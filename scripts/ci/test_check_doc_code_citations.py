@@ -257,6 +257,37 @@ class SectionScopedEra(unittest.TestCase):
         self.assertEqual(rc, 0, out)
 
 
+    def test_child_section_with_its_OWN_parsed_pin_is_not_attributed_to_the_parent(self):
+        """A nested slice that pins itself is untouched by an unparsed parent.
+
+        The child's parsed pin is more specific and would govern these rows
+        whether or not the parent's declaration parsed, so nothing about them
+        is mis-resolved. An earlier version re-implemented scope and skipped
+        only inline row pins, so it counted these as misresolved and FATALed a
+        correct document."""
+        with Fixture(
+            f"#### Register\n\nReviewed at `{UNBORN}`.\n\n"
+            f"##### Slice\n\nReviewed at **`{ROW_PIN_PRESENT}`**.\n\n"
+            "| CEN-X1 | ok | `tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, out)
+
+    def test_an_era_finding_does_not_mask_the_rest_of_the_document(self):
+        """Only the citations an unparsed declaration actually mis-scopes are
+        skipped. Aborting the whole file on one era finding let a single
+        refusal hide every other defect in it."""
+        with Fixture(
+            f"#### R\n\nReviewed at `{UNBORN}`.\n\n"
+            "| a | ok | `tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n\n"
+            "## Other\n\n| b | ok | `blockchain_db.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1)
+        self.assertIn("declares an era this gate does not parse", out)
+        self.assertIn("matches 2 tracked files", out)
+
+
 class SymbolAndRange(unittest.TestCase):
     def test_range_inside_exactly_one_overload_passes(self):
         """W-TI: `check_tx_inputs` has two definitions at the pin, [3310,3328]

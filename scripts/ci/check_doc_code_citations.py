@@ -331,32 +331,36 @@ def section_spans(lines):
 
 def unparsed_era_sections(lines, eras):
     """Era declarations this parser did not understand, whose citations
-    therefore resolved at the WRONG revision.
+    therefore resolve at a revision the document does not claim.
 
-    The test is not "did anything fall back to HEAD". HEAD is only one of the
-    wrong answers: an unparsed pin on a `#####` slice sitting under a `####`
-    parent that IS parsed lets the slice's rows inherit the PARENT's sha, so
-    nothing falls back to HEAD and the gate stays green while resolving the
-    slice at a revision the document does not claim. That is the register's
-    actual heading shape.
+    THE SCOPE QUESTION IS ASKED OF THE PARSER, NOT RE-IMPLEMENTED HERE. For
+    each refused declaration the line is rewritten into the form the parser
+    accepts, eras are recomputed, and the two maps are diffed: the citations
+    that would resolve differently ARE the affected ones, by definition.
 
-    So each declaration is compared against what it WOULD have set. A citation
-    is mis-resolved when its era differs from the sha the declaration names.
-    Where they happen to agree there is no defect and nothing is reported.
+    That is not a shortcut, it is the fix for a recurring defect. Three
+    findings on this gate came from the refusal keeping its own notion of
+    scope beside `eras_for_lines`' notion -- they agreed until they didn't.
+    Every rule the parser has comes along for free here and cannot drift:
 
-    Rows carrying their own inline pin are skipped: most-specific-wins means a
-    row pin legitimately overrides whatever the section would have said.
+      - an inline `at `<sha>`` row pin wins in BOTH maps, so no diff, so the
+        row is correctly not attributed to the section;
+      - a NESTED section with its own parsed pin likewise wins in both, so a
+        child slice that pins itself is untouched by an unparsed parent;
+      - a nested section WITHOUT a pin does differ, and is correctly affected;
+      - scope ends at the next same-or-shallower heading because that is what
+        the parser does, not because this function remembers to.
+
+    And where the refused declaration names the sha the section would have
+    inherited anyway, the two maps are identical: no diff, no finding, because
+    no resolution changes.
     """
     flagged = []
-    section_level = 99
     for lineno, line in enumerate(lines, 1):
-        heading = HEADING_RE.match(line)
-        if heading:
-            section_level = len(heading.group(1))
-            continue
         stripped = line.lstrip()
         if (
             stripped.startswith("|")
+            or HEADING_RE.match(line)
             or not ANY_SHA_RE.search(line)
             or not any(intent.search(line) for intent in PIN_INTENT_RES)
             or SECTION_PIN_RE.search(line)
@@ -364,30 +368,26 @@ def unparsed_era_sections(lines, eras):
             continue
         declared = ANY_SHA_RE.search(line).group(1)
 
-        # The span this declaration would have governed had it parsed: onward
-        # until a heading at the same level or shallower, exactly as
-        # `eras_for_lines` scopes a pin it does understand.
-        scope_end = len(lines)
-        for later in range(lineno + 1, len(lines) + 1):
-            match = HEADING_RE.match(lines[later - 1])
-            if match and len(match.group(1)) <= section_level:
-                scope_end = later - 1
-                break
+        patched = list(lines)
+        patched[lineno - 1] = "Reviewed at **`" + declared + "`**"
+        would_be = eras_for_lines(patched)
 
-        misresolved = 0
-        for inner in range(lineno + 1, scope_end + 1):
-            text = lines[inner - 1]
-            if INLINE_PIN_RE.search(text):
-                continue  # the row pins itself; most specific wins
-            if eras.get(inner) != declared:
-                misresolved += len(CITATION_RE.findall(text))
-        if misresolved:
+        affected = [
+            other
+            for other in range(1, len(lines) + 1)
+            if would_be.get(other) != eras.get(other)
+            and CITATION_RE.search(lines[other - 1])
+        ]
+        if affected:
             flagged.append(
                 {
                     "declaration": "`" + declared + "`",
                     "declared_at": lineno,
-                    "head_cites": misresolved,
+                    "head_cites": sum(
+                        len(CITATION_RE.findall(lines[a - 1])) for a in affected
+                    ),
                     "heading": _enclosing_heading(lines, lineno),
+                    "lines": set(affected),
                 }
             )
     return flagged
@@ -505,12 +505,19 @@ def check_document(relpath, failures):
             f"`Reviewed at **`<sha>`**` or a table header `(all at `<sha>`)`, "
             f"or pin the rows individually with `at `<sha>`` on each."
         )
-    if unparsed:
-        # Resolution below would be against the wrong era; reporting path
-        # findings on top of that would be noise built on a false premise.
-        return 0
+    # Only the citations an unparsed declaration actually mis-scopes are
+    # skipped below -- resolving THOSE would be checking against an era the
+    # document does not claim, and any finding would be noise built on a false
+    # premise. The rest of the document is still checked: aborting the whole
+    # file on one era finding let a single refusal mask every other defect in
+    # it, which is the opposite of what a gate is for.
+    mis_scoped = set()
+    for section in unparsed:
+        mis_scoped |= section["lines"]
 
     for lineno, line in enumerate(lines, 1):
+        if lineno in mis_scoped:
+            continue
         rev = eras[lineno]
         matches = list(CITATION_RE.finditer(line))
         if not matches:
