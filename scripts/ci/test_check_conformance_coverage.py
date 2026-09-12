@@ -190,11 +190,11 @@ def _(tmp):
     # two selectors would disagree and the gate would refuse.
     r = run(tmp)
     assert r.returncode == 0, r.stderr
-    assert "disagree" not in r.stderr
+    assert "do not sit inside" not in r.stderr
     return "slice headings stay inside the register"
 
 
-@case("the two register selectors must AGREE — a row that drifted OUT of §5.4.1 FATALs")
+@case("SCOPE FENCE: a stated row that drifted OUT of §5.4.1 FATALs")
 def _(tmp):
     # The first version of this case re-stated CEN-A1, which is already inside
     # §5.4.1 — so both selectors still saw the SAME SET and nothing disagreed.
@@ -206,9 +206,27 @@ def _(tmp):
     reg += ("\n### 6 Some other section\n\n| Row | State | Evidence |\n| --- | --- | --- |\n"
             "| CEN-K1a | **CHECKED-CONFORMANT** | a row that drifted out of the register |\n")
     r = run(tmp, register=reg)
-    assert r.returncode == 1, "selector disagreement must not be resolved silently"
-    assert "disagree" in r.stderr, r.stderr
-    return "neither selector is allowed to win by default"
+    assert r.returncode == 1, "a stated row outside the register must not pass"
+    assert "do not sit inside" in r.stderr, r.stderr
+    return "a drifted row — or a lost section boundary — is named"
+
+
+@case("the retired reverse limb stays retired — it could never fire")
+def _(tmp):
+    # An earlier version compared the in-section set against the document-wide
+    # set in BOTH directions and called it a mutual cross-check. The in-section
+    # set is populated only for rows that already matched the state vocabulary,
+    # so it is a SUBSET by construction and the reverse difference was provably
+    # empty — a limb printing "none" forever. Kept as a case so the claim is not
+    # quietly restored: the in-section question (an id with no recognised state)
+    # is answered by the `unstated` alarm, which CAN fire, as the case below it
+    # shows. A comparison between a set and its own subset is a containment
+    # assertion, not a cross-check.
+    reg = REGISTER.replace("| **CEN-A1** | **CHECKED-CONFORMANT** |", "| **CEN-A1** | **PROBABLY-FINE** |")
+    r = run(tmp, register=reg)
+    assert r.returncode == 1, "the in-section direction must be covered by SOMETHING"
+    assert "no recognised" in r.stderr, r.stderr
+    return "covered by the unstated alarm, not by a subset comparison"
 
 
 @case("SYMMETRIC DROP: an id shape both sides lose equally is caught per-side")

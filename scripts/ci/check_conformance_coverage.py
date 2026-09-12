@@ -33,8 +33,8 @@
 # Instance of 47-gate-subject-assertion.mdc, which this gate needs more than
 # most: it reports a clean tree and an extractor that stopped extracting with
 # the SAME output — two empty sets also have an empty difference. Every parse
-# asserts its own subject below, and the register is read by two independent
-# selectors that must agree.
+# asserts its own subject below, each side counts the ids it dropped, and a
+# scope fence catches a §5.4.1 boundary that stopped being detected.
 
 import re
 import sys
@@ -75,6 +75,11 @@ ID_ATTEMPT_RE = re.compile(r"^\*{0,2}CEN-")
 #   (1) ONE recogniser, shared by both sides, so the two cannot drift apart;
 #   (2) each side asserts `rows that tried to be an id == ids parsed`, so a
 #       recogniser bug is loud on each side INDEPENDENTLY of the comparison.
+# (2) is a CONTAINMENT assertion, not a cross-check: parsed ids are a subset of
+# attempts by construction, so it can only fail one way — attempts exceeding
+# parses. That is the direction the hazard travels, so the check is sound; it is
+# named honestly here because the same subset relation is what made an earlier
+# "cross-check" in this file unable to fire at all.
 # Credit: shekyl-core-8a, from the #704 post-mortem.
 
 # The census §4 row: | id | rule | site(s) | C/P | bucket | class | evidence | notes |
@@ -150,12 +155,26 @@ def census_ratified(lines, failures):
 
 
 def register_recorded(lines, failures):
-    """Ids carrying a conformance state, by TWO independent selectors.
+    """Ids carrying a conformance state in §5.4.1, plus a one-directional SCOPE FENCE.
 
-    Selector A trusts the state vocabulary and scans the whole document.
-    Selector B trusts the section boundary and scans only §5.4.1.
-    They answer the same question by different means, so a disagreement means
-    one of them is wrong and the gate must not pick a winner silently.
+    The fence: no row carrying a conformance state may live OUTSIDE §5.4.1.
+    Stated rows are collected document-wide and compared against those found
+    inside the section; anything in the first set and not the second is either a
+    register row that drifted out of its section, or — more usefully — evidence
+    that the section boundary stopped being detected, which would otherwise make
+    every in-section row read as missing.
+
+    IT IS A FENCE, NOT A MUTUAL CROSS-CHECK, and the distinction is recorded
+    because the code once claimed the stronger thing. The in-section set is
+    populated only for rows that already matched the state vocabulary, so it is
+    a SUBSET of the document-wide set BY CONSTRUCTION and the reverse difference
+    is provably empty — a limb that could never fire, printing "none" forever.
+    A comparison between a set and its own subset is a containment assertion
+    wearing a cross-check's clothes; a cross-check earns the name only when both
+    sides can disagree in both directions. The reverse question — an in-section
+    row with an id but no recognised state — is real and is answered separately
+    by the `unstated` alarm below, which CAN fire. Two checks, one job each.
+    (shekyl-core-8a, third finding on this gate.)
     """
     by_state, by_section = set(), set()
     unstated, unparsed = [], []
@@ -214,15 +233,18 @@ def register_recorded(lines, failures):
                         "§5.4.1 or its row schema did not parse")
         return by_state | by_section
 
-    only_state = sorted(by_state - by_section)
-    only_section = sorted(by_section - by_state)
-    if only_state or only_section:
+    outside_section = sorted(by_state - by_section)
+    if outside_section:
         failures.append(
-            f"{REGISTER.name}: the two register selectors disagree, so neither can be "
-            f"trusted — state-vocabulary found {len(by_state)}, §5.4.1-section found "
-            f"{len(by_section)}; outside the section: {only_state or 'none'}; "
-            f"inside but not state-matched: {only_section or 'none'}")
-    return by_state | by_section
+            f"{REGISTER.name}: {len(outside_section)} row(s) carry a conformance state but do "
+            f"not sit inside §5.4.1:\n  " + ", ".join(outside_section) +
+            "\n  Either a register row drifted out of its section, or the §5.4.1 boundary "
+            "stopped being detected — in which case every in-section row is also being "
+            "misread and no coverage result from this run can be trusted.")
+    # Deliberately NOT `by_state | by_section`: the union would be identical
+    # (one is a subset of the other) and would read as if it were combining two
+    # independent findings. Return the set the register actually recorded.
+    return by_section
 
 
 def main():
