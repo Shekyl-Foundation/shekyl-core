@@ -31,10 +31,9 @@ cited: B and C1 move the FFI boundary and touch consensus; D changes a
 KAT-frozen derivation. Identifier family **`EU-`**, registered at birth in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 per
 [`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc); prefix
-checked unique against C10 / C2 / CB / CEN / CR / CSR / CT / CU / CW / DQ / DRS /
-DS / F / FL / GAP / GF / LV / MR / MS / MSW / OA / P / PC / PD / PR / PW / PWC /
-PWD / Q12 / R18 / R2 / RC / RF / RK / RP / RT / S / SA / SCE / SH / SJ / SM / SO /
-SP / TJ / VC / VG / WI / WP / X at the recording commit.
+checked unique by `scripts/ci/check_index_prefix_uniqueness.py` over the 73
+prefixes registered at the recording commit — the gate's count, not a hand-kept
+list (a partial list reads as the population it is not).
 
 **Decision authority:** Rick. **Timing posture, in his words (2026-09-11):**
 *"It's not like this is going to be released until this whole thing is
@@ -95,8 +94,9 @@ else's liveness to draw on instead.
    forbids in the other direction.
 3. **The fetcher is a daemon subsystem, written in Rust** beside
    `shekyl-daemon-rpc` (rule 20; the countermand), reaching personas over the
-   daemon's own Tor surface (`shekyl-tor-control-daemon`). Out of this round's
-   scope — TJ-B's — but its home is fixed here.
+   daemon's Tor surface. `shekyl-tor-control-daemon` is the crate that exists
+   there; that it carries *outbound* is TJ-B's to confirm, not this round's
+   claim. Out of this round's scope — TJ-B's — but its home is fixed here.
 4. **SP-T3 measured the wrong topology.** The dispersion spike is
    persona→persona onion; the protocol path is daemon→wallet. **Obligation on
    TJ-B, not an `EU-` disposition:** re-base the measurement daemon→wallet
@@ -120,14 +120,23 @@ present iff `JoinMarket` on the wire)."*
 **record's committed `bond_spend_pk`**, never a vin-carried key (SA-2b forbids
 the key on non-`JoinMarket` vins precisely because a vin-carried key is a
 forgeable self-assertion); the authorizer rides the surface-A `pqc_auths` slot
-and the pin ties it to the record (`db_lmdb.cpp` `set_archival_bond_value`
-persists it). `EndpointUpdate` inherits that answer unchanged. What was
+and the pin ties it to the record (`BlockchainLMDB::put_archival_bond_record` in
+`db_lmdb.cpp` persists it). `EndpointUpdate` inherits that answer unchanged. What was
 missing was not a key but a **selector** that could say so: until C0 the
 "is this a cold post" decision was implied by which C++ arms happened to call
 the pin, and described in prose — in three places — as *"`bond_debit > 0`, not
 the post kind."* `EndpointUpdate` has `bond_debit == 0`, so under that prose it
 would have authorized **hot**: exactly the stalemate the carrier ruling's
 authorization clause exists to prevent.
+
+**One clause of the source ruling reads the other way.** The shape sentence
+in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §7
+(:934 at the recording commit) says *"authorized by the persona's attestation
+key"*; the same ruling's *"spec detail to resolve"* clause, quoted above, asks
+which **cold** key. The attestation key is the identity key a serving host
+holds — the drain the pin exists to close (`debit_auth.rs` header) — so the
+second clause governs and the first is superseded here, not re-edited there:
+this record is where the resolution lives.
 
 **C0's finding (PR #703):** the prose never described the code. The Release
 arm pins on kind, unconditionally, ahead of UB9; only `HoldingsUpdate` selects
@@ -154,9 +163,13 @@ match the wrapped call.
 base32-encoded — everything but the key is derived. Storing the string would
 put a parser and a canonicalization question on a genesis-frozen surface,
 cost 56 bytes for 32 bytes of entropy, and admit non-canonical spellings that
-differ as bytes and agree as addresses. Rules
-[65](../../.cursor/rules/65-address-format-discipline.mdc) and
-[42](../../.cursor/rules/42-serialization-policy.mdc) both point at the key.
+differ as bytes and agree as addresses. Rule
+[65](../../.cursor/rules/65-address-format-discipline.mdc) (an address is a
+display form over a key) points at the key, and so does rule
+[42](../../.cursor/rules/42-serialization-policy.mdc) where it applies — the
+**wallet's** persisted copy of the field (Freezes, above), not the vin: a fixed
+32-byte field versions cleanly; a string carries a format question into every
+version bump.
 **The address is a display form.** A reader reconstructs it; the wire never
 carries it.
 
@@ -186,7 +199,9 @@ epoch open (`challenge_assignment.rs`, `DrawablePair { p_id, shard_id }`; §9.5
 pin 1's canonical order). The pair is the sort key; the endpoint is **not** a
 field on it — it joins through the bond record by `p_id`, one lookup, at the
 moment the drawable set is snapshotted. This is the carrier ruling's *"the
-drawable snapshot and the endpoint move together"* made concrete: an
+drawable snapshot (§4.1) and the endpoint move together"*
+([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §7, :934
+at the recording commit) made concrete: an
 `EndpointUpdate` that connects mid-epoch is record-effect at connect and
 mechanism-effect at the next epoch open, exactly as `HoldingsUpdate` is.
 
@@ -251,7 +266,10 @@ asserts), so a retired persona serves nothing and there is no endpoint whose
 reachability matters. Permitting the post would create a mutation path on a
 record the mechanism no longer reads. The refusal is a verify-time guard in
 B's `verify_endpoint_update` — `bonded_total == 0 ⇒ refuse` — with its own
-code, classified our-state (the record is what it is), not the sender's form.
+code, classified as its exact sibling is: `HoldingsUpdate` on an unbonded
+record is `SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED`, mapped to
+`DropVerdict::PolicyOrState` (`rust/shekyl-ffi/src/archival_ffi/codes.rs:275`)
+— our state, not the sender's form. B mirrors that mapping by name.
 
 **Do not clear, because clearing is a write on the policed path.** The
 laundering invariant (`EU-D9`) exists to keep `EndpointUpdate` off the
@@ -295,12 +313,22 @@ and D's regenerator invocation cites it. The V1 manifest's own
 replaces the regenerator along with the vector rather than inheriting an
 ungated one.
 
+**The label is registered, and the registry is gated.**
+`shekyl-archival-p-hs-id-ed25519-v1` has a row in
+[`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) (mechanism 2, HKDF
+`info`, const `ARCHIVAL_P_HS_ID_INFO`), and `scripts/ci/domain_registry_gate.sh`
+asserts every registered literal at its defining file — the v1 row fails the
+moment the literal changes. So the registry row moves to v2 **in D's commit**,
+not after it ([rule 30](../../.cursor/rules/30-cryptography.mdc)). The row is
+`shekyl-live`, not `frozen-inherited`, so `FROZEN_DOMAIN_SEPARATORS.md` is not
+in scope (checked at the recording commit: no `hs-id` row there).
+
 **Sequencing consequence.** Until D lands, no second address exists to rotate
 to, so B+C1 land a wire nothing can yet produce an update for — see `EU-D10`.
 
 **Decision-log entry:** [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md)
-§"2026-09-12 — `ARCHIVAL_P_DERIVE_V1` retired: `hs_id` derivation takes a
-rotation index; vector re-anchored as V2 (`EU-D8`)".
+§"2026-09-12 — `ARCHIVAL_P_DERIVE_V1` retirement AUTHORIZED: `hs_id`
+derivation to take a rotation index; vector to be re-anchored as V2 (`EU-D8`)".
 
 ---
 
@@ -362,6 +390,9 @@ CSR-3a conformance record in the same PR — the C0 precedent (CEN-J13).
 - **The credit-wire cutover deletion** (`ARCHIVAL_CREDIT_WIRE.md` §2's
   surface): separately scoped.
 - **The `hs_id` service index** ("the daemon creates its service at index 0
-  today"): the carrier ruling calls it an `EndpointUpdate` prerequisite; under
-  `EU-D8` it is subsumed — the rotation index *is* the service index, and
-  index 0 is the first address. No separate settlement needed.
+  today"): the carrier ruling calls it an `EndpointUpdate` prerequisite. Rick's
+  instruction (2026-09-11) was to check *whether it needs settling before this
+  lands or whether index 0 is simply the answer*. **PROPOSED, not ruled:** under
+  `EU-D8` the rotation index would *be* the service index, index 0 the first
+  address, and no separate settlement needed. That is this record's reading,
+  put to Rick at D's design pass; it does not carry the round's status.

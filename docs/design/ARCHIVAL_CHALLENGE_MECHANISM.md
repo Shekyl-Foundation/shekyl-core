@@ -1486,8 +1486,9 @@ than repealing it:
 4. The two standalone PRs (#433 ordering assert, #434 coverage sim) —
    in flight.
 
-**HOLD — three of the four have since cleared (updated 2026-09-12; was "two
-of the four", 2026-08-23).** The list as written was: pass-record
+**HOLD — two of the four have cleared and landed; a third, `EndpointUpdate`,
+is ruled and sequenced but not in the tree (updated 2026-09-12; was "two of
+the four", 2026-08-23).** The list as written was: pass-record
 serialization; the response format; `EndpointUpdate` on the bond wire; the
 settlement writer (item 9's schema is genuinely open).
 
