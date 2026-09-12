@@ -252,8 +252,8 @@ invocations:
 
 - **`EndpointUpdate` B+C1** (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md`
   `EU-D10`–`EU-D13`; branch `feat/eu-b-c1-endpoint-update-wire`,
-  opened 2026-09-12 — PR number and merge commit recorded in this
-  entry when the PR opens and lands). Bond-post kind 4
+  PR #717, opened 2026-09-12 — merge commit recorded in this entry
+  when it lands). Bond-post kind 4
   (`EndpointUpdate`) on the consensus vin, with its predicate arm.
   Criterion 1: the vin serializer (kind bound, four presence
   couplings), the CT-balance term arity for kind 4, the record
