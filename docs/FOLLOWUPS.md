@@ -14,6 +14,12 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **DRS-W16: resolve whether `remove_block`'s unpositioned `m_cur_blocks` delete is reachable.** The positioning `mdb_cursor_get(…, MDB_SET)` was removed by inherited commit `22c0fae47b` (subject unrelated to block removal), yet pops do not throw `EINVAL` as an unpositioned `mdb_cursor_del` should — so either something positions the cursor that the read missed, or it is stale from an earlier operation in the same write transaction, and only the second deletes at a stale position. Falsifier: a write transaction that performs no `blocks` operation, then `remove_block`, and observe whether the delete throws. Capability recorded in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9; **consequence deliberately not established there**.
+  - Target: pre-genesis
+
+- **Rule 42's globs do not cover `rust/shekyl-chain-store`, whose codecs DRS-0 just froze as consensus-visible.** The accumulator freeze makes the redb value codec the canonical encoding the digest folds, so a codec change moves the digest — but rule 42's persisted-wire version-bump CI enforcement is scoped by glob to the wallet crates, and DRS-0 slice C's §11.1 schema_version rule has the same gap. Until the globs extend, codec stability there is a convention with no gate. Falsify by checking whether `.cursor/rules/42-serialization-policy.mdc`'s globs match `rust/shekyl-chain-store/**`. Escalated to Rick as a rules change.
+  - Target: pre-genesis
+
 - **`on_mining_status` still labels dead pre-RandomX variants "Cryptonight" (rule 60).** The daemon's `pow_algorithm` label table (`src/rpc/core_rpc_server.cpp` `on_mining_status`) emits Cryptonight names for PoW variants Shekyl never had; the CLI deliberately does not render the field (CU-3, [`CLI_USABILITY.md`](design/CLI_USABILITY.md) §CU-3) but the daemon-side arms are dead-branch deletion work — falsify by `grep -n "Cryptonight" src/rpc/core_rpc_server.cpp` returning nothing.
   - Target: pre-genesis
 

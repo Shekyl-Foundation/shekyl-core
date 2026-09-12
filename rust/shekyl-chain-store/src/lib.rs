@@ -18,4 +18,5 @@
 
 #![deny(unsafe_code)]
 
+pub mod accumulator;
 pub mod digest_v0;

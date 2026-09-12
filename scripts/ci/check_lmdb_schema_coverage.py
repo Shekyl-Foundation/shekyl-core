@@ -310,9 +310,15 @@ def main() -> None:
     DIGEST_V0_TABLES = {"blocks", "block_info", "spent_keys", "curve_tree_meta"}
     DIGEST_STATES = {"v0", "v0-partial", "excluded", "uncovered"}
 
-    state_rows = re.findall(
-        r"^\| `([a-z0-9_]+)` \|[^\n]*\| ([a-z0-9-]+) \|$",
+    # NOTE (slice A, 2026-09-12): the matrix gained an `Accumulator class`
+    # column to the RIGHT of `Digest v0`. This pattern captures BOTH trailing
+    # columns by position. It previously captured "the last column" and would
+    # silently have started reading class tokens as digest states.
+    state_rows_raw = re.findall(
+        r"^\| `([a-z0-9_]+)` \|.*\| ([a-z0-9-]+) \| ([a-z-]+) \|$",
         mat_m.group(0), re.MULTILINE)
+    state_rows = [(t, v) for t, v, _ in state_rows_raw]
+    class_rows = [(t, c) for t, _, c in state_rows_raw]
     if not state_rows:
         _fail("the audit coverage matrix has no `Digest v0` state column "
               "(P0e leg) -- every row must carry exactly one of "
@@ -355,6 +361,67 @@ def main() -> None:
             "disagree -- one of the two copies has drifted from "
             "logical_state_digest.cpp:\n  " + "\n  ".join(detail))
 
+    # Accumulator-class leg (DRS-0 slice A, 2026-09-12). DAEMON_REDB_STORE
+    # §6.2: "every table in inventory contributes to some accumulator or
+    # named exclusion. No silent sampling."
+    #
+    # THIS LEG ASSERTS CLASSHOOD, NOT SOUNDNESS -- the same shape as the P0e
+    # leg above, and the distinction matters more here. A tree whose 49 tables
+    # all read `excluded` passes it. It CANNOT check that a `set-shaped`
+    # assignment is actually reversible, that an `append-mostly` table really
+    # has a checkpoint, or that a `derived` row's source is independently
+    # specified. Those are design properties; the evidence for them lives in
+    # the audit's §12 falsifier run, per row, and in no exit code. The
+    # negative control for this leg demonstrates the blindness deliberately:
+    # marking a table `set-shaped` whose pop path recomputes its element
+    # leaves this gate GREEN.
+    ACCUM_CLASSES = {"set-shaped", "append-mostly", "small", "derived",
+                     "excluded"}
+    if not class_rows:
+        _fail("the audit coverage matrix has no `Accumulator class` column "
+              "(DRS-0 slice A leg) -- every row must carry exactly one of "
+              + "/".join(sorted(ACCUM_CLASSES)))
+    classes = dict(class_rows)
+    if len(classes) != len(class_rows):
+        errors.append("duplicate table rows while reading the Accumulator "
+                      "class column of the audit coverage matrix")
+    bad_cls = sorted(f"{t} -> {c}" for t, c in classes.items()
+                     if c not in ACCUM_CLASSES)
+    if bad_cls:
+        errors.append(
+            "these audit coverage matrix rows carry an unknown Accumulator "
+            "class (allowed: " + ", ".join(sorted(ACCUM_CLASSES)) + "):\n  "
+            + "\n  ".join(bad_cls))
+    classless = [t for t in tables if t not in classes]
+    if classless:
+        errors.append(
+            "these tables exist in SHEKYL_LMDB_TABLES but carry no "
+            "Accumulator class in the audit coverage matrix -- \u00a76.2 "
+            "requires every table in inventory to contribute to some "
+            "accumulator or named exclusion, with no silent sampling:\n  "
+            + "\n  ".join(classless))
+
+    # The two columns are DIFFERENT AXES, and the audit states how far apart
+    # they are. Derive the figure here rather than trusting the prose: a
+    # stated count that no gate checks is the defect this file exists to
+    # prevent. "Digested-but-classed" is the direction that matters -- a v0
+    # exclusion is not an accumulator exclusion.
+    axis_gap = sorted(t for t in tables
+                      if states.get(t) == "excluded"
+                      and classes.get(t) not in (None, "excluded"))
+    stated_gap = re.search(
+        r"they disagree on \*\*(\d+)\*\* rows", audit)
+    if not stated_gap:
+        errors.append("the audit \u00a712 no longer states how many rows the "
+                      "Digest v0 and Accumulator class axes disagree on -- "
+                      "the claim this leg checks has gone")
+    elif int(stated_gap.group(1)) != len(axis_gap):
+        errors.append(
+            f"the audit states the two axes disagree on "
+            f"{stated_gap.group(1)} rows; {len(axis_gap)} rows are "
+            f"v0-`excluded` with a real accumulator class:\n  "
+            + ", ".join(axis_gap))
+
     mat_count = re.search(r"\*\*(\d+) rows\*\*", mat_m.group(0))
     if not mat_count:
         errors.append("the audit coverage matrix's '**N rows**' count line "
@@ -382,6 +449,18 @@ def main() -> None:
           "and invisible to the digest (audit §11) — one of them, "
           "hf_starting_heights, holds no runtime rows to diverge (DRS-W5). "
           "That is a recorded measurement, not a failure.")
+    cledger = Counter(classes[t] for t in tables if t in classes)
+    print(f"    Accumulator class freeze (DRS-0 slice A): every table carries "
+          "one class \u2014 "
+          + ", ".join(f"{cledger[k]} {k}" for k in
+                      ("set-shaped", "append-mostly", "small", "derived",
+                       "excluded")
+                      if cledger.get(k))
+          + ". This leg checks CLASSHOOD, not soundness: it cannot see "
+          "whether a set-shaped table is actually pop-reversible. "
+          f"The two axes disagree on {len(axis_gap)} rows (v0-excluded with "
+          "a real class) \u2014 a v0 exclusion is not an accumulator "
+          "exclusion (audit \u00a712).")
 
 
 if __name__ == "__main__":
