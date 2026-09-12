@@ -2,13 +2,16 @@
 
 **Date:** 2026-09-05 (DRS-P0b; supersedes the April 2026 audit in place);
 §9's register extended 2026-09-08 by **DRS-P0c** (rows DRS-W12 through DRS-W15);
-DRS-W12 and DRS-W15 regraded 2026-09-09
-**Pin:** three, and each row states which it was verified against. **P0b rows
+DRS-W12 and DRS-W15 regraded 2026-09-09; §11 digest ledger added
+2026-09-11 by **DRS-P0e**
+**Pin:** four, and each row states which it was verified against. **P0b rows
 (DRS-W1 through DRS-W11) and §§0–8, §10: `dev` `2dba46537`. P0c rows
 (DRS-W12 through DRS-W15) as first written: `dev` `14aa42074`. The 2026-09-09
 regrade evidence in the DRS-W12 and DRS-W15 subsections — the `hardfork.cpp`
 and `blockchain.cpp` call-graph and window-length citations: `dev`
-`3497b8a78`.** Line citations are *records-was*
+`3497b8a78`. P0e's §11 ledger and §10's `Digest v0` column — the
+digest walker's accessor mapping and the per-table divergence test: `dev`
+`eb1b60198`.** Line citations are *records-was*
 against the pin they name, not against `HEAD`; they are expected to drift
 and must not be "corrected" to a later tree. Two eras are safe only while
 both are declared — an undeclared second era is what put three citations on
@@ -677,7 +680,7 @@ the figure was left as a bound; it is no longer a live deferral.)*
 | DRS-W6 | The post-pop burn pair (`total_burned` reversal + `block_burn` row removal, `blockchain.cpp:896`–`:905`) sits at the **core layer, outside `BlockchainDB::pop_block`**. Two consequences: a batchless core-path caller pops in two transactions; and a caller popping through the DB funnel skips both writes entirely — **live today** via `blockchain_import --pop-blocks`, which calls `get_db().pop_block(...)` directly and documents why (§3). A database added through the verifying path and popped by that tool keeps burns the chain no longer contains | wart (**latent bookkeeping, live reachability** — graded on the complete five-site consumer census: RPC readout, connect add, pop reversal, and the two slash guards — an *inflated* value satisfies the underflow guard more easily but **reduces** the overflow guard's headroom, so the earlier reading ("satisfies both with headroom") was wrong in direction; the grade survives on magnitude instead, since that guard fires only within `slashed_amount` of `UINT64_MAX`, astronomically far from any burn total in atomic units. DRS-W6's own tool path can repeat, so the inflation is unbounded in principle: popping through the DB and re-adding increments the aggregate again each cycle. No emission, supply, or validation arithmetic consumes the scalar — `shekyl-economics-sim/src/record.rs:143` refuses the `already_generated − total_burned` derivation on the record, and the conservation helper is KAT-only with synthetic operands. **Grade expires with its ground**: any consensus consumer of the scalar re-grades this at that consumer's design round) | RECORD-AND-SPECIFY: **derived-total reversal belongs in the pop funnel** in the Rust store, so popping through the store cannot mean something different from popping through the node |
 | DRS-W7 | **Four** sites, four semantics for the same scalar's impossible value: the connect increment **wraps** (`blockchain.cpp:6436` — unchecked `uint64_t +=`, no guard at all), the pop reversal **clamps** to floor (`:902`), the slash add **throws** `FATAL` on overflow (`db_lmdb.cpp:6050`), the slash revert **throws** `FATAL` on underflow (`:6362`). The census read "three sites, three semantics" until review found the unchecked connect add — the one site with no opinion at all about an impossible value | wart (**reachable — regraded**: DRS-W9 produces the too-LOW scalar the `:6362` underflow tests, and DRS-W6's tool path the too-HIGH one. The disagreement is live, and the fourth site is the sharpest part of it: three sites decided what an impossible total means and the fourth never asked) | RECORD-AND-SPECIFY: the Rust store gets **one** ruled semantic for an impossible derived total, applied at every site including the increment — checked arithmetic, not `+=`. The ruling belongs to the economics lane |
 | DRS-W8 | `correct_block_cumulative_difficulties` (`:3034`) aborts explicitly on its size-mismatch guard but not on its loop throws — and there is no stack owner to unwind them: `block_wtxn_start` heap-allocates into `m_write_txn` (`:4311`) and only stop/abort delete and clear it (`:4344`, `:4361`). A loop throw therefore leaves the LMDB write transaction **live** and the member non-null, so the next `block_wtxn_start()` throws `DB_ERROR_TXN_START` and every subsequent block write fails until the process restarts. It also has **no production caller** (§5c) | wart (no partial commit — nothing commits — but a **poisoned writer**, not merely an open transaction; unwired today) | RECORD-AND-SPECIFY: one unwinding path in the Rust store, and a write handle whose lifetime is owned by the scope that opened it rather than by a raw member pointer |
-| DRS-W9 | The connect-side burn pair (`add_block_burn` + `total_burned` increment, `blockchain.cpp:6425`–`:6437`) runs **after** the try whose catches set `m_batch_success = false`. A throw between the two unwinds to `add_new_block`'s outer catch, which sets only `bvc`, so `cleanup_handle_incoming_blocks` still calls `batch_stop()`: the block, its txs and the `block_burn` row commit **without** the aggregate — a partial commit of one logical unit, and the production entry for a too-LOW `total_burned` that DRS-W7 lacked | wart (**the most severe of this set, and still not S-graded**: no consensus arithmetic reads the scalar and no fund-safety consequence follows, and the window needs an LMDB-level write failure — but it can leave a node whose next slash revert trips the `:6362` FATAL underflow, a local halt, and it falsified a PASS this audit had published) | RECORD-AND-SPECIFY, converging with DRS-W6: the burn bookkeeping is core-layer on **both** connect and pop, so neither side inherits the funnel's failure semantics. In the Rust store both belong **inside** the funnel |
+| DRS-W9 | The connect-side burn pair (`add_block_burn` + `total_burned` increment, `blockchain.cpp:6425`–`:6437`) runs **after** the try whose catches set `m_batch_success = false`. A throw between the two unwinds to `add_new_block`'s outer catch, which sets only `bvc`, so `cleanup_handle_incoming_blocks` still calls `batch_stop()`: the block, its txs and the `block_burn` row commit **without** the aggregate — a partial commit of one logical unit, and the production entry for a too-LOW `total_burned` that DRS-W7 lacked | wart (**the most severe of this set, and still not S-graded**: no consensus arithmetic reads the scalar and no fund-safety consequence follows, and the window needs an LMDB-level write failure — but it can leave a node whose next slash revert trips the `:6362` FATAL underflow, a local halt, and it falsified a PASS this audit had published) | RECORD-AND-SPECIFY, converging with DRS-W6: the burn bookkeeping is core-layer on **both** connect and pop, so neither side inherits the funnel's failure semantics. In the Rust store both belong **inside** the funnel. **The oracle does not catch this (P0e, 2026-09-11):** `total_burned` lives in `properties` (`set_total_burned` writes `m_properties`), and `properties` is **uncovered** by digest v0 (§11) — the digest reads only `blocks`' row count, `block_info.bi_hash`, `spent_keys` and `curve_tree_meta`'s root. A store that suffered this partial commit is **indistinguishable from a healthy one** under the v0 digest, so nothing here may be read as "a regression check would find it" |
 | DRS-W10 | `open()`'s older-DB exit **commits before it refuses**: `txn.commit()` runs, then `migrate()` throws (`:1819`-ff), so the table creations and the `hf_starting_heights` drop persist on a store the binary just declined to open (§5b) | wart (no partial transaction and no unsound state — the refusal's remedy is delete-and-resync, so nothing survives to be inconsistent; recorded because the shape does not survive a store that *can* migrate) | RECORD-AND-SPECIFY: in the Rust store, an open that fails leaves the store as it found it — structural changes commit only on the path that succeeds |
 | DRS-W11 | `drop_hard_fork_info` (`:4675`) reuses `m_hf_starting_heights`, a handle every writable `open()` has already **closed** — LMDB's `del=1` deletes the database *and* closes the handle (`lmdb.h:1216`–`:1225`; `mdb.c:10970`–`:10973`). The first `mdb_drop` fails and the function throws before reaching the `hf_versions` drop, so the shipped `blockchain_import --drop-hard-fork` cannot do its job. Spec-derived consequence, not observed here: a closed handle's slot may be reused, so a stale member handle can come to name a different table (§5c) | wart (**loud, not silent** — the tool throws `DB_ERROR` rather than dropping the wrong thing, and it is the only other user of the member; graded on that, not on the aliasing path, which nothing in this tree reaches) | RECORD-AND-SPECIFY: in the Rust store, deleting a table **consumes** its handle, so a stale handle is unrepresentable rather than merely unused. Whether `--drop-hard-fork` should work at all is the census/R4 question, not this pass's |
 | — | Dead schema-doc row: `properties` key `staker_pool_balance` + both accessors, zero occurrences in `src/` | doc defect | fixed in this PR (`LMDB_SCHEMA.md` row and the Staking-section pointer) |
@@ -946,7 +949,11 @@ records as divergent from the authoritative rebuild on two axes.
 
 One row per `SHEKYL_LMDB_TABLES` entry (gate-pinned bijection; the row
 count is the macro's length by construction). "Path §" points at the
-section above whose verdict covers the table's writers.
+section above whose verdict covers the table's writers. **`Digest v0`**
+states what digest v0 sees of that table — one of `v0`, `v0-partial`,
+`excluded` or `uncovered`, defined in §11 and gate-enforced one-per-table
+by the P0e leg. A state token is **not** a coverage claim: 24 of the 49 read
+`uncovered`.
 
 **49 rows** (the stated figure is gate-checked against the macro's
 length, like the P0a registry's). **A stated property of this matrix, not
@@ -981,57 +988,57 @@ every row of the table that follows:
   could see the name. A rule that said "every table except the keep set"
   would contradict DRS-W5 one line after stating it.
 
-| Table | Writers at the pin | Path § |
-| --- | --- | --- |
-| `alt_blocks` | `add_alt_block` / `remove_alt_block`; `drop_alt_blocks` (emptied) | §5 |
-| `archival_alt_attestation_witness` | `store/remove_archival_alt_attestation_witness`; `drop_alt_blocks` | §5 |
-| `archival_attestation_witness` | `store/remove_…_at_height`; `delete_…_before_height` (prune) | §2/§3/§5a |
-| `archival_bond` | `put_archival_bond_value` / `remove_archival_bond_record` | §2/§3 |
-| `archival_bond_holdings_update_log` | journal helpers | §2/§3/§7/§8 |
-| `archival_bond_rebond_log` | journal helpers | §2/§3/§7/§8 |
-| `archival_bond_unbond_log` | journal helpers (`archival_journal_put/delete`, param dbi) | §2/§3/§7/§8 |
-| `archival_budget` | epoch-close put; `delete_archival_budget_for_epoch` — the **pop-side** revert (`revert_archival_epoch_close_at_height`, `:8536`); `delete_archival_budget_before_epoch` — the retention prune | §2/§3/§5a |
-| `archival_budget_accrual` | `add/remove_archival_budget_accrual`; `delete_…_before_height` | §2/§3/§5a |
-| `archival_emission_claim_log` | journal helpers | §2/§3/§7/§8 |
-| `archival_epoch_close_log` | `process/revert_archival_epoch_close_at_height` | §2/§3 |
-| `archival_r_market` | epoch-close put; `delete_archival_r_market_for_epoch` — **pop-side** revert (`:8528`); `delete_archival_r_market_before_epoch` — retention prune | §2/§3/§5a |
-| `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_archival_serve_credit_before_epoch` (retention prune); FAKECHAIN-fenced RPC injector `regtest_inject_archival_serve_credit` (§5c) | §2/§3/§5a/§5c |
-| `archival_settlement` | `set_archival_settlement` — caller's txn, unwired (CEN-L8); `delete_archival_settlement_for_epoch` — **pop-side**, from `revert_archival_slashes_at_height` (`:6423`), not a prune; `delete_archival_settlement_before_epoch` — retention prune | §3/§5a/§5c |
-| `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put (§5c) | §2/§3/§5c |
-| `archival_sigma_work` | epoch-close put; `delete_archival_sigma_work_for_epoch` — **pop-side** revert (`:8529`); `delete_archival_sigma_work_before_epoch` — retention prune | §2/§3/§5a |
-| `archival_slash_applied` | `set/remove_archival_slash_applied` | §2/§3 |
-| `archival_slash_log` | `append_archival_slash_log`; `revert_archival_slashes_at_height` | §2/§3 |
-| `block_burn` | `add_block_burn` / `remove_block_burn` | §2/§3 |
-| `block_heights` | `add_block` / `remove_block` | §2/§3 |
-| `block_info` | `add_block` / `remove_block`; `correct_block_cumulative_difficulties` (own `block_wtxn`) | §2/§3/§5c |
-| `block_pending_additions` | `add_block_pending_addition`; `remove_block_pending_additions` | §2/§3 |
-| `blocks` | `add_block` / `remove_block` (`m_wcursors`) | §2/§3 |
-| `curve_tree_checkpoints` | `save_curve_tree_checkpoint`; `prune_curve_tree_intermediate_layers` | §2/§3 |
-| `curve_tree_layers` | `grow/trim_curve_tree`; `prune_curve_tree_intermediate_layers`; corruption-test del (§5c) | §2/§3/§5c |
-| `curve_tree_leaves` | `grow_curve_tree` / `trim_curve_tree` | §2/§3 |
-| `curve_tree_meta` | `grow/trim_curve_tree` | §2/§3 |
-| `curve_tree_roots` | `store/remove_curve_tree_root_at_height` | §2/§3 |
-| `hf_starting_heights` | **deleted at every non-read-only `open()`** (`mdb_drop` del=1, `:1779`); `drop_hard_fork_info`; finding DRS-W5 | §5b/§5c |
-| `hf_versions` | `set_hard_fork_version` (`TXN_BLOCK_PREFIX`); `drop_hard_fork_info`; not cleaned on pop (P0c wart) | §2/§5c |
-| `leaf_to_output` | `add/remove_output_leaf_mapping` | §2/§3 |
-| `output_amounts` | `add_output` / `remove_output` | §2/§3 |
-| `output_metadata` | `store_output_metadata` — sole caller is inside `prune_tx_data` (`db_lmdb.cpp:10229`), so this table is written by the **depth prune**, not by connect | §5a |
-| `output_to_leaf` | `add/remove_output_leaf_mapping` | §2/§3 |
-| `output_txs` | `add_output` / `remove_output` | §2/§3 |
-| `pending_tree_drain` | `add_pending_tree_drain_entry`; `remove_pending_tree_drain_entries` | §2/§3 |
-| `pending_tree_leaves` | `add/remove_pending_tree_leaf`; `drain_pending_tree_leaves` | §2/§3 |
-| `properties` | `open()` version seed; `set_total_bonded_atomic` / `set_total_burned` (incl. the post-pop burn reversal, `blockchain.cpp:896` — §3/DRS-W6); `set_archival_last_slash_epoch` — written on **both** paths, by `process_archival_slash_at_height` on connect (`:6248`) and `revert_archival_slashes_at_height` on pop (`:6429`, `:6431`); prune receipts — `note_archival_prune_watermark_epoch` and `set_archival_frozen_shard_count_on_write_txn`, plus `pruning_seed` written by `prune_worker` (`:2365`) and `tx_prune_next_block` by `write_tx_prune_next_block_height` (`:10283`), both §5a; `set_settlement_epoch_blocks_pin` (own txn) | §2/§3/§5a/§5b/§5c |
-| `spent_keys` | `add_spent_key` / `remove_spent_key` | §2/§3 |
-| `tx_indices` | `add_transaction_data` / `remove_transaction_data` | §2/§3 |
-| `tx_outputs` | `add_tx_amount_output_indices` / `remove_transaction_data` | §2/§3 |
-| `txpool_blob` | `add/remove_txpool_tx` (`LockedTXN`); reset-kept | §4/§5b |
-| `txpool_meta` | `add/update/remove_txpool_tx` (`LockedTXN`); reset-kept | §4/§5b |
-| `txs` | **none** — opened (`:1662`), never written or read through its handle; finding DRS-W4 | §9 |
-| `txs_pqc_auths` | `add_transaction_data` / `remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a |
-| `txs_prunable` | `add/remove_transaction_data`; `prune_worker`, `prune_tx_data` (own txns) | §2/§3/§5a |
-| `txs_prunable_hash` | `add/remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a |
-| `txs_prunable_tip` | `add/remove_transaction_data`; `prune_worker` | §2/§3/§5a |
-| `txs_pruned` | `add_transaction_data` / `remove_transaction_data` | §2/§3 |
+| Table | Writers at the pin | Path § | Digest v0 |
+| --- | --- | --- | --- |
+| `alt_blocks` | `add_alt_block` / `remove_alt_block`; `drop_alt_blocks` (emptied) | §5 | excluded |
+| `archival_alt_attestation_witness` | `store/remove_archival_alt_attestation_witness`; `drop_alt_blocks` | §5 | excluded |
+| `archival_attestation_witness` | `store/remove_…_at_height`; `delete_…_before_height` (prune) | §2/§3/§5a | excluded |
+| `archival_bond` | `put_archival_bond_value` / `remove_archival_bond_record` | §2/§3 | excluded |
+| `archival_bond_holdings_update_log` | journal helpers | §2/§3/§7/§8 | excluded |
+| `archival_bond_rebond_log` | journal helpers | §2/§3/§7/§8 | excluded |
+| `archival_bond_unbond_log` | journal helpers (`archival_journal_put/delete`, param dbi) | §2/§3/§7/§8 | excluded |
+| `archival_budget` | epoch-close put; `delete_archival_budget_for_epoch` — the **pop-side** revert (`revert_archival_epoch_close_at_height`, `:8536`); `delete_archival_budget_before_epoch` — the retention prune | §2/§3/§5a | excluded |
+| `archival_budget_accrual` | `add/remove_archival_budget_accrual`; `delete_…_before_height` | §2/§3/§5a | excluded |
+| `archival_emission_claim_log` | journal helpers | §2/§3/§7/§8 | excluded |
+| `archival_epoch_close_log` | `process/revert_archival_epoch_close_at_height` | §2/§3 | excluded |
+| `archival_r_market` | epoch-close put; `delete_archival_r_market_for_epoch` — **pop-side** revert (`:8528`); `delete_archival_r_market_before_epoch` — retention prune | §2/§3/§5a | excluded |
+| `archival_serve_credit` | `set/remove_archival_serve_credit_bit`; `delete_archival_serve_credit_before_epoch` (retention prune); FAKECHAIN-fenced RPC injector `regtest_inject_archival_serve_credit` (§5c) | §2/§3/§5a/§5c | excluded |
+| `archival_settlement` | `set_archival_settlement` — caller's txn, unwired (CEN-L8); `delete_archival_settlement_for_epoch` — **pop-side**, from `revert_archival_slashes_at_height` (`:6423`), not a prune; `delete_archival_settlement_before_epoch` — retention prune | §3/§5a/§5c | excluded |
+| `archival_shard_segment` | `put_archival_shard_segment`; `revert_archival_segment_freezes`; corruption-test put (§5c) | §2/§3/§5c | excluded |
+| `archival_sigma_work` | epoch-close put; `delete_archival_sigma_work_for_epoch` — **pop-side** revert (`:8529`); `delete_archival_sigma_work_before_epoch` — retention prune | §2/§3/§5a | excluded |
+| `archival_slash_applied` | `set/remove_archival_slash_applied` | §2/§3 | excluded |
+| `archival_slash_log` | `append_archival_slash_log`; `revert_archival_slashes_at_height` | §2/§3 | excluded |
+| `block_burn` | `add_block_burn` / `remove_block_burn` | §2/§3 | uncovered |
+| `block_heights` | `add_block` / `remove_block` | §2/§3 | uncovered |
+| `block_info` | `add_block` / `remove_block`; `correct_block_cumulative_difficulties` (own `block_wtxn`) | §2/§3/§5c | v0-partial |
+| `block_pending_additions` | `add_block_pending_addition`; `remove_block_pending_additions` | §2/§3 | uncovered |
+| `blocks` | `add_block` / `remove_block` (`m_wcursors`) | §2/§3 | v0-partial |
+| `curve_tree_checkpoints` | `save_curve_tree_checkpoint`; `prune_curve_tree_intermediate_layers` | §2/§3 | uncovered |
+| `curve_tree_layers` | `grow/trim_curve_tree`; `prune_curve_tree_intermediate_layers`; corruption-test del (§5c) | §2/§3/§5c | uncovered |
+| `curve_tree_leaves` | `grow_curve_tree` / `trim_curve_tree` | §2/§3 | uncovered |
+| `curve_tree_meta` | `grow/trim_curve_tree` | §2/§3 | v0-partial |
+| `curve_tree_roots` | `store/remove_curve_tree_root_at_height` | §2/§3 | uncovered |
+| `hf_starting_heights` | **deleted at every non-read-only `open()`** (`mdb_drop` del=1, `:1779`); `drop_hard_fork_info`; finding DRS-W5 | §5b/§5c | uncovered |
+| `hf_versions` | `set_hard_fork_version` (`TXN_BLOCK_PREFIX`); `drop_hard_fork_info`; not cleaned on pop (P0c wart) | §2/§5c | uncovered |
+| `leaf_to_output` | `add/remove_output_leaf_mapping` | §2/§3 | uncovered |
+| `output_amounts` | `add_output` / `remove_output` | §2/§3 | uncovered |
+| `output_metadata` | `store_output_metadata` — sole caller is inside `prune_tx_data` (`db_lmdb.cpp:10229`), so this table is written by the **depth prune**, not by connect | §5a | uncovered |
+| `output_to_leaf` | `add/remove_output_leaf_mapping` | §2/§3 | uncovered |
+| `output_txs` | `add_output` / `remove_output` | §2/§3 | uncovered |
+| `pending_tree_drain` | `add_pending_tree_drain_entry`; `remove_pending_tree_drain_entries` | §2/§3 | uncovered |
+| `pending_tree_leaves` | `add/remove_pending_tree_leaf`; `drain_pending_tree_leaves` | §2/§3 | uncovered |
+| `properties` | `open()` version seed; `set_total_bonded_atomic` / `set_total_burned` (incl. the post-pop burn reversal, `blockchain.cpp:896` — §3/DRS-W6); `set_archival_last_slash_epoch` — written on **both** paths, by `process_archival_slash_at_height` on connect (`:6248`) and `revert_archival_slashes_at_height` on pop (`:6429`, `:6431`); prune receipts — `note_archival_prune_watermark_epoch` and `set_archival_frozen_shard_count_on_write_txn`, plus `pruning_seed` written by `prune_worker` (`:2365`) and `tx_prune_next_block` by `write_tx_prune_next_block_height` (`:10283`), both §5a; `set_settlement_epoch_blocks_pin` (own txn) | §2/§3/§5a/§5b/§5c | uncovered |
+| `spent_keys` | `add_spent_key` / `remove_spent_key` | §2/§3 | v0 |
+| `tx_indices` | `add_transaction_data` / `remove_transaction_data` | §2/§3 | uncovered |
+| `tx_outputs` | `add_tx_amount_output_indices` / `remove_transaction_data` | §2/§3 | uncovered |
+| `txpool_blob` | `add/remove_txpool_tx` (`LockedTXN`); reset-kept | §4/§5b | excluded |
+| `txpool_meta` | `add/update/remove_txpool_tx` (`LockedTXN`); reset-kept | §4/§5b | excluded |
+| `txs` | **none** — opened (`:1662`), never written or read through its handle; finding DRS-W4 | §9 | excluded |
+| `txs_pqc_auths` | `add_transaction_data` / `remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a | uncovered |
+| `txs_prunable` | `add/remove_transaction_data`; `prune_worker`, `prune_tx_data` (own txns) | §2/§3/§5a | uncovered |
+| `txs_prunable_hash` | `add/remove_transaction_data` (v11: kept by the depth prune) | §2/§3/§5a | uncovered |
+| `txs_prunable_tip` | `add/remove_transaction_data`; `prune_worker` | §2/§3/§5a | uncovered |
+| `txs_pruned` | `add_transaction_data` / `remove_transaction_data` | §2/§3 | uncovered |
 
 Enumeration ground: 135 write call sites across 81 functions (79
 `BlockchainLMDB::` methods + the two anonymous-namespace journal template
@@ -1048,3 +1055,122 @@ dbi). `txs` is the one macro table with no write site (DRS-W4), and
 its verdicts are records-was — true of a 29-table store with claim-era
 staking and a live Monero migration ladder, none of which exist at this
 pin.*
+
+## 11. Digest v0 coverage ledger (P0e)
+
+**This section states what digest v0 sees. It does not claim the store is
+covered** — three of its four states say the opposite, and the count below is
+the measured size of the gap P0d named when it scoped v0 as a *minimum*.
+
+**Every one of the 49 declared tables carries exactly one state token in
+§10's `Digest v0` column**, and the schema-coverage gate's P0e leg enforces
+that — one token per table, drawn from the four below, no blanks. The leg
+asserts **statehood, not coverage**: a tree where all 49 read `uncovered`
+passes it. What the leg prevents is a table entering or leaving the digest
+with nobody writing it down.
+
+**The test applied to every row, and the only one applied:** *would a
+divergence in this table move a digest-v0 input?* Digest v0 reads exactly
+four things (`logical_state_digest.cpp:41`) — the row **count** of `blocks`
+via `mdb_stat`, `block_info.bi_hash` for every height, the whole
+`spent_keys` set, and `curve_tree_meta`'s `"root"`. A table's role, its
+importance, or the fact that it is indexed off something digested are **not**
+answers to that question. "Derived from a digested primary" was rejected as a
+class for exactly this reason: the digest hashes `bi_hash`, not the
+`block_info` row, so an index keyed on a field the digest never reads can
+diverge freely.
+
+| State | Count | Meaning |
+| --- | --- | --- |
+| `v0` | **1** | Fully hashed. Any divergence moves the digest |
+| `v0-partial` | **3** | One field or one property is hashed; the rest of the table is not |
+| `excluded` | **21** | Outside the oracle's stated domain, or dead |
+| `uncovered` | **24** | In domain, consensus-bearing, and invisible to the digest |
+
+**`v0` and `v0-partial` — what is actually hashed.**
+
+`spent_keys` is the only table hashed whole. The other three are partial, and
+the partiality is easy to misread:
+
+- **`blocks` — row count only.** `height()` takes `mdb_stat(m_blocks)` and
+  uses `ms_entries`. The block *blobs* are never read by the digest. A blob
+  corrupted at height *h* with `block_info.bi_hash` intact does not move it.
+  The Digest-v0 read-set table in §6 says the hash is "`block_info.bi_hash`,
+  not the `blocks` blob", which is true of the *hash* and has been read as
+  meaning `blocks` is out of the digest entirely. Its cardinality is in.
+- **`block_info` — `bi_hash` only.** The row also carries `bi_height`,
+  `bi_timestamp`, `bi_coins`, `bi_weight`, `bi_diff` and `bi_cum_rct`. Block
+  **difficulty and weight are consensus inputs** and the digest does not see
+  them.
+- **`curve_tree_meta` — the `"root"` property only.** Other keys in the table
+  are not read.
+
+**`excluded` — outside the oracle's domain, or dead.**
+
+Digest v0 is a **main-chain-state oracle by construction**, so non-canonical
+state is outside its *domain* rather than missing from its *coverage*. That
+is the whole justification, and it is a domain claim, not a safety claim.
+
+- **Non-canonical (4):** `txpool_meta`, `txpool_blob`, `alt_blocks`,
+  `archival_alt_attestation_witness`. **Only the txpool pair has the boundary
+  enforced** — §6's exclusion test guards the leak direction (a write there
+  must *not* move the digest). `alt_blocks` and the alt witness have no
+  equivalent test, so for them the boundary is *declared, not enforced*. That
+  is this class's open item. The alt witness is archival as well as alt; it
+  is classed here because the domain argument is the one that holds today,
+  and it inherits §7.1.1's KAT obligation when S-ARCH ports.
+- **Archival journal families (16):** the `DAEMON_REDB_STORE.md` §7.1.1 named
+  exclusion. **The replacement KAT that rule requires does not exist yet.**
+  §7.1.1 forbids extracting S-ARCH or implementing archival apply in
+  `shekyl-chain-store` until these are digested *or* carry that KAT, so the
+  obligation is live and unmet — recorded here as the exclusion's open item
+  rather than treated as discharged by being written down.
+- **Dead (1):** `txs` — zero read sites and zero write sites (DRS-W4).
+  Nothing can diverge in a table nothing touches.
+
+**`uncovered` — in domain, and the digest cannot see it.**
+
+Twenty-four tables hold main-chain state that no digest-v0 input depends on.
+Four are worth naming individually because a reader would otherwise assume
+the oracle covers them:
+
+- **`properties` — and this one has a consumer in this document.** It holds
+  the schema version, the prune-watermark receipt, and **`total_burned`**
+  (`set_total_burned` writes `m_properties`). The burn aggregate is the
+  subject of three wart rows, and **DRS-W9 describes a partial commit that
+  leaves it wrong**: the block, its txs and the `block_burn` row commit
+  without the aggregate. **Digest v0 cannot distinguish a store that suffered
+  that failure from one that did not.** W9's disposition carries this
+  cross-reference.
+- **`curve_tree_roots` — per-height roots, read by consensus.** Written on
+  connect (`blockchain_db.cpp:658`), removed on pop (`:874`), and read as the
+  FCMP membership-proof reference root at `blockchain.cpp:3898`, `:4047` and
+  `:4309`. The digest hashes only the *current* root, so a historical root
+  diverging at a height the tree has since moved past is invisible. §6 said
+  this table "is P0e, not v0"; this is that disposition — **uncovered**, not
+  excluded.
+- **Stored transaction bodies (`txs_pruned`, `txs_prunable`,
+  `txs_prunable_hash`, `txs_prunable_tip`).** The digest hashes block
+  *identities*, never stored tx content. This is the largest single hole by
+  volume. Do not read DRS-W4's "dead" verdict onto these — W4 is about `txs`
+  alone; these four are live.
+- **`hf_versions` and `hf_starting_heights`.** Uncovered like the rest, with
+  a caveat that is *not* a coverage state: their retention semantics are
+  pending census R4 (DRS-W5, DRS-W11, DRS-W15). `hf_starting_heights` is
+  additionally `mdb_drop`'d at every writable `open()` (DRS-W5), so it has no
+  runtime rows to diverge — its uncoveredness is vacuous at runtime rather
+  than latent.
+
+The remaining eighteen — the output set (`output_txs`, `output_amounts`,
+`output_metadata`, `tx_outputs`), the tx and block indices (`tx_indices`,
+`block_heights`), the curve-tree working state (`curve_tree_leaves`,
+`curve_tree_layers`, `curve_tree_checkpoints`, `leaf_to_output`,
+`output_to_leaf`, `pending_tree_leaves`, `pending_tree_drain`,
+`block_pending_additions`), `txs_pqc_auths`, `block_burn` and the two
+hardfork tables above — fail the divergence test for the same reason: no
+digest-v0 input reads them.
+
+**These are findings, not decisions.** Widening the digest is **DRS-E1**'s,
+not P0e's: v0's read set is P0d's and pinned, and changing it moves the
+oracle. P0e's job was to measure the gap and make it impossible to lose.
+
