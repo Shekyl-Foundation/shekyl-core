@@ -113,7 +113,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
-- **`hf_starting_heights` deleted at every writable `open()` (P0b DRS-W5).** `mdb_drop(…,1)` at `db_lmdb.cpp:1778`, never re-created — macro table structurally absent at runtime; feeds census R4 ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
+- **`hf_starting_heights` deleted at every writable `open()` (P0b DRS-W5).** `mdb_drop(…,1)` at `db_lmdb.cpp:1779`, never re-created — macro table structurally absent at runtime; feeds census R4 ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
 - **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
