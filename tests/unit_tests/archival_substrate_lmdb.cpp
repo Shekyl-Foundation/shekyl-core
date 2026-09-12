@@ -125,7 +125,7 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   const uint64_t bonded_total = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
 
   BlockchainDB& db = fixture.db;
-  db.put_archival_bond_record(p_id, pubkey, {}, 3, bonded_total,
+  db.put_archival_bond_record(p_id, pubkey, {}, archival_test::test_endpoint(), 3, bonded_total,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, shards, bad);
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -261,7 +261,7 @@ TEST(archival_substrate_lmdb, complete_tree_bond_holds_any_shard)
   const std::vector<uint8_t> pubkey = {0x05, 0x06};
 
   BlockchainDB& db = fixture.db;
-  db.put_archival_bond_record(p_id, pubkey, {}, 1, SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p_id, pubkey, {}, archival_test::test_endpoint(), 1, SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsCompleteTree, {}, {});
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -540,9 +540,9 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   const crypto::hash p_missing = make_hash(0x53);
   const std::vector<uint8_t> pubkey = {0x01};
 
-  db.put_archival_bond_record(p1, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p1, pubkey, {}, archival_test::test_endpoint(), join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
-  db.put_archival_bond_record(p2, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p2, pubkey, {}, archival_test::test_endpoint(), join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
 
   // Aged segment for shard 7; shard 9 stays segment-less (age 0). A second
@@ -661,7 +661,7 @@ TEST(archival_substrate_lmdb, emission_gather_folds_three_challenges_into_one_cr
   const crypto::hash p1 = make_hash(0x71);
   const std::vector<uint8_t> pubkey = {0x01};
 
-  db.put_archival_bond_record(p1, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p1, pubkey, {}, archival_test::test_endpoint(), join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
 
@@ -783,7 +783,7 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
   // holdings after the close — the exact M2-1 drop-after-serve mutation.
   // Every snapshot output must be bit-identical: the work channel reads the
   // serve-credit ledger, never the holdings descriptor.
-  db.put_archival_bond_record(p2, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p2, pubkey, {}, archival_test::test_endpoint(), join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -912,7 +912,7 @@ TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip
   // Membership begins at join+1, so a bond joined AT the settlement epoch is
   // not yet a member: its credit rows yield r_market = 0 and sigma = 0.
   const crypto::hash p1 = make_hash(0x54);
-  db.put_archival_bond_record(p1, {0x01}, {}, settlement_epoch,
+  db.put_archival_bond_record(p1, {0x01}, {}, archival_test::test_endpoint(), settlement_epoch,
     2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   db.put_archival_shard_segment(7, 0, make_hash(0x65), 26000);
@@ -3379,7 +3379,7 @@ TEST(archival_substrate_lmdb, release_connect_pop_roundtrip_through_real_block_p
   const uint64_t record_bonded = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t total_bonded = 5 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   db.put_archival_bond_record(p_id,
-    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, 3, record_bonded,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, archival_test::test_endpoint(), 3, record_bonded,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 42}, {{5, 6}});
   db.set_total_bonded_atomic(total_bonded);
   fixture.db.batch_stop();
@@ -3461,10 +3461,10 @@ TEST(archival_substrate_lmdb, release_two_p_one_block_threads_the_counter)
   const uint64_t bonded_a = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t bonded_b = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   db.put_archival_bond_record(p_a,
-    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x11), {}, 0, bonded_a,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x11), {}, archival_test::test_endpoint(), 0, bonded_a,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7});
   db.put_archival_bond_record(p_b,
-    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x22), {}, 0, bonded_b,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x22), {}, archival_test::test_endpoint(), 0, bonded_b,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {8, 9});
   db.set_total_bonded_atomic(bonded_a + bonded_b);
   fixture.db.batch_stop();
@@ -3566,7 +3566,7 @@ TEST(archival_substrate_lmdb, holdings_update_add_connect_pop_roundtrip_through_
   const uint64_t record_bonded = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t total_bonded = 5 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   db.put_archival_bond_record(p_id,
-    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, 3, record_bonded,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, archival_test::test_endpoint(), 3, record_bonded,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 42});
   db.set_total_bonded_atomic(total_bonded);
   fixture.db.batch_stop();
@@ -4022,4 +4022,193 @@ TEST(archival_substrate_lmdb, budget_epoch_boundary_includes_final_block_through
   ASSERT_TRUE(lmdb.has_archival_budget_row(0));
   EXPECT_EQ(db.get_archival_budget(0), kSeb * kAccrual)
     << "pop + re-connect must reproduce budget(0) byte-identically";
+}
+
+// ─── EndpointUpdate (EU-D12) ─────────────────────────────────────────────────
+
+TEST(archival_substrate_lmdb, endpoint_update_revert_value_round_trips)
+{
+  shekyl::db::ArchivalBondEndpointUpdateRevertValue v{};
+  std::memset(v.p_id, 0x9E, sizeof(v.p_id));
+  v.pre_endpoint.fill(0xE0);
+
+  const std::vector<uint8_t> encoded = v.encode();
+  EXPECT_EQ(encoded.size(), shekyl::db::ArchivalBondEndpointUpdateRevertValue::kSize);
+  EXPECT_EQ(encoded[0], shekyl::db::ArchivalBondEndpointUpdateRevertValue::kVersion);
+  shekyl::db::ArchivalBondEndpointUpdateRevertValue out{};
+  ASSERT_TRUE(shekyl::db::ArchivalBondEndpointUpdateRevertValue::decode(
+    encoded.data(), encoded.size(), out));
+  EXPECT_EQ(0, std::memcmp(out.p_id, v.p_id, sizeof(v.p_id)));
+  EXPECT_EQ(out.pre_endpoint, v.pre_endpoint);
+
+  // Fixed size: a byte short or long is not a row.
+  EXPECT_FALSE(shekyl::db::ArchivalBondEndpointUpdateRevertValue::decode(
+    encoded.data(), encoded.size() - 1, out));
+  std::vector<uint8_t> longer = encoded;
+  longer.push_back(0);
+  EXPECT_FALSE(shekyl::db::ArchivalBondEndpointUpdateRevertValue::decode(
+    longer.data(), longer.size(), out));
+  // A zero pre-image is a value the record can hold — it round-trips.
+  v.pre_endpoint.fill(0);
+  const std::vector<uint8_t> zero = v.encode();
+  ASSERT_TRUE(shekyl::db::ArchivalBondEndpointUpdateRevertValue::decode(
+    zero.data(), zero.size(), out));
+  EXPECT_EQ(out.pre_endpoint, v.pre_endpoint);
+}
+
+namespace {
+
+cryptonote::transaction make_endpoint_update_tx(const crypto::hash& p_id, uint8_t endpoint_fill)
+{
+  transaction tx{};
+  tx.version = 2;
+  txin_archival_bond_post vin{};
+  vin.hybrid_public_key.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B);
+  vin.p_canonical_id = p_id;
+  vin.post_kind = static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate);
+  vin.endpoint = archival_test::test_endpoint(endpoint_fill);
+  tx.vin.push_back(vin);
+  return tx;
+}
+
+} // namespace
+
+// EndpointUpdate connect/pop twin through the REAL block path (EU-D12):
+// add_block drives the vin dispatch → apply_archival_endpoint_update (pre-image
+// journal in the per-kind table, endpoint replaced), pop_block drives
+// revert_archival_endpoint_updates_at_height. EU-D9 KAT (a), C++ half: the
+// record's persisted bytes after the connect differ from before ONLY in the
+// endpoint field — checked by encoding the pre-record with the new endpoint
+// spliced in and comparing whole encodings — and the pop restores them
+// byte-exactly. The global counter is asserted untouched both ways.
+TEST(archival_substrate_lmdb, endpoint_update_connect_pop_roundtrip_through_real_block_path)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  append_minimal_blocks(db, kSeb + 3);
+
+  const crypto::hash p_id = make_hash(0xF4);
+  const uint64_t record_bonded = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const uint64_t total_bonded = 5 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  db.put_archival_bond_record(p_id,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {},
+    archival_test::test_endpoint(0xE0), 3, record_bonded,
+    shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 42}, {{5, 6}});
+  db.set_total_bonded_atomic(total_bonded);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue pre{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, pre));
+  const std::vector<uint8_t> pre_bytes = pre.encode();
+  std::array<uint8_t, 32> e0{};
+  e0.fill(0xE0);
+  ASSERT_EQ(pre.endpoint, e0);
+
+  connect_block_with_txs(db, {make_endpoint_update_tx(p_id, 0xE1)});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  shekyl::db::ArchivalBondValue post{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, post));
+  std::array<uint8_t, 32> e1{};
+  e1.fill(0xE1);
+  EXPECT_EQ(post.endpoint, e1);
+  // KAT (a): the whole persisted record, with only the endpoint spliced.
+  shekyl::db::ArchivalBondValue expect = pre;
+  expect.endpoint = e1;
+  EXPECT_EQ(post.encode(), expect.encode());
+  EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
+
+  block popped{};
+  std::vector<transaction> popped_txs;
+  fixture.db.pop_block(popped, popped_txs);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_EQ(popped_txs.size(), 1u);
+  shekyl::db::ArchivalBondValue restored{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_id, restored));
+  EXPECT_EQ(restored.endpoint, e0);
+  EXPECT_EQ(restored.encode(), pre_bytes);
+  EXPECT_EQ(db.get_total_bonded_atomic(), total_bonded);
+}
+
+// EU-D9 KAT (b): a rotation inside the failure window does not reset it.
+//
+// The attack this pins: a P that is about to be slashed for sustained absence
+// rotates its endpoint, hoping the window starts over with the "new" service.
+// The window is a property of (P, shard) observations — serve-credit bits and
+// the shard's add-epoch — and an EndpointUpdate touches neither. Built on the
+// m-of-n scheduler KAT: walk to m-1 observed misses, connect the rotation
+// through the real block path, walk one more epoch, and the slash still
+// fires at epoch m with the rotated endpoint in place. A connect wired into
+// the wrong branch (one that rebuilt add-epochs or holdings as a re-add) would
+// push the m-th miss out by the epochs it reset and this test would fail.
+TEST(archival_substrate_lmdb, endpoint_rotation_does_not_reset_the_failure_window)
+{
+  TempLMDB fixture;
+  BlockchainDB& db = fixture.db;
+  const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+  const FailureWindowParams window = failure_window_params();
+  ASSERT_GE(window.m, 2u);
+
+  HardFork hf(db, 1, 0);
+  hf.init();
+  db.set_hard_fork(&hf);
+
+  const crypto::hash p_miss = make_hash(0x7F);
+  shekyl::db::ArchivalBondValue seed = window_kat_bond();
+  seed.endpoint.fill(0xE0);
+  db.put_archival_bond_value(p_miss, seed);
+  db.set_total_bonded_atomic(2 * floor);
+  db.set_total_burned(0);
+
+  // m-1 observed misses: absorbed, as the scheduler KAT establishes.
+  const uint64_t absorbed_epoch = window.m - 1;
+  append_minimal_blocks(db,
+    shekyl_archival_epoch_slash_deadline_height(absorbed_epoch) + 2);
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  shekyl::db::ArchivalBondValue read{};
+  ASSERT_TRUE(db.get_archival_bond_value(p_miss, read));
+  ASSERT_TRUE(read.holds_shard(7));
+  ASSERT_EQ(db.get_archival_last_slash_epoch(), absorbed_epoch);
+
+  // The rotation lands inside the window, through the real connect path.
+  connect_block_with_txs(db, {make_endpoint_update_tx(p_miss, 0xE1)});
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+  ASSERT_TRUE(db.get_archival_bond_value(p_miss, read));
+  std::array<uint8_t, 32> e1{};
+  e1.fill(0xE1);
+  ASSERT_EQ(read.endpoint, e1);
+  // The window's inputs are untouched by the rotation: same shard, same
+  // add-epoch, still absorbed at this point.
+  EXPECT_EQ(read.held_shard_ids, (std::vector<uint64_t>{7}));
+  EXPECT_EQ(read.shard_add_epochs, (std::vector<uint64_t>{0}));
+  EXPECT_TRUE(read.bad_intervals.empty());
+
+  // One more epoch: the m-th miss crosses the threshold exactly as it would
+  // have without the rotation.
+  const uint64_t slash_epoch = window.m;
+  append_minimal_blocks(db,
+    shekyl_archival_epoch_slash_deadline_height(slash_epoch) + 2 - db.height());
+  fixture.db.batch_stop();
+  fixture.db.batch_start();
+
+  ASSERT_TRUE(db.get_archival_bond_value(p_miss, read));
+  EXPECT_FALSE(read.holds_shard(7));
+  EXPECT_EQ(read.bonded_total_atomic, 2 * floor - floor);
+  EXPECT_EQ(db.get_total_burned(), floor);
+  ASSERT_EQ(read.bad_intervals.size(), 1u);
+  EXPECT_EQ(read.bad_intervals[0].start_epoch, slash_epoch);
+  EXPECT_FALSE(db.archival_bond_good_through(p_miss, slash_epoch));
+  // ... and the slash did not undo the rotation either: the endpoint is the
+  // record's own field, disjoint from what the slash writes.
+  EXPECT_EQ(read.endpoint, e1);
 }

@@ -650,6 +650,27 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   {
     throw WRONG_TYPE("bond_spend_pk is JoinMarket-coupled");
   }
+  // EU-D3 coupling: the endpoint is emitted iff JoinMarket or EndpointUpdate;
+  // a stray endpoint on another kind fails at the producer like a stray key.
+  if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket)
+    || txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::EndpointUpdate))
+  {
+    INSERT_INTO_JSON_OBJECT(dest, endpoint, txin.endpoint);
+  }
+  else if (txin.has_endpoint())
+  {
+    throw WRONG_TYPE("endpoint is JoinMarket/EndpointUpdate-coupled");
+  }
+  if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::EndpointUpdate))
+  {
+    // EU-D11: the kind-4 object ends at the endpoint — holdings and the
+    // amount term are not emitted, and a vin carrying them is refused here
+    // (fromJsonValue below refuses the members on read).
+    if (!txin.is_endpoint_update_shape())
+      throw WRONG_TYPE("EndpointUpdate carries holdings or an amount term");
+    dest.EndObject();
+    return;
+  }
   INSERT_INTO_JSON_OBJECT(dest, holdings, txin.holdings);
   INSERT_INTO_JSON_OBJECT(dest, bonded_total_atomic, txin.bonded_total_atomic);
   INSERT_INTO_JSON_OBJECT(dest, bond_credit, txin.bond_credit);
@@ -671,7 +692,7 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_p
     throw WRONG_TYPE("archival bond-post hybrid_public_key length not canonical");
   GET_FROM_JSON_OBJECT(val, txin.p_canonical_id, p_canonical_id);
   GET_FROM_JSON_OBJECT(val, txin.post_kind, post_kind);
-  if (txin.post_kind > static_cast<uint8_t>(cryptonote::archival_bond_post_kind::HoldingsUpdate))
+  if (txin.post_kind > static_cast<uint8_t>(cryptonote::archival_bond_post_kind::EndpointUpdate))
     throw WRONG_TYPE("invalid archival_bond_post_kind");
   // §9.11 coupling: JoinMarket requires the exact-canonical-length GF-1 debit
   // authorizer; every other kind must not carry one (the field stays empty).
@@ -684,6 +705,30 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_p
   else if (val.HasMember("bond_spend_pk"))
   {
     throw WRONG_TYPE("bond_spend_pk is JoinMarket-coupled");
+  }
+  // EU-D3 coupling: JoinMarket and EndpointUpdate require the endpoint; every
+  // other kind must not carry one.
+  if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket)
+    || txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::EndpointUpdate))
+  {
+    GET_FROM_JSON_OBJECT(val, txin.endpoint, endpoint);
+  }
+  else if (val.HasMember("endpoint"))
+  {
+    throw WRONG_TYPE("endpoint is JoinMarket/EndpointUpdate-coupled");
+  }
+  if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::EndpointUpdate))
+  {
+    // EU-D11: refuse, don't ignore — a kind-4 object carrying holdings or an
+    // amount term is the shape the binary and boost codecs refuse.
+    if (val.HasMember("holdings") || val.HasMember("bonded_total_atomic")
+      || val.HasMember("bond_credit") || val.HasMember("bond_debit"))
+      throw WRONG_TYPE("EndpointUpdate carries holdings or an amount term");
+    txin.holdings = cryptonote::archival_holdings_descriptor{};
+    txin.bonded_total_atomic = 0;
+    txin.bond_credit = 0;
+    txin.bond_debit = 0;
+    return;
   }
   GET_FROM_JSON_OBJECT(val, txin.holdings, holdings);
   GET_FROM_JSON_OBJECT(val, txin.bonded_total_atomic, bonded_total_atomic);

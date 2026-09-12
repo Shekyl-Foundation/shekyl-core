@@ -14,6 +14,8 @@
 # `cold_authority_pin` / `shekyl_archival_cold_authority_pin`.
 #
 #   Release          always            (UB3 before UB9, §8.7.1.1)
+#   EndpointUpdate   always            (EU-D2: rotation is what the hot key's
+#                                       thief must NOT be able to do)
 #   HoldingsUpdate   iff bond_debit > 0 (drop = cold, add = identity)
 #   JoinMarket       never             (the credit that COMMITS the cold key)
 #   Rebond           never             (credit path; verify needs debit == 0)
@@ -61,8 +63,9 @@ done
 
 # Each REQUIRED site by name, not a count. A count cannot tell a removed
 # checkpoint call from a new unrelated one, and it counts comments; both were
-# true of the previous version. These are the three places consensus decides a
-# value-out is authorized, and each is asserted to reach the shared predicate
+# true of the previous version. These are the four places consensus decides a
+# cold-authority post is authorized (three value-outs and the endpoint
+# rotation), and each is asserted to reach the shared predicate
 # (a fourth -- the per-block-checkpoint fast path's "block fast-check debit"
 # belt -- was deleted with its whole mechanism in C2-R1a: with the fast path
 # gone the per-tx verify below is unconditional at block connect, so the
@@ -70,10 +73,11 @@ done
 #
 #   blockchain.cpp   "Release"                 per-tx debit verify
 #   blockchain.cpp   "HoldingsUpdate-drop"    per-tx debit verify
+#   blockchain.cpp   "EndpointUpdate"          per-tx rotation verify (EU-D2)
 #   daemon_submit_ffi.cpp                     the submit gather's work gate
 #
 # Comments are stripped first, so a mention in prose cannot stand in for a
-# call. Adding a fifth value-out arm means adding its row here — deliberately,
+# call. Adding another cold-authority arm means adding its row here — deliberately,
 # because a new arm that authorizes nothing is the failure this gate exists
 # for and it cannot be detected by looking at the arms that do.
 # Comment-stripped file body, captured rather than piped. `rg -q` exits on the
@@ -135,6 +139,9 @@ require_call src/cryptonote_core/blockchain.cpp \
 require_call src/cryptonote_core/blockchain.cpp \
   'archival_cold_authority_pin\(record,[^;]*"HoldingsUpdate-drop"\)' \
   "per-tx HoldingsUpdate-drop verify"
+require_call src/cryptonote_core/blockchain.cpp \
+  'archival_cold_authority_pin\(record,[^;]*"EndpointUpdate"\)' \
+  "per-tx EndpointUpdate verify"
 require_call src/rpc/daemon_submit_ffi.cpp \
   'shekyl_archival_cold_authority_pin\(' \
   "submit gather work gate"

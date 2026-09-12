@@ -37,6 +37,7 @@
 #include "bulletproofs_plus.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_config.h"
+#include <functional>
 #include "shekyl/shekyl_ffi.h"
 
 using namespace crypto;
@@ -258,14 +259,23 @@ namespace
       return verCtSemanticsSimple(std::vector<const CtSig*>(1, &rv));
     }
 
-    // Shared CT-balance + aggregate-range tail for the archival bond-post and
-    // reward-emission semantics checks. The balance FFI, canonical-BPP layout
-    // check, flatten loops, and range-proof verify are identical for both — only
-    // the (credit, debit) operands and each caller's structural prologue differ,
-    // so the common logic lives here once. `what` labels the log lines. Any
-    // divergence must be made here, not forked into a second copy.
+    // The flattened-operand balance call each archival semantics check selects:
+    // the bond-post shape (one bond term), the emission shape (the mint on the
+    // debit slot), or the EndpointUpdate shape (no term at all, its own FFI
+    // entry — a kind byte on the shared export would be an untyped hole for
+    // the emission caller, which is not a bond post and has no kind to pass).
+    using archival_balance_fn = std::function<uint8_t(
+        const uint8_t *pseudo_flat, size_t num_pseudo,
+        const uint8_t *mask_flat, size_t num_masks, uint64_t txn_fee)>;
+
+    // Shared CT-balance + aggregate-range tail for the archival bond-post,
+    // reward-emission, and EndpointUpdate semantics checks. The canonical-BPP
+    // layout check, flatten loops, and range-proof verify are identical for all
+    // three — only the balance call's operands and each caller's structural
+    // prologue differ, so the common logic lives here once. `what` labels the
+    // log lines. Any divergence must be made here, not forked into a second copy.
     static bool verArchivalCtBalanceAndRange(const CtSig &rv,
-        const uint64_t bond_credit, const uint64_t bond_debit, const char *what)
+        const archival_balance_fn &balance, const char *what)
     {
       CHECK_AND_ASSERT_MES(rv.outPk.size() == n_bulletproof_plus_amounts(rv.p.bulletproofs_plus),
           false, "Mismatched sizes of outPk and bulletproofs_plus");
@@ -287,14 +297,12 @@ namespace
       mask_flat.reserve(rv.outPk.size() * 32);
       for (const ctkey &op : rv.outPk)
         mask_flat.insert(mask_flat.end(), op.mask.bytes, op.mask.bytes + 32);
-      const uint8_t balance_rc = shekyl_archival_verify_bond_post_ct_balance(
+      const uint8_t balance_rc = balance(
           pseudo_flat.empty() ? nullptr : pseudo_flat.data(),
           rv.p.pseudoOuts.size(),
           mask_flat.empty() ? nullptr : mask_flat.data(),
           rv.outPk.size(),
-          rv.txnFee,
-          bond_credit,
-          bond_debit);
+          rv.txnFee);
       if (balance_rc != SHEKYL_ARCHIVAL_BOND_CT_BALANCE_OK)
       {
         LOG_PRINT_L1(what << " sum check failed (rc=" << static_cast<unsigned>(balance_rc) << ")");
@@ -321,7 +329,13 @@ namespace
         CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(), false,
             "verCtSemanticsBondPost requires non-empty FCMP++ proof");
         // Bond-post CT balance: credit = bond_credit, debit = bond_debit.
-        return verArchivalCtBalanceAndRange(rv, bond_credit, bond_debit, "Bond-post");
+        return verArchivalCtBalanceAndRange(rv,
+            [&](const uint8_t *pseudo, size_t n_pseudo, const uint8_t *masks, size_t n_masks,
+                uint64_t fee) {
+              return shekyl_archival_verify_bond_post_ct_balance(
+                  pseudo, n_pseudo, masks, n_masks, fee, bond_credit, bond_debit);
+            },
+            "Bond-post");
       }
       catch (const std::exception &e)
       {
@@ -331,6 +345,35 @@ namespace
       catch (...)
       {
         LOG_PRINT_L1("Error in verCtSemanticsBondPost, but not an actual exception");
+        return false;
+      }
+    }
+
+    bool verCtSemanticsEndpointUpdate(const CtSig &rv)
+    {
+      try
+      {
+        CHECK_AND_ASSERT_MES(rv.type == CTTypeFcmpPlusPlusPqc, false,
+            "verCtSemanticsEndpointUpdate called on unsupported CtSig type");
+        CHECK_AND_ASSERT_MES(!rv.p.fcmp_pp_proof.empty(), false,
+            "verCtSemanticsEndpointUpdate requires non-empty FCMP++ proof");
+        // EU-D11: no bond term — the plain equation through its own FFI entry.
+        return verArchivalCtBalanceAndRange(rv,
+            [](const uint8_t *pseudo, size_t n_pseudo, const uint8_t *masks, size_t n_masks,
+                uint64_t fee) {
+              return shekyl_archival_verify_endpoint_update_ct_balance(
+                  pseudo, n_pseudo, masks, n_masks, fee);
+            },
+            "EndpointUpdate");
+      }
+      catch (const std::exception &e)
+      {
+        LOG_PRINT_L1("Error in verCtSemanticsEndpointUpdate: " << e.what());
+        return false;
+      }
+      catch (...)
+      {
+        LOG_PRINT_L1("Error in verCtSemanticsEndpointUpdate, but not an actual exception");
         return false;
       }
     }
@@ -354,8 +397,14 @@ namespace
         //   sum(pseudoOuts) + total_reward*H = sum(out masks) + fee*H.
         // Same single-sourced tail as bond-post; the mint rides the debit slot
         // (left-hand side), credit stays 0.
-        return verArchivalCtBalanceAndRange(rv, /*bond_credit=*/0,
-            /*bond_debit=*/total_reward, "Emission");
+        return verArchivalCtBalanceAndRange(rv,
+            [&](const uint8_t *pseudo, size_t n_pseudo, const uint8_t *masks, size_t n_masks,
+                uint64_t fee) {
+              return shekyl_archival_verify_bond_post_ct_balance(
+                  pseudo, n_pseudo, masks, n_masks, fee, /*bond_credit=*/0,
+                  /*bond_debit=*/total_reward);
+            },
+            "Emission");
       }
       catch (const std::exception &e)
       {

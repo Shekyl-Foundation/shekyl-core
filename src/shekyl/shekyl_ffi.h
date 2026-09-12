@@ -1861,6 +1861,18 @@ uint8_t shekyl_archival_verify_bond_post_ct_balance(
     uint64_t bond_credit,
     uint64_t bond_debit);
 
+/// EndpointUpdate CT balance (EU-D11: no bond term):
+/// `sum(pseudoOuts) = sum(out masks) + fee*H`. Its own entry point — the
+/// bond-post export's second caller is the reward-emission arm, which is not
+/// a bond post and has no kind to pass; the C++ bond-post caller selects by
+/// post_kind. Same pointer/point contract as the sibling.
+uint8_t shekyl_archival_verify_endpoint_update_ct_balance(
+    const uint8_t* pseudo_outs_ptr,
+    size_t num_pseudo_outs,
+    const uint8_t* out_masks_ptr,
+    size_t num_out_masks,
+    uint64_t txn_fee);
+
 // General CT cleartext balance (GENESIS_TX_WIRE_FORMAT.md §2.3): the no-bond-term
 // shape for verCtSemanticsSimple / verCtSemanticsFeeOnly. Canonical prime-order
 // points only; INVALID_POINT is checked before the sum, so a torsion-laden input
@@ -1935,7 +1947,10 @@ uint8_t shekyl_check_commitment_masks(
 /// length iff JoinMarket, empty otherwise — returning
 /// SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING (code 23, shared by
 /// both entry points like LEN_OVERFLOW) instead of building a vin the Rust
-/// wire codec would refuse to serialize.
+/// wire codec would refuse to serialize. `endpoint_*` is the vin's EU-D3
+/// serving endpoint — exactly 32 bytes on JoinMarket (and EndpointUpdate),
+/// null/0 on every other kind; the same marshaler refuses the coupling with
+/// SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING (code 52).
 uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
@@ -1943,6 +1958,8 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     size_t shard_ids_len,
     const uint8_t* bond_spend_pk_ptr,
     size_t bond_spend_pk_len,
+    const uint8_t* endpoint_ptr,
+    size_t endpoint_len,
     uint64_t bonded_total_atomic,
     uint64_t bond_credit,
     uint64_t bond_debit,
@@ -2144,8 +2161,8 @@ uint8_t shekyl_archival_last_served_scan(
     uint8_t* out_scan);
 
 // Cold-authority gate. Rust owns both halves:
-//   selector  requires_cold_authority — Release always; HoldingsUpdate iff
-//             bond_debit > 0; JoinMarket / Rebond never
+//   selector  requires_cold_authority — Release and EndpointUpdate always;
+//             HoldingsUpdate iff bond_debit > 0; JoinMarket / Rebond never
 //   pin       presented pqc_auths key vs the record's COMMITTED bond_spend_pk
 // C++ marshals and logs. A record committing no canonical-length key
 // authorizes NOTHING -- fail closed, no identity-key fallback. Code 51 is
@@ -2154,6 +2171,30 @@ uint8_t shekyl_archival_last_served_scan(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST 51
+
+// EndpointUpdate (ARCHIVAL_ENDPOINT_UPDATE.md; kind 4). Shared vin marshal:
+// the EU-D3 endpoint coupling (32 bytes iff JoinMarket or EndpointUpdate) —
+// the sibling of BOND_SPEND_PK_COUPLING, shared by every verify entry.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING       52
+// EndpointUpdate verify (EU-D7): wrong kind at the entry; record missing is
+// RECORD_MISSING (12); record present but not Bonded (zero balance — Exited
+// or terminally slashed); a marshal presenting a term / no endpoint on a kind
+// whose wire cannot carry those shapes (EU-D11 belts); and the kind-4 vin
+// carrying holdings or a term at the marshal.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_ENDPOINT_UPDATE 53
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_RECORD_NOT_BONDED    54
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_CARRIES_TERM         55
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_WITHOUT_ENDPOINT     56
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_EU_SHAPE                57
+/// EndpointUpdate bond-post verify (EU-D7). `endpoint_*` is the vin's 32-byte
+/// endpoint; `record_exists` / `record_bonded_total` come from the LMDB bond
+/// record. The C++ arm runs the cold-authority pin FIRST (EU-D2), then this.
+uint8_t shekyl_archival_verify_endpoint_update(
+    uint8_t post_kind,
+    const uint8_t* endpoint_ptr,
+    size_t endpoint_len,
+    uint8_t record_exists,
+    uint64_t record_bonded_total);
 /// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.
 uint8_t shekyl_archival_bond_post_drop_verdict(uint8_t code);
 /// NUL-terminated static reason for a bond-post verify code (do not free).

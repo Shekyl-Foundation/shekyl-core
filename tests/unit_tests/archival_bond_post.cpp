@@ -61,12 +61,44 @@ txin_archival_bond_post make_join_market_vin()
   // GF-1 debit authorizer: JoinMarket-coupled on the wire (§9.11), exact
   // canonical length enforced by the serializer.
   bond.bond_spend_pk.assign(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5);
+  // EU-D3 serving endpoint: JoinMarket-coupled (with EndpointUpdate). Non-zero
+  // so present and absent (the zero key) are distinguishable below.
+  memset(bond.endpoint.data, 0x0E, sizeof(bond.endpoint.data));
   bond.holdings.kind = archival_holdings_kind::ShardSetCompact;
   bond.holdings.shard_ids = {7, 42};
   bond.bonded_total_atomic = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   bond.bond_credit = bond.bonded_total_atomic;
   bond.bond_debit = 0;
   return bond;
+}
+
+/// The EU-D11 shape: exactly the endpoint. Built from the JoinMarket fixture
+/// so the identity fields match and only the kind-coupled ones differ.
+txin_archival_bond_post make_endpoint_update_vin()
+{
+  txin_archival_bond_post bond = make_join_market_vin();
+  bond.post_kind = static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate);
+  bond.bond_spend_pk.clear();
+  memset(bond.endpoint.data, 0x4E, sizeof(bond.endpoint.data));
+  bond.holdings = archival_holdings_descriptor{};
+  bond.bonded_total_atomic = 0;
+  bond.bond_credit = 0;
+  bond.bond_debit = 0;
+  return bond;
+}
+
+bool endpoint_is(const txin_archival_bond_post& v, uint8_t fill)
+{
+  crypto::public_key expect{};
+  memset(expect.data, fill, sizeof(expect.data));
+  return memcmp(v.endpoint.data, expect.data, sizeof(expect.data)) == 0;
+}
+
+size_t varint_size(uint64_t v)
+{
+  size_t n = 1;
+  while (v >= 0x80) { v >>= 7; ++n; }
+  return n;
 }
 
 } // namespace
@@ -143,6 +175,7 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
       txin_archival_bond_post b = make_join_market_vin();
       b.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
       b.bond_spend_pk.clear();
+      b.endpoint = crypto::public_key{}; // EU-D3: absent off JoinMarket/EndpointUpdate
       b.holdings.shard_ids.clear();
       b.bonded_total_atomic = 0;
       b.bond_credit = 0;
@@ -159,6 +192,91 @@ TEST(archival_bond_post, vin_serializer_enforces_bond_spend_pk_coupling)
     const auto& out = std::get<txin_archival_bond_post>(decoded);
     EXPECT_TRUE(out.bond_spend_pk.empty());
     EXPECT_EQ(out.bond_debit, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC);
+  }
+}
+
+// EU-D3 / EU-D11 at the binary serializer: the endpoint exists iff JoinMarket
+// or EndpointUpdate, and the kind-4 vin is exactly the endpoint. The
+// round-trip pins the byte length, so a field silently added to (or dropped
+// from) the kind-4 wire shape shows up as a count, not as a passing decode.
+TEST(archival_bond_post, vin_serializer_enforces_endpoint_coupling_and_kind4_shape)
+{
+  const auto encode = [](const txin_v& vin, std::string& wire) {
+    std::ostringstream oss;
+    binary_archive<true> oar(oss);
+    const bool ok = ::do_serialize(oar, const_cast<txin_v&>(vin));
+    wire = oss.str();
+    return ok;
+  };
+  const auto decode = [](const std::string& wire, txin_v& out) {
+    binary_archive<false> iar({reinterpret_cast<const uint8_t*>(wire.data()), wire.size()});
+    return ::do_serialize(iar, out);
+  };
+
+  {
+    // JoinMarket round-trips its endpoint.
+    std::string wire;
+    ASSERT_TRUE(encode(make_join_market_vin(), wire));
+    txin_v decoded;
+    ASSERT_TRUE(decode(wire, decoded));
+    EXPECT_TRUE(endpoint_is(std::get<txin_archival_bond_post>(decoded), 0x0E));
+  }
+  {
+    // EndpointUpdate is exactly the endpoint: tag ‖ len ‖ pk ‖ p_id ‖ kind ‖ endpoint.
+    std::string wire;
+    ASSERT_TRUE(encode(make_endpoint_update_vin(), wire));
+    EXPECT_EQ(wire.size(),
+      1 + varint_size(config::PQC_HYBRID_SINGLE_KEY_LEN) + config::PQC_HYBRID_SINGLE_KEY_LEN
+        + sizeof(crypto::hash) + 1 + 32);
+    txin_v decoded;
+    ASSERT_TRUE(decode(wire, decoded));
+    const auto& out = std::get<txin_archival_bond_post>(decoded);
+    EXPECT_EQ(out.post_kind, static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate));
+    EXPECT_TRUE(endpoint_is(out, 0x4E));
+    EXPECT_TRUE(out.bond_spend_pk.empty());
+    EXPECT_TRUE(out.is_endpoint_update_shape());
+  }
+  {
+    // A Release carrying an endpoint is a misconstruction: refused on write.
+    txin_archival_bond_post release = make_join_market_vin();
+    release.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    release.bond_spend_pk.clear();
+    release.holdings.shard_ids.clear();
+    release.bonded_total_atomic = 0;
+    release.bond_credit = 0;
+    release.bond_debit = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
+    std::string wire;
+    EXPECT_FALSE(encode(release, wire));
+    // ... and the same Release without one serializes and reads back absent.
+    release.endpoint = crypto::public_key{};
+    ASSERT_TRUE(encode(release, wire));
+    txin_v decoded;
+    ASSERT_TRUE(decode(wire, decoded));
+    EXPECT_FALSE(std::get<txin_archival_bond_post>(decoded).has_endpoint());
+  }
+  {
+    // EU-D11: a kind-4 vin carrying holdings or an amount term is refused on
+    // write — the wire has no slot for them, so they cannot be "dropped".
+    txin_archival_bond_post with_holdings = make_endpoint_update_vin();
+    with_holdings.holdings.shard_ids = {7};
+    std::string wire;
+    EXPECT_FALSE(encode(with_holdings, wire));
+    txin_archival_bond_post with_term = make_endpoint_update_vin();
+    with_term.bond_credit = 1;
+    EXPECT_FALSE(encode(with_term, wire));
+  }
+  {
+    // The kind bound moved with the enum: 5 does not parse.
+    std::string wire;
+    ASSERT_TRUE(encode(make_endpoint_update_vin(), wire));
+    const size_t kind_off =
+      1 + varint_size(config::PQC_HYBRID_SINGLE_KEY_LEN) + config::PQC_HYBRID_SINGLE_KEY_LEN
+        + sizeof(crypto::hash);
+    ASSERT_EQ(static_cast<uint8_t>(wire[kind_off]),
+      static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate));
+    wire[kind_off] = static_cast<char>(5);
+    txin_v decoded;
+    EXPECT_FALSE(decode(wire, decoded));
   }
 }
 
@@ -203,7 +321,28 @@ TEST(archival_bond_post, boost_serializer_enforces_bond_spend_pk_coupling)
     txin_archival_bond_post release = make_join_market_vin();
     release.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
     release.bond_spend_pk.clear();
+    release.endpoint = crypto::public_key{};
     EXPECT_TRUE(boost_round_trip(release).bond_spend_pk.empty());
+  }
+  // EU-D3 / EU-D11 mirrored: the endpoint round-trips on its two kinds, a
+  // stray endpoint on a Release throws, and a kind-4 vin carrying holdings or
+  // a term throws instead of being silently truncated.
+  {
+    EXPECT_TRUE(endpoint_is(boost_round_trip(make_join_market_vin()), 0x0E));
+    const txin_archival_bond_post out = boost_round_trip(make_endpoint_update_vin());
+    EXPECT_TRUE(endpoint_is(out, 0x4E));
+    EXPECT_TRUE(out.is_endpoint_update_shape());
+  }
+  {
+    txin_archival_bond_post release_with_endpoint = make_join_market_vin();
+    release_with_endpoint.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    release_with_endpoint.bond_spend_pk.clear();
+    EXPECT_THROW(boost_round_trip(release_with_endpoint), boost::archive::archive_exception);
+  }
+  {
+    txin_archival_bond_post with_term = make_endpoint_update_vin();
+    with_term.bond_debit = 1;
+    EXPECT_THROW(boost_round_trip(with_term), boost::archive::archive_exception);
   }
 }
 
@@ -243,6 +382,54 @@ TEST(archival_bond_post, json_codec_enforces_bond_spend_pk_coupling)
     txin_archival_bond_post release_with_key = make_join_market_vin();
     release_with_key.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
     EXPECT_THROW(to_json(release_with_key), cryptonote::json::WRONG_TYPE);
+  }
+  // EU-D3 / EU-D11 at the JSON codec, write and read.
+  {
+    const std::string json = to_json(make_endpoint_update_vin());
+    rapidjson::Document doc;
+    ASSERT_FALSE(doc.Parse(json.c_str()).HasParseError());
+    EXPECT_TRUE(doc.HasMember("endpoint"));
+    EXPECT_FALSE(doc.HasMember("holdings"));
+    EXPECT_FALSE(doc.HasMember("bond_credit"));
+    txin_archival_bond_post out{};
+    cryptonote::json::fromJsonValue(doc, out);
+    EXPECT_TRUE(endpoint_is(out, 0x4E));
+    EXPECT_TRUE(out.is_endpoint_update_shape());
+  }
+  {
+    txin_archival_bond_post release_with_endpoint = make_join_market_vin();
+    release_with_endpoint.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    release_with_endpoint.bond_spend_pk.clear();
+    EXPECT_THROW(to_json(release_with_endpoint), cryptonote::json::WRONG_TYPE);
+    txin_archival_bond_post kind4_with_term = make_endpoint_update_vin();
+    kind4_with_term.bonded_total_atomic = 1;
+    EXPECT_THROW(to_json(kind4_with_term), cryptonote::json::WRONG_TYPE);
+  }
+  {
+    // Read side refuses, not ignores: a JoinMarket object re-labelled kind 4
+    // still carries holdings and terms, and must not parse as a rotation.
+    const std::string json = to_json(make_join_market_vin());
+    rapidjson::Document doc;
+    ASSERT_FALSE(doc.Parse(json.c_str()).HasParseError());
+    doc["post_kind"].SetUint(static_cast<unsigned>(archival_bond_post_kind::EndpointUpdate));
+    doc.RemoveMember("bond_spend_pk");
+    txin_archival_bond_post out{};
+    EXPECT_THROW(cryptonote::json::fromJsonValue(doc, out), cryptonote::json::WRONG_TYPE);
+  }
+  {
+    // ... and a Release object with an endpoint member is refused on read.
+    txin_archival_bond_post release = make_join_market_vin();
+    release.post_kind = static_cast<uint8_t>(archival_bond_post_kind::Release);
+    release.bond_spend_pk.clear();
+    release.endpoint = crypto::public_key{};
+    const std::string json = to_json(release);
+    rapidjson::Document doc;
+    ASSERT_FALSE(doc.Parse(json.c_str()).HasParseError());
+    doc.AddMember("endpoint",
+      rapidjson::Value("4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e"),
+      doc.GetAllocator());
+    txin_archival_bond_post out{};
+    EXPECT_THROW(cryptonote::json::fromJsonValue(doc, out), cryptonote::json::WRONG_TYPE);
   }
 }
 
@@ -339,4 +526,29 @@ TEST(archival_bond_post, rct_balance_includes_bond_debit_term)
   EXPECT_FALSE(ct::verCtSemanticsSimple(rv));
   EXPECT_TRUE(ct::verCtSemanticsBondPost(rv, 0, bond_debit));
   EXPECT_FALSE(ct::verCtSemanticsBondPost(rv, bond_debit, 0));
+}
+
+// EU-D11 at the CT-semantics dispatch: an EndpointUpdate balances with NO bond
+// term through its own entry, while the bond-post entry keeps refusing the
+// zero-term shape — the two are different checks, not one with (0, 0).
+TEST(archival_bond_post, rct_balance_endpoint_update_has_no_bond_term)
+{
+  ct::CtSig rv{};
+  rv.type = ct::CTTypeFcmpPlusPlusPqc;
+  rv.txnFee = 0;
+  rv.p.fcmp_pp_proof = {0x01};
+  const ct::key mask_scalar = ct::skGen();
+  rv.outPk.resize(1);
+  rv.outPk[0].mask = ct::commit(0, mask_scalar);
+  rv.enc_amounts.resize(1);
+  rv.enc_labels.resize(1);
+  // The funding input contributes only blinding; nothing is credited or debited.
+  rv.p.pseudoOuts.push_back(ct::commit(0, mask_scalar));
+  rv.p.bulletproofs_plus.push_back(ct::bulletproof_plus_PROVE(0, mask_scalar));
+
+  EXPECT_TRUE(ct::verCtSemanticsEndpointUpdate(rv));
+  EXPECT_FALSE(ct::verCtSemanticsBondPost(rv, 0, 0));
+  // A fee with nothing funding it is a sum mismatch on the kind-4 path too.
+  rv.txnFee = 1;
+  EXPECT_FALSE(ct::verCtSemanticsEndpointUpdate(rv));
 }

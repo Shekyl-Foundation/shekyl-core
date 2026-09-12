@@ -307,7 +307,7 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         // length on JoinMarket, so an empty key here is unreachable through
         // ANY parse path — including pool/blob reloads via boost archives.
         put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key,
-          bond.bond_spend_pk, join_epoch,
+          bond.bond_spend_pk, bond.endpoint, join_epoch,
           bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
           bond.holdings.shard_ids);
         const uint64_t bonded_total = get_total_bonded_atomic();
@@ -353,10 +353,18 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         apply_archival_rebond(block_height, bond.p_canonical_id,
           bond.holdings.shard_ids);
       }
+      else if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate))
+      {
+        // EndpointUpdate connect (EU-D12): the record's endpoint becomes the
+        // vin's; the previous one is journaled for the pop. The vin carries
+        // nothing else (EU-D11), so there is no counter movement here.
+        apply_archival_endpoint_update(block_height, bond.p_canonical_id, bond.endpoint);
+      }
       else
       {
         throw std::runtime_error(
-          "FATAL: bond-post connect supports JoinMarket, Release, HoldingsUpdate, and Rebond only");
+          "FATAL: bond-post connect supports JoinMarket, Release, HoldingsUpdate, Rebond, "
+          "and EndpointUpdate only");
       }
     }
     else if (std::holds_alternative<txin_archival_reward_emission>(tx_input))
@@ -796,6 +804,11 @@ void BlockchainDB::pop_block(block& blk, std::vector<transaction>& txs)
   // before the rebond revert re-opens the journaled closed interval. The
   // restored holdings/balance fields are disjoint from the other journals'.
   revert_archival_rebonds_at_height(removed_block_height - 1);
+  // EndpointUpdate pre-image restore (EU-D12): same journal-key convention.
+  // The journal touches ONLY `endpoint`, a field no other journal restores,
+  // so this revert is field-disjoint from the slash / Release / HoldingsUpdate
+  // / Rebond reverts above and its position among them is free.
+  revert_archival_endpoint_updates_at_height(removed_block_height - 1);
   // Mirror of the accrual write in add_block, keyed at the block's INDEX
   // N = removed_block_height - 1 (the claim-journal convention above, not
   // the hook convention). Runs inside the same wtxn as the pop — key
@@ -948,9 +961,9 @@ void BlockchainDB::remove_transaction(const crypto::hash& tx_hash, uint64_t bloc
     {
       const auto& bond = std::get<txin_archival_bond_post>(tx_input);
       // Only JoinMarket pops here (vin-driven: the record is deleted whole).
-      // Release, HoldingsUpdate, and Rebond pop via the height-keyed pre-image
-      // journals in pop_block — the vin carries the post-connect state, so it
-      // cannot drive the restore.
+      // Release, HoldingsUpdate, Rebond, and EndpointUpdate pop via the
+      // height-keyed pre-image journals in pop_block — the vin carries the
+      // post-connect state, so it cannot drive the restore.
       if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
         remove_archival_bond_record(bond.p_canonical_id);
@@ -1688,7 +1701,8 @@ bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, u
 
 void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
   const std::vector<uint8_t>& /*hybrid_pubkey*/,
-  const std::vector<uint8_t>& /*bond_spend_pk*/, uint64_t /*join_settlement_epoch*/,
+  const std::vector<uint8_t>& /*bond_spend_pk*/, const crypto::public_key& /*endpoint*/,
+  uint64_t /*join_settlement_epoch*/,
   uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
   const std::vector<uint64_t>& /*held_shard_ids*/,
   const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)
@@ -1776,6 +1790,15 @@ void BlockchainDB::apply_archival_rebond(uint64_t /*block_height*/,
 }
 
 void BlockchainDB::revert_archival_rebonds_at_height(uint64_t /*block_height*/)
+{
+}
+
+void BlockchainDB::apply_archival_endpoint_update(uint64_t /*block_height*/,
+  const crypto::hash& /*p_id*/, const crypto::public_key& /*endpoint*/)
+{
+}
+
+void BlockchainDB::revert_archival_endpoint_updates_at_height(uint64_t /*block_height*/)
 {
 }
 

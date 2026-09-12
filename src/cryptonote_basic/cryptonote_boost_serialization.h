@@ -280,6 +280,28 @@ namespace boost
     {
       throw cryptonote::boost_archive_content_error("bond_spend_pk is JoinMarket-coupled");
     }
+    // EU-D3 coupling mirrored the same way: the endpoint exists iff JoinMarket
+    // or EndpointUpdate (raw 32 bytes); a stray endpoint on another kind is a
+    // misconstruction on save and unreachable on load (default zero).
+    if (x.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket)
+      || x.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::EndpointUpdate))
+    {
+      a & x.endpoint;
+    }
+    else if (x.has_endpoint())
+    {
+      throw cryptonote::boost_archive_content_error("endpoint is JoinMarket/EndpointUpdate-coupled");
+    }
+    if (x.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::EndpointUpdate))
+    {
+      // EU-D11: the kind-4 vin ends at the endpoint. Direction-agnostic like
+      // the branches above: on save this refuses a vin carrying holdings or a
+      // term; on load the fields were never in the archive and hold their
+      // zero defaults, so the same check is the belt that they still do.
+      if (!x.is_endpoint_update_shape())
+        throw cryptonote::boost_archive_content_error("EndpointUpdate carries holdings or an amount term");
+      return;
+    }
     a & x.holdings;
     a & x.bonded_total_atomic;
     a & x.bond_credit;

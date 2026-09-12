@@ -4985,6 +4985,60 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return true;
   }
 
+  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate))
+  {
+    // EU-D3 / EU-D11 belts for non-parse callers (every codec refuses these
+    // shapes at parse): a kind-4 vin is exactly the endpoint — no vin-borne
+    // debit authorizer (§9.11), no holdings, no amount term.
+    if (!bond.bond_spend_pk.empty())
+    {
+      MERROR_VER("Archival EndpointUpdate rejected: vin carries a bond_spend_pk "
+        "(JoinMarket-coupled field)");
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+    }
+    if (!bond.is_endpoint_update_shape())
+    {
+      MERROR_VER("Archival EndpointUpdate rejected: vin carries holdings or an amount "
+        "term (EU-D11)");
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+    }
+
+    shekyl::db::ArchivalBondValue record{};
+    const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
+
+    // Cold authority (EU-D2) — shared Rust gate, before the semantic verify.
+    // EndpointUpdate is unconditional in requires_cold_authority: the
+    // principal-tier key committed at JoinMarket, which the serving host does
+    // not hold — in the endpoint-burn cases (host compromise, deanonymization)
+    // it is what the attacker lacks, and a hot-key rotation would be a
+    // flapping contest decided by whoever posts last.
+    if (have_record)
+    {
+      const uint8_t pin_rc = archival_cold_authority_pin(record,
+        bond.post_kind, bond.bond_debit, auth_pubkey, "EndpointUpdate");
+      if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+        return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
+    }
+
+    // Semantic verify (EU-D7): kind, endpoint present, record present and
+    // Bonded. The endpoint is not validated as a key — any 32 bytes (EU-D9:
+    // a bad endpoint is self-harm the P pays for at the next challenge).
+    const uint8_t eu_rc = shekyl_archival_verify_endpoint_update(
+      bond.post_kind,
+      reinterpret_cast<const uint8_t*>(bond.endpoint.data),
+      sizeof(bond.endpoint.data),
+      have_record ? 1 : 0,
+      record.bonded_total_atomic);
+    if (eu_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
+    {
+      MERROR_VER("Archival EndpointUpdate verify failed (code "
+        << static_cast<unsigned>(eu_rc) << "): "
+        << shekyl_archival_bond_post_err_string(eu_rc));
+      return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(eu_rc));
+    }
+    return true;
+  }
+
   // §9.11 belt for non-parse callers, the Release arm's twin (the serializer
   // enforces this at parse, and the FFI vin marshaler below re-refuses the
   // coupling): JoinMarket must commit a canonical-length bond_spend_pk for
@@ -5016,6 +5070,10 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     bond.holdings.shard_ids.size(),
     bond.bond_spend_pk.data(),
     bond.bond_spend_pk.size(),
+    // EU-D3: the serving endpoint JoinMarket commits (the marshaler refuses
+    // the coupling — 32 bytes on this kind, none elsewhere).
+    reinterpret_cast<const uint8_t*>(bond.endpoint.data),
+    sizeof(bond.endpoint.data),
     bond.bonded_total_atomic,
     bond.bond_credit,
     bond.bond_debit,

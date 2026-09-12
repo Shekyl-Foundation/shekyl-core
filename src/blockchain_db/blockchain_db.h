@@ -2271,9 +2271,13 @@ public:
   // key, so the production connect can never silently commit a record whose
   // debits are unauthorized-forever. Test seeders pass {} when the record's
   // debit path is not under test.
+  // `endpoint` is the serving endpoint the JoinMarket vin carried (EU-D3),
+  // committed as the record's current endpoint (EU-D12; rotated later by
+  // apply_archival_endpoint_update) — likewise no default.
   virtual void put_archival_bond_record(const crypto::hash& p_id,
     const std::vector<uint8_t>& hybrid_pubkey,
-    const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
+    const std::vector<uint8_t>& bond_spend_pk, const crypto::public_key& endpoint,
+    uint64_t join_settlement_epoch,
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals = {});
@@ -2396,6 +2400,18 @@ public:
   /// `total_bonded_atomic` via the Rust pop fold (non-negative whole-FLOOR
   /// delta guard — zero included).
   virtual void revert_archival_rebonds_at_height(uint64_t block_height);
+  /// EndpointUpdate connect writer (EU-D12): replaces the record's `endpoint`
+  /// with the vin's, journaling the previous endpoint in the per-kind
+  /// `archival_bond_endpoint_update_log`. Nothing else moves — no counter,
+  /// no holdings, no interval. FATALs on a missing or unbonded record (the
+  /// verify pinned both). Caller: the bond-post vin connect dispatch.
+  virtual void apply_archival_endpoint_update(uint64_t block_height, const crypto::hash& p_id,
+    const crypto::public_key& endpoint);
+  /// Restore the EndpointUpdate journal rows recorded when `block_height`
+  /// connected: the previous endpoint comes back, every other field is left
+  /// as the tip has it (field-disjoint from the other journals, so its order
+  /// among them in pop_block is free).
+  virtual void revert_archival_endpoint_updates_at_height(uint64_t block_height);
   /// HoldingsUpdate-drop verify marshaling: the dropped shard's segment
   /// freeze height (feeds the retention-horizon age-at-add). Returns false
   /// when the shard has no frozen segment — a REACHABLE state, not

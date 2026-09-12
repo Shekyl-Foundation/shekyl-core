@@ -45,6 +45,8 @@
 #include "serialization/crypto.h"
 #include "serialization/keyvalue_serialization.h" // eepe named serialization
 #include "cryptonote_config.h"
+#include <cstring>
+
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "misc_language.h"
@@ -156,6 +158,10 @@ namespace cryptonote
     Rebond = 1,
     Release = 2,
     HoldingsUpdate = 3,
+    // EU-D1 (ARCHIVAL_ENDPOINT_UPDATE.md): rotate the record's serving
+    // endpoint under cold authority. The vin is exactly the endpoint — no
+    // holdings, no amount term (EU-D11).
+    EndpointUpdate = 4,
   };
 
   enum class archival_holdings_kind : uint8_t
@@ -191,7 +197,7 @@ namespace cryptonote
   {
     std::vector<uint8_t> hybrid_public_key;
     crypto::hash p_canonical_id;
-    uint8_t post_kind;
+    uint8_t post_kind = 0;
     // GF-1 debit authorizer (gate-4 §4.1 / gate-6 §9.6), JoinMarket-coupled on
     // the wire (§9.11, matching the Rust bond wire and shekyl-wire): present
     // with the exact canonical single-key length iff post_kind == JoinMarket,
@@ -199,10 +205,29 @@ namespace cryptonote
     // into the bond record at JoinMarket connect; every later bond_debit
     // verifies against the committed copy, never the identity key.
     std::vector<uint8_t> bond_spend_pk;
+    // EU-D3 serving endpoint: the raw 32-byte hidden-service public key
+    // (`OnionIdentity::public_key`), present iff post_kind is JoinMarket or
+    // EndpointUpdate and absent from the wire on every other kind (no length
+    // prefix — a BLOB, matching the Rust bond wire and shekyl-wire). In memory
+    // "absent" is the zero key (`crypto::null_pkey`); that is a WRITE-side
+    // belt only — on the two carrying kinds any 32 bytes parse, zero included,
+    // because refusing a value Rust accepts would be a parse divergence.
+    crypto::public_key endpoint{};
     archival_holdings_descriptor holdings;
-    uint64_t bonded_total_atomic;
-    uint64_t bond_credit;
-    uint64_t bond_debit;
+    uint64_t bonded_total_atomic = 0;
+    uint64_t bond_credit = 0;
+    uint64_t bond_debit = 0;
+
+    [[nodiscard]] bool has_endpoint() const noexcept
+    {
+      return std::memcmp(endpoint.data, crypto::null_pkey.data, sizeof(endpoint.data)) != 0;
+    }
+    [[nodiscard]] bool is_endpoint_update_shape() const noexcept
+    {
+      return holdings.kind == archival_holdings_kind::ShardSetCompact
+        && holdings.shard_ids.empty() && bonded_total_atomic == 0
+        && bond_credit == 0 && bond_debit == 0;
+    }
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(hybrid_public_key)
@@ -213,7 +238,7 @@ namespace cryptonote
         return false;
       FIELD(p_canonical_id)
       FIELD(post_kind)
-      if (post_kind > static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
+      if (post_kind > static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate))
         return false;
       if (post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
@@ -228,6 +253,38 @@ namespace cryptonote
         // write it makes a misconstruction loud instead of silently dropping
         // the key from the emitted bytes.
         return false;
+      }
+      // EU-D3 coupling, the §9.11 belt's twin: the endpoint exists iff
+      // JoinMarket or EndpointUpdate. Same read/write asymmetry as above.
+      if (post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket)
+        || post_kind == static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate))
+      {
+        FIELD(endpoint)
+      }
+      else if (has_endpoint())
+      {
+        return false;
+      }
+      if (post_kind == static_cast<uint8_t>(archival_bond_post_kind::EndpointUpdate))
+      {
+        // EU-D11: holdings and the amount term are absent iff EndpointUpdate —
+        // the kind-4 vin ends at the endpoint. On write, a vin carrying either
+        // is a misconstruction, refused rather than silently truncated; on
+        // read the fields were never on the wire and are pinned to the empty
+        // shape (they are default-zero, but the read does not rely on it).
+        if constexpr (W)
+        {
+          if (!is_endpoint_update_shape())
+            return false;
+        }
+        else
+        {
+          holdings = archival_holdings_descriptor{};
+          bonded_total_atomic = 0;
+          bond_credit = 0;
+          bond_debit = 0;
+        }
+        return ar.good();
       }
       FIELD(holdings)
       VARINT_FIELD(bonded_total_atomic)

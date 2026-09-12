@@ -142,7 +142,12 @@ using namespace crypto;
 // epoch close backfilled the key. Refused at open instead; the bump also
 // keeps a V11 binary (which reads no receipts) out of a V12 datadir.
 // Delete and resync.
-#define VERSION 12
+// V13: EndpointUpdate (ARCHIVAL_ENDPOINT_UPDATE.md, EU-D12) — layout. The
+// `archival_bond` value gains the 32-byte serving endpoint (kVersion 6→7;
+// every V12 record fails decode's version pin, so a V12 datadir cannot be
+// read), and the per-kind `archival_bond_endpoint_update_log` journal is
+// born. Pre-genesis: delete and resync.
+#define VERSION 13
 
 namespace
 {
@@ -355,6 +360,7 @@ namespace
   X(LMDB_ARCHIVAL_BOND_UNBOND_LOG,          "archival_bond_unbond_log") \
   X(LMDB_ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG, "archival_bond_holdings_update_log") \
   X(LMDB_ARCHIVAL_BOND_REBOND_LOG,          "archival_bond_rebond_log") \
+  X(LMDB_ARCHIVAL_BOND_ENDPOINT_UPDATE_LOG, "archival_bond_endpoint_update_log") \
   X(LMDB_ARCHIVAL_R_MARKET,                 "archival_r_market") \
   X(LMDB_ARCHIVAL_SIGMA_WORK,               "archival_sigma_work") \
   X(LMDB_ARCHIVAL_EPOCH_CLOSE_LOG,          "archival_epoch_close_log") \
@@ -1711,6 +1717,9 @@ void BlockchainLMDB::open(const std::string& filename, const int db_flags)
     "Failed to open db handle for m_archival_bond_holdings_update_log");
   lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_REBOND_LOG, MDB_CREATE, m_archival_bond_rebond_log,
     "Failed to open db handle for m_archival_bond_rebond_log");
+  lmdb_db_open(txn, LMDB_ARCHIVAL_BOND_ENDPOINT_UPDATE_LOG, MDB_CREATE,
+    m_archival_bond_endpoint_update_log,
+    "Failed to open db handle for m_archival_bond_endpoint_update_log");
   lmdb_db_open(txn, LMDB_ARCHIVAL_R_MARKET, MDB_CREATE, m_archival_r_market,
     "Failed to open db handle for m_archival_r_market");
   lmdb_db_open(txn, LMDB_ARCHIVAL_SIGMA_WORK, MDB_CREATE, m_archival_sigma_work,
@@ -5549,7 +5558,8 @@ bool BlockchainLMDB::get_archival_shard_segment_at_height(uint64_t shard_id, uin
 
 void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   const std::vector<uint8_t>& hybrid_pubkey,
-  const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
+  const std::vector<uint8_t>& bond_spend_pk, const crypto::public_key& endpoint,
+  uint64_t join_settlement_epoch,
   uint64_t bonded_total_atomic, uint8_t holdings_kind,
   const std::vector<uint64_t>& held_shard_ids,
   const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals)
@@ -5563,6 +5573,12 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   // Release + re-JoinMarket). Every later bond_debit's pqc auth verifies
   // against this copy, never the identity key.
   bond.bond_spend_pk = bond_spend_pk;
+  // EU-D3/EU-D12: the serving endpoint the vin carried, committed as the
+  // record's current endpoint. Unlike bond_spend_pk it is NOT immutable — an
+  // EndpointUpdate connect (apply_archival_endpoint_update) rotates it under
+  // cold authority; this is the one conversion from the vin's crypto type to
+  // the codec's byte array.
+  std::memcpy(bond.endpoint.data(), endpoint.data, bond.endpoint.size());
   bond.join_settlement_epoch = join_settlement_epoch;
   bond.bonded_total_atomic = bonded_total_atomic;
   bond.holdings_kind = holdings_kind;
@@ -7056,6 +7072,74 @@ void BlockchainLMDB::revert_archival_rebonds_at_height(uint64_t block_height)
   archival_journal_delete<shekyl::db::ArchivalBondRebondLogKey>(
     *m_write_txn, m_archival_bond_rebond_log, block_height,
     static_cast<uint32_t>(rows.size()), "archival bond rebond log");
+}
+
+void BlockchainLMDB::apply_archival_endpoint_update(uint64_t block_height,
+  const crypto::hash& p_id, const crypto::public_key& endpoint)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival endpoint-update requires active write txn");
+
+  // EndpointUpdate connect (EU-D12): the ONE field this kind mutates is the
+  // record's endpoint. No counters move, no holdings or intervals change, and
+  // there is no Rust fold to consult — the verify (`verify_endpoint_update`)
+  // already pinned the record Bonded; the writer re-asserts the precondition
+  // it depends on and FATALs, like every other connect writer, on a record
+  // the verify said exists.
+  shekyl::db::ArchivalBondValue bond{};
+  if (!load_archival_bond_value(p_id, bond))
+    throw std::runtime_error("FATAL: archival endpoint-update without bond record");
+  if (bond.bonded_total_atomic == 0)
+    throw std::runtime_error("FATAL: archival endpoint-update on an unbonded record");
+
+  shekyl::db::ArchivalBondEndpointUpdateRevertValue log_entry{};
+  std::memcpy(log_entry.p_id, p_id.data, 32);
+  log_entry.pre_endpoint = bond.endpoint;
+
+  std::memcpy(bond.endpoint.data(), endpoint.data, bond.endpoint.size());
+  put_archival_bond_value(p_id, bond);
+
+  const uint32_t seq = archival_journal_next_seq<shekyl::db::ArchivalBondEndpointUpdateLogKey>(
+    *m_write_txn, m_archival_bond_endpoint_update_log, block_height,
+    "archival bond endpoint-update log");
+  archival_journal_put<shekyl::db::ArchivalBondEndpointUpdateLogKey>(
+    *m_write_txn, m_archival_bond_endpoint_update_log, block_height, seq, log_entry.encode(),
+    "archival bond endpoint-update log");
+}
+
+void BlockchainLMDB::revert_archival_endpoint_updates_at_height(uint64_t block_height)
+{
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (!m_write_txn)
+    throw std::runtime_error("FATAL: archival endpoint-update revert requires active write txn");
+
+  const std::vector<shekyl::db::ArchivalBondEndpointUpdateRevertValue> rows =
+    archival_journal_read<shekyl::db::ArchivalBondEndpointUpdateLogKey,
+      shekyl::db::ArchivalBondEndpointUpdateRevertValue>(
+      *m_write_txn, m_archival_bond_endpoint_update_log, block_height,
+      "archival bond endpoint-update log");
+
+  // Restore in reverse connect order (§5). Exactly the journaled field comes
+  // back; every other field is the tip's, untouched — a rotation cannot
+  // become a value error through this path because the row carries no value.
+  for (auto it = rows.rbegin(); it != rows.rend(); ++it)
+  {
+    crypto::hash p_id{};
+    std::memcpy(p_id.data, it->p_id, 32);
+
+    shekyl::db::ArchivalBondValue bond{};
+    if (!load_archival_bond_value(p_id, bond))
+      throw std::runtime_error("FATAL: archival endpoint-update revert without bond record");
+    bond.endpoint = it->pre_endpoint;
+    put_archival_bond_value(p_id, bond);
+  }
+
+  archival_journal_delete<shekyl::db::ArchivalBondEndpointUpdateLogKey>(
+    *m_write_txn, m_archival_bond_endpoint_update_log, block_height,
+    static_cast<uint32_t>(rows.size()), "archival bond endpoint-update log");
 }
 
 bool BlockchainLMDB::archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const

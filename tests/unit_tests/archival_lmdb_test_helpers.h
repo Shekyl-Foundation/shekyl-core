@@ -34,6 +34,16 @@ namespace archival_test {
 // so; sharing this constant there would silently collapse the rows it needs.
 inline constexpr uint64_t kServeCreditTestBlockHeight = 1000;
 
+/// A non-zero serving endpoint for record seeders (EU-D3/EU-D12). Non-zero
+/// so a test that reads the field back can tell "the seeded value" from the
+/// in-memory absent (zero) key.
+inline crypto::public_key test_endpoint(uint8_t fill = 0xE0)
+{
+  crypto::public_key k{};
+  std::memset(k.data, fill, sizeof(k.data));
+  return k;
+}
+
 /// Temp-dir LMDB with the batch write lifecycle open, templated so tests can
 /// substitute a BlockchainLMDB subclass (e.g. a fake-tip height override).
 template <typename DBT>
@@ -170,15 +180,15 @@ struct EmissionSnapshotKat
   /// post-seed reads and writes ride a fresh write txn.
   void seed(cryptonote::BlockchainDB& db) const
   {
-    db.put_archival_bond_record(p1, pubkey, {}, kJoinEpoch,
+    db.put_archival_bond_record(p1, pubkey, {}, test_endpoint(), kJoinEpoch,
       2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
       shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
-    db.put_archival_bond_record(p2, pubkey, {}, kJoinEpoch,
+    db.put_archival_bond_record(p2, pubkey, {}, test_endpoint(), kJoinEpoch,
       2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
       shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
     // Bonded but never credited in E: claimant_bond_idx must come back as
     // the no-credit sentinel, zero work by construction.
-    db.put_archival_bond_record(p_no_credit, pubkey, {}, kJoinEpoch,
+    db.put_archival_bond_record(p_no_credit, pubkey, {}, test_endpoint(), kJoinEpoch,
       2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
       shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
 

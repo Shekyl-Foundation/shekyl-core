@@ -76,6 +76,10 @@ namespace ct {
     // Bond-post CT balance: sum(pseudoOuts) + bond_debit = sum(out masks) + fee + bond_credit
     // (gate-4 ARCHIVAL_BOND_GATE4.md section 3.2).
     bool verCtSemanticsBondPost(const CtSig &rv, uint64_t bond_credit, uint64_t bond_debit);
+    // EndpointUpdate CT balance (EU-D11: no bond term): sum(pseudoOuts) = sum(out masks) + fee.
+    // Its own entry rather than a (0, 0) call into verCtSemanticsBondPost, which refuses the
+    // zero-term shape — the kind-4 vin has no term to present, so nothing marshals one.
+    bool verCtSemanticsEndpointUpdate(const CtSig &rv);
     // Archival emission CT balance: sum(pseudoOuts) + total_reward = sum(out masks) + fee —
     // the mint enters on the input side (the debit slot of the shared balance FFI). Fee
     // inputs are optional: the FCMP++ proof is present iff fee_input_count > 0

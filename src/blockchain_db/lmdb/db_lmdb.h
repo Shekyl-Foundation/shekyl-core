@@ -510,7 +510,8 @@ private:
 
   virtual void put_archival_bond_record(const crypto::hash& p_id,
     const std::vector<uint8_t>& hybrid_pubkey,
-    const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
+    const std::vector<uint8_t>& bond_spend_pk, const crypto::public_key& endpoint,
+    uint64_t join_settlement_epoch,
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals) override;
@@ -579,6 +580,9 @@ private:
   virtual void apply_archival_rebond(uint64_t block_height, const crypto::hash& p_id,
     const std::vector<uint64_t>& post_shard_ids) override;
   virtual void revert_archival_rebonds_at_height(uint64_t block_height) override;
+  virtual void apply_archival_endpoint_update(uint64_t block_height, const crypto::hash& p_id,
+    const crypto::public_key& endpoint) override;
+  virtual void revert_archival_endpoint_updates_at_height(uint64_t block_height) override;
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const override;
   virtual std::vector<uint64_t> archival_bond_last_served_epochs(const crypto::hash& p_id,
     const std::vector<uint64_t>& shard_ids) const override;
@@ -967,6 +971,7 @@ private:
   MDB_dbi m_archival_bond_unbond_log; // BE(height)||BE(seq) -> Release record pre-image journal
   MDB_dbi m_archival_bond_holdings_update_log; // BE(height)||BE(seq) -> HoldingsUpdate record pre-image journal
   MDB_dbi m_archival_bond_rebond_log; // BE(height)||BE(seq) -> Rebond record pre-image journal
+  MDB_dbi m_archival_bond_endpoint_update_log; // BE(height)||BE(seq) -> EndpointUpdate endpoint pre-image journal
   MDB_dbi m_archival_r_market;        // BE(shard)||BE(E) -> BE(count)
   MDB_dbi m_archival_sigma_work;      // BE(E) -> BE(sigma_milli)
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
