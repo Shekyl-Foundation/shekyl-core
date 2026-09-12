@@ -6,12 +6,12 @@
 //! Bond-post verify / connect / pop FFI (JoinMarket, Release, HoldingsUpdate, Rebond).
 
 use shekyl_archival_retention::{
-    debit_auth_pin, holdings_update_add_connect, holdings_update_drop_connect, holdings_update_pop,
-    rebond_connect, rebond_pop, release_connect, release_pop, verify_holdings_update_add,
-    verify_holdings_update_drop, verify_join_market_bond_post, verify_rebond_bond_post,
-    verify_release_bond_post, whole_record_last_served, ArchivalBondPostVin, BadInterval,
-    BondPostKind, DebitAuthError, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet,
-    ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES,
+    cold_authority_pin, holdings_update_add_connect, holdings_update_drop_connect,
+    holdings_update_pop, rebond_connect, rebond_pop, release_connect, release_pop,
+    verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
+    verify_rebond_bond_post, verify_release_bond_post, whole_record_last_served,
+    ArchivalBondPostVin, BadInterval, BondPostKind, ColdAuthorityError, HoldingsDescriptor,
+    HoldingsKind, LastServedScan, ShardSet, ShardSetError, HYBRID_PUBKEY_CANONICAL_BYTES,
 };
 
 use super::codes::*;
@@ -406,35 +406,48 @@ pub unsafe extern "C" fn shekyl_archival_last_served_scan(
     SHEKYL_ARCHIVAL_BOND_POST_OK
 }
 
-/// Pin a debit's presented authorizer against the bond record's committed
-/// `bond_spend_pk` (`shekyl-archival-retention::debit_auth_pin`).
+/// The composed **cold-authority** gate for a bond-post
+/// (`shekyl-archival-retention::cold_authority_pin`): consult
+/// `requires_cold_authority(post_kind, bond_debit)`, and when it holds, pin
+/// the presented authorizer against the bond record's committed
+/// `bond_spend_pk`.
 ///
-/// The single authorization gate for a **value-out** bond-post — selected by
-/// `bond_debit > 0`, not by post kind. Consensus consumers are `Release` and
-/// the **drop** arm of `HoldingsUpdate`; `Rebond` and `HoldingsUpdate`-add
-/// are credit paths that consensus authorizes with the identity key, and
-/// applying this pin to them would reject legitimate posts. The C++ block path calls this;
-/// the Rust submit battery calls the same function natively
-/// (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3), so the two paths cannot
-/// drift on the one predicate that has no recovery — a compromised serving
-/// host holds the identity key and could otherwise authorize a collateral
-/// drain.
+/// The selector lives in Rust, once, as an exhaustive truth table: `Release`
+/// always; `HoldingsUpdate` iff `bond_debit > 0`; `JoinMarket` and `Rebond`
+/// never (credit paths, identity-key authorized — applying the pin to them
+/// would reject legitimate posts). The C++ block-connect arms and the submit
+/// gather call this; the Rust submit battery calls the same function
+/// natively (`DAEMON_SUBMIT_VERDICT.md` §8.7.1.1 row UB3), so the two paths
+/// cannot drift on the one predicate that has no recovery — a compromised
+/// serving host holds the identity key and could otherwise authorize a
+/// collateral drain.
 ///
-/// Both refusals are distinct codes so the operator log separates *a record
-/// that authorizes nothing* from *a wrong key against a record that does*.
-/// A record committing no canonical-length key authorizes **nothing**;
-/// there is no identity-key fallback.
+/// Three refusals, all distinct codes. Two are the pin's, so the operator
+/// log separates *a record that authorizes nothing* from *a wrong key
+/// against a record that does*; a record committing no canonical-length key
+/// authorizes **nothing**, there is no identity-key fallback. The third,
+/// `ERR_NOT_COLD_AUTHORITY_POST`, is the cross-check: the caller asked for
+/// cold authority on a post the predicate excludes, which means the arm and
+/// the predicate disagree. Unreachable through a correct caller.
+///
+/// An unknown `post_kind` byte refuses with `ERR_POST_KIND` rather than
+/// guessing a row.
 ///
 /// # Safety
 /// When a length is positive, its pointer must be valid for that many bytes
 /// for the duration of the call. A zero length accepts a null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_archival_debit_auth_pin(
+pub unsafe extern "C" fn shekyl_archival_cold_authority_pin(
+    post_kind: u8,
+    bond_debit: u64,
     record_bond_spend_pk_ptr: *const u8,
     record_bond_spend_pk_len: usize,
     auth_pubkey_ptr: *const u8,
     auth_pubkey_len: usize,
 ) -> u8 {
+    let Ok(post_kind) = BondPostKind::from_u8(post_kind) else {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND;
+    };
     // Nested so neither key is copied: both are canonical-length hybrid
     // public keys (~2 KiB each) on a consensus path, and the pin only ever
     // reads them.
@@ -444,7 +457,7 @@ pub unsafe extern "C" fn shekyl_archival_debit_auth_pin(
             record_bond_spend_pk_len,
             |record| {
                 with_bond_post_u8_slice(auth_pubkey_ptr, auth_pubkey_len, |auth| {
-                    debit_auth_pin(record, auth)
+                    cold_authority_pin(post_kind, bond_debit, record, auth)
                 })
             },
         )
@@ -455,10 +468,13 @@ pub unsafe extern "C" fn shekyl_archival_debit_auth_pin(
     };
     match pinned {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
-        Err(DebitAuthError::RecordCommitsNoKey) => {
+        Err(ColdAuthorityError::NotAColdAuthorityPost { .. }) => {
+            SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST
+        }
+        Err(ColdAuthorityError::RecordCommitsNoKey(_)) => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY
         }
-        Err(DebitAuthError::AuthKeyMismatch) => {
+        Err(ColdAuthorityError::AuthKeyMismatch(_)) => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH
         }
     }

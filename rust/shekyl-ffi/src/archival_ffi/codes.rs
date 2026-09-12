@@ -234,13 +234,19 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED: u8 = 47;
 /// at the same `ShardSet::new` boundary as the count cap ("a set on the wire").
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD: u8 = 48;
 
-/// Debit authorization (`shekyl_archival_debit_auth_pin`): the bond record
+/// Cold authority (`shekyl_archival_cold_authority_pin`): the bond record
 /// commits no canonical-length `bond_spend_pk`, so it authorizes **no** debit.
 /// Fail closed — never an identity-key fallback.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY: u8 = 49;
-/// Debit authorization: the presented `pqc_auths` key is not the record's
+/// Cold authority: the presented `pqc_auths` key is not the record's
 /// committed `bond_spend_pk` (identity-key or foreign-key authorization).
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH: u8 = 50;
+/// Cold authority: the gate was invoked for a `(post_kind, bond_debit)` that
+/// `requires_cold_authority` excludes. The calling arm and the predicate
+/// disagree about this kind — an implementation error, never the sender's
+/// form, so it classifies as an internal failure. Unreachable through a
+/// correct caller; exists so a new arm cannot silently authorize hot.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST: u8 = 51;
 
 /// PWD-B7: map a bond-post FFI verify code onto a drop verdict.
 ///
@@ -254,9 +260,9 @@ pub extern "C" fn shekyl_archival_bond_post_drop_verdict(code: u8) -> u8 {
 
 fn archival_bond_post_drop_verdict(code: u8) -> DropVerdict {
     match code {
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR | SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW => {
-            DropVerdict::InternalFailure
-        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_LEN_OVERFLOW
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST => DropVerdict::InternalFailure,
         SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE
