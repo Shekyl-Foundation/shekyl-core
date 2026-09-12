@@ -52,28 +52,19 @@
 
 namespace shekyl {
 
-bool RelayFloorRing::empty() const
-{
-  CRITICAL_REGION_LOCAL(m_lock);
-  return m_entries.empty();
-}
-
-bool RelayFloorRing::at_height(uint64_t height) const
-{
-  CRITICAL_REGION_LOCAL(m_lock);
-  return !m_entries.empty() && m_entries.back().height == height;
-}
-
 bool RelayFloorRing::continues_at(uint64_t next_height) const
 {
   CRITICAL_REGION_LOCAL(m_lock);
   return !m_entries.empty() && m_entries.back().height + 1 == next_height;
 }
 
-uint64_t RelayFloorRing::current_floor() const
+bool RelayFloorRing::floor_if_at(uint64_t height, uint64_t &floor) const
 {
   CRITICAL_REGION_LOCAL(m_lock);
-  return m_entries.empty() ? 0 : m_entries.back().floor;
+  if (m_entries.empty() || m_entries.back().height != height)
+    return false;
+  floor = m_entries.back().floor;
+  return true;
 }
 
 void RelayFloorRing::reset(std::deque<RelayFloorEntry> entries)
@@ -251,8 +242,9 @@ std::vector<std::pair<uint64_t, uint64_t>> Blockchain::relay_floor_ring() const
 uint64_t Blockchain::get_current_fee_per_byte() const
 {
   const uint64_t tip_height = m_db->height();
-  if (m_relay_floor_ring.at_height(tip_height))
-    return m_relay_floor_ring.current_floor();
+  uint64_t cached = 0;
+  if (m_relay_floor_ring.floor_if_at(tip_height, cached))
+    return cached;
 
   const uint64_t already_generated_coins = tip_height ? m_db->get_block_already_generated_coins(tip_height - 1) : 0;
   uint64_t floor = 0;

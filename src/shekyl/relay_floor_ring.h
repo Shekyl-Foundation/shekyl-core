@@ -54,10 +54,11 @@ public:
   // Stack capacity: must be >= G+1. G is Rust-owned and read at runtime.
   static constexpr size_t kCapacity = 8;
 
-  bool empty() const;
-  bool at_height(uint64_t height) const;
   bool continues_at(uint64_t next_height) const;
-  uint64_t current_floor() const;
+
+  // One lock: height check and floor load are one snapshot. False if empty
+  // or the ring is not at `height` (caller then computes live).
+  bool floor_if_at(uint64_t height, uint64_t &floor) const;
 
   void reset(std::deque<RelayFloorEntry> entries);
   void push(uint64_t height, uint64_t floor, size_t window);
