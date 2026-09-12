@@ -376,15 +376,62 @@ class SectionScopedEra(unittest.TestCase):
         self.assertIn("points past the end of the file", out)
 
     def test_bounds_are_checked_at_the_CITED_era_not_HEAD(self):
-        """A line valid at the pin must pass even if the file has since shrunk
-        past it -- and the reverse. The era must reach the bounds check, or it
-        is a HEAD check wearing a pin."""
+        """Stated as a FATAL, using a file that GREW since the pin.
+
+        `db_lmdb.cpp` is 10257 lines at this pin and 10324 at HEAD, so line
+        10300 is past end-of-file AT THE PIN and valid at HEAD:
+
+            era reaches the limb -> past EOF at the pin -> FATAL
+            limb still uses HEAD -> within the file     -> green
+
+        The earlier version cited a file DELETED at HEAD, which does not
+        discriminate: a HEAD-based check would find no tracked path and SKIP,
+        so its green proved nothing about which era reached the limb.
+        """
         with Fixture(
             f"## S\n\nReviewed at **`{PIN}`**.\n\n"
-            "| CEN-X | ok | `shekyl-tor/src/binary.rs:10` |\n"
+            "| CEN-X | ok | `blockchain_db/lmdb/db_lmdb.cpp:10300` |\n"
         ) as doc:
             rc, out = run_gate(doc)
-        self.assertEqual(rc, 0, "a file deleted since the pin still has lines AT the pin")
+        self.assertEqual(rc, 1, "a line past EOF at the CITED era must fail")
+        self.assertIn("points past the end of the file", out)
+        self.assertIn("10257", out)
+
+    def test_a_line_valid_only_at_the_pin_still_passes(self):
+        """The other direction, using a file that SHRANK since the pin.
+
+        `blockchain.cpp` is 7511 lines at this pin and 7457 at HEAD, so line
+        7500 is valid at the pin and past end-of-file at HEAD. A HEAD-based
+        bounds check would FATAL a correctly-written records-was citation.
+        """
+        with Fixture(
+            f"## S\n\nReviewed at **`{PIN}`**.\n\n"
+            "| CEN-X | ok | `cryptonote_core/blockchain.cpp:7500` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, out)
+
+    def test_the_last_line_passes_and_one_past_it_fails(self):
+        """Pins the boundary itself, because it was off by one.
+
+        `git show` content split on newlines yields a trailing EMPTY element
+        for any file ending in a newline. Counted as a line, it let a citation
+        exactly ONE PAST end-of-file through and overstated the file's length
+        in the failure text.
+        """
+        with Fixture(
+            f"## S\n\nReviewed at **`{PIN}`**.\n\n"
+            "| CEN-A | ok | `cryptonote_core/blockchain.cpp:7511` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, "the LAST line of the file is a valid citation")
+        with Fixture(
+            f"## S\n\nReviewed at **`{PIN}`**.\n\n"
+            "| CEN-A | ok | `cryptonote_core/blockchain.cpp:7512` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1, "one line past the end must fail")
+        self.assertIn("7511", out)
 
     def test_a_second_era_on_one_row_governs_its_own_clause(self):
         """A row carrying two eras resolved entirely at the FIRST. The later

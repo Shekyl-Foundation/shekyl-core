@@ -258,7 +258,17 @@ class Era:
             text=True,
             check=False,
         )
-        return None if proc.returncode != 0 else proc.stdout.split("\n")
+        if proc.returncode != 0:
+            return None
+        lines = proc.stdout.split("\n")
+        # A file ending in a newline splits to a trailing EMPTY element, which
+        # is not a line. Left in, `len(lines)` overstates the file by one, so a
+        # citation exactly ONE PAST end-of-file passed the bounds check and the
+        # failure text overstated how long the file is. Dropped only when it is
+        # actually empty, so a file with no final newline is unaffected.
+        if lines and lines[-1] == "":
+            lines.pop()
+        return lines
 
 
 CELL_SPLIT = re.compile(r"(?<!\\)\|")
