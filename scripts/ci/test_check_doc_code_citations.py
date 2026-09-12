@@ -14,6 +14,16 @@
 # THIS repository's real history -- that is the subject under test, and a
 # resolver proved only against a synthetic git tree would not be proved at all.
 #
+# A GREEN ASSERTION IS THE WEAK ONE, and this suite has paid for that four
+# times. `assertEqual(rc, 0)` says the gate accepted the input; it does NOT
+# say the gate accepted it for the right reason, because the defect the
+# fixture names may produce a green too. Every such case here has had its
+# input chosen so the defect produces the OPPOSITE verdict -- a file deleted
+# since the pin, an era where the cited file does not exist, a basename that
+# is ambiguous only at one revision. Before adding another, name the defect
+# and say which way it would go; if it also goes green, the fixture proves
+# nothing and belongs in the FATAL form instead.
+#
 # Run: `python3 scripts/ci/test_check_doc_code_citations.py` (stdlib unittest,
 # no runner needed -- matches scripts/bench/test_compare.py).
 
@@ -94,15 +104,20 @@ class AmbiguousPath(unittest.TestCase):
 
 class EraSelection(unittest.TestCase):
     def test_citation_valid_at_its_pin_but_absent_at_head_passes(self):
-        """The reason this gate is not a link checker. A records-was citation
-        is true at its sha; resolving it at HEAD would fail a correct row."""
-        body = (
+        """The reason this gate is not a link checker: a records-was citation
+        is true at its sha and is NOT required to be true now.
+
+        The cited file was DELETED between the pin and HEAD, which is what
+        makes the assertion discriminating. An earlier version cited a file
+        that still exists at HEAD, so resolving at the wrong era passed too
+        and the test could not tell the two apart.
+        """
+        with Fixture(
             f"## S\n\nReviewed at **`{PIN}`**.\n\n"
-            "Evidence: `cryptonote_basic/cryptonote_format_utils.cpp:800`.\n"
-        )
-        with Fixture(body) as doc:
+            "Evidence: `shekyl-tor/src/binary.rs:1`.\n"
+        ) as doc:
             rc, out = run_gate(doc)
-        self.assertEqual(rc, 0, out)
+        self.assertEqual(rc, 0, "a file deleted since the pin must still resolve AT the pin")
 
     def test_file_not_yet_born_at_the_declared_pin_is_fatal(self):
         """Resolution really happens at the pin: a file that exists at HEAD but
@@ -294,19 +309,29 @@ class SectionScopedEra(unittest.TestCase):
         With a pinned `####` parent, a pinned `#####` slice, and a SECOND
         `#####` slice pinning nothing, a single-pin parser cleared the child's
         pin at the sibling heading and left nothing behind — the sibling fell
-        to HEAD and its records-was citations were resolved against current
-        code. The eras disagree on purpose: the cited file exists at the
-        parent era and not at HEAD's predecessor, so inheriting the wrong one
-        is the difference between pass and fail."""
+        to HEAD and its records-was citations resolved against current code.
+
+        Stated as a FATAL on purpose. The first version of this fixture
+        asserted a GREEN, and a green cannot tell "inherited the parent"
+        from "fell through to HEAD" whenever the cited file resolves at both
+        — which it did, so the test passed under the very parser it named.
+        Here the parent era is one where the file does NOT exist, so:
+            stack parser  -> Slice B inherits the parent -> absent -> FATAL
+            single pin    -> Slice B falls to HEAD       -> present -> green
+        The defect now produces the opposite verdict, which is the only thing
+        that makes the assertion worth anything.
+        """
         with Fixture(
-            f"#### Parent\n\nReviewed at **`{ROW_PIN_PRESENT}`**.\n\n"
-            f"##### Slice A\n\nReviewed at **`{PIN}`**.\n\n"
-            "| CEN-X | ok | `cryptonote_core/blockchain.cpp:1` |\n\n"
+            f"#### Parent\n\nReviewed at **`{UNBORN}`**.\n\n"
+            f"##### Slice A\n\nReviewed at **`{ROW_PIN_PRESENT}`**.\n\n"
+            "| CEN-X | ok | `tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n\n"
             "##### Slice B\n\n"
             "| CEN-Y | ok | `tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n"
         ) as doc:
             rc, out = run_gate(doc)
-        self.assertEqual(rc, 0, "Slice B must inherit the parent era, not fall to HEAD")
+        self.assertEqual(rc, 1, "Slice B must inherit the parent era, not fall to HEAD")
+        self.assertIn("matches no tracked file", out)
+        self.assertIn(UNBORN, out)
 
     def test_an_era_finding_in_one_slice_does_not_hide_a_defect_in_its_SIBLING(self):
         """The counterfactual diff must not attribute a sibling's rows to the
