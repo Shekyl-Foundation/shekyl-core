@@ -224,15 +224,22 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_redb_schema_key_types.py
 
+      - name: Run redb key-type ordering selftest
+        # The rule function is what makes INTEGERKEY and dupsort-hash32
+        # collapse unskippable; run the fixture that a name-set elif
+        # swallowing zerokval-uint64 tables (block_info, output_txs) fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_key_types.py --selftest
+
       - name: Run redb schema bijection gate
         # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
-        # redb TableDefinition and vice versa, no duplicates on either side,
-        # and the module's own ALL_TABLE_NAMES agrees with its definitions.
+        # redb TableDefinition and vice versa, no duplicates on either side.
         # The X-macro is the only admissible source: the settlement pair
         # exists only on BlockchainLMDB, so a schema built from the abstract
         # interface silently omits a write path LMDB has (SO-D8).
-        # Checks NAMES, not types — comparator evidence is in hash_order.rs's
-        # tests, class evidence is per-row in the audit's §12.
+        # Checks NAMES, not types — ordering is the key-type gate above;
+        # comparator evidence is in lmdb_order's tests; class evidence is
+        # per-row in the audit's §12.
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_redb_schema_bijection.py

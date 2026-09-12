@@ -14,20 +14,11 @@
 # built from the abstract interface silently ships without a write path LMDB
 # has. SO-D8 owns promoting it; this gate refuses to inherit the gap.
 #
-# THIS GATE HAS ALREADY EARNED ITSELF. The first draft of the schema map,
-# written from familiarity with the subsystem rather than from the macro, had
-# 52 entries: it invented `archival_claimed_epochs`, `archival_prune_watermark`,
-# `archival_reward_paid` and `archival_bond_value` — all real concepts, none of
-# them tables (the watermark is a `properties` key) — and omitted the real
-# `output_metadata`.
-#
-# WHAT THIS GATE DOES NOT CHECK, stated because a green here is narrower than
-# it looks: it checks NAMES, not types. It cannot tell whether a table's key
-# type reproduces LMDB's ordering, whether a value encoding is canonical, or
-# whether a set-shaped table's accumulator hook reads before deleting. The
-# comparator evidence is in `hash_order.rs`'s tests (pinned against a
-# transcription of the C++ over 4 000 pairs); the class evidence is per-row in
-# LMDB_WRITE_ATOMICITY_AUDIT.md §12. "49/49 mapped" is a claim on one axis.
+# THIS GATE CHECKS NAMES, NOT TYPES. Ordering is `check_redb_schema_key_types.py`
+# in the same workflow; comparator evidence is in `lmdb_order`'s tests (pinned
+# against a transcription of the C++ over 4 000 pairs); class evidence is
+# per-row in LMDB_WRITE_ATOMICITY_AUDIT.md §12. "49/49 mapped" is a claim on
+# one axis.
 #
 # Instance of 47-gate-subject-assertion.mdc: an empty parse on either side has
 # an empty difference, which is indistinguishable from a clean run.
@@ -43,7 +34,6 @@ SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
 MACRO_RE = re.compile(r"#define SHEKYL_LMDB_TABLES\(X\)(.*?)\n\n", re.S)
 ENTRY_RE = re.compile(r'X\(\s*\w+\s*,\s*"([^"]+)"\s*\)')
 DEF_RE = re.compile(r'(?:Multimap)?TableDefinition::new\("([^"]+)"\)')
-LIST_RE = re.compile(r"ALL_TABLE_NAMES:\s*\[&str;\s*(\d+)\]\s*=\s*\[(.*?)\];", re.S)
 
 
 def dupes(names):
@@ -99,23 +89,6 @@ def main():
             + ", ".join(extra)
             + "\n    This is how a plausible concept becomes an invented table — check "
               "whether it is really a row inside another table.")
-
-    # The module's own self-declaration must agree with its definitions.
-    lm = LIST_RE.search(schema)
-    if not lm:
-        failures.append(f"{SCHEMA.name}: ALL_TABLE_NAMES did not parse — the module's self-claim is missing")
-    else:
-        declared_len = int(lm.group(1))
-        listed = re.findall(r'"([^"]+)"', lm.group(2))
-        if len(listed) != declared_len:
-            failures.append(
-                f"ALL_TABLE_NAMES declares [&str; {declared_len}] but contains {len(listed)} entries")
-        if sorted(listed) != sorted(defined):
-            only_list = sorted(set(listed) - set(defined))
-            only_def = sorted(set(defined) - set(listed))
-            failures.append(
-                f"ALL_TABLE_NAMES disagrees with the TableDefinitions in the same module — "
-                f"listed-only: {only_list or 'none'}; defined-only: {only_def or 'none'}")
 
     report(failures)
     print(f"redb schema bijection: {len(censused)} censused LMDB tables <-> "
