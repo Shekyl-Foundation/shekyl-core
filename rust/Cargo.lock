@@ -4672,10 +4672,15 @@ name = "shekyl-tx-weight"
 version = "3.1.0"
 dependencies = [
  "curve25519-dalek",
+ "rand_core 0.6.4",
+ "serde_json",
+ "shekyl-bulletproofs",
  "shekyl-crypto-pq",
  "shekyl-curve-io",
+ "shekyl-curve-primitives",
  "shekyl-fcmp",
  "shekyl-scanner",
+ "shekyl-tx-builder",
  "shekyl-wire",
 ]
 

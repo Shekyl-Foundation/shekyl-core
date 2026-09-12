@@ -38,6 +38,17 @@ pub(crate) fn zeroizing_arr32_from_ptr(ptr: *const u8) -> Option<zeroize::Zeroiz
 /// the function is `unsafe` because safe Rust cannot verify these
 /// preconditions.
 pub(crate) unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
+    unsafe { slice_from_typed_ptr(ptr, len) }
+}
+
+/// Read `len` elements of `T` through the same null / zero-length /
+/// `isize::MAX`-byte-bound seam as [`slice_from_ptr`].
+///
+/// # Safety
+///
+/// A non-null `ptr` must be aligned for `T` and address `len` readable
+/// elements. That allocation-size precondition is the caller's contract.
+pub(crate) unsafe fn slice_from_typed_ptr<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
     if len == 0 {
         return Some(&[]);
     }
@@ -50,7 +61,8 @@ pub(crate) unsafe fn slice_from_ptr<'a>(ptr: *const u8, len: usize) -> Option<&'
     // crate's FFI-read seam for that bound; sites that still call
     // `from_raw_parts` directly re-own it (SA-R-7 conventions-tail
     // residual).
-    if len > isize::MAX as usize {
+    let byte_len = len.checked_mul(core::mem::size_of::<T>())?;
+    if byte_len > isize::MAX as usize {
         return None;
     }
     Some(std::slice::from_raw_parts(ptr, len))
@@ -159,6 +171,12 @@ mod slice_from_ptr_tests {
             unsafe { slice_from_ptr(bytes.as_ptr(), 4) },
             Some(&bytes[..])
         );
+        let words = [1u64, 2, 3];
+        assert_eq!(
+            unsafe { slice_from_typed_ptr(words.as_ptr(), 3) },
+            Some(&words[..])
+        );
+        assert!(unsafe { slice_from_typed_ptr::<u64>(dangling.cast(), too_big) }.is_none());
     }
 
     #[test]
