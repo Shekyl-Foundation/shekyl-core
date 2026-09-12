@@ -4893,6 +4893,9 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
     return "bond record commits no bond_spend_pk; it authorizes no debit";
   case SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH:
     return "pqc auth key is not the record's committed bond_spend_pk";
+  case SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST:
+    return "cold-authority gate invoked for a post that requires none "
+      "(the calling arm and requires_cold_authority disagree)";
   default:
     return "unknown bond-post verify code";
   }
@@ -4910,20 +4913,37 @@ const char* archival_bond_post_verify_err_string(uint8_t code)
 // record falls through to the semantic verify's RECORD_MISSING) and run this
 // BEFORE any per-shard cursor scans or FFI verify: it is a two-vector compare,
 // so an unauthorized attempt is rejected before it can cost LMDB seeks.
-// Debit authorization for the value-out bond-post arms. The predicate itself
-// is Rust (`shekyl-archival-retention::debit_auth_pin`); this site marshals and
-// logs. Callers classify the returned code via
-// `shekyl_archival_bond_post_drop_verdict` — this helper does not decide
-// whether the rejection severs. It used to be implemented here, which made it
-// a second copy of the one check that has no recovery -- a compromised serving
-// host holds the identity hybrid key, so an identity-authorized debit is a
-// collateral drain. The Rust submit battery calls the same function natively
-// (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3), so the two verifying paths share
-// it rather than tracking each other.
-uint8_t archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
+// Cold authority for the bond-post arms. BOTH halves are Rust
+// (`shekyl-archival-retention::cold_authority_pin`): the selector -- whether
+// this (post_kind, bond_debit) needs cold authority at all, an exhaustive
+// truth table (`requires_cold_authority`: Release always, HoldingsUpdate iff
+// bond_debit > 0, JoinMarket/Rebond never) -- and the pin against the record's
+// COMMITTED bond_spend_pk. This site marshals and logs. Callers classify the
+// returned code via `shekyl_archival_bond_post_drop_verdict` — this helper does
+// not decide whether the rejection severs.
+//
+// Until 2026-09-11 only the pin was Rust and the selector was spelled at each
+// arm by which arms happened to call it -- the Release arm on kind, the
+// HoldingsUpdate arm on its debit term -- while the prose in three places said
+// "bond_debit > 0, not the post kind", which the Release arm never did. Moving
+// the selector into one Rust function is what lets a new kind (the ruled
+// EndpointUpdate, zero-debit, cold) be one predicate row instead of a
+// re-derivation at every arm. The pin itself used to be implemented here too,
+// which made it a second copy of the one check that has no recovery -- a
+// compromised serving host holds the identity hybrid key, so an
+// identity-authorized debit is a collateral drain. The Rust submit battery
+// calls the same function natively (DAEMON_SUBMIT_VERDICT.md 8.7.1.1 row UB3),
+// so the two verifying paths share it rather than tracking each other.
+//
+// The third rc arm, NOT_COLD_AUTHORITY_POST, is the cross-check: it fires only
+// if an arm calls this for a post the predicate excludes. Unreachable today;
+// its job is to make an arm/predicate disagreement loud rather than hot.
+uint8_t archival_cold_authority_pin(const shekyl::db::ArchivalBondValue& record,
+  uint8_t post_kind, uint64_t bond_debit,
   const std::vector<uint8_t>& auth_pubkey, const char* arm)
 {
-  const uint8_t rc = shekyl_archival_debit_auth_pin(
+  const uint8_t rc = shekyl_archival_cold_authority_pin(
+    post_kind, bond_debit,
     record.bond_spend_pk.empty() ? nullptr : record.bond_spend_pk.data(),
     record.bond_spend_pk.size(),
     auth_pubkey.empty() ? nullptr : auth_pubkey.data(),
@@ -4945,9 +4965,19 @@ uint8_t archival_debit_auth_pin(const shekyl::db::ArchivalBondValue& record,
       "record's committed bond_spend_pk (identity-key or foreign-key debit "
       "authorization is forbidden)");
   }
+  else if (rc == SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST)
+  {
+    // Not the sender's fault: this arm asked for cold authority on a post the
+    // Rust predicate says needs none. The arm and requires_cold_authority
+    // disagree about post_kind -- fix the code, not the transaction.
+    MERROR_VER("Archival " << arm << " rejected: cold-authority gate invoked for "
+      "post_kind " << static_cast<unsigned>(post_kind) << " / bond_debit "
+      << bond_debit << ", which requires no cold authority (arm/predicate "
+      "disagreement -- an implementation error)");
+  }
   else
   {
-    MERROR_VER("Archival " << arm << " rejected: debit-auth pin marshal fault (code "
+    MERROR_VER("Archival " << arm << " rejected: cold-authority pin marshal fault (code "
       << static_cast<unsigned>(rc) << ")");
   }
   return rc;
@@ -5028,13 +5058,15 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     shekyl::db::ArchivalBondValue record{};
     const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
 
-    // GF-1 debit authorization — the shared pin (archival_debit_auth_pin
-    // above), run before the cooldown-anchor gathering + semantic verify.
-    // Classification is the bond-post mapper: no committed key is our
-    // record state; a key mismatch is the sender's form.
+    // GF-1 cold authority — the shared gate (archival_cold_authority_pin
+    // above; Release is unconditional in the Rust predicate), run before the
+    // cooldown-anchor gathering + semantic verify. Classification is the
+    // bond-post mapper: no committed key is our record state; a key mismatch
+    // is the sender's form.
     if (have_record)
     {
-      const uint8_t pin_rc = archival_debit_auth_pin(record, auth_pubkey, "Release");
+      const uint8_t pin_rc = archival_cold_authority_pin(record,
+        bond.post_kind, bond.bond_debit, auth_pubkey, "Release");
       if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
         return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
     }
@@ -5152,11 +5184,14 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
       return true;
     }
 
-    // DROP (grace-tail debit path). GF-1 debit authorization — the shared pin
-    // (archival_debit_auth_pin above), the Release arm's twin.
+    // DROP (grace-tail debit path). GF-1 cold authority — the shared gate
+    // (archival_cold_authority_pin above; HoldingsUpdate selects on its debit
+    // term in the Rust predicate, and we are on the bond_debit != 0 branch),
+    // the Release arm's twin.
     if (have_record)
     {
-      const uint8_t pin_rc = archival_debit_auth_pin(record, auth_pubkey, "HoldingsUpdate-drop");
+      const uint8_t pin_rc = archival_cold_authority_pin(record,
+        bond.post_kind, bond.bond_debit, auth_pubkey, "HoldingsUpdate-drop");
       if (pin_rc != SHEKYL_ARCHIVAL_BOND_POST_OK)
         return reject_drop(tvc, shekyl_archival_bond_post_drop_verdict(pin_rc));
     }

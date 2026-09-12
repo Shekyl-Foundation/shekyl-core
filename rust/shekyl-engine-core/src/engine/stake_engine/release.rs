@@ -380,7 +380,7 @@ impl Message<AssembleRelease> for StakeEngine {
 
         // **The bond slot carries `bond_spend_pk`, NOT the identity key.** This
         // is the one place the exit diverges from every credit post, and it is
-        // the whole of GF-1 debit authorization: `archival_debit_auth_pin`
+        // the whole of GF-1 cold authority: `archival_cold_authority_pin`
         // requires this slot's key to equal the record's COMMITTED
         // `bond_spend_pk` and rejects the identity key by name. Signing a
         // value-out with `hybrid_sign_sk` is exactly what a compromised serving

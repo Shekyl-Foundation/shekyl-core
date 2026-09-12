@@ -429,9 +429,11 @@ re-derived 26 times:
   `archival_serve_credit_equivalence.cpp`) — the AUDITED DECISION header
   requires re-authoring the fixture on any predicate change.
 - **Walk W-BP** — bond-post: `blockchain.cpp:4808–5290`. Four kind arms plus
-  the shared debit-auth pin (`shekyl_archival_debit_auth_pin`, rc discriminated
-  three ways, all non-OK reject) and the credit-arm identity-key check, present
-  on every credit path.
+  the shared cold-authority gate (`shekyl_archival_cold_authority_pin`, rc
+  discriminated four ways, all non-OK reject; **selector in Rust** as
+  `requires_cold_authority` since 2026-09-11 — before that the pin was shared
+  and the selector was implied by which arms called it) and the credit-arm
+  identity-key check, present on every credit path.
 - **Walk W-EM** — emission: `blockchain.cpp:3888–4190`. Extract, key-derivation,
   reference-context, per-epoch snapshot, reward-set, coarse-verify and
   fee-proof arms all reject on their discriminated codes.
@@ -458,7 +460,7 @@ Rust-side FFI calls, with the exceptions noted per row.
 | CEN-J10 | **CHECKED-CONFORMANT** | W-SC. `shekyl_archival_verify_serve_credit_vin` rc-checked reject (`:5551–5556`); chunk read is all-or-nothing before the FFI ("no partial-fill path reaches the FFI verifier") |
 | CEN-J11 | **CHECKED-CONFORMANT** | W-BP. Length gate, recompute-failure gate, and hint-mismatch gate each reject (`:4892–4909`) |
 | CEN-J12 | **CHECKED-CONFORMANT** | W-BP. JoinMarket requires canonical-length `bond_spend_pk` (`:5201`); Unbond/HoldingsUpdate/Rebond each reject a non-empty one (`:4922`, `:4990`, `:5138`), and a kind-agnostic catch-all rejects the residue (`:5208`) — **all five sites agree** |
-| CEN-J13 | **CHECKED-CONFORMANT** | W-BP. Debit arms authorize via `shekyl_archival_debit_auth_pin` (three-way rc, all non-OK reject, `:4828–4855`); credit arms check the identity key on every path (add `:5041`, Rebond `:5183`, JoinMarket `:5288`) |
+| CEN-J13 | **CHECKED-CONFORMANT** | W-BP. Debit arms authorize via `shekyl_archival_cold_authority_pin` (four-way rc, all non-OK reject; helper `:4941`, Release `:5068`, HoldingsUpdate-drop `:5193`); credit arms check the identity key on every path (add `:5178`, Rebond `:5327`, JoinMarket `:5433`). **Re-anchored 2026-09-11** at the cold-authority refactor: the pin is unchanged, the selector moved from the arms into Rust (`requires_cold_authority`: Release always, HoldingsUpdate iff `bond_debit > 0`), and the fourth rc arm (`NOT_COLD_AUTHORITY_POST`) is the arm/predicate cross-check, unreachable through these three sites. Conformance status carried, not re-derived — the C++ decision at each site is byte-identical; what changed is where the decision is *stated*. Previous anchors: `:4828–4855` / `:5041` / `:5183` / `:5288` |
 | CEN-J14 | **CHECKED-CONFORMANT** | W-BP. `shekyl_archival_verify_join_market_bond_post` rc-checked reject (`:5216–5231`) |
 | CEN-J15 | **CHECKED-CONFORMANT** | W-BP. Admission FFI rc-checked reject with decoded reason (`:5273–5284`); the per-shard facts (r_market, freeze/presence) are gathered C++-side as **marshaled operands**, decided Rust-side |
 | CEN-J16 | **CHECKED-CONFORMANT** | W-BP. `shekyl_archival_verify_unbond_bond_post` rc-checked reject (`:4958–4980`); last-served scan selection itself asks Rust (`shekyl_archival_last_served_scan`) |
