@@ -5082,3 +5082,65 @@ walked every `.so` would only arbitrate it.
 `rust/shekyl-archival-retention/src/constants.rs` (`EFFECTIVE` latch).
 
 <!-- Append new entries above this line. Date format YYYY-MM-DD. -->
+
+## 2026-09-12 — `ARCHIVAL_P_DERIVE_V1` retired: `hs_id` derivation takes a rotation index; vector re-anchored as V2 (`EU-D8`)
+
+**Decision.** The persona serving-identity derivation
+`derive_p_hs_id_seed(master_seed, net, fmt, p_slot)` is **replaced**, not
+extended: a new label (`shekyl-archival-p-hs-id-ed25519-v2`, hyphen-normalized
+per the existing convention) with a rotation index **always present** in the
+preimage. `docs/test_vectors/ARCHIVAL_P_DERIVE_V1` is **deleted** and a V2
+vector directory minted with a fresh manifest. This entry is the authorization
+the regeneration requires under `50-testing.mdc` §"Regenerating a self-pinned
+vector is a decision, not a command," and the citation D's regenerator
+invocation must carry.
+
+**Ruled by Rick, 2026-09-11**, in the `EndpointUpdate` sequence
+(`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D8`): *"there is no chain and no
+user wallet, so replace the derivation outright and re-anchor the vector. Mint
+the new label, rotation always present, delete V1. Free today, a migration after
+genesis — the same argument that decided the envelope arms."*
+
+**What moves.**
+
+1. The `hs_id` label: `…-v1` → `…-v2`. One label never names two functions
+   (`30-cryptography.mdc`); adding a preimage term under the old label was
+   never available.
+2. The preimage gains a rotation index, unconditionally. The rejected
+   alternative — "rotation = 0 reproduces today's bytes" — encodes
+   absent-iff-zero into a preimage, the representational trick that produces
+   the next three-year-old comment.
+3. The V1 vector directory (`manifest.json`, `vectors.json`, tier-1 HKDF
+   intermediates + tier-2 end-to-end material) is deleted. V2 is minted
+   fresh, not derived from V1's bytes.
+
+**Why replacement is free today.** No block has been mined on any network and
+no user wallet exists; every persona is regenerated deterministically from
+its seed. After genesis the same change is a migration.
+
+**What does not move.** The identity and debit-authority tiers of
+`ARCHIVAL_P_DERIVE` (GF-1/GF-9 labels) are untouched; only the `hs_id` tier
+changes. `p_canonical_id` is unaffected.
+
+**Oracle statement (rule per `50-testing.mdc`).** The V2 vectors are
+**self-pinned (tier 3)** drift tripwires, as V1's were. The V1 manifest's
+`regeneration_command` (`kat_regenerate_archival_p_derive_v1 -- --ignored`)
+predates the citation gate and is not gated; D replaces the regenerator along
+with the vector rather than inheriting an ungated one, and the V2 regenerator
+refuses to run without citing this entry.
+
+**Regeneration citation to use.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-12 ARCHIVAL_P_DERIVE_V1 retired; hs_id
+rotation index; V2 re-anchor (EU-D8)"`.
+
+**Sequencing.** D is the last step of C0 → A → B+C1 → D. Until it lands, B+C1's
+wire has no second address to rotate to (a STAGED callee-without-caller,
+recorded at `EU-D10`).
+
+**Reference.** `rust/shekyl-crypto-pq/src/archival_p.rs`
+(`ARCHIVAL_P_HS_ID_INFO`, `derive_p_hs_id_seed`);
+`docs/test_vectors/ARCHIVAL_P_DERIVE_V1/manifest.json` (to be deleted by D);
+`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` §9;
+`.cursor/rules/50-testing.mdc` §"Regenerating a self-pinned vector".
+
+---
