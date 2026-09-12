@@ -30,10 +30,24 @@ four bytes are the most significant. The loads are native, so on a
 little-endian host the effect is to order the 32 bytes as a **little-endian
 256-bit integer**: byte 31 most significant, byte 0 least.
 
-**It is NOT byte-lexicographic, and it is not the `memcmp` order a reader is
-likely to assume — it is the reverse of it.** Demonstrated with
-`A = 01 00 … 00` and `B = 00 … 00 01`: `compare_hash32` says `A < B`, while
-byte-lexicographic comparison says `A > B`.
+**It is NOT byte-lexicographic**, and the precise statement matters more than
+that negative one, because the obvious reading of "the reverse of
+lexicographic" produces a *different, also-wrong* order:
+
+- **It IS** ascending lexicographic over the **reversed byte string** —
+  compare byte 31 first, then 30, … down to byte 0. In Rust that is
+  `a.iter().rev().cmp(b.iter().rev())`, equivalently comparing the
+  byte-reversed arrays.
+- **It is NOT** *descending* lexicographic. That reading flips the *result* of
+  comparing byte 0 first; the real function flips *which byte is compared*
+  first. Measured over 4 000 random pairs: the reversed-byte reading agrees
+  with the C++ on **4 000/4 000**, while descending-lexicographic disagrees on
+  **2 010/4 000**. A wrong implementation here is therefore wrong on about half
+  of all pairs rather than cleanly inverted — it will not show up in a smoke
+  test. (`Reverse<[u8; 32]>` is the wrong primitive for this reason.)
+
+Demonstrated with `A = 01 00 … 00` and `B = 00 … 00 01`: `compare_hash32` says
+`A < B`, byte-lexicographic says `A > B`.
 
 > **This sentence previously said "in memory order … lexicographically", which
 > is word 0 first — the opposite of what the loop does.** It is corrected here
@@ -54,14 +68,21 @@ The seven tables, split by which ordering the comparator governs:
 **Two properties to carry into any reimplementation** (specification records —
 the C++ is scheduled for deletion, so neither is patched here):
 
-- **Host-endianness dependence is structural, not incidental.** The native
-  `uint32_t` loads mean the on-disk *ordering* differs between a little-endian
-  and a big-endian host — a sharper instance of this document's
-  architecture-dependence note, which otherwise concerns field layout rather
-  than sort order. A reimplementation should state its byte order
-  **explicitly** rather than inherit the host's.
-- **`mv_data` is cast to `uint32_t*` with no alignment guarantee.** Benign on
-  x86-64 and ARM64; UB-adjacent in principle.
+- **Host-endianness dependence is structural, and the big-endian behaviour is
+  not a clean alternative order.** The native `uint32_t` loads mean a
+  big-endian host compares bytes in the order 28, 29, 30, 31, 24, 25, 26, 27,
+  … 0, 1, 2, 3 — a word-shuffled hybrid that is neither lexicographic nor
+  reversed-lexicographic. **There is no host on which this function is
+  lexicographic.** Measured: LE and BE readings of the same bytes disagree on
+  2 000 of 4 000 random pairs. A database written on one and read on the other
+  is silently mis-ordered rather than loudly wrong. A reimplementation must
+  state its byte order **explicitly** rather than inherit the host's.
+- **The `uint32_t*` cast of `mv_data` is undefined behaviour twice over** — it
+  violates strict aliasing, and LMDB does not guarantee 4-byte alignment of
+  key/value buffers. Benign on x86-64 and ARM64 in practice. **The evidence
+  that this is a wart rather than a considered choice is four lines above it:**
+  `compare_uint64` performs the same kind of load correctly, via `memcpy`. The
+  codebase already knows the idiom; this function simply does not use it.
 
 ### String comparator
 
