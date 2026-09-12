@@ -5,6 +5,14 @@ on a daemon/p2p cutover this series excludes (§2.9a). The C++ covert
 restructure (§2.1 stages 1–3) is not being pursued; stage 4 enablement is
 not startable. See §2.9 for the series, §3 for what has landed.
 
+> **UPDATE 2026-09-12 — Tor-zone cover is no longer this document's subject.**
+> [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) (TRC; RULED 2026-09-04,
+> recorded 2026-09-12) obtains wire-observer resistance on the **Tor zone**
+> by operator non-exit relay posture, not by this carrier. **This file's
+> carrier is retained** for encrypted network layers other than Tor. §1.6 is
+> **not** triggered. Do not delete the machinery on "Tor no longer uses it"
+> grounds; that is a scope restatement, not abandonment.
+
 > **UPDATED 2026-08-29: the mechanism now HAS its production caller** — see
 > §3.1a. It is still **inert by default**, behind a development opt-in, so the
 > do-not-delete argument below stands unchanged in force; what changed is that
@@ -13,9 +21,9 @@ not startable. See §2.9 for the series, §3 for what has landed.
 This document exists because the cover mechanism was **deliberately inert,
 fully built, and had no production caller** — which is indistinguishable, to a
 dead-code sweep or a new maintainer, from abandoned scaffolding. It was not.
-`DAEMON_RELAY_PRIVACY.md` §42 is a standing restoration proposal with a ruled
-architecture (§42.3), a ruled backstop (§92), and a scoped implementation
-(§42.5a/b).
+`DAEMON_RELAY_PRIVACY.md` §42 remains the carrier's architecture for encrypted
+zones other than Tor. **Its application as the Tor zone's cover mechanism is
+SUPERSEDED 2026-09-12** by [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md).
 
 > **DO NOT DELETE ANY COMPONENT IN §1 ON "NO CALLERS" GROUNDS.** This was
 > written when the absence of a production caller was *the current state of a
@@ -53,8 +61,9 @@ by:
    on** — §41's deletion removed configuration B, and the comment at that site
    records why turning it back on naively would be wrong.
 
-**Restoring cover traffic is, mechanically, changing (1).** Everything below is
-what that change would wake up.
+**Restoring cover traffic is, mechanically, changing (1).** *(Tor-zone
+application SUPERSEDED 2026-09-12, TRC; this restoration remains for encrypted
+zones other than Tor.)* Everything below is what that change would wake up.
 
 ### 1.2 C++ inventory
 
@@ -176,20 +185,32 @@ it*, because a replacement exists and is tested.
 
 ### 1.6 The ONLY conditions under which deletion is correct
 
+**Not triggered by TRC (2026-09-12).**
+[`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) removes the Tor zone from this
+carrier's cover-mechanism role and **retains the mechanism** for other
+encrypted layers. That is a scope restatement. Deletion still requires
+abandoning §42 as a design for those remaining layers.
+
 Not "no callers". Deletion requires **abandoning §42 as a design**, which means
 re-opening, in writing:
 
-- **§91.2** — Design A's ruling that Tor-only is a supported posture. Cover
-  traffic is what defends the node↔proxy wire; without it the wire-observer row
-  of §32.6 is undefended and "supported" weakens.
+- **§91.2** — Design A's ruling that Tor-only is a supported posture. **This
+  file's 2026-08-23 reading** — cover traffic is what defends the node↔proxy
+  wire; without it the wire-observer row of §32.6 is undefended — is
+  **SUPERSEDED for Tor 2026-09-12**
+  ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)). Design A is not re-ruled
+  here. On Tor that row is posture-conditional, not undefended-without-carrier.
+  **On encrypted zones other than Tor** cover traffic remains what defends it.
 - **§42.4** — the carrier's narrowed job (deny the count of *originations*).
   **Re-opened 2026-08-23** (§42.4a): the narrowing's "4.3× over capacity" was
   against the carrier's own 492 B/s, so at a window sized to the maximum
   admissible transaction the job is no longer narrowed. Re-opening §42.4 is
   therefore *already done* and is no longer a cost of deletion — but the job it
   restores is **larger**, not smaller.
-- **§32.6's grid** — the wire-observer recall cell, which cover is the only
-  mechanism addressing.
+- **§32.6's grid** — the wire-observer recall cell. Cover is the only
+  mechanism addressing it **on encrypted zones other than Tor**. On Tor the
+  cell is **SUPERSEDED as a protocol default 2026-09-12 (TRC)** — posture-
+  conditional.
 - **Q-11 Unit 2** — `conformance/linkage.rs` is its substrate.
 
 **The symmetry, added 2026-08-23: §1.7 states the conditions under which
@@ -222,11 +243,15 @@ shape in which sunk work wins.
 
 The carrier buys **§20.9's charter: wire-observer recall goes to zero for
 originations** — §32.6's top-left cell, held as a **structural** property rather
-than a statistical one, and it is the only mechanism addressing that cell
-(§1.6). At a window sized to the maximum admissible transaction, §42.4's
-narrowing no longer applies (re-opened 2026-08-23, `DAEMON_RELAY_PRIVACY.md`
-§42.4a), so the cell reads **zero for all traffic** rather than zero-for-
-originations / one-for-activity.
+than a statistical one. **On the Tor zone this charter is SUPERSEDED 2026-09-12**
+([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §6): that cell is
+posture-conditional, not a protocol default. **On encrypted zones other than
+Tor the charter still holds**, and the carrier remains the only mechanism
+addressing that cell there (§1.6). At a window sized to the maximum
+admissible transaction, §42.4's narrowing no longer applies (re-opened
+2026-08-23, `DAEMON_RELAY_PRIVACY.md` §42.4a), so on those remaining zones the
+cell reads **zero for all traffic** rather than zero-for-originations /
+one-for-activity.
 
 **The end-of-build decision therefore compares two stated quantities**, this
 guarantee against the axis-1 and axis-2 costs below — not one.
@@ -343,41 +368,57 @@ to this axis we do not have.
 > `carrier::WINDOW_BYTES`, `MEAN_CADENCE_MS` and `NOISE_MIN_DELAY_MS` at the
 > time of the run rather than the numbers above.
 
-#### Axis 3 — relay co-location does NOT retire the carrier. **Ruled.**
+#### Axis 3 — relay co-location does NOT retire the carrier. **Ruled 2026-08-23; SUPERSEDED for the Tor zone 2026-09-12 (TRC)**
 
-Ruled now rather than measured later, because after the build it becomes an
-argument about sunk work.
+Ruled 2026-08-23 rather than measured later, because after the build it becomes
+an argument about sunk work. **Tor-zone substitution is SUPERSEDED 2026-09-12**
+by [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §2.1: on Tor, volume cover
+replaces this carrier as the zone's cover mechanism. The mission-2 objection
+below is real and is the cost that document's §6 names, not a silent deletion
+of this reasoning. **What survives:** no protocol constant may be derived
+against an assumption of relay cover (TRC §5).
 
 **Relay cover cannot substitute for the carrier at any measured relay traffic
-level**, and the reason is the mission hierarchy rather than a number:
+level** *(SUPERSEDED as a Tor-zone conclusion 2026-09-12; retained as the
+reason the carrier stays for encrypted zones other than Tor)*, and the reason
+is the mission hierarchy rather than a number:
 
 - **Relay operation is optional.** A wire-observer guarantee that holds only for
   operators who relay **is privacy as a setting**, which mission priority 2
-  forbids. No measurement changes this, because a measurement can only ever
-  describe the operators who opted in.
+  forbids. **This is the cost TRC §6 accepts on the Tor zone**, not a reason
+  the carrier must remain that zone's mechanism. No measurement changes the
+  mission-2 fact, because a measurement can only ever describe the operators
+  who opted in. On encrypted zones other than Tor the objection still
+  forbids substituting relay cover for this carrier.
 - **Mandatory relaying does not rescue it.** The **ramp** is unfixable — a fresh
   install carries almost nothing for days, precisely the window in which it is
   most identifiable as a new participant — and rule 76's floor device on a
-  consumer uplink cannot be *required* to relay.
+  consumer uplink cannot be *required* to relay. TRC §9 rejects "every node
+  relays" on these grounds; the relay posture is never a default.
 
-**The standing rule this generalises to:** the protocol's guarantees must hold
-at **zero** relay participation, and **no constant may be derived against an
-assumption of relay cover**. The failure mode is concrete — *"we can lower the
-carrier rate because relay operators have cover underneath it"* — and that is
-the back door mission priority 2 forbids. Held, the co-location benefit is a
-bonus nothing depends on, and the tension between it and constraint (1) below
-dissolves.
+**The standing rule this generalises to, PRESERVED 2026-09-12:** the protocol's
+guarantees that *remain* protocol guarantees must hold at **zero** relay
+participation, and **no constant may be derived against an assumption of
+relay cover**. The failure mode is concrete — *"we can lower a remaining
+carrier rate because relay operators have cover underneath it"* — and that
+is the back door mission priority 2 still forbids on any zone the carrier
+still covers. Held, co-location benefit is a bonus nothing depends on.
 
-**Scope of the ruling, narrowed deliberately.** What is foreclosed is relay
-cover **substituting** for the carrier or **licensing a weaker constant**. Relay
-cover remains available as what operators can do instead **if the carrier fails
-axis 1 or axis 2 on its own merits** — that is a different argument (*"the
-carrier does not work, and here is what operators can do"*), and this ruling
-must not foreclose it by accident.
+**Scope of the 2026-08-23 ruling, as of 2026-09-12.** What remains foreclosed
+is relay cover **licensing a weaker carrier constant** on zones the carrier
+still covers. What is **withdrawn for the Tor zone** is relay cover being
+unable to *substitute* for the carrier there —
+[`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) is that substitution, with
+§6 as the named reduction in who the guarantee covers.
 
 #### Relay contribution as an operator posture — the four constraints
 
-Recommended, and separate from every guarantee above:
+**SoT as of 2026-09-12:** [`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md) §§4–5
+and [`docs/TOR_RELAY.md`](../TOR_RELAY.md). The four constraints below are
+the 2026-08-23 wording; they are preserved (path selection, non-exit, opt-in,
+separate process) and are not a second authority.
+
+Recommended, and separate from every remaining carrier guarantee:
 
 1. **Never route Shekyl traffic through Shekyl-operated relays, and never prefer
    them.** Path selection stays entirely Tor's. Otherwise an adversary running
@@ -846,7 +887,7 @@ flood-suite reconciliation, stage-4 cover *enablement* (§2.3 / §92.5).
 | **§2.9 step 2 — covert executor** | **LANDED 2026-08-29 — the producer is wired and a real transaction rides the carrier** | `NoiseQueues` is a real port: constant window, CV-1 restart, epoch-bound `CovertSend`, enqueue refuses a non-multiple. CV-4 still threads distinct queues through the cadence. **Corrected 2026-08-25:** the "no production caller" line attributed the gap to an in-process path step 5 must provide. That inference was wrong — the work does not wait on the cutover, and C++ performs the transport for stem and fluff today and can do the same here. **Corrected again 2026-08-26: it is also not one call, and this row said so while being cited as the authority.** The caller is FOUR pieces. (1) An OWNER — nothing constructs or holds `NoiseQueues` outside its own tests. (2) An ENQUEUE path — no production caller ever puts a real fragment in. (3) The JOIN, for BOTH noise effects rather than one — `Driver::poll` emits `Effect::NoiseSend { channel, peer }` and `Effect::NoiseUnbind { channel }`, and neither reaches `NoiseQueues::take_for_send` / `::unbind`; `unbind` is what invalidates outstanding tokens, so omitting it is not a lesser half. (4) A WIDENED `NoiseSendCb` — today `fn(ctx, channel, peer)`, carrying no bytes out and no status back, so the deliberately non-destructive token cannot be resolved (advance on a successful send, leave the queue alone on failure); `on_noise` correspondingly only logs. Three are Rust-internal; the fourth is a boundary change, which widening OUTWARD does not make a CV-4 breach — CV-4 forbids feeding the scheduler traffic-dependent input, and bytes chosen by Rust after the cadence has already picked when and to whom tell it nothing. The caller also inherits §2.9b's one-transaction-per-notification requirement. **PARTLY BUILT 2026-08-26/27, and the remainder is named at §3.1a.** Three of the four, plus the enqueue CROSSING but not its caller: `RelayZoneHandle` owns the queue beside `Driver` (never inside — CV-4's barrier as a field); `shekyl_relay_zone_noise_enqueue` takes **one transaction blob** and Rust frames and pads it to a whole window, so §2.9b is structural rather than documented and a batch is *unsayable* at the crossing; `dispatch` joins both effects; and `ShekylRelayNoiseSendCb` carries bytes out and a send status back. `ShekylRelayNoiseUnbindCb` is **deleted** — unbind is consumed in Rust now, and C++ has held no channel state since #515, so it was a callback with no job. Reachable only after `cryptonote::levin::set_carrier_development(true)`, a RUNTIME opt-in defaulting off — the compile-time `SHEKYL_CARRIER_DEVELOPMENT` macro an earlier draft used is gone, because a gate CI never builds cannot test the only configuration that runs the carrier. §3.1 is why the opt-in is a ruling and not caution. **CLOSED 2026-08-29 by the producer.** `dandelionpp_notify` consumes `plan_dispatch_with_refresh` and enqueues on `SHEKYL_RELAY_CARRIER_NOISE`, so the carrier carries real transactions rather than dummies alone. The swap was the small half: an enqueue is NOT a send, so `record_relayed` and the stem observation could not stay where #573 put them, and the queue gained a terminal verdict — `CarrierOutcome::{Sent,Discarded}` against a caller-minted opaque token, reported through `ShekylRelayCarrierResolvedCb`. Both arms are load-bearing: `unbind` clears a channel, so a completion-only signal would leave the pool waiting forever on a record that never fires, and a discard must read as NOT RELAYED so the origin retries on the short grid instead of waiting out 1148 s for a transaction that was never sent (§92.5c item 3, now conditional on the send having happened). §3.1a's reopening criterion is MET: `a_real_transaction_rides_the_carrier_and_records_on_arrival` drives one through the queue onto the wire and asserts both that nothing is recorded at send time and that a relay IS recorded once the carrier drains it. |
 | **§2.9 step 3 — zone fan-out in Rust** | **satisfied by step 1 — reinterpreted, not skipped** | The step asked that Rust "name the zone set" and C++ reduce to "send these bytes on this zone". `ZoneRouteDecision::BroadcastAllZones` **is** that naming: Rust decides, and `net_node.inl` enumerates its own configured map without deciding anything. Under Design A the fan-out is *every* configured zone, so a Rust `fanout(configured) -> configured` behind the FFI would be an **identity function** — machinery with no content, and rule 21's shape. The loop's literal deletion belongs to step 5, where it goes with the rest of the file. **The step's real constraint holds: the loop did not grow another arm.** |
 | **§2.9 step 4 — the inherited covert branch is deleted** | **deletion landed; skip DISCHARGED 2026-08-29 — after two successive grounds expired** | The branch is **gone, not repaired**, per the step's own wording. `queue_covert_notify` went with it, and #515 then deleted the rest of the C++ carrier, and C++ could not enable noise at all until the default-off development opt-in restored a path (§3.1). **Corrected 2026-08-25.** The shim was recorded as *skipped* under the step's escape clause ("*or* skip if step 5 lands first"). **Step 5 did not land** — §2.9a ruled it blocked — so that clause never fired, and reading the skip as discharged left the carrier looking blocked on a row whose subject is *deleting the C++ relay path*, which is a different thing. The skip is nonetheless still **correct, and as of 2026-08-29 discharged** — though not on the ground this row last gave. That ground (#515 removed the C++ carrier entirely, so there is no `levin_notify.cpp` consumer for `plan_dispatch` to feed and the shim would be plumbing to nowhere) has **itself expired**: `dandelionpp_notify` consumes `plan_dispatch_with_refresh` today, so a consumer exists. What keeps the skip right is that the consumer which exists is **the Rust crossing this row prescribed, not the C++ shim it declined** — the enqueue hands one blob across, and Rust frames it, paces it, and hands the bytes back out for C++ to transport — as C++ already does for stem and fluff — per `20-rust-vs-cpp-policy`. And the item this row named as owed (the step-2 caller above, **in Rust**) is the step-2 row's **CLOSED 2026-08-29**. Two successive grounds expiring under a skip that was correct both times is the argument for recording a skip's GROUND and not just its verdict — a verdict outlives the reason that earned it, and reads as still-load-bearing once that reason is gone. See `.cursor/rules/22-no-lazy-deferral.mdc`, "A deferral's CONDITION can expire". |
-| §2.9 step 5 — C++ relay path deleted | **BLOCKED, not pending** | §2.9a — it needs Rust to own the levin codec and the connection registry, i.e. the **p2p layer this series excludes**, and no daemon/p2p cutover design doc exists. Found by trying to start it. |
+| §2.9 step 5 — C++ relay path deleted | **BLOCKED, not pending** | §2.9a — it needs Rust to own the levin codec and the connection registry, i.e. the **p2p layer this series excludes**, and no daemon/p2p cutover design doc exists. Found by trying to start it. **Not Tor-zone cover enablement** — that subject moved 2026-09-12 ([`TOR_COVER_POSTURE.md`](TOR_COVER_POSTURE.md)); this row's subject remains deleting the C++ relay path. |
 | **superseded C++ noise machinery deleted** | **landed** | `noise_channel`, `queue_covert_notify`, `clear_channel`, `send_noise`, the `channels` deque, `covert_payload` and `noise_zone_params` are gone. `make_relay_zone` no longer takes a noise flag, so C++ cannot construct a noise zone at all — `get_status().has_noise` reads the Rust-owned fact and is false everywhere. The two noise effect callbacks remain as **loud failures**, not no-ops: a silent drop would lose a real carrier effect the moment the cutover builds the path that can reach them. **Superseded 2026-08-27 on all three counts, by the change that built the executor's caller:** `make_relay_zone` sets the flag again for an ENCRYPTED zone behind `set_carrier_development` (off by default, so `has_noise` is still false in a shipped build); the send callback transports rather than failing loudly; and its unbind sibling is **deleted**, since unbind is consumed inside Rust and C++ has no channel state to clear. |
 | §2.8 α rule | **pre-registered** | no number yet; the rule is the artifact |
 

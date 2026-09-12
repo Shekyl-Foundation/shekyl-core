@@ -1,5 +1,11 @@
 # Anonymity Networks with Shekyl
 
+> **UPDATE 2026-09-12.** Tor-zone wire-observer cover is operator non-exit
+> relay posture, not a protocol carrier. See [`TOR_RELAY.md`](TOR_RELAY.md)
+> and [`design/TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md). This
+> file's remaining body is the inherited Tor/I2P P2P usage matrix; it is
+> not the cover-posture SoT.
+
 Currently only Tor and I2P have been integrated into Shekyl. The usage of
 these networks is still considered experimental - there are a few pessimistic
 cases where privacy is leaked. The design is intended to maximize privacy of

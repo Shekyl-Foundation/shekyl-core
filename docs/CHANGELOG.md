@@ -4,6 +4,14 @@
 
 ### Changed
 
+- **Tor-zone wire-observer cover is operator non-exit relay posture, not
+  the protocol carrier** ([`TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md),
+  TRC; RULED 2026-09-04, recorded 2026-09-12). Default Tor nodes no longer
+  receive protocol-level constant-rate cover. The carrier remains for
+  encrypted zones other than Tor. Operator recommendation:
+  [`TOR_RELAY.md`](TOR_RELAY.md). This is a reduction in what the protocol
+  guarantees: cover moves from a protocol mechanism to an operator posture.
+
 - **Cover-traffic ~42 GB/month ceiling signed off** after the
   `COVER_TRAFFIC_RESTORATION.md` §3.1c three-arm measurement (seedusw,
   2026-09-12). Defects 1–3 not observed. Honest Tor-only observed

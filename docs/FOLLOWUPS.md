@@ -604,6 +604,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
   - Target: pre-genesis
 
+- **TRC-1: measure ordinary-operator relay cover across hours and consensus weights.** [`TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md) §8. The ruling that Tor-zone cover is volume (non-exit relay posture) rather than substitution (the protocol carrier) rests on a measurement that has not been taken. Named blocker: falsifier-chain step 1 — the posture is documented (`docs/TOR_RELAY.md`) and an operator relay is running. Falsify by measuring carried traffic at ordinary operator scale; if originated cells remain distinguishable, the ruling reopens and the carrier's scope re-expands to Tor. Reciprocity sizing is a Foundation measurement, not this row.
+  - Target: pre-genesis
+
 - **Relay: a transaction mined while the carrier holds it is still SENT — every remaining window, up to ~100 KiB.** The verdict-time `pool_has_tx` gate stops the record and the F-10 observation, but the verdict arrives only on completion, so a transaction mined before its first tick emits all of its windows: `MAX_FRAGMENTS` (5) × `WINDOW_BYTES` (20 480). An earlier entry said "one wasted window", understating it by the fragment cap. Named blocker: cancelling earlier needs an enqueue-cancellation API `NoiseQueues` does not have, and `unbind` clears a whole channel, so cancelling one message would discard its channel-mates. Bounded per transaction rather than per epoch, and it is cover carrying something peers already hold. §3.1c (2026-09-12) did not show a material share. Reopen if another caller needs cancellation [`COVER_TRAFFIC_RESTORATION.md` §3.1e](design/COVER_TRAFFIC_RESTORATION.md)
   - Target: pre-genesis
 

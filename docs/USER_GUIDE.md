@@ -745,6 +745,13 @@ Whole-tx weights (FCMP++/Bp+/KEM dominate) are closer to ~2.4× solo for
 > **Status: Experimental.** There are known metadata leak vectors. See
 > [ANONYMITY_NETWORKS.md](ANONYMITY_NETWORKS.md) for the full threat matrix.
 
+> **Tor-zone cover is an operator choice, not a protocol default (TRC,
+> recorded 2026-09-12).** Wire-observer resistance on Tor comes from running a
+> **non-exit** Tor relay in a **separate process** from `shekyld`. See
+> [TOR_RELAY.md](TOR_RELAY.md). The daemon does not check, warn, or refuse on
+> that basis. The contract is
+> [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md).
+
 Shekyl can broadcast transactions over Tor or I2P so that observers cannot
 link your IP address to your transactions. Regular block sync and peer
 communication still uses IPv4 to resist Sybil attacks.
