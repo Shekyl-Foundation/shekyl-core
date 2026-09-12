@@ -41,6 +41,22 @@
 //! curve pop *reconstructs* `TreePosition` arithmetically, so a fold over
 //! the caller's argument would inherit the reconstruction.
 //!
+//! # Relationship to the shipped v0 oracle
+//!
+//! [`SetAccumulator`] over
+//! [`digest_v0::SPENT_ELEM_CUSTOMIZATION`](crate::digest_v0::SPENT_ELEM_CUSTOMIZATION)
+//! reproduces [`digest_v0::spent_accumulator`](crate::digest_v0::spent_accumulator)
+//! byte for byte — asserted by test, so the incremental form is a drop-in
+//! for the full-domain one and DRS-E2 can compare across the two.
+//!
+//! [`AppendAccumulator`] is **not** equivalent to
+//! [`digest_v0::chain_component`](crate::digest_v0::chain_component): that
+//! function folds the block count into its preimage and hashes the whole
+//! height-ordered sequence in one pass, which is a different shape from a
+//! per-element chain. Adopting [`AppendAccumulator`] for `blocks` is
+//! therefore a [`DIGEST_FORMAT_VERSION`](crate::digest_v0::DIGEST_FORMAT_VERSION)
+//! bump, not a refactor, and DRS-E1 must not assume equivalence.
+//!
 //! [`SetAccumulator::remove`] cannot check this. It XORs whatever it is
 //! given, and XORing an element that was never inserted silently *adds* it —
 //! the operation is an involution, not a set difference. That is the
@@ -326,6 +342,19 @@ mod tests {
     #[test]
     fn set_empty_accumulator_is_all_zero() {
         assert_eq!(SetAccumulator::new(KI).value(), [0u8; 32]);
+    }
+
+    #[test]
+    fn set_accumulator_reproduces_the_shipped_v0_spent_accumulator() {
+        // Continuity with the full-domain oracle: the incremental form must
+        // be a drop-in for digest_v0's, or DRS-E2 cannot compare the two.
+        use crate::digest_v0::{spent_accumulator, SPENT_ELEM_CUSTOMIZATION};
+        let keys: Vec<[u8; 32]> = (0..5).map(elem).collect();
+        let mut acc = SetAccumulator::new(SPENT_ELEM_CUSTOMIZATION);
+        for k in &keys {
+            acc.insert(k);
+        }
+        assert_eq!(acc.value(), spent_accumulator(&keys));
     }
 
     #[test]

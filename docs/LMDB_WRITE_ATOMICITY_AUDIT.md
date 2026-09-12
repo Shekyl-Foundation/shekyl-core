@@ -691,7 +691,7 @@ the figure was left as a bound; it is no longer a live deferral.)*
 | DRS-W13 | Curve-tree pop reconstructs `TreePosition` as `leaf_count - drained_count + j` because the drain journal never recorded it | wart (latent, correct today by invariant — evidence below) | RECORD-AND-SPECIFY: journal the assigned position; pop reads it back |
 | DRS-W14 | Unbounded probe loops walk archival journal rows until first miss, so the reader holds the writer's density invariant | wart (no unsound state today — evidence below) | RECORD-AND-SPECIFY: range-scan the key prefix; gap-tolerance is a property of the query |
 | DRS-W15 | `hf_versions` rows above the new tip are not deleted on pop, and **one** site reads them (`hardfork.cpp:300`, the file's only above-tip read) | wart (**regraded 2026-09-09**: the read-back is load-bearing *only for the incremental vote window*, and that window is discarded by two of four pop callers and wrong for the other two. It diverges from the authoritative rebuild on two axes — **contents**, masked by the inert table, and **length**, one entry per pop below `window_size` and observable today. No consensus effect: `threshold` is 0) | RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete — **conditional**: the obligation survives into Rust only if R4 keeps an incremental window. Drop it and the clause retires, leaving `hf_versions` deletable on pop |
-| DRS-W16 | `remove_block` deletes from `m_cur_blocks` **without positioning it** (`db_lmdb.cpp:1053`), while positioning its two sibling cursors explicitly in the same function. The `mdb_cursor_get(…, MDB_SET)` that positioned it was **removed** by inherited commit `22c0fae47b`, whose subject ("db: store cumulative rct output distribution in the db for speed") is unrelated to block removal | wart (**capability recorded, consequence NOT established** — see the subsection; production pops work, which is evidence against a realized defect and is itself unexplained) | RECORD-AND-SPECIFY: in the Rust store a delete names its key; there is no ambient cursor position for an unrelated commit to strand. The C++ reachability question is **open and routed**, not closed by this row |
+| DRS-W16 | `remove_block` deletes from `m_cur_blocks` **without positioning it** (`db_lmdb.cpp:1053`), while positioning its two sibling cursors explicitly in the same function. The `mdb_cursor_get(…, MDB_SET)` that positioned it was **removed** by inherited commit `22c0fae47b`, whose subject ("db: store cumulative rct output distribution in the db for speed") is unrelated to block removal. It is correct today only because its **sole** caller reads the top block through the **same** write-cursor member one call earlier (`blockchain_db.cpp:743`), a coupling `remove_block` neither states nor can check | wart (**latent, not reachable in this tree** — one caller, no interleaved `blocks` read. A `blocks` read inserted in that window, or a second caller, makes the delete remove whatever row the cursor last landed on, and `mdb_cursor_del` at a valid-but-wrong position **succeeds**: a torn logical unit, not a crash, since `block_info` and `block_heights` are positioned explicitly) | RECORD-AND-SPECIFY: in the Rust store a delete names its key, so there is no ambient cursor position for a future edit to strand. Restoring the dropped `MDB_SET` is the cheap C++ guard and is **not** taken here |
 
 **P0c — what these four rows are, and the pin they were read at.** Rows
 DRS-W12 through DRS-W15 are the **wart register** the P0c envelope calls for,
@@ -980,32 +980,50 @@ block removal. A removal that rides along in a commit about something else,
 leaving two sibling cursors positioned and the third not, is the signature
 of an omission rather than a decision.
 
-**What is NOT established, stated plainly because the temptation here is to
-grade the consequence from the capability.** This row records that the
-positioning is absent and that it was once present. It does **not** establish
-that any pop deletes the wrong row. There is direct evidence against that
-reading: pops run in production and in the test suite, and `mdb_cursor_del`
-on an unpositioned cursor returns `EINVAL`, which this call site converts to
-a throw. **A pop-only write transaction should therefore fail loudly on the
-first pop, and does not.** That contradiction is unresolved. Either something
-positions `m_cur_blocks` that this reading missed, or the cursor is non-null
-and stale from an earlier operation in the same transaction — and those two
-have very different consequences: the first is benign, the second deletes at
-a stale position.
+**Why it nevertheless works today — the mechanism, found rather than
+assumed.** An unpositioned `mdb_cursor_del` returns `EINVAL`, so a pop
+*should* throw on the first call; pops do not. The resolution is an
+**implicit position coupling across two functions**.
+`BlockchainDB::pop_block` calls `blk = get_top_block()`
+(`blockchain_db.cpp:743`) immediately before the pop sequence.
+`get_top_block` reaches `get_block_blob_from_height`, which does
+`mdb_cursor_get(m_cur_blocks, &key, …, MDB_SET)` (`:2789`) — and `RCURSOR`
+(`:440`) opens into `m_cursors`, which **is** `&m_wcursors` inside a write
+transaction. It is therefore the *same* `m_cur_blocks` member, left
+positioned at `height() - 1` — exactly the row `remove_block` then
+deletes. Nothing between the two touches the `blocks` table
+(`blockchain_db.cpp:743`–`:805`), and `pop_block` is `remove_block`'s
+**sole caller** (`:805`; the only other declarations are the pure virtual
+and `testdb.h`'s empty override).
 
-**Falsifier, named so the next pass does not have to invent one:** start a
-write transaction that performs **no** `blocks` operation, call
-`remove_block`, and observe whether the `mdb_cursor_del` throws. A throw
-means the guard is loud and the row is cosmetic. A success means the cursor
-carried a position across the call, and the next question is whose.
+**So the grade is latent, not unresolved, and the hazard is precise.**
+`remove_block` is correct today by a property of its caller that
+`remove_block` does not state and cannot check. Two changes break it, both
+silent:
 
-**Routing.** This is a block-pop defect candidate in the C++ substrate, so
-the disposition is the standing RECORD-AND-SPECIFY default; the A3 narrow
-exception does not fire, because no ratified, conformance-checked row
-depends on the C++ serving as an interim oracle here. It is **not** graded
-S — grading it S would require the consequence this row explicitly does not
-establish. It is routed to whoever owns the pop path for the falsifier
-above; slice A found it and stopped at the boundary of what it measured.
+- any `blocks` read inserted between `get_top_block()` and `remove_block()`
+  in that window — it repositions the shared cursor, and the delete then
+  removes **whatever row the cursor last landed on**; and
+- any second caller of `remove_block` that does not read the top block
+  first — it deletes at a stale position, or throws `EINVAL` if the cursor
+  is fresh.
+
+The first is the dangerous one: `mdb_cursor_del` at a *valid but wrong*
+position succeeds. There is no loud failure — the wrong block row is
+removed while `block_info` and `block_heights`, which **are** positioned
+explicitly, remove the right ones. That is a torn logical unit, not a
+crash.
+
+**Routing.** Standing RECORD-AND-SPECIFY default; the A3 narrow exception
+does not fire, because no ratified, conformance-checked row depends on the
+C++ serving as an interim oracle here. **Not S-graded:** the defect is not
+reachable in this tree — one caller, no interleaved `blocks` read — so
+this is a latent fragility, not a live fault. In the Rust store a delete
+names its key and there is no ambient cursor position for a future edit to
+strand, which is the specification this row closes on. If the C++ is to
+live any length of time, the cheap guard is to restore the `MDB_SET` the
+inherited commit dropped; that is a C++ change and therefore not taken
+here.
 
 ## 10. Coverage matrix — every table, its writers, its audited path
 
@@ -1353,34 +1371,60 @@ Set-shaped reversibility requires the element's canonical encoding be
 a property of the *table*, not of the class, so it is established per row
 rather than asserted class-wide.
 
-**The falsifier run for this freeze, and its result:** for each `set-shaped`
-candidate, does the delete path **read the element back from the store**, or
-**recompute** it? Recompute fails. Every delete path in the store reads back
-before deleting — `remove_spent_key` locates by `MDB_GET_BOTH` on the key
-image itself; `remove_block` reads `mdb_block_info` back and derives the
-`block_heights` element from the stored `bi_hash`; `remove_transaction_data`
-reads the whole `txindex` back via `MDB_GET_BOTH`; `remove_output` reads the
-stored `pre_rct_outkey` back to reach `output_txs`; and the retention prunes
-iterate with both `k` and `v` in hand
-(`delete_archival_budget_before_epoch`). So the stored element is available
-at every delete site.
+**The falsifier run for this freeze, and its result:** for each of the
+fifteen `set-shaped` tables, does the delete path have the stored element
+**in hand**, or does it delete by key with the value never read? **The
+answer is not uniform, and an earlier draft of this section said it was.**
+Ten paths read the element back; five delete by key alone:
 
-**This yields a design rule rather than a per-table exemption: the
-accumulator MUST fold the value read from the store at delete, never the
-caller's argument.** `remove_output_leaf_mapping` is the case that proves
-the rule matters — DRS-W13 records that the caller *reconstructs*
-`TreePosition` arithmetically because the drain journal never recorded it,
-and the store defends itself by reading the stored value back and throwing
-on mismatch. A fold over the caller's argument would inherit W13's
-reconstruction; a fold over the stored bytes does not. `output_to_leaf` and
-`leaf_to_output` are therefore `set-shaped` **and** carry W13 as a live
-constraint on the Rust implementation.
+| Delete has the element | Mechanism |
+| --- | --- |
+| `spent_keys` | `remove_spent_key` — `MDB_GET_BOTH`; the element *is* the key image |
+| `block_heights` | `remove_block` — element derived from the `mdb_block_info` read back |
+| `tx_indices` | `remove_transaction_data` — whole `txindex` via `MDB_GET_BOTH` |
+| `output_txs`, `output_amounts` | `remove_output` — stored `pre_rct_outkey` read back |
+| `output_to_leaf`, `leaf_to_output` | `remove_output_leaf_mapping` — `mdb_get` then verify-before-delete |
+| `block_pending_additions`, `pending_tree_drain` | range cursor walks holding `&v` |
+| `archival_shard_segment` | `revert_archival_segment_freezes` — cursor walk holding `&v` |
 
-**In-place update is the other reversibility obligation**, distinct from
-delete: any table with an update path (not merely insert/delete) must XOR
-out the old value and XOR in the new, which requires reading the old.
-`txpool_meta`'s `update_txpool_tx` is the live example, and it is `excluded`
-— but the obligation binds any future `set-shaped` table that gains one.
+| Delete by key ALONE — element never read | Call |
+| --- | --- |
+| `archival_bond` | `remove_archival_bond_record` — `mdb_del(txn, dbi, &k, nullptr)` |
+| `archival_slash_applied` | `remove_archival_slash_applied` — same shape |
+| `block_burn` | `remove_block_burn` — same shape |
+| `curve_tree_roots` | `remove_curve_tree_root_at_height` — same shape |
+| `pending_tree_leaves` | `remove_pending_tree_leaf` — same shape |
+
+**This does not move any class**, because a `set-shaped` accumulator is
+still reversible on those five — redb can always read before it deletes.
+What it moves is the **obligation**: for those five the Rust store must
+perform a read the C++ does not, and a port that transliterates
+`mdb_del(…, nullptr)` into a bare redb `remove` desynchronizes the
+accumulator silently. That is a specific instruction to DRS-0 slice B and
+DRS-E1, and it only exists because the run was per-table.
+
+**The general design rule, which holds for all fifteen: fold the value read
+from the store, never the caller's argument.**
+`remove_output_leaf_mapping` is why it is phrased that way — DRS-W13
+records that the caller *reconstructs* `TreePosition` arithmetically
+because the drain journal never recorded it, and the store defends itself
+by reading the stored value back and throwing on mismatch. A fold over the
+caller's argument would inherit W13's reconstruction; a fold over the
+stored bytes does not. `output_to_leaf` and `leaf_to_output` are therefore
+`set-shaped` **and** carry W13 as a live constraint on the Rust
+implementation.
+
+**Blind upsert is the second reversibility obligation, and four
+`set-shaped` tables have one.** `put_archival_bond_value`,
+`set_archival_slash_applied`, `add_block_burn` and
+`store_curve_tree_root_at_height` all call `mdb_put(…, 0)` — flags `0`,
+so an existing row is **overwritten without being read**. An XOR
+accumulator over those tables must fold the old value *out* before folding
+the new value *in*, which again requires a read the C++ does not perform.
+An earlier draft of this section named `txpool_meta`'s `update_txpool_tx`
+as "the live example" of an update path and noted it was `excluded`,
+implying no `set-shaped` table had one. Four do, and they are the same
+simple key→value tables that delete by key above.
 
 ### Comparator coupling — the seven `compare_hash32` tables
 
@@ -1437,9 +1481,18 @@ comparator becomes digest-relevant and this row must be revisited.*
 
 ### `derived` — why the class is legitimate and not merely convenient
 
-`curve_tree_layers` and `curve_tree_checkpoints` are recomputed from the
-leaves on trim, so an independent accumulator over them would assert their
-storage is ground truth when it is not.
+`curve_tree_layers` and `curve_tree_checkpoints` are both functions of the
+leaves, so an independent accumulator over them would assert their storage
+is ground truth when it is not.
+
+**Their named source is `curve_tree_leaves` for both, and for
+`curve_tree_checkpoints` that is a correction rather than a restatement.**
+`save_curve_tree_checkpoint` builds a row by *copying* `root`, `depth` and
+`leaf_count` out of `curve_tree_meta`. Verifying a checkpoint against
+`curve_tree_meta` would therefore compare a copy with its original: it
+detects a bad copy and is blind to a bad tree, which is the degenerate case
+the discriminator below exists to reject. The verification must recompute
+from the **leaves**.
 
 **Reconstructibility is a recovery property, not a digest exemption.**
 DRS-D10 says non-block-corpus tables are rebuildable by replaying local
@@ -1470,6 +1523,16 @@ Both current `derived` rows pass: DRS-D3b makes `shekyl-fcmp` /
 arithmetic, and forbids the daemon's grow/trim/drain from reimplementing any
 of it — so the layer above a set of leaves is a stated pure function owned
 by a different crate than the writer path.
+
+**Why `curve_tree_roots` is `set-shaped` and not `derived`,** though it too
+is a function of the leaves: consensus reads it directly
+(`blockchain.cpp:3898`, `:4047`, `:4309`), so a wrong stored root is
+*consumed* rather than merely stored. Folding the stored bytes catches that
+divergence at the point it can do harm; recomputation is additional
+assurance, not a substitute. `curve_tree_checkpoints` has no consensus
+reader, so recomputation at checkpoint heights is sufficient for it. The
+distinction is **consensus-read versus internal**, and it is stated here
+because the next table assigned to either class will be argued by analogy.
 
 **A `derived` row with no nameable source is a finding against D10's
 universal wording, not a table-level exception.**
