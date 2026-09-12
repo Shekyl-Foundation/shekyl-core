@@ -104,7 +104,18 @@ row in `IMPLEMENTATION_INDEX.md` and `SERVE_CREDIT_PRUNED_MAX_BYTES`
 **The record got bigger and the chain got smaller** — because `RF-D8` ruling
 (i) kept the ~1,920 B opening *additively*, and `RF-D10` put the 5,107 B
 countersignature half on the prunable side. Both are correct and they push
-opposite ways. Restating the second row as "prunability fixed `k_cap`" would be
+opposite ways.
+
+> **SUPERSEDED IN ITS FIRST HALF — `RF-D8` (i) was RETRACTED 2026-08-26
+> (recorded here 2026-09-11, so this paragraph stood on a withdrawn premise
+> for 16 days).** The opening does not survive, so "the record got bigger"
+> no longer holds: the record is ~3,411 B, not ~5,331 B, and every figure
+> below derived from the ~1,920 B opening — including §2.1's arithmetic
+> — wants re-deriving before anything is sized against it. `RF-D10`'s half
+> is untouched. The two-forces framing survives; only the first magnitude
+> falls. Kept rather than recomputed in place, because this section is the
+> record of what the round priced, and a silently updated number would make
+> the round look like it had foreseen the retraction. Restating the second row as "prunability fixed `k_cap`" would be
 true only on the axis that stopped binding.
 
 ### 2.1 The arithmetic, with `SEB = 10,000` (`constants.rs:202`)
@@ -581,6 +592,38 @@ of them are how this round started.
    disagreed and the stale one is the one a reader reaches first. The doc's
    item 2 is **struck in place, not rewritten** — someone who already followed
    the instruction needs the correction where they read it.
+
+   > **REVERSED 2026-09-11 — this item is now wrong in exactly the way it
+   > warns about, and it is the SOURCE the index was projecting.** `RF-D8`
+   > ruling (i) was **retracted 2026-08-26**, five days after the RF round's
+   > CLOSED stamp (`ARCHIVAL_RESPONSE_FORMAT.md`, grep `RF-D8` (i)): the
+   > countersignature preimage names the challenged leaf, so `P` cannot sign
+   > it without learning which request is the challenge — defeating
+   > `ARCHIVAL_CHALLENGE_MECHANISM.md` §9's *"the test IS a read"*. The
+   > witness-computed rescue branch is redundant (a witness holding the bytes
+   > recomputes `R_k` in full), so both branches collapse.
+   >
+   > **Consequence: every bolded conclusion above is inverted.**
+   > `verify_segment_path` and `challenge_leaf_index` are **deletion-bound**
+   > on `ARCHIVAL_CREDIT_WIRE.md` §2's surface, not permanent consensus
+   > admission code. `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 2 and
+   > `challenge.rs:9–19` **read correctly as they stand — do not "fix"
+   > them.** The fifth fix this item describes landed at `aee2477d9d`
+   > (2026-08-24) and was undone in effect by `52f61476bb` (2026-08-26);
+   > `challenge.rs` now carries the retraction and `path.rs` the
+   > deletion-bound annotation, so the two modules agree again.
+   >
+   > **`challenge.rs` still deletes only in its leaf-opening half.** The
+   > module stays live as the serve-credit admission path into
+   > `blockchain.cpp` until the assignment cutover — "deletes wholesale"
+   > was over-broad in both directions.
+   >
+   > Left in place under this document's own rule, one level up: someone who
+   > followed *this* item needs the reversal where they read it. This was
+   > found from the projection — `IMPLEMENTATION_INDEX.md`'s
+   > `SO-D1…SO-Dn` row, reconciled in its own change — which is the
+   > reverse of the usual direction and only worked because the index row
+   > quoted this one instead of citing it.
 4. **`FOLLOWUPS.md` §"PRUNABILITY RESOLVED"** said the records ride *the
    coinbase transaction's* prunable region. `RF-D10` landed them in the
    **serve-credit transaction's** (`serialize_ctsig_prunable`, `ct_types.h`).

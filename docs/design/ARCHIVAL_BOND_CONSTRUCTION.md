@@ -514,7 +514,7 @@ exists to track.
 
 The `Auth key` column is unchanged and remains correct: `Release` and
 `HoldingsUpdate drop` authorize under the record's committed `bond_spend_pk`,
-which consensus pins in `archival_debit_auth_pin` — never the identity key. SA-2b
+which consensus pins in `archival_cold_authority_pin` (the composed gate; `requires_cold_authority` selects, `debit_auth_pin` compares) — never the identity key. SA-2b
 moved that key off the vin, not out of the requirement.
 
 ### 9.1 `CompleteTree` is a foundation-only constructor, structurally (naive-optimizer footgun)

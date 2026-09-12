@@ -137,7 +137,9 @@ pub use constants::{
     SettlementEpochOverrideError, CHALLENGES_PER_PAIR_PER_EPOCH, CHALLENGE_BEACON_SEAL_BLOCKS,
     CHALLENGE_RESOLUTION_BLOCKS, CHALLENGE_RESPONSE_BLOCKS, SETTLEMENT_EPOCH_BLOCKS,
 };
-pub use debit_auth::{debit_auth_pin, DebitAuthError};
+pub use debit_auth::{
+    cold_authority_pin, debit_auth_pin, requires_cold_authority, ColdAuthorityError, DebitAuthError,
+};
 pub use emission_kat_shape::{EmissionKatShape, EMISSION_KAT_SHAPE};
 pub use emission_verify::{
     claimant_reward_share, emission_vin_verify, emission_vin_verify_auth,

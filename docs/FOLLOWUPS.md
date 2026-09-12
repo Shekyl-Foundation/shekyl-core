@@ -14,6 +14,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **`on_mining_status` still labels dead pre-RandomX variants "Cryptonight" (rule 60).** The daemon's `pow_algorithm` label table (`src/rpc/core_rpc_server.cpp` `on_mining_status`) emits Cryptonight names for PoW variants Shekyl never had; the CLI deliberately does not render the field (CU-3, [`CLI_USABILITY.md`](design/CLI_USABILITY.md) §CU-3) but the daemon-side arms are dead-branch deletion work — falsify by `grep -n "Cryptonight" src/rpc/core_rpc_server.cpp` returning nothing.
+  - Target: pre-genesis
+
 - **Delete or justify `tx_extra` 0x0A (`PQC_SPEND_AUTH_PUBKEYS`) — it has no producer.** Found at the C2-R2 signing round (Rick, verified at source): declared (`src/cryptonote_basic/tx_extra.h:48`, `rust/shekyl-wire/src/tx_extra.rs:50`), parsed (`tx_extra.rs:233`), picked (`src/cryptonote_basic/cryptonote_format_utils.cpp:540`) — and nothing anywhere constructs the field; the only write arm is the codec's generic `write_blob` branch. A parse surface with no producer is rule-15 debt and a fuzzing surface for free. Rule 15: delete at the port, or record the future producer that justifies it. — [`CONSENSUS_C2_R2_WEIGHT_FEES.md`](completed/CONSENSUS_C2_R2_WEIGHT_FEES.md) Q10
   - Target: pre-genesis
 
@@ -110,7 +113,7 @@ Default. Lands before genesis if it should exist at launch.
 - **`txs` is a zero-write, zero-read LMDB table (P0b DRS-W4).** Handle's only occurrence is its `open()`; inherited-dead deletion candidate — C++ + schema-version change, census/DRS lane owns ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
-- **`hf_starting_heights` deleted at every writable `open()` (P0b DRS-W5).** `mdb_drop(…,1)` at `db_lmdb.cpp:1778`, never re-created — macro table structurally absent at runtime; feeds census R4 ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
+- **`hf_starting_heights` deleted at every writable `open()` (P0b DRS-W5).** `mdb_drop(…,1)` at `db_lmdb.cpp:1779`, never re-created — macro table structurally absent at runtime; feeds census R4 ([audit §9](LMDB_WRITE_ATOMICITY_AUDIT.md))
   - Target: pre-genesis
 
 - **DRS-BENCH — resource/privacy/IBD/pop suite (not throughput).** File
@@ -335,9 +338,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **Genesis ceremony tooling: `generate-genesis-address` CLI**
-  - Target: pre-genesis
-
-- **USER_GUIDE realignment to the Rust CLI surface (2026-06-10 doc**
   - Target: pre-genesis
 
 - **Stage 1 trait-extraction chain — closeout audit (2026-05-29, [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)**
@@ -604,7 +604,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Chore #3: retire every 32-bit target — leading with the security argument (`v3.1.0-alpha.5`, landed on `chore/retire-32bit-targets`).**
   - Target: pre-genesis
 
-- **The ~42 GB/month cover-traffic budget is signed off PROVISIONALLY and has never been measured against actual usage.** Condition of the 2026-08-29 sign-off: build the carrier so a real transaction rides it, then compare actual bytes on the wire against the ceiling. Expected discrepancy and the bar for a real defect are pre-registered [`COVER_TRAFFIC_RESTORATION.md` §3.1c](design/COVER_TRAFFIC_RESTORATION.md). **RUNNABLE as of 2026-09-05** — `shekyld --carrier-development` (hidden) arms the carrier, which nothing outside the gtests could do before; the three-arm method, the exact framed-`WINDOW_BYTES` filter (`HEADER_SIZE + m_cb`, not `m_cb` itself), the count-at-levin-payload trap and the 2 h window are at §3.1c(i); the counter is `utils/carrier/count_windows.py`. **Arm A rehearsal 2026-09-10** (`seedusw`, `--expect-zero`): `windows=0` over 13 node→proxy flows, 20 877 packets, 0 kernel drops. Arms B and C (the budget measurement) still unrun.
+- **The ~42 GB/month cover-traffic budget is signed off PROVISIONALLY and has never been measured against actual usage.** Condition of the 2026-08-29 sign-off: build the carrier so a real transaction rides it, then compare actual bytes on the wire against the ceiling. Expected discrepancy and the bar for a real defect are pre-registered [`COVER_TRAFFIC_RESTORATION.md` §3.1c](design/COVER_TRAFFIC_RESTORATION.md). **RUNNABLE as of 2026-09-05** — `shekyld --carrier-development` (hidden) arms the carrier, which nothing outside the gtests could do before; the three-arm method, the exact framed-`WINDOW_BYTES` filter (`HEADER_SIZE + m_cb`, not `m_cb` itself), the count-at-levin-payload trap and the 2 h window are at §3.1c(i); the counter is `utils/carrier/count_windows.py`. **Arm A rehearsal 2026-09-10** (`seedusw`, `--expect-zero`): `windows=0` over 13 node→proxy flows, 20 877 packets, 0 kernel drops. **Arm A 2 h baseline 2026-09-11** (`seedusw`, alpha.8, `/tmp/arm-a-alpha8.pcap`): 7189 s, 2221 packets, 0 kernel drops, `windows=0` over 8 flows; daemon was not passed `--carrier-development`. Arms B and C (the budget measurement) still unrun.
   - Target: pre-genesis
 
 - **Relay: a transaction mined while the carrier holds it is still SENT — every remaining window, up to ~100 KiB.** The verdict-time `pool_has_tx` gate stops the record and the F-10 observation, but the verdict arrives only on completion, so a transaction mined before its first tick emits all of its windows: `MAX_FRAGMENTS` (5) × `WINDOW_BYTES` (20 480). An earlier entry said "one wasted window", understating it by the fragment cap. Named blocker: cancelling earlier needs an enqueue-cancellation API `NoiseQueues` does not have, and `unbind` clears a whole channel, so cancelling one message would discard its channel-mates. Bounded per transaction rather than per epoch, and it is cover carrying something peers already hold. Reopen if another caller needs cancellation, or if the §3.1c bandwidth measurement shows mined-while-queued traffic is a material share [`COVER_TRAFFIC_RESTORATION.md` §3.1e](design/COVER_TRAFFIC_RESTORATION.md)

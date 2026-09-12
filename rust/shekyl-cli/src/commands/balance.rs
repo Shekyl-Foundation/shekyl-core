@@ -8,7 +8,26 @@
 use serde_json::json;
 
 use super::{format_amount_str, require_open};
+use crate::display::short_address;
 use crate::rpc_client::RpcSession;
+
+/// Fetch this wallet's primary address. `fail` is the report prefix on an
+/// RPC error (`Failed to get address` / `Failed to get the payout address`).
+pub(crate) fn primary_address(rpc: &RpcSession, fail: &str) -> Option<String> {
+    match rpc.call("get_primary_address", json!({})) {
+        Ok(val) => match val.get("address").and_then(|v| v.as_str()) {
+            Some(address) => Some(address.to_owned()),
+            None => {
+                eprintln!("Malformed get_primary_address response.");
+                None
+            }
+        },
+        Err(e) => {
+            rpc.report(fail, &e);
+            None
+        }
+    }
+}
 
 pub fn cmd_balance(rpc: &RpcSession) {
     if !require_open(rpc) {
@@ -46,21 +65,58 @@ pub fn cmd_balance(rpc: &RpcSession) {
     }
 }
 
-pub fn cmd_address(rpc: &RpcSession) {
+/// `address [--full | --out <path>]` (CU-4). Hybrid addresses run to
+/// ~2,030 characters; the default is a short **display-only** form so the
+/// terminal stays usable, with the full string behind `--full` (print) or
+/// `--out <path>` (written to a new 0600 file, never overwriting — the same
+/// file-creation shape as `--seed-out`; an address is public, the uniform
+/// handling is for consistency, not secrecy).
+pub fn cmd_address(rpc: &RpcSession, full: bool, out: Option<&str>) {
     if !require_open(rpc) {
         return;
     }
-    match rpc.call("get_primary_address", json!({})) {
-        Ok(val) => match val.get("address").and_then(|v| v.as_str()) {
-            Some(address) => println!("{address}"),
-            None => eprintln!("Malformed get_primary_address response."),
-        },
-        Err(e) => rpc.report("Failed to get address", &e),
+    let Some(address) = primary_address(rpc, "Failed to get address") else {
+        return;
+    };
+
+    if let Some(path) = out {
+        let path = std::path::Path::new(path);
+        let write = super::scripted::open_owner_only_excl(path, "address file").and_then(
+            |mut file| -> Result<(), Box<dyn std::error::Error>> {
+                use std::io::Write;
+                writeln!(file, "{address}")?;
+                Ok(())
+            },
+        );
+        match write {
+            Ok(()) => println!(
+                "Full address ({} characters) written to {}.",
+                address.chars().count(),
+                path.display()
+            ),
+            Err(e) => eprintln!("{e}"),
+        }
+        return;
     }
+
+    if full {
+        println!("{address}");
+        return;
+    }
+
+    println!("{}", short_address(&address));
+    println!(
+        "(short display form of the {}-character address — not valid for \
+         pasting; \"address --full\" prints it all, \"address --out <path>\" \
+         writes it to a file)",
+        address.chars().count()
+    );
 }
 
 /// One-round-trip wallet summary over `get_wallet_info` (WI-RPC-4).
-pub fn cmd_engine_info(rpc: &RpcSession) {
+/// The REPL command is `wallet` (renamed from `engine_info`, CU-2; the old
+/// name is a hidden alias).
+pub fn cmd_wallet(rpc: &RpcSession) {
     if !require_open(rpc) {
         return;
     }
@@ -79,7 +135,12 @@ pub fn cmd_engine_info(rpc: &RpcSession) {
             println!("Wallet: {}", s("name"));
             println!("  Network:         {}", s("network"));
             println!("  Capability:      {}", s("capability"));
-            println!("  Address:         {}", s("address"));
+            let addr = s("address");
+            let shown = short_address(addr);
+            println!("  Address:         {shown}");
+            if shown != addr {
+                println!("                   (display only; \"address --full\" prints it all)");
+            }
             println!("  Wallet height:   {}", i("wallet_height"));
             match val.get("daemon_height").and_then(serde_json::Value::as_i64) {
                 Some(h) => println!("  Daemon height:   {h}"),
