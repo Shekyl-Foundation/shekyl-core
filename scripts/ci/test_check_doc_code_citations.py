@@ -30,7 +30,7 @@ SCRIPT = pathlib.Path(__file__).resolve().parent / "check_doc_code_citations.py"
 # Real revisions in this repository. The gate's whole job is resolving against
 # declared history, so these are deliberately concrete.
 PIN = "4b9807c5e"  # the §5.4.1 review pin
-ROW_PIN = "8ba1aae3d"  # the atomicity audit's row-level override
+ROW_PIN_PRESENT = "e54e5b983"  # curve_tree_header_root_check.cpp EXISTS here
 UNBORN = "2dba46537"  # predates tests/unit_tests/curve_tree_header_root_check.cpp
 
 
@@ -117,16 +117,34 @@ class EraSelection(unittest.TestCase):
         self.assertIn(UNBORN, out)
 
     def test_row_level_pin_overrides_the_section_pin(self):
-        """The atomicity audit's :923 shape -- a row citing against *its own*
-        pin inside a section pinned elsewhere. A slice-level-only
-        implementation passes the CSR and fails exactly here."""
+        """A row citing against its own pin inside a section pinned elsewhere.
+
+        The two eras are chosen to DISAGREE: the cited file is absent at the
+        section pin and present at the row pin, so the test fails if the
+        override is not applied. The earlier version of this fixture used a
+        spelling the parser does not treat as a pin AND a file that exists at
+        both eras, so it passed without the override ever applying -- vacuous
+        in exactly the way this gate exists to catch.
+        """
         with Fixture(
             f"## S\n\nReviewed at **`{UNBORN}`**.\n\n"
-            f"| row | reorg rebuild at `blockchain.cpp:1494` against its own pin "
-            f"(`{ROW_PIN}`) |\n"
+            f"| CEN-X1 | re-reviewed at `{ROW_PIN_PRESENT}` | "
+            "`tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n"
         ) as doc:
             rc, out = run_gate(doc)
         self.assertEqual(rc, 0, out)
+
+    def test_without_the_row_override_the_same_row_fails(self):
+        """The other half: drop the override and the section pin governs, where
+        the file does not exist. This is what makes the test above non-vacuous."""
+        with Fixture(
+            f"## S\n\nReviewed at **`{UNBORN}`**.\n\n"
+            "| CEN-X1 | no override | "
+            "`tests/unit_tests/curve_tree_header_root_check.cpp:1` |\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1)
+        self.assertIn("matches no tracked file", out)
 
     def test_section_pin_does_not_leak_past_its_heading(self):
         """Measured false FATAL: the §5.4.1 slice pin leaking into the decision
@@ -216,9 +234,10 @@ class SymbolAndRange(unittest.TestCase):
             rc, out = run_gate(doc)
         self.assertEqual(rc, 0, out)
 
-    def test_range_outside_every_overload_is_fatal(self):
-        """Same symbol, a range inside neither definition: the range has
-        stopped naming which definition is meant."""
+    def test_range_touching_no_definition_is_fatal(self):
+        """The defect the rule is for: a range that overlaps NO definition of
+        the symbol it names -- a pointer that has come loose from its
+        subject."""
         with Fixture(
             f"## S\n\nReviewed at **`{PIN}`**.\n\n"
             "Walks: **W-TI** = `check_tx_inputs` "
@@ -226,8 +245,65 @@ class SymbolAndRange(unittest.TestCase):
         ) as doc:
             rc, out = run_gate(doc)
         self.assertEqual(rc, 1)
-        self.assertIn("definitions in", out)
-        self.assertIn("lies inside none of them", out)
+        self.assertIn("overlaps no definition", out)
+        self.assertIn("come loose from the symbol", out)
+
+
+
+    def test_containment_runs_across_a_WRAPPED_legend(self):
+        """The register's legends wrap: the `**W-TI**` marker sits on one line
+        while the symbol and range sit on the next. A per-line check ran on 3
+        citations in the whole register and never once on W-TI -- the overload
+        case the rule was written for. Checked over the legend BLOCK now."""
+        with Fixture(
+            f"### S\n\nReviewed at **`{PIN}`**.\n\n"
+            "Walks: **W-TI** = the spend-path\n"
+            "gates in `check_tx_inputs` (`cryptonote_core/blockchain.cpp:100\u2013120`).\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1, "a wrapped legend must still be checked")
+        self.assertIn("W-TI", out)
+
+    def test_the_Walk_spelling_is_recognised(self):
+        """The register writes both `**W-TI**` and `**Walk W-BP**`. A marker
+        regex matching only the first silently skipped every walk using the
+        second."""
+        with Fixture(
+            f"### S\n\nReviewed at **`{PIN}`**.\n\n"
+            "- **Walk W-BP** — bond-post: `check_tx_inputs`\n"
+            "  (`cryptonote_core/blockchain.cpp:100\u2013120`).\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 1, "the `**Walk W-XX**` spelling must be checked too")
+        self.assertIn("W-BP", out)
+
+    def test_region_walk_spanning_two_functions_passes(self):
+        """A walk range may deliberately SPAN several functions — W-MT covers
+        `prevalidate_miner_transaction` and `validate_miner_transaction`
+        together. Strict containment-in-one would FATAL that correct row, which
+        is why the rule is overlap."""
+        with Fixture(
+            f"### S\n\nReviewed at **`{PIN}`**.\n\n"
+            "One walk, **W-MT**:\n"
+            "`prevalidate_miner_transaction` + `validate_miner_transaction`\n"
+            "(`cryptonote_core/blockchain.cpp:1653\u20131822`).\n"
+        ) as doc:
+            rc, out = run_gate(doc)
+        self.assertEqual(rc, 0, out)
+
+    def test_a_symbol_is_not_matched_as_a_substring(self):
+        """`validate_miner_transaction` must not match inside
+        `prevalidate_miner_transaction`. The substring form reported two
+        definitions where the file has one of each, turning a correct walk into
+        a FATAL."""
+        blob = ["bool Blockchain::prevalidate_miner_transaction(const block& b)",
+                "{", "  return true;", "}"]
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("g", str(SCRIPT))
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        self.assertEqual(gate.definition_extents(blob, "validate_miner_transaction"), [])
+        self.assertEqual(len(gate.definition_extents(blob, "prevalidate_miner_transaction")), 1)
 
 
 class CorpusCrossCheck(unittest.TestCase):

@@ -24,7 +24,14 @@
 # problem; it only makes the failure louder.
 #
 # ERA SELECTION, most specific wins:
-#   1. an inline `at `<sha>`` on the citation's own line (row-level override);
+#   1. an inline `at `<sha>`` on the citation's own line (row-level override).
+#      ONLY that spelling. The atomicity audit writes one as "against *its own*
+#      pin (`<sha>`)", which is NOT parsed and falls back to the section era --
+#      stated here rather than quietly widened, because accepting spellings on
+#      sight is how a wrong-era resolution gets in. Note the residue: an
+#      unparsed row pin inside a TABLE ROW is not caught by the section refusal
+#      either, since that refusal ignores table rows by design. Pin a row with
+#      `at `<sha>`` or pin its section.
 #   2. the pin governing the enclosing section -- `Reviewed at **`<sha>`**` or
 #      a table header `(all at `<sha>`)`. A pin's scope ENDS at the next
 #      heading of the same or shallower level. Without that bound the §5.4.1
@@ -160,8 +167,13 @@ CITATION_RE = re.compile(
     r"`([A-Za-z0-9_./-]+\.(?:" + "|".join(SOURCE_EXTS) + r"))"
     r"(?::(\d+)(?:[–—-](\d+))?\+?)?`"
 )
-# A walk legend entry: `**W-XX**` followed by prose that may name a symbol.
-LEGEND_RE = re.compile(r"\*\*W-[A-Z]{2}\*\*")
+# A walk legend entry. The register writes BOTH `**W-TI**` and `**Walk W-BP**`,
+# and its legends WRAP across lines -- the marker sits on one line while the
+# symbol and range it introduces sit on the next. So containment is checked
+# over the legend BLOCK (a blank-line-delimited paragraph), never per line: a
+# per-line check silently ran on 3 citations in the whole register and never
+# once on W-TI, the overload case the rule exists for.
+WALK_MARKER_RE = re.compile(r"\*\*(?:Walk\s+)?(W-[A-Z]{2})\*\*")
 SYMBOL_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)`")
 
 HEAD = "HEAD"
@@ -169,6 +181,22 @@ HEAD = "HEAD"
 # Any `<sha>`-shaped token, used only to detect era declarations this parser
 # did not understand -- never to resolve with.
 ANY_SHA_RE = re.compile(r"`([0-9a-f]{7,40})`")
+
+# Spellings authors actually use to declare an era, which this gate does NOT
+# parse. Matching them is how an unparsed declaration is told apart from prose
+# that merely mentions a revision -- the register's front matter and its §5
+# narrative both cite shas mid-sentence as provenance, and neither is
+# declaring an era for the rows beneath it.
+#
+#   1. the slice convention, anchored at LINE START: a real pin opens its line
+#      ("Reviewed at **`<sha>`** (2026-09-02). Walks: ..."). A sha buried
+#      mid-paragraph is provenance, not a declaration.
+#   2. the branch-and-sha idiom (`` `dev` `<sha>` ``) used by the atomicity
+#      audit's row-set pins.
+PIN_INTENT_RES = (
+    re.compile(r"^\*{0,2}(?:Re-?)?[Rr]eviewed at\b"),
+    re.compile(r"`dev`\s*`[0-9a-f]{7,40}`"),
+)
 
 
 class Era:
@@ -217,11 +245,16 @@ def definition_extents(lines, symbol):
     declaration+definition pair collapses to one without a special case.
     """
     bare = symbol.split("::")[-1]
+    # Anchored on a non-identifier character: a plain substring search for
+    # `validate_miner_transaction(` also matches inside
+    # `prevalidate_miner_transaction(`, which reported two definitions where
+    # the file has one of each and turned a correct walk into a FATAL.
+    call = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(bare) + r"\s*\(")
     out = []
     for i, line in enumerate(lines):
         if line[:1] in (" ", "\t", "", "#", "/"):
             continue
-        if f"{bare}(" not in line and f"{symbol}(" not in line:
+        if not call.search(line):
             continue
         depth = 0
         opened = False
@@ -269,6 +302,33 @@ def eras_for_lines(lines):
     return eras
 
 
+def section_spans(lines):
+    """Every heading's span, properly NESTED: a section runs to the next
+    same-or-shallower heading, so a `#####` slice lies INSIDE its `####`
+    parent.
+
+    This is the document's one notion of scope. Era selection already nested
+    this way while the unparsed-era check treated every heading as a fresh
+    section, so a pin declared on a parent never shared a section with the
+    citations under its children -- two instruments over one document with
+    different grammars and nothing comparing them.
+    """
+    heads = []
+    for lineno, line in enumerate(lines, 1):
+        match = HEADING_RE.match(line)
+        if match:
+            heads.append(
+                [len(match.group(1)), line.strip("# ").strip()[:60], lineno, len(lines)]
+            )
+    for i, head in enumerate(heads):
+        for later in heads[i + 1:]:
+            if later[0] <= head[0]:
+                head[3] = later[2] - 1
+                break
+    front = [0, "(front matter)", 1, (heads[0][2] - 1 if heads else len(lines))]
+    return [tuple(h) for h in ([front] + heads)]
+
+
 def unparsed_era_sections(lines, eras):
     """Sections that tried to declare an era this parser did not understand.
 
@@ -278,28 +338,128 @@ def unparsed_era_sections(lines, eras):
     sit in table cells and are excluded, so a dated ledger carrying its own
     per-row provenance is not flagged.
     """
-    current = {"heading": "(front matter)", "declaration": None,
-               "declared_at": 0, "head_cites": 0}
-    sections = []
+    flagged = []
+    for level, heading, start, end in section_spans(lines):
+        declaration = None
+        declared_at = 0
+        head_cites = 0
+        for lineno in range(start, min(end, len(lines)) + 1):
+            line = lines[lineno - 1]
+            stripped = line.lstrip()
+            if (
+                declaration is None
+                and not stripped.startswith("|")
+                and ANY_SHA_RE.search(line)
+                and any(intent.search(line) for intent in PIN_INTENT_RES)
+                and not SECTION_PIN_RE.search(line)
+            ):
+                declaration = "`" + ANY_SHA_RE.search(line).group(1) + "`"
+                declared_at = lineno
+            if eras.get(lineno) == HEAD:
+                head_cites += len(CITATION_RE.findall(line))
+        if declaration and head_cites:
+            flagged.append(
+                {
+                    "heading": heading,
+                    "declaration": declaration,
+                    "declared_at": declared_at,
+                    "head_cites": head_cites,
+                    "level": level,
+                }
+            )
+    # Report the innermost section that owns each failure, not every ancestor
+    # that contains it: one finding per defect, named where the author looks.
+    flagged.sort(key=lambda f: -f["level"])
+    seen_lines = set()
+    unique = []
+    for finding in flagged:
+        if finding["declared_at"] in seen_lines:
+            continue
+        seen_lines.add(finding["declared_at"])
+        unique.append(finding)
+    return unique
+
+
+def legend_blocks(lines):
+    """Blank-line-delimited paragraphs that carry a walk marker, as
+    (first_lineno, joined_text)."""
+    out = []
+    start = None
+    buf = []
     for lineno, line in enumerate(lines, 1):
-        if HEADING_RE.match(line):
-            sections.append(current)
-            current = {"heading": line.strip("# ").strip()[:60],
-                       "declaration": None, "declared_at": 0, "head_cites": 0}
-        stripped = line.lstrip()
-        if (
-            current["declaration"] is None
-            and not stripped.startswith("|")
-            and ANY_SHA_RE.search(line)
-            and not CITATION_RE.search(line)
-            and not SECTION_PIN_RE.search(line)
-        ):
-            current["declaration"] = "`" + ANY_SHA_RE.search(line).group(1) + "`"
-            current["declared_at"] = lineno
-        if eras[lineno] == HEAD:
-            current["head_cites"] += len(CITATION_RE.findall(line))
-    sections.append(current)
-    return [s for s in sections if s["declaration"] and s["head_cites"]]
+        if line.strip():
+            if start is None:
+                start = lineno
+            buf.append(line)
+            continue
+        if buf and WALK_MARKER_RE.search(" ".join(buf)):
+            out.append((start, " ".join(buf)))
+        start, buf = None, []
+    if buf and WALK_MARKER_RE.search(" ".join(buf)):
+        out.append((start, " ".join(buf)))
+    return out
+
+
+def check_legend_containment(relpath, lines, eras, failures):
+    """A walk's cited range must lie inside exactly one body-bearing definition
+    of the symbol that walk names.
+
+    Scoped per WALK, not per block: one paragraph introduces several walks
+    (`**W-TI** = ... , **W-RB** = ... , **W-PQ** = ...`), so the text is split
+    on the markers and each walk's symbol is paired only with the range in its
+    own segment.
+    """
+    for first_lineno, text in legend_blocks(lines):
+        rev = eras.get(first_lineno, HEAD)
+        tracked = Era.files(rev)
+        if tracked is None:
+            continue  # the unreachable-pin limb already reported this
+        parts = WALK_MARKER_RE.split(text)
+        for walk_id, segment in zip(parts[1::2], parts[2::2]):
+            # Pair POSITIONALLY: a walk entry lists several clauses, each with
+            # its own symbols and range ("`a` + `b` (`f.cpp:1-2`), plus ... the
+            # operand derivations (`c` `:9`, `hardforks.cpp:35-37`)"). Pairing
+            # every symbol with every range made `get_tx_volume_avg` answer for
+            # a range belonging to the clause above it. A range's symbols are
+            # those between it and the previous range.
+            cursor = 0
+            for match in [m for m in CITATION_RE.finditer(segment) if m.group(2)]:
+                symbols = [
+                    sym
+                    for sym in SYMBOL_RE.findall(segment[cursor:match.start()])
+                    if "." not in sym and "/" not in sym
+                ]
+                cursor = match.end()
+                candidates = resolve_path(match.group(1), tracked)
+                if len(candidates) != 1:
+                    continue  # the path limb owns that failure
+                blob = Era.blob(rev, candidates[0])
+                if blob is None:
+                    continue
+                start = int(match.group(2))
+                end = int(match.group(3) or match.group(2))
+                for symbol in symbols:
+                    extents = definition_extents(blob, symbol)
+                    if not extents:
+                        continue  # prose, or defined elsewhere -- not a claim
+                    # OVERLAP, not strict containment. A walk range may sit
+                    # inside one definition (W-TI is a sub-block of a ~900-line
+                    # function) or deliberately SPAN several (W-MT covers
+                    # `prevalidate_miner_transaction` and
+                    # `validate_miner_transaction` together). Both are honest
+                    # citations. The defect is a range that touches NO
+                    # definition of the symbol it names -- a pointer that has
+                    # come loose from its subject.
+                    if any(e[0] <= end and start <= e[1] for e in extents):
+                        continue
+                    failures.append(
+                        f"{relpath}:{first_lineno}: walk {walk_id} cites "
+                        f"`{symbol}` with range {start}-{end}, which overlaps "
+                        f"no definition of it in {candidates[0]} at `{rev}` "
+                        + ", ".join(f"[{a},{b}]" for a, b in extents)
+                        + " -- the range has come loose from the symbol it "
+                        "names."
+                    )
 
 
 def check_document(relpath, failures):
@@ -362,40 +522,8 @@ def check_document(relpath, failures):
                     "them; qualify it with enough leading directories to be unique."
                 )
                 continue
-            if not LEGEND_RE.search(line) or match.group(2) is None:
-                continue
-            # Walk legend with a range: the symbol must own that range.
-            start, end = int(match.group(2)), int(match.group(3) or match.group(2))
-            blob = Era.blob(rev, candidates[0])
-            if blob is None:
-                failures.append(
-                    f"{relpath}:{lineno}: `{candidates[0]}` is tracked at `{rev}` but "
-                    f"its content could not be read"
-                )
-                continue
-            for symbol in SYMBOL_RE.findall(line):
-                if "." in symbol or symbol.startswith("W-"):
-                    continue
-                extents = definition_extents(blob, symbol)
-                if not extents:
-                    continue  # not a symbol defined in this file; prose, not a citation
-                owning = [e for e in extents if e[0] <= start and end <= e[1]]
-                if len(owning) == 1:
-                    continue
-                if len(extents) > 1 and not owning:
-                    failures.append(
-                        f"{relpath}:{lineno}: `{symbol}` has {len(extents)} "
-                        f"definitions in {candidates[0]} at `{rev}` "
-                        + ", ".join(f"[{a},{b}]" for a, b in extents)
-                        + f" and the cited range {start}-{end} lies inside none of "
-                        "them -- the range does not name which definition is meant."
-                    )
-                elif len(owning) > 1:
-                    failures.append(
-                        f"{relpath}:{lineno}: `{symbol}` range {start}-{end} lies "
-                        f"inside {len(owning)} definitions at `{rev}`; it does not "
-                        "pick one."
-                    )
+
+    check_legend_containment(relpath, lines, eras, failures)
 
     if seen == 0:
         failures.append(
