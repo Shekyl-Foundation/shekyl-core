@@ -176,12 +176,38 @@ class ArtifactRefusals(unittest.TestCase):
         and a 1.25x floor sits well inside that band."""
         self._refuse(lambda a: a.pop("environment"), "environment block absent")
 
-    def test_refuses_unreadable_loadavg_sentinel(self):
-        """-1.0 is the sentinel for an unreadable /proc, and it must not pass as a
-        load figure. 0.0 was deliberately NOT used as the sentinel because zero is
-        a legitimate load."""
+    def test_refuses_a_negative_load_average(self):
+        """A load average cannot be negative, and this is the test that matters:
+        the producer's ORIGINAL failure sentinel was -1.0, which is a number and
+        so passed an isinstance-only check. The first version of this test used
+        None — a value the code never emitted — so it could not fail on the real
+        path. Test the sentinel the producer actually produces."""
+        for k in D.LOADAVG_FIELDS:
+            with self.subTest(field=k):
+                self._refuse(lambda a, k=k: a["environment"].__setitem__(k, -1.0),
+                             "impossible negative load")
+
+    def test_refuses_non_numeric_load_average(self):
         self._refuse(lambda a: a["environment"].__setitem__(
             "loadavg_1m_at_start", None), "loadavg_1m_at_start")
+
+    def test_refuses_a_boolean_load_average(self):
+        """`isinstance(True, int)` is True in Python, so a bool would satisfy a
+        numeric check and then compare as 1."""
+        self._refuse(lambda a: a["environment"].__setitem__(
+            "loadavg_1m_at_end", True), "loadavg_1m_at_end")
+
+    def test_the_producer_emits_no_numeric_sentinel_on_failure(self):
+        """Pins the PRODUCER, not just the validator: if os.getloadavg is
+        unavailable, `_loadavg` must return None rather than any number, so a
+        failed observation has no representation that could validate."""
+        import drs_bench as R
+        real = os.getloadavg
+        os.getloadavg = lambda: (_ for _ in ()).throw(OSError("no"))
+        try:
+            self.assertIsNone(R._loadavg())
+        finally:
+            os.getloadavg = real
 
     def test_refuses_missing_cpu_count_for_the_load(self):
         self._refuse(lambda a: a["environment"].pop("cpu_count"),
@@ -193,6 +219,37 @@ class ArtifactRefusals(unittest.TestCase):
     def test_refuses_empty_cpu_model(self):
         self._refuse(lambda a: a["hardware"].__setitem__("cpu_model", ""),
                      "hardware.cpu_model")
+
+    def test_refuses_missing_disk_class_source(self):
+        """Provenance for the disk class: without it, a probed value cannot be told
+        from one asserted by hand."""
+        self._refuse(lambda a: a["hardware"].pop("disk_class_source"),
+                     "hardware.disk_class_source")
+
+    def test_refuses_undetermined_source_beside_a_real_disk_class(self):
+        """`measure` pre-flights the undeterminable case and refuses to start, so
+        this combination cannot come from the harness. Requiring the provenance is
+        what makes that pre-flight guarantee checkable."""
+        self._refuse(lambda a: a["hardware"].__setitem__("disk_class_source",
+                                                         "undetermined"),
+                     "a value nobody established")
+
+    def test_refuses_generated_blocks_with_no_observed_duration(self):
+        """Both directions of the generation pair, which is why it is a cross-check
+        and not a presence check. The fields are legitimately absent when the seed
+        was reused."""
+        self._refuse(lambda a: (a["fixture"].__setitem__("blocks_generated", 200),
+                                a["fixture"].__setitem__("generation_wall_s", None)),
+                     "their duration was not observed")
+
+    def test_refuses_zero_duration_for_generated_blocks(self):
+        self._refuse(lambda a: (a["fixture"].__setitem__("blocks_generated", 200),
+                                a["fixture"].__setitem__("generation_wall_s", 0)),
+                     "their duration was not observed")
+
+    def test_refuses_a_duration_with_no_blocks_generated(self):
+        self._refuse(lambda a: a["fixture"].__setitem__("generation_wall_s", 99.0),
+                     "no blocks generated")
 
     def test_refuses_placeholder_disk_class(self):
         """§1.3 requires the disk TYPE. "unknown" is non-empty, so a mere

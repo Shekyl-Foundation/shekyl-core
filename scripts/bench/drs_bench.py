@@ -74,17 +74,22 @@ def _dir_bytes(path, apparent):
 
 
 def _loadavg():
-    """(1-minute, 5-minute) load average, or (-1.0, -1.0) if unreadable.
+    """(1-minute, 5-minute) load average, or None if unreadable.
 
-    A negative sentinel rather than 0.0: zero is a legitimate load and would read
-    as "the machine was idle", which is the placeholder-satisfies-the-field defect
-    this file has now hit twice. The validator requires a number and a reader can
-    see that -1 is not one of them.
+    None, not a numeric sentinel. The first version of this returned (-1.0, -1.0)
+    on the reasoning that a reader can see -1 is not a load — but the VALIDATOR
+    only asked `isinstance(v, (int, float))`, and -1.0 is a number, so the sentinel
+    validated as a real measurement. That is the third instance in this file of the
+    same defect (`disk_class: "unknown"`, a failed CPU read as `0.0`), and it slipped
+    through because the test for it used `None` rather than the sentinel the code
+    actually emits: the test could not fail on the real path. A failed observation
+    now has no numeric representation at all, and `measure` refuses.
     """
     try:
-        return os.getloadavg()[0], os.getloadavg()[1]
+        la = os.getloadavg()
+        return la[0], la[1]
     except OSError:
-        return -1.0, -1.0
+        return None
 
 
 def _cpu_seconds(pid):
@@ -330,6 +335,10 @@ def measure(args):
         store_bytes = _dir_bytes(subj_dir, apparent=False)
         store_apparent = _dir_bytes(subj_dir, apparent=True)
 
+    if load_at_start is None or load_at_end is None:
+        _fail("could not read the load average from os.getloadavg(). System load is a "
+              "condition of a wall-time measurement, so no artifact is written rather "
+              "than one carrying an unobserved figure.")
     if cpu_at_start is None or cpu_at_end is None:
         _fail("could not sample the subject's CPU time from /proc "
               f"(start={cpu_at_start}, end={cpu_at_end}). The artifact would have to "

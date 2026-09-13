@@ -38,6 +38,14 @@ ALLOWED_SYNC_MODES = ("safe",)
 # §1.3 requires the disk TYPE. "unknown" is not a type, so it is not a value.
 ALLOWED_DISK_CLASSES = ("hdd", "ssd_or_nvme")
 
+# How `disk_class` was established. "undetermined" is what the fingerprint reports
+# when it could neither probe nor be told, and `measure` pre-flights that case and
+# refuses to start — so an artifact carrying a real class beside an undetermined
+# source did not come from `measure`, and is asserting a value nobody established.
+# Requiring the provenance is what makes the pre-flight's guarantee CHECKABLE
+# rather than merely true of the happy path.
+ALLOWED_DISK_CLASS_SOURCES = ("probed", "operator-declared")
+
 # SYSTEM LOAD IS A CONDITION OF A WALL-TIME MEASUREMENT, in the same class as
 # `fs_type` and `disk_class`: not a detail, a thing without which the number does
 # not mean what it says.
@@ -202,9 +210,17 @@ def artifact_refusals(a):
                  "and a 5-minute load average of 8.6")
     else:
         for k in LOADAVG_FIELDS:
-            if not isinstance(env.get(k), (int, float)):
-                r.append(f"environment.{k} is {env.get(k)!r} — a wall-time figure whose "
-                         "contention is unrecorded cannot be compared against another")
+            v = env.get(k)
+            # `isinstance(v, (int, float))` alone is NOT enough, and shipping that was
+            # this file's third placeholder defect: the producer's failure sentinel was
+            # -1.0, which is a number and so validated as a real load. A load average
+            # cannot be negative, so the range check is what makes the type check mean
+            # something. The producer no longer emits a numeric sentinel either; this
+            # is the second line of defence, for an artifact written by hand.
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0:
+                r.append(f"environment.{k} is {v!r} — a wall-time figure whose "
+                         "contention is unrecorded, or recorded as an impossible "
+                         "negative load, cannot be compared against another")
         if not isinstance(env.get("cpu_count"), int) or env["cpu_count"] < 1:
             r.append("environment.cpu_count absent — a load average means nothing "
                      "without the core count it is relative to")
@@ -217,6 +233,13 @@ def artifact_refusals(a):
         for k in ("cpu_model", "ram_bytes", "disk_class"):
             if not h.get(k):
                 r.append(f"hardware.{k} absent or empty")
+        src = h.get("disk_class_source")
+        if src not in ALLOWED_DISK_CLASS_SOURCES:
+            r.append(f"hardware.disk_class_source is {src!r}, not one of "
+                     f"{list(ALLOWED_DISK_CLASS_SOURCES)} — a disk class with no record "
+                     "of how it was established cannot be told from one asserted by "
+                     "hand, and 'undetermined' beside a real class is a value nobody "
+                     "established")
         if h.get("disk_class") and h["disk_class"] not in ALLOWED_DISK_CLASSES:
             r.append(f"hardware.disk_class is {h['disk_class']!r}, not one of "
                      f"{list(ALLOWED_DISK_CLASSES)}. §1.3 requires the disk TYPE; a "
@@ -270,6 +293,22 @@ def artifact_refusals(a):
             r.append(f"fixture.tx_per_block is {f['tx_per_block']} but prunable_region "
                      "claims absence by construction, which holds only for a "
                      "coinbase-only fixture")
+        # The generation pair, cross-checked in BOTH directions. These fields are
+        # legitimately ABSENT when the seed was reused and nothing was generated —
+        # that is the point of recording them — so the rule is consistency, not
+        # presence: blocks generated implies a positive observed duration, and no
+        # blocks generated implies no duration. Either alone is a run reporting
+        # work it did not time, or a time for work it did not do.
+        gb, gw = f.get("blocks_generated"), f.get("generation_wall_s")
+        if isinstance(gb, int) and gb > 0:
+            if not isinstance(gw, (int, float)) or isinstance(gw, bool) or gw <= 0:
+                r.append(f"fixture.blocks_generated is {gb} but generation_wall_s is "
+                         f"{gw!r} — blocks were generated and their duration was not "
+                         "observed, so any rate derived from this pair is invented")
+        elif gw is not None:
+            r.append(f"fixture.generation_wall_s is {gw!r} while blocks_generated is "
+                     f"{gb!r} — a generation duration with no blocks generated")
+
         peers = f.get("peers_used")
         if not isinstance(peers, int) or peers < 1:
             r.append(f"fixture.peers_used is {peers!r} — IBD wall time scales with the "
