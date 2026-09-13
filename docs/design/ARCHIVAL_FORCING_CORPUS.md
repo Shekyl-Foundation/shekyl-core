@@ -20,11 +20,12 @@ holds that we do not extract or port S-ARCH *"until digest coverage includes
 the archival journal families (or an explicit, named exclusion with a
 replacement KAT that forces apply/revert to run)"*, because — in the same
 section's words — **"a backend can omit all apply/revert hooks and still pass
-core digests."** `LMDB_WRITE_ATOMICITY_AUDIT.md` recorded, **until this
-branch corrected it**, that *"the replacement KAT that rule requires does not
-exist yet."* That wording is quoted here as the **pre-ruling** state it
-described, not as the tree's current claim: §3.5 rules the extraction bar
-discharged for settlement, and the audit line now says so.
+core digests."** `LMDB_WRITE_ATOMICITY_AUDIT.md` records that
+*"the replacement KAT that rule requires does not exist yet."* **That still
+holds for all sixteen families**, and §3.5 says precisely why it holds for
+settlement even though a KAT exists: the KAT forces the **revert** through a
+production hook but only ever seeds the **apply** side through the writer,
+which is not the apply path.
 
 **The diff does not discharge that bar; it consumes it.** Empty-vs-empty
 passes a digest comparison. The corpus is the half that makes the comparison
@@ -147,10 +148,14 @@ rather than this lane's preference.
 ### 3.4 What already exists, and what it is missing
 
 A replacement KAT for settlement is **not** absent.
-`tests/unit_tests/archival_settlement_table.cpp` forces both halves directly:
-seven tests call `set_archival_settlement`, and `EpochRevertDropsOnlyThatEpoch`
-(`:120-131`) calls `delete_archival_settlement_for_epoch` and asserts on the
-result.
+`tests/unit_tests/archival_settlement_table.cpp` reaches both halves, but
+**not equally**, and the difference is what §3.5 turns on. Its **revert** runs
+through production: `SlashRevertDropsEveryEpochInTheFoldedSpanAndRewindsBelowIt`
+(`:207`) performs a real `process_archival_slash_at_height` fold and then calls
+`revert_archival_slashes_at_height` (`:251`), which reaches
+`delete_archival_settlement_for_epoch`. Its **apply** does not: all twelve
+`set_archival_settlement` calls go straight onto the store handle, which is the
+writer rather than the apply path.
 
 This lane first proposed making that fixture backend-parametric — it is
 `TempArchivalLMDB<DBT>`, already a template — and **E1's owner declined, on
@@ -166,53 +171,68 @@ an adapter written for the test, so passing would prove the adapter works.
 That is a shim standing between the oracle and its subject, built to satisfy
 the very rule that exists because a backend can omit its hooks and still pass.
 
-### 3.5 The routed question: is settlement's bar already met?
+### 3.5 Two gates, and why settlement passes neither yet
 
-**RULED 2026-09-13 (Rick, via steering), as recommended below.** The rule has
-two sentences and they gate different things:
+**RULED 2026-09-13 (Rick, at `37accf6f9`).** This section replaces an earlier
+reading that this lane published and that was wrong in both directions. Both
+errors are recorded rather than edited away, because both were acted on.
 
-> **Rule:** do **not** extract/port **S-ARCH** (or implement archival apply in
-> `shekyl-chain-store`) until digest coverage includes the archival journal
-> families (**or an explicit, named exclusion with a replacement KAT that
-> forces apply/revert to run**). ... digests must still *see* production LMDB
-> behavior for those paths **before claiming parity**.
+**§7.1.1 defines two gates, not one bar.** Separating them is what makes the
+sequencing legible:
 
-The parenthetical gates **extraction**. The trailing clause gates **parity**.
-Read that way, both of the following are true at once, and the register should
-say which bar it is talking about:
+| Gate | Question it answers | Granularity |
+| --- | --- | --- |
+| **Extraction** | may archival apply be written in `shekyl-chain-store`? | **per family**, lands incrementally as KATs arrive |
+| **Parity** | may DRS-E2 claim those rows ported correctly? | **all families at once** — it is one harness |
 
-- **Extraction, for `archival_settlement` only: arguably met today.** The
-  escape clause wants a named exclusion plus a KAT that forces apply/revert to
-  run. §3.1–3.2 are the named exclusion; `archival_settlement_table.cpp` is
-  the KAT, against production `BlockchainLMDB`, with no redb, no façade and no
-  corpus. This also breaks a circularity worth naming: §7.1.1 bars
-  *implementing archival apply in `shekyl-chain-store`*, so "write the Rust
-  apply, then KAT it" cannot be the order. KAT-first against the C++ is the
-  only direction that opens.
-- **Parity: not met, and not by this KAT.** §7.1.1's own first paragraph names
-  the hazard as *"a backend can omit all apply/revert hooks and still pass core
-  digests."* A KAT that exercises **LMDB's** hooks cannot detect **redb**
-  omitting **its** hooks — it does not touch redb at all. So the KAT satisfies
-  the clause's letter without addressing the hazard its preamble states. What
-  addresses that hazard is the corpus, the diff, and the `ApplyPolicy`
-  sufficiency control of §5.
+So extraction proceeds family by family, and parity waits once, at the end, on
+the corpus through the dual-population path, both backends, diffed per row
+against the register.
 
-**The ruling:** the existing KAT **discharges the extraction bar** for the
-settlement family, the exclusion **stays named**, and **parity remains owed**
-against the corpus.
+**Correction 1 — settlement does NOT pass the extraction gate.** This lane
+first reported that it did. The gate wants *"a replacement KAT that forces
+apply/revert to run"*, and the evidence splits:
 
-`LMDB_WRITE_ATOMICITY_AUDIT.md`'s line asserting that the replacement KAT
-*"does not exist yet"* is corrected in this branch. For settlement it was
-already false when written, and a stale assertion of that shape is what leads
-someone to rebuild a KAT that already exists.
+- **Revert: genuinely forced.** `archival_settlement_table.cpp` runs a real
+  `process_archival_slash_at_height` fold, then calls the production hook
+  `revert_archival_slashes_at_height`, which reaches
+  `delete_archival_settlement_for_epoch`, and asserts the folded span's rows
+  drop while the neighbouring epoch survives.
+- **Apply: not forced, and cannot be.** All twelve `set_archival_settlement`
+  calls go straight onto the store handle. **That is the writer, not the apply
+  path** — and it cannot be the apply path, because the writer has no
+  production caller (§3.1). A direct store-method invocation is not apply.
 
-**Carried as a recommendation, deliberately NOT applied here:** if "replacement
-KAT" was always meant to imply cross-backend reach, the clause is weaker than
-its rationale and wants a one-sentence tightening. That is a rules-shaped
-change and should be ruled on its own rather than folded into a corpus branch,
-so §7.1.1 itself is untouched by this work.
+The rule asks for apply **and** revert, so settlement is **half met and
+therefore unmet**, and stays so until **SO-D8**. Other families may genuinely
+meet the gate; settlement is the one that cannot. Its being the family that
+fails every bar today is not coincidence — it is the same missing writer each
+time.
 
----
+**Correction 2 — the trailing clause is reference-side, not cross-backend.**
+This lane read *"digests must still see production LMDB behavior for those
+paths before claiming parity"* as a cross-backend requirement. It names
+**LMDB**. It asks that the oracle has watched LMDB actually run those paths,
+which a C++-only KAT satisfies on the literal text. The instinct that the
+clause is weaker than its rationale was right; the diagnosis of why was not.
+
+**Why the gap exists, which explains it rather than patching it.** When
+§7.1.1 was written **the digest WAS the comparator** — one instrument computed
+over both stores — so "coverage includes the archival journal families"
+implied both sides **by construction**. Covering LMDB implied covering redb.
+**That implication died when the comparator became a diff.** The cross-backend
+reach was never stated because it never had to be.
+
+**The tightening therefore belongs on the comparison side, not in the
+definition of "replacement KAT".** That term is doing separate work in the
+extraction leg and in DRS-E2's DIVERGENT row, and overloading it breaks both.
+The proposed shape, carried in this branch's PR body as a **recommendation**
+with §7.1.1 itself untouched:
+
+> ...digests must still see production LMDB behavior for those paths before
+> claiming parity, **and the comparison must reach the same paths in the
+> ported backend** — a corpus that exercises apply/revert against LMDB alone
+> establishes the **reference**, not parity.
 
 ## 4. Three forceability findings from the scoping pass
 
@@ -286,7 +306,29 @@ challenge. The complete-tree branch of that scan reaches
 bond forces the row **without** a frozen segment. The corpus should take that
 branch.
 
-**4.3 `archival_shard_segment` needs 25,992 leaves and the cheap path is
+**4.3 The 25,992-leaf freeze gates ONE family, not the corpus — so the build
+tiers.** Measured rather than assumed: of the apply hooks, only
+`process_archival_slash_for_epoch` references `archival_shard_segment` at all,
+and only down its complete-tree branch. `process_archival_epoch_close_at_height`
+(which writes `archival_r_market`, `archival_sigma_work`, `archival_budget` and
+`archival_epoch_close_log`), `apply_archival_emission_claim`,
+`apply_archival_unbond`, `apply_archival_rebond`, `put_archival_bond_record`
+and `add_archival_budget_accrual` reference it **zero** times.
+
+| Tier | Families | Precondition |
+| --- | --- | --- |
+| **Cheap** | every forceable family except one — bond, both slash tables, emission, the three bond journals, the four epoch-close tables, serve credit, budget accrual | ordinary blocks, a bond, an epoch boundary |
+| **Expensive** | `archival_shard_segment` alone | 25,992 curve-tree leaves |
+
+**This is the round's best scheduling news.** Extraction can unblock for
+almost every family long before the leaf count is reachable, and the corpus
+should be staged so the cheap tier lands first. `archival_slash_applied` is
+the proof the tiering is real rather than tidy: it *looks* segment-coupled and
+is not, because the `else` branch over `bond.held_shard_ids` forces the row
+without a frozen segment.
+
+**The remaining cost is genuine and unavoidable: `archival_shard_segment`
+needs 25,992 leaves and the cheap path is
 foreclosed by design.** Segment freeze fires on first crossing of
 `SEGMENT_LEAF_COUNT = 25_992`. There is no regtest override, and
 `config/consensus_constants.json:43` states the reason: it is **"NOT a
@@ -428,8 +470,10 @@ agreement with 7b on `ApplyPolicy`; the TLB decision.
   rather than duplicating it.
 - The sufficiency control — blocked on `ApplyPolicy` landing in
   `shekyl-chain-store` (ruled in, not yet built).
-- Settlement's two **corpus** cells — blocked on **SO-D8**, which is the
-  writer landing. Nothing in this round moves them.
+- Settlement's two **corpus** cells, **and its extraction gate** — both
+  blocked on **SO-D8**, which is the writer landing. Nothing in this round
+  moves them. Its revert is already forced through a production hook; the
+  apply half is what SO-D8 unblocks.
 - The attestation-witness families — **no longer an open validity question.**
   §4.1 answers it: there is no producer at this pin, so the blocker is the
   **Phase 2/3 template writer**, not the cost of constructing valid bytes.
