@@ -251,6 +251,12 @@ pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH: u8 = 50;
 /// correct caller; exists so a new arm cannot silently authorize hot.
 pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST: u8 = 51;
 
+/// JoinMarket vin marshal / verify: the endpoint violates its coupling
+/// (`EU-D3`) — absent, not 32 bytes, or the all-zero key (the bond record
+/// encodes "no endpoint" as zero, so a zero key is refused as absent). The
+/// other kinds have no endpoint slot, so a coupling on them is unrepresentable.
+pub const SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING: u8 = 52;
+
 /// Stable operator strings for the bond-post C-ABI code space.
 ///
 /// **This is THE table.** NUL-terminated so C++ can hand these to
@@ -298,6 +304,9 @@ pub const fn bond_post_err_cstr(code: u8) -> &'static CStr {
         }
         SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING => {
             c"bond_spend_pk violates the JoinMarket coupling (missing/non-canonical on JoinMarket, or present on another kind)"
+        }
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING => {
+            c"JoinMarket endpoint violates its coupling (missing, not 32 bytes, or the all-zero key)"
         }
         SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE => {
             c"post_kind is not HoldingsUpdate"
@@ -439,6 +448,7 @@ fn archival_bond_post_drop_verdict(code: u8) -> DropVerdict {
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_NOT_FULL
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_RELEASE_HOLDINGS_NOT_EMPTY
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        | SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_HOLDINGS_UPDATE
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_POST_NOT_COMPACT
         | SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_ADD_TERMS
@@ -668,6 +678,7 @@ pub(super) fn map_bond_post_error(err: BondPostError) -> u8 {
         BondPostError::BondFloorZero => SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_ZERO,
         BondPostError::FloorMismatch => SHEKYL_ARCHIVAL_BOND_POST_ERR_FLOOR_MISMATCH,
         BondPostError::RecordExists => SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_EXISTS,
+        BondPostError::EndpointZero => SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING,
         BondPostError::PostKindNotRelease => SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE,
         BondPostError::RecordMissing => SHEKYL_ARCHIVAL_BOND_POST_ERR_RECORD_MISSING,
         BondPostError::NothingToRelease => SHEKYL_ARCHIVAL_BOND_POST_ERR_NOTHING_TO_RELEASE,

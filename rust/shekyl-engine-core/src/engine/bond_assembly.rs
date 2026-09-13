@@ -607,36 +607,28 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// its pre-genesis deadline intact — staking is default-on and genesis-frozen,
 /// and half a discharge is not one.
 ///
-/// The §9.11 coupling is enforced in both directions, not assumed. Only
-/// JoinMarket carries `bond_spend_pk` on the wire; a debit authorizes against
-/// the record's **committed** copy (`archival_cold_authority_pin`), and consensus
-/// rejects a `Release` vin that brings a key along — "vin carries a
-/// bond_spend_pk (JoinMarket-coupled field)". So the `Release` arm refuses a
-/// non-empty key here rather than dropping it on the floor: silently discarding
-/// it would turn a construction bug into a transaction that looks fine locally
-/// and is rejected by every node.
+/// Map a retention vin onto the consensus wire. JoinMarket-coupled fields
+/// live on [`shekyl_archival_retention::BondKind`]; a Release cannot carry
+/// them. HoldingsUpdate / Rebond have no wallet producer yet.
 pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, BondAssemblyError> {
-    let kind = match vin.post_kind {
-        RetentionBondPostKind::JoinMarket => WireBondPostKind::JoinMarket {
-            bond_spend_pk: vin.bond_spend_pk.clone(),
+    let kind = match &vin.kind {
+        shekyl_archival_retention::BondKind::JoinMarket {
+            bond_spend_pk,
+            endpoint,
+        } => WireBondPostKind::JoinMarket {
+            bond_spend_pk: bond_spend_pk.clone(),
+            endpoint: *endpoint,
         },
-        RetentionBondPostKind::Release => {
-            if !vin.bond_spend_pk.is_empty() {
-                return Err(BondAssemblyError::build(
-                    "wire bond-post mapping",
-                    "Release vin carries a bond_spend_pk; the debit authorizer is \
-                     the record's committed key, never one the vin brings along \
-                     (§9.11 — consensus rejects this input)",
-                ));
-            }
+        shekyl_archival_retention::BondKind::Release => {
             WireBondPostKind::Other(RetentionBondPostKind::Release as u8)
         }
         other => {
             return Err(BondAssemblyError::build(
                 "wire bond-post mapping",
                 format!(
-                    "post kind {other:?} has no wallet-side producer yet; \
-                     JoinMarket and Release can be assembled"
+                    "post kind {:?} has no wallet-side producer yet; \
+                     JoinMarket and Release can be assembled",
+                    other.tag()
                 ),
             ));
         }

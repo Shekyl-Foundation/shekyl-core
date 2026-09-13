@@ -1459,9 +1459,11 @@ change instead of two.
   path `/shard/{id}`, status/header transcribed from `shekyl-p-serve`.
   This round's exclusion of the HTTP layer stands; that document is the
   successor the exclusion lacked, not a reopening of this round.
-- **The settlement-outcome table schema** (§9.7 item 9) and **`EndpointUpdate`
-  on the bond wire** — separate PRs, separate validation surfaces
+- **The settlement-outcome table schema** (§9.7 item 9) — a separate PR,
+  a separate validation surface
   ([rule 19](../../.cursor/rules/19-validation-surface-discipline.mdc)).
+  (`EndpointUpdate` on the bond wire, listed here as the other exclusion,
+  was REJECTED 2026-09-13.)
 - **Whether A5/W10 survives overall.** The `RESPONSE_BYTES` correction moved one
   end of it; the arithmetic is pinned by the restated proxy tests and the verdict
   belongs to `ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`.

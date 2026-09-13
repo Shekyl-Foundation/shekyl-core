@@ -57,8 +57,9 @@
 //! | [`SPENT_ELEM_CUSTOMIZATION`] | `shekyl/chain-digest/v0/spent-elem` | per-key-image XOR leaf |
 //!
 //! Incremental accumulators (update-on-insert / reverse-on-delete at
-//! every block) are **DRS-0**, not this slice. v0 is a full-domain
-//! scan so the canonical logical state is defined before codecs freeze.
+//! every block) are [`crate::accumulator`] (DRS-0 slice A). v0 is a
+//! full-domain scan so the canonical logical state is defined before
+//! codecs freeze.
 //!
 //! # Oracle scope (CSR-3 / CSR-3a)
 //!

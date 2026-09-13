@@ -25,7 +25,9 @@ This round specifies the **client** side of the archival serving route:
 a daemon fetching `GET /shard/{id}` from a P-served `.onion`. The server
 half exists (`shekyl-p-serve` + `shekyl-p-host`, built-unwired at SH-1/
 SH-2); the inner frame and path are ruled (`RF-D4` frame, `RF-R1`
-route); discovery is ruled (`EU-D1`…`EU-D9`). Timeout/retry is
+route); discovery is ruled (`EU-D1`, `EU-D3`, `EU-D4` — the
+JoinMarket-endpoint design; the rest of the `EU-` round was REJECTED
+2026-09-13 with kind 4, see §4). Timeout/retry is
 `SF-D6` (RULED) and
 concurrency is `SF-D7` (RULED). The request-side carrier and
 countersigning key are now ruled (`SF-D5` amendment; `SF-D13`), and so
@@ -157,7 +159,8 @@ inherited as "the client waits."
 | Daemon is client; wallet is server; no wallet-to-wallet; HTTP-over-onion not a Levin message; RPC a separate layer; fetcher beside `shekyl-daemon-rpc` (process locality, not crate membership) | `EU-D1` |
 | **Client crate is `shekyl-p-fetch`.** Counterpart of `shekyl-p-serve`. Codec is `shekyl-curve-tree` (shared, not mirrored). Virt-port home is `shekyl-curve-tree`. Not `shekyl-p-transport` (`PWD-E9`). Dependency cut is a gate owed at implementation (`scripts/ci/check_p_fetch_dep_cut.sh`) | `SF-D4` RULED 2026-09-12 |
 | Endpoint = raw 32-byte Ed25519; address is display form; discovery is a chain read at the epoch-open drawable snapshot | `EU-D3`, `EU-D4` |
-| Enumerability of onions is a design input; serve-side rate-limit is load-bearing | `EU-D6` |
+| Onions are enumerable (every `JoinMarket` publishes one; public is its normal state); the serve-side limiter (`shekyl-p-serve::serve::MAX_INFLIGHT`, SPIKE-PIN-2) is load-bearing. **`EU-D6` REJECTED 2026-09-13** as a rotation-rate argument; the enumerability fact and the limiter survive on their own code anchors, not on `EU-D6` |
+| **`EndpointUpdate` (kind 4) REJECTED 2026-09-13** — a bonded persona's endpoint never changes; the endpoint is mandatory on `JoinMarket`, non-zero by consensus, immutable for the record's life (`EU-D3` narrowed). A new address is a new persona via Release + fresh `JoinMarket`. `EU-D2`, `EU-D5`…`EU-D13` rejected with it. Consequence for this round: "no endpoint on record" is unrepresentable, so `SF-D6`'s no-endpoint non-row collapses (see `SF-D6`), and `SF-D13`'s "onion key may rotate" reason is refuted (see `SF-D13`) | `EU` §1, §5 |
 | `GET /shard/{id}`; identical 404s for every non-servable outcome; only content-type + content-length on the response; hand-rolled HTTP/1.1 | `RF-R1` |
 | **Request-header amendment RULED 2026-09-13, not yet landed:** exactly one named header is required and decodes canonically to 40 bytes `nonce[32] ‖ height_le[8]` — fresh random for every request, both callers, plus the published chain-tip height at request time (for the miner building *h*, that is *h*−1). Missing, malformed, duplicate, or wrong-length values are the same identical complete-head 404. All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR | `SF-D5` amendment; implementation carrier is the `shekyl-p-serve` + `shekyl-p-fetch` PR |
 | **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and verifies `R_k` — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). There is no leaf to extract locally (`RF-D8` retracted the opening). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
@@ -165,7 +168,7 @@ inherited as "the client waits."
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. The daemon image passes that `SocketAddr` into `shekyl-p-fetch`; the crate does not discover SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
 | **Unauthenticated SOCKS, no isolation flags.** The fetch client presents no SOCKS credentials and sets no isolation flags on the zone proxy. Circuit assignment is Tor's, per its own defaults — this is not a one-circuit guarantee. Fetches then share circuits with overlay P2P (no credentials on the same SOCKS); that blending is a consequence, not a cover mechanism. Cover is TRC's subject | `SF-D3` RULED 2026-09-12 |
 | **The virtual port is 80**, a shared constant both sides read from `shekyl-curve-tree` (`SF-D4` named the home). Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — the current location, not the home; the implementation PR moves it. Two `80`s that happen to agree are still not the ratification — this row is the number; the implementation PR puts one constant in `shekyl-curve-tree` and both sides read it. **Request amendment:** same `GET /shard/{id}`, one required header decoding to `nonce[32] ‖ height_le[8]`, no path token, query string, or body; every production call uses it | `SF-D5` RULED 2026-09-12; AMENDED 2026-09-13 |
-| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is a non-row (filter / pre-dial miss). 404 is a completed exchange (immediate miss), not a retry. Over-capacity silent close is stall-class (`RF-R1`), not a 404. Any other complete-head is malformed. Stall retries of that `P` reuse the same 40-byte header. `content-length` above `signature_envelope_len + max framed_len()` is refused from the HTTP headers; otherwise it must equal `signature_envelope_len + framed_len()`, known after fixed metadata but before segment bytes. The envelope is a fixed-width slice, then parsed. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
+| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is unrepresentable (`EU-D3` narrowed 2026-09-13), so the former filter / pre-dial non-row is void. 404 is a completed exchange (immediate miss), not a retry. Over-capacity silent close is stall-class (`RF-R1`), not a 404. Any other complete-head is malformed. Stall retries of that `P` reuse the same 40-byte header. `content-length` above `signature_envelope_len + max framed_len()` is refused from the HTTP headers; otherwise it must equal `signature_envelope_len + framed_len()`, known after fixed metadata but before segment bytes. The envelope is a fixed-width slice, then parsed. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
 | **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(destination, shard_id, header)` — schedulers name `P`; the HTTP path names only `s`. `N` slots, no unbounded buffer: a scheduler waits for a slot. `N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`). Not organic draw cap `k` and not a function of `D`. SP-T3 re-base / W₂ owns the upper bound as min(circuit-churn, memory); the implementation PR owns the lower-bound judgement. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12 |
 | **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`, performed by the organic scheduler, not by `shekyl-p-fetch`. Per-need exclusion is scratch, not memory. The fetch client forms no opinions — it is given a destination | `SF-D10` RULED; `SF-D12` corollary |
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
@@ -457,7 +460,8 @@ location; the implementation PR moves the declaration. `SF-D4` forbids
 the client pulling engine-core to get it.
 
 - **Reopen if:** the Tor layer surfaces a reason a non-default virt
-  port cuts an enumeration or scanning class `EU-D6` cares about; or
+  port cuts an enumeration or scanning class (onions are enumerable
+  from `JoinMarket` posts; `EU-D6` itself is REJECTED); or
   the implementation cannot express one canonical 40-byte
   `nonce ‖ height` representation without adding a second request
   field.
@@ -492,30 +496,25 @@ refusal, not a retry of an address the witness never had.
   verify `s` — a **chain-state gap**. Whether the fill scheduler
   should have asked for `s` at all in that state is reconstruct /
   TJ-D, not this table. The fetch client still does not dial.
-- **No endpoint on the bond record** (endpoint was *not* on the
-  record). Chain-state, knowable before any dial — same shape as
-  missing `FrozenSegmentRecord`. Split of the stall-class row: that
-  row is SOCKS CONNECT / intro failure when the endpoint *was* on
-  the record. Organic: filter out of the draw set (do not spend a
-  dial discovering it). Challenge: pre-dial check on the assigned
-  `P`; no endpoint is an immediate **miss**, not bounded retries
-  against an address the witness never had. Do not collapse those
-  two under "unpublished onion."
-
-  This is the only miss that costs `P` a slash contribution for a
-  **chain-state** condition rather than a behavioural one. `P`
-  published no endpoint, which under `EU-D1` is `P`'s own omission —
-  the verdict is defensible. The drawable snapshot and the endpoint
-  move together at epoch open (`EU-D4`): the witness reads the
-  endpoint from the same snapshot that named the assignment, so "no
-  endpoint at assignment time" is a stable fact for the whole
-  window, not a race. An `EndpointUpdate` that has not landed in
-  this epoch's snapshot, or a record whose endpoint was never set
-  at `JoinMarket`, therefore produces misses for every assignment
-  in the interval. The operator-facing half belongs to `EU-D1`: a
-  bonded persona with no published endpoint is in a slash-accruing
-  state and should know it. Not this round's to fix; this round is
-  where the fetch taxonomy makes it true.
+- **No endpoint on the bond record — VOID 2026-09-13, unrepresentable.**
+  This was ruled 2026-09-12 as a chain-state non-row (organic: filter
+  from the draw; challenge: pre-dial immediate miss), with a named
+  operator failure mode — an `EndpointUpdate` not yet landed, or a
+  record whose endpoint was never set — accruing misses for a whole
+  window. The `EU` kind-4 rejection (`EU-D3` narrowed 2026-09-13)
+  removes the premise: the endpoint is **mandatory on `JoinMarket`**,
+  a non-`Option` field, all-zero refused by consensus on both sides,
+  and **immutable for the record's life**. A drawable `P` therefore
+  always has exactly one endpoint, from the same snapshot that named
+  it (`EU-D4`). There is no filter to apply, no pre-dial branch to
+  take, and no slash-accruing "unpublished" state for an operator to
+  be warned about — the case cannot be constructed. What remains of
+  the old split is one thing: an endpoint that is on the record but
+  has no live descriptor is a **transport** outcome and files under
+  the stall-class row above, exactly as SOCKS CONNECT / intro failure
+  does. The stall-class row's "(endpoint *was* on the record)"
+  qualifier is now always true and is kept only as a record of the
+  split it used to make.
 
 **Length.** `ServedFrameHeader::framed_len()` declares the **inner
 frame** (header + `leaf_count × LEAF_BYTES` + `padding_len`), never
@@ -747,8 +746,10 @@ read now costs a hybrid signature with `P`'s identity secret, so that
 secret is resident in the serving process for as long as it serves —
 derived, scoped, and zeroized under rules 35 and 36, behind the
 callback, never in `shekyl-p-serve`'s own types. This is consistent
-with the custody model already accepted (`EndpointUpdate` assumes host
-compromise yields the hot key), but it is a residency the serving task
+with the custody model already accepted (`EU` §1, 2026-09-13: host
+compromise yields the serving seed and the identity signing key; the
+remedy is Release under the never-on-host `bond_spend_pk`, then a fresh
+persona), but it is a residency the serving task
 does not have today: `shekyl-p-serve` was built never to hold a secret.
 It is named here so the implementation PR and SH-2 design the
 residency rather than discover it the first time the serve path needs
@@ -764,10 +765,15 @@ containing `shard_id` is by itself a server-enforced shard binding.
 
 Two same-neighbourhood keys are expressly **not** selected:
 
-- not the raw onion endpoint key as the Ed25519 leg; the onion key
-  authenticates the Tor rendezvous and may rotate through
-  `EndpointUpdate`, while `p_canonical_id` remains the hash of the
-  stable canonical hybrid identity key;
+- not the raw onion endpoint key as the Ed25519 leg. *(The reason
+  first written here — "may rotate through `EndpointUpdate`" — is
+  REFUTED 2026-09-13: the endpoint is immutable, so both keys are
+  equally stable.)* The reasons that stand: the onion key has no
+  ML-DSA sibling, so it cannot produce the hybrid signature `RF-D2`
+  requires at all; it is the rendezvous-authentication key and giving
+  it a second signing role crosses key-separation for no gain; and
+  `p_canonical_id` is the hash of the hybrid identity key, so that is
+  the key the verifier already binds to the record;
 - never `bond_spend_pk`, the cold debit authorizer that does not cross
   into the serving tree.
 
@@ -779,8 +785,8 @@ controls P's hybrid identity key. Online cooperation remains the
 already-accepted fully-collusive case; an additional static proof does
 not remove it.
 
-- **Reopen if:** grounding the `JoinMarket` / `EndpointUpdate`
-  authorization preimage shows the endpoint bytes are not covered by
+- **Reopen if:** grounding the `JoinMarket` authorization preimage
+  shows the endpoint bytes are not covered by
   the record's authorization; or Tor v3 rendezvous is shown not to
   authenticate the raw endpoint key the drawable snapshot carries.
   Re-evaluation is a format round over the bond binding, not an
@@ -1037,7 +1043,9 @@ Named attacker objectives this round's rulings are evaluated against:
    Tor's. Sharing circuits with overlay P2P is a consequence of that
    contract, not a leak isolation would cut. See `SF-D3`.
 3. **Slash-by-denial over onion — not a client-owned weapon, and not a
-   handoff.** The serve-side limiter is load-bearing (`EU-D6`). The
+   handoff.** The serve-side limiter is load-bearing
+   (`shekyl-p-serve::serve::MAX_INFLIGHT`; `EU-D6` is REJECTED but the
+   limiter is code). The
    form that would slash is a third party keeping an *honest* `P`'s
    assigned challenge fetches from landing; the honest holder did
    nothing wrong. A full limiter is **not** a 404: `RF-R1` closes
@@ -1082,7 +1090,7 @@ Named attacker objectives this round's rulings are evaluated against:
    (`EU-D3` puts the onion on chain). Targeting is unavailable
    (unobservability above). Introduction is priced per circuit, and T
    needs many concurrent circuits to hold a meaningful share of
-   `EU-D6`. Sustain is the binding constraint: occupy most of the
+   `MAX_INFLIGHT`. Sustain is the binding constraint: occupy most of the
    limiter continuously — sustained multi-megabit received throughput
    over Tor, across many circuits, each with its own guard and puzzle
    cost, for ~17 hours per window, for as many windows as the
@@ -1108,7 +1116,7 @@ Named attacker objectives this round's rulings are evaluated against:
    reflex is per-client throttling, and there is no client to
    throttle. Damage is not localized to `P`'s box (rendezvous
    outward). Four levers, no IP filtering: (1) Tor's intro-layer PoW
-   parameters, (2) the service's own stream limiter (`EU-D6` /
+   parameters, (2) the service's own stream limiter (`MAX_INFLIGHT` /
    SPIKE-PIN-1/2), (3) vanguard posture (`VG-1`…`VG-3`), (4) the
    accumulated-miss threshold's tolerance. The mechanism-side answer,
    if one is ever needed, is the miss threshold; this round does not
@@ -1177,8 +1185,10 @@ port a shared constant both sides read from `shekyl-curve-tree`,
 `nonce[32] ‖ height_le[8]` — requester-random and published-tip
 height, both callers; `SF-D5` RULED and amended),
 one failure taxonomy with two caller columns (`SF-D6` RULED: per-attempt
-handling is the client's; 404 is a completed exchange; no-endpoint is a
-non-row; organic draw bound `k` is `TJ-D`'s; `content-length` equals the
+handling is the client's; 404 is a completed exchange; no-endpoint is
+unrepresentable since the `EU` kind-4 rejection of 2026-09-13, so the
+former non-row is void; organic draw bound `k` is `TJ-D`'s;
+`content-length` equals the
 constant signature-envelope length plus inner `framed_len()`, with
 disagreement known before segment bytes; parse, root mismatch, and bad
 countersignature are typed separately), one fixed client
