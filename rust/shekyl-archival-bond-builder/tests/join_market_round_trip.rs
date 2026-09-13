@@ -53,13 +53,13 @@ fn join_market_construct_verifies_against_retention() {
     assert!(floor > 0);
 
     // --- construct: vin (no on-vin signature; authorization rides surface A) ---
-    let built = build_join_market_vin(keys.bond_post_keys(), holdings.clone())
+    let built = build_join_market_vin(keys.bond_post_keys(), holdings.clone(), [0xEE; 32])
         .expect("build JoinMarket vin");
 
     // The vin is shaped exactly as the credit-path verify side requires.
-    assert_eq!(built.vin().bonded_total_atomic, floor);
-    assert_eq!(built.vin().bond_credit, floor);
-    assert_eq!(built.vin().bond_debit, 0);
+    assert_eq!(built.vin().bonded_total_atomic(), floor);
+    assert_eq!(built.vin().bond_credit(), floor);
+    assert_eq!(built.vin().bond_debit(), 0);
 
     // --- verify (1/2): vin semantics, record does not yet exist ---
     verify_join_market_bond_post(built.vin(), false).expect("verify accepts fresh JoinMarket post");
@@ -99,7 +99,7 @@ fn join_market_construct_verifies_against_retention() {
 fn imbalanced_funding_is_rejected_before_proving() {
     let keys = derive_archival_p_keys(&MASTER, DerivationNetwork::Mainnet, SeedFormat::Bip39, 0)
         .expect("derive P keys");
-    let built = build_join_market_vin(keys.bond_post_keys(), shard_set(vec![1]))
+    let built = build_join_market_vin(keys.bond_post_keys(), shard_set(vec![1]), [0xEE; 32])
         .expect("build JoinMarket vin");
 
     // Funding short by 1 atomic unit: caught at the amount level.
@@ -121,8 +121,8 @@ fn wrong_credit_amount_breaks_the_balance() {
         .expect("derive P keys");
     let holdings = shard_set(vec![7, 42]);
     let floor = bond_floor(&holdings);
-    let built =
-        build_join_market_vin(keys.bond_post_keys(), holdings).expect("build JoinMarket vin");
+    let built = build_join_market_vin(keys.bond_post_keys(), holdings, [0xEE; 32])
+        .expect("build JoinMarket vin");
 
     const CHANGE: u64 = 1_000_000;
     const FEE: u64 = 2_000;
@@ -142,5 +142,5 @@ fn wrong_credit_amount_breaks_the_balance() {
         ),
     );
     assert_eq!(result, Err(BondCtBalanceError::SumMismatch));
-    assert_eq!(built.vin().bond_credit, floor);
+    assert_eq!(built.vin().bond_credit(), floor);
 }

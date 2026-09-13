@@ -616,27 +616,43 @@ pub(crate) fn wire_holdings(holdings: &HoldingsDescriptor) -> Holdings {
 /// it would turn a construction bug into a transaction that looks fine locally
 /// and is rejected by every node.
 pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, BondAssemblyError> {
-    let kind = match vin.post_kind {
-        RetentionBondPostKind::JoinMarket => WireBondPostKind::JoinMarket {
-            bond_spend_pk: vin.bond_spend_pk.clone(),
-        },
-        RetentionBondPostKind::Release => {
-            if !vin.bond_spend_pk.is_empty() {
-                return Err(BondAssemblyError::build(
-                    "wire bond-post mapping",
-                    "Release vin carries a bond_spend_pk; the debit authorizer is \
-                     the record's committed key, never one the vin brings along \
-                     (§9.11 — consensus rejects this input)",
-                ));
-            }
-            WireBondPostKind::Other(RetentionBondPostKind::Release as u8)
-        }
+    let (kind, holdings, bonded_total_atomic, bond_credit, bond_debit) = match &vin.payload {
+        shekyl_archival_retention::BondPostPayload::JoinMarket {
+            bond_spend_pk,
+            endpoint,
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
+        } => (
+            WireBondPostKind::JoinMarket {
+                bond_spend_pk: bond_spend_pk.clone(),
+                endpoint: *endpoint,
+            },
+            holdings,
+            *bonded_total_atomic,
+            *bond_credit,
+            *bond_debit,
+        ),
+        shekyl_archival_retention::BondPostPayload::Release {
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
+        } => (
+            WireBondPostKind::Other(RetentionBondPostKind::Release as u8),
+            holdings,
+            *bonded_total_atomic,
+            *bond_credit,
+            *bond_debit,
+        ),
         other => {
             return Err(BondAssemblyError::build(
                 "wire bond-post mapping",
                 format!(
-                    "post kind {other:?} has no wallet-side producer yet; \
-                     JoinMarket and Release can be assembled"
+                    "post kind {:?} has no wallet-side producer yet; \
+                     JoinMarket and Release can be assembled",
+                    other.kind()
                 ),
             ));
         }
@@ -645,10 +661,10 @@ pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, B
         hybrid_public_key: vin.hybrid_public_key.clone(),
         p_canonical_id: vin.p_canonical_id,
         kind,
-        holdings: wire_holdings(&vin.holdings),
-        bonded_total_atomic: vin.bonded_total_atomic,
-        bond_credit: vin.bond_credit,
-        bond_debit: vin.bond_debit,
+        holdings: wire_holdings(holdings),
+        bonded_total_atomic,
+        bond_credit,
+        bond_debit,
     })))
 }
 

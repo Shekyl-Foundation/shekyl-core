@@ -2440,10 +2440,10 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     }];
 
     // ── Build the bond vin + the change output ───────────────────────
-    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone())
+    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings.clone(), [0xEE; 32])
         .expect("build JoinMarket vin");
-    assert_eq!(built.vin().bond_credit, floor);
-    assert_eq!(built.vin().bond_debit, 0);
+    assert_eq!(built.vin().bond_credit(), floor);
+    assert_eq!(built.vin().bond_debit(), 0);
 
     let change: u64 = input_amount - fee - floor;
     // Offset the change index so (combined_ss, output_index) never collides

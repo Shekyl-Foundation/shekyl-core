@@ -81,9 +81,13 @@ pub const TAG_INPUT_BOND_POST: u8 = 0x03;
 /// enforces (`cryptonote_basic.h:302-310`) and [`Input::read`] mirrors.
 pub const TAG_INPUT_ARCHIVAL_REWARD_EMISSION: u8 = 0x04;
 
-/// `post_kind` value for a JoinMarket archival bond post.
-/// `bond_spend_pk` is present on the wire iff `post_kind == JOINMARKET` (§9.11).
+/// `post_kind` value for a JoinMarket archival bond post. `bond_spend_pk` and
+/// the serving endpoint are present on the wire iff `post_kind == JOINMARKET`
+/// (§9.11, `EU-D3`).
 pub const BOND_POST_KIND_JOINMARKET: u8 = 0;
+/// The serving endpoint on the wire: the raw 32-byte ed25519 public key of the
+/// persona's v3 onion service. Present iff JoinMarket (`EU-D3`).
+pub const BOND_POST_ENDPOINT_LEN: usize = 32;
 /// `holdings.kind` for a compact shard-set (carries an explicit shard list).
 pub const HOLDINGS_SHARD_SET_COMPACT: u8 = 0;
 /// `holdings.kind` for the complete tree (carries no shard list).
@@ -587,36 +591,42 @@ fn check_serve_credit_pruned_blob(bytes: &[u8]) -> io::Result<()> {
 
 /// The `post_kind` discriminant of a [`BondPost`], with its coupled payload.
 ///
-/// Only the JoinMarket post carries `bond_spend_pk` on the wire (§9.11), so the
-/// coupling lives in the type: `JoinMarket` *always* has the key and `Other` *never*
-/// does. That makes both silent round-trip hazards of the old `{ post_kind: u8,
-/// bond_spend_pk: Option<_> }` shape — a non-JoinMarket post whose `Some` key `write`
-/// dropped, and a JoinMarket post whose missing key `write` errored on — impossible
-/// to construct.
+/// Only the JoinMarket post carries `bond_spend_pk` and the serving endpoint on
+/// the wire (§9.11, `EU-D3`), so the one coupling lives in the type: `JoinMarket`
+/// *always* has both and `Other` *never* does. That makes both silent round-trip
+/// hazards of a `{ post_kind: u8, bond_spend_pk: Option<_> }` shape — a
+/// non-JoinMarket post whose `Some` key `write` dropped, and a JoinMarket post
+/// whose missing key `write` errored on — impossible to construct.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum BondPostKind {
     /// JoinMarket post (`post_kind` `0x00`) — carries `bond_spend_pk`, the
-    /// GF-1 debit authorizer (§9.11). The credit path; Release is `Other(2)`.
+    /// GF-1 debit authorizer (§9.11), and the serving endpoint (`EU-D3`). The
+    /// credit path; Release is `Other(2)`.
     JoinMarket {
         /// The GF-1 debit authorizer hybrid public key.
         bond_spend_pk: Vec<u8>,
+        /// The persona's serving endpoint (`EU-D3`): mandatory on JoinMarket —
+        /// a bonded persona's endpoint is fixed for the record's life, so a
+        /// new onion address is a new persona (Release, then JoinMarket).
+        endpoint: [u8; BOND_POST_ENDPOINT_LEN],
     },
-    /// Any non-JoinMarket post kind — no `bond_spend_pk` on the wire. The byte must
-    /// not be the JoinMarket tag (`Other` is non-JoinMarket by construction; `write`
-    /// rejects `Other(JOINMARKET)`).
+    /// Any non-JoinMarket post kind — no `bond_spend_pk` and no endpoint on the
+    /// wire. The byte must not be the JoinMarket tag (`Other` is non-JoinMarket
+    /// by construction; `write` rejects `Other(JOINMARKET)`).
     Other(u8),
 }
 
 /// Archival bond-post payload (dense tag `0x03`, gate-4 §3.4.1).
-/// The `post_kind`/`bond_spend_pk` coupling (§9.11) is carried in [`BondPostKind`]:
-/// JoinMarket carries the key; every other archival kind is `Other(tag)`.
+/// The `post_kind` coupling (§9.11, `EU-D3`) is carried in [`BondPostKind`]:
+/// JoinMarket carries the key and the endpoint; every other archival kind is
+/// `Other(tag)`.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct BondPost {
     /// `P`'s canonical hybrid public key.
     pub hybrid_public_key: Vec<u8>,
     /// `P`'s canonical id.
     pub p_canonical_id: [u8; 32],
-    /// The post kind and its coupled `bond_spend_pk` (§9.11).
+    /// The post kind and its coupled `bond_spend_pk` + endpoint (§9.11, `EU-D3`).
     pub kind: BondPostKind,
     /// Holdings served.
     pub holdings: Holdings,
@@ -634,16 +644,20 @@ impl BondPost {
         w.write_all(&self.hybrid_public_key)?;
         w.write_all(&self.p_canonical_id)?;
         match &self.kind {
-            BondPostKind::JoinMarket { bond_spend_pk } => {
+            BondPostKind::JoinMarket {
+                bond_spend_pk,
+                endpoint,
+            } => {
                 w.write_all(&[BOND_POST_KIND_JOINMARKET])?;
                 write_varint(bond_spend_pk.len(), w)?;
                 w.write_all(bond_spend_pk)?;
+                w.write_all(endpoint)?;
             }
             BondPostKind::Other(post_kind) => {
                 // `Other` is non-JoinMarket by contract; reusing the JoinMarket tag
-                // would make `write` emit a `bond_spend_pk`-less blob that `read`
-                // would then try to parse as JoinMarket (consuming the holdings bytes
-                // as the key). Reject the misconstruction rather than emit it.
+                // would make `write` emit a key-less, endpoint-less blob that `read`
+                // would then try to parse as JoinMarket (consuming the holdings
+                // bytes as the key). Reject the misconstruction rather than emit it.
                 if *post_kind == BOND_POST_KIND_JOINMARKET {
                     return Err(io::Error::other(
                         "shekyl-wire: BondPostKind::Other must not use the JoinMarket tag \
@@ -673,6 +687,7 @@ impl BondPost {
                     "bond_spend_pk",
                     PQC_HYBRID_SINGLE_KEY_LEN,
                 )?,
+                endpoint: read_array(r)?,
             }
         } else {
             BondPostKind::Other(post_kind)
@@ -700,7 +715,7 @@ impl BondPost {
             )));
         }
         match &self.kind {
-            BondPostKind::JoinMarket { bond_spend_pk } => {
+            BondPostKind::JoinMarket { bond_spend_pk, .. } => {
                 if bond_spend_pk.len() != PQC_HYBRID_SINGLE_KEY_LEN {
                     return Err(io::Error::other(format!(
                         "shekyl-wire: bond_post bond_spend_pk {} != canonical {PQC_HYBRID_SINGLE_KEY_LEN}",
@@ -709,7 +724,7 @@ impl BondPost {
                 }
             }
             // `Other` must not reuse the JoinMarket tag — `write` would emit a
-            // bond_spend_pk-less blob that re-parses as JoinMarket (a mis-parse).
+            // key-less, endpoint-less blob that re-parses as JoinMarket (a mis-parse).
             BondPostKind::Other(post_kind) => {
                 if *post_kind == BOND_POST_KIND_JOINMARKET {
                     return Err(io::Error::other(

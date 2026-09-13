@@ -281,6 +281,7 @@ fn emission_mixed_with_bond_post_rejected() {
         p_canonical_id: [0x02; 32],
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0x03; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 1,

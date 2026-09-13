@@ -690,12 +690,12 @@ fn verify_credit_funding_rejects_wrong_total() {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
     };
-    let vin = build_join_market_vin(bundle.bond_post_keys(), holdings)
+    let vin = build_join_market_vin(bundle.bond_post_keys(), holdings, [0xEE; 32])
         .expect("build_join_market_vin succeeds for valid inputs");
 
     let fee = AtomicUnits::from_raw(100);
     let outputs = AtomicUnits::from_raw(500);
-    let bond_credit = AtomicUnits::from_raw(vin.vin().bond_credit);
+    let bond_credit = AtomicUnits::from_raw(vin.vin().bond_credit());
     let correct_total = outputs
         .checked_add(fee)
         .and_then(|s| s.checked_add(bond_credit))
@@ -895,6 +895,7 @@ fn with_bond_post(mut block: ScannableBlock, slot: u32) -> ScannableBlock {
         p_canonical_id: canonical_id(slot).to_bytes(),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 1_000,

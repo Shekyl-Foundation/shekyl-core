@@ -7,22 +7,21 @@
 
 use super::*;
 use crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet};
+use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet, ENDPOINT_BYTES};
 
 fn valid_join_vin() -> ArchivalBondPostVin {
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::JoinMarket,
-        bond_spend_pk: vec![0xE5; 64],
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::join_market(
+        vec![0xAB; 64],
+        [0x11; 32],
+        vec![0xE5; 64],
+        [0xEE; ENDPOINT_BYTES],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         },
-        bonded_total_atomic: 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_debit: 0,
-    }
+        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+    )
 }
 
 #[test]
@@ -31,9 +30,41 @@ fn accepts_valid_join_market() {
 }
 
 #[test]
-fn rejects_non_join_post_kind() {
+fn rejects_all_zero_endpoint() {
+    // The bond record encodes "no endpoint" as the zero key, so consensus
+    // refuses a JoinMarket that would connect as a bond advertising nothing.
     let mut vin = valid_join_vin();
-    vin.post_kind = BondPostKind::Rebond;
+    let BondPostPayload::JoinMarket { endpoint, .. } = &mut vin.payload else {
+        panic!("valid_join_vin is JoinMarket");
+    };
+    *endpoint = [0u8; ENDPOINT_BYTES];
+    assert_eq!(
+        verify_join_market_bond_post(&vin, false),
+        Err(BondPostError::EndpointZero)
+    );
+    // Any other single non-zero byte is a key the verify does not judge.
+    let mut vin = valid_join_vin();
+    let BondPostPayload::JoinMarket { endpoint, .. } = &mut vin.payload else {
+        panic!("valid_join_vin is JoinMarket");
+    };
+    *endpoint = [0u8; ENDPOINT_BYTES];
+    endpoint[ENDPOINT_BYTES - 1] = 1;
+    assert!(verify_join_market_bond_post(&vin, false).is_ok());
+}
+
+#[test]
+fn rejects_non_join_post_kind() {
+    let vin = ArchivalBondPostVin::rebond(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
+        },
+        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        0,
+    );
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::PostKindNotJoinMarket)
@@ -43,7 +74,7 @@ fn rejects_non_join_post_kind() {
 #[test]
 fn rejects_empty_shard_set() {
     let mut vin = valid_join_vin();
-    vin.holdings.shard_ids = ShardSet::empty();
+    vin.holdings_mut().shard_ids = ShardSet::empty();
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::ShardSetCompactEmpty)
@@ -53,10 +84,10 @@ fn rejects_empty_shard_set() {
 #[test]
 fn rejects_complete_tree_with_shards() {
     let mut vin = valid_join_vin();
-    vin.holdings.kind = HoldingsKind::CompleteTree;
-    vin.holdings.shard_ids = ShardSet::new(vec![1]).unwrap();
-    vin.bonded_total_atomic = ARCHIVAL_BOND_FLOOR_ATOMIC;
-    vin.bond_credit = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    vin.holdings_mut().kind = HoldingsKind::CompleteTree;
+    vin.holdings_mut().shard_ids = ShardSet::new(vec![1]).unwrap();
+    vin.set_bonded_total(ARCHIVAL_BOND_FLOOR_ATOMIC);
+    vin.set_bond_credit(ARCHIVAL_BOND_FLOOR_ATOMIC);
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::CompleteTreeWithShardIds)
@@ -66,9 +97,9 @@ fn rejects_complete_tree_with_shards() {
 #[test]
 fn rejects_bond_debit_nonzero() {
     let mut vin = valid_join_vin();
-    vin.bond_credit = 0;
-    vin.bonded_total_atomic = 0;
-    vin.bond_debit = 1;
+    vin.set_bond_credit(0);
+    vin.set_bonded_total(0);
+    vin.set_bond_debit(1);
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::BondDebitNonzero)
@@ -78,7 +109,7 @@ fn rejects_bond_debit_nonzero() {
 #[test]
 fn rejects_both_terms_nonzero() {
     let mut vin = valid_join_vin();
-    vin.bond_debit = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    vin.set_bond_debit(ARCHIVAL_BOND_FLOOR_ATOMIC);
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::BothTermsNonzero)
@@ -88,7 +119,7 @@ fn rejects_both_terms_nonzero() {
 #[test]
 fn rejects_floor_zero_via_empty_shards() {
     let mut vin = valid_join_vin();
-    vin.holdings.shard_ids = ShardSet::empty();
+    vin.holdings_mut().shard_ids = ShardSet::empty();
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::ShardSetCompactEmpty)
@@ -98,7 +129,7 @@ fn rejects_floor_zero_via_empty_shards() {
 #[test]
 fn rejects_credit_above_floor() {
     let mut vin = valid_join_vin();
-    vin.bond_credit = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC + 1;
+    vin.set_bond_credit(2 * ARCHIVAL_BOND_FLOOR_ATOMIC + 1);
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::FloorMismatch)
@@ -108,7 +139,7 @@ fn rejects_credit_above_floor() {
 #[test]
 fn rejects_total_below_floor() {
     let mut vin = valid_join_vin();
-    vin.bonded_total_atomic = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC - 1;
+    vin.set_bonded_total(2 * ARCHIVAL_BOND_FLOOR_ATOMIC - 1);
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::FloorMismatch)
@@ -135,19 +166,17 @@ const RECORD_BONDED: u64 = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 /// The post-connect state of a full exit: empty holdings, zero total.
 fn valid_release_vin() -> ArchivalBondPostVin {
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::Release,
-        bond_spend_pk: Vec::new(),
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::release(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::empty(),
         },
-        bonded_total_atomic: 0,
-        bond_credit: 0,
-        bond_debit: RECORD_BONDED,
-    }
+        0,
+        0,
+        RECORD_BONDED,
+    )
 }
 
 fn ok_release(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
@@ -236,8 +265,7 @@ fn rejects_full_interval_log() {
 
 #[test]
 fn rejects_wrong_post_kind() {
-    let mut vin = valid_release_vin();
-    vin.post_kind = BondPostKind::JoinMarket;
+    let vin = valid_join_vin();
     assert_eq!(ok_release(&vin), Err(BondPostError::PostKindNotRelease));
 }
 
@@ -259,7 +287,7 @@ fn rejects_missing_record() {
 #[test]
 fn rejects_nothing_to_release() {
     let mut vin = valid_release_vin();
-    vin.bond_debit = 0;
+    vin.set_bond_debit(0);
     assert_eq!(
         verify_release_bond_post(
             &vin,
@@ -276,7 +304,7 @@ fn rejects_nothing_to_release() {
 #[test]
 fn rejects_credit_on_release() {
     let mut vin = valid_release_vin();
-    vin.bond_credit = 1;
+    vin.set_bond_credit(1);
     assert_eq!(ok_release(&vin), Err(BondPostError::ReleaseCreditNonzero));
 }
 
@@ -284,7 +312,7 @@ fn rejects_credit_on_release() {
 fn rejects_floor_mismatch_nonempty_holdings() {
     // Non-empty holdings ⇒ bond_floor > 0, but bonded_total_atomic is 0.
     let mut vin = valid_release_vin();
-    vin.holdings.shard_ids = ShardSet::new(vec![7]).unwrap();
+    vin.holdings_mut().shard_ids = ShardSet::new(vec![7]).unwrap();
     assert_eq!(ok_release(&vin), Err(BondPostError::ReleaseFloorMismatch));
 }
 
@@ -299,8 +327,8 @@ fn rejects_partial_release_nonzero_post_total() {
     // Consistent post-state but total != 0 ⇒ partial exit; belongs on the
     // HoldingsUpdate-drop path, not Release.
     let mut vin = valid_release_vin();
-    vin.holdings.shard_ids = ShardSet::new(vec![7]).unwrap();
-    vin.bonded_total_atomic = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    vin.holdings_mut().shard_ids = ShardSet::new(vec![7]).unwrap();
+    vin.set_bonded_total(ARCHIVAL_BOND_FLOOR_ATOMIC);
     assert_eq!(ok_release(&vin), Err(BondPostError::NotFullRelease));
 }
 
@@ -308,7 +336,7 @@ fn rejects_partial_release_nonzero_post_total() {
 fn rejects_debit_not_full_balance() {
     // The debit must remove the record's whole current bonded_total.
     let mut vin = valid_release_vin();
-    vin.bond_debit = ARCHIVAL_BOND_FLOOR_ATOMIC; // record holds RECORD_BONDED = 2*FLOOR
+    vin.set_bond_debit(ARCHIVAL_BOND_FLOOR_ATOMIC); // record holds RECORD_BONDED = 2*FLOOR
     assert_eq!(ok_release(&vin), Err(BondPostError::DebitNotFullBalance));
 }
 
@@ -382,19 +410,17 @@ fn hu_current_shards() -> Vec<u64> {
 }
 
 fn valid_add_vin() -> ArchivalBondPostVin {
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::HoldingsUpdate,
-        bond_spend_pk: Vec::new(),
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::holdings_update(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7, 9, 11]).unwrap(), // current + one new shard
         },
-        bonded_total_atomic: 3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_debit: 0,
-    }
+        3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+        0,
+    )
 }
 
 fn ok_add(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
@@ -416,8 +442,7 @@ fn accepts_valid_add() {
 
 #[test]
 fn add_rejects_wrong_post_kind() {
-    let mut vin = valid_add_vin();
-    vin.post_kind = BondPostKind::JoinMarket;
+    let vin = valid_join_vin();
     assert_eq!(ok_add(&vin), Err(BondPostError::PostKindNotHoldingsUpdate));
 }
 
@@ -461,15 +486,10 @@ fn add_rejects_exited_record_resurrection() {
     // JoinMarket-bypassing re-entry path whose connect then threw on the
     // empty-pre-image journal encode (verify-valid but unconnectable on
     // every node: a chain-stall vector). P2B-7 Pin 1: Bonded → Bonded.
-    let vin = ArchivalBondPostVin {
-        holdings: HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![11]).unwrap(),
-        },
-        bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        ..valid_add_vin()
-    };
+    let mut vin = valid_add_vin();
+    vin.holdings_mut().shard_ids = ShardSet::new(vec![11]).unwrap();
+    vin.set_bonded_total(ARCHIVAL_BOND_FLOOR_ATOMIC);
+    vin.set_bond_credit(ARCHIVAL_BOND_FLOOR_ATOMIC);
     assert_eq!(
         verify_holdings_update_add(
             &vin,
@@ -508,10 +528,10 @@ fn add_rejects_open_bad_interval() {
 #[test]
 fn add_rejects_wrong_terms() {
     let mut vin = valid_add_vin();
-    vin.bond_credit = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC; // must be exactly one FLOOR
+    vin.set_bond_credit(2 * ARCHIVAL_BOND_FLOOR_ATOMIC); // must be exactly one FLOOR
     assert_eq!(ok_add(&vin), Err(BondPostError::HoldingsUpdateAddTerms));
     let mut vin = valid_add_vin();
-    vin.bond_debit = 1; // credit path must carry no debit
+    vin.set_bond_debit(1); // credit path must carry no debit
     assert_eq!(ok_add(&vin), Err(BondPostError::HoldingsUpdateAddTerms));
 }
 
@@ -519,15 +539,15 @@ fn add_rejects_wrong_terms() {
 fn add_rejects_not_single_add() {
     // Post adds two shards.
     let mut vin = valid_add_vin();
-    vin.holdings.shard_ids = ShardSet::new(vec![7, 9, 11, 13]).unwrap();
-    vin.bonded_total_atomic = 4 * ARCHIVAL_BOND_FLOOR_ATOMIC;
+    vin.holdings_mut().shard_ids = ShardSet::new(vec![7, 9, 11, 13]).unwrap();
+    vin.set_bonded_total(4 * ARCHIVAL_BOND_FLOOR_ATOMIC);
     assert_eq!(ok_add(&vin), Err(BondPostError::HoldingsUpdateNotSingleAdd));
 }
 
 #[test]
 fn add_rejects_floor_mismatch() {
     let mut vin = valid_add_vin();
-    vin.bonded_total_atomic = 4 * ARCHIVAL_BOND_FLOOR_ATOMIC; // != |post|·FLOOR
+    vin.set_bonded_total(4 * ARCHIVAL_BOND_FLOOR_ATOMIC); // != |post|·FLOOR
     assert_eq!(
         ok_add(&vin),
         Err(BondPostError::HoldingsUpdateAddFloorMismatch)
@@ -544,19 +564,17 @@ const DROP_LAST_SERVED: u64 = 5;
 const DROP_CURRENT: u64 = 40; // tenure 40 ≥ horizon 20; cooldown/settle satisfied
 
 fn valid_drop_vin() -> ArchivalBondPostVin {
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::HoldingsUpdate,
-        bond_spend_pk: Vec::new(),
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::holdings_update(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7]).unwrap(), // current {7, 11} minus 11
         },
-        bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: 0,
-        bond_debit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-    }
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+        0,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -604,7 +622,7 @@ fn drop_rejects_released_record() {
 #[test]
 fn drop_rejects_wrong_terms() {
     let mut vin = valid_drop_vin();
-    vin.bond_debit = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
+    vin.set_bond_debit(2 * ARCHIVAL_BOND_FLOOR_ATOMIC);
     assert_eq!(ok_drop(&vin), Err(BondPostError::HoldingsUpdateDropTerms));
 }
 
@@ -633,8 +651,8 @@ fn drop_rejects_not_single_or_wrong_shard() {
 fn drop_rejects_last_shard() {
     // Dropping the only shard: post empty → use Release.
     let mut vin = valid_drop_vin();
-    vin.holdings.shard_ids = ShardSet::empty();
-    vin.bonded_total_atomic = 0;
+    vin.holdings_mut().shard_ids = ShardSet::empty();
+    vin.set_bonded_total(0);
     assert_eq!(
         verify_holdings_update_drop(
             &vin,
@@ -742,19 +760,17 @@ fn rebond_record_shards() -> Vec<u64> {
 fn rebond_vin(post: Vec<u64>, credit: u64) -> ArchivalBondPostVin {
     let shard_ids = ShardSet::new(post).expect("rebond fixture holdings are valid");
     let post_floor = shard_ids.len() as u64 * ARCHIVAL_BOND_FLOOR_ATOMIC;
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::Rebond,
-        bond_spend_pk: Vec::new(),
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::rebond(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids,
         },
-        bonded_total_atomic: post_floor,
-        bond_credit: credit,
-        bond_debit: 0,
-    }
+        post_floor,
+        credit,
+        0,
+    )
 }
 
 fn ok_rebond(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
@@ -798,8 +814,7 @@ fn rebond_accepts_terminal_slash_full_refund() {
 
 #[test]
 fn rebond_rejects_wrong_post_kind() {
-    let mut vin = rebond_vin(vec![7, 9], 0);
-    vin.post_kind = BondPostKind::HoldingsUpdate;
+    let vin = valid_add_vin();
     assert_eq!(ok_rebond(&vin), Err(BondPostError::PostKindNotRebond));
 }
 
@@ -830,7 +845,7 @@ fn rebond_rejects_complete_tree_record_and_post() {
         Err(BondPostError::RebondOnCompleteTree)
     );
     let mut vin = rebond_vin(vec![], 0);
-    vin.holdings.kind = HoldingsKind::CompleteTree;
+    vin.holdings_mut().kind = HoldingsKind::CompleteTree;
     assert_eq!(ok_rebond(&vin), Err(BondPostError::RebondPostNotCompact));
 }
 
@@ -935,7 +950,7 @@ fn rebond_rejects_swap_and_shed_respec() {
 fn rebond_rejects_term_mismatches() {
     // Debit is never carried on a credit path.
     let mut vin = rebond_vin(vec![7, 9], 0);
-    vin.bond_debit = 1;
+    vin.set_bond_debit(1);
     assert_eq!(ok_rebond(&vin), Err(BondPostError::RebondTerms));
     // Credit must equal floor(post) − bonded: growth without credit…
     assert_eq!(
@@ -949,7 +964,7 @@ fn rebond_rejects_term_mismatches() {
     );
     // Post bonded_total must equal bond_floor(post).
     let mut vin = rebond_vin(vec![7, 9], 0);
-    vin.bonded_total_atomic += 1;
+    vin.set_bonded_total(vin.bonded_total_atomic() + 1);
     assert_eq!(ok_rebond(&vin), Err(BondPostError::RebondTerms));
     // A record whose bonded exceeds floor(record holdings) is corruption —
     // the explicit floor-invariant check names it (an honest shrink is
