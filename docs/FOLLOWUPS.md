@@ -11,11 +11,11 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
-- **`ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated** — its manifest's `regeneration_command` predates rule 50's `SHEKYL_PINNED_REGEN_DECISION` requirement; arm it the way the gate-4 lifecycle regenerator is armed. Surfaced by the withdrawn V1 retirement ([`ARCHIVAL_ENDPOINT_UPDATE.md`](design/ARCHIVAL_ENDPOINT_UPDATE.md) §5, 2026-09-13). Target: **pre-genesis**.
-
 
 Default. Lands before genesis if it should exist at launch.
 
+- **`ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated** — its manifest's `regeneration_command` predates rule 50's `SHEKYL_PINNED_REGEN_DECISION` requirement; arm it the way the gate-4 lifecycle regenerator is armed. Surfaced by the withdrawn V1 retirement ([`ARCHIVAL_ENDPOINT_UPDATE.md`](design/ARCHIVAL_ENDPOINT_UPDATE.md) §5, 2026-09-13).
+  - Target: pre-genesis
 - **DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.** The positioning `mdb_cursor_get(…, MDB_SET)` was removed by inherited commit `22c0fae47b` (subject unrelated to block removal); the delete is correct today only because `BlockchainDB::pop_block` reads the top block through the same write-cursor member one call earlier. Latent, not reachable in this tree — but any `blocks` read inserted between those two calls, or any second caller of `remove_block`, deletes at a valid-but-wrong position, which **succeeds silently** while the explicitly-positioned `block_info` and `block_heights` deletes remove the right rows. Either restore the dropped `MDB_SET` or land the guard at the Rust port. Falsify by `grep -n "MDB_SET" ` over `remove_block` in `src/blockchain_db/lmdb/db_lmdb.cpp`. Mechanism in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9.
   - Target: pre-genesis
 
