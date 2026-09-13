@@ -1351,91 +1351,88 @@ as pre-emptive reclassifications** — pre-declaring a class against an
 unlanded ruling is the same error as declaring one against a landed
 mechanism that is leaving. Neither moves a token today.
 
-**1. `curve_tree_leaves` — the class was assigned over the wrong domain.**
+**1. `curve_tree_leaves` — `append-mostly` over the WHOLE table, and the
+row states which store it is about.**
 
-**The distinction the whole question turns on: a digest cares whether
-nodes AGREE, not whether bytes are PRESENT.** Uniform absence and
-node-variable absence are different things for an accumulator. If every
-node discards the same rows at the same consensus-known height, all nodes
-hold identical state and the accumulator is well-defined with a boundary —
-*digestible*, merely piecewise. Only *node-variable* absence, where two
-honest nodes legitimately differ, forces exclusion. `txs_prunable` is
-`excluded` because prune **seeds** differ between honest nodes, not because
-bytes are missing.
+**This row is about the DAEMON's `m_curve_tree_leaves`, not the wallet's
+`LeafStore`.** DRS-D3 makes them deliberately separate — *"schemas,
+tables, txn models, durability, APIs, and crates deliberately separate"*
+([`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) `:300`) — and every
+table in this matrix is the daemon's. The clause is here permanently
+because omitting it is what produced the error recorded at the end of this
+entry.
 
-**The surrogate precedent, already frozen in §10.** Where retention makes a
-table node-variable, the variable table is `excluded` and **the class is
-carried by the invariant commitment to it**: `txs_prunable` → `excluded`,
-`txs_prunable_hash` → `append-mostly`. The leaves are the variable side of
-exactly that shape — a non-staker "retains **A** only and **prunes** deep
-segment leaves to `R_k`" ([`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md)
-`:172`) — so a flat `append-mostly` over the whole table is wrong: a
-running chained hash needs every leaf, and a pruned node cannot compute it.
-**The row had been given the surrogate's class.**
+**The daemon does not prune leaves, and cannot.**
+[`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+fact §2.5: *"**The daemon retains every leaf forever.**
+`m_curve_tree_leaves` is deleted only by `trim_curve_tree` (reorg). This is
+already **consensus-required** — serve-credit vin verification needs leaf
+scalars at arbitrary challenged indices."* And
+[`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md)
+puts it structurally: *"The current challenge design does not merely
+coexist with the unpruned world — it **structurally forces** it. No daemon
+can prune while verification reads arbitrary local leaves."*
 
-**But the precedent does not transfer wholesale, and the reason is
-arithmetic rather than a judgement call.** Set **A** — what *every*
-syncing wallet and lean node retains — is "sub-root frontiers (`R_k`),
-owned-output chunks (once scanned), **active (unpruned) frontier
-segment**" (`:153`). So the table splits, and the two halves fall
-*inversely*:
+So **there is no node-variability in this table to class over.** Every
+daemon holds every leaf; the only deletion is reorg trim, which is not a
+retention policy. `append-mostly` over the whole table is correct, and the
+accumulator folds every leaf from position 0.
 
-| Leaf range | Retention | Covered by `R_k`? | Disposition |
-| --- | --- | --- | --- |
-| **Frozen** segments (positions `< complete × E`) | pruned by non-stakers, kept by archivers — **node-variable** | **yes, completely** | not folded; surrogated |
-| **Frontier** segment (the trailing partial) | in set **A**, so **every honest node holds it** — uniform | **no, and cannot be** | folded directly |
+**Direct folding is strictly stronger than a surrogate here, which is the
+reason the scope must not be narrowed.** For a table every node holds in
+full, folding the leaf bytes detects a leaf corruption unconditionally. An
+accumulator over a *stored* `R_k` detects it only if something recomputes
+`R_k` from the leaves — it certifies the commitment, not the data under it.
+Trading the first for the second buys nothing and gives up coverage.
 
-A sub-root exists only once a subtree *completes*
-([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
-`:79`), so up to `E − 1` trailing leaves sit under no commitment at any
-moment. **That uncovered part is exactly the part that needs no cover**,
-because it is uniform. The covered part is exactly the part that varies.
+**Hazard and reopening criterion.** A running chained hash requires every
+leaf, so `append-mostly` **would** fail if daemon-side deep-leaf discard
+ever landed *and* were node-variable. Today that antecedent is **unbuilt
+and structurally blocked** — a stronger not-yet than an unbuilt one alone —
+and the second conjunct is separately ruled: *"pruning is NOT node
+variable"* (Rick, 2026-09-13). Both conjuncts must hold for the hazard to
+fire; neither does. **What would reopen it:** a change to the challenge
+design that stops reading arbitrary local leaves, *followed by* a
+daemon-side discard mechanism that is node-variable. Not either alone.
 
-**Therefore the correction is a BOUNDED DOMAIN, not wholesale
-`excluded`** — and this is the distinction the reading job was commissioned
-to settle. Taking `excluded` for the whole table would drop the frontier
-segment: uniform consensus state, held by every node, committed to by
-nothing, folded by nobody. That is the fail-open shape the digest exists to
-prevent. The token stays **`append-mostly`**; what was wrong and is now
-stated is its **domain** — the chain starts at the freeze boundary, not at
-leaf 0 — and its **surrogate**, named in the row the way `txs_prunable`
-names `txs_prunable_hash`:
+**A class correction was made here and reverted, and the reason is
+recorded because the failure is reusable.** Acting on a routed diagnosis
+that this row had been given a surrogate's class, an earlier commit in this
+PR narrowed `curve_tree_leaves` to `append-mostly` *over the frontier
+segment only*, surrogating the frozen prefix with `archival_shard_segment`'s
+`R_k`. **The premise was a citation about a different store.**
+[`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) `:171`–`:172` says a
+non-staker **wallet** prunes deep segment leaves to `R_k` — the noun is on
+`:171`, which is why a citation to `:172` alone loses it — and set **A**'s
+holder
+column (`:153`) reads "Every syncing **wallet / lean node**" — that is
+wallet-class retention, describing the wallet `LeafStore` that DRS-D3
+holds separate. It says nothing about `m_curve_tree_leaves`.
 
-> **`curve_tree_leaves` — `append-mostly` over the frontier segment only.
-> The frozen prefix is surrogated by `archival_shard_segment`'s `R_k`
-> (itself `set-shaped`, so the commitment is already folded).**
+**The instructive part is which check was run.** The correction came with
+an explicit reading job — *is `R_k` a complete cover of the frozen
+segments?* — and that job was executed faithfully and answered correctly
+(it is; see the verification retained below). But the load-bearing premise
+was a different proposition — *do the daemon's leaves vary between honest
+nodes at all?* — and nobody, including me, checked it. **Verifying the
+question you were handed is not the same as verifying the claim it
+supports.** Had the narrowing shipped, it would have removed direct
+coverage of state every daemon holds identically, which is the same
+fail-open shape the reading job was commissioned to prevent, landing on the
+other half of the table.
 
-**The surrogate is a complete, dense cover of the frozen side — verified,
-because `excluded` on that prefix is only safe if it is.**
-`process_archival_segment_freezes_at_height` loops
-`for (shard_id = next; shard_id < complete; ++shard_id)` where `complete =
-frozen_segment_count_on_write_txn()` and `next` is the table's own
-`MDB_LAST + 1`, so ids are contiguous from 0. A missing layer-2 chunk for a
-completed segment is a **`FATAL` abort** — its comment says "the tree and
-the freeze rule disagree — corruption, **not a skippable row**" — so a gap
-cannot be created silently. Rows are `MDB_NOOVERWRITE` (CREATE-only, the
-O-2 adversary), and `revert_archival_segment_freezes` deletes from
-`MDB_LAST` down, breaking at the first `shard_id < complete`, which
-preserves density from the top. One `R_k` per frozen segment, no gaps.
-
-**The boundary is consensus-known and arithmetic**, which is what makes the
-piecewise definition well-defined rather than a judgement: segments are
-`E = SEGMENT_LEAF_COUNT = 25 992` leaves, subtree-aligned, and `E` is a
-multiple of the Selene leaf-chunk width 38 (`25 992 = 684 × 38`), so
-segment bases are chunk-aligned by construction. `E` is pinned by test
-(`segment_leaf_count_is_pinned_value`) and the division lives at one Rust
-site by §5.1 discipline.
-
-**What this entry supersedes.** An earlier draft recorded this as a
-*pending trigger* — "discard lands **and** is node-variable" — and then as
-*resolved* by the ruling that pruning is not node variable (Rick,
-2026-09-13). Both framings asked the wrong question. Deep-leaf pruning to
-`R_k` is **already** in the design and already node-variable; nothing was
-waiting on a future discard decision. The defect was never a pending
-mechanism, it was a class assigned over the whole table when it was only
-ever true of part of it. **A class token is not a soundness claim** — §12
-says so as a general disclaimer, and this row is what that disclaimer looks
-like when it bites.
+**The surrogate-completeness verification is kept**, because it is sound
+and `archival_shard_segment`'s own `set-shaped` row depends on it: the
+freeze loop runs `for (shard_id = next; shard_id < complete; ++shard_id)`
+with `complete = frozen_segment_count_on_write_txn()` and `next` the
+table's own `MDB_LAST + 1`, so ids are contiguous from 0; a missing layer-2
+chunk for a completed segment is a **`FATAL`** abort commented "corruption,
+**not a skippable row**"; rows are `MDB_NOOVERWRITE` (CREATE-only, O-2);
+and `revert_archival_segment_freezes` deletes from `MDB_LAST` down,
+breaking at the first `shard_id < complete`, preserving density from the
+top. One `R_k` per frozen segment with no silent gaps — **a true fact that
+does not establish what the class change needed**, which was that the
+leaves under those `R_k` differ between honest daemons.
 
 **2. The `node-local` reason rests on the C++ stripe prune, which the Rust
 store does not inherit.** Recorded per table, because verification shows
