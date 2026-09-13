@@ -28,7 +28,17 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src/cryptonote_core/blockchain.cpp"
 DOC = ROOT / "docs/design/DAEMON_REDB_STORE.md"
 
-CALL_RE = re.compile(r"m_db->([a-zA-Z_][a-zA-Z0-9_]*)")
+# Identifiers of type `BlockchainDB *` / `&` declared anywhere in the file —
+# members, parameters of file-static helpers, visitor fields. The alias SET is
+# derived, never hardcoded: this gate's first version matched the literal
+# `m_db->` token, which is the same derivation that built the table it checks,
+# so it was green BY CONSTRUCTION over every call made through any other name.
+# Three live methods were missing and it could not see them.
+ALIAS_DECL_RE = re.compile(r"BlockchainDB\s*[*&]\s*([a-zA-Z_][a-zA-Z0-9_]*)")
+# Other access shapes, refused rather than silently missed: if the file ever
+# reaches the store through `get_db()` the alias derivation above does not
+# cover it, and the gate must say so instead of undercounting.
+INDIRECT_RE = re.compile(r"get_db\(\)\s*(?:\.|->)\s*[a-zA-Z_]")
 SECTION_RE = re.compile(r"^### 3\.5 ", re.M)
 ROW_RE = re.compile(r"^\|\s*\*\*(S-[A-Z-]+)\*\*\s*\|([^|]*)\|\s*(\d+)\s*\|([^|]*)\|", re.M)
 METHOD_RE = re.compile(r"`([a-zA-Z_][a-zA-Z0-9_]*)`")
@@ -42,10 +52,22 @@ def main():
     if failures:
         report(failures)
 
-    vocabulary = set(CALL_RE.findall(SOURCE.read_text(encoding="utf-8")))
+    src = SOURCE.read_text(encoding="utf-8")
+    aliases = sorted(set(ALIAS_DECL_RE.findall(src)))
+    if not aliases:
+        report([f"{SOURCE.name}: found no `BlockchainDB *` identifiers — the alias derivation is "
+                "broken, and an empty vocabulary is covered by any partition"])
+    vocabulary = set()
+    for alias in aliases:
+        vocabulary |= set(
+            re.findall(rf"(?<![\w>]){re.escape(alias)}->([a-zA-Z_][a-zA-Z0-9_]*)", src))
     if not vocabulary:
-        report([f"{SOURCE.name}: parsed ZERO `m_db->` calls — the derivation is broken, and an "
-                "empty vocabulary is covered by any partition"])
+        report([f"{SOURCE.name}: parsed ZERO store calls across aliases {aliases} — "
+                "the derivation is broken"])
+    if INDIRECT_RE.search(src):
+        report([f"{SOURCE.name}: reaches the store through `get_db()`, which this gate's alias "
+                "derivation does not cover. Extend the derivation rather than letting the "
+                "vocabulary silently undercount."])
 
     text = DOC.read_text(encoding="utf-8")
     m = SECTION_RE.search(text)
@@ -98,11 +120,13 @@ def main():
         failures.append(
             f"§3.5's heading says {head.group(1)} methods; the tree has {len(vocabulary)}. "
             f"Re-derive the SET, not just the number — the membership can move further than "
-            f"the total (it moved +7/-5 for a net +2 between 3247fe3b6 and f103acd38).")
+            f"the total (alias-derived, it moved +7/-3 for a net +4 between 3247fe3b6 and "
+            f"f103acd38), and re-derive it with THIS derivation: a delta measured between two "
+            f"different instruments misfiles unchanged methods as births and deaths.")
 
     report(failures)
-    print(f"DRS-C surface map: {len(vocabulary)} `m_db->` methods derived from "
-          f"{SOURCE.name} <-> {len(seen)} assigned across {len(rows)} surfaces; "
+    print(f"DRS-C surface map: {len(vocabulary)} store methods derived from {SOURCE.name} "
+          f"across aliases {aliases} <-> {len(seen)} assigned across {len(rows)} surfaces; "
           f"every method in exactly one, counts{'' if counts_ok else ' NOT'} consistent")
 
 

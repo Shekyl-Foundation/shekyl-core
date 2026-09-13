@@ -504,29 +504,61 @@ wallet e2e (E-8).
 4. Curve: **storage only**; encodings + arithmetic single-sourced (DRS-D3b);
    cross-store KAT (DRS-D3c).
 
-### 3.5 DRS-C surface map (99 methods from `blockchain.cpp`)
+### 3.5 DRS-C surface map (102 methods from `blockchain.cpp`)
 
 **Verified at `f103acd383c5da5524748e4efef4420833106265` (`dev`, 2026-09-13).**
 Every `m_db->` method reached from `blockchain.cpp` is assigned to **exactly
-one** surface: 99 methods, 10 surfaces, no method in two and none in none.
+one** surface: 102 methods, 10 surfaces, no method in two and none in none.
 Gated by `scripts/ci/check_drs_c_surface_map.py`, which re-derives the
 vocabulary from `blockchain.cpp` at the tree it runs on and compares it against
 this table in both directions.
 
-**The count moved, and the membership moved four times as much.** §3.5 was
-stamped at `3247fe3b6` (2026-07-27) with **97**, and that figure was correct
-then — re-derived at that pin it is still 97. At the current pin it is **99**,
-but the delta is **+7 / −5**, not +2: twelve names changed to move the total by
-two. Adjusting the number without re-deriving the set would have produced the
-right total over the wrong membership — seven methods assigned to no surface and
-five rows pointing at methods that no longer exist. The removed names are
-`correct_block_cumulative_difficulties`, `get_blocks_from`,
-`get_prunable_tx_blob`, `get_prunable_tx_hash` and
-`has_archival_serve_credit_bit`; the added ones are
-`archival_serve_credit_pass_count`, `get_archival_alt_attestation_witness`,
+**The vocabulary is derived across every `BlockchainDB *` alias, not from one
+token — and that correction is itself a finding.** The first version of this map
+and its gate both matched the literal `m_db->`, which gave **99**. But
+`blockchain.cpp` also reaches the store through a second identifier: the
+file-static helpers `fill(BlockchainDB *db, …)` (`:2917`, `:2938`) and
+`archival_marshal_record_facts(BlockchainDB *db, …)` (`:4652`), plus the
+`add_transaction_input_visitor` field (`:3209`). Counting those brings the true
+vocabulary to **102**.
+
+Three methods are reachable **only** through the alias and were therefore
+missing from the partition entirely: `get_prunable_tx_blob`,
+`get_prunable_tx_hash` and `is_open`. Worse, the first version reported the
+first two as *removed since 2026-07-27* — they were not removed, they moved
+from `m_db->` to `db->` when `fill` was extracted, and a token-matching
+derivation cannot tell those apart.
+
+**The gate could not catch this, because it shared the derivation that built
+the table.** Both used the same `m_db->` regex, so the bijection was green by
+construction over every call made through any other name. The gate now derives
+the alias SET from `BlockchainDB *`/`&` declarations and collects calls on each,
+so a third alias is covered without anyone remembering to add it; and it
+refuses outright if the file ever reaches the store via `get_db()`, which that
+derivation would not cover. Verified complete for this file: exactly two such
+identifiers exist, `db` and `m_db`, with no `get_db()` access and no
+`BlockchainDB &` references.
+
+**The count moved, and the membership moved further — but the delta must be
+measured with ONE instrument.** §3.5 was stamped at `3247fe3b6` (2026-07-27)
+with **97**. That was the single-token figure; re-derived across aliases, the
+true vocabulary at that pin was **98** — `is_open` was alias-only then too, so
+the old instrument undercounted *both* eras, not just the current one. Measured
+alias-to-alias, `3247fe3b6` → `f103acd38` is **98 → 102, net +4**: three methods
+genuinely gone (`correct_block_cumulative_difficulties`, `get_blocks_from`,
+`has_archival_serve_credit_bit`) and seven added
+(`archival_serve_credit_pass_count`, `get_archival_alt_attestation_witness`,
 `get_archival_attestation_witness_at_height`,
 `get_archival_prune_watermark_epoch`, `get_curve_tree_leaf_count`,
-`pop_target_allowed` and `store_archival_alt_attestation_witness`.
+`pop_target_allowed`, `store_archival_alt_attestation_witness`).
+
+`is_open` appears in neither list: it is not new, it was never counted.
+`get_prunable_tx_blob` and `get_prunable_tx_hash` appear in neither list
+either — they are present at *both* pins, having moved from `m_db->` to `db->`
+when `fill` was extracted. Subtracting 97 from 102 and calling the difference
+"+8 new" would have been arithmetic over two different instruments: the right
+total, the wrong membership, and three names misfiled as births or deaths that
+were neither.
 
 **Method lists are explicit, not globs.** The draft used patterns
 (`batch_*`, `get_block*`, `archival_bond_*`) with counts beside them, and the
@@ -536,11 +568,11 @@ below is written out so the partition is a set, not a description of one.
 
 | Surface | Role | # | Methods | Extraction order | Path B / genesis note |
 | --- | --- | --- | --- | --- | --- |
-| **S-TXN** | Batch / open / sync / locks | 10 | `batch_abort` `batch_start` `batch_stop` `close` `fixup` `is_read_only` `m_synchronization_lock` `reset` `safesyncmode` `sync` | **1** — Every other surface runs **inside** its transactions. Nothing can be extracted before the txn boundary is, so this is not a preference — it is the only position that works. | Stays with the store backend |
+| **S-TXN** | Batch / open / sync / locks | 11 | `batch_abort` `batch_start` `batch_stop` `close` `fixup` `is_open` `is_read_only` `m_synchronization_lock` `reset` `safesyncmode` `sync` | **1** — Every other surface runs **inside** its transactions. Nothing can be extracted before the txn boundary is, so this is not a preference — it is the only position that works. | Stays with the store backend |
 | **S-CHAIN-W** | Connect and pop write set | 7 | `add_block` `add_block_burn` `pop_block` `remove_block_burn` `set_hard_fork` `set_settlement_epoch_blocks_pin` `set_total_burned` | **2** — The connect/pop write set is what the logical-state digest is computed **over**, so extracting it first gives DRS-E2 a subject to compare. Moving it later means every earlier increment is validated against an unported writer. | Long-term Rust `apply_block` / `pop_block` |
 | **S-CHAIN-R** | Tip, headers, weights, burns | 23 | `block_exists` `for_blocks_range` `get_block` `get_block_already_generated_coins` `get_block_blob_from_height` `get_block_burn` `get_block_cumulative_difficulty` `get_block_cumulative_rct_outputs` `get_block_difficulty` `get_block_from_height` `get_block_hash_from_height` `get_block_height` `get_block_long_term_weight` `get_block_timestamp` `get_block_weight` `get_block_weights` `get_long_term_block_weights` `get_settlement_epoch_blocks_pin` `get_top_block` `get_top_block_timestamp` `get_total_burned` `height` `top_block_hash` | **3** — Reads the tables S-CHAIN-W writes. Split across increments, the two halves of one table's contract move separately and a digest mismatch cannot be localised to either. | Hot RPC path |
 | **S-OUT-KI** | Outputs and key images | 9 | `can_thread_bulk_indices` `for_all_key_images` `for_all_outputs` `get_output_distribution` `get_output_histogram` `get_output_key` `get_output_tx_and_index` `has_key_image` `has_key_images` | **4** — Consensus-critical (double-spend admission) and needs chain reads for height context, so it follows S-CHAIN-R rather than racing it. |  |
-| **S-TX** | Tx blob and existence | 7 | `for_all_transactions` `get_pruned_tx_blob` `get_tx_amount_output_indices` `get_tx_blob` `get_tx_count` `get_tx_unlock_time` `tx_exists` | **5** — Tx blob and existence reads, dependent on chain-R for height context. No writer of its own in this vocabulary — `blockchain.cpp` writes txs only through `add_block`. |  |
+| **S-TX** | Tx blob and existence | 9 | `for_all_transactions` `get_prunable_tx_blob` `get_prunable_tx_hash` `get_pruned_tx_blob` `get_tx_amount_output_indices` `get_tx_blob` `get_tx_count` `get_tx_unlock_time` `tx_exists` | **5** — Tx blob and existence reads, dependent on chain-R for height context. No writer of its own in this vocabulary — `blockchain.cpp` writes txs only through `add_block`. |  |
 | **S-CURVE** | Curve-tree reads | 5 | `get_curve_tree_depth` `get_curve_tree_leaf_chunk` `get_curve_tree_leaf_count` `get_curve_tree_root` `get_curve_tree_root_at_height` | **6** — Reads only; the arithmetic lives in `shekyl-fcmp`, not here. Depends on chain state but nothing depends on it, so it can move once the chain surfaces are stable. | Storage only; math in `shekyl-fcmp` |
 | **S-ARCH** | Archival reads/writes reached from `blockchain.cpp` | 18 | `archival_bond_all_last_served_epochs` `archival_bond_good_through` `archival_bond_holds_shard` `archival_bond_join_epoch` `archival_bond_last_served_epochs` `archival_serve_credit_pass_count` `archival_shard_freeze_height` `gather_archival_emission_epoch_snapshot` `get_archival_alt_attestation_witness` `get_archival_attestation_witness_at_height` `get_archival_bond_hybrid_pubkey` `get_archival_bond_value` `get_archival_last_slash_epoch` `get_archival_prune_watermark_epoch` `get_archival_r_market` `get_archival_shard_segment_at_height` `set_archival_serve_credit_bit` `store_archival_alt_attestation_witness` | **7** — Largest surface (18) and **gated on the P0b journal audit** — its write paths are the ones whose atomicity is still being characterised. Extracting before that audit ports an unaudited contract. | Cursor surface for retention (E4) |
 | **S-POOL** | Tx pool | 8 | `add_txpool_tx` `for_all_txpool_txes` `get_txpool_tx_blob` `get_txpool_tx_count` `get_txpool_tx_meta` `remove_txpool_tx` `txpool_tx_matches_category` `update_txpool_tx` | **8** — No consensus state and no dependency on the chain surfaces, so it can parallelize with 4–7 if there is capacity. Ordered here rather than earlier because it is privacy-sensitive (Dandelion++) and deserves attention that is not competing with the consensus path. | Privacy-sensitive (Dandelion++) |
