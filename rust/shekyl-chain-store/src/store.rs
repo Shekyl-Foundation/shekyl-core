@@ -56,6 +56,8 @@ use redb::{
     Database, Durability, ReadOnlyDatabase, ReadTransaction, ReadableDatabase, WriteTransaction,
 };
 
+use crate::apply_policy::ApplyPolicy;
+
 /// The durability every write transaction is set to, declared rather than
 /// inherited (DRS-D9, Tier-A A4). See the module note on why this is a
 /// constant and not a default.
@@ -113,6 +115,7 @@ impl core::error::Error for StoreError {}
 /// reachability, not control.
 pub struct ChainStore {
     backend: Backend,
+    apply_policy: ApplyPolicy,
 }
 
 enum Backend {
@@ -126,6 +129,7 @@ impl core::fmt::Debug for ChainStore {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ChainStore")
             .field("read_only", &self.is_read_only())
+            .field("apply_policy", &self.apply_policy)
             .finish_non_exhaustive()
     }
 }
@@ -137,10 +141,37 @@ impl ChainStore {
     ///
     /// [`StoreError::Open`] if the file cannot be created or opened.
     pub fn create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::with_apply_policy(path, ApplyPolicy::default())
+    }
+
+    /// Create or open the store with an explicit [`ApplyPolicy`].
+    ///
+    /// Anything but [`ApplyPolicy::Full`] produces a run whose comparator
+    /// output is **not** parity evidence -- see that type. The policy is
+    /// taken at construction rather than per call, so a run cannot change
+    /// its own provenance halfway through.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Open`] if the file cannot be created or opened.
+    pub fn with_apply_policy(
+        path: impl AsRef<Path>,
+        apply_policy: ApplyPolicy,
+    ) -> Result<Self, StoreError> {
         let db = Database::create(path).map_err(StoreError::Open)?;
         Ok(Self {
             backend: Backend::Writable(db),
+            apply_policy,
         })
+    }
+
+    /// The policy this store was opened under.
+    ///
+    /// Always reportable, because every comparator artifact carries it: a
+    /// stubbed run's output must be impossible to mistake for a parity run.
+    #[must_use]
+    pub const fn apply_policy(&self) -> ApplyPolicy {
+        self.apply_policy
     }
 
     /// Open an **existing** store without the ability to write.
@@ -157,6 +188,7 @@ impl ChainStore {
         let db = ReadOnlyDatabase::open(path).map_err(StoreError::Open)?;
         Ok(Self {
             backend: Backend::ReadOnly(db),
+            apply_policy: ApplyPolicy::default(),
         })
     }
 
@@ -272,6 +304,30 @@ mod tests {
         ));
         drop(std::fs::remove_file(&p));
         p
+    }
+
+    #[test]
+    fn a_store_defaults_to_full_apply_and_reports_it() {
+        let path = tmp("policy");
+        let store = ChainStore::create(&path).expect("create");
+        assert_eq!(store.apply_policy(), ApplyPolicy::Full);
+        assert!(store.apply_policy().is_parity_evidence());
+        drop(std::fs::remove_file(&path));
+    }
+
+    #[test]
+    fn a_stubbed_store_reports_a_non_parity_policy() {
+        use crate::apply_policy::ArchivalFamily;
+        let path = tmp("stubbed");
+        const STUB: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
+        let store = ChainStore::with_apply_policy(&path, ApplyPolicy::StubbedFamilies(STUB))
+            .expect("create stubbed");
+        assert!(!store.apply_policy().is_parity_evidence());
+        assert!(store
+            .apply_policy()
+            .artifact_stamp()
+            .contains("NOT-PARITY-EVIDENCE"));
+        drop(std::fs::remove_file(&path));
     }
 
     #[test]

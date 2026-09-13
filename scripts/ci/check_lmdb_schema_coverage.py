@@ -685,6 +685,39 @@ def main() -> None:
     )
     errors.extend(wp_errs)
 
+    # Archival-family leg (DRS-E1, 2026-09-13). shekyl-chain-store's
+    # ApplyPolicy names one variant per archival family, and DRS 7.1.1's
+    # sufficiency control stubs families BY NAME. A table added to the C++
+    # with no variant falls outside every policy silently: its apply could
+    # never be stubbed, so it could never be shown load-bearing -- which is
+    # precisely the hazard 7.1.1 states ("a backend can omit all
+    # apply/revert hooks and still pass core digests").
+    #
+    # Both directions, because one would let the enum drift ahead of the
+    # store it describes.
+    fam_path = ROOT / "rust" / "shekyl-chain-store" / "src" / "apply_policy.rs"
+    try:
+        fam_src = fam_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        sys.exit(f"FAIL: cannot read apply_policy.rs ({exc}) -- the "
+                 "archival-family leg has no subject (rule 47)")
+    fam_names = set(re.findall(r'=> "(archival_[a-z_]+)"', fam_src))
+    if not fam_names:
+        sys.exit("FAIL: parsed ZERO archival family names from "
+                 "apply_policy.rs -- the leg reads nothing, which is first "
+                 "evidence its subject moved, not that the sets agree")
+    macro_archival = {t for t in tables if t.startswith("archival_")}
+    if macro_archival - fam_names:
+        errors.append(
+            "archival table(s) in SHEKYL_LMDB_TABLES with no ApplyPolicy "
+            "family, so their apply can never be stubbed nor shown "
+            "load-bearing (DRS 7.1.1):\n  "
+            + ", ".join(sorted(macro_archival - fam_names)))
+    if fam_names - macro_archival:
+        errors.append(
+            "ApplyPolicy family name(s) that are not archival tables in the "
+            "X-macro:\n  " + ", ".join(sorted(fam_names - macro_archival)))
+
     if errors:
         sys.exit("FAIL: the LMDB schema surface is out of step with the live "
                  "table list:\n" + "\n".join(errors))
@@ -714,6 +747,9 @@ def main() -> None:
           f"The two axes disagree on {len(axis_gap)} rows (v0-excluded with "
           "a real class) \u2014 a v0 exclusion is not an accumulator "
           "exclusion (audit \u00a712).")
+    print(f"    Archival families (DRS-E1): {len(fam_names)} ApplyPolicy "
+          "variants, bijective with the X-macro's archival tables. Stubbing "
+          "by name is what makes 7.1.1's sufficiency control expressible.")
     print(f"    Write patterns (slice A): {len(derived_blind)} of "
           f"{len(set_shaped)} set-shaped tables blind-upsert "
           "(mdb_put flags 0) and so need a read-modify-write hook; "
