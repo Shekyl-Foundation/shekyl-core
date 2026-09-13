@@ -219,6 +219,17 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_shell_gate_exits.py
 
+      - name: Run DRS-C surface map gate
+        # Tier-A A9: blockchain.cpp's `m_db->` vocabulary is partitioned into
+        # named validation surfaces, every method in exactly one. The gate
+        # RE-DERIVES the vocabulary from the tree it runs on rather than
+        # trusting a verification stamp: §3.5's stamp stayed correct in the
+        # document at 97 while the tree moved to 99, and the membership moved
+        # by twelve (+7/-5) to shift the total by two.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_c_surface_map.py
+
       - name: Run redb key-type ordering gate
         # The bijection gate checks that every table is MAPPED; this one checks
         # the mapping reproduces LMDB's ORDERING. That gap was not theoretical:
