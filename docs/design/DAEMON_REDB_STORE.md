@@ -1171,23 +1171,49 @@ reasons row for row** — two instruments, one field, cross-checked:
 > — toward the second branch, and the first was malformed.** "Is archiver
 > surplus inside the digest domain?" puts a **node-level** property inside a
 > **table-level** set; read precisely, it proposes changing what a digest *is*
-> for one table, to avoid using a mechanism the matrix already has. The
-> mechanism: the **variable-by-retention table is `excluded` and the invariant
-> commitment carries the class** — frozen already as `txs_prunable` `excluded`
-> beside `txs_prunable_hash` `append-mostly`. `curve_tree_leaves` is the
-> variable side and currently holds **`append-mostly`, which is the
-> *surrogate's* class**: the token sits on the wrong side of the pair. Correct
-> it and the domain question stops existing — leaves are not folded in either
-> direction, so surplus becomes unmeasurable by the digest for exactly the
-> reason surplus `txs_prunable` bytes are unmeasurable today. **Not this
-> document's to make** (the class column and its Rust `TABLE_CLASSES` are slice
-> A's), and it is not expected to be a blanket exclusion: a segment's sub-root
-> is permanent only once the subtree completes
-> ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
-> §1.1, `E = 25 992`), so up to `E−1` frontier leaves sit under no commitment
-> — but gap and variability coincide **inversely**, the frontier being retained
-> by every honest node while the covered frozen tail is what varies. A piecewise
-> split at the freeze boundary is the likely landing. **Nothing is routed to
+> for one table, to avoid using a mechanism the matrix already has. The proposed
+> mechanism was the surrogate pattern frozen beside it — *variable-by-retention
+> table `excluded`, invariant commitment carries the class*, as `txs_prunable`
+> `excluded` sits beside `txs_prunable_hash` `append-mostly` — applied to
+> `curve_tree_leaves` on the reading that it is the variable side holding the
+> surrogate's token.
+>
+> **THAT DIAGNOSIS WAS FALSE AND NO TOKEN MOVED. `curve_tree_leaves` stays
+> whole-table `append-mostly`, as originally frozen.** A narrowing landed and
+> was **reverted** the same day (slice A, `116b424b6`). The premise — that the
+> daemon's leaves vary between honest nodes — is contradicted by the tree in
+> two places, and the citation it rested on is about a **different store**:
+>
+> - the pruning sentence is
+>   [`../V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) `:171–172`, whose
+>   subject is *"a non-staker **wallet**"* and whose set-A holder column
+>   (`:153`) reads "Every syncing wallet / lean node" — the **wallet's**
+>   `LeafStore`, which `DRS-D3` (§1, `:300`) makes *"deliberately separate"*
+>   from the daemon store in "schemas, tables, txn models, durability, APIs, and
+>   crates";
+> - the daemon's table is named in the negative:
+>   [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+>   fact §2.5 (`:144`) — *"**The daemon retains every leaf forever.**
+>   `m_curve_tree_leaves` is deleted only by `trim_curve_tree` (reorg). This is
+>   already **consensus-required**"* — and
+>   [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md)
+>   `:105` puts it past doubt: the challenge design *"**structurally forces**"*
+>   the unpruned world, since *"no daemon can prune while verification reads
+>   arbitrary local leaves."*
+>
+> **And the narrowing would have cost coverage, which is the substantive half.**
+> Folding leaf bytes detects a corruption unconditionally; an accumulator over a
+> **stored** `R_k` detects one only if something recomputes `R_k` from the
+> leaves — it certifies the commitment, not the data under it. For a table every
+> daemon fully holds, direct folding is strictly stronger, so the split traded a
+> stronger check for a weaker one in exchange for a variability that does not
+> exist in that store.
+>
+> **Reopening, in its strengthened form:** a change to the challenge design that
+> stops reading arbitrary local leaves, **followed by** a node-variable daemon
+> discard. Not either alone — "unbuilt *and structurally blocked*" is a stronger
+> not-yet than "unbuilt", so the earlier trigger conjunct stands rather than
+> being superseded. **Nothing is routed to
 > `PDM-Q` by this block**; the uniform-schedule-versus-uniform-content
 > distinction above is what forced the question to be stated precisely enough to
 > be seen as malformed, and that is all it was needed for.
