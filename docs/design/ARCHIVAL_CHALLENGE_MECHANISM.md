@@ -133,9 +133,14 @@ The read itself (unchanged from the TJ round):
 1. The witness pulls the **entire shard** over P's onion rendezvous.
 2. The witness verifies the bytes against the shard's leaf hash `R_k` — the
    response is self-authenticating.
-3. P countersigns the session nonce, proving the read reached P's link
-   (nonce construction: `attestation_wire.rs:191` — the anchor key is fork
-   §7.2, see below).
+3. P countersigns the read, proving it reached P's link. **As of
+   2026-09-13 (RULED, not landed):** the message is
+   `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` — requester-random nonce and
+   published tip height from the request header, plus the route id P
+   parsed (`SF-D8`) — under the bond record's hybrid identity key
+   (`SF-D13`; the §7.2(i) anchor-key fork is **closed**). The landed v1
+   (`attestation_wire.rs:191`, block-bound nonce alone) is what runs until
+   `ARCHIVAL_SHARD_FETCH.md` §9.1 step (a0) lands.
 4. The pass record is broadcast as a transaction; any miner may include it
    within the resolution window **W₂**.
 
@@ -830,7 +835,9 @@ the round kept trying to add forensics underneath it.
    to a coinbase key they don't hold.
    **The nonce's `r` term DELETES; `block_hash(h−1)` substitutes
    (checked at source, 2026-08-10).** `attestation_wire.rs:191-195`
-   assigns the roles: `cb_out_key` is "the copy-freeride bind; kept,"
+   assigns the roles: `cb_out_key` is "the copy-freeride bind; kept" *(kept
+   in v1; `SF-D8` 2026-09-13 drops it from the signed message and accepts
+   same-height reuse — not landed)*,
    `r` is "the producer's revealed randomness" — its only job is nonce
    unpredictability, stopping P from pre-signing a countersignature it
    hands out without ever being contacted. It cannot do that job: both
@@ -927,13 +934,15 @@ the round kept trying to add forensics underneath it.
    attacker's position, authorized by the one key never on the host.
    Record: [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md).
    **Open checks before the P-side closes:** (i) **The same-entity
-   binding artifact**: whether the attestation Ed25519 leg *is* the
-   onion key (endpoint-binding per-signature) or a sibling with an
-   onion-key proof-of-possession over the bond record at post (the PoP
-   is the binding) — a
-   TJ-B-adjacent format decision landing on the **bond wire**, hence
-   (ii) a persisted-wire change ⇒ version-constant bump (rule 42) when
-   built. (iii) **RESOLVED — no change (2026-08-11, verified at
+   binding artifact** — **RESOLVED 2026-09-13 by `SF-D13`: neither.**
+   The countersigning key is the bond record's existing hybrid identity
+   key (`BondPost.hybrid_public_key`, both legs); the onion key is
+   authenticated by the Tor rendezvous and bound beside it on the same
+   authorized record; no sibling and no PoP field are added to the bond
+   wire. *(The question as posed: whether the attestation Ed25519 leg
+   *is* the onion key or a sibling with an onion-key proof-of-possession
+   over the bond record at post.)* Hence (ii) — the persisted-wire change
+   ⇒ version-constant bump (rule 42) — does **not** arise from (i). (iii) **RESOLVED — no change (2026-08-11, verified at
    source): `hybrid_sign` hot is safe, because the emission claim is
    two-of-two and only one factor is the identity hybrid.**
    `emission_vin_verify_auth` requires Auth-P (hybrid signature under

@@ -9,15 +9,22 @@
 //! A bonded persona `P` answers shard reads over its onion rendezvous: a
 //! witness pulls the **entire shard** and verifies the bytes against the
 //! chain-committed sub-root `R_k` (§2) — the response is
-//! **self-authenticating by content**, which is why this crate signs
-//! nothing. The two inputs a countersignature would need are the session
-//! nonce construction and the signing key (attestation-leg-is-onion-key vs
-//! sibling + proof-of-possession). The **nonce is no longer a fork** —
-//! `RF-D3`/`RF-D5` settled it as
-//! `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`, with `r` replaced rather
-//! than removed — while the signing key remains open. Either way the
-//! pass-record axis does not land in this loop: this crate is transport,
-//! and it still signs nothing.
+//! **self-authenticating by content**. As landed, this crate signs nothing.
+//!
+//! **RULED 2026-09-13, NOT LANDED** (`docs/design/ARCHIVAL_SHARD_FETCH.md`
+//! `SF-D5`/`SF-D8`/`SF-D13`; lands in that round's §9.1 step (a)): the
+//! response gains a countersignature. Both inputs are now ruled — the
+//! *"signing key remains open"* fork this paragraph used to record is
+//! **closed**: the key is the bond record's hybrid identity key
+//! (`BondPost.hybrid_public_key`, `SF-D13`), reached through a signer
+//! callback on [`PServeEndpoint`] so this crate still holds no secret; the
+//! message is `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` (`SF-D8`), where
+//! the 40-byte `nonce ‖ height` arrives in one required request header
+//! (`SF-D5`; requester-random, **not** the block-bound `attestation_nonce`)
+//! and `shard_id` is the `u64` this crate parsed from `/shard/{id}`. The
+//! signature rides a fixed-length envelope ahead of the unchanged `RF-D4`
+//! frame. Until step (a) lands, the header-ignoring, unsigned behaviour
+//! below is what runs.
 //!
 //! # This crate's place in the §9.5 item-3 arc
 //!

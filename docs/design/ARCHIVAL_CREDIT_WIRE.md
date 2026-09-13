@@ -30,7 +30,7 @@ rulings into bytes:
 | Ruling (elsewhere) | What it fixes for the wire |
 |---|---|
 | Miner-chosen set, coinbase-revealed | The attester is the block producer; no schedule, no beacon |
-| Block-bound nonce `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` | The record's authenticity binds to *this* block's coinbase |
+| Block-bound nonce `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` — **SUPERSEDED twice:** `r` → `block_hash(h−1)` (`RF-D3`/`RF-D5`, 2026-08-19, landed); then the countersignature message became requester-random `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` with `cb_out_key` dropped (`SF-D8`, 2026-09-13, not landed) | The record's authenticity binds to *this* block's coinbase — *(v1 property; `SF-D8` accepts same-height reuse)* |
 | Non-transferable / self-crediting killed | Verify must recompute the nonce, never trust a carried one |
 | Miss fact (three-valued) | The record carries a pass/miss discriminant; "neither" is off-wire |
 | Coinbase-output-key uniqueness (epoch-windowed) | A consensus check the wire's verify path must invoke |
@@ -118,11 +118,15 @@ manipulation surface).** Applied hard, they collapse most of a first draft:
   cover `H(nonce ‖ transfer_digest)`, but that is not consensus-verifiable:
   `transfer_digest` would digest the transferred shard bytes, which are
   off-chain, so admission could never reconstruct the signed message. The
-  countersignature covers **the nonce alone** (§3.3), and that is *complete*, not
-  a shortcut — `s` (`shard_id`) is already a nonce term, so a content digest
-  would add no binding `s` does not carry. Read-content binding comes from
+  countersignature covers **the nonce alone** (§3.3) — **SUPERSEDED 2026-09-13
+  by `SF-D8` (RULED, not landed): the signed message is
+  `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]`, the nonce requester-random.
+  The completeness argument below was v1's** — `s` (`shard_id`) was a nonce
+  term, so a content digest would have added no binding `s` did not carry. Read-content binding comes from
   §9.4's topology, not from a signed artifact; nothing of the sort is on the wire.
-- **The nonce is NOT stored** — `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` is recomputable
+- **The nonce is NOT stored** — **REVERSED 2026-09-13 by `SF-D8` (RULED, not
+  landed): the pass record carries the 32-byte requester-random nonce, because
+  it is not recomputable.** v1 reasoning follows: `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` is recomputable
   at the only two moments anything needs it (admission and any later re-check),
   because `r` (coinbase extra) and `cb_out_key` (coinbase output) are kept-side
   and survive the signature prune. Storing it is redundant moving data.
@@ -308,9 +312,11 @@ transaction at all.
 
 **3.3 The verify entrypoint that replaces `shekyl_archival_verify_serve_credit_vin`
 (shape 4).** Its contract inverts: instead of a path opening, for each of the `k`
-records it (a) recomputes the nonce from `r ‖ cb_out_key ‖ P ‖ s ‖ E`,
+records it (a) recomputes the nonce from `r ‖ cb_out_key ‖ P ‖ s ‖ E`
+*(v1; `SF-D8` 2026-09-13, not landed: the nonce is carried, not recomputed)*,
 (b) for a **pass** (`kind = pass`) checks the side-table `HybridSignature` is
-`P`'s valid countersignature over the nonce; for a **miss** (`kind = miss`)
+`P`'s valid countersignature over the nonce *(v1; `SF-D8`: over
+`carried_nonce ‖ predecessor_height_le ‖ shard_id_le`)*; for a **miss** (`kind = miss`)
 requires no signature, (c) binds the attester to the block producer (the
 coinbase authorship *is* the attestation — no separate witness key), and
 (d) invokes the **epoch-windowed coinbase-output-key uniqueness** check (the

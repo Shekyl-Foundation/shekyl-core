@@ -14,11 +14,21 @@
 //! owns the settlement fold; the two never share a signature, which is the §4
 //! seam.
 //!
-//! # What `P` countersigns — the nonce alone
+//! # What `P` countersigns — the nonce alone (v1, landed; v2 RULED, not landed)
 //!
-//! The countersignature covers **the nonce alone**
-//! (`H(r ‖ cb_out_key ‖ P ‖ s ‖ E)`). Every term is on-chain or derivable, so
-//! admission can recompute and verify it. An earlier draft considered
+//! **RULED 2026-09-13, NOT LANDED** (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`; lands
+//! as that round's §9.1 step (a0), alone, as a consensus verifier change):
+//! the v2 message is `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` under a new
+//! versioned domain, where `nonce` is **requester-random and carried on the
+//! pass record** (not recomputable from chain terms), signed `height` must
+//! equal the block's predecessor height, and the v1 domain is never reused.
+//! `cb_out_key` and the rest of the challenge tuple leave the signed message;
+//! same-height reuse across competing blocks is accepted by ruling. Everything
+//! below this line describes the **landed v1** verifier.
+//!
+//! The v1 countersignature covers **the nonce alone**
+//! (`H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`). Every term is on-chain or
+//! derivable, so admission can recompute and verify it. An earlier draft considered
 //! `H(nonce ‖ transfer_digest)`, but `transfer_digest` digests off-chain shard
 //! bytes that consensus cannot reconstruct — that reading is not
 //! consensus-verifiable. Nonce-only is also *complete*: `shard_id` is already a
@@ -44,7 +54,10 @@ use crate::id::p_canonical_id_from_hybrid_pubkey;
 
 /// cSHAKE customization for the block-bound challenge nonce (§3, copy-freeride
 /// repair: the `cb_out_key` term binds the attestation to *this* block's
-/// coinbase output).
+/// coinbase output). **Superseded by ruling, not landed:** `SF-D8`
+/// (2026-09-13) removes `cb_out_key` from the signed message and accepts
+/// same-height reuse; this construction has no signing consumer once §9.1
+/// step (a0) lands.
 pub const ATTESTATION_NONCE_CUSTOMIZATION: &[u8] = b"shekyl/archival-attestation-nonce-v1";
 
 /// cSHAKE customization for `attestation_root` over the ordered pass-record set.
@@ -151,6 +164,10 @@ impl AttestationHeader {
 
 /// One **pass** attestation: identity + terms + countersignature.
 ///
+/// **Layout amendment RULED 2026-09-13, NOT LANDED** (`SF-D8`): the record
+/// gains the 32-byte requester-random `nonce` the v2 message is signed over,
+/// because it cannot be recomputed from chain terms. Lands in §9.1 step (a0).
+///
 /// There is no `kind` field — Pass is the type. [`Self::to_header`] materializes
 /// the kept wire header with `kind = Pass`. Miss records never carry a
 /// signature and never appear here, so root/verify cannot represent
@@ -192,7 +209,8 @@ impl PassRecord {
 /// `H(block_hash(h−1) ‖ cb_out_key ‖ p_id ‖ shard_id ‖ E)` (§3).
 ///
 /// `cb_out_key` is the coinbase output key — the copy-freeride bind, and the
-/// term that makes the countersignature non-transferable.
+/// term that makes the countersignature non-transferable. *(v1 property;
+/// `SF-D8` drops the term and accepts same-height reuse — see the module doc.)*
 ///
 /// # `prev_block_hash` must be a VALIDATED predecessor hash, not a header field
 ///
@@ -478,8 +496,10 @@ pub fn pass_records_from_headers_and_witness(
 /// 1. **`p_id` binds the key.** The record's `p_id` must be *this pubkey's*
 ///    canonical id ([`p_canonical_id_from_hybrid_pubkey`]).
 /// 2. **The signature covers the nonce.** Recompute
-///    `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` from the record's terms and check `P`'s
-///    hybrid countersignature over it.
+///    `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` from the record's terms and
+///    check `P`'s hybrid countersignature over it. *(v1. The v2 check —
+///    `carried_nonce ‖ predecessor_height_le ‖ shard_id_le` under the new
+///    domain — is RULED (`SF-D8`) and lands in §9.1 step (a0).)*
 ///
 /// Kind is not checked: a miss cannot be a [`PassRecord`].
 #[must_use]
