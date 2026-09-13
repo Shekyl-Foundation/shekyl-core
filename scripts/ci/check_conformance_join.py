@@ -103,16 +103,29 @@ def main() -> None:
     # check. The thing that actually protects the anchoring is the extractor
     # regex plus cross-check 2 below, which does bite. This stays as a
     # printed figure so the hazard is visible to a reader.
+    # Two denominators, because they answer different questions and the
+    # number's meaning changes with the field it covers:
+    #   WHOLE ROW  - a state word anywhere in the line, including evidence
+    #                prose. This is what a naive regex actually sees, since
+    #                it would not stop at the state cell either.
+    #   STATE CELL - a state word in the state cell only, after the anchored
+    #                token. The narrower, more conservative figure.
+    whole_row: set[str] = set()
+    state_cell: set[str] = set()
     membership_pairs = 0
-    trapped: list[str] = []
     for line in reg_text.splitlines():
-        m = re.match(r"^\| \*?\*?(CEN-[A-Za-z0-9]+)", line)
-        if not m:
+        m = re.match(
+            r"^\| \*?\*?(CEN-[A-Za-z0-9]+)\*?\*?[^|]*\| *\*\*([A-Z-]+)\*\*(.*)$", line
+        )
+        if not m or m.group(2) not in STATES:
             continue
-        mentioned = [state for state in STATES if state in line]
-        membership_pairs += len(mentioned)
-        if m.group(1) in states and len(mentioned) > 1:
-            trapped.append(m.group(1))
+        rid, anchored, rest = m.group(1), m.group(2), m.group(3)
+        membership_pairs += 1 + sum(1 for s2 in STATES if s2 != anchored and s2 in rest)
+        cell_tail = rest.split("|")[0]
+        if any(s2 != anchored and s2 in rest for s2 in STATES):
+            whole_row.add(rid)
+        if any(s2 != anchored and s2 in cell_tail for s2 in STATES):
+            state_cell.add(rid)
 
     # Cross-check 2: the register must STATE its current tally, and the
     # stated one must be the derived one.
@@ -156,11 +169,13 @@ def main() -> None:
         f"never read from prose."
     )
     print(
-        f"    Anchoring (MEASURED, not guarded): {len(trapped)} row(s) mention a "
-        f"state in history prose as well as in their state cell "
-        f"({membership_pairs} membership pairs vs {len(states)} real rows). "
-        "A membership reader grades those fixed rows DIVERGENT, which under "
-        "CSR-3a FAILS the port for defects that are not there."
+        f"    Anchoring (MEASURED, not guarded): {len(whole_row)} row(s) "
+        f"WHOLE-ROW / {len(state_cell)} STATE-CELL-ONLY carry a second state "
+        f"word beside their anchored one ({membership_pairs} membership pairs "
+        f"vs {len(states)} real rows). The field is NAMED because the figure "
+        "means different things over different denominators. A membership "
+        "reader grades those long-fixed rows as divergent, and under CSR-3a "
+        "DIVERGENT + identical FAILS the port -- for defects that are not there."
     )
     print(
         "    This gate checks the MAP the grading reads, not the grading: "
