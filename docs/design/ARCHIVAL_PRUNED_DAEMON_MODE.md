@@ -1,20 +1,23 @@
 # Pruned-daemon mode — set-B discard (PDM)
 
-**Status: OPEN** — round opened 2026-09-12. `PDM-Q1`…`PDM-Q6` and
-`PDM-Q8` are **OPEN**. `PDM-Q3` is restated (today not node-local,
-`PDM-Q-F8`). `PDM-Q7` is **PARTIAL** (opt-in flag rejected). `PDM-Q-S0`
-is RULED. This is the design home TJ-D named; it is not yet the
-design.
+**Status: OPEN** — round opened 2026-09-12. `PDM-Q1`…`PDM-Q6`, `PDM-Q8`
+and `PDM-Q10` are **OPEN**. `PDM-Q3` is restated (today not node-local,
+`PDM-Q-F8`). `PDM-Q1` is widened and `PDM-Q6` promoted (`PDM-Q-F12`:
+leaves are a cache of the block corpus; set-B scarcity as scoped does
+not exist). `PDM-Q7` is **PARTIAL** (opt-in flag rejected, scoped to the
+universal set). `PDM-Q9` is **PARTIAL** (shard retention is the bond
+process; binding and lapse timing OPEN). `PDM-Q-S0` is RULED. This is
+the design home TJ-D named; it is not yet the design.
 
 **Grounded at** `dev@edb35dbb1467a55c1a1dd4033966fb9fe3413080` (2026-09-12,
 `origin/dev` HEAD when the round opened; PR #720 / DRS-0 slice A).
 Citations below were read at that sha. Do not inherit line numbers from the
 opening prompt (written at `1c6238bf8`).
 
-**Family:** `PDM-Q` — tokens `PDM-Q1`…`PDM-Q8` (questions), `PDM-Q-F*`
+**Family:** `PDM-Q` — tokens `PDM-Q1`…`PDM-Q10` (questions), `PDM-Q-F*`
 (findings), `PDM-Q-S0` (sequencing constraint). Registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 at birth (rule 94).
-Family cell `**PDM-Q1…PDM-Q8**` parses to `PDM-Q`. Distinct from
+Family cell `**PDM-Q1…PDM-Q10**` parses to `PDM-Q`. Distinct from
 `**PD-A…PD-F**` (parses `PD-A`, the reopen-(d) probe).
 
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -96,7 +99,7 @@ answered that the shape is not node-local *today*.
 Four premises, read at source. Grade: **established by reading**, unless
 marked otherwise.
 
-### 1.1 The product is set-B scarcity — established
+### 1.1 The product is set-B scarcity — established as R2's claim; challenged by `PDM-Q-F12`
 
 [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md)
 R2 (lines 75–79): ordinary nodes collapse deep segments to their sub-root
@@ -108,14 +111,21 @@ frontier segment) is held by every syncing wallet and is **not**
 archiver-challenge subject. Set B (deep segment leaves + shard auxiliary)
 is the archiver good (same file, lines 96–100).
 
+**What is established is that R2 says this.** Whether discarding
+`m_curve_tree_leaves` produces scarcity is a different claim, and
+`PDM-Q-F12` shows it does not: every leaf scalar is a pure function of
+bytes the discarding node keeps. The product is still set-B scarcity;
+what set B has to *be* for that to hold is now Q1's and Q6's question.
+
 ### 1.2 That product does not exist — established, and currently forced
 
 Same R2, lines 80–83: pruned-daemon mode is unbuilt; every daemon today
 retains every leaf forever. Restated as freeze-pipeline fact 5
 ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
 lines 144–148): `m_curve_tree_leaves` is deleted only by `trim_curve_tree`
-(reorg). Restated as the soundness premise of the `archival_shard_leaf`
-deletion at that file's §6.2 (lines 408–411).
+(reorg; two deletion loops in that one function, `db_lmdb.cpp:9278`
+trim-to-empty and `:9392`). Restated as the soundness premise of the
+`archival_shard_leaf` deletion at that file's §6.2 (lines 408–411).
 
 Load-bearing enrichment, not a paraphrase (sequencing doc lines 101–106):
 this retention is **consensus-required**. Serve-credit vin verification
@@ -174,28 +184,40 @@ Each ruling, when written, takes rule-21 shape: the rejection (or the
 positive choice), substrate-anchored reopening criteria, and the
 re-evaluation shape. None of that is filled in here.
 
-### `PDM-Q1` OPEN — The retained set
+### `PDM-Q1` OPEN — The retained set (widened 2026-09-13, `PDM-Q-F12`)
 
-Do **not** start from a blank enumeration. `PDM-Q-F7` already places
-the set-A / set-B split on exactly one table with one deletion site:
+Do **not** start from a blank enumeration. `PDM-Q-F7` places the
+set-A boundary on layer 0, and `PDM-Q-F12` shows the set-B boundary
+cannot stop at the leaf table:
 
 - **Set A, already retained by every node:** layer 0 of
   `m_curve_tree_layers` (`R_k` at chunk granularity). Never deleted
   except by reorg trim. The intermediate-layer prune loop starts at
   `layer = 1` (`db_lmdb.cpp:9974`); the root layer is also unpruned.
-- **Set B, the discard subject:** `m_curve_tree_leaves`. Deleted today
-  only by `trim_curve_tree` (reorg). That is the only table Q1's
-  discard ruling has to name, plus whatever else the ruling *adds*
-  (headers, consensus tables, a leaf window if Q2 keeps one).
+- **Set B, the discard subject — not one table.** `m_curve_tree_leaves`
+  is where the leaf bytes live, but every leaf is a pure function of
+  bytes the node keeps (`PDM-Q-F12`): `O` and `C` from `output_metadata`
+  (or the tx corpus), `I = hash_to_p3(O)`, and `h_pqc` from `tx_extra`
+  field `0x07` in the transaction blob. Discarding the leaf table alone
+  discards a cache. Q1 must therefore rule on **each derivation input**:
+  `output_metadata` (D10 §11.2 already names it node-local by prune
+  policy; slice A grades it `Excluded`, `class.rs:149`), `leaf_to_output`
+  / `output_to_leaf` (set-shaped, `class.rs:147,150`), and the
+  transaction corpus itself — which is `PDM-Q6`'s subject. Whatever Q1
+  leaves retained, set B is what is *not* recomputable from it.
 
 Enumerate the rest against that boundary, not as prose: headers, which
 intermediate layers *beyond* layer 0, which leaf window if any, which
 consensus tables. Every later question is measured against this set.
+A Q1 ruling that names `m_curve_tree_leaves` and stops has not
+produced scarcity and has not answered Q1.
 
 The stale "recomputed from leaves" comments
 (`db_lmdb.cpp:9922-9925`, `:9970`; `blockchain_db.h:2838`) are
 corrected in the PR that rules Q1, not left for the ruling pass to
-trip over.
+trip over. The slice A class assignments for the three curve-tree
+tables (`PDM-Q-F11`) are re-graded against Q1's output by the DRS-0
+lane, not here.
 
 ### `PDM-Q2` OPEN — Discard trigger and depth
 
@@ -271,7 +293,7 @@ centralisation dependency wearing a pruning costume. Also
 path, and its remaining item (b) "store-backed / pruned-tree assembly
 (F5, the prune-policy PR)".
 
-### `PDM-Q6` OPEN — The transaction-prunable side
+### `PDM-Q6` OPEN — The transaction corpus: the locus of scarcity (promoted 2026-09-13, `PDM-Q-F12`)
 
 Curve-tree leaves have a designed home; tx-prunable blobs have only the
 inherited stripe scheme. No document appears to ask whether they should
@@ -279,6 +301,22 @@ be archival subject matter. They already carry per-tx `prunable_hash`
 commitments — structurally the same thing `R_k` is for a leaf segment.
 Rule on whether they enter the archival subject. If they do not, say
 why, with reopening criteria.
+
+**Promoted.** `PDM-Q-F12` makes this the load-bearing question rather
+than a side one. The leaf is regenerated on replay from the transaction
+(`blockchain_db.cpp:598-617`, production code). The input of last
+resort for every leaf scalar is the block corpus — `O` and `C` from the
+output, `h_pqc` from `tx_extra` `0x07`. If the corpus is universally
+retained under D10's replay premise, nothing an archiver holds is
+scarce, and the possession test cannot discriminate no matter what Q1
+discards from the derived tables. Set-B scarcity, if it exists, comes
+from **here**: what part of the transaction corpus a pruned node does
+not keep. Q6's ruling is therefore also the ruling on whether PDM has a
+product. Note the two readings of "prunable": the inherited
+`txs_prunable` region is one occupant (sole-occupant test, §5); the
+outputs and `tx_extra` that regenerate leaves sit in the *pruned* half
+(`txs_pruned`, append-mostly). Q6 must say which half it is talking
+about.
 
 ### `PDM-Q7` PARTIAL 2026-09-12 — Disposition of the Monero-era stripe engine
 
@@ -290,7 +328,13 @@ underscoped and, as of steering 2026-09-12, the wrong question.
 - The **manual / opt-in flag is rejected.** Pruned-daemon mode is a
   standard process across all daemons, not an operator switch. That
   is what makes `CR-D2`'s "every node prunes" premise true, or what
-  withdraws it.
+  withdraws it. **Scope (2026-09-13):** this rejection covers the
+  *universal* retention set — what every daemon holds and discards.
+  It does not cover the archiver's *supplementary* set (shard `s`),
+  which is necessarily configured from somewhere; that source is
+  `PDM-Q9`, and the answer there is the bond, not a daemon flag. An
+  implementer reading this bullet as "no retention configuration of
+  any kind" would produce an unbuildable archiver.
 - The **C++ stripe engine is not deleted until this design is
   complete.** It may serve as reference for the Rust cutover. Removal
   of the Monero-era mechanism (`prune_worker`, `pruning_seed`,
@@ -313,6 +357,73 @@ design leaks a query pattern that universal retention does not. Wargame
 the fetch side: who observes the request, what it discloses, and whether
 cover traffic, batching, or oblivious retrieval is required. Do not let
 the density argument absorb the query-privacy argument.
+
+### `PDM-Q9` PARTIAL 2026-09-13 — The archiver's retention set: source, binding, lapse
+
+After Q7 there are **two retention regimes**, and Q7 ruled only one:
+
+1. The universal set — every daemon, consensus, no operator switch
+   (Q1–Q6, Q7's rejection).
+2. The archiver's supplementary set — shard `s`, held in addition.
+
+**Ruled (steering, 2026-09-13): shard retention is the bond process.**
+The bond already carries the shard set on-chain: `holdings` is
+`ShardSetCompact{ids}` or `CompleteTree`
+([`ARCHIVAL_BOND_CONSTRUCTION.md`](ARCHIVAL_BOND_CONSTRUCTION.md) line
+349), stored in `archival_bond` (consensus-folded, set-shaped,
+`class.rs:114`), changed by `HoldingsUpdate`, ended by `Release`. The
+daemon's supplementary retention set is **read from the chain**, not
+configured on the daemon. There is no second place where "which shards"
+is spelled, and no daemon flag is minted for it.
+
+**Still OPEN, in rule-21 shape when ruled:**
+
+- **Binding.** The daemon must know which bond(s) it serves for. That
+  is a public identifier (the bond's persona key), not a secret, and
+  it lives on the serving host's side of the Model D boundary. Name
+  where it lives and how it is set; say explicitly that no seed
+  material crosses to make it work
+  ([`16-architectural-inheritance`](../../.cursor/rules/16-architectural-inheritance.mdc)
+  §"comment that outlived its architecture" is the precedent for
+  getting this wrong).
+- **Lapse timing.** Retention must outlast the bond. An archiver whose
+  `Release` (or a `HoldingsUpdate` dropping shard `s`) lands at height
+  `h` can still be challenged on `s` for the challenge window and
+  settled for the settlement lag after `h`. If the daemon discards at
+  `h`, a correct exit is slashed. State the retention tail as a
+  function of the pinned constants in `shekyl-archival-retention`
+  (`CHALLENGE_RESOLUTION_BLOCKS`, `SETTLEMENT_EPOCH_BLOCKS`,
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` = 720), and name the test that goes
+  red if the tail is shorter than the window.
+- **Interaction with the universal set.** Where the archiver's shard
+  `s` overlaps the universal window (Q2's not-yet-discarded frontier),
+  the supplementary set is empty by construction; the ruling should
+  say so rather than have two mechanisms both believe they own the
+  same bytes.
+
+### `PDM-Q10` OPEN — The RPC contract for "not retained"
+
+Two RPC readers of the leaf table exist (`core_rpc_server.cpp:1577`,
+`:1670`). `PDM-Q-F9`'s fix for the second is "match `:1577`", and
+`:1577` returns `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`. Right today; under
+PDM both readers then report a leaf the node has *legitimately*
+discarded as an internal failure — the wallet-facing twin of
+`PDM-Q-F8b`. Rule on a response that distinguishes *not retained here;
+fetch from an archiver* (and, once Q9 is ruled, *which* one) from *the
+store is broken*. The membership-path assembly client
+([`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) remaining item (b)) is
+the consumer; the shard-fetch client round (`SF-`, PR #714) is where the
+fetch leg's transport is being designed and is the place this response
+has to be legible.
+
+**The privacy argument does not cut against this.**
+[`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) lines 22–27: every
+RPC leg is operator-to-operator, both endpoints machines the same person
+controls, the adversary is the network path and never the peer. `:1577`
+and `:1670` are that leg. A daemon telling its own operator's wallet "I
+do not hold shard `s`" discloses nothing the operator did not configure.
+Q8's query-privacy concern lives on the *fetch* leg to a third-party
+archiver, not here.
 
 ---
 
@@ -349,7 +460,18 @@ Named so they cannot be discovered after a ruling. Not answered here.
 - **Reorg.** Discarded-then-reorged. The retention prune is un-journaled.
   State revert behaviour explicitly.
   [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) is
-  the precedent for how that gets argued.
+  the precedent for how that gets argued. `PDM-Q-F10` names the line:
+  `trim_curve_tree` reads the removed leaves' scalars for the
+  boundary-chunk `hash_trim` (`db_lmdb.cpp:9361`) and throws `DB_ERROR`
+  at `:9363` inside the write txn. A reorg into a discarded segment
+  aborts mid-transaction. Both halves of the constraint are owed, not
+  one: Q2's discard depth is bounded below by the maximum reorg depth,
+  **and** trim gets a defined failure — because the bound is only as
+  good as the constant enforcing it, and no consensus-side reorg cap
+  exists at this pin (`ARCHIVAL_REORG_DEPTH_BLOCKS` = 720 is
+  archival-domain, `shekyl-archival-retention`;
+  `NetworkSafetyConstants.max_reorg_depth` is engine-side,
+  `shekyl-engine-state/src/safety_constants.rs:61`).
 
 ---
 
@@ -371,7 +493,9 @@ Read, cite, build on. A disagreement is a finding, not a premise.
 - Bond construction and slashing
   ([`ARCHIVAL_BOND_CONSTRUCTION.md`](ARCHIVAL_BOND_CONSTRUCTION.md),
   [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md)).
-- R2 itself, including two-legged necessity.
+- R2 itself, including two-legged necessity. `PDM-Q-F12` is a
+  disagreement with R2's premise that leaf discard is scarcity — recorded
+  as a finding, per this section's first sentence, not as a re-derivation.
 - TJ-F's two faces (soundness test vs type-level "response + `R_k`, no
   store handle").
 - TJ's sequencing claim that the pruning *mode* is node-local (Q3
@@ -397,7 +521,13 @@ Named now so they are not discovered later.
   is the cross-check instrument. A pruning design that changes what a
   node retains changes what "rebuildable by replaying local blocks" can
   mean. D10's binding sentence is not this round's to edit; Q1's
-  retained set is the input that round will need.
+  retained set is the input that round will need. Sharper than the
+  wording issue: slice A's **class assignments** for the three
+  curve-tree tables assume universal leaf retention (`PDM-Q-F11`) —
+  `curve_tree_leaves` append-mostly, `curve_tree_layers` and
+  `curve_tree_checkpoints` derived *from the leaves*. Those three rows
+  are re-graded by the DRS-0 lane once Q1 rules; this charter names
+  the dependency and does not edit `class.rs`.
 - **The credit wire** — [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md)
   prunable-residence row: *Header kept; 3.43 KB countersignature on the
   coinbase-tx prunable side*. If `PDM-Q6` rules that side into the
@@ -447,9 +577,11 @@ Named now so they are not discovered later.
   …)` (`:9974`), so layer 0 and the root layer are never pruned. Layer 0
   therefore survives and is already the thing Q1 needs: `R_k` at
   chunk granularity, retained by every node, never deleted except by
-  reorg trim. The set-A / set-B split falls on exactly one table
-  (`m_curve_tree_leaves`) with one deletion site. Q1 starts from that
-  boundary. The stale comments are corrected in the PR that rules Q1.
+  reorg trim. The leaf bytes live in exactly one table
+  (`m_curve_tree_leaves`) deleted in exactly one function
+  (`trim_curve_tree`, two loops: `:9278`, `:9392`). Q1 starts from that
+  boundary — and `PDM-Q-F12` then shows the boundary does not stop
+  there. The stale comments are corrected in the PR that rules Q1.
 - **PDM-Q-F8.** Q3 is answerable at a named line today, and the answer
   is "not node-local until TJ-A lands." `blockchain.cpp:5327`:
   `get_curve_tree_leaf_chunk` failure rejects the transaction with
@@ -485,6 +617,70 @@ Named now so they are not discovered later.
   [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) (`PDM-Q-F9`). This charter does
   not carry the C++ edit.
 
+### Established by reading (2026-09-13, same pin)
+
+- **PDM-Q-F10.** `trim_curve_tree` reads leaves on the pop path. F7 is
+  right that upper layers recompose from layer 0, but the layer-0
+  **boundary chunk** is not recomposed — it is `hash_trim`'d, and that
+  needs the removed leaves' scalars: `db_lmdb.cpp:9354-9365` reads
+  `m_curve_tree_leaves` at `:9361` and `throw0(DB_ERROR(...))` at
+  `:9363`, inside the write txn. A reorg that reaches into a discarded
+  segment aborts mid-transaction. Consequence for Q2: discard depth is
+  bounded below by the maximum reorg depth **and** trim needs a defined
+  failure (the bound is only as good as the constant enforcing it, and
+  there is no consensus-side reorg cap at this pin — see §3 *Reorg*).
+  Precision fix to F7's "one deletion site": one function, two loops
+  (`:9278` trim-to-empty, `:9392`).
+- **PDM-Q-F11.** DRS-0 slice A's accumulator freeze contradicts set-B
+  discard on three tables.
+  `rust/shekyl-chain-store/src/accumulator/class.rs:140-142`:
+  `curve_tree_checkpoints` and `curve_tree_layers` are `Derived`,
+  `curve_tree_leaves` is `AppendMostly` (running chained hash —
+  deletions are unrepresentable). The audit that defends those grades,
+  [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md)
+  lines 1518–1531 (note: `docs/`, not `docs/design/`), is explicit that
+  verifying checkpoints against `curve_tree_meta` compares a copy with
+  its original and is blind to a bad tree, so verification **must**
+  recompute from the leaves. Leaves being the source is the whole
+  reason `Derived` is defended as legitimate rather than convenient;
+  discard removes the discriminator's only input. This is F7's false
+  premise (`db_lmdb.cpp:9922`) one layer up, in a document that was
+  right at the time it was written and stops being right the moment PDM
+  ships. Carrier: the DRS-0 lane re-grades the three rows against Q1's
+  output; §5 names the dependency.
+- **PDM-Q-F12.** **Leaves are a cache of a pure function of the block
+  corpus. Set-B scarcity, as currently scoped, does not exist.**
+  Trace the construction: `blockchain_db.cpp:608-611` calls
+  `shekyl_construct_curve_tree_leaf(output_key, commitment.bytes, h_pqc,
+  leaf)` — three inputs. `output_key` and `commitment` are the output's
+  `O` and `C` (`:564`, `:597`). `h_pqc`, the fourth scalar, has its
+  provenance at `:528-546`: `extract_leaf_hashes` pulls the
+  `tx_extra_pqc_leaf_hashes` field (`0x07`) out of the transaction,
+  exactly `32 · vout.size()` bytes, one per output, and `:557` indexes
+  it. So the fourth scalar lives in **the transaction blob**, which is
+  block corpus and retained under D10's replay premise. Every one of the
+  four scalars is reconstructible from data a discarding node keeps —
+  `O`, `I = hash_to_p3(O)`, `C` from `output_metadata` via
+  `get_output_key(0, i)` (the RPC already does exactly this,
+  `core_rpc_server.cpp:1585-1600`) or from the blocks directly if
+  `output_metadata` is itself discarded (`Excluded`, `class.rs:149`);
+  `h_pqc` from `tx_extra` `0x07`. The regeneration path is not
+  hypothetical: it is the production code at `blockchain_db.cpp:598-617`
+  running on every replay. Therefore: (i) the storage argument is close
+  to nil — discard 128 B/output and keep every byte that regenerates it;
+  (ii) the possession test cannot discriminate on leaves *at all* — an
+  archiver storing zero leaves answers every leaf challenge correctly by
+  local recompute, faster than a fetch. That is the liveness-not-
+  possession failure the round was opened to fix, reproduced inside the
+  fix. Scarcity would have to come from discarding the derivation
+  inputs, and the input of last resort is the block corpus — `PDM-Q6`'s
+  subject. Q6 is promoted to the locus of scarcity; Q1 widens as a
+  consequence (must rule on `output_metadata`, `leaf_to_output`,
+  `output_to_leaf`, and the tx corpus). Recorded as its own finding
+  rather than a Q1 scoping note because it is a challenge to the
+  round's premise (§1.1), and a reader has to hit it first: *name what
+  makes set B scarce, or withdraw the claim that it is.*
+
 ### Retracted
 
 - **PDM-Q-F6 RETRACTED 2026-09-12** as a launch-state fork. Was
@@ -504,10 +700,13 @@ Named now so they are not discovered later.
 ### Undetermined (ruling pass)
 
 - The retained set (starting from layer 0 / `m_curve_tree_leaves`,
-  F7), the trigger (including the free-regime duration and what the
-  market does during it), residual consensus reads after TJ-A (Q3),
-  reconstruction, cold sync, tx-prunable subject-matter, stripe-engine
-  residue at the cutover (Q7), fetch privacy.
+  F7; widened to the leaf's derivation inputs, F12), the trigger
+  (including the free-regime duration, what the market does during it,
+  and the reorg-depth floor, F10), residual consensus reads after TJ-A
+  (Q3), reconstruction, cold sync, the transaction corpus as the locus
+  of scarcity (Q6, F12), stripe-engine residue at the cutover (Q7),
+  fetch privacy, the archiver's bond-binding and lapse tail (Q9), the
+  "not retained" RPC response (Q10).
 - Negative-control status of any coverage number this round later quotes.
   Do not quote a coverage figure without an edit that makes the
   instrument go red. Q3's residual-set instrument is the named
@@ -521,14 +720,16 @@ Named now so they are not discovered later.
 | ID | Question | State |
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
-| `PDM-Q1` | Retained set (starts from layer 0 / `m_curve_tree_leaves`) | OPEN |
-| `PDM-Q2` | Trigger, depth, and free-regime duration | OPEN |
+| `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12) | OPEN — widened 2026-09-13 |
+| `PDM-Q2` | Trigger, depth, free-regime duration, reorg-depth floor (F10) | OPEN |
 | `PDM-Q3` | Residual consensus reads after TJ-A | OPEN — today not node-local (`PDM-Q-F8`) |
 | `PDM-Q4` | Reconstruction path | OPEN |
 | `PDM-Q5` | Cold sync and bootstrap | OPEN |
-| `PDM-Q6` | Tx-prunable as archival subject | OPEN |
-| `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected; C++ stays until this design is complete; removal at `DRS-E*` |
+| `PDM-Q6` | Transaction corpus as archival subject — the locus of scarcity (F12) | OPEN — promoted 2026-09-13 |
+| `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*` |
 | `PDM-Q8` | Privacy (density vs query) | OPEN |
+| `PDM-Q9` | Archiver's retention set: source, binding, lapse | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); binding and lapse tail OPEN |
+| `PDM-Q10` | RPC contract for "not retained" | OPEN |
 
 When this round proposes a test, it will name the edit that makes that
 test red. A red test that cannot be made red by a specific edit is not
@@ -545,9 +746,15 @@ retracted; `PDM-Q-S0` carries the genesis-does-not-precede sentence.
 sha, adversarial items discharged or named as remaining,
 D10/SO-D8/CR-D2/sole-occupant consequences stated rather than discovered.
 
-Q1 starts from F7's boundary; the PR that rules Q1 corrects
-`db_lmdb.cpp:9922-9925` / `:9970` / `blockchain_db.h:2838`. Q2's
-ruling must state the free-regime duration and the market's behaviour
-during it. Q3 is the residual-set question after TJ-A, with an
-instrument that can go red. F9 is a C++ defect independent of PDM;
-the carrier is the FOLLOWUPS row, not this charter.
+Q1 starts from F7's boundary and does not stop at the leaf table
+(F12); the PR that rules Q1 corrects `db_lmdb.cpp:9922-9925` / `:9970`
+/ `blockchain_db.h:2838`. Q2's ruling must state the free-regime
+duration, the market's behaviour during it, and the reorg-depth floor
+with trim's defined failure (F10). Q3 is the residual-set question
+after TJ-A, with an instrument that can go red. **Q6 is answered
+before Q1 is closed**, because F12 makes the transaction corpus the
+only place scarcity can come from; a Q1 ruling written ahead of Q6 is
+ruling on a cache. Q9's binding and lapse tail; Q10's response shape,
+legible to the `SF-` round. F9 is a C++ defect independent of PDM; the
+carrier is the FOLLOWUPS row, not this charter. F11's re-grade of the
+three curve-tree rows is the DRS-0 lane's, on Q1's output.

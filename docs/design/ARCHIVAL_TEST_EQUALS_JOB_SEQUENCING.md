@@ -109,7 +109,7 @@ the payment for it honest.
   reintroduce a materialized chunk store with a designed writer). **UPDATE
   2026-09-12:** that hypothetical now has a design home —
   [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
-  (`PDM-Q1`…`PDM-Q8`). The two reconciliations remain that round's to rule;
+  (`PDM-Q1`…`PDM-Q10`). The two reconciliations remain that round's to rule;
   opening the home does not discharge them.
 - The open DRS round (`DAEMON_REDB_STORE.md`) — the daemon storage redesign —
   still does not treat pruning. **UPDATE 2026-09-12:** implementation of
@@ -250,7 +250,7 @@ change post-genesis.
 - **TJ-D — pruned-daemon mode's design home and its two reconciliations.**
   **UPDATE 2026-09-12:** the design home is
   [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
-  (`PDM-Q1`…`PDM-Q8`). Remaining: DRS coupling (storage side), the
+  (`PDM-Q1`…`PDM-Q10`). Remaining: DRS coupling (storage side), the
   segment-freeze reversion clause (frozen-leaf exclusion or materialized
   chunk store), and the serve-credit verify rewire (fact §2.5's
   consensus-required retention must be dissolved by TJ-A before any pruning
