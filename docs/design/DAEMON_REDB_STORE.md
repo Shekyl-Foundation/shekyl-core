@@ -529,6 +529,16 @@ launch under D2-reopen.
 **S-ARCH** during C/E4; they are part of the god-object storage class, not
 only `blockchain.cpp`.
 
+**Status of the inherited pruning wiring, stated here because this is where a
+porter looks and the default reading is wrong (Rick, 2026-09-12):** the
+Monero-era stripe prune **stays in the C++ tree and is not ported** — "not
+brought over" means left where it is, not deleted. It is therefore a
+**reference implementation for the Rust rewrite, not debt to remove**, and
+rules 60 and 16 do not point at deleting it: a deletion was ruled, started and
+retracted on 2026-09-12 for exactly this reason. Its *reconstruction* half is
+expected to inform **shard** reconstruction, which is a second reason to read
+it rather than reach for it.
+
 **One named instance, because it is countable by nothing (2026-09-12, `ba4b3c73a`):** the settlement write path — `set_archival_settlement`, `get_archival_settlement`, `delete_archival_settlement_for_epoch`, `delete_archival_settlement_before_epoch` — exists **only** on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h:754–775`), with **zero** occurrences in `src/blockchain_db/blockchain_db.h` or `src/blockchain_db/testdb.h` against **48** virtual archival methods on the base class. DRS-0 therefore carries it as **known-unwired** (its production caller is a rule-22 hold on `SO-D8`, `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 — not an omission to helpfully fix) **and known-un-abstracted**: because the pair is off the interface, no port-surface completeness check enumerating `BlockchainDB` can see it — `DRS-W12`'s hazard inverted, and the half `db_lmdb.cpp:7657`'s *"not reachable, so not wrong"* note stopped one level short of. The base-class promotion is in `SO-D8`'s scope so the port does not discover it.
 
 **DRS-C PR shape — amended 2026-09-01 (CSR-4 ruled: analysis-only).** DRS-C does
@@ -1095,6 +1105,127 @@ reasons row for row** — two instruments, one field, cross-checked:
 | **Not chain state** | `txpool_meta`, `txpool_blob`, `alt_blocks`, `archival_alt_attestation_witness` | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception |
 | **Node-local by prune policy** | `txs_prunable`, `txs_prunable_tip`, `output_metadata` | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
 | **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
+
+> **AMENDED at `edb35dbb1` (2026-09-12, same day): the middle group's rationale
+> is on a TRIGGER, not retired here.** *(Line anchors in this block are
+> re-resolved at **`064d17d92`**, 2026-09-13 — `db_lmdb.cpp` moved after the
+> amendment was written and every one of them had drifted onto live code at
+> the wrong subject, which is this block's own subject. This document is
+> outside `check_doc_code_citations.py`'s `DEFAULT_DOCS`, so they are
+> unchecked by gate and were re-resolved by hand, symbol first.)* The reasoning: `PDM-Q-S0` is understood
+> to rule that pruned-daemon mode is not implemented in the inherited C++
+> daemon and lands in the Rust daemon after `DRS-E*`, which would mean the
+> inherited stripe prune does not come over — and "rebuildable only from bytes
+> a pruning node has deliberately discarded" would then describe a mechanism
+> the ported store will not have. **That ruling does not resolve in this tree:
+> `PDM-Q` appears in no document at `edb35dbb1` (its round is open at PR #723,
+> unmerged).** So nothing is reclassified on it, in either direction — and the
+> restraint is symmetric, which is the point: the same argument that forbids
+> pre-declaring `curve_tree_leaves` into a class against an unlanded discard
+> ruling forbids reclassifying `txs_prunable` **out** of one against the same
+> unlanded ruling. What is recorded is the trigger and the per-table evidence,
+> so that when `PDM-Q` lands this is a walkable list rather than a re-derivation.
+> The stake is stated once: an exclusion carried on an expired rationale is
+> **state excluded from a digest, which is the failure the digest exists to
+> prevent** — so the trigger must not be forgotten either. Per table, and they
+> do not share a disposition:
+>
+> **UPDATED the same day (Rick, 2026-09-12) — the trigger now has a stated
+> direction, and it is the opposite of the one the conditionals below were
+> drafted against.** *"We are leaving the old pruning implementation in C++ and
+> writing the new one in Rust — it will include everything (more or less) that
+> the C++ pruning had."* So: the inherited mechanism **stays in the C++ tree**
+> and is simply not ported, and a **new Rust mechanism that does discard is
+> being written**. The antecedent of each conditional below — *if no Rust-side
+> discard exists* — is therefore **expected to be false**.
+>
+> **CORRECTED before merge (Rick, 2026-09-13): "pruning is NOT node variable",
+> so the likely outcome is that these exclusions are LIFTED, not re-pointed.**
+> An earlier draft of this paragraph predicted they would *survive on a
+> re-pointed rationale (node-variability created by the new mechanism)*. That
+> rationale never becomes available — and predicting it would have been **this
+> block's own warning committed one level down**: a reason that happens to land
+> on the right verdict for the wrong mechanism is how the next expiry goes
+> unnoticed.
+>
+> **The distinction that makes three words load-bearing: a digest cares whether
+> nodes AGREE, not whether bytes are PRESENT.** Uniform, consensus-scheduled
+> discard leaves every node holding identical state at the boundary — a
+> well-defined accumulator with the boundary *in the definition*, digestible.
+> Only **node-variable** discard, where two honest nodes legitimately differ,
+> forces exclusion. Absence alone never did, and reading absence as the trigger
+> is what produced the expired rationale this block corrects.
+>
+> **One clause must be attached or the ruling is false for the one table this is
+> about — routed, not assumed.** [`../V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md)
+> ("Normal nodes vs archivers", `:171–176`) defines **three** retention classes
+> of honest node: a non-staker retains **A** and prunes deep segment leaves to
+> `R_k`; an archiver retains **B** plus shard-scoped **C**; the foundation floor
+> retains **B + C** completely — and "market redundancy … above the floor"
+> varies **between archivers**. So retained *content* is node-variable by
+> design; it is the market's product. What is uniform is the discard
+> **boundary**, and therefore the **floor** of what every honest node holds. The
+> ruling holds exactly when the accumulator is defined **over that
+> consensus-retained floor** rather than over "the table's contents", with
+> archiver surplus definitionally **outside** the digest domain. *Open and
+> routed:* whether that surplus sits outside the domain or in a
+> separately-classed table is `PDM-Q`'s to rule — under the first reading these
+> exclusions lift; under the second `curve_tree_leaves` differs between two
+> honest nodes and an exclusion would be correct after all.
+> **`archival_attestation_witness`'s conditional row reopens on the same
+> event**, having dissolved only while nothing could discard and nothing could
+> acquire pruned. Neither is settled until the new mechanism's discard shape is
+> ruled (`PDM-Q`, PR #723) — still a trigger, now with a direction.
+>
+> **Cross-reference:** slice A reached the same place from the digest side, and
+> its reopening subsection states the conjunct this trigger needs — *discard
+> lands **and** is node-variable*. Rick's ruling settles that conditional's
+> second half. Two records, one finding: read them together
+> ([`../LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §12,
+> reopening criteria).
+>
+> - **`txs_prunable` — the exclusion is on a trigger, not lifted.** *If* no
+>   Rust-side discard exists, the bytes are always present and replay
+>   reproduces them, and it belongs **in the digest domain**; its `node-local`
+>   reason and its surrogate (`txs_prunable_hash`) were sound against the C++
+>   tree and would not be properties of the store being built. Not moved here:
+>   that conditional's antecedent is the unlanded ruling above.
+> - **`txs_prunable_tip` — CORRECTED 2026-09-12, same day, and the correction
+>   is the interesting part.** This first read *"every consumer lives inside
+>   `prune_worker`, so the Rust store should not carry the table"* — which was
+>   **false as evidence**: that enumeration was the `mdb_cursor_open` sites
+>   only (`:2406` / `:2464` / `:2569`, inside `prune_worker` `:2324–2605`). The table is also written in `add_transaction_data` (`:1163`) and
+>   deleted in `remove_transaction_data` (`:1230`/`:1235`) — the connect and pop
+>   paths, not the prune worker. *N hits of one pattern are not the
+>   population*, and the conclusion did not follow from the evidence given.
+>   **The argument that does survive is from the WRITE path, not the read
+>   sites:** that write is guarded by `if (get_blockchain_pruning_seed())` four lines
+>   above it (`:1160`), and the paired delete is `MDB_NOTFOUND`-tolerant. So on a node with no seed —
+>   every node today — the table is **never populated** and the delete is a
+>   tolerated no-op. Its *population*, not its call sites, is what ties it to
+>   the mechanism. That is a reason to ask whether it ports; it is **not** a
+>   settled deletion, and nothing is reclassified on it here.
+> - **`output_metadata` — the stated reason does not cover it, and the correct
+>   one is a different shape.** It is not discarded content; it is content
+>   **created by discarding** — `store_output_metadata` is called from exactly
+>   one site, inside `prune_tx_data` (`:10239`) — and **its read chain is dead
+>   two levels deep**: `get_output_metadata` (`:10070`) has exactly one caller,
+>   `is_output_pruned` (`:10093`, calling at `:10099`), and `is_output_pruned` has **no call site anywhere** in `src/`,
+>   `rust/` or `tests/` — only its pure-virtual declaration, its `db_lmdb`
+>   override and a `testdb.h` stub returning `false`. So the correct reason is
+>   closer to **`dead`** (DRS-W4's shape) than to `node-local`. At
+>   the port it is therefore **empty by construction** unless `PDM-Q`
+>   re-commissions the need it serves ("what does a discarding node keep so
+>   wallets can still scan?"), which is `PDM-Q`'s question and not a digest
+>   classification.
+>
+> **The consequence for the port is positive and time-boxed.** With the
+> inherited prune not coming over, the Rust store has **no node-variable
+> content by construction** until set-B discard lands — so the digest oracle
+> commissions against a **uniform** reference rather than a merely
+> currently-uniform one. That is the cleanest window there will be, and it
+> closes the day discard lands.
+
 
 **And one CONDITIONAL row, which is the interesting one because it is neither
 excluded nor unconditionally rebuildable.** `archival_attestation_witness` is
