@@ -35,6 +35,20 @@ PEAK_RSS_RATIO = 2.0         # <= passes
 # silently means NOSYNC.
 ALLOWED_SYNC_MODES = ("safe",)
 
+# The daemon reports the durability posture it RESOLVED, as
+#   Database sync: flags=0x1 (safe), sync_mode=0, threshold=1 blocks
+# added for A4 (§4) so that the posture is "explicit rather than a library default
+# reached by omission, and that is only checkable from a running node if the node
+# says which flags it opened with". The harness reads that line out of the
+# subject's own log, which is why `durability.observed` can now be TRUE: earlier
+# revisions recorded `false` and said plainly that no readback existed, because
+# `mdb_env_get_flags` is in-process and nothing logged the resolved mode. It does
+# now, so the claim is measured instead of imposed-and-validated.
+RESOLVED_SYNC_RE = r"Database sync: flags=0x([0-9a-f]+)([^,]*), sync_mode=(\d+)"
+# Any of these in the resolved line means LMDB was opened without an fsync per
+# commit, whatever was asked for.
+NOSYNC_MARKERS = ("MDB_NOSYNC", "MDB_MAPASYNC")
+
 # §1.3 requires the disk TYPE. "unknown" is not a type, so it is not a value.
 ALLOWED_DISK_CLASSES = ("hdd", "ssd_or_nvme")
 
@@ -66,6 +80,21 @@ LOADAVG_FIELDS = ("loadavg_1m_at_start", "loadavg_1m_at_end", "loadavg_5m_at_end
 
 ENGINE_DEFAULT_LMDB = "daemon-default-lmdb (no engine switch exists)"
 
+# Every selector this gate knows, mapped to the engine it actually selects. An
+# artifact's `engine` must equal the engine its selector selects, in BOTH
+# directions: `redb` claimed under the LMDB default is a relabelled run, and
+# `lmdb` claimed under a redb selector is equally incoherent -- the earlier check
+# caught only the first, so a hand-authored artifact could pass by inverting it.
+#
+# There is deliberately NO redb entry. The runner has no engine selection path:
+# it records ENGINE_DEFAULT_LMDB unconditionally because the daemon always opens
+# LMDB. Until a real selection path exists and records its own provenance, an
+# `engine: redb` artifact cannot be produced OR validated -- so the first run
+# after DRS-E1 lands cannot spend a full measurement on LMDB and discover it at
+# shutdown. Adding the engine here is part of wiring the redb arm, not a
+# precondition for it.
+ENGINE_SELECTORS = {ENGINE_DEFAULT_LMDB: "lmdb"}
+
 # A STATED BOUND ON WHAT A FIXTURE GENERALISES TO, recorded for the same reason as
 # `fs_type`: it is a condition of the measurement, not a detail.
 #
@@ -85,6 +114,15 @@ PRUNABLE_ABSENT = ("absent by construction: coinbase-only fixture, no non-coinba
 # fsync against tmpfs/ramfs has no backing store to flush, so `safe` is
 # indistinguishable from MDB_NOSYNC.
 DURABILITY_DEFEATING_FS = ("tmpfs", "ramfs")
+
+# Filesystems on which an fsync is believed to reach stable storage. Deliberately
+# an ALLOWED SET rather than a denylist: over-inclusion here is a false red, which
+# is safe, whereas a denylist of two values admits every placeholder -- "unknown",
+# "undetermined", "" -- on the one field that decides whether DRS-D9 could hold at
+# all. A filesystem absent from both lists is REFUSED rather than assumed, and
+# adding one is a deliberate act with a reason, not a silent default.
+DURABLE_FS = ("ext2", "ext3", "ext4", "xfs", "btrfs", "zfs", "f2fs", "jfs",
+              "reiserfs", "ntfs3", "apfs", "hfsplus", "ufs", "overlay")
 
 PRIMARY_MEASURE = "ibd_wall_time_s"
 MEASURE_AXES = {
@@ -167,11 +205,22 @@ def artifact_refusals(a):
     if not sel:
         r.append("engine_selected_by absent — an engine LABEL with no record of how the "
                  "engine was selected cannot be distinguished from a relabelled run")
-    elif a.get("engine") == "redb" and sel == ENGINE_DEFAULT_LMDB:
-        r.append("engine is 'redb' but engine_selected_by says the daemon default was "
-                 "used, which opens LMDB. This is a relabelled LMDB run, and as a "
-                 "candidate it would pass §1.3's floor at a ratio near 1.0 without any "
-                 "redb store existing")
+    elif sel not in ENGINE_SELECTORS:
+        r.append(f"engine_selected_by is {sel!r}, which this gate does not know. Known "
+                 f"selectors: {sorted(ENGINE_SELECTORS)}. An unknown selector is an "
+                 "unverifiable claim about which store was exercised; a redb selector "
+                 "belongs here as part of wiring the redb arm, alongside the runner "
+                 "path that actually selects it")
+    elif a.get("engine") != ENGINE_SELECTORS[sel]:
+        r.append(f"engine is {a.get('engine')!r} but engine_selected_by selects "
+                 f"{ENGINE_SELECTORS[sel]!r}. The label and the mechanism disagree, so "
+                 "one of them is false: as a candidate this would pass §1.3's floor at "
+                 "a ratio near 1.0 without the claimed store being exercised at all")
+    if a.get("thresholds_frozen_at") != FROZEN_AT:
+        r.append(f"thresholds_frozen_at is {a.get('thresholds_frozen_at')!r}, not "
+                 f"{FROZEN_AT!r} — this artifact was produced against a different "
+                 "freeze era, and routing it through today's ratios would apply "
+                 "thresholds it was not measured under")
     if not a.get("git_rev"):
         r.append("git_rev absent — a number with no tree is not reproducible")
     pin = a.get("thresholds_frozen_at")
@@ -197,10 +246,25 @@ def artifact_refusals(a):
             r.append(f"durability.imposed_argv does not carry "
                      f"--db-sync-mode={d.get('sync_mode')}, so the recorded mode is not "
                      "the mode that was imposed")
-        if d.get("observed") is not False:
-            r.append("durability.observed must be present and false: no readback of the "
-                     "LMDB env flags exists. Recording it as observed would claim an "
-                     "observation the harness cannot make")
+        if d.get("observed") is not True:
+            r.append("durability.observed must be true: the daemon reports the flags it "
+                     "resolved (A4's enabler), so the posture is observable and an "
+                     "artifact that does not observe it is not recording a condition it "
+                     "could have measured")
+        line = d.get("resolved_log_line")
+        if not isinstance(line, str) or not re.search(RESOLVED_SYNC_RE, line):
+            r.append(f"durability.resolved_log_line is {str(line)[:60]!r}, which does "
+                     "not carry the daemon's resolved sync report. That line IS the "
+                     "readback; without it the recorded mode is only what was asked for")
+        else:
+            hit = [m for m in NOSYNC_MARKERS if m in line]
+            if hit:
+                r.append(f"durability.resolved_log_line reports {hit} — the store was "
+                         f"opened WITHOUT an fsync per commit, so DRS-D9 was not in "
+                         f"force whatever sync_mode was requested: {line.strip()[:120]}")
+            elif "(safe)" not in line:
+                r.append(f"durability.resolved_log_line does not report the safe flag, "
+                         f"so the resolved posture is not DRS-D9's: {line.strip()[:120]}")
 
     env = a.get("environment")
     if not isinstance(env, dict):
@@ -253,6 +317,13 @@ def artifact_refusals(a):
             r.append(f"hardware.fs_type is {fs!r}: fsync there has no backing store to "
                      "flush, so DRS-D9 durability was NOT in force and this is a "
                      "RAM-disk number, not a strict-durability baseline")
+        elif fs not in DURABLE_FS:
+            r.append(f"hardware.fs_type is {fs!r}, which this gate neither trusts nor "
+                     f"rejects. Known-durable: {list(DURABLE_FS)}; known-defeating: "
+                     f"{list(DURABILITY_DEFEATING_FS)}. Refused rather than assumed — "
+                     "this field decides whether DRS-D9 could hold, and a placeholder "
+                     "like 'unknown' would otherwise satisfy it. Add the filesystem "
+                     "deliberately if fsync reaches stable storage there")
 
     f = a.get("fixture")
     if not isinstance(f, dict):
@@ -272,6 +343,14 @@ def artifact_refusals(a):
             r.append("fixture.verify_exercised must state pow and fcmp_pp explicitly; "
                      "§1.3's primary metric names both and a coinbase-only fixture "
                      "exercises only one")
+        elif not all(isinstance(v[k], bool) for k in ("pow", "fcmp_pp")):
+            # Values, not just keys. `fcmp_pp: "false"` is a TRUTHY string: it would
+            # satisfy a presence check and then suppress the shortfall in compare(),
+            # letting an artifact claim full verification and take a passing floor.
+            r.append(f"fixture.verify_exercised must use real booleans, got "
+                     f"{ {k: type(v[k]).__name__ for k in ('pow', 'fcmp_pp')} } — a "
+                     "truthy string such as \"false\" satisfies a key check and then "
+                     "silently suppresses the verification shortfall")
         if "tx_per_block" not in f:
             r.append("fixture.tx_per_block absent — it is the reason fcmp_pp is not "
                      "exercised, so it belongs in the record")
@@ -299,6 +378,16 @@ def artifact_refusals(a):
         # presence: blocks generated implies a positive observed duration, and no
         # blocks generated implies no duration. Either alone is a run reporting
         # work it did not time, or a time for work it did not do.
+        # The subject syncs to the seed's tip, so these are the same number. A
+        # divergence means either a partial sync (which `measure` refuses outright)
+        # or an artifact edited after the fact; both make the height unusable as the
+        # comparability key it is.
+        sh, hr = f.get("seed_height"), f.get("height_reached")
+        if isinstance(sh, int) and isinstance(hr, int) and sh != hr:
+            r.append(f"fixture.seed_height is {sh} but height_reached is {hr} — the "
+                     "subject syncs to the seed's tip, so a difference means the run "
+                     "did not converge or the record was altered")
+
         gb, gw = f.get("blocks_generated"), f.get("generation_wall_s")
         if isinstance(gb, int) and gb > 0:
             if not isinstance(gw, (int, float)) or isinstance(gw, bool) or gw <= 0:
@@ -363,8 +452,11 @@ def _masked_argv(a):
     """
     out = []
     for x in a.get("durability", {}).get("imposed_argv", []):
+        # No engine flag is masked: the daemon has none. Masking a speculative
+        # `--db-engine` would hide a real difference the day one exists, and the
+        # mask belongs in the same change that adds the flag.
         if re.match(r"^--(data-dir|p2p-bind-port|rpc-bind-port|add-exclusive-node|"
-                    r"log-file|db-engine)=", x):
+                    r"log-file)=", x):
             continue
         out.append(x)
     return out
@@ -380,6 +472,15 @@ def _durability_policy(a):
 def comparability_refusals(base, cand):
     """Reasons these two artifacts cannot produce a §1.3 ratio."""
     r = []
+    for field in ("thresholds_frozen_at",):
+        if base.get(field) != cand.get(field):
+            r.append(f"{field} differs ({base.get(field)!r} vs {cand.get(field)!r}) — "
+                     "the two runs were measured against different frozen thresholds")
+    if base.get("git_rev") != cand.get("git_rev"):
+        r.append(f"git_rev differs ({str(base.get('git_rev'))[:9]} vs "
+                 f"{str(cand.get('git_rev'))[:9]}) — §1.3 requires the same binary and "
+                 "flags with only the engine differing, so a ratio across trees can "
+                 "attribute a consensus or code change to the engine")
     if base.get("engine") == cand.get("engine"):
         r.append(f"both artifacts are engine={base.get('engine')!r}; §1.3's floor is a "
                  "ratio BETWEEN engines. Two same-engine runs are a regression "
@@ -394,8 +495,15 @@ def comparability_refusals(base, cand):
         r.append("durability blocks differ — a ratio between different durability "
                  "policies measures the policy, not the engine")
     bf, cf = base.get("fixture", {}), cand.get("fixture", {})
-    for k in ("nettype", "height_reached", "verify_exercised", "tx_per_block",
-              "peers_used", "prunable_region"):
+    # NOT compared, deliberately, and both would be false reds:
+    #   height_requested -- two runs that ASKED for different heights but REACHED the
+    #     same one did the same work, and `height_reached` is what is compared.
+    #   schema_version -- both artifacts are validated against SCHEMA individually,
+    #     so they cannot differ while both are usable.
+    # Left alone rather than mechanically added: a refusal that cannot correspond to
+    # a real difference trains readers to ignore refusals.
+    for k in ("nettype", "height_reached", "reference_height", "verify_exercised",
+              "tx_per_block", "peers_used", "prunable_region"):
         if bf.get(k) != cf.get(k):
             r.append(f"fixture.{k} differs ({bf.get(k)!r} vs {cf.get(k)!r}) — the two "
                      "runs did not do the same work")
@@ -486,6 +594,11 @@ def compare(base, cand):
         if not f["verify_exercised"].get("fcmp_pp"):
             short.append(f"{tag} exercised NO FCMP++ verification "
                          f"(tx_per_block={f.get('tx_per_block')})")
+        if not f["verify_exercised"].get("pow"):
+            # §1.3's primary metric names PoW as well, and a run without it is a
+            # different experiment -- previously recorded and never surfaced.
+            short.append(f"{tag} exercised NO PoW verification, which §1.3's primary "
+                         "metric requires as in real sync")
     contention = (saturation_notes(base, "baseline") +
                   saturation_notes(cand, "candidate"))
     benv, cenv = base.get("environment") or {}, cand.get("environment") or {}
@@ -511,7 +624,17 @@ def redb_engine_sites():
     """
     if not os.path.isdir(CHAIN_STORE):
         return [], 0, True
-    engine_re = re.compile(r"redb::(Database|WriteTransaction|ReadTransaction)")
+    # Two forms, because either alone is a false green. The second is the crate's
+    # OWN existing import style (`use redb::{Key, TypeName, Value}`), so an engine
+    # written idiomatically would have been invisible to the qualified form.
+    # Over-inclusion is a false RED here (an import with no use), which is the safe
+    # direction for a gate whose green authorises a deferral.
+    qualified_re = re.compile(r"redb::(Database|WriteTransaction|ReadTransaction)\b")
+    # `use redb::…` including multi-line brace groups and `as` aliases; the import
+    # names the type even when later use is unqualified.
+    import_re = re.compile(r"use\s+redb::(?:\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*(?:\s+as\s+"
+                           r"[A-Za-z_][A-Za-z0-9_]*)?)", re.S)
+    engine_type_re = re.compile(r"\b(Database|WriteTransaction|ReadTransaction)\b")
     sites, scanned = [], 0
     for dirpath, _, names in os.walk(CHAIN_STORE):
         if f"{os.sep}target{os.sep}" in dirpath + os.sep:
@@ -521,11 +644,16 @@ def redb_engine_sites():
                 continue
             scanned += 1
             fp = os.path.join(dirpath, n)
+            rel = os.path.relpath(fp, ROOT)
             with open(fp, encoding="utf-8") as fh:
-                for i, line in enumerate(fh, 1):
-                    if engine_re.search(line):
-                        sites.append(f"{os.path.relpath(fp, ROOT)}:{i}")
-    return sites, scanned, False
+                text = fh.read()
+            for m in qualified_re.finditer(text):
+                sites.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}")
+            for m in import_re.finditer(text):
+                if engine_type_re.search(m.group(0)):
+                    sites.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1} "
+                                 f"(imported)")
+    return sorted(set(sites)), scanned, False
 
 
 def blocker_failures():

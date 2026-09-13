@@ -10,22 +10,23 @@
       "--non-interactive",
       "--log-level=1",
       "--data-dir=/home/torvaldsl/shekyl/drsbench-work/subject",
-      "--p2p-bind-port=46701",
-      "--rpc-bind-port=55493",
-      "--add-exclusive-node=127.0.0.1:41163"
+      "--p2p-bind-port=39965",
+      "--rpc-bind-port=45739",
+      "--add-exclusive-node=127.0.0.1:43025"
     ],
-    "observed": false,
+    "observed": true,
     "policy": "DRS-D9 full-fsync-per-commit",
-    "readback_gap": "mdb_env_get_flags is in-process only and the daemon logs no resolved sync mode; the mode was validated against an allowed set before spawning and the argv is recorded verbatim, which is not the same as observing the flags",
+    "readback": "the subject daemon's own startup report of the flags it resolved. The mode is still validated against an allowed set BEFORE spawning, because a refusal that comes before the run costs nothing and this line only arrives after it",
+    "resolved_log_line": "2026-09-13T19:27:19.819644Z  INFO global: Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks",
     "sync_mode": "safe"
   },
   "engine": "lmdb",
   "engine_selected_by": "daemon-default-lmdb (no engine switch exists)",
   "environment": {
     "cpu_count": 16,
-    "loadavg_1m_at_end": 6.3193359375,
-    "loadavg_1m_at_start": 1.0048828125,
-    "loadavg_5m_at_end": 5.46337890625,
+    "loadavg_1m_at_end": 4.7548828125,
+    "loadavg_1m_at_start": 2.66796875,
+    "loadavg_5m_at_end": 4.34912109375,
     "note": "the subject is meant to be the machine's only significant load. A wall-time ratio requires two runs at comparable load: on this machine the same fixture moved 36-55% on wall and 16-24% on CPU between an idle box and a 5-minute load average of 8.6 over 16 cores, and a 1.25x floor sits well inside that band"
   },
   "fixture": {
@@ -46,7 +47,7 @@
     },
     "verify_note": "PoW longhash is computed and checked for every block with no nettype bypass; --fixed-difficulty lowers the TARGET only. generateblocks produces coinbase-only blocks, so FCMP++ verification is not exercised at all."
   },
-  "git_rev": "999979fc92510be51588a05a2ccbf93161ec7d13",
+  "git_rev": "463c628b14e6ad09a51b09dc67fd5c29710b464b",
   "hardware": {
     "cpu_count": 16,
     "cpu_model": "11th Gen Intel(R) Core(TM) i9-11950H @ 2.60GHz",
@@ -62,7 +63,7 @@
       "name": "ibd_wall_time_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 212.035
+      "value": 215.563
     },
     {
       "axis": "cpu_time",
@@ -70,7 +71,7 @@
       "name": "subject_cpu_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 787.41
+      "value": 803.12
     },
     {
       "axis": "memory",
@@ -78,7 +79,7 @@
       "name": "peak_rss_bytes",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 564719616
+      "value": 565149696
     },
     {
       "axis": "disk",

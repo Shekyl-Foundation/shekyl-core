@@ -9,36 +9,37 @@
       "--no-igd",
       "--non-interactive",
       "--log-level=1",
-      "--data-dir=/home/torvaldsl/shekyl/drsbench-work2/subject",
-      "--p2p-bind-port=49805",
-      "--rpc-bind-port=37237",
-      "--add-exclusive-node=127.0.0.1:35101"
+      "--data-dir=/home/torvaldsl/shekyl/drsbench-work/subject",
+      "--p2p-bind-port=45159",
+      "--rpc-bind-port=49357",
+      "--add-exclusive-node=127.0.0.1:52503"
     ],
-    "observed": false,
+    "observed": true,
     "policy": "DRS-D9 full-fsync-per-commit",
-    "readback_gap": "mdb_env_get_flags is in-process only and the daemon logs no resolved sync mode; the mode was validated against an allowed set before spawning and the argv is recorded verbatim, which is not the same as observing the flags",
+    "readback": "the subject daemon's own startup report of the flags it resolved. The mode is still validated against an allowed set BEFORE spawning, because a refusal that comes before the run costs nothing and this line only arrives after it",
+    "resolved_log_line": "2026-09-13T19:22:29.354223Z  INFO global: Database sync: flags=0x1 (safe), sync_mode=3, threshold=1 blocks",
     "sync_mode": "safe"
   },
   "engine": "lmdb",
   "engine_selected_by": "daemon-default-lmdb (no engine switch exists)",
   "environment": {
     "cpu_count": 16,
-    "loadavg_1m_at_end": 4.2607421875,
-    "loadavg_1m_at_start": 3.0419921875,
-    "loadavg_5m_at_end": 11.705078125,
+    "loadavg_1m_at_end": 5.828125,
+    "loadavg_1m_at_start": 0.71142578125,
+    "loadavg_5m_at_end": 4.44873046875,
     "note": "the subject is meant to be the machine's only significant load. A wall-time ratio requires two runs at comparable load: on this machine the same fixture moved 36-55% on wall and 16-24% on CPU between an idle box and a 5-minute load average of 8.6 over 16 cores, and a 1.25x floor sits well inside that band"
   },
   "fixture": {
-    "blocks_generated": 200,
-    "generation_wall_s": 188.204,
-    "height_reached": 201,
-    "height_requested": 200,
+    "blocks_generated": 0,
+    "generation_wall_s": null,
+    "height_reached": 2001,
+    "height_requested": 2000,
     "nettype": "fakechain",
     "peers_used": 1,
     "prunable_region": "absent by construction: coinbase-only fixture, no non-coinbase transaction and therefore no txs_prunable_hash region",
     "reference_height": 100000,
-    "seed_height": 201,
-    "seed_reused": false,
+    "seed_height": 2001,
+    "seed_reused": true,
     "tx_per_block": 0,
     "verify_exercised": {
       "fcmp_pp": false,
@@ -46,7 +47,7 @@
     },
     "verify_note": "PoW longhash is computed and checked for every block with no nettype bypass; --fixed-difficulty lowers the TARGET only. generateblocks produces coinbase-only blocks, so FCMP++ verification is not exercised at all."
   },
-  "git_rev": "999979fc92510be51588a05a2ccbf93161ec7d13",
+  "git_rev": "463c628b14e6ad09a51b09dc67fd5c29710b464b",
   "hardware": {
     "cpu_count": 16,
     "cpu_model": "11th Gen Intel(R) Core(TM) i9-11950H @ 2.60GHz",
@@ -62,7 +63,7 @@
       "name": "ibd_wall_time_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 25.548
+      "value": 226.835
     },
     {
       "axis": "cpu_time",
@@ -70,7 +71,7 @@
       "name": "subject_cpu_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 83.28
+      "value": 826.42
     },
     {
       "axis": "memory",
@@ -78,7 +79,7 @@
       "name": "peak_rss_bytes",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 564482048
+      "value": 564740096
     },
     {
       "axis": "disk",
@@ -86,7 +87,7 @@
       "name": "store_bytes",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 1454080
+      "value": 9736192
     },
     {
       "axis": "disk",
@@ -94,7 +95,7 @@
       "name": "store_bytes_apparent",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 1437726
+      "value": 9715742
     }
   ],
   "schema_version": "shekyl_drs_bench_v1",

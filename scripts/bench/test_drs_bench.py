@@ -43,8 +43,10 @@ def valid_artifact(engine="lmdb", **over):
             "sync_mode": "safe",
             "imposed_argv": ["--regtest", "--db-sync-mode=safe", "--data-dir=/x/subject",
                              "--p2p-bind-port=1", "--rpc-bind-port=2"],
-            "observed": False,
-            "readback_gap": "no readback exists",
+            "observed": True,
+            "resolved_log_line": "2026-09-13T00:00:00Z INFO global: Database sync: "
+                                 "flags=0x1 (safe), sync_mode=0, threshold=1 blocks",
+            "readback": "the subject daemon's own resolved-flags report",
         },
         "environment": {"loadavg_1m_at_start": 0.3, "loadavg_1m_at_end": 0.4,
                         "loadavg_5m_at_end": 0.35, "cpu_count": 8,
@@ -164,11 +166,39 @@ class ArtifactRefusals(unittest.TestCase):
         self._refuse(lambda a: a["durability"].pop("imposed_argv"),
                      "imposed_argv absent")
 
-    def test_refuses_claiming_durability_was_observed(self):
-        """No readback of the LMDB env flags exists. An artifact claiming one
-        asserts an observation the harness cannot make."""
-        self._refuse(lambda a: a["durability"].__setitem__("observed", True),
-                     "must be present and false")
+    def test_refuses_an_unobserved_durability_posture(self):
+        """The daemon reports the flags it resolved (A4's enabler), so the posture is
+        observable. An artifact that does not observe it is failing to record a
+        condition it could have measured. This inverts an earlier revision, which
+        required `observed: false` because no readback existed."""
+        self._refuse(lambda a: a["durability"].__setitem__("observed", False),
+                     "must be true")
+
+    def test_refuses_a_missing_resolved_flags_line(self):
+        self._refuse(lambda a: a["durability"].pop("resolved_log_line"),
+                     "That line IS the readback")
+
+    def test_refuses_a_resolved_line_reporting_nosync(self):
+        """THE ONE THAT MATTERS: the daemon says it opened with MDB_NOSYNC while the
+        artifact claims sync_mode safe. Before the readback, this artifact was
+        indistinguishable from a correct one — the label agreed with itself."""
+        for marker in ("MDB_NOSYNC", "MDB_MAPASYNC"):
+            with self.subTest(marker=marker):
+                self._refuse(lambda a, m=marker: a["durability"].__setitem__(
+                    "resolved_log_line",
+                    f"INFO global: Database sync: flags=0x2 (fast: {m}), sync_mode=2, "
+                    f"threshold=1 blocks"), "opened WITHOUT an fsync per commit")
+
+    def test_refuses_a_resolved_line_without_the_safe_flag(self):
+        self._refuse(lambda a: a["durability"].__setitem__(
+            "resolved_log_line",
+            "INFO global: Database sync: flags=0x10 (salvage), sync_mode=0, "
+            "threshold=1 blocks"), "does not report the safe flag")
+
+    def test_refuses_a_non_report_string_as_the_readback(self):
+        self._refuse(lambda a: a["durability"].__setitem__(
+            "resolved_log_line", "some other log line entirely"),
+            "does not carry the daemon's resolved sync report")
 
     def test_refuses_missing_environment_block(self):
         """System load is a condition of a wall-time measurement: the same fixture
@@ -260,17 +290,65 @@ class ArtifactRefusals(unittest.TestCase):
                      "a placeholder satisfies the field")
 
     def test_refuses_a_relabelled_lmdb_run(self):
-        """The high-severity one. The daemon has no engine switch, so an artifact
-        labelled redb while selected by the daemon default IS an LMDB run — and as
-        a candidate it would pass §1.3's floor at a ratio near 1.0 with no redb
-        store in existence. Found by Bugbot on #727."""
+        """The daemon has no engine switch, so an artifact labelled redb while
+        selected by the daemon default IS an LMDB run — and as a candidate it would
+        pass §1.3's floor at a ratio near 1.0 with no redb store in existence."""
         a = valid_artifact("redb")
         a["engine_selected_by"] = D.ENGINE_DEFAULT_LMDB
         r = D.artifact_refusals(a)
-        self.assertTrue(any("relabelled LMDB run" in x for x in r), r)
+        self.assertTrue(any("label and the mechanism disagree" in x for x in r), r)
+
+    def test_refuses_the_inverted_label_mechanism_mismatch(self):
+        """The other direction, which the first version of this check missed: a
+        contradictory pair passed simply by being inverted."""
+        a = valid_artifact("lmdb")
+        a["engine"] = "lmdb"
+        a["engine_selected_by"] = "--db-engine=redb"
+        r = D.artifact_refusals(a)
+        self.assertTrue(any("does not know" in x for x in r), r)
+
+    def test_refuses_an_unknown_engine_selector(self):
+        self._refuse(lambda a: a.__setitem__("engine_selected_by", "magic"),
+                     "which this gate does not know")
+
+    def test_redb_artifacts_are_unreachable_until_a_selector_exists(self):
+        """The F7 guarantee made checkable. The runner has no redb selection path,
+        so no redb selector is known and an `engine: redb` artifact can be neither
+        produced nor validated. Adding the selector is part of wiring the redb arm;
+        this test turns red then, which is the reminder."""
+        self.assertNotIn("redb", set(D.ENGINE_SELECTORS.values()))
+        for sel in list(D.ENGINE_SELECTORS) + ["--db-engine=redb", "whatever"]:
+            a = valid_artifact("redb")
+            a["engine_selected_by"] = sel
+            self.assertTrue(D.artifact_refusals(a),
+                            f"an engine=redb artifact validated under selector {sel!r}")
 
     def test_refuses_missing_engine_selected_by(self):
         self._refuse(lambda a: a.pop("engine_selected_by"), "engine_selected_by absent")
+
+    def test_refuses_placeholder_fs_type(self):
+        """Same defect as `disk_class: "unknown"`, on the field that decides whether
+        DRS-D9 could hold. A two-value denylist let every placeholder through."""
+        for ph in ("unknown", "undetermined", "n/a"):
+            with self.subTest(fs=ph):
+                self._refuse(lambda a, ph=ph: a["hardware"].__setitem__("fs_type", ph),
+                             "neither trusts nor rejects")
+
+    def test_accepts_the_known_durable_filesystems(self):
+        """The allowed set must actually admit real filesystems, or the gate fails
+        closed on everything and would be deleted rather than heeded."""
+        for fs in ("ext4", "xfs", "btrfs", "zfs"):
+            with self.subTest(fs=fs):
+                a = valid_artifact()
+                a["hardware"]["fs_type"] = fs
+                self.assertEqual(D.artifact_refusals(a), [])
+
+    def test_refuses_truthy_string_verification_flags(self):
+        """`fcmp_pp: "false"` is a TRUTHY string: it satisfies a key check and then
+        suppresses the shortfall in compare(), letting an artifact claim full
+        verification and take a passing floor."""
+        self._refuse(lambda a: a["fixture"]["verify_exercised"].__setitem__(
+            "fcmp_pp", "false"), "must use real booleans")
 
     def test_refuses_a_tmpfs_measurement(self):
         """fsync on tmpfs has no backing store to flush, so `safe` and
@@ -317,6 +395,17 @@ class ArtifactRefusals(unittest.TestCase):
 
     def test_refuses_missing_tx_per_block(self):
         self._refuse(lambda a: a["fixture"].pop("tx_per_block"), "tx_per_block absent")
+
+    def test_refuses_a_different_freeze_era(self):
+        """An artifact measured against different frozen thresholds must not be
+        routed through today's ratios."""
+        self._refuse(lambda a: a.__setitem__("thresholds_frozen_at", "deadbeef"),
+                     "different freeze era")
+
+    def test_refuses_seed_height_disagreeing_with_height_reached(self):
+        """The subject syncs to the seed's tip, so these are one number."""
+        self._refuse(lambda a: a["fixture"].__setitem__("seed_height", 12345),
+                     "syncs to the seed's tip")
 
     def test_refuses_wrong_schema_version(self):
         self._refuse(lambda a: a.__setitem__("schema_version", "other_v9"),
@@ -395,6 +484,28 @@ class Comparability(unittest.TestCase):
                                            "--p2p-bind-port=99", "--rpc-bind-port=98"]
         self.assertEqual(D.comparability_refusals(b, c), [])
 
+    def test_refuses_differing_freeze_era_between_artifacts(self):
+        self._refuse(lambda b, c: c.__setitem__("thresholds_frozen_at", "cafebabe"),
+                     "different frozen thresholds")
+
+    def test_refuses_differing_reference_height(self):
+        self._refuse(lambda b, c: c["fixture"].__setitem__("reference_height", 50000),
+                     "fixture.reference_height differs")
+
+    def test_height_requested_may_differ_when_reached_matches(self):
+        """Deliberately NOT a refusal: two runs that asked for different heights but
+        reached the same one did the same work. A refusal that cannot correspond to
+        a real difference trains readers to ignore refusals."""
+        b, c = self._pair()
+        c["fixture"]["height_requested"] = b["fixture"]["height_requested"] - 1
+        self.assertEqual(D.comparability_refusals(b, c), [])
+
+    def test_refuses_artifacts_from_different_trees(self):
+        """§1.3 requires the same binary with only the engine differing, so a ratio
+        across trees can attribute a consensus change to the engine."""
+        self._refuse(lambda b, c: c.__setitem__("git_rev", "deadbeefc"),
+                     "git_rev differs")
+
     def test_refuses_same_engine_pair(self):
         self._refuse(lambda b, c: c.__setitem__("engine", "lmdb"),
                      "ratio BETWEEN engines")
@@ -471,6 +582,14 @@ class Verdicts(unittest.TestCase):
         rep = self._cmp(wall_ratio=1.50)
         self.assertEqual(self._row(rep, "ibd_wall_time_s")["verdict"], "BAND")
 
+    def test_band_is_not_silently_a_pass(self):
+        """§1.3 makes the band a decision-log call, so `check` exits 0 — and a
+        silent zero is how a band becomes a de facto pass. The report must say so."""
+        rep = self._cmp(wall_ratio=1.3)
+        self.assertEqual(rep["verdict"], "BAND")
+        row = self._row(rep, "ibd_wall_time_s")
+        self.assertIn("decision-log", row["note"])
+
     def test_above_the_hard_fail_line_is_over(self):
         rep = self._cmp(wall_ratio=1.6)
         self.assertEqual(self._row(rep, "ibd_wall_time_s")["verdict"], "OVER")
@@ -528,6 +647,16 @@ class Verdicts(unittest.TestCase):
                             for s in rep["fixture_shortfalls"]))
         self.assertTrue(any("NO FCMP++" in s for s in rep["fixture_shortfalls"]))
 
+    def test_absent_pow_is_reported_as_a_shortfall(self):
+        """Recorded but never surfaced before: §1.3's primary metric names PoW, so a
+        run without it is a different experiment and must say so."""
+        b = valid_artifact("lmdb"); c = valid_artifact("redb")
+        for a in (b, c):
+            a["fixture"]["verify_exercised"] = {"pow": False, "fcmp_pp": False}
+        rep = D.compare(b, c)
+        self.assertTrue(any("NO PoW verification" in x for x in rep["fixture_shortfalls"]),
+                        rep["fixture_shortfalls"])
+
     def test_no_shortfall_at_reference_height_with_fcmp(self):
         rep = self._cmp(height=D.REFERENCE_HEIGHT, fcmp=True)
         self.assertEqual(rep["fixture_shortfalls"], [])
@@ -540,6 +669,77 @@ class Verdicts(unittest.TestCase):
         rep = D.compare(b, c)
         self.assertEqual(self._row(rep, "ibd_wall_time_s")["verdict"], "OVER")
         self.assertEqual(rep["verdict"], "OVER")
+
+
+class MalformedInput(unittest.TestCase):
+
+    def test_non_object_artifact_is_refused_not_crashed(self):
+        """A syntactically valid non-object -- null, a list -- previously reached
+        `comparability_refusals`, which reads both sides with `.get` and raised
+        AttributeError: a malformed input crashed the gate instead of being
+        rejected by it."""
+        for bad in (None, [], "x", 3):
+            with self.subTest(value=bad):
+                r = D.artifact_refusals(bad)
+                self.assertTrue(r, f"{bad!r} produced no refusal")
+                self.assertTrue(any("not a JSON object" in x for x in r), r)
+
+
+class InputErrors(unittest.TestCase):
+    """A gate reports verdicts; a traceback is not one. Each of these exited
+    through a stack trace before, saying where the script broke rather than what
+    was wrong with the input — the same defect as reaching the comparability check
+    with a non-object, one layer further out."""
+
+    def _cli(self, *args):
+        import subprocess
+        return subprocess.run([sys.executable,
+                               os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            "drs_bench.py")] + list(args),
+                              capture_output=True, text=True)
+
+    def test_missing_artifact_is_a_verdict_not_a_traceback(self):
+        p = self._cli("validate", "/nonexistent/artifact.json")
+        self.assertEqual(p.returncode, 1)
+        self.assertNotIn("Traceback", p.stderr + p.stdout)
+        self.assertIn("no such artifact", p.stderr)
+
+    def test_unparseable_json_is_a_verdict_not_a_traceback(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as fh:
+            fh.write("not json{")
+            bad = fh.name
+        self.addCleanup(os.unlink, bad)
+        p = self._cli("validate", bad)
+        self.assertEqual(p.returncode, 1)
+        self.assertNotIn("Traceback", p.stderr + p.stdout)
+        self.assertIn("not valid JSON", p.stderr)
+
+    def test_resolved_line_reader_ignores_nothing_and_strips_ansi(self):
+        """The readback reader: it must find the daemon's colourised line and return
+        it without terminal control bytes, and return None when the line is absent
+        rather than a stand-in."""
+        import drs_bench as R
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
+            fh.write("\x1b[2mts\x1b[0m \x1b[32m INFO\x1b[0m global: Database sync: "
+                     "flags=0x1 (safe), sync_mode=3, threshold=1 blocks\n")
+            good = fh.name
+        self.addCleanup(os.unlink, good)
+        line = R._resolved_sync_line(good)
+        self.assertIsNotNone(line)
+        self.assertNotIn("\x1b", line)
+        self.assertIn("flags=0x1 (safe)", line)
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as fh:
+            fh.write("nothing relevant here\n")
+            bare = fh.name
+        self.addCleanup(os.unlink, bare)
+        self.assertIsNone(R._resolved_sync_line(bare))
+        self.assertIsNone(R._resolved_sync_line("/nonexistent/x.log"))
+
+    def test_a_directory_is_a_verdict_not_a_traceback(self):
+        p = self._cli("validate", tempfile.mkdtemp())
+        self.assertEqual(p.returncode, 1)
+        self.assertNotIn("Traceback", p.stderr + p.stdout)
+        self.assertIn("is a directory", p.stderr)
 
 
 class BlockerProbe(unittest.TestCase):
@@ -570,6 +770,26 @@ class BlockerProbe(unittest.TestCase):
             "src/schema.rs": "use redb::{MultimapTableDefinition, TableDefinition};\n",
         })
         self.assertEqual(f, [])
+
+    def test_fires_on_the_crates_own_import_style(self):
+        """The polarity trap: this scan is a POSITIVE needle, so a miss is a false
+        GREEN. Matching only `redb::Database` missed an engine written in the
+        crate's OWN existing style -- `use redb::{...}` then unqualified use -- so
+        `blockers` would have stayed green with the engine present."""
+        f = self._with_chain_store({
+            "src/engine.rs": "use redb::{Database, WriteTransaction};\n"
+                             "fn open() -> Database { Database::create(\"x\").unwrap() }\n"})
+        self.assertTrue(f, "an imported-style engine produced no sites")
+        self.assertTrue(any("blocker is gone" in x for x in f), f)
+
+    def test_fires_on_a_multiline_import_block(self):
+        f = self._with_chain_store({
+            "src/engine.rs": "use redb::{\n    Key,\n    Database,\n    Value,\n};\n"})
+        self.assertTrue(f, "a multi-line import produced no sites")
+
+    def test_fires_on_an_aliased_import(self):
+        f = self._with_chain_store({"src/e.rs": "use redb::Database as Db;\n"})
+        self.assertTrue(f, "an aliased import produced no sites")
 
     def test_fires_when_a_redb_database_appears(self):
         f = self._with_chain_store({"src/engine.rs": "let db: redb::Database = x;\n"})

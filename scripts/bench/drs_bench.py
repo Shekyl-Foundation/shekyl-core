@@ -8,6 +8,13 @@
 # The gate (schema, refusals, §1.3 compare, redb-engine probe) lives in
 # `drs_artifact.py`. Design record: `docs/design/DAEMON_REDB_STORE.md` §7.4.
 #
+# EXIT CODES for `check`: 0 when no axis is OVER, 1 when any axis is OVER, 2 for a
+# usage or input error (argparse's convention, which `_load`'s refusals follow). A
+# **BAND** verdict exits 0 on purpose: §1.3 makes 1.25x-1.50x a decision-log call
+# for a human to accept or mitigate, so this gate must not convert it into a
+# failure -- and equally must not let it read as a clean pass, which is why the
+# text report says so in as many words.
+#
 # Python, under `scripts/bench/`, deliberately. Rule 20 makes Rust the default
 # for the daemon codebase and its bug fixes; this spawns daemons and writes
 # JSON, the same job as `compare.py`. It is not a second copy of that script:
@@ -71,6 +78,27 @@ def _dir_bytes(path, apparent):
     args = ["du", "-s", "-b", path] if apparent else ["du", "-s", "-B1", path]
     return int(subprocess.run(args, check=True, capture_output=True,
                               text=True).stdout.split()[0])
+
+
+def _resolved_sync_line(log_path):
+    """The daemon's own report of the durability flags it resolved, or None.
+
+    This is the readback. The daemon logs it at startup for A4, so the harness no
+    longer has to settle for recording the argv it imposed: it can check what the
+    node says it opened with. Read from the SUBJECT's log, the subject being the
+    process whose numbers the artifact carries.
+    """
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if "Database sync: flags=0x" in line:
+                    # The daemon colourises its log. Strip the escapes: an artifact
+                    # field is a record, and terminal control bytes in one make it
+                    # harder to read and to diff.
+                    return re.sub(r"\x1b\[[0-9;]*m", "", line).strip()
+    except OSError:
+        return None
+    return None
 
 
 def _loadavg():
@@ -240,7 +268,15 @@ def measure(args):
                                          f"--rpc-bind-port={rpcp}"] + argv_extra
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
-        log = open(os.path.join(work, f"{tag}.log"), "a", encoding="utf-8")
+        # The SUBJECT's log is truncated; the seed's is appended. That asymmetry is
+        # deliberate: the seed legitimately spans two phases (generate offline, then
+        # serve networked) and both belong in one log, while the subject is spawned
+        # once per run and its log is now READ BACK for the resolved durability
+        # flags. Appending would let a stale line from an earlier run in this work
+        # directory be read as this run's readback — `work` is not wiped between
+        # runs, only the subject's data directory is.
+        mode = "a" if tag == "seed" else "w"
+        log = open(os.path.join(work, f"{tag}.log"), mode, encoding="utf-8")
         try:
             proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=d)
         finally:
@@ -299,6 +335,10 @@ def measure(args):
                       f"here (tens of seconds to minutes) and is EXCLUDED from the "
                       f"measurement, so raising --startup-timeout does not affect "
                       f"any number.")
+            # The durability READBACK, taken from the subject's own startup report
+            # now that it is up. Read here rather than at the end so a subject that
+            # dies mid-sync still fails on the specific missing thing.
+            resolved_line = _resolved_sync_line(os.path.join(work, "subject.log"))
             # Denominator: first successful get_info to height == seed height.
             # CPU is a delta over the same window. A single end-of-run read
             # would carry startup / RandomX init / store open, which the wall
@@ -335,6 +375,12 @@ def measure(args):
         store_bytes = _dir_bytes(subj_dir, apparent=False)
         store_apparent = _dir_bytes(subj_dir, apparent=True)
 
+    if resolved_line is None:
+        _fail(f"the subject never reported its resolved durability flags in "
+              f"{work}/subject.log. That line is the readback for DRS-D9, so no "
+              f"artifact is written: recording the mode we ASKED for while unable to "
+              f"see what the daemon opened with is the posture-by-omission A4 "
+              f"forbids. A daemon predating the A4 report will not log it — rebuild.")
     if load_at_start is None or load_at_end is None:
         _fail("could not read the load average from os.getloadavg(). System load is a "
               "condition of a wall-time measurement, so no artifact is written rather "
@@ -366,11 +412,17 @@ def measure(args):
             "policy": "DRS-D9 full-fsync-per-commit",
             "sync_mode": args.sync_mode,
             "imposed_argv": subj_argv[1:],
-            "observed": False,
-            "readback_gap": "mdb_env_get_flags is in-process only and the daemon logs "
-                            "no resolved sync mode; the mode was validated against an "
-                            "allowed set before spawning and the argv is recorded "
-                            "verbatim, which is not the same as observing the flags",
+            # OBSERVED, from the daemon's own report of the flags it resolved.
+            # Earlier revisions recorded False with an honest note that no readback
+            # existed -- `mdb_env_get_flags` is in-process and nothing logged the
+            # resolved mode. A4's enabler landed that log line, so the posture is
+            # measured rather than imposed-and-validated.
+            "observed": True,
+            "resolved_log_line": resolved_line,
+            "readback": "the subject daemon's own startup report of the flags it "
+                        "resolved. The mode is still validated against an allowed set "
+                        "BEFORE spawning, because a refusal that comes before the run "
+                        "costs nothing and this line only arrives after it",
         },
         "environment": {
             "loadavg_1m_at_start": load_at_start[0],
@@ -446,9 +498,44 @@ def measure(args):
               "artifact at the same height.")
 
 
+def _positive_int(v):
+    """argparse type for a count that must be at least 1.
+
+    Rejected at the boundary rather than downstream: `--height 0` previously
+    reached the seed logic and reported "seed holds only height 1; nothing to
+    sync", and `--height -5` reported "already holds height 1" — both true
+    statements about a symptom, neither naming the cause. An error that describes
+    where the program noticed is not an error that says what the operator did.
+    """
+    try:
+        n = int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{v!r} is not an integer")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
 def _load(path):
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    """Read an artifact, or refuse. Never raise.
+
+    A gate reports verdicts; a traceback is not one. An absent file, an
+    unreadable one and malformed JSON are all ordinary operator errors, and each
+    used to exit through a stack trace that says where this script broke rather
+    than what was wrong with the input. Same defect as reaching
+    `comparability_refusals` with a non-object, one layer further out.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError:
+        _fail(f"{path}: no such artifact")
+    except IsADirectoryError:
+        _fail(f"{path}: is a directory, not an artifact")
+    except OSError as e:
+        _fail(f"{path}: cannot be read ({e.strerror})")
+    except json.JSONDecodeError as e:
+        _fail(f"{path}: is not valid JSON (line {e.lineno}, column {e.colno}: {e.msg})")
 
 
 def main():
@@ -468,7 +555,8 @@ def main():
 
     m = sub.add_parser("measure", help="run the IBD baseline and emit an artifact")
     m.add_argument("--engine", default="lmdb", choices=("lmdb", "redb"))
-    m.add_argument("--height", type=int, default=A.REFERENCE_HEIGHT)
+    m.add_argument("--height", type=_positive_int,
+                   default=A.REFERENCE_HEIGHT)
     m.add_argument("--out", required=True)
     m.add_argument("--daemon", default=os.path.join(ROOT, "build/bin/shekyld"))
     m.add_argument("--work-dir", required=True)
@@ -513,7 +601,12 @@ def main():
         bad = []
         for path, a in ((args.baseline, base), (args.candidate, cand)):
             bad += [f"{path}: {x}" for x in A.artifact_refusals(a)]
-        bad += A.comparability_refusals(base, cand)
+        # Stop here if either artifact is unusable. `comparability_refusals` reads
+        # both with `.get`, so a syntactically valid non-object -- `null`, a list --
+        # raised AttributeError instead of being refused: a malformed input crashed
+        # the gate rather than being rejected by it.
+        if not bad:
+            bad += A.comparability_refusals(base, cand)
         if bad:
             _fail("refusing to compute a §1.3 ratio:\n  " + "\n  ".join(bad))
         rep = A.compare(base, cand)
@@ -533,6 +626,14 @@ def main():
             for s in rep["fixture_shortfalls"]:
                 print(f"  SHORTFALL: {s}")
             print(f"  verdict: {rep['verdict']}")
+            if rep["verdict"] == "BAND":
+                # §1.3 makes the 1.25x-1.50x band a decision-log call, so the exit
+                # status is 0 -- a human has to accept or mitigate. Said out loud
+                # because a silent zero is how a band becomes a de facto pass, and
+                # premature clearing is the expensive direction here.
+                print("  NOTE: BAND exits 0 because §1.3 makes this a decision-log "
+                      "call, NOT a pass. Do not wire this verdict as CI pass/fail on "
+                      "its own; record the accept-or-mitigate decision.")
         sys.exit(1 if rep["verdict"] == "OVER" else 0)
 
     if args.cmd == "measure":
