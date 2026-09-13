@@ -75,11 +75,12 @@ pub const MAX_REQUEST_BYTES: usize = 8 * 1024;
 /// Maximum connections served **at once**; arrivals past the cap are
 /// closed, never answered.
 ///
-/// A shard read is a ~100-byte request answered with ~3.33 MB — roughly
-/// 33 000× egress amplification with the requester paying only its own
-/// circuit — and none of the per-connection protections (timeouts, request
-/// bound) limits aggregate load; nor does the onion's `MaxStreams`, which
-/// is per rendezvous circuit. This cap is that aggregate bound.
+/// A shard GET carries ~3.33 MB of body. None of the per-connection
+/// protections (timeouts, request bound) limits aggregate load; nor does
+/// the onion's `MaxStreams`, which is per rendezvous circuit. This cap is
+/// that aggregate bound. Over onion the transfer is symmetric (the
+/// requester must receive the body), so the cap is concurrent-circuit
+/// occupancy, not a one-sided egress tax.
 ///
 /// **Carried placeholder (SPIKE-PIN-2): the value is not a derivation.**
 /// The binding resource is *egress*, not memory: a body is streamed in

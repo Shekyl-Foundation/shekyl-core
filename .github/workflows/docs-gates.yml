@@ -254,6 +254,37 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_shell_gate_exits.py
 
+      - name: Run DRS-C surface map gate
+        # Tier-A A9: blockchain.cpp's store vocabulary is partitioned into
+        # named validation surfaces, every method in exactly one. The gate
+        # RE-DERIVES the vocabulary from the tree it runs on rather than
+        # trusting a verification stamp: §3.5's stamp sat at 97 while the tree
+        # had moved to 102, and the membership moved further than the total
+        # (+7/-3 for a net +4).
+        #
+        # It derives the alias SET from `BlockchainDB *`/`&` declarations
+        # instead of matching one token, and takes the call OPERATOR from the
+        # declaration's sigil (`*` -> `->`, `&` -> `.`). The first version
+        # matched `m_db->` -- the same derivation that built the table -- so it
+        # was green BY CONSTRUCTION over calls made through any other name, and
+        # missed three live methods. Receiver shapes the derivation cannot
+        # follow (`get_db` on sight, an `auto` binding of the store, a
+        # dereferenced call) are REFUSED over the DERIVED alias set, so a new
+        # alias or a new shape fails loudly instead of shrinking the vocabulary.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_c_surface_map.py
+
+      - name: Self-test the DRS-C surface map gate
+        # That gate has been wrong twice in the same way: a receiver shape its
+        # derivation could not follow, silently absent from the vocabulary,
+        # with the bijection green over the gap. Hand-run negative controls
+        # caught neither, because they were written from the same mental model
+        # as the derivation. Every shape is pinned here as a case -- collected,
+        # refused, and the near-misses that must be neither.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_drs_c_surface_map.py
+
       - name: Run redb key-type ordering gate
         # The bijection gate checks that every table is MAPPED; this one checks
         # the mapping reproduces LMDB's ORDERING. That gap was not theoretical:

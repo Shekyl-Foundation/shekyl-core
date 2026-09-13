@@ -14,8 +14,10 @@ security/PQC → privacy → longevity. DRS success criteria (§0.1) and BENCH
 columns are ordered by that hierarchy, not by engineering elegance.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 **Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
-**Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**; surface map
-from `blockchain.cpp` `m_db->` vocabulary (97 methods). **The five table-inventory
+**Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**. The surface
+map is **no longer stamped** — §3.5 is re-derived from the tree by
+`scripts/ci/check_drs_c_surface_map.py` on every run, because the stamp here
+said 97 while the tree had moved to **102 store methods**. **The five table-inventory
 rows (handles, opens, claimed total, undocumented, phantoms) re-measured
 at `9742ec4f6` by P0a (2026-09-05); the atomicity-audit row re-measured at
 `2dba46537` by P0b (2026-09-05)** — the remaining substrate rows
@@ -242,7 +244,8 @@ store, don't patch blind.
 
 Durable state lives in C++ LMDB (**49** declared tables, 48 at runtime —
 DRS-W5). Orchestration tangle is
-**`blockchain.cpp`** (253 `m_db->`, 97 methods), not the storage class alone.
+**`blockchain.cpp`** (272 store call sites, 102 store methods), not the
+storage class alone.
 Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
 **boundary-thickness and type-safety** problem under
 [`40-ffi-discipline`](../../.cursor/rules/40-ffi-discipline.mdc) — marshal
@@ -488,7 +491,8 @@ cannot — and the failure mode is “wallet can’t spend.”
 
 ### 3.1 Today
 
-`blockchain.cpp` (97 DB methods) → `BlockchainLMDB` (49 tables) + FFI gather shells.
+`blockchain.cpp` (102 store methods) → `BlockchainLMDB` (49 tables) + FFI gather
+shells.
 
 ### 3.2 After DRS-C (+ LMDB digest)
 
@@ -509,30 +513,186 @@ wallet e2e (E-8).
 4. Curve: **storage only**; encodings + arithmetic single-sourced (DRS-D3b);
    cross-store KAT (DRS-D3c).
 
-### 3.5 DRS-C draft surface map (97 methods from `blockchain.cpp`)
+### 3.5 DRS-C surface map (102 methods from `blockchain.cpp`)
 
-**Draft partition** — rule 19 validation surfaces. Method lists are the full
-`m_db->` vocabulary (97 names); assignment is **initial** and refined when C
-PRs open. “Owner at genesis” is intent, not a promise that B finishes pre-
-launch under D2-reopen.
+**Verified at `f103acd383c5da5524748e4efef4420833106265` (`dev`, 2026-09-13).**
+Every `m_db->` method reached from `blockchain.cpp` is assigned to **exactly
+one** surface: 102 methods, 10 surfaces, no method in two and none in none.
+Gated by `scripts/ci/check_drs_c_surface_map.py`, which re-derives the
+vocabulary from `blockchain.cpp` at the tree it runs on and compares it against
+this table in both directions.
 
-| Surface ID | Role | Methods (count) | C extraction order | Path B / genesis note |
-| --- | --- | --- | --- | --- |
-| **S-TXN** | Batch / open / sync / locks | `batch_*`, `close`, `reset`, `sync`, `safesyncmode`, `is_read_only`, `m_synchronization_lock`, `fixup` (10) | First (every other surface depends) | Stay with store backend |
-| **S-CHAIN-W** | Connect/pop write set | `add_block`, `pop_block`, `correct_block_cumulative_difficulties`, `add_block_burn`, `remove_block_burn`, `set_hard_fork`, `set_total_burned`, `set_settlement_epoch_blocks_pin` (8) | Early — heart of connect | Long-term Rust `apply_block`/`pop_block` |
-| **S-CHAIN-R** | Tip / headers / weights / burns | `height`, `top_block_hash`, `get_top_block*`, `block_exists`, `get_block*`, `get_block_*`, `for_blocks_range`, `get_blocks_from`, `get_total_burned`, `get_block_burn`, `get_settlement_epoch_blocks_pin` (24) | With or after S-CHAIN-W | Hot RPC path |
-| **S-TX** | Tx blob / existence | `tx_exists`, `get_tx_blob`, `get_pruned_tx_blob`, `get_prunable_*`, `get_tx_count`, `get_tx_unlock_time`, `get_tx_amount_output_indices`, `for_all_transactions` (9) | Mid | |
-| **S-OUT-KI** | Outputs + key images | `has_key_image(s)`, `for_all_key_images`, `get_output_*`, `for_all_outputs`, `can_thread_bulk_indices` (9) | Mid — consensus critical | |
-| **S-CURVE** | Curve tree reads (writes live in add_block path today) | `get_curve_tree_root`, `get_curve_tree_root_at_height`, `get_curve_tree_depth`, `get_curve_tree_leaf_chunk` (4) | After chain | Storage only; math in fcmp |
-| **S-ARCH** | Archival reads/writes used from `blockchain.cpp` | `archival_bond_*`, `archival_shard_*`, `get_archival_*`, `has/set_archival_serve_credit_bit`, `gather_archival_emission_epoch_snapshot` (14) | After journal audit (P0) | Cursor surface for retention (E4) |
-| **S-POOL** | Tx pool | `add_txpool_tx`, `update_txpool_tx`, `remove_txpool_tx`, `get_txpool_*`, `for_all_txpool_txes`, `txpool_tx_matches_category` (8) | Can parallelize | Privacy-sensitive (Dandelion++) |
-| **S-ALT** | Alt chain | `add_alt_block`, `get_alt_block*`, `remove_alt_block`, `drop_alt_blocks`, `for_all_alt_blocks` (6) | Later | |
-| **S-PRUNE** | Pruning | `prune_*`, `check_pruning`, `update_pruning`, `get_blockchain_pruning_seed`, related (≤8) | Later | Bootstrap/prune tools |
+**The vocabulary is derived across every `BlockchainDB *` alias, not from one
+token — and that correction is itself a finding.** The first version of this map
+and its gate both matched the literal `m_db->`, which gave **99**. But
+`blockchain.cpp` also reaches the store through a second identifier: the
+file-static helpers `fill(BlockchainDB *db, …)` (`:2917`, `:2938`) and
+`archival_marshal_record_facts(BlockchainDB *db, …)` (`:4652`), plus the
+`add_transaction_input_visitor` field (`:3209`). Counting those brings the true
+vocabulary to **102**.
 
-**Not in the 97 but adjacent:** full archival *drivers* still inside
+Three methods are reachable **only** through the alias and were therefore
+missing from the partition entirely: `get_prunable_tx_blob`,
+`get_prunable_tx_hash` and `is_open`. Worse, the first version reported the
+first two as *removed since 2026-07-27* — they were not removed, they moved
+from `m_db->` to `db->` when `fill` was extracted, and a token-matching
+derivation cannot tell those apart.
+
+**The gate could not catch this, because it shared the derivation that built
+the table.** Both used the same `m_db->` regex, so the bijection was green by
+construction over every call made through any other name. The gate now derives
+the alias SET from `BlockchainDB *`/`&` declarations and collects calls on each,
+so a third alias is covered without anyone remembering to add it. The call
+**operator** comes from the declaration's sigil — `BlockchainDB *` is reached
+through `->`, `BlockchainDB &` through `.` — because deriving a reference alias
+and then collecting only `->` is worse than not deriving it at all: it looks
+covered and contributes nothing. The pattern tolerates a cv-qualifier, so
+`BlockchainDB* const m_db` derives `m_db` and not `const`.
+
+**Every receiver shape is either collected or refused; none is skipped.** A
+method that vanishes from the vocabulary is covered by any partition, so
+undercounting is the failure mode and it must be loud. Three shapes the
+derivation cannot follow are refused with file and line: `get_db` **on sight**
+anywhere in the file (not merely where a call follows it — binding its result
+to a reference and calling through that is exactly the invisible path), an
+`auto` binding of the store, and a dereferenced call `(*db).method()`. The
+refusals are built from the **derived** alias set rather than a written-down
+pair; a gate whose collection is dynamic and whose refusals are hand-listed
+reintroduces the original defect for every alias nobody remembered to add.
+
+Where the derivation must guess, it guesses toward **over**-collecting: the
+lookbehind excludes identifier characters only, so `this->m_db->height()` is
+collected. Treating `>` as a boundary — the first version of this fix did —
+dropped arrow-qualified receivers that even the original token match had
+caught. Admitting `obj->db->x` for an unrelated member named `db` costs a
+phantom, which fails loudly; dropping `this->m_db->x` costs a method, which
+does not.
+
+Verified complete for this file: exactly two identifiers exist, `db` and `m_db`,
+both pointers; no `get_db` occurrence, no `auto` binding of the store, no
+dereferenced calls, no `BlockchainDB &` declarations, and no arrow-qualified
+receivers. Each of those is a **case** in
+`scripts/ci/test_check_drs_c_surface_map.py`, not a one-time observation —
+including the near-misses that must be neither collected nor refused, such as
+`auto h = m_db->height()`, which binds a call result and not the store.
+
+**The count moved, and the membership moved further — but the delta must be
+measured with ONE instrument.** §3.5 was stamped at `3247fe3b6` (2026-07-27)
+with **97**. That was the single-token figure; re-derived across aliases, the
+true vocabulary at that pin was **98** — `is_open` was alias-only then too, so
+the old instrument undercounted *both* eras, not just the current one. Measured
+alias-to-alias, `3247fe3b6` → `f103acd38` is **98 → 102, net +4**: three methods
+genuinely gone (`correct_block_cumulative_difficulties`, `get_blocks_from`,
+`has_archival_serve_credit_bit`) and seven added
+(`archival_serve_credit_pass_count`, `get_archival_alt_attestation_witness`,
+`get_archival_attestation_witness_at_height`,
+`get_archival_prune_watermark_epoch`, `get_curve_tree_leaf_count`,
+`pop_target_allowed`, `store_archival_alt_attestation_witness`).
+
+`is_open` appears in neither list: it is not new, it was never counted.
+`get_prunable_tx_blob` and `get_prunable_tx_hash` appear in neither list
+either — they are present at *both* pins, having moved from `m_db->` to `db->`
+when `fill` was extracted. Subtracting 97 from 102 and calling the difference
+"+8 new" would have been arithmetic over two different instruments: the right
+total, the wrong membership, and three names misfiled as births or deaths that
+were neither.
+
+**Method lists are explicit, not globs.** The draft used patterns
+(`batch_*`, `get_block*`, `archival_bond_*`) with counts beside them, and the
+counts summed to ~100 against a stated 97 — a glob cannot be checked against a
+vocabulary, and the arithmetic drifted because nothing could notice. Every name
+below is written out so the partition is a set, not a description of one.
+
+| Surface | Role | # | Methods | Extraction order | Path B / genesis note |
+| --- | --- | --- | --- | --- | --- |
+| **S-TXN** | Batch / open / sync / locks | 11 | `batch_abort` `batch_start` `batch_stop` `close` `fixup` `is_open` `is_read_only` `m_synchronization_lock` `reset` `safesyncmode` `sync` | **1** — Every other surface runs **inside** its transactions. Nothing can be extracted before the txn boundary is, so this is not a preference — it is the only position that works. | Stays with the store backend |
+| **S-CHAIN-W** | Connect and pop write set | 7 | `add_block` `add_block_burn` `pop_block` `remove_block_burn` `set_hard_fork` `set_settlement_epoch_blocks_pin` `set_total_burned` | **2** — The connect/pop write set is what the logical-state digest is computed **over**, so extracting it first gives DRS-E2 a subject to compare. Moving it later means every earlier increment is validated against an unported writer. | Long-term Rust `apply_block` / `pop_block` |
+| **S-CHAIN-R** | Tip, headers, weights, burns | 23 | `block_exists` `for_blocks_range` `get_block` `get_block_already_generated_coins` `get_block_blob_from_height` `get_block_burn` `get_block_cumulative_difficulty` `get_block_cumulative_rct_outputs` `get_block_difficulty` `get_block_from_height` `get_block_hash_from_height` `get_block_height` `get_block_long_term_weight` `get_block_timestamp` `get_block_weight` `get_block_weights` `get_long_term_block_weights` `get_settlement_epoch_blocks_pin` `get_top_block` `get_top_block_timestamp` `get_total_burned` `height` `top_block_hash` | **3** — Reads the tables S-CHAIN-W writes. Split across increments, the two halves of one table's contract move separately and a digest mismatch cannot be localised to either. | Hot RPC path |
+| **S-OUT-KI** | Outputs and key images | 9 | `can_thread_bulk_indices` `for_all_key_images` `for_all_outputs` `get_output_distribution` `get_output_histogram` `get_output_key` `get_output_tx_and_index` `has_key_image` `has_key_images` | **4** — Consensus-critical (double-spend admission) and needs chain reads for height context, so it follows S-CHAIN-R rather than racing it. |  |
+| **S-TX** | Tx blob and existence | 9 | `for_all_transactions` `get_prunable_tx_blob` `get_prunable_tx_hash` `get_pruned_tx_blob` `get_tx_amount_output_indices` `get_tx_blob` `get_tx_count` `get_tx_unlock_time` `tx_exists` | **5** — Tx blob and existence reads, dependent on chain-R for height context. No writer of its own in this vocabulary — `blockchain.cpp` writes txs only through `add_block`. |  |
+| **S-CURVE** | Curve-tree reads | 5 | `get_curve_tree_depth` `get_curve_tree_leaf_chunk` `get_curve_tree_leaf_count` `get_curve_tree_root` `get_curve_tree_root_at_height` | **6** — Reads only; the arithmetic lives in `shekyl-fcmp`, not here. Depends on chain state but nothing depends on it, so it can move once the chain surfaces are stable. | Storage only; math in `shekyl-fcmp` |
+| **S-ARCH** | Archival reads/writes reached from `blockchain.cpp` | 18 | `archival_bond_all_last_served_epochs` `archival_bond_good_through` `archival_bond_holds_shard` `archival_bond_join_epoch` `archival_bond_last_served_epochs` `archival_serve_credit_pass_count` `archival_shard_freeze_height` `gather_archival_emission_epoch_snapshot` `get_archival_alt_attestation_witness` `get_archival_attestation_witness_at_height` `get_archival_bond_hybrid_pubkey` `get_archival_bond_value` `get_archival_last_slash_epoch` `get_archival_prune_watermark_epoch` `get_archival_r_market` `get_archival_shard_segment_at_height` `set_archival_serve_credit_bit` `store_archival_alt_attestation_witness` | **7** — Largest surface (18) and **gated on the P0b journal audit** — its write paths are the ones whose atomicity is still being characterised. Extracting before that audit ports an unaudited contract. | Cursor surface for retention (E4) |
+| **S-POOL** | Tx pool | 8 | `add_txpool_tx` `for_all_txpool_txes` `get_txpool_tx_blob` `get_txpool_tx_count` `get_txpool_tx_meta` `remove_txpool_tx` `txpool_tx_matches_category` `update_txpool_tx` | **8** — No consensus state and no dependency on the chain surfaces, so it can parallelize with 4–7 if there is capacity. Ordered here rather than earlier because it is privacy-sensitive (Dandelion++) and deserves attention that is not competing with the consensus path. | Privacy-sensitive (Dandelion++) |
+| **S-ALT** | Alt chain | 6 | `add_alt_block` `drop_alt_blocks` `for_all_alt_blocks` `get_alt_block` `get_alt_block_count` `remove_alt_block` | **9** — Alt-chain storage depends on both chain surfaces being settled; its reorg path is the one place both are exercised together. |  |
+| **S-PRUNE** | Pruning | 6 | `check_pruning` `get_blockchain_pruning_seed` `pop_target_allowed` `prune_blockchain` `prune_tx_data` `update_pruning` | **NOT EXTRACTED** — five of the six are the Monero-era stripe engine, superseded before they can be ported (see the PDM note below). `pop_target_allowed` is the exception and needs a home. | Bootstrap / prune tools |
+
+**This is analysis, and it stops here (CSR-4, ruled 2026-09-01, status line
+§0).** DRS-C does not ship as C++ refactor PRs. The partition is the scoping
+and review unit for the Rust rewrite — one surface per increment, digest
+identity checked per §6 and CSR-3's bucket scope. Several surfaces below look
+cheap to extract now; that observation is not a licence, and the order column
+exists to scope E1's increments rather than to start them.
+
+**Authority:** this map is an **input** to the rewrite scoping, not a competing
+authority on what a method does (§0, :78). Where the partition and
+`CONSENSUS_RULE_CENSUS.md` disagree about a method's role, the census wins and
+the disagreement is a finding.
+
+**S-PRUNE is not extracted, and that is a supersession rather than a
+deferral (recorded 2026-09-13).** PR #723's pruned-daemon-mode round rules that
+the C++ stripe engine is not deleted until that design completes, may serve as
+**reference** for the Rust cutover, and that removal of the Monero-era mechanism
+(`prune_worker`, `pruning_seed`, `CRYPTONOTE_PRUNING_*`) happens at `DRS-E*` —
+not as a C++ deletion now. `PDM-Q-F17` scopes "reference" narrowly: **not** the
+prune worker, but the seed arithmetic (`src/common/pruning.h`), the wire
+advertisement (`CORE_SYNC_DATA`, peerlist) and complement-seeking peer
+selection. So S-PRUNE's order is **not extracted**, not "later" — and the
+distinction is load-bearing, because two lanes read rules 60/16 as licence to
+delete that code and #723 overturns that reading.
+
+**Grounding, stated because it changes how much this is worth relying on:**
+`PDM-Q-S0` and `PDM-Q7` are ruled, but **PR #723 is OPEN and unmerged as of
+2026-09-13** — `ARCHIVAL_PRUNED_DAEMON_MODE.md` does not exist on `dev`, which
+is why it is named here in prose rather than linked. Verified against the
+round's own text on `docs/pruned-daemon-mode-round`, not from a relayed summary.
+
+**The supersession does not cover the whole surface, and the remainder is a
+scoping problem this note creates rather than solves.** Five methods
+(`check_pruning`, `get_blockchain_pruning_seed`, `prune_blockchain`,
+`prune_tx_data`, `update_pruning`) are stripe-era and die with it.
+`pop_target_allowed` is **not** — it answers a question about Shekyl's own
+archival prune watermark (C2-R1b-Q1c), which PDM does not retire. Parked in a
+surface that is never extracted, it becomes a method the pop path needs and no
+increment owns. It is **deliberately not re-homed here**: #723 is an open round,
+and re-partitioning a map on an unmerged ruling is how a partition acquires a
+dependency nobody can see. The falsifier below already names the condition, and
+this sharpens it — if E1 cannot extract the pop path without
+`pop_target_allowed`, that moves it, and the PDM supersession makes that
+outcome likelier rather than less.
+
+**The three tables ruled not-to-port do not touch this vocabulary — derived,
+not assumed.** `txs_prunable_tip`, `txs` and `hf_starting_heights` are ruled out
+of the Rust store (E1's target is 46 tables, not 49). **Zero** of the 102
+methods names any of them: they are reached only through
+`BlockchainLMDB::add_transaction_data`, `remove_transaction_data`,
+`prune_worker`, `open` and `drop_hard_fork_info`, none of which is in
+`blockchain.cpp`'s vocabulary. The count is therefore unchanged at 102. What
+does change is narrower and belongs to S-CHAIN-W: `txs_prunable_tip` is written
+on the insert path beneath `add_block`, so dropping it shrinks what that
+surface's writer must reproduce without removing any method from its row.
+
+**One judgment call, named so it can be overturned:** `pop_target_allowed` is
+assigned to **S-PRUNE** rather than S-CHAIN-W. It is consulted on the pop path,
+which argues for the writer surface, but what it answers is a prune-watermark
+question — whether the target lies above the floor the prune receipt
+establishes (C2-R1b-Q1c). Ported with the writer it would drag the watermark
+contract into an increment that does not otherwise touch retention. If E1 finds
+the pop path cannot be extracted without it, that is the falsifier and it moves.
+
+**Not in the 102 but adjacent:** full archival *drivers* still inside
 `BlockchainLMDB` (process_archival_*, apply_archival_*) — extracted toward
 **S-ARCH** during C/E4; they are part of the god-object storage class, not
 only `blockchain.cpp`.
+
+**Status of the inherited pruning wiring, stated here because this is where a
+porter looks and the default reading is wrong (Rick, 2026-09-12):** the
+Monero-era stripe prune **stays in the C++ tree and is not ported** — "not
+brought over" means left where it is, not deleted. It is therefore a
+**reference implementation for the Rust rewrite, not debt to remove**, and
+rules 60 and 16 do not point at deleting it: a deletion was ruled, started and
+retracted on 2026-09-12 for exactly this reason. Its *reconstruction* half is
+expected to inform **shard** reconstruction, which is a second reason to read
+it rather than reach for it.
 
 **One named instance, because it is countable by nothing (2026-09-12, `ba4b3c73a`):** the settlement write path — `set_archival_settlement`, `get_archival_settlement`, `delete_archival_settlement_for_epoch`, `delete_archival_settlement_before_epoch` — exists **only** on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h:754–775`), with **zero** occurrences in `src/blockchain_db/blockchain_db.h` or `src/blockchain_db/testdb.h` against **48** virtual archival methods on the base class. DRS-0 therefore carries it as **known-unwired** (its production caller is a rule-22 hold on `SO-D8`, `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 — not an omission to helpfully fix) **and known-un-abstracted**: because the pair is off the interface, no port-surface completeness check enumerating `BlockchainDB` can see it — `DRS-W12`'s hazard inverted, and the half `db_lmdb.cpp:7657`'s *"not reachable, so not wrong"* note stopped one level short of. The base-class promotion is in `SO-D8`'s scope so the port does not discover it.
 
@@ -1251,6 +1411,172 @@ reasons row for row** — two instruments, one field, cross-checked:
 | **Not chain state** | `txpool_meta`, `txpool_blob`, `alt_blocks`, `archival_alt_attestation_witness` | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception |
 | **Node-local by prune policy** | `txs_prunable`, `txs_prunable_tip`, `output_metadata` | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
 | **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
+
+> **AMENDED at `edb35dbb1` (2026-09-12, same day): the middle group's rationale
+> is on a TRIGGER, not retired here.** *(Line anchors in this block are
+> re-resolved at **`064d17d92`**, 2026-09-13 — `db_lmdb.cpp` moved after the
+> amendment was written and every one of them had drifted onto live code at
+> the wrong subject, which is this block's own subject. This document is
+> outside `check_doc_code_citations.py`'s `DEFAULT_DOCS`, so they are
+> unchecked by gate and were re-resolved by hand, symbol first.)* The reasoning: `PDM-Q-S0` is understood
+> to rule that pruned-daemon mode is not implemented in the inherited C++
+> daemon and lands in the Rust daemon after `DRS-E*`, which would mean the
+> inherited stripe prune does not come over — and "rebuildable only from bytes
+> a pruning node has deliberately discarded" would then describe a mechanism
+> the ported store will not have. **That ruling does not resolve in this tree:
+> `PDM-Q` appears in no document at `edb35dbb1` (its round is open at PR #723,
+> unmerged).** So nothing is reclassified on it, in either direction — and the
+> restraint is symmetric, which is the point: the same argument that forbids
+> pre-declaring `curve_tree_leaves` into a class against an unlanded discard
+> ruling forbids reclassifying `txs_prunable` **out** of one against the same
+> unlanded ruling. What is recorded is the trigger and the per-table evidence,
+> so that when `PDM-Q` lands this is a walkable list rather than a re-derivation.
+> The stake is stated once: an exclusion carried on an expired rationale is
+> **state excluded from a digest, which is the failure the digest exists to
+> prevent** — so the trigger must not be forgotten either. Per table, and they
+> do not share a disposition:
+>
+> **UPDATED the same day (Rick, 2026-09-12) — the trigger now has a stated
+> direction, and it is the opposite of the one the conditionals below were
+> drafted against.** *"We are leaving the old pruning implementation in C++ and
+> writing the new one in Rust — it will include everything (more or less) that
+> the C++ pruning had."* So: the inherited mechanism **stays in the C++ tree**
+> and is simply not ported, and a **new Rust mechanism that does discard is
+> being written**. The antecedent of each conditional below — *if no Rust-side
+> discard exists* — is therefore **expected to be false**.
+>
+> **CORRECTED before merge (Rick, 2026-09-13): "pruning is NOT node variable",
+> so the likely outcome is that these exclusions are LIFTED, not re-pointed.**
+> An earlier draft of this paragraph predicted they would *survive on a
+> re-pointed rationale (node-variability created by the new mechanism)*. That
+> rationale never becomes available — and predicting it would have been **this
+> block's own warning committed one level down**: a reason that happens to land
+> on the right verdict for the wrong mechanism is how the next expiry goes
+> unnoticed.
+>
+> **The distinction that makes three words load-bearing: a digest cares whether
+> nodes AGREE, not whether bytes are PRESENT.** Uniform, consensus-scheduled
+> discard leaves every node holding identical state at the boundary — a
+> well-defined accumulator with the boundary *in the definition*, digestible.
+> Only **node-variable** discard, where two honest nodes legitimately differ,
+> forces exclusion. Absence alone never did, and reading absence as the trigger
+> is what produced the expired rationale this block corrects.
+>
+> **One clause must be attached or the ruling is false for the one table this is
+> about — routed, not assumed.** [`../V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md)
+> ("Normal nodes vs archivers", `:171–176`) defines **three** retention classes
+> of honest node: a non-staker retains **A** and prunes deep segment leaves to
+> `R_k`; an archiver retains **B** plus shard-scoped **C**; the foundation floor
+> retains **B + C** completely — and "market redundancy … above the floor"
+> varies **between archivers**. So retained *content* is node-variable by
+> design; it is the market's product. What is uniform is the discard
+> **boundary**, and therefore the **floor** of what every honest node holds. The
+> ruling holds exactly when the accumulator is defined **over that
+> consensus-retained floor** rather than over "the table's contents", with
+> archiver surplus definitionally **outside** the digest domain. **RESOLVED the same day
+> — toward the second branch, and the first was malformed.** "Is archiver
+> surplus inside the digest domain?" puts a **node-level** property inside a
+> **table-level** set; read precisely, it proposes changing what a digest *is*
+> for one table, to avoid using a mechanism the matrix already has. The proposed
+> mechanism was the surrogate pattern frozen beside it — *variable-by-retention
+> table `excluded`, invariant commitment carries the class*, as `txs_prunable`
+> `excluded` sits beside `txs_prunable_hash` `append-mostly` — applied to
+> `curve_tree_leaves` on the reading that it is the variable side holding the
+> surrogate's token.
+>
+> **THAT DIAGNOSIS WAS FALSE AND NO TOKEN MOVED. `curve_tree_leaves` stays
+> whole-table `append-mostly`, as originally frozen.** A narrowing landed and
+> was **reverted** the same day (slice A, `116b424b6`). The premise — that the
+> daemon's leaves vary between honest nodes — is contradicted by the tree in
+> two places, and the citation it rested on is about a **different store**:
+>
+> - the pruning sentence is
+>   [`../V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) `:171–172`, whose
+>   subject is *"a non-staker **wallet**"* and whose set-A holder column
+>   (`:153`) reads "Every syncing wallet / lean node" — the **wallet's**
+>   `LeafStore`, which `DRS-D3` (§1, `:300`) makes *"deliberately separate"*
+>   from the daemon store in "schemas, tables, txn models, durability, APIs, and
+>   crates";
+> - the daemon's table is named in the negative:
+>   [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+>   fact §2.5 (`:144`) — *"**The daemon retains every leaf forever.**
+>   `m_curve_tree_leaves` is deleted only by `trim_curve_tree` (reorg). This is
+>   already **consensus-required**"* — and
+>   [`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md)
+>   `:105` puts it past doubt: the challenge design *"**structurally forces**"*
+>   the unpruned world, since *"no daemon can prune while verification reads
+>   arbitrary local leaves."*
+>
+> **And the narrowing would have cost coverage, which is the substantive half.**
+> Folding leaf bytes detects a corruption unconditionally; an accumulator over a
+> **stored** `R_k` detects one only if something recomputes `R_k` from the
+> leaves — it certifies the commitment, not the data under it. For a table every
+> daemon fully holds, direct folding is strictly stronger, so the split traded a
+> stronger check for a weaker one in exchange for a variability that does not
+> exist in that store.
+>
+> **Reopening, in its strengthened form:** a change to the challenge design that
+> stops reading arbitrary local leaves, **followed by** a node-variable daemon
+> discard. Not either alone — "unbuilt *and structurally blocked*" is a stronger
+> not-yet than "unbuilt", so the earlier trigger conjunct stands rather than
+> being superseded. **Nothing is routed to
+> `PDM-Q` by this block**; the uniform-schedule-versus-uniform-content
+> distinction above is what forced the question to be stated precisely enough to
+> be seen as malformed, and that is all it was needed for.
+> **`archival_attestation_witness`'s conditional row reopens on the same
+> event**, having dissolved only while nothing could discard and nothing could
+> acquire pruned. Neither is settled until the new mechanism's discard shape is
+> ruled (`PDM-Q`, PR #723) — still a trigger, now with a direction.
+>
+> **Cross-reference:** slice A reached the same place from the digest side, and
+> its reopening subsection states the conjunct this trigger needs — *discard
+> lands **and** is node-variable*. Rick's ruling settles that conditional's
+> second half. Two records, one finding: read them together
+> ([`../LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §12,
+> reopening criteria).
+>
+> - **`txs_prunable` — the exclusion is on a trigger, not lifted.** *If* no
+>   Rust-side discard exists, the bytes are always present and replay
+>   reproduces them, and it belongs **in the digest domain**; its `node-local`
+>   reason and its surrogate (`txs_prunable_hash`) were sound against the C++
+>   tree and would not be properties of the store being built. Not moved here:
+>   that conditional's antecedent is the unlanded ruling above.
+> - **`txs_prunable_tip` — CORRECTED 2026-09-12, same day, and the correction
+>   is the interesting part.** This first read *"every consumer lives inside
+>   `prune_worker`, so the Rust store should not carry the table"* — which was
+>   **false as evidence**: that enumeration was the `mdb_cursor_open` sites
+>   only (`:2406` / `:2464` / `:2569`, inside `prune_worker` `:2324–2605`). The table is also written in `add_transaction_data` (`:1163`) and
+>   deleted in `remove_transaction_data` (`:1230`/`:1235`) — the connect and pop
+>   paths, not the prune worker. *N hits of one pattern are not the
+>   population*, and the conclusion did not follow from the evidence given.
+>   **The argument that does survive is from the WRITE path, not the read
+>   sites:** that write is guarded by `if (get_blockchain_pruning_seed())` four lines
+>   above it (`:1160`), and the paired delete is `MDB_NOTFOUND`-tolerant. So on a node with no seed —
+>   every node today — the table is **never populated** and the delete is a
+>   tolerated no-op. Its *population*, not its call sites, is what ties it to
+>   the mechanism. That is a reason to ask whether it ports; it is **not** a
+>   settled deletion, and nothing is reclassified on it here.
+> - **`output_metadata` — the stated reason does not cover it, and the correct
+>   one is a different shape.** It is not discarded content; it is content
+>   **created by discarding** — `store_output_metadata` is called from exactly
+>   one site, inside `prune_tx_data` (`:10239`) — and **its read chain is dead
+>   two levels deep**: `get_output_metadata` (`:10070`) has exactly one caller,
+>   `is_output_pruned` (`:10093`, calling at `:10099`), and `is_output_pruned` has **no call site anywhere** in `src/`,
+>   `rust/` or `tests/` — only its pure-virtual declaration, its `db_lmdb`
+>   override and a `testdb.h` stub returning `false`. So the correct reason is
+>   closer to **`dead`** (DRS-W4's shape) than to `node-local`. At
+>   the port it is therefore **empty by construction** unless `PDM-Q`
+>   re-commissions the need it serves ("what does a discarding node keep so
+>   wallets can still scan?"), which is `PDM-Q`'s question and not a digest
+>   classification.
+>
+> **The consequence for the port is positive and time-boxed.** With the
+> inherited prune not coming over, the Rust store has **no node-variable
+> content by construction** until set-B discard lands — so the digest oracle
+> commissions against a **uniform** reference rather than a merely
+> currently-uniform one. That is the cleanest window there will be, and it
+> closes the day discard lands.
+
 
 **And one CONDITIONAL row, which is the interesting one because it is neither
 excluded nor unconditionally rebuildable.** `archival_attestation_witness` is

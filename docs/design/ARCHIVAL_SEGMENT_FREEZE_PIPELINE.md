@@ -449,6 +449,12 @@ showing the 38-leaf gather is a verify-path bottleneck (it is one
 LMDB range read of ~4.9 KB — not credible, named only to be
 dismissable with evidence).
 
+**UPDATE 2026-09-12:** that design round is now
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
+(`PDM-Q`). The criteria are unchanged; they are that round's to
+discharge or refine. Implementation of whatever it rules waits on
+the daemon C++→Rust cutover (`DRS-E*`, `PDM-Q-S0`).
+
 ### 6.3 Explicitly out of scope
 
 Challenge scheduling/firing, shard distribution and gossip
