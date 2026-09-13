@@ -45,6 +45,8 @@
 #include "serialization/crypto.h"
 #include "serialization/keyvalue_serialization.h" // eepe named serialization
 #include "cryptonote_config.h"
+#include <cstring>
+
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "misc_language.h"
@@ -191,7 +193,7 @@ namespace cryptonote
   {
     std::vector<uint8_t> hybrid_public_key;
     crypto::hash p_canonical_id;
-    uint8_t post_kind;
+    uint8_t post_kind = 0;
     // GF-1 debit authorizer (gate-4 §4.1 / gate-6 §9.6), JoinMarket-coupled on
     // the wire (§9.11, matching the Rust bond wire and shekyl-wire): present
     // with the exact canonical single-key length iff post_kind == JoinMarket,
@@ -199,10 +201,23 @@ namespace cryptonote
     // into the bond record at JoinMarket connect; every later bond_debit
     // verifies against the committed copy, never the identity key.
     std::vector<uint8_t> bond_spend_pk;
+    // 32-byte onion pubkey, JoinMarket-coupled (no length prefix). Off
+    // JoinMarket, the zero key means absent (write-side belt). On JoinMarket
+    // any 32 bytes parse, zero included — verify (code 52) refuses the zero
+    // key so the parsers stay in lockstep.
+    crypto::public_key endpoint{};
     archival_holdings_descriptor holdings;
-    uint64_t bonded_total_atomic;
-    uint64_t bond_credit;
-    uint64_t bond_debit;
+    uint64_t bonded_total_atomic = 0;
+    uint64_t bond_credit = 0;
+    uint64_t bond_debit = 0;
+
+    /// Off JoinMarket: empty `bond_spend_pk` and the zero endpoint. On
+    /// JoinMarket the zero endpoint is a value, not absence.
+    [[nodiscard]] bool join_market_coupled_fields_absent() const noexcept
+    {
+      return bond_spend_pk.empty()
+        && std::memcmp(endpoint.data, crypto::null_pkey.data, sizeof(endpoint.data)) == 0;
+    }
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(hybrid_public_key)
@@ -220,13 +235,10 @@ namespace cryptonote
         FIELD(bond_spend_pk)
         if (bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
           return false;
+        FIELD(endpoint)
       }
-      else if (!bond_spend_pk.empty())
+      else if (!join_market_coupled_fields_absent())
       {
-        // §9.11 coupling: only JoinMarket carries the debit authorizer. On
-        // read this branch is unreachable (the field is default-empty); on
-        // write it makes a misconstruction loud instead of silently dropping
-        // the key from the emitted bytes.
         return false;
       }
       FIELD(holdings)

@@ -219,6 +219,39 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_shell_gate_exits.py
 
+      - name: Run redb key-type ordering gate
+        # The bijection gate checks that every table is MAPPED; this one checks
+        # the mapping reproduces LMDB's ORDERING. That gap was not theoretical:
+        # review of the first landing found three MDB_INTEGERKEY tables mapped
+        # as &[u8] and one DUPSORT multimap whose values ignored compare_uint64
+        # — names 49/49 while four orderings were wrong.
+        # Default-flag tables are deliberately unconstrained: several store
+        # BE(x) 8-byte keys, where big-endian byte-lex IS numeric order, so both
+        # u64 and &[u8] are correct and a rule would fail correct code.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_key_types.py
+
+      - name: Run redb key-type ordering selftest
+        # The rule function is what makes INTEGERKEY and dupsort-hash32
+        # collapse unskippable; run the fixture that a name-set elif
+        # swallowing zerokval-uint64 tables (block_info, output_txs) fails.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_key_types.py --selftest
+
+      - name: Run redb schema bijection gate
+        # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
+        # redb TableDefinition and vice versa, no duplicates on either side.
+        # The X-macro is the only admissible source: the settlement pair
+        # exists only on BlockchainLMDB, so a schema built from the abstract
+        # interface silently omits a write path LMDB has (SO-D8).
+        # Checks NAMES, not types — ordering is the key-type gate above;
+        # comparator evidence is in lmdb_order's tests; class evidence is
+        # per-row in the audit's §12.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_bijection.py
+
       - name: Run conformance-coverage gate
         # Every RATIFIED consensus rule (census bucket 1/2) must carry a
         # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and

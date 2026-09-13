@@ -142,7 +142,11 @@ using namespace crypto;
 // epoch close backfilled the key. Refused at open instead; the bump also
 // keeps a V11 binary (which reads no receipts) out of a V12 datadir.
 // Delete and resync.
-#define VERSION 12
+// V13: the JoinMarket serving endpoint (EU-D3) — layout. The `archival_bond`
+// value gains the 32-byte serving endpoint column after `bond_spend_pk`
+// (kVersion 6→7; every V12 record fails decode's version pin, so a V12
+// datadir cannot be read). No new table. Pre-genesis: delete and resync.
+#define VERSION 13
 
 namespace
 {
@@ -5549,7 +5553,8 @@ bool BlockchainLMDB::get_archival_shard_segment_at_height(uint64_t shard_id, uin
 
 void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   const std::vector<uint8_t>& hybrid_pubkey,
-  const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
+  const std::vector<uint8_t>& bond_spend_pk, const crypto::public_key& endpoint,
+  uint64_t join_settlement_epoch,
   uint64_t bonded_total_atomic, uint8_t holdings_kind,
   const std::vector<uint64_t>& held_shard_ids,
   const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals)
@@ -5563,6 +5568,11 @@ void BlockchainLMDB::put_archival_bond_record(const crypto::hash& p_id,
   // Release + re-JoinMarket). Every later bond_debit's pqc auth verifies
   // against this copy, never the identity key.
   bond.bond_spend_pk = bond_spend_pk;
+  // EU-D3: the serving endpoint the vin carried, committed like bond_spend_pk
+  // — once, immutable for the record's life (a new onion address is a new
+  // persona). This is the one conversion from the vin's crypto type to the
+  // codec's byte array.
+  std::memcpy(bond.endpoint.data(), endpoint.data, bond.endpoint.size());
   bond.join_settlement_epoch = join_settlement_epoch;
   bond.bonded_total_atomic = bonded_total_atomic;
   bond.holdings_kind = holdings_kind;

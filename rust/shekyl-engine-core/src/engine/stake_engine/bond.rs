@@ -11,6 +11,7 @@ use shekyl_archival_bond_builder::build_join_market_vin;
 use shekyl_archival_retention::id::p_canonical_id_from_hybrid_pubkey;
 use shekyl_archival_retention::HoldingsDescriptor;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
+use shekyl_tor_control_wallet::service::OnionIdentity;
 use shekyl_tx_builder::TreeContext;
 
 use crate::engine::bond_assembly::{BondAssemblyError, FundingInputContext, PBoundBytes};
@@ -113,7 +114,8 @@ impl Message<AssembleBond> for StakeEngine {
         // pre-SA-2b signing circularity forced a second, public-parts
         // construction plus a runtime A-1 equality check; deleting the on-vin
         // signature deleted the circularity, and the duplicate with it.)
-        let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone())
+        let endpoint = OnionIdentity::from_hs_id_seed(&keys.hs_id_seed).public_key();
+        let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone(), endpoint)
             .map_err(StakeEngineError::BondBuild)?;
         let hybrid_pk_bytes = built.vin().hybrid_public_key.clone();
         let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);

@@ -380,6 +380,31 @@ Index and CHANGELOG use the Tier-A framing when reopen fires.
 3. Artifacts must record **durability configuration**. Unlabeled redb numbers
    are not genesis-load-bearing (no redb benches on `dev` at Round-2 stamp).
 
+4. **The pass/fail lines above are PRE-REGISTERED and frozen** at `ba4b3c73a` (2026-09-12, DRS-0 slice C). §7.4 names "IBD floor from DRS-0" as a BENCH input, and
+   this is that input: **≤ 1.25× passes, > 1.50× after one documented
+   mitigation cycle hard-fails, the band between them is a decision-log call,
+   peak RSS ≤ 2×**. They are frozen **now, while no measurement exists** —
+   re-verified at this pin: the workspace has no redb-touching or IBD bench
+   (`rust/*/benches/` carries only crypto-pq and engine-core economics), exactly
+   as §7.4 records. That is the point rather than a limitation: a threshold
+   chosen after the first number is a threshold fitted to it, and these ratios
+   decide whether redb is genesis-load-bearing at all.
+
+   **What "refine with the first in-tree baseline" still covers**, unchanged: the
+   *instrument* rows — reference height `H` (if no fixture reaches 100_000, the
+   artifact records the height it reached and the plan is amended, not the
+   ratio), hardware class, and the durability configuration every artifact must
+   carry. **Refining a ratio after seeing a number is a threshold change and
+   needs the reopening it would otherwise avoid.**
+
+   **Named blocker (rule 22):** the floor cannot be *discharged* here, only
+   stated — discharging it needs DRS-BENCH artifacts in-tree. This leg is
+   therefore "thresholds frozen, measurement outstanding", not "IBD floor done".
+   **No pop/reorg threshold is pre-registered and that is deliberate:** pop is
+   off-chain (§5.3), so it has no propagation budget to miss. Its halt condition
+   is journal/delete churn under §7.4, not a wall-time ratio. Reopener: if pop
+   ever runs inside the block-propagation budget, it acquires a ratio like IBD's.
+
 Marshal-tax remains qualitative; Path B stands on rule 40.
 
 ### 1.4 Non-unification (DRS-D3) — load-bearing rationale
@@ -504,6 +529,8 @@ launch under D2-reopen.
 **S-ARCH** during C/E4; they are part of the god-object storage class, not
 only `blockchain.cpp`.
 
+**One named instance, because it is countable by nothing (2026-09-12, `ba4b3c73a`):** the settlement write path — `set_archival_settlement`, `get_archival_settlement`, `delete_archival_settlement_for_epoch`, `delete_archival_settlement_before_epoch` — exists **only** on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h:754–775`), with **zero** occurrences in `src/blockchain_db/blockchain_db.h` or `src/blockchain_db/testdb.h` against **48** virtual archival methods on the base class. DRS-0 therefore carries it as **known-unwired** (its production caller is a rule-22 hold on `SO-D8`, `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 — not an omission to helpfully fix) **and known-un-abstracted**: because the pair is off the interface, no port-surface completeness check enumerating `BlockchainDB` can see it — `DRS-W12`'s hazard inverted, and the half `db_lmdb.cpp:7657`'s *"not reachable, so not wrong"* note stopped one level short of. The base-class promotion is in `SO-D8`'s scope so the port does not discover it.
+
 **DRS-C PR shape — amended 2026-09-01 (CSR-4 ruled: analysis-only).** DRS-C does
 **not** ship as C++ refactor PRs. Rule 20 and
 [`15-deletion-and-debt`](../../.cursor/rules/15-deletion-and-debt.mdc) both
@@ -524,13 +551,34 @@ and privacy (node liveness → density).
 | **Single writer** | At most one apply/pop (or batch) write transaction at a time. P2P block ingest, RPC that mutates pool, and maintenance share a **writer queue** (or equivalent mutex + ordered wakeups). No “optimistic” second writer. |
 | **Apply owns the critical path** | Under backlog, **block connect/pop preempts** non-essential writes (pool relay timestamp updates may batch/coalesce — must not starve apply). |
 | **Readers** | Unlimited concurrent read txns in principle; **RPC must not hold read txns across network waits**. Read txn lifetime ≤ request handler scope (hard guideline). Long-lived reads (export, debug) are **admin-only** or explicitly rate-limited. |
-| **DoS: long-lived readers** | Attacker-influenceable RPC must not pin free pages indefinitely. Mitigations (pick in DRS-0 / implement in C or E1): max read-txn wall time; max concurrent heavy reads; reject/export-only paths for full scans. BENCH measures file growth under adversarial concurrent readers. |
+| **DoS: long-lived readers** | Attacker-influenceable RPC must not pin free pages indefinitely. Mitigations (pick in DRS-0 / implement in C or E1): max read-txn wall time; max concurrent heavy reads; reject/export-only paths for full scans. BENCH measures file growth under adversarial concurrent readers. **PICKED** at `ba4b3c73a` (2026-09-12, slice C) — see §3.6.1; implementation stays C/E1. |
 | **redb-specific** | redb self-managed cache → peak RSS under attacker feed is a **hard BENCH bound** (§1.3). Writer still single; no multi-process multi-writer on one file. |
 | **Multi-process** | Default `shekyld` = one process, one store file, one writer. Remote wallet talks **RPC**, never opens daemon redb. (D3 topology.) |
 | **Shadow / dual backend** | Second engine is a **separate file**; never two writers on one LMDB env (V4). Shadow apply may lag; production authority is one backend. |
 
 P2P and levin remain C++ at genesis under D2-reopen without requiring B;
 they must still obey the writer queue when calling into surfaces.
+
+#### 3.6.1 Long-lived-reader mitigations — PICKED at `ba4b3c73a` (2026-09-12, DRS-0 slice C)
+
+§3.6's DoS row says *pick in DRS-0 / implement in C or E1*. These are the
+picks. **Mechanisms and where they live — not values, and not code:** the
+constants are E1's to choose against BENCH, and nothing here is implemented in
+this change.
+
+| Mitigation | Mechanism picked | Falsifier |
+| --- | --- | --- |
+| **Max read-txn wall time** | A **deadline carried by the read transaction itself**, enforced at the store boundary: the txn is aborted and the request fails loudly when it expires. **Not** a per-handler timeout — a handler added later cannot forget a deadline it does not set. | An RPC path that can hold a read txn past the deadline, or a handler that opts out |
+| **Max concurrent heavy reads** | A **store-owned semaphore** over *heavy* reads, where **heavy is defined structurally, not by name**: any read whose cost is not bounded by a key range — full-domain scans and the `for_all_*` / cursor-walk family. Exceeding it **rejects with a retryable error**; it does not queue, because queueing converts a bounded refusal into an unbounded wait that pins pages anyway. | A full-domain read reachable without acquiring the semaphore |
+| **Reject / export-only full scans** | Full-domain scans are **not reachable from the attacker-influenceable RPC surface at all** — they exist only on the export/admin path, which is the restricted surface. Reachability, not rate-limiting: a scan that is merely slowed still pins pages for as long as it runs. | Any full-domain scan reachable from an unauthenticated or public RPC method |
+| **Countability** (added here, not in §3.6's list) | All three live **on the store API**, so a check that enumerates the store's read surface sees every read path. A mitigation attached to call sites is countable by nothing — the failure the settlement write path just demonstrated (§3.5, 2026-09-12). | A read path that reaches the engine without passing the store API |
+
+**Why "pick the mechanism, not the number" is the right granularity here:** the
+three constants are exactly what BENCH's adversarial-reader row measures, so
+pinning them now would pre-empt the measurement that exists to set them. The
+*shape* — deadline on the txn, structural definition of heavy, reachability
+rather than rate — is not measurement-dependent and would otherwise be
+re-litigated per handler.
 
 ---
 
@@ -552,14 +600,14 @@ rebuttal of redb.
 
 ### 5.1 Privacy / security hard findings (DRS-0 / P0)
 
-| Surface | Concern |
-| --- | --- |
-| Freed-page / COW residue | Forensic recovery of txpool / Dandelion++ timing state differs by engine |
-| File growth over multi-year small commits | Operator cost → node density → network privacy |
-| Long-lived concurrent readers | RPC readers are attacker-influenceable; pin free pages → unbounded growth / memory pressure — severity depends on engine reclamation |
-| Peak RSS under attacker-shaped input | LMDB → OS page cache (evictable); redb self-managed cache — different DoS / partition profile |
-| IBD wall time | Privacy chain only (R-15) — not vanity perf |
-| Pop/reorg wall time | Off-chain window; COW delete churn + five archival revert journals |
+| Surface | Concern | DRS-0 disposition (slice C, `ba4b3c73a`, 2026-09-12) |
+| --- | --- | --- |
+| Freed-page / COW residue | Forensic recovery of txpool / Dandelion++ timing state differs by engine | **PICKED — the pool does not live in the consensus store file.** Today it does: `m_txpool_meta` / `m_txpool_blob` are opened in the same env as the chain (`src/blockchain_db/lmdb/db_lmdb.cpp:1677–1678`), so consensus-store free pages carry relay-timing residue that outlives the tx. Pool state is **not consensus state and not reconstructible from blocks** (D10 does not reach it), so it belongs in a **separate store file that may be discarded wholesale** — which also makes residue a *policy* question rather than an engine-reclamation question. *Falsifier:* any pool table in the consensus store's `TableDefinition` set. **Depends on the slice-B schema map**; if one file is ruled instead, the fallback pick is wipe-on-open for pool tables, which is strictly weaker (it bounds residue lifetime rather than removing it) |
+| File growth over multi-year small commits | Operator cost → node density → network privacy | **MEASURED, not picked** — §7.4 row 1; bound is §1.3's file-size / logical-size ratio after a simulated year of 2-minute blocks. No desk decision available: the quantity is engine reclamation behaviour |
+| Long-lived concurrent readers | RPC readers are attacker-influenceable; pin free pages → unbounded growth / memory pressure — severity depends on engine reclamation | **PICKED — §3.6.1** (deadline on the txn; structural definition of *heavy*; full scans unreachable from the public surface; all three on the store API so they are countable). Values are E1's against BENCH |
+| Peak RSS under attacker-shaped input | LMDB → OS page cache (evictable); redb self-managed cache — different DoS / partition profile | **MEASURED** — bound is §1.3's ≤ 2× LMDB peak, now **pre-registered and frozen** (§1.3 item 4) rather than a sketch |
+| IBD wall time | Privacy chain only (R-15) — not vanity perf | **THRESHOLDS FROZEN, measurement outstanding** — §1.3 item 4. Rule-22 blocker: DRS-BENCH artifacts in-tree |
+| Pop/reorg wall time | Off-chain window; COW delete churn + five archival revert journals | **No ratio pre-registered, deliberately** — pop is off-chain (§5.3) and has no propagation budget to miss; its halt condition is journal / delete churn under §7.4. Reopener stated at §1.3 item 4 |
 
 ### 5.2 Durability (DRS-D9) — no security-vs-speed tradeoff
 
@@ -573,6 +621,15 @@ columns only — never steady-state ops/sec.
 
 Tests: `kill -9` mid-commit; fault injection; recovery via reconstructible
 replay (E-6).
+
+**DRS-0 disposition at `ba4b3c73a` (2026-09-12, slice C) — nothing to decide. DRS-D9 is a binding
+decision (§1) and this section already carries its reopening criterion and its
+tests.** Slice C's durability leg is discharged by pointing at it: the strictest
+practical durability stands, the reopening criterion stands unchanged
+(measurement of IBD / pop / resource columns only, never steady-state ops/sec),
+and no slice-C ruling narrows or widens it. Recorded rather than silently
+skipped, because a deliverable line that names "durability" and a decision that
+already rules it are otherwise read as a gap by the next person down the list.
 
 ### 5.3 Where “network-bound” does **not** apply
 
@@ -936,7 +993,134 @@ Blocks (and required blobs) live in the most format-stable representation
 (simple versioned redb table **or** append-only side file). Other tables are
 **derived**.
 
+### 11.1 Format policy — RULED at `ba4b3c73a` (2026-09-12, DRS-0 slice C)
+
+DRS-0's deliverable line names **format policy** and §7 is where it lands: this
+section already rules the *strategy* (reconstruction is the migration
+mechanism), and what follows is the policy that strategy implies. Four axes,
+three ruled and one routed.
+
+**(a) The store carries a schema-version cell, and a mismatch is answered by
+rebuild, not by a migrator.** Key **`schema_version`**, in the `properties`
+table, value `u64`. **Byte form pinned** because `properties` orders by string
+comparison and the exact bytes are therefore load-bearing for the port: ASCII
+`schema_version`, **14 bytes, no NUL terminator and no length prefix**
+(`73 63 68 65 6d 61 5f 76 65 72 73 69 6f 6e`). **Absent reads as refuse, not as
+version 1** — a store that exists and carries no cell is not a store this
+binary wrote, and the wallet's `IMPLICIT_SCHEMA_VERSION` default
+(`rust/shekyl-curve-tree/src/store/redb_backend.rs`) is a *migration* affordance
+for a store that predates the cell, which pre-genesis there cannot be.
+**Newer refuses; older refuses too** — there is no migration ladder and none
+will be written, because §11 makes replay-from-blocks the answer, and because
+the C++ precedent shows where the other posture ends: `#define VERSION 12`
+(`src/blockchain_db/lmdb/db_lmdb.cpp:145`) with a `migrate()` ladder whose
+Monero-era rungs are unreachable and were deleted under rule 60. Name and shape
+follow DRS-D3b's *written pattern* rather than a shared crate, which DRS-D3d
+forbids.
+
+**(b) A bump is required for any change that alters stored bytes — including a
+value-codec change.** Adding, removing or re-keying a table bumps; so does
+changing a value encoding, because under the accumulator design the redb value
+codec **is** the canonical encoding the digest folds (slice A / slice B), so a
+codec change is digest-visible rather than a refactor. Stated here because the
+coupling runs from those slices into this policy and would otherwise be
+discovered as a digest mismatch.
+
+**(c) redb's own on-disk format version is handled by rebuild, never by an
+in-place upgrade.** redb pins its file format independently of our schema —
+4.1.0 carries `FILE_FORMAT_VERSION3` and fails a mismatched file with
+*"Manual upgrade required"*
+(`/redb-4.1.0/src/error.rs`, read at the pinned source, not recalled). Policy: a
+redb upgrade that moves that constant is a **deliberate, artifact-recorded
+operation — build a fresh store and replay** (§11's "trivial migrator"), never
+redb's own upgrade path. The loud failure is the good case, and it is the reason
+§11's reconstructibility mandate is load-bearing rather than aspirational.
+
+**(d) §11's blocks-representation either/or — RULED: a simple versioned redb
+table, not an append-only side file.** A side file is a second durability
+surface and a second crash-consistency story, which under DRS-D9's full fsync
+buys nothing it does not also cost: two files can disagree after a torn commit,
+and the disagreement is precisely in the corpus everything else is rebuilt
+*from*. One file, one writer, one durability policy. *Reopening criterion (rule
+21):* a BENCH result showing the block corpus is the binding cost on the IBD
+floor **and** that append-only storage moves it across the §1.3 line — not a
+preference for bulk-load shape.
+
+**(e) ROUTED, not ruled here — rule 42 does not cover this store.** Rule 42
+(persisted-block wire change ⇒ version-constant bump, CI-enforced) is scoped by
+its own globs to `rust/shekyl-engine-state/**` and `rust/shekyl-engine-file/**`
+— the **wallet**. The daemon store is outside it, so (a) and (b) above have no
+CI ratchet behind them. Extending rule 42's globs to the daemon store crate is
+the obvious fix and it is **not this slice's to make**: `.cursor/rules/` is
+Rick's. Recorded as a finding with its consequence named, per rule 22, rather
+than assumed.
+
 ---
+
+
+### 11.2 E-6 — the reconstructibility boundary, drawn by table (DRS-0 slice C, `ba4b3c73a`, 2026-09-12)
+
+§11 states D10's mandate and §8.1 puts *"DRS-D10 reconstructible derived
+state implemented"* on the **genesis checklist**, so the boundary it assumes is
+load-bearing rather than descriptive. This draws it.
+
+**The digest side is slice A's and is cited, not restated.** The five
+accumulator-class tokens and every table's class live in
+[`LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §12, with
+the discriminator that keeps the `derived` class honest (*can the table's
+contents be stated as a function of its named source without reference to the
+writer's code?*). **Reconstructibility is a recovery property and never a digest
+exemption** — a derived table exempted from coverage because it can be rebuilt
+yields a store that can repair a corruption it cannot see. The two axes are
+independent and this section is only the recovery one.
+
+**The corpus, by table.** §11 says "block blobs + minimum tx blobs needed to
+replay `apply_block`". Concretely that is **`blocks`**, **`txs_pruned`**, and
+**`txs_pqc_auths`** — the last because the V11 retention note
+(`src/blockchain_db/lmdb/db_lmdb.cpp:128–135`) records that `prune_tx_data`
+must **keep** `txs_pqc_auths` and `txs_prunable_hash` when it drops the prunable
+body: both are operands of the pruned v3 txid, and neither has a hash table of
+its own. **That note is D10's failure mode already realised once**: V10's depth
+pass deleted them, so "a V10 datadir that ever pruned holds txs the V11 reader
+cannot name … forever, with no repair path (the bytes are gone)." A corpus
+boundary drawn one table too small is unrecoverable by construction, which is
+why this is drawn by table rather than by phrase.
+
+**D10 is stated universally and its wording does not hold. Three groups, each
+grounded at this pin, and the classification agrees with slice A's `excluded`
+reasons row for row** — two instruments, one field, cross-checked:
+
+| Group | Tables | Why replay cannot produce them |
+| --- | --- | --- |
+| **Not chain state** | `txpool_meta`, `txpool_blob`, `alt_blocks`, `archival_alt_attestation_witness` | Replaying **main-chain** blocks produces the main chain. The pool is unconfirmed by definition and the alt surface is by definition what the chain did not take; two honest nodes at one height legitimately differ. Slice A excludes these from **all future digests** on the same ground. Slice C's §5.1 pick moves the pool out of the consensus store file entirely, which makes this a boundary rather than an exception |
+| **Node-local by prune policy** | `txs_prunable`, `txs_prunable_tip`, `output_metadata` | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
+| **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
+
+**And one CONDITIONAL row, which is the interesting one because it is neither
+excluded nor unconditionally rebuildable.** `archival_attestation_witness` is
+class `small` — digested, consensus-bearing, not excluded by anyone — and it
+reaches the store through `block_connect_supplement::attestation_witness`
+(`src/cryptonote_core/tx_verification_utils.h:87`), populated by the transport,
+*"empty until the transport populates it"*. Its bytes ride the coinbase
+transaction's **prunable** side (`ARCHIVAL_CREDIT_WIRE.md`, prunable-residence
+row: *"Header kept; 3.43 KB countersignature on the coinbase-tx prunable
+side"*). So it is reconstructible from the local corpus **iff the node retains
+that prunable region**, and on a pruning node it is not — the same dependency
+the `node-local` group carries, on a table nobody has classified that way.
+**Flagged for the implementation to confirm at the byte level rather than
+asserted here:** what this section establishes is that the table's rebuild path
+runs through prunable bytes, not that the projection is exact.
+
+**Consequence, stated rather than patched.** D10 reads *"All non-block-corpus
+tables must be rebuildable by replaying local blocks through `apply_block`"*.
+Its true domain is **consensus-bearing derived state whose inputs the node
+retains** — which is what §8.1's checklist item can actually be checked
+against. **The wording of a binding decision is not this slice's to change**
+(rule 21 / `.cursor/rules` and §1 are the owner's), so this is routed, not
+edited: either D10 gains a domain clause naming the three groups, or each group
+gains a named exception. Leaving it universal is the option that should not be
+taken, because §8.1 turns it into a genesis gate and a gate whose subject is
+mis-stated is one that passes on the wrong set.
 
 ## 12. Deletion register
 

@@ -4,6 +4,37 @@
 
 ### Changed
 
+- **The `JoinMarket` bond post carries the persona's serving endpoint** — the
+  raw 32-byte Ed25519 key of its v3 onion service, mandatory, refused on every
+  other kind (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`) — and the `archival_bond`
+  record stores it (value v7; LMDB schema v13, a v12 datadir refused at open;
+  pre-genesis, delete and resync). The witness reads it from the drawable
+  snapshot through the record (`EU-D4`). **`EndpointUpdate` (bond-post kind 4)
+  is REJECTED** (Rick, 2026-09-13): a bonded persona's endpoint never changes;
+  a new address is a new persona via Release and a fresh `JoinMarket`. The
+  kind-4 half built in PR #717 was excised before merge, and the
+  `ARCHIVAL_P_DERIVE_V1` retirement authorized 2026-09-12 is withdrawn
+  (decision log, 2026-09-13).
+
+- **Tor-zone wire-observer cover is operator non-exit relay posture, not
+  the protocol carrier** ([`TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md),
+  TRC; RULED 2026-09-04, recorded 2026-09-12). Default Tor nodes no longer
+  receive protocol-level constant-rate cover. The carrier remains for
+  encrypted zones other than Tor. Operator recommendation:
+  [`TOR_RELAY.md`](TOR_RELAY.md) — the daemon's Tor client (SOCKS and overlay
+  inbound) must be **that same non-exit relay process**; a sidecar client
+  Tor, including the default managed ephemeral instance, is uncovered.
+  This is a reduction in what the protocol guarantees: cover moves from a
+  protocol mechanism to an operator posture.
+
+- **Cover-traffic ~42 GB/month ceiling signed off** after the
+  `COVER_TRAFFIC_RESTORATION.md` §3.1c three-arm measurement (seedusw,
+  2026-09-12). Defects 1–3 not observed. Honest Tor-only observed
+  ~18–20 GB/month equivalent (7128–7809 B/s), under the two-channel mean
+  of 8192 B/s. The 42 GB figure remains the dual-zone four-channel
+  *ceiling*, not the typical node bill. The §3.1c counter reads the live
+  29-byte Levin header (`utils/carrier/count_windows.py`).
+
 - **Short-term block-weight surge factor is 4**, sourced from
   `config/consensus_constants.json` as `block_weight_short_term_surge_factor`.
   The effective-median clamp that consumes it lives in

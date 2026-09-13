@@ -2271,9 +2271,13 @@ public:
   // key, so the production connect can never silently commit a record whose
   // debits are unauthorized-forever. Test seeders pass {} when the record's
   // debit path is not under test.
+  // `endpoint` is the serving endpoint the JoinMarket vin carried (EU-D3),
+  // committed once as the record's endpoint for the life of the bond (a new
+  // onion address is a new persona) — likewise no default.
   virtual void put_archival_bond_record(const crypto::hash& p_id,
     const std::vector<uint8_t>& hybrid_pubkey,
-    const std::vector<uint8_t>& bond_spend_pk, uint64_t join_settlement_epoch,
+    const std::vector<uint8_t>& bond_spend_pk, const crypto::public_key& endpoint,
+    uint64_t join_settlement_epoch,
     uint64_t bonded_total_atomic, uint8_t holdings_kind,
     const std::vector<uint64_t>& held_shard_ids,
     const std::vector<std::pair<uint64_t, uint64_t>>& bad_intervals = {});

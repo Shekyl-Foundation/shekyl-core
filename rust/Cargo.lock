@@ -3791,6 +3791,7 @@ dependencies = [
 name = "shekyl-chain-store"
 version = "3.1.0"
 dependencies = [
+ "redb",
  "shekyl-crypto-hash",
 ]
 

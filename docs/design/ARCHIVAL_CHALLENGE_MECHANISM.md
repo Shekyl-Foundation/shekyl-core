@@ -11,10 +11,11 @@ Tor inbound half; landed as PRs #442 / #445 / #447). §9.5 *narrows* the
 "do not cut consensus code" gate below rather than repealing it: everything on
 the §9.5 HOLD list — pass-record serialization, the response format,
 `EndpointUpdate` on the bond wire, the settlement writer — still waits on the
-format round. *(Updated 2026-09-12: `EndpointUpdate` is no longer held — its
-round record is [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md),
-`EU-D1`…`EU-D10`, and the sequence C0 → A → B+C1 → D is under way with C0
-landed. The other three entries read as they did.)* The ruling of record from this round: challenge
+format round. *(Updated 2026-09-13: `EndpointUpdate` is **REJECTED** — Rick's
+HARD NO of 2026-09-13, recorded in
+[`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md): a bonded
+persona's endpoint never changes; a new address is a new persona. The other
+three entries read as they did.)* The ruling of record from this round: challenge
 assignment is **derived, not committed** (§2, ruled 2026-08-07 — "the more the
 system regulates itself, the better"; derivation makes challenges verifiable
 by anyone and scope-limited against DDoS). Everything else here is the round's
@@ -46,7 +47,8 @@ relocated to §8 as the tx-carrier justification.
 producer of block h (the only party with a liveness oracle; a nominee
 cannot be compelled post-impossibility), anchor = that block's
 `cb_out_key` as a consequence; P-side already ruled (onion-bound
-identity, three-tier custody, cold-authorized `EndpointUpdate`).
+identity, three-tier custody; the cold-authorized `EndpointUpdate` this
+sentence listed was REJECTED 2026-09-13 — see §7 item 2).
 **Live remainder: ONE consolidated format round** (response wire,
 pass-record tx carrier + prunable residence, bond-wire fields, binding
 artifact, key tiers; nonce re-pinned as
@@ -911,39 +913,24 @@ the round kept trying to add forensics underneath it.
    co-residency and correlated uptime remain unaddressed (the circuit
    axis is already unrepresentable via `shekyl-p-transport`) and are
    worth more to an adversary than key-material statistics.
-   **Mutability — RULED (2026-08-10): rotation-in-place via
-   `EndpointUpdate`.** The reasoning of record: every endpoint-burn case
-   (compromised host, discovered address, lost onion key) leaves the
-   persona's economic position untouched — bond, holdings, join epoch,
-   earnings history, and the `[E, MAX)` interval state are all
-   unaffected; **only the routing field is spoiled**. Forcing a release
-   would destroy a clean record to fix a network address — and worse,
-   push the operator into a new persona with fresh principal funding,
-   which is precisely the clustering edge. Rotation-in-place is the
-   privacy-preserving option as well as the operationally sane one.
-   **The invariant the spec must state explicitly, because it reads as
-   obviously wrong once stated and gets implemented wrong when it
-   isn't: rotation resets NOTHING the window or the market reads.**
-   `good_through`, `join_settlement_epoch`, the bad-interval list, and
-   the failure-window history all survive an `EndpointUpdate`
-   untouched — otherwise rotation launders bad standing (a persona
-   approaching 11-of-13 rotates and buys a clean window for the price <!-- doc-literal-gate-allow: archival failure-window m-of-n (slash observations), not multisig operator config -->
-   of one transaction). Shape: **routing-only mutation, no economic or
-   standing side effects, authorized by the persona's attestation key,
-   fee-funded from persona earnings, effective at epoch boundary** so
-   the drawable snapshot (§4.1) and the endpoint move together.
-   **Residuals carried as stated, not solved:** the pre-first-claim
-   funding gap (bounded at one epoch); timing correlation if an
-   operator rotates many personas at once; and the compromise window
-   between host-takeover and the update landing, during which the
-   attacker can serve and countersign as P — survivable precisely
-   because serving and countersigning honestly is what P wanted, so the
-   attacker's best move is impersonation rather than damage.
+   **Mutability — REJECTED (Rick, 2026-09-13).** A bonded persona's
+   endpoint never changes. *"Rotating an existing bond is a dead giveaway
+   for someone to link it."* A new onion address is a new persona: Release
+   under the cold key, then a fresh JoinMarket. This paragraph previously
+   recorded a 2026-08-10 "rotation-in-place via `EndpointUpdate`" ruling,
+   which was not his; the three "endpoint-burn" cases it priced do not
+   survive grounding. The onion key is an HKDF child of the seed and cannot
+   be lost. The address is published in the JoinMarket post and dialed by
+   every witness, so "discovered" is its normal state. A compromised host
+   holds the serving seed and the identity signing key, and no endpoint
+   change takes either back; Release is the one act that ends the
+   attacker's position, authorized by the one key never on the host.
+   Record: [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md).
    **Open checks before the P-side closes:** (i) **The same-entity
    binding artifact**: whether the attestation Ed25519 leg *is* the
-   onion key (endpoint-binding per-signature, but rotation-coupled) or
-   a sibling with an onion-key proof-of-possession over the bond record
-   at post/update (rotation-free; the PoP is the binding) — a
+   onion key (endpoint-binding per-signature) or a sibling with an
+   onion-key proof-of-possession over the bond record at post (the PoP
+   is the binding) — a
    TJ-B-adjacent format decision landing on the **bond wire**, hence
    (ii) a persisted-wire change ⇒ version-constant bump (rule 42) when
    built. (iii) **RESOLVED — no change (2026-08-11, verified at
@@ -961,8 +948,7 @@ the round kept trying to add forensics underneath it.
    path; GF-1 separation plus the leaf gate were already doing the
    work, one layer down. Every hot-key surface accounted:
    countersigning-as-P harmless (the priced q² case); emission claims
-   blocked by Auth-B; `EndpointUpdate` cold by ruling; debit/Release
-   under cold `bond_spend_pk`.
+   blocked by Auth-B; debit/Release under cold `bond_spend_pk`.
    **The custody proviso the resolution rests on (verified):** the
    backing secret IS reachable from `master_seed_64` — via the
    receive-address KEM bundle (`kem_d_z` → decap → per-output
@@ -979,70 +965,18 @@ the round kept trying to add forensics underneath it.
    to a delta — `ARCHIVAL_P_DERIVE_V1` already carries the ruled
    three-tier shape (debit authority, identity hybrid, `hs_id` serving
    identity — GF-1/GF-9 labels, KAT-frozen). No new labels, no corpus
-   rotation. The only derivation delta is the **`hs_id` rotation
-   index**, an `EndpointUpdate` prerequisite rather than a serving-path
-   one: the daemon creates its service at index 0 today.
-   **Carrier — RULED (2026-08-10): `EndpointUpdate` rides the bond-post
-   vin as `BondPostKind::EndpointUpdate = 4`, same family as
-   `HoldingsUpdate`, deliberately different mutation class.** The
-   four-way decomposition on the record:
-   1. *Economics:* `HoldingsUpdate` is defined by its amount arms
-      (exactly ±FLOOR, one shard, `bonded_total` recomputed,
-      retention-horizon gate on drop). `EndpointUpdate` has **zero
-      credit, zero debit, `bonded_total` untouched** — nonzero amounts
-      on it are made unrepresentable on the wire, the same enforcement
-      idiom as the `bond_spend_pk` iff-`JoinMarket` coupling. The
-      endpoint field itself is present iff `JoinMarket` (born at post —
-      a bond without an endpoint was the discovery gap) or
-      `EndpointUpdate` (rotation).
-   2. *Standing effects — the two variants are opposites:*
-      `HoldingsUpdate` legitimately mutates what the market and window
-      read; `EndpointUpdate` touches nothing they read. Stated at
-      family level precisely because a maintainer seeing two siblings
-      in one enum will reach for the shared record-update path — and
-      the sibling's path *does* carry standing-mutation code.
-   3. *Authorization — COLD, and the family precedent is explicitly
-      BROKEN (ruled 2026-08-10).* The family splits debit vs non-debit,
-      but that split is a **proxy**: debit arms touch value, so they
-      get the cold key. `EndpointUpdate` touches no value, so the proxy
-      routes it hot — and the proxy is wrong here, because the thing
-      being protected is not value but **the persona's ability to
-      escape a compromised host**. Hot authorization gives the escape
-      hatch to exactly the key the host attacker already holds: the
-      attacker rotates to an address it controls, the operator rotates
-      back with the *identical* derived key — an unbounded flapping
-      contest between parties with equal authority, decided by whoever
-      posts last. Not a hijack window; a **permanent stalemate**, in
-      exactly the case the mutation exists for — so it cannot be filed
-      as a residual. Two of the three burn cases (compromise,
-      deanonymization) mean the hot key is in enemy hands, so
-      `EndpointUpdate` needs authority the compromised host does not
-      have: **the cold tier, despite being a non-debit post.** The cost,
-      stated honestly in the operator-facing text: rotation requires
-      reaching for the same custody used for releasing — the escape is
-      not automatable from the serving box. That is the correct
-      trade — an escape hatch a compromised host can operate isn't
-      one — but it is a real burden. It also cleans up the funding
-      residual: with cold authority the principal is already involved,
-      so fee-from-earnings becomes a nicety and the pre-first-claim
-      gap stops being a hard corner. Spec detail to resolve: which
-      cold key a non-`JoinMarket`-posted record verifies against
-      (`bond_spend_pk` is present iff `JoinMarket` on the wire).
-   4. *Timing — one family-level rule:* `EndpointUpdate` is ruled
-      effective at epoch boundary, and Pin-5 quantization already
-      lands `HoldingsUpdate`'s *drawable* effect at epoch open
-      regardless of when the record mutates — so both variants share
-      one statement: **record-effect at connect, mechanism-effect at
-      epoch open.** Neither carries its own timing rule.
-   **The laundering invariant is a TEST, not a sentence (ruled
-   2026-08-10):** prose will not stop the shared-path mistake, because
-   the sibling legitimately carries standing-mutation code. Two KATs
-   land with the implementation: (a) a record's
-   `join_settlement_epoch`, bad-interval list, `bonded_total`, and
-   holdings are **byte-identical** across an `EndpointUpdate`; (b) a
-   failure-window vector in which a persona at 10 accumulated misses
-   **still slashes after rotating** — the attack stated as a test, the
-   one that fails loudly if rotation is wired into the wrong branch.
+   rotation, and no derivation delta: one onion per persona is the
+   design (endpoint rotation REJECTED 2026-09-13, item 2 above), so the
+   service index is not a parameter.
+   **Carrier — REJECTED (2026-09-13).** There is no `EndpointUpdate`
+   post kind. The bond-post kinds are JoinMarket, Rebond, Release and
+   HoldingsUpdate; byte 4 is unassigned. The endpoint field is present iff
+   `JoinMarket`, born at post — a bond without an endpoint was the
+   discovery gap — and immutable for the record's life. The text this
+   paragraph replaces specified a kind-4 carrier (economics, standing,
+   cold authorization, timing, two laundering KATs); it was built in PR
+   #717 and excised before merge, the kind-4 branch kept at archive tag
+   `archive/feat/eu-b-c1-endpoint-update-wire-2026-09-13`.
 3. **Expiry semantics — CLOSED (2026-08-08): expiry ⇒ miss.** The
    temptation under unattributable expiry is to discard it
    (expiry⇒uncounted); that is precisely wrong — a durably dark P
@@ -1487,8 +1421,8 @@ than repealing it:
    in flight.
 
 **HOLD — two of the four have cleared and landed; a third, `EndpointUpdate`,
-is ruled and sequenced but not in the tree (updated 2026-09-12; was "two of
-the four", 2026-08-23).** The list as written was: pass-record
+is REJECTED (updated 2026-09-13; was "ruled and sequenced" 2026-09-12 and
+"two of the four" 2026-08-23).** The list as written was: pass-record
 serialization; the response format; `EndpointUpdate` on the bond wire; the
 settlement writer (item 9's schema is genuinely open).
 
@@ -1498,15 +1432,12 @@ settlement writer (item 9's schema is genuinely open).
 - **The response format — DISCHARGED 2026-08-21.** `RF-D1`…`RF-D10` ruled and
   implemented, PR #522. This entry is what made the other two "correctly
   blocked", so its clearing is what re-opened the queue.
-- **`EndpointUpdate` on the bond wire — RELEASED FROM HOLD 2026-09-12.** The
-  2026-08-10 ruling above is the shape; its one named spec gap (which cold key
-  a non-`JoinMarket` record verifies against) closed with C0 (PR #703), and the
-  six implementation-shaping questions the ruling did not reach are ruled in
-  [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md) (`EU-D1`…`EU-D10`,
-  2026-09-11). Not in the tree yet: B+C1 (wire + one predicate arm, atomic)
-  and D (the `hs_id` rotation index, a derivation replacement) follow in that
-  order. Until D lands the wire is a deliberate callee-without-caller,
-  disposed at `EU-D10`.
+- **`EndpointUpdate` on the bond wire — REJECTED 2026-09-13.** Rick's HARD
+  NO: a bonded persona's endpoint never changes; a new address is a new
+  persona. The JoinMarket half of what the 2026-09-11 round sequenced — the
+  vin's mandatory serving endpoint and the record column the witness reads
+  (`EU-D3`, `EU-D4`) — lands on its own; the kind-4 half was excised before
+  merge. Record: [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md).
 - **The settlement writer — SCHEMA LANDED; the production wiring is now the
   hold, as of 2026-08-25.** This entry said the round had `SO-D6` (reorg)
   outstanding, which was true on 2026-08-23 and is not now: `SO-D1`…`SO-D5`
@@ -1611,7 +1542,7 @@ against these.
    process holding `master_seed` (or holding the derived `hs_id_seed`,
    one convenient edit from the master seed) also holds `bond_spend_pk`'s
    authority — the exposure is **bond authority** (Release, the debit
-   arms, `EndpointUpdate`), not the emission claim (Auth-B stays
+   arms), not the emission claim (Auth-B stays
    leaf-gated on `backing_pubkey`, which is not in `ARCHIVAL_P_DERIVE_V1`
    — check (iii) still resolves "no change" on *that* axis). The build
    constraint: the serving side receives the **expanded onion identity**,
@@ -1698,8 +1629,7 @@ against these.
    load `λ·D/E` per block rises monotonically with `D`; an archiver must
    post `HoldingsUpdate` **continuously** to keep covering new segments (a
    recurring on-chain cost, with a recurring principal-funding question
-   attached — and it interacts with the cold-authorized `EndpointUpdate`
-   family); and the Foundation `CompleteTree` node's holdings grow forever
+   attached); and the Foundation `CompleteTree` node's holdings grow forever
    by definition. **The `D ≈ 324k` figure the round sized against is a
    snapshot, not a ceiling** — the concurrency inputs (and the
    `max_streams` / `MAX_INFLIGHT` placeholders) must be treated as
