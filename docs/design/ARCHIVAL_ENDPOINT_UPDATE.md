@@ -6,7 +6,8 @@ Release and a fresh `JoinMarket`. Three of the round's dispositions survive as
 the **JoinMarket-endpoint design** — `EU-D1` (the daemon is the client),
 `EU-D3` (the endpoint field, on `JoinMarket` only), `EU-D4` (the witness reads
 it from the drawable snapshot through the record) — and land in the
-JoinMarket-endpoint PR (number filled in on landing). Everything else in the
+JoinMarket-endpoint PR, **#724, merged to `dev` 2026-09-13 (`f103acd38`)**.
+Everything else in the
 round (`EU-D2`, `EU-D5`…`EU-D13`, the 2026-08-10 "carrier ruling" they
 implemented, and the `ARCHIVAL_P_DERIVE_V1` retirement authorized for D) is
 rejected with it — §5. **Read §1 before reasoning about endpoints.**

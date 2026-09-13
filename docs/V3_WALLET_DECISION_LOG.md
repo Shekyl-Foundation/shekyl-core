@@ -5175,7 +5175,8 @@ present iff `post_kind == JoinMarket` and **mandatory** there (a bond
 without an endpoint was the discovery gap), immutable for the record's life.
 Ruled by Rick (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`,
 2026-09-11; narrowed to JoinMarket-only by the 2026-09-13 entry below);
-landing under `07-consensus-atomic-cutovers.mdc`.
+landed under `07-consensus-atomic-cutovers.mdc` as PR #724 (`f103acd38`,
+2026-09-13).
 
 **What moves.** Every serialized JoinMarket vin gains 32 bytes after
 `bond_spend_pk`. The self-pinned gate-4 lifecycle fixture
@@ -5228,7 +5229,7 @@ keeps `EU-D1`, `EU-D3`, `EU-D4` as the JoinMarket-endpoint design.
 **What was built and excised.** PR #717 carried the JoinMarket endpoint
 (vin field, record column, LMDB v13) interleaved with the kind-4 arm; the
 kind-4 half was excised before merge and the JoinMarket half re-cut as its
-own PR. Archive tags: `archive/feat/eu-b-c1-endpoint-update-wire-2026-09-13`
+own PR, #724, merged 2026-09-13 (`f103acd38`). Archive tags: `archive/feat/eu-b-c1-endpoint-update-wire-2026-09-13`
 (the #717 branch), `archive/feat/eu-d-hs-id-rotation-2026-09-13` (D's
 design pass, never built).
 
