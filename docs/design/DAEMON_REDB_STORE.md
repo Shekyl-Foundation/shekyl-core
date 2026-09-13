@@ -1137,15 +1137,52 @@ reasons row for row** — two instruments, one field, cross-checked:
 > the C++ pruning had."* So: the inherited mechanism **stays in the C++ tree**
 > and is simply not ported, and a **new Rust mechanism that does discard is
 > being written**. The antecedent of each conditional below — *if no Rust-side
-> discard exists* — is therefore **expected to be false**. The likely outcome is
-> that these exclusions **survive on a re-pointed rationale** (node-variability
-> created deliberately by the new mechanism) rather than being lifted, and the
-> re-pointing is what must not be skipped: a reason that happens to land on the
-> right verdict for the wrong mechanism is how the next expiry goes unnoticed.
+> discard exists* — is therefore **expected to be false**.
+>
+> **CORRECTED before merge (Rick, 2026-09-13): "pruning is NOT node variable",
+> so the likely outcome is that these exclusions are LIFTED, not re-pointed.**
+> An earlier draft of this paragraph predicted they would *survive on a
+> re-pointed rationale (node-variability created by the new mechanism)*. That
+> rationale never becomes available — and predicting it would have been **this
+> block's own warning committed one level down**: a reason that happens to land
+> on the right verdict for the wrong mechanism is how the next expiry goes
+> unnoticed.
+>
+> **The distinction that makes three words load-bearing: a digest cares whether
+> nodes AGREE, not whether bytes are PRESENT.** Uniform, consensus-scheduled
+> discard leaves every node holding identical state at the boundary — a
+> well-defined accumulator with the boundary *in the definition*, digestible.
+> Only **node-variable** discard, where two honest nodes legitimately differ,
+> forces exclusion. Absence alone never did, and reading absence as the trigger
+> is what produced the expired rationale this block corrects.
+>
+> **One clause must be attached or the ruling is false for the one table this is
+> about — routed, not assumed.** [`../V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md)
+> ("Normal nodes vs archivers", `:171–176`) defines **three** retention classes
+> of honest node: a non-staker retains **A** and prunes deep segment leaves to
+> `R_k`; an archiver retains **B** plus shard-scoped **C**; the foundation floor
+> retains **B + C** completely — and "market redundancy … above the floor"
+> varies **between archivers**. So retained *content* is node-variable by
+> design; it is the market's product. What is uniform is the discard
+> **boundary**, and therefore the **floor** of what every honest node holds. The
+> ruling holds exactly when the accumulator is defined **over that
+> consensus-retained floor** rather than over "the table's contents", with
+> archiver surplus definitionally **outside** the digest domain. *Open and
+> routed:* whether that surplus sits outside the domain or in a
+> separately-classed table is `PDM-Q`'s to rule — under the first reading these
+> exclusions lift; under the second `curve_tree_leaves` differs between two
+> honest nodes and an exclusion would be correct after all.
 > **`archival_attestation_witness`'s conditional row reopens on the same
 > event**, having dissolved only while nothing could discard and nothing could
 > acquire pruned. Neither is settled until the new mechanism's discard shape is
 > ruled (`PDM-Q`, PR #723) — still a trigger, now with a direction.
+>
+> **Cross-reference:** slice A reached the same place from the digest side, and
+> its reopening subsection states the conjunct this trigger needs — *discard
+> lands **and** is node-variable*. Rick's ruling settles that conditional's
+> second half. Two records, one finding: read them together
+> ([`../LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §12,
+> reopening criteria).
 >
 > - **`txs_prunable` — the exclusion is on a trigger, not lifted.** *If* no
 >   Rust-side discard exists, the bytes are always present and replay
