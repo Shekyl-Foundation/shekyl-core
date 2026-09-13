@@ -26,12 +26,18 @@ public:
   std::set<uint64_t> missing_leaves;
   std::set<uint64_t> missing_layer0_chunks;
   std::set<uint64_t> missing_output_keys;
+  /// Positions whose reads throw, as LMDB does when the env is closed or a
+  /// read transaction cannot be opened -- the store failing, not a hole.
+  std::set<uint64_t> throwing_leaves;
+  std::set<uint64_t> throwing_layer0_chunks;
 
   uint8_t get_curve_tree_depth() const override { return 1; }
   uint64_t get_curve_tree_leaf_count() const override { return leaf_count; }
 
   bool get_curve_tree_leaf_by_tree_position(uint64_t pos, uint8_t* leaf_out) const override
   {
+    if (throwing_leaves.count(pos))
+      throw cryptonote::DB_ERROR("Attempted to read leaf on closed database");
     if (pos >= leaf_count || missing_leaves.count(pos))
       return false;
     for (size_t i = 0; i < 128; ++i)
@@ -41,6 +47,8 @@ public:
 
   bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const override
   {
+    if (layer == 0 && throwing_layer0_chunks.count(chunk))
+      throw cryptonote::DB_ERROR("Failed to create a read transaction for the db");
     if (layer == 0 && missing_layer0_chunks.count(chunk))
       return false;
     for (size_t i = 0; i < 32; ++i)
@@ -111,6 +119,36 @@ TEST(curve_tree_path_fail_closed, missing_output_key_refuses_and_names_position)
   std::string err;
   ASSERT_FALSE(assemble(db, 0, 3, 3, out, err));
   EXPECT_NE(err.find("tree position 1"), std::string::npos) << err;
+}
+
+// The callbacks run inside a Rust `extern "C"` frame: an exception that
+// escaped one would abort the process rather than produce the promised
+// refusal. LMDB's read paths do throw (`check_open`, read-txn setup), so
+// each store failure must come back as `false` with its message attached.
+TEST(curve_tree_path_fail_closed, throwing_leaf_read_becomes_a_refusal_with_its_message)
+{
+  HoleyTreeDB db;
+  db.leaf_count = 3;
+  db.throwing_leaves = {1};
+
+  cryptonote::curve_tree_path_bytes out;
+  std::string err;
+  ASSERT_FALSE(assemble(db, 0, 3, 3, out, err));
+  EXPECT_NE(err.find("tree position 1"), std::string::npos) << err;
+  EXPECT_NE(err.find("closed database"), std::string::npos) << err;
+}
+
+TEST(curve_tree_path_fail_closed, throwing_layer_hash_read_becomes_a_refusal_with_its_message)
+{
+  HoleyTreeDB db;
+  db.leaf_count = 3;
+  db.throwing_layer0_chunks = {0};
+
+  cryptonote::curve_tree_path_bytes out;
+  std::string err;
+  ASSERT_FALSE(assemble(db, 0, 3, 3, out, err));
+  EXPECT_NE(err.find("layer 0 chunk 0"), std::string::npos) << err;
+  EXPECT_NE(err.find("read transaction"), std::string::npos) << err;
 }
 
 TEST(curve_tree_path_fail_closed, complete_store_yields_expected_shape)
