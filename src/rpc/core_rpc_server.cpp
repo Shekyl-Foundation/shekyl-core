@@ -1667,10 +1667,18 @@ namespace cryptonote
                        li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
                   {
                     uint8_t lf[128];
-                    if (db.get_curve_tree_leaf_by_tree_position(li, lf))
-                      extra_data.insert(extra_data.end(), lf, lf + 128);
-                    else
-                      extra_data.insert(extra_data.end(), 128, 0);
+                    if (!db.get_curve_tree_leaf_by_tree_position(li, lf))
+                    {
+                      // Never substitute zero bytes: a zero leaf hashes to a
+                      // wrong-but-well-formed sibling, and the client's path
+                      // verification fails against R_k with nothing pointing
+                      // at the store (PDM-Q-F9). Match the reader at the top of
+                      // this function.
+                      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+                      error_resp.message = "Failed to read leaf at tree position " + std::to_string(li);
+                      return false;
+                    }
+                    extra_data.insert(extra_data.end(), lf, lf + 128);
                   }
                 }
                 else
@@ -1679,7 +1687,13 @@ namespace cryptonote
                        li < sibling_chunk * prev_cw + cur_in_chunk; ++li)
                   {
                     uint8_t h[32] = {};
-                    db.get_curve_tree_layer_hash(layer - 2, li, h);
+                    if (!db.get_curve_tree_layer_hash(layer - 2, li, h))
+                    {
+                      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
+                      error_resp.message = "Internal error: missing layer hash at layer "
+                        + std::to_string(layer - 2) + " chunk " + std::to_string(li);
+                      return false;
+                    }
                     extra_data.insert(extra_data.end(), h, h + 32);
                   }
                 }
