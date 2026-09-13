@@ -49,19 +49,39 @@ extension would be debt the rewrite re-creates. DRS-D5's
 decompose-in-C++-first rationale is already retired (2026-09-01
 countermand).
 
-**Reopening criteria.** Steering names a C++ landing window *before*
-`DRS-E*`, in writing, with a reviewer-map of the C++ surface. "The rewrite
-slipped" is not a criterion.
+**Launch sequencing.** Genesis does not precede this design's
+implementation; steering, 2026-09-12. `DRS-E*` is therefore on the
+critical path to launch, because the first implementation waits on it.
+That may already have been true; it was not written in the documents a
+reader walks, and a launch-state fork — genesis shipping while the C++
+daemon still retains everything — was inferred from trajectory to fill
+the gap. There is no such window to design a policy for.
+
+This is not a claim that the pruning *mode* needs a coordinated
+activation (TJ's node-local claim is `PDM-Q3`'s to confirm). It is a
+claim that V3 does not ship a daemon that still cannot discard set B.
+
+**Reopening criteria.** Two, independently:
+
+1. Steering names a C++ landing window *before* `DRS-E*`, in writing,
+   with a reviewer-map of the C++ surface.
+2. Steering names, in writing, a genesis window that precedes this
+   design's implementation.
+
+"The rewrite slipped" is not a criterion for either. Trajectory inference
+is how the dissolved launch-state fork was minted; it is not a
+criterion.
 
 **Re-evaluation shape.** An amendment to this section, in this file, citing
 the steering note. Not a silent C++ PR. Not an allow-comment in
-`db_lmdb.cpp`.
+`db_lmdb.cpp`. Not a silent genesis that ships the C++ daemon.
 
 This constraint is **not** a ruling on `PDM-Q3` (consensus-scheduled vs
 per-node) and **not** a ruling on TJ's already-stated claim that the
 pruning *mode* is node-local and ships without coordination. Those are
-still this round's to confirm or correct. `PDM-Q-S0` answers only *which
-codebase the first implementation may touch*.
+still this round's to confirm or correct. `PDM-Q-S0` answers *which
+codebase the first implementation may touch* and *that genesis does not
+precede that implementation*.
 
 ---
 
@@ -163,6 +183,18 @@ before assuming it. How deep before collapse? The number sets set-B
 scarcity and interacts with the challenge draw window and the redraw
 floor. Name which closed rulings the depth choice touches.
 
+The same number sets the **free-regime duration**. Even with PDM shipped
+and running at height 1, no node can have discarded anything until the
+first segment reaches discard depth. Scarcity does not exist at chain
+start regardless of what ships when (`PDM-Q-S0` closed the
+schedule-created reading of that window; what remains is structural).
+A Q2 ruling that names a depth without stating that duration — in
+heights, and as wall-clock at the pinned block-time constant — and
+without saying what the archival market does during it (bonds,
+challenges, whether the possession test is live) has not answered Q2.
+The §3 free-riding bullet is discharged against this duration, not
+against the rewrite calendar.
+
 ### `PDM-Q3` OPEN — Determinism: consensus-scheduled or per-node?
 
 The retention prune is identical everywhere. The stripe prune is
@@ -170,8 +202,11 @@ seed-dependent and per-node. Which shape does leaf discard take?
 
 Do **not** re-derive in ignorance of TJ's already-stated sequencing
 resolution (index `TJ-A…TJ-G` row): *the pruning MODE is node-local and
-ships post-genesis without coordination (rule 75)*. `PDM-Q3`'s job is to
-confirm whether set-B leaf discard can actually take that shape: if any
+ships post-genesis without coordination (rule 75)*. That sentence is
+about the mode not needing a coordinated hard-fork to *activate*; it
+is not a claim that genesis ships before PDM exists. `PDM-Q-S0` has
+ruled the latter. `PDM-Q3`'s job is to confirm whether set-B leaf
+discard can actually take the node-local shape: if any
 consensus-relevant read can reach discarded bytes, two honest nodes at
 one height legitimately differ and that is a consensus event, not a
 configuration difference. Citing TJ is not answering Q3.
@@ -235,12 +270,15 @@ Named so they cannot be discovered after a ruling. Not answered here.
 - **Withholding.** An archiver that holds leaves but refuses selected
   requests. What distinguishes that from an offline archiver, and does
   the challenge mechanism see the difference?
-- **Free-riding during the transition.** While every node still retains
-  everything, an "archiver" needs no storage. Is there a cutover where
-  bonds start collateralising something real, and what stops a bond
-  posted in the free regime from being honoured in the scarce one?
-  `PDM-Q-S0` makes this window longer, not shorter: design can close
-  while the C++ daemon still retains every leaf.
+- **Free-riding during the free regime.** The free regime is
+  structural, not a rewrite-schedule artifact. Even with PDM shipped
+  at height 1, an "archiver" needs no storage until the first segment
+  reaches Q2's discard depth; scarcity does not exist at chain start
+  regardless of what ships when. What stops a bond posted in the free
+  regime from being honoured in the scarce one? The duration of that
+  question is Q2's output. Q2 must state the duration and what the
+  market does during it; this bullet is discharged against that
+  duration, not against `DRS-E*`'s calendar.
 - **Eclipse and fetch.** If a node must fetch to verify, an eclipsing
   adversary controls what it can verify. Compare against today, where it
   verifies locally. TJ-F's "no store handle" face is the intended
@@ -340,6 +378,16 @@ Named now so they are not discovered later.
   sentence is unamended.
 - **PDM-Q-F5.** Implementation is forbidden in C++ (`PDM-Q-S0`).
 
+### Retracted
+
+- **PDM-Q-F6 RETRACTED 2026-09-12** as a launch-state fork. Was
+  premised on genesis shipping ahead of `DRS-E*` (inferred from
+  trajectory, not ruled). The (a)/(b)/(c) launch-policy window does
+  not exist. Surviving remainder: (i) `PDM-Q-S0` records that genesis
+  does not precede this design's implementation; (ii) the free regime
+  is structural — its duration is Q2's discard depth, not a
+  schedule artifact.
+
 ### Inference (not yet a ruling)
 
 - The possession-test/liveness paraphrase is a plausible reading of the
@@ -348,8 +396,10 @@ Named now so they are not discovered later.
 
 ### Undetermined (ruling pass)
 
-- The retained set, the trigger, determinism, reconstruction, cold sync,
-  tx-prunable subject-matter, `--prune-blockchain` fate, fetch privacy.
+- The retained set, the trigger (including the free-regime duration
+  and what the market does during it), determinism, reconstruction,
+  cold sync, tx-prunable subject-matter, `--prune-blockchain` fate,
+  fetch privacy.
 - Whether any consensus-relevant read currently reaches
   `m_curve_tree_leaves` *other than* serve-credit vin verification
   (TJ-F's dissolution target). A second reader would be a second Q3
@@ -364,9 +414,9 @@ Named now so they are not discovered later.
 
 | ID | Question | State |
 | --- | --- | --- |
-| `PDM-Q-S0` | Implementation site | **RULED 2026-09-12** — after `DRS-E*`; no C++ |
+| `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
 | `PDM-Q1` | Retained set | OPEN |
-| `PDM-Q2` | Trigger and depth | OPEN |
+| `PDM-Q2` | Trigger, depth, and free-regime duration | OPEN |
 | `PDM-Q3` | Consensus-scheduled vs per-node | OPEN |
 | `PDM-Q4` | Reconstruction path | OPEN |
 | `PDM-Q5` | Cold sync and bootstrap | OPEN |
@@ -382,7 +432,10 @@ a test (rule 50 / the opening prompt).
 
 ## 8. What the next pass owes
 
-Steering review of this opening. Then the ruling pass: §§2–3 answered,
-each with rule-21 shape, evidence pinned at a declared sha, adversarial
-items discharged or named as remaining, D10/SO-D8/CR-D2/sole-occupant
-consequences stated rather than discovered.
+Steering review of this opening. `PDM-Q-F6`'s launch-state fork is
+retracted; `PDM-Q-S0` now carries the genesis-does-not-precede sentence.
+Then the ruling pass: §§2–3 answered, each with rule-21 shape, evidence
+pinned at a declared sha, adversarial items discharged or named as
+remaining, D10/SO-D8/CR-D2/sole-occupant consequences stated rather than
+discovered. Q2's ruling must state the free-regime duration and the
+market's behaviour during it.
