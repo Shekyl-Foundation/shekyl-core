@@ -137,6 +137,20 @@ PEAK_RSS_RATIO = 2.0         # <= passes
 # before a daemon ever sees it.
 ALLOWED_SYNC_MODES = ("safe",)
 
+# §1.3 requires the artifact to document "disk type (NVMe vs HDD)". "unknown" is
+# not a disk type, and a required field satisfied by a placeholder is a
+# requirement that cannot fail — so the allowed values are enumerated.
+ALLOWED_DISK_CLASSES = ("hdd", "ssd_or_nvme")
+
+# Filesystems on which DRS-D9 CANNOT HOLD. fsync against tmpfs/ramfs has no
+# backing store to flush, so it returns without doing anything and `safe` is
+# indistinguishable from `MDB_NOSYNC`. A wall-time number taken there is not a
+# strict-durability baseline, it is a RAM-disk baseline wearing the label — and
+# the first real run of this harness produced exactly that, from a scratch
+# directory that happened to be a 63 GB tmpfs. The `unknown` disk class was the
+# only visible symptom.
+DURABILITY_DEFEATING_FS = ("tmpfs", "ramfs")
+
 PRIMARY_MEASURE = "ibd_wall_time_s"
 MEASURE_AXES = {
     "ibd_wall_time_s": ("wall_time", "s", IBD_FLOOR_RATIO, IBD_HARD_FAIL_RATIO),
@@ -234,6 +248,19 @@ def artifact_refusals(a):
         for k in ("cpu_model", "ram_bytes", "disk_class"):
             if not h.get(k):
                 r.append(f"hardware.{k} absent or empty")
+        if h.get("disk_class") and h["disk_class"] not in ALLOWED_DISK_CLASSES:
+            r.append(f"hardware.disk_class is {h['disk_class']!r}, not one of "
+                     f"{list(ALLOWED_DISK_CLASSES)}. §1.3 requires the disk TYPE; a "
+                     "placeholder satisfies the field without satisfying the "
+                     "requirement")
+        fs = h.get("fs_type")
+        if not fs:
+            r.append("hardware.fs_type absent — it decides whether DRS-D9 could hold "
+                     "at all, so it is a measurement condition and not a detail")
+        elif fs in DURABILITY_DEFEATING_FS:
+            r.append(f"hardware.fs_type is {fs!r}: fsync there has no backing store to "
+                     "flush, so DRS-D9 durability was NOT in force and this is a "
+                     "RAM-disk number, not a strict-durability baseline")
 
     f = a.get("fixture")
     if not isinstance(f, dict):
@@ -462,6 +489,25 @@ def _rpc(port, method, params=None, timeout=60):
         return json.load(r)
 
 
+def _fs_type(path):
+    """Filesystem type backing `path`, by longest matching mount point."""
+    real = os.path.realpath(path)
+    best, best_type = "", ""
+    try:
+        with open("/proc/mounts", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                mp = parts[1].replace("\\040", " ")
+                if (real == mp or real.startswith(mp.rstrip("/") + "/")) and \
+                        len(mp) > len(best):
+                    best, best_type = mp, parts[2]
+    except OSError:
+        return ""
+    return best_type
+
+
 def hardware_fingerprint(path):
     cpu = ""
     with open("/proc/cpuinfo", encoding="utf-8") as fh:
@@ -479,14 +525,19 @@ def hardware_fingerprint(path):
     try:
         st = os.stat(path)
         maj, mnr = os.major(st.st_dev), os.minor(st.st_dev)
-        rot = f"/sys/dev/block/{maj}:{mnr}/../queue/rotational"
-        if os.path.exists(rot):
-            with open(rot, encoding="utf-8") as fh:
-                disk = "hdd" if fh.read().strip() == "1" else "ssd_or_nvme"
+        # Try the partition's own queue first, then its parent disk: a partition
+        # carries no `rotational` of its own, and a whole-disk device has no
+        # parent to walk up to.
+        for rot in (f"/sys/dev/block/{maj}:{mnr}/queue/rotational",
+                    f"/sys/dev/block/{maj}:{mnr}/../queue/rotational"):
+            if os.path.exists(rot):
+                with open(rot, encoding="utf-8") as fh:
+                    disk = "hdd" if fh.read().strip() == "1" else "ssd_or_nvme"
+                break
     except OSError:
         pass
     return {"cpu_model": cpu, "ram_bytes": ram, "disk_class": disk,
-            "cpu_count": os.cpu_count()}
+            "fs_type": _fs_type(path), "cpu_count": os.cpu_count()}
 
 
 def _dir_bytes(path, apparent):
@@ -601,6 +652,20 @@ def measure(args):
 
     work = os.path.abspath(args.work_dir)
     os.makedirs(work, exist_ok=True)
+    # Refuse a durability-defeating filesystem up front. At the reference height
+    # this saves roughly a day of generation that could not have produced a
+    # DRS-D9 number, and it is the same refusal the validator applies to the
+    # finished artifact -- checked here so the harness never starts work whose
+    # result it would decline to emit.
+    for label, d in (("--work-dir", work),
+                     ("--seed-dir", os.path.abspath(args.seed_dir or work))):
+        os.makedirs(d, exist_ok=True)
+        fs = _fs_type(d)
+        if fs in DURABILITY_DEFEATING_FS:
+            _fail(f"{label}={d} is on {fs}, where fsync has no backing store to flush. "
+                  f"DRS-D9 durability cannot hold there, so the run would produce a "
+                  f"RAM-disk number labelled as a strict-durability baseline. Point it "
+                  f"at real storage.")
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
     subj_dir = os.path.join(work, "subject")
     # The SUBJECT is always wiped: it is the thing being measured and an IBD

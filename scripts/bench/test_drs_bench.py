@@ -44,7 +44,8 @@ def valid_artifact(engine="lmdb", **over):
             "readback_gap": "no readback exists",
         },
         "hardware": {"cpu_model": "Test CPU", "ram_bytes": 1 << 34,
-                     "disk_class": "ssd_or_nvme", "cpu_count": 8},
+                     "disk_class": "ssd_or_nvme", "fs_type": "ext4",
+                     "cpu_count": 8},
         "fixture": {
             "nettype": "fakechain", "height_reached": 200, "height_requested": 200,
             "reference_height": D.REFERENCE_HEIGHT, "tx_per_block": 0,
@@ -166,6 +167,28 @@ class ArtifactRefusals(unittest.TestCase):
     def test_refuses_empty_cpu_model(self):
         self._refuse(lambda a: a["hardware"].__setitem__("cpu_model", ""),
                      "hardware.cpu_model")
+
+    def test_refuses_placeholder_disk_class(self):
+        """§1.3 requires the disk TYPE. "unknown" is non-empty, so a mere
+        presence check accepts it — a required field satisfied by a placeholder
+        is a requirement that cannot fail. The harness emitted exactly this on
+        its first real run."""
+        self._refuse(lambda a: a["hardware"].__setitem__("disk_class", "unknown"),
+                     "a placeholder satisfies the field")
+
+    def test_refuses_a_tmpfs_measurement(self):
+        """fsync on tmpfs has no backing store to flush, so `safe` and
+        MDB_NOSYNC are indistinguishable and DRS-D9 was never in force. The
+        number is real; what it measures is a RAM disk."""
+        self._refuse(lambda a: a["hardware"].__setitem__("fs_type", "tmpfs"),
+                     "RAM-disk number")
+
+    def test_refuses_ramfs_too(self):
+        self._refuse(lambda a: a["hardware"].__setitem__("fs_type", "ramfs"),
+                     "DRS-D9 durability was NOT in force")
+
+    def test_refuses_missing_fs_type(self):
+        self._refuse(lambda a: a["hardware"].pop("fs_type"), "hardware.fs_type absent")
 
     def test_refuses_zero_height_reached(self):
         self._refuse(lambda a: a["fixture"].__setitem__("height_reached", 0),
