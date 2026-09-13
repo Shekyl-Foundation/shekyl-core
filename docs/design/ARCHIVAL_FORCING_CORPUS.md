@@ -51,15 +51,27 @@ set difference against the X-macro is empty.
 "N forceable" is a **derived** figure here. It is not asserted anywhere in
 this document independently of the rows.
 
-**One figure disagrees and is flagged rather than corrected.**
-`LMDB_WRITE_ATOMICITY_AUDIT.md` §10 marks **17** distinct `archival_*` rows
-`excluded` on the Digest v0 axis — counted from the rows, not from a prior
-figure — while the P0e paragraph in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) describes "16 archival
-journals under §7.1.1". The 34-cell denominator does not depend on which is
-right: the diff needs all 17 tables populated either way. But §7.1.1's
-exclusion set is what this corpus discharges, so the off-by-one belongs to
-whoever owns that paragraph. Not silently rewritten here.
+**A figure that looks like an off-by-one is two denominators, and both are
+right.** `LMDB_WRITE_ATOMICITY_AUDIT.md` §10 marks **17** `archival_*` rows
+`excluded` on the Digest v0 axis, while the P0e paragraph in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) says "16 archival
+journals under §7.1.1". Parsed **by column** — the token `excluded` appears in
+both the Digest v0 and Accumulator class columns, so a row-wise grep
+over-counts — §10's Digest v0 axis is 21 `excluded`, 24 `uncovered`, 3
+`v0-partial`, 1 `v0`, summing to 49. The 21 decompose exactly as P0e states:
+
+| Group | Members |
+| --- | --- |
+| 16 archival journals | the 17 `archival_*` rows **less** `archival_alt_attestation_witness` |
+| 4 outside the main-chain domain | `alt_blocks`, `archival_alt_attestation_witness`, `txpool_blob`, `txpool_meta` |
+| 1 dead | `txs` — "opened, never written or read through its handle" (DRS-W4) |
+
+So **17 counts the `archival_` prefix; 16 counts archival journals by role**,
+with the alt witness grouped beside `alt_blocks` in §5 because that is where
+its divergence lives. Nothing to correct. Recorded because this lane first
+filed it as a discrepancy: the flag was raised on a row-wise match, and 7b's
+column-wise recount is what dissolved it. The 34-cell denominator is unaffected
+either way — the diff needs all 17 tables populated.
 
 ---
 
@@ -123,19 +135,66 @@ seven tests call `set_archival_settlement`, and `EpochRevertDropsOnlyThatEpoch`
 (`:120-131`) calls `delete_archival_settlement_for_epoch` and asserts on the
 result.
 
-What it is missing is **backend reach**. Its fixture is
-`TempLMDB = TempArchivalLMDB<cryptonote::BlockchainLMDB>` — already a template
-over the DB type, whose own comment anticipates substituting another subclass.
-That template parameter is the seam. Making this file backend-parametric
-discharges §7.1.1 for settlement **without** a block sequence and **without** a
-raw writer, and is the cheapest real item in this round.
+This lane first proposed making that fixture backend-parametric — it is
+`TempArchivalLMDB<DBT>`, already a template — and **E1's owner declined, on
+grounds this document adopts.** The fixture's comment scopes the template to
+"a `BlockchainLMDB` subclass", and its constructor drives `open`,
+`set_batch_transactions`, `batch_start`: the C++ `BlockchainDB` API.
+`shekyl-chain-store` is a Rust crate with no such interface, so "a redb-backed
+`DBT`" means a C++ class implementing `BlockchainDB` over redb through the
+FFI — the façade **DRS-D1** refuses. D1's word is *permanent* and a test-only
+shard is arguably not that, so the refusal does not rest on the letter. It
+rests on what the green would mean: the KAT would force apply/revert through
+an adapter written for the test, so passing would prove the adapter works.
+That is a shim standing between the oracle and its subject, built to satisfy
+the very rule that exists because a backend can omit its hooks and still pass.
+
+### 3.5 The routed question: is settlement's bar already met?
+
+**Routed, not ruled here — §7.1.1 belongs to the DRS-0 document, not to this
+lane.** The rule has two sentences and they gate different things:
+
+> **Rule:** do **not** extract/port **S-ARCH** (or implement archival apply in
+> `shekyl-chain-store`) until digest coverage includes the archival journal
+> families (**or an explicit, named exclusion with a replacement KAT that
+> forces apply/revert to run**). ... digests must still *see* production LMDB
+> behavior for those paths **before claiming parity**.
+
+The parenthetical gates **extraction**. The trailing clause gates **parity**.
+Read that way, both of the following are true at once, and the register should
+say which bar it is talking about:
+
+- **Extraction, for `archival_settlement` only: arguably met today.** The
+  escape clause wants a named exclusion plus a KAT that forces apply/revert to
+  run. §3.1–3.2 are the named exclusion; `archival_settlement_table.cpp` is
+  the KAT, against production `BlockchainLMDB`, with no redb, no façade and no
+  corpus. This also breaks a circularity worth naming: §7.1.1 bars
+  *implementing archival apply in `shekyl-chain-store`*, so "write the Rust
+  apply, then KAT it" cannot be the order. KAT-first against the C++ is the
+  only direction that opens.
+- **Parity: not met, and not by this KAT.** §7.1.1's own first paragraph names
+  the hazard as *"a backend can omit all apply/revert hooks and still pass core
+  digests."* A KAT that exercises **LMDB's** hooks cannot detect **redb**
+  omitting **its** hooks — it does not touch redb at all. So the KAT satisfies
+  the clause's letter without addressing the hazard its preamble states. What
+  addresses that hazard is the corpus, the diff, and the `ApplyPolicy`
+  sufficiency control of §5.
+
+**Recommendation to whoever owns §7.1.1:** treat the existing KAT as
+discharging the **extraction** bar for the settlement family, keep the
+exclusion named, and keep the parity bar owed against the corpus. If instead
+"replacement KAT" was always meant to imply cross-backend reach, then the
+clause as written is weaker than its rationale and should be tightened — which
+is a one-sentence edit, and better made deliberately than discovered at a
+green.
 
 ---
 
-## 4. Two forceability costs found while scoping
+## 4. Three forceability findings from the scoping pass
 
-Both were found by checking rather than assuming, and both change the corpus's
-cost profile. Surfaced here so they are not discovered at test time.
+All three were found by checking rather than assuming. Two are costs that
+change the corpus's build; the third removes one. Surfaced here so none of
+them is discovered at test time.
 
 **4.1 `archival_attestation_witness` is not produced by local mining.**
 `blockchain_db.cpp:673` writes the row only `if (!attestation_witness.empty())`,
@@ -273,7 +332,13 @@ agreement with 7b on `ApplyPolicy`; the TLB decision.
   rather than duplicating it.
 - The sufficiency control — blocked on `ApplyPolicy` landing in
   `shekyl-chain-store` (ruled in, not yet built).
-- Settlement's two cells — blocked on **SO-D8**; the backend-parametric
-  fixture of §3.4 is the part that is *not* blocked.
+- Settlement's two **corpus** cells — blocked on **SO-D8**, which is the
+  writer landing. Nothing in this round moves them.
 - The attestation-witness validity question of §4.1 — open, and it gates how
   much construction that family needs.
+
+**Withdrawn during the round:** the backend-parametric settlement fixture.
+Proposed here, declined by E1's owner on the DRS-D1 façade ground and on the
+stronger one that the KAT would then be testing its own adapter (§3.4). It is
+replaced by the routed question of §3.5, which is cheaper than the thing it
+replaces and does not need the fixture at all.
