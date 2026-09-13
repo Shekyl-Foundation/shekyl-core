@@ -162,7 +162,7 @@ inherited as "the client waits."
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
 | **Unauthenticated SOCKS, no isolation flags.** The fetch client presents no SOCKS credentials and sets no isolation flags on the zone proxy. Circuit assignment is Tor's, per its own defaults — this is not a one-circuit guarantee. Fetches then share circuits with overlay P2P (no credentials on the same SOCKS); that blending is a consequence, not a cover mechanism. Cover is TRC's subject | `SF-D3` RULED 2026-09-12 |
 | **The virtual port is 80**, a shared constant both sides read from `shekyl-curve-tree` (`SF-D4` named the home). Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — the current location, not the home; the implementation PR moves it. Two `80`s that happen to agree are still not the ratification — this row is the number; the implementation PR puts one constant in `shekyl-curve-tree` and both sides read it. **Request amendment:** same `GET /shard/{id}`, one required header decoding to `nonce[32] ‖ height_le[8]`, no path token, query string, or body; every production call uses it | `SF-D5` RULED 2026-09-12; AMENDED 2026-09-13 |
-| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is a non-row (filter / pre-dial miss). 404 is a completed exchange (immediate miss), not a retry. `content-length` must equal the constant `signature_envelope_len` plus `framed_len()`; disagreement is malformed and is known after fixed metadata but before segment bytes. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
+| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is a non-row (filter / pre-dial miss). 404 is a completed exchange (immediate miss), not a retry. Over-capacity silent close is stall-class (`RF-R1`), not a 404. Any other complete-head is malformed. Stall retries of that `P` reuse the same 40-byte header. `content-length` must equal the constant `signature_envelope_len` plus `framed_len()`; disagreement is malformed and is known after fixed metadata but before segment bytes. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
 | **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(destination, shard_id, header)` — schedulers name `P`; the HTTP path names only `s`. `N` slots, no unbounded buffer: a scheduler waits for a slot. `N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`). Not organic draw cap `k` and not a function of `D`. SP-T3 re-base / W₂ owns the upper bound as min(circuit-churn, memory); the implementation PR owns the lower-bound judgement. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12 |
 | **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`, performed by the organic scheduler, not by `shekyl-p-fetch`. Per-fetch exclusion is scratch, not memory. The fetch client forms no opinions — it is given a destination | `SF-D10` RULED; `SF-D12` corollary |
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
@@ -587,11 +587,12 @@ an implementation.
 
 | Outcome | Challenge (assigned `P`) | Organic (`SF-D10` draw) |
 | --- | --- | --- |
-| Circuit timeout / HTTP stall / SOCKS CONNECT or intro failure (endpoint *was* on the record) | Stall-class: bounded retries of **that** `P` inside the deadline, then **miss** | Stall-class: same per-attempt retries; then exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Circuit timeout / HTTP stall / SOCKS CONNECT or intro failure / over-capacity silent close (endpoint *was* on the record). `RF-R1`: over-capacity arrivals are closed with **no HTTP bytes**, not a 404 | Stall-class: bounded retries of **that** `P` inside the deadline, then **miss** | Stall-class: same per-attempt retries; then exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Body short of agreed `N` (truncated transfer) | Stall-class | Stall-class |
 | Body long of agreed `N` (overlength) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `content-length` ≠ `signature_envelope_len + framed_len()` (envelope length is a constant; known after the frame header, before segment bytes) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Identical 404 (`RF-R1`) | **Miss.** Completed exchange; `P` answered "no." Do not retry **that** `P`. Identical 404s are why the client must not distinguish *which* "no" | Exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Complete-head that is not `200` with exactly `content-type` + `content-length`, and not the identical 404 (`301`, `500`, extra headers, wrong content-type) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Malformed response envelope / frame | Malformed → **miss**. Logged (`SF-D12`); not a selection input | Malformed: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `R_k` mismatch | Root-mismatch → **miss**. Typed and logged (`SF-D8`, `SF-D12`); not a selection input | Root-mismatch: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Countersignature invalid for `SF-D8`'s ruled `nonce ‖ height ‖ shard_id` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
@@ -600,6 +601,12 @@ an implementation.
   `R_k` mismatch, and bad countersignature into distinct verdicts.
   Their scheduler consequence is intentionally the same; their typed
   errors are not.
+- **Stall retries reuse the header.** Per-attempt handling is
+  identical for both callers: retries of **that** `P` resend the same
+  40-byte `nonce ‖ height`. A new destination (organic draw-next, or
+  a new challenge) gets a new random; height is the tip at that new
+  request. Minting a new nonce on stall retry of the assigned `P`
+  would make a later pass record fail admission (wrong random).
 - **Constraint:** retries must not become a distinguishable challenge
   pattern — the retry policy is a property of the client, not of the
   caller. Isolation shape is no longer a way to violate that:
@@ -992,11 +999,15 @@ Named attacker objectives this round's rulings are evaluated against:
    handoff.** The serve-side limiter is load-bearing (`EU-D6`). The
    form that would slash is a third party keeping an *honest* `P`'s
    assigned challenge fetches from landing; the honest holder did
-   nothing wrong, and the client cannot tell darkness from a full
-   limiter (identical 404s, `RF-R1`). **Nothing this client can do is
-   the defense,** and **nothing this round owes the challenge
-   mechanism.** Volumetric denial over onion is symmetrically priced
-   and untargetable; the cheap attack is positional and already owned.
+   nothing wrong. A full limiter is **not** a 404: `RF-R1` closes
+   over-capacity arrivals with no HTTP bytes, which this table files
+   as stall-class — bounded retries, then a challenge **miss**.
+   Darkness and a full limiter look the same to the client (silent
+   close). An honest `P` at cap is therefore on the slash path after
+   retries. **Nothing this client can do is the defense,** and
+   **nothing this round owes the challenge mechanism.** Volumetric
+   denial over onion is symmetrically priced and untargetable; the
+   cheap attack is positional and already owned.
 
    **Unobservability, not the window.** `CHALLENGE_RESPONSE_BLOCKS =
    500` is ~17 hours and sounds like a generous target. What defeats
