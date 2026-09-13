@@ -14,6 +14,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **PDM-Q-F9: membership-path RPC silently zero-fills a missing curve-tree leaf.** `core_rpc_server.cpp:1668-1672` inserts 128 zero bytes when `get_curve_tree_leaf_by_tree_position` fails; the sibling reader at `:1577` returns `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`. Dead on an unpruned node, ordinary under PDM, and already reachable via registry/tree disagreement. Match `:1577`. Carrier: a dedicated C++ PR, not the PDM-Q charter and not the Q1 comment-correction PR. Falsify by `grep -n "insert(extra_data.end(), 128, 0)" src/rpc/core_rpc_server.cpp` returning nothing. Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q-F9`.
+  - Target: pre-genesis
+
 - **DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.** The positioning `mdb_cursor_get(…, MDB_SET)` was removed by inherited commit `22c0fae47b` (subject unrelated to block removal); the delete is correct today only because `BlockchainDB::pop_block` reads the top block through the same write-cursor member one call earlier. Latent, not reachable in this tree — but any `blocks` read inserted between those two calls, or any second caller of `remove_block`, deletes at a valid-but-wrong position, which **succeeds silently** while the explicitly-positioned `block_info` and `block_heights` deletes remove the right rows. Either restore the dropped `MDB_SET` or land the guard at the Rust port. Falsify by `grep -n "MDB_SET" ` over `remove_block` in `src/blockchain_db/lmdb/db_lmdb.cpp`. Mechanism in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9.
   - Target: pre-genesis
 
