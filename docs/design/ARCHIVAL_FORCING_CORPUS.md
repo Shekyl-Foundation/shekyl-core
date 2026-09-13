@@ -20,8 +20,11 @@ holds that we do not extract or port S-ARCH *"until digest coverage includes
 the archival journal families (or an explicit, named exclusion with a
 replacement KAT that forces apply/revert to run)"*, because — in the same
 section's words — **"a backend can omit all apply/revert hooks and still pass
-core digests."** `LMDB_WRITE_ATOMICITY_AUDIT.md:1235` records that *"the
-replacement KAT that rule requires does not exist yet."*
+core digests."** `LMDB_WRITE_ATOMICITY_AUDIT.md` recorded, **until this
+branch corrected it**, that *"the replacement KAT that rule requires does not
+exist yet."* That wording is quoted here as the **pre-ruling** state it
+described, not as the tree's current claim: §3.5 rules the extraction bar
+discharged for settlement, and the audit line now says so.
 
 **The diff does not discharge that bar; it consumes it.** Empty-vs-empty
 passes a digest comparison. The corpus is the half that makes the comparison
@@ -77,12 +80,19 @@ either way — the diff needs all 17 tables populated.
 
 ## 3. The six exclusions, across three families
 
-Two families are excluded for the **same structural reason** — the tree has no
-producer for them — and in both the revert half is **vacuous** over a table
-nothing writes. `archival_settlement` is §3.1–3.2; the two attestation-witness
-tables are §4.1, found by answering a question this round had first filed as
-open. Their blockers differ (**SO-D8** for settlement, the **Phase 2/3 template
-writer** for the witness), so they discharge separately.
+**Three tables, two blocker categories** — the distinction the six-cell count
+turns on. All three are excluded for the **same structural reason**, that the
+tree has no producer for them, and in all three the revert half is **vacuous**
+over a table nothing writes. They separate only by what would unblock them:
+
+| Table | Apply excluded because | Blocker |
+| --- | --- | --- |
+| `archival_settlement` (§3.1–3.2) | `set_archival_settlement` has no production caller | **SO-D8** |
+| `archival_attestation_witness` (§4.1) | no emitter exists; the supplement is never populated locally | **Phase 2/3 template writer** |
+| `archival_alt_attestation_witness` (§4.1) | same emitter gap, alt-chain side | **Phase 2/3 template writer** |
+
+Two blockers, so they discharge separately rather than together. The witness
+pair was found by answering a question this round had first filed as open.
 
 ### 3.1 `archival_settlement` apply — no production caller
 
@@ -403,7 +413,8 @@ shallower than the retention horizon per the ratified refusal.
 
 ## 8. What this round does and does not build
 
-**Does:** the 34-cell register and its three gates; the two exclusions with
+**Does:** the 34-cell register and the **four** legs that gate it (shape,
+denominator, disposition, anchors) plus its self-test; the two exclusions with
 their evidence; the two forceability costs; the reuse inventory; the interface
 agreement with 7b on `ApplyPolicy`; the TLB decision.
 
@@ -419,8 +430,9 @@ agreement with 7b on `ApplyPolicy`; the TLB decision.
   `shekyl-chain-store` (ruled in, not yet built).
 - Settlement's two **corpus** cells — blocked on **SO-D8**, which is the
   writer landing. Nothing in this round moves them.
-- The attestation-witness validity question of §4.1 — open, and it gates how
-  much construction that family needs.
+- The attestation-witness families — **no longer an open validity question.**
+  §4.1 answers it: there is no producer at this pin, so the blocker is the
+  **Phase 2/3 template writer**, not the cost of constructing valid bytes.
 
 **Withdrawn during the round:** the backend-parametric settlement fixture.
 Proposed here, declined by E1's owner on the DRS-D1 façade ground and on the

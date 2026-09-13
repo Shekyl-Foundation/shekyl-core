@@ -146,6 +146,15 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_archival_forcing_cells.py
 
+      - name: Run AFC-1 forcing register self-test
+        # The gate's four legs were bitten by hand when written; a hand bite
+        # is not a pin. These fixtures hold each leg, including the gate's own
+        # regression: the anchor leg once matched any long word from the
+        # free-text note, so a row could resolve to a comment rather than to
+        # code while reading as checked.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_archival_forcing_cells.py
+
       - name: Run LMDB schema coverage self-test
         # The write-pattern leg pins SET membership, not cardinality. A
         # rotation that keeps the blind-upsert count at 10 and changes
