@@ -17,12 +17,20 @@
 //! - **DRS-0 slice A** — [`accumulator`]: the incremental replacements
 //!   for that full-domain scan, the five-token class vocabulary, and
 //!   the per-table write contracts the Rust port must honour.
+//! - **DRS-0 slice B** — [`schema`] / [`lmdb_order`]: one redb
+//!   `TableDefinition` per censused LMDB table, with the key types that
+//!   reproduce LMDB order. Table types encode ordering; domain identity
+//!   (`BlockHash` vs `TxHash` vs key image) converts at the engine API.
 //!
-//! Later slices (schema map, codecs) add modules next to these. They
-//! must bijection-pin table names against
-//! [`accumulator::TABLE_CLASSES`].
+//! Slice B's table names are bijection-pinned against
+//! [`accumulator::TABLE_CLASSES`] **and** against the X-macro
+//! `SHEKYL_LMDB_TABLES` by `scripts/ci/check_redb_schema_bijection.py` —
+//! three surfaces, all 49, checked in every direction. Later slices
+//! (codecs) add modules next to these and inherit that pin.
 
 #![deny(unsafe_code)]
 
 pub mod accumulator;
 pub mod digest_v0;
+pub mod lmdb_order;
+pub mod schema;

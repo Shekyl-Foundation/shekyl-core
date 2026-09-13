@@ -646,7 +646,8 @@ of them are how this round started.
 
 **§9.5's HOLD list is discharged with them.** Pass-record serialization
 cleared 2026-08-18 (the carrier round) and the response format 2026-08-21;
-`EndpointUpdate` stays held, and the settlement writer is now held on a round
+`EndpointUpdate` stayed held until it was REJECTED 2026-09-13, and the
+settlement writer is now held on a round
 rather than a blocker. Discharged in place following the `settle_epoch` entry
 already below it — a HOLD list silently pruned as items clear loses the
 evidence that the sequencing was right.

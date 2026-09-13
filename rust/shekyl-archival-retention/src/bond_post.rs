@@ -20,7 +20,7 @@
 use thiserror::Error;
 
 use crate::bond_floor::{bond_floor, bond_floor_of};
-use crate::bond_wire::{ArchivalBondPostVin, BondPostKind, HoldingsKind};
+use crate::bond_wire::{ArchivalBondPostVin, BondKind, BondPostKind, HoldingsKind};
 use crate::distinct::all_distinct;
 use crate::release_cooldown::{release_cooldown_elapsed, slashes_settled_through};
 
@@ -42,6 +42,12 @@ pub enum BondPostError {
     FloorMismatch,
     #[error("bond record already exists for P_canonical_id")]
     RecordExists,
+    #[error(
+        "JoinMarket endpoint is the all-zero key: the bond record encodes \
+         \"no endpoint\" as zero, so a zero key would connect as a bond that \
+         advertises nothing"
+    )]
+    EndpointZero,
     #[error("post_kind is not Release")]
     PostKindNotRelease,
     #[error("Release requires an existing bond record")]
@@ -209,7 +215,7 @@ fn holdings_update_prologue(
     record_holdings_kind: HoldingsKind,
     record_held_shard_ids: &[u64],
 ) -> Result<u64, BondPostError> {
-    if vin.post_kind != BondPostKind::HoldingsUpdate {
+    if !matches!(vin.kind, BondKind::HoldingsUpdate) {
         return Err(BondPostError::PostKindNotHoldingsUpdate);
     }
     let Some(current_bonded) = record_bonded_total else {
@@ -438,7 +444,7 @@ pub fn verify_rebond_bond_post(
     record_held_shard_ids: &[u64],
     record_bad_intervals: &[crate::consensus_state::BadInterval],
 ) -> Result<(), BondPostError> {
-    if vin.post_kind != BondPostKind::Rebond {
+    if !matches!(vin.kind, BondKind::Rebond) {
         return Err(BondPostError::PostKindNotRebond);
     }
     let Some(current_bonded) = record_bonded_total else {
@@ -512,12 +518,23 @@ pub fn verify_rebond_bond_post(
 /// Verify JoinMarket bond-post semantics after wire decode and LMDB substrate read.
 ///
 /// `record_exists` is `true` when `get_archival_bond_hybrid_pubkey` would succeed.
+///
+/// The endpoint (`EU-D3`) is the persona's onion public key, committed once at
+/// connect and immutable for the record's life. It is not validated as a key
+/// (any non-zero 32 bytes pass — a bad endpoint is self-harm the P pays for at
+/// the next challenge), but the **all-zero key is refused**: the bond record
+/// stores "no endpoint" as the zero key and cannot tell the two apart, so a
+/// zero key would connect as a bonded persona that advertises nothing.
 pub fn verify_join_market_bond_post(
     vin: &ArchivalBondPostVin,
     record_exists: bool,
 ) -> Result<(), BondPostError> {
-    if vin.post_kind != BondPostKind::JoinMarket {
+    let BondKind::JoinMarket { endpoint, .. } = &vin.kind else {
         return Err(BondPostError::PostKindNotJoinMarket);
+    };
+
+    if endpoint.iter().all(|b| *b == 0) {
+        return Err(BondPostError::EndpointZero);
     }
 
     match vin.holdings.kind {
@@ -612,6 +629,9 @@ pub fn release_pre_cooldown_guards(
 /// the block path and the submit pre-gate call the same function, and the order
 /// inside `verify_release_bond_post` is unchanged.
 pub fn release_vin_statics(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
+    if !matches!(vin.kind, BondKind::Release) {
+        return Err(BondPostError::PostKindNotRelease);
+    }
     if vin.bond_credit != 0 {
         return Err(BondPostError::ReleaseCreditNonzero);
     }
@@ -669,7 +689,7 @@ pub fn verify_release_bond_post(
     last_settled_slash_epoch: Option<u64>,
     current_settlement_epoch: u64,
 ) -> Result<(), BondPostError> {
-    if vin.post_kind != BondPostKind::Release {
+    if vin.post_kind() != BondPostKind::Release {
         return Err(BondPostError::PostKindNotRelease);
     }
 

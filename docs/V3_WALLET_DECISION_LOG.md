@@ -4926,6 +4926,17 @@ priority hierarchy, not a deferral. A future product round that wants
 offline signing starts from a fresh threat-model review, not from this
 entry.
 
+**Disambiguation (2026-09-12).** "Cold authority" in the archival bond
+family (`requires_cold_authority`, `cold_authority_pin`,
+`shekyl_archival_cold_authority_pin`) is a **custody tier** — the
+principal-tier `bond_spend_pk` committed in the bond record, which the
+serving host does not hold — and is unrelated to the workflow rejected
+here. A cold-authority spend is an ordinary networked spend made with a key
+kept off the serving box. The function is not renamed: it is accurate in
+standard custody vocabulary, single-sourced, FFI-exported, and gate-asserted
+by name. See `docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` §5 (`EU-D2`'s custody
+vocabulary stands; its "widen the selector" clause was rejected 2026-09-13).
+
 **Reference.** `docs/api/wallet_rpc.yaml` `x-shekyl-method-registry`;
 `.cursor/rules/23-disposition-visibility.mdc`; wallet-rewrite audit
 plan (2026-09-07).
@@ -5153,5 +5164,78 @@ recorded at `EU-D10`).
 `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (the v1 row, to move with D);
 `docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` §9;
 `.cursor/rules/50-testing.mdc` §"Regenerating a self-pinned vector".
+
+---
+
+## 2026-09-12 — JoinMarket vin gains a mandatory serving endpoint (`EU-D3`); the gate-4 lifecycle tripwire is re-pinned
+
+**Decision.** The archival bond-post vin carries the persona's serving
+endpoint — the raw 32-byte Ed25519 public key of its v3 onion service —
+present iff `post_kind == JoinMarket` and **mandatory** there (a bond
+without an endpoint was the discovery gap), immutable for the record's life.
+Ruled by Rick (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`,
+2026-09-11; narrowed to JoinMarket-only by the 2026-09-13 entry below);
+landing under `07-consensus-atomic-cutovers.mdc`.
+
+**What moves.** Every serialized JoinMarket vin gains 32 bytes after
+`bond_spend_pk`. The self-pinned gate-4 lifecycle fixture
+(`rust/shekyl-archival-retention/tests/fixtures/gate4_lifecycle_kat_v1.json`,
+`join.wire_hex`) pins that wire, and the C++ integration test
+(`tests/unit_tests/archival_bond_post_integration.cpp`) parses the same hex
+with the C++ decoder — so the re-pin is the cross-language check that both
+serializers moved together. The fixture's endpoint is a deterministic pattern
+(`0x0E × 32`), as `bond_spend_pk`'s is: the tripwire pins wire shape and
+record commit, not the onion derivation.
+
+**Why free.** No chain has been mined on any network and no user wallet
+exists; there is no legacy JoinMarket vin to accommodate.
+
+**Regeneration citation to use.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-12 JoinMarket endpoint mandatory
+(EU-D3); gate-4 lifecycle re-pin"`. The gate-4 regenerator is armed with the
+citation check by the same PR (it was an unarmed rewrite-on-request before,
+the shape `50-testing.mdc` calls a one-command silencer).
+
+**Reference.** `rust/shekyl-archival-retention/src/bond_wire.rs`
+(`ArchivalBondPostVin::endpoint`, `check_couplings`);
+`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md` §3.
+
+---
+
+## 2026-09-13 — `EndpointUpdate` (bond-post kind 4) REJECTED: a bonded persona's endpoint never changes; the `ARCHIVAL_P_DERIVE_V1` retirement authorized 2026-09-12 is WITHDRAWN
+
+**Ruled by Rick, 2026-09-13, verbatim:** *"IT has always been - who said it
+could rotate? That is a HARD NO. Rotating an existing bond is a dead giveaway
+for someone to link it. IT has been the rule for a long time. THe roation
+COULD be about a daemon, but how the fuck would you lose the key if it's
+derived from the seed?"*
+
+**Decision.** A bonded persona's serving endpoint is committed at
+`JoinMarket` and never changes. A new onion address is a new persona: Release
+under the cold `bond_spend_pk`, then a fresh `JoinMarket`. There is no
+`EndpointUpdate` post kind; byte 4 of the bond-post kind is unassigned.
+
+**What this withdraws.** The entry above this one's predecessor,
+"`ARCHIVAL_P_DERIVE_V1` retirement AUTHORIZED" (2026-09-12): no rotation
+index enters the `hs_id` preimage, the v1 label and vector stay, and the
+regeneration citation it minted must not be used. The 2026-08-10
+"rotation-in-place" and kind-4 carrier paragraphs of
+`ARCHIVAL_CHALLENGE_MECHANISM.md` §7 item 2, recorded as rulings, were not
+Rick's and are replaced in place. The `EndpointUpdate` round record
+(`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md`) now carries the rejection and
+keeps `EU-D1`, `EU-D3`, `EU-D4` as the JoinMarket-endpoint design.
+
+**What was built and excised.** PR #717 carried the JoinMarket endpoint
+(vin field, record column, LMDB v13) interleaved with the kind-4 arm; the
+kind-4 half was excised before merge and the JoinMarket half re-cut as its
+own PR. Archive tags: `archive/feat/eu-b-c1-endpoint-update-wire-2026-09-13`
+(the #717 branch), `archive/feat/eu-d-hs-id-rotation-2026-09-13` (D's
+design pass, never built).
+
+**Why the rejected reasoning failed.** The onion key is an HKDF child of the
+seed (cannot be lost); the address is published in the `JoinMarket` post
+(public is its normal state); a compromised host holds the serving seed and
+identity key, which no endpoint change takes back — only Release does, and
+Release is authorized by the one key never on the host.
 
 ---

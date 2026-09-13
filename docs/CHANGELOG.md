@@ -4,6 +4,18 @@
 
 ### Changed
 
+- **The `JoinMarket` bond post carries the persona's serving endpoint** — the
+  raw 32-byte Ed25519 key of its v3 onion service, mandatory, refused on every
+  other kind (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`) — and the `archival_bond`
+  record stores it (value v7; LMDB schema v13, a v12 datadir refused at open;
+  pre-genesis, delete and resync). The witness reads it from the drawable
+  snapshot through the record (`EU-D4`). **`EndpointUpdate` (bond-post kind 4)
+  is REJECTED** (Rick, 2026-09-13): a bonded persona's endpoint never changes;
+  a new address is a new persona via Release and a fresh `JoinMarket`. The
+  kind-4 half built in PR #717 was excised before merge, and the
+  `ARCHIVAL_P_DERIVE_V1` retirement authorized 2026-09-12 is withdrawn
+  (decision log, 2026-09-13).
+
 - **Tor-zone wire-observer cover is operator non-exit relay posture, not
   the protocol carrier** ([`TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md),
   TRC; RULED 2026-09-04, recorded 2026-09-12). Default Tor nodes no longer

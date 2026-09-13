@@ -19,6 +19,9 @@ use shekyl_peer_policy::DropVerdict;
 use std::ffi::CStr;
 use std::ptr;
 
+/// The serving endpoint every JoinMarket call site passes (EU-D3: mandatory).
+static TEST_ENDPOINT: [u8; 32] = [0x4E; 32];
+
 #[test]
 fn emission_vin_drop_verdict_classifies_form_and_does_not_sever_on_our_state() {
     assert!(DropVerdict::from_byte(shekyl_emission_vin_drop_verdict(
@@ -261,6 +264,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
             shard_len,
             spend_pk.as_ptr(),
             spend_pk.len(),
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             total,
             credit,
             debit,
@@ -272,9 +277,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
         verify(0, 0, Some(&shard), 1, floor, floor, 0, 0),
         SHEKYL_ARCHIVAL_BOND_POST_OK
     );
-    // A conforming Rebond vin carries NO key (§9.11), so the post-kind
-    // verdict is asserted with an empty one; Rebond WITH a key is the
-    // coupling case at the bottom.
+    // This entry is JoinMarket-only: a Rebond byte is the post-kind verdict,
+    // whether or not the caller also handed an endpoint or a spend key.
     assert_eq!(
         unsafe {
             shekyl_archival_verify_join_market_bond_post(
@@ -284,6 +288,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 1,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
+                0,
                 floor,
                 floor,
                 0,
@@ -291,6 +297,49 @@ fn bond_post_ffi_maps_each_reject_reason() {
             )
         },
         SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
+    );
+    // JoinMarket missing its endpoint: the EU-D3 coupling refuses at the marshal.
+    assert_eq!(
+        unsafe {
+            shekyl_archival_verify_join_market_bond_post(
+                0,
+                0,
+                std::ptr::from_ref(&shard),
+                1,
+                spend_pk.as_ptr(),
+                spend_pk.len(),
+                std::ptr::null(),
+                0,
+                floor,
+                floor,
+                0,
+                0,
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
+    );
+    // JoinMarket with the all-zero endpoint: the bond record encodes "no
+    // endpoint" as the zero key, so the verify refuses it (EndpointZero) and
+    // the mapping reports it under the coupling code, not a distinct verdict.
+    let zero_endpoint = [0u8; 32];
+    assert_eq!(
+        unsafe {
+            shekyl_archival_verify_join_market_bond_post(
+                0,
+                0,
+                std::ptr::from_ref(&shard),
+                1,
+                spend_pk.as_ptr(),
+                spend_pk.len(),
+                zero_endpoint.as_ptr(),
+                zero_endpoint.len(),
+                floor,
+                floor,
+                0,
+                0,
+            )
+        },
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING
     );
     assert_eq!(
         verify(0, 0, None, 1, floor, floor, 0, 0),
@@ -339,6 +388,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 pk.as_ptr()
             },
             pk.len(),
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             floor,
             floor,
             0,
@@ -353,11 +404,11 @@ fn bond_post_ffi_maps_each_reject_reason() {
         coupling(&spend_pk[..HYBRID_PUBKEY_CANONICAL_BYTES - 1]),
         SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
     );
-    // ...and the inverse direction: a non-JoinMarket kind (Rebond) carrying
-    // a key refuses at the marshaler, before the post-kind verdict.
+    // A non-JoinMarket kind at this entry is the post-kind verdict; the
+    // spend-pk coupling is a JoinMarket-operand check, not a kind check.
     assert_eq!(
         verify(1, 0, Some(&shard), 1, floor, floor, 0, 0),
-        SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING
+        SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND
     );
     // A null key pointer with a positive length is the caller bug, not coupling.
     assert_eq!(
@@ -369,6 +420,8 @@ fn bond_post_ffi_maps_each_reject_reason() {
                 1,
                 std::ptr::null(),
                 HYBRID_PUBKEY_CANONICAL_BYTES,
+                TEST_ENDPOINT.as_ptr(),
+                TEST_ENDPOINT.len(),
                 floor,
                 floor,
                 0,
@@ -691,6 +744,8 @@ fn bond_post_ffi_rejects_duplicate_holdings_at_the_marshal_boundary() {
             dup.len(),
             std::ptr::null(),
             0,
+            TEST_ENDPOINT.as_ptr(),
+            TEST_ENDPOINT.len(),
             3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
             0,
