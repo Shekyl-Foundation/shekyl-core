@@ -901,15 +901,37 @@ exercised — the longhash is computed for every block with no nettype bypass an
 rather than leaving §1.3's "FCMP++ + PoW verify enabled as in real sync" to
 stand unqualified.
 
-Observed at H=200 on one workstation (`f103acd38`, DRS-D9 durability), stated as
-per-block rates because the absolute is fixture-sized: generation **0.72 s/block**,
-IBD **0.105 s/block**, store **~202 KB/block**. Linear extrapolation to
-H = 100_000 — a **lower bound**, since per-block IBD cost grows with chain and
-tree size — gives roughly **3 h** of IBD per engine arm but about **20 h** of
-one-time chain generation. Generation is therefore cached and reused via
-`--seed-dir`: without reuse the primary metric is impractical at the reference
-height, and reuse additionally gives both engine arms a byte-identical fixture,
-which `check` requires.
+**First in-tree LMDB baseline:**
+`docs/benchmarks/drs_bench_ibd_lmdb_h2000_x86_64_20260913T073955Z.json`.
+H = 2000, one peer, coinbase-only, DRS-D9 durability, ext4 on NVMe, i9-11950H.
+Per-block rates, because the absolute is fixture-sized:
+
+| axis | rate | at H = 100_000 (lower bound) |
+| --- | --- | --- |
+| chain generation (fixture cost) | 0.729 s/block | ~20.3 h, once |
+| **IBD wall time** (primary) | 0.1006 s/block | ~2.8 h per engine arm |
+| store, allocated | 4.87 KB/block | ~490 MB |
+| peak RSS | 539 MB at H = 2000 | not extrapolated |
+
+Extrapolation is a **lower bound**: per-block IBD cost grows with chain and tree
+size. Allocated/apparent store size is 1.002, so LMDB leaves no meaningful holes
+at this height — that ratio is the thing to watch against a candidate engine.
+
+Generation dominates, so the seed chain is cached and topped up via
+`--seed-dir`; without reuse the primary metric is impractical at the reference
+height, and reuse additionally gives both arms a byte-identical fixture, which
+`check` requires. Only the subject is wiped per run.
+
+**Both phases are CPU-bound on RandomX verification at this height**, not
+disk-bound: the same run on tmpfs differed by under 5% (IBD 197.8 s vs 201.1 s,
+generation 0.730 vs 0.729 s/block). That is a measured result and **not** a
+licence to bench on tmpfs — fsync there has no backing store to flush, so
+`safe` is indistinguishable from `MDB_NOSYNC`, DRS-D9 is not in force, and the
+harness refuses such a run before starting. It also means the IBD ratio between
+two engines will be **compressed** by a large common PoW cost at this height;
+the ratio is still the right comparison, but a 1.25x floor on a
+verification-dominated total is a weaker discriminator than it looks, and grows
+sharper as H rises or transactions enter the fixture.
 
 **Durability is measured, not labelled.** DRS-D9 is satisfied by imposing
 `--db-sync-mode=safe`, validated against an allowed set *before* a daemon
