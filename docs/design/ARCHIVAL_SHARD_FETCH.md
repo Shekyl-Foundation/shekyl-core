@@ -237,6 +237,13 @@ supervise on the Pi 4 floor (rule 76). `--no-ephemeral-tor` with no
 not a second Tor and not a fetch-failure. `SF-D6` names that case as
 a non-row so it cannot drift back in as a taxonomy outcome.
 
+**Composition hands in a `SocketAddr`.** `shekyl-p-fetch` does not
+discover SOCKS and does not depend on `shekyl-daemon-rpc` (`SF-D4`
+dep-cut). The daemon image passes the zone proxy address into the
+client — `zone.m_proxy_address` from C++, or
+`DaemonTorControl::socks_addr()` when that is the zone. `--tx-proxy`
+is still that address, not a second lookup.
+
 - **Reopen if:** the SP-T3 re-base measurement over this topology
   shows the accepted residual is worse than a second Tor process at
   the Pi 4 floor.
