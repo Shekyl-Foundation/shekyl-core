@@ -13,6 +13,8 @@ use shekyl_archival_retention::{
 };
 use shekyl_crypto_pq::signature::HybridPublicKey;
 
+use crate::legacy_util::slice_from_typed_ptr;
+
 // ── Credit-wire attestation admission verify (Phase 2, ARCHIVAL_CREDIT_WIRE.md §3–§4) ──
 //
 // The consensus recompute-and-compare that replaces #398's interim `check_attestation_root`
@@ -165,12 +167,14 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     //    C++ fills is loud immediately, not on the first block that happens to carry a pass
     //    record. Below the threshold no window exists and the table must be empty; at or above
     //    it the table must be exactly `L + 1` hashes for `[h − depth − L, h − depth]`.
-    let anchor_hashes: &[[u8; PASS_ANCHOR_HASH_LEN]] = if ctx.anchor_hashes_len == 0 {
-        &[]
-    } else if ctx.anchor_hashes_ptr.is_null() {
+    //    The table is a typed `[u8; 32]` array, so it goes through the typed seam
+    //    (`slice_from_typed_ptr`: zero-length → empty, null → refuse, `isize::MAX` byte bound),
+    //    not a bare `from_raw_parts` — the SA-R-7 ratchet (`tests/ffi_boundary_ratchet.rs`)
+    //    pins this file's raw-read count and would flag a new raw site.
+    let Some(anchor_hashes): Option<&[[u8; PASS_ANCHOR_HASH_LEN]]> =
+        (unsafe { slice_from_typed_ptr(ctx.anchor_hashes_ptr, ctx.anchor_hashes_len) })
+    else {
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
-    } else {
-        unsafe { std::slice::from_raw_parts(ctx.anchor_hashes_ptr, ctx.anchor_hashes_len) }
     };
     let window: Option<PassAnchorWindow> =
         match PassAnchorHeights::for_predecessor(ctx.predecessor_height) {
