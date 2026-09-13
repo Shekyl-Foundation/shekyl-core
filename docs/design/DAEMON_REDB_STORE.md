@@ -1096,6 +1096,46 @@ reasons row for row** — two instruments, one field, cross-checked:
 | **Node-local by prune policy** | `txs_prunable`, `txs_prunable_tip`, `output_metadata` | Rebuildable **only from bytes a pruning node has deliberately discarded**. Replay cannot recreate what the local corpus no longer holds, and D10's own premise is *local* blocks |
 | **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
 
+> **AMENDED at `edb35dbb1` (2026-09-12, same day): the middle group's rationale
+> EXPIRES AT THE PORT, and the amendment is dated rather than rewritten because
+> the group was correct at its own era.** `PDM-Q-S0` rules that pruned-daemon
+> mode is **not** implemented in the inherited C++ daemon and lands in the Rust
+> daemon after `DRS-E*`. The inherited stripe prune is therefore **not coming
+> over** — so "rebuildable only from bytes a pruning node has deliberately
+> discarded" describes a mechanism the ported store will not have, and an
+> exclusion carried on an expired rationale is **state excluded from a digest,
+> which is the failure the digest exists to prevent**. Per table, and they do
+> not share a disposition:
+>
+> - **`txs_prunable` — the exclusion does not port.** With no Rust-side
+>   discard the bytes are always present and replay reproduces them, so it is
+>   **in the digest domain** at the port. Its `node-local` reason and its named
+>   surrogate (`txs_prunable_hash`) were sound against the C++ tree and are not
+>   a property of the store being built.
+> - **`txs_prunable_tip` — not a reclassification: it is prune scaffolding and
+>   the Rust store should not carry the table at all.** Every consumer lives
+>   inside `prune_worker` (`src/blockchain_db/lmdb/db_lmdb.cpp`: open `:1668`,
+>   dupsort `:1766`, reads `:2402` / `:2460` / `:2565`, the worker spanning
+>   `:2320–2601`); the depth-based `prune_tx_data` never reads it. It has no
+>   other consumer in the tree.
+> - **`output_metadata` — the stated reason does not cover it, and the correct
+>   one is a different shape.** It is not discarded content; it is content
+>   **created by discarding** — `store_output_metadata` is called from exactly
+>   one site, inside `prune_tx_data` (`:10229`) — and **nothing reads it**:
+>   `get_output_metadata` has zero callers outside the DB implementation. At
+>   the port it is therefore **empty by construction** unless `PDM-Q`
+>   re-commissions the need it serves ("what does a discarding node keep so
+>   wallets can still scan?"), which is `PDM-Q`'s question and not a digest
+>   classification.
+>
+> **The consequence for the port is positive and time-boxed.** With the
+> inherited prune not coming over, the Rust store has **no node-variable
+> content by construction** until set-B discard lands — so the digest oracle
+> commissions against a **uniform** reference rather than a merely
+> currently-uniform one. That is the cleanest window there will be, and it
+> closes the day discard lands.
+
+
 **And one CONDITIONAL row, which is the interesting one because it is neither
 excluded nor unconditionally rebuildable.** `archival_attestation_witness` is
 class `small` — digested, consensus-bearing, not excluded by anyone — and it
