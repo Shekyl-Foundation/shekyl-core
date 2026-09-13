@@ -28,7 +28,13 @@ put every node with a day's downtime on the archival market; floor
 `D_max`, candidate F19's ~195-day retirement floor). `PDM-Q12` (freeze pipeline
 and wallet-side `LeafStore` under Q6's unit) is minted OPEN.
 `PDM-Q-S0` is RULED. This is the design home TJ-D named; it is not
-yet the design.
+yet the design. **What this document is for:** nothing here is built
+while DRS is in progress — the implementation waits on the C++→Rust
+daemon cutover (`DRS-E*`, `PDM-Q-S0`). This charter is the
+**reference for the DRS build**, so that the universal-discard intent
+(uniform boundary `W`, archiver exceptions above it, hash rows
+forever) is unambiguous to the agents writing the Rust store and its
+digest, and so the store trait is shaped for it rather than retrofitted.
 
 **Grounded at** `dev@edb35dbb1467a55c1a1dd4033966fb9fe3413080` (2026-09-12,
 `origin/dev` HEAD when the round opened; PR #720 / DRS-0 slice A).
@@ -257,9 +263,12 @@ so the horizon Q1 mints is
 **and** lands with the check that makes it enforced (`PDM-Q-F19`).
 
 The stale "recomputed from leaves" comments
-(`db_lmdb.cpp:9922-9925`, `:9970`; `blockchain_db.h:2838`) are
-corrected in the PR that rules Q1, not left for the ruling pass to
-trip over. The slice A class assignments for the three curve-tree
+(`db_lmdb.cpp:9922-9925`, `:9970`; `blockchain_db.h:2838` at the pin;
+`:9932-9935`, `:9978-9980`, `:2841-2842` at `4da609cbd`) are a
+PDM-independent C++ fix with their own `docs/FOLLOWUPS.md` row
+(`PDM-Q-F7`, 2026-09-13), landing now with F9/F18/F23 rather than in
+the PR that rules Q1 — small, grep-falsified, and it clears noise out
+of the tree before the ruling pass reads it. The slice A class assignments for the three curve-tree
 tables (`PDM-Q-F11`) are re-graded against Q1's output by the DRS-0
 lane, not here.
 
@@ -889,20 +898,37 @@ open items below is recorded against each.
   range's holder count reaches zero. Archiver economics are stated
   against the three egress terms Q5 item 4 names (band-2 sync,
   challenge, recovery).
-- **Data loss is the one fetch on `P`'s side.** `P` never fetches
-  under normal operation. A daemon that loses `range(s)` (disk
-  failure, restore from a pre-`retain` backup) cannot regenerate the
-  good — nothing can; that is what makes it the good. Either archivers
-  accept slashing on data loss, or there is a **recovery fetch** from
-  other holders of `s`, over Q5's `fetch_prunable_range` primitive, from the
-  archiver's own daemon. The candidate reading: recovery-by-fetch is
-  right and is the single named exception to "`P` never fetches";
-  slashing stays (the market prices durability) but the exposure is
-  bounded to the recovery window. Two things it owes: the window
+- **Data loss — recovery is the daemon's ordinary fetch, not an
+  exception.** (Restated 2026-09-13; the earlier "single named
+  exception to *P never fetches*" framing is struck.) `P` never
+  fetches — the *daemon* fetches, and `P` is a wallet persona that
+  serves. A daemon that loses `range(s)` (disk failure, restore from a
+  pre-`retain` backup) cannot regenerate the good — nothing can; that
+  is what makes it the good. Either archivers accept slashing on data
+  loss, or the daemon **re-acquires `range(s)`** from other holders
+  through Q5's `fetch_prunable_range` primitive — the same primitive
+  band 2 and history read-back use, called by a different scheduler.
+  There is no boundary being crossed and nothing to design around;
+  recording one would invite exactly that. The candidate reading:
+  recovery-by-fetch is right; slashing stays (the market prices
+  durability) but the exposure is bounded to the recovery window. Two things it owes: the window
   (recovery must complete inside the challenge cadence or the fetch
   is pointless), and the **free-ride shape** — a recovery fetch is
   unpaid serve load on the archivers that answer it; bound it or price
   it rather than assume it is rare.
+- **The serving path from the retention exception has no RPC (owed,
+  2026-09-13).** Q12 names the wallet-side `LeafStore` a deletion
+  target; nothing names its replacement. Today `shekyl-p-host`'s serve
+  set reads `LeafStore` through `ServingReader`
+  (`redb_backend.rs:164-183`). Under daemon storage the wallet must ask
+  the daemon for `range(s)`'s prunable bodies over the
+  operator-to-operator leg — a new RPC, `get_prunable_range(a, b)` or
+  similar, and it is the **only new surface daemon storage
+  introduces**. It sits on the SH-2 remainder (the wallet constructing
+  `PersonaServingHost`) and is what `StoreShardProvider` swaps to.
+  Without it "the daemon stores, the wallet serves" is a sentence with
+  no code path. Q10's "not retained" response is this RPC's negative
+  arm.
 - **Interaction with the universal set.** Where the archiver's shard
   `s` overlaps the universal window (Q2's not-yet-discarded frontier),
   the supplementary set is empty by construction; the ruling should
@@ -1006,6 +1032,15 @@ a **detectability boundary**, not a security margin.
   `bond_duration` precedent — pinned to the **same Round-2 testnet
   re-pin gate as `archival_failure_window_n`**, since both are numbers
   only real network behaviour settles and both feed F19's floor.
+- *The Round-2 gate is one item with three entries (consolidated
+  2026-09-13).* `archival_failure_window_n` (PROVISIONAL,
+  `config/consensus_constants.json`), **`D_max`** (this question) and
+  **`W`** (Q2) all re-pin against the same measured outage-duration
+  CDF, and F19's retirement floor `tip − (CRB + n·SEB + D_max)` is a
+  sum over two of them with `W`'s candidate equal to it. They are
+  tracked in three questions; the gate is **one** entry — re-pin `n`
+  and the other two are downstream of the same measurement. The
+  Round-2 re-pin task names all three or it is incomplete.
 
 - *Second reason it wants to be shallow (2026-09-13, from Q5).* Under
   Q5's anchor model a **synced** node trusts nothing it did not verify
@@ -1389,8 +1424,11 @@ Named now so they are not discovered later.
   second conjunct never fires — the trigger is the lifting, not the
   exclusion — and the charter says so where DRS will look (§5).
   `class.rs` is byte-identical at `4da609cbd` to `edb35dbb1`; the
-  `:140-142` / `:149` / `:161-163` anchors hold, and `:164`
-  (`txs_prunable_tip`, `Excluded`) is a fourth row on the same floor.
+  `:140-142` / `:149` / `:161-163` anchors hold. `:164`
+  (`txs_prunable_tip`, `Excluded`) is a fourth row on the same floor,
+  and under Q7 its grade is **moot rather than wrong**: it is
+  stripe-engine scaffolding that dies with `prune_worker` at
+  `DRS-E*`.
 - **PDM-Q-F12.** **Leaves are a cache of a pure function of the block
   corpus. Set-B scarcity, as currently scoped, does not exist.**
   Trace the construction: `blockchain_db.cpp:608-611` calls
@@ -1807,13 +1845,27 @@ consensus question: *does anything read it after admission?*
   states. `SF-D1`'s own reopen clause (`:195`, "a storage-only
   pruned-daemon path … without a fetch client") does **not** fire —
   band 2 needs the client — so Q6 item 4 is what reopens it, on the
-  unit. **Sequencing hazard, flagged not fixed here (another lane's
-  row, rule 94 §6):** `docs/FOLLOWUPS.md` now carries *"Implement the
-  daemon shard-fetch client (`SF-` round RULED, halt lifted
-  2026-09-13)"* with no Q6 dependency. Built now, the client's request
-  grammar and transport are keepers and its frame codec and
-  content-verify are rewritten the day Q6 rules. The row should carry
-  that split, or Q6 should be ruled first.
+  unit. **Sequencing — RULED (steering, 2026-09-13): split the client
+  at the verify seam; neither wait for Q6 nor build the whole thing.**
+  The `SF-` ruling already draws the line: everything that survives Q6
+  is transport, everything that does not is the frame codec and the
+  content-verify, and the serve side proved the shape
+  (`StoreShardProvider` sits behind a trait so the store could change
+  under it). **Sub-PR 1, now:** `shekyl-p-fetch`'s dial, header,
+  envelope, SOCKS reuse, in-flight cap and miss/timeout taxonomy,
+  against a body type of opaque bytes and a single
+  `verify(body, expected) -> Result` hole. **Sub-PR 2, blocked on
+  `PDM-Q6`:** the frame codec and the per-tx verify; that row carries
+  the Q6 dependency. Rule 26's sub-PR line *is* the seam. This defuses
+  the real hazard, which is not wasted work: a client built now against
+  `recompute_segment_r_k` becomes the thing Q6 has to argue *against*
+  instead of the thing Q6 rules *on*. **Falsifier (rule 15, so the
+  split does not rot into a permanent abstraction):** sub-PR 1's body
+  type is `Vec<u8>` and nothing else. A unit-aware type, a leaf/tx
+  enum, or any polymorphism over the two shapes means the unit decision
+  has leaked into the transport layer, and the split is reverted. The
+  hole is a hole, not an interface. The `SF-` implement-row in
+  `docs/FOLLOWUPS.md` carries this split (edited on steering's ruling).
 
 ### Retracted
 
@@ -1837,7 +1889,11 @@ consensus question: *does anything read it after admission?*
   occupant, and the leaf→transaction unit change it forces on the
   closed archival rulings (Q6, F13–F15; now including the `SF-`
   fetch contract that closed on the leaf unit mid-round, F25) —
-  ruled first. Then the
+  ruled first. **Q11's *shape* does not wait on Q6** — `D_max` is a
+  reorg cap, unit-independent, and it needs a consensus-side owner who
+  is not in this PR and needs lead time; start it in parallel. Only
+  its *use* in Q2 and Q1 waits on Q6's unit. The critical path is Q6
+  alone. Then the
   retained set (starting from layer 0 / `m_curve_tree_leaves`, F7;
   widened to the leaf's derivation inputs, F12; §9's `CACHE` and
   `LOCAL-BOUNDED` rows, F16), the trigger (including the free-regime
@@ -1900,8 +1956,8 @@ sha, adversarial items discharged or named as remaining,
 D10/SO-D8/CR-D2/sole-occupant consequences stated rather than discovered.
 
 Q1 starts from F7's boundary and does not stop at the leaf table
-(F12); the PR that rules Q1 corrects `db_lmdb.cpp:9922-9925` / `:9970`
-/ `blockchain_db.h:2838`. Q2's ruling must state the free-regime
+(F12); the `db_lmdb.cpp:9922-9925` / `:9970` / `blockchain_db.h:2838`
+comment fix goes now as its own C++ row (F7), with F9/F18/F23. Q2's ruling must state the free-regime
 duration, the market's behaviour during it, and the reorg-depth floor
 with trim's defined failure (F10) and F15's admission-only floor —
 and **`W`** (F24): floor `D_max`, the honest-downtime argument, the
