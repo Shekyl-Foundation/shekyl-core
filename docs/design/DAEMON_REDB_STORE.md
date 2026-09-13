@@ -1167,11 +1167,30 @@ reasons row for row** — two instruments, one field, cross-checked:
 > **boundary**, and therefore the **floor** of what every honest node holds. The
 > ruling holds exactly when the accumulator is defined **over that
 > consensus-retained floor** rather than over "the table's contents", with
-> archiver surplus definitionally **outside** the digest domain. *Open and
-> routed:* whether that surplus sits outside the domain or in a
-> separately-classed table is `PDM-Q`'s to rule — under the first reading these
-> exclusions lift; under the second `curve_tree_leaves` differs between two
-> honest nodes and an exclusion would be correct after all.
+> archiver surplus definitionally **outside** the digest domain. **RESOLVED the same day
+> — toward the second branch, and the first was malformed.** "Is archiver
+> surplus inside the digest domain?" puts a **node-level** property inside a
+> **table-level** set; read precisely, it proposes changing what a digest *is*
+> for one table, to avoid using a mechanism the matrix already has. The
+> mechanism: the **variable-by-retention table is `excluded` and the invariant
+> commitment carries the class** — frozen already as `txs_prunable` `excluded`
+> beside `txs_prunable_hash` `append-mostly`. `curve_tree_leaves` is the
+> variable side and currently holds **`append-mostly`, which is the
+> *surrogate's* class**: the token sits on the wrong side of the pair. Correct
+> it and the domain question stops existing — leaves are not folded in either
+> direction, so surplus becomes unmeasurable by the digest for exactly the
+> reason surplus `txs_prunable` bytes are unmeasurable today. **Not this
+> document's to make** (the class column and its Rust `TABLE_CLASSES` are slice
+> A's), and it is not expected to be a blanket exclusion: a segment's sub-root
+> is permanent only once the subtree completes
+> ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+> §1.1, `E = 25 992`), so up to `E−1` frontier leaves sit under no commitment
+> — but gap and variability coincide **inversely**, the frontier being retained
+> by every honest node while the covered frozen tail is what varies. A piecewise
+> split at the freeze boundary is the likely landing. **Nothing is routed to
+> `PDM-Q` by this block**; the uniform-schedule-versus-uniform-content
+> distinction above is what forced the question to be stated precisely enough to
+> be seen as malformed, and that is all it was needed for.
 > **`archival_attestation_witness`'s conditional row reopens on the same
 > event**, having dissolved only while nothing could discard and nothing could
 > acquire pruned. Neither is settled until the new mechanism's discard shape is
