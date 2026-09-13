@@ -1310,51 +1310,6 @@ namespace cryptonote
     std::vector<block> *m_prepare_blocks;
 
     /**
-     * @brief collects the keys for all outputs being "spent" as an input
-     *
-     * This function makes sure that each "input" in an input (mixins) exists
-     * and collects the public key for each from the transaction it was included in
-     * via the visitor passed to it.
-     *
-     * If pmax_related_block_height is not NULL, its value is set to the height
-     * of the most recent block which contains an output used in the input set
-     *
-     * @tparam visitor_t a class encapsulating tx is unlocked and collect tx key
-     * @param tx_in_to_key a transaction input instance
-     * @param vis an instance of the visitor to use
-     * @param tx_prefix_hash the hash of the associated transaction_prefix
-     * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
-     * @param tx_version version of the tx, if > 1 we also get commitments
-     *
-     * @return false if any keys are not found or any inputs are not unlocked, otherwise true
-     */
-    template<class visitor_t>
-    inline bool scan_outputkeys_for_indexes(size_t tx_version, const txin_to_key& tx_in_to_key, visitor_t &vis, const crypto::hash &tx_prefix_hash, uint64_t* pmax_related_block_height = NULL) const;
-
-    /**
-     * @brief collect output public keys of a transaction input set
-     *
-     * This function locates all outputs associated with a given input set (mixins)
-     * and validates that they exist and are usable
-     * (unlocked, unspent is checked elsewhere).
-     *
-     * If pmax_related_block_height is not NULL, its value is set to the height
-     * of the most recent block which contains an output used in the input set
-     *
-     * @param tx_version the transaction version
-     * @param txin the transaction input
-     * @param tx_prefix_hash the transaction prefix hash, for caching organization
-     * @param sig the input signature
-     * @param output_keys return-by-reference the public keys of the outputs in the input set
-     * @param ct_signatures the FCMP++ signatures, which are only valid if tx version > 1
-     * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
-     * @param hf_version the consensus rules version to use
-     *
-     * @return false if any output is not yet unlocked, or is missing, otherwise true
-     */
-    bool check_tx_input(size_t tx_version,const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const ct::CtSig &ct_signatures, std::vector<ct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const;
-
-    /**
      * @brief validate a transaction's inputs and their keys
      *
      * This function validates transaction inputs and their keys.  Previously
