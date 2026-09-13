@@ -90,19 +90,38 @@
 //! **The price of recomputing: `n` is now a retention constraint.** Before the
 //! window, the slash decision read a *single* epoch's served state; it now
 //! reads up to `n − 1` epochs further back. Those rows are not permanent —
-//! `prune_archival_epochs_before` deletes `archival_serve_credit` below
-//! `tip_epoch − MAX_CLAIM_AGE_W` (`prune_below_epoch_at_height`,
-//! `ARCHIVAL_CONSENSUS_STATE.md` §5). A pruned row is indistinguishable from a
-//! never-earned one, so a window reaching past the prune horizon would read
-//! *served* epochs as **misses** and slash an archiver for history the node
-//! deleted. The horizon is comfortable at the shipped values and the assert
-//! below pins it, because **raising `n` at Round-2 is exactly the edit that
-//! would cross it** and nothing else would catch that.
+//! `prune_archival_epochs_before` deletes every epoch-scoped archival table
+//! below `tip_epoch − MAX_CLAIM_AGE_W` (`prune_below_epoch_at_height`,
+//! `ARCHIVAL_CONSENSUS_STATE.md` §5), and a pruned row is indistinguishable
+//! from one that was never written. What a horizon breach *does* to the
+//! verdict depends on which table the window reads, and the two candidates
+//! fail in **opposite directions** (`ARCHIVAL_SETTLEMENT_WRITER.md` §8,
+//! `SO-D5`):
 //!
-//! Note the constraint is a false-slash risk, not a fork risk: pruning is a
-//! deterministic function of tip height, so every node deletes the same rows and
-//! would compute the same wrong answer. Reorgs cannot reach a prune boundary
-//! either (`ARCHIVAL_REORG_DEPTH_BLOCKS` ≪ `SETTLEMENT_EPOCH_BLOCKS`).
+//! - **`archival_serve_credit` — the read the window makes today** (an
+//!   [`EpochObservation`] is `archival_serve_credit_pass_count(...) > 0`).
+//!   Absent means *no pass bit*, i.e. a **miss**. A breach reads *served*
+//!   epochs as missed and **slashes an honest archiver** for history the node
+//!   deleted. Loud-wrong: somebody's bond burns and they will say so.
+//! - **`archival_settlement` — the ruled future read**, once the `SO-D8` writer
+//!   is wired and the window consumes verdict rows. Absent means
+//!   **non-observation** (`SO-D1`: never issued ⇒ not a miss). A breach reads
+//!   fully-evidenced *failures* as unobserved epochs and silently **shrinks the
+//!   window's denominator**, so an archiver that should have been slashed is
+//!   not. Quiet-wrong: nothing burns, nobody complains, the pin's deterrence
+//!   erodes without a signal.
+//!
+//! Both are wrong, both are consensus-deterministic (pruning is a function of
+//! tip height, so every node deletes the same rows and reaches the same wrong
+//! verdict — a false verdict, not a fork), and **the same assert catches both**,
+//! because both tables are pruned by the same call at the same horizon. It is
+//! stated twice here so that a maintainer debugging a *missed* slash does not
+//! read "slashes honest archivers" and conclude the assert is about somebody
+//! else's problem. The horizon is comfortable at the shipped values and the
+//! assert below pins it, because **raising `n` at Round-2 is exactly the edit
+//! that would cross it** and nothing else would catch that. Reorgs cannot reach
+//! a prune boundary either (`ARCHIVAL_REORG_DEPTH_BLOCKS` ≪
+//! `SETTLEMENT_EPOCH_BLOCKS`).
 //!
 //! ## Numerics are provisional; the shape is frozen
 //!
@@ -166,8 +185,13 @@ const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 =
 /// This is the assert that must fire if Round-2 re-pins `n` upward past the
 /// retention window, or if `MAX_CLAIM_AGE_W` is ever lowered. Crossing it does
 /// not fork the network (pruning is deterministic in tip height, so every node
-/// deletes the same rows) — it silently converts served epochs into misses.
-/// Whichever constant moves, the fix is a decision about both, not a bump.
+/// deletes the same rows) — it produces a wrong verdict whose *direction*
+/// depends on the table read (module docs, `SO-D5`): against the serve-credit
+/// ledger a pruned row is a **miss** and an honest archiver is slashed; against
+/// the settlement table a pruned row is **non-observation** and a failed
+/// archiver is not. Whichever constant moves, the fix is a decision about
+/// both, not a bump — and whichever failure you are chasing, this is the
+/// assert for it.
 ///
 /// Measured on the **genesis** schedule. The FAKECHAIN-only
 /// `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` override shortens `SEB` while
@@ -177,10 +201,13 @@ const SLASH_SETTLEMENT_TIP_LAG_EPOCHS: u64 =
 /// caveat, not a consensus one: the override is refused on public networks.
 const _: () = assert!(
     (ARCHIVAL_FAILURE_WINDOW_N as u64) + SLASH_SETTLEMENT_TIP_LAG_EPOCHS <= MAX_CLAIM_AGE_W + 1,
-    "the failure window reaches further back than the serve-credit ledger is \
-     retained (prune_archival_epochs_before deletes below tip - MAX_CLAIM_AGE_W): \
-     a pruned bit reads as a MISS, so this window would slash archivers for \
-     epochs they served and the node deleted"
+    "the failure window reaches further back than the epoch-scoped archival \
+     tables are retained (prune_archival_epochs_before deletes below \
+     tip - MAX_CLAIM_AGE_W). Against archival_serve_credit a pruned bit reads as \
+     a MISS and honest archivers are slashed for epochs they served; against \
+     archival_settlement a pruned row reads as NON-OBSERVATION and failed \
+     archivers escape a slash they earned. Both directions are this assert \
+     (ARCHIVAL_SETTLEMENT_WRITER.md SO-D5)"
 );
 
 /// **Connect-order coupling — the slash pass must read what the close wrote.**
@@ -383,10 +410,12 @@ mod tests {
     }
 
     #[test]
-    fn the_window_fits_inside_the_serve_credit_retention_horizon() {
+    fn the_window_fits_inside_the_archival_retention_horizon() {
         // The const-assert above is the gate; this states the margin in numbers
         // so a Round-2 re-pin can see how much room it has before the window
-        // starts reading pruned epochs as misses.
+        // starts reading pruned epochs — as misses against the serve-credit
+        // ledger, as non-observations against the settlement table (SO-D5).
+        // Both tables prune at this one horizon (prune_archival_epochs_before).
         let deepest_epoch_read = u64::from(FAILURE_WINDOW_N) - 1; // n - 1 below the decision epoch
         let oldest_epoch_retained = MAX_CLAIM_AGE_W - SLASH_SETTLEMENT_TIP_LAG_EPOCHS;
         assert!(

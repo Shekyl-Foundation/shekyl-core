@@ -48,7 +48,7 @@ Grounded on `dev@cbba3e261`, 2026-08-23. Every row was read, not recalled.
 | 4 | Absent-row ⇒ non-observation ⇒ not-drawable | §4.2 | *conditional in §4.2 — resolved by `SO-D1`* |
 | 5 | Expiry ⇒ miss | fork §7.3, closed 2026-08-08 | §7 preamble |
 | 6 | Urn state derives, never stores | §7.1 + `ARCHIVAL_CREDIT_WIRE.md` §3 | §7.1 "urn bookkeeping" |
-| 7 | Prune horizon ≥ window | `failure_window.rs:93–104,181` | const-assert present |
+| 7 | Prune horizon ≥ window | `failure_window.rs:90–124,178–210` (re-anchored 2026-09-13, SO-D5 discharge) | const-assert present; names both failure directions |
 
 ### 1.1 Why the existing table cannot be widened (re-verified, not inherited)
 
@@ -489,6 +489,16 @@ but its rationale string must be rewritten, because a maintainer reading
 assert is unrelated. **Failing safe is not the same as failing correctly**, and
 an assert that describes the wrong failure is one that gets relaxed by whoever
 proves that failure cannot happen.
+
+> **DISCHARGED 2026-09-13.** `failure_window.rs` now names both directions in
+> the module doc (`:90–124`, one bullet per table, with which read is live
+> today and which is the ruled future), in the assert's doc and its message
+> (`:178–210`), and in the margin test's name and comment
+> (`the_window_fits_inside_the_archival_retention_horizon`). The claim the
+> rewrite rests on — both tables prune at one horizon — was verified at
+> `prune_archival_epochs_before` (`db_lmdb.cpp:7726,7728`), not inherited
+> from this section. The `:93–104` / `:181` anchors quoted above are the
+> pre-rewrite line numbers and are left as written; the §2 row is updated.
 
 ---
 
