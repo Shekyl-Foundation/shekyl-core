@@ -11,6 +11,8 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 ## Pre-genesis
 
+- **`ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated** — its manifest's `regeneration_command` predates rule 50's `SHEKYL_PINNED_REGEN_DECISION` requirement; arm it the way the gate-4 lifecycle regenerator is armed. Surfaced by the withdrawn V1 retirement ([`ARCHIVAL_ENDPOINT_UPDATE.md`](design/ARCHIVAL_ENDPOINT_UPDATE.md) §5, 2026-09-13). Target: **pre-genesis**.
+
 
 Default. Lands before genesis if it should exist at launch.
 
