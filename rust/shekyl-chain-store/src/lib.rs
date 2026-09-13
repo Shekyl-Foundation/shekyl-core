@@ -37,6 +37,7 @@
 #![deny(unsafe_code)]
 
 pub mod accumulator;
+pub mod conformance;
 pub mod digest_v0;
 pub mod lmdb_order;
 pub mod schema;
