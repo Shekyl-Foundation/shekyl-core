@@ -13,8 +13,9 @@ and `blockchain.cpp` call-graph and window-length citations: `dev`
 `3497b8a78`. P0e's §11 ledger and §10's `Digest v0` column — the
 digest walker's accessor mapping and the per-table divergence test: `dev`
 `eb1b60198`. DRS-0 slice A's §12 and §10's `Accumulator class` column —
-the delete-path falsifier run, the `compare_hash32` characterisation and
-DRS-W16: `dev` `ba4b3c73a`.** Line citations are *records-was*
+the delete-path falsifier run, the `compare_hash32` characterisation,
+DRS-W16, **and §12's "Reopening criteria" subsection (added 2026-09-13,
+verified against this same pin, not a later tip)**: `dev` `ba4b3c73a`.** Line citations are *records-was*
 against the pin they name, not against `HEAD`; they are expected to drift
 and must not be "corrected" to a later tree. Two eras are safe only while
 both are declared — an undeclared second era is what put three citations on
@@ -1341,6 +1342,108 @@ pin the types to this document.
 - **dead** — declared but not live: `txs` (never written, DRS-W4) and
   `hf_starting_heights` (dropped at every writable `open()`, DRS-W5).
   Excluded because the domain is empty, not because divergence is tolerable.
+
+### Reopening criteria — two reasons above have an expiry
+
+**A class assigned on a mechanism's behaviour expires when that mechanism
+does.** Both items here are recorded **as hazards with named triggers, not
+as pre-emptive reclassifications** — pre-declaring a class against an
+unlanded ruling is the same error as declaring one against a landed
+mechanism that is leaving. Neither moves a token today.
+
+**1. `curve_tree_leaves` (`append-mostly`) — RESOLVED, not pending.**
+
+**The distinction the whole question turns on: a digest cares whether
+nodes AGREE, not whether bytes are PRESENT.** Uniform absence and
+node-variable absence are different things for an accumulator. If every
+node discards the same leaves at the same consensus-known height, all
+nodes hold identical state and the accumulator is well-defined with a
+boundary — *digestible*, merely piecewise. Only *node-variable* absence,
+where two honest nodes legitimately differ, forces exclusion. Presence is
+not the criterion; agreement is. `txs_prunable` is `excluded` because
+prune **seeds** differ between honest nodes, not because bytes are
+missing — the same mechanism under a uniform schedule would not be
+excluded at all.
+
+The open question was therefore never "does discard land" but **"does
+discard land *and* is it node-variable"**, and the second conjunct is now
+**ruled FALSE**: *"pruning is NOT node variable"* — Rick, 2026-09-13, via
+steering relay. So `curve_tree_leaves` stays `append-mostly` with a
+piecewise definition at the discard boundary, and this is a settled case
+rather than a trigger a reader has to carry.
+
+The mechanical hazard is still worth recording, because it is what makes
+the ruling load-bearing rather than incidental: a running chained hash
+over the leaves requires every leaf — you cannot fold what you do not
+have — so `append-mostly` would have been **wrong**, not merely early, had
+discard been node-variable. Equally, pre-declaring the leaves
+`excluded / node-local` in anticipation would have been wrong in the other
+direction, which is the mistake this entry was opened to prevent.
+
+**What would reopen it:** a change to that ruling — a discard mechanism
+that lets two honest nodes at the same height hold different leaves. Not
+the arrival of discard itself.
+
+**2. The `node-local` reason rests on the C++ stripe prune, which the Rust
+store does not inherit.** Recorded per table, because verification shows
+the three do **not** share a disposition — which is exactly what grouping
+them under one reason hid:
+
+- **`txs_prunable`** — the exclusion does not survive the port. With no
+  Rust-side discard the bytes are always present and replay reproduces
+  them, so it lands **in** the digest domain. The `node-local` reason and
+  its `txs_prunable_hash` surrogate were sound against *this* tree and are
+  not properties of the store being built.
+- **`txs_prunable_tip`** — prune-tied by **population**, not by call
+  site, and both halves of that took a correction to reach. Its write and
+  delete are on the **block connect and pop paths**, not in
+  `prune_worker`: `add_transaction_data` (`:1159`) and
+  `remove_transaction_data` (`:1226`, `:1231`); only its three
+  `mdb_cursor_open` sites (`:2402`, `:2460`, `:2565`) are inside the
+  worker, so an enumeration of the *read* sites alone makes it look like
+  scaffolding it is not. **But the write is guarded by
+  `if (get_blockchain_pruning_seed())` (`:1156`) and the delete is
+  `MDB_NOTFOUND`-tolerant** — so on a node with no pruning seed the table
+  is never populated and the delete is a tolerated no-op. Naming the call
+  sites without the guard, as an earlier draft of this row did, overstates
+  the table's independence from the prune exactly as enumerating the reads
+  understated it. Whether the Rust store carries it is a live
+  prune-policy question — a real one, on the population argument — and
+  **not** a settled deletion.
+- **`output_metadata`** — the `node-local` reason does not describe it at
+  all, and the true shape is stronger. It is not discarded content; it is
+  content **created by discarding**, written from one site inside
+  `prune_tx_data` (`:10229`). Its read chain is **dead two levels deep**:
+  `get_output_metadata` has exactly one caller, `is_output_pruned`
+  (`:10083`), and `is_output_pruned` has **no call site anywhere** in
+  `src/`, `rust/` or `tests/` — only its declaration, its override and a
+  `testdb.h` stub. At the port it is empty by construction, so its reason
+  is closer to `dead` (DRS-W4's shape) than to `node-local`.
+
+**Why this is an argument for commissioning the digest sooner, not a
+caveat.** If the inherited prune does not port, then until set-B discard
+lands **the Rust store has no node-variable content by construction** — so
+the digest oracle commissions against a *uniform* reference rather than a
+merely currently-uniform one. That window closes the day node-variable
+discard lands.
+
+**Grounding note, stated because the freeze must not cite what it cannot
+reach.** The code claims above were verified against the declared slice-A
+pin `ba4b3c73a`, and **all nine line anchors were re-resolved there
+immediately before push** — this file is the one document
+`check_doc_code_citations.py` refuses (`DEFERRED_DOCS`, because it
+declares eras by row-set in front matter), so its anchors are
+hand-verified or not verified at all. They **do not** resolve at the
+branch tip: merging `dev` brought the V12 → V13 schema bump, which moved
+every one of them. That is the expected records-was behaviour this
+header's pin sentence describes, not drift to repair — re-anchoring them
+to a later tip is what the header forbids, and what once put three
+citations of this file on code they did not describe. The
+**PDM-Q rulings are not landed** — no `PDM-Q` string resolves anywhere
+under `docs/` at this commit, and the round's opening commit is not an
+ancestor of `dev`. They are recorded here as **triggers to re-evaluate**,
+which is why nothing above changes a class token. When PDM-Q lands, this
+subsection is the list to walk.
 
 ### What the fold consumes (binds DRS-0 slice B's codecs)
 
