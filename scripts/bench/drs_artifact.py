@@ -656,6 +656,44 @@ def redb_engine_sites():
     return sorted(set(sites)), scanned, False
 
 
+NEW_DB = os.path.join(ROOT, "src", "blockchain_db", "blockchain_db.cpp")
+
+
+def daemon_engine_switch():
+    """(can_switch, subject_missing) — can the daemon open anything but LMDB?
+
+    The redb refusal below states TWO reasons and, until 2026-09-13, tested
+    only one. Its message says "the daemon has NO engine switch — it always
+    opens LMDB — AND no redb consensus engine exists to switch to"; the
+    predicate was `if not sites`, so the *first* reason never gated
+    anything.
+
+    That mattered the moment DRS-E1's first increment landed
+    `redb::Database` in the chain-store crate WITHOUT a table read/write
+    path, without an FFI export of the store, and without any daemon
+    wiring. `sites` became non-empty, the refusal lifted, and `--engine
+    redb` would have been permitted against a daemon that still has exactly
+    one unconditional `new BlockchainLMDB()` — producing precisely the
+    relabelled-LMDB artifact the message warns about.
+
+    So this reads the factory. `new_db()` returning an unconditional
+    `BlockchainLMDB` is the switch's absence, stated where it is true
+    rather than asserted in a string.
+    """
+    if not os.path.isfile(NEW_DB):
+        return False, True
+    with open(NEW_DB, encoding="utf-8") as fh:
+        text = fh.read()
+    m = re.search(r"BlockchainDB\s*\*\s*new_db\s*\([^)]*\)\s*\{(.*?)\n\}", text, re.S)
+    if not m:
+        return False, True
+    body = m.group(1)
+    # A switch means a choice: more than one construction, or a branch.
+    constructions = set(re.findall(r"new\s+(Blockchain[A-Za-z0-9_]+)\s*\(", body))
+    branches = re.search(r"(if|switch)", body)
+    return (len(constructions) > 1 or bool(branches)), False
+
+
 def blocker_failures():
     """FATAL when the redb-arm deferral's blocker has stopped holding.
 
@@ -668,15 +706,31 @@ def blocker_failures():
     if missing:
         return [f"{CHAIN_STORE} does not exist; this probe's subject is absent, which "
                 "is the first evidence the probe is no longer reading anything"]
+    can_switch, switch_missing = daemon_engine_switch()
+    if switch_missing:
+        return [f"{os.path.relpath(NEW_DB, ROOT)}'s new_db() could not be read; this "
+                "probe's second subject is absent, which is first evidence it has "
+                "stopped reading rather than that the blocker lifted"]
     out = []
     if scanned == 0:
         out.append(f"scanned ZERO .rs files under {os.path.relpath(CHAIN_STORE, ROOT)} "
                    "— the probe's corpus is empty, so its green means nothing")
-    if sites:
+    if sites and can_switch:
         out.append("the redb CONSENSUS engine now exists — " + ", ".join(sites[:8]) +
-                   f" ({len(sites)} sites). The stage-one deferral of the redb arm was "
-                   "blocked on its absence, and that blocker is gone: wire the redb "
-                   "arm and the pop/reorg row, then remove this probe.")
+                   f" ({len(sites)} sites) — AND new_db() can select it. The "
+                   "stage-one deferral of the redb arm was blocked on the arm being "
+                   "unrunnable; that blocker is gone: wire the redb arm and the "
+                   "pop/reorg row, then remove this probe.")
+    elif sites:
+        # Deliberately NOT a failure, and deliberately still printed: redb
+        # code exists but the arm remains unrunnable, so the deferral holds
+        # for the reason it was taken. Losing this line would make the
+        # transition invisible, which is the probe's whole value.
+        print(f"    note: {len(sites)} redb site(s) under "
+              f"{os.path.relpath(CHAIN_STORE, ROOT)}, but new_db() still returns an "
+              "unconditional BlockchainLMDB — the redb arm stays deferred because "
+              "it is UNRUNNABLE, not because the crate is empty. The blocker's "
+              "subject is the arm, not the code.")
     return out
 
 
@@ -765,7 +819,8 @@ def measurement_preflight(engine, sync_mode, daemon, work_dir, seed_dir, disk_cl
                  "and say nothing.")
     if engine == "redb":
         sites, _, _missing = redb_engine_sites()
-        if not sites:
+        can_switch, _sw_missing = daemon_engine_switch()
+        if not (sites and can_switch):
             r.append("--engine redb refused: the daemon has NO engine switch — it "
                      "always opens LMDB — and no redb consensus engine exists in "
                      f"{os.path.relpath(CHAIN_STORE, ROOT)} to switch to. The run "
