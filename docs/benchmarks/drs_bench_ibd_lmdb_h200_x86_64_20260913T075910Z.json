@@ -1,0 +1,92 @@
+{
+  "durability": {
+    "imposed_argv": [
+      "--regtest",
+      "--keep-fakechain",
+      "--fixed-difficulty=1",
+      "--db-sync-mode=safe",
+      "--allow-local-ip",
+      "--no-igd",
+      "--non-interactive",
+      "--log-level=1",
+      "--data-dir=/home/torvaldsl/shekyl/drsbench-work2/subject",
+      "--p2p-bind-port=58221",
+      "--rpc-bind-port=45563",
+      "--add-exclusive-node=127.0.0.1:52835"
+    ],
+    "observed": false,
+    "policy": "DRS-D9 full-fsync-per-commit",
+    "readback_gap": "mdb_env_get_flags is in-process only and the daemon logs no resolved sync mode; the mode was validated against an allowed set before spawning and the argv is recorded verbatim, which is not the same as observing the flags",
+    "sync_mode": "safe"
+  },
+  "engine": "lmdb",
+  "fixture": {
+    "blocks_generated": 200,
+    "generation_wall_s": 146.373,
+    "height_reached": 201,
+    "height_requested": 200,
+    "nettype": "fakechain",
+    "peers_used": 1,
+    "reference_height": 100000,
+    "seed_height": 201,
+    "seed_reused": false,
+    "tx_per_block": 0,
+    "verify_exercised": {
+      "fcmp_pp": false,
+      "pow": true
+    },
+    "verify_note": "PoW longhash is computed and checked for every block with no nettype bypass; --fixed-difficulty lowers the TARGET only. generateblocks produces coinbase-only blocks, so FCMP++ verification is not exercised at all."
+  },
+  "git_rev": "77ced10d28521b6c48f2cda1b8c1c2c17966d4f7",
+  "hardware": {
+    "cpu_count": 16,
+    "cpu_model": "11th Gen Intel(R) Core(TM) i9-11950H @ 2.60GHz",
+    "disk_class": "ssd_or_nvme",
+    "fs_type": "ext4",
+    "ram_bytes": 134237892608
+  },
+  "measures": [
+    {
+      "axis": "wall_time",
+      "denominator": "subject's first successful get_info to height == seed height; EXCLUDES process start, RandomX dataset init and store open",
+      "name": "ibd_wall_time_s",
+      "scenario": "ibd_coinbase_only",
+      "unit": "s",
+      "value": 21.163
+    },
+    {
+      "axis": "cpu_time",
+      "denominator": "utime+stime of the subject over all threads for the whole sync. Against ibd_wall_time_s this says whether the phase was compute-bound and how parallel it was; it does NOT attribute the cost to any particular operation",
+      "name": "subject_cpu_s",
+      "scenario": "ibd_coinbase_only",
+      "unit": "s",
+      "value": 77.5
+    },
+    {
+      "axis": "memory",
+      "denominator": "subject VmHWM sampled during sync. NOT \u00a77.4's attacker-feed row, which has no definition yet",
+      "name": "peak_rss_bytes",
+      "scenario": "ibd_coinbase_only",
+      "unit": "bytes",
+      "value": 564957184
+    },
+    {
+      "axis": "disk",
+      "denominator": "filesystem-ALLOCATED bytes of the subject data dir, measured after the store was closed. NOT \u00a77.4's multi-year row",
+      "name": "store_bytes",
+      "scenario": "ibd_coinbase_only",
+      "unit": "bytes",
+      "value": 1458176
+    },
+    {
+      "axis": "disk",
+      "denominator": "apparent (file-length) bytes of the same directory, same moment; differs from the allocated figure only if the engine leaves holes",
+      "name": "store_bytes_apparent",
+      "scenario": "ibd_coinbase_only",
+      "unit": "bytes",
+      "value": 1437726
+    }
+  ],
+  "schema_version": "shekyl_drs_bench_v1",
+  "thresholds_frozen_at": "ba4b3c73a"
+}

@@ -155,6 +155,9 @@ PRIMARY_MEASURE = "ibd_wall_time_s"
 MEASURE_AXES = {
     "ibd_wall_time_s": ("wall_time", "s", IBD_FLOOR_RATIO, IBD_HARD_FAIL_RATIO),
     "peak_rss_bytes": ("memory", "bytes", PEAK_RSS_RATIO, PEAK_RSS_RATIO),
+    # No threshold: §1.3 sets none for CPU time. It is recorded to keep
+    # "compute-bound" an observation rather than an inference.
+    "subject_cpu_s": ("cpu_time", "s", None, None),
     # Two disk rows, because §1.3's resource bound names a "file-size / logical-size
     # ratio": `store_bytes` is what the filesystem ALLOCATED (the operator's cost)
     # and `store_bytes_apparent` is the file length. They diverge exactly when an
@@ -547,6 +550,24 @@ def _dir_bytes(path, apparent):
                               text=True).stdout.split()[0])
 
 
+def _cpu_seconds(pid):
+    """utime+stime of the process, all threads, in seconds.
+
+    Separates WORKING from WAITING: compared against wall time it says whether a
+    phase was compute-bound and how parallel it was. Without it, "not
+    disk-bound" is as far as a wall-time-only artifact can go, and the step from
+    there to naming a dominant cost is an attribution, not a measurement.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            # Skip comm, which may itself contain spaces inside parentheses.
+            rest = fh.read().rpartition(")")[2].split()
+        utime, stime = int(rest[11]), int(rest[12])
+        return (utime + stime) / os.sysconf("SC_CLK_TCK")
+    except (OSError, IndexError, ValueError):
+        return None
+
+
 def _peak_rss_bytes(pid):
     """VmHWM — the kernel's own high-water mark, read while the process lives.
 
@@ -712,10 +733,14 @@ def measure(args):
                   f"(exited={proc.poll()}); see {work}/seed.log and seed.argv")
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
+        gen_blocks, gen_wall = 0, None
         if have_h < target_h:
+            gen_blocks = target_h - have_h
+            _gt0 = time.time()
             r = _rpc(srpc, "generateblocks",
-                     {"amount_of_blocks": target_h - have_h, "wallet_address": addr,
+                     {"amount_of_blocks": gen_blocks, "wallet_address": addr,
                       "starting_nonce": 0}, timeout=args.gen_timeout)
+            gen_wall = time.time() - _gt0
             st = r.get("result", {}).get("status")
             if st != "OK":
                 _fail(f"generateblocks refused: status={st!r} "
@@ -776,6 +801,7 @@ def measure(args):
                 time.sleep(args.poll_interval)
             elapsed = time.time() - t0
             peak = max(peak, _peak_rss_bytes(subj.pid) or 0)
+            cpu_s = _cpu_seconds(subj.pid)
             synced = reached >= seed_h
         finally:
             subj.terminate()
@@ -834,6 +860,11 @@ def measure(args):
             "seed_height": int(seed_h),
             "seed_reused": bool(seed_reused),
             "peers_used": int(peers),
+            # Generation is FIXTURE cost, recorded so the table row that quotes a
+            # generation rate cites an artifact field rather than a one-off
+            # script. Absent when the seed was reused and nothing was generated.
+            "blocks_generated": int(gen_blocks),
+            "generation_wall_s": None if gen_wall is None else round(gen_wall, 3),
         },
         "measures": [
             {"name": "ibd_wall_time_s", "axis": "wall_time", "unit": "s",
@@ -841,6 +872,13 @@ def measure(args):
              "denominator": "subject's first successful get_info to height == seed "
                             "height; EXCLUDES process start, RandomX dataset init and "
                             "store open"},
+            {"name": "subject_cpu_s", "axis": "cpu_time", "unit": "s",
+             "value": 0.0 if cpu_s is None else round(cpu_s, 3),
+             "scenario": scenario,
+             "denominator": "utime+stime of the subject over all threads for the "
+                            "whole sync. Against ibd_wall_time_s this says whether "
+                            "the phase was compute-bound and how parallel it was; it "
+                            "does NOT attribute the cost to any particular operation"},
             {"name": "peak_rss_bytes", "axis": "memory", "unit": "bytes",
              "value": int(peak), "scenario": scenario,
              "denominator": "subject VmHWM sampled during sync. NOT §7.4's "

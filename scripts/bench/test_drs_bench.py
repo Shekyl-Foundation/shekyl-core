@@ -55,6 +55,8 @@ def valid_artifact(engine="lmdb", **over):
         "measures": [
             {"name": "ibd_wall_time_s", "axis": "wall_time", "unit": "s",
              "value": 100.0, "scenario": "ibd_coinbase_only"},
+            {"name": "subject_cpu_s", "axis": "cpu_time", "unit": "s",
+             "value": 400.0, "scenario": "ibd_coinbase_only"},
             {"name": "peak_rss_bytes", "axis": "memory", "unit": "bytes",
              "value": 1 << 30, "scenario": "ibd_coinbase_only"},
             {"name": "store_bytes", "axis": "disk", "unit": "bytes",
@@ -343,6 +345,12 @@ class Verdicts(unittest.TestCase):
         rep = self._cmp()
         self.assertEqual(self._row(rep, "store_bytes")["verdict"], "NO_THRESHOLD")
 
+    def test_cpu_row_has_no_threshold(self):
+        """§1.3 sets no CPU-time threshold; the row exists so "compute-bound"
+        can be an observation instead of an inference."""
+        rep = self._cmp()
+        self.assertEqual(self._row(rep, "subject_cpu_s")["verdict"], "NO_THRESHOLD")
+
     def test_apparent_store_row_also_has_no_threshold(self):
         rep = self._cmp()
         self.assertEqual(self._row(rep, "store_bytes_apparent")["verdict"],
@@ -434,7 +442,8 @@ class FollowonRegistry(unittest.TestCase):
     def test_no_followon_silently_shares_a_name_with_a_live_measure(self):
         """A follow-on that also appears in MEASURE_AXES would be emitted and
         deferred at the same time."""
-        live = set(D.MEASURE_AXES) - {"store_bytes", "store_bytes_apparent"}
+        live = set(D.MEASURE_AXES) - {"store_bytes", "store_bytes_apparent",
+                                      "subject_cpu_s"}
         self.assertEqual(live & set(D.FOLLOWON_MEASURES), set())
 
 
