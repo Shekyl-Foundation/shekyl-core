@@ -4,10 +4,16 @@
 and `PDM-Q10` are **OPEN**. `PDM-Q3` is restated (today not node-local,
 `PDM-Q-F8`). `PDM-Q1` is widened and `PDM-Q6` promoted (`PDM-Q-F12`:
 leaves are a cache of the block corpus; set-B scarcity as scoped does
-not exist). `PDM-Q7` is **PARTIAL** (opt-in flag rejected, scoped to the
-universal set). `PDM-Q9` is **PARTIAL** (shard retention is the bond
-process; binding and lapse timing OPEN). `PDM-Q-S0` is RULED. This is
-the design home TJ-D named; it is not yet the design.
+not exist), then **`PDM-Q6` is the round's subject** (`PDM-Q-F13`: the
+transaction's prunable region is scarce *and* replay-compatible, with
+its verifier `txs_prunable_hash` already in the schema; `PDM-Q-F14`:
+`pqc_auths`, ~60 % of tx bytes, is kept only for want of a hash row;
+`PDM-Q-F15`: the `serve_credit_pruned` self-reference is benign). §9
+inventories every data element at the pin. `PDM-Q7` is **PARTIAL**
+(opt-in flag rejected, scoped to the universal set). `PDM-Q9` is
+**PARTIAL** (shard retention is the bond process; binding and lapse
+timing OPEN). `PDM-Q-S0` is RULED. This is the design home TJ-D named;
+it is not yet the design.
 
 **Grounded at** `dev@edb35dbb1467a55c1a1dd4033966fb9fe3413080` (2026-09-12,
 `origin/dev` HEAD when the round opened; PR #720 / DRS-0 slice A).
@@ -29,7 +35,10 @@ C++ landing regardless — see `PDM-Q-S0`).
 **What this round is.** The design home for pruned-daemon mode: ordinary
 nodes collapse deep curve-tree segments to `R_k` and discard the leaves;
 archivers hold the leaves. Until that exists, R2's possession test cannot
-discriminate.
+discriminate. **As opened.** `PDM-Q-F12`/`F13` move the good: leaves are
+a cache; what ordinary nodes discard and archivers hold is the
+transaction's prunable region (and, pending Q6 item 2, its `pqc_auths`).
+The sentence above is R2's framing and is kept so the drift is visible.
 
 **What this round is not.** It does not re-derive R2, segment freeze, the
 challenge/response format, or bond/slash construction. It does not
@@ -115,7 +124,12 @@ is the archiver good (same file, lines 96–100).
 `m_curve_tree_leaves` produces scarcity is a different claim, and
 `PDM-Q-F12` shows it does not: every leaf scalar is a pure function of
 bytes the discarding node keeps. The product is still set-B scarcity;
-what set B has to *be* for that to hold is now Q1's and Q6's question.
+what set B has to *be* for that to hold is `PDM-Q6`'s question, and
+`PDM-Q-F13` names the candidate: the transaction's **prunable region**
+(`CtSigPrunable`, `src/fcmp/ct_types.h:333`) — original bytes nothing
+derives and nothing derives from, admission-verified, hash-committed
+per tx in `txs_prunable_hash`. §9 inventories every data element at
+the pin against that test.
 
 ### 1.2 That product does not exist — established, and currently forced
 
@@ -184,11 +198,16 @@ Each ruling, when written, takes rule-21 shape: the rejection (or the
 positive choice), substrate-anchored reopening criteria, and the
 re-evaluation shape. None of that is filled in here.
 
-### `PDM-Q1` OPEN — The retained set (widened 2026-09-13, `PDM-Q-F12`)
+### `PDM-Q1` OPEN — The retained set (widened 2026-09-13, `PDM-Q-F12`; downstream of Q6 per `PDM-Q-F13`)
 
-Do **not** start from a blank enumeration. `PDM-Q-F7` places the
-set-A boundary on layer 0, and `PDM-Q-F12` shows the set-B boundary
-cannot stop at the leaf table:
+**Q1 is answered after Q6, not beside it.** `PDM-Q-F13` puts the
+scarce good in the transaction's prunable region; the retained set is
+then *everything else*, and Q1's job is the enumeration in §9 made
+into a ruling — which derived tables a pruned node keeps as caches,
+which it drops and recomputes, and which node-local journals it
+retires on a window. Do **not** start from a blank enumeration.
+`PDM-Q-F7` places the set-A boundary on layer 0, and `PDM-Q-F12` shows
+the set-B boundary cannot stop at the leaf table:
 
 - **Set A, already retained by every node:** layer 0 of
   `m_curve_tree_layers` (`R_k` at chunk granularity). Never deleted
@@ -210,7 +229,15 @@ Enumerate the rest against that boundary, not as prose: headers, which
 intermediate layers *beyond* layer 0, which leaf window if any, which
 consensus tables. Every later question is measured against this set.
 A Q1 ruling that names `m_curve_tree_leaves` and stops has not
-produced scarcity and has not answered Q1.
+produced scarcity and has not answered Q1. Two items §9 surfaces that
+Q1 owes a sentence each: the legacy ring-decoy readers of
+`output_metadata` at `src/cryptonote_core/blockchain.cpp:296-350`
+(`scan_outputkeys_for_indexes` — live under FCMP++ or rule-60 residue?
+if residue, the only consensus reader of `output_metadata` after
+admission is gone and the table is a cache like the leaves), and the
+six archival pop-undo journals plus `archival_slash_log` (`PDM-Q-F16`),
+which are node-local and window-bounded in principle but unbounded on
+disk today.
 
 The stale "recomputed from leaves" comments
 (`db_lmdb.cpp:9922-9925`, `:9970`; `blockchain_db.h:2838`) are
@@ -293,30 +320,88 @@ centralisation dependency wearing a pruning costume. Also
 path, and its remaining item (b) "store-backed / pruned-tree assembly
 (F5, the prune-policy PR)".
 
-### `PDM-Q6` OPEN — The transaction corpus: the locus of scarcity (promoted 2026-09-13, `PDM-Q-F12`)
+### `PDM-Q6` OPEN — The prunable region as the archival good: the round's subject (promoted 2026-09-13 `PDM-Q-F12`; made the subject 2026-09-13 `PDM-Q-F13`)
 
 Curve-tree leaves have a designed home; tx-prunable blobs have only the
-inherited stripe scheme. No document appears to ask whether they should
-be archival subject matter. They already carry per-tx `prunable_hash`
-commitments — structurally the same thing `R_k` is for a leaf segment.
-Rule on whether they enter the archival subject. If they do not, say
-why, with reopening criteria.
+inherited stripe scheme. No document before this one asks whether they
+should be archival subject matter. They already carry per-tx
+`prunable_hash` commitments — structurally the same thing `R_k` is for
+a leaf segment. Rule on whether they enter the archival subject. If
+they do not, say why, with reopening criteria.
 
-**Promoted.** `PDM-Q-F12` makes this the load-bearing question rather
-than a side one. The leaf is regenerated on replay from the transaction
-(`blockchain_db.cpp:598-617`, production code). The input of last
-resort for every leaf scalar is the block corpus — `O` and `C` from the
-output, `h_pqc` from `tx_extra` `0x07`. If the corpus is universally
-retained under D10's replay premise, nothing an archiver holds is
-scarce, and the possession test cannot discriminate no matter what Q1
-discards from the derived tables. Set-B scarcity, if it exists, comes
-from **here**: what part of the transaction corpus a pruned node does
-not keep. Q6's ruling is therefore also the ruling on whether PDM has a
-product. Note the two readings of "prunable": the inherited
-`txs_prunable` region is one occupant (sole-occupant test, §5); the
-outputs and `tx_extra` that regenerate leaves sit in the *pruned* half
-(`txs_pruned`, append-mostly). Q6 must say which half it is talking
-about.
+**Promoted (F12), then made the subject (F13).** `PDM-Q-F12` showed
+that the leaf is regenerated on replay from the transaction
+(`blockchain_db.cpp:598-617`), so nothing in the derived tables is
+scarce. `PDM-Q-F13` then ran F12's own test against the transaction's
+two halves and found the third category F12's author said could not
+exist: the **prunable region** (`CtSigPrunable`,
+`src/fcmp/ct_types.h:333` — `bulletproofs_plus` `:349`,
+`fcmp_pp_proof` `:367`, `pseudoOuts` `:384`, `serve_credit_pruned`
+`:402`) is original, non-derivable, admission-only, **and** every byte
+replay needs to rebuild the derived tables lives in the *other* half
+(`output_key` from `vout`, `commitment` from `outPk`, `h_pqc` from
+`tx_extra` `0x07` — all in `CtSigBase` / the prefix). Discarding the
+prunable region is therefore compatible with D10's replay premise
+*and* produces a good an archiver can be scarce in. Its verifier is
+already in the schema: `txs_prunable_hash`, 32 B per tx, written at
+`db_lmdb.cpp:1166-1167` and kept by the V11 retention rule
+(`db_lmdb.cpp:128-136`). Q6's ruling is the ruling on whether PDM has
+a product, and it is written **before** Q1.
+
+What Q6 must rule, in this order:
+
+1. **The good.** Is the archival subject the prunable region of the
+   transaction corpus below Q2's depth? If yes, the unit of possession
+   is a transaction's `CtSigPrunable` bytes and the unit of
+   verification is its `txs_prunable_hash`. If no, name what else is
+   scarce — §9 finds nothing.
+2. **The second occupant — `pqc_auths` (`PDM-Q-F14`).** The PQC
+   authorizations are ~60 % of a typical transaction's bytes
+   (`FCMP_PLUS_PLUS.md` §13: ~10.6 KB of ~17–18 KB for 2-in/2-out),
+   are read by consensus only at admission (every reader is inside
+   `check_tx_inputs`, `blockchain.cpp:3717-4351`), enter the txid only
+   through a 32-byte `pqc_auth_hash`
+   (`cryptonote_format_utils.cpp:1306-1318`), and are kept by V11
+   solely because *"neither has a hash table of its own"*
+   (`db_lmdb.cpp:131`). A 32-byte `txs_pqc_auth_hash` row per tx would
+   make the slice archival subject on the same terms as the prunable
+   body. Q6 rules whether it does — storage semantics only; the tx
+   blob and txid are untouched — or names why the largest element in
+   the transaction stays universally retained.
+3. **The unit change downstream (§5).** Every closed archival ruling
+   defines the good as **leaves**: `SHARD_BYTES = 25,992 × 128`
+   (`ARCHIVAL_RESPONSE_FORMAT.md` `RF-D6`), `challenge_leaf_index`,
+   the 128-byte `leaf_bytes` claim in the kept vin (`RF-D1`),
+   `LeafStore::frozen_segment`, the freeze pipeline's segment. If the
+   good is the prunable region, the shard is a set of transactions
+   (by block range, most naturally), the challenge names a transaction
+   and the response is its `CtSigPrunable` bytes verified against the
+   retained `txs_prunable_hash`. Q6 states which closed rulings that
+   reopens and which survive with the unit substituted. It does not
+   quietly keep leaf-shaped challenges over a good that is not leaves.
+4. **Self-reference — discharged (`PDM-Q-F15`).** `serve_credit_pruned`
+   is the archival system's own evidence inside the good it sells. At
+   the pin it is read exactly once after parse — `blockchain.cpp:3807`,
+   inside `check_tx_inputs` — and by nothing else in `src/` except the
+   (de)serializers (`json_object.cpp`,
+   `cryptonote_boost_serialization.h`; `rg serve_credit_pruned src`).
+   Settlement, challenge verification and
+   slashing read the kept vin (`RF-D1`'s ~230 B) and the archival
+   tables populated from it at add time; the retention prune already
+   retires those rows at `tip − W` without touching the pruned half.
+   Benign, under one condition Q2 already owes: discard depth ≥ the
+   reorg depth that can re-drive `check_tx_inputs` on the block.
+5. **Depth floor from admission-only reads.** Everything in the good
+   is re-read on a reorg re-verify and on nothing else. The inherited
+   engine's `CRYPTONOTE_PRUNING_TIP_BLOCKS = 5500` is the Monero-era
+   answer to this; Q2 gives Shekyl's, and F10's trim floor and this
+   one are the same number or Q2 says which is larger.
+
+Note the two readings of "prunable": the inherited `txs_prunable`
+region is the `CtSigPrunable` sole occupant (§5 test); the outputs and
+`tx_extra` that regenerate leaves sit in the *pruned* half
+(`txs_pruned`, append-mostly) and stay. Q6 says which half every
+sentence is about.
 
 ### `PDM-Q7` PARTIAL 2026-09-12 — Disposition of the Monero-era stripe engine
 
@@ -536,6 +621,27 @@ Named now so they are not discovered later.
   prunable region has exactly one occupant; blob vs re-serialize hash
   paths agree only *positionally*. Read this test before proposing
   anything that adds to or reorders that region.
+- **Every leaf-shaped archival ruling** (`PDM-Q-F13` item 3 of Q6) —
+  [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md) `RF-D1`
+  (the 128 B `leaf_bytes` claim) and `RF-D6` (`SHARD_BYTES = 25,992 ×
+  128`, `challenge_leaf_index`, `LeafStore::frozen_segment`),
+  [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md)'s
+  draw, [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)'s
+  segment as the unit of holding, and the bond's `holdings` descriptor
+  ([`ARCHIVAL_BOND_CONSTRUCTION.md`](ARCHIVAL_BOND_CONSTRUCTION.md) line
+  349). All define possession over a good `PDM-Q-F12` shows is not
+  scarce. If Q6 rules the prunable region in, the unit of possession
+  becomes a transaction's `CtSigPrunable` and the verifier its
+  `txs_prunable_hash`; each of those rulings is either re-keyed with
+  the unit substituted or reopened. Q6 names which.
+- **V11 retention rule** (`db_lmdb.cpp:128-136`) and
+  **`txs_pqc_auths`** (`PDM-Q-F14`) — the rule keeps the PQC slice
+  because it lacks a hash table. A Q6 ruling that adds
+  `txs_pqc_auth_hash` changes what V11 protects and is a schema bump on
+  the C++ side that this round does **not** make (`PDM-Q-S0`); it is
+  the Rust store's to carry at `DRS-E*`, and slice A's `AppendMostly`
+  grade on `txs_pqc_auths` (`class.rs:161`) re-grades with the three
+  curve-tree rows.
 - **`CURVE_TREE_CLIENT.md` remaining (b)** — store-backed / pruned-tree
   assembly (F5). A PDM ruling that wallets assemble against `R_k` +
   fetched chunks is that item's substrate.
@@ -681,6 +787,102 @@ Named now so they are not discovered later.
   round's premise (§1.1), and a reader has to hit it first: *name what
   makes set B scarce, or withdraw the claim that it is.*
 
+### Established by reading (2026-09-13, same pin — the data-element pass)
+
+The pass §9 tabulates. Read against F12's test: *is this element a
+pure function of bytes a pruned node keeps?* — and against the
+consensus question: *does anything read it after admission?*
+
+- **PDM-Q-F13.** **The third category exists, and the code already
+  designates it: the transaction's prunable region is scarce and
+  D10-compatible.** F12's author asserted scarcity and
+  reconstructibility were one axis — anything non-derivable is needed
+  for replay, anything not needed is derivable. That was true of
+  derived state and false of the transaction. `src/fcmp/ct_types.h`
+  splits the ct signature at `:197` / `:333`: the **unprunable base**
+  (`type`, `txnFee`, `referenceBlock`, `enc_amounts`, `enc_labels`,
+  `outPk`) and the **prunable region** `CtSigPrunable`
+  (`bulletproofs_plus` `:349`, `fcmp_pp_proof` `:367`, `pseudoOuts`
+  `:384`, `serve_credit_pruned` `:402`). Run F12's own trace against
+  the split: leaf reconstruction reads `output_key` from `vout`,
+  `commitment` from `tx.ct_signatures.outPk[i].mask`
+  (`blockchain_db.cpp:597`) and `h_pqc` from `tx_extra` `0x07` — all
+  three in the base. Replay through `apply_block` rebuilds every
+  derived table from the **pruned** corpus alone, so D10 is not in
+  tension with discarding the prunable region. And the region is
+  non-derivable in the strong sense: range proofs and FCMP++ proofs
+  are commitments over witness data that no longer exists anywhere;
+  they are original, not cached. Scarce *and* replay-compatible — the
+  object F12 said could not exist. Its verifier is already in the
+  schema: the V11 rule (`db_lmdb.cpp:128-136`) keeps `txs_prunable_hash`
+  when `prune_tx_data` drops the body, and the row is written per tx
+  at `:1166-1167`. A challenged archiver returns bytes; any node
+  verifies them against a 32-byte hash it retained — non-forgeable,
+  per transaction, no fetch to check, and it discriminates on
+  **possession**, which was the defect that opened the round. Size:
+  `FCMP_PLUS_PLUS.md` §13 puts the region at ~6.1 KB of a ~17–18 KB
+  2-in/2-out transaction (~35 %). Consequence: the scarce good is not
+  "the block corpus" (F12's phrasing); it is the corpus's prunable
+  region. Q6 is the round's subject, not a promotion; Q1's set-B
+  enumeration is downstream of Q6's ruling.
+- **PDM-Q-F14.** **The largest element in a transaction is kept by
+  hashing convention, not by consensus need.** `pqc_auths` — one
+  hybrid public key + hybrid signature per input,
+  `cryptonote_basic.h:426-433` — is ~10.6 KB of the same 2-in/2-out
+  transaction (~60 %, `FCMP_PLUS_PLUS.md` §13). It is stored as its
+  own slice of the unprunable half, `txs_pqc_auths`
+  (`db_lmdb.cpp:1132-1149`: bytes `pqc_auths_offset..unprunable_size`).
+  Every consensus reader is inside `check_tx_inputs`
+  (`blockchain.cpp:3717`, `:3739`, `:3838`, `:3922`, `:3988`, `:4231`,
+  `:4351`); the DB reads (`db_lmdb.cpp:3344`…`:3997`) are blob
+  reassembly for serving. It enters the txid only as `pqc_auth_hash`:
+  `hash(prefix, base_ct, pqc_auth_hash, prunable_hash)`,
+  `cryptonote_format_utils.cpp:1306-1318`. The V11 comment says why
+  it is retained: *"neither has a hash table of its own"*
+  (`db_lmdb.cpp:131`). So a 32-byte `txs_pqc_auth_hash` row per tx
+  would put the slice in the same category as F13's region — original,
+  admission-only, hash-verifiable — with no change to the tx blob or
+  the txid. Not a ruling; Q6 item 2. Recorded because a Q6 that rules
+  the ~35 % in and leaves the ~60 % universally retained has answered
+  the storage question backwards.
+- **PDM-Q-F15.** **The self-reference is checked and benign.**
+  `serve_credit_pruned` (RF-D1 pass records, the pruned half) sits
+  inside F13's good. Readers in `src/` after parse: exactly one,
+  `blockchain.cpp:3807`, inside `check_tx_inputs`, handing each vin
+  its record for `check_archival_serve_credit_input`; the remaining
+  hits are the serializers. Settlement, challenge verification and
+  slashing read the **kept** vin (`RF-D1`: `p_canonical_id`,
+  `shard_id`, `settlement_epoch`, `leaf_bytes`, Ed25519
+  countersignature, ~230 B) and the archival tables populated from it
+  at add time; `CR-D2` ruled the kept side *"identifies the record,
+  cannot re-verify the opening"* — the pruned half was designed as
+  admission-only. The retention prune (`db_lmdb.cpp:7704-7739`) already
+  retires the credit, settlement, r_market, sigma-work, budget and
+  witness rows at `tip − W` and its own comment says *"Settlement reads
+  the kept tx_extra headers, never this witness"*. So the archival
+  system already treats its evidence as disposable after `W`; the
+  pruned half being in the good adds no reader. Condition: discard
+  depth ≥ the reorg depth that can re-run `check_tx_inputs` on the
+  block (Q2, same floor as F10's).
+- **PDM-Q-F16.** **Seven archival tables are node-local journals that
+  grow without bound and are read only inside a window.** Six —
+  `archival_bond_unbond_log`, `archival_bond_holdings_update_log`,
+  `archival_bond_rebond_log`, `archival_emission_claim_log`,
+  `archival_slash_log`, `archival_epoch_close_log` — are referenced
+  only in `db_lmdb.{h,cpp}`; their readers are the pop path
+  (`revert_*_at_height`, `db_lmdb.cpp:6256`, `:6513`, `:6631`,
+  `:6892`, `:7000`, `:8508`). One forward-path consensus read exists:
+  `archival_slash_removed_holding_after` (`:5243`) range-scans
+  `archival_slash_log` strictly above a settlement height, so rows
+  older than the retention window are never reached **if** every
+  caller's `at_height ≥ tip − W` — not proven here. None of the seven
+  is in the retention prune's list; slice A grades all six logs
+  `AppendMostly` (`class.rs:116-134`). Bytes are per event, not per
+  transaction, so the storage stake is small; the finding is a
+  class, not a number: these are `LOCAL-BOUNDED` in §9 and Q1 owes
+  them a retirement horizon (the reorg window for the six, the
+  retention window for the slash log once the caller bound is shown).
+
 ### Retracted
 
 - **PDM-Q-F6 RETRACTED 2026-09-12** as a launch-state fork. Was
@@ -699,14 +901,22 @@ Named now so they are not discovered later.
 
 ### Undetermined (ruling pass)
 
-- The retained set (starting from layer 0 / `m_curve_tree_leaves`,
-  F7; widened to the leaf's derivation inputs, F12), the trigger
-  (including the free-regime duration, what the market does during it,
-  and the reorg-depth floor, F10), residual consensus reads after TJ-A
-  (Q3), reconstruction, cold sync, the transaction corpus as the locus
-  of scarcity (Q6, F12), stripe-engine residue at the cutover (Q7),
-  fetch privacy, the archiver's bond-binding and lapse tail (Q9), the
-  "not retained" RPC response (Q10).
+- The prunable region as the archival good, the `pqc_auths` second
+  occupant, and the leaf→transaction unit change it forces on the
+  closed archival rulings (Q6, F13–F15) — ruled first. Then the
+  retained set (starting from layer 0 / `m_curve_tree_leaves`, F7;
+  widened to the leaf's derivation inputs, F12; §9's `CACHE` and
+  `LOCAL-BOUNDED` rows, F16), the trigger (including the free-regime
+  duration, what the market does during it, and the reorg-depth floor,
+  F10 / F15), residual consensus reads after TJ-A (Q3),
+  reconstruction, cold sync, stripe-engine residue at the cutover
+  (Q7), fetch privacy, the archiver's bond-binding and lapse tail
+  (Q9), the "not retained" RPC response (Q10).
+- Whether `scan_outputkeys_for_indexes` (`blockchain.cpp:296-350`) is
+  a live FCMP++ consensus reader of `output_metadata` or rule-60
+  residue (§9, Q1).
+- Whether every caller of `archival_slash_removed_holding_after`
+  passes `at_height ≥ tip − W` (F16).
 - Negative-control status of any coverage number this round later quotes.
   Do not quote a coverage figure without an edit that makes the
   instrument go red. Q3's residual-set instrument is the named
@@ -720,12 +930,12 @@ Named now so they are not discovered later.
 | ID | Question | State |
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
-| `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12) | OPEN — widened 2026-09-13 |
+| `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory) | OPEN — widened 2026-09-13; ruled after Q6 (F13) |
 | `PDM-Q2` | Trigger, depth, free-regime duration, reorg-depth floor (F10) | OPEN |
 | `PDM-Q3` | Residual consensus reads after TJ-A | OPEN — today not node-local (`PDM-Q-F8`) |
 | `PDM-Q4` | Reconstruction path | OPEN |
 | `PDM-Q5` | Cold sync and bootstrap | OPEN |
-| `PDM-Q6` | Transaction corpus as archival subject — the locus of scarcity (F12) | OPEN — promoted 2026-09-13 |
+| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; leaf→tx unit change (F13, F14, F15) | OPEN — the round's subject 2026-09-13; ruled before Q1 |
 | `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*` |
 | `PDM-Q8` | Privacy (density vs query) | OPEN |
 | `PDM-Q9` | Archiver's retention set: source, binding, lapse | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); binding and lapse tail OPEN |
@@ -750,11 +960,151 @@ Q1 starts from F7's boundary and does not stop at the leaf table
 (F12); the PR that rules Q1 corrects `db_lmdb.cpp:9922-9925` / `:9970`
 / `blockchain_db.h:2838`. Q2's ruling must state the free-regime
 duration, the market's behaviour during it, and the reorg-depth floor
-with trim's defined failure (F10). Q3 is the residual-set question
-after TJ-A, with an instrument that can go red. **Q6 is answered
-before Q1 is closed**, because F12 makes the transaction corpus the
-only place scarcity can come from; a Q1 ruling written ahead of Q6 is
-ruling on a cache. Q9's binding and lapse tail; Q10's response shape,
-legible to the `SF-` round. F9 is a C++ defect independent of PDM; the
-carrier is the FOLLOWUPS row, not this charter. F11's re-grade of the
-three curve-tree rows is the DRS-0 lane's, on Q1's output.
+with trim's defined failure (F10) and F15's admission-only floor. Q3
+is the residual-set question after TJ-A, with an instrument that can
+go red. **Q6 is answered before Q1 is closed**, and Q6 is now a
+concrete question rather than a promotion: F13 names the good (the
+prunable region, verified by `txs_prunable_hash`), F14 names the
+second occupant (`pqc_auths`, ~60 % of the bytes, kept only for want
+of a hash row), F15 discharges the self-reference, and Q6 item 3 owes
+the list of closed leaf-shaped rulings the unit change reopens. A Q1
+ruling written ahead of Q6 is ruling on a cache. Q1 then rules §9's
+`CACHE` and `LOCAL-BOUNDED` rows (F16) and the two undetermined
+readers. Q9's binding and lapse tail; Q10's response shape, legible
+to the `SF-` round. F9 is a C++ defect independent of PDM; the carrier
+is the FOLLOWUPS row, not this charter. F11's re-grade of the three
+curve-tree rows — and now `txs_pqc_auths` — is the DRS-0 lane's, on
+Q6's and Q1's output.
+
+---
+
+## 9. Data-element inventory at the pin (`edb35dbb1` + this round's reads)
+
+The pass the user asked for: every element that reaches the chain
+store, graded on two axes — **derivable?** (F12's test: a pure
+function of bytes a pruned node keeps) and **read after admission?**
+(by consensus, by wallets, by nothing). Classes:
+
+- **KEEP-C** — consensus reads it after admission. Universal. Not
+  negotiable by this round.
+- **KEEP-W** — consensus does not need it after admission; **wallets
+  do** (restore-from-seed scans every output ever). Universal unless a
+  ruling gives wallets an archiver-served path — which is Q5's
+  centralisation question wearing a different costume. Default KEEP.
+- **KEEP-D** — derivation input for a `Derived` / `CACHE` table under
+  D10's replay premise. Kept because dropping it makes something else
+  unrebuildable.
+- **CACHE** — pure function of KEEP-C/KEEP-W/KEEP-D bytes. Discard is a
+  performance choice, never scarcity (F12). Q1's rows.
+- **GOOD** — original, non-derivable, admission-only, hash-committed.
+  The archival subject candidate (F13, F14). Q6's rows.
+- **LOCAL-BOUNDED** — node-local; readable only within a window
+  (reorg, retention, tip). Retire on the window; never scarce (F16).
+
+Sizes are per unit at the pin; the transaction figures are
+`FCMP_PLUS_PLUS.md` §13's 2-in/2-out budget (~17–18 KB), which does
+**not** itemise the `0x06` KEM ciphertexts (1120 B/output,
+`POST_QUANTUM_CRYPTOGRAPHY.md:153`) — they are in the prefix and are
+added here. "Readers" lists post-admission readers only; every element
+is read at admission.
+
+### 9.1 The transaction (the block corpus, `blocks` + `txs_*`)
+
+| Element | Wire home | Store home | Bytes (2-in/2-out) | Post-admission readers | Derivable from | Class |
+| --- | --- | --- | ---: | --- | --- | --- |
+| prefix: `version`, `unlock_time`, `vin` (key images, archival vins), `vout` (`O`), `extra` sans `0x06`/`0x07` | tx prefix | `txs_pruned` | ~0.5 KB | consensus (key images → `spent_keys` rebuild; archival vins → archival tables rebuild; `RF-D1` kept vin read by settlement / slash), wallets | — (original) | KEEP-C |
+| `tx_extra` `0x07` PQC leaf hashes (`h_pqc`) | prefix | `txs_pruned` | 32 B/output | replay (`blockchain_db.cpp:528-557` → leaf) | — | KEEP-D |
+| `tx_extra` `0x06` hybrid KEM ciphertexts | prefix | `txs_pruned` | 1120 B/output (~2.2 KB) | wallets only (scan / restore) | — | KEEP-W |
+| `CtSigBase`: `type`, `txnFee`, `referenceBlock`, `enc_amounts`, `enc_labels`, `outPk` | ct base (`ct_types.h:197`) | `txs_pruned` | ~256 B | replay (`outPk` → commitment → leaf, `:597`; fee → burn / emission), wallets (`enc_amounts`, `enc_labels`) | — | KEEP-C / KEEP-D |
+| `pqc_auths` (hybrid pk + hybrid sig per input) | between base and prunable (`cryptonote_basic.h:492`) | `txs_pqc_auths` | ~5.3 KB/input (~10.6 KB) | **none** — every reader is in `check_tx_inputs` (`blockchain.cpp:3717-4351`); txid uses only `pqc_auth_hash` | — (original) | **GOOD** candidate (F14) — needs a 32 B hash row it does not have |
+| `CtSigPrunable`: `bulletproofs_plus` | prunable (`:349`) | `txs_prunable` | ~1.5 KB | none; hash in `txs_prunable_hash` | — (witness gone) | **GOOD** (F13) |
+| `CtSigPrunable`: `fcmp_pp_proof` + `curve_trees_tree_depth` | prunable (`:367`) | `txs_prunable` | ~2.5 KB/input (~4.5 KB) | none; hash in `txs_prunable_hash` | — (witness gone) | **GOOD** (F13) |
+| `CtSigPrunable`: `pseudoOuts` | prunable (`:384`) | `txs_prunable` | 32 B/input | none | — | **GOOD** (F13) |
+| `CtSigPrunable`: `serve_credit_pruned` (RF-D1 pruned half: ML-DSA leg + `path` incl. the leaf chunk) | prunable (`:402`) | `txs_prunable` | ~9,965 B per serve-credit vin (`ARCHIVAL_RESPONSE_FORMAT.md:78-81`) | none (`blockchain.cpp:3807` is admission; F15) | — | **GOOD** (F13, F15) |
+| `txs_prunable_hash` | — | `txs_prunable_hash` | 32 B/tx | txid recompute (`get_pruned_transaction_hash`); **the GOOD's verifier** | H(prunable) — but only if you hold the prunable | KEEP-C |
+| `pqc_auth_hash` | — | **no table** (V11: *"neither has a hash table"*) | 32 B/tx if minted | would be `txs_pqc_auths`'s verifier | H(pqc_auths) | Q6 item 2 |
+| `tx_indices` (hash → id, height, unlock) | — | `tx_indices` | ~56 B/tx | consensus (tx lookup, reorg), RPC | rebuild from `blocks` | CACHE (kept; index) |
+| `tx_outputs` (tx → global output indices) | — | `tx_outputs` | 8 B/output | reorg pop (`remove_output`), RPC | rebuild | CACHE |
+| `txs` (inherited) | — | `txs` | 0 (unused at v3; `Excluded`, `class.rs`) | none | — | deletion target (rule 60), not this round's |
+| `txs_prunable_tip` | — | `txs_prunable_tip` | 8 B/tx in tip | inherited stripe engine only | — | LOCAL-BOUNDED (dies with Q7) |
+
+Totals for the 2-in/2-out transaction, at the pin: **~20 KB on the
+wire; ~3 KB is KEEP-C/KEEP-W/KEEP-D (prefix + base + KEM ct + leaf
+hashes); ~6 KB is GOOD today (the prunable region); ~10.6 KB is GOOD
+pending a hash row (F14).** A ruling that takes both GOOD rows retains
+~15 % of transaction bytes universally.
+
+### 9.2 Per output — the derived layer (all CACHE under F12)
+
+| Table | Bytes/output | Post-admission readers | Derivable from | Class |
+| --- | ---: | --- | --- | --- |
+| `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `:1577`/`:1670` | `O`, `C`, `h_pqc` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
+| `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | `scan_outputkeys_for_indexes` (`blockchain.cpp:296-350`) — live or rule-60 residue: **undetermined**; RPC leaf reconstruction (`core_rpc_server.cpp:1585`) | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
+| `output_txs`, `output_amounts` | ~40, ~48 | reorg pop, RPC | rebuild | CACHE |
+| `output_to_leaf`, `leaf_to_output` | 16, 16 | leaf ↔ output mapping on pop and RPC | rebuild (insertion order) | CACHE |
+| `pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions` | 128 + index, transient | maturity drain at unlock height (consensus) | rebuild from `unlock_time` | KEEP-C while pending; self-bounding (empties at maturity) |
+
+### 9.3 Per block and per input — consensus state that is not a cache
+
+| Table | Bytes/unit | Post-admission readers | Derivable | Class |
+| --- | ---: | --- | --- | --- |
+| `blocks` (header incl. `attestation_root` + miner tx + tx hashes) | ~0.3 KB + miner tx (KEM ct per coinbase output) | PoW / difficulty window, reorg, sync serving, replay root | — | KEEP-C |
+| `block_info`, `block_heights` | ~100, 40 | difficulty, cumulative weight, hash → height | rebuild from `blocks` | CACHE (kept; index) |
+| `spent_keys` | 32 B/input | **every** FCMP++ input check (double spend) | rebuild from `vin` | KEEP-C — the one permanently unbounded set; not prunable at any depth |
+| `curve_tree_roots` | 32–64 B/block | every FCMP++ proof verify (`referenceBlock` → root) | rebuild from leaves… which are CACHE — root chain must stay | KEEP-C |
+| `curve_tree_layers` layer 0 (`R_k` chunks) | 32 B/chunk | recompose on trim (F7); TJ-F verify target | recompute from leaves (CACHE) — kept as the set-A boundary | KEEP-C (set A) |
+| `curve_tree_layers` layers 1..depth−2 | 32 B/chunk | none after seal | recompose from layer 0 | CACHE — **already pruned** by every node (`prune_curve_tree_intermediate_layers`) |
+| `curve_tree_meta`, `curve_tree_checkpoints` | small | trim, integrity check (`Derived`, F11) | from leaves (F11) — re-grade | CACHE / KEEP-C (root layer) |
+| `block_burn` | 8–16 B/block | emission / burn accounting | rebuild from fees | CACHE (kept; small) |
+| `hf_versions`, `hf_starting_heights`, `properties` | small | consensus versioning, receipts (V12 prune watermark) | — | KEEP-C (constant size) |
+
+### 9.4 Archival / staking state (the 18 `archival_*` tables + `block_burn`)
+
+Everything here is **populated from kept prefix bytes** (archival vins
+are opaque canonical blobs in the tx prefix, `cryptonote_basic.h:190`,
+`:257`, `:288`) and is therefore rebuildable by replay from the pruned
+corpus. Nothing here is GOOD; the question is only which rows a node
+must keep to *verify new blocks* versus which it may retire.
+
+| Table | Class (slice A) | Post-admission readers | Bounded by | Class (this round) |
+| --- | --- | --- | --- | --- |
+| `archival_bond` | SetShaped | every bond / challenge / settlement / slash rule (live bond set) | live bonds | KEEP-C |
+| `archival_shard_segment` | SetShaped | freeze pipeline, challenge target (`R_k` per shard) | segments ever frozen | KEEP-C (unit changes if Q6 rules the good is transactions — §5) |
+| `archival_slash_applied` | SetShaped | slash dedupe | slashes ever | KEEP-C |
+| `archival_serve_credit`, `archival_settlement`, `archival_r_market`, `archival_sigma_work`, `archival_budget`, `archival_budget_accrual`, `archival_attestation_witness` | Small | settlement / epoch close within `W` | **retention prune at `tip − W`** (`db_lmdb.cpp:7704-7739`, un-journaled) | LOCAL-BOUNDED — already retired; nothing owed |
+| `archival_alt_attestation_witness` | Excluded | alt-chain reconnect | alt blocks | LOCAL-BOUNDED (alt) |
+| `archival_bond_unbond_log`, `archival_bond_holdings_update_log`, `archival_bond_rebond_log`, `archival_emission_claim_log`, `archival_epoch_close_log` | AppendMostly | pop path only (`revert_*_at_height`) | **nothing today** | LOCAL-BOUNDED in principle (reorg window); unbounded on disk (F16) — Q1 |
+| `archival_slash_log` | AppendMostly | pop path + `archival_slash_removed_holding_after` (`:5243`, scans above `at_height`) | **nothing today** | LOCAL-BOUNDED (retention window) once the caller bound is shown (F16) — Q1 |
+
+### 9.5 Node-local, never chain state
+
+`alt_blocks`, `txpool_meta`, `txpool_blob` (all `Excluded`). Bounded by
+their own eviction. Not this round's.
+
+### 9.6 What the inventory says
+
+1. **The only scarce goods at the pin are the transaction's prunable
+   region and — pending a 32-byte hash row — its `pqc_auths` slice.**
+   Together ~85 % of transaction bytes. Everything else is either
+   consensus-required forever (`spent_keys`, roots, headers, the
+   prefix), wallet-required (KEM ciphertexts), a derivation input for
+   the tree (`0x07`, `outPk`, `vout`), or a cache.
+2. **Nothing in the archival / staking *tables* is prunable in the
+   scarcity sense**, and nothing there needs to be: the seven
+   window-bounded tables are already retired by the retention prune,
+   the three set-shaped tables are live consensus state, and the seven
+   journals (F16) are node-local with a window nobody has yet applied.
+   The archival domain's bytes are in the **transaction**: the pass
+   record's pruned half is ~10 KB per serve-credit vin against ~230 B
+   kept (`RF-D1`), which is `CR-D2`'s ~88 GB/yr floor — and under F13
+   that stream is GOOD, not overhead. The archival system's own
+   evidence is the bulk of what it sells (F15 says that is benign).
+3. **The one permanent, unbounded, unprunable table is `spent_keys`**
+   — 32 B per input, forever, on every node. Any storage projection
+   that omits it is wrong; any pruning design that touches it breaks
+   double-spend detection.
+4. **Discarding the derived layer (§9.2) saves ~340 B/output against
+   ~1.3 KB/output of bytes that regenerate it.** It is a cache policy
+   (Q1) and buys no scarcity (F12). Whether a pruned node keeps
+   `curve_tree_leaves` is a latency question about spend-path
+   assembly and TJ-A's verify path, not a product question.
