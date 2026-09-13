@@ -30,6 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 LMDB = ROOT / "src/blockchain_db/lmdb/db_lmdb.cpp"
 SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
+CLASSES = ROOT / "rust/shekyl-chain-store/src/accumulator/class.rs"
 
 MACRO_RE = re.compile(r"#define SHEKYL_LMDB_TABLES\(X\)(.*?)\n\n", re.S)
 ENTRY_RE = re.compile(r'X\(\s*\w+\s*,\s*"([^"]+)"\s*\)')
@@ -47,7 +48,7 @@ def dupes(names):
 
 def main():
     failures = []
-    for p in (LMDB, SCHEMA):
+    for p in (LMDB, SCHEMA, CLASSES):
         if not p.is_file():
             failures.append(f"{p.relative_to(ROOT)}: missing — the gate's subject does not exist")
     if failures:
@@ -75,6 +76,37 @@ def main():
         if d:
             failures.append(f"{label}: duplicate table name(s): {', '.join(sorted(set(d)))}")
 
+    # THIRD SURFACE: slice A's accumulator class table. lib.rs requires slice B's
+    # names to be bijection-pinned against it, and two lanes maintaining one
+    # table list is precisely where drift lives — so it is checked here rather
+    # than asserted in prose.
+    ctext = CLASSES.read_text(encoding="utf-8")
+    cstart = ctext.find("pub const TABLE_CLASSES")
+    classed = []
+    if cstart < 0:
+        failures.append(f"{CLASSES.name}: TABLE_CLASSES did not parse — third surface missing")
+    else:
+        block = ctext[cstart:]
+        block = block[: block.index("\n];")]
+        classed = re.findall(r'"([a-z_0-9]+)"', block)
+        if not classed:
+            failures.append(f"{CLASSES.name}: parsed ZERO class entries — third surface missing")
+        d = dupes(classed)
+        if d:
+            failures.append(f"TABLE_CLASSES: duplicate table name(s): {', '.join(sorted(set(d)))}")
+        only_class = sorted(set(classed) - set(censused))
+        only_macro = sorted(set(censused) - set(classed))
+        if only_class:
+            failures.append(
+                f"{len(only_class)} name(s) in TABLE_CLASSES are NOT in the X-macro:\n    "
+                + ", ".join(only_class))
+        if only_macro:
+            failures.append(
+                f"{len(only_macro)} censused table(s) carry NO accumulator class:\n    "
+                + ", ".join(only_macro)
+                + "\n    Slice A assigns one of five tokens to every table; a gap here means "
+                  "the two slices disagree about the inventory.")
+
     missing = sorted(set(censused) - set(defined))
     extra = sorted(set(defined) - set(censused))
     if missing:
@@ -92,7 +124,8 @@ def main():
 
     report(failures)
     print(f"redb schema bijection: {len(censused)} censused LMDB tables <-> "
-          f"{len(defined)} redb table definitions, no duplicates, no gaps in either direction")
+          f"{len(defined)} redb table definitions <-> {len(classed)} accumulator classes; "
+          f"no duplicates, no gaps in any direction")
 
 
 def report(failures):

@@ -4,6 +4,25 @@
 
 ### Changed
 
+- **Tor-zone wire-observer cover is operator non-exit relay posture, not
+  the protocol carrier** ([`TOR_COVER_POSTURE.md`](design/TOR_COVER_POSTURE.md),
+  TRC; RULED 2026-09-04, recorded 2026-09-12). Default Tor nodes no longer
+  receive protocol-level constant-rate cover. The carrier remains for
+  encrypted zones other than Tor. Operator recommendation:
+  [`TOR_RELAY.md`](TOR_RELAY.md) — the daemon's Tor client (SOCKS and overlay
+  inbound) must be **that same non-exit relay process**; a sidecar client
+  Tor, including the default managed ephemeral instance, is uncovered.
+  This is a reduction in what the protocol guarantees: cover moves from a
+  protocol mechanism to an operator posture.
+
+- **Cover-traffic ~42 GB/month ceiling signed off** after the
+  `COVER_TRAFFIC_RESTORATION.md` §3.1c three-arm measurement (seedusw,
+  2026-09-12). Defects 1–3 not observed. Honest Tor-only observed
+  ~18–20 GB/month equivalent (7128–7809 B/s), under the two-channel mean
+  of 8192 B/s. The 42 GB figure remains the dual-zone four-channel
+  *ceiling*, not the typical node bill. The §3.1c counter reads the live
+  29-byte Levin header (`utils/carrier/count_windows.py`).
+
 - **Short-term block-weight surge factor is 4**, sourced from
   `config/consensus_constants.json` as `block_weight_short_term_surge_factor`.
   The effective-median clamp that consumes it lives in

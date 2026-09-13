@@ -682,6 +682,8 @@ serve-credit response"* — which is precisely why
 **What is genuinely open** is the arithmetic at the boundary: a response naming
 `E` admitted during `E+1`, and what dedup and the emission gather do with it.
 
+**Scope addition 2026-09-12 (`ba4b3c73a`), so the wiring and the interface change arrive together:** `SO-D8` also **promotes the settlement write path onto `BlockchainDB`**. It lives only on `BlockchainLMDB` today (`src/blockchain_db/lmdb/db_lmdb.h:754–775`; zero hits in `src/blockchain_db/blockchain_db.h` and `src/blockchain_db/testdb.h`), so if the cutover lands without it, either the base-class change happens on the consensus-cutover critical path or the redb store (DRS-0) silently ships without a write path LMDB has.
+
 **Why it is not ruled here, stated as a rule-22 blocker rather than a
 deferral:** this is **consensus-visible admission timing on a genesis-frozen
 surface** — a wrong byte is permanent. It is the design-first category, and it

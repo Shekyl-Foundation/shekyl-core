@@ -115,6 +115,37 @@
 #     depth 1, where `git show <old-sha>:path` simply fails; a gate that
 #     treated that as "nothing to check" would pass vacuously on every PR.
 #
+# WHAT THIS GATE DOES NOT CHECK — stated here, at the gate level, because
+# these are properties of the INSTRUMENT and not of any one document. A
+# per-document deferral list is the wrong container for a gate-capability gap:
+# DEFERRED_DOCS' self-expiry probe asks "would this document now pass?", which
+# is a valid proxy only when the blocker is DOC-SIDE. A capability gap would
+# fire that probe while the blocker still stood.
+#
+#   1. THE SYMBOL AXIS ON TABLE ROWS. A row's citation is checked for path
+#      uniqueness and for range bounds, NOT for whether the symbol named
+#      beside it is the subject of the cited lines. Walk legends ARE checked
+#      (`check_symbol_ranges`), because a legend has a form tight enough to
+#      trust. Measured before deciding, on this register's own rows:
+#      containment gave 10 candidates, all mis-pairings; symbol-existence gave
+#      3, all legitimate -- a deliberate negative claim, a forward reference to
+#      an unmerged tree, and a cross-clause mention. Zero real findings in 58
+#      symbol/file pairs, because Evidence prose legitimately names a symbol
+#      beside a line that is not in it: wrapper-and-delegate, effect site, or
+#      the previous clause's subject.
+#      THE FIX IS A CITATION FORM, NOT A CLEVERER PARSER. You cannot gate free
+#      prose; you gate a shape. Owner: whoever sets the row citation
+#      convention (see the registers' own authors) -- not this script.
+#
+#   2. TWO CITATION SPELLINGS GO UNPARSED, hence unchecked, currently 2 of
+#      ~213 in the register: an approximate line (`file.cpp:~6430`) and a
+#      multi-line list (`file.cpp:196/198`). A malformed citation is
+#      indistinguishable from prose here, so it is silently uncounted rather
+#      than refused. An "attempt" detector was measured and rejected: written
+#      loosely it matches member access (`bei.height` -> `bei.h`,
+#      `m_checkpoints.check_block` -> `m_checkpoints.c`) and produced 15 false
+#      positives against those 2 real ones.
+#
 # Rule 46: the verdict never travels through a pipe. Every git call is
 # subprocess.run(check=False) with its returncode read explicitly, and the
 # exit status is set by sys.exit() here.
@@ -227,7 +258,26 @@ class Era:
             text=True,
             check=False,
         )
-        return None if proc.returncode != 0 else proc.stdout.split("\n")
+        if proc.returncode != 0:
+            return None
+        lines = proc.stdout.split("\n")
+        # A file ending in a newline splits to a trailing EMPTY element, which
+        # is not a line. Left in, `len(lines)` overstates the file by one, so a
+        # citation exactly ONE PAST end-of-file passed the bounds check and the
+        # failure text overstated how long the file is. Dropped only when it is
+        # actually empty, so a file with no final newline is unaffected.
+        if lines and lines[-1] == "":
+            lines.pop()
+        return lines
+
+
+CELL_SPLIT = re.compile(r"(?<!\\)\|")
+
+
+def cells(line):
+    r"""Row cells, split on UNESCAPED pipes -- `\|` inside a code span is
+    content, and splitting on it shifts every column to its right."""
+    return [c.strip() for c in CELL_SPLIT.split(line.rstrip("\n"))]
 
 
 def resolve_path(token, tracked):
@@ -280,7 +330,28 @@ def definition_extents(lines, symbol):
     return out
 
 
-def eras_for_lines(lines):
+def era_for_citation(line, pos, section_era):
+    """Era governing the citation at character `pos` of `line`.
+
+    A row may carry TWO eras -- "re-verified at `A` ... and again at `B`" --
+    and resolving the whole line at the FIRST one silently checks the later
+    clause against a revision the row does not claim for it. The governing pin
+    is the nearest one to the LEFT of the citation; with none to its left the
+    enclosing section's era stands, NOT the row's first pin.
+
+    Harmless while only path uniqueness is checked, wrong the moment ranges
+    are -- which is what the symbol limb does, so it is fixed in the same
+    commit that makes it matter.
+    """
+    governing = None
+    for match in INLINE_PIN_RE.finditer(line):
+        if match.start() >= pos:
+            break
+        governing = match.group(1)
+    return governing or section_era
+
+
+def eras_for_lines(lines, inline=True):
     """Era governing each 1-based line: inline override, else the innermost
     enclosing section pin, else HEAD.
 
@@ -311,8 +382,12 @@ def eras_for_lines(lines):
             while stack and stack[-1][0] >= section_level:
                 stack.pop()
             stack.append((section_level, found.group(1) or found.group(2)))
-        inline = INLINE_PIN_RE.search(line)
-        eras[i] = inline.group(1) if inline else (stack[-1][1] if stack else HEAD)
+        section = stack[-1][1] if stack else HEAD
+        if not inline:
+            eras[i] = section
+            continue
+        found_inline = INLINE_PIN_RE.search(line)
+        eras[i] = found_inline.group(1) if found_inline else section
     return eras
 
 
@@ -434,72 +509,144 @@ def legend_blocks(lines):
     return out
 
 
-def check_legend_containment(relpath, lines, eras, failures, mis_scoped=frozenset()):
-    """A walk's cited range must lie inside exactly one body-bearing definition
-    of the symbol that walk names.
+def check_clause_containment(relpath, lineno, label, text, era_of, failures):
+    """A cited range must overlap a definition of the symbol named beside it.
 
-    Scoped per WALK, not per block: one paragraph introduces several walks
-    (`**W-TI** = ... , **W-RB** = ... , **W-PQ** = ...`), so the text is split
-    on the markers and each walk's symbol is paired only with the range in its
-    own segment.
+    ONE routine for walk legends and for table rows. It used to exist only
+    inside the walk-legend loop, which left the symbol half of every
+    non-legend row unchecked -- and the symbol is the half that survives line
+    drift, so it is the half that matters once rows cite symbol-first.
+
+    Pairs POSITIONALLY: a clause's symbols are those between it and the
+    previous ranged citation. Pairing every symbol with every range made one
+    symbol answer for a range belonging to the clause above it.
     """
+    cursor = 0
+    for match in [m for m in CITATION_RE.finditer(text) if m.group(2)]:
+        symbols = [
+            sym
+            for sym in SYMBOL_RE.findall(text[cursor:match.start()])
+            if "." not in sym and "/" not in sym
+        ]
+        cursor = match.end()
+        rev = era_of(match.start())
+        tracked = Era.files(rev)
+        if tracked is None:
+            continue  # the unreachable-pin limb owns that failure
+        candidates = resolve_path(match.group(1), tracked)
+        if len(candidates) != 1:
+            continue  # the path limb owns that failure
+        blob = Era.blob(rev, candidates[0])
+        if blob is None:
+            continue
+        start = int(match.group(2))
+        end = int(match.group(3) or match.group(2))
+        for symbol in symbols:
+            extents = definition_extents(blob, symbol)
+            if not extents:
+                continue  # prose, or defined elsewhere -- not a claim
+            # OVERLAP, not strict containment. A range may sit inside one
+            # definition (a sub-block of a ~900-line function) or deliberately
+            # SPAN several. Both are honest. The defect is a range that
+            # touches NO definition of the symbol it names -- a pointer that
+            # has come loose from its subject.
+            if any(e[0] <= end and start <= e[1] for e in extents):
+                continue
+            failures.append(
+                f"{relpath}:{lineno}: {label} cites `{symbol}` with range "
+                f"{start}-{end}, which overlaps no definition of it in "
+                f"{candidates[0]} at `{rev}` "
+                + ", ".join(f"[{a},{b}]" for a, b in extents)
+                + " -- the range has come loose from the symbol it names."
+            )
+
+
+def check_symbol_ranges(relpath, lines, eras, section_eras, failures,
+                        mis_scoped=frozenset()):
+    """Symbol/range containment, over WALK LEGENDS ONLY -- deliberately.
+
+    A legend has a form tight enough to check: `**W-XX** = `symbol`
+    (`file:range`)`, where the walk IS the region and the symbol names it. A
+    table row's Evidence cell is free prose, and three legitimate patterns
+    there put a cited line outside the named symbol's body:
+
+      - WRAPPER AND DELEGATE. `ver_non_input_consensus` is a thin forwarder at
+        :259/:265; the rules it is cited for live in
+        `ver_non_input_consensus_templated` at :49, so the row's `:90` for
+        "Rule 5" is CORRECT and containment would reject it.
+      - EFFECT SITE, not definition site -- "X's failure throws (`:6443`)"
+        cites the throw, which is in a caller.
+      - a symbol belonging to the PREVIOUS clause across a `; `, which no
+        adjacency window separates from the next citation.
+
+    Measured before deciding, on the register's own rows: containment produced
+    10 candidates, ALL mis-pairings; symbol-EXISTENCE produced 3, all three
+    legitimate -- a deliberate negative claim ("appears nowhere in"), a
+    forward reference to an unmerged tree, and a cross-clause mention. Zero
+    real findings out of 58 symbol/file pairs. Shipping either against free
+    prose would be a gate that cries wolf, and this repo has lost gates that
+    way -- taking their correct checks with them.
+
+    So the symbol axis is NOT checked on rows, and that gap is stated at the
+    top of this file with its owner rather than buried here. What IS checked on
+    every ranged citation, rows included, is that its end line EXISTS in the
+    cited file at the cited era -- see `check_range_bounds`. That needs no
+    judgement and closes the "wrong line reads green" axis.
+    """
+    legend_span = set()
     for first_lineno, last_lineno, text in legend_blocks(lines):
-        # A legend sitting under a declaration this gate could not parse is
-        # read at an era the document does not claim, so any containment
-        # finding from it would be built on the same false premise the path
-        # limb already declines to report.
+        legend_span |= set(range(first_lineno, last_lineno + 1))
+        # A legend under a declaration this gate could not parse is read at an
+        # era the document does not claim, so a finding from it would rest on
+        # the same false premise the path limb declines to report.
         if mis_scoped & set(range(first_lineno, last_lineno + 1)):
             continue
         rev = eras.get(first_lineno, HEAD)
-        tracked = Era.files(rev)
-        if tracked is None:
-            continue  # the unreachable-pin limb already reported this
         parts = WALK_MARKER_RE.split(text)
         for walk_id, segment in zip(parts[1::2], parts[2::2]):
-            # Pair POSITIONALLY: a walk entry lists several clauses, each with
-            # its own symbols and range ("`a` + `b` (`f.cpp:1-2`), plus ... the
-            # operand derivations (`c` `:9`, `hardforks.cpp:35-37`)"). Pairing
-            # every symbol with every range made `get_tx_volume_avg` answer for
-            # a range belonging to the clause above it. A range's symbols are
-            # those between it and the previous range.
-            cursor = 0
-            for match in [m for m in CITATION_RE.finditer(segment) if m.group(2)]:
-                symbols = [
-                    sym
-                    for sym in SYMBOL_RE.findall(segment[cursor:match.start()])
-                    if "." not in sym and "/" not in sym
-                ]
-                cursor = match.end()
-                candidates = resolve_path(match.group(1), tracked)
-                if len(candidates) != 1:
-                    continue  # the path limb owns that failure
-                blob = Era.blob(rev, candidates[0])
-                if blob is None:
-                    continue
-                start = int(match.group(2))
-                end = int(match.group(3) or match.group(2))
-                for symbol in symbols:
-                    extents = definition_extents(blob, symbol)
-                    if not extents:
-                        continue  # prose, or defined elsewhere -- not a claim
-                    # OVERLAP, not strict containment. A walk range may sit
-                    # inside one definition (W-TI is a sub-block of a ~900-line
-                    # function) or deliberately SPAN several (W-MT covers
-                    # `prevalidate_miner_transaction` and
-                    # `validate_miner_transaction` together). Both are honest
-                    # citations. The defect is a range that touches NO
-                    # definition of the symbol it names -- a pointer that has
-                    # come loose from its subject.
-                    if any(e[0] <= end and start <= e[1] for e in extents):
-                        continue
-                    failures.append(
-                        f"{relpath}:{first_lineno}: walk {walk_id} cites "
-                        f"`{symbol}` with range {start}-{end}, which overlaps "
-                        f"no definition of it in {candidates[0]} at `{rev}` "
-                        + ", ".join(f"[{a},{b}]" for a, b in extents)
-                        + " -- the range has come loose from the symbol it "
-                        "names."
-                    )
+            check_clause_containment(
+                relpath, first_lineno, f"walk {walk_id}", segment,
+                lambda _pos, rev=rev: rev, failures,
+            )
+
+
+def check_range_bounds(relpath, lines, section_eras, failures,
+                       mis_scoped=frozenset()):
+    """A ranged citation's end line must exist in the cited file at its era.
+
+    Weak on purpose, and the strongest thing available without a citation FORM
+    the gate can trust: it needs no pairing and no prose reading, so it cannot
+    cry wolf. It catches the gross drift that previously read green -- a row
+    citing `:999999`, or a range whose end has fallen off a shrinking file.
+
+    The era is resolved PER CITATION, not per line, because a row carrying two
+    eras would otherwise have its later clause bounds-checked against the
+    first one's revision.
+    """
+    for lineno, line in enumerate(lines, 1):
+        if lineno in mis_scoped:
+            continue
+        for match in CITATION_RE.finditer(line):
+            if not match.group(2):
+                continue
+            rev = era_for_citation(line, match.start(), section_eras.get(lineno, HEAD))
+            tracked = Era.files(rev)
+            if tracked is None:
+                continue  # the unreachable-pin limb owns that failure
+            candidates = resolve_path(match.group(1), tracked)
+            if len(candidates) != 1:
+                continue  # the path limb owns that failure
+            blob = Era.blob(rev, candidates[0])
+            if blob is None:
+                continue
+            end = int(match.group(3) or match.group(2))
+            if end <= len(blob):
+                continue
+            failures.append(
+                f"{relpath}:{lineno}: `{match.group(1)}` cites line {end}, but "
+                f"that file has {len(blob)} lines at `{rev}` -- the citation "
+                "points past the end of the file it names."
+            )
 
 
 def check_document(relpath, failures):
@@ -510,6 +657,7 @@ def check_document(relpath, failures):
     with open(abspath, encoding="utf-8") as handle:
         lines = handle.read().split("\n")
     eras = eras_for_lines(lines)
+    section_eras = eras_for_lines(lines, inline=False)
     seen = 0
 
     unparsed = unparsed_era_sections(lines, eras)
@@ -538,19 +686,26 @@ def check_document(relpath, failures):
     for lineno, line in enumerate(lines, 1):
         if lineno in mis_scoped:
             continue
-        rev = eras[lineno]
         matches = list(CITATION_RE.finditer(line))
         if not matches:
             continue
-        tracked = Era.files(rev)
-        if tracked is None:
-            failures.append(
-                f"{relpath}:{lineno}: pin `{rev}` is unreachable in this checkout, so "
-                f"its citations cannot be resolved. A shallow clone cannot run this "
-                f"gate -- fetch full history rather than skipping the era."
-            )
-            continue
+        unreachable_reported = False
         for match in matches:
+            # PER CITATION, not per line: a row carrying two eras would
+            # otherwise resolve its later clause against the first one's
+            # revision, checking it against code the row does not claim for it.
+            rev = era_for_citation(line, match.start(), section_eras.get(lineno, HEAD))
+            tracked = Era.files(rev)
+            if tracked is None:
+                if not unreachable_reported:
+                    unreachable_reported = True
+                    failures.append(
+                        f"{relpath}:{lineno}: pin `{rev}` is unreachable in this "
+                        f"checkout, so its citations cannot be resolved. A shallow "
+                        f"clone cannot run this gate -- fetch full history rather "
+                        f"than skipping the era."
+                    )
+                continue
             seen += 1
             token = match.group(1)
             candidates = resolve_path(token, tracked)
@@ -570,7 +725,8 @@ def check_document(relpath, failures):
                 )
                 continue
 
-    check_legend_containment(relpath, lines, eras, failures, mis_scoped)
+    check_symbol_ranges(relpath, lines, eras, section_eras, failures, mis_scoped)
+    check_range_bounds(relpath, lines, section_eras, failures, mis_scoped)
 
     if seen == 0:
         failures.append(
