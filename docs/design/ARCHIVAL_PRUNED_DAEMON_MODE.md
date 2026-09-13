@@ -375,8 +375,9 @@ residual set of consensus reads that can reach discarded leaves
 empty, and what instrument proves it stays empty? Citing TJ is not
 answering that. A grep of `get_curve_tree_leaf_chunk` /
 `get_curve_tree_leaf_by_tree_position` in `src/` at this pin shows one
-production consensus caller (`blockchain.cpp:5327`) and two RPC
-readers (`core_rpc_server.cpp:1577`, `:1670`). RPC is not consensus.
+production consensus caller (`blockchain.cpp:5327`) and the RPC
+path assembler (`shekyl-fcmp::rpc_path`, C++ callbacks in
+`curve_tree_path.cpp`). RPC is not consensus.
 The instrument Q3 names has to fail if a new consensus caller appears.
 
 Do **not** re-derive in ignorance of TJ's already-stated sequencing
@@ -951,11 +952,12 @@ open items below is recorded against each.
 
 ### `PDM-Q10` OPEN — The RPC contract for "not retained"
 
-Two RPC readers of the leaf table exist (`core_rpc_server.cpp:1577`,
-`:1670`). `PDM-Q-F9`'s fix for the second is "match `:1577`", and
-`:1577` returns `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`. Right today; under
-PDM both readers then report a leaf the node has *legitimately*
-discarded as an internal failure — the wallet-facing twin of
+The leaf-table readers that serve `get_curve_tree_path` live in
+`shekyl-fcmp::rpc_path` (store trait) with C++ callbacks in
+`src/cryptonote_core/curve_tree_path.cpp`. A missing leaf, layer hash,
+or output key is `CORE_RPC_ERROR_CODE_INTERNAL_ERROR` (PDM-Q-F9). Right
+today; under PDM those readers then report a leaf the node has
+*legitimately* discarded as an internal failure — the wallet-facing twin of
 `PDM-Q-F8b`. Rule on a response that distinguishes *not retained here;
 fetch from an archiver* (and, once Q9 is ruled, *which* one) from *the
 store is broken*. The membership-path assembly client
@@ -1447,8 +1449,8 @@ Named now so they are not discovered later.
   block corpus and retained under D10's replay premise. Every one of the
   four scalars is reconstructible from data a discarding node keeps —
   `O`, `I = hash_to_p3(O)`, `C` from `output_metadata` via
-  `get_output_key(0, i)` (the RPC already does exactly this,
-  `core_rpc_server.cpp:1585-1600`) or from the blocks directly if
+  `get_output_key(0, i)` (the RPC already does exactly this, via
+  `shekyl-fcmp::rpc_path` / `curve_tree_path.cpp`) or from the blocks directly if
   `output_metadata` is itself discarded (`Excluded`, `class.rs:149`);
   `h_pqc` from `tx_extra` `0x07`. The regeneration path is not
   hypothetical: it is the production code at `blockchain_db.cpp:598-617`
@@ -1578,11 +1580,10 @@ consensus question: *does anything read it after admission?*
   `output_metadata` grading in §9 stands as CACHE without the
   "undetermined" qualifier, and the whole
   `check_tx_input` → `scan_outputkeys_for_indexes` → `outputs_visitor`
-  chain is a rule-60 deletion — **landed in PR #733 (2026-09-13)**. Its
-  residue is disclosed there: `Blockchain::m_scan_table` now has zero
-  readers but is still populated by `prepare_handle_incoming_blocks`'s
-  ring-member pre-fetch; that deletion has its own FOLLOWUPS row because
-  the same loop carries P2P-2 cluster-B drop verdicts.
+  chain is a rule-60 deletion — **landed in PR #733 (2026-09-13)**. The
+  disclosed `m_scan_table` residue landed in the same PR: the ring-member
+  pre-fetch is gone; duplicate-tx and duplicate-key-image
+  `ATTRIBUTABLE_FORM` drops remain as two `unordered_set`s over the batch.
 - **PDM-Q-F19.** **The slash log's forward reader is bounded on every
   path, and on no path is the bound a check.** The reviewer's read
   was one path; the pin has two, and the answer is the same shape on
@@ -2086,8 +2087,8 @@ pending a hash row (F14).** A ruling that takes both GOOD rows retains
 
 | Table | Bytes/output | Post-admission readers | Derivable from | Class |
 | --- | ---: | --- | --- | --- |
-| `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `:1577`/`:1670` | `O`, `C`, `h_pqc` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
-| `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | none in consensus — `scan_outputkeys_for_indexes` (`blockchain.cpp:262`) is rule-60 residue, its sole caller `check_tx_input` (`:4522`) has zero callers (`PDM-Q-F18`); RPC leaf reconstruction (`core_rpc_server.cpp:1585`) | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
+| `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `shekyl-fcmp::rpc_path` | `O`, `C`, `h_pqc` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
+| `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | none in consensus — `scan_outputkeys_for_indexes` deleted with `check_tx_input` (`PDM-Q-F18`); RPC `chunk_outputs` via `shekyl-fcmp::rpc_path` | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
 | `output_txs`, `output_amounts` | ~40, ~48 | reorg pop, RPC | rebuild | CACHE |
 | `output_to_leaf`, `leaf_to_output` | 16, 16 | leaf ↔ output mapping on pop and RPC | rebuild (insertion order) | CACHE |
 | `pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions` | 128 + index, transient | maturity drain at unlock height (consensus) | rebuild from `unlock_time` | KEEP-C while pending; self-bounding (empties at maturity) |

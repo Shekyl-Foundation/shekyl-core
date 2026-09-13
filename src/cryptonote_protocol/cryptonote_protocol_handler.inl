@@ -694,11 +694,6 @@ namespace cryptonote
       request_chain_history(context);
     }
 
-    // No periodic checkpoint reload: checkpoints are compiled in and
-    // enforced once at core::init. The DNS half went with the cleartext-DNS
-    // surface and the json half with PDM-Q-F23 (a runtime-loadable pin
-    // bypasses the release-carried anchor).
-
     return 1;
   }  
   //------------------------------------------------------------------------------------------------------------------------  

@@ -14,10 +14,11 @@
   ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md)
   `PDM-Q-F23` / `PDM-Q5`). An existing `checkpoints.json` is ignored, not
   refused. In the same PR: `get_curve_tree_path` returns
-  `CORE_RPC_ERROR_CODE_INTERNAL_ERROR` on a leaf or layer hash the store
-  cannot return instead of zero-filling the sibling data (`PDM-Q-F9`); the
-  dead ring-era `check_tx_input` / `scan_outputkeys_for_indexes` chain is
-  deleted (`PDM-Q-F18`).
+  `CORE_RPC_ERROR_CODE_INTERNAL_ERROR` on a leaf, layer hash, or output
+  key the store cannot return instead of zero-filling the sibling data
+  (`PDM-Q-F9`; assembly is `shekyl-fcmp::rpc_path`); the dead ring-era
+  `check_tx_input` / `scan_outputkeys_for_indexes` chain and the write-only
+  `m_scan_table` ring-member pre-fetch are deleted (`PDM-Q-F18`).
 
 - **The `JoinMarket` bond post carries the persona's serving endpoint** — the
   raw 32-byte Ed25519 key of its v3 onion service, mandatory, refused on every
