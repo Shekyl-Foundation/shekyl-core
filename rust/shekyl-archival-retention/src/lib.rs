@@ -25,7 +25,9 @@
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
 //! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
-//! - [`attestation_wire`] — header, nonce, `PassRecord`, root, pass verify.
+//! - [`attestation_wire`] — header, `PassRecord` (carried nonce + anchor height),
+//!   root, witness, the `SF-D8` countersignature transcript, the anchor window,
+//!   pass verify.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
 //! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`);
@@ -76,11 +78,15 @@ pub use attestation::{
     settle_epoch, AttestationKind, EpochSettlement, SettleError, SERVE_THRESHOLD_PASSES,
 };
 pub use attestation_wire::{
-    attestation_nonce, attestation_root, empty_attestation_root,
-    pass_records_from_headers_and_witness, verify_pass_countersignature, AttestationHeader,
-    AttestationHeaderError, BlockAttestationWitness, PassRecord, WitnessError, WitnessPairingError,
-    ATTESTATION_HEADER_LEN, ATTESTATION_NONCE_CUSTOMIZATION, ATTESTATION_ROOT_CUSTOMIZATION,
-    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, WITNESS_PREFIX_LEN,
+    attestation_root, empty_attestation_root, pass_countersignature_message,
+    pass_records_from_headers_and_witness, pass_request_header_bytes, verify_pass_countersignature,
+    AttestationHeader, AttestationHeaderError, BlockAttestationWitness, PassAnchorHeights,
+    PassAnchorWindow, PassAnchorWindowError, PassCountersignatureError, PassRecord, PassWitness,
+    WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN, ATTESTATION_ROOT_CUSTOMIZATION,
+    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, PASS_ANCHOR_DEPTH_BLOCKS,
+    PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN, WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
@@ -93,9 +99,9 @@ pub use bond_connect::{
 pub use bond_ct_balance::{verify_bond_post_ct_balance, BondCtBalanceError, BondTerm};
 pub use bond_duration::{bond_duration, ShardAgeAtAdd};
 pub use bond_floor::{
-    bond_floor, ARCHIVAL_BOND_FLOOR_ATOMIC, ARCHIVAL_REORG_DEPTH_BLOCKS,
-    ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE, BOND_DURATION_BASE_EPOCHS,
-    MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
+    bond_floor, ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_BOND_FLOOR_ATOMIC,
+    ARCHIVAL_REORG_DEPTH_BLOCKS, ARCHIVAL_REWARD_AGE_WEIGHT_MILLI, BOND_DURATION_AGE_SCALE,
+    BOND_DURATION_BASE_EPOCHS, MAX_CLAIM_AGE_W, RELEASE_COOLDOWN_EPOCHS, RETENTION_HORIZON_BLOCKS,
 };
 pub use bond_post::{
     bond_post_block_unique, bond_post_funding_floor_met, release_pre_cooldown_guards,

@@ -7,41 +7,82 @@
 //! *admission* half of the seam (block-validation time, pre-prune).
 //!
 //! Design of record: [`ARCHIVAL_CREDIT_WIRE.md`](../../../docs/design/ARCHIVAL_CREDIT_WIRE.md)
-//! (TJ-B step 3, shape 4). This module owns the parts admission touches — the
-//! kept **header** bytes (`p_id, shard_id, E, kind`), the block-bound **nonce**,
-//! the **`attestation_root`** over the **pass-record** set (header‖signature
-//! pairs), and the **countersignature verify**. Its sibling [`crate::attestation`]
-//! owns the settlement fold; the two never share a signature, which is the §4
-//! seam.
+//! (TJ-B step 3, shape 4), amended by
+//! [`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
+//! `SF-D8` (ruled 2026-09-13, landed here as that round's §9.1 step (a0)).
+//! This module owns the parts admission touches — the kept **header** bytes
+//! (`p_id, shard_id, E, kind`), the requester-random **nonce** and
+//! **anchor height** each pass carries, the **`attestation_root`** over the
+//! **pass-record** set, and the **countersignature verify**. Its sibling
+//! [`crate::attestation`] owns the settlement fold; the two never share a
+//! signature, which is the §4 seam.
 //!
-//! # What `P` countersigns — the nonce alone (v1, landed; v2 RULED, not landed)
+//! # What `P` countersigns — the decoded request header ‖ `shard_id` (v2)
 //!
-//! **RULED 2026-09-13, NOT LANDED** (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`; lands
-//! as that round's §9.1 step (a0), alone, as a consensus verifier change):
-//! the v2 message is `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` under a new
-//! versioned domain, where `nonce` is **requester-random and carried on the
-//! pass record** (not recomputable from chain terms), signed `height` must
-//! equal the block's predecessor height, and the v1 domain is never reused.
-//! `cb_out_key` and the rest of the challenge tuple leave the signed message;
-//! same-height reuse across competing blocks is accepted by ruling. Everything
-//! below this line describes the **landed v1** verifier.
+//! [`pass_countersignature_message`] is the single statement of the signed
+//! transcript, `header[72] ‖ shard_id_le[8]`, under
+//! [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION)
+//! (the `-v2` domain; the nonce-only `-v1` domain is retired and never reused),
+//! where the header is the fetching client's one required request header
+//! (`SF-D5`) **decoded to its 72 canonical binary bytes**
+//! ([`pass_request_header_bytes`]):
 //!
-//! The v1 countersignature covers **the nonce alone**
-//! (`H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`). Every term is on-chain or
-//! derivable, so admission can recompute and verify it. An earlier draft considered
-//! `H(nonce ‖ transfer_digest)`, but `transfer_digest` digests off-chain shard
-//! bytes that consensus cannot reconstruct — that reading is not
-//! consensus-verifiable. Nonce-only is also *complete*: `shard_id` is already a
-//! nonce term, so a content digest adds no binding `s` does not carry. §9.4's
-//! topology binding carries the read-happened property.
+//! ```text
+//! nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]
+//! ```
+//!
+//! `P` signs the **decoded** value, never the header's textual form. `RF-R1`
+//! gives the header one canonical textual encoding, but the transcript has to
+//! be the binary or Rust and C++ disagree the first time a case or padding
+//! variant is accepted on the wire.
+//!
+//! - **`nonce`** is 32 requester-random bytes. `P` sees them only as bytes to
+//!   sign; they are **not** derivable from chain terms, so the pass record
+//!   carries them ([`PassRecord::nonce`]) and the witness transports them
+//!   alongside the signature ([`PassWitness`]). Every caller draws its nonce
+//!   fresh per request — witness and organic reader alike; `P` cannot tell
+//!   which, which is what keeps *the test IS a read* true.
+//! - **`anchor_height` / `anchor_hash`** bind the read to a block that had to
+//!   **exist** when `P` signed: the requester anchors at
+//!   `tip − `[`PASS_ANCHOR_DEPTH_BLOCKS`] and supplies that block's hash. The
+//!   record carries the **height** ([`PassRecord::anchor_height`]); admission
+//!   looks the **hash** up from the connecting chain
+//!   ([`PassAnchorWindow`]) — a fabricated hash fails against the real one,
+//!   which is what makes the term unforgeable by the requester. The depth is
+//!   the archival freeze margin, so the anchored hash is identical on every
+//!   honest node's chain and tip races cannot touch it; the accepted **residue**
+//!   is that a colluding `P` gains `depth` blocks of pre-signing lead, which
+//!   the 2-of-3 quadratic already prices. Admission accepts
+//!   `anchor_height ∈ [h − depth − L, h − depth]` for a block whose predecessor
+//!   is `h` ([`PassAnchorHeights::for_predecessor`]); `L` =
+//!   [`PASS_ANCHOR_LAG_BLOCKS`] covers fetch span and `P`/requester skew, so
+//!   one record is valid across `L + 1` heights (the replay window, accepted
+//!   by ruling). `P`'s own pre-sign gate is `±L` around its own
+//!   `height − depth` with the **same** `L` (`RF-R1`), so no `P` gates
+//!   distinctively.
+//! - **`shard_id`** is the `u64` `P` parsed from the `/shard/{id}` route it
+//!   actually served. Signing it server-side is what makes the countersignature
+//!   a *shard* binding: a caller-supplied header alone would let a dishonest
+//!   witness replay a valid signature over any shard's terms.
+//!
+//! Below `depth + L` (predecessor height < [`PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT`])
+//! no window exists and **any** pass record is refused; the first settlement
+//! is at 10 000, so nothing is lost.
+//!
+//! The v1 message (`H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`, every term
+//! recomputable) is **retired**, not gated: `cb_out_key` and the rest of the
+//! challenge tuple leave the signed message, `attestation_nonce()` is deleted,
+//! and the verifier takes the anchor window where it took the predecessor
+//! hash and coinbase key. Pre-genesis, no chain carried a v1 record.
 //!
 //! # Pass is a type, not a kind check
 //!
-//! Root and verify take [`PassRecord`] — identity + terms + signature, with
-//! **no `kind` field**. Wire encode materializes `kind = Pass`. A miss is a
-//! kept header alone and cannot enter these APIs. That is the admission half of
-//! the same make-bad-states-unrepresentable seam settlement already uses
-//! (`settle_epoch(passes, issued)` — absolute-2, §7.1 ratification).
+//! Root and verify take [`PassRecord`] — identity + terms + nonce + anchor
+//! height + signature, with **no `kind` field**. Wire encode materializes
+//! `kind = Pass`. A miss is a kept header alone and cannot enter these APIs.
+//! That is the admission half of the same make-bad-states-unrepresentable seam
+//! settlement already uses (`settle_epoch(passes, issued)` — absolute-2, §7.1
+//! ratification).
 
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
@@ -49,24 +90,78 @@ use shekyl_crypto_pq::signature::{
 use shekyl_crypto_pq::CryptoError;
 
 use crate::attestation::AttestationKind;
+use crate::bond_floor::{ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_REORG_DEPTH_BLOCKS};
 use crate::hash::cshake256_32;
 use crate::id::p_canonical_id_from_hybrid_pubkey;
 
-/// cSHAKE customization for the block-bound challenge nonce (§3, copy-freeride
-/// repair: the `cb_out_key` term binds the attestation to *this* block's
-/// coinbase output). **Superseded by ruling, not landed:** `SF-D8`
-/// (2026-09-13) removes `cb_out_key` from the signed message and accepts
-/// same-height reuse; this construction has no signing consumer once §9.1
-/// step (a0) lands.
-pub const ATTESTATION_NONCE_CUSTOMIZATION: &[u8] = b"shekyl/archival-attestation-nonce-v1";
-
 /// cSHAKE customization for `attestation_root` over the ordered pass-record set.
+///
+/// Unchanged by the `SF-D8` layout amendment: the record layout it hashes gained
+/// the nonce and anchor height (see [`attestation_root`]), which the two-record
+/// KAT pins, and the genesis-frozen empty root (`count = 0`, no records) is
+/// byte-identical before and after. There was never a chain carrying the
+/// pre-amendment layout, so there is no second layout under this string to
+/// separate from.
 pub const ATTESTATION_ROOT_CUSTOMIZATION: &[u8] = b"shekyl/archival-attestation-root-v1";
 
 /// Canonical kept-header length: `p_id(32) + shard_id(8) + settlement_epoch(8) +
 /// kind(1)` (§3.1). The `kind` byte is the sole prune-surviving *discriminant*
 /// on the full kept header (`p_id ‖ s ‖ E ‖ kind` all ride `prefix_hash`).
 pub const ATTESTATION_HEADER_LEN: usize = 32 + 8 + 8 + 1;
+
+/// Length of the requester-random nonce a pass record carries and `P` signs
+/// over (`SF-D5`: exactly 32 bytes, one encoding, refused otherwise).
+pub const PASS_NONCE_LEN: usize = 32;
+
+/// Length of the little-endian anchor height in the request header, the
+/// transcript, the pass record, and the witness entry.
+pub const PASS_ANCHOR_HEIGHT_LEN: usize = 8;
+
+/// Length of the anchor block hash in the request header and the transcript.
+/// It is **not** carried by the record or the witness — admission derives it
+/// from the connecting chain at `anchor_height`.
+pub const PASS_ANCHOR_HASH_LEN: usize = 32;
+
+/// Length of the **decoded** request header `P` signs
+/// ([`pass_request_header_bytes`]): `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
+pub const PASS_REQUEST_HEADER_LEN: usize =
+    PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + PASS_ANCHOR_HASH_LEN;
+
+/// Length of the signed transcript `header[72] ‖ shard_id_le[8]`
+/// ([`pass_countersignature_message`]).
+pub const PASS_COUNTERSIGNATURE_MESSAGE_LEN: usize = PASS_REQUEST_HEADER_LEN + 8;
+
+/// Anchor burial depth: the requester anchors at `tip − depth`, admission at
+/// `h − depth` (upper bound). This **is** `archival_reorg_depth_blocks` (720),
+/// consumed from the generated constant — the same freeze margin segment
+/// freeze already relies on never being replaced, so the anchored hash is
+/// canonical on every honest node. Both directions are dangerous
+/// (`config/consensus_constants.json`): lower makes the anchor
+/// reorg-sensitive; higher lengthens collusive pre-signing lead.
+pub const PASS_ANCHOR_DEPTH_BLOCKS: u64 = ARCHIVAL_REORG_DEPTH_BLOCKS;
+
+/// Anchor lag `L` (PROVISIONAL 4, `SF-D8`): the window below the upper bound
+/// admission accepts, and the half-width of `P`'s pre-sign gate. Consumed from
+/// the generated constant; the falsifier and re-pin rule live on the JSON key.
+pub const PASS_ANCHOR_LAG_BLOCKS: u64 = ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS;
+
+/// Lowest predecessor height with an anchor window: `depth + L`. Below it
+/// ([`PassAnchorHeights::for_predecessor`] is `None`) every pass record is
+/// refused — the genesis boundary, KAT-pinned at the threshold and one below.
+pub const PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT: u64 =
+    PASS_ANCHOR_DEPTH_BLOCKS + PASS_ANCHOR_LAG_BLOCKS;
+
+/// Number of heights (and hashes) in one anchor window: `L + 1`.
+///
+/// `L` is a small block count (PROVISIONAL 4, re-pin band `[2, …]`), so the
+/// cast cannot truncate on any target; the assertion makes that a build
+/// failure rather than a comment if the JSON key is ever set absurdly.
+pub const PASS_ANCHOR_WINDOW_LEN: usize = {
+    assert!(PASS_ANCHOR_LAG_BLOCKS <= u32::MAX as u64);
+    #[allow(clippy::cast_possible_truncation)]
+    let lag = PASS_ANCHOR_LAG_BLOCKS as usize;
+    lag + 1
+};
 
 /// Genesis-frozen consensus cap on attestation records per block. It must equal
 /// C++ `config::ARCHIVAL_MAX_ATTESTATION_RECORDS` (the cross-language witness KAT
@@ -78,19 +173,21 @@ pub const MAX_ATTESTATION_RECORDS: usize = 256;
 /// Fixed framing prefix of a canonical witness: `count_le(8)`.
 pub const WITNESS_PREFIX_LEN: usize = 8;
 
+/// One witness entry: `nonce(32) ‖ anchor_height_le(8) ‖ signature_canonical`
+/// ([`PassWitness`]).
+pub const WITNESS_ENTRY_LEN: usize =
+    PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + HybridSignature::CANONICAL_LEN;
+
 /// The EXACT maximum canonical byte length of a [`BlockAttestationWitness`]:
-/// `count(8) ‖ MAX_ATTESTATION_RECORDS × HybridSignature`. This is the
-/// authority the C++ transport cap must respect: the coarse
+/// `count(8) ‖ MAX_ATTESTATION_RECORDS × (nonce ‖ anchor_height ‖ HybridSignature)`.
+/// This is the authority the C++ transport cap must respect: the coarse
 /// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES` must **over-bound** this value
 /// (`cpp_cap ≥ this`), never under-bound it — a C++ cap below this maximum would
 /// reject on the wire a witness that Rust admits, i.e. a consensus split. The
 /// direction is gated cross-language by the FFI bound test; this const is the
 /// single Rust-side authority for that check.
 pub const MAX_ATTESTATION_WITNESS_BYTES: usize =
-    WITNESS_PREFIX_LEN + MAX_ATTESTATION_RECORDS * HybridSignature::CANONICAL_LEN;
-
-/// Fixed nonce preimage length: `r(32) ‖ cb_out_key(32) ‖ p_id(32) ‖ s(8) ‖ E(8)`.
-const NONCE_INPUT_LEN: usize = 32 + 32 + 32 + 8 + 8;
+    WITNESS_PREFIX_LEN + MAX_ATTESTATION_RECORDS * WITNESS_ENTRY_LEN;
 
 /// `kind` byte encodings — fixed, not a bit in a status field, so a decoder
 /// rejects anything that is neither (no silent third state).
@@ -162,11 +259,151 @@ impl AttestationHeader {
     }
 }
 
-/// One **pass** attestation: identity + terms + countersignature.
+/// The anchor **heights** admission accepts for a block whose validated
+/// predecessor is `h`: `[h − depth − L, h − depth]`, inclusive, `L + 1` wide.
 ///
-/// **Layout amendment RULED 2026-09-13, NOT LANDED** (`SF-D8`): the record
-/// gains the 32-byte requester-random `nonce` the v2 message is signed over,
-/// because it cannot be recomputed from chain terms. Lands in §9.1 step (a0).
+/// The upper bound carries freshness (`P` could not have signed a hash of a
+/// block that did not exist; the depth is the accepted lead); the lower bound
+/// is hygiene against a stale anchor. `h` is the **predecessor** of the block
+/// carrying the record — the value C++ already passes — so a fetch that spans
+/// one block boundary (anchored for `h`, mined into `h + 1`) is still inside
+/// the window; that is why `L ≥ 2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PassAnchorHeights {
+    first: u64,
+    last: u64,
+}
+
+impl PassAnchorHeights {
+    /// The window for a block connecting to predecessor height
+    /// `predecessor_height`, or `None` below
+    /// [`PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT`] (no window exists; every pass
+    /// record is refused there).
+    #[must_use]
+    pub fn for_predecessor(predecessor_height: u64) -> Option<Self> {
+        if predecessor_height < PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT {
+            return None;
+        }
+        let last = predecessor_height - PASS_ANCHOR_DEPTH_BLOCKS;
+        Some(Self {
+            first: last - PASS_ANCHOR_LAG_BLOCKS,
+            last,
+        })
+    }
+
+    /// Lowest accepted anchor height (`h − depth − L`).
+    #[must_use]
+    pub const fn first(&self) -> u64 {
+        self.first
+    }
+
+    /// Highest accepted anchor height (`h − depth`).
+    #[must_use]
+    pub const fn last(&self) -> u64 {
+        self.last
+    }
+
+    /// Number of heights in the window — always [`PASS_ANCHOR_WINDOW_LEN`].
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        PASS_ANCHOR_WINDOW_LEN
+    }
+
+    /// A window is never empty (`L + 1 ≥ 1`); provided for the `len`/`is_empty`
+    /// pairing lint, it is always `false`.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        false
+    }
+
+    /// Table index of `anchor_height` within the window (`anchor − first`), or
+    /// `None` when it lies outside — the **one indexed lookup** the verifier
+    /// performs against the C++-filled hash table.
+    #[must_use]
+    pub fn index_of(&self, anchor_height: u64) -> Option<usize> {
+        if anchor_height < self.first || anchor_height > self.last {
+            return None;
+        }
+        // ≤ L, so this narrowing is infallible on every target width.
+        Some(usize::try_from(anchor_height - self.first).expect("index ≤ L fits usize"))
+    }
+}
+
+/// An anchor window could not be built from the caller's hash table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PassAnchorWindowError {
+    /// The predecessor height is below [`PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT`]:
+    /// no window exists, so no table can be right.
+    #[error(
+        "no pass anchor window below predecessor height {PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT} \
+         (got {predecessor_height})"
+    )]
+    BelowThreshold { predecessor_height: u64 },
+    /// The hash table is not exactly [`PASS_ANCHOR_WINDOW_LEN`] entries — a
+    /// marshaling slip on the caller's side, distinct from any record verdict.
+    #[error("pass anchor hash table has {got} entries, expected {expected}")]
+    WrongLength { expected: usize, got: usize },
+}
+
+/// The anchor window with its **hashes**: the connecting chain's block hash at
+/// each height of [`PassAnchorHeights`], `hashes[i]` for height `first + i`.
+///
+/// The caller (C++ admission, through the FFI ctx) fills the table from the
+/// chain the block is being connected to — the main chain, or an alt chain
+/// **above the fork point** — so a block validated on an alt chain sees that
+/// chain's anchor hashes, not the main chain's. Nothing caps reorg depth, so an
+/// anchor inside a deep alt chain is a live case, not a corner. Rust does one
+/// indexed lookup per record and never reads chain state itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PassAnchorWindow {
+    heights: PassAnchorHeights,
+    hashes: Vec<[u8; PASS_ANCHOR_HASH_LEN]>,
+}
+
+impl PassAnchorWindow {
+    /// Build the window for `predecessor_height` from the caller's hash table,
+    /// which must hold exactly [`PASS_ANCHOR_WINDOW_LEN`] hashes for heights
+    /// `first..=last` in ascending order.
+    pub fn new(
+        predecessor_height: u64,
+        hashes: Vec<[u8; PASS_ANCHOR_HASH_LEN]>,
+    ) -> Result<Self, PassAnchorWindowError> {
+        let heights = PassAnchorHeights::for_predecessor(predecessor_height)
+            .ok_or(PassAnchorWindowError::BelowThreshold { predecessor_height })?;
+        if hashes.len() != heights.len() {
+            return Err(PassAnchorWindowError::WrongLength {
+                expected: heights.len(),
+                got: hashes.len(),
+            });
+        }
+        Ok(Self { heights, hashes })
+    }
+
+    /// The heights this window covers.
+    #[must_use]
+    pub const fn heights(&self) -> PassAnchorHeights {
+        self.heights
+    }
+
+    /// The connecting chain's hash at `anchor_height`, or `None` when the height
+    /// is outside the window.
+    #[must_use]
+    pub fn hash_at(&self, anchor_height: u64) -> Option<&[u8; PASS_ANCHOR_HASH_LEN]> {
+        self.heights
+            .index_of(anchor_height)
+            .map(|i| &self.hashes[i])
+    }
+}
+
+/// One **pass** attestation: identity + terms + the carried nonce and anchor
+/// height + countersignature.
+///
+/// `nonce` and `anchor_height` are the requester-supplied header terms `P`
+/// signed over (with the anchor hash and the served `shard_id`). They are
+/// carried because they cannot be recomputed: no chain term determines a
+/// caller's nonce, and the anchor height is the caller's choice within the
+/// window (`SF-D8`). The anchor **hash** is not carried — admission derives it
+/// from the connecting chain, which is what makes it unforgeable.
 ///
 /// There is no `kind` field — Pass is the type. [`Self::to_header`] materializes
 /// the kept wire header with `kind = Pass`. Miss records never carry a
@@ -177,6 +414,8 @@ pub struct PassRecord {
     pub p_id: [u8; 32],
     pub shard_id: u64,
     pub settlement_epoch: u64,
+    pub nonce: [u8; PASS_NONCE_LEN],
+    pub anchor_height: u64,
     pub signature: HybridSignature,
 }
 
@@ -192,79 +431,91 @@ impl PassRecord {
         }
     }
 
-    /// Block-bound nonce for this record's identity and terms.
+    /// The transcript `P` must have signed for this record to verify when the
+    /// connecting chain's hash at `anchor_height` is `anchor_hash`:
+    /// [`pass_countersignature_message`] over the carried nonce and anchor
+    /// height, that hash, and this record's `shard_id`. Prefer this at call
+    /// sites that hold a record so the terms cannot drift from it.
     #[must_use]
-    pub fn nonce(&self, prev_block_hash: &[u8; 32], cb_out_key: &[u8; 32]) -> [u8; 32] {
-        attestation_nonce(
-            prev_block_hash,
-            cb_out_key,
-            &self.p_id,
-            self.shard_id,
-            self.settlement_epoch,
-        )
+    pub fn countersignature_message(
+        &self,
+        anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
+    ) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+        pass_countersignature_message(&self.nonce, self.anchor_height, anchor_hash, self.shard_id)
     }
 }
 
-/// The block-bound challenge nonce
-/// `H(block_hash(h−1) ‖ cb_out_key ‖ p_id ‖ shard_id ‖ E)` (§3).
-///
-/// `cb_out_key` is the coinbase output key — the copy-freeride bind, and the
-/// term that makes the countersignature non-transferable. *(v1 property;
-/// `SF-D8` drops the term and accepts same-height reuse — see the module doc.)*
-///
-/// # `prev_block_hash` must be a VALIDATED predecessor hash, not a header field
-///
-/// This term replaced the producer's revealed randomness `r`
-/// (`ARCHIVAL_RESPONSE_FORMAT.md` `RF-D3`). `r` never bought what it appeared
-/// to: `r` and `cb_out_key` are chosen by the **same party**, so a second
-/// producer-chosen random term cannot strengthen a property that fails exactly
-/// when the producer defects. `block_hash(h−1)` substitutes on **existence** —
-/// it cannot exist before block `h−1` does, regardless of any party's
-/// behaviour — which bounds collusive pre-signing to one block.
-///
-/// **That property is only real if the value is a validated predecessor.** A
-/// block header's `prev_id` as *supplied* is producer-chosen; it becomes
-/// `block_hash(h−1)` only once validated against the chain the block is being
-/// connected to. Passing an unvalidated header field here reintroduces exactly
-/// the choosability `r` was deleted for having. The invariant is stated on the
-/// field because call-site ordering is the only thing that currently enforces
-/// it, and an invariant enforced by nothing but ordering has no name and no
-/// test — the same reasoning as the prunable region's sole-occupant tripwire.
-///
-/// Every term is on-chain or derivable at admission, so verify recomputes it
-/// identically.
-///
-/// Prefer [`PassRecord::nonce`] at call sites that already hold a pass record
-/// so the terms cannot drift from the record.
+/// The **decoded** request header (`SF-D5`) — the 72 canonical binary bytes
+/// `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` the fetching client
+/// sends and `P` signs. `RF-R1` owns the textual header encoding; this is the
+/// value it decodes to, and the only form that enters the transcript.
 #[must_use]
-pub fn attestation_nonce(
-    prev_block_hash: &[u8; 32],
-    cb_out_key: &[u8; 32],
-    p_id: &[u8; 32],
+pub fn pass_request_header_bytes(
+    nonce: &[u8; PASS_NONCE_LEN],
+    anchor_height: u64,
+    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
+) -> [u8; PASS_REQUEST_HEADER_LEN] {
+    const HEIGHT_END: usize = PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
+    let mut out = [0u8; PASS_REQUEST_HEADER_LEN];
+    out[0..PASS_NONCE_LEN].copy_from_slice(nonce);
+    out[PASS_NONCE_LEN..HEIGHT_END].copy_from_slice(&anchor_height.to_le_bytes());
+    out[HEIGHT_END..].copy_from_slice(anchor_hash);
+    out
+}
+
+/// The signed transcript of a pass countersignature (`SF-D8`):
+/// `header[72] ‖ shard_id_le[8]`, the header being
+/// [`pass_request_header_bytes`] — `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
+///
+/// This is the **only** statement of the layout; `P`'s serve path and every
+/// verifier (admission here, the fetching client in `shekyl-p-fetch`) build the
+/// message through it, so the three cannot drift. The signature itself is made
+/// under [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION).
+/// A plain concatenation, **not** a hash — a verifier that hashed it would
+/// fail the byte-pinned KAT.
+///
+/// - `nonce`: the caller's 32 random bytes, opaque to `P`.
+/// - `anchor_height`: the caller's anchor, `tip − depth` at request time; at
+///   admission the record's carried value, accepted only inside
+///   [`PassAnchorHeights`].
+/// - `anchor_hash`: at `P`, the caller's header bytes (gated on height only —
+///   `P` is chain-blind); at admission the connecting chain's hash at
+///   `anchor_height` ([`PassAnchorWindow::hash_at`]), so a caller who lied
+///   about the hash produced a signature that verifies nowhere.
+/// - `shard_id`: the `u64` `P` parsed from the route it served — the
+///   server-enforced shard binding.
+#[must_use]
+pub fn pass_countersignature_message(
+    nonce: &[u8; PASS_NONCE_LEN],
+    anchor_height: u64,
+    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
     shard_id: u64,
-    settlement_epoch: u64,
-) -> [u8; 32] {
-    // Fixed-size stack preimage — consensus-adjacent, called per pass at
-    // admission; no heap alloc on the hot path.
-    let mut input = [0u8; NONCE_INPUT_LEN];
-    input[0..32].copy_from_slice(prev_block_hash);
-    input[32..64].copy_from_slice(cb_out_key);
-    input[64..96].copy_from_slice(p_id);
-    input[96..104].copy_from_slice(&shard_id.to_le_bytes());
-    input[104..112].copy_from_slice(&settlement_epoch.to_le_bytes());
-    cshake256_32(ATTESTATION_NONCE_CUSTOMIZATION, &input)
+) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+    let mut out = [0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN];
+    out[..PASS_REQUEST_HEADER_LEN].copy_from_slice(&pass_request_header_bytes(
+        nonce,
+        anchor_height,
+        anchor_hash,
+    ));
+    out[PASS_REQUEST_HEADER_LEN..].copy_from_slice(&shard_id.to_le_bytes());
+    out
 }
 
 /// `attestation_root` over the block's **pass-records** (§3.2) — the value
 /// stored in the block field and mined over as a merkle leaf.
 ///
-/// Each record contributes `header_canonical ‖ signature_canonical`, so the root
-/// commits the header↔signature **pairing** — not signatures alone, and not in
-/// an unstated positional order. Records are **sorted by these canonical
-/// bytes** before hashing, giving one defined order every producer and every
-/// re-validating node (reading signatures from the **prunable** side table at
-/// admission / pre-prune) reproduces identically. Post-prune the **stored**
-/// root is trusted (mined into the block hash); settlement never recomputes it.
+/// Each record contributes
+/// `header_canonical ‖ nonce ‖ anchor_height_le ‖ signature_canonical`, so the
+/// root commits the header↔nonce↔anchor↔signature **tuple** — not signatures
+/// alone, and not in an unstated positional order. The nonce and anchor height
+/// are committed because they are signed-over yet not chain-derivable: a root
+/// over header‖signature alone would let the witness transport different
+/// header terms than the ones the root was mined over. Records are **sorted by
+/// these canonical bytes** before hashing, giving one defined order every
+/// producer and every re-validating node (reading nonce+anchor+signature from
+/// the **prunable** side table at admission / pre-prune) reproduces
+/// identically. Post-prune the **stored** root is trusted (mined into the
+/// block hash); settlement never recomputes it.
 ///
 /// The input type is [`PassRecord`]: miss-with-signature is unrepresentable.
 /// Each signature is in its authoritative fixed-length canonical encoding
@@ -273,14 +524,19 @@ pub fn attestation_nonce(
 ///
 /// **Defined-empty** (§3.2 invariant): an empty set hashes to the customization
 /// over the bare count prefix, a fixed constant, so the leaf is never omitted
-/// and the count never desyncs.
+/// and the count never desyncs. That constant is genesis-frozen and did not
+/// move when the record layout gained the nonce and anchor height.
 pub fn attestation_root(records: &[PassRecord]) -> Result<[u8; 32], CryptoError> {
-    const RECORD_LEN: usize = ATTESTATION_HEADER_LEN + HybridSignature::CANONICAL_LEN;
+    const NONCE_END: usize = ATTESTATION_HEADER_LEN + PASS_NONCE_LEN;
+    const ANCHOR_END: usize = NONCE_END + PASS_ANCHOR_HEIGHT_LEN;
+    const RECORD_LEN: usize = ANCHOR_END + HybridSignature::CANONICAL_LEN;
     let mut record_bytes: Vec<[u8; RECORD_LEN]> = Vec::with_capacity(records.len());
     for record in records {
         let mut rec = [0u8; RECORD_LEN];
         rec[..ATTESTATION_HEADER_LEN].copy_from_slice(&record.to_header().to_canonical_bytes());
-        rec[ATTESTATION_HEADER_LEN..].copy_from_slice(&record.signature.to_canonical_bytes()?);
+        rec[ATTESTATION_HEADER_LEN..NONCE_END].copy_from_slice(&record.nonce);
+        rec[NONCE_END..ANCHOR_END].copy_from_slice(&record.anchor_height.to_le_bytes());
+        rec[ANCHOR_END..].copy_from_slice(&record.signature.to_canonical_bytes()?);
         record_bytes.push(rec);
     }
     record_bytes.sort_unstable();
@@ -302,47 +558,68 @@ pub fn empty_attestation_root() -> [u8; 32] {
     attestation_root(&[]).expect("empty attestation_root is infallible")
 }
 
+/// One witness entry: the nonce and anchor height a pass was signed over and
+/// the signature. All three are prunable — none is in the block hash directly;
+/// the mined [`attestation_root`] commits them paired with the kept header.
+#[derive(Debug, Clone)]
+pub struct PassWitness {
+    pub nonce: [u8; PASS_NONCE_LEN],
+    pub anchor_height: u64,
+    pub signature: HybridSignature,
+}
+
+impl PassWitness {
+    fn canonical_bytes_eq(&self, other: &Self) -> bool {
+        self.nonce == other.nonce
+            && self.anchor_height == other.anchor_height
+            && self.signature.ed25519 == other.signature.ed25519
+            && self.signature.ml_dsa == other.signature.ml_dsa
+    }
+}
+
 /// The prunable, admission-only **attestation witness** for one block
 /// (§3.2/§4, transport shape B2). It carries exactly the data the block *hash*
-/// does not commit directly — the per-pass [`HybridSignature`]s — transported **alongside** the block, stored
-/// only in the height-keyed side table, and dropped after the retention horizon.
-/// It is never in the block blob (which rides the never-pruned `blocks` store,
-/// so blob-resident bytes cannot prune — the reason shape 1 was rejected). Its
+/// does not commit directly — each pass's carried nonce, anchor height, and
+/// [`HybridSignature`] — transported **alongside** the block, stored only in
+/// the height-keyed side table, and dropped after the retention horizon. It is
+/// never in the block blob (which rides the never-pruned `blocks` store, so
+/// blob-resident bytes cannot prune — the reason shape 1 was rejected). Its
 /// integrity does not need the blob: [`attestation_root`] (the mined header
-/// field) commits the header↔signature set, and admission recomputes it over
-/// these signatures paired with the kept `tx_extra` headers.
+/// field) commits the header↔nonce↔anchor↔signature set, and admission
+/// recomputes it over these entries paired with the kept `tx_extra` headers.
 ///
 /// # The pairing rule (consensus — pinned here because the block-hash
 /// differential is structurally blind to it)
 ///
 /// The block-hash / C++↔Rust differential cannot see this witness (it is not in
-/// the hash), so the sig↔header pairing must be stated, not inferred:
-/// `pass_signatures[i]` is the countersignature for the **i-th pass header** —
-/// the kept `tx_extra` headers filtered to `kind = Pass`, in `tx_extra` order.
-/// Miss headers consume no signature. [`pass_records_from_headers_and_witness`]
-/// is the single executable statement of this zip; both producer and validator
-/// go through it so the rule cannot drift between call sites. A pass-header /
-/// signature **count** mismatch is a loud error (a block-validity failure at
-/// admission); any *content* pairing disagreement instead surfaces as an
-/// `attestation_root` mismatch (self-enforcing).
+/// the hash), so the entry↔header pairing must be stated, not inferred:
+/// `passes[i]` is the nonce+anchor+countersignature for the **i-th pass
+/// header** — the kept `tx_extra` headers filtered to `kind = Pass`, in
+/// `tx_extra` order. Miss headers consume no entry.
+/// [`pass_records_from_headers_and_witness`] is the single executable statement
+/// of this zip; both producer and validator go through it so the rule cannot
+/// drift between call sites. A pass-header / entry **count** mismatch is a loud
+/// error (a block-validity failure at admission); any *content* pairing
+/// disagreement instead surfaces as an `attestation_root` mismatch
+/// (self-enforcing).
 #[derive(Debug, Clone)]
 pub struct BlockAttestationWitness {
-    /// One signature per pass header, in `tx_extra` pass order.
-    pub pass_signatures: Vec<HybridSignature>,
+    /// One entry per pass header, in `tx_extra` pass order.
+    pub passes: Vec<PassWitness>,
 }
 
-// HybridSignature is not `PartialEq`; compare its canonical field bytes. Two
-// witnesses are equal iff every paired signature's `(ed25519, ml_dsa)`
-// bytes match — enough for round-trip assertions without widening the crypto
-// type's derives.
+// HybridSignature is not `PartialEq`; compare canonical field bytes. Two
+// witnesses are equal iff every paired entry's nonce, anchor height, and
+// `(ed25519, ml_dsa)` bytes match — enough for round-trip assertions without
+// widening the crypto type's derives.
 impl PartialEq for BlockAttestationWitness {
     fn eq(&self, other: &Self) -> bool {
-        self.pass_signatures.len() == other.pass_signatures.len()
+        self.passes.len() == other.passes.len()
             && self
-                .pass_signatures
+                .passes
                 .iter()
-                .zip(&other.pass_signatures)
-                .all(|(a, b)| a.ed25519 == b.ed25519 && a.ml_dsa == b.ml_dsa)
+                .zip(&other.passes)
+                .all(|(a, b)| a.canonical_bytes_eq(b))
     }
 }
 impl Eq for BlockAttestationWitness {}
@@ -357,20 +634,20 @@ pub enum WitnessError {
     TooShort(usize),
     /// The declared (or encode-side) count exceeds [`MAX_ATTESTATION_RECORDS`].
     /// Checked **before** any length arithmetic on decode, so it also caps the
-    /// allocation and rules out a `count · CANONICAL_LEN` overflow. Held as the
-    /// raw wire `u64` — the value may not fit `usize` on a 32-bit target, which
-    /// is itself a reason to reject.
+    /// allocation and rules out a `count · WITNESS_ENTRY_LEN` overflow. Held as
+    /// the raw wire `u64` — the value may not fit `usize` on a 32-bit target,
+    /// which is itself a reason to reject.
     #[error("attestation witness count {0} exceeds cap {MAX_ATTESTATION_RECORDS}")]
     CountExceedsCap(u64),
     /// Total length is not exactly
-    /// `WITNESS_PREFIX_LEN + count · HybridSignature::CANONICAL_LEN`.
-    #[error("attestation witness length {got}, expected {expected} for {count} signature(s)")]
+    /// `WITNESS_PREFIX_LEN + count · WITNESS_ENTRY_LEN`.
+    #[error("attestation witness length {got}, expected {expected} for {count} entry(ies)")]
     LengthMismatch {
         count: usize,
         expected: usize,
         got: usize,
     },
-    /// The `index`-th signature failed canonical encode/decode.
+    /// The `index`-th entry's signature failed canonical encode/decode.
     #[error("attestation witness signature {index} invalid: {source}")]
     Signature {
         index: usize,
@@ -380,36 +657,40 @@ pub enum WitnessError {
 }
 
 impl BlockAttestationWitness {
-    /// Canonical bytes: `count_le(8) ‖ signature[0..count]`, each in
-    /// [`HybridSignature::to_canonical_bytes`] (fixed
-    /// [`HybridSignature::CANONICAL_LEN`]). This is the exact byte stream carried
-    /// alongside the block and pinned by the cross-language witness KAT — the
-    /// `count` prefix mirrors [`attestation_root`]'s `u64`-LE length prefix so
-    /// the two encodings share one integer convention.
+    /// Canonical bytes:
+    /// `count_le(8) ‖ (nonce(32) ‖ anchor_height_le(8) ‖ signature)[0..count]`,
+    /// each signature in [`HybridSignature::to_canonical_bytes`] (fixed
+    /// [`HybridSignature::CANONICAL_LEN`]), so every entry is exactly
+    /// [`WITNESS_ENTRY_LEN`]. This is the exact byte stream carried alongside
+    /// the block and pinned by the cross-language witness KAT — the `count`
+    /// prefix mirrors [`attestation_root`]'s `u64`-LE length prefix so the two
+    /// encodings share one integer convention.
     ///
-    /// Rejects a signature count above [`MAX_ATTESTATION_RECORDS`] (same cap as
+    /// Rejects an entry count above [`MAX_ATTESTATION_RECORDS`] (same cap as
     /// decode) so an over-cap producer cannot emit a blob the decoder would
     /// refuse — encode and decode share one validity surface.
     pub fn to_canonical_bytes(&self) -> Result<Vec<u8>, WitnessError> {
-        let count = self.pass_signatures.len();
+        let count = self.passes.len();
         if count > MAX_ATTESTATION_RECORDS {
             return Err(WitnessError::CountExceedsCap(count as u64));
         }
-        let mut out =
-            Vec::with_capacity(WITNESS_PREFIX_LEN + count * HybridSignature::CANONICAL_LEN);
+        let mut out = Vec::with_capacity(WITNESS_PREFIX_LEN + count * WITNESS_ENTRY_LEN);
         out.extend_from_slice(&(count as u64).to_le_bytes());
-        for (index, sig) in self.pass_signatures.iter().enumerate() {
-            let bytes = sig
+        for (index, entry) in self.passes.iter().enumerate() {
+            let sig = entry
+                .signature
                 .to_canonical_bytes()
                 .map_err(|source| WitnessError::Signature { index, source })?;
-            debug_assert_eq!(bytes.len(), HybridSignature::CANONICAL_LEN);
-            out.extend_from_slice(&bytes);
+            debug_assert_eq!(sig.len(), HybridSignature::CANONICAL_LEN);
+            out.extend_from_slice(&entry.nonce);
+            out.extend_from_slice(&entry.anchor_height.to_le_bytes());
+            out.extend_from_slice(&sig);
         }
         Ok(out)
     }
 
     /// Decode a witness blob. Rejects a short prefix, an over-cap count (before
-    /// allocating), a total length that is not an exact `count`-many signatures,
+    /// allocating), a total length that is not an exact `count`-many entries,
     /// and any malformed signature — all loud, because a malformed witness is a
     /// block-validity failure at admission, never a silent default.
     pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, WitnessError> {
@@ -419,15 +700,15 @@ impl BlockAttestationWitness {
         let count_u64 =
             u64::from_le_bytes(bytes[0..WITNESS_PREFIX_LEN].try_into().expect("8 bytes"));
         // Cap BEFORE the length multiply: bounds the allocation and forecloses a
-        // `count · CANONICAL_LEN` overflow on a hostile count. Compared in u64 so
-        // the check itself never truncates on a 32-bit target.
+        // `count · WITNESS_ENTRY_LEN` overflow on a hostile count. Compared in
+        // u64 so the check itself never truncates on a 32-bit target.
         if count_u64 > MAX_ATTESTATION_RECORDS as u64 {
             return Err(WitnessError::CountExceedsCap(count_u64));
         }
         // ≤ MAX_ATTESTATION_RECORDS now, so this narrowing is infallible on every
         // target width (the cap fits every usize).
         let count = usize::try_from(count_u64).expect("count ≤ cap fits usize");
-        let expected = WITNESS_PREFIX_LEN + count * HybridSignature::CANONICAL_LEN;
+        let expected = WITNESS_PREFIX_LEN + count * WITNESS_ENTRY_LEN;
         if bytes.len() != expected {
             return Err(WitnessError::LengthMismatch {
                 count,
@@ -435,33 +716,43 @@ impl BlockAttestationWitness {
                 got: bytes.len(),
             });
         }
-        let mut pass_signatures = Vec::with_capacity(count);
+        let mut passes = Vec::with_capacity(count);
         for index in 0..count {
-            let start = WITNESS_PREFIX_LEN + index * HybridSignature::CANONICAL_LEN;
-            let end = start + HybridSignature::CANONICAL_LEN;
-            let sig = HybridSignature::from_canonical_bytes(&bytes[start..end])
+            let start = WITNESS_PREFIX_LEN + index * WITNESS_ENTRY_LEN;
+            let nonce_end = start + PASS_NONCE_LEN;
+            let anchor_end = nonce_end + PASS_ANCHOR_HEIGHT_LEN;
+            let end = start + WITNESS_ENTRY_LEN;
+            let mut nonce = [0u8; PASS_NONCE_LEN];
+            nonce.copy_from_slice(&bytes[start..nonce_end]);
+            let anchor_height =
+                u64::from_le_bytes(bytes[nonce_end..anchor_end].try_into().expect("8 bytes"));
+            let signature = HybridSignature::from_canonical_bytes(&bytes[anchor_end..end])
                 .map_err(|source| WitnessError::Signature { index, source })?;
-            pass_signatures.push(sig);
+            passes.push(PassWitness {
+                nonce,
+                anchor_height,
+                signature,
+            });
         }
-        Ok(Self { pass_signatures })
+        Ok(Self { passes })
     }
 }
 
-/// The kept pass headers and the witness signatures disagreed on count.
+/// The kept pass headers and the witness entries disagreed on count.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("attestation pairing count mismatch: {pass_headers} pass header(s) vs {signatures} witness signature(s)")]
+#[error("attestation pairing count mismatch: {pass_headers} pass header(s) vs {signatures} witness entry(ies)")]
 pub struct WitnessPairingError {
     pub pass_headers: usize,
     pub signatures: usize,
 }
 
 /// Reconstruct the block's [`PassRecord`] set by zipping the kept **pass**
-/// headers with the witness signatures — the single executable statement of the
+/// headers with the witness entries — the single executable statement of the
 /// §3.2 pairing rule. `headers` is the full kept set (pass **and** miss, in
 /// `tx_extra` order); it is filtered to `kind = Pass` and zipped positionally
-/// with `witness.pass_signatures`. Both admission's `attestation_root` recompute
-/// and any later re-check call this, so the pairing cannot drift between sites.
-/// A pass-header / signature count mismatch is a [`WitnessPairingError`] (a
+/// with `witness.passes`. Both admission's `attestation_root` recompute and any
+/// later re-check call this, so the pairing cannot drift between sites. A
+/// pass-header / entry count mismatch is a [`WitnessPairingError`] (a
 /// block-validity failure).
 pub fn pass_records_from_headers_and_witness(
     headers: &[AttestationHeader],
@@ -471,67 +762,116 @@ pub fn pass_records_from_headers_and_witness(
         .iter()
         .filter(|h| h.kind == AttestationKind::Pass)
         .collect();
-    if pass.len() != witness.pass_signatures.len() {
+    if pass.len() != witness.passes.len() {
         return Err(WitnessPairingError {
             pass_headers: pass.len(),
-            signatures: witness.pass_signatures.len(),
+            signatures: witness.passes.len(),
         });
     }
     Ok(pass
         .into_iter()
-        .zip(&witness.pass_signatures)
-        .map(|(h, sig)| PassRecord {
+        .zip(&witness.passes)
+        .map(|(h, entry)| PassRecord {
             p_id: h.p_id,
             shard_id: h.shard_id,
             settlement_epoch: h.settlement_epoch,
-            signature: sig.clone(),
+            nonce: entry.nonce,
+            anchor_height: entry.anchor_height,
+            signature: entry.signature.clone(),
         })
         .collect())
 }
 
+/// Why one pass record's countersignature was refused at admission — three
+/// typed classes, because the FFI reports each as a distinct verdict and the
+/// diagnostics differ: a wrong `p_id` and a bad signature are forgery signals,
+/// an out-of-window anchor is a stale or pre-fetched read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PassCountersignatureError {
+    /// The record's `p_id` is not the supplied pubkey's canonical id.
+    #[error("pass record p_id is not the supplied pubkey's canonical id")]
+    PIdMismatch,
+    /// The carried `anchor_height` lies outside the block's window
+    /// `[first, last]` — no hash to check against, so no signature is
+    /// evaluated.
+    #[error("pass anchor height {anchor_height} outside admission window [{first}, {last}]")]
+    AnchorOutOfWindow {
+        anchor_height: u64,
+        first: u64,
+        last: u64,
+    },
+    /// `P`'s hybrid signature does not verify over the transcript built from
+    /// the record and the connecting chain's hash at its anchor height.
+    #[error("pass countersignature does not verify")]
+    InvalidSignature,
+}
+
 /// Verify one **pass** record's countersignature at admission (§3.3 step b).
 ///
-/// Two bindings, both self-contained so no correctness rides on the caller:
+/// Three bindings, all self-contained so no correctness rides on the caller:
 ///
 /// 1. **`p_id` binds the key.** The record's `p_id` must be *this pubkey's*
 ///    canonical id ([`p_canonical_id_from_hybrid_pubkey`]).
-/// 2. **The signature covers the nonce.** Recompute
-///    `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` from the record's terms and
-///    check `P`'s hybrid countersignature over it. *(v1. The v2 check —
-///    `carried_nonce ‖ predecessor_height_le ‖ shard_id_le` under the new
-///    domain — is RULED (`SF-D8`) and lands in §9.1 step (a0).)*
+/// 2. **The anchor is in the window.** The record's `anchor_height` must lie in
+///    `window.heights()` — `[h − depth − L, h − depth]` for the connecting
+///    block's predecessor `h`. Outside it there is no chain hash to check
+///    against; the record is refused before any signature work.
+/// 3. **The signature covers `header ‖ shard_id`.** Build
+///    [`PassRecord::countersignature_message`] from the carried nonce and
+///    anchor height, the **connecting chain's** hash at that height
+///    ([`PassAnchorWindow::hash_at`]), and the record's `shard_id`, and check
+///    `P`'s hybrid countersignature over it under the v2 domain. A signature
+///    `P` made over a different anchor hash (a fabricated one, or a fork's),
+///    or over a different shard, or over a nonce other than the one carried,
+///    fails here.
+///
+/// `window` must be filled from the chain the block is actually being
+/// connected to (alt chain above the fork point included), from its
+/// **validated** predecessor height — never from a header-claimed value.
 ///
 /// Kind is not checked: a miss cannot be a [`PassRecord`].
-#[must_use]
 pub fn verify_pass_countersignature(
-    prev_block_hash: &[u8; 32],
-    cb_out_key: &[u8; 32],
+    window: &PassAnchorWindow,
     p_pubkey: &HybridPublicKey,
     record: &PassRecord,
-) -> bool {
+) -> Result<(), PassCountersignatureError> {
     // Binding 1: the record's p_id must be this pubkey's canonical id.
-    let Ok(pubkey_bytes) = p_pubkey.to_canonical_bytes() else {
-        return false;
-    };
+    let pubkey_bytes = p_pubkey
+        .to_canonical_bytes()
+        .map_err(|_| PassCountersignatureError::PIdMismatch)?;
     if p_canonical_id_from_hybrid_pubkey(&pubkey_bytes).as_bytes() != &record.p_id {
-        return false;
+        return Err(PassCountersignatureError::PIdMismatch);
     }
-    // Binding 2: P's countersignature over the block-bound nonce.
-    let nonce = record.nonce(prev_block_hash, cb_out_key);
+    // Binding 2: the anchor height must be one the window holds a hash for.
+    let heights = window.heights();
+    let anchor_hash = window.hash_at(record.anchor_height).ok_or(
+        PassCountersignatureError::AnchorOutOfWindow {
+            anchor_height: record.anchor_height,
+            first: heights.first(),
+            last: heights.last(),
+        },
+    )?;
+    // Binding 3: P's countersignature over the SF-D8 transcript with the
+    // chain's hash, not any caller's.
+    let message = record.countersignature_message(anchor_hash);
     HybridEd25519MlDsa
         .verify(
             p_pubkey,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
-            &nonce,
+            &message,
             &record.signature,
         )
-        .is_ok()
+        .map_err(|_| PassCountersignatureError::InvalidSignature)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use shekyl_crypto_pq::signature::HybridSecretKey;
+
+    /// A predecessor height comfortably above the genesis threshold; its
+    /// window is `[H − 724, H − 720]` = `[4276, 4280]` at the pinned constants.
+    const H: u64 = 5000;
 
     fn keypair() -> (HybridPublicKey, HybridSecretKey) {
         HybridEd25519MlDsa
@@ -557,18 +897,64 @@ mod tests {
         *p_canonical_id_from_hybrid_pubkey(&bytes).as_bytes()
     }
 
+    /// A deterministic stand-in for "the chain's hash at `height`" so every
+    /// window in these tests agrees on what each height hashes to.
+    fn chain_hash(height: u64) -> [u8; 32] {
+        let mut h = [0u8; 32];
+        h[..8].copy_from_slice(&height.to_le_bytes());
+        h[8] = 0xC4;
+        h
+    }
+
+    /// The window a block connecting to predecessor `predecessor_height` sees,
+    /// filled from `chain_hash`.
+    fn window_at(predecessor_height: u64) -> PassAnchorWindow {
+        let heights = PassAnchorHeights::for_predecessor(predecessor_height).expect("window");
+        PassAnchorWindow::new(
+            predecessor_height,
+            (heights.first()..=heights.last()).map(chain_hash).collect(),
+        )
+        .expect("table sized to the window")
+    }
+
     fn pass_record(
         p_id: [u8; 32],
         shard_id: u64,
         settlement_epoch: u64,
+        nonce: [u8; PASS_NONCE_LEN],
+        anchor_height: u64,
         signature: HybridSignature,
     ) -> PassRecord {
         PassRecord {
             p_id,
             shard_id,
             settlement_epoch,
+            nonce,
+            anchor_height,
             signature,
         }
+    }
+
+    /// A pass record signed correctly by `sk` for `(nonce, anchor, shard)` with
+    /// the anchor hash the chain holds at `anchor_height`.
+    fn signed_pass(
+        sk: &HybridSecretKey,
+        p_id: [u8; 32],
+        nonce: [u8; PASS_NONCE_LEN],
+        anchor_height: u64,
+        shard_id: u64,
+        settlement_epoch: u64,
+    ) -> PassRecord {
+        let sig = att_sign(
+            sk,
+            &pass_countersignature_message(
+                &nonce,
+                anchor_height,
+                &chain_hash(anchor_height),
+                shard_id,
+            ),
+        );
+        pass_record(p_id, shard_id, settlement_epoch, nonce, anchor_height, sig)
     }
 
     #[test]
@@ -608,62 +994,298 @@ mod tests {
         // Structural seam: PassRecord cannot carry Miss; wire kind is Pass.
         let (_pk, sk) = keypair();
         let sig = att_sign(&sk, b"x");
-        let rec = pass_record([1u8; 32], 2, 3, sig);
+        let rec = pass_record([1u8; 32], 2, 3, [0u8; 32], 4, sig);
         assert_eq!(rec.to_header().kind, AttestationKind::Pass);
     }
 
     #[test]
-    fn nonce_binds_every_term() {
-        let base = attestation_nonce(&[1; 32], &[2; 32], &[3; 32], 4, 5);
-        // Changing any input changes the nonce (no term is dead).
-        assert_ne!(base, attestation_nonce(&[9; 32], &[2; 32], &[3; 32], 4, 5)); // r
-        assert_ne!(base, attestation_nonce(&[1; 32], &[9; 32], &[3; 32], 4, 5)); // cb_out_key
-        assert_ne!(base, attestation_nonce(&[1; 32], &[2; 32], &[9; 32], 4, 5)); // p_id
-        assert_ne!(base, attestation_nonce(&[1; 32], &[2; 32], &[3; 32], 9, 5)); // shard
-        assert_ne!(base, attestation_nonce(&[1; 32], &[2; 32], &[3; 32], 4, 9)); // epoch
-        assert_eq!(base, attestation_nonce(&[1; 32], &[2; 32], &[3; 32], 4, 5));
+    fn request_header_and_message_are_the_pinned_concatenation() {
+        // nonce ‖ anchor_height_le ‖ anchor_hash, then ‖ shard_le — every term
+        // at its position, no hashing.
+        let nonce = [0xAAu8; 32];
+        let hash = [0xBBu8; 32];
+        let header = pass_request_header_bytes(&nonce, 0x0102_0304_0506_0708, &hash);
+        assert_eq!(header.len(), PASS_REQUEST_HEADER_LEN);
+        assert_eq!(&header[..32], &nonce);
+        assert_eq!(
+            &header[32..40],
+            &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+        );
+        assert_eq!(&header[40..72], &hash);
+
+        let msg = pass_countersignature_message(
+            &nonce,
+            0x0102_0304_0506_0708,
+            &hash,
+            0x1112_1314_1516_1718,
+        );
+        assert_eq!(msg.len(), PASS_COUNTERSIGNATURE_MESSAGE_LEN);
+        assert_eq!(
+            &msg[..72],
+            &header,
+            "the transcript starts with the decoded header"
+        );
+        assert_eq!(
+            &msg[72..80],
+            &[0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11]
+        );
+        // Every term is live: changing any one changes the message.
+        assert_ne!(
+            msg,
+            pass_countersignature_message(
+                &[0xABu8; 32],
+                0x0102_0304_0506_0708,
+                &hash,
+                0x1112_1314_1516_1718
+            )
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(&nonce, 1, &hash, 0x1112_1314_1516_1718)
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(
+                &nonce,
+                0x0102_0304_0506_0708,
+                &[0xBCu8; 32],
+                0x1112_1314_1516_1718
+            )
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(&nonce, 0x0102_0304_0506_0708, &hash, 1)
+        );
     }
 
     #[test]
-    fn pass_record_nonce_matches_free_function() {
+    fn pass_record_message_matches_free_function() {
         let (_pk, sk) = keypair();
         let sig = att_sign(&sk, b"n");
-        let rec = pass_record([3u8; 32], 4, 5, sig);
-        let (r, cb) = ([1u8; 32], [2u8; 32]);
+        let rec = pass_record([3u8; 32], 4, 5, [9u8; 32], 77, sig);
+        let hash = [0xDDu8; 32];
         assert_eq!(
-            rec.nonce(&r, &cb),
-            attestation_nonce(&r, &cb, &rec.p_id, rec.shard_id, rec.settlement_epoch)
+            rec.countersignature_message(&hash),
+            pass_countersignature_message(&rec.nonce, 77, &hash, rec.shard_id)
         );
+    }
+
+    #[test]
+    fn anchor_window_heights_are_depth_and_lag_below_the_predecessor() {
+        assert_eq!(PASS_ANCHOR_DEPTH_BLOCKS, 720);
+        assert_eq!(PASS_ANCHOR_LAG_BLOCKS, 4);
+        assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, 724);
+        assert_eq!(PASS_ANCHOR_WINDOW_LEN, 5);
+
+        let w = PassAnchorHeights::for_predecessor(H).unwrap();
+        assert_eq!((w.first(), w.last()), (H - 724, H - 720));
+        assert_eq!(w.len(), 5);
+        assert!(!w.is_empty());
+        // The one indexed lookup: anchor − first, None outside.
+        assert_eq!(w.index_of(H - 724), Some(0));
+        assert_eq!(w.index_of(H - 720), Some(4));
+        assert_eq!(w.index_of(H - 725), None);
+        assert_eq!(w.index_of(H - 719), None);
+
+        // Genesis boundary: 723 has no window; 724 is the first with one, and
+        // it bottoms out at height 0.
+        assert_eq!(PassAnchorHeights::for_predecessor(723), None);
+        let first = PassAnchorHeights::for_predecessor(724).unwrap();
+        assert_eq!((first.first(), first.last()), (0, 4));
+        assert_eq!(PassAnchorHeights::for_predecessor(0), None);
+    }
+
+    #[test]
+    fn anchor_window_table_must_match_the_window_exactly() {
+        assert_eq!(
+            PassAnchorWindow::new(723, vec![[0u8; 32]; 5]).unwrap_err(),
+            PassAnchorWindowError::BelowThreshold {
+                predecessor_height: 723
+            }
+        );
+        assert_eq!(
+            PassAnchorWindow::new(H, vec![[0u8; 32]; 4]).unwrap_err(),
+            PassAnchorWindowError::WrongLength {
+                expected: 5,
+                got: 4
+            }
+        );
+        assert_eq!(
+            PassAnchorWindow::new(H, vec![[0u8; 32]; 6]).unwrap_err(),
+            PassAnchorWindowError::WrongLength {
+                expected: 5,
+                got: 6
+            }
+        );
+        let w = window_at(H);
+        assert_eq!(w.hash_at(H - 724), Some(&chain_hash(H - 724)));
+        assert_eq!(w.hash_at(H - 720), Some(&chain_hash(H - 720)));
+        assert_eq!(w.hash_at(H - 719), None);
     }
 
     #[test]
     fn a_valid_countersignature_verifies_and_a_wrong_key_or_term_fails() {
         let (pubkey, secret) = keypair();
-        let (r, cb) = ([11u8; 32], [22u8; 32]);
         let p_id = p_id_of(&pubkey);
-        let nonce = attestation_nonce(&r, &cb, &p_id, 42, 1000);
-        let sig = att_sign(&secret, &nonce);
-        let rec = pass_record(p_id, 42, 1000, sig);
+        let nonce = [0x11u8; 32];
+        let anchor = H - 720; // the requester's tip − depth for a block at H + 1
+        let rec = signed_pass(&secret, p_id, nonce, anchor, 42, 1000);
+        let w = window_at(H);
 
-        assert!(verify_pass_countersignature(&r, &cb, &pubkey, &rec));
+        assert_eq!(verify_pass_countersignature(&w, &pubkey, &rec), Ok(()));
 
-        // A signature over a DIFFERENT block's r must not verify — this is the
-        // copy-freeride / cross-block replay defence at the crypto layer.
-        assert!(!verify_pass_countersignature(&[99; 32], &cb, &pubkey, &rec));
-        // Nor a different coinbase output key (the copy bind).
-        assert!(!verify_pass_countersignature(&r, &[99; 32], &pubkey, &rec));
-        // Nor a different (shard, epoch) term.
+        // A different shard term: the server-side shard binding.
         let mut other = rec.clone();
         other.shard_id = 43;
-        assert!(!verify_pass_countersignature(&r, &cb, &pubkey, &other));
+        assert_eq!(
+            verify_pass_countersignature(&w, &pubkey, &other),
+            Err(PassCountersignatureError::InvalidSignature)
+        );
+        // A different carried nonce than the one signed over.
+        let mut swapped_nonce = rec.clone();
+        swapped_nonce.nonce = [0x22u8; 32];
+        assert_eq!(
+            verify_pass_countersignature(&w, &pubkey, &swapped_nonce),
+            Err(PassCountersignatureError::InvalidSignature)
+        );
+        // A different carried anchor height INSIDE the window: the chain's hash
+        // at that height is not the one signed over, so the signature fails —
+        // the height is bound through the hash the verifier supplies.
+        let mut moved_anchor = rec.clone();
+        moved_anchor.anchor_height = anchor - 1;
+        assert_eq!(
+            verify_pass_countersignature(&w, &pubkey, &moved_anchor),
+            Err(PassCountersignatureError::InvalidSignature)
+        );
+        // Settlement epoch is NOT in the signed message (it is a kept-header
+        // term the root commits); changing it does not touch the signature.
+        let mut other_epoch = rec.clone();
+        other_epoch.settlement_epoch = 1001;
+        assert_eq!(
+            verify_pass_countersignature(&w, &pubkey, &other_epoch),
+            Ok(())
+        );
 
         // Binding 1 in isolation: a record whose p_id is NOT this key's id fails
-        // even when the signature covers that record's own nonce.
-        let foreign_id = [0xABu8; 32];
-        let foreign_nonce = attestation_nonce(&r, &cb, &foreign_id, 42, 1000);
-        let sig_over_foreign = att_sign(&secret, &foreign_nonce);
-        let foreign = pass_record(foreign_id, 42, 1000, sig_over_foreign);
-        assert!(!verify_pass_countersignature(&r, &cb, &pubkey, &foreign));
+        // even when the signature covers that record's own message.
+        let foreign = signed_pass(&secret, [0xABu8; 32], nonce, anchor, 42, 1000);
+        assert_eq!(
+            verify_pass_countersignature(&w, &pubkey, &foreign),
+            Err(PassCountersignatureError::PIdMismatch)
+        );
+    }
+
+    /// The requester supplies the anchor hash to `P`, so a requester who lies
+    /// about it gets a signature over a hash the chain never had — refused
+    /// against the real one. This is what makes the hash term unforgeable
+    /// while `P` stays chain-blind.
+    #[test]
+    fn a_fabricated_anchor_hash_fails_against_the_chains_hash() {
+        let (pubkey, secret) = keypair();
+        let p_id = p_id_of(&pubkey);
+        let anchor = H - 722;
+        let lied = att_sign(
+            &secret,
+            &pass_countersignature_message(&[0x55u8; 32], anchor, &[0xFFu8; 32], 42),
+        );
+        let rec = pass_record(p_id, 42, 1000, [0x55u8; 32], anchor, lied);
+        assert_eq!(
+            verify_pass_countersignature(&window_at(H), &pubkey, &rec),
+            Err(PassCountersignatureError::InvalidSignature)
+        );
+    }
+
+    /// The window is `[h − depth − L, h − depth]`, both ends inclusive: an
+    /// anchor at either bound verifies, one past either bound is refused
+    /// before any signature is evaluated. The same record is therefore valid
+    /// at `L + 1` consecutive predecessor heights — the accepted replay
+    /// window — and at none outside them.
+    #[test]
+    fn anchor_window_bounds_are_inclusive_and_out_of_window_is_typed() {
+        let (pubkey, secret) = keypair();
+        let p_id = p_id_of(&pubkey);
+        let w = window_at(H);
+        let heights = w.heights();
+
+        for anchor in [heights.first(), heights.last()] {
+            let rec = signed_pass(&secret, p_id, [0x66u8; 32], anchor, 7, 1000);
+            assert_eq!(verify_pass_countersignature(&w, &pubkey, &rec), Ok(()));
+        }
+        for anchor in [heights.first() - 1, heights.last() + 1] {
+            let rec = signed_pass(&secret, p_id, [0x66u8; 32], anchor, 7, 1000);
+            assert_eq!(
+                verify_pass_countersignature(&w, &pubkey, &rec),
+                Err(PassCountersignatureError::AnchorOutOfWindow {
+                    anchor_height: anchor,
+                    first: heights.first(),
+                    last: heights.last(),
+                })
+            );
+        }
+
+        // One record, anchored at A = H − 720, across connecting heights: valid
+        // for predecessors H ..= H + L (A stays inside the sliding window),
+        // refused at H − 1 (A above the upper bound — a pre-fetched read) and
+        // at H + L + 1 (A below the lower bound — stale).
+        let anchor = H - 720;
+        let rec = signed_pass(&secret, p_id, [0x77u8; 32], anchor, 7, 1000);
+        for h in H..=H + PASS_ANCHOR_LAG_BLOCKS {
+            assert_eq!(
+                verify_pass_countersignature(&window_at(h), &pubkey, &rec),
+                Ok(()),
+                "anchor {anchor} must verify at predecessor {h}"
+            );
+        }
+        assert!(matches!(
+            verify_pass_countersignature(&window_at(H - 1), &pubkey, &rec),
+            Err(PassCountersignatureError::AnchorOutOfWindow { .. })
+        ));
+        assert!(matches!(
+            verify_pass_countersignature(&window_at(H + PASS_ANCHOR_LAG_BLOCKS + 1), &pubkey, &rec),
+            Err(PassCountersignatureError::AnchorOutOfWindow { .. })
+        ));
+    }
+
+    /// The dishonest-witness replay the shard term exists to close: a valid
+    /// countersignature `P` made for shard 42 must not verify as a pass over
+    /// shard 43 even with the same header terms carried.
+    #[test]
+    fn a_signature_over_one_shard_cannot_be_replayed_against_another() {
+        let (pubkey, secret) = keypair();
+        let p_id = p_id_of(&pubkey);
+        let nonce = [0x33u8; 32];
+        let anchor = H - 721;
+        let served = signed_pass(&secret, p_id, nonce, anchor, 42, 1000);
+        let replayed = pass_record(p_id, 43, 1000, nonce, anchor, served.signature.clone());
+        let w = window_at(H);
+        assert_eq!(verify_pass_countersignature(&w, &pubkey, &served), Ok(()));
+        assert_eq!(
+            verify_pass_countersignature(&w, &pubkey, &replayed),
+            Err(PassCountersignatureError::InvalidSignature)
+        );
+    }
+
+    /// The v1 domain is retired, not aliased: a signature under the v1 string
+    /// over the v2 message must not verify.
+    #[test]
+    fn v1_domain_signature_does_not_verify_under_v2() {
+        let (pubkey, secret) = keypair();
+        let p_id = p_id_of(&pubkey);
+        let nonce = [0x44u8; 32];
+        let anchor = H - 720;
+        let msg = pass_countersignature_message(&nonce, anchor, &chain_hash(anchor), 42);
+        let v1_sig = HybridEd25519MlDsa
+            .sign(&secret, b"shekyl/archival-attestation-scheme-v1", &msg)
+            .expect("sign");
+        let rec = pass_record(p_id, 42, 1000, nonce, anchor, v1_sig);
+        assert_eq!(
+            verify_pass_countersignature(&window_at(H), &pubkey, &rec),
+            Err(PassCountersignatureError::InvalidSignature)
+        );
+        assert_eq!(
+            shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
+            b"shekyl/archival-attestation-scheme-v2"
+        );
     }
 
     #[test]
@@ -676,8 +1298,10 @@ mod tests {
         let (_pk, sk) = keypair();
         let s1 = att_sign(&sk, b"a");
         let s2 = att_sign(&sk, b"b");
-        let r1 = pass_record([7u8; 32], 42, 1000, s1.clone());
-        let r2 = pass_record([7u8; 32], 43, 1000, s2.clone());
+        let (n1, n2) = ([1u8; 32], [2u8; 32]);
+        let (a1, a2) = (4276u64, 4277u64);
+        let r1 = pass_record([7u8; 32], 42, 1000, n1, a1, s1.clone());
+        let r2 = pass_record([7u8; 32], 43, 1000, n2, a2, s2.clone());
 
         // A non-empty set differs from empty.
         assert_ne!(attestation_root(std::slice::from_ref(&r1)).unwrap(), empty);
@@ -690,11 +1314,57 @@ mod tests {
         // PAIRING IS COMMITTED: swapping which signature rides which terms
         // changes the root.
         let swapped = attestation_root(&[
-            pass_record(r1.p_id, r1.shard_id, r1.settlement_epoch, s2),
-            pass_record(r2.p_id, r2.shard_id, r2.settlement_epoch, s1),
+            pass_record(
+                r1.p_id,
+                r1.shard_id,
+                r1.settlement_epoch,
+                n1,
+                a1,
+                s2.clone(),
+            ),
+            pass_record(
+                r2.p_id,
+                r2.shard_id,
+                r2.settlement_epoch,
+                n2,
+                a2,
+                s1.clone(),
+            ),
         ])
         .unwrap();
         assert_ne!(ab, swapped);
+
+        // THE NONCE IS COMMITTED: the same header+anchor+signature set with the
+        // nonces swapped is a different root, so a witness cannot transport a
+        // nonce other than the one the root was mined over.
+        let nonce_swapped = attestation_root(&[
+            pass_record(
+                r1.p_id,
+                r1.shard_id,
+                r1.settlement_epoch,
+                n2,
+                a1,
+                s1.clone(),
+            ),
+            pass_record(
+                r2.p_id,
+                r2.shard_id,
+                r2.settlement_epoch,
+                n1,
+                a2,
+                s2.clone(),
+            ),
+        ])
+        .unwrap();
+        assert_ne!(ab, nonce_swapped);
+
+        // THE ANCHOR HEIGHT IS COMMITTED, for the same reason.
+        let anchor_swapped = attestation_root(&[
+            pass_record(r1.p_id, r1.shard_id, r1.settlement_epoch, n1, a2, s1),
+            pass_record(r2.p_id, r2.shard_id, r2.settlement_epoch, n2, a1, s2),
+        ])
+        .unwrap();
+        assert_ne!(ab, anchor_swapped);
     }
 
     #[test]
@@ -703,29 +1373,42 @@ mod tests {
         let s0 = att_sign(&sk, b"w0");
         let s1 = att_sign(&sk, b"w1");
         let w = BlockAttestationWitness {
-            pass_signatures: vec![s0, s1],
+            passes: vec![
+                PassWitness {
+                    nonce: [5u8; 32],
+                    anchor_height: 0x0102_0304_0506_0708,
+                    signature: s0,
+                },
+                PassWitness {
+                    nonce: [6u8; 32],
+                    anchor_height: 4277,
+                    signature: s1,
+                },
+            ],
         };
         let bytes = w.to_canonical_bytes().unwrap();
-        // Layout: count_le(8) ‖ 2 × CANONICAL_LEN. The leading `r(32)` is gone
-        // (RF-D3): the nonce anchors to the validated predecessor hash, which is
-        // chain state the verifier already holds, so it is never transported.
-        assert_eq!(
-            bytes.len(),
-            WITNESS_PREFIX_LEN + 2 * HybridSignature::CANONICAL_LEN
-        );
+        // Layout: count_le(8) ‖ 2 × (nonce(32) ‖ anchor_le(8) ‖ CANONICAL_LEN).
+        assert_eq!(bytes.len(), WITNESS_PREFIX_LEN + 2 * WITNESS_ENTRY_LEN);
         assert_eq!(&bytes[0..WITNESS_PREFIX_LEN], &2u64.to_le_bytes());
+        assert_eq!(
+            &bytes[WITNESS_PREFIX_LEN..WITNESS_PREFIX_LEN + PASS_NONCE_LEN],
+            &[5u8; 32]
+        );
+        assert_eq!(
+            &bytes[WITNESS_PREFIX_LEN + PASS_NONCE_LEN..WITNESS_PREFIX_LEN + PASS_NONCE_LEN + 8],
+            &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01],
+            "anchor height is little-endian after the nonce"
+        );
         assert_eq!(
             BlockAttestationWitness::from_canonical_bytes(&bytes).unwrap(),
             w
         );
 
-        // Codec-defined-empty: a zero-signature witness is still a valid
+        // Codec-defined-empty: a zero-entry witness is still a valid
         // `count=0` encoding. That is distinct from the C++ side-table
         // convention, which skips writing a row for empty/absent witnesses
         // (interim / all-miss blocks store nothing; absent key ≡ no witness).
-        let empty = BlockAttestationWitness {
-            pass_signatures: vec![],
-        };
+        let empty = BlockAttestationWitness { passes: vec![] };
         let eb = empty.to_canonical_bytes().unwrap();
         assert_eq!(eb.len(), WITNESS_PREFIX_LEN);
         assert_eq!(
@@ -739,10 +1422,15 @@ mod tests {
         let (_pk, sk) = keypair();
         let s0 = att_sign(&sk, b"w");
         let good = BlockAttestationWitness {
-            pass_signatures: vec![s0],
+            passes: vec![PassWitness {
+                nonce: [0u8; 32],
+                anchor_height: 1,
+                signature: s0,
+            }],
         }
         .to_canonical_bytes()
         .unwrap();
+        const SIG_START: usize = WITNESS_PREFIX_LEN + PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
 
         // Short prefix.
         assert!(matches!(
@@ -750,7 +1438,7 @@ mod tests {
             Err(WitnessError::TooShort(n)) if n == WITNESS_PREFIX_LEN - 1
         ));
 
-        // Declares one signature, carries none.
+        // Declares one entry, carries none.
         let mut short_body = Vec::new();
         short_body.extend_from_slice(&1u64.to_le_bytes());
         assert!(matches!(
@@ -762,8 +1450,24 @@ mod tests {
             })
         ));
 
+        // The two superseded entry shapes — signature alone (pre-SF-D8) and
+        // nonce ‖ signature (the withdrawn #734 cut) — are length mismatches,
+        // not silently re-framed entries.
+        for skip in [
+            PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN,
+            PASS_ANCHOR_HEIGHT_LEN,
+        ] {
+            let mut stale = Vec::new();
+            stale.extend_from_slice(&1u64.to_le_bytes());
+            stale.extend_from_slice(&good[WITNESS_PREFIX_LEN + skip..]);
+            assert!(matches!(
+                BlockAttestationWitness::from_canonical_bytes(&stale),
+                Err(WitnessError::LengthMismatch { count: 1, .. })
+            ));
+        }
+
         // Over-cap count is rejected before allocating — a hostile u64 cannot
-        // trigger a `count · CANONICAL_LEN` reservation.
+        // trigger a `count · WITNESS_ENTRY_LEN` reservation.
         let mut over = Vec::new();
         over.extend_from_slice(&((MAX_ATTESTATION_RECORDS as u64) + 1).to_le_bytes());
         assert!(matches!(
@@ -771,9 +1475,10 @@ mod tests {
             Err(WitnessError::CountExceedsCap(n)) if n == MAX_ATTESTATION_RECORDS as u64 + 1
         ));
 
-        // Corrupt the first signature's leading version byte.
+        // Corrupt the first signature's leading version byte (after the nonce
+        // and anchor height).
         let mut corrupt = good.clone();
-        corrupt[WITNESS_PREFIX_LEN] ^= 0xFF;
+        corrupt[SIG_START] ^= 0xFF;
         assert!(matches!(
             BlockAttestationWitness::from_canonical_bytes(&corrupt),
             Err(WitnessError::Signature { index: 0, .. })
@@ -785,7 +1490,14 @@ mod tests {
         let (_pk, sk) = keypair();
         let sig = att_sign(&sk, b"x");
         let over = BlockAttestationWitness {
-            pass_signatures: vec![sig; MAX_ATTESTATION_RECORDS + 1],
+            passes: vec![
+                PassWitness {
+                    nonce: [0u8; 32],
+                    anchor_height: 0,
+                    signature: sig,
+                };
+                MAX_ATTESTATION_RECORDS + 1
+            ],
         };
         assert!(matches!(
             over.to_canonical_bytes(),
@@ -796,16 +1508,14 @@ mod tests {
     #[test]
     fn pairing_zips_pass_headers_and_reproduces_the_root() {
         // Two pass records with a MISS interleaved: the witness holds only the
-        // two pass signatures, and the zip must skip the miss.
+        // two pass entries, and the zip must skip the miss.
         let (pk, sk) = keypair();
         let p_id = p_id_of(&pk);
-        let (r, cb) = ([3u8; 32], [4u8; 32]);
-        let sig_for = |shard: u64, epoch: u64| {
-            let nonce = attestation_nonce(&r, &cb, &p_id, shard, epoch);
-            att_sign(&sk, &nonce)
-        };
-        let s_a = sig_for(10, 1000);
-        let s_b = sig_for(20, 1000);
+        let w = window_at(H);
+        let (n_a, n_b) = ([0xA0u8; 32], [0xB0u8; 32]);
+        let (a_a, a_b) = (H - 720, H - 723);
+        let rec_a = signed_pass(&sk, p_id, n_a, a_a, 10, 1000);
+        let rec_b = signed_pass(&sk, p_id, n_b, a_b, 20, 1000);
 
         let headers = vec![
             AttestationHeader {
@@ -827,27 +1537,31 @@ mod tests {
                 kind: AttestationKind::Pass,
             },
         ];
+        let entry = |r: &PassRecord| PassWitness {
+            nonce: r.nonce,
+            anchor_height: r.anchor_height,
+            signature: r.signature.clone(),
+        };
         let witness = BlockAttestationWitness {
-            pass_signatures: vec![s_a.clone(), s_b.clone()],
+            passes: vec![entry(&rec_a), entry(&rec_b)],
         };
 
         let records = pass_records_from_headers_and_witness(&headers, &witness).unwrap();
         assert_eq!(records.len(), 2);
-        // The reconstructed records verify against P (pairing landed correctly).
+        // The reconstructed records carry the header terms and verify against
+        // P (pairing landed correctly).
+        assert_eq!((records[0].nonce, records[0].anchor_height), (n_a, a_a));
+        assert_eq!((records[1].nonce, records[1].anchor_height), (n_b, a_b));
         for rec in &records {
-            assert!(verify_pass_countersignature(&r, &cb, &pk, rec));
+            assert_eq!(verify_pass_countersignature(&w, &pk, rec), Ok(()));
         }
-        // And their root matches the direct construction from the same pairs.
-        let direct = attestation_root(&[
-            pass_record(p_id, 10, 1000, s_a.clone()),
-            pass_record(p_id, 20, 1000, s_b.clone()),
-        ])
-        .unwrap();
+        // And their root matches the direct construction from the same tuples.
+        let direct = attestation_root(&[rec_a.clone(), rec_b.clone()]).unwrap();
         assert_eq!(attestation_root(&records).unwrap(), direct);
 
         // A count mismatch (one pass header dropped from the witness) is loud.
         let short_witness = BlockAttestationWitness {
-            pass_signatures: vec![s_a.clone()],
+            passes: vec![entry(&rec_a)],
         };
         assert_eq!(
             pass_records_from_headers_and_witness(&headers, &short_witness).unwrap_err(),
@@ -857,13 +1571,17 @@ mod tests {
             }
         );
 
-        // PAIRING-SWAP NEGATIVE CONTROL: feeding the two pass signatures in the
-        // wrong order mis-binds each sig to the other's terms, so the recomputed
-        // root differs — the property the cross-language KAT extends over the FFI.
+        // PAIRING-SWAP NEGATIVE CONTROL: feeding the two entries in the wrong
+        // order mis-binds each to the other's terms, so the recomputed root
+        // differs — the property the cross-language KAT extends over the FFI.
         let swapped_witness = BlockAttestationWitness {
-            pass_signatures: vec![s_b, s_a],
+            passes: vec![entry(&rec_b), entry(&rec_a)],
         };
         let swapped = pass_records_from_headers_and_witness(&headers, &swapped_witness).unwrap();
         assert_ne!(attestation_root(&swapped).unwrap(), direct);
+        // …and the mis-bound records no longer verify (shard term differs).
+        assert!(swapped
+            .iter()
+            .all(|rec| verify_pass_countersignature(&w, &pk, rec).is_err()));
     }
 }
