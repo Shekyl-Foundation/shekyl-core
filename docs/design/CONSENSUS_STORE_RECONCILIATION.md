@@ -30,7 +30,7 @@ registered family under alphabetic-until-digit: distinct from `CB-`, `CEN-`,
 | Program | Document | Family | What it cuts by |
 | --- | --- | --- | --- |
 | All-Rust consensus rewrite | [`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) | `CEN-` | **rule** (171 behavioral statements) |
-| Daemon chain store | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) | `DRS-` | **DB call surface** (102 store methods → S-TXN…S-PRUNE) |
+| Daemon chain store | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) | `DRS-` | **DB call surface** (101 store methods → S-TXN…S-PRUNE) |
 
 **This document rules nothing about consensus content.** It establishes where
 the two programs overlap, records the countermand, and lists the decisions each
@@ -115,7 +115,7 @@ files as their subject:
 
 | File | CEN rows enforcing here | DRS treatment |
 | --- | --- | --- |
-| `cryptonote_core/blockchain.cpp` | **92** | the god object; DRS-C partitions its 102 store methods |
+| `cryptonote_core/blockchain.cpp` | **92** | the god object; DRS-C partitions its 101 store methods |
 | `blockchain_db/lmdb/db_lmdb.cpp` | **14** | the store; DRS-E1 replaces it |
 | `cryptonote_core/tx_pool.cpp` | **11** | DRS-C surface **S-POOL** |
 | `cryptonote_core/cryptonote_core.cpp` | **12** | connect caller; DRS-B consumer |

@@ -17,7 +17,7 @@ columns are ordered by that hierarchy, not by engineering elegance.
 **Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**. The surface
 map is **no longer stamped** — §3.5 is re-derived from the tree by
 `scripts/ci/check_drs_c_surface_map.py` on every run, because the stamp here
-said 97 while the tree had moved to **102 store methods**. **The five table-inventory
+said 97 while the tree had moved to 102. **The five table-inventory
 rows (handles, opens, claimed total, undocumented, phantoms) re-measured
 at `9742ec4f6` by P0a (2026-09-05); the atomicity-audit row re-measured at
 `2dba46537` by P0b (2026-09-05)** — the remaining substrate rows
@@ -244,7 +244,7 @@ store, don't patch blind.
 
 Durable state lives in C++ LMDB (**49** declared tables, 48 at runtime —
 DRS-W5). Orchestration tangle is
-**`blockchain.cpp`** (269 store call sites, 102 store methods), not the
+**`blockchain.cpp`** (267 store call sites, 101 store methods), not the
 storage class alone.
 Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
 **boundary-thickness and type-safety** problem under
@@ -491,7 +491,7 @@ cannot — and the failure mode is “wallet can’t spend.”
 
 ### 3.1 Today
 
-`blockchain.cpp` (102 store methods) → `BlockchainLMDB` (49 tables) + FFI gather
+`blockchain.cpp` (101 store methods) → `BlockchainLMDB` (49 tables) + FFI gather
 shells.
 
 ### 3.2 After DRS-C (+ LMDB digest)
@@ -513,11 +513,11 @@ wallet e2e (E-8).
 4. Curve: **storage only**; encodings + arithmetic single-sourced (DRS-D3b);
    cross-store KAT (DRS-D3c).
 
-### 3.5 DRS-C surface map (102 methods from `blockchain.cpp`)
+### 3.5 DRS-C surface map (101 methods from `blockchain.cpp`)
 
-**Verified at `f103acd383c5da5524748e4efef4420833106265` (`dev`, 2026-09-13).**
+**Verified at PR #733 (PDM C++ residue; `can_thread_bulk_indices` left with the F18 scan-table prefetch).**
 Every `m_db->` method reached from `blockchain.cpp` is assigned to **exactly
-one** surface: 102 methods, 10 surfaces, no method in two and none in none.
+one** surface: 101 methods, 10 surfaces, no method in two and none in none.
 Gated by `scripts/ci/check_drs_c_surface_map.py`, which re-derives the
 vocabulary from `blockchain.cpp` at the tree it runs on and compares it against
 this table in both directions.
@@ -608,7 +608,7 @@ below is written out so the partition is a set, not a description of one.
 | **S-TXN** | Batch / open / sync / locks | 11 | `batch_abort` `batch_start` `batch_stop` `close` `fixup` `is_open` `is_read_only` `m_synchronization_lock` `reset` `safesyncmode` `sync` | **1** — Every other surface runs **inside** its transactions. Nothing can be extracted before the txn boundary is, so this is not a preference — it is the only position that works. | Stays with the store backend |
 | **S-CHAIN-W** | Connect and pop write set | 7 | `add_block` `add_block_burn` `pop_block` `remove_block_burn` `set_hard_fork` `set_settlement_epoch_blocks_pin` `set_total_burned` | **2** — The connect/pop write set is what the logical-state digest is computed **over**, so extracting it first gives DRS-E2 a subject to compare. Moving it later means every earlier increment is validated against an unported writer. | Long-term Rust `apply_block` / `pop_block` |
 | **S-CHAIN-R** | Tip, headers, weights, burns | 23 | `block_exists` `for_blocks_range` `get_block` `get_block_already_generated_coins` `get_block_blob_from_height` `get_block_burn` `get_block_cumulative_difficulty` `get_block_cumulative_rct_outputs` `get_block_difficulty` `get_block_from_height` `get_block_hash_from_height` `get_block_height` `get_block_long_term_weight` `get_block_timestamp` `get_block_weight` `get_block_weights` `get_long_term_block_weights` `get_settlement_epoch_blocks_pin` `get_top_block` `get_top_block_timestamp` `get_total_burned` `height` `top_block_hash` | **3** — Reads the tables S-CHAIN-W writes. Split across increments, the two halves of one table's contract move separately and a digest mismatch cannot be localised to either. | Hot RPC path |
-| **S-OUT-KI** | Outputs and key images | 9 | `can_thread_bulk_indices` `for_all_key_images` `for_all_outputs` `get_output_distribution` `get_output_histogram` `get_output_key` `get_output_tx_and_index` `has_key_image` `has_key_images` | **4** — Consensus-critical (double-spend admission) and needs chain reads for height context, so it follows S-CHAIN-R rather than racing it. |  |
+| **S-OUT-KI** | Outputs and key images | 8 | `for_all_key_images` `for_all_outputs` `get_output_distribution` `get_output_histogram` `get_output_key` `get_output_tx_and_index` `has_key_image` `has_key_images` | **4** — Consensus-critical (double-spend admission) and needs chain reads for height context, so it follows S-CHAIN-R rather than racing it. |  |
 | **S-TX** | Tx blob and existence | 9 | `for_all_transactions` `get_prunable_tx_blob` `get_prunable_tx_hash` `get_pruned_tx_blob` `get_tx_amount_output_indices` `get_tx_blob` `get_tx_count` `get_tx_unlock_time` `tx_exists` | **5** — Tx blob and existence reads, dependent on chain-R for height context. No writer of its own in this vocabulary — `blockchain.cpp` writes txs only through `add_block`. |  |
 | **S-CURVE** | Curve-tree reads | 5 | `get_curve_tree_depth` `get_curve_tree_leaf_chunk` `get_curve_tree_leaf_count` `get_curve_tree_root` `get_curve_tree_root_at_height` | **6** — Reads only; the arithmetic lives in `shekyl-fcmp`, not here. Depends on chain state but nothing depends on it, so it can move once the chain surfaces are stable. | Storage only; math in `shekyl-fcmp` |
 | **S-ARCH** | Archival reads/writes reached from `blockchain.cpp` | 18 | `archival_bond_all_last_served_epochs` `archival_bond_good_through` `archival_bond_holds_shard` `archival_bond_join_epoch` `archival_bond_last_served_epochs` `archival_serve_credit_pass_count` `archival_shard_freeze_height` `gather_archival_emission_epoch_snapshot` `get_archival_alt_attestation_witness` `get_archival_attestation_witness_at_height` `get_archival_bond_hybrid_pubkey` `get_archival_bond_value` `get_archival_last_slash_epoch` `get_archival_prune_watermark_epoch` `get_archival_r_market` `get_archival_shard_segment_at_height` `set_archival_serve_credit_bit` `store_archival_alt_attestation_witness` | **7** — Largest surface (18) and **gated on the P0b journal audit** — its write paths are the ones whose atomicity is still being characterised. Extracting before that audit ports an unaudited contract. | Cursor surface for retention (E4) |
