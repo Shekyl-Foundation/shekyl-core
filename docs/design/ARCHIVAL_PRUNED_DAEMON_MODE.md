@@ -385,7 +385,65 @@ What Q6 must rule, in this order:
    transaction) and strong jointly (~95 %), and a Q6 that admits the
    prunable region while keeping `pqc_auths` universally retained has
    the smaller slice in the good and the larger one out.
-3. **The unit change downstream (§5).** Every closed archival ruling
+3. **What proves shard membership once the Merkle path stops doing
+   it (added 2026-09-13, review).** Under leaves, one path against
+   `R_k` proved two things at once — *these bytes are the leaf at this
+   position* and *this position is in shard `s`*. Under a per-tx
+   `txs_prunable_hash`, the verifier proves **integrity only**: these
+   bytes are that transaction's prunable region. Shard membership
+   becomes a separate derivation, and whatever establishes
+   `tx → shard` joins the retained set. That is a new obligation the
+   leaf formulation never had, because the path was doing the work
+   invisibly. Two shapes: **derived** — if the shard is a height or
+   tx-index range (the `PDM-Q-F17` stripe candidate is exactly this),
+   membership is `height(tx) ∈ range`, read off `tx_indices` /
+   `block_info`, which are KEEP-C, and costs nothing; **stored** — if
+   the shard stays a leaf-position segment (`ShardSetCompact{ids}`
+   over `[k·E, (k+1)·E)`), the `tx → leaf position` mapping
+   (`output_to_leaf`, graded CACHE in §9) becomes load-bearing for
+   membership and either joins KEEP-D or is re-derived on every check.
+   Q6 names which, and the storage arithmetic follows.
+
+   **The collision this surfaces is with the credit wire, and it cuts
+   the other way from the one first reported.** The report read
+   [`ARCHIVAL_PER_CHALLENGE_RECORD.md`](ARCHIVAL_PER_CHALLENGE_RECORD.md)
+   as a round in flight ruling on a leaf opening. At the pin it is
+   **RULED 2026-08-24** and implemented, and then overtaken: `RF-D8`
+   (i) was **retracted 2026-08-26** and the whole leaf-opening cluster
+   — `challenge_leaf_index`, the fire schedule, the path opening — is
+   on [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md) §2's
+   deletion surface (`PC-D3`'s own disposition note says so: *"this
+   hardened a function that DELETES"*, kept only as `TJ-1`'s interim
+   mitigation). The successor is not a leaf opening of any unit: a
+   *miner* attests it read the **whole shard** from `P`, `P`
+   countersigns **the nonce alone**, and `ARCHIVAL_CREDIT_WIRE.md` §3
+   rejected a `transfer_digest` because *"admission could never
+   reconstruct the signed message"* — the shard bytes are off-chain.
+   **Q6's unit changes that premise.** If the good is the prunable
+   region, every node retains `txs_prunable_hash` for every
+   transaction in the shard, so a digest over what the miner read
+   **is** consensus-reconstructible: `H(txs_prunable_hash[t] for t ∈
+   s)` is computable at admission from kept-side data. The credit
+   wire's "no content binding on the wire, read-content binding from
+   §9.4's topology" ruling was made under a unit whose verifier was
+   not retained; Q6 supplies one that is. Whether that reopens the
+   `transfer_digest` rejection is Q6's to say — it is the difference
+   between a possession test that discriminates by topology and one
+   that discriminates by hash — and it is stated here so the two
+   designs stop ruling on the same object from opposite ends.
+   Whichever lands second inherits the other's unit.
+
+   On the amortization hazard the report expected the unit change to
+   retire: **partly.** `PC` §2's defect — three countersignatures over
+   one identical opening — is a shared-root problem, and a per-tx
+   verifier has no shared root; that hazard is structurally gone under
+   any sampled test over the new unit. `PC-D3`'s free-ride — keep the
+   ~82 KB of predictable challenged leaves, discard the shard — is a
+   **draw** problem, not a unit problem, and survives any test whose
+   sample is precomputable, whatever the sample's verifier. Under the
+   credit wire's whole-shard read neither is live; both return the
+   moment sampling does.
+4. **The unit change downstream (§5).** Every closed archival ruling
    defines the good as **leaves**: `SHARD_BYTES = 25,992 × 128`
    (`ARCHIVAL_RESPONSE_FORMAT.md` `RF-D6`), `challenge_leaf_index`,
    the 128-byte `leaf_bytes` claim in the kept vin (`RF-D1`),
@@ -403,7 +461,7 @@ What Q6 must rule, in this order:
    coverage (`PDM-Q-F17`). Q6 adopts it, adapts it (stripe count,
    stripe size, tip window are Monero's numbers), or names why the
    shard is shaped otherwise.
-4. **Self-reference — discharged (`PDM-Q-F15`).** `serve_credit_pruned`
+5. **Self-reference — discharged (`PDM-Q-F15`).** `serve_credit_pruned`
    is the archival system's own evidence inside the good it sells. At
    the pin it is read exactly once after parse — `blockchain.cpp:3807`,
    inside `check_tx_inputs` — and by nothing else in `src/` except the
@@ -415,7 +473,7 @@ What Q6 must rule, in this order:
    retires those rows at `tip − W` without touching the pruned half.
    Benign, under one condition Q2 already owes: discard depth ≥ the
    reorg depth that can re-drive `check_tx_inputs` on the block.
-5. **Depth floor from admission-only reads.** Everything in the good
+6. **Depth floor from admission-only reads.** Everything in the good
    is re-read on a reorg re-verify and on nothing else. The inherited
    engine's `CRYPTONOTE_PRUNING_TIP_BLOCKS = 5500` is the Monero-era
    answer to this; Q2 gives Shekyl's, and F10's trim floor and this
@@ -732,11 +790,19 @@ Named now so they are not discovered later.
   prunable-residence row: *Header kept; 3.43 KB countersignature on the
   coinbase-tx prunable side*. If `PDM-Q6` rules that side into the
   archival subject, `CR-D2` reopens and the carrier decision changes.
+  Second point of contact (Q6 item 3): §3's `transfer_digest`
+  rejection rests on *"admission could never reconstruct the signed
+  message"* — true of off-chain shard bytes, not of a digest over
+  retained `txs_prunable_hash` rows. Q6 says whether that reopens.
+  Read §2's deletion surface before citing anything leaf-shaped from
+  [`ARCHIVAL_PER_CHALLENGE_RECORD.md`](ARCHIVAL_PER_CHALLENGE_RECORD.md):
+  `PC-D1`…`PC-D7` are RULED and the leaf-opening cluster they hardened
+  is on that surface (`RF-D8` (i) retracted 2026-08-26).
 - **`tests/unit_tests/tx_prunable_region_sole_occupant.cpp`** — the
   prunable region has exactly one occupant; blob vs re-serialize hash
   paths agree only *positionally*. Read this test before proposing
   anything that adds to or reorders that region.
-- **Every leaf-shaped archival ruling** (`PDM-Q-F13` item 3 of Q6) —
+- **Every leaf-shaped archival ruling** (`PDM-Q-F13` item 4 of Q6) —
   [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md) `RF-D1`
   (the 128 B `leaf_bytes` claim) and `RF-D6` (`SHARD_BYTES = 25,992 ×
   128`, `challenge_leaf_index`, `LeafStore::frozen_segment`),
@@ -1142,7 +1208,7 @@ consensus question: *does anything read it after admission?*
   `txs_prunable_hash` — and slashing), while the archival system has
   those and lacks what the engine has (a compact, third-party-computable
   holdings function and emergent coverage), *and* is keyed to a unit
-  F12 showed is not scarce. Q6 item 3's unit change can take the
+  F12 showed is not scarce. Q6 item 4's unit change can take the
   arithmetic as the shard definition. Three things the mapping must
   not lose: (a) the seed is a **claim** — the engine catches a liar
   only when a block is requested; the bond + challenge is what turns
@@ -1245,7 +1311,7 @@ go red. **Q6 is answered before Q1 is closed**, and Q6 is now a
 concrete question rather than a promotion: F13 names the good (the
 prunable region, verified by `txs_prunable_hash`), F14 names the
 second occupant (`pqc_auths`, ~60 % of the bytes, kept only for want
-of a hash row), F15 discharges the self-reference, and Q6 item 3 owes
+of a hash row), F15 discharges the self-reference, and Q6 item 4 owes
 the list of closed leaf-shaped rulings the unit change reopens. A Q1
 ruling written ahead of Q6 is ruling on a cache. Q1 then rules §9's
 `CACHE` and `LOCAL-BOUNDED` rows (F16) and the two undetermined
