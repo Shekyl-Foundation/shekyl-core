@@ -27,7 +27,11 @@
 //! Mining address note: `capture_coinbase.py` mines to a freshly derived
 //! current-format regtest fixture address (`vectors/regtest_mining_recipients.json`),
 //! NOT the genesis recipients — a vector concern, not the treasury allocation; see
-//! `vectors/README.md` for the full rationale. Note h0 **is** the mainnet genesis
+//! `vectors/README.md` for the full rationale. "Current-format" is **enforced** by
+//! `regtest_mining_fixture_is_in_the_current_address_encoding` below, not asserted
+//! here: this sentence was true when written, went false when the address encoding
+//! gained `msg_sign_pk`, and no test noticed for as long as none of them decoded
+//! the file. Note h0 **is** the mainnet genesis
 //! (regtest shares `GENESIS_TX`), so any genesis re-pin requires re-capturing this
 //! corpus.
 
@@ -98,6 +102,57 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
                 block_hash, MAINNET_GENESIS_BLOCK_ID,
                 "height 0 block_hash must equal the published mainnet genesis id \
                  (mining_parity MAINNET frozen_id / GENESIS_ALLOCATIONS.md)"
+            );
+        }
+    }
+}
+
+/// The mining-address fixture must be in the encoding this file's header calls
+/// "current-format" — asserted by DECODING it, not by saying so in a comment.
+///
+/// This test exists because the claim and its subject had come apart. The
+/// header above named `vectors/regtest_mining_recipients.json` a "current-format"
+/// address while the committed file held the pre-`msg_sign_pk` encoding, and
+/// every test in this crate stayed green throughout — because none of them read
+/// it. `capture_coinbase.py` consumes it, so the damage showed up only when
+/// someone tried to regenerate the corpus: the daemon's `generateblocks` answers
+/// `-4 "Failed to parse wallet address"` and no chain can be produced at all.
+///
+/// The observable had collapsed: a fixture whose format nothing evaluates
+/// cannot fail a format assertion. Refreshing the bytes alone would have left
+/// this suite passing for precisely the same reason it passed while broken, so
+/// the decode is the point and the fixture refresh is the consequence.
+///
+/// `ShekylAddress::decode` is the same decoder the daemon uses to parse the
+/// mining recipient, so a pass here means `generateblocks` accepts the address
+/// rather than merely that the string is well-formed.
+#[test]
+fn regtest_mining_fixture_is_in_the_current_address_encoding() {
+    use shekyl_address::ShekylAddress;
+
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("vectors/regtest_mining_recipients.json"))
+            .expect("regtest_mining_recipients.json parses");
+
+    let recipients = fixture["recipients"]
+        .as_array()
+        .expect("fixture has a `recipients` array");
+    assert!(
+        !recipients.is_empty(),
+        "fixture carries no recipients — an empty array would satisfy the loop below \
+         without decoding anything, which is the defect this test exists to catch"
+    );
+
+    for (i, recipient) in recipients.iter().enumerate() {
+        let encoded = recipient["address"]
+            .as_str()
+            .unwrap_or_else(|| panic!("recipient {i} has no `address` string"));
+        if let Err(err) = ShekylAddress::decode(encoded) {
+            panic!(
+                "recipient {i} does not decode with the current address format: {err:?}\n\
+                 The fixture is stale. Regenerate it from the documented emitter:\n\
+                 cargo test -p shekyl-wire --test emit_regtest_addr -- --ignored --nocapture\n\
+                 See tests/vectors/README.md."
             );
         }
     }
