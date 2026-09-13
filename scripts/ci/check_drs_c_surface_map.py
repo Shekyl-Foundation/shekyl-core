@@ -3,22 +3,36 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# DRS-C (Tier-A A9): blockchain.cpp's `m_db->` vocabulary is partitioned into
+# DRS-C (Tier-A A9): blockchain.cpp's store vocabulary is partitioned into
 # named validation surfaces, and the partition is a BIJECTION — every method in
 # exactly one surface, every listed method real.
 #
 # WHY A GATE AND NOT A STAMP. §3.5 carried a verification stamp pinning it to
-# `3247fe3b6` (2026-07-27) at 97 methods. That figure was correct when written
-# and stayed correct in the document while the tree moved to 99 — and the
-# membership moved by TWELVE (+7 / -5) to shift the total by two. A stamp
-# records that someone looked once; it cannot notice the twelfth change. This
-# gate re-derives the vocabulary from the tree it runs on.
+# `3247fe3b6` (2026-07-27) at 97 methods. A stamp records that someone looked
+# once; it cannot notice the next change. Re-derived alias-aware, that pin holds
+# 98 and the current tree holds 102 — and the membership moved further than the
+# total (+7 / -3). This gate re-derives from the tree it runs on.
+#
+# WHY THE DERIVATION IS THE HARD PART. The first version matched the literal
+# `m_db->` token — the same derivation that built the table it checks — so it
+# was green BY CONSTRUCTION over every call made through any other name, and
+# three live methods were in no surface at all. Re-deriving is only independent
+# if the METHOD differs, not merely the run.
+#
+# THE STANDING RULE HERE: every receiver shape is either COLLECTED or REFUSED,
+# never silently skipped. Undercounting is the failure mode, because a method
+# that vanishes from the vocabulary is covered by any partition. When in doubt
+# the derivation errs toward OVER-collecting: a phantom fails loudly and a human
+# looks, where a missing method just goes green.
 #
 # THE DENOMINATOR IS DERIVED, NEVER READ FROM THE PROSE. The count in the
 # heading is checked against the derivation, not trusted as its source.
 #
 # Instance of 47-gate-subject-assertion.mdc: an empty vocabulary or an
 # unparsed table would satisfy the bijection vacuously, so both are asserted.
+#
+# Self-test: scripts/ci/test_check_drs_c_surface_map.py pins every shape below.
+# A regex added here without a case added there is how round 2 happened.
 
 import re
 import sys
@@ -28,79 +42,106 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "src/cryptonote_core/blockchain.cpp"
 DOC = ROOT / "docs/design/DAEMON_REDB_STORE.md"
 
-# Identifiers of type `BlockchainDB *` / `&` declared anywhere in the file —
-# members, parameters of file-static helpers, visitor fields. The alias SET is
-# derived, never hardcoded: this gate's first version matched the literal
-# `m_db->` token, which is the same derivation that built the table it checks,
-# so it was green BY CONSTRUCTION over every call made through any other name.
-# Three live methods were missing and it could not see them.
-# `(?:const\s+)?` so a cv-qualified declaration yields the identifier and not
-# the literal token `const` as an "alias".
+# The declaration's SIGIL is captured, not just the name: a `BlockchainDB *` is
+# called through `->` and a `BlockchainDB &` through `.`, and collecting the
+# wrong operator is how a reference alias gets derived, looks covered, and
+# contributes nothing. `(?:const\s+)?` so a cv-qualified declaration yields the
+# identifier and not the literal token `const`.
 ALIAS_DECL_RE = re.compile(
-    r"BlockchainDB\s*[*&]\s*(?:const\s+)?([a-zA-Z_][a-zA-Z0-9_]*)")
+    r"BlockchainDB\s*([*&])\s*(?:const\s+)?([a-zA-Z_][a-zA-Z0-9_]*)")
 
-# Receiver shapes this derivation cannot follow. It reads `alias->method`, so a
-# call written any other way is invisible to it — which is exactly the defect
-# this gate was built green over. Each is REFUSED rather than silently missed:
-# undercounting is the failure mode, and it must be loud. Zero of these are
-# present today; they are refused so that the day one appears, the gate says so
-# instead of quietly shrinking the vocabulary.
-UNHANDLED_SHAPES = (
-    (re.compile(r"get_db\(\)\s*(?:\.|->)\s*[a-zA-Z_]"),
-     "reaches the store through `get_db()`"),
-    (re.compile(r"\bauto\s*[*&]?\s*[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*\*?\s*"
-                r"(?:m_db|db)\s*[;,)]"),
-     "binds the store to an `auto` name, whose declaration carries no "
-     "`BlockchainDB` token for the alias derivation to find"),
-    (re.compile(r"\(\s*\*\s*(?:m_db|db)\s*\)\s*\."),
-     "calls through a dereferenced pointer `(*db).method()` rather than `->`"),
-)
 SECTION_RE = re.compile(r"^### 3\.5 ", re.M)
 ROW_RE = re.compile(r"^\|\s*\*\*(S-[A-Z-]+)\*\*\s*\|([^|]*)\|\s*(\d+)\s*\|([^|]*)\|", re.M)
 METHOD_RE = re.compile(r"`([a-zA-Z_][a-zA-Z0-9_]*)`")
+HEAD_RE = re.compile(r"### 3\.5 DRS-C surface map \((\d+) methods")
 
 
-def main():
-    failures = []
-    for p in (SOURCE, DOC):
-        if not p.is_file():
-            failures.append(f"{p.relative_to(ROOT)}: missing — the gate's subject does not exist")
-    if failures:
-        report(failures)
+def derive_aliases(src):
+    """Identifier -> the call operators it can legally be reached through.
 
-    src = SOURCE.read_text(encoding="utf-8")
-    aliases = sorted(set(ALIAS_DECL_RE.findall(src)))
-    if not aliases:
-        report([f"{SOURCE.name}: found no `BlockchainDB *` identifiers — the alias derivation is "
-                "broken, and an empty vocabulary is covered by any partition"])
+    A name declared both ways (pointer in one scope, reference in another)
+    carries both operators rather than whichever declaration was seen last.
+    """
+    aliases = {}
+    for sigil, name in ALIAS_DECL_RE.findall(src):
+        aliases.setdefault(name, set()).add("->" if sigil == "*" else ".")
+    return aliases
+
+
+def collect_vocabulary(src, aliases):
+    """Every store method reached through any derived alias.
+
+    The lookbehind excludes identifier characters ONLY. It deliberately does not
+    exclude `>`, so `this->m_db->height()` is collected: treating `>` as a
+    boundary dropped arrow-qualified receivers that the original `m_db->` token
+    match had caught — a regression, and in the silent direction. Admitting
+    `obj->db->x` for an unrelated member named `db` costs a phantom, which
+    fails loudly; dropping `this->m_db->x` costs a method, which does not.
+    """
     vocabulary = set()
-    for alias in aliases:
-        vocabulary |= set(
-            re.findall(rf"(?<![\w>]){re.escape(alias)}->([a-zA-Z_][a-zA-Z0-9_]*)", src))
-    if not vocabulary:
-        report([f"{SOURCE.name}: parsed ZERO store calls across aliases {aliases} — "
-                "the derivation is broken"])
-    for shape_re, what in UNHANDLED_SHAPES:
+    for name, operators in aliases.items():
+        for op in operators:
+            vocabulary |= set(re.findall(
+                rf"(?<!\w){re.escape(name)}\s*{re.escape(op)}\s*([a-zA-Z_][a-zA-Z0-9_]*)", src))
+    return vocabulary
+
+
+def unhandled_shapes(src, aliases):
+    """Receiver shapes this derivation cannot follow, as (line, what, snippet).
+
+    Refused rather than silently missed. The patterns are built FROM the derived
+    alias set, never from a hardcoded pair: a gate whose derivation is dynamic
+    and whose refusals are hand-written reintroduces the original defect for
+    every alias nobody remembered to add here.
+
+    `get_db` is refused on sight anywhere in the file rather than only when a
+    call follows it, because binding its result to a reference and calling
+    through that is exactly the invisible path. Known and accepted: this also
+    fires on a comment that merely mentions `get_db()`. That is a false positive
+    in the loud direction, and stripping comments first has a worse edge (a `//`
+    inside a string literal), so the noisier rule is the deliberate choice.
+    """
+    alternation = "|".join(re.escape(n) for n in sorted(aliases)) if aliases else r"(?!x)x"
+    shapes = (
+        (re.compile(r"\bget_db\b"),
+         "reaches the store through `get_db()`, whose result this derivation "
+         "cannot follow"),
+        (re.compile(rf"\bauto\s*[*&]?\s*[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*[*&]?\s*"
+                    rf"(?:{alternation})\s*[;,)]"),
+         "binds the store to an `auto` name, whose declaration carries no "
+         "`BlockchainDB` token for the alias derivation to find"),
+        (re.compile(rf"\(\s*\*\s*(?:{alternation})\s*\)\s*\."),
+         "calls through a dereferenced pointer `(*db).method()` rather than `->`"),
+    )
+    found = []
+    for shape_re, what in shapes:
         hit = shape_re.search(src)
         if hit:
-            line = src.count("\n", 0, hit.start()) + 1
-            report([f"{SOURCE.name}:{line}: {what}, which this gate's alias derivation does not "
-                    f"cover ({hit.group(0).strip()!r}). Extend the derivation to follow that "
-                    "shape rather than letting the vocabulary silently undercount."])
+            found.append((src.count("\n", 0, hit.start()) + 1, what, hit.group(0).strip()))
+    return found
 
-    text = DOC.read_text(encoding="utf-8")
+
+def slice_section(text):
+    """The §3.5 block, or None when the gate's subject is absent."""
     m = SECTION_RE.search(text)
     if not m:
-        report([f"{DOC.name}: §3.5 heading not found — subject missing"])
+        return None
     section = text[m.start():]
     nxt = re.search(r"^### 3\.6 ", section, re.M)
-    section = section[: nxt.start()] if nxt else section
+    return section[: nxt.start()] if nxt else section
 
+
+def check_partition(section, vocabulary):
+    """Bijection between §3.5's rows and the derived vocabulary.
+
+    Returns (failures, assigned, rows, counts_ok).
+    """
+    failures = []
     rows = ROW_RE.findall(section)
     if not rows:
-        report([f"{DOC.name}: §3.5 has no surface rows — subject missing"])
+        return ([f"§3.5 has no surface rows — subject missing"], {}, [], False)
 
-    seen = {}
+    assigned = {}
     counts_ok = True
     for surface, _role, declared, methods in rows:
         names = METHOD_RE.findall(methods)
@@ -109,15 +150,15 @@ def main():
                 f"{surface}: the row declares {declared} methods and lists {len(names)}")
             counts_ok = False
         for name in names:
-            if name in seen:
+            if name in assigned:
                 failures.append(
-                    f"`{name}` is assigned to BOTH {seen[name]} and {surface} — a method in two "
-                    f"surfaces makes the extraction order ambiguous for it")
+                    f"`{name}` is assigned to BOTH {assigned[name]} and {surface} — a method in "
+                    f"two surfaces makes the extraction order ambiguous for it")
             else:
-                seen[name] = surface
+                assigned[name] = surface
 
-    uncovered = sorted(vocabulary - set(seen))
-    phantom = sorted(set(seen) - vocabulary)
+    uncovered = sorted(vocabulary - set(assigned))
+    phantom = sorted(set(assigned) - vocabulary)
     if uncovered:
         failures.append(
             f"{len(uncovered)} method(s) reached from blockchain.cpp are in NO surface:\n    "
@@ -132,9 +173,9 @@ def main():
               "surface row pointing at nothing scopes nothing.")
 
     # The heading's count is checked against the derivation, not believed.
-    head = re.search(r"### 3\.5 DRS-C surface map \((\d+) methods", section)
+    head = HEAD_RE.search(section)
     if not head:
-        failures.append(f"{DOC.name}: §3.5 heading does not state a method count")
+        failures.append("§3.5 heading does not state a method count")
     elif int(head.group(1)) != len(vocabulary):
         failures.append(
             f"§3.5's heading says {head.group(1)} methods; the tree has {len(vocabulary)}. "
@@ -142,10 +183,40 @@ def main():
             f"the total (alias-derived, it moved +7/-3 for a net +4 between 3247fe3b6 and "
             f"f103acd38), and re-derive it with THIS derivation: a delta measured between two "
             f"different instruments misfiles unchanged methods as births and deaths.")
+    return (failures, assigned, rows, counts_ok)
 
-    report(failures)
+
+def main():
+    missing = [f"{p.relative_to(ROOT)}: missing — the gate's subject does not exist"
+               for p in (SOURCE, DOC) if not p.is_file()]
+    if missing:
+        report(missing)
+
+    src = SOURCE.read_text(encoding="utf-8")
+    aliases = derive_aliases(src)
+    if not aliases:
+        report([f"{SOURCE.name}: found no `BlockchainDB *`/`&` identifiers — the alias derivation "
+                "is broken, and an empty vocabulary is covered by any partition"])
+
+    for line, what, snippet in unhandled_shapes(src, aliases):
+        report([f"{SOURCE.name}:{line}: {what} ({snippet!r}). Extend the derivation to follow "
+                "that shape rather than letting the vocabulary silently undercount."])
+
+    vocabulary = collect_vocabulary(src, aliases)
+    if not vocabulary:
+        report([f"{SOURCE.name}: parsed ZERO store calls across aliases "
+                f"{sorted(aliases)} — the derivation is broken"])
+
+    section = slice_section(DOC.read_text(encoding="utf-8"))
+    if section is None:
+        report([f"{DOC.name}: §3.5 heading not found — subject missing"])
+
+    failures, assigned, rows, counts_ok = check_partition(section, vocabulary)
+    report([f"{DOC.name}: {f}" if f.startswith("§3.5 h") else f for f in failures])
+
+    shown = {name: "".join(sorted(ops)) for name, ops in sorted(aliases.items())}
     print(f"DRS-C surface map: {len(vocabulary)} store methods derived from {SOURCE.name} "
-          f"across aliases {aliases} <-> {len(seen)} assigned across {len(rows)} surfaces; "
+          f"across aliases {shown} <-> {len(assigned)} assigned across {len(rows)} surfaces; "
           f"every method in exactly one, counts{'' if counts_ok else ' NOT'} consistent")
 
 

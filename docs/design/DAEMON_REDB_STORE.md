@@ -533,21 +533,39 @@ derivation cannot tell those apart.
 the table.** Both used the same `m_db->` regex, so the bijection was green by
 construction over every call made through any other name. The gate now derives
 the alias SET from `BlockchainDB *`/`&` declarations and collects calls on each,
-so a third alias is covered without anyone remembering to add it.
-
-It reads `alias->method`, so a call written any other way is still invisible to
-it — and rather than leave that as the next reader's silent undercount, the
-three remaining receiver shapes are **refused by name**: `get_db()` access, an
-`auto` binding of the store (`auto *alias = m_db;` — its declaration carries no
-`BlockchainDB` token to derive from), and a dereferenced call
-(`(*db).method()`). None is present today; each is refused so that the day one
-appears the gate says so, with the file and line, instead of quietly shrinking
-the vocabulary. The declaration pattern also tolerates a cv-qualifier, so
+so a third alias is covered without anyone remembering to add it. The call
+**operator** comes from the declaration's sigil — `BlockchainDB *` is reached
+through `->`, `BlockchainDB &` through `.` — because deriving a reference alias
+and then collecting only `->` is worse than not deriving it at all: it looks
+covered and contributes nothing. The pattern tolerates a cv-qualifier, so
 `BlockchainDB* const m_db` derives `m_db` and not `const`.
 
-Verified complete for this file: exactly two such identifiers exist, `db` and
-`m_db`; no `get_db()` access, no `auto` binding of the store, no dereferenced
-calls, and no `BlockchainDB &` references.
+**Every receiver shape is either collected or refused; none is skipped.** A
+method that vanishes from the vocabulary is covered by any partition, so
+undercounting is the failure mode and it must be loud. Three shapes the
+derivation cannot follow are refused with file and line: `get_db` **on sight**
+anywhere in the file (not merely where a call follows it — binding its result
+to a reference and calling through that is exactly the invisible path), an
+`auto` binding of the store, and a dereferenced call `(*db).method()`. The
+refusals are built from the **derived** alias set rather than a written-down
+pair; a gate whose collection is dynamic and whose refusals are hand-listed
+reintroduces the original defect for every alias nobody remembered to add.
+
+Where the derivation must guess, it guesses toward **over**-collecting: the
+lookbehind excludes identifier characters only, so `this->m_db->height()` is
+collected. Treating `>` as a boundary — the first version of this fix did —
+dropped arrow-qualified receivers that even the original token match had
+caught. Admitting `obj->db->x` for an unrelated member named `db` costs a
+phantom, which fails loudly; dropping `this->m_db->x` costs a method, which
+does not.
+
+Verified complete for this file: exactly two identifiers exist, `db` and `m_db`,
+both pointers; no `get_db` occurrence, no `auto` binding of the store, no
+dereferenced calls, no `BlockchainDB &` declarations, and no arrow-qualified
+receivers. Each of those is a **case** in
+`scripts/ci/test_check_drs_c_surface_map.py`, not a one-time observation —
+including the near-misses that must be neither collected nor refused, such as
+`auto h = m_db->height()`, which binds a call result and not the store.
 
 **The count moved, and the membership moved further — but the delta must be
 measured with ONE instrument.** §3.5 was stamped at `3247fe3b6` (2026-07-27)
