@@ -107,6 +107,35 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
     }
 }
 
+/// Accept a mining recipient only if the daemon's `generateblocks` path would.
+///
+/// `ShekylAddress::decode` alone is too weak to stand behind that claim: its own
+/// contract accepts `<classical>` display-only addresses as well as full ones,
+/// and it *infers* the network from the HRP rather than requiring one. The
+/// daemon is stricter on both counts — `construct_miner_tx`
+/// (`src/cryptonote_core/cryptonote_tx_utils.cpp:183`) refuses a miner address
+/// whose PQC public key is empty ("v3 requires per-output KEM encapsulation")
+/// and then checks its exact length, and the FAKECHAIN daemon parses the
+/// Mainnet HRP because fakechain mirrors Mainnet address encoding.
+///
+/// So a fixture could satisfy a bare `decode` and still make `capture_coinbase.py`
+/// fail — the assertion would have been weaker than the guarantee it advertised,
+/// which is the same defect as the stale fixture itself one level up.
+fn accept_mining_recipient(encoded: &str) -> Result<(), String> {
+    use shekyl_address::{Network, ShekylAddress};
+
+    let addr = ShekylAddress::decode_for_network(encoded, Network::Mainnet)
+        .map_err(|e| format!("does not decode as a Mainnet address: {e:?}"))?;
+    if !addr.has_pqc_segment() {
+        return Err(
+            "decodes, but carries no PQC segment — `construct_miner_tx` \
+                    refuses a miner address without one"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// The mining-address fixture must be in the encoding this file's header calls
 /// "current-format" — asserted by DECODING it, not by saying so in a comment.
 ///
@@ -123,13 +152,14 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
 /// this suite passing for precisely the same reason it passed while broken, so
 /// the decode is the point and the fixture refresh is the consequence.
 ///
-/// `ShekylAddress::decode` is the same decoder the daemon uses to parse the
-/// mining recipient, so a pass here means `generateblocks` accepts the address
-/// rather than merely that the string is well-formed.
+/// Acceptance is `accept_mining_recipient`, not a bare `ShekylAddress::decode`.
+/// The first version of this test used the bare decode and claimed, here, that a
+/// pass meant `generateblocks` would accept the address. It did not: `decode`
+/// accepts display-only addresses and infers the network instead of requiring
+/// one, so the assertion was weaker than the sentence describing it — the same
+/// gap as the fixture, in the paragraph written to close it.
 #[test]
 fn regtest_mining_fixture_is_in_the_current_address_encoding() {
-    use shekyl_address::ShekylAddress;
-
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("vectors/regtest_mining_recipients.json"))
             .expect("regtest_mining_recipients.json parses");
@@ -147,13 +177,68 @@ fn regtest_mining_fixture_is_in_the_current_address_encoding() {
         let encoded = recipient["address"]
             .as_str()
             .unwrap_or_else(|| panic!("recipient {i} has no `address` string"));
-        if let Err(err) = ShekylAddress::decode(encoded) {
+        if let Err(err) = accept_mining_recipient(encoded) {
             panic!(
-                "recipient {i} does not decode with the current address format: {err:?}\n\
+                "recipient {i} would be refused by the mining path: {err}\n\
                  The fixture is stale. Regenerate it from the documented emitter:\n\
                  cargo test -p shekyl-wire --test emit_regtest_addr -- --ignored --nocapture\n\
                  See tests/vectors/README.md."
             );
         }
     }
+}
+
+/// Both limbs of `accept_mining_recipient` must be able to refuse something.
+///
+/// A tightened predicate that no input can fail is the defect it was tightened
+/// to fix. Each rejection is built from the committed fixture or the emitter's
+/// own account, so these are real addresses that a bare `decode` accepts and
+/// the daemon would not.
+#[test]
+fn the_mining_recipient_predicate_refuses_what_the_daemon_refuses() {
+    use shekyl_address::{Network, ShekylAddress};
+    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("vectors/regtest_mining_recipients.json"))
+            .expect("fixture parses");
+    let full = fixture["recipients"][0]["address"]
+        .as_str()
+        .expect("fixture address");
+
+    // Control: the committed fixture is accepted, so the refusals below are
+    // discriminating between inputs rather than refusing everything.
+    accept_mining_recipient(full).expect("committed fixture must be accepted");
+
+    // Display-only: the library's own short form for the SAME account. Note it
+    // is not the full address's first segment — the display segment is a
+    // distinct, shorter encoding (`encode_classical_display`), which is why
+    // splitting on '/' does not produce one. A bare `decode` accepts this by
+    // contract; `construct_miner_tx` refuses it for want of a PQC key.
+    let classical_only = ShekylAddress::decode(full)
+        .expect("fixture decodes")
+        .encode_classical_display()
+        .expect("encode display form");
+    assert!(
+        ShekylAddress::decode(&classical_only).is_ok(),
+        "precondition: a bare decode accepts the display-only form, which is \
+         exactly why the bare decode was too weak"
+    );
+    let err = accept_mining_recipient(&classical_only).expect_err("must be refused");
+    assert!(err.contains("PQC segment"), "wrong refusal reason: {err}");
+
+    // Wrong network: the same account encoded for Testnet. The HRP differs, so
+    // the FAKECHAIN daemon (which parses Mainnet HRPs) would not accept it.
+    let (_seed, blob) = generate_account_from_raw_seed(&[0x11u8; 32], DerivationNetwork::Fakechain)
+        .expect("derive account");
+    let testnet = blob
+        .to_address(Network::Testnet)
+        .encode()
+        .expect("encode testnet address");
+    assert!(
+        ShekylAddress::decode(&testnet).is_ok(),
+        "precondition: a bare decode accepts any network's address"
+    );
+    let err = accept_mining_recipient(&testnet).expect_err("must be refused");
+    assert!(err.contains("Mainnet"), "wrong refusal reason: {err}");
 }
