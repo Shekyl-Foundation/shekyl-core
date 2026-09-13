@@ -4701,6 +4701,21 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     ? nullptr
     : bond.holdings.shard_ids.data();
 
+  // EU-D3 belt for non-parse callers, kind-agnostic (every codec refuses the
+  // shape at parse; the per-arm §9.11 belts below are its twin for the key):
+  // the serving endpoint exists iff JoinMarket. Placed before the arms so no
+  // arm can be reached with an endpoint it must not see — the JoinMarket
+  // marshal below then hands the Rust verify a field that is present by
+  // construction (32 bytes on this kind; the marshaler re-refuses the
+  // coupling on its side).
+  if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket)
+    && bond.has_endpoint())
+  {
+    MERROR_VER("Archival bond-post rejected: vin carries an endpoint on a kind that "
+      "cannot (JoinMarket-coupled field)");
+    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+  }
+
   if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Release))
   {
     // §9.11 coupling belt for non-parse callers (every codec refuses this at
@@ -5018,6 +5033,10 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     bond.holdings.shard_ids.size(),
     bond.bond_spend_pk.data(),
     bond.bond_spend_pk.size(),
+    // EU-D3: the serving endpoint JoinMarket commits (the marshaler refuses
+    // the coupling — 32 bytes on this kind, none elsewhere).
+    reinterpret_cast<const uint8_t*>(bond.endpoint.data),
+    sizeof(bond.endpoint.data),
     bond.bonded_total_atomic,
     bond.bond_credit,
     bond.bond_debit,

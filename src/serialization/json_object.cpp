@@ -635,20 +635,26 @@ void toJsonValue(rapidjson::Writer<epee::byte_stream>& dest, const cryptonote::t
   INSERT_INTO_JSON_OBJECT(dest, hybrid_public_key, txin.hybrid_public_key);
   INSERT_INTO_JSON_OBJECT(dest, p_canonical_id, txin.p_canonical_id);
   INSERT_INTO_JSON_OBJECT(dest, post_kind, txin.post_kind);
-  // §9.11 coupling: the GF-1 debit authorizer is emitted iff JoinMarket,
-  // mirroring the binary serializer — including its write-side refusals: a
-  // non-canonical key (or a stray key on another kind) must fail HERE at the
-  // producer, not surface later as a parse failure of daemon-emitted JSON
-  // (fromJsonValue below rejects both shapes).
+  // §9.11 / EU-D3 coupling: the GF-1 debit authorizer and the serving
+  // endpoint are emitted iff JoinMarket, mirroring the binary serializer —
+  // including its write-side refusals: a non-canonical key, or a stray key
+  // or endpoint on another kind, must fail HERE at the producer, not surface
+  // later as a parse failure of daemon-emitted JSON (fromJsonValue below
+  // rejects the same shapes).
   if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))
   {
     if (txin.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
       throw WRONG_TYPE("archival bond-post bond_spend_pk length not canonical");
     INSERT_INTO_JSON_OBJECT(dest, bond_spend_pk, txin.bond_spend_pk);
+    INSERT_INTO_JSON_OBJECT(dest, endpoint, txin.endpoint);
   }
   else if (!txin.bond_spend_pk.empty())
   {
     throw WRONG_TYPE("bond_spend_pk is JoinMarket-coupled");
+  }
+  else if (txin.has_endpoint())
+  {
+    throw WRONG_TYPE("endpoint is JoinMarket-coupled");
   }
   INSERT_INTO_JSON_OBJECT(dest, holdings, txin.holdings);
   INSERT_INTO_JSON_OBJECT(dest, bonded_total_atomic, txin.bonded_total_atomic);
@@ -673,17 +679,24 @@ void fromJsonValue(const rapidjson::Value& val, cryptonote::txin_archival_bond_p
   GET_FROM_JSON_OBJECT(val, txin.post_kind, post_kind);
   if (txin.post_kind > static_cast<uint8_t>(cryptonote::archival_bond_post_kind::HoldingsUpdate))
     throw WRONG_TYPE("invalid archival_bond_post_kind");
-  // §9.11 coupling: JoinMarket requires the exact-canonical-length GF-1 debit
-  // authorizer; every other kind must not carry one (the field stays empty).
+  // §9.11 / EU-D3 coupling: JoinMarket requires the exact-canonical-length
+  // GF-1 debit authorizer and the 32-byte serving endpoint (a missing member
+  // throws); every other kind must carry neither — an unexpected member is
+  // refused, not ignored (the fields stay at their defaults).
   if (txin.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))
   {
     GET_FROM_JSON_OBJECT(val, txin.bond_spend_pk, bond_spend_pk);
     if (txin.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
       throw WRONG_TYPE("archival bond-post bond_spend_pk length not canonical");
+    GET_FROM_JSON_OBJECT(val, txin.endpoint, endpoint);
   }
   else if (val.HasMember("bond_spend_pk"))
   {
     throw WRONG_TYPE("bond_spend_pk is JoinMarket-coupled");
+  }
+  else if (val.HasMember("endpoint"))
+  {
+    throw WRONG_TYPE("endpoint is JoinMarket-coupled");
   }
   GET_FROM_JSON_OBJECT(val, txin.holdings, holdings);
   GET_FROM_JSON_OBJECT(val, txin.bonded_total_atomic, bonded_total_atomic);

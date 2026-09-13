@@ -45,6 +45,8 @@
 #include "serialization/crypto.h"
 #include "serialization/keyvalue_serialization.h" // eepe named serialization
 #include "cryptonote_config.h"
+#include <cstring>
+
 #include "crypto/crypto.h"
 #include "crypto/hash.h"
 #include "misc_language.h"
@@ -191,7 +193,7 @@ namespace cryptonote
   {
     std::vector<uint8_t> hybrid_public_key;
     crypto::hash p_canonical_id;
-    uint8_t post_kind;
+    uint8_t post_kind = 0;
     // GF-1 debit authorizer (gate-4 §4.1 / gate-6 §9.6), JoinMarket-coupled on
     // the wire (§9.11, matching the Rust bond wire and shekyl-wire): present
     // with the exact canonical single-key length iff post_kind == JoinMarket,
@@ -199,10 +201,29 @@ namespace cryptonote
     // into the bond record at JoinMarket connect; every later bond_debit
     // verifies against the committed copy, never the identity key.
     std::vector<uint8_t> bond_spend_pk;
+    // EU-D3 serving endpoint: the raw 32-byte hidden-service public key
+    // (`OnionIdentity::public_key`) of the persona's v3 onion service,
+    // JoinMarket-coupled on the wire exactly like bond_spend_pk: present iff
+    // post_kind == JoinMarket, absent from the wire on every other kind (no
+    // length prefix — a fixed 32-byte BLOB, matching the Rust bond wire and
+    // shekyl-wire). Committed once into the bond record at JoinMarket connect
+    // and never rotated: a new onion address is a new persona. In memory
+    // "absent" is the zero key (`crypto::null_pkey`); that representation is
+    // a WRITE-side belt for the non-JoinMarket kinds only — on JoinMarket any
+    // 32 bytes parse, zero included, because refusing a value Rust's parser
+    // accepts would be a parse divergence; the zero key is refused one layer
+    // up, by the Rust JoinMarket verify (code 52), which both the block path
+    // and the submit path run.
+    crypto::public_key endpoint{};
     archival_holdings_descriptor holdings;
-    uint64_t bonded_total_atomic;
-    uint64_t bond_credit;
-    uint64_t bond_debit;
+    uint64_t bonded_total_atomic = 0;
+    uint64_t bond_credit = 0;
+    uint64_t bond_debit = 0;
+
+    [[nodiscard]] bool has_endpoint() const noexcept
+    {
+      return std::memcmp(endpoint.data, crypto::null_pkey.data, sizeof(endpoint.data)) != 0;
+    }
 
     BEGIN_SERIALIZE_OBJECT()
       FIELD(hybrid_public_key)
@@ -217,16 +238,22 @@ namespace cryptonote
         return false;
       if (post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
       {
+        // §9.11 + EU-D3: JoinMarket carries the debit authorizer (exact
+        // canonical single-key length) and then the serving endpoint (raw
+        // 32 bytes), in that order — the one branch that writes or reads
+        // either field.
         FIELD(bond_spend_pk)
         if (bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
           return false;
+        FIELD(endpoint)
       }
-      else if (!bond_spend_pk.empty())
+      else if (!bond_spend_pk.empty() || has_endpoint())
       {
-        // §9.11 coupling: only JoinMarket carries the debit authorizer. On
-        // read this branch is unreachable (the field is default-empty); on
-        // write it makes a misconstruction loud instead of silently dropping
-        // the key from the emitted bytes.
+        // §9.11 / EU-D3 coupling: only JoinMarket carries the debit
+        // authorizer and the endpoint. On read this branch is unreachable
+        // (both fields are default-empty); on write it makes a
+        // misconstruction loud instead of silently dropping the field from
+        // the emitted bytes.
         return false;
       }
       FIELD(holdings)
