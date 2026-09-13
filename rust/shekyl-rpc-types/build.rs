@@ -46,7 +46,22 @@ use std::path::PathBuf;
 /// it replaces the hand-written `x50` that previously bypassed this authority
 /// altogether — the key was ADDED here precisely so that it stops being a
 /// constant this digest could not see.
-const PINNED_DIGEST: &str = "1959257f4e5101a332e92a3d7f9cb8e7941860a9606edd2a9f9d11fee04189f8";
+///
+/// **Re-pinned 2026-09-13 — key ADDED: `archival_attestation_anchor_lag_blocks`
+/// = 4 (PROVISIONAL) in `config/consensus_constants.json`.** The pin's
+/// question: *does a different value of this key make a different chain?*
+/// **Yes.** It is `L` in the SF-D8 pass-countersignature admission window
+/// `[h − depth − L, h − depth]` (`ARCHIVAL_SHARD_FETCH.md` SF-D8): a node
+/// holding `L = 4` admits a block carrying a pass anchored `h − depth − 4`
+/// that a node holding `L = 3` rejects as `ANCHOR_OUT_OF_WINDOW`, and the
+/// genesis threshold `depth + L` below which any pass record is refused moves
+/// with it. A split, so the key belongs here; it is read by
+/// `rust/shekyl-archival-retention/build.rs` (the single Rust authority — C++
+/// sizes the window through `shekyl_archival_pass_anchor_window`, holding no
+/// copy). The same change also re-commented `archival_reorg_depth_blocks`
+/// (value unchanged at 720): `_comment_*` keys are outside the canonical
+/// form, so that edit alone would not have moved this digest.
+const PINNED_DIGEST: &str = "47bb9de937866bc9686dcc15efe3aee7bf8a33b419a2f61ee68c6d23d2dabf4d";
 
 fn main() {
     let manifest_dir =

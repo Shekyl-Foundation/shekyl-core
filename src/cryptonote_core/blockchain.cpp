@@ -2119,16 +2119,6 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     return false;
   }
 
-  // the credit-wire attestation verify (ARCHIVAL_CREDIT_WIRE.md §3-§4). Cheap pre-cutover (empty
-  // witness -> empty-set root recompute); post-cutover it does up to one hybrid-signature verify per
-  // pass record, so the signature leg must sit behind PoW before population turns on (Phase-5
-  // ordering constraint, see FOLLOWUPS). verify_block_attestation logs the specific verdict code.
-  if (!verify_block_attestation(b, connect.attestation_witness))
-  {
-    reject_block_form(bvc);
-    return false;
-  }
-
   //block is not related with head of main chain
   //first of all - look in alternative chains container
   alt_block_data_t prev_data;
@@ -2240,6 +2230,21 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     {
       MERROR_VER("Block with id: " << id << std::endl << " for alternative chain, does not have enough proof of work: " << proof_of_work << std::endl << " expected difficulty: " << current_diff);
       reject_block_bad_pow(bvc);
+      return false;
+    }
+
+    // the credit-wire attestation verify (ARCHIVAL_CREDIT_WIRE.md §3-§4). Sits behind PoW: post-
+    // cutover it does up to one hybrid-signature verify per pass record. It runs HERE, not at the
+    // top of the function, because SF-D8 keys every countersignature's anchor window off the
+    // VALIDATED predecessor height -- `prev_height` above, read from the alt parent (alt store) or
+    // the main chain by `b.prev_id`, never from the coinbase's producer-claimed height
+    // (`block_height`, which prevalidate_miner_transaction checks against bei.height only
+    // afterwards). `alt_chain` is handed through so the anchor hashes above the fork point are
+    // THIS chain's, not the main chain's (a deep reorg would otherwise split consensus on every
+    // pass record anchored past the fork). verify_block_attestation logs the specific verdict code.
+    if (!verify_block_attestation(b, prev_height, &alt_chain, connect.attestation_witness))
+    {
+      reject_block_form(bvc);
       return false;
     }
 
@@ -5228,19 +5233,76 @@ bool Blockchain::check_block_timestamp(const block& b, uint64_t& median_ts) cons
   return check_block_timestamp(timestamps, b, median_ts);
 }
 //------------------------------------------------------------------
-bool Blockchain::verify_block_attestation(const block& b, const blobdata& witness)
+bool Blockchain::fill_pass_anchor_window(uint64_t predecessor_height,
+  const std::list<block_extended_info>* alt_chain, std::vector<crypto::hash>& out) const
+{
+  out.clear();
+  uint64_t first = 0;
+  size_t len = 0;
+  const uint8_t shape = shekyl_archival_pass_anchor_window(predecessor_height, &first, &len);
+  if (shape == SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD)
+    return true; // no window below the threshold; the empty table is the required shape
+  if (shape != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
+  {
+    MERROR("shekyl_archival_pass_anchor_window(" << predecessor_height << ") returned " << (unsigned)shape);
+    return false;
+  }
+
+  // Heights at or above the alt chain's fork point come from the alt chain (front = fork point,
+  // ascending to back = parent); everything below is main chain. The window's top is
+  // h - depth <= h, so every height is on the connecting chain by construction; a miss is an
+  // internal inconsistency, not a producer-controlled input.
+  const uint64_t alt_from = (alt_chain && !alt_chain->empty()) ? alt_chain->front().height : UINT64_MAX;
+  out.reserve(len);
+  for (size_t i = 0; i < len; ++i)
+  {
+    const uint64_t height = first + i;
+    if (height >= alt_from)
+    {
+      bool found = false;
+      for (const block_extended_info& bei : *alt_chain)
+      {
+        if (bei.height == height)
+        {
+          out.push_back(get_block_hash(bei.bl));
+          found = true;
+          break;
+        }
+      }
+      if (!found)
+      {
+        MERROR("pass anchor height " << height << " not on the alt chain being connected to");
+        return false;
+      }
+    }
+    else
+    {
+      if (height >= m_db->height())
+      {
+        MERROR("pass anchor height " << height << " above the main chain height " << m_db->height());
+        return false;
+      }
+      out.push_back(m_db->get_block_hash_from_height(height));
+    }
+  }
+  return true;
+}
+//------------------------------------------------------------------
+bool Blockchain::verify_block_attestation(const block& b, uint64_t predecessor_height,
+  const std::list<block_extended_info>* alt_chain, const blobdata& witness)
 {
   // ARCHIVAL_CREDIT_WIRE.md §3-§4: recompute-and-compare the block's attestation_root and verify
   // every pass record's P-countersignature. ALL logic is in Rust (shekyl_archival_verify_attestation);
   // this only marshals -- reads the header blob from the coinbase tx_extra, names the pass p_ids
-  // (step 1), reads each bond's hybrid pubkey from LMDB by those keys, reads the coinbase output key,
-  // hands the raw bytes across, and obeys the verdict. It parses nothing structural and decides
-  // nothing (rule 20). Pre-cutover no block carries pass records, so on every VALID block (empty
-  // witness, well-formed coinbase) this matches the interim's attestation_root ==
-  // empty_attestation_root(); it is strictly stricter only on three pinned shapes (unsolicited
-  // witness bytes, an unreadable coinbase vout[0] that prevalidate_miner_transaction rejects anyway,
-  // and a coinbase tx_extra that fails to parse), so no valid block's verdict changes except the
-  // deliberate unparseable-extra tightening pinned in unreadable_headers_is_headers_unreadable.
+  // (step 1), reads each bond's hybrid pubkey from LMDB by those keys, fills the pass-anchor hash
+  // window from the connecting chain (step 0), hands the raw bytes and the caller's validated
+  // predecessor height across, and obeys the verdict. It parses nothing structural and decides
+  // nothing (rule 20). Pre-cutover no block carries pass records, so on
+  // every VALID block (empty witness, well-formed coinbase) this matches the interim's
+  // attestation_root == empty_attestation_root(); it is strictly stricter only on two pinned shapes
+  // (unsolicited witness bytes, and a coinbase tx_extra that fails to parse), so no valid block's
+  // verdict changes except the deliberate unparseable-extra tightening pinned in
+  // unreadable_headers_is_headers_unreadable.
   const crypto::hash id = get_block_hash(b);
 
   // 1. Header blob from the coinbase tx_extra. parse_archival_attestation_from_extra returns false
@@ -5289,33 +5351,40 @@ bool Blockchain::verify_block_attestation(const block& b, const blobdata& witnes
     pairs[i].pubkey_len = pubkeys[i].size();
   }
 
-  // 4. Assemble the ctx. cb_out_key is the coinbase vout[0] output key the nonce binds (consensus
-  //    rule); a block with no coinbase output or a non-key output is unreadable -- flag it so Rust
-  //    returns ERR_CBKEY_UNREADABLE rather than verifying against garbage.
+  // 4. Step 0: the pass-anchor hash window. SF-D8: the v2 countersignature is over
+  //    `nonce || anchor_height || block_hash(anchor_height) || shard_id`; the record carries the
+  //    nonce and anchor height, and the verifier reads the hash at that height from THIS table --
+  //    the connecting chain's hashes for `[h - depth - L, h - depth]`, h the VALIDATED predecessor
+  //    the caller derived (main chain: the checked top; alt chain: the alt parent). It is never
+  //    `get_block_height(b)` -- the coinbase's producer-claimed height -- because an unvalidated
+  //    header field is producer-chosen, the property the v1 nonce's `r` was deleted for. There is
+  //    no unpopulated sentinel: 0 is block 1's real predecessor height, and a wrong value fails
+  //    closed (the implied window holds the wrong hashes, or below the threshold does not exist).
+  //    The table's shape is checked by Rust on every block (ERR_MALFORMED_ANCHOR_TABLE), so a
+  //    sizing mistake here is loud on the first block, not the first pass record.
+  std::vector<crypto::hash> anchor_hashes;
+  if (!fill_pass_anchor_window(predecessor_height, alt_chain, anchor_hashes))
+  {
+    MERROR_VER("Block with id: " << id << " could not fill the pass anchor window for predecessor "
+      << predecessor_height);
+    return false;
+  }
+  static_assert(sizeof(crypto::hash) == 32, "anchor table entries are 32-byte block hashes");
+
+  // 5. Assemble the ctx.
   shekyl_archival_attestation_verify_ctx ctx{};
   std::memcpy(ctx.attestation_root, b.attestation_root.data, 32);
-  crypto::public_key cb_out_key;
-  if (!b.miner_tx.vout.empty() && get_output_public_key(b.miner_tx.vout[0], cb_out_key))
-  {
-    std::memcpy(ctx.cb_out_key, cb_out_key.data, 32);
-    ctx.cb_out_key_readable = 1;
-  }
-  // prev_block_hash: the nonce's anchor term, replacing the producer's revealed randomness `r`
-  // (RF-D3). It must be the VALIDATED predecessor -- on the main-chain path `bl.prev_id` is checked
-  // against `top_hash` before this runs; on the alt-chain path it is the fork point the alt chain is
-  // built on. An unvalidated header field would be producer-chosen, which is exactly the property
-  // `r` was deleted for having. Rust refuses all-zeros (ERR_PREVHASH_UNPOPULATED) rather than
-  // verifying every countersignature against H(0..0), so a forgotten field is loud, not silent --
-  // deliberately with no `_readable` flag, since a verifier holding a block has parsed its header
-  // and that arm could never legitimately fire.
-  std::memcpy(ctx.prev_block_hash, b.prev_id.data, 32);
+  ctx.predecessor_height = predecessor_height;
+  ctx.anchor_hashes_ptr = anchor_hashes.empty() ? nullptr
+    : reinterpret_cast<const uint8_t (*)[32]>(anchor_hashes.data());
+  ctx.anchor_hashes_len = anchor_hashes.size();
   ctx.headers_readable = headers_readable ? 1 : 0;
   ctx.headers_ptr = headers.empty() ? nullptr : reinterpret_cast<const uint8_t*>(headers.data());
   ctx.headers_len = headers.size();
   ctx.pairs_ptr = pairs.empty() ? nullptr : pairs.data();
   ctx.pairs_len = pairs.size();
 
-  // 5. Step 2: the atomic verify. Any non-OK is a block-validity failure.
+  // 6. Step 2: the atomic verify. Any non-OK is a block-validity failure.
   const uint8_t verdict = shekyl_archival_verify_attestation(
     witness.empty() ? nullptr : reinterpret_cast<const uint8_t*>(witness.data()), witness.size(), &ctx);
   if (verdict != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
@@ -5402,10 +5471,20 @@ leave:
   // witness -> empty-set root recompute); post-cutover it does up to one hybrid-signature verify per
   // pass record, so the signature leg must sit behind PoW before population turns on (Phase-5
   // ordering constraint, see FOLLOWUPS). verify_block_attestation logs the specific verdict code.
-  if (!verify_block_attestation(bl, connect.attestation_witness))
+  //
+  // SF-D8 keys each countersignature's anchor window off the VALIDATED predecessor height:
+  // `bl.prev_id == top_hash` was just checked, so the predecessor is the current top, at height
+  // `blockchain_height - 1` (`blockchain_height` is already the chain height = this block's
+  // height), and the anchor hashes are the main chain's (no alt chain). Genesis has no
+  // predecessor (top_block_hash reports height UINT64_MAX on an empty chain); it carries zero
+  // records and sits below the anchor threshold -- pass 0 rather than the wrapped value.
   {
-    reject_block_form(bvc);
-    goto leave;
+    const uint64_t predecessor_height = blockchain_height == 0 ? 0 : blockchain_height - 1;
+    if (!verify_block_attestation(bl, predecessor_height, nullptr, connect.attestation_witness))
+    {
+      reject_block_form(bvc);
+      goto leave;
+    }
   }
 
   TIME_MEASURE_FINISH(t1);

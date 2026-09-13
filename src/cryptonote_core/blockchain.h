@@ -1597,10 +1597,8 @@ namespace cryptonote
      * Pre-cutover no block carries pass records, so on every VALID block (empty
      * witness, well-formed coinbase) this matches the interim's
      * `attestation_root == empty_attestation_root()`. It is strictly stricter on
-     * three pinned shapes: unsolicited witness bytes on an empty-root block
-     * (`MALFORMED_WITNESS`) and an unreadable coinbase `vout[0]`
-     * (`CBKEY_UNREADABLE`, which `prevalidate_miner_transaction` rejects anyway)
-     * are already-invalid; a coinbase `tx_extra` that fails to parse
+     * two pinned shapes: unsolicited witness bytes on an empty-root block
+     * (`MALFORMED_WITNESS`) are already-invalid; a coinbase `tx_extra` that fails to parse
      * (`HEADERS_UNREADABLE`) is a deliberate tightening of the inherited
      * arbitrary-tx_extra tolerance — the `attestation_root` commitment over the
      * kept headers is unverifiable when they cannot be read, and the settlement
@@ -1609,12 +1607,44 @@ namespace cryptonote
      * the across-FFI KAT and turns on for producers at the cutover.
      *
      * @param b the block to be checked
+     * @param predecessor_height the VALIDATED height `h` of the block `b`
+     *   connects to: the checked top on the main-chain path, the alt parent's
+     *   height on the alt path — never the coinbase's producer-claimed height.
+     *   SF-D8 (`ARCHIVAL_SHARD_FETCH.md`) keys the pass anchor window
+     *   `[h − depth − L, h − depth]` off it. Genesis passes 0 (no predecessor,
+     *   zero records, below the anchor threshold).
+     * @param alt_chain the alt blocks between the main chain and `b`'s parent
+     *   (front = fork point, back = parent) when `b` is being connected to an
+     *   alt chain, as `build_alt_chain` produces it; `nullptr` on the main-chain
+     *   path. Anchor heights at or above `alt_chain->front().height` are read
+     *   from it, the rest from the main chain, so the anchor table is the
+     *   CONNECTING chain's (SF-D8 alt-chain fill above the fork point).
      * @param witness the block's opaque attestation-witness blob
      *   (`connect.attestation_witness`); empty is the zero-record set
      *
      * @return true iff the Rust verdict is OK, otherwise false
      */
-    bool verify_block_attestation(const block& b, const blobdata& witness);
+    bool verify_block_attestation(const block& b, uint64_t predecessor_height,
+      const std::list<block_extended_info>* alt_chain, const blobdata& witness);
+
+    /**
+     * @brief fill the SF-D8 pass-anchor hash table for a block connecting to
+     * `predecessor_height`
+     *
+     * Step 0 of `verify_block_attestation`. Asks
+     * `shekyl_archival_pass_anchor_window` which heights the window covers
+     * (C++ holds no copy of the depth or L — one authority, no drift pair) and
+     * fills `out` with the connecting chain's block hash at each, ascending:
+     * heights at or above the alt chain's fork point from `alt_chain`, the
+     * rest from the main chain. Below the anchor threshold the window does not
+     * exist and `out` is left empty — the shape Rust requires there.
+     *
+     * @return false only if a window height is not on the connecting chain
+     *   (an internal inconsistency — the caller has already checked `b`'s
+     *   parent is connected), in which case the block is rejected
+     */
+    bool fill_pass_anchor_window(uint64_t predecessor_height,
+      const std::list<block_extended_info>* alt_chain, std::vector<crypto::hash>& out) const;
 
     /**
      * @brief finish an alternate chain's timestamp window from the main chain

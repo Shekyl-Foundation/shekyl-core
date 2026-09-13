@@ -7,8 +7,9 @@
 
 use shekyl_archival_retention::{
     attestation_root, pass_records_from_headers_and_witness, verify_pass_countersignature,
-    AttestationHeader, AttestationKind, BlockAttestationWitness, ATTESTATION_HEADER_LEN,
-    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_ATTESTATION_RECORDS,
+    AttestationHeader, AttestationKind, BlockAttestationWitness, PassAnchorHeights,
+    PassAnchorWindow, PassCountersignatureError, ATTESTATION_HEADER_LEN,
+    HYBRID_PUBKEY_CANONICAL_BYTES, MAX_ATTESTATION_RECORDS, PASS_ANCHOR_HASH_LEN,
 };
 use shekyl_crypto_pq::signature::HybridPublicKey;
 
@@ -36,7 +37,7 @@ pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_HEADERS: u8 = 3;
 /// per-record parse work proportional to the count.
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CAP_EXCEEDED: u8 = 4;
 /// The recomputed `attestation_root` does not equal the mined header field. Signatures are NOT
-/// evaluated at this point — the marshaling-drift diagnostic (look at the header blob / cb_out_key
+/// evaluated at this point — the marshaling-drift diagnostic (look at the header blob / witness
 /// C++ passed), distinct from a genuine signature failure.
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH: u8 = 5;
 /// A pass record's countersignature genuinely failed, or its `p_id` is not the supplied pubkey's
@@ -44,8 +45,11 @@ pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH: u8 = 5;
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID: u8 = 6;
 /// A pass record names a `p_id` with no bond record (C++ passed the empty-pubkey marker).
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT: u8 = 7;
-/// C++ could not read the coinbase `vout[0]` output pubkey the nonce binds.
-pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE: u8 = 8;
+// Code 8 (`ERR_CBKEY_UNREADABLE`) is **RETIRED**, never reused. It reported that
+// C++ could not read the coinbase `vout[0]` key the v1 nonce bound; `SF-D8`
+// (2026-09-13) removed `cb_out_key` from the signed message, so the ctx no
+// longer carries it and nothing can emit the code. Deleted per rule 23
+// (a REJECTED symbol leaves the namespace entry, not the constant).
 /// The `(p_id, pubkey)` pairs do not correspond EXACTLY to the parsed pass-`p_id` set (a pair with
 /// no pass record, a pass `p_id` with no pair, or a duplicate pair `p_id`) — a C++/Rust parse
 /// disagreement between step-1 and step-2.
@@ -58,40 +62,29 @@ pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY: u8 = 10;
 /// headers is unverifiable, and the settlement scan later reads those same coinbase bytes — so
 /// the block is rejected loudly rather than admitted as if it committed zero records.
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE: u8 = 11;
-/// `prev_block_hash` was all-zeros — the unpopulated-field sentinel.
-///
-/// **Distinguishable on purpose.** Folding this into a generic malformed-ctx
-/// verdict would tell the next reader the *record* was bad; this code tells them
-/// the *field* was never filled in, which is the only way that value arises.
-///
-/// **Why there is no `prev_block_hash_readable` flag** (`RF-D5`, ruled
-/// 2026-08-19), stated here because the asymmetry with `cb_out_key_readable`
-/// reads like an oversight otherwise:
-/// - `cb_out_key_readable` models a state that **can genuinely occur** —
-///   extracting the coinbase output key requires parsing the coinbase tx, which
-///   can fail on a malformed one.
-/// - `prev_block_hash` is the connecting block's own header field. A verifier
-///   that has a block has parsed its header, so an "unreadable" arm here could
-///   **never legitimately fire** — and a check that cannot fire is worse than no
-///   check, because it reads as protective. On a frozen surface that is permanent.
-/// - A flag would not buy the property anyway: the hazard is an *unpopulated*
-///   field, and the flag is itself caller-populated, so a caller that forgets the
-///   hash equally forgets the flag. What makes it fail-closed is
-///   zero-initialisation — and zero-rejection gets that without a second field
-///   the caller must get right.
-/// - **All-zeros is a sound sentinel only where a record consumes the anchor**,
-///   which is where the check lives. The reasoning first recorded here — *"a real
-///   block hash under RandomX has leading zeros, never thirty-two"* — was **wrong**:
-///   `prev_id` is the block *object* hash, not the RandomX PoW value, so no
-///   difficulty target constrains it. And the genesis block's `prev_id` **is**
-///   all-zeros, while genesis does reach this path (`top_block_hash()` returns
-///   `null_hash` on an empty chain, so `add_new_block` routes it to
-///   `handle_block_to_main_chain`). Gating on the ctx unconditionally would have
-///   **rejected genesis and prevented chain initialisation**. Scoped to
-///   record-bearing blocks — all of which are at height ≥ 1 with a real
-///   predecessor hash — all-zeros is again unreachable except by a caller that
-///   failed to populate the field.
-pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED: u8 = 12;
+// Code 12 (`ERR_PREVHASH_UNPOPULATED`) is **RETIRED**, never reused. It refused
+// an all-zero `prev_block_hash` — the v1 nonce's anchor term — when a record
+// would consume it. `SF-D8` (2026-09-13) replaced that term with a requester
+// anchor the verifier resolves against a window of chain hashes keyed off the
+// predecessor **height**, for which no sentinel exists: `0` is block 1's real
+// predecessor height. A caller that forgets to populate `predecessor_height`
+// fails closed anyway — the window it implies holds the wrong hashes (or does
+// not exist), so every record is refused; there is no silent-accept path for
+// the field to guard.
+/// The anchor-hash table does not have the shape the predecessor height implies: `L + 1` hashes
+/// at or above the threshold, none below it. A marshaling slip on the C++ side (the caller sized
+/// the table without asking [`shekyl_archival_pass_anchor_window`], or filled it for a different
+/// height) — checked on EVERY block, records or not, so the drift is loud on the first block after
+/// it appears rather than on the first block that carries a pass record.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE: u8 = 13;
+/// A pass record's carried `anchor_height` lies outside the block's admission window
+/// `[h − depth − L, h − depth]` — a stale or pre-fetched read (`SF-D8`). No hash exists to check
+/// against, so no signature is evaluated; distinct from a genuine signature failure.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW: u8 = 14;
+/// The block carries a pass record but its predecessor height is below
+/// `PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT` (`depth + L`): no anchor window exists that early, so no
+/// pass can be admitted — the genesis boundary. First settlement is at 10 000, so nothing is lost.
+pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD: u8 = 15;
 
 /// One `(p_id, hybrid pubkey)` pair C++ resolved for a distinct pass `p_id` that step-1 named.
 /// `pubkey_len == 0` is the bond-absent marker; `== HYBRID_PUBKEY_CANONICAL_BYTES` is a key; any
@@ -105,26 +98,37 @@ pub struct ShekylArchivalPidPubkey {
 }
 
 /// Consensus context for [`shekyl_archival_verify_attestation`], filled by C++ after its LMDB
-/// reads. `cb_out_key` is the coinbase `vout[0]` output pubkey the nonce binds (consensus rule:
-/// the attestation binds `vout[0]`, not an arbitrary output); `cb_out_key_readable == 0` means C++
-/// could not read it (→ `..._ERR_CBKEY_UNREADABLE`, never garbage). `headers` is the RAW
-/// 49-byte-record `tx_extra` blob — Rust splits and parses it (untrusted input, rule 20 #3);
-/// `headers_readable == 0` means C++ could not parse the coinbase `tx_extra` at all
-/// (→ `..._ERR_HEADERS_UNREADABLE`, never misread as the committed empty set).
+/// reads. `headers` is the RAW 49-byte-record `tx_extra` blob — Rust splits and parses it
+/// (untrusted input, rule 20 #3); `headers_readable == 0` means C++ could not parse the coinbase
+/// `tx_extra` at all (→ `..._ERR_HEADERS_UNREADABLE`, never misread as the committed empty set).
+///
+/// `SF-D8` (2026-09-13) removed the v1 nonce's inputs from this struct: the coinbase `vout[0]`
+/// key and its readability flag, and the single predecessor **hash**. The v2 countersignature
+/// binds `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id`, where the anchor is a block the
+/// requester chose within `[h − depth − L, h − depth]`; the chain-state the verifier needs is the
+/// predecessor height plus the connecting chain's hash at each height of that window.
 #[repr(C)]
 pub struct ShekylArchivalAttestationVerifyCtx {
     pub attestation_root: [u8; 32],
-    pub cb_out_key: [u8; 32],
-    /// `block_hash(h−1)` — the connecting block's **validated** predecessor hash.
+    /// `h` — the **validated** height of the block this block connects to.
     ///
-    /// Must be the predecessor the block is actually being connected to, not
-    /// `prev_id` as supplied in the header: an unvalidated header field is
-    /// producer-chosen, which is exactly the property `r` was deleted for having.
-    /// All-zeros is rejected as the unpopulated-field sentinel
-    /// (`..._ERR_PREVHASH_UNPOPULATED`); there is deliberately no readability
-    /// flag, and the reasoning is on that constant.
-    pub prev_block_hash: [u8; 32],
-    pub cb_out_key_readable: u8,
+    /// Must be the predecessor the block is actually being connected to (main chain: the
+    /// current top height; alt chain: the alt parent's height), never a header-claimed value —
+    /// an unvalidated header field is producer-chosen. It keys the anchor window: admission
+    /// accepts anchor heights in `[h − depth − L, h − depth]` and looks each up in
+    /// `anchor_hashes`. There is no unpopulated sentinel because `0` is a legitimate value
+    /// (block 1's predecessor); a forgotten field fails closed — the implied window holds the
+    /// wrong hashes or does not exist, so every record is refused.
+    pub predecessor_height: u64,
+    /// The connecting chain's block hash at each height of the anchor window, ascending:
+    /// `anchor_hashes[i]` is the hash at `first + i`, where `(first, len)` is what
+    /// [`shekyl_archival_pass_anchor_window`] returned for `predecessor_height`. Filled from the
+    /// chain the block is being connected to — the main chain, or the alt chain **above the fork
+    /// point** — so a block validated on an alt chain sees that chain's anchors. Exactly `L + 1`
+    /// entries at or above the threshold, exactly `0` below it; any other shape is
+    /// `..._ERR_MALFORMED_ANCHOR_TABLE`, checked on every block.
+    pub anchor_hashes_ptr: *const [u8; PASS_ANCHOR_HASH_LEN],
+    pub anchor_hashes_len: usize,
     pub headers_readable: u8,
     pub headers_ptr: *const u8,
     pub headers_len: usize,
@@ -134,7 +138,7 @@ pub struct ShekylArchivalAttestationVerifyCtx {
 
 /// Verify a block's attestation set against its mined `attestation_root` (Phase 2 admission).
 ///
-/// `witness` is the opaque `count ‖ pass-signatures` blob (`connect.attestation_witness`); an
+/// `witness` is the opaque `count ‖ (nonce ‖ signature)*` blob (`connect.attestation_witness`); an
 /// empty blob is the zero-record set (the pre-cutover state). Returns a
 /// `SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_*` code; C++ rejects on any non-`OK`.
 ///
@@ -152,13 +156,39 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     }
     let ctx = unsafe { &*ctx_ptr };
 
-    // C++ never improvises the unreadable-coinbase or unreadable-headers verdicts.
-    if ctx.cb_out_key_readable == 0 {
-        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE;
-    }
+    // C++ never improvises the unreadable-headers verdict.
     if ctx.headers_readable == 0 {
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE;
     }
+
+    // 0. Anchor window shape — O(1), checked on EVERY block so a marshaling drift in the table
+    //    C++ fills is loud immediately, not on the first block that happens to carry a pass
+    //    record. Below the threshold no window exists and the table must be empty; at or above
+    //    it the table must be exactly `L + 1` hashes for `[h − depth − L, h − depth]`.
+    let anchor_hashes: &[[u8; PASS_ANCHOR_HASH_LEN]] = if ctx.anchor_hashes_len == 0 {
+        &[]
+    } else if ctx.anchor_hashes_ptr.is_null() {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+    } else {
+        unsafe { std::slice::from_raw_parts(ctx.anchor_hashes_ptr, ctx.anchor_hashes_len) }
+    };
+    let window: Option<PassAnchorWindow> =
+        match PassAnchorHeights::for_predecessor(ctx.predecessor_height) {
+            None => {
+                if !anchor_hashes.is_empty() {
+                    return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE;
+                }
+                None
+            }
+            Some(_) => {
+                match PassAnchorWindow::new(ctx.predecessor_height, anchor_hashes.to_vec()) {
+                    Ok(w) => Some(w),
+                    // `BelowThreshold` is excluded by the `Some` arm; the only reachable error is
+                    // `WrongLength`.
+                    Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE,
+                }
+            }
+        };
 
     // 1. Header blob: cap FIRST (structural, before per-record work), then parse ONCE. The parsed
     //    records are carried through coverage / recompute / countersig — never re-parsed.
@@ -185,9 +215,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
 
     // 2. Witness. An empty blob is the zero-signature set; any non-empty blob must decode exactly.
     let witness = if witness_len == 0 {
-        BlockAttestationWitness {
-            pass_signatures: Vec::new(),
-        }
+        BlockAttestationWitness { passes: Vec::new() }
     } else {
         let witness_bytes = unsafe { std::slice::from_raw_parts(witness_ptr, witness_len) };
         match BlockAttestationWitness::from_canonical_bytes(witness_bytes) {
@@ -196,7 +224,7 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
         }
     };
 
-    // 3. Pair pass headers (tx_extra order) with the witness signatures. A count mismatch is a
+    // 3. Pair pass headers (tx_extra order) with the witness entries. A count mismatch is a
     //    malformed witness for this block. Parsed ONCE above — carried through below.
     let records = match pass_records_from_headers_and_witness(&parsed_headers, &witness) {
         Ok(r) => r,
@@ -261,31 +289,17 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH;
     }
 
-    // 7. Per-pass countersignature — only after the root agrees.
-    // The nonce's anchor term, checked HERE rather than with the other ctx gates:
-    // all-zeros is refused only when a countersignature will actually be verified
-    // against it.
-    //
-    // **The genesis block is why.** `prev_id` is the block *object* hash, not the
-    // RandomX PoW value, so nothing about mining excludes an all-zero block id —
-    // and the genesis block's `prev_id` **is** all-zeros by construction. Genesis
-    // reaches this path: `top_block_hash()` returns `null_hash` on an empty chain,
-    // so `bl.prev_id == get_tail_id()` holds and `add_new_block` routes genesis to
-    // `handle_block_to_main_chain`. Gating on the ctx would have rejected genesis
-    // and the chain could never have initialised.
-    //
-    // Scoping the check to "a record will consume this" is not a genesis
-    // special-case; it is checking the value where it is load-bearing. With no
-    // pass records no nonce is computed, so the anchor is read by nothing and
-    // enforcing it there would be asserting on a value the code never uses. Every
-    // block that *does* carry a record is at height ≥ 1, whose `prev_id` is a real
-    // predecessor hash — so within this scope all-zeros remains unreachable except
-    // by a caller that failed to populate the field, which is exactly what the
-    // sentinel is for.
-    if !records.is_empty() && ctx.prev_block_hash == [0u8; 32] {
-        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED;
+    // 7. Per-pass countersignature — only after the root agrees. Each record's carried nonce and
+    //    anchor height, the connecting chain's hash at that height (one indexed lookup in the
+    //    window), and the record's own shard_id form the SF-D8 transcript; the record's p_id must
+    //    be the paired pubkey's canonical id. Below the anchor threshold there is no window, so
+    //    a block with any pass record is refused there (genesis boundary).
+    if records.is_empty() {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK;
     }
-
+    let Some(window) = window else {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD;
+    };
     for record in &records {
         let (_, pk) = resolved
             .iter()
@@ -294,12 +308,61 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
         let Some(pk) = pk else {
             return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT;
         };
-        if !verify_pass_countersignature(&ctx.prev_block_hash, &ctx.cb_out_key, pk, record) {
-            return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID;
+        match verify_pass_countersignature(&window, pk, record) {
+            Ok(()) => {}
+            Err(PassCountersignatureError::AnchorOutOfWindow { .. }) => {
+                return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW;
+            }
+            Err(
+                PassCountersignatureError::PIdMismatch
+                | PassCountersignatureError::InvalidSignature,
+            ) => {
+                return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID;
+            }
         }
     }
 
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+}
+
+/// Step 0: the anchor window C++ must fill for a block whose **validated** predecessor height is
+/// `predecessor_height` (`SF-D8`). Writes the window's first height and its length (`L + 1`) and
+/// returns `OK`; below `PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT` (`depth + L`) no window exists —
+/// writes `(0, 0)` and returns `..._ERR_BELOW_ANCHOR_THRESHOLD`, and C++ passes an empty table.
+///
+/// The arithmetic lives here, not in a generated C++ constant, so there is ONE authority for the
+/// window and no drift pair: C++ asks, fills `len` hashes at `first + i` from the chain the block
+/// is being connected to (alt chain above the fork point, main chain below it), and hands them
+/// across in [`ShekylArchivalAttestationVerifyCtx::anchor_hashes_ptr`]. Zero authority over block
+/// validity — step 2 re-derives the same window and rejects a table of any other shape.
+///
+/// # Safety
+/// `out_first_height` and `out_len` must be valid, writable pointers.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_archival_pass_anchor_window(
+    predecessor_height: u64,
+    out_first_height: *mut u64,
+    out_len: *mut usize,
+) -> u8 {
+    if out_first_height.is_null() || out_len.is_null() {
+        return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
+    }
+    match PassAnchorHeights::for_predecessor(predecessor_height) {
+        Some(heights) => {
+            unsafe {
+                *out_first_height = heights.first();
+                *out_len = heights.len();
+            }
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
+        }
+        None => {
+            unsafe {
+                *out_first_height = 0;
+                *out_len = 0;
+            }
+            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD
+        }
+    }
 }
 
 /// Name the distinct pass `p_id`s in a block's attestation headers (Phase 2 admission, step 1).
