@@ -41,7 +41,7 @@ public:
 
   bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const override
   {
-    if (layer != 0 || missing_layer0_chunks.count(chunk))
+    if (layer == 0 && missing_layer0_chunks.count(chunk))
       return false;
     for (size_t i = 0; i < 32; ++i)
       hash_out[i] = static_cast<uint8_t>(0xA0 + chunk);
