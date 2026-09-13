@@ -14,6 +14,12 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.** The positioning `mdb_cursor_get(…, MDB_SET)` was removed by inherited commit `22c0fae47b` (subject unrelated to block removal); the delete is correct today only because `BlockchainDB::pop_block` reads the top block through the same write-cursor member one call earlier. Latent, not reachable in this tree — but any `blocks` read inserted between those two calls, or any second caller of `remove_block`, deletes at a valid-but-wrong position, which **succeeds silently** while the explicitly-positioned `block_info` and `block_heights` deletes remove the right rows. Either restore the dropped `MDB_SET` or land the guard at the Rust port. Falsify by `grep -n "MDB_SET" ` over `remove_block` in `src/blockchain_db/lmdb/db_lmdb.cpp`. Mechanism in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9.
+  - Target: pre-genesis
+
+- **Rule 42's globs do not cover `rust/shekyl-chain-store`, whose codecs DRS-0 just froze as consensus-visible.** The accumulator freeze makes the redb value codec the canonical encoding the digest folds, so a codec change moves the digest — but rule 42's persisted-wire version-bump CI enforcement is scoped by glob to the wallet crates, and DRS-0 slice C's §11.1 schema_version rule has the same gap. Until the globs extend, codec stability there is a convention with no gate. Falsify by checking whether `.cursor/rules/42-serialization-policy.mdc`'s globs reach the `rust/shekyl-chain-store` crate at all; today they name only the two wallet engine crates. Escalated to Rick as a rules change.
+  - Target: pre-genesis
+
 - **`on_mining_status` still labels dead pre-RandomX variants "Cryptonight" (rule 60).** The daemon's `pow_algorithm` label table (`src/rpc/core_rpc_server.cpp` `on_mining_status`) emits Cryptonight names for PoW variants Shekyl never had; the CLI deliberately does not render the field (CU-3, [`CLI_USABILITY.md`](design/CLI_USABILITY.md) §CU-3) but the daemon-side arms are dead-branch deletion work — falsify by `grep -n "Cryptonight" src/rpc/core_rpc_server.cpp` returning nothing.
   - Target: pre-genesis
 

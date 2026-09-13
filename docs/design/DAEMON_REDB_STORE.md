@@ -269,7 +269,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) — **met 2026-09-05 (P0b):** audit §§2-3 verdicts + §7/§8 transcriptions; both S-grades were closed by PR #602/#604 | Security | DRS-P0 |
 | **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 was bucket-1 ratified with an implementation that silently omitted an accepted output (fixed 2026-09-04), so a digest match there would have recorded reproduction of the defect — the reason the rule is written this way. Over a **DIVERGENT** or **UNREVIEWED** row — or any bucket-3/4 row — the digest is regression evidence and must be reported as that (a **CHECKED-CONFORMANT** register row is the one case where a match *is* correctness evidence). **Met-exists 2026-09-10 (P0d):** `shekyl-chain-store::digest_v0` + `BlockchainLMDB::logical_state_digest_v0` against production LMDB (core chain + spent_keys + live curve root). DRS-C consumes it. Archival journals excluded (§7.1.1) | Security | DRS-P0 → C |
-| **A3** | Known durable-state **warts** are recorded (DRS-W1…DRS-W15); default **RECORD-AND-SPECIFY**. **Met 2026-09-08 (P0c):** four remaining rows registered in the audit §9; A-6 dominance analysis declined (possession-typed write handle). **Regraded 2026-09-09:** DRS-W15 Forbidden is DIVERGE-by-delete **conditional** on R4 keeping an incremental vote window; R4 answers that prior question, not two sequenced ones. DRS-W12 is latent (capability, not a blinded test) | Security | DRS-P0 / C |
+| **A3** | Known durable-state **warts** are recorded (DRS-W1…DRS-W16); default **RECORD-AND-SPECIFY**. **Met 2026-09-08 (P0c):** four remaining rows registered in the audit §9; A-6 dominance analysis declined (possession-typed write handle). **Regraded 2026-09-09:** DRS-W15 Forbidden is DIVERGE-by-delete **conditional** on R4 keeping an incremental vote window; R4 answers that prior question, not two sequenced ones. DRS-W12 is latent (capability, not a blinded test) | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |
 | **A6** | **IBD wall time** meets the §1.3 floor (full-node viability → density → remote-node privacy) | Privacy | DRS-BENCH / DRS-0 |
@@ -661,12 +661,31 @@ pressure. **DRS-0 freezes accumulator design** (constrains codecs):
 | Table class | Digest mechanism |
 | --- | --- |
 | **Set-shaped** (`spent_keys`, `output_txs`, `block_heights`, `tx_indices`, …) | Order-independent incremental accumulator (XOR or additive field hash of per-element canonical encodings); update on insert, reverse on delete; **pop-symmetric by construction** |
-| **Append-mostly** (`blocks`, `txs_*`, `curve_tree_leaves`, …) | Running chained hash |
+| **Append-mostly** (`blocks`, `txs_*`, `curve_tree_leaves`, …) | Running chained hash. **Pop-symmetric by *checkpoint*, not by construction** — `H_n = h(H_{n-1} ‖ x_n)` cannot be reversed one step without retaining `H_{n-1}`; the fourth row's mechanism is what bounds the drift (DRS-0 slice A) |
 | **Small** (`properties`, `curve_tree_meta`, `hf_versions`, archival journals, …) | Full-domain digest every block (cheap) |
 | **Torn-commit / durability visibility** | **Reopen + full-domain reconciliation** of incremental accumulators at **declared checkpoint heights**, not every block |
 
 Total coverage = every table in inventory contributes to some accumulator or
 named exclusion. **No silent sampling.**
+
+**Frozen 2026-09-12 by DRS-0 slice A.** The per-table assignment for all
+**49** inventory tables is the `Accumulator class` column of
+[`LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md) §10,
+with the five tokens, the `set-shaped` delete-path falsifier, the named
+exclusion reasons and the gate's stated limitation defined in that
+document's §12. The vocabulary and write contracts live in
+`shekyl-chain-store::accumulator` (`AccumulatorClass`, `TABLE_CLASSES`,
+`SET_SHAPED_CONTRACTS`) — that is what DRS-E1 reads. Three qualifications the freeze establishes and this
+section does not state: the Append-mostly caveat above; that **the fourth
+row is a cross-cutting verification mechanism, not a table class** (no
+table is "the torn-commit table" — it applies to the two *incremental*
+classes); and that **"archival journals → Small" holds only for the seven
+carrying a retention prune**, since Small is a claim about a *bounded*
+domain — the six unpruned append-only journals are graded Append-mostly.
+The freeze also adds a fifth token, `derived`, for tables recomputed from a
+named source through an independently specified derivation. **Scope note:**
+an accumulator class is a different axis from a digest-v0 state, and the
+two disagree on 16 rows; a v0 exclusion is not an accumulator exclusion.
 
 ### 6.3 Independence
 
