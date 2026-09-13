@@ -1107,7 +1107,12 @@ reasons row for row** — two instruments, one field, cross-checked:
 | **Dead** | `txs` (never written, DRS-W4), `hf_starting_heights` (dropped at every writable `open()`, DRS-W5) | Empty domain. Trivially satisfied and trivially uninteresting |
 
 > **AMENDED at `edb35dbb1` (2026-09-12, same day): the middle group's rationale
-> is on a TRIGGER, not retired here.** The reasoning: `PDM-Q-S0` is understood
+> is on a TRIGGER, not retired here.** *(Line anchors in this block are
+> re-resolved at **`064d17d92`**, 2026-09-13 — `db_lmdb.cpp` moved after the
+> amendment was written and every one of them had drifted onto live code at
+> the wrong subject, which is this block's own subject. This document is
+> outside `check_doc_code_citations.py`'s `DEFAULT_DOCS`, so they are
+> unchecked by gate and were re-resolved by hand, symbol first.)* The reasoning: `PDM-Q-S0` is understood
 > to rule that pruned-daemon mode is not implemented in the inherited C++
 > daemon and lands in the Rust daemon after `DRS-E*`, which would mean the
 > inherited stripe prune does not come over — and "rebuildable only from bytes
@@ -1152,13 +1157,13 @@ reasons row for row** — two instruments, one field, cross-checked:
 >   is the interesting part.** This first read *"every consumer lives inside
 >   `prune_worker`, so the Rust store should not carry the table"* — which was
 >   **false as evidence**: that enumeration was the `mdb_cursor_open` sites
->   only. The table is also written in `add_transaction_data` (`:1159`) and
->   deleted in `remove_transaction_data` (`:1226`/`:1231`) — the connect and pop
+>   only (`:2406` / `:2464` / `:2569`, inside `prune_worker` `:2324–2605`). The table is also written in `add_transaction_data` (`:1163`) and
+>   deleted in `remove_transaction_data` (`:1230`/`:1235`) — the connect and pop
 >   paths, not the prune worker. *N hits of one pattern are not the
 >   population*, and the conclusion did not follow from the evidence given.
 >   **The argument that does survive is from the WRITE path, not the read
->   sites:** that write is guarded by `if (get_blockchain_pruning_seed())`, and
->   the paired delete is `MDB_NOTFOUND`-tolerant. So on a node with no seed —
+>   sites:** that write is guarded by `if (get_blockchain_pruning_seed())` four lines
+>   above it (`:1160`), and the paired delete is `MDB_NOTFOUND`-tolerant. So on a node with no seed —
 >   every node today — the table is **never populated** and the delete is a
 >   tolerated no-op. Its *population*, not its call sites, is what ties it to
 >   the mechanism. That is a reason to ask whether it ports; it is **not** a
@@ -1166,9 +1171,9 @@ reasons row for row** — two instruments, one field, cross-checked:
 > - **`output_metadata` — the stated reason does not cover it, and the correct
 >   one is a different shape.** It is not discarded content; it is content
 >   **created by discarding** — `store_output_metadata` is called from exactly
->   one site, inside `prune_tx_data` (`:10229`) — and **its read chain is dead
->   two levels deep**: `get_output_metadata`'s only caller is `is_output_pruned`
->   (`:10089`), and `is_output_pruned` has **no call site anywhere** in `src/`,
+>   one site, inside `prune_tx_data` (`:10239`) — and **its read chain is dead
+>   two levels deep**: `get_output_metadata` (`:10070`) has exactly one caller,
+>   `is_output_pruned` (`:10093`, calling at `:10099`), and `is_output_pruned` has **no call site anywhere** in `src/`,
 >   `rust/` or `tests/` — only its pure-virtual declaration, its `db_lmdb`
 >   override and a `testdb.h` stub returning `false`. So the correct reason is
 >   closer to **`dead`** (DRS-W4's shape) than to `node-local`. At
