@@ -848,6 +848,15 @@ def measure(args):
             # The denominator: from the subject answering RPC (so RandomX dataset
             # init and store open are EXCLUDED) to its height reaching the seed's.
             t0, reached, peak, peers = ready, 0, 0, 0
+            # CPU is sampled at the instant the wall clock starts, and the figure
+            # reported is the DELTA. A single end-of-run read would be cumulative
+            # since process start, so it would carry startup, RandomX dataset
+            # init and store open -- exactly what `ibd_wall_time_s` EXCLUDES --
+            # and the CPU-to-wall ratio would then be comparing two different
+            # phases. RandomX init is itself heavily parallel, so that error does
+            # not average out; it inflates the ratio in the direction that makes
+            # "compute-bound" look established.
+            cpu_at_start = _cpu_seconds(subj.pid)
             deadline = t0 + args.sync_timeout
             while time.time() < deadline:
                 try:
@@ -867,7 +876,7 @@ def measure(args):
                 time.sleep(args.poll_interval)
             elapsed = time.time() - t0
             peak = max(peak, _peak_rss_bytes(subj.pid) or 0)
-            cpu_s = _cpu_seconds(subj.pid)
+            cpu_at_end = _cpu_seconds(subj.pid)
             synced = reached >= seed_h
         finally:
             subj.terminate()
@@ -884,6 +893,14 @@ def measure(args):
         proc.terminate()
         proc.wait(args.shutdown_timeout)
 
+    # A failed /proc read is an ABSENT observation, not zero CPU. Emitting 0.0
+    # would pass validation as "the subject used no CPU", which is the same
+    # placeholder-satisfies-the-field defect as accepting disk_class "unknown".
+    if cpu_at_start is None or cpu_at_end is None:
+        _fail("could not sample the subject's CPU time from /proc "
+              f"(start={cpu_at_start}, end={cpu_at_end}). The artifact would have to "
+              "record a failed observation as a number, so none is written.")
+    cpu_s = cpu_at_end - cpu_at_start
     if not synced:
         _fail(f"subject reached height {reached} of {seed_h} in {elapsed:.1f}s and did "
               "not converge. A partial sync is not a shorter measurement of the same "
@@ -940,12 +957,15 @@ def measure(args):
                             "height; EXCLUDES process start, RandomX dataset init and "
                             "store open"},
             {"name": "subject_cpu_s", "axis": "cpu_time", "unit": "s",
-             "value": 0.0 if cpu_s is None else round(cpu_s, 3),
-             "scenario": scenario,
-             "denominator": "utime+stime of the subject over all threads for the "
-                            "whole sync. Against ibd_wall_time_s this says whether "
-                            "the phase was compute-bound and how parallel it was; it "
-                            "does NOT attribute the cost to any particular operation"},
+             "value": round(cpu_s, 3), "scenario": scenario,
+             "denominator": "utime+stime of the subject over all threads, sampled at "
+                            "the first successful get_info and again at the end, "
+                            "reported as the DELTA -- so it spans exactly the same "
+                            "phase as ibd_wall_time_s and excludes startup, RandomX "
+                            "dataset init and store open. Against that wall figure it "
+                            "says whether the phase was compute-bound and how "
+                            "parallel; it does NOT attribute the cost to any "
+                            "particular operation"},
             {"name": "peak_rss_bytes", "axis": "memory", "unit": "bytes",
              "value": int(peak), "scenario": scenario,
              "denominator": "subject VmHWM sampled during sync. NOT §7.4's "

@@ -902,56 +902,62 @@ rather than leaving §1.3's "FCMP++ + PoW verify enabled as in real sync" to
 stand unqualified.
 
 **First in-tree LMDB baseline.** Three artifacts in `docs/benchmarks/`, all
-passing `drs_bench.py validate`:
-`drs_bench_ibd_lmdb_h2000_x86_64_20260913T080604Z.json` and
-`...T081002Z.json` (the primary pair, kept as two runs so the run-to-run spread
-is evidenced rather than asserted), plus
-`drs_bench_ibd_lmdb_h200_x86_64_20260913T081354Z.json`, the only one in which
-generation actually ran — the H = 2000 seed is reused, so its
-`generation_wall_s` is **null** rather than quietly reporting a rate it did not
-observe.
+passing `drs_bench.py validate`: `drs_bench_ibd_lmdb_h2000_x86_64_20260913T082046Z.json`
+and `drs_bench_ibd_lmdb_h2000_x86_64_20260913T082457Z.json` (the primary pair, kept as two
+runs so the run-to-run spread is evidenced rather than asserted), plus
+`drs_bench_ibd_lmdb_h200_x86_64_20260913T082845Z.json`, the only one in which generation
+actually ran — the H = 2000 seed is reused, so its `generation_wall_s` is
+**null** rather than quietly reporting a rate it did not observe.
 
-Conditions: one peer, coinbase-only, DRS-D9 durability, ext4 on NVMe
-(probed, not declared), i9-11950H, 16 cores.
+Conditions: one peer, coinbase-only, DRS-D9 durability, ext4 on NVMe (probed,
+not operator-declared), i9-11950H, 16 cores.
 
-| axis | measured | per block |
+| axis | measured at H = 2000 | per block |
 | --- | --- | --- |
-| **IBD wall time** (primary) | 201.02 s / 201.26 s at H = 2000 | **100.5 ms** |
-| IBD CPU time | 760.3 s / 756.4 s — **3.76-3.78x wall** | 380 ms CPU |
+| **IBD wall time** (primary) | 198.59 s / 202.54 s | **~100 ms** |
+| IBD CPU time | 751.8 s / 758.1 s — **3.74-3.79x wall** | ~377 ms CPU |
 | store, allocated | 9,736,192 B | 4,868 B |
 | store, allocated / apparent | 1.0021 | — |
 | peak RSS | 539 MiB | — |
-| chain generation (fixture cost) | 143.76 s / 200 blocks | **719 ms** |
+| chain generation (fixture cost) | 143.48 s / 200 blocks | **717 ms** |
 
-Run-to-run spread on identical inputs is **0.12%** across the primary pair (0.7%
-across all four ext4 runs taken this session).
+Run-to-run spread on identical inputs is **2.0%** across the primary pair; the
+six ext4 runs taken while landing this sat in 198.6-202.5 s. Quote the ratio, not
+the absolute.
 
 **Extrapolation to H = 100_000, and why no direction is claimed for it.** At
-0.1006 s/block IBD that is ~2.8 h per engine arm, and generation ~20.0 h once;
-store would be ~490 MB. Those are point estimates whose **error direction is
-unknown**, and the two-point evidence says so plainly: per-block cost *fell*
-between the two heights, not rose — IBD 106.5 ms/block at H = 200 against
-100.5 ms at H = 2000, store 7,291 B/block against 4,868 B. Two mechanisms pull
-opposite ways and both are present: fixed per-run overhead amortises **down**
-over more blocks, while chain and curve-tree growth push per-block cost **up**.
-Two points a decade apart, dominated by the first effect, cannot separate them.
-An earlier revision of this section called the extrapolation a lower bound; that
-asserted the second mechanism wins, which is not measured.
+~100 ms/block that is ~2.8 h of IBD per engine arm, generation ~19.9 h once, and
+store ~490 MB. These are point estimates whose **error direction is unknown**,
+and the two heights say so plainly: per-block cost *fell* rather than rose —
+IBD ~105 ms/block at H = 200 against ~100 ms at H = 2000, store 7,311 B/block
+against 4,868 B. Two mechanisms pull opposite ways and both are present: fixed
+per-run overhead amortises **down** over more blocks, while chain and
+curve-tree growth push per-block cost **up**. Two points a decade apart,
+dominated by the first, cannot separate them. An earlier revision called this a
+lower bound, which asserts the second mechanism wins; that is not measured.
 
 Generation dominates the cost, so the seed chain is cached and topped up via
 `--seed-dir`; only the subject is wiped per run, being the thing measured. Reuse
-additionally gives both engine arms a byte-identical fixture, which `check`
-requires.
+also gives both engine arms a byte-identical fixture, which `check` requires.
 
 **IBD is compute-bound and parallel, not disk-bound.** Measured two independent
-ways: 3.76-3.78x CPU-to-wall on 16 cores, and tmpfs vs ext4 agreeing within 5%
-(IBD 197.8 s vs 201.0 s; generation 0.730 vs 0.719 s/block). The tmpfs agreement
-is a measured result and **not** a licence to bench there — fsync on tmpfs has
-no backing store to flush, so `safe` is indistinguishable from `MDB_NOSYNC`,
-DRS-D9 is not in force, and the harness refuses such a run before it starts.
+ways: **3.74-3.79x CPU-to-wall on 16 cores**, and tmpfs versus ext4 agreeing
+within 5%. The CPU figure is a **delta** — sampled at the first successful
+`get_info` and again at the end — so it spans exactly the phase
+`ibd_wall_time_s` covers and excludes startup, RandomX dataset init and store
+open. An earlier revision took one cumulative end-of-run reading against a
+wall clock that began at first RPC, which mixed two phases and inflated the
+ratio in the direction that made this very conclusion look established;
+correcting it moved the ratio from 3.76-3.78x to 3.74-3.79x, so the conclusion
+survived a denominator it had not earned.
+
+The tmpfs agreement is a measured result and **not** a licence to bench there:
+fsync on tmpfs has no backing store to flush, so `safe` is indistinguishable
+from `MDB_NOSYNC`, DRS-D9 is not in force, and the harness refuses such a run
+before it starts.
 
 **WHAT IS NOT MEASURED, and therefore must not be concluded.** The
-per-operation breakdown of that 380 ms of CPU per block is **unknown**: the
+per-operation breakdown of that ~377 ms of CPU per block is **unknown**: the
 block-addition path carries no `PERF` instrumentation, so the daemon's own
 timings cover only RPC entry points (in the subject's log `get_info` dominates,
 and that is this harness's polling contending on the blockchain lock, not work).

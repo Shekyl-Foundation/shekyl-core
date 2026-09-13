@@ -10,9 +10,9 @@
       "--non-interactive",
       "--log-level=1",
       "--data-dir=/home/torvaldsl/shekyl/drsbench-work/subject",
-      "--p2p-bind-port=55365",
-      "--rpc-bind-port=43925",
-      "--add-exclusive-node=127.0.0.1:53203"
+      "--p2p-bind-port=60065",
+      "--rpc-bind-port=40609",
+      "--add-exclusive-node=127.0.0.1:47847"
     ],
     "observed": false,
     "policy": "DRS-D9 full-fsync-per-commit",
@@ -38,7 +38,7 @@
     },
     "verify_note": "PoW longhash is computed and checked for every block with no nettype bypass; --fixed-difficulty lowers the TARGET only. generateblocks produces coinbase-only blocks, so FCMP++ verification is not exercised at all."
   },
-  "git_rev": "2bd621d59fd497b9fb18e406550bfa87aa92be24",
+  "git_rev": "bd01376395e8d24b02bd6212ccd59d865b2395a6",
   "hardware": {
     "cpu_count": 16,
     "cpu_model": "11th Gen Intel(R) Core(TM) i9-11950H @ 2.60GHz",
@@ -54,15 +54,15 @@
       "name": "ibd_wall_time_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 201.019
+      "value": 202.539
     },
     {
       "axis": "cpu_time",
-      "denominator": "utime+stime of the subject over all threads for the whole sync. Against ibd_wall_time_s this says whether the phase was compute-bound and how parallel it was; it does NOT attribute the cost to any particular operation",
+      "denominator": "utime+stime of the subject over all threads, sampled at the first successful get_info and again at the end, reported as the DELTA -- so it spans exactly the same phase as ibd_wall_time_s and excludes startup, RandomX dataset init and store open. Against that wall figure it says whether the phase was compute-bound and how parallel; it does NOT attribute the cost to any particular operation",
       "name": "subject_cpu_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 760.27
+      "value": 758.06
     },
     {
       "axis": "memory",
@@ -70,7 +70,7 @@
       "name": "peak_rss_bytes",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 564936704
+      "value": 565133312
     },
     {
       "axis": "disk",
