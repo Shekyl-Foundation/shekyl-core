@@ -8,10 +8,7 @@ not exist), then **`PDM-Q6` is the round's subject** (`PDM-Q-F13`: the
 transaction's prunable region is scarce *and* replay-compatible, with
 its verifier `txs_prunable_hash` already in the schema; `PDM-Q-F14`:
 `pqc_auths`, ~60 % of tx bytes, is kept only for want of a hash row;
-`PDM-Q-F15`: the `serve_credit_pruned` self-reference is benign;
-`PDM-Q-F17`, from the daemon cutover lane: the stripe engine's
-seed-arithmetic / advertisement / coverage triple already partitions
-that good, and is what Q7 keeps the C++ to be read for). §9
+`PDM-Q-F15`: the `serve_credit_pruned` self-reference is benign). §9
 inventories every data element at the pin. `PDM-Q7` is **PARTIAL**
 (opt-in flag rejected, scoped to the universal set). `PDM-Q9` is
 **PARTIAL** (shard retention is the bond process; binding and lapse
@@ -232,15 +229,17 @@ Enumerate the rest against that boundary, not as prose: headers, which
 intermediate layers *beyond* layer 0, which leaf window if any, which
 consensus tables. Every later question is measured against this set.
 A Q1 ruling that names `m_curve_tree_leaves` and stops has not
-produced scarcity and has not answered Q1. Two items §9 surfaces that
-Q1 owes a sentence each: the legacy ring-decoy readers of
-`output_metadata` at `src/cryptonote_core/blockchain.cpp:296-350`
-(`scan_outputkeys_for_indexes` — live under FCMP++ or rule-60 residue?
-if residue, the only consensus reader of `output_metadata` after
-admission is gone and the table is a cache like the leaves), and the
-six archival pop-undo journals plus `archival_slash_log` (`PDM-Q-F16`),
-which are node-local and window-bounded in principle but unbounded on
-disk today.
+produced scarcity and has not answered Q1. Two items §9 surfaced are
+now settled at the pin (review, 2026-09-13): `scan_outputkeys_for_indexes`
+is rule-60 residue with no live caller, so `output_metadata` has no
+post-admission consensus reader and is a cache like the leaves
+(`PDM-Q-F18`); and the archival journals' horizon is not Q1's to pick
+freely — the slash log's forward reader is bounded by the serve-credit
+deadline on one path and by the slash-scheduler watermark plus the
+failure window on the other, neither enforced on `at_height` itself,
+so the horizon Q1 mints is
+`tip − (CHALLENGE_RESOLUTION_BLOCKS + n·SETTLEMENT_EPOCH_BLOCKS + reorg)`
+**and** lands with the check that makes it enforced (`PDM-Q-F19`).
 
 The stale "recomputed from leaves" comments
 (`db_lmdb.cpp:9922-9925`, `:9970`; `blockchain_db.h:2838`) are
@@ -370,7 +369,16 @@ What Q6 must rule, in this order:
    make the slice archival subject on the same terms as the prunable
    body. Q6 rules whether it does — storage semantics only; the tx
    blob and txid are untouched — or names why the largest element in
-   the transaction stays universally retained.
+   the transaction stays universally retained. Spot-checked
+   2026-09-13: the `db_lmdb.cpp` access sites (`:1071-1214`,
+   `:3330-3383`, table open `:1664`) are store plumbing, consistent
+   with all consensus reads sitting in `check_tx_inputs`; the txid
+   already commits to `pqc_auth_hash`, so a hash-table row changes no
+   wire byte. **Items 1 and 2 are ruled together, not sequentially:**
+   the storage case for either alone is weak (~35 % or ~60 % of the
+   transaction) and strong jointly (~95 %), and a Q6 that admits the
+   prunable region while keeping `pqc_auths` universally retained has
+   the smaller slice in the good and the larger one out.
 3. **The unit change downstream (§5).** Every closed archival ruling
    defines the good as **leaves**: `SHARD_BYTES = 25,992 × 128`
    (`ARCHIVAL_RESPONSE_FORMAT.md` `RF-D6`), `challenge_leaf_index`,
@@ -906,13 +914,79 @@ consensus question: *does anything read it after admission?*
   `archival_slash_removed_holding_after` (`:5243`) range-scans
   `archival_slash_log` strictly above a settlement height, so rows
   older than the retention window are never reached **if** every
-  caller's `at_height ≥ tip − W` — not proven here. None of the seven
+  caller's `at_height ≥ tip − W` — proven at the pin in `PDM-Q-F19`,
+  with the bound being emergent rather than enforced. None of the seven
   is in the retention prune's list; slice A grades all six logs
   `AppendMostly` (`class.rs:116-134`). Bytes are per event, not per
   transaction, so the storage stake is small; the finding is a
   class, not a number: these are `LOCAL-BOUNDED` in §9 and Q1 owes
   them a retirement horizon (the reorg window for the six, the
   retention window for the slash log once the caller bound is shown).
+
+### Verified by review (2026-09-13) — closes two §8 open items
+
+- **PDM-Q-F18.** **`scan_outputkeys_for_indexes` is rule-60 residue;
+  `output_metadata` has no post-admission consensus reader.** The
+  function (`src/cryptonote_core/blockchain.cpp:262`) has one caller,
+  `Blockchain::check_tx_input` (`:4564`, inside `:4522`), and
+  `check_tx_input` has **zero callers** — `src/` and `tests/` return
+  only the declaration (`blockchain.h:1355`), the definition, and a
+  comment at `:3514`. The body is ring-era on its face: it branches
+  on `tx_version == 1` and validates `txin.key_offsets.size()`
+  against returned ring members, which FCMP++ removed. So the
+  `output_metadata` grading in §9 stands as CACHE without the
+  "undetermined" qualifier, and the whole
+  `check_tx_input` → `scan_outputkeys_for_indexes` → `outputs_visitor`
+  chain is a rule-60 deletion, recorded in `docs/FOLLOWUPS.md` for a
+  dedicated C++ PR (not this charter, not the Q1 comment-correction
+  PR).
+- **PDM-Q-F19.** **The slash log's forward reader is bounded on every
+  path, and on no path is the bound a check.** The reviewer's read
+  was one path; the pin has two, and the answer is the same shape on
+  both. `archival_slash_removed_holding_after` (`db_lmdb.cpp:5243`) is
+  reached only via `archival_bond_holds_shard_of` (`:5328`; calls at
+  `:5385`, `:5388`), whose `at_height` is always an `h_fire`:
+  1. *Serve-credit consumer* (admission): `blockchain.cpp:5270`
+     → `archival_bond_holds_shard` (`:5315` → `:5325`). Bounded by the
+     **credit deadline**: the vin is rejected if
+     `current_height > h_close` (`blockchain.cpp:5222-5226`), and
+     `h_fire ∈ (0, H_close]`, so `at_height ≥ tip − SETTLEMENT_EPOCH_BLOCKS`
+     at admission. Not a check on `at_height`; a consequence of a
+     check on the epoch.
+  2. *Slash scheduler*: `process_archival_slash_at_height`
+     (`:6197`) walks epochs from the watermark `last_slash_epoch + 1`
+     while `block_height > H_slash_deadline(E)`
+     (`= (E+1)·SEB − 1 + CHALLENGE_RESOLUTION_BLOCKS`,
+     `failure_window.rs:191`) → `archival_challenge_failed_at_height`
+     (`:5892`) → `archival_baseline_observed_at_epoch` (`:5734`),
+     which computes `h_fire` at `:5810` and, per its own comment at
+     `:5803-5808`, applies **no range check** — `H_fire ∈ (0, H_close]`
+     is asserted from well-formedness. The failure window then walks
+     **back** `n − 1` epochs (`--epoch` loop, `:5860-5864`;
+     `n = 13`, `config/consensus_constants.json:32`). Bounded by the
+     **watermark** in steady state:
+     `at_height ≥ tip − (CHALLENGE_RESOLUTION_BLOCKS + n·SETTLEMENT_EPOCH_BLOCKS)`
+     = `tip − 140,000` at the pinned constants (both 10,000), plus the
+     reorg depth the pop path can rewind the watermark by.
+
+  So the horizon exists and is `tip − (CRB + n·SEB + reorg)`; Q1 can
+  name it. What Q1 cannot do is name it *alone*: on both paths the
+  bound is emergent (a deadline check on the epoch; a monotone counter
+  catching up), and a node that scans from a cold watermark
+  (`u64::MAX → next_epoch = 0`, `:6203`) evaluates every epoch at its
+  historical deadline height, reading a slash log that replay itself
+  has just written — fine today, and a silent read of nothing once a
+  horizon retires those rows. The second-order point the reviewer
+  flagged is the finding: a documented "no range check" on a value a
+  prune horizon will depend on is exactly the shape where an assertion
+  becomes a check. Today the only thing keeping `h_fire` above a future
+  discard horizon is an argument in a comment. The horizon lands **with**
+  the check — `at_height ≥ retirement_floor` asserted where the
+  scan starts, going red before the scan reads a retired range — or it
+  does not land. Falsify the bound by a test that advances the chain
+  `CRB + n·SEB + 1` past an epoch and shows the scheduler never reads
+  below the floor; falsify the *check* by removing the assertion and
+  showing the test still passes, which is the current state.
 
 ### Received from the daemon cutover lane (2026-09-13), verified at the pin
 
@@ -999,11 +1073,11 @@ consensus question: *does anything read it after admission?*
   reconstruction, cold sync, stripe-engine residue at the cutover
   (Q7), fetch privacy, the archiver's bond-binding and lapse tail
   (Q9), the "not retained" RPC response (Q10).
-- Whether `scan_outputkeys_for_indexes` (`blockchain.cpp:296-350`) is
-  a live FCMP++ consensus reader of `output_metadata` or rule-60
-  residue (§9, Q1).
-- Whether every caller of `archival_slash_removed_holding_after`
-  passes `at_height ≥ tip − W` (F16).
+- ~~Whether `scan_outputkeys_for_indexes` is live or residue~~ —
+  settled residue, `PDM-Q-F18`. ~~Whether every caller of
+  `archival_slash_removed_holding_after` passes `at_height ≥ tip − W`~~
+  — both paths bounded, neither enforced, `PDM-Q-F19`; what remains
+  owed is the check.
 - Negative-control status of any coverage number this round later quotes.
   Do not quote a coverage figure without an edit that makes the
   instrument go red. Q3's residual-set instrument is the named
@@ -1023,9 +1097,9 @@ consensus question: *does anything read it after admission?*
 | `PDM-Q4` | Reconstruction path | OPEN |
 | `PDM-Q5` | Cold sync and bootstrap | OPEN |
 | `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; leaf→tx unit change (F13, F14, F15) | OPEN — the round's subject 2026-09-13; ruled before Q1 |
-| `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; what is read from it is the seed arithmetic + advertisement + coverage triple, not the prune worker (F17) |
+| `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*` |
 | `PDM-Q8` | Privacy (density vs query) | OPEN |
-| `PDM-Q9` | Archiver's retention set: source, binding, lapse, advertisement | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); binding, lapse tail and the wire advertisement of holdings (F17) OPEN |
+| `PDM-Q9` | Archiver's retention set: source, binding, lapse | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); binding and lapse tail OPEN |
 | `PDM-Q10` | RPC contract for "not retained" | OPEN |
 
 When this round proposes a test, it will name the edit that makes that
@@ -1057,10 +1131,8 @@ of a hash row), F15 discharges the self-reference, and Q6 item 3 owes
 the list of closed leaf-shaped rulings the unit change reopens. A Q1
 ruling written ahead of Q6 is ruling on a cache. Q1 then rules §9's
 `CACHE` and `LOCAL-BOUNDED` rows (F16) and the two undetermined
-readers. Q9's binding, lapse tail and holdings advertisement (F17); Q10's
-response shape, legible to the `SF-` round. Q6 item 3 answers F17:
-adopt, adapt or refuse the stripe arithmetic as the shard definition
-for the prunable-region good. F9 is a C++ defect independent of PDM; the carrier
+readers. Q9's binding and lapse tail; Q10's response shape, legible
+to the `SF-` round. F9 is a C++ defect independent of PDM; the carrier
 is the FOLLOWUPS row, not this charter. F11's re-grade of the three
 curve-tree rows — and now `txs_pqc_auths` — is the DRS-0 lane's, on
 Q6's and Q1's output.
@@ -1128,7 +1200,7 @@ pending a hash row (F14).** A ruling that takes both GOOD rows retains
 | Table | Bytes/output | Post-admission readers | Derivable from | Class |
 | --- | ---: | --- | --- | --- |
 | `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `:1577`/`:1670` | `O`, `C`, `h_pqc` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
-| `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | `scan_outputkeys_for_indexes` (`blockchain.cpp:296-350`) — live or rule-60 residue: **undetermined**; RPC leaf reconstruction (`core_rpc_server.cpp:1585`) | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
+| `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | none in consensus — `scan_outputkeys_for_indexes` (`blockchain.cpp:262`) is rule-60 residue, its sole caller `check_tx_input` (`:4522`) has zero callers (`PDM-Q-F18`); RPC leaf reconstruction (`core_rpc_server.cpp:1585`) | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
 | `output_txs`, `output_amounts` | ~40, ~48 | reorg pop, RPC | rebuild | CACHE |
 | `output_to_leaf`, `leaf_to_output` | 16, 16 | leaf ↔ output mapping on pop and RPC | rebuild (insertion order) | CACHE |
 | `pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions` | 128 + index, transient | maturity drain at unlock height (consensus) | rebuild from `unlock_time` | KEEP-C while pending; self-bounding (empties at maturity) |
@@ -1163,7 +1235,7 @@ must keep to *verify new blocks* versus which it may retire.
 | `archival_serve_credit`, `archival_settlement`, `archival_r_market`, `archival_sigma_work`, `archival_budget`, `archival_budget_accrual`, `archival_attestation_witness` | Small | settlement / epoch close within `W` | **retention prune at `tip − W`** (`db_lmdb.cpp:7704-7739`, un-journaled) | LOCAL-BOUNDED — already retired; nothing owed |
 | `archival_alt_attestation_witness` | Excluded | alt-chain reconnect | alt blocks | LOCAL-BOUNDED (alt) |
 | `archival_bond_unbond_log`, `archival_bond_holdings_update_log`, `archival_bond_rebond_log`, `archival_emission_claim_log`, `archival_epoch_close_log` | AppendMostly | pop path only (`revert_*_at_height`) | **nothing today** | LOCAL-BOUNDED in principle (reorg window); unbounded on disk (F16) — Q1 |
-| `archival_slash_log` | AppendMostly | pop path + `archival_slash_removed_holding_after` (`:5243`, scans above `at_height`) | **nothing today** | LOCAL-BOUNDED (retention window) once the caller bound is shown (F16) — Q1 |
+| `archival_slash_log` | AppendMostly | pop path + `archival_slash_removed_holding_after` (`:5243`, scans above `at_height`); `at_height = h_fire` on both entry paths, bounded by credit deadline / watermark + window, not by a check (F19) | **nothing today** | LOCAL-BOUNDED — horizon `tip − (CRB + n·SEB + reorg)`, minted with its check (F19) — Q1 |
 
 ### 9.5 Node-local, never chain state
 
