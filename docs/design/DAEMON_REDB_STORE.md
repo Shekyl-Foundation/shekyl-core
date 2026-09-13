@@ -387,9 +387,14 @@ Index and CHANGELOG use the Tier-A framing when reopen fires.
    this is that input: **≤ 1.25× passes, > 1.50× after one documented
    mitigation cycle hard-fails, the band between them is a decision-log call,
    peak RSS ≤ 2×**. They are frozen **now, while no measurement exists** —
-   re-verified at this pin: the workspace has no redb-touching or IBD bench
-   (`rust/*/benches/` carries only crypto-pq and engine-core economics), exactly
-   as §7.4 records. That is the point rather than a limitation: a threshold
+   re-verified at this pin: the workspace has no redb-touching or IBD bench,
+   exactly as §7.4 records. (**Census corrected 2026-09-13** at `f103acd38`,
+   no threshold touched: `rust/*/benches/` holds **38 bench files across 9
+   crates**, not only crypto-pq and engine-core economics — those two are 17 of
+   the 38. **Zero** of the 38 names `redb` or `LeafStore`, so the load-bearing
+   claim, and with it this freeze, stands; the original parenthetical
+   undercounted the denominator without affecting the conclusion drawn from
+   it.) That is the point rather than a limitation: a threshold
    chosen after the first number is a threshold fitted to it, and these ratios
    decide whether redb is genesis-load-bearing at all.
 
@@ -1028,6 +1033,192 @@ wrong thing.
 Compare engines (redb / heed / LMDB) on the rows above when the suite runs;
 halt conditions named in the bench plan (e.g. file-growth slope, RSS ceiling,
 IBD floor from DRS-0).
+
+**Stage one — landed (2026-09-13).** Gate `scripts/bench/drs_artifact.py`
+(schema, refusals, §1.3 compare, redb-engine probe) and runner
+`scripts/bench/drs_bench.py` (`measure` / `check` / `validate` / `blockers`)
+with selftest `scripts/bench/test_drs_bench.py`, wired in `docs-gates.yml`.
+The **LMDB arm only**: there is no redb consensus store to measure —
+`shekyl-chain-store` names redb in type-level table and key-ordering
+declarations and holds no `Database` and no transaction — and
+`drs_bench.py blockers` asserts that blocker still holds on every CI run, so
+the deferral turns red when DRS-E1 grows the engine instead of ageing quietly.
+
+Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**
+(the primary), plus **CPU time**, **peak RSS** and **store size** as free
+denominators of the same run. An artifact is a **record of every live axis**,
+not a bag of rows — omitting a thresholded axis would skip its floor. The
+attacker-shaped and multi-year rows, and pop/reorg, stay follow-ons with named
+blockers in `FOLLOWON_MEASURES` (recorded, not probed: a probe that cannot
+observe its own blocker would fire while the blocker still stood). Pop/reorg is
+the best positioned, since `/pop_blocks` already exists.
+
+**Vehicle:** two daemons under `--regtest`. The seed generates **offline**
+(`generateblocks` is gated on `check_core_ready()`, which a zero-peer daemon
+never satisfies, and the protocol handler initialises `m_synchronized(offline)`)
+then restarts **networked** over the same datadir; the **subject** syncs from it.
+That measures IBD rather than in-process block connect. PoW verification is
+exercised — the longhash is computed for every block with no nettype bypass and
+`--fixed-difficulty` lowers the target only — but coinbase-only blocks exercise
+**no FCMP++ verification**, which every artifact records in `verify_exercised`
+rather than leaving §1.3's "FCMP++ + PoW verify enabled as in real sync" to
+stand unqualified.
+
+**First in-tree LMDB baseline.** Three artifacts in `docs/benchmarks/`, all
+passing `drs_bench.py validate`: `drs_bench_ibd_lmdb_h2000_x86_64_20260913T192136Z.json`
+and `drs_bench_ibd_lmdb_h2000_x86_64_20260913T192638Z.json` (the primary pair, two runs so the
+spread is evidenced rather than asserted), plus
+`drs_bench_ibd_lmdb_h200_x86_64_20260913T193129Z.json`, the only one in which generation ran —
+the H = 2000 seed is reused, so its `generation_wall_s` is **null** rather than
+reporting a rate it did not observe.
+
+Conditions: one peer, coinbase-only, DRS-D9 durability **read back from the
+daemon's own resolved-flags report** (`flags=0x1 (safe), sync_mode=3`), ext4 on
+NVMe (probed, not operator-declared), i9-11950H, 16 cores. Load at the start and
+end of each measured phase is recorded per artifact, for the reason below.
+
+| axis | committed pair (H = 2000) | per block |
+| --- | --- | --- |
+| **IBD wall time** (primary) | 215.6 s / 226.8 s | 108-113 ms |
+| IBD CPU time | 803 s / 826 s — **3.64-3.73x wall** | ~405 ms CPU |
+| store, allocated | 9,736,192 B | 4,868 B |
+| store, allocated / apparent | 1.0021 | — |
+| peak RSS | 539 MiB | — |
+| chain generation (fixture, H = 200 artifact) | 156.0 s / 200 blocks | 780 ms |
+
+**THE ABSOLUTE IS PROVISIONAL, AND THE REASON IS RECORDED RATHER THAN APOLOGISED
+FOR.** Ten runs of the *identical* fixture on this machine, differing only in the
+machine's other work, spanned **IBD 198.6-415.8 s** (99-208 ms/block) and
+**generation 0.717-0.941 s/block**, at 1-minute load averages from 0.7 to **27.3**
+on 16 cores. That is a **2.1x** spread with engine, fixture, flags and durability
+all held constant — and a **1.25x floor sits far inside it**. Both wall AND CPU
+inflate under load (CPU 751 s quiet to 1006 s at load 27), so CPU time is not a
+contention-robust substitute; it inflates less, which is not the same thing.
+
+Three consequences, all deliberate:
+1. Load is a recorded **measurement condition**, beside `fs_type` and
+   `disk_class`; an artifact without it is refused.
+2. It is **reported, never thresholded**. §1.3 states no load limit, and choosing
+   one after seeing these numbers is precisely the pre-registration violation this
+   harness exists to prevent. `check` prints both runs' loads and flags a run whose
+   load exceeded its core count — saturation being a *definition*, not a chosen
+   line — and that flag **does not move the verdict**.
+3. **Quote the ratio, not the absolute.** §1.3 deferred its absolute "N hours"
+   until a first LMDB baseline landed in-tree. This lands one, and lands it with
+   the conditions that qualify it; a quiet-machine absolute is still owed before
+   any "N hours" is fixed.
+
+**Extrapolation to H = 100_000, with two separate uncertainties.** At the observed
+per-block rates: IBD ~3.0-5.8 h per engine arm, generation ~19.9-26.1 h once,
+store ~490 MB. The range is contention. The **direction** of the height-scaling
+error is separately **unknown**, and the two heights say so: per-block cost did
+not rise with height — ~112 ms/block at H = 200 against 108-113 ms at H = 2000,
+store 7,311 B/block against 4,868 B. Fixed per-run overhead amortises **down**
+over more blocks while chain and curve-tree growth push **up**; two points a
+decade apart cannot separate them. An earlier revision called this a lower bound,
+which asserts the second mechanism wins. Not measured, not claimed.
+
+Generation dominates, so the seed chain is cached and topped up via `--seed-dir`;
+only the subject is wiped per run, being the thing measured. Reuse also gives both
+engine arms a byte-identical fixture, which `check` requires.
+
+**IBD is compute-bound and parallel, not disk-bound.** Measured two independent
+ways: **3.64-3.73x CPU-to-wall** on 16 cores, and tmpfs versus ext4 agreeing
+within 5%. The CPU figure is a **delta** — sampled at the first successful
+`get_info` and again at the end — so it spans exactly the phase
+`ibd_wall_time_s` covers and excludes startup, RandomX dataset init and store
+open. An earlier revision took one cumulative end-of-run reading against a wall
+clock beginning at first RPC, mixing two phases and inflating the ratio in the
+direction that made this very conclusion look established; correcting it barely
+moved the number, so the conclusion survived a denominator it had not earned.
+
+The tmpfs agreement is a measured result and **not** a licence to bench there:
+fsync on tmpfs has no backing store to flush, so `safe` is indistinguishable from
+`MDB_NOSYNC`, DRS-D9 is not in force, and the harness refuses such a run before it
+starts.
+
+**WHAT IS NOT MEASURED, and therefore must not be concluded.** The per-operation
+breakdown of that ~405 ms of CPU per block is **unknown**: the block-addition path
+carries no `PERF` instrumentation, so the daemon's own timings cover only RPC
+entry points (in the subject's log `get_info` dominates, and that is this
+harness's polling contending on the blockchain lock, not work). Attributing the
+cost to PoW verification, to curve-tree leaf insertion, or to output indexing
+would be an inference dressed as a measurement.
+
+It matters for reading the floor in **both** directions, so neither is asserted.
+If most of that CPU is verification neither engine can avoid, a common cost
+**compresses** the ratio and a 1.25x floor on the total is a weaker discriminator
+than it looks. If it is store work — leaf insertion, index maintenance, the very
+tables DRS-E1 replaces — the ratio is **sharper** than it looks. Deciding needs
+the block-add path instrumented, which is a follow-on. Until then §1.3's floor
+stands exactly as frozen, and this paragraph records an open question rather than
+a case for moving it.
+
+**A STATED BOUND ON WHAT THIS BASELINE GENERALISES TO.** The fixture is
+coinbase-only, so it holds no non-coinbase transaction and therefore no
+transaction **prunable region** — the part of a tx covered by the
+`txs_prunable_hash` table that already exists in `db_lmdb.h`. That region is the
+subject of the pruning round's `PDM-Q-F13`/`PDM-Q-F14` findings in
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md), which name it
+as the scarce replay-compatible good and put `pqc_auths` at ~60% of tx bytes.
+Cited as **recorded findings, not rulings**: that round is **Status: OPEN** with
+`PDM-Q1`…`PDM-Q6` and `PDM-Q8` unruled, so nothing here depends on how it
+resolves — only on the shape of this fixture, which is settled. Store-size and IBD
+figures taken here are consequently measured on the block shape **least**
+sensitive to any scheme that discards prunable bytes, and they do not transfer to
+a fixture containing transactions. Recorded per artifact as
+`fixture.prunable_region`, cross-checked against `tx_per_block` so neither field
+can move alone.
+
+The trigger, not a conclusion: **when a tx-bearing fixture exists, re-take the
+baseline rather than reuse these numbers.** The store-work share of the total
+rises with transactions, and that share is precisely what §1.3's ratio is trying
+to see — which also bears on the open question below, in the direction that still
+needs the block-add path instrumented rather than inferred.
+
+**WHAT IS NOT MEASURED, and therefore must not be concluded.** The
+per-operation breakdown of that ~377 ms of CPU per block is **unknown**: the
+block-addition path carries no `PERF` instrumentation, so the daemon's own
+timings cover only RPC entry points (in the subject's log `get_info` dominates,
+and that is this harness's polling contending on the blockchain lock, not work).
+Attributing the cost to PoW verification, to curve-tree leaf insertion, or to
+output indexing would be an inference dressed as a measurement.
+
+It matters for reading the floor in **both** directions, so neither is asserted.
+If most of that CPU is verification neither engine can avoid, a common cost
+**compresses** the ratio and a 1.25x floor on the total is a weaker
+discriminator than it looks. If it is store work — leaf insertion, index
+maintenance, the very tables DRS-E1 replaces — the ratio is **sharper** than it
+looks. Deciding needs the block-add path instrumented, which is a follow-on.
+Until then §1.3's floor stands exactly as frozen, and this paragraph records an
+open question rather than a case for moving it.
+
+**Durability is measured, not labelled — and now genuinely observed.** DRS-D9 is
+imposed as `--db-sync-mode=safe`, validated against an allowed set *before* a
+daemon starts, **and then read back from the daemon's own report of the flags it
+resolved**. `core::init` logs `Database sync: flags=0x…, sync_mode=…,
+threshold=…` for exactly this purpose — A4's requirement is only checkable from
+a running node if the node says what it opened with — so artifacts carry
+`durability.observed: true` with the line itself, and the gate **refuses** an
+artifact whose resolved line reports `MDB_NOSYNC`/`MDB_MAPASYNC` or lacks the
+safe flag. An earlier revision of this section recorded `observed: false` and
+said plainly that no readback existed; that was true when written and is not
+now, which is the difference between a recorded gap and a stale claim.
+
+**A4 status on the LMDB path, corrected 2026-09-13.** Of the three
+default-by-omission mechanisms this section previously listed, **two are fixed**:
+`parse_db_sync_mode` now **fails closed** on an unrecognised token rather than
+falling through to `DEFAULT_FLAGS` (`--db-sync-mode=saf` refuses to start
+instead of silently selecting `MDB_NOSYNC`), and the resolved posture is now
+logged. **The third stands:** an unspecified `--db-sync-mode` still resolves to
+`DBF_FAST`, and with the argument defaulted the protocol handler calls
+`safesyncmode(false)` for the duration of sync — so **the shipped default
+daemon's IBD still runs at its least durable setting**, which is exactly the
+phase this table measures.
+
+A DRS-D9 baseline is consequently slower than a default daemon's IBD and is
+**not** a user-facing sync-time estimate; both engines pay the same cost, so the
+**ratio** is unaffected.
 
 ---
 
