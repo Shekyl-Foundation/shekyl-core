@@ -1183,3 +1183,23 @@ daemon→wallet — never as a second protocol round. The first
 implementation is the client; the first tests are that client against
 `shekyl-p-serve`; the challenge caller is wired to the same entry
 point.
+
+## 10. What this round did not find
+
+Surfaces examined that did not yield a further disposition:
+
+- A non-default virt-port as an anti-enumeration lever (`SF-D5`
+  reopen only).
+- Copying `IsolateSOCKSAuth` onto the daemon fetcher (`SF-D3`).
+- A second Tor process (`SF-D2`).
+- Verify-failure as a selection input (`SF-D12`).
+- A leaf-addressed suffix as a Round-1 path (`SF-D1` holds that door
+  shut).
+- Serving and fetching sharing a Tor instance (`SF-D11` withdrawn;
+  `PWD-E9`).
+
+The nonce-as-challenge-fingerprint was a **finding**, not a clean
+surface: putting `attestation_nonce` on the wire would have named the
+assignment. Ruled off the fetch (`SF-D5`/`SF-D8` amendment).
+Same-height reuse of a signature across competing blocks was examined
+and accepted: the fetch proves `P` served.
