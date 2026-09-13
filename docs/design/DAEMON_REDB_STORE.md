@@ -529,6 +529,16 @@ launch under D2-reopen.
 **S-ARCH** during C/E4; they are part of the god-object storage class, not
 only `blockchain.cpp`.
 
+**Status of the inherited pruning wiring, stated here because this is where a
+porter looks and the default reading is wrong (Rick, 2026-09-12):** the
+Monero-era stripe prune **stays in the C++ tree and is not ported** — "not
+brought over" means left where it is, not deleted. It is therefore a
+**reference implementation for the Rust rewrite, not debt to remove**, and
+rules 60 and 16 do not point at deleting it: a deletion was ruled, started and
+retracted on 2026-09-12 for exactly this reason. Its *reconstruction* half is
+expected to inform **shard** reconstruction, which is a second reason to read
+it rather than reach for it.
+
 **One named instance, because it is countable by nothing (2026-09-12, `ba4b3c73a`):** the settlement write path — `set_archival_settlement`, `get_archival_settlement`, `delete_archival_settlement_for_epoch`, `delete_archival_settlement_before_epoch` — exists **only** on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h:754–775`), with **zero** occurrences in `src/blockchain_db/blockchain_db.h` or `src/blockchain_db/testdb.h` against **48** virtual archival methods on the base class. DRS-0 therefore carries it as **known-unwired** (its production caller is a rule-22 hold on `SO-D8`, `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 — not an omission to helpfully fix) **and known-un-abstracted**: because the pair is off the interface, no port-surface completeness check enumerating `BlockchainDB` can see it — `DRS-W12`'s hazard inverted, and the half `db_lmdb.cpp:7657`'s *"not reachable, so not wrong"* note stopped one level short of. The base-class promotion is in `SO-D8`'s scope so the port does not discover it.
 
 **DRS-C PR shape — amended 2026-09-01 (CSR-4 ruled: analysis-only).** DRS-C does
@@ -1114,6 +1124,23 @@ reasons row for row** — two instruments, one field, cross-checked:
 > **state excluded from a digest, which is the failure the digest exists to
 > prevent** — so the trigger must not be forgotten either. Per table, and they
 > do not share a disposition:
+>
+> **UPDATED the same day (Rick, 2026-09-12) — the trigger now has a stated
+> direction, and it is the opposite of the one the conditionals below were
+> drafted against.** *"We are leaving the old pruning implementation in C++ and
+> writing the new one in Rust — it will include everything (more or less) that
+> the C++ pruning had."* So: the inherited mechanism **stays in the C++ tree**
+> and is simply not ported, and a **new Rust mechanism that does discard is
+> being written**. The antecedent of each conditional below — *if no Rust-side
+> discard exists* — is therefore **expected to be false**. The likely outcome is
+> that these exclusions **survive on a re-pointed rationale** (node-variability
+> created deliberately by the new mechanism) rather than being lifted, and the
+> re-pointing is what must not be skipped: a reason that happens to land on the
+> right verdict for the wrong mechanism is how the next expiry goes unnoticed.
+> **`archival_attestation_witness`'s conditional row reopens on the same
+> event**, having dissolved only while nothing could discard and nothing could
+> acquire pruned. Neither is settled until the new mechanism's discard shape is
+> ruled (`PDM-Q`, PR #723) — still a trigger, now with a direction.
 >
 > - **`txs_prunable` — the exclusion is on a trigger, not lifted.** *If* no
 >   Rust-side discard exists, the bytes are always present and replay
