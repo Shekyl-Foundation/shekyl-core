@@ -34,11 +34,27 @@ DOC = ROOT / "docs/design/DAEMON_REDB_STORE.md"
 # `m_db->` token, which is the same derivation that built the table it checks,
 # so it was green BY CONSTRUCTION over every call made through any other name.
 # Three live methods were missing and it could not see them.
-ALIAS_DECL_RE = re.compile(r"BlockchainDB\s*[*&]\s*([a-zA-Z_][a-zA-Z0-9_]*)")
-# Other access shapes, refused rather than silently missed: if the file ever
-# reaches the store through `get_db()` the alias derivation above does not
-# cover it, and the gate must say so instead of undercounting.
-INDIRECT_RE = re.compile(r"get_db\(\)\s*(?:\.|->)\s*[a-zA-Z_]")
+# `(?:const\s+)?` so a cv-qualified declaration yields the identifier and not
+# the literal token `const` as an "alias".
+ALIAS_DECL_RE = re.compile(
+    r"BlockchainDB\s*[*&]\s*(?:const\s+)?([a-zA-Z_][a-zA-Z0-9_]*)")
+
+# Receiver shapes this derivation cannot follow. It reads `alias->method`, so a
+# call written any other way is invisible to it — which is exactly the defect
+# this gate was built green over. Each is REFUSED rather than silently missed:
+# undercounting is the failure mode, and it must be loud. Zero of these are
+# present today; they are refused so that the day one appears, the gate says so
+# instead of quietly shrinking the vocabulary.
+UNHANDLED_SHAPES = (
+    (re.compile(r"get_db\(\)\s*(?:\.|->)\s*[a-zA-Z_]"),
+     "reaches the store through `get_db()`"),
+    (re.compile(r"\bauto\s*[*&]?\s*[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*\*?\s*"
+                r"(?:m_db|db)\s*[;,)]"),
+     "binds the store to an `auto` name, whose declaration carries no "
+     "`BlockchainDB` token for the alias derivation to find"),
+    (re.compile(r"\(\s*\*\s*(?:m_db|db)\s*\)\s*\."),
+     "calls through a dereferenced pointer `(*db).method()` rather than `->`"),
+)
 SECTION_RE = re.compile(r"^### 3\.5 ", re.M)
 ROW_RE = re.compile(r"^\|\s*\*\*(S-[A-Z-]+)\*\*\s*\|([^|]*)\|\s*(\d+)\s*\|([^|]*)\|", re.M)
 METHOD_RE = re.compile(r"`([a-zA-Z_][a-zA-Z0-9_]*)`")
@@ -64,10 +80,13 @@ def main():
     if not vocabulary:
         report([f"{SOURCE.name}: parsed ZERO store calls across aliases {aliases} — "
                 "the derivation is broken"])
-    if INDIRECT_RE.search(src):
-        report([f"{SOURCE.name}: reaches the store through `get_db()`, which this gate's alias "
-                "derivation does not cover. Extend the derivation rather than letting the "
-                "vocabulary silently undercount."])
+    for shape_re, what in UNHANDLED_SHAPES:
+        hit = shape_re.search(src)
+        if hit:
+            line = src.count("\n", 0, hit.start()) + 1
+            report([f"{SOURCE.name}:{line}: {what}, which this gate's alias derivation does not "
+                    f"cover ({hit.group(0).strip()!r}). Extend the derivation to follow that "
+                    "shape rather than letting the vocabulary silently undercount."])
 
     text = DOC.read_text(encoding="utf-8")
     m = SECTION_RE.search(text)

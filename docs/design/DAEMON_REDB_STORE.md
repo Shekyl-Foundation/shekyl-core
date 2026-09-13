@@ -533,11 +533,21 @@ derivation cannot tell those apart.
 the table.** Both used the same `m_db->` regex, so the bijection was green by
 construction over every call made through any other name. The gate now derives
 the alias SET from `BlockchainDB *`/`&` declarations and collects calls on each,
-so a third alias is covered without anyone remembering to add it; and it
-refuses outright if the file ever reaches the store via `get_db()`, which that
-derivation would not cover. Verified complete for this file: exactly two such
-identifiers exist, `db` and `m_db`, with no `get_db()` access and no
-`BlockchainDB &` references.
+so a third alias is covered without anyone remembering to add it.
+
+It reads `alias->method`, so a call written any other way is still invisible to
+it — and rather than leave that as the next reader's silent undercount, the
+three remaining receiver shapes are **refused by name**: `get_db()` access, an
+`auto` binding of the store (`auto *alias = m_db;` — its declaration carries no
+`BlockchainDB` token to derive from), and a dereferenced call
+(`(*db).method()`). None is present today; each is refused so that the day one
+appears the gate says so, with the file and line, instead of quietly shrinking
+the vocabulary. The declaration pattern also tolerates a cv-qualifier, so
+`BlockchainDB* const m_db` derives `m_db` and not `const`.
+
+Verified complete for this file: exactly two such identifiers exist, `db` and
+`m_db`; no `get_db()` access, no `auto` binding of the store, no dereferenced
+calls, and no `BlockchainDB &` references.
 
 **The count moved, and the membership moved further — but the delta must be
 measured with ONE instrument.** §3.5 was stamped at `3247fe3b6` (2026-07-27)
