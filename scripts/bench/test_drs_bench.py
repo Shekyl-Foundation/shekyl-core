@@ -46,12 +46,16 @@ def valid_artifact(engine="lmdb", **over):
             "observed": False,
             "readback_gap": "no readback exists",
         },
+        "environment": {"loadavg_1m_at_start": 0.3, "loadavg_1m_at_end": 0.4,
+                        "loadavg_5m_at_end": 0.35, "cpu_count": 8,
+                        "note": "quiet"},
         "hardware": {"cpu_model": "Test CPU", "ram_bytes": 1 << 34,
                      "disk_class": "ssd_or_nvme", "disk_class_source": "probed",
                      "fs_type": "ext4", "cpu_count": 8},
         "fixture": {
             "nettype": "fakechain", "height_reached": 200, "height_requested": 200,
             "reference_height": D.REFERENCE_HEIGHT, "tx_per_block": 0,
+            "prunable_region": D.PRUNABLE_ABSENT,
             "verify_exercised": {"pow": True, "fcmp_pp": False},
             "seed_height": 200, "peers_used": 1,
         },
@@ -166,6 +170,23 @@ class ArtifactRefusals(unittest.TestCase):
         self._refuse(lambda a: a["durability"].__setitem__("observed", True),
                      "must be present and false")
 
+    def test_refuses_missing_environment_block(self):
+        """System load is a condition of a wall-time measurement: the same fixture
+        on this machine moved 36-55% on wall between idle and load 8.6/16 cores,
+        and a 1.25x floor sits well inside that band."""
+        self._refuse(lambda a: a.pop("environment"), "environment block absent")
+
+    def test_refuses_unreadable_loadavg_sentinel(self):
+        """-1.0 is the sentinel for an unreadable /proc, and it must not pass as a
+        load figure. 0.0 was deliberately NOT used as the sentinel because zero is
+        a legitimate load."""
+        self._refuse(lambda a: a["environment"].__setitem__(
+            "loadavg_1m_at_start", None), "loadavg_1m_at_start")
+
+    def test_refuses_missing_cpu_count_for_the_load(self):
+        self._refuse(lambda a: a["environment"].pop("cpu_count"),
+                     "load average means nothing without the core count")
+
     def test_refuses_missing_hardware(self):
         self._refuse(lambda a: a.pop("hardware"), "hardware block absent")
 
@@ -217,6 +238,25 @@ class ArtifactRefusals(unittest.TestCase):
         'FCMP++ + PoW verify enabled as in real sync' stand unqualified."""
         self._refuse(lambda a: a["fixture"]["verify_exercised"].pop("fcmp_pp"),
                      "must state pow and fcmp_pp explicitly")
+
+    def test_refuses_missing_prunable_region(self):
+        """It bounds what the baseline generalises to: a coinbase-only fixture is
+        the block shape least sensitive to discarding prunable bytes, so figures
+        taken here do not transfer to a tx-bearing fixture."""
+        self._refuse(lambda a: a["fixture"].pop("prunable_region"),
+                     "fixture.prunable_region absent")
+
+    def test_refuses_coinbase_only_claiming_a_prunable_region(self):
+        self._refuse(lambda a: a["fixture"].__setitem__("prunable_region",
+                                                        "1234 bytes measured"),
+                     "has no prunable region to report")
+
+    def test_refuses_tx_bearing_fixture_claiming_absence_by_construction(self):
+        """The other direction, which is what makes this a cross-check and not a
+        restatement of tx_per_block: absence-by-construction holds only for a
+        coinbase-only fixture."""
+        self._refuse(lambda a: a["fixture"].__setitem__("tx_per_block", 12),
+                     "claims absence by construction")
 
     def test_refuses_missing_tx_per_block(self):
         self._refuse(lambda a: a["fixture"].pop("tx_per_block"), "tx_per_block absent")
@@ -314,6 +354,11 @@ class Comparability(unittest.TestCase):
         self._refuse(lambda b, c: c["fixture"].__setitem__("height_reached", 150),
                      "fixture.height_reached differs")
 
+    def test_refuses_differing_prunable_region(self):
+        self._refuse(lambda b, c: c["fixture"].__setitem__("prunable_region",
+                                                           "present, 900 KB"),
+                     "fixture.prunable_region differs")
+
     def test_refuses_differing_peer_count(self):
         """IBD wall time scales with the number of peers serving it, so equal
         heights at different peer counts are not the same experiment."""
@@ -400,6 +445,25 @@ class Verdicts(unittest.TestCase):
         rep = self._cmp(wall_ratio=1.0, rss_ratio=2.5)
         self.assertEqual(self._row(rep, "ibd_wall_time_s")["verdict"], "PASS")
         self.assertEqual(rep["verdict"], "OVER")
+
+    def test_saturated_run_is_flagged_without_changing_the_verdict(self):
+        """`loadavg > cores` is the definition of more runnable work than cores, so
+        reporting it invents no threshold. It must SURFACE and must NOT move the
+        verdict: §1.3 sets no load limit, and quietly failing a run for being busy
+        would be exactly the pre-registration violation this harness prevents."""
+        b = valid_artifact("lmdb"); c = valid_artifact("redb")
+        c["environment"]["loadavg_1m_at_end"] = 27.0  # 8 cores in the fixture
+        self.assertEqual(D.comparability_refusals(b, c), [],
+                         "load must not become a comparability refusal")
+        rep = D.compare(b, c)
+        self.assertTrue(any("more runnable work than cores" in x
+                            for x in rep["contention_notes"]), rep["contention_notes"])
+        self.assertEqual(rep["verdict"], "PASS",
+                         "a contention note must not change the §1.3 verdict")
+
+    def test_quiet_run_has_no_contention_note(self):
+        rep = D.compare(valid_artifact("lmdb"), valid_artifact("redb"))
+        self.assertEqual(rep["contention_notes"], [])
 
     def test_shortfall_names_the_height_and_the_missing_fcmp(self):
         rep = self._cmp(height=200)

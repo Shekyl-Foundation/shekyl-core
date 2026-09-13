@@ -10,9 +10,9 @@
       "--non-interactive",
       "--log-level=1",
       "--data-dir=/home/torvaldsl/shekyl/drsbench-work/subject",
-      "--p2p-bind-port=43573",
-      "--rpc-bind-port=52241",
-      "--add-exclusive-node=127.0.0.1:47655"
+      "--p2p-bind-port=46701",
+      "--rpc-bind-port=55493",
+      "--add-exclusive-node=127.0.0.1:41163"
     ],
     "observed": false,
     "policy": "DRS-D9 full-fsync-per-commit",
@@ -21,6 +21,13 @@
   },
   "engine": "lmdb",
   "engine_selected_by": "daemon-default-lmdb (no engine switch exists)",
+  "environment": {
+    "cpu_count": 16,
+    "loadavg_1m_at_end": 6.3193359375,
+    "loadavg_1m_at_start": 1.0048828125,
+    "loadavg_5m_at_end": 5.46337890625,
+    "note": "the subject is meant to be the machine's only significant load. A wall-time ratio requires two runs at comparable load: on this machine the same fixture moved 36-55% on wall and 16-24% on CPU between an idle box and a 5-minute load average of 8.6 over 16 cores, and a 1.25x floor sits well inside that band"
+  },
   "fixture": {
     "blocks_generated": 0,
     "generation_wall_s": null,
@@ -28,6 +35,7 @@
     "height_requested": 2000,
     "nettype": "fakechain",
     "peers_used": 1,
+    "prunable_region": "absent by construction: coinbase-only fixture, no non-coinbase transaction and therefore no txs_prunable_hash region",
     "reference_height": 100000,
     "seed_height": 2001,
     "seed_reused": true,
@@ -38,7 +46,7 @@
     },
     "verify_note": "PoW longhash is computed and checked for every block with no nettype bypass; --fixed-difficulty lowers the TARGET only. generateblocks produces coinbase-only blocks, so FCMP++ verification is not exercised at all."
   },
-  "git_rev": "bd01376395e8d24b02bd6212ccd59d865b2395a6",
+  "git_rev": "999979fc92510be51588a05a2ccbf93161ec7d13",
   "hardware": {
     "cpu_count": 16,
     "cpu_model": "11th Gen Intel(R) Core(TM) i9-11950H @ 2.60GHz",
@@ -54,15 +62,15 @@
       "name": "ibd_wall_time_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 198.59
+      "value": 212.035
     },
     {
       "axis": "cpu_time",
-      "denominator": "utime+stime of the subject over all threads, sampled at the first successful get_info and again at the end, reported as the DELTA -- so it spans exactly the same phase as ibd_wall_time_s and excludes startup, RandomX dataset init and store open. Against that wall figure it says whether the phase was compute-bound and how parallel; it does NOT attribute the cost to any particular operation",
+      "denominator": "utime+stime of the subject over all threads, sampled at the first successful get_info and again at the end, reported as the DELTA \u2014 so it spans exactly the same phase as ibd_wall_time_s",
       "name": "subject_cpu_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 751.76
+      "value": 787.41
     },
     {
       "axis": "memory",
@@ -70,7 +78,7 @@
       "name": "peak_rss_bytes",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 564871168
+      "value": 564719616
     },
     {
       "axis": "disk",

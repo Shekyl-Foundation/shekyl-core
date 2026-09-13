@@ -73,6 +73,20 @@ def _dir_bytes(path, apparent):
                               text=True).stdout.split()[0])
 
 
+def _loadavg():
+    """(1-minute, 5-minute) load average, or (-1.0, -1.0) if unreadable.
+
+    A negative sentinel rather than 0.0: zero is a legitimate load and would read
+    as "the machine was idle", which is the placeholder-satisfies-the-field defect
+    this file has now hit twice. The validator requires a number and a reader can
+    see that -1 is not one of them.
+    """
+    try:
+        return os.getloadavg()[0], os.getloadavg()[1]
+    except OSError:
+        return -1.0, -1.0
+
+
 def _cpu_seconds(pid):
     """utime+stime of the process, all threads, in seconds. None if unreadable."""
     try:
@@ -287,6 +301,7 @@ def measure(args):
             t0, reached, peers = subj.ready_at, 0, 0
             rss_samples = []
             cpu_at_start = _cpu_seconds(subj.pid)
+            load_at_start = _loadavg()
             deadline = t0 + args.sync_timeout
             while time.time() < deadline:
                 try:
@@ -308,6 +323,7 @@ def measure(args):
             if rss is not None:
                 rss_samples.append(rss)
             cpu_at_end = _cpu_seconds(subj.pid)
+            load_at_end = _loadavg()
             synced = reached >= seed_h
         # Store size AFTER close: a live LMDB env reported 40.7 MB for a
         # 200-block chain that measured 1.43 MB once closed.
@@ -347,6 +363,17 @@ def measure(args):
                             "allowed set before spawning and the argv is recorded "
                             "verbatim, which is not the same as observing the flags",
         },
+        "environment": {
+            "loadavg_1m_at_start": load_at_start[0],
+            "loadavg_1m_at_end": load_at_end[0],
+            "loadavg_5m_at_end": load_at_end[1],
+            "cpu_count": os.cpu_count(),
+            "note": "the subject is meant to be the machine's only significant load. "
+                    "A wall-time ratio requires two runs at comparable load: on this "
+                    "machine the same fixture moved 36-55% on wall and 16-24% on CPU "
+                    "between an idle box and a 5-minute load average of 8.6 over 16 "
+                    "cores, and a 1.25x floor sits well inside that band",
+        },
         "hardware": A.hardware_fingerprint(subj_dir, args.disk_class),
         "fixture": {
             "nettype": "fakechain",
@@ -354,6 +381,7 @@ def measure(args):
             "height_requested": int(args.height),
             "reference_height": A.REFERENCE_HEIGHT,
             "tx_per_block": 0,
+            "prunable_region": A.PRUNABLE_ABSENT,
             "verify_exercised": {"pow": True, "fcmp_pp": False},
             "verify_note": "PoW longhash is computed and checked for every block with "
                            "no nettype bypass; --fixed-difficulty lowers the TARGET "
@@ -398,7 +426,10 @@ def measure(args):
         fh.write("\n")
     print(f"wrote {args.out}: engine={args.engine} height_reached={reached} "
           f"{A.PRIMARY_MEASURE}={elapsed:.3f}s peak_rss={peak} "
-          f"store={store_bytes} (apparent {store_apparent})")
+          f"store={store_bytes} (apparent {store_apparent}) "
+          f"load={load_at_start[0]:.2f}->{load_at_end[0]:.2f} on {os.cpu_count()} cores")
+    for note in A.saturation_notes(artifact, "this run"):
+        print(f"CONTENTION: {note}")
     if reached < A.REFERENCE_HEIGHT:
         print(f"NOTE: height {reached} is below §1.3's reference {A.REFERENCE_HEIGHT}. "
               "§1.3 permits 'max available fixture; the artifact records the height it "
@@ -487,6 +518,9 @@ def main():
                 ratio = "n/a" if row["ratio"] is None else f"{row['ratio']:.4f}x"
                 print(f"  [{row['verdict']:<13}] {row['name']:<18} {ratio:>10}  "
                       f"({row['axis']}) — {row['note']}")
+            print(f"  load: {rep['load_conditions']}")
+            for c in rep["contention_notes"]:
+                print(f"  CONTENTION: {c}")
             for s in rep["fixture_shortfalls"]:
                 print(f"  SHORTFALL: {s}")
             print(f"  verdict: {rep['verdict']}")

@@ -38,7 +38,41 @@ ALLOWED_SYNC_MODES = ("safe",)
 # §1.3 requires the disk TYPE. "unknown" is not a type, so it is not a value.
 ALLOWED_DISK_CLASSES = ("hdd", "ssd_or_nvme")
 
+# SYSTEM LOAD IS A CONDITION OF A WALL-TIME MEASUREMENT, in the same class as
+# `fs_type` and `disk_class`: not a detail, a thing without which the number does
+# not mean what it says.
+#
+# Measured on this machine, same fixture, same inputs, only the machine's other
+# work differing: idle gave 198.6-202.5 s wall at 751-758 CPU-s (3.74-3.79x);
+# at a 5-minute load average of 8.6 on 16 cores the same run gave 272.7-311.1 s
+# wall at 875-939 CPU-s (3.02-3.21x). So wall inflated 36-55% AND CPU inflated
+# 16-24% -- CPU time is NOT a contention-robust substitute for a quiet machine,
+# it only inflates less. A 1.25x floor is well inside that band, which is why the
+# load has to be on the artifact rather than in someone's memory of the run.
+#
+# Recorded, NOT thresholded. §1.3 states no load limit and inventing one here
+# would be exactly the pre-registration violation this harness exists to avoid;
+# the rule is that a ratio needs two runs at comparable RECORDED load, and the
+# artifact is what lets a reader check that.
+LOADAVG_FIELDS = ("loadavg_1m_at_start", "loadavg_1m_at_end", "loadavg_5m_at_end")
+
 ENGINE_DEFAULT_LMDB = "daemon-default-lmdb (no engine switch exists)"
+
+# A STATED BOUND ON WHAT A FIXTURE GENERALISES TO, recorded for the same reason as
+# `fs_type`: it is a condition of the measurement, not a detail.
+#
+# A coinbase-only chain holds no non-coinbase transaction, so it carries no
+# transaction PRUNABLE REGION — the part of a tx covered by the
+# `txs_prunable_hash` table that already exists in `db_lmdb.h`. Store-size and IBD
+# figures taken on such a fixture are therefore measured on the block shape LEAST
+# sensitive to any scheme that discards prunable bytes, and they do not transfer to
+# a fixture containing transactions.
+#
+# Recorded as a TRIGGER rather than a conclusion: when a tx-bearing fixture exists,
+# re-take the baseline instead of reusing these numbers — the store-work share of
+# the total rises, and that share is what §1.3's ratio is trying to see.
+PRUNABLE_ABSENT = ("absent by construction: coinbase-only fixture, no non-coinbase "
+                   "transaction and therefore no txs_prunable_hash region")
 
 # fsync against tmpfs/ramfs has no backing store to flush, so `safe` is
 # indistinguishable from MDB_NOSYNC.
@@ -160,6 +194,21 @@ def artifact_refusals(a):
                      "LMDB env flags exists. Recording it as observed would claim an "
                      "observation the harness cannot make")
 
+    env = a.get("environment")
+    if not isinstance(env, dict):
+        r.append("environment block absent — system load during the run is a condition "
+                 "of a wall-time measurement, not a detail: the same fixture on this "
+                 "machine moved 36-55% on wall and 16-24% on CPU between an idle box "
+                 "and a 5-minute load average of 8.6")
+    else:
+        for k in LOADAVG_FIELDS:
+            if not isinstance(env.get(k), (int, float)):
+                r.append(f"environment.{k} is {env.get(k)!r} — a wall-time figure whose "
+                         "contention is unrecorded cannot be compared against another")
+        if not isinstance(env.get("cpu_count"), int) or env["cpu_count"] < 1:
+            r.append("environment.cpu_count absent — a load average means nothing "
+                     "without the core count it is relative to")
+
     h = a.get("hardware")
     if not isinstance(h, dict):
         r.append("hardware block absent — §1.3 requires CPU model, RAM and disk type "
@@ -203,6 +252,24 @@ def artifact_refusals(a):
         if "tx_per_block" not in f:
             r.append("fixture.tx_per_block absent — it is the reason fcmp_pp is not "
                      "exercised, so it belongs in the record")
+        # Cross-check against tx_per_block, able to disagree in BOTH directions: a
+        # coinbase-only fixture must report the prunable region absent, and a
+        # tx-bearing one must not claim absence-by-construction. Either field
+        # changing alone is a red, which is what separates this from a restatement
+        # of tx_per_block.
+        pr = f.get("prunable_region")
+        if not pr:
+            r.append("fixture.prunable_region absent — it bounds what this baseline "
+                     "generalises to, a fixture with no prunable region being the "
+                     "block shape least sensitive to discarding prunable bytes")
+        elif f.get("tx_per_block") == 0 and pr != PRUNABLE_ABSENT:
+            r.append(f"fixture.tx_per_block is 0 but prunable_region says {pr[:60]!r}; "
+                     "a coinbase-only fixture has no prunable region to report")
+        elif isinstance(f.get("tx_per_block"), int) and f["tx_per_block"] > 0 \
+                and pr == PRUNABLE_ABSENT:
+            r.append(f"fixture.tx_per_block is {f['tx_per_block']} but prunable_region "
+                     "claims absence by construction, which holds only for a "
+                     "coinbase-only fixture")
         peers = f.get("peers_used")
         if not isinstance(peers, int) or peers < 1:
             r.append(f"fixture.peers_used is {peers!r} — IBD wall time scales with the "
@@ -289,7 +356,7 @@ def comparability_refusals(base, cand):
                  "policies measures the policy, not the engine")
     bf, cf = base.get("fixture", {}), cand.get("fixture", {})
     for k in ("nettype", "height_reached", "verify_exercised", "tx_per_block",
-              "peers_used"):
+              "peers_used", "prunable_region"):
         if bf.get(k) != cf.get(k):
             r.append(f"fixture.{k} differs ({bf.get(k)!r} vs {cf.get(k)!r}) — the two "
                      "runs did not do the same work")
@@ -307,6 +374,30 @@ def comparability_refusals(base, cand):
         r.append(f"thresholded measures {skipped} are not present on both artifacts; "
                  "omitting one skips its floor")
     return r
+
+
+def saturation_notes(a, tag):
+    """Contention notes for one artifact. Empty when the machine was not saturated.
+
+    `loadavg > cpu_count` is the DEFINITION of more runnable work than cores, not a
+    threshold anyone chose, which is why it is safe to report here: §1.3 states no
+    load limit and inventing one would be the pre-registration violation this
+    harness exists to prevent. So this SURFACES contention and never changes a
+    verdict. Measured on this machine, same fixture and inputs: 198.6-202.5 s wall
+    idle against 415.8 s at a 1-minute load of 27 on 16 cores. A 1.25x floor is
+    far inside that, so a ratio taken across two differently-loaded runs measures
+    the machine's other work.
+    """
+    env = a.get("environment") or {}
+    n = env.get("cpu_count") or 0
+    out = []
+    for k in ("loadavg_1m_at_start", "loadavg_1m_at_end"):
+        v = env.get(k)
+        if isinstance(v, (int, float)) and n and v > n:
+            out.append(f"{tag}: {k} was {v:.2f} on {n} cores — the machine had more "
+                       f"runnable work than cores, so this run's ABSOLUTE wall time is "
+                       f"contention-inflated and is not a reference figure")
+    return out
 
 
 def compare(base, cand):
@@ -356,7 +447,17 @@ def compare(base, cand):
         if not f["verify_exercised"].get("fcmp_pp"):
             short.append(f"{tag} exercised NO FCMP++ verification "
                          f"(tx_per_block={f.get('tx_per_block')})")
+    contention = (saturation_notes(base, "baseline") +
+                  saturation_notes(cand, "candidate"))
+    benv, cenv = base.get("environment") or {}, cand.get("environment") or {}
+    load_note = (f"baseline load {benv.get('loadavg_1m_at_start')}->"
+                 f"{benv.get('loadavg_1m_at_end')}, candidate load "
+                 f"{cenv.get('loadavg_1m_at_start')}->{cenv.get('loadavg_1m_at_end')} "
+                 f"on {benv.get('cpu_count')} cores. §1.3 sets no load limit, so this is "
+                 f"reported and NOT thresholded; a ratio needs two runs at comparable "
+                 f"recorded load")
     return {"schema_version": "shekyl_drs_bench_compare_v1",
+            "load_conditions": load_note, "contention_notes": contention,
             "thresholds_frozen_at": FROZEN_AT, "baseline_engine": base["engine"],
             "candidate_engine": cand["engine"], "rows": rows, "verdict": worst,
             "fixture_shortfalls": short}
