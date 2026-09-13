@@ -1139,7 +1139,13 @@ starts.
 **A STATED BOUND ON WHAT THIS BASELINE GENERALISES TO.** The fixture is
 coinbase-only, so it holds no non-coinbase transaction and therefore no
 transaction **prunable region** — the part of a tx covered by the
-`txs_prunable_hash` table that already exists in `db_lmdb.h`. Store-size and IBD
+`txs_prunable_hash` table that already exists in `db_lmdb.h`. That region is the
+subject of the pruning round's `PDM-Q-F13`/`PDM-Q-F14` findings in
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md), which name it
+as the scarce replay-compatible good and put `pqc_auths` at ~60% of tx bytes.
+Cited as **recorded findings, not rulings**: that round is **Status: OPEN** with
+`PDM-Q1`…`PDM-Q6` and `PDM-Q8` unruled, so nothing here depends on how it
+resolves — only on the shape of this fixture, which is settled. Store-size and IBD
 figures taken here are consequently measured on the block shape **least**
 sensitive to any scheme that discards prunable bytes, and they do not transfer to
 a fixture containing transactions. Recorded per artifact as
