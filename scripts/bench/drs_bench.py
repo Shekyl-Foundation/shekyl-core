@@ -141,7 +141,15 @@ PRIMARY_MEASURE = "ibd_wall_time_s"
 MEASURE_AXES = {
     "ibd_wall_time_s": ("wall_time", "s", IBD_FLOOR_RATIO, IBD_HARD_FAIL_RATIO),
     "peak_rss_bytes": ("memory", "bytes", PEAK_RSS_RATIO, PEAK_RSS_RATIO),
+    # Two disk rows, because §1.3's resource bound names a "file-size / logical-size
+    # ratio": `store_bytes` is what the filesystem ALLOCATED (the operator's cost)
+    # and `store_bytes_apparent` is the file length. They diverge exactly when an
+    # engine leaves holes, which is a property that could differ between engines,
+    # so collapsing them to one number would hide the thing worth comparing.
+    # Neither carries a threshold — the ceiling is set after the first multi-year
+    # sim, so a verdict here would be invented.
     "store_bytes": ("disk", "bytes", None, None),
+    "store_bytes_apparent": ("disk", "bytes", None, None),
 }
 
 # ── §7.4 follow-on measures, each with a NAMED blocker (rule 22) ────────────
@@ -470,6 +478,13 @@ def hardware_fingerprint(path):
             "cpu_count": os.cpu_count()}
 
 
+def _dir_bytes(path, apparent):
+    """Total size of a directory tree: apparent file length, or allocated blocks."""
+    args = ["du", "-s", "-b", path] if apparent else ["du", "-s", "-B1", path]
+    return int(subprocess.run(args, check=True, capture_output=True,
+                              text=True).stdout.split()[0])
+
+
 def _peak_rss_bytes(pid):
     """VmHWM — the kernel's own high-water mark, read while the process lives.
 
@@ -658,13 +673,18 @@ def measure(args):
                 time.sleep(args.poll_interval)
             elapsed = time.time() - t0
             peak = max(peak, _peak_rss_bytes(subj.pid) or 0)
-            store_bytes = int(subprocess.run(["du", "-sb", subj_dir], check=True,
-                                             capture_output=True,
-                                             text=True).stdout.split()[0])
             synced = reached >= seed_h
         finally:
             subj.terminate()
             subj.wait(args.shutdown_timeout)
+        # AFTER the store is closed, never while the daemon holds it. A live LMDB
+        # environment reported 40.7 MB for a 200-block chain that measured 1.43 MB
+        # once closed — a ~28x overstatement. Whatever the transient is
+        # (in-flight batch growth during sync), a figure that changes by that much
+        # at shutdown is not a store size, and taking it while running would have
+        # put an irreproducible number in a threshold-bearing artifact.
+        store_bytes = _dir_bytes(subj_dir, apparent=False)
+        store_apparent = _dir_bytes(subj_dir, apparent=True)
     finally:
         proc.terminate()
         proc.wait(args.shutdown_timeout)
@@ -723,8 +743,14 @@ def measure(args):
                             "attacker-feed row, which has no definition yet"},
             {"name": "store_bytes", "axis": "disk", "unit": "bytes",
              "value": store_bytes, "scenario": scenario,
-             "denominator": "du -sb of the subject data dir after sync. NOT §7.4's "
+             "denominator": "filesystem-ALLOCATED bytes of the subject data dir, "
+                            "measured after the store was closed. NOT §7.4's "
                             "multi-year row"},
+            {"name": "store_bytes_apparent", "axis": "disk", "unit": "bytes",
+             "value": store_apparent, "scenario": scenario,
+             "denominator": "apparent (file-length) bytes of the same directory, same "
+                            "moment; differs from the allocated figure only if the "
+                            "engine leaves holes"},
         ],
     }
     refusals = artifact_refusals(artifact)
@@ -735,7 +761,8 @@ def measure(args):
         json.dump(artifact, fh, indent=2, sort_keys=True)
         fh.write("\n")
     print(f"wrote {args.out}: engine={args.engine} height_reached={reached} "
-          f"{PRIMARY_MEASURE}={elapsed:.3f}s peak_rss={peak} store={store_bytes}")
+          f"{PRIMARY_MEASURE}={elapsed:.3f}s peak_rss={peak} "
+          f"store={store_bytes} (apparent {store_apparent})")
     if reached < REFERENCE_HEIGHT:
         print(f"NOTE: height {reached} is below §1.3's reference {REFERENCE_HEIGHT}. "
               "§1.3 permits 'max available fixture; the artifact records the height it "

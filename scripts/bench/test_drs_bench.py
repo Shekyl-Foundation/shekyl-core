@@ -58,6 +58,8 @@ def valid_artifact(engine="lmdb", **over):
              "value": 1 << 30, "scenario": "ibd_coinbase_only"},
             {"name": "store_bytes", "axis": "disk", "unit": "bytes",
              "value": 1 << 20, "scenario": "ibd_coinbase_only"},
+            {"name": "store_bytes_apparent", "axis": "disk", "unit": "bytes",
+             "value": 1 << 20, "scenario": "ibd_coinbase_only"},
         ],
     }
     a.update(over)
@@ -312,6 +314,11 @@ class Verdicts(unittest.TestCase):
         rep = self._cmp()
         self.assertEqual(self._row(rep, "store_bytes")["verdict"], "NO_THRESHOLD")
 
+    def test_apparent_store_row_also_has_no_threshold(self):
+        rep = self._cmp()
+        self.assertEqual(self._row(rep, "store_bytes_apparent")["verdict"],
+                         "NO_THRESHOLD")
+
     def test_worst_verdict_wins_over_a_passing_row(self):
         rep = self._cmp(wall_ratio=1.0, rss_ratio=2.5)
         self.assertEqual(self._row(rep, "ibd_wall_time_s")["verdict"], "PASS")
@@ -398,7 +405,7 @@ class FollowonRegistry(unittest.TestCase):
     def test_no_followon_silently_shares_a_name_with_a_live_measure(self):
         """A follow-on that also appears in MEASURE_AXES would be emitted and
         deferred at the same time."""
-        live = set(D.MEASURE_AXES) - {"store_bytes"}
+        live = set(D.MEASURE_AXES) - {"store_bytes", "store_bytes_apparent"}
         self.assertEqual(live & set(D.FOLLOWON_MEASURES), set())
 
 
