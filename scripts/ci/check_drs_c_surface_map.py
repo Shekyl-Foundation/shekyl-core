@@ -50,6 +50,22 @@ DOC = ROOT / "docs/design/DAEMON_REDB_STORE.md"
 ALIAS_DECL_RE = re.compile(
     r"BlockchainDB\s*([*&])\s*(?:const\s+)?([a-zA-Z_][a-zA-Z0-9_]*)")
 
+# Figures about this partition that live OUTSIDE §3.5. The heading's count was
+# gated; these siblings were not, and every one of them drifted to 97 while the
+# tree moved to 102 — in the design doc's own preamble, in the reconciliation
+# doc's two tables, and in the tracking index. A gated number beside ungated
+# restatements of itself is a number that disagrees with itself in public.
+# Each file must state the figure at least once, and every occurrence must
+# equal the derivation (rule 47: a file that has stopped stating it fails as a
+# missing subject, rather than passing by absence).
+CROSS_REF_FILES = (
+    ROOT / "docs/design/DAEMON_REDB_STORE.md",
+    ROOT / "docs/design/CONSENSUS_STORE_RECONCILIATION.md",
+    ROOT / "docs/design/IMPLEMENTATION_INDEX.md",
+)
+CROSS_REF_METHODS_RE = re.compile(r"(\d+) store methods")
+CROSS_REF_SITES_RE = re.compile(r"(\d+) store call sites")
+
 SECTION_RE = re.compile(r"^### 3\.5 ", re.M)
 ROW_RE = re.compile(r"^\|\s*\*\*(S-[A-Z-]+)\*\*\s*\|([^|]*)\|\s*(\d+)\s*\|([^|]*)\|", re.M)
 METHOD_RE = re.compile(r"`([a-zA-Z_][a-zA-Z0-9_]*)`")
@@ -119,6 +135,45 @@ def unhandled_shapes(src, aliases):
         if hit:
             found.append((src.count("\n", 0, hit.start()) + 1, what, hit.group(0).strip()))
     return found
+
+
+def check_cross_references(read, vocabulary_size, call_sites):
+    """Figures restated outside §3.5 must equal the derivation.
+
+    `read` maps a path to its text, so this is testable without a tree.
+    """
+    failures = []
+    for path in CROSS_REF_FILES:
+        text = read(path)
+        if text is None:
+            failures.append(f"{path.name}: missing — a cross-reference subject does not exist")
+            continue
+        stated = CROSS_REF_METHODS_RE.findall(text)
+        if not stated:
+            failures.append(
+                f"{path.name}: states no `N store methods` figure. It is a declared "
+                f"cross-reference for the DRS-C partition, so silence here is a stale figure "
+                f"that got reworded, not a file with nothing to say.")
+        for n in set(stated):
+            if int(n) != vocabulary_size:
+                failures.append(
+                    f"{path.name}: says {n} store methods; the tree has {vocabulary_size}. "
+                    f"A figure restated outside §3.5 drifts exactly as quietly as one inside it.")
+        for n in set(CROSS_REF_SITES_RE.findall(text)):
+            if int(n) != call_sites:
+                failures.append(
+                    f"{path.name}: says {n} store call sites; the tree has {call_sites}.")
+    return failures
+
+
+def count_call_sites(src, aliases):
+    """Call SITES, not distinct methods — the tangle's size, restated in prose."""
+    total = 0
+    for name, operators in aliases.items():
+        for op in operators:
+            total += len(re.findall(
+                rf"(?<!\w){re.escape(name)}\s*{re.escape(op)}\s*[a-zA-Z_]", src))
+    return total
 
 
 def slice_section(text):
@@ -212,7 +267,11 @@ def main():
         report([f"{DOC.name}: §3.5 heading not found — subject missing"])
 
     failures, assigned, rows, counts_ok = check_partition(section, vocabulary)
-    report([f"{DOC.name}: {f}" if f.startswith("§3.5 h") else f for f in failures])
+    failures = [f"{DOC.name}: {f}" if f.startswith("§3.5 h") else f for f in failures]
+    failures += check_cross_references(
+        lambda p: p.read_text(encoding="utf-8") if p.is_file() else None,
+        len(vocabulary), count_call_sites(src, aliases))
+    report(failures)
 
     shown = {name: "".join(sorted(ops)) for name, ops in sorted(aliases.items())}
     print(f"DRS-C surface map: {len(vocabulary)} store methods derived from {SOURCE.name} "

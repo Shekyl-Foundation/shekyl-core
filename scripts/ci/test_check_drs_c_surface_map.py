@@ -194,6 +194,51 @@ check("a section with no rows is refused, not vacuously satisfied",
 check("§3.5 absent is detected as a missing subject",
       gate.slice_section("### 3.4 Other\n\ntext\n"), None)
 
+# ------------------------------------------------- cross-document figures
+# The heading's count was gated while three sibling documents restated it
+# ungated, and every restatement drifted to 97 while the tree moved to 102.
+# `read` is injected so these run without touching the repo.
+
+GOOD = "the map covers 102 store methods over 272 store call sites"
+
+
+def xrefs(texts, size=102, sites=272):
+    """texts: {filename -> text or None}, defaulting to the good figure."""
+    return gate.check_cross_references(
+        lambda p: texts.get(p.name, GOOD), size, sites)
+
+
+check("every cross-reference agreeing with the derivation passes",
+      xrefs({}), [])
+
+check("a cross-reference stating the wrong method count fails",
+      any("says 97 store methods" in f for f in
+          xrefs({"IMPLEMENTATION_INDEX.md": "surfaces (97 store methods)"})), True)
+
+check("a cross-reference stating the wrong call-site count fails",
+      any("says 253 store call sites" in f for f in
+          xrefs({"DAEMON_REDB_STORE.md": GOOD.replace("272", "253")})), True)
+
+check("a cross-reference that states NO figure fails as a missing subject",
+      any("states no `N store methods` figure" in f for f in
+          xrefs({"CONSENSUS_STORE_RECONCILIATION.md": "prose with no figure"})), True)
+
+check("a missing cross-reference file fails rather than passing by absence",
+      any("a cross-reference subject does not exist" in f for f in
+          xrefs({"IMPLEMENTATION_INDEX.md": None})), True)
+
+check("one stale occurrence among several correct ones still fails",
+      any("says 99 store methods" in f for f in
+          xrefs({"DAEMON_REDB_STORE.md": GOOD + " and elsewhere 99 store methods"})), True)
+
+check("all three declared files are actually read",
+      len(xrefs({"DAEMON_REDB_STORE.md": "x", "CONSENSUS_STORE_RECONCILIATION.md": "x",
+                 "IMPLEMENTATION_INDEX.md": "x"})), 3)
+
+check("call-site count is derived, not the method count",
+      gate.count_call_sites("BlockchainDB* m_db;\nvoid f(){ m_db->a(); m_db->a(); m_db->b(); }",
+                            {"m_db": {"->"}}), 3)
+
 
 if FAILURES:
     print(f"check_drs_c_surface_map self-test FAILED ({len(FAILURES)}/{CHECKS}):\n",

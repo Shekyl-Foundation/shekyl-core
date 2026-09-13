@@ -14,8 +14,10 @@ security/PQC → privacy → longevity. DRS success criteria (§0.1) and BENCH
 columns are ordered by that hierarchy, not by engineering elegance.
 **Process rule:** [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc).
 **Spec-first per** [`05-system-thinking.mdc`](../../.cursor/rules/05-system-thinking.mdc).
-**Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**; surface map
-from `blockchain.cpp` `m_db->` vocabulary (97 methods). **The five table-inventory
+**Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**. The surface
+map is **no longer stamped** — §3.5 is re-derived from the tree by
+`scripts/ci/check_drs_c_surface_map.py` on every run, because the stamp here
+said 97 while the tree had moved to **102 store methods**. **The five table-inventory
 rows (handles, opens, claimed total, undocumented, phantoms) re-measured
 at `9742ec4f6` by P0a (2026-09-05); the atomicity-audit row re-measured at
 `2dba46537` by P0b (2026-09-05)** — the remaining substrate rows
@@ -242,7 +244,8 @@ store, don't patch blind.
 
 Durable state lives in C++ LMDB (**49** declared tables, 48 at runtime —
 DRS-W5). Orchestration tangle is
-**`blockchain.cpp`** (253 `m_db->`, 97 methods), not the storage class alone.
+**`blockchain.cpp`** (272 store call sites, 102 store methods), not the
+storage class alone.
 Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
 **boundary-thickness and type-safety** problem under
 [`40-ffi-discipline`](../../.cursor/rules/40-ffi-discipline.mdc) — marshal
