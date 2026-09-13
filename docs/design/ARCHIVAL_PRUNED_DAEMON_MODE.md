@@ -8,7 +8,10 @@ not exist), then **`PDM-Q6` is the round's subject** (`PDM-Q-F13`: the
 transaction's prunable region is scarce *and* replay-compatible, with
 its verifier `txs_prunable_hash` already in the schema; `PDM-Q-F14`:
 `pqc_auths`, ~60 % of tx bytes, is kept only for want of a hash row;
-`PDM-Q-F15`: the `serve_credit_pruned` self-reference is benign). §9
+`PDM-Q-F15`: the `serve_credit_pruned` self-reference is benign;
+`PDM-Q-F17`, from the daemon cutover lane: the stripe engine's
+seed-arithmetic / advertisement / coverage triple already partitions
+that good, and is what Q7 keeps the C++ to be read for). §9
 inventories every data element at the pin. `PDM-Q7` is **PARTIAL**
 (opt-in flag rejected, scoped to the universal set). `PDM-Q9` is
 **PARTIAL** (shard retention is the bond process; binding and lapse
@@ -379,6 +382,13 @@ What Q6 must rule, in this order:
    retained `txs_prunable_hash`. Q6 states which closed rulings that
    reopens and which survive with the unit substituted. It does not
    quietly keep leaf-shaped challenges over a good that is not leaves.
+   The candidate shard definition is on the table already: the
+   inherited stripe arithmetic partitions block heights over
+   `txs_prunable` — F13's good — with a `u32` holdings encoding, a
+   third-party `has_unpruned_block` function and coordinator-free
+   coverage (`PDM-Q-F17`). Q6 adopts it, adapts it (stripe count,
+   stripe size, tip window are Monero's numbers), or names why the
+   shard is shaped otherwise.
 4. **Self-reference — discharged (`PDM-Q-F15`).** `serve_credit_pruned`
    is the archival system's own evidence inside the good it sells. At
    the pin it is read exactly once after parse — `blockchain.cpp:3807`,
@@ -424,7 +434,11 @@ underscoped and, as of steering 2026-09-12, the wrong question.
   complete.** It may serve as reference for the Rust cutover. Removal
   of the Monero-era mechanism (`prune_worker`, `pruning_seed`,
   `CRYPTONOTE_PRUNING_*`) happens at `DRS-E*` (`PDM-Q-S0`), not as a
-  C++ deletion in this round.
+  C++ deletion in this round. **What "reference" means (2026-09-13,
+  `PDM-Q-F17`):** not the prune worker — the seed arithmetic
+  (`src/common/pruning.h`), the wire advertisement (`CORE_SYNC_DATA`,
+  peerlist) and the complement-seeking peer selection. Those are read
+  from; the deletion pass is what remains.
 
 **Still OPEN:** the standard process (what every daemon retains and
 discards) is Q1–Q6 and Q8. Q7 does not re-derive it. Read
@@ -485,6 +499,17 @@ is spelled, and no daemon flag is minted for it.
   the supplementary set is empty by construction; the ruling should
   say so rather than have two mechanisms both believe they own the
   same bytes.
+- **Advertisement (added 2026-09-13, `PDM-Q-F17`).** The chain is the
+  source; the wire still needs to say it, because a fetching peer
+  selects archivers before it has read their bonds. The inherited
+  `pruning_seed` slot in `CORE_SYNC_DATA` / peerlist is the shape: a
+  compact holdings encoding a third party can expand
+  (`has_unpruned_block`'s role) and **check against the bond**. Rule
+  whether `holdings` (`ShardSetCompact{ids}` / `CompleteTree`) is that
+  encoding or is compressed to one, and state that a wire claim that
+  disagrees with the chain is a drop reason attributable to the sender
+  (`PWD-B7`), which the C++ engine's range-check-only validation
+  (`net_node.inl:2315`) is not.
 
 ### `PDM-Q10` OPEN — The RPC contract for "not retained"
 
@@ -535,8 +560,14 @@ Named so they cannot be discovered after a ruling. Not answered here.
   fetch.
 - **Stripe/shard interaction.** The C++ stripe engine survives until
   this design is complete and is removed at `DRS-E*` (`PDM-Q7`).
-  Until then the two partitions are unrelated. Enumerate what a node
-  holding stripe *i* and having discarded set B can and cannot answer.
+  ~~Until then the two partitions are unrelated.~~ **Refuted under
+  F13 (`PDM-Q-F17`):** the stripe partitions block heights over
+  `txs_prunable`, which is the good; the two partitions are unrelated
+  only while the good is leaves. The bullet's remaining work is the
+  inverse of the original: enumerate what an archiver whose shard is
+  a stripe of the prunable region can and cannot answer to a leaf-
+  shaped challenge, and what the `u32` seed does and does not commit
+  it to.
 - **Sybil economics.** Does the market price scarcity in a way that
   survives an adversary who runs many cheap archivers holding overlapping
   popular shards? Build on
@@ -883,6 +914,62 @@ consensus question: *does anything read it after admission?*
   them a retirement horizon (the reorg window for the six, the
   retention window for the slash log once the caller bound is shown).
 
+### Received from the daemon cutover lane (2026-09-13), verified at the pin
+
+- **PDM-Q-F17.** **What is transferable from the C++ stripe engine is
+  not the pruning; it is the assignment / advertisement / coverage
+  triple — and under F13 it already partitions the good.** The
+  cutover lane's input, read at source:
+  1. *Assignment.* One `u32` compresses a node's retention
+     commitment: `tools::make_pruning_seed(stripe, log_stripes)`, and
+     a third party computes what the node holds from it alone —
+     `has_unpruned_block(height, chain_height, seed)`,
+     `get_next_unpruned_block_height`, `get_pruning_stripe`
+     (`src/common/pruning.h:44-51`). Partition unit: 4096-block
+     stripes, 2³ of them, tip window 5500
+     (`src/cryptonote_config.h:342-344`).
+  2. *Advertisement.* The seed rides `CORE_SYNC_DATA` and every
+     peerlist entry (`cryptonote_protocol_defs.h:200`;
+     `net_node.inl:1582`, `:2915`) and is validated on ingest against
+     the stripe range (`net_node.inl:2315`; `PWC-C6`,
+     [`P2P_1_WIRE_CENSUS.md`](P2P_1_WIRE_CENSUS.md) line 367).
+  3. *Coverage.* No coordinator: `get_next_needed_pruning_stripe`
+     drives peer selection to candidates whose stripe complements the
+     local gap (`net_node.inl:1714`, `:1828-1830`, `:1853-1862`), and
+     `get_random_stripe` spreads self-assignment.
+
+  Mapped onto archival, that is *which archiver holds which shard,
+  advertised compactly, checkable by a third party, network-wide
+  coverage with no registry* — the shape `PDM-Q`'s possession test
+  needs, already solved once, in code Q7 keeps deliberately. **What
+  this round adds:** the stripe is a partition of **block heights over
+  `txs_prunable`** — i.e. of exactly F13's good. §3's "the two
+  partitions are unrelated" was true of leaves and is false of the
+  prunable region: the inherited engine is a coordinator-free
+  assignment of the archival good that lacks only what the archival
+  system has (a bond with economic weight, a possession verifier —
+  `txs_prunable_hash` — and slashing), while the archival system has
+  those and lacks what the engine has (a compact, third-party-computable
+  holdings function and emergent coverage), *and* is keyed to a unit
+  F12 showed is not scarce. Q6 item 3's unit change can take the
+  arithmetic as the shard definition. Three things the mapping must
+  not lose: (a) the seed is a **claim** — the engine catches a liar
+  only when a block is requested; the bond + challenge is what turns
+  the claim into a tested commitment, so the triple is the *front* of
+  the mechanism and the bond is its *back* (Q9's source ruling stands
+  — the chain, not the wire, is authoritative; the wire slot
+  advertises what the chain already says, and a peer can check one
+  against the other); (b) coverage in the engine is by random stripe
+  plus peer preference, coverage in the market is by price
+  (`r ≫ 1000`, §3 Sybil bullet) — Q6 says which does the work, or how
+  they compose; (c) under Q7 every ordinary node's retention is
+  identical, so the slot carries information **only for archivers**,
+  which bounds Q8's exposure to what the bond already publishes.
+  Closes the earlier repurposing note: `pruning_seed`'s wire slot is
+  not merely an available successor for "advertise what you retain";
+  the arithmetic behind it is the part worth taking, and it stays in
+  C++ to be read from until `DRS-E*` (`PDM-Q7`).
+
 ### Retracted
 
 - **PDM-Q-F6 RETRACTED 2026-09-12** as a launch-state fork. Was
@@ -936,9 +1023,9 @@ consensus question: *does anything read it after admission?*
 | `PDM-Q4` | Reconstruction path | OPEN |
 | `PDM-Q5` | Cold sync and bootstrap | OPEN |
 | `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; leaf→tx unit change (F13, F14, F15) | OPEN — the round's subject 2026-09-13; ruled before Q1 |
-| `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*` |
+| `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; what is read from it is the seed arithmetic + advertisement + coverage triple, not the prune worker (F17) |
 | `PDM-Q8` | Privacy (density vs query) | OPEN |
-| `PDM-Q9` | Archiver's retention set: source, binding, lapse | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); binding and lapse tail OPEN |
+| `PDM-Q9` | Archiver's retention set: source, binding, lapse, advertisement | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); binding, lapse tail and the wire advertisement of holdings (F17) OPEN |
 | `PDM-Q10` | RPC contract for "not retained" | OPEN |
 
 When this round proposes a test, it will name the edit that makes that
@@ -970,8 +1057,10 @@ of a hash row), F15 discharges the self-reference, and Q6 item 3 owes
 the list of closed leaf-shaped rulings the unit change reopens. A Q1
 ruling written ahead of Q6 is ruling on a cache. Q1 then rules §9's
 `CACHE` and `LOCAL-BOUNDED` rows (F16) and the two undetermined
-readers. Q9's binding and lapse tail; Q10's response shape, legible
-to the `SF-` round. F9 is a C++ defect independent of PDM; the carrier
+readers. Q9's binding, lapse tail and holdings advertisement (F17); Q10's
+response shape, legible to the `SF-` round. Q6 item 3 answers F17:
+adopt, adapt or refuse the stripe arithmetic as the shard definition
+for the prunable-region good. F9 is a C++ defect independent of PDM; the carrier
 is the FOLLOWUPS row, not this charter. F11's re-grade of the three
 curve-tree rows — and now `txs_pqc_auths` — is the DRS-0 lane's, on
 Q6's and Q1's output.
