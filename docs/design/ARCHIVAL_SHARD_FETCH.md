@@ -1,16 +1,23 @@
 # Archival shard fetch — the daemon client (design round)
 
-**Status: OPEN.** Round 1 opened 2026-09-12, grounded `dev@ba4b3c73a`.
-Identifier family `SF-` (index row `SF-D1…SF-Dn`, registered at birth per
-rule 94 §1). Process per
+**Status: RULED — Round 1 CLOSED 2026-09-13; implementation pending.**
+Round 1 opened 2026-09-12, grounded `dev@ba4b3c73a`. Every `SF-D`
+question is disposed: `SF-D2`, `SF-D3`, `SF-D4`, `SF-D6`, `SF-D7`,
+`SF-D10`, `SF-D13` RULED; `SF-D5` RULED and amended with the nonce
+header; `SF-D8` RULED (signed message and response carrier); `SF-D9`
+done; `SF-D11` WITHDRAWN; `SF-D12` a corollary of `SF-D10`. **The
+rule-26 halt is lifted:** the implementation PR (`shekyl-p-fetch`) may
+begin. This file stays in `docs/design/` because it still owns named
+residue the implementation PR discharges — the header spelling and
+encoding (`SF-D5`), organic draw bound `k` (`SF-D6`), in-flight cap `N`
+(`SF-D7`), the signature domain string and KAT (`SF-D8`), and the W₂
+measurement (§8) — and archives to `docs/completed/` when the client
+lands. Identifier family `SF-` (index row `SF-D1…SF-Dn`, registered at
+birth per rule 94 §1). Process per
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
-this is a multi-round design front on an FFI-adjacent, privacy-load-bearing
-surface. Decision authority: Rick. **No implementation code — no fetcher,
-no FFI — until `SF-D8` is RULED** (rule 26 halt; `SF-D2` RULED,
-`SF-D3` RULED, `SF-D4` RULED, `SF-D5` RULED and amended with the nonce
-header, `SF-D6` RULED, `SF-D7` RULED, `SF-D9` done, `SF-D10` RULED,
-`SF-D11` withdrawn, `SF-D12` a corollary of `SF-D10`, `SF-D13` RULED).
-The FOLLOWUPS row is the deferral record.
+a multi-round design front on an FFI-adjacent, privacy-load-bearing
+surface. Decision authority: Rick. The FOLLOWUPS row is the
+implementation record.
 
 This round specifies the **client** side of the archival serving route:
 a daemon fetching `GET /shard/{id}` from a P-served `.onion`. The server
@@ -20,10 +27,12 @@ route); discovery is ruled (`EU-D1`…`EU-D9`). Timeout/retry is
 `SF-D6` (RULED) and
 concurrency is `SF-D7` (RULED). The request-side nonce carrier and
 countersigning key are now ruled (`SF-D5` amendment; `SF-D13`), and so
-is the signed message (`SF-D8` message half, RULED 2026-09-13: `P`
-signs `nonce[32] ‖ shard_id_le[8]` with the shard id it parsed from the
-route). What remains is `SF-D8`'s returned-signature carrier — the
-thing an implementer would otherwise decide silently at the keyboard. Crate home is `SF-D4` (RULED). Virt-port is `SF-D5` (RULED:
+is the complete response (`SF-D8`, RULED 2026-09-13: `P` signs
+`nonce[32] ‖ shard_id_le[8]` with the shard id it parsed from the
+route, and the response body is an outer binary envelope carrying the
+canonical `HybridSignature` followed by the unchanged `RF-D4` frame) —
+the things an implementer would otherwise have decided silently at the
+keyboard. Crate home is `SF-D4` (RULED). Virt-port is `SF-D5` (RULED:
 80, home `shekyl-curve-tree`). Outbound SOCKS reuse is `SF-D2`. SOCKS
 isolation is `SF-D3` (unauthenticated, no isolation flags; circuit
 assignment is Tor's).
@@ -61,7 +70,7 @@ round is — is the **daemon client of those contracts**.
   is not.** `RF-D4` owns the inner frame, `RF-R1` owns the current
   request line and HTTP status/headers. Neither owns timeout, retry, or
   dial grammar. `SF-D5` amends the request with the required nonce;
-  `SF-D8` owns the response envelope. How the daemon uses Tor outbound
+  `SF-D8` rules the response envelope. How the daemon uses Tor outbound
   is `SF-D2`. SOCKS isolation is `SF-D3` (unauthenticated, no isolation
   flags).
 - **The topology flipped.** `EU-D1` rules: the daemon is the client; no
@@ -149,12 +158,13 @@ inherited as "the client waits."
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
 | **Unauthenticated SOCKS, no isolation flags.** The fetch client presents no SOCKS credentials and sets no isolation flags on the zone proxy. Circuit assignment is Tor's, per its own defaults — this is not a one-circuit guarantee. Fetches then share circuits with overlay P2P (no credentials on the same SOCKS); that blending is a consequence, not a cover mechanism. Cover is TRC's subject | `SF-D3` RULED 2026-09-12 |
 | **The virtual port is 80**, a shared constant both sides read from `shekyl-curve-tree` (`SF-D4` named the home). Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — the current location, not the home; the implementation PR moves it. Two `80`s that happen to agree are still not the ratification — this row is the number; the implementation PR puts one constant in `shekyl-curve-tree` and both sides read it. **Request amendment:** same `GET /shard/{id}`, one required canonical 32-byte nonce header, no path token, query string, or body; every production call uses it | `SF-D5` RULED 2026-09-12; AMENDED 2026-09-13 |
-| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is owed, not picked (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is a non-row (filter / pre-dial miss). 404 is a completed exchange (immediate miss), not a retry. `content-length` must equal decoded `signature_envelope_len + framed_len()`; disagreement is malformed and is known after fixed metadata but before segment bytes. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
+| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is owed, not picked (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is a non-row (filter / pre-dial miss). 404 is a completed exchange (immediate miss), not a retry. `content-length` must equal the constant `signature_envelope_len` plus `framed_len()`; disagreement is malformed and is known after fixed metadata but before segment bytes. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
 | **One fixed client in-flight cap `N`, one shared queue, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. `N` is not organic draw cap `k` and is not a function of `D`. SP-T3 re-base / W₂ owns the Pi 4 Tor circuit-churn upper bound; the implementation PR owns the lower-bound judgement and records why its chosen parallelism does not serialize reconstruct. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or shared-queue wait plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12 |
 | **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`. Per-fetch exclusion is scratch, not memory. The fetch client forms no opinions — the challenge system is the measurement authority | `SF-D10` RULED; `SF-D12` corollary |
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
 | **The signed message is `nonce[32] ‖ shard_id_le[8]`** — the caller's opaque header bytes followed by the `u64` `P` parsed from `/shard/{id}`, under a new versioned domain (the v1 nonce-only domain is not reused). Nonce-only was refuted once the nonce became caller-supplied: a witness could request a held decoy while sending the target's nonce and submit the resulting signature as a pass for the unheld target. Appending the server-parsed shard id makes that signature fail for `target`. `P` still interprets nothing about the nonce; no wire field is added; challenge and organic requests remain identical. Domain string and KAT are pinned by the implementation PR | `SF-D8` message half RULED 2026-09-13 |
-| **Inner frame only:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything. `RF-D4` carries no returned countersignature. The outer response carrier is OPEN under `SF-D8`; do not read the existing inner-frame ruling as a complete response | `RF-D4`, `RF-D7`; `SF-D8` carrier OPEN |
+| **Inner frame:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything. `RF-D4` itself carries no countersignature and is unchanged | `RF-D4`, `RF-D7` |
+| **Response carrier:** the HTTP body is an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length), followed by the unchanged `RF-D4` frame. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13 |
 | Padding field reserved, no scheme; TJ-H mitigation at the Tor layer (vanguards on the **wallet** serve path) | TJ-H (ruled 2026-08-08) |
 | Server bind `127.0.0.1:0`; reachability is `ADD_ONION` | `RF-R1`, `shekyl-p-host` |
 | SP-T3's numbers measured persona→persona and must re-base daemon→wallet before promotion | `EU-D1` consequence 4 |
@@ -179,14 +189,14 @@ suffixes `/shard/` is a named reopening of `RF-R1`, not of this round —
 and it inherits this premise: the new path must be usable by both
 callers. A leaf-addressed challenge-only suffix is a second path.
 
-## 6. Round-1 remaining question (`SF-D8`)
+## 6. Round-1 questions — all disposed 2026-09-13
 
-The remaining question is recorded with a **lean** and a **reopen
-criterion**. Rick rules it. `SF-D2`…`SF-D7` are RULED below. `SF-D9`
-is done (same-change heading). `SF-D10` is RULED below. `SF-D11` is
-withdrawn (§4 / `PWD-E9`). `SF-D12` is a corollary of `SF-D10`, not a
-coupled question. `SF-D13` rules the signing key before `SF-D8`.
-Halt is `SF-D8`.
+Each question below is recorded with its ruling and a **reopen
+criterion**. Rick ruled them. `SF-D2`…`SF-D7` RULED. `SF-D9` done
+(same-change heading). `SF-D10` RULED. `SF-D11` withdrawn (§4 /
+`PWD-E9`). `SF-D12` a corollary of `SF-D10`, not a coupled question.
+`SF-D13` ruled the signing key before `SF-D8`; `SF-D8` RULED last
+(signed message, then carrier), which lifted the rule-26 halt.
 
 ### `SF-D2` — daemon Tor outbound posture — RULED 2026-09-12
 
@@ -480,9 +490,11 @@ refusal, not a retry of an address the witness never had.
 **Length.** `ServedFrameHeader::framed_len()` declares the **inner
 frame** (header + `leaf_count × LEAF_BYTES` + `padding_len`), never
 frozen `SHARD_BYTES = 3,326,976` as the whole HTTP body size. That
-constant is the **segment**. `SF-D8` adds a returned-signature
+constant is the **segment**. `SF-D8` (RULED) puts a returned-signature
 envelope outside that frame, so the HTTP `content-length` must equal
-`signature_envelope_len + framed_len()`. Treating `framed_len()` alone
+`signature_envelope_len + framed_len()`, where `signature_envelope_len`
+is the fixed canonical `HybridSignature` length — a constant, not a
+decoded field. Treating `framed_len()` alone
 as the HTTP body length is SUPERSEDED 2026-09-13 by the countersigned
 response requirement.
 
@@ -558,7 +570,7 @@ an implementation.
 | Circuit timeout / HTTP stall / SOCKS CONNECT or intro failure (endpoint *was* on the record) | Stall-class: bounded retries of **that** `P` inside the deadline, then **miss** | Stall-class: same per-attempt retries; then exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Body short of agreed `N` (truncated transfer) | Stall-class | Stall-class |
 | Body long of agreed `N` (overlength) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| `content-length` ≠ decoded `signature_envelope_len + framed_len()` (after fixed metadata; before segment bytes) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| `content-length` ≠ `signature_envelope_len + framed_len()` (envelope length is a constant; known after the frame header, before segment bytes) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Identical 404 (`RF-R1`) | **Miss.** Completed exchange; `P` answered "no." Do not retry **that** `P`. Identical 404s are why the client must not distinguish *which* "no" | Exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Malformed response envelope / frame | Malformed → **miss**. Logged (`SF-D12`); not a selection input | Malformed: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `R_k` mismatch | Root-mismatch → **miss**. Typed and logged (`SF-D8`, `SF-D12`); not a selection input | Root-mismatch: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
@@ -692,7 +704,7 @@ not remove it.
   Re-evaluation is a format round over the bond binding, not an
   opportunistic key swap in `shekyl-p-serve`.
 
-### `SF-D8` — returned signature and verify seam — SIGNED MESSAGE RULED 2026-09-13; CARRIER OPEN
+### `SF-D8` — returned signature and verify seam — RULED 2026-09-13
 
 The original `R_k`-only lean was incomplete. The fetcher's output is a
 **typed result both callers consume**, produced only after all three
@@ -762,21 +774,27 @@ response-format contract and to `verify_pass_countersignature`, which
 today verify the nonce alone; the implementation PR makes those
 amendments, it does not override them silently.
 
-**The remaining question is the response carrier.** `RF-D4`'s
-`ServedFrameHeader` contains only `leaf_count` and `padding_len`; the
-landed HTTP response carries no countersignature. `SF-D8` is not fully
-RULED until the response places the two signature legs somewhere
-exactly.
+**Response carrier — RULED 2026-09-13.** `RF-D4`'s
+`ServedFrameHeader` contains only `leaf_count` and `padding_len` and
+the landed HTTP response carries no countersignature, so the signature
+needs a home that is neither the inner frame nor a header:
 
-- **Lean — carrier:** an outer binary response envelope containing the canonical
-  `HybridSignature`, followed by the existing `ServedFrameHeader` and
-  segment bytes. Keep the HTTP response headers exactly
-  `content-type` and `content-length`; do not text-encode a 3,309-byte
-  ML-DSA leg into an HTTP header. The inner `RF-D4` frame remains
-  unchanged and `content-length` covers envelope plus frame.
+- **Carrier:** the HTTP body is an outer binary response envelope
+  carrying the canonical `HybridSignature` (both legs, the fixed
+  canonical length from `shekyl-crypto-pq`), followed by the existing
+  `ServedFrameHeader` and segment bytes. The HTTP response headers stay
+  exactly `content-type` and `content-length`; no signature leg is
+  text-encoded into a header — a 3,309-byte ML-DSA leg does not belong
+  in one. The inner `RF-D4` frame is byte-for-byte unchanged, and
+  `content-length` covers envelope plus frame (this is the
+  `signature_envelope_len + framed_len()` equality `SF-D6` already
+  checks). Because the signature length is fixed, the envelope adds no
+  length field and the frame offset is a constant.
 - **Verify placement:** inside the fetch call. The client returns only
   verified-or-refused, never raw bytes — a raw-bytes return invites a
-  caller to skip either check.
+  caller to skip either check. The successful type carries the
+  verified shard and the signature; parse, `RootMismatch`, and
+  `BadCountersignature` are its three typed refusals.
 - **Reopen if:** the reconstruct caller demonstrates a need for an
   unverified stream (for example partial-segment resume) that cannot
   be met behind the seam; or the canonical hybrid-signature encoding
@@ -860,7 +878,8 @@ not inherit it.
 ### `SF-D11` — serving ↔ fetching Tor instance — WITHDRAWN 2026-09-12
 
 Asked in this round, then closed by reading `PWD-E9` (RULED 2026-09-08,
-implemented 2026-09-09). Not an open question and not in the halt list.
+implemented 2026-09-09). Never an open question of this round; it was
+never on the (now-lifted) halt list.
 See §4. Identifier kept so grep finds the withdrawal; `SF-D12` is not
 renumbered (already published).
 
@@ -1042,16 +1061,17 @@ amended),
 one failure taxonomy with two caller columns (`SF-D6` RULED: per-attempt
 handling is the client's; 404 is a completed exchange; no-endpoint is a
 non-row; organic draw bound `k` owed; `content-length` equals the
-decoded signature-envelope length plus inner `framed_len()`, with
+constant signature-envelope length plus inner `framed_len()`, with
 disagreement known before segment bytes; parse, root mismatch, and bad
 countersignature are typed separately), one fixed client
 in-flight cap and one shared caller-blind queue (`SF-D7` RULED; integer
 pinned by the implementation PR from SP-T3's upper bound and its own
 lower-bound throughput judgement), the stable bond-record hybrid
 identity signing key (`SF-D13`), the signed message
-`nonce[32] ‖ shard_id_le[8]` under a new versioned domain (`SF-D8`
-message half RULED), the outer returned-signature envelope and typed
-verify function (`SF-D8` carrier, still OPEN), and one organic
+`nonce[32] ‖ shard_id_le[8]` under a new versioned domain, the outer
+fixed-length signature envelope ahead of the unchanged `RF-D4` frame,
+and the verified-or-refused typed fetch result (`SF-D8` RULED), and
+one organic
 selection rule: uniform memoryless draw over the drawable holders of
 `s`, per-fetch exclusion permitted, no persistent state (`SF-D10`);
 verify-failure is observability, never a selection input (`SF-D12`).

@@ -3,8 +3,8 @@
 **Status:** **CLOSED 2026-08-21** — every disposition `RF-D1`…`RF-D10` is
 ruled *and* implemented on `dev`. Round opened 2026-08-18.
 
-**POST-CLOSE FINDING 2026-09-13 — RULED under `SF-D8` (message), CARRIER
-OPEN:** the implemented nonce-only countersignature is complete only while
+**POST-CLOSE FINDING 2026-09-13 — RULED under `SF-D8`, NOT YET LANDED:**
+the implemented nonce-only countersignature is complete only while
 the server derives or validates the nonce.
 [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D5` now makes the
 nonce opaque caller-supplied request data so organic and challenge reads
@@ -15,9 +15,12 @@ RULED 2026-09-13 that `P` signs `nonce[32] ‖ shard_id_le[8]` — the opaque
 header bytes followed by the `u64` it parsed from the route — under a new
 versioned domain; the v1 nonce-only message is not reused for the fetch
 response, and `verify_pass_countersignature` is amended to the v2 message
-by the implementation PR. The response carrier for the two signature legs
-is still open under `SF-D8`. The 2026-08-21 status above remains the record
-of what landed, not a claim that the v2 message is implemented.
+by the implementation PR. `SF-D8` also ruled the carrier: the HTTP body is
+a fixed-length outer envelope holding the canonical `HybridSignature`,
+followed by the unchanged `RF-D4` frame; response headers stay exactly
+`content-type` and `content-length`, which covers envelope plus frame. The
+2026-08-21 status above remains the record of what landed, not a claim that
+the v2 message or the envelope is implemented.
 
 *(This line read "implementation pending" until 2026-08-23. It was stale from
 2026-08-21, when PR #522 merged: the doc led the PR per this round's own
