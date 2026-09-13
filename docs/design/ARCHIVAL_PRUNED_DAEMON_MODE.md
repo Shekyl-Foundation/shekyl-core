@@ -473,7 +473,8 @@ client lives in the **daemon** (its Tor zone,
 can become a validator; serving stays behind the wallet. Primitive:
 `fetch_prunable_range(a, b)`, verified per-tx; callers: band 2 here,
 Q9's recovery fetch, history read-back. Transport is the `SF-` round's
-(PR #714); Q5 states what the caller needs from it.
+(PR #714, RULED 2026-09-13 — `PDM-Q-F25` on what Q6 changes in it);
+Q5 states what the caller needs from it.
 
 **The anchor is disableable in one direction only.**
 `assumevalid=0` (verify everything from genesis, band 2 = the whole
@@ -658,7 +659,11 @@ What Q6 must rule, in this order:
    defines the good as **leaves**: `SHARD_BYTES = 25,992 × 128`
    (`ARCHIVAL_RESPONSE_FORMAT.md` `RF-D6`), `challenge_leaf_index`,
    the 128-byte `leaf_bytes` claim in the kept vin (`RF-D1`),
-   `LeafStore::frozen_segment`, the freeze pipeline's segment. If the
+   `LeafStore::frozen_segment`, the freeze pipeline's segment — and,
+   RULED 2026-09-13 while this round was open, the whole `SF-` fetch
+   contract (`PDM-Q-F25`: request unit a whole leaf shard by `u64`
+   id, response a `ServedFrameHeader` leaf frame, content-verify
+   `recompute_segment_r_k`). If the
    good is the prunable region, the shard is a set of transactions
    (by block range, most naturally), the challenge names a transaction
    and the response is its `CtSigPrunable` bytes verified against the
@@ -926,9 +931,11 @@ discarded as an internal failure — the wallet-facing twin of
 fetch from an archiver* (and, once Q9 is ruled, *which* one) from *the
 store is broken*. The membership-path assembly client
 ([`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) remaining item (b)) is
-the consumer; the shard-fetch client round (`SF-`, PR #714) is where the
-fetch leg's transport is being designed and is the place this response
-has to be legible.
+the consumer; the shard-fetch client round (`SF-`, PR #714, **RULED
+2026-09-13**, [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)) owns
+the fetch leg's transport and is the place this response has to be
+legible — its miss/timeout taxonomy (`SF-` §"Timeout / miss / retry") is
+where "not retained" lands on the wire.
 
 **The privacy argument does not cut against this.**
 [`RPC_TRANSPORT_POSTURE.md`](RPC_TRANSPORT_POSTURE.md) lines 22–27: every
@@ -1170,6 +1177,20 @@ Named now so they are not discovered later.
   `curve_tree_checkpoints` derived *from the leaves*. Those three rows
   are re-graded by the DRS-0 lane once Q1 rules; this charter names
   the dependency and does not edit `class.rs`.
+  **UPDATE 2026-09-13 (`4da609cbd`, PR #726):** the DRS lane has since
+  stated *how* it will absorb the ruling
+  (`DAEMON_REDB_STORE.md:1105-1275`, §11.2 amendment chain): a digest
+  cares whether nodes agree, not whether bytes are present, so a
+  **uniform** discard yields a floor-defined accumulator and lifts
+  exclusions rather than re-pointing them. The handoff is therefore
+  **the boundary, not a grade** — `W` (Q2) and Q1's journal horizon —
+  and its reopening conjunct *"followed by a node-variable daemon
+  discard"* does not fire under Q7/Q8: only the surplus is
+  node-variable, and it is outside the digest domain by DRS's own
+  definition. F11 UPDATE carries the detail; the same block
+  independently confirms F18's `output_metadata` grading (its read
+  chain `get_output_metadata → is_output_pruned` has no call site,
+  `:1255-1266`).
 - **The credit wire** — [`ARCHIVAL_CREDIT_WIRE.md`](ARCHIVAL_CREDIT_WIRE.md)
   prunable-residence row: *Header kept; 3.43 KB countersignature on the
   coinbase-tx prunable side*. If `PDM-Q6` rules that side into the
@@ -1328,9 +1349,10 @@ Named now so they are not discovered later.
   `curve_tree_leaves` is `AppendMostly` (running chained hash —
   deletions are unrepresentable). The audit that defends those grades,
   [`docs/LMDB_WRITE_ATOMICITY_AUDIT.md`](../LMDB_WRITE_ATOMICITY_AUDIT.md)
-  lines 1518–1531 (note: `docs/`, not `docs/design/`), is explicit that
-  verifying checkpoints against `curve_tree_meta` compares a copy with
-  its original and is blind to a bad tree, so verification **must**
+  lines 1681–1695 at `dev@4da609cbd` (was 1518–1531 at `edb35dbb1`;
+  note: `docs/`, not `docs/design/`), is explicit that verifying
+  checkpoints against `curve_tree_meta` compares a copy with its
+  original and is blind to a bad tree, so verification **must**
   recompute from the leaves. Leaves being the source is the whole
   reason `Derived` is defended as legitimate rather than convenient;
   discard removes the discriminator's only input. This is F7's false
@@ -1338,6 +1360,37 @@ Named now so they are not discovered later.
   right at the time it was written and stops being right the moment PDM
   ships. Carrier: the DRS-0 lane re-grades the three rows against Q1's
   output; §5 names the dependency.
+  **UPDATE 2026-09-13 (`dev@4da609cbd`, PR #726 merged): the
+  contradiction is now a handoff, and the handoff's shape is DRS's,
+  not this charter's.** DRS-0a ruled (`DAEMON_REDB_STORE.md:1142-1175`,
+  Rick, "pruning is NOT node variable") that *a digest cares whether
+  nodes AGREE, not whether bytes are PRESENT*: a uniform,
+  consensus-scheduled discard leaves every node holding identical
+  state at the boundary and is digestible as an accumulator **defined
+  over the consensus-retained floor**, with archiver surplus
+  definitionally outside the digest domain; only node-variable discard
+  forces `Excluded`. That is exactly Q7/Q8/`W`'s shape (uniform
+  boundary, exceptions above it), so the predicted outcome on DRS's
+  side is that exclusions are **lifted, not re-pointed**. Three
+  consequences for this charter. (i) What PDM hands DRS is not a list
+  of re-grades but **the boundary** — `W` (Q2) for bodies, Q1's journal
+  horizon — over which the floor-defined accumulator is taken; the
+  "re-grade to `Excluded`" language in F22 (ii) below is **withdrawn**
+  in favour of that. (ii) The `curve_tree_leaves` narrowing DRS landed
+  and reverted the same day (`116b424b6`) rested on a wallet citation;
+  its reversion premise — the daemon's leaves do not vary between
+  honest nodes — **stays true under PDM**, because Q1's leaf discard,
+  if ruled, is uniform. F11's substantive half also stands: an
+  accumulator over a stored `R_k` certifies the commitment, not the
+  data, so a leaf digest that survives discard is a *windowed* fold
+  over the retained leaves, not a fold over `R_k`. (iii) DRS's
+  reopening clause reads *"stops reading arbitrary local leaves,
+  **followed by** a node-variable daemon discard"*; under PDM the
+  second conjunct never fires — the trigger is the lifting, not the
+  exclusion — and the charter says so where DRS will look (§5).
+  `class.rs` is byte-identical at `4da609cbd` to `edb35dbb1`; the
+  `:140-142` / `:149` / `:161-163` anchors hold, and `:164`
+  (`txs_prunable_tip`, `Excluded`) is a fourth row on the same floor.
 - **PDM-Q-F12.** **Leaves are a cache of a pure function of the block
   corpus. Set-B scarcity, as currently scoped, does not exist.**
   Trace the construction: `blockchain_db.cpp:608-611` calls
@@ -1682,10 +1735,13 @@ consensus question: *does anything read it after admission?*
   Q6 wants it: `txs_prunable` is `Excluded` and `txs_prunable_hash` is
   `AppendMostly` (`class.rs:162-163`) — body non-accumulator, hash
   permanent — without knowing why. The one row that is wrong under
-  F14 is `txs_pqc_auths` at `AppendMostly` (`:161`); it takes the same
-  re-grade F11 asks for the curve-tree rows, in the DRS-0 lane, on
-  Q6's output. The per-tx permanent cost of the whole design is the
-  two 32-byte rows.
+  F14 is `txs_pqc_auths` at `AppendMostly` (`:161`); ~~it takes the
+  same re-grade F11 asks for the curve-tree rows~~ — **WITHDRAWN
+  2026-09-13 (F11 UPDATE): under DRS-0a's "agree, not present" ruling
+  a uniform discard does not make a table `Excluded`; `txs_pqc_auths`
+  and `txs_prunable` alike become floor-defined accumulators over
+  `(tip − W, tip]`, and what PDM owes DRS is `W`, not a grade.** The
+  per-tx permanent cost of the whole design is the two 32-byte rows.
 - **PDM-Q-F23.** **The checkpoint table is empty at the pin, and the
   inherited machinery is the reorg cap and the sync anchor in one
   function.** `init_default_checkpoints` is a no-op on every network
@@ -1725,6 +1781,39 @@ consensus question: *does anything read it after admission?*
   horizon); §8's convergence statement corrected to *unconditional for
   running nodes with downtime under `W`*; band table and F20
   re-pointed. Steering-raised 2026-09-13.
+- **PDM-Q-F25.** **The `SF-` round closed on the leaf unit while this
+  round was open, and its implementation row is now sequenced ahead of
+  the ruling that changes its unit.** [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)
+  is *RULED — Round 1 CLOSED 2026-09-13* (merged to `dev` in PR #714,
+  `99832006c`). What it fixes is sound and survives Q6 with the unit
+  substituted: one client (`shekyl-p-fetch`) in the daemon's Tor zone,
+  one entry point `fetch(destination, shard_id, header)`, challenge and
+  organic callers indistinguishable on the wire (`SF-D1`), tor-zone
+  SOCKS, `GET /shard/{id}` on port 80, `nonce ‖ height` header, one
+  in-flight cap, one miss/timeout taxonomy. Its **organic caller** is
+  *"this daemon needs shard `s` (reconstruct, IBD-after-prune, operator
+  test)"* (`:96-98`) — which is Q5's band 2 and Q9's recovery fetch by
+  another name, **consistent with F20 as corrected** (the reads are
+  real, they are just not chain-following for a current node under
+  `W`). What does *not* survive is the unit: the request names a whole
+  leaf shard (`SHARD_BYTES = 3,326,976`, `:521`; `RF-R1` grammar,
+  `:166`), the response is a `ServedFrameHeader` leaf frame
+  (`served_frame.rs:274`, `:176`), content-verify is
+  `recompute_segment_r_k` over `[[u8; 128]]` (`store/ops.rs:139`,
+  `:139`), and the challenge "verifies `R_k` over the whole shard"
+  (`:100`). Under Q6 the request names a transaction range, the
+  response is prunable bodies, and verify is per-tx against
+  `txs_prunable_hash` / `txs_pqc_auth_hash` — the TJ-F rebinding Q4
+  states. `SF-D1`'s own reopen clause (`:195`, "a storage-only
+  pruned-daemon path … without a fetch client") does **not** fire —
+  band 2 needs the client — so Q6 item 4 is what reopens it, on the
+  unit. **Sequencing hazard, flagged not fixed here (another lane's
+  row, rule 94 §6):** `docs/FOLLOWUPS.md` now carries *"Implement the
+  daemon shard-fetch client (`SF-` round RULED, halt lifted
+  2026-09-13)"* with no Q6 dependency. Built now, the client's request
+  grammar and transport are keepers and its frame codec and
+  content-verify are rewritten the day Q6 rules. The row should carry
+  that split, or Q6 should be ruled first.
 
 ### Retracted
 
@@ -1746,7 +1835,9 @@ consensus question: *does anything read it after admission?*
 
 - The prunable region as the archival good, the `pqc_auths` second
   occupant, and the leaf→transaction unit change it forces on the
-  closed archival rulings (Q6, F13–F15) — ruled first. Then the
+  closed archival rulings (Q6, F13–F15; now including the `SF-`
+  fetch contract that closed on the leaf unit mid-round, F25) —
+  ruled first. Then the
   retained set (starting from layer 0 / `m_curve_tree_leaves`, F7;
   widened to the leaf's derivation inputs, F12; §9's `CACHE` and
   `LOCAL-BOUNDED` rows, F16), the trigger (including the free-regime
