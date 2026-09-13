@@ -165,7 +165,7 @@ inherited as "the client waits."
 | **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is a non-row (filter / pre-dial miss). 404 is a completed exchange (immediate miss), not a retry. `content-length` must equal the constant `signature_envelope_len` plus `framed_len()`; disagreement is malformed and is known after fixed metadata but before segment bytes. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
 | **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(destination, shard_id, header)` — schedulers name `P`; the HTTP path names only `s`. `N` is not organic draw cap `k` and is not a function of `D`. SP-T3 re-base / W₂ owns the Pi 4 Tor circuit-churn upper bound; the implementation PR owns the lower-bound judgement and records why its chosen parallelism does not serialize reconstruct. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12 |
 | **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`, performed by the organic scheduler, not by `shekyl-p-fetch`. Per-fetch exclusion is scratch, not memory. The fetch client forms no opinions — it is given a destination | `SF-D10` RULED; `SF-D12` corollary |
-| **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
+| **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
 | **The signed message is `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]`** — requester-random, published tip height, then the `u64` `P` parsed from `/shard/{id}`, under a new versioned domain (the v1 nonce-only domain is not reused). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard. The pass record **carries** the 32-byte random (it cannot be recomputed); admission of a challenge pass checks signed height against the block's predecessor height. Domain string and KAT are pinned by the implementation PR | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 |
 | **Inner frame:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything. `RF-D4` itself carries no countersignature and is unchanged | `RF-D4`, `RF-D7` |
 | **Response carrier:** the HTTP body is an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length), followed by the unchanged `RF-D4` frame. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13 |
@@ -692,10 +692,18 @@ integer from that range. Not a function of `D`.
 
 The countersignature uses P's stable **hybrid identity key** from the
 bond record (`shekyl_wire::BondPost.hybrid_public_key`), both Ed25519
-and ML-DSA legs. The serving composition obtains the corresponding
-hybrid signing secret; this ruling does not invent a second key field.
+and ML-DSA legs. This ruling does not invent a second key field.
 The verifier first binds the public key to `p_canonical_id`, then
 verifies the two legs.
+
+**Injection, not custody.** `shekyl-p-serve` remains transport: it
+holds no key material. `PServeEndpoint` takes a signer callback that
+returns the canonical `HybridSignature` over the `SF-D8` transcript.
+Loopback tests inject a test key. Production composition
+(`shekyl-p-host` / SH-2) passes the persona hybrid signing secret.
+The fetch implementation PR lands the callback and the envelope;
+SH-2 wires the live secret. The unsigned HTTP half is not a
+substitute for a countersigned loopback test.
 
 This ruling selects the **key only**. It does not inherit
 `verify_pass_countersignature`'s current nonce-only message from
@@ -823,7 +831,9 @@ needs a home that is neither the inner frame nor a header:
   `content-length` covers envelope plus frame (this is the
   `signature_envelope_len + framed_len()` equality `SF-D6` already
   checks). Because the signature length is fixed, the envelope adds no
-  length field and the frame offset is a constant.
+  length field and the frame offset is a constant. The serve crate
+  obtains the signature from the `SF-D13` callback; it does not load
+  the secret.
 - **Verify placement:** inside the fetch call. The client returns only
   verified-or-refused, never raw bytes — a raw-bytes return invites a
   caller to skip either check. The successful type carries the
@@ -1069,9 +1079,11 @@ Named attacker objectives this round's rulings are evaluated against:
   already owned; not this client. SPIKE-PIN-1/2 stay where `SF-D7`
   left them.
 - SH-2 remainder (the wallet actually constructing
-  `PersonaServingHost`) — a named blocker for *end-to-end onion
-  integration*, not for specifying the client; loopback serve already
-  tests the HTTP half.
+  `PersonaServingHost` and passing the persona hybrid signing secret
+  into the `SF-D13` callback) — a named blocker for *production*
+  countersignature and for end-to-end onion integration. Loopback
+  tests of the envelope inject a test key; they do not wait on SH-2.
+  Loopback of the unsigned HTTP half is not that test.
 - The endpoint field on the vin (EU's B+C1 slice).
 - Availability-level teaching-to-the-test (serve during windows,
   refuse outside them). Coverage math as a function of `D` on
@@ -1106,7 +1118,8 @@ in-flight cap and one shared admission path (`SF-D7` RULED:
 `fetch(destination, shard_id, header)`; integer pinned by the
 implementation PR from SP-T3's upper bound and its own lower-bound
 throughput judgement), the stable bond-record hybrid
-identity signing key (`SF-D13`), the signed message
+identity signing key (`SF-D13`: callback into `PServeEndpoint`; crate
+holds no secret), the signed message
 `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` under a new versioned
 domain (challenge tuple not in the fetch; pass record carries the
 random), the outer
