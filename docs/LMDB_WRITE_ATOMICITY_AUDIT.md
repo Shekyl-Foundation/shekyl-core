@@ -1375,15 +1375,22 @@ them under one reason hid:
   them, so it lands **in** the digest domain. The `node-local` reason and
   its `txs_prunable_hash` surrogate were sound against *this* tree and are
   not properties of the store being built.
-- **`txs_prunable_tip`** — **not** prune-only scaffolding, and this
-  correction matters because the opposite was proposed. It is written by
-  `add_transaction_data` (`:1159`) and deleted by
-  `remove_transaction_data` (`:1226`, `:1231`) — the **block connect and
-  pop paths**. Only its three `mdb_cursor_open` sites (`:2402`, `:2460`,
-  `:2565`) are inside `prune_worker`. An enumeration of the *read* sites
-  alone makes it look like prune scaffolding; the write path says
-  otherwise. Whether the Rust store carries the table is a live
-  prune-policy question, **not** a settled deletion.
+- **`txs_prunable_tip`** — prune-tied by **population**, not by call
+  site, and both halves of that took a correction to reach. Its write and
+  delete are on the **block connect and pop paths**, not in
+  `prune_worker`: `add_transaction_data` (`:1159`) and
+  `remove_transaction_data` (`:1226`, `:1231`); only its three
+  `mdb_cursor_open` sites (`:2402`, `:2460`, `:2565`) are inside the
+  worker, so an enumeration of the *read* sites alone makes it look like
+  scaffolding it is not. **But the write is guarded by
+  `if (get_blockchain_pruning_seed())` (`:1156`) and the delete is
+  `MDB_NOTFOUND`-tolerant** — so on a node with no pruning seed the table
+  is never populated and the delete is a tolerated no-op. Naming the call
+  sites without the guard, as an earlier draft of this row did, overstates
+  the table's independence from the prune exactly as enumerating the reads
+  understated it. Whether the Rust store carries it is a live
+  prune-policy question — a real one, on the population argument — and
+  **not** a settled deletion.
 - **`output_metadata`** — the `node-local` reason does not describe it at
   all, and the true shape is stronger. It is not discarded content; it is
   content **created by discarding**, written from one site inside
