@@ -64,8 +64,8 @@ The sentence above is R2's framing and is kept so the drift is visible.
 **What this round is not.** It does not re-derive R2, segment freeze, the
 challenge/response format, or bond/slash construction. It does not
 delete the C++ stripe engine (that waits on this design, then `DRS-E*`).
-It does not write `db_lmdb.cpp`, and it does not fix `PDM-Q-F9`'s silent
-zero-fill (dedicated C++ PR; `docs/FOLLOWUPS.md`).
+It does not write `db_lmdb.cpp`, and it did not fix `PDM-Q-F9`'s silent
+zero-fill (landed separately in PR #733, 2026-09-13, with F7, F18, F23).
 
 ---
 
@@ -524,8 +524,11 @@ one; none is anticipated.
    already gone, per the comment there). A runtime-loadable checkpoint
    file is a trust channel that bypasses the release-carried anchor —
    the exact surface the anchor argument says is worse than
-   coordination. Rule 15/60; carrier is a FOLLOWUPS row; lands no later
-   than the PR that populates the compiled-in table.
+   coordination. Rule 15/60. **Landed in PR #733 (2026-09-13):**
+   `load_checkpoints_from_json`, `core::update_checkpoints` and the
+   ten-minute reload are deleted; the compiled-in set is enforced once at
+   init by `Blockchain::enforce_checkpoints`. Populating the table is
+   still the release-gate obligation in item 2.
 4. **Band 2's egress number.** Bounded by release gap × tx rate, not
    chain length — but it is the one place archivers carry sync load.
    Archiver economics are stated against **band-2 sync egress +
@@ -1340,9 +1343,10 @@ Named now so they are not discovered later.
   as a real condition. Two readers of the same table with opposite
   failure semantics is a defect **independent of PDM**. Fix
   independently of this round (match `:1577`); not the Q1 comment-
-  correction PR (different file, different property). Carrier:
-  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) (`PDM-Q-F9`). This charter does
-  not carry the C++ edit.
+  correction PR (different file, different property). **Landed in PR
+  #733 (2026-09-13):** both the leaf read and the previously unchecked
+  layer-hash read now return `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`. This
+  charter does not carry the C++ edit.
 
 ### Established by reading (2026-09-13, same pin)
 
@@ -1573,9 +1577,11 @@ consensus question: *does anything read it after admission?*
   `output_metadata` grading in §9 stands as CACHE without the
   "undetermined" qualifier, and the whole
   `check_tx_input` → `scan_outputkeys_for_indexes` → `outputs_visitor`
-  chain is a rule-60 deletion, recorded in `docs/FOLLOWUPS.md` for a
-  dedicated C++ PR (not this charter, not the Q1 comment-correction
-  PR).
+  chain is a rule-60 deletion — **landed in PR #733 (2026-09-13)**. Its
+  residue is disclosed there: `Blockchain::m_scan_table` now has zero
+  readers but is still populated by `prepare_handle_incoming_blocks`'s
+  ring-member pre-fetch; that deletion has its own FOLLOWUPS row because
+  the same loop carries P2P-2 cluster-B drop verdicts.
 - **PDM-Q-F19.** **The slash log's forward reader is bounded on every
   path, and on no path is the bound a check.** The reviewer's read
   was one path; the pin has two, and the answer is the same shape on
@@ -1981,8 +1987,8 @@ the list of closed leaf-shaped rulings the unit change reopens. A Q1
 ruling written ahead of Q6 is ruling on a cache. Q1 then rules §9's
 `CACHE` and `LOCAL-BOUNDED` rows (F16) and the two undetermined
 readers. Q9's binding and lapse tail; Q10's response shape, legible
-to the `SF-` round. F9 is a C++ defect independent of PDM; the carrier
-is the FOLLOWUPS row, not this charter. F11's re-grade of the three
+to the `SF-` round. F9 was a C++ defect independent of PDM, landed in
+PR #733 alongside F7, F18 and F23 — not this charter. F11's re-grade of the three
 curve-tree rows — and now `txs_pqc_auths` (F22) — is the DRS-0 lane's,
 on Q6's and Q1's output.
 
