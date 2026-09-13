@@ -9726,7 +9726,8 @@ void BlockchainLMDB::remove_curve_tree_root_at_height(uint64_t block_height)
 }
 
 // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): prunable
-// admission bytes (r + pass signatures), height-keyed (native uint64,
+// admission bytes (count ‖ (nonce ‖ anchor_height ‖ signature) per pass,
+// SF-D8 v2), height-keyed (native uint64,
 // MDB_INTEGERKEY), opaque at this layer. Mirrors the curve-tree root primitives
 // above — same key shape, same write-txn discipline.
 void BlockchainLMDB::store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness)

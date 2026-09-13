@@ -1296,7 +1296,7 @@ inner frame     := leaf_count  varint    (≤ leaves_per_segment = 25 992)
                  ‖ padding_bytes         (padding_len, exactly)
 
 hashed against R_k: segment_bytes ONLY
-HTTP body (SF-D8, 2026-09-13, not landed) := HybridSignature ‖ inner frame
+HTTP body (SF-D8, 2026-09-13; message half LANDED (a0), this envelope lands with SF (a)) := HybridSignature ‖ inner frame
 ```
 
 **`varint` names one encoding, and this document has to say which.** It is the

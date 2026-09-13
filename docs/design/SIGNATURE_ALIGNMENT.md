@@ -323,13 +323,17 @@ not by which was less work.
 | E | Attestation countersignature | `shekyl-p-serve` (signer lands with `SF` (a); none in-repo at ratification) | `verify_pass_countersignature` ← C++ | `shekyl/archival-attestation-scheme-v2` — **v1 RETIRED 2026-09-13** by `SF-D8` (a0): the message became `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` (the decoded request header ‖ route id), so the string moved with it (`CRYPTO_DOMAIN_REGISTRY.tsv`); no v1 signature was ever produced |
 | F | Serve-credit response | none in-repo | serve_credit (F1) | `shekyl/archival-serve-credit-scheme-v1` (assignable unilaterally) |
 
-Distinct `…-scheme-v1` per surface (SA-R-2 principle), including the four that
+Distinct `…-scheme-vN` per surface (SA-R-2 principle; every surface is at
+`v1` except E, rotated to `v2` by `SF-D8`), including the four that
 already carry an *inner* cSHAKE customization — the scheme-level domain is a
 separate layer and gets its own string. Surface A's domain lives **inside the
 Rust scheme**, so the C++ differential pair (`get_transaction_signed_payload` /
 `transaction.rs` `pqc_signing_payload_hashes`) stays byte-identical and does
-not move — the wrap is Rust-only. E and F have no in-repo signer, so their
-constants are assignable now with the KAT writers the only lockstep.
+not move — the wrap is Rust-only. F has no in-repo signer, so its constant is
+assignable now with the KAT writer the only lockstep. E's was assignable the
+same way until `SF-D8` (a0) landed its verifier and armed KAT (2026-09-13); the
+string is now pinned by `attestation_pass_countersignature_v2_kat.json` and
+moves only with a regeneration recorded in the decision log.
 
 ### Census corrections folded as facts
 

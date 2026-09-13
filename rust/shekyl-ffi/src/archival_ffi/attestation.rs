@@ -73,11 +73,15 @@ pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE: u8 = 11;
 // fails closed anyway — the window it implies holds the wrong hashes (or does
 // not exist), so every record is refused; there is no silent-accept path for
 // the field to guard.
-/// The anchor-hash table does not have the shape the predecessor height implies: `L + 1` hashes
+/// The anchor-hash table does not have the LENGTH the predecessor height implies: `L + 1` hashes
 /// at or above the threshold, none below it. A marshaling slip on the C++ side (the caller sized
-/// the table without asking [`shekyl_archival_pass_anchor_window`], or filled it for a different
-/// height) — checked on EVERY block, records or not, so the drift is loud on the first block after
-/// it appears rather than on the first block that carries a pass record.
+/// the table without asking [`shekyl_archival_pass_anchor_window`]) — checked on EVERY block,
+/// records or not, so the drift is loud on the first block after it appears rather than on the
+/// first block that carries a pass record. This is a shape check only: the verifier receives the
+/// hashes, not the height they were filled from, so a right-length table filled from the wrong
+/// base is indistinguishable here and surfaces as `..._ERR_COUNTERSIG_INVALID` on the first
+/// record that consumes a differing hash (fail-closed, mis-diagnosed). The C++ fill derives its
+/// base from step 0's `first`, so the two heights come from one call.
 pub const SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE: u8 = 13;
 /// A pass record's carried `anchor_height` lies outside the block's admission window
 /// `[h − depth − L, h − depth]` — a stale or pre-fetched read (`SF-D8`). No hash exists to check

@@ -318,13 +318,15 @@ transaction at all.
 
 **3.3 The verify entrypoint that replaces `shekyl_archival_verify_serve_credit_vin`
 (shape 4).** Its contract inverts: instead of a path opening, for each of the `k`
-records it (a) recomputes the nonce from `r ‖ cb_out_key ‖ P ‖ s ‖ E`
-*(v1; `SF-D8` 2026-09-13, LANDED by (a0): the nonce and anchor height are
-carried, not recomputed; the anchor hash is read from the connecting chain)*,
+records it (a) takes the witness-carried requester nonce and anchor height and
+reads the anchor **hash** from the connecting chain at that height, requiring
+`anchor_height ∈ [h − 720 − L, h − 720]` for validated predecessor `h`
+*(`SF-D8`, LANDED by (a0) 2026-09-13; the v1 step recomputed a block-bound
+nonce from `r ‖ cb_out_key ‖ P ‖ s ‖ E` — RETIRED, never carried a record)*,
 (b) for a **pass** (`kind = pass`) checks the side-table `HybridSignature` is
-`P`'s valid countersignature over the nonce *(v1; `SF-D8`: over
-`carried_nonce ‖ carried_anchor_height_le ‖ chain_hash(anchor_height) ‖
-shard_id_le`, with `anchor_height ∈ [h − 720 − L, h − 720]`)*; for a **miss** (`kind = miss`)
+`P`'s valid countersignature over
+`nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖ shard_id_le` under
+`shekyl/archival-attestation-scheme-v2`; for a **miss** (`kind = miss`)
 requires no signature, (c) binds the attester to the block producer (the
 coinbase authorship *is* the attestation — no separate witness key), and
 (d) invokes the **epoch-windowed coinbase-output-key uniqueness** check (the
@@ -415,13 +417,13 @@ fixes two lifecycle points on the same records:
 
 - **Admission (block validation, per-block, PRE-prune).** Recompute
   `attestation_root` over the side-table signatures and check it equals the
-  stored block field; for each **pass** recompute the nonce from
-  `r ‖ cb_out_key ‖ P ‖ s ‖ E` *(v1; since `SF-D8` (a0), 2026-09-13: take the
-  carried nonce and anchor height, require the height inside
-  `[h − 720 − L, h − 720]` for validated predecessor `h`, and verify `P`'s
-  signature over `nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖
-  shard_id_le` under `shekyl/archival-attestation-scheme-v2`; refuse every
-  pass record while `h < 720 + L`)* and verify `P`'s signature; require **miss**
+  stored block field; for each **pass** take the carried nonce and anchor
+  height, require the height inside `[h − 720 − L, h − 720]` for validated
+  predecessor `h`, and verify `P`'s signature over
+  `nonce ‖ anchor_height_le ‖ chain_hash(anchor_height) ‖ shard_id_le` under
+  `shekyl/archival-attestation-scheme-v2`; refuse every pass record while
+  `h < 720 + L` *(`SF-D8` (a0), 2026-09-13; v1 recomputed a block-bound nonce
+  from `r ‖ cb_out_key ‖ P ‖ s ‖ E` — RETIRED)*; require **miss**
   records carry none; check each `kind` bit matches signature-presence; run the
   coinbase-output-key uniqueness check. A malformed set invalidates the *block*;
   so does a coinbase `tx_extra` that fails to parse (`HEADERS_UNREADABLE`): the

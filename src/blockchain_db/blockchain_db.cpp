@@ -659,7 +659,8 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
   }
 
   // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): the
-  // prunable admission bytes (r + pass signatures) ride this same write txn,
+  // prunable admission bytes (count ‖ (nonce ‖ anchor_height ‖ signature) per
+  // pass, SF-D8 v2) ride this same write txn,
   // keyed via archival_attestation_witness_key(prev_height) — the SAME height
   // store_curve_tree_root_at_height uses above. An empty witness (interim /
   // all-miss) writes no row: absent key reads as "no witness".
