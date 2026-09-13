@@ -248,20 +248,35 @@ a blocker, and it is the single largest item in the build.
 
 ---
 
-## 5. Controls — what each one would establish
+## 5. Controls — and which one actually reaches the hazard
 
-| Control | Shape | Establishes | Available |
-| --- | --- | --- | --- |
-| **Necessity** | full redb, corpus **minus** family X → diff stays green | the corpus is load-bearing; demonstrates empty-vs-empty | with E1 |
-| **Sufficiency** | full corpus, redb with X's apply **stubbed** → diff goes **RED** | the comparator **can fail** | with E1 + `ApplyPolicy` |
-| **Coverage assertion** | LMDB alone: after the apply segment each forceable table is non-empty; after the pop segment each returns to its pre-apply state | the corpus reaches what it claims to reach | **now** |
+The three controls are usually listed as a menu of increasing strength. They
+are not. **They have three different subjects, and only one of them has
+§7.1.1's stated hazard as its subject.** The hazard, in that section's own
+words, is that *"a backend can omit all apply/revert hooks and still pass core
+digests."*
 
-Necessity alone is the weaker bar and would have to be labelled as such.
-Sufficiency is the one §7.1.1 actually asks for, and it depends on a switch
-this lane does not own.
+| Control | Subject | Shape | What a pass establishes | Reaches the hazard? |
+| --- | --- | --- | --- | --- |
+| **Coverage assertion** | the corpus, against LMDB | after the apply segment each forceable table is non-empty; after the pop segment each returns to its pre-apply state | the corpus reaches what it claims to reach | **No** — redb is not in it |
+| **Necessity** | the corpus, against the diff | full redb, corpus **minus** family X → diff stays green | the corpus is load-bearing; demonstrates empty-vs-empty | **No** — the backend is held at full |
+| **Sufficiency** | **redb's apply** | full corpus, redb with X's apply **stubbed** → diff goes **RED** | the comparator **can fail** when a hook is missing | **Yes — and it is the only one** |
 
-**7b has ruled that switch in and it can be cited.** `shekyl-chain-store` will
-expose `ApplyPolicy::{Full, StubbedFamilies(&[ArchivalFamily])}` via
+The first two are **preconditions** for the third meaning anything, not weaker
+versions of it. A corpus that does not reach a family makes every later
+statement about that family vacuous, and a corpus whose removal changes
+nothing was never load-bearing. But neither one can detect redb omitting a
+hook, because neither one varies redb.
+
+**The consequence, which E1's owner has taken and will state at the policy
+stamp:** a green diff over the archival families is parity evidence **only if
+redb's apply actually ran**, and the thing that establishes that is the policy
+of the run, not the colour of the diff. So the comparator's green is
+**conditional on a `Full`-policy run** and will be reported that way rather
+than as parity standing alone.
+
+**The switch is ruled in and can be cited.** `shekyl-chain-store` exposes
+`ApplyPolicy::{Full, StubbedFamilies(&[ArchivalFamily])}` via
 `with_apply_policy`, as a **runtime value rather than a cargo feature** —
 because a `#[cfg(feature)]` switch compiles the store differently under test,
 which would make the sufficiency control evidence about a *differently
