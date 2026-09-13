@@ -172,6 +172,15 @@ TEST(archival_bond_post, gate4_integration_accepts_valid_join_market)
   const Gate4Kat kat = load_gate4_kat();
   txin_archival_bond_post bond = load_join_bond_vin(kat.join_wire_hex);
   EXPECT_EQ(bond.p_canonical_id, hash_from_hex(kat.p_id_hex));
+  // EU-D3 cross-language pin: the Rust regenerator (gate4_lifecycle_kat.rs)
+  // wrote the JoinMarket endpoint as 32 x 0x0E; C++ must read those bytes at
+  // the endpoint field — position and length agree across the codecs, not
+  // merely "the wire parsed".
+  {
+    crypto::public_key expected{};
+    memset(expected.data, 0x0E, sizeof(expected.data));
+    EXPECT_EQ(0, memcmp(bond.endpoint.data, expected.data, sizeof(expected.data)));
+  }
 
   auto db = std::make_unique<ArchivalBondPostIntegrationDB>();
   BlockchainAndPool bap;
@@ -303,12 +312,15 @@ TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
   const uint64_t floor = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t shard = 42;
   const std::vector<uint8_t> spend_pk(config::PQC_HYBRID_SINGLE_KEY_LEN, 0xE5);
+  // EU-D3: JoinMarket commits a 32-byte serving endpoint; the marshaler
+  // couples it like the key (32 bytes iff JoinMarket).
+  const std::vector<uint8_t> endpoint(32, 0x0E);
 
   auto verify = [&](uint8_t post_kind, uint8_t holdings_kind, const uint64_t* shards, size_t shard_len,
     uint64_t total, uint64_t credit, uint64_t debit, uint8_t record_exists) {
     return shekyl_archival_verify_join_market_bond_post(
       post_kind, holdings_kind, shards, shard_len, spend_pk.data(), spend_pk.size(),
-      total, credit, debit, record_exists);
+      endpoint.data(), endpoint.size(), total, credit, debit, record_exists);
   };
 
   EXPECT_EQ(verify(0, 0, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_OK);
@@ -316,7 +328,7 @@ TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
   // coupling at the marshaler (asserted below), so the post-kind verdict is
   // probed with an empty key.
   EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
-      1, 0, &shard, 1, nullptr, 0, floor, floor, 0, 0),
+      1, 0, &shard, 1, nullptr, 0, nullptr, 0, floor, floor, 0, 0),
     SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND);
   EXPECT_EQ(verify(0, 0, nullptr, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_NULL_PTR);
   EXPECT_EQ(verify(0, 99, &shard, 1, floor, floor, 0, 0), SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_KIND);
@@ -330,13 +342,27 @@ TEST(archival_bond_post, ffi_maps_each_bond_post_error_code)
   // §9.11 coupling at the shared vin marshaler: JoinMarket without a key (or
   // with a truncated one) refuses, as does a Release carrying any key.
   EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
-      0, 0, &shard, 1, nullptr, 0, floor, floor, 0, 0),
+      0, 0, &shard, 1, nullptr, 0, endpoint.data(), endpoint.size(), floor, floor, 0, 0),
     SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
   EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
-      0, 0, &shard, 1, spend_pk.data(), spend_pk.size() - 1, floor, floor, 0, 0),
+      0, 0, &shard, 1, spend_pk.data(), spend_pk.size() - 1, endpoint.data(), endpoint.size(),
+      floor, floor, 0, 0),
     SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
-  EXPECT_EQ(verify(1, 0, &shard, 1, floor, floor, 0, 0),
-    SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
+  // EU-D3 at the JoinMarket entry: without an endpoint, or with a truncated
+  // one, the coupling refuses. There is no "endpoint on another kind" case to
+  // pin: the other entries have no endpoint operand, and a non-JoinMarket kind
+  // at this entry is the wrong-kind verdict (asserted above) before any
+  // operand is marshaled — the shape is unrepresentable, not checked.
+  EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
+      0, 0, &shard, 1, spend_pk.data(), spend_pk.size(), nullptr, 0, floor, floor, 0, 0),
+    SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
+  EXPECT_EQ(shekyl_archival_verify_join_market_bond_post(
+      0, 0, &shard, 1, spend_pk.data(), spend_pk.size(), endpoint.data(), endpoint.size() - 1,
+      floor, floor, 0, 0),
+    SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
+  // A key on a non-JoinMarket kind is pinned through the Release export below
+  // (the JoinMarket entry answers a Rebond kind with POST_KIND before it
+  // marshals anything — asserted above).
   EXPECT_EQ(shekyl_archival_verify_release_bond_post(
       static_cast<uint8_t>(archival_bond_post_kind::Release), 0, nullptr, 0,
       spend_pk.data(), spend_pk.size(), 0, 0, floor, 1, floor, 0, nullptr, 0,

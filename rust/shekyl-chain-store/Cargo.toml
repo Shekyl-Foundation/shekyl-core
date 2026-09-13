@@ -12,6 +12,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+redb = { workspace = true }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 
 [lints]

@@ -13,8 +13,9 @@ and `blockchain.cpp` call-graph and window-length citations: `dev`
 `3497b8a78`. P0e's §11 ledger and §10's `Digest v0` column — the
 digest walker's accessor mapping and the per-table divergence test: `dev`
 `eb1b60198`. DRS-0 slice A's §12 and §10's `Accumulator class` column —
-the delete-path falsifier run, the `compare_hash32` characterisation and
-DRS-W16: `dev` `ba4b3c73a`.** Line citations are *records-was*
+the delete-path falsifier run, the `compare_hash32` characterisation,
+DRS-W16, **and §12's "Reopening criteria" subsection (added 2026-09-13,
+verified against this same pin, not a later tip)**: `dev` `ba4b3c73a`.** Line citations are *records-was*
 against the pin they name, not against `HEAD`; they are expected to drift
 and must not be "corrected" to a later tree. Two eras are safe only while
 both are declared — an undeclared second era is what put three citations on
@@ -1341,6 +1342,158 @@ pin the types to this document.
 - **dead** — declared but not live: `txs` (never written, DRS-W4) and
   `hf_starting_heights` (dropped at every writable `open()`, DRS-W5).
   Excluded because the domain is empty, not because divergence is tolerable.
+
+### Reopening criteria — two reasons above have an expiry
+
+**A class assigned on a mechanism's behaviour expires when that mechanism
+does.** Both items here are recorded **as hazards with named triggers, not
+as pre-emptive reclassifications** — pre-declaring a class against an
+unlanded ruling is the same error as declaring one against a landed
+mechanism that is leaving. Neither moves a token today.
+
+**1. `curve_tree_leaves` — `append-mostly` over the WHOLE table, and the
+row states which store it is about.**
+
+**This row is about the DAEMON's `m_curve_tree_leaves`, not the wallet's
+`LeafStore`.** DRS-D3 makes them deliberately separate — *"schemas,
+tables, txn models, durability, APIs, and crates deliberately separate"*
+([`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md) `:300`) — and every
+table in this matrix is the daemon's. The clause is here permanently
+because omitting it is what produced the error recorded at the end of this
+entry.
+
+**The daemon does not prune leaves, and cannot.**
+[`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](design/ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+fact §2.5: *"**The daemon retains every leaf forever.**
+`m_curve_tree_leaves` is deleted only by `trim_curve_tree` (reorg). This is
+already **consensus-required** — serve-credit vin verification needs leaf
+scalars at arbitrary challenged indices."* And
+[`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md`](design/ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md)
+puts it structurally: *"The current challenge design does not merely
+coexist with the unpruned world — it **structurally forces** it. No daemon
+can prune while verification reads arbitrary local leaves."*
+
+So **there is no node-variability in this table to class over.** Every
+daemon holds every leaf; the only deletion is reorg trim, which is not a
+retention policy. `append-mostly` over the whole table is correct, and the
+accumulator folds every leaf from position 0.
+
+**Direct folding is strictly stronger than a surrogate here, which is the
+reason the scope must not be narrowed.** For a table every node holds in
+full, folding the leaf bytes detects a leaf corruption unconditionally. An
+accumulator over a *stored* `R_k` detects it only if something recomputes
+`R_k` from the leaves — it certifies the commitment, not the data under it.
+Trading the first for the second buys nothing and gives up coverage.
+
+**Hazard and reopening criterion.** A running chained hash requires every
+leaf, so `append-mostly` **would** fail if daemon-side deep-leaf discard
+ever landed *and* were node-variable. Today that antecedent is **unbuilt
+and structurally blocked** — a stronger not-yet than an unbuilt one alone —
+and the second conjunct is separately ruled: *"pruning is NOT node
+variable"* (Rick, 2026-09-13). Both conjuncts must hold for the hazard to
+fire; neither does. **What would reopen it:** a change to the challenge
+design that stops reading arbitrary local leaves, *followed by* a
+daemon-side discard mechanism that is node-variable. Not either alone.
+
+**A class correction was made here and reverted, and the reason is
+recorded because the failure is reusable.** Acting on a routed diagnosis
+that this row had been given a surrogate's class, an earlier commit in this
+PR narrowed `curve_tree_leaves` to `append-mostly` *over the frontier
+segment only*, surrogating the frozen prefix with `archival_shard_segment`'s
+`R_k`. **The premise was a citation about a different store.**
+[`V3_STAKER_ARCHIVAL.md`](V3_STAKER_ARCHIVAL.md) `:171`–`:172` says a
+non-staker **wallet** prunes deep segment leaves to `R_k` — the noun is on
+`:171`, which is why a citation to `:172` alone loses it — and set **A**'s
+holder
+column (`:153`) reads "Every syncing **wallet / lean node**" — that is
+wallet-class retention, describing the wallet `LeafStore` that DRS-D3
+holds separate. It says nothing about `m_curve_tree_leaves`.
+
+**The instructive part is which check was run.** The correction came with
+an explicit reading job — *is `R_k` a complete cover of the frozen
+segments?* — and that job was executed faithfully and answered correctly
+(it is; see the verification retained below). But the load-bearing premise
+was a different proposition — *do the daemon's leaves vary between honest
+nodes at all?* — and nobody, including me, checked it. **Verifying the
+question you were handed is not the same as verifying the claim it
+supports.** Had the narrowing shipped, it would have removed direct
+coverage of state every daemon holds identically, which is the same
+fail-open shape the reading job was commissioned to prevent, landing on the
+other half of the table.
+
+**The surrogate-completeness verification is kept**, because it is sound
+and `archival_shard_segment`'s own `set-shaped` row depends on it: the
+freeze loop runs `for (shard_id = next; shard_id < complete; ++shard_id)`
+with `complete = frozen_segment_count_on_write_txn()` and `next` the
+table's own `MDB_LAST + 1`, so ids are contiguous from 0; a missing layer-2
+chunk for a completed segment is a **`FATAL`** abort commented "corruption,
+**not a skippable row**"; rows are `MDB_NOOVERWRITE` (CREATE-only, O-2);
+and `revert_archival_segment_freezes` deletes from `MDB_LAST` down,
+breaking at the first `shard_id < complete`, preserving density from the
+top. One `R_k` per frozen segment with no silent gaps — **a true fact that
+does not establish what the class change needed**, which was that the
+leaves under those `R_k` differ between honest daemons.
+
+**2. The `node-local` reason rests on the C++ stripe prune, which the Rust
+store does not inherit.** Recorded per table, because verification shows
+the three do **not** share a disposition — which is exactly what grouping
+them under one reason hid:
+
+- **`txs_prunable`** — the exclusion does not survive the port. With no
+  Rust-side discard the bytes are always present and replay reproduces
+  them, so it lands **in** the digest domain. The `node-local` reason and
+  its `txs_prunable_hash` surrogate were sound against *this* tree and are
+  not properties of the store being built.
+- **`txs_prunable_tip`** — prune-tied by **population**, not by call
+  site, and both halves of that took a correction to reach. Its write and
+  delete are on the **block connect and pop paths**, not in
+  `prune_worker`: `add_transaction_data` (`:1159`) and
+  `remove_transaction_data` (`:1226`, `:1231`); only its three
+  `mdb_cursor_open` sites (`:2402`, `:2460`, `:2565`) are inside the
+  worker, so an enumeration of the *read* sites alone makes it look like
+  scaffolding it is not. **But the write is guarded by
+  `if (get_blockchain_pruning_seed())` (`:1156`) and the delete is
+  `MDB_NOTFOUND`-tolerant** — so on a node with no pruning seed the table
+  is never populated and the delete is a tolerated no-op. Naming the call
+  sites without the guard, as an earlier draft of this row did, overstates
+  the table's independence from the prune exactly as enumerating the reads
+  understated it. Whether the Rust store carries it is a live
+  prune-policy question — a real one, on the population argument — and
+  **not** a settled deletion.
+- **`output_metadata`** — the `node-local` reason does not describe it at
+  all, and the true shape is stronger. It is not discarded content; it is
+  content **created by discarding**, written from one site inside
+  `prune_tx_data` (`:10229`). Its read chain is **dead two levels deep**:
+  `get_output_metadata` has exactly one caller, `is_output_pruned`
+  (`:10083`), and `is_output_pruned` has **no call site anywhere** in
+  `src/`, `rust/` or `tests/` — only its declaration, its override and a
+  `testdb.h` stub. At the port it is empty by construction, so its reason
+  is closer to `dead` (DRS-W4's shape) than to `node-local`.
+
+**Why this is an argument for commissioning the digest sooner, not a
+caveat.** If the inherited prune does not port, then until set-B discard
+lands **the Rust store has no node-variable content by construction** — so
+the digest oracle commissions against a *uniform* reference rather than a
+merely currently-uniform one. That window closes the day node-variable
+discard lands.
+
+**Grounding note, stated because the freeze must not cite what it cannot
+reach.** The code claims above were verified against the declared slice-A
+pin `ba4b3c73a`, and **all nine line anchors were re-resolved there
+immediately before push** — this file is the one document
+`check_doc_code_citations.py` refuses (`DEFERRED_DOCS`, because it
+declares eras by row-set in front matter), so its anchors are
+hand-verified or not verified at all. They **do not** resolve at the
+branch tip: merging `dev` brought the V12 → V13 schema bump, which moved
+every one of them. That is the expected records-was behaviour this
+header's pin sentence describes, not drift to repair — re-anchoring them
+to a later tip is what the header forbids, and what once put three
+citations of this file on code they did not describe. The
+**PDM-Q rulings are not landed** — no `PDM-Q` string resolves anywhere
+under `docs/` at this commit, and the round's opening commit is not an
+ancestor of `dev`. They are recorded here as **triggers to re-evaluate**,
+which is why nothing above changes a class token. When PDM-Q lands, this
+subsection is the list to walk.
 
 ### What the fold consumes (binds DRS-0 slice B's codecs)
 

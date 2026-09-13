@@ -244,6 +244,7 @@ fn bond_post_input() -> Input {
         p_canonical_id: [0x77; 32],
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::ShardSetCompact(vec![1, 2, 3, 9]),
         bonded_total_atomic: 750_000_000 * 4,

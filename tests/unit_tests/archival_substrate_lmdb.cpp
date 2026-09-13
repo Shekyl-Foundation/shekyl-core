@@ -125,7 +125,7 @@ TEST(archival_substrate_lmdb, bond_record_roundtrip)
   const uint64_t bonded_total = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
 
   BlockchainDB& db = fixture.db;
-  db.put_archival_bond_record(p_id, pubkey, {}, 3, bonded_total,
+  db.put_archival_bond_record(p_id, pubkey, {}, archival_test::test_endpoint(), 3, bonded_total,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, shards, bad);
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -261,7 +261,7 @@ TEST(archival_substrate_lmdb, complete_tree_bond_holds_any_shard)
   const std::vector<uint8_t> pubkey = {0x05, 0x06};
 
   BlockchainDB& db = fixture.db;
-  db.put_archival_bond_record(p_id, pubkey, {}, 1, SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p_id, pubkey, {}, archival_test::test_endpoint(), 1, SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsCompleteTree, {}, {});
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -540,9 +540,9 @@ TEST(archival_substrate_lmdb, epoch_close_gather_compute_store_revert)
   const crypto::hash p_missing = make_hash(0x53);
   const std::vector<uint8_t> pubkey = {0x01};
 
-  db.put_archival_bond_record(p1, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p1, pubkey, {}, archival_test::test_endpoint(), join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
-  db.put_archival_bond_record(p2, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p2, pubkey, {}, archival_test::test_endpoint(), join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 9}, {});
 
   // Aged segment for shard 7; shard 9 stays segment-less (age 0). A second
@@ -661,7 +661,7 @@ TEST(archival_substrate_lmdb, emission_gather_folds_three_challenges_into_one_cr
   const crypto::hash p1 = make_hash(0x71);
   const std::vector<uint8_t> pubkey = {0x01};
 
-  db.put_archival_bond_record(p1, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p1, pubkey, {}, archival_test::test_endpoint(), join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   db.put_archival_shard_segment(7, 100, make_hash(0x60), 26000);
 
@@ -783,7 +783,7 @@ TEST(archival_substrate_lmdb, emission_snapshot_identity_and_descriptor_immunity
   // holdings after the close — the exact M2-1 drop-after-serve mutation.
   // Every snapshot output must be bit-identical: the work channel reads the
   // serve-credit ledger, never the holdings descriptor.
-  db.put_archival_bond_record(p2, pubkey, {}, join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
+  db.put_archival_bond_record(p2, pubkey, {}, archival_test::test_endpoint(), join_epoch, 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   fixture.db.batch_stop();
   fixture.db.batch_start();
@@ -912,7 +912,7 @@ TEST(archival_substrate_lmdb, zero_output_close_stored_shape_and_reorg_roundtrip
   // Membership begins at join+1, so a bond joined AT the settlement epoch is
   // not yet a member: its credit rows yield r_market = 0 and sigma = 0.
   const crypto::hash p1 = make_hash(0x54);
-  db.put_archival_bond_record(p1, {0x01}, {}, settlement_epoch,
+  db.put_archival_bond_record(p1, {0x01}, {}, archival_test::test_endpoint(), settlement_epoch,
     2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7}, {});
   db.put_archival_shard_segment(7, 0, make_hash(0x65), 26000);
@@ -3379,7 +3379,7 @@ TEST(archival_substrate_lmdb, release_connect_pop_roundtrip_through_real_block_p
   const uint64_t record_bonded = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t total_bonded = 5 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   db.put_archival_bond_record(p_id,
-    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, 3, record_bonded,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, archival_test::test_endpoint(), 3, record_bonded,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 42}, {{5, 6}});
   db.set_total_bonded_atomic(total_bonded);
   fixture.db.batch_stop();
@@ -3461,10 +3461,10 @@ TEST(archival_substrate_lmdb, release_two_p_one_block_threads_the_counter)
   const uint64_t bonded_a = SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t bonded_b = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   db.put_archival_bond_record(p_a,
-    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x11), {}, 0, bonded_a,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x11), {}, archival_test::test_endpoint(), 0, bonded_a,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7});
   db.put_archival_bond_record(p_b,
-    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x22), {}, 0, bonded_b,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x22), {}, archival_test::test_endpoint(), 0, bonded_b,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {8, 9});
   db.set_total_bonded_atomic(bonded_a + bonded_b);
   fixture.db.batch_stop();
@@ -3566,7 +3566,7 @@ TEST(archival_substrate_lmdb, holdings_update_add_connect_pop_roundtrip_through_
   const uint64_t record_bonded = 2 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   const uint64_t total_bonded = 5 * SHEKYL_ARCHIVAL_BOND_FLOOR_ATOMIC;
   db.put_archival_bond_record(p_id,
-    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, 3, record_bonded,
+    std::vector<uint8_t>(config::PQC_HYBRID_SINGLE_KEY_LEN, 0x5B), {}, archival_test::test_endpoint(), 3, record_bonded,
     shekyl::db::ArchivalBondValue::kHoldingsShardSetCompact, {7, 42});
   db.set_total_bonded_atomic(total_bonded);
   fixture.db.batch_stop();

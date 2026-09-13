@@ -307,7 +307,7 @@ void BlockchainDB::add_transaction(const crypto::hash& blk_hash, const std::pair
         // length on JoinMarket, so an empty key here is unreachable through
         // ANY parse path — including pool/blob reloads via boost archives.
         put_archival_bond_record(bond.p_canonical_id, bond.hybrid_public_key,
-          bond.bond_spend_pk, join_epoch,
+          bond.bond_spend_pk, bond.endpoint, join_epoch,
           bond.bonded_total_atomic, static_cast<uint8_t>(bond.holdings.kind),
           bond.holdings.shard_ids);
         const uint64_t bonded_total = get_total_bonded_atomic();
@@ -1688,7 +1688,8 @@ bool BlockchainDB::get_archival_shard_segment_at_height(uint64_t /*shard_id*/, u
 
 void BlockchainDB::put_archival_bond_record(const crypto::hash& /*p_id*/,
   const std::vector<uint8_t>& /*hybrid_pubkey*/,
-  const std::vector<uint8_t>& /*bond_spend_pk*/, uint64_t /*join_settlement_epoch*/,
+  const std::vector<uint8_t>& /*bond_spend_pk*/, const crypto::public_key& /*endpoint*/,
+  uint64_t /*join_settlement_epoch*/,
   uint64_t /*bonded_total_atomic*/, uint8_t /*holdings_kind*/,
   const std::vector<uint64_t>& /*held_shard_ids*/,
   const std::vector<std::pair<uint64_t, uint64_t>>& /*bad_intervals*/)

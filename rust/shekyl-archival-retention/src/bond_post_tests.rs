@@ -7,22 +7,21 @@
 
 use super::*;
 use crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC;
-use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet};
+use crate::bond_wire::{HoldingsDescriptor, HoldingsKind, ShardSet, ENDPOINT_BYTES};
 
 fn valid_join_vin() -> ArchivalBondPostVin {
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::JoinMarket,
-        bond_spend_pk: vec![0xE5; 64],
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::join_market(
+        vec![0xAB; 64],
+        [0x11; 32],
+        vec![0xE5; 64],
+        [0xEE; ENDPOINT_BYTES],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
         },
-        bonded_total_atomic: 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: 2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_debit: 0,
-    }
+        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+    )
 }
 
 #[test]
@@ -31,9 +30,32 @@ fn accepts_valid_join_market() {
 }
 
 #[test]
-fn rejects_non_join_post_kind() {
+fn rejects_all_zero_endpoint() {
     let mut vin = valid_join_vin();
-    vin.post_kind = BondPostKind::Rebond;
+    vin.set_endpoint([0u8; ENDPOINT_BYTES]);
+    assert_eq!(
+        verify_join_market_bond_post(&vin, false),
+        Err(BondPostError::EndpointZero)
+    );
+    let mut ep = [0u8; ENDPOINT_BYTES];
+    ep[ENDPOINT_BYTES - 1] = 1;
+    vin.set_endpoint(ep);
+    assert!(verify_join_market_bond_post(&vin, false).is_ok());
+}
+
+#[test]
+fn rejects_non_join_post_kind() {
+    let vin = ArchivalBondPostVin::rebond(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
+            kind: HoldingsKind::ShardSetCompact,
+            shard_ids: ShardSet::new(vec![7, 42]).unwrap(),
+        },
+        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        2 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        0,
+    );
     assert_eq!(
         verify_join_market_bond_post(&vin, false),
         Err(BondPostError::PostKindNotJoinMarket)
@@ -135,19 +157,17 @@ const RECORD_BONDED: u64 = 2 * ARCHIVAL_BOND_FLOOR_ATOMIC;
 
 /// The post-connect state of a full exit: empty holdings, zero total.
 fn valid_release_vin() -> ArchivalBondPostVin {
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::Release,
-        bond_spend_pk: Vec::new(),
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::release(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::empty(),
         },
-        bonded_total_atomic: 0,
-        bond_credit: 0,
-        bond_debit: RECORD_BONDED,
-    }
+        0,
+        0,
+        RECORD_BONDED,
+    )
 }
 
 fn ok_release(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
@@ -236,8 +256,7 @@ fn rejects_full_interval_log() {
 
 #[test]
 fn rejects_wrong_post_kind() {
-    let mut vin = valid_release_vin();
-    vin.post_kind = BondPostKind::JoinMarket;
+    let vin = valid_join_vin();
     assert_eq!(ok_release(&vin), Err(BondPostError::PostKindNotRelease));
 }
 
@@ -382,19 +401,17 @@ fn hu_current_shards() -> Vec<u64> {
 }
 
 fn valid_add_vin() -> ArchivalBondPostVin {
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::HoldingsUpdate,
-        bond_spend_pk: Vec::new(),
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::holdings_update(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7, 9, 11]).unwrap(), // current + one new shard
         },
-        bonded_total_atomic: 3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_debit: 0,
-    }
+        3 * ARCHIVAL_BOND_FLOOR_ATOMIC,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+        0,
+    )
 }
 
 fn ok_add(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
@@ -416,8 +433,7 @@ fn accepts_valid_add() {
 
 #[test]
 fn add_rejects_wrong_post_kind() {
-    let mut vin = valid_add_vin();
-    vin.post_kind = BondPostKind::JoinMarket;
+    let vin = valid_join_vin();
     assert_eq!(ok_add(&vin), Err(BondPostError::PostKindNotHoldingsUpdate));
 }
 
@@ -461,15 +477,10 @@ fn add_rejects_exited_record_resurrection() {
     // JoinMarket-bypassing re-entry path whose connect then threw on the
     // empty-pre-image journal encode (verify-valid but unconnectable on
     // every node: a chain-stall vector). P2B-7 Pin 1: Bonded → Bonded.
-    let vin = ArchivalBondPostVin {
-        holdings: HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![11]).unwrap(),
-        },
-        bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        ..valid_add_vin()
-    };
+    let mut vin = valid_add_vin();
+    vin.holdings.shard_ids = ShardSet::new(vec![11]).unwrap();
+    vin.bonded_total_atomic = ARCHIVAL_BOND_FLOOR_ATOMIC;
+    vin.bond_credit = ARCHIVAL_BOND_FLOOR_ATOMIC;
     assert_eq!(
         verify_holdings_update_add(
             &vin,
@@ -544,19 +555,17 @@ const DROP_LAST_SERVED: u64 = 5;
 const DROP_CURRENT: u64 = 40; // tenure 40 ≥ horizon 20; cooldown/settle satisfied
 
 fn valid_drop_vin() -> ArchivalBondPostVin {
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::HoldingsUpdate,
-        bond_spend_pk: Vec::new(),
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::holdings_update(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::new(vec![7]).unwrap(), // current {7, 11} minus 11
         },
-        bonded_total_atomic: ARCHIVAL_BOND_FLOOR_ATOMIC,
-        bond_credit: 0,
-        bond_debit: ARCHIVAL_BOND_FLOOR_ATOMIC,
-    }
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+        0,
+        ARCHIVAL_BOND_FLOOR_ATOMIC,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -742,19 +751,17 @@ fn rebond_record_shards() -> Vec<u64> {
 fn rebond_vin(post: Vec<u64>, credit: u64) -> ArchivalBondPostVin {
     let shard_ids = ShardSet::new(post).expect("rebond fixture holdings are valid");
     let post_floor = shard_ids.len() as u64 * ARCHIVAL_BOND_FLOOR_ATOMIC;
-    ArchivalBondPostVin {
-        hybrid_public_key: vec![0xAB; 64],
-        p_canonical_id: [0x11; 32],
-        post_kind: BondPostKind::Rebond,
-        bond_spend_pk: Vec::new(),
-        holdings: HoldingsDescriptor {
+    ArchivalBondPostVin::rebond(
+        vec![0xAB; 64],
+        [0x11; 32],
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids,
         },
-        bonded_total_atomic: post_floor,
-        bond_credit: credit,
-        bond_debit: 0,
-    }
+        post_floor,
+        credit,
+        0,
+    )
 }
 
 fn ok_rebond(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
@@ -798,8 +805,7 @@ fn rebond_accepts_terminal_slash_full_refund() {
 
 #[test]
 fn rebond_rejects_wrong_post_kind() {
-    let mut vin = rebond_vin(vec![7, 9], 0);
-    vin.post_kind = BondPostKind::HoldingsUpdate;
+    let vin = valid_add_vin();
     assert_eq!(ok_rebond(&vin), Err(BondPostError::PostKindNotRebond));
 }
 
@@ -966,24 +972,10 @@ fn rebond_rejects_term_mismatches() {
     );
 }
 
-// (The former `rebond_rejects_oversize_shard_set` verify test is retired
-// with the `RebondPostOversize` belt: an oversize post cannot be built into
-// the vin's `ShardSet`, so the fail-open hole it closed — an oversize post
-// collapsing `bond_floor` to 0 on a terminal record, verifying with zero
-// collateral, then aborting the block-connect encode — is now
-// unrepresentable at the decode/marshal boundary. The bound is proven by
-// the `ShardSet` construction tests and re-guarded on the raw-slice connect
-// path by `rebond_connect`'s `PostOversize` belt + the FFI marshal test.)
-
 #[test]
 fn rebond_rejects_record_floor_drift() {
-    // A record whose bonded_total drifted BELOW bond_floor(holdings)
-    // (1.5·FLOOR over two shards — no honest path produces it; any latent
-    // bug or DB corruption could). The terms alone would verify — credit =
-    // bond_floor(post) − 1.5·FLOOR via the checked_sub — and the connect
-    // fold's RecordFloorInvariantBroken belt would then FATAL-abort every
-    // node connecting the block. The verify-side check turns the chain
-    // halt into a tx rejection.
+    // Drifted record (1.5·FLOOR over two shards): terms would verify and
+    // connect would FATAL; verify rejects so the chain does not halt.
     let drifted = ARCHIVAL_BOND_FLOOR_ATOMIC + ARCHIVAL_BOND_FLOOR_ATOMIC / 2;
     let vin = rebond_vin(vec![7, 9], 2 * ARCHIVAL_BOND_FLOOR_ATOMIC - drifted);
     assert_eq!(

@@ -65,7 +65,7 @@
 //!   the serve-credit battery (SC1–SC8) in this match arm.
 //! - **HoldingsUpdate / Rebond** (wire `BondPostKind::Other`): the semantic
 //!   verifies exist in `shekyl-archival-retention` and the block path runs
-//!   them today, but **no wallet constructs either kind**. Building their
+//!   them today, but **no wallet constructs either**. Building their
 //!   submit-side fact sets now would be pre-provisioned flexibility (rule
 //!   21) whose Phase-D race classification could not be verified against
 //!   any real submission, so `verify_bond_post` refuses them at the kind
@@ -258,7 +258,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // producer, so their fact sets are deliberately unbuilt and they refuse
     // loudly under their named rule-21 reopening criterion (module docs).
     let arm = match &bond.kind {
-        WireBondPostKind::JoinMarket { bond_spend_pk } => BondArm::Credit(bond_spend_pk),
+        WireBondPostKind::JoinMarket { bond_spend_pk, .. } => BondArm::Credit(bond_spend_pk),
         WireBondPostKind::Other(tag) if *tag == RetentionBondPostKind::Release as u8 => {
             BondArm::Debit
         }
@@ -860,19 +860,30 @@ fn retention_vin(
     post_kind: RetentionBondPostKind,
     bond_spend_pk: &[u8],
 ) -> Option<ArchivalBondPostVin> {
-    let (kind, shard_ids) = match &bond.holdings {
+    let (holdings_kind, shard_ids) = match &bond.holdings {
         Holdings::ShardSetCompact(ids) => (
             HoldingsKind::ShardSetCompact,
             ShardSet::new(ids.clone()).ok()?,
         ),
         Holdings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
     };
+    let kind = match &bond.kind {
+        WireBondPostKind::JoinMarket { endpoint, .. } => {
+            shekyl_archival_retention::BondKind::JoinMarket {
+                bond_spend_pk: bond_spend_pk.to_vec(),
+                endpoint: *endpoint,
+            }
+        }
+        WireBondPostKind::Other(_) => post_kind.unit_kind()?,
+    };
     Some(ArchivalBondPostVin {
         hybrid_public_key: bond.hybrid_public_key.clone(),
         p_canonical_id: bond.p_canonical_id,
-        post_kind,
-        bond_spend_pk: bond_spend_pk.to_vec(),
-        holdings: HoldingsDescriptor { kind, shard_ids },
+        kind,
+        holdings: HoldingsDescriptor {
+            kind: holdings_kind,
+            shard_ids,
+        },
         bonded_total_atomic: bond.bonded_total_atomic,
         bond_credit: bond.bond_credit,
         bond_debit: bond.bond_debit,

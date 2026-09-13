@@ -1109,6 +1109,8 @@ private:
 //
 // Versioned LMDB value for `archival_bond` (gate-4 §4; serve-credit reads).
 //
+// v7 inserts the 32-byte serving `endpoint` after `bond_spend_pk` (written
+// once at JoinMarket connect; no later kind mutates it).
 // v6 (HoldingsUpdate, gate-4 §4.4) appends the per-shard `shard_add_epochs`
 // array — index-parallel to `held_shard_ids` under one shared count — powering
 // the drop-eligibility gate and per-shard E_add+1 counting. v5 (GF-1, gate-4
@@ -1120,7 +1122,7 @@ private:
 // pre-genesis posture: no migration, reset the data directory.
 
 struct ArchivalBondValue {
-    static constexpr uint8_t kVersion = 6;
+    static constexpr uint8_t kVersion = 7;
     static constexpr uint8_t kHoldingsShardSetCompact = 0;
     static constexpr uint8_t kHoldingsCompleteTree = 1;
     static constexpr size_t kMaxPubkeyLen = 2048;
@@ -1172,6 +1174,9 @@ struct ArchivalBondValue {
     /// canonical-length requirement is the writers'/verify's (every record is
     /// created by JoinMarket connect, whose vin serializer enforces it).
     std::vector<uint8_t> bond_spend_pk;
+    /// v7: 32-byte serving endpoint, written once at JoinMarket connect.
+    /// Any 32 bytes (zero is a value the vin carried, not an absence).
+    std::array<uint8_t, 32> endpoint{};
     uint64_t join_settlement_epoch = 0;
     /// Per-P bonded balance (gate-4 §4.1); must equal `bond_floor(holdings)` post-connect.
     uint64_t bonded_total_atomic = 0;
@@ -1249,7 +1254,7 @@ struct ArchivalBondValue {
                 "ArchivalBondValue encode: claimed_settlement_epochs order/span violated");
 
         std::vector<uint8_t> out;
-        out.reserve(1 + 2 + hybrid_pubkey.size() + 2 + bond_spend_pk.size() + 8 + 8 + 1 + 4
+        out.reserve(1 + 2 + hybrid_pubkey.size() + 2 + bond_spend_pk.size() + 32 + 8 + 8 + 1 + 4
             + held_shard_ids.size() * 8 + shard_add_epochs.size() * 8
             + 4 + bad_intervals.size() * 16 + 4 + claimed_settlement_epochs.size() * 8 + 8);
         out.push_back(kVersion);
@@ -1261,6 +1266,9 @@ struct ArchivalBondValue {
         out.push_back(static_cast<uint8_t>(spk_len >> 8));
         out.push_back(static_cast<uint8_t>(spk_len));
         out.insert(out.end(), bond_spend_pk.begin(), bond_spend_pk.end());
+        // v7: the endpoint rides as raw 32 bytes (no length: it is a key, not a
+        // variable-length blob).
+        out.insert(out.end(), endpoint.begin(), endpoint.end());
         for (int i = 7; i >= 0; --i)
             out.push_back(static_cast<uint8_t>((join_settlement_epoch >> (i * 8)) & 0xFF));
         for (int i = 7; i >= 0; --i)
@@ -1326,7 +1334,7 @@ struct ArchivalBondValue {
 
     static bool decode(const void* data, size_t len, ArchivalBondValue& out)
     {
-        if (!data || len < 1 + 2 + 2 + 8 + 8 + 1 + 4 + 4 + 4 + 8)
+        if (!data || len < 1 + 2 + 2 + 32 + 8 + 8 + 1 + 4 + 4 + 4 + 8)
             return false;
         const auto* p = static_cast<const uint8_t*>(data);
         size_t off = 0;
@@ -1343,10 +1351,12 @@ struct ArchivalBondValue {
         off += pk_len;
         const uint16_t spk_len = static_cast<uint16_t>((p[off] << 8) | p[off + 1]);
         off += 2;
-        if (spk_len > kMaxPubkeyLen || off + spk_len + 8 + 8 + 1 > len)
+        if (spk_len > kMaxPubkeyLen || off + spk_len + 32 + 8 + 8 + 1 > len)
             return false;
         out.bond_spend_pk.assign(p + off, p + off + spk_len);
         off += spk_len;
+        std::memcpy(out.endpoint.data(), p + off, 32);
+        off += 32;
         out.join_settlement_epoch = load_be64(p + off);
         off += 8;
         out.bonded_total_atomic = load_be64(p + off);

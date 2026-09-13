@@ -1948,7 +1948,10 @@ uint8_t shekyl_check_commitment_masks(
 /// length iff JoinMarket, empty otherwise — returning
 /// SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING (code 23, shared by
 /// both entry points like LEN_OVERFLOW) instead of building a vin the Rust
-/// wire codec would refuse to serialize.
+/// wire codec would refuse to serialize. `endpoint_*` is the vin's EU-D3
+/// serving endpoint — exactly 32 bytes on JoinMarket, null/0 on every other
+/// kind; the marshaler refuses the coupling with
+/// SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING (code 52).
 uint8_t shekyl_archival_verify_join_market_bond_post(
     uint8_t post_kind,
     uint8_t holdings_kind,
@@ -1956,6 +1959,8 @@ uint8_t shekyl_archival_verify_join_market_bond_post(
     size_t shard_ids_len,
     const uint8_t* bond_spend_pk_ptr,
     size_t bond_spend_pk_len,
+    const uint8_t* endpoint_ptr,
+    size_t endpoint_len,
     uint64_t bonded_total_atomic,
     uint64_t bond_credit,
     uint64_t bond_debit,
@@ -2167,6 +2172,11 @@ uint8_t shekyl_archival_last_served_scan(
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_NO_RECORD_KEY 49
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_DEBIT_AUTH_KEY_MISMATCH  50
 #define SHEKYL_ARCHIVAL_BOND_POST_ERR_NOT_COLD_AUTHORITY_POST 51
+
+// Shared vin marshal: the EU-D3 serving-endpoint coupling (32 bytes on
+// JoinMarket, none on any other kind) — the sibling of
+// BOND_SPEND_PK_COUPLING.
+#define SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING       52
 /// PWD-B7: drop verdict for a shekyl_archival_verify_*_bond_post error code.
 uint8_t shekyl_archival_bond_post_drop_verdict(uint8_t code);
 /// NUL-terminated static reason for a bond-post verify code (do not free).

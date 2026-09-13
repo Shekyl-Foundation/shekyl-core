@@ -1,61 +1,52 @@
 # `EndpointUpdate` — the round record (EU)
 
-**Status:** **RULED** (round record) — dispositions `EU-D1`…`EU-D10` ruled
-2026-09-11, recorded 2026-09-12. Nothing in this document is implemented
-unless a disposition says so by PR number; as of the recording date only
-`EU-D2`'s prerequisite (C0) has landed. **Read this before cutting B, C1 or
-D.** The rulings were made in-channel by Rick and are quoted where the
-words matter; the consequences are this document's.
+**Status:** **REJECTED** (kind 4) — Rick, 2026-09-13. A bonded persona's
+endpoint never changes; a new onion address is a new persona, reached by
+Release and a fresh `JoinMarket`. Three of the round's dispositions survive as
+the **JoinMarket-endpoint design** — `EU-D1` (the daemon is the client),
+`EU-D3` (the endpoint field, on `JoinMarket` only), `EU-D4` (the witness reads
+it from the drawable snapshot through the record) — and land in the
+JoinMarket-endpoint PR (number filled in on landing). Everything else in the
+round (`EU-D2`, `EU-D5`…`EU-D13`, the 2026-08-10 "carrier ruling" they
+implemented, and the `ARCHIVAL_P_DERIVE_V1` retirement authorized for D) is
+rejected with it — §5. **Read §1 before reasoning about endpoints.**
 
-**Unblocked by** — every input this round consumes is closed:
+**Identifier family** `EU-`, registered in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2; the rejected
+dispositions keep their numbers so citations resolve to a REJECTED line
+([rule 23](../../.cursor/rules/23-disposition-visibility.mdc)).
 
-| Upstream | State |
-|---|---|
-| Carrier ruling — `EndpointUpdate = 4` on the bond-post vin, cold, zero-amount, epoch-open timing, two KATs | **RULED 2026-08-10**, [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §7 item 2 (carrier) — the shape this round implements, not reopens |
-| Witness selection — the witness is the producer of block *h* | **CLOSED 2026-08-10**, same document, fork 2 |
-| The client/server boundary for the archival path | **RULED 2026-09-11** (`EU-D1` below) — it re-derives fork 2 at the architecture level |
-| C0 — the cold-authority selector as one Rust predicate | **LANDED 2026-09-12**, PR #703 (`4231518ca`); review pass in PR #711 |
-| The named spec gap — which cold key a non-`JoinMarket` record verifies against | **RESOLVED** by C0's finding (`EU-D2`) |
-
-**Freezes.** The endpoint field on the bond-post vin (a genesis-frozen consensus
-wire) and the endpoint column on the bond record (LMDB). **Rule 42 does NOT
-fire on the vin** — it governs tier-4 sealed `shekyl-engine-state` blocks, not
-the consensus tx wire. It fires on the **wallet** half: `PENDING_POST_VERSION`
-`10 → 11` when the wallet learns to persist a pending `EndpointUpdate`. The
-LMDB `#define VERSION 12 → 13` is the schema guard — separate guard, separate
-question (the `PC-D` row's phrasing). Getting this wrong is how B mis-aims the
-bump; it is stated here so B does not have to re-derive it.
-
-**Process.** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
-cited: B and C1 move the FFI boundary and touch consensus; D changes a
-KAT-frozen derivation. Identifier family **`EU-`**, registered at birth in
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 per
-[`94-tracking-index`](../../.cursor/rules/94-tracking-index.mdc); prefix
-checked unique by `scripts/ci/check_index_prefix_uniqueness.py` over the 73
-prefixes registered at the recording commit — the gate's count, not a hand-kept
-list (a partial list reads as the population it is not).
-
-**Decision authority:** Rick. **Timing posture, in his words (2026-09-11):**
-*"It's not like this is going to be released until this whole thing is
-complete, so the timing is less important than it seems."* Sequence matters;
-calendar does not.
+**Decision authority:** Rick.
 
 ---
 
-## 1. What this round is, and is not
+## 1. The ruling — 2026-09-13
 
-The 2026-08-10 carrier ruling was unusually complete: kind, family, amount
-arms made unrepresentable, endpoint presence rule, cold authorization with the
-family proxy explicitly broken, timing, and the laundering invariant as two
-named tests. It left **one** spec gap — the cold key for a non-`JoinMarket`
-record — and did not reach six implementation-shaping questions that any
-author would otherwise decide silently at the keyboard. This round closes the
-gap, decides the six, records two further rulings the sequence forced (the
-client/server boundary; retired personas), and fixes the landing order.
+**In Rick's words, verbatim:**
 
-It does **not** reopen the carrier ruling, does not touch the shard-assignment
-gap (`-29505`, an unopened round of its own), and does not specify TJ-B — it
-hands TJ-B its premises.
+> "IT has always been - who said it could rotate? That is a HARD NO. Rotating
+> an existing bond is a dead giveaway for someone to link it. IT has been the
+> rule for a long time. THe roation COULD be about a daemon, but how the fuck
+> would you lose the key if it's derived from the seed?"
+
+**What it fixes.** The persona's serving identity (`hs_id_seed`) is an HKDF
+child of the persona slot, exactly like its identity and bond-spend keys: one
+onion per persona is the design, not a gap. The "endpoint-burn" cases the
+rejected carrier paragraph priced do not survive grounding:
+
+- *Lost onion key* — cannot happen; the key is re-derived from the seed.
+- *Discovered address* — the address is published in the `JoinMarket` post
+  and dialed by every witness. Public is its normal state.
+- *Compromised host* — the attacker holds the serving seed and the identity
+  signing key. No endpoint change takes either back, and posting one adds a
+  public, timestamped record that this persona moved, correlated with the
+  operator's own incident. The one act that ends the attacker's position is
+  Release, authorized by the one key never on the host (`bond_spend_pk`,
+  principal-tier custody — C0, PR #703); the operator then joins from a
+  clean box as a new persona.
+
+**What it does not touch.** The daemon's own onion address (network posture)
+is a different object, not on chain, and not this record's subject.
 
 ---
 
@@ -110,54 +101,7 @@ else's liveness to draw on instead.
 
 ---
 
-## 3. `EU-D2` — RULED (resolved by C0's finding): the cold key is the record's committed `bond_spend_pk`, reached by widening the selector one arm
-
-**The gap as the carrier ruling left it:** *"Spec detail to resolve: which cold
-key a non-`JoinMarket`-posted record verifies against (`bond_spend_pk` is
-present iff `JoinMarket` on the wire)."*
-
-**The answer was already in the tree.** A value-out post authorizes against the
-**record's committed `bond_spend_pk`**, never a vin-carried key (SA-2b forbids
-the key on non-`JoinMarket` vins precisely because a vin-carried key is a
-forgeable self-assertion); the authorizer rides the surface-A `pqc_auths` slot
-and the pin ties it to the record (`BlockchainLMDB::put_archival_bond_record` in
-`db_lmdb.cpp` persists it). `EndpointUpdate` inherits that answer unchanged. What was
-missing was not a key but a **selector** that could say so: until C0 the
-"is this a cold post" decision was implied by which C++ arms happened to call
-the pin, and described in prose — in three places — as *"`bond_debit > 0`, not
-the post kind."* `EndpointUpdate` has `bond_debit == 0`, so under that prose it
-would have authorized **hot**: exactly the stalemate the carrier ruling's
-authorization clause exists to prevent.
-
-**One clause of the source ruling reads the other way.** The shape sentence
-in [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §7
-(:934 at the recording commit) says *"authorized by the persona's attestation
-key"*; the same ruling's *"spec detail to resolve"* clause, quoted above, asks
-which **cold** key. The attestation key is the identity key a serving host
-holds — the drain the pin exists to close (`debit_auth.rs` header) — so the
-second clause governs and the first is superseded here, not re-edited there:
-this record is where the resolution lives.
-
-**C0's finding (PR #703):** the prose never described the code. The Release
-arm pins on kind, unconditionally, ahead of UB9; only `HoldingsUpdate` selects
-on the debit term. The selector is now one exhaustive Rust truth table,
-`requires_cold_authority(post_kind, bond_debit)`, and every consensus site
-calls the composed `cold_authority_pin`. **C1 is one arm:**
-`BondPostKind::EndpointUpdate => true`. It lands atomically with B under
-[rule 07](../../.cursor/rules/07-consensus-atomic-cutovers.mdc), so there is no
-window in which kind 4 exists and authorizes hot.
-
-**Why C was split (Rick, 2026-09-11):** *"C0 — extract the predicate, no
-behavior change. … C1 — add one arm. Three lines, lands atomically with B."*
-The alternative — bundling a change to every value-out post's authorization
-into the endpoint feature — was a false choice; C0 front-loaded the risky part
-so a C++-caller break surfaces before the endpoint work depends on it. It
-did: C0's own gate needed a statement-scoped call-site check before it could
-match the wrapped call.
-
----
-
-## 4. `EU-D3` — RULED: the endpoint is the raw 32-byte Ed25519 key, present iff `JoinMarket ∨ EndpointUpdate`, structurally mandatory on `JoinMarket`
+## 3. `EU-D3` — RULED 2026-09-11, narrowed 2026-09-13: the endpoint is the raw 32-byte Ed25519 key, present iff `JoinMarket`, mandatory there, immutable for the record's life
 
 **Encoding.** The v3 onion address is `pubkey ‖ checksum ‖ version`,
 base32-encoded — everything but the key is derived. Storing the string would
@@ -173,37 +117,36 @@ version bump.
 **The address is a display form.** A reader reconstructs it; the wire never
 carries it.
 
-**Presence.** Present iff `post_kind ∈ {JoinMarket, EndpointUpdate}`, enforced
-in `write` / `read_payload` alongside the existing `bond_spend_pk`-iff-`JoinMarket`
-coupling — two fields, two couplings, one enforcement site. A `JoinMarket` vin
-without an endpoint, or a `Release` / `Rebond` / `HoldingsUpdate` vin with one,
-is unrepresentable on the wire, the same idiom as the amount arms.
+**Presence.** Present iff `post_kind == JoinMarket` — the same condition as
+`bond_spend_pk`, so the two fields share one coupling branch in `write` /
+`read_payload`. A `JoinMarket` vin without an endpoint, or a `Release` /
+`Rebond` / `HoldingsUpdate` vin with one, is unrepresentable on the wire, the
+same idiom as the amount arms. An all-zero endpoint on `JoinMarket` is refused
+by consensus on both sides, because the daemon's flat vin struct represents
+"absent" as the zero key and cannot tell the two apart.
 
 **Mandatory on `JoinMarket`.** The carrier ruling's *"a bond without an
 endpoint was the discovery gap"* reads as mandatory; it lands as a
 non-`Option` field. There is no chain and no wallet, so there is no legacy
 bond to accommodate — a bond without an endpoint cannot be constructed.
 
-**On the record.** `ArchivalBondValue` gains a 32-byte endpoint column; written
-at `JoinMarket` connect, overwritten at `EndpointUpdate` connect, **never
-cleared** (`EU-D7`). LMDB `VERSION 12 → 13`.
+**On the record.** `ArchivalBondValue` gains a 32-byte endpoint column
+(value v6 → v7), written at `JoinMarket` connect and **never changed**: a
+Release leaves the row in place with a zero bonded total, endpoint included.
+LMDB `VERSION 12 → 13` for the column; a v12 datadir is refused at open.
 
 ---
 
-## 5. `EU-D4` — RULED: the witness reads the endpoint from the drawable snapshot at epoch open, joined through the record by `p_id`
+## 4. `EU-D4` — RULED 2026-09-11: the witness reads the endpoint from the drawable snapshot at epoch open, joined through the record by `p_id`
 
-A persona accumulates one `JoinMarket` and *N* `EndpointUpdate`s. Discovery is
-a chain read only if the witness reads **one place** — not a history walk. That
-place is the drawable-set snapshot the challenge derivation already takes at
+Discovery is a chain read only if the witness reads **one place** — the
+record, not the post that wrote it. That place is the drawable-set snapshot the challenge derivation already takes at
 epoch open (`challenge_assignment.rs`, `DrawablePair { p_id, shard_id }`; §9.5
 pin 1's canonical order). The pair is the sort key; the endpoint is **not** a
 field on it — it joins through the bond record by `p_id`, one lookup, at the
-moment the drawable set is snapshotted. This is the carrier ruling's *"the
-drawable snapshot (§4.1) and the endpoint move together"*
-([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §7, :934
-at the recording commit) made concrete: an
-`EndpointUpdate` that connects mid-epoch is record-effect at connect and
-mechanism-effect at the next epoch open, exactly as `HoldingsUpdate` is.
+moment the drawable set is snapshotted. A `JoinMarket` that connects
+mid-epoch is record-effect at connect and mechanism-effect at the next epoch
+open, exactly as `HoldingsUpdate` is.
 
 Stated here rather than left to whoever writes the fetcher, because the
 alternative — the fetcher walking the record's post history — is the design a
@@ -211,188 +154,48 @@ reader of the wire would reach for, and it is wrong.
 
 ---
 
-## 6. `EU-D5` — RULED: rotation rate is unbounded, and cold custody is the brake
+## 5. Rejected, by name — 2026-09-13
 
-Zero economics means the only brakes on rotation are the transaction fee and
-the friction of reaching cold custody, and the epoch-open timing rule makes
-mid-epoch flapping invisible to the mechanism regardless. No bound. **Ruled
-rather than left unasked**, because an unasked bound on a consensus surface is
-the thing a later reader adds "to be safe" and then cannot remove.
+Every entry below was written as RULED between 2026-08-10 and 2026-09-12 and
+is REJECTED by §1. The numbers are kept so a citation resolves here.
 
-The carrier ruling's stated cost stands and is the operator-facing text:
-rotation requires the same custody used for releasing — the escape is not
-automatable from the serving box. That is the correct trade, and it is the
-bound.
-
----
-
-## 7. `EU-D6` — RULED: enumeration is a design input, not a leak to tolerate
-
-Publishing onion keys on chain makes the entire archival set a permanently,
-publicly enumerable list of live services — every persona, forever, including
-retired ones. That is the intended cost of chain-read discovery, and under
-`EU-D1` it is stronger than a cost: **a daemon doing discovery needs the
-persona set anyway.** Enumerability is an input the fetcher relies on.
-
-What it obliges downstream, recorded so TJ-B inherits it as a premise:
-
-- **TJ-H's guard→persona confirmation oracle changes character.** It
-  previously assumed an adversary who already knew which `.onion` to probe;
-  now everyone does. The fixed shard size (3,326,976 B) is the traffic
-  signature, and the only mitigation is variable-length padding — which is a
-  wire-format property and therefore **must be decided inside the frozen
-  response semantics** (`RF-D4`'s layer), or it cannot be added later without
-  a consensus-boundary change. `shekyl-p-serve` already solved the header
-  half (hand-rolled HTTP so two personas are byte-identical at the header
-  level, `RESPONSE_HEADER_NAMES` asserted complete); TJ-H is the same threat
-  one layer down, and the endpoint is the right place to *emit* padding while
-  the scheme lives in the frozen format because the witness verifies it
-  against `R_k`.
-- **Serve-side fetch rate-limiting becomes load-bearing, not hygienic.**
-- The daemon's own circuit is now what confirms the oracle, so the
-  rate-limit and the padding are daemon-facing controls as much as
-  wallet-facing ones.
+- **The 2026-08-10 "carrier ruling"** (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7
+  item 2, Mutability and Carrier paragraphs) — rotation-in-place via a
+  kind-4 `EndpointUpdate`; REJECTED, the paragraphs replaced in place. It was
+  recorded as a ruling; it was not Rick's.
+- **`EU-D2`** — the cold key for a non-`JoinMarket` record, "reached by
+  widening the selector one arm": there is no arm to widen. C0's finding and
+  predicate (`requires_cold_authority`, `cold_authority_pin`) stand as landed
+  in #703 for Release and the debit arms; the custody vocabulary ("cold" =
+  principal tier, not cold signing) stands with the decision-log entry of
+  2026-09-12.
+- **`EU-D5`** (rotation rate unbounded), **`EU-D6`** (enumeration a design
+  input — as a rotation-rate argument), **`EU-D7`** (refuse `EndpointUpdate`
+  on a zero-bonded record), **`EU-D9`** (the two laundering KATs),
+  **`EU-D11`** (the kind-4 vin shape), **`EU-D12`** (the per-kind
+  `archival_bond_endpoint_update_log` journal), **`EU-D13`**
+  (`PENDING_POST_VERSION` 10→11 with the producer) — REJECTED with the kind.
+- **`EU-D8`** — the `hs_id` derivation to take a rotation index under a v2
+  label, V1 deleted, V2 minted — REJECTED. `ARCHIVAL_P_DERIVE_V1` and the
+  `shekyl-archival-p-hs-id-ed25519-v1` label stay as they are. The
+  decision-log entry that authorized the retirement is WITHDRAWN by the
+  2026-09-13 entry. The debt `EU-D8` noticed on the way — V1's regenerator
+  is not citation-gated — is real and is a FOLLOWUPS line.
+- **`EU-D10`** — the sequence C0 → A → B+C1 → D. C0 (#703) and A (#712, this
+  record's first version) landed. B+C1 was built as PR #717 and **excised
+  before merge**: its JoinMarket half is the PR this record now describes;
+  its kind-4 half is kept at archive tag
+  `archive/feat/eu-b-c1-endpoint-update-wire-2026-09-13`. D's design pass
+  (a rotation window, a persisted rotation hint, a submit battery) was
+  written, never built, and is kept at
+  `archive/feat/eu-d-hs-id-rotation-2026-09-13`.
 
 ---
 
-## 8. `EU-D7` — RULED 2026-09-11: refuse `EndpointUpdate` on a zero-bonded record; Release leaves the endpoint
+## 6. Handed onward as premises (unchanged)
 
-**In Rick's words:** *"refuse EndpointUpdate on a zero-bonded record, and do not
-clear the endpoint on Release."*
-
-**Refuse, because rotation has no subject.** A Release preserves the record
-row with `bonded_total == 0` (what `e2e_release_accepted_and_connected`
-asserts), so a retired persona serves nothing and there is no endpoint whose
-reachability matters. Permitting the post would create a mutation path on a
-record the mechanism no longer reads. The refusal is a verify-time guard in
-B's `verify_endpoint_update` — `bonded_total == 0 ⇒ refuse` — with its own
-code, classified as its exact sibling is: `HoldingsUpdate` on an unbonded
-record is `SHEKYL_ARCHIVAL_BOND_POST_ERR_HU_RECORD_NOT_BONDED`, mapped to
-`DropVerdict::PolicyOrState` (`rust/shekyl-ffi/src/archival_ffi/codes.rs:275`)
-— our state, not the sender's form. B mirrors that mapping by name.
-
-**Do not clear, because clearing is a write on the policed path.** The
-laundering invariant (`EU-D9`) exists to keep `EndpointUpdate` off the
-standing-mutation path its sibling legitimately uses. Clearing the endpoint
-on Release is a standing mutation on exactly that path; buying "no dead
-addresses" with a write there is a bad trade.
-
-**The harm from leaving them is smaller than it first reads — stated so no
-one reopens it.** The endpoint is a field on a record, not an index. A
-discovering daemon filters on drawability (`EU-D4`), so a dead address is
-reachable only by someone deliberately reading non-drawable records. And
-derivation-per-slot means a retired address is unlinkable to the operator's
-next persona. "Enumerable forever" sounds worse than it is.
-
----
-
-## 9. `EU-D8` — RULED 2026-09-11: D replaces the derivation and re-anchors the vector; it does not extend V1
-
-**The problem.** `derive_p_hs_id_seed(master_seed, net, fmt, p_slot)` is
-`p_expand_32(…, ARCHIVAL_P_HS_ID_INFO, p_slot)` — a labeled derivation with a
-frozen vector (`docs/test_vectors/ARCHIVAL_P_DERIVE_V1`). Adding a rotation
-term changes the preimage, and [rule 30](../../.cursor/rules/30-cryptography.mdc)
-says one label never names two functions — so rotation cannot be added under
-`ARCHIVAL_P_DERIVE_V1`. The reflex fix, "rotation = 0 reproduces today's
-bytes," encodes absent-iff-zero into a preimage: the representational trick
-that produces the next three-year-old comment.
-
-**In Rick's words:** *"there is no chain and no user wallet, so **replace the
-derivation outright and re-anchor the vector.** Mint the new label, rotation
-always present, delete V1. Free today, a migration after genesis — the same
-argument that decided the envelope arms."*
-
-**Consequences.** A new label (`…-hs-id-ed25519-v2`, hyphen-normalized per
-the existing convention), rotation index always present in the preimage, the
-V1 vector directory **deleted** and a V2 minted with a fresh manifest. This is
-a self-pinned (tier 3) vector under [rule 50](../../.cursor/rules/50-testing.mdc)
-§"Regenerating a self-pinned vector is a decision, not a command," so **D's
-first artifact is the decision-log entry** — written by this round, below —
-and D's regenerator invocation cites it. The V1 manifest's own
-`regeneration_command` predates that rule and is not gated on a citation; D
-replaces the regenerator along with the vector rather than inheriting an
-ungated one.
-
-**The label is registered, and the registry is gated.**
-`shekyl-archival-p-hs-id-ed25519-v1` has a row in
-[`CRYPTO_DOMAIN_REGISTRY.tsv`](CRYPTO_DOMAIN_REGISTRY.tsv) (mechanism 2, HKDF
-`info`, const `ARCHIVAL_P_HS_ID_INFO`), and `scripts/ci/domain_registry_gate.sh`
-asserts every registered literal at its defining file — the v1 row fails the
-moment the literal changes. So the registry row moves to v2 **in D's commit**,
-not after it ([rule 30](../../.cursor/rules/30-cryptography.mdc)). The row is
-`shekyl-live`, not `frozen-inherited`, so `FROZEN_DOMAIN_SEPARATORS.md` is not
-in scope (checked at the recording commit: no `hs-id` row there).
-
-**Sequencing consequence.** Until D lands, no second address exists to rotate
-to, so B+C1 land a wire nothing can yet produce an update for — see `EU-D10`.
-
-**Decision-log entry:** [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md)
-§"2026-09-12 — `ARCHIVAL_P_DERIVE_V1` retirement AUTHORIZED: `hs_id`
-derivation to take a rotation index; vector to be re-anchored as V2 (`EU-D8`)".
-
----
-
-## 10. `EU-D9` — RULED (carried from 2026-08-10, restated as B's acceptance): the laundering invariant is two tests
-
-Carried verbatim from the carrier ruling because B is what makes it
-checkable, and prose will not stop the shared-path mistake — the sibling
-`HoldingsUpdate` legitimately carries standing-mutation code, and a
-maintainer seeing two siblings in one enum will reach for the shared
-record-update path.
-
-- **KAT (a):** a record's `join_settlement_epoch`, bad-interval list,
-  `bonded_total`, and holdings are **byte-identical** across an
-  `EndpointUpdate`. Over `bond_connect.rs`, in the retention crate's test
-  suite.
-- **KAT (b):** a failure-window vector in which a persona at 10 accumulated
-  misses **still slashes after rotating** — the attack stated as a test, the
-  one that fails loudly if rotation is wired into the wrong branch. Fixture
-  infrastructure exists (`gate4_lifecycle_kat.rs`,
-  `attestation_settlement_window.rs`).
-
-Both land **in B**, and both must be observed failing against a deliberately
-mis-wired connect before they are trusted (rule 50; the C0 bites are the
-pattern).
-
----
-
-## 11. `EU-D10` — RULED 2026-09-11: the sequence, and the dispositions each step leaves behind
-
-**In Rick's words:** *"C0 → A → B+C1 (atomic) → D."*
-
-| Step | Lands | Disposition it leaves |
-|---|---|---|
-| **C0** | `requires_cold_authority` + `cold_authority_pin`; selector in Rust | **LANDED** #703; review pass #711 |
-| **A** | this document; the decision-log entry; `EU-` registered; HELD rows flipped | this PR |
-| **B + C1** (one PR, rule 07) | kind 4 in the retention enum, the C++ `archival_bond_post_kind`, and `shekyl-wire` (whose `Other(u8)` already parses it); the endpoint field and its couplings; the record column + LMDB 12→13; `PENDING_POST_VERSION` 10→11; `verify_endpoint_update` incl. the `EU-D7` refusal; the C++ connect arm; `EU-D9`'s two KATs; **and** the one predicate arm | **STAGED (rule 23)** — a deliberate callee-without-caller: the wire exists and nothing produces an update for it. Named consumers: D (the second address) and, for the *read* side, TJ-B's fetcher. In-policy under the disposition test because both consumers are named and the plan is live; recorded here so the next audit does not flag it |
-| **D** | new label, rotation always present, V1 deleted, V2 minted; regenerator cites the entry | closes B's staging |
-
-**Why D is last despite being a production prerequisite.** B+C1's staging is
-safe (the predicate arm ships with the wire, so kind 4 never authorizes hot),
-and D is the derivation change with the widest re-verification surface; landing
-it last means it lands against a settled wire.
-
-**Daemon C++ (Rick, 2026-09-11):** *"you may have to write the daemon C++ for
-now — it will be rewritten, but I'd rather have it properly implemented and
-rewritten than re-litigated from the daemon side when we do the Rust
-cutover."* B's connect arm is written in C++ under that ruling, as the
-existing pattern (a thin marshal onto a Rust verify), and ships with its
-CSR-3a conformance record in the same PR — the C0 precedent (CEN-J13).
-
----
-
-## 12. Out of scope, by name
-
-- **Shard assignment** (`-29505`): its own unopened round. Not touched.
-- **TJ-B** (the daemon-side fetcher and everything the read path needs): this
-  round hands it `EU-D1`, `EU-D4`, `EU-D6` and the SP-T3 re-base obligation
-  as premises. It does not specify it.
-- **The credit-wire cutover deletion** (`ARCHIVAL_CREDIT_WIRE.md` §2's
-  surface): separately scoped.
-- **The `hs_id` service index** ("the daemon creates its service at index 0
-  today"): the carrier ruling calls it an `EndpointUpdate` prerequisite. Rick's
-  instruction (2026-09-11) was to check *whether it needs settling before this
-  lands or whether index 0 is simply the answer*. **PROPOSED, not ruled:** under
-  `EU-D8` the rotation index would *be* the service index, index 0 the first
-  address, and no separate settlement needed. That is this record's reading,
-  put to Rick at D's design pass; it does not carry the round's status.
+- **TJ-B** (the daemon-side fetcher): `EU-D1`, `EU-D4`, and the SP-T3
+  daemon→wallet re-base obligation. This record does not specify it.
+- **Shard assignment** (`-29505`): its own unopened round.
+- **The credit-wire cutover deletion** (`ARCHIVAL_CREDIT_WIRE.md` §2):
+  separately scoped.

@@ -531,6 +531,7 @@ mod tests {
             p_canonical_id: [0xB2; 32],
             kind: BondPostKind::JoinMarket {
                 bond_spend_pk: vec![0xC3; PQC_HYBRID_SINGLE_KEY_LEN],
+                endpoint: [0xEE; 32],
             },
             holdings: Holdings::CompleteTree,
             bonded_total_atomic: 500,

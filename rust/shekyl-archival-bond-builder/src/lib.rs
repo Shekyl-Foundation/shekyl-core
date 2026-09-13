@@ -53,8 +53,8 @@ mod error;
 pub use error::BondBuildError;
 
 use shekyl_archival_retention::{
-    bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, BondPostKind,
-    HoldingsDescriptor, HoldingsKind, ShardSet,
+    bond_floor, p_canonical_id_from_hybrid_pubkey, ArchivalBondPostVin, HoldingsDescriptor,
+    HoldingsKind, ShardSet, ENDPOINT_BYTES,
 };
 use shekyl_crypto_pq::archival_p::BondPostKeys;
 use shekyl_ct_balance::{InputTerm, OutputTerm};
@@ -158,6 +158,7 @@ impl ReleaseVin {
 pub fn build_join_market_vin(
     keys: BondPostKeys<'_>,
     holdings: HoldingsDescriptor,
+    endpoint: [u8; ENDPOINT_BYTES],
 ) -> Result<JoinMarketVin, BondBuildError> {
     let floor = bond_floor(&holdings);
     if floor == 0 {
@@ -195,16 +196,15 @@ pub fn build_join_market_vin(
     // prefix), and the vin type tag distinguishes it from every other P-auth
     // context. See ARCHIVAL_BOND_GATE4.md §3.4.1 ("not an on-vin signature blob")
     // and the SA-2b reconciliation ruling (SIGNATURE_ALIGNMENT.md §2.2).
-    let vin = ArchivalBondPostVin {
+    let vin = ArchivalBondPostVin::join_market(
         hybrid_public_key,
         p_canonical_id,
-        post_kind: BondPostKind::JoinMarket,
         bond_spend_pk,
+        endpoint,
         holdings,
-        bonded_total_atomic: floor,
-        bond_credit: floor,
-        bond_debit: 0,
-    };
+        floor,
+        floor,
+    );
 
     Ok(JoinMarketVin { vin })
 }
@@ -240,7 +240,8 @@ pub fn verify_credit_funding(
     fee: AtomicUnits,
     post: &JoinMarketVin,
 ) -> Result<(), BondBuildError> {
-    let bond_credit = AtomicUnits::from_raw(post.vin.bond_credit);
+    let credit = post.vin().bond_credit;
+    let bond_credit = AtomicUnits::from_raw(credit);
     let required = output_total
         .checked_add(fee)
         .and_then(|s| s.checked_add(bond_credit))
@@ -250,7 +251,7 @@ pub fn verify_credit_funding(
             funding: funding_total.to_raw(),
             outputs: output_total.to_raw(),
             fee: fee.to_raw(),
-            floor: post.vin.bond_credit,
+            floor: credit,
         });
     }
     Ok(())
@@ -320,27 +321,17 @@ pub fn build_release_vin(
         .map_err(BondBuildError::IdentityEncode)?;
     let p_canonical_id = p_canonical_id_from_hybrid_pubkey(&hybrid_public_key).to_bytes();
 
-    let vin = ArchivalBondPostVin {
+    let vin = ArchivalBondPostVin::release(
         hybrid_public_key,
         p_canonical_id,
-        post_kind: BondPostKind::Release,
-        // Empty, not omitted: `bond_wire.rs` rejects a `bond_spend_pk` on any
-        // non-JoinMarket kind ("JoinMarket-coupled; other post kinds must not
-        // carry one"), and the Release verify arm is passed null/0 by the
-        // consensus caller for the same reason.
-        bond_spend_pk: Vec::new(),
-        // The canonical empty descriptor. `bond_floor` returns 0 both for this
-        // and for a structurally-invalid oversize set, which is why the verifier
-        // guards the non-empty case explicitly — this constructor can only
-        // produce the legitimate one.
-        holdings: HoldingsDescriptor {
+        HoldingsDescriptor {
             kind: HoldingsKind::ShardSetCompact,
             shard_ids: ShardSet::empty(),
         },
-        bonded_total_atomic: 0,
-        bond_credit: 0,
-        bond_debit: record_bonded_total,
-    };
+        0,
+        0,
+        record_bonded_total,
+    );
     Ok(ReleaseVin { vin })
 }
 
@@ -371,7 +362,8 @@ pub fn verify_debit_funding(
     fee: AtomicUnits,
     post: &ReleaseVin,
 ) -> Result<(), BondBuildError> {
-    let bond_debit = AtomicUnits::from_raw(post.vin.bond_debit);
+    let debit = post.vin().bond_debit;
+    let bond_debit = AtomicUnits::from_raw(debit);
     let sources = funding_total
         .checked_add(bond_debit)
         .ok_or(BondBuildError::AmountOverflow)?;
@@ -381,7 +373,7 @@ pub fn verify_debit_funding(
     if sources != sinks {
         return Err(BondBuildError::DebitImbalance {
             funding: funding_total.to_raw(),
-            debit: post.vin.bond_debit,
+            debit,
             outputs: output_total.to_raw(),
             fee: fee.to_raw(),
         });

@@ -250,6 +250,28 @@ invocations:
   implementation time); landed under §18 here so future
   invocations inherit the lesson without amending the rule.
 
+- **JoinMarket serving endpoint** (`docs/design/ARCHIVAL_ENDPOINT_UPDATE.md`
+  `EU-D3` / `EU-D4`; PR number and merge commit to be filled in on landing).
+  The archival bond-post vin gains a mandatory 32-byte serving endpoint on
+  `JoinMarket`, refused on every other kind; the `archival_bond` record value
+  moves v6 → v7 and LMDB `VERSION` 12 → 13 with it. Criterion 1: every node
+  parses the vin and the record byte-identically. Criterion 2: a vin carries
+  the field or is refused — no flag state is simultaneously valid. Criterion
+  3: enumerated in advance by the 2026-09-11 round, then *narrowed* on
+  2026-09-13 when Rick rejected kind-4 `EndpointUpdate`: the PR that first
+  carried this cutover (#717) also carried a kind-4 arm, journal table and
+  verify, all excised before merge (kept at archive tag
+  `archive/feat/eu-b-c1-endpoint-update-wire-2026-09-13`) — a narrowing of
+  the enumerated scope, the shape §18's lesson above allows. Criterion 4:
+  the PR description carries the reviewer map — consensus-affecting:
+  `cryptonote_basic.h`, `cryptonote_boost_serialization.h`,
+  `json_object.cpp`, `blockchain.cpp` (the JoinMarket marshal and the
+  endpoint coupling belt), `shekyl_types.h`, `db_lmdb.cpp`,
+  `rust/shekyl-wire/src/transaction.rs`,
+  `rust/shekyl-archival-retention/src/bond_wire.rs`; mechanical: FFI headers,
+  the JoinMarket producer, fixtures, docs. Rollback: revert the merge commit;
+  a reverted build refuses a v13 datadir at open (pre-genesis, free).
+
 ### Cases that might appear analogous but are not
 
 These cases share surface features with consensus-atomic

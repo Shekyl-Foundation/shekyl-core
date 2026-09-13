@@ -468,6 +468,7 @@ fn join_market_bond_post() -> Input {
         p_canonical_id: [7u8; 32],
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![9u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 100,

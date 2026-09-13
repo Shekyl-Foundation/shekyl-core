@@ -14,6 +14,8 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **`ARCHIVAL_P_DERIVE_V1`'s regenerator is not citation-gated** — its manifest's `regeneration_command` predates rule 50's `SHEKYL_PINNED_REGEN_DECISION` requirement; arm it the way the gate-4 lifecycle regenerator is armed. Surfaced by the withdrawn V1 retirement ([`ARCHIVAL_ENDPOINT_UPDATE.md`](design/ARCHIVAL_ENDPOINT_UPDATE.md) §5, 2026-09-13).
+  - Target: pre-genesis
 - **PDM-Q-F9: membership-path RPC silently zero-fills a missing curve-tree leaf.** `core_rpc_server.cpp:1668-1672` inserts 128 zero bytes when `get_curve_tree_leaf_by_tree_position` fails; the sibling reader at `:1577` returns `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`. Dead on an unpruned node, ordinary under PDM, and already reachable via registry/tree disagreement. Match `:1577`. Carrier: a dedicated C++ PR, not the PDM-Q charter and not the Q1 comment-correction PR. Falsify by `grep -n "insert(extra_data.end(), 128, 0)" src/rpc/core_rpc_server.cpp` returning nothing. Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q-F9`.
   - Target: pre-genesis
 - **PDM-Q-F18: delete the ring-era `check_tx_input` chain.** `Blockchain::check_tx_input` (`src/cryptonote_core/blockchain.cpp:4522`) has zero callers; its body branches on `tx_version == 1` and validates `key_offsets` against ring members. It is the sole caller of `scan_outputkeys_for_indexes` (`:262`), which is the only consensus-shaped reader of `output_metadata`. Rule-60 deletion: `check_tx_input`, `scan_outputkeys_for_indexes`, the `outputs_visitor` struct, the `blockchain.h:1332`/`:1355` declarations, and the comment at `:3514`. Carrier: a dedicated C++ PR. Falsify by `rg -n 'check_tx_input\b|scan_outputkeys_for_indexes' src tests` returning nothing. Owner: [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q-F18`.
@@ -135,7 +137,7 @@ Default. Lands before genesis if it should exist at launch.
 - **DRS-D3c — cross-store leaf/position KAT.** Daemon vs wallet LeafStore:
   - Target: pre-genesis
 
-- **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with**
+- **Round-2 stressnet re-pin of the failure-window `m`/`n` — must be JOINT with reopen (d)** — sliding-window m-of-n is built (`failure_window.rs`; pin [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md)); numerics remain Round-1 provisional. Cannot be sized against honest miss alone: gate-4 grace and `m`/`n` are one surface (`slash_prob(q, m, n)`), and pinning for false-slash alone invalidates reopen (d) (`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md` §12.6). Falsify by the re-pin recording both false-slash and reopen-(d) inputs, not only an honest-failure CDF.
   - Target: pre-genesis
 
 - **`sweep_all` — deleted in WI-RPC-2b, no Shekyl-native surface; decide**
@@ -947,6 +949,9 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - ~~**Measure boundary-cell occupancy**~~ — **DONE at round 18**: occupancy 741‰, mean residence 637 blocks, max 13 597; it selected `P` = 720. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (the figures) and §9 FL-D8 (row closed).
+  - Target: pre-genesis
+
+- **Implement the daemon shard-fetch client (`SF-` round RULED, halt lifted 2026-09-13)** — one `shekyl-p-fetch` client for challenge and organic reads ([ARCHIVAL_SHARD_FETCH.md](design/ARCHIVAL_SHARD_FETCH.md), Round 1 CLOSED 2026-09-13). Every `SF-D` question is disposed; `SF-D9` is done; `SF-D11` is withdrawn; `SF-D12` is a corollary of `SF-D10`. The request carrier is closed in shape: tor-zone SOCKS, `GET /shard/{id}` on port 80, one required header decoding to `nonce[32] ‖ height_le[8]` (fresh random plus published-tip height, **both** callers — not `attestation_nonce`), and one shared admission path (`fetch(destination, shard_id, header)`; schedulers name `P`). The implementation PR pins the exact header name/encoding in code plus tests and updates the `RF-R1` living contract in the same change. Verification is local `R_k` plus P's hybrid countersignature under the stable bond-record identity key; parse, root mismatch, and bad countersignature remain typed. `SF-D8`: `P` signs `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` (server-parsed route id); the challenge tuple and `cb_out_key` stay off the fetch — the mechanism proves `P` served, not which miner asked; the pass record carries the 32-byte random; the HTTP body is a fixed-length outer envelope holding the canonical `HybridSignature` followed by the unchanged `RF-D4` frame. **Not blocked.** The implementation PR owes: header spelling/encoding plus `RF-R1` contract update, the signature domain string and KAT, the `verify_pass_countersignature` v2 amendment (carried nonce; signed height = predecessor height), the `PServeEndpoint` signer callback (crate still holds no keys; SH-2 wires the live secret), in-flight cap `N` (also `N × SHARD_BYTES` on the Pi 4; no unbounded buffer, schedulers wait for a slot) with its lower-bound rationale, the `SF-D4` dep-cut gate, and the W₂ measurement as its Round 0. Organic draw bound `k` is `TJ-D`'s (the fill scheduler names the next `P`); not this PR. Archive the round doc to `docs/completed/` when the client lands.
   - Target: pre-genesis
 
 ## Post-genesis

@@ -96,6 +96,7 @@ fn bond_post_holdings_with_duplicate_shard_rejected_at_read() {
         p_canonical_id: [0x77; 32],
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::ShardSetCompact(vec![7, 42, 7]),
         bonded_total_atomic: 750_000_000 * 3,
@@ -120,6 +121,7 @@ fn bond_post_joinmarket_round_trips_with_bond_spend_pk() {
         p_canonical_id: [0x77; 32],
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::ShardSetCompact(vec![1, 2, 3, 9]),
         bonded_total_atomic: 750_000_000 * 4,
