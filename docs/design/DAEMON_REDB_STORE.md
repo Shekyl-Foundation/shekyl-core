@@ -901,64 +901,71 @@ exercised — the longhash is computed for every block with no nettype bypass an
 rather than leaving §1.3's "FCMP++ + PoW verify enabled as in real sync" to
 stand unqualified.
 
-**First in-tree LMDB baseline:**
-`docs/benchmarks/drs_bench_ibd_lmdb_h2000_x86_64_20260913T075448Z.json`. Its
-predecessor `...T073955Z.json` is kept beside it rather than replaced: the two
-are the same experiment on the same inputs, so they are the evidence for the
-run-to-run spread quoted below, and only the later one carries the CPU-time row.
-H = 2000, one peer, coinbase-only, DRS-D9 durability, ext4 on NVMe, i9-11950H.
-The generation rate is `generation_wall_s / blocks_generated` from the companion
-`drs_bench_ibd_lmdb_h200_x86_64_20260913T075910Z.json`, the only one of the two
-in which generation actually ran — the H = 2000 seed was reused, so its
+**First in-tree LMDB baseline.** Three artifacts in `docs/benchmarks/`, all
+passing `drs_bench.py validate`:
+`drs_bench_ibd_lmdb_h2000_x86_64_20260913T080604Z.json` and
+`...T081002Z.json` (the primary pair, kept as two runs so the run-to-run spread
+is evidenced rather than asserted), plus
+`drs_bench_ibd_lmdb_h200_x86_64_20260913T081354Z.json`, the only one in which
+generation actually ran — the H = 2000 seed is reused, so its
 `generation_wall_s` is **null** rather than quietly reporting a rate it did not
-observe. Per-block rates, because the absolute
-is fixture-sized:
+observe.
 
-| axis | rate | at H = 100_000 (lower bound) |
+Conditions: one peer, coinbase-only, DRS-D9 durability, ext4 on NVMe
+(probed, not declared), i9-11950H, 16 cores.
+
+| axis | measured | per block |
 | --- | --- | --- |
-| chain generation (fixture cost) | 0.732 s/block | ~20.3 h, once |
-| **IBD wall time** (primary) | 0.1012 s/block | ~2.8 h per engine arm |
-| IBD CPU time | 0.380 CPU-s/block (3.76x wall) | compute-bound, parallel |
-| store, allocated | 4.87 KB/block | ~490 MB |
-| peak RSS | 539 MB at H = 2000 | not extrapolated |
+| **IBD wall time** (primary) | 201.02 s / 201.26 s at H = 2000 | **100.5 ms** |
+| IBD CPU time | 760.3 s / 756.4 s — **3.76-3.78x wall** | 380 ms CPU |
+| store, allocated | 9,736,192 B | 4,868 B |
+| store, allocated / apparent | 1.0021 | — |
+| peak RSS | 539 MiB | — |
+| chain generation (fixture cost) | 143.76 s / 200 blocks | **719 ms** |
 
-Extrapolation is a **lower bound**: per-block IBD cost grows with chain and tree
-size. Allocated/apparent store size is 1.002, so LMDB leaves no meaningful holes
-at this height — that ratio is the thing to watch against a candidate engine.
+Run-to-run spread on identical inputs is **0.12%** across the primary pair (0.7%
+across all four ext4 runs taken this session).
 
-Generation dominates, so the seed chain is cached and topped up via
-`--seed-dir`; without reuse the primary metric is impractical at the reference
-height, and reuse additionally gives both arms a byte-identical fixture, which
-`check` requires. Only the subject is wiped per run.
+**Extrapolation to H = 100_000, and why no direction is claimed for it.** At
+0.1006 s/block IBD that is ~2.8 h per engine arm, and generation ~20.0 h once;
+store would be ~490 MB. Those are point estimates whose **error direction is
+unknown**, and the two-point evidence says so plainly: per-block cost *fell*
+between the two heights, not rose — IBD 106.5 ms/block at H = 200 against
+100.5 ms at H = 2000, store 7,291 B/block against 4,868 B. Two mechanisms pull
+opposite ways and both are present: fixed per-run overhead amortises **down**
+over more blocks, while chain and curve-tree growth push per-block cost **up**.
+Two points a decade apart, dominated by the first effect, cannot separate them.
+An earlier revision of this section called the extrapolation a lower bound; that
+asserted the second mechanism wins, which is not measured.
 
-**IBD is compute-bound and parallel, not disk-bound.** Measured, in two
-independent ways: the subject consumed **760 CPU-seconds over 202 s of wall
-time** (3.76x, on 16 cores), and the same run on tmpfs differed by under 5%
-(IBD 197.8 s vs 202.4 s; generation 0.730 vs 0.732 s/block). Run-to-run spread on
-identical inputs was 0.7% — 201.1 s and 202.4 s, both artifacts in-tree, which is
-the reason both are kept.
+Generation dominates the cost, so the seed chain is cached and topped up via
+`--seed-dir`; only the subject is wiped per run, being the thing measured. Reuse
+additionally gives both engine arms a byte-identical fixture, which `check`
+requires.
 
-The tmpfs agreement is a measured result and **not** a licence to bench there:
-fsync on tmpfs has no backing store to flush, so `safe` is indistinguishable
-from `MDB_NOSYNC`, DRS-D9 is not in force, and the harness refuses such a run
-before starting.
+**IBD is compute-bound and parallel, not disk-bound.** Measured two independent
+ways: 3.76-3.78x CPU-to-wall on 16 cores, and tmpfs vs ext4 agreeing within 5%
+(IBD 197.8 s vs 201.0 s; generation 0.730 vs 0.719 s/block). The tmpfs agreement
+is a measured result and **not** a licence to bench there — fsync on tmpfs has
+no backing store to flush, so `safe` is indistinguishable from `MDB_NOSYNC`,
+DRS-D9 is not in force, and the harness refuses such a run before it starts.
 
-**WHAT IS NOT MEASURED, and what therefore must not be concluded.** The
+**WHAT IS NOT MEASURED, and therefore must not be concluded.** The
 per-operation breakdown of that 380 ms of CPU per block is **unknown**: the
 block-addition path carries no `PERF` instrumentation, so the daemon's own
-timings cover only RPC entry points (in the subject's log, `get_info` dominates
+timings cover only RPC entry points (in the subject's log `get_info` dominates,
 and that is this harness's polling contending on the blockchain lock, not work).
 Attributing the cost to PoW verification, to curve-tree leaf insertion, or to
 output indexing would be an inference dressed as a measurement.
 
-This matters for reading the floor, in **both** directions, so neither should be
-asserted yet. If most of that CPU is verification neither engine can avoid, a
-common cost **compresses** the ratio and a 1.25x floor on the total is a weaker
-discriminator than it looks. If instead it is store work — leaf insertion,
-index maintenance, the very tables DRS-E1 replaces — the ratio is **sharper**
-than it looks. Deciding between those requires instrumenting the block-add path,
-which is a follow-on; until then §1.3's floor stands exactly as frozen, and this
-paragraph is the record of an open question rather than a case for changing it.
+It matters for reading the floor in **both** directions, so neither is asserted.
+If most of that CPU is verification neither engine can avoid, a common cost
+**compresses** the ratio and a 1.25x floor on the total is a weaker
+discriminator than it looks. If it is store work — leaf insertion, index
+maintenance, the very tables DRS-E1 replaces — the ratio is **sharper** than it
+looks. Deciding needs the block-add path instrumented, which is a follow-on.
+Until then §1.3's floor stands exactly as frozen, and this paragraph records an
+open question rather than a case for moving it.
 
 **Durability is measured, not labelled.** DRS-D9 is satisfied by imposing
 `--db-sync-mode=safe`, validated against an allowed set *before* a daemon

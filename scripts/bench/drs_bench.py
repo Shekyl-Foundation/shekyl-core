@@ -142,6 +142,13 @@ ALLOWED_SYNC_MODES = ("safe",)
 # requirement that cannot fail — so the allowed values are enumerated.
 ALLOWED_DISK_CLASSES = ("hdd", "ssd_or_nvme")
 
+# How the engine under test was SELECTED. The daemon has no engine switch today:
+# it always opens LMDB. So an artifact labelled `redb` while selected this way is
+# a relabelled LMDB run, and `check` would read the pair as a real cross-engine
+# ratio of ~1.0 — certifying redb against §1.3's floor before redb exists. The
+# label is therefore recorded with its mechanism, and the two are cross-checked.
+ENGINE_DEFAULT_LMDB = "daemon-default-lmdb (no engine switch exists)"
+
 # Filesystems on which DRS-D9 CANNOT HOLD. fsync against tmpfs/ramfs has no
 # backing store to flush, so it returns without doing anything and `safe` is
 # indistinguishable from `MDB_NOSYNC`. A wall-time number taken there is not a
@@ -217,6 +224,15 @@ def artifact_refusals(a):
         r.append(f"schema_version is {a.get('schema_version')!r}, expected {SCHEMA!r}")
     if a.get("engine") not in ("lmdb", "redb"):
         r.append(f"engine is {a.get('engine')!r}, expected 'lmdb' or 'redb'")
+    sel = a.get("engine_selected_by")
+    if not sel:
+        r.append("engine_selected_by absent — an engine LABEL with no record of how the "
+                 "engine was selected cannot be distinguished from a relabelled run")
+    elif a.get("engine") == "redb" and sel == ENGINE_DEFAULT_LMDB:
+        r.append("engine is 'redb' but engine_selected_by says the daemon default was "
+                 "used, which opens LMDB. This is a relabelled LMDB run, and as a "
+                 "candidate it would pass §1.3's floor at a ratio near 1.0 without any "
+                 "redb store existing")
     if not a.get("git_rev"):
         r.append("git_rev absent — a number with no tree is not reproducible")
 
@@ -425,6 +441,32 @@ def compare(base, cand):
 
 # ── the blocker probe: a deferral that cannot outlive its cause ─────────────
 
+def redb_engine_sites():
+    """(sites, files_scanned, subject_missing) for the redb CONSENSUS engine.
+
+    One scan, two consumers, deliberately: it decides whether the stage-one
+    deferral still holds AND whether `--engine redb` can mean anything. Those are
+    the same fact, and reading it twice is how they would come to disagree.
+    """
+    if not os.path.isdir(CHAIN_STORE):
+        return [], 0, True
+    engine_re = re.compile(r"redb::(Database|WriteTransaction|ReadTransaction)")
+    sites, scanned = [], 0
+    for dirpath, _, names in os.walk(CHAIN_STORE):
+        if f"{os.sep}target{os.sep}" in dirpath + os.sep:
+            continue
+        for n in names:
+            if not n.endswith(".rs"):
+                continue
+            scanned += 1
+            fp = os.path.join(dirpath, n)
+            with open(fp, encoding="utf-8") as fh:
+                for i, line in enumerate(fh, 1):
+                    if engine_re.search(line):
+                        sites.append(f"{os.path.relpath(fp, ROOT)}:{i}")
+    return sites, scanned, False
+
+
 def blocker_failures():
     """FATAL when a PROBED follow-on's named blocker has stopped holding.
 
@@ -434,30 +476,17 @@ def blocker_failures():
     — the wallet's LeafStore, the very store DRS-D9 means by "not inherited
     from LeafStore silence" — and would fire this probe every run.
     """
+    sites, scanned, missing = redb_engine_sites()
     out = []
-    if not os.path.isdir(CHAIN_STORE):
+    if missing:
         return [f"{CHAIN_STORE} does not exist; this probe's subject is absent, which "
                 "is the first evidence the probe is no longer reading anything"]
-    engine_re = re.compile(r"redb::(Database|WriteTransaction|ReadTransaction)")
-    hits, scanned = [], 0
-    for dirpath, _, names in os.walk(CHAIN_STORE):
-        if f"{os.sep}target{os.sep}" in dirpath + os.sep:
-            continue
-        for n in names:
-            if not n.endswith(".rs"):
-                continue
-            scanned += 1
-            p = os.path.join(dirpath, n)
-            with open(p, encoding="utf-8") as fh:
-                for i, line in enumerate(fh, 1):
-                    if engine_re.search(line):
-                        hits.append(f"{os.path.relpath(p, ROOT)}:{i}")
     if scanned == 0:
         out.append(f"scanned ZERO .rs files under {os.path.relpath(CHAIN_STORE, ROOT)} "
                    "— the probe's corpus is empty, so its green means nothing")
-    if hits:
-        out.append("the redb CONSENSUS engine now exists — " + ", ".join(hits[:8]) +
-                   f" ({len(hits)} sites). The stage-one deferral of the redb arm was "
+    if sites:
+        out.append("the redb CONSENSUS engine now exists — " + ", ".join(sites[:8]) +
+                   f" ({len(sites)} sites). The stage-one deferral of the redb arm was "
                    "blocked on its absence, and that blocker is gone: wire the redb "
                    "arm and the pop/reorg row, then remove this probe.")
     return out
@@ -511,7 +540,31 @@ def _fs_type(path):
     return best_type
 
 
-def hardware_fingerprint(path):
+def _probe_disk_class(path):
+    """"hdd" / "ssd_or_nvme" from sysfs, or None when it cannot be determined.
+
+    Returns None rather than "unknown" so the caller must decide what to do about
+    it. btrfs, zfs and overlay present an anonymous `st_dev` with no
+    `/sys/dev/block` entry at all, so this failing is ordinary and not a sign of
+    an exotic machine.
+    """
+    try:
+        st = os.stat(path)
+        maj, mnr = os.major(st.st_dev), os.minor(st.st_dev)
+        # The partition's own queue first, then its parent disk: a partition
+        # carries no `rotational` of its own, and a whole-disk device has no
+        # parent to walk up to.
+        for rot in (f"/sys/dev/block/{maj}:{mnr}/queue/rotational",
+                    f"/sys/dev/block/{maj}:{mnr}/../queue/rotational"):
+            if os.path.exists(rot):
+                with open(rot, encoding="utf-8") as fh:
+                    return "hdd" if fh.read().strip() == "1" else "ssd_or_nvme"
+    except OSError:
+        pass
+    return None
+
+
+def hardware_fingerprint(path, declared_disk_class=None):
     cpu = ""
     with open("/proc/cpuinfo", encoding="utf-8") as fh:
         for line in fh:
@@ -524,22 +577,12 @@ def hardware_fingerprint(path):
             if line.startswith("MemTotal:"):
                 ram = int(line.split()[1]) * 1024
                 break
-    disk = "unknown"
-    try:
-        st = os.stat(path)
-        maj, mnr = os.major(st.st_dev), os.minor(st.st_dev)
-        # Try the partition's own queue first, then its parent disk: a partition
-        # carries no `rotational` of its own, and a whole-disk device has no
-        # parent to walk up to.
-        for rot in (f"/sys/dev/block/{maj}:{mnr}/queue/rotational",
-                    f"/sys/dev/block/{maj}:{mnr}/../queue/rotational"):
-            if os.path.exists(rot):
-                with open(rot, encoding="utf-8") as fh:
-                    disk = "hdd" if fh.read().strip() == "1" else "ssd_or_nvme"
-                break
-    except OSError:
-        pass
+    probed = _probe_disk_class(path)
+    disk = probed or declared_disk_class or "unknown"
     return {"cpu_model": cpu, "ram_bytes": ram, "disk_class": disk,
+            "disk_class_source": "probed" if probed else
+                                 ("operator-declared" if declared_disk_class
+                                  else "undetermined"),
             "fs_type": _fs_type(path), "cpu_count": os.cpu_count()}
 
 
@@ -666,6 +709,16 @@ def measure(args):
               f"Only {list(ALLOWED_SYNC_MODES)} satisfies DRS-D9, and the daemon accepts "
               "an unrecognised value by silently falling back to DBF_FAST (MDB_NOSYNC), "
               "so a typo here would measure the wrong durability and say nothing.")
+    if args.engine == "redb":
+        sites, _, _missing = redb_engine_sites()
+        if not sites:
+            _fail("--engine redb refused: the daemon has NO engine switch — it always "
+                  "opens LMDB — and no redb consensus engine exists in "
+                  f"{os.path.relpath(CHAIN_STORE, ROOT)} to switch to. The run would "
+                  "produce a relabelled LMDB artifact, which `check` would read as a "
+                  "cross-engine ratio near 1.0 and pass against §1.3's floor. This "
+                  "refusal lifts by the same scan that `blockers` uses, so it opens "
+                  "exactly when DRS-E1 lands the engine.")
     if not os.path.isfile(args.daemon):
         _fail(f"{args.daemon} is not a file — build the daemon in THIS worktree; a "
               "binary from another tree measures another tree")
@@ -687,6 +740,19 @@ def measure(args):
                   f"DRS-D9 durability cannot hold there, so the run would produce a "
                   f"RAM-disk number labelled as a strict-durability baseline. Point it "
                   f"at real storage.")
+    # And the disk class, for the same reason: the finished artifact is refused
+    # without it, so discovering that after the run wastes the run. btrfs, zfs and
+    # overlay report an anonymous st_dev with no sysfs queue node, so probing
+    # cannot answer on perfectly ordinary layouts -- hence an operator override
+    # rather than a guess, recorded as declared rather than probed.
+    probed = _probe_disk_class(work)
+    if probed is None and not args.disk_class:
+        _fail(f"the disk class of {work} could not be probed: its filesystem "
+              f"({_fs_type(work) or 'unknown'}) reports no sysfs queue/rotational node, "
+              "which is normal for btrfs, zfs and overlay. §1.3 requires the disk type "
+              "in the artifact and the validator refuses 'unknown', so pass "
+              "--disk-class hdd|ssd_or_nvme. It is recorded as operator-declared, not "
+              "probed.")
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
     subj_dir = os.path.join(work, "subject")
     # The SUBJECT is always wiped: it is the thing being measured and an IBD
@@ -829,6 +895,7 @@ def measure(args):
     artifact = {
         "schema_version": SCHEMA,
         "engine": args.engine,
+        "engine_selected_by": ENGINE_DEFAULT_LMDB,
         "git_rev": git_rev,
         "thresholds_frozen_at": FROZEN_AT,
         "durability": {
@@ -842,7 +909,7 @@ def measure(args):
                             "allowed set before spawning and the argv is recorded "
                             "verbatim, which is not the same as observing the flags",
         },
-        "hardware": hardware_fingerprint(subj_dir),
+        "hardware": hardware_fingerprint(subj_dir, args.disk_class),
         "fixture": {
             "nettype": "fakechain",
             "height_reached": int(reached),
@@ -952,6 +1019,9 @@ def main():
                    help="reusable seed chain (default: <work-dir>/seed). "
                         "Topped up to the requested height, never wiped "
                         "unless --fresh-seed.")
+    m.add_argument("--disk-class", default=None, choices=ALLOWED_DISK_CLASSES,
+                   help="declare the disk type when it cannot be probed (btrfs, zfs, "
+                        "overlay); recorded as operator-declared, not probed")
     m.add_argument("--fresh-seed", action="store_true",
                    help="discard the seed chain and regenerate it")
 

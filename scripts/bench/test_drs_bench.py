@@ -33,6 +33,8 @@ def valid_artifact(engine="lmdb", **over):
     a = {
         "schema_version": D.SCHEMA,
         "engine": engine,
+        "engine_selected_by": D.ENGINE_DEFAULT_LMDB if engine == "lmdb" else
+                              "--db-engine=redb",
         "git_rev": "0123456789abcdef",
         "thresholds_frozen_at": D.FROZEN_AT,
         "durability": {
@@ -44,8 +46,8 @@ def valid_artifact(engine="lmdb", **over):
             "readback_gap": "no readback exists",
         },
         "hardware": {"cpu_model": "Test CPU", "ram_bytes": 1 << 34,
-                     "disk_class": "ssd_or_nvme", "fs_type": "ext4",
-                     "cpu_count": 8},
+                     "disk_class": "ssd_or_nvme", "disk_class_source": "probed",
+                     "fs_type": "ext4", "cpu_count": 8},
         "fixture": {
             "nettype": "fakechain", "height_reached": 200, "height_requested": 200,
             "reference_height": D.REFERENCE_HEIGHT, "tx_per_block": 0,
@@ -177,6 +179,19 @@ class ArtifactRefusals(unittest.TestCase):
         its first real run."""
         self._refuse(lambda a: a["hardware"].__setitem__("disk_class", "unknown"),
                      "a placeholder satisfies the field")
+
+    def test_refuses_a_relabelled_lmdb_run(self):
+        """The high-severity one. The daemon has no engine switch, so an artifact
+        labelled redb while selected by the daemon default IS an LMDB run — and as
+        a candidate it would pass §1.3's floor at a ratio near 1.0 with no redb
+        store in existence. Found by Bugbot on #727."""
+        a = valid_artifact("redb")
+        a["engine_selected_by"] = D.ENGINE_DEFAULT_LMDB
+        r = D.artifact_refusals(a)
+        self.assertTrue(any("relabelled LMDB run" in x for x in r), r)
+
+    def test_refuses_missing_engine_selected_by(self):
+        self._refuse(lambda a: a.pop("engine_selected_by"), "engine_selected_by absent")
 
     def test_refuses_a_tmpfs_measurement(self):
         """fsync on tmpfs has no backing store to flush, so `safe` and
@@ -421,6 +436,15 @@ class BlockerProbe(unittest.TestCase):
         D.CHAIN_STORE = os.path.join(tempfile.mkdtemp(), "does-not-exist")
         self.addCleanup(lambda: setattr(D, "CHAIN_STORE", old))
         self.assertTrue(any("does not exist" in x for x in D.blocker_failures()))
+
+    def test_engine_site_scan_backs_both_consumers(self):
+        """`blockers` and the `--engine redb` refusal read the SAME scan, so they
+        cannot come to disagree about whether the engine exists."""
+        sites, scanned, missing = D.redb_engine_sites()
+        self.assertFalse(missing)
+        self.assertGreater(scanned, 0, "the scan read no files, so both consumers "
+                                       "are answering from an empty corpus")
+        self.assertEqual(sites, [], "redb consensus engine sites appeared")
 
     def test_the_real_tree_still_has_no_redb_consensus_engine(self):
         """The live assertion behind stage one's scoping. When DRS-E1 lands this

@@ -10,9 +10,9 @@
       "--non-interactive",
       "--log-level=1",
       "--data-dir=/home/torvaldsl/shekyl/drsbench-work/subject",
-      "--p2p-bind-port=33643",
-      "--rpc-bind-port=39749",
-      "--add-exclusive-node=127.0.0.1:40001"
+      "--p2p-bind-port=36305",
+      "--rpc-bind-port=48217",
+      "--add-exclusive-node=127.0.0.1:51127"
     ],
     "observed": false,
     "policy": "DRS-D9 full-fsync-per-commit",
@@ -20,6 +20,7 @@
     "sync_mode": "safe"
   },
   "engine": "lmdb",
+  "engine_selected_by": "daemon-default-lmdb (no engine switch exists)",
   "fixture": {
     "blocks_generated": 0,
     "generation_wall_s": null,
@@ -37,11 +38,12 @@
     },
     "verify_note": "PoW longhash is computed and checked for every block with no nettype bypass; --fixed-difficulty lowers the TARGET only. generateblocks produces coinbase-only blocks, so FCMP++ verification is not exercised at all."
   },
-  "git_rev": "77ced10d28521b6c48f2cda1b8c1c2c17966d4f7",
+  "git_rev": "2bd621d59fd497b9fb18e406550bfa87aa92be24",
   "hardware": {
     "cpu_count": 16,
     "cpu_model": "11th Gen Intel(R) Core(TM) i9-11950H @ 2.60GHz",
     "disk_class": "ssd_or_nvme",
+    "disk_class_source": "probed",
     "fs_type": "ext4",
     "ram_bytes": 134237892608
   },
@@ -52,7 +54,7 @@
       "name": "ibd_wall_time_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 202.436
+      "value": 201.263
     },
     {
       "axis": "cpu_time",
@@ -60,7 +62,7 @@
       "name": "subject_cpu_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 760.15
+      "value": 756.39
     },
     {
       "axis": "memory",
@@ -68,7 +70,7 @@
       "name": "peak_rss_bytes",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 564957184
+      "value": 565026816
     },
     {
       "axis": "disk",

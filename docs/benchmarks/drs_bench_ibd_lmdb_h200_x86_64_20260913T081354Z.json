@@ -9,10 +9,10 @@
       "--no-igd",
       "--non-interactive",
       "--log-level=1",
-      "--data-dir=/home/torvaldsl/shekyl/drsbench-work/subject",
-      "--p2p-bind-port=45273",
-      "--rpc-bind-port=40575",
-      "--add-exclusive-node=127.0.0.1:48657"
+      "--data-dir=/home/torvaldsl/shekyl/drsbench-work2/subject",
+      "--p2p-bind-port=45187",
+      "--rpc-bind-port=42073",
+      "--add-exclusive-node=127.0.0.1:48401"
     ],
     "observed": false,
     "policy": "DRS-D9 full-fsync-per-commit",
@@ -20,14 +20,17 @@
     "sync_mode": "safe"
   },
   "engine": "lmdb",
+  "engine_selected_by": "daemon-default-lmdb (no engine switch exists)",
   "fixture": {
-    "height_reached": 2001,
-    "height_requested": 2000,
+    "blocks_generated": 200,
+    "generation_wall_s": 143.759,
+    "height_reached": 201,
+    "height_requested": 200,
     "nettype": "fakechain",
     "peers_used": 1,
     "reference_height": 100000,
-    "seed_height": 2001,
-    "seed_reused": true,
+    "seed_height": 201,
+    "seed_reused": false,
     "tx_per_block": 0,
     "verify_exercised": {
       "fcmp_pp": false,
@@ -35,11 +38,12 @@
     },
     "verify_note": "PoW longhash is computed and checked for every block with no nettype bypass; --fixed-difficulty lowers the TARGET only. generateblocks produces coinbase-only blocks, so FCMP++ verification is not exercised at all."
   },
-  "git_rev": "9ef6d4a287b34f121159fb24ba3ef4c8e67f3608",
+  "git_rev": "2bd621d59fd497b9fb18e406550bfa87aa92be24",
   "hardware": {
     "cpu_count": 16,
     "cpu_model": "11th Gen Intel(R) Core(TM) i9-11950H @ 2.60GHz",
     "disk_class": "ssd_or_nvme",
+    "disk_class_source": "probed",
     "fs_type": "ext4",
     "ram_bytes": 134237892608
   },
@@ -50,7 +54,15 @@
       "name": "ibd_wall_time_s",
       "scenario": "ibd_coinbase_only",
       "unit": "s",
-      "value": 201.143
+      "value": 21.3
+    },
+    {
+      "axis": "cpu_time",
+      "denominator": "utime+stime of the subject over all threads for the whole sync. Against ibd_wall_time_s this says whether the phase was compute-bound and how parallel it was; it does NOT attribute the cost to any particular operation",
+      "name": "subject_cpu_s",
+      "scenario": "ibd_coinbase_only",
+      "unit": "s",
+      "value": 77.97
     },
     {
       "axis": "memory",
@@ -58,7 +70,7 @@
       "name": "peak_rss_bytes",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 564961280
+      "value": 565182464
     },
     {
       "axis": "disk",
@@ -66,7 +78,7 @@
       "name": "store_bytes",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 9736192
+      "value": 1458176
     },
     {
       "axis": "disk",
@@ -74,7 +86,7 @@
       "name": "store_bytes_apparent",
       "scenario": "ibd_coinbase_only",
       "unit": "bytes",
-      "value": 9715742
+      "value": 1437726
     }
   ],
   "schema_version": "shekyl_drs_bench_v1",
