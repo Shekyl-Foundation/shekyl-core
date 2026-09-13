@@ -63,13 +63,31 @@ def main():
         return errors
 
     # Leg 2 — denominator against the X-macro, both directions.
-    xm = set(
-        re.findall(r'X\(LMDB_ARCHIVAL_[A-Z_]+,\s*"([a-z_]+)"', XMACRO_SRC.read_text())
-    )
+    #
+    # Extraction is deliberately IDENTICAL to check_lmdb_schema_coverage.py's:
+    # scoped to the SHEKYL_LMDB_TABLES macro body, digits allowed in the table
+    # name, closing paren required. Two gates pinning "the same" set with
+    # independently written parsers is how they agree by construction today and
+    # diverge silently later. A looser parser here (no digits) would MISS a
+    # future table like `archival_r2_market`; it would then be absent from both
+    # sides of the set difference, and this gate would go GREEN over a table
+    # nothing covers -- §7.1.1's own hazard reappearing through its fix.
+    text = XMACRO_SRC.read_text()
+    body = re.search(r"^#define SHEKYL_LMDB_TABLES\(X\)(.*?)^\s*$", text, re.S | re.M)
+    if not body:
+        return fail(
+            "SHEKYL_LMDB_TABLES macro not found in db_lmdb.cpp — it moved or "
+            "was renamed. This is a broken run, not agreement (rule 47)."
+        )
+    xm = {
+        t
+        for t in re.findall(r'X\([A-Z0-9_]+,\s*"([a-z0-9_]+)"\)', body.group(1))
+        if t.startswith("archival_")
+    }
     if not xm:
         return fail(
-            "found no X(LMDB_ARCHIVAL_...) entries — the macro moved or was "
-            "renamed. This is a broken run, not agreement (rule 47)."
+            "found no archival_* entries in SHEKYL_LMDB_TABLES — the naming "
+            "changed. This is a broken run, not agreement (rule 47)."
         )
     listed = {r[0] for r in rows}
     for missing in sorted(xm - listed):

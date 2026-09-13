@@ -275,9 +275,20 @@ of the run, not the colour of the diff. So the comparator's green is
 **conditional on a `Full`-policy run** and will be reported that way rather
 than as parity standing alone.
 
-**The switch is ruled in and can be cited.** `shekyl-chain-store` exposes
-`ApplyPolicy::{Full, StubbedFamilies(&[ArchivalFamily])}` via
-`with_apply_policy`, as a **runtime value rather than a cargo feature** —
+**The switch is built, and this document cites it as SPECIFIED rather than as
+resolved — it is not in this tree at this pin.** E1's owner reports
+`ApplyPolicy` landed and committed on their branch, which is unpushed, so
+nothing below resolves at `638bb05c3` and none of it should be read as a
+verified citation until both branches land. Named blocker, stated so the
+claim cannot quietly age into an assertion.
+
+The specified surface: `ApplyPolicy::{Full, StubbedFamilies(&[ArchivalFamily])}`
+via `with_apply_policy`, with `is_parity_evidence()` false for anything but
+`Full`, `artifact_stamp()` carrying `NOT-PARITY-EVIDENCE`, and `applies(family)`
+for the eventual dispatch. `ArchivalFamily` carries **17** variants, one per
+`archival_*` table, with `table()` giving the X-macro name and `ALL` in macro
+order — so this register's rows map onto variants directly rather than through
+strings. It is a **runtime value rather than a cargo feature** —
 because a `#[cfg(feature)]` switch compiles the store differently under test,
 which would make the sufficiency control evidence about a *differently
 compiled* store rather than the one that ships. The store always reports its
@@ -286,6 +297,21 @@ structurally unusable as §8.1 parity evidence rather than merely discouraged.
 
 The coverage assertion has its own red control: drop one corpus segment and
 that family's assertion must fail.
+
+**Two gates now pin the same 17, and that is a hazard with a cheap cure.**
+E1's owner gate-pins `ArchivalFamily` bijectively against the X-macro; this
+lane's gate pins the register's table set against the X-macro. Both are
+anchored to the same construct, so the agreement is transitive and a third
+cross-check would be redundant — **provided both read that construct the same
+way.** They did not. This gate's first extractor scanned the whole file for
+`X(LMDB_ARCHIVAL_...` with no digits in the name class, where the established
+`check_lmdb_schema_coverage.py` scopes to the `SHEKYL_LMDB_TABLES` macro body
+and allows digits. Both returned 17 today, which is how the divergence would
+have stayed invisible. A future `archival_r2_market` would have been missed
+here, hence absent from **both** sides of the set difference, and this gate
+would have gone **green over a table nothing covers** — §7.1.1's own hazard
+reappearing through the instrument built to close it. The extractor is now
+character-identical to the established one, and the digit case is a red-bite.
 
 ---
 
