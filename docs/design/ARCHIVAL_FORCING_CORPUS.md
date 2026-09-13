@@ -40,8 +40,8 @@ with **two** cells: an apply half and a revert half. Every cell resolves to
 | | |
 | --- | --- |
 | Cells | 34 |
-| `FORCED-BY` | 32 |
-| `EXCLUDED` | 2 |
+| `FORCED-BY` | 28 |
+| `EXCLUDED` | 6 |
 
 The register is emitted as TSV so it can be gated rather than parsed from
 prose: assert 34 cells, assert every table appears exactly twice, assert the
@@ -75,16 +75,23 @@ either way — the diff needs all 17 tables populated.
 
 ---
 
-## 3. The two exclusions, both on `archival_settlement`
+## 3. The six exclusions, across three families
 
-### 3.1 Apply — no production caller
+Two families are excluded for the **same structural reason** — the tree has no
+producer for them — and in both the revert half is **vacuous** over a table
+nothing writes. `archival_settlement` is §3.1–3.2; the two attestation-witness
+tables are §4.1, found by answering a question this round had first filed as
+open. Their blockers differ (**SO-D8** for settlement, the **Phase 2/3 template
+writer** for the witness), so they discharge separately.
+
+### 3.1 `archival_settlement` apply — no production caller
 
 `set_archival_settlement` has no production caller; `db_lmdb.cpp:7667` says so
 in terms. **No block sequence can fire its apply path**, so this is a
 pre-existing exclusion that the corpus inherits, not a corpus defect. It is
 held under the writer round's §5.1 pending SO-D8.
 
-### 3.2 Revert — vacuous, which is the subtler half
+### 3.2 `archival_settlement` revert — vacuous, which is the subtler half
 
 `delete_archival_settlement_for_epoch` *does* execute: it is reached from
 `revert_archival_slashes_at_height` (`db_lmdb.cpp:6433`, defined `:7505`).
@@ -151,8 +158,8 @@ the very rule that exists because a backend can omit its hooks and still pass.
 
 ### 3.5 The routed question: is settlement's bar already met?
 
-**Routed, not ruled here — §7.1.1 belongs to the DRS-0 document, not to this
-lane.** The rule has two sentences and they gate different things:
+**RULED 2026-09-13 (Rick, via steering), as recommended below.** The rule has
+two sentences and they gate different things:
 
 > **Rule:** do **not** extract/port **S-ARCH** (or implement archival apply in
 > `shekyl-chain-store`) until digest coverage includes the archival journal
@@ -180,13 +187,20 @@ say which bar it is talking about:
   addresses that hazard is the corpus, the diff, and the `ApplyPolicy`
   sufficiency control of §5.
 
-**Recommendation to whoever owns §7.1.1:** treat the existing KAT as
-discharging the **extraction** bar for the settlement family, keep the
-exclusion named, and keep the parity bar owed against the corpus. If instead
-"replacement KAT" was always meant to imply cross-backend reach, then the
-clause as written is weaker than its rationale and should be tightened — which
-is a one-sentence edit, and better made deliberately than discovered at a
-green.
+**The ruling:** the existing KAT **discharges the extraction bar** for the
+settlement family, the exclusion **stays named**, and **parity remains owed**
+against the corpus.
+
+`LMDB_WRITE_ATOMICITY_AUDIT.md`'s line asserting that the replacement KAT
+*"does not exist yet"* is corrected in this branch. For settlement it was
+already false when written, and a stale assertion of that shape is what leads
+someone to rebuild a KAT that already exists.
+
+**Carried as a recommendation, deliberately NOT applied here:** if "replacement
+KAT" was always meant to imply cross-backend reach, the clause is weaker than
+its rationale and wants a one-sentence tightening. That is a rules-shaped
+change and should be ruled on its own rather than folded into a corpus branch,
+so §7.1.1 itself is untouched by this work.
 
 ---
 
@@ -196,26 +210,52 @@ All three were found by checking rather than assuming. Two are costs that
 change the corpus's build; the third removes one. Surfaced here so none of
 them is discovered at test time.
 
-**4.1 `archival_attestation_witness` is not produced by local mining.**
-`blockchain_db.cpp:673` writes the row only `if (!attestation_witness.empty())`,
-and the bytes arrive on `block_connect_supplement`, which is zero-initialised
-(`block_connect_supplement connect{}`) on the ordinary connect path. The
-populated producers are p2p
-(`make_block_connect_supplement_from_block_entry`, from
-`arg.b.attestation_witness`) and verifying import. A chaingen-mined corpus
-therefore forces **no** witness row by default.
+**4.1 The attestation-witness question is ANSWERED, and the answer moved four
+cells out of `FORCED-BY`.** This round first filed it as open — whether witness
+bytes must be valid to survive the verify. Chased to the end, the question
+dissolves into a stronger one.
 
-The hash-keyed alt-chain counterpart carries the **same** caveat and for the
-same reason: its only producer is `blockchain.cpp:2504`, which stores
-`connect.attestation_witness` beside the alt block, so an unpopulated
-supplement leaves both tables empty.
+Start with what is true of the input path. `blockchain_db.cpp:673` writes the
+row only `if (!attestation_witness.empty())`, and the bytes arrive on
+`block_connect_supplement`, which is zero-initialised on the ordinary connect
+path; the populated producers are p2p and verifying import. So a mined corpus
+forces no row by default, and the alt-chain counterpart at
+`blockchain.cpp:2504` is empty for the same reason.
 
-The corpus must populate the supplement, which is the **production input
-path** and so is legitimate — this is not a raw writer. **Open question for
-the build phase:** whether the bytes must be valid `r`-plus-pass-signatures to
-survive B4's attestation verify. If they must, construction is real work and
-needs its own scoping; `tests/unit_tests/archival_attestation_verify.cpp` is
-where that answer lives.
+**Attaching arbitrary bytes does not work, and is a named reject shape.**
+`verify_block_attestation` (`blockchain.cpp:2262`) is a hard gate on the
+connect path. Its own comment lists **unsolicited witness bytes** as one of
+three shapes on which it is deliberately *stricter* than the interim, so a
+witness riding a block whose coinbase commits to the empty attestation root is
+rejected rather than stored.
+
+**Replaying the pinned KAT does not work either.** A frozen valid vector exists
+(`archival_attestation_verify.cpp`, `pinned_valid_vector_verifies_ok`), but its
+countersignature binds the **coinbase output key** (`[0x09; 32]`) and the
+**predecessor block hash** (`[0x07; 32]`, the RF-D3 nonce term). A corpus block
+has neither, so the vector cannot be lifted into a real chain.
+
+**And generating a fresh one is not available: there is no emitter.** The
+attestation FFI exposes exactly two entry points — `shekyl_archival_verify_attestation`
+and `shekyl_archival_attestation_pass_p_ids`. Both verify. Nothing in the tree
+**constructs** a witness: every `attestation_witness =` in `src/` is a copy from
+the database, a wire entry, or a bootstrap record. The tree says so plainly at
+`blockchain.cpp:6252` — *"Empty on local mine and until the **Phase 2/3
+template writer** populates it"* — and `shekyl-p-host` still calls the
+countersignature a format-round decision.
+
+**So both witness families are excluded for want of a producer**, exactly as
+`archival_settlement` is, and both revert halves are vacuous by the §3.2
+argument: `remove_archival_attestation_witness_at_height` (`db_lmdb.cpp:9762`)
+and `remove_archival_alt_attestation_witness` (`db_lmdb.cpp:9807`) are each a
+lone `mdb_del` with no counter and no side effect, so neither can be
+discriminated over a table nothing writes. The named blocker is the **Phase 2/3
+template writer**, not SO-D8.
+
+This is the round's most consequential correction, because the cost it removes
+is not the one it looked like. The family was scoped as expensive construction
+work; it is in fact **not constructible at all at this pin**, which is cheaper
+to build and more important to know.
 
 **4.2 The two slash tables are forceable, but not by the same event, and
 neither depends on settlement.** Worth stating because the coupling looks
@@ -368,6 +408,10 @@ their evidence; the two forceability costs; the reuse inventory; the interface
 agreement with 7b on `ApplyPolicy`; the TLB decision.
 
 **Does not, with named blockers:**
+
+- Four cells it had first scoped as buildable — the two attestation-witness
+  families — now excluded for want of any producer (§4.1), blocked on the
+  **Phase 2/3 template writer**.
 
 - The corpus sequence itself — blocked on the TLB shape, since it extends TLB
   rather than duplicating it.

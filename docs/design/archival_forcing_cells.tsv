@@ -8,10 +8,10 @@ archival_serve_credit	apply	FORCED-BY:tx-with-serve-credit-response-vin	blockcha
 archival_serve_credit	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:945	remove_archival_serve_credit_bit
 archival_settlement	apply	EXCLUDED:no-production-caller	db_lmdb.cpp:7667	held under writer-round 5.1 pending SO-D8; unit KAT exists, LMDB-bound
 archival_settlement	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:7505	delete runs but cannot discriminate; only write is mdb_cursor_del, no counter
-archival_attestation_witness	apply	FORCED-BY:connect-with-populated-supplement	blockchain_db.cpp:674	NOT produced by local mining; connect{} is zero-init
-archival_attestation_witness	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:822	remove_archival_attestation_witness_at_height
-archival_alt_attestation_witness	apply	FORCED-BY:alt-block-add-with-populated-supplement	blockchain.cpp:2504	store_archival_alt_attestation_witness(id, connect.attestation_witness); same not-from-local-mining caveat as the main-chain row
-archival_alt_attestation_witness	revert	FORCED-BY:alt-block-removal-or-reorg	db_lmdb.cpp:4801	from remove_alt_block
+archival_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:6252	no emitter exists: tree says "Empty on local mine and until the Phase 2/3 template writer populates it"; FFI exposes verify + pass_p_ids only
+archival_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:9762	remove_archival_attestation_witness_at_height is a lone mdb_del, no counter, no side effect
+archival_alt_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:2504	stores connect.attestation_witness, which no in-tree emitter ever populates; same blocker as the main-chain row
+archival_alt_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:9807	remove_archival_alt_attestation_witness is a lone mdb_del, no counter, no side effect
 archival_bond	apply	FORCED-BY:bond-post-JoinMarket	blockchain_db.cpp:309	put_archival_bond_record
 archival_bond	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:956	remove_archival_bond_record
 archival_shard_segment	apply	FORCED-BY:segment-freeze-first-crossing	blockchain_db.cpp:643	process_archival_segment_freezes_at_height; COST: needs 25992 curve-tree leaves, segment_leaf_count is NOT a tunable

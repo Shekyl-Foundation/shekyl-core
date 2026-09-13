@@ -1232,11 +1232,31 @@ is the whole justification, and it is a domain claim, not a safety claim.
   is classed here because the domain argument is the one that holds today,
   and it inherits §7.1.1's KAT obligation when S-ARCH ports.
 - **Archival journal families (16):** the `DAEMON_REDB_STORE.md` §7.1.1 named
-  exclusion. **The replacement KAT that rule requires does not exist yet.**
-  §7.1.1 forbids extracting S-ARCH or implementing archival apply in
-  `shekyl-chain-store` until these are digested *or* carry that KAT, so the
-  obligation is live and unmet — recorded here as the exclusion's open item
-  rather than treated as discharged by being written down.
+  exclusion. §7.1.1 forbids extracting S-ARCH or implementing archival apply
+  in `shekyl-chain-store` until these are digested *or* carry a replacement
+  KAT. **The obligation is live and unmet for fifteen of the sixteen, and
+  DISCHARGED FOR `archival_settlement` (ruled 2026-09-13).**
+
+  This line read "the replacement KAT that rule requires does not exist yet"
+  until 2026-09-13. For settlement that was already false when written:
+  [`tests/unit_tests/archival_settlement_table.cpp`](../tests/unit_tests/archival_settlement_table.cpp)
+  drives **both** halves against production `BlockchainLMDB` — twelve
+  `set_archival_settlement` calls across eight tests, plus
+  `delete_archival_settlement_for_epoch` with an assertion that the
+  neighbouring epoch survives. The register that found it is
+  [`ARCHIVAL_FORCING_CORPUS.md`](design/ARCHIVAL_FORCING_CORPUS.md) (AFC-1).
+
+  **The ruling splits §7.1.1's two sentences, which gate different things.**
+  The parenthetical gates **extraction** — a named exclusion plus a KAT that
+  forces apply/revert to run — and that is met for settlement today. The
+  trailing clause gates **parity**, and this KAT cannot meet it: exercising
+  **LMDB's** hooks cannot detect **redb** omitting **its own**, so the KAT
+  satisfies the parenthetical's letter without touching the hazard §7.1.1's
+  own preamble names. **Parity remains owed** for all sixteen, against the
+  AFC-1 corpus and its stubbed-apply control. The order is forced rather than
+  chosen: the same rule bars implementing archival apply in
+  `shekyl-chain-store`, so "write the Rust apply, then KAT it" is circular,
+  and KAT-first against the C++ is the only way through.
 - **Dead (1):** `txs` — zero read sites and zero write sites (DRS-W4).
   Nothing can diverge in a table nothing touches.
 
