@@ -11,9 +11,9 @@ use shekyl_archival_retention::{
     holdings_update_pop, rebond_connect, rebond_pop, release_connect, release_pop,
     verify_holdings_update_add, verify_holdings_update_drop, verify_join_market_bond_post,
     verify_rebond_bond_post, verify_release_bond_post, whole_record_last_served,
-    ArchivalBondPostVin, BadInterval, BondPostKind, BondPostPayload, ColdAuthorityError,
-    DebitAuthError, HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet, ShardSetError,
-    ENDPOINT_BYTES,
+    ArchivalBondPostVin, BadInterval, BondKind, BondPostKind, ColdAuthorityError, DebitAuthError,
+    HoldingsDescriptor, HoldingsKind, LastServedScan, ShardSet, ShardSetError, ENDPOINT_BYTES,
+    HYBRID_PUBKEY_CANONICAL_BYTES,
 };
 
 use super::codes::*;
@@ -82,168 +82,84 @@ unsafe fn with_bond_post_u8_slice<R>(
     Ok(f(slice))
 }
 
-/// Marshal the shared bond-post args into an [`ArchivalBondPostVin`] for the JoinMarket
-/// and Release FFI entry points. The `post_kind` byte is decoded at each call site (the
-/// two name an out-of-range byte differently — `ERR_POST_KIND` vs
-/// `ERR_POST_KIND_NOT_RELEASE`), so it arrives here already typed. The C++ hybrid pubkey
-/// and `P_id` hint stay consensus-side, so the vin carries placeholders for them.
-///
-/// `bond_spend_pk` is marshaled for real, NOT placeholdered: the §9.11 coupling
-/// (JoinMarket iff exact-canonical-length key) is structural in
-/// [`ArchivalBondPostVin`] — `serialize()` refuses a violating vin — and unlike
-/// the consensus-side placeholders above, an empty key is a *valid* wire shape
-/// for the debit kinds, so a placeholder would silently satisfy the wrong
-/// invariant. The marshaler enforces the coupling (`ERR_BOND_SPEND_PK_COUPLING`)
-/// instead of constructing a violating vin. (The key is authorized on-chain by
-/// P's surface-A `pqc_auths` signature over the whole-tx payload, not by an
-/// on-vin blob — SA-2b, SIGNATURE_ALIGNMENT.md §2.2.)
-///
-/// `kind` selects the payload variant and carries exactly the kind-coupled
-/// operand that kind can hold — JoinMarket's `EU-D3` endpoint (already
-/// marshaled by [`endpoint_from_raw`]). The other kinds have no slot for one,
-/// so "an endpoint on a Release" is not a state this marshal can be handed;
-/// the presence coupling is the selector's shape, not a check.
+/// Marshal shard ids + holdings kind into a [`HoldingsDescriptor`]. The C++
+/// hybrid pubkey and `P_id` hint stay consensus-side.
 ///
 /// # Safety
-/// `shard_ids_ptr` must be valid for `shard_ids_len` `u64`s, or null when the len is 0;
-/// `bond_spend_pk_ptr` must be valid for `bond_spend_pk_len` bytes, or null when the
-/// len is 0.
-/// The payload the shared marshal builds. Carries exactly the kind-coupled
-/// operand its kind can hold: JoinMarket commits the `EU-D3` endpoint;
-/// Release, Rebond and HoldingsUpdate have no endpoint field. A wrong kind at
-/// an entry is therefore refused by that entry's own wrong-kind code before
-/// any operand is marshaled, never as a coupling on an operand the kind has
-/// no slot for.
-#[derive(Clone, Copy)]
-enum ValueMovingKind {
-    JoinMarket { endpoint: [u8; ENDPOINT_BYTES] },
-    Release,
-    Rebond,
-    HoldingsUpdate,
-}
-
-impl ValueMovingKind {
-    /// The kinds an endpoint-free entry (Release, HoldingsUpdate, Rebond) may
-    /// marshal; JoinMarket needs an endpoint those entries do not carry.
-    fn endpoint_free(kind: BondPostKind) -> Option<Self> {
-        match kind {
-            BondPostKind::Release => Some(Self::Release),
-            BondPostKind::Rebond => Some(Self::Rebond),
-            BondPostKind::HoldingsUpdate => Some(Self::HoldingsUpdate),
-            BondPostKind::JoinMarket => None,
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)] // coarse-call FFI: mirrors the entry points' flat operand list
-unsafe fn bond_post_vin_from_raw(
-    kind: ValueMovingKind,
+/// `shard_ids_ptr` must be valid for `shard_ids_len` `u64`s, or null when the len is 0.
+unsafe fn marshal_holdings(
     holdings_kind: u8,
     shard_ids_ptr: *const u64,
     shard_ids_len: usize,
-    bond_spend_pk_ptr: *const u8,
-    bond_spend_pk_len: usize,
-    bonded_total_atomic: u64,
-    bond_credit: u64,
-    bond_debit: u64,
-) -> Result<ArchivalBondPostVin, u8> {
+) -> Result<HoldingsDescriptor, u8> {
     let shard_ids_raw =
         unsafe { with_bond_post_u64_slice(shard_ids_ptr, shard_ids_len, <[u64]>::to_vec) }?;
-    // The wire decoder validates the vin's shard list through `ShardSet::new`;
-    // this marshal is a second decoder for the same wire object, so it routes
-    // through the identical constructor — the bound AND duplicate-freeness are
-    // unrepresentable-if-violated past the FFI boundary for EVERY post kind, not
-    // a case each downstream verify must re-guard (`bond_floor` collapses to an
-    // in-band 0 on oversize, which let an unguarded verify read it as the empty
-    // exit shape; and a duplicate silently double-counted the floor).
+    // Same constructor the wire decoder uses: bound and duplicate-freeness are
+    // unrepresentable past this boundary for every post kind.
     let shard_ids = ShardSet::new(shard_ids_raw).map_err(|e| match e {
         ShardSetError::CountExceeded { .. } => {
             SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_COUNT_EXCEEDED
         }
         ShardSetError::Duplicate { .. } => SHEKYL_ARCHIVAL_BOND_POST_ERR_HOLDINGS_DUPLICATE_SHARD,
     })?;
-    let bond_spend_pk =
-        unsafe { with_bond_post_u8_slice(bond_spend_pk_ptr, bond_spend_pk_len, <[u8]>::to_vec) }?;
-    let holdings_kind = holdings_kind_from_u8(holdings_kind)?;
-    let holdings = HoldingsDescriptor {
-        kind: holdings_kind,
+    Ok(HoldingsDescriptor {
+        kind: holdings_kind_from_u8(holdings_kind)?,
         shard_ids,
-    };
-    // The payload variant is the coupling. One arm per kind, so the match is
-    // exhaustive without a "cannot happen" arm: a new value-moving kind must be
-    // placed here before it compiles past the boundary. The §9.11 key belt is
-    // the one coupling still expressible as a bad operand (every entry takes
-    // the key pointer), so it is checked; the endpoint's is not (see `kind`).
-    let off_join_market = |bond_spend_pk: &[u8]| {
-        if !bond_spend_pk.is_empty() {
-            return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
-        }
-        Ok(())
-    };
-    let payload = match kind {
-        ValueMovingKind::JoinMarket { endpoint } => {
-            if bond_spend_pk.len() != shekyl_archival_retention::HYBRID_PUBKEY_CANONICAL_BYTES {
-                return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING);
-            }
-            BondPostPayload::JoinMarket {
-                bond_spend_pk,
-                endpoint,
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            }
-        }
-        ValueMovingKind::Release => {
-            off_join_market(&bond_spend_pk)?;
-            BondPostPayload::Release {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            }
-        }
-        ValueMovingKind::Rebond => {
-            off_join_market(&bond_spend_pk)?;
-            BondPostPayload::Rebond {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            }
-        }
-        ValueMovingKind::HoldingsUpdate => {
-            off_join_market(&bond_spend_pk)?;
-            BondPostPayload::HoldingsUpdate {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            }
-        }
-    };
-    Ok(ArchivalBondPostVin {
-        hybrid_public_key: Vec::new(),
-        p_canonical_id: [0u8; 32],
-        payload,
     })
 }
 
-/// Marshal the JoinMarket serving endpoint (`EU-D3`): exactly `ENDPOINT_BYTES`
-/// at a non-null pointer is the key; a null pointer or any other length is the
-/// coupling refusal (`ERR_ENDPOINT_COUPLING`). The all-zero key is not judged
-/// here — `verify_join_market_bond_post` owns that rule (the bond record
-/// encodes "no endpoint" as zero) and `map_bond_post_error` reports it under
-/// the same code, so the FFI and the Rust-native submit path agree.
+fn bond_post_vin(
+    kind: BondKind,
+    holdings: HoldingsDescriptor,
+    bonded_total_atomic: u64,
+    bond_credit: u64,
+    bond_debit: u64,
+) -> ArchivalBondPostVin {
+    ArchivalBondPostVin {
+        hybrid_public_key: Vec::new(),
+        p_canonical_id: [0u8; 32],
+        kind,
+        holdings,
+        bonded_total_atomic,
+        bond_credit,
+        bond_debit,
+    }
+}
+
+/// `bond_spend_pk` is marshaled for real, not placeholdered: an empty key is a
+/// valid wire shape for the debit kinds, so a placeholder would silently
+/// satisfy the wrong invariant. JoinMarket requires the canonical length;
+/// every other kind requires empty (`ERR_BOND_SPEND_PK_COUPLING`).
 ///
 /// # Safety
-/// When `len > 0`, `ptr` must be valid for `len` bytes for the duration of the call.
+/// `ptr` must be valid for `len` bytes, or null when the len is 0.
+unsafe fn marshal_bond_spend_pk(ptr: *const u8, len: usize) -> Result<Vec<u8>, u8> {
+    unsafe { with_bond_post_u8_slice(ptr, len, <[u8]>::to_vec) }
+}
+
+fn refuse_stray_bond_spend_pk(pk: &[u8]) -> Result<(), u8> {
+    if pk.is_empty() {
+        Ok(())
+    } else {
+        Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING)
+    }
+}
+
+/// JoinMarket serving endpoint: exactly [`ENDPOINT_BYTES`] at a non-null
+/// pointer. Null or any other length is `ERR_ENDPOINT_COUPLING`. The all-zero
+/// key is `verify_join_market_bond_post`'s rule (the bond record encodes "no
+/// endpoint" as zero), reported under the same code.
+///
+/// # Safety
+/// `ptr` must be valid for `ENDPOINT_BYTES` bytes.
 unsafe fn endpoint_from_raw(ptr: *const u8, len: usize) -> Result<[u8; ENDPOINT_BYTES], u8> {
     if ptr.is_null() || len != ENDPOINT_BYTES {
         return Err(SHEKYL_ARCHIVAL_BOND_POST_ERR_ENDPOINT_COUPLING);
     }
     let mut out = [0u8; ENDPOINT_BYTES];
-    unsafe { with_bond_post_u8_slice(ptr, len, |s| out.copy_from_slice(s)) }?;
+    unsafe {
+        std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), ENDPOINT_BYTES);
+    }
     Ok(out)
 }
 
@@ -251,15 +167,14 @@ unsafe fn endpoint_from_raw(ptr: *const u8, len: usize) -> Result<[u8; ENDPOINT_
 ///
 /// Hybrid pubkey bounds and `p_canonical_id` hint recompute stay in C++ consensus glue.
 /// `record_exists` is `1` when LMDB already has a bond record for this `P_id`.
-/// `bond_spend_pk_*` is the vin's GF-1 debit authorizer; the shared marshaler
-/// enforces the §9.11 coupling (exact-canonical-length key iff JoinMarket,
-/// `ERR_BOND_SPEND_PK_COUPLING` otherwise). `endpoint_*` is the vin's `EU-D3`
-/// serving endpoint: exactly 32 non-zero bytes, else `ERR_ENDPOINT_COUPLING`.
+/// `bond_spend_pk_*` must be the canonical-length debit authorizer
+/// (`ERR_BOND_SPEND_PK_COUPLING` otherwise). `endpoint_*` must be exactly 32
+/// bytes (`ERR_ENDPOINT_COUPLING` otherwise); the all-zero key is refused by
+/// verify under the same code.
 ///
 /// # Safety
 /// `bond_spend_pk_ptr` must be valid for `bond_spend_pk_len` bytes, or null when
-/// the len is 0. `endpoint_ptr` must be valid for `endpoint_len` bytes, or null
-/// when the len is 0.
+/// the len is 0. `endpoint_ptr` must be valid for `ENDPOINT_BYTES` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     post_kind: u8,
@@ -281,26 +196,32 @@ pub unsafe extern "C" fn shekyl_archival_verify_join_market_bond_post(
     ) {
         return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND;
     }
-    // EU-D3: JoinMarket commits an endpoint; absent, mis-sized, or zero is
-    // the coupling refusal.
+    let holdings = match unsafe { marshal_holdings(holdings_kind, shard_ids_ptr, shard_ids_len) } {
+        Ok(h) => h,
+        Err(code) => return code,
+    };
     let endpoint = match unsafe { endpoint_from_raw(endpoint_ptr, endpoint_len) } {
         Ok(e) => e,
         Err(code) => return code,
     };
-    let vin = match bond_post_vin_from_raw(
-        ValueMovingKind::JoinMarket { endpoint },
-        holdings_kind,
-        shard_ids_ptr,
-        shard_ids_len,
-        bond_spend_pk_ptr,
-        bond_spend_pk_len,
+    let bond_spend_pk = match unsafe { marshal_bond_spend_pk(bond_spend_pk_ptr, bond_spend_pk_len) }
+    {
+        Ok(pk) => pk,
+        Err(code) => return code,
+    };
+    if bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
+        return SHEKYL_ARCHIVAL_BOND_POST_ERR_BOND_SPEND_PK_COUPLING;
+    }
+    let vin = bond_post_vin(
+        BondKind::JoinMarket {
+            bond_spend_pk,
+            endpoint,
+        },
+        holdings,
         bonded_total_atomic,
         bond_credit,
         bond_debit,
-    ) {
-        Ok(v) => v,
-        Err(code) => return code,
-    };
+    );
     match verify_join_market_bond_post(&vin, record_exists != 0) {
         Ok(()) => SHEKYL_ARCHIVAL_BOND_POST_OK,
         Err(e) => map_bond_post_error(e),
@@ -352,25 +273,24 @@ pub unsafe extern "C" fn shekyl_archival_verify_release_bond_post(
     // entry's own wrong-kind verdict; the verify re-checks Release by name.
     let kind = match BondPostKind::from_u8(post_kind)
         .ok()
-        .and_then(ValueMovingKind::endpoint_free)
+        .and_then(BondPostKind::unit_kind)
     {
         Some(k) => k,
         None => return SHEKYL_ARCHIVAL_BOND_POST_ERR_POST_KIND_NOT_RELEASE,
     };
-    let vin = match bond_post_vin_from_raw(
-        kind,
-        holdings_kind,
-        shard_ids_ptr,
-        shard_ids_len,
-        bond_spend_pk_ptr,
-        bond_spend_pk_len,
-        bonded_total_atomic,
-        bond_credit,
-        bond_debit,
-    ) {
-        Ok(v) => v,
+    let holdings = match unsafe { marshal_holdings(holdings_kind, shard_ids_ptr, shard_ids_len) } {
+        Ok(h) => h,
         Err(code) => return code,
     };
+    let bond_spend_pk = match unsafe { marshal_bond_spend_pk(bond_spend_pk_ptr, bond_spend_pk_len) }
+    {
+        Ok(pk) => pk,
+        Err(code) => return code,
+    };
+    if let Err(code) = refuse_stray_bond_spend_pk(&bond_spend_pk) {
+        return code;
+    }
+    let vin = bond_post_vin(kind, holdings, bonded_total_atomic, bond_credit, bond_debit);
     let record_bonded_total = if record_exists != 0 {
         Some(record_bonded_total)
     } else {
@@ -729,26 +649,16 @@ unsafe fn bond_post_record_marshal_prologue(
     record_shard_ids_ptr: *const u64,
     record_shard_ids_len: usize,
 ) -> Result<(ArchivalBondPostVin, Option<u64>, HoldingsKind, Vec<u64>), u8> {
-    // The prologue serves HoldingsUpdate and Rebond, which carry no endpoint
-    // (`EU-D3`); a kind it cannot marshal without one (JoinMarket) is the
-    // caller's wrong-kind verdict.
+    // HoldingsUpdate and Rebond carry no endpoint; JoinMarket is this
+    // entry's wrong-kind verdict.
     let kind = BondPostKind::from_u8(post_kind)
         .ok()
-        .and_then(ValueMovingKind::endpoint_free)
+        .and_then(BondPostKind::unit_kind)
         .ok_or(wrong_post_kind_err)?;
-    let vin = unsafe {
-        bond_post_vin_from_raw(
-            kind,
-            holdings_kind,
-            shard_ids_ptr,
-            shard_ids_len,
-            bond_spend_pk_ptr,
-            bond_spend_pk_len,
-            bonded_total_atomic,
-            bond_credit,
-            bond_debit,
-        )
-    }?;
+    let holdings = unsafe { marshal_holdings(holdings_kind, shard_ids_ptr, shard_ids_len) }?;
+    let bond_spend_pk = unsafe { marshal_bond_spend_pk(bond_spend_pk_ptr, bond_spend_pk_len) }?;
+    refuse_stray_bond_spend_pk(&bond_spend_pk)?;
+    let vin = bond_post_vin(kind, holdings, bonded_total_atomic, bond_credit, bond_debit);
     // Parse the record's kind only when a record exists: a missing record must
     // surface as RECORD_MISSING (the verify's own verdict), never as a
     // misleading HOLDINGS_KIND from whatever placeholder the caller passed.

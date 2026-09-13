@@ -42,7 +42,7 @@ use shekyl_archival_bond_builder::{
 };
 use shekyl_archival_retention::{
     bond_floor, verify_bond_post_ct_balance, verify_release_bond_post, ArchivalBondPostVin,
-    BondPostError, BondPostPayload, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
+    BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
@@ -127,10 +127,7 @@ fn post_kind_is_load_bearing() {
 #[test]
 fn bond_credit_must_be_zero_on_a_debit_path() {
     let mut v = vin();
-    let BondPostPayload::Release { bond_credit, .. } = &mut v.payload else {
-        panic!("ReleaseVin");
-    };
-    *bond_credit = 1;
+    v.bond_credit = 1;
     assert!(matches!(
         verify(&v),
         Err(BondPostError::ReleaseCreditNonzero)
@@ -144,16 +141,13 @@ fn bond_credit_must_be_zero_on_a_debit_path() {
 #[test]
 fn holdings_must_be_empty_not_merely_floor_zero() {
     let mut v = vin();
-    let BondPostPayload::Release { holdings, .. } = &mut v.payload else {
-        panic!("ReleaseVin");
-    };
-    *holdings = HoldingsDescriptor {
+    v.holdings = HoldingsDescriptor {
         kind: HoldingsKind::ShardSetCompact,
         shard_ids: ShardSet::new(vec![4]).expect("one shard"),
     };
     // Non-empty holdings have a non-zero floor, so this trips the floor
     // equality first; zero the floor operand to reach the holdings guard.
-    assert_ne!(bond_floor(v.holdings()), 0);
+    assert_ne!(bond_floor(&v.holdings), 0);
     assert!(matches!(
         verify(&v),
         Err(BondPostError::ReleaseFloorMismatch)
@@ -169,28 +163,16 @@ fn a_non_zero_post_connect_total_is_not_a_full_exit() {
     // to that descriptor's own floor — equality then holds, and the only thing
     // left to object to is that the exit is partial.
     let mut v = vin();
-    {
-        let BondPostPayload::Release { holdings, .. } = &mut v.payload else {
-            panic!("ReleaseVin");
-        };
-        *holdings = HoldingsDescriptor {
-            kind: HoldingsKind::ShardSetCompact,
-            shard_ids: ShardSet::new(vec![4]).expect("one shard"),
-        };
-    }
-    let floor = bond_floor(v.holdings());
+    v.holdings = HoldingsDescriptor {
+        kind: HoldingsKind::ShardSetCompact,
+        shard_ids: ShardSet::new(vec![4]).expect("one shard"),
+    };
+    let floor = bond_floor(&v.holdings);
     assert_ne!(
         floor, 0,
         "premise: a non-empty descriptor has a non-zero floor"
     );
-    let BondPostPayload::Release {
-        bonded_total_atomic,
-        ..
-    } = &mut v.payload
-    else {
-        panic!("ReleaseVin");
-    };
-    *bonded_total_atomic = floor;
+    v.bonded_total_atomic = floor;
 
     assert!(
         matches!(verify(&v), Err(BondPostError::NotFullRelease)),
@@ -202,10 +184,7 @@ fn a_non_zero_post_connect_total_is_not_a_full_exit() {
 #[test]
 fn the_debit_must_be_the_whole_balance() {
     let mut v = vin();
-    let BondPostPayload::Release { bond_debit, .. } = &mut v.payload else {
-        panic!("ReleaseVin");
-    };
-    *bond_debit = BONDED - 1;
+    v.bond_debit = BONDED - 1;
     assert!(matches!(
         verify(&v),
         Err(BondPostError::DebitNotFullBalance)
@@ -299,7 +278,7 @@ fn the_debit_rule_agrees_with_the_consensus_commitment_rule() {
         &commit(out_total, &mask),
         FEE,
         BondTerm::Debit(
-            NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.vin().bond_debit()))
+            NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.vin().bond_debit))
                 .expect("a full exit debits a non-zero balance"),
         ),
     )
@@ -337,7 +316,7 @@ fn the_debit_rule_rejects_amounts_the_commitment_rule_would_reject() {
             &commit(wrong_total, &mask),
             FEE,
             BondTerm::Debit(
-                NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.vin().bond_debit()))
+                NonZeroAtomicUnits::new(AtomicUnits::from_raw(v.vin().bond_debit))
                     .expect("non-zero"),
             ),
         )

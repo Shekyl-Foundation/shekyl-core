@@ -310,7 +310,7 @@ impl Message<AssembleRelease> for StakeEngine {
             .map_err(StakeEngineError::BondBuild)?;
         let hybrid_pk_bytes = built.vin().hybrid_public_key.clone();
         let persona = p_canonical_id_from_hybrid_pubkey(&hybrid_pk_bytes);
-        let bond_debit = built.vin().bond_debit();
+        let bond_debit = built.vin().bond_debit;
         let debit_term = built.debit_term();
 
         // Shape floor first — after the record-state arms, before every

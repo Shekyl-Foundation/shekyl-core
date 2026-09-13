@@ -91,7 +91,7 @@ impl JoinMarketVin {
     /// `extra_outputs` entry; `tx-builder` never learns the word "bond" (§7.2).
     #[must_use]
     pub fn credit_term(&self) -> OutputTerm {
-        OutputTerm::new(AtomicUnits::from_raw(self.vin.bond_credit()))
+        OutputTerm::new(AtomicUnits::from_raw(self.vin.bond_credit))
     }
 }
 
@@ -131,7 +131,7 @@ impl ReleaseVin {
     /// `verify_bond_post_ct_balance` is what fixes the side.
     #[must_use]
     pub fn debit_term(&self) -> InputTerm {
-        InputTerm::new(AtomicUnits::from_raw(self.vin.bond_debit()))
+        InputTerm::new(AtomicUnits::from_raw(self.vin.bond_debit))
     }
 }
 
@@ -240,7 +240,7 @@ pub fn verify_credit_funding(
     fee: AtomicUnits,
     post: &JoinMarketVin,
 ) -> Result<(), BondBuildError> {
-    let credit = post.vin().bond_credit();
+    let credit = post.vin().bond_credit;
     let bond_credit = AtomicUnits::from_raw(credit);
     let required = output_total
         .checked_add(fee)
@@ -362,7 +362,7 @@ pub fn verify_debit_funding(
     fee: AtomicUnits,
     post: &ReleaseVin,
 ) -> Result<(), BondBuildError> {
-    let debit = post.vin().bond_debit();
+    let debit = post.vin().bond_debit;
     let bond_debit = AtomicUnits::from_raw(debit);
     let sources = funding_total
         .checked_add(bond_debit)

@@ -4701,34 +4701,26 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     ? nullptr
     : bond.holdings.shard_ids.data();
 
-  // EU-D3 belt for non-parse callers, kind-agnostic (every codec refuses the
-  // shape at parse; the per-arm §9.11 belts below are its twin for the key):
-  // the serving endpoint exists iff JoinMarket. Placed before the arms so no
-  // arm can be reached with an endpoint it must not see — the JoinMarket
-  // marshal below then hands the Rust verify a field that is present by
-  // construction (32 bytes on this kind; the marshaler re-refuses the
-  // coupling on its side).
-  if (bond.post_kind != static_cast<uint8_t>(archival_bond_post_kind::JoinMarket)
-    && bond.has_endpoint())
+  // Non-parse belt: JoinMarket-coupled fields exist iff JoinMarket. Codecs
+  // already refuse the shape at parse; this covers constructed vins.
+  const bool is_join_market =
+    bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket);
+  if (is_join_market)
   {
-    MERROR_VER("Archival bond-post rejected: vin carries an endpoint on a kind that "
-      "cannot (JoinMarket-coupled field)");
+    if (bond.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
+    {
+      MERROR_VER("Archival JoinMarket rejected: bond_spend_pk missing or not canonical");
+      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+    }
+  }
+  else if (!bond.join_market_coupled_fields_absent())
+  {
+    MERROR_VER("Archival bond-post rejected: vin carries a JoinMarket-coupled field");
     return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
   }
 
   if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Release))
   {
-    // §9.11 coupling belt for non-parse callers (every codec refuses this at
-    // parse; the credit path's twin belt sits below): only JoinMarket carries
-    // the debit authorizer — a Release debit authorizes against the record's
-    // COMMITTED copy, never a key the vin brings along.
-    if (!bond.bond_spend_pk.empty())
-    {
-      MERROR_VER("Archival Release rejected: vin carries a bond_spend_pk "
-        "(JoinMarket-coupled field)");
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-    }
-
     shekyl::db::ArchivalBondValue record{};
     const bool have_record = m_db->get_archival_bond_value(bond.p_canonical_id, record);
 
@@ -4791,17 +4783,6 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
   if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::HoldingsUpdate))
   {
-    // §9.11 coupling belt: a HoldingsUpdate never carries the vin-borne debit
-    // authorizer — the add is a credit (identity-key auth) and the drop's debit
-    // authorizes against the record's COMMITTED bond_spend_pk (GF-1 selector),
-    // never a key the vin brings along.
-    if (!bond.bond_spend_pk.empty())
-    {
-      MERROR_VER("Archival HoldingsUpdate rejected: vin carries a bond_spend_pk "
-        "(JoinMarket-coupled field)");
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-    }
-
     shekyl::db::ArchivalBondValue record{};
     bool have_record = false;
     std::vector<uint64_t> bad_flat;
@@ -4945,16 +4926,6 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
 
   if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::Rebond))
   {
-    // §9.11 coupling belt: Rebond never carries the vin-borne debit authorizer
-    // — it is a credit (identity-key auth, P2B-9 Pin 4) and the record keeps
-    // its join-time committed bond_spend_pk for future debits.
-    if (!bond.bond_spend_pk.empty())
-    {
-      MERROR_VER("Archival Rebond rejected: vin carries a bond_spend_pk "
-        "(JoinMarket-coupled field)");
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-    }
-
     // Rebond semantic verify (gate-4 §3.4; P2B-9 reinstatement): marshal the
     // record's current holdings + the full interval log as flattened
     // (start, end_exclusive) pairs — the open-interval precondition, the Pin-5
@@ -5002,28 +4973,6 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     return true;
   }
 
-  // §9.11 belt for non-parse callers, the Release arm's twin (the serializer
-  // enforces this at parse, and the FFI vin marshaler below re-refuses the
-  // coupling): JoinMarket must commit a canonical-length bond_spend_pk for
-  // the record — it never authorizes the credit itself; the identity-key pin
-  // below does — and every other kind on this arm (Rebond and HoldingsUpdate
-  // dispatch above; anything else is verify-rejected downstream) must not
-  // carry one.
-  if (bond.post_kind == static_cast<uint8_t>(archival_bond_post_kind::JoinMarket))
-  {
-    if (bond.bond_spend_pk.size() != config::PQC_HYBRID_SINGLE_KEY_LEN)
-    {
-      MERROR_VER("Archival JoinMarket rejected: bond_spend_pk missing or not canonical");
-      return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-    }
-  }
-  else if (!bond.bond_spend_pk.empty())
-  {
-    MERROR_VER("Archival bond-post rejected: vin carries a bond_spend_pk "
-      "(JoinMarket-coupled field)");
-    return reject_drop(tvc, SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-  }
-
   std::vector<uint8_t> existing_pubkey;
   const bool record_exists = m_db->get_archival_bond_hybrid_pubkey(bond.p_canonical_id, existing_pubkey);
   const uint8_t verify_rc = shekyl_archival_verify_join_market_bond_post(
@@ -5033,8 +4982,6 @@ bool Blockchain::check_archival_bond_post_input(const txin_archival_bond_post& b
     bond.holdings.shard_ids.size(),
     bond.bond_spend_pk.data(),
     bond.bond_spend_pk.size(),
-    // EU-D3: the serving endpoint JoinMarket commits (the marshaler refuses
-    // the coupling — 32 bytes on this kind, none elsewhere).
     reinterpret_cast<const uint8_t*>(bond.endpoint.data),
     sizeof(bond.endpoint.data),
     bond.bonded_total_atomic,

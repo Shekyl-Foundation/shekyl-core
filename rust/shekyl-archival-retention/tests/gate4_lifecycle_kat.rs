@@ -19,8 +19,8 @@ use shekyl_archival_retention::{
     serve_credit_epoch_ok, sigma_work_milli, verify_conservation_snapshot,
     verify_join_market_bond_post, verify_segment_path, ArchivalBondPostVin,
     ArchivalServeCreditPruned, ArchivalServeCreditResponse, BadInterval, BondPostError,
-    BondPostPayload, ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind,
-    ServeCreditRow, ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, SETTLEMENT_EPOCH_BLOCKS,
+    ConservationError, ConservationSnapshot, HoldingsDescriptor, HoldingsKind, ServeCreditRow,
+    ShardSet, ARCHIVAL_BOND_FLOOR_ATOMIC, ENDPOINT_BYTES, SETTLEMENT_EPOCH_BLOCKS,
     VIN_TYPE_ARCHIVAL_SERVE_CREDIT_RESPONSE,
 };
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, HybridPublicKey, SignatureScheme};
@@ -264,7 +264,7 @@ fn gate4_lifecycle_kat_vectors() {
         ArchivalBondPostVin::read_payload_exact(&mut cursor).expect("parse join bond-post");
     verify_join_market_bond_post(&join_vin, false).expect("join verify");
     assert_eq!(
-        bond_floor(join_vin.holdings()),
+        bond_floor(&join_vin.holdings),
         join["bond_credit"].as_u64().expect("bond_credit")
     );
 
@@ -419,14 +419,7 @@ fn gate4_join_rejects_both_bond_terms() {
     let mut cursor = Cursor::new(&join_wire[1..]);
     let mut join_vin =
         ArchivalBondPostVin::read_payload_exact(&mut cursor).expect("parse join bond-post");
-    match &mut join_vin.payload {
-        BondPostPayload::JoinMarket {
-            bond_debit,
-            bond_credit,
-            ..
-        } => *bond_debit = *bond_credit,
-        _ => panic!("gate4 fixture is a JoinMarket vin"),
-    }
+    join_vin.bond_debit = join_vin.bond_credit;
     assert_eq!(
         verify_join_market_bond_post(&join_vin, false),
         Err(BondPostError::BothTermsNonzero)

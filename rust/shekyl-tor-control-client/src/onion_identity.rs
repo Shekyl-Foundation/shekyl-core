@@ -98,9 +98,7 @@ const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 /// `Arc<OnionIdentity>` at the call site.
 pub struct OnionIdentity {
     expanded: Zeroizing<[u8; ONION_KEY_BYTES]>,
-    /// The ed25519 public key — the 32 bytes the bond-post vin carries as
-    /// the persona's serving endpoint (`EU-D3`); `service_id` is its display
-    /// form. Public by definition, so held unwrapped.
+    /// Ed25519 public key (the JoinMarket serving endpoint). Public, unwrapped.
     public_key: [u8; 32],
     service_id: ServiceId,
 }
@@ -138,11 +136,8 @@ impl OnionIdentity {
         }
     }
 
-    /// The raw 32-byte ed25519 public key: what the archival bond-post vin
-    /// carries as the persona's serving endpoint (`EU-D3` — the wire carries
-    /// the key, never the address; a reader reconstructs `service_id` from
-    /// it). This is the only accessor the JoinMarket producer needs; the
-    /// secret half stays behind [`Self::mint_onion_key`].
+    /// Raw 32-byte ed25519 public key (JoinMarket serving endpoint).
+    /// The secret half stays behind [`Self::mint_onion_key`].
     #[must_use]
     pub fn public_key(&self) -> [u8; 32] {
         self.public_key

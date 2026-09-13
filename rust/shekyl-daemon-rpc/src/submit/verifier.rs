@@ -860,56 +860,33 @@ fn retention_vin(
     post_kind: RetentionBondPostKind,
     bond_spend_pk: &[u8],
 ) -> Option<ArchivalBondPostVin> {
-    let (kind, shard_ids) = match &bond.holdings {
+    let (holdings_kind, shard_ids) = match &bond.holdings {
         Holdings::ShardSetCompact(ids) => (
             HoldingsKind::ShardSetCompact,
             ShardSet::new(ids.clone()).ok()?,
         ),
         Holdings::CompleteTree => (HoldingsKind::CompleteTree, ShardSet::empty()),
     };
-    // The endpoint rides the wire kind (EU-D3): JoinMarket carries one, every
-    // other kind does not — the retention view mirrors that exactly, so
-    // `check_couplings` on the marshaled vin agrees with the wire.
-    let holdings = HoldingsDescriptor { kind, shard_ids };
-    let payload = match &bond.kind {
+    let kind = match &bond.kind {
         WireBondPostKind::JoinMarket { endpoint, .. } => {
-            shekyl_archival_retention::BondPostPayload::JoinMarket {
+            shekyl_archival_retention::BondKind::JoinMarket {
                 bond_spend_pk: bond_spend_pk.to_vec(),
                 endpoint: *endpoint,
-                holdings,
-                bonded_total_atomic: bond.bonded_total_atomic,
-                bond_credit: bond.bond_credit,
-                bond_debit: bond.bond_debit,
             }
         }
-        WireBondPostKind::Other(_) => match post_kind {
-            RetentionBondPostKind::Release => shekyl_archival_retention::BondPostPayload::Release {
-                holdings,
-                bonded_total_atomic: bond.bonded_total_atomic,
-                bond_credit: bond.bond_credit,
-                bond_debit: bond.bond_debit,
-            },
-            RetentionBondPostKind::Rebond => shekyl_archival_retention::BondPostPayload::Rebond {
-                holdings,
-                bonded_total_atomic: bond.bonded_total_atomic,
-                bond_credit: bond.bond_credit,
-                bond_debit: bond.bond_debit,
-            },
-            RetentionBondPostKind::HoldingsUpdate => {
-                shekyl_archival_retention::BondPostPayload::HoldingsUpdate {
-                    holdings,
-                    bonded_total_atomic: bond.bonded_total_atomic,
-                    bond_credit: bond.bond_credit,
-                    bond_debit: bond.bond_debit,
-                }
-            }
-            RetentionBondPostKind::JoinMarket => return None,
-        },
+        WireBondPostKind::Other(_) => post_kind.unit_kind()?,
     };
     Some(ArchivalBondPostVin {
         hybrid_public_key: bond.hybrid_public_key.clone(),
         p_canonical_id: bond.p_canonical_id,
-        payload,
+        kind,
+        holdings: HoldingsDescriptor {
+            kind: holdings_kind,
+            shard_ids,
+        },
+        bonded_total_atomic: bond.bonded_total_atomic,
+        bond_credit: bond.bond_credit,
+        bond_debit: bond.bond_debit,
     })
 }
 

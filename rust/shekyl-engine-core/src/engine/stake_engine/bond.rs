@@ -114,10 +114,6 @@ impl Message<AssembleBond> for StakeEngine {
         // pre-SA-2b signing circularity forced a second, public-parts
         // construction plus a runtime A-1 equality check; deleting the on-vin
         // signature deleted the circularity, and the duplicate with it.)
-        // The serving endpoint the bond advertises (EU-D3, mandatory): the
-        // persona's onion public key, minted here from the seed the actor
-        // holds and never returned — `OnionIdentity` yields the public half
-        // only; the expanded secret stays behind `mint_onion_key`.
         let endpoint = OnionIdentity::from_hs_id_seed(&keys.hs_id_seed).public_key();
         let built = build_join_market_vin(keys.bond_post_keys(), msg.holdings.clone(), endpoint)
             .map_err(StakeEngineError::BondBuild)?;
@@ -135,7 +131,7 @@ impl Message<AssembleBond> for StakeEngine {
         // ── Step 8: funding arithmetic (§3.2 balance rule, checked) ──────
         // `funding == change + fee + credit` exactly; change splits across
         // TWO outputs (daemon prunable-tx floor: `vout.size() < 2` rejects).
-        let floor = built.vin().bond_credit();
+        let floor = built.vin().bond_credit;
         let required = floor
             .checked_add(msg.fee)
             .ok_or(BondAssemblyError::AmountOverflow)?;

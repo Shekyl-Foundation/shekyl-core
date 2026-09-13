@@ -263,15 +263,7 @@ namespace boost
     a & x.hybrid_public_key;
     a & x.p_canonical_id;
     a & x.post_kind;
-    // §9.11 / EU-D3 coupling mirrored from the binary serializer: the GF-1
-    // debit authorizer (exact canonical single-key length) and the serving
-    // endpoint (raw 32 bytes) exist iff JoinMarket, in that order. Boost
-    // archives are internal (blob/pool paths), but they must refuse the same
-    // shapes the binary codec refuses — on load so a non-canonical key can
-    // never enter memory through this path (the record-commit at connect
-    // assumes no codec admits one), and on save so a misconstruction is loud
-    // instead of silently dropping a field. The stray-field branch is
-    // unreachable on load (both fields hold their zero defaults).
+    // JoinMarket-coupled fields iff JoinMarket, same shapes as the binary codec.
     if (x.post_kind == static_cast<uint8_t>(cryptonote::archival_bond_post_kind::JoinMarket))
     {
       a & x.bond_spend_pk;
@@ -279,13 +271,9 @@ namespace boost
         throw cryptonote::boost_archive_content_error("archival bond-post bond_spend_pk length not canonical");
       a & x.endpoint;
     }
-    else if (!x.bond_spend_pk.empty())
+    else if (!x.join_market_coupled_fields_absent())
     {
-      throw cryptonote::boost_archive_content_error("bond_spend_pk is JoinMarket-coupled");
-    }
-    else if (x.has_endpoint())
-    {
-      throw cryptonote::boost_archive_content_error("endpoint is JoinMarket-coupled");
+      throw cryptonote::boost_archive_content_error("JoinMarket-coupled field on a non-JoinMarket kind");
     }
     a & x.holdings;
     a & x.bonded_total_atomic;

@@ -695,7 +695,7 @@ fn verify_credit_funding_rejects_wrong_total() {
 
     let fee = AtomicUnits::from_raw(100);
     let outputs = AtomicUnits::from_raw(500);
-    let bond_credit = AtomicUnits::from_raw(vin.vin().bond_credit());
+    let bond_credit = AtomicUnits::from_raw(vin.vin().bond_credit);
     let correct_total = outputs
         .checked_add(fee)
         .and_then(|s| s.checked_add(bond_credit))

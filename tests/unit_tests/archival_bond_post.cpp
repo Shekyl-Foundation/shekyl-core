@@ -243,7 +243,7 @@ TEST(archival_bond_post, vin_serializer_enforces_endpoint_coupling)
     ASSERT_TRUE(encode(release, wire));
     txin_v decoded;
     ASSERT_TRUE(decode(wire, decoded));
-    EXPECT_FALSE(std::get<txin_archival_bond_post>(decoded).has_endpoint());
+    EXPECT_TRUE(std::get<txin_archival_bond_post>(decoded).join_market_coupled_fields_absent());
   }
   {
     // The kind bound is HoldingsUpdate: the byte one above it does not parse.

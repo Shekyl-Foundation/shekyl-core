@@ -31,10 +31,11 @@ pub const MAX_HOLDINGS_SHARDS: usize = 4096;
 
 /// The serving endpoint on the wire: the raw 32-byte Ed25519 public key of
 /// the persona's v3 onion service (`EU-D3`). The `.onion` address is a display
-/// form (`pubkey ‖ checksum ‖ version`, base32) — a reader reconstructs it;
-/// the wire never carries it.
+/// form; the wire never carries it.
 pub const ENDPOINT_BYTES: usize = 32;
 
+/// Wire discriminant of a bond-post vin (gate-4 §3.4.1). Copy so FFI, debit-auth,
+/// and `as u8` sites can name the byte without carrying JoinMarket's fields.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BondPostKind {
@@ -52,6 +53,56 @@ impl BondPostKind {
             2 => Ok(Self::Release),
             3 => Ok(Self::HoldingsUpdate),
             _ => Err(WireError::InvalidPostKind(v)),
+        }
+    }
+
+    /// Unit kinds: Rebond / Release / HoldingsUpdate. `None` for JoinMarket,
+    /// which needs `bond_spend_pk` and the endpoint before it is a [`BondKind`].
+    pub const fn unit_kind(self) -> Option<BondKind> {
+        match self {
+            Self::Rebond => Some(BondKind::Rebond),
+            Self::Release => Some(BondKind::Release),
+            Self::HoldingsUpdate => Some(BondKind::HoldingsUpdate),
+            Self::JoinMarket => None,
+        }
+    }
+}
+
+/// Kind of a decoded [`ArchivalBondPostVin`]. JoinMarket is the only variant
+/// that carries extra data (`bond_spend_pk` + serving endpoint). Holdings and
+/// the amount terms live on the vin — every kind has them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BondKind {
+    JoinMarket {
+        bond_spend_pk: Vec<u8>,
+        endpoint: [u8; ENDPOINT_BYTES],
+    },
+    Rebond,
+    Release,
+    HoldingsUpdate,
+}
+
+impl BondKind {
+    pub const fn tag(&self) -> BondPostKind {
+        match self {
+            Self::JoinMarket { .. } => BondPostKind::JoinMarket,
+            Self::Rebond => BondPostKind::Rebond,
+            Self::Release => BondPostKind::Release,
+            Self::HoldingsUpdate => BondPostKind::HoldingsUpdate,
+        }
+    }
+
+    pub fn bond_spend_pk(&self) -> Option<&[u8]> {
+        match self {
+            Self::JoinMarket { bond_spend_pk, .. } => Some(bond_spend_pk.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn endpoint(&self) -> Option<&[u8; ENDPOINT_BYTES]> {
+        match self {
+            Self::JoinMarket { endpoint, .. } => Some(endpoint),
+            _ => None,
         }
     }
 }
@@ -236,62 +287,18 @@ pub struct HoldingsDescriptor {
     pub shard_ids: ShardSet,
 }
 
-/// Kind-keyed payload of an [`ArchivalBondPostVin`]. The one presence
-/// coupling is the variant: `bond_spend_pk` and the serving endpoint exist
-/// only on [`Self::JoinMarket`] (`EU-D3`, §9.11); holdings and the amount
-/// term exist on every kind. A bonded persona's endpoint is fixed for the
-/// record's life — a new onion address is a new persona (Release, then a
-/// fresh JoinMarket).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BondPostPayload {
-    JoinMarket {
-        bond_spend_pk: Vec<u8>,
-        endpoint: [u8; ENDPOINT_BYTES],
-        holdings: HoldingsDescriptor,
-        bonded_total_atomic: u64,
-        bond_credit: u64,
-        bond_debit: u64,
-    },
-    Rebond {
-        holdings: HoldingsDescriptor,
-        bonded_total_atomic: u64,
-        bond_credit: u64,
-        bond_debit: u64,
-    },
-    Release {
-        holdings: HoldingsDescriptor,
-        bonded_total_atomic: u64,
-        bond_credit: u64,
-        bond_debit: u64,
-    },
-    HoldingsUpdate {
-        holdings: HoldingsDescriptor,
-        bonded_total_atomic: u64,
-        bond_credit: u64,
-        bond_debit: u64,
-    },
-}
-
-impl BondPostPayload {
-    pub const fn kind(&self) -> BondPostKind {
-        match self {
-            Self::JoinMarket { .. } => BondPostKind::JoinMarket,
-            Self::Rebond { .. } => BondPostKind::Rebond,
-            Self::Release { .. } => BondPostKind::Release,
-            Self::HoldingsUpdate { .. } => BondPostKind::HoldingsUpdate,
-        }
-    }
-}
-
-/// Byte-exact `txin_archival_bond_post` (gate-4 §3.4.1). The kind-keyed
-/// fields live in [`BondPostPayload`] so a JoinMarket without an endpoint or
-/// a Release with one is unrepresentable in memory — the same idiom
-/// `shekyl-wire` uses for the consensus tx.
+/// Byte-exact `txin_archival_bond_post` (gate-4 §3.4.1). JoinMarket-coupled
+/// fields live on [`BondKind`]; holdings and the amount terms are on the
+/// struct, matching `shekyl-wire::BondPost`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArchivalBondPostVin {
     pub hybrid_public_key: Vec<u8>,
     pub p_canonical_id: [u8; 32],
-    pub payload: BondPostPayload,
+    pub kind: BondKind,
+    pub holdings: HoldingsDescriptor,
+    pub bonded_total_atomic: u64,
+    pub bond_credit: u64,
+    pub bond_debit: u64,
 }
 
 #[derive(Debug)]
@@ -431,14 +438,14 @@ impl ArchivalBondPostVin {
         Self {
             hybrid_public_key,
             p_canonical_id,
-            payload: BondPostPayload::JoinMarket {
+            kind: BondKind::JoinMarket {
                 bond_spend_pk,
                 endpoint,
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit: 0,
             },
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit: 0,
         }
     }
 
@@ -453,12 +460,11 @@ impl ArchivalBondPostVin {
         Self {
             hybrid_public_key,
             p_canonical_id,
-            payload: BondPostPayload::Release {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            },
+            kind: BondKind::Release,
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
         }
     }
 
@@ -473,12 +479,11 @@ impl ArchivalBondPostVin {
         Self {
             hybrid_public_key,
             p_canonical_id,
-            payload: BondPostPayload::Rebond {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            },
+            kind: BondKind::Rebond,
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
         }
     }
 
@@ -493,114 +498,51 @@ impl ArchivalBondPostVin {
         Self {
             hybrid_public_key,
             p_canonical_id,
-            payload: BondPostPayload::HoldingsUpdate {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            },
+            kind: BondKind::HoldingsUpdate,
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
         }
     }
 
     pub const fn post_kind(&self) -> BondPostKind {
-        self.payload.kind()
-    }
-
-    /// The post's holdings. Every kind carries them.
-    pub fn holdings(&self) -> &HoldingsDescriptor {
-        match &self.payload {
-            BondPostPayload::JoinMarket { holdings, .. }
-            | BondPostPayload::Rebond { holdings, .. }
-            | BondPostPayload::Release { holdings, .. }
-            | BondPostPayload::HoldingsUpdate { holdings, .. } => holdings,
-        }
-    }
-
-    /// The record's bonded total after this post connects. Every kind carries it.
-    pub fn bonded_total_atomic(&self) -> u64 {
-        match &self.payload {
-            BondPostPayload::JoinMarket {
-                bonded_total_atomic,
-                ..
-            }
-            | BondPostPayload::Rebond {
-                bonded_total_atomic,
-                ..
-            }
-            | BondPostPayload::Release {
-                bonded_total_atomic,
-                ..
-            }
-            | BondPostPayload::HoldingsUpdate {
-                bonded_total_atomic,
-                ..
-            } => *bonded_total_atomic,
-        }
-    }
-
-    /// The credit term. Every kind carries it (zero where the kind moves no value in).
-    pub fn bond_credit(&self) -> u64 {
-        match &self.payload {
-            BondPostPayload::JoinMarket { bond_credit, .. }
-            | BondPostPayload::Rebond { bond_credit, .. }
-            | BondPostPayload::Release { bond_credit, .. }
-            | BondPostPayload::HoldingsUpdate { bond_credit, .. } => *bond_credit,
-        }
-    }
-
-    /// The debit term. Every kind carries it (zero where the kind moves no value out).
-    pub fn bond_debit(&self) -> u64 {
-        match &self.payload {
-            BondPostPayload::JoinMarket { bond_debit, .. }
-            | BondPostPayload::Rebond { bond_debit, .. }
-            | BondPostPayload::Release { bond_debit, .. }
-            | BondPostPayload::HoldingsUpdate { bond_debit, .. } => *bond_debit,
-        }
+        self.kind.tag()
     }
 
     pub fn bond_spend_pk(&self) -> Option<&[u8]> {
-        match &self.payload {
-            BondPostPayload::JoinMarket { bond_spend_pk, .. } => Some(bond_spend_pk.as_slice()),
-            _ => None,
-        }
+        self.kind.bond_spend_pk()
     }
 
-    /// The serving endpoint: present iff JoinMarket (`EU-D3`).
     pub fn endpoint(&self) -> Option<&[u8; ENDPOINT_BYTES]> {
-        match &self.payload {
-            BondPostPayload::JoinMarket { endpoint, .. } => Some(endpoint),
-            _ => None,
-        }
+        self.kind.endpoint()
     }
 
-    /// Remaining write-time checks that the payload type cannot hold:
-    /// hybrid-key length, JoinMarket `bond_spend_pk` length, holdings bounds.
-    /// Presence couplings are the variant — they are not checked here.
+    /// Write-time checks the kind type cannot hold: hybrid-key length,
+    /// JoinMarket `bond_spend_pk` length, holdings bounds. Presence couplings
+    /// are the variant — they are not checked here.
     pub fn check_couplings(&self) -> Result<(), WireError> {
         if self.hybrid_public_key.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
             return Err(WireError::HybridPubkeyLenNotCanonical {
                 got: self.hybrid_public_key.len(),
             });
         }
-        if let BondPostPayload::JoinMarket { bond_spend_pk, .. } = &self.payload {
+        if let BondKind::JoinMarket { bond_spend_pk, .. } = &self.kind {
             if bond_spend_pk.len() != HYBRID_PUBKEY_CANONICAL_BYTES {
                 return Err(WireError::BondSpendPkLenNotCanonical {
                     got: bond_spend_pk.len(),
                 });
             }
         }
+        if self.holdings.kind == HoldingsKind::ShardSetCompact
+            && self.holdings.shard_ids.len() > MAX_HOLDINGS_SHARDS
         {
-            let holdings = self.holdings();
-            if holdings.kind == HoldingsKind::ShardSetCompact
-                && holdings.shard_ids.len() > MAX_HOLDINGS_SHARDS
-            {
-                return Err(WireError::HoldingsCountExceeded {
-                    got: holdings.shard_ids.len(),
-                });
-            }
-            if holdings.kind == HoldingsKind::CompleteTree && !holdings.shard_ids.is_empty() {
-                return Err(WireError::ShardListForbiddenForCompleteTree);
-            }
+            return Err(WireError::HoldingsCountExceeded {
+                got: self.holdings.shard_ids.len(),
+            });
+        }
+        if self.holdings.kind == HoldingsKind::CompleteTree && !self.holdings.shard_ids.is_empty() {
+            return Err(WireError::ShardListForbiddenForCompleteTree);
         }
         Ok(())
     }
@@ -612,47 +554,19 @@ impl ArchivalBondPostVin {
         w.write_all(&self.hybrid_public_key)?;
         w.write_all(&self.p_canonical_id)?;
         w.write_all(&[self.post_kind() as u8])?;
-        match &self.payload {
-            BondPostPayload::JoinMarket {
-                bond_spend_pk,
-                endpoint,
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            } => {
-                write_varint(&bond_spend_pk.len(), w)?;
-                w.write_all(bond_spend_pk)?;
-                w.write_all(endpoint)?;
-                write_holdings_descriptor(w, holdings)?;
-                write_varint(bonded_total_atomic, w)?;
-                write_varint(bond_credit, w)?;
-                write_varint(bond_debit, w)?;
-            }
-            BondPostPayload::Rebond {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            }
-            | BondPostPayload::Release {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            }
-            | BondPostPayload::HoldingsUpdate {
-                holdings,
-                bonded_total_atomic,
-                bond_credit,
-                bond_debit,
-            } => {
-                write_holdings_descriptor(w, holdings)?;
-                write_varint(bonded_total_atomic, w)?;
-                write_varint(bond_credit, w)?;
-                write_varint(bond_debit, w)?;
-            }
+        if let BondKind::JoinMarket {
+            bond_spend_pk,
+            endpoint,
+        } = &self.kind
+        {
+            write_varint(&bond_spend_pk.len(), w)?;
+            w.write_all(bond_spend_pk)?;
+            w.write_all(endpoint)?;
         }
+        write_holdings_descriptor(w, &self.holdings)?;
+        write_varint(&self.bonded_total_atomic, w)?;
+        write_varint(&self.bond_credit, w)?;
+        write_varint(&self.bond_debit, w)?;
         Ok(())
     }
 
@@ -670,8 +584,8 @@ impl ArchivalBondPostVin {
         let mut hybrid_public_key = vec![0u8; pk_len];
         r.read_exact(&mut hybrid_public_key)?;
         let p_canonical_id = read_bytes(r)?;
-        let post_kind = BondPostKind::from_u8(read_byte(r)?)?;
-        let payload = match post_kind {
+        let tag = BondPostKind::from_u8(read_byte(r)?)?;
+        let kind = match tag {
             BondPostKind::JoinMarket => {
                 let spk_len: usize = read_varint(r)?;
                 if spk_len != HYBRID_PUBKEY_CANONICAL_BYTES {
@@ -680,53 +594,27 @@ impl ArchivalBondPostVin {
                 let mut bond_spend_pk = vec![0u8; spk_len];
                 r.read_exact(&mut bond_spend_pk)?;
                 let endpoint = read_bytes(r)?;
-                let holdings = read_holdings_descriptor(r)?;
-                let bonded_total_atomic = read_varint(r)?;
-                let bond_credit = read_varint(r)?;
-                let bond_debit = read_varint(r)?;
-                BondPostPayload::JoinMarket {
+                BondKind::JoinMarket {
                     bond_spend_pk,
                     endpoint,
-                    holdings,
-                    bonded_total_atomic,
-                    bond_credit,
-                    bond_debit,
                 }
             }
-            BondPostKind::Rebond | BondPostKind::Release | BondPostKind::HoldingsUpdate => {
-                let holdings = read_holdings_descriptor(r)?;
-                let bonded_total_atomic = read_varint(r)?;
-                let bond_credit = read_varint(r)?;
-                let bond_debit = read_varint(r)?;
-                match post_kind {
-                    BondPostKind::Rebond => BondPostPayload::Rebond {
-                        holdings,
-                        bonded_total_atomic,
-                        bond_credit,
-                        bond_debit,
-                    },
-                    BondPostKind::Release => BondPostPayload::Release {
-                        holdings,
-                        bonded_total_atomic,
-                        bond_credit,
-                        bond_debit,
-                    },
-                    BondPostKind::HoldingsUpdate => BondPostPayload::HoldingsUpdate {
-                        holdings,
-                        bonded_total_atomic,
-                        bond_credit,
-                        bond_debit,
-                    },
-                    BondPostKind::JoinMarket => {
-                        unreachable!("JoinMarket takes its own read arm")
-                    }
-                }
-            }
+            BondPostKind::Rebond => BondKind::Rebond,
+            BondPostKind::Release => BondKind::Release,
+            BondPostKind::HoldingsUpdate => BondKind::HoldingsUpdate,
         };
+        let holdings = read_holdings_descriptor(r)?;
+        let bonded_total_atomic = read_varint(r)?;
+        let bond_credit = read_varint(r)?;
+        let bond_debit = read_varint(r)?;
         Ok(Self {
             hybrid_public_key,
             p_canonical_id,
-            payload,
+            kind,
+            holdings,
+            bonded_total_atomic,
+            bond_credit,
+            bond_debit,
         })
     }
 
@@ -751,70 +639,17 @@ impl ArchivalBondPostVin {
 
 #[cfg(test)]
 impl ArchivalBondPostVin {
-    pub(crate) fn set_bond_debit(&mut self, debit: u64) {
-        *self.debit_mut() = debit;
-    }
-
-    pub(crate) fn set_bond_credit(&mut self, credit: u64) {
-        *self.credit_mut() = credit;
-    }
-
-    pub(crate) fn set_bonded_total(&mut self, total: u64) {
-        *self.total_mut() = total;
-    }
-
-    pub(crate) fn holdings_mut(&mut self) -> &mut HoldingsDescriptor {
-        match &mut self.payload {
-            BondPostPayload::JoinMarket { holdings, .. }
-            | BondPostPayload::Rebond { holdings, .. }
-            | BondPostPayload::Release { holdings, .. }
-            | BondPostPayload::HoldingsUpdate { holdings, .. } => holdings,
-        }
-    }
-
     pub(crate) fn set_bond_spend_pk(&mut self, pk: Vec<u8>) {
-        match &mut self.payload {
-            BondPostPayload::JoinMarket { bond_spend_pk, .. } => *bond_spend_pk = pk,
+        match &mut self.kind {
+            BondKind::JoinMarket { bond_spend_pk, .. } => *bond_spend_pk = pk,
             _ => panic!("bond_spend_pk exists only on JoinMarket"),
         }
     }
 
-    fn debit_mut(&mut self) -> &mut u64 {
-        match &mut self.payload {
-            BondPostPayload::JoinMarket { bond_debit, .. }
-            | BondPostPayload::Rebond { bond_debit, .. }
-            | BondPostPayload::Release { bond_debit, .. }
-            | BondPostPayload::HoldingsUpdate { bond_debit, .. } => bond_debit,
-        }
-    }
-
-    fn credit_mut(&mut self) -> &mut u64 {
-        match &mut self.payload {
-            BondPostPayload::JoinMarket { bond_credit, .. }
-            | BondPostPayload::Rebond { bond_credit, .. }
-            | BondPostPayload::Release { bond_credit, .. }
-            | BondPostPayload::HoldingsUpdate { bond_credit, .. } => bond_credit,
-        }
-    }
-
-    fn total_mut(&mut self) -> &mut u64 {
-        match &mut self.payload {
-            BondPostPayload::JoinMarket {
-                bonded_total_atomic,
-                ..
-            }
-            | BondPostPayload::Rebond {
-                bonded_total_atomic,
-                ..
-            }
-            | BondPostPayload::Release {
-                bonded_total_atomic,
-                ..
-            }
-            | BondPostPayload::HoldingsUpdate {
-                bonded_total_atomic,
-                ..
-            } => bonded_total_atomic,
+    pub(crate) fn set_endpoint(&mut self, ep: [u8; ENDPOINT_BYTES]) {
+        match &mut self.kind {
+            BondKind::JoinMarket { endpoint, .. } => *endpoint = ep,
+            _ => panic!("endpoint exists only on JoinMarket"),
         }
     }
 }

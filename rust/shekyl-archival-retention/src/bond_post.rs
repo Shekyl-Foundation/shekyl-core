@@ -20,9 +20,7 @@
 use thiserror::Error;
 
 use crate::bond_floor::{bond_floor, bond_floor_of};
-use crate::bond_wire::{
-    ArchivalBondPostVin, BondPostKind, BondPostPayload, HoldingsDescriptor, HoldingsKind,
-};
+use crate::bond_wire::{ArchivalBondPostVin, BondKind, BondPostKind, HoldingsKind};
 use crate::distinct::all_distinct;
 use crate::release_cooldown::{release_cooldown_elapsed, slashes_settled_through};
 
@@ -211,27 +209,15 @@ pub(crate) fn single_shard_diff(current: &[u64], post: &[u64]) -> SingleDiff {
 /// empty-pre-image journal encode — a verify-valid tx no block can connect
 /// (chain-stall vector). Re-entry after an exit or a full slash is
 /// `JoinMarket`/`Rebond`, never a voluntary adjustment.
-fn holdings_update_fields(
+fn holdings_update_prologue(
     vin: &ArchivalBondPostVin,
-) -> Result<(&HoldingsDescriptor, u64, u64, u64), BondPostError> {
-    match &vin.payload {
-        BondPostPayload::HoldingsUpdate {
-            holdings,
-            bonded_total_atomic,
-            bond_credit,
-            bond_debit,
-        } => Ok((holdings, *bonded_total_atomic, *bond_credit, *bond_debit)),
-        _ => Err(BondPostError::PostKindNotHoldingsUpdate),
-    }
-}
-
-fn holdings_update_prologue<'a>(
-    vin: &'a ArchivalBondPostVin,
     record_bonded_total: Option<u64>,
     record_holdings_kind: HoldingsKind,
     record_held_shard_ids: &[u64],
-) -> Result<(u64, &'a HoldingsDescriptor, u64, u64, u64), BondPostError> {
-    let (holdings, bonded_total_atomic, bond_credit, bond_debit) = holdings_update_fields(vin)?;
+) -> Result<u64, BondPostError> {
+    if !matches!(vin.kind, BondKind::HoldingsUpdate) {
+        return Err(BondPostError::PostKindNotHoldingsUpdate);
+    }
     let Some(current_bonded) = record_bonded_total else {
         return Err(BondPostError::RecordMissing);
     };
@@ -240,19 +226,13 @@ fn holdings_update_prologue<'a>(
     if record_holdings_kind != HoldingsKind::ShardSetCompact {
         return Err(BondPostError::HoldingsUpdateOnCompleteTree);
     }
-    if holdings.kind != HoldingsKind::ShardSetCompact {
+    if vin.holdings.kind != HoldingsKind::ShardSetCompact {
         return Err(BondPostError::HoldingsUpdatePostNotCompact);
     }
     if current_bonded == 0 || record_held_shard_ids.is_empty() {
         return Err(BondPostError::HoldingsUpdateRecordNotBonded);
     }
-    Ok((
-        current_bonded,
-        holdings,
-        bonded_total_atomic,
-        bond_credit,
-        bond_debit,
-    ))
+    Ok(current_bonded)
 }
 
 /// Verify `HoldingsUpdate`-**add** bond-post semantics — voluntary growth of a
@@ -281,15 +261,14 @@ pub fn verify_holdings_update_add(
     record_bad_intervals: &[crate::consensus_state::BadInterval],
     current_settlement_epoch: u64,
 ) -> Result<(), BondPostError> {
-    let (current_bonded, holdings, bonded_total_atomic, bond_credit, bond_debit) =
-        holdings_update_prologue(
-            vin,
-            record_bonded_total,
-            record_holdings_kind,
-            record_held_shard_ids,
-        )?;
+    let current_bonded = holdings_update_prologue(
+        vin,
+        record_bonded_total,
+        record_holdings_kind,
+        record_held_shard_ids,
+    )?;
     // Credit direction (§3.2 term table): exactly `+FLOOR`, no debit.
-    if bond_debit != 0 || bond_credit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
+    if vin.bond_debit != 0 || vin.bond_credit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
         return Err(BondPostError::HoldingsUpdateAddTerms);
     }
     // Good standing (Q4): voluntary growth requires the record be good_through the
@@ -302,16 +281,16 @@ pub fn verify_holdings_update_add(
         return Err(BondPostError::HoldingsUpdateNotGoodStanding);
     }
     // Exactly one shard added; the post is `current ∪ {new}` (set semantics).
-    match single_shard_diff(record_held_shard_ids, &holdings.shard_ids) {
+    match single_shard_diff(record_held_shard_ids, &vin.holdings.shard_ids) {
         SingleDiff::Added(_) => {}
         _ => return Err(BondPostError::HoldingsUpdateNotSingleAdd),
     }
     // Floor equality on the post-state: bonded_total == bond_floor(post) ==
     // (|current| + 1)·FLOOR. `bond_credit == FLOOR` (checked above) is the
     // single-shard increment; this pins the resulting total.
-    let post_floor = bond_floor(holdings);
-    if bonded_total_atomic != post_floor
-        || bonded_total_atomic
+    let post_floor = bond_floor(&vin.holdings);
+    if vin.bonded_total_atomic != post_floor
+        || vin.bonded_total_atomic
             != current_bonded.saturating_add(crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC)
     {
         return Err(BondPostError::HoldingsUpdateAddFloorMismatch);
@@ -354,32 +333,33 @@ pub fn verify_holdings_update_drop(
     last_settled_slash_epoch: Option<u64>,
     current_settlement_epoch: u64,
 ) -> Result<(), BondPostError> {
-    let (current_bonded, holdings, bonded_total_atomic, bond_credit, bond_debit) =
-        holdings_update_prologue(
-            vin,
-            record_bonded_total,
-            record_holdings_kind,
-            record_held_shard_ids,
-        )?;
+    let current_bonded = holdings_update_prologue(
+        vin,
+        record_bonded_total,
+        record_holdings_kind,
+        record_held_shard_ids,
+    )?;
     // Debit direction (§3.2 term table): exactly `−FLOOR`, no credit.
-    if bond_credit != 0 || bond_debit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
+    if vin.bond_credit != 0 || vin.bond_debit != crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC {
         return Err(BondPostError::HoldingsUpdateDropTerms);
     }
     // Exactly one shard removed, and it is the shard C++ read facts for.
-    match single_shard_diff(record_held_shard_ids, &holdings.shard_ids) {
+    match single_shard_diff(record_held_shard_ids, &vin.holdings.shard_ids) {
         SingleDiff::Removed(s) if s == dropped_shard_id => {}
         _ => return Err(BondPostError::HoldingsUpdateNotSingleDrop),
     }
     // Drop-last-shard rejected: a full exit is `Release` (→ `Exited`), not a drop
     // that would leave an empty ShardSetCompact (P2B-7 Pin 1).
-    if holdings.shard_ids.is_empty() {
+    if vin.holdings.shard_ids.is_empty() {
         return Err(BondPostError::HoldingsUpdateDropLastShard);
     }
     // Floor equality on the post-state: bonded_total == bond_floor(post) ==
     // (|current| − 1)·FLOOR.
-    let post_floor = bond_floor(holdings);
-    if bonded_total_atomic != post_floor
-        || bonded_total_atomic.saturating_add(crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC)
+    let post_floor = bond_floor(&vin.holdings);
+    if vin.bonded_total_atomic != post_floor
+        || vin
+            .bonded_total_atomic
+            .saturating_add(crate::bond_floor::ARCHIVAL_BOND_FLOOR_ATOMIC)
             != current_bonded
     {
         return Err(BondPostError::HoldingsUpdateDropFloorMismatch);
@@ -464,15 +444,9 @@ pub fn verify_rebond_bond_post(
     record_held_shard_ids: &[u64],
     record_bad_intervals: &[crate::consensus_state::BadInterval],
 ) -> Result<(), BondPostError> {
-    let BondPostPayload::Rebond {
-        holdings,
-        bonded_total_atomic,
-        bond_credit,
-        bond_debit,
-    } = &vin.payload
-    else {
+    if !matches!(vin.kind, BondKind::Rebond) {
         return Err(BondPostError::PostKindNotRebond);
-    };
+    }
     let Some(current_bonded) = record_bonded_total else {
         return Err(BondPostError::RecordMissing);
     };
@@ -481,12 +455,12 @@ pub fn verify_rebond_bond_post(
     if record_holdings_kind != HoldingsKind::ShardSetCompact {
         return Err(BondPostError::RebondOnCompleteTree);
     }
-    if holdings.kind != HoldingsKind::ShardSetCompact {
+    if vin.holdings.kind != HoldingsKind::ShardSetCompact {
         return Err(BondPostError::RebondPostNotCompact);
     }
     // Reinstatement needs a position to reinstate into; `∅` is a zombie (good
     // standing, no shards, no balance — HU-add and Release both reject it).
-    if holdings.shard_ids.is_empty() {
+    if vin.holdings.shard_ids.is_empty() {
         return Err(BondPostError::ShardSetCompactEmpty);
     }
     // (No oversize guard here: `vin.holdings.shard_ids` is a `ShardSet`, bounded
@@ -511,7 +485,7 @@ pub fn verify_rebond_bond_post(
     }
     // Pin 1: duplicate-free superset of the current holdings. (The added-set
     // itself is the CONNECT fold's operand — verify only needs the shape.)
-    if superset_added_diff(record_held_shard_ids, &holdings.shard_ids).is_none() {
+    if superset_added_diff(record_held_shard_ids, &vin.holdings.shard_ids).is_none() {
         return Err(BondPostError::RebondNotSuperset);
     }
     // §3.2 record floor invariant, checked HERE against the marshaled record
@@ -528,14 +502,14 @@ pub fn verify_rebond_bond_post(
     // zero legal); post-state floor equality. `checked_sub` fails closed on
     // a record whose bonded exceeds the post floor (corruption — the superset
     // makes an honest shrink unrepresentable).
-    if *bond_debit != 0 {
+    if vin.bond_debit != 0 {
         return Err(BondPostError::RebondTerms);
     }
-    let post_floor = bond_floor(holdings);
+    let post_floor = bond_floor(&vin.holdings);
     let Some(expected_credit) = post_floor.checked_sub(current_bonded) else {
         return Err(BondPostError::RebondTerms);
     };
-    if *bond_credit != expected_credit || *bonded_total_atomic != post_floor {
+    if vin.bond_credit != expected_credit || vin.bonded_total_atomic != post_floor {
         return Err(BondPostError::RebondTerms);
     }
     Ok(())
@@ -555,15 +529,7 @@ pub fn verify_join_market_bond_post(
     vin: &ArchivalBondPostVin,
     record_exists: bool,
 ) -> Result<(), BondPostError> {
-    let BondPostPayload::JoinMarket {
-        endpoint,
-        holdings,
-        bonded_total_atomic,
-        bond_credit,
-        bond_debit,
-        ..
-    } = &vin.payload
-    else {
+    let BondKind::JoinMarket { endpoint, .. } = &vin.kind else {
         return Err(BondPostError::PostKindNotJoinMarket);
     };
 
@@ -571,28 +537,28 @@ pub fn verify_join_market_bond_post(
         return Err(BondPostError::EndpointZero);
     }
 
-    match holdings.kind {
-        HoldingsKind::ShardSetCompact if holdings.shard_ids.is_empty() => {
+    match vin.holdings.kind {
+        HoldingsKind::ShardSetCompact if vin.holdings.shard_ids.is_empty() => {
             return Err(BondPostError::ShardSetCompactEmpty);
         }
-        HoldingsKind::CompleteTree if !holdings.shard_ids.is_empty() => {
+        HoldingsKind::CompleteTree if !vin.holdings.shard_ids.is_empty() => {
             return Err(BondPostError::CompleteTreeWithShardIds);
         }
         _ => {}
     }
 
-    if *bond_credit > 0 && *bond_debit > 0 {
+    if vin.bond_credit > 0 && vin.bond_debit > 0 {
         return Err(BondPostError::BothTermsNonzero);
     }
-    if *bond_debit != 0 {
+    if vin.bond_debit != 0 {
         return Err(BondPostError::BondDebitNonzero);
     }
 
-    let floor = bond_floor(holdings);
+    let floor = bond_floor(&vin.holdings);
     if floor == 0 {
         return Err(BondPostError::BondFloorZero);
     }
-    if *bonded_total_atomic != floor || *bond_credit != floor {
+    if vin.bonded_total_atomic != floor || vin.bond_credit != floor {
         return Err(BondPostError::FloorMismatch);
     }
 
@@ -635,11 +601,8 @@ pub fn release_pre_cooldown_guards(
         return Err(BondPostError::NothingToRelease);
     }
     release_vin_statics(vin)?;
-    let BondPostPayload::Release { bond_debit, .. } = &vin.payload else {
-        return Err(BondPostError::PostKindNotRelease);
-    };
     // The debit removes the whole current balance (§3.2 table; §4.3 refund).
-    if *bond_debit != current_bonded {
+    if vin.bond_debit != current_bonded {
         return Err(BondPostError::DebitNotFullBalance);
     }
     // The connect must append the clean interval-close (§4.3 F3); a full log
@@ -666,35 +629,29 @@ pub fn release_pre_cooldown_guards(
 /// the block path and the submit pre-gate call the same function, and the order
 /// inside `verify_release_bond_post` is unchanged.
 pub fn release_vin_statics(vin: &ArchivalBondPostVin) -> Result<(), BondPostError> {
-    let BondPostPayload::Release {
-        holdings,
-        bonded_total_atomic,
-        bond_credit,
-        bond_debit: _,
-    } = &vin.payload
-    else {
+    if !matches!(vin.kind, BondKind::Release) {
         return Err(BondPostError::PostKindNotRelease);
-    };
-    if *bond_credit != 0 {
+    }
+    if vin.bond_credit != 0 {
         return Err(BondPostError::ReleaseCreditNonzero);
     }
 
     // Step-4 floor equality on the vin's post-connect state (§3.5 debit-path note).
-    let floor = bond_floor(holdings);
+    let floor = bond_floor(&vin.holdings);
     // A full Release ends at the canonical empty holdings, whose floor is 0. But
     // `bond_floor` also returns 0 for a structurally-invalid (oversize) shard set,
     // so a floor-0 descriptor that still carries shards is not an exit — reject it
     // rather than let it masquerade as empty. (Join rejects floor-0 outright as
     // `BondFloorZero`; Release cannot, because the empty end-state is legitimately
     // floor 0, so it guards the non-empty case explicitly.)
-    if floor == 0 && !holdings.shard_ids.is_empty() {
+    if floor == 0 && !vin.holdings.shard_ids.is_empty() {
         return Err(BondPostError::ReleaseHoldingsNotEmpty);
     }
-    if *bonded_total_atomic != floor {
+    if vin.bonded_total_atomic != floor {
         return Err(BondPostError::ReleaseFloorMismatch);
     }
     // Full exit: post-connect total is zero (⇒ empty holdings, by floor equality).
-    if *bonded_total_atomic != 0 {
+    if vin.bonded_total_atomic != 0 {
         return Err(BondPostError::NotFullRelease);
     }
     Ok(())

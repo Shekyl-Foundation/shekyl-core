@@ -62,7 +62,7 @@ fn bond_post_complete_tree_has_no_shard_list_on_wire() {
     );
     let wire = vin.serialize().unwrap();
     let decoded = ArchivalBondPostVin::read(&mut wire.as_slice()).unwrap();
-    let holdings = decoded.holdings();
+    let holdings = decoded.holdings;
     assert_eq!(holdings.kind, HoldingsKind::CompleteTree);
     assert!(holdings.shard_ids.is_empty());
 }

@@ -605,9 +605,7 @@ pub enum BondPostKind {
     JoinMarket {
         /// The GF-1 debit authorizer hybrid public key.
         bond_spend_pk: Vec<u8>,
-        /// The persona's serving endpoint (`EU-D3`): mandatory on JoinMarket —
-        /// a bonded persona's endpoint is fixed for the record's life, so a
-        /// new onion address is a new persona (Release, then JoinMarket).
+        /// Serving endpoint: 32-byte onion pubkey, mandatory on JoinMarket.
         endpoint: [u8; BOND_POST_ENDPOINT_LEN],
     },
     /// Any non-JoinMarket post kind — no `bond_spend_pk` and no endpoint on the

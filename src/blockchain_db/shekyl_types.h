@@ -1109,10 +1109,8 @@ private:
 //
 // Versioned LMDB value for `archival_bond` (gate-4 §4; serve-credit reads).
 //
-// v7 (EU-D3) inserts the 32-byte serving `endpoint` after `bond_spend_pk`:
-// committed at JoinMarket connect from the vin's endpoint field and, like the
-// key before it, written once and immutable for the record's life — no
-// bond-post kind mutates it, so no journal restores it.
+// v7 inserts the 32-byte serving `endpoint` after `bond_spend_pk` (written
+// once at JoinMarket connect; no later kind mutates it).
 // v6 (HoldingsUpdate, gate-4 §4.4) appends the per-shard `shard_add_epochs`
 // array — index-parallel to `held_shard_ids` under one shared count — powering
 // the drop-eligibility gate and per-shard E_add+1 counting. v5 (GF-1, gate-4
@@ -1176,13 +1174,8 @@ struct ArchivalBondValue {
     /// canonical-length requirement is the writers'/verify's (every record is
     /// created by JoinMarket connect, whose vin serializer enforces it).
     std::vector<uint8_t> bond_spend_pk;
-    /// v7 (EU-D3): the serving endpoint — the raw 32-byte hidden-service
-    /// public key of the persona's v3 onion service. Written once at
-    /// JoinMarket connect from the vin and immutable for the record's life
-    /// (a new onion address is a new persona: Release, then a fresh
-    /// JoinMarket). Any 32 bytes; the codec pins no value (a zero key is
-    /// what the vin carried, not an absence — the write side does not refuse
-    /// it either).
+    /// v7: 32-byte serving endpoint, written once at JoinMarket connect.
+    /// Any 32 bytes (zero is a value the vin carried, not an absence).
     std::array<uint8_t, 32> endpoint{};
     uint64_t join_settlement_epoch = 0;
     /// Per-P bonded balance (gate-4 §4.1); must equal `bond_floor(holdings)` post-connect.
