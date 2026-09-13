@@ -520,3 +520,162 @@ history is in PR #712, not here.
   `EU-D8` the rotation index would *be* the service index, index 0 the first
   address, and no separate settlement needed. That is this record's reading,
   put to Rick at D's design pass; it does not carry the round's status.
+
+---
+
+## 17. D's design pass — PROPOSED 2026-09-12, put to Rick; nothing here carries the round's status
+
+D is the step `EU-D10` leaves for last: the `hs_id` derivation takes a
+rotation index under a new label (`EU-D8`), V1 is deleted and V2 minted under
+the decision-log entry `EU-D8` cites, and the wallet producer for
+`EndpointUpdate` lands with `PENDING_POST_VERSION` 10→11 (`EU-D13`), closing
+B's STAGED posture. This section is the pass B's readiness sweep was for B:
+the tree was read at `2b3de8ee5` before D's first code commit, and what
+follows is what the rulings do not yet cover. Each item is **PROPOSED**; the
+rulings go into `EU-D14`… when Rick makes them, and this section is then
+replaced by them (a round-doc row states what *is* true).
+
+### 17.1 Settled by the round — not reopened here
+
+- **The preimage is single-stage.** `EU-D8` puts the rotation index *in the
+  preimage* of the labeled derivation. The proposed `p_info` for the `hs_id`
+  tier is `ARCHIVAL_P_HS_ID_INFO ‖ 0x00 ‖ p_slot_le32 ‖ rotation_le32` — both
+  operands fixed-width `u32`, so no second separator is needed and the
+  encoding is injective. The other seven labels keep the existing
+  `label ‖ 0x00 ‖ p_slot_le32` (decision log: "only the `hs_id` tier
+  changes"). A two-stage shape (a per-slot root, then a rotation expansion) is
+  a *different function* from the one ruled and is not offered.
+- **Who rotates.** The bundle that signs a Release: `ArchivalPKeys` with
+  `bond_spend_sk` resident. `EU-D2`'s cold authority is the record's committed
+  `bond_spend_pk`; no new wallet capability is involved.
+- **Serving-side hand-over.** `EU-D4` makes the rotation take effect at the
+  next epoch open, so the old address must keep serving until then. That is
+  the persona serving loop's lifecycle wiring, which
+  `ARCHIVAL_CHALLENGE_MECHANISM.md` records as unbuilt; D's obligation is to
+  expose the current rotation's identity from the bundle. Handed onward as a
+  premise, §16-style, not taken into D.
+
+### 17.2 D-1 PROPOSED: rotation seeds come from a lookahead window derived at open
+
+**Grounding.** `lifecycle/assemble.rs` borrows the master seed transiently at
+open, derives one `ArchivalPKeys` per slot in the persona lookahead window,
+and retains the bundles, not the seed (Model D). `ArchivalPKeys.hs_id_seed`
+is carried for exactly this reason ("under Model D the master seed is gone
+after derivation"). So a rotation *cannot* re-derive from the master seed at
+rotation time; whatever rotation a session can post must have been derived
+at open.
+
+**Proposal.** The bundle carries a small window of `hs_id` seeds,
+`[current, current + ARCHIVAL_HS_ID_ROTATION_LOOKAHEAD)`, each under the v2
+preimage, behind one accessor `hs_id_seed_for(rotation) -> Option<&[u8; 32]>`.
+The three readers of `.hs_id_seed` today (`stake_engine/bond.rs`,
+`stake_engine/persona.rs` ×2) become "the current rotation"; the producer
+reads `current + 1`. The cost is one HKDF expand per window entry per bundle
+per open — negligible next to the PQ keygen the same open already pays.
+Proposed width **8**: a rotation is a confirmed chain transaction under cold
+custody (`EU-D5`), so eight in one session is not a realistic path; exhausting
+the window is a typed refusal ("reopen to continue rotating"), never a silent
+wrap. The alternative that has no exhaustion — a per-slot root retained in the
+bundle — is the two-stage shape §17.1 does not offer.
+
+### 17.3 D-2 PROPOSED: the current rotation index is a persisted hint, reconciled against the chain; `STAKING_BLOCK_VERSION` 2→3
+
+**Grounding.** `StakingBlock` already holds `bonded_slots` under documented
+hint-not-truth semantics (persist-before-use, reconciled at open, orphans
+GC'd) and `bond_sightings` for restore-from-seed. `EU-D13` enumerated D's
+persisted-shape changes as `PENDING_POST_VERSION` alone; this pass finds a
+second one. The rotation index has the same shape as `bonded_slots`: a wallet
+needs it *before* the scan has read anything (to publish the serving identity
+at open), and a restored-from-seed wallet does not have it.
+
+**Proposal.** `StakingBlock` gains `endpoint_rotation: BTreeMap<u32, u32>`
+(slot → current rotation; absent = 0), a derive-time hint. Truth is the
+chain: the record's endpoint is written only by JoinMarket and
+`EndpointUpdate` posts, both of which the principal scan's bond watch already
+matches by `p_canonical_id` (`bond_watch.rs` maps kind 4 today), so the last
+confirmed endpoint-bearing post for the slot *is* the record's endpoint.
+Reconciliation is derive-and-match: at merge, the sighted endpoint is
+compared against the identities of `[hint, hint + window)` and the hint set
+to the match. The hint is **monotone** like `p_slot`, for liveness rather than
+privacy: a rolled-back hint would re-serve an address the record no longer
+names, so the witness misses and the persona is slashed for an address it
+never stopped serving. An `EndpointUpdate` sighting must **not** adopt the
+slot as bonded (`sightings_in`'s JoinMarket-only filter stays; a separate
+endpoint sighting is recorded). This is a second schema bump, rule 42 snapshot
+included, outside `EU-D13`'s enumeration — hence a ruling, not a call.
+
+### 17.4 D-3 PROPOSED: the `EndpointUpdate` submit battery is inside D
+
+**Grounding.** `shekyl-daemon-rpc/src/submit/verifier.rs` refuses
+HoldingsUpdate, Rebond and `EndpointUpdate` at submit under rule 21 with the
+reopening criterion "a producer" and the re-evaluation shape "§8.7.1.1 pattern
+— matrix rows, `SubmitFacts` bundle, Phase-D disposition per fact". D *is* the
+producer, and a producer whose submissions the daemon refuses is not one
+(producers and callers land together).
+
+**Shape.** Phase-B facts: record present, `bonded_total > 0` (`EU-D7`),
+`auth_pubkey == record.bond_spend_pk` (the shared cold pin; possession by the
+UB0-style pre-gate). Phase-D re-check: the bonded total only — an exit or
+slash connecting during Phase C; the pinned key is immutable and a racing
+rotation from elsewhere changes nothing the verify reads. C++ delta, sized at
+`daemon_submit_ffi.{h,cpp}`: a third probe kind
+(`SHEKYL_SUBMIT_BOND_PROBE_ENDPOINT_UPDATE`) that gathers presence, the bonded
+total and `bond_spend_pk` — the *cheap* half of the Release gather, without
+the per-shard last-served scan — and the commit shim's `bond_is_release` bool
+becomes the kind byte. Marshal only, no verdict (rule 20). The POD's "valid
+iff the probe kind was `_RELEASE`" comment on `bond_record_bonded_total`
+widens to both debit-side kinds.
+
+### 17.5 D-4 PROPOSED: §16's reading — the rotation index is the service index; JoinMarket commits rotation 0
+
+As §16 states it. Consequences: the JoinMarket producer derives its endpoint
+from rotation 0; rotation `n`'s `EndpointUpdate` carries the public key of
+`hs_id_seed_for(n)`; the pending record carries the *target* rotation, and
+confirmation advances the hint in the same seal that removes the record.
+No separate settlement of "the service index" is needed.
+
+### 17.6 What D carries whichever way the rulings fall
+
+- `archival_p.rs`: `ARCHIVAL_P_HS_ID_INFO` → the v2 literal;
+  `derive_p_hs_id_seed(master, net, fmt, p_slot, rotation)`; the window
+  accessor of §17.2.
+- `archival_p_freeze.rs`: `include_str!` to the V2 directory; the hand-pinned
+  `ARCHIVAL_P_DERIVE_MANIFEST_HASH` re-pinned under the same citation.
+- The V2 corpus and its regenerator, armed with
+  `SHEKYL_PINNED_REGEN_DECISION="2026-09-12 ARCHIVAL_P_DERIVE_V1 retirement authorized; hs_id rotation index; V2 re-anchor (EU-D8)"`
+  byte-for-byte from the AUTHORIZED entry. Tier 1 pins the same slot at two
+  rotation indices, so a derivation that ignored the term could not pass. The
+  test is renamed off the `kat_` prefix (rule 50: `kat_*` is reserved for
+  tiers 1–2; a self-pinned vector says tripwire), and
+  `.github/workflows/depends-aarch64-kats.yml`, which runs it by name, moves
+  with it.
+- `CRYPTO_DOMAIN_REGISTRY.tsv`: the v1 row → v2, same commit (`EU-D8`).
+- `shekyl-sp-t3-spike/src/onion_key.rs`: the one out-of-engine caller passes
+  an explicit rotation (the spike stays; deleting it is its own decision).
+- Doc sweep: 24 files name `ARCHIVAL_P_DERIVE_V1`, the v1 `hs-id` literal or
+  the `kat_` test; each hit is classified in context — asserts-is (label
+  tables such as `ARCHIVAL_FIREWALL_GATE6.md` §9.3, the inventory, this doc's
+  `EU-D8`) moves; dated history and the other seven `-v1` labels do not.
+- `pending_post_block.rs`: `PendingEndpointUpdate { persona, tx_bytes,
+  funding_gindexes, target_rotation, state }`, `PENDING_POST_VERSION` 10→11,
+  snapshot regenerated under `UPDATE_SNAPSHOTS=1` (`EU-D13`).
+- The producer: `AssembleEndpointUpdate` mirroring `AssembleRelease`'s
+  handle validation, held-bundle lookup, handle↔record persona match and
+  bonded-record precondition, over the shared `bond_post_assemble` tail with
+  `bond_spend_sk` as the signer and no term; a `UserPendingPost` variant.
+- Records: the decision-log entry keeps its tense and gains a dated "landed"
+  line; `IMPLEMENTATION_INDEX.md` §5 row; changelog; the B+C1 STAGED note in
+  `verifier.rs` is retired with the battery.
+
+### 17.7 Put to Rick
+
+1. **D-1** (§17.2): the rotation window at open, width 8, exhaustion a typed
+   refusal — or the two-stage per-slot root, which has no exhaustion but is
+   not the preimage `EU-D8` describes.
+2. **D-2** (§17.3): the persisted rotation hint, `STAKING_BLOCK_VERSION` 2→3,
+   as a second bump outside `EU-D13`'s enumeration.
+3. **D-3** (§17.4): the submit battery lands in D under rule 21's own
+   criterion, with the probe kind as its C++ delta.
+4. **D-4** (§17.5): the index-0 reading, as §16 puts it.
+5. **Hand-over** (§17.1): serving the old address until the next epoch open
+   is the serving loop's, handed onward as a premise.
