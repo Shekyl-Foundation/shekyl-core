@@ -389,9 +389,6 @@ public:
    */
   void note_archival_prune_watermark_epoch(uint64_t prune_below_epoch);
 
-
-  virtual bool can_thread_bulk_indices() const { return true; }
-
   /**
    * @brief return a histogram of outputs on the blockchain
    *

@@ -515,7 +515,7 @@ wallet e2e (E-8).
 
 ### 3.5 DRS-C surface map (101 methods from `blockchain.cpp`)
 
-**Verified at PR #733 (PDM C++ residue; `can_thread_bulk_indices` left with the F18 scan-table prefetch).**
+**Verified at PR #733 (PDM C++ residue: the F18 scan-table prefetch is deleted, and `can_thread_bulk_indices` — the capability probe only that prefetch consulted — with it; `get_output_key` stays in S-OUT-KI for its other callers).**
 Every `m_db->` method reached from `blockchain.cpp` is assigned to **exactly
 one** surface: 101 methods, 10 surfaces, no method in two and none in none.
 Gated by `scripts/ci/check_drs_c_surface_map.py`, which re-derives the
