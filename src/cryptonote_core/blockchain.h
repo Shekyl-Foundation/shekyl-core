@@ -754,15 +754,12 @@ namespace cryptonote
     //debug functions
 
     /**
-     * @brief check the blockchain against a set of checkpoints
+     * @brief validate the local chain against a set of checkpoints
      *
-     * If a block fails a checkpoint, the blockchain is rolled back to two
-     * blocks prior to that block.
+     * If a block fails a checkpoint, the chain is rolled back to two blocks
+     * prior to it (floored at DB height 1).
      *
      * @param points the checkpoints to check against
-     */
-    /**
-     * @brief validate the local chain against loaded checkpoints
      *
      * @return false iff a conflict exists that could not be resolved by
      * rollback (the target sits below the prune watermark) — the caller
@@ -785,13 +782,17 @@ namespace cryptonote
     bool is_following_degraded() const { return m_following_degraded.load(std::memory_order_relaxed); }
 
     /**
-     * @brief loads new checkpoints from a file
+     * @brief enforce the compiled-in checkpoints against the local chain
      *
-     * @param file_path the path of the file to look for and load checkpoints from
+     * Run once at core::init. Checkpoints are release-carried (PDM-Q5's
+     * anchor model); the runtime json channel that used to feed this path
+     * was deleted (PDM-Q-F23), so the set cannot change while the daemon
+     * runs and there is nothing to reload periodically.
      *
-     * @return false if any enforced checkpoint type fails to load, otherwise true
+     * @return false iff a checkpoint conflict could not be resolved by
+     * rollback (C2-R1b F-1(b)) -- the caller fail-stops.
      */
-    bool update_checkpoints(const std::string& file_path);
+    bool enforce_checkpoints();
 
 
     // user options, must be called before calling init()

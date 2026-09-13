@@ -101,7 +101,6 @@ public:
   bool get_test_drop_download() const { return true; }
   bool get_test_drop_download_height() const { return true; }
   bool check_incoming_block_size(const cryptonote::blobdata& block_blob) const { return true; }
-  bool update_checkpoints(const bool skip_dns = false) { return true; }
   uint64_t get_target_blockchain_height() const { return target_height; }
   size_t get_block_sync_size(uint64_t height) const { return BLOCKS_SYNCHRONIZING_DEFAULT_COUNT; }
   void on_transactions_relayed(epee::span<const cryptonote::blobdata> tx_blobs, cryptonote::relay_method tx_relay, epee::net_utils::zone) {}

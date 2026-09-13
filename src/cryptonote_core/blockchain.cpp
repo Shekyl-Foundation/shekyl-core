@@ -6330,12 +6330,11 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
         // popped, and "rolling back" to a chain whose height-0 block still
         // mismatches would report the conflict resolved while fixing
         // nothing (the reports-success shape, fourth instance). This node
-        // is on the wrong network or the file is wrong; fail-stop.
+        // is on the wrong network for the binary it runs; fail-stop.
         MERROR("Checkpoint at height 0 (expected " << pt.second
           << ", chain has " << m_db->get_block_hash_from_height(0)
           << ") conflicts with this chain's GENESIS -- no rollback can"
-          << " resolve it; remedy: fix the checkpoints file or resync on"
-          << " the right network");
+          << " resolve it; remedy: resync on the right network");
         ok = false;
         continue;
       }
@@ -6351,7 +6350,7 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
       // watermark, there is no remedy this daemon can apply -- it must not
       // keep running in contradiction with a checkpoint it accepted. Same
       // predicate as the pop_block belt; the false return fail-stops via
-      // core::update_checkpoints -> graceful_exit.
+      // enforce_checkpoints -> core::init.
       //
       // Height-vs-index: `rollback_target` is a DB HEIGHT (the rollback
       // loop stops when height() == rollback_target), while the predicate
@@ -6390,23 +6389,14 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
   return ok;
 }
 //------------------------------------------------------------------
-// returns false if any of the checkpoints loading returns false.
-// That should happen only if a checkpoint is added that conflicts
-// with an existing checkpoint.
-bool Blockchain::update_checkpoints(const std::string& file_path)
+bool Blockchain::enforce_checkpoints()
 {
-  if (!m_checkpoints.load_checkpoints_from_json(file_path))
-  {
-      return false;
-  }
-
   if (!check_against_checkpoints(m_checkpoints))
   {
     // F-1(b): a conflict the rollback could not apply -- the caller
-    // (core::update_checkpoints) fail-stops rather than letting the daemon
-    // run in contradiction with a checkpoint it accepted. The file is the
-    // one operator input; name it.
-    MERROR("Checkpoint conflict from '" << file_path << "' could not be resolved; refusing to continue");
+    // (core::init) fail-stops rather than letting the daemon run in
+    // contradiction with a checkpoint its own binary carries.
+    MERROR("A compiled-in checkpoint conflicts with the local chain and could not be resolved by rollback; refusing to continue");
     return false;
   }
 

@@ -694,11 +694,10 @@ namespace cryptonote
       request_chain_history(context);
     }
 
-    // Reload json checkpoints every 10 minutes and verify them against the blocks
-    // we already have. There is no DNS half any more: load_checkpoints_from_dns
-    // went with the rest of the cleartext-DNS surface, and update_checkpoints is
-    // json-only.
-    CHECK_AND_ASSERT_MES(m_core.update_checkpoints(), 1, "One or more checkpoints loaded from json conflicted with existing checkpoints.");
+    // No periodic checkpoint reload: checkpoints are compiled in and
+    // enforced once at core::init. The DNS half went with the cleartext-DNS
+    // surface and the json half with PDM-Q-F23 (a runtime-loadable pin
+    // bypasses the release-carried anchor).
 
     return 1;
   }  
