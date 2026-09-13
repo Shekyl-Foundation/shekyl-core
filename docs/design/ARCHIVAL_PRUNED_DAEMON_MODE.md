@@ -1,8 +1,10 @@
 # Pruned-daemon mode — set-B discard (PDM)
 
-**Status: OPEN** — round opened 2026-09-12. `PDM-Q1`…`PDM-Q8` are **OPEN**.
-No question is RULED in this file. This is the design home TJ-D named; it
-is not yet the design.
+**Status: OPEN** — round opened 2026-09-12. `PDM-Q1`…`PDM-Q6` and
+`PDM-Q8` are **OPEN**. `PDM-Q3` is restated (today not node-local,
+`PDM-Q-F8`). `PDM-Q7` is **PARTIAL** (opt-in flag rejected). `PDM-Q-S0`
+is RULED. This is the design home TJ-D named; it is not yet the
+design.
 
 **Grounded at** `dev@edb35dbb1467a55c1a1dd4033966fb9fe3413080` (2026-09-12,
 `origin/dev` HEAD when the round opened; PR #720 / DRS-0 slice A).
@@ -27,8 +29,10 @@ archivers hold the leaves. Until that exists, R2's possession test cannot
 discriminate.
 
 **What this round is not.** It does not re-derive R2, segment freeze, the
-challenge/response format, or bond/slash construction. It does not land
-`--prune-blockchain` deletion. It does not write `db_lmdb.cpp`.
+challenge/response format, or bond/slash construction. It does not
+delete the C++ stripe engine (that waits on this design, then `DRS-E*`).
+It does not write `db_lmdb.cpp`, and it does not fix `PDM-Q-F9`'s silent
+zero-fill (dedicated C++ PR; `docs/FOLLOWUPS.md`).
 
 ---
 
@@ -58,8 +62,11 @@ daemon still retains everything — was inferred from trajectory to fill
 the gap. There is no such window to design a policy for.
 
 This is not a claim that the pruning *mode* needs a coordinated
-activation (TJ's node-local claim is `PDM-Q3`'s to confirm). It is a
-claim that V3 does not ship a daemon that still cannot discard set B.
+activation. TJ's node-local sentence is about activation not needing a
+hard fork; `PDM-Q-F8` has already shown leaf discard is not node-local
+*today*. The remaining `PDM-Q3` question is the residual consensus-read
+set after TJ-A. It is a claim that V3 does not ship a daemon that still
+cannot discard set B.
 
 **Reopening criteria.** Two, independently:
 
@@ -76,12 +83,11 @@ criterion.
 the steering note. Not a silent C++ PR. Not an allow-comment in
 `db_lmdb.cpp`. Not a silent genesis that ships the C++ daemon.
 
-This constraint is **not** a ruling on `PDM-Q3` (consensus-scheduled vs
-per-node) and **not** a ruling on TJ's already-stated claim that the
-pruning *mode* is node-local and ships without coordination. Those are
-still this round's to confirm or correct. `PDM-Q-S0` answers *which
-codebase the first implementation may touch* and *that genesis does not
-precede that implementation*.
+This constraint is **not** a ruling on `PDM-Q3`'s residual-set question
+and **not** a ruling that retracts TJ's activation sentence. `PDM-Q-S0`
+answers *which codebase the first implementation may touch* and *that
+genesis does not precede that implementation*. `PDM-Q-F8` has already
+answered that the shape is not node-local *today*.
 
 ---
 
@@ -158,11 +164,11 @@ bond docs are read in the ruling pass.
 | --- | --- | --- |
 | Inherited stripe prune | `BlockchainLMDB::prune_worker` in `src/blockchain_db/lmdb/db_lmdb.cpp` (definition ~2320); deletes `m_txs_prunable` when `!has_unpruned_block` below the tip window. Flag `--prune-blockchain`, default false. Seed in `src/common/pruning.{h,cpp}`. P2P/RPC/`shekyl-levin` carry `pruning_seed`. Constants `CRYPTONOTE_PRUNING_LOG_STRIPES = 3`, `CRYPTONOTE_PRUNING_TIP_BLOCKS = 5500` in `src/cryptonote_config.h` (~343–344) | tx-prunable blobs by stripe + tip. Not curve-tree leaves |
 | Archival retention prune | `process_archival_epoch_close_at_height` (~8385) calls `prune_archival_epochs_before` (~7704–7739). Comment at ~7710–7712: *Deliberately NOT reverted by any pop path* | serve-credit, settlement, r_market, sigma_work, budget, accrual, attestation-witness rows below `tip − W`. Bookkeeping, not leaves |
-| Intermediate-layer prune | `prune_curve_tree_intermediate_layers` (~9917); loop `layer = 1..=depth-2` | sealed upper-layer chunks. Leaves are the recompute source, not the delete target |
+| Intermediate-layer prune | `BlockchainDB` caller `src/blockchain_db/blockchain_db.cpp:651-655`: every node, unconditionally (not gated on `--prune-blockchain`), every `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` (10,000, `src/cryptonote_config.h:313`) blocks. Definition `prune_curve_tree_intermediate_layers` at `src/blockchain_db/lmdb/db_lmdb.cpp:9917`; loop `for (uint8_t layer = 1; layer <= depth - 2; …)` at `:9974` | sealed upper-layer chunks. Layer 0 and the root layer are never pruned. The comment at `:9922-9925` that these hashes "can be recomputed from leaves" is **false** (`PDM-Q-F7`); `trim_curve_tree` recomposes from layer 0 |
 
 ---
 
-## 2. Numbered questions — all OPEN
+## 2. Numbered questions
 
 Each ruling, when written, takes rule-21 shape: the rejection (or the
 positive choice), substrate-anchored reopening criteria, and the
@@ -170,10 +176,26 @@ re-evaluation shape. None of that is filled in here.
 
 ### `PDM-Q1` OPEN — The retained set
 
-What does an ordinary node keep, exactly? Enumerate it as a set, not as
-prose: headers, `R_k` sub-roots, which intermediate layers, which leaf
-window, which consensus tables. Every later question is measured against
-this set.
+Do **not** start from a blank enumeration. `PDM-Q-F7` already places
+the set-A / set-B split on exactly one table with one deletion site:
+
+- **Set A, already retained by every node:** layer 0 of
+  `m_curve_tree_layers` (`R_k` at chunk granularity). Never deleted
+  except by reorg trim. The intermediate-layer prune loop starts at
+  `layer = 1` (`db_lmdb.cpp:9974`); the root layer is also unpruned.
+- **Set B, the discard subject:** `m_curve_tree_leaves`. Deleted today
+  only by `trim_curve_tree` (reorg). That is the only table Q1's
+  discard ruling has to name, plus whatever else the ruling *adds*
+  (headers, consensus tables, a leaf window if Q2 keeps one).
+
+Enumerate the rest against that boundary, not as prose: headers, which
+intermediate layers *beyond* layer 0, which leaf window if any, which
+consensus tables. Every later question is measured against this set.
+
+The stale "recomputed from leaves" comments
+(`db_lmdb.cpp:9922-9925`, `:9970`; `blockchain_db.h:2838`) are
+corrected in the PR that rules Q1, not left for the ruling pass to
+trip over.
 
 ### `PDM-Q2` OPEN — Discard trigger and depth
 
@@ -195,21 +217,38 @@ challenges, whether the possession test is live) has not answered Q2.
 The §3 free-riding bullet is discharged against this duration, not
 against the rewrite calendar.
 
-### `PDM-Q3` OPEN — Determinism: consensus-scheduled or per-node?
+### `PDM-Q3` OPEN — Residual consensus reads after TJ-A
 
-The retention prune is identical everywhere. The stripe prune is
-seed-dependent and per-node. Which shape does leaf discard take?
+"Which shape does leaf discard take?" is the wrong question.
+`PDM-Q-F8` answers the shape **at this pin**: not node-local.
+`src/cryptonote_core/blockchain.cpp:5327` (serve-credit vin
+verification) rejects the transaction with
+`SHEKYL_DROP_VERDICT_INTERNAL_FAILURE` if
+`get_curve_tree_leaf_chunk` fails. A node that discarded set B does not
+fail open and does not fail unknown. Two honest nodes at the same
+height, differing only in prune configuration, reach opposite validity
+verdicts on identical bytes. That is the consensus event Q3 was
+written to go looking for, and it exists now.
+
+Node-locality is therefore **conditional on TJ-A's rewire landing
+first**, and is false before it. §1.2 already declared that
+dependency; F8 is the named line.
+
+**The remaining question, still OPEN:** given TJ-A's rewire, is the
+residual set of consensus reads that can reach discarded leaves
+empty, and what instrument proves it stays empty? Citing TJ is not
+answering that. A grep of `get_curve_tree_leaf_chunk` /
+`get_curve_tree_leaf_by_tree_position` in `src/` at this pin shows one
+production consensus caller (`blockchain.cpp:5327`) and two RPC
+readers (`core_rpc_server.cpp:1577`, `:1670`). RPC is not consensus.
+The instrument Q3 names has to fail if a new consensus caller appears.
 
 Do **not** re-derive in ignorance of TJ's already-stated sequencing
 resolution (index `TJ-A…TJ-G` row): *the pruning MODE is node-local and
 ships post-genesis without coordination (rule 75)*. That sentence is
 about the mode not needing a coordinated hard-fork to *activate*; it
-is not a claim that genesis ships before PDM exists. `PDM-Q-S0` has
-ruled the latter. `PDM-Q3`'s job is to confirm whether set-B leaf
-discard can actually take the node-local shape: if any
-consensus-relevant read can reach discarded bytes, two honest nodes at
-one height legitimately differ and that is a consensus event, not a
-configuration difference. Citing TJ is not answering Q3.
+is not a claim that genesis ships before PDM exists (`PDM-Q-S0`), and
+it is not a claim that leaf discard is node-local *today* (`PDM-Q-F8`).
 
 ### `PDM-Q4` OPEN — Reconstruction path
 
@@ -241,15 +280,29 @@ commitments — structurally the same thing `R_k` is for a leaf segment.
 Rule on whether they enter the archival subject. If they do not, say
 why, with reopening criteria.
 
-### `PDM-Q7` OPEN — Disposition of `--prune-blockchain`
+### `PDM-Q7` PARTIAL 2026-09-12 — Disposition of the Monero-era stripe engine
 
-Keep, subsume, or delete. Deletion is p2p-visible (peers advertise and
-request by pruning seed) and is the mechanism the pass-record carrier
-round's premise rests on. Read
+The three-way "keep, subsume, or delete `--prune-blockchain`" is
+underscoped and, as of steering 2026-09-12, the wrong question.
+
+**Ruled here, as sequencing not as the standard process itself:**
+
+- The **manual / opt-in flag is rejected.** Pruned-daemon mode is a
+  standard process across all daemons, not an operator switch. That
+  is what makes `CR-D2`'s "every node prunes" premise true, or what
+  withdraws it.
+- The **C++ stripe engine is not deleted until this design is
+  complete.** It may serve as reference for the Rust cutover. Removal
+  of the Monero-era mechanism (`prune_worker`, `pruning_seed`,
+  `CRYPTONOTE_PRUNING_*`) happens at `DRS-E*` (`PDM-Q-S0`), not as a
+  C++ deletion in this round.
+
+**Still OPEN:** the standard process (what every daemon retains and
+discards) is Q1–Q6 and Q8. Q7 does not re-derive it. Read
 [`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)
-`CR-D2`. Deleting the stripe scheme while set-B discard is unbuilt
-removes the only pruning that exists. Sequence accordingly, and under
-`PDM-Q-S0`.
+`CR-D2` for the p2p-visible residue the stripe scheme currently
+carries; that residue dies with the engine at the cutover, or it is
+named as something the standard process must still speak.
 
 ### `PDM-Q8` OPEN — Privacy
 
@@ -284,10 +337,10 @@ Named so they cannot be discovered after a ruling. Not answered here.
   verifies locally. TJ-F's "no store handle" face is the intended
   dissolution for *new-block verify*; spend-path assembly is a different
   fetch.
-- **Stripe/shard interaction.** If `--prune-blockchain` survives
-  alongside set-B discard, the two partitions are unrelated. Enumerate
-  what a node holding stripe *i* and having discarded set B can and
-  cannot answer.
+- **Stripe/shard interaction.** The C++ stripe engine survives until
+  this design is complete and is removed at `DRS-E*` (`PDM-Q7`).
+  Until then the two partitions are unrelated. Enumerate what a node
+  holding stripe *i* and having discarded set B can and cannot answer.
 - **Sybil economics.** Does the market price scarcity in a way that
   survives an adversary who runs many cheap archivers holding overlapping
   popular shards? Build on
@@ -377,6 +430,60 @@ Named now so they are not discovered later.
   known not to hold; the prune-policy group is named; the binding
   sentence is unamended.
 - **PDM-Q-F5.** Implementation is forbidden in C++ (`PDM-Q-S0`).
+- **PDM-Q-F7.** The intermediate-layer prune already runs on every node
+  (`blockchain_db.cpp:651-655`), unconditionally, every
+  `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL` (10,000) blocks. Its soundness
+  comment (`db_lmdb.cpp:9922-9925`, restated `:9970` and
+  `blockchain_db.h:2838`) names leaves as the recompute source. §1.5's
+  table originally read that as an all-clear ("leaves are the recompute
+  source, not the delete target"). That is backwards as a risk reading:
+  being the recompute source for a live deletion is what would make the
+  leaves load-bearing for something other than serve-credit. **The
+  comment is wrong about its own source.** There is no function that
+  rebuilds layers `1..depth-2` from leaves. The only upper-layer
+  rebuild is inside `trim_curve_tree` (`db_lmdb.cpp:9412` onward), and
+  it recomposes from **layer 0**, the leaf-chunk hash layer, not from
+  leaves. The prune loop is `for (uint8_t layer = 1; layer <= depth - 2;
+  …)` (`:9974`), so layer 0 and the root layer are never pruned. Layer 0
+  therefore survives and is already the thing Q1 needs: `R_k` at
+  chunk granularity, retained by every node, never deleted except by
+  reorg trim. The set-A / set-B split falls on exactly one table
+  (`m_curve_tree_leaves`) with one deletion site. Q1 starts from that
+  boundary. The stale comments are corrected in the PR that rules Q1.
+- **PDM-Q-F8.** Q3 is answerable at a named line today, and the answer
+  is "not node-local until TJ-A lands." `blockchain.cpp:5327`:
+  `get_curve_tree_leaf_chunk` failure rejects the transaction with
+  `SHEKYL_DROP_VERDICT_INTERNAL_FAILURE`. Two honest nodes at one height,
+  differing only in prune configuration, reach opposite validity
+  verdicts on identical bytes. That is the consensus event. Q3 is
+  restated as the residual-set question after TJ-A; "which shape" is
+  not open.
+- **PDM-Q-F8b.** `INTERNAL_FAILURE` is the wrong verdict class for a
+  local capability gap. Under pruning, a node would be telling peers
+  that a valid transaction is malformed. The drop is attributable to
+  the receiver's configuration, not to the sender — an attributability
+  violation of PWD-B7 (P2P-2 cluster B:
+  [`SHEKYL_P2P_PROTOCOL.md`](SHEKYL_P2P_PROTOCOL.md) line 3699 — a
+  rejection justifies a drop only when it is attributable to the
+  sender). Own row because the consensus-event finding (F8) and the
+  verdict-class finding are independently load-bearing. The line also
+  fires today on registry/tree disagreement; TJ-A's rewire is what
+  removes the prune-configuration case, not a verdict-enum patch on
+  this charter.
+- **PDM-Q-F9.** Silent zero-fill that is dead today and becomes the
+  default path under pruning. `core_rpc_server.cpp:1668-1672`: a
+  missing leaf is inserted as 128 zero bytes, no error. Its sibling
+  reader at `:1577` returns `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`. On an
+  unpruned node the `else` is unreachable (harmless). The moment PDM
+  ships it is the ordinary path, and the node hands a wallet a
+  structurally wrong membership path with no error signal. Already
+  reachable through registry/tree disagreement, which `:5327` treats
+  as a real condition. Two readers of the same table with opposite
+  failure semantics is a defect **independent of PDM**. Fix
+  independently of this round (match `:1577`); not the Q1 comment-
+  correction PR (different file, different property). Carrier:
+  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) (`PDM-Q-F9`). This charter does
+  not carry the C++ edit.
 
 ### Retracted
 
@@ -396,17 +503,16 @@ Named now so they are not discovered later.
 
 ### Undetermined (ruling pass)
 
-- The retained set, the trigger (including the free-regime duration
-  and what the market does during it), determinism, reconstruction,
-  cold sync, tx-prunable subject-matter, `--prune-blockchain` fate,
-  fetch privacy.
-- Whether any consensus-relevant read currently reaches
-  `m_curve_tree_leaves` *other than* serve-credit vin verification
-  (TJ-F's dissolution target). A second reader would be a second Q3
-  blocker.
+- The retained set (starting from layer 0 / `m_curve_tree_leaves`,
+  F7), the trigger (including the free-regime duration and what the
+  market does during it), residual consensus reads after TJ-A (Q3),
+  reconstruction, cold sync, tx-prunable subject-matter, stripe-engine
+  residue at the cutover (Q7), fetch privacy.
 - Negative-control status of any coverage number this round later quotes.
   Do not quote a coverage figure without an edit that makes the
-  instrument go red.
+  instrument go red. Q3's residual-set instrument is the named
+  instance: it must go red if a new consensus caller of discarded
+  leaves appears.
 
 ---
 
@@ -415,13 +521,13 @@ Named now so they are not discovered later.
 | ID | Question | State |
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
-| `PDM-Q1` | Retained set | OPEN |
+| `PDM-Q1` | Retained set (starts from layer 0 / `m_curve_tree_leaves`) | OPEN |
 | `PDM-Q2` | Trigger, depth, and free-regime duration | OPEN |
-| `PDM-Q3` | Consensus-scheduled vs per-node | OPEN |
+| `PDM-Q3` | Residual consensus reads after TJ-A | OPEN — today not node-local (`PDM-Q-F8`) |
 | `PDM-Q4` | Reconstruction path | OPEN |
 | `PDM-Q5` | Cold sync and bootstrap | OPEN |
 | `PDM-Q6` | Tx-prunable as archival subject | OPEN |
-| `PDM-Q7` | `--prune-blockchain` | OPEN |
+| `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected; C++ stays until this design is complete; removal at `DRS-E*` |
 | `PDM-Q8` | Privacy (density vs query) | OPEN |
 
 When this round proposes a test, it will name the edit that makes that
@@ -433,9 +539,15 @@ a test (rule 50 / the opening prompt).
 ## 8. What the next pass owes
 
 Steering review of this opening. `PDM-Q-F6`'s launch-state fork is
-retracted; `PDM-Q-S0` now carries the genesis-does-not-precede sentence.
-Then the ruling pass: §§2–3 answered, each with rule-21 shape, evidence
-pinned at a declared sha, adversarial items discharged or named as
-remaining, D10/SO-D8/CR-D2/sole-occupant consequences stated rather than
-discovered. Q2's ruling must state the free-regime duration and the
-market's behaviour during it.
+retracted; `PDM-Q-S0` carries the genesis-does-not-precede sentence.
+`PDM-Q-F7`…`F9` are at-the-pin code findings. Then the ruling pass:
+§§2–3 answered, each with rule-21 shape, evidence pinned at a declared
+sha, adversarial items discharged or named as remaining,
+D10/SO-D8/CR-D2/sole-occupant consequences stated rather than discovered.
+
+Q1 starts from F7's boundary; the PR that rules Q1 corrects
+`db_lmdb.cpp:9922-9925` / `:9970` / `blockchain_db.h:2838`. Q2's
+ruling must state the free-regime duration and the market's behaviour
+during it. Q3 is the residual-set question after TJ-A, with an
+instrument that can go red. F9 is a C++ defect independent of PDM;
+the carrier is the FOLLOWUPS row, not this charter.
