@@ -599,7 +599,7 @@ establishes (C2-R1b-Q1c). Ported with the writer it would drag the watermark
 contract into an increment that does not otherwise touch retention. If E1 finds
 the pop path cannot be extracted without it, that is the falsifier and it moves.
 
-**Not in the 97 but adjacent:** full archival *drivers* still inside
+**Not in the 102 but adjacent:** full archival *drivers* still inside
 `BlockchainLMDB` (process_archival_*, apply_archival_*) — extracted toward
 **S-ARCH** during C/E4; they are part of the god-object storage class, not
 only `blockchain.cpp`.
