@@ -1311,7 +1311,8 @@ Named now so they are not discovered later.
   (`m_curve_tree_leaves`) deleted in exactly one function
   (`trim_curve_tree`, two loops: `:9278`, `:9392`). Q1 starts from that
   boundary — and `PDM-Q-F12` then shows the boundary does not stop
-  there. The stale comments are corrected in the PR that rules Q1.
+  there. The stale comments were corrected in PR #733 (2026-09-13),
+  not held for the Q1 ruling.
 - **PDM-Q-F8.** Q3 is answerable at a named line today, and the answer
   is "not node-local until TJ-A lands." `blockchain.cpp:5327`:
   `get_curve_tree_leaf_chunk` failure rejects the transaction with
@@ -1797,15 +1798,18 @@ consensus question: *does anything read it after admission?*
   proof in every historical block: the only skip is the
   pool-admission cache (`blockchain.cpp:5978`, structural checks still
   run), `:5681`'s checkpoint-zone skip is commented out, `:5722` is
-  hash matching. The JSON checkpoint channel is **live**:
+  hash matching. At the pin the JSON checkpoint channel was **live**:
   `update_checkpoints` → `load_checkpoints_from_json`
-  (`blockchain.cpp:6635`), reloaded every ten minutes from
-  `cryptonote_protocol_handler.inl:698`; the DNS half is already
+  (`blockchain.cpp:6635` at `edb35dbb1`), reloaded every ten minutes
+  from `cryptonote_protocol_handler.inl:698`; the DNS half was already
   deleted (comment at the same line). Consequences: Q5's anchor
   populates this table; Q11's `D_max` is the rolling cap above it and
-  binds only once a node has an anchored chain; the JSON channel is a
-  runtime trust path that bypasses the release-carried anchor and is a
-  rule-15/60 deletion target (FOLLOWUPS row).
+  binds only once a node has an anchored chain; the JSON channel was a
+  runtime trust path that bypasses the release-carried anchor — a
+  rule-15/60 deletion **executed in PR #733 (2026-09-13)**: the loader,
+  the periodic reload and `JSON_HASH_FILE_NAME` are gone, and the
+  surviving conflict rollback runs once at `core::init` as
+  `Blockchain::enforce_checkpoints`.
 - **PDM-Q-F24.** **The universal bytes window had silently inherited
   `D_max`, and the convergence property was true only of a node that
   never stops.** Q4's "uniform `D_max` window" and Q5's band 3
