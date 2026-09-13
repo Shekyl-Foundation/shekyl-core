@@ -22,6 +22,12 @@
 //!   reproduce LMDB order. Table types encode ordering; domain identity
 //!   (`BlockHash` vs `TxHash` vs key image) converts at the engine API.
 //!
+//! - **DRS-E1 increment 1** — [`store`]: lifecycle and the write-transaction
+//!   surface (S-TXN). The write handle is a possession type, which is how
+//!   DRS-W3's 129-dereference precondition becomes unrepresentable rather
+//!   than merely unviolated — the discharge P0c's declination was banking
+//!   on. Durability is a declared constant, not redb's default.
+//!
 //! Slice B's table names are bijection-pinned against
 //! [`accumulator::TABLE_CLASSES`] **and** against the X-macro
 //! `SHEKYL_LMDB_TABLES` by `scripts/ci/check_redb_schema_bijection.py` —
@@ -34,3 +40,4 @@ pub mod accumulator;
 pub mod digest_v0;
 pub mod lmdb_order;
 pub mod schema;
+pub mod store;
