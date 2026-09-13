@@ -13,8 +13,9 @@ and `blockchain.cpp` call-graph and window-length citations: `dev`
 `3497b8a78`. P0e's §11 ledger and §10's `Digest v0` column — the
 digest walker's accessor mapping and the per-table divergence test: `dev`
 `eb1b60198`. DRS-0 slice A's §12 and §10's `Accumulator class` column —
-the delete-path falsifier run, the `compare_hash32` characterisation and
-DRS-W16: `dev` `ba4b3c73a`.** Line citations are *records-was*
+the delete-path falsifier run, the `compare_hash32` characterisation,
+DRS-W16, **and §12's "Reopening criteria" subsection (added 2026-09-13,
+verified against this same pin, not a later tip)**: `dev` `ba4b3c73a`.** Line citations are *records-was*
 against the pin they name, not against `HEAD`; they are expected to drift
 and must not be "corrected" to a later tree. Two eras are safe only while
 both are declared — an undeclared second era is what put three citations on
@@ -1427,7 +1428,17 @@ merely currently-uniform one. That window closes the day node-variable
 discard lands.
 
 **Grounding note, stated because the freeze must not cite what it cannot
-reach.** The code claims above were verified in this tree at the pin. The
+reach.** The code claims above were verified against the declared slice-A
+pin `ba4b3c73a`, and **all nine line anchors were re-resolved there
+immediately before push** — this file is the one document
+`check_doc_code_citations.py` refuses (`DEFERRED_DOCS`, because it
+declares eras by row-set in front matter), so its anchors are
+hand-verified or not verified at all. They **do not** resolve at the
+branch tip: merging `dev` brought the V12 → V13 schema bump, which moved
+every one of them. That is the expected records-was behaviour this
+header's pin sentence describes, not drift to repair — re-anchoring them
+to a later tip is what the header forbids, and what once put three
+citations of this file on code they did not describe. The
 **PDM-Q rulings are not landed** — no `PDM-Q` string resolves anywhere
 under `docs/` at this commit, and the round's opening commit is not an
 ancestor of `dev`. They are recorded here as **triggers to re-evaluate**,
