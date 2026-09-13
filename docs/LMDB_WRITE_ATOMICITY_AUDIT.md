@@ -1350,20 +1350,38 @@ as pre-emptive reclassifications** — pre-declaring a class against an
 unlanded ruling is the same error as declaring one against a landed
 mechanism that is leaving. Neither moves a token today.
 
-**1. `curve_tree_leaves` (`append-mostly`) stops being computable under
-set-B discard.** A running chained hash over the leaves requires every leaf:
-you cannot fold what you do not have. **`append-mostly` therefore holds
-exactly while every node retains every leaf**, and the archival lane's
-PDM-Q discard ruling is what reopens it.
+**1. `curve_tree_leaves` (`append-mostly`) — RESOLVED, not pending.**
 
-It is deliberately **not** pre-declared `excluded / node-local`, and the
-reason is worth stating because it is the more likely mistake: if discard
-is **uniform** — consensus-scheduled and identical everywhere, as the
-in-house retention prune already is — the leaves stay *in domain* with a
-piecewise definition split at a consensus-known boundary. That is a
-digestible shape, not an excluded one. Only *node-variable* discard would
-push them out. So the trigger is not "discard lands" but **"discard lands
-and is node-variable."**
+**The distinction the whole question turns on: a digest cares whether
+nodes AGREE, not whether bytes are PRESENT.** Uniform absence and
+node-variable absence are different things for an accumulator. If every
+node discards the same leaves at the same consensus-known height, all
+nodes hold identical state and the accumulator is well-defined with a
+boundary — *digestible*, merely piecewise. Only *node-variable* absence,
+where two honest nodes legitimately differ, forces exclusion. Presence is
+not the criterion; agreement is. `txs_prunable` is `excluded` because
+prune **seeds** differ between honest nodes, not because bytes are
+missing — the same mechanism under a uniform schedule would not be
+excluded at all.
+
+The open question was therefore never "does discard land" but **"does
+discard land *and* is it node-variable"**, and the second conjunct is now
+**ruled FALSE**: *"pruning is NOT node variable"* — Rick, 2026-09-13, via
+steering relay. So `curve_tree_leaves` stays `append-mostly` with a
+piecewise definition at the discard boundary, and this is a settled case
+rather than a trigger a reader has to carry.
+
+The mechanical hazard is still worth recording, because it is what makes
+the ruling load-bearing rather than incidental: a running chained hash
+over the leaves requires every leaf — you cannot fold what you do not
+have — so `append-mostly` would have been **wrong**, not merely early, had
+discard been node-variable. Equally, pre-declaring the leaves
+`excluded / node-local` in anticipation would have been wrong in the other
+direction, which is the mistake this entry was opened to prevent.
+
+**What would reopen it:** a change to that ruling — a discard mechanism
+that lets two honest nodes at the same height hold different leaves. Not
+the arrival of discard itself.
 
 **2. The `node-local` reason rests on the C++ stripe prune, which the Rust
 store does not inherit.** Recorded per table, because verification shows
