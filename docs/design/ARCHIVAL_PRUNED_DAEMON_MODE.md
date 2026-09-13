@@ -12,18 +12,24 @@ its verifier `txs_prunable_hash` already in the schema; `PDM-Q-F14`:
 inventories every data element at the pin. `PDM-Q7` is **PARTIAL**
 (opt-in flag rejected, scoped to the universal set). `PDM-Q9` is
 **PARTIAL** (shard retention is the bond process; binding and lapse
-timing OPEN). `PDM-Q-S0` is RULED. This is the design home TJ-D named;
-it is not yet the design.
+timing OPEN). `PDM-Q8` is **PARTIAL** (P2P body-serving is uniform
+inside the universal window on every node — ratified 2026-09-13;
+fetch-side privacy OPEN). `PDM-Q5` is widened (`PDM-Q-F20`: under Q6
+a fresh node's proof verification is a read of the whole good from
+archivers — *sync is the read*; the skeleton suffices for state, the
+body for proof). `PDM-Q12` (freeze pipeline and wallet-side
+`LeafStore` under Q6's unit) is minted OPEN. `PDM-Q-S0` is RULED. This
+is the design home TJ-D named; it is not yet the design.
 
 **Grounded at** `dev@edb35dbb1467a55c1a1dd4033966fb9fe3413080` (2026-09-12,
 `origin/dev` HEAD when the round opened; PR #720 / DRS-0 slice A).
 Citations below were read at that sha. Do not inherit line numbers from the
 opening prompt (written at `1c6238bf8`).
 
-**Family:** `PDM-Q` — tokens `PDM-Q1`…`PDM-Q11` (questions), `PDM-Q-F*`
+**Family:** `PDM-Q` — tokens `PDM-Q1`…`PDM-Q12` (questions), `PDM-Q-F*`
 (findings), `PDM-Q-S0` (sequencing constraint). Registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 at birth (rule 94).
-Family cell `**PDM-Q1…PDM-Q11**` parses to `PDM-Q`. Distinct from
+Family cell `**PDM-Q1…PDM-Q12**` parses to `PDM-Q`. Distinct from
 `**PD-A…PD-F**` (parses `PD-A`, the reopen-(d) probe).
 
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -317,7 +323,7 @@ assemble a spend path* (can be asynchronous). TJ-F already requires
 verify-new-blocks to run on responder-supplied material + `R_k`; do not
 re-open that as if it were undecided.
 
-### `PDM-Q5` OPEN — Cold sync and bootstrap
+### `PDM-Q5` OPEN — Cold sync and bootstrap (widened 2026-09-13, `PDM-Q-F20`)
 
 A new node must reach tip. Does it need leaves to do so, or can it build
 from `R_k` commitments carried in the chain? Today's answer is that
@@ -327,6 +333,56 @@ centralisation dependency wearing a pruning costume. Also
 [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) on the untrusted-peer
 path, and its remaining item (b) "store-backed / pruned-tree assembly
 (F5, the prune-policy PR)".
+
+**Widened under Q6's unit (`PDM-Q-F20`): the leaf question is
+answered (F12 — leaves regenerate from the skeleton) and a larger one
+replaces it.** A fresh node verifies every proof and every PQC
+signature in history by default; under Q6 no ordinary peer holds
+those bytes beyond `tip − D_max`. So bootstrap decomposes into
+**skeleton sync** — the unprunable base plus the two hash rows, from
+any peer, verified against the header chain, sufficient to build
+*all* consensus state (curve tree from `outPk` + `vout` + `tx_extra`
+0x07 per F12, `spent_keys` from the prefix, archival tables from
+kept-side headers) — and **body fill** — the prunable region and
+`pqc_auths` for every historical transaction, **from archivers**,
+verified per-tx against the retained rows. The skeleton suffices for
+*state*; the body suffices for *proof*. Q5 rules:
+
+1. **Synced-state semantics.** A node holding correct tip state from
+   the skeleton alone can validate new blocks but has not itself
+   verified that history was valid. Under `00-mission` priority 1 it
+   must not report itself synchronized until body fill completes for
+   every range; the inherited `--sync-pruned-blocks` ("allow syncing
+   from nodes with only pruned blocks", `cryptonote_core.cpp:127-130`;
+   pruned entries are accepted on the txid alone via
+   `get_pruned_transaction_hash`, `cryptonote_protocol_handler.inl:139-152`)
+   is exactly trust-the-txid-skip-the-proofs and must not become the
+   default by inheritance. State-first / proof-second is the
+   *availability* shape (the node is useful to its operator's wallet
+   at once — the skeleton is KEEP-W), not a relaxation of the
+   security one.
+2. **The unverified-range condition.** A range with no reachable
+   archiver is a range no new node can verify. That is a **loud,
+   named** node state ("unverified `[a, b)`"), never a silent
+   `INTERNAL_FAILURE` (F8b) and never a quiet fall-through to
+   trust-the-txid — the same detectability posture as `D_max`
+   (Q11). It is also the network's coverage alarm; Q9's coverage
+   item is where the floor that prevents it lives.
+3. **Who fetches.** Body fill is a read of the good over the fetch
+   leg. Under `PDM-Q8`'s ruled uniformity, no daemon serves
+   beyond-window bodies over P2P, so the fetch is over onion to
+   wallet-fronted archivers — and a *bare daemon* must be able to
+   become a validator, so the archival **fetch client lives in the
+   daemon** (its Tor zone,
+   [`DAEMON_RELAY_PRIVACY.md`](DAEMON_RELAY_PRIVACY.md)), while
+   *serving* stays behind the wallet (it needs a persona, a bond and a
+   countersignature). Fetching is anonymous by nature; serving is not.
+   Q5 owes the primitive — `fetch_prunable_range(a, b)`, verified
+   per-tx — and names its three callers: body fill here, Q9's
+   recovery fetch, and any Q3 residual read (which should be none).
+4. **Sequencing with the `SF-` round (PR #714).** The shard-fetch
+   client being designed there is this primitive's transport; Q5 does
+   not re-derive it, it states what the caller needs from it.
 
 ### `PDM-Q6` OPEN — The prunable region as the archival good: the round's subject (promoted 2026-09-13 `PDM-Q-F12`; made the subject 2026-09-13 `PDM-Q-F13`)
 
@@ -403,6 +459,18 @@ What Q6 must rule, in this order:
    (`output_to_leaf`, graded CACHE in §9) becomes load-bearing for
    membership and either joins KEEP-D or is re-derived on every check.
    Q6 names which, and the storage arithmetic follows.
+
+   **Third candidate (2026-09-13): a `tx_id` range.** Height ranges
+   (F17's stripe) derive membership for free but a shard's byte size
+   then floats with throughput, which breaks per-shard pricing; leaf
+   segments have fixed cardinality but need the stored mapping. The
+   store's own transaction index is monotone — `tx_id =
+   get_tx_count()` at insert (`db_lmdb.cpp:1068`, written at `:1090`),
+   KEEP-C — so a shard as `[k·T, (k+1)·T)` in `tx_id` has fixed
+   cardinality *and* derivable membership, and `height(tx)` for the
+   F10 discard predicate is one `tx_indices` lookup. Q6 weighs it
+   beside the other two; it is the candidate that keeps `RF-D6`'s
+   fixed-size shard without keeping `output_to_leaf`.
 
    **The collision this surfaces is with the credit wire, and it cuts
    the other way from the one first reported.** The report read
@@ -485,6 +553,13 @@ region is the `CtSigPrunable` sole occupant (§5 test); the outputs and
 (`txs_pruned`, append-mostly) and stay. Q6 says which half every
 sentence is about.
 
+One boundary the verifier does not cover (`PDM-Q-F22`): the coinbase's
+`prunable_hash` is `null_hash` by construction, so nothing on a
+coinbase prunable side is committed to by `txs_prunable_hash`. Any Q6
+shape that places archival evidence there verifies it against the
+credit wire's block-level `attestation_root`, not the row. The
+precedent is already written; Q6 cites it rather than rediscovers it.
+
 ### `PDM-Q7` PARTIAL 2026-09-12 — Disposition of the Monero-era stripe engine
 
 The three-way "keep, subsume, or delete `--prune-blockchain`" is
@@ -512,6 +587,22 @@ underscoped and, as of steering 2026-09-12, the wrong question.
   peerlist) and the complement-seeking peer selection. Those are read
   from; the deletion pass is what remains.
 
+**Still OPEN (added 2026-09-13):** under Q9's candidate — the daemon
+holds shards as a *retention exception* on the universal discard
+predicate — the exception list is configuration that reaches the
+daemon over the operator leg, and an **unbonded** operator can set it
+(a Foundation full archive, a block explorer, an altruistic keep-all
+node). Q7 says whether that is permitted. The reading this charter
+records as the candidate: **permitted, because retention and serving
+are different acts** — the bond is what *serving* needs (persona,
+countersignature, credit), and with `PDM-Q8`'s ruled P2P uniformity an
+unbonded exception affects only local disk and local fetch avoidance,
+reaches no wire, and is the structural coverage floor Q9 and Q5 item 2
+want. Q7's "not an operator switch" then reads: the *universal* set has
+no switch; *exceptions* exist and are not what makes a node an
+archiver. If Q7 rules the other way it names why an unbonded full
+archive is a hazard and not a floor.
+
 **Still OPEN:** the standard process (what every daemon retains and
 discards) is Q1–Q6 and Q8. Q7 does not re-derive it. Read
 [`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)
@@ -519,7 +610,7 @@ discards) is Q1–Q6 and Q8. Q7 does not re-derive it. Read
 carries; that residue dies with the engine at the cutover, or it is
 named as something the standard process must still speak.
 
-### `PDM-Q8` OPEN — Privacy
+### `PDM-Q8` PARTIAL 2026-09-13 — Privacy
 
 Two directions, both load-bearing under `00-mission`. Pruning lowers the
 cost of running a node, which raises node density. Fetching a specific
@@ -528,6 +619,44 @@ design leaks a query pattern that universal retention does not. Wargame
 the fetch side: who observes the request, what it discloses, and whether
 cover traffic, batching, or oblivious retrieval is required. Do not let
 the density argument absorb the query-privacy argument.
+
+**Ruled (steering, 2026-09-13) — P2P body-serving is uniform on every
+node.** The hazard it closes (`PDM-Q-F21`): the bond publishes shard
+`s` on-chain; if an archiver's daemon answered P2P requests for
+beyond-window bodies in `range(s)`, the one clearnet peer that serves
+those bodies *is* that persona's daemon — a Model D breach by
+inference, with the linking fact (`s`) supplied by the chain itself.
+The rule: **every daemon serves transaction bodies over P2P only
+inside the universal window, and refuses identically outside it,
+regardless of what it retains locally.** Retention selects data;
+it never selects wire behaviour (rule 71's shape, applied to the
+serve side). Consequences, recorded as they follow:
+
+- All beyond-window *serving* is wallet-fronted over onion, under a
+  persona, as today (`shekyl-p-host`). The daemon never learns, and
+  never reveals, which of its retained ranges is anyone's shard.
+- The `NOTIFY_REQUEST_GET_OBJECTS` serve path
+  (`cryptonote_protocol_handler.inl:963`) and its `req.prune` /
+  `should_ask_for_pruned_data` negotiation (`:2343-2346`) are the
+  Monero-era surface that made retention *visible* on the wire
+  (`CR-D2`'s residue); under this ruling the successor has one
+  answer inside the window and one refusal outside it, and no
+  per-peer retention negotiation. `pruning_seed` on the wire carries
+  information only for archivers (F17 (c)) — and after this ruling it
+  should carry none for them either on the *daemon's* P2P identity;
+  the advertisement Q9 owes belongs to the persona, not the peer.
+- The fetch client for body fill therefore lives in the daemon and
+  reads over onion (Q5 item 3); it is the *serving* act that stays
+  behind the wallet.
+- Test: an archiver daemon retaining `range(s)` and a non-archiver
+  daemon must be indistinguishable to any P2P peer across every
+  request in the protocol. The edit that makes it red is a serve
+  path that consults the retention set outside the universal
+  window.
+
+This is the design that has been intended throughout; it had not been
+stated. **Still OPEN:** the fetch-side wargame above, now over the
+onion leg to archivers rather than over P2P.
 
 ### `PDM-Q9` PARTIAL 2026-09-13 — The archiver's retention set: source, binding, lapse
 
@@ -547,6 +676,22 @@ daemon's supplementary retention set is **read from the chain**, not
 configured on the daemon. There is no second place where "which shards"
 is spelled, and no daemon flag is minted for it.
 
+**Candidate under review (steering discussion, 2026-09-13; not
+ruled): the daemon holds the shard, as a retention exception on the
+universal discard predicate.** Today `P` serves from a *second*
+database — `shekyl-curve-tree`'s wallet-side redb `LeafStore`
+(`PDM-Q-F21`) — holding the unit F12 retired. The daemon already has
+the good at ingest (it wrote `txs_prunable` before any discard could
+run), so retaining shard `s` is one thing: do not discard the prunable
+regions in `range(s)`. That is a filter on the predicate every daemon
+already evaluates — `retain(block) = in_window(block) ∨ block ∈
+exceptions` — one code path, one deletion site, archivers differing
+from other nodes by data rather than by software (rule 71's shape).
+Serving path: onion request → wallet → operator-to-operator leg →
+daemon reads `range(s)` → wallet streams; localhost against a Tor
+circuit is not a latency question. What the candidate changes in the
+open items below is recorded against each.
+
 **Still OPEN, in rule-21 shape when ruled:**
 
 - **Binding.** The daemon must know which bond(s) it serves for. That
@@ -556,7 +701,18 @@ is spelled, and no daemon flag is minted for it.
   material crosses to make it work
   ([`16-architectural-inheritance`](../../.cursor/rules/16-architectural-inheritance.mdc)
   §"comment that outlived its architecture" is the precedent for
-  getting this wrong).
+  getting this wrong). **Under the candidate this item mostly
+  dissolves:** the wallet holds the bond and issues `retain(s)` /
+  `release(s)` over the operator leg; the daemon holds a set of ranges
+  and no persona identity, cannot tell which persona a serve is for
+  (the wallet countersigns), and several personas on one daemon are a
+  union of exceptions. Nothing crosses the boundary but a list of
+  ranges. State explicitly that the exception list on the daemon's
+  disk is a persona-linking fact of the *same class* as the bond on
+  the wallet's disk — operator-controlled machine, never advertised
+  (`PDM-Q8` ruled) — so that daemon storage is not later misread as a
+  Model D violation: Model D bounds network identity, not which local
+  process holds which bytes.
 - **Lapse timing.** Retention must outlast the bond. An archiver whose
   `Release` (or a `HoldingsUpdate` dropping shard `s`) lands at height
   `h` can still be challenged on `s` for the challenge window and
@@ -565,7 +721,33 @@ is spelled, and no daemon flag is minted for it.
   function of the pinned constants in `shekyl-archival-retention`
   (`CHALLENGE_RESOLUTION_BLOCKS`, `SETTLEMENT_EPOCH_BLOCKS`,
   `ARCHIVAL_REORG_DEPTH_BLOCKS` = 720), and name the test that goes
-  red if the tail is shorter than the window.
+  red if the tail is shorter than the window. **Under the candidate**
+  the tail is a monotone floor the *daemon* enforces after any
+  `retain(s)` — `release(s)` is accepted at once by the wallet and
+  cannot shorten it — which is testable against the constants and
+  cannot be defeated by a wallet bug.
+- **Coverage is chain liveness, not market health (`PDM-Q-F20`).** A
+  range with no archiver is a range no fresh node can verify (Q5 item
+  2). The market prices shards by `r`; nothing in it guarantees every
+  range has *one* holder. Q9 names the floor — `CompleteTree` holdings
+  as a structural fact (Foundation, explorers; Q7's unbonded
+  exceptions are the same object), a minimum-holder rule the
+  challenge scheduler enforces, or something else — and says which
+  instrument goes red when a range's holder count reaches zero.
+- **Data loss is the one fetch on `P`'s side.** `P` never fetches
+  under normal operation. A daemon that loses `range(s)` (disk
+  failure, restore from a pre-`retain` backup) cannot regenerate the
+  good — nothing can; that is what makes it the good. Either archivers
+  accept slashing on data loss, or there is a **recovery fetch** from
+  other holders of `s`, over Q5 item 3's primitive, from the
+  archiver's own daemon. The candidate reading: recovery-by-fetch is
+  right and is the single named exception to "`P` never fetches";
+  slashing stays (the market prices durability) but the exposure is
+  bounded to the recovery window. Two things it owes: the window
+  (recovery must complete inside the challenge cadence or the fetch
+  is pointless), and the **free-ride shape** — a recovery fetch is
+  unpaid serve load on the archivers that answer it; bound it or price
+  it rather than assume it is rare.
 - **Interaction with the universal set.** Where the archiver's shard
   `s` overlaps the universal window (Q2's not-yet-discarded frontier),
   the supplementary set is empty by construction; the ruling should
@@ -674,6 +856,35 @@ refuses a fork deeper than `D_max` and the verdict it emits; the
 consequences for Q2's predicate and F19's floor stated as recomputed
 values, not literals; and the test that goes red when a fork of
 `D_max + 1` is accepted.
+
+### `PDM-Q12` OPEN — The freeze pipeline and the wallet-side `LeafStore` under Q6's unit (minted 2026-09-13)
+
+Held as a question, not a claim, because the pipeline has dependents
+(`TJ-D`, `RF-D6`'s segment, `SF-`'s serve-set pin).
+
+- **Does the freeze retire?** The segment freeze
+  ([`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md))
+  exists to commit `R_k` over a segment of leaves so that served bytes
+  are content-verifiable. Under a per-tx verifier the commitment
+  exists at ingest — every txid already binds `prunable_hash` and
+  `pqc_auth_hash` — so there is no moment at which a range *becomes*
+  verifiable; it was verifiable in the block it landed. If nothing
+  remains for the pipeline to commit, it retires, and Q12 names what
+  its dependents bind to instead (the shard's derivable membership,
+  Q6 item 3).
+- **The wallet-side `LeafStore` is a deletion target, not a
+  migration (`PDM-Q-F21`).** There is no chain and the unit changed:
+  `open_frozen_segment_body`, `ServingReader`, leaf-order body
+  streaming (`rust/shekyl-curve-tree/src/store/redb_backend.rs:164-183`)
+  go, and `StoreError::FrozenSegmentPruned` (`:464`) — "the serve-set
+  was not pinned before a prune ran" — is a failure mode that cannot
+  occur when the daemon's retention exception *is* the pin (Q9's
+  candidate). `StoreShardProvider` in `shekyl-p-host` abstracts over a
+  reader, so the swap is the provider, not the endpoint.
+- **What a ruling owes:** the dependents list with each one's
+  substitute; the deletion surface; and a statement that the wire
+  sees no change (the credit wire's whole-shard read is unit-agnostic
+  on the wire, `ARCHIVAL_CREDIT_WIRE.md` §3).
 
 ---
 
@@ -1227,6 +1438,68 @@ consensus question: *does anything read it after admission?*
   the arithmetic behind it is the part worth taking, and it stays in
   C++ to be read from until `DRS-E*` (`PDM-Q7`).
 
+### Established by reading (2026-09-13, same pin — the serving-side and sync pass)
+
+- **PDM-Q-F20.** **Under Q6's unit, sync is the read.** A fresh node
+  verifies every proof and PQC signature in history by default; under
+  Q6 no ordinary peer holds those bytes beyond `tip − D_max`, so every
+  fresh node's bootstrap is a read of the *entire* good from
+  archivers. Three consequences. (a) *Coverage is chain liveness*: a
+  range with no archiver is a range no new node can ever verify —
+  the floor is Q9's, the loud node state is Q5's. (b) *The possession
+  test gets organic demand*: TJ ruled "the test IS a read" and then
+  had to manufacture readers (miner attestation); syncing nodes are
+  real readers with a real need, arriving continuously, reading whole
+  ranges and verifying every byte against a hash they hold — an
+  archiver that drops bytes is caught by the next node that syncs, not
+  by a scheduler. Whether such reads *earn* credit is the credit
+  wire's; that they *exist* changes the threat model. (c) *The
+  skeleton suffices for state, the body for proof*: everything a node
+  needs to build current consensus state is derivable from the
+  unprunable base plus the two hash rows (F12 for the tree;
+  `spent_keys` from the prefix; archival tables from kept-side
+  headers), so bootstrap decomposes into skeleton sync from any peer
+  and body fill from archivers, and "I have verified genesis→tip" is a
+  separable job. The inherited `--sync-pruned-blocks`
+  (`cryptonote_core.cpp:127-130`; `cryptonote_protocol_handler.inl:139-152`
+  accepts a pruned entry on the txid alone) is the Monero-era
+  trust-the-txid form of body-less sync and must not become the
+  default by inheritance (`00-mission` priority 1). Q5 widened.
+- **PDM-Q-F21.** **The serving side holds the retired unit, and
+  serving it over P2P would unmask the persona.** Two facts. (i) `P`
+  serves today from a wallet-side redb `LeafStore`
+  (`rust/shekyl-curve-tree/src/store/redb_backend.rs`; `ServingReader`
+  / `open_frozen_segment_body` at `:164-183`, `FrozenSegmentPruned` at
+  `:464`), a second database separate from the daemon, holding leaves
+  in tree order for verification against `R_k` — i.e. the unit F12
+  showed is a cache. The store is not redundant; it holds the wrong
+  object (Q12). (ii) If the daemon holds shards (Q9's candidate) and
+  answered P2P requests for beyond-window bodies in `range(s)`, the
+  chain's own publication of `s` in the bond makes the one clearnet
+  peer that serves them identifiable as that persona's daemon. The
+  inherited serve path negotiates retention per peer
+  (`cryptonote_protocol_handler.inl:963`, `:2343-2346`,
+  `pruning_seed`). **Ruled on the spot (`PDM-Q8`): P2P body-serving
+  is uniform inside the universal window on every node**; beyond-
+  window serving is wallet-fronted over onion only; fetching lives in
+  the daemon (Q5 item 3).
+- **PDM-Q-F22.** **Two boundary facts the Q6 verifier design must
+  carry.** (i) The coinbase's `prunable_hash` is `null_hash` whenever
+  `ct_signatures.type == CTTypeNull` (`cryptonote_format_utils.cpp:1299-1302`),
+  and the coinbase is always `CTTypeNull` — so nothing on a coinbase
+  prunable side is committed to by `txs_prunable_hash`. The credit
+  wire already hit this and answered it with the block-level
+  `attestation_root` (`ARCHIVAL_CREDIT_WIRE.md` §3.1, "why the
+  coinbase's `prunable_hash` cannot carry the commitment"); Q6 cites
+  the precedent. (ii) DRS-0 slice A already grades the good the way
+  Q6 wants it: `txs_prunable` is `Excluded` and `txs_prunable_hash` is
+  `AppendMostly` (`class.rs:162-163`) — body non-accumulator, hash
+  permanent — without knowing why. The one row that is wrong under
+  F14 is `txs_pqc_auths` at `AppendMostly` (`:161`); it takes the same
+  re-grade F11 asks for the curve-tree rows, in the DRS-0 lane, on
+  Q6's output. The per-tx permanent cost of the whole design is the
+  two 32-byte rows.
+
 ### Retracted
 
 - **PDM-Q-F6 RETRACTED 2026-09-12** as a launch-state fork. Was
@@ -1253,9 +1526,13 @@ consensus question: *does anything read it after admission?*
   `LOCAL-BOUNDED` rows, F16), the trigger (including the free-regime
   duration, what the market does during it, and the reorg-depth floor,
   F10 / F15), residual consensus reads after TJ-A (Q3),
-  reconstruction, cold sync, stripe-engine residue at the cutover
-  (Q7), fetch privacy, the archiver's bond-binding and lapse tail
-  (Q9), the "not retained" RPC response (Q10).
+  reconstruction, cold sync as skeleton sync + body fill with the
+  unverified-range state and the fetch primitive (Q5, F20),
+  stripe-engine residue at the cutover and unbonded exceptions (Q7),
+  fetch-side privacy over onion (Q8's remaining half), the archiver's
+  daemon-storage candidate, lapse tail, coverage floor and recovery
+  fetch (Q9), the "not retained" RPC response (Q10), the freeze
+  pipeline and `LeafStore` under the new unit (Q12).
 - ~~Whether `scan_outputkeys_for_indexes` is live or residue~~ —
   settled residue, `PDM-Q-F18`. ~~Whether every caller of
   `archival_slash_removed_holding_after` passes `at_height ≥ tip − W`~~
@@ -1278,13 +1555,14 @@ consensus question: *does anything read it after admission?*
 | `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` vs `tip − D_max` (F10) | OPEN — blocked on Q11 |
 | `PDM-Q3` | Residual consensus reads after TJ-A | OPEN — today not node-local (`PDM-Q-F8`) |
 | `PDM-Q4` | Reconstruction path | OPEN |
-| `PDM-Q5` | Cold sync and bootstrap | OPEN |
-| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; leaf→tx unit change (F13, F14, F15) | OPEN — the round's subject 2026-09-13; ruled before Q1 |
-| `PDM-Q7` | Stripe engine / `--prune-blockchain` | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*` |
-| `PDM-Q8` | Privacy (density vs query) | OPEN |
-| `PDM-Q9` | Archiver's retention set: source, binding, lapse | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); binding and lapse tail OPEN |
+| `PDM-Q5` | Cold sync and bootstrap — skeleton sync + body fill from archivers; synced-state semantics; the unverified-range state; the fetch primitive and its three callers (F20) | OPEN — widened 2026-09-13; transport is the `SF-` round's |
+| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22) | OPEN — the round's subject 2026-09-13; ruled before Q1 |
+| `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; unbonded exceptions OPEN (candidate: permitted, serving needs the bond) |
+| `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
+| `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); candidate under review: the daemon holds the shard as a retention exception on the universal predicate (binding dissolves to `retain(s)`/`release(s)` over the operator leg); lapse tail, coverage floor (F20), recovery fetch OPEN |
 | `PDM-Q10` | RPC contract for "not retained" | OPEN |
 | `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2) and F19 (Q1) both derive from; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; candidate 720 (24 h) as coordination with the archival domain, security wants shallower; numeric pinned to the Round-2 re-pin gate with `n` |
+| `PDM-Q12` | The freeze pipeline and the wallet-side `LeafStore` under Q6's unit — does the freeze retire when the commitment exists at ingest; `LeafStore` as deletion target (F21) | OPEN — minted 2026-09-13; held as a question because of `TJ-D` / `RF-D6` / `SF-` dependents |
 
 When this round proposes a test, it will name the edit that makes that
 test red. A red test that cannot be made red by a specific edit is not
@@ -1318,8 +1596,24 @@ ruling written ahead of Q6 is ruling on a cache. Q1 then rules §9's
 readers. Q9's binding and lapse tail; Q10's response shape, legible
 to the `SF-` round. F9 is a C++ defect independent of PDM; the carrier
 is the FOLLOWUPS row, not this charter. F11's re-grade of the three
-curve-tree rows — and now `txs_pqc_auths` — is the DRS-0 lane's, on
-Q6's and Q1's output.
+curve-tree rows — and now `txs_pqc_auths` (F22) — is the DRS-0 lane's,
+on Q6's and Q1's output.
+
+The serving-side pass (F20–F22) adds: Q5 rules synced-state semantics,
+the unverified-range state and the fetch primitive, with the `SF-`
+round owning transport; Q7 rules unbonded exceptions; Q8's ruled
+uniformity is carried into the daemon-cutover lane as a property of
+the successor serve path (one answer inside the window, one refusal
+outside, no per-peer retention negotiation) and its indistinguishability
+test named; Q9 rules the daemon-storage candidate, the coverage floor
+and the recovery fetch; Q12 rules whether the freeze retires and lists
+the `LeafStore` deletion surface. The shape the pass converged on, for
+the ruling pass to confirm or refute: one unit (a tx range), one
+predicate (`retain`), one verifier (the two hash rows the txid already
+commits), one primitive (fetch a range, verify per-tx), one
+advertisement (the bond, echoed compactly per F17), one economic
+weight (the bond) — with sync, recovery and challenge being the same
+read. Nothing new is committed to by consensus.
 
 ---
 
