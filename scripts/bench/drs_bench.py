@@ -330,7 +330,8 @@ def comparability_refusals(base, cand):
         r.append("durability blocks differ — a ratio between different durability "
                  "policies measures the policy, not the engine")
     bf, cf = base.get("fixture", {}), cand.get("fixture", {})
-    for k in ("nettype", "height_reached", "verify_exercised", "tx_per_block"):
+    for k in ("nettype", "height_reached", "verify_exercised", "tx_per_block",
+              "peers_used"):
         if bf.get(k) != cf.get(k):
             r.append(f"fixture.{k} differs ({bf.get(k)!r} vs {cf.get(k)!r}) — the two "
                      "runs did not do the same work")
@@ -658,15 +659,20 @@ def measure(args):
                 _fail("subject RPC never came up")
             # The denominator: from the subject answering RPC (so RandomX dataset
             # init and store open are EXCLUDED) to its height reaching the seed's.
-            t0, reached, peak = ready, 0, 0
+            t0, reached, peak, peers = ready, 0, 0, 0
             deadline = t0 + args.sync_timeout
             while time.time() < deadline:
                 try:
-                    reached = _rpc(brpc, "get_info")["result"]["height"]
+                    info = _rpc(brpc, "get_info")["result"]
                 except (urllib.error.URLError, OSError, json.JSONDecodeError,
                         TimeoutError):
                     time.sleep(1)
                     continue
+                reached = info["height"]
+                # How many peers served this IBD is part of the experiment: wall
+                # time scales with it, so two artifacts taken against different
+                # peer counts are not comparable even at identical heights.
+                peers = max(peers, info.get("outgoing_connections_count", 0))
                 peak = max(peak, _peak_rss_bytes(subj.pid) or 0)
                 if reached >= seed_h:
                     break
@@ -730,6 +736,7 @@ def measure(args):
                            "FCMP++ verification is not exercised at all.",
             "seed_height": int(seed_h),
             "seed_reused": bool(seed_reused),
+            "peers_used": int(peers),
         },
         "measures": [
             {"name": "ibd_wall_time_s", "axis": "wall_time", "unit": "s",

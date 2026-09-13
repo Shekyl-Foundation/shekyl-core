@@ -49,7 +49,7 @@ def valid_artifact(engine="lmdb", **over):
             "nettype": "fakechain", "height_reached": 200, "height_requested": 200,
             "reference_height": D.REFERENCE_HEIGHT, "tx_per_block": 0,
             "verify_exercised": {"pow": True, "fcmp_pp": False},
-            "seed_height": 200,
+            "seed_height": 200, "peers_used": 1,
         },
         "measures": [
             {"name": "ibd_wall_time_s", "axis": "wall_time", "unit": "s",
@@ -248,6 +248,12 @@ class Comparability(unittest.TestCase):
     def test_refuses_differing_height_reached(self):
         self._refuse(lambda b, c: c["fixture"].__setitem__("height_reached", 150),
                      "fixture.height_reached differs")
+
+    def test_refuses_differing_peer_count(self):
+        """IBD wall time scales with the number of peers serving it, so equal
+        heights at different peer counts are not the same experiment."""
+        self._refuse(lambda b, c: c["fixture"].__setitem__("peers_used", 4),
+                     "fixture.peers_used differs")
 
     def test_refuses_differing_verify_exercised(self):
         self._refuse(lambda b, c: c["fixture"].__setitem__(
