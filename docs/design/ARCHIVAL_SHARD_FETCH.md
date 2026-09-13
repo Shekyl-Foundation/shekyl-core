@@ -1,6 +1,7 @@
 # Archival shard fetch — the daemon client (design round)
 
-**Status: RULED — Round 1 CLOSED 2026-09-13; implementation pending.**
+**Status: RULED — Round 1 CLOSED 2026-09-13; implementation in
+progress: (a0) LANDED 2026-09-13, (a)/(b)/(c) pending.**
 Round 1 opened 2026-09-12, grounded `dev@ba4b3c73a`. Every `SF-D`
 question is disposed: `SF-D2`, `SF-D3`, `SF-D4`, `SF-D6`, `SF-D7`,
 `SF-D10`, `SF-D13` RULED; `SF-D5` RULED and amended with the request
@@ -10,10 +11,11 @@ rule-26 halt is lifted:** implementation may begin, in the landing
 sequence §9.1 fixes (2026-09-13): (a0) the v2 pass-countersignature
 verifier alone → (a) serve side → (b) `shekyl-p-fetch` → (c) W₂ then
 `N`. This file stays in `docs/design/` because it still owns named
-residue the implementation PR discharges — the header spelling and
-encoding (`SF-D5`), in-flight cap `N` (`SF-D7`), the signature domain
-string and KAT (`SF-D8`), carrying the requester-random on the pass
-record (`SF-D8`), and the W₂ measurement (§8) — and archives to
+residue the implementation PRs discharge — the header spelling and
+encoding (`SF-D5`), in-flight cap `N` (`SF-D7`), the response envelope
+(`SF-D8` carrier), and the W₂ measurement (§8); the signature domain
+string, KAT, and nonce-carrying pass record (`SF-D8` message) were
+discharged by (a0) — and archives to
 `docs/completed/` when the client lands. Organic draw bound `k` is
 `TJ-D`'s, not this PR's.
 Identifier family `SF-` (index row `SF-D1…SF-Dn`, registered at
@@ -33,9 +35,13 @@ JoinMarket-endpoint design; the rest of the `EU-` round was REJECTED
 `SF-D6` (RULED) and
 concurrency is `SF-D7` (RULED). The request-side carrier and
 countersigning key are now ruled (`SF-D5` amendment; `SF-D13`), and so
-is the complete response (`SF-D8`, RULED 2026-09-13, amended later the
-same day: both callers send requester-random bytes plus the published
-tip height; `P` signs `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]`; the
+is the complete response (`SF-D8`, RULED 2026-09-13, amended twice
+later the same day — the second amendment is the one that landed: both
+callers send requester-random bytes plus a **chain anchor**
+`anchor_height ‖ anchor_hash` at `tip − archival_reorg_depth_blocks`;
+`P` gates `anchor_height` against its own height (±`L`) and signs the
+decoded 72-byte header ‖ `shard_id_le[8]`; admission looks the anchor
+hash up on the connecting chain inside `[h−720−L, h−720]`; the
 challenge tuple and `cb_out_key` are not in the fetch signature; the
 response body is an outer binary envelope carrying the canonical
 `HybridSignature` followed by the unchanged `RF-D4` frame) — the
@@ -164,17 +170,17 @@ inherited as "the client waits."
 | Onions are enumerable (every `JoinMarket` publishes one; public is its normal state); the serve-side limiter (`shekyl-p-serve::serve::MAX_INFLIGHT`, SPIKE-PIN-2) is load-bearing. **`EU-D6` REJECTED 2026-09-13** as a rotation-rate argument; the enumerability fact and the limiter survive on their own code anchors, not on `EU-D6` |
 | **`EndpointUpdate` (kind 4) REJECTED 2026-09-13** — a bonded persona's endpoint never changes; the endpoint is mandatory on `JoinMarket`, non-zero by consensus, immutable for the record's life (`EU-D3` narrowed). A new address is a new persona via Release + fresh `JoinMarket`. `EU-D2`, `EU-D5`…`EU-D13` rejected with it. Consequence for this round: "no endpoint on record" is unrepresentable, so `SF-D6`'s no-endpoint non-row collapses (see `SF-D6`), and `SF-D13`'s "onion key may rotate" reason is refuted (see `SF-D13`) | `EU` §1, §5 |
 | `GET /shard/{id}`; identical 404s for every non-servable outcome; only content-type + content-length on the response; hand-rolled HTTP/1.1 | `RF-R1` |
-| **Request-header amendment RULED 2026-09-13, not yet landed:** exactly one named header is required and decodes canonically to 40 bytes `nonce[32] ‖ height_le[8]` — fresh random for every request, both callers, plus the published chain-tip height at request time (for the miner building *h*, that is *h*−1). Missing, malformed, duplicate, or wrong-length values are the same identical complete-head 404. All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR | `SF-D5` amendment; implementation carrier is the `shekyl-p-serve` + `shekyl-p-fetch` PR |
+| **Request-header amendment RULED 2026-09-13 (second amendment; verifier half LANDED by (a0), serve half lands with (a)):** exactly one named header is required and decodes canonically to 72 bytes `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — fresh random for every request, both callers, plus a chain anchor at `tip − archival_reorg_depth_blocks` (720): the height and the requester's own block hash at it. `P` applies one pre-sign gate, `anchor_height ∈ [p − 720 − L, p − 720 + L]` with `p` its own height and `L = archival_attestation_anchor_lag_blocks` (4, PROVISIONAL), else the identical 404. Missing, malformed, duplicate, wrong-length, or out-of-gate values are the same identical complete-head 404. All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR. `P` signs the **decoded** 72 bytes, never the textual form | `SF-D5` amendment; verifier (a0) `#734`; serve-side carrier is the `shekyl-p-serve` PR (a) |
 | **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and verifies `R_k` — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). There is no leaf to extract locally (`RF-D8` retracted the opening). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
 | **Serving and fetching do not share a Tor instance.** `PWD-E9` (RULED 2026-09-08, implemented 2026-09-09): the daemon gets its own tor path with no crossover to the archival-serving persona; the launch path takes instance identity as a parameter, so sharing the code cannot produce a shared instance. The ratified §7 guard residual splits one application's identities; E9 forbids two applications sharing one instance, and the ephemeral/durable asymmetry makes the crossover strictly worse. **`SF-D11` withdrawn** — asked in this round, then closed by reading `PWD-E9` | `PWD-E9` |
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. The daemon image passes that `SocketAddr` into `shekyl-p-fetch`; the crate does not discover SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
 | **Unauthenticated SOCKS, no isolation flags.** The fetch client presents no SOCKS credentials and sets no isolation flags on the zone proxy. Circuit assignment is Tor's, per its own defaults — this is not a one-circuit guarantee. Fetches then share circuits with overlay P2P (no credentials on the same SOCKS); that blending is a consequence, not a cover mechanism. Cover is TRC's subject | `SF-D3` RULED 2026-09-12 |
-| **The virtual port is 80**, a shared constant both sides read from `shekyl-curve-tree` (`SF-D4` named the home). Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — the current location, not the home; the implementation PR moves it. Two `80`s that happen to agree are still not the ratification — this row is the number; the implementation PR puts one constant in `shekyl-curve-tree` and both sides read it. **Request amendment:** same `GET /shard/{id}`, one required header decoding to `nonce[32] ‖ height_le[8]`, no path token, query string, or body; every production call uses it | `SF-D5` RULED 2026-09-12; AMENDED 2026-09-13 |
-| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is unrepresentable (`EU-D3` narrowed 2026-09-13), so the former filter / pre-dial non-row is void. 404 is a completed exchange (immediate miss), not a retry. Over-capacity silent close is stall-class (`RF-R1`), not a 404. Any other complete-head is malformed. Stall retries of that `P` reuse the same 40-byte header. `content-length` above `signature_envelope_len + max framed_len()` is refused from the HTTP headers; otherwise it must equal `signature_envelope_len + framed_len()`, known after fixed metadata but before segment bytes. The envelope is a fixed-width slice, then parsed. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
+| **The virtual port is 80**, a shared constant both sides read from `shekyl-curve-tree` (`SF-D4` named the home). Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — the current location, not the home; the implementation PR moves it. Two `80`s that happen to agree are still not the ratification — this row is the number; the implementation PR puts one constant in `shekyl-curve-tree` and both sides read it. **Request amendment:** same `GET /shard/{id}`, one required header decoding to `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`, no path token, query string, or body; every production call uses it | `SF-D5` RULED 2026-09-12; AMENDED 2026-09-13 (×2) |
+| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is unrepresentable (`EU-D3` narrowed 2026-09-13), so the former filter / pre-dial non-row is void. 404 is a completed exchange (immediate miss), not a retry. Over-capacity silent close is stall-class (`RF-R1`), not a 404. Any other complete-head is malformed. Stall retries of that `P` reuse the same 72-byte header. `content-length` above `signature_envelope_len + max framed_len()` is refused from the HTTP headers; otherwise it must equal `signature_envelope_len + framed_len()`, known after fixed metadata but before segment bytes. The envelope is a fixed-width slice, then parsed. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
 | **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(&FetchTarget, &header)` — **AMENDED 2026-09-13:** the target is typed (`ServingEndpoint`, `HybridPublicKey`, `FrozenSegmentRecord`, `u64`), caller-supplied from local chain state, never from a response; schedulers name `P`; the HTTP path names only `s`. `N` slots, no unbounded buffer: a scheduler waits for a slot. `N` is also `N × SHARD_BYTES` on the Pi 4 floor (the client materialises the segment to verify `R_k`). Not organic draw cap `k` and not a function of `D`. SP-T3 re-base / W₂ owns the upper bound as min(circuit-churn, memory); the implementation PR owns the lower-bound judgement. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12; AMENDED 2026-09-13 |
 | **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`, performed by the organic scheduler, not by `shekyl-p-fetch`. Per-need exclusion is scratch, not memory. The fetch client forms no opinions — it is given a destination | `SF-D10` RULED; `SF-D12` corollary |
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. `shekyl-p-serve` holds no key material: `PServeEndpoint` takes a signer callback; tests inject a test key; SH-2 wires the persona secret. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
-| **The signed message is `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]`** — requester-random, published tip height, then the `u64` `P` parsed from `/shard/{id}`, under a new versioned domain (the v1 nonce-only domain is not reused). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard. The pass record **carries** the 32-byte random (it cannot be recomputed); admission of a challenge pass checks signed height against the block's predecessor height. Domain string and KAT are pinned by the implementation PR | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 |
+| **The signed message is the decoded header ‖ `shard_id_le[8]`: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`** (80 bytes) — requester-random, the requester's chain anchor at `tip − 720`, then the `u64` `P` parsed from `/shard/{id}`, under `shekyl/archival-attestation-scheme-v2` (the v1 nonce-only domain is retired). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard. The pass record **carries** `nonce` and `anchor_height` (neither is recomputable); admission rebuilds the transcript with the connecting chain's hash at `anchor_height`, requires `anchor_height ∈ [h − 720 − L, h − 720]` with `h` the validated predecessor, and refuses every pass record while `h < 720 + L` (724). Domain string, fixture, and boundary KATs (723/724) LANDED 2026-09-13 by (a0) | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 (×2); LANDED (a0) |
 | **Inner frame:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything. `RF-D4` itself carries no countersignature and is unchanged | `RF-D4`, `RF-D7` |
 | **Response carrier:** the HTTP body is an outer binary envelope carrying the canonical `HybridSignature` (both legs, fixed length), followed by the unchanged `RF-D4` frame. HTTP response headers stay exactly `content-type` and `content-length`; `content-length` covers envelope plus frame. No signature leg is text-encoded into a header. Verification happens inside the fetch call; the client returns verified-or-refused, never raw bytes | `SF-D8` carrier RULED 2026-09-13 |
 | Padding field reserved, no scheme; TJ-H mitigation at the Tor layer (vanguards on the **wallet** serve path) | TJ-H (ruled 2026-08-08) |
@@ -212,9 +218,12 @@ criterion**. Rick ruled them. `SF-D2`…`SF-D7` RULED. `SF-D9` done
 `PWD-E9`). `SF-D12` a corollary of `SF-D10`, not a coupled question.
 `SF-D13` ruled the signing key before `SF-D8`; `SF-D8` RULED last
 (signed message, then carrier), which lifted the rule-26 halt.
-`SF-D5`/`SF-D8` were amended later the same day: both callers send
-requester-random plus published-tip height; the challenge tuple is not
-on the fetch.
+`SF-D5`/`SF-D8` were amended later the same day, twice: first to
+requester-random plus published-tip height (SUPERSEDED the same day,
+never landed), then to requester-random plus a buried chain anchor
+`anchor_height ‖ anchor_hash` with a `P`-side height gate — the shape
+the (a0) PR landed. The challenge tuple is not on the fetch under
+either.
 
 ### `SF-D2` — daemon Tor outbound posture — RULED 2026-09-12
 
@@ -405,28 +414,65 @@ then the `RF-R1` GET. Unauthenticated SOCKS, no isolation flags
 (`SF-D3`). No caller-specific path token (`SF-D1`), no query string,
 and no request body.
 
-**Request-header amendment (RULED 2026-09-13; AMENDED later the same
-day).** Every request carries exactly one named header whose one
-canonical textual encoding decodes to exactly 40 bytes:
-`nonce[32] ‖ height_le[8]`. Both callers, every request:
+**Request-header amendment (RULED 2026-09-13; AMENDED twice later the
+same day — the second amendment is current).** Every request carries
+exactly one named header whose one canonical textual encoding decodes
+to exactly 72 bytes: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
+Both callers, every request:
 
 - `nonce` is fresh cryptographically random 32 bytes. No two requests
   reuse it. It is **not** `attestation_nonce`. The challenge tuple
   (`block_hash(h−1)`, `cb_out_key`, `P`, `s`, `E`) does not go on the
   fetch — that hash names the assignment, and putting it on the wire
   lets `P` serve the witness and refuse everyone else.
-- `height` is the published chain-tip height at request time, as a
-  little-endian `u64`. Both `P` and any requester can compute it.
-  For the miner building block *h* it is *h*−1. It is freshness, not
-  identity: it does not name the assignment.
+- `anchor_height` is `tip − archival_reorg_depth_blocks` (720) at
+  request time, as a little-endian `u64`, and `anchor_hash` is the
+  requester's own block hash at that height. A block 720 deep is the
+  segment-freeze depth (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`,
+  const-asserted equal in the retention KAT): identical on every
+  honest node's chain, so races at the tip cannot make an honest
+  requester's anchor fail, and every miner building on the same tip
+  sends the same anchor. It is freshness, not identity: it does not
+  name the assignment.
 
-`P` treats the decoded 40 bytes as opaque input to `SF-D8`'s
-response-binding transcript. It does not infer which caller this is.
+**`P`-side gate (RULED 2026-09-13; lands with the (a) serve PR under
+`RF-R1`).** Before signing, `P` checks
+`anchor_height ∈ [p − 720 − L, p − 720 + L]`, where `p` is `P`'s own
+height and `L = archival_attestation_anchor_lag_blocks` (4,
+PROVISIONAL). Out of gate is the identical complete-head 404. The
+**upper** bound carries freshness against a non-colluding witness: a
+requester that fetched at height *T* with `anchor = hash(T − 720)`
+would otherwise hold a signature admissible at *h* = *T* + 720, a day
+later; with the gate it gets a 404. The **lower** bound is hygiene.
+The gate is **two-sided with the same `L`** so a `P` one block behind
+does not refuse the whole network, and so no `P` gates distinctively.
+`P` needs a **height**, not a chain: one `u64` the host supplies from
+the same loopback the claim leg already requires (`SF-D13`);
+`shekyl-p-serve` stays a blind signer over requester bytes with no
+daemon dependency (`SF-D4` dep cut intact). **Residual, recorded:**
+the gate leaks whether `P` is synced — a requester can binary-search
+`P`'s height through 404s. A synced `P` answers like every other synced
+`P`, and an unsynced one is already failing challenges, so the leak is
+"synced or not", which is not identity. Accepted.
+
+`P` treats the decoded 72 bytes as opaque input to `SF-D8`'s
+response-binding transcript — the gate reads `anchor_height`, nothing
+else is interpreted. It does not infer which caller this is.
 
 This rules the **carrier**, not the signed message. The request parser
-hands `(nonce, height, shard_id)` to the response-binding seam; `SF-D8`
-fixes the signed transcript as
-`nonce[32] ‖ height_le[8] ‖ shard_id_le[8]`.
+hands `(header_bytes, shard_id)` to the response-binding seam; `SF-D8`
+fixes the signed transcript as the **decoded** 72 bytes in canonical
+binary followed by `shard_id_le[8]` — never the header's textual form,
+so Rust and C++ cannot disagree the first time a case or padding
+variant is accepted on the wire.
+
+*Records-was (first amendment, SUPERSEDED the same day, never
+landed):* 40 bytes `nonce[32] ‖ height_le[8]` with `height` the
+published tip and admission requiring equality with the predecessor
+height. Refuted because a requester-chosen integer proves nothing
+about when the fetch happened — `P` signs blind and a lone witness
+pre-fetches for any future height — and because exact equality misses
+every honest fetch that spans a block boundary.
 
 The header's **presence and shape** are ruled here. Its exact spelling
 and canonical textual encoding follow `RF-R1`'s transcription
@@ -438,11 +484,12 @@ Missing, duplicate, malformed, or wrong-length values are a
 complete-head miss and render the same byte-identical 404 as every
 other non-servable outcome. All other request headers remain ignored.
 
-**The only semantic request fields.** The 40-byte header is the only
+**The only semantic request fields.** The 72-byte header is the only
 recognized caller-supplied field other than the selected shard id.
 Both production callers use one serializer and vary only
-`(shard_id, nonce, height)`. Height is the published tip, so at any
-moment both callers send the same height distribution. This is the
+`(shard_id, nonce, anchor)`. The anchor is a deterministic function of
+the requester's tip, so at any moment both callers send the same
+anchor distribution. This is the
 enforceable `SF-D1` property: ignored HTTP syntax remains
 client-controlled on the wire under `RF-R1` (including currently
 accepted version-token values and leading-zero ids), so this ruling
@@ -464,9 +511,10 @@ the client pulling engine-core to get it.
 - **Reopen if:** the Tor layer surfaces a reason a non-default virt
   port cuts an enumeration or scanning class (onions are enumerable
   from `JoinMarket` posts; `EU-D6` itself is REJECTED); or
-  the implementation cannot express one canonical 40-byte
-  `nonce ‖ height` representation without adding a second request
-  field.
+  the implementation cannot express one canonical 72-byte
+  `nonce ‖ anchor_height ‖ anchor_hash` representation without adding
+  a second request field; or the W₂ / PD-F-2 dispersion measurement
+  moves `L` (see `SF-D8`'s PROVISIONAL note for the direction rule).
 
 ### `SF-D6` — timeout / miss / retry taxonomy — RULED 2026-09-12; AMENDED 2026-09-13
 
@@ -610,7 +658,7 @@ an implementation.
 | Complete-head that is not `200` with exactly `content-type` + `content-length`, and not the identical 404 (`301`, `500`, extra headers, wrong content-type) | Malformed → **miss** | Malformed: exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | Malformed response envelope / frame | Malformed → **miss**. Logged (`SF-D12`); not a selection input | Malformed: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 | `R_k` mismatch | Root-mismatch → **miss**. Typed and logged (`SF-D8`, `SF-D12`); not a selection input | Root-mismatch: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
-| Countersignature invalid for `SF-D8`'s ruled `nonce ‖ height ‖ shard_id` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
+| Countersignature invalid for `SF-D8`'s ruled `header[72] ‖ shard_id` transcript under P's bond-record hybrid identity key | Bad-countersignature → **miss**. Typed and logged (`SF-D8`, `SF-D12`); completed response, so no retry of that `P` | Bad-countersignature: log; exclude, draw next. Cap/`k` or remaining-empty → **client-need** |
 
 - **Amendment 2026-09-13:** the last three rows split parse failure,
   `R_k` mismatch, and bad countersignature into distinct verdicts.
@@ -618,10 +666,14 @@ an implementation.
   errors are not.
 - **Stall retries reuse the header.** Per-attempt handling is
   identical for both callers: retries of **that** `P` resend the same
-  40-byte `nonce ‖ height`. A new destination (organic draw-next, or
-  a new challenge) gets a new random; height is the tip at that new
-  request. Minting a new nonce on stall retry of the assigned `P`
-  would make a later pass record fail admission (wrong random).
+  72-byte `nonce ‖ anchor_height ‖ anchor_hash`. A new destination
+  (organic draw-next, or a new challenge) gets a new random; the
+  anchor is `tip − 720` at that new request. Minting a new nonce on
+  stall retry of the assigned `P` would make a later pass record fail
+  admission (wrong random). Retries are also why `L` is sized by
+  fetch-plus-retry span, not by fetch alone: the anchor is fixed at
+  first attempt and admission needs it inside `[h−720−L, h−720]` at
+  the block that finally carries it.
 - **Constraint:** retries must not become a distinguishable challenge
   pattern — the retry policy is a property of the client, not of the
   caller. Isolation shape is no longer a way to violate that:
@@ -800,6 +852,14 @@ It is named here so the implementation PR and SH-2 design the
 residency rather than discover it the first time the serve path needs
 to sign.
 
+**Second named input: a height, not a chain (added with the `SF-D5`
+second amendment, 2026-09-13).** The `P`-side anchor gate needs `P`'s
+own height to within `L`. That is one `u64` the host passes in beside
+the signer callback, read from the same loopback the claim leg already
+requires; a value within `L` of true is sufficient, so the host need
+not hold a validated tip, only a validated height. `shekyl-p-serve`
+still holds no chain view and takes no daemon dependency.
+
 **Test-key injection is an armed test affordance, not a config
 surface (added 2026-09-13).** The loopback acceptance test signs with
 an injected key. A key-injection path that survives into a production
@@ -860,9 +920,9 @@ checks:
 2. recompute `R_k` (`recompute_segment_r_k`) and compare it with the
    daemon's local `FrozenSegmentRecord`;
 3. verify P's hybrid countersignature under `SF-D13` against the ruled
-   transcript `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` — the 40-byte
-   header this request sent, followed by the `u64` this request asked
-   for.
+   transcript `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖
+   shard_id_le[8]` — the decoded 72-byte header this request sent,
+   followed by the `u64` this request asked for.
 
 No store handle exists at verify time (TJ-F liveness). The two
 verification refusals are distinct typed errors — `RootMismatch` and
@@ -881,18 +941,25 @@ scope** — the type this round names is the input that round consumes.
 Reconstruct's "install these leaves" is also out of scope (TJ-D
 storage); it consumes the same typed result.
 
-**Request side is closed.** `SF-D5` carries the 40-byte header: same
-`GET /shard/{id}`, one required canonical `nonce[32] ‖ height_le[8]`,
-no path token, query string, or body. Both callers generate a fresh
-random `nonce` and attach the published tip height. `P` parses `{id}`
-and constructs the signed transcript from the header plus that id.
+**Request side is closed.** `SF-D5` carries the 72-byte header: same
+`GET /shard/{id}`, one required canonical
+`nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`, no path token,
+query string, or body. Both callers generate a fresh random `nonce`
+and attach their chain anchor at `tip − 720`. `P` gates the anchor
+height against its own (`SF-D5`), parses `{id}`, and constructs the
+signed transcript from the decoded header plus that id.
 
 **The fetch proves `P` served, not which miner asked.** Binding
 `cb_out_key` or the rest of the challenge tuple into the request
 would name the assignment on the wire. Same-height reuse of a
-signature across competing blocks is accepted: Alice fetched, `P`
-served, Bob's winning block may carry that evidence. The 2-of-3
-counts whether `P` served, not who asked.
+signature across competing blocks still happens and is still fine:
+every miner building on tip *T* sends the same `hash(T − 720)`, so
+Alice fetched, `P` served, and Bob's winning block may carry that
+evidence. The 2-of-3 counts whether `P` served, not who asked.
+(Anchoring at the **tip** hash instead would have lost this — a `P`
+that saw the losing side of a same-height race first would sign a hash
+that never becomes canonical and eat an unpriced miss. Burying the
+anchor 720 deep keeps it; see the residual below for what it costs.)
 
 **Grounding finding — a signature that does not cover the parsed
 route id is a confused deputy.** The caller chooses the random
@@ -903,36 +970,144 @@ Appending the server-parsed shard id makes that signature fail for
 `target`. This is not additional evidence against a fully collusive
 P+witness; that residual remains priced by the ruled 2-of-3 quadratic.
 
-**Signed message — RULED 2026-09-13; AMENDED later the same day.**
-`P` signs one fixed, domain-separated encoding of
-`nonce[32] ‖ height_le[8] ‖ shard_id_le[8]`, where `nonce` and
-`height` are the decoded header values exactly as received and
-`shard_id` is the exact `u64` `P` parsed from this request's
-`/shard/{id}`. Both signature legs cover that message. The fetch
-client reconstructs it from the header it sent and the shard id it
-requested; it never reads those values back from the response.
+**Signed message — RULED 2026-09-13; AMENDED twice later the same
+day (second amendment current).** `P` signs one fixed,
+domain-separated encoding of
+`nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`
+(80 bytes), where the first 72 bytes are the **decoded** header in
+canonical binary exactly as received — never the header's textual
+form — and `shard_id` is the exact `u64` `P` parsed from this
+request's `/shard/{id}`. Both signature legs cover that message. The
+fetch client reconstructs it from the header it sent and the shard id
+it requested; it never reads those values back from the response.
 
-The pass record **carries** the 32-byte `nonce` — it is requester-
-random, so it cannot be recomputed from chain terms. That reverses
-the credit-wire line that the nonce is not stored. Admission of a
-challenge pass reconstructs the message as
-`carried_nonce ‖ predecessor_height_le ‖ record.shard_id` and checks
-the signature; signed height must equal the block's predecessor
-height (the published tip while building *h*). Height itself is not
-an extra stored field.
+The pass record **carries** the 32-byte `nonce` and the 8-byte
+`anchor_height` — the random cannot be recomputed from chain terms and
+the height is the requester's choice inside a window, so neither is
+derivable at admission. That reverses the credit-wire line that the
+nonce is not stored (+40 bytes per witness entry versus v1). The
+**anchor hash is not carried**: admission reads it from the
+**connecting chain** at `anchor_height`, which is exactly what makes a
+fabricated hash fail. Admission of a challenge pass in a block whose
+validated predecessor is at height `h`:
+
+- requires `anchor_height ∈ [h − 720 − L, h − 720]` — the upper bound
+  is `h − 720` because the requester anchored at its own tip minus
+  720, and its tip is at most `h`; the lower bound absorbs fetch span
+  (including `SF-D6` stall retries of the same `P`, which reuse the
+  header), `P`/requester skew, and the miner ending up building
+  *h*+1 with an anchor chosen for *h*. Outside → `AnchorOutOfWindow`;
+- rebuilds the transcript with the connecting chain's block hash at
+  `anchor_height` — main chain, or the alt chain **above the fork
+  point** when the block is being validated on an alt chain (nothing
+  caps reorg depth, so a main-chain-only lookup would be a consensus
+  split waiting for a deep reorg) — and verifies under `P`'s bond
+  hybrid key. Mismatch → `BadCountersignature`;
+- refuses **every** pass record while `h < 720 + L` (724): no anchor
+  exists yet. First settlement is at 10 000, so nothing is lost.
+  Boundary KATs at 723 (refuse) and 724 (accept), Rust, FFI, and C++.
+
+**Constants, single-sourced.** Depth is the existing
+`archival_reorg_depth_blocks` (720, `config/consensus_constants.json`),
+which gains a third consumer; the retention KAT const-asserts it equal
+to `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (`segment.rs`), and the JSON
+comment now names **both** danger directions — lower makes the anchor
+reorg-sensitive and re-introduces honest fork misses; higher lengthens
+the collusive pre-signing lead — plus the `PDM-Q11` `D_max` gate as a
+consumer. `L` is the new `archival_attestation_anchor_lag_blocks`
+**= 4, PROVISIONAL**, `build.rs`-enforced `≥ 2`, read by Rust; C++
+sizes the window through `shekyl_archival_pass_anchor_window` and holds
+no copy. The verifier reads the generated constants, never a third
+literal.
+
+*`L = 4` — why, and how it moves.* The asymmetry decides the direction:
+too small produces honest witness misses (unpriced, landing on
+operators); too large costs one block of pre-fetch lead per unit
+against a 720-block floor and one block of epoch slack per unit
+against 10 000. So err large. What it must cover: fetch span plus
+skew. The only measured fetch figure is a burst floor near 180 KB/s
+(~20 s for 3.33 MB) — a floor from a null result, not a sustained
+figure — and `SF-D6`'s bounded retries against a stalling `P` can
+stretch one witness attempt to several minutes. Two blocks of span
+(four minutes of fetch-plus-retry), one block of `P`/requester skew,
+one of margin: four. **Falsifier:** the W₂ / PD-F-2 dispersion
+measurement, in either direction. If p99 fetch-plus-retry lands under
+two minutes, drop to 3. If it lands over six, the answer is **not**
+"raise `L`" — it is that `SF-D6`'s retry budget is too generous,
+because `L` would be absorbing what the budget should bound. The
+re-pin must not simply track the measurement upward.
+
+**Residuals, recorded rather than inherited:**
+
+- *720-block collusive lead.* Burial depth is lead time: a `P` that
+  skips its own gate can, at tip *T*, sign a pass anchored `hash(T)`
+  that is admissible at *h* ∈ [*T* + 720, *T* + 720 + *L*] — a day
+  out — and sign the coming day's worth for a colluding requester in
+  one sitting, then go offline. The honest gate refuses that anchor;
+  only collusion produces the lead. Fork immunity and short lead are one knob pulling opposite
+  ways; there is no depth that gives both. Fork misses hit honest
+  operators and nothing prices them; collusion lead hits the mechanism
+  only under collusion, which the 2-of-3 quadratic already prices, and
+  a day of lead changes how often colluders talk, not the arithmetic.
+  A middle depth (10–20 blocks) is better on both axes but introduces
+  a new "this depth is safe" assumption nothing else relies on; 720
+  introduces none. Accepted, priced.
+- *Freshness against a non-colluding witness is structural, not
+  economic.* With the anchor requester-supplied and **no** `P`-side
+  gate, a lone witness at height *T* could send `hash(T)` and hold a
+  signature usable at *T* + 720; the attack costs the whole archival
+  set's bandwidth daily and was impractical, but "impractical" is
+  economics. The `SF-D5` gate makes it a 404. Recorded so the property
+  is not later read as depending on bandwidth.
+- *Binary-search leak from the gate* — `SF-D5`. Leaks "synced or not",
+  not identity.
+- *`L` against the 10 000-block epoch.* A pass anchored in the last
+  `L` blocks of one epoch may be carried by a block in the next; the
+  window does not know epochs. `L`/10 000 of slack at the boundary.
+  Not fixed; recorded.
 
 The message gets a **new versioned domain string**; the signature
 API's v1 nonce-only domain is not reused, so a v1 signature can
-never verify as a v2 one. The domain string, the helper home, and a
-KAT are pinned by the implementation PR. Landing this requires an
-explicit amendment to the nonce-only response-format contract, to
-`verify_pass_countersignature`, and to the pass-record layout that
-today omits the nonce. `verify_pass_countersignature` is a
+never verify as a v2 one. `verify_pass_countersignature` is a
 **consensus** helper (admission of pass records). Changing the signed
-message from 32 bytes to `nonce ‖ height ‖ shard_id` and carrying the
-random is a consensus-rule body replacement, pre-genesis — named so
-it is not a silent helper edit. The implementation PR makes those
-amendments; it does not override them silently.
+message from 32 bytes to `header[72] ‖ shard_id` and carrying the
+random plus anchor height is a consensus-rule body replacement,
+pre-genesis — named so it is not a silent helper edit.
+
+*Records-was (first amendment, SUPERSEDED the same day, never
+landed):* transcript `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` with
+signed height required to **equal** the predecessor height and not
+stored. Refuted on two grounds: a requester-chosen integer carries no
+existence property (`P` signs blind, so nothing stops a lone witness
+pre-fetching for any future height), and exact equality misses every
+honest fetch that spans a block boundary.
+
+*LANDED 2026-09-13 by the §9.1 (a0) PR.* Domain string
+`shekyl/archival-attestation-scheme-v2` (`SCHEME_DOMAIN_ATTESTATION`,
+`shekyl-crypto-pq/src/signature.rs`; v1 retired in
+`CRYPTO_DOMAIN_REGISTRY.tsv`, the `archival-attestation-nonce-v1`
+cSHAKE customization deleted with `attestation_nonce()`). Helper home
+`shekyl-archival-retention::attestation_wire::pass_countersignature_message`
+over `pass_request_header_bytes`; `PassRecord` carries
+`nonce: [u8; 32]` and `anchor_height: u64`; the prunable witness entry
+is `nonce[32] ‖ anchor_height_le[8] ‖ HybridSignature[3385]` and
+`attestation_root` commits to `header ‖ nonce ‖ anchor_height ‖
+signature`. Verifier input is `predecessor_height` plus the connecting
+chain's `L + 1` anchor hashes for `[h − 720 − L, h − 720]`
+(`ShekylArchivalAttestationVerifyCtx.anchor_hashes_ptr/len`, filled by
+`Blockchain::fill_pass_anchor_window` from the main chain or the alt
+chain above the fork point; `cb_out_key`, `cb_out_key_readable`,
+`prev_block_hash` removed; verdicts 8 and 12 RETIRED; new verdicts 13
+`MALFORMED_ANCHOR_TABLE`, 14 `ANCHOR_OUT_OF_WINDOW`, 15
+`BELOW_ANCHOR_THRESHOLD`; C++ sizes the table via
+`shekyl_archival_pass_anchor_window`). Witness cap
+`ATTESTATION_WITNESS_MAX_BYTES = 876 808` (+40/entry versus v1),
+Rust-authoritative, C++ asserted equal. KAT: a deterministic fixture
+(`tests/fixtures/attestation_pass_countersignature_v2_kat.json`, keys
+from `derive_archival_p_keys` at a pinned seed, a deterministic
+`kat_chain_hash` window) shared by the Rust, FFI, and C++ tests,
+regenerated under the armed regenerator with the decision-log entry of
+2026-09-13. The `P`-side gate and header parse are (a)'s.
 
 **Response carrier — RULED 2026-09-13.** `RF-D4`'s
 `ServedFrameHeader` contains only `leaf_count` and `padding_len` and
@@ -1084,7 +1259,8 @@ Named attacker objectives this round's rulings are evaluated against:
    publicly computable `attestation_nonce` — lets `P` serve the test and
    refuse the job. This is TJ §9's attack, now applied to the client's
    observable surface. `SF-D5`/`SF-D8` close the nonce channel: both
-   callers send requester-random plus the published tip height.
+   callers send requester-random plus the same deterministic chain
+   anchor at `tip − 720`.
    **Client-side selection statistics are not a channel this round
    owns.** Assignment is on-chain; `P` computes its window from the
    chain (`SF-D10`). The residual — serve during windows, refuse
@@ -1249,8 +1425,9 @@ cover mechanism — cover is TRC's subject; serving↔fetching already
 dial grammar (key → onion:80, the
 port a shared constant both sides read from `shekyl-curve-tree`,
 `GET /shard/{id}` plus one required header decoding to
-`nonce[32] ‖ height_le[8]` — requester-random and published-tip
-height, both callers; `SF-D5` RULED and amended),
+`nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — requester-random
+and the chain anchor at `tip − 720`, both callers, gated ±`L` by `P`
+against its own height; `SF-D5` RULED and amended),
 one failure taxonomy with two caller columns (`SF-D6` RULED: per-attempt
 handling is the client's; 404 is a completed exchange; no-endpoint is
 unrepresentable since the `EU` kind-4 rejection of 2026-09-13, so the
@@ -1266,10 +1443,12 @@ caller-supplied from local chain state, never from a response; integer
 pinned by the implementation PR from SP-T3's upper bound and its own
 lower-bound throughput judgement), the stable bond-record hybrid
 identity signing key (`SF-D13`: callback into `PServeEndpoint`; crate
-holds no secret), the signed message
-`nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` under a new versioned
-domain (challenge tuple not in the fetch; pass record carries the
-random), the outer
+holds no secret; the host also supplies `P`'s height), the signed
+message `header[72] ‖ shard_id_le[8]` under
+`shekyl/archival-attestation-scheme-v2` (challenge tuple not in the
+fetch; pass record carries the random and the anchor height; admission
+looks the anchor hash up on the connecting chain inside
+`[h − 720 − L, h − 720]`), the outer
 fixed-length signature envelope ahead of the unchanged `RF-D4` frame,
 and the verified-or-refused typed fetch result (`SF-D8` RULED), and
 one organic
@@ -1289,17 +1468,28 @@ point.
 One PR was over the rule-06 ceiling and mixed a consensus verifier
 change with HTTP framing. Four PRs, each green alone, in this order:
 
-- **(a0) the v2 pass-countersignature verifier, first and alone.**
+- **(a0) the v2 pass-countersignature verifier, first and alone —
+  LANDED 2026-09-13** (branch `feat/sf-a0-v2-pass-countersignature`;
+  PR number recorded in the index row at merge).
   `verify_pass_countersignature` re-anchored to
-  `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` under the new versioned
-  domain string, with its KAT regenerated under an armed regenerator
-  and the decision-log entry rule 50 requires. This is a consensus
-  verifier change: it lands on its own (rule 07 shape), not inside a
-  serve-side HTTP PR. `SM-R-3` is live the moment `P` signs
-  caller-chosen bytes, so a defect in the domain-separation
-  construction surfaces here, before anything depends on it.
-- **(a) serve side.** `RF-R1` header parse (one required header, same
-  identical 404 on absence/malformation), the fixed-length
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`
+  under the new versioned domain string, taking the connecting chain's
+  anchor window across the FFI (one indexed lookup; alt-chain fill
+  above the fork point; genesis threshold 724 with KATs at 723/724),
+  constants single-sourced from `consensus_constants.json`
+  (`archival_reorg_depth_blocks` reused as depth, new
+  `archival_attestation_anchor_lag_blocks = 4` PROVISIONAL), with its
+  KAT regenerated under an armed regenerator and the decision-log
+  entry rule 50 requires. This is a consensus verifier change: it
+  lands on its own (rule 07 shape), not inside a serve-side HTTP PR.
+  `SM-R-3` is live the moment `P` signs caller-chosen bytes, so a
+  defect in the domain-separation construction surfaces here, before
+  anything depends on it.
+- **(a) serve side.** `RF-R1` header parse (one required header
+  decoding to the 72 bytes, same identical 404 on
+  absence/malformation/out-of-gate), the `P`-side anchor gate ±`L`
+  against the host-supplied height, signing over the **decoded**
+  bytes, the fixed-length
   `HybridSignature` envelope ahead of the unchanged `RF-D4` frame, the
   `PServeEndpoint` signer callback with the armed test-key affordance
   (`SF-D13`), and the `RF-R1` living-contract update. Its loopback KAT
@@ -1333,4 +1523,8 @@ The nonce-as-challenge-fingerprint was a **finding**, not a clean
 surface: putting `attestation_nonce` on the wire would have named the
 assignment. Ruled off the fetch (`SF-D5`/`SF-D8` amendment).
 Same-height reuse of a signature across competing blocks was examined
-and accepted: the fetch proves `P` served.
+and accepted: the fetch proves `P` served — and the anchor is buried
+720 deep precisely so that reuse survives a same-height race (a
+tip-hash anchor would have lost it). The first amendment's
+requester-chosen height-only transcript was examined the same day and
+SUPERSEDED before landing: it carried no existence property.

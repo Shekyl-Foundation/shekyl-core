@@ -40,9 +40,9 @@ fn witness_cap_is_cpp_formula() {
 
 /// The framing crate carries a hand-copied twin of the retention crate's
 /// witness maximum (no production dependency). This is the gate that makes
-/// the copy unable to drift silently: the v1→v2 move (866,568 → 874,760)
-/// was caught by the C++ FFI gate and not here, because here there was
-/// only a literal.
+/// the copy unable to drift silently: the v1→v2 move (866,568 → 876,808,
+/// +40 per entry for `nonce ‖ anchor_height`) was caught by the C++ FFI
+/// gate and not here, because here there was only a literal.
 #[test]
 fn witness_cap_matches_retention_authority() {
     assert_eq!(

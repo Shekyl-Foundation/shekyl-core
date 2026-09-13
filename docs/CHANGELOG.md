@@ -20,6 +20,45 @@
   `check_tx_input` / `scan_outputkeys_for_indexes` chain and the write-only
   `m_scan_table` ring-member pre-fetch are deleted (`PDM-Q-F18`).
 
+- **Archival pass countersignature is v2, anchor-bound: `P` signs the
+  decoded 72-byte request header `nonce[32] ‖ anchor_height_le[8] ‖
+  anchor_hash[32]` followed by `shard_id_le[8]`** under
+  `shekyl/archival-attestation-scheme-v2`
+  ([`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D5` /
+  `SF-D8`, §9.1 (a0)). The anchor is the requester's own chain at
+  `tip − archival_reorg_depth_blocks` (720). Consensus admission of
+  coinbase pass records (`verify_pass_countersignature`,
+  `shekyl_archival_verify_attestation`) takes the block's **validated
+  predecessor height** `h` and the connecting chain's block hashes for
+  `[h − 720 − L, h − 720]` (main chain, or the alt chain above the fork
+  point), requires the record's carried `anchor_height` to fall in that
+  window, rebuilds the transcript with the chain's hash at that height, and
+  verifies under `P`'s bond hybrid key; every pass record is refused while
+  `h < 720 + L`. `L = archival_attestation_anchor_lag_blocks = 4`
+  (**PROVISIONAL**, new consensus constant, `≥ 2` enforced at build; the
+  `shekyl-rpc-types` constants digest is re-pinned for the added key). The
+  v1 nonce-only message `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` and
+  its `shekyl/archival-attestation-nonce-v1` derivation are deleted, not
+  gated (no v1 signature was ever produced). Prunable attestation witness
+  entries are `nonce[32] ‖ anchor_height_le[8] ‖ HybridSignature[3385]`;
+  `attestation_root` commits to `header ‖ nonce ‖ anchor_height ‖ signature`.
+  The FFI verify context drops `cb_out_key`, `cb_out_key_readable`, and
+  `prev_block_hash` and gains `predecessor_height` plus the anchor-hash
+  table (`anchor_hashes_ptr/len`; C++ sizes it via the new
+  `shekyl_archival_pass_anchor_window`); verdict codes 8
+  (`CBKEY_UNREADABLE`) and 12 (`PREVHASH_UNPOPULATED`) are retired and never
+  reused; 13 `MALFORMED_ANCHOR_TABLE`, 14 `ANCHOR_OUT_OF_WINDOW`, and 15
+  `BELOW_ANCHOR_THRESHOLD` are minted. The witness transport cap
+  (`ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES`, its Rust twins, and the p2p
+  `block_complete_entry` bound) moves 866,568 → 876,808
+  (`8 + 256 × (32 + 8 + 3385)`); the `shekyl-levin` twin now has a test
+  asserting equality with the retention crate's constant. Binds the
+  signature to the server-parsed `/shard/{id}` so a decoy-route signature
+  cannot be filed as a pass for another shard, and to a chain anchor so a
+  non-colluding witness cannot pre-fetch a signature for a future block
+  (the `P`-side ±`L` gate lands with the serve-side PR). Pre-genesis; no
+  chain state exists under v1.
+
 - **The `JoinMarket` bond post carries the persona's serving endpoint** — the
   raw 32-byte Ed25519 key of its v3 onion service, mandatory, refused on every
   other kind (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`) — and the `archival_bond`

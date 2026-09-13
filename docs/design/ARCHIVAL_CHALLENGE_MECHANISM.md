@@ -134,13 +134,16 @@ The read itself (unchanged from the TJ round):
 2. The witness verifies the bytes against the shard's leaf hash `R_k` — the
    response is self-authenticating.
 3. P countersigns the read, proving it reached P's link. **As of
-   2026-09-13 (RULED, not landed):** the message is
-   `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` — requester-random nonce and
-   published tip height from the request header, plus the route id P
-   parsed (`SF-D8`) — under the bond record's hybrid identity key
-   (`SF-D13`; the §7.2(i) anchor-key fork is **closed**). The landed v1
-   (`attestation_wire.rs:191`, block-bound nonce alone) is what runs until
-   `ARCHIVAL_SHARD_FETCH.md` §9.1 step (a0) lands.
+   2026-09-13 (`SF-D8`; verifier LANDED by `ARCHIVAL_SHARD_FETCH.md`
+   §9.1 step (a0), signer lands with (a)):** the message is the decoded
+   72-byte request header `nonce[32] ‖ anchor_height_le[8] ‖
+   anchor_hash[32]` — requester-random nonce plus the requester's chain
+   anchor at `tip − 720` — followed by `shard_id_le[8]`, the route id P
+   parsed, under the bond record's hybrid identity key (`SF-D13`; the
+   §7.2(i) anchor-key fork is **closed**). P gates `anchor_height`
+   against its own height ±`L` before signing; admission looks the anchor
+   hash up on the connecting chain inside `[h − 720 − L, h − 720]`. The
+   v1 block-bound-nonce-alone message is deleted.
 4. The pass record is broadcast as a transaction; any miner may include it
    within the resolution window **W₂**.
 
@@ -836,8 +839,9 @@ the round kept trying to add forensics underneath it.
    **The nonce's `r` term DELETES; `block_hash(h−1)` substitutes
    (checked at source, 2026-08-10).** `attestation_wire.rs:191-195`
    assigns the roles: `cb_out_key` is "the copy-freeride bind; kept" *(kept
-   in v1; `SF-D8` 2026-09-13 drops it from the signed message and accepts
-   same-height reuse — not landed)*,
+   in v1; `SF-D8` 2026-09-13 drops it from the signed message, binds a
+   requester-supplied anchor `block_hash(tip − 720)` instead, and accepts
+   same-height reuse — LANDED by (a0))*,
    `r` is "the producer's revealed randomness" — its only job is nonce
    unpredictability, stopping P from pre-signing a countersignature it
    hands out without ever being contacted. It cannot do that job: both
