@@ -235,6 +235,37 @@ check("all three declared files are actually read",
       len(xrefs({"DAEMON_REDB_STORE.md": "x", "CONSENSUS_STORE_RECONCILIATION.md": "x",
                  "IMPLEMENTATION_INDEX.md": "x"})), 3)
 
+# Every SPELLING of the figure, because keying on one phrasing is how the
+# cross-reference leg shipped green over two live restatements.
+
+for phrase, label in (("102 store methods", "store methods"),
+                      ("102 DB methods", "DB methods"),
+                      ("102 `m_db->` methods", "m_db-> methods"),
+                      ("102 `db->` methods", "db-> methods"),
+                      ("**102** store methods", "bolded"),
+                      ("102  store  methods", "extra whitespace")):
+    check(f"spelling captured: {label}",
+          gate.CROSS_REF_METHODS_RE.findall(f"the map covers {phrase} today"), ["102"])
+
+for phrase, label in (("97 store methods", "stale store methods"),
+                      ("97 DB methods", "stale DB methods"),
+                      ("97 `m_db->` methods", "stale m_db-> methods")):
+    check(f"stale spelling still FAILS: {label}",
+          any("says 97" in f for f in xrefs({"IMPLEMENTATION_INDEX.md": phrase})), True)
+
+# A broadened matcher earns its keep only if it stays off other figures in the
+# very same documents. These are real neighbours, not invented ones.
+for phrase, label in (("rehost ~3k / 77 methods", "E-7 gather shell (77 methods)"),
+                      ("against 48 virtual archival methods", "base-class archival methods"),
+                      ("landed nine methods", "no digit at all"),
+                      ("102 methods from `blockchain.cpp`", "bare heading form (HEAD_RE owns it)")):
+    check(f"near-miss NOT captured: {label}",
+          gate.CROSS_REF_METHODS_RE.findall(phrase), [])
+
+check("an unrelated method count does not trip the cross-reference leg",
+      xrefs({"DAEMON_REDB_STORE.md": "102 store methods, and separately 77 methods for E-7"}),
+      [])
+
 check("call-site count is derived, not the method count",
       gate.count_call_sites("BlockchainDB* m_db;\nvoid f(){ m_db->a(); m_db->a(); m_db->b(); }",
                             {"m_db": {"->"}}), 3)

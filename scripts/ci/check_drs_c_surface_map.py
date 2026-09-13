@@ -63,7 +63,16 @@ CROSS_REF_FILES = (
     ROOT / "docs/design/CONSENSUS_STORE_RECONCILIATION.md",
     ROOT / "docs/design/IMPLEMENTATION_INDEX.md",
 )
-CROSS_REF_METHODS_RE = re.compile(r"(\d+) store methods")
+# Every spelling of THIS figure, not the one phrasing this gate's author
+# happened to write. Keying on `N store methods` alone meant the check only saw
+# prose it had just been handed: two restatements survived in other wordings
+# (`97 DB methods`, ``97 `m_db->` methods``) and the gate was green over exactly
+# the drift it was added to catch. The qualifier is required, so unrelated
+# method counts in the same documents are not swept in — `77 methods` is the
+# archival gather shell (E-7) and `48 virtual archival methods` is the base
+# class, neither of which this figure governs.
+CROSS_REF_METHODS_RE = re.compile(
+    r"(\d+)\s*(?:\*\*)?\s*(?:`m_db->`|`db->`|store|DB)\s+methods")
 CROSS_REF_SITES_RE = re.compile(r"(\d+) store call sites")
 
 SECTION_RE = re.compile(r"^### 3\.5 ", re.M)

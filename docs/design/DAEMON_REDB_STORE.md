@@ -486,7 +486,8 @@ cannot — and the failure mode is “wallet can’t spend.”
 
 ### 3.1 Today
 
-`blockchain.cpp` (97 DB methods) → `BlockchainLMDB` (49 tables) + FFI gather shells.
+`blockchain.cpp` (102 store methods) → `BlockchainLMDB` (49 tables) + FFI gather
+shells.
 
 ### 3.2 After DRS-C (+ LMDB digest)
 
