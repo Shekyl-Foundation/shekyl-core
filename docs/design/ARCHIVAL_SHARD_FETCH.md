@@ -160,7 +160,7 @@ inherited as "the client waits."
 | Enumerability of onions is a design input; serve-side rate-limit is load-bearing | `EU-D6` |
 | `GET /shard/{id}`; identical 404s for every non-servable outcome; only content-type + content-length on the response; hand-rolled HTTP/1.1 | `RF-R1` |
 | **Request-header amendment RULED 2026-09-13, not yet landed:** exactly one named header is required and decodes canonically to 40 bytes `nonce[32] ‖ height_le[8]` — fresh random for every request, both callers, plus the published chain-tip height at request time (for the miner building *h*, that is *h*−1). Missing, malformed, duplicate, or wrong-length values are the same identical complete-head 404. All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR | `SF-D5` amendment; implementation carrier is the `shekyl-p-serve` + `shekyl-p-fetch` PR |
-| **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and extracts leaf ℓ locally — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
+| **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and verifies `R_k` — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). There is no leaf to extract locally (`RF-D8` retracted the opening). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
 | **Serving and fetching do not share a Tor instance.** `PWD-E9` (RULED 2026-09-08, implemented 2026-09-09): the daemon gets its own tor path with no crossover to the archival-serving persona; the launch path takes instance identity as a parameter, so sharing the code cannot produce a shared instance. The ratified §7 guard residual splits one application's identities; E9 forbids two applications sharing one instance, and the ephemeral/durable asymmetry makes the crossover strictly worse. **`SF-D11` withdrawn** — asked in this round, then closed by reading `PWD-E9` | `PWD-E9` |
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. The daemon image passes that `SocketAddr` into `shekyl-p-fetch`; the crate does not discover SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
 | **Unauthenticated SOCKS, no isolation flags.** The fetch client presents no SOCKS credentials and sets no isolation flags on the zone proxy. Circuit assignment is Tor's, per its own defaults — this is not a one-circuit guarantee. Fetches then share circuits with overlay P2P (no credentials on the same SOCKS); that blending is a consequence, not a cover mechanism. Cover is TRC's subject | `SF-D3` RULED 2026-09-12 |
@@ -183,7 +183,7 @@ callers of it.** No third wallet-side client; no challenge-only harness;
 no caller-specific header, path token, or isolation shape that would let
 `P` distinguish a test from a read. Two production schedulers drive the
 same client entry point `fetch(destination, shard_id, header)` — "you
-produced block *h*: fetch leaf ℓ of shard *s* from assigned `P`" and
+produced block *h*: fetch shard *s* from assigned `P`" and
 "this daemon needs shard *s*" — and tests are a third scheduler of
 that same entry point, not a separate path. The HTTP request names
 only the shard; the destination is whom the scheduler named, not a
@@ -850,8 +850,12 @@ never verify as a v2 one. The domain string, the helper home, and a
 KAT are pinned by the implementation PR. Landing this requires an
 explicit amendment to the nonce-only response-format contract, to
 `verify_pass_countersignature`, and to the pass-record layout that
-today omits the nonce; the implementation PR makes those amendments,
-it does not override them silently.
+today omits the nonce. `verify_pass_countersignature` is a
+**consensus** helper (admission of pass records). Changing the signed
+message from 32 bytes to `nonce ‖ height ‖ shard_id` and carrying the
+random is a consensus-rule body replacement, pre-genesis — named so
+it is not a silent helper edit. The implementation PR makes those
+amendments; it does not override them silently.
 
 **Response carrier — RULED 2026-09-13.** `RF-D4`'s
 `ServedFrameHeader` contains only `leaf_count` and `padding_len` and
