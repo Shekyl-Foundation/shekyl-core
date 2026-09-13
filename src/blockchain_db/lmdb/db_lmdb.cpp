@@ -7453,7 +7453,8 @@ void BlockchainLMDB::set_archival_settlement(const crypto::hash& p_id, uint64_t 
 }
 
 bool BlockchainLMDB::get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-  uint64_t settlement_epoch, std::array<uint8_t, 3>& out_row) const
+  uint64_t settlement_epoch,
+  std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
   check_open();

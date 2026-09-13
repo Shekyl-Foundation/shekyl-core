@@ -201,6 +201,15 @@ public:
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) override {}
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash&, uint64_t, uint64_t) const override { return 0; }
 
+  // Settlement outcomes (SO-D8 promotion). The read reports "absent", which
+  // SO-D1 defines as non-observation — the same fail-closed shape as the
+  // serve-credit doubles above returning "no bit".
+  virtual void set_archival_settlement(const crypto::hash&, uint64_t, uint64_t, uint32_t, uint32_t) override {}
+  virtual bool get_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
+    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>&) const override { return false; }
+  virtual void delete_archival_settlement_for_epoch(uint64_t) override {}
+  virtual void delete_archival_settlement_before_epoch(uint64_t) override {}
+
   virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&,
     const std::vector<uint8_t>&, const crypto::public_key&, uint64_t,
     uint64_t, uint8_t, const std::vector<uint64_t>&,

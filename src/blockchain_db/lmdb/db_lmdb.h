@@ -743,37 +743,33 @@ public:
   //
   // Public for the same reason apply_archival_slash_one above is: the
   // production caller is process_archival_slash_for_epoch, a member, and these
-  // are exposed so the table's KATs can drive the path directly. Deliberately
-  // NOT virtual on BlockchainDB. The only writer is
-  // process_archival_slash_for_epoch and the only reverter is
-  // revert_archival_slashes_at_height, both BlockchainLMDB members, so the
-  // dispatch would buy nothing and would break every BlockchainDB test double
-  // for a surface none of them can implement.
+  // are exposed so the table's KATs can drive the path directly.
+  //
+  // Overrides of BlockchainDB pure virtuals since 2026-09-13 (SO-D8 scope
+  // addition, ARCHIVAL_SETTLEMENT_WRITER.md §12). The earlier note here —
+  // "deliberately NOT virtual on BlockchainDB; the only writer and reverter
+  // are BlockchainLMDB members, so the dispatch would buy nothing" — had a
+  // TRUE premise and a wrong conclusion, and is recorded as refuted rather
+  // than deleted: dispatch was never the point; interface completeness was.
+  // The contract text lives on the base declarations; this side documents
+  // only what is LMDB-specific.
 
-  /// Fold (passes, issued) through the Rust encoder and store the row for
-  /// (P_id, shard, E). Refuses rather than storing if the fold refuses.
   void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch, uint32_t passes, uint32_t issued);
+    uint64_t settlement_epoch, uint32_t passes, uint32_t issued) override;
 
-  /// Read a settlement row. Returns false when absent — which SO-D1 defines as
-  /// "never issued", not "missed".
   bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch, std::array<uint8_t, 3>& out_row) const;
+    uint64_t settlement_epoch,
+    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const override;
 
-  /// Drop every settlement row for one epoch — the SO-D6 revert.
-  ///
   /// A full-table scan filtering the epoch field, because SO-D2's key puts the
   /// epoch LAST so the outer-window walk can range-scan a pair's epochs in
   /// order. That trade is inherited, not invented:
   /// delete_archival_serve_credit_before_epoch scans the same way for the same
   /// reason. Both callers are rare — a prune, and a reorg crossing a fold.
-  void delete_archival_settlement_for_epoch(uint64_t settlement_epoch);
+  void delete_archival_settlement_for_epoch(uint64_t settlement_epoch) override;
 
-  /// Retention prune for the settlement table — every row strictly below
-  /// `prune_below_epoch`. Called from `prune_archival_epochs_before`, which
-  /// is contracted to visit every epoch-scoped archival table and was
-  /// missing this one.
-  void delete_archival_settlement_before_epoch(uint64_t prune_below_epoch);
+  /// Same tail-epoch scan as the revert above, for the same key-order reason.
+  void delete_archival_settlement_before_epoch(uint64_t prune_below_epoch) override;
 
   /// As-of-E consensus snapshot gather — see the BlockchainDB base
   /// declaration (blockchain_db.h) for the soundness argument and the

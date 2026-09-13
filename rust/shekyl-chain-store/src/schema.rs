@@ -14,9 +14,13 @@
 //! that exists in only one of the two modules is a merge defect, not a
 //! third list to maintain here.
 //!
-//! Walking `BlockchainDB`'s virtual interface would miss tables. The
-//! settlement pair exists only on `BlockchainLMDB` (SO-D8), so a schema built
-//! from the abstract interface silently ships without a write path LMDB has.
+//! Walking `BlockchainDB`'s virtual interface is not the denominator, because
+//! a table can exist without being on it. The instance that proved this:
+//! until 2026-09-12 the settlement write path lived only on `BlockchainLMDB`,
+//! so a schema built from the abstract interface would have shipped without a
+//! write path LMDB has. SO-D8 has since promoted that path onto `BlockchainDB`
+//! (`ARCHIVAL_SETTLEMENT_WRITER.md` §12), which closes that instance and not
+//! the class — the X-macro stays the only authority.
 //!
 //! # Mapping rules, derived from LMDB open flags and comparators
 //!
@@ -132,7 +136,8 @@ pub const BLOCK_BURN: TableDefinition<u64, u64> = TableDefinition::new("block_bu
 pub const ARCHIVAL_SERVE_CREDIT: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("archival_serve_credit");
 
-/// `archival_settlement` — default flags. Not on the abstract interface (SO-D8).
+/// `archival_settlement` — default flags. On the abstract interface since
+/// 2026-09-12 (SO-D8 promotion); was `BlockchainLMDB`-only before that.
 pub const ARCHIVAL_SETTLEMENT: TableDefinition<&[u8], &[u8]> =
     TableDefinition::new("archival_settlement");
 
