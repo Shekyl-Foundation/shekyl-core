@@ -51,6 +51,16 @@ set difference against the X-macro is empty.
 "N forceable" is a **derived** figure here. It is not asserted anywhere in
 this document independently of the rows.
 
+**One figure disagrees and is flagged rather than corrected.**
+`LMDB_WRITE_ATOMICITY_AUDIT.md` §10 marks **17** distinct `archival_*` rows
+`excluded` on the Digest v0 axis — counted from the rows, not from a prior
+figure — while the P0e paragraph in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) describes "16 archival
+journals under §7.1.1". The 34-cell denominator does not depend on which is
+right: the diff needs all 17 tables populated either way. But §7.1.1's
+exclusion set is what this corpus discharges, so the off-by-one belongs to
+whoever owns that paragraph. Not silently rewritten here.
+
 ---
 
 ## 3. The two exclusions, both on `archival_settlement`
@@ -89,7 +99,7 @@ SO-D8 lands.**
 
 A test-only raw writer that forced settlement rows would make both cells
 forceable. **Refused**, and the tree has already refused it in this exact
-place. The note at `db_lmdb.cpp:7485-7493` sits nine lines above
+place. The note at `db_lmdb.cpp:7485-7493` sits just above
 `delete_archival_settlement_for_epoch` itself and reads:
 
 > ... this CALL SITE is a corruption tripwire with no red-side test --
@@ -136,6 +146,11 @@ populated producers are p2p
 `arg.b.attestation_witness`) and verifying import. A chaingen-mined corpus
 therefore forces **no** witness row by default.
 
+The hash-keyed alt-chain counterpart carries the **same** caveat and for the
+same reason: its only producer is `blockchain.cpp:2504`, which stores
+`connect.attestation_witness` beside the alt block, so an unpopulated
+supplement leaves both tables empty.
+
 The corpus must populate the supplement, which is the **production input
 path** and so is legitimate — this is not a raw writer. **Open question for
 the build phase:** whether the bytes must be valid `r`-plus-pass-signatures to
@@ -143,7 +158,26 @@ survive B4's attestation verify. If they must, construction is real work and
 needs its own scoping; `tests/unit_tests/archival_attestation_verify.cpp` is
 where that answer lives.
 
-**4.2 `archival_shard_segment` needs 25,992 leaves and the cheap path is
+**4.2 The two slash tables are forceable, but not by the same event, and
+neither depends on settlement.** Worth stating because the coupling looks
+plausible and is not there: `delete_archival_settlement_for_epoch` is called
+from the slash *revert*, which invites the reading that the slash pass writes
+only against settled outcomes. It does not.
+`archival_challenge_failed_at_height` reads serve-credit pass counts and
+`has_archival_slash_applied`, never the settlement table, so neither slash cell
+inherits settlement's exclusion.
+
+They are forced by **different** events, and the register says so rather than
+collapsing them. `archival_slash_log`'s epoch marker is written
+**unconditionally**, once per height that passes an epoch's slash deadline —
+cheap. `archival_slash_applied` needs a bonded P that actually fails a
+challenge. The complete-tree branch of that scan reaches
+`archival_shard_segment` and would drag in §4.3's 25,992-leaf cost, but the
+`else` branch iterates `bond.held_shard_ids` directly, so a non-complete-tree
+bond forces the row **without** a frozen segment. The corpus should take that
+branch.
+
+**4.3 `archival_shard_segment` needs 25,992 leaves and the cheap path is
 foreclosed by design.** Segment freeze fires on first crossing of
 `SEGMENT_LEAF_COUNT = 25_992`. There is no regtest override, and
 `config/consensus_constants.json:43` states the reason: it is **"NOT a
