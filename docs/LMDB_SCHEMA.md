@@ -24,7 +24,65 @@ Several `DUPSORT` tables use a **dummy primary key** of 8 zero bytes (`zerokval`
 
 ### Hash comparator
 
-`compare_hash32` interprets a 32-byte `crypto::hash` as 8 consecutive `uint32_t` words in memory order and compares them lexicographically.
+`compare_hash32` (`db_lmdb.cpp:236`) loads a 32-byte `crypto::hash` as 8
+`uint32_t` words and compares them **from word 7 down to word 0** — the LAST
+four bytes are the most significant. The loads are native, so on a
+little-endian host the effect is to order the 32 bytes as a **little-endian
+256-bit integer**: byte 31 most significant, byte 0 least.
+
+**It is NOT byte-lexicographic**, and the precise statement matters more than
+that negative one, because the obvious reading of "the reverse of
+lexicographic" produces a *different, also-wrong* order:
+
+- **It IS** ascending lexicographic over the **reversed byte string** —
+  compare byte 31 first, then 30, … down to byte 0. In Rust that is
+  `a.iter().rev().cmp(b.iter().rev())`, equivalently comparing the
+  byte-reversed arrays.
+- **It is NOT** *descending* lexicographic. That reading flips the *result* of
+  comparing byte 0 first; the real function flips *which byte is compared*
+  first. Measured over 4 000 random pairs: the reversed-byte reading agrees
+  with the C++ on **4 000/4 000**, while descending-lexicographic disagrees on
+  **2 010/4 000**. A wrong implementation here is therefore wrong on about half
+  of all pairs rather than cleanly inverted — it will not show up in a smoke
+  test. (`Reverse<[u8; 32]>` is the wrong primitive for this reason.)
+
+Demonstrated with `A = 01 00 … 00` and `B = 00 … 00 01`: `compare_hash32` says
+`A < B`, byte-lexicographic says `A > B`.
+
+> **This sentence previously said "in memory order … lexicographically", which
+> is word 0 first — the opposite of what the loop does.** It is corrected here
+> because the wrong description coincided with the default ordering a
+> reimplementation would reach for (Rust's `[u8; 32]`, `memcmp`), so a port
+> built on this document would have agreed with the document, agreed with
+> itself, and been **backwards from LMDB on all seven tables that use this
+> comparator** — invisible until a range scan returned the wrong set. Found
+> while mapping the schema for DRS-0 slice B.
+
+The seven tables, split by which ordering the comparator governs:
+
+| Governs | Tables |
+|---|---|
+| **Key** order (`mdb_set_compare`) | `txpool_meta`, `txpool_blob`, `alt_blocks`, `archival_alt_attestation_witness` |
+| **Duplicate** order (`mdb_set_dupsort`) | `spent_keys`, `block_heights`, `tx_indices` |
+
+**Two properties to carry into any reimplementation** (specification records —
+the C++ is scheduled for deletion, so neither is patched here):
+
+- **Host-endianness dependence is structural, and the big-endian behaviour is
+  not a clean alternative order.** The native `uint32_t` loads mean a
+  big-endian host compares bytes in the order 28, 29, 30, 31, 24, 25, 26, 27,
+  … 0, 1, 2, 3 — a word-shuffled hybrid that is neither lexicographic nor
+  reversed-lexicographic. **There is no host on which this function is
+  lexicographic.** Measured: LE and BE readings of the same bytes disagree on
+  2 000 of 4 000 random pairs. A database written on one and read on the other
+  is silently mis-ordered rather than loudly wrong. A reimplementation must
+  state its byte order **explicitly** rather than inherit the host's.
+- **The `uint32_t*` cast of `mv_data` is undefined behaviour twice over** — it
+  violates strict aliasing, and LMDB does not guarantee 4-byte alignment of
+  key/value buffers. Benign on x86-64 and ARM64 in practice. **The evidence
+  that this is a wart rather than a considered choice is four lines above it:**
+  `compare_uint64` performs the same kind of load correctly, via `memcpy`. The
+  codebase already knows the idiom; this function simply does not use it.
 
 ### String comparator
 
