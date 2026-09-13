@@ -2838,9 +2838,11 @@ public:
   /**
    * @brief remove intermediate layer hashes between checkpoints.
    *
-   * Given a checkpoint height, removes internal hash layers that can be
-   * recomputed from leaves between the previous checkpoint and this one.
-   * Leaves and the latest live layer state are preserved.
+   * Given a checkpoint height, removes internal hash layers (1..depth-2)
+   * between the previous checkpoint and this one. Layer 0 (the leaf-chunk
+   * hash layer), the leaves, and the latest live layer state are preserved;
+   * layer 0 is the recompose source for the removed layers (trim_curve_tree
+   * rebuilds from it), not the leaf table.
    *
    * @param checkpoint_height  the checkpoint up to which to prune
    */
