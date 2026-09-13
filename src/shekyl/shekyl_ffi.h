@@ -1832,8 +1832,8 @@ struct shekyl_archival_pid_pubkey {
 /// shekyl_archival_pass_anchor_window(h) for `(first, len)` and fills anchor_hashes with the
 /// CONNECTING chain's block hash at each height `first + i` — main chain, or the alt chain above
 /// the fork point — so a block validated on an alt chain sees that chain's anchors. Exactly `len`
-/// entries at or above the threshold; exactly 0 (and a null ptr) when the call reports
-/// ERR_BELOW_ANCHOR_THRESHOLD. Any other shape is ERR_MALFORMED_ANCHOR_TABLE on EVERY block,
+/// entries at or above the threshold; exactly 0 (and a null ptr) when step 0 writes `(0, 0)`
+/// (predecessor below depth + L). Any other shape is ERR_MALFORMED_ANCHOR_TABLE on EVERY block,
 /// records or not, so a sizing mistake is loud on the first block rather than the first pass.
 /// There is NO unpopulated sentinel: 0 is block 1's real predecessor height, and a forgotten
 /// field fails closed (its implied window holds the wrong hashes or does not exist).
@@ -1871,12 +1871,9 @@ struct shekyl_archival_attestation_verify_ctx {
 /// A pass record on a block whose predecessor is below the anchor threshold (no window exists).
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD 15
 
-/// Step 0: the anchor window a block connecting to `predecessor_height` is verified against. On
-/// OK writes the window's first height and its length (`L + 1`); C++ fills anchor_hashes with the
-/// connecting chain's hash at `first .. first + len` in ascending order. Returns
-/// ERR_BELOW_ANCHOR_THRESHOLD (with `0, 0` written) when `predecessor_height < depth + L` — below
-/// it no window exists and the ctx table must be empty. The depth and L come from the Rust
-/// crate's generated consensus constants; C++ holds no copy, so there is no drift pair.
+/// Step 0: the table shape C++ must fill. Always returns OK (or ERR_NULL_PTR): writes
+/// `(first, L + 1)` when a window exists, or `(0, 0)` below depth + L. ERR_BELOW_ANCHOR_THRESHOLD
+/// is a verify verdict only. Depth and L come from the Rust crate; C++ holds no copy.
 uint8_t shekyl_archival_pass_anchor_window(
     uint64_t predecessor_height,
     uint64_t* out_first_height,

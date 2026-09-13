@@ -46,6 +46,7 @@
 #include "tx_pool.h"
 #include "tx_pqc_verify.h"
 #include "blockchain.h"
+#include "archival_pass_anchor.h"
 #include "blockchain_db/blockchain_db.h"
 #include "serialization/binary_archive.h"
 #include "cryptonote_basic/cryptonote_boost_serialization.h"
@@ -5240,50 +5241,46 @@ bool Blockchain::fill_pass_anchor_window(uint64_t predecessor_height,
   uint64_t first = 0;
   size_t len = 0;
   const uint8_t shape = shekyl_archival_pass_anchor_window(predecessor_height, &first, &len);
-  if (shape == SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD)
-    return true; // no window below the threshold; the empty table is the required shape
   if (shape != SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK)
   {
     MERROR("shekyl_archival_pass_anchor_window(" << predecessor_height << ") returned " << (unsigned)shape);
     return false;
   }
+  if (len == 0)
+    return true;
 
-  // Heights at or above the alt chain's fork point come from the alt chain (front = fork point,
-  // ascending to back = parent); everything below is main chain. The window's top is
-  // h - depth <= h, so every height is on the connecting chain by construction; a miss is an
-  // internal inconsistency, not a producer-controlled input.
-  const uint64_t alt_from = (alt_chain && !alt_chain->empty()) ? alt_chain->front().height : UINT64_MAX;
-  out.reserve(len);
-  for (size_t i = 0; i < len; ++i)
+  // Consecutive alt hashes starting at the fork; heights below that are main chain.
+  std::vector<crypto::hash> alt_hashes;
+  uint64_t alt_from = std::numeric_limits<uint64_t>::max();
+  if (alt_chain && !alt_chain->empty())
   {
-    const uint64_t height = first + i;
-    if (height >= alt_from)
+    alt_from = alt_chain->front().height;
+    alt_hashes.reserve(alt_chain->size());
+    uint64_t expect = alt_from;
+    for (const block_extended_info& bei : *alt_chain)
     {
-      bool found = false;
-      for (const block_extended_info& bei : *alt_chain)
+      if (bei.height != expect)
       {
-        if (bei.height == height)
-        {
-          out.push_back(get_block_hash(bei.bl));
-          found = true;
-          break;
-        }
-      }
-      if (!found)
-      {
-        MERROR("pass anchor height " << height << " not on the alt chain being connected to");
+        MERROR("pass-anchor alt chain is not consecutive at " << bei.height
+          << " (expected " << expect << ")");
         return false;
       }
+      alt_hashes.push_back(get_block_hash(bei.bl));
+      ++expect;
     }
-    else
-    {
-      if (height >= m_db->height())
-      {
-        MERROR("pass anchor height " << height << " above the main chain height " << m_db->height());
-        return false;
-      }
-      out.push_back(m_db->get_block_hash_from_height(height));
-    }
+  }
+
+  auto main_hash = [this](uint64_t height, crypto::hash& h) -> bool {
+    if (height >= m_db->height())
+      return false;
+    h = m_db->get_block_hash_from_height(height);
+    return true;
+  };
+  if (!fill_connecting_anchor_hashes(first, len, alt_from, alt_hashes, main_hash, out))
+  {
+    MERROR("pass anchor height missing on the connecting chain for predecessor "
+      << predecessor_height);
+    return false;
   }
   return true;
 }
@@ -5291,18 +5288,8 @@ bool Blockchain::fill_pass_anchor_window(uint64_t predecessor_height,
 bool Blockchain::verify_block_attestation(const block& b, uint64_t predecessor_height,
   const std::list<block_extended_info>* alt_chain, const blobdata& witness)
 {
-  // ARCHIVAL_CREDIT_WIRE.md §3-§4: recompute-and-compare the block's attestation_root and verify
-  // every pass record's P-countersignature. ALL logic is in Rust (shekyl_archival_verify_attestation);
-  // this only marshals -- reads the header blob from the coinbase tx_extra, names the pass p_ids
-  // (step 1), reads each bond's hybrid pubkey from LMDB by those keys, fills the pass-anchor hash
-  // window from the connecting chain (step 0), hands the raw bytes and the caller's validated
-  // predecessor height across, and obeys the verdict. It parses nothing structural and decides
-  // nothing (rule 20). Pre-cutover no block carries pass records, so on
-  // every VALID block (empty witness, well-formed coinbase) this matches the interim's
-  // attestation_root == empty_attestation_root(); it is strictly stricter only on two pinned shapes
-  // (unsolicited witness bytes, and a coinbase tx_extra that fails to parse), so no valid block's
-  // verdict changes except the deliberate unparseable-extra tightening pinned in
-  // unreadable_headers_is_headers_unreadable.
+  // Marshal headers, bond pubkeys, and the connecting-chain anchor table into
+  // shekyl_archival_verify_attestation. Rust owns the verdict (rule 20).
   const crypto::hash id = get_block_hash(b);
 
   // 1. Header blob from the coinbase tx_extra. parse_archival_attestation_from_extra returns false
@@ -5351,17 +5338,8 @@ bool Blockchain::verify_block_attestation(const block& b, uint64_t predecessor_h
     pairs[i].pubkey_len = pubkeys[i].size();
   }
 
-  // 4. Step 0: the pass-anchor hash window. SF-D8: the v2 countersignature is over
-  //    `nonce || anchor_height || block_hash(anchor_height) || shard_id`; the record carries the
-  //    nonce and anchor height, and the verifier reads the hash at that height from THIS table --
-  //    the connecting chain's hashes for `[h - depth - L, h - depth]`, h the VALIDATED predecessor
-  //    the caller derived (main chain: the checked top; alt chain: the alt parent). It is never
-  //    `get_block_height(b)` -- the coinbase's producer-claimed height -- because an unvalidated
-  //    header field is producer-chosen, the property the v1 nonce's `r` was deleted for. There is
-  //    no unpopulated sentinel: 0 is block 1's real predecessor height, and a wrong value fails
-  //    closed (the implied window holds the wrong hashes, or below the threshold does not exist).
-  //    The table's shape is checked by Rust on every block (ERR_MALFORMED_ANCHOR_TABLE), so a
-  //    sizing mistake here is loud on the first block, not the first pass record.
+  // 4. Connecting-chain hashes for the window Rust named. predecessor_height is
+  //    the validated parent, never the coinbase-claimed height.
   std::vector<crypto::hash> anchor_hashes;
   if (!fill_pass_anchor_window(predecessor_height, alt_chain, anchor_hashes))
   {

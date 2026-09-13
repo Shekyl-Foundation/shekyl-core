@@ -11,27 +11,11 @@
 //! chain-committed sub-root `R_k` (§2) — the response is
 //! **self-authenticating by content**. As landed, this crate signs nothing.
 //!
-//! **RULED 2026-09-13, NOT LANDED** (`docs/design/ARCHIVAL_SHARD_FETCH.md`
-//! `SF-D5`/`SF-D8`/`SF-D13`; lands in that round's §9.1 step (a)): the
-//! response gains a countersignature. Both inputs are now ruled — the
-//! *"signing key remains open"* fork this paragraph used to record is
-//! **closed**: the key is the bond record's hybrid identity key
-//! (`BondPost.hybrid_public_key`, `SF-D13`), reached through a signer
-//! callback on [`PServeEndpoint`] so this crate still holds no secret; the
-//! message is the **decoded** 72-byte request header
-//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` followed by
-//! `shard_id_le[8]` (`SF-D8`; verifier LANDED as step (a0)), where the
-//! header arrives in one required request field (`SF-D5`; requester-random
-//! nonce plus the requester's chain anchor at `tip − 720`, **not** the
-//! block-bound `attestation_nonce`) and `shard_id` is the `u64` this crate
-//! parsed from `/shard/{id}`. Before signing, this crate gates
-//! `anchor_height` against a host-supplied height `p` — refusing outside
-//! `[p − 720 − L, p − 720 + L]` with the identical 404 — so it needs one
-//! `u64`, not a chain view, and stays free of any daemon dependency. It
-//! signs the decoded binary, never the header's textual form. The signature
-//! rides a fixed-length envelope ahead of the unchanged `RF-D4` frame. Until
-//! step (a) lands, the header-ignoring, unsigned behaviour below is what
-//! runs.
+//! **RULED 2026-09-13, NOT LANDED** (`ARCHIVAL_SHARD_FETCH.md` `SF-D5`/`SF-D8`/
+//! `SF-D13`, §9.1 step (a)): the response will countersign the decoded header
+//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` with
+//! `BondPost.hybrid_public_key` via a signer callback. The verifier is already
+//! landed (step (a0)). Until (a) lands, this crate signs nothing.
 //!
 //! # This crate's place in the §9.5 item-3 arc
 //!

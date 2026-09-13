@@ -1087,7 +1087,7 @@ honest fetch that spans a block boundary.
 `shekyl-crypto-pq/src/signature.rs`; v1 retired in
 `CRYPTO_DOMAIN_REGISTRY.tsv`, the `archival-attestation-nonce-v1`
 cSHAKE customization deleted with `attestation_nonce()`). Helper home
-`shekyl-archival-retention::attestation_wire::pass_countersignature_message`
+`shekyl-archival-retention::pass_anchor::pass_countersignature_message`
 over `pass_request_header_bytes`; `PassRecord` carries
 `nonce: [u8; 32]` and `anchor_height: u64`; the prunable witness entry
 is `nonce[32] ‖ anchor_height_le[8] ‖ HybridSignature[3385]` and

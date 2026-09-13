@@ -7,8 +7,8 @@
 
 use shekyl_archival_retention::{
     attestation_root, pass_records_from_headers_and_witness, verify_pass_countersignature,
-    AttestationHeader, AttestationKind, BlockAttestationWitness, PassAnchorHeights,
-    PassAnchorWindow, PassCountersignatureError, ATTESTATION_HEADER_LEN,
+    AttestationHeader, AttestationKind, BlockAttestationWitness, PassAnchorWindow,
+    PassAnchorWindowError, PassCountersignatureError, ATTESTATION_HEADER_LEN,
     HYBRID_PUBKEY_CANONICAL_BYTES, MAX_ATTESTATION_RECORDS, PASS_ANCHOR_HASH_LEN,
 };
 use shekyl_crypto_pq::signature::HybridPublicKey;
@@ -127,7 +127,8 @@ pub struct ShekylArchivalAttestationVerifyCtx {
     /// [`shekyl_archival_pass_anchor_window`] returned for `predecessor_height`. Filled from the
     /// chain the block is being connected to — the main chain, or the alt chain **above the fork
     /// point** — so a block validated on an alt chain sees that chain's anchors. Exactly `L + 1`
-    /// entries at or above the threshold, exactly `0` below it; any other shape is
+    /// entries at or above the threshold, exactly `0` below it (`shekyl_archival_pass_anchor_window`
+    /// writes `(0, 0)` there and returns `OK`); any other shape is
     /// `..._ERR_MALFORMED_ANCHOR_TABLE`, checked on every block.
     pub anchor_hashes_ptr: *const [u8; PASS_ANCHOR_HASH_LEN],
     pub anchor_hashes_len: usize,
@@ -140,8 +141,8 @@ pub struct ShekylArchivalAttestationVerifyCtx {
 
 /// Verify a block's attestation set against its mined `attestation_root` (Phase 2 admission).
 ///
-/// `witness` is the opaque `count ‖ (nonce ‖ signature)*` blob (`connect.attestation_witness`); an
-/// empty blob is the zero-record set (the pre-cutover state). Returns a
+/// `witness` is the opaque `count ‖ (nonce ‖ anchor_height_le ‖ signature)*` blob
+/// (`connect.attestation_witness`); an empty blob is the zero-record set. Returns a
 /// `SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_*` code; C++ rejects on any non-`OK`.
 ///
 /// # Safety
@@ -177,21 +178,10 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
     };
     let window: Option<PassAnchorWindow> =
-        match PassAnchorHeights::for_predecessor(ctx.predecessor_height) {
-            None => {
-                if !anchor_hashes.is_empty() {
-                    return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE;
-                }
-                None
-            }
-            Some(_) => {
-                match PassAnchorWindow::new(ctx.predecessor_height, anchor_hashes.to_vec()) {
-                    Ok(w) => Some(w),
-                    // `BelowThreshold` is excluded by the `Some` arm; the only reachable error is
-                    // `WrongLength`.
-                    Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE,
-                }
-            }
+        match PassAnchorWindow::from_table(ctx.predecessor_height, anchor_hashes) {
+            Ok(w) => Some(w),
+            Err(PassAnchorWindowError::BelowThreshold { .. }) if anchor_hashes.is_empty() => None,
+            Err(_) => return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE,
         };
 
     // 1. Header blob: cap FIRST (structural, before per-record work), then parse ONCE. The parsed
@@ -329,16 +319,12 @@ pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
 }
 
-/// Step 0: the anchor window C++ must fill for a block whose **validated** predecessor height is
-/// `predecessor_height` (`SF-D8`). Writes the window's first height and its length (`L + 1`) and
-/// returns `OK`; below `PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT` (`depth + L`) no window exists —
-/// writes `(0, 0)` and returns `..._ERR_BELOW_ANCHOR_THRESHOLD`, and C++ passes an empty table.
+/// Step 0: the table shape C++ must fill for a block connecting to `predecessor_height`.
 ///
-/// The arithmetic lives here, not in a generated C++ constant, so there is ONE authority for the
-/// window and no drift pair: C++ asks, fills `len` hashes at `first + i` from the chain the block
-/// is being connected to (alt chain above the fork point, main chain below it), and hands them
-/// across in [`ShekylArchivalAttestationVerifyCtx::anchor_hashes_ptr`]. Zero authority over block
-/// validity — step 2 re-derives the same window and rejects a table of any other shape.
+/// Always returns `OK` (or `NULL_PTR`): writes `(first, L + 1)` when a window exists, or
+/// `(0, 0)` below the genesis threshold. `ERR_BELOW_ANCHOR_THRESHOLD` is a verify verdict
+/// only — this sizer has zero authority over block validity. Step 2 re-derives the window
+/// and rejects any other table shape.
 ///
 /// # Safety
 /// `out_first_height` and `out_len` must be valid, writable pointers.
@@ -351,22 +337,17 @@ pub unsafe extern "C" fn shekyl_archival_pass_anchor_window(
     if out_first_height.is_null() || out_len.is_null() {
         return SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_NULL_PTR;
     }
-    match PassAnchorHeights::for_predecessor(predecessor_height) {
-        Some(heights) => {
-            unsafe {
-                *out_first_height = heights.first();
-                *out_len = heights.len();
-            }
-            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
-        }
-        None => {
-            unsafe {
-                *out_first_height = 0;
-                *out_len = 0;
-            }
-            SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD
-        }
+    match PassAnchorWindow::shape_for_predecessor(predecessor_height) {
+        Some((first, len)) => unsafe {
+            *out_first_height = first;
+            *out_len = len;
+        },
+        None => unsafe {
+            *out_first_height = 0;
+            *out_len = 0;
+        },
     }
+    SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK
 }
 
 /// Name the distinct pass `p_id`s in a block's attestation headers (Phase 2 admission, step 1).

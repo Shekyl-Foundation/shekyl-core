@@ -96,7 +96,7 @@ pub const SCHEME_DOMAIN_EMISSION_BACKING: &[u8] = b"shekyl/archival-emission-bac
 /// the fetching client's decoded request header followed by the served shard,
 /// `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`
 /// (`ARCHIVAL_SHARD_FETCH.md` `SF-D8`, ruled 2026-09-13; built by
-/// `shekyl_archival_retention::pass_countersignature_message`).
+/// `shekyl_archival_retention::pass_anchor::pass_countersignature_message`).
 ///
 /// The retired v1 domain `shekyl/archival-attestation-scheme-v1` signed the
 /// 32-byte block-bound nonce alone. It is **never reused**: a v1 signature can

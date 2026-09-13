@@ -39,12 +39,11 @@ use serde_json::{json, Value};
 use shekyl_archival_retention::{
     attestation_root, pass_countersignature_message, pass_request_header_bytes,
     verify_pass_countersignature, AttestationHeader, AttestationKind, BlockAttestationWitness,
-    PassAnchorHeights, PassAnchorWindow, PassAnchorWindowError, PassCountersignatureError,
-    PassRecord, PassWitness, WitnessError, ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS,
-    MAX_ATTESTATION_WITNESS_BYTES, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN,
-    PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT,
-    PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
-    PASS_REQUEST_HEADER_LEN, WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
+    PassAnchorWindow, PassAnchorWindowError, PassCountersignatureError, PassRecord, PassWitness,
+    WitnessError, ATTESTATION_HEADER_LEN, MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
+    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
+    PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN, WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
@@ -277,15 +276,10 @@ fn kat_chain_hash(height: u64) -> [u8; PASS_ANCHOR_HASH_LEN] {
 /// The window a block connecting to `predecessor_height` sees, filled from
 /// `kat_chain_hash` — the same table the fixture carries for the pinned height.
 fn kat_window(predecessor_height: u64) -> PassAnchorWindow {
-    let heights = PassAnchorHeights::for_predecessor(predecessor_height)
+    let (first, len) = PassAnchorWindow::shape_for_predecessor(predecessor_height)
         .unwrap_or_else(|| panic!("predecessor {predecessor_height} has a window"));
-    PassAnchorWindow::new(
-        predecessor_height,
-        (heights.first()..=heights.last())
-            .map(kat_chain_hash)
-            .collect(),
-    )
-    .expect("table sized to the window")
+    let hashes: Vec<_> = (0..len as u64).map(|i| kat_chain_hash(first + i)).collect();
+    PassAnchorWindow::from_table(predecessor_height, &hashes).expect("table sized to the window")
 }
 
 /// 723 has no window (any pass record is refused there); 724 is the first
@@ -295,15 +289,15 @@ fn kat_window(predecessor_height: u64) -> PassAnchorWindow {
 #[test]
 fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
     assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, 724);
-    assert_eq!(PassAnchorHeights::for_predecessor(723), None);
+    assert_eq!(PassAnchorWindow::shape_for_predecessor(723), None);
     assert_eq!(
-        PassAnchorWindow::new(723, vec![[0u8; 32]; PASS_ANCHOR_WINDOW_LEN]).unwrap_err(),
+        PassAnchorWindow::from_table(723, &[[0u8; 32]; PASS_ANCHOR_WINDOW_LEN]).unwrap_err(),
         PassAnchorWindowError::BelowThreshold {
             predecessor_height: 723
         }
     );
-    let first = PassAnchorHeights::for_predecessor(724).expect("724 has a window");
-    assert_eq!((first.first(), first.last()), (0, 4));
+    let (first, len) = PassAnchorWindow::shape_for_predecessor(724).expect("724 has a window");
+    assert_eq!((first, len), (0, 5));
 
     let (pk, sk, p_id) = kat_persona();
     let anchor = 0u64;
@@ -575,8 +569,7 @@ fn build_signature_document() -> Value {
         }],
     };
     let window = kat_window(SIG_PREDECESSOR_HEIGHT);
-    let heights = window.heights();
-    let table: Vec<String> = (heights.first()..=heights.last())
+    let table: Vec<String> = (window.first()..=window.last())
         .map(|h| hex::encode(kat_chain_hash(h)))
         .collect();
     json!({
@@ -600,7 +593,7 @@ fn build_signature_document() -> Value {
         "predecessor_height": SIG_PREDECESSOR_HEIGHT,
         "anchor_height": SIG_ANCHOR_HEIGHT,
         "anchor_hash_hex": hex::encode(kat_chain_hash(SIG_ANCHOR_HEIGHT)),
-        "anchor_window_first_height": heights.first(),
+        "anchor_window_first_height": window.first(),
         "anchor_window_hashes_hex": table,
         "shard_id": SIG_SHARD_ID,
         "settlement_epoch": SIG_EPOCH,
@@ -637,7 +630,7 @@ fn fixture_window(kat: &Value) -> PassAnchorWindow {
                 .expect("32 bytes")
         })
         .collect();
-    PassAnchorWindow::new(kat["predecessor_height"].as_u64().expect("height"), hashes)
+    PassAnchorWindow::from_table(kat["predecessor_height"].as_u64().expect("height"), &hashes)
         .expect("fixture window is well-formed")
 }
 
@@ -669,14 +662,11 @@ fn pinned_v2_signature_fixture_operands_match_this_test() {
         fixture_hex(&kat, "anchor_hash_hex"),
         kat_chain_hash(SIG_ANCHOR_HEIGHT)
     );
-    let heights = PassAnchorHeights::for_predecessor(SIG_PREDECESSOR_HEIGHT).unwrap();
-    assert_eq!(
-        kat["anchor_window_first_height"].as_u64(),
-        Some(heights.first())
-    );
+    let (first, _) = PassAnchorWindow::shape_for_predecessor(SIG_PREDECESSOR_HEIGHT).unwrap();
+    assert_eq!(kat["anchor_window_first_height"].as_u64(), Some(first));
     let window = fixture_window(&kat);
-    assert_eq!(window.heights(), heights);
-    for h in heights.first()..=heights.last() {
+    assert_eq!(window.first(), first);
+    for h in window.first()..=window.last() {
         assert_eq!(window.hash_at(h), Some(&kat_chain_hash(h)));
     }
     assert_eq!(kat["shard_id"].as_u64(), Some(SIG_SHARD_ID));
@@ -754,18 +744,14 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
     // Anchor hash: a chain whose hash at the anchor height differs (a fork, or a
     // requester who lied to P) rejects the signature — the hash is P's
     // transcript term, checked against the CHAIN's value, never the header's.
-    let heights = window.heights();
-    let forked = PassAnchorWindow::new(
-        SIG_PREDECESSOR_HEIGHT,
-        (heights.first()..=heights.last())
-            .map(|h| {
-                let mut x = kat_chain_hash(h);
-                x[9] ^= 0xFF;
-                x
-            })
-            .collect(),
-    )
-    .unwrap();
+    let forked_hashes: Vec<_> = (window.first()..=window.last())
+        .map(|h| {
+            let mut x = kat_chain_hash(h);
+            x[9] ^= 0xFF;
+            x
+        })
+        .collect();
+    let forked = PassAnchorWindow::from_table(SIG_PREDECESSOR_HEIGHT, &forked_hashes).unwrap();
     assert_eq!(
         verify_pass_countersignature(&forked, &pk, &record),
         Err(PassCountersignatureError::InvalidSignature)

@@ -31,7 +31,7 @@ rulings into bytes:
 |---|---|
 | Miner-chosen set, coinbase-revealed | The attester is the block producer; no schedule, no beacon |
 | Block-bound nonce `H(r ‖ cb_out_key ‖ P ‖ s ‖ E)` — **SUPERSEDED twice:** `r` → `block_hash(h−1)` (`RF-D3`/`RF-D5`, 2026-08-19, landed); then the countersignature message became requester-random `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` with `cb_out_key` dropped (`SF-D8`, 2026-09-13; verifier LANDED by the (a0) PR the same day — admission verifies over the carried nonce and anchor height, with the anchor hash read from the connecting chain inside `[h−720−L, h−720]`) | The record's authenticity binds to *this* block's coinbase — *(v1 property; `SF-D8` binds to a chain anchor 720 deep instead and accepts same-height reuse)* |
-| Non-transferable / self-crediting killed | Verify must recompute the nonce, never trust a carried one |
+| Non-transferable / self-crediting killed | v1 recomputed the nonce from chain terms. **SUPERSEDED `SF-D8` (LANDED (a0)):** the nonce is requester-random and **carried**; admission does not trust a carried *hash* — it looks the hash up from the connecting chain at the carried height |
 | Miss fact (three-valued) | The record carries a pass/miss discriminant; "neither" is off-wire |
 | Coinbase-output-key uniqueness (epoch-windowed) | A consensus check the wire's verify path must invoke |
 | Prunable residence | Header kept; 3.43 KB countersignature on the coinbase-tx prunable side |

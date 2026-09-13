@@ -182,7 +182,7 @@ TEST(archival_attestation_verify, step0_window_matches_fixture_and_pins_threshol
   // The fixture's anchor is the window's top: h - depth.
   EXPECT_EQ(k.anchor_height, first + len - 1);
 
-  EXPECT_EQ(anchor_window(723, first, len), SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD);
+  EXPECT_EQ(anchor_window(723, first, len), SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
   EXPECT_EQ(first, 0u);
   EXPECT_EQ(len, 0u);
   EXPECT_EQ(anchor_window(724, first, len), SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);

@@ -25,9 +25,8 @@
 //! - [`constants`] — genesis-pinned challenge counts and seal offset.
 //! - [`wire`] — byte-exact `txin_archival_serve_credit_response` encode/decode.
 //! - [`attestation`] — settlement fold over challenge outcome counts (`settle_epoch`, absolute-2).
-//! - [`attestation_wire`] — header, `PassRecord` (carried nonce + anchor height),
-//!   root, witness, the `SF-D8` countersignature transcript, the anchor window,
-//!   pass verify.
+//! - [`attestation_wire`] — header, `PassRecord`, root, witness, pass verify.
+//! - [`pass_anchor`] — SF-D8 window and countersignature transcript.
 //!
 //! KAT: `tests/fixtures/gate2_serve_credit_kat_v1.json` (regenerate with
 //! `cargo test -p shekyl-archival-retention regenerate_gate2_kat_fixture -- --ignored`);
@@ -59,6 +58,7 @@ pub mod error;
 pub mod failure_window;
 pub mod hash;
 pub mod id;
+pub mod pass_anchor;
 pub mod path;
 pub mod release_cooldown;
 pub mod reward_arithmetic;
@@ -78,15 +78,11 @@ pub use attestation::{
     settle_epoch, AttestationKind, EpochSettlement, SettleError, SERVE_THRESHOLD_PASSES,
 };
 pub use attestation_wire::{
-    attestation_root, empty_attestation_root, pass_countersignature_message,
-    pass_records_from_headers_and_witness, pass_request_header_bytes, verify_pass_countersignature,
-    AttestationHeader, AttestationHeaderError, BlockAttestationWitness, PassAnchorHeights,
-    PassAnchorWindow, PassAnchorWindowError, PassCountersignatureError, PassRecord, PassWitness,
-    WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN, ATTESTATION_ROOT_CUSTOMIZATION,
-    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, PASS_ANCHOR_DEPTH_BLOCKS,
-    PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS,
-    PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
-    PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN, WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
+    attestation_root, empty_attestation_root, pass_records_from_headers_and_witness,
+    verify_pass_countersignature, AttestationHeader, AttestationHeaderError,
+    BlockAttestationWitness, PassCountersignatureError, PassRecord, PassWitness, WitnessError,
+    WitnessPairingError, ATTESTATION_HEADER_LEN, ATTESTATION_ROOT_CUSTOMIZATION,
+    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
@@ -153,6 +149,12 @@ pub use emission_verify::{
     emission_vin_verify_backing, emission_vin_verify_claims, epoch_is_before_join, AuthVerified,
     BackingVerified, ClaimantBondRecord, ClaimantShare, ClaimantShareError, ClaimsVerified,
     EmissionEpochSource, EmissionVerified, EmissionVerifyContext, EmissionVerifyError,
+};
+pub use pass_anchor::{
+    pass_countersignature_message, pass_request_header_bytes, PassAnchorWindow,
+    PassAnchorWindowError, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN,
+    PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN,
+    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 pub use settlement_row::{
     RowError, SettlementRow, OUTCOME_MISSED, OUTCOME_NON_OBSERVATION, OUTCOME_SERVED,

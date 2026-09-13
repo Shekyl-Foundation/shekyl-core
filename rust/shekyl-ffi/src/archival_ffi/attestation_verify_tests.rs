@@ -51,11 +51,11 @@ fn window_table(predecessor_height: u64) -> Vec<[u8; PASS_ANCHOR_HASH_LEN]> {
     let code = unsafe {
         shekyl_archival_pass_anchor_window(predecessor_height, &raw mut first, &raw mut len)
     };
-    if code == SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD {
-        assert_eq!((first, len), (0, 0));
+    assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
+    if len == 0 {
+        assert_eq!(first, 0);
         return Vec::new();
     }
-    assert_eq!(code, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
     (0..len as u64).map(|i| chain_hash(first + i)).collect()
 }
 
@@ -724,10 +724,7 @@ fn anchor_window_threshold_is_pinned_at_723_and_724() {
     let mut first = 99u64;
     let mut len = 99usize;
     let below = unsafe { shekyl_archival_pass_anchor_window(723, &raw mut first, &raw mut len) };
-    assert_eq!(
-        below,
-        SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD
-    );
+    assert_eq!(below, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
     assert_eq!((first, len), (0, 0));
     let at = unsafe { shekyl_archival_pass_anchor_window(724, &raw mut first, &raw mut len) };
     assert_eq!(at, SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);

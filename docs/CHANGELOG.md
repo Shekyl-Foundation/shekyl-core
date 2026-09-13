@@ -44,8 +44,10 @@
   `attestation_root` commits to `header ‖ nonce ‖ anchor_height ‖ signature`.
   The FFI verify context drops `cb_out_key`, `cb_out_key_readable`, and
   `prev_block_hash` and gains `predecessor_height` plus the anchor-hash
-  table (`anchor_hashes_ptr/len`; C++ sizes it via the new
-  `shekyl_archival_pass_anchor_window`); verdict codes 8
+  table (`anchor_hashes_ptr/len`; C++ sizes it via
+  `shekyl_archival_pass_anchor_window`, which writes `(first, len)` or
+  `(0, 0)` and returns `OK` — `BELOW_ANCHOR_THRESHOLD` is a verify
+  verdict only); verdict codes 8
   (`CBKEY_UNREADABLE`) and 12 (`PREVHASH_UNPOPULATED`) are retired and never
   reused; 13 `MALFORMED_ANCHOR_TABLE`, 14 `ANCHOR_OUT_OF_WINDOW`, and 15
   `BELOW_ANCHOR_THRESHOLD` are minted. The witness transport cap
