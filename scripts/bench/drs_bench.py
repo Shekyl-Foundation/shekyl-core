@@ -435,12 +435,22 @@ def blocker_failures():
 
 # ── measurement ─────────────────────────────────────────────────────────────
 
-def _free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    p = s.getsockname()[1]
-    s.close()
-    return p
+def _reserve_ports(n):
+    """Pick n distinct free ports, holding every socket until all are chosen.
+
+    Allocating them one at a time — bind, read, close, repeat — lets the kernel
+    hand the SAME ephemeral port back on the next bind, and two daemons told to
+    use one port is a hang rather than an error. Holding all the sockets open
+    makes the ports distinct by construction. The caller closes them immediately
+    before spawning, so a foreign process can still take one in that window;
+    that is why a failure to come up reports the ports it asked for.
+    """
+    socks = [socket.socket() for _ in range(n)]
+    for sk in socks:
+        sk.bind(("127.0.0.1", 0))
+    ports = [sk.getsockname()[1] for sk in socks]
+    assert len(set(ports)) == n, f"port reservation collided: {ports}"
+    return ports, socks
 
 
 def _rpc(port, method, params=None, timeout=60):
@@ -503,9 +513,17 @@ def _peak_rss_bytes(pid):
     return None
 
 
-def _wait_rpc(port, timeout):
+def _wait_rpc(port, timeout, proc=None):
+    """Wait for the daemon's RPC to answer. Returns the timestamp, or None.
+
+    `proc` makes a dead daemon fail FAST instead of burning the whole timeout:
+    a process that exited will never answer, and waiting the full window turns
+    a clear "it crashed" into an indistinguishable "it was slow".
+    """
     t0 = time.time()
     while time.time() - t0 < timeout:
+        if proc is not None and proc.poll() is not None:
+            return None
         try:
             if _rpc(port, "get_info", timeout=5).get("result", {}).get("status") == "OK":
                 return time.time()
@@ -601,14 +619,21 @@ def measure(args):
     common = ["--regtest", "--keep-fakechain", "--fixed-difficulty=1",
               f"--db-sync-mode={args.sync_mode}", "--allow-local-ip", "--no-igd",
               "--non-interactive", f"--log-level={args.log_level}"]
-    sp2p, srpc = _free_port(), _free_port()
-    bp2p, brpc = _free_port(), _free_port()
+    (sp2p, srpc, bp2p, brpc), _held = _reserve_ports(4)
+    for _sk in _held:
+        _sk.close()
 
     def spawn(tag, d, argv_extra):
-        argv = [args.daemon] + common + [f"--data-dir={d}", f"--p2p-bind-port=" +
-                str(sp2p if tag == "seed" else bp2p),
-                f"--rpc-bind-port=" + str(srpc if tag == "seed" else brpc)] + argv_extra
+        p2p, rpcp = (sp2p, srpc) if tag == "seed" else (bp2p, brpc)
+        argv = [args.daemon] + common + [f"--data-dir={d}",
+                                         f"--p2p-bind-port={p2p}",
+                                         f"--rpc-bind-port={rpcp}"] + argv_extra
         log = open(os.path.join(work, f"{tag}.log"), "a", encoding="utf-8")
+        # Record the argv next to the log: a daemon that never answers is
+        # diagnosed from what it was ASKED to do, and the ports are the first
+        # thing to check.
+        with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
+            fh.write(" ".join(argv) + "\n")
         return subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=d), argv
 
     # ── phase 1: generate the chain on an offline seed
@@ -617,8 +642,9 @@ def measure(args):
     target_h = args.height + 1
     proc, _ = spawn("seed", seed_dir, ["--offline"])
     try:
-        if _wait_rpc(srpc, args.startup_timeout) is None:
-            _fail("seed RPC never came up")
+        if _wait_rpc(srpc, args.startup_timeout, proc) is None:
+            _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
+                  f"(exited={proc.poll()}); see {work}/seed.log and seed.argv")
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
         if have_h < target_h:
@@ -647,16 +673,22 @@ def measure(args):
     # ── phase 2: same datadir, networked, so it can serve
     proc, _ = spawn("seed", seed_dir, [])
     try:
-        if _wait_rpc(srpc, args.startup_timeout) is None:
-            _fail("networked seed RPC never came up")
+        if _wait_rpc(srpc, args.startup_timeout, proc) is None:
+            _fail(f"networked seed RPC on 127.0.0.1:{srpc} never came up "
+                  f"(exited={proc.poll()}); see {work}/seed.log and seed.argv")
 
         # ── phase 3: the subject, which is what we are measuring
         subj, subj_argv = spawn("subject", subj_dir,
                                 [f"--add-exclusive-node=127.0.0.1:{sp2p}"])
         try:
-            ready = _wait_rpc(brpc, args.startup_timeout)
+            ready = _wait_rpc(brpc, args.startup_timeout, subj)
             if ready is None:
-                _fail("subject RPC never came up")
+                _fail(f"subject RPC on 127.0.0.1:{brpc} never came up "
+                      f"(exited={subj.poll()}); see {work}/subject.log and "
+                      f"subject.argv. A non-offline daemon's startup is variable "
+                      f"here (tens of seconds to minutes) and is EXCLUDED from the "
+                      f"measurement, so raising --startup-timeout does not affect "
+                      f"any number.")
             # The denominator: from the subject answering RPC (so RandomX dataset
             # init and store open are EXCLUDED) to its height reaching the seed's.
             t0, reached, peak, peers = ready, 0, 0, 0
@@ -807,7 +839,7 @@ def main():
     m.add_argument("--work-dir", required=True)
     m.add_argument("--sync-mode", default="safe")
     m.add_argument("--log-level", type=int, default=1)
-    m.add_argument("--startup-timeout", type=float, default=300.0)
+    m.add_argument("--startup-timeout", type=float, default=1200.0)
     m.add_argument("--gen-timeout", type=float, default=14400.0)
     m.add_argument("--sync-timeout", type=float, default=14400.0)
     m.add_argument("--shutdown-timeout", type=float, default=300.0)
