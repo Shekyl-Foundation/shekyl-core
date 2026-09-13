@@ -160,6 +160,9 @@ fn accept_mining_recipient(encoded: &str) -> Result<(), String> {
 /// gap as the fixture, in the paragraph written to close it.
 #[test]
 fn regtest_mining_fixture_is_in_the_current_address_encoding() {
+    use shekyl_address::Network;
+    use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
+
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("vectors/regtest_mining_recipients.json"))
             .expect("regtest_mining_recipients.json parses");
@@ -171,6 +174,26 @@ fn regtest_mining_fixture_is_in_the_current_address_encoding() {
         !recipients.is_empty(),
         "fixture carries no recipients — an empty array would satisfy the loop below \
          without decoding anything, which is the defect this test exists to catch"
+    );
+
+    // Provenance: the committed fixture must BE what the documented emitter
+    // produces, not merely some address the daemon would accept. `README.md`
+    // says "reproduce via `cargo test ... emit_regtest_addr`", and nothing
+    // evaluated that claim — a hand-edited or differently-seeded address would
+    // satisfy every check below while the documented command regenerated
+    // something else. The seed is the emitter's; if the two ever diverge this
+    // assertion fails loudly rather than the corpus drifting.
+    let (_seed, blob) = generate_account_from_raw_seed(&[0x11u8; 32], DerivationNetwork::Fakechain)
+        .expect("derive fakechain account");
+    let emitted = blob
+        .to_address(Network::Mainnet)
+        .encode()
+        .expect("encode address");
+    assert_eq!(
+        recipients[0]["address"].as_str().expect("fixture address"),
+        emitted,
+        "the committed fixture is not what `emit_regtest_addr` produces — \
+         regenerate it from the documented command rather than editing it"
     );
 
     for (i, recipient) in recipients.iter().enumerate() {
