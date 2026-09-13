@@ -57,6 +57,36 @@ enum { HAVE_BLOCK_MAIN_CHAIN, HAVE_BLOCK_ALT_CHAIN, HAVE_BLOCK_INVALID };
 
 namespace cryptonote
 {
+   /**
+    * @brief the resolved `--db-sync-mode` settings
+    *
+    * Extracted from `core::init` so the parse can be tested without opening a
+    * database. The parse FAILS CLOSED: an unrecognised token in a durability
+    * setting refuses rather than selecting a default, because the default is
+    * `DBF_FAST` (`MDB_NOSYNC`) and silently choosing the least durable mode on
+    * a typo is fail-open on the one control that decides whether a crash costs
+    * the chain.
+    */
+   struct db_sync_settings
+   {
+     uint64_t db_flags = 0;
+     blockchain_db_sync_mode sync_mode = db_defaultsync;
+     bool sync_on_blocks = true;
+     uint64_t sync_threshold = 1;
+   };
+
+   /**
+    * @brief parse a `--db-sync-mode` specification
+    *
+    * @param spec       the raw option string (`[safe|fast|fastest]:[sync|async]:[<n>[blocks|bytes]]`)
+    * @param is_default true when the argument was not supplied on the command line
+    * @param out        resolved settings, written only on success
+    * @param error      human-readable reason, written only on failure
+    * @return true on success; false means REFUSE TO START
+    */
+   bool parse_db_sync_mode(const std::string &spec, bool is_default,
+                           db_sync_settings &out, std::string &error);
+
    struct test_options {
      const std::pair<uint8_t, uint64_t> *hard_forks;
      const size_t long_term_block_weight_window;

@@ -45,6 +45,7 @@ set(unit_tests_sources
   daemon_rpc_client.cpp
   daemon_submit_ffi_roundtrip.cpp
   daemon_submit_shims.cpp
+  db_sync_mode_parse.cpp
   decompose_amount_into_digits.cpp
   device.cpp
   difficulty.cpp

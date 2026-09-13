@@ -195,6 +195,41 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_doc_code_citations.py
 
+      - name: Run DRS-BENCH harness selftest
+        # `scripts/bench/drs_artifact.py` refuses to emit or compare a consensus
+        # store number that does not carry its measurement conditions —
+        # DRS-D9 durability, hardware class, height reached, which
+        # verification the fixture actually exercised, and every live axis.
+        # The selftest breaks one field at a time and asserts the refusal names
+        # it; a control proves the unmutated artifact is accepted, without
+        # which every one of those reds could be firing on an already-invalid
+        # fixture. It also loads the committed `docs/benchmarks/drs_bench_ibd_*.json`
+        # files, so deleting or editing them is a red (rule 47).
+        #
+        # It also pins §1.3's frozen ratios against the doc's own text in both
+        # directions, so editing the threshold on either side alone is a red.
+        # Those numbers were frozen before any measurement existed, and a
+        # ratio refined after seeing a number is a reopening (rule 21), not a
+        # refinement.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_drs_bench.py
+
+      - name: Run DRS-BENCH deferral blocker probe
+        # Stage one landed the harness and the LMDB arm only, because there is
+        # no redb CONSENSUS store to measure: `rust/shekyl-chain-store/` names
+        # redb in type-level table and key-ordering declarations and holds no
+        # Database and no transaction. This asserts that blocker STILL HOLDS,
+        # so the deferral cannot outlive its cause — when DRS-E1 grows the
+        # engine this turns red and names the sites, which is the signal to
+        # wire the redb arm rather than a surprise.
+        #
+        # Scoped to that crate deliberately: redb is already a real engine in
+        # `rust/shekyl-curve-tree/src/store/redb_backend.rs`, the wallet
+        # LeafStore that DRS-D9 means by "not inherited from LeafStore
+        # silence", so a workspace-wide probe would fire every run.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_bench.py blockers
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.
@@ -218,6 +253,37 @@ jobs:
         # in BOTH directions — anchored passes, unanchored fails.
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_shell_gate_exits.py
+
+      - name: Run DRS-C surface map gate
+        # Tier-A A9: blockchain.cpp's store vocabulary is partitioned into
+        # named validation surfaces, every method in exactly one. The gate
+        # RE-DERIVES the vocabulary from the tree it runs on rather than
+        # trusting a verification stamp: §3.5's stamp sat at 97 while the tree
+        # had moved to 102, and the membership moved further than the total
+        # (+7/-3 for a net +4).
+        #
+        # It derives the alias SET from `BlockchainDB *`/`&` declarations
+        # instead of matching one token, and takes the call OPERATOR from the
+        # declaration's sigil (`*` -> `->`, `&` -> `.`). The first version
+        # matched `m_db->` -- the same derivation that built the table -- so it
+        # was green BY CONSTRUCTION over calls made through any other name, and
+        # missed three live methods. Receiver shapes the derivation cannot
+        # follow (`get_db` on sight, an `auto` binding of the store, a
+        # dereferenced call) are REFUSED over the DERIVED alias set, so a new
+        # alias or a new shape fails loudly instead of shrinking the vocabulary.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_c_surface_map.py
+
+      - name: Self-test the DRS-C surface map gate
+        # That gate has been wrong twice in the same way: a receiver shape its
+        # derivation could not follow, silently absent from the vocabulary,
+        # with the bijection green over the gap. Hand-run negative controls
+        # caught neither, because they were written from the same mental model
+        # as the derivation. Every shape is pinned here as a case -- collected,
+        # refused, and the near-misses that must be neither.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_drs_c_surface_map.py
 
       - name: Run redb key-type ordering gate
         # The bijection gate checks that every table is MAPPED; this one checks

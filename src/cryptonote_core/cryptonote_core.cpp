@@ -410,6 +410,104 @@ namespace cryptonote
     return m_blockchain_storage.get_alternative_blocks_count();
   }
   //-----------------------------------------------------------------------------------------------
+  //-----------------------------------------------------------------------------------------------
+  bool parse_db_sync_mode(const std::string &spec, bool is_default,
+                          db_sync_settings &out, std::string &error)
+  {
+    db_sync_settings parsed;
+
+    std::string trimmed = spec;
+    boost::trim(trimmed);
+
+    // An empty specification is "not specified": the defaults below stand. The
+    // pre-2026-09-13 form had an `options.size() == 0` branch for this, which
+    // boost::split can never produce -- splitting "" yields one empty element,
+    // not an empty vector -- so the branch was unreachable and the empty string
+    // fell through to the silent-default `else` this function replaces.
+    if (trimmed.empty())
+    {
+      parsed.db_flags = DBF_FAST;
+      out = parsed;
+      return true;
+    }
+
+    std::vector<std::string> options;
+    boost::split(options, trimmed, boost::is_any_of(" :"));
+
+    for (const auto &option : options)
+      MDEBUG("option: " << option);
+
+    bool safemode = false;
+    if (options[0] == "safe")
+    {
+      safemode = true;
+      parsed.db_flags = DBF_SAFE;
+      parsed.sync_mode = is_default ? db_defaultsync : db_nosync;
+    }
+    else if (options[0] == "fast")
+    {
+      parsed.db_flags = DBF_FAST;
+      parsed.sync_mode = is_default ? db_defaultsync : db_async;
+    }
+    else if (options[0] == "fastest")
+    {
+      parsed.db_flags = DBF_FASTEST;
+      parsed.sync_threshold = 1000; // default to fastest:async:1000
+      parsed.sync_mode = is_default ? db_defaultsync : db_async;
+    }
+    else
+    {
+      // FAIL CLOSED. The pre-2026-09-13 form was `else db_flags = DEFAULT_FLAGS;`
+      // with no diagnostic, and DEFAULT_FLAGS is DBF_FAST, which db_lmdb maps to
+      // MDB_NOSYNC -- so `--db-sync-mode=saf` silently selected the LEAST durable
+      // mode. Pre-genesis there is no deployed base to break, so an unrecognised
+      // token refuses to start instead.
+      error = "unrecognised db sync mode \"" + options[0] + "\"; expected safe, fast or fastest";
+      return false;
+    }
+
+    if (options.size() >= 2 && !safemode)
+    {
+      if (options[1] == "sync")
+        parsed.sync_mode = is_default ? db_defaultsync : db_sync;
+      else if (options[1] == "async")
+        parsed.sync_mode = is_default ? db_defaultsync : db_async;
+      else
+      {
+        // The same defect one field along, and it had no `else` at all: an
+        // unrecognised options[1] was silently ignored, leaving whatever
+        // options[0] had chosen. Same durability setting, same treatment.
+        error = "unrecognised db sync policy \"" + options[1] + "\"; expected sync or async";
+        return false;
+      }
+    }
+
+    if (options.size() >= 3 && !safemode)
+    {
+      char *endptr;
+      const uint64_t threshold = strtoull(options[2].c_str(), &endptr, 0);
+      if (*endptr == '\0' || !strcmp(endptr, "blocks"))
+      {
+        parsed.sync_on_blocks = true;
+        parsed.sync_threshold = threshold;
+      }
+      else if (!strcmp(endptr, "bytes"))
+      {
+        parsed.sync_on_blocks = false;
+        parsed.sync_threshold = threshold;
+      }
+      else
+      {
+        // Unchanged: this token already refused. The two above now match it.
+        error = "invalid db sync threshold \"" + options[2] + "\"; expected <n>, <n>blocks or <n>bytes";
+        return false;
+      }
+    }
+
+    out = parsed;
+    return true;
+  }
+  //-----------------------------------------------------------------------------------------------
   bool core::init(const boost::program_options::variables_map& vm, const cryptonote::test_options *test_options)
   {
     start_time = std::time(nullptr);
@@ -482,80 +580,38 @@ namespace cryptonote
 
     try
     {
-      uint64_t db_flags = 0;
-
-      std::vector<std::string> options;
-      boost::trim(db_sync_mode);
-      boost::split(options, db_sync_mode, boost::is_any_of(" :"));
       const bool db_sync_mode_is_default = command_line::is_arg_defaulted(vm, cryptonote::arg_db_sync_mode);
 
-      for(const auto &option : options)
-        MDEBUG("option: " << option);
-
-      // default to fast:async:1
-      uint64_t DEFAULT_FLAGS = DBF_FAST;
-
-      if(options.size() == 0)
+      db_sync_settings resolved;
+      std::string db_sync_error;
+      if (!parse_db_sync_mode(db_sync_mode, db_sync_mode_is_default, resolved, db_sync_error))
       {
-        // default to fast:async:1
-        db_flags = DEFAULT_FLAGS;
+        // Refuse to start. A durability control that silently falls back to its
+        // least durable setting on a typo is the one failure a node cannot
+        // detect from its own behaviour.
+        MFATAL("Invalid --db-sync-mode: " << db_sync_error);
+        return false;
       }
 
-      bool safemode = false;
-      if(options.size() >= 1)
-      {
-        if(options[0] == "safe")
-        {
-          safemode = true;
-          db_flags = DBF_SAFE;
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_nosync;
-        }
-        else if(options[0] == "fast")
-        {
-          db_flags = DBF_FAST;
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_async;
-        }
-        else if(options[0] == "fastest")
-        {
-          db_flags = DBF_FASTEST;
-          sync_threshold = 1000; // default to fastest:async:1000
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_async;
-        }
-        else
-          db_flags = DEFAULT_FLAGS;
-      }
-
-      if(options.size() >= 2 && !safemode)
-      {
-        if(options[1] == "sync")
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_sync;
-        else if(options[1] == "async")
-          sync_mode = db_sync_mode_is_default ? db_defaultsync : db_async;
-      }
-
-      if(options.size() >= 3 && !safemode)
-      {
-        char *endptr;
-        uint64_t threshold = strtoull(options[2].c_str(), &endptr, 0);
-        if (*endptr == '\0' || !strcmp(endptr, "blocks"))
-        {
-          sync_on_blocks = true;
-          sync_threshold = threshold;
-        }
-        else if (!strcmp(endptr, "bytes"))
-        {
-          sync_on_blocks = false;
-          sync_threshold = threshold;
-        }
-        else
-        {
-          LOG_ERROR("Invalid db sync mode: " << options[2]);
-          return false;
-        }
-      }
+      uint64_t db_flags = resolved.db_flags;
+      sync_mode = resolved.sync_mode;
+      sync_on_blocks = resolved.sync_on_blocks;
+      sync_threshold = resolved.sync_threshold;
 
       if (db_salvage)
         db_flags |= DBF_SALVAGE;
+
+      // A4: report what was RESOLVED, not what was asked for. The point of the
+      // row is that the durability posture is explicit rather than a library
+      // default reached by omission, and that is only checkable from a running
+      // node if the node says which flags it opened with.
+      MGINFO("Database sync: flags=0x" << std::hex << db_flags << std::dec
+        << (db_flags & DBF_SAFE ? " (safe)" : "")
+        << (db_flags & DBF_FAST ? " (fast: MDB_NOSYNC)" : "")
+        << (db_flags & DBF_FASTEST ? " (fastest: MDB_NOSYNC|MDB_WRITEMAP|MDB_MAPASYNC)" : "")
+        << (db_flags & DBF_SALVAGE ? " (salvage)" : "")
+        << ", sync_mode=" << (int)sync_mode
+        << ", threshold=" << sync_threshold << (sync_on_blocks ? " blocks" : " bytes"));
 
       db->open(filename, db_flags);
       if(!db->m_open)

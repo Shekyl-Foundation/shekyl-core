@@ -1436,8 +1436,8 @@ settlement writer (item 9's schema is genuinely open).
   NO: a bonded persona's endpoint never changes; a new address is a new
   persona. The JoinMarket half of what the 2026-09-11 round sequenced — the
   vin's mandatory serving endpoint and the record column the witness reads
-  (`EU-D3`, `EU-D4`) — lands on its own; the kind-4 half was excised before
-  merge. Record: [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md).
+  (`EU-D3`, `EU-D4`) — landed on its own as PR #724 (`f103acd38`,
+  2026-09-13); the kind-4 half was excised before merge. Record: [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md).
 - **The settlement writer — SCHEMA LANDED; the production wiring is now the
   hold, as of 2026-08-25.** This entry said the round had `SO-D6` (reorg)
   outstanding, which was true on 2026-08-23 and is not now: `SO-D1`…`SO-D5`
