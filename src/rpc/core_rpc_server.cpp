@@ -46,7 +46,6 @@ using namespace epee;
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
-#include "fcmp/ct_ops.h"
 #include "cryptonote_core/curve_tree_path.h"
 #include "misc_language.h"
 #include "net/local_ip.h"
@@ -1551,10 +1550,8 @@ namespace cryptonote
 
       curve_tree_path_bytes bytes;
       std::string err;
-      if (!assemble_curve_tree_path(db, output_idx, ref_leaf_count, tip_leaf_count, bytes, err))
+      if (!assemble_curve_tree_path(db, output_idx, ref_leaf_count, tip_leaf_count, depth, bytes, err))
       {
-        // A store read the path needs did not succeed. Fail the call (PDM-Q-F9);
-        // the assembler never substitutes bytes for a read it could not make.
         error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
         error_resp.message = std::move(err);
         return false;
