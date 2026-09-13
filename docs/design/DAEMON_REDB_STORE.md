@@ -384,9 +384,14 @@ Index and CHANGELOG use the Tier-A framing when reopen fires.
    this is that input: **≤ 1.25× passes, > 1.50× after one documented
    mitigation cycle hard-fails, the band between them is a decision-log call,
    peak RSS ≤ 2×**. They are frozen **now, while no measurement exists** —
-   re-verified at this pin: the workspace has no redb-touching or IBD bench
-   (`rust/*/benches/` carries only crypto-pq and engine-core economics), exactly
-   as §7.4 records. That is the point rather than a limitation: a threshold
+   re-verified at this pin: the workspace has no redb-touching or IBD bench,
+   exactly as §7.4 records. (**Census corrected 2026-09-13** at `f103acd38`,
+   no threshold touched: `rust/*/benches/` holds **38 bench files across 9
+   crates**, not only crypto-pq and engine-core economics — those two are 17 of
+   the 38. **Zero** of the 38 names `redb` or `LeafStore`, so the load-bearing
+   claim, and with it this freeze, stands; the original parenthetical
+   undercounted the denominator without affecting the conclusion drawn from
+   it.) That is the point rather than a limitation: a threshold
    chosen after the first number is a threshold fitted to it, and these ratios
    decide whether redb is genesis-load-bearing at all.
 
@@ -868,6 +873,59 @@ wrong thing.
 Compare engines (redb / heed / LMDB) on the rows above when the suite runs;
 halt conditions named in the bench plan (e.g. file-growth slope, RSS ceiling,
 IBD floor from DRS-0).
+
+**Stage one — landed (2026-09-13).** Harness `scripts/bench/drs_bench.py`
+(`measure` / `check` / `validate` / `blockers`) with selftest
+`scripts/bench/test_drs_bench.py`, both wired in `docs-gates.yml`. The **LMDB
+arm only**: there is no redb consensus store to measure — `shekyl-chain-store`
+names redb in type-level table and key-ordering declarations and holds no
+`Database` and no transaction — and `drs_bench.py blockers` asserts that
+blocker still holds on every CI run, so the deferral turns red when DRS-E1
+grows the engine instead of ageing quietly.
+
+Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**
+(the primary), plus **peak RSS** and **store size** as free denominators of the
+same run. The latter two are explicitly **not** this table's attacker-shaped or
+multi-year rows; those, and pop/reorg, stay follow-ons with named blockers in
+`FOLLOWON_MEASURES` — pop/reorg is the best positioned, since `/pop_blocks`
+already exists.
+
+**Vehicle:** two daemons under `--regtest`. The seed generates **offline**
+(`generateblocks` is gated on `check_core_ready()`, which a zero-peer daemon
+never satisfies, and the protocol handler initialises `m_synchronized(offline)`)
+then restarts **networked** over the same datadir; the **subject** syncs from it.
+That measures IBD rather than in-process block connect. PoW verification is
+exercised — the longhash is computed for every block with no nettype bypass and
+`--fixed-difficulty` lowers the target only — but coinbase-only blocks exercise
+**no FCMP++ verification**, which every artifact records in `verify_exercised`
+rather than leaving §1.3's "FCMP++ + PoW verify enabled as in real sync" to
+stand unqualified.
+
+Observed at H=200 on one workstation (`f103acd38`, DRS-D9 durability), stated as
+per-block rates because the absolute is fixture-sized: generation **0.72 s/block**,
+IBD **0.105 s/block**, store **~202 KB/block**. Linear extrapolation to
+H = 100_000 — a **lower bound**, since per-block IBD cost grows with chain and
+tree size — gives roughly **3 h** of IBD per engine arm but about **20 h** of
+one-time chain generation. Generation is therefore cached and reused via
+`--seed-dir`: without reuse the primary metric is impractical at the reference
+height, and reuse additionally gives both engine arms a byte-identical fixture,
+which `check` requires.
+
+**Durability is measured, not labelled.** DRS-D9 is satisfied by imposing
+`--db-sync-mode=safe`, validated against an allowed set *before* a daemon
+starts: an unrecognised value is accepted by the daemon and silently means
+`DBF_FAST`/`MDB_NOSYNC`. Note for **A4** (§4): on the LMDB path durability is
+currently default-by-omission in three ways — the default flags are `DBF_FAST`,
+a malformed `--db-sync-mode` falls through to them undiagnosed, and with the
+argument defaulted the protocol handler calls `safesyncmode(false)` for the
+duration of sync, so **the shipped daemon's IBD runs at its least durable
+setting**, which is exactly the phase this table measures. A DRS-D9 baseline is
+consequently slower than a default daemon's IBD and is **not** a user-facing
+sync-time estimate; both engines pay the same cost, so the **ratio** is
+unaffected. No readback of the LMDB env flags exists (`mdb_env_get_flags` is
+in-process and nothing logs the resolved mode), so artifacts record
+`observed: false`; the enabler A4 wants is one log line reporting the resolved
+flags.
 
 ---
 

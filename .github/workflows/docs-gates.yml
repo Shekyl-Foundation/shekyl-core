@@ -195,6 +195,39 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/test_check_doc_code_citations.py
 
+      - name: Run DRS-BENCH harness selftest
+        # `scripts/bench/drs_bench.py` refuses to emit or compare a consensus
+        # store number that does not carry its measurement conditions —
+        # DRS-D9 durability, hardware class, height reached, and which
+        # verification the fixture actually exercised. The selftest breaks one
+        # field at a time and asserts the refusal names it; a control proves
+        # the unmutated artifact is accepted, without which every one of those
+        # reds could be firing on an already-invalid fixture.
+        #
+        # It also pins §1.3's frozen ratios against the doc's own text in both
+        # directions, so editing the threshold on either side alone is a red.
+        # Those numbers were frozen before any measurement existed, and a
+        # ratio refined after seeing a number is a reopening (rule 21), not a
+        # refinement.
+        if: '!cancelled()'
+        run: python3 scripts/bench/test_drs_bench.py
+
+      - name: Run DRS-BENCH deferral blocker probe
+        # Stage one landed the harness and the LMDB arm only, because there is
+        # no redb CONSENSUS store to measure: `rust/shekyl-chain-store/` names
+        # redb in type-level table and key-ordering declarations and holds no
+        # Database and no transaction. This asserts that blocker STILL HOLDS,
+        # so the deferral cannot outlive its cause — when DRS-E1 grows the
+        # engine this turns red and names the sites, which is the signal to
+        # wire the redb arm rather than a surprise.
+        #
+        # Scoped to that crate deliberately: redb is already a real engine in
+        # `rust/shekyl-curve-tree/src/store/redb_backend.rs`, the wallet
+        # LeafStore that DRS-D9 means by "not inherited from LeafStore
+        # silence", so a workspace-wide probe would fire every run.
+        if: '!cancelled()'
+        run: python3 scripts/bench/drs_bench.py blockers
+
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.
