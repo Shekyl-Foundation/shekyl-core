@@ -1342,6 +1342,73 @@ pin the types to this document.
   `hf_starting_heights` (dropped at every writable `open()`, DRS-W5).
   Excluded because the domain is empty, not because divergence is tolerable.
 
+### Reopening criteria — two reasons above have an expiry
+
+**A class assigned on a mechanism's behaviour expires when that mechanism
+does.** Both items here are recorded **as hazards with named triggers, not
+as pre-emptive reclassifications** — pre-declaring a class against an
+unlanded ruling is the same error as declaring one against a landed
+mechanism that is leaving. Neither moves a token today.
+
+**1. `curve_tree_leaves` (`append-mostly`) stops being computable under
+set-B discard.** A running chained hash over the leaves requires every leaf:
+you cannot fold what you do not have. **`append-mostly` therefore holds
+exactly while every node retains every leaf**, and the archival lane's
+PDM-Q discard ruling is what reopens it.
+
+It is deliberately **not** pre-declared `excluded / node-local`, and the
+reason is worth stating because it is the more likely mistake: if discard
+is **uniform** — consensus-scheduled and identical everywhere, as the
+in-house retention prune already is — the leaves stay *in domain* with a
+piecewise definition split at a consensus-known boundary. That is a
+digestible shape, not an excluded one. Only *node-variable* discard would
+push them out. So the trigger is not "discard lands" but **"discard lands
+and is node-variable."**
+
+**2. The `node-local` reason rests on the C++ stripe prune, which the Rust
+store does not inherit.** Recorded per table, because verification shows
+the three do **not** share a disposition — which is exactly what grouping
+them under one reason hid:
+
+- **`txs_prunable`** — the exclusion does not survive the port. With no
+  Rust-side discard the bytes are always present and replay reproduces
+  them, so it lands **in** the digest domain. The `node-local` reason and
+  its `txs_prunable_hash` surrogate were sound against *this* tree and are
+  not properties of the store being built.
+- **`txs_prunable_tip`** — **not** prune-only scaffolding, and this
+  correction matters because the opposite was proposed. It is written by
+  `add_transaction_data` (`:1159`) and deleted by
+  `remove_transaction_data` (`:1226`, `:1231`) — the **block connect and
+  pop paths**. Only its three `mdb_cursor_open` sites (`:2402`, `:2460`,
+  `:2565`) are inside `prune_worker`. An enumeration of the *read* sites
+  alone makes it look like prune scaffolding; the write path says
+  otherwise. Whether the Rust store carries the table is a live
+  prune-policy question, **not** a settled deletion.
+- **`output_metadata`** — the `node-local` reason does not describe it at
+  all, and the true shape is stronger. It is not discarded content; it is
+  content **created by discarding**, written from one site inside
+  `prune_tx_data` (`:10229`). Its read chain is **dead two levels deep**:
+  `get_output_metadata` has exactly one caller, `is_output_pruned`
+  (`:10083`), and `is_output_pruned` has **no call site anywhere** in
+  `src/`, `rust/` or `tests/` — only its declaration, its override and a
+  `testdb.h` stub. At the port it is empty by construction, so its reason
+  is closer to `dead` (DRS-W4's shape) than to `node-local`.
+
+**Why this is an argument for commissioning the digest sooner, not a
+caveat.** If the inherited prune does not port, then until set-B discard
+lands **the Rust store has no node-variable content by construction** — so
+the digest oracle commissions against a *uniform* reference rather than a
+merely currently-uniform one. That window closes the day node-variable
+discard lands.
+
+**Grounding note, stated because the freeze must not cite what it cannot
+reach.** The code claims above were verified in this tree at the pin. The
+**PDM-Q rulings are not landed** — no `PDM-Q` string resolves anywhere
+under `docs/` at this commit, and the round's opening commit is not an
+ancestor of `dev`. They are recorded here as **triggers to re-evaluate**,
+which is why nothing above changes a class token. When PDM-Q lands, this
+subsection is the list to walk.
+
 ### What the fold consumes (binds DRS-0 slice B's codecs)
 
 The accumulator folds a **canonical encoding of the decoded logical value**,
