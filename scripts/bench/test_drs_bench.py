@@ -17,7 +17,7 @@
 # would go; if it also goes green, it proves nothing and belongs in the FATAL
 # form instead.
 
-import copy
+import glob
 import json
 import os
 import re
@@ -26,7 +26,8 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import drs_bench as D  # noqa: E402
+import drs_artifact as D  # noqa: E402
+import drs_bench as R  # noqa: E402
 
 
 def valid_artifact(engine="lmdb", **over):
@@ -245,6 +246,30 @@ class ArtifactRefusals(unittest.TestCase):
     def test_refuses_empty_measures(self):
         self._refuse(lambda a: a.__setitem__("measures", []), "measures absent or empty")
 
+    def test_refuses_a_zero_on_a_thresholded_axis(self):
+        """0.0 validates as a number and reads as 'used no time/RSS'. Same
+        placeholder-satisfies-the-field defect as disk_class 'unknown'."""
+        self._refuse(lambda a: a["measures"][0].__setitem__("value", 0),
+                     "failed observation")
+
+    def test_refuses_omitting_a_thresholded_axis(self):
+        """§1.3 froze IBD wall time AND peak RSS. A bag of rows that omits RSS
+        would skip that floor and still PASS."""
+        self._refuse(lambda a: a.__setitem__(
+            "measures", [m for m in a["measures"] if m["name"] != "peak_rss_bytes"]),
+            "missing required")
+
+    def test_refuses_missing_peers_used(self):
+        self._refuse(lambda a: a["fixture"].pop("peers_used"), "peers_used")
+
+    def test_refuses_zero_peers(self):
+        self._refuse(lambda a: a["fixture"].__setitem__("peers_used", 0),
+                     "missing or zero count")
+
+    def test_refuses_a_mismatched_frozen_pin(self):
+        self._refuse(lambda a: a.__setitem__("thresholds_frozen_at", "deadbeef"),
+                     "thresholds_frozen_at")
+
 
 class Comparability(unittest.TestCase):
 
@@ -386,6 +411,15 @@ class Verdicts(unittest.TestCase):
         rep = self._cmp(height=D.REFERENCE_HEIGHT, fcmp=True)
         self.assertEqual(rep["fixture_shortfalls"], [])
 
+    def test_zero_thresholded_baseline_fail_closes(self):
+        """Defense in depth: even if a zero wall time slipped past the
+        validator, compare must not PASS the floor on an undefined ratio."""
+        b, c = valid_artifact("lmdb"), valid_artifact("redb")
+        b["measures"][0]["value"] = 0
+        rep = D.compare(b, c)
+        self.assertEqual(self._row(rep, "ibd_wall_time_s")["verdict"], "OVER")
+        self.assertEqual(rep["verdict"], "OVER")
+
 
 class BlockerProbe(unittest.TestCase):
     """The stage-one deferral of the redb arm is blocked on the redb CONSENSUS
@@ -454,11 +488,10 @@ class BlockerProbe(unittest.TestCase):
 
 class FollowonRegistry(unittest.TestCase):
 
-    def test_every_followon_declares_a_kind_and_a_blocker(self):
-        for name, val in D.FOLLOWON_MEASURES.items():
+    def test_every_followon_names_a_blocker(self):
+        for name, why in D.FOLLOWON_MEASURES.items():
             with self.subTest(name=name):
-                kind, why = val
-                self.assertIn(kind, ("PROBED", "RECORDED"))
+                self.assertIsInstance(why, str)
                 self.assertGreater(len(why), 40,
                                    "a named blocker must say what is blocking, not just "
                                    "that something is (rule 22)")
@@ -466,9 +499,87 @@ class FollowonRegistry(unittest.TestCase):
     def test_no_followon_silently_shares_a_name_with_a_live_measure(self):
         """A follow-on that also appears in MEASURE_AXES would be emitted and
         deferred at the same time."""
-        live = set(D.MEASURE_AXES) - {"store_bytes", "store_bytes_apparent",
-                                      "subject_cpu_s"}
-        self.assertEqual(live & set(D.FOLLOWON_MEASURES), set())
+        self.assertEqual(set(D.MEASURE_AXES) & set(D.FOLLOWON_MEASURES), set())
+
+    def test_followons_do_not_claim_to_be_probed(self):
+        """blocker_failures scans the redb engine. Labelling pop/reorg PROBED
+        without driving that scan is a check that cannot fail."""
+        self.assertNotIn("PROBED", D.FOLLOWON_MEASURES)
+        self.assertIsInstance(next(iter(D.FOLLOWON_MEASURES.values())), str)
+
+
+class CommittedArtifacts(unittest.TestCase):
+    """The in-tree JSON files are this gate's subject. A selftest that only
+    mutates a synthetic fixture stays green if those files are deleted or
+    edited to satisfy a future check (rule 47)."""
+
+    def test_in_tree_artifacts_exist_and_validate(self):
+        paths = sorted(glob.glob(D.ARTIFACT_GLOB))
+        self.assertTrue(paths, "no committed DRS-BENCH artifacts; this gate's "
+                               "subject is absent")
+        for p in paths:
+            with self.subTest(path=os.path.basename(p)):
+                with open(p, encoding="utf-8") as fh:
+                    a = json.load(fh)
+                self.assertEqual(D.artifact_refusals(a), [], p)
+
+
+class Preflight(unittest.TestCase):
+
+    def test_refuses_redb_while_the_engine_is_absent(self):
+        r = D.measurement_preflight(
+            engine="redb", sync_mode="safe", daemon=__file__,
+            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
+        self.assertTrue(any("NO engine switch" in x for x in r), r)
+
+    def test_refuses_an_unrecognised_sync_mode_before_spawn(self):
+        r = D.measurement_preflight(
+            engine="lmdb", sync_mode="fast", daemon=__file__,
+            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
+        self.assertTrue(any("MDB_NOSYNC" in x for x in r), r)
+
+    def test_refuses_a_missing_daemon_binary(self):
+        r = D.measurement_preflight(
+            engine="lmdb", sync_mode="safe",
+            daemon=os.path.join(tempfile.mkdtemp(), "no-such-shekyld"),
+            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
+        self.assertTrue(any("is not a file" in x for x in r), r)
+
+    def test_control_a_sane_lmdb_preflight_is_empty(self):
+        r = D.measurement_preflight(
+            engine="lmdb", sync_mode="safe", daemon=__file__,
+            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
+        # work_dir '.' may still lack a sysfs rotational node; declaring the
+        # class is what makes this a control rather than a probe of this box.
+        self.assertFalse(any("engine switch" in x or "MDB_NOSYNC" in x
+                             or "is not a file" in x for x in r), r)
+
+
+class HardwareFingerprint(unittest.TestCase):
+
+    def test_does_not_emit_unknown_as_a_disk_class(self):
+        hw = D.hardware_fingerprint(".", declared_disk_class=None)
+        self.assertNotEqual(hw.get("disk_class"), "unknown")
+        if "disk_class" not in hw:
+            self.assertEqual(hw["disk_class_source"], "undetermined")
+            self.assertTrue(D.artifact_refusals(valid_artifact(
+                hardware={**hw, "cpu_model": "Test CPU", "ram_bytes": 1,
+                          "fs_type": "ext4", "cpu_count": 1})))
+
+    def test_declared_class_is_recorded_as_declared(self):
+        hw = D.hardware_fingerprint(".", declared_disk_class="hdd")
+        if hw.get("disk_class_source") != "probed":
+            self.assertEqual(hw["disk_class"], "hdd")
+            self.assertEqual(hw["disk_class_source"], "operator-declared")
+
+
+class RunnerImport(unittest.TestCase):
+    """The CLI module must keep loading after the split; a missing import is
+    how the gate and the runner would come to disagree about the schema."""
+
+    def test_runner_uses_the_gate_module(self):
+        self.assertIs(R.A.SCHEMA, D.SCHEMA)
+        self.assertIs(R.A.artifact_refusals, D.artifact_refusals)
 
 
 if __name__ == "__main__":

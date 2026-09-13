@@ -206,7 +206,9 @@ sorted largest delta first. Next steps:
 
 `drs_bench_ibd_*.json` are produced by `scripts/bench/drs_bench.py measure` and
 consumed by `drs_bench.py check`, which routes two of them through the IBD floor
-frozen in `docs/design/DAEMON_REDB_STORE.md` §1.3. They are **not** part of the
+frozen in `docs/design/DAEMON_REDB_STORE.md` §1.3. The gate itself —
+schema, refusals, comparator, redb-engine probe — lives in
+`scripts/bench/drs_artifact.py`. They are **not** part of the
 `shekyl_rust_v0` envelope and are not read by `compare.py`: that script is
 iai-callgrind only by construction, and its
 `<crate>/<bench_target>/<group>/<function>` ids cannot name a two-daemon C++ IBD

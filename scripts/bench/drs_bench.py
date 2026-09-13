@@ -4,100 +4,19 @@
 # All rights reserved.
 # BSD-3-Clause
 #
-# DRS-BENCH — consensus-store benchmark harness and IBD-floor gate.
-#
-# Subject: `docs/design/DAEMON_REDB_STORE.md` §7.4 (what to measure) against
-# §1.3 (the pre-registered floor). Stage one lands the harness and the **LMDB
-# baseline**; the redb arm lands with DRS-E1, because there is no redb consensus
-# store to measure yet — `rust/shekyl-chain-store/` names `redb` in four
-# type-level declarations (table definitions and LMDB key ordering) and holds no
-# `Database`, no transaction, no engine. That is a measured result, not an
-# assumption, and `blockers` below re-checks it on every run.
-#
-# WHY THE RATIO AND NOT A THROUGHPUT NUMBER. §1.3 retired the throughput column
-# (decision log 2026-07-27). Absolute times are not comparable across machines;
-# the floor is a RATIO taken on one machine with one binary, engine being the
-# only difference. So every absolute figure here exists to produce a ratio, and
-# `check` refuses to produce one from two artifacts that disagree about anything
-# else (see `comparability_refusals`).
-#
-# ── DURABILITY IS PART OF THE MEASUREMENT, NOT METADATA ──────────────────────
-#
-# DRS-D9 binds the consensus store to the strictest practical durability, and
-# A4 (§4, line ~273) states the requirement as "explicit ... not library
-# default by omission". On the LMDB path today it IS by omission, in three
-# separate ways, all of which would silently corrupt a baseline:
-#
-#   1. `cryptonote_core.cpp` `DEFAULT_FLAGS = DBF_FAST` — an unconfigured
-#      daemon opens LMDB with `MDB_NOSYNC` (`db_lmdb.cpp`, the DBF_FAST arm).
-#   2. A malformed `--db-sync-mode` value falls through the mode `else` to
-#      `DEFAULT_FLAGS` **with no error**. Only a bad *threshold* token is
-#      diagnosed. So `--db-sync-mode=saf` measures NOSYNC and says nothing.
-#   3. With the argument defaulted, `m_db_default_sync` is true and
-#      `cryptonote_protocol_handler.inl` calls `safesyncmode(false)` when sync
-#      starts, restoring it only once synchronized. The shipped default
-#      daemon's IBD therefore runs at `MDB_NOSYNC|MDB_MAPASYNC` — its least
-#      durable phase is exactly the phase this harness measures.
-#
-# Consequence for the reader of any number produced here: a DRS-D9 baseline is
-# **not** comparable to a default daemon's IBD time, and is expected to be
-# slower. Both engines pay the same fsync cost, so the RATIO is fair; the
-# ABSOLUTE is not a user-facing sync-time estimate. `scenario` and
-# `durability` are recorded on every measure so this cannot be misread.
-#
-# `DBF_SAFE` is 1 and `db_lmdb.cpp`'s open() never reads it, so
-# `--db-sync-mode=safe` leaves `mdb_flags == 0`: LMDB's own default, an fsync
-# per commit. That is the production-intent configuration, and it also makes
-# `safesyncmode()` a no-op because the argument is no longer defaulted.
-#
-# ── WHAT THIS HARNESS CANNOT OBSERVE ────────────────────────────────────────
-#
-# Recorded once, here, at harness level rather than probed per-run: a probe for
-# a gap the harness cannot close would fire while its blocker still stood.
-#
-#   * **The LMDB env flags actually in force.** `mdb_env_get_flags` is
-#     in-process only and the daemon logs no resolved sync mode, so nothing
-#     outside the process can read them back. The harness therefore VALIDATES
-#     the mode against an allowed set before spawning (`ALLOWED_SYNC_MODES`)
-#     and records the argv verbatim. An allowed-set check has safe polarity —
-#     over-inclusion is a false red. It is not a readback, and it is not
-#     claimed as one. The enabler that would make it one is a single log line
-#     reporting resolved `db_flags`/`sync_mode`, which A4 already wants.
-#   * **Two rejected probes, so they are not re-invented.** `SIGKILL` cannot
-#     discriminate fsync from NOSYNC: `MDB_NOSYNC` data survives process death
-#     in the page cache — only power loss separates them. Counting fsyncs
-#     cannot either: under the default `fast:async:1` the async
-#     `store_blockchain()` calls `mdb_env_sync(force)` at about the same
-#     cadence, and only the blocking-ness differs.
-#   * **FCMP++ verification cost.** Any coinbase-only fixture exercises none
-#     of it. §1.3's primary metric says "FCMP++ + PoW verify enabled as in real
-#     sync"; PoW verify IS exercised (see below), FCMP++ is not, and
-#     `verify_exercised` records that per artifact rather than letting the
-#     phrase stand unqualified. §1.3 pre-authorizes the shortfall — "or max
-#     available fixture; the artifact records the height it reached".
-#
-# PoW verify cost IS real under regtest. `blockchain.cpp`'s PoW arm computes
-# `get_block_longhash` for every block with no nettype bypass — its only `else`
-# is a precomputed-longhash cache — and its comment records that the
-# checkpoint-zone bypass was deliberately removed. `--fixed-difficulty` lowers
-# the difficulty TARGET only; the RandomX hash is still computed and checked.
-#
-# ── LANGUAGE ────────────────────────────────────────────────────────────────
+# DRS-BENCH runner: two-daemon regtest IBD, emits an artifact or refuses.
+# The gate (schema, refusals, §1.3 compare, redb-engine probe) lives in
+# `drs_artifact.py`. Design record: `docs/design/DAEMON_REDB_STORE.md` §7.4.
 #
 # Python, under `scripts/bench/`, deliberately. Rule 20 makes Rust the default
-# for the DAEMON codebase and its bug fixes; this is neither — it spawns
-# daemons and compares JSON, the same job and the same directory as
-# `compare.py`, `post_comment.py` and `capture_rust_baseline.sh`. Putting a
-# process orchestrator in Rust here would add a crate to the workspace that
-# ships nothing and advances no FFI boundary.
+# for the daemon codebase and its bug fixes; this spawns daemons and writes
+# JSON, the same job as `compare.py`. It is not a second copy of that script:
+# compare.py is iai-callgrind only, and its ids cannot name a two-daemon IBD run.
 #
-# It is NOT a second copy of `scripts/bench/compare.py`. That script is
-# "**iai-callgrind only**" by construction (its own words): criterion
-# wall-clock rows pass through as informational with `verdict: "info"` and no
-# threshold, and its ids are `<crate>/<bench_target>/<group>/<function>`, which
-# cannot name a two-daemon C++ IBD run. It could not carry these rows, and
-# widening it would put an instruction-count gate and a wall-time gate behind
-# one schema.
+# Vehicle: generateblocks is gated on check_core_ready(), which a zero-peer
+# daemon never satisfies, and the protocol handler initialises
+# m_synchronized(offline). So: generate offline, restart networked over the
+# same datadir, measure the subject syncing from it.
 
 import argparse
 import json
@@ -111,95 +30,10 @@ import time
 import urllib.error
 import urllib.request
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DESIGN_DOC = os.path.join(ROOT, "docs/design/DAEMON_REDB_STORE.md")
-CHAIN_STORE = os.path.join(ROOT, "rust/shekyl-chain-store")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import drs_artifact as A  # noqa: E402
 
-SCHEMA = "shekyl_drs_bench_v1"
-
-# ── §1.3, PRE-REGISTERED AND FROZEN ─────────────────────────────────────────
-#
-# Frozen 2026-09-12 (DRS-0 slice C) BEFORE any measurement existed. Refining a
-# ratio after seeing a number is a threshold CHANGE requiring reopening under
-# rule 21, not a refinement — a finding for the decision authority, never an
-# edit here. `test_frozen_thresholds_*` cross-checks every value below against
-# the doc's own §1.3 text in BOTH directions, so editing either side alone is
-# a red.
-FROZEN_AT = "ba4b3c73a"
-REFERENCE_HEIGHT = 100_000
-IBD_FLOOR_RATIO = 1.25       # <= passes
-IBD_HARD_FAIL_RATIO = 1.50   # >  hard-fails after one documented mitigation cycle
-PEAK_RSS_RATIO = 2.0         # <= passes
-
-# The only sync mode that satisfies DRS-D9 on the LMDB path. An allowed set
-# rather than a spelling check: `--db-sync-mode=saf` is accepted by the daemon
-# and silently means NOSYNC, so the harness must refuse the string itself
-# before a daemon ever sees it.
-ALLOWED_SYNC_MODES = ("safe",)
-
-# §1.3 requires the artifact to document "disk type (NVMe vs HDD)". "unknown" is
-# not a disk type, and a required field satisfied by a placeholder is a
-# requirement that cannot fail — so the allowed values are enumerated.
-ALLOWED_DISK_CLASSES = ("hdd", "ssd_or_nvme")
-
-# How the engine under test was SELECTED. The daemon has no engine switch today:
-# it always opens LMDB. So an artifact labelled `redb` while selected this way is
-# a relabelled LMDB run, and `check` would read the pair as a real cross-engine
-# ratio of ~1.0 — certifying redb against §1.3's floor before redb exists. The
-# label is therefore recorded with its mechanism, and the two are cross-checked.
-ENGINE_DEFAULT_LMDB = "daemon-default-lmdb (no engine switch exists)"
-
-# Filesystems on which DRS-D9 CANNOT HOLD. fsync against tmpfs/ramfs has no
-# backing store to flush, so it returns without doing anything and `safe` is
-# indistinguishable from `MDB_NOSYNC`. A wall-time number taken there is not a
-# strict-durability baseline, it is a RAM-disk baseline wearing the label — and
-# the first real run of this harness produced exactly that, from a scratch
-# directory that happened to be a 63 GB tmpfs. The `unknown` disk class was the
-# only visible symptom.
-DURABILITY_DEFEATING_FS = ("tmpfs", "ramfs")
-
-PRIMARY_MEASURE = "ibd_wall_time_s"
-MEASURE_AXES = {
-    "ibd_wall_time_s": ("wall_time", "s", IBD_FLOOR_RATIO, IBD_HARD_FAIL_RATIO),
-    "peak_rss_bytes": ("memory", "bytes", PEAK_RSS_RATIO, PEAK_RSS_RATIO),
-    # No threshold: §1.3 sets none for CPU time. It is recorded to keep
-    # "compute-bound" an observation rather than an inference.
-    "subject_cpu_s": ("cpu_time", "s", None, None),
-    # Two disk rows, because §1.3's resource bound names a "file-size / logical-size
-    # ratio": `store_bytes` is what the filesystem ALLOCATED (the operator's cost)
-    # and `store_bytes_apparent` is the file length. They diverge exactly when an
-    # engine leaves holes, which is a property that could differ between engines,
-    # so collapsing them to one number would hide the thing worth comparing.
-    # Neither carries a threshold — the ceiling is set after the first multi-year
-    # sim, so a verdict here would be invented.
-    "store_bytes": ("disk", "bytes", None, None),
-    "store_bytes_apparent": ("disk", "bytes", None, None),
-}
-
-# ── §7.4 follow-on measures, each with a NAMED blocker (rule 22) ────────────
-#
-# Two kinds, and the difference is whether the blocker can be MECHANICALLY
-# re-checked. One that can is probed by `blockers` and fails the moment it
-# stops holding, so the deferral cannot outlive its cause. One that cannot is
-# recorded here and nowhere else — a probe that cannot observe its own blocker
-# would fire while the blocker still stood, which is worse than a comment.
-FOLLOWON_MEASURES = {
-    "pop_reorg_wall_time_s": (
-        "PROBED", "best-positioned follow-on: the /pop_blocks RPC already exists, "
-        "so this needs a depth schedule and an artifact row, not a new capability."),
-    "store_bytes_multi_year": (
-        "RECORDED", "§1.3 states the file-size ceiling is 'set after first multi-year "
-        "sim', so no threshold exists to gate against. A measure with no threshold "
-        "emits a number with no verdict; landing it would create the appearance of "
-        "coverage. Needs the ceiling first, which is a decision, not a measurement."),
-    "free_page_reclaim": (
-        "RECORDED", "needs a long-lived concurrent-reader workload; no such driver "
-        "exists in tests/ or scripts/."),
-    "peak_rss_attacker_feed": (
-        "RECORDED", "§7.4 names 'attacker-shaped input' without defining it. Choosing "
-        "a shape here would invent the threat model this measure is supposed to test. "
-        "Needs a definition, which is a design round."),
-}
+ROOT = A.ROOT
 
 
 def _fail(msg):
@@ -207,302 +41,13 @@ def _fail(msg):
     sys.exit(1)
 
 
-# ── artifact validation: no number without its conditions ───────────────────
-
-def artifact_refusals(a):
-    """Reasons this artifact may not be used as a measurement. Empty == usable.
-
-    Every entry is a condition §1.3 requires be RECORDED. The harness refuses
-    to emit, and `check` refuses to read, an artifact missing any of them —
-    "unlabeled numbers are not genesis-load-bearing" is made unrepresentable
-    rather than merely stated.
-    """
-    r = []
-    if not isinstance(a, dict):
-        return ["artifact is not a JSON object"]
-    if a.get("schema_version") != SCHEMA:
-        r.append(f"schema_version is {a.get('schema_version')!r}, expected {SCHEMA!r}")
-    if a.get("engine") not in ("lmdb", "redb"):
-        r.append(f"engine is {a.get('engine')!r}, expected 'lmdb' or 'redb'")
-    sel = a.get("engine_selected_by")
-    if not sel:
-        r.append("engine_selected_by absent — an engine LABEL with no record of how the "
-                 "engine was selected cannot be distinguished from a relabelled run")
-    elif a.get("engine") == "redb" and sel == ENGINE_DEFAULT_LMDB:
-        r.append("engine is 'redb' but engine_selected_by says the daemon default was "
-                 "used, which opens LMDB. This is a relabelled LMDB run, and as a "
-                 "candidate it would pass §1.3's floor at a ratio near 1.0 without any "
-                 "redb store existing")
-    if not a.get("git_rev"):
-        r.append("git_rev absent — a number with no tree is not reproducible")
-
-    d = a.get("durability")
-    if not isinstance(d, dict):
-        r.append("durability block absent — §1.3(3): artifacts MUST record durability "
-                 "configuration, and DRS-D9 is the policy they must record")
-    else:
-        if d.get("sync_mode") not in ALLOWED_SYNC_MODES:
-            r.append(f"durability.sync_mode is {d.get('sync_mode')!r}; only "
-                     f"{list(ALLOWED_SYNC_MODES)} satisfies DRS-D9 on the LMDB path. A "
-                     "value the daemon does not recognise falls through to DBF_FAST "
-                     "(MDB_NOSYNC) in silence")
-        argv = d.get("imposed_argv")
-        if not isinstance(argv, list) or not argv:
-            r.append("durability.imposed_argv absent — the harness cannot read the env "
-                     "flags back, so the argv it imposed IS the record")
-        elif not any(x == f"--db-sync-mode={d.get('sync_mode')}" for x in argv):
-            r.append(f"durability.imposed_argv does not carry "
-                     f"--db-sync-mode={d.get('sync_mode')}, so the recorded mode is not "
-                     "the mode that was imposed")
-        if d.get("observed") is not False:
-            r.append("durability.observed must be present and false: no readback of the "
-                     "LMDB env flags exists. Recording it as observed would claim an "
-                     "observation the harness cannot make")
-
-    h = a.get("hardware")
-    if not isinstance(h, dict):
-        r.append("hardware block absent — §1.3 requires CPU model, RAM and disk type "
-                 "in the artifact")
-    else:
-        for k in ("cpu_model", "ram_bytes", "disk_class"):
-            if not h.get(k):
-                r.append(f"hardware.{k} absent or empty")
-        if h.get("disk_class") and h["disk_class"] not in ALLOWED_DISK_CLASSES:
-            r.append(f"hardware.disk_class is {h['disk_class']!r}, not one of "
-                     f"{list(ALLOWED_DISK_CLASSES)}. §1.3 requires the disk TYPE; a "
-                     "placeholder satisfies the field without satisfying the "
-                     "requirement")
-        fs = h.get("fs_type")
-        if not fs:
-            r.append("hardware.fs_type absent — it decides whether DRS-D9 could hold "
-                     "at all, so it is a measurement condition and not a detail")
-        elif fs in DURABILITY_DEFEATING_FS:
-            r.append(f"hardware.fs_type is {fs!r}: fsync there has no backing store to "
-                     "flush, so DRS-D9 durability was NOT in force and this is a "
-                     "RAM-disk number, not a strict-durability baseline")
-
-    f = a.get("fixture")
-    if not isinstance(f, dict):
-        r.append("fixture block absent")
-    else:
-        if not f.get("nettype"):
-            r.append("fixture.nettype absent")
-        hr = f.get("height_reached")
-        if not isinstance(hr, int) or hr <= 0:
-            r.append(f"fixture.height_reached is {hr!r} — a run that reached no height "
-                     "produced no measurement")
-        if not isinstance(f.get("height_requested"), int):
-            r.append("fixture.height_requested absent — without it the artifact cannot "
-                     "say whether it fell short of §1.3's reference height")
-        v = f.get("verify_exercised")
-        if not isinstance(v, dict) or not all(k in v for k in ("pow", "fcmp_pp")):
-            r.append("fixture.verify_exercised must state pow and fcmp_pp explicitly; "
-                     "§1.3's primary metric names both and a coinbase-only fixture "
-                     "exercises only one")
-        if "tx_per_block" not in f:
-            r.append("fixture.tx_per_block absent — it is the reason fcmp_pp is not "
-                     "exercised, so it belongs in the record")
-
-    ms = a.get("measures")
-    if not isinstance(ms, list) or not ms:
-        r.append("measures absent or empty")
-    else:
-        for i, m in enumerate(ms):
-            if not isinstance(m, dict):
-                r.append(f"measures[{i}] is not an object")
-                continue
-            name = m.get("name")
-            if name not in MEASURE_AXES:
-                r.append(f"measures[{i}].name is {name!r}, not one of "
-                         f"{sorted(MEASURE_AXES)}")
-                continue
-            axis, unit, _, _ = MEASURE_AXES[name]
-            if not isinstance(m.get("value"), (int, float)) or m["value"] < 0:
-                r.append(f"measures[{i}] ({name}) value is {m.get('value')!r}")
-            if m.get("axis") != axis:
-                r.append(f"measures[{i}] ({name}) axis is {m.get('axis')!r}, expected "
-                         f"{axis!r} — state the axis a figure is on")
-            if m.get("unit") != unit:
-                r.append(f"measures[{i}] ({name}) unit is {m.get('unit')!r}, expected "
-                         f"{unit!r}")
-            if not m.get("scenario"):
-                r.append(f"measures[{i}] ({name}) scenario absent — an IBD RSS figure "
-                         "must not be readable as §7.4's attacker-feed row")
-    return r
-
-
-# ── comparability: the ratio's denominator must be the same experiment ──────
-
-def _masked_argv(a):
-    """Subject argv with engine- and path-specific arguments removed.
-
-    §1.3: "same machine, same binary flags except engine". Data directory and
-    ports differ between the two runs by construction and say nothing about the
-    engine, so they are masked; everything else must match, because anything
-    else differing means the two numbers answer different questions.
-    """
-    out = []
-    for x in a.get("durability", {}).get("imposed_argv", []):
-        if re.match(r"^--(data-dir|p2p-bind-port|rpc-bind-port|add-exclusive-node|"
-                    r"log-file|db-engine)=", x):
-            continue
-        out.append(x)
-    return out
-
-
-def _durability_policy(a):
-    """The durability block minus the argv, which is compared under the mask."""
-    d = dict(a.get("durability", {}))
-    d.pop("imposed_argv", None)
-    return d
-
-
-def comparability_refusals(base, cand):
-    """Reasons these two artifacts cannot produce a §1.3 ratio."""
-    r = []
-    if base.get("engine") == cand.get("engine"):
-        r.append(f"both artifacts are engine={base.get('engine')!r}; §1.3's floor is a "
-                 "ratio BETWEEN engines. Two same-engine runs are a regression "
-                 "comparison, which this gate does not define thresholds for")
-    if base.get("hardware") != cand.get("hardware"):
-        r.append("hardware blocks differ — cross-machine absolute times are not "
-                 "load-bearing, so a ratio across machines is not the floor §1.3 froze")
-    # `imposed_argv` lives inside the durability block but is compared SEPARATELY,
-    # under the path/port mask below: the two runs differ in data directory and
-    # ports by construction. Comparing the block wholesale would therefore refuse
-    # every real pair — caught by `test_control_datadir_and_ports_are_masked`,
-    # which is precisely the job of a control over a refusal set.
-    if _durability_policy(base) != _durability_policy(cand):
-        r.append("durability blocks differ — a ratio between different durability "
-                 "policies measures the policy, not the engine")
-    bf, cf = base.get("fixture", {}), cand.get("fixture", {})
-    for k in ("nettype", "height_reached", "verify_exercised", "tx_per_block",
-              "peers_used"):
-        if bf.get(k) != cf.get(k):
-            r.append(f"fixture.{k} differs ({bf.get(k)!r} vs {cf.get(k)!r}) — the two "
-                     "runs did not do the same work")
-    if _masked_argv(base) != _masked_argv(cand):
-        r.append("subject argv differs beyond engine and paths: "
-                 f"{_masked_argv(base)} vs {_masked_argv(cand)}")
-    bn = {m["name"] for m in base.get("measures", [])}
-    cn = {m["name"] for m in cand.get("measures", [])}
-    if PRIMARY_MEASURE not in bn & cn:
-        r.append(f"{PRIMARY_MEASURE} is not present on both artifacts; it is §1.3's "
-                 "primary metric and the floor is defined on it")
-    return r
-
-
-def compare(base, cand):
-    """The §1.3 verdict. Callers must have validated both artifacts first."""
-    bm = {m["name"]: m["value"] for m in base["measures"]}
-    cm = {m["name"]: m["value"] for m in cand["measures"]}
-    rows, worst = [], "PASS"
-    rank = {"PASS": 0, "BAND": 1, "OVER": 2, "NO_THRESHOLD": 0}
-    for name in sorted(bm.keys() & cm.keys()):
-        axis, unit, floor, hard = MEASURE_AXES[name]
-        b, c = bm[name], cm[name]
-        if b == 0:
-            rows.append({"name": name, "axis": axis, "unit": unit, "baseline": b,
-                         "candidate": c, "ratio": None, "verdict": "NO_THRESHOLD",
-                         "note": "baseline is zero; a ratio would be undefined"})
-            continue
-        ratio = c / b
-        if floor is None:
-            v, note = "NO_THRESHOLD", FOLLOWON_MEASURES.get(name, ("", "§1.3 states no "
-                                                                   "threshold"))[1]
-        elif ratio <= floor:
-            v, note = "PASS", f"<= {floor}x floor"
-        elif ratio > hard:
-            v, note = "OVER", (f"> {hard}x — hard fail under §1.3 AFTER one documented "
-                               "mitigation cycle. Whether that cycle has happened is a "
-                               "human record, not a field here")
-        else:
-            v, note = "BAND", (f"between {floor}x and {hard}x — §1.3 makes this a "
-                               "decision-log call: accept or mitigate")
-        rows.append({"name": name, "axis": axis, "unit": unit, "baseline": b,
-                     "candidate": c, "ratio": round(ratio, 4), "verdict": v,
-                     "note": note})
-        if rank[v] > rank[worst]:
-            worst = v
-    short = []
-    for a, tag in ((base, "baseline"), (cand, "candidate")):
-        f = a["fixture"]
-        if f["height_reached"] < REFERENCE_HEIGHT:
-            short.append(f"{tag} reached height {f['height_reached']} of §1.3's "
-                         f"reference {REFERENCE_HEIGHT}")
-        if not f["verify_exercised"].get("fcmp_pp"):
-            short.append(f"{tag} exercised NO FCMP++ verification "
-                         f"(tx_per_block={f.get('tx_per_block')})")
-    return {"schema_version": "shekyl_drs_bench_compare_v1",
-            "thresholds_frozen_at": FROZEN_AT, "baseline_engine": base["engine"],
-            "candidate_engine": cand["engine"], "rows": rows, "verdict": worst,
-            "fixture_shortfalls": short}
-
-
-# ── the blocker probe: a deferral that cannot outlive its cause ─────────────
-
-def redb_engine_sites():
-    """(sites, files_scanned, subject_missing) for the redb CONSENSUS engine.
-
-    One scan, two consumers, deliberately: it decides whether the stage-one
-    deferral still holds AND whether `--engine redb` can mean anything. Those are
-    the same fact, and reading it twice is how they would come to disagree.
-    """
-    if not os.path.isdir(CHAIN_STORE):
-        return [], 0, True
-    engine_re = re.compile(r"redb::(Database|WriteTransaction|ReadTransaction)")
-    sites, scanned = [], 0
-    for dirpath, _, names in os.walk(CHAIN_STORE):
-        if f"{os.sep}target{os.sep}" in dirpath + os.sep:
-            continue
-        for n in names:
-            if not n.endswith(".rs"):
-                continue
-            scanned += 1
-            fp = os.path.join(dirpath, n)
-            with open(fp, encoding="utf-8") as fh:
-                for i, line in enumerate(fh, 1):
-                    if engine_re.search(line):
-                        sites.append(f"{os.path.relpath(fp, ROOT)}:{i}")
-    return sites, scanned, False
-
-
-def blocker_failures():
-    """FATAL when a PROBED follow-on's named blocker has stopped holding.
-
-    Scoped to `rust/shekyl-chain-store/`, which is where DRS-E1 says the redb
-    consensus engine grows. A workspace-wide grep would be wrong: redb is
-    already a real engine in `rust/shekyl-curve-tree/src/store/redb_backend.rs`
-    — the wallet's LeafStore, the very store DRS-D9 means by "not inherited
-    from LeafStore silence" — and would fire this probe every run.
-    """
-    sites, scanned, missing = redb_engine_sites()
-    out = []
-    if missing:
-        return [f"{CHAIN_STORE} does not exist; this probe's subject is absent, which "
-                "is the first evidence the probe is no longer reading anything"]
-    if scanned == 0:
-        out.append(f"scanned ZERO .rs files under {os.path.relpath(CHAIN_STORE, ROOT)} "
-                   "— the probe's corpus is empty, so its green means nothing")
-    if sites:
-        out.append("the redb CONSENSUS engine now exists — " + ", ".join(sites[:8]) +
-                   f" ({len(sites)} sites). The stage-one deferral of the redb arm was "
-                   "blocked on its absence, and that blocker is gone: wire the redb "
-                   "arm and the pop/reorg row, then remove this probe.")
-    return out
-
-
-# ── measurement ─────────────────────────────────────────────────────────────
-
 def _reserve_ports(n):
     """Pick n distinct free ports, holding every socket until all are chosen.
 
-    Allocating them one at a time — bind, read, close, repeat — lets the kernel
-    hand the SAME ephemeral port back on the next bind, and two daemons told to
-    use one port is a hang rather than an error. Holding all the sockets open
-    makes the ports distinct by construction. The caller closes them immediately
-    before spawning, so a foreign process can still take one in that window;
-    that is why a failure to come up reports the ports it asked for.
+    Allocating them one at a time lets the kernel hand the same ephemeral port
+    back; two daemons told to use one port hang rather than error. A foreign
+    process can still take one between close and spawn, which is why a failure
+    to come up reports the ports it asked for.
     """
     socks = [socket.socket() for _ in range(n)]
     for sk in socks:
@@ -521,71 +66,6 @@ def _rpc(port, method, params=None, timeout=60):
         return json.load(r)
 
 
-def _fs_type(path):
-    """Filesystem type backing `path`, by longest matching mount point."""
-    real = os.path.realpath(path)
-    best, best_type = "", ""
-    try:
-        with open("/proc/mounts", encoding="utf-8") as fh:
-            for line in fh:
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                mp = parts[1].replace("\\040", " ")
-                if (real == mp or real.startswith(mp.rstrip("/") + "/")) and \
-                        len(mp) > len(best):
-                    best, best_type = mp, parts[2]
-    except OSError:
-        return ""
-    return best_type
-
-
-def _probe_disk_class(path):
-    """"hdd" / "ssd_or_nvme" from sysfs, or None when it cannot be determined.
-
-    Returns None rather than "unknown" so the caller must decide what to do about
-    it. btrfs, zfs and overlay present an anonymous `st_dev` with no
-    `/sys/dev/block` entry at all, so this failing is ordinary and not a sign of
-    an exotic machine.
-    """
-    try:
-        st = os.stat(path)
-        maj, mnr = os.major(st.st_dev), os.minor(st.st_dev)
-        # The partition's own queue first, then its parent disk: a partition
-        # carries no `rotational` of its own, and a whole-disk device has no
-        # parent to walk up to.
-        for rot in (f"/sys/dev/block/{maj}:{mnr}/queue/rotational",
-                    f"/sys/dev/block/{maj}:{mnr}/../queue/rotational"):
-            if os.path.exists(rot):
-                with open(rot, encoding="utf-8") as fh:
-                    return "hdd" if fh.read().strip() == "1" else "ssd_or_nvme"
-    except OSError:
-        pass
-    return None
-
-
-def hardware_fingerprint(path, declared_disk_class=None):
-    cpu = ""
-    with open("/proc/cpuinfo", encoding="utf-8") as fh:
-        for line in fh:
-            if line.startswith("model name"):
-                cpu = line.split(":", 1)[1].strip()
-                break
-    ram = 0
-    with open("/proc/meminfo", encoding="utf-8") as fh:
-        for line in fh:
-            if line.startswith("MemTotal:"):
-                ram = int(line.split()[1]) * 1024
-                break
-    probed = _probe_disk_class(path)
-    disk = probed or declared_disk_class or "unknown"
-    return {"cpu_model": cpu, "ram_bytes": ram, "disk_class": disk,
-            "disk_class_source": "probed" if probed else
-                                 ("operator-declared" if declared_disk_class
-                                  else "undetermined"),
-            "fs_type": _fs_type(path), "cpu_count": os.cpu_count()}
-
-
 def _dir_bytes(path, apparent):
     """Total size of a directory tree: apparent file length, or allocated blocks."""
     args = ["du", "-s", "-b", path] if apparent else ["du", "-s", "-B1", path]
@@ -594,16 +74,9 @@ def _dir_bytes(path, apparent):
 
 
 def _cpu_seconds(pid):
-    """utime+stime of the process, all threads, in seconds.
-
-    Separates WORKING from WAITING: compared against wall time it says whether a
-    phase was compute-bound and how parallel it was. Without it, "not
-    disk-bound" is as far as a wall-time-only artifact can go, and the step from
-    there to naming a dominant cost is an attribution, not a measurement.
-    """
+    """utime+stime of the process, all threads, in seconds. None if unreadable."""
     try:
         with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
-            # Skip comm, which may itself contain spaces inside parentheses.
             rest = fh.read().rpartition(")")[2].split()
         utime, stime = int(rest[11]), int(rest[12])
         return (utime + stime) / os.sysconf("SC_CLK_TCK")
@@ -612,12 +85,7 @@ def _cpu_seconds(pid):
 
 
 def _peak_rss_bytes(pid):
-    """VmHWM — the kernel's own high-water mark, read while the process lives.
-
-    Chosen over `wait4`'s `ru_maxrss` because it can be sampled before the
-    subject is asked to exit, and because it is the subject's OWN peak rather
-    than an aggregate over every child this harness has spawned.
-    """
+    """VmHWM in bytes, or None if unreadable."""
     try:
         with open(f"/proc/{pid}/status", encoding="utf-8") as fh:
             for line in fh:
@@ -631,9 +99,8 @@ def _peak_rss_bytes(pid):
 def _wait_rpc(port, timeout, proc=None):
     """Wait for the daemon's RPC to answer. Returns the timestamp, or None.
 
-    `proc` makes a dead daemon fail FAST instead of burning the whole timeout:
-    a process that exited will never answer, and waiting the full window turns
-    a clear "it crashed" into an indistinguishable "it was slow".
+    `proc` makes a dead daemon fail fast: a process that exited will never
+    answer, and waiting the full window turns a crash into a slow start.
     """
     t0 = time.time()
     while time.time() - t0 < timeout:
@@ -647,24 +114,52 @@ def _wait_rpc(port, timeout, proc=None):
     return None
 
 
+def _stop(proc, timeout):
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+class _RunningDaemon:
+    """One shekyld: wait for RPC on enter, terminate (then kill) on exit."""
+
+    def __init__(self, proc, rpc_port, startup_timeout, shutdown_timeout):
+        self.proc = proc
+        self.rpc_port = rpc_port
+        self.startup_timeout = startup_timeout
+        self.shutdown_timeout = shutdown_timeout
+        self.ready_at = None
+
+    def __enter__(self):
+        self.ready_at = _wait_rpc(self.rpc_port, self.startup_timeout, self.proc)
+        return self
+
+    def __exit__(self, *exc):
+        _stop(self.proc, self.shutdown_timeout)
+        return False
+
+    @property
+    def ready(self):
+        return self.ready_at is not None
+
+    @property
+    def pid(self):
+        return self.proc.pid
+
+
 def mining_address(timeout):
     """A current-format regtest mining address, minted by the canonical emitter.
 
-    NOT read from `rust/shekyl-wire/tests/vectors/regtest_mining_recipients.json`.
-    That committed vector holds the SAME key material at the pre-`msg_sign_pk`
-    encoding and no longer decodes: `ShekylAddress::decode` reports
-    `BadLength { segment: "classical", expected: 129, got: 81 }`, the 48-byte
-    difference being the SLH-DSA-192s message-signing public key that became the
-    fourth classical field. The C++ side rejects it identically, via
-    `shekyl_address_decode` returning null ("Invalid Bech32m address format"), so
-    `generateblocks` answers -4 "Failed to parse wallet address" and no chain can
-    be generated from the committed fixture at all.
-
-    The emitter named by that vector's own README is the source of truth, so this
-    runs it rather than pinning a second copy of the address here — a pinned
-    string would go stale on the next address-format change exactly as the vector
-    did, and silently, because a stale address fails at generation time with an
-    error that does not mention formats.
+    Not read from rust/shekyl-wire/tests/vectors/regtest_mining_recipients.json:
+    that vector holds the same key material at the pre-msg_sign_pk encoding and
+    no longer decodes. Running the emitter named by that vector's README is the
+    source of truth — a pinned string would go stale on the next address-format
+    change exactly as the vector did.
     """
     cmd = ["cargo", "test", "-q", "-p", "shekyl-wire", "--test", "emit_regtest_addr",
            "--", "--ignored", "--nocapture"]
@@ -675,9 +170,7 @@ def mining_address(timeout):
               f"{proc.stdout[-2000:]}\n{proc.stderr[-2000:]}")
     hits = re.findall(r"^REGTEST_MINING_ADDR=(\S+)$", proc.stdout, re.M)
     # Rule 47: the emitter's exit status says the test passed, not that it
-    # printed an address. A `--nocapture` print that stops printing leaves a
-    # passing test and an empty match, and an empty address would reach the
-    # daemon as a -4 parse error attributed to the wrong cause.
+    # printed an address.
     if len(hits) != 1:
         _fail(f"expected exactly one REGTEST_MINING_ADDR line from the emitter, found "
               f"{len(hits)}. The emitter passed but did not report an address, so there "
@@ -691,79 +184,25 @@ def mining_address(timeout):
 def measure(args):
     """Run the LMDB IBD baseline and emit an artifact, or refuse.
 
-    THREE PHASES, and the first two exist for one reason: `generateblocks` is
-    gated on `check_core_ready()`, which requires the p2p payload to be
-    synchronized, and a zero-peer daemon never becomes synchronized. The
-    protocol handler initialises `m_synchronized(offline)`, so an `--offline`
-    daemon is synchronized from birth and will generate. `--offline` also
-    disables p2p, so the seed cannot serve in that state — hence generate
-    offline, stop, restart networked over the SAME datadir, and only then
-    measure the subject syncing from it. `--keep-fakechain` is load-bearing on
-    every phase: without it the FAKECHAIN datadir is removed at startup and the
-    restart would serve an empty chain.
-
-    The subject is what the artifact describes. The seed is fixture.
+    The subject is what the artifact describes. The seed is fixture. The seed
+    is reused across runs (generation dominates at the reference height); the
+    subject is always wiped (an IBD from a partial chain is a different
+    experiment).
     """
-    if args.sync_mode not in ALLOWED_SYNC_MODES:
-        _fail(f"--sync-mode={args.sync_mode!r} refused before any daemon was started. "
-              f"Only {list(ALLOWED_SYNC_MODES)} satisfies DRS-D9, and the daemon accepts "
-              "an unrecognised value by silently falling back to DBF_FAST (MDB_NOSYNC), "
-              "so a typo here would measure the wrong durability and say nothing.")
-    if args.engine == "redb":
-        sites, _, _missing = redb_engine_sites()
-        if not sites:
-            _fail("--engine redb refused: the daemon has NO engine switch — it always "
-                  "opens LMDB — and no redb consensus engine exists in "
-                  f"{os.path.relpath(CHAIN_STORE, ROOT)} to switch to. The run would "
-                  "produce a relabelled LMDB artifact, which `check` would read as a "
-                  "cross-engine ratio near 1.0 and pass against §1.3's floor. This "
-                  "refusal lifts by the same scan that `blockers` uses, so it opens "
-                  "exactly when DRS-E1 lands the engine.")
-    if not os.path.isfile(args.daemon):
-        _fail(f"{args.daemon} is not a file — build the daemon in THIS worktree; a "
-              "binary from another tree measures another tree")
-    addr = mining_address(args.cargo_timeout)
-
     work = os.path.abspath(args.work_dir)
     os.makedirs(work, exist_ok=True)
-    # Refuse a durability-defeating filesystem up front. At the reference height
-    # this saves roughly a day of generation that could not have produced a
-    # DRS-D9 number, and it is the same refusal the validator applies to the
-    # finished artifact -- checked here so the harness never starts work whose
-    # result it would decline to emit.
-    for label, d in (("--work-dir", work),
-                     ("--seed-dir", os.path.abspath(args.seed_dir or work))):
-        os.makedirs(d, exist_ok=True)
-        fs = _fs_type(d)
-        if fs in DURABILITY_DEFEATING_FS:
-            _fail(f"{label}={d} is on {fs}, where fsync has no backing store to flush. "
-                  f"DRS-D9 durability cannot hold there, so the run would produce a "
-                  f"RAM-disk number labelled as a strict-durability baseline. Point it "
-                  f"at real storage.")
-    # And the disk class, for the same reason: the finished artifact is refused
-    # without it, so discovering that after the run wastes the run. btrfs, zfs and
-    # overlay report an anonymous st_dev with no sysfs queue node, so probing
-    # cannot answer on perfectly ordinary layouts -- hence an operator override
-    # rather than a guess, recorded as declared rather than probed.
-    probed = _probe_disk_class(work)
-    if probed is None and not args.disk_class:
-        _fail(f"the disk class of {work} could not be probed: its filesystem "
-              f"({_fs_type(work) or 'unknown'}) reports no sysfs queue/rotational node, "
-              "which is normal for btrfs, zfs and overlay. §1.3 requires the disk type "
-              "in the artifact and the validator refuses 'unknown', so pass "
-              "--disk-class hdd|ssd_or_nvme. It is recorded as operator-declared, not "
-              "probed.")
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
+    os.makedirs(seed_dir, exist_ok=True)
+    pre = A.measurement_preflight(
+        engine=args.engine, sync_mode=args.sync_mode, daemon=args.daemon,
+        work_dir=work, seed_dir=seed_dir, disk_class=args.disk_class)
+    if pre:
+        _fail("refusing to start:\n  " + "\n  ".join(pre))
+    addr = mining_address(args.cargo_timeout)
+
     subj_dir = os.path.join(work, "subject")
-    # The SUBJECT is always wiped: it is the thing being measured and an IBD
-    # that starts from a partial chain is a different experiment. The SEED is
-    # fixture and is deliberately REUSED — at the reference height generation
-    # costs many hours against an IBD measured in single hours, so regenerating
-    # per run would dominate the harness, and a shared seed additionally gives
-    # both engine arms a byte-identical fixture, which `check` demands.
     shutil.rmtree(subj_dir, ignore_errors=True)
     os.makedirs(subj_dir)
-    os.makedirs(seed_dir, exist_ok=True)
     if args.fresh_seed:
         shutil.rmtree(seed_dir, ignore_errors=True)
         os.makedirs(seed_dir)
@@ -771,91 +210,82 @@ def measure(args):
     common = ["--regtest", "--keep-fakechain", "--fixed-difficulty=1",
               f"--db-sync-mode={args.sync_mode}", "--allow-local-ip", "--no-igd",
               "--non-interactive", f"--log-level={args.log_level}"]
-    (sp2p, srpc, bp2p, brpc), _held = _reserve_ports(4)
-    for _sk in _held:
-        _sk.close()
+    (sp2p, srpc, bp2p, brpc), held = _reserve_ports(4)
+    for sk in held:
+        sk.close()
 
     def spawn(tag, d, argv_extra):
         p2p, rpcp = (sp2p, srpc) if tag == "seed" else (bp2p, brpc)
         argv = [args.daemon] + common + [f"--data-dir={d}",
                                          f"--p2p-bind-port={p2p}",
                                          f"--rpc-bind-port={rpcp}"] + argv_extra
-        log = open(os.path.join(work, f"{tag}.log"), "a", encoding="utf-8")
-        # Record the argv next to the log: a daemon that never answers is
-        # diagnosed from what it was ASKED to do, and the ports are the first
-        # thing to check.
         with open(os.path.join(work, f"{tag}.argv"), "a", encoding="utf-8") as fh:
             fh.write(" ".join(argv) + "\n")
-        return subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=d), argv
+        log = open(os.path.join(work, f"{tag}.log"), "a", encoding="utf-8")
+        try:
+            proc = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, cwd=d)
+        finally:
+            log.close()
+        return proc, argv
 
-    # ── phase 1: generate the chain on an offline seed
-    # Genesis alone is height 1, and N generated blocks leave height N+1, so the
-    # target height for `--height N` is N+1.
+    def running(proc, rpc_port):
+        return _RunningDaemon(proc, rpc_port, args.startup_timeout,
+                              args.shutdown_timeout)
+
+    # Genesis alone is height 1; N generated blocks leave height N+1.
     target_h = args.height + 1
     proc, _ = spawn("seed", seed_dir, ["--offline"])
-    try:
-        if _wait_rpc(srpc, args.startup_timeout, proc) is None:
+    with running(proc, srpc) as seed:
+        if not seed.ready:
             _fail(f"seed RPC on 127.0.0.1:{srpc} never came up "
-                  f"(exited={proc.poll()}); see {work}/seed.log and seed.argv")
+                  f"(exited={seed.proc.poll()}); see {work}/seed.log and seed.argv")
         have_h = _rpc(srpc, "get_info")["result"]["height"]
         seed_reused = have_h > 1
         gen_blocks, gen_wall = 0, None
         if have_h < target_h:
             gen_blocks = target_h - have_h
-            _gt0 = time.time()
-            r = _rpc(srpc, "generateblocks",
-                     {"amount_of_blocks": gen_blocks, "wallet_address": addr,
-                      "starting_nonce": 0}, timeout=args.gen_timeout)
-            gen_wall = time.time() - _gt0
-            st = r.get("result", {}).get("status")
+            gt0 = time.time()
+            resp = _rpc(srpc, "generateblocks",
+                        {"amount_of_blocks": gen_blocks, "wallet_address": addr,
+                         "starting_nonce": 0}, timeout=args.gen_timeout)
+            gen_wall = time.time() - gt0
+            st = resp.get("result", {}).get("status")
             if st != "OK":
                 _fail(f"generateblocks refused: status={st!r} "
-                      f"({json.dumps(r)[:300]})")
+                      f"({json.dumps(resp)[:300]})")
         elif have_h > target_h:
             _fail(f"the seed at {seed_dir} already holds height {have_h}, past the "
                   f"requested {target_h}. Blocks cannot be un-generated without "
                   f"changing what is being measured; point --seed-dir elsewhere or "
                   f"pass --fresh-seed.")
         seed_h = _rpc(srpc, "get_info")["result"]["height"]
-    finally:
-        proc.terminate()
-        proc.wait(args.shutdown_timeout)
     if seed_h != target_h:
         _fail(f"seed is at height {seed_h}, expected {target_h} — generation did not "
               "reach the requested height, so the fixture is not the one asked for")
     if seed_h <= 1:
         _fail(f"seed holds only height {seed_h}; nothing to sync")
 
-    # ── phase 2: same datadir, networked, so it can serve
     proc, _ = spawn("seed", seed_dir, [])
-    try:
-        if _wait_rpc(srpc, args.startup_timeout, proc) is None:
+    with running(proc, srpc) as seed:
+        if not seed.ready:
             _fail(f"networked seed RPC on 127.0.0.1:{srpc} never came up "
-                  f"(exited={proc.poll()}); see {work}/seed.log and seed.argv")
-
-        # ── phase 3: the subject, which is what we are measuring
-        subj, subj_argv = spawn("subject", subj_dir,
-                                [f"--add-exclusive-node=127.0.0.1:{sp2p}"])
-        try:
-            ready = _wait_rpc(brpc, args.startup_timeout, subj)
-            if ready is None:
+                  f"(exited={seed.proc.poll()}); see {work}/seed.log and seed.argv")
+        subj_proc, subj_argv = spawn(
+            "subject", subj_dir, [f"--add-exclusive-node=127.0.0.1:{sp2p}"])
+        with running(subj_proc, brpc) as subj:
+            if not subj.ready:
                 _fail(f"subject RPC on 127.0.0.1:{brpc} never came up "
-                      f"(exited={subj.poll()}); see {work}/subject.log and "
+                      f"(exited={subj.proc.poll()}); see {work}/subject.log and "
                       f"subject.argv. A non-offline daemon's startup is variable "
                       f"here (tens of seconds to minutes) and is EXCLUDED from the "
                       f"measurement, so raising --startup-timeout does not affect "
                       f"any number.")
-            # The denominator: from the subject answering RPC (so RandomX dataset
-            # init and store open are EXCLUDED) to its height reaching the seed's.
-            t0, reached, peak, peers = ready, 0, 0, 0
-            # CPU is sampled at the instant the wall clock starts, and the figure
-            # reported is the DELTA. A single end-of-run read would be cumulative
-            # since process start, so it would carry startup, RandomX dataset
-            # init and store open -- exactly what `ibd_wall_time_s` EXCLUDES --
-            # and the CPU-to-wall ratio would then be comparing two different
-            # phases. RandomX init is itself heavily parallel, so that error does
-            # not average out; it inflates the ratio in the direction that makes
-            # "compute-bound" look established.
+            # Denominator: first successful get_info to height == seed height.
+            # CPU is a delta over the same window. A single end-of-run read
+            # would carry startup / RandomX init / store open, which the wall
+            # figure excludes.
+            t0, reached, peers = subj.ready_at, 0, 0
+            rss_samples = []
             cpu_at_start = _cpu_seconds(subj.pid)
             deadline = t0 + args.sync_timeout
             while time.time() < deadline:
@@ -866,41 +296,33 @@ def measure(args):
                     time.sleep(1)
                     continue
                 reached = info["height"]
-                # How many peers served this IBD is part of the experiment: wall
-                # time scales with it, so two artifacts taken against different
-                # peer counts are not comparable even at identical heights.
                 peers = max(peers, info.get("outgoing_connections_count", 0))
-                peak = max(peak, _peak_rss_bytes(subj.pid) or 0)
+                rss = _peak_rss_bytes(subj.pid)
+                if rss is not None:
+                    rss_samples.append(rss)
                 if reached >= seed_h:
                     break
                 time.sleep(args.poll_interval)
             elapsed = time.time() - t0
-            peak = max(peak, _peak_rss_bytes(subj.pid) or 0)
+            rss = _peak_rss_bytes(subj.pid)
+            if rss is not None:
+                rss_samples.append(rss)
             cpu_at_end = _cpu_seconds(subj.pid)
             synced = reached >= seed_h
-        finally:
-            subj.terminate()
-            subj.wait(args.shutdown_timeout)
-        # AFTER the store is closed, never while the daemon holds it. A live LMDB
-        # environment reported 40.7 MB for a 200-block chain that measured 1.43 MB
-        # once closed — a ~28x overstatement. Whatever the transient is
-        # (in-flight batch growth during sync), a figure that changes by that much
-        # at shutdown is not a store size, and taking it while running would have
-        # put an irreproducible number in a threshold-bearing artifact.
+        # Store size AFTER close: a live LMDB env reported 40.7 MB for a
+        # 200-block chain that measured 1.43 MB once closed.
         store_bytes = _dir_bytes(subj_dir, apparent=False)
         store_apparent = _dir_bytes(subj_dir, apparent=True)
-    finally:
-        proc.terminate()
-        proc.wait(args.shutdown_timeout)
 
-    # A failed /proc read is an ABSENT observation, not zero CPU. Emitting 0.0
-    # would pass validation as "the subject used no CPU", which is the same
-    # placeholder-satisfies-the-field defect as accepting disk_class "unknown".
     if cpu_at_start is None or cpu_at_end is None:
         _fail("could not sample the subject's CPU time from /proc "
               f"(start={cpu_at_start}, end={cpu_at_end}). The artifact would have to "
               "record a failed observation as a number, so none is written.")
+    if not rss_samples:
+        _fail("could not sample the subject's peak RSS from /proc. Emitting 0 would "
+              "validate as a real measurement and skip the 2× floor.")
     cpu_s = cpu_at_end - cpu_at_start
+    peak = max(rss_samples)
     if not synced:
         _fail(f"subject reached height {reached} of {seed_h} in {elapsed:.1f}s and did "
               "not converge. A partial sync is not a shorter measurement of the same "
@@ -910,33 +332,29 @@ def measure(args):
                              capture_output=True, text=True).stdout.strip()
     scenario = "ibd_coinbase_only"
     artifact = {
-        "schema_version": SCHEMA,
+        "schema_version": A.SCHEMA,
         "engine": args.engine,
-        "engine_selected_by": ENGINE_DEFAULT_LMDB,
+        "engine_selected_by": A.ENGINE_DEFAULT_LMDB,
         "git_rev": git_rev,
-        "thresholds_frozen_at": FROZEN_AT,
+        "thresholds_frozen_at": A.FROZEN_AT,
         "durability": {
             "policy": "DRS-D9 full-fsync-per-commit",
             "sync_mode": args.sync_mode,
             "imposed_argv": subj_argv[1:],
-            # Deliberately false, and validated as false: no readback exists.
             "observed": False,
             "readback_gap": "mdb_env_get_flags is in-process only and the daemon logs "
                             "no resolved sync mode; the mode was validated against an "
                             "allowed set before spawning and the argv is recorded "
                             "verbatim, which is not the same as observing the flags",
         },
-        "hardware": hardware_fingerprint(subj_dir, args.disk_class),
+        "hardware": A.hardware_fingerprint(subj_dir, args.disk_class),
         "fixture": {
             "nettype": "fakechain",
             "height_reached": int(reached),
             "height_requested": int(args.height),
-            "reference_height": REFERENCE_HEIGHT,
+            "reference_height": A.REFERENCE_HEIGHT,
             "tx_per_block": 0,
-            "verify_exercised": {
-                "pow": True,
-                "fcmp_pp": False,
-            },
+            "verify_exercised": {"pow": True, "fcmp_pp": False},
             "verify_note": "PoW longhash is computed and checked for every block with "
                            "no nettype bypass; --fixed-difficulty lowers the TARGET "
                            "only. generateblocks produces coinbase-only blocks, so "
@@ -944,45 +362,34 @@ def measure(args):
             "seed_height": int(seed_h),
             "seed_reused": bool(seed_reused),
             "peers_used": int(peers),
-            # Generation is FIXTURE cost, recorded so the table row that quotes a
-            # generation rate cites an artifact field rather than a one-off
-            # script. Absent when the seed was reused and nothing was generated.
             "blocks_generated": int(gen_blocks),
             "generation_wall_s": None if gen_wall is None else round(gen_wall, 3),
         },
         "measures": [
-            {"name": "ibd_wall_time_s", "axis": "wall_time", "unit": "s",
-             "value": round(elapsed, 3), "scenario": scenario,
-             "denominator": "subject's first successful get_info to height == seed "
-                            "height; EXCLUDES process start, RandomX dataset init and "
-                            "store open"},
-            {"name": "subject_cpu_s", "axis": "cpu_time", "unit": "s",
-             "value": round(cpu_s, 3), "scenario": scenario,
-             "denominator": "utime+stime of the subject over all threads, sampled at "
-                            "the first successful get_info and again at the end, "
-                            "reported as the DELTA -- so it spans exactly the same "
-                            "phase as ibd_wall_time_s and excludes startup, RandomX "
-                            "dataset init and store open. Against that wall figure it "
-                            "says whether the phase was compute-bound and how "
-                            "parallel; it does NOT attribute the cost to any "
-                            "particular operation"},
-            {"name": "peak_rss_bytes", "axis": "memory", "unit": "bytes",
-             "value": int(peak), "scenario": scenario,
-             "denominator": "subject VmHWM sampled during sync. NOT §7.4's "
-                            "attacker-feed row, which has no definition yet"},
-            {"name": "store_bytes", "axis": "disk", "unit": "bytes",
-             "value": store_bytes, "scenario": scenario,
-             "denominator": "filesystem-ALLOCATED bytes of the subject data dir, "
-                            "measured after the store was closed. NOT §7.4's "
-                            "multi-year row"},
-            {"name": "store_bytes_apparent", "axis": "disk", "unit": "bytes",
-             "value": store_apparent, "scenario": scenario,
-             "denominator": "apparent (file-length) bytes of the same directory, same "
-                            "moment; differs from the allocated figure only if the "
-                            "engine leaves holes"},
+            A.measure_row(
+                "ibd_wall_time_s", round(elapsed, 3), scenario,
+                "subject's first successful get_info to height == seed height; "
+                "EXCLUDES process start, RandomX dataset init and store open"),
+            A.measure_row(
+                "subject_cpu_s", round(cpu_s, 3), scenario,
+                "utime+stime of the subject over all threads, sampled at the first "
+                "successful get_info and again at the end, reported as the DELTA — "
+                "so it spans exactly the same phase as ibd_wall_time_s"),
+            A.measure_row(
+                "peak_rss_bytes", int(peak), scenario,
+                "subject VmHWM sampled during sync. NOT §7.4's attacker-feed row, "
+                "which has no definition yet"),
+            A.measure_row(
+                "store_bytes", store_bytes, scenario,
+                "filesystem-ALLOCATED bytes of the subject data dir, measured after "
+                "the store was closed. NOT §7.4's multi-year row"),
+            A.measure_row(
+                "store_bytes_apparent", store_apparent, scenario,
+                "apparent (file-length) bytes of the same directory, same moment; "
+                "differs from the allocated figure only if the engine leaves holes"),
         ],
     }
-    refusals = artifact_refusals(artifact)
+    refusals = A.artifact_refusals(artifact)
     if refusals:
         _fail("the harness produced an artifact it will not emit:\n  " +
               "\n  ".join(refusals))
@@ -990,16 +397,14 @@ def measure(args):
         json.dump(artifact, fh, indent=2, sort_keys=True)
         fh.write("\n")
     print(f"wrote {args.out}: engine={args.engine} height_reached={reached} "
-          f"{PRIMARY_MEASURE}={elapsed:.3f}s peak_rss={peak} "
+          f"{A.PRIMARY_MEASURE}={elapsed:.3f}s peak_rss={peak} "
           f"store={store_bytes} (apparent {store_apparent})")
-    if reached < REFERENCE_HEIGHT:
-        print(f"NOTE: height {reached} is below §1.3's reference {REFERENCE_HEIGHT}. "
+    if reached < A.REFERENCE_HEIGHT:
+        print(f"NOTE: height {reached} is below §1.3's reference {A.REFERENCE_HEIGHT}. "
               "§1.3 permits 'max available fixture; the artifact records the height it "
               "reached' — it is recorded, and the ratio is only valid against another "
               "artifact at the same height.")
 
-
-# ── CLI ─────────────────────────────────────────────────────────────────────
 
 def _load(path):
     with open(path, encoding="utf-8") as fh:
@@ -1019,11 +424,11 @@ def main():
     c.add_argument("candidate")
     c.add_argument("--json", action="store_true")
 
-    sub.add_parser("blockers", help="FATAL if a deferred follow-on's blocker is gone")
+    sub.add_parser("blockers", help="FATAL if the redb-arm deferral's blocker is gone")
 
     m = sub.add_parser("measure", help="run the IBD baseline and emit an artifact")
     m.add_argument("--engine", default="lmdb", choices=("lmdb", "redb"))
-    m.add_argument("--height", type=int, default=REFERENCE_HEIGHT)
+    m.add_argument("--height", type=int, default=A.REFERENCE_HEIGHT)
     m.add_argument("--out", required=True)
     m.add_argument("--daemon", default=os.path.join(ROOT, "build/bin/shekyld"))
     m.add_argument("--work-dir", required=True)
@@ -1039,7 +444,7 @@ def main():
                    help="reusable seed chain (default: <work-dir>/seed). "
                         "Topped up to the requested height, never wiped "
                         "unless --fresh-seed.")
-    m.add_argument("--disk-class", default=None, choices=ALLOWED_DISK_CLASSES,
+    m.add_argument("--disk-class", default=None, choices=A.ALLOWED_DISK_CLASSES,
                    help="declare the disk type when it cannot be probed (btrfs, zfs, "
                         "overlay); recorded as operator-declared, not probed")
     m.add_argument("--fresh-seed", action="store_true",
@@ -1048,31 +453,30 @@ def main():
     args = ap.parse_args()
 
     if args.cmd == "validate":
-        r = artifact_refusals(_load(args.artifact))
+        r = A.artifact_refusals(_load(args.artifact))
         if r:
             _fail(f"{args.artifact} is not a usable measurement:\n  " + "\n  ".join(r))
         print(f"{args.artifact}: usable")
         return
 
     if args.cmd == "blockers":
-        f = blocker_failures()
+        f = A.blocker_failures()
         if f:
             _fail("a deferred follow-on's blocker no longer holds:\n  " +
                   "\n  ".join(f))
-        probed = [k for k, (kind, _) in FOLLOWON_MEASURES.items() if kind == "PROBED"]
-        print(f"blockers hold: {len(probed)} probed follow-on(s), "
-              f"{len(FOLLOWON_MEASURES) - len(probed)} recorded at harness level")
+        print(f"blockers hold: redb consensus engine absent, "
+              f"{len(A.FOLLOWON_MEASURES)} recorded follow-on(s)")
         return
 
     if args.cmd == "check":
         base, cand = _load(args.baseline), _load(args.candidate)
         bad = []
         for path, a in ((args.baseline, base), (args.candidate, cand)):
-            bad += [f"{path}: {x}" for x in artifact_refusals(a)]
-        bad += comparability_refusals(base, cand)
+            bad += [f"{path}: {x}" for x in A.artifact_refusals(a)]
+        bad += A.comparability_refusals(base, cand)
         if bad:
             _fail("refusing to compute a §1.3 ratio:\n  " + "\n  ".join(bad))
-        rep = compare(base, cand)
+        rep = A.compare(base, cand)
         if args.json:
             print(json.dumps(rep, indent=2, sort_keys=True))
         else:

@@ -196,13 +196,15 @@ jobs:
         run: python3 scripts/ci/test_check_doc_code_citations.py
 
       - name: Run DRS-BENCH harness selftest
-        # `scripts/bench/drs_bench.py` refuses to emit or compare a consensus
+        # `scripts/bench/drs_artifact.py` refuses to emit or compare a consensus
         # store number that does not carry its measurement conditions —
-        # DRS-D9 durability, hardware class, height reached, and which
-        # verification the fixture actually exercised. The selftest breaks one
-        # field at a time and asserts the refusal names it; a control proves
-        # the unmutated artifact is accepted, without which every one of those
-        # reds could be firing on an already-invalid fixture.
+        # DRS-D9 durability, hardware class, height reached, which
+        # verification the fixture actually exercised, and every live axis.
+        # The selftest breaks one field at a time and asserts the refusal names
+        # it; a control proves the unmutated artifact is accepted, without
+        # which every one of those reds could be firing on an already-invalid
+        # fixture. It also loads the committed `docs/benchmarks/drs_bench_ibd_*.json`
+        # files, so deleting or editing them is a red (rule 47).
         #
         # It also pins §1.3's frozen ratios against the doc's own text in both
         # directions, so editing the threshold on either side alone is a red.

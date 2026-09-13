@@ -874,21 +874,24 @@ Compare engines (redb / heed / LMDB) on the rows above when the suite runs;
 halt conditions named in the bench plan (e.g. file-growth slope, RSS ceiling,
 IBD floor from DRS-0).
 
-**Stage one — landed (2026-09-13).** Harness `scripts/bench/drs_bench.py`
-(`measure` / `check` / `validate` / `blockers`) with selftest
-`scripts/bench/test_drs_bench.py`, both wired in `docs-gates.yml`. The **LMDB
-arm only**: there is no redb consensus store to measure — `shekyl-chain-store`
-names redb in type-level table and key-ordering declarations and holds no
-`Database` and no transaction — and `drs_bench.py blockers` asserts that
-blocker still holds on every CI run, so the deferral turns red when DRS-E1
-grows the engine instead of ageing quietly.
+**Stage one — landed (2026-09-13).** Gate `scripts/bench/drs_artifact.py`
+(schema, refusals, §1.3 compare, redb-engine probe) and runner
+`scripts/bench/drs_bench.py` (`measure` / `check` / `validate` / `blockers`)
+with selftest `scripts/bench/test_drs_bench.py`, wired in `docs-gates.yml`.
+The **LMDB arm only**: there is no redb consensus store to measure —
+`shekyl-chain-store` names redb in type-level table and key-ordering
+declarations and holds no `Database` and no transaction — and
+`drs_bench.py blockers` asserts that blocker still holds on every CI run, so
+the deferral turns red when DRS-E1 grows the engine instead of ageing quietly.
 
 Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**
-(the primary), plus **peak RSS** and **store size** as free denominators of the
-same run. The latter two are explicitly **not** this table's attacker-shaped or
-multi-year rows; those, and pop/reorg, stay follow-ons with named blockers in
-`FOLLOWON_MEASURES` — pop/reorg is the best positioned, since `/pop_blocks`
-already exists.
+(the primary), plus **CPU time**, **peak RSS** and **store size** as free
+denominators of the same run. An artifact is a **record of every live axis**,
+not a bag of rows — omitting a thresholded axis would skip its floor. The
+attacker-shaped and multi-year rows, and pop/reorg, stay follow-ons with named
+blockers in `FOLLOWON_MEASURES` (recorded, not probed: a probe that cannot
+observe its own blocker would fire while the blocker still stood). Pop/reorg is
+the best positioned, since `/pop_blocks` already exists.
 
 **Vehicle:** two daemons under `--regtest`. The seed generates **offline**
 (`generateblocks` is gated on `check_core_ready()`, which a zero-peer daemon
