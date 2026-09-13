@@ -42,7 +42,7 @@ use shekyl_archival_bond_builder::{
 };
 use shekyl_archival_retention::{
     bond_floor, verify_bond_post_ct_balance, verify_release_bond_post, ArchivalBondPostVin,
-    BondPostError, BondPostKind, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
+    BondPostError, BondTerm, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat, MASTER_SEED_BYTES};
 use shekyl_crypto_pq::archival_p::derive_archival_p_keys;
@@ -107,8 +107,20 @@ fn never_served_is_a_legitimate_exit_not_a_refusal() {
 
 #[test]
 fn post_kind_is_load_bearing() {
-    let mut v = vin();
-    v.post_kind = BondPostKind::JoinMarket;
+    let v = built().vin().clone();
+    // A JoinMarket payload cannot be a Release: the type is the check.
+    let v = shekyl_archival_retention::ArchivalBondPostVin::join_market(
+        v.hybrid_public_key.clone(),
+        v.p_canonical_id,
+        vec![0xE5; shekyl_archival_retention::HYBRID_PUBKEY_CANONICAL_BYTES],
+        [0xEE; shekyl_archival_retention::ENDPOINT_BYTES],
+        shekyl_archival_retention::HoldingsDescriptor {
+            kind: shekyl_archival_retention::HoldingsKind::ShardSetCompact,
+            shard_ids: shekyl_archival_retention::ShardSet::empty(),
+        },
+        0,
+        0,
+    );
     assert!(matches!(verify(&v), Err(BondPostError::PostKindNotRelease)));
 }
 
@@ -203,7 +215,7 @@ fn nothing_to_release_is_refused_at_assembly_not_at_the_chain() {
 /// producer emits an empty vector, and this pins that it stays empty.
 #[test]
 fn an_release_carries_no_bond_spend_pk() {
-    assert!(vin().bond_spend_pk.is_empty());
+    assert!(vin().bond_spend_pk().is_none());
 }
 
 // ── The debit-side balance rule, tied to the commitment rule it precedes ─────

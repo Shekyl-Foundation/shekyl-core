@@ -922,6 +922,7 @@ mod tests {
             p_canonical_id: canonical_id(p).to_bytes(),
             kind: BondPostKind::JoinMarket {
                 bond_spend_pk: Vec::new(),
+                endpoint: [0xEE; 32],
             },
             holdings: Holdings::CompleteTree,
             bonded_total_atomic: 1_000,

@@ -647,6 +647,7 @@ fn build_bond_fixture() -> BondFixture {
             .as_bytes(),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: bond_spend_pk.clone(),
+            endpoint: [0xEE; 32],
         },
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: floor,
@@ -671,8 +672,8 @@ fn build_bond_fixture() -> BondFixture {
 
     // ── Construct the bond vin (public keys only; SA-2b — no on-vin sig);
     // amount-level credit funding rule (§7.3) before proving ─────────────
-    let built =
-        build_join_market_vin(p_keys.bond_post_keys(), holdings).expect("build JoinMarket vin");
+    let built = build_join_market_vin(p_keys.bond_post_keys(), holdings, [0xEE; 32])
+        .expect("build JoinMarket vin");
     verify_credit_funding(
         AtomicUnits::from_raw(INPUT_AMOUNT),
         AtomicUnits::from_raw(change_total),
@@ -1237,7 +1238,8 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
     let mut swapped = fx.parsed.tx.clone();
     for input in &mut swapped.prefix.inputs {
         if let shekyl_wire::transaction::Input::BondPost(bp) = input {
-            let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk } = &mut bp.kind
+            let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk, .. } =
+                &mut bp.kind
             else {
                 panic!("bond fixture is a JoinMarket post");
             };
@@ -1258,7 +1260,7 @@ fn bond_spend_pk_swap_after_signing_is_rejected() {
     let parsed = bond_mutated(|tx| {
         for input in &mut tx.prefix.inputs {
             if let shekyl_wire::transaction::Input::BondPost(bp) = input {
-                let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk } =
+                let shekyl_wire::transaction::BondPostKind::JoinMarket { bond_spend_pk, .. } =
                     &mut bp.kind
                 else {
                     panic!("bond fixture is a JoinMarket post");
