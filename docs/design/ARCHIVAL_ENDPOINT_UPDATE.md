@@ -541,7 +541,8 @@ replaced by them (a round-doc row states what *is* true).
   preimage* of the labeled derivation. The proposed `p_info` for the `hs_id`
   tier is `ARCHIVAL_P_HS_ID_INFO ‖ 0x00 ‖ p_slot_le32 ‖ rotation_le32` — both
   operands fixed-width `u32`, so no second separator is needed and the
-  encoding is injective. The other seven labels keep the existing
+  encoding is injective. The other eight labels (nine `ARCHIVAL_P_*_INFO`
+  constants in `archival_p.rs`, counted; `hs_id` is one) keep the existing
   `label ‖ 0x00 ‖ p_slot_le32` (decision log: "only the `hs_id` tier
   changes"). A two-stage shape (a per-slot root, then a rotation expansion) is
   a *different function* from the one ruled and is not offered.
@@ -565,18 +566,21 @@ after derivation"). So a rotation *cannot* re-derive from the master seed at
 rotation time; whatever rotation a session can post must have been derived
 at open.
 
-**Proposal.** The bundle carries a small window of `hs_id` seeds,
-`[current, current + ARCHIVAL_HS_ID_ROTATION_LOOKAHEAD)`, each under the v2
-preimage, behind one accessor `hs_id_seed_for(rotation) -> Option<&[u8; 32]>`.
-The three readers of `.hs_id_seed` today (`stake_engine/bond.rs`,
-`stake_engine/persona.rs` ×2) become "the current rotation"; the producer
-reads `current + 1`. The cost is one HKDF expand per window entry per bundle
-per open — negligible next to the PQ keygen the same open already pays.
-Proposed width **8**: a rotation is a confirmed chain transaction under cold
-custody (`EU-D5`), so eight in one session is not a realistic path; exhausting
-the window is a typed refusal ("reopen to continue rotating"), never a silent
-wrap. The alternative that has no exhaustion — a per-slot root retained in the
-bundle — is the two-stage shape §17.1 does not offer.
+**Proposal.** The bundle carries a small **resident** window of `hs_id`
+seeds, `[current, current + ARCHIVAL_HS_ID_ROTATION_LOOKAHEAD)`, each under
+the v2 preimage, behind one accessor
+`hs_id_seed_for(rotation) -> Option<&[u8; 32]>`. The three readers of
+`.hs_id_seed` today (`stake_engine/bond.rs`, `stake_engine/persona.rs` ×2)
+become "the current rotation"; the producer reads the next unposted index.
+The cost is one HKDF expand per window entry per bundle per open —
+negligible next to the PQ keygen the same open already pays. Proposed width
+**4** (a knob, not a property): a rotation is a confirmed chain transaction
+under cold custody (`EU-D5`), so the window bounds rotations *per open*, not
+per persona; exhausting it is a typed refusal ("reopen to continue
+rotating"), never a silent wrap. This is the persona pattern's resident half
+(`ARCHIVAL_PERSONA_LOOKAHEAD`: resident bundles, small); the wide half is
+§17.3's probe cache. The alternative that has no exhaustion — a per-slot root
+retained in the bundle — is the two-stage shape §17.1 does not offer.
 
 ### 17.3 D-2 PROPOSED: the current rotation index is a persisted hint, reconciled against the chain; `STAKING_BLOCK_VERSION` 2→3
 
@@ -588,18 +592,35 @@ second one. The rotation index has the same shape as `bonded_slots`: a wallet
 needs it *before* the scan has read anything (to publish the serving identity
 at open), and a restored-from-seed wallet does not have it.
 
-**Proposal.** `StakingBlock` gains `endpoint_rotation: BTreeMap<u32, u32>`
-(slot → current rotation; absent = 0), a derive-time hint. Truth is the
-chain: the record's endpoint is written only by JoinMarket and
+**Proposal.** `StakingBlock` gains two fields in one bump, mirroring the
+persona pattern's split between a resident lookahead and a wide, cheap probe
+cache (`types.rs`: "different cost model"):
+
+- `endpoint_rotation: BTreeMap<u32, u32>` — slot → current rotation, a
+  derive-time hint. A slot with no row has posted and sighted no rotation,
+  which under D-4 (§17.5) *means* rotation 0 — the JoinMarket address — by
+  the index's definition, not by an absent-iff-zero default.
+- `endpoint_probe_cache: BTreeMap<u32, Vec<[u8; 32]>>` — slot → the
+  Ed25519 public keys of rotations `[hint, hint + ARCHIVAL_HS_ID_ROTATION_PROBE_WINDOW)`,
+  derived once at open (the seed-in-scope seam) and never invalidated; public
+  by function, sealed because the slot↔address association is `P`'s history,
+  exactly as `persona_id_cache` is treated. Proposed width **32**, the
+  persona probe window's figure.
+
+Truth is the chain: the record's endpoint is written only by JoinMarket and
 `EndpointUpdate` posts, both of which the principal scan's bond watch already
 matches by `p_canonical_id` (`bond_watch.rs` maps kind 4 today), so the last
 confirmed endpoint-bearing post for the slot *is* the record's endpoint.
-Reconciliation is derive-and-match: at merge, the sighted endpoint is
-compared against the identities of `[hint, hint + window)` and the hint set
-to the match. The hint is **monotone** like `p_slot`, for liveness rather than
-privacy: a rolled-back hint would re-serve an address the record no longer
-names, so the witness misses and the persona is slashed for an address it
-never stopped serving. An `EndpointUpdate` sighting must **not** adopt the
+Reconciliation is a cache lookup at merge: the sighted endpoint is matched
+against the probe cache and the hint set to the matched index. **No match
+means "beyond the window"**, not a defect: the hint advances to the window's
+end, the next open derives the window above it, and the next rescan matches
+— `ceil(depth / W)` open+rescan cycles for a restore-from-seed whose persona
+rotated `depth` times, the same argument `ARCHIVAL_PERSONA_PROBE_WINDOW`
+makes for slots. The hint is **monotone** like `p_slot`, for liveness rather
+than privacy: a rolled-back hint would re-serve an address the record no
+longer names, so the witness misses and the persona is slashed for an address
+it never stopped serving. An `EndpointUpdate` sighting must **not** adopt the
 slot as bonded (`sightings_in`'s JoinMarket-only filter stays; a separate
 endpoint sighting is recorded). This is a second schema bump, rule 42 snapshot
 included, outside `EU-D13`'s enumeration — hence a ruling, not a call.
@@ -648,12 +669,16 @@ No separate settlement of "the service index" is needed.
   test is renamed off the `kat_` prefix (rule 50: `kat_*` is reserved for
   tiers 1–2; a self-pinned vector says tripwire), and
   `.github/workflows/depends-aarch64-kats.yml`, which runs it by name, moves
-  with it.
+  with it. `.github/CODEOWNERS` protects `/rust/**/tests/kat_*.rs` and
+  `docs/test_vectors/**` — the corpus stays covered, the renamed test file
+  would not, so the rename adds a `CODEOWNERS` row for the new name in the
+  same commit.
 - `CRYPTO_DOMAIN_REGISTRY.tsv`: the v1 row → v2, same commit (`EU-D8`).
 - `shekyl-sp-t3-spike/src/onion_key.rs`: the one out-of-engine caller passes
   an explicit rotation (the spike stays; deleting it is its own decision).
-- Doc sweep: 24 files name `ARCHIVAL_P_DERIVE_V1`, the v1 `hs-id` literal or
-  the `kat_` test; each hit is classified in context — asserts-is (label
+- Doc sweep: 26 files name `ARCHIVAL_P_DERIVE_V1`, the v1 `hs-id` literal or
+  the `kat_` test (`grep -rIl`, `external`/`target`/`build` excluded; two of
+  them are `Cargo.toml` comments); each hit is classified in context — asserts-is (label
   tables such as `ARCHIVAL_FIREWALL_GATE6.md` §9.3, the inventory, this doc's
   `EU-D8`) moves; dated history and the other seven `-v1` labels do not.
 - `pending_post_block.rs`: `PendingEndpointUpdate { persona, tx_bytes,
@@ -669,11 +694,12 @@ No separate settlement of "the service index" is needed.
 
 ### 17.7 Put to Rick
 
-1. **D-1** (§17.2): the rotation window at open, width 8, exhaustion a typed
-   refusal — or the two-stage per-slot root, which has no exhaustion but is
-   not the preimage `EU-D8` describes.
-2. **D-2** (§17.3): the persisted rotation hint, `STAKING_BLOCK_VERSION` 2→3,
-   as a second bump outside `EU-D13`'s enumeration.
+1. **D-1** (§17.2): the resident rotation window at open, width 4,
+   exhaustion a typed refusal — or the two-stage per-slot root, which has no
+   exhaustion but is not the preimage `EU-D8` describes.
+2. **D-2** (§17.3): the persisted rotation hint plus the rotation probe cache
+   (two fields, one `STAKING_BLOCK_VERSION` 2→3), as a second bump outside
+   `EU-D13`'s enumeration.
 3. **D-3** (§17.4): the submit battery lands in D under rule 21's own
    criterion, with the probe kind as its C++ delta.
 4. **D-4** (§17.5): the index-0 reading, as §16 puts it.
