@@ -9,10 +9,11 @@ done; `SF-D11` WITHDRAWN; `SF-D12` a corollary of `SF-D10`. **The
 rule-26 halt is lifted:** the implementation PR (`shekyl-p-fetch`) may
 begin. This file stays in `docs/design/` because it still owns named
 residue the implementation PR discharges — the header spelling and
-encoding (`SF-D5`), organic draw bound `k` (`SF-D6`), in-flight cap `N`
-(`SF-D7`), the signature domain string and KAT (`SF-D8`), carrying the
-requester-random on the pass record (`SF-D8`), and the W₂ measurement
-(§8) — and archives to `docs/completed/` when the client lands.
+encoding (`SF-D5`), in-flight cap `N` (`SF-D7`), the signature domain
+string and KAT (`SF-D8`), carrying the requester-random on the pass
+record (`SF-D8`), and the W₂ measurement (§8) — and archives to
+`docs/completed/` when the client lands. Organic draw bound `k` is
+`TJ-D`'s, not this PR's.
 Identifier family `SF-` (index row `SF-D1…SF-Dn`, registered at
 birth per rule 94 §1). Process per
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
@@ -161,9 +162,9 @@ inherited as "the client waits."
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
 | **Unauthenticated SOCKS, no isolation flags.** The fetch client presents no SOCKS credentials and sets no isolation flags on the zone proxy. Circuit assignment is Tor's, per its own defaults — this is not a one-circuit guarantee. Fetches then share circuits with overlay P2P (no credentials on the same SOCKS); that blending is a consequence, not a cover mechanism. Cover is TRC's subject | `SF-D3` RULED 2026-09-12 |
 | **The virtual port is 80**, a shared constant both sides read from `shekyl-curve-tree` (`SF-D4` named the home). Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core` (`serving/task.rs:52`) — the current location, not the home; the implementation PR moves it. Two `80`s that happen to agree are still not the ratification — this row is the number; the implementation PR puts one constant in `shekyl-curve-tree` and both sides read it. **Request amendment:** same `GET /shard/{id}`, one required header decoding to `nonce[32] ‖ height_le[8]`, no path token, query string, or body; every production call uses it | `SF-D5` RULED 2026-09-12; AMENDED 2026-09-13 |
-| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is owed, not picked (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is a non-row (filter / pre-dial miss). 404 is a completed exchange (immediate miss), not a retry. `content-length` must equal the constant `signature_envelope_len` plus `framed_len()`; disagreement is malformed and is known after fixed metadata but before segment bytes. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
-| **One fixed client in-flight cap `N`, one shared queue, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. `N` is not organic draw cap `k` and is not a function of `D`. SP-T3 re-base / W₂ owns the Pi 4 Tor circuit-churn upper bound; the implementation PR owns the lower-bound judgement and records why its chosen parallelism does not serialize reconstruct. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or shared-queue wait plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12 |
-| **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`. Per-fetch exclusion is scratch, not memory. The fetch client forms no opinions — the challenge system is the measurement authority | `SF-D10` RULED; `SF-D12` corollary |
+| **Timeout / miss / retry taxonomy.** One table, two caller columns. Per-attempt handling is the client's (`SF-D1`); the axis is whom the scheduler names next and what exhaustion means. Organic draw bound `k` is the fill scheduler's (`TJ-D`), not the fetch crate's (`client-need` on remaining-empty or `k`). No-endpoint on the bond record is a non-row (filter / pre-dial miss). 404 is a completed exchange (immediate miss), not a retry. `content-length` must equal the constant `signature_envelope_len` plus `framed_len()`; disagreement is malformed and is known after fixed metadata but before segment bytes. Parse, root-mismatch, and bad-countersignature remain typed separately. Reopen if W₂ retry budget and `CHALLENGE_RESPONSE_BLOCKS` cannot coexist | `SF-D6` RULED 2026-09-12; AMENDED 2026-09-13 |
+| **One fixed client in-flight cap `N`, one shared admission path, no caller differentiation.** Challenge and organic use the same client code, admission, and request; no priority, reservation, caller tag, or second entry point. The API is `fetch(destination, shard_id, header)` — schedulers name `P`; the HTTP path names only `s`. `N` is not organic draw cap `k` and is not a function of `D`. SP-T3 re-base / W₂ owns the Pi 4 Tor circuit-churn upper bound; the implementation PR owns the lower-bound judgement and records why its chosen parallelism does not serialize reconstruct. Reopen if capped reconstruct throughput falls below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer approaches `CHALLENGE_RESPONSE_BLOCKS` | `SF-D7` RULED 2026-09-12 |
+| **Organic selection is a uniform memoryless draw** over the drawable holder set of shard `s`, performed by the organic scheduler, not by `shekyl-p-fetch`. Per-fetch exclusion is scratch, not memory. The fetch client forms no opinions — it is given a destination | `SF-D10` RULED; `SF-D12` corollary |
 | **Countersign with the bond record's hybrid identity key**, `BondPost.hybrid_public_key`, both Ed25519 and ML-DSA legs. This rules the key, not the message (the message is `SF-D8`'s). This is not the onion key and never the cold `bond_spend_pk`. The onion endpoint is authenticated by the Tor rendezvous and bound beside the identity key on P's authorized bond record; the response signature proves the live responder also controls P's identity key | `SF-D13` RULED 2026-09-13 |
 | **The signed message is `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]`** — requester-random, published tip height, then the `u64` `P` parsed from `/shard/{id}`, under a new versioned domain (the v1 nonce-only domain is not reused). The challenge tuple and `cb_out_key` are not in this message: the fetch proves `P` served, not which miner asked. `shard_id` stops a decoy-route signature being filed as a pass for a different shard. The pass record **carries** the 32-byte random (it cannot be recomputed); admission of a challenge pass checks signed height against the block's predecessor height. Domain string and KAT are pinned by the implementation PR | `SF-D8` message half RULED 2026-09-13; AMENDED 2026-09-13 |
 | **Inner frame:** `ServedFrameHeader` (leaf_count ‖ padding_len ‖ segment ‖ padding); codec owned by `shekyl-curve-tree`; write-zero read-anything. `RF-D4` itself carries no countersignature and is unchanged | `RF-D4`, `RF-D7` |
@@ -178,9 +179,12 @@ inherited as "the client waits."
 callers of it.** No third wallet-side client; no challenge-only harness;
 no caller-specific header, path token, or isolation shape that would let
 `P` distinguish a test from a read. Two production schedulers drive the
-same entry point — "you produced block *h*: fetch leaf ℓ of shard *s*"
-and "this daemon needs shard *s*" — and tests are a third scheduler of
-that same entry point, not a separate path.
+same client entry point `fetch(destination, shard_id, header)` — "you
+produced block *h*: fetch leaf ℓ of shard *s* from assigned `P`" and
+"this daemon needs shard *s*" — and tests are a third scheduler of
+that same entry point, not a separate path. The HTTP request names
+only the shard; the destination is whom the scheduler named, not a
+caller tag on the wire.
 
 Reopen if a storage-only pruned-daemon path is shown to exercise the
 serve endpoint end to end without a fetch client. (Also if `EU-D1` or
@@ -557,10 +561,10 @@ not surface this on its own: a truncating `P` looks like weather.
 The number the measurement produces has to satisfy this requirement.
 
 **Organic exclusion**, once, for every "exclude" below: `SF-D10`
-scratch — without replacement inside this fetch, dies with the
-fetch. No longer-lived list. The challenge caller does not consult
-this; assignment is the selection, and stall-class retries are of
-**that** `P`.
+scratch on the organic scheduler — without replacement inside this
+need, dies with the need. No longer-lived list. The challenge
+caller does not consult this; assignment is the selection, and
+stall-class retries are of **that** `P`.
 
 **Organic draw bound, owed.** `D` is unbounded and growing (challenge
 mechanism §9.6 item 3). "Exclude, draw next" until the set is empty
@@ -568,11 +572,11 @@ is a full walk of `D` for a shard nobody currently serves — a
 circuit dial per holder, with no deadline forcing a stop. That walk
 is **not** implied. Either the draw is capped at some `k` (try `k`,
 then `client-need` with holders remaining) or "exhausted" means
-something other than "all `D`". The number is `TJ-D`'s in part
-(the fill scheduler's) and this table's in part (the walk is
-specified here). This round names the bound as **owed**; it does not
-pick `k`. Distinct from `SF-D7`: that cap is concurrent transfers,
-not how many holders one fetch tries.
+something other than "all `D`". **`k` is `TJ-D`'s** — the fill
+scheduler that names the next `P`. This table specifies the walk;
+this round does not pick `k` and the fetch crate does not pin it.
+Distinct from `SF-D7`: that cap is concurrent transfers, not how
+many holders one organic need tries.
 
 **`client-need`** is the organic terminal: this fetch stopped without
 a verified body, because the remaining draw set was empty **or**
@@ -613,9 +617,9 @@ an implementation.
 
 Server-side `MAX_INFLIGHT` / `max_streams` remain SPIKE-PIN-1/2 (the W₂
 rig's). The client needs its own in-flight bound, sized for **both**
-callers sharing one daemon Tor instance. Distinct from `SF-D6`'s owed
-draw cap `k`: that is how many holders one fetch tries; this is how
-many transfers may be outstanding at once.
+callers sharing one daemon Tor instance. Distinct from `SF-D6`'s organic draw cap `k` (the fill scheduler's):
+that is how many holders one organic need tries; this is how many
+transfers may be outstanding at once.
 
 Challenge mechanism §9.6 item 3 stands: `D` is unbounded. This cap is
 **not** a function of `D`. Coverage math at maturity counts
@@ -638,7 +642,8 @@ fill with no deadline at all. Sharing a cap, the caller a small cap
 would hurt is the deadline-free one.
 
 **No caller differentiation.** Challenge and organic requests enter
-the same client code, the same in-flight limiter, and the same queue.
+the same client code, the same in-flight limiter, and the same
+admission path.
 There is no priority, reservation, caller tag, second entry point, or
 per-caller admission rule. `SF-D1` governs the whole request
 mechanism, not only the HTTP bytes: serving `P` must have no way to
@@ -658,25 +663,28 @@ its ability to track a handful of outstanding transfers. A
 floor-derived number is adequate for both, for different reasons.
 
 **The integer is unpinned.** This round rules the *shape* (one fixed
-`N`, one shared queue, caller-blind `fetch(s)`). "Small fixed" is not
-a number. The range: bounded above by what a Pi 4's Tor client handles
-without circuit churn (a measurement the SP-T3 re-base / W₂ owes over
-this topology); bounded below by enough parallelism that reconstruct
-is not serialised one shard at a time. The lower endpoint is the
-implementation PR's own judgement: that PR records why its chosen
-parallelism is acceptable for fill throughput; it is not a second
-SP-T3 measurement. The implementation PR pins the integer from that
-range. Not a function of `D`.
+`N`, one shared admission path, `fetch(destination, shard_id, header)`
+for both callers). Caller-blind is the HTTP request, not the API:
+the path is `/shard/{id}`; the scheduler supplies the destination.
+"Small fixed" is not a number. The range: bounded above by what a Pi 4's
+Tor client handles without circuit churn (a measurement the SP-T3
+re-base / W₂ owes over this topology); bounded below by enough
+parallelism that reconstruct is not serialised one shard at a time.
+The lower endpoint is the implementation PR's own judgement: that PR
+records why its chosen parallelism is acceptable for fill throughput;
+it is not a second SP-T3 measurement. The implementation PR pins the
+integer from that range. Not a function of `D`.
 
-- **Lean:** one fixed in-flight cap `N`, one shared queue, and the same
-  caller-blind `fetch(s)` for challenge and organic requests. No
-  priority or reservation. Concurrent transfers, not `k`, not
-  circuit-build cost, not a per-`D` scaling constant. Integer
-  unpinned — range above; implementation PR pins it from the SP-T3
-  re-base's upper bound and owns the lower-bound throughput judgement.
+- **Lean:** one fixed in-flight cap `N`, one shared admission path, and
+  the same `fetch(destination, shard_id, header)` for challenge and
+  organic requests. No priority or reservation. Concurrent transfers,
+  not `k`, not circuit-build cost, not a per-`D` scaling constant.
+  Integer unpinned — range above; implementation PR pins it from the
+  SP-T3 re-base's upper bound and owns the lower-bound throughput
+  judgement.
 - **Reopen if:** reconstruct throughput at the cap falls below what
   TJ-D's fill scheduler requires to keep pace with chain growth; or
-  shared-queue wait plus transfer for a challenge request approaches
+  wait-for-a-slot plus transfer for a challenge request approaches
   `CHALLENGE_RESPONSE_BLOCKS`. Not reopened by coverage math at
   maturity — that quantity cannot answer this question.
 
@@ -843,7 +851,9 @@ not a parenthetical in the living contract.
 ### `SF-D10` — organic selection — RULED 2026-09-12
 
 Uniform memoryless draw over the holder set of shard `s`, read from the
-drawable snapshot. Per-fetch exclusion permitted. No persistent state.
+drawable snapshot, performed by the **organic scheduler**. Per-need
+exclusion permitted. No persistent state. `shekyl-p-fetch` does not
+draw; it is given a destination.
 
 The challenge caller does not consult this rule. The assignment is the
 selection. `P` already has that assignment from the chain (§3 derived
@@ -857,23 +867,23 @@ Three pins so "memoryless" is not underspecified:
    is the only stateless distribution with no bias, and it spreads any
    single daemon's need profile thinly across the set rather than
    concentrating it on one persona.
-2. **Per-fetch exclusion is not memory.** Within one fetch's retry
-   sequence, draw without replacement — do not immediately re-dial the
-   `P` that just timed out. Scratch state that dies with the fetch. No
-   persistence, no reorg interaction, no cross-daemon divergence,
-   nothing exploitable, and it saves the wasted circuit standup a
-   strictly with-replacement draw would sometimes spend. Strict
-   re-draw-with-replacement is wasteful; a persistent exclusion list
-   is the thing this ruling refuses.
+2. **Per-need exclusion is not memory.** Within one organic need's
+   retry sequence, draw without replacement — do not immediately
+   re-dial the `P` that just timed out. Scratch state that dies with
+   the need. No persistence, no reorg interaction, no cross-daemon
+   divergence, nothing exploitable, and it saves the wasted circuit
+   standup a strictly with-replacement draw would sometimes spend.
+   Strict re-draw-with-replacement is wasteful; a persistent exclusion
+   list is the thing this ruling refuses.
 3. **The fetch client forms no opinions.** Tor does not lack
    measurement — it has bandwidth authorities. What it lacks is
    client-side reputation. Measurement lives at the consensus layer;
    clients consume it without forming private opinions. Same
    architecture: the challenge system is the measurement authority;
-   the fetch client consumes the drawable snapshot and draws. Private
-   per-client reputation diverges, cannot be audited, and is shapeable
-   by whoever wants to be excluded. A privileged-`P` system is an
-   attack surface.
+   the organic scheduler consumes the drawable snapshot and draws;
+   `shekyl-p-fetch` dials whom it is given. Private per-client
+   reputation diverges, cannot be audited, and is shapeable by whoever
+   wants to be excluded. A privileged-`P` system is an attack surface.
 
 A timeout over Tor carries almost no information about `P`; the base
 failure rate swamps the signal. Memory keyed on that is a memory of
@@ -1088,13 +1098,14 @@ port a shared constant both sides read from `shekyl-curve-tree`,
 height, both callers; `SF-D5` RULED and amended),
 one failure taxonomy with two caller columns (`SF-D6` RULED: per-attempt
 handling is the client's; 404 is a completed exchange; no-endpoint is a
-non-row; organic draw bound `k` owed; `content-length` equals the
+non-row; organic draw bound `k` is `TJ-D`'s; `content-length` equals the
 constant signature-envelope length plus inner `framed_len()`, with
 disagreement known before segment bytes; parse, root mismatch, and bad
 countersignature are typed separately), one fixed client
-in-flight cap and one shared caller-blind queue (`SF-D7` RULED; integer
-pinned by the implementation PR from SP-T3's upper bound and its own
-lower-bound throughput judgement), the stable bond-record hybrid
+in-flight cap and one shared admission path (`SF-D7` RULED:
+`fetch(destination, shard_id, header)`; integer pinned by the
+implementation PR from SP-T3's upper bound and its own lower-bound
+throughput judgement), the stable bond-record hybrid
 identity signing key (`SF-D13`), the signed message
 `nonce[32] ‖ height_le[8] ‖ shard_id_le[8]` under a new versioned
 domain (challenge tuple not in the fetch; pass record carries the
@@ -1102,9 +1113,10 @@ random), the outer
 fixed-length signature envelope ahead of the unchanged `RF-D4` frame,
 and the verified-or-refused typed fetch result (`SF-D8` RULED), and
 one organic
-selection rule: uniform memoryless draw over the drawable holders of
-`s`, per-fetch exclusion permitted, no persistent state (`SF-D10`);
-verify-failure is observability, never a selection input (`SF-D12`).
+selection rule, on the scheduler not the fetch crate: uniform
+memoryless draw over the drawable holders of `s`, per-need exclusion
+permitted, no persistent state (`SF-D10`); verify-failure is
+observability, never a selection input (`SF-D12`).
 The challenge is a scheduler of that client. The W₂ measurement plan
 is named as Round 0 / pre-flight of the *implementation* PR, over
 daemon→wallet — never as a second protocol round. The first
