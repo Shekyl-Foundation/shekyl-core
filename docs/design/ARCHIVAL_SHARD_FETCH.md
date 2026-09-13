@@ -742,6 +742,18 @@ The fetch implementation PR lands the callback and the envelope;
 SH-2 wires the live secret. The unsigned HTTP half is not a
 substitute for a countersigned loopback test.
 
+**Named residency: the serving host becomes a hot signer.** Every
+read now costs a hybrid signature with `P`'s identity secret, so that
+secret is resident in the serving process for as long as it serves —
+derived, scoped, and zeroized under rules 35 and 36, behind the
+callback, never in `shekyl-p-serve`'s own types. This is consistent
+with the custody model already accepted (`EndpointUpdate` assumes host
+compromise yields the hot key), but it is a residency the serving task
+does not have today: `shekyl-p-serve` was built never to hold a secret.
+It is named here so the implementation PR and SH-2 design the
+residency rather than discover it the first time the serve path needs
+to sign.
+
 This ruling selects the **key only**. It does not inherit
 `verify_pass_countersignature`'s current nonce-only message from
 `shekyl-archival-retention/src/attestation_wire.rs`: caller-supplied
@@ -797,9 +809,11 @@ three the same scheduler consequence while preserving the diagnostic
 distinction.
 
 The successful type retains the countersignature beside the verified
-shard. The witness caller keeps it for pass-record construction; the
-organic caller discards it after verification. Both receive the same
-type from the same call. Pass-record construction itself is **out of
+shard. Both callers verify it — "verified-or-refused" is caller-blind,
+so a `P` that signs badly is refused by every requester, which is what
+keeps the client uniform. The witness caller then keeps the signature
+for pass-record construction; the organic caller has no further use
+for it. Both receive the same type from the same call. Pass-record construction itself is **out of
 scope** — the type this round names is the input that round consumes.
 Reconstruct's "install these leaves" is also out of scope (TJ-D
 storage); it consumes the same typed result.
@@ -927,7 +941,14 @@ Three pins so "memoryless" is not underspecified:
    divergence, nothing exploitable, and it saves the wasted circuit
    standup a strictly with-replacement draw would sometimes spend.
    Strict re-draw-with-replacement is wasteful; a persistent exclusion
-   list is the thing this ruling refuses.
+   list is the thing this ruling refuses. **The set lives exactly as
+   long as the need does, and the need's lifetime is `TJ-D`'s.** A
+   need that backs off and retries for hours carries an hours-long
+   exclusion set, which is the edge of "scratch." So the `client-need`
+   handoff hands `TJ-D` a privacy-relevant bound, not only a
+   scheduling one: how long a need lives is also how long a daemon
+   remembers which `P`s it has already tried for `s`, and it is not to
+   be set on fill-throughput grounds alone.
 3. **The fetch client forms no opinions.** Tor does not lack
    measurement — it has bandwidth authorities. What it lacks is
    client-side reputation. Measurement lives at the consensus layer;

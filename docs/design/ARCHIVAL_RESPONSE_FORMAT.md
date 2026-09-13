@@ -24,7 +24,11 @@ HTTP body is a fixed-length outer envelope holding the canonical
 headers stay exactly `content-type` and `content-length`, which covers
 envelope plus frame. The 2026-08-21 status above remains the record of
 what landed, not a claim that the v2 message or the envelope is
-implemented.
+implemented. **The `RF-D4` section below is left as the CLOSED record
+of the inner frame; where it calls that frame the whole body ("no
+envelope", `served response :=`) it is superseded in scope by `SF-D8`
+and is rewritten by the implementation PR that lands the envelope.**
+Each superseded line carries its own marker.
 
 *(This line read "implementation pending" until 2026-08-23. It was stale from
 2026-08-21, when PR #522 merged: the doc led the PR per this round's own
@@ -1221,11 +1225,14 @@ subject. The byte-parity arm is owed regardless of how the rest of `A` lands.
 
 ---
 
-### `RF-D4` — artifact B, the served payload
+### `RF-D4` — artifact B, the served payload — INNER FRAME; SCOPE SUPERSEDED 2026-09-13 by `SF-D8`
 
-**Today there is no format.** `shekyl-p-serve` streams a raw `FrozenSegmentBody`
-— a flat concatenation of leaf bytes — with `content-length = (end − next) ·
-LEAF_BYTES` (`redb_backend.rs:363-365`). No envelope, no fields.
+**At round open (2026-08-18) there was no format.** `shekyl-p-serve` streamed
+a raw `FrozenSegmentBody` — a flat concatenation of leaf bytes — with
+`content-length = (end − next) · LEAF_BYTES` (`redb_backend.rs:363-365`). No
+envelope, no fields. *(Records-was: the state this section set out to fix.
+Since 2026-09-13 `SF-D8` places a fixed-length `HybridSignature` envelope
+ahead of the frame this section defines; that envelope is ruled, not landed.)*
 
 **`content-length` cannot be TJ-H's reserved header**, for three reasons:
 
@@ -1239,15 +1246,19 @@ LEAF_BYTES` (`redb_backend.rs:363-365`). No envelope, no fields.
    field *in the frozen format*; anything living only in HTTP/1.1 headers does
    not survive a transport change.
 
-**Draft: one length field, ahead of the body.**
+**Draft: one length field, ahead of the body.** *(SCOPE SUPERSEDED
+2026-09-13: this grammar is the **inner frame**, not the whole HTTP body.
+Per `SF-D8` the body is `HybridSignature ‖ <this frame>`; the frame's bytes
+are unchanged. Rewritten by the implementation PR.)*
 
 ```text
-served response := leaf_count  varint    (≤ leaves_per_segment = 25 992)
+inner frame     := leaf_count  varint    (≤ leaves_per_segment = 25 992)
                  ‖ padding_len varint
                  ‖ segment_bytes         (leaf_count × LEAF_BYTES, exactly)
                  ‖ padding_bytes         (padding_len, exactly)
 
 hashed against R_k: segment_bytes ONLY
+HTTP body (SF-D8, 2026-09-13, not landed) := HybridSignature ‖ inner frame
 ```
 
 **`varint` names one encoding, and this document has to say which.** It is the
