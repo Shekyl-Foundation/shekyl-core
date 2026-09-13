@@ -1853,10 +1853,18 @@ consensus question: *does anything read it after admission?*
   (`StoreShardProvider` sits behind a trait so the store could change
   under it). **Sub-PR 1, now:** `shekyl-p-fetch`'s dial, header,
   envelope, SOCKS reuse, in-flight cap and miss/timeout taxonomy,
-  against a body type of opaque bytes and a single
-  `verify(body, expected) -> Result` hole. **Sub-PR 2, blocked on
-  `PDM-Q6`:** the frame codec and the per-tx verify; that row carries
-  the Q6 dependency. Rule 26's sub-PR line *is* the seam. This defuses
+  **and the envelope's countersignature verify in full** — against a
+  body type of opaque bytes and a single **content-verify** hole
+  `verify(body, expected) -> Result`. There are two verifies on the
+  fetch path and they have different fates: the countersignature (`P`
+  signed `nonce ‖ height ‖ shard_id` under the bond-record key) is
+  transport authenticity, unit-independent, and is sub-PR 1's in full;
+  the content-verify (bytes against `R_k` today, against
+  `txs_prunable_hash` under Q6) is the thing that changes with the
+  unit and is the hole. The countersignature check is not inside the
+  hole, and the hole's `expected` is opaque until Q6 names it.
+  **Sub-PR 2, blocked on `PDM-Q6`:** the frame codec and the per-tx
+  content-verify; that row carries the Q6 dependency. Rule 26's sub-PR line *is* the seam. This defuses
   the real hazard, which is not wasted work: a client built now against
   `recompute_segment_r_k` becomes the thing Q6 has to argue *against*
   instead of the thing Q6 rules *on*. **Falsifier (rule 15, so the
