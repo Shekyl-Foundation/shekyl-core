@@ -20,10 +20,10 @@ it is not yet the design.
 Citations below were read at that sha. Do not inherit line numbers from the
 opening prompt (written at `1c6238bf8`).
 
-**Family:** `PDM-Q` — tokens `PDM-Q1`…`PDM-Q10` (questions), `PDM-Q-F*`
+**Family:** `PDM-Q` — tokens `PDM-Q1`…`PDM-Q11` (questions), `PDM-Q-F*`
 (findings), `PDM-Q-S0` (sequencing constraint). Registered in
 [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 at birth (rule 94).
-Family cell `**PDM-Q1…PDM-Q10**` parses to `PDM-Q`. Distinct from
+Family cell `**PDM-Q1…PDM-Q11**` parses to `PDM-Q`. Distinct from
 `**PD-A…PD-F**` (parses `PD-A`, the reopen-(d) probe).
 
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
@@ -267,6 +267,12 @@ without saying what the archival market does during it (bonds,
 challenges, whether the possession test is live) has not answered Q2.
 The §3 free-riding bullet is discharged against this duration, not
 against the rewrite calendar.
+
+**Reorg-depth floor (F10, restated 2026-09-13):** not a depth — a
+predicate on the segment's own leaves: *discard only once the highest
+`eligible_height` among the segment's leaves is below `tip − D_max`*,
+asserted at the discard decision. `D_max` is `PDM-Q11`'s constant; Q2
+cannot be ruled before it exists.
 
 ### `PDM-Q3` OPEN — Residual consensus reads after TJ-A
 
@@ -543,6 +549,74 @@ do not hold shard `s`" discloses nothing the operator did not configure.
 Q8's query-privacy concern lives on the *fetch* leg to a third-party
 archiver, not here.
 
+### `PDM-Q11` OPEN — `D_max`, the consensus reorg cap
+
+Minted 2026-09-13 because two rulings derive from one number that
+does not exist: Q2's discard floor (F10) and Q1's journal retirement
+floor (F19) both carry a `D_max` term, and at this pin there is no
+consensus-side bound on accepted fork depth —
+`ARCHIVAL_REORG_DEPTH_BLOCKS = 720` is archival-domain
+(`shekyl-archival-retention`), `max_reorg_depth` is an engine-side
+preference (`shekyl-engine-prefs/src/schema.rs:425`, default 3),
+neither is a rule a validator applies to a competing chain. A
+constant two independent rulings derive from is a constant in its own
+right; burying it in whichever question is ruled first is how it
+inherits that question's scope. It is carried here until it is ruled;
+**it is not archival-scoped**, and its ruling may relocate to a
+consensus-constants family — if it does, this question closes by
+reference.
+
+**What `D_max` is, stated so the derivation is possible.** It does
+not raise attack cost — an adversary who can rewrite `k` blocks can
+rewrite them whether or not nodes accept the result. It changes the
+*failure mode*: below `D_max` a successful rewrite lands silently as
+an ordinary reorg; above it nodes refuse, the network visibly splits,
+and resolution moves out of band where humans can see it. `D_max` is
+a **detectability boundary**, not a security margin.
+
+**Candidate derivation (review, 2026-09-13; not ruled):**
+
+- *Adversary, positioned.* Anyone who can rent RandomX-capable CPU.
+  Pre-genesis there is no sunk-ASIC cost and the rentable pool exceeds
+  a young chain's hashrate by orders of magnitude — which is why the
+  containment layer is permanently load-bearing here rather than a
+  Monero carry. The adversary buys some depth `d_afford` cheaply; the
+  requirement is `D_max < d_afford`, because every depth below `D_max`
+  is bought silently.
+- *Honest floor.* Fork races at 120 s blocks
+  (`BLOCK_INTERVAL_SECS = 120`,
+  `shekyl-relay-privacy/tests/f_prime_admissible_region.rs:368`) are
+  1–3 blocks. The binding case is a partition where both sides mine: a
+  partition of duration `T` yields at most `T / 120 s` on the losing
+  side, less if that side's hashrate dropped. So
+  `D_max ≥ T_tolerable / 120 s`.
+- Both bounds land in **hours**. The honest floor and the adversary
+  ceiling are close together and there is no wide safe band — a
+  property of a CPU-mined genesis chain, not a flaw in the derivation.
+- *Provisional value: `D_max = 720` (24 h at 120 s).* The argument is
+  **coordination, stated as such, not dressed as security**: the
+  archival domain has frozen its assumptions against 720 —
+  `gf7_sealing_run.rs:91-93` premines `720 + 30`, `pscan/start.rs:93`
+  trails the tip by it, `serve_set_source.rs:166` reasons "far deeper
+  than" it — and a different consensus number creates the drift pair
+  the constants policy rejects (`consensus_constants.json:30`, "ONE
+  authority and no drift pair"). Recorded alongside: 720 sits at the
+  *top* of the honest range and plausibly above `d_afford` for a chain
+  in its first year; the security argument wants it shallower (180 =
+  6 h is defensible on the honest side and better on the adversary
+  side).
+- *Re-pin gate.* Shape frozen, numeric provisional, on the
+  `bond_duration` precedent — pinned to the **same Round-2 testnet
+  re-pin gate as `archival_failure_window_n`**, since both are numbers
+  only real network behaviour settles and both feed F19's floor.
+
+**What a ruling owes:** the constant's home (config authority, single
+read path, no generated-header twin); the validator-side check that
+refuses a fork deeper than `D_max` and the verdict it emits; the
+consequences for Q2's predicate and F19's floor stated as recomputed
+values, not literals; and the test that goes red when a fork of
+`D_max + 1` is accepted.
+
 ---
 
 ## 3. Adversarial work required before any `PDM-Q*` ruling is recorded
@@ -595,7 +669,9 @@ Named so they cannot be discovered after a ruling. Not answered here.
   exists at this pin (`ARCHIVAL_REORG_DEPTH_BLOCKS` = 720 is
   archival-domain, `shekyl-archival-retention`;
   `NetworkSafetyConstants.max_reorg_depth` is engine-side,
-  `shekyl-engine-state/src/safety_constants.rs:61`).
+  `shekyl-engine-state/src/safety_constants.rs:61`). That missing cap
+  is `PDM-Q11` (`D_max`), minted 2026-09-13 because F10's discard
+  floor and F19's journal horizon both derive from it.
 
 ---
 
@@ -776,6 +852,25 @@ Named now so they are not discovered later.
   there is no consensus-side reorg cap at this pin — see §3 *Reorg*).
   Precision fix to F7's "one deletion site": one function, two loops
   (`:9278` trim-to-empty, `:9392`).
+  **Restated 2026-09-13 (review): the discard floor is a predicate,
+  not a depth.** Trim is height-granular (it reverts blocks, bounded
+  by `D_max`); discard is leaf-granular (`SEGMENT_LEAF_COUNT = 25,992`,
+  [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
+  line 84, segments spanning `[k·E, (k+1)·E)` in leaf positions).
+  Converting one to the other needs an outputs-per-block rate — a
+  parameter derived from a mechanism that has not run. State the
+  constraint in the only unit where it is exact: *a segment may be
+  discarded only once the highest `eligible_height` among its
+  constituent leaves is below `tip − D_max`.* Checkable against data
+  the node already holds, needs no rate estimate, and does not drift
+  with throughput — under low output rates a segment spans many blocks
+  and waits; under high rates it clears quickly; both are correct
+  without retuning. **Enforcement point:** the predicate is asserted
+  where the discard is *decided*, not where the trim discovers it —
+  today `:9361` throws `DB_ERROR` mid-write-txn, so a violated floor
+  would surface as a corrupted write rather than a refused discard.
+  `D_max` itself is `PDM-Q11`; F10 and F19 are blocked on the same
+  missing constant.
 - **PDM-Q-F11.** DRS-0 slice A's accumulator freeze contradicts set-B
   discard on three tables.
   `rust/shekyl-chain-store/src/accumulator/class.rs:140-142`:
@@ -947,9 +1042,11 @@ consensus question: *does anything read it after admission?*
   reached only via `archival_bond_holds_shard_of` (`:5328`; calls at
   `:5385`, `:5388`), whose `at_height` is always an `h_fire`:
   1. *Serve-credit consumer* (admission): `blockchain.cpp:5270`
-     → `archival_bond_holds_shard` (`:5315` → `:5325`). Bounded by the
-     **credit deadline**: the vin is rejected if
-     `current_height > h_close` (`blockchain.cpp:5222-5226`), and
+     → `archival_bond_holds_shard` (`db_lmdb.cpp:5315` → `:5325`).
+     Bounded by the **credit deadline**: the vin is rejected if
+     `current_height > h_close` (`blockchain.cpp:5222-5226`, verdict
+     `POLICY_OR_STATE` — the right class, unlike the
+     `INTERNAL_FAILURE` at `:5327` that F8b flagged), and
      `h_fire ∈ (0, H_close]`, so `at_height ≥ tip − SETTLEMENT_EPOCH_BLOCKS`
      at admission. Not a check on `at_height`; a consequence of a
      check on the epoch.
@@ -965,12 +1062,32 @@ consensus question: *does anything read it after admission?*
      **back** `n − 1` epochs (`--epoch` loop, `:5860-5864`;
      `n = 13`, `config/consensus_constants.json:32`). Bounded by the
      **watermark** in steady state:
-     `at_height ≥ tip − (CHALLENGE_RESOLUTION_BLOCKS + n·SETTLEMENT_EPOCH_BLOCKS)`
-     = `tip − 140,000` at the pinned constants (both 10,000), plus the
-     reorg depth the pop path can rewind the watermark by.
+     `at_height ≥ tip − (CHALLENGE_RESOLUTION_BLOCKS + n·SETTLEMENT_EPOCH_BLOCKS + D_max)`,
+     where `D_max` is the depth the pop path can rewind the watermark
+     by — the consensus reorg cap, which **does not exist at this pin**
+     (`PDM-Q11`).
 
-  So the horizon exists and is `tip − (CRB + n·SEB + reorg)`; Q1 can
-  name it. What Q1 cannot do is name it *alone*: on both paths the
+  So the horizon exists as a **formula**, `tip − (CRB + n·SEB + D_max)`,
+  and Q1 can name it. Three things about the number it evaluates to:
+  - **`n` is PROVISIONAL, not frozen.**
+    `config/consensus_constants.json:30`: shape genesis-frozen,
+    numerics re-pinned at the Round-2 testnet stressnet against the
+    measured outage-duration CDF, on the `bond_duration` precedent.
+    If `n` moves, the floor moves. The same comment records that C++
+    already reads `m`/`n` through `shekyl_archival_failure_window_params`
+    precisely so there is one authority and no drift pair — the
+    horizon is **computed** through that path, never a literal.
+  - **`D_max` has no constant behind it** (F10; §3 *Reorg*). It is the
+    term with nothing behind it, so it is the one that must not round
+    to zero. A number stated without it — `tip − 140,000` — is wrong by
+    the one term that is not yet ruled.
+  - At the provisional values (`CRB = SEB = 10,000`, `n = 13`,
+    `D_max = 720` per the `PDM-Q11` candidate) the floor is
+    `tip − 140,720`. A test pinned to that literal goes stale the
+    moment Round-2 moves `n` or `D_max`; a test that recomputes goes
+    red only when the formula is wrong.
+
+  What Q1 cannot do is name the horizon *alone*: on both paths the
   bound is emergent (a deadline check on the epoch; a monotone counter
   catching up), and a node that scans from a cold watermark
   (`u64::MAX → next_epoch = 0`, `:6203`) evaluates every epoch at its
@@ -1091,8 +1208,8 @@ consensus question: *does anything read it after admission?*
 | ID | Question | State |
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
-| `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory) | OPEN — widened 2026-09-13; ruled after Q6 (F13) |
-| `PDM-Q2` | Trigger, depth, free-regime duration, reorg-depth floor (F10) | OPEN |
+| `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory; journal horizon `tip − (CRB + n·SEB + D_max)`, F19) | OPEN — widened 2026-09-13; ruled after Q6 (F13); horizon blocked on Q11 |
+| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` vs `tip − D_max` (F10) | OPEN — blocked on Q11 |
 | `PDM-Q3` | Residual consensus reads after TJ-A | OPEN — today not node-local (`PDM-Q-F8`) |
 | `PDM-Q4` | Reconstruction path | OPEN |
 | `PDM-Q5` | Cold sync and bootstrap | OPEN |
@@ -1101,6 +1218,7 @@ consensus question: *does anything read it after admission?*
 | `PDM-Q8` | Privacy (density vs query) | OPEN |
 | `PDM-Q9` | Archiver's retention set: source, binding, lapse | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); binding and lapse tail OPEN |
 | `PDM-Q10` | RPC contract for "not retained" | OPEN |
+| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2) and F19 (Q1) both derive from; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; candidate 720 (24 h) as coordination with the archival domain, security wants shallower; numeric pinned to the Round-2 re-pin gate with `n` |
 
 When this round proposes a test, it will name the edit that makes that
 test red. A red test that cannot be made red by a specific edit is not
