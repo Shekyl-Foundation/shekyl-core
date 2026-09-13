@@ -3,6 +3,22 @@
 **Status:** **CLOSED 2026-08-21** — every disposition `RF-D1`…`RF-D10` is
 ruled *and* implemented on `dev`. Round opened 2026-08-18.
 
+**POST-CLOSE FINDING 2026-09-13 — RULED under `SF-D8` (message), CARRIER
+OPEN:** the implemented nonce-only countersignature is complete only while
+the server derives or validates the nonce.
+[`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) `SF-D5` now makes the
+nonce opaque caller-supplied request data so organic and challenge reads
+share one request shape. In that topology, nonce-only does not bind the
+signature to the server-parsed `/shard/{id}`: a witness can request a held
+decoy while supplying the challenge nonce for an unheld target. `SF-D8`
+RULED 2026-09-13 that `P` signs `nonce[32] ‖ shard_id_le[8]` — the opaque
+header bytes followed by the `u64` it parsed from the route — under a new
+versioned domain; the v1 nonce-only message is not reused for the fetch
+response, and `verify_pass_countersignature` is amended to the v2 message
+by the implementation PR. The response carrier for the two signature legs
+is still open under `SF-D8`. The 2026-08-21 status above remains the record
+of what landed, not a claim that the v2 message is implemented.
+
 *(This line read "implementation pending" until 2026-08-23. It was stale from
 2026-08-21, when PR #522 merged: the doc led the PR per this round's own
 practice, and nothing updated the header when the code landed behind it. The
@@ -16,7 +32,7 @@ and leaving the index is how the next reader still gets the wrong answer.)*
 which a round has "landed":**
 
 | On `dev` | PR | Dispositions |
-|---|---|---|
+| --- | --- | --- |
 | 2026-08-19 | #504 | `RF-D3`, `RF-D5` |
 | 2026-08-21 | #522 | `RF-D1`, `RF-D2`, `RF-D4`, `RF-D6`…`RF-D10` — artifacts A and B, the C++ vin, the pruned half, and the review round |
 
@@ -918,8 +934,15 @@ precise state [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.m
 §9 (ruled 2026-07-29, *"the test IS a read"*) exists to prevent, because a `P`
 that can distinguish tests from reads fast-paths the tests and lets real reads
 rot. The nonce design gives indistinguishability **by construction** — `P`
-countersigns every request over an opaque 32 bytes. The opening destroys it,
-because its preimage is not opaque: it names a leaf.
+countersigns every request over opaque bytes. **LIMIT ADDED 2026-09-13:** this
+sentence rules caller indistinguishability, not route binding. Once `SF-D5`
+makes those bytes caller-supplied, signing them alone lets a witness send the
+target nonce on a held-decoy `/shard/{id}` and obtain a signature that verifies
+for an unheld target. `SF-D8` therefore binds the opaque nonce to the
+server-parsed shard id (`nonce ‖ shard_id`, RULED 2026-09-13) while keeping
+the nonce itself uninterpreted. The
+opening still destroys indistinguishability because its preimage is not
+opaque: it names a leaf.
 
 **The rescue branch is closed too.** Letting the *witness* compute the opening
 and carry it unsigned would keep `P` ignorant — and buys nothing, because a
