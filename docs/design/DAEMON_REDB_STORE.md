@@ -609,7 +609,7 @@ below is written out so the partition is a set, not a description of one.
 | **S-ARCH** | Archival reads/writes reached from `blockchain.cpp` | 18 | `archival_bond_all_last_served_epochs` `archival_bond_good_through` `archival_bond_holds_shard` `archival_bond_join_epoch` `archival_bond_last_served_epochs` `archival_serve_credit_pass_count` `archival_shard_freeze_height` `gather_archival_emission_epoch_snapshot` `get_archival_alt_attestation_witness` `get_archival_attestation_witness_at_height` `get_archival_bond_hybrid_pubkey` `get_archival_bond_value` `get_archival_last_slash_epoch` `get_archival_prune_watermark_epoch` `get_archival_r_market` `get_archival_shard_segment_at_height` `set_archival_serve_credit_bit` `store_archival_alt_attestation_witness` | **7** — Largest surface (18) and **gated on the P0b journal audit** — its write paths are the ones whose atomicity is still being characterised. Extracting before that audit ports an unaudited contract. | Cursor surface for retention (E4) |
 | **S-POOL** | Tx pool | 8 | `add_txpool_tx` `for_all_txpool_txes` `get_txpool_tx_blob` `get_txpool_tx_count` `get_txpool_tx_meta` `remove_txpool_tx` `txpool_tx_matches_category` `update_txpool_tx` | **8** — No consensus state and no dependency on the chain surfaces, so it can parallelize with 4–7 if there is capacity. Ordered here rather than earlier because it is privacy-sensitive (Dandelion++) and deserves attention that is not competing with the consensus path. | Privacy-sensitive (Dandelion++) |
 | **S-ALT** | Alt chain | 6 | `add_alt_block` `drop_alt_blocks` `for_all_alt_blocks` `get_alt_block` `get_alt_block_count` `remove_alt_block` | **9** — Alt-chain storage depends on both chain surfaces being settled; its reorg path is the one place both are exercised together. |  |
-| **S-PRUNE** | Pruning | 6 | `check_pruning` `get_blockchain_pruning_seed` `pop_target_allowed` `prune_blockchain` `prune_tx_data` `update_pruning` | **10** — Operates destructively over what every other surface defines. Last because a prune contract written against half-ported surfaces would have to be rewritten when the rest land. | Bootstrap / prune tools |
+| **S-PRUNE** | Pruning | 6 | `check_pruning` `get_blockchain_pruning_seed` `pop_target_allowed` `prune_blockchain` `prune_tx_data` `update_pruning` | **NOT EXTRACTED** — five of the six are the Monero-era stripe engine, superseded before they can be ported (see the PDM note below). `pop_target_allowed` is the exception and needs a home. | Bootstrap / prune tools |
 
 **This is analysis, and it stops here (CSR-4, ruled 2026-09-01, status line
 §0).** DRS-C does not ship as C++ refactor PRs. The partition is the scoping
@@ -622,6 +622,49 @@ exists to scope E1's increments rather than to start them.
 authority on what a method does (§0, :78). Where the partition and
 `CONSENSUS_RULE_CENSUS.md` disagree about a method's role, the census wins and
 the disagreement is a finding.
+
+**S-PRUNE is not extracted, and that is a supersession rather than a
+deferral (recorded 2026-09-13).** PR #723's pruned-daemon-mode round rules that
+the C++ stripe engine is not deleted until that design completes, may serve as
+**reference** for the Rust cutover, and that removal of the Monero-era mechanism
+(`prune_worker`, `pruning_seed`, `CRYPTONOTE_PRUNING_*`) happens at `DRS-E*` —
+not as a C++ deletion now. `PDM-Q-F17` scopes "reference" narrowly: **not** the
+prune worker, but the seed arithmetic (`src/common/pruning.h`), the wire
+advertisement (`CORE_SYNC_DATA`, peerlist) and complement-seeking peer
+selection. So S-PRUNE's order is **not extracted**, not "later" — and the
+distinction is load-bearing, because two lanes read rules 60/16 as licence to
+delete that code and #723 overturns that reading.
+
+**Grounding, stated because it changes how much this is worth relying on:**
+`PDM-Q-S0` and `PDM-Q7` are ruled, but **PR #723 is OPEN and unmerged as of
+2026-09-13** — `ARCHIVAL_PRUNED_DAEMON_MODE.md` does not exist on `dev`, which
+is why it is named here in prose rather than linked. Verified against the
+round's own text on `docs/pruned-daemon-mode-round`, not from a relayed summary.
+
+**The supersession does not cover the whole surface, and the remainder is a
+scoping problem this note creates rather than solves.** Five methods
+(`check_pruning`, `get_blockchain_pruning_seed`, `prune_blockchain`,
+`prune_tx_data`, `update_pruning`) are stripe-era and die with it.
+`pop_target_allowed` is **not** — it answers a question about Shekyl's own
+archival prune watermark (C2-R1b-Q1c), which PDM does not retire. Parked in a
+surface that is never extracted, it becomes a method the pop path needs and no
+increment owns. It is **deliberately not re-homed here**: #723 is an open round,
+and re-partitioning a map on an unmerged ruling is how a partition acquires a
+dependency nobody can see. The falsifier below already names the condition, and
+this sharpens it — if E1 cannot extract the pop path without
+`pop_target_allowed`, that moves it, and the PDM supersession makes that
+outcome likelier rather than less.
+
+**The three tables ruled not-to-port do not touch this vocabulary — derived,
+not assumed.** `txs_prunable_tip`, `txs` and `hf_starting_heights` are ruled out
+of the Rust store (E1's target is 46 tables, not 49). **Zero** of the 102
+methods names any of them: they are reached only through
+`BlockchainLMDB::add_transaction_data`, `remove_transaction_data`,
+`prune_worker`, `open` and `drop_hard_fork_info`, none of which is in
+`blockchain.cpp`'s vocabulary. The count is therefore unchanged at 102. What
+does change is narrower and belongs to S-CHAIN-W: `txs_prunable_tip` is written
+on the insert path beneath `add_block`, so dropping it shrinks what that
+surface's writer must reproduce without removing any method from its row.
 
 **One judgment call, named so it can be overturned:** `pop_target_allowed` is
 assigned to **S-PRUNE** rather than S-CHAIN-W. It is consulted on the pop path,
