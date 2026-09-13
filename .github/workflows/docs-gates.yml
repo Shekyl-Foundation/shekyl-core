@@ -220,12 +220,20 @@ jobs:
         run: python3 scripts/ci/test_check_shell_gate_exits.py
 
       - name: Run DRS-C surface map gate
-        # Tier-A A9: blockchain.cpp's `m_db->` vocabulary is partitioned into
+        # Tier-A A9: blockchain.cpp's store vocabulary is partitioned into
         # named validation surfaces, every method in exactly one. The gate
         # RE-DERIVES the vocabulary from the tree it runs on rather than
-        # trusting a verification stamp: §3.5's stamp stayed correct in the
-        # document at 97 while the tree moved to 99, and the membership moved
-        # by twelve (+7/-5) to shift the total by two.
+        # trusting a verification stamp: §3.5's stamp sat at 97 while the tree
+        # had moved to 102, and the membership moved further than the total
+        # (+7/-3 for a net +4).
+        #
+        # It derives the alias SET from `BlockchainDB *`/`&` declarations
+        # instead of matching one token. The first version matched `m_db->` --
+        # the same derivation that built the table -- so it was green BY
+        # CONSTRUCTION over calls made through any other name, and missed three
+        # live methods. Receiver shapes the derivation cannot follow
+        # (`get_db()`, an `auto` binding, a dereferenced call) are REFUSED, so
+        # a new one fails loudly instead of shrinking the vocabulary.
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_drs_c_surface_map.py
