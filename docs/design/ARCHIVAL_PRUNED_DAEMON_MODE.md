@@ -21,7 +21,11 @@ skeleton must be a release-carried checkpoint on the `assumevalid`
 argument, **not** `tip − D_max` — a tip-relative horizon lets a
 heavier invalid chain split the network by sync date; three bands;
 the trust-below fallback is REJECTED). `PDM-Q4` collapses: no
-chain-following read reaches an archiver. `PDM-Q12` (freeze pipeline
+chain-following read reaches an archiver for a node with downtime
+under **`W`**, the universal bytes window — minted as Q2's ruling
+variable (`PDM-Q-F24`: it had silently inherited `D_max`, which would
+put every node with a day's downtime on the archival market; floor
+`D_max`, candidate F19's ~195-day retirement floor). `PDM-Q12` (freeze pipeline
 and wallet-side `LeafStore` under Q6's unit) is minted OPEN.
 `PDM-Q-S0` is RULED. This is the design home TJ-D named; it is not
 yet the design.
@@ -285,6 +289,61 @@ predicate on the segment's own leaves: *discard only once the highest
 asserted at the discard decision. `D_max` is `PDM-Q11`'s constant; Q2
 cannot be ruled before it exists.
 
+**`W`, the universal bytes window (minted 2026-09-13, `PDM-Q-F24`) —
+Q2's actual ruling variable, and it is not `D_max`.** The charter had
+let the window every daemon keeps full bodies for inherit `D_max`
+silently (Q4's "uniform `D_max` window", Q5's band 3). That cannot
+stand: a node down longer than the window returns with an anchored
+chain — `D_max` binds, the anchor is satisfied — and needs blocks
+`(old_tip, new_tip]`; bodies for `(new_tip − W, new_tip]` come from
+peers, bodies for `(old_tip, new_tip − W]` are beyond the window on
+**every** ordinary peer (Q8's uniformity), so it enters band 2 and
+fetches from archivers to verify blocks it missed. At `W = D_max =
+720` that is every node with more than a day of downtime — reboots,
+ISP outages, a laptop closed for a long weekend: the population, not
+an edge case. **`D_max` and `W` have opposite pressures and must not
+share a value.** `D_max` is a reorg parameter derived from adversary
+economics that push it *shallow*; `W` is a downtime-tolerance
+parameter with **no adversary-side ceiling** — a large `W` helps no
+attacker, it only reduces scarcity. Bounds:
+
+- *Floor:* `D_max` (F10 — pops must be able to re-pool full
+  transactions; F15's admission-only floor is inside this).
+- *Honest-node argument:* how long an honest node may be down before
+  it should need an archiver. Same shape as `D_max`'s partition
+  argument but generous — days to weeks, not hours — because nothing
+  on the adversary side punishes generosity.
+- *Ceiling:* economic, not security — the point at which so little of
+  the chain lies beyond `W` that the market has nothing to sell. This
+  is the density-versus-query trade the original Q8 posed, given a
+  concrete meaning: `W` sets **both** downtime tolerance and how much
+  of the chain is scarce, and it *is* the free-regime duration above
+  (nothing is scarce until the chain is `W` blocks old).
+- *Candidate — one horizon, not two:* F19's retirement floor,
+  `tip − (CRB + n·SEB + D_max)` ≈ 140,720 blocks ≈ 195 days at the
+  pinned constants — the deepest thing any consensus read reaches.
+  Setting `W` there makes bodies and journals retire together (Q1's
+  horizon and Q2's become one), and gives ~6 months of downtime
+  tolerance before a running node touches an archiver, comfortably
+  past anything an honest operator does by accident. It inherits
+  `n`'s PROVISIONAL status and the Round-2 re-pin gate, and is
+  computed through `shekyl_archival_failure_window_params`, never a
+  literal. The cost is disk: ~195 days of bodies universal, at
+  ~16.7 KB/tx (§9: ~6.1 KB prunable region + ~10.6 KB `pqc_auths` of a
+  ~17–18 KB 2-in/2-out) ≈ 2.35 GB per 1 tx/block, 23.5 GB per
+  10 tx/block, 235 GB per 100 tx/block. Q2 prices that against the
+  scarcity it removes and the free regime it lengthens.
+- *Uniformity, not consensus:* `W` decides no validity verdict, but
+  under Q8 the window is what every daemon answers identically inside,
+  so two releases with different `W` are distinguishable on the wire
+  during rollout. `W` changes are network-uniform releases, stated as
+  such (rule 71), and its home is beside `D_max`'s.
+
+Whatever the number, the convergence statement in §8 is corrected to
+**unconditional for running nodes with downtime under `W`, band 2 for
+the rest** — which makes `W` visible as the thing that decides how
+often the market is on the liveness path, where it should be.
+
 ### `PDM-Q3` OPEN — Residual consensus reads after TJ-A
 
 "Which shape does leaf discard take?" is the wrong question.
@@ -327,18 +386,26 @@ from the skeleton), under Q3 the residual consensus read set after
 TJ-A is expected empty, and under Q5's three-band model **no
 chain-following read ever reaches an archiver**: new-block
 verification uses the skeleton-derived state; reorg pops need full
-transactions, which are inside the uniform `D_max` window (F10's
-predicate); trim's leaves regenerate. A continuously-running node
-never contacts an archiver. What remains of Q4 is the list of
-**optional** fetches the daemon makes — Q5's band-2 body fill, Q9's
+transactions, which are inside the uniform bytes window `W ≥ D_max`
+(Q2, F10's predicate); trim's leaves regenerate. A running node whose
+downtime is under `W` never contacts an archiver; one down longer
+re-enters Q5's band 2 for the blocks it missed (`PDM-Q-F24` — which is
+why `W` is a minted parameter and not `D_max`). What remains of Q4 is
+the list of **optional-to-chain-following** fetches the daemon makes —
+Q5's band-2 body fill (fresh node, or returning node past `W`), Q9's
 recovery of its own retention exceptions, and history read-back
-(reveal-and-check) — and the statement that each is optional to
-chain-following. TJ-F's "verify-new-blocks runs on responder-supplied
-material + `R_k`" is reopened by this only in that there is no longer
-a responder in the new-block path; Q4's ruling says so and lists what
-TJ-F binds to instead. The membership-path assembly client
-([`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) item (b)) is a wallet
-concern over the skeleton, not a daemon fetch.
+(reveal-and-check) — and the TJ-F rebinding. **TJ-F rebinds to the
+per-tx verify** (sentence owed 2026-09-13, now stated): TJ-F
+(`ARCHIVAL_TEST_EQUALS_JOB_SEQUENCING.md:269`, "verification must fail
+against a poisoned leaf store") froze a *behaviour*, not a concept.
+Under Q6 there is no leaf store to poison and no responder in the
+new-block path, so the behaviour re-binds one unit over: **a body-fill
+read whose revealed bytes do not hash to the retained
+`txs_prunable_hash` / `txs_pqc_auth_hash` row must fail, loudly, and
+must not be silently skipped** — the same invariant, and the one Q5's
+`fetch_prunable_range` is verified against. The membership-path
+assembly client ([`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) item
+(b)) is a wallet concern over the skeleton, not a daemon fetch.
 
 ### `PDM-Q5` OPEN — Cold sync and bootstrap: the anchor question (restated 2026-09-13, `PDM-Q-F20`/`F23`)
 
@@ -391,11 +458,12 @@ Three bands:
 | Band | Range | Bytes from | Proofs |
 | --- | --- | --- | --- |
 | 1 | `≤ C` | skeleton, any peer | trusted with the binary; state built per F20 (c) |
-| 2 | `(C, tip − D_max]` | archivers, over the fetch primitive (onion) | fetched and verified per-tx against the retained hash rows |
-| 3 | `(tip − D_max, tip]` | ordinary peers, P2P, inside the uniform window (`PDM-Q8`) | verified as today |
+| 2 | `(C, tip − W]` | archivers, over the fetch primitive (onion) | fetched and verified per-tx against the retained hash rows |
+| 3 | `(tip − W, tip]` | ordinary peers, P2P, inside the uniform bytes window `W ≥ D_max` (Q2, `PDM-Q-F24`; `PDM-Q8`) | verified as today |
 
-Band 2 is **the release gap**: near zero on a current binary, larger
-on a stale one, and always **loud** ("unverified `[a, b)`", never a
+Band 2 is **the release gap** for a fresh node and **the downtime
+past `W`** for a returning one (`PDM-Q-F24`): near zero on a current
+binary with downtime under `W`, larger otherwise, and always **loud** ("unverified `[a, b)`", never a
 silent `INTERNAL_FAILURE` per F8b, never a quiet fall-through to
 trust-the-txid — `--sync-pruned-blocks`, `cryptonote_core.cpp:127-130`
 / `cryptonote_protocol_handler.inl:139-152`, is the inherited
@@ -1545,9 +1613,9 @@ consensus question: *does anything read it after admission?*
 
 ### Established by reading (2026-09-13, same pin — the serving-side and sync pass)
 
-- **PDM-Q-F20** (a)/(b) CORRECTED 2026-09-13, see end of entry; (c) stands. **Under Q6's unit, sync is the read — for band 2 only, after the anchor correction.** A fresh node
+- **PDM-Q-F20** — (a)/(b) CORRECTED 2026-09-13, see end of entry; (c) stands. **Under Q6's unit, sync is the read — for band 2 only, after the anchor correction.** A fresh node
   verifies every proof and PQC signature in history by default; under
-  Q6 no ordinary peer holds those bytes beyond `tip − D_max`, so every
+  Q6 no ordinary peer holds those bytes beyond `tip − W` (`W ≥ D_max`, Q2), so every
   fresh node's bootstrap is a read of the *entire* good from
   archivers. Three consequences. (a) *Coverage is chain liveness*: a
   range with no archiver is a range no new node can ever verify —
@@ -1638,6 +1706,25 @@ consensus question: *does anything read it after admission?*
   binds only once a node has an anchored chain; the JSON channel is a
   runtime trust path that bypasses the release-carried anchor and is a
   rule-15/60 deletion target (FOLLOWUPS row).
+- **PDM-Q-F24.** **The universal bytes window had silently inherited
+  `D_max`, and the convergence property was true only of a node that
+  never stops.** Q4's "uniform `D_max` window" and Q5's band 3
+  `(tip − D_max, tip]` set the window every daemon keeps full bodies
+  for to one day (Q11's candidate 720). A node returning from downtime
+  longer than the window has an anchored chain, so nothing in Q5's
+  argument stops it — but bodies for the blocks it missed beyond
+  `tip − W` are on no ordinary peer (Q8's uniformity), so it enters
+  band 2 and reads archivers to verify blocks the network has already
+  accepted. At one day that is the population of running nodes, not an
+  edge case. The two parameters have opposite pressures: `D_max` is
+  pushed *shallow* by adversary economics (Q11); the window has no
+  adversary-side ceiling and is pushed *deep* by honest downtime
+  tolerance, bounded only economically by how much of the chain stays
+  scarce. `W` is minted as Q2's ruling variable (floor `D_max`;
+  candidate F19's retirement floor so bodies and journals share one
+  horizon); §8's convergence statement corrected to *unconditional for
+  running nodes with downtime under `W`*; band table and F20
+  re-pointed. Steering-raised 2026-09-13.
 
 ### Retracted
 
@@ -1663,12 +1750,13 @@ consensus question: *does anything read it after admission?*
   retained set (starting from layer 0 / `m_curve_tree_leaves`, F7;
   widened to the leaf's derivation inputs, F12; §9's `CACHE` and
   `LOCAL-BOUNDED` rows, F16), the trigger (including the free-regime
-  duration, what the market does during it, and the reorg-depth floor,
-  F10 / F15), residual consensus reads after TJ-A (Q3),
-  reconstruction as the list of optional fetches (Q4), cold sync as
-  the anchor question — release-carried checkpoint, launch window,
-  release-gate full-verify step, band-2 egress, JSON-channel deletion,
-  ordering with Q11 (Q5, F20/F23),
+  duration, what the market does during it, the reorg-depth floor,
+  F10 / F15, and `W` the universal bytes window, F24), residual
+  consensus reads after TJ-A (Q3), reconstruction as the list of
+  optional fetches (Q4), cold sync as the anchor question —
+  release-carried checkpoint, launch window, release-gate full-verify
+  step, band-2 egress, JSON-channel deletion, ordering with Q11 (Q5,
+  F20/F23),
   stripe-engine residue at the cutover and unbonded exceptions (Q7),
   fetch-side privacy over onion (Q8's remaining half), the archiver's
   daemon-storage candidate, lapse tail, coverage floor and recovery
@@ -1693,10 +1781,10 @@ consensus question: *does anything read it after admission?*
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
 | `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory; journal horizon `tip − (CRB + n·SEB + D_max)`, F19) | OPEN — widened 2026-09-13; ruled after Q6 (F13); horizon blocked on Q11 |
-| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` vs `tip − D_max` (F10) | OPEN — blocked on Q11 |
+| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24) | OPEN — blocked on Q11 |
 | `PDM-Q3` | Residual consensus reads after TJ-A | OPEN — today not node-local (`PDM-Q-F8`) |
-| `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional | OPEN — collapsed 2026-09-13 (F20/F23); owes the TJ-F rebinding sentence |
-| `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − D_max]` filled from archivers; above from peers); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's |
+| `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | OPEN — collapsed 2026-09-13 (F20/F23/F24); TJ-F sentence stated |
+| `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's |
 | `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22) | OPEN — the round's subject 2026-09-13; ruled before Q1 |
 | `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; unbonded exceptions OPEN (candidate: permitted, serving needs the bond) |
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
@@ -1724,7 +1812,10 @@ Q1 starts from F7's boundary and does not stop at the leaf table
 (F12); the PR that rules Q1 corrects `db_lmdb.cpp:9922-9925` / `:9970`
 / `blockchain_db.h:2838`. Q2's ruling must state the free-regime
 duration, the market's behaviour during it, and the reorg-depth floor
-with trim's defined failure (F10) and F15's admission-only floor. Q3
+with trim's defined failure (F10) and F15's admission-only floor —
+and **`W`** (F24): floor `D_max`, the honest-downtime argument, the
+economic ceiling, priced in disk at ~16.7 KB/tx against the scarcity
+it removes; the F19 candidate makes Q1's and Q2's horizons one. Q3
 is the residual-set question after TJ-A, with an instrument that can
 go red. **Q6 is answered before Q1 is closed**, and Q6 is now a
 concrete question rather than a promotion: F13 names the good (the
@@ -1759,12 +1850,13 @@ advertisement (the bond, echoed compactly per F17), one economic
 weight (the bond) — with band-2 fill, recovery, read-back and challenge
 being the same read. Nothing new is committed to by consensus. And the
 property the anchor correction makes provable rather than aspired to:
-**under Q6 + Q11 + the release-carried anchor + a uniform retention
-floor of `D_max`, the archival market is off the chain-following path
-for every running node unconditionally, and for every fresh node on a
-current release outside the launch window.** Where it is *not* off the
-path — the launch window, stale binaries, `assumevalid=0` auditors,
-history read-back — is named, and the coverage floor is sized to those
+**under Q6 + Q11 + the release-carried anchor + a uniform bytes
+window `W ≥ D_max`, the archival market is off the chain-following path
+for every running node whose downtime is under `W`, and for every
+fresh node on a current release outside the launch window.** Where it
+is *not* off the path — the launch window, stale binaries, downtime
+past `W`, `assumevalid=0` auditors, history read-back — is named,
+`W` is the parameter that decides how often (F24), and the coverage floor is sized to those
 readers rather than to a liveness claim that does not hold.
 
 ---
