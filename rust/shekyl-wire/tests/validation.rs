@@ -599,12 +599,13 @@ fn validator_rejects_a_duplicate_leaf_hash_field() {
 
 #[test]
 fn validator_rejects_a_leaf_hash_field_of_the_wrong_length() {
-    // 32*(n-1) — the shape the DB used to zero-fill into a leaf.
+    // A 32-byte field for two outputs — the pre-PL-D3 single-entry width, and
+    // the shape the DB used to zero-fill into a leaf.
     let err = spend_with_extra(pqc_fields(1120 * 2, 32))
         .validate_context_free_pruned()
         .unwrap_err();
     assert!(err.to_string().contains("0x07"), "{err}");
-    assert!(err.to_string().contains("64 required"), "{err}");
+    assert!(err.to_string().contains("128 required"), "{err}");
 }
 
 /// An `extra` that does not parse is refused outright.

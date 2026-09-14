@@ -194,7 +194,7 @@ fn attestation_does_not_disturb_the_pqc_shape_check() {
     let fields = vec![
         TxExtraField::PubKey([0x11; 32]),
         TxExtraField::PqcKemCiphertext(vec![0u8; HYBRID_KEM_CT_BYTES * n_out]),
-        TxExtraField::PqcLeafHashes(vec![0u8; PQC_LEAF_HASH_BYTES * n_out]),
+        TxExtraField::PqcLeafHashes(tx_extra::conforming_pqc_leaf_blob(n_out)),
         TxExtraField::ArchivalAttestation(vec![0x5A; 8]),
     ];
     tx_extra::check_pqc_field_shape_of(&fields, n_out)

@@ -1003,7 +1003,7 @@ has a property it lacks.
 ### 12.1 Implementation record (2026-09-14)
 
 Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
-`dev` at `a6160a4bd`, ruling 9), rule-07 framing per §10:
+`dev` at `a6160a4bd`, ruling 10), rule-07 framing per §10:
 
 - **Fix-falsifier first** (`rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`,
   commit `cf063a744`): red on the pre-`PL-D3` tree with exactly one match
@@ -1018,12 +1018,20 @@ Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
   exceptional-value guard, the two NUMS generators pinned, the 64-byte
   `0x07` entry with the point-admission rule at relay and connect (Rust rule
   + C++ adapter passing the payload), `K` derived by every verifier and
-  never on the wire, the circuit's opening leg, scan-time re-derivation with
-  the signer-side received-but-unspendable refusal
-  (`TxBuilderError::PqcLeafMismatch`, FFI −32), the emission vin without
+  never on the wire, the circuit's opening leg, scan-time verification of
+  both halves of the published entry against the recipient's own derivation
+  (`shekyl-scanner` compares `CM ‖ record` with `derive_pqc_leaf`'s entry; a
+  mismatch or a missing entry is classified received-but-unspendable on the
+  persisted row — `TransferDetails::unspendable`, `LEDGER_BLOCK_VERSION 11`
+  — retained in the ledger, excluded from coin selection and `unlocked`,
+  surfaced as the wallet-RPC state `UNSPENDABLE` with `unspendable_reason`
+  and the sender's `tx_hash`, and totalled in `get_balance.unspendable`;
+  census `d-14`, rule 82) with the signer-side refusal kept as defence in
+  depth (`TxBuilderError::PqcLeafMismatch`, FFI −32), the emission vin without
   `pqc_pk_hash` (ruling 9), census `d-3`/`d-4` (no zero fallback anywhere),
-  `d-1` (fuzz targets rebuilt), `d-2` (the `hp_of_O` aliasing field is
-  gone), `d-11` (test comments rewritten), `d-12` (`PqcKeyPointInvalid` /
+  `d-1` (fuzz targets rebuilt and compiling), `d-2` (`hp_of_O` left the
+  signing JSON contract with the aliasing), `d-11` (test comments
+  rewritten), `d-12` (`PqcKeyPointInvalid` /
   `PqcKeyCountMismatch` split), A5-12 (the discrete-log soundness
   assumption stated in both vendored crate docs).
 - Every §9 S1 vector regenerated under the decision-log citation; LMDB

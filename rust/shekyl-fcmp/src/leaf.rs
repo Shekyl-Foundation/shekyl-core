@@ -218,6 +218,71 @@ mod tests {
         assert_eq!(leaf, restored);
     }
 
+    /// Admission (`pqc_leaf_point_valid`, the CEN-I19 content rule: canonical,
+    /// prime-order, non-identity, via `curve25519-dalek`) and DB-add
+    /// (`construct_leaf` → [`PqcLeafScalar::from_commitment_point`], via
+    /// `dalek-ff-group`) decompress the published `CM` through two different
+    /// code paths. Every encoding admission accepts must convert — otherwise
+    /// a consensus-valid block aborts the node at DB add (CEN-L11 "unreachable")
+    /// — so the implication is asserted over the boundary set: a real `CM`,
+    /// the identity, every small-order point, a real point plus torsion, and
+    /// the non-canonical encodings (`y ≥ p`, and `x = 0` with the sign bit).
+    /// The converse is not required (DB-add is looser on torsion) and is
+    /// pinned as such so a later tightening is a conscious change.
+    #[test]
+    fn admission_accepted_points_always_convert_at_db_add() {
+        use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
+        use curve25519_dalek::traits::Identity;
+        use curve25519_dalek::{EdwardsPoint, Scalar};
+        use shekyl_curve_generators::pqc_leaf_point_valid;
+
+        let real = Scalar::from(7u64) * ED25519_BASEPOINT_POINT;
+        let mut cases: Vec<([u8; 32], &'static str, bool)> = vec![
+            (real.compress().to_bytes(), "real CM", true),
+            (
+                EdwardsPoint::identity().compress().to_bytes(),
+                "identity",
+                false,
+            ),
+        ];
+        for t in &EIGHT_TORSION {
+            cases.push((t.compress().to_bytes(), "small-order point", false));
+        }
+        cases.push((
+            (real + EIGHT_TORSION[1]).compress().to_bytes(),
+            "real point plus torsion",
+            false,
+        ));
+        // y = p (2^255 - 19), sign bit clear and set: non-canonical encodings
+        // of y = 0.
+        let mut y_p = [0xffu8; 32];
+        y_p[0] = 0xed;
+        y_p[31] = 0x7f;
+        cases.push((y_p, "y = p", false));
+        let mut y_p_sign = y_p;
+        y_p_sign[31] |= 0x80;
+        cases.push((y_p_sign, "y = p with sign bit", false));
+        // y = p + 1 (encodes y = 1, the identity, non-canonically).
+        let mut y_p1 = y_p;
+        y_p1[0] = 0xee;
+        cases.push((y_p1, "y = p + 1", false));
+        // y = 1 with the sign bit set: x = 0 cannot be negative.
+        let mut one_neg = [0u8; 32];
+        one_neg[0] = 1;
+        one_neg[31] = 0x80;
+        cases.push((one_neg, "y = 1 with sign bit (x = 0)", false));
+
+        for (bytes, name, expect_admitted) in cases {
+            let admitted = pqc_leaf_point_valid(&bytes).is_some();
+            let converts = PqcLeafScalar::from_commitment_point(&bytes).is_some();
+            assert_eq!(admitted, expect_admitted, "{name}: admission verdict");
+            assert!(
+                !admitted || converts,
+                "{name}: admission accepts an encoding DB-add cannot convert (node abort)"
+            );
+        }
+    }
+
     #[test]
     fn pqc_leaf_scalar_byte_roundtrip() {
         let original = PqcLeafScalar([0xab; 32]);

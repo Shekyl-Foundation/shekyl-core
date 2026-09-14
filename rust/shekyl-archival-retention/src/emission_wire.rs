@@ -124,7 +124,7 @@ pub struct WorkEpochClaim {
 /// merely *a* key. The former `pqc_pk_hash` field (the leaf hash carried on
 /// the wire and checked by a hash gate) was removed with `PL-D3`: the leaf
 /// value is no longer a public function of the key, and the opening proof is
-/// the binding (round doc §12, ruling 7).
+/// the binding (round doc §12, ruling 9).
 ///
 /// **Reveal scope (§8.0.3 / §7.3):** the pubkey is per-output **one-time**, so
 /// this reveal deterministically identifies exactly one backing output and

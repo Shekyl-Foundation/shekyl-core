@@ -192,7 +192,8 @@ pub(crate) const ED25519_REPR_BYTES: usize = 32;
 
 /// Verifier-supplied, per-input context for [`FcmpPlusPlus::verify`].
 ///
-/// The key image and the input's `H(pqc_pk)` leaf scalar are the two pieces of
+/// The key image and the input's PQC key point `K = k·G_k` (the value the
+/// circuit opens the leaf commitment to, `PL-D3`) are the two pieces of
 /// verifier-side data that must align, by input index, with the proof's input
 /// tuples. Bundling them into one ordered collection makes a length mismatch or a
 /// cross-input transposition unrepresentable: there is a single `Vec` whose length
@@ -294,7 +295,7 @@ impl FcmpPlusPlus {
     ///
     /// This only queues the proofs for batch verification. The BatchVerifiers MUST also be verified.
     ///
-    /// `per_input` carries the verifier-side key image and `H(pqc_pk)` leaf scalar for
+    /// `per_input` carries the verifier-side key image and PQC key point for
     /// each input, in input order; its length must equal the proof's input count.
     ///
     /// On error, the BatchVerifiers MUST be considered corrupted and discarded. The
@@ -354,7 +355,7 @@ impl FcmpPlusPlus {
 ///
 /// Sibling type to [`FcmpPlusPlus`] — the SAL leg is replaced by
 /// [`MembershipSpendAuth`] (the `R_O` leg alone); the `Fcmp` membership leg, including
-/// the `H(pqc_pk)` extra-leaf-scalar binding, is unchanged. A membership-only proof
+/// the leaf-commitment opening to the PQC key point, is unchanged. A membership-only proof
 /// cannot verify where a full proof is required (and vice versa): at the typed API by
 /// construction, at the byte seam by transcript domain separation.
 ///
@@ -420,7 +421,8 @@ impl FcmpMembershipOnly {
     ///
     /// `signable_tx_hash` must be binding to the transaction prefix, the RingCT base,
     /// and the pseudo-outs. No key images are taken: nothing here is checked against
-    /// the spent set. Each input's `H(pqc_pk)` leaf commitment is proven in-circuit;
+    /// the spent set. Each input's leaf commitment is opened in-circuit to the
+    /// verifier-derived PQC key point;
     /// the ML-DSA authentication against that commitment is the caller's obligation
     /// (`docs/design/FCMP_MEMBERSHIP_ONLY.md` §7 — a hard gate on the emission vin).
     ///

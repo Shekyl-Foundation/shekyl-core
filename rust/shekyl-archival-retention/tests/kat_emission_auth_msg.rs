@@ -33,7 +33,7 @@
 //! "customization v1".
 //!
 //! **Regenerated for `PL-D3` (2026-09-14, `FCMP_SPEND_LINKABILITY.md` §6.2,
-//! round-doc ruling 7):** the vin's `pqc_pk_hash` field left the wire (the
+//! round-doc ruling 9):** the vin's `pqc_pk_hash` field left the wire (the
 //! backing leaf's binding is the membership-only proof's in-circuit opening),
 //! so `EXPECTED_WIRE_LEN` (10 933 → 10 901) and `EXPECTED_WIRE_DIGEST_HEX`
 //! moved; both role digests are unchanged because the auth message never

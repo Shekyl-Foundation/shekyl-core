@@ -13,7 +13,8 @@
 //!
 //! `tx_extra` is emitted directly in the C++ `sort_tx_extra` fixed-point
 //! order for the genesis field subset — `0x01` pubkey, one aggregated `0x06`
-//! KEM-ciphertext blob, one aggregated `0x07` leaf-hash blob (pick order:
+//! KEM-ciphertext blob, one aggregated `0x07` leaf-entry blob (`CM ‖ record`
+//! per output; pick order:
 //! `cryptonote_format_utils.cpp`, `sort_tx_extra`) — so no general sorter is
 //! needed and the emitted extra is already canonical.
 

@@ -5446,7 +5446,7 @@ the `shekyl-rpc-types` miner-tx vectors extracted from them;
 `docs/test_vectors/TX_EXTRA_PQC_ROUND_TRIP.json` (constants only); the
 `shekyl-tx-weight` `FCMP_PROOF_SIZE_KAT` table (the opening leg changes every
 cell); the emission vin fixtures (`emission_connect_kat_v1.json` — the vin no
-longer carries `pqc_pk_hash`, ruling 7), the serve-credit fixtures that embed
+longer carries `pqc_pk_hash`, ruling 9), the serve-credit fixtures that embed
 leaf bytes (`gate2_serve_credit_kat_v1.json`,
 `serve_credit_equivalence_kat_v1.json`, `serve_credit_tx_parity_v1.json`,
 `pruned_tx_hash_parity_v1.json`); and two store version pins that make a stale

@@ -8,11 +8,11 @@ use libfuzzer_sys::fuzz_target;
 use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::leaf::PqcKeyScalar;
 
-/// Simulates deserializing the prunable portion of a CTTypeFcmpPlusPlusPqc
-/// transaction. The fuzzer provides arbitrary bytes which are interpreted as
-/// a concatenation of: pseudoOuts (N*32 bytes) + fcmp_pp_proof (variable) +
-/// pqc key scalars (N*32 bytes, PL-D3). The number of inputs is derived from the first
-/// byte. Any data that doesn't parse cleanly must not cause panics or OOM.
+// Simulates deserializing the prunable portion of a CTTypeFcmpPlusPlusPqc
+// transaction. The fuzzer provides arbitrary bytes which are interpreted as
+// a concatenation of: pseudoOuts (N*32 bytes) + fcmp_pp_proof (variable) +
+// pqc key scalars (N*32 bytes, PL-D3). The number of inputs is derived from the first
+// byte. Any data that doesn't parse cleanly must not cause panics or OOM.
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {
         return;
@@ -23,7 +23,6 @@ fuzz_target!(|data: &[u8]| {
 
     let pseudo_outs_len = num_inputs * 32;
     let pqc_hashes_len = num_inputs * 32;
-    let min_len = pseudo_outs_len + pqc_hashes_len;
 
     // Extract pseudoOuts (zero-pad if short)
     let pseudo_outs: Vec<[u8; 32]> = (0..num_inputs)

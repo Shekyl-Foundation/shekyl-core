@@ -5,7 +5,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use shekyl_fcmp::proof::{prove, verify, ProveInput, BranchLayer};
+use shekyl_fcmp::proof::{prove, verify, KeyImage, ProveInput};
 use shekyl_fcmp::leaf::PqcKeyScalar;
 
 fuzz_target!(|data: &[u8]| {
@@ -46,7 +46,7 @@ fuzz_target!(|data: &[u8]| {
         Err(_) => return,
     };
 
-    let key_images = vec![[0u8; 32]];
+    let key_images = vec![KeyImage::from_canonical_bytes([0u8; 32])];
 
     let result = verify(
         &proof_result.proof,

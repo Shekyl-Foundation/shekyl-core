@@ -247,7 +247,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // ── 2. Build a real multi-layer curve tree ───────────────────────────
     // Genesis coinbase: the spent output at vout 0, then decoy members. Every
     // output shares the spent output's (valid) 0x07 entry; they differ by
-    // their O/C points, so their leaf hashes still differ.
+    // their O/C points, so their leaves still differ.
     let spent_entry = spent.pqc_leaf.entry();
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
     let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);

@@ -50,17 +50,18 @@ const BUDGET_AT_ZONE: usize = 600_000;
 /// weight change (wire format, proof size, auth encoding) must update this
 /// table consciously — that is the point.
 // Re-pinned 2026-09-14 with `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2): the
-// `0x07` entry grew to 64 B per output (`+32·n_out`) and the FCMP++ proof
+// `0x07` entry grew to 64 B per output (`+32·n_out`, plus one byte where the
+// field's length varint crosses 128) and the FCMP++ proof
 // gained the in-circuit opening leg (single-input proofs +128 B; multi-input
 // proofs shrink because the leg replaces the per-input extra-scalar branch —
 // census companion §8), so every cell moved and not by one constant.
 const EXPECTED_WEIGHTS: [(usize, usize, usize); 6] = [
-    (1, 2, 13_133),
-    (8, 2, 58_717),
-    (1, 16, 34_076),
-    (8, 16, 79_660),
-    (4, 4, 37_332),
-    (2, 8, 30_101),
+    (1, 2, 13_198),
+    (8, 2, 58_782),
+    (1, 16, 34_588),
+    (8, 16, 80_172),
+    (4, 4, 37_460),
+    (2, 8, 30_357),
 ];
 
 #[test]
@@ -124,8 +125,8 @@ fn candidate_shapes_saturate_their_caps() {
             .collect();
         assert_eq!(
             leaf_blobs,
-            vec![32 * n_out],
-            "exactly ONE 0x07 field carrying 32·n_out leaf-hash bytes"
+            vec![shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES * n_out],
+            "exactly ONE 0x07 field carrying 64·n_out leaf-entry bytes (PL-D3)"
         );
 
         // Per-tx caps hold — the fixture is admissible under what R2 ratifies.

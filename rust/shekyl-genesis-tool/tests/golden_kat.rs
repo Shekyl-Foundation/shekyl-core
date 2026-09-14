@@ -131,7 +131,7 @@ fn extra_is_canonical_fixed_point() {
     assert!(
         matches!(&fields[2], TxExtraField::PqcLeafHashes(b)
             if b.len() == recipients.len() * PQC_LEAF_HASH_BYTES),
-        "field 2 must be the aggregated 0x07 leaf-hash blob"
+        "field 2 must be the aggregated 0x07 leaf-entry blob"
     );
     // Raw byte anchors: tag 0x01 at offset 0, tag 0x06 right after the
     // 32-byte pubkey.

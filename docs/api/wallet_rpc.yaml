@@ -1476,7 +1476,7 @@ components:
 
     GetBalanceResult:
       type: object
-      required: [liquid, unlocked, pending]
+      required: [liquid, unlocked, pending, unspendable]
       description: >
         Staking is first-class (locked JSON shape). As of WI-RPC-5 the
         staking fields carry live values projected from the same
@@ -1515,6 +1515,13 @@ components:
             staking seal — degrade, never a fabricated zero).
         pending:
           $ref: "#/components/schemas/AtomicUnits"
+        unspendable:
+          $ref: "#/components/schemas/AtomicUnits"
+          description: >
+            Money in received-but-unspendable outputs (`get_transfers`
+            state UNSPENDABLE; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`):
+            on chain and retained, never spendable by this wallet. Counted
+            in no other field. Always present; `"0"` is a true zero.
 
     GetPrimaryAddressParams:
       type: object
@@ -1802,7 +1809,7 @@ components:
             INCOMING rows are scanner-observed and always carry it.
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED, ABANDONED]
+          enum: [PENDING, CONFIRMED, SPENT, UNSPENDABLE, FAILED, DROPPED, ABANDONED]
           description: >
             PENDING = unsettled (receive awaiting confirmation, or send
             still in flight). CONFIRMED = on-chain. SPENT = receive
@@ -1816,7 +1823,15 @@ components:
             gave up on the send (`abandon_tx`); unlike DROPPED the
             release claim is intent, not evidence, so the input locks
             may still be held until the watchdog resolves — and a late
-            confirmation still flips such a row to CONFIRMED.
+            confirmation still flips such a row to CONFIRMED. UNSPENDABLE =
+            INCOMING only: received but unspendable — the sender's
+            transaction (`tx_hash`) published a `tx_extra` `0x07` leaf entry
+            that does not open to this wallet's derivation for the output
+            (`FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`), so no spend of it
+            can ever be proven; the money is on chain, the row is retained,
+            and `get_balance.unspendable` totals it. `unspendable_reason`
+            names which half failed. Never flips: a rescan re-derives the
+            same verdict from the same chain bytes.
 
 
             Each value is a distinct situation and none collapses into
@@ -1827,6 +1842,16 @@ components:
         spent_height:
           type: integer
           format: int64
+        unspendable_reason:
+          type: string
+          enum: [PQC_LEAF_MISMATCH, PQC_LEAF_ENTRY_ABSENT]
+          description: >
+            Present exactly when `state` is UNSPENDABLE. PQC_LEAF_MISMATCH:
+            the published `0x07` entry (`CM ‖ record`) is not this wallet's
+            derivation for the output. PQC_LEAF_ENTRY_ABSENT: the
+            transaction carries no `0x07` entry for the output (a shape
+            consensus refuses; reachable only from a non-consensus block
+            source).
         attribution:
           allOf:
             - $ref: "#/components/schemas/ReceiveAttribution"
@@ -1852,7 +1877,7 @@ components:
           enum: [INCOMING, OUTGOING]
         state:
           type: string
-          enum: [PENDING, CONFIRMED, SPENT, FAILED, DROPPED, ABANDONED]
+          enum: [PENDING, CONFIRMED, SPENT, UNSPENDABLE, FAILED, DROPPED, ABANDONED]
         since_height:
           type: integer
           format: int64

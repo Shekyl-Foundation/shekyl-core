@@ -171,9 +171,10 @@ struct FcmpSignInput {
     #[serde(with = "shekyl_tx_builder::types::hex_blob")]
     combined_ss: Vec<u8>,
     output_index: u64,
-    #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
-    #[allow(non_snake_case)]
-    hp_of_O: [u8; 32],
+    // No `hp_of_O`: the key-image generator is Rust's to derive from the
+    // output key (`biased_hash_to_point`); the leaf chunk carries it as
+    // `key_image_gen`. The former field's only consumer was the removed
+    // `h_pqc` aliasing (census `d-2`), so it left the contract with it.
     amount: u64,
     #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
     commitment_mask: [u8; 32],
@@ -183,8 +184,7 @@ struct FcmpSignInput {
     output_key: [u8; 32],
     // No `h_pqc` / leaf-opening field: the signer re-derives the input's own
     // PQC leaf commitment and blind from `combined_ss` + `output_index`
-    // (`PL-D3`) and checks it against `leaf_chunk` before proving. (The
-    // former field was fed `hp_of_O` by every caller — census `d-2`.)
+    // (`PL-D3`) and checks it against `leaf_chunk` before proving.
     leaf_chunk: Vec<shekyl_tx_builder::LeafEntry>,
     #[serde(with = "shekyl_tx_builder::types::hex_layers")]
     c1_layers: Vec<Vec<[u8; 32]>>,

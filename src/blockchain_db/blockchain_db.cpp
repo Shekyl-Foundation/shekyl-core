@@ -602,12 +602,15 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         const MaturityHeight mat{maturity_raw};
         uint8_t leaf[128];
         // CEN-L11: the verdict is checked, not discarded. construct_leaf fails
-        // only when the output key or the commitment is not a canonical,
-        // prime-order, non-identity point — and both are gated upstream on
-        // both paths (shekyl_check_output_keys via check_outs_valid;
-        // shekyl_check_commitment_masks via check_commitment_mask_valid, with
-        // the coinbase legs in prevalidate_miner_transaction). So this is
-        // unreachable, and it aborts rather than silently omitting the output.
+        // only when the output key, the commitment or the 0x07 commitment
+        // point CM is not a canonical, prime-order, non-identity point — and
+        // all three are gated upstream on both paths (shekyl_check_output_keys
+        // via check_outs_valid; shekyl_check_commitment_masks via
+        // check_commitment_mask_valid, with the coinbase legs in
+        // prevalidate_miner_transaction; CM by the PL-D3 content rule in
+        // shekyl_tx_extra_pqc_field_shape, code 10, at relay and connect).
+        // So this is unreachable, and it aborts rather than silently omitting
+        // the output.
         if (!shekyl_construct_curve_tree_leaf(
               reinterpret_cast<const uint8_t*>(&output_key),
               commitment.bytes, h_pqc, leaf))

@@ -91,6 +91,7 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         )),
         eligible_height: 100 + SPENDABLE_AGE,
         frozen: false,
+        unspendable: None,
         fcmp_precomputed_path: None,
         receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
     }

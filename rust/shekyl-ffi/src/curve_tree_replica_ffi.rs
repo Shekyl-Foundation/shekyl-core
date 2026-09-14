@@ -72,7 +72,7 @@ pub struct ShekylCurveTreeReplicaOutput {
 pub struct ShekylCurveTreeReplicaTx {
     /// `1` for the block's coinbase, `0` otherwise (decides maturity).
     pub is_miner: u8,
-    /// `1` when the transaction carries a `tx_extra` `0x07` leaf-hash tag.
+    /// `1` when the transaction carries a `tx_extra` `0x07` leaf-entry tag.
     pub has_leaf_hash_blob: u8,
     /// The raw `0x07` payload (`leaf_hash_blob_len` bytes); ignored when
     /// `has_leaf_hash_blob == 0`.
@@ -152,7 +152,7 @@ unsafe fn borrow<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
 }
 
 /// One decoded transaction before the borrowing `TxLeafInputs` view is built:
-/// `(is_miner, leaf-hash blob, outputs)`.
+/// `(is_miner, `0x07` leaf-entry blob, outputs)`.
 type DecodedTx<'a> = (bool, Option<&'a [u8]>, Vec<RawOutput>);
 
 fn target_kind(raw: u8) -> Option<TargetKind> {
@@ -201,7 +201,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
         let (blob, outs) = unsafe {
             let blob = if tx.has_leaf_hash_blob != 0 {
                 let Some(b) = slice_from_ptr(tx.leaf_hash_blob, tx.leaf_hash_blob_len) else {
-                    tracing::error!("curve-tree replica: tx {ti} has a null leaf-hash blob");
+                    tracing::error!("curve-tree replica: tx {ti} has a null 0x07 leaf-entry blob");
                     return false;
                 };
                 Some(b)

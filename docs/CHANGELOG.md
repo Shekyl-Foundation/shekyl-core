@@ -15,10 +15,14 @@
   `K = k·G_k` (`shekyl-oxide/crypto/fcmps` `first_layer`). The `0x07` entry
   is 64 bytes per output, `CM ‖ cSHAKE256("shekyl/pqc-leaf-record-v1",
   pk ‖ r_h)` (`PL-D3a`), and admission checks every entry's point at relay
-  and connect (`check_pqc_leaf_entries`, FFI code 10). The wallet re-derives
-  the entry at scan and the signer refuses before proving when the chain's
-  leaf is not its derivation (`TxBuilderError::PqcLeafMismatch`, FFI −32:
-  received but unspendable). The emission vin drops `pqc_pk_hash` (the
+  and connect (`check_pqc_leaf_entries`, FFI code 10). The wallet verifies
+  both halves of the published entry at scan and classifies a mismatch or a
+  missing entry received-but-unspendable (`TransferDetails::unspendable`,
+  `LEDGER_BLOCK_VERSION 11`; retained, never selectable, wallet-RPC state
+  `UNSPENDABLE` + `unspendable_reason`, `get_balance.unspendable`), with the
+  signer's own refusal before proving kept as defence in depth
+  (`TxBuilderError::PqcLeafMismatch`, FFI −32). The emission vin drops
+  `pqc_pk_hash` (the
   binding is the proof), `VerifyError` splits `PqcKeyPointInvalid` (3) from
   `PqcKeyCountMismatch` (9), the multisig witness header is 288 B, and the
   genesis transactions, block-0 ids, curve-tree fixtures, proof-size and

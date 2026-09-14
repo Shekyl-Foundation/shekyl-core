@@ -280,13 +280,22 @@ leaf set a faithful port would not have stored.) The record half is opaque
 to consensus. This field is emitted by `construct_miner_tx` (coinbase) and
 by every wallet output path (transfer, drain, bond, emission claim).
 
-**Recipient verification.** A non-honest entry (any `CM` other than the
-recipient's own derivation) yields an output the recipient can see but never
-open: the wallet re-derives `(CM, record)` at scan and the signer checks the
-derived `CM.x` against the chain's leaf before proving — a mismatch is the
-typed received-but-unspendable refusal (`TxBuilderError::PqcLeafMismatch`),
-not a proof failure. The output's creator can recognise its spend (the
-sender residual, `FCMP_SPEND_LINKABILITY.md` §13).
+**Recipient verification.** A non-honest entry (any `CM ‖ record` other
+than the recipient's own derivation) yields an output the recipient can see
+but never open. The wallet verifies both halves at scan: `shekyl-scanner`
+re-derives `(CM, record)` from `combined_ss` and the output index and
+compares the 64 bytes with the published entry (constant-time). A mismatch,
+or a missing entry, is classified **received-but-unspendable** on the
+persisted row (`TransferDetails::unspendable`): the output is retained in the
+ledger with the sender's transaction named, excluded from coin selection and
+from `unlocked`, totalled separately (`get_balance.unspendable`) and shown
+as the wallet-RPC state `UNSPENDABLE` with an `unspendable_reason`
+(`FCMP_SPEND_LINKABILITY.md` §6.2, rule 82). The signer keeps a second
+check as defence in depth — the derived `CM.x` against the chain's leaf
+before proving (`TxBuilderError::PqcLeafMismatch`) — so a stale ledger can
+never reach a proof failure. Consensus verifies neither half: only the
+recipient can. The output's creator can recognise its spend (the sender
+residual, `FCMP_SPEND_LINKABILITY.md` §13).
 
 ### Coinbase KEM self-encapsulation
 

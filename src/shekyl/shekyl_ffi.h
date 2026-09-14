@@ -1456,7 +1456,7 @@ struct ShekylSignResult {
 /// x = ho + b and y internally. C++ never touches x.
 ///
 /// Input JSON format (FcmpSignInput):
-///   {ki, combined_ss (hex, 128 chars), output_index, hp_of_O, amount,
+///   {ki, combined_ss (hex, 128 chars), output_index, amount,
 ///    commitment_mask, commitment, output_key,
 ///    leaf_chunk, c1_layers, c2_layers}
 /// The input's own PQC leaf commitment and blind (PL-D3) are re-derived by

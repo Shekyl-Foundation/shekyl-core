@@ -174,8 +174,13 @@ fn store_root_mixed_maturity_drain_order() {
         commitment: Some(ED25519_BASEPOINT),
         target: TargetKind::TaggedKey,
     };
-    let blob_cb = [0x01u8; 32];
-    let blob_reg = [0x02u8; 32];
+    // One 64-byte `0x07` entry per output (`CM ‖ record`, PL-D3): the point
+    // half must decompress (the client refuses a non-point); the record half
+    // is free and keeps the two entries distinct.
+    let mut blob_cb = [0x01u8; 64];
+    blob_cb[..32].copy_from_slice(&ED25519_BASEPOINT);
+    let mut blob_reg = [0x02u8; 64];
+    blob_reg[..32].copy_from_slice(&ED25519_BASEPOINT);
     let txs = [
         TxLeafInputs {
             is_miner: true,

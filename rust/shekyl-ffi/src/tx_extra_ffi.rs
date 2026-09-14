@@ -142,16 +142,13 @@ pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape(
 }
 
 /// Borrow `len` bytes; a null pointer is accepted only with length 0.
+/// Routed through the crate's one byte-slice seam (`slice_from_ptr`) so this
+/// file adds no raw site of its own (SA-R-7 boundary ratchet).
 unsafe fn byte_slice<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
-    if len == 0 {
-        return Some(&[]);
-    }
-    if ptr.is_null() || len > isize::MAX as usize {
-        return None;
-    }
-    // SAFETY: non-null, `len` readable bytes per the caller's contract; the
-    // borrow does not outlive the FFI call.
-    Some(unsafe { std::slice::from_raw_parts(ptr, len) })
+    // SAFETY: the caller's contract — `len` readable bytes behind a non-null
+    // `ptr` — is exactly the seam helper's precondition; the borrow does not
+    // outlive the FFI call.
+    unsafe { crate::legacy_util::slice_from_ptr(ptr, len) }
 }
 
 /// Write `msg` NUL-terminated into a caller-owned buffer, truncating on a

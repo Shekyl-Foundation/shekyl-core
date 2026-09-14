@@ -302,7 +302,7 @@ namespace test
         ConstructedOutput change_out = construct_output_ffi(
             change_tx_secret, change_wallet, output_amount, 0);
 
-        // --- 6. Build Hp(O) for leaf entry ---
+        // --- 6. Build Hp(O) for the leaf chunk's key-image generator ---
         ge_p3 hp;
         ct::key od_rct;
         memcpy(od_rct.bytes, input_out.output_key, 32);
@@ -315,7 +315,6 @@ namespace test
             "\"ki\":\"" + hex_encode(scanned.key_image, 32) + "\","
             "\"combined_ss\":\"" + hex_encode(scanned.combined_ss, 64) + "\","
             "\"output_index\":" + std::to_string(input_output_index) + ","
-            "\"hp_of_O\":\"" + hex_encode(hp_of_o, 32) + "\","
             "\"amount\":" + std::to_string(input_amount) + ","
             "\"commitment_mask\":\"" + hex_encode(scanned.z, 32) + "\","
             "\"commitment\":\"" + hex_encode(input_out.commitment, 32) + "\","
@@ -412,9 +411,17 @@ namespace test
         // --- 10. Verify the proof ---
         // shekyl_fcmp_verify expects layers (= LMDB depth + 1).
         const uint8_t verify_layers = static_cast<uint8_t>(tree_depth + 1);
-        // The verifier's per-input value is the revealed key's scalar (PL-D3).
+        // The verifier's per-input value is the scalar of the key the spend
+        // REVEALS — `pqc_auths[i].hybrid_public_key`, the canonical hybrid
+        // encoding derived from `combined_ss` — not the ML-DSA-only key the
+        // scan hands back as `pqc_pk` (PL-D3; the leaf commits to the hybrid
+        // key, so hashing the other string fails verification).
+        ShekylBuffer hybrid_pk = shekyl_derive_pqc_public_key(scanned.combined_ss, input_output_index);
+        EXPECT_TRUE(hybrid_pk.ptr != nullptr && hybrid_pk.len > 0)
+            << "DEBUG: shekyl_derive_pqc_public_key failed";
         uint8_t pqc_key[32];
-        EXPECT_TRUE(shekyl_fcmp_pqc_leaf_hash(scanned.pqc_pk.data(), scanned.pqc_pk.size(), pqc_key));
+        EXPECT_TRUE(shekyl_fcmp_pqc_leaf_hash(hybrid_pk.ptr, hybrid_pk.len, pqc_key));
+        shekyl_buffer_free(hybrid_pk.ptr, hybrid_pk.len);
         uint8_t fcmp_result = shekyl_fcmp_verify(
             fcmp_proof.data(), fcmp_proof.size(),
             scanned.key_image, 1,

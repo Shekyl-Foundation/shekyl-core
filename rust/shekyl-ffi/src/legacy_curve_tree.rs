@@ -318,7 +318,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_helios_hash_init(out_ptr: *mut u8) ->
     true
 }
 
-/// Return the number of scalars per leaf (4 for Shekyl: O.x, I.x, C.x, H(pqc_pk)).
+/// Return the number of scalars per leaf (4 for Shekyl: O.x, I.x, C.x, CM.x).
 #[no_mangle]
 pub extern "C" fn shekyl_curve_tree_scalars_per_leaf() -> u32 {
     #[allow(clippy::cast_possible_truncation)]

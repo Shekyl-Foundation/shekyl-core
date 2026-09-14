@@ -342,11 +342,15 @@ pub const SPEC_VERIFY_COST: SpecVerifyCost = {
     // n_in = 1 (the modal shape): genesis and depth-7 endpoints.
     // msg_bytes is NOTIFY_NEW_TRANSACTIONS + tx, including the 29-byte Levin
     // header (PWD-B5). Enforced by tests/carrier_window.rs against notify().
-    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_118));
-    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection, 15_550));
+    // Re-derived 2026-09-14 under `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2:
+    // 64-byte `0x07` entries and the proof's opening leg moved every shape);
+    // the `millis` are still §85.3's pre-`PL-D3` measurements — the
+    // floor-device re-measurement is owed (rule 76; §12.1 of the round doc).
+    cells[0][0] = Some(pi4(124.5, TreeBasis::Genesis, 13_311));
+    cells[0][DEPTH_TIERS - 1] = Some(pi4(143.3, TreeBasis::SynthesizedProjection, 14_783));
     // n_in = 8 (the consensus maximum): the tail §75's sorting is about.
-    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis, 59_344));
-    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection, 63_761));
+    cells[7][0] = Some(pi4(399.2, TreeBasis::Genesis, 58_897));
+    cells[7][DEPTH_TIERS - 1] = Some(pi4(791.9, TreeBasis::SynthesizedProjection, 62_097));
     SpecVerifyCost { cells }
 };
 

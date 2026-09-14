@@ -40,11 +40,12 @@
 //!   only `txout_to_tagged_key` ([`shekyl_wire`]'s sole [`Output`] shape,
 //!   GENESIS §9.5), so the other [`TargetKind`]s are unreachable here (they
 //!   exist in [`shekyl_curve_tree`] only for daemon leaf-set parity).
-//! - **`leaf_hash_blob`** is the `tx_extra 0x07` payload verbatim; a
-//!   malformed/absent extra yields `None`, which the client resolves to the
-//!   zero `h_pqc` fallback per the daemon's `extract_leaf_hashes` `{}` path
-//!   (`recon.rs`). The decode does not error on a malformed extra — it mirrors
-//!   the fallback.
+//! - **`leaf_hash_blob`** is the `tx_extra 0x07` payload verbatim (`CM ‖
+//!   record` per output, `PL-D3`); a malformed/absent extra yields `None`,
+//!   which the client refuses as `ClientError::LeafEntries` (`recon.rs`
+//!   `extract_leaf_commitments`; census `d-3`/`d-4`: no zero fallback). The
+//!   decode itself does not error on a malformed extra — the refusal is the
+//!   client's, where the block and transaction can be named.
 //!
 //! # X7 — buffer bounded by the consensus output ceiling, before allocation
 //!
@@ -110,10 +111,10 @@ fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeEr
         return Err(DecodeError::ExcessiveOutputs { is_miner, count });
     }
 
-    // `tx_extra 0x07` leaf-hash blob, verbatim. A malformed or absent extra
-    // yields `None` — the client resolves that to the zero `h_pqc` fallback
-    // (the daemon's `extract_leaf_hashes` `{}` path), so we mirror the
-    // fallback rather than erroring.
+    // `tx_extra 0x07` leaf-entry blob, verbatim. A malformed or absent extra
+    // yields `None`; the client refuses that block (`ClientError::LeafEntries`,
+    // no zero fallback — census `d-3`/`d-4`), naming the transaction, so the
+    // decode carries the absence rather than erroring here.
     let leaf_hash_blob = {
         let mut extra_bytes = prefix.extra.as_slice();
         Extra::read(&mut extra_bytes)

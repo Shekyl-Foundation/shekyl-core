@@ -10,7 +10,7 @@
 //! additive, structured view over it. It parses the tag-prefixed field sequence
 //! and re-serializes it byte-identically, and gives **per-output** access to the
 //! PQC scan fields — `0x06` hybrid KEM ciphertexts (`x25519 ‖ ML-KEM-768` per
-//! output) and `0x07` leaf hashes (`h_pqc` per output).
+//! output) and `0x07` leaf entries (`CM ‖ record`, 64 bytes per output).
 //!
 //! This crate owns the **Shekyl genesis `tx_extra` tag set**
 //! (`GENESIS_TX_WIRE_FORMAT.md` §9.6a). Tag grammars: most tags are
@@ -40,7 +40,8 @@ pub const TX_EXTRA_TAG_ADDITIONAL_PUBKEYS: u8 = 0x04;
 pub const TX_EXTRA_TAG_PQC_OWNERSHIP: u8 = 0x05;
 /// `0x06` — per-output hybrid KEM ciphertexts.
 pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = 0x06;
-/// `0x07` — per-output PQC leaf hashes.
+/// `0x07` — per-output PQC leaf entries (`CM ‖ record`, `PL-D3`; the
+/// constant keeps the tag's historical name).
 pub const TX_EXTRA_TAG_PQC_LEAF_HASHES: u8 = 0x07;
 /// `0x08` — multisig migration blob.
 pub const TX_EXTRA_TAG_MULTISIG_MIGRATION: u8 = 0x08;
@@ -119,7 +120,7 @@ pub enum TxExtraField {
     PqcOwnership(Vec<PqcOwnershipEntry>),
     /// `0x06` — per-output hybrid KEM ciphertexts, concatenated.
     PqcKemCiphertext(Vec<u8>),
-    /// `0x07` — per-output PQC leaf hashes, concatenated.
+    /// `0x07` — per-output PQC leaf entries (`CM ‖ record`), concatenated.
     PqcLeafHashes(Vec<u8>),
     /// `0x08` — multisig migration blob.
     MultisigMigration(Vec<u8>),

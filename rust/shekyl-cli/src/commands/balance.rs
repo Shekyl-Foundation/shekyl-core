@@ -55,6 +55,20 @@ pub fn cmd_balance(rpc: &RpcSession) {
             println!("  Unlocked:           {} SKL", field("unlocked"));
             println!("  Liquid:             {} SKL", field("liquid"));
             println!("  Pending:            {} SKL", field("pending"));
+            // Received-but-unspendable money (PL-D3 §6.2): shown only when
+            // non-zero, with the pointer to the rows that name the sender's
+            // transaction (rule 82: the failure is first-class, not hidden).
+            if let Some(unspendable) = val
+                .get("unspendable")
+                .and_then(|v| v.as_str())
+                .filter(|v| *v != "0")
+            {
+                println!(
+                    "  Unspendable:        {} SKL  (received but unspendable — \
+                     see `transfers` rows in state UNSPENDABLE)",
+                    format_amount_str(unspendable)
+                );
+            }
             println!("  Staked:             {}", staking_field("staked"));
             println!(
                 "  Claimable rewards:  {}",

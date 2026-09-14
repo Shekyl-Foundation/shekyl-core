@@ -62,7 +62,8 @@ pub enum ExtraField {
     PublicKeys(Vec<EdwardsPoint>),
     /// PQC KEM ciphertext blob (Shekyl tag 0x06).
     PqcKemCiphertext(Vec<u8>),
-    /// PQC leaf hash commitments (Shekyl tag 0x07).
+    /// PQC leaf entries (Shekyl tag 0x07): `CM ‖ record`, 64 bytes per
+    /// output (`PL-D3`). The variant keeps the tag's historical name.
     PqcLeafHashes(Vec<u8>),
 }
 
@@ -91,7 +92,8 @@ impl ExtraField {
     /// Admission treats those 32-byte keys as opaque (`shekyl-wire`
     /// `PubKey([u8; 32])`), so a consensus-valid extra can carry a
     /// non-point. Failing the whole extra would drop a present `0x06`/`0x07`
-    /// and make curve-tree decode fall back to zero `h_pqc`. A bad `0x04`
+    /// — the scan could not recover the outputs and the curve-tree client
+    /// would refuse the block for a missing leaf entry. A bad `0x04`
     /// is skipped as a field — dropping individual keys would shift later
     /// per-output additional keys.
     fn try_from_wire(field: TxExtraField) -> Option<Self> {
@@ -199,7 +201,8 @@ impl Extra {
         None
     }
 
-    /// Extract PQC leaf hash commitments from the extra fields.
+    /// The `0x07` payload: every output's leaf entry (`CM ‖ record`, 64 B
+    /// each, `PL-D3`) concatenated in output order. First match.
     pub fn pqc_leaf_hashes(&self) -> Option<&[u8]> {
         for field in &self.0 {
             if let ExtraField::PqcLeafHashes(data) = field {
@@ -207,6 +210,21 @@ impl Extra {
             }
         }
         None
+    }
+
+    /// Output `vout`'s published leaf entry (`CM ‖ record`), or `None` when
+    /// the transaction carries no `0x07` field or it is too short to hold
+    /// that output. The scanner compares this with the recipient's own
+    /// derivation (`PL-D3` §6.2 scan-time verification).
+    pub fn pqc_leaf_entry(
+        &self,
+        vout: usize,
+    ) -> Option<&[u8; shekyl_crypto_pq::derivation::PQC_LEAF_ENTRY_LEN]> {
+        use shekyl_crypto_pq::derivation::PQC_LEAF_ENTRY_LEN;
+        let blob = self.pqc_leaf_hashes()?;
+        let start = vout.checked_mul(PQC_LEAF_ENTRY_LEN)?;
+        let end = start.checked_add(PQC_LEAF_ENTRY_LEN)?;
+        blob.get(start..end)?.try_into().ok()
     }
 
     /// Transaction extra for a hybrid-PQC transfer: tx pubkey plus ONE
@@ -263,17 +281,17 @@ impl Extra {
         Extra(fields)
     }
 
-    /// Append a PQC leaf-hash commitment field (Shekyl tag `0x07`,
-    /// `N × 32` bytes — `H(pqc_pk)` per output, in output order).
+    /// Append the PQC leaf-entry field (Shekyl tag `0x07`, `64·N` bytes —
+    /// `CM ‖ record` per output, in output order; `PL-D3`).
     ///
-    /// The daemon's curve-tree ingestion reads this field to set each new
-    /// output's `h_pqc` leaf component; an output ingested **without** it
-    /// carries a zero leaf hash and can never satisfy the spend-side
-    /// `pqc_auths`-derived hash check — i.e. it is unspendable. Every
-    /// transaction whose outputs must be spendable appends this field:
-    /// bond-post/emission change (stake_engine.rs) and the ordinary
-    /// transfer path (sign_bridge.rs; its omission there made every
-    /// transfer output unspendable — surfaced live by the PR-4b bond e2e).
+    /// The daemon's curve-tree ingestion reads `CM` from this field to set
+    /// each new output's 4th leaf scalar (`CM.x`), and admission refuses a
+    /// transaction with outputs that lacks the field or carries an
+    /// inadmissible point (CEN-I19, `check_pqc_leaf_entries`). Every
+    /// transaction-building path appends it: bond-post/emission change
+    /// (stake_engine), drain, and the ordinary transfer path (sign_bridge.rs;
+    /// its omission there once made every transfer output unspendable —
+    /// surfaced live by the PR-4b bond e2e).
     pub fn push_pqc_leaf_hashes(&mut self, blob: Vec<u8>) {
         self.0.push(ExtraField::PqcLeafHashes(blob));
     }

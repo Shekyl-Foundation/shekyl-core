@@ -343,18 +343,23 @@ fn build_test_case(iteration: u32) {
     let cm: [u8; 32] = scanned.pqc_leaf[..32].try_into().expect("entry point");
     let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&cm).expect("CM decompresses");
     let tree_root = build_selene_root(&input_out.output_key, &input_out.commitment, &cm);
-    // The verifier's per-input value: k = H_l(hybrid_pk), through the FFI.
+    // The verifier's per-input value: k = H_l(hybrid_pk), through the FFI,
+    // over the key the spend REVEALS — the canonical hybrid encoding derived
+    // from `combined_ss` — not the ML-DSA-only `pqc_pk` the scan hands back
+    // (the leaf commits to the hybrid key; the other string fails to verify).
+    let hybrid_pk = unsafe {
+        shekyl_ffi::shekyl_derive_pqc_public_key(scanned.combined_ss.as_ptr(), input_output_index)
+    };
+    assert!(
+        !hybrid_pk.ptr.is_null() && hybrid_pk.len > 0,
+        "shekyl_derive_pqc_public_key failed"
+    );
     let mut pqc_key = [0u8; 32];
     assert!(
-        unsafe {
-            shekyl_fcmp_pqc_leaf_hash(
-                scanned.pqc_pk.as_ptr(),
-                scanned.pqc_pk.len(),
-                pqc_key.as_mut_ptr(),
-            )
-        },
+        unsafe { shekyl_fcmp_pqc_leaf_hash(hybrid_pk.ptr, hybrid_pk.len, pqc_key.as_mut_ptr()) },
         "shekyl_fcmp_pqc_leaf_hash failed"
     );
+    unsafe { shekyl_buffer_free(hybrid_pk.ptr, hybrid_pk.len) };
 
     let hp_of_o_point = shekyl_curve_generators::biased_hash_to_point(input_out.output_key);
     let hp_of_o: [u8; 32] = hp_of_o_point.compress().to_bytes();
