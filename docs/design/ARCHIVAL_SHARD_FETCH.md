@@ -1,7 +1,9 @@
 # Archival shard fetch — the daemon client (design round)
 
 **Status: RULED — Round 1 CLOSED 2026-09-13; implementation in
-progress: (a0) LANDED 2026-09-13, (a)/(b)/(c) pending.**
+progress: (a0) LANDED 2026-09-13 (#734); (a)+(b) BUILT 2026-09-13 as
+one stacked PR on #734 (sub-PR 1 of the FOLLOWUPS row; §9.1
+amendment); (c) pending.**
 Round 1 opened 2026-09-12, grounded `dev@ba4b3c73a`. Every `SF-D`
 question is disposed: `SF-D2`, `SF-D3`, `SF-D4`, `SF-D6`, `SF-D7`,
 `SF-D10`, `SF-D13` RULED; `SF-D5` RULED and amended with the request
@@ -11,13 +13,17 @@ rule-26 halt is lifted:** implementation may begin, in the landing
 sequence §9.1 fixes (2026-09-13): (a0) the v2 pass-countersignature
 verifier alone → (a) serve side → (b) `shekyl-p-fetch` → (c) W₂ then
 `N`. This file stays in `docs/design/` because it still owns named
-residue the implementation PRs discharge — the header spelling and
-encoding (`SF-D5`), in-flight cap `N` (`SF-D7`), the response envelope
-(`SF-D8` carrier), and the W₂ measurement (§8); the signature domain
-string, KAT, and nonce-carrying pass record (`SF-D8` message) were
-discharged by (a0) — and archives to
-`docs/completed/` when the client lands. Organic draw bound `k` is
-`TJ-D`'s, not this PR's.
+residue — the **integer** `N` (`SF-D7`; `shekyl_p_fetch::MAX_INFLIGHT
+= 4` is the SPIKE-PIN with its lower-bound rationale on the constant)
+and the W₂ measurement (§8, step (c)), which the SP-T3 rig cannot run
+until its client leg is re-based onto `shekyl-p-fetch` (its
+`fetch_once` says so). Discharged: the signature domain string, KAT,
+and nonce-carrying pass record (`SF-D8` message) by (a0); the header
+spelling and encoding (`SF-D5`), the response envelope (`SF-D8`
+carrier), the `P`-side gate, the signer seam (`SF-D13`), the client
+and its `SF-D6` taxonomy, and the `SF-D4` dep-cut gate by (a)+(b).
+Archives to `docs/completed/` when (c) pins `N`. Organic draw bound `k`
+is `TJ-D`'s, not this PR's.
 Identifier family `SF-` (index row `SF-D1…SF-Dn`, registered at
 birth per rule 94 §1). Process per
 [`26-sub-pr-design-discipline.mdc`](../../.cursor/rules/26-sub-pr-design-discipline.mdc):
@@ -170,7 +176,7 @@ inherited as "the client waits."
 | Onions are enumerable (every `JoinMarket` publishes one; public is its normal state); the serve-side limiter (`shekyl-p-serve::serve::MAX_INFLIGHT`, SPIKE-PIN-2) is load-bearing. **`EU-D6` REJECTED 2026-09-13** as a rotation-rate argument; the enumerability fact and the limiter survive on their own code anchors, not on `EU-D6` |
 | **`EndpointUpdate` (kind 4) REJECTED 2026-09-13** — a bonded persona's endpoint never changes; the endpoint is mandatory on `JoinMarket`, non-zero by consensus, immutable for the record's life (`EU-D3` narrowed). A new address is a new persona via Release + fresh `JoinMarket`. `EU-D2`, `EU-D5`…`EU-D13` rejected with it. Consequence for this round: "no endpoint on record" is unrepresentable, so `SF-D6`'s no-endpoint non-row collapses (see `SF-D6`), and `SF-D13`'s "onion key may rotate" reason is refuted (see `SF-D13`) | `EU` §1, §5 |
 | `GET /shard/{id}`; identical 404s for every non-servable outcome; only content-type + content-length on the response; hand-rolled HTTP/1.1 | `RF-R1` |
-| **Request-header amendment RULED 2026-09-13 (second amendment; verifier half LANDED by (a0), serve half lands with (a)):** exactly one named header is required and decodes canonically to 72 bytes `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — fresh random for every request, both callers, plus a chain anchor at `tip − archival_reorg_depth_blocks` (720): the height and the requester's own block hash at it. `P` applies one pre-sign gate, `anchor_height ∈ [p − 720 − L, p − 720 + L]` with `p` its own height and `L = archival_attestation_anchor_lag_blocks` (4, PROVISIONAL), else the identical 404. Missing, malformed, duplicate, wrong-length, or out-of-gate values are the same identical complete-head 404. All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR. `P` signs the **decoded** 72 bytes, never the textual form | `SF-D5` amendment; verifier (a0) `#734`; serve-side carrier is the `shekyl-p-serve` PR (a) |
+| **Request-header amendment RULED 2026-09-13 (second amendment; verifier half LANDED by (a0); serve half and client LANDED by (a)+(b): header `shekyl-pass-request`, value lowercase hex of the 72 bytes, `serving_route::{REQUEST_HEADER_NAME, encode_request_header, decode_request_header}`):** exactly one named header is required and decodes canonically to 72 bytes `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — fresh random for every request, both callers, plus a chain anchor at `tip − archival_reorg_depth_blocks` (720): the height and the requester's own block hash at it. `P` applies one pre-sign gate, `anchor_height ∈ [p − 720 − L, p − 720 + L]` with `p` its own height and `L = archival_attestation_anchor_lag_blocks` (4, PROVISIONAL), else the identical 404. Missing, malformed, duplicate, wrong-length, or out-of-gate values are the same identical complete-head 404. All other request headers remain ignored. Exact header spelling and canonical textual encoding land code-plus-tests first under `RF-R1`'s transcription discipline, then the living contract records them in the same implementation PR. `P` signs the **decoded** 72 bytes, never the textual form | `SF-D5` amendment; verifier (a0) `#734`; serve-side carrier is the `shekyl-p-serve` PR (a) |
 | **Request unit is a whole shard.** `{id}` is an exact decimal `u64`; no suffix, no query string (`RF-R1` request grammar; `serve.rs:558–560` parses exactly that). There is no leaf addressing. The challenge caller fetches the full segment and verifies `R_k` — that is the TJ §9 topology working as designed (the honest holder's egress is the cost being measured). There is no leaf to extract locally (`RF-D8` retracted the opening). `RF-R1`'s reopening clause permits "an additional path that suffixes `/shard/`" if a later request contract is needed; that suffix is exactly where a leaf-addressed challenge fetch would enter, and it is the natural optimization for anyone looking at ~3.33 MB per challenge. **`SF-D1` holds that door shut:** any future suffix path must be usable by both callers, or it is a second path by another name | `RF-R1`; `SF-D1` |
 | **Serving and fetching do not share a Tor instance.** `PWD-E9` (RULED 2026-09-08, implemented 2026-09-09): the daemon gets its own tor path with no crossover to the archival-serving persona; the launch path takes instance identity as a parameter, so sharing the code cannot produce a shared instance. The ratified §7 guard residual splits one application's identities; E9 forbids two applications sharing one instance, and the ephemeral/durable asymmetry makes the crossover strictly worse. **`SF-D11` withdrawn** — asked in this round, then closed by reading `PWD-E9` | `PWD-E9` |
 | **Fetch outbound reuses the tor zone's existing SOCKS, unconditionally.** No second Tor process. No manufactured SOCKS reopen. The object of reuse is the **zone proxy** (`zone.m_proxy_address` / `socks_connect`), not always `DaemonTorControl` — `--tx-proxy` / `--anonymous-inbound` already yield the managed instance and still leave a tor-zone SOCKS. The daemon image passes that `SocketAddr` into `shekyl-p-fetch`; the crate does not discover SOCKS. PWD-E7 is not re-ruled. Shared-instance residual (P2P ↔ archival-fetch on one process) is accepted (§7 threat 4) and is the `SF-D3` ruling, not a leftover | `SF-D2` RULED 2026-09-12 |
@@ -358,8 +364,11 @@ shared dependency of both halves; no crate minted to hold a number.
 Today's `SERVING_VIRTUAL_PORT` is `pub(crate)` in `shekyl-engine-core`
 and is the current location, not the home.
 
-**Dependency cut is a gate, not a sentence.** The implementation PR
-owes `scripts/ci/check_p_fetch_dep_cut.sh` (same shape as
+**Dependency cut is a gate, not a sentence.** LANDED 2026-09-13 by
+(b) as `scripts/ci/check_p_fetch_dep_cut.py` (Python over manifests,
+not the `.sh` first named: the properties are transitive-closure
+facts a line-grep cannot see, and grep-gates has no toolchain for
+`cargo metadata`; same fail-closed rule-47 shape as
 `check_debit_auth_single_source.sh`; wired beside it in
 `grep-gates.yml`). A sentence that tokio-net / SOCKS must not enter
 consensus, chain-store, or RPC decays the first time someone adds a
@@ -435,8 +444,8 @@ Both callers, every request:
   sends the same anchor. It is freshness, not identity: it does not
   name the assignment.
 
-**`P`-side gate (RULED 2026-09-13; lands with the (a) serve PR under
-`RF-R1`).** Before signing, `P` checks
+**`P`-side gate (RULED 2026-09-13; LANDED by (a) —
+`shekyl_p_serve::anchor_within_gate`, run before the shard lookup).** Before signing, `P` checks
 `anchor_height ∈ [p − 720 − L, p − 720 + L]`, where `p` is `P`'s own
 height and `L = archival_attestation_anchor_lag_blocks` (4,
 PROVISIONAL). Out of gate is the identical complete-head 404. The
@@ -475,10 +484,13 @@ pre-fetches for any future height — and because exact equality misses
 every honest fetch that spans a block boundary.
 
 The header's **presence and shape** are ruled here. Its exact spelling
-and canonical textual encoding follow `RF-R1`'s transcription
-discipline: the implementation PR pins them in code plus tests, adds a
-request-side sibling of `RESPONSE_HEADER_NAMES`, and updates
-[`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) in the same
+and canonical textual encoding followed `RF-R1`'s transcription
+discipline and are LANDED by (a): `REQUEST_HEADER_NAME =
+"shekyl-pass-request"`, value the lowercase hex of the 72 bytes
+(`serving_route::encode_request_header` / `decode_request_header`,
+name matched case-insensitively, value strict), pinned by
+`request_header_parsing_is_http_lenient_and_value_strict` and recorded
+in [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) in the same
 change. This is a concrete carrier, not permission for more fields.
 Missing, duplicate, malformed, or wrong-length values are a
 complete-head miss and render the same byte-identical 404 as every
@@ -769,9 +781,11 @@ integer from that range. Not a function of `D`.
   the same `fetch(&FetchTarget, &header)` for challenge and
   organic requests (target typed; amendment below). No priority or reservation. Concurrent transfers,
   not `k`, not circuit-build cost, not a per-`D` scaling constant.
-  Integer unpinned — range above; implementation PR pins it from the
-  SP-T3 re-base's upper bound and owns the lower-bound throughput
-  judgement.
+  Integer SPIKE-PIN `N = 4` (`shekyl_p_fetch::MAX_INFLIGHT`, (b),
+  2026-09-13): the lower-bound throughput judgement and the memory
+  term (`4 × max_body_bytes() ≈ 27 MB` at the leaf figure) are on the
+  constant's doc; the SP-T3 re-base's upper bound (step (c)) replaces
+  the SPIKE-PIN.
 - **Reopen if:** reconstruct throughput at the cap falls below what
   TJ-D's fill scheduler requires to keep pace with chain growth; or
   wait-for-a-slot plus transfer for a challenge request approaches
@@ -834,8 +848,10 @@ holds no key material. `PServeEndpoint` takes a signer callback that
 returns the canonical `HybridSignature` over the `SF-D8` transcript.
 Loopback tests inject a test key. Production composition
 (`shekyl-p-host` / SH-2) passes the persona hybrid signing secret.
-The fetch implementation PR lands the callback and the envelope;
-SH-2 wires the live secret. The unsigned HTTP half is not a
+The callback (`shekyl_p_serve::PassSigner`; `shekyl_p_host::{PassKey,
+HostSigner, NoResidentKey}`) and the envelope LANDED by (a); SH-2
+wires the live secret — until then `engine-core` binds `NoResidentKey`
+and every serve is a counted sign refusal. The unsigned HTTP half is not a
 substitute for a countersigned loopback test.
 
 **Named residency: the serving host becomes a hot signer.** Every
@@ -1113,10 +1129,11 @@ from `derive_archival_p_keys` at a pinned seed, a deterministic
 regenerated under the armed regenerator with the decision-log entry of
 2026-09-13. The `P`-side gate and header parse are (a)'s.
 
-**Response carrier — RULED 2026-09-13.** `RF-D4`'s
+**Response carrier — RULED 2026-09-13; LANDED by (a)+(b)
+(`SIGNATURE_ENVELOPE_LEN` on both ends).** `RF-D4`'s
 `ServedFrameHeader` contains only `leaf_count` and `padding_len` and
-the landed HTTP response carries no countersignature, so the signature
-needs a home that is neither the inner frame nor a header:
+the pre-(a) HTTP response carried no countersignature, so the signature
+needed a home that is neither the inner frame nor a header:
 
 - **Carrier:** the HTTP body is an outer binary response envelope
   carrying the canonical `HybridSignature` (both legs, the fixed
@@ -1489,7 +1506,8 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   `SM-R-3` is live the moment `P` signs caller-chosen bytes, so a
   defect in the domain-separation construction surfaces here, before
   anything depends on it.
-- **(a) serve side.** `RF-R1` header parse (one required header
+- **(a) serve side — BUILT 2026-09-13 (commits `0ed3e11e0`,
+  `1a0ea3e90`, `64a81697a` of the sub-PR 1 branch).** `RF-R1` header parse (one required header
   decoding to the 72 bytes, same identical 404 on
   absence/malformation/out-of-gate), the `P`-side anchor gate ±`L`
   against the host-supplied height, signing over the **decoded**
@@ -1498,13 +1516,29 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   `PServeEndpoint` signer callback with the armed test-key affordance
   (`SF-D13`), and the `RF-R1` living-contract update. Its loopback KAT
   verifies against the verifier (a0) already merged.
-- **(b) `shekyl-p-fetch`.** The client, `FetchTarget` (`SF-D7`
-  amendment) and the `ServingEndpoint` newtype in `shekyl-curve-tree`,
-  the `SF-D6` taxonomy as typed errors, the dep-cut gate
-  (`check_p_fetch_dep_cut.sh`), and a SPIKE-PIN `N` with its
+- **(b) `shekyl-p-fetch` — BUILT 2026-09-13 (`62076d69c`, `5f553754a`).**
+  The client, `FetchTarget` (`SF-D7` amendment) and the
+  `ServingEndpoint` newtype in `shekyl-curve-tree`, the `SF-D6`
+  taxonomy as typed errors, the dep-cut gate
+  (`check_p_fetch_dep_cut.py`), and SPIKE-PIN `N = 4` with its
   lower-bound rationale recorded.
+
+  **Amendment 2026-09-13 — (a) and (b) land as one PR.** The
+  FOLLOWUPS row (the implementation record) already scoped them as one
+  sub-PR, and (a) alone would merge a server requiring a header no
+  client in the tree sends. Seven scope-respecting commits in the
+  (a)→(b) order, stacked on #734 because the client compiles against
+  (a0)'s `pass_anchor`; under the rule-06 ceiling. The stacked PR's
+  description carries this disclosure.
 - **(c) W₂ on (b), then pin `N`.** The SP-T3 daemon→wallet re-base
-  runs against the (b) client; the upper bound it produces and (b)'s
+  runs against the (b) client — and **re-bases the rig's client leg
+  onto it**: `shekyl-p-transport::blocking_get` cannot carry the
+  `SF-D5` header, so since (a) the rig's every fetch is the identical
+  404 (disclosed at `harness.rs::fetch_once`). The leg was not swapped
+  in (b) because the production client dials without SOCKS isolation
+  and the rig's cold/warm arms *are* per-client isolation; how "cold"
+  is measured over the reuse topology is (c)'s design. Falsify by
+  `live_apparatus` passing; the upper bound it produces and (b)'s
   lower-bound judgement pin the integer, replacing the SPIKE-PIN.
 
 The round doc archives to `docs/completed/` when (c) lands.

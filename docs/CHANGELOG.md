@@ -61,6 +61,41 @@
   (the `P`-side ±`L` gate lands with the serve-side PR). Pre-genesis; no
   chain state exists under v1.
 
+- **The archival serving route requires one request header and
+  countersigns every served body.** `GET /shard/{id}` now carries
+  `shekyl-pass-request: <144 lowercase hex>` — the 72-byte
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — and `P` refuses,
+  with the identical complete-head 404, a request whose header is missing,
+  duplicate, malformed, wrong-length, or whose `anchor_height` lies
+  outside `[p − 720 − L, p − 720 + L]` of its own height (the gate runs
+  before the shard lookup). A 200 body is the canonical `HybridSignature`
+  (3385 bytes) over the decoded header ‖ `shard_id_le[8]` under the v2
+  attestation domain, then the unchanged `RF-D4` frame
+  ([`ARCHIVAL_SERVING_ROUTE.md`](design/ARCHIVAL_SERVING_ROUTE.md);
+  [`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D5`,
+  `SF-D8`, §9.1 (a)+(b)). The grammar both ends read — port 80, route
+  prefix, header name and hex codec, response header set,
+  `ServingEndpoint` — is homed in `shekyl_curve_tree::serving_route`.
+  `shekyl-p-serve` signs through a `PassSigner` the host supplies;
+  `shekyl-p-host` binds a `HostSigner` over a caller-provided `PassKey`,
+  and the wallet binds `NoResidentKey` until SH-2 wires the persona's
+  resident attestation key, so **every serve from a real wallet is today a
+  counted sign refusal** (`ServeCounters::sign_failures`) rendering the
+  404. New crate `shekyl-p-fetch`: the daemon-side client
+  (`PFetchClient::fetch(&FetchTarget, &RequestHeader)`), SOCKS5h through
+  the daemon's own Tor client with no isolation flags, `MAX_INFLIGHT = 4`
+  (provisional, W₂ pins it), body ceiling refused from `content-length`
+  before a byte is read, typed outcomes `Stall` / `Miss` / `Malformed` /
+  `BadCountersignature` / `ContentRefused`, countersignature verified
+  under the target's bond-record key through the same
+  `verify_pass_transcript` consensus admission uses, and a `ContentVerify`
+  hole for the body's meaning (sub-PR 2). Built, unwired: nothing in the
+  daemon constructs the client yet. New grep gate
+  `scripts/ci/check_p_fetch_dep_cut.py` holds the `SF-D4` dependency cut
+  and keeps `test-signer` out of every shipped graph. The SP-T3 rig's
+  client leg cannot send the header and is dead until §9.1 (c) re-bases
+  it (disclosed at `harness.rs::fetch_once`).
+
 - **The `JoinMarket` bond post carries the persona's serving endpoint** — the
   raw 32-byte Ed25519 key of its v3 onion service, mandatory, refused on every
   other kind (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`) — and the `archival_bond`

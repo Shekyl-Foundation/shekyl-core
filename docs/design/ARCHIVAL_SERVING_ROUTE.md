@@ -1,7 +1,9 @@
 # Archival serving route — request contract
 
 **Status: LIVING CONTRACT.** Ruled 2026-09-10 (`RF-R1`). Last verified
-2026-09-12 (`SF-D9`: topology is daemon→P per `EU-D1`).
+2026-09-13 (`SF` (a)+(b): the request header and the countersignature
+envelope landed on both ends; grammar homed in
+`shekyl_curve_tree::serving_route`).
 
 This is the request half that
 [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md)
@@ -9,13 +11,21 @@ This is the request half that
 [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §9.5
 both declined. Those exclusions stand: this is not a format-round
 document and not consensus. It is the HTTP/1.1-over-onion request a
-witness uses to fetch a shard. Index row `RF-R1`. Implementation:
-`rust/shekyl-p-serve` (`ROUTE_PREFIX`, `parse_request`,
-`RESPONSE_HEADER_NAMES`, `NOT_FOUND`).
+witness uses to fetch a shard. Index row `RF-R1`. Implementation: the
+grammar both ends read is `shekyl_curve_tree::serving_route`
+(`SERVING_VIRTUAL_PORT`, `ROUTE_PREFIX`, `CONTENT_TYPE`,
+`RESPONSE_HEADER_NAMES`, `REQUEST_HEADER_NAME`,
+`encode_request_header` / `decode_request_header`, `ServingEndpoint`);
+the server is `rust/shekyl-p-serve` (`parse_request`, `resolve_body`,
+`NOT_FOUND`); the client is `rust/shekyl-p-fetch` (`PFetchClient`,
+`RequestHeader`, `FetchError`).
 
-The body after `\r\n\r\n` is `RF-D4`
-(`shekyl_curve_tree::served_frame::ServedFrameHeader`). This document
-does not own it.
+The body after `\r\n\r\n` is the **countersignature envelope** then the
+`RF-D4` frame: `HybridSignature` canonical bytes
+(`SIGNATURE_ENVELOPE_LEN = HybridSignature::CANONICAL_LEN`, 3385) ‖
+`shekyl_curve_tree::served_frame::ServedFrameHeader` ‖ payload
+(`SF-D8`). This document owns the envelope's *position and width*; the
+signature's transcript is `SF-D8`'s and the frame is `RF-D4`'s.
 
 ---
 
@@ -38,11 +48,13 @@ The contract freezes at the **earliest** of:
 
 Until then the path is still cheap to change. After, it is a flag day.
 
-Today none of the three has fired: there is no production fetcher
-(`RF-D4`), and `PersonaServingHost` has never published a descriptor
-(index SH-1 / SH-2b-2 remainder). The ruling still lands now because
-genesis software will ship this path, and silence is how
-`/x-provisional/v0/shard/` would have shipped.
+Today none of the three has fired — but (1) is one wiring away. The
+client crate `shekyl-p-fetch` speaks this contract (`SF` (b),
+2026-09-13); no daemon path invokes it yet (the challenge / reconstruct
+scheduler is `SF` sub-PR 2's, behind `PDM-Q6`). `PersonaServingHost`
+has never published a descriptor (index SH-1 / SH-2b-2 remainder). The
+ruling still lands now because genesis software will ship this path,
+and silence is how `/x-provisional/v0/shard/` would have shipped.
 
 ---
 
@@ -83,15 +95,22 @@ the tests are the spec.
   else. No `date`, no `server`, no `etag`, no `accept-ranges`.
 - `content-type` is `application/octet-stream`.
 - Every **complete-head** non-servable outcome — wrong path, wrong
-  method, malformed route/id, unknown shard, unfrozen shard, store
-  failure — renders one identical 404 with the same two headers and
+  method, malformed route/id, missing / duplicate / malformed /
+  wrong-length request header, `anchor_height` outside `P`'s gate,
+  unknown shard, unfrozen shard, store failure, signer refusal —
+  renders one identical 404 with the same two headers and
   `content-length: 0`.
+- On 200, `content-length` is `SIGNATURE_ENVELOPE_LEN + framed_len`;
+  the body leads with the countersignature, then the `RF-D4` frame.
 - Incomplete heads (oversized, mid-head EOF, read timeout) and
   over-capacity arrivals are **closed with no HTTP bytes**.
 - Which response a complete head gets is settled before any byte is
-  written.
-- No request logging at any level. Observables are four aggregate
-  monotone counters (served, refused, lookup failures, accept failures).
+  written. The gate check runs **before** the shard lookup, and the
+  signature is computed **after** it, so an out-of-gate request costs
+  no store read and a miss costs no signature.
+- No request logging at any level. Observables are five aggregate
+  monotone counters (served, refused, lookup failures, sign failures,
+  accept failures).
 
 Two personas served from one wallet are byte-indistinguishable at the
 header level. That is the privacy invariant
@@ -108,20 +127,27 @@ header level. That is the privacy invariant
 - `{id}` is an exact decimal `u64` (`FromStr`). No path suffix, no query
   string, no sign. Leading zeros are accepted by `u64` parse (so `/shard/007`
   is shard 7); that is current behaviour, not a second encoding.
-- Request headers are ignored. Presence, absence, and values are not a
-  discriminator. **AMENDMENT RULED 2026-09-13, NOT LANDED on this route
-  (`SF-D5`, second amendment; the verifier half landed as `SF` (a0)):**
-  one required header decoding to 72 bytes
-  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`; missing,
-  malformed, duplicate, or wrong-length values join the identical
+- **One required request header** (`SF-D5`, second amendment, LANDED
+  2026-09-13 as `SF` (a)): name `shekyl-pass-request`
+  (`REQUEST_HEADER_NAME`; matched case-insensitively, as HTTP names
+  are), value the **lowercase hex** of exactly 72 bytes
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`
+  (`REQUEST_HEADER_BYTES`; `encode_request_header` /
+  `decode_request_header`). The value is strict: 144 lowercase hex
+  digits, optional surrounding whitespace only. Missing, duplicate,
+  uppercase, wrong-length, or non-hex values join the identical
   complete-head 404, and so does an `anchor_height` outside
   `[p − 720 − L, p − 720 + L]` for `P`'s own height `p`
   (`L = archival_attestation_anchor_lag_blocks`, the same `L` on both
-  sides so no `P` gates distinctively). `P` signs the **decoded** 72
-  bytes ‖ `shard_id_le[8]`, never the textual form. Exact spelling and
-  encoding land in the `shekyl-p-serve` PR (`SF` (a)), then this line
-  updates. Until then this line describes the landed header-ignoring
-  implementation.
+  sides so no `P` gates distinctively; the window saturates at zero
+  for `p < 720`). `P` signs the **decoded** 72 bytes ‖ `shard_id_le[8]`
+  under `SCHEME_DOMAIN_ATTESTATION` (`SF-D8`;
+  `shekyl_archival_retention::pass_anchor::pass_countersignature_message`),
+  never the textual form. Every other request header is ignored.
+- The client sends exactly two lines after the request line: the
+  header above and the blank terminator. No `host`, no `user-agent`,
+  no `accept` — every requester's head is byte-identical modulo `{id}`
+  and the header value (`SF-D1`, requester side).
 
 ### Transport — RULED by transcription
 
@@ -131,8 +157,17 @@ headers are the fingerprint this contract forbids. The endpoint binds
 `shekyl-p-host` wires. This crate does not speak Tor.
 
 `MAX_INFLIGHT`, `MAX_REQUEST_BYTES`, and the write/stall timeouts are
-**not** this contract. `MAX_INFLIGHT` remains SPIKE-PIN-2 (a placeholder
-the W₂ rig derives). They are operational bounds, not the request line.
+**not** this contract, on either end. The server's `MAX_INFLIGHT`
+remains SPIKE-PIN-2 (a placeholder the W₂ rig derives); the client's
+`shekyl_p_fetch::MAX_INFLIGHT = 4` is `SF-D7`'s SPIKE-PIN with its
+lower-bound rationale on the constant; `shekyl_p_fetch::Timeouts` and
+`max_body_bytes()` are operational bounds. They decide when an attempt
+is a stall or a refusal, never what a completed exchange means.
+
+The client dials `ServingEndpoint::onion_address():80` through the
+daemon's own Tor client as SOCKS5**h** (`SF-D2`, `SF-D3`): the proxy
+resolves the name; the client resolves nothing and offers no SOCKS
+auth (no per-fetch circuit isolation).
 
 ---
 
@@ -153,12 +188,21 @@ the W₂ rig derives). They are operational bounds, not the request line.
 ## Falsifier
 
 **Holds** iff `ROUTE_PREFIX == "/shard/"` in
-`rust/shekyl-p-serve/src/serve.rs` and
+`rust/shekyl-curve-tree/src/serving_route.rs` and
 `request_parsing_accepts_only_the_ruled_route` is green (the discarded
-`/x-provisional/v0/shard/` path is a miss).
+`/x-provisional/v0/shard/` path is a miss); and the two ends agree on
+the header and the envelope —
+`request_header_parsing_is_http_lenient_and_value_strict` and
+`the_served_body_leads_with_the_countersignature_then_the_frame`
+(`shekyl-p-serve`) green beside
+`a_signed_shard_comes_back_verified_and_the_proxy_got_the_onion_name`
+(`shekyl-p-fetch`), which pins the client's request bytes verbatim.
 
-**Broken** iff `ROUTE_PREFIX` contains `provisional` or `v0`, or the
-discarded path is accepted.
+**Broken** iff `ROUTE_PREFIX` contains `provisional` or `v0`, the
+discarded path is accepted, or either end reads the grammar from a
+constant that is not `serving_route`'s (`scripts/ci/check_p_fetch_dep_cut.py`
+holds that the client reaches `shekyl-curve-tree`; a re-spelled
+constant is the review's catch).
 
 The loud form of failure is either string surviving into a genesis-freeze
 tag as the live prefix.
