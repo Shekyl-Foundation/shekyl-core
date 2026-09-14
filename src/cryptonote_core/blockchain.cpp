@@ -2242,7 +2242,10 @@ bool Blockchain::handle_alternative_block(const block& b, const crypto::hash& id
     // (`block_height`, which prevalidate_miner_transaction checks against bei.height only
     // afterwards). `alt_chain` is handed through so the anchor hashes above the fork point are
     // THIS chain's, not the main chain's (a deep reorg would otherwise split consensus on every
-    // pass record anchored past the fork). verify_block_attestation logs the specific verdict code.
+    // pass record anchored past the fork). The bond PUBKEY lookup inside is still main-chain
+    // `m_db` state -- a pass from a bond that joined only on this alt chain is refused here
+    // (FOLLOWUPS: "Alt-chain attestation verify resolves bond pubkeys from main-chain state").
+    // verify_block_attestation logs the specific verdict code.
     if (!verify_block_attestation(b, prev_height, &alt_chain, connect.attestation_witness))
     {
       reject_block_form(bvc);

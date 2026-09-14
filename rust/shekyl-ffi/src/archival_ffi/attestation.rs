@@ -152,6 +152,10 @@ pub struct ShekylArchivalAttestationVerifyCtx {
 /// # Safety
 /// `ctx_ptr` must be valid; `witness_ptr` and the ctx's `headers`/`pairs` (and each pair's
 /// `pubkey`) must each point to `len` valid bytes, or be null iff the corresponding `len == 0`.
+/// `ctx.anchor_hashes_ptr` must point to `ctx.anchor_hashes_len` valid, readable `[u8; 32]`
+/// entries, or be null iff `anchor_hashes_len == 0`; a non-null pointer with a shorter backing
+/// allocation is UB the length check cannot catch (it compares `len` against the window shape,
+/// not against the allocation).
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_archival_verify_attestation(
     witness_ptr: *const u8,
