@@ -147,9 +147,14 @@ jobs:
             scripts/ci/check_debit_auth_single_source.sh
           # SF-D4: the shard-fetch client is cut from the serving/wallet side,
           # the SOCKS dial is out of consensus/store/server, and p-serve's
-          # `test-signer` is out of every graph BuildRust.cmake ships. Read
-          # from manifests (this job has no toolchain), so a new shipped root
-          # is added to the script's SHIPPED_ROOTS in the same change.
+          # `test-signer` resolves off in every graph BuildRust.cmake ships.
+          # Read from manifests (this job has no toolchain): shipped roots
+          # are parsed out of BuildRust.cmake itself, and features are
+          # unified Cargo-style (aliases, defaults, optional and weak deps),
+          # not grepped. The selftest first: it plants each forwarding path
+          # on synthetic manifests and proves the resolver sees it (rule 47).
+          run_one "SF-D4: dependency-cut resolver selftest" \
+            python3 scripts/ci/check_p_fetch_dep_cut.py --selftest
           run_one "SF-D4: shard-fetch dependency cut" \
             python3 scripts/ci/check_p_fetch_dep_cut.py
           run_one "Rule 71: nettype selects data, not control flow" \
