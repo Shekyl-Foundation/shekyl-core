@@ -30,6 +30,38 @@ fn cleanup(path: &std::path::Path) {
 }
 
 #[test]
+fn a_reopened_store_is_unknown_not_full() {
+    // §6.2's fourth verification class is REOPEN + reconciliation, so reopen
+    // is part of the mechanism. A file written under a stubbed policy and
+    // reopened must not come back stamped `full` -- that is the artifact the
+    // stamp exists to prevent. Until the policy is persisted (named blocker
+    // on ApplyPolicy::Unknown) every reopen is Unknown: still applies every
+    // family, never parity evidence.
+    let path = tmp("reopen");
+    {
+        let fresh = ChainStore::create(&path).expect("fresh create");
+        assert_eq!(
+            fresh.apply_policy(),
+            ApplyPolicy::Full,
+            "a fresh file is Full"
+        );
+        fresh
+            .begin_batch()
+            .expect("begin")
+            .commit()
+            .expect("commit");
+    }
+    let again = ChainStore::create(&path).expect("reopen via create");
+    assert_eq!(again.apply_policy(), ApplyPolicy::Unknown);
+    assert!(!again.apply_policy().is_parity_evidence());
+    drop(again);
+    let ro = ChainStore::open_read_only(&path).expect("reopen read-only");
+    assert_eq!(ro.apply_policy(), ApplyPolicy::Unknown);
+    assert!(ro.apply_policy().artifact_stamp().contains("REFUSE"));
+    cleanup(&path);
+}
+
+#[test]
 fn a_store_defaults_to_full_apply_and_reports_it() {
     let path = tmp("policy");
     let store = ChainStore::create(&path).expect("create");

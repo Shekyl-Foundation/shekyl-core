@@ -128,6 +128,26 @@ pub enum ApplyPolicy {
     /// The named families' applies are skipped, so the comparator must go
     /// red. Construct with [`Self::stubbed`]; an empty list is refused.
     StubbedFamilies(&'static [ArchivalFamily]),
+    /// The store was **reopened** and no policy is persisted in it, so the
+    /// policy its rows were written under is not knowable from the file.
+    ///
+    /// **Fail-closed by construction.** §6.2's fourth verification class is
+    /// *reopen* + full-domain reconciliation — reopen is part of the
+    /// mechanism, not an edge. A store written under a stubbed policy,
+    /// reopened, and stamped `full` would be precisely the artifact this
+    /// type exists to prevent, and a wrong `full` stamp is worse than no
+    /// stamp. So a reopen without a persisted policy is `Unknown`: it still
+    /// **applies every family** (the taint is on the evidence, not on the
+    /// writes), it is never parity evidence, and every artifact-emitting
+    /// path must refuse it.
+    ///
+    /// **Named blocker (rule 22):** persistence lands with the codecs — an
+    /// `apply_policy` key in `PROPERTIES`, which is a value-codec change and
+    /// therefore a `schema_version` bump under slice C §11.1, in the PR
+    /// where the codec gate exists. **No stamped artifact may be published
+    /// until then.** Falsify by: `ChainStore::open_read_only` reading the
+    /// key and returning the persisted policy instead of `Unknown`.
+    Unknown,
 }
 
 /// [`ApplyPolicy::stubbed`] was given an empty list.
@@ -153,7 +173,7 @@ impl ApplyPolicy {
     pub const fn reject_empty_stub(self) -> Result<(), EmptyApplyStub> {
         match self {
             Self::StubbedFamilies([]) => Err(EmptyApplyStub),
-            Self::Full | Self::StubbedFamilies(_) => Ok(()),
+            Self::Full | Self::Unknown | Self::StubbedFamilies(_) => Ok(()),
         }
     }
 
@@ -161,6 +181,8 @@ impl ApplyPolicy {
     /// evidence, or archived under §8.1.
     #[must_use]
     pub const fn is_parity_evidence(self) -> bool {
+        // `Unknown` is deliberately not listed: a reopen without a persisted
+        // policy cannot vouch for the rows it finds.
         matches!(self, Self::Full)
     }
 
@@ -170,7 +192,9 @@ impl ApplyPolicy {
     #[must_use]
     pub fn applies(self, family: ArchivalFamily) -> bool {
         match self {
-            Self::Full => true,
+            // Unknown applies everything: the doubt is about what was written
+            // before this handle, not about what this handle should write.
+            Self::Full | Self::Unknown => true,
             Self::StubbedFamilies(list) => !list.contains(&family),
         }
     }
@@ -180,6 +204,9 @@ impl ApplyPolicy {
     pub fn artifact_stamp(self) -> String {
         match self {
             Self::Full => "apply-policy=full".to_owned(),
+            Self::Unknown => {
+                "apply-policy=UNKNOWN NOT-PARITY-EVIDENCE REFUSE-TO-PUBLISH".to_owned()
+            }
             Self::StubbedFamilies(list) => {
                 let mut names: Vec<&str> = list.iter().map(|f| f.table()).collect();
                 names.sort_unstable();
@@ -196,6 +223,18 @@ impl ApplyPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_applies_everything_but_is_never_evidence() {
+        // The taint is on the evidence, not the writes: a reopened store
+        // keeps applying every family, and nothing it produces may be cited.
+        assert!(!ApplyPolicy::Unknown.is_parity_evidence());
+        for f in ArchivalFamily::ALL {
+            assert!(ApplyPolicy::Unknown.applies(f), "{f:?}");
+        }
+        let s = ApplyPolicy::Unknown.artifact_stamp();
+        assert!(s.contains("UNKNOWN") && s.contains("REFUSE"), "{s}");
+    }
 
     #[test]
     fn the_default_is_full_and_only_full_is_parity_evidence() {

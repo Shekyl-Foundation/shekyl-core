@@ -272,7 +272,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) — **met 2026-09-05 (P0b):** audit §§2-3 verdicts + §7/§8 transcriptions; both S-grades were closed by PR #602/#604 | Security | DRS-P0 |
 | **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 was bucket-1 ratified with an implementation that silently omitted an accepted output (fixed 2026-09-04), so a digest match there would have recorded reproduction of the defect — the reason the rule is written this way. Over a **DIVERGENT** or **UNREVIEWED** row — or any bucket-3/4 row — the digest is regression evidence and must be reported as that (a **CHECKED-CONFORMANT** register row is the one case where a match *is* correctness evidence). **Met-exists 2026-09-10 (P0d):** `shekyl-chain-store::digest_v0` + `BlockchainLMDB::logical_state_digest_v0` against production LMDB (core chain + spent_keys + live curve root). DRS-C consumes it. Archival journals excluded (§7.1.1) | Security | DRS-P0 → C |
-| **A3** | Known durable-state **warts** are recorded (DRS-W1…DRS-W16); default **RECORD-AND-SPECIFY**. **Met 2026-09-08 (P0c):** four remaining rows registered in the audit §9; A-6 dominance analysis declined (possession-typed write handle). **Regraded 2026-09-09:** DRS-W15 Forbidden is DIVERGE-by-delete **conditional** on R4 keeping an incremental vote window; R4 answers that prior question, not two sequenced ones. DRS-W12 is latent (capability, not a blinded test) | Security | DRS-P0 / C |
+| **A3** | Known durable-state **warts** are recorded (DRS-W1…DRS-W17); default **RECORD-AND-SPECIFY**. **Met 2026-09-08 (P0c):** four remaining rows registered in the audit §9; A-6 dominance analysis declined (possession-typed write handle). **Regraded 2026-09-09:** DRS-W15 Forbidden is DIVERGE-by-delete **conditional** on R4 keeping an incremental vote window; R4 answers that prior question, not two sequenced ones. DRS-W12 is latent (capability, not a blinded test) | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |
 | **A6** | **IBD wall time** meets the §1.3 floor (full-node viability → density → remote-node privacy) | Privacy | DRS-BENCH / DRS-0 |
@@ -1034,10 +1034,11 @@ Compare engines (redb / heed / LMDB) on the rows above when the suite runs;
 halt conditions named in the bench plan (e.g. file-growth slope, RSS ceiling,
 IBD floor from DRS-0).
 
-**Stage one — landed (2026-09-13).** Gate `scripts/bench/drs_artifact.py`
-(schema, refusals, §1.3 compare, redb-engine probe) and runner
-`scripts/bench/drs_bench.py` (`measure` / `check` / `validate` / `blockers`)
-with selftest `scripts/bench/test_drs_bench.py`, wired in `docs-gates.yml`.
+**Stage one — landed (2026-09-13; redb-engine probe and `blockers` removed
+2026-09-14).** Gate `scripts/bench/drs_artifact.py` (schema, refusals, §1.3
+compare) and runner `scripts/bench/drs_bench.py` (`measure` / `check` /
+`validate`) with selftest `scripts/bench/test_drs_bench.py`, wired in
+`docs-gates.yml`.
 The **LMDB arm only**. The redb arm is a **second binary**, not a flag: the
 daemon never compiles two store engines into one build (ruled 2026-09-14),
 so there is no `--engine` selector on the harness and no `new_db()` switch to

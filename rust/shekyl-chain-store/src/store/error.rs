@@ -34,8 +34,25 @@ pub enum StoreError {
     /// A write batch is already live on this store.
     ///
     /// redb's `begin_write` **blocks** until the in-progress writer finishes.
-    /// A second `begin_batch` on the same thread would deadlock; this error
-    /// is the C++ `DB_ERROR_TXN_START` shape, not that wait.
+    /// A `begin_batch` while another batch is live. **This is a contract
+    /// violation, not contention — do not retry it.** `write_held` is an
+    /// invariant guard on the declared one-live-write contract, released in
+    /// `WriteBatch::drop`; it is not a queue, and this error does not mean
+    /// "try again later". A caller that wraps it in a retry loop has wrapped
+    /// a bug, and the loop will appear to work.
+    ///
+    /// **Port-boundary divergence, recorded as DRS-W17** in
+    /// `LMDB_WRITE_ATOMICITY_AUDIT.md` §9: the C++ `batch_start()` returns
+    /// `bool`, and two core callers *spin* on it —
+    /// `blockchain.cpp:6553` `while (!(stop_batch = m_db->batch_start(..)))`
+    /// and `:6743` likewise. Those loops must **not** be transliterated to
+    /// `while begin_batch().is_err()`. Serialization of writers is owned by
+    /// the core layer above the store (`m_blockchain_lock`,
+    /// `CRITICAL_REGION_LOCAL1` at `blockchain.cpp:277`), which is why the
+    /// C++ never actually contends there; LMDB's own writer mutex sits below
+    /// that and is never reached by a second thread. No state diff can see
+    /// this divergence — it is a concurrency property, not a stored one — so
+    /// it lives in the register rather than in any comparator.
     WriteInProgress,
     /// [`ApplyPolicy::stubbed`](crate::apply_policy::ApplyPolicy::stubbed)
     /// was given an empty family list, which is `Full` wearing a non-parity

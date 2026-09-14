@@ -141,22 +141,52 @@ pub const fn grade(state: ConformanceState, identical: bool) -> Acceptance {
     }
 }
 
-/// A reviewed expected-divergence or replacement KAT. Empty citations are
-/// not evidence (rule 47): [`ReviewedDivergence::new`] returns `None`.
+/// A reviewed expected-divergence or replacement KAT, **keyed to one row**.
+///
+/// A free citation would license *a* divergence; a row-keyed one licenses
+/// only the row it names — the same distinction the register itself
+/// enforces. **A `ReviewedDivergence` is not transferable between rows**: a
+/// caller holding two DIVERGENT rows and one reviewed record may not reuse
+/// it, or the row-keying means nothing.
+///
+/// # What this constructor checks, and what it deliberately does not
+///
+/// `new` keeps **arity and non-emptiness** only. It cannot resolve a
+/// citation at const time, and faking validation at the type level would be
+/// worse than none — a non-empty string that resolves to nothing is exactly
+/// as much evidence as an empty one (rule 47). The real validation is a CI
+/// leg that lands with the comparator, when discharge sites exist to check:
+/// it asserts `row_id` is DIVERGENT in the live register
+/// (`check_conformance_coverage.py` already parses that tally) and that
+/// `citation` resolves as a `symbol (path:range)` reference
+/// (`check_doc_code_citations.py` already resolves those). Wiring, not
+/// machinery — but not yet wired, and this doc says so rather than implying
+/// the constructor does it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ReviewedDivergence {
+    row_id: &'static str,
     citation: &'static str,
 }
 
 impl ReviewedDivergence {
-    /// Cite the KAT or reviewed record that licenses a DIVERGENT mismatch.
+    /// Cite the KAT or reviewed record that licenses `row_id`'s DIVERGENT
+    /// mismatch — and only that row's.
+    ///
+    /// Returns `None` if either field is empty. Shape is gated here;
+    /// resolution is gated in CI (see the type doc).
     #[must_use]
-    pub const fn new(citation: &'static str) -> Option<Self> {
-        if citation.is_empty() {
+    pub const fn new(row_id: &'static str, citation: &'static str) -> Option<Self> {
+        if row_id.is_empty() || citation.is_empty() {
             None
         } else {
-            Some(Self { citation })
+            Some(Self { row_id, citation })
         }
+    }
+
+    /// The register row this evidence licenses, e.g. `"CEN-G6"`.
+    #[must_use]
+    pub const fn row_id(self) -> &'static str {
+        self.row_id
     }
 
     /// The citation this evidence carries.
@@ -176,9 +206,11 @@ impl ReviewedDivergence {
 pub enum FinalVerdict {
     /// CHECKED-CONFORMANT match: correctness evidence.
     AcceptedAsCorrect,
-    /// DIVERGENT mismatch with a reviewed citation: the port implemented
-    /// the ratified spec, not the shipped defect.
-    AcceptedAsCorrected { citation: &'static str },
+    /// DIVERGENT mismatch with reviewed, row-keyed evidence: the port
+    /// implemented the ratified spec, not the shipped defect. Carries the
+    /// typed evidence rather than an unwrapped string, so the row-keying and
+    /// non-emptiness survive into every consumer.
+    AcceptedAsCorrected(ReviewedDivergence),
     /// The row failed. The port must change.
     Failed(FailureReason),
     /// UNREVIEWED: observed, grants no correctness.
@@ -197,9 +229,7 @@ pub const fn discharge(graded: Acceptance, evidence: Option<ReviewedDivergence>)
         Acceptance::Failed(reason) => FinalVerdict::Failed(reason),
         Acceptance::RegressionSignalOnly => FinalVerdict::RegressionSignalOnly,
         Acceptance::NeedsReviewedDivergence => match evidence {
-            Some(ev) => FinalVerdict::AcceptedAsCorrected {
-                citation: ev.citation,
-            },
+            Some(ev) => FinalVerdict::AcceptedAsCorrected(ev),
             None => FinalVerdict::AwaitingReview,
         },
     }
@@ -355,20 +385,49 @@ mod tests {
     fn a_divergent_mismatch_awaits_review_until_cited() {
         let graded = grade(ConformanceState::Divergent, false);
         assert_eq!(discharge(graded, None), FinalVerdict::AwaitingReview);
-        assert_eq!(ReviewedDivergence::new(""), None);
-        let evidence = ReviewedDivergence::new("CEN-G6 KAT: S=4").expect("non-empty");
+        assert_eq!(ReviewedDivergence::new("CEN-G6", ""), None);
+        let evidence = ReviewedDivergence::new("CEN-G6", "CEN-G6 KAT: S=4").expect("non-empty");
         assert_eq!(
             discharge(graded, Some(evidence)),
-            FinalVerdict::AcceptedAsCorrected {
-                citation: "CEN-G6 KAT: S=4",
-            }
+            FinalVerdict::AcceptedAsCorrected(evidence)
         );
+        // The verdict carries the TYPED evidence, so the row it licenses is
+        // recoverable downstream rather than lost in an unwrapped string.
+        if let FinalVerdict::AcceptedAsCorrected(ev) = discharge(graded, Some(evidence)) {
+            assert_eq!(ev.row_id(), "CEN-G6");
+        } else {
+            panic!("expected AcceptedAsCorrected");
+        }
+    }
+
+    #[test]
+    fn evidence_is_keyed_to_a_row_and_both_halves_are_required() {
+        // Shape is gated here; resolution is gated in CI when discharge sites
+        // exist. A free citation licenses A divergence; a row-keyed one
+        // licenses only the row it names.
+        assert_eq!(
+            ReviewedDivergence::new("", "CEN-G6 KAT: S=4"),
+            None,
+            "row_id required"
+        );
+        assert_eq!(
+            ReviewedDivergence::new("CEN-G6", ""),
+            None,
+            "citation required"
+        );
+        let a = ReviewedDivergence::new("CEN-G6", "CEN-G6 KAT: S=4").expect("valid");
+        let b = ReviewedDivergence::new("CEN-G6b", "CEN-G6 KAT: S=4").expect("valid");
+        // Same citation, different row: NOT the same evidence. A caller with
+        // two DIVERGENT rows and one reviewed record may not reuse it.
+        assert_ne!(a, b);
+        assert_eq!(a.row_id(), "CEN-G6");
+        assert_eq!(b.row_id(), "CEN-G6b");
     }
 
     #[test]
     fn evidence_does_not_pardon_a_failure_or_decorate_a_match() {
         let defect = grade(ConformanceState::Divergent, true);
-        let evidence = ReviewedDivergence::new("should not pardon").expect("non-empty");
+        let evidence = ReviewedDivergence::new("CEN-G6", "should not pardon").expect("non-empty");
         assert_eq!(
             discharge(defect, Some(evidence)),
             FinalVerdict::Failed(FailureReason::ReproducedKnownDefect)

@@ -114,7 +114,16 @@ impl ChainStore {
     ///
     /// [`StoreError::Open`] if the file cannot be created or opened.
     pub fn create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        Self::with_apply_policy(path, ApplyPolicy::default())
+        // Fresh file -> Full: nothing was written before this handle. An
+        // EXISTING file has rows whose policy is not persisted yet, so it
+        // reopens as Unknown (fail-closed; see ApplyPolicy::Unknown's named
+        // blocker). The existence check runs before redb creates the file.
+        let policy = if path.as_ref().exists() {
+            ApplyPolicy::Unknown
+        } else {
+            ApplyPolicy::default()
+        };
+        Self::with_apply_policy(path, policy)
     }
 
     /// Create or open the store with an explicit [`ApplyPolicy`].
@@ -164,7 +173,9 @@ impl ChainStore {
             .map_err(StoreError::Open)?;
         Ok(Self {
             backend: Backend::ReadOnly(db),
-            apply_policy: ApplyPolicy::default(),
+            // A read-only handle is always a reopen, and no policy is
+            // persisted yet, so it can never vouch for what it finds.
+            apply_policy: ApplyPolicy::Unknown,
             write_held: AtomicBool::new(false),
         })
     }
