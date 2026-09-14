@@ -9,8 +9,10 @@
 // are empty. Working-store KATs live on TempLMDB
 // (tests/unit_tests/archival_settlement_table.cpp).
 //
-// Red edit: revert set_archival_settlement to `{}`. The throw test goes green
-// on a fail-open double.
+// Red edit: replace set_archival_settlement's body with `{}` (the fail-open
+// double). Both EXPECT_THROW tests go red — that is this file catching the
+// silent no-op it exists to refuse. The absent-read and empty-delete tests
+// stay green under that edit, which is why they cannot carry the check alone.
 
 #define IN_UNIT_TESTS
 

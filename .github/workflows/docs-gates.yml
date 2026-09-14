@@ -319,9 +319,12 @@ jobs:
       - name: Run redb schema bijection gate
         # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
         # redb TableDefinition and vice versa, no duplicates on either side.
-        # The X-macro is the only admissible source: the settlement pair
-        # exists only on BlockchainLMDB, so a schema built from the abstract
-        # interface silently omits a write path LMDB has (SO-D8).
+        # The X-macro is the only admissible source: a table can exist
+        # without being on BlockchainDB's interface. Until 2026-09-13 the
+        # settlement pair existed only on BlockchainLMDB, so a schema built
+        # from the abstract interface would have omitted a write path LMDB
+        # has; SO-D8 promoted it since, which closes the instance, not the
+        # class (rationale of record: check_redb_schema_bijection.py header).
         # Checks NAMES, not types — ordering is the key-type gate above;
         # comparator evidence is in lmdb_order's tests; class evidence is
         # per-row in the audit's §12.

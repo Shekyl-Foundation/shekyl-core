@@ -281,8 +281,8 @@ countersignature a format-round decision.
 
 **So both witness families are excluded for want of a producer**, exactly as
 `archival_settlement` is, and both revert halves are vacuous by the §3.2
-argument: `remove_archival_attestation_witness_at_height` (`db_lmdb.cpp:9763`)
-and `remove_archival_alt_attestation_witness` (`db_lmdb.cpp:9808`) are each a
+argument: `remove_archival_attestation_witness_at_height` (`db_lmdb.cpp:9764`)
+and `remove_archival_alt_attestation_witness` (`db_lmdb.cpp:9809`) are each a
 lone `mdb_del` with no counter and no side effect, so neither can be
 discriminated over a table nothing writes. The named blocker is the **Phase 2/3
 template writer**, not SO-D8.
