@@ -65,9 +65,10 @@ pub const Q_RISK_STAR: f64 = 0.1011;
 pub enum FailureKind {
     /// The request exceeded the harness's own ceiling without completing.
     Timeout,
-    /// The circuit or rendezvous could not be established.
+    /// The circuit or rendezvous could not be established, or the connection
+    /// closed before any response head — no exchange happened.
     Circuit,
-    /// A response arrived but stopped short, or the stream broke mid-body —
+    /// A response began but stopped short, or the stream broke mid-body —
     /// the apparatus-failure signal (a truncated shard is not a slow shard).
     Truncated,
     /// A **completed** exchange the production client refused: the identical
@@ -247,14 +248,18 @@ fn nearest_rank(sorted: &[Duration], p: u8) -> Option<Duration> {
 ///
 /// # Why this exists — the cold arm might not be cold
 ///
-/// The cold/warm split rests on distinct SOCKS usernames getting distinct
-/// circuits (`IsolateSOCKSAuth`), which controls the **client** side. It does
-/// *not* control the **service** side: a client that has already fetched a
-/// persona's descriptor may have it cached, and tor may reuse service-side
-/// rendezvous machinery across successive fetches to the *same* persona. The
-/// cold arm varies the client id but hits one persona throughout, so fetch #150
-/// can be paying a materially smaller setup cost than fetch #1 while both are
-/// labelled "cold".
+/// The cold arm rests on `SIGNAL NEWNYM` to the **client** tor before each
+/// fetch (`harness.rs`, the re-based rig): tor drops its client circuits and
+/// its client-side onion-service state, so the next fetch pays descriptor,
+/// intro, and rendezvous from nothing. That controls the client side. It does
+/// *not* control the **service** side — the persona's tor keeps its intro
+/// points and may reuse service-side rendezvous machinery across successive
+/// fetches from the *same* client — and it does not control the guards, which
+/// `NEWNYM` deliberately keeps. The cold arm hits one persona throughout, so
+/// fetch #150 can be paying a materially smaller setup cost than fetch #1
+/// while both are labelled "cold". (The first rig's isolation-key mechanism
+/// had the same exposure through a shared descriptor cache; the mechanism
+/// changed, the check did not.)
 ///
 /// **The bias is directional and unsafe.** If later cold fetches are faster, the
 /// arm's tail is optimistic, which pushes `D*` *up* — handing TJ-C a more
@@ -417,6 +422,12 @@ pub struct SweepPoint {
     pub width: usize,
     /// The observations at that width — every fetch of every round.
     pub observations: Vec<Observation>,
+    /// Connections the **serve side** shed at its own in-flight cap while
+    /// this width ran (the delta of the endpoints' refusal counters across
+    /// the point). Non-zero means the placeholder cap, not the transport,
+    /// shaped these observations: the row is **void** as an `N` input and
+    /// is reported as such, never quietly folded into the table.
+    pub cap_refusals: u64,
 }
 
 /// One row of the churn table `SF-D7` reads its upper bound from.
@@ -444,9 +455,27 @@ pub struct ChurnRow {
     pub circuit_rate: f64,
     /// The inverted gate answer at this width.
     pub d_star: DStar,
+    /// Serve-side cap refusals during this width (see
+    /// [`SweepPoint::cap_refusals`]). A row with a non-zero count is
+    /// **void**: its churn is the placeholder cap's, not Tor's. It stays in
+    /// the table so the reader sees *that* it was void rather than a gap,
+    /// and it is never the ratio baseline.
+    pub cap_refusals: u64,
+}
+
+impl ChurnRow {
+    /// Whether this row can be read as an `N` input at all.
+    #[must_use]
+    pub const fn is_void(&self) -> bool {
+        self.cap_refusals != 0
+    }
 }
 
 /// Summarise a sweep into the churn table, ordered by width.
+///
+/// The `p99 / p99(width 1)` ratio takes its baseline from the width-1 row
+/// only when that row is not void; a cap-bound baseline would scale every
+/// other row by the placeholder, so the column is left empty instead.
 #[must_use]
 pub fn churn_table(points: &[SweepPoint]) -> Vec<ChurnRow> {
     let mut rows: Vec<ChurnRow> = points
@@ -470,18 +499,19 @@ pub fn churn_table(points: &[SweepPoint]) -> Vec<ChurnRow> {
                 p99_over_width_1: None,
                 circuit_rate: ratio(circuits, s.n),
                 d_star: s.d_star,
+                cap_refusals: pt.cap_refusals,
             }
         })
         .collect();
     rows.sort_by_key(|r| r.width);
     let baseline = rows
         .iter()
-        .find(|r| r.width == 1)
+        .find(|r| r.width == 1 && !r.is_void())
         .and_then(|r| r.p99)
         .map(|d| d.as_secs_f64());
     for row in &mut rows {
         row.p99_over_width_1 = match (baseline, row.p99) {
-            (Some(b), Some(p)) if b > 0.0 => Some(p.as_secs_f64() / b),
+            (Some(b), Some(p)) if b > 0.0 && !row.is_void() => Some(p.as_secs_f64() / b),
             _ => None,
         };
     }
@@ -541,6 +571,7 @@ mod tests {
         let one = SweepPoint {
             width: 1,
             observations: (1..=100).map(|_| Observation::success(secs(10))).collect(),
+            cap_refusals: 0,
         };
         let mut four_obs: Vec<Observation> =
             (1..=90).map(|_| Observation::success(secs(25))).collect();
@@ -548,16 +579,45 @@ mod tests {
         let four = SweepPoint {
             width: 4,
             observations: four_obs,
+            cap_refusals: 0,
         };
         // Out of order on purpose: the table sorts by width.
         let rows = churn_table(&[four, one]);
         assert_eq!(rows[0].width, 1);
         assert_eq!(rows[0].p99_over_width_1, Some(1.0));
         assert!((rows[0].circuit_rate - 0.0).abs() < f64::EPSILON);
+        assert!(!rows[0].is_void());
         assert_eq!(rows[1].width, 4);
         assert_eq!(rows[1].p99_over_width_1, Some(2.5));
         assert!((rows[1].circuit_rate - 0.10).abs() < 1e-9);
         // No `bound` field, no knee: the row carries the inputs and stops.
+    }
+
+    #[test]
+    fn a_cap_bound_row_is_void_and_never_the_baseline() {
+        // The serve-side cap shed connections at width 1: those circuit
+        // failures are the placeholder's, so the row is void, and it must
+        // not become the denominator every other row is read against.
+        let one = SweepPoint {
+            width: 1,
+            observations: (1..=100).map(|_| Observation::success(secs(10))).collect(),
+            cap_refusals: 3,
+        };
+        let two = SweepPoint {
+            width: 2,
+            observations: (1..=100).map(|_| Observation::success(secs(12))).collect(),
+            cap_refusals: 0,
+        };
+        let rows = churn_table(&[one, two]);
+        assert!(rows[0].is_void());
+        assert_eq!(rows[0].cap_refusals, 3);
+        assert_eq!(rows[0].p99_over_width_1, None);
+        // Width 2 is clean but has no clean baseline to be read against.
+        assert!(!rows[1].is_void());
+        assert_eq!(rows[1].p99_over_width_1, None);
+        // The void row is still *in* the table — a gap would hide that the
+        // cap bound; a flagged row shows it.
+        assert_eq!(rows.len(), 2);
     }
 
     /// `n` successes with the given second-latencies.

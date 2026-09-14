@@ -74,7 +74,7 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
 
     app.await_reachable()
         .await
-        .expect("at least one persona becomes reachable");
+        .expect("every persona becomes reachable and none is refused");
 
     // Both personas serve, cold, and the production client verifies each body:
     // right length, countersignature valid under the persona's key. A `NEWNYM`
@@ -86,16 +86,25 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
             .await
             .expect("client tor accepts SIGNAL NEWNYM");
         let obs = app.timed_fetch(index).await;
+        // The serve-side counters are in the message so a `Circuit` here
+        // can be told apart from `P` shedding the connection at its cap.
         assert!(
             obs.is_success(),
-            "persona {index} must serve its shard over the rendezvous: {obs:?}"
+            "persona {index} must serve its shard over the rendezvous: {obs:?} \
+             (served so far: {}, shed at the serve-side cap: {})",
+            app.served_total(),
+            app.refused_total()
         );
     }
 
     // A warm fetch (no signal, same persona) must also succeed — this is the
     // arm the measurement calls optimistic, and a failure here would mean the
-    // warm arm measures nothing.
-    let warm = app.timed_fetch(0).await;
+    // warm arm measures nothing. Persona 1 is the one fetched *last*, with no
+    // `NEWNYM` since: its rendezvous circuit is the one the client tor still
+    // holds. Persona 0's was dirtied by the signal before persona 1's fetch,
+    // so refetching it here would build a fresh circuit and validate nothing
+    // about reuse.
+    let warm = app.timed_fetch(1).await;
     assert!(
         warm.is_success(),
         "warm-circuit fetch must succeed: {warm:?}"

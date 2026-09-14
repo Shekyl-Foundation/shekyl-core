@@ -123,11 +123,17 @@ fn report_churn(points: &[SweepPoint]) {
     println!("\n=== SF-D7 upper-bound inputs: client-side churn by in-flight width ===");
     println!("(one client tor; `width` cold fetches to `width` personas at once; shared uplink → pessimistic)");
     println!(
-        "{:>5} {:>5} {:>8} {:>8} {:>9} {:>8} {:>10}  {:>10}",
+        "(one PFetchClient per persona on purpose: the SPIKE-PIN admission semaphore this \
+         sweep exists to replace is NOT in the path; a production daemon has one client)"
+    );
+    println!(
+        "{:>5} {:>5} {:>8} {:>8} {:>9} {:>8} {:>10}  {:>10}  cap",
         "width", "n", "p50 s", "p99 s", "p99/w1", "circ %", "D* s", "mem MB"
     );
     let per_body = max_body_bytes();
-    for row in churn_table(points) {
+    let rows = churn_table(points);
+    let void_rows = rows.iter().filter(|r| r.is_void()).count();
+    for row in &rows {
         let d_star = match row.d_star {
             DStar::At(d) => format!("{:>10.2}", d.as_secs_f64()),
             DStar::Unbounded => " UNBOUNDED".to_owned(),
@@ -143,8 +149,13 @@ fn report_churn(points: &[SweepPoint]) {
             mem_bytes / 1_000_000,
             (mem_bytes % 1_000_000) / 100_000
         );
+        let cap = if row.is_void() {
+            format!("VOID ({} shed)", row.cap_refusals)
+        } else {
+            "ok".to_owned()
+        };
         println!(
-            "{:>5} {:>5} {} {} {:>9} {:>7.1}% {d_star}  {mem_mb:>10}",
+            "{:>5} {:>5} {} {} {:>9} {:>7.1}% {d_star}  {mem_mb:>10}  {cap}",
             row.width,
             row.n,
             fmt_opt_secs(row.p50),
@@ -152,6 +163,13 @@ fn report_churn(points: &[SweepPoint]) {
             row.p99_over_width_1
                 .map_or_else(|| "—".to_owned(), |r| format!("{r:.2}×")),
             row.circuit_rate * 100.0,
+        );
+    }
+    if void_rows != 0 {
+        println!(
+            "{void_rows} row(s) VOID: the serve-side placeholder cap shed connections while they \
+             ran, so their churn is the cap's, not Tor's. Read N from the remaining rows only, \
+             or raise the cap and re-run the sweep."
         );
     }
     println!(
@@ -331,6 +349,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sweep = Vec::new();
     for width in sweep_widths(personas) {
         let mut at_width = Vec::with_capacity(conc_n * width);
+        // The serve-side cap counter *before* this width, so the delta across
+        // it is this width's alone. A non-zero delta voids the row.
+        let refused_before = app.refused_total();
         for i in 0..conc_n {
             app.rotate_client_circuits().await?;
             // One task per fetch, as a daemon's scheduler would issue them;
@@ -350,9 +371,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         append_rows(&mut out, &format!("conc{width}"), &at_width);
         report(&format!("{width} in flight, cold client"), &at_width);
+        let cap_refusals = app.refused_total() - refused_before;
+        if cap_refusals != 0 {
+            println!(
+                "  width {width}: the serve-side cap shed {cap_refusals} connection(s) — \
+                 this row is VOID as an N input (the placeholder cap shaped it, not Tor)"
+            );
+        }
         sweep.push(SweepPoint {
             width,
             observations: at_width,
+            cap_refusals,
         });
     }
 
@@ -385,11 +414,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // believes it fetched. A mismatch means some "success" came from somewhere
     // else, which would invalidate every number above.
     println!("\nendpoints served {} requests total", app.served_total());
-    // And a second cross-check the old rig could not make: a refused count is
-    // the apparatus disagreeing with itself (anchor gate, key, envelope), which
-    // the `refused` outcome column above would already have shown per row.
+    // The run-wide serve-side cap total. Per-width deltas already voided the
+    // sweep rows they fell in; this is the whole-run figure for the record,
+    // and any count outside the sweep (cold/warm/soak are single-stream, so
+    // it should be zero there) is the apparatus disagreeing with itself.
     println!(
-        "endpoints shed {} connections at the serve-side cap",
+        "endpoints shed {} connections at the serve-side cap over the whole run",
         app.refused_total()
     );
 

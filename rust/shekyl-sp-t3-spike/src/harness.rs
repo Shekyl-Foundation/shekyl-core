@@ -124,11 +124,25 @@ pub const APPARATUS_ANCHOR_HASH: [u8; 32] = [0x5a; 32];
 
 /// Ceiling on a single fetch before the harness calls it a timeout.
 ///
-/// Above the sum of the production client's own per-step bounds
-/// ([`Timeouts::DEFAULT`]: dial + head + body), so the client's bound fires
-/// first and the harness ceiling is only a backstop — that way a timeout is
-/// classified by the layer that actually knows why.
-pub const FETCH_CEILING: Duration = Duration::from_secs(720);
+/// **Derived** from the production client's own per-step bounds, not
+/// pinned beside them: [`Timeouts::DEFAULT`]'s dial, the head bound —
+/// which [`PFetchClient::fetch`] applies **twice**, once to writing the
+/// request and once to reading the head — the body deadline, and a margin.
+/// The client's bound must fire first so a timeout is classified by the
+/// layer that knows which step stalled; a ceiling equal to the sum would
+/// let the harness win at the boundary and call the client's `Stall` a
+/// harness `Timeout`. Deriving it is what keeps that true when the
+/// client's bounds move (rule 16: a constant that claims to be the maximum
+/// of others is checked by being computed from them).
+pub const FETCH_CEILING: Duration = Duration::from_secs(
+    Timeouts::DEFAULT.dial.as_secs()
+        + 2 * Timeouts::DEFAULT.head.as_secs()
+        + Timeouts::DEFAULT.body_total.as_secs()
+        + FETCH_CEILING_MARGIN_SECS,
+);
+
+/// Headroom above the client's summed bounds, so the two never race.
+const FETCH_CEILING_MARGIN_SECS: u64 = 60;
 
 /// How long to wait for a freshly-published descriptor to become reachable.
 ///
@@ -260,6 +274,16 @@ impl Persona {
         &self.verifying_key
     }
 
+    /// The endpoint column as a bond record would carry it — the 32 bytes a
+    /// remote reader hands to [`ServingEndpoint::from_record_bytes`] to
+    /// build its [`FetchTarget`]. The `.onion` hostname is *derived* from
+    /// these bytes, not the other way round, so a reader given only the
+    /// hostname could not build the production target.
+    #[must_use]
+    pub fn serving_endpoint(&self) -> &ServingEndpoint {
+        &self.serving
+    }
+
     /// The typed fetch target for shard `shard_id`, as a scheduler would
     /// build it from local chain state.
     #[must_use]
@@ -299,6 +323,13 @@ impl ClientLeg {
     /// apparatus anchor, exactly as a daemon mints one per need; the content
     /// hole accepts every body, because what the rig checks is the
     /// transport and the countersignature, not `R_k`.
+    ///
+    /// # Panics
+    ///
+    /// If the OS entropy source fails. That is not a fetch outcome — no
+    /// exchange happened, so no [`FailureKind`] describes it — and a rig
+    /// that cannot mint nonces has nothing left to measure. It stops loudly
+    /// rather than filing the failure under a class Tor would be blamed for.
     pub async fn fetch_once(
         &self,
         lane: usize,
@@ -306,7 +337,7 @@ impl ClientLeg {
     ) -> Result<usize, FailureKind> {
         let client = &self.lanes[lane % self.lanes.len()];
         let header = RequestHeader::fresh(APPARATUS_ANCHOR_HEIGHT, APPARATUS_ANCHOR_HASH)
-            .map_err(|_| FailureKind::Refused)?;
+            .expect("OS entropy source failed; the apparatus cannot mint request nonces");
         let fetched = tokio::time::timeout(
             FETCH_CEILING,
             client.fetch(target, &header, Arc::new(AcceptAnyContent)),
@@ -373,8 +404,18 @@ pub enum ApparatusError {
     NoServiceId,
     /// The serve endpoint could not bind loopback.
     Bind(std::io::Error),
-    /// No persona became reachable within [`PUBLISH_TIMEOUT`].
+    /// Not every persona became reachable within [`PUBLISH_TIMEOUT`].
     NotReachable,
+    /// A persona answered and the production client **refused** the
+    /// exchange — the identical 404, a bad countersignature, a malformed
+    /// envelope. The onion is up, so this is not publication delay; it is
+    /// the apparatus disagreeing with itself (anchor gate, key, fixture),
+    /// and retrying it until the deadline would only relabel that as
+    /// [`Self::NotReachable`].
+    Refused {
+        /// Index of the persona whose exchange was refused.
+        persona: usize,
+    },
     /// The payload cannot be served at all: not a whole number of leaves, or
     /// more than one segment. Refused at bring-up, because an apparatus that
     /// serves a 404 for every shard measures nothing.
@@ -395,7 +436,14 @@ impl std::fmt::Display for ApparatusError {
                 "ADD_ONION reply carried no service id, or not the derived one"
             ),
             Self::Bind(e) => write!(f, "serve endpoint bind failed: {e}"),
-            Self::NotReachable => write!(f, "no persona became reachable before the deadline"),
+            Self::NotReachable => {
+                write!(f, "not every persona became reachable before the deadline")
+            }
+            Self::Refused { persona } => write!(
+                f,
+                "persona {persona} answered but the client refused the exchange (anchor gate, \
+                 key, or fixture disagree)"
+            ),
             Self::Unframeable { bytes } => write!(
                 f,
                 "payload of {bytes} bytes is not servable (not a whole number of leaves, or \
@@ -587,26 +635,69 @@ impl Apparatus {
         self.client_tor.socks
     }
 
-    /// Block until at least one persona answers, so the measurement does not
+    /// Block until **every** persona answers, so the measurement does not
     /// record descriptor-publication delay as fetch latency.
     ///
     /// This is an **apparatus** step, and its cost is deliberately excluded from
     /// every arm: publication happens once when the persona comes online, not
     /// once per challenge, so folding it into the fetch distribution would
-    /// inflate the tail with a cost a real drawn miner never pays.
+    /// inflate the tail with a cost a real drawn miner never pays. Every
+    /// persona is probed, not just the first: the concurrency sweep fans out
+    /// to all of them at once, and a persona whose descriptor was still
+    /// propagating would have its publication delay recorded as circuit
+    /// churn — the very signal `SF-D7` reads `N` from.
+    ///
+    /// Each probe is bounded by what remains of [`PUBLISH_TIMEOUT`], so the
+    /// deadline is honoured even when a probe stalls for the client's full
+    /// [`FETCH_CEILING`]. A probe the client **refuses** fails at once as
+    /// [`ApparatusError::Refused`]: the onion answered, so waiting longer
+    /// cannot change the outcome, and retrying it to the deadline would file
+    /// an apparatus fault under `NotReachable`.
     pub async fn await_reachable(&self) -> Result<Duration, ApparatusError> {
         let started = Instant::now();
-        let persona = self.personas.first().ok_or(ApparatusError::NotReachable)?;
-        let target = persona.target(0);
-        while started.elapsed() < PUBLISH_TIMEOUT {
-            if let Ok(bytes) = self.client.fetch_once(0, &target).await {
-                if bytes == self.expected_len {
-                    return Ok(started.elapsed());
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(5)).await;
+        let deadline = started + PUBLISH_TIMEOUT;
+        if self.personas.is_empty() {
+            return Err(ApparatusError::NotReachable);
         }
-        Err(ApparatusError::NotReachable)
+        // In slot order, under one shared deadline. The personas publish
+        // concurrently regardless, so by the time the first answers the rest
+        // are usually already up and each later probe is one fetch.
+        for (index, persona) in self.personas.iter().enumerate() {
+            self.probe_until(index, persona.target(0), deadline).await?;
+        }
+        Ok(started.elapsed())
+    }
+
+    /// Probe one persona until it serves the expected body, the client
+    /// refuses it, or `deadline` passes.
+    async fn probe_until(
+        &self,
+        index: usize,
+        target: FetchTarget,
+        deadline: Instant,
+    ) -> Result<(), ApparatusError> {
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ApparatusError::NotReachable);
+            }
+            let probe = tokio::time::timeout(remaining, self.client.fetch_once(index, &target));
+            match probe.await {
+                Ok(Ok(bytes)) if bytes == self.expected_len => return Ok(()),
+                Ok(Err(FailureKind::Refused)) => {
+                    return Err(ApparatusError::Refused { persona: index });
+                }
+                // Not yet reachable, a short body, or the deadline passed
+                // mid-probe: retry while the deadline allows.
+                Ok(_) | Err(_) => {}
+            }
+            let pause =
+                Duration::from_secs(5).min(deadline.saturating_duration_since(Instant::now()));
+            if pause.is_zero() {
+                return Err(ApparatusError::NotReachable);
+            }
+            tokio::time::sleep(pause).await;
+        }
     }
 
     /// Make the next fetch **cold**: `SIGNAL NEWNYM` to the client tor, so it
@@ -710,16 +801,23 @@ impl Apparatus {
 fn classify(e: &FetchError) -> FailureKind {
     match e {
         // The SOCKS dial against an `.onion` is what builds the rendezvous, so
-        // "could not connect" means the rendezvous did not come up.
-        FetchError::Stall(Stall::DialTimeout | Stall::Dial(_)) => FailureKind::Circuit,
+        // "could not connect" means the rendezvous did not come up. A
+        // connection that closed before *any* response head belongs here
+        // too: no exchange happened, so there is no body to have been short
+        // — the stream, or the circuit under it, went away. (`P`'s own
+        // over-capacity close also lands here; the serve-side refusal
+        // counter is what tells the two apart, and a sweep row it is
+        // non-zero for is void, not reinterpreted.)
+        FetchError::Stall(Stall::DialTimeout | Stall::Dial(_) | Stall::ClosedBeforeHead) => {
+            FailureKind::Circuit
+        }
         // The connection came up and then went quiet.
         FetchError::Stall(Stall::HeadTimeout | Stall::BodyTimeout | Stall::NoClose) => {
             FailureKind::Timeout
         }
-        // Bytes stopped short, or the stream broke.
-        FetchError::Stall(Stall::ClosedBeforeHead | Stall::Truncated { .. } | Stall::Io(_)) => {
-            FailureKind::Truncated
-        }
+        // A response began and then stopped short, or the stream broke
+        // under it.
+        FetchError::Stall(Stall::Truncated { .. } | Stall::Io(_)) => FailureKind::Truncated,
         FetchError::Miss
         | FetchError::Malformed(_)
         | FetchError::BadCountersignature
@@ -757,8 +855,11 @@ mod tests {
     fn fetch_ceiling_is_a_backstop_above_the_client_bounds() {
         // The client's own bounds must fire first, so a timeout is classified
         // by the layer that knows which step stalled.
+        // The head bound is applied twice by `PFetchClient::fetch` (request
+        // write, then head read), so the sum the ceiling must clear is
+        // dial + 2·head + body — not dial + head + body.
         let t = Timeouts::DEFAULT;
-        assert!(FETCH_CEILING > t.dial + t.head + t.body_total);
+        assert!(FETCH_CEILING > t.dial + t.head + t.head + t.body_total);
     }
 
     #[test]
@@ -768,6 +869,13 @@ mod tests {
         // returned a short body" from "the apparatus refused the exchange".
         assert_eq!(
             classify(&FetchError::Stall(Stall::DialTimeout)),
+            FailureKind::Circuit
+        );
+        // No head means no exchange: that is the path, not a short body.
+        // Filing it under `Truncated` would take it out of the churn rate
+        // `SF-D7` reads `N` from.
+        assert_eq!(
+            classify(&FetchError::Stall(Stall::ClosedBeforeHead)),
             FailureKind::Circuit
         );
         assert_eq!(
