@@ -69,6 +69,16 @@ impl fmt::Debug for PersonaServing {
 /// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
 /// ordinary miss — a shard the persona simply does not hold — is the
 /// deliberate 404 and moves neither counter.
+///
+/// **Distinguishable is not yet surfaced.** These are read through
+/// [`PersonaServing::counters`]; today the production serving task
+/// (`engine-core`'s `serving::task`) holds the host privately and publishes
+/// only posture and the serve-set alarms, so the counters reach an operator
+/// only through tests. The reading that puts them on the alarm board is the
+/// operator surface `ARCHIVAL_SHARD_FETCH.md` `SF-D6` assigns to `TJ-D`,
+/// carried with the `SH-2` key wiring in `docs/FOLLOWUPS.md` — until it
+/// lands, a nonzero `sign_failures` is a fact the persona knows and nobody
+/// is told.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ServeCounters {
     /// Shards served (200 with a countersigned frame).
