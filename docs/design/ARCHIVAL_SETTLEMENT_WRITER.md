@@ -693,7 +693,9 @@ serve-credit response"* — which is precisely why
 **What is genuinely open** is the arithmetic at the boundary: a response naming
 `E` admitted during `E+1`, and what dedup and the emission gather do with it.
 
-**Scope addition 2026-09-12 (`ba4b3c73a`), so the wiring and the interface change arrive together:** `SO-D8` also **promotes the settlement write path onto `BlockchainDB`**. It lives only on `BlockchainLMDB` today (`src/blockchain_db/lmdb/db_lmdb.h:754–775`; zero hits in `src/blockchain_db/blockchain_db.h` and `src/blockchain_db/testdb.h`), so if the cutover lands without it, either the base-class change happens on the consensus-cutover critical path or the redb store (DRS-0) silently ships without a write path LMDB has.
+**Scope addition 2026-09-12 (`ba4b3c73a`):** `SO-D8` also **promotes the settlement write path onto `BlockchainDB`**. *Its original coupling — "so the wiring and the interface change arrive together" — is SUPERSEDED 2026-09-13: the interface landed alone (`a6f602d33`, next paragraph) while the production caller stays on the §5.1 hold; the promotion was pulled forward precisely so the base-class change is off the cutover's critical path.* **PRE-PROMOTION:** it lived only on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h`; zero hits in `blockchain_db.h` and `testdb.h`), so if the cutover landed without it, either the base-class change would happen on the consensus-cutover critical path or the redb store (DRS-0) would silently ship without a write path LMDB has.
+
+**LANDED 2026-09-13 (`a6f602d33`).** The four methods are pure virtuals on `BlockchainDB`, `override` on `BlockchainLMDB`. `BaseTestDB` throws on write (absence is SO-D1 non-observation, so a silent no-op is fail-open); working-store KATs stay on `TempLMDB`. The production caller remains the §5.1 hold.
 
 **Why it is not ruled here, stated as a rule-22 blocker rather than a
 deferral:** this is **consensus-visible admission timing on a genesis-frozen

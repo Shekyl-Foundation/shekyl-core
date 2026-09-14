@@ -1,0 +1,275 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! SF-D8 pass-countersignature transcript and admission window.
+//!
+//! Design: [`ARCHIVAL_SHARD_FETCH.md`](../../../docs/design/ARCHIVAL_SHARD_FETCH.md)
+//! `SF-D8`. Record codec and [`verify_pass_countersignature`](crate::verify_pass_countersignature)
+//! live in [`crate::attestation_wire`].
+
+use crate::bond_floor::{ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS, ARCHIVAL_REORG_DEPTH_BLOCKS};
+
+/// Requester-random nonce `P` signs over (`SF-D5`: exactly 32 bytes).
+pub const PASS_NONCE_LEN: usize = 32;
+
+/// Little-endian anchor height in the header, transcript, record, and witness.
+pub const PASS_ANCHOR_HEIGHT_LEN: usize = 8;
+
+/// Anchor block hash in the header and transcript. Not carried on the record —
+/// admission looks it up from the connecting chain.
+pub const PASS_ANCHOR_HASH_LEN: usize = 32;
+
+/// Decoded request header: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
+pub const PASS_REQUEST_HEADER_LEN: usize =
+    PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + PASS_ANCHOR_HASH_LEN;
+
+/// Signed transcript: header[72] ‖ shard_id_le[8].
+pub const PASS_COUNTERSIGNATURE_MESSAGE_LEN: usize = PASS_REQUEST_HEADER_LEN + 8;
+
+/// Requester anchors at `tip − depth`; admission's upper bound is `h − depth`.
+/// This is `archival_reorg_depth_blocks` (720).
+pub const PASS_ANCHOR_DEPTH_BLOCKS: u64 = ARCHIVAL_REORG_DEPTH_BLOCKS;
+
+/// Window lag `L` (PROVISIONAL 4). Same `L` on P's pre-sign gate (`RF-R1`).
+pub const PASS_ANCHOR_LAG_BLOCKS: u64 = ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS;
+
+/// Lowest predecessor height with a window: `depth + L`. Below it every pass
+/// record is refused.
+pub const PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT: u64 =
+    PASS_ANCHOR_DEPTH_BLOCKS + PASS_ANCHOR_LAG_BLOCKS;
+
+/// Heights (and hashes) in one window: `L + 1`.
+pub const PASS_ANCHOR_WINDOW_LEN: usize = {
+    assert!(PASS_ANCHOR_LAG_BLOCKS <= u32::MAX as u64);
+    #[allow(clippy::cast_possible_truncation)]
+    let lag = PASS_ANCHOR_LAG_BLOCKS as usize;
+    lag + 1
+};
+
+/// Window construction failed: genesis boundary, or the caller's table is the
+/// wrong length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PassAnchorWindowError {
+    #[error(
+        "no pass anchor window below predecessor height {PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT} \
+         (got {predecessor_height})"
+    )]
+    BelowThreshold { predecessor_height: u64 },
+    #[error("pass anchor hash table has {got} entries, expected {expected}")]
+    WrongLength { expected: usize, got: usize },
+}
+
+/// Connecting-chain hashes for `[h − depth − L, h − depth]`, `hashes[i]` at
+/// `first + i`. Length is [`PASS_ANCHOR_WINDOW_LEN`] in the type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PassAnchorWindow {
+    first: u64,
+    hashes: [[u8; PASS_ANCHOR_HASH_LEN]; PASS_ANCHOR_WINDOW_LEN],
+}
+
+impl PassAnchorWindow {
+    /// `(first_height, len)` the caller must fill, or `None` below
+    /// [`PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT`].
+    #[must_use]
+    pub fn shape_for_predecessor(predecessor_height: u64) -> Option<(u64, usize)> {
+        if predecessor_height < PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT {
+            return None;
+        }
+        let last = predecessor_height - PASS_ANCHOR_DEPTH_BLOCKS;
+        Some((last - PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_WINDOW_LEN))
+    }
+
+    /// Build from the caller's table for `predecessor_height`. The slice must
+    /// be exactly [`PASS_ANCHOR_WINDOW_LEN`] hashes, ascending from `first`.
+    pub fn from_table(
+        predecessor_height: u64,
+        hashes: &[[u8; PASS_ANCHOR_HASH_LEN]],
+    ) -> Result<Self, PassAnchorWindowError> {
+        let Some((first, _)) = Self::shape_for_predecessor(predecessor_height) else {
+            return Err(PassAnchorWindowError::BelowThreshold { predecessor_height });
+        };
+        let hashes: [[u8; PASS_ANCHOR_HASH_LEN]; PASS_ANCHOR_WINDOW_LEN] = hashes
+            .try_into()
+            .map_err(|_| PassAnchorWindowError::WrongLength {
+                expected: PASS_ANCHOR_WINDOW_LEN,
+                got: hashes.len(),
+            })?;
+        Ok(Self { first, hashes })
+    }
+
+    #[must_use]
+    pub const fn first(&self) -> u64 {
+        self.first
+    }
+
+    #[must_use]
+    pub const fn last(&self) -> u64 {
+        self.first + PASS_ANCHOR_LAG_BLOCKS
+    }
+
+    /// Connecting-chain hash at `anchor_height`, or `None` outside the window.
+    #[must_use]
+    pub fn hash_at(&self, anchor_height: u64) -> Option<&[u8; PASS_ANCHOR_HASH_LEN]> {
+        let offset = anchor_height.checked_sub(self.first)?;
+        let i = usize::try_from(offset).ok()?;
+        self.hashes.get(i)
+    }
+}
+
+/// Decoded `SF-D5` header: `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`.
+#[must_use]
+pub fn pass_request_header_bytes(
+    nonce: &[u8; PASS_NONCE_LEN],
+    anchor_height: u64,
+    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
+) -> [u8; PASS_REQUEST_HEADER_LEN] {
+    const HEIGHT_END: usize = PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
+    let mut out = [0u8; PASS_REQUEST_HEADER_LEN];
+    out[0..PASS_NONCE_LEN].copy_from_slice(nonce);
+    out[PASS_NONCE_LEN..HEIGHT_END].copy_from_slice(&anchor_height.to_le_bytes());
+    out[HEIGHT_END..].copy_from_slice(anchor_hash);
+    out
+}
+
+/// Transcript `P` signs: [`pass_request_header_bytes`] ‖ `shard_id_le[8]`.
+/// Plain concatenation, not a hash. Domain is
+/// [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION).
+#[must_use]
+pub fn pass_countersignature_message(
+    nonce: &[u8; PASS_NONCE_LEN],
+    anchor_height: u64,
+    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
+    shard_id: u64,
+) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+    let mut out = [0u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN];
+    out[..PASS_REQUEST_HEADER_LEN].copy_from_slice(&pass_request_header_bytes(
+        nonce,
+        anchor_height,
+        anchor_hash,
+    ));
+    out[PASS_REQUEST_HEADER_LEN..].copy_from_slice(&shard_id.to_le_bytes());
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const H: u64 = 5000;
+
+    fn chain_hash(height: u64) -> [u8; 32] {
+        let mut h = [0u8; 32];
+        h[..8].copy_from_slice(&height.to_le_bytes());
+        h[8] = 0xC4;
+        h
+    }
+
+    fn window_at(predecessor_height: u64) -> PassAnchorWindow {
+        let (first, len) =
+            PassAnchorWindow::shape_for_predecessor(predecessor_height).expect("window");
+        let hashes: Vec<_> = (0..len as u64).map(|i| chain_hash(first + i)).collect();
+        PassAnchorWindow::from_table(predecessor_height, &hashes)
+            .expect("table sized to the window")
+    }
+
+    #[test]
+    fn request_header_and_message_are_the_pinned_concatenation() {
+        let nonce = [0xAAu8; 32];
+        let hash = [0xBBu8; 32];
+        let header = pass_request_header_bytes(&nonce, 0x0102_0304_0506_0708, &hash);
+        assert_eq!(header.len(), PASS_REQUEST_HEADER_LEN);
+        assert_eq!(&header[..32], &nonce);
+        assert_eq!(
+            &header[32..40],
+            &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+        );
+        assert_eq!(&header[40..72], &hash);
+
+        let msg = pass_countersignature_message(
+            &nonce,
+            0x0102_0304_0506_0708,
+            &hash,
+            0x1112_1314_1516_1718,
+        );
+        assert_eq!(msg.len(), PASS_COUNTERSIGNATURE_MESSAGE_LEN);
+        assert_eq!(&msg[..72], &header);
+        assert_eq!(
+            &msg[72..80],
+            &[0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11]
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(
+                &[0xABu8; 32],
+                0x0102_0304_0506_0708,
+                &hash,
+                0x1112_1314_1516_1718
+            )
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(&nonce, 1, &hash, 0x1112_1314_1516_1718)
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(
+                &nonce,
+                0x0102_0304_0506_0708,
+                &[0xBCu8; 32],
+                0x1112_1314_1516_1718
+            )
+        );
+        assert_ne!(
+            msg,
+            pass_countersignature_message(&nonce, 0x0102_0304_0506_0708, &hash, 1)
+        );
+    }
+
+    #[test]
+    fn anchor_window_heights_are_depth_and_lag_below_the_predecessor() {
+        assert_eq!(PASS_ANCHOR_DEPTH_BLOCKS, 720);
+        assert_eq!(PASS_ANCHOR_LAG_BLOCKS, 4);
+        assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, 724);
+        assert_eq!(PASS_ANCHOR_WINDOW_LEN, 5);
+
+        let (first, len) = PassAnchorWindow::shape_for_predecessor(H).unwrap();
+        assert_eq!((first, len), (H - 724, 5));
+        let w = window_at(H);
+        assert_eq!((w.first(), w.last()), (H - 724, H - 720));
+        assert_eq!(w.hash_at(H - 724), Some(&chain_hash(H - 724)));
+        assert_eq!(w.hash_at(H - 720), Some(&chain_hash(H - 720)));
+        assert_eq!(w.hash_at(H - 725), None);
+        assert_eq!(w.hash_at(H - 719), None);
+
+        assert_eq!(PassAnchorWindow::shape_for_predecessor(723), None);
+        let (first, _) = PassAnchorWindow::shape_for_predecessor(724).unwrap();
+        assert_eq!(first, 0);
+        assert_eq!(PassAnchorWindow::shape_for_predecessor(0), None);
+    }
+
+    #[test]
+    fn anchor_window_table_must_match_the_window_exactly() {
+        assert_eq!(
+            PassAnchorWindow::from_table(723, &[[0u8; 32]; 5]).unwrap_err(),
+            PassAnchorWindowError::BelowThreshold {
+                predecessor_height: 723
+            }
+        );
+        assert_eq!(
+            PassAnchorWindow::from_table(H, &[[0u8; 32]; 4]).unwrap_err(),
+            PassAnchorWindowError::WrongLength {
+                expected: 5,
+                got: 4
+            }
+        );
+        assert_eq!(
+            PassAnchorWindow::from_table(H, &[[0u8; 32]; 6]).unwrap_err(),
+            PassAnchorWindowError::WrongLength {
+                expected: 5,
+                got: 6
+            }
+        );
+    }
+}

@@ -101,7 +101,6 @@
 1	shekyl/archival-serve-credit-response-v1	rust/shekyl-archival-retention/src/challenge.rs	SERVE_CREDIT_RESPONSE_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-challenge-assignment-v1	rust/shekyl-archival-retention/src/challenge_assignment.rs	CHALLENGE_ASSIGNMENT_CUSTOMIZATION	shekyl-live		per-draw challenge-assignment stream (PR #435)
 1	shekyl/archival-p-id-v1	rust/shekyl-archival-retention/src/id.rs	P_CANONICAL_ID_CUSTOMIZATION	shekyl-live
-1	shekyl/archival-attestation-nonce-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_NONCE_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-attestation-root-v1	rust/shekyl-archival-retention/src/attestation_wire.rs	ATTESTATION_ROOT_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-emission-auth-backing-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_BACKING_CUSTOMIZATION	shekyl-live
 1	shekyl/archival-emission-auth-claim-v2	rust/shekyl-archival-retention/src/emission_wire.rs	EMISSION_AUTH_CLAIM_CUSTOMIZATION	shekyl-live
@@ -115,7 +114,7 @@
 1	shekyl/pqc-auth-tx-multisig-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_PQC_AUTH_TX_MULTISIG	shekyl-live
 1	shekyl/archival-emission-claim-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_CLAIM	shekyl-live
 1	shekyl/archival-emission-backing-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_EMISSION_BACKING	shekyl-live
-1	shekyl/archival-attestation-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live
+1	shekyl/archival-attestation-scheme-v2	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_ATTESTATION	shekyl-live		SF-D8 (2026-09-13): message became the decoded request header ‖ served shard, nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]; -v1 (nonce-only) retired, no code const kept — the retention crate's v1_domain_signature_does_not_verify_under_v2 test is the negative control. The -v1 block-bound nonce customization (shekyl/archival-attestation-nonce-v1, ATTESTATION_NONCE_CUSTOMIZATION) was deleted with attestation_nonce() in the same change
 1	shekyl/archival-serve-credit-scheme-v1	rust/shekyl-crypto-pq/src/signature.rs	SCHEME_DOMAIN_SERVE_CREDIT	shekyl-live
 1	shekyl/snapshot-id-v1	rust/shekyl-engine-core/src/engine/refresh/types.rs	SNAPSHOT_ID_CUSTOMIZATION	shekyl-live		wallet-internal reservation-staleness digest; cSHAKE customization (SA-3c retargeted it off cn_fast_hash — unpersisted, no wire, fresh mint)
 1	shekyl/chain-digest/v0	rust/shekyl-chain-store/src/digest_v0.rs	OUTER_CUSTOMIZATION	shekyl-live		DRS-P0d logical-state digest outer

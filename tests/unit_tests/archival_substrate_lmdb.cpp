@@ -1089,8 +1089,8 @@ TEST(archival_substrate_lmdb, budget_reorg_pop_symmetry)
 }
 
 // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): the
-// prunable, height-keyed admission bytes (r + pass signatures), opaque at the DB
-// layer. Exercises the lifecycle the block add/pop/prune path drives — store,
+// prunable, height-keyed admission bytes (count ‖ (nonce ‖ anchor_height ‖
+// signature) per pass, SF-D8 v2), opaque at the DB layer. Exercises the lifecycle the block add/pop/prune path drives — store,
 // read-back, pop-remove, prune-remove — asserting removal via BOTH the pop key
 // and the prune's height break, and that absent/removed heights read as empty.
 TEST(archival_substrate_lmdb, attestation_witness_store_pop_prune_roundtrip)

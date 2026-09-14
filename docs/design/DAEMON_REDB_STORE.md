@@ -17,7 +17,7 @@ columns are ordered by that hierarchy, not by engineering elegance.
 **Verification stamp:** Round-2 numbers vs `dev` **`3247fe3b6`**. The surface
 map is **no longer stamped** — §3.5 is re-derived from the tree by
 `scripts/ci/check_drs_c_surface_map.py` on every run, because the stamp here
-said 97 while the tree had moved to **102 store methods**. **The five table-inventory
+said 97 while the tree had moved to 102. **The five table-inventory
 rows (handles, opens, claimed total, undocumented, phantoms) re-measured
 at `9742ec4f6` by P0a (2026-09-05); the atomicity-audit row re-measured at
 `2dba46537` by P0b (2026-09-05)** — the remaining substrate rows
@@ -244,7 +244,7 @@ store, don't patch blind.
 
 Durable state lives in C++ LMDB (**49** declared tables, 48 at runtime —
 DRS-W5). Orchestration tangle is
-**`blockchain.cpp`** (272 store call sites, 102 store methods), not the
+**`blockchain.cpp`** (269 store call sites, 101 store methods), not the
 storage class alone.
 Policy math increasingly lives in Rust. Cross-language gather/FFI/store is a
 **boundary-thickness and type-safety** problem under
@@ -272,7 +272,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) — **met 2026-09-05 (P0b):** audit §§2-3 verdicts + §7/§8 transcriptions; both S-grades were closed by PR #602/#604 | Security | DRS-P0 |
 | **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 was bucket-1 ratified with an implementation that silently omitted an accepted output (fixed 2026-09-04), so a digest match there would have recorded reproduction of the defect — the reason the rule is written this way. Over a **DIVERGENT** or **UNREVIEWED** row — or any bucket-3/4 row — the digest is regression evidence and must be reported as that (a **CHECKED-CONFORMANT** register row is the one case where a match *is* correctness evidence). **Met-exists 2026-09-10 (P0d):** `shekyl-chain-store::digest_v0` + `BlockchainLMDB::logical_state_digest_v0` against production LMDB (core chain + spent_keys + live curve root). DRS-C consumes it. Archival journals excluded (§7.1.1) | Security | DRS-P0 → C |
-| **A3** | Known durable-state **warts** are recorded (DRS-W1…DRS-W16); default **RECORD-AND-SPECIFY**. **Met 2026-09-08 (P0c):** four remaining rows registered in the audit §9; A-6 dominance analysis declined (possession-typed write handle). **Regraded 2026-09-09:** DRS-W15 Forbidden is DIVERGE-by-delete **conditional** on R4 keeping an incremental vote window; R4 answers that prior question, not two sequenced ones. DRS-W12 is latent (capability, not a blinded test) | Security | DRS-P0 / C |
+| **A3** | Known durable-state **warts** are recorded (DRS-W1…DRS-W17); default **RECORD-AND-SPECIFY**. **Met 2026-09-08 (P0c):** four remaining rows registered in the audit §9; A-6 dominance analysis declined (possession-typed write handle). **Regraded 2026-09-09:** DRS-W15 Forbidden is DIVERGE-by-delete **conditional** on R4 keeping an incremental vote window; R4 answers that prior question, not two sequenced ones. DRS-W12 is latent (capability, not a blinded test) | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |
 | **A6** | **IBD wall time** meets the §1.3 floor (full-node viability → density → remote-node privacy) | Privacy | DRS-BENCH / DRS-0 |
@@ -376,7 +376,7 @@ Index and CHANGELOG use the Tier-A framing when reopen fires.
 | **Reference height** | **H = 100_000** synthetic or regtest-equivalent full-validation blocks (or max available fixture; raise only with BENCH plan amend) | Large enough for bulk-load shape; small enough for CI optional nightly |
 | **Hardware class** | Single mid-range x86_64 workstation/server class used for project CI self-host notes; document CPU model, RAM, disk type (NVMe vs HDD) **in the artifact** | Cross-machine absolute times are not load-bearing; **ratios** are |
 | **Primary metric** | Wall time IBD to H under **same** consensus verify cost as production (FCMP++ + PoW verify enabled as in real sync) | Privacy chain: slower IBD → fewer full nodes → more remote-node use |
-| **Floor (relative)** | redb (or candidate) IBD wall time ≤ **1.25×** LMDB wall time on the **same** machine, same binary flags except engine, same durability policy as production intent (DRS-D9) | Absolute “N hours” deferred until first LMDB baseline lands in-tree |
+| **Floor (relative)** | redb (or candidate) IBD wall time ≤ **1.25×** LMDB wall time on the **same** machine, **two binaries** (one backend per build — the daemon never compiles two store engines into one binary, ruled 2026-09-14), same flags, same durability policy as production intent (DRS-D9) | Absolute “N hours” deferred until first LMDB baseline lands in-tree |
 | **Hard fail (D2-R3 / D6)** | Ratio **> 1.50×** after one documented mitigation cycle, **or** fails resource bounds (§7.4) | Between 1.25× and 1.50×: decision-log accept or mitigate |
 | **Resource bounds (sketch)** | Peak RSS under attacker-feed scenario ≤ **2×** LMDB peak on same scenario; file-size / logical-size ratio after simulated year of 2-minute blocks stays within plan-stated ceiling (set after first multi-year sim) | Security/privacy > speed |
 
@@ -491,7 +491,7 @@ cannot — and the failure mode is “wallet can’t spend.”
 
 ### 3.1 Today
 
-`blockchain.cpp` (102 store methods) → `BlockchainLMDB` (49 tables) + FFI gather
+`blockchain.cpp` (101 store methods) → `BlockchainLMDB` (49 tables) + FFI gather
 shells.
 
 ### 3.2 After DRS-C (+ LMDB digest)
@@ -513,11 +513,11 @@ wallet e2e (E-8).
 4. Curve: **storage only**; encodings + arithmetic single-sourced (DRS-D3b);
    cross-store KAT (DRS-D3c).
 
-### 3.5 DRS-C surface map (102 methods from `blockchain.cpp`)
+### 3.5 DRS-C surface map (101 methods from `blockchain.cpp`)
 
-**Verified at `f103acd383c5da5524748e4efef4420833106265` (`dev`, 2026-09-13).**
+**Verified at PR #733 (PDM C++ residue: the F18 scan-table prefetch is deleted, and `can_thread_bulk_indices` — the capability probe only that prefetch consulted — with it; `get_output_key` stays in S-OUT-KI for its other callers).**
 Every `m_db->` method reached from `blockchain.cpp` is assigned to **exactly
-one** surface: 102 methods, 10 surfaces, no method in two and none in none.
+one** surface: 101 methods, 10 surfaces, no method in two and none in none.
 Gated by `scripts/ci/check_drs_c_surface_map.py`, which re-derives the
 vocabulary from `blockchain.cpp` at the tree it runs on and compares it against
 this table in both directions.
@@ -608,7 +608,7 @@ below is written out so the partition is a set, not a description of one.
 | **S-TXN** | Batch / open / sync / locks | 11 | `batch_abort` `batch_start` `batch_stop` `close` `fixup` `is_open` `is_read_only` `m_synchronization_lock` `reset` `safesyncmode` `sync` | **1** — Every other surface runs **inside** its transactions. Nothing can be extracted before the txn boundary is, so this is not a preference — it is the only position that works. | Stays with the store backend |
 | **S-CHAIN-W** | Connect and pop write set | 7 | `add_block` `add_block_burn` `pop_block` `remove_block_burn` `set_hard_fork` `set_settlement_epoch_blocks_pin` `set_total_burned` | **2** — The connect/pop write set is what the logical-state digest is computed **over**, so extracting it first gives DRS-E2 a subject to compare. Moving it later means every earlier increment is validated against an unported writer. | Long-term Rust `apply_block` / `pop_block` |
 | **S-CHAIN-R** | Tip, headers, weights, burns | 23 | `block_exists` `for_blocks_range` `get_block` `get_block_already_generated_coins` `get_block_blob_from_height` `get_block_burn` `get_block_cumulative_difficulty` `get_block_cumulative_rct_outputs` `get_block_difficulty` `get_block_from_height` `get_block_hash_from_height` `get_block_height` `get_block_long_term_weight` `get_block_timestamp` `get_block_weight` `get_block_weights` `get_long_term_block_weights` `get_settlement_epoch_blocks_pin` `get_top_block` `get_top_block_timestamp` `get_total_burned` `height` `top_block_hash` | **3** — Reads the tables S-CHAIN-W writes. Split across increments, the two halves of one table's contract move separately and a digest mismatch cannot be localised to either. | Hot RPC path |
-| **S-OUT-KI** | Outputs and key images | 9 | `can_thread_bulk_indices` `for_all_key_images` `for_all_outputs` `get_output_distribution` `get_output_histogram` `get_output_key` `get_output_tx_and_index` `has_key_image` `has_key_images` | **4** — Consensus-critical (double-spend admission) and needs chain reads for height context, so it follows S-CHAIN-R rather than racing it. |  |
+| **S-OUT-KI** | Outputs and key images | 8 | `for_all_key_images` `for_all_outputs` `get_output_distribution` `get_output_histogram` `get_output_key` `get_output_tx_and_index` `has_key_image` `has_key_images` | **4** — Consensus-critical (double-spend admission) and needs chain reads for height context, so it follows S-CHAIN-R rather than racing it. |  |
 | **S-TX** | Tx blob and existence | 9 | `for_all_transactions` `get_prunable_tx_blob` `get_prunable_tx_hash` `get_pruned_tx_blob` `get_tx_amount_output_indices` `get_tx_blob` `get_tx_count` `get_tx_unlock_time` `tx_exists` | **5** — Tx blob and existence reads, dependent on chain-R for height context. No writer of its own in this vocabulary — `blockchain.cpp` writes txs only through `add_block`. |  |
 | **S-CURVE** | Curve-tree reads | 5 | `get_curve_tree_depth` `get_curve_tree_leaf_chunk` `get_curve_tree_leaf_count` `get_curve_tree_root` `get_curve_tree_root_at_height` | **6** — Reads only; the arithmetic lives in `shekyl-fcmp`, not here. Depends on chain state but nothing depends on it, so it can move once the chain surfaces are stable. | Storage only; math in `shekyl-fcmp` |
 | **S-ARCH** | Archival reads/writes reached from `blockchain.cpp` | 18 | `archival_bond_all_last_served_epochs` `archival_bond_good_through` `archival_bond_holds_shard` `archival_bond_join_epoch` `archival_bond_last_served_epochs` `archival_serve_credit_pass_count` `archival_shard_freeze_height` `gather_archival_emission_epoch_snapshot` `get_archival_alt_attestation_witness` `get_archival_attestation_witness_at_height` `get_archival_bond_hybrid_pubkey` `get_archival_bond_value` `get_archival_last_slash_epoch` `get_archival_prune_watermark_epoch` `get_archival_r_market` `get_archival_shard_segment_at_height` `set_archival_serve_credit_bit` `store_archival_alt_attestation_witness` | **7** — Largest surface (18) and **gated on the P0b journal audit** — its write paths are the ones whose atomicity is still being characterised. Extracting before that audit ports an unaudited contract. | Cursor surface for retention (E4) |
@@ -694,7 +694,7 @@ retracted on 2026-09-12 for exactly this reason. Its *reconstruction* half is
 expected to inform **shard** reconstruction, which is a second reason to read
 it rather than reach for it.
 
-**One named instance, because it is countable by nothing (2026-09-12, `ba4b3c73a`):** the settlement write path — `set_archival_settlement`, `get_archival_settlement`, `delete_archival_settlement_for_epoch`, `delete_archival_settlement_before_epoch` — exists **only** on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h:754–775`), with **zero** occurrences in `src/blockchain_db/blockchain_db.h` or `src/blockchain_db/testdb.h` against **48** virtual archival methods on the base class. DRS-0 therefore carries it as **known-unwired** (its production caller is a rule-22 hold on `SO-D8`, `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 — not an omission to helpfully fix) **and known-un-abstracted**: because the pair is off the interface, no port-surface completeness check enumerating `BlockchainDB` can see it — `DRS-W12`'s hazard inverted, and the half `db_lmdb.cpp:7657`'s *"not reachable, so not wrong"* note stopped one level short of. The base-class promotion is in `SO-D8`'s scope so the port does not discover it. **UPDATE 2026-09-13 — known-un-abstracted half DISCHARGED, and its hazard statement narrowed:** the four are pure virtuals on `BlockchainDB` (`src/blockchain_db/blockchain_db.h`, grep `set_archival_settlement`), `override` on `BlockchainLMDB`, and no-op on `BaseTestDB`. The sentence above — *"no port-surface completeness check enumerating `BlockchainDB` can see it"* — was checked at source and is vacuously true: **no such check exists.** Every redb-side denominator (`check_redb_schema_bijection.py`, `check_redb_schema_key_types.py`, DRS-E1's `ApplyPolicy` families) is the `SHEKYL_LMDB_TABLES` X-macro, which has carried `archival_settlement` since `9d7661daf8`; the port could not have missed the *table*. What the promotion closes is the C++ *method-surface* gap for the interface's remaining lifetime, and nothing more. The **known-unwired** half is unchanged — the production caller is still the `SO-D8` §5.1 hold — and this paragraph's row count (48) is the pre-promotion figure.
+**One named instance, because it is countable by nothing (2026-09-12, `ba4b3c73a`):** the settlement write path — `set_archival_settlement`, `get_archival_settlement`, `delete_archival_settlement_for_epoch`, `delete_archival_settlement_before_epoch` — exists **only** on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h:754–775`), with **zero** occurrences in `src/blockchain_db/blockchain_db.h` or `src/blockchain_db/testdb.h` against **48** virtual archival methods on the base class. DRS-0 therefore carries it as **known-unwired** (its production caller is a rule-22 hold on `SO-D8`, `ARCHIVAL_SETTLEMENT_WRITER.md` §5.1 — not an omission to helpfully fix) **and known-un-abstracted**: because the pair is off the interface, no port-surface completeness check enumerating `BlockchainDB` can see it — `DRS-W12`'s hazard inverted, and the half `db_lmdb.cpp:7669`'s *"not reachable, so not wrong"* note stopped one level short of. The base-class promotion is in `SO-D8`'s scope so the port does not discover it. **UPDATE 2026-09-13 — known-un-abstracted half DISCHARGED, and its hazard statement narrowed:** the four are pure virtuals on `BlockchainDB` (`src/blockchain_db/blockchain_db.h`, grep `set_archival_settlement`), `override` on `BlockchainLMDB`, and throw-on-write on `BaseTestDB` (read stays absent — SO-D1 non-observation, so a silent no-op is fail-open). The sentence above — *"no port-surface completeness check enumerating `BlockchainDB` can see it"* — was checked at source and is vacuously true: **no such check exists.** Every redb-side denominator (`check_redb_schema_bijection.py`, `check_redb_schema_key_types.py`, DRS-E1's `ApplyPolicy` families) is the `SHEKYL_LMDB_TABLES` X-macro, which has carried `archival_settlement` since `9d7661daf8`; the port could not have missed the *table*. What the promotion closes is the C++ *method-surface* gap for the interface's remaining lifetime, and nothing more. The **known-unwired** half is unchanged — the production caller is still the `SO-D8` §5.1 hold — and this paragraph's row count (48) is the pre-promotion figure.
 
 **DRS-C PR shape — amended 2026-09-01 (CSR-4 ruled: analysis-only).** DRS-C does
 **not** ship as C++ refactor PRs. Rule 20 and
@@ -1034,15 +1034,23 @@ Compare engines (redb / heed / LMDB) on the rows above when the suite runs;
 halt conditions named in the bench plan (e.g. file-growth slope, RSS ceiling,
 IBD floor from DRS-0).
 
-**Stage one — landed (2026-09-13).** Gate `scripts/bench/drs_artifact.py`
-(schema, refusals, §1.3 compare, redb-engine probe) and runner
-`scripts/bench/drs_bench.py` (`measure` / `check` / `validate` / `blockers`)
-with selftest `scripts/bench/test_drs_bench.py`, wired in `docs-gates.yml`.
-The **LMDB arm only**: there is no redb consensus store to measure —
-`shekyl-chain-store` names redb in type-level table and key-ordering
-declarations and holds no `Database` and no transaction — and
-`drs_bench.py blockers` asserts that blocker still holds on every CI run, so
-the deferral turns red when DRS-E1 grows the engine instead of ageing quietly.
+**Stage one — landed (2026-09-13; redb-engine probe and `blockers` removed
+2026-09-14).** Gate `scripts/bench/drs_artifact.py` (schema, refusals, §1.3
+compare) and runner `scripts/bench/drs_bench.py` (`measure` / `check` /
+`validate`) with selftest `scripts/bench/test_drs_bench.py`, wired in
+`docs-gates.yml`.
+The **LMDB arm only**. The redb arm is a **second binary**, not a flag: the
+daemon never compiles two store engines into one build (ruled 2026-09-14),
+so there is no `--engine` selector on the harness and no `new_db()` switch to
+watch for. The harness labels each artifact from the one backend its build
+carries, recorded as `engine_selected_by`; `check` refuses two same-backend
+artifacts because §1.3's floor is a ratio *between* backends. The redb arm
+arrives when a redb-backed `shekyld` build target exists and reports its
+backend — the named blocker, carried in `FOLLOWUPS.md` with its falsifier,
+not by a source probe. An earlier probe that regexed `new_db()` for an
+engine switch was deleted with the flag: it guarded a transition that is
+not on the roadmap. The FFI-export clause is a stated
+fact, not a probed leg.
 
 Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**
 (the primary), plus **CPU time**, **peak RSS** and **store size** as free

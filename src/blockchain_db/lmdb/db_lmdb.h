@@ -389,9 +389,6 @@ public:
    */
   void note_archival_prune_watermark_epoch(uint64_t prune_below_epoch);
 
-
-  virtual bool can_thread_bulk_indices() const { return true; }
-
   /**
    * @brief return a histogram of outputs on the blockchain
    *
@@ -741,18 +738,10 @@ public:
 
   // ─── Settlement outcomes (SO-D2/SO-D6) ──────────────────────────────────
   //
-  // Public for the same reason apply_archival_slash_one above is: the
-  // production caller is process_archival_slash_for_epoch, a member, and these
-  // are exposed so the table's KATs can drive the path directly.
-  //
-  // Overrides of BlockchainDB pure virtuals since 2026-09-13 (SO-D8 scope
-  // addition, ARCHIVAL_SETTLEMENT_WRITER.md §12). The earlier note here —
-  // "deliberately NOT virtual on BlockchainDB; the only writer and reverter
-  // are BlockchainLMDB members, so the dispatch would buy nothing" — had a
-  // TRUE premise and a wrong conclusion, and is recorded as refuted rather
-  // than deleted: dispatch was never the point; interface completeness was.
-  // The contract text lives on the base declarations; this side documents
-  // only what is LMDB-specific.
+  // Public so the table's KATs can drive the path directly (same reason
+  // apply_archival_slash_one is). Overrides of BlockchainDB; contract text
+  // lives on the base declarations. LMDB-specific: SO-D2 puts the epoch last,
+  // so both deletes are full-table scans.
 
   void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch, uint32_t passes, uint32_t issued) override;
@@ -969,7 +958,7 @@ private:
   MDB_dbi m_archival_epoch_close_log; // block_height -> settlement_epoch finalized
   MDB_dbi m_archival_budget_accrual;  // BE(height) -> BE(staker_inflow) (redirected write, §3.1)
   MDB_dbi m_archival_budget;          // BE(E) -> BE(budget) frozen at close (§3.2)
-  MDB_dbi m_archival_attestation_witness; // height [8B native, INTEGERKEY] -> prunable admission witness blob (r||pass-sigs; ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2 — never in the block blob)
+  MDB_dbi m_archival_attestation_witness; // height [8B native, INTEGERKEY] -> prunable admission witness blob (count || (nonce || anchor_height || sig) per pass, SF-D8 v2; ARCHIVAL_CREDIT_WIRE.md §3.2/§4, transport B2 — never in the block blob)
   MDB_dbi m_archival_alt_attestation_witness; // block hash [32B, compare_hash32] -> prunable alt-chain admission witness blob (reorg-survival counterpart to m_archival_attestation_witness; ARCHIVAL_CREDIT_WIRE.md §3, transport B2)
 
   MDB_dbi m_pending_tree_leaves;      // BE(maturity)||BE(output) [16B] -> leaf [128B]

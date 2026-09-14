@@ -19,7 +19,7 @@ reconciled `LMDB_SCHEMA.md` (2026-09-05) and DRS-P0b rewrote
 `LMDB_WRITE_ATOMICITY_AUDIT.md` (2026-09-05); both are gate-pinned to the
 `SHEKYL_LMDB_TABLES` macro and graded RECONCILED in the DRS oracles table.
 **DRS-P0c** closed the wart register on 2026-09-08 at DRS-W15; it now spans
-DRS-W1…DRS-W16, DRS-W16 having been added 2026-09-12 by DRS-0 slice A (evidence
+DRS-W1…DRS-W17 — DRS-W16 added 2026-09-12 by DRS-0 slice A, DRS-W17 2026-09-14 by DRS-E1 increment 1 (evidence
 in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9).
 **DRS-P0d** landed the logical-state digest v0 on 2026-09-10 (core chain +
 spent keys + live curve-tree root against production LMDB; archival

@@ -9727,7 +9727,8 @@ void BlockchainLMDB::remove_curve_tree_root_at_height(uint64_t block_height)
 }
 
 // Credit-wire attestation witness (ARCHIVAL_CREDIT_WIRE.md §3.2/§4): prunable
-// admission bytes (r + pass signatures), height-keyed (native uint64,
+// admission bytes (count ‖ (nonce ‖ anchor_height ‖ signature) per pass,
+// SF-D8 v2), height-keyed (native uint64,
 // MDB_INTEGERKEY), opaque at this layer. Mirrors the curve-tree root primitives
 // above — same key shape, same write-txn discipline.
 void BlockchainLMDB::store_archival_attestation_witness_at_height(uint64_t block_height, const blobdata& witness)
@@ -9932,8 +9933,11 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
 
   // Find the previous checkpoint to determine which leaf range was already
   // covered.  We only prune layer entries for chunks that are fully below
-  // the previous checkpoint (those hashes are redundant -- they can be
-  // recomputed from leaves if ever needed again).
+  // the previous checkpoint.  Those hashes are redundant: layer 0 (the
+  // leaf-chunk hash layer) is never pruned, and the only upper-layer
+  // rebuild in this store -- trim_curve_tree -- recomposes layers
+  // 1..depth-2 from layer 0, not from m_curve_tree_leaves.  Nothing reads
+  // the leaf table to regenerate a pruned layer (PDM-Q-F7).
   uint64_t prev_checkpoint_height = 0;
   uint64_t prev_leaf_count = 0;
   {
@@ -9978,7 +9982,7 @@ void BlockchainLMDB::prune_curve_tree_intermediate_layers(uint64_t checkpoint_he
   // Prune intermediate layers (1 through depth-2).  For each layer, only
   // delete chunk entries whose index is strictly below the chunk boundary
   // implied by prev_leaf_count.  These chunks are fully "sealed" by the
-  // previous checkpoint and can be recomputed from leaves.
+  // previous checkpoint and are recomposable from layer 0, which is kept.
   uint64_t pruned_count = 0;
   uint64_t child_boundary = prev_leaf_count / CT_SELENE_CHUNK_WIDTH;
 

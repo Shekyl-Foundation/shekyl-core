@@ -64,8 +64,8 @@ The sentence above is R2's framing and is kept so the drift is visible.
 **What this round is not.** It does not re-derive R2, segment freeze, the
 challenge/response format, or bond/slash construction. It does not
 delete the C++ stripe engine (that waits on this design, then `DRS-E*`).
-It does not write `db_lmdb.cpp`, and it does not fix `PDM-Q-F9`'s silent
-zero-fill (dedicated C++ PR; `docs/FOLLOWUPS.md`).
+It does not write `db_lmdb.cpp`, and it did not fix `PDM-Q-F9`'s silent
+zero-fill (landed separately in PR #733, 2026-09-13, with F7, F18, F23).
 
 ---
 
@@ -375,8 +375,9 @@ residual set of consensus reads that can reach discarded leaves
 empty, and what instrument proves it stays empty? Citing TJ is not
 answering that. A grep of `get_curve_tree_leaf_chunk` /
 `get_curve_tree_leaf_by_tree_position` in `src/` at this pin shows one
-production consensus caller (`blockchain.cpp:5327`) and two RPC
-readers (`core_rpc_server.cpp:1577`, `:1670`). RPC is not consensus.
+production consensus caller (`blockchain.cpp:5327`) and the RPC
+path assembler (`shekyl-fcmp::rpc_path`, C++ callbacks in
+`curve_tree_path.cpp`). RPC is not consensus.
 The instrument Q3 names has to fail if a new consensus caller appears.
 
 Do **not** re-derive in ignorance of TJ's already-stated sequencing
@@ -524,8 +525,11 @@ one; none is anticipated.
    already gone, per the comment there). A runtime-loadable checkpoint
    file is a trust channel that bypasses the release-carried anchor —
    the exact surface the anchor argument says is worse than
-   coordination. Rule 15/60; carrier is a FOLLOWUPS row; lands no later
-   than the PR that populates the compiled-in table.
+   coordination. Rule 15/60. **Landed in PR #733 (2026-09-13):**
+   `load_checkpoints_from_json`, `core::update_checkpoints` and the
+   ten-minute reload are deleted; the compiled-in set is enforced once at
+   init by `Blockchain::enforce_checkpoints`. Populating the table is
+   still the release-gate obligation in item 2.
 4. **Band 2's egress number.** Bounded by release gap × tx rate, not
    chain length — but it is the one place archivers carry sync load.
    Archiver economics are stated against **band-2 sync egress +
@@ -948,11 +952,12 @@ open items below is recorded against each.
 
 ### `PDM-Q10` OPEN — The RPC contract for "not retained"
 
-Two RPC readers of the leaf table exist (`core_rpc_server.cpp:1577`,
-`:1670`). `PDM-Q-F9`'s fix for the second is "match `:1577`", and
-`:1577` returns `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`. Right today; under
-PDM both readers then report a leaf the node has *legitimately*
-discarded as an internal failure — the wallet-facing twin of
+The leaf-table readers that serve `get_curve_tree_path` live in
+`shekyl-fcmp::rpc_path` (store trait) with C++ callbacks in
+`src/cryptonote_core/curve_tree_path.cpp`. A missing leaf, layer hash,
+or output key is `CORE_RPC_ERROR_CODE_INTERNAL_ERROR` (PDM-Q-F9). Right
+today; under PDM those readers then report a leaf the node has
+*legitimately* discarded as an internal failure — the wallet-facing twin of
 `PDM-Q-F8b`. Rule on a response that distinguishes *not retained here;
 fetch from an archiver* (and, once Q9 is ruled, *which* one) from *the
 store is broken*. The membership-path assembly client
@@ -1308,7 +1313,8 @@ Named now so they are not discovered later.
   (`m_curve_tree_leaves`) deleted in exactly one function
   (`trim_curve_tree`, two loops: `:9278`, `:9392`). Q1 starts from that
   boundary — and `PDM-Q-F12` then shows the boundary does not stop
-  there. The stale comments are corrected in the PR that rules Q1.
+  there. The stale comments were corrected in PR #733 (2026-09-13),
+  not held for the Q1 ruling.
 - **PDM-Q-F8.** Q3 is answerable at a named line today, and the answer
   is "not node-local until TJ-A lands." `blockchain.cpp:5327`:
   `get_curve_tree_leaf_chunk` failure rejects the transaction with
@@ -1340,9 +1346,10 @@ Named now so they are not discovered later.
   as a real condition. Two readers of the same table with opposite
   failure semantics is a defect **independent of PDM**. Fix
   independently of this round (match `:1577`); not the Q1 comment-
-  correction PR (different file, different property). Carrier:
-  [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md) (`PDM-Q-F9`). This charter does
-  not carry the C++ edit.
+  correction PR (different file, different property). **Landed in PR
+  #733 (2026-09-13):** both the leaf read and the previously unchecked
+  layer-hash read now return `CORE_RPC_ERROR_CODE_INTERNAL_ERROR`. This
+  charter does not carry the C++ edit.
 
 ### Established by reading (2026-09-13, same pin)
 
@@ -1442,8 +1449,8 @@ Named now so they are not discovered later.
   block corpus and retained under D10's replay premise. Every one of the
   four scalars is reconstructible from data a discarding node keeps —
   `O`, `I = hash_to_p3(O)`, `C` from `output_metadata` via
-  `get_output_key(0, i)` (the RPC already does exactly this,
-  `core_rpc_server.cpp:1585-1600`) or from the blocks directly if
+  `get_output_key(0, i)` (the RPC already does exactly this, via
+  `shekyl-fcmp::rpc_path` / `curve_tree_path.cpp`) or from the blocks directly if
   `output_metadata` is itself discarded (`Excluded`, `class.rs:149`);
   `h_pqc` from `tx_extra` `0x07`. The regeneration path is not
   hypothetical: it is the production code at `blockchain_db.cpp:598-617`
@@ -1573,9 +1580,10 @@ consensus question: *does anything read it after admission?*
   `output_metadata` grading in §9 stands as CACHE without the
   "undetermined" qualifier, and the whole
   `check_tx_input` → `scan_outputkeys_for_indexes` → `outputs_visitor`
-  chain is a rule-60 deletion, recorded in `docs/FOLLOWUPS.md` for a
-  dedicated C++ PR (not this charter, not the Q1 comment-correction
-  PR).
+  chain is a rule-60 deletion — **landed in PR #733 (2026-09-13)**. The
+  disclosed `m_scan_table` residue landed in the same PR: the ring-member
+  pre-fetch is gone; duplicate-tx and duplicate-key-image
+  `ATTRIBUTABLE_FORM` drops remain as two `unordered_set`s over the batch.
 - **PDM-Q-F19.** **The slash log's forward reader is bounded on every
   path, and on no path is the bound a check.** The reviewer's read
   was one path; the pin has two, and the answer is the same shape on
@@ -1791,15 +1799,18 @@ consensus question: *does anything read it after admission?*
   proof in every historical block: the only skip is the
   pool-admission cache (`blockchain.cpp:5978`, structural checks still
   run), `:5681`'s checkpoint-zone skip is commented out, `:5722` is
-  hash matching. The JSON checkpoint channel is **live**:
+  hash matching. At the pin the JSON checkpoint channel was **live**:
   `update_checkpoints` → `load_checkpoints_from_json`
-  (`blockchain.cpp:6635`), reloaded every ten minutes from
-  `cryptonote_protocol_handler.inl:698`; the DNS half is already
+  (`blockchain.cpp:6635` at `edb35dbb1`), reloaded every ten minutes
+  from `cryptonote_protocol_handler.inl:698`; the DNS half was already
   deleted (comment at the same line). Consequences: Q5's anchor
   populates this table; Q11's `D_max` is the rolling cap above it and
-  binds only once a node has an anchored chain; the JSON channel is a
-  runtime trust path that bypasses the release-carried anchor and is a
-  rule-15/60 deletion target (FOLLOWUPS row).
+  binds only once a node has an anchored chain; the JSON channel was a
+  runtime trust path that bypasses the release-carried anchor — a
+  rule-15/60 deletion **executed in PR #733 (2026-09-13)**: the loader,
+  the periodic reload and `JSON_HASH_FILE_NAME` are gone, and the
+  surviving conflict rollback runs once at `core::init` as
+  `Blockchain::enforce_checkpoints`.
 - **PDM-Q-F24.** **The universal bytes window had silently inherited
   `D_max`, and the convergence property was true only of a node that
   never stops.** Q4's "uniform `D_max` window" and Q5's band 3
@@ -1827,7 +1838,8 @@ consensus question: *does anything read it after admission?*
   substituted: one client (`shekyl-p-fetch`) in the daemon's Tor zone,
   one entry point `fetch(destination, shard_id, header)`, challenge and
   organic callers indistinguishable on the wire (`SF-D1`), tor-zone
-  SOCKS, `GET /shard/{id}` on port 80, `nonce ‖ height` header, one
+  SOCKS, `GET /shard/{id}` on port 80, one 72-byte
+  `nonce ‖ anchor_height ‖ anchor_hash` header (`SF-D5` as amended), one
   in-flight cap, one miss/timeout taxonomy. Its **organic caller** is
   *"this daemon needs shard `s` (reconstruct, IBD-after-prune, operator
   test)"* (`:96-98`) — which is Q5's band 2 and Q9's recovery fetch by
@@ -1857,7 +1869,8 @@ consensus question: *does anything read it after admission?*
   body type of opaque bytes and a single **content-verify** hole
   `verify(body, expected) -> Result`. There are two verifies on the
   fetch path and they have different fates: the countersignature (`P`
-  signed `nonce ‖ height ‖ shard_id` under the bond-record key) is
+  signed `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id` under the
+  bond-record key, `SF-D8` v2) is
   transport authenticity, unit-independent, and is sub-PR 1's in full;
   the content-verify (bytes against `R_k` today, against
   `txs_prunable_hash` under Q6) is the thing that changes with the
@@ -1981,8 +1994,8 @@ the list of closed leaf-shaped rulings the unit change reopens. A Q1
 ruling written ahead of Q6 is ruling on a cache. Q1 then rules §9's
 `CACHE` and `LOCAL-BOUNDED` rows (F16) and the two undetermined
 readers. Q9's binding and lapse tail; Q10's response shape, legible
-to the `SF-` round. F9 is a C++ defect independent of PDM; the carrier
-is the FOLLOWUPS row, not this charter. F11's re-grade of the three
+to the `SF-` round. F9 was a C++ defect independent of PDM, landed in
+PR #733 alongside F7, F18 and F23 — not this charter. F11's re-grade of the three
 curve-tree rows — and now `txs_pqc_auths` (F22) — is the DRS-0 lane's,
 on Q6's and Q1's output.
 
@@ -2076,8 +2089,8 @@ pending a hash row (F14).** A ruling that takes both GOOD rows retains
 
 | Table | Bytes/output | Post-admission readers | Derivable from | Class |
 | --- | ---: | --- | --- | --- |
-| `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `:1577`/`:1670` | `O`, `C`, `h_pqc` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
-| `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | none in consensus — `scan_outputkeys_for_indexes` (`blockchain.cpp:262`) is rule-60 residue, its sole caller `check_tx_input` (`:4522`) has zero callers (`PDM-Q-F18`); RPC leaf reconstruction (`core_rpc_server.cpp:1585`) | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
+| `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `shekyl-fcmp::rpc_path` | `O`, `C`, `h_pqc` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
+| `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | none in consensus — `scan_outputkeys_for_indexes` deleted with `check_tx_input` (`PDM-Q-F18`); RPC `chunk_outputs` via `shekyl-fcmp::rpc_path` | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
 | `output_txs`, `output_amounts` | ~40, ~48 | reorg pop, RPC | rebuild | CACHE |
 | `output_to_leaf`, `leaf_to_output` | 16, 16 | leaf ↔ output mapping on pop and RPC | rebuild (insertion order) | CACHE |
 | `pending_tree_leaves`, `pending_tree_drain`, `block_pending_additions` | 128 + index, transient | maturity drain at unlock height (consensus) | rebuild from `unlock_time` | KEEP-C while pending; self-bounding (empties at maturity) |

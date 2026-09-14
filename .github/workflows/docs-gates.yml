@@ -128,6 +128,33 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_lmdb_schema_coverage.py
 
+      - name: Run AFC-1 archival forcing register check
+        # The forcing register (docs/design/archival_forcing_cells.tsv) is the
+        # 34-cell map of which archival apply/revert halves a block sequence
+        # can force. Its value is that its citations RESOLVE, and line anchors
+        # into db_lmdb.cpp drift with every edit — a register of stale anchors
+        # is worse than none, because it reads as checked.
+        #
+        # Extraction is deliberately identical to check_lmdb_schema_coverage's
+        # parse_table_list: two gates pinning one construct with independently
+        # written parsers agree by construction today and diverge silently
+        # later. A looser parser here would MISS a future archival table, which
+        # would then be absent from BOTH sides of the set difference and go
+        # green over a table nothing covers.
+        #
+        # Runs even if earlier checks failed, for the same non-masking reason.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_archival_forcing_cells.py
+
+      - name: Run AFC-1 forcing register self-test
+        # The gate's four legs were bitten by hand when written; a hand bite
+        # is not a pin. These fixtures hold each leg, including the gate's own
+        # regression: the anchor leg once matched any long word from the
+        # free-text note, so a row could resolve to a comment rather than to
+        # code while reading as checked.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_archival_forcing_cells.py
+
       - name: Run LMDB schema coverage self-test
         # The write-pattern leg pins SET membership, not cardinality. A
         # rotation that keeps the blind-upsert count at 10 and changes
@@ -214,22 +241,6 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/bench/test_drs_bench.py
 
-      - name: Run DRS-BENCH deferral blocker probe
-        # Stage one landed the harness and the LMDB arm only, because there is
-        # no redb CONSENSUS store to measure: `rust/shekyl-chain-store/` names
-        # redb in type-level table and key-ordering declarations and holds no
-        # Database and no transaction. This asserts that blocker STILL HOLDS,
-        # so the deferral cannot outlive its cause — when DRS-E1 grows the
-        # engine this turns red and names the sites, which is the signal to
-        # wire the redb arm rather than a surprise.
-        #
-        # Scoped to that crate deliberately: redb is already a real engine in
-        # `rust/shekyl-curve-tree/src/store/redb_backend.rs`, the wallet
-        # LeafStore that DRS-D9 means by "not inherited from LeafStore
-        # silence", so a workspace-wide probe would fire every run.
-        if: '!cancelled()'
-        run: python3 scripts/bench/drs_bench.py blockers
-
       - name: Run index prefix-uniqueness check
         # Rule 94 §2 family prefixes must not collide.
         # Instance of 47-gate-subject-assertion.mdc.
@@ -308,9 +319,12 @@ jobs:
       - name: Run redb schema bijection gate
         # DRS-0 slice B: every table in SHEKYL_LMDB_TABLES has exactly one
         # redb TableDefinition and vice versa, no duplicates on either side.
-        # The X-macro is the only admissible source: the settlement pair
-        # exists only on BlockchainLMDB, so a schema built from the abstract
-        # interface silently omits a write path LMDB has (SO-D8).
+        # The X-macro is the only admissible source: a table can exist
+        # without being on BlockchainDB's interface. Until 2026-09-13 the
+        # settlement pair existed only on BlockchainLMDB, so a schema built
+        # from the abstract interface would have omitted a write path LMDB
+        # has; SO-D8 promoted it since, which closes the instance, not the
+        # class (rationale of record: check_redb_schema_bijection.py header).
         # Checks NAMES, not types — ordering is the key-type gate above;
         # comparator evidence is in lmdb_order's tests; class evidence is
         # per-row in the audit's §12.

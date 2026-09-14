@@ -10,14 +10,14 @@
 // parameters and requiring identical outcomes. If a per-network arm ever
 // returns to the mechanism, one of these EXPECT_EQ pairs splits.
 //
-// (The wiring half — core::update_checkpoints and the init block running
-// on every network — is enforced by deletion: those functions no longer
-// consult m_nettype at all, and the rule-71 gate holds the fence.)
+// (The wiring half — Blockchain::enforce_checkpoints and the init block
+// running on every network — is enforced by deletion: those functions no
+// longer consult m_nettype at all, and the rule-71 gate holds the fence.
+// Checkpoints are compiled in only; the runtime json channel was deleted
+// under PDM-Q-F23, so the second suite injects via add_checkpoint, the same
+// call a populated init_default_checkpoints makes.)
 
 #include "gtest/gtest.h"
-
-#include <boost/filesystem.hpp>
-#include <fstream>
 
 #include "checkpoints/checkpoints.h"
 #include "string_tools.h"
@@ -37,16 +37,6 @@ constexpr const char* kHashA =
 constexpr const char* kHashB =
     "2222222222222222222222222222222222222222222222222222222222222222";
 
-std::string write_json(const std::string& body)
-{
-  auto path = boost::filesystem::temp_directory_path() /
-              boost::filesystem::unique_path();
-  std::ofstream f(path.string());
-  f << body;
-  f.close();
-  return path.string();
-}
-
 } // namespace
 
 TEST(checkpoint_uniformity, defaults_identical_across_public_networks)
@@ -64,12 +54,8 @@ TEST(checkpoint_uniformity, defaults_identical_across_public_networks)
   }
 }
 
-TEST(checkpoint_uniformity, json_load_and_enforcement_identical)
+TEST(checkpoint_uniformity, add_and_enforcement_identical)
 {
-  const std::string file = write_json(
-      "{\"hashlines\":[{\"height\":7,\"hash\":\"" + std::string(kHashA) +
-      "\"}]}");
-
   crypto::hash good{}, bad{};
   ASSERT_TRUE(epee::string_tools::hex_to_pod(kHashA, good));
   ASSERT_TRUE(epee::string_tools::hex_to_pod(kHashB, bad));
@@ -78,9 +64,9 @@ TEST(checkpoint_uniformity, json_load_and_enforcement_identical)
   {
     checkpoints cp;
     ASSERT_TRUE(cp.init_default_checkpoints(net));
-    ASSERT_TRUE(cp.load_checkpoints_from_json(file));
+    ASSERT_TRUE(cp.add_checkpoint(7, kHashA));
 
-    // Identical load result on every network...
+    // Identical add result on every network...
     ASSERT_EQ(1u, cp.get_points().size()) << "network " << static_cast<int>(net);
     EXPECT_EQ(7u, cp.get_max_height());
     // ...and identical enforcement verdicts.
@@ -91,6 +77,4 @@ TEST(checkpoint_uniformity, json_load_and_enforcement_identical)
     EXPECT_FALSE(cp.is_alternative_block_allowed(9, 6));
     EXPECT_TRUE(cp.is_alternative_block_allowed(9, 8));
   }
-
-  boost::filesystem::remove(file);
 }

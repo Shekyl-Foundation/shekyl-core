@@ -61,7 +61,7 @@ const REGISTRY: &str = include_str!("../../../docs/design/CRYPTO_DOMAIN_REGISTRY
 /// The CBOM table (docs/CRYPTOGRAPHIC_INVENTORY.md §3) is a dated snapshot of
 /// these numbers.
 const PRODUCTION_PINS: [(&str, usize, usize); 6] = [
-    ("1", 28, 0), // DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem})
+    ("1", 27, 0), // DRS-P0d: +3 (chain-digest/v0{,/chain,/spent-elem}); SF-D8: -1 (attestation-nonce-v1 retired)
     ("2", 45, 0), // fork-(ii) layout: +1 (archival-p msg-sign identity, the 7th P label)
     ("3", 1, 3),
     ("4", 9, 0),

@@ -38,6 +38,7 @@
 
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +48,10 @@ REGISTER = ROOT / "docs/design/CONSENSUS_STORE_RECONCILIATION.md"
 # The three conformance states of §5.4.1. This vocabulary is itself a selector:
 # a register row's state cell must begin with one of them.
 STATES = ("CHECKED-CONFORMANT", "DIVERGENT", "UNREVIEWED")
-STATE_RE = re.compile(r"^\*{0,2}(" + "|".join(STATES) + r")")
+# Anchored at BOTH ends of the token: a state must be followed by its closing
+# bold (if any) and then a non-word character, or `**DIVERGENTLY**` would be
+# recorded as DIVERGENT and counted toward the tally the gate exists to pin.
+STATE_RE = re.compile(r"^\*{0,2}(" + "|".join(STATES) + r")\*{0,2}(?![A-Za-z0-9-])")
 
 # `**CEN-L8**` and `CEN-K1a` are both real spellings. CEN-L8 is bolded AND is
 # the only UNREVIEWED row, so a selector that missed bolded ids would report a
@@ -88,6 +92,15 @@ CENSUS_FIELDS = 10
 CENSUS_ID = 1
 CENSUS_BUCKET = 5
 RATIFIED_BUCKETS = {"1", "2"}
+
+# Machine-readable current tally. Historical prose carries "1 DIVERGENT"
+# from earlier eras; matching those would stay green while the live
+# register drifted (Copilot on #740). Exactly one of these comments, and
+# its three counts must equal the rows.
+TALLY_RE = re.compile(
+    r"<!-- conformance-tally: (\d+) CHECKED-CONFORMANT, "
+    r"(\d+) DIVERGENT, (\d+) UNREVIEWED -->"
+)
 
 # Markdown escapes a literal pipe inside a cell as `\|`; splitting on it would
 # shift every column right of the escape. Two rows of slice 10 quote C++ `||`.
@@ -177,6 +190,7 @@ def register_recorded(lines, failures):
     (shekyl-core-8a, third finding on this gate.)
     """
     by_state, by_section = set(), set()
+    states: dict[str, str] = {}
     unstated, unparsed = [], []
     attempts = 0
     in_section = False
@@ -214,12 +228,20 @@ def register_recorded(lines, failures):
             m = ID_RE.match(c[CENSUS_ID])
             if not m:
                 continue
-        stated = bool(STATE_RE.match(c[2]))
+        stated = STATE_RE.match(c[2])
         if stated:
             by_state.add(m.group(1))
         if in_section:
             if stated:
-                by_section.add(m.group(1))
+                rid = m.group(1)
+                if rid in by_section:
+                    failures.append(
+                        f"{REGISTER.name}:{n}: duplicate register row {rid} — "
+                        "the last write would silently replace the first state's "
+                        "value and the tally would count one row"
+                    )
+                by_section.add(rid)
+                states[rid] = stated.group(1)
             else:
                 # A row inside the register that carries an id but no
                 # recognisable state: the row schema changed under the gate.
@@ -231,7 +253,7 @@ def register_recorded(lines, failures):
     if not by_state or not by_section:
         failures.append(f"{REGISTER.name}: parsed ZERO recorded rows — "
                         "§5.4.1 or its row schema did not parse")
-        return by_state | by_section
+        return by_state | by_section, states
 
     outside_section = sorted(by_state - by_section)
     if outside_section:
@@ -243,8 +265,9 @@ def register_recorded(lines, failures):
             "misread and no coverage result from this run can be trusted.")
     # Deliberately NOT `by_state | by_section`: the union would be identical
     # (one is a subset of the other) and would read as if it were combining two
-    # independent findings. Return the set the register actually recorded.
-    return by_section
+    # independent findings. Return the set the register actually recorded,
+    # plus the per-row states the grader reads.
+    return by_section, states
 
 
 def main():
@@ -258,7 +281,13 @@ def main():
     # again to discover the next (shekyl-core-8a, from #704 where an early
     # return masked the rest of the document).
     ratified = census_ratified(census_lines, failures) if census_lines is not None else set()
-    recorded = register_recorded(register_lines, failures) if register_lines is not None else set()
+    recorded, states = (
+        register_recorded(register_lines, failures)
+        if register_lines is not None
+        else (set(), {})
+    )
+    if register_lines is not None:
+        check_tally("\n".join(register_lines), states, failures)
     if failures:
         report(failures)
 
@@ -280,8 +309,46 @@ def main():
             "Either the census bucket moved, or the row's id is stale.")
 
     report(failures)
+    tally = Counter(states.values())
     print(f"conformance coverage: {len(ratified)} ratified rules, {len(recorded)} recorded, "
           f"set-difference zero in both directions")
+    print(
+        "    derived tally: "
+        + ", ".join(f"{tally.get(s, 0)} {s}" for s in STATES)
+        + ". DIVERGENT identity FAILS (reproducing a known defect is not parity)."
+    )
+
+
+def check_tally(text: str, states: dict[str, str], failures: list[str]) -> None:
+    """The live tally is a dedicated comment, never a prose search.
+
+    Searching the whole document matches historical "1 DIVERGENT" records-was
+    figures. One HTML comment, three derived counts, both directions.
+    """
+    hits = TALLY_RE.findall(text)
+    if not hits:
+        failures.append(
+            f"{REGISTER.name}: missing '<!-- conformance-tally: N CHECKED-CONFORMANT, "
+            "N DIVERGENT, N UNREVIEWED -->' — the live tally this limb checks "
+            "has no subject (rule 47)"
+        )
+        return
+    if len(hits) > 1:
+        failures.append(
+            f"{REGISTER.name}: {len(hits)} conformance-tally comments; the live "
+            "tally must appear once so a stale copy cannot satisfy the check"
+        )
+        return
+    stated = tuple(int(x) for x in hits[0])
+    tally = Counter(states.values())
+    derived = tuple(tally.get(s, 0) for s in STATES)
+    if stated != derived:
+        failures.append(
+            f"{REGISTER.name}: conformance-tally comment says "
+            f"{stated[0]} CHECKED-CONFORMANT, {stated[1]} DIVERGENT, "
+            f"{stated[2]} UNREVIEWED; the rows derive "
+            f"{derived[0]} / {derived[1]} / {derived[2]}"
+        )
 
 
 def report(failures):

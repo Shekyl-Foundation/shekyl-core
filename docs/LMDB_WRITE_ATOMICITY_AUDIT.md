@@ -15,7 +15,7 @@ digest walker's accessor mapping and the per-table divergence test: `dev`
 `eb1b60198`. DRS-0 slice A's §12 and §10's `Accumulator class` column —
 the delete-path falsifier run, the `compare_hash32` characterisation,
 DRS-W16, **and §12's "Reopening criteria" subsection (added 2026-09-13,
-verified against this same pin, not a later tip)**: `dev` `ba4b3c73a`.** Line citations are *records-was*
+verified against this same pin, not a later tip)**: `dev` `ba4b3c73a`. **DRS-W17** (the `batch_start` spin-wait, minted 2026-09-14 by DRS-E1 increment 1): `dev` `c8bf82c41`.** Line citations are *records-was*
 against the pin they name, not against `HEAD`; they are expected to drift
 and must not be "corrected" to a later tree. Two eras are safe only while
 both are declared — an undeclared second era is what put three citations on
@@ -693,6 +693,7 @@ the figure was left as a bound; it is no longer a live deferral.)*
 | DRS-W14 | Unbounded probe loops walk archival journal rows until first miss, so the reader holds the writer's density invariant | wart (no unsound state today — evidence below) | RECORD-AND-SPECIFY: range-scan the key prefix; gap-tolerance is a property of the query |
 | DRS-W15 | `hf_versions` rows above the new tip are not deleted on pop, and **one** site reads them (`hardfork.cpp:300`, the file's only above-tip read) | wart (**regraded 2026-09-09**: the read-back is load-bearing *only for the incremental vote window*, and that window is discarded by two of four pop callers and wrong for the other two. It diverges from the authoritative rebuild on two axes — **contents**, masked by the inert table, and **length**, one entry per pop below `window_size` and observable today. No consensus effect: `threshold` is 0) | RECORD-AND-SPECIFY. Forbidden: DIVERGE-by-delete — **conditional**: the obligation survives into Rust only if R4 keeps an incremental window. Drop it and the clause retires, leaving `hf_versions` deletable on pop |
 | DRS-W16 | `remove_block` deletes from `m_cur_blocks` **without positioning it** (`db_lmdb.cpp:1053`), while positioning its two sibling cursors explicitly in the same function. The `mdb_cursor_get(…, MDB_SET)` that positioned it was **removed** by inherited commit `22c0fae47b`, whose subject ("db: store cumulative rct output distribution in the db for speed") is unrelated to block removal. It is correct today only because its **sole** caller reads the top block through the **same** write-cursor member one call earlier (`blockchain_db.cpp:743`), a coupling `remove_block` neither states nor can check | wart (**latent, not reachable in this tree** — one caller, no interleaved `blocks` read. A `blocks` read inserted in that window, or a second caller, makes the delete remove whatever row the cursor last landed on, and `mdb_cursor_del` at a valid-but-wrong position **succeeds**: a torn logical unit, not a crash, since `block_info` and `block_heights` are positioned explicitly) | RECORD-AND-SPECIFY: in the Rust store a delete names its key, so there is no ambient cursor position for a future edit to strand. Restoring the dropped `MDB_SET` is the cheap C++ guard and is **not** taken here |
+| DRS-W17 | `BlockchainLMDB::batch_start` returns `bool`, and two core callers **spin on `false`**: `blockchain.cpp:6553` `while (!(stop_batch = m_db->batch_start(blocks_entry.size(), bytes)))` and `:6743` `while (!m_db->batch_start(1, block_byte_estimate))`; two more (`:624`, `:6314`) call it once. The retry protocol is never exercised in practice because writers are serialized above the store by `m_blockchain_lock` (`CRITICAL_REGION_LOCAL1`, `blockchain.cpp:277`); LMDB's own writer mutex sits below and is never reached by a second thread | wart (**port-boundary divergence, not a C++ defect**: `shekyl-chain-store` refuses a second live batch with a typed `WriteInProgress` that means *contract violated, do not retry* — a concurrency property no state diff can see, the same blind spot as A4's durability flags) | DIVERGE-INTENTIONALLY at the port: the two spin loops must **not** be transliterated to `while begin_batch().is_err()`; serialization stays owned by the core layer, named here so every caller inherits one backoff policy rather than one per caller. No digest exclusion applies — the digest never saw the property — so the replacement KAT is a concurrency test — the **refusal half is delivered** (`store_tests.rs` `a_second_batch_from_another_thread_is_refused_not_queued`: a second thread gets `WriteInProgress` back while the holder is alive, not parked behind it); the **callers' half** — that the two spin loops are ported as a serialized wait above the store, never as a retry on the typed error — is owed with the S-TXN port |
 
 **P0c — what these four rows are, and the pin they were read at.** Rows
 DRS-W12 through DRS-W15 are the **wart register** the P0c envelope calls for,
@@ -1232,11 +1233,51 @@ is the whole justification, and it is a domain claim, not a safety claim.
   is classed here because the domain argument is the one that holds today,
   and it inherits §7.1.1's KAT obligation when S-ARCH ports.
 - **Archival journal families (16):** the `DAEMON_REDB_STORE.md` §7.1.1 named
-  exclusion. **The replacement KAT that rule requires does not exist yet.**
-  §7.1.1 forbids extracting S-ARCH or implementing archival apply in
-  `shekyl-chain-store` until these are digested *or* carry that KAT, so the
-  obligation is live and unmet — recorded here as the exclusion's open item
-  rather than treated as discharged by being written down.
+  exclusion. §7.1.1 forbids extracting S-ARCH or implementing archival apply
+  in `shekyl-chain-store` until these are digested *or* carry a replacement
+  KAT that **forces apply/revert to run**. **The obligation is live and unmet
+  for all sixteen** (ruled 2026-09-13).
+
+  This line read "the replacement KAT that rule requires does not exist yet"
+  until 2026-09-13, was briefly corrected to record `archival_settlement` as
+  **discharged**, and that correction was **wrong**. It is withdrawn here
+  rather than quietly reverted, because it was published.
+
+  **What the settlement KAT does and does not establish.**
+  [`tests/unit_tests/archival_settlement_table.cpp`](../tests/unit_tests/archival_settlement_table.cpp)
+  drives its **revert** half through the production hook —
+  `revert_archival_slashes_at_height`, which reaches
+  `delete_archival_settlement_for_epoch` — after a real
+  `process_archival_slash_at_height` fold, and asserts the folded span's rows
+  drop while the neighbouring epoch survives. That half genuinely runs.
+
+  Its **apply** half does not. All twelve `set_archival_settlement` calls go
+  straight onto the store handle, and that is **the writer, not the apply
+  path** — it cannot be the apply path, because `set_archival_settlement` has
+  no production caller (`db_lmdb.cpp:7668`, held under the writer round's §5.1
+  pending **SO-D8**). §7.1.1 asks for apply **and** revert, so settlement is
+  **half met and therefore unmet**, and will stay so until SO-D8 gives the
+  writer a caller.
+
+  **The trailing clause is reference-side, not cross-backend.** It reads
+  *"digests must still see production LMDB behavior for those paths before
+  claiming parity"* — it names **LMDB**. It asks that the oracle has watched
+  LMDB actually run those paths; a C++-only KAT satisfies it on the literal
+  text. The gap is real but sits elsewhere, and it has a cause worth recording
+  rather than patching: **when §7.1.1 was written the digest WAS the
+  comparator**, one instrument computed over both stores, so "coverage
+  includes the archival families" implied both sides **by construction**.
+  Covering LMDB implied covering redb. That implication died when the
+  comparator became a **diff**, and the cross-backend reach was never stated
+  because it never had to be.
+
+  **Two gates, not one bar** — see
+  [`ARCHIVAL_FORCING_CORPUS.md`](design/ARCHIVAL_FORCING_CORPUS.md) (AFC-1).
+  The **extraction** gate is per-family and lands incrementally as KATs
+  arrive. The **parity** gate is all families at once, because it is one
+  harness: the forcing corpus through the dual-population path, both backends,
+  diffed per row against the register.
+
 - **Dead (1):** `txs` — zero read sites and zero write sites (DRS-W4).
   Nothing can diverge in a table nothing touches.
 

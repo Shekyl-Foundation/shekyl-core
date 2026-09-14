@@ -99,7 +99,7 @@
 //! `SO-D5`):
 //!
 //! - **`archival_serve_credit` — the read the window makes today** (an
-//!   [`EpochObservation`] is `archival_serve_credit_pass_count(...) > 0`).
+//!   [`BaselineObservation`] is `archival_serve_credit_pass_count(...) > 0`).
 //!   Absent means *no pass bit*, i.e. a **miss**. A breach reads *served*
 //!   epochs as missed and **slashes an honest archiver** for history the node
 //!   deleted. Loud-wrong: somebody's bond burns and they will say so.

@@ -113,6 +113,7 @@ set(unit_tests_sources
   archival_bond_post_integration.cpp
   archival_settlement_testdb.cpp
   archival_attestation_verify.cpp
+  archival_pass_anchor.cpp
   archival_reward_emission.cpp
   archival_emission_connect.cpp
   archival_emission_ct_balance.cpp
@@ -126,6 +127,7 @@ set(unit_tests_sources
   archival_claim_source_rpc.cpp
   ct_balance_differential.cpp
   curve_tree_header_root_check.cpp
+  curve_tree_path_fail_closed.cpp
   tx_extra_pqc_field_shape.cpp
   deferred_insertion.cpp
   economics_b5_fee_coinbase.cpp
@@ -217,6 +219,8 @@ SET_PROPERTY(SOURCE tx_extra_pqc_field_shape.cpp PROPERTY COMPILE_DEFINITIONS
   SERVE_CREDIT_TX_PARITY_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-wire/tests/fixtures/serve_credit_tx_parity_v1.json")
 SET_PROPERTY(SOURCE archival_substrate_lmdb.cpp PROPERTY COMPILE_DEFINITIONS
   GATE2_KAT_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/gate2_serve_credit_kat_v1.json")
+SET_PROPERTY(SOURCE archival_attestation_verify.cpp PROPERTY COMPILE_DEFINITIONS
+  ATTESTATION_V2_PINNED_FIXTURE_PATH="${CMAKE_SOURCE_DIR}/rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json")
 SET_PROPERTY(SOURCE mtp_boundary.cpp PROPERTY COMPILE_DEFINITIONS
   MTP_BOUNDARY_VECTOR_PATH="${CMAKE_SOURCE_DIR}/docs/test_vectors/MTP_BOUNDARY_V1.json")
 SET_PROPERTY(SOURCE fork_choice_vectors.cpp PROPERTY COMPILE_DEFINITIONS
