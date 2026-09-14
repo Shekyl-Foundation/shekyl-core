@@ -1384,6 +1384,33 @@ pin the types to this document.
   `hf_starting_heights` (dropped at every writable `open()`, DRS-W5).
   Excluded because the domain is empty, not because divergence is tolerable.
 
+**`properties` is `small` over a SCOPED domain, pinned 2026-09-14 (DRS-E1
+increment 2).** The table is two jurisdictions under one name. Its chain-state
+cells — `total_burned`, `total_bonded_atomic`, `archival_last_slash_epoch`,
+`archival_frozen_shard_count` (each written on connect and reversed on pop),
+`settlement_epoch_blocks_pin` — are consensus state two honest nodes at one
+height must agree on. Its engine-local cells — `version` (the redb store's
+`schema_version`), `pruning_seed`, `tx_prune_next_block`,
+`last_pruned_tx_data_height`, and the redb store's `apply_policy` provenance
+— are per-node facts two honest nodes legitimately differ on: a prune seed is
+random, a provenance is a test-harness history. Folding the whole table would
+make the digest disagree between two correct nodes, so the `small` full-domain
+digest for this row is over the **chain-state cells only**. The redb store
+makes the boundary a type: `codec::PropertyCell::Scope` is `ChainState` or
+`EngineLocal` per cell, a cell cannot be declared without one, `properties`
+has no raw write handle, and the fold domain is "every `ChainState` cell" —
+derived from the type at the surface that defines the cell, not from a list
+here. This paragraph is the LMDB-side record of the same line. **One cell is
+neither, and its scope is the surface owner's ruling, not this paragraph's:**
+`archival_prune_watermark_epoch` is consensus-driven but **exempt from pop
+reversal** by design (`LMDB_SCHEMA.md`'s row: a pop cannot restore pruned
+rows, so the floor never retreats), which means two honest nodes at one
+height can hold different values if one of them has been higher — it fails
+the pop-symmetry every folded class carries. It is not `ChainState` as the
+digest defines it, and it is not node-local policy either. The `Scope` it gets
+is decided when S-ARCH/S-PRUNE declares its `PropertyCell`, with this hazard
+in view.
+
 ### Reopening criteria — two reasons above have an expiry
 
 **A class assigned on a mechanism's behaviour expires when that mechanism

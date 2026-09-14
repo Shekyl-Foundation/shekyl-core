@@ -372,24 +372,44 @@ of the run, not the colour of the diff. So the comparator's green is
 **conditional on a `Full`-policy run** and will be reported that way rather
 than as parity standing alone.
 
-**The switch is built, and this document cites it as SPECIFIED rather than as
-resolved — it is not in this tree at this pin.** E1's owner reports
-`ApplyPolicy` landed and committed on their branch, which is unpushed, so
-nothing below resolves at `638bb05c3` and none of it should be read as a
-verified citation until both branches land. Named blocker, stated so the
-claim cannot quietly age into an assertion.
+**The switch is built and landed.** *Superseded text, retained:* at `638bb05c3`
+`ApplyPolicy` was cited as SPECIFIED on an unpushed branch. It landed with
+DRS-E1 increment 1 (PR #740, 2026-09-13) and was **re-shaped by increment 2
+(2026-09-14)** into two types, because the first shape stamped the wrong
+subject — see below.
 
-The specified surface: `ApplyPolicy::{Full, StubbedFamilies(&[ArchivalFamily])}`
-via `with_apply_policy`, with `is_parity_evidence()` false for anything but
-`Full`, `artifact_stamp()` carrying `NOT-PARITY-EVIDENCE`, and `applies(family)`
-for the eventual dispatch. `ArchivalFamily` carries **17** variants, one per
-`archival_*` table, with `table()` giving the X-macro name and `ALL` in macro
-order — so this register's rows map onto variants directly rather than through
-strings. It is a **runtime value rather than a cargo feature** —
-because a `#[cfg(feature)]` switch compiles the store differently under test,
-which would make the sufficiency control evidence about a *differently
-compiled* store rather than the one that ships. The store always reports its
-policy, and every comparator artifact carries the stamp, so a non-`Full` run is
+The landed surface, in `rust/shekyl-chain-store`:
+
+- `ApplyPolicy::{Full, StubbedFamilies(FamilySet)}` via `with_apply_policy`
+  is the **session's intent**: `applies(family)` is what `WriteBatch` consults
+  to refuse a stubbed family's table (`StoreError::FamilyStubbed`). An empty
+  stub is rejected at construction. `ArchivalFamily` carries **17** variants,
+  one per `archival_*` table, with `table()` giving the X-macro name and `ALL`
+  in macro order; `FamilySet` is the `Copy` bitset over them.
+- `Provenance` is the **file's history**: the union of every committed batch's
+  stubbed set, persisted in the `properties` cell `apply_policy` and widened
+  **inside the batch's own transaction** — so abort and drop leave no taint, a
+  stubbed commit with zero rows still taints (the event is the commit under a
+  stub, not the row count), and a later `Full` session reads and cannot narrow
+  it. `is_parity_evidence()` is false for any non-empty union;
+  `artifact_stamp()` carries `NOT-PARITY-EVIDENCE`. `ChainStore::provenance()`
+  reports it on writable **and read-only** handles, and `WriteBatch::commit`
+  returns the widened record.
+
+Why the split: the stamp's subject is *whether redb's apply ran for the rows
+this file holds*, and a session's policy cannot answer that for rows an earlier
+session wrote. Under increment 1 a `Full` reopen of a file built under a stub
+would have stamped its artifacts as parity evidence; under increment 2 it
+cannot, because the stamp reads the file. The `ApplyPolicy::Unknown` variant
+increment 1 used for "file predates the cell" is deleted — the cell is sealed
+in a fresh file's first transaction, so its absence is corruption
+(`CellCorrupt`), not age.
+
+It remains a **runtime value rather than a cargo feature** — because a
+`#[cfg(feature)]` switch compiles the store differently under test, which would
+make the sufficiency control evidence about a *differently compiled* store
+rather than the one that ships. The store always reports its provenance, and
+every comparator artifact carries the stamp, so a non-`Full` history is
 structurally unusable as §8.1 parity evidence rather than merely discouraged.
 
 The coverage assertion has its own red control: drop one corpus segment and

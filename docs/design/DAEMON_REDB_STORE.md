@@ -8,7 +8,7 @@ Round-1 (**DRS-R-1…R-19**), Round-2 (**R2-1…R2-8**, **E-1…E-8**), a
 **gap-close pass** (success criteria, surface map, concurrency, P0 multi-PR,
 D2-reopen as first-class good, D10 mandatory reconstructible, IBD floor
 sketch — 2026-07-27), and **post-close pin PC-1** (D2-R1 re-pointed at DRS-C —
-2026-08-21, §14). Engine-swap (**DRS-E\***) not started; **P0a–P0d delivered 2026-09-10**; **DRS-0 is UNBLOCKED as of 2026-09-11** — CEN-B5's S1 was re-verified at `e54e5b983` (the sha that merged PR #623) and the row promoted, discharging its last gate. Prior premature “ratified” banner remains withdrawn.
+2026-08-21, §14). Engine-swap (**DRS-E\***) **in progress: E1 increment 1 (S-TXN lifecycle, PR #740, 2026-09-13) landed; increment 2 (canonical codecs + rule-42 gate, `schema_version` seal, persisted provenance, typed `properties` cells — §11.1 implementation pointers) landed 2026-09-14; no chain-shaped table is written yet and the daemon still opens LMDB only**; **P0a–P0d delivered 2026-09-10**; **DRS-0 is UNBLOCKED as of 2026-09-11** — CEN-B5's S1 was re-verified at `e54e5b983` (the sha that merged PR #623) and the row promoted, discharging its last gate. Prior premature “ratified” banner remains withdrawn.
 **Mission hierarchy** ([`00-mission`](../../.cursor/rules/00-mission.mdc)):
 security/PQC → privacy → longevity. DRS success criteria (§0.1) and BENCH
 columns are ordered by that hierarchy, not by engineering elegance.
@@ -1405,14 +1405,36 @@ and the disagreement is precisely in the corpus everything else is rebuilt
 floor **and** that append-only storage moves it across the §1.3 line — not a
 preference for bulk-load shape.
 
-**(e) ROUTED, not ruled here — rule 42 does not cover this store.** Rule 42
-(persisted-block wire change ⇒ version-constant bump, CI-enforced) is scoped by
-its own globs to `rust/shekyl-engine-state/**` and `rust/shekyl-engine-file/**`
-— the **wallet**. The daemon store is outside it, so (a) and (b) above have no
-CI ratchet behind them. Extending rule 42's globs to the daemon store crate is
-the obvious fix and it is **not this slice's to make**: `.cursor/rules/` is
-Rick's. Recorded as a finding with its consequence named, per rule 22, rather
-than assumed.
+**(e) CLOSED at DRS-E1 increment 2 — rule 42 covers this store.** *Superseded
+text, retained:* at `ba4b3c73a` rule 42 was scoped by its globs to the wallet
+crates and (a)/(b) had no CI ratchet behind them; the glob was attached at
+DRS-0 with an explicit "no gate" paragraph. The gate landed with the codecs, as
+rule 42 said it should: `codec_snapshot` tests in
+`rust/shekyl-chain-store/src/codec/snapshot_tests.rs` pin the fixture encodings
+of every `Canonical` impl under `rust/shekyl-chain-store/schemas/*.snap`, and
+`.github/workflows/schema-snapshot.yml` runs them and refuses any `.snap` change
+there without `SCHEMA_VERSION` moving in the same PR. See
+[`42-serialization-policy.mdc`](../../.cursor/rules/42-serialization-policy.mdc)
+§"Two ratchets, one workflow".
+
+**Implementation pointers (DRS-E1 increment 2, 2026-09-14).**
+
+- (a) is `store/header.rs`: `seal` writes `schema_version` (and the
+  `apply_policy` provenance cell — §7.1.1's sufficiency control, specified in
+  [`ARCHIVAL_FORCING_CORPUS.md`](ARCHIVAL_FORCING_CORPUS.md) §"ApplyPolicy")
+  in a fresh file's **first** transaction, before any batch; `verify` runs on every writable and read-only
+  open and returns `SchemaVersionAbsent` / `SchemaVersionMismatch { found,
+  expected }` / `CellCorrupt` — never a default. The key bytes are pinned by a
+  test on `codec::SchemaVersionCell::KEY`.
+- (b) is `codec::Canonical`: one fixed-width, strict encoding per stored value
+  type, used both to store and to digest. Types are `u8`, `u64` (LE, matching
+  `digest_v0` and redb's native `u64`), `Hash32`, `SchemaVersion`, `FamilySet`;
+  the table-valued codecs land with their surfaces.
+- The `properties` table has **no raw write handle**: `WriteBatch::open_table`
+  refuses it (`PropertiesAreTyped`). Cells are typed by `codec::PropertyCell`
+  with a `Scope` — `ChainState` (digest-visible, writable through
+  `put_property`) or `EngineLocal` (`schema_version`, `apply_policy`: written
+  only by the header code, and `put_property` on them does not compile).
 
 ---
 
