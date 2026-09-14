@@ -399,6 +399,26 @@ def _(tmp):
     return "an absent subject is named"
 
 
+@case("PREFIX TRAP: `**DIVERGENTLY**` must not be read as DIVERGENT")
+def _(tmp):
+    # Under a prefix-matching STATE_RE this is GREEN: the malformed cell parses
+    # as DIVERGENT and the shifted tally agrees with it. Under the anchored
+    # regex the cell carries no valid state, so CEN-A1 is a ratified rule with
+    # no record and the gate FATALs. Only the fix makes this red.
+    reg = REGISTER.replace(
+        "| **CEN-A1** | **CHECKED-CONFORMANT** |",
+        "| **CEN-A1** | **DIVERGENTLY** |",
+    )
+    reg = reg.replace(
+        "<!-- conformance-tally: 2 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+        "<!-- conformance-tally: 1 CHECKED-CONFORMANT, 1 DIVERGENT, 1 UNREVIEWED -->",
+    )
+    r = run(tmp, register=reg)
+    assert r.returncode == 1, "a malformed state token must not count as a state"
+    assert "CEN-A1" in r.stderr, r.stderr
+    return "a malformed token is no state, not a prefix-matched one"
+
+
 def main():
     failed = 0
     for name, fn in CASES:

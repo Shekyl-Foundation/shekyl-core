@@ -194,6 +194,73 @@ fn a_second_live_batch_is_a_typed_error_not_a_deadlock() {
 }
 
 #[test]
+fn with_apply_policy_full_on_an_existing_file_is_downgraded_to_unknown() {
+    // The bypass Copilot found: `create` checked freshness but
+    // `with_apply_policy(path, Full)` did not, so a reopen through it stamped
+    // Full. One place now decides, from the syscall that claims the path.
+    let path = tmp("full-on-existing");
+    ChainStore::create(&path)
+        .expect("fresh")
+        .begin_batch()
+        .expect("b")
+        .commit()
+        .expect("c");
+    let again = ChainStore::with_apply_policy(&path, ApplyPolicy::Full).expect("reopen");
+    assert_eq!(
+        again.apply_policy(),
+        ApplyPolicy::Unknown,
+        "Full over unwritten rows"
+    );
+    drop(again);
+    // A stubbed reopen is a legitimate sufficiency run and keeps its policy.
+    const STUB: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
+    let stubbed =
+        ChainStore::with_apply_policy(&path, ApplyPolicy::stubbed(STUB).expect("non-empty"))
+            .expect("stubbed reopen");
+    assert!(matches!(
+        stubbed.apply_policy(),
+        ApplyPolicy::StubbedFamilies(_)
+    ));
+    cleanup(&path);
+}
+
+#[test]
+fn a_second_batch_from_another_thread_is_refused_not_queued() {
+    // DRS-W17's replacement KAT, refusal half: the C++ batch_start returns
+    // false and its callers spin; redb's begin_write would BLOCK on a
+    // condvar; this store must do neither. A second thread asking while a
+    // batch is live gets WriteInProgress back promptly -- it does not wait
+    // for the holder to finish, which is what would happen if the guard were
+    // redb's queue rather than the CAS. The wait is bounded so that "queued"
+    // is a red verdict, not a hung job: without the bound this test would
+    // block on the condvar until the holder is dropped, which it never is
+    // until the asker has answered.
+    let path = tmp("cross-thread");
+    let store = std::sync::Arc::new(ChainStore::create(&path).expect("create"));
+    let held = store.begin_batch().expect("holder");
+    let (tx, rx) = std::sync::mpsc::channel();
+    let asker = {
+        let store = std::sync::Arc::clone(&store);
+        std::thread::spawn(move || {
+            let verdict = match store.begin_batch() {
+                Err(StoreError::WriteInProgress) => Ok(()),
+                Err(e) => Err(format!("wrong error: {e}")),
+                Ok(_) => Err("second batch was GRANTED while one was live".to_owned()),
+            };
+            tx.send(verdict).expect("main is waiting");
+        })
+    };
+    let verdict = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("asker was QUEUED behind the holder instead of refused");
+    // The answer arrived while `held` is still alive: refused, not parked.
+    verdict.expect("refused promptly");
+    held.abort().expect("abort");
+    asker.join().expect("asker thread");
+    cleanup(&path);
+}
+
+#[test]
 fn a_read_snapshot_is_allowed_while_a_write_is_live() {
     let path = tmp("read-during-write");
     let store = ChainStore::create(&path).expect("create");

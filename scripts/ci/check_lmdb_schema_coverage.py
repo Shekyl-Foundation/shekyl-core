@@ -91,6 +91,16 @@ FAMILY_ROW = re.compile(
 FAMILY_MACRO = re.compile(r"archival_families!\s*\{(.*?)\}", re.S)
 
 
+def _strip_rust_comments(src: str) -> str:
+    """Delegate to scripts/ci/strip_c_comments.py rather than re-implement it."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "strip_c_comments", ROOT / "scripts" / "ci" / "strip_c_comments.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.strip(src, rust=True)
+
+
 def check_archival_families(fam_src: str, tables: list[str]) -> list[str]:
     """Bijection: ApplyPolicy family rows ↔ X-macro archival tables.
 
@@ -102,7 +112,11 @@ def check_archival_families(fam_src: str, tables: list[str]) -> list[str]:
     double-count it.
     """
     errors: list[str] = []
-    block = FAMILY_MACRO.search(fam_src)
+    # Read code, not prose (rule 47): a commented-out row such as
+    # `// R2Market => "archival_r2_market",` must not count as a family, or
+    # a table could leave the policy while the bijection stays green.
+    # scripts/ci/strip_c_comments.py is the repo's stripper.
+    block = FAMILY_MACRO.search(_strip_rust_comments(fam_src))
     if not block:
         return [
             "archival_families! { … } not found in apply_policy.rs — the "

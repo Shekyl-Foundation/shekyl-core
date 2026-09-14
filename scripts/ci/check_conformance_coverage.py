@@ -48,7 +48,10 @@ REGISTER = ROOT / "docs/design/CONSENSUS_STORE_RECONCILIATION.md"
 # The three conformance states of §5.4.1. This vocabulary is itself a selector:
 # a register row's state cell must begin with one of them.
 STATES = ("CHECKED-CONFORMANT", "DIVERGENT", "UNREVIEWED")
-STATE_RE = re.compile(r"^\*{0,2}(" + "|".join(STATES) + r")")
+# Anchored at BOTH ends of the token: a state must be followed by its closing
+# bold (if any) and then a non-word character, or `**DIVERGENTLY**` would be
+# recorded as DIVERGENT and counted toward the tally the gate exists to pin.
+STATE_RE = re.compile(r"^\*{0,2}(" + "|".join(STATES) + r")\*{0,2}(?![A-Za-z0-9-])")
 
 # `**CEN-L8**` and `CEN-K1a` are both real spellings. CEN-L8 is bolded AND is
 # the only UNREVIEWED row, so a selector that missed bolded ids would report a

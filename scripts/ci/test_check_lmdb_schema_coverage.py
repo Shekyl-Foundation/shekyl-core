@@ -202,5 +202,25 @@ class ArchivalFamilyLeg(unittest.TestCase):
         self.assertTrue(any("archival_families!" in e for e in errors), errors)
 
 
+    def test_a_commented_out_family_row_does_not_count(self):
+        """A row inside a Rust comment is prose, not a family. Before the
+        comment strip, `// Budget => "archival_budget",` kept the bijection
+        green after the real row was removed -- the family could then never
+        be stubbed nor shown load-bearing (DRS 7.1.1's own hazard, arriving
+        through the gate built to close it)."""
+        tables = ["archival_bond", "archival_budget"]
+        live = ('archival_families! {\n    Bond => "archival_bond",\n'
+                '    Budget => "archival_budget",\n}')
+        self.assertEqual(GATE.check_archival_families(live, tables), [])
+        commented = ('archival_families! {\n    Bond => "archival_bond",\n'
+                     '    // Budget => "archival_budget",\n}')
+        errs = GATE.check_archival_families(commented, tables)
+        self.assertTrue(any("archival_budget" in e for e in errs), errs)
+        block = ('archival_families! {\n    Bond => "archival_bond",\n'
+                 '    /* Budget => "archival_budget", */\n}')
+        errs = GATE.check_archival_families(block, tables)
+        self.assertTrue(any("archival_budget" in e for e in errs), errs)
+
+
 if __name__ == "__main__":
     unittest.main()

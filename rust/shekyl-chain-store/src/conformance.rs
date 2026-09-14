@@ -69,7 +69,14 @@ pub enum ConformanceState {
     /// Reviewed and found to diverge from its ratified spec. **Matching is
     /// failing** — see the module note.
     Divergent,
-    /// No conformance record exists. The default, by absence.
+    /// Not reviewed to a conclusion. Arrives **two ways** and both grade the
+    /// same: the default **by absence** (a live bucket-1/2 rule with no
+    /// conformance record at all), or an **explicitly recorded** state — the
+    /// register's `CEN-L8` carries `**UNREVIEWED**` because its review
+    /// *failed closed* on an unwired clause. Neither grants correctness, and
+    /// absence must never be read as "fine". An earlier version of this doc
+    /// said "by absence" only, contradicting the module note and the CEN-L8
+    /// test two screens down.
     Unreviewed,
 }
 

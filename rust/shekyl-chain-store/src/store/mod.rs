@@ -24,7 +24,12 @@
 //!
 //! A second live batch is a typed [`StoreError::WriteInProgress`], not
 //! redb's blocking `begin_write`. Same-thread re-entry would otherwise
-//! deadlock; C++ throws `DB_ERROR_TXN_START` for the same fact.
+//! deadlock. The C++ is **not** the same shape, and saying so precisely is
+//! the point: `BlockchainLMDB::batch_start` **returns `false`** for a
+//! second batch (`m_batch_active` or `m_write_batch_txn` set,
+//! `db_lmdb.cpp:4103`/`:4105`) and two core callers *spin* on that; it
+//! **throws** only when a non-batch `m_write_txn` is live (`:4108`). This
+//! store refuses with a typed error and never spins — DRS-W17.
 //!
 //! # Durability is declared, never inherited
 //!
@@ -114,16 +119,7 @@ impl ChainStore {
     ///
     /// [`StoreError::Open`] if the file cannot be created or opened.
     pub fn create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        // Fresh file -> Full: nothing was written before this handle. An
-        // EXISTING file has rows whose policy is not persisted yet, so it
-        // reopens as Unknown (fail-closed; see ApplyPolicy::Unknown's named
-        // blocker). The existence check runs before redb creates the file.
-        let policy = if path.as_ref().exists() {
-            ApplyPolicy::Unknown
-        } else {
-            ApplyPolicy::default()
-        };
-        Self::with_apply_policy(path, policy)
+        Self::with_apply_policy(path, ApplyPolicy::default())
     }
 
     /// Create or open the store with an explicit [`ApplyPolicy`].
@@ -144,10 +140,36 @@ impl ChainStore {
         apply_policy
             .reject_empty_stub()
             .map_err(|crate::apply_policy::EmptyApplyStub| StoreError::EmptyApplyStub)?;
-        let db = redb::Builder::new()
-            .set_cache_size(CACHE_SIZE)
-            .create(path)
-            .map_err(StoreError::Open)?;
+        // Fresh-vs-existing is decided by the SAME syscall that claims the
+        // path, never by a separate probe: `create_new` either creates the
+        // file atomically (fresh) or fails with AlreadyExists (reopen). An
+        // earlier draft checked `exists()` first and then called `create`,
+        // which also opens existing files -- a creator racing between the
+        // two would have been stamped `Full` over rows it never wrote.
+        // redb's own `create` does exactly this open-with-create and hands
+        // the file to `create_file`, so a 0-byte file is the path it knows.
+        let mut builder = redb::Builder::new();
+        builder.set_cache_size(CACHE_SIZE);
+        let (db, fresh) = match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(path.as_ref())
+        {
+            Ok(file) => (builder.create_file(file).map_err(StoreError::Open)?, true),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                (builder.create(path).map_err(StoreError::Open)?, false)
+            }
+            Err(e) => return Err(StoreError::Open(redb::DatabaseError::Storage(e.into()))),
+        };
+        // A caller cannot assert `Full` over rows it did not write: on an
+        // existing file, Full is downgraded to Unknown (fail-closed until
+        // the policy is persisted). Non-Full policies stand -- they are
+        // already not evidence, and a stubbed reopen is a legitimate run.
+        let apply_policy = match (fresh, apply_policy) {
+            (false, ApplyPolicy::Full) => ApplyPolicy::Unknown,
+            (_, p) => p,
+        };
         Ok(Self {
             backend: Backend::Writable(db),
             apply_policy,
