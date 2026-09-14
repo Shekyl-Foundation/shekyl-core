@@ -4,30 +4,40 @@
 # BSD-3-Clause
 #
 # Wire-schema guard — commit 3.4 of the mid-rewire hardening pass
-# (`docs/MID_REWIRE_HARDENING.md` §3.4).
+# (`docs/MID_REWIRE_HARDENING.md` §3.4), extended to the daemon chain
+# store by DRS-E1 increment 2 (`docs/design/DAEMON_REDB_STORE.md` §11.1).
 #
 # Converts the `block_version` discipline from cultural invariant to
 # mechanical check. Two jobs, one trigger:
 #
 #   pull_request → dev
 #     - assert-snapshots:       runs the `schema_snapshot` tests in
-#                               `shekyl-engine-state`. Fails with a
+#                               `shekyl-engine-state` and the
+#                               `codec_snapshot` tests in
+#                               `shekyl-chain-store`. Fails with a
 #                               unified diff if any persisted block's
-#                               postcard wire schema drifts from its
-#                               committed `.snap`.
-#     - enforce-version-bump:   cross-checks the PR diff: if any
+#                               postcard wire schema, or any chain-store
+#                               canonical codec's fixture encodings,
+#                               drift from the committed `.snap`.
+#     - enforce-version-bump:   cross-checks the PR diff. Wallet: if any
 #                               `.snap` under `rust/shekyl-engine-state/
 #                               schemas/` changed, the matching version
 #                               constant in the paired source file
 #                               (`WALLET_LEDGER_FORMAT_VERSION`,
 #                               `LEDGER_BLOCK_VERSION`, …) must have
-#                               changed in the same PR. Fails otherwise.
+#                               changed in the same PR. Chain store: if
+#                               ANY `.snap` under `rust/shekyl-chain-store/
+#                               schemas/` changed, `SCHEMA_VERSION` in
+#                               `src/codec/schema_version.rs` must have.
+#                               Fails otherwise.
 #
 # Rationale: a `.snap` change means the on-disk wire format changed.
 # Consumers depend on the version constant to recognize incompatible
 # bundles — letting a schema drift land without a version bump is a
 # silent data corruption risk (see `docs/MID_REWIRE_HARDENING.md` §3.4
-# and `.cursor/rules/42-serialization-policy.mdc`).
+# and `.cursor/rules/42-serialization-policy.mdc`). For the chain store
+# the codec is also the digest's fold input, so a silent codec move is a
+# consensus-oracle move.
 
 name: ci/schema-snapshot
 
@@ -36,6 +46,7 @@ on:
     branches: [dev]
     paths:
       - "rust/shekyl-engine-state/**"
+      - "rust/shekyl-chain-store/**"
       - "rust/Cargo.lock"
       - "rust/Cargo.toml"
       - ".github/workflows/schema-snapshot.yml"
@@ -86,6 +97,16 @@ jobs:
           # module name keeps this job fast and isolates the failure
           # signal from unrelated unit tests.
           cargo test -p shekyl-engine-state schema_snapshot --no-fail-fast
+
+      - name: Run chain-store codec_snapshot tests
+        working-directory: rust
+        run: |
+          # The chain store's counterpart lives in
+          # `shekyl-chain-store/src/codec/snapshot_tests.rs`: one `.snap`
+          # of fixture encodings per `Canonical` codec, plus meta-tests
+          # that every impl has a snapshot and that this workflow gates
+          # the crate (`workflow_gates_this_crate` reads this file).
+          cargo test -p shekyl-chain-store codec_snapshot --no-fail-fast
 
   enforce-version-bump:
     name: "Enforce paired block_version bump"
@@ -180,6 +201,39 @@ jobs:
             fi
           done
 
+          # Chain store (DRS-E1 increment 2). One version constant covers
+          # every codec, because the store rebuilds rather than migrates
+          # (`DAEMON_REDB_STORE.md` §11.1(a)): if ANY snapshot under the
+          # crate's schemas/ directory changed, SCHEMA_VERSION must have
+          # moved in the same PR. No per-codec registry to keep in sync —
+          # the crate's `every_canonical_impl_has_a_snapshot` meta-test
+          # guarantees the snapshot set is the codec set.
+          CS_SNAP_DIR="rust/shekyl-chain-store/schemas/"
+          CS_SRC="rust/shekyl-chain-store/src/codec/schema_version.rs"
+          CS_CONST="SCHEMA_VERSION"
+          CS_TOUCHED=$(echo "${CHANGED}" | grep -F "${CS_SNAP_DIR}" | grep -E '\.snap$' || true)
+          if [ -n "${CS_TOUCHED}" ]; then
+            echo "::group::chain-store: codec snapshot(s) changed, checking ${CS_CONST} bump"
+            echo "${CS_TOUCHED}" | sed 's/^/  snapshot:  /'
+            echo "  source:    ${CS_SRC}"
+            echo "  constant:  ${CS_CONST}"
+            if ! echo "${CHANGED}" | grep -Fxq "${CS_SRC}"; then
+              echo "::error file=${CS_SRC}::chain-store codec snapshot changed but ${CS_SRC} was not touched"
+              echo "  FATAL: a canonical codec moved without a paired ${CS_CONST} bump."
+              FAIL=1
+            elif ! git diff "${BASE_SHA}...${HEAD_SHA}" -- "${CS_SRC}" \
+                   | grep -E "^[-+]pub const ${CS_CONST}\s*:" > /dev/null; then
+              echo "::error file=${CS_SRC}::${CS_CONST} constant not bumped alongside a chain-store codec snapshot"
+              echo "  FATAL: ${CS_SRC} changed but the declaration line of"
+              echo "  ${CS_CONST} is untouched. A codec change moves the stored"
+              echo "  bytes AND the digest fold; bump in the same commit."
+              FAIL=1
+            else
+              echo "  OK: ${CS_CONST} declaration line is part of the diff."
+            fi
+            echo "::endgroup::"
+          fi
+
           if [ "${FAIL}" -ne 0 ]; then
             cat <<'EOF'
 
@@ -194,7 +248,11 @@ jobs:
                constant in the same PR and regenerate the snapshot:
                  UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state \
                    schema_snapshot
-            3. If no, revert the change to the block struct.
+               For the chain store, bump `SCHEMA_VERSION` in
+               `rust/shekyl-chain-store/src/codec/schema_version.rs` and:
+                 UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store \
+                   codec_snapshot
+            3. If no, revert the change to the block struct / codec.
 
           EOF
             exit 1

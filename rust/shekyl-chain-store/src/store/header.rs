@@ -1,0 +1,124 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! The store header: two `properties` cells the store owns outright — and
+//! the typed cell access every other `properties` read or write goes
+//! through.
+//!
+//! - `schema_version` ([`SchemaVersionCell`]) — sealed into a fresh file's
+//!   **first** transaction and checked before any other read or write on
+//!   reopen (§11.1(a)). Reaching an open-or-create table path first would
+//!   stamp a stale file to the current version in passing and the mismatch
+//!   could never fire, which is why [`verify`] runs in a read transaction
+//!   with no write side effects.
+//! - `apply_policy` ([`ApplyPolicyCell`]) — the file's
+//!   [`Provenance`]: sealed with the creating session's stubbed set and
+//!   [widened](widen) inside every stubbed batch's own transaction, so the
+//!   taint commits with the rows it describes or not at all.
+//!
+//! No public write path reaches either cell. [`seal`] and [`widen`] are
+//! their only writers; [`put`] is `pub(super)` and its public caller,
+//! `WriteBatch::put_property`, is bounded to chain-state cells.
+
+use redb::{ReadTransaction, ReadableTable, WriteTransaction};
+
+use crate::apply_policy::ApplyPolicy;
+use crate::codec::{ApplyPolicyCell, Canonical, PropertyCell, SchemaVersionCell, SCHEMA_VERSION};
+use crate::provenance::Provenance;
+use crate::schema::PROPERTIES;
+
+use super::error::{CellFault, StoreError};
+
+/// Write both header cells into a fresh store.
+///
+/// The provenance a fresh file starts with is the creating session's own
+/// stubbed set: a store *created* under a stubbed policy has been written
+/// under it from its first byte.
+pub(super) fn seal(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
+    let provenance = Provenance::FULL.widened_by(policy);
+    put::<SchemaVersionCell>(txn, &SCHEMA_VERSION)?;
+    put::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
+    Ok(provenance)
+}
+
+/// Check an existing store's layout version and read its provenance.
+///
+/// # Errors
+///
+/// [`StoreError::SchemaVersionAbsent`] if there is no `properties` table
+/// or no `schema_version` cell; [`StoreError::SchemaVersionMismatch`] if
+/// the version is not [`SCHEMA_VERSION`]; [`StoreError::CellCorrupt`] if
+/// a header cell is present but malformed, or `apply_policy` is missing.
+pub(super) fn verify(txn: &ReadTransaction) -> Result<Provenance, StoreError> {
+    let table = match txn.open_table(PROPERTIES) {
+        Ok(table) => table,
+        Err(redb::TableError::TableDoesNotExist(_)) => return Err(StoreError::SchemaVersionAbsent),
+        Err(e) => return Err(StoreError::Table(e)),
+    };
+    let found = get::<SchemaVersionCell>(&table)?.ok_or(StoreError::SchemaVersionAbsent)?;
+    if found != SCHEMA_VERSION {
+        return Err(StoreError::SchemaVersionMismatch {
+            found,
+            expected: SCHEMA_VERSION,
+        });
+    }
+    let stubbed = get::<ApplyPolicyCell>(&table)?.ok_or(absent::<ApplyPolicyCell>())?;
+    Ok(Provenance::of(stubbed))
+}
+
+/// Widen the provenance cell by `policy`'s stubbed set, in `txn`.
+///
+/// Read-modify-write inside the batch's own transaction: the union is
+/// over what the file *currently* records, and it commits when the batch
+/// does. A `Full` policy is a no-op that still reads the cell.
+pub(super) fn widen(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
+    let current = {
+        let table = txn.open_table(PROPERTIES).map_err(StoreError::Table)?;
+        get::<ApplyPolicyCell>(&table)?.ok_or(absent::<ApplyPolicyCell>())?
+    };
+    let after = Provenance::of(current).widened_by(policy);
+    if after.stubbed() != current {
+        put::<ApplyPolicyCell>(txn, &after.stubbed())?;
+    }
+    Ok(after)
+}
+
+/// Read cell `C` from an open `properties` table.
+///
+/// `Ok(None)` if absent; [`StoreError::CellCorrupt`] if present but not an
+/// encoding of `C::Value`.
+pub(super) fn get<C: PropertyCell>(
+    table: &impl ReadableTable<&'static str, &'static [u8]>,
+) -> Result<Option<C::Value>, StoreError> {
+    let Some(guard) = table.get(C::KEY).map_err(StoreError::Storage)? else {
+        return Ok(None);
+    };
+    C::Value::decode(guard.value())
+        .map(Some)
+        .map_err(|cause| StoreError::CellCorrupt {
+            key: C::KEY,
+            fault: CellFault::Undecodable(cause),
+        })
+}
+
+/// Write cell `C` in `txn`. Opens (creating if needed) the `properties`
+/// table for the duration of the write.
+pub(super) fn put<C: PropertyCell>(
+    txn: &WriteTransaction,
+    value: &C::Value,
+) -> Result<(), StoreError> {
+    let mut table = txn.open_table(PROPERTIES).map_err(StoreError::Table)?;
+    table
+        .insert(C::KEY, value.encode().as_slice())
+        .map(drop)
+        .map_err(StoreError::Storage)
+}
+
+fn absent<C: PropertyCell>() -> StoreError {
+    StoreError::CellCorrupt {
+        key: C::KEY,
+        fault: CellFault::Absent,
+    }
+}

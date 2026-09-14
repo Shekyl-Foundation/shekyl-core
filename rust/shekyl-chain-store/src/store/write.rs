@@ -9,8 +9,12 @@
 //! table consults [`ApplyPolicy`](crate::apply_policy::ApplyPolicy) by name
 //! so a stubbed family's apply cannot run — and cannot create the table
 //! by opening it.
-
-use std::sync::atomic::{AtomicBool, Ordering};
+//!
+//! A stubbed batch also **taints the file** when it commits: the
+//! provenance cell is widened inside the batch's own transaction (see
+//! [`commit`](WriteBatch::commit)), so the record that rows were written
+//! under a stub lands with those rows or not at all. An aborted stubbed
+//! batch leaves no trace, which is correct — it wrote nothing.
 
 use redb::{
     Key, MultimapTable, MultimapTableDefinition, MultimapTableHandle, Table, TableDefinition,
@@ -18,8 +22,13 @@ use redb::{
 };
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
+use crate::codec::{ChainState, PropertyCell};
+use crate::provenance::Provenance;
+use crate::schema::PROPERTIES;
 
 use super::error::StoreError;
+use super::header;
+use super::shared::Shared;
 
 /// An open write transaction.
 ///
@@ -35,19 +44,19 @@ use super::error::StoreError;
 pub struct WriteBatch<'store> {
     txn: Option<WriteTransaction>,
     apply_policy: ApplyPolicy,
-    write_held: &'store AtomicBool,
+    shared: &'store Shared,
 }
 
 impl<'store> WriteBatch<'store> {
     pub(super) fn new(
         txn: WriteTransaction,
         apply_policy: ApplyPolicy,
-        write_held: &'store AtomicBool,
+        shared: &'store Shared,
     ) -> Self {
         Self {
             txn: Some(txn),
             apply_policy,
-            write_held,
+            shared,
         }
     }
 
@@ -64,7 +73,11 @@ impl<'store> WriteBatch<'store> {
             .expect("WriteBatch holds a transaction until commit/abort consume it")
     }
 
-    fn refuse_stubbed(&self, name: &str) -> Result<(), StoreError> {
+    /// The two by-name refusals every raw table open passes through.
+    fn admit(&self, name: &str) -> Result<(), StoreError> {
+        if name == PROPERTIES.name() {
+            return Err(StoreError::PropertiesAreTyped);
+        }
         if let Some(family) = ArchivalFamily::from_table(name) {
             if !self.apply_policy.applies(family) {
                 return Err(StoreError::FamilyStubbed(family));
@@ -77,12 +90,15 @@ impl<'store> WriteBatch<'store> {
     ///
     /// Archival families whose apply is stubbed are refused *before* the
     /// engine sees the name, so a sufficiency run cannot accidentally
-    /// create the table it is proving load-bearing.
+    /// create the table it is proving load-bearing. The `properties` table
+    /// is refused outright: its cells are typed and written through
+    /// [`put_property`](Self::put_property).
     ///
     /// # Errors
     ///
     /// [`StoreError::FamilyStubbed`] if this table is an archival family
-    /// the policy skips; [`StoreError::Table`] if the engine refuses.
+    /// the policy skips; [`StoreError::PropertiesAreTyped`] for
+    /// `properties`; [`StoreError::Table`] if the engine refuses.
     pub fn open_table<'txn, K, V>(
         &'txn self,
         definition: TableDefinition<'_, K, V>,
@@ -91,16 +107,17 @@ impl<'store> WriteBatch<'store> {
         K: Key + 'static,
         V: Value + 'static,
     {
-        self.refuse_stubbed(definition.name())?;
+        self.admit(definition.name())?;
         self.txn().open_table(definition).map_err(StoreError::Table)
     }
 
-    /// Open a multimap table for writing. Same stubbing rule as
+    /// Open a multimap table for writing. Same refusals as
     /// [`open_table`](Self::open_table).
     ///
     /// # Errors
     ///
-    /// [`StoreError::FamilyStubbed`] or [`StoreError::Table`].
+    /// [`StoreError::FamilyStubbed`], [`StoreError::PropertiesAreTyped`]
+    /// or [`StoreError::Table`].
     pub fn open_multimap_table<'txn, K, V>(
         &'txn self,
         definition: MultimapTableDefinition<'_, K, V>,
@@ -109,22 +126,85 @@ impl<'store> WriteBatch<'store> {
         K: Key + 'static,
         V: Key + 'static,
     {
-        self.refuse_stubbed(definition.name())?;
+        self.admit(definition.name())?;
         self.txn()
             .open_multimap_table(definition)
             .map_err(StoreError::Table)
     }
 
-    /// Commit the batch.
+    /// Read a typed `properties` cell, seeing this batch's own writes.
+    ///
+    /// Any scope may be read: a connect path that needs the layout version
+    /// or the provenance can ask, it just cannot write them.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Commit`] if the engine could not commit. The
-    /// transaction is consumed either way — DRS-W2's swallowed-`batch_stop`
-    /// failure made unrepresentable.
-    pub fn commit(mut self) -> Result<(), StoreError> {
+    /// [`StoreError::CellCorrupt`] if the cell is present but is not an
+    /// encoding of `C::Value`; [`StoreError::Table`] / [`StoreError::Storage`]
+    /// if the engine refuses. Absent is `Ok(None)`.
+    pub fn get_property<C: PropertyCell>(&self) -> Result<Option<C::Value>, StoreError> {
+        let table = self
+            .txn()
+            .open_table(PROPERTIES)
+            .map_err(StoreError::Table)?;
+        header::get::<C>(&table)
+    }
+
+    /// Write a typed **chain-state** `properties` cell.
+    ///
+    /// The bound is the permission: only `C: PropertyCell<Scope = ChainState>`
+    /// compiles. The engine-local header cells (`schema_version`,
+    /// `apply_policy`) have no public writer:
+    ///
+    /// ```compile_fail,E0271
+    /// use shekyl_chain_store::codec::{SchemaVersion, SchemaVersionCell};
+    /// use shekyl_chain_store::store::ChainStore;
+    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// let batch = store.begin_batch().unwrap();
+    /// batch.put_property::<SchemaVersionCell>(&SchemaVersion::new(9));
+    /// ```
+    ///
+    /// ```compile_fail,E0271
+    /// use shekyl_chain_store::codec::ApplyPolicyCell;
+    /// use shekyl_chain_store::family_set::FamilySet;
+    /// use shekyl_chain_store::store::ChainStore;
+    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// let batch = store.begin_batch().unwrap();
+    /// batch.put_property::<ApplyPolicyCell>(&FamilySet::EMPTY);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Table`] / [`StoreError::Storage`] if the engine refuses.
+    pub fn put_property<C>(&self, value: &C::Value) -> Result<(), StoreError>
+    where
+        C: PropertyCell<Scope = ChainState>,
+    {
+        header::put::<C>(self.txn(), value)
+    }
+
+    /// Commit the batch, returning the file's [`Provenance`] as of this
+    /// commit.
+    ///
+    /// A stubbed batch widens the persisted provenance cell **in this
+    /// transaction** before committing, so the taint is atomic with the
+    /// rows. A `Full` batch leaves the cell as it found it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Commit`] if the engine could not commit;
+    /// [`StoreError::CellCorrupt`] / [`StoreError::Storage`] if the
+    /// provenance cell could not be read back or widened (the batch is
+    /// aborted, nothing lands). The transaction is consumed either way —
+    /// DRS-W2's swallowed-`batch_stop` failure made unrepresentable.
+    pub fn commit(mut self) -> Result<Provenance, StoreError> {
         let txn = take_txn(&mut self.txn);
-        txn.commit().map_err(StoreError::Commit)
+        let provenance = header::widen(&txn, self.apply_policy)?;
+        txn.commit().map_err(StoreError::Commit)?;
+        // Mirror only after the engine has committed: a failed commit must
+        // not leave the in-memory record more tainted than the file.
+        self.shared.taint(provenance);
+        Ok(provenance)
     }
 
     /// Discard the batch explicitly.
@@ -154,6 +234,6 @@ impl Drop for WriteBatch<'_> {
         // completed. Clearing the flag after that so the next begin_batch
         // is not refused for a batch that no longer exists.
         self.txn.take();
-        self.write_held.store(false, Ordering::Release);
+        self.shared.release_write();
     }
 }

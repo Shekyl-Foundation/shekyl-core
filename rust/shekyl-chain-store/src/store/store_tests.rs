@@ -4,16 +4,18 @@
 // BSD-3-Clause
 
 //! S-TXN tests. Sibling of the production files so the workflow stays
-//! under the size the decomposition ratchet exists to protect.
+//! under the size the decomposition ratchet exists to protect. Header and
+//! provenance tests are in `header_tests.rs`.
 
 use redb::TableDefinition;
 
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
+use crate::family_set::FamilySet;
 
-const PROBE: TableDefinition<&str, u64> = TableDefinition::new("__e1_probe");
+pub(super) const PROBE: TableDefinition<&str, u64> = TableDefinition::new("__e1_probe");
 
-fn tmp(name: &str) -> std::path::PathBuf {
+pub(super) fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
         "shekyl-chain-store-{}-{}-{:?}.redb",
@@ -25,62 +27,16 @@ fn tmp(name: &str) -> std::path::PathBuf {
     p
 }
 
-fn cleanup(path: &std::path::Path) {
+pub(super) fn cleanup(path: &std::path::Path) {
     drop(std::fs::remove_file(path));
 }
 
 #[test]
-fn a_reopened_store_is_unknown_not_full() {
-    // §6.2's fourth verification class is REOPEN + reconciliation, so reopen
-    // is part of the mechanism. A file written under a stubbed policy and
-    // reopened must not come back stamped `full` -- that is the artifact the
-    // stamp exists to prevent. Until the policy is persisted (named blocker
-    // on ApplyPolicy::Unknown) every reopen is Unknown: still applies every
-    // family, never parity evidence.
-    let path = tmp("reopen");
-    {
-        let fresh = ChainStore::create(&path).expect("fresh create");
-        assert_eq!(
-            fresh.apply_policy(),
-            ApplyPolicy::Full,
-            "a fresh file is Full"
-        );
-        fresh
-            .begin_batch()
-            .expect("begin")
-            .commit()
-            .expect("commit");
-    }
-    let again = ChainStore::create(&path).expect("reopen via create");
-    assert_eq!(again.apply_policy(), ApplyPolicy::Unknown);
-    assert!(!again.apply_policy().is_parity_evidence());
-    drop(again);
-    let ro = ChainStore::open_read_only(&path).expect("reopen read-only");
-    assert_eq!(ro.apply_policy(), ApplyPolicy::Unknown);
-    assert!(ro.apply_policy().artifact_stamp().contains("REFUSE"));
-    cleanup(&path);
-}
-
-#[test]
-fn a_store_defaults_to_full_apply_and_reports_it() {
+fn a_store_defaults_to_full_apply_and_a_fresh_file_is_evidence() {
     let path = tmp("policy");
     let store = ChainStore::create(&path).expect("create");
     assert_eq!(store.apply_policy(), ApplyPolicy::Full);
-    assert!(store.apply_policy().is_parity_evidence());
-    cleanup(&path);
-}
-
-#[test]
-fn a_stubbed_store_reports_a_non_parity_policy() {
-    let path = tmp("stubbed");
-    const STUB: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
-    let store = ChainStore::with_apply_policy(&path, ApplyPolicy::stubbed(STUB).expect("stub"))
-        .expect("create stubbed");
-    assert!(!store.apply_policy().is_parity_evidence());
-    assert!(store
-        .apply_policy()
-        .artifact_stamp()
-        .contains("NOT-PARITY-EVIDENCE"));
+    assert!(store.provenance().is_parity_evidence());
     cleanup(&path);
 }
 
@@ -88,7 +44,7 @@ fn a_stubbed_store_reports_a_non_parity_policy() {
 fn an_empty_stub_is_refused_at_open() {
     let path = tmp("empty-stub");
     assert!(matches!(
-        ChainStore::with_apply_policy(&path, ApplyPolicy::StubbedFamilies(&[])),
+        ChainStore::with_apply_policy(&path, ApplyPolicy::StubbedFamilies(FamilySet::EMPTY)),
         Err(StoreError::EmptyApplyStub)
     ));
     assert!(!path.exists(), "a refused policy must not create the store");
@@ -194,37 +150,6 @@ fn a_second_live_batch_is_a_typed_error_not_a_deadlock() {
 }
 
 #[test]
-fn with_apply_policy_full_on_an_existing_file_is_downgraded_to_unknown() {
-    // The bypass Copilot found: `create` checked freshness but
-    // `with_apply_policy(path, Full)` did not, so a reopen through it stamped
-    // Full. One place now decides, from the syscall that claims the path.
-    let path = tmp("full-on-existing");
-    ChainStore::create(&path)
-        .expect("fresh")
-        .begin_batch()
-        .expect("b")
-        .commit()
-        .expect("c");
-    let again = ChainStore::with_apply_policy(&path, ApplyPolicy::Full).expect("reopen");
-    assert_eq!(
-        again.apply_policy(),
-        ApplyPolicy::Unknown,
-        "Full over unwritten rows"
-    );
-    drop(again);
-    // A stubbed reopen is a legitimate sufficiency run and keeps its policy.
-    const STUB: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
-    let stubbed =
-        ChainStore::with_apply_policy(&path, ApplyPolicy::stubbed(STUB).expect("non-empty"))
-            .expect("stubbed reopen");
-    assert!(matches!(
-        stubbed.apply_policy(),
-        ApplyPolicy::StubbedFamilies(_)
-    ));
-    cleanup(&path);
-}
-
-#[test]
 fn a_second_batch_from_another_thread_is_refused_not_queued() {
     // DRS-W17's replacement KAT, refusal half: the C++ batch_start returns
     // false and its callers spin; redb's begin_write would BLOCK on a
@@ -286,6 +211,35 @@ fn a_stubbed_family_cannot_open_its_table_on_a_write() {
         table.insert("k", &1_u64).expect("insert");
     }
     batch.commit().expect("commit");
+    cleanup(&path);
+}
+
+#[test]
+fn the_properties_table_has_no_raw_write_handle() {
+    // A raw handle would let a string overwrite `schema_version` or clear
+    // the provenance record, which is exactly what the typed surface exists
+    // to make unrepresentable. Reads stay raw-capable: nothing can be
+    // damaged by looking.
+    let path = tmp("properties-typed");
+    let store = ChainStore::create(&path).expect("create");
+    let batch = store.begin_batch().expect("begin");
+    assert!(matches!(
+        batch.open_table(crate::schema::PROPERTIES),
+        Err(StoreError::PropertiesAreTyped)
+    ));
+    // Nor by redefining it under another type: the refusal is by name.
+    const IMPOSTOR: redb::MultimapTableDefinition<&str, &[u8]> =
+        redb::MultimapTableDefinition::new("properties");
+    assert!(matches!(
+        batch.open_multimap_table(IMPOSTOR),
+        Err(StoreError::PropertiesAreTyped)
+    ));
+    batch.abort().expect("abort");
+    store
+        .begin_read()
+        .expect("read")
+        .open_table(crate::schema::PROPERTIES)
+        .expect("raw read of properties is allowed");
     cleanup(&path);
 }
 
