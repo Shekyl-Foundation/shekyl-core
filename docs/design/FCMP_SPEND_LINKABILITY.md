@@ -1026,6 +1026,8 @@ Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
   — retained in the ledger, excluded from coin selection and `unlocked`,
   surfaced as the wallet-RPC state `UNSPENDABLE` with `unspendable_reason`
   and the sender's `tx_hash`, and totalled in `get_balance.unspendable`;
+  the persona funding extractor skips such an output with the transaction
+  named rather than counting it as bond funding — `pscan/scan_step.rs`;
   census `d-14`, rule 82) with the signer-side refusal kept as defence in
   depth (`TxBuilderError::PqcLeafMismatch`, FFI −32), the emission vin without
   `pqc_pk_hash` (ruling 9), census `d-3`/`d-4` (no zero fallback anywhere),

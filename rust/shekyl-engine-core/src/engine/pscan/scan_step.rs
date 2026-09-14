@@ -792,6 +792,27 @@ pub(crate) fn run_dual_extractor(
                 .scan(block.clone())
                 .map_err(DualExtractError::Scan)?;
             for out in recovered.into_inner() {
+                // PL-D3 §6.2 (`FCMP_SPEND_LINKABILITY.md`): the scanner has
+                // compared the output's published `0x07` entry with the
+                // persona's own derivation. A received-but-unspendable output
+                // can never be proven, so it is neither bond funding nor a
+                // funding record — counting it would fail at post assembly
+                // with the money already promised. Named here (rule 82: the
+                // failure is loud, with the sender's transaction) and skipped;
+                // the primary-wallet path persists the same verdict on its row.
+                if let Some(reason) = out.unspendable() {
+                    let wo = out.wallet_output();
+                    tracing::warn!(
+                        target: "shekyl_engine_core::pscan",
+                        p_slot = *slot,
+                        tx_hash = %hex::encode(wo.transaction()),
+                        vout = wo.index_in_transaction(),
+                        ?reason,
+                        "persona output received but unspendable: its 0x07 leaf entry \
+                         does not open to this persona's derivation; not counted as funding"
+                    );
+                    continue;
+                }
                 let acc = by_epoch.entry(epoch).or_insert(AtomicUnits::ZERO);
                 *acc = acc
                     .checked_add(out.amount())
@@ -1018,6 +1039,55 @@ mod tests {
             "the persona's own output was summed into the epoch delta"
         );
         assert!(res.bond_post_matches.is_empty());
+    }
+
+    /// PL-D3 §6.2 on the persona path: an owned output whose published `0x07`
+    /// entry does not open to the persona's derivation is received but
+    /// unspendable — it contributes neither an epoch delta nor a funding
+    /// record. The block is the honest fixture with one byte of the entry's
+    /// record half flipped; the KEM ciphertexts and tx pubkey are reused so
+    /// the output still recovers.
+    #[test]
+    fn unspendable_persona_output_is_not_funding() {
+        use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
+        use shekyl_scanner::extra::Extra;
+
+        let p = persona(0);
+        let mut block = funding_block(&p);
+        {
+            let tx = &mut block.transactions[0];
+            let extra = Extra::read(&mut tx.prefix.extra.as_slice()).expect("fixture extra");
+            let (keys, _) = extra.keys().expect("fixture tx pubkey");
+            let kem_cts: Vec<Vec<u8>> = extra
+                .pqc_kem_ciphertext()
+                .expect("fixture 0x06")
+                .chunks(HYBRID_KEM_CT_LEN)
+                .map(<[u8]>::to_vec)
+                .collect();
+            let mut leaf_blob = extra.pqc_leaf_hashes().expect("fixture 0x07").to_vec();
+            leaf_blob[63] ^= 0x01;
+            let mut tampered = Extra::for_hybrid_transfer(keys[0], kem_cts);
+            tampered.push_pqc_leaf_hashes(leaf_blob);
+            tx.prefix.extra = tampered.serialize();
+        }
+        let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeMap::new(),
+            range(20_001, 20_002),
+            &[block],
+            &KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
+        assert!(
+            res.funding.is_empty(),
+            "an unspendable output is not funding"
+        );
+        assert!(
+            res.funding_outputs.is_empty(),
+            "an unspendable output leaves no funding record"
+        );
     }
 
     /// D-A1 consistency gate (WI-2): the per-output funding records and the
