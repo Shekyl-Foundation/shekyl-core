@@ -1253,7 +1253,7 @@ is the whole justification, and it is a domain claim, not a safety claim.
   Its **apply** half does not. All twelve `set_archival_settlement` calls go
   straight onto the store handle, and that is **the writer, not the apply
   path** — it cannot be the apply path, because `set_archival_settlement` has
-  no production caller (`db_lmdb.cpp:7667`, held under the writer round's §5.1
+  no production caller (`db_lmdb.cpp:7668`, held under the writer round's §5.1
   pending **SO-D8**). §7.1.1 asks for apply **and** revert, so settlement is
   **half met and therefore unmet**, and will stay so until SO-D8 gives the
   writer a caller.
