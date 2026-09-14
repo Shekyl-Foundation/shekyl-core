@@ -403,7 +403,9 @@ The first layer of the circuit runs **five** `discrete_log` gadgets per
 input (`o_blind`, `i_blind_u`, `i_blind_v`, `i_blind_blind`, `c_blind`,
 `circuit.rs:131–150`) over **four claimed points** in the proof tape
 (`fcmps/src/lib.rs:305–312`: `inputs × (WORDS_PER_DIVISOR + 4 × WORDS_PER_CLAIMED_POINT)`,
-one claimed point = 4 words = 128 bytes); the 4th-scalar equality at
+one claimed point = 4 words, packed with `COMMITMENT_WORD_LEN = 128` words
+per vector commitment over the padded C1 rows — the 4 288 B FCMP part of
+the 4 768 B measured blob; the other 480 B is the SAL leg); the 4th-scalar equality at
 `:159–162` is one linear constraint and costs nothing measurable today. Gate
 counts are not exposed by the GBP API at the pin; the pre-flight (`26` B9)
 instruments them before any budget becomes a gate.
@@ -586,11 +588,15 @@ ambiguity `O.x` and `C.x` already carry.
 
 **Cost.** One more claimed point on the four the first layer already
 carries, in the exact shape of an existing leg — so the cost is known by
-analogy today and confirmed by measurement at pre-flight:
+analogy today and confirmed by measurement at pre-flight. **Numeric
+correction, 2026-09-14 (rule 26 B6):** the first ratified draft priced the
+proof-size delta as "+128 B per input" by reading one claimed point's four
+words as bytes on the wire; the words are packed into vector commitments,
+and the crate's own formula gives the figures below.
 
 | Quantity | Figure | Basis |
 |---|---|---|
-| Proof size per input | **+128 B** (one claimed point, 4 words × 32 B; `lib.rs:307–309`), **+64 B** more if the C1 inner-product vector crosses a power of two | the crate's own `proof_size` formula |
+| Proof size | **+256 B per proof** at depths 3–4 for 1–16 inputs (**not** +128 B per input as first written — a misreading corrected 2026-09-14): the claimed point's 4 words are packed into C1 vector commitments of `COMMITMENT_WORD_LEN = 128` words over the padded row count, so one more point adds two commitments and their `t` terms, 8 elements; at 8 layers the C1 rows cross a power of two and the packing changes | the crate's own `proof_size` (`lib.rs:278–335`), replicated cell-for-cell against `shekyl_fcmp::tree::proof_size` on a 5×5 grid, then re-run with five claimed points; **measured at pre-flight**. The measured 4 768 B of §6.1 is 4 288 B FCMP + 480 B SAL |
 | First-layer prove | **≈ +25 %** of claimed-point work (5 on 4); small single-digit % of the §6.1 total, which is dominated by the branch layers | by analogy to the `c_blind` leg; **measure** |
 | Verify | one more point in the batched MSM; ≤ a rounding step of §6.1 | **measure** |
 | Creation / scan | one fixed-base double-scalar multiplication + one HKDF-Expand per output | wallet-side, negligible |
@@ -625,7 +631,7 @@ fixed in the same PR or it routes the wrong value.
 |---|---|---|---|
 | Published `0x07` | compressed point `k·G_k + r·G_r` ‖ record `cSHAKE256(pk ‖ r_h)` (`PL-D3a`), 64 B | `H2(k ‖ r)` field element | `H2(k ‖ r)` |
 | Circuit change | one more `discrete_log` + `on_curve` + `incomplete_add_pub` leg (the `c_blind` shape) | one arithmetisation-friendly hash gadget (Poseidon2 or sibling) replaces the equality | remove the constraint and the public input |
-| In-circuit cost | +1 claimed point on 4; +128 B/input | ≈ 250 multiplication gates by estimate; +0–64 B | negative |
+| In-circuit cost | +1 claimed point on 4; +256 B per proof at depths 3–4 (formula, §6.2) | ≈ 250 multiplication gates by estimate; +0–64 B | negative |
 | Commitment binding | discrete log — the proof's own assumption | collision resistance — survives a discrete-log break | collision resistance |
 | Hiding | perfect | yes | yes |
 | New primitive | **none** | **yes**: a hash over the leaf field with generated parameters, vectors, a Rust implementation every producer shares, and its own cryptanalysis posture | no |
