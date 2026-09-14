@@ -7,6 +7,7 @@
 
 use super::legacy_types::*;
 use super::legacy_util::*;
+use zeroize::Zeroizing;
 
 // ─── FCMP++: Generators ─────────────────────────────────────────────────────
 
@@ -73,7 +74,8 @@ pub unsafe extern "C" fn shekyl_derive_pqc_leaf_entry(
     if combined_ss_ptr.is_null() || leaf_entry_out.is_null() {
         return false;
     }
-    let mut ss = [0u8; 64];
+    // Rule 35's FFI clause: the shared-secret copy wipes on every exit.
+    let mut ss = Zeroizing::new([0u8; 64]);
     std::ptr::copy_nonoverlapping(combined_ss_ptr, ss.as_mut_ptr(), 64);
 
     match shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf(&ss, output_index) {
@@ -100,7 +102,8 @@ pub unsafe extern "C" fn shekyl_derive_pqc_public_key(
     if combined_ss_ptr.is_null() {
         return ShekylBuffer::null();
     }
-    let mut ss = [0u8; 64];
+    // Rule 35's FFI clause: the shared-secret copy wipes on every exit.
+    let mut ss = Zeroizing::new([0u8; 64]);
     std::ptr::copy_nonoverlapping(combined_ss_ptr, ss.as_mut_ptr(), 64);
 
     match shekyl_crypto_pq::derivation::derive_pqc_public_key(&ss, output_index) {

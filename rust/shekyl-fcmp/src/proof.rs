@@ -83,6 +83,15 @@ pub enum ProveError {
         max: usize,
     },
 
+    #[error(
+        "leaf chunk arity mismatch at input {input_index}: {outputs} outputs, {cm_x} cm_x scalars"
+    )]
+    LeafChunkArityMismatch {
+        input_index: usize,
+        outputs: usize,
+        cm_x: usize,
+    },
+
     #[error("scalar decomposition failed (zero blinding factor)")]
     ScalarDecompositionFailed,
 
@@ -351,6 +360,18 @@ fn assemble_input_path(
 
     if data.leaf_outputs.is_empty() {
         return Err(ProveError::TreePathUnavailable(idx));
+    }
+    // Wire arity is data: the two chunk vectors arrive independently
+    // (public `ProveInput` fields; the multisig witness carrier), so their
+    // agreement is validated rather than assumed — an under-length
+    // `leaf_cm_x` would panic at the index below, an over-length one would
+    // be silently truncated.
+    if data.leaf_cm_x.len() != data.leaf_outputs.len() {
+        return Err(ProveError::LeafChunkArityMismatch {
+            input_index: idx,
+            outputs: data.leaf_outputs.len(),
+            cm_x: data.leaf_cm_x.len(),
+        });
     }
 
     let mut chunk_outputs = Vec::with_capacity(data.leaf_outputs.len());
@@ -1436,6 +1457,41 @@ mod tests {
             wrong_root.is_err() || matches!(wrong_root, Ok(false)),
             "wrong tree root must not verify"
         );
+
+        // Chunk-arity mismatch is a typed refusal, not a panic: the two
+        // chunk vectors are independently constructible (public fields;
+        // the multisig witness carrier), so an under-length `leaf_cm_x`
+        // must not index out of bounds and an over-length one must not be
+        // silently truncated.
+        for cm_x in [vec![], vec![h_pqc_bytes, h_pqc_bytes]] {
+            let mismatched = ProveInput {
+                output_key: o_bytes,
+                key_image_gen: i_bytes,
+                commitment: c_bytes,
+                pqc_leaf_commitment: pqc.cm.to_bytes(),
+                pqc_leaf_blind: pqc.blind.to_repr(),
+                spend_key_x: x.to_repr(),
+                spend_key_y: y.to_repr(),
+                commitment_mask: z.to_repr(),
+                pseudo_out_blind: a.to_repr(),
+                leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
+                leaf_chunk_cm_x: cm_x,
+                c1_branch_layers: vec![],
+                c2_branch_layers: vec![],
+            };
+            let refused = prove(&[mismatched], &tree_root, tree_depth, signable_tx_hash).err();
+            assert!(
+                matches!(
+                    refused,
+                    Some(ProveError::LeafChunkArityMismatch {
+                        input_index: 0,
+                        outputs: 1,
+                        ..
+                    })
+                ),
+                "chunk-arity mismatch must be a typed refusal, got {refused:?}"
+            );
+        }
     }
 
     /// PR-E1 roundtrip KAT: a valid membership-only proof from `prove_membership_only`

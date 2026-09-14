@@ -125,11 +125,13 @@ pub fn maturity_height(block_height: u64, is_miner: bool, target: TargetKind) ->
     }
 }
 
-/// Which of an output's published Ed25519 points failed decompression while
-/// building its leaf. These are the three point *inputs* of
+/// Which of an output's published Ed25519 points was refused while building
+/// its leaf. These are the three point *inputs* of
 /// [`shekyl_fcmp::tree::construct_leaf`]; the fourth leaf field, `I = Hp(O)`,
 /// is derived by hash-to-point and is always a point, so it can never be the
-/// failing input.
+/// failing input. `O` and `C` fail only on decompression (consensus imposes
+/// nothing more on them); `CM` is held to the full admission content rule
+/// (canonical, prime-order, non-identity — `pqc_leaf_point_valid`, CEN-I19).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeafPoint {
     /// The output's one-time key `O`.
@@ -140,8 +142,9 @@ pub enum LeafPoint {
     LeafCommitment,
 }
 
-/// An output whose published point failed Ed25519 decompression during leaf
-/// collection. `gindex` names the offending output in the global output
+/// An output whose published point was refused during leaf collection —
+/// failed decompression, or (for `CM`) failed the admission content rule.
+/// `gindex` names the offending output in the global output
 /// sequence (assigned to every vout, so it identifies the tx/vout position).
 ///
 /// On an admitted chain this never fires: the daemon rejects such an output
@@ -154,7 +157,7 @@ pub enum LeafPoint {
 pub struct LeafPointError {
     /// Global output index of the offending output.
     pub gindex: Gindex,
-    /// Which published point failed decompression.
+    /// Which published point was refused.
     pub point: LeafPoint,
 }
 
@@ -163,8 +166,10 @@ pub struct LeafPointError {
 ///
 /// Returns `Ok(Some(leaf))` iff the output is a tree-leaf candidate:
 /// - (a) the target is a known key target (not [`TargetKind::Other`]);
-/// - (b) the output has a commitment (`i < outPk.size()`); and
-/// - (c) [`shekyl_fcmp::tree::construct_leaf`] succeeds.
+/// - (b) the output has a commitment (`i < outPk.size()`);
+/// - (c) the published `CM` passes the admission content rule
+///   (`pqc_leaf_point_valid`: canonical, prime-order, non-identity); and
+/// - (c2) [`shekyl_fcmp::tree::construct_leaf`] succeeds.
 ///
 /// Returns `Ok(None)` on the *legitimate* skips (a) and (b) — the daemon
 /// skips the same outputs, so the two leaf sets agree. The global output
@@ -172,9 +177,10 @@ pub struct LeafPointError {
 /// result — the leaf set is a subset of the indexed set
 /// (CT2_DRAIN_ORDER.md §2.2). This function decides leaf membership only.
 ///
-/// Returns `Err` when (c) fails: a published point that does not
-/// decompress. That is **not** a skip — the daemon aborts on the same
-/// input (`DB_ERROR`, `blockchain_db.cpp:617`), so treating it as one
+/// Returns `Err` when (c) or (c2) fails: a published `CM` the admission
+/// rule refuses, or a point that does not decompress. That is **not** a
+/// skip — the daemon rejects the same input (admission at relay/connect,
+/// `DB_ERROR` at store, `blockchain_db.cpp:617`), so treating it as one
 /// would silently drop a leaf the daemon refuses to be without, and every
 /// later leaf would sit at a shifted position. The error names the failing
 /// point so the feed defect is diagnosable.
@@ -187,7 +193,17 @@ pub fn try_build_leaf(out: &OutputIdentity) -> Result<Option<[u8; 128]>, LeafPoi
     let Some(commitment) = out.commitment else {
         return Ok(None);
     };
-    // (c) leaf construction succeeds (shared FFI primitive with the
+    // (c) the published `CM` passes the admission content rule the daemon
+    // enforces at relay and connect (canonical, prime-order, non-identity;
+    // CEN-I19): `construct_leaf` below only decompresses, so without this
+    // check a non-conforming feed could hand the replica an
+    // identity/torsion/non-canonical commitment the daemon would have
+    // refused — the same fail-closed parity contract as (c2), through the
+    // shared predicate rather than a re-statement of it.
+    if shekyl_crypto_pq::leaf_commitment::pqc_leaf_point_valid(&out.cm).is_none() {
+        return Err(LeafPoint::LeafCommitment);
+    }
+    // (c2) leaf construction succeeds (shared FFI primitive with the
     // daemon, so x-extraction of all four points — `CM.x` included —
     // cannot diverge; CT2_DRAIN_ORDER.md §3.2).
     match construct_leaf(&out.output_key, &commitment, &out.cm) {
@@ -468,6 +484,42 @@ mod tests {
         let mut bad_c = coinbase_output();
         bad_c.commitment = Some([7u8; 32]);
         assert_eq!(try_build_leaf(&bad_c), Err(LeafPoint::Commitment));
+    }
+
+    /// `CM` is held to the admission content rule, not just decompression:
+    /// the identity (decompresses fine) and a torsion point (decompresses
+    /// fine) are refused exactly as the daemon refuses them at relay and
+    /// connect, and only for `CM` — `O`/`C` carry no such consensus rule.
+    #[test]
+    fn try_build_leaf_holds_cm_to_the_admission_rule() {
+        // Compressed identity: y = 1.
+        let mut identity = [0u8; 32];
+        identity[0] = 0x01;
+        // A small-order (torsion) point: canonical encoding, decompresses,
+        // not in the prime-order subgroup.
+        const TORSION: [u8; 32] = [
+            0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10,
+            0x67, 0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77,
+            0x92, 0xac, 0x03, 0x7a,
+        ];
+
+        for bad in [identity, TORSION] {
+            let mut out = coinbase_output();
+            out.cm = bad;
+            assert_eq!(try_build_leaf(&out), Err(LeafPoint::LeafCommitment));
+        }
+
+        // The identity as `O` or `C` is refused too, but by
+        // `construct_leaf` itself (`to_xy` has no affine x for the
+        // identity) — the same shared primitive the daemon runs, so parity
+        // holds there without a CM-style admission check, and the error
+        // still names the right arm.
+        let mut id_o = coinbase_output();
+        id_o.output_key = identity;
+        assert_eq!(try_build_leaf(&id_o), Err(LeafPoint::OutputKey));
+        let mut id_c = coinbase_output();
+        id_c.commitment = Some(identity);
+        assert_eq!(try_build_leaf(&id_c), Err(LeafPoint::Commitment));
     }
 
     /// `collect_block_leaves` refuses the block on a bad point and names the
