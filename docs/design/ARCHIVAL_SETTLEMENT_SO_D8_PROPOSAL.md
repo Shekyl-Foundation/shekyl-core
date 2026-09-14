@@ -1,12 +1,22 @@
 # `SO-D8` — ruling-round proposal: cross-epoch admission and the settlement writer's production caller
 
-**Status:** OPEN — **PROPOSAL, not a ruling** (one item ruled: `SO-D9` (i),
-2026-09-13, §1). Drafted 2026-09-13 for Rick's ratification. Nothing in this file is authority until the disposition table in
-§9 is stamped RULED; until then `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22
-hold on the writer's call site **stands** and this document does not route
-around it. No admission code, no consensus code, and no writer call site were
-written for this round (Slices A and B of the 2026-09-13 brief were authorized;
-Slice C — implementation — was not, and §8 is its plan, not its work).
+**Status:** OPEN — **PROPOSAL; direction RATIFIED, sub-dispositions not yet
+ruled.** Rick ratified shape **R-B** (post-issuance window, §2) on 2026-09-13
+with the eight modifications in §2.1 to be ruled item by item; `SO-D9` (i) is
+ruled (§1). Drafted 2026-09-13 for Rick's ratification. Nothing in the §9 table
+is authority until stamped RULED; until then `ARCHIVAL_SETTLEMENT_WRITER.md`
+§12's rule-22 hold on the writer's call site **stands** and this document does
+not route around it. No admission code, no consensus code, and no writer call
+site were written for this round (Slices A and B of the 2026-09-13 brief were
+authorized; Slice C — implementation — was not, and §8 is its plan, not its
+work).
+
+> **F5 (§1.4) is a finding outside this round's scope and larger than it:
+> every FCMP++ spend on the tree is linkable to the output it spends, today,
+> by the public 4th leaf scalar.** It was found by running the check Rick
+> asked for before the witness scheme was adopted. It is filed in
+> `docs/FOLLOWUPS.md` as pre-genesis/critical and is **Rick's to open**; this
+> proposal only records what it means for the witness key (§2.2).
 
 **Grounded at** `dev@37accf6f` (fresh worktree `~/shekyl/wt-so-settlement`,
 branch `feat/so-a-settlement-surface` carrying the three Slice-A commits
@@ -42,7 +52,8 @@ than §12 listed, not less.** A record naming `E` is fully representable in a
 block of `E+1`; exactly one live consensus rule refuses it today (the C++
 `h_close` gate), and the "ruled per-challenge deadline" §12 proposed
 re-pointing that gate at **does not exist in code**. §2 states the two shapes
-the ruling can take; item (e) is where the implementation work is under either.
+the ruling can take and records which was ratified; item (e) is where the
+implementation work is under either.
 
 > **CORRECTED 2026-09-13 (Rick's review of the first cut, same day).** The
 > first cut of this section claimed the premise was *"unrepresentable on the
@@ -57,21 +68,21 @@ the ruling can take; item (e) is where the implementation work is under either.
 
 ---
 
-## 1. Findings F1 and SO-D9 — what actually binds a record, read at the admission path
+## 1. Findings — what actually binds a record, read at the admission path
 
 ### F1 — the wire binds a record to the block it rides in, and to a **prover-declared** epoch
 
 | # | Binding | Where | Holds? |
 |---|---|---|---|
-| 1 | Nonce `H(block_hash(h−1) ‖ cb_out_key(h) ‖ P ‖ s ‖ E)` — `prev_block_hash` and `cb_out_key` populated from **the block being validated** | `blockchain.cpp:5504` (`cb_out_key` from `b.miner_tx`), `:5515` (`b.prev_id`); `attestation_wire.rs:79–80` | **Yes.** A countersignature made for block `h` verifies in no other block. |
-| 2 | `PC-D3`: `challenge_leaf_index(P, s, E, prev_block_hash, …)` derived from the including block's predecessor | `serve_credit.rs:172–200` | **Yes.** The leaf a record opens is drawn by the block it rides in. |
-| 3 | Kept header is `p_id ‖ shard_id ‖ settlement_epoch ‖ kind` — no issuing height, no claimed block | `attestation_wire.rs:92–97` | **Yes.** There is no field in which a record names an issuing `h`. |
+| 1 | `PC-D3`: `challenge_leaf_index(P, s, E, prev_block_hash, leaf_count)` — the challenged leaf is drawn by the **including block's predecessor**, and the index is inside P's signed preimage together with `R_k`, the leaf bytes and the path | `blockchain.cpp:5307` (`ctx.prev_block_hash`), `serve_credit.rs:182–188`, `wire.rs:379–402` (`signature_preimage`) | **Yes.** A countersignature made against block `h`'s predecessor verifies in no block with a different predecessor. **This is the vin's only block binding** — see F3 for what the first cut put here instead. |
+| 2 | Beacon fire height `challenge_fire_height(h_open, h_close, block_hash_at_seal, P, s, E)` from `ctx.block_hash_at_seal` | `blockchain.cpp:5305`, `serve_credit.rs:190–198`, gate at `:208–209` | **Yes**, and it **dies with the beacon** under derived assignment (§3). |
+| 3 | Kept header is `p_id ‖ shard_id ‖ settlement_epoch ‖ Ed25519 countersig` — no issuing height, no claimed block | `cryptonote_config.h:424–426` (`1 + 32 + 10 + 10 + 64 = 117`), `shekyl-wire/src/transaction.rs:184,:197` | **Yes.** There is no field in which a record names an issuing `h`. |
 | 4 | `settlement_epoch` in that header is **written by the prover** and parsed by C++ at `get_archival_serve_credit_key` | `blockchain.cpp:5124` | **Yes** — and this is the row the first cut missed: **nothing in rows 1–3 ties `E` to the including block's epoch.** |
 | 5 | The only live rule relating `E` to the block's height: `if (current_height > h_close(E)) reject "past credit deadline"` | `blockchain.cpp:5186–5190` (C++, reachable, per-epoch); duplicated Rust-side as `ERR_CREDIT_DEADLINE`, `serve_credit.rs:211–212`, unreachable only because C++ refuses first | **Yes.** This is *exactly* the gate §12 named. |
 
-So: a record for `(P, s, E)` **can** ride a block of `E+1` — its nonce and leaf
-are bound to *that* block, its `E` is whatever the prover wrote — and is
-refused today by row 5 alone. `SO-D8` §12 stands as written.
+So: a record for `(P, s, E)` **can** ride a block of `E+1` — its leaf index is
+bound to *that* block's predecessor, its `E` is whatever the prover wrote — and
+is refused today by row 5 alone. `SO-D8` §12 stands as written.
 
 ### `SO-D9` — `ERR_EPOCH_MISMATCH` is a check that cannot fire (filed as its own finding)
 
@@ -91,9 +102,7 @@ therefore **Rick's**:
 - **(i) Make it fire:** populate `ctx.settlement_epoch` from
   `shekyl_archival_settlement_epoch_at_height(current_height)`
   (`shekyl_ffi.h:2594`, exists) — one C++ line — so *"the record's epoch is the
-  including block's epoch"* becomes an explicit enforced rule. Reviewer's
-  preference, and this proposal's: it is the check the round needs once
-  assignment is derived (`SO-D8b`).
+  including block's epoch"* becomes an explicit enforced rule.
 - **(ii) Delete it** and let the row-5 `h_close` gate be the single expression.
 
 > **RULED 2026-09-13 — (i).** Rick: *"Deleting leaves the rule implicit in an
@@ -115,17 +124,20 @@ therefore **Rick's**:
 >   reaches the FFI. The two together are the explicit rule; which one a given
 >   test observes depends on this ordering, and the cutover that deletes the
 >   beacon gates must not re-order them by accident.
-> - **What is ruled is the site, not the value's provenance under R-B.** Under
->   R-A the value at `:5304` is `settlement_epoch_at_height(current_height)`.
->   Under R-B the same site would compute the *issuing* block's epoch instead;
->   the rule "the record's declared epoch equals the epoch consensus assigns to
->   it" is the single-site statement in either case.
+> - **What is ruled is the site, not the value's provenance.** Under R-A the
+>   value at `:5304` is `settlement_epoch_at_height(current_height)`. **Under
+>   R-B (ratified, §2) the same site computes the *issuing* block's epoch,
+>   `settlement_epoch_at_height(h)`**, where `h` has first been validated as a
+>   real block in the window (§2.1 item 3). The rule "the record's declared
+>   epoch equals the epoch consensus assigns to it" is the single-site
+>   statement in either case — and under R-B it is a **real** check for the
+>   first time, because `h` is validated rather than copied from the record.
 >
 > **Implementation status: NOT built.** One C++ line at `blockchain.cpp:5304`
 > plus a test that a future-epoch header is refused with `EPOCH_MISMATCH` and a
-> stale-epoch header with `h_close`. It is a consensus tightening on the
-> admission path and was not in the 2026-09-13 brief's authorized slices; it
-> is ready to build on authorization, and the FOLLOWUPS row carries it.
+> stale-epoch header with the deadline gate. It is a consensus tightening on
+> the admission path and was not in the 2026-09-13 brief's authorized slices;
+> it is ready to build on authorization, and the FOLLOWUPS row carries it.
 
 ### 1.1 What is true about `W₂`, and why it makes the round larger
 
@@ -134,17 +146,22 @@ therefore **Rick's**:
 is the re-export; nothing else reads it. Its doc string — *"blocks after a
 challenge's issuing block to accept its serve-credit response"*
 (`constants.rs:59`) — describes a gate that does not exist. **There is no
-per-challenge deadline anywhere in code.**
+per-challenge deadline anywhere in code.** Its value is
+`SETTLEMENT_EPOCH_BLOCKS / W2_EPOCH_DIVISOR = 10,000 / 20 = 500`
+(`constants.rs:147,:153,:202`) — about 16.7 hours at 2-minute blocks.
 
 This does not shrink `SO-D8`; it removes its escape hatch. §12's argument was
 *"the ruled per-challenge deadline already exists and is per-challenge"*, so
 the `h_close` gate could simply be re-pointed at it. It does not exist. Under
-shape R-B (§2) the round must **design** that deadline, not re-point to it.
+the ratified shape R-B the round must **design** that deadline, not re-point
+to it — and the constant then acquires the consumer its doc string already
+describes (§2.1 item 6).
 
 `SO-D7`'s lag argument (*"a challenge drawn at epoch-relative block 9,999
 resolves 500 blocks into `E+1`"*, `IMPLEMENTATION_INDEX.md` SO row) reads the
-same doc string as a mechanism. It describes shape R-B, which is one of the
-two things this round can rule — not a property the tree has.
+same doc string as a mechanism. It describes shape R-B — which is now the
+ruled direction, so the sentence becomes true when the cutover lands and is
+false until then.
 
 ### 1.2 The class, recorded
 
@@ -164,106 +181,379 @@ the source of each operand**; and **when a finding matches a class the round
 has already logged three times, that match is a reason to re-check, not a
 reason to stop.**
 
+### 1.3 F3 — the first cut conflated two mechanisms' block bindings (corrected at source in F1 row 1)
+
+The first cut's F1 row 1 cited *"nonce `H(block_hash(h−1) ‖ cb_out_key(h) ‖ P
+‖ s ‖ E)`, `blockchain.cpp:5504` (`cb_out_key` from `b.miner_tx`), `:5515`
+(`b.prev_id`)"* as the serve-credit vin's binding to its block. Those lines
+are **`verify_block_attestation`** — the block-level attestation path (coinbase
+`tx_extra` `0x0B`, `attestation_root`, P-countersigned witness records,
+`attestation_wire.rs:80` `NONCE_INPUT_LEN`), a *different* mechanism that
+happens to share `P, s, E` operands. The serve-credit **vin** path
+(`blockchain.cpp:5302–5320`) populates `current_height`, `settlement_epoch`,
+`block_hash_at_seal`, `prev_block_hash`, `registry_segment_subroot_rk`,
+`segment_leaf_count`, the bond pubkey and the leaf layer — **no `cb_out_key`
+and no nonce**. Its block binding is F1 row 1 as now written: `prev_block_hash
+→ challenge_leaf_index → signed preimage`.
+
+Consequence for R-B (§2.1 item 2): what must rebind to the issuing block is
+the **leaf-index derivation** (and the fire-height input dies), not a nonce.
+That is one operand, not two, and it is already verifier-derived
+(`RF-D6`/`RF-D8`), so the change is *which block's* hash C++ hands the FFI —
+not a new wire term. Operand-source rule of §1.2, applied to the first cut's
+own table.
+
+### 1.4 F4 — `PC-D2` and `ARCHIVAL_CHALLENGE_MECHANISM.md` §2 contradict each other, and `PC-D2`'s premise is inverted
+
+`ARCHIVAL_PER_CHALLENGE_RECORD.md` `PC-D2` rules *"the block is implicit: the
+record rides its own producer's block"* — shape R-A — and gives as its ground
+that a claimed-block field is forgeable and that arbitrating a thundering
+herd is to be avoided. `ARCHIVAL_CHALLENGE_MECHANISM.md` §2 (the ratified
+derived-assignment lifecycle) has the pass record *"broadcast as a
+transaction; any miner may include it within the resolution window W₂"* —
+shape R-B. Both are ratified text; they cannot both be the mechanism.
+
+**The herd premise is inverted.** Under R-A every miner attempting `h` must
+fetch `~λ·D/SEB` segments (≈ 97 at maturity, §7.1) from their `P`s *inside the
+block interval*, speculatively, because the record can only ride `h` and only
+`h`'s winner gets paid for it. That is ~97 concurrent fetches per pool per
+block hitting the same `P`s — the herd `PC-D2` was written to avoid. Under
+R-B only the *winner* of `h` fetches, and has `W₂ = 500` blocks (~16.7 h) to
+do it: the same 323 MB per epoch spread over hours instead of 120 seconds,
+~5.4 KB/s sustained. It is the difference between a duty and a capacity test.
+Rick, 2026-09-13: *"the 'thundering herd' problem was actually all the miners
+trying to hit a single P while mining, so this is sort of the same problem in
+reverse."* R-A is the herd; R-B is its cure.
+
+Disposition: **`PC-D2` is reversed by the R-B ratification (§2)**; the
+mechanism doc's §2 lifecycle is the authority; `PC-D2`'s forgeable-field
+objection is answered not by a claimed-block field but by **validating `h`**
+(§2.1 item 3) — a validated reference is not a claimed value. The reversal is
+recorded in `ARCHIVAL_PER_CHALLENGE_RECORD.md` in-line at `PC-D2` when the
+ruling PR lands (rule 23: the superseded row carries its status in the row).
+
+### 1.5 F5 — every FCMP++ spend is linkable to the output it spends, by the public 4th leaf scalar (**tree-wide; not this round's; Rick's to open**)
+
+Rick asked, before adopting a witness scheme that reveals a coinbase output's
+per-output hybrid key early: *what prevents `H(revealed hybrid_public_key)`
+from being matched against the chain's published per-output leaf hashes at
+spend time? There must be something — otherwise every FCMP++ spend would be
+trivially linkable.* Read at source, 2026-09-13: **nothing prevents it, and
+every FCMP++ spend is trivially linkable.** The chain, each link verified:
+
+| # | Fact | Where |
+|---|---|---|
+| 1 | Every non-coinbase output commits `h_pqc = H(hybrid_public_key)` **publicly** in `tx_extra` `0x07`, one 32-byte hash per output in vout order; the daemon copies it into the 128-byte leaf `{O.x, I.x, C.x, h_pqc}` at `[96..128]`, stored in `curve_tree_leaves` | `FCMP_PLUS_PLUS.md:65,:215–220,:704`; `blockchain_db.cpp:528–556` (`extract_leaf_hashes`); `shekyl-fcmp/src/leaf.rs:38–62`; `CURVE_TREE_CLIENT.md:402–411` (*"fully public (already on the chain)"*) |
+| 2 | `h_pqc` is **per-output unique**: `derive_pqc_leaf_hash(combined_ss, output_index)` = `hash_pqc_public_key(derive_pqc_public_key(combined_ss, output_index))`, both from `derive_output_secrets` on the same `(combined_ss, index)`; the coinbase self-encapsulation exists *precisely* to keep them distinct (*"would link rewards"*) | `derivation.rs:87–113,:120–135,:230`; `FCMP_PLUS_PLUS.md:240–247` |
+| 3 | The spend carries **that same `hybrid_public_key` in cleartext** in `tx.pqc_auths[i]` | `tx_pqc_verify.cpp:128–129` (serialised into the signed header), `:169–232` (verified as supplied) |
+| 4 | Consensus hashes the revealed key with the **leaf-hash function** and hands the result to the FCMP++ verifier as a **public input** | `blockchain.cpp:4348–4356` (`shekyl_fcmp_pqc_leaf_hash(hpk) → pqc_hashes_flat`); `fcmps/src/lib.rs:102–111` (`Input { O_tilde, I_tilde, R, C_tilde, extra_leaf_scalars: "Public values" }`), `:784` |
+| 5 | The circuit **blinds** `O, I, C` (`O_tilde = O + o_blind·T` etc.) and then **constrains the leaf's 4th scalar to equal the public value, unblinded**: `constrain_equal_to_zero(var − public_val)`; the membership tuple is `{O.x, I.x, C.x, h_pqc}` with `h_pqc` a public constant | `fcmps/src/circuit.rs:133–163` (blinding), `:153–163` (equality), `:166–168` (tuple) |
+
+So for every input `i` of every FCMP++ transaction, the spent leaf is **the
+unique leaf whose bytes `[96..128]` equal `H(tx.pqc_auths[i].hybrid_public_key)`**
+— an `O(1)` lookup against a table every node holds, or a scan of `tx_extra`
+`0x07` blobs. The anonymity set of every spend is **one**. No circuit break is
+needed; the observer never touches the proof — the public inputs are enough.
+
+**The tree's own documentation asserts the opposite**, in three places a
+reader would trust: `FCMP_PLUS_PLUS.md:102–104,:121–122` (*"does not reveal
+which leaves are spent"*, *"anonymous, zero-knowledge"*),
+`POST_QUANTUM_CRYPTOGRAPHY.md:735–737` (*"without revealing which leaf"*),
+`MERKLE_TREE.md:235` (*"again, without revealing which leaf"*). All three are
+true of `O, I, C` and false of the tuple. Rule 16's corollary in its purest
+form: the claim is true of the design's *intent* and false of the design.
+
+**The tripwire already written for this fired and nobody was watching it.**
+`REWARD_EMISSION_LEG.md` §7.3 (`:806–829`) found *this exact enumerability*
+for the emission backing vin — *"leaf extra-scalars are publicly enumerable,
+so this reveal deterministically identifies the backing output"* — and
+dispositioned it as safe because *"the creating tx's inputs are
+FCMP++-hidden"*, with a **tripwire**: *"Any future change weakening FCMP++
+input anonymity (or letting output identification reach a tx's inputs)
+reopens this finding."* The creating tx's inputs carry the identical
+`pqc_auths` construction. They were never hidden. The tripwire condition was
+true when it was written; the analysis was scoped to one vin and did not ask
+whether the ordinary spend had the same shape (`FCMP_MEMBERSHIP_ONLY.md:376–384`
+cross-references the same disposition). §7.3's *"third linkability class"* is
+not a class of the emission vin; it is the tree.
+
+**Disposition (this proposal's, for Rick to rule on):**
+
+- **Filed** in `docs/FOLLOWUPS.md`, `Target: pre-genesis`, as a mission
+  priority-2 (privacy) defect on the consensus wire. Not `SO-`; no family is
+  minted here — it wants its own round with its own identifier, and that is
+  Rick's call (rule 94 §1). No code was touched.
+- **What it is not:** it is not a soundness defect (funds are safe; the PQC
+  binding works exactly as documented). It is a privacy defect that nullifies
+  FCMP++'s reason for existing while every other property holds — the shape
+  rule 16 names as the dangerous one, because nothing fails.
+- **What a fix must do**, stated only so the witness-key ruling below can be
+  made against it: the spend must convince the verifier that the revealed
+  key matches the leaf **without disclosing the leaf's 4th scalar** — an
+  in-circuit hash of the key (expensive over a 1,996-byte input under
+  Blake2b; plausible under an algebraic hash), a blinded commitment to
+  `h_pqc` re-randomised like `C`, or a key structure that is not per-output
+  and per-spend revealed. Every one of those keeps `hybrid_public_key` in
+  cleartext at spend time (ML-DSA cannot be verified without its public
+  key). **That fact is what rules the witness key** (§2.2).
+- **Genesis-frozen surfaces this touches:** the leaf layout, the FCMP++
+  public-input list, `tx.pqc_auths`, `tx_extra` `0x07`. All pre-genesis; the
+  pre-genesis discount (`15-deletion-and-debt`) applies in full and nothing
+  here argues for anything but fixing it structurally before genesis.
+
 ---
 
-## 2. The two shapes the ruling can take
+## 2. The two shapes, and the one ratified
 
 Neither is "what the tree is". The tree today is the interim beacon: one
 challenge per pair-epoch, response accepted anywhere in `(h_fire, h_close]`,
 epoch prover-declared. Derived assignment replaces that, and the replacement
 must pick one of:
 
-| | **R-A — same-block** (`PC-D2`'s shape, made an enforced rule) | **R-B — post-issuance window** (`W₂`'s doc string, `SO-D7`, `SO-D8` §12) |
+| | **R-A — same-block** (`PC-D2`'s shape) | **R-B — post-issuance window** (`ARCHIVAL_CHALLENGE_MECHANISM.md` §2, `W₂`'s doc string, `SO-D7`, `SO-D8` §12) — **RATIFIED 2026-09-13** |
 |---|---|---|
-| Record answers the challenge of | the block it rides in: `(P,s) ∈ assignment(h_incl)` and `E = epoch(h_incl)` | an issuing block `h < h_incl ≤ h + W₂`, which the verifier must identify |
-| How `E` is bound to the block | **SO-D9 (i)**: `ctx.settlement_epoch` from height — a consensus tightening, one C++ line | replaced by `epoch(h) == E` where `h` is the issuing block |
-| How `h` is identified | it is `h_incl`; nothing to identify | **new**: a header field naming `h`, or a verifier-side search of `assignment(E)` for `(P,s)` disambiguating among up to `λ` draws — either way a change to a **genesis-frozen surface** (`RF` round closed 2026-08-21) and the nonce must rebind to `cb_out_key(h)` / `block_hash(h−1)` of the *issuing* block |
-| `h_close` gate (`blockchain.cpp:5186`) | stays; redundant with SO-D9 (i) and kept as defence in depth (`SO-D8a`) | replaced by a **per-challenge** deadline that must be **designed** (§1.1) |
-| Dedup (`blockchain.cpp:5156`) | one record per `(P,s,E)` per block is **exact** — the urn draws without replacement within a block | must key on `(P,s,E,h)`: two records answering different draws may share a block |
-| Emission gather at `h_close(E)` (`db_lmdb.cpp:8411`) | **complete** — every record for `E` is in `E`'s blocks | **incomplete** — records for `E` land up to `W₂` into `E+1`; the writer round's *"emission timing is untouched by the lag"* (verified against the gather's read set, not its timing) becomes **false**, and the gather must move to the slash pass or re-run. **§12 did not price this.** |
-| `passes > issued` | unreachable once the membership gate lands | reachable only through the same missing gate |
-| `SO-D7` writer home | slash pass, for the reasons `SO-D7` gave (ascending order, existing revert) | slash pass, and emission must join it |
-| Cost R-A carries and R-B does not | fetch latency sits **inside block production**: a miner that cannot fetch `~97` segments (§6) within the block interval omits records (draws fall to non-observation) or delays its block; every pool attempting `h` fetches the same pairs from `P` concurrently — a thundering-herd shape `PC-D2` chose the implicit-block design specifically to avoid arbitrating. **Q1, Rick's.** | the witness has `W₂` blocks |
+| Record answers the challenge of | the block it rides in: `(P,s) ∈ assignment(h_incl)` and `E = epoch(h_incl)` | an issuing block `h`, `h < h_incl ≤ h + W₂`, **named in the record and validated** |
+| How `E` is bound to the block | `SO-D9` (i) from `current_height` | `SO-D9` (i) from **`h`**: `epoch(h) == E` — a real check, because `h` is validated |
+| How `h` is identified | it is `h_incl`; nothing to identify | header field `h` (kept side, `117 → ~125` B); validated as a real block in `[h_incl − W₂, h_incl)`. A *validated* reference is not the forgeable claimed value `PC-D2` deleted claimed-block fields for |
+| Block operand the leaf index derives from (`PC-D3`) | `block_hash(h_incl − 1)` | **`block_hash(h − 1)`** — the issuing block's predecessor (F3: one operand, verifier-derived, no new wire term) |
+| `h_close` gate (`blockchain.cpp:5186`) | stays | **replaced** by the per-challenge deadline `h_incl ≤ h + CHALLENGE_RESPONSE_BLOCKS` (§3) |
+| Dedup (`blockchain.cpp:5156`) | pair-epoch-wide `pass_count > 0` is **exact** — one draw per block | **`(P, s, E, h)`** — and the exact-get *resolves* because `h` is in the DB (§4) |
+| Emission gather at `h_close(E)` (`db_lmdb.cpp:8334`) | complete | **incomplete** until `h_close(E) + W₂`; moves to the slash pass (§5) — `SO-D7` applied to a second consumer |
+| `passes > issued` | unreachable once the membership gate lands | unreachable once membership + dedup-on-`h` + validated-`h` hold (§6) |
+| Who fetches, and when | **every** miner attempting `h`, speculatively, inside the block interval — the herd (F4) | **the winner of `h`**, within `W₂` blocks |
+| Who is the witness, and how is that proven | implicit: the record rides the producer's block | the producer of `h`, **authenticated** by a hybrid signature under a key `h` committed (§2.2) |
+| Frozen surfaces touched | none on the wire | record format (RF round reopens, rule 21), rule-42 version bump, one new `tx_extra` tag (§2.2) |
 
-**Recommendation: R-A, as a ruling, not as a description.** It is `PC-D2`'s
-shape; it touches no frozen byte; its consensus delta is two gates (SO-D9 (i) and
-the membership gate), both tightenings; and items (a)–(d) are *ruled* by it
-rather than dissolved. R-B re-opens a closed wire round, designs a deadline
-that has never existed, and moves the emission gather. The cost of R-A is Q1,
-and this proposal does not decide it.
+**Ratified: R-B.** Rick, 2026-09-13: *"This is the way it needs to work."*
+The grounds, in the order they were established: (1) F4 — R-A is the herd,
+not its avoidance; (2) `SO-D7`'s finding (*"pass evidence is not final at
+`h_close`"*) was already ruled for the writer and simply applies to the
+emission gather too — R-B extends a ruling rather than inventing one; (3) `W₂`
+acquires the consumer its doc string describes (Q2 resolves as a consequence
+of Q1, not independently); (4) the honest new cost — dedup on `(P,s,E,h)` — is
+`PC-D4`'s widening one field further, and `PC-D4` already established the
+per-pair-epoch fold the emission gather needs. The first cut recommended R-A;
+that recommendation is **withdrawn** and the reason it was wrong is F4.
+
+### 2.1 What R-B modifies — eight items, each to be ruled
+
+Rick's enumeration of 2026-09-13, re-grounded at source; where the tree
+disagrees with the enumeration the correction is marked.
+
+1. **Record format — genesis-frozen, and the RF round reopens.** `h` on the
+   kept side (varint ≤ 10 B), kept ceiling `117 → 127` worst case
+   (`1 + 32 + 10 + 10 + 10 + 64`). That moves `ARCHIVAL_SERVE_CREDIT_VIN_MAX_BYTES`
+   (`cryptonote_config.h:425`), its `static_assert` (`:426`) and the
+   const-asserted twin in `shekyl-wire` (`transaction.rs:184,:197`) — three
+   sites, one literal. Witness pk + sig go **pruned** (§2.2), so the pruned
+   ceiling re-derives (`ARCHIVAL_RESPONSE_FORMAT.md:845` gives 5,107 B
+   pre-`RF-D6`, `:974` ~3,411 B after; the new figure is that plus the witness
+   material, or plus its amortised share under batching — item 8).
+   `attestation_wire.rs`'s kept header is the *attestation* path's, not the
+   vin's (F3); the vin header that gains `h` is `ArchivalServeCreditResponse`
+   (`wire.rs`). **Rule 42 fires**: persisted block bytes move, version bump
+   owed. **Rule 21 reopening criterion for the RF close (2026-08-21) is met**
+   — the ruled mechanism changed; this is the substrate change the close
+   named, not preference.
+2. **The leaf-index operand rebinds to the issuing block** (corrected from
+   *"nonce operands"* — F3). `PC-D3`'s `challenge_leaf_index` takes
+   `block_hash(h − 1)`, the issuing block's predecessor, in place of
+   `prev_block_hash` of the including block; C++ fetches it by validated
+   height. `ctx.block_hash_at_seal` (`blockchain.cpp:5305`) and
+   `challenge_fire_height` die with the beacon. The FFI ctx carries `h` (or
+   the derived hash for it) — one field.
+3. **Admission path — five changes in one function** (`blockchain.cpp:5100–5330`):
+   (a) parse `h`; validate it is a real block with `h_incl − W₂ ≤ h < h_incl`
+   (`h_incl = current_height`); (b) **replace** the `h_close` gate (`:5186`)
+   with the per-challenge deadline — the upper bound in (a) *is* the deadline;
+   (c) `SO-D9` (i) as `settlement_epoch_at_height(h) == E`; (d) membership:
+   `(P, s) ∈ assignment(h)` — the urn must answer for the last `W₂` blocks,
+   not only the current one (§7); (e) witness authentication — read `h`'s
+   coinbase witness commitment, compare the hash of the presented witness
+   key, verify the hybrid signature over the record's binding preimage
+   (§2.2). Order matters for which refusal a test observes; the `SO-D9`
+   ruling's ordering note applies.
+4. **The dedup key stops being vacuous — an unexpected win.** `PC-D4` widened
+   the ledger key to `(P, s, E, block)` but kept dedup pair-epoch-wide
+   (`blockchain.cpp:5156` is `archival_serve_credit_pass_count(P,s,E) > 0`)
+   because the exact-get would probe a block not yet in the DB. Under R-B the
+   key's block is `h`, **in the past and in the DB**, so `(P, s, E, h)` is an
+   exact-get that resolves; `PC-D7`'s deferred half discharges without the
+   workaround. **Semantic change to record:** the ledger's height field means
+   *including* block today and must mean *issuing* block; the 48-byte-prefix
+   `pass_count` is unaffected either way.
+5. **Emission gather — the real cost, and smaller than billed.**
+   `gather_archival_emission_epoch_snapshot` (`db_lmdb.cpp:8334`) at
+   `h_close(E)` becomes incomplete: records for `E` land up to `W₂ = 500`
+   blocks into `E+1`. It moves to the slash pass
+   (`process_archival_slash_for_epoch`, `:6075`, at `h > h_close(E) +
+   CHALLENGE_RESOLUTION_BLOCKS = h_close(E) + 10,000`, `constants.rs:44`),
+   where **every** record for `E` is final because `10,000 ≥ 500`. This is
+   `SO-D7`'s finding applied to a second consumer; the writer round verified
+   emission was untouched *only under the beacon*, where records are final at
+   `h_close`. Not a new problem R-B introduces — a ruling already made
+   arriving at the place its first application verified it did not reach,
+   with the verification scoped to a mechanism R-B replaces.
+6. **Constants get their referents.** `CHALLENGE_RESPONSE_BLOCKS` becomes the
+   per-challenge deadline its doc string (`constants.rs:59`) already
+   describes; `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`
+   (`:183–185`) becomes load-bearing (item 5 depends on it). `λ` **must** be
+   pinned to `CHALLENGES_PER_PAIR_PER_EPOCH` before any of this (Q4, §7.3).
+7. **New daemon-side secret lifetime.** The producer of `h` retains the
+   material to sign as witness for up to `W₂` blocks. Rust-owned,
+   `ZeroizeOnDrop`, rules 35/36; wants a **stated restart policy**, because a
+   daemon that loses it silently stops witnessing, and that shows up as `β`
+   (non-observation), not as an error. §2.2 says *which* secret.
+8. **Block weight — batching is the lever, ruled with its consequences.** At
+   maturity (~97 draws/block) with one witness pk (1,996 B,
+   `cryptonote_config.h:396`) + one hybrid sig (3,385 B, `:398`) **per
+   record**: ~8.8 KB × 97 ≈ **850 KB/block** relayed, against a 300 KB
+   penalty-free zone. **Batched per issuing block** — one witness tx carrying
+   all of `h`'s records, one pk + sig for the batch: ~97 × 3.4 KB + 5.4 KB ≈
+   **335 KB/block**. Permanent (kept) bytes: ~127 B × 97 ≈ 12 KB/block ≈
+   3.2 GB/yr at 2-minute blocks either way. Prunable bytes still count toward
+   block weight. Three consequences to rule: (a) the witness tx is a **single
+   point of failure** for ~97 credits — its fee and submission path become
+   availability-relevant in a way a per-record tx is not; (b) whether a batch
+   is all-or-nothing under admission or admits its valid members; (c) the
+   `tx_pool` class the batch tx belongs to (`serve_credit_only`,
+   `blockchain.cpp:3480` in the credit-wire doc's numbering).
+
+### 2.2 Two checks Rick asked for before ruling, and what they returned
+
+**Reorg across `h`/`h_incl` — safe, recorded as checked.** A record at
+`h_incl` references `h < h_incl`. A reorg replaces a suffix of the chain, so
+any reorg deep enough to remove `h` also removes `h_incl`. There is no
+reachable state in which a connected record references a block that no longer
+exists; `pop_block` reverting `h_incl` removes the record before `h` can be
+touched. Written down because R-B is the first mechanism where evidence and
+its reference live in different blocks, and a reader will ask. The cache
+(§7) rewinds by the same suffix.
+
+**Linkability of an early witness-key reveal — the answer is F5, and it rules
+the key.** Rick's framing offered two outcomes: *"nothing, because the
+spend-side key is re-randomised or distinct"* → scheme clean; *"the pk is
+sensitive pre-spend"* → dedicated never-spent witness output. The tree gives
+a third: the spend-side key is **not** re-randomised, **is** the same key,
+and its reveal at spend **already** identifies the output — for every output,
+not only coinbase. So, on the tree as it stands, revealing a coinbase
+output's per-output hybrid key at witness time adds **nothing** an observer
+does not get at spend time. That is not a reason to adopt it:
+
+- F5 is a pre-genesis defect that will be fixed, and every plausible fix
+  keeps `hybrid_public_key` in cleartext at spend (§1.5). Under any such fix,
+  a witness reveal of a **spendable** output's key re-creates the link at
+  that one output: `pk` seen at witness time equals `pk` seen at spend time.
+  Coupling the witness to a spendable output's key builds the round's
+  mechanism on the defect's persistence.
+- A **dedicated, never-spent witness output** (Rick's dodge) works but costs
+  one extra coinbase output per block — a leaf, a 0x07 hash, a KEM
+  ciphertext (1,120 B) — permanently, for a key that is never used to spend.
+- **Proposed instead: a dedicated witness key that is not an output.**
+  Derive a hybrid keypair from the coinbase `combined_ss` under a **distinct
+  HKDF `info`/salt** (not `derive_output_secrets`'s per-output path — a
+  registered domain, `CRYPTO_DOMAIN_REGISTRY.tsv` row) and commit
+  `hash_pqc_public_key(witness_pk)` in the coinbase under a **new `tx_extra`
+  tag** (`0x0C` is the next free after `0x0B`, `tx_extra.h:52`): 32 B/block
+  permanent, no output, no leaf, nothing the spend path ever touches. The
+  witness reveals `witness_pk` + a hybrid signature in the record's pruned
+  half; verification is (§2.1 item 3e) hash-compare against `h`'s coinbase
+  tag, then verify. It links to nothing because it *is* nothing but the
+  witness role — which is public by construction (the producer of `h` is the
+  producer of `h`). Same secret-lifetime cost as any alternative (item 7);
+  the node retains `combined_ss` or the derived seed for `W₂` blocks.
+
+**This is Q8 (§10); the proposal's recommendation is the dedicated
+non-output key.** What is *ruled out* by F5 is the coinbase output's own
+per-output key — not because it leaks today (nothing can leak more than the
+spend already does) but because it would leak *after* F5 is fixed.
 
 ---
 
-## 3. `SO-D8a` — boundary arithmetic and the two deadline gates
+## 3. `SO-D8a` — boundary arithmetic and the deadline gates, under R-B
 
-**Proposed under R-A: the boundary rule is `E = epoch(h_incl)`, enforced by
-SO-D9 (i).** Issuance at epoch-relative block 9,999 is answered in block 9,999 or
-falls to non-observation for that draw. Nothing straddles *by rule* — where the
-first cut said *by construction*.
+**Proposed: the boundary rule is `E = epoch(h)` — the issuing block's epoch —
+enforced by `SO-D9` (i) evaluated at `h`; the deadline is per-challenge,
+`h < h_incl ≤ h + CHALLENGE_RESPONSE_BLOCKS`.** A draw at epoch-relative block
+9,999 of `E` is answerable in any block up to epoch-relative 499 of `E+1`,
+names `E`, and is counted for `E`. Nothing "straddles": the record's epoch is
+a function of a validated height.
 
-The gates at `serve_credit.rs:208–212` and their C++ twin:
+The gates at `serve_credit.rs:208–212` and their C++ twins:
 
 - `ERR_FIRE_NOT_REACHED` (`current_height <= h_fire`) — the single-beacon fire
-  height. **Dies with the beacon**; replaced by the membership gate (`SO-D8b`).
-- `ERR_CREDIT_DEADLINE` / C++ `h_close` gate — **keep, untouched** (Q5,
-  answered by the review). It is a live C++ rule with a Rust defence-in-depth
-  duplicate; the duplicate is unreachable only because C++ refuses first,
-  which is the correct relationship for a duplicate. The first cut proposed
-  deleting it on the ground that the tautology made it unreachable —
-  inverted: the vacuous check is `EPOCH_MISMATCH`, not this one.
-- `ERR_EPOCH_MISMATCH` — SO-D9 (i) or (ii). Under R-A, (i).
+  height (`block_hash_at_seal` input). **Dies with the beacon**; replaced by
+  the membership gate (`SO-D8b`) — *"was `(P,s)` drawn at `h`?"* is the only
+  fire question derived assignment has.
+- `ERR_CREDIT_DEADLINE` / C++ `h_close` gate — **replaced**, not relaxed. The
+  first cut kept both as defence in depth *under R-A*; under R-B the gate's
+  subject changes from *"before the epoch closes"* to *"within `W₂` of the
+  draw"*, and keeping the old bound alongside would refuse exactly the
+  records R-B exists to admit (draws in the last `W₂` blocks of `E`). Both
+  twins (`blockchain.cpp:5186`, `serve_credit.rs:211`) move to the new
+  bound together; the Rust twin stays a defence-in-depth duplicate of the
+  C++ rule, in that relationship.
+- `ERR_EPOCH_MISMATCH` — `SO-D9` (i), operand `settlement_epoch_at_height(h)`.
 
-Consensus-visibility: SO-D9 (i) and the membership gate both shrink the accepted
-set. Both are consensus changes and belong to the §5 atomic cutover.
+Consensus-visibility: three admission changes (`SO-D9` (i), membership, the
+deadline re-bound) plus witness authentication. All belong to the §8 atomic
+cutover.
 
-## 4. `SO-D8b` — dedup at `blockchain.cpp:5156` and the membership gate
+## 4. `SO-D8b` — dedup and the membership gate, under R-B
 
-**Proposed: dedup unchanged; add the gate `PC-D7` kept alive.**
+**Proposed: dedup widens to `(P, s, E, h)` as an exact-get; add `PC-D7`'s
+membership gate against `assignment(h)`.**
 
-- Dedup today: one serve-credit vin per `(P,s,E)` per block
-  (`serve_credit_preblock_duplicate`, mirrored in
-  `serve_credit_decisions.rs`). Under R-A that is **exact**, because a pair is
-  drawn at most once per block (without-replacement within `advance_block`).
-  No change.
-- **New gate, consensus-visible:** a record for `(P,s,E)` in block `h` is
-  admitted only if `(P,s) ∈ assignment(h)`. This is the *count bound* and the
-  *anti-adaptive-selection* check `PC-D7` names. Without it a miner colluding
-  with `P` includes two pass records for `P`'s own pair in blocks it mines —
-  regardless of whether the urn ever drew the pair — and settles **Served**
-  with zero honest draws. With it, a collusive pass costs a *won block at an
-  assigned height*, which is the 2-of-3 quadratic's pricing assumption.
-- Cost: answering `(P,s) ∈ assignment(h)` needs the urn state at `h`. See
-  `SO-D8e` — this is why the FFI shape is the real item.
+- Dedup today (`blockchain.cpp:5156`): one serve-credit vin per `(P,s,E)`
+  **per epoch** — pair-epoch-wide, `pass_count > 0`. Correct under the beacon
+  (one challenge per pair-epoch). Under derived assignment with `λ = 3` draws
+  per pair-epoch it would refuse the second and third honest passes, so it
+  **must** widen. The widened key `(P,s,E,h)` exact-gets against the `PC-D4`
+  ledger whose height field now means *issuing* block (§2.1 item 4); two
+  records answering different draws of the same pair may share `h_incl` and
+  both admit. Mirror in `serve_credit_decisions.rs` in lockstep.
+- **Membership gate, consensus-visible:** admitted only if
+  `(P, s) ∈ assignment(h)`. Without it a miner colluding with `P` includes
+  pass records for `P`'s pair citing any `h` it likes — regardless of whether
+  the urn drew the pair at `h` — and settles **Served** with zero honest
+  draws. With it, plus witness authentication, a collusive pass costs *a won
+  block at an assigned height* **and** that block's witness key, which is the
+  2-of-3 quadratic's pricing assumption.
+- Cost: answering `(P,s) ∈ assignment(h)` for any `h` in the trailing `W₂`
+  window needs the urn's per-block draws retained for `W₂` blocks. See
+  `SO-D8e`.
 
-## 5. `SO-D8c` — emission gather
+## 5. `SO-D8c` — emission gather, under R-B
 
-**Proposed: unchanged under R-A.** `gather_archival_epoch_rows` at
-`process_archival_epoch_close_at_height` (`db_lmdb.cpp:8411`) walks
-`m_archival_serve_credit` for epoch `E` at `h_close(E)`; under R-A every record
-for `E` is already in the table. `PC-D6`'s fold (one credit per pair-epoch,
-`:8195`) stands. **Noted, not opened:** emission credits on *presence* (`≥ 1`
-pass, `PC-D6` *"three passes credit a pair once"*) while settlement slashes on
-absolute-2; `PC-D6` says *"no economic disposition opens"* and this proposal
-does not open one — it is recorded so the next reader does not rediscover it
-as a bug.
+**Proposed: the gather moves from `process_archival_epoch_close_at_height`
+to the slash pass, alongside the settlement writer.** At `h_close(E)` the
+table is incomplete by up to `W₂` blocks of records; at the slash deadline
+`h_close(E) + 10,000` it is final. `PC-D6`'s fold (one credit per pair-epoch,
+`db_lmdb.cpp:8195` in the writer doc's numbering) is unchanged in shape and
+re-keyed over the widened ledger. `REWARD_EMISSION_LEG.md` §4.5 already reads
+`Σwork(E)` lagged (*"settlement epoch `E+1` or later"*), so the consumer side
+tolerates the move; what changes is **where the snapshot is taken**, and the
+`ARCHIVAL_CONSENSUS_STATE.md` §4 invariant-2 joint pin that materialises it
+at `h_close` must be re-pinned to the slash pass in the same change.
 
-Under R-B this item is the largest change in the round (§2 row 6); that is the
-principal reason to prefer R-A.
+**Noted, not opened:** emission credits on *presence* (`≥ 1` pass) while
+settlement slashes on absolute-2; `PC-D6` says *"no economic disposition
+opens"* and this proposal does not open one.
 
 ## 6. `SO-D8d` — `passes > issued`
 
-**Proposed: unreachable once `SO-D8b`'s membership gate and SO-D9 (i) both hold;
-kept as a typed refusal that is FATAL at settlement, never clamped.** Both
-gates are needed: without SO-D9 (i) a record can carry a stale `E` into a block of
-`E+1` and, if admitted, count as a pass for `E` after `issued(E)` was fixed.
-`settle_epoch` (`attestation.rs:142–145`) already returns
+**Proposed: unreachable once membership (§4), dedup on `(P,s,E,h)` (§4) and
+validated `h` (§2.1 item 3a) all hold — each `h` contributes at most one
+record per pair, and only if `(P,s)` was drawn at `h`, so `passes ≤ issued`
+by construction. Kept as a typed refusal that is FATAL at settlement, never
+clamped.** `settle_epoch` (`attestation.rs:142–145`) already returns
 `SettleError::MorePassesThanIssued`; `SettlementRow::settle`
-(`settlement_row.rs:150`) refuses to compose a row. The writer maps that to a
-FATAL (`db_lmdb.cpp` `set_archival_settlement` throws) rather than `min(passes,
-issued)`: a clamp converts the collusion of `SO-D8b` into **Served**, silently,
-which is the one outcome the check exists to prevent. This is rule 50's
-"a check that cannot fail" in its useful form — the check is unreachable only
-while the gate holds, and the FATAL is the alarm that it stopped holding.
+(`settlement_row.rs:150`) refuses to compose a row; the writer maps that to a
+FATAL (`db_lmdb.cpp` `set_archival_settlement` throws) rather than
+`min(passes, issued)`: a clamp converts the collusion of §4 into **Served**,
+silently, which is the one outcome the check exists to prevent. Rule 50's
+"check that cannot fail" in its useful form — unreachable only while the
+gates hold, and the FATAL is the alarm that they stopped holding.
 
 ## 7. `SO-D8e` — the `assign_epoch` FFI shape (the real item)
 
@@ -271,7 +561,7 @@ while the gate holds, and the FATAL is the alarm that it stopped holding.
 
 | Consumer | Question | Cadence | Cost if answered by pure replay (`assign_epoch`) |
 |---|---|---|---|
-| Admission (`SO-D8b`) | `(P,s) ∈ assignment(h)`? | **every block** | replay from `h_open(E)` to `h`: `O(draws so far)` — at maturity up to 972,000 cSHAKE draws **per block** |
+| Admission (`SO-D8b`) | `(P,s) ∈ assignment(h)`, for any `h` in `[h_incl − W₂, h_incl)`? | **every block**, up to ~97 lookups | replay from `h_open(E)` to `h`: `O(draws so far)` — at maturity up to 972,000 cSHAKE draws **per block** |
 | Settlement writer (`SO-D1`) | `issued(P,s,E)` for every pair | once per epoch, in the slash pass | one full replay: 972,000 draws |
 
 Measured 2026-09-13, release, this host (`measure_full_epoch_replay_cost_at_maturity`,
@@ -281,51 +571,65 @@ not estimated here. Even at this host's speed, ~1 s of pure derivation per
 block on the admission path is not acceptable; per epoch in the slash pass it
 is.
 
-### 7.2 Proposed shape: a Rust-owned, in-memory, sequentially-fed urn with checkpoints
+### 7.2 Proposed shape: a Rust-owned, in-memory, sequentially-fed urn with a `W₂` ring and checkpoints
 
 **Rust owns the urn; nothing else does.** `ChallengeUrn` already is the
 sequential form (`advance_block(prev_hash)` per block, `draws_done()`;
-`challenge_assignment.rs:131–255`, `advance_block` at `:211`). The proposal is a wrapper type in
-`shekyl-archival-retention`, no new crate:
+`challenge_assignment.rs:131–255`, `advance_block` at `:211`). The proposal is
+a wrapper type in `shekyl-archival-retention`, no new crate:
 
 ```text
 EpochAssignmentCache  (derived state; NEVER persisted — SO-D3 derive-don't-store)
   open(E, drawable_pairs_at_h_open)                        // fresh urn; λ = CHALLENGES_PER_PAIR_PER_EPOCH, not a parameter (Q4)
-  advance(prev_hash) -> &[DrawablePair]                    // assignment(h); O(λ·pairs/SEB) per block
-  is_assigned(h, P, s) -> bool                             // admission gate, O(1) after advance
+  advance(h, prev_hash) -> &[DrawablePair]                 // assignment(h); O(λ·pairs/SEB) per block; pushed onto the ring
+  is_assigned(h, P, s) -> bool                             // admission gate; O(1) for any h in the trailing W₂ ring, refuse-not-guess outside it
   issued_histogram() -> impl Iterator<(DrawablePair, u32)> // writer input at settlement
-  checkpoint() / rewind_to(checkpoint)                     // pop_block, no replay for shallow reorgs
+  checkpoint() / rewind_to(h)                              // pop_block; pops the ring and the urn together
 ```
 
+- **The `W₂` ring is R-B's addition.** Admission asks about *past* blocks, so
+  the per-block draw sets must be retained: `W₂ × ~97 × 40 B ≈ 2 MB` at
+  maturity. An `h` outside the ring is a **refusal**, never a replay on the
+  admission path — the deadline gate (§3) has already refused anything older
+  than `W₂`, so the ring's depth and the deadline are the same constant and
+  must be read from the same place.
 - **Precedent:** `ArchivalSealHashCache` — derived, in-memory, rebuilt from
   chain on restart, the pattern `SO-D3` named.
-- **Reorg:** `pop_block` rewinds to the checkpoint at the popped height; a
-  reorg deeper than the retained checkpoints replays from `h_open(E)` (bounded
-  by one epoch = 1.09 s here). `SO-D6` already deletes settlement rows on
-  revert; the cache follows the same height.
-- **Restart mid-epoch:** replay from `h_open(E)` on first use. Same bound.
+- **Reorg:** `pop_block` rewinds urn and ring to the popped height; a reorg
+  deeper than the retained checkpoints replays from `h_open(E)` (bounded by
+  one epoch = 1.09 s here). `SO-D6` already deletes settlement rows on
+  revert; the cache follows the same height. §2.2's suffix argument means a
+  popped `h_incl` never leaves a dangling reference to a live `h`.
+- **Restart mid-epoch:** replay from `h_open(E)` on first use, rebuilding the
+  ring for the trailing `W₂`. Same bound.
+- **Retention (Q7, answered by construction):** the cache for `E` must live
+  until the last record for `E` can be admitted — `h_close(E) + W₂` — and,
+  if it is to feed the writer without a replay, until the slash pass at
+  `h_close(E) + 10,000`. So two epochs' urns are resident by necessity for
+  the first 500 blocks of each epoch; retaining through the slash deadline
+  (zero replay at settlement) is the recommendation and costs one more
+  epoch of a ~2 MB structure.
 - **Ordering hazard, named:** the cache must be advanced with the *validated*
   predecessor's hash, never `prev_id` as supplied on an alt path — the same
-  constraint `RF-D5` states on `prev_block_hash`.
+  constraint `RF-D5` states for the attestation path's `prev_block_hash`.
 
 **FFI, for as long as the C++ daemon exists (rule 20: shim, not logic):**
 one opaque handle, five entry points —
 `shekyl_archival_assignment_open / advance / is_assigned / issued_rows / rewind`
 — C++ marshals heights and 40-byte pair keys and does nothing else. **In the
 redb store this FFI does not exist:** the Rust `apply_block` / `pop_block`
-(`DAEMON_REDB_STORE.md` §3.5 S-CHAIN-W, *"Long-term Rust `apply_block` /
-`pop_block`"*) calls `EpochAssignmentCache` directly. The type is designed for
-the second caller; the FFI is a temporary adaptor and is listed on the credit
-wire's deletion surface from birth.
+(`DAEMON_REDB_STORE.md` §3.5 S-CHAIN-W) calls `EpochAssignmentCache` directly.
+The type is designed for the second caller; the FFI is a temporary adaptor
+and is listed on the credit wire's deletion surface from birth.
 
 ### 7.3 Inputs the shape needs that the tree does not yet supply
 
 - **`drawable_pairs_at_h_open(E)`** — the set the urn is seeded with. The
   drawability relocation (`ARCHIVAL_CHALLENGE_MECHANISM.md` §4.1) fixes *when*
   it is evaluated; **no enumerator exists in the tree** (`rg -i drawable
-  src/blockchain_db/` → none; Rust has only the `DrawablePair` type). This is
-  Slice C work and a question (Q3): which table is the denominator, and is it
-  frozen at `h_open(E)` or at the seal?
+  src/blockchain_db/` → none; Rust has only the `DrawablePair` type). Slice C
+  work and a question (Q3): which table is the denominator, and is it frozen
+  at `h_open(E)` or at the seal?
 - **`lambda_target`** — a bare `u32` parameter at `challenge_assignment.rs:152`
   and `:264`. `CHALLENGES_PER_PAIR_PER_EPOCH = 3` exists (`constants.rs:27`)
   and is const-asserted against `SERVE_THRESHOLD_PASSES` (`attestation.rs:77,
@@ -333,7 +637,9 @@ wire's deletion surface from birth.
   are in `shekyl-economics-sim`. The 972,000 figure assumes `λ = 3` by hand.
   **Must be pinned before any production caller** (Q4, confirmed by review):
   `EpochAssignmentCache::open` takes no `lambda_target` argument and reads the
-  constant, so the two cannot disagree. Filed in `docs/FOLLOWUPS.md`.
+  constant. Filed in `docs/FOLLOWUPS.md`.
+- **The witness commitment** (§2.2) — a new coinbase `tx_extra` tag and its
+  derivation domain. Neither exists.
 
 ---
 
@@ -341,93 +647,114 @@ wire's deletion surface from birth.
 
 Rust to the maximum extent (`20-rust-vs-cpp-policy`; the 2026-09-01 countermand
 rules the C++ unshippable and `DRS-E1` is in flight). Everything below that
-computes lives in `shekyl-archival-retention`; C++ is a marshaling shim that
-dies with the daemon.
+computes lives in `shekyl-archival-retention` / `shekyl-crypto-pq`; C++ is a
+marshaling shim that dies with the daemon.
 
 | Item | Plan |
 |---|---|
-| **Where the enumeration walk goes** | `shekyl-archival-retention::settlement::settle_epoch_rows(issued: impl Iterator<(DrawablePair,u32)>, passes: impl Fn(&DrawablePair)->u32) -> Vec<(ArchivalPairEpochKey, SettlementRow)>` — pure, testable, no storage. `issued` comes from `EpochAssignmentCache::issued_histogram()` (or one `assign_epoch` replay if the cache is not resident). One FFI `shekyl_archival_settlement_rows_for_epoch` returns the batch; C++ `process_archival_slash_for_epoch` (`db_lmdb.cpp:6075`) loops `set_archival_settlement` **before** the fold, per `SO-D7` (*"write the row, then fold it, in one hook"*). Under redb: the Rust apply path calls `settle_epoch_rows` and writes directly. |
+| **Where the enumeration walk goes** | `shekyl-archival-retention::settlement::settle_epoch_rows(issued: impl Iterator<(DrawablePair,u32)>, passes: impl Fn(&DrawablePair)->u32) -> Vec<(ArchivalPairEpochKey, SettlementRow)>` — pure, testable, no storage. `issued` from `EpochAssignmentCache::issued_histogram()` (or one `assign_epoch` replay if not resident). One FFI `shekyl_archival_settlement_rows_for_epoch` returns the batch; C++ `process_archival_slash_for_epoch` (`db_lmdb.cpp:6075`) loops `set_archival_settlement` **before** the fold, per `SO-D7`. Under redb: the Rust apply path calls `settle_epoch_rows` and writes directly. |
 | **How `issued` is obtained** | From the urn (§7), never from records (`SO-D1`: the forcing case has zero records). |
-| **How `passes` is obtained** | `archival_serve_credit_pass_count(P,s,E)` (`db_lmdb.cpp:5138`) — already a per-pair-epoch count over the `PC-D4` widened key; under R-A it is complete at `h_close(E)` and certainly by the slash deadline. Redb: the same count over the same table. |
-| **Cost** | One epoch replay per settled epoch if the cache is not resident (1.09 s here; Pi-4 owed), inside the slash pass, off the admission path. Zero additional derivation if the cache is retained until `h_slash_deadline(E) = h_close(E) + CHALLENGE_RESOLUTION_BLOCKS` — one epoch of retention, so at most two epochs' urns resident. Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
-| **Reader precondition (`SO-D7`'s lag)** | Unchanged in shape, re-grounded in cause: rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`, so the window walk (`db_lmdb.cpp:5870–5890`) must **exclude** `E` until settled, not read absence as non-observation. Stated as a reader constraint and tested (§10 item 5, restated: *inside `(h_close(E), h_slash_deadline(E)]`*, not *`[h_close, h_close + W₂)`*). The walk's `> 0` presence read at `:5880` is the interim predicate and is what the cutover replaces with the settlement row's `outcome`. |
-| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass at epoch-relative block 9,999 is counted* — under R-A it rides block 9,999 and is in the table at `h_close`; the red edit is no longer "move the writer to `h_close`" but "run the writer before the slash deadline with a synthetic lagged pop/reconnect" — i.e. the test becomes the reorg test. **Item 5 restated** as above. **New item 7:** the membership gate — a record for an unassigned pair in block `h` is refused; the red edit is deleting the gate. **New item 8:** collusion — two records for one pair in one epoch from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. |
-| **`CEN-L8` promotion path** | The census row's settlement clause names *"an unwired writer"* and puts settlement at epoch close; `SO-D7` puts it in the slash pass. Path: (1) ruling lands here → (2) census row re-worded to the slash-pass hook, two hooks per boundary stay (close + settlement) → (3) writer call site lands with the gate → (4) `DRS-P0f` re-reviews the row against the merged sha and records CHECKED-CONFORMANT. Not before step 3: a row promoted against a hold is the failure `CEN-L11` was. |
-| **What changes at the same cutover** | **Added:** SO-D9 (i) — `ctx.settlement_epoch` from `shekyl_archival_settlement_epoch_at_height(current_height)` at `blockchain.cpp:5304`, which makes `ERR_EPOCH_MISMATCH` a live rule; the membership gate (`SO-D8b`). **Deleted:** `challenge_fire_height` path and `ERR_FIRE_NOT_REACHED`; `archival_baseline_observed_at_epoch` as the interim `issued`. **Kept:** `ERR_CREDIT_DEADLINE` and its C++ twin (`SO-D8a`). **Ruled separately (Q2, rule 21):** `CHALLENGE_RESPONSE_BLOCKS` — no consensus consumer; either the doc string is rewritten to what it is under R-A (a witness fetch budget, not consensus) and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is dropped, or under R-B it becomes the per-challenge deadline the round must design. |
+| **How `passes` is obtained** | `archival_serve_credit_pass_count(P,s,E)` (`db_lmdb.cpp:5138`) — a per-pair-epoch count over the `PC-D4` widened key; **complete at `h_close(E) + W₂` and therefore at the slash pass** (`10,000 ≥ 500`). Redb: the same count over the same table. |
+| **Where the emission gather goes** | Same hook, same pass (§5): `gather_archival_emission_epoch_snapshot` is called from `process_archival_slash_for_epoch` after the writer, not from `process_archival_epoch_close_at_height`. The invariant-2 joint pin moves with it. |
+| **Admission changes (one function, `blockchain.cpp:5100–5330`)** | Parse `h` (new kept field); `if (h >= current_height \|\| current_height - h > CHALLENGE_RESPONSE_BLOCKS) reject`; fetch `block_hash(h−1)` by height for the leaf index; `ctx.settlement_epoch = settlement_epoch_at_height(h)` (`SO-D9` (i)); `is_assigned(h, P, s)` via the cache FFI; witness check via a `shekyl_archival_verify_witness(...)` FFI that takes `h`'s coinbase witness tag bytes + the pruned witness pk/sig + the record preimage. Dedup: `archival_serve_credit_present(P,s,E,h)` exact-get replaces the `pass_count > 0` probe at `:5156`; Rust twin in `serve_credit_decisions.rs`. The Rust FFI verifier (`serve_credit.rs`) drops the fire-height path and re-binds `ERR_CREDIT_DEADLINE` to the window. |
+| **Witness key (pending Q8)** | `shekyl-crypto-pq`: `derive_witness_keypair(combined_ss)` under a new registered domain; `hash_pqc_public_key` of it committed under a new `tx_extra` tag by `construct_miner_tx` (`cryptonote_tx_utils.cpp:198` region). Node-side: a `ZeroizeOnDrop` ring of `W₂` witness seeds keyed by height, Rust-owned, with the restart policy Q10 rules. |
+| **Batching (pending Q9)** | One `serve_credit` tx per issuing block per witness, carrying all of `h`'s records as vins; the witness pk + sig once, in the tx's prunable region, covering a preimage that binds every vin. Admission semantics per Q9(b). |
+| **Cost** | One epoch replay per settled epoch if the cache is not resident (1.09 s here; Pi-4 owed), inside the slash pass, off the admission path. Admission: `O(1)` ring lookups + one hybrid verify per **batch** (or per record unbatched — 97 ML-DSA-65 verifies per block is the unbatched admission cost and is itself a reason to batch). Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
+| **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk (`db_lmdb.cpp:5870–5890`) must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read at `:5880` is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
+| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*; red edit: evaluate `SO-D9` at `h_incl` instead of `h`. **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. |
+| **`CEN-L8` promotion path** | The census row's settlement clause names *"an unwired writer"* and puts settlement at epoch close; `SO-D7` puts it in the slash pass, and §5 now puts the emission gather there too. Path: (1) ruling lands here → (2) census row re-worded: two hooks per boundary stay (close + settlement), but the close hook no longer gathers emission → (3) writer + gather call sites land with the gates → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. |
+| **What changes at the same cutover** | **Added:** `SO-D9` (i) at `h`; membership gate; deadline re-bound to `W₂`; witness authentication; `h` on the kept wire; new coinbase tag; dedup exact-get on `(P,s,E,h)`. **Deleted:** `challenge_fire_height` path, `ERR_FIRE_NOT_REACHED`, `ctx.block_hash_at_seal`; `archival_baseline_observed_at_epoch` as the interim `issued`; the `h_close` bound as a deadline. **Moved:** emission gather to the slash pass. **Superseded in-line (rule 23):** `PC-D2`; the `constants.rs:59` doc string becomes true and stays. |
 
 **Sequencing against `DRS-E1`:** none of the above blocks on redb, and none of
-it thickens the C++ beyond one loop and one FFI call. If redb's `apply_block`
-lands first, the FFI half is simply never written.
+it thickens the C++ beyond marshaling. If redb's `apply_block` lands first,
+the FFI half is simply never written.
+
+**Sequencing against F5:** none of the above blocks on F5's fix **provided Q8
+rules the non-output witness key**; with the coinbase output's own key, the
+witness mechanism would have to be re-cut when F5 is fixed.
 
 ---
 
-## 9. Proposed dispositions — **NONE RULED**
+## 9. Dispositions
 
-| ID | Proposed disposition | State |
+| ID | Disposition | State |
 |---|---|---|
-| `SO-D8` (parent) | Premise **stands** (§1, corrected): cross-epoch records are representable and refused today by one live C++ rule. Shape **R-A** adopted *as a ruling*: `E = epoch(h_incl)`, enforced. | **PROPOSED** |
-| `SO-D9` (standalone) | `ERR_EPOCH_MISMATCH` is a tautology (`blockchain.cpp:5124 → :5304 → serve_credit.rs:168`). **(i)**: populate `ctx.settlement_epoch` from `shekyl_archival_settlement_epoch_at_height(current_height)` — an explicit single-site rule that the record's epoch is the block's, not a bound on *when*. Implementation not yet built; FOLLOWUPS row carries it. | **RULED 2026-09-13 — (i)** |
-| `SO-D8a` | Boundary rule is SO-D9 (i). `ERR_FIRE_NOT_REACHED` dies with the beacon; **`ERR_CREDIT_DEADLINE` and its C++ twin kept untouched** (Q5, answered — the first cut's "delete as unreachable" was inverted). No relaxation. | **PROPOSED** |
-| `SO-D8b` | Dedup unchanged (exact under without-replacement draws). **Add** `PC-D7`'s membership gate — with SO-D9 (i), the cutover's two consensus changes. | **PROPOSED** |
-| `SO-D8c` | Emission gather unchanged **under R-A only**; presence-vs-absolute-2 asymmetry recorded, not opened. Under R-B this is the largest change in the round. | **PROPOSED** |
-| `SO-D8d` | `passes > issued` unreachable once `SO-D8b` + SO-D9 (i) hold; FATAL at settlement, never clamped. | **PROPOSED** |
-| `SO-D8e` | `EpochAssignmentCache`: Rust-owned, in-memory, sequential, checkpointed, never persisted; `λ` read from `CHALLENGES_PER_PAIR_PER_EPOCH`, not a parameter (Q4); 5-call opaque FFI as a deletion-surface adaptor; direct call from redb `apply_block`. | **PROPOSED** |
-| `W₂` (Q2, rule 21) | `CHALLENGE_RESPONSE_BLOCKS` has no consensus consumer; the const-assert `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS` couples a consensus constant to one without a referent. Row filed in FOLLOWUPS regardless of how `SO-D8` goes. | **FILED** |
-| Slice A1 (Q6) | **Keep**, per review, on grounds narrower than §12 gave: the LMDB path needs a virtual to be reachable polymorphically, and a method with no interface presence is invisible to any port-surface check that enumerates `BlockchainDB`. In tension with `DRS-W12`; one commit. | **ANSWERED — keep** |
-| Sweep on ruling | `constants.rs:59` W₂ doc; `ARCHIVAL_SETTLEMENT_WRITER.md` §6/§12/§13 and the `IMPLEMENTATION_INDEX.md` SO-row `SO-D7` lag sentence; `TJ` `:819–822`; mechanism §2 step list — under R-A all `PC-D2`-superseded, marked in-line per rule 23. **Not swept before the ruling:** under R-B they are the design. | owed with the ruling PR |
+| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; items §2.1 1–8 to be ruled individually |
+| `SO-D9` (standalone) | `ERR_EPOCH_MISMATCH` is a tautology. **(i)**: populate `ctx.settlement_epoch` from `settlement_epoch_at_height(·)` — under R-B, of the validated `h`. Not yet built; FOLLOWUPS row carries it. | **RULED 2026-09-13 — (i)** |
+| `SO-D8a` | Boundary rule `E = epoch(h)`; `ERR_FIRE_NOT_REACHED` dies; **`h_close` deadline replaced** by the per-challenge `W₂` bound in both twins (the first cut's "keep untouched" was under R-A). | **PROPOSED** |
+| `SO-D8b` | Dedup **widens** to `(P,s,E,h)` exact-get (resolves — `PC-D7`'s deferred half discharges); add `PC-D7`'s membership gate against `assignment(h)`. | **PROPOSED** |
+| `SO-D8c` | Emission gather **moves to the slash pass** — `SO-D7` applied to its second consumer; invariant-2 joint pin moves with it. Presence-vs-absolute-2 recorded, not opened. | **PROPOSED** |
+| `SO-D8d` | `passes ≤ issued` by construction under membership + dedup-on-`h` + validated `h`; FATAL at settlement, never clamped. | **PROPOSED** |
+| `SO-D8e` | `EpochAssignmentCache` with a `W₂` ring: Rust-owned, in-memory, sequential, checkpointed, never persisted; `λ` from the constant (Q4); retained through the slash deadline (Q7); 5-call opaque FFI as a deletion-surface adaptor; direct call from redb `apply_block`. | **PROPOSED** |
+| `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row re-worded from "no referent" to "referent pending the cutover". | **RESOLVED by R-B** |
+| Witness key (Q8) | **Dedicated non-output hybrid key** derived from the coinbase `combined_ss` under a registered domain, committed under a new coinbase `tx_extra` tag; pk + sig pruned. The coinbase output's own per-output key is **ruled out by F5** (§2.2). | **PROPOSED — Rick's** |
+| Batching (Q9) | One witness tx per issuing block; consequences (a)–(c) of §2.1 item 8 to be ruled. | **PROPOSED — Rick's** |
+| Slice A1 (Q6) | **Keep**, per review, on grounds narrower than §12 gave. | **ANSWERED — keep** |
+| F3 | First cut's F1 row 1 cited the attestation path for the vin's binding; corrected at source. | **CORRECTED** |
+| F4 | `PC-D2` ↔ mechanism §2 contradiction; `PC-D2`'s herd premise inverted; reversed by R-B. In-line supersession at `PC-D2` owed with the ruling PR. | **RECORDED** |
+| **F5** | **Every FCMP++ spend is linkable to its output by the public 4th leaf scalar.** Tree-wide, pre-genesis, priority-2. Filed in FOLLOWUPS; **not** this round's; needs its own round and identifier. | **FILED — Rick's to open** |
+| Sweep on ruling | `constants.rs:59` W₂ doc (becomes true — keep); `ARCHIVAL_SETTLEMENT_WRITER.md` §6/§12/§13 and the `IMPLEMENTATION_INDEX.md` SO-row `SO-D7` lag sentence (become true — re-date); `PC-D2` and its citations (`ARCHIVAL_PER_CHALLENGE_RECORD.md`, `TJ` `:819–822`) marked SUPERSEDED in-line; `FCMP_PLUS_PLUS.md:102–104,:121–122`, `POST_QUANTUM_CRYPTOGRAPHY.md:735–737`, `MERKLE_TREE.md:235` — **F5's sweep, owed by F5's round, not this one**, but listed so the next reader does not rediscover them as accurate. | owed with the ruling PRs |
 
 ### 9.1 Figures flagged for re-derivation
 
 | Figure | Source | Status 2026-09-13 |
 |---|---|---|
 | ~972,000 assignments / epoch | `3 × 324,000`, `challenge_assignment.rs:534`, asserted at `:555` | **Holds** as `λ·pairs`; `λ = 3` is a test parameter, not a pinned constant (Q4). Cost **measured** 1.09 s release on this host; Pi-4 owed. |
-| 72 % unobservable at `k_cap = 30` | `ARCHIVAL_CHALLENGE_MECHANISM.md:1185` histogram `{0: 35 %, 1: 37 %, 2: 28 %}` | **Not re-derived** — no code artifact produces this histogram; it is a doc-only figure. Under R-A the capped-regime mechanics are unchanged, so the inputs did not move. Flagged as *unverifiable at source* rather than re-asserted. |
-| ~3,411 B record | `ARCHIVAL_RESPONSE_FORMAT.md:974` (post-`RF-D6`) | Not re-derived here; `RF-D6` removed two fields after the 5,331 figure and the doc records the drop. No wire change since the `RF` close (2026-08-21) per `git log` on `attestation_wire.rs`/`serve_credit` wire. |
+| ~97 draws / block at maturity | `972,000 / 10,000` | Arithmetic; the per-block witness load and the ring size derive from it. |
+| 72 % unobservable at `k_cap = 30` | `ARCHIVAL_CHALLENGE_MECHANISM.md:1185` histogram `{0: 35 %, 1: 37 %, 2: 28 %}` | **Not re-derived** — doc-only figure, no code artifact. Under R-B the capped-regime mechanics are unchanged (the window changes when a draw is answered, not how many are drawn). Flagged *unverifiable at source*. |
+| ~3,411 B record; 5,107 B pre-`RF-D6` | `ARCHIVAL_RESPONSE_FORMAT.md:974`, `:845` | Not re-derived; R-B adds `h` (≤ 10 B kept) and the witness material (1,996 + 3,385 B pruned, per record or per batch). |
+| 1,996 / 3,385 B hybrid key / sig | `cryptonote_config.h:396,:398` | **Grounded.** |
+| 850 KB / 335 KB per block | §2.1 item 8 | Arithmetic on the grounded figures; the 300 KB penalty-free zone is quoted from Rick's message and **not re-grounded here** — owed. |
 
-### 9.2 Wargames under R-A
+### 9.2 Wargames under R-B
 
 | Scenario | What happens | What stops it |
 |---|---|---|
-| **Adaptive-selection archiver** — `P` serves only when it can predict it is assigned | Assignment for `h` is public one block early (`block_hash(h−1)`); `P` can predict, but the *witness* is whoever wins `h`, unknown until it is mined, and the leaf is `PC-D3`-drawn by `h−1`. `P` must serve every assigned draw to every prospective winner. | Membership gate + `PC-D3`; residual = `P` colluding with a pool that wins the assigned block, priced by the quadratic. |
-| **Boundary-straddler** — issuance at epoch-relative 9,999 | Rides block 9,999 or falls to non-observation for that draw. A record carrying `E` into block 10,000 (epoch `E+1`) is representable — nothing in the nonce or leaf stops it — and is refused. | **Today:** the C++ `h_close` gate alone (`blockchain.cpp:5186`). **After the cutover:** SO-D9 (i) refuses it first (`epoch(h_incl) ≠ E`), `h_close` second, and the membership gate would refuse it anyway unless `(P,s) ∈ assignment(10,000)` — in which case it is an `E+1` record wearing an `E` header, which SO-D9 (i) is exactly the rule against. Today only `h_close` stands between that record and admission; §12's original proposal was to *relax* `h_close`, which would have admitted it with nothing behind. |
-| **Reorg across `h_close(E)`** | Alt branch's blocks carry their own records (nonce-bound to them); losing branch leaves no residue (`verify_block_attestation` is pure). Settlement rows for `E`, if already written, are deleted by `revert_archival_slashes_at_height` and recomputed on reconnect (`SO-D6`). Cache rewinds to checkpoint. | `SO-D6` + §7.2 checkpoints. **Unread, named:** the pop order in `blockchain_db.cpp:748–749` reverts slashes before epoch-close; confirm the cache rewind is sequenced before either. |
-| **Under-issuance regime** (`k_cap` binding) | Pairs with `issued ≤ 1` settle NonObservation with a row (`SO-D1`), so degradation is measured, not silent. Unchanged by R-A. | `SO-D1`/`SO-D2`'s `issued` byte. |
+| **Adaptive-selection archiver** — `P` serves only when it can predict it is assigned | `assignment(h)` is public at `h−1`; `P` can predict *that* it is drawn. But the witness is `h`'s winner, unknown until mined, who fetches within `W₂`; `P` refusing everyone but a colluding pool earns non-observation from honest winners, which under 2-of-3 with `λ = 3` is **Missed** unless the colluder wins ≥ 2 of the 3 assigned blocks. | Membership gate + witness authentication + `PC-D3` leaf drawn at `h−1`; residual priced by the quadratic. |
+| **Forged issuing block** — record cites an `h` at which the pair was not drawn, or which the includer did not produce | (a) `h` outside `[h_incl − W₂, h_incl)` → deadline refusal; (b) `(P,s) ∉ assignment(h)` → membership refusal; (c) `h` real and assigned but signer is not `h`'s producer → witness hash-compare against `h`'s coinbase commitment fails. | §2.1 item 3 (a), (d), (e). |
+| **Boundary-straddler** — draw at epoch-relative 9,999 of `E` | Answerable in blocks `[10,000, 10,499)` of the chain — epoch-relative `[0, 499)` of `E+1` — names `E` (`epoch(h) = E`), counted for `E`, present in the table by `h_close(E) + 500`, read by the writer and the emission gather at `h_close(E) + 10,000`. | `SO-D9` (i) at `h`; §5's move; `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`. |
+| **Reorg across `h_close(E)`, or across `h`** | Suffix property (§2.2): no connected record can reference a removed `h`. Alt branch's blocks carry their own records (leaf index bound to their own `h−1`); losing branch leaves no residue. Settlement rows for `E`, if written, are deleted by `revert_archival_slashes_at_height` and recomputed on reconnect (`SO-D6`); cache and ring rewind together. | `SO-D6` + §7.2. **Unread, named:** the pop order in `blockchain_db.cpp:748–749` reverts slashes before epoch-close; confirm the cache rewind is sequenced before either. |
+| **Witness key loss** — producer of `h` restarts and loses the witness seed | Draws at `h` fall to non-observation; nothing errors. Shows up as `β`. | Q10's restart policy; at minimum a metric. Not a consensus concern; an availability one. |
+| **Batch as single point of failure** (Q9) | One witness tx carries ~97 credits; if it is underfunded, malformed, or unrelayed, all ~97 draws at `h` are non-observation. | Q9 (a)–(c). |
+| **Under-issuance regime** (`k_cap` binding) | Pairs with `issued ≤ 1` settle NonObservation with a row (`SO-D1`), so degradation is measured, not silent. Unchanged by R-B. | `SO-D1`/`SO-D2`'s `issued` byte. |
+| **F5 interaction** | On the tree today, nothing the witness reveals is not already revealed at spend. After F5 is fixed, a witness scheme keyed on a spendable output's pk re-creates the link at that output. | Q8: the non-output witness key. |
 
 ---
 
 ## 10. Questions for Rick
 
-Four of seven were answered in the 2026-09-13 review of the first cut and
-`SO-D9` was ruled the same day; the answers are recorded here so the list is
-not re-asked. **Open: 1, 3, 7.**
+Seven were posed in the first cut; four answered in the 2026-09-13 review,
+`SO-D9` ruled, and R-B ratified the same day, which resolves 1, 2 and 7. Four
+new ones arise from R-B. **Open: 3, 8, 9, 10, 11.**
 
-1. **OPEN — (Mechanism, decides R-A's cost)** Under the same-block shape every
-   miner attempting `h` fetches `~λ·pairs/SEB ≈ 97` segments from their `P`s
-   inside the block interval, concurrently with every other pool. Is that load
-   and latency acceptable, or does it re-open `PC-D2`'s "no herd" claim? The
-   review flagged this as the one question the agent must not decide: it is a
-   thundering-herd shape, and `PC-D2` chose the implicit-block design
-   specifically to avoid arbitrating one.
-2. **ANSWERED — no referent.** `CHALLENGE_RESPONSE_BLOCKS` is read only by
-   const-asserts. The assert `CHALLENGE_RESOLUTION_BLOCKS ≥
-   CHALLENGE_RESPONSE_BLOCKS` couples a consensus constant to one with no
-   consensus consumer — a rule-21 item worth a row regardless of `SO-D8`.
-   Filed (FOLLOWUPS).
+1. **RATIFIED — R-B.** The herd is R-A's, not R-B's (F4). Recorded §2.
+2. **RESOLVED by 1.** `CHALLENGE_RESPONSE_BLOCKS` becomes the per-challenge
+   deadline; the const-assert becomes load-bearing.
 3. **OPEN — (Slice C input)** What is the drawable set at `h_open(E)`, and
    from which table is it enumerated? No enumerator exists.
 4. **ANSWERED — unpinned, must be pinned before any production caller.**
-   `lambda_target` is a bare `u32` at `challenge_assignment.rs:152` / `:264`;
-   `CHALLENGES_PER_PAIR_PER_EPOCH` exists but only the economics sim reads it.
-   §7.2's `open()` drops the parameter and reads the constant. Filed
-   (FOLLOWUPS).
-5. **ANSWERED — inverted, then RULED.** `ERR_CREDIT_DEADLINE` is untouched: a
-   defence-in-depth duplicate of the live C++ `h_close` rule. The vacuous
-   check is `ERR_EPOCH_MISMATCH` (`SO-D9`), **ruled (i) 2026-09-13**: make it
-   fire from height. Nothing remains open on this item except building it.
-6. **ANSWERED — keep A1**, on grounds narrower than §12's: the LMDB path
-   needs a virtual to be reachable polymorphically, and a method absent from
-   the interface is invisible to any port-surface check that enumerates
-   `BlockchainDB`. Genuinely in tension with `DRS-W12`; one commit.
-7. **OPEN — (Retention)** Is the cache retained through `h_slash_deadline(E)`
-   (two urns resident, zero replay at settlement) or dropped at `h_close(E)`
-   (one replay per settlement)?
+   `lambda_target` is a bare `u32` at `challenge_assignment.rs:152` / `:264`.
+   §7.2's `open()` drops the parameter and reads the constant. Filed.
+5. **ANSWERED, then RULED.** `ERR_CREDIT_DEADLINE`'s disposition changed with
+   R-B — it is **re-bound** to the `W₂` window, not kept as `h_close` (§3).
+   The vacuous check was `ERR_EPOCH_MISMATCH` (`SO-D9`), ruled (i).
+6. **ANSWERED — keep A1.**
+7. **RESOLVED by 1.** The cache must retain `≥ W₂` of per-block draws for
+   admission regardless; retaining through the slash deadline is one more
+   epoch of ~2 MB and removes the settlement replay. Recommendation: retain.
+8. **OPEN — (Witness key; F5 rules one option out)** Dedicated non-output
+   hybrid key derived from the coinbase `combined_ss` under a registered
+   domain, committed under a new coinbase `tx_extra` tag (proposal's
+   recommendation, §2.2); or a dedicated never-spent coinbase output (your
+   dodge — works, costs a leaf + KEM ciphertext per block); or the coinbase
+   output's own per-output key (**ruled out** — builds on F5's persistence).
+9. **OPEN — (Batching)** One witness tx per issuing block: (a) fee source and
+   submission path given it is a single point of failure for ~97 credits;
+   (b) all-or-nothing admission or admit-valid-members; (c) its tx-pool
+   class.
+10. **OPEN — (Secret lifetime)** Restart policy for the witness seed ring:
+    persist encrypted for `W₂` blocks (a secret at rest, rule 35), or accept
+    loss as `β` with a metric. Rust-owned either way.
+11. **OPEN — (F5)** Who opens the round, under what identifier, and does it
+    gate anything currently in flight. This proposal asserts only that it is
+    pre-genesis, priority-2, and that Q8's recommendation is made against it.
