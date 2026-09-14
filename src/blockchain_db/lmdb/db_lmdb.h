@@ -738,18 +738,10 @@ public:
 
   // ─── Settlement outcomes (SO-D2/SO-D6) ──────────────────────────────────
   //
-  // Public for the same reason apply_archival_slash_one above is: the
-  // production caller is process_archival_slash_for_epoch, a member, and these
-  // are exposed so the table's KATs can drive the path directly.
-  //
-  // Overrides of BlockchainDB pure virtuals since 2026-09-13 (SO-D8 scope
-  // addition, ARCHIVAL_SETTLEMENT_WRITER.md §12). The earlier note here —
-  // "deliberately NOT virtual on BlockchainDB; the only writer and reverter
-  // are BlockchainLMDB members, so the dispatch would buy nothing" — had a
-  // TRUE premise and a wrong conclusion, and is recorded as refuted rather
-  // than deleted: dispatch was never the point; interface completeness was.
-  // The contract text lives on the base declarations; this side documents
-  // only what is LMDB-specific.
+  // Public so the table's KATs can drive the path directly (same reason
+  // apply_archival_slash_one is). Overrides of BlockchainDB; contract text
+  // lives on the base declarations. LMDB-specific: SO-D2 puts the epoch last,
+  // so both deletes are full-table scans.
 
   void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch, uint32_t passes, uint32_t issued) override;

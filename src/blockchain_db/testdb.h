@@ -30,11 +30,8 @@
 
 #pragma once
 
-#include <array>
-#include <iterator>
 #include <stdexcept>
 #include <string>
-#include <tuple>
 #include <vector>
 #include <map>
 
@@ -204,46 +201,25 @@ public:
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) override {}
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash&, uint64_t, uint64_t) const override { return 0; }
 
-  // Settlement outcomes (SO-D8 promotion). Backed by a map, NOT no-op'd like
-  // the serve-credit doubles above — and the reason is the SO-D5 inversion
-  // failure_window.rs carries: for serve credit an absent bit reads as a MISS
-  // (harsh; a no-op double fails closed), but for settlement an absent row
-  // reads as NON-OBSERVATION (SO-D1) — the most forgiving verdict there is.
-  // A double whose write is a silent no-op and whose read is "absent" would
-  // therefore let a test write a row, read it back missing, and pass — the
-  // checks-that-cannot-fail shape. So the write folds through the same Rust
-  // encoder LMDB uses and throws where LMDB throws; the read returns exactly
-  // what was written; the deletes delete.
-  virtual void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch, uint32_t passes, uint32_t issued) override
+  // Settlement write throws. Absence is SO-D1 non-observation (the most
+  // forgiving verdict), so a silent no-op write would let a test pass after
+  // a failed store — the SO-D5 inversion in a double. Serve-credit may no-op
+  // because absence there is a MISS. A working in-memory table belongs on a
+  // subclass (the serve-credit pattern) or on BlockchainLMDB / TempLMDB.
+  virtual void set_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
+    uint32_t, uint32_t) override
   {
-    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES> row{};
-    const uint8_t rc = shekyl_archival_settlement_row(passes, issued, row.data());
-    if (rc != 0)
-      throw std::runtime_error("FATAL: settlement fold refused (P, shard, E) counts; code "
-        + std::to_string(static_cast<unsigned>(rc)));
-    m_archival_settlement[settlement_key(p_id, shard_id, settlement_epoch)] = row;
+    throw std::runtime_error(
+      "FATAL: BaseTestDB is not a settlement store; a no-op write would "
+      "read back as SO-D1 non-observation (fail-open). Use TempLMDB.");
   }
-  virtual bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
-    uint64_t settlement_epoch,
-    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const override
+  virtual bool get_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
+    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>&) const override
   {
-    const auto it = m_archival_settlement.find(settlement_key(p_id, shard_id, settlement_epoch));
-    if (it == m_archival_settlement.end())
-      return false;
-    out_row = it->second;
-    return true;
+    return false;
   }
-  virtual void delete_archival_settlement_for_epoch(uint64_t settlement_epoch) override
-  {
-    for (auto it = m_archival_settlement.begin(); it != m_archival_settlement.end();)
-      it = (std::get<2>(it->first) == settlement_epoch) ? m_archival_settlement.erase(it) : std::next(it);
-  }
-  virtual void delete_archival_settlement_before_epoch(uint64_t prune_below_epoch) override
-  {
-    for (auto it = m_archival_settlement.begin(); it != m_archival_settlement.end();)
-      it = (std::get<2>(it->first) < prune_below_epoch) ? m_archival_settlement.erase(it) : std::next(it);
-  }
+  virtual void delete_archival_settlement_for_epoch(uint64_t) override {}
+  virtual void delete_archival_settlement_before_epoch(uint64_t) override {}
 
   virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&,
     const std::vector<uint8_t>&, const crypto::public_key&, uint64_t,
@@ -315,16 +291,6 @@ public:
   virtual bool get_curve_tree_checkpoint(uint64_t, std::vector<uint8_t>&) const override { return false; }
   virtual uint64_t get_latest_curve_tree_checkpoint_height() const override { return 0; }
   virtual void prune_curve_tree_intermediate_layers(uint64_t) override {}
-
-private:
-  // (P_id bytes, shard, E) — the same triple SO-D2's 48-byte key encodes, kept
-  // as a tuple so the epoch-scoped deletes can filter without decoding.
-  using settlement_key_t = std::tuple<std::string, uint64_t, uint64_t>;
-  static settlement_key_t settlement_key(const crypto::hash& p_id, uint64_t shard_id, uint64_t settlement_epoch)
-  {
-    return settlement_key_t(std::string(p_id.data, sizeof(p_id.data)), shard_id, settlement_epoch);
-  }
-  std::map<settlement_key_t, std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>> m_archival_settlement;
 };
 
 }

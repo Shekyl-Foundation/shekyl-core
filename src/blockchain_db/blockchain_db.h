@@ -2245,29 +2245,16 @@ public:
 
   // ─── Settlement outcomes (ARCHIVAL_SETTLEMENT_WRITER.md SO-D1/SO-D2/SO-D6) ──
   //
-  // The per-pair-epoch VERDICT table, distinct from the per-challenge EVIDENCE
+  // Per-pair-epoch VERDICT table, distinct from the per-challenge EVIDENCE
   // ledger above: `outcome‖passes‖issued` (3 B, Rust-encoded) keyed
-  // `P_id‖BE(shard)‖BE(E)` (48 B). An absent row is SO-D1's "never issued ⇒
+  // `P_id‖BE(shard)‖BE(E)` (48 B). An absent row is SO-D1 "never issued ⇒
   // non-observation", NOT a miss — the reader must not collapse the two.
   //
-  // Pure virtual, deliberately. Until 2026-09-13 these lived only on
-  // BlockchainLMDB ("the only writer is a BlockchainLMDB member, so dispatch
-  // buys nothing"), which was true and was the wrong test: an interface that
-  // omits a surface its one implementation has is not an interface, and the
-  // BlockchainDB test double could not be asked about the table at all.
-  // SO-D8 (ARCHIVAL_SETTLEMENT_WRITER.md §12, scope addition `ba4b3c73a`)
-  // promotes them here. Scope of what this buys, stated so it is not
-  // over-read: the redb port's denominators (schema bijection, ApplyPolicy
-  // families) are the SHEKYL_LMDB_TABLES X-macro, which already carries
-  // `archival_settlement` — the port could not have missed the TABLE. What
-  // was missing was the C++ METHOD surface, for as long as this interface
-  // lives. `= 0` rather than a permissive default because a store that
-  // forgot the table should fail to compile, not silently no-op.
-  //
-  // Production caller status is unchanged by the promotion: the writer's call
-  // site is a rule-22 named hold on SO-D8 (§5.1). The revert
-  // (revert_archival_slashes_at_height) and the retention prune
-  // (prune_archival_epochs_before) are wired.
+  // Pure virtual so a store that forgot the table fails to compile. The
+  // writer's production call site is a rule-22 hold on SO-D8 (§5.1). The
+  // revert (`revert_archival_slashes_at_height`) and the retention prune
+  // (`prune_archival_epochs_before`) are wired. Redb's table denominator is
+  // the SHEKYL_LMDB_TABLES X-macro, not this interface.
 
   /// Fold `(passes, issued)` through the Rust encoder and store the row for
   /// `(P_id, shard, E)`. Refuses (throws) rather than storing if the fold
@@ -2275,11 +2262,12 @@ public:
   virtual void set_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch, uint32_t passes, uint32_t issued) = 0;
 
-  /// Read a settlement row. Returns false when absent — which SO-D1 defines as
-  /// "never issued", not "missed". A present row is re-validated through the
-  /// same Rust decoder that gates the write, so a non-canonical stored row is a
-  /// FATAL, never a value. The width is the FFI's compile-time constant so a
-  /// Rust-side change to SETTLEMENT_ROW_LEN breaks every override here.
+  /// Read a settlement row. Returns false when absent (SO-D1 never-issued).
+  /// When true, `out_row` holds a canonical
+  /// `SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES` row. The width is the FFI
+  /// compile-time constant so a Rust-side SETTLEMENT_ROW_LEN change breaks
+  /// every override. Integrity checks on stored bytes are the backend's,
+  /// not this signature's.
   virtual bool get_archival_settlement(const crypto::hash& p_id, uint64_t shard_id,
     uint64_t settlement_epoch,
     std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>& out_row) const = 0;
