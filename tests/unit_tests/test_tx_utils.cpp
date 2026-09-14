@@ -359,7 +359,7 @@ TEST(remove_field_from_tx_extra, invalid_varint)
   ASSERT_EQ(sizeof(extra_arr), extra.size());
 }
 
-TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_survive_sort)
+TEST(tx_extra_pqc_round_trip, kem_and_leaf_entries_survive_sort)
 {
   // Build tx_extra with: pubkey (0x01) + KEM ciphertext (0x06) + leaf hashes (0x07)
   // Then serialize → sort → re-parse and verify byte equality of recovered fields.
@@ -434,7 +434,7 @@ TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_survive_sort)
   ASSERT_EQ(sorted, double_sorted) << "sort_tx_extra not idempotent";
 }
 
-TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_reverse_order)
+TEST(tx_extra_pqc_round_trip, kem_and_leaf_entries_reverse_order)
 {
   // Insert leaf hashes BEFORE KEM ciphertext (wrong canonical order)
   // sort_tx_extra should reorder to canonical order, preserving contents.

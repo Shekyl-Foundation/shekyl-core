@@ -109,6 +109,54 @@ fn test_release_multiplier_ffi() {
 // shekyl_emission_vin_verify, whose Rust body emission_vin_verify_auth pins the
 // leaf-gate-first order and per-role domains — see emission_verify_kat.rs.)
 
+/// The census `d-12` split crosses the FFI: a PQC key-scalar count that
+/// disagrees with the key-image count returns 9 (`PqcKeyCountMismatch`)
+/// from the pre-slicing check — the code the entry point advertises —
+/// while a pseudo-out mismatch keeps the invalid-parameters code (1).
+#[test]
+fn full_verify_ffi_distinguishes_pqc_count_mismatch() {
+    let root = [0u8; 32];
+    let txh = [0u8; 32];
+    let proof = [0u8; 8];
+    let two = [1u8; 64];
+
+    // 2 key images, 2 pseudo-outs, 1 PQC scalar: the d-12 discriminant.
+    let r = unsafe {
+        shekyl_fcmp_verify(
+            proof.as_ptr(),
+            proof.len(),
+            two.as_ptr(),
+            2,
+            two.as_ptr(),
+            2,
+            two.as_ptr(),
+            1,
+            root.as_ptr(),
+            1,
+            txh.as_ptr(),
+        )
+    };
+    assert_eq!(r, 9, "PQC key count mismatch must surface as 9, not 1");
+
+    // 2 key images, 1 pseudo-out, 2 PQC scalars: still invalid parameters.
+    let r = unsafe {
+        shekyl_fcmp_verify(
+            proof.as_ptr(),
+            proof.len(),
+            two.as_ptr(),
+            2,
+            two.as_ptr(),
+            1,
+            two.as_ptr(),
+            2,
+            root.as_ptr(),
+            1,
+            txh.as_ptr(),
+        )
+    };
+    assert_eq!(r, 1, "pseudo-out count mismatch keeps code 1");
+}
+
 /// The full-path FFI shares the membership-only hardening: matched-but-huge
 /// or over-cap counts reject with code 1 before any slice/allocation.
 #[test]

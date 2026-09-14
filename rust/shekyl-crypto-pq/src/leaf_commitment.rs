@@ -67,7 +67,10 @@ const _: () = assert!(PQC_LEAF_POINT_LEN + PQC_LEAF_RECORD_LEN == PQC_LEAF_ENTRY
 
 /// One output's published `tx_extra` `0x07` entry: compressed `CM` then the
 /// post-quantum record. The leaf's 4th scalar is `CM.x`, extracted at
-/// `construct_leaf`; the record is checked by nothing live.
+/// `construct_leaf`. Consensus ignores the record (admission checks only
+/// the point); the recipient's scan verifies the whole entry against its
+/// own derivation, and a mismatch is received-but-unspendable
+/// (`FCMP_SPEND_LINKABILITY.md` §6.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PqcLeafEntry {
     /// Compressed Ed25519 point `CM = k·G_k + r·J`.

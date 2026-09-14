@@ -982,8 +982,11 @@ pub fn verify(
 /// (`REWARD_EMISSION_LEG.md` §7). Mirror of [`verify`] with the key-image leg
 /// removed: it proves membership **and** spend authority (the `R_O` Schnorr leg)
 /// but publishes **no key image**, so anti-replay is the emission per-epoch dedup,
-/// not a spent-set tag. ML-DSA attestation to `H(pqc_pk)` is the caller's obligation
-/// (the sibling vin-layer gate primitive, PR-E1), not this function's.
+/// not a spent-set tag. The revealed key's binding to the proven leaf is this
+/// proof's in-circuit `PL-D3` opening (`K = H_ℓ(pk)·G_k` as the per-input
+/// public value); the ML-DSA signatures over the role-separated binding
+/// messages are the caller's obligation (`emission_verify` §7.1), not this
+/// function's — the former `H(pqc_pk)` hash gate is retired.
 ///
 /// Transcript domain separation in [`FcmpMembershipOnly`] (`SAL_MEMBERSHIP_ONLY_DST`)
 /// prevents a full proof from being accepted here and vice-versa; the FFI seam test

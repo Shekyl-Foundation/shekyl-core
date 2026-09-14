@@ -399,10 +399,16 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 ) -> u8 {
     // Mirror of the membership-only entry point's hardening (PR #229 r2): reject
     // count mismatches and out-of-range arity BEFORE slicing or allocating, and
-    // guard the ×32 byte-length multiplies against usize overflow. All reject
-    // paths keep this function's existing invalid-parameters code (1), so the
-    // error surface is unchanged.
-    if ki_count != po_count || ki_count != pqc_hash_count {
+    // guard the ×32 byte-length multiplies against usize overflow. The PQC
+    // key-scalar arity has its own discriminant (9, the census `d-12` split):
+    // it is the same mismatch `proof::verify` reports as
+    // `PqcKeyCountMismatch`, refused here first so the hardening still
+    // precedes every slice. All other reject paths keep the
+    // invalid-parameters code (1).
+    if ki_count != pqc_hash_count {
+        return 9; // PqcKeyCountMismatch
+    }
+    if ki_count != po_count {
         return 1; // DeserializationFailed (invalid parameters)
     }
     if ki_count == 0 || ki_count > shekyl_fcmp::MAX_INPUTS {
@@ -631,8 +637,9 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
 
 /// Convert raw output data into serialized 4-scalar leaves.
 ///
-/// `outputs_ptr`: packed tuples of `{O.x[32], I.x[32], C.x[32], pqc_pk_hash[32]}`,
-/// each 128 bytes. `count` = number of outputs.
+/// `outputs_ptr`: packed tuples of `{O.x[32], I.x[32], C.x[32], CM.x[32]}`
+/// (the 4th scalar is the `PL-D3` leaf commitment's x-coordinate), each
+/// 128 bytes. `count` = number of outputs.
 ///
 /// Returns a ShekylBuffer containing the serialized leaves (same format, but validated).
 #[no_mangle]
