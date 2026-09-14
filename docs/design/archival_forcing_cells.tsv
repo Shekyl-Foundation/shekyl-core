@@ -1,5 +1,5 @@
 # Archival forcing corpus — per-cell forceability register (AFC-1).
-# Pin: 638bb05c3. Denominator: 17 tables x 2 halves = 34 cells.
+# Pin: a6160a4bd. Denominator: 17 tables x 2 halves = 34 cells.
 # Anchors re-resolved 2026-09-14 on the PL-D3 implementation branch (the
 # same symbols, at the lines the branch moved them to).
 # Table set is derived from the X(LMDB_ARCHIVAL_ ...) X-macro at

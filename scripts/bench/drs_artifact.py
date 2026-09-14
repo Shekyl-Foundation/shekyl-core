@@ -16,7 +16,6 @@ import re
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DESIGN_DOC = os.path.join(ROOT, "docs/design/DAEMON_REDB_STORE.md")
-CHAIN_STORE = os.path.join(ROOT, "rust/shekyl-chain-store")
 ARTIFACT_GLOB = os.path.join(ROOT, "docs/benchmarks/drs_bench_ibd_*.json")
 
 SCHEMA = "shekyl_drs_bench_v1"
@@ -160,7 +159,10 @@ MEASURE_AXES = {
 
 # Deferred measures. These are comments the harness can grep, not probes:
 # a probe that cannot observe its own blocker would fire while the blocker
-# still stood. The one mechanical probe is `redb_engine_sites`, below.
+# still stood. The former mechanical probe (`redb_engine_sites` / a `new_db()`
+# switch detector) was deleted 2026-09-14: the redb arm is a second BINARY,
+# never a flag or a switch, so its blocker is a build target, carried in
+# FOLLOWUPS.md with a falsifier.
 FOLLOWON_MEASURES = {
     "pop_reorg_wall_time_s":
         "best-positioned follow-on: the /pop_blocks RPC already exists, so this "
@@ -615,69 +617,6 @@ def compare(base, cand):
             "fixture_shortfalls": short}
 
 
-def redb_engine_sites():
-    """(sites, files_scanned, subject_missing) for the redb CONSENSUS engine.
-
-    One scan, two consumers: it decides whether the stage-one deferral still
-    holds AND whether `--engine redb` can mean anything. Those are the same
-    fact; reading it twice is how they would come to disagree.
-    """
-    if not os.path.isdir(CHAIN_STORE):
-        return [], 0, True
-    # Two forms, because either alone is a false green. The second is the crate's
-    # OWN existing import style (`use redb::{Key, TypeName, Value}`), so an engine
-    # written idiomatically would have been invisible to the qualified form.
-    # Over-inclusion is a false RED here (an import with no use), which is the safe
-    # direction for a gate whose green authorises a deferral.
-    qualified_re = re.compile(r"redb::(Database|WriteTransaction|ReadTransaction)\b")
-    # `use redb::…` including multi-line brace groups and `as` aliases; the import
-    # names the type even when later use is unqualified.
-    import_re = re.compile(r"use\s+redb::(?:\{[^}]*\}|[A-Za-z_][A-Za-z0-9_]*(?:\s+as\s+"
-                           r"[A-Za-z_][A-Za-z0-9_]*)?)", re.S)
-    engine_type_re = re.compile(r"\b(Database|WriteTransaction|ReadTransaction)\b")
-    sites, scanned = [], 0
-    for dirpath, _, names in os.walk(CHAIN_STORE):
-        if f"{os.sep}target{os.sep}" in dirpath + os.sep:
-            continue
-        for n in names:
-            if not n.endswith(".rs"):
-                continue
-            scanned += 1
-            fp = os.path.join(dirpath, n)
-            rel = os.path.relpath(fp, ROOT)
-            with open(fp, encoding="utf-8") as fh:
-                text = fh.read()
-            for m in qualified_re.finditer(text):
-                sites.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1}")
-            for m in import_re.finditer(text):
-                if engine_type_re.search(m.group(0)):
-                    sites.append(f"{rel}:{text.count(chr(10), 0, m.start()) + 1} "
-                                 f"(imported)")
-    return sorted(set(sites)), scanned, False
-
-
-def blocker_failures():
-    """FATAL when the redb-arm deferral's blocker has stopped holding.
-
-    Scoped to `rust/shekyl-chain-store/`, which is where DRS-E1 says the redb
-    consensus engine grows. A workspace-wide grep would be wrong: redb is
-    already a real engine in `rust/shekyl-curve-tree/src/store/redb_backend.rs`
-    — the wallet's LeafStore — and would fire this probe every run.
-    """
-    sites, scanned, missing = redb_engine_sites()
-    if missing:
-        return [f"{CHAIN_STORE} does not exist; this probe's subject is absent, which "
-                "is the first evidence the probe is no longer reading anything"]
-    out = []
-    if scanned == 0:
-        out.append(f"scanned ZERO .rs files under {os.path.relpath(CHAIN_STORE, ROOT)} "
-                   "— the probe's corpus is empty, so its green means nothing")
-    if sites:
-        out.append("the redb CONSENSUS engine now exists — " + ", ".join(sites[:8]) +
-                   f" ({len(sites)} sites). The stage-one deferral of the redb arm was "
-                   "blocked on its absence, and that blocker is gone: wire the redb "
-                   "arm and the pop/reorg row, then remove this probe.")
-    return out
 
 
 def fs_type(path):
@@ -750,7 +689,7 @@ def hardware_fingerprint(path, declared_disk_class=None):
     return out
 
 
-def measurement_preflight(engine, sync_mode, daemon, work_dir, seed_dir, disk_class):
+def measurement_preflight(sync_mode, daemon, work_dir, seed_dir, disk_class):
     """Refusals that must fire before any daemon starts or cargo runs.
 
     Same conditions `artifact_refusals` will apply to the finished record, so
@@ -763,16 +702,6 @@ def measurement_preflight(engine, sync_mode, daemon, work_dir, seed_dir, disk_cl
                  "accepts an unrecognised value by silently falling back to DBF_FAST "
                  "(MDB_NOSYNC), so a typo here would measure the wrong durability "
                  "and say nothing.")
-    if engine == "redb":
-        sites, _, _missing = redb_engine_sites()
-        if not sites:
-            r.append("--engine redb refused: the daemon has NO engine switch — it "
-                     "always opens LMDB — and no redb consensus engine exists in "
-                     f"{os.path.relpath(CHAIN_STORE, ROOT)} to switch to. The run "
-                     "would produce a relabelled LMDB artifact, which `check` would "
-                     "read as a cross-engine ratio near 1.0 and pass against §1.3's "
-                     "floor. This refusal lifts by the same scan that `blockers` "
-                     "uses, so it opens exactly when DRS-E1 lands the engine.")
     if not os.path.isfile(daemon):
         r.append(f"{daemon} is not a file — build the daemon in THIS worktree; a "
                  "binary from another tree measures another tree")
