@@ -45,11 +45,9 @@ pub(crate) const STALENESS_BOUND_REFRESHES: u64 = 10;
 pub(crate) const CAUGHT_UP_SLACK_BLOCKS: u64 = 64;
 
 /// Virtual port the persona's onion publishes — the port a witness dials.
-///
-/// 80 because it is the onion-service convention and carries no information: a
-/// non-default port is a per-operator distinguisher on an address whose whole
-/// purpose is to be indistinguishable. Not a setting, for that reason.
-pub(crate) const SERVING_VIRTUAL_PORT: u16 = 80;
+/// Declared once in `shekyl_curve_tree::serving_route` so the fetch client
+/// dials the port the persona publishes by construction (`SF-D4`, `SF-D5`).
+pub(crate) use shekyl_curve_tree::serving_route::SERVING_VIRTUAL_PORT;
 
 /// Per-rendezvous-circuit stream cap. **Carried placeholder (SPIKE-PIN-1), not
 /// a derivation** — the W₂ rig chooses it, and the value here is the one the

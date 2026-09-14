@@ -47,24 +47,14 @@ use tokio::task::JoinHandle;
 
 use crate::provider::{ShardBody, ShardProvider};
 
-/// The one route this endpoint answers. Ruled `RF-R1`
-/// (`docs/design/ARCHIVAL_SERVING_ROUTE.md`): `GET /shard/{id}`.
-/// Not a format-round candidate — §9.5's exclusion stands — and not
-/// consensus. **Do not rename this to restore `provisional` or mint a
-/// version token.** A later request contract is an additional path that
-/// suffixes `/shard/`, with a named reopening; until then this is the
-/// only route.
-pub const ROUTE_PREFIX: &str = "/shard/";
-
-/// Response content type for shard bytes.
-pub const CONTENT_TYPE: &str = "application/octet-stream";
-
-/// Every header name the endpoint ever emits, in emission order — the
-/// **complete** set, asserted by `two_personas_are_header_identical`, so
-/// adding a header without updating this constant fails the
-/// indistinguishability test rather than silently widening the
-/// fingerprint.
-pub const RESPONSE_HEADER_NAMES: &[&str] = &["content-type", "content-length"];
+// The route grammar this endpoint answers — `GET /shard/{id}`, the
+// `application/octet-stream` content type, and the complete response
+// header set — is declared once in `shekyl_curve_tree::serving_route` and
+// read by both ends of the route (`SF-D4`: the fetch client may not depend
+// on this crate, and one constant read twice is the ratification two
+// agreeing constants are not). Re-exported so this crate's public surface
+// and its tests are unchanged.
+pub use shekyl_curve_tree::serving_route::{CONTENT_TYPE, RESPONSE_HEADER_NAMES, ROUTE_PREFIX};
 
 /// Cap on the request head, applied **while reading** rather than after —
 /// the pre-allocation bound. A shard read's request is a request line plus
