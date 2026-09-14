@@ -1030,9 +1030,15 @@ Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
   — retained in the ledger, excluded from coin selection and `unlocked`,
   surfaced as the wallet-RPC state `UNSPENDABLE` with `unspendable_reason`
   and the sender's `tx_hash`, and totalled in `get_balance.unspendable`;
-  the persona funding extractor skips such an output with the transaction
-  named rather than counting it as bond funding — `pscan/scan_step.rs`;
-  census `d-14`, rule 82) with the signer-side refusal kept as defence in
+  the persona funding extractor skips such an output rather than counting
+  it as bond funding, warning loudly but anonymously — the log line names
+  no slot, transaction, or index, because any sender can mint the trigger
+  and log sinks travel beyond the custody boundary; the ledger row and
+  RPC carry the specifics (the D-A1 / rule-82 reconciliation, pinned by
+  `unspendable_warn_is_loud_but_names_no_persona_or_tx`) —
+  `pscan/scan_step.rs`; census `d-14`, rule 82; this reconciliation and
+  the sign-input JSON key rename (`h_pqc` → `cm_x` at both producers, no
+  serde alias) ratified by Rick, 2026-09-14) with the signer-side refusal kept as defence in
   depth (`TxBuilderError::PqcLeafMismatch`, FFI −32), the emission vin without
   `pqc_pk_hash` (ruling 9), census `d-3`/`d-4` (no zero fallback anywhere),
   `d-1` (fuzz targets rebuilt and compiling), `d-2` (`hp_of_O` left the
