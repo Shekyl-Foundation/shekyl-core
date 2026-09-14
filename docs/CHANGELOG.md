@@ -4,6 +4,25 @@
 
 ### Changed
 
+- **Every FCMP++ spend currently identifies the output it spends (`PL-D1`),
+  and the documents that claimed otherwise are corrected at source.** The
+  input's revealed `pqc_auths[i].hybrid_public_key` hashes to the per-output
+  value published in `tx_extra` `0x07` at creation, and consensus hands that
+  hash to the verifier as a public input — one hash and one lookup, no proof
+  inspection. Amounts and destinations stay hidden; the spend graph does not.
+  Pre-genesis; nothing has leaked. Design round 1, ratified by Rick on
+  2026-09-14 (this branch carries no wire, leaf, or circuit change; the
+  implementation is the separate rule-07 PR; the fix `PL-D3` is a Pedersen commitment to the key in the
+  leaf, opened in-circuit by the existing discrete-log gadget, with a proper
+  hash-commitment mechanism as the successor round `PL-D4`) is
+  [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md);
+  it also rules `PL-D2` (Rick, 2026-09-14): the in-circuit "quantum-resistant
+  binding" is discrete-log sound, the "even if EC discrete log is broken"
+  claims are corrected at source (§4.5), and the post-quantum-sound leg is
+  designed with `PL-D4` at V4. `REWARD_EMISSION_LEG.md` §7.3's
+  2026-07-01 invariant ("the creating tx's inputs are FCMP++-hidden") is
+  struck; its tripwire fired.
+
 - **The daemon no longer reads `<data-dir>/checkpoints.json`.** Checkpoints
   are compiled in and carried by the release binary; the runtime JSON
   channel (`load_checkpoints_from_json`, the ten-minute reload) is deleted

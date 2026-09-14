@@ -6,7 +6,7 @@
 
 **"Prove your money exists in the entire history… without anyone knowing which one is yours"**
 
-In a normal blockchain, proving "I own this coin" is easy — the ledger literally lists who owns what. But that kills privacy. Shekyl (like Monero) wants **full anonymity**: every output should blend into the entire history of the chain so no one can tell which specific coin you are spending.
+In a normal blockchain, proving "I own this coin" is easy — the ledger literally lists who owns what. But that kills privacy. Shekyl (like Monero) wants **full anonymity**: every output should blend into the entire history of the chain so no one can tell which specific coin you are spending. That is the design goal and the membership proof delivers it; today the proof's public 4th-scalar input names the spent leaf regardless (`PL-D1`, "Our 4th scalar" below), until `PL-D3` lands.
 
 The solution is a **membership proof**: prove "my output is somewhere in the giant list of all outputs ever created" without revealing *where* it is.
 
@@ -232,9 +232,9 @@ This happens once per layer, alternating between Selene and Helios, all the way 
 
 ### Our 4th scalar
 
-Because of our 4th scalar, the proof also demonstrates: "The PQC key hash committed in my leaf matches the one I'm presenting in the transaction" — again, without revealing which leaf. The verifier provides the expected `H(pqc_pk)` as a public input, and the circuit checks that the 4th leaf scalar equals it.
+Because of our 4th scalar, the proof also demonstrates: "The PQC key hash committed in my leaf matches the one I'm presenting in the transaction." The verifier provides the expected `H(pqc_pk)` as a public input, and the circuit checks that the 4th leaf scalar equals it — and **that is exactly what reveals which leaf.** The same `H(pqc_pk)` was published for the output when it was created (`tx_extra` tag `0x07`), so anyone can hash the key the transaction presents and find the one leaf that carries it. The three blinded scalars hide the leaf; the fourth, unblinded and public, names it (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)).
 
-This means an attacker who compromises the classical EC cryptography (e.g., via a quantum computer) still can't steal funds — they'd also need to forge the ML-DSA-65 signature on the PQC key that's bound into the tree leaf. They must break **both** layers.
+What this does and does not give. Against an attacker who breaks Ed25519 but not the Helios/Selene curves the proof runs on, both layers must be broken, as intended: they cannot substitute a key, and they cannot forge an ML-DSA-65 signature under the committed one. Against an attacker who can compute elliptic-curve discrete logs in general (for example with a quantum computer), it does **not** stop theft by itself: the membership proof that enforces the leaf binding is a discrete-log argument, so such an attacker forges it for a key of their own choosing and signs under that key; the ML-DSA-65 layer stops forgery of a signature under a given key, not substitution of the key. The design's answer for a full discrete-log break is the V4 lattice-only transition, with the Keccak-chained `0x07` record of each output's key (`PL-D3a`) as the post-quantum ownership record until then (`PL-D2`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
 
 ### The proof system: Generalized Bulletproofs (GBPs)
 
@@ -267,7 +267,7 @@ The tree topology, branching factors, curve cycle, and proof system are all inhe
 
 ## Why This Modified Merkle Tree?
 
-- **Full-chain anonymity**: Prove your output exists *anywhere* in history (not just a small ring of 16 decoys).
+- **Full-chain anonymity**: Prove your output exists *anywhere* in history (not just a small ring of 16 decoys) — the membership proof's property; the spend as composed today still names its input (`PL-D1`).
 - **PQC binding**: The extra `H(pqc_pk)` scalar ties quantum-resistant authorization directly into the proof — an attacker must break both EC and lattice cryptography.
 - **Zero-knowledge**: The algebraic structure (Pedersen commitments + curve cycle) lets the proof hide which output while still proving membership and correctness.
 - **Efficiency trade-off**: We pay a bit more computation (one extra scalar per output, one more curve multiplication per leaf hash) for dramatically better privacy and future quantum resistance.

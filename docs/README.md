@@ -136,6 +136,7 @@ There is no V3.1 / V3.2 / V3.x release train. Allowed FOLLOWUPS / plan `Target:`
 | --- | --- |
 | Post-quantum spend / ownership | [POST_QUANTUM_CRYPTOGRAPHY.md](POST_QUANTUM_CRYPTOGRAPHY.md) |
 | FCMP++ membership | [FCMP_PLUS_PLUS.md](FCMP_PLUS_PLUS.md) |
+| FCMP++ spend linkability (`PL-` round, open) | [design/FCMP_SPEND_LINKABILITY.md](design/FCMP_SPEND_LINKABILITY.md) |
 | Economics / denomination | [DESIGN_CONCEPTS.md](DESIGN_CONCEPTS.md) |
 | Genesis allocations | [GENESIS_TRANSPARENCY.md](GENESIS_TRANSPARENCY.md), [GENESIS_ALLOCATIONS.md](GENESIS_ALLOCATIONS.md) |
 | Archival staking (mechanism) | [V3_STAKER_ARCHIVAL.md](V3_STAKER_ARCHIVAL.md) |
