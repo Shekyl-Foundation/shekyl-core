@@ -7110,6 +7110,8 @@ void BlockchainLMDB::fold_archival_market_bonded_counts(std::vector<uint64_t>& b
   rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
   while (rc == 0)
   {
+    if (k.mv_size != 32)
+      throw std::runtime_error("FATAL: archival_bond key size mismatch during coverage fold");
     shekyl::db::ArchivalBondValue bond{};
     if (!shekyl::db::ArchivalBondValue::decode(v.mv_data, v.mv_size, bond))
       throw std::runtime_error("FATAL: archival_bond decode failed during coverage fold");

@@ -136,6 +136,13 @@ pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
 /// a method that declines to answer must not report success.
 pub const CORE_RPC_ERROR_CODE_CORE_BUSY: i64 = -9;
 
+/// JSON-RPC error code for an operator shard-fetch that did not produce a
+/// body (`CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`). Typed miss — not
+/// `WRONG_PARAM`. The requested `shard_id` was well-formed; this node
+/// does not currently hold the archive (pruned, or the scheduler returned
+/// MISS).
+pub const CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE: i64 = -22;
+
 /// The REST error envelope a natively-served endpoint answers with when it
 /// cannot produce its reply (HTTP 500): `status` is never `OK`, and `error`
 /// names what failed (diagnostic text — RK-D8 scope — not contract). The

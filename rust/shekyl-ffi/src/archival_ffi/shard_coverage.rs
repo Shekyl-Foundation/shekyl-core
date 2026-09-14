@@ -65,14 +65,13 @@ pub unsafe extern "C" fn shekyl_archival_order_shard_coverage(
     if out_cap < in_len {
         return SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_CAP;
     }
-    if in_len > 0 && out_ptr.is_null() {
-        return SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_MARSHAL;
-    }
 
-    let inputs = if in_len == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(in_ptr, in_len) }
+    let Some(inputs) = (unsafe { crate::legacy_util::slice_from_typed_ptr(in_ptr, in_len) }) else {
+        return SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_MARSHAL;
+    };
+    let Some(out) = (unsafe { crate::legacy_util::slice_from_typed_ptr_mut(out_ptr, in_len) })
+    else {
+        return SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_MARSHAL;
     };
     let rows: Vec<ShardCoverageIn> = inputs
         .iter()
@@ -86,18 +85,15 @@ pub unsafe extern "C" fn shekyl_archival_order_shard_coverage(
     let ranked = order_shard_coverage(tip_height, budget_atomic, sigma_work_milli, &rows);
     debug_assert_eq!(ranked.len(), in_len);
 
-    if in_len > 0 {
-        let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, in_len) };
-        for (dst, src) in out.iter_mut().zip(ranked.iter()) {
-            *dst = ShekylArchivalShardCoverageOut {
-                shard_id: src.shard_id,
-                bonded_count: src.bonded_count,
-                served_count: src.served_count,
-                freeze_height: src.freeze_height,
-                join_scarcity_micro: src.join_scarcity_micro,
-                expected_profit_atomic: src.expected_profit_atomic,
-            };
-        }
+    for (dst, src) in out.iter_mut().zip(ranked.iter()) {
+        *dst = ShekylArchivalShardCoverageOut {
+            shard_id: src.shard_id,
+            bonded_count: src.bonded_count,
+            served_count: src.served_count,
+            freeze_height: src.freeze_height,
+            join_scarcity_micro: src.join_scarcity_micro,
+            expected_profit_atomic: src.expected_profit_atomic,
+        };
     }
     unsafe {
         *out_len = in_len;

@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "string_tools.h"
 
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
@@ -1757,7 +1759,9 @@ namespace cryptonote
   {
     struct request_t: public rpc_request_base
     {
-      uint64_t shard_id;
+      /// Omitted on the wire stays this sentinel (`struct_init` + in-class
+      /// initializer). 0 is a real shard; `{}` must not fetch it.
+      uint64_t shard_id = std::numeric_limits<uint64_t>::max();
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_request_base)

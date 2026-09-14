@@ -13,9 +13,10 @@ extern "C" {
 
 /// Daemon-only operator shard-fetch scheduler (`ARCHIVAL_SHARD_FETCH.md` SF-D1).
 /// Lives outside `shekyl_ffi.h`: `shekyl-p-fetch` must not enter `shekyl-ffi`
-/// (`scripts/ci/check_p_fetch_dep_cut.py`). The strong symbol is provided by
-/// `shekyl-archival-fetch-sched` via `shekyl-daemon-image`. RPC unit tests
-/// link a weak stub that always returns MISS.
+/// (`scripts/ci/check_p_fetch_dep_cut.py`). The sole definition is
+/// `shekyl-archival-fetch-sched` via `shekyl-daemon-image` (daemon and
+/// unit_tests both select that image). A C++ weak stub in `rpc` would
+/// win GNU ld's first-archive pass and pin production on typed MISS.
 ///
 /// Every node prunes. Shard bodies below the window live with stakers, or
 /// temporarily on a daemon that requested the shard to view. This entry is

@@ -32,6 +32,7 @@
 #include <boost/preprocessor/stringize.hpp>
 #include <boost/uuid/nil_generator.hpp>
 #include <filesystem>
+#include <limits>
 #include "include_base_utils.h"
 #include "string_tools.h"
 using namespace epee;
@@ -1676,11 +1677,19 @@ namespace cryptonote
   {
     RPC_TRACKER(request_archival_shard);
     (void)ctx;
+    /* Restricted gate is Rust `RESTRICTED_METHODS` (RK-D6), same as
+       `on_relay_tx`. Coverage stays public; this fetch is admin-only. */
     try
     {
-      if (!rpc::fill_request_archival_shard(req.shard_id, res))
+      if (req.shard_id == std::numeric_limits<uint64_t>::max())
       {
         error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
+        error_resp.message = "shard_id is required";
+        return false;
+      }
+      if (!rpc::fill_request_archival_shard(req.shard_id, res))
+      {
+        error_resp.code = CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE;
         error_resp.message = "could not retrieve this archive";
         return false;
       }

@@ -23,7 +23,13 @@ void fill_archival_shard_coverage(const BlockchainDB& db,
 {
   using cmd = COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE;
 
-  const uint64_t tip_height = db.height();
+  // `db.height()` is the block count / next height. Age and last-settled
+  // epoch are as of the included tip — the parent the next block will
+  // connect on (`height() ? height()-1 : 0`). Passing the count itself
+  // is one too high: at a settlement boundary the list would report an
+  // epoch that has not closed.
+  const uint64_t chain_height = db.height();
+  const uint64_t tip_height = chain_height ? chain_height - 1 : 0;
   const uint64_t leaf_count = db.get_curve_tree_leaf_count();
   const uint64_t frozen_count = shekyl_archival_frozen_segment_count(leaf_count);
   const uint64_t settled = shekyl_archival_last_settled_epoch_as_of_parent(tip_height);
@@ -46,7 +52,14 @@ void fill_archival_shard_coverage(const BlockchainDB& db,
   {
     uint64_t freeze_height = 0;
     if (!db.archival_shard_freeze_height(shard_id, freeze_height))
-      freeze_height = 0;
+    {
+      // Frozen-universe membership is leaf-count geometry; a missing or
+      // undecodable freeze row is inconsistency, not genesis height 0
+      // (a real genesis freeze returns true with out=0). Ranking a hole
+      // as oldest would lie.
+      throw std::runtime_error(
+          "missing freeze row for frozen shard " + std::to_string(shard_id));
+    }
     ins[static_cast<size_t>(shard_id)] = ShekylArchivalShardCoverageIn{
       shard_id,
       bonded[static_cast<size_t>(shard_id)],

@@ -12,12 +12,6 @@
 #include "shekyl/shekyl_daemon_fetch.h"
 #include "string_tools.h"
 
-extern "C" __attribute__((weak)) uint8_t shekyl_daemon_operator_shard_fetch(
-    uint64_t /*shard_id*/, ShekylArchivalShardAggregateOut* /*out*/)
-{
-  return SHEKYL_DAEMON_SHARD_FETCH_MISS;
-}
-
 namespace cryptonote
 {
 namespace rpc
@@ -38,10 +32,14 @@ bool fill_request_archival_shard(
   const uint8_t rc = shekyl_daemon_operator_shard_fetch(shard_id, &out);
   if (rc != SHEKYL_DAEMON_SHARD_FETCH_OK)
     return false;
+  // Echo the request id. A scheduler that fills a different shard is a
+  // bug, not a view of that other body.
+  if (out.shard_id != shard_id)
+    return false;
 
   crypto::hash rk{};
   std::memcpy(rk.data, out.shard_hash, sizeof(rk.data));
-  res.shard_id = out.shard_id;
+  res.shard_id = shard_id;
   res.shard_hash = epee::string_tools::pod_to_hex(rk);
   res.block_count = out.block_count;
   res.tx_count = out.tx_count;
