@@ -61,7 +61,7 @@
 //! Dependency cut (`SF-D4`): `shekyl-curve-tree` for the shared route
 //! grammar, `shekyl-crypto-pq` for the key and signature types,
 //! `shekyl-archival-retention` for the transcript and its verifier, and
-//! nothing from the serving side. `scripts/ci/check_p_fetch_dep_cut.sh`
+//! nothing from the serving side. `scripts/ci/check_p_fetch_dep_cut.py`
 //! holds the edges.
 
 pub mod client;

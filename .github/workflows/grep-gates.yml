@@ -145,6 +145,13 @@ jobs:
             scripts/ci/check_engine_decomposition.sh
           run_one "Debit-auth pin: single-sourced" \
             scripts/ci/check_debit_auth_single_source.sh
+          # SF-D4: the shard-fetch client is cut from the serving/wallet side,
+          # the SOCKS dial is out of consensus/store/server, and p-serve's
+          # `test-signer` is out of every graph BuildRust.cmake ships. Read
+          # from manifests (this job has no toolchain), so a new shipped root
+          # is added to the script's SHIPPED_ROOTS in the same change.
+          run_one "SF-D4: shard-fetch dependency cut" \
+            python3 scripts/ci/check_p_fetch_dep_cut.py
           run_one "Rule 71: nettype selects data, not control flow" \
             scripts/ci/check_network_uniformity.sh
           run_one "Ignored tests carry their reason in the attribute" \

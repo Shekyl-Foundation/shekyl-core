@@ -173,7 +173,7 @@ pub fn anchor_within_gate(own_height: u64, anchor_height: u64) -> bool {
 /// height with [`TestKeySigner::set_height`]. Nothing here is derived from
 /// a wallet seed and nothing here may reach a bonded persona — the cfg
 /// gate is the only reason the type compiles, and
-/// `scripts/ci/check_p_fetch_dep_cut.sh` asserts the `test-signer` feature
+/// `scripts/ci/check_p_fetch_dep_cut.py` asserts the `test-signer` feature
 /// is unreachable from every production graph.
 #[cfg(any(test, feature = "test-signer"))]
 pub struct TestKeySigner {

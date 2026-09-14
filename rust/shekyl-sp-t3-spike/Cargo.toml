@@ -16,7 +16,7 @@ publish = false
 # `ShardProvider`, so the inbound-hardening shape under test is the shipped one.
 # `test-signer` arms the ephemeral attestation key the personas countersign
 # with (`SF-D8`): this crate is a DISPOSABLE measurement rig, not a production
-# graph, and `scripts/ci/check_p_fetch_dep_cut.sh` asserts the feature stays
+# graph, and `scripts/ci/check_p_fetch_dep_cut.py` asserts the feature stays
 # out of every graph that ships.
 shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
 # The harness's own async plumbing (bring-up, timed fetches, teardown). The v3
