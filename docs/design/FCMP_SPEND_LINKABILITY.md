@@ -1000,6 +1000,37 @@ has a property it lacks.
 
 ---
 
+### 12.1 Implementation record (2026-09-14)
+
+Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
+`dev` at `a6160a4bd`, ruling 9), rule-07 framing per §10:
+
+- **Fix-falsifier first** (`rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`,
+  commit `cf063a744`): red on the pre-`PL-D3` tree with exactly one match
+  on each surface at the spent index; green after the fix with zero matches
+  on both. Binding-falsifier `test_wrong_opening_fails` (vendored circuit
+  crate) rejects a wrong `K`.
+- **Rule 26 pre-flight** measured before the first production commit
+  (census companion §8) and the cost table in §6.3 corrected to the
+  measured figures.
+- Everything §6.2 specifies is implemented: `k` and the record on cSHAKE256
+  under registered customizations (Tier B), the HKDF blinds with the
+  exceptional-value guard, the two NUMS generators pinned, the 64-byte
+  `0x07` entry with the point-admission rule at relay and connect (Rust rule
+  + C++ adapter passing the payload), `K` derived by every verifier and
+  never on the wire, the circuit's opening leg, scan-time re-derivation with
+  the signer-side received-but-unspendable refusal
+  (`TxBuilderError::PqcLeafMismatch`, FFI −32), the emission vin without
+  `pqc_pk_hash` (ruling 9), census `d-3`/`d-4` (no zero fallback anywhere),
+  `d-1` (fuzz targets rebuilt), `d-2` (the `hp_of_O` aliasing field is
+  gone), `d-11` (test comments rewritten), `d-12` (`PqcKeyPointInvalid` /
+  `PqcKeyCountMismatch` split), A5-12 (the discrete-log soundness
+  assumption stated in both vendored crate docs).
+- Every §9 S1 vector regenerated under the decision-log citation; LMDB
+  `VERSION 14` and the wallet curve-tree store `SCHEMA_VERSION 5`.
+- Open by design: A5-1…A5-7 (gate-6 owner, ruling 4, now that the premise
+  is restored), `PL-D4` (`Target: V4`), the fuzz-crate CI gap (FOLLOWUPS).
+
 ## 13. What this round did not find (denominator, rule 26)
 
 Examined and clean: `docs/design/FCMP_SPEND_SIGNING_PREIMAGE.md` (no

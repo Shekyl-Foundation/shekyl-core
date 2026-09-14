@@ -4,6 +4,32 @@
 
 ### Changed
 
+- **Every FCMP++ spend no longer identifies the output it spends (`PL-D1`
+  fixed by `PL-D3`).** The leaf's 4th scalar was `H(hybrid_pk)`, published
+  per output in `tx_extra` `0x07` and handed to the verifier as a public
+  input, so hashing the key a spend reveals and looking it up named the
+  spent output. It is now the x-coordinate of a Pedersen commitment
+  `CM = k·G_k + r·J` (`k = H_ℓ(hybrid_pk)` by cSHAKE256 under
+  `shekyl/pqc-leaf-key-v1`; `r` an HKDF blind with an exceptional-value
+  guard) that the circuit opens in-circuit to the verifier-derived point
+  `K = k·G_k` (`shekyl-oxide/crypto/fcmps` `first_layer`). The `0x07` entry
+  is 64 bytes per output, `CM ‖ cSHAKE256("shekyl/pqc-leaf-record-v1",
+  pk ‖ r_h)` (`PL-D3a`), and admission checks every entry's point at relay
+  and connect (`check_pqc_leaf_entries`, FFI code 10). The wallet re-derives
+  the entry at scan and the signer refuses before proving when the chain's
+  leaf is not its derivation (`TxBuilderError::PqcLeafMismatch`, FFI −32:
+  received but unspendable). The emission vin drops `pqc_pk_hash` (the
+  binding is the proof), `VerifyError` splits `PqcKeyPointInvalid` (3) from
+  `PqcKeyCountMismatch` (9), the multisig witness header is 288 B, and the
+  genesis transactions, block-0 ids, curve-tree fixtures, proof-size and
+  weight tables, emission/serve-credit fixtures and the leaf KATs are
+  re-pinned; LMDB `VERSION 14`, wallet curve-tree store `SCHEMA_VERSION 5`
+  (pre-genesis: delete and resync). Fix-falsifier
+  `rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`; binding-falsifier
+  `test_wrong_opening_fails`
+  ([`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §6.2,
+  §9, §12; decision log 2026-09-14).
+
 - **Every FCMP++ spend currently identifies the output it spends (`PL-D1`),
   and the documents that claimed otherwise are corrected at source.** The
   input's revealed `pqc_auths[i].hybrid_public_key` hashes to the per-output

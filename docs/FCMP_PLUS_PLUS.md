@@ -32,9 +32,10 @@ in `rust/shekyl-fcmp/`.
 ## 1. Curve Tree Structure
 
 The FCMP++ proof ranges over the entire UTXO set, represented as a **curve
-tree** — a Merkle-like hash tree built over an elliptic curve cycle. (That
-range is not the spend's anonymity set: while `PL-D1` is open the transaction
-identifies its inputs, see the preamble.)
+tree** — a Merkle-like hash tree built over an elliptic curve cycle. That
+range is the spend's anonymity set since `PL-D3` (2026-09-14): nothing
+published per output is a function of the key a spend reveals (see the
+preamble).
 
 ### Helios/Selene Alternating Layers
 

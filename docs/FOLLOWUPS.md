@@ -14,9 +14,6 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
-- **Every FCMP++ spend is linkable to the output it spends, by the public 4th leaf scalar (`PL-D1`) — tree-wide privacy defect; the in-circuit PQ binding is only discrete-log sound (`PL-D2`).** The spend reveals `pqc_auths[i].hybrid_public_key`; consensus hashes it (`shekyl_fcmp_pqc_leaf_hash`) and passes it to the FCMP++ verifier as a public input; the same hash was published per output in `tx_extra` `0x07` at creation. Round 1 (design only, Rick to ratify) is in [`design/FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md): verified chain, census, priced candidates, rejections on record. Also filed as `F5` on `docs/so-d8-proposal` (branch-only); whichever lands second reconciles to one line.
-  - Target: pre-genesis
-
 - **`PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.** A hash over the leaf field chosen on measured gates and published cryptanalysis, with generated parameters, pinned vectors, a registry row and one shared Rust implementation; it makes the leaf commitment binding beyond discrete log and is what a post-quantum-sound membership leg would prove over ([`design/FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §6.5). Ruled 2026-09-14: designed with the V4 lattice-only transition (itself gated on lattice threshold signatures or mature isogeny signatures such as PRISM) as one leaf-format cutover; until then `PL-D3a`'s record beside the point is the post-quantum ownership record for every v3 output.
   - Target: V4
 
