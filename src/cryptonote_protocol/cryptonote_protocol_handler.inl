@@ -694,12 +694,6 @@ namespace cryptonote
       request_chain_history(context);
     }
 
-    // Reload json checkpoints every 10 minutes and verify them against the blocks
-    // we already have. There is no DNS half any more: load_checkpoints_from_dns
-    // went with the rest of the cleartext-DNS surface, and update_checkpoints is
-    // json-only.
-    CHECK_AND_ASSERT_MES(m_core.update_checkpoints(), 1, "One or more checkpoints loaded from json conflicted with existing checkpoints.");
-
     return 1;
   }  
   //------------------------------------------------------------------------------------------------------------------------  

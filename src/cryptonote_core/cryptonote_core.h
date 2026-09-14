@@ -484,13 +484,6 @@ namespace cryptonote
      void set_checkpoints(checkpoints&& chk_pts);
 
      /**
-      * @brief set the file path to read from when loading checkpoints
-      *
-      * @param path the path to set ours as
-      */
-     void set_checkpoints_file_path(const std::string& path);
-
-     /**
       * @copydoc tx_memory_pool::have_tx
       *
       * @note see tx_memory_pool::have_tx
@@ -735,18 +728,6 @@ namespace cryptonote
       *
       */
      std::time_t get_start_time() const;
-
-     /**
-      * @brief tells the Blockchain to update its checkpoints
-      *
-      * This function will check if enough time has passed since the last
-      * time checkpoints were updated and tell the Blockchain to update
-      * its checkpoints if it is time.  If updating checkpoints fails,
-      * the daemon is told to shut down.
-      *
-      * @note see Blockchain::update_checkpoints()
-      */
-     bool update_checkpoints();
 
      /**
       * @brief tells the daemon to wind down operations and stop running
@@ -1020,11 +1001,6 @@ namespace cryptonote
      uint64_t m_target_blockchain_height; //!< blockchain height target
 
      network_type m_nettype; //!< which network are we on?
-
-     std::string m_checkpoints_path; //!< path to json checkpoints file
-     time_t m_last_json_checkpoints_update; //!< time when json checkpoints were last updated
-
-     std::atomic_flag m_checkpoints_updating; //!< set if checkpoints are currently updating to avoid multiple threads attempting to update at once
 
      size_t block_sync_size;
 
