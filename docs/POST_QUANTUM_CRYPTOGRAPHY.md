@@ -64,13 +64,27 @@ In scope for v3:
 Achieved at genesis:
 
 - FCMP++ replaces CLSAG for membership proofs; per-output PQC keys via
-  hybrid KEM prevent transaction linkability
-- `pqc_auths` (one entry per input) provides quantum-resistant spend authorization
+  hybrid KEM keep one output's key from linking to another's (no key reuse).
+  **They do not prevent spend→output linkage:** the key revealed at spend
+  hashes to the value published for the output at creation (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md))
+- `pqc_auths` (one entry per input) provides a per-input signature that is
+  unforgeable against a quantum adversary **under the key it presents**;
+  binding that key to the spent output is the membership argument's job and
+  is discrete-log sound until V4 (`PL-D2`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4)
 
 The chain must remain secure if either:
 
 - classical assumptions still hold and PQ assumptions fail, or
 - PQ assumptions hold and classical assumptions fail
+
+**Status of the second clause in v3 (precise, `PL-D2`):** it is met by the
+signature layer only. Membership soundness, the leaf's key binding, and
+amount binding all rest on the discrete-logarithm assumption; a classical
+failure opens all three together, and the ML-DSA-65 layer then authorises
+whichever key the forger presents. What survives such a failure is the
+Keccak-chained `0x07` record of each output's key (`PL-D3a`), usable by a
+transparent claim. The second clause is met in full at the V4 lattice-only
+transition, not before.
 
 Therefore, spend authorization must use hybrid verification:
 
@@ -296,14 +310,33 @@ The curve tree is a Merkle-like structure where:
 - Even-level internal nodes are Selene hash commitments.
 - The root is committed in the block header as `curve_tree_root`.
 
-The membership proof is classical (it operates over elliptic curves, not
-lattice structures), but the overall scheme achieves quantum resistance through
-the leaf-commitment binding: the spend must present the key whose point the
-spent leaf's commitment opens to in-circuit, and forge a valid per-input
-`pqc_auths[i]` signature under it, which needs the ML-DSA-65 secret key. (The
-in-circuit binding itself is discrete-log-sound; the precise post-quantum
-statement is `docs/design/FCMP_SPEND_LINKABILITY.md` §4, `PL-D2`.) The FCMP++ proof demonstrates
-membership; each `pqc_auths[i]` proves authorization for that input.
+The membership proof is classical: a Generalized Bulletproofs argument over
+Helios/Selene whose soundness rests on the discrete-logarithm assumption,
+and the leaf's key binding — the in-circuit opening of the spent leaf's
+commitment `CM` to the presented key's point (`PL-D3`) — is one of its
+constraints. Precisely:
+
+- Against an adversary that cannot compute EC discrete logs, the argument
+  binds the presented `pqc_pk` to the spent leaf, and the ML-DSA-65
+  signature must be produced under that key.
+- Against an adversary that can compute EC discrete logs (a
+  cryptographically relevant quantum computer), the membership argument —
+  including the leaf binding — is forgeable for any public input, and the
+  ML-DSA-65 check then authorises whichever key the forger presents. The
+  amount commitments are Pedersen and open under the same assumption.
+- The in-circuit binding is therefore load-bearing only against a break of
+  Ed25519 that spares Helios and Selene.
+- What survives a full discrete-log break is the record committed at
+  creation in `tx_extra` `0x07`, Keccak-chained into the block: a
+  post-quantum-binding statement of which ML-DSA key the output was created
+  for, usable by a transparent claim at the V4 transition, not by a
+  hidden-output spend (`PL-D2`, `PL-D3a`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
+
+The FCMP++ proof demonstrates membership and, under the discrete-log
+assumption, that the presented key opens the spent leaf's commitment; each
+`pqc_auths[i]` proves possession of the ML-DSA-65 secret key for the key
+presented. Nothing published per output is a function of the key alone
+(`PL-D3`), so the public input `K` does not identify the spent output.
 
 ## Per-Output PQC Key Derivation
 
@@ -749,9 +782,10 @@ The binding works as follows:
   key presented in `pqc_auths[i]`, without revealing which leaf.
 - Each `pqc_auths[i]` entry then provides the hybrid Ed25519 + ML-DSA-65
   signature for that input, proving knowledge of the corresponding PQC secret key.
-- An attacker cannot substitute a different PQC key because the in-circuit
-  proof opens the leaf's commitment to the presented key's point (discrete-log
-  soundness; see `FCMP_SPEND_LINKABILITY.md` §4).
+- An attacker who cannot compute EC discrete logs cannot substitute a
+  different PQC key: the in-circuit opening binds the leaf's committed key
+  to the membership proof under that assumption. An attacker who can compute
+  them can forge the proof for a key of their own choosing (`PL-D2`).
 
 ## Transaction Format
 
@@ -1138,20 +1172,32 @@ Operational consequences:
   - per-input authorization metadata in `pqc_auths`
   - canonical payload hash over prefix + FCMP++ base + PQ auth header
   - dual verification requirement (`Ed25519 && ML-DSA-65`)
-  - per-output PQC keys via hybrid KEM prevent transaction linkability
-- **Classical (but full-chain anonymous)**
+  - per-output PQC keys via hybrid KEM prevent key reuse across outputs
+    (they do **not** prevent spend→output linkage, `PL-D1`)
+- **Classical (zero-knowledge over the full chain)**
   - FCMP++ membership proof operates over classical elliptic curves
     (Ed25519 → Helios → Selene curve tower)
   - stealth addressing and one-time output derivation
-  - full UTXO set serves as the anonymity set (no ring subset selection)
-- **Quantum-resistant binding**
-  - the PQC leaf commitment in each curve tree leaf binds PQC ownership to the UTXO
-  - even if EC discrete log is broken, the ML-DSA-65 authorization prevents
-    unauthorized spending
+  - the proof ranges over the full UTXO set (no ring subset selection), and
+    since `PL-D3` nothing published per output is a function of the spend's
+    revealed key, so that set is the spend's anonymity set
+- **Binding of the PQC key to the leaf — discrete-log sound, not post-quantum**
+  - the leaf commitment binds PQC ownership to the UTXO under the
+    discrete-logarithm assumption the membership argument itself rests on
+  - against an adversary that computes EC discrete logs, the membership
+    argument, the leaf binding and the amount commitments fall together;
+    the ML-DSA-65 check then authorises whichever key is presented (`PL-D2`)
+  - what survives such a break is the Keccak-chained `0x07` record of the
+    output's key (`PL-D3a`), usable by a transparent claim at the V4
+    transition
 
-Operationally: the FCMP++ EC membership proof provides full-chain anonymity
-while `pqc_auths` provides quantum-resistant authorization. The combination
-achieves both privacy and quantum resistance.
+Operationally: the FCMP++ EC membership proof is zero-knowledge over the
+full chain; its composition with the public `H(pqc_pk)` input identifies the
+spent output today (`PL-D1`, pre-genesis, fix `PL-D3` in design), and
+`pqc_auths` provides the authorization layer, whose post-quantum property
+is unforgeability of the signature under the key presented — not binding of
+that key to the spent output, which is discrete-log sound until V4
+(`PL-D2`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
 
 ### v3 Rollout Notes
 

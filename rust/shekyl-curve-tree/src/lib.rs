@@ -6,10 +6,12 @@
 //! Wallet-side FCMP++ curve-tree client.
 //!
 //! Reconstructs the FCMP++ output curve tree locally from synced blocks
-//! and assembles membership paths for spends — without revealing which
-//! output a wallet is proving against (the privacy reason the path is
+//! and assembles membership paths for spends — without telling the daemon
+//! which output a wallet is proving against (the privacy reason the path is
 //! assembled client-side rather than fetched, `00-mission.mdc` priority
-//! 2). The reconstructed root must byte-equal the consensus root the
+//! 2; necessary but not sufficient while `PL-D1`, the on-chain reveal in
+//! `docs/design/FCMP_SPEND_LINKABILITY.md`, is open). The reconstructed
+//! root must byte-equal the consensus root the
 //! daemon commits in each block header, so the derivation replicates the
 //! daemon's leaf-stream logic bit-exactly.
 //!

@@ -807,7 +807,7 @@ operational threats, not consensus lemmas, and this leg imposes no rotation *ver
 **backing-output lineage is no longer optional hygiene**: the `pqc_pk` reveal below promotes it to
 a **mandatory, firewall-class** gate-6 policy (the ladder + sweep).
 
-**Backing-`pqc_pk` reveal — the invariant (2026-07-01).** The quantum spend-authority auth
+**Backing-`pqc_pk` reveal — the invariant (2026-07-01), STRUCK 2026-09-13 (`PL-D1`).** The quantum spend-authority auth
 (§5.3.1 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7) carries the backing
 output's **`pqc_pk` in cleartext** on the vin; the membership-only proof opens the backing
 leaf's commitment to that key's point in-circuit. **Corrected by `PL-D3` (2026-09-14):** the
@@ -826,23 +826,27 @@ keypair is **per-output one-time**, derived from the output's `combined_ss` via 
 P-public envelope and does not pierce the firewall**, for a reason that must be stated so a future
 change cannot silently break it:
 
-> **Invariant.** Principal↔P is protected by **FCMP++ input anonymity + the cover's
-> amount-decorrelation** — *never* by P's outputs being unidentifiable. Identifying a backing
-> output reveals a P-owned output (P is public by role) and its creating tx, but the **creating
-> tx's inputs are FCMP++-hidden**, so the identification **does not trace back to the principal**.
-> The forward change-heuristic that would matter on a transparent chain dies under FCMP++ (spends
-> are membership proofs over the whole tree); the only residual surviving raw-funding-output
-> identification is **funding timing** — the soft-correlation class the gate-6 standoff machinery
-> already covers.
+> **Struck 2026-09-13.** The invariant recorded here on 2026-07-01 held that principal↔P is
+> protected by FCMP++ input anonymity because "the creating tx's inputs are FCMP++-hidden" and
+> "the forward change-heuristic dies under FCMP++". Both clauses were false when written, by the
+> mechanism the paragraph above describes: no FCMP++ input is hidden — each is identified by its
+> own revealed `pqc_pk` — and the change-heuristic survives because every spend publishes its input
+> identity. What protects principal↔P on-chain today is therefore only the cover's
+> amount-decorrelation and timing, not input anonymity. The GF-4b ladder below, rung 2's "backward
+> lineage is FCMP++-hidden", and every consumer of this invariant are re-ruled by the `PL-` round
+> ([`FCMP_SPEND_LINKABILITY.md`](FCMP_SPEND_LINKABILITY.md) §8 forward-actions); this section
+> records the refutation and does not re-rule them.
 >
-> **Tripwire.** Any future change weakening FCMP++ input anonymity (or letting output
-> identification reach a tx's inputs) **reopens this finding** — the reveal's safety is contingent
-> on input anonymity, not on the reveal being absent.
+> **Tripwire — FIRED 2026-09-13.** The condition ("letting output identification reach a tx's
+> inputs") was met not by a later change but from the mechanism's birth: the premise was never
+> true. The finding is reopened as `PL-D1`.
 
 **Backing-output selection is gate-6's, and the one dangerous rung is designed out.** By lineage,
 most→least safe: **mint/earned** (provenance terminates at consensus — reveals nothing) >
 **bond-post change** (creating tx already P-public; its own backward lineage — which funding it
-consumed — is FCMP++-hidden, so the bond post is itself one churn hop) > **raw pre-bond-post
+consumed — was held to be FCMP++-hidden, which `PL-D1` refutes: the bond post's inputs are
+identified like every other spend, so this rung's "one churn hop" is re-ruled by the `PL-` round) >
+**raw pre-bond-post
 funding** (the *only* rung where the reveal newly identifies the funding tx + its timing —
 **forbidden**). The forbidden rung is made **structurally unrepresentable** (not merely
 dispreferred): the wallet rule is that the bond post / re-bond **sweeps P's entire spendable

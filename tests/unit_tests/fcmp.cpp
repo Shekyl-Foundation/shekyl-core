@@ -308,8 +308,10 @@ TEST(fcmp, referenceBlock_staleness_constants)
 
 TEST(fcmp, key_offsets_empty_for_fcmp_type)
 {
-  // FCMP++ transactions must not have key_offsets (ring members);
-  // the anonymity set is the full UTXO set via the curve tree proof.
+  // FCMP++ transactions must not have key_offsets (ring members); the
+  // membership proof ranges over the full UTXO set via the curve tree (the
+  // spend's anonymity set is nevertheless one output while PL-D1 is open —
+  // docs/design/FCMP_SPEND_LINKABILITY.md).
   cryptonote::txin_to_key txin;
   txin.key_offsets.clear();
   ASSERT_TRUE(txin.key_offsets.empty());

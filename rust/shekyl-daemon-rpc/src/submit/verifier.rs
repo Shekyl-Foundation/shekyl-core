@@ -1085,6 +1085,11 @@ fn verify_fcmp(
 /// scheme_id=2 self-marking cost, so it is a wallet coin-selection invariant —
 /// a blocking E′/MS-5 ship gate, not merely tracked — not a consensus rule (and
 /// not TM-1, whose disposition rests on the linkage being unmechanizable).
+/// Re-based 2026-09-14 (PL-D1 → PL-D3): the "no other set shrinks" ground was
+/// struck while every FCMP++ spend identified its input by the public 4th leaf
+/// scalar; PL-D3 (the hiding leaf commitment opened in-circuit) restores it,
+/// and the conclusion stood on the scheme_id=2 precedent alone in between
+/// (docs/design/FCMP_SPEND_LINKABILITY.md §12, ruling 5).
 /// Dropped here in lockstep with the C++ battery so the K13 differential holds.
 ///
 /// [`pqc_signing_payload_hashes`]: shekyl_wire::transaction::Transaction::pqc_signing_payload_hashes
