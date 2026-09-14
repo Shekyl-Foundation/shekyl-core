@@ -4,6 +4,22 @@
 
 ### Changed
 
+- **The daemon no longer reads `<data-dir>/checkpoints.json`.** Checkpoints
+  are compiled in and carried by the release binary; the runtime JSON
+  channel (`load_checkpoints_from_json`, the ten-minute reload) is deleted
+  and the compiled-in set is enforced once at startup
+  (`Blockchain::enforce_checkpoints`), rolling a conflicting local chain
+  back or fail-stopping exactly as before. A runtime-loadable pin was a
+  trust channel bypassing the release-carried anchor
+  ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md)
+  `PDM-Q-F23` / `PDM-Q5`). An existing `checkpoints.json` is ignored, not
+  refused. In the same PR: `get_curve_tree_path` returns
+  `CORE_RPC_ERROR_CODE_INTERNAL_ERROR` on a leaf, layer hash, or output
+  key the store cannot return instead of zero-filling the sibling data
+  (`PDM-Q-F9`; assembly is `shekyl-fcmp::rpc_path`); the dead ring-era
+  `check_tx_input` / `scan_outputkeys_for_indexes` chain and the write-only
+  `m_scan_table` ring-member pre-fetch are deleted (`PDM-Q-F18`).
+
 - **The `JoinMarket` bond post carries the persona's serving endpoint** — the
   raw 32-byte Ed25519 key of its v3 onion service, mandatory, refused on every
   other kind (`ARCHIVAL_ENDPOINT_UPDATE.md` `EU-D3`) — and the `archival_bond`

@@ -255,141 +255,6 @@ bool Blockchain::have_tx_keyimg_as_spent(const crypto::key_image &key_im) const
   return  m_db->has_key_image(key_im);
 }
 //------------------------------------------------------------------
-// This function makes sure that each "input" in an input (mixins) exists
-// and collects the public key for each from the transaction it was included in
-// via the visitor passed to it.
-template <class visitor_t>
-bool Blockchain::scan_outputkeys_for_indexes(size_t tx_version, const txin_to_key& tx_in_to_key, visitor_t &vis, const crypto::hash &tx_prefix_hash, uint64_t* pmax_related_block_height) const
-{
-  LOG_PRINT_L3("Blockchain::" << __func__);
-
-  // ND: Disable locking and make method private.
-  //CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  // verify that the input has key offsets (that it exists properly, really)
-  if(!tx_in_to_key.key_offsets.size())
-    return false;
-
-  // cryptonote_format_utils uses relative offsets for indexing to the global
-  // outputs list.  that is to say that absolute offset #2 is absolute offset
-  // #1 plus relative offset #2.
-  // TODO: Investigate if this is necessary / why this is done.
-  std::vector<uint64_t> absolute_offsets = relative_output_offsets_to_absolute(tx_in_to_key.key_offsets);
-  std::vector<output_data_t> outputs;
-
-  bool found = false;
-  auto it = m_scan_table.find(tx_prefix_hash);
-  if (it != m_scan_table.end())
-  {
-    auto its = it->second.find(tx_in_to_key.k_image);
-    if (its != it->second.end())
-    {
-      outputs = its->second;
-      found = true;
-    }
-  }
-
-  if (!found)
-  {
-    try
-    {
-      m_db->get_output_key(epee::span<const uint64_t>(&tx_in_to_key.amount, 1), absolute_offsets, outputs, true);
-      if (absolute_offsets.size() != outputs.size())
-      {
-        MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount);
-        return false;
-      }
-    }
-    catch (...)
-    {
-      MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount);
-      return false;
-    }
-  }
-  else
-  {
-    // check for partial results and add the rest if needed;
-    if (outputs.size() < absolute_offsets.size() && outputs.size() > 0)
-    {
-      MDEBUG("Additional outputs needed: " << absolute_offsets.size() - outputs.size());
-      std::vector < uint64_t > add_offsets;
-      std::vector<output_data_t> add_outputs;
-      add_outputs.reserve(absolute_offsets.size() - outputs.size());
-      for (size_t i = outputs.size(); i < absolute_offsets.size(); i++)
-        add_offsets.push_back(absolute_offsets[i]);
-      try
-      {
-        m_db->get_output_key(epee::span<const uint64_t>(&tx_in_to_key.amount, 1), add_offsets, add_outputs, true);
-        if (add_offsets.size() != add_outputs.size())
-        {
-          MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount);
-          return false;
-        }
-      }
-      catch (...)
-      {
-        MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount);
-        return false;
-      }
-      outputs.insert(outputs.end(), add_outputs.begin(), add_outputs.end());
-    }
-  }
-
-  size_t count = 0;
-  for (const uint64_t& i : absolute_offsets)
-  {
-    try
-    {
-      output_data_t output_index;
-      try
-      {
-        // get tx hash and output index for output
-        if (count < outputs.size())
-          output_index = outputs.at(count);
-        else
-          output_index = m_db->get_output_key(tx_in_to_key.amount, i);
-
-        // call to the passed boost visitor to grab the public key for the output
-        if (!vis.handle_output(output_index.unlock_time, output_index.pubkey, output_index.commitment))
-        {
-          MERROR_VER("Failed to handle_output for output no = " << count << ", with absolute offset " << i);
-          return false;
-        }
-      }
-      catch (...)
-      {
-        MERROR_VER("Output does not exist! amount = " << tx_in_to_key.amount << ", absolute_offset = " << i);
-        return false;
-      }
-
-      // if on last output and pmax_related_block_height not null pointer
-      if(++count == absolute_offsets.size() && pmax_related_block_height)
-      {
-        // set *pmax_related_block_height to tx block height for this output
-        auto h = output_index.height;
-        if(*pmax_related_block_height < h)
-        {
-          *pmax_related_block_height = h;
-        }
-      }
-
-    }
-    catch (const OUTPUT_DNE& e)
-    {
-      MERROR_VER("Output does not exist: " << e.what());
-      return false;
-    }
-    catch (const TX_DNE& e)
-    {
-      MERROR_VER("Transaction does not exist: " << e.what());
-      return false;
-    }
-
-  }
-
-  return true;
-}
-//------------------------------------------------------------------
 uint64_t Blockchain::get_current_blockchain_height() const
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
@@ -883,7 +748,6 @@ block Blockchain::pop_block_from_blockchain()
     MWARNING(pruned << " pruned txes could not be added back to the txpool");
 
   m_blocks_longhash_table.clear();
-  m_scan_table.clear();
 
   uint64_t top_block_height;
   crypto::hash top_block_hash = get_tail_id(top_block_height);
@@ -3510,10 +3374,6 @@ std::vector<bool> Blockchain::have_tx_keyimges_as_spent(const epee::span<const c
 }
 //------------------------------------------------------------------
 // This function validates transaction inputs and their keys.
-// FIXME: consider moving functionality specific to one input into
-//        check_tx_input() rather than here, and use this function simply
-//        to iterate the inputs as necessary (splitting the task
-//        using threads, etc.)
 bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, uint64_t* pmax_used_block_height, bool skip_fcmp_verify) const
 {
   PERF_TIMER(check_tx_inputs);
@@ -4515,70 +4375,6 @@ bool Blockchain::is_tx_spendtime_unlocked(uint64_t unlock_time, uint8_t hf_versi
   }
   return false;
 }
-//------------------------------------------------------------------
-// This function locates all outputs associated with a given input (mixins)
-// and validates that they exist and are usable.  It also checks the ring
-// signature for each input.
-bool Blockchain::check_tx_input(size_t tx_version, const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const ct::CtSig &ct_signatures, std::vector<ct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const
-{
-  LOG_PRINT_L3("Blockchain::" << __func__);
-
-  // ND:
-  // 1. Disable locking and make method private.
-  //CRITICAL_REGION_LOCAL(m_blockchain_lock);
-
-  struct outputs_visitor
-  {
-    std::vector<ct::ctkey >& m_output_keys;
-    const Blockchain& m_bch;
-    const uint8_t hf_version;
-    outputs_visitor(std::vector<ct::ctkey>& output_keys, const Blockchain& bch, uint8_t hf_version) :
-      m_output_keys(output_keys), m_bch(bch), hf_version(hf_version)
-    {
-    }
-    bool handle_output(uint64_t unlock_time, const crypto::public_key &pubkey, const ct::key &commitment)
-    {
-      //check tx unlock time
-      if (!m_bch.is_tx_spendtime_unlocked(unlock_time, hf_version))
-      {
-        MERROR_VER("One of outputs for one of inputs has wrong tx.unlock_time = " << unlock_time);
-        return false;
-      }
-
-      // The original code includes a check for the output corresponding to this input
-      // to be a txout_to_key. This is removed, as the database does not store this info.
-      // Only txout_to_key (and since HF_VERSION_VIEW_TAGS, txout_to_tagged_key)
-      // outputs are stored in the DB in the first place, done in Blockchain*::add_output.
-      // Additional type checks on outputs were also added via cryptonote::check_output_types
-      // and cryptonote::get_output_public_key (see Blockchain::check_tx_outputs).
-
-      m_output_keys.push_back(ct::ctkey({ct::pk2rct(pubkey), commitment}));
-      return true;
-    }
-  };
-
-  output_keys.clear();
-
-  // collect output keys
-  outputs_visitor vi(output_keys, *this, hf_version);
-  if (!scan_outputkeys_for_indexes(tx_version, txin, vi, tx_prefix_hash, pmax_related_block_height))
-  {
-    MERROR_VER("Failed to get output keys for tx with amount = " << print_money(txin.amount) << " and count indexes " << txin.key_offsets.size());
-    return false;
-  }
-
-  if(txin.key_offsets.size() != output_keys.size())
-  {
-    MERROR_VER("Output keys for tx with amount = " << txin.amount << " and count indexes " << txin.key_offsets.size() << " returned wrong keys count " << output_keys.size());
-    return false;
-  }
-  if (tx_version == 1) {
-    CHECK_AND_ASSERT_MES(sig.size() == output_keys.size(), false, "internal error: tx signatures count=" << sig.size() << " mismatch with outputs keys count for inputs=" << output_keys.size());
-  }
-  // ct_signatures will be expanded after this
-  return true;
-}
-//------------------------------------------------------------------
 crypto::hash Blockchain::compute_fcmp_verification_hash(const transaction& tx)
 {
   const ct::CtSig &rv = tx.ct_signatures;
@@ -6533,12 +6329,11 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
         // popped, and "rolling back" to a chain whose height-0 block still
         // mismatches would report the conflict resolved while fixing
         // nothing (the reports-success shape, fourth instance). This node
-        // is on the wrong network or the file is wrong; fail-stop.
+        // is on the wrong network for the binary it runs; fail-stop.
         MERROR("Checkpoint at height 0 (expected " << pt.second
           << ", chain has " << m_db->get_block_hash_from_height(0)
           << ") conflicts with this chain's GENESIS -- no rollback can"
-          << " resolve it; remedy: fix the checkpoints file or resync on"
-          << " the right network");
+          << " resolve it; remedy: resync on the right network");
         ok = false;
         continue;
       }
@@ -6554,7 +6349,7 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
       // watermark, there is no remedy this daemon can apply -- it must not
       // keep running in contradiction with a checkpoint it accepted. Same
       // predicate as the pop_block belt; the false return fail-stops via
-      // core::update_checkpoints -> graceful_exit.
+      // enforce_checkpoints -> core::init.
       //
       // Height-vs-index: `rollback_target` is a DB HEIGHT (the rollback
       // loop stops when height() == rollback_target), while the predicate
@@ -6593,23 +6388,14 @@ bool Blockchain::check_against_checkpoints(const checkpoints& points)
   return ok;
 }
 //------------------------------------------------------------------
-// returns false if any of the checkpoints loading returns false.
-// That should happen only if a checkpoint is added that conflicts
-// with an existing checkpoint.
-bool Blockchain::update_checkpoints(const std::string& file_path)
+bool Blockchain::enforce_checkpoints()
 {
-  if (!m_checkpoints.load_checkpoints_from_json(file_path))
-  {
-      return false;
-  }
-
   if (!check_against_checkpoints(m_checkpoints))
   {
     // F-1(b): a conflict the rollback could not apply -- the caller
-    // (core::update_checkpoints) fail-stops rather than letting the daemon
-    // run in contradiction with a checkpoint it accepted. The file is the
-    // one operator input; name it.
-    MERROR("Checkpoint conflict from '" << file_path << "' could not be resolved; refusing to continue");
+    // (core::init) fail-stops rather than letting the daemon run in
+    // contradiction with a checkpoint its own binary carries.
+    MERROR("A compiled-in checkpoint conflicts with the local chain and could not be resolved by rollback; refusing to continue");
     return false;
   }
 
@@ -6703,7 +6489,6 @@ bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
 
   TIME_MEASURE_FINISH(t1);
   m_blocks_longhash_table.clear();
-  m_scan_table.clear();
 
   CRITICAL_REGION_END();
   m_tx_pool.unlock();
@@ -6714,29 +6499,9 @@ bool Blockchain::cleanup_handle_incoming_blocks(bool force_sync)
 }
 
 //------------------------------------------------------------------
-void Blockchain::output_scan_worker(const uint64_t amount, const std::vector<uint64_t> &offsets, std::vector<output_data_t> &outputs) const
-{
-  try
-  {
-    m_db->get_output_key(epee::span<const uint64_t>(&amount, 1), offsets, outputs, true);
-  }
-  catch (const std::exception& e)
-  {
-    MERROR_VER("EXCEPTION: " << e.what());
-  }
-  catch (...)
-  {
-
-  }
-}
-
-//------------------------------------------------------------------
-// ND: Speedups:
-// 1. Thread long_hash computations if possible (m_max_prepare_blocks_threads = nthreads, default = 4)
-// 2. Group all amounts (from txs) and related absolute offsets and form a table of tx_prefix_hash
-//    vs [k_image, output_keys] (m_scan_table). This is faster because it takes advantage of bulk queries
-//    and is threaded if possible. The table (m_scan_table) will be used later when querying output
-//    keys.
+// Thread long_hash computations if possible (m_max_prepare_blocks_threads).
+// Duplicate-tx / duplicate-key-image ATTRIBUTABLE_FORM drops (P2P-2 cluster B)
+// are a pair of sets over the batch — they no longer fill a ring-member table.
 bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete_entry> &blocks_entry, std::vector<block> &blocks, uint8_t *drop_verdict)
 {
   MTRACE("Blockchain::" << __func__);
@@ -6745,7 +6510,6 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   TIME_MEASURE_START(prepare);
   bool stop_batch;
   uint64_t bytes = 0;
-  size_t total_txs = 0;
   blocks.clear();
 
   // Order of locking must be:
@@ -6784,7 +6548,6 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
     // the NOTIFY_RESPONSE_GET_OBJECTS handler. Omitting it lets a witness-carrying span exceed the
     // memory bound the batch believes it is under.
     bytes += entry.attestation_witness.size();
-    total_txs += entry.txs.size();
   }
   m_bytes_to_sync += bytes;
   while (!(stop_batch = m_db->batch_start(blocks_entry.size(), bytes))) {
@@ -6918,34 +6681,21 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
   m_fake_scan_time = 0;
   m_fake_pow_calc_time = 0;
 
-  m_scan_table.clear();
-
   TIME_MEASURE_FINISH(prepare);
   m_fake_pow_calc_time = prepare / blocks_entry.size();
 
   if (blocks_entry.size() > 1 && threads > 1 && m_show_time_stats)
     MDEBUG("Prepare blocks took: " << prepare << " ms");
 
-  TIME_MEASURE_START(scantable);
-
-  // [input] stores all unique amounts found
-  std::vector < uint64_t > amounts;
-  // [input] stores all absolute_offsets for each amount
-  std::map<uint64_t, std::vector<uint64_t>> offset_map;
-  // [output] stores all output_data_t for each absolute_offset
-  std::map<uint64_t, std::vector<output_data_t>> tx_map;
-  std::vector<std::pair<cryptonote::transaction, crypto::hash>> txes(total_txs);
-
-#define SCAN_TABLE_QUIT(m, verdict) \
+#define PREPARE_QUIT(m, verdict) \
         do { \
             MERROR_VER(m) ;\
-            m_scan_table.clear(); \
             classify_drop(drop_verdict, (verdict)); \
             return false; \
         } while(0); \
 
-  // generate sorted tables for all amounts and absolute offsets
-  size_t tx_index = 0, block_index = 0;
+  std::unordered_set<crypto::hash> seen_tx_prefixes;
+  std::unordered_set<crypto::key_image> seen_key_images;
   for (const auto &entry : blocks_entry)
   {
     if (m_cancel)
@@ -6956,176 +6706,24 @@ bool Blockchain::prepare_handle_incoming_blocks(const std::vector<block_complete
 
     for (const auto &tx_blob : entry.txs)
     {
-      if (tx_index >= txes.size())
-        SCAN_TABLE_QUIT("tx_index is out of sync", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-      transaction &tx = txes[tx_index].first;
-      crypto::hash &tx_prefix_hash = txes[tx_index].second;
-      ++tx_index;
-
+      transaction tx;
       if (!parse_and_validate_tx_base_from_blob(tx_blob.blob, tx))
-        SCAN_TABLE_QUIT("Could not parse tx from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+        PREPARE_QUIT("Could not parse tx from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
+
+      crypto::hash tx_prefix_hash;
       cryptonote::get_transaction_prefix_hash(tx, tx_prefix_hash);
+      if (!seen_tx_prefixes.insert(tx_prefix_hash).second)
+        PREPARE_QUIT("Duplicate tx found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
 
-      auto its = m_scan_table.find(tx_prefix_hash);
-      if (its != m_scan_table.end())
-        SCAN_TABLE_QUIT("Duplicate tx found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-
-      m_scan_table.emplace(tx_prefix_hash, std::unordered_map<crypto::key_image, std::vector<output_data_t>>());
-      its = m_scan_table.find(tx_prefix_hash);
-      assert(its != m_scan_table.end());
-
-      // get all amounts from tx.vin(s). Archival vins (bond-post,
-      // serve-credit, reward-emission) carry no key image and no amount —
-      // skip them, matching every other vin walk on the block path (an
-      // unguarded std::get here threw bad_variant_access on the first
-      // mined bond-post, surfaced by the PR-4b e2e).
       for (const auto &txin : tx.vin)
       {
         if (!std::holds_alternative<txin_to_key>(txin))
           continue;
         const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
-
-        // check for duplicate
-        auto it = its->second.find(in_to_key.k_image);
-        if (it != its->second.end())
-          SCAN_TABLE_QUIT("Duplicate key_image found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
-
-        amounts.push_back(in_to_key.amount);
-      }
-
-      // sort and remove duplicate amounts from amounts list
-      std::sort(amounts.begin(), amounts.end());
-      auto last = std::unique(amounts.begin(), amounts.end());
-      amounts.erase(last, amounts.end());
-
-      // add amount to the offset_map and tx_map
-      for (const uint64_t &amount : amounts)
-      {
-        if (offset_map.find(amount) == offset_map.end())
-          offset_map.emplace(amount, std::vector<uint64_t>());
-
-        if (tx_map.find(amount) == tx_map.end())
-          tx_map.emplace(amount, std::vector<output_data_t>());
-      }
-
-      // add new absolute_offsets to offset_map (same archival-vin skip as
-      // the amounts walk above)
-      for (const auto &txin : tx.vin)
-      {
-        if (!std::holds_alternative<txin_to_key>(txin))
-          continue;
-        const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
-        // no need to check for duplicate here.
-        auto absolute_offsets = relative_output_offsets_to_absolute(in_to_key.key_offsets);
-        for (const auto & offset : absolute_offsets)
-          offset_map[in_to_key.amount].push_back(offset);
-
+        if (!seen_key_images.insert(in_to_key.k_image).second)
+          PREPARE_QUIT("Duplicate key_image found from incoming blocks.", SHEKYL_DROP_VERDICT_ATTRIBUTABLE_FORM);
       }
     }
-    ++block_index;
-  }
-
-  // sort and remove duplicate absolute_offsets in offset_map
-  for (auto &offsets : offset_map)
-  {
-    std::sort(offsets.second.begin(), offsets.second.end());
-    auto last = std::unique(offsets.second.begin(), offsets.second.end());
-    offsets.second.erase(last, offsets.second.end());
-  }
-
-  // gather all the output keys
-  threads = tpool.get_max_concurrency();
-  if (!m_db->can_thread_bulk_indices())
-    threads = 1;
-
-  if (threads > 1 && amounts.size() > 1)
-  {
-    tools::threadpool::waiter waiter(tpool);
-
-    for (size_t i = 0; i < amounts.size(); i++)
-    {
-      uint64_t amount = amounts[i];
-      tpool.submit(&waiter, boost::bind(&Blockchain::output_scan_worker, this, amount, std::cref(offset_map[amount]), std::ref(tx_map[amount])), true);
-    }
-    if (!waiter.wait())
-    {
-      classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-      return false;
-    }
-  }
-  else
-  {
-    for (size_t i = 0; i < amounts.size(); i++)
-    {
-      uint64_t amount = amounts[i];
-      output_scan_worker(amount, offset_map[amount], tx_map[amount]);
-    }
-  }
-
-  // now generate a table for each tx_prefix and k_image hashes
-  tx_index = 0;
-  for (const auto &entry : blocks_entry)
-  {
-    if (m_cancel)
-    {
-      classify_drop(drop_verdict, SHEKYL_DROP_VERDICT_POLICY_OR_STATE);
-      return false;
-    }
-
-    for (size_t i = 0; i < entry.txs.size(); ++i)
-    {
-      if (tx_index >= txes.size())
-        SCAN_TABLE_QUIT("tx_index is out of sync", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-      const transaction &tx = txes[tx_index].first;
-      const crypto::hash &tx_prefix_hash = txes[tx_index].second;
-      ++tx_index;
-
-      auto its = m_scan_table.find(tx_prefix_hash);
-      if (its == m_scan_table.end())
-        SCAN_TABLE_QUIT("Tx not found on scan table from incoming blocks.", SHEKYL_DROP_VERDICT_INTERNAL_FAILURE);
-
-      // Same archival-vin skip as the collection walks above.
-      for (const auto &txin : tx.vin)
-      {
-        if (!std::holds_alternative<txin_to_key>(txin))
-          continue;
-        const txin_to_key &in_to_key = std::get<txin_to_key>(txin);
-        auto needed_offsets = relative_output_offsets_to_absolute(in_to_key.key_offsets);
-
-        std::vector<output_data_t> outputs;
-        for (const uint64_t & offset_needed : needed_offsets)
-        {
-          size_t pos = 0;
-          bool found = false;
-
-          for (const uint64_t &offset_found : offset_map[in_to_key.amount])
-          {
-            if (offset_needed == offset_found)
-            {
-              found = true;
-              break;
-            }
-
-            ++pos;
-          }
-
-          if (found && pos < tx_map[in_to_key.amount].size())
-            outputs.push_back(tx_map[in_to_key.amount].at(pos));
-          else
-            break;
-        }
-
-        its->second.emplace(in_to_key.k_image, outputs);
-      }
-    }
-  }
-
-  TIME_MEASURE_FINISH(scantable);
-  if (total_txs > 0)
-  {
-    m_fake_scan_time = scantable / total_txs;
-    if(m_show_time_stats)
-      MDEBUG("Prepare scantable took: " << scantable << " ms");
   }
 
   return true;

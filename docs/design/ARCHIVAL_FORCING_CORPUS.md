@@ -250,10 +250,10 @@ row only `if (!attestation_witness.empty())`, and the bytes arrive on
 `block_connect_supplement`, which is zero-initialised on the ordinary connect
 path; the populated producers are p2p and verifying import. So a mined corpus
 forces no row by default, and the alt-chain counterpart at
-`blockchain.cpp:2504` is empty for the same reason.
+`blockchain.cpp:2368` is empty for the same reason.
 
 **Attaching arbitrary bytes does not work, and is a named reject shape.**
-`verify_block_attestation` (`blockchain.cpp:2262`) is a hard gate on the
+`verify_block_attestation` (`blockchain.cpp:2126`) is a hard gate on the
 connect path. Its own comment lists **unsolicited witness bytes** as one of
 three shapes on which it is deliberately *stricter* than the interim, so a
 witness riding a block whose coinbase commits to the empty attestation root is
@@ -270,7 +270,7 @@ attestation FFI exposes exactly two entry points — `shekyl_archival_verify_att
 and `shekyl_archival_attestation_pass_p_ids`. Both verify. Nothing in the tree
 **constructs** a witness: every `attestation_witness =` in `src/` is a copy from
 the database, a wire entry, or a bootstrap record. The tree says so plainly at
-`blockchain.cpp:6252` — *"Empty on local mine and until the **Phase 2/3
+`blockchain.cpp:6048` — *"Empty on local mine and until the **Phase 2/3
 template writer** populates it"* — and `shekyl-p-host` still calls the
 countersignature a format-round decision.
 

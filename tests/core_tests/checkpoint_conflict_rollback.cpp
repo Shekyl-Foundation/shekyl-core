@@ -3,9 +3,6 @@
 // All rights reserved.
 // BSD-3-Clause
 
-#include <boost/filesystem.hpp>
-#include <fstream>
-
 #include "chaingen.h"
 #include "checkpoint_conflict_rollback.h"
 
@@ -50,14 +47,14 @@ bool gen_checkpoint_conflict_rollback::check_conflict_rollback(cryptonote::core&
   reinterpret_cast<char&>(wrong_4) ^= 1;
   const crypto::hash genesis = bcs.get_block_id_by_height(0);
 
-  const boost::filesystem::path json_path =
-      boost::filesystem::temp_directory_path() / boost::filesystem::unique_path("ckpt-conflict-%%%%%%%%.json");
+  // Install the conflicting set the way a populated init_default_checkpoints
+  // would: checkpoints are compiled in only (the runtime json channel was
+  // deleted under PDM-Q-F23), so the test stands in for the release table.
   {
-    std::ofstream ofs(json_path.string());
-    ofs << "{\"hashlines\":[";
-    ofs << "{\"hash\":\"" << epee::string_tools::pod_to_hex(wrong_2) << "\",\"height\":2},";
-    ofs << "{\"hash\":\"" << epee::string_tools::pod_to_hex(wrong_4) << "\",\"height\":4}";
-    ofs << "]}";
+    cryptonote::checkpoints cp;
+    CHECK_TEST_CONDITION(cp.add_checkpoint(2, epee::string_tools::pod_to_hex(wrong_2)));
+    CHECK_TEST_CONDITION(cp.add_checkpoint(4, epee::string_tools::pod_to_hex(wrong_4)));
+    bcs.set_checkpoints(std::move(cp));
   }
 
   // The walk must COMPLETE: the height-2 conflict rolls back to the
@@ -70,19 +67,18 @@ bool gen_checkpoint_conflict_rollback::check_conflict_rollback(cryptonote::core&
   std::string what;
   try
   {
-    resolved = bcs.update_checkpoints(json_path.string());
+    resolved = bcs.enforce_checkpoints();
   }
   catch (const std::exception& e)
   {
     threw = true;
     what = e.what();
   }
-  boost::filesystem::remove(json_path);
 
   CHECK_AND_ASSERT_MES(!threw, false,
       "[" << perr_context << "] checkpoint conflict walk threw instead of completing: " << what);
   CHECK_AND_ASSERT_MES(resolved, false,
-      "[" << perr_context << "] update_checkpoints reported an unresolvable conflict");
+      "[" << perr_context << "] enforce_checkpoints reported an unresolvable conflict");
 
   // Rolled back to the genesis-only chain, and no deeper: genesis survives.
   CHECK_EQ(1, (int)c.get_current_blockchain_height());
