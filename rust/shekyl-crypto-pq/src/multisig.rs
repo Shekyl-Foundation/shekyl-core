@@ -9,7 +9,6 @@
 
 use crate::error::PqcVerifyError;
 use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme};
-use shekyl_crypto_hash::keccak256;
 
 /// Largest multisig group served (MSW-G, settled 2026-07-15: 2f+1 at f=2;
 /// withdrew the same-day MAX=8 pick). The value is the *correctness* cap —

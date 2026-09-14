@@ -22,7 +22,8 @@
   binding is the proof), `VerifyError` splits `PqcKeyPointInvalid` (3) from
   `PqcKeyCountMismatch` (9), the multisig witness header is 288 B, and the
   genesis transactions, block-0 ids, curve-tree fixtures, proof-size and
-  weight tables, emission/serve-credit fixtures and the leaf KATs are
+  weight tables (the dust boundary's marginal input weight 9136 → 9008),
+  emission/serve-credit fixtures and the leaf KATs are
   re-pinned; LMDB `VERSION 14`, wallet curve-tree store `SCHEMA_VERSION 5`
   (pre-genesis: delete and resync). Fix-falsifier
   `rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`; binding-falsifier

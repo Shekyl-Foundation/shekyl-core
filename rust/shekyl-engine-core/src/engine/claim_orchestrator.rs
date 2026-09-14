@@ -481,7 +481,7 @@ mod tests {
             snapshot, source_at_count, source_json,
         };
         use crate::engine::stake_engine::test_fixtures::{
-            constructed_record, constructed_record_with_entry, derive_bundle, spawn_over,
+            constructed_record_with_entry, derive_bundle, spawn_over,
         };
         use crate::engine::stake_engine::PSlot;
 
