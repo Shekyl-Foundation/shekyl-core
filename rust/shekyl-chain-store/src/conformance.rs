@@ -141,6 +141,70 @@ pub const fn grade(state: ConformanceState, identical: bool) -> Acceptance {
     }
 }
 
+/// A reviewed expected-divergence or replacement KAT. Empty citations are
+/// not evidence (rule 47): [`ReviewedDivergence::new`] returns `None`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ReviewedDivergence {
+    citation: &'static str,
+}
+
+impl ReviewedDivergence {
+    /// Cite the KAT or reviewed record that licenses a DIVERGENT mismatch.
+    #[must_use]
+    pub const fn new(citation: &'static str) -> Option<Self> {
+        if citation.is_empty() {
+            None
+        } else {
+            Some(Self { citation })
+        }
+    }
+
+    /// The citation this evidence carries.
+    #[must_use]
+    pub const fn citation(self) -> &'static str {
+        self.citation
+    }
+}
+
+/// What [`discharge`] licenses after grading.
+///
+/// [`grade`] is the mechanical six-cell table. This is the frozen promotion
+/// path E2's DIVERGENT rows actually use: a mismatch is not an automatic
+/// pass. Adding an arm here is a signature change; adding a cell to
+/// [`grade`] is not a way to sneak a DIVERGENT pass through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FinalVerdict {
+    /// CHECKED-CONFORMANT match: correctness evidence.
+    AcceptedAsCorrect,
+    /// DIVERGENT mismatch with a reviewed citation: the port implemented
+    /// the ratified spec, not the shipped defect.
+    AcceptedAsCorrected { citation: &'static str },
+    /// The row failed. The port must change.
+    Failed(FailureReason),
+    /// UNREVIEWED: observed, grants no correctness.
+    RegressionSignalOnly,
+    /// DIVERGENT mismatch with no reviewed citation yet.
+    AwaitingReview,
+}
+
+/// Promote a [`grade`] result. Evidence is meaningful only for
+/// [`Acceptance::NeedsReviewedDivergence`]; it does not pardon a failure
+/// and it does not decorate a conformant match.
+#[must_use]
+pub const fn discharge(graded: Acceptance, evidence: Option<ReviewedDivergence>) -> FinalVerdict {
+    match graded {
+        Acceptance::AcceptedAsCorrect => FinalVerdict::AcceptedAsCorrect,
+        Acceptance::Failed(reason) => FinalVerdict::Failed(reason),
+        Acceptance::RegressionSignalOnly => FinalVerdict::RegressionSignalOnly,
+        Acceptance::NeedsReviewedDivergence => match evidence {
+            Some(ev) => FinalVerdict::AcceptedAsCorrected {
+                citation: ev.citation,
+            },
+            None => FinalVerdict::AwaitingReview,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,5 +349,34 @@ mod tests {
                 grade(ConformanceState::for_row(None), identical)
             );
         }
+    }
+
+    #[test]
+    fn a_divergent_mismatch_awaits_review_until_cited() {
+        let graded = grade(ConformanceState::Divergent, false);
+        assert_eq!(discharge(graded, None), FinalVerdict::AwaitingReview);
+        assert_eq!(ReviewedDivergence::new(""), None);
+        let evidence = ReviewedDivergence::new("CEN-G6 KAT: S=4").expect("non-empty");
+        assert_eq!(
+            discharge(graded, Some(evidence)),
+            FinalVerdict::AcceptedAsCorrected {
+                citation: "CEN-G6 KAT: S=4",
+            }
+        );
+    }
+
+    #[test]
+    fn evidence_does_not_pardon_a_failure_or_decorate_a_match() {
+        let defect = grade(ConformanceState::Divergent, true);
+        let evidence = ReviewedDivergence::new("should not pardon").expect("non-empty");
+        assert_eq!(
+            discharge(defect, Some(evidence)),
+            FinalVerdict::Failed(FailureReason::ReproducedKnownDefect)
+        );
+        let ok = grade(ConformanceState::CheckedConformant, true);
+        assert_eq!(
+            discharge(ok, Some(evidence)),
+            FinalVerdict::AcceptedAsCorrect
+        );
     }
 }

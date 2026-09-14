@@ -23,10 +23,11 @@
 //!   (`BlockHash` vs `TxHash` vs key image) converts at the engine API.
 //!
 //! - **DRS-E1 increment 1** — [`store`]: lifecycle and the write-transaction
-//!   surface (S-TXN). The write handle is a possession type, which is how
-//!   DRS-W3's 129-dereference precondition becomes unrepresentable rather
-//!   than merely unviolated — the discharge P0c's declination was banking
-//!   on. Durability is a declared constant, not redb's default.
+//!   surface (S-TXN). The write handle is a possession type: table access
+//!   goes through it (never a raw transaction), a second live batch is a
+//!   typed error rather than a deadlock, and drop aborts. Durability,
+//!   two-phase commit, and cache size are declared constants, not library
+//!   defaults by omission.
 //!
 //! Slice B's table names are bijection-pinned against
 //! [`accumulator::TABLE_CLASSES`] **and** against the X-macro
