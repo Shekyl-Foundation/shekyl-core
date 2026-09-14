@@ -750,6 +750,25 @@ confirmed they served what the client leg believed it fetched.
 
 ### 12.2 How to produce the numbers
 
+> **Amendment 2026-09-14 — the rig below is the re-based one, not the one
+> §12.0–§12.1 and §13 measured with.** The records above stand as measured:
+> persona↔persona over one tor, every fetch under a unique SOCKS proxy-user
+> (per-fetch isolation), body unsigned. Since
+> [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) §9.1 (c) the rig is
+> **daemon→wallet**: one client tor the fetches dial through with **no
+> per-fetch isolation** (the production posture of `shekyl-p-fetch`), each
+> persona behind **its own tor**. "Cold" is `SIGNAL NEWNYM` on the client tor
+> before the fetch; "warm" is circuit reuse. Every fetch carries the `SF-D5`
+> header and verifies the `SF-D8` countersignature; a completed exchange the
+> client refuses is a `Refused` outcome, distinct from `Circuit`/`Stall`. The
+> two-persona concurrent arm became a **sweep** over `SHEKYL_SPIKE_PERSONAS`
+> (powers of two), which prints the `SF-D7` churn table; the cold arm's p99
+> is printed against the `L` note's two thresholds. Neither pin is picked by
+> the binary. Numbers from the re-based rig are **not comparable** to the
+> tables above without this note, and go in the (c) record, not here.
+> `live_apparatus` passed over real Tor on the re-based rig in 110 s
+> (three bootstraps, header sent, bodies verified under each persona's key).
+
 ```bash
 # 1. Mine a regtest chain past the shard-0 leaf range (~5 h at ~0.69 s/block).
 # 2. Extract the real shard.
@@ -761,10 +780,16 @@ SHEKYL_SPIKE_SHARD_OUT=/path/shard.bin \
 SHEKYL_SPIKE_TOR=/path/to/pinned/tor \
 SHEKYL_SPIKE_SHARD=/path/shard.bin \
 SHEKYL_SPIKE_OUT=/path/observations.tsv \
+SHEKYL_SPIKE_PERSONAS=8 \
 SHEKYL_SPIKE_COLD=200 SHEKYL_SPIKE_WARM=200 SHEKYL_SPIKE_CONC=100 \
 SHEKYL_SPIKE_HOURS=24 \
   cargo run -p shekyl-sp-t3-spike --release --bin pd-f2-measure
 ```
+
+`SHEKYL_SPIKE_PERSONAS` (2026-09-14) is the sweep width: that many persona
+tors come up beside the client tor, and the concurrent arm runs widths
+`1, 2, 4, …` up to it, `CONC` rounds each. Every tor shares the box's uplink,
+which biases the sweep pessimistic — named in the table header.
 
 ### 12.3 Arms and their sample sizes
 

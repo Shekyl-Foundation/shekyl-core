@@ -1554,6 +1554,24 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   `live_apparatus` passing; the upper bound it produces and (b)'s
   lower-bound judgement pin the integer, replacing the SPIKE-PIN.
 
+  **Re-base BUILT 2026-09-14 (`b9c2fdb01`, `b3ec6b79a`); run
+  pending.** The rig is daemon→wallet: one client tor the fetches dial
+  through with no per-fetch isolation (the production posture), each
+  persona behind its own tor with its own guard set. "Cold" is
+  `SIGNAL NEWNYM` on the client tor before the fetch — the daemon's
+  view of a fresh circuit, not a fresh client; "warm" is circuit reuse.
+  A completed exchange the client refuses (anchor gate, key, envelope)
+  is `Refused`, kept apart from `Circuit` and `Stall` so the apparatus
+  cannot blame Tor for disagreeing with itself. The concurrency sweep
+  (`SHEKYL_SPIKE_PERSONAS` wide, powers of two) prints the `SF-D7`
+  churn table with `width × max_body_bytes()` beside each row; the
+  cold arm's single-attempt p99 is printed against the `L` note's two
+  thresholds. The binary picks neither pin. `live_apparatus` passed
+  over real Tor in 110 s (two persona tors + client tor; header sent,
+  bodies verified under each persona's key). The run itself waits on a
+  real regtest shard (§12.2 of the SP-T3 doc: ~5 h mine, then extract),
+  then a ≥ 24 h soak.
+
 The round doc archives to `docs/completed/` when (c) lands.
 
 ## 10. What this round did not find
