@@ -3,6 +3,9 @@
 **Status:** scoping round. Pin: `638bb05c3`.
 **Owner:** this lane. **Consumer:** DRS-E1 / E2 (`shekyl-chain-store`).
 **Companion data:** [`archival_forcing_cells.tsv`](archival_forcing_cells.tsv) — the 34-cell register.
+The register carries its own pin (`a6160a4bd`, re-anchored 2026-09-14 after four
+SF-D8 commits shifted the anchored C++); this document's prose citations
+resolve at the pin above.
 
 ---
 
