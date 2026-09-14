@@ -1583,38 +1583,29 @@ namespace cryptonote
     bool check_block_timestamp(const std::vector<uint64_t>& timestamps, const block& b) const { uint64_t median_ts; return check_block_timestamp(timestamps, b, median_ts); }
 
     /**
-     * @brief verifies a block's archival attestation (ARCHIVAL_CREDIT_WIRE.md §3-§4)
+     * @brief marshal a block's attestation set into `shekyl_archival_verify_attestation`
      *
-     * Recompute-and-compare the block's `attestation_root` and verify every pass
-     * record's P-countersignature. ALL logic is in Rust
-     * (`shekyl_archival_verify_attestation`); this member only marshals — it reads
-     * the header blob from the coinbase `tx_extra`, names the pass p_ids (step 1),
-     * reads each bond's hybrid pubkey from LMDB by those keys, reads the coinbase
-     * output key, hands the raw bytes across, and obeys the verdict. It parses
-     * nothing structural and decides nothing (rule 20), so it needs `m_db` and is
-     * not static.
+     * Reads kept headers, names pass p_ids, loads bond pubkeys, fills the
+     * connecting-chain anchor table, and obeys the Rust verdict. Parses nothing
+     * structural (rule 20).
      *
-     * Pre-cutover no block carries pass records, so on every VALID block (empty
-     * witness, well-formed coinbase) this matches the interim's
-     * `attestation_root == empty_attestation_root()`. It is strictly stricter on
-     * three pinned shapes: unsolicited witness bytes on an empty-root block
-     * (`MALFORMED_WITNESS`) and an unreadable coinbase `vout[0]`
-     * (`CBKEY_UNREADABLE`, which `prevalidate_miner_transaction` rejects anyway)
-     * are already-invalid; a coinbase `tx_extra` that fails to parse
-     * (`HEADERS_UNREADABLE`) is a deliberate tightening of the inherited
-     * arbitrary-tx_extra tolerance — the `attestation_root` commitment over the
-     * kept headers is unverifiable when they cannot be read, and the settlement
-     * scan later reads those same bytes (pinned by
-     * `unreadable_headers_is_headers_unreadable`). The populated path is proven by
-     * the across-FFI KAT and turns on for producers at the cutover.
-     *
-     * @param b the block to be checked
-     * @param witness the block's opaque attestation-witness blob
-     *   (`connect.attestation_witness`); empty is the zero-record set
-     *
-     * @return true iff the Rust verdict is OK, otherwise false
+     * @param predecessor_height validated height of the block `b` connects to
+     *   (main-chain top, or alt parent). Never the coinbase-claimed height.
+     * @param alt_chain fork-to-parent alt blocks, or `nullptr` on main chain
+     * @param witness `connect.attestation_witness`; empty is the zero-record set
      */
-    bool verify_block_attestation(const block& b, const blobdata& witness);
+    bool verify_block_attestation(const block& b, uint64_t predecessor_height,
+      const std::list<block_extended_info>* alt_chain, const blobdata& witness);
+
+    /**
+     * @brief fill the SF-D8 pass-anchor table via `fill_connecting_anchor_hashes`
+     *
+     * Asks `shekyl_archival_pass_anchor_window` for `(first, len)` (Rust owns
+     * depth/L). Empty `len` is the genesis-threshold shape. Alt hashes are
+     * consecutive from the fork; heights below that come from main.
+     */
+    bool fill_pass_anchor_window(uint64_t predecessor_height,
+      const std::list<block_extended_info>* alt_chain, std::vector<crypto::hash>& out) const;
 
     /**
      * @brief finish an alternate chain's timestamp window from the main chain

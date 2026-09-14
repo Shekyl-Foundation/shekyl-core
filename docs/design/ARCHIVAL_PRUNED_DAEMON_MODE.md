@@ -1838,7 +1838,8 @@ consensus question: *does anything read it after admission?*
   substituted: one client (`shekyl-p-fetch`) in the daemon's Tor zone,
   one entry point `fetch(destination, shard_id, header)`, challenge and
   organic callers indistinguishable on the wire (`SF-D1`), tor-zone
-  SOCKS, `GET /shard/{id}` on port 80, `nonce ‖ height` header, one
+  SOCKS, `GET /shard/{id}` on port 80, one 72-byte
+  `nonce ‖ anchor_height ‖ anchor_hash` header (`SF-D5` as amended), one
   in-flight cap, one miss/timeout taxonomy. Its **organic caller** is
   *"this daemon needs shard `s` (reconstruct, IBD-after-prune, operator
   test)"* (`:96-98`) — which is Q5's band 2 and Q9's recovery fetch by
@@ -1868,7 +1869,8 @@ consensus question: *does anything read it after admission?*
   body type of opaque bytes and a single **content-verify** hole
   `verify(body, expected) -> Result`. There are two verifies on the
   fetch path and they have different fates: the countersignature (`P`
-  signed `nonce ‖ height ‖ shard_id` under the bond-record key) is
+  signed `nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id` under the
+  bond-record key, `SF-D8` v2) is
   transport authenticity, unit-independent, and is sub-PR 1's in full;
   the content-verify (bytes against `R_k` today, against
   `txs_prunable_hash` under Q6) is the thing that changes with the

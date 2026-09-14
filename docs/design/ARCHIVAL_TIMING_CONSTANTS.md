@@ -29,7 +29,8 @@ rewrite → P2B-6 §7 threat re-center → **this cluster's values** (sim-backed
 | `MAX_SETTLEMENT_EPOCHS_PER_EMISSION` | **15** | Max epochs per emission vin; work vector + dedup batch | Emission §3 |
 | `MAX_CLAIM_AGE_W` (`W`) | **26** | E-3 forfeiture horizon (settlement epochs); **hot prune** | Archival state §5 |
 | `RETENTION_HORIZON_BLOCKS` | **420_000** | Min block-span archival derived state survives before prune sweep | Archival state §5 |
-| `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** | Max processable reorg depth (blocks); `pop_block` + wallet refresh | Gate-4 §5, P2B-5 |
+| `ARCHIVAL_REORG_DEPTH_BLOCKS` | **720** | Max processable reorg depth (blocks); `pop_block` + wallet refresh; **since 2026-09-13 also the pass-countersignature anchor depth** (`SF-D8`: requester anchors a shard read to `block_hash(tip − this)`) | Gate-4 §5, P2B-5, `ARCHIVAL_SHARD_FETCH.md` `SF-D8` |
+| `ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS` (`L`) | **4** (**PROVISIONAL**, 2026-09-13) | Half-width of the pass-anchor admission window `[h − 720 − L, h − 720]` and of `P`'s pre-sign gate `[p − 720 − L, p − 720 + L]`; `≥ 2` build-enforced. Falsifier: W₂ / PD-F-2 dispersion — p99 fetch-plus-retry under 2 min → 3; over 6 min → tighten `SF-D6`'s retry budget, do not raise `L` | `ARCHIVAL_SHARD_FETCH.md` `SF-D8` |
 | `RELEASE_COOLDOWN_EPOCHS` | **2** | Grace after last serve before `Release` (settlement epochs) | Gate-4 §3.4–§4.3 |
 | `CHALLENGE_RESOLUTION_BLOCKS` | **10_000** (gate-2 interface) | Worst-case slash challenge window (blocks) | Gate-2 (interface) |
 | `BOND_DURATION_BASE_EPOCHS` | **4** (provisional¹) | Flat floor of per-shard retention-commitment horizon (settlement epochs) | Gate-4; sim L9/L10 |
@@ -276,6 +277,7 @@ cargo run -p shekyl-staking-sim -- --timing-cluster
 "max_claim_age_w": 26,
 "retention_horizon_blocks": 420000,
 "archival_reorg_depth_blocks": 720,
+"archival_attestation_anchor_lag_blocks": 4,
 "release_cooldown_epochs": 2,
 "challenge_resolution_blocks": 10000
 ```
@@ -297,6 +299,12 @@ cargo run -p shekyl-staking-sim -- --timing-cluster
 
 ## Revision history
 
+- **2026-09-13 (`SF-D8` anchor):** `ARCHIVAL_REORG_DEPTH_BLOCKS` gains a
+  third consumer as the pass-countersignature anchor depth (both tuning
+  directions now dangerous — see the JSON `_comment_archival_timing`); add
+  `ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS = 4` PROVISIONAL with its
+  falsifier. Not a re-pin of the 2026-06-07 values; the sim harness is
+  unchanged.
 - **2026-06-07 (reorg/retention split):** Delete `REORG_HORIZON`; add `RETENTION_HORIZON_BLOCKS`,
   `ARCHIVAL_REORG_DEPTH_BLOCKS`; `prune_horizon_epochs = W`; §2.4 emission/reorg trace; T-A16
   note; fix `W` rationale (forfeiture not decorrelation).

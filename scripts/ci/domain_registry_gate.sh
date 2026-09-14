@@ -262,7 +262,9 @@ count_pattern() {
 # be registered below -- the literal-presence leg will see it there, but
 # this count pin will NOT move, because the number of cSHAKE call sites
 # stays at two however many tables are wired.
-MECH1_EXPECTED=50
+# SF-D8 (2026-09-13): `attestation_nonce()` and its one cSHAKE site were
+# deleted with the v1 nonce-only countersignature (50 -> 49).
+MECH1_EXPECTED=49
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2

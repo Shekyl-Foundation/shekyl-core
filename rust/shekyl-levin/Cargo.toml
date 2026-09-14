@@ -44,6 +44,10 @@ zstd = { workspace = true, optional = true }
 # Round-trip property tests (rule 50): builder → chunked reader → same
 # message, over arbitrary payloads, commands, and chunk boundaries.
 proptest = "1"
+# Test-only: `tests/notify_kats.rs` asserts the hand-copied
+# `ATTESTATION_WITNESS_MAX_BYTES` twin equals the retention crate's authority.
+# Not a production dependency (see `payload/block.rs`).
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 
 [lints]
 workspace = true

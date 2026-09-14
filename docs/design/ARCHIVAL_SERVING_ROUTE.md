@@ -109,13 +109,19 @@ header level. That is the privacy invariant
   string, no sign. Leading zeros are accepted by `u64` parse (so `/shard/007`
   is shard 7); that is current behaviour, not a second encoding.
 - Request headers are ignored. Presence, absence, and values are not a
-  discriminator. **AMENDMENT RULED 2026-09-13, NOT LANDED (`SF-D5`):**
-  one required header decoding to 40 bytes
-  `nonce[32] ‖ height_le[8]`; missing, malformed, duplicate, or
-  wrong-length values join the identical complete-head 404. Exact
-  spelling and encoding land in the `shekyl-p-serve` + `shekyl-p-fetch`
-  PR, then this line updates. Until then this line describes the
-  landed header-ignoring implementation.
+  discriminator. **AMENDMENT RULED 2026-09-13, NOT LANDED on this route
+  (`SF-D5`, second amendment; the verifier half landed as `SF` (a0)):**
+  one required header decoding to 72 bytes
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`; missing,
+  malformed, duplicate, or wrong-length values join the identical
+  complete-head 404, and so does an `anchor_height` outside
+  `[p − 720 − L, p − 720 + L]` for `P`'s own height `p`
+  (`L = archival_attestation_anchor_lag_blocks`, the same `L` on both
+  sides so no `P` gates distinctively). `P` signs the **decoded** 72
+  bytes ‖ `shard_id_le[8]`, never the textual form. Exact spelling and
+  encoding land in the `shekyl-p-serve` PR (`SF` (a)), then this line
+  updates. Until then this line describes the landed header-ignoring
+  implementation.
 
 ### Transport — RULED by transcription
 

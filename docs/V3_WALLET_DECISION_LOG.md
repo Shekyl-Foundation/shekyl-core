@@ -5240,3 +5240,168 @@ identity key, which no endpoint change takes back — only Release does, and
 Release is authorized by the one key never on the host.
 
 ---
+
+## 2026-09-13 — Attestation pass countersignature moves to v2 (`SF-D8`, anchor-bound): pinned attestation vectors regenerated
+
+**Decision.** The consensus helper `verify_pass_countersignature`
+(`rust/shekyl-archival-retention/src/attestation_wire.rs`) is re-anchored
+to the `SF-D8` transcript as finally ruled — a requester-supplied
+**chain anchor** buried at the segment-freeze depth, gated by `P` and
+looked up on the connecting chain at admission — and the pinned vectors
+that froze the v1 shape are regenerated. This entry is the authorization
+the armed regenerators require under `50-testing.mdc` §"Regenerating a
+self-pinned vector is a decision, not a command," and the citation their
+invocations carry.
+
+**Ruled by Rick, 2026-09-13**, in the shard-fetch round
+(`docs/design/ARCHIVAL_SHARD_FETCH.md` `SF-D5` / `SF-D8`, second
+amendment; landed as that round's §9.1 step (a0), "the v2
+pass-countersignature verifier, first and alone"). The same day's
+**first** amendment — requester-random `nonce[32] ‖ height_le[8]` with
+signed height required to equal the predecessor height — was drafted,
+adversarially reviewed, and SUPERSEDED before landing: a requester-chosen
+integer carries no existence property (`P` signs blind, so a lone witness
+could pre-fetch a signature for any future height), and exact equality
+misses every honest fetch that spans a block boundary. It is recorded
+here so it is not re-derived.
+
+**What moves.**
+
+1. **The request header and the signed message.** v1 signed the 32-byte
+   block-bound nonce `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` alone.
+   v2's request carries one header decoding to 72 bytes,
+   `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]`: fresh random,
+   then the requester's own chain at `tip − archival_reorg_depth_blocks`
+   (720) — height and hash. `P` signs the **decoded** 72 bytes in
+   canonical binary followed by `shard_id_le[8]`, the `u64` it parsed from
+   `/shard/{id}` (80 bytes; never the header's textual form, so Rust and
+   C++ cannot disagree on a wire variant). A signature that does not
+   cover the parsed route id is a confused deputy. `cb_out_key` and the
+   challenge tuple leave the message: the fetch proves `P` served, not
+   which miner asked.
+2. **Why an anchor, and why 720 deep.** The anchor restores the existence
+   property `RF-D3`/`RF-D5` gave the v1 nonce — the block had to exist to
+   be hashed — while keeping the nonce requester-random so `P` cannot
+   recognise a witness. Anchoring at the **tip** hash would make the
+   signature fork-sensitive: a `P` that saw the losing side of a
+   same-height race first signs a hash that never becomes canonical and
+   eats an unpriced miss. At 720 the hash is the segment-freeze depth
+   (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, const-asserted equal in the
+   retention KAT), identical on every honest node's chain — no new "this
+   depth is safe" assumption. **Priced residual:** burial depth is lead
+   time. A `P` that skips its own gate can sign a pass anchored `hash(T)`
+   at tip *T* that is admissible at *h* ∈ [*T* + 720, *T* + 720 + *L*],
+   a day out, and pre-sign the coming day for a colluding requester.
+   Fork immunity and short lead are one knob; fork misses land on honest
+   operators unpriced, collusion lead is already priced by the 2-of-3
+   quadratic. Accepted.
+3. **`P`-side gate (lands with (a), `RF-R1`).** Before signing, `P`
+   requires `anchor_height ∈ [p − 720 − L, p − 720 + L]`, `p` its own
+   height, else the identical 404. The upper bound is what makes
+   freshness against a non-colluding witness **structural** rather than
+   economic: without it a lone witness at height *T* sends `hash(T)` and
+   holds a signature usable at *T* + 720. The lower bound is hygiene. The
+   gate is two-sided with the same `L` so a `P` one block behind does not
+   refuse the network and no `P` gates distinctively. `P` needs a
+   **height**, not a chain — one `u64` from the host over the loopback the
+   claim leg already requires; `shekyl-p-serve` stays chain-blind.
+   **Residual, recorded:** the gate leaks whether `P` is synced (a
+   requester can binary-search `P`'s height through 404s). A synced `P`
+   answers like every other synced `P`; an unsynced one is already
+   failing challenges. The leak is "synced or not", not identity.
+4. **Admission.** `PassRecord` carries `nonce: [u8; 32]` and
+   `anchor_height: u64` (neither derivable); the **hash is not carried**
+   — admission reads it from the connecting chain, which is what makes a
+   fabricated hash fail. With `h` the block's **validated** predecessor
+   height: `anchor_height ∈ [h − 720 − L, h − 720]` else
+   `AnchorOutOfWindow`; transcript rebuilt with the connecting chain's
+   hash at `anchor_height` (alt chain above the fork point when
+   validating on an alt chain — nothing caps reorg depth, so main-chain
+   lookup alone would be a consensus split) and verified under `P`'s
+   bond hybrid key, else `BadCountersignature`; every pass record refused
+   while `h < 720 + L` (724) — no anchor exists; first settlement is at
+   10 000, nothing lost. The `attestation_root` record layout becomes
+   `header ‖ nonce ‖ anchor_height ‖ signature`; the prunable witness
+   entry becomes `nonce ‖ anchor_height ‖ signature`
+   (`ATTESTATION_WITNESS_MAX_BYTES` 866 568 → 876 808, +40/entry versus
+   v1, Rust-authoritative, C++ asserted equal). The root's customization
+   string does **not** rotate: no chain carried the old layout, and the
+   genesis-frozen empty root (`count = 0`) is byte-identical — pinned
+   unchanged.
+5. **Constants, single-sourced.** `archival_reorg_depth_blocks` (720,
+   existing) gains its third consumer as the anchor depth; its JSON
+   comment now names both danger directions (lower → reorg-sensitive
+   anchor and honest fork misses; higher → longer collusive lead) and the
+   `PDM-Q11` `D_max` gate as a consumer. New
+   `archival_attestation_anchor_lag_blocks = 4`, **PROVISIONAL**,
+   `build.rs`-enforced `≥ 2`; Rust reads it, C++ sizes the window through
+   `shekyl_archival_pass_anchor_window` and holds no copy.
+   *Sizing:* too small produces honest witness misses (unpriced); too
+   large costs one block of pre-fetch lead per unit against a 720-block
+   floor and one block of epoch slack per unit against 10 000 — so err
+   large. Two blocks of fetch-plus-`SF-D6`-retry span (the only fetch
+   figure is a ~180 KB/s burst floor from a null result, and bounded
+   retries stretch one attempt to minutes), one of `P`/requester skew,
+   one of margin: four. *Falsifier:* the W₂ / PD-F-2 dispersion
+   measurement, either direction — p99 under two minutes → 3; over six
+   → the answer is **not** to raise `L` but that `SF-D6`'s retry budget is
+   too generous, because `L` would be absorbing what the budget should
+   bound. *Recorded residual:* `L` / 10 000 of slack at the epoch
+   boundary; not fixed.
+6. **The scheme domain.** `SCHEME_DOMAIN_ATTESTATION` rotates
+   `shekyl/archival-attestation-scheme-v1` → `…-v2`. One label never names
+   two functions (`30-cryptography.mdc`); a v1 signature can never verify
+   as v2 independent of the message layout. No retired-label const is
+   kept; `v1_domain_signature_does_not_verify_under_v2` is the negative
+   control.
+7. **Deleted.** `attestation_nonce()`, its cSHAKE customization
+   `shekyl/archival-attestation-nonce-v1`, and the `prev_block_hash` /
+   `cb_out_key` / `cb_out_key_readable` verifier inputs (FFI verdicts 8
+   and 12 RETIRED; 13 `MALFORMED_ANCHOR_TABLE`, 14 `ANCHOR_OUT_OF_WINDOW`,
+   15 `BELOW_ANCHOR_THRESHOLD` minted). `MECH1_EXPECTED` 50 → 49.
+
+**Vectors regenerated under this entry.**
+
+- `rust/shekyl-archival-retention/tests/attestation_wire_kat.rs`:
+  `ROOT_TWO_EXPECT_HEX` (record layout gained nonce and anchor height);
+  `NONCE_EXPECT_HEX` deleted with its function and replaced by the
+  hand-computed `REQUEST_HEADER_EXPECT_HEX` and `MSG_EXPECT_HEX`
+  concatenation pins.
+- `rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json`
+  — **new.** A fully deterministic positive vector: `P`'s identity keypair
+  from `derive_archival_p_keys([0x5A; 64], Mainnet, Bip39, slot 0)`, the
+  ML-DSA leg hedged with a fixed seed, over a fixed
+  `(nonce, anchor_height, anchor_hash, shard_id)` with a deterministic
+  `kat_chain_hash` window at `predecessor_height = 4242`. Rebuilding from
+  the operands must reproduce every pinned byte; the pinned signature
+  must verify inside the window against the pinned chain and fail under
+  any single-term change, a forked anchor hash, or a shifted window.
+  Threshold pinned at 723 (refuse) / 724 (accept) in Rust, FFI, and C++.
+- `docs/test_vectors/PQC_HYBRID_V2_KAT.json`: the `attestation` surface
+  vector re-signs under the `-v2` domain (the other five surfaces are
+  reused byte-identically by the idempotent writer).
+- `rust/shekyl-rpc-types/build.rs` `PINNED_DIGEST` re-pinned for the
+  added `archival_attestation_anchor_lag_blocks` key (a different `L` is
+  a different chain).
+- Cross-language: the FFI attestation-verify tests and the C++
+  `archival_attestation_verify` pinned-vector test consume the same fixture,
+  under this same citation. (Renamed `_kat.json` → `_pinned.json` in review,
+  2026-09-14: the signature bytes are tier 3, and rule 50 reserves the KAT
+  name for tiers 1–2 — the oracle statement below is unchanged.)
+
+**Oracle statement (`50-testing.mdc`).** The root and witness pins remain
+**self-pinned (tier 3)** drift tripwires. The header and message pins are
+**hand-computed (tier 1)** — the concatenations are checkable by eye. The
+signature fixture is **self-pinned (tier 3)** for the bytes, with an
+independent (tier 2) check alongside: the verifier accepts it and rejects
+every single-term mutation, so sign/verify co-drift cannot pass.
+
+**Regeneration citation used.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-13 SF-D8 v2 pass countersignature: nonce ‖ anchor_height ‖ anchor_hash ‖ shard_id under -v2 domain, anchor window [h−720−L, h−720] (ARCHIVAL_SHARD_FETCH.md §9.1 step a0)"`.
+
+**Reference.** `docs/design/ARCHIVAL_SHARD_FETCH.md` `SF-D5`, `SF-D8`,
+`SF-D13`, §9.1 (a0); `docs/design/ARCHIVAL_CREDIT_WIRE.md` §3;
+`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (scheme row rotated, nonce row
+deleted); `config/consensus_constants.json`; `.cursor/rules/50-testing.mdc`.
+
+---

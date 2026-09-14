@@ -1233,11 +1233,51 @@ is the whole justification, and it is a domain claim, not a safety claim.
   is classed here because the domain argument is the one that holds today,
   and it inherits §7.1.1's KAT obligation when S-ARCH ports.
 - **Archival journal families (16):** the `DAEMON_REDB_STORE.md` §7.1.1 named
-  exclusion. **The replacement KAT that rule requires does not exist yet.**
-  §7.1.1 forbids extracting S-ARCH or implementing archival apply in
-  `shekyl-chain-store` until these are digested *or* carry that KAT, so the
-  obligation is live and unmet — recorded here as the exclusion's open item
-  rather than treated as discharged by being written down.
+  exclusion. §7.1.1 forbids extracting S-ARCH or implementing archival apply
+  in `shekyl-chain-store` until these are digested *or* carry a replacement
+  KAT that **forces apply/revert to run**. **The obligation is live and unmet
+  for all sixteen** (ruled 2026-09-13).
+
+  This line read "the replacement KAT that rule requires does not exist yet"
+  until 2026-09-13, was briefly corrected to record `archival_settlement` as
+  **discharged**, and that correction was **wrong**. It is withdrawn here
+  rather than quietly reverted, because it was published.
+
+  **What the settlement KAT does and does not establish.**
+  [`tests/unit_tests/archival_settlement_table.cpp`](../tests/unit_tests/archival_settlement_table.cpp)
+  drives its **revert** half through the production hook —
+  `revert_archival_slashes_at_height`, which reaches
+  `delete_archival_settlement_for_epoch` — after a real
+  `process_archival_slash_at_height` fold, and asserts the folded span's rows
+  drop while the neighbouring epoch survives. That half genuinely runs.
+
+  Its **apply** half does not. All twelve `set_archival_settlement` calls go
+  straight onto the store handle, and that is **the writer, not the apply
+  path** — it cannot be the apply path, because `set_archival_settlement` has
+  no production caller (`db_lmdb.cpp:7667`, held under the writer round's §5.1
+  pending **SO-D8**). §7.1.1 asks for apply **and** revert, so settlement is
+  **half met and therefore unmet**, and will stay so until SO-D8 gives the
+  writer a caller.
+
+  **The trailing clause is reference-side, not cross-backend.** It reads
+  *"digests must still see production LMDB behavior for those paths before
+  claiming parity"* — it names **LMDB**. It asks that the oracle has watched
+  LMDB actually run those paths; a C++-only KAT satisfies it on the literal
+  text. The gap is real but sits elsewhere, and it has a cause worth recording
+  rather than patching: **when §7.1.1 was written the digest WAS the
+  comparator**, one instrument computed over both stores, so "coverage
+  includes the archival families" implied both sides **by construction**.
+  Covering LMDB implied covering redb. That implication died when the
+  comparator became a **diff**, and the cross-backend reach was never stated
+  because it never had to be.
+
+  **Two gates, not one bar** — see
+  [`ARCHIVAL_FORCING_CORPUS.md`](design/ARCHIVAL_FORCING_CORPUS.md) (AFC-1).
+  The **extraction** gate is per-family and lands incrementally as KATs
+  arrive. The **parity** gate is all families at once, because it is one
+  harness: the forcing corpus through the dual-population path, both backends,
+  diffed per row against the register.
+
 - **Dead (1):** `txs` — zero read sites and zero write sites (DRS-W4).
   Nothing can diverge in a table nothing touches.
 
