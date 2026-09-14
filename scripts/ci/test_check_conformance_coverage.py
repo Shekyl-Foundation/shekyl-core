@@ -59,6 +59,8 @@ REGISTER = """# Register
 
 #### 5.4.1 The conformance-exception register
 
+<!-- conformance-tally: 2 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->
+
 | Row | Conformance state | Evidence | Digest acceptance |
 | --- | --- | --- | --- |
 | **CEN-A1** | **CHECKED-CONFORMANT** | Reviewed at `deadbeef`. Walked | Digest required |
@@ -111,6 +113,10 @@ def _(tmp):
 def _(tmp):
     reg = REGISTER.replace(
         "| CEN-K1a | **CHECKED-CONFORMANT** | W-AD. A walk with a quoted `a \\|\\| b` in it |\n", "")
+    reg = reg.replace(
+        "<!-- conformance-tally: 2 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+        "<!-- conformance-tally: 1 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+    )
     r = run(tmp, register=reg)
     assert r.returncode == 1, "a removed record must not pass"
     assert "CEN-K1a" in r.stderr and "carry no conformance record" in r.stderr, r.stderr
@@ -123,6 +129,10 @@ def _(tmp):
         "| **CEN-A1** | **CHECKED-CONFORMANT** |",
         "| **CEN-ZZ9** | **CHECKED-CONFORMANT** | Reviewed at `deadbeef` | Digest |\n"
         "| **CEN-A1** | **CHECKED-CONFORMANT** |")
+    reg = reg.replace(
+        "<!-- conformance-tally: 2 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+        "<!-- conformance-tally: 3 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+    )
     r = run(tmp, register=reg)
     assert r.returncode == 1, "a row outside the ratified set must not pass"
     assert "CEN-ZZ9" in r.stderr and "NOT ratified" in r.stderr, r.stderr
@@ -298,6 +308,10 @@ def _(tmp):
         "\n##### P0f slice 10 — a second table under a second nested heading\n\n"
         "| Row | State | Evidence |\n| --- | --- | --- |\n"
         "| **CEN-G6b** | **DIVERGENT** | ratified S=4, shipped 50 |")
+    reg = reg.replace(
+        "<!-- conformance-tally: 2 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+        "<!-- conformance-tally: 2 CHECKED-CONFORMANT, 1 DIVERGENT, 1 UNREVIEWED -->",
+    )
     r = run(tmp, census=c, register=reg)
     assert r.returncode == 0, r.stderr
     assert "4 ratified rules, 4 recorded" in r.stdout, r.stdout
@@ -322,6 +336,57 @@ def _(tmp):
     return "numeric-first-column rows are ignored"
 
 
+@case("a duplicate register id FATALs rather than keeping the last state")
+def _(tmp):
+    reg = REGISTER.replace(
+        "| **CEN-A1** | **CHECKED-CONFORMANT** | Reviewed at `deadbeef`. Walked | Digest required |",
+        "| **CEN-A1** | **CHECKED-CONFORMANT** | Reviewed at `deadbeef`. Walked | Digest required |\n"
+        "| **CEN-A1** | **DIVERGENT** | a second row for the same id | Digest |",
+    )
+    r = run(tmp, register=reg)
+    assert r.returncode == 1, "a duplicate id must not pass"
+    assert "duplicate register row CEN-A1" in r.stderr, r.stderr
+    return "the second CEN-A1 is named"
+
+
+@case("the live tally comment must match the derived row counts")
+def _(tmp):
+    reg = REGISTER.replace(
+        "<!-- conformance-tally: 2 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+        "<!-- conformance-tally: 1 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+    )
+    r = run(tmp, register=reg)
+    assert r.returncode == 1, "a drifted tally comment must not pass"
+    assert "conformance-tally comment says" in r.stderr, r.stderr
+    assert "2 / 0 / 1" in r.stderr, r.stderr
+    return "derived 2/0/1 vs stated 1/0/1"
+
+
+@case("historical '1 DIVERGENT' prose does not satisfy the live tally")
+def _(tmp):
+    # The defect Copilot named: a whole-document search matches records-was
+    # figures. The comment is the only accepted subject; extra prose is noise.
+    reg = REGISTER.replace(
+        "Walked",
+        "Walked; historical record: 1 DIVERGENT at an earlier pin",
+    )
+    r = run(tmp, register=reg)
+    assert r.returncode == 0, r.stderr
+    return "prose '1 DIVERGENT' is not the tally"
+
+
+@case("a missing tally comment is a missing subject, not a skipped limb")
+def _(tmp):
+    reg = REGISTER.replace(
+        "<!-- conformance-tally: 2 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->\n\n",
+        "",
+    )
+    r = run(tmp, register=reg)
+    assert r.returncode == 1
+    assert "missing '<!-- conformance-tally:" in r.stderr, r.stderr
+    return "no comment is a missing subject"
+
+
 @case("a missing document FATALs rather than reading as an empty set")
 def _(tmp):
     root = Path(tmp)
@@ -332,6 +397,26 @@ def _(tmp):
     r = subprocess.run([sys.executable, str(gate)], capture_output=True, text=True)
     assert r.returncode == 1 and "missing" in r.stderr, r.stderr
     return "an absent subject is named"
+
+
+@case("PREFIX TRAP: `**DIVERGENTLY**` must not be read as DIVERGENT")
+def _(tmp):
+    # Under a prefix-matching STATE_RE this is GREEN: the malformed cell parses
+    # as DIVERGENT and the shifted tally agrees with it. Under the anchored
+    # regex the cell carries no valid state, so CEN-A1 is a ratified rule with
+    # no record and the gate FATALs. Only the fix makes this red.
+    reg = REGISTER.replace(
+        "| **CEN-A1** | **CHECKED-CONFORMANT** |",
+        "| **CEN-A1** | **DIVERGENTLY** |",
+    )
+    reg = reg.replace(
+        "<!-- conformance-tally: 2 CHECKED-CONFORMANT, 0 DIVERGENT, 1 UNREVIEWED -->",
+        "<!-- conformance-tally: 1 CHECKED-CONFORMANT, 1 DIVERGENT, 1 UNREVIEWED -->",
+    )
+    r = run(tmp, register=reg)
+    assert r.returncode == 1, "a malformed state token must not count as a state"
+    assert "CEN-A1" in r.stderr, r.stderr
+    return "a malformed token is no state, not a prefix-matched one"
 
 
 def main():
