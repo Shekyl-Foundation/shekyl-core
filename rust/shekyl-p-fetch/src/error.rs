@@ -117,6 +117,12 @@ pub enum Stall {
         /// Bytes that arrived.
         received: u64,
     },
+    /// Exactly `content-length` bytes arrived and then `P` neither closed
+    /// nor sent more within the stall bound. `RF-R1` closes after the body;
+    /// a `P` that holds the connection open is wedged, not lying, so this
+    /// is retried like any other stall — and it is the only way the client
+    /// can tell "nothing more came" from "nothing more came *yet*".
+    NoClose,
     /// Any other I/O error on the stream.
     Io(io::Error),
 }
@@ -132,6 +138,7 @@ impl fmt::Display for Stall {
             Self::Truncated { declared, received } => {
                 write!(f, "body truncated: {received} of {declared} bytes")
             }
+            Self::NoClose => f.write_str("body complete but P did not close"),
             Self::Io(e) => write!(f, "i/o: {e}"),
         }
     }
@@ -170,6 +177,14 @@ pub enum Malformed {
         /// The ceiling it exceeded.
         max: u64,
     },
+    /// More body bytes arrived than `content-length` declared — "body long
+    /// of agreed `N`" (`SF-D6`). Detected either in the bytes that came
+    /// with the head or on the probe for `P`'s close after exactly `N`;
+    /// the excess is not read, only observed.
+    Overlength {
+        /// Bytes `content-length` declared.
+        declared: u64,
+    },
     /// The leading envelope bytes are not a canonical `HybridSignature`.
     Envelope,
 }
@@ -193,6 +208,12 @@ impl fmt::Display for Malformed {
                 write!(
                     f,
                     "content-length {declared} exceeds the body ceiling {max}"
+                )
+            }
+            Self::Overlength { declared } => {
+                write!(
+                    f,
+                    "more body bytes than the declared content-length {declared}"
                 )
             }
             Self::Envelope => f.write_str("envelope is not a canonical hybrid signature"),

@@ -46,6 +46,13 @@ struct Seen {
 enum Script {
     /// Reply with these bytes, then close.
     Respond(Vec<u8>),
+    /// Reply with the first bytes, pause long enough for the client to be
+    /// probing for the close, then send the second and close — a trailer
+    /// that cannot have been buffered behind the head.
+    RespondThenTrail(Vec<u8>, Vec<u8>),
+    /// Reply with these bytes and hold the connection open — a `P` that
+    /// finished the body and never closed.
+    RespondHoldOpen(Vec<u8>),
     /// Complete the handshake, read the request, then say nothing until
     /// the client gives up.
     Silent,
@@ -160,6 +167,16 @@ async fn serve_one(mut s: TcpStream, script: Script, record: Arc<Mutex<Vec<Seen>
         Script::Respond(bytes) => {
             s.write_all(&bytes).await.ok()?;
             s.shutdown().await.ok()?;
+        }
+        Script::RespondThenTrail(bytes, trailer) => {
+            s.write_all(&bytes).await.ok()?;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            s.write_all(&trailer).await.ok()?;
+            s.shutdown().await.ok()?;
+        }
+        Script::RespondHoldOpen(bytes) => {
+            s.write_all(&bytes).await.ok()?;
+            tokio::time::sleep(Duration::from_secs(30)).await;
         }
         Script::Silent => {
             tokio::time::sleep(Duration::from_secs(30)).await;
@@ -396,6 +413,76 @@ async fn a_404_with_a_body_is_not_the_contract() {
     )
     .await;
     assert_eq!(malformed(out), Malformed::ContentLength);
+}
+
+#[tokio::test]
+async fn a_404_declaring_nothing_but_sending_bytes_is_not_the_identical_404() {
+    // `content-length: 0` is honoured to the byte. A "no" with payload
+    // behind it is a `P` off the contract, not a miss to record.
+    let keys = keys();
+    let mut bytes = head_only(
+        "HTTP/1.1 404 Not Found",
+        "content-type: application/octet-stream\r\ncontent-length: 0",
+    );
+    bytes.extend_from_slice(b"but here is something anyway");
+    let (out, _) = run(Script::Respond(bytes), Hole::accepting(), &keys).await;
+    assert_eq!(malformed(out), Malformed::Overlength { declared: 0 });
+}
+
+// ------------------------------------------------------- overlength and close
+
+#[tokio::test]
+async fn bytes_past_content_length_are_malformed_not_trimmed() {
+    // A valid signed body with a trailer. Trimming the trailer would let
+    // `P` ship anything behind a verifying prefix; SF-D6 says body long
+    // of agreed `N` is malformed, so the fetch is refused whether the
+    // trailer arrived with the head or on the probe for the close.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let mut bytes = signed_response(&keys, &header(), SHARD);
+    bytes.extend_from_slice(b"trailer");
+    let declared = u64::try_from(SIGNATURE_ENVELOPE_LEN + CONTENT.len()).unwrap();
+    let (out, _) = run(Script::Respond(bytes), Arc::clone(&hole), &keys).await;
+    assert_eq!(malformed(out), Malformed::Overlength { declared });
+    assert!(
+        hole.shown().is_empty(),
+        "nothing is verified from a response that is not the contract"
+    );
+}
+
+#[tokio::test]
+async fn a_late_trailer_is_caught_on_the_probe_for_the_close() {
+    // The body is complete and verifiable; the excess arrives only after
+    // the client has it all. The probe that a conforming `P` answers
+    // with EOF is answered with a byte instead.
+    let keys = keys();
+    let hole = Hole::accepting();
+    let declared = u64::try_from(SIGNATURE_ENVELOPE_LEN + CONTENT.len()).unwrap();
+    let (out, _) = run(
+        Script::RespondThenTrail(signed_response(&keys, &header(), SHARD), b"x".to_vec()),
+        Arc::clone(&hole),
+        &keys,
+    )
+    .await;
+    assert_eq!(malformed(out), Malformed::Overlength { declared });
+    assert!(hole.shown().is_empty());
+}
+
+#[tokio::test]
+async fn a_complete_body_with_no_close_is_a_stall() {
+    // Every byte arrived; `P` just never hung up. The client cannot call
+    // the body final until it sees EOF, and a `P` that goes quiet instead
+    // is wedged — a stall, retried like one — not lying.
+    let keys = keys();
+    let (out, _) = run(
+        Script::RespondHoldOpen(signed_response(&keys, &header(), SHARD)),
+        Hole::accepting(),
+        &keys,
+    )
+    .await;
+    let err = out.expect_err("not final");
+    assert!(err.retries_same_p());
+    assert!(matches!(err, FetchError::Stall(Stall::NoClose)), "{err}");
 }
 
 // ------------------------------------------------------------- SF-D6: malformed

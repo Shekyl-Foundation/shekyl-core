@@ -243,27 +243,37 @@ impl PFetchClient {
 
         let (head, mut body) = read_head(&mut stream, self.timeouts.head).await?;
         let head = parse_head(&head)?;
-        let declared = match head.status {
+        let held = match head.status {
             404 => {
                 if head.content_length != 0 {
                     return Err(FetchError::Malformed(Malformed::ContentLength));
                 }
-                return Err(FetchError::Miss);
+                false
             }
-            200 => head.content_length,
+            200 => {
+                let declared = head.content_length;
+                let envelope = u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64");
+                if declared < envelope {
+                    return Err(FetchError::Malformed(Malformed::EnvelopeShort { declared }));
+                }
+                let max = max_body_bytes();
+                if declared > max {
+                    return Err(FetchError::Malformed(Malformed::Oversize { declared, max }));
+                }
+                true
+            }
             other => return Err(FetchError::Malformed(Malformed::Status(other))),
         };
-        let envelope = u64::try_from(SIGNATURE_ENVELOPE_LEN).expect("envelope fits u64");
-        if declared < envelope {
-            return Err(FetchError::Malformed(Malformed::EnvelopeShort { declared }));
-        }
-        let max = max_body_bytes();
-        if declared > max {
-            return Err(FetchError::Malformed(Malformed::Oversize { declared, max }));
-        }
 
-        read_body(&mut stream, &mut body, declared, self.timeouts).await?;
+        // Both answers are read to the same standard: exactly the declared
+        // bytes, then `P`'s close. A 404 is a *completed* exchange only if
+        // it completes — a "no" with bytes behind it is not the identical
+        // 404, it is a `P` off the contract.
+        read_body(&mut stream, &mut body, head.content_length, self.timeouts).await?;
         drop(stream);
+        if !held {
+            return Err(FetchError::Miss);
+        }
 
         // Off the executor: a hybrid verify is real CPU, and the hole may
         // be much more (today it recomputes a segment root). The slot goes
@@ -430,9 +440,24 @@ impl From<Malformed> for FetchError {
     }
 }
 
+impl From<Stall> for FetchError {
+    fn from(s: Stall) -> Self {
+        Self::Stall(s)
+    }
+}
+
 /// Read exactly `declared` body bytes into `body` (which may already hold
-/// the bytes that arrived with the head), under a per-read stall bound
-/// and a whole-body deadline.
+/// the bytes that arrived with the head), then confirm `P` closed — under
+/// a per-read stall bound and a whole-body deadline.
+///
+/// "Exactly" is checked in both directions. Fewer bytes before the close is
+/// [`Stall::Truncated`]; more bytes — already buffered behind the head, or
+/// arriving on the probe for the close — is [`Malformed::Overlength`]
+/// (`SF-D6`: body long of agreed `N` is malformed, not trimmed). The probe
+/// is what makes the second direction decidable: `RF-R1` has `P` close
+/// after the body, so a conforming `P`'s EOF is already behind the last
+/// byte, and a `P` that sends neither EOF nor bytes within the stall bound
+/// is [`Stall::NoClose`].
 async fn read_body<S: AsyncRead + Unpin>(
     stream: &mut S,
     body: &mut Vec<u8>,
@@ -440,9 +465,9 @@ async fn read_body<S: AsyncRead + Unpin>(
     timeouts: Timeouts,
 ) -> Result<(), FetchError> {
     let declared_len = usize::try_from(declared).expect("declared length within the ceiling");
-    // Bytes past the declaration are not ours; a conforming `P` closes
-    // after the body, and a non-conforming one's trailer is ignored.
-    body.truncate(declared_len);
+    if body.len() > declared_len {
+        return Err(FetchError::Malformed(Malformed::Overlength { declared }));
+    }
     body.reserve_exact(declared_len - body.len());
     let drain = async {
         while body.len() < declared_len {
@@ -455,18 +480,27 @@ async fn read_body<S: AsyncRead + Unpin>(
                 .map_err(Stall::Io)?;
             body.truncate(start + n);
             if n == 0 {
-                return Err(Stall::Truncated {
+                return Err(FetchError::Stall(Stall::Truncated {
                     declared,
                     received: u64::try_from(body.len()).expect("received fits u64"),
-                });
+                }));
             }
+        }
+        // Exactly `declared` in hand. The next read decides the response:
+        // EOF completes it, a byte breaks it, silence is a stall.
+        let mut probe = [0u8; 1];
+        let n = timeout(timeouts.body_stall, stream.read(&mut probe))
+            .await
+            .map_err(|_| Stall::NoClose)?
+            .map_err(Stall::Io)?;
+        if n != 0 {
+            return Err(FetchError::Malformed(Malformed::Overlength { declared }));
         }
         Ok(())
     };
     match timeout(timeouts.body_total, drain).await {
         Err(_elapsed) => Err(FetchError::Stall(Stall::BodyTimeout)),
-        Ok(Err(stall)) => Err(FetchError::Stall(stall)),
-        Ok(Ok(())) => Ok(()),
+        Ok(outcome) => outcome,
     }
 }
 

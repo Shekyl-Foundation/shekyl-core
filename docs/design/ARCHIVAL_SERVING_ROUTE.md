@@ -102,6 +102,13 @@ the tests are the spec.
   `content-length: 0`.
 - On 200, `content-length` is `SIGNATURE_ENVELOPE_LEN + framed_len`;
   the body leads with the countersignature, then the `RF-D4` frame.
+- **One response, then close.** `P` shuts its write half as soon as
+  the last body byte is written (`close_gracefully`), so the client's
+  EOF is behind the body, not behind a keep-alive. The client reads
+  exactly `content-length` bytes and then **requires** that EOF: bytes
+  instead are `SF-D6` overlength (malformed), silence instead is a
+  stall (`Stall::NoClose`). A 404 is held to the same standard — a
+  "no" with bytes behind it is not the identical 404.
 - Incomplete heads (oversized, mid-head EOF, read timeout) and
   over-capacity arrivals are **closed with no HTTP bytes**.
 - Which response a complete head gets is settled before any byte is
@@ -139,8 +146,11 @@ header level. That is the privacy invariant
   complete-head 404, and so does an `anchor_height` outside
   `[p − 720 − L, p − 720 + L]` for `P`'s own height `p`
   (`L = archival_attestation_anchor_lag_blocks`, the same `L` on both
-  sides so no `P` gates distinctively; the window saturates at zero
-  for `p < 720`). `P` signs the **decoded** 72 bytes ‖ `shard_id_le[8]`
+  sides so no `P` gates distinctively). For `p < 720` there is no
+  anchor at depth 720 yet and `P` refuses every request; for
+  `720 ≤ p < 720 + L` the window's lower edge clamps at height 0
+  (`anchor_within_gate`, `shekyl-p-serve`). `P` signs the **decoded**
+  72 bytes ‖ `shard_id_le[8]`
   under `SCHEME_DOMAIN_ATTESTATION` (`SF-D8`;
   `shekyl_archival_retention::pass_anchor::pass_countersignature_message`),
   never the textual form. Every other request header is ignored.
