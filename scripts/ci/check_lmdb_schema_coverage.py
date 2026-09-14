@@ -85,6 +85,78 @@ COVERAGE_ROW = re.compile(
 )
 
 
+FAMILY_ROW = re.compile(
+    r'([A-Za-z][A-Za-z0-9]*)\s*=>\s*"(archival_[a-z0-9_]+)"'
+)
+FAMILY_MACRO = re.compile(r"archival_families!\s*\{(.*?)\}", re.S)
+
+
+def _strip_rust_comments(src: str) -> str:
+    """Delegate to scripts/ci/strip_c_comments.py rather than re-implement it."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "strip_c_comments", ROOT / "scripts" / "ci" / "strip_c_comments.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.strip(src, rust=True)
+
+
+def check_archival_families(fam_src: str, tables: list[str]) -> list[str]:
+    """Bijection: ApplyPolicy family rows ↔ X-macro archival tables.
+
+    Parsed as a *list*, not a set: a second mapping to an existing name
+    would leave the sets equal. Digits are in the name class because the
+    X-macro allows them (`archival_r2_market` is the worked case).
+    Reads the `archival_families!` invocation only — the generated
+    `Self::Variant => "…"` match arms are the same list and must not
+    double-count it.
+    """
+    errors: list[str] = []
+    # Read code, not prose (rule 47): a commented-out row such as
+    # `// R2Market => "archival_r2_market",` must not count as a family, or
+    # a table could leave the policy while the bijection stays green.
+    # scripts/ci/strip_c_comments.py is the repo's stripper.
+    block = FAMILY_MACRO.search(_strip_rust_comments(fam_src))
+    if not block:
+        return [
+            "archival_families! { … } not found in apply_policy.rs — the "
+            "leg's subject moved (rule 47)"
+        ]
+    rows = FAMILY_ROW.findall(block.group(1))
+    if not rows:
+        return [
+            "parsed ZERO archival family rows from apply_policy.rs -- the "
+            "leg reads nothing, which is first evidence its subject moved, "
+            "not that the sets agree"
+        ]
+    variants = [v for v, _ in rows]
+    names = [n for _, n in rows]
+    dup_var = duplicates(variants)
+    if dup_var:
+        errors.append(
+            "duplicate ApplyPolicy variant(s):\n  " + "\n  ".join(dup_var))
+    dup_names = duplicates(names)
+    if dup_names:
+        errors.append(
+            "duplicate ApplyPolicy table name(s); converting to a set "
+            "would hide a second mapping to the same table:\n  "
+            + "\n  ".join(dup_names))
+    fam_set = set(names)
+    macro_archival = [t for t in tables if t.startswith("archival_")]
+    missing = [t for t in macro_archival if t not in fam_set]
+    if missing:
+        errors.append(
+            "archival table(s) in SHEKYL_LMDB_TABLES with no ApplyPolicy "
+            "family, so their apply can never be stubbed nor shown "
+            "load-bearing (DRS 7.1.1):\n  " + "\n  ".join(missing))
+    ghosts = sorted(fam_set - set(macro_archival))
+    if ghosts:
+        errors.append(
+            "ApplyPolicy family name(s) that are not archival tables in the "
+            "X-macro:\n  " + "\n  ".join(ghosts))
+    return errors
+
+
 def duplicates(names: list[str]) -> list[str]:
     """Names appearing more than once, sorted.
 
@@ -685,6 +757,24 @@ def main() -> None:
     )
     errors.extend(wp_errs)
 
+    # Archival-family leg (DRS-E1, 2026-09-13). shekyl-chain-store's
+    # ApplyPolicy names one variant per archival family, and DRS 7.1.1's
+    # sufficiency control stubs families BY NAME. A table added to the C++
+    # with no variant falls outside every policy silently: its apply could
+    # never be stubbed, so it could never be shown load-bearing -- which is
+    # precisely the hazard 7.1.1 states ("a backend can omit all
+    # apply/revert hooks and still pass core digests").
+    #
+    # Both directions, because one would let the enum drift ahead of the
+    # store it describes.
+    fam_path = ROOT / "rust" / "shekyl-chain-store" / "src" / "apply_policy.rs"
+    try:
+        fam_src = fam_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        sys.exit(f"FAIL: cannot read apply_policy.rs ({exc}) -- the "
+                 "archival-family leg has no subject (rule 47)")
+    errors.extend(check_archival_families(fam_src, tables))
+
     if errors:
         sys.exit("FAIL: the LMDB schema surface is out of step with the live "
                  "table list:\n" + "\n".join(errors))
@@ -714,6 +804,10 @@ def main() -> None:
           f"The two axes disagree on {len(axis_gap)} rows (v0-excluded with "
           "a real class) \u2014 a v0 exclusion is not an accumulator "
           "exclusion (audit \u00a712).")
+    n_archival = sum(1 for t in tables if t.startswith("archival_"))
+    print(f"    Archival families (DRS-E1): {n_archival} ApplyPolicy "
+          "variants, bijective with the X-macro's archival tables. Stubbing "
+          "by name is what makes 7.1.1's sufficiency control expressible.")
     print(f"    Write patterns (slice A): {len(derived_blind)} of "
           f"{len(set_shaped)} set-shaped tables blind-upsert "
           "(mdb_put flags 0) and so need a read-modify-write hook; "

@@ -742,91 +742,6 @@ class InputErrors(unittest.TestCase):
         self.assertIn("is a directory", p.stderr)
 
 
-class BlockerProbe(unittest.TestCase):
-    """The stage-one deferral of the redb arm is blocked on the redb CONSENSUS
-    engine not existing. These prove the probe can fail, in both the
-    blocker-is-gone and the corpus-is-empty directions — a probe that cannot
-    fail would report the blocker holding forever.
-    """
-
-    def _with_chain_store(self, files):
-        d = tempfile.mkdtemp()
-        os.makedirs(os.path.join(d, "src"), exist_ok=True)
-        for name, body in files.items():
-            with open(os.path.join(d, name), "w", encoding="utf-8") as fh:
-                fh.write(body)
-        old = D.CHAIN_STORE
-        D.CHAIN_STORE = d
-        self.addCleanup(lambda: setattr(D, "CHAIN_STORE", old))
-        return D.blocker_failures()
-
-    def test_control_type_level_redb_use_does_not_fire(self):
-        """Today's real state: `use redb::{Key, TypeName, Value}` and
-        `TableDefinition` are schema and key-ordering declarations, not an
-        engine. If these fired, the probe would be red from the day it landed
-        and would be deleted rather than heeded."""
-        f = self._with_chain_store({
-            "src/hash.rs": "use redb::{Key, TypeName, Value};\n",
-            "src/schema.rs": "use redb::{MultimapTableDefinition, TableDefinition};\n",
-        })
-        self.assertEqual(f, [])
-
-    def test_fires_on_the_crates_own_import_style(self):
-        """The polarity trap: this scan is a POSITIVE needle, so a miss is a false
-        GREEN. Matching only `redb::Database` missed an engine written in the
-        crate's OWN existing style -- `use redb::{...}` then unqualified use -- so
-        `blockers` would have stayed green with the engine present."""
-        f = self._with_chain_store({
-            "src/engine.rs": "use redb::{Database, WriteTransaction};\n"
-                             "fn open() -> Database { Database::create(\"x\").unwrap() }\n"})
-        self.assertTrue(f, "an imported-style engine produced no sites")
-        self.assertTrue(any("blocker is gone" in x for x in f), f)
-
-    def test_fires_on_a_multiline_import_block(self):
-        f = self._with_chain_store({
-            "src/engine.rs": "use redb::{\n    Key,\n    Database,\n    Value,\n};\n"})
-        self.assertTrue(f, "a multi-line import produced no sites")
-
-    def test_fires_on_an_aliased_import(self):
-        f = self._with_chain_store({"src/e.rs": "use redb::Database as Db;\n"})
-        self.assertTrue(f, "an aliased import produced no sites")
-
-    def test_fires_when_a_redb_database_appears(self):
-        f = self._with_chain_store({"src/engine.rs": "let db: redb::Database = x;\n"})
-        self.assertTrue(f)
-        self.assertTrue(any("blocker is gone" in x for x in f), f)
-
-    def test_fires_when_a_write_transaction_appears(self):
-        f = self._with_chain_store({"src/e.rs": "fn w(t: &redb::WriteTransaction) {}\n"})
-        self.assertTrue(f)
-
-    def test_fires_when_the_corpus_is_empty(self):
-        """An absence-shaped probe emits the same green whether the corpus was
-        clean or was never read."""
-        f = self._with_chain_store({"src/notrust.txt": "redb::Database\n"})
-        self.assertTrue(any("scanned ZERO" in x for x in f), f)
-
-    def test_fires_when_the_subject_directory_is_absent(self):
-        old = D.CHAIN_STORE
-        D.CHAIN_STORE = os.path.join(tempfile.mkdtemp(), "does-not-exist")
-        self.addCleanup(lambda: setattr(D, "CHAIN_STORE", old))
-        self.assertTrue(any("does not exist" in x for x in D.blocker_failures()))
-
-    def test_engine_site_scan_backs_both_consumers(self):
-        """`blockers` and the `--engine redb` refusal read the SAME scan, so they
-        cannot come to disagree about whether the engine exists."""
-        sites, scanned, missing = D.redb_engine_sites()
-        self.assertFalse(missing)
-        self.assertGreater(scanned, 0, "the scan read no files, so both consumers "
-                                       "are answering from an empty corpus")
-        self.assertEqual(sites, [], "redb consensus engine sites appeared")
-
-    def test_the_real_tree_still_has_no_redb_consensus_engine(self):
-        """The live assertion behind stage one's scoping. When DRS-E1 lands this
-        turns red and names the sites, which is the signal to wire the redb arm."""
-        self.assertEqual(D.blocker_failures(), [])
-
-
 class FollowonRegistry(unittest.TestCase):
 
     def test_every_followon_names_a_blocker(self):
@@ -843,8 +758,10 @@ class FollowonRegistry(unittest.TestCase):
         self.assertEqual(set(D.MEASURE_AXES) & set(D.FOLLOWON_MEASURES), set())
 
     def test_followons_do_not_claim_to_be_probed(self):
-        """blocker_failures scans the redb engine. Labelling pop/reorg PROBED
-        without driving that scan is a check that cannot fail."""
+        """Nothing probes the redb arm any more -- it is a second binary, never
+        a switch, so the source probe was deleted 2026-09-14. Labelling a
+        follow-on PROBED with nothing driving a probe is a check that cannot
+        fail, and that is truer now than when a probe existed."""
         self.assertNotIn("PROBED", D.FOLLOWON_MEASURES)
         self.assertIsInstance(next(iter(D.FOLLOWON_MEASURES.values())), str)
 
@@ -867,28 +784,22 @@ class CommittedArtifacts(unittest.TestCase):
 
 class Preflight(unittest.TestCase):
 
-    def test_refuses_redb_while_the_engine_is_absent(self):
-        r = D.measurement_preflight(
-            engine="redb", sync_mode="safe", daemon=__file__,
-            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
-        self.assertTrue(any("NO engine switch" in x for x in r), r)
-
     def test_refuses_an_unrecognised_sync_mode_before_spawn(self):
         r = D.measurement_preflight(
-            engine="lmdb", sync_mode="fast", daemon=__file__,
+            sync_mode="fast", daemon=__file__,
             work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
         self.assertTrue(any("MDB_NOSYNC" in x for x in r), r)
 
     def test_refuses_a_missing_daemon_binary(self):
         r = D.measurement_preflight(
-            engine="lmdb", sync_mode="safe",
+            sync_mode="safe",
             daemon=os.path.join(tempfile.mkdtemp(), "no-such-shekyld"),
             work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
         self.assertTrue(any("is not a file" in x for x in r), r)
 
     def test_control_a_sane_lmdb_preflight_is_empty(self):
         r = D.measurement_preflight(
-            engine="lmdb", sync_mode="safe", daemon=__file__,
+            sync_mode="safe", daemon=__file__,
             work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
         # work_dir '.' may still lack a sysfs rotational node; declaring the
         # class is what makes this a control rather than a probe of this box.
