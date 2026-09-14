@@ -79,10 +79,11 @@ pub use attestation::{
 };
 pub use attestation_wire::{
     attestation_root, empty_attestation_root, pass_records_from_headers_and_witness,
-    verify_pass_countersignature, AttestationHeader, AttestationHeaderError,
-    BlockAttestationWitness, PassCountersignatureError, PassRecord, PassWitness, WitnessError,
-    WitnessPairingError, ATTESTATION_HEADER_LEN, ATTESTATION_ROOT_CUSTOMIZATION,
-    MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES, WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
+    verify_pass_countersignature, verify_pass_transcript, AttestationHeader,
+    AttestationHeaderError, BlockAttestationWitness, PassCountersignatureError, PassRecord,
+    PassWitness, WitnessError, WitnessPairingError, ATTESTATION_HEADER_LEN,
+    ATTESTATION_ROOT_CUSTOMIZATION, MAX_ATTESTATION_RECORDS, MAX_ATTESTATION_WITNESS_BYTES,
+    WITNESS_ENTRY_LEN, WITNESS_PREFIX_LEN,
 };
 pub use bond_connect::{
     clean_interval_close, holdings_update_add_connect, holdings_update_drop_connect,
@@ -152,9 +153,10 @@ pub use emission_verify::{
 };
 pub use pass_anchor::{
     pass_countersignature_message, pass_request_header_bytes, PassAnchorWindow,
-    PassAnchorWindowError, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN, PASS_ANCHOR_HEIGHT_LEN,
-    PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, PASS_ANCHOR_WINDOW_LEN,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
+    PassAnchorWindowError, PassRequestHeader, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN,
+    PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS, PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT,
+    PASS_ANCHOR_WINDOW_LEN, PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN,
+    PASS_REQUEST_HEADER_LEN,
 };
 pub use settlement_row::{
     RowError, SettlementRow, OUTCOME_MISSED, OUTCOME_NON_OBSERVATION, OUTCOME_SERVED,

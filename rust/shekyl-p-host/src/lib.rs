@@ -80,9 +80,12 @@
 
 pub mod host;
 pub mod serve_set;
+pub mod signer;
 
-pub use host::{HostError, PersonaServing, PersonaServingHost};
+pub use host::{HostError, PersonaServing, PersonaServingHost, ServeCounters};
 pub use serve_set::{
     PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
     Staleness, StalenessBound,
 };
+pub use shekyl_p_serve::PassKey;
+pub use signer::NoResidentKey;

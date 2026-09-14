@@ -14,14 +14,36 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
+use shekyl_archival_retention::verify_pass_transcript;
+use shekyl_crypto_pq::signature::HybridSignature;
+use shekyl_curve_tree::serving_route::encode_request_header;
 use shekyl_curve_tree::{
     leaves_per_segment, recompute_segment_r_k, BlockHeight, Gindex, LeafEntry, LeafStore,
     OutputIdentity, SegmentId, SegmentPin, ServedFrameHeader, ServingReader, TargetKind,
     LEAF_BYTES,
 };
-use shekyl_p_serve::{PServeEndpoint, ShardProvider, StoreShardProvider};
+use shekyl_p_serve::{
+    PServeEndpoint, PassSigner, ShardProvider, StoreShardProvider, TestKeySigner,
+    REQUEST_HEADER_NAME, SIGNATURE_ENVELOPE_LEN,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+/// The test persona's height and the in-gate anchor a requester at the
+/// same tip attaches (`tip − 720`).
+const OWN_HEIGHT: u64 = 20_000;
+const ANCHOR_HEIGHT: u64 = OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS;
+const NONCE: [u8; 32] = [0x3c; 32];
+const ANCHOR_HASH: [u8; 32] = [0xc3; 32];
+
+async fn bind(provider: Arc<dyn ShardProvider>) -> (PServeEndpoint, Arc<TestKeySigner>) {
+    let signer = Arc::new(TestKeySigner::ephemeral(OWN_HEIGHT));
+    let ep = PServeEndpoint::bind(provider, Arc::clone(&signer) as Arc<dyn PassSigner>)
+        .await
+        .expect("bind endpoint");
+    (ep, signer)
+}
 
 /// A full segment of distinct canonical leaves — distinct so a
 /// stride/offset bug in the read cannot still hash to the right `R_k`.
@@ -49,20 +71,33 @@ fn segment_entries() -> Vec<LeafEntry> {
 
 async fn fetch(addr: SocketAddr, path: &str) -> Vec<u8> {
     let mut s = TcpStream::connect(addr).await.expect("connect");
-    s.write_all(format!("GET {path} HTTP/1.1\r\nhost: x\r\n\r\n").as_bytes())
-        .await
-        .expect("write request");
+    let header = encode_request_header(&pass_request_header_bytes(
+        &NONCE,
+        ANCHOR_HEIGHT,
+        &ANCHOR_HASH,
+    ));
+    s.write_all(
+        format!("GET {path} HTTP/1.1\r\nhost: x\r\n{REQUEST_HEADER_NAME}: {header}\r\n\r\n")
+            .as_bytes(),
+    )
+    .await
+    .expect("write request");
     let mut out = Vec::new();
     s.read_to_end(&mut out).await.expect("read response");
     out
 }
 
-fn body_of(response: &[u8]) -> &[u8] {
+/// Split a 200 response after its head into (countersignature, framed body).
+fn envelope_of(response: &[u8]) -> (HybridSignature, &[u8]) {
     let end = response
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
         .expect("response has a head");
-    &response[end + 4..]
+    let (sig, body) = response[end + 4..].split_at(SIGNATURE_ENVELOPE_LEN);
+    (
+        HybridSignature::from_canonical_bytes(sig).expect("served body leads with a signature"),
+        body,
+    )
 }
 
 #[tokio::test]
@@ -89,14 +124,25 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
     // servable through it.
     store.prune_frozen(&[]).expect("prune");
 
-    let ep = PServeEndpoint::bind(Arc::new(provider))
-        .await
-        .expect("bind endpoint");
+    let (ep, signer) = bind(Arc::new(provider)).await;
 
     let response = fetch(ep.addr(), "/shard/0").await;
-    let mut body = body_of(&response);
+    let (signature, mut body) = envelope_of(&response);
 
-    // The witness's first act is to read the frame (`RF-D4`): it says how
+    // The witness's *first* act (`SF-D8`): the response is bound to the
+    // request it made. Verified through the same consensus function the
+    // daemon runs at admission, against the P pubkey the bond record holds.
+    verify_pass_transcript(
+        signer.public_key(),
+        &NONCE,
+        ANCHOR_HEIGHT,
+        &ANCHOR_HASH,
+        0,
+        &signature,
+    )
+    .expect("the countersignature covers this request's header and shard id");
+
+    // Then the frame (`RF-D4`): it says how
     // many leaves the response carries and how many bytes follow them that
     // are *not* part of the `R_k` input. This test is the nearest thing to
     // a fetcher that exists, so it reads the format the way one will —
@@ -143,11 +189,10 @@ async fn unfrozen_and_unknown_shards_are_indistinguishable_404s() {
     store
         .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
         .expect("append and freeze segment 0");
-    let ep = PServeEndpoint::bind(Arc::new(StoreShardProvider::new(ServingReader::new(
+    let (ep, _) = bind(Arc::new(StoreShardProvider::new(ServingReader::new(
         Arc::clone(&store),
     ))))
-    .await
-    .expect("bind");
+    .await;
 
     let unfrozen = fetch(ep.addr(), "/shard/1").await;
     let unknown = fetch(ep.addr(), "/shard/77").await;
@@ -169,11 +214,10 @@ async fn unpinned_prune_surfaces_as_a_counted_failure_not_a_distinct_response() 
         .expect("append and freeze segment 0");
     store.prune_frozen(&[]).expect("prune without pinning");
 
-    let ep = PServeEndpoint::bind(Arc::new(StoreShardProvider::new(ServingReader::new(
+    let (ep, _) = bind(Arc::new(StoreShardProvider::new(ServingReader::new(
         Arc::clone(&store),
     ))))
-    .await
-    .expect("bind");
+    .await;
     let pruned = fetch(ep.addr(), "/shard/0").await;
     let bad_route = fetch(ep.addr(), "/nope").await;
     assert_eq!(pruned, bad_route, "store failure renders the shared 404");

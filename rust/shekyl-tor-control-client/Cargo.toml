@@ -29,8 +29,11 @@ unpinned-tor-for-tests = []
 hmac = { version = "0.12", default-features = false }
 sha2 = { version = "0.10", default-features = false }
 ed25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize"] }
-sha3 = { version = "0.10", default-features = false }
 hex-literal = "1"
+# The v3 hostname transform. Shared with the daemon fetch client so the
+# address a persona publishes and the address a daemon dials cannot
+# drift. Encoding only — this crate still does not own a Tor instance.
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 zeroize = { version = "1", default-features = false, features = ["alloc", "derive"] }
 
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt", "macros", "process", "fs"] }

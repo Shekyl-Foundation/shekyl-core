@@ -5,7 +5,7 @@
 
 //! `Engine::start_serving_if_staker` — the construction site.
 
-use shekyl_p_host::PersonaServing;
+use shekyl_p_host::{NoResidentKey, PersonaServing};
 
 use super::task::{
     spawn_serving_task, ServingConfig, CLAIM_SOURCE_TIMEOUT, SERVING_MAX_STREAMS,
@@ -212,6 +212,15 @@ where
                 identity,
                 virtual_port: SERVING_VIRTUAL_PORT,
                 max_streams: SERVING_MAX_STREAMS,
+                // The `SF-D13` countersignature key is the persona's
+                // `hybrid_sign_sk`, which lives inside the stake actor under
+                // Model D and crosses into the serving role only as a signing
+                // capability — the SH-2 remainder
+                // (`ARCHIVAL_SHARD_FETCH.md` §"out of scope"). Until that
+                // capability is wired the host refuses to sign: every fetch
+                // is the identical 404, counted under `sign_failures`, and
+                // no unsigned shard is ever served.
+                key: std::sync::Arc::new(NoResidentKey),
             },
             pinner,
             std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),
