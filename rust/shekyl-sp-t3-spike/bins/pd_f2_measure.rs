@@ -13,10 +13,36 @@
 //! SHEKYL_SPIKE_TOR=/path/to/tor \
 //! SHEKYL_SPIKE_SHARD=/path/to/shard.bin \
 //! SHEKYL_SPIKE_OUT=/path/to/observations.tsv \
+//! SHEKYL_SPIKE_PERSONAS=P \
 //! SHEKYL_SPIKE_COLD=N SHEKYL_SPIKE_WARM=N SHEKYL_SPIKE_CONC=N \
 //! SHEKYL_SPIKE_HOURS=H \
 //!   cargo run -p shekyl-sp-t3-spike --release --bin pd-f2-measure
 //! ```
+//!
+//! `SHEKYL_SPIKE_PERSONAS` (default 4) is the width of the concurrency
+//! sweep: that many personas come up, **each behind its own tor**, plus the
+//! client tor every fetch dials through. The sweep runs widths
+//! `1, 2, 4, …` up to `P` (and `P` itself if not a power of two), `CONC`
+//! rounds each; every round is `NEWNYM` then `width` fetches at once. Its
+//! table is the client-side circuit-churn input `SF-D7` names as the upper
+//! bound on `N`. The box's uplink is shared across every tor here, which
+//! biases the sweep *pessimistic* — named in the report, not hidden.
+//!
+//! # What it prints for the two pins
+//!
+//! - **`N` (`SF-D7`):** the churn table — per width: `n`, p50, p99, p99 as
+//!   a ratio to width 1, circuit-failure rate, `D*`, and the memory term
+//!   `width × max_body_bytes()`. The binary does **not** pick the knee; a
+//!   threshold it invented would be exactly the kind of number the `L`
+//!   note's falsifier was rewritten to avoid. The reader takes the largest
+//!   width that is not churning *and* whose memory term fits the Pi 4
+//!   floor, and pins that.
+//! - **`L` (`SF-D8`):** the cold arm's p99 against the PROVISIONAL note's
+//!   two thresholds (under two minutes → drop to 3; over six → tighten the
+//!   `SF-D6` retry budget, do not raise `L`), and how many attempts of that
+//!   p99 fit under six minutes. Single-attempt, stated as such: retry is
+//!   the scheduler's, so "fetch-plus-retry" is this p99 times whatever
+//!   `TJ-D` budgets.
 //!
 //! # What it writes, and what it refuses to write
 //!
@@ -31,12 +57,16 @@
 //! substituted its payload would be worse than no measurement.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use shekyl_p_fetch::max_body_bytes;
 use shekyl_sp_t3_spike::fixture::ShardFixture;
 use shekyl_sp_t3_spike::harness::Apparatus;
 use shekyl_sp_t3_spike::measure::{
-    summarize, warmup_drift, DStar, FailureKind, Observation, Q_RISK_STAR,
+    attempts_within_budget, churn_table, l_verdict, p99, summarize, warmup_drift, DStar,
+    FailureKind, LVerdict, Observation, Summary, SweepPoint, L_BUDGET_TOO_GENEROUS_ABOVE,
+    L_DROP_BELOW, Q_RISK_STAR,
 };
 
 fn env_path(key: &str) -> Option<PathBuf> {
@@ -67,6 +97,103 @@ fn append_rows(out: &mut Option<std::fs::File>, arm: &str, obs: &[Observation]) 
         writeln!(f, "{arm}\t{}\t{outcome}", o.elapsed.as_millis()).ok();
     }
     f.flush().ok();
+}
+
+/// The widths the sweep visits: powers of two up to `personas`, plus
+/// `personas` itself when it is not one.
+fn sweep_widths(personas: usize) -> Vec<usize> {
+    let mut widths: Vec<usize> = std::iter::successors(Some(1usize), |w| w.checked_mul(2))
+        .take_while(|&w| w <= personas)
+        .collect();
+    if widths.last() != Some(&personas) && personas >= 1 {
+        widths.push(personas);
+    }
+    widths
+}
+
+fn fmt_opt_secs(d: Option<Duration>) -> String {
+    d.map_or_else(
+        || "   —    ".to_owned(),
+        |d| format!("{:>8.2}", d.as_secs_f64()),
+    )
+}
+
+/// The `SF-D7` churn table, with the memory term beside each row.
+fn report_churn(points: &[SweepPoint]) {
+    println!("\n=== SF-D7 upper-bound inputs: client-side churn by in-flight width ===");
+    println!("(one client tor; `width` cold fetches to `width` personas at once; shared uplink → pessimistic)");
+    println!(
+        "{:>5} {:>5} {:>8} {:>8} {:>9} {:>8} {:>10}  {:>10}",
+        "width", "n", "p50 s", "p99 s", "p99/w1", "circ %", "D* s", "mem MB"
+    );
+    let per_body = max_body_bytes();
+    for row in churn_table(points) {
+        let d_star = match row.d_star {
+            DStar::At(d) => format!("{:>10.2}", d.as_secs_f64()),
+            DStar::Unbounded => " UNBOUNDED".to_owned(),
+            DStar::Undefined => "     undef".to_owned(),
+        };
+        // `width × max_body_bytes()` is the resident term SF-D7 caps
+        // against the Pi 4 floor; integer bytes, shown to a tenth of a MB.
+        let mem_bytes = u64::try_from(row.width)
+            .expect("width fits u64")
+            .saturating_mul(per_body);
+        let mem_mb = format!(
+            "{}.{}",
+            mem_bytes / 1_000_000,
+            (mem_bytes % 1_000_000) / 100_000
+        );
+        println!(
+            "{:>5} {:>5} {} {} {:>9} {:>7.1}% {d_star}  {mem_mb:>10}",
+            row.width,
+            row.n,
+            fmt_opt_secs(row.p50),
+            fmt_opt_secs(row.p99),
+            row.p99_over_width_1
+                .map_or_else(|| "—".to_owned(), |r| format!("{r:.2}×")),
+            row.circuit_rate * 100.0,
+        );
+    }
+    println!(
+        "The pin is min(largest non-churning width, memory fit on the Pi 4 floor). \
+         This table does not pick it."
+    );
+}
+
+/// The `L` falsifier, read off the cold arm.
+fn report_l(cold: &Summary) {
+    println!("\n=== SF-D8 `L` falsifier (PROVISIONAL L = 4), from the cold arm ===");
+    match p99(cold) {
+        None => println!("no cold successes — the falsifier is undefined on this run"),
+        Some(p) => {
+            println!(
+                "single-attempt cold p99 = {:.1} s  (note thresholds: < {} s → drop to 3; > {} s → tighten SF-D6 budget, not L)",
+                p.as_secs_f64(),
+                L_DROP_BELOW.as_secs(),
+                L_BUDGET_TOO_GENEROUS_ABOVE.as_secs()
+            );
+            match l_verdict(cold) {
+                LVerdict::DropToThreeCandidate => println!(
+                    "verdict: DROP-TO-3 CANDIDATE — necessary, not sufficient: fetch-plus-retry must \
+                     also land under two minutes once TJ-D's retry budget is applied"
+                ),
+                LVerdict::Holds => println!("verdict: L = 4 HOLDS on the single-attempt tail"),
+                LVerdict::TightenRetryBudgetNotL => println!(
+                    "verdict: OVER SIX MINUTES ON ONE ATTEMPT — the note says tighten SF-D6's \
+                     retry budget, do not raise L; a single attempt this long also questions \
+                     the fetch itself"
+                ),
+                LVerdict::Undefined => unreachable!("p99 present"),
+            }
+            match attempts_within_budget(cold) {
+                Some(k) => println!(
+                    "attempts of this p99 that fit under six minutes: {k} — the most SF-D6 can \
+                     budget per witness attempt before L absorbs the budget"
+                ),
+                None => println!("attempts of this p99 that fit under six minutes: 0"),
+            }
+        }
+    }
 }
 
 fn report(arm: &str, obs: &[Observation]) {
@@ -116,6 +243,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("SHEKYL_SPIKE_TOR must point at the pinned Tor Expert Bundle binary")?;
     let shard_path = env_path("SHEKYL_SPIKE_SHARD")
         .ok_or("SHEKYL_SPIKE_SHARD must point at a real extracted shard fixture")?;
+    let personas = env_usize("SHEKYL_SPIKE_PERSONAS", 4).max(1);
     let cold_n = env_usize("SHEKYL_SPIKE_COLD", 100);
     let warm_n = env_usize("SHEKYL_SPIKE_WARM", 100);
     let conc_n = env_usize("SHEKYL_SPIKE_CONC", 50);
@@ -128,9 +256,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let dir = tempfile::tempdir()?;
     println!(
-        "bringing up a client tor and 2 personas, each behind its own tor (three bootstraps, in parallel)..."
+        "bringing up a client tor and {personas} personas, each behind its own tor ({} bootstraps, in parallel)...",
+        personas + 1
     );
-    let app = Apparatus::bring_up(tor, dir.path().join("tor-data"), 2, fixture.bytes()).await?;
+    let app = Arc::new(
+        Apparatus::bring_up(
+            tor,
+            dir.path().join("tor-data"),
+            u32::try_from(personas)?,
+            fixture.bytes(),
+        )
+        .await?,
+    );
 
     // The expected body length is the apparatus's to know, not this binary's
     // to pass: it is derived from the payload through the production serving
@@ -167,6 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     append_rows(&mut out, "cold", &cold);
     report("cold (NEWNYM before each), single stream", &cold);
+    let cold_summary = summarize(&cold);
 
     // --- Arm 2: warm. Back-to-back fetches to one persona with no signal in
     // between, so the client tor reuses its rendezvous circuit and only the
@@ -182,23 +320,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     append_rows(&mut out, "warm", &warm);
     report("warm (reused circuit), single stream", &warm);
 
-    // --- Arm 3: two personas fetched concurrently through the one client tor,
-    // cold. This is the client-side churn question at n = 2 — two rendezvous
-    // circuits building at once on the daemon's tor. (The serve-side contention
-    // datum this arm used to double as is gone: the personas are on separate
-    // tors now, and serve-side load is SPIKE-F-11's, measured from other hosts.)
-    let mut conc = Vec::new();
-    for i in 0..conc_n {
-        app.rotate_client_circuits().await?;
-        let (ra, rb) = tokio::join!(app.timed_fetch(0), app.timed_fetch(1));
-        conc.push(ra);
-        conc.push(rb);
-        if (i + 1) % 10 == 0 {
-            println!("  concurrent {}/{conc_n}", i + 1);
+    // --- Arm 3: the concurrency sweep. At each width, `NEWNYM` once, then
+    // `width` cold fetches to `width` distinct personas at once through the
+    // one client tor — `width` rendezvous circuits building together on the
+    // daemon's tor. This is `SF-D7`'s client-side churn question, and the
+    // table it produces is the upper-bound input for `N`. (The serve-side
+    // contention datum the old two-persona arm doubled as is gone on
+    // purpose: the personas are on separate tors now, and serve-side load is
+    // SPIKE-F-11's, measured from other hosts.)
+    let mut sweep = Vec::new();
+    for width in sweep_widths(personas) {
+        let mut at_width = Vec::with_capacity(conc_n * width);
+        for i in 0..conc_n {
+            app.rotate_client_circuits().await?;
+            // One task per fetch, as a daemon's scheduler would issue them;
+            // joined in order so the round's observations land together.
+            let tasks: Vec<_> = (0..width)
+                .map(|p| {
+                    let app = Arc::clone(&app);
+                    tokio::spawn(async move { app.timed_fetch(p).await })
+                })
+                .collect();
+            for t in tasks {
+                at_width.push(t.await?);
+            }
+            if (i + 1) % 10 == 0 {
+                println!("  width {width}: round {}/{conc_n}", i + 1);
+            }
         }
+        append_rows(&mut out, &format!("conc{width}"), &at_width);
+        report(&format!("{width} in flight, cold client"), &at_width);
+        sweep.push(SweepPoint {
+            width,
+            observations: at_width,
+        });
     }
-    append_rows(&mut out, "concurrent", &conc);
-    report("2 personas concurrent, cold client", &conc);
 
     // --- Arm 4: the dispersion soak. Circuit-latency dispersion is the
     // load-bearing parameter (§8.3) and it is *time-varying*, so a one-hour
@@ -237,6 +393,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         app.refused_total()
     );
 
+    // The two pin inputs this run exists to produce, last so they are what
+    // the operator sees at the bottom of the log.
+    report_churn(&sweep);
+    report_l(&cold_summary);
+
+    let app = Arc::try_unwrap(app).map_err(|_| "a fetch task still holds the apparatus")?;
     app.shutdown().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sweep_widths;
+
+    #[test]
+    fn sweep_visits_powers_of_two_and_the_top() {
+        assert_eq!(sweep_widths(1), vec![1]);
+        assert_eq!(sweep_widths(4), vec![1, 2, 4]);
+        // A non-power-of-two persona count is still visited at full width,
+        // or the sweep would never measure the apparatus it brought up.
+        assert_eq!(sweep_widths(6), vec![1, 2, 4, 6]);
+        assert_eq!(sweep_widths(8), vec![1, 2, 4, 8]);
+    }
 }
