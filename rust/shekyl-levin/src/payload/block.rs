@@ -15,14 +15,18 @@ use super::PortableMap;
 /// `config::ARCHIVAL_ATTESTATION_WITNESS_MAX_BYTES`
 /// (`src/cryptonote_config.h`) / `shekyl-archival-retention::MAX_ATTESTATION_WITNESS_BYTES`.
 ///
-/// Formula: `count(8) + 256 * 3385` (`PQC_HYBRID_SINGLE_SIG_LEN` /
-/// `HybridSignature::CANONICAL_LEN`). This crate does **not** take
-/// `shekyl-archival-retention` as a production dependency (that stack is
-/// heavier than a framing crate). The numeric identity is pinned below and
-/// in `tests/notify_kats.rs`.
-pub const ATTESTATION_WITNESS_MAX_BYTES: usize = 8 + 256 * 3385;
+/// Formula: `count(8) + 256 * (nonce(32) + anchor_height(8) + 3385)` —
+/// `PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN` plus `PQC_HYBRID_SINGLE_SIG_LEN`
+/// / `HybridSignature::CANONICAL_LEN` per pass entry (`SF-D8`, 2026-09-13:
+/// the requester-random nonce and the anchor height both ride the witness;
+/// the anchor hash does not — the verifier reads it from its own chain).
+/// This crate does **not** take `shekyl-archival-retention` as a production
+/// dependency (that stack is heavier than a framing crate). The numeric
+/// identity is pinned below, and `tests/notify_kats.rs` asserts it against
+/// the retention crate's own constant so a move there fails here.
+pub const ATTESTATION_WITNESS_MAX_BYTES: usize = 8 + 256 * (32 + 8 + 3385);
 
-const _: () = assert!(ATTESTATION_WITNESS_MAX_BYTES == 866_568);
+const _: () = assert!(ATTESTATION_WITNESS_MAX_BYTES == 876_808);
 
 /// `cryptonote::tx_blob_entry`.
 #[derive(Debug, Clone, PartialEq, Eq)]

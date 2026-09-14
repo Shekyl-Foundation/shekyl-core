@@ -1819,21 +1819,31 @@ struct shekyl_archival_pid_pubkey {
 };
 
 /// Consensus context for shekyl_archival_verify_attestation, filled after C++'s LMDB reads.
-/// cb_out_key is the coinbase vout[0] output pubkey the nonce binds (consensus rule);
-/// cb_out_key_readable == 0 means C++ could not read it (-> ERR_CBKEY_UNREADABLE, never garbage).
 /// headers is the RAW 49-byte-record tx_extra blob — Rust splits and parses it;
 /// headers_readable == 0 means C++ could not parse the coinbase tx_extra at all
 /// (-> ERR_HEADERS_UNREADABLE, never misread as the committed empty set).
-/// prev_block_hash is block_hash(h-1) -- the nonce's anchor term, replacing the deleted `r`.
-/// It must be the VALIDATED predecessor, not prev_id as supplied: an unvalidated header field is
-/// producer-chosen, which is the property `r` was deleted for having. All-zeros is refused
-/// (-> ERR_PREVHASH_UNPOPULATED); there is deliberately NO _readable flag, because a verifier
-/// holding a block has parsed its header, so such an arm could never legitimately fire.
+/// predecessor_height is h — the VALIDATED height of the block this block connects to (main
+/// chain: the current top height; alt chain: the alt parent's height), never a header-claimed
+/// value: an unvalidated header field is producer-chosen. SF-D8 (ARCHIVAL_SHARD_FETCH.md) binds
+/// every pass countersignature to `nonce || anchor_height || block_hash(anchor_height) ||
+/// shard_id`, where the record carries anchor_height and admission accepts it inside the window
+/// `[h − depth − L, h − depth]` (depth = archival_reorg_depth_blocks, L =
+/// archival_attestation_anchor_lag_blocks). C++ never computes that window: it asks
+/// shekyl_archival_pass_anchor_window(h) for `(first, len)` and fills anchor_hashes with the
+/// CONNECTING chain's block hash at each height `first + i` — main chain, or the alt chain above
+/// the fork point — so a block validated on an alt chain sees that chain's anchors. Exactly `len`
+/// entries at or above the threshold; exactly 0 (and a null ptr) when step 0 writes `(0, 0)`
+/// (predecessor below depth + L). Any other shape is ERR_MALFORMED_ANCHOR_TABLE on EVERY block,
+/// records or not, so a sizing mistake is loud on the first block rather than the first pass.
+/// There is NO unpopulated sentinel: 0 is block 1's real predecessor height, and a forgotten
+/// field fails closed (its implied window holds the wrong hashes or does not exist).
+/// Mirrors the Rust `#[repr(C)]` struct in shekyl-ffi/src/archival_ffi/attestation.rs;
+/// tests/unit_tests/archival_attestation_verify.cpp marshals the shared v2 fixture through both.
 struct shekyl_archival_attestation_verify_ctx {
     uint8_t attestation_root[32];
-    uint8_t cb_out_key[32];
-    uint8_t prev_block_hash[32];
-    uint8_t cb_out_key_readable;
+    uint64_t predecessor_height;
+    const uint8_t (*anchor_hashes_ptr)[32];
+    size_t anchor_hashes_len;
     uint8_t headers_readable;
     const uint8_t* headers_ptr;
     size_t headers_len;
@@ -1849,11 +1859,25 @@ struct shekyl_archival_attestation_verify_ctx {
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ROOT_MISMATCH      5
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_COUNTERSIG_INVALID 6
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT        7
-#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_CBKEY_UNREADABLE   8
+// 8 (ERR_CBKEY_UNREADABLE) RETIRED by SF-D8 (2026-09-13) — number never reused; see the Rust table.
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH 9
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_PUBKEY   10
 #define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_HEADERS_UNREADABLE 11
-#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PREVHASH_UNPOPULATED 12
+// 12 (ERR_PREVHASH_UNPOPULATED) RETIRED by SF-D8 (2026-09-13) — number never reused.
+/// anchor_hashes has the wrong shape for predecessor_height (marshaling drift, never forgery).
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE 13
+/// A pass record's anchor_height lies outside `[h − depth − L, h − depth]` (stale or future anchor).
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW 14
+/// A pass record on a block whose predecessor is below the anchor threshold (no window exists).
+#define SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BELOW_ANCHOR_THRESHOLD 15
+
+/// Step 0: the table shape C++ must fill. Always returns OK (or ERR_NULL_PTR): writes
+/// `(first, L + 1)` when a window exists, or `(0, 0)` below depth + L. ERR_BELOW_ANCHOR_THRESHOLD
+/// is a verify verdict only. Depth and L come from the Rust crate; C++ holds no copy.
+uint8_t shekyl_archival_pass_anchor_window(
+    uint64_t predecessor_height,
+    uint64_t* out_first_height,
+    size_t* out_len);
 
 /// Step 1: name the distinct pass p_ids in a block's attestation headers, so C++ knows which
 /// archival-bond pubkeys to read before it can build the ctx pairs above. Parses the same raw
@@ -1870,8 +1894,8 @@ uint8_t shekyl_archival_attestation_pass_p_ids(
     size_t* out_len);
 
 /// Verify a block's attestation set against its mined attestation_root. `witness` is the opaque
-/// `r || count || pass-signatures` blob (connect.attestation_witness); an empty blob is the
-/// zero-record set. Returns a SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_* code; reject on any non-OK.
+/// `count || (nonce || anchor_height || signature)*` blob (connect.attestation_witness); an empty
+/// blob is the zero-record set. Returns a SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_* code; reject on any non-OK.
 uint8_t shekyl_archival_verify_attestation(
     const uint8_t* witness_ptr,
     size_t witness_len,

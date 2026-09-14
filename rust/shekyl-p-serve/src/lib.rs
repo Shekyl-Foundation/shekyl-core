@@ -9,15 +9,13 @@
 //! A bonded persona `P` answers shard reads over its onion rendezvous: a
 //! witness pulls the **entire shard** and verifies the bytes against the
 //! chain-committed sub-root `R_k` (§2) — the response is
-//! **self-authenticating by content**, which is why this crate signs
-//! nothing. The two inputs a countersignature would need are the session
-//! nonce construction and the signing key (attestation-leg-is-onion-key vs
-//! sibling + proof-of-possession). The **nonce is no longer a fork** —
-//! `RF-D3`/`RF-D5` settled it as
-//! `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`, with `r` replaced rather
-//! than removed — while the signing key remains open. Either way the
-//! pass-record axis does not land in this loop: this crate is transport,
-//! and it still signs nothing.
+//! **self-authenticating by content**. As landed, this crate signs nothing.
+//!
+//! **RULED 2026-09-13, NOT LANDED** (`ARCHIVAL_SHARD_FETCH.md` `SF-D5`/`SF-D8`/
+//! `SF-D13`, §9.1 step (a)): the response will countersign the decoded header
+//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` with
+//! `BondPost.hybrid_public_key` via a signer callback. The verifier is already
+//! landed (step (a0)). Until (a) lands, this crate signs nothing.
 //!
 //! # This crate's place in the §9.5 item-3 arc
 //!
