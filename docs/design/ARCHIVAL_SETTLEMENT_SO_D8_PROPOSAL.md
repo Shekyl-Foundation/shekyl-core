@@ -11,6 +11,12 @@ site were written for this round (Slices A and B of the 2026-09-13 brief were
 authorized; Slice C — implementation — was not, and §8 is its plan, not its
 work).
 
+> **Line-number era.** `blockchain.cpp:NNNN` citations in this document are
+> pinned at `dev@37accf6f` (the brief's read); `dev` has since shed ~195 lines
+> above the serve-credit arm, so today's numbers are lower. Identifiers
+> (`h_close`, `challenge_seal_on_chain`, `ctx.settlement_epoch`,
+> `shekyl_archival_verify_serve_credit_vin`) are stable; re-pin at Slice C.
+
 > **F5 (§1.5) → `PL-D1`, CLOSED by `PL-D3` — PR #745
 > (`feat/pl-d3-pedersen-leaf-commitment`), ratified by Rick 2026-09-14.** The
 > finding this proposal filed as `F5` on 2026-09-13 — every FCMP++ spend
@@ -89,11 +95,13 @@ implementation work is under either.
 | 2 | Beacon fire height `challenge_fire_height(h_open, h_close, block_hash_at_seal, P, s, E)` from `ctx.block_hash_at_seal` | `blockchain.cpp:5305`, `serve_credit.rs:190–198`, gate at `:208–209` | **Yes**, and it **dies with the beacon** under derived assignment (§3). |
 | 3 | Kept header is `p_id ‖ shard_id ‖ settlement_epoch ‖ Ed25519 countersig` — no issuing height, no claimed block | `cryptonote_config.h:424–426` (`1 + 32 + 10 + 10 + 64 = 117`), `shekyl-wire/src/transaction.rs:184,:197` | **Yes.** There is no field in which a record names an issuing `h`. |
 | 4 | `settlement_epoch` in that header is **written by the prover** and parsed by C++ at `get_archival_serve_credit_key` | `blockchain.cpp:5124` | **Yes** — and this is the row the first cut missed: **nothing in rows 1–3 ties `E` to the including block's epoch.** |
-| 5 | The only live rule relating `E` to the block's height: `if (current_height > h_close(E)) reject "past credit deadline"` | `blockchain.cpp:5186–5190` (C++, reachable, per-epoch); duplicated Rust-side as `ERR_CREDIT_DEADLINE`, `serve_credit.rs:211–212`, unreachable only because C++ refuses first | **Yes.** This is *exactly* the gate §12 named. |
+| 5 | The live rules relating `E` to the block's height are **two bounds on `E`**: `if (current_height > h_close(E)) reject "past credit deadline"` (upper bound on height → lower bound on `E`), and `challenge_seal_on_chain(h_open(E), current_height)`, i.e. `E·N + 1 < current_height` (upper bound on `E`; it exists so the seal read cannot throw `BLOCK_DNE` on an attacker-chosen future `E`) | `blockchain.cpp:5186–5190` and `:5201` (C++, reachable, per-epoch); the first duplicated Rust-side as `ERR_CREDIT_DEADLINE`, `serve_credit.rs:211–212`, unreachable only because C++ refuses first | **Yes.** The first is *exactly* the gate §12 named; the second is the one the first cut omitted (Copilot, PR #747). Together they admit `E·N + 2 ≤ current_height ≤ (E+1)·N`. |
 
 So: a record for `(P, s, E)` **can** ride a block of `E+1` — its leaf index is
 bound to *that* block's predecessor, its `E` is whatever the prover wrote — and
-is refused today by row 5 alone. `SO-D8` §12 stands as written.
+row 5 refuses it **except at one height**: `current_height = h_close(E) =
+(E+1)·N`, the first block of `E+1`, where `>` is false and the record is
+admitted with `E ≠ epoch(current_height)`. `SO-D8` §12 stands as written.
 
 ### `SO-D9` — `ERR_EPOCH_MISMATCH` is a check that cannot fire (filed as its own finding)
 
@@ -127,14 +135,30 @@ therefore **Rick's**:
 >
 > Two facts about the site, read for the implementation, not assumed:
 >
-> - **Ordering.** The C++ `h_close` gate (`blockchain.cpp:5186`) runs *before*
->   the FFI call that evaluates `EPOCH_MISMATCH` (`:5315`). So with (i) landed
->   and nothing else changed, a record carrying `E` in a block of `E+1` is
->   refused by `h_close` first, and `EPOCH_MISMATCH` is the live refusal for a
->   header naming a **future** epoch (`E+1` in a block of `E`), which today
->   reaches the FFI. The two together are the explicit rule; which one a given
->   test observes depends on this ordering, and the cutover that deletes the
->   beacon gates must not re-order them by accident.
+> - **Ordering — corrected 2026-09-14 (Copilot, PR #747).** *Superseded text:
+>   "`EPOCH_MISMATCH` is the live refusal for a header naming a future epoch,
+>   which today reaches the FFI."* It does not. **Two** C++ gates run before
+>   the FFI call that evaluates `EPOCH_MISMATCH` (`:5315`): `h_close`
+>   (`:5188`) refuses `current_height > (E+1)·N`, and `challenge_seal_on_chain`
+>   (`:5201`) refuses `E·N + 1 ≥ current_height` — a future-epoch header has
+>   `h_open` above the tip and dies there (F1 row 5). What survives to the FFI
+>   is `E·N + 2 ≤ current_height ≤ (E+1)·N`, so the **only** header that reaches
+>   `EPOCH_MISMATCH` with `E ≠ epoch(current_height)` is the boundary case
+>   `current_height = (E+1)·N`: a record for `E` in the first block of `E+1`
+>   — the straddler itself. Consequences: (a) with (i) landed on today's path
+>   and nothing else changed, that one block flips from **admitted** (the
+>   tautology passes) to **refused**; (b) under R-B the operand is the
+>   validated issuing block `h` (next bullet) and the same record is admitted
+>   again when `epoch(h) = E`, so (i)-alone is a one-block behaviour change
+>   the cutover reverses — build them together, or accept the interim flip
+>   knowingly (Q14); (c) the test for (i) is an **isolated verifier test**
+>   (`shekyl-ffi/src/archival_ffi/tests.rs` already drives
+>   `shekyl_archival_verify_serve_credit_vin` directly) with
+>   `ctx.settlement_epoch` derived from height and a header that disagrees —
+>   not a full-path future-epoch vector, which the seal gate would refuse
+>   first and mis-attribute. The cutover that deletes the beacon gates
+>   (§2.1 item 1) removes both pre-FFI bounds; after it, `EPOCH_MISMATCH` is
+>   the *only* rule relating `E` to a height, which is why it must exist.
 > - **What is ruled is the site, not the value's provenance.** Under R-A the
 >   value at `:5304` is `settlement_epoch_at_height(current_height)`. **Under
 >   R-B (ratified, §2) the same site computes the *issuing* block's epoch,
@@ -145,8 +169,10 @@ therefore **Rick's**:
 >   first time, because `h` is validated rather than copied from the record.
 >
 > **Implementation status: NOT built.** One C++ line at `blockchain.cpp:5304`
-> plus a test that a future-epoch header is refused with `EPOCH_MISMATCH` and a
-> stale-epoch header with the deadline gate. It is a consensus tightening on
+> plus the isolated verifier test named under "Ordering" (a header disagreeing
+> with a height-derived `ctx.settlement_epoch` is refused with
+> `EPOCH_MISMATCH`); the full-path vectors remain: stale header → deadline
+> gate, future header → seal gate. It is a consensus tightening on
 > the admission path and was not in the 2026-09-13 brief's authorized slices;
 > it is ready to build on authorization, and the FOLLOWUPS row carries it.
 
@@ -301,7 +327,16 @@ successor. The reconciliation this proposal owes under `PL` §12 ruling 11:
 
 - **The `FOLLOWUPS.md` line is withdrawn** (this branch, 2026-09-14). The one
   line of record is the `PL-` round's `PL-D4` entry under `Target: V4`, landing
-  with #745. Nothing `SO-` owns is on it.
+  with #745. Nothing `SO-` owns is on it. The `PL-D1` row on `dev`
+  (`FOLLOWUPS.md:17`) still carries *"Also filed as `F5` on
+  `docs/so-d8-proposal` (branch-only); whichever lands second reconciles"* —
+  that sentence is **removed by #745 itself**, which deletes the whole `PL-D1`
+  row when `PL-D3` lands (its `FOLLOWUPS.md` diff is `−4/+1`; the row's own
+  text says *"this item closes when it lands"*). This branch does **not** edit
+  that row: it is the `PL-` lane's (rule 94 §6), and a modify here against a
+  delete there is a conflict for whichever PR lands second. Until #745 merges
+  the cross-reference is stale-but-harmless (it points at a line that no
+  longer exists); after it, gone.
 - **What `PL-D3` does, as ratified** (`FCMP_SPEND_LINKABILITY.md` §6.2, read on
   `feat/pl-d3-pedersen-leaf-commitment` 2026-09-14): the leaf's 4th scalar
   becomes `CM.x`, `CM = k·G_k + r·G_r` (two NUMS generators), with `k = H_ℓ(hybrid_pk)` a cSHAKE256
@@ -725,7 +760,7 @@ marshaling shim that dies with the daemon.
 | **Batching (pending Q9)** | One `serve_credit` tx per issuing block per witness, carrying all of `h`'s records as vins; the witness pk + sig once, in the tx's prunable region, covering a preimage that binds every vin. Admission semantics per Q9(b). |
 | **Cost** | One epoch replay per settled epoch if the cache is not resident (1.09 s here; Pi-4 owed), inside the slash pass, off the admission path. Admission: `O(1)` ring lookups + one hybrid verify per **batch** (or per record unbatched — 97 ML-DSA-65 verifies per block is the unbatched admission cost and is itself a reason to batch). Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
 | **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk (`db_lmdb.cpp:5870–5890`) must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read at `:5880` is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
-| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*; red edit: evaluate `SO-D9` at `h_incl` instead of `h`. **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. |
+| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused with `EPOCH_MISMATCH`. Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. |
 | **`CEN-L8` promotion path** | The census row's settlement clause names *"an unwired writer"* and puts settlement at epoch close; `SO-D7` puts it in the slash pass, and §5 now puts the emission gather there too. Path: (1) ruling lands here → (2) census row re-worded: two hooks per boundary stay (close + settlement), but the close hook no longer gathers emission → (3) writer + gather call sites land with the gates → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. |
 | **What changes at the same cutover** | **Added:** `SO-D9` (i) at `h`; membership gate; deadline re-bound to `W₂`; witness authentication; `h` on the kept wire; new coinbase tag; dedup exact-get on `(P,s,E,h)`. **Deleted:** `challenge_fire_height` path, `ERR_FIRE_NOT_REACHED`, `ctx.block_hash_at_seal`; `archival_baseline_observed_at_epoch` as the interim `issued`; the `h_close` bound as a deadline. **Moved:** emission gather to the slash pass. **Superseded in-line (rule 23):** `PC-D2`; the `constants.rs:59` doc string becomes true and stays. |
 
@@ -797,7 +832,9 @@ it.
 
 Seven were posed in the first cut; four answered in the 2026-09-13 review,
 `SO-D9` ruled, and R-B ratified the same day, which resolves 1, 2 and 7. Four
-new ones arise from R-B. **Open: 3, 8, 9, 10, 11.**
+new ones arise from R-B; Q11 is resolved by the `PL-` round and #745; Q12–Q14
+were opened in the 2026-09-14 reconciliation and review. **Open: 3, 8, 9, 10,
+12, 13, 14.**
 
 1. **RATIFIED — R-B.** The herd is R-A's, not R-B's (F4). Recorded §2.
 2. **RESOLVED by 1.** `CHALLENGE_RESPONSE_BLOCKS` becomes the per-challenge
@@ -855,3 +892,14 @@ new ones arise from R-B. **Open: 3, 8, 9, 10, 11.**
     rather than discovered when the first record citing `h` arrives and
     cannot be verified. Proposal: yes, same PR as the tag. Cost: one CEN row
     and one more arm in the adapter; nothing in C++ beyond the call.
+14. **OPEN — (`SO-D9` (i) sequencing, surfaced by review of #747)** With the
+    two pre-FFI bounds in place (§1, "Ordering"), (i) built alone changes the
+    verdict on exactly one block per epoch: a record for `E` in block
+    `(E+1)·N` goes from admitted to refused, and R-B's `epoch(h)` operand
+    admits it again. Rule one of: (a) land (i) **with** the R-B cutover, as
+    the same site (`:5304`) with its final operand — no interim flip, and the
+    isolated verifier test covers the check either way; or (b) land (i) now
+    on `current_height`, accept the one-block refusal as the interim rule
+    (it is the stricter reading), and re-target the operand in the cutover.
+    Proposal: **(a)** — the check's reason to exist is the post-cutover path,
+    and (b) writes a consensus change that the next PR reverses.
