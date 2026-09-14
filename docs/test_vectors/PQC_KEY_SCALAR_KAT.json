@@ -1,5 +1,5 @@
 {
-  "description": "PL-D3 pins for k = H_l(hybrid_pk) (cSHAKE256 under shekyl/pqc-leaf-key-v1, 64-byte read reduced mod the Ed25519 group order) and K = k*G_k. Inputs: the degenerate lengths (empty, 1 byte, 32 bytes) and one real derived hybrid public key. Consumed by pqc_key_scalar_known_answer_vectors in rust/shekyl-crypto-pq/src/derivation.rs, which asserts both consensus entry points (pqc_key_scalar and the shekyl-fcmp PqcKeyScalar wrapper). Frozen: never regenerated without a decision-log entry (SHEKYL_PINNED_REGEN_DECISION).",
+  "description": "PL-D3 pins for k = H_l(hybrid_pk) (cSHAKE256 under shekyl/pqc-leaf-key-v1, 64-byte read reduced mod the Ed25519 group order) and K = k*G_k. Inputs: the degenerate lengths (empty, 1 byte, 32 bytes) and one real derived hybrid public key. Consumed by pqc_key_scalar_known_answer_vectors in rust/shekyl-crypto-pq/src/leaf_commitment.rs, which asserts both consensus entry points (pqc_key_scalar and the shekyl-fcmp PqcKeyScalar wrapper). Frozen: never regenerated without a decision-log entry (SHEKYL_PINNED_REGEN_DECISION).",
   "regeneration_decision": "2026-09-14 PL-D3 leaf commitment: 0x07 = CM ‖ record, CM = k·G_k + r·J opened in-circuit; leaf-hash vectors retired and re-pinned",
   "vectors": [
     {

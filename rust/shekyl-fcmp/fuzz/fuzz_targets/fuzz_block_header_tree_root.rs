@@ -5,8 +5,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use shekyl_fcmp::proof::{prove, verify, KeyImage, ProveInput};
 use shekyl_fcmp::leaf::PqcKeyScalar;
+use shekyl_fcmp::proof::{prove, verify, KeyImage, ProveInput};
 
 fuzz_target!(|data: &[u8]| {
     // Feed block headers with fuzz-supplied tree roots and signable hashes to

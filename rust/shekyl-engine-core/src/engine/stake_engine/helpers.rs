@@ -50,7 +50,7 @@ pub(crate) struct ConstructedVouts {
     pub(crate) output_keys: Vec<[u8; 32]>,
     pub(crate) view_tags: Vec<Option<u8>>,
     pub(crate) kem_blobs: Vec<Vec<u8>>,
-    pub(crate) leaf_hash_blob: Vec<u8>,
+    pub(crate) leaf_entry_blob: Vec<u8>,
 }
 
 /// Construct `amounts` as vouts to `P`'s base address. `capture` sees each
@@ -69,7 +69,7 @@ pub(crate) fn construct_vouts_to_base(
         output_keys: Vec::with_capacity(amounts.len()),
         view_tags: Vec::with_capacity(amounts.len()),
         kem_blobs: Vec::with_capacity(amounts.len()),
-        leaf_hash_blob: Vec::with_capacity(32 * amounts.len()),
+        leaf_entry_blob: Vec::with_capacity(32 * amounts.len()),
     };
     for (idx, &amount) in amounts.iter().enumerate() {
         let constructed = construct_output(
@@ -87,7 +87,7 @@ pub(crate) fn construct_vouts_to_base(
         kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
         vouts.kem_blobs.push(kem_blob);
         vouts
-            .leaf_hash_blob
+            .leaf_entry_blob
             .extend_from_slice(&constructed.pqc_leaf.entry_bytes());
         vouts.output_keys.push(constructed.output_key);
         vouts.view_tags.push(Some(constructed.view_tag_prefilter));

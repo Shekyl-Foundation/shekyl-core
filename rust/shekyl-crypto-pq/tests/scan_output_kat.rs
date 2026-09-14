@@ -212,25 +212,8 @@ fn scan_output_view_tag_kat() {
 fn gen_scan_output_kat() {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
 
-    const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
-    let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
-    let cited = decision.len() > 11
-        && decision.as_bytes()[..10]
-            .iter()
-            .enumerate()
-            .all(|(i, b)| match i {
-                4 | 7 => *b == b'-',
-                _ => b.is_ascii_digit(),
-            })
-        && decision.as_bytes()[10] == b' ';
-    assert!(
-        cited,
-        "refusing to regenerate PQC_SCAN_OUTPUT_KAT.json: set \
-         {PINNED_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
-         docs/V3_WALLET_DECISION_LOG.md entry that authorizes moving it (got: \
-         {decision:?}). Moving a pinned vector is a format decision, not a test \
-         fix — see 50-testing.mdc."
-    );
+    let decision =
+        shekyl_crypto_pq::test_support::regen_decision_or_refuse("PQC_SCAN_OUTPUT_KAT.json");
     eprintln!("regenerating the scan-output KAT under decision: {decision}");
 
     struct Spec {

@@ -7,7 +7,7 @@
   },
   "constants": {
     "HYBRID_KEM_CT_BYTES": 1120,
-    "PQC_LEAF_HASH_BYTES": 64
+    "PQC_LEAF_ENTRY_LEN": 64
   },
   "vectors": [
     {

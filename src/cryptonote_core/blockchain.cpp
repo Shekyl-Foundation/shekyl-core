@@ -3789,7 +3789,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           memcpy(key_images_flat.data() + j * 32, &in_to_key.k_image, 32);
           memcpy(pseudo_outs_flat.data() + j * 32, rv.p.pseudoOuts[j].bytes, 32);
           const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
-          if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
+          if (!shekyl_fcmp_pqc_key_scalar(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
           {
             MERROR_VER("Archival bond-post tx pqc key scalar failed for spend input " << i);
             tvc.m_verifivation_failed = true;
@@ -4098,7 +4098,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             memcpy(key_images_flat.data() + j * 32, &in_to_key.k_image, 32);
             memcpy(pseudo_outs_flat.data() + j * 32, rv.p.pseudoOuts[j].bytes, 32);
             const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
-            if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
+            if (!shekyl_fcmp_pqc_key_scalar(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
             {
               MERROR_VER("Archival emission tx pqc key scalar failed for fee input " << i);
               tvc.m_verifivation_failed = true;
@@ -4218,7 +4218,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
         for (size_t i = 0; i < num_inputs; ++i)
         {
           const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
-          if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + i * 32))
+          if (!shekyl_fcmp_pqc_key_scalar(hpk.data(), hpk.size(), pqc_hashes_flat.data() + i * 32))
           {
             MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc key scalar failed for input " << i);
             tvc.m_verifivation_failed = true;
@@ -4284,7 +4284,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   // was vacuous: `expected_scheme` was derived from `tx.pqc_auths[0]` itself
   // (self-referential), and per-output scheme binding is the in-circuit
   // opening of the spent leaf's PQC commitment to the revealed key's point
-  // (PL-D3; the per-input `k` from `shekyl_fcmp_pqc_leaf_hash` above), not
+  // (PL-D3; the per-input `k` from `shekyl_fcmp_pqc_key_scalar` above), not
   // this check. Its *effect* was to make a tx that spends a solo (scheme 1)
   // output and a multisig (scheme 2) output together unrepresentable — under
   // FCMP++ separate txs are unlinkable, so co-spending is the only proof of

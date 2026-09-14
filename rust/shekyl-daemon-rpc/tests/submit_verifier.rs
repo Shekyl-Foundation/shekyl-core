@@ -324,7 +324,7 @@ fn build_funding_setup() -> FundingSetup {
         };
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(blob.as_slice()),
+            leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
         client

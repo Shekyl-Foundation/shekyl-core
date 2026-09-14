@@ -23,11 +23,11 @@
   OpenAPI `0.5.0`), with the
   signer's own refusal before proving kept as defence in depth
   (`TxBuilderError::PqcLeafMismatch`, FFI −32). The emission vin drops
-  `pqc_pk_hash` (the
-  binding is the proof), `VerifyError` splits `PqcKeyPointInvalid` (3) from
-  `PqcKeyCountMismatch` (9), the multisig witness header is 288 B, and the
-  genesis transactions, block-0 ids, curve-tree fixtures, proof-size and
-  weight tables (the dust boundary's marginal input weight 9136 → 9008),
+  `pqc_pk_hash` (the binding is the proof); `VerifyError` gains
+  `PqcKeyCountMismatch` (9) and retires code 3 (`K` is computed directly); the FFI helpers
+  are renamed for what they now return (`shekyl_derive_pqc_leaf_hash` →
+  `shekyl_derive_pqc_leaf_entry`, `shekyl_fcmp_pqc_leaf_hash` →
+  `shekyl_fcmp_pqc_key_scalar`); the wallet's curve-tree replica surfaces an undecodable leaf point as an error instead of skipping that leaf; the multisig witness header is 288 B; and the genesis transactions, block-0 ids, curve-tree fixtures, proof-size and weight tables (the dust boundary's marginal input weight 9136 → 9008),
   emission/serve-credit fixtures and the leaf KATs are
   re-pinned; LMDB `VERSION 14`, wallet curve-tree store `SCHEMA_VERSION 5`
   (pre-genesis: delete and resync). Fix-falsifier
@@ -36,12 +36,12 @@
   ([`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §6.2,
   §9, §12; decision log 2026-09-14).
 
-- **Every FCMP++ spend currently identifies the output it spends (`PL-D1`),
-  and the documents that claimed otherwise are corrected at source.** The
-  input's revealed `pqc_auths[i].hybrid_public_key` hashes to the per-output
-  value published in `tx_extra` `0x07` at creation, and consensus hands that
-  hash to the verifier as a public input — one hash and one lookup, no proof
-  inspection. Amounts and destinations stay hidden; the spend graph does not.
+- **Every FCMP++ spend identified the output it spent (`PL-D1`; closed
+  pre-genesis by the `PL-D3` entry above), and the documents that claimed
+  otherwise are corrected at source.** The input's revealed
+  `pqc_auths[i].hybrid_public_key` hashed to the per-output value published
+  in `tx_extra` `0x07` at creation, and consensus handed that hash to the
+  verifier as a public input — one hash, one lookup, no proof inspection. Amounts and destinations stay hidden; the spend graph, until `PL-D3`, did not.
   Pre-genesis; nothing has leaked. Design round 1, ratified by Rick on
   2026-09-14 (the implementation is the `PL-D3` entry above; the fix is a
   Pedersen commitment to the key in the

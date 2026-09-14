@@ -120,7 +120,8 @@ fn reconstruct_roots(blocks: &[Block]) -> Vec<[u8; 32]> {
             is_miner: true,
             outputs: &blk.outputs,
         }];
-        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries);
+        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries)
+            .expect("KAT chain has no bad published point");
         let drained_through = blk.height.saturating_sub(1);
         let scalars = assemble_leaf_stream(&entries, drained_through);
         roots.push(root_from_scalars(&scalars));
@@ -275,7 +276,7 @@ fn decode_client_chain(chain: &Value) -> Vec<ClientBlock> {
 fn ingest_client_block(client: &mut CurveTreeClient, blk: &ClientBlock) {
     let txs = [TxLeafInputs {
         is_miner: true,
-        leaf_hash_blob: Some(&blk.blob),
+        leaf_entry_blob: Some(&blk.blob),
         outputs: &blk.outputs,
     }];
     client
@@ -307,7 +308,7 @@ fn client_reconstructs_consensus_root_at_every_height() {
         for blk in &blocks {
             let txs = [TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blk.blob),
+                leaf_entry_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
             client
@@ -385,7 +386,7 @@ fn client_path_matches_recon_path() {
         for (blk, recon_root) in client_blocks.iter().zip(&recon) {
             let txs = [TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blk.blob),
+                leaf_entry_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
             client

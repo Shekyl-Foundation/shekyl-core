@@ -45,7 +45,7 @@
 #define TX_EXTRA_TAG_ADDITIONAL_PUBKEYS     0x04
 #define TX_EXTRA_TAG_PQC_OWNERSHIP          0x05
 #define TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT     0x06
-#define TX_EXTRA_TAG_PQC_LEAF_HASHES        0x07
+#define TX_EXTRA_TAG_PQC_LEAF_ENTRIES       0x07
 #define TX_EXTRA_TAG_MULTISIG_MIGRATION     0x08
 #define TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS     0x09
 #define TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS 0x0A
@@ -172,7 +172,7 @@ namespace cryptonote
   // (shekyl_tx_extra_pqc_field_shape); the record is checked by nothing live.
   static constexpr size_t PQC_LEAF_ENTRY_LEN = 64;
 
-  struct tx_extra_pqc_leaf_hashes
+  struct tx_extra_pqc_leaf_entries
   {
     std::string blob;
 
@@ -225,7 +225,7 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_additional_pub_keys, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_hashes, tx_extra_multisig_migration, tx_extra_pqc_view_tag_hints, tx_extra_pqc_spend_auth_pubkeys, tx_extra_archival_attestation> tx_extra_field;
+  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_additional_pub_keys, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_entries, tx_extra_multisig_migration, tx_extra_pqc_view_tag_hints, tx_extra_pqc_spend_auth_pubkeys, tx_extra_archival_attestation> tx_extra_field;
 }
 
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_padding, TX_EXTRA_TAG_PADDING);
@@ -234,7 +234,7 @@ VARIANT_TAG(binary_archive, cryptonote::tx_extra_nonce, TX_EXTRA_NONCE);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_additional_pub_keys, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_ownership, TX_EXTRA_TAG_PQC_OWNERSHIP);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_kem_ciphertext, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT);
-VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_leaf_hashes, TX_EXTRA_TAG_PQC_LEAF_HASHES);
+VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_leaf_entries, TX_EXTRA_TAG_PQC_LEAF_ENTRIES);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_multisig_migration, TX_EXTRA_TAG_MULTISIG_MIGRATION);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_view_tag_hints, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_spend_auth_pubkeys, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS);

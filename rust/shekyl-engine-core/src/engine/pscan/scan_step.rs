@@ -794,22 +794,22 @@ pub(crate) fn run_dual_extractor(
             for out in recovered.into_inner() {
                 // PL-D3 §6.2 (`FCMP_SPEND_LINKABILITY.md`): the scanner has
                 // compared the output's published `0x07` entry with the
-                // persona's own derivation. A received-but-unspendable output
-                // can never be proven, so it is neither bond funding nor a
-                // funding record — counting it would fail at post assembly
-                // with the money already promised. Named here (rule 82: the
-                // failure is loud, with the sender's transaction) and skipped;
-                // the primary-wallet path persists the same verdict on its row.
-                if let Some(reason) = out.unspendable() {
-                    let wo = out.wallet_output();
+                // persona's own derivation; an unspendable output is neither
+                // bond funding nor a funding record — counting it would fail
+                // at post assembly with the money already promised. Loud but
+                // anonymous (the D-A1 / rule-82 reconciliation): D-A1 redacts
+                // the persona↔funding-tx association (`FundingOutputMatch`'s
+                // redacted `Debug`), and any sender can trip this branch
+                // against a suspected persona — a slot or tx hash here would
+                // hand the log channel exactly what D-A1 withholds. Rule 82
+                // is satisfied at the wallet surface (ledger row + CLI name
+                // the sending transaction), so the log names neither.
+                if out.unspendable().is_some() {
                     tracing::warn!(
                         target: "shekyl_engine_core::pscan",
-                        p_slot = *slot,
-                        tx_hash = %hex::encode(wo.transaction()),
-                        vout = wo.index_in_transaction(),
-                        ?reason,
-                        "persona output received but unspendable: its 0x07 leaf entry \
-                         does not open to this persona's derivation; not counted as funding"
+                        "a persona-scan output failed the PL-D3 leaf-commitment check \
+                         and was quarantined (received but unspendable, not counted as \
+                         funding); the wallet ledger names the sending transaction"
                     );
                     continue;
                 }

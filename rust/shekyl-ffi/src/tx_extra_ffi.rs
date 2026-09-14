@@ -49,6 +49,19 @@ pub const SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH: i32 = 9;
 /// A `0x07` entry's leaf commitment is not a canonical prime-order point
 /// (`PL-D3` content rule).
 pub const SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT: i32 = 10;
+/// The caller's `leaf_blob` disagrees with its declared `leaf_lens` (null
+/// with a nonzero length, or a byte count other than the single declared
+/// field's length). This is an FFI marshalling bug in the caller — a fact
+/// about the call, not a verdict about the transaction's content — and it is
+/// reported as such so the daemon never logs a content diagnosis (e.g. "leaf
+/// commitment is not a canonical prime-order point") for a C++-side bug.
+/// Fail-closed: the transaction is refused either way.
+pub const SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING: i32 = 11;
+
+/// The sentence written for [`SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING`].
+/// Owned here (not in `shekyl-wire`): the wire crate rules on transaction
+/// bytes; a blob/length disagreement never reaches it.
+const MARSHALLING_MSG: &str = "FFI marshalling: leaf blob length disagrees with declared lengths";
 
 /// Buffer size the caller must provide for the message, NUL included. The
 /// longest sentence this type produces is well under half of it; a message
@@ -68,7 +81,15 @@ fn code(err: PqcFieldShapeError) -> i32 {
         E::Duplicate { tag, .. } if tag == KEM => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_DUPLICATE,
         E::Duplicate { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE,
         E::Length { tag, .. } if tag == KEM => SHEKYL_TX_EXTRA_PQC_SHAPE_KEM_LENGTH,
-        E::Length { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH,
+        // `LeafBlobLength` is the content rule's own precondition
+        // (`check_pqc_leaf_entries` on a blob that is not a whole, non-zero
+        // number of 64-byte entries). Unreachable through this FFI — the
+        // shape rule has already pinned the single field to `64 · n_outputs`
+        // bytes and the marshalling check has pinned the handed-over blob to
+        // that declared length — but mapped to the length-family code
+        // (fail-closed) rather than dropped, so a future reordering can
+        // never turn it into an "OK".
+        E::Length { .. } | E::LeafBlobLength { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH,
         E::LeafPointInvalid { .. } => SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT,
     }
 }
@@ -80,7 +101,10 @@ fn code(err: PqcFieldShapeError) -> i32 {
 /// of the `0x07` field when the parser found exactly one (null with length 0
 /// otherwise); once the shape rule has admitted a single correctly-sized
 /// field, every entry's commitment point is checked
-/// ([`check_pqc_leaf_entries`], `PL-D3`).
+/// ([`check_pqc_leaf_entries`], `PL-D3`). A `leaf_blob` that disagrees with
+/// the declared `leaf_lens` (null with a nonzero length, or a different byte
+/// count) is refused with [`SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING`] —
+/// a caller bug, reported distinctly from any content verdict.
 ///
 /// On a non-conformant shape the error's sentence is written to `out_msg` as a
 /// NUL-terminated string (at most `out_msg_cap` bytes including the NUL,
@@ -117,21 +141,28 @@ pub unsafe extern "C" fn shekyl_tx_extra_pqc_field_shape(
         };
         (kem, leaf)
     };
-    let shape = check_pqc_field_shape(n_outputs, kem, leaf).and_then(|()| {
-        if leaf.len() != 1 {
-            // Only the `n_outputs == 0` arm admits no field; nothing to check.
-            return Ok(());
-        }
-        // SAFETY: caller contract on `leaf_blob` / `leaf_blob_len`.
-        let blob = unsafe { byte_slice(leaf_blob, leaf_blob_len) };
-        match blob {
-            Some(blob) if blob.len() == leaf[0] => check_pqc_leaf_entries(blob),
-            // The caller said one field of `leaf[0]` bytes but handed over
-            // something else: refuse as a bad entry, never as "conformant".
-            _ => Err(PqcFieldShapeError::LeafPointInvalid { index: 0 }),
-        }
-    });
-    match shape {
+    if let Err(err) = check_pqc_field_shape(n_outputs, kem, leaf) {
+        // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
+        unsafe { write_msg(out_msg, out_msg_cap, &err.to_string()) };
+        return code(err);
+    }
+    if leaf.len() != 1 {
+        // Only the `n_outputs == 0` arm admits no field; nothing to check.
+        return SHEKYL_TX_EXTRA_PQC_SHAPE_OK;
+    }
+    // SAFETY: caller contract on `leaf_blob` / `leaf_blob_len`.
+    let blob = unsafe { byte_slice(leaf_blob, leaf_blob_len) };
+    // The caller said one field of `leaf[0]` bytes but handed over something
+    // else (a null blob with a nonzero length, or a different byte count).
+    // That is a marshalling bug in the caller, not a fact about the
+    // transaction: refuse with the marshalling code — never "conformant",
+    // and never a content verdict the daemon would log as a bad entry.
+    let (Some(blob), true) = (blob, leaf_blob_len == leaf[0]) else {
+        // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
+        unsafe { write_msg(out_msg, out_msg_cap, MARSHALLING_MSG) };
+        return SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING;
+    };
+    match check_pqc_leaf_entries(blob) {
         Ok(()) => SHEKYL_TX_EXTRA_PQC_SHAPE_OK,
         Err(err) => {
             // SAFETY: caller contract on `out_msg` / `out_msg_cap`.
@@ -168,6 +199,27 @@ unsafe fn write_msg(out: *mut c_char, cap: usize, msg: &str) {
         std::ptr::copy_nonoverlapping(msg.as_ptr().cast::<c_char>(), out, n);
         *out.add(n) = 0;
     }
+}
+
+/// Write the conforming 64-byte `0x07` leaf entry
+/// ([`shekyl_wire::tx_extra::conforming_pqc_leaf_entry`]) to `out`: the
+/// compressed `PQC_LEAF_COMMITMENT_J` generator followed by the fixed opaque
+/// record. Exists for the C++ unit-test fixtures
+/// (`tests/unit_tests/pqc_spend_fixture.h`), which previously hand-copied the
+/// point's bytes — one code path on both sides makes drift impossible.
+/// Test-support surface, not consensus: production callers derive real
+/// entries via `shekyl_derive_pqc_leaf_entry`.
+///
+/// # Safety
+/// `out` must point to 64 writable bytes; null is tolerated (no write).
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_test_conforming_pqc_leaf_entry(out: *mut u8) {
+    if out.is_null() {
+        return;
+    }
+    let entry = shekyl_wire::tx_extra::conforming_pqc_leaf_entry();
+    // SAFETY: caller contract — 64 writable bytes behind a non-null `out`.
+    unsafe { std::ptr::copy_nonoverlapping(entry.as_ptr(), out, entry.len()) };
 }
 
 /// Borrow `count` `usize`s; a null pointer is accepted only with count 0.
@@ -364,10 +416,33 @@ mod tests {
             text(&msg),
             "tx_extra 0x07 entry 1: leaf commitment is not a canonical prime-order point"
         );
-        // Declared length and handed-over bytes disagree: refused, not admitted.
+        // Declared length and handed-over bytes disagree: refused as an FFI
+        // marshalling bug — distinct from a content verdict, so the daemon
+        // never logs "bad entry" for a C++-side blob/length mismatch.
         assert_eq!(
             call_with_blob(2, &[2 * K], &[2 * L], &good[..L], &mut msg),
-            SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT
+            SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING
+        );
+        assert_eq!(
+            text(&msg),
+            "FFI marshalling: leaf blob length disagrees with declared lengths"
+        );
+        // A null blob with a nonzero declared length is the same caller bug.
+        assert_eq!(
+            unsafe {
+                shekyl_tx_extra_pqc_field_shape(
+                    2,
+                    [2 * K].as_ptr(),
+                    1,
+                    [2 * L].as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    2 * L,
+                    msg.as_mut_ptr(),
+                    msg.len(),
+                )
+            },
+            SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING
         );
         // The shape rule still fires first on a wrong length.
         assert_eq!(

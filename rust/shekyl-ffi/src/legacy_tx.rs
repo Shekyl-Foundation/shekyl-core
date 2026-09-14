@@ -657,7 +657,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
     amount_out: *mut u64,
     pqc_pk_out: *mut ShekylBuffer,
     pqc_sk_out: *mut ShekylBuffer,
-    h_pqc_out: *mut [u8; 64],
+    leaf_entry_out: *mut [u8; 64],
 ) -> bool {
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
@@ -703,7 +703,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
         || amount_out.is_null()
         || pqc_pk_out.is_null()
         || pqc_sk_out.is_null()
-        || h_pqc_out.is_null()
+        || leaf_entry_out.is_null()
     {
         return false;
     }
@@ -731,7 +731,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
             *amount_out = scanned.amount;
             *pqc_pk_out = ShekylBuffer::from_vec(scanned.pqc_public_key.clone());
             *pqc_sk_out = ShekylBuffer::from_vec(scanned.pqc_secret_key.clone());
-            *h_pqc_out = scanned.pqc_leaf.entry_bytes();
+            *leaf_entry_out = scanned.pqc_leaf.entry_bytes();
             // scanned drops here — ZeroizeOnDrop wipes y, z, k_amount, pqc_secret_key
             true
         }
@@ -772,7 +772,7 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
     recovered_spend_key_out: *mut u8,
     pqc_pk_out: *mut ShekylBuffer,
     pqc_sk_out: *mut ShekylBuffer,
-    h_pqc_out: *mut [u8; 64],
+    leaf_entry_out: *mut [u8; 64],
 ) -> bool {
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
@@ -817,7 +817,7 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
         || recovered_spend_key_out.is_null()
         || pqc_pk_out.is_null()
         || pqc_sk_out.is_null()
-        || h_pqc_out.is_null()
+        || leaf_entry_out.is_null()
     {
         return false;
     }
@@ -850,7 +850,7 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
             );
             *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
             *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
-            *h_pqc_out = recovered.pqc_leaf.entry_bytes();
+            *leaf_entry_out = recovered.pqc_leaf.entry_bytes();
             true
         }
         Err(_) => false,
@@ -971,7 +971,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     combined_ss_out: *mut u8,
     pqc_pk_out: *mut ShekylBuffer,
     pqc_sk_out: *mut ShekylBuffer,
-    h_pqc_out: *mut [u8; 64],
+    leaf_entry_out: *mut [u8; 64],
 ) -> bool {
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
@@ -1018,7 +1018,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
         || key_image_out.is_null()
         || pqc_pk_out.is_null()
         || pqc_sk_out.is_null()
-        || h_pqc_out.is_null()
+        || leaf_entry_out.is_null()
     {
         return false;
     }
@@ -1057,7 +1057,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     );
     *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
     *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
-    *h_pqc_out = recovered.pqc_leaf.entry_bytes();
+    *leaf_entry_out = recovered.pqc_leaf.entry_bytes();
 
     if have_spend_key {
         let b_key = &*(spend_secret_key as *const [u8; 32]);

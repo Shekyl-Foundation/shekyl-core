@@ -510,7 +510,7 @@ async fn funded_ledger_and_tree(
         let txs = if h == owned_block {
             Arc::new(vec![crate::scan::OwnedTxLeaves {
                 is_miner: false,
-                leaf_hash_blob: Some(leaf_blob.clone()),
+                leaf_entry_blob: Some(leaf_blob.clone()),
                 outputs: raw_outputs.clone(),
             }])
         } else {

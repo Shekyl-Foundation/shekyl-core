@@ -11,7 +11,7 @@
 
 use shekyl_ffi::{
     shekyl_buffer_free, shekyl_construct_curve_tree_leaf, shekyl_construct_output,
-    shekyl_curve_tree_hash_grow_selene, shekyl_fcmp_pqc_leaf_hash, shekyl_fcmp_verify,
+    shekyl_curve_tree_hash_grow_selene, shekyl_fcmp_pqc_key_scalar, shekyl_fcmp_verify,
     shekyl_kem_keypair_generate, shekyl_output_data_free, shekyl_scan_and_recover,
     shekyl_sign_fcmp_transaction, ShekylBuffer, ShekylOutputData,
 };
@@ -356,8 +356,8 @@ fn build_test_case(iteration: u32) {
     );
     let mut pqc_key = [0u8; 32];
     assert!(
-        unsafe { shekyl_fcmp_pqc_leaf_hash(hybrid_pk.ptr, hybrid_pk.len, pqc_key.as_mut_ptr()) },
-        "shekyl_fcmp_pqc_leaf_hash failed"
+        unsafe { shekyl_fcmp_pqc_key_scalar(hybrid_pk.ptr, hybrid_pk.len, pqc_key.as_mut_ptr()) },
+        "shekyl_fcmp_pqc_key_scalar failed"
     );
     unsafe { shekyl_buffer_free(hybrid_pk.ptr, hybrid_pk.len) };
 
@@ -381,14 +381,13 @@ fn build_test_case(iteration: u32) {
         "output_key": hex_encode(&input_out.output_key),
         "key_image_gen": hex_encode(&hp_of_o),
         "commitment": hex_encode(&input_out.commitment),
-        "h_pqc": hex_encode(&cm_x),
+        "cm_x": hex_encode(&cm_x),
     });
 
     let inputs_json = serde_json::json!([{
         "ki": hex_encode(&scanned.key_image),
         "combined_ss": hex_encode(&scanned.combined_ss),
         "output_index": input_output_index,
-        "hp_of_O": hex_encode(&hp_of_o),
         "amount": input_amount,
         "commitment_mask": hex_encode(&scanned.z),
         "commitment": hex_encode(&input_out.commitment),

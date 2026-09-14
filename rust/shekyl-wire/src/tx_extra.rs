@@ -42,7 +42,7 @@ pub const TX_EXTRA_TAG_PQC_OWNERSHIP: u8 = 0x05;
 pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = 0x06;
 /// `0x07` — per-output PQC leaf entries (`CM ‖ record`, `PL-D3`; the
 /// constant keeps the tag's historical name).
-pub const TX_EXTRA_TAG_PQC_LEAF_HASHES: u8 = 0x07;
+pub const TX_EXTRA_TAG_PQC_LEAF_ENTRIES: u8 = 0x07;
 /// `0x08` — multisig migration blob.
 pub const TX_EXTRA_TAG_MULTISIG_MIGRATION: u8 = 0x08;
 /// `0x09` — PQC view-tag hints blob.
@@ -86,6 +86,9 @@ mod kem_layout_pins {
     const _: () = assert!(super::HYBRID_KEM_CT_BYTES == shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN);
     const _: () =
         assert!(super::PQC_LEAF_ENTRY_LEN == shekyl_crypto_pq::leaf_commitment::PQC_LEAF_ENTRY_LEN);
+    const _: () = assert!(
+        super::PQC_LEAF_POINT_BYTES == shekyl_crypto_pq::leaf_commitment::PQC_LEAF_POINT_LEN
+    );
 }
 
 /// Max padding run in bytes, **including** the tag byte (`TX_EXTRA_PADDING_MAX_COUNT`,
@@ -237,7 +240,7 @@ pub fn parse(extra: &[u8]) -> io::Result<Vec<TxExtraField>> {
             TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT => {
                 TxExtraField::PqcKemCiphertext(read_blob(&mut cur, "pqc_kem")?)
             }
-            TX_EXTRA_TAG_PQC_LEAF_HASHES => {
+            TX_EXTRA_TAG_PQC_LEAF_ENTRIES => {
                 TxExtraField::PqcLeafEntries(read_blob(&mut cur, "pqc_leaf_hashes")?)
             }
             TX_EXTRA_TAG_MULTISIG_MIGRATION => {
@@ -375,7 +378,7 @@ fn write_field<W: Write>(w: &mut W, field: &TxExtraField) -> io::Result<()> {
         TxExtraField::PqcKemCiphertext(blob) => {
             write_blob(w, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT, blob)
         }
-        TxExtraField::PqcLeafEntries(blob) => write_blob(w, TX_EXTRA_TAG_PQC_LEAF_HASHES, blob),
+        TxExtraField::PqcLeafEntries(blob) => write_blob(w, TX_EXTRA_TAG_PQC_LEAF_ENTRIES, blob),
         TxExtraField::MultisigMigration(blob) => {
             write_blob(w, TX_EXTRA_TAG_MULTISIG_MIGRATION, blob)
         }
@@ -456,6 +459,14 @@ pub enum PqcFieldShapeError {
     /// The `0x07` entry at `index` does not begin with a canonical, prime-order,
     /// non-identity Ed25519 point — the leaf commitment content rule (`PL-D3`).
     LeafPointInvalid { index: usize },
+    /// The `0x07` blob handed to the content rule is not a whole, non-zero
+    /// number of `PQC_LEAF_ENTRY_LEN`-byte entries. The content rule enforces
+    /// its own precondition rather than trusting the caller to have run the
+    /// shape rule first: a trailing remainder would otherwise pass unchecked
+    /// (`chunks_exact` silently drops it), and an empty blob would pass
+    /// vacuously — no conforming field is empty (the shape rule admits a
+    /// `0x07` field only with `n_outputs > 0`).
+    LeafBlobLength { got: usize },
 }
 
 impl std::fmt::Display for PqcFieldShapeError {
@@ -484,6 +495,11 @@ impl std::fmt::Display for PqcFieldShapeError {
             Self::LeafPointInvalid { index } => write!(
                 f,
                 "tx_extra 0x07 entry {index}: leaf commitment is not a canonical prime-order point"
+            ),
+            Self::LeafBlobLength { got } => write!(
+                f,
+                "tx_extra 0x07 content check: blob is {got} bytes; a whole, non-zero \
+                 multiple of {PQC_LEAF_ENTRY_LEN} required"
             ),
         }
     }
@@ -525,7 +541,7 @@ pub fn check_pqc_field_shape(
         kem_lens,
     )?;
     check_one(
-        TX_EXTRA_TAG_PQC_LEAF_HASHES,
+        TX_EXTRA_TAG_PQC_LEAF_ENTRIES,
         PQC_LEAF_ENTRY_LEN,
         n_outputs,
         leaf_lens,
@@ -568,9 +584,16 @@ fn check_one(
 /// each `PQC_LEAF_ENTRY_LEN` entry's first 32 bytes must decompress to a
 /// canonical, prime-order, non-identity Ed25519 point. A value that fails this
 /// is not a leaf any prover can open, and the tree must not store it. The
-/// record half is opaque here (checked by nothing live). Call after the shape
-/// rule has established a single, correctly-sized field.
+/// record half is opaque here (checked by nothing live).
+///
+/// The blob must be a whole, non-zero number of entries
+/// ([`PqcFieldShapeError::LeafBlobLength`] otherwise) — enforced here, not
+/// assumed from the shape rule, so a caller that skips the shape rule cannot
+/// get a vacuous pass on a trailing remainder or an empty blob.
 pub fn check_pqc_leaf_entries(blob: &[u8]) -> Result<(), PqcFieldShapeError> {
+    if blob.is_empty() || !blob.len().is_multiple_of(PQC_LEAF_ENTRY_LEN) {
+        return Err(PqcFieldShapeError::LeafBlobLength { got: blob.len() });
+    }
     for (index, entry) in blob.chunks_exact(PQC_LEAF_ENTRY_LEN).enumerate() {
         let mut point = [0u8; PQC_LEAF_POINT_BYTES];
         point.copy_from_slice(&entry[..PQC_LEAF_POINT_BYTES]);
@@ -730,6 +753,37 @@ mod pqc_field_shape {
             check_pqc_field_shape(0, &[K], &[]),
             Err(E::PresentWithoutOutputs { tag: 0x06 })
         );
+    }
+
+    /// The content rule enforces its own precondition: a blob that is not a
+    /// whole, non-zero number of entries is refused, never vacuously passed.
+    /// 63 bytes yields zero `chunks_exact(64)` chunks (the whole blob is the
+    /// remainder) and 65 bytes silently drops its last byte — both were
+    /// previously `Ok`.
+    #[test]
+    fn content_rule_rejects_partial_and_empty_blobs() {
+        use PqcFieldShapeError as E;
+        assert_eq!(
+            check_pqc_leaf_entries(&[0x7bu8; 63]),
+            Err(E::LeafBlobLength { got: 63 })
+        );
+        let mut oversize = conforming_pqc_leaf_blob(1);
+        oversize.push(0x7b);
+        assert_eq!(
+            check_pqc_leaf_entries(&oversize),
+            Err(E::LeafBlobLength { got: 65 })
+        );
+        assert_eq!(
+            check_pqc_leaf_entries(&[]),
+            Err(E::LeafBlobLength { got: 0 })
+        );
+        // The sentence names its numbers (the daemon logs it verbatim).
+        assert_eq!(
+            check_pqc_leaf_entries(&[0x7bu8; 63]).unwrap_err().to_string(),
+            "tx_extra 0x07 content check: blob is 63 bytes; a whole, non-zero multiple of 64 required"
+        );
+        // Control: the conforming whole-entry blob still passes.
+        assert_eq!(check_pqc_leaf_entries(&conforming_pqc_leaf_blob(2)), Ok(()));
     }
 
     #[test]

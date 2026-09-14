@@ -17,8 +17,8 @@ use sha3::{Digest, Keccak256};
 
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT,
-    edwards::{CompressedEdwardsY, EdwardsPoint},
-    traits::Identity,
+    edwards::{CompressedEdwardsY, EdwardsBasepointTable, EdwardsPoint},
+    traits::{BasepointTable, Identity},
 };
 use group::{prime::PrimeGroup, GroupEncoding};
 use helioselene::{Helios, HeliosPoint, Selene, SelenePoint};
@@ -95,6 +95,19 @@ pub static PQC_LEAF_COMMITMENT_G_K: LazyLock<EdwardsPoint> = LazyLock::new(|| {
 pub static PQC_LEAF_COMMITMENT_J: LazyLock<EdwardsPoint> = LazyLock::new(|| {
     hash_to_point(keccak256(b"Shekyl PQC leaf commitment generator J")) // FROZEN DST
 });
+
+/// Precomputed fixed-base table for [`PQC_LEAF_COMMITMENT_G_K`]: every output's
+/// leaf commitment computes `k·G_k`, and every verifier recomputes `K = k·G_k`,
+/// so the multiply is fixed-base on both sides. Built from the frozen point —
+/// the frozen-point tests assert table-mul equals plain-mul, so the table
+/// cannot drift from its generator.
+pub static PQC_LEAF_COMMITMENT_G_K_TABLE: LazyLock<EdwardsBasepointTable> =
+    LazyLock::new(|| EdwardsBasepointTable::create(&PQC_LEAF_COMMITMENT_G_K));
+
+/// Precomputed fixed-base table for [`PQC_LEAF_COMMITMENT_J`] (`r·J` in
+/// `CM = k·G_k + r·J`). Same pinning as [`PQC_LEAF_COMMITMENT_G_K_TABLE`].
+pub static PQC_LEAF_COMMITMENT_J_TABLE: LazyLock<EdwardsBasepointTable> =
+    LazyLock::new(|| EdwardsBasepointTable::create(&PQC_LEAF_COMMITMENT_J));
 
 /// Decompress a published PQC leaf commitment point and check it is a
 /// canonical, prime-order, non-identity point — the admission rule's content

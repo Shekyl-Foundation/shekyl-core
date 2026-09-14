@@ -40,7 +40,7 @@ use shekyl_curve_generators::{HELIOS_HASH_INIT, SELENE_HASH_INIT};
 use shekyl_fcmp_proofs::fcmps;
 
 /// Number of scalars per output in the leaf layer.
-/// Shekyl uses 4-scalar leaves: {O.x, I.x, C.x, H(pqc_pk)}.
+/// Shekyl uses 4-scalar leaves: {O.x, I.x, C.x, CM.x} (`PL-D3`).
 pub const SCALARS_PER_LEAF: usize = 4;
 
 /// Number of outputs per leaf-layer chunk (C1/Selene branching factor).

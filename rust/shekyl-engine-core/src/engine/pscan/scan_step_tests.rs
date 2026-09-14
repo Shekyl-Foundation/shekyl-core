@@ -158,19 +158,14 @@ fn funding_sums_owned_outputs_at_the_range_epoch() {
     assert!(res.bond_post_matches.is_empty());
 }
 
-/// PL-D3 §6.2 on the persona path: an owned output whose published `0x07`
-/// entry does not open to the persona's derivation is received but
-/// unspendable — it contributes neither an epoch delta nor a funding
-/// record. The block is the honest fixture with one byte of the entry's
-/// record half flipped; the KEM ciphertexts and tx pubkey are reused so
-/// the output still recovers.
-#[test]
-fn unspendable_persona_output_is_not_funding() {
+/// [`funding_block`] with one byte of the `0x07` entry's record half
+/// flipped; the KEM ciphertexts and tx pubkey are reused so the output
+/// still recovers — received but unspendable (PL-D3 §6.2).
+fn tampered_funding_block(p: &ArchivalPKeys) -> ScannableBlock {
     use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
     use shekyl_scanner::extra::Extra;
 
-    let p = persona(0);
-    let mut block = funding_block(&p);
+    let mut block = funding_block(p);
     {
         let tx = &mut block.transactions[0];
         let extra = Extra::read(&mut tx.prefix.extra.as_slice()).expect("fixture extra");
@@ -187,6 +182,17 @@ fn unspendable_persona_output_is_not_funding() {
         tampered.push_pqc_leaf_entries(leaf_blob);
         tx.prefix.extra = tampered.serialize();
     }
+    block
+}
+
+/// PL-D3 §6.2 on the persona path: an owned output whose published `0x07`
+/// entry does not open to the persona's derivation is received but
+/// unspendable — it contributes neither an epoch delta nor a funding
+/// record.
+#[test]
+fn unspendable_persona_output_is_not_funding() {
+    let p = persona(0);
+    let block = tampered_funding_block(&p);
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
     let res = run_dual_extractor(
         vec![(0, scanner)],
@@ -205,6 +211,111 @@ fn unspendable_persona_output_is_not_funding() {
         res.funding_outputs.is_empty(),
         "an unspendable output leaves no funding record"
     );
+}
+
+/// D-A1 / rule-82 reconciliation pin (the log-channel sibling of
+/// [`funding_output_match_debug_is_redacted`]): the unspendable-output warn
+/// must stay **loud** — deleting it would go unnoticed by the redaction
+/// half alone — while carrying **no** persona- or tx-identifying field. Any
+/// sender can mint an output that trips the branch against a suspected
+/// persona, so a warn naming the slot or transaction would hand the log
+/// channel the persona↔funding-tx association D-A1 redacts everywhere else;
+/// the wallet ledger row carries those specifics instead.
+#[test]
+fn unspendable_warn_is_loud_but_names_no_persona_or_tx() {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    /// Shared in-memory sink for the fmt subscriber.
+    #[derive(Clone, Default)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+    impl Write for SharedBuf {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("buffer lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+        type Writer = SharedBuf;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let p = persona(0);
+    let block = tampered_funding_block(&p);
+    // The identifiers the warn must NOT carry: every tx hash the block
+    // holds (computed from the fixture, not pattern-matched generically).
+    let mut forbidden_hashes: Vec<String> = block
+        .block
+        .transaction_hashes
+        .iter()
+        .map(hex::encode)
+        .collect();
+    forbidden_hashes.extend(block.transactions.iter().map(|tx| hex::encode(tx.hash())));
+    let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");
+
+    let sink = SharedBuf::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(sink.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        // Two passes, because tracing caches per-callsite interest globally
+        // and computes it on the thread that hits a callsite FIRST
+        // (`Rebuilder::JustOne` → `dispatcher::get_default`, tracing-core
+        // 0.1.36): the sibling test drives the same `warn!` with no
+        // subscriber, and when it wins that race the callsite is cached
+        // `Interest::never` — sticky, so the event is skipped before
+        // dispatch and this capture stays empty. The first pass guarantees
+        // the callsite is registered no matter who won; the rebuild then
+        // recomputes its interest from THIS thread, whose default is the
+        // capturing subscriber; the second pass is therefore delivered
+        // deterministically.
+        let first = run_dual_extractor(
+            vec![(0, guaranteed_scanner_for_persona(&p).expect("scanner"))],
+            &BTreeMap::new(),
+            range(20_001, 20_002),
+            &[tampered_funding_block(&p)],
+            &KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
+        assert!(first.funding.is_empty(), "the output was quarantined");
+        tracing::callsite::rebuild_interest_cache();
+        let res = run_dual_extractor(
+            vec![(0, scanner)],
+            &BTreeMap::new(),
+            range(20_001, 20_002),
+            &[block],
+            &KeyImageWatchSet::new(),
+        )
+        .expect("extract")
+        .result;
+        assert!(res.funding.is_empty(), "the output was quarantined");
+    });
+
+    let text = String::from_utf8(sink.0.lock().expect("buffer lock").clone())
+        .expect("fmt output is UTF-8");
+    // (1) Loud: the warn fired.
+    assert!(
+        text.contains("failed the PL-D3 leaf-commitment check"),
+        "the quarantine warn must fire; captured log: {text:?}"
+    );
+    // (2) Redacted: neither the slot field nor any of the block's tx hashes.
+    assert!(
+        !text.contains("p_slot"),
+        "the warn must not name the persona slot; captured log: {text:?}"
+    );
+    for hash in &forbidden_hashes {
+        assert!(
+            !text.contains(hash.as_str()),
+            "the warn must not name a transaction hash; captured log: {text:?}"
+        );
+    }
 }
 
 /// D-A1 consistency gate (WI-2): the per-output funding records and the

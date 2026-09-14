@@ -429,7 +429,7 @@ fn ct2_ingested() -> (CurveTreeClient, Vec<Ct2Block>, ReferenceBlock) {
     for blk in &blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client

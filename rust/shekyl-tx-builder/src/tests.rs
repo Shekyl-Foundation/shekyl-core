@@ -541,3 +541,62 @@ fn extra_output_term_raises_required_total() {
     )
     .is_ok());
 }
+
+/// Leaf-chunk selection under duplicate `(O, C)` pairs (`PL-D3`).
+///
+/// Consensus does not reject two chunk entries with the same output key and
+/// commitment; only `CM.x` names the spent leaf. The selection must therefore
+/// prefer the entry whose `CM.x` matches this spend's own derivation — a
+/// first-match lookup would pick the wrong duplicate and falsely refuse with
+/// `PqcLeafMismatch`. The three legs pin the settled semantics:
+/// `(O, C, derived CM.x)` present → proceed; only `(O, C)` present →
+/// `PqcLeafMismatch`; neither → `SpentOutputNotInLeafChunk`.
+#[test]
+fn duplicate_o_c_pair_selects_the_openable_leaf() {
+    use crate::sign::prove_input_from_spend;
+    use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
+    use shekyl_fcmp::PqcLeafScalar;
+
+    let inp = dummy_spend_input(100);
+    let combined: [u8; 64] = inp.combined_ss[..64].try_into().unwrap();
+    let derived = derive_pqc_leaf(&combined, inp.output_index).expect("fixture leaf derives");
+    let derived_cm_x = PqcLeafScalar::from_commitment_point(&derived.point)
+        .expect("derived commitment decompresses")
+        .0;
+
+    let wrong_duplicate = LeafEntry {
+        cm_x: [0xEE; 32],
+        ..dummy_leaf_entry()
+    };
+    let openable = LeafEntry {
+        cm_x: derived_cm_x,
+        ..dummy_leaf_entry()
+    };
+
+    // Wrong-CM.x duplicate FIRST: ordering is the discriminating axis — a
+    // first-match lookup stops at it and refuses.
+    let mut with_both = dummy_spend_input(100);
+    with_both.leaf_chunk = vec![wrong_duplicate.clone(), openable.clone()];
+    let prove_input = prove_input_from_spend(0, &with_both, [0u8; 32])
+        .expect("the openable duplicate must be selected");
+    assert_eq!(prove_input.pqc_leaf_commitment, derived.point);
+
+    // Same (O, C) present but no entry opens: present-but-unopenable.
+    let mut unopenable = dummy_spend_input(100);
+    unopenable.leaf_chunk = vec![wrong_duplicate];
+    assert!(matches!(
+        prove_input_from_spend(0, &unopenable, [0u8; 32]),
+        Err(TxBuilderError::PqcLeafMismatch { index: 0 })
+    ));
+
+    // No (O, C) match at all: absent.
+    let mut absent = dummy_spend_input(100);
+    absent.leaf_chunk = vec![LeafEntry {
+        output_key: [9u8; 32],
+        ..openable
+    }];
+    assert!(matches!(
+        prove_input_from_spend(0, &absent, [0u8; 32]),
+        Err(TxBuilderError::SpentOutputNotInLeafChunk { index: 0 })
+    ));
+}

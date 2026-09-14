@@ -1,5 +1,5 @@
 {
-  "description": "PL-D3 / PL-D3a pins for the owner-side tx_extra 0x07 entry: CM = k*G_k + r*J (k = H_l(hybrid_pk), r = HKDF-Expand(prk, \"shekyl-pqc-leaf-blind\" || idx_le64 || ctr, 64) mod l), record = cSHAKE256(shekyl/pqc-leaf-record-v1, pk || r_h), r_h = HKDF-Expand(prk, \"shekyl-pqc-leaf-record-blind\" || idx_le64, 32), per (combined_ss, output_index). Consumed by pqc_leaf_commitment_known_answer_vectors in rust/shekyl-crypto-pq/src/derivation.rs. Frozen: never regenerated without a decision-log entry (SHEKYL_PINNED_REGEN_DECISION).",
+  "description": "PL-D3 / PL-D3a pins for the owner-side tx_extra 0x07 entry: CM = k*G_k + r*J (k = H_l(hybrid_pk), r = HKDF-Expand(prk, \"shekyl-pqc-leaf-blind\" || idx_le64 || ctr, 64) mod l), record = cSHAKE256(shekyl/pqc-leaf-record-v1, pk || r_h), r_h = HKDF-Expand(prk, \"shekyl-pqc-leaf-record-blind\" || idx_le64, 32), per (combined_ss, output_index). Consumed by pqc_leaf_commitment_known_answer_vectors in rust/shekyl-crypto-pq/src/leaf_commitment.rs. Frozen: never regenerated without a decision-log entry (SHEKYL_PINNED_REGEN_DECISION).",
   "regeneration_decision": "2026-09-14 PL-D3 leaf commitment: 0x07 = CM ‖ record, CM = k·G_k + r·J opened in-circuit; leaf-hash vectors retired and re-pinned",
   "vectors": [
     {

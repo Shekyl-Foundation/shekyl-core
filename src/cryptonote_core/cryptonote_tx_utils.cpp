@@ -195,8 +195,8 @@ namespace cryptonote
 
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(out_amounts.size() * HYBRID_KEM_CT_BYTES);
-      tx_extra_pqc_leaf_hashes leaf_hash_field;
-      leaf_hash_field.blob.reserve(out_amounts.size() * PQC_LEAF_ENTRY_LEN);
+      tx_extra_pqc_leaf_entries leaf_entry_field;
+      leaf_entry_field.blob.reserve(out_amounts.size() * PQC_LEAF_ENTRY_LEN);
 
       tx.ct_signatures.outPk.resize(out_amounts.size());
       tx.ct_signatures.enc_amounts.resize(out_amounts.size());
@@ -234,7 +234,7 @@ namespace cryptonote
             reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
             od.kem_ciphertext_ml_kem.len);
 
-        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
+        leaf_entry_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
 
         summary_amounts += out_amounts[i];
         ShekylOutputData tmp = od;
@@ -253,7 +253,7 @@ namespace cryptonote
       {
         std::ostringstream oss;
         binary_archive<true> oar(oss);
-        tx_extra_field variant_field = leaf_hash_field;
+        tx_extra_field variant_field = leaf_entry_field;
         bool r = ::do_serialize(oar, variant_field);
         CHECK_AND_ASSERT_MES(r, false, "Failed to serialize PQC leaf hashes for coinbase tx_extra");
         std::string blob = oss.str();
@@ -496,8 +496,8 @@ namespace cryptonote
       // v3 unified loop: shekyl_construct_output produces O, C, KEM CT, PQC data.
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(destinations.size() * HYBRID_KEM_CT_BYTES);
-      tx_extra_pqc_leaf_hashes leaf_hash_field;
-      leaf_hash_field.blob.reserve(destinations.size() * PQC_LEAF_ENTRY_LEN);
+      tx_extra_pqc_leaf_entries leaf_entry_field;
+      leaf_entry_field.blob.reserve(destinations.size() * PQC_LEAF_ENTRY_LEN);
       v3_rct_data.resize(destinations.size());
 
       size_t output_index = 0;
@@ -544,7 +544,7 @@ namespace cryptonote
             reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
             od.kem_ciphertext_ml_kem.len);
 
-        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
+        leaf_entry_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
 
         summary_outs_money += dst_entr.amount;
         ShekylOutputData tmp = od;
@@ -564,7 +564,7 @@ namespace cryptonote
       {
         std::ostringstream oss;
         binary_archive<true> oar(oss);
-        tx_extra_field variant_field = leaf_hash_field;
+        tx_extra_field variant_field = leaf_entry_field;
         CHECK_AND_ASSERT_MES(::do_serialize(oar, variant_field), false,
           "Failed to serialize PQC leaf hashes for tx_extra");
         std::string blob = oss.str();

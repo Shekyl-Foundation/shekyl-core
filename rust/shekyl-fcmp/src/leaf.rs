@@ -35,11 +35,19 @@ impl PqcLeafScalar {
 /// The per-output PQC key scalar `k = H_ℓ(hybrid_pk)` (an Ed25519 scalar), the
 /// verifier's input to the opening check.
 ///
-/// Forwards to [`shekyl_crypto_pq::leaf_commitment::pqc_key_scalar`] (the single
-/// source; customization [`shekyl_crypto_pq::leaf_commitment::DOMAIN_PQC_LEAF_KEY`]).
+/// The wrapped bytes are **always the canonical encoding** of `k` — a consensus
+/// input must have exactly one byte spelling, so every constructor either
+/// produces a reduced scalar ([`Self::from_pqc_public_key`],
+/// [`Self::from_scalar`]) or refuses non-canonical bytes
+/// ([`Self::from_canonical_bytes`], the `Deserialize` impl). The field is
+/// private so no path can bypass that invariant.
+///
+/// The derivation forwards to
+/// [`shekyl_crypto_pq::leaf_commitment::pqc_key_scalar`] (the single source;
+/// customization [`shekyl_crypto_pq::leaf_commitment::DOMAIN_PQC_LEAF_KEY`]).
 /// A duplicate body here would be a second copy to drift; there is none.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize, Serialize, Deserialize)]
-pub struct PqcKeyScalar(pub [u8; 32]);
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize, Serialize)]
+pub struct PqcKeyScalar([u8; 32]);
 
 impl PqcKeyScalar {
     /// `k` for the canonical hybrid public key the spend reveals.
@@ -50,15 +58,75 @@ impl PqcKeyScalar {
         ))
     }
 
+    /// `k` from its canonical 32-byte encoding; `None` if the bytes are not the
+    /// canonical encoding of an Ed25519 scalar. This is the boundary
+    /// constructor (FFI, deserialization): a non-canonical spelling is refused,
+    /// never silently reduced to a second encoding of the same `k`.
+    #[must_use]
+    pub fn from_canonical_bytes(bytes: [u8; 32]) -> Option<Self> {
+        use curve25519_dalek::scalar::Scalar;
+        if bool::from(Scalar::from_canonical_bytes(bytes).is_some()) {
+            Some(PqcKeyScalar(bytes))
+        } else {
+            None
+        }
+    }
+
+    /// `k` from an already-reduced scalar (derivation-side construction). A
+    /// `curve25519_dalek::Scalar` is reduced by construction, so its canonical
+    /// encoding is total — this cannot fail.
+    #[must_use]
+    pub fn from_scalar(s: curve25519_dalek::Scalar) -> Self {
+        PqcKeyScalar(s.to_bytes())
+    }
+
+    /// The canonical 32-byte encoding of `k`.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// The canonical 32-byte encoding of `k`, by value.
+    #[must_use]
+    pub fn to_bytes(self) -> [u8; 32] {
+        self.0
+    }
+
     /// The public point `K = k·G_k`, compressed — what the circuit's opening leg
     /// takes as its public value. Never on the wire. Forwards to
     /// [`shekyl_crypto_pq::leaf_commitment::pqc_key_point_from_scalar`].
     #[must_use]
     pub fn point(&self) -> [u8; 32] {
         use curve25519_dalek::scalar::Scalar;
-        let k = Scalar::from_canonical_bytes(self.0)
-            .unwrap_or_else(|| Scalar::from_bytes_mod_order(self.0));
+        // The constructors guarantee canonical bytes, so this reduction is the
+        // identity — it only converts the encoding back to a `Scalar`.
+        let k = Scalar::from_bytes_mod_order(self.0);
         shekyl_crypto_pq::leaf_commitment::pqc_key_point_from_scalar(&k)
+    }
+
+    /// The public point `K = k·G_k` as the proof ciphersuite's group element —
+    /// the form the verifier feeds the circuit's opening leg directly, with no
+    /// compress/decompress round-trip. Multiplies over the generator's
+    /// precomputed basepoint table.
+    #[must_use]
+    pub fn key_point(&self) -> dalek_ff_group::EdwardsPoint {
+        use curve25519_dalek::scalar::Scalar;
+        // Canonical by the constructors' invariant; reduction is the identity.
+        let k = Scalar::from_bytes_mod_order(self.0);
+        dalek_ff_group::EdwardsPoint(&*shekyl_curve_generators::PQC_LEAF_COMMITMENT_G_K_TABLE * &k)
+    }
+}
+
+/// Refuse-don't-reduce at the serde boundary: the derived impl would have
+/// admitted a non-canonical spelling into a type whose invariant is
+/// canonicality, so the impl is manual and routes through
+/// [`PqcKeyScalar::from_canonical_bytes`].
+impl<'de> Deserialize<'de> for PqcKeyScalar {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let bytes = <[u8; 32]>::deserialize(deserializer)?;
+        PqcKeyScalar::from_canonical_bytes(bytes).ok_or_else(|| {
+            serde::de::Error::custom("PqcKeyScalar: bytes are not a canonical Ed25519 scalar")
+        })
     }
 }
 
@@ -142,19 +210,79 @@ mod tests {
         for pk in [vec![0xff; 1952], vec![], vec![0x01]] {
             let s = PqcKeyScalar::from_pqc_public_key(&pk);
             assert!(
-                bool::from(Scalar::from_canonical_bytes(s.0).is_some()),
+                bool::from(Scalar::from_canonical_bytes(*s.as_bytes()).is_some()),
                 "k must be a canonical Ed25519 scalar"
             );
-            assert_ne!(s.0, [0u8; 32], "k must not be zero");
+            assert_ne!(*s.as_bytes(), [0u8; 32], "k must not be zero");
         }
+    }
+    /// The canonicality invariant is structural: the boundary constructor and
+    /// the serde boundary refuse a non-canonical spelling rather than reducing
+    /// it into a second encoding of the same `k`.
+    #[test]
+    fn pqc_key_scalar_refuses_non_canonical_bytes() {
+        use curve25519_dalek::scalar::Scalar;
+
+        // ℓ itself: the smallest non-canonical encoding (reduces to zero).
+        let ell: [u8; 32] = [
+            0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9,
+            0xde, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x10,
+        ];
+        for bad in [ell, [0xff; 32]] {
+            assert!(
+                PqcKeyScalar::from_canonical_bytes(bad).is_none(),
+                "non-canonical bytes must be refused, not reduced"
+            );
+            let json = serde_json::to_string(&bad.to_vec()).unwrap();
+            assert!(
+                serde_json::from_str::<PqcKeyScalar>(&json).is_err(),
+                "Deserialize must refuse non-canonical bytes"
+            );
+        }
+
+        // Canonical bytes are accepted, byte-identically, on both boundaries;
+        // zero is canonical (identity refusal is the circuit's, downstream).
+        for good in [
+            [0u8; 32],
+            Scalar::from_bytes_mod_order([0xab; 32]).to_bytes(),
+        ] {
+            let s = PqcKeyScalar::from_canonical_bytes(good).expect("canonical bytes accepted");
+            assert_eq!(*s.as_bytes(), good);
+            let json = serde_json::to_string(&s).unwrap();
+            let de: PqcKeyScalar = serde_json::from_str(&json).expect("canonical roundtrip");
+            assert_eq!(de, s);
+        }
+    }
+    #[test]
+    fn pqc_key_scalar_from_scalar_is_canonical() {
+        use curve25519_dalek::scalar::Scalar;
+        let k = Scalar::from_bytes_mod_order([0x77; 32]);
+        let s = PqcKeyScalar::from_scalar(k);
+        assert_eq!(s.to_bytes(), k.to_bytes());
+        assert_eq!(
+            PqcKeyScalar::from_canonical_bytes(s.to_bytes()),
+            Some(s),
+            "from_scalar output is canonical by construction"
+        );
     }
     #[test]
     fn pqc_key_point_is_k_times_g_k() {
         use curve25519_dalek::scalar::Scalar;
         let s = PqcKeyScalar::from_pqc_public_key(&[0xab; 1952]);
-        let expected =
-            *shekyl_curve_generators::PQC_LEAF_COMMITMENT_G_K * Scalar::from_bytes_mod_order(s.0);
+        let expected = *shekyl_curve_generators::PQC_LEAF_COMMITMENT_G_K
+            * Scalar::from_bytes_mod_order(*s.as_bytes());
         assert_eq!(s.point(), expected.compress().to_bytes());
+    }
+    /// `K` has two derivation homes — the compressed form through
+    /// `shekyl_crypto_pq::pqc_key_point_from_scalar` and the group-element form
+    /// over the curve-generators basepoint table. One `k`, one `K`: drift
+    /// between them would split the prover's and verifier's public input.
+    #[test]
+    fn key_point_agrees_with_compressed_point() {
+        use ciphersuite::group::GroupEncoding;
+        let s = PqcKeyScalar::from_pqc_public_key(&[0xab; 1952]);
+        assert_eq!(s.key_point().to_bytes(), s.point());
     }
     #[test]
     fn leaf_scalar_from_commitment_point_is_wei25519_x() {

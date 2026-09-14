@@ -568,7 +568,7 @@ def construct_multisig_output(
     }
 
     # 4th leaf scalar: CM.x, with CM = k*G_k + r*J and k over the full container (PL-D3)
-    k = multisig_pqc_leaf_hash(leaf_container)   # = pqc_key_scalar(container bytes)
+    k = pqc_key_scalar(leaf_container_bytes)          # one derivation, no multisig shim
     (cm, record) = pqc_leaf_commitment(combined_ss, index, leaf_container)
 
     return OutputConstruction {
@@ -629,7 +629,7 @@ Per multisig-recipient output, the tx_extra includes:
 | Tag | Name | Payload |
 |---|---|---|
 | 0x06 | `TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT` | N × 1120 B |
-| 0x07 | `TX_EXTRA_TAG_PQC_LEAF_HASHES` | 64 B (`CM ‖ record`; `CM` commits to `k = H_ℓ(full container)`, `PL-D3`) |
+| 0x07 | `TX_EXTRA_TAG_PQC_LEAF_ENTRIES` | 64 B (`CM ‖ record`; `CM` commits to `k = H_ℓ(full container)`, `PL-D3`) |
 | 0x09 | `TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS` | N × 1 B |
 | **0x0A** | `TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS` | **1 + N × 32 B** (version byte + N Y_i) |
 
@@ -661,7 +661,7 @@ consensus. With the Solution C receiving model in place, the binding chain is:
 3. At spend time, the spender presents `pqc_auths[i].hybrid_public_key`
    containing the canonical `MultisigKeyContainer` (byte-identical to the
    one committed)
-4. The verifier computes `k = shekyl_fcmp_pqc_leaf_hash(blob)`, derives
+4. The verifier computes `k = shekyl_fcmp_pqc_key_scalar(blob)`, derives
    `K = k·G_k`, and the FCMP++ proof confirms a leaf whose commitment opens
    to `K` is in the curve tree
 5. The FCMP++ proof verifies the key image derives from `O`
@@ -1602,8 +1602,8 @@ A stale member receiving a `CounterProof` MUST verify, in order:
    (if local chain lacks this block, wait for sync; do not reject)
 2. `tx_hash` appears at `tx_position` in that block
 3. `tx.pqc_auths[i].scheme_id == 2` for all inputs (multisig spend)
-4. `multisig_pqc_leaf_hash(tx.pqc_auths[i].hybrid_public_key)` matches
-   the leaf hash of an output tracked in local state with matching
+4. `pqc_key_scalar(tx.pqc_auths[i].hybrid_public_key)` matches
+   the tracked key scalar of an output in local state with matching
    `group_id`
 5. The `consumed_inputs` listed in CounterProof match the tx's actual
    input key images exactly (no loose matching)

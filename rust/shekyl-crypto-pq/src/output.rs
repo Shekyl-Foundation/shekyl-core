@@ -393,7 +393,7 @@ pub fn construct_output_with_label_plaintext(
     // --- PQC keypair ---
 
     let (pqc_pk, _pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let pqc_leaf = compute_pqc_leaf(&secrets, &combined_ss.0, output_index)?;
+    let pqc_leaf = compute_pqc_leaf(&secrets, &pqc_pk, &combined_ss.0, output_index)?;
     Ok(OutputData {
         output_key,
         commitment,
@@ -749,7 +749,7 @@ pub fn scan_output_with_ml_kem_dk(
     // --- PQC keypair derivation ---
 
     let (pqc_pk, pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let pqc_leaf = compute_pqc_leaf(&secrets, &combined_ss.0, output_index)?;
+    let pqc_leaf = compute_pqc_leaf(&secrets, &pqc_pk, &combined_ss.0, output_index)?;
     Ok(ScannedOutput {
         y: secrets.y,
         z: secrets.z,
@@ -962,7 +962,7 @@ pub fn scan_output_recover_with_ml_kem_dk(
 
     // --- PQC keypair derivation ---
     let (pqc_pk, pqc_sk) = keygen_from_seed_bytes(&secrets.ml_dsa_seed)?;
-    let pqc_leaf = compute_pqc_leaf(&secrets, &combined_ss.0, output_index)?;
+    let pqc_leaf = compute_pqc_leaf(&secrets, &pqc_pk, &combined_ss.0, output_index)?;
     Ok(RecoveredOutput {
         ho: secrets.ho,
         y: secrets.y,
@@ -1409,25 +1409,26 @@ fn keygen_from_seed_bytes(ml_dsa_seed: &[u8; 32]) -> Result<(Vec<u8>, Vec<u8>), 
 /// Build the output's PQC leaf commitment from the full hybrid public key
 /// (Ed25519 + ML-DSA) — the same canonical bytes the spend reveals in
 /// `tx.pqc_auths[i].hybrid_public_key`, so the verifier's `K = k·G_k` opens it.
+///
+/// Takes the caller's already-serialized ML-DSA public key rather than
+/// re-running keygen: every call site derives the keypair from
+/// `secrets.ml_dsa_seed` one line earlier, and FIPS 204 keygen is
+/// deterministic, so a second keygen here could only reproduce those bytes.
 fn compute_pqc_leaf(
     secrets: &OutputSecrets,
+    ml_dsa_pk_bytes: &[u8],
     combined_ss: &[u8],
     output_index: u64,
 ) -> Result<PqcLeafCommitment, CryptoError> {
     use crate::signature::HybridPublicKey;
     use ed25519_dalek::SigningKey;
 
-    let (ml_pk, _ml_sk) = keygen_from_seed(&secrets.ml_dsa_seed)?;
-
     let ed_signing = SigningKey::from_bytes(&secrets.ed25519_pqc_seed);
     let ed_verifying = ed_signing.verifying_key();
 
     let hybrid_pk = HybridPublicKey {
         ed25519: ed_verifying.to_bytes(),
-        ml_dsa: {
-            use fips204::traits::SerDes;
-            ml_pk.into_bytes().to_vec()
-        },
+        ml_dsa: ml_dsa_pk_bytes.to_vec(),
     };
 
     let pk_bytes = hybrid_pk
@@ -1948,15 +1949,6 @@ mod tests {
 
         let out = construct_output(&tx_key, &pk.x25519, &pk.ml_kem, &spend_key, 500, 0).unwrap();
 
-        // The commitment must be to the full hybrid pk, not just the ML-DSA pk
-        // (the old bug): a commitment built from the ML-DSA-only bytes differs.
-        let combined_for_ml_only = [0x11u8; 64];
-        let ml_only = pqc_leaf_commitment(&combined_for_ml_only, 0, &out.pqc_public_key).unwrap();
-        assert_ne!(
-            out.pqc_leaf.point, ml_only.point,
-            "CM must commit to the full hybrid pk, not just ML-DSA"
-        );
-
         let scanned = scan_output(
             &sk.x25519,
             &sk.ml_kem,
@@ -1996,6 +1988,21 @@ mod tests {
             out.pqc_leaf.entry(),
             derived.entry(),
             "PQC leaf must match derive_pqc_leaf"
+        );
+
+        // The commitment must be to the full hybrid pk, not just the ML-DSA pk
+        // (the old bug). Built from the REAL combined_ss and the same index, so
+        // the blind r cancels by construction — the control below proves it —
+        // and the point inequality can only come from the key axis.
+        let ml_only = pqc_leaf_commitment(&combined_ss.0, 0, &out.pqc_public_key).unwrap();
+        assert_eq!(
+            ml_only.blind, out.pqc_leaf.blind,
+            "control: r derives from (combined_ss, index) alone, so the \
+             ML-DSA-only commitment must reuse the same blind"
+        );
+        assert_ne!(
+            out.pqc_leaf.point, ml_only.point,
+            "CM must commit to the full hybrid pk, not just ML-DSA"
         );
         assert_eq!(
             out.pqc_leaf.counter, 0,

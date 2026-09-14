@@ -158,7 +158,7 @@ TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_whose_point_is_zero_filled)
 {
   transaction tx = bare_spend();
   append_kem(tx, KEM * tx.vout.size());
-  cryptonote::tx_extra_pqc_leaf_hashes f;
+  cryptonote::tx_extra_pqc_leaf_entries f;
   f.blob.assign(LEAF * tx.vout.size(), '\0');
   const std::string b = shekyl_test_fixtures::serialize_tx_extra_field(f);
   tx.extra.insert(tx.extra.end(), b.begin(), b.end());
@@ -169,7 +169,7 @@ TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_whose_point_has_small_order)
 {
   transaction tx = bare_spend();
   append_kem(tx, KEM * tx.vout.size());
-  cryptonote::tx_extra_pqc_leaf_hashes f;
+  cryptonote::tx_extra_pqc_leaf_entries f;
   for (size_t i = 0; i < tx.vout.size(); ++i)
     f.blob += shekyl_test_fixtures::conforming_pqc_leaf_entry();
   // y = 0 encodes an 8-torsion point: decompresses, but is not prime-order.
@@ -179,7 +179,7 @@ TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_whose_point_has_small_order)
   EXPECT_FALSE(semantic_accepts(tx));
 }
 
-TEST(tx_extra_pqc_field_shape, rejects_duplicate_leaf_hash_field)
+TEST(tx_extra_pqc_field_shape, rejects_duplicate_leaf_entry_field)
 {
   transaction tx = conforming_spend();
   append_leaf(tx, LEAF * tx.vout.size());
@@ -193,7 +193,7 @@ TEST(tx_extra_pqc_field_shape, rejects_duplicate_kem_field)
   EXPECT_FALSE(semantic_accepts(tx)) << "two 0x06 fields";
 }
 
-TEST(tx_extra_pqc_field_shape, rejects_leaf_hash_field_one_output_long)
+TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_field_one_output_long)
 {
   transaction tx = bare_spend();
   append_kem(tx, KEM * tx.vout.size());
@@ -201,7 +201,7 @@ TEST(tx_extra_pqc_field_shape, rejects_leaf_hash_field_one_output_long)
   EXPECT_FALSE(semantic_accepts(tx)) << "0x07 at 32*(n+1)";
 }
 
-TEST(tx_extra_pqc_field_shape, rejects_leaf_hash_field_one_output_short)
+TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_field_one_output_short)
 {
   transaction tx = bare_spend();
   ASSERT_GE(tx.vout.size(), 1u);
@@ -270,7 +270,7 @@ TEST(tx_extra_pqc_field_shape, rejects_a_tx_extra_that_does_not_parse_unknown_ta
 
 // ---- Gate 2: the coinbase, on a real-nettype chain --------------------------
 
-TEST(tx_extra_pqc_field_shape, coinbase_with_duplicate_leaf_hash_field_is_rejected_before_writing)
+TEST(tx_extra_pqc_field_shape, coinbase_with_duplicate_leaf_entry_field_is_rejected_before_writing)
 {
   TestnetChain chain;
   block_verification_context bvc{};
@@ -289,7 +289,7 @@ TEST(tx_extra_pqc_field_shape, coinbase_with_duplicate_leaf_hash_field_is_reject
 
 // ---- Gate 3: the DB collector, below admission ------------------------------
 
-TEST(tx_extra_pqc_field_shape, db_collector_refuses_a_short_leaf_hash_field_instead_of_zero_filling)
+TEST(tx_extra_pqc_field_shape, db_collector_refuses_a_short_leaf_entry_field_instead_of_zero_filling)
 {
   TempLMDB fixture;
   BlockchainDB& db = fixture.db;

@@ -381,7 +381,6 @@ impl std::fmt::Debug for TxInputSigningContext {
             .field("source_ciphertext", &self.source_ciphertext)
             .field("output_key", &"[REDACTED]")
             .field("commitment", &"[REDACTED]")
-            .field("h_pqc", &"[REDACTED]")
             .field("leaf_chunk", &format!("{} entries", self.leaf_chunk.len()))
             .field("c1_layers", &format!("{} layers", self.c1_layers.len()))
             .field("c2_layers", &format!("{} layers", self.c2_layers.len()))

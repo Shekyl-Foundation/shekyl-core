@@ -265,7 +265,7 @@ count_pattern() {
 # SF-D8 (2026-09-13): `attestation_nonce()` and its one cSHAKE site were
 # deleted with the v1 nonce-only countersignature (50 -> 49).
 # PL-D3 (2026-09-14): 49 -> 54. Two production sites in
-# rust/shekyl-crypto-pq/src/derivation.rs -- `pqc_key_scalar`
+# rust/shekyl-crypto-pq/src/leaf_commitment.rs -- `pqc_key_scalar`
 # (shekyl/pqc-leaf-key-v1, the 64-byte read) and `pqc_leaf_record`
 # (shekyl/pqc-leaf-record-v1) -- plus three inline #[cfg(test)] sites: the
 # domain-separation negative control hashes one preimage under both

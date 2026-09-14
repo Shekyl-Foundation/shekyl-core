@@ -555,7 +555,7 @@ namespace cryptonote
     if (!pick<tx_extra_nonce>(nar, tx_extra_fields, TX_EXTRA_NONCE)) return false;
     if (!pick<tx_extra_pqc_ownership>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_OWNERSHIP)) return false;
     if (!pick<tx_extra_pqc_kem_ciphertext>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT)) return false;
-    if (!pick<tx_extra_pqc_leaf_hashes>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_LEAF_HASHES)) return false;
+    if (!pick<tx_extra_pqc_leaf_entries>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_LEAF_ENTRIES)) return false;
     if (!pick<tx_extra_multisig_migration>(nar, tx_extra_fields, TX_EXTRA_TAG_MULTISIG_MIGRATION)) return false;
     if (!pick<tx_extra_pqc_view_tag_hints>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS)) return false;
     if (!pick<tx_extra_pqc_spend_auth_pubkeys>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS)) return false;
@@ -992,7 +992,7 @@ namespace cryptonote
     {
       if (const auto* kem = std::get_if<tx_extra_pqc_kem_ciphertext>(&f))
         kem_lens.push_back(kem->blob.size());
-      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_hashes>(&f))
+      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_entries>(&f))
       {
         leaf_lens.push_back(leaf->blob.size());
         leaf_blob = &leaf->blob;

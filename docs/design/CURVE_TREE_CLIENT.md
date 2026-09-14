@@ -410,7 +410,7 @@ leaves from blocks it already syncs), the client *builds* the leaf itself and
 therefore needs `CM` as an input. `CM` is **not derivable from the bare
 public output** — it is a hiding commitment to the *hybrid public key*
 (`PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14)), carried **on-chain in a single `tx_extra` `0x07` field**
-(`tx_extra_pqc_leaf_hashes`: one concatenated blob, `64` bytes per output in
+(`tx_extra_pqc_leaf_entries`: one concatenated blob, `64` bytes per output in
 vout order — `CM ‖ record`), sliced per-output at `i*64` with **no fallback**:
 an absent field, a length that is not `64 × n`, or a wrong entry count is an
 ingest error (`ClientError::LeafEntries`), exactly what admission refuses

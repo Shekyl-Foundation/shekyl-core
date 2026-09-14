@@ -87,7 +87,7 @@ pub struct TxLeafInputs<'a> {
     /// Whether this is the block's coinbase (`is_miner`).
     pub is_miner: bool,
     /// Parsed `tx_extra 0x07` blob, or `None` if the tag is absent.
-    pub leaf_hash_blob: Option<&'a [u8]>,
+    pub leaf_entry_blob: Option<&'a [u8]>,
     /// Per-output identities in `vout` order, leaf commitment not yet resolved.
     pub outputs: &'a [RawOutput],
 }
@@ -235,6 +235,20 @@ pub enum ClientError {
         tx_index: usize,
         /// What was wrong with the payload.
         source: crate::recon::LeafEntryError,
+    },
+    /// An output's published point (`O`, `C`, or the `0x07` leaf commitment
+    /// `CM`) failed Ed25519 decompression while building this block's
+    /// leaves. The point-content twin of [`ClientError::LeafEntries`]: on an
+    /// admitted chain the content rule refuses such a transaction, and the
+    /// daemon **aborts** on the same input at store time (`DB_ERROR`,
+    /// `src/blockchain_db/blockchain_db.cpp:617`) — both surfaces agree
+    /// fail-closed, so the replica refuses the block rather than omitting
+    /// the leaf and building a silently divergent tree.
+    LeafPoint {
+        /// Block height being ingested.
+        height: BlockHeight,
+        /// The offending output (by gindex) and the failing point.
+        source: crate::recon::LeafPointError,
     },
 }
 
@@ -764,7 +778,7 @@ impl CurveTreeClient {
         // an admitted chain cannot carry is an error, never a placeholder.
         let mut identities: Vec<Vec<OutputIdentity>> = Vec::with_capacity(block.txs.len());
         for (tx_index, tx) in block.txs.iter().enumerate() {
-            let commitments = extract_leaf_commitments(tx.leaf_hash_blob, tx.outputs.len())
+            let commitments = extract_leaf_commitments(tx.leaf_entry_blob, tx.outputs.len())
                 .map_err(|source| ClientError::LeafEntries {
                     height: block.height,
                     tx_index,
@@ -795,10 +809,17 @@ impl CurveTreeClient {
             .collect();
 
         // Collect this block's leaves into a local vec — `self.entries` is
-        // untouched until the store transaction commits.
+        // untouched until the store transaction commits. A bad published
+        // point refuses the whole block (the local vec is discarded), so no
+        // partial leaf set can reach the store or memory.
         let mut new_leaves: Vec<LeafEntry> = Vec::new();
         let next_gindex =
-            collect_block_leaves(block.height.0, &txs, self.next_gindex, &mut new_leaves);
+            collect_block_leaves(block.height.0, &txs, self.next_gindex, &mut new_leaves).map_err(
+                |source| ClientError::LeafPoint {
+                    height: block.height,
+                    source,
+                },
+            )?;
 
         // The bucket newly final at this block's cutoff, read from the
         // *existing* maturity index (a leaf created in this block can never
@@ -1119,20 +1140,32 @@ mod tests {
         }
     }
 
-    /// One conforming `0x07` entry per output: a valid commitment point (the
-    /// basepoint — any prime-order point decompresses for the leaf) and an
-    /// opaque record, as a V3 chain always emits (`PL-D3`).
-    fn leaf_blob(n: usize) -> Vec<u8> {
+    /// One conforming `0x07` entry: `CM` is a valid, torsion-free point
+    /// derived deterministically from `seed` (`Hp` over a seed-filled key,
+    /// via the crate's existing point primitive), followed by an opaque
+    /// record. Distinct seeds give byte-distinct commitment points and so
+    /// byte-distinct leaves — which is what lets an ordering test tell two
+    /// leaves apart.
+    fn leaf_entry(seed: u8) -> [u8; 64] {
         let mut entry = [0x07u8; 64];
-        entry[..32].copy_from_slice(&ED25519_BASEPOINT);
-        entry.repeat(n)
+        entry[..32].copy_from_slice(&shekyl_fcmp::tree::key_image_generator(&[seed; 32]));
+        entry
+    }
+
+    /// One conforming `0x07` entry per output, as a V3 chain always emits
+    /// (`PL-D3`); entry `i` is seeded `i + 1`, so entries within one blob
+    /// are byte-distinct.
+    fn leaf_blob(n: usize) -> Vec<u8> {
+        (0..n)
+            .flat_map(|i| leaf_entry(u8::try_from(i + 1).expect("test blob fits u8")))
+            .collect()
     }
 
     /// One coinbase tx carrying a per-output `0x07` blob of `n` × 64 bytes.
     fn coinbase_block<'a>(outputs: &'a [RawOutput], blob: &'a [u8]) -> Vec<TxLeafInputs<'a>> {
         vec![TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(blob),
+            leaf_entry_blob: Some(blob),
             outputs,
         }]
     }
@@ -1371,12 +1404,12 @@ mod tests {
             let txs = [
                 TxLeafInputs {
                     is_miner: true,
-                    leaf_hash_blob: Some(&blob),
+                    leaf_entry_blob: Some(&blob),
                     outputs: &cb_outs,
                 },
                 TxLeafInputs {
                     is_miner: false,
-                    leaf_hash_blob: Some(&blob),
+                    leaf_entry_blob: Some(&blob),
                     outputs: &reg_outs,
                 },
             ];
@@ -1415,19 +1448,33 @@ mod tests {
             commitment: Some(ED25519_BASEPOINT),
             target: TargetKind::TaggedKey,
         };
-        let blob0 = leaf_blob(1);
-        let blob1_cb = leaf_blob(1);
-        let blob1_reg = leaf_blob(1);
+        // Three byte-distinct entries (distinct commitment points), so the
+        // three leaves are byte-distinct and the root comparison below can
+        // actually fail if the store mirror routes two of them in the wrong
+        // order — identical leaves would make every ordering produce the
+        // same root.
+        let blob0 = leaf_entry(1).to_vec();
+        let blob1_cb = leaf_entry(2).to_vec();
+        let blob1_reg = leaf_entry(3).to_vec();
+        {
+            // The test observes its own setup: the discrimination claim
+            // rests on pairwise-distinct commitment points.
+            let points = [&blob0[..32], &blob1_cb[..32], &blob1_reg[..32]];
+            assert!(
+                points[0] != points[1] && points[0] != points[2] && points[1] != points[2],
+                "setup: the three 0x07 commitment points must be pairwise distinct"
+            );
+        }
         let txs0 = coinbase_block(&outs_cb, &blob0);
         let txs1 = [
             TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blob1_cb),
+                leaf_entry_blob: Some(&blob1_cb),
                 outputs: &outs_cb,
             },
             TxLeafInputs {
                 is_miner: false,
-                leaf_hash_blob: Some(&blob1_reg),
+                leaf_entry_blob: Some(&blob1_reg),
                 outputs: &[regular],
             },
         ];
@@ -1523,6 +1570,8 @@ mod tests {
         // its Wei25519 x-coordinate (`construct_leaf` extracts it).
         let outs = [coinbase_raw()];
         let blob = leaf_blob(1);
+        let mut cm = [0u8; 32];
+        cm.copy_from_slice(&blob[..32]);
         let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
         client
@@ -1532,10 +1581,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(client.entries.len(), 1);
-        let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&ED25519_BASEPOINT)
-            .expect("basepoint decompresses");
+        let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&cm)
+            .expect("leaf_blob commitment point decompresses");
         assert_eq!(&client.entries[0].leaf[96..128], &cm_x);
-        assert_eq!(client.entries[0].identity.cm, ED25519_BASEPOINT);
+        assert_eq!(client.entries[0].identity.cm, cm);
     }
 
     #[test]

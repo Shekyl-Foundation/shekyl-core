@@ -323,7 +323,7 @@ namespace test
                 "\"output_key\":\"" + hex_encode(input_out.output_key, 32) + "\","
                 "\"key_image_gen\":\"" + hex_encode(hp_of_o, 32) + "\","
                 "\"commitment\":\"" + hex_encode(input_out.commitment, 32) + "\","
-                "\"h_pqc\":\"" + hex_encode(leaf + 96, 32) + "\""
+                "\"cm_x\":\"" + hex_encode(leaf + 96, 32) + "\""
             "}],"
             "\"c1_layers\":[],"
             "\"c2_layers\":[]"
@@ -420,7 +420,7 @@ namespace test
         EXPECT_TRUE(hybrid_pk.ptr != nullptr && hybrid_pk.len > 0)
             << "DEBUG: shekyl_derive_pqc_public_key failed";
         uint8_t pqc_key[32];
-        EXPECT_TRUE(shekyl_fcmp_pqc_leaf_hash(hybrid_pk.ptr, hybrid_pk.len, pqc_key));
+        EXPECT_TRUE(shekyl_fcmp_pqc_key_scalar(hybrid_pk.ptr, hybrid_pk.len, pqc_key));
         shekyl_buffer_free(hybrid_pk.ptr, hybrid_pk.len);
         uint8_t fcmp_result = shekyl_fcmp_verify(
             fcmp_proof.data(), fcmp_proof.size(),

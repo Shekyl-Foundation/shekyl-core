@@ -150,7 +150,8 @@ fn reconstruct_roots(blocks: &[BlockFix]) -> Vec<[u8; 32]> {
                 outputs: &t.outputs,
             })
             .collect();
-        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries);
+        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries)
+            .expect("KAT chain has no bad published point");
         let drained_through = blk.height.saturating_sub(1);
         let scalars = assemble_leaf_stream(&entries, drained_through);
         roots.push(root_from_scalars(&scalars));

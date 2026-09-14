@@ -21,8 +21,8 @@ fuzz_target!(|data: &[u8]| {
     // must always be a valid prime-order point.
     if !data.is_empty() {
         let k = PqcKeyScalar::from_pqc_public_key(data);
-        assert_eq!(k.0[31] & 0x80, 0);
-        assert_ne!(k.0, [0u8; 32]);
+        assert_eq!(k.as_bytes()[31] & 0x80, 0);
+        assert_ne!(*k.as_bytes(), [0u8; 32]);
         assert!(shekyl_curve_generators::pqc_leaf_point_valid(&k.point()).is_some());
     }
 
@@ -47,7 +47,8 @@ fuzz_target!(|data: &[u8]| {
         commitment.copy_from_slice(&data[32..64]);
         cm.copy_from_slice(&data[64..96]);
         if let Some(leaf) = construct_leaf(&output_key, &commitment, &cm) {
-            let x = PqcLeafScalar::from_commitment_point(&cm).expect("leaf built, so CM decompresses");
+            let x =
+                PqcLeafScalar::from_commitment_point(&cm).expect("leaf built, so CM decompresses");
             assert_eq!(&leaf[96..128], &x.0);
         }
     }
@@ -56,7 +57,7 @@ fuzz_target!(|data: &[u8]| {
     for fill in [0x00u8, 0xff, 0x7f, 0x80, 0x01, 0xfe] {
         let pk = vec![fill; 1952];
         let k = PqcKeyScalar::from_pqc_public_key(&pk);
-        assert_eq!(k.0[31] & 0x80, 0);
-        assert_ne!(k.0, [0u8; 32]);
+        assert_eq!(k.as_bytes()[31] & 0x80, 0);
+        assert_ne!(*k.as_bytes(), [0u8; 32]);
     }
 });

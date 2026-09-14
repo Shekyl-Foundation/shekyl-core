@@ -149,7 +149,7 @@ Per-input key scalar `k = H_ℓ(pqc_pk)` = `derivation::pqc_key_scalar`
 (cSHAKE256 `shekyl/pqc-leaf-key-v1`, reduced mod ℓ; the leaf holds the
 commitment `CM = k·G_k + r·J` and the proof opens it — `PL-D3`, 2026-09-14,
 superseding the Blake2b leaf hash this plan was written against); the C++ FFI
-mirror is `shekyl_fcmp_pqc_leaf_hash`.
+mirror is `shekyl_fcmp_pqc_key_scalar`.
 
 ### 1.4 FCMP membership-only FFI seam — **the gap (§9 carry)**
 

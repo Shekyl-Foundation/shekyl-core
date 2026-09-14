@@ -5,8 +5,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::leaf::PqcKeyScalar;
+use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
 
 // Simulates deserializing the prunable portion of a CTTypeFcmpPlusPlusPqc
 // transaction. The fuzzer provides arbitrary bytes which are interpreted as
@@ -22,7 +22,7 @@ fuzz_target!(|data: &[u8]| {
     let rest = &data[1..];
 
     let pseudo_outs_len = num_inputs * 32;
-    let pqc_hashes_len = num_inputs * 32;
+    let pqc_keys_len = num_inputs * 32;
 
     // Extract pseudoOuts (zero-pad if short)
     let pseudo_outs: Vec<[u8; 32]> = (0..num_inputs)
@@ -42,15 +42,15 @@ fuzz_target!(|data: &[u8]| {
     let proof_start = pseudo_outs_len.min(rest.len());
     let after_pseudo = &rest[proof_start..];
 
-    // Split: last pqc_hashes_len bytes are pqc hashes, middle is proof
-    let (proof_data, pqc_data) = if after_pseudo.len() > pqc_hashes_len {
-        let split = after_pseudo.len() - pqc_hashes_len;
+    // Split: last pqc_keys_len bytes are pqc key scalars, middle is proof
+    let (proof_data, pqc_data) = if after_pseudo.len() > pqc_keys_len {
+        let split = after_pseudo.len() - pqc_keys_len;
         (&after_pseudo[..split], &after_pseudo[split..])
     } else {
         (&[][..], after_pseudo)
     };
 
-    let pqc_hashes: Vec<PqcKeyScalar> = (0..num_inputs)
+    let pqc_keys: Vec<PqcKeyScalar> = (0..num_inputs)
         .map(|i| {
             let mut h = [0u8; 32];
             let start = i * 32;
@@ -59,7 +59,11 @@ fuzz_target!(|data: &[u8]| {
             } else if let Some(partial) = pqc_data.get(start..) {
                 h[..partial.len()].copy_from_slice(partial);
             }
-            PqcKeyScalar(h)
+            // Clear the top nibble so the bytes are < 2^252 < ℓ — always the
+            // canonical encoding `from_canonical_bytes` requires — while
+            // keeping the fuzz entropy over the scalar's value.
+            h[31] &= 0x0f;
+            PqcKeyScalar::from_canonical_bytes(h).expect("masked bytes are canonical")
         })
         .collect();
 
@@ -71,8 +75,7 @@ fuzz_target!(|data: &[u8]| {
         tree_root.copy_from_slice(&data[2..34]);
     }
 
-    let key_images: Vec<KeyImage> =
-        vec![KeyImage::from_canonical_bytes([0u8; 32]); num_inputs];
+    let key_images: Vec<KeyImage> = vec![KeyImage::from_canonical_bytes([0u8; 32]); num_inputs];
 
     let mut signable_tx_hash = [0u8; 32];
     if data.len() >= 66 {
@@ -86,7 +89,15 @@ fuzz_target!(|data: &[u8]| {
             num_inputs: num_inputs as u32,
             tree_depth,
         };
-        let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
+        let _ = verify(
+            &proof,
+            &key_images,
+            &pseudo_outs,
+            &pqc_keys,
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        );
     }
 
     // Empty proof
@@ -96,7 +107,15 @@ fuzz_target!(|data: &[u8]| {
             num_inputs: num_inputs as u32,
             tree_depth,
         };
-        let _ = verify(&empty, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
+        let _ = verify(
+            &empty,
+            &key_images,
+            &pseudo_outs,
+            &pqc_keys,
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        );
     }
 
     // Wrong number of inputs (mismatched arrays)
@@ -109,7 +128,15 @@ fuzz_target!(|data: &[u8]| {
                 num_inputs: (num_inputs - 1) as u32,
                 tree_depth,
             };
-            let _ = verify(&proof, &fewer_ki, &pseudo_outs[..num_inputs - 1], &pqc_hashes[..num_inputs - 1], &tree_root, tree_depth, signable_tx_hash);
+            let _ = verify(
+                &proof,
+                &fewer_ki,
+                &pseudo_outs[..num_inputs - 1],
+                &pqc_keys[..num_inputs - 1],
+                &tree_root,
+                tree_depth,
+                signable_tx_hash,
+            );
         }
     }
 
@@ -122,6 +149,14 @@ fuzz_target!(|data: &[u8]| {
             num_inputs: num_inputs as u32,
             tree_depth,
         };
-        let _ = verify(&proof, &key_images, &pseudo_outs, &pqc_hashes, &tree_root, tree_depth, signable_tx_hash);
+        let _ = verify(
+            &proof,
+            &key_images,
+            &pseudo_outs,
+            &pqc_keys,
+            &tree_root,
+            tree_depth,
+            signable_tx_hash,
+        );
     }
 });

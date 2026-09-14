@@ -376,7 +376,7 @@ TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_survive_sort)
     kem_field.blob[i] = static_cast<char>(i & 0xFF);
 
   // 2 outputs × 64 bytes = 128 bytes of leaf entries (CM || record)
-  cryptonote::tx_extra_pqc_leaf_hashes lh_field;
+  cryptonote::tx_extra_pqc_leaf_entries lh_field;
   lh_field.blob.resize(2 * cryptonote::PQC_LEAF_ENTRY_LEN);
   for (size_t i = 0; i < lh_field.blob.size(); ++i)
     lh_field.blob[i] = static_cast<char>((i + 0x42) & 0xFF);
@@ -419,7 +419,7 @@ TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_survive_sort)
     << "KEM ciphertext blob changed after sort (size orig=" << kem_field.blob.size()
     << " recovered=" << recovered_kem.blob.size() << ")";
 
-  cryptonote::tx_extra_pqc_leaf_hashes recovered_lh;
+  cryptonote::tx_extra_pqc_leaf_entries recovered_lh;
   ASSERT_TRUE(cryptonote::find_tx_extra_field_by_type(fields_after, recovered_lh));
   ASSERT_EQ(lh_field.blob, recovered_lh.blob)
     << "Leaf hashes blob changed after sort (size orig=" << lh_field.blob.size()
@@ -446,7 +446,7 @@ TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_reverse_order)
   cryptonote::tx_extra_pqc_kem_ciphertext kem_field;
   kem_field.blob.resize(HYBRID_KEM_CT_BYTES, '\x55');
 
-  cryptonote::tx_extra_pqc_leaf_hashes lh_field;
+  cryptonote::tx_extra_pqc_leaf_entries lh_field;
   lh_field.blob.resize(cryptonote::PQC_LEAF_ENTRY_LEN, '\x77');
 
   // Intentionally wrong order: leaf hashes first, then KEM
@@ -483,7 +483,7 @@ TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_reverse_order)
   ASSERT_TRUE(cryptonote::find_tx_extra_field_by_type(sorted_fields, recovered_kem));
   ASSERT_EQ(kem_field.blob, recovered_kem.blob);
 
-  cryptonote::tx_extra_pqc_leaf_hashes recovered_lh;
+  cryptonote::tx_extra_pqc_leaf_entries recovered_lh;
   ASSERT_TRUE(cryptonote::find_tx_extra_field_by_type(sorted_fields, recovered_lh));
   ASSERT_EQ(lh_field.blob, recovered_lh.blob);
 

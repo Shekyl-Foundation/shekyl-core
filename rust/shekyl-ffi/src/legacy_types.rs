@@ -5,22 +5,25 @@
 
 //! Shared C-ABI types for the legacy monofile FFI surface.
 
-/// Fixed-size witness header per input in the FCMP++ prove/verify FFI.
-/// Layout: [O:32][I:32][C:32][CM:32][r:32][x:32][y:32][z:32][a:32]
-///   CM, r = the input's PQC leaf commitment point and its blind (PL-D3)
-///   x, y = SAL spend secrets (O = xG + yT)
-///   z    = Pedersen commitment mask (C = zG + amount*H)
-///   a    = pseudo-out blinding factor (r_c = a - z)
+/// Heap-allocated `(ptr, len)` byte buffer handed across the C ABI; freed
+/// with `shekyl_buffer_free`.
 #[repr(C)]
 pub struct ShekylBuffer {
     pub ptr: *mut u8,
     pub len: usize,
 }
 
-// Part of the witness seam, not a general constant: every reference to it —
-// parser, writer, tests — is multisig-gated, so it carries the same cfg.
-// This replaces an allow(dead_code): a suppression that hides the fact was
-// worse than a cfg that states it, and the pin documents the seam as gated.
+/// Fixed-size witness header per input in the FCMP++ prove/verify FFI.
+/// Layout: [O:32][I:32][C:32][CM:32][r:32][x:32][y:32][z:32][a:32]
+///   CM, r = the input's PQC leaf commitment point and its blind (PL-D3)
+///   x, y = SAL spend secrets (O = xG + yT)
+///   z    = Pedersen commitment mask (C = zG + amount*H)
+///   a    = pseudo-out blinding factor (r_c = a - z)
+///
+/// Part of the witness seam, not a general constant: every reference to it —
+/// parser, writer, tests — is multisig-gated, so it carries the same cfg.
+/// This replaces an allow(dead_code): a suppression that hides the fact was
+/// worse than a cfg that states it, and the pin documents the seam as gated.
 #[cfg(feature = "multisig")]
 pub const SHEKYL_PROVE_WITNESS_HEADER_BYTES: usize = 288;
 

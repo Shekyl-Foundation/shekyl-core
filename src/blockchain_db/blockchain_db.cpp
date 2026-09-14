@@ -525,7 +525,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // leaves whose post-quantum binding was to nothing, invisibly. Everything
     // below is unreachable for an admitted transaction and aborts rather than
     // falling back (CEN-L11 pattern).
-    auto extract_leaf_hashes = [](const transaction& tx) -> std::vector<uint8_t> {
+    auto extract_leaf_entries = [](const transaction& tx) -> std::vector<uint8_t> {
       std::string why;
       if (!check_tx_extra_pqc_field_shape(tx, why))
         throw DB_ERROR(("curve-tree leaf: " + why + " at DB add for tx "
@@ -537,7 +537,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       std::vector<tx_extra_field> fields;
       if (!parse_tx_extra(tx.extra, fields))
         throw DB_ERROR("curve-tree leaf: tx_extra parses for the shape check but not here (bug)");
-      tx_extra_pqc_leaf_hashes lh;
+      tx_extra_pqc_leaf_entries lh;
       if (!find_tx_extra_field_by_type(fields, lh))
         throw DB_ERROR("curve-tree leaf: the shape check accepted a tx whose 0x07 field is absent (bug)");
       // Exactly one field of exactly PQC_LEAF_ENTRY_LEN * vout.size() bytes
@@ -549,15 +549,15 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
     // All outputs are deferred: compute leaf, determine maturity, add to pending.
     // Each output is tracked by its global output index for exact reversal.
     auto collect_outputs = [&](const transaction& tx, bool is_miner) {
-      const auto leaf_hash_blob = extract_leaf_hashes(tx);
+      const auto leaf_entry_blob = extract_leaf_entries(tx);
 
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const OutputIndex this_output{next_output_seq++};
         const auto& vout = tx.vout[i];
-        // extract_leaf_hashes pinned the blob to exactly one 64-byte entry per
+        // extract_leaf_entries pinned the blob to exactly one 64-byte entry per
         // output; the leaf constructor takes the commitment point at its front
         // (PL-D3) and extracts the x-coordinate itself.
-        const uint8_t* h_pqc = leaf_hash_blob.data() + i * PQC_LEAF_ENTRY_LEN;
+        const uint8_t* leaf_entry = leaf_entry_blob.data() + i * PQC_LEAF_ENTRY_LEN;
 
         crypto::public_key output_key;
         uint64_t maturity_raw;
@@ -613,7 +613,7 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
         // the output.
         if (!shekyl_construct_curve_tree_leaf(
               reinterpret_cast<const uint8_t*>(&output_key),
-              commitment.bytes, h_pqc, leaf))
+              commitment.bytes, leaf_entry, leaf))
           throw DB_ERROR(("curve-tree leaf construction failed at DB add (vout index "
             + std::to_string(i) + " of tx "
             + epee::string_tools::pod_to_hex(get_transaction_hash(tx))

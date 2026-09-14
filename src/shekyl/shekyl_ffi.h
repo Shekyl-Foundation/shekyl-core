@@ -444,7 +444,7 @@ void shekyl_generator_T(uint8_t* out_ptr);
 /// shekyl_fcmp_membership_only_verify take. The verifier derives K = k*G_k
 /// from it and the FCMP++ circuit opens the spent leaf's commitment to K. A
 /// function of the revealed key only -- never the leaf value. Writes 32 bytes.
-bool shekyl_fcmp_pqc_leaf_hash(
+bool shekyl_fcmp_pqc_key_scalar(
     const uint8_t* pqc_pk_ptr,
     size_t pqc_pk_len,
     uint8_t* out_ptr);
@@ -452,11 +452,11 @@ bool shekyl_fcmp_pqc_leaf_hash(
 /// Derive the output's 64-byte tx_extra 0x07 entry CM || record (PL-D3 /
 /// PL-D3a) from combined KEM shared secret and output index. Secret key and
 /// blinds stay on the Rust side; never returned.
-/// combined_ss_ptr: 64 bytes. h_pqc_out: 64-byte caller-provided buffer.
-bool shekyl_derive_pqc_leaf_hash(
+/// combined_ss_ptr: 64 bytes. leaf_entry_out: 64-byte caller-provided buffer.
+bool shekyl_derive_pqc_leaf_entry(
     const uint8_t* combined_ss_ptr,
     uint64_t output_index,
-    uint8_t* h_pqc_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
+    uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 /// Derive canonical hybrid public key bytes from combined KEM shared secret
 /// and output index. Secret key derived internally and zeroized; never returned.
@@ -490,12 +490,15 @@ uint8_t shekyl_derive_view_tag_prefilter(
 /// Verify FCMP++ proof with batch verification.
 ///
 /// pqc_pk_hashes_ptr: pqc_hash_count * 32 bytes, one PQC key scalar k per input
-/// (shekyl_fcmp_pqc_leaf_hash over the input's revealed hybrid_public_key).
+/// (shekyl_fcmp_pqc_key_scalar over the input's revealed hybrid_public_key).
+/// A non-canonical scalar encoding is refused with code 1, never reduced.
 ///
 /// Returns 0 on success, or a nonzero VerifyError discriminant on failure:
 ///   1 = DeserializationFailed   4 = KeyImageCountMismatch  7 = TreeDepthTooLarge
 ///   2 = InvalidTreeRoot         5 = UpstreamError          9 = PqcKeyCountMismatch
-///   3 = PqcKeyPointInvalid      6 = BatchVerificationFailed
+///   6 = BatchVerificationFailed
+///   (3 retired 2026-09-14, PL-D3 fix pass: the arm could not fire -- K is
+///   computed directly. Retired-in-place; never reassign.)
 /// See rust/shekyl-fcmp/src/proof.rs VerifyError for canonical definitions.
 ///
 /// tree_depth: upstream library `layers` count (= LMDB depth + 1).
@@ -522,10 +525,13 @@ uint8_t shekyl_fcmp_verify(
 /// po_count must equal pqc_hash_count.
 /// po_count must be in 1..=MAX_INPUTS (= 8); 0 or larger is rejected up front.
 /// Returns 0 on success, else the VerifyError discriminant:
-///   1 = Deserialization (also: null ptr; po_count == 0 or > MAX_INPUTS; po_count*32 usize overflow)
-///   2 = InvalidTreeRoot   3 = PqcKeyPointInvalid
+///   1 = Deserialization (also: null ptr; po_count == 0 or > MAX_INPUTS;
+///       po_count*32 usize overflow; a non-canonical PQC key scalar k)
+///   2 = InvalidTreeRoot
 ///   5 = UpstreamError     6 = BatchVerificationFailed   7 = TreeDepthTooLarge
 ///   8 = InputCountMismatch (po_count != pqc_hash_count)
+///   (3 retired 2026-09-14, PL-D3 fix pass: the arm could not fire -- K is
+///   computed directly. Retired-in-place; never reassign.)
 /// Code 4 (KeyImageCountMismatch) is unreachable here — this path has no key images.
 uint8_t shekyl_fcmp_membership_only_verify(
     const uint8_t* proof_ptr,
@@ -714,7 +720,7 @@ bool shekyl_scan_output(
     uint64_t* amount_out,
     ShekylBuffer* pqc_pk_out,
     ShekylBuffer* pqc_sk_out,
-    uint8_t* h_pqc_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
+    uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 /// Scan an output recovering the spend key B' = O - ho*G - y*T.
 /// Caller looks up B' in subaddress table to determine ownership.
@@ -741,7 +747,7 @@ bool shekyl_scan_output_recover(
     uint8_t* recovered_spend_key_out,
     ShekylBuffer* pqc_pk_out,
     ShekylBuffer* pqc_sk_out,
-    uint8_t* h_pqc_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
+    uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 // ─── Merged scan + key image (PR-wallet Phase 1b) ────────────────────────────
 
@@ -782,7 +788,7 @@ bool shekyl_scan_and_recover(
     uint8_t* combined_ss_out,
     ShekylBuffer* pqc_pk_out,
     ShekylBuffer* pqc_sk_out,
-    uint8_t* h_pqc_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
+    uint8_t* leaf_entry_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 // ─── Key image computation (2 remaining sites) ──────────────────────────────
 
@@ -1269,9 +1275,9 @@ typedef struct ShekylCurveTreeReplicaOutput {
 /// One transaction's leaf inputs in vout order.
 typedef struct ShekylCurveTreeReplicaTx {
     uint8_t is_miner;
-    uint8_t has_leaf_hash_blob;      // tx_extra 0x07 tag present
-    const uint8_t* leaf_hash_blob;   // raw 0x07 payload, leaf_hash_blob_len bytes
-    size_t leaf_hash_blob_len;
+    uint8_t has_leaf_entry_blob;     // tx_extra 0x07 tag present
+    const uint8_t* leaf_entry_blob;  // raw 0x07 payload, leaf_entry_blob_len bytes
+    size_t leaf_entry_blob_len;
     const ShekylCurveTreeReplicaOutput* outputs;
     size_t n_outputs;
 } ShekylCurveTreeReplicaTx;
@@ -1285,9 +1291,9 @@ static_assert(offsetof(ShekylCurveTreeReplicaOutput, has_commitment) == 64, "rep
 static_assert(offsetof(ShekylCurveTreeReplicaOutput, target_kind) == 65, "replica output layout");
 static_assert(sizeof(ShekylCurveTreeReplicaOutput) == 66, "replica output layout");
 static_assert(offsetof(ShekylCurveTreeReplicaTx, is_miner) == 0, "replica tx layout");
-static_assert(offsetof(ShekylCurveTreeReplicaTx, has_leaf_hash_blob) == 1, "replica tx layout");
-static_assert(offsetof(ShekylCurveTreeReplicaTx, leaf_hash_blob) == sizeof(void*), "replica tx layout");
-static_assert(offsetof(ShekylCurveTreeReplicaTx, leaf_hash_blob_len) == 2 * sizeof(void*), "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, has_leaf_entry_blob) == 1, "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, leaf_entry_blob) == sizeof(void*), "replica tx layout");
+static_assert(offsetof(ShekylCurveTreeReplicaTx, leaf_entry_blob_len) == 2 * sizeof(void*), "replica tx layout");
 static_assert(offsetof(ShekylCurveTreeReplicaTx, outputs) == 3 * sizeof(void*), "replica tx layout");
 static_assert(offsetof(ShekylCurveTreeReplicaTx, n_outputs) == 4 * sizeof(void*), "replica tx layout");
 static_assert(sizeof(ShekylCurveTreeReplicaTx) == 5 * sizeof(void*), "replica tx layout");
@@ -1339,6 +1345,12 @@ bool shekyl_curve_tree_replica_next_block_root(
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE               8
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH                  9
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT                   10
+/// leaf_blob disagrees with the declared leaf_lens (null with a nonzero
+/// length, or a different byte count): an FFI marshalling bug in the CALLER,
+/// reported distinctly from every content verdict so the daemon never logs a
+/// "bad entry" diagnosis for a C++-side bug. Message: "FFI marshalling: leaf
+/// blob length disagrees with declared lengths". Fail-closed either way.
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_MARSHALLING              11
 /// Buffer size for out_msg, NUL included.
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP                      256
 /// Returns SHEKYL_TX_EXTRA_PQC_SHAPE_OK or one of the codes above, and writes
@@ -1358,6 +1370,14 @@ int32_t shekyl_tx_extra_pqc_field_shape(
     size_t leaf_blob_len,
     char* out_msg,
     size_t out_msg_cap);
+
+/// Write the conforming 64-byte 0x07 leaf entry (shekyl-wire's
+/// conforming_pqc_leaf_entry: the compressed PQC_LEAF_COMMITMENT_J generator
+/// followed by the fixed opaque record) to out (64 bytes; null tolerated).
+/// Exists for the C++ unit-test fixtures (tests/unit_tests/pqc_spend_fixture.h)
+/// so no fixture hand-copies the point's bytes; test-support surface, not
+/// consensus.
+void shekyl_test_conforming_pqc_leaf_entry(uint8_t* out);
 
 /// Compose every curve-tree layer ABOVE the leaf layer, narrow from the leaf-chunk
 /// layer — the correct producer-side grow that telescopes to the reference root
@@ -1401,15 +1421,15 @@ bool shekyl_ed25519_to_selene_scalar(
 /// output's PQC leaf commitment point.
 /// output_key_ptr: 32 bytes compressed Ed25519 output public key (O).
 /// commitment_ptr: 32 bytes compressed Ed25519 amount commitment (C).
-/// h_pqc_ptr: 32 bytes, the commitment point CM at the front of the output's
-///   0x07 entry (PL-D3). No placeholder: an output without an admissible entry
-///   is not a leaf (admission refuses its transaction).
+/// cm_point_ptr: 32 bytes, the commitment point CM at the front of the
+///   output's 0x07 entry (PL-D3). No placeholder: an output without an
+///   admissible entry is not a leaf (admission refuses its transaction).
 /// leaf_out_ptr: 128 bytes output for {O.x, I.x, C.x, CM.x}.
 /// Returns true on success.
 bool shekyl_construct_curve_tree_leaf(
     const uint8_t* output_key_ptr,
     const uint8_t* commitment_ptr,
-    const uint8_t* h_pqc_ptr,
+    const uint8_t* cm_point_ptr,
     uint8_t* leaf_out_ptr);
 
 /// Store-callback membership-path assembly for `get_curve_tree_path`.

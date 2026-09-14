@@ -34,7 +34,8 @@ use helioselene::{Helios, Selene};
 
 use crate::{
     BulletproofGenerators, FcmpGenerators, H_pow_2, FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, H,
-    HELIOS_HASH_INIT, PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_J, SELENE_HASH_INIT, T,
+    HELIOS_HASH_INIT, PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_G_K_TABLE,
+    PQC_LEAF_COMMITMENT_J, PQC_LEAF_COMMITMENT_J_TABLE, SELENE_HASH_INIT, T,
 };
 
 fn ed_hex(p: &curve25519_dalek::EdwardsPoint) -> String {
@@ -131,6 +132,27 @@ fn frozen_singletons() {
         hex::encode(SELENE_HASH_INIT.to_bytes()),
         "8681759fee95c1c97169b8d1476cfab7da101edef5932cf03053ae56f7081d07",
         "Selene hash-init generator moved"
+    );
+}
+
+/// The precomputed fixed-base tables are pinned to their frozen points:
+/// table-mul must equal plain point-mul for a nonzero scalar. This bites if a
+/// table is ever built from (or edited to) a different point than the frozen
+/// generator it names; it does NOT re-pin the points themselves — that is
+/// [`frozen_singletons`].
+#[test]
+fn leaf_commitment_tables_match_their_points() {
+    let s = curve25519_dalek::Scalar::from(0xd3d3_d3d3_d3d3_d3d3u64);
+    assert_ne!(s, curve25519_dalek::Scalar::ZERO);
+    assert_eq!(
+        &*PQC_LEAF_COMMITMENT_G_K_TABLE * &s,
+        *PQC_LEAF_COMMITMENT_G_K * s,
+        "G_k table drifted from the frozen G_k point"
+    );
+    assert_eq!(
+        &*PQC_LEAF_COMMITMENT_J_TABLE * &s,
+        *PQC_LEAF_COMMITMENT_J * s,
+        "J table drifted from the frozen J point"
     );
 }
 

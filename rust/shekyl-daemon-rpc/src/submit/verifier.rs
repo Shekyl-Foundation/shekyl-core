@@ -1005,7 +1005,7 @@ fn verify_fcmp(
 ) -> Result<(), VerifyReject> {
     // One PQC key scalar `k = H_ℓ(hybrid_public_key)` per spending input,
     // submission order — the same value the C++ caller computes per input via
-    // `shekyl_fcmp_pqc_leaf_hash`; the verifier derives `K = k·G_k` and the
+    // `shekyl_fcmp_pqc_key_scalar`; the verifier derives `K = k·G_k` and the
     // circuit opens the spent leaf's commitment to it (`PL-D3`,
     // `FCMP_SPEND_LINKABILITY.md` §6.2). The caller passes `leaf_auths` already
     // narrowed to the leaf-contributing subset (every auth for a spend, the

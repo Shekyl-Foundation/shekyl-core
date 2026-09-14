@@ -164,17 +164,10 @@ fn hybrid_v2_pinned_vectors_verify_per_surface() {
     }
 }
 
-/// Environment variable that arms [`regenerate_hybrid_v2_kat`]:
-/// `YYYY-MM-DD <rationale>`, the date naming the `docs/V3_WALLET_DECISION_LOG.md`
-/// entry that authorizes moving a pinned surface vector. The fixture is a
-/// self-pinned tripwire (rule 50): a regenerator that rewrites it on request
-/// is a one-command silencer for a failing pin, so it refuses without a
-/// citation (the `wallet_envelope.rs` `pinned_fixtures_regenerate` shape).
-const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
-
 /// Regenerate `docs/test_vectors/PQC_HYBRID_V2_KAT.json` in place. Armed —
-/// refuses to run unless [`PINNED_REGEN_DECISION_ENV`] cites the decision-log
-/// entry authorizing the move:
+/// refuses to run unless `SHEKYL_PINNED_REGEN_DECISION` cites the decision-log
+/// entry authorizing the move (the fixture is a self-pinned tripwire, rule 50;
+/// the shared guard is `shekyl_crypto_pq::test_support::regen_decision_or_refuse`):
 ///
 /// ```text
 /// SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
@@ -190,24 +183,8 @@ const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
 #[test]
 #[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn regenerate_hybrid_v2_kat() {
-    let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
-    let cited = decision.len() > 11
-        && decision.as_bytes()[..10]
-            .iter()
-            .enumerate()
-            .all(|(i, b)| match i {
-                4 | 7 => *b == b'-',
-                _ => b.is_ascii_digit(),
-            })
-        && decision.as_bytes()[10] == b' ';
-    assert!(
-        cited,
-        "refusing to regenerate PQC_HYBRID_V2_KAT.json: set \
-         {PINNED_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
-         docs/V3_WALLET_DECISION_LOG.md entry that authorizes moving it (got: \
-         {decision:?}). Moving a pinned vector is a format decision, not a test \
-         fix — see 50-testing.mdc."
-    );
+    let decision =
+        shekyl_crypto_pq::test_support::regen_decision_or_refuse("PQC_HYBRID_V2_KAT.json");
     eprintln!("regenerating the hybrid v2 surface KAT under decision: {decision}");
     let scheme = HybridEd25519MlDsa;
     let path = fixture_path();

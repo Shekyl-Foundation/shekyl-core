@@ -70,7 +70,7 @@ fn ingest_chain(client: &mut CurveTreeClient, blocks: &[ClientBlock]) {
     for blk in blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client
@@ -127,7 +127,8 @@ fn store_root_matches_oracle_and_header_tier_a() {
                 is_miner: true,
                 outputs: &identities,
             }];
-            gindex = collect_block_leaves(blk.height, &txs, gindex, &mut recon_entries);
+            gindex = collect_block_leaves(blk.height, &txs, gindex, &mut recon_entries)
+                .expect("KAT chain has no bad published point");
             let through = blk.height.saturating_sub(1);
             let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
             let store_root = client
@@ -184,12 +185,12 @@ fn store_root_mixed_maturity_drain_order() {
     let txs = [
         TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blob_cb),
+            leaf_entry_blob: Some(&blob_cb),
             outputs: &[coinbase],
         },
         TxLeafInputs {
             is_miner: false,
-            leaf_hash_blob: Some(&blob_reg),
+            leaf_entry_blob: Some(&blob_reg),
             outputs: &[regular],
         },
     ];
@@ -207,7 +208,7 @@ fn store_root_mixed_maturity_drain_order() {
     for height in 1..=61u64 {
         let txs_cb = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blob_cb),
+            leaf_entry_blob: Some(&blob_cb),
             outputs: &[coinbase],
         }];
         client
@@ -251,7 +252,8 @@ fn store_root_mixed_maturity_drain_order() {
             outputs: &identities_reg,
         },
     ];
-    collect_block_leaves(0, &recon_txs, 0, &mut recon_entries);
+    collect_block_leaves(0, &recon_txs, 0, &mut recon_entries)
+        .expect("fixture has no bad published point");
 
     let through = 60u64;
     let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));

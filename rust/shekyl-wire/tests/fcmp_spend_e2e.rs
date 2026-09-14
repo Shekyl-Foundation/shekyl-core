@@ -58,7 +58,7 @@
 //! against real crypto-valued fields.
 
 mod common;
-use common::conforming_pqc_extra;
+use common::{conforming_pqc_extra, random_wallet};
 
 use curve25519_dalek::{
     constants::ED25519_BASEPOINT_POINT, edwards::CompressedEdwardsY, scalar::Scalar,
@@ -67,7 +67,6 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 
 use shekyl_bulletproofs::Bulletproof;
-use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
@@ -116,38 +115,6 @@ const TREE_OUTPUTS: usize = 700;
 /// ever promoted to a multi-case `proptest`, drop the fixed seed and let the
 /// proptest harness drive the witness draw per case.
 const RNG_SEED: u64 = 0x5368_656b_796c_3031; // "Shekyl01"
-
-/// A minimal spendable wallet: an Ed25519 spend keypair (`b`, `B = b*G`) plus a
-/// hybrid X25519 + ML-KEM-768 KEM keypair. The typed (non-FFI) analogue of the
-/// wallet in `shekyl-ffi`'s `signing_round_trip` test.
-struct Wallet {
-    /// Spend secret `b`.
-    spend_secret: [u8; 32],
-    /// Spend public `B = b*G` (compressed Ed25519).
-    spend_public: [u8; 32],
-    x25519_pk: [u8; 32],
-    x25519_sk: [u8; 32],
-    ml_kem_ek: Vec<u8>,
-    ml_kem_dk: Vec<u8>,
-}
-
-fn random_wallet(rng: &mut ChaCha20Rng) -> Wallet {
-    let b = Scalar::random(rng);
-    let spend_public = (ED25519_BASEPOINT_POINT * b).compress().to_bytes();
-    let (pk, sk) = HybridX25519MlKem
-        .keypair_generate()
-        .expect("hybrid KEM keypair generation");
-    Wallet {
-        spend_secret: b.to_bytes(),
-        spend_public,
-        x25519_pk: pk.x25519,
-        x25519_sk: sk.x25519,
-        ml_kem_ek: pk.ml_kem,
-        // `HybridKemSecretKey` is `ZeroizeOnDrop`; its `Vec` field can't be
-        // moved out, so clone the decapsulation key into the test wallet.
-        ml_kem_dk: sk.ml_kem.clone(),
-    }
-}
 
 /// A random valid prime-order compressed Ed25519 point (`r*G`). Used for decoy
 /// tree members: only the *spent* output needs recoverable secrets — the rest
@@ -294,7 +261,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         };
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(blob.as_slice()),
+            leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
         client

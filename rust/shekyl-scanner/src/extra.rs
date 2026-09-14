@@ -41,7 +41,7 @@ pub const MAX_EXTRA_SIZE_BY_RELAY_RULE: usize = 1060;
 pub const TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT: u8 = tx_extra::TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT;
 
 /// Shekyl tx_extra tag for PQC leaf hash commitments.
-pub const TX_EXTRA_TAG_PQC_LEAF_HASHES: u8 = tx_extra::TX_EXTRA_TAG_PQC_LEAF_HASHES;
+pub const TX_EXTRA_TAG_PQC_LEAF_ENTRIES: u8 = tx_extra::TX_EXTRA_TAG_PQC_LEAF_ENTRIES;
 
 /// A field within the TX extra.
 ///

@@ -17,7 +17,6 @@
 
 use hkdf::Hkdf;
 use sha2::Sha512;
-use zeroize::Zeroize;
 
 use fips204::ml_dsa_65;
 
@@ -50,8 +49,11 @@ pub fn keygen_from_seed(
 /// Derive the canonical hybrid public key bytes from combined shared secret and
 /// output index, without returning any secret key material.
 ///
-/// Used where the full public key (not just its hash) is needed before signing,
-/// e.g. populating `tx.pqc_auths[i].hybrid_public_key` for payload construction.
+/// Used where the full public key is needed before signing, e.g. populating
+/// `tx.pqc_auths[i].hybrid_public_key` for payload construction. The leaf never
+/// stores a hash of these bytes: it stores `CM.x` (`PL-D3`), and the verifier
+/// recomputes the key scalar `k = H_ℓ(hybrid_pk)` from the revealed key as the
+/// commitment's key component ([`crate::leaf_commitment`]).
 pub fn derive_pqc_public_key(
     combined_ss: &[u8; 64],
     output_index: u64,
@@ -266,21 +268,43 @@ pub(crate) fn make_info(label: &[u8], output_index: u64) -> Vec<u8> {
     info
 }
 
-fn expand_to_scalar(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
-    let info = make_info(label, output_index);
-    let mut wide = [0u8; 64];
-    hk.expand(&info, &mut wide)
+/// Expand 64 bytes under `info` and wide-reduce into a canonical Ed25519
+/// scalar (rule 30: wide-reduce, never 32-byte modular reduction). The shared
+/// body for every scalar derived off the output PRK: [`expand_to_scalar`] and
+/// the PQC leaf-commitment blind ([`crate::leaf_commitment`]) both come
+/// through here, so the reduction cannot drift between them. The 64-byte
+/// expansion is wiped structurally; the returned scalar wipes on drop.
+pub(crate) fn expand_wide_scalar(hk: &Hkdf<Sha512>, info: &[u8]) -> zeroize::Zeroizing<Scalar> {
+    let mut wide = zeroize::Zeroizing::new([0u8; 64]);
+    hk.expand(info, wide.as_mut())
         .expect("HKDF-Expand failed for 64-byte output");
-    let scalar = Scalar::from_bytes_mod_order_wide(&wide);
-    wide.zeroize();
-    scalar.to_bytes()
+    zeroize::Zeroizing::new(Scalar::from_bytes_mod_order_wide(&wide))
+}
+
+fn expand_to_scalar(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
+    let scalar = expand_wide_scalar(hk, &make_info(label, output_index));
+    let mut out = [0u8; 32];
+    out.copy_from_slice(scalar.as_bytes());
+    out
+}
+
+/// HKDF-Expand 32 bytes under `label ‖ idx_le64` directly into `out` — the
+/// write-into-destination shape (rule 35) for callers whose destination is
+/// already inside a `Zeroize` wrapper.
+pub(crate) fn expand_32_into(
+    hk: &Hkdf<Sha512>,
+    label: &[u8],
+    output_index: u64,
+    out: &mut [u8; 32],
+) {
+    let info = make_info(label, output_index);
+    hk.expand(&info, out)
+        .expect("HKDF-Expand failed for 32-byte output");
 }
 
 pub(crate) fn expand_32(hk: &Hkdf<Sha512>, label: &[u8], output_index: u64) -> [u8; 32] {
-    let info = make_info(label, output_index);
     let mut out = [0u8; 32];
-    hk.expand(&info, &mut out)
-        .expect("HKDF-Expand failed for 32-byte output");
+    expand_32_into(hk, label, output_index, &mut out);
     out
 }
 

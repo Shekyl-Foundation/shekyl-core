@@ -5,13 +5,17 @@
 
 //! FCMP++ proof construction and verification with PQC commitment binding.
 //!
-//! The Shekyl proof extends upstream FCMP++ by including `H(pqc_pk)` as
-//! a public input verified in-circuit against the 4th leaf scalar.
+//! The Shekyl proof extends upstream FCMP++ with the `PL-D3` opening leg: the
+//! 4th leaf scalar is `CM.x` for the output's Pedersen commitment
+//! `CM = k·G_k + r·J`, and the circuit proves `K + r·J = CM` for the
+//! verifier-supplied public input `K = k·G_k`, `k = H_ℓ(hybrid_pk)` of the key
+//! the spend reveals. The key is bound to the spent leaf without the leaf value
+//! being a public function of the key.
 
 use crate::leaf::PqcKeyScalar;
 use crate::{MAX_INPUTS, MAX_TREE_DEPTH};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use ciphersuite::{
     group::{
@@ -54,9 +58,6 @@ pub enum ProveError {
     #[error("empty inputs")]
     EmptyInputs,
 
-    #[error("PQC hash mismatch at input {input_index}")]
-    PqcHashMismatch { input_index: usize },
-
     #[error("tree path unavailable for input {0}")]
     TreePathUnavailable(usize),
 
@@ -98,12 +99,11 @@ pub enum VerifyError {
     #[error("invalid tree root")]
     InvalidTreeRoot,
 
-    /// The verifier-derived PQC key point `K = k·G_k` for input `{0}` is not
-    /// a usable point (the identity). Unreachable for a non-zero `k`, which
-    /// `pqc_key_scalar` guarantees; kept as a loud refusal, never a silent skip.
-    #[error("PQC key point invalid at input {0}")]
-    PqcKeyPointInvalid(usize),
-
+    // Discriminant 3 (`PqcKeyPointInvalid`) is RETIRED, not renumbered: the
+    // verifier now computes `K = k·G_k` directly as a group element, so a
+    // non-decompressible `K` is unrepresentable (a `k = 0` identity still
+    // refuses loudly, in the circuit's `Input` constructor, surfacing as
+    // `UpstreamError`). The C header mirrors the retirement.
     #[error("key image count mismatch: expected {expected}, got {got}")]
     KeyImageCountMismatch { expected: usize, got: usize },
 
@@ -133,13 +133,14 @@ pub enum VerifyError {
 impl VerifyError {
     /// FFI-stable discriminant for crossing the C ABI boundary.
     ///
-    /// Codes 1-9 map to the enum variants in declaration order.
-    /// Code 0 is reserved for success (not an error).
+    /// Code 0 is reserved for success (not an error); code 3 is RETIRED with
+    /// the `PqcKeyPointInvalid` variant and must never be reassigned — the
+    /// remaining codes keep their original values so the C header stays a
+    /// stable mirror.
     pub fn discriminant(&self) -> u8 {
         match self {
             Self::DeserializationFailed => 1,
             Self::InvalidTreeRoot => 2,
-            Self::PqcKeyPointInvalid(_) => 3,
             Self::KeyImageCountMismatch { .. } => 4,
             Self::UpstreamError(_) => 5,
             Self::BatchVerificationFailed => 6,
@@ -168,17 +169,27 @@ pub struct BranchLayer {
 ///
 /// The C++ wallet constructs this from the output being spent, the
 /// per-output key derivation, and the Merkle path from `get_curve_tree_path`.
-#[derive(Clone, Debug)]
+///
+/// Carries the spend's signing secrets (`spend_key_x`, `spend_key_y`,
+/// `commitment_mask`, `pseudo_out_blind`, `pqc_leaf_blind`), so the struct
+/// wipes them on drop and its `Debug` redacts them; the public tree/path data
+/// is skipped from the wipe. Not `Clone`: no caller duplicates a witness, and
+/// every extra copy is another buffer to wipe.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct ProveInput {
     /// Compressed Ed25519 output public key O.
+    #[zeroize(skip)]
     pub output_key: [u8; 32],
     /// Compressed Ed25519 key image generator I = Hp(O).
+    #[zeroize(skip)]
     pub key_image_gen: [u8; 32],
     /// Compressed Ed25519 Pedersen commitment C.
+    #[zeroize(skip)]
     pub commitment: [u8; 32],
     /// The output's PQC leaf commitment point `CM = k·G_k + r·J`, compressed
     /// Ed25519 (the first 32 bytes of its `0x07` entry); `CM.x` is the 4th leaf
     /// scalar (`PL-D3`).
+    #[zeroize(skip)]
     pub pqc_leaf_commitment: [u8; 32],
     /// The commitment's blind `r` (Ed25519 scalar) — the opening leg's witness.
     pub pqc_leaf_blind: [u8; 32],
@@ -203,15 +214,56 @@ pub struct ProveInput {
 
     /// Sibling outputs in the same leaf chunk (compressed Ed25519 points).
     /// Each entry is (O, I, C) as 3x32 bytes.
+    #[zeroize(skip)]
     pub leaf_chunk_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])>,
     /// The 4th leaf scalar (`CM.x`) of each output in the chunk, parallel to
     /// `leaf_chunk_outputs` — the sibling values as the leaf holds them.
+    #[zeroize(skip)]
     pub leaf_chunk_cm_x: Vec<[u8; 32]>,
 
     /// Selene (C1) branch layers, bottom to top.
+    #[zeroize(skip)]
     pub c1_branch_layers: Vec<BranchLayer>,
     /// Helios (C2) branch layers, bottom to top.
+    #[zeroize(skip)]
     pub c2_branch_layers: Vec<BranchLayer>,
+}
+
+// The secret fields never reach logs or error messages: redacted here, at the
+// only place they could be formatted.
+impl std::fmt::Debug for ProveInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProveInput")
+            .field("output_key", &self.output_key)
+            .field("key_image_gen", &self.key_image_gen)
+            .field("commitment", &self.commitment)
+            .field("pqc_leaf_commitment", &self.pqc_leaf_commitment)
+            .field("pqc_leaf_blind", &"[REDACTED]")
+            .field("spend_key_x", &"[REDACTED]")
+            .field("spend_key_y", &"[REDACTED]")
+            .field("commitment_mask", &"[REDACTED]")
+            .field("pseudo_out_blind", &"[REDACTED]")
+            .field("leaf_chunk_outputs", &self.leaf_chunk_outputs)
+            .field("leaf_chunk_cm_x", &self.leaf_chunk_cm_x)
+            .field("c1_branch_layers", &self.c1_branch_layers)
+            .field("c2_branch_layers", &self.c2_branch_layers)
+            .finish()
+    }
+}
+
+impl ProveInput {
+    /// This input's membership-leg data, in the shape [`assemble_input_path`]
+    /// takes.
+    fn path_data(&self) -> InputPathData<'_> {
+        InputPathData {
+            pqc_leaf_commitment: &self.pqc_leaf_commitment,
+            pqc_leaf_blind: &self.pqc_leaf_blind,
+            leaf_outputs: &self.leaf_chunk_outputs,
+            leaf_cm_x: &self.leaf_chunk_cm_x,
+            c1_branch_layers: &self.c1_branch_layers,
+            c2_branch_layers: &self.c2_branch_layers,
+        }
+    }
 }
 
 /// Result of FCMP++ proof construction.
@@ -220,6 +272,212 @@ pub struct ProveResult {
     pub proof: ShekylFcmpProof,
     /// Per-input pseudo-outs (C_tilde compressed), needed by the wallet for balance proof.
     pub pseudo_outs: Vec<[u8; 32]>,
+}
+
+/// One input's membership-leg data, viewed uniformly across the two witness
+/// carriers (`ProveInput` for the single-signer paths, `ProveInputLeafChunk`
+/// for the multisig path): the spent output's `CM` and blind `r` bytes, the
+/// leaf chunk, and the branch layers.
+///
+/// Borrowed views into the carrier, so the shared assembly
+/// ([`assemble_input_path`]) never copies the blind out of its
+/// zeroize-on-drop home. `Copy` copies only the references, never the bytes
+/// behind them.
+#[derive(Clone, Copy)]
+struct InputPathData<'a> {
+    pqc_leaf_commitment: &'a [u8; 32],
+    pqc_leaf_blind: &'a [u8; 32],
+    leaf_outputs: &'a [([u8; 32], [u8; 32], [u8; 32])],
+    leaf_cm_x: &'a [[u8; 32]],
+    c1_branch_layers: &'a [BranchLayer],
+    c2_branch_layers: &'a [BranchLayer],
+}
+
+/// Assemble one input's membership leg: the [`OutputBlinds`] (rerandomization
+/// blinds plus the `PL-D3` `KBlind` over `J`) and the [`Path`] (leaf chunk
+/// decompression, zero-padded branch layers).
+///
+/// The single definition for all three provers ([`prove_with_rng`],
+/// [`prove_membership_only`], and the multisig `prove_with_sal`). The provers
+/// differ only in what happens *before* this point — how the rerandomization
+/// and the spend-auth leg are produced — never in how the membership leg is
+/// marshaled; a third hand-copy of this body is exactly the drift surface that
+/// broke the cfg-gated path once.
+fn assemble_input_path(
+    idx: usize,
+    output: Output,
+    rerand: &RerandomizedOutput,
+    data: InputPathData<'_>,
+) -> Result<(OutputBlinds<EdwardsPoint>, Path<Curves>), ProveError> {
+    let output_cm =
+        decompress_ed25519(data.pqc_leaf_commitment).ok_or(ProveError::InvalidPoint {
+            input_index: idx,
+            field: "pqc_leaf_commitment",
+        })?;
+    let pqc_leaf_blind =
+        deserialize_ed25519_scalar(data.pqc_leaf_blind).ok_or(ProveError::InvalidScalar {
+            input_index: idx,
+            field: "pqc_leaf_blind",
+        })?;
+
+    let output_blind = OutputBlinds::new(
+        OBlind::new(
+            EdwardsPoint(*T),
+            ScalarDecomposition::new(rerand.o_blind())
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        ),
+        IBlind::new(
+            EdwardsPoint(*FCMP_PLUS_PLUS_U),
+            EdwardsPoint(*FCMP_PLUS_PLUS_V),
+            ScalarDecomposition::new(rerand.i_blind())
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        ),
+        IBlindBlind::new(
+            EdwardsPoint(*T),
+            ScalarDecomposition::new(rerand.i_blind_blind())
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        ),
+        CBlind::new(
+            EdwardsPoint::generator(),
+            ScalarDecomposition::new(rerand.c_blind())
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        ),
+        KBlind::new(
+            EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
+            ScalarDecomposition::new(pqc_leaf_blind)
+                .ok_or(ProveError::ScalarDecompositionFailed)?,
+        ),
+    );
+
+    if data.leaf_outputs.is_empty() {
+        return Err(ProveError::TreePathUnavailable(idx));
+    }
+
+    let mut chunk_outputs = Vec::with_capacity(data.leaf_outputs.len());
+    let mut chunk_cm_x = Vec::with_capacity(data.leaf_outputs.len());
+    for (j, (o, i, c)) in data.leaf_outputs.iter().enumerate() {
+        let lo = decompress_ed25519(o).ok_or(ProveError::InvalidPoint {
+            input_index: idx,
+            field: "leaf_O",
+        })?;
+        let li = decompress_ed25519(i).ok_or(ProveError::InvalidPoint {
+            input_index: idx,
+            field: "leaf_I",
+        })?;
+        let lc = decompress_ed25519(c).ok_or(ProveError::InvalidPoint {
+            input_index: idx,
+            field: "leaf_C",
+        })?;
+        chunk_outputs.push(Output::new(lo, li, lc).map_err(|e| {
+            ProveError::UpstreamError(format!("leaf Output::new at input {idx}, leaf {j}: {e:?}"))
+        })?);
+
+        let cm_x =
+            deserialize_selene_scalar(&data.leaf_cm_x[j]).ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "leaf_cm_x",
+            })?;
+        chunk_cm_x.push(cm_x);
+    }
+
+    // Zero-pad partial branch chunks to the full chunk width — see
+    // `pad_branch_chunk` for the rationale (the consensus tree stores narrow
+    // chunks; the FCMP circuit needs full width; zero scalars vanish in the
+    // layer hash so the consensus root is unchanged; an over-wide chunk is
+    // rejected rather than silently truncated).
+    let mut c1_layers = Vec::new();
+    for layer in data.c1_branch_layers {
+        let scalars: Vec<<Selene as Ciphersuite>::F> = layer
+            .siblings
+            .iter()
+            .map(deserialize_selene_scalar)
+            .collect::<Option<Vec<_>>>()
+            .ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "c1_branch",
+            })?;
+        c1_layers.push(pad_branch_chunk::<Selene>(
+            scalars,
+            crate::tree::SELENE_CHUNK_WIDTH,
+            idx,
+            "c1_branch",
+        )?);
+    }
+    let mut c2_layers = Vec::new();
+    for layer in data.c2_branch_layers {
+        let scalars: Vec<<Helios as Ciphersuite>::F> = layer
+            .siblings
+            .iter()
+            .map(deserialize_helios_scalar)
+            .collect::<Option<Vec<_>>>()
+            .ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "c2_branch",
+            })?;
+        c2_layers.push(pad_branch_chunk::<Helios>(
+            scalars,
+            crate::tree::HELIOS_CHUNK_WIDTH,
+            idx,
+            "c2_branch",
+        )?);
+    }
+
+    Ok((
+        output_blind,
+        Path::<Curves> {
+            output,
+            output_cm,
+            leaves: chunk_outputs,
+            leaves_cm_x: chunk_cm_x,
+            curve_2_layers: c2_layers,
+            curve_1_layers: c1_layers,
+        },
+    ))
+}
+
+/// Run the shared membership-circuit tail every prover ends with: build the
+/// [`Branches`], draw the branch blinds from `rng`, blind, and produce the
+/// [`Fcmp`]. The provers differ only in their spend-auth leg and proof
+/// container; the membership circuit is one code path.
+fn prove_membership_circuit<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    paths: Vec<Path<Curves>>,
+    output_blinds_list: Vec<OutputBlinds<EdwardsPoint>>,
+) -> Result<Fcmp<Curves>, ProveError> {
+    let branches =
+        Branches::new(paths).ok_or(ProveError::UpstreamError("Branches::new failed".into()))?;
+
+    let c1_blind_count = branches.necessary_c1_blinds();
+    let c2_blind_count = branches.necessary_c2_blinds();
+
+    let c1_h = SELENE_FCMP_GENERATORS.generators.h();
+    let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
+
+    let c1_blinds: Vec<_> = (0..c1_blind_count)
+        .map(|_| {
+            Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
+                c1_h,
+                ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut *rng))
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ))
+        })
+        .collect::<Result<_, ProveError>>()?;
+    let c2_blinds: Vec<_> = (0..c2_blind_count)
+        .map(|_| {
+            Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
+                c2_h,
+                ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut *rng))
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ))
+        })
+        .collect::<Result<_, ProveError>>()?;
+
+    let blinded = branches
+        .blind(output_blinds_list, c1_blinds, c2_blinds)
+        .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
+
+    Fcmp::prove(&mut *rng, &*FCMP_PARAMS, blinded)
+        .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))
 }
 
 /// Construct an FCMP++ proof for a set of inputs, drawing all randomness from
@@ -310,173 +568,12 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
         let (_, sal) = SpendAuthAndLinkability::prove(&mut *rng, signable_tx_hash, &opening);
         sal_pairs.push((crate_input, sal));
 
-        // Build OutputBlinds from rerandomization
-        let output_cm =
-            decompress_ed25519(&input.pqc_leaf_commitment).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "pqc_leaf_commitment",
-            })?;
-        let pqc_leaf_blind =
-            deserialize_ed25519_scalar(&input.pqc_leaf_blind).ok_or(ProveError::InvalidScalar {
-                input_index: idx,
-                field: "pqc_leaf_blind",
-            })?;
-        let output_blind = OutputBlinds::new(
-            OBlind::new(
-                EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.o_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            IBlind::new(
-                EdwardsPoint(*FCMP_PLUS_PLUS_U),
-                EdwardsPoint(*FCMP_PLUS_PLUS_V),
-                ScalarDecomposition::new(rerand.i_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            IBlindBlind::new(
-                EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.i_blind_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            CBlind::new(
-                EdwardsPoint::generator(),
-                ScalarDecomposition::new(rerand.c_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            KBlind::new(
-                EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
-                ScalarDecomposition::new(pqc_leaf_blind)
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-        );
+        let (output_blind, path) = assemble_input_path(idx, output, &rerand, input.path_data())?;
         output_blinds_list.push(output_blind);
-
-        // Build the leaf chunk
-        if input.leaf_chunk_outputs.is_empty() {
-            return Err(ProveError::TreePathUnavailable(idx));
-        }
-
-        let mut chunk_outputs = Vec::with_capacity(input.leaf_chunk_outputs.len());
-        let mut chunk_extra = Vec::with_capacity(input.leaf_chunk_outputs.len());
-        for (j, (o, i, c)) in input.leaf_chunk_outputs.iter().enumerate() {
-            let lo = decompress_ed25519(o).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_O",
-            })?;
-            let li = decompress_ed25519(i).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_I",
-            })?;
-            let lc = decompress_ed25519(c).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_C",
-            })?;
-            chunk_outputs.push(Output::new(lo, li, lc).map_err(|e| {
-                ProveError::UpstreamError(format!(
-                    "leaf Output::new at input {idx}, leaf {j}: {e:?}"
-                ))
-            })?);
-
-            let h_pqc = deserialize_selene_scalar(&input.leaf_chunk_cm_x[j]).ok_or(
-                ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "leaf_cm_x",
-                },
-            )?;
-            chunk_extra.push(h_pqc);
-        }
-
-        // Build C1/C2 branch layers, zero-padded to the full chunk width.
-        //
-        // The consensus curve tree stores PARTIAL (narrow) chunks for incomplete
-        // nodes (`shekyl-curve-tree::assemble` slices `prev[start..end]`), but the
-        // FCMP membership circuit is built for fixed-width chunks. Zero scalars
-        // vanish in the layer hash (`hash_grow([c]) == hash_grow([c, 0…])`), so
-        // zero-padding here satisfies the circuit while leaving the consensus root
-        // unchanged. Without this, a proof over a partial branch chunk fails
-        // verification with `BatchVerificationFailed` (CT-5 real-tree verify fix).
-        let mut c1_layers = Vec::new();
-        for layer in &input.c1_branch_layers {
-            let scalars: Vec<<Selene as Ciphersuite>::F> = layer
-                .siblings
-                .iter()
-                .map(deserialize_selene_scalar)
-                .collect::<Option<Vec<_>>>()
-                .ok_or(ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "c1_branch",
-                })?;
-            c1_layers.push(pad_branch_chunk::<Selene>(
-                scalars,
-                crate::tree::SELENE_CHUNK_WIDTH,
-                idx,
-                "c1_branch",
-            )?);
-        }
-        let mut c2_layers = Vec::new();
-        for layer in &input.c2_branch_layers {
-            let scalars: Vec<<Helios as Ciphersuite>::F> = layer
-                .siblings
-                .iter()
-                .map(deserialize_helios_scalar)
-                .collect::<Option<Vec<_>>>()
-                .ok_or(ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "c2_branch",
-                })?;
-            c2_layers.push(pad_branch_chunk::<Helios>(
-                scalars,
-                crate::tree::HELIOS_CHUNK_WIDTH,
-                idx,
-                "c2_branch",
-            )?);
-        }
-
-        paths.push(Path::<Curves> {
-            output,
-            output_cm,
-            leaves: chunk_outputs,
-            leaves_cm_x: chunk_extra,
-            curve_2_layers: c2_layers,
-            curve_1_layers: c1_layers,
-        });
+        paths.push(path);
     }
 
-    // Build branches, generate blinds, and produce the proof
-    let branches =
-        Branches::new(paths).ok_or(ProveError::UpstreamError("Branches::new failed".into()))?;
-
-    let c1_blind_count = branches.necessary_c1_blinds();
-    let c2_blind_count = branches.necessary_c2_blinds();
-
-    let c1_h = SELENE_FCMP_GENERATORS.generators.h();
-    let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
-
-    let c1_blinds: Vec<_> = (0..c1_blind_count)
-        .map(|_| {
-            Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
-                c1_h,
-                ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut *rng))
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ))
-        })
-        .collect::<Result<_, ProveError>>()?;
-    let c2_blinds: Vec<_> = (0..c2_blind_count)
-        .map(|_| {
-            Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
-                c2_h,
-                ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut *rng))
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ))
-        })
-        .collect::<Result<_, ProveError>>()?;
-
-    let blinded = branches
-        .blind(output_blinds_list, c1_blinds, c2_blinds)
-        .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
-
-    let fcmp = Fcmp::prove(&mut *rng, &*FCMP_PARAMS, blinded)
-        .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))?;
+    let fcmp = prove_membership_circuit(rng, paths, output_blinds_list)?;
 
     let fcmp_pp = FcmpPlusPlus::new(sal_pairs, fcmp);
 
@@ -528,12 +625,12 @@ pub fn prove(
 /// rerandomization, or an upstream prove failure.
 ///
 /// # Maintenance
-/// Branch-building, blinds, and `Fcmp::prove` are intentionally identical to [`prove`]; only
-/// the rerandomization, spend-auth, and proof type differ (the three swaps above). A full
-/// extraction into a shared helper is **deferred** — it would restructure the shipped `prove`
-/// path for an additive change. The drift guard is that **both** paths have roundtrip KATs
-/// (`prove_verify_roundtrip`, `membership_only_prove_verify_roundtrip_and_cross_type`): a change
-/// to the shared shape in one that is not mirrored to the other fails the other's KAT.
+/// The membership leg (per-input assembly and the circuit tail) is shared code —
+/// [`assemble_input_path`] and [`prove_membership_circuit`] — so it cannot drift
+/// between the provers; only the three swaps above are this function's own body.
+/// Both paths additionally have roundtrip KATs (`prove_verify_roundtrip`,
+/// `membership_only_prove_verify_roundtrip_and_cross_type`) pinning the shared
+/// shape end to end.
 #[allow(non_snake_case)]
 pub fn prove_membership_only(
     inputs: &[ProveInput],
@@ -598,163 +695,12 @@ pub fn prove_membership_only(
         let msa = MembershipSpendAuth::prove(&mut OsRng, signable_tx_hash, idx as u32, &opening);
         msa_pairs.push((crate_input, msa));
 
-        // OutputBlinds from the rerandomization — identical to `prove`.
-        let output_cm =
-            decompress_ed25519(&input.pqc_leaf_commitment).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "pqc_leaf_commitment",
-            })?;
-        let pqc_leaf_blind =
-            deserialize_ed25519_scalar(&input.pqc_leaf_blind).ok_or(ProveError::InvalidScalar {
-                input_index: idx,
-                field: "pqc_leaf_blind",
-            })?;
-        let output_blind = OutputBlinds::new(
-            OBlind::new(
-                EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.o_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            IBlind::new(
-                EdwardsPoint(*FCMP_PLUS_PLUS_U),
-                EdwardsPoint(*FCMP_PLUS_PLUS_V),
-                ScalarDecomposition::new(rerand.i_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            IBlindBlind::new(
-                EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.i_blind_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            CBlind::new(
-                EdwardsPoint::generator(),
-                ScalarDecomposition::new(rerand.c_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            KBlind::new(
-                EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
-                ScalarDecomposition::new(pqc_leaf_blind)
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-        );
+        let (output_blind, path) = assemble_input_path(idx, output, &rerand, input.path_data())?;
         output_blinds_list.push(output_blind);
-
-        // Leaf chunk + branch layers — identical to `prove`.
-        if input.leaf_chunk_outputs.is_empty() {
-            return Err(ProveError::TreePathUnavailable(idx));
-        }
-
-        let mut chunk_outputs = Vec::with_capacity(input.leaf_chunk_outputs.len());
-        let mut chunk_extra = Vec::with_capacity(input.leaf_chunk_outputs.len());
-        for (j, (o, i, c)) in input.leaf_chunk_outputs.iter().enumerate() {
-            let lo = decompress_ed25519(o).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_O",
-            })?;
-            let li = decompress_ed25519(i).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_I",
-            })?;
-            let lc = decompress_ed25519(c).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_C",
-            })?;
-            chunk_outputs.push(Output::new(lo, li, lc).map_err(|e| {
-                ProveError::UpstreamError(format!(
-                    "leaf Output::new at input {idx}, leaf {j}: {e:?}"
-                ))
-            })?);
-
-            let h_pqc = deserialize_selene_scalar(&input.leaf_chunk_cm_x[j]).ok_or(
-                ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "leaf_cm_x",
-                },
-            )?;
-            chunk_extra.push(h_pqc);
-        }
-
-        let mut c1_layers = Vec::new();
-        for layer in &input.c1_branch_layers {
-            let scalars: Vec<<Selene as Ciphersuite>::F> = layer
-                .siblings
-                .iter()
-                .map(deserialize_selene_scalar)
-                .collect::<Option<Vec<_>>>()
-                .ok_or(ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "c1_branch",
-                })?;
-            c1_layers.push(pad_branch_chunk::<Selene>(
-                scalars,
-                crate::tree::SELENE_CHUNK_WIDTH,
-                idx,
-                "c1_branch",
-            )?);
-        }
-        let mut c2_layers = Vec::new();
-        for layer in &input.c2_branch_layers {
-            let scalars: Vec<<Helios as Ciphersuite>::F> = layer
-                .siblings
-                .iter()
-                .map(deserialize_helios_scalar)
-                .collect::<Option<Vec<_>>>()
-                .ok_or(ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "c2_branch",
-                })?;
-            c2_layers.push(pad_branch_chunk::<Helios>(
-                scalars,
-                crate::tree::HELIOS_CHUNK_WIDTH,
-                idx,
-                "c2_branch",
-            )?);
-        }
-
-        paths.push(Path::<Curves> {
-            output,
-            output_cm,
-            leaves: chunk_outputs,
-            leaves_cm_x: chunk_extra,
-            curve_2_layers: c2_layers,
-            curve_1_layers: c1_layers,
-        });
+        paths.push(path);
     }
 
-    let branches =
-        Branches::new(paths).ok_or(ProveError::UpstreamError("Branches::new failed".into()))?;
-
-    let c1_blind_count = branches.necessary_c1_blinds();
-    let c2_blind_count = branches.necessary_c2_blinds();
-
-    let c1_h = SELENE_FCMP_GENERATORS.generators.h();
-    let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
-
-    let c1_blinds: Vec<_> = (0..c1_blind_count)
-        .map(|_| {
-            Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
-                c1_h,
-                ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng))
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ))
-        })
-        .collect::<Result<_, ProveError>>()?;
-    let c2_blinds: Vec<_> = (0..c2_blind_count)
-        .map(|_| {
-            Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
-                c2_h,
-                ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng))
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ))
-        })
-        .collect::<Result<_, ProveError>>()?;
-
-    let blinded = branches
-        .blind(output_blinds_list, c1_blinds, c2_blinds)
-        .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
-
-    let fcmp = Fcmp::prove(&mut OsRng, &*FCMP_PARAMS, blinded)
-        .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))?;
+    let fcmp = prove_membership_circuit(&mut OsRng, paths, output_blinds_list)?;
 
     let fcmp_mo = FcmpMembershipOnly::new(msa_pairs, fcmp);
 
@@ -825,168 +771,13 @@ pub fn prove_with_sal(
         paired.push((input, sal));
 
         let chunk = &leaf_chunks[idx];
-        let output_cm =
-            decompress_ed25519(&chunk.pqc_leaf_commitment).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "pqc_leaf_commitment",
-            })?;
-        let pqc_leaf_blind =
-            deserialize_ed25519_scalar(&chunk.pqc_leaf_blind).ok_or(ProveError::InvalidScalar {
-                input_index: idx,
-                field: "pqc_leaf_blind",
-            })?;
-
-        // Build OutputBlinds from rerandomization
-        let output_blind = OutputBlinds::new(
-            OBlind::new(
-                EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.o_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            IBlind::new(
-                EdwardsPoint(*FCMP_PLUS_PLUS_U),
-                EdwardsPoint(*FCMP_PLUS_PLUS_V),
-                ScalarDecomposition::new(rerand.i_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            IBlindBlind::new(
-                EdwardsPoint(*T),
-                ScalarDecomposition::new(rerand.i_blind_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            CBlind::new(
-                EdwardsPoint::generator(),
-                ScalarDecomposition::new(rerand.c_blind())
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-            KBlind::new(
-                EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
-                ScalarDecomposition::new(pqc_leaf_blind)
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ),
-        );
+        let (output_blind, path) =
+            assemble_input_path(idx, *orig_output, rerand, chunk.path_data())?;
         output_blinds_list.push(output_blind);
-
-        // Build the leaf chunk and branch layers
-        if chunk.leaf_outputs.is_empty() {
-            return Err(ProveError::TreePathUnavailable(idx));
-        }
-
-        let mut chunk_outputs = Vec::with_capacity(chunk.leaf_outputs.len());
-        let mut chunk_extra = Vec::with_capacity(chunk.leaf_outputs.len());
-        for (j, (o, i, c)) in chunk.leaf_outputs.iter().enumerate() {
-            let lo = decompress_ed25519(o).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_O",
-            })?;
-            let li = decompress_ed25519(i).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_I",
-            })?;
-            let lc = decompress_ed25519(c).ok_or(ProveError::InvalidPoint {
-                input_index: idx,
-                field: "leaf_C",
-            })?;
-            chunk_outputs.push(Output::new(lo, li, lc).map_err(|e| {
-                ProveError::UpstreamError(format!(
-                    "leaf Output::new at input {idx}, leaf {j}: {e:?}"
-                ))
-            })?);
-            let h = deserialize_selene_scalar(&chunk.leaf_cm_x[j]).ok_or(
-                ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "leaf_cm_x",
-                },
-            )?;
-            chunk_extra.push(h);
-        }
-
-        // Zero-pad partial branch chunks to the full chunk width — see
-        // `pad_branch_chunk` for the rationale (the consensus tree stores narrow
-        // chunks; the FCMP circuit needs full width; zero scalars vanish in the
-        // layer hash so the consensus root is unchanged; an over-wide chunk is
-        // rejected rather than silently truncated).
-        let mut c1_layers = Vec::new();
-        for layer in &chunk.c1_branch_layers {
-            let scalars: Vec<<Selene as Ciphersuite>::F> = layer
-                .siblings
-                .iter()
-                .map(deserialize_selene_scalar)
-                .collect::<Option<Vec<_>>>()
-                .ok_or(ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "c1_branch",
-                })?;
-            c1_layers.push(pad_branch_chunk::<Selene>(
-                scalars,
-                crate::tree::SELENE_CHUNK_WIDTH,
-                idx,
-                "c1_branch",
-            )?);
-        }
-        let mut c2_layers = Vec::new();
-        for layer in &chunk.c2_branch_layers {
-            let scalars: Vec<<Helios as Ciphersuite>::F> = layer
-                .siblings
-                .iter()
-                .map(deserialize_helios_scalar)
-                .collect::<Option<Vec<_>>>()
-                .ok_or(ProveError::InvalidScalar {
-                    input_index: idx,
-                    field: "c2_branch",
-                })?;
-            c2_layers.push(pad_branch_chunk::<Helios>(
-                scalars,
-                crate::tree::HELIOS_CHUNK_WIDTH,
-                idx,
-                "c2_branch",
-            )?);
-        }
-
-        paths.push(Path::<Curves> {
-            output: *orig_output,
-            output_cm,
-            leaves: chunk_outputs,
-            leaves_cm_x: chunk_extra,
-            curve_2_layers: c2_layers,
-            curve_1_layers: c1_layers,
-        });
+        paths.push(path);
     }
 
-    let branches =
-        Branches::new(paths).ok_or(ProveError::UpstreamError("Branches::new failed".into()))?;
-
-    let c1_blind_count = branches.necessary_c1_blinds();
-    let c2_blind_count = branches.necessary_c2_blinds();
-
-    let c1_h = SELENE_FCMP_GENERATORS.generators.h();
-    let c2_h = HELIOS_FCMP_GENERATORS.generators.h();
-
-    let c1_blinds: Vec<_> = (0..c1_blind_count)
-        .map(|_| {
-            Ok(BranchBlind::<<Selene as Ciphersuite>::G>::new(
-                c1_h,
-                ScalarDecomposition::new(<Selene as Ciphersuite>::F::random(&mut OsRng))
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ))
-        })
-        .collect::<Result<_, ProveError>>()?;
-    let c2_blinds: Vec<_> = (0..c2_blind_count)
-        .map(|_| {
-            Ok(BranchBlind::<<Helios as Ciphersuite>::G>::new(
-                c2_h,
-                ScalarDecomposition::new(<Helios as Ciphersuite>::F::random(&mut OsRng))
-                    .ok_or(ProveError::ScalarDecompositionFailed)?,
-            ))
-        })
-        .collect::<Result<_, ProveError>>()?;
-
-    let blinded = branches
-        .blind(output_blinds_list, c1_blinds, c2_blinds)
-        .map_err(|e| ProveError::UpstreamError(format!("blind: {e:?}")))?;
-
-    let fcmp = Fcmp::prove(&mut OsRng, &*FCMP_PARAMS, blinded)
-        .map_err(|e| ProveError::UpstreamError(format!("Fcmp::prove: {e:?}")))?;
+    let fcmp = prove_membership_circuit(&mut OsRng, paths, output_blinds_list)?;
 
     let fcmp_pp = FcmpPlusPlus::new(paired, fcmp);
 
@@ -1008,17 +799,58 @@ pub fn prove_with_sal(
 }
 
 /// Leaf chunk and branch data for `prove_with_sal()`.
+///
+/// Carries the opening witness `pqc_leaf_blind`, so the struct wipes it on
+/// drop and its `Debug` redacts it; the public tree data is skipped from the
+/// wipe. Not `Clone`: no caller duplicates a witness.
 #[cfg(feature = "multisig")]
-#[derive(Clone, Debug)]
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct ProveInputLeafChunk {
     /// The spent output's PQC leaf commitment point `CM` (compressed Ed25519).
+    #[zeroize(skip)]
     pub pqc_leaf_commitment: [u8; 32],
     /// The commitment's blind `r` (Ed25519 scalar).
     pub pqc_leaf_blind: [u8; 32],
+    #[zeroize(skip)]
     pub leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])>,
+    #[zeroize(skip)]
     pub leaf_cm_x: Vec<[u8; 32]>,
+    #[zeroize(skip)]
     pub c1_branch_layers: Vec<BranchLayer>,
+    #[zeroize(skip)]
     pub c2_branch_layers: Vec<BranchLayer>,
+}
+
+// The blind never reaches logs or error messages: redacted here, at the only
+// place it could be formatted.
+#[cfg(feature = "multisig")]
+impl std::fmt::Debug for ProveInputLeafChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProveInputLeafChunk")
+            .field("pqc_leaf_commitment", &self.pqc_leaf_commitment)
+            .field("pqc_leaf_blind", &"[REDACTED]")
+            .field("leaf_outputs", &self.leaf_outputs)
+            .field("leaf_cm_x", &self.leaf_cm_x)
+            .field("c1_branch_layers", &self.c1_branch_layers)
+            .field("c2_branch_layers", &self.c2_branch_layers)
+            .finish()
+    }
+}
+
+#[cfg(feature = "multisig")]
+impl ProveInputLeafChunk {
+    /// This input's membership-leg data, in the shape [`assemble_input_path`]
+    /// takes.
+    fn path_data(&self) -> InputPathData<'_> {
+        InputPathData {
+            pqc_leaf_commitment: &self.pqc_leaf_commitment,
+            pqc_leaf_blind: &self.pqc_leaf_blind,
+            leaf_outputs: &self.leaf_outputs,
+            leaf_cm_x: &self.leaf_cm_x,
+            c1_branch_layers: &self.c1_branch_layers,
+            c2_branch_layers: &self.c2_branch_layers,
+        }
+    }
 }
 
 /// Verify an FCMP++ proof against public inputs.
@@ -1092,14 +924,13 @@ pub fn verify(
             VerifyError::DeserializationFailed
         })?;
 
-    // K = k·G_k per input, computed here from the revealed key's scalar and never
-    // carried on the wire (PL-D3); a non-decompressible point is impossible for a
-    // scalar multiple of G_k, but the arm is kept as a loud refusal.
-    let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> = pqc_keys
-        .iter()
-        .enumerate()
-        .map(|(i, k)| decompress_ed25519(&k.point()).ok_or(VerifyError::PqcKeyPointInvalid(i)))
-        .collect::<Result<Vec<_>, _>>()?;
+    // K = k·G_k per input, computed here from the revealed key's scalar as a
+    // group element directly and never carried on the wire (PL-D3). Total: a
+    // scalar multiple of G_k is always a point. A zero `k` yields the identity,
+    // which the circuit's `Input` constructor refuses loudly (surfacing as
+    // `UpstreamError`), never a silent skip.
+    let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> =
+        pqc_keys.iter().map(PqcKeyScalar::key_point).collect();
 
     // Both collections are length-validated to `num_inputs` above; zip them into the
     // single ordered per-input bundle the verifier takes, so alignment is structural.
@@ -1159,9 +990,8 @@ pub fn verify(
 /// asserts the cross-type rejection.
 ///
 /// # Errors
-/// [`VerifyError::InputCountMismatch`] (pseudo-outs **or** pqc-hash count vs proof input
-/// count), [`VerifyError::PqcKeyPointInvalid`] (per-input key point),
-/// [`VerifyError::InvalidTreeRoot`], [`VerifyError::TreeDepthTooLarge`],
+/// [`VerifyError::InputCountMismatch`] (pseudo-outs **or** pqc-key count vs proof input
+/// count), [`VerifyError::InvalidTreeRoot`], [`VerifyError::TreeDepthTooLarge`],
 /// [`VerifyError::DeserializationFailed`] (also `proof.num_inputs == 0` or `> MAX_INPUTS`),
 /// [`VerifyError::UpstreamError`], or [`VerifyError::BatchVerificationFailed`].
 /// Never [`VerifyError::KeyImageCountMismatch`] — this path has no key images.
@@ -1208,14 +1038,13 @@ pub fn verify_membership_only(
         VerifyError::InvalidTreeRoot
     })?;
 
-    // K = k·G_k per input, computed here from the revealed key's scalar and never
-    // carried on the wire (PL-D3); a non-decompressible point is impossible for a
-    // scalar multiple of G_k, but the arm is kept as a loud refusal.
-    let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> = pqc_keys
-        .iter()
-        .enumerate()
-        .map(|(i, k)| decompress_ed25519(&k.point()).ok_or(VerifyError::PqcKeyPointInvalid(i)))
-        .collect::<Result<Vec<_>, _>>()?;
+    // K = k·G_k per input, computed here from the revealed key's scalar as a
+    // group element directly and never carried on the wire (PL-D3). Total: a
+    // scalar multiple of G_k is always a point. A zero `k` yields the identity,
+    // which the circuit's `Input` constructor refuses loudly (surfacing as
+    // `UpstreamError`), never a silent skip.
+    let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> =
+        pqc_keys.iter().map(PqcKeyScalar::key_point).collect();
 
     let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut proof.data.as_slice())
         .map_err(|e| {
@@ -1368,7 +1197,8 @@ mod tests {
         let cm = (EdwardsPoint(*PQC_LEAF_COMMITMENT_G_K) * k)
             + (EdwardsPoint(*PQC_LEAF_COMMITMENT_J) * r);
         PqcLeaf {
-            key: PqcKeyScalar(k.to_repr()),
+            key: PqcKeyScalar::from_canonical_bytes(k.to_repr())
+                .expect("a reduced scalar's encoding is canonical"),
             blind: r,
             cm,
             x: <EdwardsPoint as DivisorCurve>::to_xy(cm).unwrap().0,

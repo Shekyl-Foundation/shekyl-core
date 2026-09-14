@@ -55,7 +55,7 @@ extension preserves the zero-knowledge proof system's security properties.
      `rust/shekyl-crypto-pq/src/derivation.rs` (`pqc_key_scalar` — the single
      source). Forwarding-only entry points stay forwarding-only:
      `shekyl_fcmp::leaf::PqcKeyScalar::from_pqc_public_key` and the FFI
-     `shekyl_fcmp_pqc_leaf_hash()` in `rust/shekyl-ffi/src/legacy_fcmp.rs`
+     `shekyl_fcmp_pqc_key_scalar()` in `rust/shekyl-ffi/src/legacy_fcmp.rs`
    - Blind derivation `r` (HKDF, `shekyl-pqc-leaf-blind ‖ idx ‖ ctr`) and the
      NUMS generators `PQC_LEAF_COMMITMENT_G_K` / `_J`
    - Public input handling: the verifier derives `K = k·G_k` from each

@@ -19,14 +19,18 @@
 
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, TargetKind};
 use shekyl_consensus::{COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
-use shekyl_fcmp::tree::{build_layers, construct_leaf, selene_hash_init, SCALARS_PER_LEAF};
+use shekyl_fcmp::tree::{
+    build_layers, construct_leaf, ed25519_point_to_selene_scalar, selene_hash_init,
+    SCALARS_PER_LEAF,
+};
 
 /// Size in bytes of one per-output `0x07` entry: the leaf commitment point
 /// `CM` (32) followed by the post-quantum record (32) — `PL-D3` / `PL-D3a`.
 /// Single source: [`shekyl_fcmp::PQC_LEAF_ENTRY_LEN`].
 pub const PQC_LEAF_ENTRY_BYTES: usize = shekyl_fcmp::PQC_LEAF_ENTRY_LEN;
 /// Byte length of the commitment point at the front of each entry.
-pub const PQC_LEAF_POINT_BYTES: usize = 32;
+/// Single source: `shekyl-crypto-pq` owns the 32/32 split of the entry.
+pub const PQC_LEAF_POINT_BYTES: usize = shekyl_crypto_pq::leaf_commitment::PQC_LEAF_POINT_LEN;
 
 /// Why a transaction's `0x07` payload cannot yield its outputs' leaf
 /// commitments. On an admitted chain none of these fires: the shape and
@@ -35,7 +39,9 @@ pub const PQC_LEAF_POINT_BYTES: usize = 32;
 /// fallback** — the zero-`h_pqc` placeholder the daemon retired (CEN-I19) is
 /// gone here too; a block that reaches this code with a bad field is a bug
 /// in the feed, surfaced as an error rather than stored as a leaf set the
-/// daemon would never hold.
+/// daemon would never hold. These are the *shape* errors; the point-content
+/// twin — a published point that fails decompression — is [`LeafPointError`],
+/// raised by [`collect_block_leaves`] under the same no-fallback rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LeafEntryError {
     /// The `0x07` tag is absent on a transaction with outputs.
@@ -119,30 +125,87 @@ pub fn maturity_height(block_height: u64, is_miner: bool, target: TargetKind) ->
     }
 }
 
+/// Which of an output's published Ed25519 points failed decompression while
+/// building its leaf. These are the three point *inputs* of
+/// [`shekyl_fcmp::tree::construct_leaf`]; the fourth leaf field, `I = Hp(O)`,
+/// is derived by hash-to-point and is always a point, so it can never be the
+/// failing input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeafPoint {
+    /// The output's one-time key `O`.
+    OutputKey,
+    /// The output's amount commitment `C` (`outPk`).
+    Commitment,
+    /// The published `0x07` leaf commitment `CM` (`PL-D3`).
+    LeafCommitment,
+}
+
+/// An output whose published point failed Ed25519 decompression during leaf
+/// collection. `gindex` names the offending output in the global output
+/// sequence (assigned to every vout, so it identifies the tx/vout position).
+///
+/// On an admitted chain this never fires: the daemon rejects such an output
+/// at admission and **aborts** on the same input at store time
+/// (`DB_ERROR`, `src/blockchain_db/blockchain_db.cpp:617`). The replica
+/// mirrors that fail-closed behavior — the block is refused, never ingested
+/// with the leaf silently omitted (which would consume the gindex and build
+/// a silently divergent tree).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LeafPointError {
+    /// Global output index of the offending output.
+    pub gindex: Gindex,
+    /// Which published point failed decompression.
+    pub point: LeafPoint,
+}
+
 /// The leaf-skip predicate fused with leaf construction, mirroring the
 /// body of the `collect_outputs` per-output loop.
 ///
-/// Returns `Some(leaf)` iff the output is a tree-leaf candidate:
+/// Returns `Ok(Some(leaf))` iff the output is a tree-leaf candidate:
 /// - (a) the target is a known key target (not [`TargetKind::Other`]);
 /// - (b) the output has a commitment (`i < outPk.size()`); and
 /// - (c) [`shekyl_fcmp::tree::construct_leaf`] succeeds.
 ///
-/// Returns `None` otherwise. The global output index is assigned to
-/// *every* output by the caller regardless of this result — the leaf set
-/// is a subset of the indexed set (CT2_DRAIN_ORDER.md §2.2). This
-/// function decides leaf membership only.
-#[must_use]
-pub fn try_build_leaf(out: &OutputIdentity) -> Option<[u8; 128]> {
+/// Returns `Ok(None)` on the *legitimate* skips (a) and (b) — the daemon
+/// skips the same outputs, so the two leaf sets agree. The global output
+/// index is assigned to *every* output by the caller regardless of this
+/// result — the leaf set is a subset of the indexed set
+/// (CT2_DRAIN_ORDER.md §2.2). This function decides leaf membership only.
+///
+/// Returns `Err` when (c) fails: a published point that does not
+/// decompress. That is **not** a skip — the daemon aborts on the same
+/// input (`DB_ERROR`, `blockchain_db.cpp:617`), so treating it as one
+/// would silently drop a leaf the daemon refuses to be without, and every
+/// later leaf would sit at a shifted position. The error names the failing
+/// point so the feed defect is diagnosable.
+pub fn try_build_leaf(out: &OutputIdentity) -> Result<Option<[u8; 128]>, LeafPoint> {
     // (a) known target.
     if matches!(out.target, TargetKind::Other) {
-        return None;
+        return Ok(None);
     }
     // (b) has commitment slot.
-    let commitment = out.commitment?;
+    let Some(commitment) = out.commitment else {
+        return Ok(None);
+    };
     // (c) leaf construction succeeds (shared FFI primitive with the
     // daemon, so x-extraction of all four points — `CM.x` included —
     // cannot diverge; CT2_DRAIN_ORDER.md §3.2).
-    construct_leaf(&out.output_key, &commitment, &out.cm)
+    match construct_leaf(&out.output_key, &commitment, &out.cm) {
+        Some(leaf) => Ok(Some(leaf)),
+        None => {
+            // Name the failing input, in `construct_leaf`'s own probe
+            // order. `I = Hp(O)` is derived (hash-to-point, infallible),
+            // so if `O` and `C` decompress the failure is `CM`.
+            let point = if ed25519_point_to_selene_scalar(&out.output_key).is_none() {
+                LeafPoint::OutputKey
+            } else if ed25519_point_to_selene_scalar(&commitment).is_none() {
+                LeafPoint::Commitment
+            } else {
+                LeafPoint::LeafCommitment
+            };
+            Err(point)
+        }
+    }
 }
 
 /// Collect leaf entries from a block's transactions, assigning global
@@ -159,12 +222,18 @@ pub fn try_build_leaf(out: &OutputIdentity) -> Option<[u8; 128]> {
 ///
 /// Pass `txs` in C++ order: the coinbase first, then block txs in
 /// block-list order; outputs within each in `vout` order.
+///
+/// Errors with [`LeafPointError`] when an output's published point fails
+/// decompression ([`try_build_leaf`] (c)): the daemon aborts on the same
+/// input, so the replica refuses the block rather than omitting the leaf
+/// and building a silently divergent tree. `out` may hold a partial batch
+/// on `Err`; the caller discards it.
 pub fn collect_block_leaves(
     block_height: u64,
     txs: &[TxOutputs<'_>],
     next_gindex: u64,
     out: &mut Vec<LeafEntry>,
-) -> u64 {
+) -> Result<u64, LeafPointError> {
     let mut gindex = next_gindex;
     for tx in txs {
         for output in tx.outputs {
@@ -175,18 +244,26 @@ pub fn collect_block_leaves(
             let Some(maturity) = maturity_height(block_height, tx.is_miner, output.target) else {
                 continue; // (a) unknown target; index already consumed.
             };
-            if let Some(leaf) = try_build_leaf(output) {
-                out.push(LeafEntry {
+            match try_build_leaf(output) {
+                Ok(Some(leaf)) => out.push(LeafEntry {
                     gindex: Gindex(this_gindex),
                     maturity: BlockHeight(maturity),
                     creation_height: BlockHeight(block_height),
                     leaf,
                     identity: *output,
-                });
+                }),
+                // (b) no commitment slot; index already consumed.
+                Ok(None) => {}
+                Err(point) => {
+                    return Err(LeafPointError {
+                        gindex: Gindex(this_gindex),
+                        point,
+                    });
+                }
             }
         }
     }
-    gindex
+    Ok(gindex)
 }
 
 /// The drained leaves at `drained_through`, in canonical drain order
@@ -351,27 +428,68 @@ mod tests {
     fn try_build_leaf_other_target_skipped() {
         let mut out = coinbase_output();
         out.target = TargetKind::Other;
-        assert!(try_build_leaf(&out).is_none());
+        assert_eq!(try_build_leaf(&out), Ok(None));
     }
 
     #[test]
     fn try_build_leaf_no_commitment_skipped() {
         let mut out = coinbase_output();
         out.commitment = None;
-        assert!(try_build_leaf(&out).is_none());
+        assert_eq!(try_build_leaf(&out), Ok(None));
     }
 
     #[test]
     fn try_build_leaf_coinbase_included() {
-        let leaf = try_build_leaf(&coinbase_output()).expect("valid coinbase output builds a leaf");
+        let leaf = try_build_leaf(&coinbase_output())
+            .expect("no bad point")
+            .expect("valid coinbase output builds a leaf");
         // The 4th scalar is the commitment point's x-coordinate (PL-D3).
         let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&ED25519_BASEPOINT)
             .expect("basepoint decompresses");
         assert_eq!(&leaf[96..128], &cm_x);
-        // A value that is not a point is not a leaf: no zero placeholder.
+    }
+
+    /// A published value that is not a point is a *named error* on its axis,
+    /// never a skip and never a zero placeholder: a skipped leaf would
+    /// silently diverge from the daemon, which aborts on the same input
+    /// (`DB_ERROR`, `blockchain_db.cpp:617`) — the two surfaces agree
+    /// fail-closed. `[7u8; 32]` is a non-point (nothing decompresses
+    /// from it).
+    #[test]
+    fn try_build_leaf_names_the_failing_point() {
+        let mut bad_cm = coinbase_output();
+        bad_cm.cm = [7u8; 32];
+        assert_eq!(try_build_leaf(&bad_cm), Err(LeafPoint::LeafCommitment));
+
+        let mut bad_o = coinbase_output();
+        bad_o.output_key = [7u8; 32];
+        assert_eq!(try_build_leaf(&bad_o), Err(LeafPoint::OutputKey));
+
+        let mut bad_c = coinbase_output();
+        bad_c.commitment = Some([7u8; 32]);
+        assert_eq!(try_build_leaf(&bad_c), Err(LeafPoint::Commitment));
+    }
+
+    /// `collect_block_leaves` refuses the block on a bad point and names the
+    /// offending output by its true global index (the index every vout
+    /// consumes), not by its position in the leaf subset.
+    #[test]
+    fn collect_refuses_block_on_bad_point_with_gindex() {
         let mut bad = coinbase_output();
         bad.cm = [7u8; 32];
-        assert!(try_build_leaf(&bad).is_none());
+        let outputs = [coinbase_output(), bad];
+        let txs = [TxOutputs {
+            is_miner: true,
+            outputs: &outputs,
+        }];
+        let mut leaves = Vec::new();
+        assert_eq!(
+            collect_block_leaves(60, &txs, 0, &mut leaves),
+            Err(LeafPointError {
+                gindex: Gindex(1),
+                point: LeafPoint::LeafCommitment,
+            })
+        );
     }
 
     #[test]
@@ -387,7 +505,7 @@ mod tests {
             outputs: &outputs,
         }];
         let mut leaves = Vec::new();
-        let next = collect_block_leaves(60, &txs, 0, &mut leaves);
+        let next = collect_block_leaves(60, &txs, 0, &mut leaves).expect("no bad point");
         assert_eq!(next, 2, "both vouts consume an index");
         assert_eq!(leaves.len(), 1, "only the valid output is a leaf");
         assert_eq!(
@@ -414,7 +532,7 @@ mod tests {
     #[test]
     fn non_empty_root_differs_from_empty() {
         let id = coinbase_output();
-        let leaf = try_build_leaf(&id).expect("leaf");
+        let leaf = try_build_leaf(&id).expect("no bad point").expect("leaf");
         let entry = LeafEntry {
             gindex: Gindex(0),
             maturity: BlockHeight(120),
@@ -431,7 +549,7 @@ mod tests {
     #[test]
     fn assemble_filters_undrained_and_sorts_by_maturity_then_gindex() {
         let id = coinbase_output();
-        let leaf = try_build_leaf(&id).expect("leaf");
+        let leaf = try_build_leaf(&id).expect("no bad point").expect("leaf");
         let entries = [
             LeafEntry {
                 gindex: Gindex(5),
@@ -464,7 +582,9 @@ mod tests {
     #[test]
     fn incremental_drain_batches_match_drained_sorted_prefix() {
         let id = coinbase_output();
-        let leaf = try_build_leaf(&id).expect("valid leaf");
+        let leaf = try_build_leaf(&id)
+            .expect("no bad point")
+            .expect("valid leaf");
         let entries = vec![
             LeafEntry {
                 gindex: Gindex(0),

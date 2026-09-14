@@ -326,8 +326,8 @@ TEST(mining_parity, genesis_tx_extra_is_sort_tx_extra_fixed_point)
       << nc.name << ": field 0 must be TX_EXTRA_TAG_PUBKEY (0x01)";
     EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pqc_kem_ciphertext>(fields[1]))
       << nc.name << ": field 1 must be TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT (0x06)";
-    EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pqc_leaf_hashes>(fields[2]))
-      << nc.name << ": field 2 must be TX_EXTRA_TAG_PQC_LEAF_HASHES (0x07)";
+    EXPECT_TRUE(std::holds_alternative<cryptonote::tx_extra_pqc_leaf_entries>(fields[2]))
+      << nc.name << ": field 2 must be TX_EXTRA_TAG_PQC_LEAF_ENTRIES (0x07)";
   }
 }
 

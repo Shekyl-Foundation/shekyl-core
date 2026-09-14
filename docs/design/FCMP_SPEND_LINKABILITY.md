@@ -1,9 +1,9 @@
 # PL — FCMP++ spend linkability through the public 4th leaf scalar
 
 **Status:** OPEN — round 1 **RATIFIED by Rick, 2026-09-14** (§12); the
-implementation proceeds under §10 on its own branch from current `dev`; no
-implementation in this document's PR. `PL-D1` (the linkability defect) is verified at source and
-is not refuted. `PL-D2` (the in-circuit PQ binding is only as sound as the
+implementation, built under §10 on its own worktree from `dev`, **lands in
+this document's PR** under rule 07 (§12.1; the clause "no implementation in this document's PR" that stood here was true of the doc-only PR #744 and was superseded 2026-09-14 by #745, which carries both). `PL-D1` (the linkability defect) is verified at source,
+not refuted, and **closed by `PL-D3` in this PR** (§12.1). `PL-D2` (the in-circuit PQ binding is only as sound as the
 discrete-log proof enforcing it) is raised here; **ruled 2026-09-14** — the
 four documents that claimed otherwise are corrected at source (§4.5), on
 Rick's instruction that this is security information, not marketing.
@@ -32,7 +32,7 @@ were clear of the 77 registered families at the anchor
 its own family and `F5` stays as the historical name.
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 is invoked — the fix crosses the circuit, the FFI (`shekyl_fcmp_verify`,
-`shekyl_construct_curve_tree_leaf`, `shekyl_fcmp_pqc_leaf_hash`), the wire
+`shekyl_construct_curve_tree_leaf`, `shekyl_fcmp_pqc_leaf_hash` — renamed `shekyl_fcmp_pqc_key_scalar` by the fix), the wire
 (`tx_extra` `0x07`), and the genesis-frozen leaf format.
 [`07-consensus-atomic-cutovers`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
 is named for the implementation PR (§10); this round is the design-first
@@ -51,7 +51,7 @@ inherits it). Both are pre-genesis: nothing has leaked, nothing migrates.
 
 ---
 
-## 0. The defect in one paragraph (`PL-D1`)
+## 0. The defect in one paragraph (`PL-D1`) — CLOSED by `PL-D3` in this PR, 2026-09-14; described below as found at the 2026-09-13 pin
 
 Every FCMP++ spend reveals the spent output's hybrid PQC public key in
 cleartext (`tx.pqc_auths[i].hybrid_public_key`). That key's hash was published
@@ -865,7 +865,7 @@ must be done by hand:** the rule-42 snapshot (silent), the domain registry
 
 ---
 
-## 10. The implementation PR, when ratified (rule 07 framing — not this round)
+## 10. The implementation PR, when ratified (rule 07 framing — not this round) — EXECUTED 2026-09-14, record in §12.1
 
 - **Criterion 1** met: leaf content and the verifier's public-input shape
   are byte-identical-reproduction rules. **Criterion 2** follows. **Criterion 3**: §9 at `Base commit`.

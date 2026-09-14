@@ -72,5 +72,8 @@ pub mod schnorr;
 pub mod signature;
 pub mod wallet_envelope;
 
+#[doc(hidden)]
+pub mod test_support;
+
 pub use error::CryptoError;
 pub use shekyl_address as address;

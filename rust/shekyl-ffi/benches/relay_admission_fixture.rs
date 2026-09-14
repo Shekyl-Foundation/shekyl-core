@@ -145,7 +145,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     let mut ks: Vec<Scalar> = Vec::with_capacity(n_in);
     let mut rs: Vec<Scalar> = Vec::with_capacity(n_in);
     let mut cms: Vec<EdwardsPoint> = Vec::with_capacity(n_in);
-    let mut h_pqcs = Vec::with_capacity(n_in);
+    let mut cm_xs = Vec::with_capacity(n_in);
 
     for _ in 0..n_in {
         let x = Scalar::random(&mut *rng);
@@ -168,7 +168,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
         os.push(o);
         is.push(i);
         cs.push(c);
-        h_pqcs.push(h);
+        cm_xs.push(h);
     }
 
     // Per-layout leaf construction.
@@ -194,7 +194,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
                 <EdwardsPoint as DivisorCurve>::to_xy(cs[idx]).unwrap().0,
                 generators[4 * slot + 2],
             ));
-            terms.push((h_pqcs[idx], generators[4 * slot + 3]));
+            terms.push((cm_xs[idx], generators[4 * slot + 3]));
         }
         *SELENE_HASH_INIT + multiexp_vartime(&terms)
     };
@@ -285,7 +285,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
         (point, c1, c2, owner)
     };
 
-    let all_h_pqc: Vec<[u8; 32]> = h_pqcs.iter().map(PrimeField::to_repr).collect();
+    let all_cm_x: Vec<[u8; 32]> = cm_xs.iter().map(PrimeField::to_repr).collect();
 
     let inputs: Vec<ProveInput> = (0..n_in)
         .map(|i| ProveInput {
@@ -302,7 +302,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
                 .iter()
                 .map(|&j| (os[j].to_bytes(), is[j].to_bytes(), cs[j].to_bytes()))
                 .collect(),
-            leaf_chunk_cm_x: per_input_chunk[i].iter().map(|&j| all_h_pqc[j]).collect(),
+            leaf_chunk_cm_x: per_input_chunk[i].iter().map(|&j| all_cm_x[j]).collect(),
             c1_branch_layers: c1_layers.clone(),
             c2_branch_layers: c2_layers.clone(),
         })

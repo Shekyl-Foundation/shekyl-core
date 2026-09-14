@@ -135,7 +135,7 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
   // invalidating other inputs' signatures.
   //
   // NOTE: this uses cn_fast_hash (Keccak-256) via get_blob_hash, which is
-  // intentionally different from shekyl_fcmp_pqc_leaf_hash (cSHAKE256 under
+  // intentionally different from shekyl_fcmp_pqc_key_scalar (cSHAKE256 under
   // "shekyl/pqc-leaf-key-v1", reduced to the Ed25519 scalar k whose point
   // the FCMP++ circuit opens the spent leaf's commitment to -- PL-D3). The
   // two serve different purposes: the key scalar is the in-circuit binding

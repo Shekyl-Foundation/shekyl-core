@@ -118,7 +118,7 @@ fn assembled_path_verifies_as_segment_opening() {
     for blk in &blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client
@@ -199,7 +199,7 @@ fn tj_f_forged_material_does_not_verify() {
     for blk in &blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client

@@ -353,9 +353,9 @@ pub(crate) fn sign_tx(local: &LocalKeys, tx: &TxToSign) -> Result<TxSignatures, 
     // refuses a transaction with outputs that lacks the field (CEN-I19), and
     // the bond/emission assembly paths (stake_engine.rs) append the same
     // value through the same primitive.
-    let leaf_hash_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
+    let leaf_entry_blob: Vec<u8> = built_outputs.iter().flat_map(|b| b.pqc_leaf).collect();
     let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_entries(leaf_hash_blob);
+    extra.push_pqc_leaf_entries(leaf_entry_blob);
     let tx_extra = extra.serialize();
 
     let mut bundles = HashMap::new();

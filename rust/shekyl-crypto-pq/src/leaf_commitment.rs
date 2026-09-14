@@ -23,10 +23,10 @@ use curve25519_dalek::traits::Identity;
 use hkdf::Hkdf;
 use sha2::Sha512;
 use shekyl_crypto_hash::{cshake256_32, cshake256_64};
-use shekyl_curve_generators::{PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_J};
-use zeroize::Zeroize;
+use shekyl_curve_generators::{PQC_LEAF_COMMITMENT_G_K_TABLE, PQC_LEAF_COMMITMENT_J_TABLE};
+use zeroize::{Zeroize, Zeroizing};
 
-use crate::derivation::{expand_32, make_info, HKDF_SALT_OUTPUT_DERIVE};
+use crate::derivation::{expand_32_into, expand_wide_scalar, make_info, HKDF_SALT_OUTPUT_DERIVE};
 use crate::CryptoError;
 
 /// cSHAKE256 customization for the per-output PQC **key scalar**
@@ -53,15 +53,27 @@ const LABEL_OUTPUT_PQC_LEAF_RECORD_BLIND: &[u8] = b"shekyl-pqc-leaf-record-blind
 /// followed by the 32-byte record (`PL-D3` + `PL-D3a`).
 pub const PQC_LEAF_ENTRY_LEN: usize = 64;
 
+/// Width of the compressed commitment point `CM` — the first slice of the
+/// `0x07` entry. Single owner of the entry's internal split; wire and
+/// curve-tree consumers pin against this rather than a local `32`.
+pub const PQC_LEAF_POINT_LEN: usize = 32;
+
+/// Width of the post-quantum record — the second slice of the `0x07` entry.
+pub const PQC_LEAF_RECORD_LEN: usize = 32;
+
+// The entry is exactly `point ‖ record`. Relates three independently-editable
+// constants: moving any one of them without the others fails this assert.
+const _: () = assert!(PQC_LEAF_POINT_LEN + PQC_LEAF_RECORD_LEN == PQC_LEAF_ENTRY_LEN);
+
 /// One output's published `tx_extra` `0x07` entry: compressed `CM` then the
 /// post-quantum record. The leaf's 4th scalar is `CM.x`, extracted at
 /// `construct_leaf`; the record is checked by nothing live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PqcLeafEntry {
     /// Compressed Ed25519 point `CM = k·G_k + r·J`.
-    pub point: [u8; 32],
+    pub point: [u8; PQC_LEAF_POINT_LEN],
     /// `cSHAKE256(pk ‖ r_h)` under [`DOMAIN_PQC_LEAF_RECORD`].
-    pub record: [u8; 32],
+    pub record: [u8; PQC_LEAF_RECORD_LEN],
 }
 
 impl PqcLeafEntry {
@@ -71,10 +83,10 @@ impl PqcLeafEntry {
     /// Split a 64-byte `0x07` entry into `(CM, record)`.
     #[must_use]
     pub fn from_bytes(bytes: [u8; Self::LEN]) -> Self {
-        let mut point = [0u8; 32];
-        let mut record = [0u8; 32];
-        point.copy_from_slice(&bytes[..32]);
-        record.copy_from_slice(&bytes[32..]);
+        let mut point = [0u8; PQC_LEAF_POINT_LEN];
+        let mut record = [0u8; PQC_LEAF_RECORD_LEN];
+        point.copy_from_slice(&bytes[..PQC_LEAF_POINT_LEN]);
+        record.copy_from_slice(&bytes[PQC_LEAF_POINT_LEN..]);
         Self { point, record }
     }
 
@@ -82,21 +94,20 @@ impl PqcLeafEntry {
     #[must_use]
     pub fn to_bytes(self) -> [u8; Self::LEN] {
         let mut e = [0u8; Self::LEN];
-        e[..32].copy_from_slice(&self.point);
-        e[32..].copy_from_slice(&self.record);
+        e[..PQC_LEAF_POINT_LEN].copy_from_slice(&self.point);
+        e[PQC_LEAF_POINT_LEN..].copy_from_slice(&self.record);
         e
     }
 }
 
-const _: () = assert!(PqcLeafEntry::LEN == PQC_LEAF_ENTRY_LEN);
-const _: () = assert!(PQC_LEAF_ENTRY_LEN == 64);
-
 /// The per-output PQC key scalar `k = H_ℓ(hybrid_pk)` as an Ed25519 `Scalar`.
 /// Single reduction of the 64-byte cSHAKE read; [`pqc_key_scalar`] and
 /// [`pqc_key_point`] both go through here so `k → K` cannot drift from `k`.
-fn key_scalar(pqc_pk_bytes: &[u8]) -> Scalar {
+/// `k` is a pre-spend secret (it opens the commitment's key component), so it
+/// travels wrapped and wipes on drop.
+fn key_scalar(pqc_pk_bytes: &[u8]) -> Zeroizing<Scalar> {
     let mut wide = cshake256_64(DOMAIN_PQC_LEAF_KEY, pqc_pk_bytes);
-    let scalar = Scalar::from_bytes_mod_order_wide(&wide);
+    let scalar = Zeroizing::new(Scalar::from_bytes_mod_order_wide(&wide));
     wide.zeroize();
     scalar
 }
@@ -108,15 +119,21 @@ fn key_scalar(pqc_pk_bytes: &[u8]) -> Scalar {
 /// the key the spend reveals and the circuit proves `K + r·J = CM`.
 ///
 /// This is the single source for `k`; `shekyl_fcmp::PqcKeyScalar` wraps it.
+/// The returned bytes are the caller's product — the caller owns their wipe.
 pub fn pqc_key_scalar(pqc_pk_bytes: &[u8]) -> [u8; 32] {
-    key_scalar(pqc_pk_bytes).to_bytes()
+    let k = key_scalar(pqc_pk_bytes);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(k.as_bytes());
+    out
 }
 
 /// `K = k·G_k` from an already-reduced Ed25519 scalar. The one multiply every
-/// verifier path (this crate and `PqcKeyScalar::point`) uses.
+/// verifier path (this crate and `PqcKeyScalar::point`) uses — fixed-base over
+/// the precomputed `G_k` table (pinned to the frozen point in
+/// `shekyl-curve-generators`).
 #[must_use]
 pub fn pqc_key_point_from_scalar(k: &Scalar) -> [u8; 32] {
-    (*PQC_LEAF_COMMITMENT_G_K * k).compress().to_bytes()
+    (&*PQC_LEAF_COMMITMENT_G_K_TABLE * k).compress().to_bytes()
 }
 
 /// The verifier-side public point `K = k·G_k` for a revealed hybrid public key,
@@ -139,15 +156,19 @@ pub fn pqc_leaf_record(pqc_pk_bytes: &[u8], record_blind: &[u8; 32]) -> [u8; 32]
 }
 
 /// The sender's / owner's opening of one output's PQC leaf commitment.
-#[derive(Clone, Zeroize, zeroize::ZeroizeOnDrop)]
+///
+/// Deliberately **not** `Clone` (rule 35): the blinds are secrets, and no
+/// caller duplicates the opening — it is derived where needed and moved once
+/// into its owning output struct.
+#[derive(Zeroize, zeroize::ZeroizeOnDrop)]
 pub struct PqcLeafCommitment {
     /// `CM = k·G_k + r·J`, compressed Ed25519 (the first 32 bytes of the `0x07`
     /// entry; its Wei25519 x-coordinate is the leaf's 4th scalar).
     #[zeroize(skip)]
-    pub point: [u8; 32],
+    pub point: [u8; PQC_LEAF_POINT_LEN],
     /// The record `cSHAKE256(pk ‖ r_h)` (the second 32 bytes of the `0x07` entry).
     #[zeroize(skip)]
-    pub record: [u8; 32],
+    pub record: [u8; PQC_LEAF_RECORD_LEN],
     /// The blind `r` (Ed25519 scalar) — the prover's in-circuit witness. Secret.
     pub blind: [u8; 32],
     /// The record blind `r_h`. Secret; opens the record at a transparent claim.
@@ -178,6 +199,11 @@ impl PqcLeafCommitment {
 /// Failure of [`pqc_leaf_commitment`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PqcLeafCommitmentError {
+    /// `K = k·G_k` is the identity — the key scalar reduced to `0 mod ℓ`, a
+    /// ~2⁻²⁵² property of the public key alone. The guard counter varies only
+    /// the blind, so no counter walk can repair it; refused before the retry
+    /// loop rather than misreported as a 256-counter exhaustion.
+    IdentityKeyPoint,
     /// 256 counter values all produced an exceptional blind — impossible in
     /// practice (each rejection is a ~2⁻²⁵² event); returned rather than looped
     /// so the guard is a rule with a visible failure, not an assumption.
@@ -186,15 +212,13 @@ pub enum PqcLeafCommitmentError {
 
 /// Derive the blind `r` for one output under the guard counter `ctr`
 /// (`HKDF-Expand(prk, "shekyl-pqc-leaf-blind" ‖ idx_le64 ‖ ctr, 64) mod ℓ`).
-fn derive_pqc_leaf_blind(hk: &Hkdf<Sha512>, output_index: u64, ctr: u8) -> [u8; 32] {
+/// The wide reduction is [`expand_wide_scalar`] — the same body the
+/// output-secrets scalars (`ho`, `y`, `z`) come through; only the one-byte
+/// counter suffix on the info distinguishes this derivation.
+fn derive_pqc_leaf_blind(hk: &Hkdf<Sha512>, output_index: u64, ctr: u8) -> Zeroizing<Scalar> {
     let mut info = make_info(LABEL_OUTPUT_PQC_LEAF_BLIND, output_index);
     info.push(ctr);
-    let mut wide = [0u8; 64];
-    hk.expand(&info, &mut wide)
-        .expect("HKDF-Expand failed for 64-byte output");
-    let scalar = Scalar::from_bytes_mod_order_wide(&wide);
-    wide.zeroize();
-    scalar.to_bytes()
+    expand_wide_scalar(hk, &info)
 }
 
 /// Build the output's PQC leaf commitment and record from the owner's
@@ -206,38 +230,63 @@ fn derive_pqc_leaf_blind(hk: &Hkdf<Sha512>, output_index: u64, ctr: u8) -> [u8; 
 /// operands. Each is rejected here and the blind re-derived under the next
 /// counter; the recipient reproduces the same walk at scan, so no counter is
 /// carried on the wire.
+///
+/// Every named secret below (`k`, `K`, `r`, `r·J`, the blinds) lives in a
+/// `Zeroizing` wrapper, so each exit — per-iteration `continue`, success,
+/// refusal — wipes it structurally (rule 35). The `Copy` rvalue temporaries
+/// the wrappers are built from are rule 35's documented small-N residue.
 pub fn pqc_leaf_commitment(
     combined_ss: &[u8],
     output_index: u64,
     pqc_pk_bytes: &[u8],
 ) -> Result<PqcLeafCommitment, PqcLeafCommitmentError> {
     let k = key_scalar(pqc_pk_bytes);
-    let big_k = *PQC_LEAF_COMMITMENT_G_K * k;
+    let big_k = Zeroizing::new(&*PQC_LEAF_COMMITMENT_G_K_TABLE * &*k);
+    if *big_k == EdwardsPoint::identity() {
+        return Err(PqcLeafCommitmentError::IdentityKeyPoint);
+    }
     let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), combined_ss);
-    let record_blind = expand_32(&hk, LABEL_OUTPUT_PQC_LEAF_RECORD_BLIND, output_index);
+    let mut record_blind = Zeroizing::new([0u8; 32]);
+    expand_32_into(
+        &hk,
+        LABEL_OUTPUT_PQC_LEAF_RECORD_BLIND,
+        output_index,
+        &mut record_blind,
+    );
     for ctr in 0u8..=u8::MAX {
-        let blind_bytes = derive_pqc_leaf_blind(&hk, output_index, ctr);
-        let r = Scalar::from_bytes_mod_order(blind_bytes);
-        if r == Scalar::ZERO {
+        let r = derive_pqc_leaf_blind(&hk, output_index, ctr);
+        if *r == Scalar::ZERO {
             continue;
         }
-        let r_j = *PQC_LEAF_COMMITMENT_J * r;
-        let cm = big_k + r_j;
-        let exceptional = big_k == EdwardsPoint::identity()
-            || r_j == EdwardsPoint::identity()
-            || cm == EdwardsPoint::identity()
-            || big_k == r_j
-            || big_k == -r_j;
-        if exceptional {
+        let r_j = Zeroizing::new(&*PQC_LEAF_COMMITMENT_J_TABLE * &*r);
+        // The circuit opens `CM` with incomplete addition over the operands
+        // `(K, r·J)`; its exceptional cases map onto these checks:
+        //   - equal operands (a doubling):          `K == r·J`
+        //   - opposite operands (`CM` = identity):  `K == -r·J` — the same
+        //     condition as `K + r·J == identity`, checked once in operand form
+        //   - an identity operand: `K == identity` is a property of the key
+        //     alone, refused before the loop; `r·J == identity` is unreachable
+        //     here — `J` is prime-order (cofactor-cleared NUMS) and `r` is a
+        //     canonical nonzero scalar after the `r == 0` re-derivation above.
+        let neg_r_j = Zeroizing::new(-&*r_j);
+        if *big_k == *r_j || *big_k == *neg_r_j {
             continue;
         }
-        return Ok(PqcLeafCommitment {
+        // CLIPPY: borrowed operands on purpose (35-secure-memory.mdc) — the
+        // suggested value operands would copy both secret points onto the
+        // stack outside their `Zeroizing` wrappers.
+        #[allow(clippy::op_ref)]
+        let cm = &*big_k + &*r_j;
+        let mut leaf = PqcLeafCommitment {
             point: cm.compress().to_bytes(),
             record: pqc_leaf_record(pqc_pk_bytes, &record_blind),
-            blind: blind_bytes,
-            record_blind,
+            blind: [0u8; 32],
+            record_blind: [0u8; 32],
             counter: ctr,
-        });
+        };
+        leaf.blind.copy_from_slice(r.as_bytes());
+        leaf.record_blind.copy_from_slice(&*record_blind);
+        return Ok(leaf);
     }
     Err(PqcLeafCommitmentError::GuardExhausted)
 }
@@ -264,6 +313,12 @@ pub fn derive_pqc_leaf(
 mod tests {
     use super::*;
     use crate::derivation::{derive_pqc_public_key, ML_DSA_65_PK_LEN};
+    use crate::test_support::regen_decision_or_refuse;
+    // The tests open commitments with the plain frozen points on purpose:
+    // production multiplies over the precomputed tables, so agreement here is
+    // an implicit table↔point pin on the real path (the explicit pin lives in
+    // shekyl-curve-generators' frozen-point tests).
+    use shekyl_curve_generators::{PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_J};
 
     #[test]
     fn derivation_deterministic() {
@@ -341,7 +396,7 @@ mod tests {
         assert_eq!(pqc_key_point(&pk), pqc_key_point_from_scalar(&k));
         assert_eq!(
             pqc_key_point(&pk),
-            (*PQC_LEAF_COMMITMENT_G_K * k).compress().to_bytes()
+            (*PQC_LEAF_COMMITMENT_G_K * *k).compress().to_bytes()
         );
         assert!(
             pqc_leaf_point_valid(&pqc_key_point(&pk)).is_some(),
@@ -359,7 +414,7 @@ mod tests {
         let ss = [0xab; 64];
         let pk_bytes = derive_pqc_public_key(&ss, 0).unwrap();
         let wrapper = PqcKeyScalar::from_pqc_public_key(&pk_bytes);
-        assert_eq!(pqc_key_scalar(&pk_bytes), wrapper.0);
+        assert_eq!(pqc_key_scalar(&pk_bytes), *wrapper.as_bytes());
         assert_eq!(pqc_key_point(&pk_bytes), wrapper.point());
     }
 
@@ -414,8 +469,9 @@ mod tests {
         let hk = Hkdf::<Sha512>::new(Some(HKDF_SALT_OUTPUT_DERIVE), &ss);
         let r0 = derive_pqc_leaf_blind(&hk, 0, 0);
         let r1 = derive_pqc_leaf_blind(&hk, 0, 1);
-        assert_ne!(r0, r1, "the guard counter must re-derive the blind");
-        assert!(bool::from(Scalar::from_canonical_bytes(r0).is_some()));
+        // Canonicality is structural now — the derivation returns a `Scalar`,
+        // not bytes — so only the counter's effect is left to assert.
+        assert_ne!(*r0, *r1, "the guard counter must re-derive the blind");
     }
 
     #[test]
@@ -439,30 +495,6 @@ mod tests {
         assert!(pqc_leaf_point_valid(&noncanonical).is_none());
         let leaf = derive_pqc_leaf(&[0xab; 64], 0).unwrap();
         assert!(pqc_leaf_point_valid(&leaf.point).is_some());
-    }
-
-    const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
-
-    fn regen_decision_or_refuse(fixture: &str) -> String {
-        let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
-        let cited = decision.len() > 11
-            && decision.as_bytes()[..10]
-                .iter()
-                .enumerate()
-                .all(|(i, b)| match i {
-                    4 | 7 => *b == b'-',
-                    _ => b.is_ascii_digit(),
-                })
-            && decision.as_bytes()[10] == b' ';
-        assert!(
-            cited,
-            "refusing to regenerate {fixture}: set \
-             {PINNED_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
-             docs/V3_WALLET_DECISION_LOG.md entry that authorizes moving it (got: \
-             {decision:?}). Moving a pinned vector is a format decision, not a test \
-             fix — see 50-testing.mdc."
-        );
-        decision
     }
 
     fn vectors_dir() -> std::path::PathBuf {
@@ -514,7 +546,7 @@ mod tests {
                 pk.len()
             );
             assert_eq!(
-                PqcKeyScalar::from_pqc_public_key(&pk).0.as_slice(),
+                PqcKeyScalar::from_pqc_public_key(&pk).as_bytes().as_slice(),
                 k.as_slice(),
                 "vector {i}: PqcKeyScalar::from_pqc_public_key drifted for input length {}",
                 pk.len()

@@ -40,7 +40,7 @@ pub unsafe extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
 /// # Safety
 /// Caller must ensure all pointer arguments are valid or null.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_fcmp_pqc_leaf_hash(
+pub unsafe extern "C" fn shekyl_fcmp_pqc_key_scalar(
     pqc_pk_ptr: *const u8,
     pqc_pk_len: usize,
     out_ptr: *mut u8,
@@ -63,14 +63,14 @@ pub unsafe extern "C" fn shekyl_fcmp_pqc_leaf_hash(
 ///
 /// # Safety
 /// - `combined_ss_ptr` must point to 64 bytes.
-/// - `h_pqc_out` must point to 64 writable bytes.
+/// - `leaf_entry_out` must point to 64 writable bytes.
 #[no_mangle]
-pub unsafe extern "C" fn shekyl_derive_pqc_leaf_hash(
+pub unsafe extern "C" fn shekyl_derive_pqc_leaf_entry(
     combined_ss_ptr: *const u8,
     output_index: u64,
-    h_pqc_out: *mut u8,
+    leaf_entry_out: *mut u8,
 ) -> bool {
-    if combined_ss_ptr.is_null() || h_pqc_out.is_null() {
+    if combined_ss_ptr.is_null() || leaf_entry_out.is_null() {
         return false;
     }
     let mut ss = [0u8; 64];
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn shekyl_derive_pqc_leaf_hash(
     match shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf(&ss, output_index) {
         Ok(leaf) => {
             let entry = leaf.entry_bytes();
-            std::ptr::copy_nonoverlapping(entry.as_ptr(), h_pqc_out, entry.len());
+            std::ptr::copy_nonoverlapping(entry.as_ptr(), leaf_entry_out, entry.len());
             true
         }
         Err(_) => false,
@@ -244,47 +244,50 @@ pub(crate) fn parse_prove_witness(
             return None;
         }
 
-        let mut output_key = [0u8; 32];
-        let mut key_image_gen = [0u8; 32];
-        let mut commitment = [0u8; 32];
-        let mut pqc_leaf_commitment = [0u8; 32];
-        let mut pqc_leaf_blind = [0u8; 32];
-        let mut spend_key_x = [0u8; 32];
-        let mut spend_key_y = [0u8; 32];
-        let mut commitment_mask = [0u8; 32];
-        let mut pseudo_out_blind = [0u8; 32];
-
-        output_key.copy_from_slice(&data[offset..offset + 32]);
-        key_image_gen.copy_from_slice(&data[offset + 32..offset + 64]);
-        commitment.copy_from_slice(&data[offset + 64..offset + 96]);
-        pqc_leaf_commitment.copy_from_slice(&data[offset + 96..offset + 128]);
-        pqc_leaf_blind.copy_from_slice(&data[offset + 128..offset + 160]);
-        spend_key_x.copy_from_slice(&data[offset + 160..offset + 192]);
-        spend_key_y.copy_from_slice(&data[offset + 192..offset + 224]);
-        commitment_mask.copy_from_slice(&data[offset + 224..offset + 256]);
-        pseudo_out_blind
-            .copy_from_slice(&data[offset + 256..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
+        let header = &data[offset..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES];
         offset += SHEKYL_PROVE_WITNESS_HEADER_BYTES;
 
         let (leaf_chunk_outputs, leaf_chunk_cm_x) = parse_leaf_chunks(data, &mut offset)?;
         let c1_branch_layers = parse_branch_layers(data, &mut offset)?;
         let c2_branch_layers = parse_branch_layers(data, &mut offset)?;
 
+        // Rule 35 hand-off discipline: the header carries secret witness
+        // fields (r, x, y, z, a), so no field may exist as a bare `[u8; 32]`
+        // local outside a zeroize wrapper. The zero-initialised `ProveInput`
+        // (ZeroizeOnDrop) is pushed FIRST and the secret bytes are copied
+        // straight from the borrowed wire slice into its heap slot — no
+        // intermediate stack copy. `with_capacity(num_inputs)` above plus
+        // exactly `num_inputs` pushes means the Vec never reallocates, so a
+        // filled (secret-bearing) entry is never memcpy'd to a new block
+        // behind the wrapper's back; keep the reserve and the push count
+        // locked together.
         inputs.push(shekyl_fcmp::proof::ProveInput {
-            output_key,
-            key_image_gen,
-            commitment,
-            pqc_leaf_commitment,
-            pqc_leaf_blind,
-            spend_key_x,
-            spend_key_y,
-            commitment_mask,
-            pseudo_out_blind,
+            output_key: [0u8; 32],
+            key_image_gen: [0u8; 32],
+            commitment: [0u8; 32],
+            pqc_leaf_commitment: [0u8; 32],
+            pqc_leaf_blind: [0u8; 32],
+            spend_key_x: [0u8; 32],
+            spend_key_y: [0u8; 32],
+            commitment_mask: [0u8; 32],
+            pseudo_out_blind: [0u8; 32],
             leaf_chunk_outputs,
             leaf_chunk_cm_x,
             c1_branch_layers,
             c2_branch_layers,
         });
+        let input = inputs.last_mut().expect("pushed on the line above");
+        input.output_key.copy_from_slice(&header[0..32]);
+        input.key_image_gen.copy_from_slice(&header[32..64]);
+        input.commitment.copy_from_slice(&header[64..96]);
+        input.pqc_leaf_commitment.copy_from_slice(&header[96..128]);
+        input.pqc_leaf_blind.copy_from_slice(&header[128..160]);
+        input.spend_key_x.copy_from_slice(&header[160..192]);
+        input.spend_key_y.copy_from_slice(&header[192..224]);
+        input.commitment_mask.copy_from_slice(&header[224..256]);
+        input
+            .pseudo_out_blind
+            .copy_from_slice(&header[256..SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
     }
 
     Some(inputs)
@@ -308,22 +311,22 @@ fn parse_leaf_chunks(
     let chunk_count = read_u32_le(data, offset)?;
     let remaining = data.len() - *offset;
     let mut outputs = bounded_capacity(chunk_count, 128, remaining)?;
-    let mut h_pqc = bounded_capacity(chunk_count, 128, remaining)?;
+    let mut cm_x = bounded_capacity(chunk_count, 128, remaining)?;
     for _ in 0..chunk_count {
         let chunk = data.get(*offset..*offset + 128)?;
         let mut lo = [0u8; 32];
         let mut li = [0u8; 32];
         let mut lc = [0u8; 32];
-        let mut lh = [0u8; 32];
+        let mut lx = [0u8; 32];
         lo.copy_from_slice(&chunk[..32]);
         li.copy_from_slice(&chunk[32..64]);
         lc.copy_from_slice(&chunk[64..96]);
-        lh.copy_from_slice(&chunk[96..128]);
+        lx.copy_from_slice(&chunk[96..128]);
         outputs.push((lo, li, lc));
-        h_pqc.push(lh);
+        cm_x.push(lx);
         *offset += 128;
     }
-    Some((outputs, h_pqc))
+    Some((outputs, cm_x))
 }
 
 /// C1 and C2 branch layers share a wire shape: a u32 layer count, then
@@ -366,12 +369,15 @@ fn parse_branch_layers(
 /// Verify an FCMP++ proof with batch verification.
 ///
 /// `pqc_pk_hashes_ptr`: `pqc_hash_count × 32` bytes, one PQC key scalar `k`
-/// per input from `shekyl_fcmp_pqc_leaf_hash` (`PL-D3`).
+/// per input from `shekyl_fcmp_pqc_key_scalar` (`PL-D3`). A non-canonical
+/// scalar encoding is refused here with code 1 (never silently reduced).
 ///
 /// Returns 0 on success, or a nonzero `VerifyError` discriminant on failure:
-///   1=DeserializationFailed, 2=InvalidTreeRoot, 3=PqcKeyPointInvalid,
+///   1=DeserializationFailed, 2=InvalidTreeRoot,
 ///   4=KeyImageCountMismatch, 5=UpstreamError, 6=BatchVerificationFailed,
 ///   7=TreeDepthTooLarge, 9=PqcKeyCountMismatch
+///   (3 retired 2026-09-14, PL-D3 fix pass: the arm could not fire — K is
+///   computed directly. Retired-in-place; never reassign.)
 ///
 /// `signable_tx_hash_ptr`: 32-byte hash that binds the proof to the transaction.
 ///
@@ -463,7 +469,15 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 
         let mut ph = [0u8; 32];
         ph.copy_from_slice(&ph_bytes[i * 32..(i + 1) * 32]);
-        pqc_hashes.push(shekyl_fcmp::leaf::PqcKeyScalar(ph));
+        // PL-D3 fix pass: `PqcKeyScalar` is constructed only through
+        // `from_canonical_bytes` (field private; non-canonical bytes are
+        // refused, never reduced). A refusal is a loud validation error —
+        // never the retired code 3.
+        let Some(k) = shekyl_fcmp::leaf::PqcKeyScalar::from_canonical_bytes(ph) else {
+            tracing::debug!(input = i, "non-canonical PQC key scalar k");
+            return 1; // DeserializationFailed — invalid caller-supplied encoding
+        };
+        pqc_hashes.push(k);
     }
 
     match shekyl_fcmp::proof::verify(
@@ -488,10 +502,12 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 /// image**). Mirror of [`shekyl_fcmp_verify`] with the key-image array removed — the
 /// ABI the C++ emission-vin shim (PR-E3) calls. Returns `0` on success, else the
 /// [`shekyl_fcmp::proof::VerifyError`] discriminant: `1=Deserialization` (also a null
-/// pointer, a count that is `0` or exceeds [`shekyl_fcmp::MAX_INPUTS`], or a `× 32`
-/// byte-length `usize` overflow), `2=InvalidTreeRoot`, `3=PqcKeyPointInvalid`,
-/// `5=UpstreamError`, `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`,
-/// `8=InputCountMismatch` (`po_count != pqc_hash_count`, checked before any slicing). Never
+/// pointer, a count that is `0` or exceeds [`shekyl_fcmp::MAX_INPUTS`], a `× 32`
+/// byte-length `usize` overflow, or a non-canonical PQC key scalar `k`),
+/// `2=InvalidTreeRoot`, `5=UpstreamError`, `6=BatchVerificationFailed`,
+/// `7=TreeDepthTooLarge`, `8=InputCountMismatch` (`po_count != pqc_hash_count`,
+/// checked before any slicing). Code `3` is retired (2026-09-14, PL-D3 fix
+/// pass: the arm could not fire — K is computed directly); never reassign. Never
 /// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
 /// emission per-epoch dedup, not a key image; the hybrid leaf-gated auth check is
 /// step 8 of the coarse `shekyl_emission_vin_verify` call
@@ -570,14 +586,28 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
             b
         })
         .collect();
-    let pqc_hashes: Vec<shekyl_fcmp::leaf::PqcKeyScalar> = ph_bytes
-        .chunks_exact(32)
-        .map(|c| {
-            let mut b = [0u8; 32];
-            b.copy_from_slice(c);
-            shekyl_fcmp::leaf::PqcKeyScalar(b)
-        })
-        .collect();
+    // Reserve through the seam (SA-R-7): `po_count` is already capped at
+    // `MAX_INPUTS` and `ph_bytes` is exactly `po_count * 32` bytes, so this
+    // cannot refuse — but the ratchet counts raw `with_capacity` sites, and
+    // the seam form keeps the backing-bound invariant stated in one place.
+    let Some(mut pqc_hashes) =
+        bounded_capacity::<shekyl_fcmp::leaf::PqcKeyScalar>(po_count, 32, ph_bytes.len())
+    else {
+        return 1;
+    };
+    for (i, c) in ph_bytes.chunks_exact(32).enumerate() {
+        let mut b = [0u8; 32];
+        b.copy_from_slice(c);
+        // PL-D3 fix pass: `PqcKeyScalar` is constructed only through
+        // `from_canonical_bytes` (field private; non-canonical bytes are
+        // refused, never reduced). A refusal is a loud validation error —
+        // never the retired code 3.
+        let Some(k) = shekyl_fcmp::leaf::PqcKeyScalar::from_canonical_bytes(b) else {
+            tracing::debug!(input = i, "non-canonical PQC key scalar k");
+            return 1; // Deserialization — invalid caller-supplied encoding
+        };
+        pqc_hashes.push(k);
+    }
 
     match shekyl_fcmp::proof::verify_membership_only(
         &proof,

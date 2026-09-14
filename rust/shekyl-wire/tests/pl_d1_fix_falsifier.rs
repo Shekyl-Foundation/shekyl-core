@@ -39,12 +39,14 @@
 //! be pairwise distinct, otherwise a zero-match result could come from a
 //! degenerate tree rather than from hiding.
 
+mod common;
+use common::random_wallet;
+
 use std::collections::HashSet;
 
-use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, scalar::Scalar};
+use curve25519_dalek::scalar::Scalar;
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
-use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
 use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
@@ -60,31 +62,6 @@ const COINBASE_LOCK_WINDOW: u64 = shekyl_consensus::COINBASE_LOCK_WINDOW as u64;
 /// Past the depth-2 capacity (`38 * 18 = 684`) so both branch layers exist.
 const TREE_OUTPUTS: usize = 700;
 const RNG_SEED: u64 = 0x504c_2d44_3120_6631; // "PL-D1 f1"
-
-struct Wallet {
-    spend_secret: [u8; 32],
-    spend_public: [u8; 32],
-    x25519_pk: [u8; 32],
-    x25519_sk: [u8; 32],
-    ml_kem_ek: Vec<u8>,
-    ml_kem_dk: Vec<u8>,
-}
-
-fn random_wallet(rng: &mut ChaCha20Rng) -> Wallet {
-    let b = Scalar::random(rng);
-    let spend_public = (ED25519_BASEPOINT_POINT * b).compress().to_bytes();
-    let (pk, sk) = HybridX25519MlKem
-        .keypair_generate()
-        .expect("hybrid KEM keypair generation");
-    Wallet {
-        spend_secret: b.to_bytes(),
-        spend_public,
-        x25519_pk: pk.x25519,
-        x25519_sk: sk.x25519,
-        ml_kem_ek: pk.ml_kem,
-        ml_kem_dk: sk.ml_kem.clone(),
-    }
-}
 
 /// A real output for a real (throwaway) recipient: its own KEM ciphertexts,
 /// its own per-output hybrid key, its own `0x07` entry.
@@ -177,7 +154,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         };
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(blob.as_slice()),
+            leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
         client

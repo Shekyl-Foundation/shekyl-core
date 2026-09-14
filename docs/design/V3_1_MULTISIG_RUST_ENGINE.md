@@ -1020,8 +1020,8 @@ B→A hybrid sig; A assembles.
 signed payload embeds the SAL via `prunable_hash` (`tx_pqc_verify.cpp:92`, the
 anti-substitution binding), and the curve-tree leaf commitment `CM = H_ℓ(pqc_pk)·G_k + r·J`
 (opened in-circuit, `PL-D3`) binds the SAL to the key, with the multisig key
-*container* being the `pqc_pk` bytes `k` is derived from (`multisig_pqc_leaf_hash`
-forwards to `pqc_key_scalar`). MS-5 extends this unchanged; it only
+*container* being the `pqc_pk` bytes `k` is derived from (`pqc_key_scalar`
+over the canonical container bytes). MS-5 extends this unchanged; it only
 forces the **pqc-last** order above (a hybrid sig signs over the finished SAL).
 
 **The nonce rule (corrected — the load-bearing security part).** Two shapes,

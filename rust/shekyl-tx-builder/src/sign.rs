@@ -362,7 +362,7 @@ pub fn prove_backing_membership(
 /// [`TxBuilderError::PqcLeafMismatch`] when the chain's leaf (this output's
 /// entry in `leaf_chunk`) is not that derivation: a proof over an unopenable
 /// leaf would only fail later, at the verifier, with no diagnosis.
-fn prove_input_from_spend(
+pub(crate) fn prove_input_from_spend(
     index: usize,
     input: &SpendInput,
     pseudo_out_blind: [u8; 32],
