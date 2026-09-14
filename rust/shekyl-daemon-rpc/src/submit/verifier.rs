@@ -1078,11 +1078,15 @@ fn verify_fcmp(
 /// agreement (every input matching `pqc_auths[0]`). Its stated scheme-downgrade
 /// purpose was vacuous — self-referential, and per-output binding is the leaf
 /// hash `h_pqc = H(hybrid_public_key)`; its actual effect, foreclosing a
-/// solo/multisig cross-model linkage, has no externality (one-time keys, FCMP++
-/// proof over the whole tree — no other set shrinks) and mirrors the opt-in
-/// scheme_id=2 self-marking cost, so it is a wallet coin-selection invariant —
-/// a blocking E′/MS-5 ship gate, not merely tracked — not a consensus rule (and
-/// not TM-1, whose disposition rests on the linkage being unmechanizable).
+/// solo/multisig cross-model linkage, mirrors the opt-in scheme_id=2
+/// self-marking cost Shekyl already permits, so it is a wallet coin-selection
+/// invariant — a blocking E′/MS-5 ship gate, not merely tracked — not a
+/// consensus rule (and not TM-1, whose disposition rests on the linkage being
+/// unmechanizable). Re-based 2026-09-14 (PL-D1): the former first ground,
+/// "the FCMP++ proof ranges over the whole tree, so no other set shrinks",
+/// is struck — every FCMP++ spend identifies its input by the public 4th
+/// leaf scalar until PL-D3 lands (docs/design/FCMP_SPEND_LINKABILITY.md), so
+/// there is no set to shrink; the conclusion stands on the precedent alone.
 /// Dropped here in lockstep with the C++ battery so the K13 differential holds.
 ///
 /// [`pqc_signing_payload_hashes`]: shekyl_wire::transaction::Transaction::pqc_signing_payload_hashes

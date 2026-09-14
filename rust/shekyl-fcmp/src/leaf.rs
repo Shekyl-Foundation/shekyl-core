@@ -8,7 +8,11 @@
 //! Extends the upstream 3-scalar FCMP++ leaf with a PQC commitment hash
 //! as the 4th Selene scalar. The verifier checks this value matches the
 //! `pqc_auth` public key presented in the transaction, binding PQC
-//! authorization to the UTXO set without revealing which output is spent.
+//! authorization to the UTXO set. Because that value is a *public* input
+//! equal to the per-output hash published in `tx_extra` tag `0x07` at
+//! creation, the same check identifies the spent output (`PL-D1`,
+//! `docs/design/FCMP_SPEND_LINKABILITY.md`); the leaf format is
+//! genesis-frozen and changes only through that round.
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
