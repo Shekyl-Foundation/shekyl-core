@@ -376,7 +376,7 @@ Index and CHANGELOG use the Tier-A framing when reopen fires.
 | **Reference height** | **H = 100_000** synthetic or regtest-equivalent full-validation blocks (or max available fixture; raise only with BENCH plan amend) | Large enough for bulk-load shape; small enough for CI optional nightly |
 | **Hardware class** | Single mid-range x86_64 workstation/server class used for project CI self-host notes; document CPU model, RAM, disk type (NVMe vs HDD) **in the artifact** | Cross-machine absolute times are not load-bearing; **ratios** are |
 | **Primary metric** | Wall time IBD to H under **same** consensus verify cost as production (FCMP++ + PoW verify enabled as in real sync) | Privacy chain: slower IBD → fewer full nodes → more remote-node use |
-| **Floor (relative)** | redb (or candidate) IBD wall time ≤ **1.25×** LMDB wall time on the **same** machine, same binary flags except engine, same durability policy as production intent (DRS-D9) | Absolute “N hours” deferred until first LMDB baseline lands in-tree |
+| **Floor (relative)** | redb (or candidate) IBD wall time ≤ **1.25×** LMDB wall time on the **same** machine, **two binaries** (one backend per build — the daemon never compiles two store engines into one binary, ruled 2026-09-14), same flags, same durability policy as production intent (DRS-D9) | Absolute “N hours” deferred until first LMDB baseline lands in-tree |
 | **Hard fail (D2-R3 / D6)** | Ratio **> 1.50×** after one documented mitigation cycle, **or** fails resource bounds (§7.4) | Between 1.25× and 1.50×: decision-log accept or mitigate |
 | **Resource bounds (sketch)** | Peak RSS under attacker-feed scenario ≤ **2×** LMDB peak on same scenario; file-size / logical-size ratio after simulated year of 2-minute blocks stays within plan-stated ceiling (set after first multi-year sim) | Security/privacy > speed |
 
@@ -1038,13 +1038,17 @@ IBD floor from DRS-0).
 (schema, refusals, §1.3 compare, redb-engine probe) and runner
 `scripts/bench/drs_bench.py` (`measure` / `check` / `validate` / `blockers`)
 with selftest `scripts/bench/test_drs_bench.py`, wired in `docs-gates.yml`.
-The **LMDB arm only**: DRS-E1 increment 1 constructs `redb::Database` in
-`shekyl-chain-store` but the daemon still has no engine switch and `ChainStore` itself
-is not exported through FFI (the crate already is, for `digest_v0`), so the arm is unrunnable. `drs_bench.py blockers`
-asserts on every CI run that **redb sites exist AND `new_db()` cannot select
-them** — that pair, not the FFI clause, is what the probe reads; redb sites
-without a switch do not lift it — so the deferral turns red when `new_db()`
-gains a switch instead of ageing quietly. The FFI-export clause is a stated
+The **LMDB arm only**. The redb arm is a **second binary**, not a flag: the
+daemon never compiles two store engines into one build (ruled 2026-09-14),
+so there is no `--engine` selector on the harness and no `new_db()` switch to
+watch for. The harness labels each artifact from the one backend its build
+carries, recorded as `engine_selected_by`; `check` refuses two same-backend
+artifacts because §1.3's floor is a ratio *between* backends. The redb arm
+arrives when a redb-backed `shekyld` build target exists and reports its
+backend — the named blocker, carried in `FOLLOWUPS.md` with its falsifier,
+not by a source probe. An earlier probe that regexed `new_db()` for an
+engine switch was deleted with the flag: it guarded a transition that is
+not on the roadmap. The FFI-export clause is a stated
 fact, not a probed leg.
 
 Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**

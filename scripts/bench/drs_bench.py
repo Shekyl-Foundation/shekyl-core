@@ -240,8 +240,7 @@ def measure(args):
     os.makedirs(work, exist_ok=True)
     seed_dir = os.path.abspath(args.seed_dir or os.path.join(work, "seed"))
     os.makedirs(seed_dir, exist_ok=True)
-    pre = A.measurement_preflight(
-        engine=args.engine, sync_mode=args.sync_mode, daemon=args.daemon,
+    pre = A.measurement_preflight(sync_mode=args.sync_mode, daemon=args.daemon,
         work_dir=work, seed_dir=seed_dir, disk_class=args.disk_class)
     if pre:
         _fail("refusing to start:\n  " + "\n  ".join(pre))
@@ -404,7 +403,10 @@ def measure(args):
     scenario = "ibd_coinbase_only"
     artifact = {
         "schema_version": A.SCHEMA,
-        "engine": args.engine,
+        # One backend per build; the daemon never compiles two store engines
+        # into one binary (ruled 2026-09-14). The label derives from the
+        # recorded selection mechanism, not from a flag an operator sets.
+        "engine": A.ENGINE_SELECTORS[A.ENGINE_DEFAULT_LMDB],
         "engine_selected_by": A.ENGINE_DEFAULT_LMDB,
         "git_rev": git_rev,
         "thresholds_frozen_at": A.FROZEN_AT,
@@ -485,7 +487,7 @@ def measure(args):
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(artifact, fh, indent=2, sort_keys=True)
         fh.write("\n")
-    print(f"wrote {args.out}: engine={args.engine} height_reached={reached} "
+    print(f"wrote {args.out}: engine={artifact['engine']} height_reached={reached} "
           f"{A.PRIMARY_MEASURE}={elapsed:.3f}s peak_rss={peak} "
           f"store={store_bytes} (apparent {store_apparent}) "
           f"load={load_at_start[0]:.2f}->{load_at_end[0]:.2f} on {os.cpu_count()} cores")
@@ -551,10 +553,7 @@ def main():
     c.add_argument("candidate")
     c.add_argument("--json", action="store_true")
 
-    sub.add_parser("blockers", help="FATAL if the redb-arm deferral's blocker is gone")
-
     m = sub.add_parser("measure", help="run the IBD baseline and emit an artifact")
-    m.add_argument("--engine", default="lmdb", choices=("lmdb", "redb"))
     m.add_argument("--height", type=_positive_int,
                    default=A.REFERENCE_HEIGHT)
     m.add_argument("--out", required=True)
@@ -585,15 +584,6 @@ def main():
         if r:
             _fail(f"{args.artifact} is not a usable measurement:\n  " + "\n  ".join(r))
         print(f"{args.artifact}: usable")
-        return
-
-    if args.cmd == "blockers":
-        f = A.blocker_failures()
-        if f:
-            _fail("a deferred follow-on's blocker no longer holds:\n  " +
-                  "\n  ".join(f))
-        print(f"blockers hold: redb arm unrunnable (new_db() cannot select an "
-              f"engine), {len(A.FOLLOWON_MEASURES)} recorded follow-on(s)")
         return
 
     if args.cmd == "check":
