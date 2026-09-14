@@ -31,9 +31,7 @@
 //! daemon's `verify_pass_transcript` rejects.
 
 use shekyl_archival_retention::pass_anchor::{
-    pass_countersignature_message, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_HASH_LEN,
-    PASS_ANCHOR_HEIGHT_LEN, PASS_ANCHOR_LAG_BLOCKS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
-    PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
+    PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS, PASS_COUNTERSIGNATURE_MESSAGE_LEN,
 };
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridSecretKey, HybridSignature, SignatureScheme,
@@ -45,29 +43,18 @@ use shekyl_crypto_pq::CryptoError;
 /// wire: the canonical `HybridSignature` encoding, and nothing else.
 pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 
-/// The persona's signing seam, supplied by the host at [`bind`].
+/// Where the persona's attestation signing key lives.
 ///
-/// Both methods are synchronous and are called from the serve loop's
-/// blocking pool, never on an executor thread: `own_height` may be a
-/// bounded store read (a host that stamps an atomic is also fine), and
-/// `sign_pass` is one hybrid sign.
+/// One method, synchronous, called from the serve loop's blocking pool
+/// once per shard the persona is about to serve. Implementors sign with
+/// [`sign_pass_transcript`] so the domain cannot drift from what the
+/// daemon's `verify_pass_transcript` checks.
 ///
-/// [`bind`]: crate::PServeEndpoint::bind
-pub trait PassSigner: Send + Sync {
-    /// The persona's current chain height, for the SF-D5 anchor gate. A
-    /// value within `L` of true is sufficient.
-    ///
-    /// `None` means the height could not be read — the serving store is
-    /// unreadable, or whatever the host reads it from is gone. The serve
-    /// loop renders the identical 404 and counts a **lookup failure**
-    /// (the same bucket as a store read that fails on the shard itself),
-    /// so a host that has lost its store is visible in the aggregate
-    /// rather than refusing every anchor silently. A fresh store at
-    /// height `0` is `Some(0)`, not `None`: readable, and below the gate.
-    fn own_height(&self) -> Option<u64>;
-
+/// The host supplies this; the serve loop never sees the secret. Height
+/// for the pre-sign gate is [`PassSigner::own_height`] — a signer is a
+/// key plus a height source, not a second `sign_pass`.
+pub trait PassKey: Send + Sync {
     /// Sign the 80-byte SF-D8 transcript under the attestation domain.
-    /// Implementors build the signature via [`sign_pass_transcript`].
     ///
     /// # Errors
     ///
@@ -82,6 +69,29 @@ pub trait PassSigner: Send + Sync {
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
     ) -> Result<HybridSignature, SignRefused>;
+}
+
+/// The persona's signing seam, supplied by the host at [`bind`]: a
+/// [`PassKey`] plus the height the pre-sign gate runs against.
+///
+/// Both methods are synchronous and are called from the serve loop's
+/// blocking pool, never on an executor thread: `own_height` may be a
+/// bounded store read (a host that stamps an atomic is also fine), and
+/// `sign_pass` is one hybrid sign.
+///
+/// [`bind`]: crate::PServeEndpoint::bind
+pub trait PassSigner: PassKey {
+    /// The persona's current chain height, for the SF-D5 anchor gate. A
+    /// value within `L` of true is sufficient.
+    ///
+    /// `None` means the height could not be read — the serving store is
+    /// unreadable, or whatever the host reads it from is gone. The serve
+    /// loop renders the identical 404 and counts a **lookup failure**
+    /// (the same bucket as a store read that fails on the shard itself),
+    /// so a host that has lost its store is visible in the aggregate
+    /// rather than refusing every anchor silently. A fresh store at
+    /// height `0` is `Some(0)`, not `None`: readable, and below the gate.
+    fn own_height(&self) -> Option<u64>;
 }
 
 /// A host's refusal to sign. The detail is operator-facing, never sent on
@@ -107,39 +117,6 @@ impl core::fmt::Display for SignRefused {
 }
 
 impl std::error::Error for SignRefused {}
-
-/// The decoded 72-byte request header, split into its three fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RequestHeaderFields {
-    pub nonce: [u8; PASS_NONCE_LEN],
-    pub anchor_height: u64,
-    pub anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
-}
-
-impl RequestHeaderFields {
-    /// Split the decoded header. Infallible: the length is in the type.
-    #[must_use]
-    pub fn from_header(header: &[u8; PASS_REQUEST_HEADER_LEN]) -> Self {
-        const HEIGHT_END: usize = PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
-        let mut nonce = [0u8; PASS_NONCE_LEN];
-        nonce.copy_from_slice(&header[..PASS_NONCE_LEN]);
-        let mut height_le = [0u8; PASS_ANCHOR_HEIGHT_LEN];
-        height_le.copy_from_slice(&header[PASS_NONCE_LEN..HEIGHT_END]);
-        let mut anchor_hash = [0u8; PASS_ANCHOR_HASH_LEN];
-        anchor_hash.copy_from_slice(&header[HEIGHT_END..]);
-        Self {
-            nonce,
-            anchor_height: u64::from_le_bytes(height_le),
-            anchor_hash,
-        }
-    }
-
-    /// The SF-D8 transcript for this header and `shard_id`.
-    #[must_use]
-    pub fn transcript(&self, shard_id: u64) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        pass_countersignature_message(&self.nonce, self.anchor_height, &self.anchor_hash, shard_id)
-    }
-}
 
 /// Sign an SF-D8 transcript under `SCHEME_DOMAIN_ATTESTATION`.
 ///
@@ -223,11 +200,7 @@ impl TestKeySigner {
 }
 
 #[cfg(any(test, feature = "test-signer"))]
-impl PassSigner for TestKeySigner {
-    fn own_height(&self) -> Option<u64> {
-        Some(self.height.load(std::sync::atomic::Ordering::Relaxed))
-    }
-
+impl PassKey for TestKeySigner {
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -236,11 +209,17 @@ impl PassSigner for TestKeySigner {
     }
 }
 
+#[cfg(any(test, feature = "test-signer"))]
+impl PassSigner for TestKeySigner {
+    fn own_height(&self) -> Option<u64> {
+        Some(self.height.load(std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shekyl_archival_retention::pass_anchor::pass_request_header_bytes;
-    use shekyl_archival_retention::verify_pass_transcript;
+    use shekyl_archival_retention::{verify_pass_transcript, PassRequestHeader};
 
     const DEPTH: u64 = PASS_ANCHOR_DEPTH_BLOCKS;
     const L: u64 = PASS_ANCHOR_LAG_BLOCKS;
@@ -269,26 +248,9 @@ mod tests {
     }
 
     #[test]
-    fn header_fields_split_and_rejoin() {
-        let h = pass_request_header_bytes(&[0x11; 32], 0x0102_0304_0506_0708, &[0x22; 32]);
-        let f = RequestHeaderFields::from_header(&h);
-        assert_eq!(f.nonce, [0x11; 32]);
-        assert_eq!(f.anchor_height, 0x0102_0304_0506_0708);
-        assert_eq!(f.anchor_hash, [0x22; 32]);
-        assert_eq!(
-            f.transcript(9),
-            pass_countersignature_message(&[0x11; 32], 0x0102_0304_0506_0708, &[0x22; 32], 9)
-        );
-    }
-
-    #[test]
     fn test_key_signer_round_trips_through_the_consensus_verifier() {
         let signer = TestKeySigner::ephemeral(DEPTH + 50);
-        let f = RequestHeaderFields {
-            nonce: [7; 32],
-            anchor_height: 49,
-            anchor_hash: [8; 32],
-        };
+        let f = PassRequestHeader::from_parts([7; 32], 49, [8; 32]);
         let sig = signer.sign_pass(&f.transcript(7)).expect("sign");
         assert_eq!(
             sig.to_canonical_bytes().unwrap().len(),
@@ -296,9 +258,9 @@ mod tests {
         );
         let ok = verify_pass_transcript(
             signer.public_key(),
-            &f.nonce,
-            f.anchor_height,
-            &f.anchor_hash,
+            f.nonce(),
+            f.anchor_height(),
+            f.anchor_hash(),
             7,
             &sig,
         );
@@ -306,9 +268,9 @@ mod tests {
         // Shard id is bound: a neighbouring id does not verify.
         let bad = verify_pass_transcript(
             signer.public_key(),
-            &f.nonce,
-            f.anchor_height,
-            &f.anchor_hash,
+            f.nonce(),
+            f.anchor_height(),
+            f.anchor_hash(),
             8,
             &sig,
         );

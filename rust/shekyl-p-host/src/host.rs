@@ -18,7 +18,8 @@ use shekyl_tor_control_wallet::service::{
 use tokio::sync::watch;
 
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
-use crate::signer::{HostSigner, PassKey};
+use crate::signer::HostSigner;
+use crate::PassKey;
 
 /// The serving identity and the shape of its published port.
 ///
@@ -71,7 +72,7 @@ impl fmt::Debug for PersonaServing {
 /// deliberate 404 and moves neither counter.
 ///
 /// **Distinguishable is not yet surfaced.** These are read through
-/// [`PersonaServing::counters`]; today the production serving task
+/// [`PersonaServingHost::counters`]; today the production serving task
 /// (`engine-core`'s `serving::task`) holds the host privately and publishes
 /// only posture and the serve-set alarms, so the counters reach an operator
 /// only through tests. The reading that puts them on the alarm board is the

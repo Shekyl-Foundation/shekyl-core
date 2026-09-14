@@ -8,7 +8,7 @@
 //! items remain visible via `#[path]` from `serve.rs`.
 
 use super::*;
-use crate::countersign::{SignRefused, TestKeySigner};
+use crate::countersign::{PassKey, SignRefused, TestKeySigner};
 use crate::provider::{ProviderError, ShardBody};
 use shekyl_archival_retention::pass_anchor::{
     pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
@@ -268,8 +268,9 @@ async fn two_personas_are_header_identical() {
 fn not_found_uses_the_declared_header_set_and_content_type() {
     // One source of truth: 404 is not a second fingerprint with a
     // divergent header list or content-type spelling.
-    assert!(NOT_FOUND.contains(&format!("content-type: {CONTENT_TYPE}")));
-    let head = NOT_FOUND
+    let not_found = render_not_found();
+    assert!(not_found.contains(&format!("content-type: {CONTENT_TYPE}")));
+    let head = not_found
         .split("\r\n\r\n")
         .next()
         .expect("status + headers");
@@ -278,7 +279,7 @@ fn not_found_uses_the_declared_header_set_and_content_type() {
 
 #[tokio::test]
 async fn every_non_servable_outcome_renders_one_identical_404() {
-    // Every complete-head miss is the one `NOT_FOUND`. A 405, a 500, or a
+    // Every complete-head miss is the one `render_not_found()`. A 405, a 500, or a
     // second 404 shape is an implementation fingerprint; a distinct
     // store-failure response is a live health oracle. Holdings are
     // chain-public — GET 200 vs 404 is already the availability oracle —
@@ -360,7 +361,7 @@ async fn every_non_servable_outcome_renders_one_identical_404() {
     for resp in &seen {
         assert_eq!(
             resp.as_slice(),
-            NOT_FOUND.as_bytes(),
+            render_not_found().as_bytes(),
             "every complete-head miss must be the shared 404"
         );
     }
@@ -393,7 +394,7 @@ async fn a_request_body_does_not_reset_the_response() {
     s.read_to_end(&mut out).await.expect("read response");
     assert_eq!(
         out,
-        NOT_FOUND.as_bytes(),
+        render_not_found().as_bytes(),
         "the complete shared 404 must survive a request that carried a body"
     );
 }
@@ -594,7 +595,7 @@ async fn the_gate_is_two_sided_with_the_admission_lag() {
                 "anchor {anchor}"
             );
         } else {
-            assert_eq!(r, NOT_FOUND.as_bytes(), "anchor {anchor}");
+            assert_eq!(r, render_not_found().as_bytes(), "anchor {anchor}");
         }
     }
     assert_eq!(ep.served_count(), 3);
@@ -609,10 +610,7 @@ async fn a_refusing_signer_renders_the_shared_404_and_counts_separately() {
     // the identical 404 — never an unsigned body. The counter is the only
     // place this is distinguishable from a missing pin.
     struct Refusing;
-    impl PassSigner for Refusing {
-        fn own_height(&self) -> Option<u64> {
-            Some(OWN_HEIGHT)
-        }
+    impl PassKey for Refusing {
         fn sign_pass(
             &self,
             _: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -620,12 +618,17 @@ async fn a_refusing_signer_renders_the_shared_404_and_counts_separately() {
             Err(SignRefused::new("not resident"))
         }
     }
+    impl PassSigner for Refusing {
+        fn own_height(&self) -> Option<u64> {
+            Some(OWN_HEIGHT)
+        }
+    }
     let signer: Arc<dyn PassSigner> = Arc::new(Refusing);
     let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]), signer)
         .await
         .expect("bind");
     let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(r, NOT_FOUND.as_bytes());
+    assert_eq!(r, render_not_found().as_bytes());
     assert_eq!(ep.sign_failure_count(), 1);
     assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
@@ -633,7 +636,7 @@ async fn a_refusing_signer_renders_the_shared_404_and_counts_separately() {
     // a sign failure: the persona never signs for a shard it does not
     // hold, and not holding one is not a fault.
     let r = fetch(ep.addr(), "/shard/9").await;
-    assert_eq!(r, NOT_FOUND.as_bytes());
+    assert_eq!(r, render_not_found().as_bytes());
     assert_eq!(ep.sign_failure_count(), 1);
     assert_eq!(ep.lookup_failure_count(), 0);
 }
@@ -645,15 +648,17 @@ async fn an_unreadable_height_renders_the_shared_404_and_counts_a_lookup_failure
     // and the fault lands in `lookup_failure_count` (a store read that
     // failed), not in `sign_failure_count` and not silently in neither.
     struct Storeless(Arc<TestKeySigner>);
-    impl PassSigner for Storeless {
-        fn own_height(&self) -> Option<u64> {
-            None
-        }
+    impl PassKey for Storeless {
         fn sign_pass(
             &self,
             m: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
         ) -> Result<HybridSignature, SignRefused> {
             self.0.sign_pass(m)
+        }
+    }
+    impl PassSigner for Storeless {
+        fn own_height(&self) -> Option<u64> {
+            None
         }
     }
     let key = Arc::new(TestKeySigner::ephemeral(OWN_HEIGHT));
@@ -662,7 +667,7 @@ async fn an_unreadable_height_renders_the_shared_404_and_counts_a_lookup_failure
         .await
         .expect("bind");
     let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(r, NOT_FOUND.as_bytes());
+    assert_eq!(r, render_not_found().as_bytes());
     assert_eq!(ep.lookup_failure_count(), 1);
     assert_eq!(ep.sign_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
@@ -686,7 +691,11 @@ async fn a_body_that_is_not_a_leaf_array_is_not_servable() {
     }
     let (ep, _) = bind(Arc::new(RaggedProvider)).await;
     let r = fetch(ep.addr(), "/shard/0").await;
-    assert_eq!(r, NOT_FOUND.as_bytes(), "an unframeable body is not served");
+    assert_eq!(
+        r,
+        render_not_found().as_bytes(),
+        "an unframeable body is not served"
+    );
     assert_eq!(ep.served_count(), 0);
 }
 

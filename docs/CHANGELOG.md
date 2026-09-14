@@ -73,16 +73,18 @@
   attestation domain, then the unchanged `RF-D4` frame
   ([`ARCHIVAL_SERVING_ROUTE.md`](design/ARCHIVAL_SERVING_ROUTE.md);
   [`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D5`,
-  `SF-D8`, §9.1 (a)+(b)). The grammar both ends read — port 80, route
-  prefix, header name and hex codec, response header set,
-  `ServingEndpoint` — is homed in `shekyl_curve_tree::serving_route`.
+  `SF-D8`, §9.1 (a)+(b)). Route grammar both ends read — port 80, path,
+  header name and hex codec, response header set — is homed in
+  `shekyl_curve_tree::serving_route`. The onion hostname is
+  `shekyl-onion-v3`, typed on the daemon as `shekyl-p-fetch::ServingEndpoint`
+  and on the wallet as `OnionIdentity` (`PWD-E9`).
   `shekyl-p-serve` signs through a `PassSigner` the host supplies;
   `shekyl-p-host` binds a `HostSigner` over a caller-provided `PassKey`,
   and the wallet binds `NoResidentKey` until SH-2 wires the persona's
   resident attestation key, so **every serve from a real wallet is today a
   counted sign refusal** (`ServeCounters::sign_failures`) rendering the
   404. New crate `shekyl-p-fetch`: the daemon-side client
-  (`PFetchClient::fetch(&FetchTarget, &RequestHeader)`), SOCKS5h through
+  (`PFetchClient::fetch(&FetchTarget, &RequestHeader, verifier)`), SOCKS5h through
   the daemon's own Tor client with no isolation flags, `MAX_INFLIGHT = 4`
   (provisional, W₂ pins it), body ceiling refused from `content-length`
   before a byte is read, typed outcomes `Stall` / `Miss` / `Malformed` /

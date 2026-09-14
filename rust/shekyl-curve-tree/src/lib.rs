@@ -39,9 +39,11 @@
 //! - [`reference`](mod@reference): reference-block selection + proof
 //!   validity-horizon arithmetic (§5), pure functions over heights.
 //! - [`serving_route`]: the archival serving route's shared grammar —
-//!   virtual port, route, header set, request-header codec, and the
-//!   `ServingEndpoint` onion derivation — read by both `shekyl-p-serve`
-//!   and `shekyl-p-fetch` so neither depends on the other (`SF-D4`).
+//!   virtual port, route, header set, request-header codec — read by
+//!   both `shekyl-p-serve` and `shekyl-p-fetch` so neither depends on
+//!   the other (`SF-D4`). The onion hostname is not grammar: it lives
+//!   in `shekyl-onion-v3`, typed on the daemon as
+//!   `shekyl-p-fetch::ServingEndpoint`.
 
 #![deny(unsafe_code)]
 
@@ -68,7 +70,6 @@ pub use segment::{
     SEGMENT_FREEZE_REORG_MARGIN_BLOCKS, SEGMENT_LAYER_J, SPENDABLE_AGE_BLOCKS,
 };
 pub use served_frame::{ServedFrameError, ServedFrameField, ServedFrameHeader};
-pub use serving_route::ServingEndpoint;
 pub use store::{
     mixed_composition_root, recompute_segment_r_k, FrozenSegmentBody, FrozenSegmentRecord,
     LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader, StoreError,

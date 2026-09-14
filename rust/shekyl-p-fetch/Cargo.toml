@@ -10,11 +10,16 @@ publish = false
 
 [dependencies]
 # The route grammar both ends read (`serving_route`: virt-port, path,
-# header name and encoding, response header set, `ServingEndpoint`) and the
+# header name and encoding, response header set) and the
 # provisional body ceiling's inputs (`leaves_per_segment`, `LEAF_BYTES`).
 # Codec shared, not mirrored (`SF-D4`). The frame itself is sub-PR 2's;
 # this crate hands frame bytes to the content-verify hole unparsed.
 shekyl-curve-tree = { path = "../shekyl-curve-tree" }
+# rend-spec-v3 hostname from the bond-record endpoint. Shared with the
+# wallet publish path (`OnionIdentity`) so the address a persona
+# publishes and the address this crate dials cannot drift. Encoding
+# only — no Tor instance, no control port (`PWD-E9`, `SF-D4`).
+shekyl-onion-v3 = { path = "../shekyl-onion-v3" }
 # `HybridPublicKey` is the target's verifying key; `HybridSignature` is the
 # envelope's type and canonical codec.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
@@ -37,6 +42,9 @@ getrandom = "0.2"
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq", features = ["test-utils"] }
+# Loopback conversation test: a real `PServeEndpoint` behind a SOCKS5
+# shim. Dev-only — SF-D4 forbids this edge on the shipped graph.
+shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
 
 [lints]
 workspace = true

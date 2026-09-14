@@ -36,12 +36,6 @@ shekyl-consensus = { path = "../shekyl-consensus" }
 # The same encoder/decoder the archival wire modules use, so one length has
 # one encoding across every Shekyl format.
 shekyl-curve-io = { path = "../shekyl-curve-io" }
-# SHA3-256 for the v3 `.onion` checksum in `serving_route::ServingEndpoint`
-# (rend-spec-v3 §6). Same crate and feature set `shekyl-tor-control-client`
-# derives the publish-side service id with, so the two ends of the serving
-# route hash the same way (`17-dependency-discipline.mdc`).
-sha3 = { version = "0.10", default-features = false }
-
 # Reads `config/consensus_constants.json` to emit the FCMP++
 # reference-block age constants (`build.rs`). Mirrors
 # `rust/shekyl-difficulty`'s build-time JSON read so the wallet's

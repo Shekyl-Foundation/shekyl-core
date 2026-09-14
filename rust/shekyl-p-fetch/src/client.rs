@@ -16,7 +16,7 @@ use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{
     CONTENT_TYPE, REQUEST_HEADER_NAME, RESPONSE_HEADER_NAMES, ROUTE_PREFIX, SERVING_VIRTUAL_PORT,
 };
-use shekyl_curve_tree::{leaves_per_segment, ServingEndpoint, LEAF_BYTES};
+use shekyl_curve_tree::{leaves_per_segment, LEAF_BYTES};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -24,7 +24,7 @@ use tokio_socks::tcp::Socks5Stream;
 
 use crate::error::{FetchError, Malformed, Stall};
 use crate::header::RequestHeader;
-use crate::target::{ContentVerify, FetchTarget, VerifiedShard};
+use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 
 /// Concurrent transfers one client may have outstanding (`SF-D7`): the
 /// in-flight cap `N`. Shared by both callers; there is no queue behind
@@ -148,7 +148,6 @@ pub struct PFetchClient {
     /// `Arc` so a permit can be *owned* and travel into the blocking
     /// verify task — see [`Self::fetch`] on cancellation.
     slots: Arc<Semaphore>,
-    verifier: Arc<dyn ContentVerify>,
     timeouts: Timeouts,
 }
 
@@ -157,7 +156,6 @@ impl std::fmt::Debug for PFetchClient {
         f.debug_struct("PFetchClient")
             .field("proxy", &self.proxy)
             .field("available_slots", &self.slots.available_permits())
-            .field("verifier", &"<dyn ContentVerify>")
             .field("timeouts", &self.timeouts)
             .finish()
     }
@@ -165,29 +163,26 @@ impl std::fmt::Debug for PFetchClient {
 
 impl PFetchClient {
     /// A client dialling through the tor-zone SOCKS5 proxy at `proxy`,
-    /// plugging `verifier` as the content-verify hole, with
-    /// [`Timeouts::DEFAULT`].
+    /// with [`Timeouts::DEFAULT`].
     ///
     /// `proxy` is the daemon's own Tor client's SOCKS port (`SF-D2`), never
     /// the serving instance's (`PWD-E9`). The proxy address is the one
     /// thing here that *is* resolved locally, because it is a loopback
     /// socket, not a name.
+    ///
+    /// The content-verify hole is per-`fetch`, not per-client: two callers
+    /// share this admission path and plug the check for *this* shard.
     #[must_use]
-    pub fn new(proxy: SocketAddr, verifier: Arc<dyn ContentVerify>) -> Self {
-        Self::with_timeouts(proxy, verifier, Timeouts::DEFAULT)
+    pub fn new(proxy: SocketAddr) -> Self {
+        Self::with_timeouts(proxy, Timeouts::DEFAULT)
     }
 
     /// [`Self::new`] with explicit per-step bounds.
     #[must_use]
-    pub fn with_timeouts(
-        proxy: SocketAddr,
-        verifier: Arc<dyn ContentVerify>,
-        timeouts: Timeouts,
-    ) -> Self {
+    pub fn with_timeouts(proxy: SocketAddr, timeouts: Timeouts) -> Self {
         Self {
             proxy,
             slots: Arc::new(Semaphore::new(MAX_INFLIGHT)),
-            verifier,
             timeouts,
         }
     }
@@ -201,8 +196,7 @@ impl PFetchClient {
 
     /// Fetch `target.shard_id` from `target.endpoint`, carrying `header`,
     /// and return it only if `P`'s countersignature verifies under
-    /// `target.verifying_key` and the content-verify hole accepts the
-    /// body.
+    /// `target.verifying_key` and `verifier` accepts the body.
     ///
     /// Waits for an in-flight slot first; the slot is held until the
     /// result is decided, body included (`SF-D7`: the body is resident
@@ -228,6 +222,7 @@ impl PFetchClient {
         &self,
         target: &FetchTarget,
         header: &RequestHeader,
+        verifier: Arc<dyn ContentVerify>,
     ) -> Result<VerifiedShard, FetchError> {
         let slot = Arc::clone(&self.slots)
             .acquire_owned()
@@ -279,7 +274,6 @@ impl PFetchClient {
         // be much more (today it recomputes a segment root). The slot goes
         // with the body: it is dropped when this closure returns, whether
         // or not anyone is still awaiting the handle.
-        let verifier = Arc::clone(&self.verifier);
         let (verifying_key, shard_id, header) =
             (target.verifying_key.clone(), target.shard_id, *header);
         tokio::task::spawn_blocking(move || {
@@ -339,6 +333,11 @@ fn request_bytes(shard_id: u64, header: &RequestHeader) -> Vec<u8> {
 
 /// Read until `\r\n\r\n`. Returns the head (without its terminator) and
 /// any body bytes that arrived with it.
+///
+/// The terminator is bounded independently of TCP chunking: a read that
+/// jumps `buf` past [`MAX_HEAD_BYTES`] with the terminator still inside
+/// that window is `HeadTooLong`, not a successful parse of an oversized
+/// head.
 async fn read_head<S: AsyncRead + Unpin>(
     stream: &mut S,
     bound: Duration,
@@ -347,11 +346,14 @@ async fn read_head<S: AsyncRead + Unpin>(
     let read = async {
         loop {
             if let Some(end) = find_head_end(&buf) {
+                if end > MAX_HEAD_BYTES {
+                    return Err(FetchError::Malformed(Malformed::HeadTooLong));
+                }
                 let body = buf.split_off(end + 4);
                 buf.truncate(end);
                 return Ok((buf, body));
             }
-            if buf.len() >= MAX_HEAD_BYTES {
+            if buf.len() > MAX_HEAD_BYTES {
                 return Err(FetchError::Malformed(Malformed::HeadTooLong));
             }
             let mut chunk = [0u8; 256];
@@ -402,7 +404,13 @@ fn parse_head(head: &[u8]) -> Result<Head, FetchError> {
     let mut seen = 0usize;
     for line in lines {
         let (name, value) = line.split_once(':').ok_or(Malformed::HeaderSet)?;
-        let name = name.trim().to_ascii_lowercase();
+        // Field-name is a token: no whitespace. Trimming would accept
+        // `content-length : 10`, a second spelling the contract does not
+        // permit. Values still take HTTP OWS.
+        if name.as_bytes().iter().any(u8::is_ascii_whitespace) {
+            return Err(Malformed::HeaderSet.into());
+        }
+        let name = name.to_ascii_lowercase();
         let value = value.trim();
         if !RESPONSE_HEADER_NAMES.contains(&name.as_str()) {
             return Err(Malformed::HeaderSet.into());
@@ -552,6 +560,12 @@ mod tests {
             malformed(head(&format!(
                 "HTTP/1.1 200 OK\r\n{ok_headers}\r\ndate: now"
             ))),
+            Malformed::HeaderSet
+        );
+        assert_eq!(
+            malformed(head(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length : 1"
+            )),
             Malformed::HeaderSet
         );
         assert_eq!(

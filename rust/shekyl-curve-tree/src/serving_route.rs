@@ -21,10 +21,13 @@
 //! pre-sign gate and the client's transcript are the two crates' own
 //! (`SF-D5`, `SF-D8`). What is here is exactly what would otherwise be
 //! written twice: the virtual port, the route prefix, the response header
-//! set, the one request header's name and textual encoding, and the
-//! serving endpoint's onion-address derivation.
-
-use sha3::{Digest, Sha3_256};
+//! set, and the one request header's name and textual encoding.
+//!
+//! The onion hostname a daemon dials is not grammar. It is a function of
+//! the bond-record endpoint column, owned by `shekyl-onion-v3` (the one
+//! rend-spec transform) and typed as `shekyl-p-fetch::ServingEndpoint`
+//! (the daemon's dial target). Wallet serving publishes through
+//! `OnionIdentity`. Those stay different types (`PWD-E9`).
 
 /// Virtual port the persona's onion publishes — the port the fetch client
 /// dials. **RULED 80** (`SF-D5`).
@@ -119,105 +122,6 @@ pub fn decode_request_header(text: &str) -> Option<[u8; REQUEST_HEADER_BYTES]> {
     Some(out)
 }
 
-/// The raw 32-byte Ed25519 public key of a persona's v3 onion service, as
-/// the bond record carries it (`EU-D3`: the `.onion` is display form; the
-/// wire never carries it).
-///
-/// Minted here per the `SF-D7` amendment so the fetch target is a type
-/// with a provenance obligation rather than a bare array the client trusts
-/// because the caller handed it over. The obligation: build this from the
-/// **record** read (the `ArchivalBondValue` endpoint column at the
-/// drawable snapshot, `EU-D4`), never from a vin and never from a
-/// response. The crate cannot check where the bytes came from; the type
-/// is what the review checks. The bond wire itself stays a bare array
-/// (rule 42 — the genesis-frozen wire is not touched for type hygiene).
-///
-/// Its one method derives the address to dial. The endpoint is immutable
-/// for the record's life (`EU` kind-4 rejection, 2026-09-13), so a value
-/// built once at draw time is good for the whole fetch.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ServingEndpoint([u8; 32]);
-
-impl ServingEndpoint {
-    /// Wrap the endpoint column of an authorized bond record. Consensus has
-    /// already refused the all-zero endpoint on both sides of the record,
-    /// so there is nothing left for this constructor to validate — the
-    /// name is the provenance statement.
-    #[must_use]
-    pub const fn from_record_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// The raw key, as the record holds it.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-
-    /// The v3 `.onion` hostname this endpoint is dialled at, per
-    /// rend-spec-v3 §6:
-    /// `base32(pubkey ‖ SHA3-256(".onion checksum" ‖ pubkey ‖ 0x03)[..2] ‖ 0x03) ‖ ".onion"`,
-    /// 56 lowercase base32 characters plus the suffix.
-    ///
-    /// The same construction `shekyl-tor-control-client` uses to fail-stop
-    /// when tor reports a different `ServiceID` than the persona advertises
-    /// (`onion_identity::service_id_from_pubkey`); the two are pinned to
-    /// the same vector in this module's tests, so the address a persona
-    /// publishes and the address a daemon derives from its record cannot
-    /// drift apart.
-    #[must_use]
-    pub fn onion_address(&self) -> String {
-        const VERSION: u8 = 0x03;
-        const CHECKSUM_PREFIX: &[u8] = b".onion checksum";
-
-        let mut hasher = Sha3_256::new();
-        hasher.update(CHECKSUM_PREFIX);
-        hasher.update(self.0);
-        hasher.update([VERSION]);
-        let checksum = hasher.finalize();
-
-        let mut raw = [0u8; 35];
-        raw[..32].copy_from_slice(&self.0);
-        raw[32..34].copy_from_slice(&checksum[..2]);
-        raw[34] = VERSION;
-
-        let mut address = base32_lower(&raw);
-        address.push_str(".onion");
-        address
-    }
-}
-
-/// RFC 4648 base32, lowercase, unpadded. 35 bytes is a whole number of
-/// 5-byte groups (7 × 5), so no padding case arises for the one real
-/// input; the general path is written and tested rather than assumed.
-///
-/// `acc` holds only the `bits` not yet emitted (fewer than 5 after each
-/// byte), so it never carries more than 12 live bits and the shift cannot
-/// lose anything. Rust's `<<` would discard high bits silently rather than
-/// trip `overflow-checks`, so the mask is legibility, not correctness —
-/// but a reader should not have to know that to trust the loop.
-fn base32_lower(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
-    let mut out = String::with_capacity(data.len().div_ceil(5) * 8);
-    let mut acc: u32 = 0;
-    let mut bits: u32 = 0;
-    for &b in data {
-        acc = (acc << 8) | u32::from(b);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            let index = usize::try_from((acc >> bits) & 0x1f).expect("5-bit index");
-            out.push(char::from(ALPHABET[index]));
-        }
-        acc &= (1 << bits) - 1;
-    }
-    if bits > 0 {
-        let index = usize::try_from((acc << (5 - bits)) & 0x1f).expect("5-bit index");
-        out.push(char::from(ALPHABET[index]));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,53 +158,6 @@ mod tests {
         assert_eq!(decode_request_header(&format!(" {}", &text[1..])), None);
         assert_eq!(decode_request_header(&format!("g{}", &text[1..])), None);
         assert_eq!(decode_request_header(""), None);
-    }
-
-    /// RFC 4648 §10 vectors, lowercased and unpadded.
-    #[test]
-    fn base32_matches_rfc_4648_vectors() {
-        assert_eq!(base32_lower(b""), "");
-        assert_eq!(base32_lower(b"f"), "my");
-        assert_eq!(base32_lower(b"fo"), "mzxq");
-        assert_eq!(base32_lower(b"foo"), "mzxw6");
-        assert_eq!(base32_lower(b"foob"), "mzxw6yq");
-        assert_eq!(base32_lower(b"fooba"), "mzxw6ytb");
-        assert_eq!(base32_lower(b"foobar"), "mzxw6ytboi");
-    }
-
-    /// Golden KAT, shared with `shekyl-tor-control-client`: this is the
-    /// public key its `service_id_golden_kat` derives from the hs-id seed
-    /// `[0x42; 32]`, and the address below is the literal that test pins.
-    /// The persona publishes at the address tor confirms for this key; the
-    /// daemon dials the address this method derives from the record. Both
-    /// pinned to one string, so a drift on either side is a red test, not
-    /// a live persona nobody can reach.
-    #[test]
-    fn onion_address_matches_the_publish_side_golden_kat() {
-        let pubkey: [u8; 32] = [
-            0x21, 0x52, 0xf8, 0xd1, 0x9b, 0x79, 0x1d, 0x24, 0x45, 0x32, 0x42, 0xe1, 0x5f, 0x2e,
-            0xab, 0x6c, 0xb7, 0xcf, 0xfa, 0x7b, 0x6a, 0x5e, 0xd3, 0x00, 0x97, 0x96, 0x0e, 0x06,
-            0x98, 0x81, 0xdb, 0x12,
-        ];
-        let endpoint = ServingEndpoint::from_record_bytes(pubkey);
-        assert_eq!(
-            endpoint.onion_address(),
-            "efjprum3peosirjsilqv6lvlns3476t3njpngaexsyhangeb3mjo7sad.onion"
-        );
-        assert_eq!(endpoint.as_bytes(), &pubkey);
-    }
-
-    #[test]
-    fn onion_address_is_well_formed_for_any_key() {
-        let endpoint = ServingEndpoint::from_record_bytes([0x77u8; 32]);
-        let address = endpoint.onion_address();
-        let (host, suffix) = address.split_at(56);
-        assert_eq!(suffix, ".onion");
-        assert!(host
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)));
-        // The version byte lands in the final base32 group: v3 ends in 'd'.
-        assert!(host.ends_with('d'), "v3 addresses end in 'd': {host}");
     }
 
     #[test]

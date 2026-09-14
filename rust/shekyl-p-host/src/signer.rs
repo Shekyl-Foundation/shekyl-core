@@ -9,7 +9,7 @@
 //! `shekyl-p-serve` asks one object ([`PassSigner`]) two questions — the
 //! persona's own height, and a signature over the transcript. This module
 //! answers the first from the store the host is already serving and leaves
-//! the second to a narrower seam, [`PassKey`], that a caller supplies.
+//! the second to [`PassKey`], which a caller supplies.
 //!
 //! # Why height is not a parameter
 //!
@@ -19,11 +19,9 @@
 //! stale `p` refuses the network; a forward `p` admits anchors the persona
 //! has not seen. The store the pins landed in already carries the height
 //! the principal's block scan advanced it to
-//! ([`ServingReader::sync_tip_height`]), and that is the same store whose
-//! shards are being signed for. Reading it there is the one answer that
-//! cannot disagree with the bytes served. Same rule the seam applies to the
-//! reader itself (see the crate doc): what a caller cannot supply, a caller
-//! cannot get wrong.
+//! ([`ServingReader::sync_tip_height`]),
+//! and that is the same store whose shards are being signed for. Reading
+//! it there is the one answer that cannot disagree with the bytes served.
 //!
 //! # Why the key is
 //!
@@ -37,30 +35,9 @@
 
 use std::sync::Arc;
 
-use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::ServingReader;
-use shekyl_p_serve::{PassSigner, SignRefused};
-
-/// Where the persona's attestation signing key lives.
-///
-/// One method, synchronous, called from the serve loop's blocking pool once
-/// per shard the persona is about to serve. Implementors sign with
-/// [`shekyl_p_serve::sign_pass_transcript`] so the domain cannot drift from
-/// what the daemon's `verify_pass_transcript` checks.
-pub trait PassKey: Send + Sync {
-    /// Sign the 80-byte `SF-D8` transcript.
-    ///
-    /// # Errors
-    ///
-    /// [`SignRefused`] when the key is not available — not resident, signer
-    /// offline, or a wallet-side policy refusal. The endpoint renders the
-    /// identical 404 and counts the refusal separately from a lookup miss.
-    fn sign_pass(
-        &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused>;
-}
+use shekyl_p_serve::{PassKey, PassSigner, SignRefused, PASS_COUNTERSIGNATURE_MESSAGE_LEN};
 
 /// The key a host binds before its resident attestation key is wired.
 ///
@@ -102,15 +79,7 @@ impl HostSigner {
     }
 }
 
-impl PassSigner for HostSigner {
-    /// The store's synced tip, live. A store that cannot be read is `None`:
-    /// the serve loop renders the 404 and counts a lookup failure, so a
-    /// persona that has lost its store shows up in `ServeCounters` rather
-    /// than refusing every anchor behind an indistinguishable sentinel.
-    fn own_height(&self) -> Option<u64> {
-        self.reader.sync_tip_height().ok().map(|h| h.0)
-    }
-
+impl PassKey for HostSigner {
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -119,18 +88,13 @@ impl PassSigner for HostSigner {
     }
 }
 
-/// The test affordance, armed only with `test-signer`: `shekyl-p-serve`'s
-/// ephemeral keypair doubles as a [`PassKey`], so a host under test can be
-/// bound with a key whose public half the test holds. Its own height is
-/// ignored here — the host reads height from the store, which is the
-/// property under test.
-#[cfg(feature = "test-signer")]
-impl PassKey for shekyl_p_serve::TestKeySigner {
-    fn sign_pass(
-        &self,
-        message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
-    ) -> Result<HybridSignature, SignRefused> {
-        PassSigner::sign_pass(self, message)
+impl PassSigner for HostSigner {
+    /// The store's synced tip, live. A store that cannot be read is `None`:
+    /// the serve loop renders the 404 and counts a lookup failure, so a
+    /// persona that has lost its store shows up in `ServeCounters` rather
+    /// than refusing every anchor behind an indistinguishable sentinel.
+    fn own_height(&self) -> Option<u64> {
+        self.reader.sync_tip_height().ok().map(|h| h.0)
     }
 }
 

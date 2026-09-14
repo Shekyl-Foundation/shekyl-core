@@ -9,7 +9,48 @@
 use std::fmt;
 
 use shekyl_crypto_pq::signature::{HybridPublicKey, HybridSignature};
-use shekyl_curve_tree::ServingEndpoint;
+
+/// The raw 32-byte Ed25519 public key of a persona's v3 onion service, as
+/// the bond record carries it (`EU-D3`: the `.onion` is display form; the
+/// wire never carries it).
+///
+/// This is the **daemon's** typed dial target. The wallet serving path
+/// publishes through `OnionIdentity` (expanded credential, `ADD_ONION`).
+/// Those stay different types (`PWD-E9`): mixing them would let a fetch
+/// client hold serving-key material, or a serving host dial through the
+/// daemon's SOCKS. The hostname both derive is one function in
+/// `shekyl-onion-v3`.
+///
+/// The provenance obligation: build this from the **record** read (the
+/// `ArchivalBondValue` endpoint column at the drawable snapshot, `EU-D4`),
+/// never from a vin and never from a response. The crate cannot check
+/// where the bytes came from; the type is what the review checks. The
+/// bond wire itself stays a bare array (rule 42).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ServingEndpoint([u8; 32]);
+
+impl ServingEndpoint {
+    /// Wrap the endpoint column of an authorized bond record. Consensus has
+    /// already refused the all-zero endpoint on both sides of the record,
+    /// so there is nothing left for this constructor to validate — the
+    /// name is the provenance statement.
+    #[must_use]
+    pub const fn from_record_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// The raw key, as the record holds it.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+
+    /// The v3 `.onion` hostname this endpoint is dialled at.
+    #[must_use]
+    pub fn onion_address(&self) -> String {
+        shekyl_onion_v3::v3_onion_hostname(&self.0)
+    }
+}
 
 /// Whom to dial, whose signature to accept, and which shard to name.
 ///
@@ -137,5 +178,25 @@ impl VerifiedShard {
     #[must_use]
     pub fn into_body(self) -> Vec<u8> {
         self.body
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn onion_address_matches_the_publish_side_golden_kat() {
+        let pubkey: [u8; 32] = [
+            0x21, 0x52, 0xf8, 0xd1, 0x9b, 0x79, 0x1d, 0x24, 0x45, 0x32, 0x42, 0xe1, 0x5f, 0x2e,
+            0xab, 0x6c, 0xb7, 0xcf, 0xfa, 0x7b, 0x6a, 0x5e, 0xd3, 0x00, 0x97, 0x96, 0x0e, 0x06,
+            0x98, 0x81, 0xdb, 0x12,
+        ];
+        let endpoint = ServingEndpoint::from_record_bytes(pubkey);
+        assert_eq!(
+            endpoint.onion_address(),
+            "efjprum3peosirjsilqv6lvlns3476t3njpngaexsyhangeb3mjo7sad.onion"
+        );
+        assert_eq!(endpoint.as_bytes(), &pubkey);
     }
 }

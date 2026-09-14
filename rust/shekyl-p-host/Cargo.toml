@@ -15,9 +15,8 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree" }
 # The serving loop itself: the loopback endpoint + the store-backed provider,
 # and the `PassSigner` seam this crate's `HostSigner` fills.
 shekyl-p-serve = { path = "../shekyl-p-serve" }
-# The SF-D8 transcript length the `PassKey` seam signs over (a consensus
-# constant; read, not redefined) and the `HybridSignature` it returns.
-shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `HybridSignature` is the `PassKey` return type (the trait lives in
+# `shekyl-p-serve`; this crate names the type only in `NoResidentKey`).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # The onion half: the supervisor, the serving posture (vanguards + onion as one
 # indivisible knob), and the derived serving identity.
@@ -42,6 +41,9 @@ shekyl-curve-tree = { path = "../shekyl-curve-tree", features = ["test-tamper"] 
 # Same shape for the signing key: the composition tests verify the served
 # countersignature against an ephemeral public key.
 shekyl-p-host = { path = ".", features = ["test-signer"] }
+# Composition tests verify the served countersignature through the same
+# consensus function the daemon runs.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 tokio = { version = "1", default-features = false, features = [
     "macros",
     "rt-multi-thread",

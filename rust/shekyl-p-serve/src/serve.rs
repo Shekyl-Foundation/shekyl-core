@@ -59,10 +59,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
-use crate::countersign::{
-    anchor_within_gate, PassSigner, RequestHeaderFields, SIGNATURE_ENVELOPE_LEN,
-};
+use crate::countersign::{anchor_within_gate, PassSigner, SIGNATURE_ENVELOPE_LEN};
 use crate::provider::{ShardBody, ShardProvider};
+use shekyl_archival_retention::PassRequestHeader;
 
 // The route grammar this endpoint answers — `GET /shard/{id}`, the
 // `application/octet-stream` content type, the request header's name and
@@ -372,7 +371,7 @@ impl std::fmt::Debug for PServeEndpoint {
 ///
 /// * **Complete request head that is non-servable** (wrong path/method,
 ///   malformed route/id, unknown or unfrozen shard, store failure) → the
-///   single shared [`NOT_FOUND`] body. A second status (405 vs 404 vs 400)
+///   single shared [`render_not_found`] body. A second status (405 vs 404 vs 400)
 ///   fingerprints the implementation; a distinct store-failure response is
 ///   a live health oracle. Holdings are chain-public — GET 200 vs 404 is
 ///   already the availability oracle — and are not what this collapse hides.
@@ -487,7 +486,7 @@ async fn resolve_body(
     sign_failures: &AtomicU64,
 ) -> Option<Resolved> {
     let Request::Shard { shard_id, header } = parse_request(head)?;
-    let fields = RequestHeaderFields::from_header(&header);
+    let fields = PassRequestHeader::from_bytes(&header);
     // Gate, then look up, on one blocking-pool hop: `own_height` may be a
     // bounded store read (the host's choice), and the shard read is one
     // regardless. The gate still runs first, so an out-of-window anchor
@@ -497,7 +496,7 @@ async fn resolve_body(
         let Some(own_height) = gate_signer.own_height() else {
             return Lookup::StoreFault;
         };
-        if !anchor_within_gate(own_height, fields.anchor_height) {
+        if !anchor_within_gate(own_height, fields.anchor_height()) {
             return Lookup::Miss;
         }
         match provider.shard_bytes(shard_id) {
@@ -560,7 +559,7 @@ async fn write_response(
         mut body,
     }) = resolved
     else {
-        return write_bounded(stream, NOT_FOUND.as_bytes()).await;
+        return write_bounded(stream, render_not_found().as_bytes()).await;
     };
     // One write, not three. The wire bytes are identical either way — this
     // is a loopback socket into tor, whose own cell framing quantizes
@@ -702,18 +701,25 @@ fn parse_request(head: &[u8]) -> Option<Request> {
     })
 }
 
+/// Status line plus exactly [`RESPONSE_HEADER_NAMES`]. One function so
+/// 200 and 404 cannot grow a second fingerprint.
+fn render_head(status: &str, len: u64) -> String {
+    format!("HTTP/1.1 {status}\r\ncontent-type: {CONTENT_TYPE}\r\ncontent-length: {len}\r\n\r\n")
+}
+
 /// The success head. Exactly [`RESPONSE_HEADER_NAMES`], nothing else — no
 /// `date` (a clock-skew fingerprint), no `server`, no `etag`, no
 /// `accept-ranges`.
 fn render_ok(len: u64) -> String {
-    format!("HTTP/1.1 200 OK\r\ncontent-type: {CONTENT_TYPE}\r\ncontent-length: {len}\r\n\r\n")
+    render_head("200 OK", len)
 }
 
 /// The single error response, byte-identical for every non-servable
 /// complete-head outcome. Built from the same header names/values as
-/// success so the declared set stays one source of truth in tests.
-const NOT_FOUND: &str =
-    "HTTP/1.1 404 Not Found\r\ncontent-type: application/octet-stream\r\ncontent-length: 0\r\n\r\n";
+/// success so the declared set stays one source of truth.
+fn render_not_found() -> String {
+    render_head("404 Not Found", 0)
+}
 
 #[cfg(test)]
 #[path = "serve_tests.rs"]

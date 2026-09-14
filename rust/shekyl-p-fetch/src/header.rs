@@ -7,8 +7,7 @@
 //! puts on the wire and what `P` signs over.
 
 use shekyl_archival_retention::pass_anchor::{
-    pass_countersignature_message, pass_request_header_bytes, PASS_ANCHOR_HASH_LEN,
-    PASS_COUNTERSIGNATURE_MESSAGE_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
+    PassRequestHeader, PASS_ANCHOR_HASH_LEN, PASS_NONCE_LEN, PASS_REQUEST_HEADER_LEN,
 };
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_BYTES};
 
@@ -19,30 +18,20 @@ const _: () = assert!(REQUEST_HEADER_BYTES == PASS_REQUEST_HEADER_LEN);
 /// The decoded `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` a fetch
 /// carries.
 ///
+/// Thin wrapper over [`PassRequestHeader`]: entropy and the hex carrier
+/// live here (a consensus crate does not mint nonces or speak HTTP). The
+/// layout and the transcript are the inner type's.
+///
 /// The requester builds one per fetch from **its own** chain view: a fresh
 /// random nonce and the hash of its block at `tip − 720`
 /// (`PASS_ANCHOR_DEPTH_BLOCKS`) — the same shape for a challenge fetch and
 /// an organic one, so the header does not distinguish callers (`SF-D1`).
-/// `P` gates `anchor_height` against its own height and refuses outside
-/// `[p − 720 − L, p − 720 + L]` with the identical 404; a requester whose
-/// anchor is stale relative to `P` reads that as a miss, not a stall.
 ///
 /// **Stall retries of the same `P` reuse the same header** (`SF-D6`): the
 /// value is a plain `Copy`, so the caller holds it across attempts rather
-/// than minting a nonce per dial. A new nonce is a new pass record, and a
-/// record for an exchange that never completed would be noise in the
-/// admission set.
-///
-/// What is signed is the **decoded** 72 bytes ‖ `shard_id_le[8]`
-/// ([`Self::transcript`]), never the hex text; a lenient server and a
-/// strict client therefore cannot sign different transcripts for one
-/// request.
+/// than minting a nonce per dial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RequestHeader {
-    nonce: [u8; PASS_NONCE_LEN],
-    anchor_height: u64,
-    anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
-}
+pub struct RequestHeader(PassRequestHeader);
 
 impl RequestHeader {
     /// A header with a fresh OS-random nonce over the caller's anchor.
@@ -72,35 +61,35 @@ impl RequestHeader {
         anchor_height: u64,
         anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
     ) -> Self {
-        Self {
+        Self(PassRequestHeader::from_parts(
             nonce,
             anchor_height,
             anchor_hash,
-        }
+        ))
     }
 
     /// The nonce — what the pass record carries beside `anchor_height`.
     #[must_use]
     pub const fn nonce(&self) -> &[u8; PASS_NONCE_LEN] {
-        &self.nonce
+        self.0.nonce()
     }
 
     /// The requester's anchor height (`tip − 720` at mint time).
     #[must_use]
     pub const fn anchor_height(&self) -> u64 {
-        self.anchor_height
+        self.0.anchor_height()
     }
 
     /// The requester's block hash at [`Self::anchor_height`].
     #[must_use]
     pub const fn anchor_hash(&self) -> &[u8; PASS_ANCHOR_HASH_LEN] {
-        &self.anchor_hash
+        self.0.anchor_hash()
     }
 
     /// The decoded 72-byte wire layout.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; PASS_REQUEST_HEADER_LEN] {
-        pass_request_header_bytes(&self.nonce, self.anchor_height, &self.anchor_hash)
+        self.0.to_bytes()
     }
 
     /// The header value as it travels: lowercase hex of [`Self::to_bytes`].
@@ -109,11 +98,25 @@ impl RequestHeader {
         encode_request_header(&self.to_bytes())
     }
 
-    /// The 80-byte transcript `P` countersigns for `shard_id`
-    /// (`SF-D8`): [`Self::to_bytes`] ‖ `shard_id_le[8]`.
+    /// The 80-byte transcript `P` countersigns for `shard_id`.
     #[must_use]
-    pub fn transcript(&self, shard_id: u64) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
-        pass_countersignature_message(&self.nonce, self.anchor_height, &self.anchor_hash, shard_id)
+    pub fn transcript(
+        &self,
+        shard_id: u64,
+    ) -> [u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+        self.0.transcript(shard_id)
+    }
+}
+
+impl From<PassRequestHeader> for RequestHeader {
+    fn from(inner: PassRequestHeader) -> Self {
+        Self(inner)
+    }
+}
+
+impl From<RequestHeader> for PassRequestHeader {
+    fn from(header: RequestHeader) -> Self {
+        header.0
     }
 }
 
@@ -130,6 +133,10 @@ mod tests {
         assert_eq!(&bytes[32..40], &[8, 7, 6, 5, 4, 3, 2, 1]);
         assert_eq!(&bytes[40..], &[9; 32]);
         assert_eq!(decode_request_header(&h.wire_value()), Some(bytes));
+        assert_eq!(
+            PassRequestHeader::from_bytes(&bytes),
+            PassRequestHeader::from(h)
+        );
     }
 
     #[test]

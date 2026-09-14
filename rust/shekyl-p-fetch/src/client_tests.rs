@@ -12,11 +12,11 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::ServingEndpoint;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, HybridSignature, SignatureScheme,
     SCHEME_DOMAIN_ATTESTATION,
 };
-use shekyl_curve_tree::ServingEndpoint;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -277,7 +277,8 @@ fn fast() -> Timeouts {
 
 fn ok_response(envelope: &[u8], content: &[u8]) -> Vec<u8> {
     let mut out = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\n\r\n",
+        "HTTP/1.1 200 OK\r\ncontent-type: {}\r\ncontent-length: {}\r\n\r\n",
+        shekyl_curve_tree::serving_route::CONTENT_TYPE,
         envelope.len() + content.len()
     )
     .into_bytes();
@@ -302,8 +303,8 @@ async fn run(
     keys: &Keys,
 ) -> (Result<VerifiedShard, FetchError>, Vec<Seen>) {
     let stub = Stub::start(script).await;
-    let client = PFetchClient::with_timeouts(stub.proxy, hole, fast());
-    let out = client.fetch(&target(keys), &header()).await;
+    let client = PFetchClient::with_timeouts(stub.proxy, fast());
+    let out = client.fetch(&target(keys), &header(), hole).await;
     // Let the stub finish recording.
     tokio::time::sleep(Duration::from_millis(20)).await;
     (out, stub.seen())
@@ -643,8 +644,10 @@ async fn a_proxy_that_is_not_listening_is_a_dial_stall() {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         l.local_addr().unwrap()
     };
-    let client = PFetchClient::with_timeouts(closed, Hole::accepting(), fast());
-    let out = client.fetch(&target(&keys), &header()).await;
+    let client = PFetchClient::with_timeouts(closed, fast());
+    let out = client
+        .fetch(&target(&keys), &header(), Hole::accepting())
+        .await;
     assert!(matches!(stall(out), Stall::Dial(_)));
 }
 
@@ -719,7 +722,6 @@ async fn the_in_flight_cap_makes_the_next_fetch_wait_for_a_slot() {
     let stub = Stub::start(Script::Silent).await;
     let client = Arc::new(PFetchClient::with_timeouts(
         stub.proxy,
-        Hole::accepting(),
         Timeouts {
             head: Duration::from_millis(600),
             ..fast()
@@ -732,7 +734,7 @@ async fn the_in_flight_cap_makes_the_next_fetch_wait_for_a_slot() {
     for _ in 0..MAX_INFLIGHT {
         let (c, k) = (Arc::clone(&client), Arc::clone(&keys));
         held.push(tokio::spawn(async move {
-            c.fetch(&target(&k), &header()).await
+            c.fetch(&target(&k), &header(), Hole::accepting()).await
         }));
     }
     // All slots taken by fetches parked on a silent P.
@@ -743,7 +745,7 @@ async fn the_in_flight_cap_makes_the_next_fetch_wait_for_a_slot() {
     let (c, k) = (Arc::clone(&client), Arc::clone(&keys));
     let waiter = tokio::spawn(async move {
         let started = tokio::time::Instant::now();
-        let out = c.fetch(&target(&k), &header()).await;
+        let out = c.fetch(&target(&k), &header(), Hole::accepting()).await;
         (started.elapsed(), out)
     });
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -771,10 +773,10 @@ async fn the_in_flight_cap_makes_the_next_fetch_wait_for_a_slot() {
 async fn dropping_a_fetch_releases_its_slot() {
     let keys = keys();
     let stub = Stub::start(Script::Silent).await;
-    let client = PFetchClient::with_timeouts(stub.proxy, Hole::accepting(), fast());
+    let client = PFetchClient::with_timeouts(stub.proxy, fast());
     {
         let (t, h) = (target(&keys), header());
-        let fut = client.fetch(&t, &h);
+        let fut = client.fetch(&t, &h, Hole::accepting());
         let fut = std::pin::pin!(fut);
         // Poll once so the slot is taken and the dial begins.
         let polled = tokio::time::timeout(Duration::from_millis(50), fut).await;
@@ -813,10 +815,10 @@ async fn dropping_a_fetch_mid_verify_keeps_the_slot_until_the_body_is_gone() {
         entered: entered_tx,
         release: Mutex::new(Some(release_rx)),
     });
-    let client = Arc::new(PFetchClient::with_timeouts(stub.proxy, hole, fast()));
+    let client = Arc::new(PFetchClient::with_timeouts(stub.proxy, fast()));
 
-    let (c, k) = (Arc::clone(&client), keys);
-    let fetch = tokio::spawn(async move { c.fetch(&target(&k), &header()).await });
+    let (c, k, v) = (Arc::clone(&client), keys, hole as Arc<dyn ContentVerify>);
+    let fetch = tokio::spawn(async move { c.fetch(&target(&k), &header(), v).await });
     // The body has been read and the hole has been entered: verify is
     // running on the pool with the body resident.
     tokio::task::spawn_blocking(move || entered_rx.recv())

@@ -86,7 +86,12 @@ SOCKS = "tokio-socks"
 
 # The client reaches the grammar here and nowhere else (codec shared, not
 # mirrored). The positive limb of the cut.
-CLIENT_MUST_REACH = ("shekyl-curve-tree", "shekyl-archival-retention", SOCKS)
+CLIENT_MUST_REACH = (
+    "shekyl-curve-tree",
+    "shekyl-archival-retention",
+    "shekyl-onion-v3",
+    SOCKS,
+)
 
 # Serving-side and wallet-side crates the client must not reach, and which
 # must not reach the client. Named, not inferred: a new serving crate is added
@@ -464,13 +469,20 @@ def main() -> int:
     if fail:
         return fail
 
-    # ── Positive limb: the client depends on the shared codec and the dial ──
+    # ── Positive limb: the client's *resolved default* graph contains the
+    # shared codec, the onion transform, and the dial. `reaches` is
+    # conservative (it counts disabled optional edges) and is the right
+    # tool for the negative cuts below; here it would stay green if
+    # tokio-socks were made optional-and-off. Rule 47: a subject that is
+    # not in the default graph is a subject this limb cannot see.
+    client_resolved = resolve_features(CLIENT, members, workspace_deps)
     for dep in CLIENT_MUST_REACH:
-        if not reaches(CLIENT, dep, members, workspace_deps):
+        if dep not in client_resolved:
             failed(
-                f"{CLIENT} no longer depends on {dep}. SF-D4 rules the codec shared, "
-                "not mirrored, and the SOCKS dial lives in this crate; a client that "
-                "reaches neither is either a copy or not a client."
+                f"{CLIENT}'s default graph no longer contains {dep}. SF-D4 rules the "
+                "codec shared, not mirrored, the onion hostname is one transform, "
+                "and the SOCKS dial lives in this crate; a client that resolves "
+                "none of them is either a copy or not a client."
             )
 
     # ── The cut, both directions ─────────────────────────────────────────

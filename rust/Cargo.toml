@@ -200,6 +200,13 @@ members = [
     # content-verify hole; reads no chain state, holds no key (SF-D4 cut).
     "shekyl-p-fetch",
 
+    # rend-spec-v3 onion hostname from an Ed25519 public key. Encoding
+    # only — no Tor instance. Wallet serving (`OnionIdentity`) and daemon
+    # fetch (`ServingEndpoint`) both read it so the address a persona
+    # publishes and the address a daemon dials cannot drift (PWD-E9: the
+    # two Tor *instances* stay separate; this is the one transform).
+    "shekyl-onion-v3",
+
     # Capability families (PWD-E9): the client speaks the protocol for any
     # owner; the wallet crate is archival-P's Tor instance (`WalletTorControl`);
     # the daemon crate is the P2P overlay's ephemeral-per-boot instance

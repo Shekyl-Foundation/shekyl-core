@@ -30,9 +30,10 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 
 [features]
 # Exposes `TestKeySigner` — a `PassSigner` over an ephemeral, non-derived
-# keypair — to integration tests and to `shekyl-p-fetch`'s loopback tests,
-# which build this lib without `cfg(test)`. The name announces intent: a
-# non-derived key never reaches a wallet or a bonded persona.
+# keypair — to this crate's integration tests and to `shekyl-p-fetch`'s
+# loopback conversation test (a *dev* edge; SF-D4 forbids it on the
+# shipped graph). The name announces intent: a non-derived key never
+# reaches a wallet or a bonded persona.
 test-signer = ["shekyl-crypto-pq/test-utils"]
 
 [dev-dependencies]

@@ -15,10 +15,13 @@ witness uses to fetch a shard. Index row `RF-R1`. Implementation: the
 grammar both ends read is `shekyl_curve_tree::serving_route`
 (`SERVING_VIRTUAL_PORT`, `ROUTE_PREFIX`, `CONTENT_TYPE`,
 `RESPONSE_HEADER_NAMES`, `REQUEST_HEADER_NAME`,
-`encode_request_header` / `decode_request_header`, `ServingEndpoint`);
+`encode_request_header` / `decode_request_header`);
 the server is `rust/shekyl-p-serve` (`parse_request`, `resolve_body`,
-`NOT_FOUND`); the client is `rust/shekyl-p-fetch` (`PFetchClient`,
-`RequestHeader`, `FetchError`).
+`render_not_found`); the client is `rust/shekyl-p-fetch` (`PFetchClient`,
+`RequestHeader`, `ServingEndpoint`, `FetchError`). The onion hostname is
+not route grammar: `shekyl-onion-v3` is the one rend-spec transform,
+typed on the daemon as `ServingEndpoint` and on the wallet as
+`OnionIdentity` (`PWD-E9`).
 
 The body after `\r\n\r\n` is the **countersignature envelope** then the
 `RF-D4` frame: `HybridSignature` canonical bytes
@@ -174,7 +177,7 @@ lower-bound rationale on the constant; `shekyl_p_fetch::Timeouts` and
 `max_body_bytes()` are operational bounds. They decide when an attempt
 is a stall or a refusal, never what a completed exchange means.
 
-The client dials `ServingEndpoint::onion_address():80` through the
+The client dials `shekyl_p_fetch::ServingEndpoint::onion_address():80` through the
 daemon's own Tor client as SOCKS5**h** (`SF-D2`, `SF-D3`): the proxy
 resolves the name; the client resolves nothing and offers no SOCKS
 auth (no per-fetch circuit isolation).

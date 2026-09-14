@@ -9,7 +9,8 @@
 //! One client, two callers, one request. The challenge caller (a miner
 //! answering a `D`-draw against `CHALLENGE_RESPONSE_BLOCKS`) and the
 //! organic caller (a pruned daemon's fill scheduler reconstructing set-B)
-//! enter the same [`PFetchClient::fetch`], take a slot from the same
+//! enter the same [`PFetchClient::fetch`] (each plugging its
+//! [`ContentVerify`] hole for that shard), take a slot from the same
 //! [`MAX_INFLIGHT`] admission path, and put the same bytes on the wire — so
 //! a serving `P` has no request-level way to tell which it is answering
 //! (`SF-D1`, `SF-D7`). Schedulers name `P`; the HTTP path names only `s`.
@@ -72,7 +73,7 @@ pub mod target;
 pub use client::{max_body_bytes, PFetchClient, Timeouts, MAX_INFLIGHT, SIGNATURE_ENVELOPE_LEN};
 pub use error::{FetchError, Malformed, Stall};
 pub use header::RequestHeader;
-pub use target::{ContentRefused, ContentVerify, FetchTarget, VerifiedShard};
+pub use target::{ContentRefused, ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 
 #[cfg(test)]
 mod client_tests;

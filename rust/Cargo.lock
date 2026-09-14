@@ -3936,7 +3936,6 @@ dependencies = [
  "rand_chacha 0.3.1",
  "redb",
  "serde_json",
- "sha3",
  "shekyl-consensus",
  "shekyl-curve-io",
  "shekyl-fcmp",
@@ -4326,6 +4325,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-onion-v3"
+version = "3.1.0"
+dependencies = [
+ "sha3",
+]
+
+[[package]]
 name = "shekyl-operator-alarm"
 version = "3.1.0"
 dependencies = [
@@ -4342,6 +4348,8 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-crypto-pq",
  "shekyl-curve-tree",
+ "shekyl-onion-v3",
+ "shekyl-p-serve",
  "tokio",
  "tokio-socks",
 ]
@@ -4620,7 +4628,7 @@ dependencies = [
  "kameo",
  "libc",
  "sha2",
- "sha3",
+ "shekyl-onion-v3",
  "tempfile",
  "tokio",
  "zeroize",

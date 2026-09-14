@@ -87,4 +87,5 @@ pub use serve_set::{
     PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
     Staleness, StalenessBound,
 };
-pub use signer::{NoResidentKey, PassKey};
+pub use shekyl_p_serve::PassKey;
+pub use signer::NoResidentKey;
