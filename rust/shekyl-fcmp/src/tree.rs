@@ -6,8 +6,9 @@
 //! Curve tree operations: grow, trim, root computation.
 //!
 //! These functions wrap the upstream FCMP++ Pedersen hash operations for the
-//! Helios/Selene curve tower. The C++ LMDB layer manages the tree structure;
-//! Rust provides the cryptographic hash primitives via FFI.
+//! Helios/Selene curve tower. The C++ LMDB layer owns the store; Rust owns
+//! the hash primitives and the RPC membership-path byte layout
+//! ([`crate::rpc_path`]).
 //!
 //! ## Tree topology
 //!

@@ -1742,12 +1742,6 @@ public:
    */
   virtual void get_output_key(const epee::span<const uint64_t> &amounts, const std::vector<uint64_t> &offsets, std::vector<output_data_t> &outputs, bool allow_partial = false) const = 0;
   
-  /*
-   * FIXME: Need to check with git blame and ask what this does to
-   * document it
-   */
-  virtual bool can_thread_bulk_indices() const = 0;
-
   /**
    * @brief gets output indices (amount-specific) for a transaction's outputs
    *
@@ -2892,9 +2886,11 @@ public:
   /**
    * @brief remove intermediate layer hashes between checkpoints.
    *
-   * Given a checkpoint height, removes internal hash layers that can be
-   * recomputed from leaves between the previous checkpoint and this one.
-   * Leaves and the latest live layer state are preserved.
+   * Given a checkpoint height, removes internal hash layers (1..depth-2)
+   * between the previous checkpoint and this one. Layer 0 (the leaf-chunk
+   * hash layer), the leaves, and the latest live layer state are preserved;
+   * layer 0 is the recompose source for the removed layers (trim_curve_tree
+   * rebuilds from it), not the leaf table.
    *
    * @param checkpoint_height  the checkpoint up to which to prune
    */

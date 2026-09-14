@@ -754,15 +754,12 @@ namespace cryptonote
     //debug functions
 
     /**
-     * @brief check the blockchain against a set of checkpoints
+     * @brief validate the local chain against a set of checkpoints
      *
-     * If a block fails a checkpoint, the blockchain is rolled back to two
-     * blocks prior to that block.
+     * If a block fails a checkpoint, the chain is rolled back to two blocks
+     * prior to it (floored at DB height 1).
      *
      * @param points the checkpoints to check against
-     */
-    /**
-     * @brief validate the local chain against loaded checkpoints
      *
      * @return false iff a conflict exists that could not be resolved by
      * rollback (the target sits below the prune watermark) — the caller
@@ -785,13 +782,17 @@ namespace cryptonote
     bool is_following_degraded() const { return m_following_degraded.load(std::memory_order_relaxed); }
 
     /**
-     * @brief loads new checkpoints from a file
+     * @brief enforce the compiled-in checkpoints against the local chain
      *
-     * @param file_path the path of the file to look for and load checkpoints from
+     * Run once at core::init. Checkpoints are release-carried (PDM-Q5's
+     * anchor model); the runtime json channel that used to feed this path
+     * was deleted (PDM-Q-F23), so the set cannot change while the daemon
+     * runs and there is nothing to reload periodically.
      *
-     * @return false if any enforced checkpoint type fails to load, otherwise true
+     * @return false iff a checkpoint conflict could not be resolved by
+     * rollback (C2-R1b F-1(b)) -- the caller fail-stops.
      */
-    bool update_checkpoints(const std::string& file_path);
+    bool enforce_checkpoints();
 
 
     // user options, must be called before calling init()
@@ -1025,16 +1026,6 @@ namespace cryptonote
     }
 
     /**
-     * @brief get a number of outputs of a specific amount
-     *
-     * @param amount the amount
-     * @param offsets the indices (indexed to the amount) of the outputs
-     * @param outputs return-by-reference the outputs collected
-     */
-    void output_scan_worker(const uint64_t amount,const std::vector<uint64_t> &offsets,
-        std::vector<output_data_t> &outputs) const;
-
-    /**
      * @brief computes the "short" and "long" hashes for a set of blocks
      *
      * @param height the height of the first block
@@ -1214,7 +1205,6 @@ namespace cryptonote
     size_t m_current_block_cumul_weight_median;
 
     // metadata containers
-    std::unordered_map<crypto::hash, std::unordered_map<crypto::key_image, std::vector<output_data_t>>> m_scan_table;
     std::unordered_map<crypto::hash, crypto::hash> m_blocks_longhash_table;
 
     std::atomic<bool> m_following_degraded{false}; //!< C2-R1b F-1(a): switch refused at the prune watermark
@@ -1308,51 +1298,6 @@ namespace cryptonote
     uint64_t m_prepare_height;
     uint64_t m_prepare_nblocks;
     std::vector<block> *m_prepare_blocks;
-
-    /**
-     * @brief collects the keys for all outputs being "spent" as an input
-     *
-     * This function makes sure that each "input" in an input (mixins) exists
-     * and collects the public key for each from the transaction it was included in
-     * via the visitor passed to it.
-     *
-     * If pmax_related_block_height is not NULL, its value is set to the height
-     * of the most recent block which contains an output used in the input set
-     *
-     * @tparam visitor_t a class encapsulating tx is unlocked and collect tx key
-     * @param tx_in_to_key a transaction input instance
-     * @param vis an instance of the visitor to use
-     * @param tx_prefix_hash the hash of the associated transaction_prefix
-     * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
-     * @param tx_version version of the tx, if > 1 we also get commitments
-     *
-     * @return false if any keys are not found or any inputs are not unlocked, otherwise true
-     */
-    template<class visitor_t>
-    inline bool scan_outputkeys_for_indexes(size_t tx_version, const txin_to_key& tx_in_to_key, visitor_t &vis, const crypto::hash &tx_prefix_hash, uint64_t* pmax_related_block_height = NULL) const;
-
-    /**
-     * @brief collect output public keys of a transaction input set
-     *
-     * This function locates all outputs associated with a given input set (mixins)
-     * and validates that they exist and are usable
-     * (unlocked, unspent is checked elsewhere).
-     *
-     * If pmax_related_block_height is not NULL, its value is set to the height
-     * of the most recent block which contains an output used in the input set
-     *
-     * @param tx_version the transaction version
-     * @param txin the transaction input
-     * @param tx_prefix_hash the transaction prefix hash, for caching organization
-     * @param sig the input signature
-     * @param output_keys return-by-reference the public keys of the outputs in the input set
-     * @param ct_signatures the FCMP++ signatures, which are only valid if tx version > 1
-     * @param pmax_related_block_height return-by-pointer the height of the most recent block in the input set
-     * @param hf_version the consensus rules version to use
-     *
-     * @return false if any output is not yet unlocked, or is missing, otherwise true
-     */
-    bool check_tx_input(size_t tx_version,const txin_to_key& txin, const crypto::hash& tx_prefix_hash, const std::vector<crypto::signature>& sig, const ct::CtSig &ct_signatures, std::vector<ct::ctkey> &output_keys, uint64_t* pmax_related_block_height, uint8_t hf_version) const;
 
     /**
      * @brief validate a transaction's inputs and their keys
