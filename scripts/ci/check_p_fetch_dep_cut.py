@@ -492,14 +492,17 @@ def main() -> int:
     for crate, feature in TEST_ONLY:
         if feature not in members[crate].get("features", {}):
             failed(f"{crate} no longer declares `{feature}`; the shipped-graph limb below is vacuous.")
-    dev_enables = any(
-        e.name == crate and feature in e.features
-        for m in members.values()
-        for e in edges(m, ("dev-dependencies",), workspace_deps)
-        for crate, feature in TEST_ONLY
-    )
-    if not dev_enables:
-        failed("no dev-dependency edge enables `test-signer`; a feature nothing tests is a feature nothing guards.")
+    # One positive limb per guarded subject (rule 47): a feature nothing
+    # tests is a feature nothing guards, and "some test enables one of
+    # them" would let one subject go dark while the other keeps the limb lit.
+    for crate, feature in TEST_ONLY:
+        dev_enables = any(
+            e.name == crate and feature in e.features
+            for m in members.values()
+            for e in edges(m, ("dev-dependencies",), workspace_deps)
+        )
+        if not dev_enables:
+            failed(f"no dev-dependency edge enables `{crate}/{feature}`; a feature nothing tests is a feature nothing guards.")
     for root in roots:
         resolved = resolve_features(root, members, workspace_deps)
         for crate, feature in TEST_ONLY:
