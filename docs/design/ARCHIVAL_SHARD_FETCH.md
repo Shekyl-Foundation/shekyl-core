@@ -15,9 +15,10 @@ verifier alone → (a) serve side → (b) `shekyl-p-fetch` → (c) W₂ then
 `N`. This file stays in `docs/design/` because it still owns named
 residue — the **integer** `N` (`SF-D7`; `shekyl_p_fetch::MAX_INFLIGHT
 = 4` is the SPIKE-PIN with its lower-bound rationale on the constant)
-and the W₂ measurement (§8, step (c)), which the SP-T3 rig cannot run
-until its client leg is re-based onto `shekyl-p-fetch` (its
-`fetch_once` says so). Discharged: the signature domain string, KAT,
+and the W₂ measurement (§8, step (c)) — the SP-T3 rig's client leg
+**is** re-based onto `shekyl-p-fetch` (2026-09-14, §9.1 (c)); what
+step (c) still waits on is the run itself, against a real regtest
+shard. Discharged: the signature domain string, KAT,
 and nonce-carrying pass record (`SF-D8` message) by (a0); the header
 spelling and encoding (`SF-D5`), the response envelope (`SF-D8`
 carrier), the `P`-side gate, the signer seam (`SF-D13`), the client

@@ -793,12 +793,26 @@ which biases the sweep pessimistic — named in the table header.
 
 ### 12.3 Arms and their sample sizes
 
+**As run on the persona↔persona rig, 2026-08 (records-was; §13 reads from
+these):**
+
 | Arm | Purpose | `N` run |
 |---|---|---|
 | Cold circuit, single stream | Pessimistic; circuit build + rendezvous inside the timed path. The faithful model — each drawn miner *is* a different client | **60** |
 | Warm circuit, single stream | Optimistic; circuit reused | **60** |
-| 2 personas concurrent | §5.2 contention datum | **30 pairs (60 obs)** |
+| 2 personas concurrent | §5.2 contention datum — **SUPERSEDED** on the re-based rig by the sweep below; the contention datum it doubled as is SPIKE-F-11's, measured from other hosts | **30 pairs (60 obs)** |
 | Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | **RUN — 2,680 fetches over a full 25 h diurnal span (§13a)** |
+
+**Planned on the re-based daemon→wallet rig (`ARCHIVAL_SHARD_FETCH.md`
+§9.1 (c), 2026-09-14; run pending — its numbers go in the (c) record, not
+here):**
+
+| Arm | Purpose | `N` planned |
+|---|---|---|
+| Cold (`NEWNYM` before each), single stream | Pessimistic; descriptor + intro + rendezvous inside the timed path. Its single-attempt p99 is the `L` falsifier's input | **200** |
+| Warm (circuit reuse), single stream | Optimistic; the organic fill scheduler's steady state against one `P` | **200** |
+| Concurrency sweep, widths `1, 2, 4, 8` | `SF-D7`'s client-side churn table — the upper-bound input for `N`; one `NEWNYM` per round, `width` cold fetches to `width` personas at once | **100 rounds per width** |
+| Soak, ≥ 24 h | As above — span, not count | **≥ 24 h, one cold fetch per ~30 s** |
 
 **On `N`, and on what more `N` can and cannot buy.** The gate turns on a **10 %
 tail**, so the p90 needs a usable confidence interval. At `N = 200` the binomial
