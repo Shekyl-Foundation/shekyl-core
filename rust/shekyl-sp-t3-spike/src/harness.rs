@@ -3,54 +3,103 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! D6 — the live apparatus: one tor, two personas, timed fetches over real
-//! rendezvous circuits.
+//! D6 — the live apparatus, **re-based daemon→wallet** (`ARCHIVAL_SHARD_FETCH.md`
+//! §9.1 step (c)): one *client* tor standing in for the daemon, one *serving*
+//! tor per persona standing in for each wallet host, and the production fetch
+//! client timing fetches over real rendezvous circuits.
 //!
 //! Separated from the measurement binary so the same wiring is exercised by an
-//! `#[ignore]`d live test (with a small payload, as apparatus validation) and by
-//! the real measurement (with the 3.33 MB shard). A harness only the binary can
-//! reach is a harness nothing checks.
+//! `#[ignore]`d live test (with a small payload, as apparatus validation), by a
+//! loopback test with no tor at all (the client leg against the production
+//! endpoint through a SOCKS shim), and by the real measurement (with the 3.33 MB
+//! shard). A harness only the binary can reach is a harness nothing checks.
 //!
-//! # Cold vs warm, and why "cold" is a fresh persona id rather than a NEWNYM
+//! # The topology, and why it changed
+//!
+//! The first rig ran **persona→persona**: one tor hosted the onions *and* dialled
+//! them, with `shekyl-p-transport`'s per-client SOCKS isolation producing the
+//! cold/warm arms. `EU-D1` then ruled the protocol **daemon→wallet** — the
+//! daemon is the client, and it dials through its own tor zone with **no**
+//! per-fetch isolation (`SF-D2`, `SF-D3`: circuits are reused). Since `SF` (a)
+//! the serve side also requires the `SF-D5` request header and countersigns
+//! the body, which `blocking_get` cannot carry; every fetch through the old leg
+//! was the identical 404. So the leg is now [`shekyl_p_fetch::PFetchClient`],
+//! the shipped daemon client, and the process split matches the protocol:
+//!
+//! - **Client tor** — the daemon's. Every fetch dials through its SOCKS port.
+//!   Its circuit state is what the cold and warm arms manipulate.
+//! - **One serving tor per persona** — the wallet hosts'. One persona on the
+//!   wire per tor is the *conformant* shape (many held, one serving —
+//!   `ARCHIVAL_BOND_CONSTRUCTION.md:667`), so a multi-persona apparatus models
+//!   several independent operators rather than the co-serving layout the
+//!   firewall forbids (§10.9) and the old rig priced at ×1.54. Guard sets are
+//!   per process; only the box's bandwidth is shared, and that is named as a
+//!   confound in the report rather than hidden in the arm.
+//!
+//! # Cold vs warm on a no-isolation client
 //!
 //! §6.2 asks for circuit setup to be inside the timed path unless a warm circuit
-//! is defensible, and for both to be reported. The two arms are produced by the
-//! isolation mechanism that already exists rather than by asking tor to rotate:
+//! is defensible, and for both to be reported. With the production client there
+//! is no per-fetch SOCKS username to vary, so the arms come from what a real
+//! daemon's tor does over time rather than from an isolation key:
 //!
-//! - **Cold** — a *different* [`PCanonicalId`] per fetch. Tor's
-//!   `IsolateSOCKSAuth` gives each distinct SOCKS username its own circuit, so
-//!   every fetch builds a new client circuit and a new rendezvous. This is also
-//!   the *faithful* model: each drawn miner is a different client, so a cold
-//!   fetch is what a real challenge looks like.
-//! - **Warm** — one [`PCanonicalId`] reused, so tor reuses the circuit and only
-//!   the rendezvous/stream cost is paid.
+//! - **Cold** — [`Apparatus::rotate_client_circuits`] sends `SIGNAL NEWNYM` to
+//!   the **client** tor before the fetch. Tor marks every client circuit dirty
+//!   and purges its client-side onion-service state (descriptor cache,
+//!   intro-point state), so the next fetch pays the **descriptor fetch, the
+//!   intro circuit, and the rendezvous circuit** from nothing. That is the
+//!   first-contact cost a drawn miner pays for a `P` it has never dialled — the
+//!   challenge shape — and it is *colder* than the old isolation arm, which
+//!   shared one tor's descriptor cache across its "distinct" clients. The
+//!   signal is process-global, which is exactly why the client tor is its own
+//!   process here: it rotates nothing on the serving side. Tor rate-limits
+//!   `NEWNYM` to one per ten seconds and silently defers a faster one, so the
+//!   harness spaces its signals itself; that wait is *outside* the timed path.
+//! - **Warm** — no signal between fetches to the same persona, so the client
+//!   tor reuses its rendezvous circuit and only the stream cost is paid. This
+//!   is the organic fill scheduler's steady state against one `P`.
+//! - **Concurrent** — `n` cold fetches to `n` personas at once through the one
+//!   client tor: the client-side circuit-churn question `SF-D7` names as the
+//!   upper bound on `N`. One [`PFetchClient`] **per persona** here, so the
+//!   sweep is never shaped by the SPIKE-PIN semaphore it exists to replace —
+//!   a production daemon has exactly one client, and the crate says so; the
+//!   rig multiplies them on purpose to measure what `N` *could* be rather than
+//!   what it *is*.
 //!
-//! A `SIGNAL NEWNYM` would have been the other way to force cold circuits, and it
-//! is deliberately not used: `NEWNYM` is process-global, so it would also rotate
-//! the *other* persona's client circuits mid-arm and contaminate the concurrent
-//! arm running beside it.
+//! # The chain the apparatus does not have
+//!
+//! `P` gates `anchor_height` against its own height (`SF-D5`) and the client
+//! anchors at `tip − 720`. The spike has no chain, so both sides read one
+//! shared number, [`APPARATUS_OWN_HEIGHT`], and the anchor hash is a fixed
+//! constant: `P` signs the decoded header bytes without interpreting them, and
+//! the hash is only ever *looked up* at block admission, which is consensus's
+//! job and not this rig's. The countersignature is verified for real, under
+//! the persona's ephemeral test key, which the client leg reads at bring-up the
+//! way a daemon reads the bond record.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kameo::actor::Spawn as _;
+use shekyl_archival_retention::PASS_ANCHOR_DEPTH_BLOCKS;
 use shekyl_crypto_pq::account::{DerivationNetwork, SeedFormat};
-use shekyl_p_transport::{PTorClient, PTransportError, RequestErrorKind, TorSocksEndpoint};
+use shekyl_crypto_pq::signature::HybridPublicKey;
+use shekyl_p_fetch::{
+    ContentRefused, ContentVerify, FetchError, FetchTarget, PFetchClient, RequestHeader,
+    ServingEndpoint, Stall, Timeouts,
+};
 use shekyl_tor_control_client::control::onion::{
     AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId,
 };
 use shekyl_tor_control_client::control::{
-    BootstrapReadiness, BootstrapState, Command, EventSink, TorControlClient,
+    BootstrapReadiness, BootstrapState, Command, EventSink, ManagedTor, Signal, SocksPort,
+    TorControlClient, TorControlClientConfig, TorLaunch,
 };
-use shekyl_tor_control_client::control::{
-    ManagedTor, SocksPort, TorControlClientConfig, TorLaunch,
-};
-use shekyl_types::{PCanonicalId, PSlot};
+use shekyl_types::PSlot;
 
-use shekyl_p_serve::{
-    PServeEndpoint, ShardBody, TestKeySigner, ROUTE_PREFIX, SIGNATURE_ENVELOPE_LEN,
-};
+use shekyl_p_serve::{PServeEndpoint, ShardBody, TestKeySigner};
 
 use crate::fixture::FixtureShardProvider;
 use crate::measure::{FailureKind, Observation};
@@ -62,18 +111,39 @@ use crate::onion_key::derive_onion_identity;
 /// number is what makes the gate pass for the right reason.
 pub const APPARATUS_OWN_HEIGHT: u64 = 100_000;
 
+/// The anchor height every request carries: `APPARATUS_OWN_HEIGHT − 720`, the
+/// value a synced daemon would compute against its own tip.
+pub const APPARATUS_ANCHOR_HEIGHT: u64 = APPARATUS_OWN_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS;
+
+/// The anchor hash every request carries. Fixed, not looked up: the rig has
+/// no chain to read `block_hash(anchor_height)` from, `P` never interprets
+/// it, and the client verifies the countersignature over the header *it
+/// sent*. Only block admission compares it against a chain, and that is not
+/// this apparatus.
+pub const APPARATUS_ANCHOR_HASH: [u8; 32] = [0x5a; 32];
+
 /// Ceiling on a single fetch before the harness calls it a timeout.
 ///
-/// Above `shekyl-p-transport`'s own 120 s global timeout, so the transport's
-/// bound fires first and the harness ceiling is only a backstop — that way a
-/// timeout is classified by the layer that actually knows why.
-pub const FETCH_CEILING: Duration = Duration::from_secs(180);
+/// Above the sum of the production client's own per-step bounds
+/// ([`Timeouts::DEFAULT`]: dial + head + body), so the client's bound fires
+/// first and the harness ceiling is only a backstop — that way a timeout is
+/// classified by the layer that actually knows why.
+pub const FETCH_CEILING: Duration = Duration::from_secs(720);
 
 /// How long to wait for a freshly-published descriptor to become reachable.
 ///
 /// Descriptor upload to the HSDirs plus a client's fetch of it takes tens of
 /// seconds on a cold service; this bounds the wait rather than assuming it.
 pub const PUBLISH_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Tor's `MAX_SIGNEWNYM_RATE`: a `NEWNYM` within this many seconds of the
+/// last is acknowledged and *deferred*, not applied. The cold arm must not
+/// time a fetch believing the rotation happened when tor is still holding
+/// it, so [`Apparatus::rotate_client_circuits`] waits this out first.
+pub const NEWNYM_MIN_SPACING: Duration = Duration::from_secs(10);
+
+/// How long a managed tor may take to bootstrap before bring-up gives up.
+const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// The apparatus's **pinned** derivation seed — the harness takes no seed from
 /// its caller, by design.
@@ -96,19 +166,82 @@ pub const PUBLISH_TIMEOUT: Duration = Duration::from_secs(300);
 /// so any fixed context works, and this one matches the KAT's slot-0 vector).
 const APPARATUS_PINNED_SEED: [u8; 64] = [0x11u8; 64];
 
-/// A persona serving a shard over its own onion.
+/// One managed tor process: its control actor and the SOCKS port it listens on.
+struct ManagedInstance {
+    control: kameo::actor::ActorRef<TorControlClient>,
+    socks: SocketAddr,
+}
+
+impl ManagedInstance {
+    /// Launch `tor_binary` with `data_dir` and wait for it to bootstrap.
+    ///
+    /// `tor_binary` goes through the **real SP-T0c hash-pin gate**
+    /// (`binary::discover_and_verify_at`), not the test bypass: the pinned Tor
+    /// Expert Bundle is what production launches, so a measurement taken against
+    /// an unverified binary would be a measurement of something else. A binary
+    /// that fails the pin fails the measurement.
+    async fn launch(tor_binary: &Path, data_dir: PathBuf) -> Result<Self, ApparatusError> {
+        let socks_port = free_port();
+        let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (readiness, mut ready_rx) = BootstrapReadiness::new();
+        let verified = shekyl_tor_control_client::binary::discover_and_verify_at(tor_binary)
+            .map_err(|e| ApparatusError::Control(e.to_string()))?;
+        let control = TorControlClient::spawn(TorControlClientConfig {
+            launch: TorLaunch::Managed(ManagedTor {
+                tor_binary: verified,
+                data_dir,
+                socks_port: SocksPort::Fixed(socks_port),
+                disable_network: false,
+                exit_observer: None,
+            }),
+            events: EventSink::new(events_tx),
+            readiness,
+        });
+
+        let deadline = Instant::now() + BOOTSTRAP_TIMEOUT;
+        loop {
+            if matches!(*ready_rx.borrow_and_update(), BootstrapState::Ready) {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(ApparatusError::Bootstrap);
+            }
+            tokio::time::timeout(Duration::from_secs(10), ready_rx.changed())
+                .await
+                .ok();
+        }
+
+        Ok(Self {
+            control,
+            socks: SocketAddr::from(([127, 0, 0, 1], socks_port)),
+        })
+    }
+
+    /// Stop the process. `on_stop` issues `DEL_ONION` for every published
+    /// service before killing the child, so this is the whole teardown.
+    async fn shutdown(self) {
+        self.control.stop_gracefully().await.ok();
+        self.control.wait_for_shutdown().await;
+    }
+}
+
+/// A persona serving a shard over its own onion, behind its own tor.
 pub struct Persona {
     /// The persona's slot.
     pub slot: PSlot,
-    /// Its canonical id — the SOCKS isolation key for *its own* outbound
-    /// traffic. Not used by the client leg (a miner is a different client).
-    pub id: PCanonicalId,
     /// Its published onion.
     pub service_id: ServiceId,
     /// The loopback endpoint tor forwards to — the **production** serving
     /// loop (`shekyl_p_serve`), driven here with a fixture provider. The
     /// spike measures what ships, not a lookalike.
     pub endpoint: PServeEndpoint,
+    /// What a daemon reads from the bond record before dialling: the
+    /// endpoint column and the identity key (`SF-D13`). Read once here at
+    /// bring-up, from the same material the onion was published from.
+    serving: ServingEndpoint,
+    verifying_key: HybridPublicKey,
+    /// The wallet host's tor — one per persona, the conformant shape.
+    tor: ManagedInstance,
 }
 
 impl Persona {
@@ -118,17 +251,94 @@ impl Persona {
         &self.service_id
     }
 
-    /// The URL a client fetches shard `index` from.
+    /// The key this persona countersigns under — what a reader on another
+    /// host needs beside the onion to verify the body (`SF-D8`). In
+    /// production this is the bond record's identity key; here it is the
+    /// ephemeral test key minted at bring-up.
     #[must_use]
-    pub fn shard_url(&self, index: u64) -> String {
-        format!("http://{}{ROUTE_PREFIX}{index}", self.service_id.hostname())
+    pub fn verifying_key(&self) -> &HybridPublicKey {
+        &self.verifying_key
+    }
+
+    /// The typed fetch target for shard `shard_id`, as a scheduler would
+    /// build it from local chain state.
+    #[must_use]
+    pub fn target(&self, shard_id: u64) -> FetchTarget {
+        FetchTarget {
+            endpoint: self.serving,
+            verifying_key: self.verifying_key.clone(),
+            shard_id,
+        }
     }
 }
 
-/// A running measurement apparatus: a managed tor plus its published personas.
+/// The client leg: the production [`PFetchClient`], one per persona.
+///
+/// Public so the loopback test can drive it against a `PServeEndpoint`
+/// through a SOCKS shim with no tor in the picture — the wiring the live
+/// test and the measurement then run over real circuits.
+pub struct ClientLeg {
+    lanes: Vec<PFetchClient>,
+}
+
+impl ClientLeg {
+    /// `lanes` clients dialling through `proxy` with the production bounds.
+    #[must_use]
+    pub fn new(proxy: SocketAddr, lanes: usize) -> Self {
+        Self {
+            lanes: (0..lanes.max(1))
+                .map(|_| PFetchClient::with_timeouts(proxy, Timeouts::DEFAULT))
+                .collect(),
+        }
+    }
+
+    /// One fetch on lane `lane` (modulo the lane count), returning the
+    /// verified body length on success.
+    ///
+    /// The header is minted fresh per call ([`RequestHeader::fresh`]) with the
+    /// apparatus anchor, exactly as a daemon mints one per need; the content
+    /// hole accepts every body, because what the rig checks is the
+    /// transport and the countersignature, not `R_k`.
+    pub async fn fetch_once(
+        &self,
+        lane: usize,
+        target: &FetchTarget,
+    ) -> Result<usize, FailureKind> {
+        let client = &self.lanes[lane % self.lanes.len()];
+        let header = RequestHeader::fresh(APPARATUS_ANCHOR_HEIGHT, APPARATUS_ANCHOR_HASH)
+            .map_err(|_| FailureKind::Refused)?;
+        let fetched = tokio::time::timeout(
+            FETCH_CEILING,
+            client.fetch(target, &header, Arc::new(AcceptAnyContent)),
+        )
+        .await;
+        match fetched {
+            Err(_) => Err(FailureKind::Timeout),
+            Ok(Ok(shard)) => Ok(shard.body().len()),
+            Ok(Err(e)) => Err(classify(&e)),
+        }
+    }
+}
+
+/// The content-verify hole, plugged open: the rig measures transport and
+/// the countersignature, and compares body *length* itself so a short body
+/// stays `Truncated` rather than becoming a content refusal.
+struct AcceptAnyContent;
+
+impl ContentVerify for AcceptAnyContent {
+    fn verify(&self, _shard_id: u64, _body: &[u8]) -> Result<(), ContentRefused> {
+        Ok(())
+    }
+}
+
+/// A running measurement apparatus: the client tor and leg, plus the
+/// published personas behind their own tors.
 pub struct Apparatus {
-    control: kameo::actor::ActorRef<TorControlClient>,
-    socks: TorSocksEndpoint,
+    client_tor: ManagedInstance,
+    client: ClientLeg,
+    /// Wall-clock of the last `NEWNYM` sent to the client tor, for the
+    /// rate-limit spacing.
+    last_newnym: Mutex<Option<Instant>>,
     /// The published personas, in slot order.
     pub personas: Vec<Persona>,
     /// The body length every fetch is checked against — **derived, never
@@ -137,12 +347,13 @@ pub struct Apparatus {
     /// Computed once at bring-up from the payload, through the production
     /// serving contract ([`shekyl_p_serve::ShardBody::header`]), so it is
     /// the length the endpoint will actually write: `RF-D4`'s frame header
-    /// plus the leaf bytes. Before this field existed every caller passed the
-    /// raw fixture length, and when the frame landed that number went stale
-    /// at four call sites at once — each reachability probe rejected until
-    /// timeout, each timed fetch classified `Truncated`. A number a caller
-    /// supplies is a number that drifts when the wire moves; a number the
-    /// apparatus derives from the same code that writes the wire cannot.
+    /// plus the leaf bytes. (The client strips the countersignature envelope
+    /// before handing the body over, so the envelope is not in this figure.)
+    /// Before this field existed every caller passed the raw fixture length,
+    /// and when the frame landed that number went stale at four call sites at
+    /// once. A number a caller supplies is a number that drifts when the wire
+    /// moves; a number the apparatus derives from the same code that writes
+    /// the wire cannot.
     expected_len: usize,
 }
 
@@ -151,13 +362,14 @@ pub struct Apparatus {
 /// silently ran against a broken apparatus is worse than no measurement.
 #[derive(Debug)]
 pub enum ApparatusError {
-    /// Tor did not bootstrap within the deadline.
+    /// A tor did not bootstrap within the deadline.
     Bootstrap,
-    /// The control connection failed.
+    /// A control connection failed.
     Control(String),
     /// `ADD_ONION` was refused.
     AddOnion(u16),
-    /// tor's reply carried no parseable service id.
+    /// tor's reply carried no parseable service id, or published an id other
+    /// than the one the derivation predicted.
     NoServiceId,
     /// The serve endpoint could not bind loopback.
     Bind(std::io::Error),
@@ -178,7 +390,10 @@ impl std::fmt::Display for ApparatusError {
             Self::Bootstrap => write!(f, "tor did not bootstrap"),
             Self::Control(e) => write!(f, "control connection failed: {e}"),
             Self::AddOnion(s) => write!(f, "ADD_ONION refused with status {s}"),
-            Self::NoServiceId => write!(f, "ADD_ONION reply carried no service id"),
+            Self::NoServiceId => write!(
+                f,
+                "ADD_ONION reply carried no service id, or not the derived one"
+            ),
             Self::Bind(e) => write!(f, "serve endpoint bind failed: {e}"),
             Self::NotReachable => write!(f, "no persona became reachable before the deadline"),
             Self::Unframeable { bytes } => write!(
@@ -193,60 +408,21 @@ impl std::fmt::Display for ApparatusError {
 impl std::error::Error for ApparatusError {}
 
 impl Apparatus {
-    /// Bring up `persona_count` personas, each serving `payload`, behind one
-    /// managed tor.
+    /// Bring up `persona_count` personas, each serving `payload` behind its
+    /// own tor, plus the client tor the fetches dial through.
     ///
-    /// # ⚠️ `persona_count > 1` builds a layout the firewall FORBIDS
+    /// `persona_count` is the width of the concurrent arm: `n` personas are
+    /// `n` independent wallet hosts a daemon can have fetches in flight to at
+    /// once. Each is its own tor process (the conformant one-persona shape);
+    /// bring-up launches them in parallel, so the cost is one bootstrap's
+    /// wall-clock, not `n`. Everything on one box shares the box's uplink —
+    /// a confound the concurrent arm's report names, and one that biases it
+    /// pessimistic.
     ///
-    /// Multi-persona *holding* is real (Model D — `PSlot` is the index into the
-    /// staker's derive-forward persona set), but the permission is **conditional
-    /// on non-co-activation**: `ARCHIVAL_BOND_CONSTRUCTION.md:667` permits
-    /// retired-but-bonded personas precisely because they are "**not
-    /// co-activation — no simultaneous wire activity**". `stake_engine.rs`'s
-    /// `active: Option<PSlot>` says the same thing in code — **many held, one on
-    /// the wire.**
-    ///
-    /// Publishing two onions on one daemon puts two personas on the wire at once.
-    /// Any latency or linkage number taken that way is an **artifact of a
-    /// deployment that will not exist**, and
-    /// `ARCHIVAL_FIREWALL_GATE6.md` §10.9 — a ratified Round-2 exit pin — already
-    /// requires non-overlapping guard sets for exactly this reason. The PD-F-2
-    /// `D*` is therefore derived from **`persona_count = 1`** runs only.
-    ///
-    /// **Do not "fix" this by splitting tor instances.** `P` and the principal
-    /// sharing one guard set is the deliberate §7 residual, accepted at
-    /// `ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md:616` under "correct as-is — do not
-    /// 'fix'": separate instances are *worse*, because a non-default config is
-    /// itself a fingerprint to a guard observer — a weaker adversary than the
-    /// correlator the shared guard exposes. **One tor process is the correct
-    /// shape.**
-    ///
-    /// **`persona_count > 1` is retained deliberately — to *price* the forbidden
-    /// layout, not by accident.** A measurement of a configuration the design
-    /// rules out is what lets the project quantify the cost of doing it anyway,
-    /// and that cost lands on **both** axes at once: complete entry-guard overlap
-    /// (privacy) *and* **≥ ×1.54** on `D*` (throughput). Co-serving is therefore
-    /// never the efficient choice, which is a stronger deterrent than the rule
-    /// alone. The ×1.54 is a **floor** — C-tor-specific, `N = 2`, one vantage,
-    /// one run — so cite it as "at least this bad, measured once", never as a
-    /// coefficient. Callers using this path must label results non-conformant.
-    ///
-    /// **The serving rule:** one persona serves per wallet. An operator wanting
-    /// several *serving* personas uses separate wallets — and should use separate
-    /// machines, each with its own default-configured tor. Beyond linkability,
-    /// each co-served
-    /// persona is added **attack surface** (an inbound onion, intro points, a
-    /// descriptor, a share of one process's failure domain) for a reward that
-    /// comes from its *bond*, not from sharing a host.
-    ///
-    /// `tor_binary` goes through the **real SP-T0c hash-pin gate**
-    /// (`binary::discover_and_verify_at`), not the test bypass: the pinned Tor
-    /// Expert Bundle is what production launches, so a measurement taken against
-    /// an unverified binary would be a measurement of something else. A binary
-    /// that fails the pin fails the measurement.
+    /// `data_dir` is the root; each tor gets a sub-directory under it.
     pub async fn bring_up(
-        tor_binary: std::path::PathBuf,
-        data_dir: std::path::PathBuf,
+        tor_binary: PathBuf,
+        data_dir: PathBuf,
         persona_count: u32,
         payload: Arc<[u8]>,
     ) -> Result<Self, ApparatusError> {
@@ -260,7 +436,7 @@ impl Apparatus {
         .await
     }
 
-    /// [`Self::bring_up`] with the onion's PoW defenses selected.
+    /// [`Self::bring_up`] with the onions' PoW defenses selected.
     ///
     /// Split out for SPIKE-F-11's two arms: the same apparatus is measured with
     /// PoW off and on, and the difference between those runs is the honest-client
@@ -268,44 +444,14 @@ impl Apparatus {
     /// signature and defaults to [`OnionPow::Disabled`], which is what every
     /// existing caller and the recorded `D*` were measured under.
     pub async fn bring_up_with_pow(
-        tor_binary: std::path::PathBuf,
-        data_dir: std::path::PathBuf,
+        tor_binary: PathBuf,
+        data_dir: PathBuf,
         persona_count: u32,
         payload: Arc<[u8]>,
         pow: OnionPow,
     ) -> Result<Self, ApparatusError> {
-        let socks_port = free_port();
-        let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (readiness, mut ready_rx) = BootstrapReadiness::new();
-        let verified = shekyl_tor_control_client::binary::discover_and_verify_at(&tor_binary)
-            .map_err(|e| ApparatusError::Control(e.to_string()))?;
-        let control = TorControlClient::spawn(TorControlClientConfig {
-            launch: TorLaunch::Managed(ManagedTor {
-                tor_binary: verified,
-                data_dir,
-                socks_port: SocksPort::Fixed(socks_port),
-                disable_network: false,
-                exit_observer: None,
-            }),
-            events: EventSink::new(events_tx),
-            readiness,
-        });
-
-        let deadline = Instant::now() + Duration::from_secs(300);
-        loop {
-            if matches!(*ready_rx.borrow_and_update(), BootstrapState::Ready) {
-                break;
-            }
-            if Instant::now() >= deadline {
-                return Err(ApparatusError::Bootstrap);
-            }
-            tokio::time::timeout(Duration::from_secs(10), ready_rx.changed())
-                .await
-                .ok();
-        }
-
         // The expected body length, derived through the production contract
-        // BEFORE any persona is bound: the same `ShardBody::flat` the fixture
+        // BEFORE any tor is launched: the same `ShardBody::flat` the fixture
         // provider will call per request, so what the probes compare against
         // is what the endpoint will write — frame header included.
         let expected_len = ShardBody::flat(Arc::clone(&payload))
@@ -314,15 +460,40 @@ impl Apparatus {
             })?
             .header()
             .framed_len();
-        let expected_len = usize::try_from(expected_len).expect("framed length fits usize")
-            // Plus the `SF-D8` countersignature envelope the endpoint writes
-            // ahead of the frame — same rule as the frame header: derived
-            // from the code that writes the wire, never typed in.
-            + SIGNATURE_ENVELOPE_LEN;
+        let expected_len = usize::try_from(expected_len).expect("framed length fits usize");
+
+        // Launch every tor at once: the client's and one per persona.
+        let tor_binary = Arc::<Path>::from(tor_binary);
+        let mut launches = tokio::task::JoinSet::new();
+        {
+            let bin = Arc::clone(&tor_binary);
+            let dir = data_dir.join("client-tor");
+            launches.spawn(async move { (None, ManagedInstance::launch(&bin, dir).await) });
+        }
+        for slot in 0..persona_count {
+            let bin = Arc::clone(&tor_binary);
+            let dir = data_dir.join(format!("persona-{slot}-tor"));
+            launches.spawn(async move { (Some(slot), ManagedInstance::launch(&bin, dir).await) });
+        }
+        let mut client_tor = None;
+        let mut serving_tors: Vec<Option<ManagedInstance>> =
+            (0..persona_count).map(|_| None).collect();
+        while let Some(joined) = launches.join_next().await {
+            let (which, launched) = joined.map_err(|e| ApparatusError::Control(e.to_string()))?;
+            let instance = launched?;
+            match which {
+                None => client_tor = Some(instance),
+                Some(slot) => {
+                    serving_tors[usize::try_from(slot).expect("slot fits usize")] = Some(instance);
+                }
+            }
+        }
+        let client_tor = client_tor.ok_or(ApparatusError::Bootstrap)?;
 
         let mut personas = Vec::new();
-        for slot in 0..persona_count {
-            let slot = PSlot::from_raw(slot);
+        for (slot, tor) in serving_tors.into_iter().enumerate() {
+            let tor = tor.ok_or(ApparatusError::Bootstrap)?;
+            let slot = PSlot::from_raw(u32::try_from(slot).expect("slot fits u32"));
             // One pinned derivation context (see `APPARATUS_PINNED_SEED`): the
             // fixed test seed under mainnet/bip39. Explicit here, not hidden in
             // the derivation.
@@ -333,12 +504,20 @@ impl Apparatus {
                 slot,
             );
             let service_id = identity.service_id().clone();
+            // The "bond record" the client leg will dial from: the endpoint
+            // column is the onion's public key, and the two encodings of it
+            // (tor's service id, `shekyl-onion-v3`'s hostname) must agree or
+            // the client would dial a service that is not this persona's.
+            let serving = ServingEndpoint::from_record_bytes(identity.public_key());
+            if serving.onion_address() != service_id.hostname() {
+                return Err(ApparatusError::NoServiceId);
+            }
             // An ephemeral attestation key per persona: the spike measures
             // the shipped serve path, and signing is on it. Its own height is
-            // the apparatus's fixed chain view; the re-based client leg
-            // (`fetch_once`, step (c)) anchors its requests against the same
-            // number.
+            // the apparatus's fixed chain view; the client leg anchors its
+            // requests against the same number.
             let signer = Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT));
+            let verifying_key = signer.public_key().clone();
             let endpoint = PServeEndpoint::bind(
                 Arc::new(FixtureShardProvider::new(Arc::clone(&payload))),
                 signer,
@@ -354,7 +533,8 @@ impl Apparatus {
             let request = AddOnion::new(identity.mint_onion_key(), port, 8)
                 .with_flags(OnionFlags { discard_pk: true })
                 .with_pow(pow);
-            let reply = control
+            let reply = tor
+                .control
                 .ask(Command::AddOnion(request))
                 .await
                 .map_err(|e| ApparatusError::Control(e.to_string()))?;
@@ -373,26 +553,38 @@ impl Apparatus {
             }
             personas.push(Persona {
                 slot,
-                id: PCanonicalId::from_bytes(persona_probe_id(slot)),
                 service_id,
                 endpoint,
+                serving,
+                verifying_key,
+                tor,
             });
         }
 
+        let client = ClientLeg::new(client_tor.socks, personas.len());
         Ok(Self {
-            control,
-            socks: TorSocksEndpoint::loopback(socks_port),
+            client_tor,
+            client,
+            last_newnym: Mutex::new(None),
             personas,
             expected_len,
         })
     }
 
     /// The body length every fetch is checked against: frame header plus
-    /// shard, as the endpoint writes it. Exposed so operators and logs can
-    /// print the number a remote reader should expect.
+    /// shard, as the endpoint writes it and the client hands it over.
+    /// Exposed so operators and logs can print the number a remote reader
+    /// should expect.
     #[must_use]
     pub fn expected_body_len(&self) -> usize {
         self.expected_len
+    }
+
+    /// The client tor's SOCKS endpoint — the "daemon's tor zone" every fetch
+    /// dials through.
+    #[must_use]
+    pub fn client_socks(&self) -> SocketAddr {
+        self.client_tor.socks
     }
 
     /// Block until at least one persona answers, so the measurement does not
@@ -405,10 +597,9 @@ impl Apparatus {
     pub async fn await_reachable(&self) -> Result<Duration, ApparatusError> {
         let started = Instant::now();
         let persona = self.personas.first().ok_or(ApparatusError::NotReachable)?;
-        let url = persona.shard_url(0);
+        let target = persona.target(0);
         while started.elapsed() < PUBLISH_TIMEOUT {
-            let probe = PCanonicalId::from_bytes(persona_probe_id(PSlot::from_raw(u32::MAX)));
-            if let Ok(bytes) = self.fetch_once(&probe, &url).await {
+            if let Ok(bytes) = self.client.fetch_once(0, &target).await {
                 if bytes == self.expected_len {
                     return Ok(started.elapsed());
                 }
@@ -418,58 +609,53 @@ impl Apparatus {
         Err(ApparatusError::NotReachable)
     }
 
-    /// One fetch as `client_id`, returning the byte count on success.
+    /// Make the next fetch **cold**: `SIGNAL NEWNYM` to the client tor, so it
+    /// drops every client circuit and its onion-service client state.
     ///
-    /// **STALE since `SF` (a) — every fetch through this leg is the identical
-    /// 404 (`FailureKind::Transport`), and [`Self::await_reachable`] times out.**
-    /// The serve side now requires the `SF-D5` request header and
-    /// countersigns the body; `blocking_get` cannot carry a header, by
-    /// design (`shekyl-p-transport` is the wallet's P↔principal isolation
-    /// crate, not a general HTTP client). The daemon client that does carry
-    /// it is `shekyl-p-fetch` (`SF` (b)) — but it dials with **no** SOCKS
-    /// isolation (`SF-D3`: circuits are reused), so under it this rig's cold
-    /// and warm arms, which *are* per-client isolation, collapse into one.
-    /// Re-basing the arms onto that topology is the W₂ measurement's own
-    /// design, `ARCHIVAL_SHARD_FETCH.md` §9.1 step **(c)**, and swapping the
-    /// leg here without it would keep the arm labels while measuring
-    /// something else. Blocked on (c); falsify by
-    /// `cargo test -p shekyl-sp-t3-spike --test live_apparatus -- --ignored`
-    /// passing.
-    async fn fetch_once(&self, client_id: &PCanonicalId, url: &str) -> Result<usize, FailureKind> {
-        let Ok(client) = PTorClient::for_persona(client_id, &self.socks) else {
-            return Err(FailureKind::Transport);
+    /// Waits out tor's ten-second rate limit first — a signal inside the
+    /// window is acknowledged and deferred, which would let the "cold" fetch
+    /// run on the old circuits. The wait is not timed; call this, then
+    /// [`Self::timed_fetch`]. Process-global by nature, so a concurrent arm
+    /// rotates once before its batch, not once per fetch.
+    pub async fn rotate_client_circuits(&self) -> Result<(), ApparatusError> {
+        let wait = {
+            let last = self.last_newnym.lock().expect("newnym clock");
+            last.map(|t| NEWNYM_MIN_SPACING.saturating_sub(t.elapsed()))
         };
-        let url = url.to_owned();
-        // `blocking_get` is synchronous by design (the transport crate keeps the
-        // async bridge at its consumer), so it rides `spawn_blocking` here rather
-        // than stalling a runtime worker for the length of a Tor fetch.
-        let joined = tokio::time::timeout(
-            FETCH_CEILING,
-            tokio::task::spawn_blocking(move || client.blocking_get(&url)),
-        )
-        .await;
-        match joined {
-            Err(_) => Err(FailureKind::Timeout),
-            Ok(Err(_join)) => Err(FailureKind::Transport),
-            Ok(Ok(Ok(body))) => Ok(body.len()),
-            Ok(Ok(Err(e))) => Err(classify(&e)),
+        if let Some(wait) = wait.filter(|w| !w.is_zero()) {
+            tokio::time::sleep(wait).await;
         }
+        let reply = self
+            .client_tor
+            .control
+            .ask(Command::Signal(Signal::NewNym))
+            .await
+            .map_err(|e| ApparatusError::Control(e.to_string()))?;
+        if reply.status() != 250 {
+            return Err(ApparatusError::Control(format!(
+                "SIGNAL NEWNYM answered {}",
+                reply.status()
+            )));
+        }
+        *self.last_newnym.lock().expect("newnym clock") = Some(Instant::now());
+        Ok(())
     }
 
-    /// Time one fetch of the full served body from `persona` as `client_id`.
+    /// Time one fetch of shard `0` from `persona_index` through the client tor.
     ///
-    /// The clock starts before the client is constructed and stops after the last
-    /// byte, so circuit build is inside the timed path (§6.2) for a cold client
-    /// and outside it for a warm one — which is exactly the difference the two
-    /// arms report. Success means the body was exactly
+    /// The clock starts before the header is minted and stops after the
+    /// countersignature verifies, so on a cold client (after
+    /// [`Self::rotate_client_circuits`]) descriptor fetch, intro, and
+    /// rendezvous are inside the timed path (§6.2), and on a warm one only
+    /// the stream is. Success means the verified body was exactly
     /// [`Self::expected_body_len`] bytes; anything shorter is `Truncated`.
-    pub async fn timed_fetch(&self, client_id: &PCanonicalId, persona_index: usize) -> Observation {
+    pub async fn timed_fetch(&self, persona_index: usize) -> Observation {
         let Some(persona) = self.personas.get(persona_index) else {
-            return Observation::failure(Duration::ZERO, FailureKind::Transport);
+            return Observation::failure(Duration::ZERO, FailureKind::Refused);
         };
-        let url = persona.shard_url(0);
+        let target = persona.target(0);
         let start = Instant::now();
-        let outcome = self.fetch_once(client_id, &url).await;
+        let outcome = self.client.fetch_once(persona_index, &target).await;
         let elapsed = start.elapsed();
         match outcome {
             // A short body is an apparatus failure, not a fast success — the
@@ -489,7 +675,7 @@ impl Apparatus {
             .sum()
     }
 
-    /// Total connections shed for exceeding the in-flight cap
+    /// Total connections shed for exceeding the serve-side in-flight cap
     /// ([`MAX_INFLIGHT`](shekyl_p_serve::MAX_INFLIGHT)).
     ///
     /// The signal that `SPIKE-PIN-2` is binding: a non-zero value during a
@@ -505,71 +691,43 @@ impl Apparatus {
             .sum()
     }
 
-    /// Withdraw the onions and stop tor.
+    /// Withdraw the onions and stop every tor.
     pub async fn shutdown(self) {
-        // `on_stop` issues DEL_ONION for every published service before killing
-        // the child, so the explicit stop here is the whole teardown.
-        self.control.stop_gracefully().await.ok();
-        self.control.wait_for_shutdown().await;
-    }
-}
-
-/// Map a transport error to the measurement's failure taxonomy.
-///
-/// The mapping is coarse because the transport crate deliberately returns
-/// username-free categories only (its invariant (a)) — a finer taxonomy would
-/// require the crate to surface exactly the detail it is designed not to.
-fn classify(e: &PTransportError) -> FailureKind {
-    match e {
-        // A transport-level failure below HTTP against an `.onion` target is a
-        // circuit/rendezvous failure in all but name: the SOCKS dial is what
-        // builds the rendezvous, so "could not connect" here means the
-        // rendezvous did not come up.
-        PTransportError::Request(RequestErrorKind::Transport) => FailureKind::Circuit,
-        // A body that could not be read to completion.
-        PTransportError::Request(RequestErrorKind::Read) => FailureKind::Truncated,
-        // Proxy misconfiguration and an HTTP non-2xx share an arm because they
-        // share a meaning for this measurement: **the apparatus is wrong, not the
-        // network.** A 404 means the client asked for a route the endpoint does
-        // not serve; a proxy error means the SOCKS endpoint was misconfigured.
-        // Neither is evidence about Tor latency, and both must be visible as
-        // non-network failures rather than inflating the circuit-failure count.
-        PTransportError::Proxy { .. } | PTransportError::Request(RequestErrorKind::Http(_)) => {
-            FailureKind::Transport
+        for persona in self.personas {
+            persona.tor.shutdown().await;
         }
+        self.client_tor.shutdown().await;
     }
 }
 
-/// A deterministic stand-in client id for probing.
+/// Map the production client's error taxonomy onto the measurement's.
 ///
-/// Distinct per slot so probes do not share a circuit; derived rather than random
-/// so a run is reproducible.
-fn persona_probe_id(slot: PSlot) -> [u8; 32] {
-    let mut id = [0u8; 32];
-    id[..4].copy_from_slice(&slot.to_raw().to_le_bytes());
-    id[4] = 0xA5;
-    id
+/// `SF-D6` types outcomes by what the *scheduler* should do next; §6.4 types
+/// them by whether Tor or the apparatus is to blame. The two agree on the
+/// no-complete-exchange side (a stall is the network) and collapse on the
+/// completed side: every decided refusal — miss, malformed, bad
+/// countersignature, content — means the apparatus, not the path, is wrong.
+fn classify(e: &FetchError) -> FailureKind {
+    match e {
+        // The SOCKS dial against an `.onion` is what builds the rendezvous, so
+        // "could not connect" means the rendezvous did not come up.
+        FetchError::Stall(Stall::DialTimeout | Stall::Dial(_)) => FailureKind::Circuit,
+        // The connection came up and then went quiet.
+        FetchError::Stall(Stall::HeadTimeout | Stall::BodyTimeout | Stall::NoClose) => {
+            FailureKind::Timeout
+        }
+        // Bytes stopped short, or the stream broke.
+        FetchError::Stall(Stall::ClosedBeforeHead | Stall::Truncated { .. } | Stall::Io(_)) => {
+            FailureKind::Truncated
+        }
+        FetchError::Miss
+        | FetchError::Malformed(_)
+        | FetchError::BadCountersignature
+        | FetchError::ContentRefused(_) => FailureKind::Refused,
+    }
 }
 
-/// A fresh client id for the cold arm — a *different* miner each fetch.
-#[must_use]
-pub fn cold_client_id(sequence: u64) -> PCanonicalId {
-    let mut id = [0u8; 32];
-    id[..8].copy_from_slice(&sequence.to_le_bytes());
-    id[8] = 0xC0;
-    PCanonicalId::from_bytes(id)
-}
-
-/// The single reused client id for the warm arm.
-#[must_use]
-pub fn warm_client_id() -> PCanonicalId {
-    let mut id = [0u8; 32];
-    id[0] = 0x0F;
-    id[1] = 0xF0;
-    PCanonicalId::from_bytes(id)
-}
-
-/// Reserve a free loopback port for tor's SOCKS listener.
+/// Reserve a free loopback port for a tor's SOCKS listener.
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral")
@@ -578,78 +736,59 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// The bound SOCKS endpoint, for a caller that needs to dial directly.
-impl Apparatus {
-    /// The managed tor's SOCKS endpoint.
-    #[must_use]
-    pub fn socks(&self) -> SocketAddr {
-        self.socks.addr()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_p_fetch::Malformed;
 
     #[test]
-    fn cold_ids_differ_per_fetch_and_warm_id_is_stable() {
-        // The whole cold/warm distinction rests on this: distinct SOCKS usernames
-        // get distinct circuits, identical ones share. If cold ids collided, the
-        // "cold" arm would silently be a second warm arm.
-        assert_ne!(cold_client_id(0), cold_client_id(1));
-        assert_ne!(cold_client_id(1), cold_client_id(2));
-        assert_eq!(warm_client_id(), warm_client_id());
-        assert_ne!(cold_client_id(0), warm_client_id());
-    }
-
-    #[test]
-    fn probe_ids_are_slot_distinct() {
-        assert_ne!(
-            persona_probe_id(PSlot::from_raw(0)),
-            persona_probe_id(PSlot::from_raw(1))
-        );
-    }
-
-    #[test]
-    fn shard_url_targets_the_serving_route_on_the_onion() {
-        let id = ServiceId::parse(&"a".repeat(56)).expect("valid id");
-        let persona = Persona {
-            slot: PSlot::from_raw(0),
-            id: PCanonicalId::from_bytes([0u8; 32]),
-            service_id: id.clone(),
-            // A throwaway endpoint just to build the struct; not served from.
-            endpoint: {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("runtime");
-                rt.block_on(PServeEndpoint::bind(
-                    Arc::new(FixtureShardProvider::new(Arc::from(
-                        vec![0u8; 1].into_boxed_slice(),
-                    ))),
-                    Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT)),
-                ))
-                .expect("bind")
-            },
-        };
+    fn anchor_is_the_burial_depth_below_own_height() {
+        // The one number both sides read: P gates the anchor against its own
+        // height ± L, and the client anchors at tip − 720. If these drifted
+        // apart every fetch would be the identical 404 and the taxonomy would
+        // call it `Refused` — visible, but for the wrong reason.
         assert_eq!(
-            persona.shard_url(7),
-            format!("http://{}.onion{ROUTE_PREFIX}7", "a".repeat(56))
+            APPARATUS_OWN_HEIGHT - APPARATUS_ANCHOR_HEIGHT,
+            PASS_ANCHOR_DEPTH_BLOCKS
         );
     }
 
     #[test]
-    fn transport_errors_map_to_distinguishable_classes() {
+    fn fetch_ceiling_is_a_backstop_above_the_client_bounds() {
+        // The client's own bounds must fire first, so a timeout is classified
+        // by the layer that knows which step stalled.
+        let t = Timeouts::DEFAULT;
+        assert!(FETCH_CEILING > t.dial + t.head + t.body_total);
+    }
+
+    #[test]
+    fn fetch_errors_map_to_distinguishable_classes() {
         // A read failure must not be reported as a circuit failure: the verdict
         // turns on separating "Tor was slow/unreachable" from "the apparatus
-        // returned a short body".
+        // returned a short body" from "the apparatus refused the exchange".
         assert_eq!(
-            classify(&PTransportError::Request(RequestErrorKind::Transport)),
+            classify(&FetchError::Stall(Stall::DialTimeout)),
             FailureKind::Circuit
         );
         assert_eq!(
-            classify(&PTransportError::Request(RequestErrorKind::Read)),
+            classify(&FetchError::Stall(Stall::HeadTimeout)),
+            FailureKind::Timeout
+        );
+        assert_eq!(
+            classify(&FetchError::Stall(Stall::Truncated {
+                declared: 10,
+                received: 3
+            })),
             FailureKind::Truncated
+        );
+        assert_eq!(classify(&FetchError::Miss), FailureKind::Refused);
+        assert_eq!(
+            classify(&FetchError::Malformed(Malformed::Status(500))),
+            FailureKind::Refused
+        );
+        assert_eq!(
+            classify(&FetchError::BadCountersignature),
+            FailureKind::Refused
         );
     }
 }

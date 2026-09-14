@@ -34,7 +34,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use shekyl_sp_t3_spike::fixture::ShardFixture;
-use shekyl_sp_t3_spike::harness::{cold_client_id, warm_client_id, Apparatus};
+use shekyl_sp_t3_spike::harness::Apparatus;
 use shekyl_sp_t3_spike::measure::{
     summarize, warmup_drift, DStar, FailureKind, Observation, Q_RISK_STAR,
 };
@@ -61,7 +61,7 @@ fn append_rows(out: &mut Option<std::fs::File>, arm: &str, obs: &[Observation]) 
             Some(FailureKind::Timeout) => "timeout",
             Some(FailureKind::Circuit) => "circuit",
             Some(FailureKind::Truncated) => "truncated",
-            Some(FailureKind::Transport) => "transport",
+            Some(FailureKind::Refused) => "refused",
         };
         // arm, elapsed_ms, outcome. Nothing else — see the module doc.
         writeln!(f, "{arm}\t{}\t{outcome}", o.elapsed.as_millis()).ok();
@@ -127,7 +127,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("shard fixture: {} bytes", fixture.len());
 
     let dir = tempfile::tempdir()?;
-    println!("bringing up 2 personas behind one tor (this includes a bootstrap)...");
+    println!(
+        "bringing up a client tor and 2 personas, each behind its own tor (three bootstraps, in parallel)..."
+    );
     let app = Apparatus::bring_up(tor, dir.path().join("tor-data"), 2, fixture.bytes()).await?;
 
     // The expected body length is the apparatus's to know, not this binary's
@@ -150,40 +152,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         writeln!(f, "arm\telapsed_ms\toutcome").ok();
     }
 
-    // --- Arm 1: cold circuit, single stream. A fresh client id per fetch, so
-    // circuit build + rendezvous are inside the timed path (§6.2). This is the
-    // faithful model of a drawn miner and is expected to dominate the tail.
+    // --- Arm 1: cold, single stream. `NEWNYM` to the client tor before each
+    // fetch, so descriptor fetch + intro + rendezvous are inside the timed path
+    // (§6.2). This is the faithful model of a drawn miner dialling a `P` it has
+    // never dialled, and is expected to dominate the tail. The ten-second
+    // NEWNYM spacing is paid *outside* the clock.
     let mut cold = Vec::new();
     for i in 0..cold_n {
-        cold.push(app.timed_fetch(&cold_client_id(i as u64), 0).await);
+        app.rotate_client_circuits().await?;
+        cold.push(app.timed_fetch(0).await);
         if (i + 1) % 10 == 0 {
             println!("  cold {}/{cold_n}", i + 1);
         }
     }
     append_rows(&mut out, "cold", &cold);
-    report("cold circuit, single stream", &cold);
+    report("cold (NEWNYM before each), single stream", &cold);
 
-    // --- Arm 2: warm circuit. One reused client id, so tor reuses the circuit
-    // and only the rendezvous/stream cost is paid — the optimistic case.
-    let warm_id = warm_client_id();
+    // --- Arm 2: warm. Back-to-back fetches to one persona with no signal in
+    // between, so the client tor reuses its rendezvous circuit and only the
+    // stream cost is paid — the organic fill scheduler's steady state against
+    // one `P`, and the optimistic case.
     let mut warm = Vec::new();
     for i in 0..warm_n {
-        warm.push(app.timed_fetch(&warm_id, 0).await);
+        warm.push(app.timed_fetch(0).await);
         if (i + 1) % 10 == 0 {
             println!("  warm {}/{warm_n}", i + 1);
         }
     }
     append_rows(&mut out, "warm", &warm);
-    report("warm circuit, single stream", &warm);
+    report("warm (reused circuit), single stream", &warm);
 
-    // --- Arm 3: two personas served concurrently. Doubles as the §5.2 contention
-    // datum: if serving A degrades B, it shows up as a widened tail here relative
-    // to the cold arm.
+    // --- Arm 3: two personas fetched concurrently through the one client tor,
+    // cold. This is the client-side churn question at n = 2 — two rendezvous
+    // circuits building at once on the daemon's tor. (The serve-side contention
+    // datum this arm used to double as is gone: the personas are on separate
+    // tors now, and serve-side load is SPIKE-F-11's, measured from other hosts.)
     let mut conc = Vec::new();
     for i in 0..conc_n {
-        let id_a = cold_client_id(1_000_000 + i as u64);
-        let id_b = cold_client_id(2_000_000 + i as u64);
-        let (ra, rb) = tokio::join!(app.timed_fetch(&id_a, 0), app.timed_fetch(&id_b, 1));
+        app.rotate_client_circuits().await?;
+        let (ra, rb) = tokio::join!(app.timed_fetch(0), app.timed_fetch(1));
         conc.push(ra);
         conc.push(rb);
         if (i + 1) % 10 == 0 {
@@ -191,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     append_rows(&mut out, "concurrent", &conc);
-    report("2 personas concurrent", &conc);
+    report("2 personas concurrent, cold client", &conc);
 
     // --- Arm 4: the dispersion soak. Circuit-latency dispersion is the
     // load-bearing parameter (§8.3) and it is *time-varying*, so a one-hour
@@ -201,10 +208,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\nsoak arm: {hours} h of spaced cold fetches...");
         let until = Instant::now() + Duration::from_secs(hours as u64 * 3600);
         let mut soak = Vec::new();
-        let mut seq = 5_000_000u64;
         while Instant::now() < until {
-            soak.push(app.timed_fetch(&cold_client_id(seq), 0).await);
-            seq += 1;
+            app.rotate_client_circuits().await?;
+            soak.push(app.timed_fetch(0).await);
             // Flush EVERY observation, not every 25th. A 24 h run on a dev box is
             // a run that gets killed, and the doc comment on `append_rows`
             // promises a killed run still leaves what it earned -- a 25-row
@@ -223,6 +229,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // believes it fetched. A mismatch means some "success" came from somewhere
     // else, which would invalidate every number above.
     println!("\nendpoints served {} requests total", app.served_total());
+    // And a second cross-check the old rig could not make: a refused count is
+    // the apparatus disagreeing with itself (anchor gate, key, envelope), which
+    // the `refused` outcome column above would already have shown per row.
+    println!(
+        "endpoints shed {} connections at the serve-side cap",
+        app.refused_total()
+    );
 
     app.shutdown().await;
     Ok(())

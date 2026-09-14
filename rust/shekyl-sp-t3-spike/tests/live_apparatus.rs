@@ -6,9 +6,11 @@
 //! Live apparatus validation — the §7 `#[ignore]`d end-to-end gate.
 //!
 //! **This is not the measurement.** It proves the apparatus works: two personas
-//! publish, both are reachable over real rendezvous circuits, both serve their
-//! bytes intact, the derived `.onion` is the one tor published, and the services
-//! are withdrawn on shutdown. The measurement itself is the `pd-f2-measure`
+//! publish (each behind its own tor), both are reachable from the client tor
+//! over real rendezvous circuits, both serve bodies the production client
+//! verifies intact, the derived `.onion` is the one tor published, `NEWNYM`
+//! is accepted by the client tor, and the services are withdrawn on shutdown.
+//! The measurement itself is the `pd-f2-measure`
 //! binary, which is deliberately not a test (§7: tests must not depend on network
 //! conditions, and a distribution is the wrong shape for a green/red verdict).
 //!
@@ -25,7 +27,7 @@
 
 use std::sync::Arc;
 
-use shekyl_sp_t3_spike::harness::{cold_client_id, warm_client_id, Apparatus};
+use shekyl_sp_t3_spike::harness::Apparatus;
 
 /// The pinned tor binary. **Hard-fails** rather than skipping, so a
 /// misconfigured integration lane is loud instead of silently passing by not
@@ -74,21 +76,26 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
         .await
         .expect("at least one persona becomes reachable");
 
-    // Both personas serve, over distinct client circuits, and the bytes arrive
-    // intact. Distinct client ids so the two fetches ride separate circuits —
-    // the client-side isolation SP-T2 proved, exercised here on the serving axis.
-    for (index, id_seq) in [(0usize, 900_001u64), (1usize, 900_002u64)] {
-        let obs = app.timed_fetch(&cold_client_id(id_seq), index).await;
+    // Both personas serve, cold, and the production client verifies each body:
+    // right length, countersignature valid under the persona's key. A `NEWNYM`
+    // before each is the cold arm's mechanism, so its acceptance by the client
+    // tor is asserted here too — a rig whose "cold" signal was silently
+    // refused would time warm circuits and call them cold.
+    for index in [0usize, 1usize] {
+        app.rotate_client_circuits()
+            .await
+            .expect("client tor accepts SIGNAL NEWNYM");
+        let obs = app.timed_fetch(index).await;
         assert!(
             obs.is_success(),
             "persona {index} must serve its shard over the rendezvous: {obs:?}"
         );
     }
 
-    // A warm fetch (reused client id) must also succeed — this is the arm the
-    // measurement calls optimistic, and a failure here would mean the warm arm
-    // measures nothing.
-    let warm = app.timed_fetch(&warm_client_id(), 0).await;
+    // A warm fetch (no signal, same persona) must also succeed — this is the
+    // arm the measurement calls optimistic, and a failure here would mean the
+    // warm arm measures nothing.
+    let warm = app.timed_fetch(0).await;
     assert!(
         warm.is_success(),
         "warm-circuit fetch must succeed: {warm:?}"

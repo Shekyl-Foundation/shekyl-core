@@ -67,11 +67,16 @@ pub enum FailureKind {
     Timeout,
     /// The circuit or rendezvous could not be established.
     Circuit,
-    /// A response arrived but was short or malformed — the apparatus-failure
-    /// signal (a truncated shard is not a slow shard).
+    /// A response arrived but stopped short, or the stream broke mid-body —
+    /// the apparatus-failure signal (a truncated shard is not a slow shard).
     Truncated,
-    /// Anything else below HTTP: connect, proxy, IO.
-    Transport,
+    /// A **completed** exchange the production client refused: the identical
+    /// 404, a malformed head or envelope, a countersignature that does not
+    /// verify under `P`'s key. `SF-D6` classes every one of these as a miss,
+    /// not a stall, and none of them is Tor's doing — a non-zero count here
+    /// means the apparatus is wrong (anchor gate, key, fixture), never that
+    /// the path was slow.
+    Refused,
 }
 
 /// One timed fetch. **No timestamp, no persona, no circuit id** — see the module
@@ -302,7 +307,7 @@ pub fn summarize(observations: &[Observation]) -> Summary {
         FailureKind::Timeout,
         FailureKind::Circuit,
         FailureKind::Truncated,
-        FailureKind::Transport,
+        FailureKind::Refused,
     ] {
         let c = observations
             .iter()
@@ -403,7 +408,7 @@ mod tests {
         // deadline fixes it; it does not, and the type says so.
         let mut obs = oks(&[1; 8]);
         obs.push(Observation::failure(secs(60), FailureKind::Timeout));
-        obs.push(Observation::failure(secs(60), FailureKind::Transport));
+        obs.push(Observation::failure(secs(60), FailureKind::Refused));
         assert_eq!(invert(&obs, Q_RISK_STAR), DStar::Unbounded);
     }
 

@@ -4583,10 +4583,11 @@ name = "shekyl-sp-t3-spike"
 version = "3.1.0"
 dependencies = [
  "kameo",
+ "shekyl-archival-retention",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
+ "shekyl-p-fetch",
  "shekyl-p-serve",
- "shekyl-p-transport",
  "shekyl-tor-control-client",
  "shekyl-types",
  "tempfile",
