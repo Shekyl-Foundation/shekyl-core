@@ -592,8 +592,8 @@ def main():
         if f:
             _fail("a deferred follow-on's blocker no longer holds:\n  " +
                   "\n  ".join(f))
-        print(f"blockers hold: redb consensus engine absent, "
-              f"{len(A.FOLLOWON_MEASURES)} recorded follow-on(s)")
+        print(f"blockers hold: redb arm unrunnable (new_db() cannot select an "
+              f"engine), {len(A.FOLLOWON_MEASURES)} recorded follow-on(s)")
         return
 
     if args.cmd == "check":

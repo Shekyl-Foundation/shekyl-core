@@ -13,14 +13,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use redb::{
-    Durability, Key, MultimapTable, MultimapTableDefinition, MultimapTableHandle, Table,
-    TableDefinition, TableHandle, Value, WriteTransaction,
+    Key, MultimapTable, MultimapTableDefinition, MultimapTableHandle, Table, TableDefinition,
+    TableHandle, Value, WriteTransaction,
 };
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 
 use super::error::StoreError;
-use super::{DURABILITY, TWO_PHASE_COMMIT};
 
 /// An open write transaction.
 ///
@@ -36,8 +35,6 @@ use super::{DURABILITY, TWO_PHASE_COMMIT};
 pub struct WriteBatch<'store> {
     txn: Option<WriteTransaction>,
     apply_policy: ApplyPolicy,
-    durability: Durability,
-    two_phase: bool,
     write_held: &'store AtomicBool,
 }
 
@@ -50,8 +47,6 @@ impl<'store> WriteBatch<'store> {
         Self {
             txn: Some(txn),
             apply_policy,
-            durability: DURABILITY,
-            two_phase: TWO_PHASE_COMMIT,
             write_held,
         }
     }
@@ -61,20 +56,6 @@ impl<'store> WriteBatch<'store> {
     #[must_use]
     pub const fn apply_policy(&self) -> ApplyPolicy {
         self.apply_policy
-    }
-
-    /// Durability this batch was armed with. Recorded after the engine
-    /// accepted [`DURABILITY`], so a test of this value is a test of the
-    /// applied policy, not only of the token.
-    #[must_use]
-    pub const fn durability(&self) -> Durability {
-        self.durability
-    }
-
-    /// Whether two-phase commit was armed on this batch.
-    #[must_use]
-    pub const fn two_phase_commit(&self) -> bool {
-        self.two_phase
     }
 
     fn txn(&self) -> &WriteTransaction {

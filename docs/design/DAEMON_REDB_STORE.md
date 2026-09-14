@@ -1039,11 +1039,13 @@ IBD floor from DRS-0).
 `scripts/bench/drs_bench.py` (`measure` / `check` / `validate` / `blockers`)
 with selftest `scripts/bench/test_drs_bench.py`, wired in `docs-gates.yml`.
 The **LMDB arm only**: DRS-E1 increment 1 constructs `redb::Database` in
-`shekyl-chain-store` but the daemon still has no engine switch and the crate
-is not exported through FFI, so the arm is unrunnable. `drs_bench.py blockers`
-asserts that conjunction still holds on every CI run — redb sites without a
-switch do not lift it — so the deferral turns red when the arm becomes
-runnable instead of ageing quietly.
+`shekyl-chain-store` but the daemon still has no engine switch and `ChainStore` itself
+is not exported through FFI (the crate already is, for `digest_v0`), so the arm is unrunnable. `drs_bench.py blockers`
+asserts on every CI run that **redb sites exist AND `new_db()` cannot select
+them** — that pair, not the FFI clause, is what the probe reads; redb sites
+without a switch do not lift it — so the deferral turns red when `new_db()`
+gains a switch instead of ageing quietly. The FFI-export clause is a stated
+fact, not a probed leg.
 
 Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**
 (the primary), plus **CPU time**, **peak RSS** and **store size** as free

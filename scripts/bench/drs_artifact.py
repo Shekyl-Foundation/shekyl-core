@@ -659,6 +659,16 @@ def redb_engine_sites():
 NEW_DB = os.path.join(ROOT, "src", "blockchain_db", "blockchain_db.cpp")
 
 
+def _strip_c_comments(src):
+    """Delegate to scripts/ci/strip_c_comments.py rather than re-implement it."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "strip_c_comments", os.path.join(ROOT, "scripts", "ci", "strip_c_comments.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.strip(src, rust=False)
+
+
 def daemon_engine_switch():
     """(can_switch, subject_missing) — can the daemon open anything but LMDB?
 
@@ -684,6 +694,11 @@ def daemon_engine_switch():
         return False, True
     with open(NEW_DB, encoding="utf-8") as fh:
         text = fh.read()
+    # Read code, not prose (rule 47): a comment such as
+    # `// no engine switch yet` inside new_db() must not read as a switch.
+    # scripts/ci/strip_c_comments.py is the repo's stripper; the SA-3b
+    # domain-registry gate uses it for exactly this reason.
+    text = _strip_c_comments(text)
     m = re.search(r"BlockchainDB\s*\*\s*new_db\s*\([^)]*\)\s*\{(.*?)\n\}", text, re.S)
     if not m:
         return False, True
@@ -819,15 +834,25 @@ def measurement_preflight(engine, sync_mode, daemon, work_dir, seed_dir, disk_cl
                  "and say nothing.")
     if engine == "redb":
         sites, _, _missing = redb_engine_sites()
-        can_switch, _sw_missing = daemon_engine_switch()
-        if not (sites and can_switch):
-            r.append("--engine redb refused: the daemon has NO engine switch — it "
-                     "always opens LMDB — and no redb consensus engine exists in "
-                     f"{os.path.relpath(CHAIN_STORE, ROOT)} to switch to. The run "
-                     "would produce a relabelled LMDB artifact, which `check` would "
-                     "read as a cross-engine ratio near 1.0 and pass against §1.3's "
-                     "floor. This refusal lifts by the same scan that `blockers` "
-                     "uses, so it opens exactly when DRS-E1 lands the engine.")
+        can_switch, sw_missing = daemon_engine_switch()
+        if sw_missing:
+            r.append(f"--engine redb refused: {os.path.relpath(NEW_DB, ROOT)}'s "
+                     "new_db() could not be read, so whether the daemon can select "
+                     "an engine is UNKNOWN. That is a missing subject (rule 47), not "
+                     "evidence the switch is absent; `blockers` treats it as FATAL "
+                     "for the same reason.")
+        elif not (sites and can_switch):
+            why = ("the daemon has NO engine switch — new_db() returns an "
+                   "unconditional BlockchainLMDB"
+                   if sites else
+                   f"no redb consensus engine exists in "
+                   f"{os.path.relpath(CHAIN_STORE, ROOT)} to switch to")
+            r.append(f"--engine redb refused: {why}. The run would produce a "
+                     "relabelled LMDB artifact, which `check` would read as a "
+                     "cross-engine ratio near 1.0 and pass against §1.3's floor. "
+                     "This refusal and `blockers` read the same two facts (redb "
+                     "sites, and whether new_db() can select an engine), so it "
+                     "opens exactly when the arm becomes runnable.")
     if not os.path.isfile(daemon):
         r.append(f"{daemon} is not a file — build the daemon in THIS worktree; a "
                  "binary from another tree measures another tree")

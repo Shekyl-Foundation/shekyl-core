@@ -865,28 +865,40 @@ class BlockerProbe(unittest.TestCase):
         self.addCleanup(lambda: setattr(D, "CHAIN_STORE", old))
         self.assertTrue(any("does not exist" in x for x in D.blocker_failures()))
 
-    def test_engine_site_scan_backs_both_consumers(self):
-        """`blockers` and the `--engine redb` refusal read the SAME scan, so they
-        cannot come to disagree about whether the engine exists."""
+    def test_the_real_tree_has_redb_sites_and_no_switch(self):
+        """The two facts the probe reads, asserted DIRECTLY on the real tree.
+
+        Replaces a 'consumer agreement' test that compared `blocker_failures()`
+        against `measurement_preflight()` -- both of which evaluate the same
+        conjunction, so the comparison was a subset relation that could not
+        disagree. Two callers of one predicate are not a cross-check.
+
+        These are the assertions that were lost when `sites == []` was deleted:
+        the tree now contains redb consensus sites (DRS-E1 increment 1), and
+        `new_db()` still cannot select an engine. Either fact changing is a
+        real event, and this is where it turns red."""
         sites, scanned, missing = D.redb_engine_sites()
         self.assertFalse(missing)
-        self.assertGreater(scanned, 0, "the scan read no files, so both consumers "
-                                       "are answering from an empty corpus")
-        _can_switch, switch_missing = D.daemon_engine_switch()
-        self.assertFalse(switch_missing, "the factory subject is absent")
-        # This used to assert `sites == []` -- a claim about the TREE -- under
-        # a name and docstring about CONSUMER AGREEMENT. DRS-E1's first
-        # increment made the tree claim false while the agreement claim
-        # stayed true, which is how the two came apart. Assert the property
-        # this test is named for; the tree's state is asserted separately.
-        blocker_lifted = bool(D.blocker_failures())
-        refusals = D.measurement_preflight(
-            engine="redb", sync_mode="safe", daemon=__file__,
-            work_dir=".", seed_dir=".", disk_class="ssd_or_nvme")
-        refusal_open = not any("NO engine switch" in x for x in refusals)
-        self.assertEqual(blocker_lifted, refusal_open,
-                         "`blockers` and the --engine redb refusal disagree about "
-                         "whether the redb arm is runnable")
+        self.assertGreater(scanned, 0, "the scan read no files")
+        self.assertTrue(sites, "DRS-E1 increment 1 landed redb::Database in the "
+                               "chain-store crate; the scanner no longer sees it")
+        can_switch, sw_missing = D.daemon_engine_switch()
+        self.assertFalse(sw_missing, "new_db() could not be read -- missing subject")
+        self.assertFalse(can_switch, "new_db() can now select an engine: the redb "
+                                     "arm is runnable and the deferral must lift")
+
+    def test_the_note_branch_prints_when_sites_exist_without_a_switch(self):
+        """The `elif sites:` branch is the probe's whole value once redb code
+        exists -- it is what keeps the transition visible. Deleting it must not
+        stay green."""
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            f = self._with_chain_store(
+                {"src/store.rs": "use redb::{Database, WriteTransaction};\n"},
+                can_switch=False)
+        self.assertEqual(f, [])
+        self.assertIn("UNRUNNABLE", buf.getvalue())
 
     def test_the_real_tree_still_has_no_RUNNABLE_redb_arm(self):
         """The live assertion behind stage one's scoping.

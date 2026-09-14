@@ -12,7 +12,6 @@ use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 
 const PROBE: TableDefinition<&str, u64> = TableDefinition::new("__e1_probe");
-const SLASH_LOG: TableDefinition<&str, u64> = TableDefinition::new("archival_slash_log");
 
 fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
@@ -64,18 +63,31 @@ fn an_empty_stub_is_refused_at_open() {
 }
 
 #[test]
-fn declared_commit_policy_is_armed_on_the_batch() {
-    // A4: explicit, not merely correct. The batch records what was armed
-    // after the engine accepted it, so this is the application, not the
-    // token sitting in a const the test also names.
+fn declared_commit_policy_constants_are_pinned() {
+    // A4: explicit, not by omission. THIS BITES AGAINST: lowering DURABILITY,
+    // turning TWO_PHASE_COMMIT off, or shrinking CACHE_SIZE in the consts.
+    // IT DOES NOT COVER: the consts being APPLIED. redb 4.1.0 has no getter
+    // for durability or two-phase commit (only setters, transactions.rs:1269
+    // and :1326), so nothing can read the applied value back; an earlier
+    // draft copied the consts into the batch and asserted the copy, which
+    // compared each const with itself. Deleting the set_* calls in arm_write
+    // leaves this green. Application is proven only by begin_batch returning
+    // Ok through the `?` on set_durability -- a weaker claim, stated as such.
+    assert!(matches!(DURABILITY, Durability::Immediate));
+    assert_eq!(CACHE_SIZE, 1024 * 1024 * 1024);
+    // TWO_PHASE_COMMIT is pinned at compile time: a constant assertion is the
+    // honest form for a constant, and clippy's assertions_on_constants says so.
+    const _: () = assert!(
+        TWO_PHASE_COMMIT,
+        "two-phase commit must stay on: redb's default is off"
+    );
     let path = tmp("armed");
     let store = ChainStore::create(&path).expect("create");
-    let batch = store.begin_batch().expect("begin");
-    assert!(matches!(batch.durability(), Durability::Immediate));
-    assert!(matches!(DURABILITY, Durability::Immediate));
-    assert_eq!(batch.two_phase_commit(), TWO_PHASE_COMMIT);
-    assert_eq!(CACHE_SIZE, 1024 * 1024 * 1024);
-    batch.abort().expect("abort");
+    store
+        .begin_batch()
+        .expect("arming the declared policy is accepted by the engine")
+        .abort()
+        .expect("abort");
     cleanup(&path);
 }
 
@@ -167,7 +179,7 @@ fn a_stubbed_family_cannot_open_its_table_on_a_write() {
         .expect("create");
     let batch = store.begin_batch().expect("begin");
     assert!(matches!(
-        batch.open_table(SLASH_LOG),
+        batch.open_table(crate::schema::ARCHIVAL_SLASH_LOG),
         Err(StoreError::FamilyStubbed(ArchivalFamily::SlashLog))
     ));
     {

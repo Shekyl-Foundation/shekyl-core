@@ -218,10 +218,12 @@ jobs:
         # Stage one landed the harness and the LMDB arm only. DRS-E1 increment 1
         # constructs `redb::Database` in `shekyl-chain-store` but the daemon
         # still has no engine switch (`new_db()` is unconditional LMDB) and the
-        # crate is not exported through FFI, so the arm is unrunnable. This
-        # asserts that blocker STILL HOLDS — redb sites without a switch do
-        # not lift it. When `new_db()` can select redb this turns red and
-        # names the sites, which is the signal to wire the arm.
+        # store (`ChainStore`) is not exported through FFI — the crate already is, for `digest_v0` — so the arm is unrunnable. This
+        # asserts that redb sites exist AND `new_db()` cannot select them —
+        # that pair is what the probe reads; the FFI clause above is a stated
+        # fact, not a probed leg. Redb sites without a switch do not lift it.
+        # When `new_db()` can select redb this turns red and names the sites,
+        # which is the signal to wire the arm.
         #
         # Scoped to that crate deliberately: redb is already a real engine in
         # `rust/shekyl-curve-tree/src/store/redb_backend.rs`, the wallet

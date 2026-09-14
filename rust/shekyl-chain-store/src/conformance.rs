@@ -55,7 +55,7 @@
 //! **anchored to the start of the state cell**. Matching the word anywhere
 //! in the row over-counts, because promoted rows carry history
 //! parentheticals like *"(was DIVERGENT, re-reviewed post-fix)"*; slicing
-//! the section by heading under-counts, because §5.4.1 is **eight**
+//! the section by heading under-counts, because §5.4.1 is **seven**
 //! sub-tables at different pins rather than one. Both errors were made
 //! while writing this module — in opposite directions — which is why the
 //! gate cross-checks the per-row extraction against the stated totals
@@ -322,7 +322,7 @@ mod tests {
         // An earlier draft of this test asserted the opposite, that no row
         // was DIVERGENT and the arms could only be reached by fabrication.
         // That came from slicing the register by heading and catching one
-        // of its eight sub-tables. The arms are exercisable against real
+        // of its seven sub-tables. The arms are exercisable against real
         // data; this asserts the semantics, and the comparator run over
         // G6/G6b is what will exercise them end to end.
         assert_eq!(

@@ -3,15 +3,17 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Which archival apply paths a store run actually exercised (DRS-E1,
-//! §7.1.1 sufficiency).
+//! Which archival apply paths a store run actually exercised (DRS-E1).
 //!
 //! # Why this is on the critical path and not a test convenience
 //!
 //! §7.1.1: *"a backend can omit all apply/revert hooks and still pass
-//! core digests."* Of the three controls proposed against that, only
-//! sufficiency (family X stubbed ⇒ diff **red**) has **redb's apply** as
-//! its subject. A green is uninterpretable without knowing the apply
+//! core digests."* That sentence is the document's. **The three-control
+//! taxonomy below is this lane's analysis, not §7.1.1's text** — the
+//! document names archival digest coverage or a replacement KAT, and the
+//! word "sufficiency" does not appear in it. Of the three controls this
+//! lane proposed against that hazard, only sufficiency (family X stubbed
+//! ⇒ diff **red**) has **redb's apply** as its subject. A green is uninterpretable without knowing the apply
 //! paths ran, so the policy is recorded on every artifact and a green
 //! published before the stamp exists is the artifact the stamp exists
 //! to prevent.
