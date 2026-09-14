@@ -75,11 +75,15 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 ///   spend-quadruple leg (F-9): the confirmed spending txid recorded so
 ///   `tx_meta.tx_keys` retention stays I-2-live for no-change outbound
 ///   transactions.
-/// - Version `10` (this version) removes
+/// - Version `10` removes
 ///   `TransferDetails::awaiting_confirmation` (PR-SJ-1b,
 ///   `WALLET_SEND_RECORD.md` P3-1a): the F14 lock is a journal-derived
 ///   fact (`SendJournalBlock::spend_locks`), no longer persisted on the
 ///   scan-derived row.
+/// - Version `11` (this version) adds `TransferDetails::unspendable` — the
+///   scan-time received-but-unspendable classification (`PL-D3`,
+///   `FCMP_SPEND_LINKABILITY.md` §6.2): the output's published `0x07`
+///   entry did not open to the wallet's own derivation.
 ///
 /// Any field addition / removal / renaming inside the block, or any
 /// transitive change in a nested type's serialized shape, bumps this;
@@ -87,7 +91,7 @@ use crate::{error::WalletLedgerError, transfer::TransferDetails};
 /// the `.cursor/rules/15-deletion-and-debt.mdc` "no in-Shekyl
 /// migration code" rule (Shekyl is pre-genesis; `rm -rf ~/.shekyl` is
 /// the migration path).
-pub const LEDGER_BLOCK_VERSION: u32 = 10;
+pub const LEDGER_BLOCK_VERSION: u32 = 11;
 
 /// Maximum number of `(height, hash)` pairs the scanner should keep in
 /// [`ReorgBlocks`]. The value is informational — the persistence layer
@@ -452,6 +456,7 @@ mod tests {
             )),
             eligible_height: 100 + SPENDABLE_AGE,
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),
         }

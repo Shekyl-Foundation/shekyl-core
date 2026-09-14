@@ -115,11 +115,16 @@ pub struct WorkEpochClaim {
 /// Mirrors `shekyl_fcmp::proof::verify_membership_only`'s per-proof inputs minus
 /// the verify-time context (`tree_root` comes from the tx's reference block;
 /// `signable_tx_hash` is computed) — §8.0.2 lean (1). The full canonical hybrid
-/// `backing_pubkey` rides the wire for the Auth-B leaf gate: verify recomputes
-/// `hash_pqc_public_key(backing_pubkey)` and demands equality with
-/// `pqc_pk_hash`, then verifies `auth_backing` under it
-/// (`emission_verify::emission_vin_verify_auth`, step 8 of the coarse
-/// `shekyl_emission_vin_verify` FFI call).
+/// `backing_pubkey` rides the wire for the Auth-B binding: verify derives the
+/// backing leaf's PQC key point `K = H_ℓ(backing_pubkey)·G_k` and the
+/// membership-only proof opens the proven leaf's commitment to it in-circuit
+/// (`PL-D3`, `FCMP_SPEND_LINKABILITY.md` §6.2) — so the key `auth_backing` is
+/// verified under (`emission_verify::emission_vin_verify_auth`, step 8 of the
+/// coarse `shekyl_emission_vin_verify` FFI call) is the proven leaf's key, not
+/// merely *a* key. The former `pqc_pk_hash` field (the leaf hash carried on
+/// the wire and checked by a hash gate) was removed with `PL-D3`: the leaf
+/// value is no longer a public function of the key, and the opening proof is
+/// the binding (round doc §12, ruling 9).
 ///
 /// **Reveal scope (§8.0.3 / §7.3):** the pubkey is per-output **one-time**, so
 /// this reveal deterministically identifies exactly one backing output and
@@ -150,10 +155,10 @@ pub struct MembershipOnlyBacking {
     pub proof: Vec<u8>,
     /// The rerandomized commitment `C~` (single input).
     pub pseudo_out: [u8; 32],
-    /// The in-circuit committed leaf scalar `H(pqc_pk)` for the backing output.
-    pub pqc_pk_hash: [u8; 32],
     /// Canonical hybrid (Ed25519 ‖ ML-DSA-65) public key of the backing output —
-    /// exactly [`SINGLE_KEY_CANONICAL_LEN`] bytes; hashes to `pqc_pk_hash`.
+    /// exactly [`SINGLE_KEY_CANONICAL_LEN`] bytes. The verifier derives the
+    /// leaf's key point from it; the proof opens the leaf commitment to that
+    /// point (`PL-D3`).
     pub backing_pubkey: Vec<u8>,
     /// Layer count the proof was built at; verify checks it against the
     /// reference block's tree (`VerifyError::InvalidTreeRoot` on mismatch).
@@ -540,7 +545,6 @@ impl ArchivalRewardEmissionVin {
         write_varint(&self.backing.proof.len(), w)?;
         w.write_all(&self.backing.proof)?;
         w.write_all(&self.backing.pseudo_out)?;
-        w.write_all(&self.backing.pqc_pk_hash)?;
         write_varint(&self.backing.backing_pubkey.len(), w)?;
         w.write_all(&self.backing.backing_pubkey)?;
         w.write_all(&[self.backing.tree_depth])?;
@@ -614,7 +618,6 @@ impl ArchivalRewardEmissionVin {
         let mut proof = vec![0u8; proof_len];
         r.read_exact(&mut proof)?;
         let pseudo_out = read_bytes(r)?;
-        let pqc_pk_hash = read_bytes(r)?;
         let backing_pubkey = read_canonical_pubkey(r, "backing_pubkey")?;
         let tree_depth = read_byte(r)?;
         let mut reward_amount_plain = Vec::with_capacity(epoch_count);
@@ -637,7 +640,6 @@ impl ArchivalRewardEmissionVin {
             backing: MembershipOnlyBacking {
                 proof,
                 pseudo_out,
-                pqc_pk_hash,
                 backing_pubkey,
                 tree_depth,
             },
@@ -822,7 +824,6 @@ mod tests {
             backing: MembershipOnlyBacking {
                 proof: vec![0xEE; 4096],
                 pseudo_out: [0x22; 32],
-                pqc_pk_hash: [0x33; 32],
                 backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
                 tree_depth: 3,
             },

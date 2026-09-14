@@ -50,7 +50,7 @@ pub(crate) struct ConstructedVouts {
     pub(crate) output_keys: Vec<[u8; 32]>,
     pub(crate) view_tags: Vec<Option<u8>>,
     pub(crate) kem_blobs: Vec<Vec<u8>>,
-    pub(crate) leaf_hash_blob: Vec<u8>,
+    pub(crate) leaf_entry_blob: Vec<u8>,
 }
 
 /// Construct `amounts` as vouts to `P`'s base address. `capture` sees each
@@ -69,7 +69,7 @@ pub(crate) fn construct_vouts_to_base(
         output_keys: Vec::with_capacity(amounts.len()),
         view_tags: Vec::with_capacity(amounts.len()),
         kem_blobs: Vec::with_capacity(amounts.len()),
-        leaf_hash_blob: Vec::with_capacity(32 * amounts.len()),
+        leaf_entry_blob: Vec::with_capacity(32 * amounts.len()),
     };
     for (idx, &amount) in amounts.iter().enumerate() {
         let constructed = construct_output(
@@ -86,7 +86,9 @@ pub(crate) fn construct_vouts_to_base(
         kem_blob.extend_from_slice(&constructed.kem_ciphertext_x25519);
         kem_blob.extend_from_slice(&constructed.kem_ciphertext_ml_kem);
         vouts.kem_blobs.push(kem_blob);
-        vouts.leaf_hash_blob.extend_from_slice(&constructed.h_pqc);
+        vouts
+            .leaf_entry_blob
+            .extend_from_slice(&constructed.pqc_leaf.entry_bytes());
         vouts.output_keys.push(constructed.output_key);
         vouts.view_tags.push(Some(constructed.view_tag_prefilter));
         vouts.output_infos.push(shekyl_tx_builder::OutputInfo {
@@ -104,18 +106,16 @@ pub(crate) fn construct_vouts_to_base(
 /// [`prepare_funding_inputs`] (bond + emission fee spends) and the emission
 /// handler's **backing** leg, which is the same derivation minus the key
 /// image (membership-only). One definition: a correction to the bundle
-/// derivation, the leaf-chunk `h_pqc` lookup, or the `combined_ss` handling
-/// lands once, or the backing proof's secrets silently diverge from the fee
-/// path's and every claim fails its own leaf gate.
+/// derivation or the `combined_ss` handling lands once, or the backing
+/// proof's secrets silently diverge from the fee path's. The record's own
+/// PQC leaf opening (`PL-D3`) is re-derived by the signer from these secrets
+/// and checked against its leaf chunk there (tx-builder), not here.
 pub(crate) struct DerivedSpendParts {
     pub(crate) bundle: SourceSecretsBundle,
     /// The first 64 bytes of the bundle's combined secret — the
     /// per-output-PQC derivation operand (the backing leg retains it for
     /// Auth-B signing).
     pub(crate) combined64: Zeroizing<[u8; 64]>,
-    /// The record's leaf hash, read back from its own leaf chunk (`h_pqc`
-    /// is not persisted on the record — public identity only).
-    pub(crate) h_pqc: [u8; 32],
     /// The per-output PQC public key derived from `combined64`.
     pub(crate) pqc_pubkey: Vec<u8>,
 }
@@ -135,16 +135,15 @@ pub(crate) fn derive_spend_parts(
     let bundle = derive_p_source_secrets_bundle(keys, &ciphertext, rec.index_in_transaction)
         .map_err(|e| BondAssemblyError::build("spend-bundle derivation", e))?;
 
-    let h_pqc = leaf_chunk
+    if !leaf_chunk
         .iter()
-        .find(|leaf| leaf.output_key == rec.output_key)
-        .map(|leaf| leaf.h_pqc)
-        .ok_or_else(|| {
-            BondAssemblyError::build(
-                "leaf-chunk lookup",
-                "funding output missing from its own leaf chunk",
-            )
-        })?;
+        .any(|leaf| leaf.output_key == rec.output_key)
+    {
+        return Err(BondAssemblyError::build(
+            "leaf-chunk lookup",
+            "funding output missing from its own leaf chunk",
+        ));
+    }
 
     let combined64: Zeroizing<[u8; 64]> =
         Zeroizing::new(bundle.combined_ss[..64].try_into().map_err(|_| {
@@ -156,7 +155,6 @@ pub(crate) fn derive_spend_parts(
     Ok(DerivedSpendParts {
         bundle,
         combined64,
-        h_pqc,
         pqc_pubkey,
     })
 }
@@ -178,7 +176,6 @@ impl DerivedSpendParts {
             spend_key_x: *self.bundle.spend_key_x,
             spend_key_y: *self.bundle.spend_key_y,
             commitment_mask: *self.bundle.commitment_mask,
-            h_pqc: self.h_pqc,
             combined_ss: self.bundle.combined_ss.to_vec(),
             output_index: rec.index_in_transaction,
             leaf_chunk,

@@ -555,7 +555,7 @@ namespace cryptonote
     if (!pick<tx_extra_nonce>(nar, tx_extra_fields, TX_EXTRA_NONCE)) return false;
     if (!pick<tx_extra_pqc_ownership>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_OWNERSHIP)) return false;
     if (!pick<tx_extra_pqc_kem_ciphertext>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT)) return false;
-    if (!pick<tx_extra_pqc_leaf_hashes>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_LEAF_HASHES)) return false;
+    if (!pick<tx_extra_pqc_leaf_entries>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_LEAF_ENTRIES)) return false;
     if (!pick<tx_extra_multisig_migration>(nar, tx_extra_fields, TX_EXTRA_TAG_MULTISIG_MIGRATION)) return false;
     if (!pick<tx_extra_pqc_view_tag_hints>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS)) return false;
     if (!pick<tx_extra_pqc_spend_auth_pubkeys>(nar, tx_extra_fields, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS)) return false;
@@ -984,13 +984,21 @@ namespace cryptonote
       return false;
     }
     std::vector<size_t> kem_lens, leaf_lens;
+    // The 0x07 payload rides along for the content rule (PL-D3: every entry's
+    // commitment point must be admissible); the rule reads it only once the
+    // shape rule has admitted exactly one field.
+    const std::string* leaf_blob = nullptr;
     for (const tx_extra_field& f : fields)
     {
       if (const auto* kem = std::get_if<tx_extra_pqc_kem_ciphertext>(&f))
         kem_lens.push_back(kem->blob.size());
-      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_hashes>(&f))
+      else if (const auto* leaf = std::get_if<tx_extra_pqc_leaf_entries>(&f))
+      {
         leaf_lens.push_back(leaf->blob.size());
+        leaf_blob = &leaf->blob;
+      }
     }
+    const bool one_leaf = leaf_lens.size() == 1 && leaf_blob != nullptr;
     // The rule's verdict AND its sentence come from shekyl-wire: the daemon
     // logs what the rule says rather than re-deriving a second wording from
     // the code, which would be two formatters to keep in step forever.
@@ -998,6 +1006,8 @@ namespace cryptonote
     const int32_t rc = shekyl_tx_extra_pqc_field_shape(tx.vout.size(),
       kem_lens.empty() ? nullptr : kem_lens.data(), kem_lens.size(),
       leaf_lens.empty() ? nullptr : leaf_lens.data(), leaf_lens.size(),
+      one_leaf ? reinterpret_cast<const uint8_t*>(leaf_blob->data()) : nullptr,
+      one_leaf ? leaf_blob->size() : 0,
       msg, sizeof(msg));
     if (rc == SHEKYL_TX_EXTRA_PQC_SHAPE_OK)
       return true;

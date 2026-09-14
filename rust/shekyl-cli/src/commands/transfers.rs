@@ -297,6 +297,32 @@ fn print_transfer_row(t: &Value) {
     let height = format_height(t);
     let tx_hash = s("tx_hash");
     println!("{direction:<10} {state:<10} {amount:>18} {fee:>14} {height:>10}  {tx_hash}");
+    // An UNSPENDABLE row (PL-D3 §6.2) carries why; print it beside the row
+    // so the user sees the failure where the money is listed (rule 82).
+    if let Some(reason) = t.get("unspendable_reason").and_then(|v| v.as_str()) {
+        println!(
+            "{:<10} received but unspendable: {}",
+            "",
+            unspendable_reason_text(reason)
+        );
+    }
+}
+
+/// Plain-language rendering of `unspendable_reason` (`PL-D3` §6.2). The
+/// user is told what it means for them — the sender's transaction cannot
+/// be spent from this wallet — not the protocol mechanism (rule 81).
+fn unspendable_reason_text(reason: &str) -> String {
+    match reason {
+        "PQC_LEAF_MISMATCH" => "the sender's transaction published a leaf entry this wallet \
+                                cannot open; this output can never be spent from here — \
+                                contact the sender"
+            .to_owned(),
+        "PQC_LEAF_ENTRY_ABSENT" => "the sender's transaction carries no leaf entry for this \
+                                    output; this output can never be spent from here — \
+                                    contact the sender"
+            .to_owned(),
+        other => format!("unspendable ({other})"),
+    }
 }
 
 /// Inclusion height, or `—` when the transaction is not on chain.
@@ -330,6 +356,9 @@ pub fn cmd_show_transfer(rpc: &RpcSession, id: &str) {
             println!("  Height:    {}", format_height(t));
             if let Some(spent) = t.get("spent_height").and_then(serde_json::Value::as_i64) {
                 println!("  Spent at:  {spent}");
+            }
+            if let Some(reason) = t.get("unspendable_reason").and_then(|v| v.as_str()) {
+                println!("  Unspendable: {}", unspendable_reason_text(reason));
             }
             if let Some(attr) = t.get("attribution") {
                 let kind = attr.get("kind").and_then(|v| v.as_str()).unwrap_or("?");

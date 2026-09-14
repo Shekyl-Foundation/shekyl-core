@@ -15,7 +15,7 @@
 
 #![allow(dead_code)]
 
-use ciphersuite::group::ff::{Field, PrimeField};
+use ciphersuite::group::ff::PrimeField;
 use ciphersuite::group::{Group, GroupEncoding};
 use ciphersuite::Ciphersuite;
 use dalek_ff_group::{EdwardsPoint, Scalar};
@@ -23,8 +23,8 @@ use ec_divisors::DivisorCurve;
 use helioselene::Selene;
 use multiexp::multiexp_vartime;
 use rand_core::{CryptoRng, RngCore};
+use shekyl_curve_generators::{PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_J};
 use shekyl_curve_generators::{SELENE_HASH_INIT, T};
-use shekyl_fcmp::leaf::PqcLeafScalar;
 use shekyl_fcmp::proof::{prove_with_rng, BranchLayer, ProveInput};
 use shekyl_fcmp::tree::{
     hash_grow_helios, hash_grow_selene, helios_hash_init, helios_point_to_selene_scalar,
@@ -140,7 +140,12 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     let mut os = Vec::with_capacity(n_in);
     let mut is = Vec::with_capacity(n_in);
     let mut cs = Vec::with_capacity(n_in);
-    let mut h_pqcs = Vec::with_capacity(n_in);
+    // PL-D3 leaf commitments: k, r, CM = k*G_k + r*J; the leaf's 4th scalar is
+    // CM.x and the verifier's per-input value is k.
+    let mut ks: Vec<Scalar> = Vec::with_capacity(n_in);
+    let mut rs: Vec<Scalar> = Vec::with_capacity(n_in);
+    let mut cms: Vec<EdwardsPoint> = Vec::with_capacity(n_in);
+    let mut cm_xs = Vec::with_capacity(n_in);
 
     for _ in 0..n_in {
         let x = Scalar::random(&mut *rng);
@@ -148,13 +153,22 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
         let o = (EdwardsPoint::generator() * x) + (EdwardsPoint(*T) * y);
         let i = EdwardsPoint::random(&mut *rng);
         let c = EdwardsPoint::random(&mut *rng);
-        let h = <Selene as Ciphersuite>::F::random(&mut *rng);
+        let k = Scalar::random(&mut *rng);
+        let r = Scalar::random(&mut *rng);
+        let cm = (EdwardsPoint(*PQC_LEAF_COMMITMENT_G_K) * k)
+            + (EdwardsPoint(*PQC_LEAF_COMMITMENT_J) * r);
+        let h = <EdwardsPoint as DivisorCurve>::to_xy(cm)
+            .expect("CM is not the identity")
+            .0;
+        ks.push(k);
+        rs.push(r);
+        cms.push(cm);
         xs.push(x);
         ys.push(y);
         os.push(o);
         is.push(i);
         cs.push(c);
-        h_pqcs.push(h);
+        cm_xs.push(h);
     }
 
     // Per-layout leaf construction.
@@ -180,7 +194,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
                 <EdwardsPoint as DivisorCurve>::to_xy(cs[idx]).unwrap().0,
                 generators[4 * slot + 2],
             ));
-            terms.push((h_pqcs[idx], generators[4 * slot + 3]));
+            terms.push((cm_xs[idx], generators[4 * slot + 3]));
         }
         *SELENE_HASH_INIT + multiexp_vartime(&terms)
     };
@@ -271,14 +285,15 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
         (point, c1, c2, owner)
     };
 
-    let all_h_pqc: Vec<[u8; 32]> = h_pqcs.iter().map(PrimeField::to_repr).collect();
+    let all_cm_x: Vec<[u8; 32]> = cm_xs.iter().map(PrimeField::to_repr).collect();
 
     let inputs: Vec<ProveInput> = (0..n_in)
         .map(|i| ProveInput {
             output_key: os[i].to_bytes(),
             key_image_gen: is[i].to_bytes(),
             commitment: cs[i].to_bytes(),
-            h_pqc: PqcLeafScalar(all_h_pqc[i]),
+            pqc_leaf_commitment: cms[i].to_bytes(),
+            pqc_leaf_blind: rs[i].to_repr(),
             spend_key_x: xs[i].to_repr(),
             spend_key_y: ys[i].to_repr(),
             commitment_mask: Scalar::random(&mut *rng).to_repr(),
@@ -287,7 +302,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
                 .iter()
                 .map(|&j| (os[j].to_bytes(), is[j].to_bytes(), cs[j].to_bytes()))
                 .collect(),
-            leaf_chunk_h_pqc: per_input_chunk[i].iter().map(|&j| all_h_pqc[j]).collect(),
+            leaf_chunk_cm_x: per_input_chunk[i].iter().map(|&j| all_cm_x[j]).collect(),
             c1_branch_layers: c1_layers.clone(),
             c2_branch_layers: c2_layers.clone(),
         })
@@ -307,8 +322,8 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
     }
 
     let mut pqc_hashes_flat = Vec::with_capacity(32 * n_in);
-    for h in &all_h_pqc {
-        pqc_hashes_flat.extend_from_slice(h);
+    for k in &ks {
+        pqc_hashes_flat.extend_from_slice(&k.to_repr());
     }
 
     // Output commitments: valid prime-order points, which is exactly what

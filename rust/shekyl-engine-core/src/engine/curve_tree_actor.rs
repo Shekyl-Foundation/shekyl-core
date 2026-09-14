@@ -347,7 +347,7 @@ impl Message<IngestBlock> for CurveTreeActor {
             .iter()
             .map(|tx| TxLeafInputs {
                 is_miner: tx.is_miner,
-                leaf_hash_blob: tx.leaf_hash_blob.as_deref(),
+                leaf_entry_blob: tx.leaf_entry_blob.as_deref(),
                 outputs: tx.outputs.as_slice(),
             })
             .collect();

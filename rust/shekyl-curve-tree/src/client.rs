@@ -56,8 +56,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::recon::{
-    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
-    root_from_scalars, TxOutputs,
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
+    TxOutputs,
 };
 use crate::store::{LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError};
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
@@ -78,16 +78,17 @@ pub struct RawOutput {
     pub target: TargetKind,
 }
 
-/// One transaction's leaf inputs, in `vout` order. The `0x07` leaf-hash
-/// blob is the raw payload from `shekyl_scanner::extra::Extra::pqc_leaf_hashes()`
-/// (`None` when the tag is absent); the client validates and slices it.
+/// One transaction's leaf inputs, in `vout` order. The `0x07` blob (one
+/// 64-byte `CM ‖ record` entry per output, `PL-D3`) is the raw payload from
+/// `shekyl_scanner::extra::Extra::pqc_leaf_entries()` (`None` when the tag is
+/// absent); the client slices it, and refuses the block if it cannot.
 #[derive(Clone, Copy, Debug)]
 pub struct TxLeafInputs<'a> {
     /// Whether this is the block's coinbase (`is_miner`).
     pub is_miner: bool,
     /// Parsed `tx_extra 0x07` blob, or `None` if the tag is absent.
-    pub leaf_hash_blob: Option<&'a [u8]>,
-    /// Per-output identities in `vout` order, `h_pqc` not yet resolved.
+    pub leaf_entry_blob: Option<&'a [u8]>,
+    /// Per-output identities in `vout` order, leaf commitment not yet resolved.
     pub outputs: &'a [RawOutput],
 }
 
@@ -221,6 +222,34 @@ pub enum ClientError {
     /// store on disk is authoritative at the fork height; recover by
     /// dropping this object and re-opening with [`CurveTreeClient::open`].
     Poisoned,
+    /// A transaction's `tx_extra 0x07` payload could not be sliced into one
+    /// leaf commitment per output. On an admitted chain this cannot happen
+    /// (the shape and content rules refuse such a transaction at relay and
+    /// connect), so it means the block feed handed the replica something the
+    /// daemon never stored — refused, never zero-filled (`PL-D3`, census
+    /// `d-3`).
+    LeafEntries {
+        /// Block height being ingested.
+        height: BlockHeight,
+        /// Transaction index within the block (coinbase is `0`).
+        tx_index: usize,
+        /// What was wrong with the payload.
+        source: crate::recon::LeafEntryError,
+    },
+    /// An output's published point (`O`, `C`, or the `0x07` leaf commitment
+    /// `CM`) failed Ed25519 decompression while building this block's
+    /// leaves. The point-content twin of [`ClientError::LeafEntries`]: on an
+    /// admitted chain the content rule refuses such a transaction, and the
+    /// daemon **aborts** on the same input at store time (`DB_ERROR`,
+    /// `src/blockchain_db/blockchain_db.cpp:617`) — both surfaces agree
+    /// fail-closed, so the replica refuses the block rather than omitting
+    /// the leaf and building a silently divergent tree.
+    LeafPoint {
+        /// Block height being ingested.
+        height: BlockHeight,
+        /// The offending output (by gindex) and the failing point.
+        source: crate::recon::LeafPointError,
+    },
 }
 
 impl ClientError {
@@ -714,7 +743,7 @@ impl CurveTreeClient {
         Ok(())
     }
 
-    /// Ingest one block, resolving `h_pqc` per output, threading the global
+    /// Ingest one block, resolving each output's leaf commitment, threading the global
     /// output index, and accumulating drained-leaf entries. Blocks must be
     /// ingested in strictly consecutive height order from genesis (`0`, `1`,
     /// `2`, …); gaps, duplicates, and rewinds return
@@ -743,25 +772,31 @@ impl CurveTreeClient {
             });
         }
 
-        // Resolve h_pqc per tx, then collect leaves. `identities` is kept
-        // alive across the `collect_block_leaves` call that borrows it.
-        let identities: Vec<Vec<OutputIdentity>> = block
-            .txs
-            .iter()
-            .map(|tx| {
-                let leaf_hashes = extract_leaf_hashes(tx.leaf_hash_blob);
+        // Resolve each output's published leaf commitment from the tx's
+        // `0x07` payload, then collect leaves. `identities` is kept alive
+        // across the `collect_block_leaves` call that borrows it. A payload
+        // an admitted chain cannot carry is an error, never a placeholder.
+        let mut identities: Vec<Vec<OutputIdentity>> = Vec::with_capacity(block.txs.len());
+        for (tx_index, tx) in block.txs.iter().enumerate() {
+            let commitments = extract_leaf_commitments(tx.leaf_entry_blob, tx.outputs.len())
+                .map_err(|source| ClientError::LeafEntries {
+                    height: block.height,
+                    tx_index,
+                    source,
+                })?;
+            identities.push(
                 tx.outputs
                     .iter()
-                    .enumerate()
-                    .map(|(i, raw)| OutputIdentity {
+                    .zip(commitments)
+                    .map(|(raw, cm)| OutputIdentity {
                         output_key: raw.output_key,
                         commitment: raw.commitment,
-                        h_pqc: per_output_h_pqc(&leaf_hashes, i),
+                        cm,
                         target: raw.target,
                     })
-                    .collect()
-            })
-            .collect();
+                    .collect(),
+            );
+        }
 
         let txs: Vec<TxOutputs<'_>> = block
             .txs
@@ -774,10 +809,17 @@ impl CurveTreeClient {
             .collect();
 
         // Collect this block's leaves into a local vec — `self.entries` is
-        // untouched until the store transaction commits.
+        // untouched until the store transaction commits. A bad published
+        // point refuses the whole block (the local vec is discarded), so no
+        // partial leaf set can reach the store or memory.
         let mut new_leaves: Vec<LeafEntry> = Vec::new();
         let next_gindex =
-            collect_block_leaves(block.height.0, &txs, self.next_gindex, &mut new_leaves);
+            collect_block_leaves(block.height.0, &txs, self.next_gindex, &mut new_leaves).map_err(
+                |source| ClientError::LeafPoint {
+                    height: block.height,
+                    source,
+                },
+            )?;
 
         // The bucket newly final at this block's cutoff, read from the
         // *existing* maturity index (a leaf created in this block can never
@@ -1098,12 +1140,32 @@ mod tests {
         }
     }
 
-    /// One coinbase tx carrying a per-output `0x07` hash blob of `n` × 32
-    /// bytes (one well-formed hash per output, as a V3 chain always emits).
+    /// One conforming `0x07` entry: `CM` is a valid, torsion-free point
+    /// derived deterministically from `seed` (`Hp` over a seed-filled key,
+    /// via the crate's existing point primitive), followed by an opaque
+    /// record. Distinct seeds give byte-distinct commitment points and so
+    /// byte-distinct leaves — which is what lets an ordering test tell two
+    /// leaves apart.
+    fn leaf_entry(seed: u8) -> [u8; 64] {
+        let mut entry = [0x07u8; 64];
+        entry[..32].copy_from_slice(&shekyl_fcmp::tree::key_image_generator(&[seed; 32]));
+        entry
+    }
+
+    /// One conforming `0x07` entry per output, as a V3 chain always emits
+    /// (`PL-D3`); entry `i` is seeded `i + 1`, so entries within one blob
+    /// are byte-distinct.
+    fn leaf_blob(n: usize) -> Vec<u8> {
+        (0..n)
+            .flat_map(|i| leaf_entry(u8::try_from(i + 1).expect("test blob fits u8")))
+            .collect()
+    }
+
+    /// One coinbase tx carrying a per-output `0x07` blob of `n` × 64 bytes.
     fn coinbase_block<'a>(outputs: &'a [RawOutput], blob: &'a [u8]) -> Vec<TxLeafInputs<'a>> {
         vec![TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(blob),
+            leaf_entry_blob: Some(blob),
             outputs,
         }]
     }
@@ -1112,7 +1174,7 @@ mod tests {
     /// production chain shape (every real block carries a coinbase).
     fn ingest_coinbase_blocks(client: &mut CurveTreeClient, from: u64, to: u64) {
         let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
+        let blob = leaf_blob(1);
         for height in from..=to {
             let txs = coinbase_block(&outs, &blob);
             client
@@ -1125,7 +1187,7 @@ mod tests {
     }
 
     fn ingest_outputs_at(client: &mut CurveTreeClient, height: u64, outputs: &[RawOutput]) {
-        let blob = vec![0x07u8; outputs.len() * 32];
+        let blob = leaf_blob(outputs.len());
         let txs = coinbase_block(outputs, &blob);
         client
             .ingest_block(BlockLeaves {
@@ -1155,7 +1217,7 @@ mod tests {
     #[test]
     fn newly_drained_from_index_matches_oracle() {
         let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
+        let blob = leaf_blob(1);
         let txs0 = coinbase_block(&outs, &blob);
         let txs1 = coinbase_block(&outs, &blob);
         let client = CurveTreeClient::from_blocks(&[
@@ -1181,7 +1243,7 @@ mod tests {
     #[test]
     fn ingest_block_rejects_non_consecutive_heights() {
         let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
+        let blob = leaf_blob(1);
         let txs = coinbase_block(&outs, &blob);
         let block0 = BlockLeaves {
             height: BlockHeight(0),
@@ -1263,7 +1325,7 @@ mod tests {
     #[test]
     fn duplicate_drained_through_updates_cache_in_place() {
         let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
+        let blob = leaf_blob(1);
         let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
         client
@@ -1334,7 +1396,7 @@ mod tests {
             commitment: Some(ED25519_BASEPOINT),
             target: TargetKind::TaggedKey,
         };
-        let blob = [0x07u8; 32];
+        let blob = leaf_blob(1);
         let cb_outs = [cb];
         let reg_outs = [regular];
         let mut client = CurveTreeClient::new();
@@ -1342,12 +1404,12 @@ mod tests {
             let txs = [
                 TxLeafInputs {
                     is_miner: true,
-                    leaf_hash_blob: Some(&blob),
+                    leaf_entry_blob: Some(&blob),
                     outputs: &cb_outs,
                 },
                 TxLeafInputs {
                     is_miner: false,
-                    leaf_hash_blob: Some(&blob),
+                    leaf_entry_blob: Some(&blob),
                     outputs: &reg_outs,
                 },
             ];
@@ -1386,19 +1448,33 @@ mod tests {
             commitment: Some(ED25519_BASEPOINT),
             target: TargetKind::TaggedKey,
         };
-        let blob0 = [0x01u8; 32];
-        let blob1_cb = [0x02u8; 32];
-        let blob1_reg = [0x03u8; 32];
+        // Three byte-distinct entries (distinct commitment points), so the
+        // three leaves are byte-distinct and the root comparison below can
+        // actually fail if the store mirror routes two of them in the wrong
+        // order — identical leaves would make every ordering produce the
+        // same root.
+        let blob0 = leaf_entry(1).to_vec();
+        let blob1_cb = leaf_entry(2).to_vec();
+        let blob1_reg = leaf_entry(3).to_vec();
+        {
+            // The test observes its own setup: the discrimination claim
+            // rests on pairwise-distinct commitment points.
+            let points = [&blob0[..32], &blob1_cb[..32], &blob1_reg[..32]];
+            assert!(
+                points[0] != points[1] && points[0] != points[2] && points[1] != points[2],
+                "setup: the three 0x07 commitment points must be pairwise distinct"
+            );
+        }
         let txs0 = coinbase_block(&outs_cb, &blob0);
         let txs1 = [
             TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blob1_cb),
+                leaf_entry_blob: Some(&blob1_cb),
                 outputs: &outs_cb,
             },
             TxLeafInputs {
                 is_miner: false,
-                leaf_hash_blob: Some(&blob1_reg),
+                leaf_entry_blob: Some(&blob1_reg),
                 outputs: &[regular],
             },
         ];
@@ -1464,11 +1540,11 @@ mod tests {
     #[test]
     fn gindex_threads_across_blocks() {
         // Two single-coinbase blocks: gindex must advance 0 then 1.
-        // The blob lands verbatim as the leaf's 4th scalar and the store
-        // validates pending rows at write time, so it must be canonical
-        // (top bit clear keeps it below the Selene modulus).
+        // The entry's commitment point yields the leaf's 4th scalar (its
+        // x-coordinate, always a canonical Selene scalar) and the store
+        // validates pending rows at write time.
         let outs = [coinbase_raw()];
-        let blob = [0x2Au8; 32];
+        let blob = leaf_blob(1);
         let txs0 = coinbase_block(&outs, &blob);
         let txs1 = coinbase_block(&outs, &blob);
         let blocks = [
@@ -1490,9 +1566,12 @@ mod tests {
 
     #[test]
     fn ingest_resolves_h_pqc_from_blob() {
-        // The blob's per-output hash must land in the leaf's 4th scalar.
+        // The entry's commitment point must land in the leaf's 4th scalar as
+        // its Wei25519 x-coordinate (`construct_leaf` extracts it).
         let outs = [coinbase_raw()];
-        let blob = [0x42u8; 32];
+        let blob = leaf_blob(1);
+        let mut cm = [0u8; 32];
+        cm.copy_from_slice(&blob[..32]);
         let txs = coinbase_block(&outs, &blob);
         let mut client = CurveTreeClient::new();
         client
@@ -1502,7 +1581,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(client.entries.len(), 1);
-        assert_eq!(&client.entries[0].leaf[96..128], &[0x42u8; 32]);
+        let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&cm)
+            .expect("leaf_blob commitment point decompresses");
+        assert_eq!(&client.entries[0].leaf[96..128], &cm_x);
+        assert_eq!(client.entries[0].identity.cm, cm);
     }
 
     #[test]
@@ -1511,7 +1593,7 @@ mod tests {
         let mut other = coinbase_raw();
         other.target = TargetKind::Other;
         let outs = [other, coinbase_raw()];
-        let blob = [0x01u8; 64]; // one hash per vout
+        let blob = leaf_blob(2); // one entry per vout
         let txs = coinbase_block(&outs, &blob);
         let client = CurveTreeClient::from_blocks(&[BlockLeaves {
             height: BlockHeight(0),
@@ -1715,10 +1797,10 @@ mod tests {
         // CT-3c's fresh-build oracle is meaningful only because
         // from_blocks replays the same per-block delta path.
         let out0 = [coinbase_raw()];
-        let blob0 = [0x07u8; 32];
+        let blob0 = leaf_blob(1);
         let txs0 = coinbase_block(&out0, &blob0);
         let out1 = [coinbase_raw(), coinbase_raw()];
-        let blob1 = [0x07u8; 64];
+        let blob1 = leaf_blob(2);
         let txs1 = coinbase_block(&out1, &blob1);
         let blocks = [
             BlockLeaves {
@@ -1862,7 +1944,7 @@ mod tests {
             identity: OutputIdentity {
                 output_key: [1u8; 32],
                 commitment: Some([2u8; 32]),
-                h_pqc: [3u8; 32],
+                cm: [3u8; 32],
                 target: TargetKind::TaggedKey,
             },
         }
@@ -2023,7 +2105,7 @@ mod tests {
         // structurally rejected as a non-consecutive ingest.
         assert_eq!(resumed.ingested_tip_height, Some(BlockHeight(70)));
         let outs = [coinbase_raw()];
-        let blob = [0x07u8; 32];
+        let blob = leaf_blob(1);
         let genesis_txs = coinbase_block(&outs, &blob);
         assert!(matches!(
             resumed.ingest_block(BlockLeaves {

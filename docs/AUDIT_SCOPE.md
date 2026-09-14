@@ -16,8 +16,10 @@ Commission a scoped third-party security review of Shekyl's modification to
 the FCMP++ curve tree leaf format, extending from 3 scalars (upstream Monero)
 to 4 scalars (Shekyl, with PQC binding).
 
-The 4th scalar (`H(pqc_pk)`) cryptographically binds a post-quantum public
-key (ML-DSA-65) to each curve tree leaf. This is the core modification that
+The 4th scalar (`CM.x`, the x-coordinate of a Pedersen commitment to the
+hash of the per-output hybrid PQC public key, opened in-circuit — `PL-D3`)
+cryptographically binds a post-quantum public key (ML-DSA-65) to each curve
+tree leaf. This is the core modification that
 enables Shekyl's dual-layer security model: classical FCMP++ membership proof
 + quantum-resistant spend authorization. The audit must verify that this
 extension preserves the zero-knowledge proof system's security properties.
@@ -29,7 +31,8 @@ extension preserves the zero-knowledge proof system's security properties.
 ### In-Scope
 
 1. **4-scalar leaf circuit modification**
-   - Verify adding `H(pqc_pk)` as 4th Pedersen commitment term preserves:
+   - Verify adding `CM.x` as 4th Pedersen commitment term, and the in-circuit
+     opening leg `K + r·J = CM` (`first_layer`), preserves:
      - **Soundness** — cannot prove membership for non-existent leaves
      - **Zero-knowledge** — proof does not leak which leaf was used
      - **Completeness** — honest prover can always produce a valid proof
@@ -43,16 +46,23 @@ extension preserves the zero-knowledge proof system's security properties.
    - Key image and pseudo-output public input handling unchanged (verify)
 
 3. **PQC commitment binding**
-   - Circuit correctly constrains 4th leaf scalar = `H(pqc_pk)`
-   - `H(pqc_pk)` computation: Blake2b-512 with domain separator
-     `shekyl-pqc-leaf`, implemented once in
-     `rust/shekyl-crypto-pq/src/derivation.rs` (`hash_pqc_public_key` /
-     `DOMAIN_PQC_LEAF` — the SA-3a single source). Forwarding-only entry
-     points to verify stay forwarding-only:
-     `shekyl_fcmp::leaf::PqcLeafScalar::from_pqc_public_key` and the FFI
-     `shekyl_fcmp_pqc_leaf_hash()` in `rust/shekyl-ffi/src/legacy_fcmp.rs`
-   - Public input handling for `H(pqc_pk)` values in `shekyl_fcmp_verify()`
-   - No information leakage about `pqc_pk` beyond the hash value
+   - Circuit correctly constrains 4th leaf scalar = `CM.x` where the claimed
+     `CM` satisfies `K + r·J = CM` for the public `K` and a witness `r`
+     (`circuit.rs` `first_layer`; incomplete addition's exclusions are matched
+     by the derivation-side exceptional-value guard)
+   - `k = H_ℓ(pqc_pk)`: cSHAKE256 under `shekyl/pqc-leaf-key-v1`, 64-byte read
+     reduced mod ℓ, implemented once in
+     `rust/shekyl-crypto-pq/src/derivation.rs` (`pqc_key_scalar` — the single
+     source). Forwarding-only entry points stay forwarding-only:
+     `shekyl_fcmp::leaf::PqcKeyScalar::from_pqc_public_key` and the FFI
+     `shekyl_fcmp_pqc_key_scalar()` in `rust/shekyl-ffi/src/legacy_fcmp.rs`
+   - Blind derivation `r` (HKDF, `shekyl-pqc-leaf-blind ‖ idx ‖ ctr`) and the
+     NUMS generators `PQC_LEAF_COMMITMENT_G_K` / `_J`
+   - Public input handling: the verifier derives `K = k·G_k` from each
+     revealed key (`shekyl_fcmp_verify()` takes the scalars)
+   - Hiding: no published per-output value (`CM`, the record, the leaf) is a
+     function of `pqc_pk` alone (`FCMP_SPEND_LINKABILITY.md` §6.2, the
+     fix-falsifier `pl_d1_fix_falsifier.rs`)
 
 4. **Cross-check: proof verification FFI boundary**
    - `shekyl_fcmp_verify()` parameter handling (key images, pseudo-outs,
@@ -205,8 +215,9 @@ For the protocol specification of these properties, see
 1. Does adding a 4th Pedersen generator to the leaf commitment introduce any
    algebraic relationship that could be exploited to break soundness?
 
-2. Does the 4th scalar's hash-based derivation (`H(pqc_pk)`) satisfy the
-   binding requirements for the Pedersen commitment scheme?
+2. Does the 4th scalar's derivation (`CM = H_ℓ(pqc_pk)·G_k + r·J`) satisfy
+   the binding and hiding requirements for the Pedersen commitment scheme,
+   and does the in-circuit opening compose soundly with the leaf commitment?
 
 3. Are the chunk widths (38/18) still optimal or safe with 128-byte leaves
    instead of 96-byte leaves? Are there performance or security edge cases

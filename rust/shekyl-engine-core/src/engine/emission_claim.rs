@@ -851,7 +851,6 @@ fn claims_vin(
         backing: MembershipOnlyBacking {
             proof: vec![0; proof_len],
             pseudo_out: [0; 32],
-            pqc_pk_hash: [0; 32],
             backing_pubkey: vec![0; SINGLE_KEY_CANONICAL_LEN],
             tree_depth,
         },

@@ -23,7 +23,8 @@ struct curve_tree_path_bytes
   /// `[leaf_pos u16 LE][leaf 128 B]*` for the layer-0 chunk, then per layer
   /// `1..depth`: `[pos_in_parent u16 LE][sibling hash 32 B]*chunk_width`.
   std::vector<uint8_t> path;
-  /// Per leaf in the layer-0 chunk: `O(32) ‖ I(32) ‖ C(32) ‖ h_pqc(32)`.
+  /// Per leaf in the layer-0 chunk: `O(32) ‖ I(32) ‖ C(32) ‖ CM.x(32)` (the
+  /// leaf's 4th scalar: the x-coordinate of its PQC leaf commitment, PL-D3).
   std::vector<uint8_t> chunk_outputs;
 };
 

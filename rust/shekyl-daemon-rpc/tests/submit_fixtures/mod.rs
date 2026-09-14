@@ -210,7 +210,6 @@ pub fn emission_vin_bytes() -> Vec<u8> {
         backing: MembershipOnlyBacking {
             proof: vec![0xEE; 512],
             pseudo_out: [0x22; 32],
-            pqc_pk_hash: [0x33; 32],
             backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
             tree_depth: 3,
         },
@@ -462,7 +461,7 @@ impl TxVerifier for MockVerifier {
 
 /// The `tx_extra` a transaction with `n` outputs must carry (CEN-I19,
 /// `GENESIS_TX_WIRE_FORMAT.md` §9.6a): exactly one `0x06` of `1120·n` bytes and
-/// one `0x07` of `32·n`, and neither when `n == 0`. Payloads are filler — the
+/// one `0x07` of `64·n`, and neither when `n == 0`. Payloads are filler — the
 /// shape rule reads counts and lengths only. A fixture must be a *valid*
 /// transaction in every respect but the one under test; before this rule these
 /// built transactions with outputs and an empty `extra`, a shape no builder has
@@ -477,11 +476,9 @@ pub fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
             shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES
                 * n_outputs
         ]),
-        shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(vec![
-            0x7b;
-            shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES
-                * n_outputs
-        ]),
+        shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(
+            shekyl_wire::tx_extra::conforming_pqc_leaf_blob(n_outputs),
+        ),
     ])
     .expect("conforming PQC tx_extra serializes")
 }

@@ -95,6 +95,7 @@ pub(crate) mod ledger_ops {
             enc_amount: [0u8; 8],
             amount_tag: 0,
             label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
+            unspendable: None,
         }
     }
 
@@ -490,6 +491,7 @@ mod ledger_proptest {
             enc_amount: [0u8; 8],
             amount_tag: 0,
             label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
+            unspendable: None,
         }
     }
 
@@ -697,6 +699,7 @@ mod sync_bookkeeping {
             enc_amount: [0u8; 8],
             amount_tag: 0,
             label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
+            unspendable: None,
         }
     }
 

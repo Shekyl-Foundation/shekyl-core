@@ -309,8 +309,8 @@ TEST(fcmp, referenceBlock_staleness_constants)
 TEST(fcmp, key_offsets_empty_for_fcmp_type)
 {
   // FCMP++ transactions must not have key_offsets (ring members); the
-  // membership proof ranges over the full UTXO set via the curve tree (the
-  // spend's anonymity set is nevertheless one output while PL-D1 is open —
+  // membership proof ranges over the full UTXO set via the curve tree, which
+  // is the spend's anonymity set since PL-D3 (2026-09-14; before it, PL-D1 —
   // docs/design/FCMP_SPEND_LINKABILITY.md).
   cryptonote::txin_to_key txin;
   txin.key_offsets.clear();
@@ -431,10 +431,10 @@ TEST(fcmp, multisig_signing_request_json_v2_fields)
   ASSERT_EQ(doc["input_global_indices"].Size(), 2u);
 }
 
-TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
+TEST(fcmp, multisig_pqc_key_scalar_via_ffi)
 {
   // Generate 3 PQC keypairs and build a key container blob,
-  // then verify shekyl_fcmp_pqc_leaf_hash returns a non-zero 32-byte hash.
+  // then verify shekyl_fcmp_pqc_key_scalar returns a non-zero 32-byte key scalar (PL-D3).
   std::vector<std::vector<uint8_t>> pub_keys;
   for (int i = 0; i < 3; ++i)
   {
@@ -462,7 +462,7 @@ TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
   }
 
   uint8_t hash_out[32] = {};
-  bool ok = shekyl_fcmp_pqc_leaf_hash(keys_blob.data(), keys_blob.size(), hash_out);
+  bool ok = shekyl_fcmp_pqc_key_scalar(keys_blob.data(), keys_blob.size(), hash_out);
   ASSERT_TRUE(ok);
 
   // Hash should not be all zeros
@@ -473,7 +473,7 @@ TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
 
   // Deterministic: same input, same output
   uint8_t hash_out2[32] = {};
-  ok = shekyl_fcmp_pqc_leaf_hash(keys_blob.data(), keys_blob.size(), hash_out2);
+  ok = shekyl_fcmp_pqc_key_scalar(keys_blob.data(), keys_blob.size(), hash_out2);
   ASSERT_TRUE(ok);
   ASSERT_EQ(memcmp(hash_out, hash_out2, 32), 0);
 }
@@ -518,18 +518,20 @@ TEST(fcmp, single_sig_hex_roundtrip)
   shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
 }
 
-TEST(fcmp, per_output_pqc_leaf_hash_derivation_consistency)
+TEST(fcmp, per_output_pqc_leaf_derivation_consistency)
 {
   uint8_t combined_ss[64];
   crypto::rand(64, combined_ss);
 
-  uint8_t h1[32], h2[32], h3[32];
-  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 42, h1));
-  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 42, h2));
-  ASSERT_EQ(memcmp(h1, h2, 32), 0) << "Same input must produce same leaf hash";
+  // 64-byte 0x07 entries: CM || record (PL-D3 / PL-D3a).
+  uint8_t h1[64], h2[64], h3[64];
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_entry(combined_ss, 42, h1));
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_entry(combined_ss, 42, h2));
+  ASSERT_EQ(memcmp(h1, h2, 64), 0) << "Same input must produce the same leaf entry";
 
-  ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 99, h3));
-  ASSERT_NE(memcmp(h1, h3, 32), 0) << "Different index must produce different leaf hash";
+  ASSERT_TRUE(shekyl_derive_pqc_leaf_entry(combined_ss, 99, h3));
+  ASSERT_NE(memcmp(h1, h3, 32), 0) << "Different index must produce a different commitment";
+  ASSERT_NE(memcmp(h1 + 32, h3 + 32, 32), 0) << "Different index must produce a different record";
 }
 
 TEST(fcmp, multisig_2of3_sig_container_assembly)

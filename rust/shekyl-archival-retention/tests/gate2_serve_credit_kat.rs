@@ -27,7 +27,9 @@ use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
 };
-use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar, SELENE_CHUNK_WIDTH};
+use shekyl_fcmp::tree::{
+    ed25519_point_to_selene_scalar, leaf_from_chunk_entry, SELENE_CHUNK_WIDTH,
+};
 
 const CT2_FIXTURE: &str = include_str!("../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
 const KAT_FIXTURE: &str = include_str!("fixtures/gate2_serve_credit_kat_v1.json");
@@ -427,7 +429,7 @@ fn ct2_ingested() -> (CurveTreeClient, Vec<Ct2Block>, ReferenceBlock) {
     for blk in &blocks {
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(&blk.blob),
+            leaf_entry_blob: Some(&blk.blob),
             outputs: &blk.outputs,
         }];
         client
@@ -463,7 +465,10 @@ fn ct2_opening_at(
         .iter()
         .find(|cl| cl.output_key == input.output_key)
         .expect("chunk leaf for opened output");
-    let leaf_bytes = construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("leaf");
+    // The chunk carries the 4th scalar (CM.x), not the commitment point.
+    let leaf_bytes =
+        leaf_from_chunk_entry(&cl.output_key, &cl.key_image_gen, &cl.commitment, &cl.cm_x)
+            .expect("leaf");
     let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
     let opening = SegmentPathOpening {
         c1_layers: path.c1_layers,
@@ -513,7 +518,7 @@ fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
         scalars.push(ed25519_point_to_selene_scalar(&cl.output_key).expect("O.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.commitment).expect("C.x"));
-        scalars.push(cl.h_pqc);
+        scalars.push(cl.cm_x);
     }
     scalars
 }

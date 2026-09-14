@@ -146,7 +146,13 @@ using namespace crypto;
 // value gains the 32-byte serving endpoint column after `bond_spend_pk`
 // (kVersion 6→7; every V12 record fails decode's version pin, so a V12
 // datadir cannot be read). No new table. Pre-genesis: delete and resync.
-#define VERSION 13
+// V14: PL-D3 (docs/design/FCMP_SPEND_LINKABILITY.md §6.2) — content. The
+// curve-tree leaf's 4th scalar is the x-coordinate of the output's PQC leaf
+// commitment, not the key hash; every stored leaf, layer hash and root a V13
+// datadir holds was built from a derivation no current node reproduces. Same
+// byte layout (128-byte leaves), so only the version pin makes the stale tree
+// loud. Pre-genesis: delete and resync.
+#define VERSION 14
 
 namespace
 {

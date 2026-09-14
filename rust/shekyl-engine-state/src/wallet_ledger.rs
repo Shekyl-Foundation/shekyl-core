@@ -115,6 +115,9 @@ use crate::{
 /// wallet2-lineage `attributes` bag (`TX_META_BLOCK_VERSION` 3, P3-5)
 /// and `SyncStateBlock`'s three never-wired fields (`scan_completed`,
 /// `confirmations_required`, `trusted_daemon`; `SYNC_STATE_BLOCK_VERSION` 2).
+/// Version `18` (this version): `TransferDetails::unspendable`, the `PL-D3`
+/// scan-time received-but-unspendable classification
+/// (`LEDGER_BLOCK_VERSION` 11).
 /// Each per-block bump (`LEDGER_BLOCK_VERSION`,
 /// `BOOKKEEPING_BLOCK_VERSION`) identifies which block is
 /// incompatible at load time; the bundle-level bump exists because
@@ -126,7 +129,7 @@ use crate::{
 /// `wallet_ledger.snap` drift implies a `WALLET_LEDGER_FORMAT_VERSION`
 /// bump in the same PR, regardless of whether any direct field of
 /// `WalletLedger` was touched.
-pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 17;
+pub const WALLET_LEDGER_FORMAT_VERSION: u32 = 18;
 
 /// The `.wallet`-side ledger bundle: the six typed blocks + a
 /// bundle-level `format_version`.
@@ -1056,6 +1059,7 @@ mod tests {
             output_handle: None,
             eligible_height: block_height + crate::transfer::SPENDABLE_AGE,
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: crate::ReceiveAttribution::default(),
         }

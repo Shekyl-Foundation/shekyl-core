@@ -237,8 +237,8 @@ the set-B boundary cannot stop at the leaf table:
 - **Set B, the discard subject — not one table.** `m_curve_tree_leaves`
   is where the leaf bytes live, but every leaf is a pure function of
   bytes the node keeps (`PDM-Q-F12`): `O` and `C` from `output_metadata`
-  (or the tx corpus), `I = hash_to_p3(O)`, and `h_pqc` from `tx_extra`
-  field `0x07` in the transaction blob. Discarding the leaf table alone
+  (or the tx corpus), `I = hash_to_p3(O)`, and the leaf commitment point
+  from `tx_extra` field `0x07` in the transaction blob (`PL-D3`). Discarding the leaf table alone
   discards a cache. Q1 must therefore rule on **each derivation input**:
   `output_metadata` (D10 §11.2 already names it node-local by prune
   policy; slice A grades it `Excluded`, `class.rs:149`), `leaf_to_output`
@@ -560,8 +560,8 @@ exist: the **prunable region** (`CtSigPrunable`,
 `fcmp_pp_proof` `:367`, `pseudoOuts` `:384`, `serve_credit_pruned`
 `:402`) is original, non-derivable, admission-only, **and** every byte
 replay needs to rebuild the derived tables lives in the *other* half
-(`output_key` from `vout`, `commitment` from `outPk`, `h_pqc` from
-`tx_extra` `0x07` — all in `CtSigBase` / the prefix). Discarding the
+(`output_key` from `vout`, `commitment` from `outPk`, the leaf commitment
+point from `tx_extra` `0x07` — all in `CtSigBase` / the prefix). Discarding the
 prunable region is therefore compatible with D10's replay premise
 *and* produces a good an archiver can be scarce in. Its verifier is
 already in the schema: `txs_prunable_hash`, 32 B per tx, written at
@@ -1441,18 +1441,19 @@ Named now so they are not discovered later.
   Trace the construction: `blockchain_db.cpp:608-611` calls
   `shekyl_construct_curve_tree_leaf(output_key, commitment.bytes, h_pqc,
   leaf)` — three inputs. `output_key` and `commitment` are the output's
-  `O` and `C` (`:564`, `:597`). `h_pqc`, the fourth scalar, has its
-  provenance at `:528-546`: `extract_leaf_hashes` pulls the
-  `tx_extra_pqc_leaf_hashes` field (`0x07`) out of the transaction,
-  exactly `32 · vout.size()` bytes, one per output, and `:557` indexes
-  it. So the fourth scalar lives in **the transaction blob**, which is
+  `O` and `C` (`:564`, `:597`). The fourth scalar's input (the leaf
+  commitment point, `PL-D3`) has its provenance at `:528-546`:
+  `extract_leaf_hashes` pulls the `tx_extra_pqc_leaf_hashes` field
+  (`0x07`) out of the transaction, exactly `64 · vout.size()` bytes, one
+  entry per output, and `:557` indexes it. So the fourth scalar lives in
+  **the transaction blob**, which is
   block corpus and retained under D10's replay premise. Every one of the
   four scalars is reconstructible from data a discarding node keeps —
   `O`, `I = hash_to_p3(O)`, `C` from `output_metadata` via
   `get_output_key(0, i)` (the RPC already does exactly this, via
   `shekyl-fcmp::rpc_path` / `curve_tree_path.cpp`) or from the blocks directly if
   `output_metadata` is itself discarded (`Excluded`, `class.rs:149`);
-  `h_pqc` from `tx_extra` `0x07`. The regeneration path is not
+  the leaf commitment from `tx_extra` `0x07`. The regeneration path is not
   hypothetical: it is the production code at `blockchain_db.cpp:598-617`
   running on every replay. Therefore: (i) the storage argument is close
   to nil — discard 128 B/output and keep every byte that regenerates it;
@@ -1488,7 +1489,7 @@ consensus question: *does anything read it after admission?*
   `:384`, `serve_credit_pruned` `:402`). Run F12's own trace against
   the split: leaf reconstruction reads `output_key` from `vout`,
   `commitment` from `tx.ct_signatures.outPk[i].mask`
-  (`blockchain_db.cpp:597`) and `h_pqc` from `tx_extra` `0x07` — all
+  (`blockchain_db.cpp:597`) and the leaf commitment from `tx_extra` `0x07` — all
   three in the base. Replay through `apply_block` rebuilds every
   derived table from the **pruned** corpus alone, so D10 is not in
   tension with discarding the prunable region. And the region is
@@ -2064,7 +2065,7 @@ is read at admission.
 | Element | Wire home | Store home | Bytes (2-in/2-out) | Post-admission readers | Derivable from | Class |
 | --- | --- | --- | ---: | --- | --- | --- |
 | prefix: `version`, `unlock_time`, `vin` (key images, archival vins), `vout` (`O`), `extra` sans `0x06`/`0x07` | tx prefix | `txs_pruned` | ~0.5 KB | consensus (key images → `spent_keys` rebuild; archival vins → archival tables rebuild; `RF-D1` kept vin read by settlement / slash), wallets | — (original) | KEEP-C |
-| `tx_extra` `0x07` PQC leaf hashes (`h_pqc`) | prefix | `txs_pruned` | 32 B/output | replay (`blockchain_db.cpp:528-557` → leaf) | — | KEEP-D |
+| `tx_extra` `0x07` PQC leaf entries (`CM ‖ record`, `PL-D3`) | prefix | `txs_pruned` | 64 B/output | replay (`blockchain_db.cpp:528-557` → leaf) | — | KEEP-D |
 | `tx_extra` `0x06` hybrid KEM ciphertexts | prefix | `txs_pruned` | 1120 B/output (~2.2 KB) | wallets only (scan / restore) | — | KEEP-W |
 | `CtSigBase`: `type`, `txnFee`, `referenceBlock`, `enc_amounts`, `enc_labels`, `outPk` | ct base (`ct_types.h:197`) | `txs_pruned` | ~256 B | replay (`outPk` → commitment → leaf, `:597`; fee → burn / emission), wallets (`enc_amounts`, `enc_labels`) | — | KEEP-C / KEEP-D |
 | `pqc_auths` (hybrid pk + hybrid sig per input) | between base and prunable (`cryptonote_basic.h:492`) | `txs_pqc_auths` | ~5.3 KB/input (~10.6 KB) | **none** — every reader is in `check_tx_inputs` (`blockchain.cpp:3717-4351`); txid uses only `pqc_auth_hash` | — (original) | **GOOD** candidate (F14) — needs a 32 B hash row it does not have |
@@ -2089,7 +2090,7 @@ pending a hash row (F14).** A ruling that takes both GOOD rows retains
 
 | Table | Bytes/output | Post-admission readers | Derivable from | Class |
 | --- | ---: | --- | --- | --- |
-| `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `shekyl-fcmp::rpc_path` | `O`, `C`, `h_pqc` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
+| `curve_tree_leaves` | 128 | serve-credit verify **today** (`blockchain.cpp:5327`, F8 — goes with TJ-A); `trim_curve_tree` boundary chunk on pop (`:9361`, F10); RPC `shekyl-fcmp::rpc_path` | `O`, `C`, `CM` → `shekyl_construct_curve_tree_leaf` (`blockchain_db.cpp:608`) | CACHE (F12) |
 | `output_metadata` (`output_data_t`: pk, unlock, height, commitment) | 80 | none in consensus — `scan_outputkeys_for_indexes` deleted with `check_tx_input` (`PDM-Q-F18`); RPC `chunk_outputs` via `shekyl-fcmp::rpc_path` | `vout` + `outPk` + block height | CACHE (`Excluded` in slice A, `class.rs:149`) |
 | `output_txs`, `output_amounts` | ~40, ~48 | reorg pop, RPC | rebuild | CACHE |
 | `output_to_leaf`, `leaf_to_output` | 16, 16 | leaf ↔ output mapping on pop and RPC | rebuild (insertion order) | CACHE |

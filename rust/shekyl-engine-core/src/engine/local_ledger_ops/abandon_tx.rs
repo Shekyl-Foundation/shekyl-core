@@ -183,6 +183,7 @@ mod tests {
             output_handle: None,
             eligible_height: 10,
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: shekyl_engine_state::ReceiveAttribution::Unattributed,
         }

@@ -18,7 +18,7 @@ use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwor
 use shekyl_genesis_tool::builder::{build_genesis_tx, genesis_block};
 use shekyl_genesis_tool::recipients::{parse_and_validate, Recipient};
 use shekyl_genesis_tool::txkey::{derive_genesis_tx_secret, tx_pubkey};
-use shekyl_wire::tx_extra::{self, TxExtraField, HYBRID_KEM_CT_BYTES, PQC_LEAF_HASH_BYTES};
+use shekyl_wire::tx_extra::{self, TxExtraField, HYBRID_KEM_CT_BYTES, PQC_LEAF_ENTRY_LEN};
 
 /// Synthetic nonce for the block-id pin (testnet's real GENESIS_NONCE value,
 /// but nothing here depends on the config).
@@ -27,11 +27,15 @@ const KAT_NONCE: u32 = 10101;
 // --- pinned vectors (recaptured 2026-08-16: genesis-txkey-v2 payment identity) ---
 const KAT_TX_SECRET_HEX: &str = "f5c1a3a255f52bdb04fe23448d941ed4ec70fea47a9eee658f4468f79617a602";
 const KAT_TX_PUB_HEX: &str = "6e78259c37b956a355c36e67c72037279170d260a4ea0e6ebbc8c3a7d711eac1";
-const KAT_BLOB_LEN: usize = 6263;
+// Re-pinned 2026-09-14 with `PL-D3` (`docs/V3_WALLET_DECISION_LOG.md`, the
+// "PL-D3 ratified" entry): the genesis `0x07` field grew from 32 to 64 bytes
+// per output (`CM ‖ record`), so the blob, its sha256, the tx hash and the
+// block id all moved. tx secret / pubkey are unchanged by construction.
+const KAT_BLOB_LEN: usize = 6423;
 const KAT_BLOB_SHA256_HEX: &str =
-    "05783d331507994ea7459777f0f281be89a0635deb8f7544aac1dc986b7cda73";
-const KAT_TX_HASH_HEX: &str = "80be1fd3fc0dee9d402eeafd35af0111446b35a2ae8ac8931371a66b07a135ec";
-const KAT_BLOCK_ID_HEX: &str = "c91b2e335074202ff64a35338e4d0aa5cb792136a8f11cd4cc5b272a6b0d8130";
+    "4ac9109479c04cbfd4a755bc3ccbe8e53578492b18dc675bb5d9a683f4c4f468";
+const KAT_TX_HASH_HEX: &str = "80ca7109f42cc07fbbfc74b4d2d8a4d4d6678a08e89d04140a611eab4e74f163";
+const KAT_BLOCK_ID_HEX: &str = "61322bd12cd882f576d67934b0e9bd86468a6e2c5c4c868aab78147cc7d290ca";
 // ----------------------------------------------------------------------------
 
 fn fixture_recipients() -> Vec<Recipient> {
@@ -125,9 +129,9 @@ fn extra_is_canonical_fixed_point() {
         "field 1 must be the aggregated 0x06 KEM blob"
     );
     assert!(
-        matches!(&fields[2], TxExtraField::PqcLeafHashes(b)
-            if b.len() == recipients.len() * PQC_LEAF_HASH_BYTES),
-        "field 2 must be the aggregated 0x07 leaf-hash blob"
+        matches!(&fields[2], TxExtraField::PqcLeafEntries(b)
+            if b.len() == recipients.len() * PQC_LEAF_ENTRY_LEN),
+        "field 2 must be the aggregated 0x07 leaf-entry blob"
     );
     // Raw byte anchors: tag 0x01 at offset 0, tag 0x06 right after the
     // 32-byte pubkey.

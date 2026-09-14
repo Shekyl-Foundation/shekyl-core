@@ -27,6 +27,7 @@ use shekyl_crypto_pq::{
     output::{compute_output_key_image, scan_output_recover_with_ml_kem_dk},
 };
 use shekyl_curve_generators::biased_hash_to_point;
+use shekyl_engine_state::UnspendableReason;
 use shekyl_units::AtomicUnits;
 use subtle::ConstantTimeEq;
 
@@ -236,6 +237,13 @@ pub struct RecoveredWalletOutput {
     pub(crate) amount_tag: u8,
     /// Decrypted label plaintext (sentinel or cooperative `REQUEST` tag).
     pub(crate) label_plaintext: [u8; 8],
+    /// Received-but-unspendable verdict (`PL-D3` §6.2, rule 82): `None`
+    /// when the transaction's published `0x07` entry for this output equals
+    /// the wallet's own derivation `CM ‖ record`; `Some` when it does not
+    /// (the chain leaf cannot be opened by this wallet) or is absent. Public
+    /// classification, not secret.
+    #[zeroize(skip)]
+    pub(crate) unspendable: Option<UnspendableReason>,
 }
 
 impl Zeroize for RecoveredWalletOutput {
@@ -257,6 +265,10 @@ impl Zeroize for RecoveredWalletOutput {
 impl RecoveredWalletOutput {
     pub fn wallet_output(&self) -> &WalletOutput {
         &self.base
+    }
+    /// The scan-time received-but-unspendable verdict (`PL-D3` §6.2).
+    pub fn unspendable(&self) -> Option<UnspendableReason> {
+        self.unspendable
     }
     pub fn ho(&self) -> &[u8; 32] {
         &self.ho
@@ -335,6 +347,7 @@ impl RecoveredWalletOutput {
             enc_amount: [0u8; 8],
             amount_tag: 0,
             label_plaintext: shekyl_crypto_pq::label::sentinel_plaintext(),
+            unspendable: None,
         }
     }
 }
@@ -691,6 +704,25 @@ impl InternalScanner {
                 continue;
             }
 
+            // PL-D3 §6.2 scan-time verification: the sender published
+            // `CM ‖ record` for this output in `0x07`; only the recipient can
+            // check that it is its own derivation. A mismatch (or a missing
+            // entry) is a received-but-unspendable output — retained, named
+            // by its transaction, never selectable (rule 82). Constant-time
+            // compare for the same reason as the ownership check above: the
+            // derived entry is a function of secret scan material.
+            let derived_entry = recovered.pqc_leaf.entry_bytes();
+            let unspendable = match extra.pqc_leaf_entry(o) {
+                None => Some(UnspendableReason::PqcLeafEntryAbsent),
+                Some(published) => {
+                    if bool::from(published.ct_eq(&derived_entry)) {
+                        None
+                    } else {
+                        Some(UnspendableReason::PqcLeafMismatch)
+                    }
+                }
+            };
+
             let amount = recovered.amount;
             let commitment = Commitment::new(
                 curve25519_dalek::Scalar::from_canonical_bytes(recovered.z)
@@ -767,6 +799,7 @@ impl InternalScanner {
                 enc_amount,
                 amount_tag: amount_tag_on_chain,
                 label_plaintext: recovered.label_plaintext,
+                unspendable,
             });
         }
 

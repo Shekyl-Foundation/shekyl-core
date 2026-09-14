@@ -188,7 +188,7 @@ transaction build_kat_tx()
   // build the transaction the network would accept; before this rule the pin
   // fixed agreement on a shape no builder can produce.
   shekyl_test_fixtures::append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * tx.vout.size());
-  shekyl_test_fixtures::append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_HASH_BYTES * tx.vout.size());
+  shekyl_test_fixtures::append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_ENTRY_LEN * tx.vout.size());
   return tx;
 }
 

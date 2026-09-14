@@ -318,7 +318,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_helios_hash_init(out_ptr: *mut u8) ->
     true
 }
 
-/// Return the number of scalars per leaf (4 for Shekyl: O.x, I.x, C.x, H(pqc_pk)).
+/// Return the number of scalars per leaf (4 for Shekyl: O.x, I.x, C.x, CM.x).
 #[no_mangle]
 pub extern "C" fn shekyl_curve_tree_scalars_per_leaf() -> u32 {
     #[allow(clippy::cast_possible_truncation)]
@@ -507,16 +507,20 @@ pub unsafe extern "C" fn shekyl_ed25519_to_selene_scalar(
 
 // ─── FCMP++: Leaf construction ──────────────────────────────────────────────
 
-/// Construct a 128-byte curve tree leaf from an output public key and commitment.
+/// Construct a 128-byte curve tree leaf from an output public key, commitment,
+/// and published PQC leaf commitment point.
 ///
 /// - `output_key_ptr`: 32 bytes, compressed Ed25519 output public key (O)
 /// - `commitment_ptr`: 32 bytes, compressed Ed25519 amount commitment (C)
-/// - `h_pqc_ptr`: 32 bytes, H(pqc_pk) scalar (or 32 zero bytes if unavailable)
-/// - `leaf_out_ptr`: 128 bytes output buffer for {O.x, I.x, C.x, H(pqc_pk)}
+/// - `cm_point_ptr`: 32 bytes, the output's PQC leaf commitment point `CM`
+///   (compressed Ed25519; the first 32 bytes of its `0x07` entry, `PL-D3`).
+///   There is no placeholder: an output without an admissible entry is not
+///   a leaf (the admission rule refuses its transaction).
+/// - `leaf_out_ptr`: 128 bytes output buffer for {O.x, I.x, C.x, CM.x}
 ///
 /// Internally computes I = Hp(O) via Monero's biased hash-to-point, then
-/// extracts Wei25519 x-coordinates for O, Hp(O), C. The 4th scalar comes
-/// from `h_pqc_ptr`.
+/// extracts Wei25519 x-coordinates for O, Hp(O), C and CM — the one leaf
+/// constructor the daemon and the wallet replica share.
 ///
 /// Returns true on success, false on decompression failure.
 ///
@@ -526,12 +530,12 @@ pub unsafe extern "C" fn shekyl_ed25519_to_selene_scalar(
 pub unsafe extern "C" fn shekyl_construct_curve_tree_leaf(
     output_key_ptr: *const u8,
     commitment_ptr: *const u8,
-    h_pqc_ptr: *const u8,
+    cm_point_ptr: *const u8,
     leaf_out_ptr: *mut u8,
 ) -> bool {
     if output_key_ptr.is_null()
         || commitment_ptr.is_null()
-        || h_pqc_ptr.is_null()
+        || cm_point_ptr.is_null()
         || leaf_out_ptr.is_null()
     {
         return false;
@@ -547,13 +551,13 @@ pub unsafe extern "C" fn shekyl_construct_curve_tree_leaf(
         std::ptr::copy_nonoverlapping(commitment_ptr, buf.as_mut_ptr(), 32);
         buf
     };
-    let h_pqc: [u8; 32] = unsafe {
+    let cm_point: [u8; 32] = unsafe {
         let mut buf = [0u8; 32];
-        std::ptr::copy_nonoverlapping(h_pqc_ptr, buf.as_mut_ptr(), 32);
+        std::ptr::copy_nonoverlapping(cm_point_ptr, buf.as_mut_ptr(), 32);
         buf
     };
 
-    match shekyl_fcmp::tree::construct_leaf(&output_key, &commitment, &h_pqc) {
+    match shekyl_fcmp::tree::construct_leaf(&output_key, &commitment, &cm_point) {
         Some(leaf) => {
             std::ptr::copy_nonoverlapping(leaf.as_ptr(), leaf_out_ptr, 128);
             true

@@ -285,9 +285,10 @@ pub unsafe extern "C" fn shekyl_frost_coordinator_aggregate_and_prove(
     let leaf_chunks: Vec<_> = prove_inputs
         .iter()
         .map(|pi| shekyl_fcmp::proof::ProveInputLeafChunk {
-            output_h_pqc: pi.h_pqc,
+            pqc_leaf_commitment: pi.pqc_leaf_commitment,
+            pqc_leaf_blind: pi.pqc_leaf_blind,
             leaf_outputs: pi.leaf_chunk_outputs.clone(),
-            leaf_h_pqc: pi.leaf_chunk_h_pqc.clone(),
+            leaf_cm_x: pi.leaf_chunk_cm_x.clone(),
             c1_branch_layers: pi.c1_branch_layers.clone(),
             c2_branch_layers: pi.c2_branch_layers.clone(),
         })

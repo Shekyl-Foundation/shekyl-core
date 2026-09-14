@@ -40,11 +40,14 @@
 //!   only `txout_to_tagged_key` ([`shekyl_wire`]'s sole [`Output`] shape,
 //!   GENESIS §9.5), so the other [`TargetKind`]s are unreachable here (they
 //!   exist in [`shekyl_curve_tree`] only for daemon leaf-set parity).
-//! - **`leaf_hash_blob`** is the `tx_extra 0x07` payload verbatim; a
-//!   malformed/absent extra yields `None`, which the client resolves to the
-//!   zero `h_pqc` fallback per the daemon's `extract_leaf_hashes` `{}` path
-//!   (`recon.rs`). The decode does not error on a malformed extra — it mirrors
-//!   the fallback.
+//! - **`leaf_entry_blob`** is the `tx_extra 0x07` payload verbatim (`CM ‖
+//!   record` per output, `PL-D3`); a malformed/absent extra yields `None`,
+//!   which the client refuses as `ClientError::LeafEntries` (`recon.rs`
+//!   `extract_leaf_commitments`; census `d-3`/`d-4`: no zero fallback), and
+//!   a published point that fails decompression is refused as
+//!   `ClientError::LeafPoint` rather than skipped. The decode itself does
+//!   not error on a malformed extra — the refusal is the client's, where
+//!   the block and transaction can be named.
 //!
 //! # X7 — buffer bounded by the consensus output ceiling, before allocation
 //!
@@ -110,15 +113,15 @@ fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeEr
         return Err(DecodeError::ExcessiveOutputs { is_miner, count });
     }
 
-    // `tx_extra 0x07` leaf-hash blob, verbatim. A malformed or absent extra
-    // yields `None` — the client resolves that to the zero `h_pqc` fallback
-    // (the daemon's `extract_leaf_hashes` `{}` path), so we mirror the
-    // fallback rather than erroring.
-    let leaf_hash_blob = {
+    // `tx_extra 0x07` leaf-entry blob, verbatim. A malformed or absent extra
+    // yields `None`; the client refuses that block (`ClientError::LeafEntries`,
+    // no zero fallback — census `d-3`/`d-4`), naming the transaction, so the
+    // decode carries the absence rather than erroring here.
+    let leaf_entry_blob = {
         let mut extra_bytes = prefix.extra.as_slice();
         Extra::read(&mut extra_bytes)
             .ok()
-            .and_then(|extra| extra.pqc_leaf_hashes().map(<[u8]>::to_vec))
+            .and_then(|extra| extra.pqc_leaf_entries().map(<[u8]>::to_vec))
     };
 
     // On-chain commitments live in the committed base, present uniformly across
@@ -142,7 +145,7 @@ fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeEr
 
     Ok(OwnedTxLeaves {
         is_miner,
-        leaf_hash_blob,
+        leaf_entry_blob,
         outputs,
     })
 }
@@ -208,11 +211,11 @@ mod tests {
     fn null_tx(
         outputs: Vec<Output>,
         commitments: Vec<[u8; 32]>,
-        leaf_hash_blob: Option<Vec<u8>>,
+        leaf_entry_blob: Option<Vec<u8>>,
     ) -> Transaction {
         let n = outputs.len();
-        let extra = leaf_hash_blob
-            .map(|blob| ExtraField::PqcLeafHashes(blob).serialize())
+        let extra = leaf_entry_blob
+            .map(|blob| ExtraField::PqcLeafEntries(blob).serialize())
             .unwrap_or_default();
         Transaction {
             prefix: TxPrefix {
@@ -279,7 +282,7 @@ mod tests {
 
                 assert!(decoded.is_miner, "coinbase is_miner");
                 assert_eq!(
-                    decoded.leaf_hash_blob.as_deref(),
+                    decoded.leaf_entry_blob.as_deref(),
                     Some(blob.as_slice()),
                     "chain {name}: 0x07 blob carried verbatim",
                 );
@@ -342,7 +345,7 @@ mod tests {
     fn malformed_or_absent_extra_yields_no_blob() {
         let tx = null_tx(vec![tagged_output([6u8; 32])], vec![[1u8; 32]], None);
         let decoded = decode_tx(&tx, true).expect("decodes");
-        assert_eq!(decoded.leaf_hash_blob, None);
+        assert_eq!(decoded.leaf_entry_blob, None);
     }
 
     #[test]

@@ -106,6 +106,7 @@ impl TransferDetailsExt for TransferDetails {
             )
             .to_raw(),
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),
         }
@@ -168,6 +169,10 @@ impl LedgerIndexesExt for LedgerIndexes {
             if ki.as_bytes() != &[0u8; 32] {
                 td.key_image = Some(ki);
             }
+            // PL-D3 §6.2: the scan-time received-but-unspendable verdict
+            // travels onto the persisted row, where `is_spendable` and the
+            // balance projection read it.
+            td.unspendable = output.unspendable();
             batch.push(td);
         }
 
