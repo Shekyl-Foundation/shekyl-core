@@ -26,7 +26,7 @@ Every time someone receives SHEKYL, the transaction creates an "output" — basi
 
 **CM.x** — *our addition*. This is the x-coordinate of a Pedersen commitment `CM = k·G_k + r·J` to the per-output post-quantum public key (`k` is a hash of the key, `r` a per-output blind). It binds the quantum-resistant authorization key to the output inside the tree — the FCMP++ proof simultaneously proves "this output exists" and "the key I present opens this leaf's commitment" — while the published value reveals nothing about the key (`docs/design/FCMP_SPEND_LINKABILITY.md`, `PL-D3`).
 
-Now, elliptic curve points are pairs of coordinates (x, y). But a key insight in the FCMP++ design is that you only need the x-coordinate to uniquely identify a point (up to sign — there are two points with the same x, one "positive" and one "negative"). The spec says: store only the x-coordinates. So each output becomes three field elements (numbers in a specific finite field): `O.x`, `I.x`, `C.x`. We add a fourth: `H(pqc_pk)`, which is already a scalar (a 32-byte number).
+Now, elliptic curve points are pairs of coordinates (x, y). But a key insight in the FCMP++ design is that you only need the x-coordinate to uniquely identify a point (up to sign — there are two points with the same x, one "positive" and one "negative"). The spec says: store only the x-coordinates. So each output becomes four field elements (numbers in a specific finite field): `O.x`, `I.x`, `C.x`, and `CM.x`.
 
 That's one leaf tuple: **4 numbers, each 32 bytes, totaling 128 bytes per output.**
 
@@ -44,7 +44,7 @@ The tree doesn't store leaves in separate buckets. It lays all the leaf scalars 
 
 ```
 Output 0              Output 1              Output 2
-[O.x, I.x, C.x, H]   [O.x, I.x, C.x, H]   [O.x, I.x, C.x, H]  ...
+[O.x, I.x, C.x, CM.x]   [O.x, I.x, C.x, CM.x]   [O.x, I.x, C.x, CM.x]  ...
 ```
 
 This is where the "6-scalar" confusion likely came from — if you're looking at Monero's version (3 scalars per output) and you see two outputs next to each other, you see 6 numbers in a row and might think that's one unit.
@@ -65,7 +65,7 @@ Say the chunk width is 2 outputs. In Monero, that's 2 × 3 = 6 scalars per chunk
 
 ```
 Chunk 0 (outputs 0-1)                          Chunk 1 (outputs 2-3)
-[O.x, I.x, C.x, H, O.x, I.x, C.x, H]         [O.x, I.x, C.x, H, O.x, I.x, C.x, H]
+[O.x, I.x, C.x, CM.x, O.x, I.x, C.x, CM.x]         [O.x, I.x, C.x, CM.x, O.x, I.x, C.x, CM.x]
                   ↓                                               ↓
             Selene Point₀                                   Selene Point₁
 ```

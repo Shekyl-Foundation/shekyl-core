@@ -165,7 +165,7 @@ pub struct LeafEntry {
     /// The leaf's 4th scalar for this output: `CM.x`, the Wei25519
     /// x-coordinate of its PQC leaf commitment (`PL-D3`).
     #[serde(with = "hex_bytes32")]
-    pub h_pqc: [u8; 32],
+    pub cm_x: [u8; 32],
 }
 
 /// A spendable input with its secret keys, curve tree membership proof path,
@@ -199,7 +199,7 @@ pub struct SpendInput {
     pub commitment_mask: [u8; 32],
     // The input's own PQC leaf commitment `CM = k·G_k + r·J` and blind `r`
     // (`PL-D3`) are not fields: the signer re-derives both from `combined_ss`
-    // and `output_index` (`shekyl_crypto_pq::derivation::derive_pqc_leaf`) —
+    // and `output_index` (`shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf`) —
     // the same derivation that produced the published `0x07` entry — and
     // checks the derived `CM.x` against this output's entry in `leaf_chunk`
     // before proving ([`crate::error::TxBuilderError::PqcLeafMismatch`]).

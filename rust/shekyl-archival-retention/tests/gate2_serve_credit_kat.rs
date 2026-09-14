@@ -467,7 +467,7 @@ fn ct2_opening_at(
         .expect("chunk leaf for opened output");
     // The chunk carries the 4th scalar (CM.x), not the commitment point.
     let leaf_bytes =
-        leaf_from_chunk_entry(&cl.output_key, &cl.key_image_gen, &cl.commitment, &cl.h_pqc)
+        leaf_from_chunk_entry(&cl.output_key, &cl.key_image_gen, &cl.commitment, &cl.cm_x)
             .expect("leaf");
     let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
     let opening = SegmentPathOpening {
@@ -518,7 +518,7 @@ fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
         scalars.push(ed25519_point_to_selene_scalar(&cl.output_key).expect("O.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.commitment).expect("C.x"));
-        scalars.push(cl.h_pqc);
+        scalars.push(cl.cm_x);
     }
     scalars
 }

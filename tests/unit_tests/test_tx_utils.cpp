@@ -377,7 +377,7 @@ TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_survive_sort)
 
   // 2 outputs × 64 bytes = 128 bytes of leaf entries (CM || record)
   cryptonote::tx_extra_pqc_leaf_hashes lh_field;
-  lh_field.blob.resize(2 * cryptonote::PQC_LEAF_HASH_BYTES);
+  lh_field.blob.resize(2 * cryptonote::PQC_LEAF_ENTRY_LEN);
   for (size_t i = 0; i < lh_field.blob.size(); ++i)
     lh_field.blob[i] = static_cast<char>((i + 0x42) & 0xFF);
 
@@ -447,7 +447,7 @@ TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_reverse_order)
   kem_field.blob.resize(HYBRID_KEM_CT_BYTES, '\x55');
 
   cryptonote::tx_extra_pqc_leaf_hashes lh_field;
-  lh_field.blob.resize(cryptonote::PQC_LEAF_HASH_BYTES, '\x77');
+  lh_field.blob.resize(cryptonote::PQC_LEAF_ENTRY_LEN, '\x77');
 
   // Intentionally wrong order: leaf hashes first, then KEM
   std::vector<uint8_t> extra;

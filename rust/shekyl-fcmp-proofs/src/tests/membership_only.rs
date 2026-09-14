@@ -80,8 +80,8 @@ fn tree_and_fcmp(
     assert_eq!(leaves.len(), rerandomized.len());
 
     let leaf_outputs: Vec<Output> = leaves.iter().map(|leaf| leaf.output).collect();
-    let leaves_extra_scalars: Vec<Vec<<Selene as Ciphersuite>::F>> =
-        leaves.iter().map(|leaf| vec![leaf.pqc.x]).collect();
+    let leaves_cm_x: Vec<<Selene as Ciphersuite>::F> =
+        leaves.iter().map(|leaf| leaf.pqc.x).collect();
 
     let mut hash_scalars = vec![];
     for leaf in leaves {
@@ -125,7 +125,7 @@ fn tree_and_fcmp(
             output: leaf.output,
             output_cm: leaf.pqc.cm,
             leaves: leaf_outputs.clone(),
-            leaves_extra_scalars: leaves_extra_scalars.clone(),
+            leaves_cm_x: leaves_cm_x.clone(),
             curve_2_layers: vec![],
             curve_1_layers: vec![],
         });

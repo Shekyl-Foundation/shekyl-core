@@ -163,7 +163,7 @@ fn leaf_node_point(chunk: &[ChunkLeaf]) -> [u8; 32] {
         scalars.push(ed25519_point_to_selene_scalar(&cl.output_key).expect("O.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.commitment).expect("C.x"));
-        scalars.push(cl.h_pqc);
+        scalars.push(cl.cm_x);
     }
     hash_grow_selene(&selene_hash_init(), 0, &ZERO, &scalars).expect("leaf node")
 }

@@ -37,7 +37,6 @@ impl FcmpCurves for ShekylCurves {
     type C1Parameters = SeleneParams;
     type C2 = Helios;
     type C2Parameters = HeliosParams;
-    const EXTRA_LEAF_SCALARS: usize = 1;
 }
 
 #[allow(clippy::type_complexity)]
@@ -126,8 +125,7 @@ fn random_path(
     let output = leaves[output_idx];
     let output_cm = leaves_cm[output_idx];
 
-    let leaves_extra_scalars: Vec<Vec<<Selene as Ciphersuite>::F>> =
-        leaves_h_pqc.iter().map(|h| vec![*h]).collect();
+    let leaves_cm_x = leaves_h_pqc.clone();
 
     let mut selene_hash = Some({
         let mut scalars = vec![];
@@ -219,7 +217,7 @@ fn random_path(
             output,
             output_cm,
             leaves,
-            leaves_extra_scalars,
+            leaves_cm_x,
             curve_2_layers,
             curve_1_layers,
         },
@@ -264,11 +262,9 @@ fn random_paths(
             shuffled_h_pqc.push(outputs_h_pqc[idx]);
         }
 
-        let extra_scalars: Vec<Vec<<Selene as Ciphersuite>::F>> =
-            shuffled_h_pqc.iter().map(|h| vec![*h]).collect();
         for path in &mut res {
             path.leaves = shuffled_outputs.clone();
-            path.leaves_extra_scalars = extra_scalars.clone();
+            path.leaves_cm_x = shuffled_h_pqc.clone();
         }
 
         let mut new_leaves_layer = vec![];
@@ -302,14 +298,13 @@ fn random_paths(
                         .unwrap()
                     } else {
                         let mut leaves_layer = vec![];
-                        for (output, extras) in
-                            path.leaves.iter().zip(path.leaves_extra_scalars.iter())
+                        for (output, cm_x) in
+                            path.leaves.iter().zip(path.leaves_cm_x.iter())
                         {
                             let O = <Ed25519 as Ciphersuite>::G::to_xy(output.O).unwrap();
                             let I = <Ed25519 as Ciphersuite>::G::to_xy(output.I).unwrap();
                             let C = <Ed25519 as Ciphersuite>::G::to_xy(output.C).unwrap();
-                            leaves_layer.extend(&[O.0, I.0, C.0]);
-                            leaves_layer.extend(extras);
+                            leaves_layer.extend(&[O.0, I.0, C.0, *cm_x]);
                         }
 
                         hash_grow(
@@ -400,12 +395,11 @@ fn random_paths(
         assert!(path.leaves.iter().any(|output| output == &path.output));
 
         let mut leaves_layer = vec![];
-        for (output, extras) in path.leaves.iter().zip(path.leaves_extra_scalars.iter()) {
+        for (output, cm_x) in path.leaves.iter().zip(path.leaves_cm_x.iter()) {
             let O = <Ed25519 as Ciphersuite>::G::to_xy(output.O).unwrap();
             let I = <Ed25519 as Ciphersuite>::G::to_xy(output.I).unwrap();
             let C = <Ed25519 as Ciphersuite>::G::to_xy(output.C).unwrap();
-            leaves_layer.extend(&[O.0, I.0, C.0]);
-            leaves_layer.extend(extras);
+            leaves_layer.extend(&[O.0, I.0, C.0, *cm_x]);
         }
 
         let mut c1_hash = Some(

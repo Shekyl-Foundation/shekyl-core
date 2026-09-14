@@ -85,7 +85,7 @@ fn test() {
         let leaves = vec![output];
         let pqc = random_pqc_leaf();
         let h_pqc = pqc.x;
-        let leaves_extra_scalars: Vec<Vec<<Selene as Ciphersuite>::F>> = vec![vec![h_pqc]];
+        let leaves_cm_x: Vec<<Selene as Ciphersuite>::F> = vec![h_pqc];
 
         let tree = TreeRoot::<Selene, Helios>::C1(
             *SELENE_HASH_INIT
@@ -112,7 +112,7 @@ fn test() {
             output,
             output_cm: pqc.cm,
             leaves,
-            leaves_extra_scalars,
+            leaves_cm_x,
             curve_2_layers: vec![],
             curve_1_layers: vec![],
         };

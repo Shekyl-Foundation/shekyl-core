@@ -119,7 +119,7 @@ fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeEr
         let mut extra_bytes = prefix.extra.as_slice();
         Extra::read(&mut extra_bytes)
             .ok()
-            .and_then(|extra| extra.pqc_leaf_hashes().map(<[u8]>::to_vec))
+            .and_then(|extra| extra.pqc_leaf_entries().map(<[u8]>::to_vec))
     };
 
     // On-chain commitments live in the committed base, present uniformly across
@@ -213,7 +213,7 @@ mod tests {
     ) -> Transaction {
         let n = outputs.len();
         let extra = leaf_hash_blob
-            .map(|blob| ExtraField::PqcLeafHashes(blob).serialize())
+            .map(|blob| ExtraField::PqcLeafEntries(blob).serialize())
             .unwrap_or_default();
         Transaction {
             prefix: TxPrefix {

@@ -36,7 +36,7 @@ fuzz_target!(|data: &[u8]| {
         commitment_mask: [7u8; 32],
         pseudo_out_blind: [8u8; 32],
         leaf_chunk_outputs: vec![],
-        leaf_chunk_h_pqc: vec![],
+        leaf_chunk_cm_x: vec![],
         c1_branch_layers: vec![],
         c2_branch_layers: vec![],
     };

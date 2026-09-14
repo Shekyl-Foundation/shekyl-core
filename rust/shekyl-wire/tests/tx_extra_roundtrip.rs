@@ -11,7 +11,7 @@
 
 use shekyl_wire::tx_extra::{
     self, PqcOwnershipEntry, TxExtraField, HYBRID_KEM_CT_BYTES, ML_KEM_768_CT_BYTES,
-    PQC_LEAF_HASH_BYTES, TX_EXTRA_TAG_NONCE,
+    PQC_LEAF_ENTRY_LEN, TX_EXTRA_TAG_NONCE,
 };
 use shekyl_wire::Block;
 
@@ -46,10 +46,10 @@ fn coinbase_tx_extra_round_trips_and_splits_per_output() {
                 assert_eq!(cts[0].ml_kem.len(), ML_KEM_768_CT_BYTES);
                 saw_kem = true;
             }
-            TxExtraField::PqcLeafHashes(blob) => {
-                assert_eq!(blob.len(), n_out * PQC_LEAF_HASH_BYTES);
+            TxExtraField::PqcLeafEntries(blob) => {
+                assert_eq!(blob.len(), n_out * PQC_LEAF_ENTRY_LEN);
                 assert_eq!(
-                    tx_extra::pqc_leaf_hashes_per_output(blob).unwrap().len(),
+                    tx_extra::pqc_leaf_entries_per_output(blob).unwrap().len(),
                     n_out
                 );
                 saw_leaf = true;
@@ -73,7 +73,7 @@ fn synthetic_tx_extra_field_kinds_round_trip() {
         TxExtraField::Nonce(vec![0xAB, 0xCD, 0xEF]),
         // two outputs' worth of 0x06 / 0x07 payloads
         TxExtraField::PqcKemCiphertext(vec![0x44; HYBRID_KEM_CT_BYTES * 2]),
-        TxExtraField::PqcLeafHashes(vec![0x55; PQC_LEAF_HASH_BYTES * 2]),
+        TxExtraField::PqcLeafEntries(vec![0x55; PQC_LEAF_ENTRY_LEN * 2]),
         // padding is last (consumes to end)
         TxExtraField::Padding(5),
     ];
@@ -194,7 +194,7 @@ fn attestation_does_not_disturb_the_pqc_shape_check() {
     let fields = vec![
         TxExtraField::PubKey([0x11; 32]),
         TxExtraField::PqcKemCiphertext(vec![0u8; HYBRID_KEM_CT_BYTES * n_out]),
-        TxExtraField::PqcLeafHashes(tx_extra::conforming_pqc_leaf_blob(n_out)),
+        TxExtraField::PqcLeafEntries(tx_extra::conforming_pqc_leaf_blob(n_out)),
         TxExtraField::ArchivalAttestation(vec![0x5A; 8]),
     ];
     tx_extra::check_pqc_field_shape_of(&fields, n_out)

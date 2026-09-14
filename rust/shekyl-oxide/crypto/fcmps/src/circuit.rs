@@ -38,15 +38,6 @@ pub trait FcmpCurves {
     /// The Discrete-Log gadget parameters for the curve of the second set of branches.
     type C2Parameters: DiscreteLogParameters;
 
-    /// Additional scalars per leaf beyond the 3 point x-coordinates (O.x, I.x, C.x).
-    ///
-    /// Shekyl uses 1 extra scalar: H(pqc_pk), giving a 4-scalar leaf.
-    const EXTRA_LEAF_SCALARS: usize = 1;
-
-    /// Total scalars per output in the leaf layer: 3 base x-coordinates + extras.
-    fn leaf_tuple_width() -> usize {
-        3 + Self::EXTRA_LEAF_SCALARS
-    }
 }
 
 /// A struct representing a circuit.
@@ -165,8 +156,9 @@ where
         let k_blind = self.discrete_log(curve, k_blind, &challenge, &challenged_J);
         self.incomplete_add_pub(K, k_blind, CM);
 
-        // Membership tuple: x-coordinates of O, I, C and the PQC commitment CM
+        // Membership tuple: `{O.x, I.x, C.x, CM.x}` — width is `LEAF_TUPLE_WIDTH`.
         let member = vec![O.x(), I.x(), C.x(), CM.x()];
+        debug_assert_eq!(member.len(), crate::LEAF_TUPLE_WIDTH);
         self.tuple_member_of_list(transcript, member, branch);
     }
 

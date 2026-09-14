@@ -90,11 +90,11 @@ use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
 use zeroize::Zeroizing;
 
 use shekyl_crypto_pq::{
-    derivation::PQC_LEAF_ENTRY_LEN,
     kem::{
         HybridKemPublicKey, HybridX25519MlKem, KeyEncapsulation, HYBRID_KEM_CT_LEN,
         ML_KEM_768_CT_LEN,
     },
+    leaf_commitment::PQC_LEAF_ENTRY_LEN,
     output::construct_output,
 };
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
@@ -306,7 +306,7 @@ fn assemble_scannable_block(
         // verifies it against the recipient's own derivation, so a fixture
         // that omitted it would classify every recovered output
         // received-but-unspendable.
-        leaf_entries.extend_from_slice(&out.pqc_leaf.entry());
+        leaf_entries.extend_from_slice(&out.pqc_leaf.entry_bytes());
     }
 
     // Serialize the extra through the PRODUCTION writer
@@ -319,7 +319,7 @@ fn assemble_scannable_block(
     // time, mirroring the production daemon → scanner path.
     let tx_pubkey = Scalar::from_bytes_mod_order(BENCH_TX_KEY) * ED25519_BASEPOINT_POINT;
     let mut extra = Extra::for_hybrid_transfer(tx_pubkey, per_output_kem_cts);
-    extra.push_pqc_leaf_hashes(leaf_entries);
+    extra.push_pqc_leaf_entries(leaf_entries);
     let extra_serialized = extra.serialize();
 
     let tx = Transaction {

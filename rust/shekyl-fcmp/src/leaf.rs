@@ -24,7 +24,7 @@ impl PqcLeafScalar {
     /// The leaf scalar for a published commitment point (compressed Ed25519):
     /// `None` if the bytes are not a decompressible point. Admission checks
     /// canonical / prime-order / non-identity before the value reaches a leaf
-    /// (`shekyl_crypto_pq::derivation::pqc_leaf_point_valid`); this is the
+    /// (`shekyl_crypto_pq::leaf_commitment::pqc_leaf_point_valid`); this is the
     /// conversion only.
     #[must_use]
     pub fn from_commitment_point(cm: &[u8; 32]) -> Option<Self> {
@@ -35,8 +35,8 @@ impl PqcLeafScalar {
 /// The per-output PQC key scalar `k = H_ℓ(hybrid_pk)` (an Ed25519 scalar), the
 /// verifier's input to the opening check.
 ///
-/// Forwards to [`shekyl_crypto_pq::derivation::pqc_key_scalar`] (the single
-/// source; customization [`shekyl_crypto_pq::derivation::DOMAIN_PQC_LEAF_KEY`]).
+/// Forwards to [`shekyl_crypto_pq::leaf_commitment::pqc_key_scalar`] (the single
+/// source; customization [`shekyl_crypto_pq::leaf_commitment::DOMAIN_PQC_LEAF_KEY`]).
 /// A duplicate body here would be a second copy to drift; there is none.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize, Serialize, Deserialize)]
 pub struct PqcKeyScalar(pub [u8; 32]);
@@ -45,18 +45,20 @@ impl PqcKeyScalar {
     /// `k` for the canonical hybrid public key the spend reveals.
     #[must_use]
     pub fn from_pqc_public_key(pqc_pk_bytes: &[u8]) -> Self {
-        PqcKeyScalar(shekyl_crypto_pq::derivation::pqc_key_scalar(pqc_pk_bytes))
+        PqcKeyScalar(shekyl_crypto_pq::leaf_commitment::pqc_key_scalar(
+            pqc_pk_bytes,
+        ))
     }
 
     /// The public point `K = k·G_k`, compressed — what the circuit's opening leg
-    /// takes as its public value. Never on the wire.
+    /// takes as its public value. Never on the wire. Forwards to
+    /// [`shekyl_crypto_pq::leaf_commitment::pqc_key_point_from_scalar`].
     #[must_use]
     pub fn point(&self) -> [u8; 32] {
         use curve25519_dalek::scalar::Scalar;
-        let k = Scalar::from_bytes_mod_order(self.0);
-        (*shekyl_curve_generators::PQC_LEAF_COMMITMENT_G_K * k)
-            .compress()
-            .to_bytes()
+        let k = Scalar::from_canonical_bytes(self.0)
+            .unwrap_or_else(|| Scalar::from_bytes_mod_order(self.0));
+        shekyl_crypto_pq::leaf_commitment::pqc_key_point_from_scalar(&k)
     }
 }
 
@@ -73,7 +75,7 @@ pub struct ShekylLeaf {
     /// Pedersen commitment x-coordinate.
     pub c_x: [u8; 32],
     /// The PQC leaf commitment's x-coordinate `CM.x` (`PL-D3`).
-    pub h_pqc: PqcLeafScalar,
+    pub cm_x: PqcLeafScalar,
 }
 
 impl ShekylLeaf {
@@ -86,7 +88,7 @@ impl ShekylLeaf {
         out[..32].copy_from_slice(&self.o_x);
         out[32..64].copy_from_slice(&self.i_x);
         out[64..96].copy_from_slice(&self.c_x);
-        out[96..128].copy_from_slice(&self.h_pqc.0);
+        out[96..128].copy_from_slice(&self.cm_x.0);
         out
     }
 
@@ -95,16 +97,16 @@ impl ShekylLeaf {
         let mut o_x = [0u8; 32];
         let mut i_x = [0u8; 32];
         let mut c_x = [0u8; 32];
-        let mut h_pqc = [0u8; 32];
+        let mut cm_x = [0u8; 32];
         o_x.copy_from_slice(&bytes[..32]);
         i_x.copy_from_slice(&bytes[32..64]);
         c_x.copy_from_slice(&bytes[64..96]);
-        h_pqc.copy_from_slice(&bytes[96..128]);
+        cm_x.copy_from_slice(&bytes[96..128]);
         ShekylLeaf {
             o_x,
             i_x,
             c_x,
-            h_pqc: PqcLeafScalar(h_pqc),
+            cm_x: PqcLeafScalar(cm_x),
         }
     }
 }
@@ -178,7 +180,7 @@ mod tests {
             o_x: [1u8; 32],
             i_x: [2u8; 32],
             c_x: [3u8; 32],
-            h_pqc: PqcLeafScalar([4u8; 32]),
+            cm_x: PqcLeafScalar([4u8; 32]),
         };
         let bytes = leaf.to_bytes();
         assert_eq!(bytes.len(), ShekylLeaf::SIZE);
@@ -197,7 +199,7 @@ mod tests {
             o_x: [0xAA; 32],
             i_x: [0xBB; 32],
             c_x: [0xCC; 32],
-            h_pqc: PqcLeafScalar([0xDD; 32]),
+            cm_x: PqcLeafScalar([0xDD; 32]),
         };
         let bytes = leaf.to_bytes();
         assert!(bytes[..32].iter().all(|&b| b == 0xAA));
@@ -212,7 +214,7 @@ mod tests {
             o_x: [0u8; 32],
             i_x: [0u8; 32],
             c_x: [0u8; 32],
-            h_pqc: PqcLeafScalar([0u8; 32]),
+            cm_x: PqcLeafScalar([0u8; 32]),
         };
         let restored = ShekylLeaf::from_bytes(&leaf.to_bytes());
         assert_eq!(leaf, restored);
@@ -290,10 +292,10 @@ mod tests {
             o_x: [1u8; 32],
             i_x: [2u8; 32],
             c_x: [3u8; 32],
-            h_pqc: original,
+            cm_x: original,
         };
         let bytes = leaf.to_bytes();
         let restored = ShekylLeaf::from_bytes(&bytes);
-        assert_eq!(restored.h_pqc, original);
+        assert_eq!(restored.cm_x, original);
     }
 }

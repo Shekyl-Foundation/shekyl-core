@@ -51,7 +51,7 @@ pub unsafe extern "C" fn shekyl_fcmp_pqc_leaf_hash(
     if out_ptr.is_null() {
         return false;
     }
-    let k = shekyl_crypto_pq::derivation::pqc_key_scalar(pk_bytes);
+    let k = shekyl_crypto_pq::leaf_commitment::pqc_key_scalar(pk_bytes);
     std::ptr::copy_nonoverlapping(k.as_ptr(), out_ptr, 32);
     true
 }
@@ -76,9 +76,9 @@ pub unsafe extern "C" fn shekyl_derive_pqc_leaf_hash(
     let mut ss = [0u8; 64];
     std::ptr::copy_nonoverlapping(combined_ss_ptr, ss.as_mut_ptr(), 64);
 
-    match shekyl_crypto_pq::derivation::derive_pqc_leaf(&ss, output_index) {
+    match shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf(&ss, output_index) {
         Ok(leaf) => {
-            let entry = leaf.entry();
+            let entry = leaf.entry_bytes();
             std::ptr::copy_nonoverlapping(entry.as_ptr(), h_pqc_out, entry.len());
             true
         }
@@ -266,7 +266,7 @@ pub(crate) fn parse_prove_witness(
             .copy_from_slice(&data[offset + 256..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
         offset += SHEKYL_PROVE_WITNESS_HEADER_BYTES;
 
-        let (leaf_chunk_outputs, leaf_chunk_h_pqc) = parse_leaf_chunks(data, &mut offset)?;
+        let (leaf_chunk_outputs, leaf_chunk_cm_x) = parse_leaf_chunks(data, &mut offset)?;
         let c1_branch_layers = parse_branch_layers(data, &mut offset)?;
         let c2_branch_layers = parse_branch_layers(data, &mut offset)?;
 
@@ -281,7 +281,7 @@ pub(crate) fn parse_prove_witness(
             commitment_mask,
             pseudo_out_blind,
             leaf_chunk_outputs,
-            leaf_chunk_h_pqc,
+            leaf_chunk_cm_x,
             c1_branch_layers,
             c2_branch_layers,
         });

@@ -400,7 +400,7 @@ pub fn verify_multisig(
 ///
 /// For a scheme-2 output the revealed `pqc_pk` is the canonical encoding of
 /// the `MultisigKeyContainer`, so its leaf commitment is `k·G_k + r·J` with
-/// `k` over exactly those bytes — the same [`crate::derivation::pqc_key_scalar`]
+/// `k` over exactly those bytes — the same [`crate::leaf_commitment::pqc_key_scalar`]
 /// every single-signer key goes through. One derivation, no multisig-specific
 /// leaf hash: the former Keccak-256 of the container was a second reading of
 /// the same bytes that the verifier never computed.
@@ -408,7 +408,7 @@ pub fn multisig_pqc_leaf_hash(
     container: &MultisigKeyContainer,
 ) -> Result<[u8; 32], PqcVerifyError> {
     let canonical = container.to_canonical_bytes()?;
-    Ok(crate::derivation::pqc_key_scalar(&canonical))
+    Ok(crate::leaf_commitment::pqc_key_scalar(&canonical))
 }
 
 // ---------------------------------------------------------------------------

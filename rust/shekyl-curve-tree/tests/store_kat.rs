@@ -107,7 +107,7 @@ fn store_root_matches_oracle_and_header_tier_a() {
                 .map(|(i, raw)| OutputIdentity {
                     output_key: raw.output_key,
                     commitment: raw.commitment,
-                    h_pqc: shekyl_curve_tree::recon::extract_leaf_commitments(
+                    cm: shekyl_curve_tree::recon::extract_leaf_commitments(
                         Some(&blk.blob),
                         blk.outputs.len(),
                     )
@@ -225,7 +225,7 @@ fn store_root_mixed_maturity_drain_order() {
         .map(|(i, raw)| OutputIdentity {
             output_key: raw.output_key,
             commitment: raw.commitment,
-            h_pqc: shekyl_curve_tree::recon::extract_leaf_commitments(Some(&blob_cb), 1)
+            cm: shekyl_curve_tree::recon::extract_leaf_commitments(Some(&blob_cb), 1)
                 .expect("0x07 entries")[i],
             target: raw.target,
         })
@@ -236,7 +236,7 @@ fn store_root_mixed_maturity_drain_order() {
         .map(|(i, raw)| OutputIdentity {
             output_key: raw.output_key,
             commitment: raw.commitment,
-            h_pqc: shekyl_curve_tree::recon::extract_leaf_commitments(Some(&blob_reg), 1)
+            cm: shekyl_curve_tree::recon::extract_leaf_commitments(Some(&blob_reg), 1)
                 .expect("0x07 entries")[i],
             target: raw.target,
         })

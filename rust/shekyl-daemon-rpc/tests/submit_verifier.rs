@@ -283,7 +283,7 @@ fn build_funding_setup() -> FundingSetup {
     // overflowed, so the tree is depth 2. Every decoy shares the spent
     // output's (valid) 0x07 entry; distinct O/C points keep leaf hashes
     // distinct.
-    let spent_entry = spent.pqc_leaf.entry();
+    let spent_entry = spent.pqc_leaf.entry_bytes();
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
     let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
@@ -378,7 +378,7 @@ fn build_funding_setup() -> FundingSetup {
             output_key: cl.output_key,
             key_image_gen: cl.key_image_gen,
             commitment: cl.commitment,
-            h_pqc: cl.h_pqc,
+            cm_x: cl.cm_x,
         })
         .collect();
     let spend_input = SpendInput {

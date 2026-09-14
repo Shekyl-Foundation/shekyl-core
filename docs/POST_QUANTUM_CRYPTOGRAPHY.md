@@ -1192,12 +1192,15 @@ Operational consequences:
     transition
 
 Operationally: the FCMP++ EC membership proof is zero-knowledge over the
-full chain; its composition with the public `H(pqc_pk)` input identifies the
-spent output today (`PL-D1`, pre-genesis, fix `PL-D3` in design), and
-`pqc_auths` provides the authorization layer, whose post-quantum property
-is unforgeability of the signature under the key presented — not binding of
-that key to the spent output, which is discrete-log sound until V4
-(`PL-D2`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
+full chain. Since `PL-D3` the leaf's 4th scalar is the x-coordinate of a
+Pedersen commitment `CM = k·G_k + r·J`, opened in-circuit to the
+verifier-derived `K = k·G_k` of the revealed key — the key is bound to the
+spent leaf without the published value being a function of the key
+(`PL-D1` closed). `pqc_auths` provides the authorization layer, whose
+post-quantum property is unforgeability of the signature under the key
+presented — not binding of that key to the spent output, which is
+discrete-log sound until V4 (`PL-D2`,
+[`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
 
 ### v3 Rollout Notes
 

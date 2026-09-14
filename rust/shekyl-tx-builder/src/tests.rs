@@ -21,7 +21,7 @@ fn dummy_leaf_entry() -> LeafEntry {
         output_key: [1u8; 32],
         key_image_gen: [2u8; 32],
         commitment: [3u8; 32],
-        h_pqc: [4u8; 32],
+        cm_x: [4u8; 32],
     }
 }
 

@@ -866,7 +866,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
                 .compress()
                 .to_bytes(),
                 commitment: constructed.commitment,
-                h_pqc,
+                cm_x: h_pqc,
             });
 
             legacy_bundles.push((
@@ -1009,8 +1009,8 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
                     "leaf_chunk[{j}].commitment mismatch ({context}, input={i})"
                 );
                 assert_eq!(
-                    ec.h_pqc, lc.h_pqc,
-                    "leaf_chunk[{j}].h_pqc mismatch ({context}, input={i})"
+                    ec.cm_x, lc.cm_x,
+                    "leaf_chunk[{j}].cm_x mismatch ({context}, input={i})"
                 );
             }
             assert_eq!(
@@ -1267,7 +1267,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
             .compress()
             .to_bytes(),
         commitment: constructed.commitment,
-        h_pqc,
+        cm_x: h_pqc,
     }];
     let tree_root = crate::engine::synthetic_tree::selene_single_chunk_tree_root(&leaf_chunk);
     let tree = TreeContext {

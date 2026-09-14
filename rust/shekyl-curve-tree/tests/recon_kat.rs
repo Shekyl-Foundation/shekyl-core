@@ -80,10 +80,10 @@ fn decode_block(b: &Value) -> Block {
         .expect("outputs array")
         .iter()
         .zip(commitments)
-        .map(|(o, h_pqc)| OutputIdentity {
+        .map(|(o, cm)| OutputIdentity {
             output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
             commitment: o["commitment"].as_str().map(decode_hex32),
-            h_pqc,
+            cm,
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();

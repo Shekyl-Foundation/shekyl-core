@@ -638,13 +638,13 @@ mod tests {
                 o_x: [1u8; 32],
                 i_x: [2u8; 32],
                 c_x: [3u8; 32],
-                h_pqc: PqcLeafScalar([4u8; 32]),
+                cm_x: PqcLeafScalar([4u8; 32]),
             },
             ShekylLeaf {
                 o_x: [5u8; 32],
                 i_x: [6u8; 32],
                 c_x: [7u8; 32],
-                h_pqc: PqcLeafScalar([8u8; 32]),
+                cm_x: PqcLeafScalar([8u8; 32]),
             },
         ];
         let bytes = leaves_to_bytes(&leaves);

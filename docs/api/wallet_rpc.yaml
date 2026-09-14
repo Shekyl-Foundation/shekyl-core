@@ -362,7 +362,10 @@ info:
   # added REJECTED as an alias-shape of claim; CapabilityMode narrowed to
   # FULL (ViewOnly REJECTED / hardware-offload DEFERRED, symbols deleted
   # tree-wide).
-  version: 0.4.0
+  # 0.5.0: PL-D3 — get_balance.unspendable (required) and TransferView
+  # state UNSPENDABLE + unspendable_reason, for received-but-unspendable
+  # outputs whose published 0x07 entry does not open to this wallet.
+  version: 0.5.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing

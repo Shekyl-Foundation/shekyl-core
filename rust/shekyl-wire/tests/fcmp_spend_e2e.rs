@@ -248,7 +248,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // Genesis coinbase: the spent output at vout 0, then decoy members. Every
     // output shares the spent output's (valid) 0x07 entry; they differ by
     // their O/C points, so their leaves still differ.
-    let spent_entry = spent.pqc_leaf.entry();
+    let spent_entry = spent.pqc_leaf.entry_bytes();
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
     let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
@@ -345,7 +345,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
             output_key: cl.output_key,
             key_image_gen: cl.key_image_gen,
             commitment: cl.commitment,
-            h_pqc: cl.h_pqc,
+            cm_x: cl.cm_x,
         })
         .collect();
     let spend_input = SpendInput {

@@ -302,7 +302,7 @@ pub fn build_fixture<R: RngCore + CryptoRng>(
                 .iter()
                 .map(|&j| (os[j].to_bytes(), is[j].to_bytes(), cs[j].to_bytes()))
                 .collect(),
-            leaf_chunk_h_pqc: per_input_chunk[i].iter().map(|&j| all_h_pqc[j]).collect(),
+            leaf_chunk_cm_x: per_input_chunk[i].iter().map(|&j| all_h_pqc[j]).collect(),
             c1_branch_layers: c1_layers.clone(),
             c2_branch_layers: c2_layers.clone(),
         })

@@ -17,7 +17,7 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
-use shekyl_crypto_pq::derivation::derive_pqc_leaf;
+use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
@@ -386,18 +386,30 @@ fn prove_input_from_spend(
             detail: e.to_string(),
         }
     })?;
-    let own = input
-        .leaf_chunk
-        .iter()
-        .find(|e| e.output_key == input.output_key && e.commitment == input.commitment)
-        .ok_or(TxBuilderError::SpentOutputNotInLeafChunk { index })?;
     let derived_x = PqcLeafScalar::from_commitment_point(&pqc_leaf.point).ok_or_else(|| {
         TxBuilderError::PqcLeafDerivation {
             index,
             detail: "derived commitment is not a decompressible point".into(),
         }
     })?;
-    if derived_x.0 != own.h_pqc {
+    // Consensus does not forbid duplicate (O, C) pairs in a chunk; only
+    // `CM.x` names the spent leaf. Prefer the matching opening, and only
+    // then fall back to "present but unopenable".
+    let mut saw_output = false;
+    let mut saw_openable = false;
+    for e in &input.leaf_chunk {
+        if e.output_key == input.output_key && e.commitment == input.commitment {
+            saw_output = true;
+            if e.cm_x == derived_x.0 {
+                saw_openable = true;
+                break;
+            }
+        }
+    }
+    if !saw_output {
+        return Err(TxBuilderError::SpentOutputNotInLeafChunk { index });
+    }
+    if !saw_openable {
         return Err(TxBuilderError::PqcLeafMismatch { index });
     }
 
@@ -406,7 +418,7 @@ fn prove_input_from_spend(
         .iter()
         .map(|e| (e.output_key, e.key_image_gen, e.commitment))
         .collect();
-    let leaf_h_pqc: Vec<[u8; 32]> = input.leaf_chunk.iter().map(|e| e.h_pqc).collect();
+    let leaf_cm_x: Vec<[u8; 32]> = input.leaf_chunk.iter().map(|e| e.cm_x).collect();
 
     let c1_branch_layers: Vec<BranchLayer> = input
         .c1_layers
@@ -434,7 +446,7 @@ fn prove_input_from_spend(
         commitment_mask: input.commitment_mask,
         pseudo_out_blind,
         leaf_chunk_outputs: leaf_outputs,
-        leaf_chunk_h_pqc: leaf_h_pqc,
+        leaf_chunk_cm_x: leaf_cm_x,
         c1_branch_layers,
         c2_branch_layers,
     })

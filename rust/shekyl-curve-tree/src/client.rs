@@ -80,7 +80,7 @@ pub struct RawOutput {
 
 /// One transaction's leaf inputs, in `vout` order. The `0x07` blob (one
 /// 64-byte `CM ‖ record` entry per output, `PL-D3`) is the raw payload from
-/// `shekyl_scanner::extra::Extra::pqc_leaf_hashes()` (`None` when the tag is
+/// `shekyl_scanner::extra::Extra::pqc_leaf_entries()` (`None` when the tag is
 /// absent); the client slices it, and refuses the block if it cannot.
 #[derive(Clone, Copy, Debug)]
 pub struct TxLeafInputs<'a> {
@@ -774,10 +774,10 @@ impl CurveTreeClient {
                 tx.outputs
                     .iter()
                     .zip(commitments)
-                    .map(|(raw, h_pqc)| OutputIdentity {
+                    .map(|(raw, cm)| OutputIdentity {
                         output_key: raw.output_key,
                         commitment: raw.commitment,
-                        h_pqc,
+                        cm,
                         target: raw.target,
                     })
                     .collect(),
@@ -1535,7 +1535,7 @@ mod tests {
         let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&ED25519_BASEPOINT)
             .expect("basepoint decompresses");
         assert_eq!(&client.entries[0].leaf[96..128], &cm_x);
-        assert_eq!(client.entries[0].identity.h_pqc, ED25519_BASEPOINT);
+        assert_eq!(client.entries[0].identity.cm, ED25519_BASEPOINT);
     }
 
     #[test]
@@ -1895,7 +1895,7 @@ mod tests {
             identity: OutputIdentity {
                 output_key: [1u8; 32],
                 commitment: Some([2u8; 32]),
-                h_pqc: [3u8; 32],
+                cm: [3u8; 32],
                 target: TargetKind::TaggedKey,
             },
         }

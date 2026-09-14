@@ -2186,7 +2186,7 @@ fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
         }
         None => buf[48] = 0,
     }
-    buf[81..113].copy_from_slice(&entry.identity.h_pqc);
+    buf[81..113].copy_from_slice(&entry.identity.cm);
     buf[113] = encode_target(&entry.identity.target);
     // Schema v2: creation_height in the formerly-free range. The value
     // stays `&[u8; 192]` (TypeName unchanged), which is exactly why the
@@ -2209,8 +2209,8 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
         }
         _ => return Err(StoreError::CorruptMeta("invalid leaf commitment tag")),
     };
-    let mut h_pqc = [0u8; 32];
-    h_pqc.copy_from_slice(&buf[81..113]);
+    let mut cm = [0u8; 32];
+    cm.copy_from_slice(&buf[81..113]);
     let target = decode_target(buf[113], &buf[114..122])?;
     let creation_height = BlockHeight(u64::from_be_bytes(
         buf[122..130].try_into().expect("8 bytes"),
@@ -2222,7 +2222,7 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
         identity: crate::types::OutputIdentity {
             output_key,
             commitment,
-            h_pqc,
+            cm,
             target,
         },
     })
@@ -2313,7 +2313,7 @@ mod tests {
             identity: OutputIdentity {
                 output_key: [1u8; 32],
                 commitment: Some([2u8; 32]),
-                h_pqc: [3u8; 32],
+                cm: [3u8; 32],
                 target: TargetKind::TaggedKey,
             },
         }
@@ -2898,8 +2898,8 @@ mod tests {
     fn random_entry(rng: &mut ChaCha20Rng, gindex: u64, maturity: u64, creation: u64) -> LeafEntry {
         let mut output_key = [0u8; 32];
         rng.fill_bytes(&mut output_key);
-        let mut h_pqc = [0u8; 32];
-        rng.fill_bytes(&mut h_pqc);
+        let mut cm = [0u8; 32];
+        rng.fill_bytes(&mut cm);
         let commitment = if rng.next_u32().is_multiple_of(2) {
             let mut c = [0u8; 32];
             rng.fill_bytes(&mut c);
@@ -2920,7 +2920,7 @@ mod tests {
             identity: OutputIdentity {
                 output_key,
                 commitment,
-                h_pqc,
+                cm,
                 target,
             },
         }

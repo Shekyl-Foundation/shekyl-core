@@ -221,7 +221,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // ── Step 7: tx_extra — tx pubkey + per-output KEM blobs + 0x07 PQC
         // leaf hashes (same shape as the bond path).
         let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-        extra.push_pqc_leaf_hashes(leaf_hash_blob);
+        extra.push_pqc_leaf_entries(leaf_hash_blob);
         let tx_extra = extra.serialize();
 
         // ── Step 8: fee spend inputs — shared spend-side leg with the bond

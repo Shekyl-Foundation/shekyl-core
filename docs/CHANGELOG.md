@@ -19,7 +19,8 @@
   both halves of the published entry at scan and classifies a mismatch or a
   missing entry received-but-unspendable (`TransferDetails::unspendable`,
   `LEDGER_BLOCK_VERSION 11`; retained, never selectable, wallet-RPC state
-  `UNSPENDABLE` + `unspendable_reason`, `get_balance.unspendable`), with the
+  `UNSPENDABLE` + `unspendable_reason`, `get_balance.unspendable`; wallet-RPC
+  OpenAPI `0.5.0`), with the
   signer's own refusal before proving kept as defence in depth
   (`TxBuilderError::PqcLeafMismatch`, FFI −32). The emission vin drops
   `pqc_pk_hash` (the

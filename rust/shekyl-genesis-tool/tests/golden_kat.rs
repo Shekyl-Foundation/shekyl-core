@@ -18,7 +18,7 @@ use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwor
 use shekyl_genesis_tool::builder::{build_genesis_tx, genesis_block};
 use shekyl_genesis_tool::recipients::{parse_and_validate, Recipient};
 use shekyl_genesis_tool::txkey::{derive_genesis_tx_secret, tx_pubkey};
-use shekyl_wire::tx_extra::{self, TxExtraField, HYBRID_KEM_CT_BYTES, PQC_LEAF_HASH_BYTES};
+use shekyl_wire::tx_extra::{self, TxExtraField, HYBRID_KEM_CT_BYTES, PQC_LEAF_ENTRY_LEN};
 
 /// Synthetic nonce for the block-id pin (testnet's real GENESIS_NONCE value,
 /// but nothing here depends on the config).
@@ -129,8 +129,8 @@ fn extra_is_canonical_fixed_point() {
         "field 1 must be the aggregated 0x06 KEM blob"
     );
     assert!(
-        matches!(&fields[2], TxExtraField::PqcLeafHashes(b)
-            if b.len() == recipients.len() * PQC_LEAF_HASH_BYTES),
+        matches!(&fields[2], TxExtraField::PqcLeafEntries(b)
+            if b.len() == recipients.len() * PQC_LEAF_ENTRY_LEN),
         "field 2 must be the aggregated 0x07 leaf-entry blob"
     );
     // Raw byte anchors: tag 0x01 at offset 0, tag 0x06 right after the

@@ -196,7 +196,7 @@ namespace cryptonote
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(out_amounts.size() * HYBRID_KEM_CT_BYTES);
       tx_extra_pqc_leaf_hashes leaf_hash_field;
-      leaf_hash_field.blob.reserve(out_amounts.size() * PQC_LEAF_HASH_BYTES);
+      leaf_hash_field.blob.reserve(out_amounts.size() * PQC_LEAF_ENTRY_LEN);
 
       tx.ct_signatures.outPk.resize(out_amounts.size());
       tx.ct_signatures.enc_amounts.resize(out_amounts.size());
@@ -234,7 +234,7 @@ namespace cryptonote
             reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
             od.kem_ciphertext_ml_kem.len);
 
-        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_HASH_BYTES);
+        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
 
         summary_amounts += out_amounts[i];
         ShekylOutputData tmp = od;
@@ -497,7 +497,7 @@ namespace cryptonote
       tx_extra_pqc_kem_ciphertext kem_field;
       kem_field.blob.reserve(destinations.size() * HYBRID_KEM_CT_BYTES);
       tx_extra_pqc_leaf_hashes leaf_hash_field;
-      leaf_hash_field.blob.reserve(destinations.size() * PQC_LEAF_HASH_BYTES);
+      leaf_hash_field.blob.reserve(destinations.size() * PQC_LEAF_ENTRY_LEN);
       v3_rct_data.resize(destinations.size());
 
       size_t output_index = 0;
@@ -544,7 +544,7 @@ namespace cryptonote
             reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
             od.kem_ciphertext_ml_kem.len);
 
-        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_HASH_BYTES);
+        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
 
         summary_outs_money += dst_entr.amount;
         ShekylOutputData tmp = od;

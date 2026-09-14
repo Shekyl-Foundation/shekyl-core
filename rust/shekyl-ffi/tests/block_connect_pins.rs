@@ -119,13 +119,13 @@ fn candidate_shapes_saturate_their_caps() {
         let leaf_blobs: Vec<usize> = fields
             .iter()
             .filter_map(|f| match f {
-                shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(b) => Some(b.len()),
+                shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(b) => Some(b.len()),
                 _ => None,
             })
             .collect();
         assert_eq!(
             leaf_blobs,
-            vec![shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES * n_out],
+            vec![shekyl_wire::tx_extra::PQC_LEAF_ENTRY_LEN * n_out],
             "exactly ONE 0x07 field carrying 64·n_out leaf-entry bytes (PL-D3)"
         );
 

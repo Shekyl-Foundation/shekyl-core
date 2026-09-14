@@ -32,7 +32,7 @@
 
 use shekyl_crypto_pq::kem::HYBRID_KEM_CT_LEN;
 use shekyl_curve_io::varint_len;
-use shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES;
+use shekyl_wire::tx_extra::PQC_LEAF_ENTRY_LEN;
 // Consensus proof-system limits from their UPSTREAM home (constraint 1 — never
 // via shekyl-tx-builder's re-export, which would invert the arrow). `MAX_TREE_DEPTH`
 // and `MAX_OUTPUTS` are re-exported (`pub use`) so consumers that price real tx
@@ -217,13 +217,13 @@ fn extra_kem_field_weight(n_out: usize) -> usize {
     1 + varint_len(blob as u64) + blob
 }
 
-/// `ExtraField::PqcLeafHashes` (`0x07`): tag + varint(len) + `n_out × 64`
+/// `ExtraField::PqcLeafEntries` (`0x07`): tag + varint(len) + `n_out × 64`
 /// leaf entries (`CM ‖ record`, `PL-D3` / `PL-D3a`) — a consensus-required
 /// field (CEN-I19: a transaction with outputs is refused without it); the
 /// transfer path appends it (sign_bridge.rs, PR-4b), so every predicted spend
 /// carries it.
 fn extra_leaf_hashes_field_weight(n_out: usize) -> usize {
-    let blob = n_out * PQC_LEAF_HASH_BYTES;
+    let blob = n_out * PQC_LEAF_ENTRY_LEN;
     1 + varint_len(blob as u64) + blob
 }
 
@@ -452,7 +452,7 @@ mod tests {
                 );
                 // The 0x07 leaf-hash blob the transfer path appends (sign_bridge.rs)
                 // — real serializer, same as the KEM term.
-                e.push_pqc_leaf_hashes(vec![0u8; n_out * PQC_LEAF_HASH_BYTES]);
+                e.push_pqc_leaf_entries(vec![0u8; n_out * PQC_LEAF_ENTRY_LEN]);
                 e.serialize()
             };
             let tx = Transaction {

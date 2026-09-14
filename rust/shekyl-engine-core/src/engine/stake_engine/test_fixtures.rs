@@ -101,9 +101,9 @@ pub(crate) fn constructed_record_with_entry(
             .compress()
             .to_bytes(),
         commitment: constructed.commitment,
-        h_pqc: shekyl_fcmp::PqcLeafScalar::from_commitment_point(&constructed.pqc_leaf.point)
+        cm_x: shekyl_fcmp::PqcLeafScalar::from_commitment_point(&constructed.pqc_leaf.point)
             .expect("constructed leaf commitment decompresses")
             .0,
     };
-    (record, leaf, constructed.pqc_leaf.entry())
+    (record, leaf, constructed.pqc_leaf.entry_bytes())
 }

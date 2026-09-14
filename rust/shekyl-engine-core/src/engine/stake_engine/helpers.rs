@@ -88,7 +88,7 @@ pub(crate) fn construct_vouts_to_base(
         vouts.kem_blobs.push(kem_blob);
         vouts
             .leaf_hash_blob
-            .extend_from_slice(&constructed.pqc_leaf.entry());
+            .extend_from_slice(&constructed.pqc_leaf.entry_bytes());
         vouts.output_keys.push(constructed.output_key);
         vouts.view_tags.push(Some(constructed.view_tag_prefilter));
         vouts.output_infos.push(shekyl_tx_builder::OutputInfo {

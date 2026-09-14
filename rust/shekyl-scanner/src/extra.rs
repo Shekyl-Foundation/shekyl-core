@@ -63,8 +63,8 @@ pub enum ExtraField {
     /// PQC KEM ciphertext blob (Shekyl tag 0x06).
     PqcKemCiphertext(Vec<u8>),
     /// PQC leaf entries (Shekyl tag 0x07): `CM ‖ record`, 64 bytes per
-    /// output (`PL-D3`). The variant keeps the tag's historical name.
-    PqcLeafHashes(Vec<u8>),
+    /// output (`PL-D3`).
+    PqcLeafEntries(Vec<u8>),
 }
 
 fn decompress_key(bytes: [u8; 32]) -> Option<EdwardsPoint> {
@@ -81,7 +81,7 @@ impl ExtraField {
                 keys.iter().map(|key| key.compress().to_bytes()).collect(),
             ),
             ExtraField::PqcKemCiphertext(data) => TxExtraField::PqcKemCiphertext(data.clone()),
-            ExtraField::PqcLeafHashes(data) => TxExtraField::PqcLeafHashes(data.clone()),
+            ExtraField::PqcLeafEntries(data) => TxExtraField::PqcLeafEntries(data.clone()),
         }
     }
 
@@ -109,7 +109,7 @@ impl ExtraField {
                 Some(ExtraField::PublicKeys(pts))
             }
             TxExtraField::PqcKemCiphertext(data) => Some(ExtraField::PqcKemCiphertext(data)),
-            TxExtraField::PqcLeafHashes(data) => Some(ExtraField::PqcLeafHashes(data)),
+            TxExtraField::PqcLeafEntries(data) => Some(ExtraField::PqcLeafEntries(data)),
             TxExtraField::PqcOwnership(_)
             | TxExtraField::MultisigMigration(_)
             | TxExtraField::PqcViewTagHints(_)
@@ -203,9 +203,9 @@ impl Extra {
 
     /// The `0x07` payload: every output's leaf entry (`CM ‖ record`, 64 B
     /// each, `PL-D3`) concatenated in output order. First match.
-    pub fn pqc_leaf_hashes(&self) -> Option<&[u8]> {
+    pub fn pqc_leaf_entries(&self) -> Option<&[u8]> {
         for field in &self.0 {
-            if let ExtraField::PqcLeafHashes(data) = field {
+            if let ExtraField::PqcLeafEntries(data) = field {
                 return Some(data);
             }
         }
@@ -219,9 +219,9 @@ impl Extra {
     pub fn pqc_leaf_entry(
         &self,
         vout: usize,
-    ) -> Option<&[u8; shekyl_crypto_pq::derivation::PQC_LEAF_ENTRY_LEN]> {
-        use shekyl_crypto_pq::derivation::PQC_LEAF_ENTRY_LEN;
-        let blob = self.pqc_leaf_hashes()?;
+    ) -> Option<&[u8; shekyl_crypto_pq::leaf_commitment::PQC_LEAF_ENTRY_LEN]> {
+        use shekyl_crypto_pq::leaf_commitment::PQC_LEAF_ENTRY_LEN;
+        let blob = self.pqc_leaf_entries()?;
         let start = vout.checked_mul(PQC_LEAF_ENTRY_LEN)?;
         let end = start.checked_add(PQC_LEAF_ENTRY_LEN)?;
         blob.get(start..end)?.try_into().ok()
@@ -292,8 +292,8 @@ impl Extra {
     /// (stake_engine), drain, and the ordinary transfer path (sign_bridge.rs;
     /// its omission there once made every transfer output unspendable —
     /// surfaced live by the PR-4b bond e2e).
-    pub fn push_pqc_leaf_hashes(&mut self, blob: Vec<u8>) {
-        self.0.push(ExtraField::PqcLeafHashes(blob));
+    pub fn push_pqc_leaf_entries(&mut self, blob: Vec<u8>) {
+        self.0.push(ExtraField::PqcLeafEntries(blob));
     }
 
     #[allow(dead_code)]
@@ -343,7 +343,7 @@ impl Extra {
 }
 
 #[cfg(test)]
-mod pqc_leaf_hashes_tests {
+mod pqc_leaf_entries_tests {
     use super::*;
     use curve25519_dalek::constants::ED25519_BASEPOINT_POINT;
 
@@ -356,38 +356,38 @@ mod pqc_leaf_hashes_tests {
     /// Scanner first-match behavior. Daemon parity on duplicate/malformed `0x07`
     /// is unverified — owned by the Tier-B seam test (`recon_tier_b.rs`).
     #[test]
-    fn pqc_leaf_hashes_round_trip() {
+    fn pqc_leaf_entries_round_trip() {
         let payload = leaf_blob(64);
-        let field = ExtraField::PqcLeafHashes(payload.clone());
+        let field = ExtraField::PqcLeafEntries(payload.clone());
         let mut wire = Vec::new();
         field.write(&mut wire).unwrap();
         let extra = Extra::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(extra.pqc_leaf_hashes(), Some(payload.as_slice()));
+        assert_eq!(extra.pqc_leaf_entries(), Some(payload.as_slice()));
     }
 
     #[test]
-    fn pqc_leaf_hashes_after_pubkey_field() {
+    fn pqc_leaf_entries_after_pubkey_field() {
         let payload = leaf_blob(32);
         let extra = Extra(vec![
             ExtraField::PublicKey(ED25519_BASEPOINT_POINT),
-            ExtraField::PqcLeafHashes(payload.clone()),
+            ExtraField::PqcLeafEntries(payload.clone()),
         ]);
         let wire = extra.serialize();
         let parsed = Extra::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(parsed.pqc_leaf_hashes(), Some(payload.as_slice()));
+        assert_eq!(parsed.pqc_leaf_entries(), Some(payload.as_slice()));
     }
 
     #[test]
-    fn pqc_leaf_hashes_duplicate_tag_returns_first_match() {
+    fn pqc_leaf_entries_duplicate_tag_returns_first_match() {
         let first = leaf_blob(32);
         let second = leaf_blob(64);
         let extra = Extra(vec![
-            ExtraField::PqcLeafHashes(first.clone()),
-            ExtraField::PqcLeafHashes(second),
+            ExtraField::PqcLeafEntries(first.clone()),
+            ExtraField::PqcLeafEntries(second),
         ]);
         let wire = extra.serialize();
         let parsed = Extra::read(&mut wire.as_slice()).unwrap();
-        assert_eq!(parsed.pqc_leaf_hashes(), Some(first.as_slice()));
+        assert_eq!(parsed.pqc_leaf_entries(), Some(first.as_slice()));
     }
 
     /// Retired inherited tags must fail closed. The previous ExtraField
@@ -418,7 +418,7 @@ mod pqc_leaf_hashes_tests {
         let wire = tx_extra::serialize(&[
             TxExtraField::PubKey([0xFF; 32]),
             TxExtraField::PqcKemCiphertext(kem.clone()),
-            TxExtraField::PqcLeafHashes(leaf.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
         .expect("opaque-key extra serializes");
         let parsed = Extra::read(&mut wire.as_slice()).expect("well-formed extra parses");
@@ -427,7 +427,7 @@ mod pqc_leaf_hashes_tests {
             "a non-point 0x01 is absent from the scan view"
         );
         assert_eq!(parsed.pqc_kem_ciphertext(), Some(kem.as_slice()));
-        assert_eq!(parsed.pqc_leaf_hashes(), Some(leaf.as_slice()));
+        assert_eq!(parsed.pqc_leaf_entries(), Some(leaf.as_slice()));
     }
 
     /// A mixed `0x04` list must not shift: one non-point drops the whole
@@ -438,7 +438,7 @@ mod pqc_leaf_hashes_tests {
         let good = ED25519_BASEPOINT_POINT.compress().to_bytes();
         let wire = tx_extra::serialize(&[
             TxExtraField::AdditionalPubKeys(vec![good, [0xFF; 32]]),
-            TxExtraField::PqcLeafHashes(leaf.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
         .expect("mixed additional-keys extra serializes");
         let parsed = Extra::read(&mut wire.as_slice()).expect("well-formed extra parses");
@@ -446,7 +446,7 @@ mod pqc_leaf_hashes_tests {
             parsed.keys().is_none(),
             "a 0x04 field with any non-point is skipped whole"
         );
-        assert_eq!(parsed.pqc_leaf_hashes(), Some(leaf.as_slice()));
+        assert_eq!(parsed.pqc_leaf_entries(), Some(leaf.as_slice()));
     }
 
     /// A genesis tag the scanner does not consume must not hide `0x06`/`0x07`.
@@ -463,12 +463,12 @@ mod pqc_leaf_hashes_tests {
             TxExtraField::ArchivalAttestation(vec![0xA7; 16]),
             TxExtraField::PubKey(pk),
             TxExtraField::PqcKemCiphertext(kem.clone()),
-            TxExtraField::PqcLeafHashes(leaf.clone()),
+            TxExtraField::PqcLeafEntries(leaf.clone()),
         ])
         .expect("genesis extra serializes");
         let parsed = Extra::read(&mut wire.as_slice()).expect("attestation-bearing extra parses");
         assert_eq!(parsed.pqc_kem_ciphertext(), Some(kem.as_slice()));
-        assert_eq!(parsed.pqc_leaf_hashes(), Some(leaf.as_slice()));
+        assert_eq!(parsed.pqc_leaf_entries(), Some(leaf.as_slice()));
         assert!(
             parsed.keys().is_some(),
             "tx pubkey after an attestation field must still be visible"

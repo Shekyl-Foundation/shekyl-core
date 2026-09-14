@@ -394,8 +394,8 @@ struct TransferDetailsSchema {
     eligible_height: u64,
     frozen: bool,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
-    receive_attribution: ReceiveAttribution,
     unspendable: Option<UnspendableReason>,
+    receive_attribution: ReceiveAttribution,
 }
 
 impl postcard_schema::Schema for TransferDetails {

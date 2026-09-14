@@ -711,7 +711,7 @@ impl InternalScanner {
             // by its transaction, never selectable (rule 82). Constant-time
             // compare for the same reason as the ownership check above: the
             // derived entry is a function of secret scan material.
-            let derived_entry = recovered.pqc_leaf.entry();
+            let derived_entry = recovered.pqc_leaf.entry_bytes();
             let unspendable = match extra.pqc_leaf_entry(o) {
                 None => Some(UnspendableReason::PqcLeafEntryAbsent),
                 Some(published) => {

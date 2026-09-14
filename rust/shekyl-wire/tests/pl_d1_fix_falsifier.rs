@@ -145,8 +145,8 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         commitment: Some(spent.commitment),
         target: TargetKind::TaggedKey,
     });
-    genesis_blob.extend_from_slice(&spent.pqc_leaf.entry());
-    published_0x07.push(spent.pqc_leaf.entry());
+    genesis_blob.extend_from_slice(&spent.pqc_leaf.entry_bytes());
+    published_0x07.push(spent.pqc_leaf.entry_bytes());
     for _ in 1..TREE_OUTPUTS {
         let decoy = real_output(&mut rng, 1);
         genesis_outputs.push(RawOutput {
@@ -154,8 +154,8 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
             commitment: Some(decoy.commitment),
             target: TargetKind::TaggedKey,
         });
-        genesis_blob.extend_from_slice(&decoy.pqc_leaf.entry());
-        published_0x07.push(decoy.pqc_leaf.entry());
+        genesis_blob.extend_from_slice(&decoy.pqc_leaf.entry_bytes());
+        published_0x07.push(decoy.pqc_leaf.entry_bytes());
     }
 
     let reference_height = COINBASE_LOCK_WINDOW + 1;
@@ -165,14 +165,14 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
             (genesis_outputs.clone(), genesis_blob.clone())
         } else {
             let filler = real_output(&mut rng, 1);
-            published_0x07.push(filler.pqc_leaf.entry());
+            published_0x07.push(filler.pqc_leaf.entry_bytes());
             (
                 vec![RawOutput {
                     output_key: filler.output_key,
                     commitment: Some(filler.commitment),
                     target: TargetKind::TaggedKey,
                 }],
-                filler.pqc_leaf.entry().to_vec(),
+                filler.pqc_leaf.entry_bytes().to_vec(),
             )
         };
         let txs = [TxLeafInputs {
@@ -231,7 +231,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
             output_key: cl.output_key,
             key_image_gen: cl.key_image_gen,
             commitment: cl.commitment,
-            h_pqc: cl.h_pqc,
+            cm_x: cl.cm_x,
         })
         .collect();
     let spend_input = SpendInput {
@@ -291,7 +291,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         .leaf_chunk
         .iter()
         .enumerate()
-        .filter(|(_, cl)| cl.h_pqc == observed_x)
+        .filter(|(_, cl)| cl.cm_x == observed_x)
         .map(|(i, _)| i)
         .collect();
 

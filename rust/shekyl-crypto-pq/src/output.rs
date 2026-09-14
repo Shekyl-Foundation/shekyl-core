@@ -63,13 +63,14 @@ pub(crate) fn ml_kem_ss_wiped_on_last_prefilter_reject() -> bool {
 
 use crate::derivation::{
     derive_kem_seed, derive_output_secrets, derive_view_tag_prefilter, keygen_from_seed,
-    pqc_leaf_commitment, OutputSecrets, PqcLeafCommitment,
+    OutputSecrets,
 };
 use crate::kem::MlKemDecapsKey;
 use crate::kem::{
     combine_shared_secrets, SharedSecret, ML_KEM_768_CT_LEN, ML_KEM_768_DK_LEN, ML_KEM_768_EK_LEN,
 };
 use crate::label::{decrypt_label_plaintext, encrypt_label_plaintext, sentinel_plaintext};
+use crate::leaf_commitment::{pqc_leaf_commitment, PqcLeafCommitment};
 use crate::CryptoError;
 
 pub use crate::encrypted_output_field::EncryptedOutputField;
@@ -1913,9 +1914,11 @@ mod tests {
         // The commitment from construct/scan must open to the key the spend
         // reveals: K = k(pk)·G_k and CM = K + r·J (PL-D3).
         use curve25519_dalek::edwards::CompressedEdwardsY;
-        let k_point = CompressedEdwardsY(crate::derivation::pqc_key_point(&auth.hybrid_public_key))
-            .decompress()
-            .unwrap();
+        let k_point = CompressedEdwardsY(crate::leaf_commitment::pqc_key_point(
+            &auth.hybrid_public_key,
+        ))
+        .decompress()
+        .unwrap();
         let r = Scalar::from_bytes_mod_order(out.pqc_leaf.blind);
         let cm = k_point + (*shekyl_curve_generators::PQC_LEAF_COMMITMENT_J * r);
         assert_eq!(
@@ -1932,8 +1935,8 @@ mod tests {
 
     #[test]
     fn pqc_leaf_matches_hybrid_pk() {
-        use crate::derivation::{derive_pqc_leaf, pqc_leaf_commitment};
         use crate::kem::combine_shared_secrets;
+        use crate::leaf_commitment::{derive_pqc_leaf, pqc_leaf_commitment};
 
         let kem = HybridX25519MlKem;
         let (pk, sk) = kem.keypair_generate().unwrap();

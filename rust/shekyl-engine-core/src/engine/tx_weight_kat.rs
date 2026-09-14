@@ -77,7 +77,7 @@ pub(crate) mod support {
                     .compress()
                     .to_bytes(),
                 commitment: constructed.commitment,
-                h_pqc,
+                cm_x: h_pqc,
             });
 
             spend_inputs.push(SpendInput {

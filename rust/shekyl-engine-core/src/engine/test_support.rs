@@ -979,7 +979,7 @@ pub(crate) fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
             shekyl_wire::tx_extra::HYBRID_KEM_CT_BYTES
                 * n_outputs
         ]),
-        shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(
+        shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(
             shekyl_wire::tx_extra::conforming_pqc_leaf_blob(n_outputs),
         ),
     ])

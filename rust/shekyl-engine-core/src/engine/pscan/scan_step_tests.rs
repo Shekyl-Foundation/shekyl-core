@@ -181,10 +181,10 @@ fn unspendable_persona_output_is_not_funding() {
             .chunks(HYBRID_KEM_CT_LEN)
             .map(<[u8]>::to_vec)
             .collect();
-        let mut leaf_blob = extra.pqc_leaf_hashes().expect("fixture 0x07").to_vec();
+        let mut leaf_blob = extra.pqc_leaf_entries().expect("fixture 0x07").to_vec();
         leaf_blob[63] ^= 0x01;
         let mut tampered = Extra::for_hybrid_transfer(keys[0], kem_cts);
-        tampered.push_pqc_leaf_hashes(leaf_blob);
+        tampered.push_pqc_leaf_entries(leaf_blob);
         tx.prefix.extra = tampered.serialize();
     }
     let scanner = guaranteed_scanner_for_persona(&p).expect("scanner");

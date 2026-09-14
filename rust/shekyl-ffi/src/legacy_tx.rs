@@ -361,7 +361,7 @@ fn curve25519_scalar_from_bytes(bytes: &[u8; 32]) -> Option<curve25519_dalek::Sc
 // build exporting a writer would offer to produce bytes nothing in that build
 // can consume.
 #[cfg(feature = "multisig")]
-/// Build the 256-byte witness header from a typed struct.
+/// Build the 288-byte witness header from a typed struct.
 ///
 /// # Safety
 /// - `input` must point to a valid `ProveInputFields`.
@@ -454,7 +454,7 @@ pub unsafe extern "C" fn shekyl_construct_output(
                 kem_ciphertext_x25519: out.kem_ciphertext_x25519,
                 kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
                 pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
-                pqc_leaf: out.pqc_leaf.entry(),
+                pqc_leaf: out.pqc_leaf.entry_bytes(),
                 y: out.y,
                 z: out.z,
                 k_amount: out.k_amount,
@@ -540,7 +540,7 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
                 kem_ciphertext_x25519: out.kem_ciphertext_x25519,
                 kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
                 pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
-                pqc_leaf: out.pqc_leaf.entry(),
+                pqc_leaf: out.pqc_leaf.entry_bytes(),
                 y: out.y,
                 z: out.z,
                 k_amount: out.k_amount,
@@ -731,7 +731,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
             *amount_out = scanned.amount;
             *pqc_pk_out = ShekylBuffer::from_vec(scanned.pqc_public_key.clone());
             *pqc_sk_out = ShekylBuffer::from_vec(scanned.pqc_secret_key.clone());
-            *h_pqc_out = scanned.pqc_leaf.entry();
+            *h_pqc_out = scanned.pqc_leaf.entry_bytes();
             // scanned drops here — ZeroizeOnDrop wipes y, z, k_amount, pqc_secret_key
             true
         }
@@ -850,7 +850,7 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
             );
             *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
             *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
-            *h_pqc_out = recovered.pqc_leaf.entry();
+            *h_pqc_out = recovered.pqc_leaf.entry_bytes();
             true
         }
         Err(_) => false,
@@ -1057,7 +1057,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     );
     *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
     *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
-    *h_pqc_out = recovered.pqc_leaf.entry();
+    *h_pqc_out = recovered.pqc_leaf.entry_bytes();
 
     if have_spend_key {
         let b_key = &*(spend_secret_key as *const [u8; 32]);

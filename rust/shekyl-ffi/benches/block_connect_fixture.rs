@@ -222,7 +222,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
         .collect();
     let extra = shekyl_wire::tx_extra::serialize(&[
         shekyl_wire::tx_extra::TxExtraField::PqcKemCiphertext(kem_concat),
-        shekyl_wire::tx_extra::TxExtraField::PqcLeafHashes(leaf_concat),
+        shekyl_wire::tx_extra::TxExtraField::PqcLeafEntries(leaf_concat),
     ])
     .expect("tx_extra serialize");
 

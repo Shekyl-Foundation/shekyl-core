@@ -24,7 +24,7 @@ pub fn conforming_pqc_extra(n_outputs: usize) -> Vec<u8> {
     }
     serialize(&[
         TxExtraField::PqcKemCiphertext(vec![0x6a; HYBRID_KEM_CT_BYTES * n_outputs]),
-        TxExtraField::PqcLeafHashes(conforming_pqc_leaf_blob(n_outputs)),
+        TxExtraField::PqcLeafEntries(conforming_pqc_leaf_blob(n_outputs)),
     ])
     .expect("conforming PQC tx_extra serializes")
 }

@@ -76,7 +76,6 @@ impl FcmpCurves for Curves {
     type C1Parameters = SeleneParams;
     type C2 = Helios;
     type C2Parameters = HeliosParams;
-    const EXTRA_LEAF_SCALARS: usize = 1;
 }
 
 include!(concat!(env!("OUT_DIR"), "/generators.rs"));

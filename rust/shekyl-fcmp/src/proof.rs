@@ -206,7 +206,7 @@ pub struct ProveInput {
     pub leaf_chunk_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])>,
     /// The 4th leaf scalar (`CM.x`) of each output in the chunk, parallel to
     /// `leaf_chunk_outputs` — the sibling values as the leaf holds them.
-    pub leaf_chunk_h_pqc: Vec<[u8; 32]>,
+    pub leaf_chunk_cm_x: Vec<[u8; 32]>,
 
     /// Selene (C1) branch layers, bottom to top.
     pub c1_branch_layers: Vec<BranchLayer>,
@@ -377,13 +377,13 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
                 ))
             })?);
 
-            let h_pqc = deserialize_selene_scalar(&input.leaf_chunk_h_pqc[j]).ok_or(
+            let h_pqc = deserialize_selene_scalar(&input.leaf_chunk_cm_x[j]).ok_or(
                 ProveError::InvalidScalar {
                     input_index: idx,
-                    field: "leaf_h_pqc",
+                    field: "leaf_cm_x",
                 },
             )?;
-            chunk_extra.push(vec![h_pqc]);
+            chunk_extra.push(h_pqc);
         }
 
         // Build C1/C2 branch layers, zero-padded to the full chunk width.
@@ -436,7 +436,7 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
             output,
             output_cm,
             leaves: chunk_outputs,
-            leaves_extra_scalars: chunk_extra,
+            leaves_cm_x: chunk_extra,
             curve_2_layers: c2_layers,
             curve_1_layers: c1_layers,
         });
@@ -665,13 +665,13 @@ pub fn prove_membership_only(
                 ))
             })?);
 
-            let h_pqc = deserialize_selene_scalar(&input.leaf_chunk_h_pqc[j]).ok_or(
+            let h_pqc = deserialize_selene_scalar(&input.leaf_chunk_cm_x[j]).ok_or(
                 ProveError::InvalidScalar {
                     input_index: idx,
-                    field: "leaf_h_pqc",
+                    field: "leaf_cm_x",
                 },
             )?;
-            chunk_extra.push(vec![h_pqc]);
+            chunk_extra.push(h_pqc);
         }
 
         let mut c1_layers = Vec::new();
@@ -715,7 +715,7 @@ pub fn prove_membership_only(
             output,
             output_cm,
             leaves: chunk_outputs,
-            leaves_extra_scalars: chunk_extra,
+            leaves_cm_x: chunk_extra,
             curve_2_layers: c2_layers,
             curve_1_layers: c1_layers,
         });
@@ -892,10 +892,10 @@ pub fn prove_with_sal(
                     "leaf Output::new at input {idx}, leaf {j}: {e:?}"
                 ))
             })?);
-            let h = deserialize_selene_scalar(&chunk.leaf_h_pqc[j]).ok_or(
+            let h = deserialize_selene_scalar(&chunk.leaf_cm_x[j]).ok_or(
                 ProveError::InvalidScalar {
                     input_index: idx,
-                    field: "leaf_h_pqc",
+                    field: "leaf_cm_x",
                 },
             )?;
             chunk_extra.push(vec![h]);
@@ -947,7 +947,7 @@ pub fn prove_with_sal(
             output: *orig_output,
             output_cm,
             leaves: chunk_outputs,
-            leaves_extra_scalars: chunk_extra,
+            leaves_cm_x: chunk_extra,
             curve_2_layers: c2_layers,
             curve_1_layers: c1_layers,
         });
@@ -1016,7 +1016,7 @@ pub struct ProveInputLeafChunk {
     /// The commitment's blind `r` (Ed25519 scalar).
     pub pqc_leaf_blind: [u8; 32],
     pub leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])>,
-    pub leaf_h_pqc: Vec<[u8; 32]>,
+    pub leaf_cm_x: Vec<[u8; 32]>,
     pub c1_branch_layers: Vec<BranchLayer>,
     pub c2_branch_layers: Vec<BranchLayer>,
 }
@@ -1026,7 +1026,7 @@ pub struct ProveInputLeafChunk {
 /// Uses batch verification for efficiency. Checks:
 /// 1. Proof deserialization
 /// 2. SAL (spend-auth-and-linkability) proof per input
-/// 3. FCMP circuit proof (tree membership + H(pqc_pk) binding)
+/// 3. FCMP circuit proof (tree membership + in-circuit opening of `CM` to `K`)
 /// 4. Finalizes batch verifiers (Ed25519, Selene, Helios)
 ///
 /// `key_images` are typed [`KeyImage`]s (re-exported from
@@ -1484,7 +1484,7 @@ mod tests {
             commitment_mask: [0; 32],
             pseudo_out_blind: [0; 32],
             leaf_chunk_outputs: vec![],
-            leaf_chunk_h_pqc: vec![],
+            leaf_chunk_cm_x: vec![],
             c1_branch_layers: vec![],
             c2_branch_layers: vec![],
         }
@@ -1548,7 +1548,7 @@ mod tests {
             commitment_mask: z.to_repr(),
             pseudo_out_blind: a.to_repr(),
             leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
-            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            leaf_chunk_cm_x: vec![h_pqc_bytes],
             c1_branch_layers: vec![],
             c2_branch_layers: vec![],
         };
@@ -1686,7 +1686,7 @@ mod tests {
             commitment_mask: Scalar::random(&mut OsRng).to_repr(),
             pseudo_out_blind: Scalar::random(&mut OsRng).to_repr(),
             leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
-            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            leaf_chunk_cm_x: vec![h_pqc_bytes],
             c1_branch_layers: vec![],
             c2_branch_layers: vec![],
         };
@@ -1847,7 +1847,7 @@ mod tests {
             commitment_mask: z.to_repr(),
             pseudo_out_blind: a.to_repr(),
             leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
-            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            leaf_chunk_cm_x: vec![h_pqc_bytes],
             c1_branch_layers: vec![],
             // Narrow 1-wide Helios chunk (the partial-chunk case); `prove` pads it.
             c2_branch_layers: vec![BranchLayer {
@@ -2090,7 +2090,7 @@ mod tests {
             commitment_mask: z2.to_repr(),
             pseudo_out_blind: a2.to_repr(),
             leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
-            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            leaf_chunk_cm_x: vec![h_pqc_bytes],
             c1_branch_layers: vec![],
             c2_branch_layers: vec![],
         };
@@ -2170,7 +2170,7 @@ mod tests {
             commitment_mask: mask.to_repr(),
             pseudo_out_blind: a.to_repr(),
             leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
-            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            leaf_chunk_cm_x: vec![h_pqc_bytes],
             c1_branch_layers: vec![],
             c2_branch_layers: vec![],
         };
@@ -2240,7 +2240,7 @@ mod tests {
             commitment_mask: z.to_repr(),
             pseudo_out_blind: a.to_repr(),
             leaf_chunk_outputs: vec![(o_bytes, i_bytes, c_bytes)],
-            leaf_chunk_h_pqc: vec![h_pqc_bytes],
+            leaf_chunk_cm_x: vec![h_pqc_bytes],
             c1_branch_layers: vec![],
             c2_branch_layers: vec![],
         };

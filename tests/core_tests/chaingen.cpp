@@ -752,7 +752,7 @@ static bool try_v3_scan_output(const cryptonote::account_base& from, const trans
     uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
     uint64_t recovered_amount = 0;
     ShekylBuffer pqc_pk_buf{}, pqc_sk_buf{};
-    uint8_t h_pqc_buf[32];
+    uint8_t h_pqc_buf[cryptonote::PQC_LEAF_ENTRY_LEN];
 
     bool ok = shekyl_scan_output_recover(
         reinterpret_cast<const uint8_t*>(&keys.m_view_secret_key),
@@ -880,7 +880,7 @@ static bool compute_v3_key_image(const cryptonote::account_base& from,
     uint8_t ho_buf[32], y_buf[32], z_buf[32], k_amount_buf[32], recovered_bprime[32];
     uint64_t recovered_amount = 0;
     ShekylBuffer pqc_pk_buf{}, pqc_sk_buf{};
-    uint8_t h_pqc_buf[32];
+    uint8_t h_pqc_buf[cryptonote::PQC_LEAF_ENTRY_LEN];
 
     bool ok = shekyl_scan_output_recover(
         reinterpret_cast<const uint8_t*>(&keys.m_view_secret_key),
@@ -1522,7 +1522,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
     tx_extra_pqc_kem_ciphertext kem_field;
     kem_field.blob.reserve(HYBRID_KEM_CT_BYTES);
     tx_extra_pqc_leaf_hashes leaf_hash_field;
-    leaf_hash_field.blob.reserve(PQC_LEAF_HASH_BYTES);
+    leaf_hash_field.blob.reserve(PQC_LEAF_ENTRY_LEN);
 
     tx.ct_signatures.outPk.resize(1);
     tx.ct_signatures.enc_amounts.resize(1);
@@ -1555,7 +1555,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
       kem_field.blob.append(
         reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
         od.kem_ciphertext_ml_kem.len);
-    leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_HASH_BYTES);
+    leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
 
     ShekylOutputData tmp = od;
     shekyl_output_data_free(&tmp);
@@ -1660,7 +1660,7 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
 
   tx_extra_pqc_leaf_hashes leaf_hash_field;
   find_tx_extra_field_by_type(extra_fields, leaf_hash_field);
-  leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_HASH_BYTES);
+  leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_ENTRY_LEN);
 
   ShekylOutputData tmp = od;
   shekyl_output_data_free(&tmp);

@@ -390,7 +390,7 @@ pub(super) async fn assemble_drain_tx(
     // leaf entries (identical layout + order to the transfer path; consensus
     // refuses a transaction with outputs that lacks the field). ──
     let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_hashes(leaf_hash_blob);
+    extra.push_pqc_leaf_entries(leaf_hash_blob);
     let tx_extra = extra.serialize();
 
     // ── Step 4: persona-keyed spend inputs — the shared bond/claim fee-sweep

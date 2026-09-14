@@ -102,7 +102,7 @@ inline void append_pqc_fields(cryptonote::transaction& tx)
   if (n == 0)
     return;
   append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * n);
-  append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_HASH_BYTES * n);
+  append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_ENTRY_LEN * n);
 }
 
 /// Strip both PQC fields (the pre-rule shape every red-first vector starts from).

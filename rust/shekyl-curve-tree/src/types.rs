@@ -46,7 +46,7 @@ pub struct OutputIdentity {
     /// [`crate::recon::extract_leaf_commitments`]. The leaf's 4th scalar is
     /// its x-coordinate, which [`crate::recon::try_build_leaf`] extracts.
     /// No fallback: an output without one is not ingested.
-    pub h_pqc: [u8; 32],
+    pub cm: [u8; 32],
     /// Output target kind.
     pub target: TargetKind,
 }
@@ -202,7 +202,7 @@ pub struct ChunkLeaf {
     /// The leaf's 4th scalar: `CM.x`, the Wei25519 x-coordinate of the
     /// output's PQC leaf commitment (`PL-D3`) — what the prover holds for
     /// every sibling in the chunk.
-    pub h_pqc: [u8; 32],
+    pub cm_x: [u8; 32],
 }
 
 /// Curve-tree context for one transaction's membership proof, shared by

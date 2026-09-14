@@ -170,7 +170,7 @@ namespace cryptonote
   // the post-quantum record (32 bytes). PL-D3 / PL-D3a
   // (docs/design/FCMP_SPEND_LINKABILITY.md §6.2). Admission checks the point
   // (shekyl_tx_extra_pqc_field_shape); the record is checked by nothing live.
-  static constexpr size_t PQC_LEAF_HASH_BYTES = 64;
+  static constexpr size_t PQC_LEAF_ENTRY_LEN = 64;
 
   struct tx_extra_pqc_leaf_hashes
   {

@@ -43,7 +43,7 @@ pub(crate) fn selene_single_chunk_tree_root(leaf_chunk: &[LeafEntry]) -> [u8; 32
             let c = CompressedEdwardsY(e.commitment)
                 .decompress()
                 .expect("commitment is on-curve");
-            (o, i, c, e.h_pqc)
+            (o, i, c, e.cm_x)
         })
         .collect();
 

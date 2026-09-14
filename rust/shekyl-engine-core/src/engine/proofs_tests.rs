@@ -443,10 +443,10 @@ mod check_workflows {
         for od in &outputs {
             kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
             kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
-            leaf_blob.extend_from_slice(&od.pqc_leaf.entry());
+            leaf_blob.extend_from_slice(&od.pqc_leaf.entry_bytes());
         }
         let mut extra = ExtraField::PqcKemCiphertext(kem_blob).serialize();
-        extra.extend_from_slice(&ExtraField::PqcLeafHashes(leaf_blob).serialize());
+        extra.extend_from_slice(&ExtraField::PqcLeafEntries(leaf_blob).serialize());
 
         let tx = Transaction {
             prefix: TxPrefix {

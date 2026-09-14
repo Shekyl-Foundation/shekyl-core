@@ -559,7 +559,7 @@ fn pqc_fields(kem_len: usize, leaf_len: usize) -> Vec<u8> {
     use shekyl_wire::tx_extra::{serialize, TxExtraField};
     serialize(&[
         TxExtraField::PqcKemCiphertext(vec![0x6a; kem_len]),
-        TxExtraField::PqcLeafHashes(vec![0x7b; leaf_len]),
+        TxExtraField::PqcLeafEntries(vec![0x7b; leaf_len]),
     ])
     .expect("test tx_extra serializes")
 }
@@ -581,12 +581,12 @@ fn validator_rejects_both_pqc_fields_absent() {
 
 #[test]
 fn validator_rejects_a_duplicate_leaf_hash_field() {
-    use shekyl_wire::tx_extra::{serialize, TxExtraField, PQC_LEAF_HASH_BYTES};
+    use shekyl_wire::tx_extra::{serialize, TxExtraField, PQC_LEAF_ENTRY_LEN};
     let mut extra = conforming_pqc_extra(2);
     extra.extend_from_slice(
-        &serialize(&[TxExtraField::PqcLeafHashes(vec![
+        &serialize(&[TxExtraField::PqcLeafEntries(vec![
             0x7b;
-            PQC_LEAF_HASH_BYTES * 2
+            PQC_LEAF_ENTRY_LEN * 2
         ])])
         .expect("second 0x07 serializes"),
     );

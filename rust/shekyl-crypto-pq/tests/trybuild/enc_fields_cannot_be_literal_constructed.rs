@@ -11,7 +11,7 @@
 //! compilation before later bodies are type-checked, so a single fixture
 //! holding both routes reports only the first.
 
-use shekyl_crypto_pq::derivation::PqcLeafCommitment;
+use shekyl_crypto_pq::leaf_commitment::PqcLeafCommitment;
 use shekyl_crypto_pq::output::{EncryptedOutputField, OutputData};
 
 pub fn literal(

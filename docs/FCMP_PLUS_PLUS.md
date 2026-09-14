@@ -13,15 +13,14 @@ performance characteristics.
 
 FCMP++ replaces ring signatures entirely. The membership **proof** is
 zero-knowledge over the entire UTXO set: nothing in the proof itself reveals
-which leaf is proven. **The transaction is not.** Each input reveals its
-`pqc_auths[i].hybrid_public_key` in cleartext; consensus hashes it into the
-leaf's 4th scalar and hands that hash to the verifier as a public input; and
-the same hash was published per output in `tx_extra` tag `0x07` when the
-output was created — so the spent output is identified by one hash and one
-lookup (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)).
-The fix (`PL-D3`) makes the published value a hiding Pedersen commitment
-opened in-circuit against the revealed key; it is pre-genesis and in design,
-and amounts and destinations are unaffected either way.
+which leaf is proven. Each input still reveals its
+`pqc_auths[i].hybrid_public_key` in cleartext. Since `PL-D3` that key is
+bound to the spent leaf by an in-circuit opening of the leaf's Pedersen
+commitment `CM = k·G_k + r·J` (`k = H_ℓ(hybrid_pk)`); the published
+`tx_extra` `0x07` value is `CM ‖ record`, not a public function of the key,
+so hashing the revealed key no longer names the spent output (`PL-D1`
+closed, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)).
+Amounts and destinations are unaffected.
 
 This is the consensus-critical reference for implementors working on FCMP++
 verification in `src/cryptonote_core/blockchain.cpp` and the Rust FFI layer
@@ -1280,7 +1279,7 @@ Do not reintroduce them. Archival emission is a different vin
 | `ML_KEM_768_CT_BYTES` | 1088 | `tx_extra.h` |
 | `X25519_CT_BYTES` | 32 | `tx_extra.h` |
 | `HYBRID_KEM_CT_BYTES` | 1120 (32 + 1088) | `tx_extra.h` |
-| `PQC_LEAF_HASH_BYTES` | 64 (`CM ‖ record` per output, `PL-D3`) | `tx_extra.h` |
+| `PQC_LEAF_ENTRY_LEN` | 64 (`CM ‖ record` per output, `PL-D3`) | `tx_extra.h` |
 | `HF_VERSION_FCMP_PLUS_PLUS_PQC` | 1 | `cryptonote_config.h` |
 
 ---

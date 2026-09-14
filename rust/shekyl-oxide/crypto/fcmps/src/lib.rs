@@ -51,9 +51,13 @@ pub mod tree;
 #[cfg(test)]
 mod tests;
 
+/// Scalars per leaf: `{O.x, I.x, C.x, CM.x}` (Shekyl `PL-D3`). The first layer's
+/// membership tuple is this wide; the tree encoding uses the same width.
+pub const LEAF_TUPLE_WIDTH: usize = 4;
+
 /// The length of branches proved for on the first layer (outputs per leaf chunk).
 ///
-/// The leaves' layer width in scalars is `C::leaf_tuple_width() * LAYER_ONE_LEN`.
+/// The leaves' layer width in scalars is `LEAF_TUPLE_WIDTH * LAYER_ONE_LEN`.
 pub const LAYER_ONE_LEN: usize = 38;
 /// The length of branches proved for on the second layer.
 pub const LAYER_TWO_LEN: usize = 18;
@@ -403,7 +407,7 @@ where
         input: &Input<<C::C1 as Ciphersuite>::F>,
         opening: TranscriptedInput<C>,
     ) -> Result<(), FcmpError> {
-        let leaf_tuple_width = C::leaf_tuple_width();
+        let leaf_tuple_width = LEAF_TUPLE_WIDTH;
 
         // Open the input tuple to the output and prove its membership on the first branch
         c1_circuit.first_layer(
@@ -585,14 +589,13 @@ where
         <C::C2 as Ciphersuite>::G: GroupEncoding<Repr = [u8; 32]>,
     {
         let tree: TreeRoot<C::C1, C::C2> = match &branches.root {
-            RootBranch::Leaves(leaves, extras) => {
+            RootBranch::Leaves(leaves, cm_xs) => {
                 let mut scalars = Vec::new();
-                for (output, extra) in leaves.iter().zip(extras.iter()) {
+                for (output, cm_x) in leaves.iter().zip(cm_xs.iter()) {
                     let O = <C::OC as Ciphersuite>::G::to_xy(output.O).unwrap();
                     let I = <C::OC as Ciphersuite>::G::to_xy(output.I).unwrap();
                     let C_point = <C::OC as Ciphersuite>::G::to_xy(output.C).unwrap();
-                    scalars.extend(&[O.0, I.0, C_point.0]);
-                    scalars.extend(extra);
+                    scalars.extend(&[O.0, I.0, C_point.0, *cm_x]);
                 }
                 let mut items = Vec::with_capacity(scalars.len());
                 for (scalar, point) in scalars.iter().zip(params.curve_1_generators.g_bold_slice())
@@ -872,7 +875,7 @@ where
         };
         let mut c2_branches = Vec::with_capacity(layers / 2);
 
-        let leaf_layer_len = C::leaf_tuple_width() * LAYER_ONE_LEN;
+        let leaf_layer_len = LEAF_TUPLE_WIDTH * LAYER_ONE_LEN;
 
         // Phase 1: Standard per-input branches (leaves + tree layers)
         for _ in inputs {
@@ -954,7 +957,7 @@ where
             });
         }
 
-        // We now have committed to O, I, C, extra leaf scalars, and all interpolated points
+        // We now have committed to O, I, C, CM, and all interpolated points
 
         // The first circuit's tape opens the blinds from the second curve
         let mut commitment_blind_claims_1 = vec![];

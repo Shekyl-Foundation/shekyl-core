@@ -14,7 +14,7 @@
 //!
 //! This module owns the *post-parse* `tx_extra 0x07` slicing
 //! ([`extract_leaf_commitments`]); the raw `tx_extra` → blob *parse* is owned
-//! by `shekyl_scanner::extra::Extra::pqc_leaf_hashes()` and runs at the
+//! by `shekyl_scanner::extra::Extra::pqc_leaf_entries()` and runs at the
 //! decode boundary (`client`, CT-3). No second `tx_extra` parser exists.
 
 use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, TargetKind};
@@ -22,9 +22,9 @@ use shekyl_consensus::{COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
 use shekyl_fcmp::tree::{build_layers, construct_leaf, selene_hash_init, SCALARS_PER_LEAF};
 
 /// Size in bytes of one per-output `0x07` entry: the leaf commitment point
-/// `CM` (32) followed by the post-quantum record (32) — `PL-D3` / `PL-D3a`
-/// (`shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES`).
-pub const PQC_LEAF_ENTRY_BYTES: usize = 64;
+/// `CM` (32) followed by the post-quantum record (32) — `PL-D3` / `PL-D3a`.
+/// Single source: [`shekyl_fcmp::PQC_LEAF_ENTRY_LEN`].
+pub const PQC_LEAF_ENTRY_BYTES: usize = shekyl_fcmp::PQC_LEAF_ENTRY_LEN;
 /// Byte length of the commitment point at the front of each entry.
 pub const PQC_LEAF_POINT_BYTES: usize = 32;
 
@@ -68,7 +68,7 @@ pub struct TxOutputs<'a> {
 /// (the first 32 bytes of each 64-byte entry), one per output.
 ///
 /// `blob` is the raw payload from
-/// `shekyl_scanner::extra::Extra::pqc_leaf_hashes()` (or `None` when the
+/// `shekyl_scanner::extra::Extra::pqc_leaf_entries()` (or `None` when the
 /// tag is absent); `n_outputs` is the transaction's `vout` count. Errors
 /// are the [`LeafEntryError`] cases; with `n_outputs == 0` an absent tag is
 /// the conforming shape and yields an empty vector.
@@ -142,7 +142,7 @@ pub fn try_build_leaf(out: &OutputIdentity) -> Option<[u8; 128]> {
     // (c) leaf construction succeeds (shared FFI primitive with the
     // daemon, so x-extraction of all four points — `CM.x` included —
     // cannot diverge; CT2_DRAIN_ORDER.md §3.2).
-    construct_leaf(&out.output_key, &commitment, &out.h_pqc)
+    construct_leaf(&out.output_key, &commitment, &out.cm)
 }
 
 /// Collect leaf entries from a block's transactions, assigning global
@@ -282,7 +282,7 @@ mod tests {
         OutputIdentity {
             output_key: ED25519_BASEPOINT,
             commitment: Some(ED25519_BASEPOINT),
-            h_pqc: ED25519_BASEPOINT,
+            cm: ED25519_BASEPOINT,
             target: TargetKind::TaggedKey,
         }
     }
@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(&leaf[96..128], &cm_x);
         // A value that is not a point is not a leaf: no zero placeholder.
         let mut bad = coinbase_output();
-        bad.h_pqc = [7u8; 32];
+        bad.cm = [7u8; 32];
         assert!(try_build_leaf(&bad).is_none());
     }
 

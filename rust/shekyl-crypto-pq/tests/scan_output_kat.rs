@@ -153,7 +153,7 @@ fn scan_output_view_tag_kat() {
             "vector {i}: kem_ct_ml_kem"
         );
         assert_eq!(
-            hex::encode(out.pqc_leaf.entry()),
+            hex::encode(out.pqc_leaf.entry_bytes()),
             v.pqc_leaf,
             "vector {i}: pqc_leaf (CM ‖ record)"
         );
@@ -322,7 +322,7 @@ fn gen_scan_output_kat() {
                 view_tag: out.view_tag_prefilter,
                 kem_ct_x25519: hex::encode(out.kem_ciphertext_x25519),
                 kem_ct_ml_kem: hex::encode(&out.kem_ciphertext_ml_kem),
-                pqc_leaf: hex::encode(out.pqc_leaf.entry()),
+                pqc_leaf: hex::encode(out.pqc_leaf.entry_bytes()),
                 pqc_public_key: hex::encode(&out.pqc_public_key),
             }
         })

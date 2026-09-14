@@ -12,8 +12,8 @@
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
-use shekyl_crypto_pq::derivation::{derive_pqc_leaf, pqc_key_scalar};
 use shekyl_crypto_pq::kem::{HybridX25519MlKem, KeyEncapsulation};
+use shekyl_crypto_pq::leaf_commitment::{derive_pqc_leaf, pqc_key_scalar};
 
 fn bench_kem_decapsulate(c: &mut Criterion) {
     let kem = HybridX25519MlKem;

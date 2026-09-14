@@ -1013,6 +1013,29 @@
                     }
                   },
                   {
+                    "name": "unspendable",
+                    "ty": {
+                      "name": "Option<T>",
+                      "ty": {
+                        "Option": {
+                          "name": "UnspendableReason",
+                          "ty": {
+                            "Enum": [
+                              {
+                                "name": "PqcLeafMismatch",
+                                "ty": "UnitVariant"
+                              },
+                              {
+                                "name": "PqcLeafEntryAbsent",
+                                "ty": "UnitVariant"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  {
                     "name": "receive_attribution",
                     "ty": {
                       "name": "ReceiveAttribution",
@@ -1230,29 +1253,6 @@
                             }
                           }
                         ]
-                      }
-                    }
-                  },
-                  {
-                    "name": "unspendable",
-                    "ty": {
-                      "name": "Option<T>",
-                      "ty": {
-                        "Option": {
-                          "name": "UnspendableReason",
-                          "ty": {
-                            "Enum": [
-                              {
-                                "name": "PqcLeafMismatch",
-                                "ty": "UnitVariant"
-                              },
-                              {
-                                "name": "PqcLeafEntryAbsent",
-                                "ty": "UnitVariant"
-                              }
-                            ]
-                          }
-                        }
                       }
                     }
                   }

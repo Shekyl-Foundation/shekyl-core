@@ -58,7 +58,7 @@ namespace
 {
 
 constexpr size_t KEM = HYBRID_KEM_CT_BYTES;      // 1120
-constexpr size_t LEAF = PQC_LEAF_HASH_BYTES;     // 64 (CM || record, PL-D3)
+constexpr size_t LEAF = PQC_LEAF_ENTRY_LEN;     // 64 (CM || record, PL-D3)
 
 using shekyl_test_fixtures::append_pqc_kem_field;
 using shekyl_test_fixtures::append_pqc_leaf_field;

@@ -43,13 +43,13 @@ fn rewrite_leaf_field(block: &mut ScannableBlock, f: impl FnOnce(Vec<u8>) -> Opt
     let mut fields = extra.0;
     let pos = fields
         .iter()
-        .position(|field| matches!(field, ExtraField::PqcLeafHashes(_)))
+        .position(|field| matches!(field, ExtraField::PqcLeafEntries(_)))
         .expect("fixture publishes a 0x07 field");
-    let ExtraField::PqcLeafHashes(blob) = fields.remove(pos) else {
-        unreachable!("position found a PqcLeafHashes field")
+    let ExtraField::PqcLeafEntries(blob) = fields.remove(pos) else {
+        unreachable!("position found a PqcLeafEntries field")
     };
     if let Some(new_blob) = f(blob) {
-        fields.insert(pos, ExtraField::PqcLeafHashes(new_blob));
+        fields.insert(pos, ExtraField::PqcLeafEntries(new_blob));
     }
     tx.prefix.extra = Extra(fields).serialize();
 }

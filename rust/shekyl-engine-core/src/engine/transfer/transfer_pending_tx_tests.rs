@@ -502,7 +502,7 @@ async fn funded_ledger_and_tree(
             commitment: Some(commitment),
             target: TargetKind::TaggedKey,
         });
-        leaf_blob.extend_from_slice(&c.pqc_leaf.entry());
+        leaf_blob.extend_from_slice(&c.pqc_leaf.entry_bytes());
     }
 
     let (dir, handle) = fresh_tree_handle();
@@ -2417,7 +2417,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
             output_key: cl.output_key,
             key_image_gen: cl.key_image_gen,
             commitment: cl.commitment,
-            h_pqc: cl.h_pqc,
+            cm_x: cl.cm_x,
         })
         .collect();
     let tree_ctx = TreeContext {
