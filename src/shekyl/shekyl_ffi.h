@@ -1395,6 +1395,28 @@ bool shekyl_construct_curve_tree_leaf(
     const uint8_t* h_pqc_ptr,
     uint8_t* leaf_out_ptr);
 
+/// Store-callback membership-path assembly for `get_curve_tree_path`.
+/// `depth` is the caller's snapshot (the same value published as tree_depth).
+/// Callbacks return true after writing the documented byte counts; false is
+/// fail-closed (PDM-Q-F9). On success `path_out` / `chunk_outputs_out` are
+/// Rust-owned; on failure `error_out` names the store position. Free every
+/// non-null buffer with `shekyl_buffer_free`.
+typedef bool (*shekyl_ct_read_leaf_fn)(void* ctx, uint64_t pos, uint8_t leaf_out[128]);
+typedef bool (*shekyl_ct_read_layer_hash_fn)(void* ctx, uint8_t layer, uint64_t chunk, uint8_t hash_out[32]);
+typedef bool (*shekyl_ct_read_output_oc_fn)(void* ctx, uint64_t pos, uint8_t o_out[32], uint8_t c_out[32]);
+bool shekyl_assemble_curve_tree_path(
+    uint64_t output_idx,
+    uint64_t ref_leaf_count,
+    uint64_t tip_leaf_count,
+    uint8_t depth,
+    void* store_ctx,
+    shekyl_ct_read_leaf_fn read_leaf,
+    shekyl_ct_read_layer_hash_fn read_layer_hash,
+    shekyl_ct_read_output_oc_fn read_output_oc,
+    ShekylBuffer* path_out,
+    ShekylBuffer* chunk_outputs_out,
+    ShekylBuffer* error_out);
+
 // ─── Transaction Builder ─────────────────────────────────────────────────────
 /// Single-call FCMP++ proof generation: BP+, membership proof, pseudo-outs.
 /// Rust owns all witness assembly. C++ never touches ephemeral spend secrets.

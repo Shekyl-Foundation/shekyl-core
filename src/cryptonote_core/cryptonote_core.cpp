@@ -215,11 +215,8 @@ namespace cryptonote
               }),
               m_starter_message_showed(false),
               m_target_blockchain_height(0),
-              m_checkpoints_path(""),
-              m_last_json_checkpoints_update(0),
               m_nettype(UNDEFINED)
   {
-    m_checkpoints_updating.clear();
     set_cryptonote_protocol(pprotocol);
   }
 #if defined(__GNUC__) && !defined(__clang__)
@@ -240,37 +237,6 @@ namespace cryptonote
   void core::set_checkpoints(checkpoints&& chk_pts)
   {
     m_blockchain_storage.set_checkpoints(std::move(chk_pts));
-  }
-  //-----------------------------------------------------------------------------------
-  void core::set_checkpoints_file_path(const std::string& path)
-  {
-    m_checkpoints_path = path;
-  }
-  //-----------------------------------------------------------------------------------------------
-  bool core::update_checkpoints()
-  {
-    // Uniform across every network (C2-R1b-Q2a, rule 71): the periodic
-    // checkpoint reload runs wherever a checkpoints.json exists, so an
-    // operator can rehearse an override on testnet before touching
-    // mainnet. The former `!= MAINNET` guard returned TRUE — reporting
-    // success for work it never did.
-    if (m_checkpoints_updating.test_and_set()) return true;
-
-    bool res = true;
-    if (time(NULL) - m_last_json_checkpoints_update >= 600)
-    {
-      res = m_blockchain_storage.update_checkpoints(m_checkpoints_path);
-      m_last_json_checkpoints_update = time(NULL);
-    }
-
-    m_checkpoints_updating.clear();
-
-    // if anything fishy happened getting new checkpoints, bring down the house
-    if (!res)
-    {
-      graceful_exit();
-    }
-    return res;
   }
   //-----------------------------------------------------------------------------------
   void core::stop()
@@ -321,13 +287,11 @@ namespace cryptonote
 
     m_config_folder = command_line::get_arg(vm, arg_data_dir);
 
-    auto data_dir = boost::filesystem::path(m_config_folder);
-
     // Uniform across every network (C2-R1b-Q2a, rule 71): checkpoint
-    // wiring — the points object AND the json reload path — is
-    // identical on mainnet, testnet and stagenet. Data may differ per
-    // network (the compiled-in list, when one ever exists); the code
-    // path may not.
+    // wiring is identical on mainnet, testnet and stagenet. Data may
+    // differ per network (the compiled-in list, when one ever exists);
+    // the code path may not. The compiled-in table is the only source --
+    // the data-dir checkpoints.json channel was deleted (PDM-Q-F23).
     {
       cryptonote::checkpoints checkpoints;
       if (!checkpoints.init_default_checkpoints(m_nettype))
@@ -335,11 +299,6 @@ namespace cryptonote
         throw std::runtime_error("Failed to initialize checkpoints");
       }
       set_checkpoints(std::move(checkpoints));
-
-      boost::filesystem::path json(JSON_HASH_FILE_NAME);
-      boost::filesystem::path checkpoint_json_hashfile_fullpath = data_dir / json;
-
-      set_checkpoints_file_path(checkpoint_json_hashfile_fullpath.string());
     }
 
 
@@ -693,11 +652,12 @@ namespace cryptonote
     if (block_sync_size > BLOCKS_SYNCHRONIZING_MAX_COUNT)
       MERROR("Error --block-sync-size cannot be greater than " << BLOCKS_SYNCHRONIZING_MAX_COUNT);
 
-    MGINFO("Loading checkpoints");
+    MGINFO("Enforcing checkpoints");
 
-    // load json checkpoints, and verify them
-    // with respect to what blocks we already have
-    CHECK_AND_ASSERT_MES(update_checkpoints(), false, "One or more checkpoints loaded from json conflicted with existing checkpoints.");
+    // Verify the compiled-in checkpoints against the blocks we already
+    // have; a conflict the rollback cannot resolve fail-stops init
+    // (C2-R1b F-1(b)).
+    CHECK_AND_ASSERT_MES(m_blockchain_storage.enforce_checkpoints(), false, "A compiled-in checkpoint conflicts with the local chain and could not be resolved by rollback.");
 
     r = m_miner.init(vm, m_nettype);
     CHECK_AND_ASSERT_MES(r, false, "Failed to initialize miner instance");
