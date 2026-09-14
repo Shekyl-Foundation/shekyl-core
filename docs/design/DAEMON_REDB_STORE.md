@@ -272,7 +272,7 @@ agnostic first** (Tier A). redb-only genesis is Tier B. Meeting Tier A under
 | --- | --- | --- | --- |
 | **A1** | Archival **pop-reversal journals** have an atomicity/pop-symmetry audit (and S0/S1 findings fixed or decision-logged) — **met 2026-09-05 (P0b):** audit §§2-3 verdicts + §7/§8 transcriptions; both S-grades were closed by PR #602/#604 | Security | DRS-P0 |
 | **A2** | A **layout-independent logical state digest** exists against production LMDB and is used as a regression oracle — **for rules ratified on record AND carrying an affirmative conformance record** (CSR-3 / CSR-3a; *not on the register* is **not** sufficient — absence means unreviewed, and unreviewed is regression-only). A bucket is not a conformance claim: CEN-L11 was bucket-1 ratified with an implementation that silently omitted an accepted output (fixed 2026-09-04), so a digest match there would have recorded reproduction of the defect — the reason the rule is written this way. Over a **DIVERGENT** or **UNREVIEWED** row — or any bucket-3/4 row — the digest is regression evidence and must be reported as that (a **CHECKED-CONFORMANT** register row is the one case where a match *is* correctness evidence). **Met-exists 2026-09-10 (P0d):** `shekyl-chain-store::digest_v0` + `BlockchainLMDB::logical_state_digest_v0` against production LMDB (core chain + spent_keys + live curve root). DRS-C consumes it. Archival journals excluded (§7.1.1) | Security | DRS-P0 → C |
-| **A3** | Known durable-state **warts** are recorded (DRS-W1…DRS-W16); default **RECORD-AND-SPECIFY**. **Met 2026-09-08 (P0c):** four remaining rows registered in the audit §9; A-6 dominance analysis declined (possession-typed write handle). **Regraded 2026-09-09:** DRS-W15 Forbidden is DIVERGE-by-delete **conditional** on R4 keeping an incremental vote window; R4 answers that prior question, not two sequenced ones. DRS-W12 is latent (capability, not a blinded test) | Security | DRS-P0 / C |
+| **A3** | Known durable-state **warts** are recorded (DRS-W1…DRS-W17); default **RECORD-AND-SPECIFY**. **Met 2026-09-08 (P0c):** four remaining rows registered in the audit §9; A-6 dominance analysis declined (possession-typed write handle). **Regraded 2026-09-09:** DRS-W15 Forbidden is DIVERGE-by-delete **conditional** on R4 keeping an incremental vote window; R4 answers that prior question, not two sequenced ones. DRS-W12 is latent (capability, not a blinded test) | Security | DRS-P0 / C |
 | **A4** | Consensus store **durability is explicit** (strict fsync policy) and crash-tested — not library default by omission | Security | DRS-D9 (+ E\* or LMDB config path) |
 | **A5** | **Resource bounds** under attacker-shaped load are measured: file growth, long-lived readers, peak RSS | Security → Privacy | DRS-BENCH |
 | **A6** | **IBD wall time** meets the §1.3 floor (full-node viability → density → remote-node privacy) | Privacy | DRS-BENCH / DRS-0 |
@@ -376,7 +376,7 @@ Index and CHANGELOG use the Tier-A framing when reopen fires.
 | **Reference height** | **H = 100_000** synthetic or regtest-equivalent full-validation blocks (or max available fixture; raise only with BENCH plan amend) | Large enough for bulk-load shape; small enough for CI optional nightly |
 | **Hardware class** | Single mid-range x86_64 workstation/server class used for project CI self-host notes; document CPU model, RAM, disk type (NVMe vs HDD) **in the artifact** | Cross-machine absolute times are not load-bearing; **ratios** are |
 | **Primary metric** | Wall time IBD to H under **same** consensus verify cost as production (FCMP++ + PoW verify enabled as in real sync) | Privacy chain: slower IBD → fewer full nodes → more remote-node use |
-| **Floor (relative)** | redb (or candidate) IBD wall time ≤ **1.25×** LMDB wall time on the **same** machine, same binary flags except engine, same durability policy as production intent (DRS-D9) | Absolute “N hours” deferred until first LMDB baseline lands in-tree |
+| **Floor (relative)** | redb (or candidate) IBD wall time ≤ **1.25×** LMDB wall time on the **same** machine, **two binaries** (one backend per build — the daemon never compiles two store engines into one binary, ruled 2026-09-14), same flags, same durability policy as production intent (DRS-D9) | Absolute “N hours” deferred until first LMDB baseline lands in-tree |
 | **Hard fail (D2-R3 / D6)** | Ratio **> 1.50×** after one documented mitigation cycle, **or** fails resource bounds (§7.4) | Between 1.25× and 1.50×: decision-log accept or mitigate |
 | **Resource bounds (sketch)** | Peak RSS under attacker-feed scenario ≤ **2×** LMDB peak on same scenario; file-size / logical-size ratio after simulated year of 2-minute blocks stays within plan-stated ceiling (set after first multi-year sim) | Security/privacy > speed |
 
@@ -1034,15 +1034,23 @@ Compare engines (redb / heed / LMDB) on the rows above when the suite runs;
 halt conditions named in the bench plan (e.g. file-growth slope, RSS ceiling,
 IBD floor from DRS-0).
 
-**Stage one — landed (2026-09-13).** Gate `scripts/bench/drs_artifact.py`
-(schema, refusals, §1.3 compare, redb-engine probe) and runner
-`scripts/bench/drs_bench.py` (`measure` / `check` / `validate` / `blockers`)
-with selftest `scripts/bench/test_drs_bench.py`, wired in `docs-gates.yml`.
-The **LMDB arm only**: there is no redb consensus store to measure —
-`shekyl-chain-store` names redb in type-level table and key-ordering
-declarations and holds no `Database` and no transaction — and
-`drs_bench.py blockers` asserts that blocker still holds on every CI run, so
-the deferral turns red when DRS-E1 grows the engine instead of ageing quietly.
+**Stage one — landed (2026-09-13; redb-engine probe and `blockers` removed
+2026-09-14).** Gate `scripts/bench/drs_artifact.py` (schema, refusals, §1.3
+compare) and runner `scripts/bench/drs_bench.py` (`measure` / `check` /
+`validate`) with selftest `scripts/bench/test_drs_bench.py`, wired in
+`docs-gates.yml`.
+The **LMDB arm only**. The redb arm is a **second binary**, not a flag: the
+daemon never compiles two store engines into one build (ruled 2026-09-14),
+so there is no `--engine` selector on the harness and no `new_db()` switch to
+watch for. The harness labels each artifact from the one backend its build
+carries, recorded as `engine_selected_by`; `check` refuses two same-backend
+artifacts because §1.3's floor is a ratio *between* backends. The redb arm
+arrives when a redb-backed `shekyld` build target exists and reports its
+backend — the named blocker, carried in `FOLLOWUPS.md` with its falsifier,
+not by a source probe. An earlier probe that regexed `new_db()` for an
+engine switch was deleted with the flag: it guarded a transition that is
+not on the roadmap. The FFI-export clause is a stated
+fact, not a probed leg.
 
 Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**
 (the primary), plus **CPU time**, **peak RSS** and **store size** as free

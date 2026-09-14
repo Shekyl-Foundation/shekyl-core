@@ -22,6 +22,13 @@
 //!   reproduce LMDB order. Table types encode ordering; domain identity
 //!   (`BlockHash` vs `TxHash` vs key image) converts at the engine API.
 //!
+//! - **DRS-E1 increment 1** — [`store`]: lifecycle and the write-transaction
+//!   surface (S-TXN). The write handle is a possession type: table access
+//!   goes through it (never a raw transaction), a second live batch is a
+//!   typed error rather than a deadlock, and drop aborts. Durability,
+//!   two-phase commit, and cache size are declared constants, not library
+//!   defaults by omission.
+//!
 //! Slice B's table names are bijection-pinned against
 //! [`accumulator::TABLE_CLASSES`] **and** against the X-macro
 //! `SHEKYL_LMDB_TABLES` by `scripts/ci/check_redb_schema_bijection.py` —
@@ -31,6 +38,9 @@
 #![deny(unsafe_code)]
 
 pub mod accumulator;
+pub mod apply_policy;
+pub mod conformance;
 pub mod digest_v0;
 pub mod lmdb_order;
 pub mod schema;
+pub mod store;
