@@ -325,7 +325,7 @@ breath as ruling it defective. The digest **survives with changed status**:
 
 #### 5.4.1 The conformance-exception register (CSR-3a)
 
-<!-- conformance-tally: 127 CHECKED-CONFORMANT, 2 DIVERGENT, 1 UNREVIEWED -->
+<!-- conformance-tally: 126 CHECKED-CONFORMANT, 2 DIVERGENT, 2 UNREVIEWED -->
 
 **A bucket is not a conformance claim.** The census's buckets say whether a
 rule is *specified and ratified on record* — they say nothing about whether the
