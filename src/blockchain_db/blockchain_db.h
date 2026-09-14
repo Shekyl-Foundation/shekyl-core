@@ -2256,19 +2256,19 @@ public:
   // `P_id‖BE(shard)‖BE(E)` (48 B). An absent row is SO-D1's "never issued ⇒
   // non-observation", NOT a miss — the reader must not collapse the two.
   //
-    // Pure virtual, deliberately. Until 2026-09-13 these lived only on
-    // BlockchainLMDB ("the only writer is a BlockchainLMDB member, so dispatch
-    // buys nothing"), which was true and was the wrong test: an interface that
-    // omits a surface its one implementation has is not an interface, and the
-    // BlockchainDB test double could not be asked about the table at all.
-    // SO-D8 (ARCHIVAL_SETTLEMENT_WRITER.md §12, scope addition `ba4b3c73a`)
-    // promotes them here. Scope of what this buys, stated so it is not
-    // over-read: the redb port's denominators (schema bijection, ApplyPolicy
-    // families) are the SHEKYL_LMDB_TABLES X-macro, which already carries
-    // `archival_settlement` — the port could not have missed the TABLE. What
-    // was missing was the C++ METHOD surface, for as long as this interface
-    // lives. `= 0` rather than a permissive default because a store that
-    // forgot the table should fail to compile, not silently no-op.
+  // Pure virtual, deliberately. Until 2026-09-13 these lived only on
+  // BlockchainLMDB ("the only writer is a BlockchainLMDB member, so dispatch
+  // buys nothing"), which was true and was the wrong test: an interface that
+  // omits a surface its one implementation has is not an interface, and the
+  // BlockchainDB test double could not be asked about the table at all.
+  // SO-D8 (ARCHIVAL_SETTLEMENT_WRITER.md §12, scope addition `ba4b3c73a`)
+  // promotes them here. Scope of what this buys, stated so it is not
+  // over-read: the redb port's denominators (schema bijection, ApplyPolicy
+  // families) are the SHEKYL_LMDB_TABLES X-macro, which already carries
+  // `archival_settlement` — the port could not have missed the TABLE. What
+  // was missing was the C++ METHOD surface, for as long as this interface
+  // lives. `= 0` rather than a permissive default because a store that
+  // forgot the table should fail to compile, not silently no-op.
   //
   // Production caller status is unchanged by the promotion: the writer's call
   // site is a rule-22 named hold on SO-D8 (§5.1). The revert
