@@ -12,10 +12,10 @@ Rick's instruction that this is security information, not marketing.
 in the middle of everything else"): a **Pedersen commitment** to the key in
 the leaf's 4th scalar, opened in-circuit by the discrete-log gadget the first
 layer already runs; the hash mechanism is the named successor round `PL-D4`
-(§6.5). The written form here is for Rick to ratify. The document
-corrections `PL-D1` requires are applied at source in the same branch as
-separately landable commits (§11). Nothing on the wire, in the leaf format,
-or in the circuit changes in this round.
+(§6.5). Rick ratified the written form on 2026-09-14 (§12) and the
+implementation landed with it under rule 07 (§10, §12.1). The document
+corrections `PL-D1` requires are applied at source (§11). The wire, the
+leaf format and the circuit change exactly as §6.2 specifies.
 **Grounded at** `dev` = `42333d34f` (2026-09-13), fresh worktree
 `~/shekyl/wt-pl-linkability`. Every `file:line` below was read at that tree
 on 2026-09-13; citations into the documents this branch itself corrects
@@ -187,9 +187,11 @@ special-purpose indexer is needed.
    `scheme_id` agreement; it is a wallet coin-selection invariant, not
    consensus) survives on its other ground — the opt-in `scheme_id=2`
    precedent — but the "no other set shrinks" ground is void while `PL-D1` is
-   open: there is no set to shrink. Whether to re-rule the rationale is
-   Rick's (§12). Not edited here: these are consensus-code comments and a
-   landed-row record, outside §11's scope.
+   open: there is no set to shrink. Re-ruled by Rick (§12 item 5):
+   re-based on the `scheme_id=2` precedent alone, applied with dated notes
+   at `verifier.rs`, `PQC_MULTISIG.md` and the `V3_1_MULTISIG_RUST_ENGINE.md`
+   row. The `blockchain.cpp` comment is off the ledger by that ruling (the
+   code is going away) and is rewritten in this PR regardless — the historical exception is explicit, not silent.
 3. **`docs/DESIGN_CONCEPTS.md` §14 Mechanism A (2026-07-17).** *"An FCMP++
    spend never reveals which output it consumes, so N is unobservable ...
    Do not build this."* The observable exists today. Corrected at source;
@@ -790,7 +792,7 @@ A5-1…A5-7 are a firewall re-ruling, not a leaf fix — their carrier is the
 | A5-5 | `docs/completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md:172, 189, 1292, 1331, 1364` | closed record | In-line refutation markers (rule 95), same shape as `FCMP_MEMBERSHIP_ONLY.md:376` |
 | A5-6 | `docs/design/PRINCIPAL_STAKE_LIFECYCLE.md:173`, `docs/design/STAKER_ARCHIVAL_SIM.md:3533`, `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md:180`, `docs/design/ARCHIVAL_BOND_WI4_MEASUREMENT.md:3445, 3721, 3888, 3922` | "FCMP++-hidden" premises in live design docs | Correct at source once §6 is ruled (the fix restores the premise; the docs then state it as restored, not as always-true) |
 | A5-7 | `rust/shekyl-standoff/src/lib.rs:55`, `rust/shekyl-standoff/src/conformance.rs:213`, `rust/shekyl-engine-state/src/pscan_state.rs:124`, `rust/shekyl-engine-core/src/engine/drain_select.rs:18`, `rust/shekyl-staking-sim/src/standoff.rs:63` | crate/module docs stating consensus cannot classify funding because it is FCMP++-hidden | Rewrite from the ruled design |
-| A5-8 | `src/cryptonote_core/blockchain.cpp:4276–4290`, `rust/shekyl-daemon-rpc/src/submit/verifier.rs:1077–1086`, `docs/PQC_MULTISIG.md:2026–2040`, `docs/design/V3_1_MULTISIG_RUST_ENGINE.md:172` | MSW-6 "no other set shrinks" ground | Rick rules whether the rationale is re-based on the `scheme_id=2` precedent alone (§12) |
+| A5-8 | `src/cryptonote_core/blockchain.cpp:4276–4290`, `rust/shekyl-daemon-rpc/src/submit/verifier.rs:1077–1086`, `docs/PQC_MULTISIG.md:2026–2040`, `docs/design/V3_1_MULTISIG_RUST_ENGINE.md:172` | MSW-6 "no other set shrinks" ground | **RULED (Rick, 2026-09-14, §12 item 5):** re-based on the `scheme_id=2` precedent alone; applied with dated notes at `verifier.rs`, `PQC_MULTISIG.md` and the `V3_1_MULTISIG_RUST_ENGINE.md` row. The `blockchain.cpp` comment is off the ledger by the same ruling (the code is going away) and is rewritten in this PR regardless |
 | A5-9 | `docs/DESIGN_CONCEPTS.md` §14 Mechanism A | "do not build this" on a refuted premise | Premise corrected at source in this branch; the disposition is re-ruled with §6 |
 | A5-10 | `docs/CHANGELOG.md:5969` and other ledger lines | historical wording | Ledger; not edited (rule 95) |
 | A5-11 | `docs/POST_QUANTUM_CRYPTOGRAPHY.md` (Security Goals, curve tower, ownership binding, privacy boundary); `docs/MERKLE_TREE.md` §"Our 4th scalar"; `docs/FCMP_PLUS_PLUS.md` §2; `docs/completed/FCMP_MEMBERSHIP_ONLY.md` §7 wargame | `PL-D2` claims | **Applied** in this branch (§4.5), ruled 2026-09-14 |
@@ -947,13 +949,15 @@ has a property it lacks.
 5. `PL-D5` is RESERVED, no symbol (§7.5).
 6. The measured baseline (§6.1) and the estimate/measurement split (§6.2).
 
-**Needs Rick's ruling:**
+**Rulings (Rick, 2026-09-14) — each item names what was open and how it was
+settled; nothing here is still pending except where an item says so:**
 
-1. **`PL-D3` in its written form** — the Pedersen commitment opened
-   in-circuit (§6.2). Rick gave the direction in-channel on 2026-09-14
-   ("go with Pedersen now"); the derivation details (Ed25519-scalar `k`,
-   the blind label, two NUMS generators, compressed point in `0x07`) are
-   this document's rendering of it and are his to ratify or amend. His
+1. **`PL-D3` in its written form — RATIFIED (Rick, 2026-09-14):** the
+   Pedersen commitment opened in-circuit (§6.2). Rick gave the direction
+   in-channel ("go with Pedersen now"); the derivation details
+   (Ed25519-scalar `k`, the blind label, two NUMS generators, compressed
+   point in `0x07`) are this document's rendering of it, ratified as
+   written. His
    review of 2026-09-14 moved point validity to an admission rule on both
    paths (applied, §6.2) — that rule is a new consensus rule and is ratified
    with the fix. His second review the same day added, all applied in §6.2:
@@ -966,8 +970,8 @@ has a property it lacks.
    RULED (same day):** both the key hash `k` and the record move onto
    cSHAKE256 under registered customizations so the domain is mechanical;
    the C++ side's comments and header strings are not on the ledger
-   because that code is going away. The written form in §6.2 is his to
-   confirm.
+   because that code is going away. The written form in §6.2 is confirmed
+   by the ratification in item 1.
 2. **`PL-D4`'s target — RULED (Rick, 2026-09-14): V4**, post-genesis,
    designed with the lattice-only transition, which itself waits on
    lattice threshold signatures or mature isogeny signatures (PRISM).

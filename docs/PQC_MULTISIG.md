@@ -2029,9 +2029,10 @@ rust/shekyl-crypto-pq/src/multisig_receiving.rs
 > binding is the leaf commitment opening (`PL-D3`; formerly the leaf hash
 > `h_pqc = H(hybrid_public_key)`), not this
 > check. Its *actual* effect was to foreclose a
-> solo(1)/multisig(2) **cross-model linkage** — under FCMP++ separate
-> txs are unlinkable, so co-spending is the only proof of common control
-> across key models. That belongs in the wallet, not consensus. **Re-based
+> solo(1)/multisig(2) **cross-model linkage** — co-spending proves common
+> control across key models (the 2026-09-11 reading added "the only proof,
+> since separate FCMP++ txs are unlinkable"; that premise was false under
+> `PL-D1` and holds again since `PL-D3`, 2026-09-14). That belongs in the wallet, not consensus. **Re-based
 > 2026-09-14 (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)):**
 > the first of the two grounds recorded here — *"no externality: the FCMP++
 > proof ranges over the whole tree, so no other party's anonymity set

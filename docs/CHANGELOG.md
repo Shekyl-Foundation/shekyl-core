@@ -41,13 +41,16 @@
   value published in `tx_extra` `0x07` at creation, and consensus hands that
   hash to the verifier as a public input — one hash and one lookup, no proof
   inspection. Amounts and destinations stay hidden; the spend graph does not.
-  Pre-genesis; nothing has leaked. Design round 1 (no wire, leaf, or circuit
-  change yet; the fix `PL-D3` is a Pedersen commitment to the key in the
+  Pre-genesis; nothing has leaked. Design round 1, ratified by Rick on
+  2026-09-14 (the implementation is the `PL-D3` entry above; the fix is a
+  Pedersen commitment to the key in the
   leaf, opened in-circuit by the existing discrete-log gadget, with a proper
   hash-commitment mechanism as the successor round `PL-D4`) is
   [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md);
-  it also opens `PL-D2`, the discrete-log soundness of the in-circuit
-  "quantum-resistant binding", for ruling. `REWARD_EMISSION_LEG.md` §7.3's
+  it also rules `PL-D2` (Rick, 2026-09-14): the in-circuit "quantum-resistant
+  binding" is discrete-log sound, the "even if EC discrete log is broken"
+  claims are corrected at source (§4.5), and the post-quantum-sound leg is
+  designed with `PL-D4` at V4. `REWARD_EMISSION_LEG.md` §7.3's
   2026-07-01 invariant ("the creating tx's inputs are FCMP++-hidden") is
   struck; its tripwire fired.
 
