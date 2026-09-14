@@ -55,9 +55,16 @@ pub const SIGNATURE_ENVELOPE_LEN: usize = HybridSignature::CANONICAL_LEN;
 /// [`bind`]: crate::PServeEndpoint::bind
 pub trait PassSigner: Send + Sync {
     /// The persona's current chain height, for the SF-D5 anchor gate. A
-    /// value within `L` of true is sufficient. A host that cannot read
-    /// its height returns `0`, which refuses every anchor — fail closed.
-    fn own_height(&self) -> u64;
+    /// value within `L` of true is sufficient.
+    ///
+    /// `None` means the height could not be read — the serving store is
+    /// unreadable, or whatever the host reads it from is gone. The serve
+    /// loop renders the identical 404 and counts a **lookup failure**
+    /// (the same bucket as a store read that fails on the shard itself),
+    /// so a host that has lost its store is visible in the aggregate
+    /// rather than refusing every anchor silently. A fresh store at
+    /// height `0` is `Some(0)`, not `None`: readable, and below the gate.
+    fn own_height(&self) -> Option<u64>;
 
     /// Sign the 80-byte SF-D8 transcript under the attestation domain.
     /// Implementors build the signature via [`sign_pass_transcript`].
@@ -66,9 +73,11 @@ pub trait PassSigner: Send + Sync {
     ///
     /// Returns [`SignRefused`] when the host cannot sign — key not
     /// resident, signer offline, or a host-side policy refusal. The serve
-    /// loop turns this into the identical 404 and counts it separately
-    /// from lookup failures so an operator can tell "shard not held" from
-    /// "key not available".
+    /// loop turns this into the identical 404 and counts it in
+    /// `sign_failure_count`, separately from `lookup_failure_count`
+    /// (store-read faults), so an operator can tell "key not available"
+    /// from "store not readable". An ordinary miss — a shard the persona
+    /// does not hold — is counted by neither.
     fn sign_pass(
         &self,
         message: &[u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN],
@@ -215,8 +224,8 @@ impl TestKeySigner {
 
 #[cfg(any(test, feature = "test-signer"))]
 impl PassSigner for TestKeySigner {
-    fn own_height(&self) -> u64 {
-        self.height.load(std::sync::atomic::Ordering::Relaxed)
+    fn own_height(&self) -> Option<u64> {
+        Some(self.height.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     fn sign_pass(

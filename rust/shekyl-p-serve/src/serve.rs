@@ -310,20 +310,23 @@ impl PServeEndpoint {
         self.refused.load(Ordering::Relaxed)
     }
 
-    /// Lookups that failed for infrastructure reasons (store I/O, pruned
-    /// bytes), plus bodies that failed part-way through. On the wire the
-    /// first render as the same 404 as any miss and the second as a closed
-    /// connection; this counter is the only place any of them is
-    /// distinguishable, and a nonzero value on a bonded serve-set means
-    /// pins are missing — the silent-slash precursor, surfaced.
+    /// Lookups that failed for infrastructure reasons — the store could not
+    /// report its tip height for the gate, or could not read the shard
+    /// (I/O, pruned bytes) — plus bodies that failed part-way through. On
+    /// the wire the first render as the same 404 as any miss and the last
+    /// as a closed connection; this counter is the only place any of them
+    /// is distinguishable, and a nonzero value on a bonded serve-set means
+    /// pins are missing — the silent-slash precursor, surfaced. An ordinary
+    /// miss (unknown id, unfrozen segment, anchor out of window) is the
+    /// deliberate 404 and is **not** counted here.
     #[must_use]
     pub fn lookup_failure_count(&self) -> u64 {
         self.lookup_failures.load(Ordering::Relaxed)
     }
 
     /// Servable requests the host's [`PassSigner`] refused to sign. On the
-    /// wire the identical 404; here, distinguishable from a missing pin so
-    /// an operator can tell "key not resident" from "shard not held". A
+    /// wire the identical 404; here, distinguishable from a store fault so
+    /// an operator can tell "key not resident" from "store not readable". A
     /// nonzero value on a bonded persona means passes are being lost to a
     /// signer that is down, not to a store that is short.
     #[must_use]
@@ -457,6 +460,16 @@ struct Resolved {
     body: ShardBody,
 }
 
+/// What the gate-and-lookup hop found. `Miss` is the ordinary, uncounted
+/// 404 (anchor out of window, unknown id, unfrozen segment); `StoreFault`
+/// is the serving store failing to answer — the tip height or the shard
+/// bytes — and is what [`PServeEndpoint::lookup_failure_count`] counts.
+enum Lookup {
+    Held(ShardBody),
+    Miss,
+    StoreFault,
+}
+
 /// Complete-head resolution: parse, gate, look up, sign — or the shared
 /// miss. Store I/O and the hybrid sign run on the blocking pool; join,
 /// store, and signer errors increment their counter and collapse to the
@@ -480,16 +493,24 @@ async fn resolve_body(
     // regardless. The gate still runs first, so an out-of-window anchor
     // never touches the shard store.
     let gate_signer = Arc::clone(&signer);
-    let body = match tokio::task::spawn_blocking(move || {
-        if !anchor_within_gate(gate_signer.own_height(), fields.anchor_height) {
-            return Ok(None);
+    let looked_up = tokio::task::spawn_blocking(move || {
+        let Some(own_height) = gate_signer.own_height() else {
+            return Lookup::StoreFault;
+        };
+        if !anchor_within_gate(own_height, fields.anchor_height) {
+            return Lookup::Miss;
         }
-        provider.shard_bytes(shard_id)
+        match provider.shard_bytes(shard_id) {
+            Ok(Some(body)) => Lookup::Held(body),
+            Ok(None) => Lookup::Miss,
+            Err(_) => Lookup::StoreFault,
+        }
     })
-    .await
-    {
-        Ok(Ok(found)) => found?,
-        Ok(Err(_)) | Err(_) => {
+    .await;
+    let body = match looked_up {
+        Ok(Lookup::Held(body)) => body,
+        Ok(Lookup::Miss) => return None,
+        Ok(Lookup::StoreFault) | Err(_) => {
             lookup_failures.fetch_add(1, Ordering::Relaxed);
             return None;
         }

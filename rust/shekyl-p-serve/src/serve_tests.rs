@@ -610,8 +610,8 @@ async fn a_refusing_signer_renders_the_shared_404_and_counts_separately() {
     // place this is distinguishable from a missing pin.
     struct Refusing;
     impl PassSigner for Refusing {
-        fn own_height(&self) -> u64 {
-            OWN_HEIGHT
+        fn own_height(&self) -> Option<u64> {
+            Some(OWN_HEIGHT)
         }
         fn sign_pass(
             &self,
@@ -629,11 +629,43 @@ async fn a_refusing_signer_renders_the_shared_404_and_counts_separately() {
     assert_eq!(ep.sign_failure_count(), 1);
     assert_eq!(ep.lookup_failure_count(), 0);
     assert_eq!(ep.served_count(), 0);
-    // An unheld shard is a lookup miss, not a sign failure: the persona
-    // never signs for a shard it does not hold.
+    // An unheld shard is an ordinary miss — neither a lookup failure nor
+    // a sign failure: the persona never signs for a shard it does not
+    // hold, and not holding one is not a fault.
     let r = fetch(ep.addr(), "/shard/9").await;
     assert_eq!(r, NOT_FOUND.as_bytes());
     assert_eq!(ep.sign_failure_count(), 1);
+    assert_eq!(ep.lookup_failure_count(), 0);
+}
+
+#[tokio::test]
+async fn an_unreadable_height_renders_the_shared_404_and_counts_a_lookup_failure() {
+    // The host cannot read its own height — its serving store is gone.
+    // Nothing is looked up and nothing is signed: the 404 is identical,
+    // and the fault lands in `lookup_failure_count` (a store read that
+    // failed), not in `sign_failure_count` and not silently in neither.
+    struct Storeless(Arc<TestKeySigner>);
+    impl PassSigner for Storeless {
+        fn own_height(&self) -> Option<u64> {
+            None
+        }
+        fn sign_pass(
+            &self,
+            m: &[u8; shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN],
+        ) -> Result<HybridSignature, SignRefused> {
+            self.0.sign_pass(m)
+        }
+    }
+    let key = Arc::new(TestKeySigner::ephemeral(OWN_HEIGHT));
+    let signer: Arc<dyn PassSigner> = Arc::new(Storeless(Arc::clone(&key)));
+    let ep = PServeEndpoint::bind(FixtureProvider::new([(0, leaves(1, 1))]), signer)
+        .await
+        .expect("bind");
+    let r = fetch(ep.addr(), "/shard/0").await;
+    assert_eq!(r, NOT_FOUND.as_bytes());
+    assert_eq!(ep.lookup_failure_count(), 1);
+    assert_eq!(ep.sign_failure_count(), 0);
+    assert_eq!(ep.served_count(), 0);
 }
 
 #[tokio::test]

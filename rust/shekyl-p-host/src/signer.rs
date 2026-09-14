@@ -103,14 +103,12 @@ impl HostSigner {
 }
 
 impl PassSigner for HostSigner {
-    /// The store's synced tip. A store that cannot be read reports `0`,
-    /// which the gate refuses outright — a persona that has lost its store
-    /// has nothing it can honestly sign for.
-    fn own_height(&self) -> u64 {
-        self.reader
-            .sync_tip_height()
-            .map(|h| h.0)
-            .unwrap_or_default()
+    /// The store's synced tip, live. A store that cannot be read is `None`:
+    /// the serve loop renders the 404 and counts a lookup failure, so a
+    /// persona that has lost its store shows up in `ServeCounters` rather
+    /// than refusing every anchor behind an indistinguishable sentinel.
+    fn own_height(&self) -> Option<u64> {
+        self.reader.sync_tip_height().ok().map(|h| h.0)
     }
 
     fn sign_pass(
@@ -154,13 +152,17 @@ mod tests {
         let store = Arc::new(LeafStore::open_ephemeral().expect("open"));
         let reader = ServingReader::new(Arc::clone(&store));
         let signer = HostSigner::new(reader, Arc::new(NoResidentKey));
-        assert_eq!(signer.own_height(), 0, "a fresh store is at height 0");
+        assert_eq!(
+            signer.own_height(),
+            Some(0),
+            "a fresh store is readable at height 0 — below the gate, not unreadable"
+        );
         store
             .append_block_deltas(&[], &[], &[], BlockHeight(4_321))
             .expect("advance tip");
         assert_eq!(
             signer.own_height(),
-            4_321,
+            Some(4_321),
             "the gate reads the height the block scan advanced, live"
         );
         assert!(signer

@@ -64,16 +64,19 @@ impl fmt::Debug for PersonaServing {
 /// Every non-servable outcome renders one identical 404 on the wire; these
 /// are the only place the outcomes are distinguishable, and only in
 /// aggregate. In particular `sign_failures` is how an operator tells "the
-/// persona does not hold that shard" (`lookup_failures`) from "the persona
-/// holds it but its attestation key refused" — a persona started with
-/// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter.
+/// serving store could not be read" (`lookup_failures`) from "the store
+/// answered but the attestation key refused" — a persona started with
+/// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
+/// ordinary miss — a shard the persona simply does not hold — is the
+/// deliberate 404 and moves neither counter.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ServeCounters {
     /// Shards served (200 with a countersigned frame).
     pub served: u64,
     /// Connections refused over the in-flight cap.
     pub refused: u64,
-    /// Requests whose shard the store did not hold, or could not read.
+    /// Requests the serving store could not answer: its tip height for the
+    /// gate, or the shard's bytes (I/O, pruned). Not misses.
     pub lookup_failures: u64,
     /// Requests whose shard was held but whose countersignature the key
     /// refused.
