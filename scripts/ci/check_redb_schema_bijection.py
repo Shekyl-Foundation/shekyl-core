@@ -9,10 +9,13 @@
 # has exactly one X-macro table. Both directions, no duplicates on either side.
 #
 # WHY THE X-MACRO IS THE SOURCE. Walking `BlockchainDB`'s virtual interface
-# would miss tables: the settlement pair exists only on `BlockchainLMDB` (zero
-# occurrences in blockchain_db.h and testdb.h, five in db_lmdb.h), so a schema
-# built from the abstract interface silently ships without a write path LMDB
-# has. SO-D8 owns promoting it; this gate refuses to inherit the gap.
+# is not a denominator, because a table can exist without being on it. The
+# instance that proved it: until 2026-09-13 the settlement write path existed
+# only on `BlockchainLMDB` (zero occurrences in blockchain_db.h and testdb.h),
+# so a schema built from the abstract interface would have shipped without a
+# write path LMDB has. SO-D8 has since promoted the four methods onto
+# `BlockchainDB`; that closes the instance, not the class, and this gate keeps
+# reading the macro.
 #
 # THIS GATE CHECKS NAMES, NOT TYPES. Ordering is `check_redb_schema_key_types.py`
 # in the same workflow; comparator evidence is in `lmdb_order`'s tests (pinned
