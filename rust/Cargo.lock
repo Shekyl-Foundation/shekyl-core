@@ -4338,7 +4338,10 @@ dependencies = [
 name = "shekyl-p-host"
 version = "3.1.0"
 dependencies = [
+ "shekyl-archival-retention",
+ "shekyl-crypto-pq",
  "shekyl-curve-tree",
+ "shekyl-p-host",
  "shekyl-p-serve",
  "shekyl-tor-control-wallet",
  "tempfile",
@@ -4349,7 +4352,10 @@ dependencies = [
 name = "shekyl-p-serve"
 version = "3.1.0"
 dependencies = [
+ "shekyl-archival-retention",
+ "shekyl-crypto-pq",
  "shekyl-curve-tree",
+ "shekyl-p-serve",
  "tokio",
 ]
 

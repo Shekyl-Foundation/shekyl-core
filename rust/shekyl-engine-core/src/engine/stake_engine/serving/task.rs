@@ -676,6 +676,7 @@ mod lifecycle_tests {
             identity: OnionIdentity::from_hs_id_seed(&[7u8; 32]),
             virtual_port: SERVING_VIRTUAL_PORT,
             max_streams: SERVING_MAX_STREAMS,
+            key: std::sync::Arc::new(shekyl_p_host::NoResidentKey),
         }
     }
 

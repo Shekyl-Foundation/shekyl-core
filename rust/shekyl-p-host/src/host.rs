@@ -6,6 +6,7 @@
 //! [`PersonaServingHost`]: the loopback serving loop and the onion that
 //! publishes it, composed into one object with one lifetime.
 
+use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -17,6 +18,7 @@ use shekyl_tor_control_wallet::service::{
 use tokio::sync::watch;
 
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
+use crate::signer::{HostSigner, PassKey};
 
 /// The serving identity and the shape of its published port.
 ///
@@ -26,7 +28,10 @@ use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, Stal
 /// serving side*, and a config that cannot hold a seed cannot hold the
 /// master seed one convenient edit away from it. The derivation happens
 /// wallet-side, once; what reaches this crate is already expanded.
-#[derive(Debug)]
+///
+/// The same boundary holds for the attestation key behind `key`: this
+/// crate receives an object that can *sign*, never the secret it signs with
+/// (see [`PassKey`]).
 pub struct PersonaServing {
     /// The wallet-derived serving identity (expanded key + `.onion`).
     pub identity: OnionIdentity,
@@ -36,6 +41,45 @@ pub struct PersonaServing {
     /// (SPIKE-PIN-1), not a derivation** — parameterized so the W₂ rig
     /// chooses it (see [`OnionServiceSpec`]).
     pub max_streams: u16,
+    /// The persona's attestation signing key for the `SF-D8` pass
+    /// countersignature — [`NoResidentKey`](crate::NoResidentKey) until the resident key is
+    /// wired (SH-2). The gate height is **not** here: the host reads it
+    /// from the store it serves (see [`crate::signer`]).
+    pub key: Arc<dyn PassKey>,
+}
+
+impl fmt::Debug for PersonaServing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PersonaServing")
+            .field("identity", &self.identity)
+            .field("virtual_port", &self.virtual_port)
+            .field("max_streams", &self.max_streams)
+            .field("key", &"<dyn PassKey>")
+            .finish()
+    }
+}
+
+/// The serving endpoint's aggregate counters, read through the host.
+///
+/// Every non-servable outcome renders one identical 404 on the wire; these
+/// are the only place the outcomes are distinguishable, and only in
+/// aggregate. In particular `sign_failures` is how an operator tells "the
+/// persona does not hold that shard" (`lookup_failures`) from "the persona
+/// holds it but its attestation key refused" — a persona started with
+/// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ServeCounters {
+    /// Shards served (200 with a countersigned frame).
+    pub served: u64,
+    /// Connections refused over the in-flight cap.
+    pub refused: u64,
+    /// Requests whose shard the store did not hold, or could not read.
+    pub lookup_failures: u64,
+    /// Requests whose shard was held but whose countersignature the key
+    /// refused.
+    pub sign_failures: u64,
+    /// Accept-loop errors.
+    pub accept_errors: u64,
 }
 
 /// Why a serving host could not start.
@@ -229,8 +273,11 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         // The reader comes from the witness, not from an argument: the store
         // served must be the store pinned, and the only way to make that
         // unconditional is to leave the caller no way to name a second one.
+        // The signer's gate height comes from that same reader, for the
+        // same reason (see `signer`).
         let provider = StoreShardProvider::new(pinned.reader().clone());
-        let endpoint = PServeEndpoint::bind(Arc::new(provider))
+        let signer = HostSigner::new(pinned.reader().clone(), serving.key);
+        let endpoint = PServeEndpoint::bind(Arc::new(provider), Arc::new(signer))
             .await
             .map_err(|e| HostError::Bind {
                 detail: e.to_string(),
@@ -405,20 +452,20 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         self.endpoint.addr()
     }
 
-    /// Shards served, refused over capacity, lookup failures, and accept
-    /// failures — the endpoint's four aggregate counters, in that order.
+    /// The endpoint's aggregate counters.
     ///
     /// Aggregate and monotone by design: there is no per-request structure
     /// to read here, because there is no per-request record anywhere in the
     /// serving path.
     #[must_use]
-    pub fn counters(&self) -> (u64, u64, u64, u64) {
-        (
-            self.endpoint.served_count(),
-            self.endpoint.refused_count(),
-            self.endpoint.lookup_failure_count(),
-            self.endpoint.accept_error_count(),
-        )
+    pub fn counters(&self) -> ServeCounters {
+        ServeCounters {
+            served: self.endpoint.served_count(),
+            refused: self.endpoint.refused_count(),
+            lookup_failures: self.endpoint.lookup_failure_count(),
+            sign_failures: self.endpoint.sign_failure_count(),
+            accept_errors: self.endpoint.accept_error_count(),
+        }
     }
 
     /// Stop serving: tear the onion down first, then the listener.

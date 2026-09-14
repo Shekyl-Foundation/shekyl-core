@@ -48,11 +48,19 @@ use shekyl_tor_control_client::control::{
 };
 use shekyl_types::{PCanonicalId, PSlot};
 
-use shekyl_p_serve::{PServeEndpoint, ShardBody, ROUTE_PREFIX};
+use shekyl_p_serve::{
+    PServeEndpoint, ShardBody, TestKeySigner, ROUTE_PREFIX, SIGNATURE_ENVELOPE_LEN,
+};
 
 use crate::fixture::FixtureShardProvider;
 use crate::measure::{FailureKind, Observation};
 use crate::onion_key::derive_onion_identity;
+
+/// The apparatus's fixed chain view: the height every persona reports for
+/// the `SF-D5` pre-sign gate, and the height the client leg anchors its
+/// request header against (`tip − 720`). The spike has no chain; one shared
+/// number is what makes the gate pass for the right reason.
+pub const APPARATUS_OWN_HEIGHT: u64 = 100_000;
 
 /// Ceiling on a single fetch before the harness calls it a timeout.
 ///
@@ -306,7 +314,11 @@ impl Apparatus {
             })?
             .header()
             .framed_len();
-        let expected_len = usize::try_from(expected_len).expect("framed length fits usize");
+        let expected_len = usize::try_from(expected_len).expect("framed length fits usize")
+            // Plus the `SF-D8` countersignature envelope the endpoint writes
+            // ahead of the frame — same rule as the frame header: derived
+            // from the code that writes the wire, never typed in.
+            + SIGNATURE_ENVELOPE_LEN;
 
         let mut personas = Vec::new();
         for slot in 0..persona_count {
@@ -321,10 +333,17 @@ impl Apparatus {
                 slot,
             );
             let service_id = identity.service_id().clone();
-            let endpoint =
-                PServeEndpoint::bind(Arc::new(FixtureShardProvider::new(Arc::clone(&payload))))
-                    .await
-                    .map_err(ApparatusError::Bind)?;
+            // An ephemeral attestation key per persona: the spike measures
+            // the shipped serve path, and signing is on it. Its own height is
+            // the apparatus's fixed chain view — the client leg anchors its
+            // requests against the same number.
+            let signer = Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT));
+            let endpoint = PServeEndpoint::bind(
+                Arc::new(FixtureShardProvider::new(Arc::clone(&payload))),
+                signer,
+            )
+            .await
+            .map_err(ApparatusError::Bind)?;
             let port = OnionPort::loopback(80, endpoint.addr())
                 .expect("PServeEndpoint always binds loopback");
             // MaxStreams is pinned conservatively here; see SPIKE-PIN-1 in the
@@ -587,9 +606,12 @@ mod tests {
                     .enable_all()
                     .build()
                     .expect("runtime");
-                rt.block_on(PServeEndpoint::bind(Arc::new(FixtureShardProvider::new(
-                    Arc::from(vec![0u8; 1].into_boxed_slice()),
-                ))))
+                rt.block_on(PServeEndpoint::bind(
+                    Arc::new(FixtureShardProvider::new(Arc::from(
+                        vec![0u8; 1].into_boxed_slice(),
+                    ))),
+                    Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT)),
+                ))
                 .expect("bind")
             },
         };
