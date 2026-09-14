@@ -813,9 +813,12 @@ RELEASE_MIN/MAX ◄── tx volume ──────┤
 > - **The hypothesis's "mixing layer / clean coins" framing is
 >   ring-era.** "No spending history" confers an advantage only where an
 >   observer can trace spending history — i.e., on a visible spend graph
->   where decoy selection samples outputs. Under FCMP++ every output enters
->   the full-chain anonymity set identically; a fresh coinbase output adds
->   exactly what any other output adds.
+>   where decoy selection samples outputs. Under FCMP++ every output is
+>   provable from the full-chain set identically, and a fresh coinbase
+>   output adds exactly what any other output adds — provided the spend does
+>   not name its input. Today it does (`PL-D1`, next bullet), so no
+>   anonymity set exists until `PL-D3` lands; the ring-era framing is wrong
+>   either way.
 > - **Mechanism A's harm model presupposes an observable FCMP++ does not
 >   emit.** "Temporal correlation between *block mined at H* and *coinbase
 >   output spent at H+N*" requires observing **when a specific output is

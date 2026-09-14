@@ -78,7 +78,7 @@ Leaf = { O.x, I.x, C.x, H(pqc_pk) }
 | `O.x` | x-coordinate of output public key | Identifies the output |
 | `I.x` | x-coordinate of key image | Prevents double-spending |
 | `C.x` | x-coordinate of Pedersen commitment | Binds the hidden amount |
-| `H(pqc_pk)` | `shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)` | Binds the ML-DSA-65 public key |
+| `H(pqc_pk)` | `shekyl_fcmp_pqc_leaf_hash(hybrid_public_key)` | Binds the canonical hybrid public key (Ed25519 ‖ ML-DSA-65) |
 
 The 4th scalar (`H(pqc_pk)`) is Shekyl-specific. It cryptographically
 binds the post-quantum public key to the curve tree leaf, creating the
@@ -548,7 +548,7 @@ For each input `i` in `tx.vin`:
 proof       = rv.p.fcmp_pp_proof
 key_images  = [ tx.vin[i].k_image for i in 0..num_inputs ]
 pseudo_outs = rv.p.pseudoOuts
-pqc_hashes  = [ shekyl_fcmp_pqc_leaf_hash(extract_ml_dsa_pk(pqc_auths[i]))
+pqc_hashes  = [ shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)
                 for i in 0..num_inputs ]
 tree_root   = (from Step 2a)
 tree_depth  = rv.p.curve_trees_tree_depth
@@ -566,8 +566,7 @@ result = shekyl_fcmp_verify(
 
 ```text
 for i in 0..num_inputs:
-    ml_dsa_pk = extract_ml_dsa_component(pqc_auths[i].hybrid_public_key)
-    computed_hash = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)
+    computed_hash = shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)
     assert computed_hash == pqc_hashes[i]
 ```
 
@@ -617,7 +616,7 @@ rust/
 |-----------|-------------|---------|
 | `shekyl_sign_transaction()` | `shekyl-ffi/src/lib.rs` | Native Rust tx signing (BP+, FCMP++, ECDH, pseudo-outs) via `shekyl-tx-builder` |
 | `shekyl_fcmp_verify()` | `shekyl-ffi/src/legacy_fcmp.rs` | Verify FCMP++ proof |
-| `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash ML-DSA-65 pubkey for leaf |
+| `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash the canonical hybrid pubkey for the leaf |
 | `shekyl_derive_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Derive h_pqc from combined_ss (secret stays in Rust) |
 | `shekyl_derive_pqc_public_key()` | `shekyl-ffi/src/lib.rs` | Derive hybrid public key from combined_ss (secret stays in Rust) |
 | `shekyl_fcmp_outputs_to_leaves()` | `shekyl-ffi/src/lib.rs` | Convert outputs to 4-scalar leaves |
@@ -1129,7 +1128,7 @@ Staking-subtree leaf (160 B):
   [  0: 32]  O.x
   [ 32: 64]  I.x
   [ 64: 96]  C.x       // C_stake = z·G + amount·H   (plain Pedersen — no τ·H_t)
-  [ 96:128]  h_pqc      = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)
+  [ 96:128]  h_pqc      = shekyl_fcmp_pqc_leaf_hash(hybrid_public_key)
   [128:160]  h_bind     = H("stake-bind" ‖ tier ‖ creation_height)   // consensus-set at inclusion
 ```
 
@@ -1840,7 +1839,7 @@ serialized immediately after `enc_amounts` and before `outPk`:
 | O | Output public key (curve tree leaf) |
 | I | Key image generator Hp(O) |
 | C | Pedersen commitment (curve tree leaf) |
-| h_pqc | H(ml_dsa_pk) PQC leaf binding |
+| h_pqc | H(hybrid_pk) PQC leaf binding (canonical Ed25519 ‖ ML-DSA-65 key) |
 | x | SAL spend secret key (`ho + b_spend`) |
 | y | SAL output-key secret (HKDF-derived) |
 | z | Pedersen commitment mask (HKDF-derived) |

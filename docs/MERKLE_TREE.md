@@ -6,7 +6,7 @@
 
 **"Prove your money exists in the entire history… without anyone knowing which one is yours"**
 
-In a normal blockchain, proving "I own this coin" is easy — the ledger literally lists who owns what. But that kills privacy. Shekyl (like Monero) wants **full anonymity**: every output should blend into the entire history of the chain so no one can tell which specific coin you are spending.
+In a normal blockchain, proving "I own this coin" is easy — the ledger literally lists who owns what. But that kills privacy. Shekyl (like Monero) wants **full anonymity**: every output should blend into the entire history of the chain so no one can tell which specific coin you are spending. That is the design goal and the membership proof delivers it; today the proof's public 4th-scalar input names the spent leaf regardless (`PL-D1`, "Our 4th scalar" below), until `PL-D3` lands.
 
 The solution is a **membership proof**: prove "my output is somewhere in the giant list of all outputs ever created" without revealing *where* it is.
 
@@ -267,7 +267,7 @@ The tree topology, branching factors, curve cycle, and proof system are all inhe
 
 ## Why This Modified Merkle Tree?
 
-- **Full-chain anonymity**: Prove your output exists *anywhere* in history (not just a small ring of 16 decoys).
+- **Full-chain anonymity**: Prove your output exists *anywhere* in history (not just a small ring of 16 decoys) — the membership proof's property; the spend as composed today still names its input (`PL-D1`).
 - **PQC binding**: The extra `H(pqc_pk)` scalar ties quantum-resistant authorization directly into the proof — an attacker must break both EC and lattice cryptography.
 - **Zero-knowledge**: The algebraic structure (Pedersen commitments + curve cycle) lets the proof hide which output while still proving membership and correctness.
 - **Efficiency trade-off**: We pay a bit more computation (one extra scalar per output, one more curve multiplication per leaf hash) for dramatically better privacy and future quantum resistance.

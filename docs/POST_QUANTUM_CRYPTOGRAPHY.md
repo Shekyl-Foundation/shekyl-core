@@ -752,7 +752,9 @@ fixed:
 
 ### FCMP++ and PQC ownership binding
 
-FCMP++ solves the anonymous per-input PQC ownership verification problem.
+FCMP++ verifies per-input PQC ownership with a zero-knowledge membership
+proof. "Anonymous" here is proof-level: the membership leg reveals nothing;
+the composition with its public 4th-scalar input does (next paragraph).
 Each curve tree leaf contains 4 scalars: `{O.x, I.x, C.x, H(pqc_pk)}`.
 The 4th scalar `H(pqc_pk)` is a hash of the output's PQC public key, proven
 in-circuit during the FCMP++ membership proof. This binds PQC ownership to
@@ -1088,8 +1090,9 @@ Rules:
   spend authority on its own
 
 PQC spend/ownership authorization works alongside the FCMP++ membership proof
-layer. FCMP++ provides full-chain anonymity; `pqc_auths` provides quantum-resistant
-spend authorization. Stealth addresses and one-time output derivation remain
+layer. FCMP++ provides a zero-knowledge membership proof over the full chain
+(proof-level; not transaction-level anonymity while `PL-D1` stands);
+`pqc_auths` provides quantum-resistant spend authorization. Stealth addresses and one-time output derivation remain
 part of the privacy stack.
 
 V3.0 ships **one reusable primary address per account** (End-state 5); on-chain

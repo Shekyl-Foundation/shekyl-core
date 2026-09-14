@@ -838,7 +838,9 @@ most→least safe: **mint/earned** (provenance terminates at consensus — revea
 consumed — was held to be FCMP++-hidden, which `PL-D1` refutes: the bond post's inputs are
 identified like every other spend, so this rung's "one churn hop" is re-ruled by the `PL-` round) >
 **raw pre-bond-post
-funding** (the *only* rung where the reveal newly identifies the funding tx + its timing —
+funding** (the rung where the reveal identifies a funding tx that is not already P-public — the
+bond post is P-public by construction, a raw funding tx is not; under `PL-D1` every rung's inputs
+are identified, so the distinction that remains is P-attribution, not hiddenness —
 **forbidden**). The forbidden rung is made **structurally unrepresentable** (not merely
 dispreferred): the wallet rule is that the bond post / re-bond **sweeps P's entire spendable
 funding set**, so no raw funding output survives to be backing-eligible and first-emission backing
