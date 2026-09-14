@@ -25,7 +25,7 @@ pub const PASS_ANCHOR_HASH_LEN: usize = 32;
 pub const PASS_REQUEST_HEADER_LEN: usize =
     PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN + PASS_ANCHOR_HASH_LEN;
 
-/// Signed transcript: header[72] ‖ shard_id_le[8].
+/// Signed transcript: 72-byte header followed by `shard_id` as 8 LE bytes.
 pub const PASS_COUNTERSIGNATURE_MESSAGE_LEN: usize = PASS_REQUEST_HEADER_LEN + 8;
 
 /// Requester anchors at `tip − depth`; admission's upper bound is `h − depth`.
@@ -133,6 +133,82 @@ pub fn pass_request_header_bytes(
     out
 }
 
+/// The decoded 72-byte request header.
+///
+/// One type for both ends of the route: the fetch client mints one, the
+/// serve loop splits the same bytes, and the transcript both sign and
+/// verify is [`Self::transcript`]. Layout owner is this module; the
+/// textual carrier (lowercase hex) is `serving_route`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassRequestHeader {
+    nonce: [u8; PASS_NONCE_LEN],
+    anchor_height: u64,
+    anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+}
+
+impl PassRequestHeader {
+    /// Assemble from the three fields. Infallible: lengths are in the types.
+    #[must_use]
+    pub const fn from_parts(
+        nonce: [u8; PASS_NONCE_LEN],
+        anchor_height: u64,
+        anchor_hash: [u8; PASS_ANCHOR_HASH_LEN],
+    ) -> Self {
+        Self {
+            nonce,
+            anchor_height,
+            anchor_hash,
+        }
+    }
+
+    /// Split a decoded header. Infallible: the length is in the type.
+    #[must_use]
+    pub fn from_bytes(header: &[u8; PASS_REQUEST_HEADER_LEN]) -> Self {
+        const HEIGHT_END: usize = PASS_NONCE_LEN + PASS_ANCHOR_HEIGHT_LEN;
+        let mut nonce = [0u8; PASS_NONCE_LEN];
+        nonce.copy_from_slice(&header[..PASS_NONCE_LEN]);
+        let mut height_le = [0u8; PASS_ANCHOR_HEIGHT_LEN];
+        height_le.copy_from_slice(&header[PASS_NONCE_LEN..HEIGHT_END]);
+        let mut anchor_hash = [0u8; PASS_ANCHOR_HASH_LEN];
+        anchor_hash.copy_from_slice(&header[HEIGHT_END..]);
+        Self {
+            nonce,
+            anchor_height: u64::from_le_bytes(height_le),
+            anchor_hash,
+        }
+    }
+
+    /// The nonce — what the pass record carries beside `anchor_height`.
+    #[must_use]
+    pub const fn nonce(&self) -> &[u8; PASS_NONCE_LEN] {
+        &self.nonce
+    }
+
+    /// The requester's anchor height (`tip − 720` at mint time).
+    #[must_use]
+    pub const fn anchor_height(&self) -> u64 {
+        self.anchor_height
+    }
+
+    /// The requester's block hash at [`Self::anchor_height`].
+    #[must_use]
+    pub const fn anchor_hash(&self) -> &[u8; PASS_ANCHOR_HASH_LEN] {
+        &self.anchor_hash
+    }
+
+    /// The decoded 72-byte wire layout.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; PASS_REQUEST_HEADER_LEN] {
+        pass_request_header_bytes(&self.nonce, self.anchor_height, &self.anchor_hash)
+    }
+
+    /// The SF-D8 transcript for this header and `shard_id`.
+    #[must_use]
+    pub fn transcript(&self, shard_id: u64) -> [u8; PASS_COUNTERSIGNATURE_MESSAGE_LEN] {
+        pass_countersignature_message(&self.nonce, self.anchor_height, &self.anchor_hash, shard_id)
+    }
+}
+
 /// Transcript `P` signs: [`pass_request_header_bytes`] ‖ `shard_id_le[8]`.
 /// Plain concatenation, not a hash. Domain is
 /// [`SCHEME_DOMAIN_ATTESTATION`](shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION).
@@ -172,6 +248,23 @@ mod tests {
         let hashes: Vec<_> = (0..len as u64).map(|i| chain_hash(first + i)).collect();
         PassAnchorWindow::from_table(predecessor_height, &hashes)
             .expect("table sized to the window")
+    }
+
+    #[test]
+    fn pass_request_header_splits_and_rejoins() {
+        let h = PassRequestHeader::from_parts([0x11; 32], 0x0102_0304_0506_0708, [0x22; 32]);
+        let bytes = h.to_bytes();
+        assert_eq!(PassRequestHeader::from_bytes(&bytes), h);
+        assert_eq!(&bytes[..32], &[0x11; 32]);
+        assert_eq!(
+            &bytes[32..40],
+            &[0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01]
+        );
+        assert_eq!(&bytes[40..], &[0x22; 32]);
+        assert_eq!(
+            h.transcript(9),
+            pass_countersignature_message(&[0x11; 32], 0x0102_0304_0506_0708, &[0x22; 32], 9)
+        );
     }
 
     #[test]

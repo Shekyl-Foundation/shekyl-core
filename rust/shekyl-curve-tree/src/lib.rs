@@ -6,10 +6,12 @@
 //! Wallet-side FCMP++ curve-tree client.
 //!
 //! Reconstructs the FCMP++ output curve tree locally from synced blocks
-//! and assembles membership paths for spends — without revealing which
-//! output a wallet is proving against (the privacy reason the path is
+//! and assembles membership paths for spends — without telling the daemon
+//! which output a wallet is proving against (the privacy reason the path is
 //! assembled client-side rather than fetched, `00-mission.mdc` priority
-//! 2). The reconstructed root must byte-equal the consensus root the
+//! 2; necessary but not sufficient while `PL-D1`, the on-chain reveal in
+//! `docs/design/FCMP_SPEND_LINKABILITY.md`, is open). The reconstructed
+//! root must byte-equal the consensus root the
 //! daemon commits in each block header, so the derivation replicates the
 //! daemon's leaf-stream logic bit-exactly.
 //!
@@ -38,6 +40,12 @@
 //! - [`client`]: orchestration over synced blocks (CT-3).
 //! - [`reference`](mod@reference): reference-block selection + proof
 //!   validity-horizon arithmetic (§5), pure functions over heights.
+//! - [`serving_route`]: the archival serving route's shared grammar —
+//!   virtual port, route, header set, request-header codec — read by
+//!   both `shekyl-p-serve` and `shekyl-p-fetch` so neither depends on
+//!   the other (`SF-D4`). The onion hostname is not grammar: it lives
+//!   in `shekyl-onion-v3`, typed on the daemon as
+//!   `shekyl-p-fetch::ServingEndpoint`.
 
 #![deny(unsafe_code)]
 
@@ -47,6 +55,7 @@ pub mod recon;
 pub mod reference;
 pub mod segment;
 pub mod served_frame;
+pub mod serving_route;
 pub mod store;
 pub mod types;
 

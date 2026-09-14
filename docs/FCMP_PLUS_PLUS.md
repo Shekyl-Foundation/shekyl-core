@@ -11,11 +11,17 @@ This document is the comprehensive technical reference for Shekyl's FCMP++
 structure, consensus rules, database schema, wallet integration, and
 performance characteristics.
 
-FCMP++ replaces ring signatures entirely. Every spend proves membership in
-the *entire* UTXO set without revealing which output is being spent. Combined
-with Shekyl's hybrid post-quantum spend authorization, this gives every
-transaction full-UTXO-set anonymity with quantum-resistant ownership — a
-combination no other cryptocurrency offers.
+FCMP++ replaces ring signatures entirely. The membership **proof** is
+zero-knowledge over the entire UTXO set: nothing in the proof itself reveals
+which leaf is proven. **The transaction is not.** Each input reveals its
+`pqc_auths[i].hybrid_public_key` in cleartext; consensus hashes it into the
+leaf's 4th scalar and hands that hash to the verifier as a public input; and
+the same hash was published per output in `tx_extra` tag `0x07` when the
+output was created — so the spent output is identified by one hash and one
+lookup (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)).
+The fix (`PL-D3`) makes the published value a hiding Pedersen commitment
+opened in-circuit against the revealed key; it is pre-genesis and in design,
+and amounts and destinations are unaffected either way.
 
 This is the consensus-critical reference for implementors working on FCMP++
 verification in `src/cryptonote_core/blockchain.cpp` and the Rust FFI layer
@@ -25,8 +31,10 @@ in `rust/shekyl-fcmp/`.
 
 ## 1. Curve Tree Structure
 
-The FCMP++ anonymity set is the entire UTXO set, represented as a **curve
-tree** — a Merkle-like hash tree built over an elliptic curve cycle.
+The FCMP++ proof ranges over the entire UTXO set, represented as a **curve
+tree** — a Merkle-like hash tree built over an elliptic curve cycle. (That
+range is not the spend's anonymity set: while `PL-D1` is open the transaction
+identifies its inputs, see the preamble.)
 
 ### Helios/Selene Alternating Layers
 
@@ -70,7 +78,7 @@ Leaf = { O.x, I.x, C.x, H(pqc_pk) }
 | `O.x` | x-coordinate of output public key | Identifies the output |
 | `I.x` | x-coordinate of key image | Prevents double-spending |
 | `C.x` | x-coordinate of Pedersen commitment | Binds the hidden amount |
-| `H(pqc_pk)` | `shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)` | Binds the ML-DSA-65 public key |
+| `H(pqc_pk)` | `shekyl_fcmp_pqc_leaf_hash(hybrid_public_key)` | Binds the canonical hybrid public key (Ed25519 ‖ ML-DSA-65) |
 
 The 4th scalar (`H(pqc_pk)`) is Shekyl-specific. It cryptographically
 binds the post-quantum public key to the curve tree leaf, creating the
@@ -93,15 +101,25 @@ FFI via `shekyl_fcmp_pqc_leaf_hash()`.
 
 ## 2. Dual-Layer Security Model
 
-FCMP++ transactions achieve quantum-resistant spend authorization through two
-independent but linked layers. Both must hold for a spend to be valid.
+FCMP++ spend authorization has two layers; both must hold for a spend to be
+valid. They are **not independent in security**: the link between them —
+that the signing key is the one committed to the spent leaf — is enforced
+inside Layer 1, whose soundness rests on the discrete-logarithm assumption.
+Layer 2 is post-quantum unforgeable under the key it presents. The
+composition is post-quantum only where Layer 1's binding survives, which a
+full EC discrete-log break does not leave standing (`PL-D2`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
 
 ### Layer 1: FCMP++ Membership Proof (In-Circuit PQC Commitment)
 
 The FCMP++ proof is a zero-knowledge argument that the prover knows openings
 to leaves in the curve tree whose 4th scalars are the `H(pqc_pk)` values
-supplied as public inputs. The proof does not reveal which leaves are spent
-— the entire UTXO set serves as the anonymity set.
+supplied as public inputs. The proof does not reveal which leaves are spent;
+**its public inputs do.** Each `H(pqc_pk)` is the per-output value the
+output's creator published in `tx_extra` tag `0x07` (coinbase:
+`cryptonote_tx_utils.cpp`; wallet spends: `shekyl-wire` `tx_extra.rs`), so the
+leaf whose 4th scalar equals it is the unique spent leaf — an `O(1)` lookup
+that never touches the proof (`PL-D1`). The entire UTXO set is the set the
+proof ranges over, not the set an observer has to search.
 
 The `H(pqc_pk)` values are passed to `shekyl_fcmp_verify()` as the
 `pqc_pk_hashes_ptr` parameter. The proof succeeds only if the prover
@@ -119,9 +137,12 @@ that the signer possesses the ML-DSA-65 secret key corresponding to the
 Together, the two layers guarantee:
 
 - **Layer 1** proves: "the spent output exists in the tree and its PQC
-  public key hash is `H(pqc_pk)`" (anonymous, zero-knowledge).
+  public key hash is `H(pqc_pk)`" (zero-knowledge over `O`, `I`, `C`; **not
+  anonymous** — `H(pqc_pk)` is a public input equal to a published per-output
+  value, `PL-D1`).
 - **Layer 2** proves: "the signer knows the secret key for `pqc_pk`"
-  (non-interactive, binding).
+  (non-interactive; unforgeable under the presented key against a quantum
+  adversary — the binding of that key to the leaf is Layer 1's, `PL-D2`).
 
 An attacker who breaks only EC discrete log cannot forge the ML-DSA-65
 signature. An attacker who breaks only ML-DSA cannot forge the FCMP++ curve
@@ -527,7 +548,7 @@ For each input `i` in `tx.vin`:
 proof       = rv.p.fcmp_pp_proof
 key_images  = [ tx.vin[i].k_image for i in 0..num_inputs ]
 pseudo_outs = rv.p.pseudoOuts
-pqc_hashes  = [ shekyl_fcmp_pqc_leaf_hash(extract_ml_dsa_pk(pqc_auths[i]))
+pqc_hashes  = [ shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)
                 for i in 0..num_inputs ]
 tree_root   = (from Step 2a)
 tree_depth  = rv.p.curve_trees_tree_depth
@@ -545,8 +566,7 @@ result = shekyl_fcmp_verify(
 
 ```text
 for i in 0..num_inputs:
-    ml_dsa_pk = extract_ml_dsa_component(pqc_auths[i].hybrid_public_key)
-    computed_hash = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)
+    computed_hash = shekyl_fcmp_pqc_leaf_hash(pqc_auths[i].hybrid_public_key)
     assert computed_hash == pqc_hashes[i]
 ```
 
@@ -596,7 +616,7 @@ rust/
 |-----------|-------------|---------|
 | `shekyl_sign_transaction()` | `shekyl-ffi/src/lib.rs` | Native Rust tx signing (BP+, FCMP++, ECDH, pseudo-outs) via `shekyl-tx-builder` |
 | `shekyl_fcmp_verify()` | `shekyl-ffi/src/legacy_fcmp.rs` | Verify FCMP++ proof |
-| `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash ML-DSA-65 pubkey for leaf |
+| `shekyl_fcmp_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Hash the canonical hybrid pubkey for the leaf |
 | `shekyl_derive_pqc_leaf_hash()` | `shekyl-ffi/src/lib.rs` | Derive h_pqc from combined_ss (secret stays in Rust) |
 | `shekyl_derive_pqc_public_key()` | `shekyl-ffi/src/lib.rs` | Derive hybrid public key from combined_ss (secret stays in Rust) |
 | `shekyl_fcmp_outputs_to_leaves()` | `shekyl-ffi/src/lib.rs` | Convert outputs to 4-scalar leaves |
@@ -1108,7 +1128,7 @@ Staking-subtree leaf (160 B):
   [  0: 32]  O.x
   [ 32: 64]  I.x
   [ 64: 96]  C.x       // C_stake = z·G + amount·H   (plain Pedersen — no τ·H_t)
-  [ 96:128]  h_pqc      = shekyl_fcmp_pqc_leaf_hash(ml_dsa_pk)
+  [ 96:128]  h_pqc      = shekyl_fcmp_pqc_leaf_hash(hybrid_public_key)
   [128:160]  h_bind     = H("stake-bind" ‖ tier ‖ creation_height)   // consensus-set at inclusion
 ```
 
@@ -1819,7 +1839,7 @@ serialized immediately after `enc_amounts` and before `outPk`:
 | O | Output public key (curve tree leaf) |
 | I | Key image generator Hp(O) |
 | C | Pedersen commitment (curve tree leaf) |
-| h_pqc | H(ml_dsa_pk) PQC leaf binding |
+| h_pqc | H(hybrid_pk) PQC leaf binding (canonical Ed25519 ‖ ML-DSA-65 key) |
 | x | SAL spend secret key (`ho + b_spend`) |
 | y | SAL output-key secret (HKDF-derived) |
 | z | Pedersen commitment mask (HKDF-derived) |

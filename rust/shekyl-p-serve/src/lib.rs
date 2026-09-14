@@ -9,13 +9,14 @@
 //! A bonded persona `P` answers shard reads over its onion rendezvous: a
 //! witness pulls the **entire shard** and verifies the bytes against the
 //! chain-committed sub-root `R_k` (§2) — the response is
-//! **self-authenticating by content**. As landed, this crate signs nothing.
-//!
-//! **RULED 2026-09-13, NOT LANDED** (`ARCHIVAL_SHARD_FETCH.md` `SF-D5`/`SF-D8`/
-//! `SF-D13`, §9.1 step (a)): the response will countersign the decoded header
-//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]` with
-//! `BondPost.hybrid_public_key` via a signer callback. The verifier is already
-//! landed (step (a0)). Until (a) lands, this crate signs nothing.
+//! **self-authenticating by content** — and, since `SF-D8` (§9.1 step
+//! (a), landed here), **bound to the request** by the persona's
+//! countersignature over the decoded request header
+//! `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖ shard_id_le[8]`
+//! under `BondPost.hybrid_public_key`. The signature is produced by the
+//! host's [`PassSigner`]; this crate still holds no key. The verifier the
+//! daemon runs is step (a0)'s,
+//! `shekyl_archival_retention::verify_pass_transcript`.
 //!
 //! # This crate's place in the §9.5 item-3 arc
 //!
@@ -54,13 +55,16 @@
 //! # What this crate is, and is not
 //!
 //! **Is:** the loopback listener ([`PServeEndpoint`]) and the store-backed
-//! shard lookup ([`StoreShardProvider`]) — pure transport plus a read.
-//! The endpoint binds `127.0.0.1:0` only; reachability comes from the
-//! `ADD_ONION` mapping `shekyl-p-host` wires in. This crate touches no key
-//! material at all — and, since [`StoreShardProvider`] is built from a
-//! read-only `ServingReader`, it cannot write to the store either.
+//! shard lookup ([`StoreShardProvider`]) — pure transport plus a read,
+//! plus the [`PassSigner`] seam through which the host countersigns. The
+//! endpoint binds `127.0.0.1:0` only; reachability comes from the
+//! `ADD_ONION` mapping `shekyl-p-host` wires in. This crate holds no key
+//! material — the signer is the host's object, and the serve loop sees
+//! only the signature it returns — and, since [`StoreShardProvider`] is
+//! built from a read-only `ServingReader`, it cannot write to the store
+//! either.
 //!
-//! **Is not:** a pass-record builder, a countersigner, the *definition* of a
+//! **Is not:** a pass-record builder, a key holder, the *definition* of a
 //! wire format (it emits `RF-D4`'s frame; `shekyl-curve-tree` owns it), a
 //! consensus surface, onion registration, or the W₂ rig. The rig extends
 //! this loop with the concurrent-batch measurement shape (§9); the
@@ -74,9 +78,11 @@
 //! - two personas served from one wallet are byte-identical at the header
 //!   level ([`serve::RESPONSE_HEADER_NAMES`] is the complete set);
 //! - every **complete-head** non-servable outcome — wrong path, wrong
-//!   method, malformed route/id, **unknown shard, unfrozen shard, store
-//!   failure** — renders one identical 404, so neither the route table
-//!   nor store health is probeable by **response bytes**;
+//!   method, malformed route/id, missing / duplicate / malformed request
+//!   header, out-of-gate anchor, **unknown shard, unfrozen shard, store
+//!   failure, signer refusal** — renders one identical 404, so neither the
+//!   route table nor store health nor key residency is probeable by
+//!   **response bytes**;
 //! - incomplete heads (oversized, mid-head EOF, read timeout) and
 //!   over-capacity arrivals are **closed** with no HTTP bytes — the same
 //!   class as ordinary circuit death, not a status-code oracle;
@@ -84,9 +90,10 @@
 //!   written**, so no miss can leak as a truncated `200`; the one residual
 //!   ([`serve`], "the residual") is a body cut short by a stalled peer or a
 //!   store fault, and is named rather than assumed away;
-//! - no request logging at any level: the only observables are four
-//!   aggregate monotone counters — served, refused, lookup failures, and
-//!   accept failures — none of which carries per-request structure.
+//! - no request logging at any level: the only observables are five
+//!   aggregate monotone counters — served, refused, lookup failures, sign
+//!   failures, and accept failures — none of which carries per-request
+//!   structure.
 //!
 //! **Timing.** Byte identity is the invariant for complete-head misses.
 //! Micro-timing differences between a wrong path (no store read) and a
@@ -99,11 +106,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod countersign;
 pub mod provider;
 pub mod serve;
 
+#[cfg(any(test, feature = "test-signer"))]
+pub use countersign::TestKeySigner;
+pub use countersign::{
+    anchor_within_gate, sign_pass_transcript, PassKey, PassSigner, SignRefused,
+    SIGNATURE_ENVELOPE_LEN,
+};
 pub use provider::{ProviderError, ShardBody, ShardProvider, StoreShardProvider};
 pub use serve::{
-    PServeEndpoint, CONTENT_TYPE, MAX_INFLIGHT, MAX_REQUEST_BYTES, RESPONSE_HEADER_NAMES,
-    ROUTE_PREFIX,
+    PServeEndpoint, CONTENT_TYPE, MAX_INFLIGHT, MAX_REQUEST_BYTES, REQUEST_HEADER_NAME,
+    RESPONSE_HEADER_NAMES, ROUTE_PREFIX,
 };
+pub use shekyl_archival_retention::pass_anchor::PASS_COUNTERSIGNATURE_MESSAGE_LEN;

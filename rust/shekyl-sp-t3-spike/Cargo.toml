@@ -14,7 +14,11 @@ publish = false
 # one side only), which for a measurement rig means measuring something other
 # than what ships. It now drives `shekyl_p_serve` behind a fixture
 # `ShardProvider`, so the inbound-hardening shape under test is the shipped one.
-shekyl-p-serve = { path = "../shekyl-p-serve" }
+# `test-signer` arms the ephemeral attestation key the personas countersign
+# with (`SF-D8`): this crate is a DISPOSABLE measurement rig, not a production
+# graph, and `scripts/ci/check_p_fetch_dep_cut.py` asserts the feature stays
+# out of every graph that ships.
+shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
 # The harness's own async plumbing (bring-up, timed fetches, teardown). The v3
 # onion encoding that used to live here (and its ed25519-dalek/sha3/sha2/zeroize
 # deps) relocated to `shekyl-tor-control-client::onion_identity` — SPIKE-F-4 completed — so the

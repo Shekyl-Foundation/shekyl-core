@@ -813,15 +813,22 @@ RELEASE_MIN/MAX ◄── tx volume ──────┤
 > - **The hypothesis's "mixing layer / clean coins" framing is
 >   ring-era.** "No spending history" confers an advantage only where an
 >   observer can trace spending history — i.e., on a visible spend graph
->   where decoy selection samples outputs. Under FCMP++ every output enters
->   the full-chain anonymity set identically; a fresh coinbase output adds
->   exactly what any other output adds.
+>   where decoy selection samples outputs. Under FCMP++ every output is
+>   provable from the full-chain set identically, and a fresh coinbase
+>   output adds exactly what any other output adds — provided the spend does
+>   not name its input. Today it does (`PL-D1`, next bullet), so no
+>   anonymity set exists until `PL-D3` lands; the ring-era framing is wrong
+>   either way.
 > - **Mechanism A's harm model presupposes an observable FCMP++ does not
 >   emit.** "Temporal correlation between *block mined at H* and *coinbase
 >   output spent at H+N*" requires observing **when a specific output is
->   spent** — an FCMP++ spend never reveals which output it consumes, so
->   N is unobservable and there is nothing to decorrelate. Do not build
->   this.
+>   spent**. The 2026-07-17 reading held that an FCMP++ spend never reveals
+>   which output it consumes; that is false today — the `pqc_pk` each spend
+>   reveals identifies the spent output (`PL-D1`,
+>   [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)), so N
+>   **is** observable. The "do not build this" disposition rested on the
+>   false premise; its ground is gone and it is re-ruled by the `PL-` round
+>   (if `PL-D1` is fixed as proposed the observable disappears again).
 > - **Mechanism B's observable is real.** Staker claims are P-attributed
 >   and carry loud plain amounts on the wire (`REWARD_EMISSION_LEG.md`),
 >   so claim frequency/timing is genuinely public; batching addresses an
@@ -880,8 +887,10 @@ correct total). These outputs enter the UTXO set and are part of the full-chain
 anonymity set used by FCMP++ membership proofs.
 
 **Privacy gain:** More coinbase-shaped outputs in the UTXO set increase the
-overall UTXO set diversity. With FCMP++, the full UTXO set is the anonymity
-set, so additional outputs improve privacy indirectly by increasing set size.
+overall UTXO set diversity. With FCMP++, the full UTXO set is the set the
+proof ranges over (the spend's actual anonymity set is one output while
+`PL-D1` is open), so additional outputs improve privacy indirectly by
+increasing set size only once that round closes.
 
 **Risk:** Increases coinbase transaction size and adds consensus complexity.
 Anti-sybil enforcement is needed to prevent miners from creating outputs

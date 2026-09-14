@@ -3,8 +3,10 @@
 Implementation of
 [the FCMP++ protocol composition](https://github.com/kayabaNerve/fcmp-plus-plus-paper)
 for Shekyl. FCMP++ replaces per-input ring signatures (CLSAG) with a single
-proof that spent outputs exist in the full UTXO set curve tree, providing
-global anonymity set coverage.
+proof that spent outputs exist in the full UTXO set curve tree; the proof is
+zero-knowledge over that whole set. (Shekyl's transaction composition
+currently identifies the spent output anyway, through the proof's public
+4th-scalar input — `PL-D1`, `docs/design/FCMP_SPEND_LINKABILITY.md`.)
 
 This crate is the only proof system accepted by Shekyl consensus from
 genesis (HF1). It is a first-party crate (relocated out of the vendored

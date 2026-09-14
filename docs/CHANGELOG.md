@@ -4,6 +4,25 @@
 
 ### Changed
 
+- **Every FCMP++ spend currently identifies the output it spends (`PL-D1`),
+  and the documents that claimed otherwise are corrected at source.** The
+  input's revealed `pqc_auths[i].hybrid_public_key` hashes to the per-output
+  value published in `tx_extra` `0x07` at creation, and consensus hands that
+  hash to the verifier as a public input — one hash and one lookup, no proof
+  inspection. Amounts and destinations stay hidden; the spend graph does not.
+  Pre-genesis; nothing has leaked. Design round 1, ratified by Rick on
+  2026-09-14 (this branch carries no wire, leaf, or circuit change; the
+  implementation is the separate rule-07 PR; the fix `PL-D3` is a Pedersen commitment to the key in the
+  leaf, opened in-circuit by the existing discrete-log gadget, with a proper
+  hash-commitment mechanism as the successor round `PL-D4`) is
+  [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md);
+  it also rules `PL-D2` (Rick, 2026-09-14): the in-circuit "quantum-resistant
+  binding" is discrete-log sound, the "even if EC discrete log is broken"
+  claims are corrected at source (§4.5), and the post-quantum-sound leg is
+  designed with `PL-D4` at V4. `REWARD_EMISSION_LEG.md` §7.3's
+  2026-07-01 invariant ("the creating tx's inputs are FCMP++-hidden") is
+  struck; its tripwire fired.
+
 - **The daemon no longer reads `<data-dir>/checkpoints.json`.** Checkpoints
   are compiled in and carried by the release binary; the runtime JSON
   channel (`load_checkpoints_from_json`, the ten-minute reload) is deleted
@@ -60,6 +79,43 @@
   non-colluding witness cannot pre-fetch a signature for a future block
   (the `P`-side ±`L` gate lands with the serve-side PR). Pre-genesis; no
   chain state exists under v1.
+
+- **The archival serving route requires one request header and
+  countersigns every served body.** `GET /shard/{id}` now carries
+  `shekyl-pass-request: <144 lowercase hex>` — the 72-byte
+  `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32]` — and `P` refuses,
+  with the identical complete-head 404, a request whose header is missing,
+  duplicate, malformed, wrong-length, or whose `anchor_height` lies
+  outside `[p − 720 − L, p − 720 + L]` of its own height (the gate runs
+  before the shard lookup). A 200 body is the canonical `HybridSignature`
+  (3385 bytes) over the decoded header ‖ `shard_id_le[8]` under the v2
+  attestation domain, then the unchanged `RF-D4` frame
+  ([`ARCHIVAL_SERVING_ROUTE.md`](design/ARCHIVAL_SERVING_ROUTE.md);
+  [`ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) `SF-D5`,
+  `SF-D8`, §9.1 (a)+(b)). Route grammar both ends read — port 80, path,
+  header name and hex codec, response header set — is homed in
+  `shekyl_curve_tree::serving_route`. The onion hostname is
+  `shekyl-onion-v3`, typed on the daemon as `shekyl-p-fetch::ServingEndpoint`
+  and on the wallet as `OnionIdentity` (`PWD-E9`).
+  `shekyl-p-serve` signs through a `PassSigner` the host supplies;
+  `shekyl-p-host` binds a `HostSigner` over a caller-provided `PassKey`,
+  and the wallet binds `NoResidentKey` until SH-2 wires the persona's
+  resident attestation key, so **every serve from a real wallet is today a
+  counted sign refusal** (`ServeCounters::sign_failures`) rendering the
+  404. New crate `shekyl-p-fetch`: the daemon-side client
+  (`PFetchClient::fetch(&FetchTarget, &RequestHeader, verifier)`), SOCKS5h through
+  the daemon's own Tor client with no isolation flags, `MAX_INFLIGHT = 4`
+  (provisional, W₂ pins it), body ceiling refused from `content-length`
+  before a byte is read, typed outcomes `Stall` / `Miss` / `Malformed` /
+  `BadCountersignature` / `ContentRefused`, countersignature verified
+  under the target's bond-record key through the same
+  `verify_pass_transcript` consensus admission uses, and a `ContentVerify`
+  hole for the body's meaning (sub-PR 2). Built, unwired: nothing in the
+  daemon constructs the client yet. New grep gate
+  `scripts/ci/check_p_fetch_dep_cut.py` holds the `SF-D4` dependency cut
+  and keeps `test-signer` out of every shipped graph. The SP-T3 rig's
+  client leg cannot send the header and is dead until §9.1 (c) re-bases
+  it (disclosed at `harness.rs::fetch_once`).
 
 - **The `JoinMarket` bond post carries the persona's serving endpoint** — the
   raw 32-byte Ed25519 key of its v3 onion service, mandatory, refused on every
