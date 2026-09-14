@@ -716,6 +716,7 @@ implementation.**
 | `SO-D6` | Reorg: recompute, **no alt twin** — derived rows delete and recompute; reverts via the existing slash revert | **CLOSED 2026-08-24** |
 | `SO-D7` | ~~Writer runs at `h_close + W₂`~~ → **writer runs inside the slash scheduler's per-epoch pass**; the `≥ W₂` constraint was already const-asserted | **CORRECTED 2026-08-24** |
 | `SO-D8` | Cross-epoch admission (response naming `E` landing in `E+1`) | **OPEN — assigned to the §5 cutover**, consensus-visible |
+| `SO-D9` | `ERR_EPOCH_MISMATCH` (`serve_credit.rs:168`) was a tautology — `ctx.settlement_epoch` (`blockchain.cpp:5304`) was the record's own epoch (`:5124`). Ruled **(i)**: populate it from `shekyl_archival_settlement_epoch_at_height(current_height)`, making "the record's epoch is the block's epoch" an explicit single-site enforced rule rather than a bound on *when* implicit in `h_close`. Independent of `SO-D8`'s shape. **Implementation not yet built** (consensus tightening; FOLLOWUPS row). Proposal and reasoning: [`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md) §1 | **RULED 2026-09-13 — (i)**, decision-anchored to the proposal's ruling commit |
 
 **Not blocked on the stressnet.** Everything above is desk-derivable, and
 `SO-D2`'s `issued` byte is deliberately the artifact that makes the eventual

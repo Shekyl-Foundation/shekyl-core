@@ -1,7 +1,7 @@
 # `SO-D8` — ruling-round proposal: cross-epoch admission and the settlement writer's production caller
 
-**Status:** OPEN — **PROPOSAL, not a ruling.** Drafted 2026-09-13 for Rick's
-ratification. Nothing in this file is authority until the disposition table in
+**Status:** OPEN — **PROPOSAL, not a ruling** (one item ruled: `SO-D9` (i),
+2026-09-13, §1). Drafted 2026-09-13 for Rick's ratification. Nothing in this file is authority until the disposition table in
 §9 is stamped RULED; until then `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22
 hold on the writer's call site **stands** and this document does not route
 around it. No admission code, no consensus code, and no writer call site were
@@ -95,6 +95,37 @@ therefore **Rick's**:
   preference, and this proposal's: it is the check the round needs once
   assignment is derived (`SO-D8b`).
 - **(ii) Delete it** and let the row-5 `h_close` gate be the single expression.
+
+> **RULED 2026-09-13 — (i).** Rick: *"Deleting leaves the rule implicit in an
+> `h_close` comparison, which is a bound on **when**, not a statement that the
+> record's epoch is the block's epoch. (i) makes that an explicit single-site
+> rule, enforced, using a helper that already exists — and it's the rule the
+> derived-assignment cutover needs regardless of which shape R-A or R-B takes.
+> One line, and pre-genesis there's no migration to weigh against the
+> tightening."* Decision-anchored to this file's ruling commit; folded into
+> `ARCHIVAL_SETTLEMENT_WRITER.md` §13 and the `IMPLEMENTATION_INDEX.md` SO row.
+>
+> Two facts about the site, read for the implementation, not assumed:
+>
+> - **Ordering.** The C++ `h_close` gate (`blockchain.cpp:5186`) runs *before*
+>   the FFI call that evaluates `EPOCH_MISMATCH` (`:5315`). So with (i) landed
+>   and nothing else changed, a record carrying `E` in a block of `E+1` is
+>   refused by `h_close` first, and `EPOCH_MISMATCH` is the live refusal for a
+>   header naming a **future** epoch (`E+1` in a block of `E`), which today
+>   reaches the FFI. The two together are the explicit rule; which one a given
+>   test observes depends on this ordering, and the cutover that deletes the
+>   beacon gates must not re-order them by accident.
+> - **What is ruled is the site, not the value's provenance under R-B.** Under
+>   R-A the value at `:5304` is `settlement_epoch_at_height(current_height)`.
+>   Under R-B the same site would compute the *issuing* block's epoch instead;
+>   the rule "the record's declared epoch equals the epoch consensus assigns to
+>   it" is the single-site statement in either case.
+>
+> **Implementation status: NOT built.** One C++ line at `blockchain.cpp:5304`
+> plus a test that a future-epoch header is refused with `EPOCH_MISMATCH` and a
+> stale-epoch header with `h_close`. It is a consensus tightening on the
+> admission path and was not in the 2026-09-13 brief's authorized slices; it
+> is ready to build on authorization, and the FOLLOWUPS row carries it.
 
 ### 1.1 What is true about `W₂`, and why it makes the round larger
 
@@ -335,7 +366,7 @@ lands first, the FFI half is simply never written.
 | ID | Proposed disposition | State |
 |---|---|---|
 | `SO-D8` (parent) | Premise **stands** (§1, corrected): cross-epoch records are representable and refused today by one live C++ rule. Shape **R-A** adopted *as a ruling*: `E = epoch(h_incl)`, enforced. | **PROPOSED** |
-| `SO-D9` (standalone) | `ERR_EPOCH_MISMATCH` is a tautology (`blockchain.cpp:5124 → :5304 → serve_credit.rs:168`). Disposition (i) make it fire from height / (ii) delete — Rick's, because (i) is a consensus tightening. Filed in FOLLOWUPS independent of `SO-D8`. | **PROPOSED (i)** |
+| `SO-D9` (standalone) | `ERR_EPOCH_MISMATCH` is a tautology (`blockchain.cpp:5124 → :5304 → serve_credit.rs:168`). **(i)**: populate `ctx.settlement_epoch` from `shekyl_archival_settlement_epoch_at_height(current_height)` — an explicit single-site rule that the record's epoch is the block's, not a bound on *when*. Implementation not yet built; FOLLOWUPS row carries it. | **RULED 2026-09-13 — (i)** |
 | `SO-D8a` | Boundary rule is SO-D9 (i). `ERR_FIRE_NOT_REACHED` dies with the beacon; **`ERR_CREDIT_DEADLINE` and its C++ twin kept untouched** (Q5, answered — the first cut's "delete as unreachable" was inverted). No relaxation. | **PROPOSED** |
 | `SO-D8b` | Dedup unchanged (exact under without-replacement draws). **Add** `PC-D7`'s membership gate — with SO-D9 (i), the cutover's two consensus changes. | **PROPOSED** |
 | `SO-D8c` | Emission gather unchanged **under R-A only**; presence-vs-absolute-2 asymmetry recorded, not opened. Under R-B this is the largest change in the round. | **PROPOSED** |
@@ -366,9 +397,9 @@ lands first, the FFI half is simply never written.
 
 ## 10. Questions for Rick
 
-Four of seven were answered in the 2026-09-13 review of the first cut; the
-answers are recorded here so the list is not re-asked. **Open: 1, 3, 7, and the
-SO-D9 (i)/(ii) ruling.**
+Four of seven were answered in the 2026-09-13 review of the first cut and
+`SO-D9` was ruled the same day; the answers are recorded here so the list is
+not re-asked. **Open: 1, 3, 7.**
 
 1. **OPEN — (Mechanism, decides R-A's cost)** Under the same-block shape every
    miner attempting `h` fetches `~λ·pairs/SEB ≈ 97` segments from their `P`s
@@ -389,11 +420,10 @@ SO-D9 (i)/(ii) ruling.**
    `CHALLENGES_PER_PAIR_PER_EPOCH` exists but only the economics sim reads it.
    §7.2's `open()` drops the parameter and reads the constant. Filed
    (FOLLOWUPS).
-5. **ANSWERED — inverted.** `ERR_CREDIT_DEADLINE` is untouched: a
+5. **ANSWERED — inverted, then RULED.** `ERR_CREDIT_DEADLINE` is untouched: a
    defence-in-depth duplicate of the live C++ `h_close` rule. The vacuous
-   check is `ERR_EPOCH_MISMATCH` (SO-D9). **What remains for Rick is SO-D9's
-   disposition**, (i) make it fire from height — a consensus tightening, the
-   reviewer's and this proposal's preference — or (ii) delete it.
+   check is `ERR_EPOCH_MISMATCH` (`SO-D9`), **ruled (i) 2026-09-13**: make it
+   fire from height. Nothing remains open on this item except building it.
 6. **ANSWERED — keep A1**, on grounds narrower than §12's: the LMDB path
    needs a virtual to be reachable polymorphically, and a method absent from
    the interface is invisible to any port-surface check that enumerates
