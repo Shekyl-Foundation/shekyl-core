@@ -695,3 +695,67 @@ async fn dropping_a_fetch_releases_its_slot() {
     }
     assert_eq!(client.available_slots(), MAX_INFLIGHT);
 }
+
+/// A hole that parks until told to return, and says when it was entered.
+/// The blocking pool runs it, so the park is a real thread block.
+struct Parked {
+    entered: std::sync::mpsc::SyncSender<()>,
+    release: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl ContentVerify for Parked {
+    fn verify(&self, _shard_id: u64, _body: &[u8]) -> Result<(), ContentRefused> {
+        self.entered.send(()).expect("test is listening");
+        let release = self.release.lock().unwrap().take().expect("entered once");
+        release.recv().expect("test releases");
+        Ok(())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_a_fetch_mid_verify_keeps_the_slot_until_the_body_is_gone() {
+    // The body and the hole outlive a dropped future: `spawn_blocking`
+    // does not stop when its handle does. The slot must go with them —
+    // otherwise `MAX_INFLIGHT` would bound admissions, not resident
+    // bodies, and a caller that cancels during verify could stack bodies.
+    let keys = keys();
+    let stub = Stub::start(Script::Respond(signed_response(&keys, &header(), SHARD))).await;
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let hole = Arc::new(Parked {
+        entered: entered_tx,
+        release: Mutex::new(Some(release_rx)),
+    });
+    let client = Arc::new(PFetchClient::with_timeouts(stub.proxy, hole, fast()));
+
+    let (c, k) = (Arc::clone(&client), keys);
+    let fetch = tokio::spawn(async move { c.fetch(&target(&k), &header()).await });
+    // The body has been read and the hole has been entered: verify is
+    // running on the pool with the body resident.
+    tokio::task::spawn_blocking(move || entered_rx.recv())
+        .await
+        .unwrap()
+        .expect("the hole was entered");
+    assert_eq!(client.available_slots(), MAX_INFLIGHT - 1);
+
+    // Cancel the caller. The verify thread is still parked in the hole.
+    fetch.abort();
+    assert!(fetch.await.unwrap_err().is_cancelled());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        client.available_slots(),
+        MAX_INFLIGHT - 1,
+        "the slot is held by the body, not by the caller"
+    );
+
+    // Let the hole return; the body is dropped and the slot comes back.
+    release_tx.send(()).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while client.available_slots() != MAX_INFLIGHT {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "slot not released after the verify finished"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}

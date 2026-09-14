@@ -145,7 +145,9 @@ impl Default for Timeouts {
 /// client would be a second cap.
 pub struct PFetchClient {
     proxy: SocketAddr,
-    slots: Semaphore,
+    /// `Arc` so a permit can be *owned* and travel into the blocking
+    /// verify task — see [`Self::fetch`] on cancellation.
+    slots: Arc<Semaphore>,
     verifier: Arc<dyn ContentVerify>,
     timeouts: Timeouts,
 }
@@ -184,7 +186,7 @@ impl PFetchClient {
     ) -> Self {
         Self {
             proxy,
-            slots: Semaphore::new(MAX_INFLIGHT),
+            slots: Arc::new(Semaphore::new(MAX_INFLIGHT)),
             verifier,
             timeouts,
         }
@@ -207,9 +209,16 @@ impl PFetchClient {
     /// until verify finishes). Both verifications run off the executor
     /// thread — a hybrid verify is CPU, and the hole may be far more.
     ///
-    /// Cancellation-safe in the only sense that matters: dropping the
-    /// future releases the slot and closes the stream. Nothing is decided
-    /// about `P` by a fetch that was not allowed to finish.
+    /// Cancellation: dropping the future closes the stream and releases the
+    /// slot — **once the fetch is actually over**. A `spawn_blocking` task
+    /// does not stop when its handle is dropped, so if the future is
+    /// dropped mid-verify the body and the hole keep running to their end;
+    /// the slot travels into that task and is released by it, not by the
+    /// drop. Otherwise repeated cancellation during verify would let the
+    /// next fetch take the slot while the last body is still resident,
+    /// and `MAX_INFLIGHT` would bound admissions rather than bodies.
+    /// Nothing is decided about `P` by a fetch that was not allowed to
+    /// finish.
     ///
     /// # Errors
     ///
@@ -220,9 +229,8 @@ impl PFetchClient {
         target: &FetchTarget,
         header: &RequestHeader,
     ) -> Result<VerifiedShard, FetchError> {
-        let _slot = self
-            .slots
-            .acquire()
+        let slot = Arc::clone(&self.slots)
+            .acquire_owned()
             .await
             .expect("in-flight semaphore is never closed");
 
@@ -258,11 +266,14 @@ impl PFetchClient {
         drop(stream);
 
         // Off the executor: a hybrid verify is real CPU, and the hole may
-        // be much more (today it recomputes a segment root).
+        // be much more (today it recomputes a segment root). The slot goes
+        // with the body: it is dropped when this closure returns, whether
+        // or not anyone is still awaiting the handle.
         let verifier = Arc::clone(&self.verifier);
         let (verifying_key, shard_id, header) =
             (target.verifying_key.clone(), target.shard_id, *header);
         tokio::task::spawn_blocking(move || {
+            let _slot = slot;
             let content = body.split_off(SIGNATURE_ENVELOPE_LEN);
             let signature = HybridSignature::from_canonical_bytes(&body)
                 .map_err(|_| FetchError::Malformed(Malformed::Envelope))?;
