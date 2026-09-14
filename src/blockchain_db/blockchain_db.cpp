@@ -1786,6 +1786,10 @@ bool BlockchainDB::archival_shard_freeze_height(uint64_t /*shard_id*/, uint64_t&
   return false;
 }
 
+void BlockchainDB::fold_archival_market_bonded_counts(std::vector<uint64_t>& /*bonded_count*/) const
+{
+}
+
 std::vector<uint64_t> BlockchainDB::archival_bond_last_served_epochs(
   const crypto::hash& /*p_id*/, const std::vector<uint64_t>& /*shard_ids*/) const
 {

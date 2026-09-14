@@ -2552,6 +2552,39 @@ uint8_t shekyl_archival_challenge_leaf_chunk_bounds(
     uint64_t* out_first_leaf_position,
     uint64_t* out_leaf_count);
 
+/// Operator coverage ranking (`ARCHIVAL_SHARD_SELECTION_LIST.md` SL-D4).
+/// C++ fills operands; Rust computes join-adjusted scarcity, expected-profit,
+/// and order. 0 = OK, 1 = marshal, 2 = out_cap < in_len.
+typedef struct ShekylArchivalShardCoverageIn {
+  uint64_t shard_id;
+  uint64_t bonded_count;
+  uint64_t served_count;
+  uint64_t freeze_height;
+} ShekylArchivalShardCoverageIn;
+
+typedef struct ShekylArchivalShardCoverageOut {
+  uint64_t shard_id;
+  uint64_t bonded_count;
+  uint64_t served_count;
+  uint64_t freeze_height;
+  uint64_t join_scarcity_micro;
+  uint64_t expected_profit_atomic;
+} ShekylArchivalShardCoverageOut;
+
+#define SHEKYL_ARCHIVAL_SHARD_COVERAGE_OK 0
+#define SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_MARSHAL 1
+#define SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_CAP 2
+
+uint8_t shekyl_archival_order_shard_coverage(
+    uint64_t tip_height,
+    uint64_t budget_atomic,
+    uint64_t sigma_work_milli,
+    const ShekylArchivalShardCoverageIn* in_ptr,
+    size_t in_len,
+    ShekylArchivalShardCoverageOut* out_ptr,
+    size_t out_cap,
+    size_t* out_len);
+
 // ---------------------------------------------------------------------------
 // Archival epoch-close consensus computation (ARCHIVAL_CONSENSUS_STATE.md §3.3,
 // §3.5). The daemon gathers raw LMDB rows and delegates the entire consensus

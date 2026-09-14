@@ -7092,6 +7092,43 @@ bool BlockchainLMDB::archival_shard_freeze_height(uint64_t shard_id, uint64_t& o
   return true;
 }
 
+void BlockchainLMDB::fold_archival_market_bonded_counts(std::vector<uint64_t>& bonded_count) const
+{
+  // Bond-record cursor only. Shard bodies are below prune; ranking is Rust.
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (bonded_count.empty())
+    return;
+
+  TXN_PREFIX_RDONLY();
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(m_txn, m_archival_bond, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_bond cursor for coverage fold: ", rc).c_str()));
+
+  MDB_val k, v;
+  rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
+  while (rc == 0)
+  {
+    shekyl::db::ArchivalBondValue bond{};
+    if (!shekyl::db::ArchivalBondValue::decode(v.mv_data, v.mv_size, bond))
+      throw std::runtime_error("FATAL: archival_bond decode failed during coverage fold");
+    if (!bond.is_complete_tree())
+    {
+      for (const uint64_t shard_id : bond.held_shard_ids)
+      {
+        if (shard_id < bonded_count.size())
+          bonded_count[static_cast<size_t>(shard_id)] += 1;
+      }
+    }
+    rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  mdb_cursor_close(cur);
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_bond coverage fold cursor failed: ", rc).c_str()));
+  TXN_POSTFIX_RDONLY();
+}
+
 std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(
   const crypto::hash& p_id, const std::vector<uint64_t>& shard_ids) const
 {

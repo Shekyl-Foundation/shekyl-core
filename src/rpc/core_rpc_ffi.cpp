@@ -291,6 +291,8 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         // default; a missing entry here is a 404 — see the curve-tree
         // comment above).
         DJRPC_WE("get_archival_emission_claim_source", on_get_archival_emission_claim_source, COMMAND_RPC_GET_ARCHIVAL_EMISSION_CLAIM_SOURCE),
+        DJRPC_WE("get_archival_shard_coverage", on_get_archival_shard_coverage, COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE),
+        DJRPC_WE("request_archival_shard", on_request_archival_shard, COMMAND_RPC_REQUEST_ARCHIVAL_SHARD),
     };
     return t;
 }

@@ -3741,6 +3741,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-archival-fetch-sched"
+version = "3.1.0"
+dependencies = [
+ "shekyl-p-fetch",
+]
+
+[[package]]
 name = "shekyl-archival-retention"
 version = "3.1.0"
 dependencies = [
@@ -3946,6 +3953,7 @@ dependencies = [
 name = "shekyl-daemon-image"
 version = "3.1.0"
 dependencies = [
+ "shekyl-archival-fetch-sched",
  "shekyl-daemon-rpc",
  "shekyl-ffi",
 ]

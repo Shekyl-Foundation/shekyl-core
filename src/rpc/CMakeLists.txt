@@ -32,6 +32,8 @@ set(rpc_base_sources
 
 set(rpc_sources
   archival_claim_source.cpp
+  archival_shard_coverage.cpp
+  archival_shard_fetch.cpp
   core_rpc_server.cpp
   core_rpc_ffi.cpp
   daemon_submit_ffi.cpp
@@ -48,6 +50,8 @@ set(rpc_headers
 
 set(rpc_private_headers
   archival_claim_source.h
+  archival_shard_coverage.h
+  archival_shard_fetch.h
   core_rpc_server.h
   core_rpc_ffi.h
   core_rpc_ffi_internal.h
