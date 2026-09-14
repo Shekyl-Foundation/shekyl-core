@@ -234,7 +234,7 @@ namespace cryptonote
             reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
             od.kem_ciphertext_ml_kem.len);
 
-        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_HASH_BYTES);
 
         summary_amounts += out_amounts[i];
         ShekylOutputData tmp = od;
@@ -544,7 +544,7 @@ namespace cryptonote
             reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
             od.kem_ciphertext_ml_kem.len);
 
-        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+        leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_HASH_BYTES);
 
         summary_outs_money += dst_entr.amount;
         ShekylOutputData tmp = od;

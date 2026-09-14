@@ -3791,7 +3791,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
           if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
           {
-            MERROR_VER("Archival bond-post tx pqc leaf hash failed for spend input " << i);
+            MERROR_VER("Archival bond-post tx pqc key scalar failed for spend input " << i);
             tvc.m_verifivation_failed = true;
             return reject_form(tvc);
           }
@@ -4100,7 +4100,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
             const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
             if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + j * 32))
             {
-              MERROR_VER("Archival emission tx pqc leaf hash failed for fee input " << i);
+              MERROR_VER("Archival emission tx pqc key scalar failed for fee input " << i);
               tvc.m_verifivation_failed = true;
               return reject_form(tvc);
             }
@@ -4220,7 +4220,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           const auto& hpk = tx.pqc_auths[i].hybrid_public_key;
           if (!shekyl_fcmp_pqc_leaf_hash(hpk.data(), hpk.size(), pqc_hashes_flat.data() + i * 32))
           {
-            MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc leaf hash failed for input " << i);
+            MERROR_VER("FCMP++ tx " << get_transaction_hash(tx) << " pqc key scalar failed for input " << i);
             tvc.m_verifivation_failed = true;
             return reject_form(tvc);
           }
@@ -4231,7 +4231,9 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
           MDEBUG("FCMP++ verify input " << dbg_i
             << " ki=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(key_images_flat.data() + dbg_i * 32), 32))
             << " pseudo_out=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(pseudo_outs_flat.data() + dbg_i * 32), 32))
-            << " pqc_hash=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(pqc_hashes_flat.data() + dbg_i * 32), 32)));
+            // The per-input value is k = H_l(hybrid_public_key), a function of the
+            // revealed key only (PL-D3) -- never the leaf value, which is hiding.
+            << " pqc_key_scalar=" << epee::string_tools::buff_to_hex_nodelimer(std::string(reinterpret_cast<const char*>(pqc_hashes_flat.data() + dbg_i * 32), 32)));
         }
 
         if (skip_fcmp_verify)
@@ -4280,9 +4282,10 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
   // MSW-6 (PQC_MULTISIG.md §16.3): the former tx-wide scheme_id agreement was
   // withdrawn. Its *stated* purpose — a cross-input scheme-downgrade defense —
   // was vacuous: `expected_scheme` was derived from `tx.pqc_auths[0]` itself
-  // (self-referential), and per-output scheme binding is the leaf hash
-  // `h_pqc = H(hybrid_public_key)` (see :3769, `shekyl_fcmp_pqc_leaf_hash`),
-  // not this check. Its *effect* was to make a tx that spends a solo (scheme 1)
+  // (self-referential), and per-output scheme binding is the in-circuit
+  // opening of the spent leaf's PQC commitment to the revealed key's point
+  // (PL-D3; the per-input `k` from `shekyl_fcmp_pqc_leaf_hash` above), not
+  // this check. Its *effect* was to make a tx that spends a solo (scheme 1)
   // output and a multisig (scheme 2) output together unrepresentable — under
   // FCMP++ separate txs are unlinkable, so co-spending is the only proof of
   // common control across key models. That belongs in the wallet, not consensus,

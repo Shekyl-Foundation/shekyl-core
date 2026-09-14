@@ -92,7 +92,7 @@ mainnet validity** (DoD #1 / §3.0.5; mainnet still also gated on Phase 6).
 Daemon-side (C++ LMDB + JSON-RPC) **already landed**:
 
 - `curve_tree_leaves` — all UTXO leaves preserved, `global_output_index →
-  128-byte {O.x, I.x, C.x, h_pqc}` (`LMDB_SCHEMA.md` §`curve_tree_leaves`).
+  128-byte {O.x, I.x, C.x, CM.x}` (`LMDB_SCHEMA.md` §`curve_tree_leaves`).
 - `curve_tree_checkpoints` — `root[32] || depth[1] || leaf_count[8]` every
   `FCMP_CURVE_TREE_CHECKPOINT_INTERVAL = 10000` blocks
   (`db_lmdb.cpp` `save_curve_tree_checkpoint`).
@@ -107,7 +107,7 @@ Daemon-side (C++ LMDB + JSON-RPC) **already landed**:
 
 Rust-side primitives **already exist** (`shekyl-fcmp::tree`):
 
-- `construct_leaf(O, C, h_pqc) -> Option<[u8; 128]>`.
+- `construct_leaf(O, C, CM) -> Option<[u8; 128]>` (the 4th scalar is `CM.x`, extracted inside; `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14)).
 - `hash_grow_selene` / `hash_grow_helios`, `hash_trim_*`.
 - `selene_point_to_helios_scalar` / `helios_point_to_selene_scalar`,
   `ed25519_point_to_selene_scalar`.
@@ -172,7 +172,7 @@ this note does not renumber). `recon` is **landed and KAT-verified** by the
 CT-2 reconstruct-root KAT (`tests/recon_kat.rs`). The `client` orchestration
 is **landed**: `CurveTreeClient` ingests blocks reduced at the caller's
 decode boundary (`BlockLeaves`/`TxLeafInputs`/`RawOutput`, carrying the
-scanner-`Extra`-parsed `0x07` blob), resolves `h_pqc`, threads the global
+scanner-`Extra`-parsed `0x07` blob), resolves each output's leaf commitment, threads the global
 output index (derive-don't-accumulate; reorg = rebuild via `from_blocks`),
 owns the reference-height → drain-cutoff mapping (`drained_through = H − 1`),
 and applies the §3.3 integrity gate (`verify_root`). The Tier-A KAT now also
@@ -256,7 +256,7 @@ pub struct ChunkLeaf {
     pub output_key:    [u8; 32],         // O (compressed)
     pub key_image_gen: [u8; 32],         // I = Hp(O) (compressed; derived in-crate)
     pub commitment:    [u8; 32],         // C (compressed)
-    pub h_pqc:         [u8; 32],         // per-output PQC leaf hash
+    pub h_pqc:         [u8; 32],         // the leaf's 4th scalar: CM.x (PL-D3)
 }
 
 pub struct TreeContext {                 // mirrors shekyl_tx_builder::types::TreeContext
@@ -350,7 +350,7 @@ here as a migration, and it is worth setting down why:
 
 The access pattern is unusually regular, and that drives the real first question:
 
-- Dense integer positions → **fixed 128-byte records** (`{O.x, I.x, C.x, h_pqc}`),
+- Dense integer positions → **fixed 128-byte records** (`{O.x, I.x, C.x, CM.x}`),
   append-mostly forward, contiguous range reads for segment serving,
   delete-recent for reorg, delete-old-non-owned for prune-to-`R_k`.
 
@@ -395,21 +395,27 @@ its path. All public; the client holds nothing else.
 | Bound the search window | `block_height: u64` | the leaf was drained ~`block_height + SPENDABLE_AGE`; narrows which range to fetch (optimization, not correctness) |
 | Spendability gate | `eligible_height: u64` | reject if `eligible_height > reference_height` (§4.4) |
 
-`h_pqc` is **read from the matched leaf** (it is in the public 128-byte tuple);
-the client does **not** derive it. So Set A is `{O, C, block_height,
-eligible_height}` — pure public identity/position metadata.
+The leaf's 4th scalar (`CM.x`) is **read from the matched leaf** (it is in
+the public 128-byte tuple); the client does **not** derive it. So Set A is
+`{O, C, block_height, eligible_height}` — pure public identity/position
+metadata. (The spent output's own commitment *opening* — `CM` and its blind
+`r` — is re-derived by the signer from the output's secrets, not read from
+the tree; the tree's value is what it is checked against.)
 
-**Block-derived path — `h_pqc` is an additional public input.** Under the
-bulk-leaf RPC path the daemon hands the client finished 128-byte leaves, so
-`h_pqc` arrives inside the tuple as above. Under the **block-derived** default
-(`CT2_DRAIN_ORDER.md`; the wallet reconstructs leaves from blocks it already
-syncs), the client *builds* the leaf itself and therefore needs `h_pqc` as an
-input. `h_pqc` is **not derivable from the bare public output** — it is the hash
-of the *hybrid public key*, carried **on-chain in a single `tx_extra` `0x07`
-field** (`tx_extra_pqc_leaf_hashes`: one concatenated blob, `32` bytes per
-output in vout order), sliced per-output at `i*32` with a **zero-fallback** when
-the field is absent, the blob length is not a multiple of 32, or the blob is
-shorter than the vout count (`CT2_DRAIN_ORDER.md` §3, `blockchain_db.cpp:341-364`).
+**Block-derived path — the leaf commitment is an additional public input.**
+Under the bulk-leaf RPC path the daemon hands the client finished 128-byte
+leaves, so `CM.x` arrives inside the tuple as above. Under the
+**block-derived** default (`CT2_DRAIN_ORDER.md`; the wallet reconstructs
+leaves from blocks it already syncs), the client *builds* the leaf itself and
+therefore needs `CM` as an input. `CM` is **not derivable from the bare
+public output** — it is a hiding commitment to the *hybrid public key*
+(`PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2, 2026-09-14)), carried **on-chain in a single `tx_extra` `0x07` field**
+(`tx_extra_pqc_leaf_hashes`: one concatenated blob, `64` bytes per output in
+vout order — `CM ‖ record`), sliced per-output at `i*64` with **no fallback**:
+an absent field, a length that is not `64 × n`, or a wrong entry count is an
+ingest error (`ClientError::LeafEntries`), exactly what admission refuses
+(`CT2_DRAIN_ORDER.md` §3.1). The zero-fallback this paragraph once described
+was retired with `PL-D3` (census `d-3`).
 It is fully public (already on the chain), so it **joins Set A** for the
 block-derived path — but as a *parsed `tx_extra` input*, not a `TransferDetails`
 field and not a secret. **Parser ownership is resolved: reuse
@@ -469,7 +475,7 @@ for it (spend-revealing), the client **content-matches**: it scans the
 downloaded contiguous leaf array for the tuple whose first 32 bytes equal the
 output's `O.x` (disambiguating on `C.x`). The match index *is* the tree position
 (`start_index + offset`), and the matched 128-byte tuple yields the full leaf
-(incl. `h_pqc`) directly — no reconstruction, no stored field, no query.
+(incl. `CM.x`) directly — no reconstruction, no stored field, no query.
 
 This is the privacy property restated structurally: **the wallet learns its
 position by reading bulk public data it already downloaded, never by asking.**
@@ -1179,7 +1185,7 @@ canonical tree under replacement at both deepen boundaries.
     undeepen drop-model and the empty/early-height root (the genesis corner of the
     same "wallet composition == C++ consensus" question). The Round-0 enumeration
     pinned every divergence surface to source in `CT2_DRAIN_ORDER.md`: S1 (index
-    assignment), S1-leaf (coinbase/`h_pqc` on-chain in `tx_extra 0x07`), S2 (drain
+    assignment), S1-leaf (coinbase/leaf commitment on-chain in `tx_extra 0x07`), S2 (drain
     trigger + `(maturity, gindex)` batch, all three maturity classes, empty-tree
     root = `selene_hash_init`), S3 (reorg, which **folds into S1/S2** for the
     wallet via derive-don't-accumulate — no journal replica). Two framing

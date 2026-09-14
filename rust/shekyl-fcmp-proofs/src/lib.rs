@@ -33,7 +33,8 @@ use fcmps::*;
 use generalized_bulletproofs_ec_gadgets::*;
 
 use shekyl_curve_generators::{
-    FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, HELIOS_HASH_INIT, SELENE_HASH_INIT, T,
+    FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, HELIOS_HASH_INIT, PQC_LEAF_COMMITMENT_J, SELENE_HASH_INIT,
+    T,
 };
 
 /// The Spend-Authorization and Linkability proof.
@@ -90,11 +91,12 @@ pub static FCMP_PARAMS: LazyLock<FcmpParams<Curves>> = LazyLock::new(|| {
         // Hash init generators
         *SELENE_HASH_INIT,
         *HELIOS_HASH_INIT,
-        // G, T, U, V
+        // G, T, U, V, and the PQC leaf commitment blinding generator J (PL-D3)
         <Ed25519 as Ciphersuite>::generator(),
         EdwardsPoint(*T),
         EdwardsPoint(*FCMP_PLUS_PLUS_U),
         EdwardsPoint(*FCMP_PLUS_PLUS_V),
+        EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
     )
     // Upstream `FcmpParams::new` is infallible (returns `Self`); it would panic
     // internally only on identity generators, which these fixed constants are not.
@@ -200,8 +202,11 @@ pub(crate) const ED25519_REPR_BYTES: usize = 32;
 pub struct InputVerification {
     /// The input's key image (`L`), as an Ed25519 group element.
     pub key_image: <Ed25519 as Ciphersuite>::G,
-    /// The input's `H(pqc_pk)` leaf-committed scalar on Selene.
-    pub pqc_pk_hash: <Selene as Ciphersuite>::F,
+    /// The input's PQC key point `K = k·G_k`, `k = H_ℓ(hybrid_pk)` for the key the
+    /// spend reveals; the circuit proves the spent leaf's commitment `CM` opens to
+    /// `K` under the prover's blind (`PL-D3`). Derived by the verifier, never on
+    /// the wire.
+    pub pqc_key_point: <Ed25519 as Ciphersuite>::G,
 }
 
 /// An error encountered when working with FCMP++.
@@ -323,12 +328,12 @@ impl FcmpPlusPlus {
                 ctx.key_image,
             );
 
-            fcmp_inputs.push(fcmps::Input::with_extra_scalars(
+            fcmp_inputs.push(fcmps::Input::new(
                 input.O_tilde,
                 input.I_tilde,
                 input.R,
                 input.C_tilde,
-                vec![ctx.pqc_pk_hash],
+                ctx.pqc_key_point,
             )?);
         }
 
@@ -430,7 +435,7 @@ impl FcmpMembershipOnly {
     /// cases; an error raised once queuing has begun leaves them partially populated.
     /// Discarding on any error is the safe, uniform contract.
     ///
-    /// `pqc_pk_hashes` is the membership-only path's only verifier-supplied per-input
+    /// `pqc_key_points` (`K = k·G_k` per input, `PL-D3`) is the membership-only path's only verifier-supplied per-input
     /// collection (there is no key image by construction), so it stays a single `Vec`;
     /// the parallel-collection bundling that [`InputVerification`] gives the full path
     /// is not warranted here.
@@ -444,30 +449,30 @@ impl FcmpMembershipOnly {
         tree: TreeRoot<<Curves as FcmpCurves>::C1, <Curves as FcmpCurves>::C2>,
         layers: usize,
         signable_tx_hash: [u8; 32],
-        pqc_pk_hashes: Vec<<Selene as Ciphersuite>::F>,
+        pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G>,
     ) -> Result<(), FcmpPlusPlusError> {
         if self.inputs.is_empty() {
             return Err(FcmpPlusPlusError::EmptyInputs);
         }
-        if self.inputs.len() != pqc_pk_hashes.len() {
+        if self.inputs.len() != pqc_key_points.len() {
             return Err(FcmpPlusPlusError::InvalidInputCount);
         }
 
         let mut fcmp_inputs = Vec::with_capacity(self.inputs.len());
-        for (index, ((input, membership_spend_auth), h_pqc)) in
-            self.inputs.iter().zip(pqc_pk_hashes).enumerate()
+        for (index, ((input, membership_spend_auth), pqc_key_point)) in
+            self.inputs.iter().zip(pqc_key_points).enumerate()
         {
             // A u32 cannot overflow here: a proof with 2^32 inputs cannot be
             // constructed or deserialized.
             let index = u32::try_from(index).expect("more than u32::MAX inputs");
             membership_spend_auth.verify(rng, verifier_ed, signable_tx_hash, index, input);
 
-            fcmp_inputs.push(fcmps::Input::with_extra_scalars(
+            fcmp_inputs.push(fcmps::Input::new(
                 input.O_tilde,
                 input.I_tilde,
                 input.R,
                 input.C_tilde,
-                vec![h_pqc],
+                pqc_key_point,
             )?);
         }
 

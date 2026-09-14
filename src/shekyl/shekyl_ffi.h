@@ -439,19 +439,24 @@ void shekyl_generator_T(uint8_t* out_ptr);
 
 // ─── FCMP++: Proof and tree operations ──────────────────────────────────────
 
-/// Compute H(pqc_pk) leaf scalar. Writes 32 bytes to out_ptr.
+/// Compute the verifier-side PQC key scalar k = H_l(hybrid_pk) for a revealed
+/// PQC public key (PL-D3): the per-input value shekyl_fcmp_verify /
+/// shekyl_fcmp_membership_only_verify take. The verifier derives K = k*G_k
+/// from it and the FCMP++ circuit opens the spent leaf's commitment to K. A
+/// function of the revealed key only -- never the leaf value. Writes 32 bytes.
 bool shekyl_fcmp_pqc_leaf_hash(
     const uint8_t* pqc_pk_ptr,
     size_t pqc_pk_len,
     uint8_t* out_ptr);
 
-/// Derive h_pqc = H(hybrid_public_key) from combined KEM shared secret and
-/// output index. Secret key derived internally and zeroized; never returned.
-/// combined_ss_ptr: 64 bytes. h_pqc_out: 32-byte caller-provided buffer.
+/// Derive the output's 64-byte tx_extra 0x07 entry CM || record (PL-D3 /
+/// PL-D3a) from combined KEM shared secret and output index. Secret key and
+/// blinds stay on the Rust side; never returned.
+/// combined_ss_ptr: 64 bytes. h_pqc_out: 64-byte caller-provided buffer.
 bool shekyl_derive_pqc_leaf_hash(
     const uint8_t* combined_ss_ptr,
     uint64_t output_index,
-    uint8_t* h_pqc_out);
+    uint8_t* h_pqc_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 /// Derive canonical hybrid public key bytes from combined KEM shared secret
 /// and output index. Secret key derived internally and zeroized; never returned.
@@ -484,10 +489,13 @@ uint8_t shekyl_derive_view_tag_prefilter(
 
 /// Verify FCMP++ proof with batch verification.
 ///
-/// Returns 0 on success, or a nonzero VerifyError discriminant (1-7) on failure:
+/// pqc_pk_hashes_ptr: pqc_hash_count * 32 bytes, one PQC key scalar k per input
+/// (shekyl_fcmp_pqc_leaf_hash over the input's revealed hybrid_public_key).
+///
+/// Returns 0 on success, or a nonzero VerifyError discriminant on failure:
 ///   1 = DeserializationFailed   4 = KeyImageCountMismatch  7 = TreeDepthTooLarge
-///   2 = InvalidTreeRoot         5 = UpstreamError
-///   3 = PqcCommitmentMismatch   6 = BatchVerificationFailed
+///   2 = InvalidTreeRoot         5 = UpstreamError          9 = PqcKeyCountMismatch
+///   3 = PqcKeyPointInvalid      6 = BatchVerificationFailed
 /// See rust/shekyl-fcmp/src/proof.rs VerifyError for canonical definitions.
 ///
 /// tree_depth: upstream library `layers` count (= LMDB depth + 1).
@@ -515,7 +523,7 @@ uint8_t shekyl_fcmp_verify(
 /// po_count must be in 1..=MAX_INPUTS (= 8); 0 or larger is rejected up front.
 /// Returns 0 on success, else the VerifyError discriminant:
 ///   1 = Deserialization (also: null ptr; po_count == 0 or > MAX_INPUTS; po_count*32 usize overflow)
-///   2 = InvalidTreeRoot   3 = PqcCommitmentMismatch
+///   2 = InvalidTreeRoot   3 = PqcKeyPointInvalid
 ///   5 = UpstreamError     6 = BatchVerificationFailed   7 = TreeDepthTooLarge
 ///   8 = InputCountMismatch (po_count != pqc_hash_count)
 /// Code 4 (KeyImageCountMismatch) is unreachable here — this path has no key images.
@@ -638,7 +646,8 @@ struct ShekylOutputData {
     uint8_t kem_ciphertext_x25519[32];
     ShekylBuffer kem_ciphertext_ml_kem;
     ShekylBuffer pqc_public_key;
-    uint8_t h_pqc[32];
+    /// The output's 64-byte tx_extra 0x07 entry CM || record (PL-D3).
+    uint8_t pqc_leaf[64];
     uint8_t y[32];
     uint8_t z[32];
     uint8_t k_amount[32];
@@ -705,7 +714,7 @@ bool shekyl_scan_output(
     uint64_t* amount_out,
     ShekylBuffer* pqc_pk_out,
     ShekylBuffer* pqc_sk_out,
-    uint8_t* h_pqc_out);
+    uint8_t* h_pqc_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 /// Scan an output recovering the spend key B' = O - ho*G - y*T.
 /// Caller looks up B' in subaddress table to determine ownership.
@@ -732,7 +741,7 @@ bool shekyl_scan_output_recover(
     uint8_t* recovered_spend_key_out,
     ShekylBuffer* pqc_pk_out,
     ShekylBuffer* pqc_sk_out,
-    uint8_t* h_pqc_out);
+    uint8_t* h_pqc_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 // ─── Merged scan + key image (PR-wallet Phase 1b) ────────────────────────────
 
@@ -773,7 +782,7 @@ bool shekyl_scan_and_recover(
     uint8_t* combined_ss_out,
     ShekylBuffer* pqc_pk_out,
     ShekylBuffer* pqc_sk_out,
-    uint8_t* h_pqc_out);
+    uint8_t* h_pqc_out); // 64 bytes: the output's 0x07 entry CM || record (PL-D3)
 
 // ─── Key image computation (2 remaining sites) ──────────────────────────────
 
@@ -1312,10 +1321,12 @@ bool shekyl_curve_tree_replica_next_block_root(
 // GENESIS_TX_WIRE_FORMAT.md §9.6a as ruled 2026-09-05; census CEN-I19).
 //
 // With n = vout.size(): exactly one 0x06 KEM-ciphertext field of 1120·n bytes
-// and exactly one 0x07 leaf-hash field of 32·n bytes when n > 0; neither when
-// n == 0. The caller parses tx_extra itself and passes the byte length of
-// every 0x06 / 0x07 field it found, in order. Consensus: called from
-// core::check_tx_semantic and Blockchain::prevalidate_miner_transaction.
+// and exactly one 0x07 leaf-entry field of 64·n bytes when n > 0; neither when
+// n == 0 -- and (PL-D3 content rule) every 0x07 entry's leading 32 bytes must
+// be a canonical prime-order non-identity Ed25519 point. The caller parses
+// tx_extra itself, passes the byte length of every 0x06 / 0x07 field it found,
+// in order, and the 0x07 payload when it found exactly one. Consensus: called
+// from core::check_tx_semantic and Blockchain::prevalidate_miner_transaction.
 // ---------------------------------------------------------------------------
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_OK                           0
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_ERR_NULL_PTR                 1
@@ -1327,6 +1338,7 @@ bool shekyl_curve_tree_replica_next_block_root(
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_MISSING                 7
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_DUPLICATE               8
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_LENGTH                  9
+#define SHEKYL_TX_EXTRA_PQC_SHAPE_LEAF_POINT                   10
 /// Buffer size for out_msg, NUL included.
 #define SHEKYL_TX_EXTRA_PQC_SHAPE_MSG_CAP                      256
 /// Returns SHEKYL_TX_EXTRA_PQC_SHAPE_OK or one of the codes above, and writes
@@ -1342,6 +1354,8 @@ int32_t shekyl_tx_extra_pqc_field_shape(
     size_t kem_count,
     const size_t* leaf_lens,
     size_t leaf_count,
+    const uint8_t* leaf_blob,
+    size_t leaf_blob_len,
     char* out_msg,
     size_t out_msg_cap);
 
@@ -1383,11 +1397,14 @@ bool shekyl_ed25519_to_selene_scalar(
     const uint8_t* compressed_ptr,
     uint8_t* out_scalar_ptr);
 
-/// Construct a 128-byte curve tree leaf from output pubkey, commitment, and PQC hash.
+/// Construct a 128-byte curve tree leaf from output pubkey, commitment, and the
+/// output's PQC leaf commitment point.
 /// output_key_ptr: 32 bytes compressed Ed25519 output public key (O).
 /// commitment_ptr: 32 bytes compressed Ed25519 amount commitment (C).
-/// h_pqc_ptr: 32 bytes H(pqc_pk) scalar (or 32 zero bytes if unavailable).
-/// leaf_out_ptr: 128 bytes output for {O.x, I.x, C.x, H(pqc_pk)}.
+/// h_pqc_ptr: 32 bytes, the commitment point CM at the front of the output's
+///   0x07 entry (PL-D3). No placeholder: an output without an admissible entry
+///   is not a leaf (admission refuses its transaction).
+/// leaf_out_ptr: 128 bytes output for {O.x, I.x, C.x, CM.x}.
 /// Returns true on success.
 bool shekyl_construct_curve_tree_leaf(
     const uint8_t* output_key_ptr,
@@ -1440,8 +1457,11 @@ struct ShekylSignResult {
 ///
 /// Input JSON format (FcmpSignInput):
 ///   {ki, combined_ss (hex, 128 chars), output_index, hp_of_O, amount,
-///    commitment_mask, commitment, output_key, h_pqc,
+///    commitment_mask, commitment, output_key,
 ///    leaf_chunk, c1_layers, c2_layers}
+/// The input's own PQC leaf commitment and blind (PL-D3) are re-derived by
+/// Rust from combined_ss + output_index and checked against leaf_chunk before
+/// proving (a mismatch is the received-but-unspendable refusal, code -32).
 ///
 /// @param spend_secret_ptr     32-byte wallet master private spend key (b).
 /// @param tx_prefix_hash_ptr   32-byte Keccak-256 hash of serialized tx prefix.
@@ -2877,7 +2897,9 @@ uint8_t shekyl_archival_emission_epoch_work(
 #define SHEKYL_EMISSION_VIN_ERR_REWARD_MISMATCH       11
 /* Step 5 (loud inflation check): Σ rewards != reward vout sum. */
 #define SHEKYL_EMISSION_VIN_ERR_VOUT_SUM_MISMATCH     12
-/* Step 6: backing pubkey does not hash to the committed leaf. */
+/* Retired (PL-D3, 2026-09-14): never emitted. The leaf hash left the vin and
+   the binding is the membership-only proof's in-circuit opening; a wrong key
+   now rejects as BACKING_REJECTED. Number reserved, never reused. */
 #define SHEKYL_EMISSION_VIN_ERR_BACKING_LEAF          13
 /* Step 6: membership-only proof rejected. */
 #define SHEKYL_EMISSION_VIN_ERR_BACKING_REJECTED      14

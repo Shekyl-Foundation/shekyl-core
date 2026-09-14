@@ -210,7 +210,7 @@ Concretely the daemon serves:
   leaf_count}` and `get_curve_tree_info -> {root, depth, leaf_count, height}`.
   Global state; reveals nothing about any wallet's spend.
 - **Leaf ranges** — contiguous spans of the 128-byte leaf tuples
-  (`{O.x, I.x, C.x, h_pqc}`) by canonical tree position (§3.0.3 — the bulk
+  (`{O.x, I.x, C.x, CM.x}`) by canonical tree position (§3.0.3 — the bulk
   endpoint that needs adding).
 - **The delta** between the wallet's last local checkpoint and the chosen
   reference block.
@@ -218,7 +218,7 @@ Concretely the daemon serves:
 The wallet then assembles the path locally using the primitives that **already
 exist** in `shekyl-fcmp::tree`:
 
-- `construct_leaf(O, C, h_pqc) -> [u8; 128]` — build a leaf tuple.
+- `construct_leaf(O, C, CM) -> Option<[u8; 128]>` — build a leaf tuple (`PL-D3`: the 4th scalar is the commitment point's x-coordinate).
 - `hash_grow_selene` / `hash_grow_helios` — hash a chunk's children into the
   parent node (Selene at even layers / leaf, Helios at odd layers).
 - `selene_point_to_helios_scalar` / `helios_point_to_selene_scalar` — feed a
@@ -228,7 +228,7 @@ exist** in `shekyl-fcmp::tree`:
 
 The daemon-side substrate this leans on **already landed** (Phase 2e/2f):
 
-- `curve_tree_leaves` — `global_output_index → 128-byte {O.x, I.x, C.x, h_pqc}`,
+- `curve_tree_leaves` — `global_output_index → 128-byte {O.x, I.x, C.x, CM.x}`,
   *all* UTXO leaves preserved (`LMDB_SCHEMA.md` §`curve_tree_leaves`,
   `INTEGERKEY`).
 - `curve_tree_checkpoints` — root/depth/leaf_count every
@@ -260,7 +260,7 @@ addition is **bulk tree data, not a path-serving endpoint**:
 
 **Alternative considered (block-derived leaves, zero new RPC).** The wallet
 already scans every block during refresh and can in principle derive every
-leaf `{O, C, h_pqc}` itself, eliminating even the bulk endpoint. Rejected as the
+leaf `{O, C, CM}` itself, eliminating even the bulk endpoint. Rejected as the
 2A-prerequisite default because it requires the wallet to replicate the
 consensus maturity/drain ordering (`pending_tree_leaves` → drain → `tree_pos`)
 exactly, which is consensus-sensitive code. The bulk-leaf endpoint lets the
@@ -642,11 +642,14 @@ than catching them. This is the anchor point for F5's validity-horizon (§3.6,
 - **`TxInputSigningContext`** (per-input, **public**; extends today's
   `{ handle, source_ciphertext, output_index }` — **but `output_index` moves into
   the `handle`-recovered set per refinement C / §3.9, not a standalone field**):
-  - `output_key: [u8; 32]`, `commitment: [u8; 32]`, `h_pqc: [u8; 32]` — the
-    output's public identity; let the actor locate its own leaf and run the C3
-    check. (Maps to `SpendInput.output_key` / `commitment` / `h_pqc`.)
+  - `output_key: [u8; 32]`, `commitment: [u8; 32]` — the output's public
+    identity; let the actor locate its own leaf and run the C3 check. (Maps to
+    `SpendInput.output_key` / `commitment`. The `h_pqc` field this design
+    carried was removed by `PL-D3`, 2026-09-14: the input's leaf opening is
+    re-derived by the signer from `combined_ss` / `output_index` and checked
+    against the chunk, never read from the tree.)
   - `leaf_chunk: Vec<LeafEntry>` — the sibling leaf chunk `(O, I=key_image_gen,
-    C, h_pqc)` (maps to `SpendInput.leaf_chunk`).
+    C, CM.x)` (maps to `SpendInput.leaf_chunk`).
   - `c1_layers: Vec<Vec<[u8; 32]>>`, `c2_layers: Vec<Vec<[u8; 32]>>` — the
     locally-assembled Selene/Helios branch siblings (maps to
     `SpendInput.c1_layers` / `c2_layers`).
@@ -791,7 +794,7 @@ secret disclosure. This is **not** a security boundary. It **is** a robustness /
 error-attribution boundary worth spending. Before committing prover effort, the
 actor cheaply:
 
-- recomputes the leaf via `construct_leaf(O, C, h_pqc)` and hashes the path up to
+- recomputes the leaf via `construct_leaf(O, C, CM)` and hashes the path up to
   the claimed `tree_root` (`hash_grow_selene` / `hash_grow_helios`); and
 - checks the well-formedness precondition
   **`c1_layers.len() + c2_layers.len() + 1 == tree_depth`** (layer 0 is the leaf,
@@ -870,8 +873,8 @@ cancelled).
   recipients, selected output identities + public paths, the one `TreeContext`,
   fee, and tx-prefix inputs.
 - `TxToSign` is the **projection** the actor needs: per-input public
-  `{ handle, source_ciphertext, output_index, output_key, commitment, h_pqc,
-  leaf_chunk, c1_layers, c2_layers }`, per-output recipient context, and the
+  `{ handle, source_ciphertext, output_index, output_key, commitment,
+  leaf_chunk, c1_layers, c2_layers }` (`h_pqc` removed by `PL-D3`), per-output recipient context, and the
   tx-level `FcmpPlusPlusContext { tree }`.
 - The actor-internal `SpendInput` = the projection's public path + engine-derived
   secrets + engine-recovered amount.
@@ -1093,7 +1096,7 @@ pub struct TxInputSigningContext {
     pub source_ciphertext: SourceCiphertext,
     pub output_key: [u8; 32],
     pub commitment: [u8; 32],
-    pub h_pqc: [u8; 32],
+    // (`h_pqc` removed by PL-D3 — the signer re-derives the leaf opening)
     pub leaf_chunk: Vec<LeafEntry>,           // (verified) sibling leaf chunk
     pub c1_layers: Vec<Vec<[u8; 32]>>,        // locally-assembled Selene siblings (F1)
     pub c2_layers: Vec<Vec<[u8; 32]>>,        // locally-assembled Helios siblings (F1)
@@ -1718,7 +1721,7 @@ step 2), never read from a daemon field.
    (`c1_layers` / `c2_layers`) and `leaf_chunk` are **not** sourced from
    `TransferDetails` — they are assembled locally by the curve-tree client
    (§3.0.4). `TransferDetails` supplies the output's **identity and tree
-   position** (`global_output_index`, `output_key`, `commitment`, `h_pqc`
+   position** (`global_output_index`, `output_key`, `commitment`
    inputs) plus the secret-derivation inputs; the path is computed against those.
    Round 1 enumerates (grep-driven) exactly which `TransferDetails` fields feed
    (a) the curve-tree client's path lookup and (b) the actor's secret derivation

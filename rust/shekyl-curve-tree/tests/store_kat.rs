@@ -107,10 +107,11 @@ fn store_root_matches_oracle_and_header_tier_a() {
                 .map(|(i, raw)| OutputIdentity {
                     output_key: raw.output_key,
                     commitment: raw.commitment,
-                    h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(
-                        &shekyl_curve_tree::recon::extract_leaf_hashes(Some(&blk.blob)),
-                        i,
-                    ),
+                    h_pqc: shekyl_curve_tree::recon::extract_leaf_commitments(
+                        Some(&blk.blob),
+                        blk.outputs.len(),
+                    )
+                    .expect("0x07 entries")[i],
                     target: match raw.target {
                         shekyl_curve_tree::TargetKind::TaggedKey => {
                             shekyl_curve_tree::TargetKind::TaggedKey
@@ -219,10 +220,8 @@ fn store_root_mixed_maturity_drain_order() {
         .map(|(i, raw)| OutputIdentity {
             output_key: raw.output_key,
             commitment: raw.commitment,
-            h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(
-                &shekyl_curve_tree::recon::extract_leaf_hashes(Some(&blob_cb)),
-                i,
-            ),
+            h_pqc: shekyl_curve_tree::recon::extract_leaf_commitments(Some(&blob_cb), 1)
+                .expect("0x07 entries")[i],
             target: raw.target,
         })
         .collect();
@@ -232,10 +231,8 @@ fn store_root_mixed_maturity_drain_order() {
         .map(|(i, raw)| OutputIdentity {
             output_key: raw.output_key,
             commitment: raw.commitment,
-            h_pqc: shekyl_curve_tree::recon::per_output_h_pqc(
-                &shekyl_curve_tree::recon::extract_leaf_hashes(Some(&blob_reg)),
-                i,
-            ),
+            h_pqc: shekyl_curve_tree::recon::extract_leaf_commitments(Some(&blob_reg), 1)
+                .expect("0x07 entries")[i],
             target: raw.target,
         })
         .collect();

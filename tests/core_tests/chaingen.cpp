@@ -1555,7 +1555,7 @@ bool construct_miner_tx_manually(size_t height, uint64_t already_generated_coins
       kem_field.blob.append(
         reinterpret_cast<const char*>(od.kem_ciphertext_ml_kem.ptr),
         od.kem_ciphertext_ml_kem.len);
-    leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+    leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_HASH_BYTES);
 
     ShekylOutputData tmp = od;
     shekyl_output_data_free(&tmp);
@@ -1660,7 +1660,7 @@ bool append_v3_output_to_miner_tx(transaction& tx, const crypto::secret_key& txk
 
   tx_extra_pqc_leaf_hashes leaf_hash_field;
   find_tx_extra_field_by_type(extra_fields, leaf_hash_field);
-  leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.h_pqc), PQC_LEAF_HASH_BYTES);
+  leaf_hash_field.blob.append(reinterpret_cast<const char*>(od.pqc_leaf), PQC_LEAF_HASH_BYTES);
 
   ShekylOutputData tmp = od;
   shekyl_output_data_free(&tmp);

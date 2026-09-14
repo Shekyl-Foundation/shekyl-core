@@ -78,7 +78,7 @@ use shekyl_curve_tree::{
     TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
-use shekyl_fcmp::PqcLeafScalar;
+use shekyl_fcmp::PqcKeyScalar;
 use shekyl_tx_builder::{
     sign_pqc_auths, sign_transaction, tx_prefix_hash_from_parts, LeafEntry, OutputInfo, SpendInput,
     TreeContext,
@@ -246,23 +246,24 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 2. Build a real multi-layer curve tree ───────────────────────────
     // Genesis coinbase: the spent output at vout 0, then decoy members. Every
-    // output shares the spent output's (valid) `h_pqc`; they differ by their
-    // O/C points, so their leaf hashes still differ.
+    // output shares the spent output's (valid) 0x07 entry; they differ by
+    // their O/C points, so their leaf hashes still differ.
+    let spent_entry = spent.pqc_leaf.entry();
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
-    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 32);
+    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
         output_key: spent.output_key,
         commitment: Some(spent.commitment),
         target: TargetKind::TaggedKey,
     });
-    genesis_blob.extend_from_slice(&spent.h_pqc);
+    genesis_blob.extend_from_slice(&spent_entry);
     for _ in 1..TREE_OUTPUTS {
         genesis_outputs.push(RawOutput {
             output_key: random_point(&mut rng),
             commitment: Some(random_point(&mut rng)),
             target: TargetKind::TaggedKey,
         });
-        genesis_blob.extend_from_slice(&spent.h_pqc);
+        genesis_blob.extend_from_slice(&spent_entry);
     }
 
     // Heights must be ingested consecutively from 0; a single decoy coinbase
@@ -288,7 +289,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
                     commitment: Some(filler_commitment),
                     target: TargetKind::TaggedKey,
                 }],
-                spent.h_pqc.to_vec(),
+                spent_entry.to_vec(),
             )
         };
         let txs = [TxLeafInputs {
@@ -354,7 +355,6 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         spend_key_x: *ki.spend_secret_x, // x = ho + b
         spend_key_y: spent.y,            // O = x*G + y*T
         commitment_mask: spent.z,        // C = z*G + amount*H
-        h_pqc: spent.h_pqc,
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
@@ -447,7 +447,12 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         tree_depth: signed.tree_depth,
     };
     let key_images: [KeyImage; 1] = [ki.key_image];
-    let pqc_pk_hashes = [PqcLeafScalar(spent.h_pqc)];
+    // The verifier's per-input value is the scalar of the canonical hybrid key
+    // the spend reveals (`pqc_auths[i].hybrid_public_key`), PL-D3.
+    let revealed_pk =
+        shekyl_crypto_pq::derivation::derive_pqc_public_key(&combined_ss.0, spent_index)
+            .expect("derive hybrid pk");
+    let pqc_pk_hashes = [PqcKeyScalar::from_pqc_public_key(&revealed_pk)];
     let ok = proof::verify(
         &verifier_proof,
         &key_images,

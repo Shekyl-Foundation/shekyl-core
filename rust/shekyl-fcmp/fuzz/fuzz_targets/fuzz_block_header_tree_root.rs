@@ -6,7 +6,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use shekyl_fcmp::proof::{prove, verify, ProveInput, BranchLayer};
-use shekyl_fcmp::leaf::PqcLeafScalar;
+use shekyl_fcmp::leaf::PqcKeyScalar;
 
 fuzz_target!(|data: &[u8]| {
     // Feed block headers with fuzz-supplied tree roots and signable hashes to
@@ -29,9 +29,12 @@ fuzz_target!(|data: &[u8]| {
         output_key: [1u8; 32],
         key_image_gen: [2u8; 32],
         commitment: [3u8; 32],
-        h_pqc: PqcLeafScalar([0x42; 32]),
+        pqc_leaf_commitment: [0x42; 32],
+        pqc_leaf_blind: [6u8; 32],
         spend_key_x: [4u8; 32],
         spend_key_y: [5u8; 32],
+        commitment_mask: [7u8; 32],
+        pseudo_out_blind: [8u8; 32],
         leaf_chunk_outputs: vec![],
         leaf_chunk_h_pqc: vec![],
         c1_branch_layers: vec![],
@@ -49,7 +52,7 @@ fuzz_target!(|data: &[u8]| {
         &proof_result.proof,
         &key_images,
         &proof_result.pseudo_outs,
-        &[PqcLeafScalar([0x42; 32])],
+        &[PqcKeyScalar::from_pqc_public_key(b"fuzz key")],
         &verify_root,
         tree_depth,
         signable_tx_hash,

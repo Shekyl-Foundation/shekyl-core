@@ -15,20 +15,9 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 use curve25519_dalek::EdwardsPoint;
 use shekyl_tx_builder::LeafEntry;
 
-/// Synthetic `h_pqc` bytes for a leaf entry.
-#[must_use]
-pub(crate) fn synthetic_h_pqc_bytes(seed: u64) -> [u8; 32] {
-    use ciphersuite::group::ff::PrimeField;
-    let mut buf = [0u8; 64];
-    buf[..8].copy_from_slice(&seed.to_le_bytes());
-    buf[32..40].copy_from_slice(&seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).to_le_bytes());
-    let h_pqc_field = dalek_ff_group::FieldElement::wide_reduce(buf);
-    h_pqc_field.to_repr()
-}
-
 /// Selene single-leaf-chunk tree root for `tree_depth = 1` (M3c-via-C recipe).
 ///
-/// Root = `SELENE_HASH_INIT + multiexp(generators, [O.x, I.x, C.x, h_pqc] per leaf)`.
+/// Root = `SELENE_HASH_INIT + multiexp(generators, [O.x, I.x, C.x, CM.x] per leaf)`.
 #[must_use]
 pub(crate) fn selene_single_chunk_tree_root(leaf_chunk: &[LeafEntry]) -> [u8; 32] {
     use ciphersuite::{

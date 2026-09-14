@@ -98,7 +98,7 @@ namespace
         uint8_t view_tag;
         uint8_t kem_ct_x25519[32];
         std::vector<uint8_t> kem_ct_ml_kem;
-        uint8_t h_pqc[32];
+        uint8_t pqc_leaf[64];  // CM || record (PL-D3)
         uint8_t y[32];
         uint8_t z[32];
     };
@@ -132,7 +132,7 @@ namespace
         out.kem_ct_ml_kem.assign(
             data.kem_ciphertext_ml_kem.ptr,
             data.kem_ciphertext_ml_kem.ptr + data.kem_ciphertext_ml_kem.len);
-        memcpy(out.h_pqc, data.h_pqc, 32);
+        memcpy(out.pqc_leaf, data.pqc_leaf, 64);
         memcpy(out.y, data.y, 32);
         memcpy(out.z, data.z, 32);
 
@@ -147,7 +147,7 @@ namespace
         uint64_t amount;
         uint8_t key_image[32];
         uint8_t combined_ss[64];
-        uint8_t h_pqc[32];
+        uint8_t pqc_leaf[64];  // CM || record (PL-D3)
         std::vector<uint8_t> pqc_pk;
         std::vector<uint8_t> pqc_sk;
 
@@ -198,7 +198,7 @@ namespace
             s.combined_ss,
             &pqc_pk_buf,
             &pqc_sk_buf,
-            s.h_pqc);
+            s.pqc_leaf);
 
         EXPECT_TRUE(ok) << "DEBUG: shekyl_scan_and_recover failed";
 
@@ -277,9 +277,11 @@ namespace test
             << " got " << scanned.amount;
 
         // --- 4. Build single-layer Selene curve tree root (layers=1) ---
+        // The leaf's 4th scalar is CM.x; the constructor takes the commitment
+        // point at the front of the 0x07 entry (PL-D3).
         uint8_t leaf[128];
         bool leaf_ok = shekyl_construct_curve_tree_leaf(
-            input_out.output_key, input_out.commitment, scanned.h_pqc, leaf);
+            input_out.output_key, input_out.commitment, scanned.pqc_leaf, leaf);
         EXPECT_TRUE(leaf_ok) << "DEBUG: shekyl_construct_curve_tree_leaf failed";
 
         uint8_t selene_init[32];
@@ -313,17 +315,16 @@ namespace test
             "\"ki\":\"" + hex_encode(scanned.key_image, 32) + "\","
             "\"combined_ss\":\"" + hex_encode(scanned.combined_ss, 64) + "\","
             "\"output_index\":" + std::to_string(input_output_index) + ","
-            "\"hp_of_O\":\"" + hex_encode(scanned.h_pqc, 32) + "\","
+            "\"hp_of_O\":\"" + hex_encode(hp_of_o, 32) + "\","
             "\"amount\":" + std::to_string(input_amount) + ","
             "\"commitment_mask\":\"" + hex_encode(scanned.z, 32) + "\","
             "\"commitment\":\"" + hex_encode(input_out.commitment, 32) + "\","
             "\"output_key\":\"" + hex_encode(input_out.output_key, 32) + "\","
-            "\"h_pqc\":\"" + hex_encode(scanned.h_pqc, 32) + "\","
             "\"leaf_chunk\":[{"
                 "\"output_key\":\"" + hex_encode(input_out.output_key, 32) + "\","
                 "\"key_image_gen\":\"" + hex_encode(hp_of_o, 32) + "\","
                 "\"commitment\":\"" + hex_encode(input_out.commitment, 32) + "\","
-                "\"h_pqc\":\"" + hex_encode(scanned.h_pqc, 32) + "\""
+                "\"h_pqc\":\"" + hex_encode(leaf + 96, 32) + "\""
             "}],"
             "\"c1_layers\":[],"
             "\"c2_layers\":[]"
@@ -411,11 +412,14 @@ namespace test
         // --- 10. Verify the proof ---
         // shekyl_fcmp_verify expects layers (= LMDB depth + 1).
         const uint8_t verify_layers = static_cast<uint8_t>(tree_depth + 1);
+        // The verifier's per-input value is the revealed key's scalar (PL-D3).
+        uint8_t pqc_key[32];
+        EXPECT_TRUE(shekyl_fcmp_pqc_leaf_hash(scanned.pqc_pk.data(), scanned.pqc_pk.size(), pqc_key));
         uint8_t fcmp_result = shekyl_fcmp_verify(
             fcmp_proof.data(), fcmp_proof.size(),
             scanned.key_image, 1,
             pseudo_out.data(), 1,
-            scanned.h_pqc, 1,
+            pqc_key, 1,
             tree_root, verify_layers,
             tx_prefix_hash);
         EXPECT_EQ(fcmp_result, 0) << "shekyl_fcmp_verify error code: " << (int)fcmp_result;

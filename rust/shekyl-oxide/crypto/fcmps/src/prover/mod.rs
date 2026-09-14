@@ -21,9 +21,10 @@ where
 {
     /// The output being proven for.
     pub output: Output<<C::OC as Ciphersuite>::G>,
-    /// Extra leaf scalars for the proven output (e.g. `[H(pqc_pk)]` for Shekyl).
-    /// Length must equal `C::EXTRA_LEAF_SCALARS`.
-    pub output_extra_scalars: Vec<<C::C1 as Ciphersuite>::F>,
+    /// The spent output's PQC leaf commitment point `CM = k·G_k + r·J`; its `x`
+    /// is the leaf's 4th scalar and must equal this output's entry in
+    /// `leaves_extra_scalars` (Shekyl `PL-D3`).
+    pub output_cm: <C::OC as Ciphersuite>::G,
     /// The leaves along this path.
     pub leaves: Vec<Output<<C::OC as Ciphersuite>::G>>,
     /// Extra leaf scalars for each sibling leaf, parallel to `leaves`.
@@ -80,7 +81,7 @@ where
     #[allow(clippy::type_complexity)]
     per_input: Vec<(
         Output<<C::OC as Ciphersuite>::G>,
-        Vec<<C::C1 as Ciphersuite>::F>,
+        <C::OC as Ciphersuite>::G,
         BranchesWithoutRootBranch<C>,
     )>,
     root: RootBranch<C>,
@@ -96,8 +97,7 @@ where
 {
     /// The output.
     output: Output<<C::OC as Ciphersuite>::G>,
-    /// Extra leaf scalars for this output.
-    pub(crate) output_extra_scalars: Vec<<C::C1 as Ciphersuite>::F>,
+    pub(crate) output_cm: <C::OC as Ciphersuite>::G,
     /// The output blinds.
     output_blinds: OutputBlinds<<C::OC as Ciphersuite>::G>,
     /// The input.
@@ -166,7 +166,7 @@ where
 
         let mut per_input = vec![(
             first.output,
-            first.output_extra_scalars,
+            first.output_cm,
             BranchesWithoutRootBranch {
                 leaves: (!root_is_leaves).then_some(first.leaves),
                 leaves_extra_scalars: (!root_is_leaves).then_some(first.leaves_extra_scalars),
@@ -204,7 +204,7 @@ where
 
             per_input.push((
                 path.output,
-                path.output_extra_scalars,
+                path.output_cm,
                 BranchesWithoutRootBranch {
                     leaves: (!root_is_leaves).then_some(path.leaves),
                     leaves_extra_scalars: (!root_is_leaves).then_some(path.leaves_extra_scalars),
@@ -248,18 +248,16 @@ where
                 .per_input
                 .into_iter()
                 .zip(output_blinds)
-                .map(
-                    |((output, output_extra_scalars, branches), output_blinds)| {
-                        let input = output_blinds.blind(&output)?;
-                        Ok(InputProofData {
-                            output,
-                            output_extra_scalars,
-                            output_blinds,
-                            input,
-                            branches,
-                        })
-                    },
-                )
+                .map(|((output, output_cm, branches), output_blinds)| {
+                    let input = output_blinds.blind(&output, output_cm)?;
+                    Ok(InputProofData {
+                        output,
+                        output_cm,
+                        output_blinds,
+                        input,
+                        branches,
+                    })
+                })
                 .collect::<Result<_, FcmpError>>()?,
             root: self.root,
             branches_1_blinds,
@@ -271,7 +269,6 @@ where
 pub(crate) struct TranscriptedBranchesPerInput {
     pub(crate) c1: Vec<Vec<Variable>>,
     pub(crate) c2: Vec<Vec<Variable>>,
-    pub(crate) extra_leaf_vars: Vec<Variable>,
 }
 
 pub(crate) struct TranscriptedBranches {
@@ -356,18 +353,7 @@ where
             per_input.push((c1, c2));
         }
 
-        // Phase 2: Extra leaf scalar branches for all inputs (after standard branches).
-        let mut all_extra_leaf_vars: Vec<Vec<Variable>> = vec![];
-        for input in &self.per_input {
-            let mut extra_leaf_vars = vec![];
-            for scalar in &input.output_extra_scalars {
-                let vars = c1_tape.append_branch(1, Some(vec![*scalar]));
-                extra_leaf_vars.push(vars[0]);
-            }
-            all_extra_leaf_vars.push(extra_leaf_vars);
-        }
-
-        // Phase 3: Root branch.
+        // Phase 2: Root branch.
         let root = match &self.root {
             RootBranch::Leaves(leaves, extras) => {
                 let flattened_leaves = flatten_leaves(leaves, extras);
@@ -379,12 +365,7 @@ where
 
         let per_input = per_input
             .into_iter()
-            .zip(all_extra_leaf_vars)
-            .map(|((c1, c2), extra_leaf_vars)| TranscriptedBranchesPerInput {
-                c1,
-                c2,
-                extra_leaf_vars,
-            })
+            .map(|(c1, c2)| TranscriptedBranchesPerInput { c1, c2 })
             .collect();
         TranscriptedBranches { per_input, root }
     }
@@ -481,17 +462,30 @@ where
                 )
             };
             let C = (C[0], C[1]);
+            // The PQC commitment opening (PL-D3): the claimed point is r·J, the
+            // padding carries CM, the leaf's committed point.
+            let (k_blind_claim, CM) = {
+                let (x, y) = <C::OC as Ciphersuite>::G::to_xy(input.output_cm).unwrap();
+                append_claimed_point(
+                    c1_tape,
+                    input.output_blinds.k_blind.0.scalar.decomposition(),
+                    input.output_blinds.k_blind.0.scalar_mul_and_divisor.clone(),
+                    vec![x, y],
+                )
+            };
+            let CM = (CM[0], CM[1]);
 
             res.push(TranscriptedInput {
                 O,
                 I,
                 C,
-                extra_leaf_vars: vec![],
+                CM,
                 o_blind_claim,
                 i_blind_u_claim,
                 i_blind_v_claim,
                 i_blind_blind_claim,
                 c_blind_claim,
+                k_blind_claim,
             });
         }
         res

@@ -21,7 +21,7 @@ pub mod proof;
 pub mod rpc_path;
 pub mod tree;
 
-pub use leaf::{PqcLeafScalar, ShekylLeaf};
+pub use leaf::{PqcKeyScalar, PqcLeafScalar, ShekylLeaf};
 #[cfg(feature = "multisig")]
 pub use proof::ProveInputLeafChunk;
 pub use proof::{BranchLayer, ProveError, ProveInput, ProveResult, ShekylFcmpProof, VerifyError};

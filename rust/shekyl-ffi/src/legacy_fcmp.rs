@@ -29,7 +29,11 @@ pub unsafe extern "C" fn shekyl_generator_T(out_ptr: *mut u8) {
 
 // ─── FCMP++: Proof and Tree Operations ──────────────────────────────────────
 
-/// Compute H(pqc_pk) leaf scalar for a PQC public key.
+/// Compute the verifier-side PQC key scalar `k = H_ℓ(hybrid_pk)` for a revealed
+/// PQC public key (`PL-D3`): the per-input value `shekyl_fcmp_verify` /
+/// `shekyl_fcmp_membership_only_verify` take, from which they derive the point
+/// `K = k·G_k` the circuit opens the spent leaf's commitment to. `k` is a
+/// function of the revealed key only — never the leaf value.
 ///
 /// Writes 32 bytes to `out_ptr`. Returns true on success.
 ///
@@ -47,18 +51,19 @@ pub unsafe extern "C" fn shekyl_fcmp_pqc_leaf_hash(
     if out_ptr.is_null() {
         return false;
     }
-    let hash = shekyl_crypto_pq::derivation::hash_pqc_public_key(pk_bytes);
-    std::ptr::copy_nonoverlapping(hash.as_ptr(), out_ptr, 32);
+    let k = shekyl_crypto_pq::derivation::pqc_key_scalar(pk_bytes);
+    std::ptr::copy_nonoverlapping(k.as_ptr(), out_ptr, 32);
     true
 }
 
-/// Derive `h_pqc = H(hybrid_public_key)` from combined shared secret and output
-/// index. Secret key is derived internally, used for public key derivation only,
-/// and zeroized immediately. No secret material crosses this boundary.
+/// Derive the output's 64-byte `tx_extra 0x07` entry `CM ‖ record` (`PL-D3` /
+/// `PL-D3a`) from combined shared secret and output index. Secret key is derived
+/// internally, used for public key derivation only, and zeroized immediately.
+/// The blinds stay on the Rust side: no secret material crosses this boundary.
 ///
 /// # Safety
 /// - `combined_ss_ptr` must point to 64 bytes.
-/// - `h_pqc_out` must point to 32 writable bytes.
+/// - `h_pqc_out` must point to 64 writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_derive_pqc_leaf_hash(
     combined_ss_ptr: *const u8,
@@ -71,9 +76,10 @@ pub unsafe extern "C" fn shekyl_derive_pqc_leaf_hash(
     let mut ss = [0u8; 64];
     std::ptr::copy_nonoverlapping(combined_ss_ptr, ss.as_mut_ptr(), 64);
 
-    match shekyl_crypto_pq::derivation::derive_pqc_leaf_hash(&ss, output_index) {
-        Ok(hash) => {
-            std::ptr::copy_nonoverlapping(hash.as_ptr(), h_pqc_out, 32);
+    match shekyl_crypto_pq::derivation::derive_pqc_leaf(&ss, output_index) {
+        Ok(leaf) => {
+            let entry = leaf.entry();
+            std::ptr::copy_nonoverlapping(entry.as_ptr(), h_pqc_out, entry.len());
             true
         }
         Err(_) => false,
@@ -194,9 +200,11 @@ pub unsafe extern "C" fn shekyl_derive_view_tag_prefilter(
 ///
 /// ```text
 /// For each of `num_inputs` inputs, sequentially:
-///   Fixed header (SHEKYL_PROVE_WITNESS_HEADER_BYTES = 256 bytes, 8 fields):
-///     [O:32][I:32][C:32][h_pqc:32][spend_x:32][spend_y:32][z:32][a:32]
+///   Fixed header (SHEKYL_PROVE_WITNESS_HEADER_BYTES = 288 bytes, 9 fields):
+///     [O:32][I:32][C:32][CM:32][r:32][spend_x:32][spend_y:32][z:32][a:32]
 ///     O, I, C are compressed Ed25519 output points.
+///     CM is the input's PQC leaf commitment point (compressed Ed25519) and
+///       r its blind — the in-circuit opening `K + r·J = CM` (PL-D3).
 ///     z is the Pedersen commitment mask (C = z*G + amount*H).
 ///     a is the desired blinding factor for this input's pseudo-out
 ///       commitment. The rerandomization scalar is `r_c = a - z`, giving
@@ -208,7 +216,7 @@ pub unsafe extern "C" fn shekyl_derive_view_tag_prefilter(
 ///   Leaf chunk (variable):
 ///     leaf_chunk_count: u32
 ///     For each entry (128 bytes):
-///       [O:32][I:32][C:32][h_pqc:32]  (compressed Ed25519 points + PQC hash)
+///       [O:32][I:32][C:32][CM.x:32]  (compressed Ed25519 points + the leaf's 4th scalar)
 ///   C1 (Selene) branch layers (variable):
 ///     c1_layer_count: u32
 ///     For each layer:
@@ -239,7 +247,8 @@ pub(crate) fn parse_prove_witness(
         let mut output_key = [0u8; 32];
         let mut key_image_gen = [0u8; 32];
         let mut commitment = [0u8; 32];
-        let mut h_pqc = [0u8; 32];
+        let mut pqc_leaf_commitment = [0u8; 32];
+        let mut pqc_leaf_blind = [0u8; 32];
         let mut spend_key_x = [0u8; 32];
         let mut spend_key_y = [0u8; 32];
         let mut commitment_mask = [0u8; 32];
@@ -248,12 +257,13 @@ pub(crate) fn parse_prove_witness(
         output_key.copy_from_slice(&data[offset..offset + 32]);
         key_image_gen.copy_from_slice(&data[offset + 32..offset + 64]);
         commitment.copy_from_slice(&data[offset + 64..offset + 96]);
-        h_pqc.copy_from_slice(&data[offset + 96..offset + 128]);
-        spend_key_x.copy_from_slice(&data[offset + 128..offset + 160]);
-        spend_key_y.copy_from_slice(&data[offset + 160..offset + 192]);
-        commitment_mask.copy_from_slice(&data[offset + 192..offset + 224]);
+        pqc_leaf_commitment.copy_from_slice(&data[offset + 96..offset + 128]);
+        pqc_leaf_blind.copy_from_slice(&data[offset + 128..offset + 160]);
+        spend_key_x.copy_from_slice(&data[offset + 160..offset + 192]);
+        spend_key_y.copy_from_slice(&data[offset + 192..offset + 224]);
+        commitment_mask.copy_from_slice(&data[offset + 224..offset + 256]);
         pseudo_out_blind
-            .copy_from_slice(&data[offset + 224..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
+            .copy_from_slice(&data[offset + 256..offset + SHEKYL_PROVE_WITNESS_HEADER_BYTES]);
         offset += SHEKYL_PROVE_WITNESS_HEADER_BYTES;
 
         let (leaf_chunk_outputs, leaf_chunk_h_pqc) = parse_leaf_chunks(data, &mut offset)?;
@@ -264,7 +274,8 @@ pub(crate) fn parse_prove_witness(
             output_key,
             key_image_gen,
             commitment,
-            h_pqc: shekyl_fcmp::leaf::PqcLeafScalar(h_pqc),
+            pqc_leaf_commitment,
+            pqc_leaf_blind,
             spend_key_x,
             spend_key_y,
             commitment_mask,
@@ -354,10 +365,13 @@ fn parse_branch_layers(
 
 /// Verify an FCMP++ proof with batch verification.
 ///
-/// Returns 0 on success, or a nonzero `VerifyError` discriminant (1-7) on failure:
-///   1=DeserializationFailed, 2=InvalidTreeRoot, 3=PqcCommitmentMismatch,
+/// `pqc_pk_hashes_ptr`: `pqc_hash_count × 32` bytes, one PQC key scalar `k`
+/// per input from `shekyl_fcmp_pqc_leaf_hash` (`PL-D3`).
+///
+/// Returns 0 on success, or a nonzero `VerifyError` discriminant on failure:
+///   1=DeserializationFailed, 2=InvalidTreeRoot, 3=PqcKeyPointInvalid,
 ///   4=KeyImageCountMismatch, 5=UpstreamError, 6=BatchVerificationFailed,
-///   7=TreeDepthTooLarge
+///   7=TreeDepthTooLarge, 9=PqcKeyCountMismatch
 ///
 /// `signable_tx_hash_ptr`: 32-byte hash that binds the proof to the transaction.
 ///
@@ -449,7 +463,7 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 
         let mut ph = [0u8; 32];
         ph.copy_from_slice(&ph_bytes[i * 32..(i + 1) * 32]);
-        pqc_hashes.push(shekyl_fcmp::leaf::PqcLeafScalar(ph));
+        pqc_hashes.push(shekyl_fcmp::leaf::PqcKeyScalar(ph));
     }
 
     match shekyl_fcmp::proof::verify(
@@ -475,7 +489,7 @@ pub unsafe extern "C" fn shekyl_fcmp_verify(
 /// ABI the C++ emission-vin shim (PR-E3) calls. Returns `0` on success, else the
 /// [`shekyl_fcmp::proof::VerifyError`] discriminant: `1=Deserialization` (also a null
 /// pointer, a count that is `0` or exceeds [`shekyl_fcmp::MAX_INPUTS`], or a `× 32`
-/// byte-length `usize` overflow), `2=InvalidTreeRoot`, `3=PqcCommitmentMismatch`,
+/// byte-length `usize` overflow), `2=InvalidTreeRoot`, `3=PqcKeyPointInvalid`,
 /// `5=UpstreamError`, `6=BatchVerificationFailed`, `7=TreeDepthTooLarge`,
 /// `8=InputCountMismatch` (`po_count != pqc_hash_count`, checked before any slicing). Never
 /// `4` (`KeyImageCountMismatch`) — this path has no key images. Anti-replay is the
@@ -556,12 +570,12 @@ pub unsafe extern "C" fn shekyl_fcmp_membership_only_verify(
             b
         })
         .collect();
-    let pqc_hashes: Vec<shekyl_fcmp::leaf::PqcLeafScalar> = ph_bytes
+    let pqc_hashes: Vec<shekyl_fcmp::leaf::PqcKeyScalar> = ph_bytes
         .chunks_exact(32)
         .map(|c| {
             let mut b = [0u8; 32];
             b.copy_from_slice(c);
-            shekyl_fcmp::leaf::PqcLeafScalar(b)
+            shekyl_fcmp::leaf::PqcKeyScalar(b)
         })
         .collect();
 

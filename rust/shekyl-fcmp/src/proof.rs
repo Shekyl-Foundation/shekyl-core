@@ -8,7 +8,7 @@
 //! The Shekyl proof extends upstream FCMP++ by including `H(pqc_pk)` as
 //! a public input verified in-circuit against the 4th leaf scalar.
 
-use crate::leaf::PqcLeafScalar;
+use crate::leaf::PqcKeyScalar;
 use crate::{MAX_INPUTS, MAX_TREE_DEPTH};
 use thiserror::Error;
 use zeroize::Zeroize;
@@ -25,11 +25,11 @@ use ec_divisors::ScalarDecomposition;
 use helioselene::{Helios, Selene};
 use rand_core::{CryptoRng, OsRng, RngCore};
 
-use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, T};
+use shekyl_curve_generators::{FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, PQC_LEAF_COMMITMENT_J, T};
 use shekyl_fcmp_proofs::{
     fcmps::{
-        BranchBlind, Branches, CBlind, Fcmp, IBlind, IBlindBlind, OBlind, OutputBlinds, Path,
-        TreeRoot,
+        BranchBlind, Branches, CBlind, Fcmp, IBlind, IBlindBlind, KBlind, OBlind, OutputBlinds,
+        Path, TreeRoot,
     },
     sal::{
         membership_only::{membership_only_rerandomize, MembershipSpendAuth},
@@ -98,8 +98,11 @@ pub enum VerifyError {
     #[error("invalid tree root")]
     InvalidTreeRoot,
 
-    #[error("PQC commitment mismatch at input {0}")]
-    PqcCommitmentMismatch(usize),
+    /// The verifier-derived PQC key point `K = k·G_k` for input `{0}` is not
+    /// a usable point (the identity). Unreachable for a non-zero `k`, which
+    /// `pqc_key_scalar` guarantees; kept as a loud refusal, never a silent skip.
+    #[error("PQC key point invalid at input {0}")]
+    PqcKeyPointInvalid(usize),
 
     #[error("key image count mismatch: expected {expected}, got {got}")]
     KeyImageCountMismatch { expected: usize, got: usize },
@@ -115,26 +118,34 @@ pub enum VerifyError {
 
     /// The provided per-input arrays do not match the proof's declared input count.
     /// Distinct from [`Self::KeyImageCountMismatch`]: the membership-only path carries
-    /// no key images, so a count error there is about pseudo-outs / pqc hashes, not KIs.
+    /// no key images, so a count error there is about pseudo-outs / pqc keys, not KIs.
     #[error("input count mismatch: expected {expected}, got {got}")]
     InputCountMismatch { expected: usize, got: usize },
+
+    /// The full path's per-input PQC key array does not match the proof's
+    /// declared input count. Split from the per-input point arm (census
+    /// `d-12`): a wrong array length and an unusable point are different
+    /// callers' mistakes and must not share a discriminant.
+    #[error("PQC key count mismatch: expected {expected}, got {got}")]
+    PqcKeyCountMismatch { expected: usize, got: usize },
 }
 
 impl VerifyError {
     /// FFI-stable discriminant for crossing the C ABI boundary.
     ///
-    /// Codes 1-8 map to the enum variants in declaration order.
+    /// Codes 1-9 map to the enum variants in declaration order.
     /// Code 0 is reserved for success (not an error).
     pub fn discriminant(&self) -> u8 {
         match self {
             Self::DeserializationFailed => 1,
             Self::InvalidTreeRoot => 2,
-            Self::PqcCommitmentMismatch(_) => 3,
+            Self::PqcKeyPointInvalid(_) => 3,
             Self::KeyImageCountMismatch { .. } => 4,
             Self::UpstreamError(_) => 5,
             Self::BatchVerificationFailed => 6,
             Self::TreeDepthTooLarge(_) => 7,
             Self::InputCountMismatch { .. } => 8,
+            Self::PqcKeyCountMismatch { .. } => 9,
         }
     }
 }
@@ -165,8 +176,12 @@ pub struct ProveInput {
     pub key_image_gen: [u8; 32],
     /// Compressed Ed25519 Pedersen commitment C.
     pub commitment: [u8; 32],
-    /// H(pqc_pk) for this output's 4th leaf scalar.
-    pub h_pqc: PqcLeafScalar,
+    /// The output's PQC leaf commitment point `CM = k·G_k + r·J`, compressed
+    /// Ed25519 (the first 32 bytes of its `0x07` entry); `CM.x` is the 4th leaf
+    /// scalar (`PL-D3`).
+    pub pqc_leaf_commitment: [u8; 32],
+    /// The commitment's blind `r` (Ed25519 scalar) — the opening leg's witness.
+    pub pqc_leaf_blind: [u8; 32],
 
     /// Spend secret key x where O = xG + yT.
     pub spend_key_x: [u8; 32],
@@ -189,7 +204,8 @@ pub struct ProveInput {
     /// Sibling outputs in the same leaf chunk (compressed Ed25519 points).
     /// Each entry is (O, I, C) as 3x32 bytes.
     pub leaf_chunk_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])>,
-    /// H(pqc_pk) for each output in the chunk, parallel to `leaf_chunk_outputs`.
+    /// The 4th leaf scalar (`CM.x`) of each output in the chunk, parallel to
+    /// `leaf_chunk_outputs` — the sibling values as the leaf holds them.
     pub leaf_chunk_h_pqc: Vec<[u8; 32]>,
 
     /// Selene (C1) branch layers, bottom to top.
@@ -295,6 +311,16 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
         sal_pairs.push((crate_input, sal));
 
         // Build OutputBlinds from rerandomization
+        let output_cm =
+            decompress_ed25519(&input.pqc_leaf_commitment).ok_or(ProveError::InvalidPoint {
+                input_index: idx,
+                field: "pqc_leaf_commitment",
+            })?;
+        let pqc_leaf_blind =
+            deserialize_ed25519_scalar(&input.pqc_leaf_blind).ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "pqc_leaf_blind",
+            })?;
         let output_blind = OutputBlinds::new(
             OBlind::new(
                 EdwardsPoint(*T),
@@ -315,6 +341,11 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
             CBlind::new(
                 EdwardsPoint::generator(),
                 ScalarDecomposition::new(rerand.c_blind())
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ),
+            KBlind::new(
+                EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
+                ScalarDecomposition::new(pqc_leaf_blind)
                     .ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
         );
@@ -354,12 +385,6 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
             )?;
             chunk_extra.push(vec![h_pqc]);
         }
-
-        let output_h_pqc =
-            deserialize_selene_scalar(&input.h_pqc.0).ok_or(ProveError::InvalidScalar {
-                input_index: idx,
-                field: "h_pqc",
-            })?;
 
         // Build C1/C2 branch layers, zero-padded to the full chunk width.
         //
@@ -409,7 +434,7 @@ pub fn prove_with_rng<R: RngCore + CryptoRng>(
 
         paths.push(Path::<Curves> {
             output,
-            output_extra_scalars: vec![output_h_pqc],
+            output_cm,
             leaves: chunk_outputs,
             leaves_extra_scalars: chunk_extra,
             curve_2_layers: c2_layers,
@@ -574,6 +599,16 @@ pub fn prove_membership_only(
         msa_pairs.push((crate_input, msa));
 
         // OutputBlinds from the rerandomization — identical to `prove`.
+        let output_cm =
+            decompress_ed25519(&input.pqc_leaf_commitment).ok_or(ProveError::InvalidPoint {
+                input_index: idx,
+                field: "pqc_leaf_commitment",
+            })?;
+        let pqc_leaf_blind =
+            deserialize_ed25519_scalar(&input.pqc_leaf_blind).ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "pqc_leaf_blind",
+            })?;
         let output_blind = OutputBlinds::new(
             OBlind::new(
                 EdwardsPoint(*T),
@@ -594,6 +629,11 @@ pub fn prove_membership_only(
             CBlind::new(
                 EdwardsPoint::generator(),
                 ScalarDecomposition::new(rerand.c_blind())
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ),
+            KBlind::new(
+                EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
+                ScalarDecomposition::new(pqc_leaf_blind)
                     .ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
         );
@@ -634,12 +674,6 @@ pub fn prove_membership_only(
             chunk_extra.push(vec![h_pqc]);
         }
 
-        let output_h_pqc =
-            deserialize_selene_scalar(&input.h_pqc.0).ok_or(ProveError::InvalidScalar {
-                input_index: idx,
-                field: "h_pqc",
-            })?;
-
         let mut c1_layers = Vec::new();
         for layer in &input.c1_branch_layers {
             let scalars: Vec<<Selene as Ciphersuite>::F> = layer
@@ -679,7 +713,7 @@ pub fn prove_membership_only(
 
         paths.push(Path::<Curves> {
             output,
-            output_extra_scalars: vec![output_h_pqc],
+            output_cm,
             leaves: chunk_outputs,
             leaves_extra_scalars: chunk_extra,
             curve_2_layers: c2_layers,
@@ -790,6 +824,18 @@ pub fn prove_with_sal(
         pseudo_outs.push(input.C_tilde().to_bytes());
         paired.push((input, sal));
 
+        let chunk = &leaf_chunks[idx];
+        let output_cm =
+            decompress_ed25519(&chunk.pqc_leaf_commitment).ok_or(ProveError::InvalidPoint {
+                input_index: idx,
+                field: "pqc_leaf_commitment",
+            })?;
+        let pqc_leaf_blind =
+            deserialize_ed25519_scalar(&chunk.pqc_leaf_blind).ok_or(ProveError::InvalidScalar {
+                input_index: idx,
+                field: "pqc_leaf_blind",
+            })?;
+
         // Build OutputBlinds from rerandomization
         let output_blind = OutputBlinds::new(
             OBlind::new(
@@ -813,11 +859,15 @@ pub fn prove_with_sal(
                 ScalarDecomposition::new(rerand.c_blind())
                     .ok_or(ProveError::ScalarDecompositionFailed)?,
             ),
+            KBlind::new(
+                EdwardsPoint(*PQC_LEAF_COMMITMENT_J),
+                ScalarDecomposition::new(pqc_leaf_blind)
+                    .ok_or(ProveError::ScalarDecompositionFailed)?,
+            ),
         );
         output_blinds_list.push(output_blind);
 
         // Build the leaf chunk and branch layers
-        let chunk = &leaf_chunks[idx];
         if chunk.leaf_outputs.is_empty() {
             return Err(ProveError::TreePathUnavailable(idx));
         }
@@ -850,12 +900,6 @@ pub fn prove_with_sal(
             )?;
             chunk_extra.push(vec![h]);
         }
-
-        let output_h_pqc =
-            deserialize_selene_scalar(&chunk.output_h_pqc.0).ok_or(ProveError::InvalidScalar {
-                input_index: idx,
-                field: "h_pqc",
-            })?;
 
         // Zero-pad partial branch chunks to the full chunk width — see
         // `pad_branch_chunk` for the rationale (the consensus tree stores narrow
@@ -901,7 +945,7 @@ pub fn prove_with_sal(
 
         paths.push(Path::<Curves> {
             output: *orig_output,
-            output_extra_scalars: vec![output_h_pqc],
+            output_cm,
             leaves: chunk_outputs,
             leaves_extra_scalars: chunk_extra,
             curve_2_layers: c2_layers,
@@ -967,7 +1011,10 @@ pub fn prove_with_sal(
 #[cfg(feature = "multisig")]
 #[derive(Clone, Debug)]
 pub struct ProveInputLeafChunk {
-    pub output_h_pqc: PqcLeafScalar,
+    /// The spent output's PQC leaf commitment point `CM` (compressed Ed25519).
+    pub pqc_leaf_commitment: [u8; 32],
+    /// The commitment's blind `r` (Ed25519 scalar).
+    pub pqc_leaf_blind: [u8; 32],
     pub leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])>,
     pub leaf_h_pqc: Vec<[u8; 32]>,
     pub c1_branch_layers: Vec<BranchLayer>,
@@ -990,7 +1037,7 @@ pub fn verify(
     proof: &ShekylFcmpProof,
     key_images: &[KeyImage],
     pseudo_outs: &[[u8; 32]],
-    pqc_pk_hashes: &[PqcLeafScalar],
+    pqc_keys: &[PqcKeyScalar],
     tree_root: &[u8; 32],
     tree_depth: u8,
     signable_tx_hash: [u8; 32],
@@ -1016,8 +1063,11 @@ pub fn verify(
             got: pseudo_outs.len(),
         });
     }
-    if pqc_pk_hashes.len() != num_inputs {
-        return Err(VerifyError::PqcCommitmentMismatch(pqc_pk_hashes.len()));
+    if pqc_keys.len() != num_inputs {
+        return Err(VerifyError::PqcKeyCountMismatch {
+            expected: num_inputs,
+            got: pqc_keys.len(),
+        });
     }
     if proof.tree_depth != tree_depth {
         return Err(VerifyError::InvalidTreeRoot);
@@ -1042,20 +1092,23 @@ pub fn verify(
             VerifyError::DeserializationFailed
         })?;
 
-    let pqc_selene: Vec<<Selene as Ciphersuite>::F> = pqc_pk_hashes
+    // K = k·G_k per input, computed here from the revealed key's scalar and never
+    // carried on the wire (PL-D3); a non-decompressible point is impossible for a
+    // scalar multiple of G_k, but the arm is kept as a loud refusal.
+    let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> = pqc_keys
         .iter()
         .enumerate()
-        .map(|(i, h)| deserialize_selene_scalar(&h.0).ok_or(VerifyError::PqcCommitmentMismatch(i)))
+        .map(|(i, k)| decompress_ed25519(&k.point()).ok_or(VerifyError::PqcKeyPointInvalid(i)))
         .collect::<Result<Vec<_>, _>>()?;
 
     // Both collections are length-validated to `num_inputs` above; zip them into the
     // single ordered per-input bundle the verifier takes, so alignment is structural.
     let per_input: Vec<InputVerification> = ki_points
         .into_iter()
-        .zip(pqc_selene)
-        .map(|(key_image, pqc_pk_hash)| InputVerification {
+        .zip(pqc_key_points)
+        .map(|(key_image, pqc_key_point)| InputVerification {
             key_image,
-            pqc_pk_hash,
+            pqc_key_point,
         })
         .collect();
 
@@ -1107,7 +1160,7 @@ pub fn verify(
 ///
 /// # Errors
 /// [`VerifyError::InputCountMismatch`] (pseudo-outs **or** pqc-hash count vs proof input
-/// count), [`VerifyError::PqcCommitmentMismatch`] (per-input scalar deserialization),
+/// count), [`VerifyError::PqcKeyPointInvalid`] (per-input key point),
 /// [`VerifyError::InvalidTreeRoot`], [`VerifyError::TreeDepthTooLarge`],
 /// [`VerifyError::DeserializationFailed`] (also `proof.num_inputs == 0` or `> MAX_INPUTS`),
 /// [`VerifyError::UpstreamError`], or [`VerifyError::BatchVerificationFailed`].
@@ -1115,7 +1168,7 @@ pub fn verify(
 pub fn verify_membership_only(
     proof: &ShekylFcmpProof,
     pseudo_outs: &[[u8; 32]],
-    pqc_pk_hashes: &[PqcLeafScalar],
+    pqc_keys: &[PqcKeyScalar],
     tree_root: &[u8; 32],
     tree_depth: u8,
     signable_tx_hash: [u8; 32],
@@ -1135,10 +1188,10 @@ pub fn verify_membership_only(
             got: pseudo_outs.len(),
         });
     }
-    if pqc_pk_hashes.len() != num_inputs {
+    if pqc_keys.len() != num_inputs {
         return Err(VerifyError::InputCountMismatch {
             expected: num_inputs,
-            got: pqc_pk_hashes.len(),
+            got: pqc_keys.len(),
         });
     }
     if proof.tree_depth != tree_depth {
@@ -1155,10 +1208,13 @@ pub fn verify_membership_only(
         VerifyError::InvalidTreeRoot
     })?;
 
-    let pqc_selene: Vec<<Selene as Ciphersuite>::F> = pqc_pk_hashes
+    // K = k·G_k per input, computed here from the revealed key's scalar and never
+    // carried on the wire (PL-D3); a non-decompressible point is impossible for a
+    // scalar multiple of G_k, but the arm is kept as a loud refusal.
+    let pqc_key_points: Vec<<Ed25519 as Ciphersuite>::G> = pqc_keys
         .iter()
         .enumerate()
-        .map(|(i, h)| deserialize_selene_scalar(&h.0).ok_or(VerifyError::PqcCommitmentMismatch(i)))
+        .map(|(i, k)| decompress_ed25519(&k.point()).ok_or(VerifyError::PqcKeyPointInvalid(i)))
         .collect::<Result<Vec<_>, _>>()?;
 
     let fcmp_mo = FcmpMembershipOnly::read(pseudo_outs, layers, &mut proof.data.as_slice())
@@ -1185,7 +1241,7 @@ pub fn verify_membership_only(
             tree,
             layers,
             signable_tx_hash,
-            pqc_selene,
+            pqc_key_points,
         )
         .map_err(|e| VerifyError::UpstreamError(format!("{e:?}")))?;
 
@@ -1294,6 +1350,31 @@ fn deserialize_tree_root(bytes: &[u8; 32], layers: usize) -> Option<TreeRoot<Sel
 mod tests {
     use super::*;
 
+    /// A random `PL-D3` leaf commitment: `k`, `K = k·G_k`, `r`, `CM = K + r·J`,
+    /// and `CM.x` as the Selene leaf scalar.
+    #[allow(non_snake_case)]
+    struct PqcLeaf {
+        key: PqcKeyScalar,
+        blind: Scalar,
+        cm: EdwardsPoint,
+        x: <Selene as Ciphersuite>::F,
+    }
+
+    fn random_pqc_leaf(rng: &mut (impl RngCore + CryptoRng)) -> PqcLeaf {
+        use ec_divisors::DivisorCurve;
+        use shekyl_curve_generators::PQC_LEAF_COMMITMENT_G_K;
+        let k = Scalar::random(&mut *rng);
+        let r = Scalar::random(&mut *rng);
+        let cm = (EdwardsPoint(*PQC_LEAF_COMMITMENT_G_K) * k)
+            + (EdwardsPoint(*PQC_LEAF_COMMITMENT_J) * r);
+        PqcLeaf {
+            key: PqcKeyScalar(k.to_repr()),
+            blind: r,
+            cm,
+            x: <EdwardsPoint as DivisorCurve>::to_xy(cm).unwrap().0,
+        }
+    }
+
     #[test]
     fn prove_rejects_too_many_inputs() {
         let inputs: Vec<ProveInput> = (0..9).map(|_| dummy_prove_input()).collect();
@@ -1358,7 +1439,10 @@ mod tests {
             &proof,
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32], [0; 32]],
-            &[PqcLeafScalar([0; 32]), PqcLeafScalar([0; 32])],
+            &[
+                PqcKeyScalar::from_pqc_public_key(b"test key"),
+                PqcKeyScalar::from_pqc_public_key(b"test key"),
+            ],
             &[0; 32],
             8,
             [0; 32],
@@ -1380,7 +1464,7 @@ mod tests {
             &proof,
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
-            &[PqcLeafScalar([0; 32])],
+            &[PqcKeyScalar::from_pqc_public_key(b"test key")],
             &[0; 32],
             10,
             [0; 32],
@@ -1393,7 +1477,8 @@ mod tests {
             output_key: [0; 32],
             key_image_gen: [0; 32],
             commitment: [0; 32],
-            h_pqc: PqcLeafScalar([0; 32]),
+            pqc_leaf_commitment: [0; 32],
+            pqc_leaf_blind: [0; 32],
             spend_key_x: [0; 32],
             spend_key_y: [0; 32],
             commitment_mask: [0; 32],
@@ -1423,7 +1508,8 @@ mod tests {
 
         let L = I * x;
 
-        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let pqc = random_pqc_leaf(&mut OsRng);
+        let h_pqc_field = pqc.x;
         let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
 
         let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
@@ -1455,7 +1541,8 @@ mod tests {
             output_key: o_bytes,
             key_image_gen: i_bytes,
             commitment: c_bytes,
-            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            pqc_leaf_commitment: pqc.cm.to_bytes(),
+            pqc_leaf_blind: pqc.blind.to_repr(),
             spend_key_x: x.to_repr(),
             spend_key_y: y.to_repr(),
             commitment_mask: z.to_repr(),
@@ -1475,7 +1562,7 @@ mod tests {
             &result.proof,
             &key_images,
             &result.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &tree_root,
             tree_depth,
             signable_tx_hash,
@@ -1490,7 +1577,7 @@ mod tests {
             &result.proof,
             &[KeyImage::from_canonical_bytes(bad_ki)],
             &result.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &tree_root,
             tree_depth,
             signable_tx_hash,
@@ -1507,7 +1594,7 @@ mod tests {
             &result.proof,
             &key_images,
             &result.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &bad_root,
             tree_depth,
             signable_tx_hash,
@@ -1558,7 +1645,8 @@ mod tests {
         let I = EdwardsPoint::random(&mut OsRng);
         let C = EdwardsPoint::random(&mut OsRng);
 
-        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let pqc = random_pqc_leaf(&mut OsRng);
+        let h_pqc_field = pqc.x;
         let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
 
         let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
@@ -1591,7 +1679,8 @@ mod tests {
             output_key: o_bytes,
             key_image_gen: i_bytes,
             commitment: c_bytes,
-            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            pqc_leaf_commitment: pqc.cm.to_bytes(),
+            pqc_leaf_blind: pqc.blind.to_repr(),
             spend_key_x: x.to_repr(),
             spend_key_y: y.to_repr(),
             commitment_mask: Scalar::random(&mut OsRng).to_repr(),
@@ -1611,7 +1700,7 @@ mod tests {
         let ok = verify_membership_only(
             &mo.proof,
             &mo.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &tree_root,
             tree_depth,
             signable_tx_hash,
@@ -1628,7 +1717,7 @@ mod tests {
             let r = verify_membership_only(
                 &tampered,
                 &mo.pseudo_outs,
-                &[PqcLeafScalar(h_pqc_bytes)],
+                &[pqc.key],
                 &tree_root,
                 tree_depth,
                 signable_tx_hash,
@@ -1646,7 +1735,7 @@ mod tests {
             &mo.proof,
             &dummy_ki,
             &mo.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &tree_root,
             tree_depth,
             signable_tx_hash,
@@ -1662,7 +1751,7 @@ mod tests {
         let as_mo = verify_membership_only(
             &full.proof,
             &full.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &tree_root,
             tree_depth,
             signable_tx_hash,
@@ -1704,7 +1793,8 @@ mod tests {
         let I = EdwardsPoint::random(&mut rng);
         let C = EdwardsPoint::random(&mut rng);
         let L = I * x;
-        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut rng);
+        let pqc = random_pqc_leaf(&mut rng);
+        let h_pqc_field = pqc.x;
         let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
 
         // Leaf → Selene leaf node (the FCMP leaf hash; same formula the passing
@@ -1750,7 +1840,8 @@ mod tests {
             output_key: o_bytes,
             key_image_gen: i_bytes,
             commitment: c_bytes,
-            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            pqc_leaf_commitment: pqc.cm.to_bytes(),
+            pqc_leaf_blind: pqc.blind.to_repr(),
             spend_key_x: x.to_repr(),
             spend_key_y: y.to_repr(),
             commitment_mask: z.to_repr(),
@@ -1772,7 +1863,7 @@ mod tests {
             &result.proof,
             &key_images,
             &result.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &tree_root,
             tree_depth,
             signable_tx_hash,
@@ -1823,7 +1914,7 @@ mod tests {
             &proof,
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
-            &[PqcLeafScalar([0; 32])],
+            &[PqcKeyScalar::from_pqc_public_key(b"test key")],
             &[0; 32],
             8,
             [0; 32],
@@ -1842,7 +1933,7 @@ mod tests {
             &proof,
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32], [0; 32]],
-            &[PqcLeafScalar([0; 32])],
+            &[PqcKeyScalar::from_pqc_public_key(b"test key")],
             &[0; 32],
             8,
             [0; 32],
@@ -1864,7 +1955,10 @@ mod tests {
             &proof,
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
-            &[PqcLeafScalar([0; 32]), PqcLeafScalar([0; 32])],
+            &[
+                PqcKeyScalar::from_pqc_public_key(b"test key"),
+                PqcKeyScalar::from_pqc_public_key(b"test key"),
+            ],
             &[0; 32],
             8,
             [0; 32],
@@ -1886,7 +1980,7 @@ mod tests {
             &proof,
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
-            &[PqcLeafScalar([0; 32])],
+            &[PqcKeyScalar::from_pqc_public_key(b"test key")],
             &[0; 32],
             0,
             [0; 32],
@@ -1906,7 +2000,7 @@ mod tests {
             &proof,
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
-            &[PqcLeafScalar([0; 32])],
+            &[PqcKeyScalar::from_pqc_public_key(b"test key")],
             &[0; 32],
             bad_depth,
             [0; 32],
@@ -1928,7 +2022,7 @@ mod tests {
             &proof,
             &[KeyImage::from_canonical_bytes([0; 32])],
             &[[0; 32]],
-            &[PqcLeafScalar([0; 32])],
+            &[PqcKeyScalar::from_pqc_public_key(b"test key")],
             &[0; 32],
             8,
             [0; 32],
@@ -1956,7 +2050,8 @@ mod tests {
         let C = EdwardsPoint::random(&mut OsRng);
         let L = I * x;
 
-        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let pqc = random_pqc_leaf(&mut OsRng);
+        let h_pqc_field = pqc.x;
         let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
 
         let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
@@ -1988,7 +2083,8 @@ mod tests {
             output_key: o_bytes,
             key_image_gen: i_bytes,
             commitment: c_bytes,
-            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            pqc_leaf_commitment: pqc.cm.to_bytes(),
+            pqc_leaf_blind: pqc.blind.to_repr(),
             spend_key_x: x.to_repr(),
             spend_key_y: y.to_repr(),
             commitment_mask: z2.to_repr(),
@@ -2007,7 +2103,7 @@ mod tests {
             &result.proof,
             &[KeyImage::from_canonical_bytes(L.to_bytes())],
             &result.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &tree_root,
             tree_depth,
             different_hash,
@@ -2035,7 +2131,8 @@ mod tests {
         let I = EdwardsPoint::random(&mut OsRng);
         let C = EdwardsPoint::random(&mut OsRng);
 
-        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let pqc = random_pqc_leaf(&mut OsRng);
+        let h_pqc_field = pqc.x;
         let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
 
         let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
@@ -2066,7 +2163,8 @@ mod tests {
             output_key: o_bytes,
             key_image_gen: i_bytes,
             commitment: c_bytes,
-            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            pqc_leaf_commitment: pqc.cm.to_bytes(),
+            pqc_leaf_blind: pqc.blind.to_repr(),
             spend_key_x: x.to_repr(),
             spend_key_y: mask.to_repr(),
             commitment_mask: mask.to_repr(),
@@ -2103,7 +2201,8 @@ mod tests {
         let C = EdwardsPoint::random(&mut OsRng);
         let L = I * x;
 
-        let h_pqc_field = <Selene as Ciphersuite>::F::random(&mut OsRng);
+        let pqc = random_pqc_leaf(&mut OsRng);
+        let h_pqc_field = pqc.x;
         let h_pqc_bytes: [u8; 32] = h_pqc_field.to_repr();
 
         let generators = SELENE_FCMP_GENERATORS.generators.g_bold_slice();
@@ -2134,7 +2233,8 @@ mod tests {
             output_key: o_bytes,
             key_image_gen: i_bytes,
             commitment: c_bytes,
-            h_pqc: PqcLeafScalar(h_pqc_bytes),
+            pqc_leaf_commitment: pqc.cm.to_bytes(),
+            pqc_leaf_blind: pqc.blind.to_repr(),
             spend_key_x: x.to_repr(),
             spend_key_y: y.to_repr(),
             commitment_mask: z.to_repr(),
@@ -2153,7 +2253,7 @@ mod tests {
             &result.proof,
             &key_images,
             &result.pseudo_outs,
-            &[PqcLeafScalar(h_pqc_bytes)],
+            &[pqc.key],
             &tree_root,
             tree_depth,
             signable_tx_hash,

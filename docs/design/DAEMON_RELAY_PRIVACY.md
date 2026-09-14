@@ -12351,9 +12351,11 @@ They are a separate surface and a separate curve.)*
 ### 72.2 ML-DSA-65 is not verified on this path — corrected
 
 §71's *"and ML-DSA-65 signatures"* does not hold for ordinary transactions.
-`shekyl_fcmp_verify` takes `pqc_pk_hashes_ptr` and converts each entry to a
-`shekyl_fcmp::leaf::PqcLeafScalar` — **the PQ commitment is a hash bound into
-the proof, not a signature checked beside it.** No ML-DSA verification occurs.
+`shekyl_fcmp_verify` takes `pqc_pk_hashes_ptr` (one key scalar `k = H_ℓ(pk)`
+per input) and converts each entry to a `shekyl_fcmp::leaf::PqcKeyScalar` —
+**the PQ binding is an in-circuit opening of the leaf commitment to the key's
+point, not a signature checked beside it** (`PL-D3`). No ML-DSA verification
+occurs.
 
 Every ML-DSA `verify` call in the workspace sits in `multisig.rs`,
 `derivation.rs`, `signature.rs` and `archival_p.rs` — multisig assembly and
@@ -12371,7 +12373,7 @@ takes.
 ### 72.3 The curve is two-dimensional, and both axes are real
 
 Inputs drive `shekyl_fcmp_verify` (`num_spend`, bounded by
-`shekyl_fcmp::MAX_INPUTS`) and the per-input leaf hash. Outputs drive
+`shekyl_fcmp::MAX_INPUTS`) and the per-input key scalar / opening leg. Outputs drive
 `shekyl_check_commitment_masks` — a prime-order subgroup check per output
 commitment, which is not free — and the balance sum.
 

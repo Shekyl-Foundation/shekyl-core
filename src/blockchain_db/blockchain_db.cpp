@@ -540,8 +540,9 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       tx_extra_pqc_leaf_hashes lh;
       if (!find_tx_extra_field_by_type(fields, lh))
         throw DB_ERROR("curve-tree leaf: the shape check accepted a tx whose 0x07 field is absent (bug)");
-      // Exactly one field of exactly 32 * vout.size() bytes, per the rule just
-      // applied -- so the first match IS the only match.
+      // Exactly one field of exactly PQC_LEAF_HASH_BYTES * vout.size() bytes
+      // whose every entry begins with an admissible commitment point, per the
+      // rule just applied -- so the first match IS the only match.
       return std::vector<uint8_t>(lh.blob.begin(), lh.blob.end());
     };
 
@@ -553,7 +554,9 @@ uint64_t BlockchainDB::add_block( const std::pair<block, blobdata>& blck
       for (uint64_t i = 0; i < tx.vout.size(); ++i) {
         const OutputIndex this_output{next_output_seq++};
         const auto& vout = tx.vout[i];
-        // extract_leaf_hashes pinned the blob to exactly one hash per output.
+        // extract_leaf_hashes pinned the blob to exactly one 64-byte entry per
+        // output; the leaf constructor takes the commitment point at its front
+        // (PL-D3) and extracts the x-coordinate itself.
         const uint8_t* h_pqc = leaf_hash_blob.data() + i * PQC_LEAF_HASH_BYTES;
 
         crypto::public_key output_key;

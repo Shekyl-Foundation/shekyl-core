@@ -5,35 +5,38 @@
 
 //! `PL-D1` fix-falsifier: a spend must not identify the output it spends.
 //!
-//! The defect (`docs/design/FCMP_SPEND_LINKABILITY.md` §0): every FCMP++
-//! spend reveals `pqc_auths[i].hybrid_public_key`; consensus hashes it with
-//! the leaf-hash function and hands the result to the verifier as a public
-//! input; the same value was published per output in `tx_extra` `0x07` at
-//! creation and copied into the leaf's 4th scalar. An observer hashes the
-//! revealed key and looks it up.
+//! The defect (`docs/design/FCMP_SPEND_LINKABILITY.md` §0, ruled and fixed
+//! 2026-09-14): every FCMP++ spend reveals `pqc_auths[i].hybrid_public_key`;
+//! before `PL-D3` consensus hashed it with the leaf-hash function and handed
+//! the result to the verifier as a public input — the same value published
+//! per output in `tx_extra` `0x07` at creation and copied into the leaf's 4th
+//! scalar. An observer hashed the revealed key and looked it up.
 //!
-//! This test is that observer. It builds a real multi-layer tree in which
-//! **every output carries its own real `h_pqc`** (the sibling e2e test fills
-//! every decoy with the spent output's value, which would hide the defect
-//! behind a wall of false matches), signs one spend on the production path,
-//! hashes the key the spend reveals with the production leaf-hash function,
-//! and searches the two surfaces an observer holds:
+//! This test is that observer, on the fixed construction. It builds a real
+//! multi-layer tree in which **every output carries its own real `0x07`
+//! entry** (the sibling e2e test fills every decoy with the spent output's
+//! value, which would hide a defect behind a wall of false matches), signs
+//! one spend on the production path, derives from the key the spend reveals
+//! everything a verifier derives — the key scalar `k`, its point `K = k·G_k`,
+//! and `K.x` — and searches the two surfaces an observer holds:
 //!
-//! 1. every 32-byte entry of every `0x07` field the chain published;
+//! 1. every 64-byte entry of every `0x07` field the chain published (the
+//!    commitment half against `K`, the record half against nothing — the
+//!    record is `cSHAKE256(pk ‖ r_h)` under a blind the observer lacks);
 //! 2. every leaf 4th scalar the chain serves — the assembled leaf chunk,
-//!    which is the daemon's `get_curve_tree_path` `chunk_outputs` surface.
+//!    which is the daemon's `get_curve_tree_path` `chunk_outputs` surface —
+//!    against `K.x`.
 //!
-//! It expects **zero** matches on both. On today's tree it is red with
-//! exactly one match on each, at the spent index — that is the defect,
-//! observed rather than described. It goes green only when the published
-//! value stops being a deterministic function of the key the spend reveals
-//! (`PL-D3`: a hiding commitment opened in-circuit). It is the first thing
-//! the implementation writes (round doc §10), and it is separate from the
-//! binding-falsifier (`test_wrong_opening_fails`), which checks the other
-//! direction.
+//! It expects **zero** matches on both. On the pre-`PL-D3` tree (the same
+//! test against the leaf hash) it was red with exactly one match on each, at
+//! the spent index — the defect observed rather than described. It is green
+//! only while the published value is hiding: `CM = K + r·J` equals `K` only
+//! for `r = 0`, which the exceptional-value guard refuses. It is separate
+//! from the binding-falsifier (`test_wrong_opening_fails`), which checks the
+//! other direction.
 //!
-//! The setup is observed by the test itself: the published values must be
-//! pairwise distinct, otherwise a zero-match result could come from a
+//! The setup is observed by the test itself: the published commitments must
+//! be pairwise distinct, otherwise a zero-match result could come from a
 //! degenerate tree rather than from hiding.
 
 use std::collections::HashSet;
@@ -49,7 +52,7 @@ use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
     TargetKind, TxLeafInputs,
 };
-use shekyl_fcmp::PqcLeafScalar;
+use shekyl_fcmp::{tree::ed25519_point_to_selene_scalar, PqcKeyScalar};
 use shekyl_tx_builder::{sign_pqc_auths, tx_prefix_hash_from_parts, LeafEntry, SpendInput};
 use shekyl_units::AtomicUnits;
 
@@ -84,7 +87,7 @@ fn random_wallet(rng: &mut ChaCha20Rng) -> Wallet {
 }
 
 /// A real output for a real (throwaway) recipient: its own KEM ciphertexts,
-/// its own per-output hybrid key, its own `h_pqc`.
+/// its own per-output hybrid key, its own `0x07` entry.
 fn real_output(rng: &mut ChaCha20Rng, amount: u64) -> OutputData {
     let recipient = random_wallet(rng);
     let tx_secret = Scalar::random(rng).to_bytes();
@@ -130,20 +133,20 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     let ki = compute_output_key_image(&combined_ss.0, spent_index, &wallet.spend_secret, &hp_of_o)
         .expect("compute key image");
 
-    // ── The chain: every output with its own real h_pqc ───────────────────
-    // `published_0x07` is the observer's table: every 0x07 field the chain
-    // carries, concatenated in publication order.
+    // ── The chain: every output with its own real 0x07 entry ──────────────
+    // `published_0x07` is the observer's table: every 0x07 entry the chain
+    // carries, in publication order.
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
-    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 32);
-    let mut published_0x07: Vec<[u8; 32]> = Vec::new();
+    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
+    let mut published_0x07: Vec<[u8; 64]> = Vec::new();
 
     genesis_outputs.push(RawOutput {
         output_key: spent.output_key,
         commitment: Some(spent.commitment),
         target: TargetKind::TaggedKey,
     });
-    genesis_blob.extend_from_slice(&spent.h_pqc);
-    published_0x07.push(spent.h_pqc);
+    genesis_blob.extend_from_slice(&spent.pqc_leaf.entry());
+    published_0x07.push(spent.pqc_leaf.entry());
     for _ in 1..TREE_OUTPUTS {
         let decoy = real_output(&mut rng, 1);
         genesis_outputs.push(RawOutput {
@@ -151,8 +154,8 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
             commitment: Some(decoy.commitment),
             target: TargetKind::TaggedKey,
         });
-        genesis_blob.extend_from_slice(&decoy.h_pqc);
-        published_0x07.push(decoy.h_pqc);
+        genesis_blob.extend_from_slice(&decoy.pqc_leaf.entry());
+        published_0x07.push(decoy.pqc_leaf.entry());
     }
 
     let reference_height = COINBASE_LOCK_WINDOW + 1;
@@ -162,14 +165,14 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
             (genesis_outputs.clone(), genesis_blob.clone())
         } else {
             let filler = real_output(&mut rng, 1);
-            published_0x07.push(filler.h_pqc);
+            published_0x07.push(filler.pqc_leaf.entry());
             (
                 vec![RawOutput {
                     output_key: filler.output_key,
                     commitment: Some(filler.commitment),
                     target: TargetKind::TaggedKey,
                 }],
-                filler.h_pqc.to_vec(),
+                filler.pqc_leaf.entry().to_vec(),
             )
         };
         let txs = [TxLeafInputs {
@@ -187,11 +190,14 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
 
     // The test observes its own setup: a zero-match result must come from
     // hiding, never from a degenerate table.
-    let distinct: HashSet<[u8; 32]> = published_0x07.iter().copied().collect();
+    let distinct: HashSet<[u8; 32]> = published_0x07
+        .iter()
+        .map(|e| <[u8; 32]>::try_from(&e[..32]).expect("entry point"))
+        .collect();
     assert_eq!(
         distinct.len(),
         published_0x07.len(),
-        "setup: every published 0x07 value must be distinct"
+        "setup: every published leaf commitment must be distinct"
     );
 
     let (tree_root, tree_depth) = client
@@ -235,7 +241,6 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         spend_key_x: *ki.spend_secret_x,
         spend_key_y: spent.y,
         commitment_mask: spent.z,
-        h_pqc: spent.h_pqc,
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,
@@ -266,31 +271,34 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     let revealed_key: &[u8] = &pqc_auths[0].public_key;
 
     // ── The observer ─────────────────────────────────────────────────────
-    // Exactly what consensus does with the revealed key
-    // (`shekyl_fcmp_pqc_leaf_hash` / `PqcLeafScalar::from_pqc_public_key`).
-    let observed = PqcLeafScalar::from_pqc_public_key(revealed_key).0;
+    // Exactly what consensus derives from the revealed key
+    // (`PqcKeyScalar::from_pqc_public_key` → `K = k·G_k`, the circuit's public
+    // value), plus the leaf-scalar form `K.x` for the served-chunk surface.
+    let key = PqcKeyScalar::from_pqc_public_key(revealed_key);
+    let observed_point = key.point();
+    let observed_x = ed25519_point_to_selene_scalar(&observed_point).expect("K decompresses");
 
-    // Surface 1: every published 0x07 value.
+    // Surface 1: every published 0x07 entry's commitment half against K.
     let extra_matches: Vec<usize> = published_0x07
         .iter()
         .enumerate()
-        .filter(|(_, v)| **v == observed)
+        .filter(|(_, e)| e[..32] == observed_point)
         .map(|(i, _)| i)
         .collect();
     // Surface 2: every leaf 4th scalar the chain serves in the assembled
-    // chunk (the `get_curve_tree_path` `chunk_outputs` surface).
+    // chunk (the `get_curve_tree_path` `chunk_outputs` surface) against K.x.
     let chunk_matches: Vec<usize> = path
         .leaf_chunk
         .iter()
         .enumerate()
-        .filter(|(_, cl)| cl.h_pqc == observed)
+        .filter(|(_, cl)| cl.h_pqc == observed_x)
         .map(|(i, _)| i)
         .collect();
 
     assert!(
         extra_matches.is_empty() && chunk_matches.is_empty(),
-        "PL-D1: the hash of the key the spend reveals identifies the spent output (spent index \
-         {spent_index}) — matches at published-0x07 index {extra_matches:?} and at served-chunk \
-         position {chunk_matches:?}; both must be empty"
+        "PL-D1: the point derived from the key the spend reveals identifies the spent output \
+         (spent index {spent_index}) — matches at published-0x07 index {extra_matches:?} and at \
+         served-chunk position {chunk_matches:?}; both must be empty"
     );
 }

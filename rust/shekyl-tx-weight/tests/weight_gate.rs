@@ -106,7 +106,10 @@ fn transfer_extra(n_out: usize) -> Vec<u8> {
         ED25519_BASEPOINT_POINT,
         (0..n_out).map(|_| vec![0u8; HYBRID_KEM_CT_LEN]),
     );
-    e.push_pqc_leaf_hashes(vec![0u8; n_out * 32]);
+    e.push_pqc_leaf_hashes(vec![
+        0u8;
+        n_out * shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES
+    ]);
     e.serialize()
 }
 

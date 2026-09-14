@@ -1,5 +1,5 @@
 {
-  "description": "Pinned test vectors for tx_extra round-trip: KEM ciphertexts (tag 0x06) and PQC leaf hashes (tag 0x07) must survive serialize → sort → re-parse with byte-identical field contents. Verified by tests/unit_tests/test_tx_utils.cpp.",
+  "description": "Pinned test vectors for tx_extra round-trip: KEM ciphertexts (tag 0x06) and PQC leaf entries (tag 0x07; 64 bytes per output, CM || record under PL-D3) must survive serialize → sort → re-parse with byte-identical field contents. Verified by tests/unit_tests/test_tx_utils.cpp.",
   "tags": {
     "TX_EXTRA_TAG_PUBKEY": "0x01",
     "TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT": "0x06",
@@ -7,7 +7,7 @@
   },
   "constants": {
     "HYBRID_KEM_CT_BYTES": 1120,
-    "PQC_LEAF_HASH_BYTES": 32
+    "PQC_LEAF_HASH_BYTES": 64
   },
   "vectors": [
     {
@@ -19,8 +19,8 @@
         "kem_ciphertext_pattern": "sequential byte (i & 0xFF) for i in 0..2240",
         "kem_ciphertext_total_bytes": 2240,
         "leaf_hashes_num_outputs": 2,
-        "leaf_hashes_pattern": "sequential byte ((i + 0x42) & 0xFF) for i in 0..64",
-        "leaf_hashes_total_bytes": 64,
+        "leaf_hashes_pattern": "sequential byte ((i + 0x42) & 0xFF) for i in 0..128",
+        "leaf_hashes_total_bytes": 128,
         "field_insertion_order": ["pubkey", "kem_ciphertext", "leaf_hashes"]
       },
       "expected": {
@@ -41,8 +41,8 @@
         "kem_ciphertext_pattern": "constant byte 0x55 repeated 1120 times",
         "kem_ciphertext_total_bytes": 1120,
         "leaf_hashes_num_outputs": 1,
-        "leaf_hashes_pattern": "constant byte 0x77 repeated 32 times",
-        "leaf_hashes_total_bytes": 32,
+        "leaf_hashes_pattern": "constant byte 0x77 repeated 64 times",
+        "leaf_hashes_total_bytes": 64,
         "field_insertion_order": ["leaf_hashes", "kem_ciphertext", "pubkey"]
       },
       "expected": {

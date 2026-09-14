@@ -397,17 +397,19 @@ pub fn verify_multisig(
 // FCMP++ multisig helpers
 // ---------------------------------------------------------------------------
 
-/// Compute the PQC leaf hash for a multisig key container.
+/// The PQC key scalar `k = H_ℓ(pqc_pk)` for a multisig key container (`PL-D3`).
 ///
-/// In FCMP++ transactions, each curve-tree leaf contains H(pqc_pk). For
-/// multisig outputs, pqc_pk is the canonical encoding of the
-/// MultisigKeyContainer. This function returns H(container_bytes) as a
-/// 32-byte hash suitable for the prover and verifier.
+/// For a scheme-2 output the revealed `pqc_pk` is the canonical encoding of
+/// the `MultisigKeyContainer`, so its leaf commitment is `k·G_k + r·J` with
+/// `k` over exactly those bytes — the same [`crate::derivation::pqc_key_scalar`]
+/// every single-signer key goes through. One derivation, no multisig-specific
+/// leaf hash: the former Keccak-256 of the container was a second reading of
+/// the same bytes that the verifier never computed.
 pub fn multisig_pqc_leaf_hash(
     container: &MultisigKeyContainer,
 ) -> Result<[u8; 32], PqcVerifyError> {
     let canonical = container.to_canonical_bytes()?;
-    Ok(keccak256(&canonical))
+    Ok(crate::derivation::pqc_key_scalar(&canonical))
 }
 
 // ---------------------------------------------------------------------------

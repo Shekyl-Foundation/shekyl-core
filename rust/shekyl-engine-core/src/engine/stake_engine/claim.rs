@@ -16,7 +16,6 @@ use shekyl_archival_retention::{
     MembershipOnlyBacking, RewardCommit,
 };
 use shekyl_bulletproofs::Bulletproof;
-use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::SINGLE_SIG_CANONICAL_LEN;
 use shekyl_crypto_pq::output::sign_pqc_auth_for_output;
 use shekyl_crypto_pq::signature::{HybridEd25519MlDsa, SignatureScheme as _};
@@ -254,28 +253,20 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
         // single record owner (the `MembershipPath` doc in `backing_set.rs`:
         // paths carry no record copy) — through the SAME
         // [`derive_spend_parts`] the fee spends use (one derivation
-        // definition; a divergence would fail every claim at the leaf gate
-        // below).
+        // definition; a divergence would fail every claim at the signer's
+        // leaf check).
         let rec = ops.backing.record();
         let backing_index = rec.index_in_transaction;
         let mut parts = derive_spend_parts(keys, rec, &ops.backing_path.leaf_chunk)?;
-        let backing_h_pqc = parts.h_pqc;
         let backing_pubkey = std::mem::take(&mut parts.pqc_pubkey);
         // Retained for Auth-B signing after the bundle moves into the
         // proving closure.
         let backing_combined = std::mem::replace(&mut parts.combined64, Zeroizing::new([0u8; 64]));
-        // Pre-flight leaf gate: the daemon's C-1 gate demands
-        // hash(backing_pubkey) == leaf.h_pqc. A mismatch here means stale or
-        // defective tree data (or a record that is not this persona's) —
-        // fail before proving, not at the daemon.
-        if hash_pqc_public_key(&backing_pubkey) != backing_h_pqc {
-            return Err(BondAssemblyError::build(
-                "backing leaf gate",
-                "derived backing pubkey does not hash to the leaf's pqc_pk_hash \
-                 (stale/defective tree data, or a record not owned by this persona)",
-            )
-            .into());
-        }
+        // The backing leaf's binding to `backing_pubkey` is the proof itself
+        // (`PL-D3`: the circuit opens the leaf commitment to the key's point);
+        // the signer re-derives the opening and refuses before proving if the
+        // chain's leaf is not this record's derivation (stale/defective tree
+        // data, or a record not owned by this persona).
         let backing_spend = parts.into_spend_input(
             rec,
             ops.backing_path.leaf_chunk,
@@ -311,7 +302,6 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             backing: MembershipOnlyBacking {
                 proof: membership.proof,
                 pseudo_out: membership.pseudo_out,
-                pqc_pk_hash: backing_h_pqc,
                 backing_pubkey: backing_pubkey.clone(),
                 tree_depth: membership.tree_depth,
             },
@@ -322,8 +312,8 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
 
         // ── Step 13: dual auth over the role-separated binding messages
         // (Q1). Auth-B signs with the backing's OUTPUT-DERIVED hybrid key
-        // (the daemon's C-1 gate checks hash(backing_pubkey) == leaf.h_pqc,
-        // verified at emission_verify.rs — NOT P's identity key); Auth-P
+        // (the proof opens the backing leaf to that key's point, verified at
+        // emission_verify.rs — NOT P's identity key); Auth-P
         // signs with P's identity hybrid key (the daemon derives the vin's
         // p_canonical_id from it, blockchain.cpp:3783 id-equality).
         let auth_msgs = vin

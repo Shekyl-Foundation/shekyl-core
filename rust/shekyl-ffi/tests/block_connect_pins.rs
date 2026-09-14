@@ -49,17 +49,28 @@ const BUDGET_AT_ZONE: usize = 600_000;
 /// an under- or over-weighted fixture (review finding). A legitimate
 /// weight change (wire format, proof size, auth encoding) must update this
 /// table consciously — that is the point.
+// Re-pinned 2026-09-14 with `PL-D3` (`FCMP_SPEND_LINKABILITY.md` §6.2): the
+// `0x07` entry grew to 64 B per output (`+32·n_out`) and the FCMP++ proof
+// gained the in-circuit opening leg (single-input proofs +128 B; multi-input
+// proofs shrink because the leg replaces the per-input extra-scalar branch —
+// census companion §8), so every cell moved and not by one constant.
 const EXPECTED_WEIGHTS: [(usize, usize, usize); 6] = [
-    (1, 2, 13_005),
-    (8, 2, 59_229),
-    (1, 16, 33_948),
-    (8, 16, 80_172),
+    (1, 2, 13_133),
+    (8, 2, 58_717),
+    (1, 16, 34_076),
+    (8, 16, 79_660),
     (4, 4, 37_332),
-    (2, 8, 29_845),
+    (2, 8, 30_101),
 ];
 
 #[test]
 fn fixture_weights_are_exactly_expected() {
+    // Capture aid: every shape's weight is printed before the first assert
+    // so a deliberate wire change can update the whole table from one run.
+    for (n_in, n_out, _) in EXPECTED_WEIGHTS {
+        let fx = build_connect_tx(&mut OsRng, n_in, n_out, 2, ChunkLayout::Spread);
+        eprintln!("weight ({n_in},{n_out}) = {}", fx.weight);
+    }
     for (n_in, n_out, expected) in EXPECTED_WEIGHTS {
         let fx = build_connect_tx(&mut OsRng, n_in, n_out, 2, ChunkLayout::Spread);
         assert_eq!(

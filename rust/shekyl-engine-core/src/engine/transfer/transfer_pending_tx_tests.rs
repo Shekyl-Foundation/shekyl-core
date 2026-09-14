@@ -447,8 +447,8 @@ async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
 /// and ingested into the tree as one non-miner transaction at the same
 /// height — `TaggedKey` non-miner maturity is `+DEFAULT_LOCK_WINDOW`
 /// (= `SPENDABLE_AGE`), matching the ledger's `eligible_height`. The block's
-/// `0x07` leaf-hash blob carries each output's real `h_pqc`, so the tree
-/// leaf's identity (`O`, `C`, `h_pqc`) equals the ledger output's. Empty
+/// `0x07` blob carries each output's real leaf entry (`CM ‖ record`), so the
+/// tree leaf's identity (`O`, `C`, `CM.x`) equals the ledger output's. Empty
 /// blocks advance the cursor to `synced`. Pick `owned_block` so the leaves
 /// are drained at the reference height: `owned_block + SPENDABLE_AGE <=
 /// synced - REF_ANCHOR_AGE`.
@@ -502,7 +502,7 @@ async fn funded_ledger_and_tree(
             commitment: Some(commitment),
             target: TargetKind::TaggedKey,
         });
-        leaf_blob.extend_from_slice(&c.h_pqc);
+        leaf_blob.extend_from_slice(&c.pqc_leaf.entry());
     }
 
     let (dir, handle) = fresh_tree_handle();
@@ -2291,7 +2291,9 @@ struct RealTreeBondProofs {
     outputs: Vec<shekyl_tx_builder::types::OutputInfo>,
     built: shekyl_archival_bond_builder::JoinMarketVin,
     output_key: [u8; 32],
-    h_pqc: [u8; 32],
+    /// The backing output's canonical hybrid PQC public key (the verifier's
+    /// input under `PL-D3`).
+    pqc_public_key: Vec<u8>,
     spend_key_x: [u8; 32],
     fee: u64,
     floor: u64,
@@ -2431,7 +2433,6 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         spend_key_x: *bundle.spend_key_x,
         spend_key_y: *bundle.spend_key_y,
         commitment_mask: *bundle.commitment_mask,
-        h_pqc: constructed.h_pqc,
         combined_ss: bundle.combined_ss.to_vec(),
         output_index,
         leaf_chunk,
@@ -2494,7 +2495,13 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         outputs,
         built,
         output_key: constructed.output_key,
-        h_pqc: constructed.h_pqc,
+        // The canonical hybrid key the spend reveals (not the ML-DSA-only
+        // `OutputData::pqc_public_key`).
+        pqc_public_key: shekyl_crypto_pq::derivation::derive_pqc_public_key(
+            &bundle.combined_ss[..64].try_into().expect("64 bytes"),
+            output_index,
+        )
+        .expect("derive hybrid pk"),
         spend_key_x: *bundle.spend_key_x,
         fee,
         floor,
@@ -2516,7 +2523,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
 #[tokio::test]
 async fn join_market_bond_post_fcmp_verify_over_real_tree() {
     use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
-    use shekyl_fcmp::PqcLeafScalar;
+    use shekyl_fcmp::PqcKeyScalar;
 
     use curve25519_dalek::scalar::Scalar;
 
@@ -2524,7 +2531,7 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         signed,
         tree_ctx,
         output_key,
-        h_pqc,
+        pqc_public_key,
         spend_key_x,
         signable_tx_hash,
         ..
@@ -2537,7 +2544,7 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
     let key_images = vec![KeyImage::from_canonical_bytes(
         (i_point * x_scalar).compress().to_bytes(),
     )];
-    let pqc_pk_hashes = vec![PqcLeafScalar(h_pqc)];
+    let pqc_pk_hashes = vec![PqcKeyScalar::from_pqc_public_key(&pqc_public_key)];
     let proof = ShekylFcmpProof {
         data: signed.fcmp_proof.clone(),
         num_inputs: 1,

@@ -357,8 +357,6 @@ pub(crate) struct TxInputSigningContext {
     pub output_key: [u8; 32],
     /// Pedersen commitment (on-chain).
     pub commitment: [u8; 32],
-    /// PQC leaf hash `H(pqc_pk)` for this output.
-    pub h_pqc: [u8; 32],
     /// Sibling leaf chunk for FCMP++ membership proof.
     pub leaf_chunk: Vec<LeafEntry>,
     /// Selene (C1) branch layers, bottom-to-top.
@@ -425,7 +423,7 @@ impl std::fmt::Debug for TxInputSigningContext {
 /// - [`Self::output_index`] ↔ `SpendInput::output_index`
 ///
 /// The public on-chain components of `SpendInput` (`output_key`,
-/// `commitment`, `amount`, `h_pqc`, `leaf_chunk`, `c1_layers`,
+/// `commitment`, `amount`, `leaf_chunk`, `c1_layers`,
 /// `c2_layers`) ride on the surrounding [`TxInputSigningContext`] /
 /// [`TxToSign`] message shapes, not in this bundle — they are not
 /// secrets.
@@ -951,7 +949,6 @@ mod tests {
             source_ciphertext: sentinel_ciphertext(),
             output_key: [0x44; 32],
             commitment: [0x55; 32],
-            h_pqc: [0x66; 32],
             leaf_chunk: Vec::new(),
             c1_layers: Vec::new(),
             c2_layers: Vec::new(),
@@ -991,7 +988,6 @@ mod tests {
                 source_ciphertext: sentinel_ciphertext(),
                 output_key: [0x44; 32],
                 commitment: [0x55; 32],
-                h_pqc: [0x66; 32],
                 leaf_chunk: Vec::new(),
                 c1_layers: Vec::new(),
                 c2_layers: Vec::new(),

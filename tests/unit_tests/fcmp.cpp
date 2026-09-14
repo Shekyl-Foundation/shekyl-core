@@ -432,7 +432,7 @@ TEST(fcmp, multisig_signing_request_json_v2_fields)
 TEST(fcmp, multisig_pqc_leaf_hash_via_ffi)
 {
   // Generate 3 PQC keypairs and build a key container blob,
-  // then verify shekyl_fcmp_pqc_leaf_hash returns a non-zero 32-byte hash.
+  // then verify shekyl_fcmp_pqc_leaf_hash returns a non-zero 32-byte key scalar (PL-D3).
   std::vector<std::vector<uint8_t>> pub_keys;
   for (int i = 0; i < 3; ++i)
   {
@@ -516,18 +516,20 @@ TEST(fcmp, single_sig_hex_roundtrip)
   shekyl_buffer_free(kp.secret_key.ptr, kp.secret_key.len);
 }
 
-TEST(fcmp, per_output_pqc_leaf_hash_derivation_consistency)
+TEST(fcmp, per_output_pqc_leaf_derivation_consistency)
 {
   uint8_t combined_ss[64];
   crypto::rand(64, combined_ss);
 
-  uint8_t h1[32], h2[32], h3[32];
+  // 64-byte 0x07 entries: CM || record (PL-D3 / PL-D3a).
+  uint8_t h1[64], h2[64], h3[64];
   ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 42, h1));
   ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 42, h2));
-  ASSERT_EQ(memcmp(h1, h2, 32), 0) << "Same input must produce same leaf hash";
+  ASSERT_EQ(memcmp(h1, h2, 64), 0) << "Same input must produce the same leaf entry";
 
   ASSERT_TRUE(shekyl_derive_pqc_leaf_hash(combined_ss, 99, h3));
-  ASSERT_NE(memcmp(h1, h3, 32), 0) << "Different index must produce different leaf hash";
+  ASSERT_NE(memcmp(h1, h3, 32), 0) << "Different index must produce a different commitment";
+  ASSERT_NE(memcmp(h1 + 32, h3 + 32, 32), 0) << "Different index must produce a different record";
 }
 
 TEST(fcmp, multisig_2of3_sig_container_assembly)

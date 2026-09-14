@@ -151,6 +151,11 @@ fn tx_builder_error_code(e: &shekyl_tx_builder::TxBuilderError) -> i32 {
         // Appended (codes are a stable C++-facing contract; never renumber).
         TxBuilderError::TreeTooShallow { .. } => -29,
         TxBuilderError::BalanceSelfCheck(_) => -30,
+        TxBuilderError::SpentOutputNotInLeafChunk { .. } => -31,
+        // PL-D3: the chain's leaf for this input is not the wallet's derivation
+        // — received but unspendable (rule 82: a typed refusal, not a proof error).
+        TxBuilderError::PqcLeafMismatch { .. } => -32,
+        TxBuilderError::PqcLeafDerivation { .. } => -33,
     }
 }
 
@@ -176,8 +181,10 @@ struct FcmpSignInput {
     commitment: [u8; 32],
     #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
     output_key: [u8; 32],
-    #[serde(with = "shekyl_tx_builder::types::hex_bytes32")]
-    h_pqc: [u8; 32],
+    // No `h_pqc` / leaf-opening field: the signer re-derives the input's own
+    // PQC leaf commitment and blind from `combined_ss` + `output_index`
+    // (`PL-D3`) and checks it against `leaf_chunk` before proving. (The
+    // former field was fed `hp_of_O` by every caller — census `d-2`.)
     leaf_chunk: Vec<shekyl_tx_builder::LeafEntry>,
     #[serde(with = "shekyl_tx_builder::types::hex_layers")]
     c1_layers: Vec<Vec<[u8; 32]>>,
@@ -303,7 +310,6 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
             spend_key_x: x_bytes,
             spend_key_y: secrets.y,
             commitment_mask: inp.commitment_mask,
-            h_pqc: inp.hp_of_O,
             combined_ss: inp.combined_ss.clone(),
             output_index: inp.output_index,
             leaf_chunk: inp.leaf_chunk.clone(),
@@ -359,7 +365,7 @@ fn curve25519_scalar_from_bytes(bytes: &[u8; 32]) -> Option<curve25519_dalek::Sc
 ///
 /// # Safety
 /// - `input` must point to a valid `ProveInputFields`.
-/// - `out_buf` must point to at least 256 writable bytes.
+/// - `out_buf` must point to at least 288 writable bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_fcmp_build_witness_header(
     input: *const ProveInputFields,
@@ -373,11 +379,12 @@ pub unsafe extern "C" fn shekyl_fcmp_build_witness_header(
     buf[0..32].copy_from_slice(&inp.output_key);
     buf[32..64].copy_from_slice(&inp.key_image_gen);
     buf[64..96].copy_from_slice(&inp.commitment);
-    buf[96..128].copy_from_slice(&inp.h_pqc);
-    buf[128..160].copy_from_slice(&inp.spend_key_x);
-    buf[160..192].copy_from_slice(&inp.spend_key_y);
-    buf[192..224].copy_from_slice(&inp.commitment_mask);
-    buf[224..256].copy_from_slice(&inp.pseudo_out_blind);
+    buf[96..128].copy_from_slice(&inp.pqc_leaf_commitment);
+    buf[128..160].copy_from_slice(&inp.pqc_leaf_blind);
+    buf[160..192].copy_from_slice(&inp.spend_key_x);
+    buf[192..224].copy_from_slice(&inp.spend_key_y);
+    buf[224..256].copy_from_slice(&inp.commitment_mask);
+    buf[256..288].copy_from_slice(&inp.pseudo_out_blind);
     true
 }
 
@@ -411,7 +418,7 @@ pub unsafe extern "C" fn shekyl_construct_output(
         kem_ciphertext_x25519: [0; 32],
         kem_ciphertext_ml_kem: ShekylBuffer::null(),
         pqc_public_key: ShekylBuffer::null(),
-        h_pqc: [0; 32],
+        pqc_leaf: [0; 64],
         y: [0; 32],
         z: [0; 32],
         k_amount: [0; 32],
@@ -447,7 +454,7 @@ pub unsafe extern "C" fn shekyl_construct_output(
                 kem_ciphertext_x25519: out.kem_ciphertext_x25519,
                 kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
                 pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
-                h_pqc: out.h_pqc,
+                pqc_leaf: out.pqc_leaf.entry(),
                 y: out.y,
                 z: out.z,
                 k_amount: out.k_amount,
@@ -484,7 +491,7 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
         kem_ciphertext_x25519: [0; 32],
         kem_ciphertext_ml_kem: ShekylBuffer::null(),
         pqc_public_key: ShekylBuffer::null(),
-        h_pqc: [0; 32],
+        pqc_leaf: [0; 64],
         y: [0; 32],
         z: [0; 32],
         k_amount: [0; 32],
@@ -533,7 +540,7 @@ pub unsafe extern "C" fn shekyl_construct_output_labeled(
                 kem_ciphertext_x25519: out.kem_ciphertext_x25519,
                 kem_ciphertext_ml_kem: ShekylBuffer::from_vec(kem_ciphertext_ml_kem),
                 pqc_public_key: ShekylBuffer::from_vec(pqc_public_key),
-                h_pqc: out.h_pqc,
+                pqc_leaf: out.pqc_leaf.entry(),
                 y: out.y,
                 z: out.z,
                 k_amount: out.k_amount,
@@ -650,7 +657,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
     amount_out: *mut u64,
     pqc_pk_out: *mut ShekylBuffer,
     pqc_sk_out: *mut ShekylBuffer,
-    h_pqc_out: *mut [u8; 32],
+    h_pqc_out: *mut [u8; 64],
 ) -> bool {
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
@@ -724,7 +731,7 @@ pub unsafe extern "C" fn shekyl_scan_output(
             *amount_out = scanned.amount;
             *pqc_pk_out = ShekylBuffer::from_vec(scanned.pqc_public_key.clone());
             *pqc_sk_out = ShekylBuffer::from_vec(scanned.pqc_secret_key.clone());
-            *h_pqc_out = scanned.h_pqc;
+            *h_pqc_out = scanned.pqc_leaf.entry();
             // scanned drops here — ZeroizeOnDrop wipes y, z, k_amount, pqc_secret_key
             true
         }
@@ -765,7 +772,7 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
     recovered_spend_key_out: *mut u8,
     pqc_pk_out: *mut ShekylBuffer,
     pqc_sk_out: *mut ShekylBuffer,
-    h_pqc_out: *mut [u8; 32],
+    h_pqc_out: *mut [u8; 64],
 ) -> bool {
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
@@ -843,7 +850,7 @@ pub unsafe extern "C" fn shekyl_scan_output_recover(
             );
             *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
             *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
-            *h_pqc_out = recovered.h_pqc;
+            *h_pqc_out = recovered.pqc_leaf.entry();
             true
         }
         Err(_) => false,
@@ -964,7 +971,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     combined_ss_out: *mut u8,
     pqc_pk_out: *mut ShekylBuffer,
     pqc_sk_out: *mut ShekylBuffer,
-    h_pqc_out: *mut [u8; 32],
+    h_pqc_out: *mut [u8; 64],
 ) -> bool {
     let Some(x_sk) = arr32_from_ptr(x25519_sk) else {
         return false;
@@ -1050,7 +1057,7 @@ pub unsafe extern "C" fn shekyl_scan_and_recover(
     );
     *pqc_pk_out = ShekylBuffer::from_vec(recovered.pqc_public_key.clone());
     *pqc_sk_out = ShekylBuffer::from_vec(recovered.pqc_secret_key.clone());
-    *h_pqc_out = recovered.h_pqc;
+    *h_pqc_out = recovered.pqc_leaf.entry();
 
     if have_spend_key {
         let b_key = &*(spend_secret_key as *const [u8; 32]);

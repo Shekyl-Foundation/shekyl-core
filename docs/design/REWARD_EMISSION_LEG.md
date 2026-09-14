@@ -432,12 +432,16 @@ rotation, one auth structurally cannot close the gap. So **two auths, over two d
 binding messages** (not one signature checked twice):
 
 - **`auth_backing`** — binds the **`P`-that-staked** to the bond: the hybrid (Ed25519 +
-  ML-DSA-65) attestation over the backing leaf's committed `H(pqc_pk)` (the leaf-bound
-  spend-authority gate, §7 / §9.6 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md)
-  §7). This is the **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify was built
-  as the PR-E1 primitive `shekyl_emission_hybrid_auth_verify`, since retired (PR-SA-2): the
-  check now lives Rust-side in `emission_verify::emission_vin_verify_auth`, step 8 of the
-  single coarse `shekyl_emission_vin_verify` FFI call. Because the leaf commits the **full
+  ML-DSA-65) attestation under the `backing_pubkey` whose key point the backing leaf's
+  commitment is opened to in-circuit (the leaf-bound spend-authority gate, §7 / §9.6 /
+  [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7). This is the
+  **C-1 hard gate**; recompute-`H(pqc_pk)`-equals-leaf-then-verify was built as the PR-E1
+  primitive `shekyl_emission_hybrid_auth_verify`, retired (PR-SA-2) into
+  `emission_verify::emission_vin_verify_auth`, and with `PL-D3` (2026-09-14) the leaf
+  equality left the vin altogether: the vin no longer carries `pqc_pk_hash`, and the
+  membership-only proof (step 6) takes `backing_pubkey`'s key point as its public value
+  and opens the proven leaf's commitment to it — so the key step 8 verifies the signature
+  under is the proven leaf's key by construction. Because the commitment is to the **full
   hybrid** pubkey and the auth exercises both halves, it binds `P` exactly as tightly as the leaf.
 - **`auth_claim`** — binds the **`P`-that-claims** to *this specific emission*: its binding
   message commits to the **payout output(s) minted and the `settlement_epochs`**, so a valid
@@ -805,10 +809,16 @@ a **mandatory, firewall-class** gate-6 policy (the ladder + sweep).
 
 **Backing-`pqc_pk` reveal — the invariant (2026-07-01).** The quantum spend-authority auth
 (§5.3.1 / [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7) carries the backing
-output's **`pqc_pk` in cleartext** on the vin; verify recomputes `H(pqc_pk)` against the in-circuit
-leaf scalar. Leaf extra-scalars are **publicly enumerable**, so this reveal **deterministically
-identifies the backing output** — a **third linkability class** the two paragraphs above (proof
-statement; non-proof correlation) do not cover. Its scope is **exactly one output**: the ML-DSA
+output's **`pqc_pk` in cleartext** on the vin; the membership-only proof opens the backing
+leaf's commitment to that key's point in-circuit. **Corrected by `PL-D3` (2026-09-14):** the
+leaf's 4th scalar was a public hash of `pqc_pk`, so leaf scalars were publicly enumerable and
+this reveal **deterministically identified the backing output** to any observer — the `PL-D1`
+defect (`FCMP_SPEND_LINKABILITY.md` §0). Under `PL-D3` the leaf holds a hiding commitment and
+the `0x07` entry publishes `CM ‖ cSHAKE256(pqc_pk ‖ r_h)`, neither a function of `pqc_pk`
+alone; the reveal identifies the backing output only to a party holding the output's
+opening — its creator (the sender residual, `FCMP_SPEND_LINKABILITY.md` §13), which for a
+self-minted backing output is `P` itself. The scope statement below still bounds the
+worst case: the ML-DSA
 keypair is **per-output one-time**, derived from the output's `combined_ss` via index-salted
 `HKDF-Expand` → `ML-DSA-65.KeyGen` ([`derivation.rs`](../../rust/shekyl-crypto-pq/src/derivation.rs)
 :13/:26, "per-output PQC leaf hash"), so revealing one backing `pqc_pk` identifies that output and
@@ -1014,7 +1024,8 @@ amounts), bond post/slash reaction.
 - [ ] **ML-DSA backing auth at the emission vin (HARD MERGE GATE).** The
       membership-only proof is classically secure only; the quantum
       spend-authority property rests entirely on the vin verifying an ML-DSA
-      signature against the leaf-committed `H(pqc_pk)` the proof binds in-circuit.
+      signature under the key whose point the proof opens the backing leaf's commitment to
+      in-circuit (`PL-D3`).
       **The emission vin PR is not mergeable without this check**
       ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7).
 - [ ] Delete / gate `check_stake_claim_input`, `txin_stake_claim`, `C_stake` admission paths.

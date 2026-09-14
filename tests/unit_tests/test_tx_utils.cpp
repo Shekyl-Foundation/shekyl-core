@@ -375,7 +375,7 @@ TEST(tx_extra_pqc_round_trip, kem_and_leaf_hashes_survive_sort)
   for (size_t i = 0; i < kem_field.blob.size(); ++i)
     kem_field.blob[i] = static_cast<char>(i & 0xFF);
 
-  // 2 outputs × 32 bytes = 64 bytes of leaf hashes
+  // 2 outputs × 64 bytes = 128 bytes of leaf entries (CM || record)
   cryptonote::tx_extra_pqc_leaf_hashes lh_field;
   lh_field.blob.resize(2 * cryptonote::PQC_LEAF_HASH_BYTES);
   for (size_t i = 0; i < lh_field.blob.size(); ++i)

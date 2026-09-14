@@ -58,7 +58,7 @@ namespace
 {
 
 constexpr size_t KEM = HYBRID_KEM_CT_BYTES;      // 1120
-constexpr size_t LEAF = PQC_LEAF_HASH_BYTES;     // 32
+constexpr size_t LEAF = PQC_LEAF_HASH_BYTES;     // 64 (CM || record, PL-D3)
 
 using shekyl_test_fixtures::append_pqc_kem_field;
 using shekyl_test_fixtures::append_pqc_leaf_field;
@@ -150,6 +150,33 @@ TEST(tx_extra_pqc_field_shape, rejects_a_kem_field_on_a_transaction_with_no_outp
   ASSERT_TRUE(tx.vout.empty());
   append_kem(tx, KEM);
   EXPECT_FALSE(semantic_accepts(tx)) << "a zero-output tx carrying 0x06 was accepted";
+}
+
+// PL-D3 content rule: a right-sized 0x07 whose entry does not begin with an
+// admissible commitment point is refused at the same gate as a wrong shape.
+TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_whose_point_is_zero_filled)
+{
+  transaction tx = bare_spend();
+  append_kem(tx, KEM * tx.vout.size());
+  cryptonote::tx_extra_pqc_leaf_hashes f;
+  f.blob.assign(LEAF * tx.vout.size(), '\0');
+  const std::string b = shekyl_test_fixtures::serialize_tx_extra_field(f);
+  tx.extra.insert(tx.extra.end(), b.begin(), b.end());
+  EXPECT_FALSE(semantic_accepts(tx));
+}
+
+TEST(tx_extra_pqc_field_shape, rejects_leaf_entry_whose_point_has_small_order)
+{
+  transaction tx = bare_spend();
+  append_kem(tx, KEM * tx.vout.size());
+  cryptonote::tx_extra_pqc_leaf_hashes f;
+  for (size_t i = 0; i < tx.vout.size(); ++i)
+    f.blob += shekyl_test_fixtures::conforming_pqc_leaf_entry();
+  // y = 0 encodes an 8-torsion point: decompresses, but is not prime-order.
+  std::fill(f.blob.begin(), f.blob.begin() + 32, '\0');
+  const std::string b = shekyl_test_fixtures::serialize_tx_extra_field(f);
+  tx.extra.insert(tx.extra.end(), b.begin(), b.end());
+  EXPECT_FALSE(semantic_accepts(tx));
 }
 
 TEST(tx_extra_pqc_field_shape, rejects_duplicate_leaf_hash_field)

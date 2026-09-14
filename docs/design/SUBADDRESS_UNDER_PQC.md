@@ -190,7 +190,7 @@ caller-side `B'` lookup (`output.rs:631-636`).
 
 Per-output confidential data on wire is **`enc_amounts` only** (9 bytes per
 output in `CtSigBase`; amount XOR + `amount_tag` — no label slot).
-`tx_extra` hybrid fields: KEM ciphertext (`0x06`), PQC leaf hashes (`0x07`)
+`tx_extra` hybrid fields: KEM ciphertext (`0x06`), PQC leaf entries (`0x07`)
 — no encrypted memo tag in `ExtraField` (`rust/shekyl-scanner/src/extra.rs`).
 Payment-request labels are **net-new** surface; transport is **5-T**
 (§5.7.10–§5.7.11). Receiver recovers cleartext amount at scan;
@@ -895,7 +895,7 @@ read as calm ("Received 12.5 SHEKYL") instead of alarming.
 field on outputs today.** Per-output confidential payload is
 `enc_amounts` (9 bytes: 8-byte XOR-encrypted amount + 1-byte `amount_tag`;
 `CtSigBase`, `ct_types.h`). `tx_extra` carries hybrid KEM (`0x06`) and PQC
-leaf hashes (`0x07`) only (`rust/shekyl-scanner/src/extra.rs`). The payment-
+leaf entries (`0x07`) only (`rust/shekyl-scanner/src/extra.rs`). The payment-
 request `label` is therefore **net-new wire surface** — which makes **where
 the label rides** the load-bearing Round-3 decision, not an afterthought (§
 below under "Wire: label transport").
@@ -1353,7 +1353,7 @@ shape varies.
 | Requirement | Disposition |
 |-------------|-------------|
 | Bind slot in **tx hash** / transaction AAD | **Yes** — relay cannot strip or swap sentinel→tag in flight (integrity half of cooperative-label trust model). |
-| Include slot in **FCMP++ membership leaf** `{O.x, I.x, C.x, H(pqc_pk)}` | **No** — not spend-relevant; avoids circuit touch (`FCMP_PLUS_PLUS.md` leaf definition). |
+| Include slot in **FCMP++ membership leaf** `{O.x, I.x, C.x, CM.x}` | **No** — not spend-relevant; avoids circuit touch (`FCMP_PLUS_PLUS.md` leaf definition). |
 
 Confirm binding lands in the **tx-hash / RCT binding layer**, not the leaf.
 

@@ -34,7 +34,7 @@ use helioselene::{Helios, Selene};
 
 use crate::{
     BulletproofGenerators, FcmpGenerators, H_pow_2, FCMP_PLUS_PLUS_U, FCMP_PLUS_PLUS_V, H,
-    HELIOS_HASH_INIT, SELENE_HASH_INIT, T,
+    HELIOS_HASH_INIT, PQC_LEAF_COMMITMENT_G_K, PQC_LEAF_COMMITMENT_J, SELENE_HASH_INIT, T,
 };
 
 fn ed_hex(p: &curve25519_dalek::EdwardsPoint) -> String {
@@ -94,6 +94,33 @@ fn frozen_singletons() {
         ed_hex(&FCMP_PLUS_PLUS_V),
         "6935f413f83109138a7a14b409552d3b76d88fca81bb5927e9a1e130cdfe29f9",
         "FCMP++ generator V moved"
+    );
+    // PL-D3 (2026-09-14): the PQC leaf-commitment generators, NUMS from their
+    // frozen DSTs; a moved point silently changes which spends are valid.
+    assert_eq!(
+        ed_hex(&PQC_LEAF_COMMITMENT_G_K),
+        "4b0a97c470e3346aa84bf505ff2d5812bb67823841e201404dbc969578ed01bd",
+        "PQC leaf-commitment key generator G_k moved"
+    );
+    assert_eq!(
+        ed_hex(&PQC_LEAF_COMMITMENT_J),
+        "ce50952ec0eb88a68a5ae4dc2c81b6f0eb1490e91c79b4dd0c3f3bcc7ebbcc68",
+        "PQC leaf-commitment blind generator J moved"
+    );
+    // Pairwise distinct from every Ed25519 generator the proofs use.
+    let all = [
+        ed_hex(&H),
+        ed_hex(&T),
+        ed_hex(&FCMP_PLUS_PLUS_U),
+        ed_hex(&FCMP_PLUS_PLUS_V),
+        ed_hex(&PQC_LEAF_COMMITMENT_G_K),
+        ed_hex(&PQC_LEAF_COMMITMENT_J),
+    ];
+    let distinct: std::collections::HashSet<&String> = all.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        all.len(),
+        "generators must be pairwise distinct"
     );
     assert_eq!(
         hex::encode(HELIOS_HASH_INIT.to_bytes()),

@@ -289,18 +289,20 @@ The tower structure enables efficient recursive proof composition:
 
 The curve tree is a Merkle-like structure where:
 
-- Leaves are 4-tuples of Ed25519 scalars: `{O.x, I.x, C.x, H(pqc_pk)}`
+- Leaves are 4-tuples of Selene scalars: `{O.x, I.x, C.x, CM.x}`
   (output key x-coordinate, key image x-coordinate, commitment x-coordinate,
-  hash of PQC public key).
+  x-coordinate of the PQC leaf commitment `CM = k·G_k + r·J`, `k = H_ℓ(pqc_pk)`).
 - Odd-level internal nodes are Helios hash commitments.
 - Even-level internal nodes are Selene hash commitments.
 - The root is committed in the block header as `curve_tree_root`.
 
 The membership proof is classical (it operates over elliptic curves, not
 lattice structures), but the overall scheme achieves quantum resistance through
-the `H(pqc_pk)` leaf binding: even if an attacker could break the EC discrete
-log problem, they cannot forge a valid per-input `pqc_auths[i]` signature without the
-ML-DSA-65 secret key bound to the leaf. The FCMP++ proof demonstrates
+the leaf-commitment binding: the spend must present the key whose point the
+spent leaf's commitment opens to in-circuit, and forge a valid per-input
+`pqc_auths[i]` signature under it, which needs the ML-DSA-65 secret key. (The
+in-circuit binding itself is discrete-log-sound; the precise post-quantum
+statement is `docs/design/FCMP_SPEND_LINKABILITY.md` §4, `PL-D2`.) The FCMP++ proof demonstrates
 membership; each `pqc_auths[i]` proves authorization for that input.
 
 ## Per-Output PQC Key Derivation
@@ -358,8 +360,10 @@ The derivation flow is:
    ```
    (pqc_pk, pqc_sk) = ML-DSA-65.KeyGen(seed = HKDF-Expand(combined_ss, "shekyl-pqc-output", 32))
    ```
-8. **Commit** `H(pqc_pk)` as the 4th scalar in the curve tree leaf for this
-   output.
+8. **Commit** the PQC leaf commitment `CM = H_ℓ(pqc_pk)·G_k + r·J` (blind
+   `r` from the label registry below) as the 4th scalar (`CM.x`) of the curve
+   tree leaf for this output, and publish `CM ‖ record` in `tx_extra` `0x07`
+   (`PL-D3` / `PL-D3a`).
 
 The recipient reverses steps 3-7 using their ML-KEM-768 decapsulation key and
 their Ed25519 view secret as the unclamped Montgomery scalar (see §DH
@@ -441,6 +445,12 @@ fast wallet scanning.
 | `amount_tag` | `shekyl-output-derive-v1` | `shekyl-output-amount-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `label_tag` | `shekyl-output-derive-v1` | `shekyl-output-label-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output` &#124;&#124; index\_le64 | 32 B | raw |
+| `r` (PQC leaf-commitment blind, `PL-D3`) | `shekyl-output-derive-v1` | `shekyl-pqc-leaf-blind` &#124;&#124; index\_le64 &#124;&#124; ctr (1 B guard counter) | 64 B | mod l (wide) |
+| `r_h` (PQC record blind, `PL-D3a`) | `shekyl-output-derive-v1` | `shekyl-pqc-leaf-record-blind` &#124;&#124; index\_le64 | 32 B | raw |
+
+**cSHAKE256 customizations on the leaf path (`PL-D3`; registry mechanism 1):**
+`shekyl/pqc-leaf-key-v1` (`k = H_ℓ(pqc_pk)`: 64-byte read reduced mod l) and
+`shekyl/pqc-leaf-record-v1` (`record = cSHAKE256(pqc_pk ‖ r_h)`, 32 B).
 
 **Secondary derivation (ML-KEM shared secret only, wire pre-filter — FA-6):**
 
@@ -721,24 +731,27 @@ fixed:
 ### FCMP++ and PQC ownership binding
 
 FCMP++ solves the anonymous per-input PQC ownership verification problem.
-Each curve tree leaf contains 4 scalars: `{O.x, I.x, C.x, H(pqc_pk)}`.
-The 4th scalar `H(pqc_pk)` is a hash of the output's PQC public key, proven
+Each curve tree leaf contains 4 scalars: `{O.x, I.x, C.x, CM.x}`.
+The 4th scalar is the x-coordinate of a Pedersen commitment
+`CM = k·G_k + r·J` to the output's PQC key scalar `k = H_ℓ(pqc_pk)`, opened
 in-circuit during the FCMP++ membership proof. This binds PQC ownership to
 the UTXO without revealing which output is being spent -- the full UTXO set
-serves as the anonymity set.
+serves as the anonymity set -- and without publishing any function of the
+key (`PL-D3`).
 
 The binding works as follows:
 
 - When an output is created, the sender derives a per-output PQC keypair via
-  hybrid KEM (X25519 + ML-KEM-768) and commits `H(pqc_pk)` as the 4th leaf
-  scalar in the curve tree.
+  hybrid KEM (X25519 + ML-KEM-768) and commits `CM = H_ℓ(pqc_pk)·G_k + r·J`
+  as the 4th leaf scalar in the curve tree (`CM ‖ record` in `tx_extra` `0x07`).
 - When spending, the FCMP++ proof demonstrates that the referenced leaf
-  (including its `H(pqc_pk)`) exists in the curve tree, without revealing
-  which leaf.
+  exists in the curve tree and that its commitment opens to the point of the
+  key presented in `pqc_auths[i]`, without revealing which leaf.
 - Each `pqc_auths[i]` entry then provides the hybrid Ed25519 + ML-DSA-65
   signature for that input, proving knowledge of the corresponding PQC secret key.
 - An attacker cannot substitute a different PQC key because the in-circuit
-  proof binds the leaf's `H(pqc_pk)` to the membership proof.
+  proof opens the leaf's commitment to the presented key's point (discrete-log
+  soundness; see `FCMP_SPEND_LINKABILITY.md` §4).
 
 ## Transaction Format
 
@@ -1132,7 +1145,7 @@ Operational consequences:
   - stealth addressing and one-time output derivation
   - full UTXO set serves as the anonymity set (no ring subset selection)
 - **Quantum-resistant binding**
-  - `H(pqc_pk)` in each curve tree leaf binds PQC ownership to the UTXO
+  - the PQC leaf commitment in each curve tree leaf binds PQC ownership to the UTXO
   - even if EC discrete log is broken, the ML-DSA-65 authorization prevents
     unauthorized spending
 
@@ -1284,7 +1297,7 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 6 | Documentation | Done | `docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/DOCUMENTATION_TODOS_AND_PQC.md`, `docs/CHANGELOG.md` |
 | 7 | Rust multisig core (scheme_id=2) | Done | `rust/shekyl-crypto-pq/src/multisig.rs` |
 | 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` returning typed `u8` error codes) |
-| 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp` (size-format checks), FCMP++ `h_pqc` leaf binding (see `PQC_MULTISIG.md` Attack 1) |
+| 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp` (size-format checks), FCMP++ in-circuit leaf-commitment opening (`PL-D3`; see `PQC_MULTISIG.md` Attack 1) |
 | 10 | Wallet multisig coordination | Rust rewrite (S2–S5) | Option-D `wallet2.cpp` group-creation fossil **deleted** (MS-5 PR-B; it threw on every input); E′ coordination lives in `rust/shekyl-multisig` + `shekyl-engine-core` |
 | 11 | Fuzz testing (10 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
 | 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |

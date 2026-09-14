@@ -3,39 +3,66 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! 4-scalar curve tree leaf: `{O.x, I.x, C.x, H(pqc_pk)}`.
+//! 4-scalar curve tree leaf: `{O.x, I.x, C.x, CM.x}`.
 //!
-//! Extends the upstream 3-scalar FCMP++ leaf with a PQC commitment hash
-//! as the 4th Selene scalar. The verifier checks this value matches the
-//! `pqc_auth` public key presented in the transaction, binding PQC
-//! authorization to the UTXO set without revealing which output is spent.
+//! Extends the upstream 3-scalar FCMP++ leaf with the x-coordinate of the
+//! output's PQC leaf commitment `CM = k·G_k + r·J`, `k = H_ℓ(hybrid_pk)`
+//! (`PL-D3`, `docs/design/FCMP_SPEND_LINKABILITY.md` §6.2). The circuit proves
+//! `K + r·J = CM` for the verifier-computed `K = k·G_k` of the key the spend
+//! reveals, so the key is bound to the spent leaf without the leaf value being
+//! a public function of the key — which is what closed `PL-D1`.
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
 
-/// A 32-byte scalar representing `H(pqc_pk)` for the 4th leaf position.
+/// The 32-byte 4th leaf scalar: the Wei25519 x-coordinate of the output's PQC
+/// leaf commitment point `CM` (a Selene scalar), as stored in the leaf.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize, Serialize, Deserialize)]
 pub struct PqcLeafScalar(pub [u8; 32]);
 
 impl PqcLeafScalar {
-    /// Compute `H(pqc_pk)` — the 4th leaf scalar.
-    ///
-    /// Forwards to [`shekyl_crypto_pq::derivation::hash_pqc_public_key`] (the
-    /// single source for the consensus leaf hash; domain
-    /// [`shekyl_crypto_pq::derivation::DOMAIN_PQC_LEAF`]). SA-3a retired the
-    /// duplicate Blake2b/wide_reduce body that lived here — it was kept in sync
-    /// with the owner only by a doc comment, so one edit to either side would
-    /// have silently forked the leaf hash.
+    /// The leaf scalar for a published commitment point (compressed Ed25519):
+    /// `None` if the bytes are not a decompressible point. Admission checks
+    /// canonical / prime-order / non-identity before the value reaches a leaf
+    /// (`shekyl_crypto_pq::derivation::pqc_leaf_point_valid`); this is the
+    /// conversion only.
+    #[must_use]
+    pub fn from_commitment_point(cm: &[u8; 32]) -> Option<Self> {
+        crate::tree::ed25519_point_to_selene_scalar(cm).map(PqcLeafScalar)
+    }
+}
+
+/// The per-output PQC key scalar `k = H_ℓ(hybrid_pk)` (an Ed25519 scalar), the
+/// verifier's input to the opening check.
+///
+/// Forwards to [`shekyl_crypto_pq::derivation::pqc_key_scalar`] (the single
+/// source; customization [`shekyl_crypto_pq::derivation::DOMAIN_PQC_LEAF_KEY`]).
+/// A duplicate body here would be a second copy to drift; there is none.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize, Serialize, Deserialize)]
+pub struct PqcKeyScalar(pub [u8; 32]);
+
+impl PqcKeyScalar {
+    /// `k` for the canonical hybrid public key the spend reveals.
+    #[must_use]
     pub fn from_pqc_public_key(pqc_pk_bytes: &[u8]) -> Self {
-        PqcLeafScalar(shekyl_crypto_pq::derivation::hash_pqc_public_key(
-            pqc_pk_bytes,
-        ))
+        PqcKeyScalar(shekyl_crypto_pq::derivation::pqc_key_scalar(pqc_pk_bytes))
+    }
+
+    /// The public point `K = k·G_k`, compressed — what the circuit's opening leg
+    /// takes as its public value. Never on the wire.
+    #[must_use]
+    pub fn point(&self) -> [u8; 32] {
+        use curve25519_dalek::scalar::Scalar;
+        let k = Scalar::from_bytes_mod_order(self.0);
+        (*shekyl_curve_generators::PQC_LEAF_COMMITMENT_G_K * k)
+            .compress()
+            .to_bytes()
     }
 }
 
 /// A Shekyl curve tree leaf with 4 scalars.
 ///
-/// Layout: `{O.x, I.x, C.x, H(pqc_pk)}` — each is a 32-byte Selene scalar.
+/// Layout: `{O.x, I.x, C.x, CM.x}` — each is a 32-byte Selene scalar.
 /// Total: 128 bytes per output in the curve tree.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Zeroize)]
 pub struct ShekylLeaf {
@@ -45,7 +72,7 @@ pub struct ShekylLeaf {
     pub i_x: [u8; 32],
     /// Pedersen commitment x-coordinate.
     pub c_x: [u8; 32],
-    /// PQC public key commitment: `H(pqc_pk)`.
+    /// The PQC leaf commitment's x-coordinate `CM.x` (`PL-D3`).
     pub h_pqc: PqcLeafScalar,
 }
 
@@ -88,41 +115,63 @@ mod tests {
     use ciphersuite::group::ff::PrimeField;
     use helioselene::HelioseleneField;
 
-    // The SA-3a byte pins for `from_pqc_public_key` (frozen captures of the
-    // pre-dedup implementation) live in
-    // `docs/test_vectors/PQC_LEAF_HASH_RAW_PK_KAT.json`, consumed by
-    // `pqc_leaf_hash_raw_pk_known_answer_vectors` in
-    // `shekyl-crypto-pq/src/derivation.rs` — one pin at the SSOT owner,
-    // asserted through both consensus entry points (this wrapper included).
-
+    // The byte pins for `PqcKeyScalar::from_pqc_public_key` live in
+    // `docs/test_vectors/PQC_KEY_SCALAR_KAT.json`, consumed at the SSOT owner
+    // (`shekyl-crypto-pq/src/derivation.rs`) and asserted through this wrapper.
     #[test]
-    fn pqc_leaf_scalar_deterministic() {
+    fn pqc_key_scalar_deterministic() {
         let pk = vec![0xab; 1952]; // ML-DSA-65 public key size
-        let s1 = PqcLeafScalar::from_pqc_public_key(&pk);
-        let s2 = PqcLeafScalar::from_pqc_public_key(&pk);
+        let s1 = PqcKeyScalar::from_pqc_public_key(&pk);
+        let s2 = PqcKeyScalar::from_pqc_public_key(&pk);
         assert_eq!(s1, s2);
     }
-
     #[test]
-    fn pqc_leaf_scalar_different_keys() {
+    fn pqc_key_scalar_different_keys() {
         let pk1 = vec![0xab; 1952];
         let pk2 = vec![0xcd; 1952];
-        let s1 = PqcLeafScalar::from_pqc_public_key(&pk1);
-        let s2 = PqcLeafScalar::from_pqc_public_key(&pk2);
-        assert_ne!(s1, s2);
-    }
-
-    #[test]
-    fn pqc_leaf_scalar_canonical() {
-        let pk = vec![0xff; 1952];
-        let s = PqcLeafScalar::from_pqc_public_key(&pk);
-        // Verify the result is a canonical HelioseleneField element by round-tripping
-        assert!(
-            bool::from(HelioseleneField::from_repr(s.0).is_some()),
-            "leaf scalar must be a canonical Selene base field element"
+        assert_ne!(
+            PqcKeyScalar::from_pqc_public_key(&pk1),
+            PqcKeyScalar::from_pqc_public_key(&pk2)
         );
     }
-
+    #[test]
+    fn pqc_key_scalar_is_canonical_ed25519_scalar() {
+        use curve25519_dalek::scalar::Scalar;
+        for pk in [vec![0xff; 1952], vec![], vec![0x01]] {
+            let s = PqcKeyScalar::from_pqc_public_key(&pk);
+            assert!(
+                bool::from(Scalar::from_canonical_bytes(s.0).is_some()),
+                "k must be a canonical Ed25519 scalar"
+            );
+            assert_ne!(s.0, [0u8; 32], "k must not be zero");
+        }
+    }
+    #[test]
+    fn pqc_key_point_is_k_times_g_k() {
+        use curve25519_dalek::scalar::Scalar;
+        let s = PqcKeyScalar::from_pqc_public_key(&[0xab; 1952]);
+        let expected =
+            *shekyl_curve_generators::PQC_LEAF_COMMITMENT_G_K * Scalar::from_bytes_mod_order(s.0);
+        assert_eq!(s.point(), expected.compress().to_bytes());
+    }
+    #[test]
+    fn leaf_scalar_from_commitment_point_is_wei25519_x() {
+        use curve25519_dalek::scalar::Scalar;
+        let cm = (*shekyl_curve_generators::PQC_LEAF_COMMITMENT_J
+            * Scalar::from_bytes_mod_order([7u8; 32]))
+        .compress()
+        .to_bytes();
+        let x = PqcLeafScalar::from_commitment_point(&cm).expect("valid point");
+        assert!(
+            bool::from(HelioseleneField::from_repr(x.0).is_some()),
+            "leaf scalar must be a canonical Selene scalar"
+        );
+        assert_eq!(
+            x.0,
+            crate::tree::ed25519_point_to_selene_scalar(&cm).unwrap()
+        );
+        assert!(PqcLeafScalar::from_commitment_point(&[0xffu8; 32]).is_none());
+    }
     #[test]
     fn leaf_roundtrip() {
         let leaf = ShekylLeaf {
@@ -135,20 +184,6 @@ mod tests {
         assert_eq!(bytes.len(), ShekylLeaf::SIZE);
         let restored = ShekylLeaf::from_bytes(&bytes);
         assert_eq!(leaf, restored);
-    }
-
-    #[test]
-    fn pqc_leaf_scalar_empty_key() {
-        let s = PqcLeafScalar::from_pqc_public_key(&[]);
-        assert!(bool::from(HelioseleneField::from_repr(s.0).is_some()));
-    }
-
-    #[test]
-    fn pqc_leaf_scalar_single_byte_keys() {
-        for b in 0..=255u8 {
-            let s = PqcLeafScalar::from_pqc_public_key(&[b]);
-            assert!(bool::from(HelioseleneField::from_repr(s.0).is_some()));
-        }
     }
 
     #[test]

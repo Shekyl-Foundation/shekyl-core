@@ -2622,7 +2622,8 @@ public:
   /**
    * @brief grow the curve tree by appending new leaf data for outputs added in a block.
    *
-   * Each leaf is 128 bytes: {O.x[32], I.x[32], C.x[32], H(pqc_pk)[32]}.
+   * Each leaf is 128 bytes: {O.x[32], I.x[32], C.x[32], CM.x[32]} -- the
+   * 4th scalar is the x-coordinate of the output's PQC leaf commitment (PL-D3).
    * The implementation stores the leaves, recomputes affected chunk hashes
    * via Rust FFI (Helios/Selene Pedersen commitments), and updates all
    * internal layers up to the root.

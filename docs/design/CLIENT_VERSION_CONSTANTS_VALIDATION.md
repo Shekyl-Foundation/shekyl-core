@@ -179,7 +179,7 @@ while grounding `VC-D12`; §2's genesis row). Three stated commitments were
 chased on this day and all three lacked an enforcing site — the plan's
 "verified via `get_info`", this document's own first draft's "committed to
 by the genesis block hash", and, in another lane, `GENESIS_TX_WIRE_FORMAT`'s
-"consensus parses `32·n_outputs`". The identity tuple is the enforcing site
+"consensus parses `32·n_outputs`" (now `64·n_outputs`, `PL-D3`). The identity tuple is the enforcing site
 for the first two; genesis is armed (`VC-D18` discharged 2026-09-09 — the
 pins are the frozen block-0 ids, reminted with `GENESIS_TX` if those ids
 move).

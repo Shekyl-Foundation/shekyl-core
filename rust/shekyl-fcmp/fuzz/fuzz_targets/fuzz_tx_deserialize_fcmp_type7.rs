@@ -6,12 +6,12 @@
 
 use libfuzzer_sys::fuzz_target;
 use shekyl_fcmp::proof::{verify, KeyImage, ShekylFcmpProof};
-use shekyl_fcmp::leaf::PqcLeafScalar;
+use shekyl_fcmp::leaf::PqcKeyScalar;
 
 /// Simulates deserializing the prunable portion of a CTTypeFcmpPlusPlusPqc
 /// transaction. The fuzzer provides arbitrary bytes which are interpreted as
 /// a concatenation of: pseudoOuts (N*32 bytes) + fcmp_pp_proof (variable) +
-/// pqc_pk_hashes (N*32 bytes). The number of inputs is derived from the first
+/// pqc key scalars (N*32 bytes, PL-D3). The number of inputs is derived from the first
 /// byte. Any data that doesn't parse cleanly must not cause panics or OOM.
 fuzz_target!(|data: &[u8]| {
     if data.is_empty() {
@@ -51,7 +51,7 @@ fuzz_target!(|data: &[u8]| {
         (&[][..], after_pseudo)
     };
 
-    let pqc_hashes: Vec<PqcLeafScalar> = (0..num_inputs)
+    let pqc_hashes: Vec<PqcKeyScalar> = (0..num_inputs)
         .map(|i| {
             let mut h = [0u8; 32];
             let start = i * 32;
@@ -60,7 +60,7 @@ fuzz_target!(|data: &[u8]| {
             } else if let Some(partial) = pqc_data.get(start..) {
                 h[..partial.len()].copy_from_slice(partial);
             }
-            PqcLeafScalar(h)
+            PqcKeyScalar(h)
         })
         .collect();
 

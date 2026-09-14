@@ -9,10 +9,11 @@
 //! derivation bit-exactly, so the wallet's reconstructed curve-tree root
 //! byte-equals the consensus header root. Each function mirrors a named
 //! site in `src/blockchain_db/blockchain_db.cpp::collect_outputs` /
-//! `extract_leaf_hashes` and is pinned in `docs/design/CT2_DRAIN_ORDER.md`.
+//! `extract_leaf_hashes` (now the `0x07` entry slice) and is pinned in
+//! `docs/design/CT2_DRAIN_ORDER.md`.
 //!
-//! This module owns the *post-parse* `tx_extra 0x07` validation
-//! ([`extract_leaf_hashes`]); the raw `tx_extra` → blob *parse* is owned
+//! This module owns the *post-parse* `tx_extra 0x07` slicing
+//! ([`extract_leaf_commitments`]); the raw `tx_extra` → blob *parse* is owned
 //! by `shekyl_scanner::extra::Extra::pqc_leaf_hashes()` and runs at the
 //! decode boundary (`client`, CT-3). No second `tx_extra` parser exists.
 
@@ -20,59 +21,86 @@ use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, TargetKind};
 use shekyl_consensus::{COINBASE_LOCK_WINDOW, DEFAULT_LOCK_WINDOW};
 use shekyl_fcmp::tree::{build_layers, construct_leaf, selene_hash_init, SCALARS_PER_LEAF};
 
-/// Size in bytes of one per-output PQC leaf hash (`PQC_LEAF_HASH_BYTES`).
-pub const PQC_LEAF_HASH_BYTES: usize = 32;
+/// Size in bytes of one per-output `0x07` entry: the leaf commitment point
+/// `CM` (32) followed by the post-quantum record (32) — `PL-D3` / `PL-D3a`
+/// (`shekyl_wire::tx_extra::PQC_LEAF_HASH_BYTES`).
+pub const PQC_LEAF_ENTRY_BYTES: usize = 64;
+/// Byte length of the commitment point at the front of each entry.
+pub const PQC_LEAF_POINT_BYTES: usize = 32;
 
-/// All-zero `h_pqc` sentinel for outputs with no on-chain leaf hash.
-/// Mirrors the C++ `zero_pqc` fallback in `collect_outputs`.
-const ZERO_PQC: [u8; 32] = [0u8; 32];
+/// Why a transaction's `0x07` payload cannot yield its outputs' leaf
+/// commitments. On an admitted chain none of these fires: the shape and
+/// content rules (`shekyl_wire::tx_extra::check_pqc_field_shape_of`) refuse
+/// such a transaction at relay and connect. The replica therefore has **no
+/// fallback** — the zero-`h_pqc` placeholder the daemon retired (CEN-I19) is
+/// gone here too; a block that reaches this code with a bad field is a bug
+/// in the feed, surfaced as an error rather than stored as a leaf set the
+/// daemon would never hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeafEntryError {
+    /// The `0x07` tag is absent on a transaction with outputs.
+    Absent,
+    /// The payload is not a whole number of entries.
+    Length {
+        /// Payload length in bytes.
+        got: usize,
+    },
+    /// The entry count does not equal the output count.
+    CountMismatch {
+        /// Entries in the payload.
+        entries: usize,
+        /// Outputs in the transaction.
+        outputs: usize,
+    },
+}
 
 /// One transaction's outputs for leaf collection, in `vout` order.
 #[derive(Clone, Copy, Debug)]
 pub struct TxOutputs<'a> {
     /// Whether this is the block's coinbase (`is_miner`).
     pub is_miner: bool,
-    /// Per-output identities in `vout` order, `h_pqc` already resolved.
+    /// Per-output identities in `vout` order, `h_pqc` (the published
+    /// commitment point) already resolved.
     pub outputs: &'a [OutputIdentity],
 }
 
-/// Validate and slice the `tx_extra 0x07` leaf-hash blob into per-output
-/// 32-byte hashes, mirroring the daemon's `extract_leaf_hashes` lambda.
+/// Slice the `tx_extra 0x07` payload into per-output leaf commitment points
+/// (the first 32 bytes of each 64-byte entry), one per output.
 ///
 /// `blob` is the raw payload from
 /// `shekyl_scanner::extra::Extra::pqc_leaf_hashes()` (or `None` when the
-/// tag is absent). Returns an empty vector when the tag is absent or the
-/// blob length is not a multiple of [`PQC_LEAF_HASH_BYTES`] (the C++
-/// `return {}` paths) — an empty result means every output falls back to
-/// the zero `h_pqc`.
-///
-/// In a V3-from-genesis chain every output carries the tag, so the
-/// absent/malformed fallbacks never fire on Tier-A fixtures; they are
-/// matched for daemon parity. The malformed (present-but-wrong-length)
-/// case is exercised in Tier B (CT2_DRAIN_ORDER.md §8.2).
-#[must_use]
-pub fn extract_leaf_hashes(blob: Option<&[u8]>) -> Vec<[u8; 32]> {
+/// tag is absent); `n_outputs` is the transaction's `vout` count. Errors
+/// are the [`LeafEntryError`] cases; with `n_outputs == 0` an absent tag is
+/// the conforming shape and yields an empty vector.
+pub fn extract_leaf_commitments(
+    blob: Option<&[u8]>,
+    n_outputs: usize,
+) -> Result<Vec<[u8; 32]>, LeafEntryError> {
     let Some(bytes) = blob else {
-        return Vec::new();
+        return if n_outputs == 0 {
+            Ok(Vec::new())
+        } else {
+            Err(LeafEntryError::Absent)
+        };
     };
-    if !bytes.len().is_multiple_of(PQC_LEAF_HASH_BYTES) {
-        return Vec::new();
+    if !bytes.len().is_multiple_of(PQC_LEAF_ENTRY_BYTES) {
+        return Err(LeafEntryError::Length { got: bytes.len() });
     }
-    bytes
-        .chunks_exact(PQC_LEAF_HASH_BYTES)
-        .map(|chunk| {
-            let mut h = [0u8; 32];
-            h.copy_from_slice(chunk);
-            h
+    let entries = bytes.len() / PQC_LEAF_ENTRY_BYTES;
+    if entries != n_outputs {
+        return Err(LeafEntryError::CountMismatch {
+            entries,
+            outputs: n_outputs,
+        });
+    }
+    Ok(bytes
+        .chunks_exact(PQC_LEAF_ENTRY_BYTES)
+        .map(|entry| {
+            let mut cm = [0u8; 32];
+            cm.copy_from_slice(&entry[..PQC_LEAF_POINT_BYTES]);
+            cm
         })
-        .collect()
-}
-
-/// Resolve the per-output `h_pqc`: the `i`-th leaf hash if present, else
-/// the zero sentinel. Mirrors `(i < num_leaf_hashes) ? blob[i] : zero_pqc`.
-#[must_use]
-pub fn per_output_h_pqc(leaf_hashes: &[[u8; 32]], i: usize) -> [u8; 32] {
-    leaf_hashes.get(i).copied().unwrap_or(ZERO_PQC)
+        .collect())
 }
 
 /// Compute an output's maturity height, mirroring the per-target maturity
@@ -112,7 +140,8 @@ pub fn try_build_leaf(out: &OutputIdentity) -> Option<[u8; 128]> {
     // (b) has commitment slot.
     let commitment = out.commitment?;
     // (c) leaf construction succeeds (shared FFI primitive with the
-    // daemon, so x-extraction cannot diverge — CT2_DRAIN_ORDER.md §3.2).
+    // daemon, so x-extraction of all four points — `CM.x` included —
+    // cannot diverge; CT2_DRAIN_ORDER.md §3.2).
     construct_leaf(&out.output_key, &commitment, &out.h_pqc)
 }
 
@@ -253,41 +282,52 @@ mod tests {
         OutputIdentity {
             output_key: ED25519_BASEPOINT,
             commitment: Some(ED25519_BASEPOINT),
-            h_pqc: [7u8; 32],
+            h_pqc: ED25519_BASEPOINT,
             target: TargetKind::TaggedKey,
         }
     }
 
     #[test]
-    fn extract_leaf_hashes_absent_is_empty() {
-        assert!(extract_leaf_hashes(None).is_empty());
-        assert!(extract_leaf_hashes(Some(&[])).is_empty());
+    fn extract_leaf_commitments_absent() {
+        assert_eq!(extract_leaf_commitments(None, 0), Ok(Vec::new()));
+        assert_eq!(
+            extract_leaf_commitments(None, 1),
+            Err(LeafEntryError::Absent)
+        );
     }
 
     #[test]
-    fn extract_leaf_hashes_slices_per_output() {
-        let blob = vec![0xABu8; 64];
-        let hashes = extract_leaf_hashes(Some(&blob));
-        assert_eq!(hashes.len(), 2);
-        assert_eq!(hashes[0], [0xABu8; 32]);
-        assert_eq!(hashes[1], [0xABu8; 32]);
+    fn extract_leaf_commitments_slices_per_output() {
+        let mut blob = vec![0xABu8; 64];
+        blob.extend_from_slice(&[0xCDu8; 64]);
+        let cms = extract_leaf_commitments(Some(&blob), 2).unwrap();
+        assert_eq!(cms, vec![[0xABu8; 32], [0xCDu8; 32]]);
     }
 
     #[test]
-    fn extract_leaf_hashes_malformed_length_is_empty() {
-        // 65 bytes: not a multiple of 32 — the daemon's `return {}` path.
+    fn extract_leaf_commitments_malformed_length_is_an_error() {
         let blob = vec![0x01u8; 65];
-        assert!(extract_leaf_hashes(Some(&blob)).is_empty());
+        assert_eq!(
+            extract_leaf_commitments(Some(&blob), 1),
+            Err(LeafEntryError::Length { got: 65 })
+        );
     }
 
     #[test]
-    fn per_output_h_pqc_zero_fallback() {
-        let hashes = [[1u8; 32], [2u8; 32]];
-        assert_eq!(per_output_h_pqc(&hashes, 0), [1u8; 32]);
-        assert_eq!(per_output_h_pqc(&hashes, 1), [2u8; 32]);
-        // Out of range → zero sentinel.
-        assert_eq!(per_output_h_pqc(&hashes, 2), ZERO_PQC);
-        assert_eq!(per_output_h_pqc(&[], 0), ZERO_PQC);
+    fn extract_leaf_commitments_count_must_equal_outputs() {
+        let blob = vec![0x01u8; 128];
+        assert_eq!(
+            extract_leaf_commitments(Some(&blob), 3),
+            Err(LeafEntryError::CountMismatch {
+                entries: 2,
+                outputs: 3
+            })
+        );
+        assert_eq!(
+            extract_leaf_commitments(Some(&[]), 0),
+            Ok(Vec::new()),
+            "no outputs, empty payload: conforming"
+        );
     }
 
     #[test]
@@ -324,8 +364,14 @@ mod tests {
     #[test]
     fn try_build_leaf_coinbase_included() {
         let leaf = try_build_leaf(&coinbase_output()).expect("valid coinbase output builds a leaf");
-        // h_pqc is the 4th scalar, copied verbatim.
-        assert_eq!(&leaf[96..128], &[7u8; 32]);
+        // The 4th scalar is the commitment point's x-coordinate (PL-D3).
+        let cm_x = shekyl_fcmp::tree::ed25519_point_to_selene_scalar(&ED25519_BASEPOINT)
+            .expect("basepoint decompresses");
+        assert_eq!(&leaf[96..128], &cm_x);
+        // A value that is not a point is not a leaf: no zero placeholder.
+        let mut bad = coinbase_output();
+        bad.h_pqc = [7u8; 32];
+        assert!(try_build_leaf(&bad).is_none());
     }
 
     #[test]

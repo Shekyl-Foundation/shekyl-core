@@ -355,12 +355,20 @@ mod tests {
         }
     }
 
+    /// A coinbase carrying one conforming `0x07` entry per output (a valid
+    /// commitment point — the basepoint — and an opaque record): the replica
+    /// refuses a transaction with outputs and no entries (`PL-D3`, no zero
+    /// fallback), exactly as admission does. The blob is leaked for the
+    /// raw-pointer struct's sake; test-only.
     fn coinbase(outs: &[ShekylCurveTreeReplicaOutput]) -> ShekylCurveTreeReplicaTx {
+        let mut entry = [0x07u8; 64];
+        entry[..32].copy_from_slice(&tagged().output_key);
+        let blob: &'static [u8] = Box::leak(entry.repeat(outs.len()).into_boxed_slice());
         ShekylCurveTreeReplicaTx {
             is_miner: 1,
-            has_leaf_hash_blob: 0,
-            leaf_hash_blob: std::ptr::null(),
-            leaf_hash_blob_len: 0,
+            has_leaf_hash_blob: 1,
+            leaf_hash_blob: blob.as_ptr(),
+            leaf_hash_blob_len: blob.len(),
             outputs: outs.as_ptr(),
             n_outputs: outs.len(),
         }

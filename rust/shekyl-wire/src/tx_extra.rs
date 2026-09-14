@@ -61,8 +61,13 @@ pub const X25519_CT_BYTES: usize = 32;
 pub const ML_KEM_768_CT_BYTES: usize = 1088;
 /// Hybrid KEM ciphertext bytes per output (`32 + 1088`).
 pub const HYBRID_KEM_CT_BYTES: usize = X25519_CT_BYTES + ML_KEM_768_CT_BYTES;
-/// PQC leaf-hash bytes per output.
-pub const PQC_LEAF_HASH_BYTES: usize = 32;
+/// PQC leaf entry bytes per output: the leaf commitment point `CM` (32,
+/// compressed Ed25519) followed by the post-quantum record (32) — `PL-D3` /
+/// `PL-D3a` (`docs/design/FCMP_SPEND_LINKABILITY.md` §6.2). The leaf's 4th
+/// scalar is `CM.x`; the record is checked by nothing live.
+pub const PQC_LEAF_HASH_BYTES: usize = 64;
+/// Byte length of the commitment point at the front of each `0x07` entry.
+pub const PQC_LEAF_POINT_BYTES: usize = 32;
 
 // The three KEM sizes above are WIRE-FREEZE pins: they must never
 // silently track a crypto-library change (that would be an unversioned
@@ -402,9 +407,10 @@ pub fn pqc_kem_per_output(blob: &[u8]) -> io::Result<Vec<KemCiphertext>> {
         .collect())
 }
 
-/// Split a `0x07` blob into per-output leaf hashes (§9.6a). Errors if the blob is
-/// not a whole number of `PQC_LEAF_HASH_BYTES`-sized entries.
-pub fn pqc_leaf_hashes_per_output(blob: &[u8]) -> io::Result<Vec<[u8; 32]>> {
+/// Split a `0x07` blob into per-output leaf entries (`CM ‖ record`, §9.6a).
+/// Errors if the blob is not a whole number of `PQC_LEAF_HASH_BYTES`-sized
+/// entries. Shape only — content admission is [`check_pqc_leaf_entries`].
+pub fn pqc_leaf_hashes_per_output(blob: &[u8]) -> io::Result<Vec<[u8; PQC_LEAF_HASH_BYTES]>> {
     if !blob.len().is_multiple_of(PQC_LEAF_HASH_BYTES) {
         return Err(io::Error::other(format!(
             "tx_extra: 0x07 blob len {} not a multiple of {PQC_LEAF_HASH_BYTES}",
@@ -414,7 +420,7 @@ pub fn pqc_leaf_hashes_per_output(blob: &[u8]) -> io::Result<Vec<[u8; 32]>> {
     Ok(blob
         .chunks_exact(PQC_LEAF_HASH_BYTES)
         .map(|chunk| {
-            let mut h = [0u8; 32];
+            let mut h = [0u8; PQC_LEAF_HASH_BYTES];
             h.copy_from_slice(chunk);
             h
         })
@@ -444,6 +450,9 @@ pub enum PqcFieldShapeError {
         got: usize,
         expected: usize,
     },
+    /// The `0x07` entry at `index` does not begin with a canonical, prime-order,
+    /// non-identity Ed25519 point — the leaf commitment content rule (`PL-D3`).
+    LeafPointInvalid { index: usize },
 }
 
 impl std::fmt::Display for PqcFieldShapeError {
@@ -469,6 +478,10 @@ impl std::fmt::Display for PqcFieldShapeError {
                 f,
                 "tx_extra {tag:#04x} is {got} bytes; {expected} required for this output count"
             ),
+            Self::LeafPointInvalid { index } => write!(
+                f,
+                "tx_extra 0x07 entry {index}: leaf commitment is not a canonical prime-order point"
+            ),
         }
     }
 }
@@ -487,11 +500,16 @@ impl std::error::Error for PqcFieldShapeError {}
 /// one home. The zero-output arm is what keeps serve-credit transactions
 /// (no outputs, empty `extra`) admissible: they are the must-accept control.
 ///
-/// Consensus, not policy (Rick, 2026-09-05): `0x07` is the fourth scalar of
-/// every leaf these outputs become — a short or missing field used to be
-/// zero-filled into the tree, a leaf set a faithful port would not store; and
-/// a short or missing `0x06` leaves the recipient unable to ever see or spend
-/// the payment, which a relay-only rule would still let a miner commit.
+/// Consensus, not policy (Rick, 2026-09-05): `0x07` carries the commitment
+/// whose x-coordinate is the fourth scalar of every leaf these outputs become
+/// — a short or missing field used to be zero-filled into the tree, a leaf
+/// set a faithful port would not store; and a short or missing `0x06` leaves
+/// the recipient unable to ever see or spend the payment, which a relay-only
+/// rule would still let a miner commit.
+///
+/// Shape only. The content rule on the same field — every entry's commitment
+/// point must be admissible — is [`check_pqc_leaf_entries`]; both run at
+/// admission through [`check_pqc_field_shape_of`] and the FFI twin.
 pub fn check_pqc_field_shape(
     n_outputs: usize,
     kem_lens: &[usize],
@@ -543,7 +561,24 @@ fn check_one(
     }
 }
 
-/// [`check_pqc_field_shape`] over parsed fields.
+/// The `0x07` content rule (`PL-D3` §6.2, admission at relay and connect):
+/// each `PQC_LEAF_HASH_BYTES` entry's first 32 bytes must decompress to a
+/// canonical, prime-order, non-identity Ed25519 point. A value that fails this
+/// is not a leaf any prover can open, and the tree must not store it. The
+/// record half is opaque here (checked by nothing live). Call after the shape
+/// rule has established a single, correctly-sized field.
+pub fn check_pqc_leaf_entries(blob: &[u8]) -> Result<(), PqcFieldShapeError> {
+    for (index, entry) in blob.chunks_exact(PQC_LEAF_HASH_BYTES).enumerate() {
+        let mut point = [0u8; PQC_LEAF_POINT_BYTES];
+        point.copy_from_slice(&entry[..PQC_LEAF_POINT_BYTES]);
+        if shekyl_curve_generators::pqc_leaf_point_valid(&point).is_none() {
+            return Err(PqcFieldShapeError::LeafPointInvalid { index });
+        }
+    }
+    Ok(())
+}
+
+/// [`check_pqc_field_shape`] then [`check_pqc_leaf_entries`] over parsed fields.
 pub fn check_pqc_field_shape_of(
     fields: &[TxExtraField],
     n_outputs: usize,
@@ -555,14 +590,41 @@ pub fn check_pqc_field_shape_of(
             _ => None,
         })
         .collect();
-    let leaf: Vec<usize> = fields
+    let leaf: Vec<&[u8]> = fields
         .iter()
         .filter_map(|f| match f {
-            TxExtraField::PqcLeafHashes(b) => Some(b.len()),
+            TxExtraField::PqcLeafHashes(b) => Some(b.as_slice()),
             _ => None,
         })
         .collect();
-    check_pqc_field_shape(n_outputs, &kem, &leaf)
+    let leaf_lens: Vec<usize> = leaf.iter().map(|b| b.len()).collect();
+    check_pqc_field_shape(n_outputs, &kem, &leaf_lens)?;
+    // The shape rule admitted exactly one field (or none, with no outputs).
+    match leaf.as_slice() {
+        [blob] => check_pqc_leaf_entries(blob),
+        _ => Ok(()),
+    }
+}
+
+/// A conforming `0x07` entry for fixtures and tests: a valid commitment point
+/// (the `J` generator — any prime-order non-identity point admits) followed by
+/// an opaque record. Test fixtures must be valid in every respect but the one
+/// their test is about; a random-byte filler is not a leaf.
+#[must_use]
+pub fn conforming_pqc_leaf_entry() -> [u8; PQC_LEAF_HASH_BYTES] {
+    let mut e = [0x7bu8; PQC_LEAF_HASH_BYTES];
+    e[..PQC_LEAF_POINT_BYTES].copy_from_slice(
+        &shekyl_curve_generators::PQC_LEAF_COMMITMENT_J
+            .compress()
+            .to_bytes(),
+    );
+    e
+}
+
+/// `n` conforming `0x07` entries, concatenated.
+#[must_use]
+pub fn conforming_pqc_leaf_blob(n_outputs: usize) -> Vec<u8> {
+    conforming_pqc_leaf_entry().repeat(n_outputs)
 }
 
 #[cfg(test)]
@@ -649,13 +711,13 @@ mod pqc_field_shape {
             check_pqc_field_shape(2, &[2 * K], &[])
                 .unwrap_err()
                 .to_string(),
-            "tx_extra 0x07 missing on a transaction with outputs; 64 bytes required"
+            "tx_extra 0x07 missing on a transaction with outputs; 128 bytes required"
         );
         assert_eq!(
             check_pqc_field_shape(1, &[K], &[2 * L])
                 .unwrap_err()
                 .to_string(),
-            "tx_extra 0x07 is 64 bytes; 32 required for this output count"
+            "tx_extra 0x07 is 128 bytes; 64 required for this output count"
         );
         assert_eq!(
             check_pqc_field_shape(0, &[], &[L]),
@@ -672,9 +734,29 @@ mod pqc_field_shape {
         let ok = [
             TxExtraField::PubKey([1u8; 32]),
             TxExtraField::PqcKemCiphertext(vec![0; 2 * K]),
-            TxExtraField::PqcLeafHashes(vec![0; 2 * L]),
+            TxExtraField::PqcLeafHashes(conforming_pqc_leaf_blob(2)),
         ];
         assert_eq!(check_pqc_field_shape_of(&ok, 2), Ok(()));
+        // Content: a zero-filled field of the right length is not a leaf.
+        let zeros = vec![
+            TxExtraField::PqcKemCiphertext(vec![0; 2 * K]),
+            TxExtraField::PqcLeafHashes(vec![0; 2 * L]),
+        ];
+        assert_eq!(
+            check_pqc_field_shape_of(&zeros, 2),
+            Err(PqcFieldShapeError::LeafPointInvalid { index: 0 })
+        );
+        // Content: the second entry carries a small-order point.
+        let mut torsion = conforming_pqc_leaf_blob(2);
+        torsion[L..L + 32].copy_from_slice(&[0u8; 32]); // y = 0: an 8-torsion point
+        let bad = vec![
+            TxExtraField::PqcKemCiphertext(vec![0; 2 * K]),
+            TxExtraField::PqcLeafHashes(torsion),
+        ];
+        assert_eq!(
+            check_pqc_field_shape_of(&bad, 2),
+            Err(PqcFieldShapeError::LeafPointInvalid { index: 1 })
+        );
         let dup = [
             TxExtraField::PqcKemCiphertext(vec![0; K]),
             TxExtraField::PqcLeafHashes(vec![0; L]),

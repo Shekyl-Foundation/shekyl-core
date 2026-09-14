@@ -5405,3 +5405,73 @@ every single-term mutation, so sign/verify co-drift cannot pass.
 deleted); `config/consensus_constants.json`; `.cursor/rules/50-testing.mdc`.
 
 ---
+
+## 2026-09-14 — `PL-D3` ratified: the leaf's 4th scalar becomes a Pedersen commitment to the PQC key; the leaf-hash vectors are re-pinned
+
+**Decision.** Every FCMP++ spend identified the output it spent through the public
+4th leaf scalar (`PL-D1`, [`docs/design/FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)).
+Ratified fix `PL-D3` (Rick, 2026-09-14, in-channel; the written form in §6.2 of
+that document): the published per-output value is `CM ‖ record`, 64 bytes, where
+`CM = k·G_k + r·J` is a Pedersen commitment to the key scalar
+`k = H_ℓ(hybrid_pk)` (cSHAKE256 under `shekyl/pqc-leaf-key-v1`, reduced into the
+Ed25519 scalar field), `r` is an HKDF-derived blind under a guard counter, and the
+record is `cSHAKE256("shekyl/pqc-leaf-record-v1", pk ‖ r_h)` (`PL-D3a`, kept for
+the whole v3 era). The leaf's 4th scalar is `CM.x`; the circuit proves
+`K + r·J = CM` for the verifier-computed `K = k·G_k` instead of an equality with
+a public hash. Point validity is an admission rule; the wallet verifies both
+halves at scan. The prefixed-Blake2b leaf hash `shekyl-pqc-leaf` is retired.
+
+**What moves.** Every pinned vector that captured the old leaf value or a root
+over it (census companion §9 S1, class a/b):
+`docs/test_vectors/PQC_LEAF_HASH_KAT.json` and `PQC_LEAF_HASH_RAW_PK_KAT.json`
+(retired — they pin the retired function; replaced by
+`PQC_KEY_SCALAR_KAT.json` for `k`/`K` over the same raw-key inputs and
+`PQC_LEAF_COMMITMENT_KAT.json` for `(combined_ss, idx) → CM ‖ record ‖ r ‖ r_h ‖ ctr`),
+`docs/test_vectors/PQC_SCAN_OUTPUT_KAT.json` (the `h_pqc` field becomes the
+64-byte `pqc_leaf` entry), the `ct2_tier_{a,b}.json` trees and their roots, the
+genesis `golden_kat.rs` constants (the genesis transaction publishes the new
+`0x07`), the archival `*_kat_v1.json` fixtures that embed leaf bytes, and the
+`0x07` shape rule's width (`64·n`). The new NUMS generators
+`PQC_LEAF_COMMITMENT_G_K` / `_J` are pinned in the frozen-points KAT.
+
+**Also moved by the implementation (2026-09-14, same citation):** the three
+`GENESIS_TX` pins in `src/cryptonote_config.h` (the genesis coinbase publishes
+five 64-byte entries; `+160` bytes) and with them the frozen block-0 ids —
+`docs/GENESIS_ALLOCATIONS.md`, `shekyl-rpc-types::identity`,
+`tests/unit_tests/mining_parity.cpp`, `regtest_coinbase_hashes.json` — the
+captured regtest coinbase block vectors `regtest_coinbase_h{0,1,2}.block` and
+the `shekyl-rpc-types` miner-tx vectors extracted from them;
+`docs/test_vectors/WITNESS_HEADER.json` (the multisig witness header grows to
+288 bytes / 9 fields: `[O][I][C][CM][r][x][y][z][a]`);
+`docs/test_vectors/TX_EXTRA_PQC_ROUND_TRIP.json` (constants only); the
+`shekyl-tx-weight` `FCMP_PROOF_SIZE_KAT` table (the opening leg changes every
+cell); the emission vin fixtures (`emission_connect_kat_v1.json` — the vin no
+longer carries `pqc_pk_hash`, ruling 7), the serve-credit fixtures that embed
+leaf bytes (`gate2_serve_credit_kat_v1.json`,
+`serve_credit_equivalence_kat_v1.json`, `serve_credit_tx_parity_v1.json`,
+`pruned_tx_hash_parity_v1.json`); and two store version pins that make a stale
+tree loud — LMDB `VERSION 13 → 14` and the wallet curve-tree store
+`SCHEMA_VERSION 4 → 5` (same byte layouts; every leaf, layer hash and root in
+an older store came from a derivation no current node reproduces; pre-genesis:
+delete and resync).
+
+**Oracle statement (`50-testing.mdc`).** `PQC_KEY_SCALAR_KAT.json` is
+**self-pinned (tier 3)** drift tripwire over the same degenerate lengths the
+retired raw-pk pins covered, with the tier-2 check beside it that
+`shekyl_fcmp::PqcKeyScalar` forwards to the owner. `PQC_LEAF_COMMITMENT_KAT.json`
+is **self-pinned (tier 3)** with the tier-2 check that `CM` opens to
+`K(pk) + r·J` and that the recipient's scan re-derives the identical entry.
+The fix-falsifier (`rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`, red on the
+old tree) and the binding-falsifier (`test_wrong_opening_fails` in the vendored
+circuit crate) are the tier-2 checks on the mechanism itself.
+
+**Regeneration citation used.**
+`SHEKYL_PINNED_REGEN_DECISION="2026-09-14 PL-D3 leaf commitment: 0x07 = CM ‖ record, CM = k·G_k + r·J opened in-circuit; leaf-hash vectors retired and re-pinned"`
+
+**Reference.** `docs/design/FCMP_SPEND_LINKABILITY.md` §6.2, §10, §12;
+`docs/design/FCMP_SPEND_LINKABILITY_CENSUS.md` §8 (pre-flight measurements);
+`docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (mechanism-4 `shekyl-pqc-leaf` retired;
+two mechanism-1 customizations and two mechanism-2 labels added);
+`.cursor/rules/50-testing.mdc`.
+
+---

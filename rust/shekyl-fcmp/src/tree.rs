@@ -488,25 +488,24 @@ pub fn ed25519_point_to_selene_scalar(compressed: &[u8; 32]) -> Option<[u8; 32]>
 }
 
 /// Construct a 128-byte curve tree leaf from an output's public key, commitment,
-/// and PQC key hash.
+/// and published PQC leaf commitment point.
 ///
 /// Computes Hp(O) (Monero's hash-to-curve), then extracts the Wei25519
-/// x-coordinates of O, Hp(O), and C. The 4th scalar is `h_pqc: &[u8; 32]` —
-/// the consensus leaf-hash **bytes**. Produce them via the SA-3a single source:
+/// x-coordinates of O, Hp(O), C and `CM` — the 4th scalar is `CM.x`, where
+/// `CM` is the compressed Ed25519 point at the front of the output's `0x07`
+/// entry (`PL-D3`). The x-extraction of all four points happens here, the one
+/// leaf constructor the daemon (over FFI) and the wallet replica share, so the
+/// two cannot diverge (`CT2_DRAIN_ORDER.md` §3.2).
 ///
-/// ```no_run
-/// # let (o, c, pqc_pk) = ([0u8; 32], [0u8; 32], vec![0u8; 1952]);
-/// let h = shekyl_fcmp::leaf::PqcLeafScalar::from_pqc_public_key(&pqc_pk);
-/// let leaf = shekyl_fcmp::construct_leaf(&o, &c, &h.0);
-/// // or: shekyl_crypto_pq::derivation::hash_pqc_public_key(&pqc_pk)
-/// ```
-///
-/// Pass `&[0u8; 32]` for outputs that have no PQC key commitment (e.g. coinbase
-/// before self-encapsulation is wired).
+/// Returns `None` if any of the four inputs is not a decompressible point. A
+/// `CM` that fails admission (non-canonical, small-order, identity) never
+/// reaches this function on an admitted chain
+/// (`shekyl_wire::tx_extra::check_pqc_leaf_entries`); there is no zero
+/// placeholder — an output without an admissible commitment is not a leaf.
 pub fn construct_leaf(
     output_key: &[u8; 32],
     commitment: &[u8; 32],
-    h_pqc: &[u8; 32],
+    pqc_leaf_commitment: &[u8; 32],
 ) -> Option<[u8; 128]> {
     let hp_point = shekyl_curve_generators::biased_hash_to_point(*output_key);
     let hp_bytes: [u8; 32] = hp_point.compress().to_bytes();
@@ -514,12 +513,37 @@ pub fn construct_leaf(
     let o_x = ed25519_point_to_selene_scalar(output_key)?;
     let i_x = ed25519_point_to_selene_scalar(&hp_bytes)?;
     let c_x = ed25519_point_to_selene_scalar(commitment)?;
+    let cm_x = ed25519_point_to_selene_scalar(pqc_leaf_commitment)?;
 
     let mut leaf = [0u8; 128];
     leaf[0..32].copy_from_slice(&o_x);
     leaf[32..64].copy_from_slice(&i_x);
     leaf[64..96].copy_from_slice(&c_x);
-    leaf[96..128].copy_from_slice(h_pqc);
+    leaf[96..128].copy_from_slice(&cm_x);
+    Some(leaf)
+}
+
+/// Re-assemble a 128-byte leaf from a served chunk entry: the three
+/// compressed points and the leaf's 4th scalar **as the chunk carries it**
+/// (`CM.x`, already extracted — `ChunkLeaf::h_pqc` / `LeafEntry::h_pqc`).
+/// The chunk does not carry the commitment point, so [`construct_leaf`]
+/// cannot be used here; this is the inverse of `rpc_path::append_layer0`.
+///
+/// Returns `None` if `O`, `I` or `C` is not a decompressible point.
+pub fn leaf_from_chunk_entry(
+    output_key: &[u8; 32],
+    key_image_gen: &[u8; 32],
+    commitment: &[u8; 32],
+    fourth_scalar: &[u8; 32],
+) -> Option<[u8; 128]> {
+    let o_x = ed25519_point_to_selene_scalar(output_key)?;
+    let i_x = ed25519_point_to_selene_scalar(key_image_gen)?;
+    let c_x = ed25519_point_to_selene_scalar(commitment)?;
+    let mut leaf = [0u8; 128];
+    leaf[0..32].copy_from_slice(&o_x);
+    leaf[32..64].copy_from_slice(&i_x);
+    leaf[64..96].copy_from_slice(&c_x);
+    leaf[96..128].copy_from_slice(fourth_scalar);
     Some(leaf)
 }
 
@@ -833,8 +857,29 @@ mod tests {
         // equal the I.x scalar `construct_leaf` writes at leaf[32..64].
         let i_compressed = key_image_generator(&o);
         let i_x = ed25519_point_to_selene_scalar(&i_compressed).expect("I.x");
-        let leaf = construct_leaf(&o, &o, &[0u8; 32]).expect("leaf");
+        let leaf = construct_leaf(&o, &o, &o).expect("leaf");
         assert_eq!(&leaf[32..64], &i_x);
+    }
+
+    /// The 4th scalar is `CM.x` (PL-D3): the constructor extracts it from the
+    /// commitment point exactly as it does for `O` and `C`, and refuses a
+    /// value that is not a point — there is no zero placeholder any more.
+    #[test]
+    fn construct_leaf_fourth_scalar_is_commitment_x() {
+        use curve25519_dalek::constants::ED25519_BASEPOINT_COMPRESSED;
+        let o = ED25519_BASEPOINT_COMPRESSED.to_bytes();
+        let cm = (*shekyl_curve_generators::PQC_LEAF_COMMITMENT_J
+            * curve25519_dalek::scalar::Scalar::from(7u64))
+        .compress()
+        .to_bytes();
+        let leaf = construct_leaf(&o, &o, &cm).expect("leaf");
+        let cm_x = ed25519_point_to_selene_scalar(&cm).expect("CM.x");
+        assert_eq!(&leaf[96..128], &cm_x);
+        assert!(
+            construct_leaf(&o, &o, &[0u8; 32]).is_none(),
+            "zero is not a point"
+        );
+        assert!(construct_leaf(&o, &o, &[0xffu8; 32]).is_none());
     }
 
     #[test]

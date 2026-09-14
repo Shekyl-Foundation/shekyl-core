@@ -17,6 +17,7 @@ use curve25519_dalek::scalar::Scalar;
 use rand_core::OsRng;
 use zeroize::Zeroizing;
 
+use shekyl_crypto_pq::derivation::derive_pqc_leaf;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
@@ -163,8 +164,8 @@ pub fn sign_transaction_with_terms(
     let prove_inputs: Vec<ProveInput> = inputs
         .iter()
         .enumerate()
-        .map(|(i, inp)| prove_input_from_spend(inp, pseudo_masks[i].to_bytes()))
-        .collect();
+        .map(|(i, inp)| prove_input_from_spend(i, inp, pseudo_masks[i].to_bytes()))
+        .collect::<Result<_, _>>()?;
 
     // ── 7. FCMP++ prove ──────────────────────────────────────────────
     let prove_result = proof::prove(
@@ -322,7 +323,7 @@ pub fn prove_backing_membership(
     // The blind is not read on the membership-only path: pseudo-out blinds
     // are a full-path (key-image) concern; the membership-only pseudo-out
     // comes from the context-bound rerandomization inside the prover.
-    let prove_input = prove_input_from_spend(input, [0u8; 32]);
+    let prove_input = prove_input_from_spend(0, input, [0u8; 32])?;
 
     let result = proof::prove_membership_only(
         &[prove_input],
@@ -354,7 +355,52 @@ pub fn prove_backing_membership(
 /// full-path signer (step 6, per-input balanced blind) and the
 /// membership-only backing leg (zero blind), so the leaf-chunk/branch-layer
 /// marshaling cannot drift between the two proving paths.
-fn prove_input_from_spend(input: &SpendInput, pseudo_out_blind: [u8; 32]) -> ProveInput {
+///
+/// Re-derives the input's own PQC leaf commitment and blind (`PL-D3`) from
+/// `combined_ss` / `output_index` — the derivation that produced the
+/// output's `0x07` entry — and refuses with
+/// [`TxBuilderError::PqcLeafMismatch`] when the chain's leaf (this output's
+/// entry in `leaf_chunk`) is not that derivation: a proof over an unopenable
+/// leaf would only fail later, at the verifier, with no diagnosis.
+fn prove_input_from_spend(
+    index: usize,
+    input: &SpendInput,
+    pseudo_out_blind: [u8; 32],
+) -> Result<ProveInput, TxBuilderError> {
+    let combined64: Zeroizing<[u8; 64]> = Zeroizing::new(
+        input
+            .combined_ss
+            .get(..64)
+            .and_then(|s| s.try_into().ok())
+            .ok_or_else(|| TxBuilderError::PqcLeafDerivation {
+                index,
+                detail: format!(
+                    "combined_ss must be at least 64 bytes, got {}",
+                    input.combined_ss.len()
+                ),
+            })?,
+    );
+    let pqc_leaf = derive_pqc_leaf(&combined64, input.output_index).map_err(|e| {
+        TxBuilderError::PqcLeafDerivation {
+            index,
+            detail: e.to_string(),
+        }
+    })?;
+    let own = input
+        .leaf_chunk
+        .iter()
+        .find(|e| e.output_key == input.output_key && e.commitment == input.commitment)
+        .ok_or(TxBuilderError::SpentOutputNotInLeafChunk { index })?;
+    let derived_x = PqcLeafScalar::from_commitment_point(&pqc_leaf.point).ok_or_else(|| {
+        TxBuilderError::PqcLeafDerivation {
+            index,
+            detail: "derived commitment is not a decompressible point".into(),
+        }
+    })?;
+    if derived_x.0 != own.h_pqc {
+        return Err(TxBuilderError::PqcLeafMismatch { index });
+    }
+
     let leaf_outputs: Vec<([u8; 32], [u8; 32], [u8; 32])> = input
         .leaf_chunk
         .iter()
@@ -377,11 +423,12 @@ fn prove_input_from_spend(input: &SpendInput, pseudo_out_blind: [u8; 32]) -> Pro
         })
         .collect();
 
-    ProveInput {
+    Ok(ProveInput {
         output_key: input.output_key,
         key_image_gen: compute_key_image_gen(&input.output_key),
         commitment: input.commitment,
-        h_pqc: PqcLeafScalar(input.h_pqc),
+        pqc_leaf_commitment: pqc_leaf.point,
+        pqc_leaf_blind: pqc_leaf.blind,
         spend_key_x: input.spend_key_x,
         spend_key_y: input.spend_key_y,
         commitment_mask: input.commitment_mask,
@@ -390,7 +437,7 @@ fn prove_input_from_spend(input: &SpendInput, pseudo_out_blind: [u8; 32]) -> Pro
         leaf_chunk_h_pqc: leaf_h_pqc,
         c1_branch_layers,
         c2_branch_layers,
-    }
+    })
 }
 
 /// Compute the key image generator Hp(O) for a given output key O.

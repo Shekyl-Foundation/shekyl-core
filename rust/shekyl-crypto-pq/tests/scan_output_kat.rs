@@ -59,7 +59,8 @@ struct Vector {
     view_tag: u8,
     kem_ct_x25519: String,
     kem_ct_ml_kem: String,
-    h_pqc: String,
+    /// The 64-byte `0x07` entry `CM ‖ record` (`PL-D3` / `PL-D3a`).
+    pqc_leaf: String,
     pqc_public_key: String,
 }
 
@@ -151,7 +152,11 @@ fn scan_output_view_tag_kat() {
             v.kem_ct_ml_kem,
             "vector {i}: kem_ct_ml_kem"
         );
-        assert_eq!(hex::encode(out.h_pqc), v.h_pqc, "vector {i}: h_pqc");
+        assert_eq!(
+            hex::encode(out.pqc_leaf.entry()),
+            v.pqc_leaf,
+            "vector {i}: pqc_leaf (CM ‖ record)"
+        );
         assert_eq!(
             hex::encode(&out.pqc_public_key),
             v.pqc_public_key,
@@ -192,15 +197,41 @@ fn scan_output_view_tag_kat() {
 /// Regenerate `PQC_SCAN_OUTPUT_KAT.json` in place. Reuses the fixture's frozen
 /// inputs when it already exists (so `expected` is reproduced deterministically
 /// after a *deliberate* derivation change); mints fresh recipient keypairs only
-/// on first creation. Run explicitly:
+/// on first creation.
 ///
 /// ```text
-/// cargo test -p shekyl-crypto-pq --test scan_output_kat -- --ignored gen_scan_output_kat
+/// SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
+///   cargo test -p shekyl-crypto-pq --test scan_output_kat -- --ignored gen_scan_output_kat
 /// ```
+///
+/// Armed (rule 50): the fixture is a self-pinned tripwire, so the regenerator
+/// refuses to run unless `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>"`
+/// cites the `docs/V3_WALLET_DECISION_LOG.md` entry authorizing the move.
 #[test]
-#[ignore = "regenerates the committed fixture; run explicitly with --ignored"]
+#[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn gen_scan_output_kat() {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT as G, scalar::Scalar};
+
+    const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
+    let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
+    let cited = decision.len() > 11
+        && decision.as_bytes()[..10]
+            .iter()
+            .enumerate()
+            .all(|(i, b)| match i {
+                4 | 7 => *b == b'-',
+                _ => b.is_ascii_digit(),
+            })
+        && decision.as_bytes()[10] == b' ';
+    assert!(
+        cited,
+        "refusing to regenerate PQC_SCAN_OUTPUT_KAT.json: set \
+         {PINNED_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
+         docs/V3_WALLET_DECISION_LOG.md entry that authorizes moving it (got: \
+         {decision:?}). Moving a pinned vector is a format decision, not a test \
+         fix — see 50-testing.mdc."
+    );
+    eprintln!("regenerating the scan-output KAT under decision: {decision}");
 
     struct Spec {
         tx_key: [u8; 32],
@@ -291,7 +322,7 @@ fn gen_scan_output_kat() {
                 view_tag: out.view_tag_prefilter,
                 kem_ct_x25519: hex::encode(out.kem_ciphertext_x25519),
                 kem_ct_ml_kem: hex::encode(&out.kem_ciphertext_ml_kem),
-                h_pqc: hex::encode(out.h_pqc),
+                pqc_leaf: hex::encode(out.pqc_leaf.entry()),
                 pqc_public_key: hex::encode(&out.pqc_public_key),
             }
         })
@@ -302,8 +333,10 @@ fn gen_scan_output_kat() {
             recipient keypair + construct_output inputs and the resulting captured \
             output; tests/scan_output_kat.rs asserts construct_output reproduces the \
             output byte-for-byte (view_tag included) and scan_output_recover_with_ml_kem_dk \
-            recovers the committed amount + spend pubkey. Regenerate with \
-            `cargo test -p shekyl-crypto-pq --test scan_output_kat -- --ignored gen_scan_output_kat`."
+            recovers the committed amount + spend pubkey. pqc_leaf is the 64-byte 0x07 entry \
+            CM || record (PL-D3 / PL-D3a). Regenerate (armed, rule 50) with \
+            `SHEKYL_PINNED_REGEN_DECISION=\"YYYY-MM-DD <rationale>\" cargo test -p \
+            shekyl-crypto-pq --test scan_output_kat -- --ignored gen_scan_output_kat`."
             .into(),
         vectors,
     };

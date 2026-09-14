@@ -41,8 +41,11 @@ pub struct OutputIdentity {
     /// (`i >= outPk.size()`), which makes it leaf-ineligible (the C++
     /// skip (b)).
     pub commitment: Option<[u8; 32]>,
-    /// Per-output PQC leaf hash (`h_pqc`), already resolved with the
-    /// zero-fallback applied (see [`crate::recon::per_output_h_pqc`]).
+    /// The output's published PQC leaf commitment point `CM` (compressed
+    /// Ed25519; the first 32 bytes of its `0x07` entry, `PL-D3`), sliced by
+    /// [`crate::recon::extract_leaf_commitments`]. The leaf's 4th scalar is
+    /// its x-coordinate, which [`crate::recon::try_build_leaf`] extracts.
+    /// No fallback: an output without one is not ingested.
     pub h_pqc: [u8; 32],
     /// Output target kind.
     pub target: TargetKind,
@@ -62,7 +65,7 @@ pub struct OutputIdentity {
 /// Deliberately **not** a full [`OutputIdentity`]: resolution uses only
 /// `gindex` and the check uses only `(output_key, commitment)`, so carrying
 /// `h_pqc` / `target` would force the engine to fabricate two fields it does
-/// not hold for an owned output (the real `h_pqc` comes back *from* the
+/// not hold for an owned output (the leaf's 4th scalar comes back *from* the
 /// drained leaf in [`ChunkLeaf`]). Public material only — `Copy`, no secrets.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct AssembleInput {
@@ -148,7 +151,7 @@ pub struct TreePosition(pub u64);
 redb_delegated_key!(TreePosition, u64, "shekyl_curve_tree::TreePosition");
 
 /// A drained tree leaf: its global output index, its maturity height, the
-/// 128-byte curve-tree leaf (`{O.x, I.x, C.x, h_pqc}`), and the public
+/// 128-byte curve-tree leaf (`{O.x, I.x, C.x, CM.x}`), and the public
 /// output identity it was built from. Tree position is determined by drain
 /// order `(maturity, gindex)`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -196,7 +199,9 @@ pub struct ChunkLeaf {
     pub key_image_gen: [u8; 32],
     /// Compressed amount commitment (`C`).
     pub commitment: [u8; 32],
-    /// Per-output PQC leaf hash (`h_pqc`).
+    /// The leaf's 4th scalar: `CM.x`, the Wei25519 x-coordinate of the
+    /// output's PQC leaf commitment (`PL-D3`) — what the prover holds for
+    /// every sibling in the chunk.
     pub h_pqc: [u8; 32],
 }
 

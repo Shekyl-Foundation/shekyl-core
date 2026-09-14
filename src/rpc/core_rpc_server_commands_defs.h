@@ -1387,7 +1387,7 @@ namespace cryptonote
       uint8_t  tree_depth;
       std::string path_blob;          // hex-encoded Merkle path (leaf scalars + branch hashes)
       std::string chunk_outputs_blob; // hex-encoded Ed25519 output data for each leaf in the chunk:
-                                      // per entry: [O:32][I:32][C:32][h_pqc:32] = 128 bytes
+                                      // per entry: [O:32][I:32][C:32][CM.x:32] = 128 bytes (PL-D3)
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE(output_index)

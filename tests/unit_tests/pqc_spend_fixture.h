@@ -62,11 +62,31 @@ inline void append_pqc_kem_field(cryptonote::transaction& tx, size_t bytes)
   tx.extra.insert(tx.extra.end(), b.begin(), b.end());
 }
 
-/// Append a 0x07 leaf-hash field of `bytes` bytes (arbitrary payload).
+/// One conforming 0x07 entry (PL-D3): a valid commitment point -- the
+/// compressed `PQC_LEAF_COMMITMENT_J` generator, any prime-order non-identity
+/// point admits -- followed by an opaque 32-byte record. Byte-identical to
+/// shekyl-wire's `conforming_pqc_leaf_entry` (the pruned-tx-hash parity pin
+/// builds the same transaction on both sides).
+inline std::string conforming_pqc_leaf_entry()
+{
+  static const uint8_t kJ[32] = {
+    0xce, 0x50, 0x95, 0x2e, 0xc0, 0xeb, 0x88, 0xa6, 0x8a, 0x5a, 0xe4, 0xdc, 0x2c, 0x81, 0xb6, 0xf0,
+    0xeb, 0x14, 0x90, 0xe9, 0x1c, 0x79, 0xb4, 0xdd, 0x0c, 0x3f, 0x3b, 0xcc, 0x7e, 0xbb, 0xcc, 0x68};
+  std::string e(reinterpret_cast<const char*>(kJ), 32);
+  e.append(32, '\x7b');
+  return e;
+}
+
+/// Append a 0x07 leaf-entry field of `bytes` bytes: conforming 64-byte entries
+/// repeated and cut to `bytes` (so a wrong-length vector is wrong in length
+/// only, and a right-length one passes the content rule too).
 inline void append_pqc_leaf_field(cryptonote::transaction& tx, size_t bytes)
 {
   cryptonote::tx_extra_pqc_leaf_hashes f;
-  f.blob.assign(bytes, '\x7b');
+  const std::string entry = conforming_pqc_leaf_entry();
+  while (f.blob.size() < bytes)
+    f.blob += entry;
+  f.blob.resize(bytes);
   const std::string b = serialize_tx_extra_field(f);
   tx.extra.insert(tx.extra.end(), b.begin(), b.end());
 }
@@ -158,9 +178,10 @@ inline cryptonote::transaction make_pqc_spend()
 
   // The per-output PQC fields every transaction with outputs must carry
   // (GENESIS_TX_WIRE_FORMAT.md §9.6a, CEN-I19): one 0x06 of 1120 bytes and
-  // one 0x07 of 32 bytes per output. The shape rule looks at counts and
-  // lengths only, so the payloads are arbitrary; without them the DB
-  // collector aborts (it used to zero-fill h_pqc silently).
+  // one 0x07 of 64 bytes per output. The 0x07 entries carry a valid
+  // commitment point (PL-D3 content rule); the rest of the payloads are
+  // arbitrary. Without the fields the DB collector aborts (it used to
+  // zero-fill h_pqc silently).
   append_pqc_fields(tx);
 
   return tx;

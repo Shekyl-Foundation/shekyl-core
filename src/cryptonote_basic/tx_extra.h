@@ -165,7 +165,12 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  static constexpr size_t PQC_LEAF_HASH_BYTES = 32;
+  // One 0x07 entry per output: the PQC leaf commitment point CM (32 bytes,
+  // compressed Ed25519; its x-coordinate is the leaf's 4th scalar) followed by
+  // the post-quantum record (32 bytes). PL-D3 / PL-D3a
+  // (docs/design/FCMP_SPEND_LINKABILITY.md §6.2). Admission checks the point
+  // (shekyl_tx_extra_pqc_field_shape); the record is checked by nothing live.
+  static constexpr size_t PQC_LEAF_HASH_BYTES = 64;
 
   struct tx_extra_pqc_leaf_hashes
   {

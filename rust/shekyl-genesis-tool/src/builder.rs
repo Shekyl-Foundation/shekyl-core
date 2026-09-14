@@ -107,7 +107,7 @@ pub fn build_genesis_tx(
 
         kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
         kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
-        leaf_blob.extend_from_slice(&od.h_pqc);
+        leaf_blob.extend_from_slice(&od.pqc_leaf.entry());
 
         total = total
             .checked_add(r.amount)

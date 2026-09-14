@@ -45,12 +45,11 @@ use crate::consensus_state::{
 };
 use crate::emission_wire::{ArchivalRewardEmissionVin, EmissionAuthRole, RewardCommit, WireError};
 use crate::reward_arithmetic::reward_share_floor;
-use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme,
 };
 use shekyl_fcmp::proof::{verify_membership_only, ShekylFcmpProof};
-use shekyl_fcmp::PqcLeafScalar;
+use shekyl_fcmp::PqcKeyScalar;
 use thiserror::Error;
 
 /// Rejection reasons for the §7.1 verify body. Every variant is a consensus
@@ -180,11 +179,6 @@ pub enum EmissionVerifyError {
     /// the emission tx's reward vout sum.
     #[error("reward total {reward_total} != vout sum {vout_sum}")]
     VoutSumMismatch { reward_total: u64, vout_sum: u64 },
-
-    /// Step 6: `hash_pqc_public_key(backing_pubkey) != pqc_pk_hash` — the
-    /// revealed backing pubkey is not the in-circuit committed leaf.
-    #[error("backing pubkey does not hash to the committed leaf scalar")]
-    BackingLeafMismatch,
 
     /// Step 6: membership-only proof rejected.
     #[error("membership-only backing rejected: {0}")]
@@ -655,10 +649,13 @@ pub fn emission_vin_verify_claims(
 /// §7.1 step 6 — membership-only backing (PR-E1 seam; **not**
 /// `shekyl_fcmp_verify`: no key image — anti-replay is the per-epoch dedup).
 ///
-/// Two checks, in order: the revealed `backing_pubkey` must hash to the
-/// in-circuit committed leaf scalar (`hash_pqc_public_key`, the Auth-B leaf
-/// gate's structural half), then the proof must verify against the reference
-/// block's tree root at its depth.
+/// The proof must verify against the reference block's tree root at its
+/// depth with the revealed `backing_pubkey`'s key point `K = H_ℓ(pk)·G_k` as
+/// the per-input public value: the circuit proves the proven leaf's
+/// commitment opens to `K` (`PL-D3`), which is the Auth-B binding — a proof
+/// over a leaf whose key is not `backing_pubkey` rejects here. The former
+/// hash gate (`hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`) is gone
+/// with the field it compared; its job moved into the proof.
 pub fn emission_vin_verify_backing(
     vin: &ArchivalRewardEmissionVin,
     tree_root: &[u8; 32],
@@ -666,10 +663,6 @@ pub fn emission_vin_verify_backing(
     signable_tx_hash: [u8; 32],
 ) -> Result<BackingVerified, EmissionVerifyError> {
     let backing = &vin.backing;
-
-    if hash_pqc_public_key(&backing.backing_pubkey) != backing.pqc_pk_hash {
-        return Err(EmissionVerifyError::BackingLeafMismatch);
-    }
 
     let proof = ShekylFcmpProof {
         data: backing.proof.clone(),
@@ -679,7 +672,7 @@ pub fn emission_vin_verify_backing(
     let ok = verify_membership_only(
         &proof,
         &[backing.pseudo_out],
-        &[PqcLeafScalar(backing.pqc_pk_hash)],
+        &[PqcKeyScalar::from_pqc_public_key(&backing.backing_pubkey)],
         tree_root,
         tree_depth,
         signable_tx_hash,
@@ -699,13 +692,14 @@ pub fn emission_vin_verify_backing(
 /// [`ArchivalRewardEmissionVin::auth_msgs`] (the single builder signer and
 /// verifier share, so they cannot drift), then verifies:
 ///
-/// 1. **Auth-B (stake-side)** — the leaf gate first
-///    (`hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`; the order is
-///    load-bearing: a signature over an unrelated-but-valid key must not
-///    pass — this function is where that order is pinned), then the
-///    hybrid signature `auth_backing` under `backing_pubkey` over the
-///    backing-role message. This binds the auth to the **proven leaf**, not
-///    merely *a* leaf (gate-6 §9.6).
+/// 1. **Auth-B (stake-side)** — the hybrid signature `auth_backing` under
+///    `backing_pubkey` over the backing-role message. The binding of that
+///    key to the **proven leaf** (not merely *a* leaf, gate-6 §9.6) is the
+///    membership-only proof of step 6 (`emission_vin_verify_backing`), which
+///    takes the same `backing_pubkey`'s key point as its public input and
+///    opens the leaf commitment to it in-circuit (`PL-D3`); a signature over
+///    an unrelated-but-valid key cannot pass step 6. The coarse FFI verdict
+///    runs step 6 before step 8.
 /// 2. **Auth-P (claim-side)** — the hybrid signature `auth_claim` under
 ///    `p_pubkey` over the claim-role message. No leaf gate: `P`'s binding is
 ///    `P_canonical_id`, field 1 of the message inventory (§6.1).
@@ -724,10 +718,7 @@ pub fn emission_vin_verify_auth(
 ) -> Result<AuthVerified, EmissionVerifyError> {
     let msgs = vin.auth_msgs(reward_commits, signable_tx_hash)?;
 
-    // Auth-B: leaf-binding first (order pinned by the PR-E1 primitive).
-    if hash_pqc_public_key(&vin.backing.backing_pubkey) != vin.backing.pqc_pk_hash {
-        return Err(EmissionVerifyError::BackingLeafMismatch);
-    }
+    // Auth-B: the key's leaf binding is step 6's in-circuit opening (PL-D3).
     verify_hybrid_auth(
         &vin.backing.backing_pubkey,
         &msgs.backing,

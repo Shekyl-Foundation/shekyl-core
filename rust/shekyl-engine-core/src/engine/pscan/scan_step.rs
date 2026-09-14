@@ -956,7 +956,6 @@ mod tests {
             backing: MembershipOnlyBacking {
                 proof: vec![0xEE; 128],
                 pseudo_out: [0x22; 32],
-                pqc_pk_hash: [0x33; 32],
                 backing_pubkey: vec![0xB2; SINGLE_KEY_CANONICAL_LEN],
                 tree_depth: 3,
             },

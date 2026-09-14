@@ -11,7 +11,7 @@ use shekyl_curve_tree::{
     AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
     ReferenceBlock, TargetKind, TxLeafInputs,
 };
-use shekyl_fcmp::tree::{construct_leaf, ed25519_point_to_selene_scalar};
+use shekyl_fcmp::tree::{ed25519_point_to_selene_scalar, leaf_from_chunk_entry};
 
 const FIXTURE: &str = include_str!("../../shekyl-curve-tree/tests/fixtures/ct2_tier_a.json");
 
@@ -161,8 +161,10 @@ fn assembled_path_verifies_as_segment_opening() {
         .position(|cl| cl.output_key == founder.output_key)
         .expect("founder in leaf chunk");
     let cl = &path.leaf_chunk[leaf_offset];
+    // The chunk carries the 4th scalar (CM.x), not the commitment point.
     let leaf_bytes =
-        construct_leaf(&cl.output_key, &cl.commitment, &cl.h_pqc).expect("construct 128-byte leaf");
+        leaf_from_chunk_entry(&cl.output_key, &cl.key_image_gen, &cl.commitment, &cl.h_pqc)
+            .expect("construct 128-byte leaf");
 
     let opening = SegmentPathOpening {
         c1_layers: path.c1_layers.clone(),

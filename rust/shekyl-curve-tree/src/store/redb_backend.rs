@@ -69,10 +69,16 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// retires that shape with a typed error. Version 4 retires the claim-era
 /// `StakedKey` target (tag 2 in the `leaf_meta` target byte + its
 /// `lock_blocks` extra at bytes 114..122): a ≤3 store may contain tag-2
-/// rows this build cannot represent. Pre-genesis disposition for any
-/// mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
+/// rows this build cannot represent. Version 5 is `PL-D3`
+/// (`FCMP_SPEND_LINKABILITY.md` §6.2): **byte-identical layout to version
+/// 4**, but the leaf's 4th scalar is now the x-coordinate of the output's
+/// PQC leaf commitment and `leaf_meta[81..113)` holds the published
+/// commitment point, not the key hash — every leaf, layer hash and root a
+/// ≤4 store holds came from a derivation no current build reproduces, and
+/// would resume into a baffling root mismatch. Pre-genesis disposition for
+/// any mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
 /// no in-Shekyl migration code).
-const SCHEMA_VERSION: u64 = 4;
+const SCHEMA_VERSION: u64 = 5;
 
 /// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
 /// without the maintained-pending-table contract. Test-only — production

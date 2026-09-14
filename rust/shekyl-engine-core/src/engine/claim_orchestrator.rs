@@ -481,7 +481,7 @@ mod tests {
             snapshot, source_at_count, source_json,
         };
         use crate::engine::stake_engine::test_fixtures::{
-            constructed_record, derive_bundle, spawn_over,
+            constructed_record, constructed_record_with_entry, derive_bundle, spawn_over,
         };
         use crate::engine::stake_engine::PSlot;
 
@@ -558,7 +558,7 @@ mod tests {
 
             // Two REAL P-paid outputs mined at `owned_block` as the chain's
             // only outputs, so gindex == chain position (0: backing, 1: fee).
-            let (backing_record, backing_leaf) = constructed_record(
+            let (backing_record, backing_leaf, backing_entry) = constructed_record_with_entry(
                 &keys,
                 0,
                 owned_block,
@@ -566,7 +566,7 @@ mod tests {
                 0,
                 MintLineageOutput::BondPostChange,
             );
-            let (fee_record, fee_leaf) = constructed_record(
+            let (fee_record, fee_leaf, fee_entry) = constructed_record_with_entry(
                 &keys,
                 1,
                 owned_block,
@@ -579,7 +579,9 @@ mod tests {
 
             // Ingest the whole chain into a real (ephemeral-store) client —
             // maturity drain, gindex threading, root reconstruction all real.
-            let leaf_blob: Vec<u8> = [backing_leaf.h_pqc, fee_leaf.h_pqc].concat();
+            // One 64-byte `0x07` entry per output (PL-D3); the client takes
+            // the commitment point from each.
+            let leaf_blob: Vec<u8> = [backing_entry, fee_entry].concat();
             let raw_outputs = vec![
                 RawOutput {
                     output_key: backing_leaf.output_key,

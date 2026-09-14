@@ -31,6 +31,12 @@ use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transact
 /// Build a representative 1-in / 2-out FCMP++ spend. Field *sizes* mirror the
 /// real shape (single-key PQC pk/sig, one Bp+, per-input pseudo-out); the byte
 /// *values* are arbitrary — this exercises serialization structure, not crypto.
+// The three hash pins below were re-pinned 2026-09-14 with `PL-D3`
+// (`FCMP_SPEND_LINKABILITY.md` §6.2): the synthetic spend's `0x07` field is now
+// one 64-byte `CM ‖ record` entry per output (`conforming_pqc_extra`), so the
+// prefix, its hash preimage and the PQC signing payload all moved. Confirmed
+// against the C++ leg by `tests/unit_tests/pruned_tx_hash_parity.cpp`, which
+// builds the same transaction on both sides.
 fn synthetic_spend() -> Transaction {
     let base = CtBase {
         enc_amounts: vec![[1u8; 9], [2u8; 9]],
@@ -349,7 +355,7 @@ fn synthetic_spend_hash_preimage_is_pinned() {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "32e2207f96d09ef2c5c72ab3a2737e77fdd20cf0b09b998bf9c00da2bf588c99",
+        h, "687b75959bcc7f1acc261a49213e8a0f47862cb6bffa9d21443437e3ae853b6e",
         "synthetic FCMP++ spend hash preimage drifted (see the §11 note above)"
     );
 }
@@ -384,7 +390,7 @@ fn synthetic_spend_prefix_hash_is_pinned() {
         .map(|b| format!("{b:02x}"))
         .collect();
     assert_eq!(
-        h, "131e4af4d1fb26be406470eacbc8f8e59e75dd921e8aac727f693746bbae1057",
+        h, "733a56d1a904b12ccea0a258418e72ff17b95a458408b6071d4194d80840d2eb",
         "FCMP++ prefix (signable_tx_hash) drifted (§1.2)"
     );
 }
@@ -399,7 +405,7 @@ fn synthetic_spend_pqc_signing_payload_hashes_are_pinned() {
     assert_eq!(hashes.len(), 1, "one PQC signing hash per input");
     let h: String = hashes[0].iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(
-        h, "5cc2aea0f8f7d57bbb8f0ef77709b41aca673bd8e3caf8e9c59cc6c253e98ed1",
+        h, "00862ce5178bfeadcdc99aa34618950d47f3c318843addc168843fb067e4a23a",
         "FCMP++ PQC signing preimage drifted (§1.1)"
     );
     // Structural: the fee is bound into the preimage (it lives in ct_base_blob), so

@@ -24,7 +24,7 @@ Every time someone receives SHEKYL, the transaction creates an "output" — basi
 
 **C** — the commitment. This is a Pedersen commitment that hides the amount of SHEKYL. It lets the network verify "inputs equal outputs" (no money created from nothing) without anyone seeing the actual amounts.
 
-**H(pqc_pk)** — *our addition*. This is a hash of the per-output post-quantum public key. It binds the quantum-resistant authorization key to the output inside the tree, so the FCMP++ proof simultaneously proves "this output exists" and "this PQC key belongs to it."
+**CM.x** — *our addition*. This is the x-coordinate of a Pedersen commitment `CM = k·G_k + r·J` to the per-output post-quantum public key (`k` is a hash of the key, `r` a per-output blind). It binds the quantum-resistant authorization key to the output inside the tree — the FCMP++ proof simultaneously proves "this output exists" and "the key I present opens this leaf's commitment" — while the published value reveals nothing about the key (`docs/design/FCMP_SPEND_LINKABILITY.md`, `PL-D3`).
 
 Now, elliptic curve points are pairs of coordinates (x, y). But a key insight in the FCMP++ design is that you only need the x-coordinate to uniquely identify a point (up to sign — there are two points with the same x, one "positive" and one "negative"). The spec says: store only the x-coordinates. So each output becomes three field elements (numbers in a specific finite field): `O.x`, `I.x`, `C.x`. We add a fourth: `H(pqc_pk)`, which is already a scalar (a 32-byte number).
 
@@ -53,7 +53,7 @@ This is where the "6-scalar" confusion likely came from — if you're looking at
 
 Inside the zero-knowledge circuit code, the prover works with full (x, y) coordinate pairs for each elliptic curve point — because the circuit needs to verify that points actually lie on the curve and perform blinding operations. So in the code, you'll see something like `[O.x, O.y, I.x, I.y, C.x, C.y]` — that's 6 values for Monero's 3 points. But these are **circuit-internal variables**, not stored data. The tree itself only stores the x-coordinates. Someone reading the prover code sees "6" and thinks that's the leaf width. It's not — it's the circuit's internal representation of 3 points as 6 coordinates.
 
-For Shekyl, the circuit will work with `[O.x, O.y, I.x, I.y, C.x, C.y, H(pqc_pk)]` — 7 internal values representing our 4 leaf scalars. The on-chain leaf tuple is still 4 scalars. The circuit just needs the extra y-coordinates to do its internal math.
+For Shekyl, the circuit works with the three (x, y) pairs plus the commitment point `CM` (as a claimed point) and the blind `r` (as a discrete-log witness) — the on-chain leaf tuple is still 4 scalars, `{O.x, I.x, C.x, CM.x}`. The circuit needs the extra y-coordinates and the blind to do its internal math.
 
 ---
 
@@ -232,7 +232,7 @@ This happens once per layer, alternating between Selene and Helios, all the way 
 
 ### Our 4th scalar
 
-Because of our 4th scalar, the proof also demonstrates: "The PQC key hash committed in my leaf matches the one I'm presenting in the transaction" — again, without revealing which leaf. The verifier provides the expected `H(pqc_pk)` as a public input, and the circuit checks that the 4th leaf scalar equals it.
+Because of our 4th scalar, the proof also demonstrates: "The PQC key I'm presenting in the transaction opens the commitment in my leaf" — again, without revealing which leaf. The verifier derives the key point `K = k·G_k` from the presented key and supplies it as a public input; the circuit checks that the leaf's commitment equals `K + r·J` for a blind `r` only the prover knows. Because the commitment hides `k`, nothing published per output is a function of the key — which is what stops a spend from identifying the output it spends (`PL-D1`).
 
 This means an attacker who compromises the classical EC cryptography (e.g., via a quantum computer) still can't steal funds — they'd also need to forge the ML-DSA-65 signature on the PQC key that's bound into the tree leaf. They must break **both** layers.
 
@@ -252,12 +252,12 @@ Two GBP proofs are actually generated — one for the Selene layers and one for 
 
 | Aspect | Monero | Shekyl |
 |---|---|---|
-| **Leaf tuple width** | 3 scalars: `{O.x, I.x, C.x}` | 4 scalars: `{O.x, I.x, C.x, H(pqc_pk)}` |
+| **Leaf tuple width** | 3 scalars: `{O.x, I.x, C.x}` | 4 scalars: `{O.x, I.x, C.x, CM.x}` |
 | **Leaf size** | 96 bytes per output | 128 bytes per output |
-| **Circuit internal variables per output** | 6 (three x,y pairs) | 7 (three x,y pairs + one scalar) |
+| **Circuit internal variables per output** | 6 (three x,y pairs) | 8 + the blind's discrete-log witness (four x,y pairs; `CM` is a claimed point) |
 | **Layer 0 scalars per chunk** | 3 × 38 = 114 | 4 × 38 = 152 |
 | **Curve cycle** | Helios/Selene (identical) | Helios/Selene (identical) |
-| **PQC binding** | None | In-circuit proof that `H(pqc_pk)` matches |
+| **PQC binding** | None | In-circuit opening of the leaf commitment to the presented key's point (`PL-D3`) |
 | **Deferred insertion** | Yes (per FCMP++ spec) | Yes, unified across all output types |
 | **Tree root in block header** | Yes | Yes |
 
@@ -268,9 +268,9 @@ The tree topology, branching factors, curve cycle, and proof system are all inhe
 ## Why This Modified Merkle Tree?
 
 - **Full-chain anonymity**: Prove your output exists *anywhere* in history (not just a small ring of 16 decoys).
-- **PQC binding**: The extra `H(pqc_pk)` scalar ties quantum-resistant authorization directly into the proof — an attacker must break both EC and lattice cryptography.
+- **PQC binding**: The extra commitment scalar ties quantum-resistant authorization directly into the proof — the in-circuit binding is discrete-log-sound, and the post-quantum authority rests on the ML-DSA-65 signature; see `FCMP_SPEND_LINKABILITY.md` §4 for the precise statement.
 - **Zero-knowledge**: The algebraic structure (Pedersen commitments + curve cycle) lets the proof hide which output while still proving membership and correctness.
-- **Efficiency trade-off**: We pay a bit more computation (one extra scalar per output, one more curve multiplication per leaf hash) for dramatically better privacy and future quantum resistance.
+- **Efficiency trade-off**: We pay a bit more computation (one extra scalar per output, one more curve multiplication per leaf hash, and one opening leg per spent input — measured at about +14 first-layer rows and +128 B on a single-input proof) for dramatically better privacy and future quantum resistance.
 
 This is the core of why our tree is "modified" compared to a classic Merkle tree — it is built from the ground up to support zero-knowledge membership proofs with PQC integration, rather than just simple data integrity.
 
@@ -280,7 +280,7 @@ This is the core of why our tree is "modified" compared to a classic Merkle tree
 
 | Term | Meaning |
 |---|---|
-| **Leaf tuple** | The 4 scalars stored per output: `{O.x, I.x, C.x, H(pqc_pk)}` |
+| **Leaf tuple** | The 4 scalars stored per output: `{O.x, I.x, C.x, CM.x}` |
 | **Leaf width** | How many scalars per output (Monero: 3, Shekyl: 4) |
 | **Chunk** | A group of outputs whose leaf scalars are hashed together in one Pedersen commitment |
 | **Branching factor** | How many outputs (layer 0) or children (layer 1+) fit in one chunk |

@@ -979,7 +979,7 @@ private:
   MDB_dbi m_output_to_leaf;           // output_index [8B native] -> tree_position [8B native] (MDB_INTEGERKEY)
   MDB_dbi m_leaf_to_output;           // tree_position [8B native] -> output_index [8B native] (MDB_INTEGERKEY)
 
-  MDB_dbi m_curve_tree_leaves;    // global_output_index -> 128 bytes leaf data
+  MDB_dbi m_curve_tree_leaves;    // global_output_index -> 128 bytes leaf data {O.x, I.x, C.x, CM.x}
   MDB_dbi m_curve_tree_layers;    // (layer_idx << 56 | chunk_idx) -> 32 bytes hash
   MDB_dbi m_curve_tree_meta;      // key string -> value (root, leaf_count, depth)
   MDB_dbi m_curve_tree_checkpoints; // block_height -> serialized checkpoint (root + depth + leaf_count)

@@ -285,7 +285,7 @@ n>5 *and* zone/address usability are dispositioned.
 
 **Hybrid posture (pin 2026-07-14).** Scheme_id=2 is already
 post-quantum for authorization (M × ML-DSA). Solo and multisig share
-classical FCMP++ membership/SAL + hybrid auth via `h_pqc`. Multisig
+classical FCMP++ membership/SAL + hybrid auth bound through the leaf commitment opening (`PL-D3`). Multisig
 adds **no** classical exposure. Classical SAL is a **liveness**
 dependency (1/N *loss*), not a compromise path. Curve HNDL on
 membership privacy is real and **not multisig-specific**. Under
@@ -399,7 +399,7 @@ persist-before-use typestate + intent-binding (`!Serialize` dropped as unprovabl
 ### What it does *not* buy
 
 - **Not smaller on the wire.** M hybrid sigs still ride; the leaf
-  commits `H(pqc_pk)` and consensus verifies it. Same auth bytes as
+  commits `CM = H_ℓ(pqc_pk)·G_k + r·J` and the proof opens it (`PL-D3`). Same auth bytes as
   Option D. Size win = composite lattice sig (dPN25 / 15.4b, 2030+).
 - **Does not fix the anonymity partition.** `scheme_id=2` and N-fold
   fan-out remain visible. Same cost at N=3 as at N=5. Honest price;
@@ -628,7 +628,7 @@ design's acceptance**, not implementation.
 | A1 | N=7 output lands; spend never serializes | **No** — R1-F-1 |
 | A2 | Present scheme-2 blob against scheme-1 leaf (or reverse) | **Armed by construction** — **length primary** (`1996 ∉` scheme-2 lengths); byte[2] secondary. Guard both with MSW-2 KAT. |
 | A3 | Spender lies about `group_id` | **Vacuous** — already in leaf; MS-8 retired |
-| A4 | Mix scheme 1/2 across inputs | **MSW-6 relaxed (landed).** Stated purpose of the tx-wide agreement was vacuous (self-referential; per-output binding is the leaf hash `h_pqc = H(blob)`). Actual effect: forecloses a solo/multisig cross-model linkage → a wallet coin-selection invariant (**no externality** + the opt-in `scheme_id=2` precedent; **not** TM-1), which must land as a **blocking E′/MS-5 ship gate**, **not** consensus. Length disjointness (MSW-2) still prevents cross-scheme confusion. |
+| A4 | Mix scheme 1/2 across inputs | **MSW-6 relaxed (landed).** Stated purpose of the tx-wide agreement was vacuous (self-referential; per-output binding is the in-circuit opening of the leaf commitment to the revealed key's point — `PL-D3`; before it, the leaf hash `h_pqc = H(blob)`). Actual effect: forecloses a solo/multisig cross-model linkage → a wallet coin-selection invariant (**no externality** + the opt-in `scheme_id=2` precedent; **not** TM-1), which must land as a **blocking E′/MS-5 ship gate**, not merely be tracked. |
 | A5 | Malicious DKG steers `group_id` | **No** — R1-F-4 |
 | A6 | Replay `sign_own` / nonce reuse | **No** — R1-F-9 |
 | A7 | Forge FROST `participant` index | **No** on FROST lineage |
@@ -684,9 +684,10 @@ multisig surfaces). Disposition: **confirm / sharpen / push back**.
 - **A2 (lie about `scheme_id`):** with leaf-bound bytes, scheme-1
   verify requires `len==1996`; scheme-2 requires a container parse.
   Cross-scheme auth fails at length/parse without a leaf change.
-  Blockchain comment that scheme binding "relies on the leaf hash"
-  (`blockchain.cpp:4251-4253`) is imprecise — the leaf binds **bytes**;
-  scheme is enforced by how those bytes parse under `scheme_id`.
+  The blockchain comment on scheme binding (`blockchain.cpp`, MSW-6
+  paragraph) is precise only as: the leaf binds the revealed key **bytes**
+  (`k = H_ℓ(bytes)`, opened in-circuit under `PL-D3`); scheme is enforced by
+  how those bytes parse under `scheme_id`.
 
 ### MS-8 retirement — **DONE (group_id deleted)**
 
@@ -1017,9 +1018,10 @@ B→A hybrid sig; A assembles.
 **(D) two-leg binding — no new primitive.** The FROST SAL leg and the M hybrid
 `scheme_id=2` legs are *already* welded bidirectionally in the solo path: the pqc
 signed payload embeds the SAL via `prunable_hash` (`tx_pqc_verify.cpp:92`, the
-anti-substitution binding), and the curve-tree leaf `h_pqc = H(pqc_pk)` binds the
-SAL to the key (`blockchain.cpp:4190`), with the multisig key *container* hashing
-to that leaf (`multisig_pqc_leaf_hash`). MS-5 extends this unchanged; it only
+anti-substitution binding), and the curve-tree leaf commitment `CM = H_ℓ(pqc_pk)·G_k + r·J`
+(opened in-circuit, `PL-D3`) binds the SAL to the key, with the multisig key
+*container* being the `pqc_pk` bytes `k` is derived from (`multisig_pqc_leaf_hash`
+forwards to `pqc_key_scalar`). MS-5 extends this unchanged; it only
 forces the **pqc-last** order above (a hybrid sig signs over the finished SAL).
 
 **The nonce rule (corrected — the load-bearing security part).** Two shapes,
@@ -1100,7 +1102,7 @@ sound daemon-side `expected_group_id` from the creating output.
 **This conclusion does not depend on changing the leaf preimage.**
 
 **Replacement (Track A / MSW-2–3).** Pin prefix-disjointness; fix
-`"output committed="` misattributions; do not change leaf hash.
+`"output committed="` misattributions; do not change the leaf derivation (`PL-D3` changed it for every scheme alike, 2026-09-14).
 
 **Re-evaluation shape.** Only if a future scheme breaks MSW-2 reopen
 criteria *and* leaf binding is shown insufficient — new design round,
@@ -1171,7 +1173,7 @@ not a quiet reopen of MS-8.
    `n∈1..=5` + delete shadows) + MSW-2/3 + MSW-4/5 (group_id ←
    address-payload versions) + **MSW-8** (delete address
    `hybrid_sign_pubkeys`).
-5. **Do not** change leaf preimage / FFI leaf hash ABI / emission
+5. **Do not** change leaf preimage / FFI leaf-scalar ABI / emission
    Auth-B / test-vector corpus / `bond_spend_pk` length as part of
    Track A.
 6. **Do not** adopt lattice-threshold / TRacoon here.
