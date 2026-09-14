@@ -37,7 +37,6 @@ pub trait FcmpCurves {
     type C2: Ciphersuite;
     /// The Discrete-Log gadget parameters for the curve of the second set of branches.
     type C2Parameters: DiscreteLogParameters;
-
 }
 
 /// A struct representing a circuit.

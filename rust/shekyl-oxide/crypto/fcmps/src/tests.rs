@@ -298,9 +298,7 @@ fn random_paths(
                         .unwrap()
                     } else {
                         let mut leaves_layer = vec![];
-                        for (output, cm_x) in
-                            path.leaves.iter().zip(path.leaves_cm_x.iter())
-                        {
+                        for (output, cm_x) in path.leaves.iter().zip(path.leaves_cm_x.iter()) {
                             let O = <Ed25519 as Ciphersuite>::G::to_xy(output.O).unwrap();
                             let I = <Ed25519 as Ciphersuite>::G::to_xy(output.I).unwrap();
                             let C = <Ed25519 as Ciphersuite>::G::to_xy(output.C).unwrap();

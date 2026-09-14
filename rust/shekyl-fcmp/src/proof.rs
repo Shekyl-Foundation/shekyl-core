@@ -898,7 +898,7 @@ pub fn prove_with_sal(
                     field: "leaf_cm_x",
                 },
             )?;
-            chunk_extra.push(vec![h]);
+            chunk_extra.push(h);
         }
 
         // Zero-pad partial branch chunks to the full chunk width — see

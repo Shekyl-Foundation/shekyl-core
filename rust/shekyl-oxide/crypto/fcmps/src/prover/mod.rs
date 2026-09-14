@@ -330,21 +330,20 @@ where
     ) -> TranscriptedBranches {
         let leaf_layer_len = LEAF_TUPLE_WIDTH * LAYER_ONE_LEN;
 
-        let flatten_leaves =
-            |leaves: &[Output<<C::OC as Ciphersuite>::G>],
-             cm_xs: &[<C::C1 as Ciphersuite>::F]| {
-                let mut flattened_leaves = vec![];
-                for (leaf, cm_x) in leaves.iter().zip(cm_xs.iter()) {
-                    let O = <C::OC as Ciphersuite>::G::to_xy(leaf.O).unwrap();
-                    let I = <C::OC as Ciphersuite>::G::to_xy(leaf.I).unwrap();
-                    let C_point = <C::OC as Ciphersuite>::G::to_xy(leaf.C).unwrap();
-                    flattened_leaves.extend(&[O.0, I.0, C_point.0, *cm_x]);
-                }
-                while flattened_leaves.len() < leaf_layer_len {
-                    flattened_leaves.push(<C::C1 as Ciphersuite>::F::ZERO);
-                }
-                flattened_leaves
-            };
+        let flatten_leaves = |leaves: &[Output<<C::OC as Ciphersuite>::G>],
+                              cm_xs: &[<C::C1 as Ciphersuite>::F]| {
+            let mut flattened_leaves = vec![];
+            for (leaf, cm_x) in leaves.iter().zip(cm_xs.iter()) {
+                let O = <C::OC as Ciphersuite>::G::to_xy(leaf.O).unwrap();
+                let I = <C::OC as Ciphersuite>::G::to_xy(leaf.I).unwrap();
+                let C_point = <C::OC as Ciphersuite>::G::to_xy(leaf.C).unwrap();
+                flattened_leaves.extend(&[O.0, I.0, C_point.0, *cm_x]);
+            }
+            while flattened_leaves.len() < leaf_layer_len {
+                flattened_leaves.push(<C::C1 as Ciphersuite>::F::ZERO);
+            }
+            flattened_leaves
+        };
 
         let empty_cm_x: Vec<<C::C1 as Ciphersuite>::F> = Vec::new();
 
@@ -355,11 +354,7 @@ where
             let mut c1 = vec![];
             let mut c2 = vec![];
             if let Some(leaves) = &input.branches.leaves {
-                let cm_xs = input
-                    .branches
-                    .leaves_cm_x
-                    .as_ref()
-                    .unwrap_or(&empty_cm_x);
+                let cm_xs = input.branches.leaves_cm_x.as_ref().unwrap_or(&empty_cm_x);
                 let flattened_leaves = flatten_leaves(leaves, cm_xs);
                 c1.push(c1_tape.append_branch(leaf_layer_len, Some(flattened_leaves)));
             }
