@@ -1038,11 +1038,12 @@ IBD floor from DRS-0).
 (schema, refusals, §1.3 compare, redb-engine probe) and runner
 `scripts/bench/drs_bench.py` (`measure` / `check` / `validate` / `blockers`)
 with selftest `scripts/bench/test_drs_bench.py`, wired in `docs-gates.yml`.
-The **LMDB arm only**: there is no redb consensus store to measure —
-`shekyl-chain-store` names redb in type-level table and key-ordering
-declarations and holds no `Database` and no transaction — and
-`drs_bench.py blockers` asserts that blocker still holds on every CI run, so
-the deferral turns red when DRS-E1 grows the engine instead of ageing quietly.
+The **LMDB arm only**: DRS-E1 increment 1 constructs `redb::Database` in
+`shekyl-chain-store` but the daemon still has no engine switch and the crate
+is not exported through FFI, so the arm is unrunnable. `drs_bench.py blockers`
+asserts that conjunction still holds on every CI run — redb sites without a
+switch do not lift it — so the deferral turns red when the arm becomes
+runnable instead of ageing quietly.
 
 Rows landed, all under one scenario label `ibd_coinbase_only`: **IBD wall time**
 (the primary), plus **CPU time**, **peak RSS** and **store size** as free

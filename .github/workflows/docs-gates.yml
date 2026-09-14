@@ -215,13 +215,13 @@ jobs:
         run: python3 scripts/bench/test_drs_bench.py
 
       - name: Run DRS-BENCH deferral blocker probe
-        # Stage one landed the harness and the LMDB arm only, because there is
-        # no redb CONSENSUS store to measure: `rust/shekyl-chain-store/` names
-        # redb in type-level table and key-ordering declarations and holds no
-        # Database and no transaction. This asserts that blocker STILL HOLDS,
-        # so the deferral cannot outlive its cause — when DRS-E1 grows the
-        # engine this turns red and names the sites, which is the signal to
-        # wire the redb arm rather than a surprise.
+        # Stage one landed the harness and the LMDB arm only. DRS-E1 increment 1
+        # constructs `redb::Database` in `shekyl-chain-store` but the daemon
+        # still has no engine switch (`new_db()` is unconditional LMDB) and the
+        # crate is not exported through FFI, so the arm is unrunnable. This
+        # asserts that blocker STILL HOLDS — redb sites without a switch do
+        # not lift it. When `new_db()` can select redb this turns red and
+        # names the sites, which is the signal to wire the arm.
         #
         # Scoped to that crate deliberately: redb is already a real engine in
         # `rust/shekyl-curve-tree/src/store/redb_backend.rs`, the wallet
