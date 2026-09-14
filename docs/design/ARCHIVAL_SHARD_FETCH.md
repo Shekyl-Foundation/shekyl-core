@@ -152,7 +152,7 @@ inherited as "the client waits."
 | Daemon `SocksPort` flags | `rust/shekyl-tor-control-client/src/control/actor.rs:859` — `--SocksPort` with `SocksPort::Auto`; no `Isolate*` flags on the spawn | Tor's own defaults apply. `SF-D3`: this client sets none |
 | Daemon Tor today | SOCKS is discovered (`rust/shekyl-tor-control-daemon/src/ephemeral.rs:18` crate-doc; `:240` — `GETINFO net/listeners/socks`) and consumed (`src/p2p/net_node.inl:878` — `zone.m_connect = &socks_connect`; `:879` — `zone.m_proxy_address`). Default posture is inbound onion **plus** SOCKS outbound on the tor zone. `--tx-proxy` / `--anonymous-inbound` yield the managed instance (`net_node.inl:815–819`) | `SF-D2` RULED: reuse **this** zone proxy. Object of reuse is the zone's SOCKS, not always `DaemonTorControl`. Does not re-rule PWD-E7 |
 | Discovery | `EU-D3`/`EU-D4` — endpoint = raw 32-byte Ed25519 key on the bond record; witness reads it from the drawable snapshot at epoch open, joined by `p_id` (`DrawablePair`, `rust/shekyl-archival-retention/src/challenge_assignment.rs:71`) | `SF-D5`'s input: key → onion is derivation, not lookup. `SF-D10` reads the holder set of `s` from the same snapshot |
-| Derived assignment | [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §2: assignment for block *h* is a pure function of *h*−1's hash over the epoch-open drawable set. Public at *h*−1's publication; every node including `P` computes it identically. Witness = producer. Window = `CHALLENGE_RESPONSE_BLOCKS`. `attestation_nonce` is `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` | Assignment stays derived. **It does not go on the fetch.** Both callers send requester-random bytes plus the published tip height (`SF-D5`). `attestation_nonce` is not a request field |
+| Derived assignment | [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §2: assignment for block *h* is a pure function of *h*−1's hash over the epoch-open drawable set. Public at *h*−1's publication; every node including `P` computes it identically. Witness = producer. Window = `CHALLENGE_RESPONSE_BLOCKS`. *(The v1 block-bound `attestation_nonce = H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` was deleted with `SF-D8` (a0), 2026-09-13.)* | Assignment stays derived. **It does not go on the fetch.** Both callers send requester-random bytes plus their own chain anchor at `tip − 720` (height and hash; `SF-D5` as amended). Nothing derived from the assignment is a request field |
 | Request parse | `rust/shekyl-p-serve/src/serve.rs:558–560` — `path.strip_prefix(ROUTE_PREFIX)` then `parse::<u64>()`; comment: "Exact decimal id — no path suffix, no query string" | The request unit is a whole shard (`§4`) |
 | Segment size | `rust/shekyl-curve-tree/src/segment.rs:36` — `LEAF_BYTES`; `:63` — `leaves_per_segment()` | Honest-holder egress of a challenge fetch: one full segment (`leaves_per_segment() × LEAF_BYTES`) |
 | Serving ↔ fetching Tor | `PWD-E9` ([`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md) §PWD-E9): daemon gets its own tor path, no crossover to the archival-serving persona; launch path takes instance identity as a parameter. Implemented 2026-09-09 (`DaemonTorControl`, `shekyl-tor-control-daemon`) | Closed. Constrains `SF-D2` (RULED): reuse is the **daemon zone's** SOCKS, never the serving persona's |
@@ -872,13 +872,15 @@ is reachable there (rule 47 — the gate proves the subject exists in
 test and does not in release). Not an environment variable a deployed
 `shekyl-p-host` could read.
 
-This ruling selects the **key only**. It does not inherit
-`verify_pass_countersignature`'s current nonce-only message from
-`shekyl-archival-retention/src/attestation_wire.rs`: caller-supplied
-opaque nonces invalidate that function's premise that a nonce
-containing `shard_id` is by itself a server-enforced shard binding.
-`SF-D8` rules the signed transcript
-(`nonce ‖ height ‖ shard_id`).
+This ruling selects the **key only**. The signed transcript is
+`SF-D8`'s — `nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] ‖
+shard_id_le[8]`, LANDED by (a0) in `verify_pass_countersignature`
+(`shekyl-archival-retention/src/attestation_wire.rs`, transcript in
+`pass_anchor.rs`). The v1 nonce-only message that function verified
+before (a0) is RETIRED: caller-supplied opaque nonces invalidated its
+premise that a nonce containing `shard_id` is by itself a
+server-enforced shard binding, which is why `shard_id` is now an
+explicit transcript term.
 
 Two same-neighbourhood keys are expressly **not** selected:
 
