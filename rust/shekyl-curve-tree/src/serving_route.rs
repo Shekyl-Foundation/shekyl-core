@@ -190,6 +190,12 @@ impl ServingEndpoint {
 /// RFC 4648 base32, lowercase, unpadded. 35 bytes is a whole number of
 /// 5-byte groups (7 × 5), so no padding case arises for the one real
 /// input; the general path is written and tested rather than assumed.
+///
+/// `acc` holds only the `bits` not yet emitted (fewer than 5 after each
+/// byte), so it never carries more than 12 live bits and the shift cannot
+/// lose anything. Rust's `<<` would discard high bits silently rather than
+/// trip `overflow-checks`, so the mask is legibility, not correctness —
+/// but a reader should not have to know that to trust the loop.
 fn base32_lower(data: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     let mut out = String::with_capacity(data.len().div_ceil(5) * 8);
@@ -203,6 +209,7 @@ fn base32_lower(data: &[u8]) -> String {
             let index = usize::try_from((acc >> bits) & 0x1f).expect("5-bit index");
             out.push(char::from(ALPHABET[index]));
         }
+        acc &= (1 << bits) - 1;
     }
     if bits > 0 {
         let index = usize::try_from((acc << (5 - bits)) & 0x1f).expect("5-bit index");
