@@ -335,8 +335,9 @@ impl Apparatus {
             let service_id = identity.service_id().clone();
             // An ephemeral attestation key per persona: the spike measures
             // the shipped serve path, and signing is on it. Its own height is
-            // the apparatus's fixed chain view — the client leg anchors its
-            // requests against the same number.
+            // the apparatus's fixed chain view; the re-based client leg
+            // (`fetch_once`, step (c)) anchors its requests against the same
+            // number.
             let signer = Arc::new(TestKeySigner::ephemeral(APPARATUS_OWN_HEIGHT));
             let endpoint = PServeEndpoint::bind(
                 Arc::new(FixtureShardProvider::new(Arc::clone(&payload))),
@@ -418,6 +419,22 @@ impl Apparatus {
     }
 
     /// One fetch as `client_id`, returning the byte count on success.
+    ///
+    /// **STALE since `SF` (a) — every fetch through this leg is the identical
+    /// 404 (`FailureKind::Transport`), and [`Self::await_reachable`] times out.**
+    /// The serve side now requires the `SF-D5` request header and
+    /// countersigns the body; `blocking_get` cannot carry a header, by
+    /// design (`shekyl-p-transport` is the wallet's P↔principal isolation
+    /// crate, not a general HTTP client). The daemon client that does carry
+    /// it is `shekyl-p-fetch` (`SF` (b)) — but it dials with **no** SOCKS
+    /// isolation (`SF-D3`: circuits are reused), so under it this rig's cold
+    /// and warm arms, which *are* per-client isolation, collapse into one.
+    /// Re-basing the arms onto that topology is the W₂ measurement's own
+    /// design, `ARCHIVAL_SHARD_FETCH.md` §9.1 step **(c)**, and swapping the
+    /// leg here without it would keep the arm labels while measuring
+    /// something else. Blocked on (c); falsify by
+    /// `cargo test -p shekyl-sp-t3-spike --test live_apparatus -- --ignored`
+    /// passing.
     async fn fetch_once(&self, client_id: &PCanonicalId, url: &str) -> Result<usize, FailureKind> {
         let Ok(client) = PTorClient::for_persona(client_id, &self.socks) else {
             return Err(FailureKind::Transport);
