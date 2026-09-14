@@ -431,7 +431,7 @@ prefix is a convention the gate cannot see. The existing
 `DOMAIN_PQC_LEAF` row (`CRYPTO_DOMAIN_REGISTRY.tsv:182`, mechanism 4)
 retires and two mechanism-1 rows replace it (this one and the record's,
 below); the mechanism-1 pin rises by two and the mechanism-4 pin falls by
-one. `shekyl-crypto-hash` gains a 64-byte XOF read beside `cshake256_32`.
+one. `shekyl-crypto-hash` already exports `cshake256_64` (the 64-byte read used for signature digests); it is reused, not added.
 The multisig container takes the same function (`k = H_ℓ(container)`,
 `multisig_pqc_leaf_hash`). Documents that name Blake2b for the leaf hash
 follow in the implementing PR: `FCMP_PLUS_PLUS.md` §1, the CBOM row in
@@ -596,9 +596,10 @@ and the crate's own formula gives the figures below.
 
 | Quantity | Figure | Basis |
 |---|---|---|
-| Proof size | **+256 B per proof** at depths 3–4 for 1–16 inputs (**not** +128 B per input as first written — a misreading corrected 2026-09-14): the claimed point's 4 words are packed into C1 vector commitments of `COMMITMENT_WORD_LEN = 128` words over the padded row count, so one more point adds two commitments and their `t` terms, 8 elements; at 8 layers the C1 rows cross a power of two and the packing changes | the crate's own `proof_size` (`lib.rs:278–335`), replicated cell-for-cell against `shekyl_fcmp::tree::proof_size` on a 5×5 grid, then re-run with five claimed points; **measured at pre-flight**. The measured 4 768 B of §6.1 is 4 288 B FCMP + 480 B SAL |
-| First-layer prove | **≈ +25 %** of claimed-point work (5 on 4); small single-digit % of the §6.1 total, which is dominated by the branch layers | by analogy to the `c_blind` leg; **measure** |
-| Verify | one more point in the batched MSM; ≤ a rounding step of §6.1 | **measure** |
+| Proof size | **+128 B per proof for one input at depths 3–6; 0 to −2 752 B for 2–16 inputs** — measured on real proofs at pre-flight (census companion §8). The leg replaces the per-input extra-scalar branch commitment with one claimed point packed into the existing C1 words, so multi-input proofs shrink. Two earlier figures in this row ("+128 B per input", then "+256 B per proof") were formula readings that kept the extra branch; superseded | real `proof.len()` against the crate's `proof_size` at every (inputs, layers) the suite proves, 2026-09-14 |
+| First-layer rows | **+14 rows** per input (97 → 111, `Circuit::muls()`); the one-input C1 IPA now pads to 512 at 7 layers instead of 8 | measured 2026-09-14 (census §8) |
+| Prove | 8-layer crate bench: +3 % to +24 % (601 → 737 ms one input; 2 079 → 2 588 ms four inputs), most of it the padding crossing at 8 layers | measured, noisy box; floor device owed |
+| Verify | +6 ms per proof (25 → 31 ms, n = 100); batches of 10 and 100 within noise | measured |
 | Creation / scan | one fixed-base double-scalar multiplication + one HKDF-Expand per output | wallet-side, negligible |
 | `0x07` width | **64 B per output** under `PL-D3a` (32 B compressed point ‖ 32 B record); the point alone would be 32 B | shape rule `64·n` |
 | New primitive | **none** — Wei25519 arithmetic, the divisor `discrete_log` gadget, NUMS generators, HKDF and `cshake256` (`shekyl-crypto-hash`) all exist | R6 |
@@ -611,8 +612,8 @@ prover path (`ProveInput` carries `r`; sibling leaves carry `CM.x` as now);
 `Input`/`InputVerification` (point instead of scalar; `PqcCommitmentMismatch`
 finally means what it says); the derivation crate (second reduction target,
 two blind labels, two generators with pinned strings and vectors);
-`shekyl-crypto-hash` gains a new function, the 64-byte cSHAKE256 XOF read
-(S0/S3: a new consensus-path hash entry point beside `cshake256_32`); **the
+`shekyl-crypto-hash`'s existing `cshake256_64` gains a consensus-path caller
+(S0); **the
 `G_r` generator table joins the `discrete_log_challenge` generator set at
 `circuit.rs:124–125` (`[T, U, V, G]` becomes five) and `FcmpParams`
 (`params.rs:26–29`, `:57–59`) — an S0 row of its own, because the challenge

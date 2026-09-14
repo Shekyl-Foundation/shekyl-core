@@ -446,3 +446,76 @@ Not under `docs/test_vectors/` but equally frozen: `ct2_tier_{a,b}.json`,
 | `scripts/ci/check_golden_revision_bump.py` | Shard-visual PNG oracle (§5). |
 | `.github/workflows/rust-audit-test.yml:190` | Fuzz-inventory presence list (§6 (d)-1). |
 | `src/shekyl/shekyl_ffi.h:67, 340, 390, 580, 863-910, 2962-3061, 3771, 3982` | `u128` difficulty, SLH-DSA "fourth classical field", 128-byte `proof_secrets` (ho‖y‖z‖k_amount) — unrelated 128s. |
+
+---
+
+## 8. Pre-flight measurements — `PL-D3` opening leg (2026-09-14)
+
+Rule 26 B9: measured, not estimated. Vendored crate `full-chain-membership-proofs`
+with the opening leg implemented (uncommitted at measurement time, branch
+`feat/pl-d3-pedersen-leaf-commitment` off `dev` a6160a4bd), same box as the
+§6.1 baseline of the round document (16-thread i9-11950H, `--release`, other
+builds running concurrently — treat the timings as ordering evidence, not
+budgets; the rule-76 floor device is still owed).
+
+**Circuit rows (`Circuit::muls()` at the first layer, one input).** 97 before,
+**111** after: the opening leg costs **14 rows** (one `discrete_log` gadget over
+the new `J` table, one `on_curve`, one `incomplete_add_pub`); the per-input
+constant `C1_LEAVES_ROWS_PER_INPUT` is set to 111. With `C1_TARGET_ROWS = 256`
+the one-input IPA keeps its padding through 6 layers (215 rows) and crosses to
+512 at 7 layers (267 rows); the old circuit crossed at 8 (253 → 8 layers = 305).
+
+**Proof bytes (FCMP part; the SAL leg adds 480 B per input on top).** The
+crate's own `proof_size` equals the real `proof.len() + 64` at every (inputs,
+layers) the suite proves (`debug_assert_eq` exercised in the debug profile;
+release runs printed both). Before → after:
+
+| inputs, layers | before | after | Δ |
+|---|---|---|---|
+| 1, 3 | 4 288 | 4 416 | **+128** |
+| 1, 4 | 4 928 | 5 056 | +128 |
+| 1, 5 | 5 312 | 5 440 | +128 |
+| 1, 6 | 5 952 | 6 080 | +128 |
+| 1, 7 | (5 312 pad-256) | 5 504 (pad-512) | padding regime crosses |
+| 1, 8 | 6 976 | 6 144 | −832 |
+| 2, 3 | 5 248 | 5 248 | 0 |
+| 2, 4 | 6 528 | 6 528 | 0 |
+| 4, 3 | 7 104 | 6 848 | −256 |
+| 8, 3 | 8 768 | 8 000 | −768 |
+| 16, 3 | 11 968 | 10 176 | −1 792 |
+| 16, 8 | 22 848 | 20 096 | −2 752 |
+
+Why the multi-input proofs shrink: the leg **replaces** the per-input
+one-element "extra leaf scalar" branch (a whole vector commitment plus its `t`
+terms) with one claimed point packed into the existing C1 words. The round
+document's first figure ("+128 B per input") was right for one input at depth
+3 for the wrong reason, and its correction ("+256 B per proof") was wrong
+because the replica kept the extra branch; this table supersedes both.
+
+**Prove / verify (crate benches, 8 layers, sequential, n = 10 / n = 100).**
+
+| | before | after |
+|---|---|---|
+| prove, 1 input | 601 ms | 737 ms |
+| prove, 2 inputs | 1 157 ms | 1 400 ms |
+| prove, 3 inputs | 1 786 ms | 1 841 ms |
+| prove, 4 inputs | 2 079 ms | 2 588 ms |
+| verify, 1 proof (n=100) | 25 ms | 31 ms |
+| verify, batch of 10 | 100 ms | 105 ms |
+| verify, batch of 100 | 849 ms | 833 ms |
+
+At 8 layers the one-input C1 IPA crosses from 256 to 512 rows, which is most of
+the one-input prove delta; at ≤6 layers the padding is unchanged and the delta
+is one leg's work. Verify moves by a few milliseconds per proof; batch
+verification is within noise.
+
+**Correctness.** All eight crate tests pass in release (single input at 1–9
+layers, 2–4 inputs at 1–4 layers, the malleated-proof suite, the size table,
+both benches, and the new `test_wrong_opening_fails`, which rejects a
+verifier-supplied `K` the leaf's commitment does not open to). `cargo fmt`
+clean.
+
+**Ledger corrections.** `shekyl-crypto-hash` already exports `cshake256_64`; no
+new hash entry point is needed (round doc §6.2 said one would be added). The
+two NUMS generators are `PQC_LEAF_COMMITMENT_G_K` and `PQC_LEAF_COMMITMENT_J`
+in `shekyl-curve-generators`, pinned in the frozen-points KAT.
