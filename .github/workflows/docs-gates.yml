@@ -128,6 +128,33 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_lmdb_schema_coverage.py
 
+      - name: Run AFC-1 archival forcing register check
+        # The forcing register (docs/design/archival_forcing_cells.tsv) is the
+        # 34-cell map of which archival apply/revert halves a block sequence
+        # can force. Its value is that its citations RESOLVE, and line anchors
+        # into db_lmdb.cpp drift with every edit — a register of stale anchors
+        # is worse than none, because it reads as checked.
+        #
+        # Extraction is deliberately identical to check_lmdb_schema_coverage's
+        # parse_table_list: two gates pinning one construct with independently
+        # written parsers agree by construction today and diverge silently
+        # later. A looser parser here would MISS a future archival table, which
+        # would then be absent from BOTH sides of the set difference and go
+        # green over a table nothing covers.
+        #
+        # Runs even if earlier checks failed, for the same non-masking reason.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_archival_forcing_cells.py
+
+      - name: Run AFC-1 forcing register self-test
+        # The gate's four legs were bitten by hand when written; a hand bite
+        # is not a pin. These fixtures hold each leg, including the gate's own
+        # regression: the anchor leg once matched any long word from the
+        # free-text note, so a row could resolve to a comment rather than to
+        # code while reading as checked.
+        if: '!cancelled()'
+        run: python3 scripts/ci/test_check_archival_forcing_cells.py
+
       - name: Run LMDB schema coverage self-test
         # The write-pattern leg pins SET membership, not cardinality. A
         # rotation that keeps the blind-upsert count at 10 and changes
