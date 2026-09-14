@@ -111,6 +111,7 @@ set(unit_tests_sources
   archival_serve_credit_integration.cpp
   archival_bond_post.cpp
   archival_bond_post_integration.cpp
+  archival_settlement_testdb.cpp
   archival_attestation_verify.cpp
   archival_pass_anchor.cpp
   archival_reward_emission.cpp

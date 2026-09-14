@@ -48,7 +48,7 @@ Grounded on `dev@cbba3e261`, 2026-08-23. Every row was read, not recalled.
 | 4 | Absent-row ⇒ non-observation ⇒ not-drawable | §4.2 | *conditional in §4.2 — resolved by `SO-D1`* |
 | 5 | Expiry ⇒ miss | fork §7.3, closed 2026-08-08 | §7 preamble |
 | 6 | Urn state derives, never stores | §7.1 + `ARCHIVAL_CREDIT_WIRE.md` §3 | §7.1 "urn bookkeeping" |
-| 7 | Prune horizon ≥ window | `failure_window.rs:93–104,181` | const-assert present |
+| 7 | Prune horizon ≥ window | `failure_window.rs:90–124,178–210` (re-anchored 2026-09-13, SO-D5 discharge) | const-assert present; names both failure directions |
 
 ### 1.1 Why the existing table cannot be widened (re-verified, not inherited)
 
@@ -490,6 +490,16 @@ assert is unrelated. **Failing safe is not the same as failing correctly**, and
 an assert that describes the wrong failure is one that gets relaxed by whoever
 proves that failure cannot happen.
 
+> **DISCHARGED 2026-09-13.** `failure_window.rs` now names both directions in
+> the module doc (`:90–124`, one bullet per table, with which read is live
+> today and which is the ruled future), in the assert's doc and its message
+> (`:178–210`), and in the margin test's name and comment
+> (`the_window_fits_inside_the_archival_retention_horizon`). The claim the
+> rewrite rests on — both tables prune at one horizon — was verified at
+> `prune_archival_epochs_before` (`db_lmdb.cpp:7726,7728`), not inherited
+> from this section. The `:93–104` / `:181` anchors quoted above are the
+> pre-rewrite line numbers and are left as written; the §2 row is updated.
+
 ---
 
 ## 9. `SO-D6` — CLOSED 2026-08-24: recompute, no alt twin, and the revert already exists
@@ -683,7 +693,9 @@ serve-credit response"* — which is precisely why
 **What is genuinely open** is the arithmetic at the boundary: a response naming
 `E` admitted during `E+1`, and what dedup and the emission gather do with it.
 
-**Scope addition 2026-09-12 (`ba4b3c73a`), so the wiring and the interface change arrive together:** `SO-D8` also **promotes the settlement write path onto `BlockchainDB`**. It lives only on `BlockchainLMDB` today (`src/blockchain_db/lmdb/db_lmdb.h:754–775`; zero hits in `src/blockchain_db/blockchain_db.h` and `src/blockchain_db/testdb.h`), so if the cutover lands without it, either the base-class change happens on the consensus-cutover critical path or the redb store (DRS-0) silently ships without a write path LMDB has.
+**Scope addition 2026-09-12 (`ba4b3c73a`):** `SO-D8` also **promotes the settlement write path onto `BlockchainDB`**. *Its original coupling — "so the wiring and the interface change arrive together" — is SUPERSEDED 2026-09-13: the interface landed alone (`a6f602d33`, next paragraph) while the production caller stays on the §5.1 hold; the promotion was pulled forward precisely so the base-class change is off the cutover's critical path.* **PRE-PROMOTION:** it lived only on `BlockchainLMDB` (`src/blockchain_db/lmdb/db_lmdb.h`; zero hits in `blockchain_db.h` and `testdb.h`), so if the cutover landed without it, either the base-class change would happen on the consensus-cutover critical path or the redb store (DRS-0) would silently ship without a write path LMDB has.
+
+**LANDED 2026-09-13 (`a6f602d33`).** The four methods are pure virtuals on `BlockchainDB`, `override` on `BlockchainLMDB`. `BaseTestDB` throws on write (absence is SO-D1 non-observation, so a silent no-op is fail-open); working-store KATs stay on `TempLMDB`. The production caller remains the §5.1 hold.
 
 **Why it is not ruled here, stated as a rule-22 blocker rather than a
 deferral:** this is **consensus-visible admission timing on a genesis-frozen

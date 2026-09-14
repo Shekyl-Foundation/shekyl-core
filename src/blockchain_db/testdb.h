@@ -30,6 +30,7 @@
 
 #pragma once
 
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <map>
@@ -199,6 +200,26 @@ public:
   virtual void set_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) override {}
   virtual void remove_archival_serve_credit_bit(const crypto::hash&, uint64_t, uint64_t, uint64_t) override {}
   virtual uint32_t archival_serve_credit_pass_count(const crypto::hash&, uint64_t, uint64_t) const override { return 0; }
+
+  // Settlement write throws. Absence is SO-D1 non-observation (the most
+  // forgiving verdict), so a silent no-op write would let a test pass after
+  // a failed store — the SO-D5 inversion in a double. Serve-credit may no-op
+  // because absence there is a MISS. A working in-memory table belongs on a
+  // subclass (the serve-credit pattern) or on BlockchainLMDB / TempLMDB.
+  virtual void set_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
+    uint32_t, uint32_t) override
+  {
+    throw std::runtime_error(
+      "FATAL: BaseTestDB is not a settlement store; a no-op write would "
+      "read back as SO-D1 non-observation (fail-open). Use TempLMDB.");
+  }
+  virtual bool get_archival_settlement(const crypto::hash&, uint64_t, uint64_t,
+    std::array<uint8_t, SHEKYL_ARCHIVAL_SETTLEMENT_ROW_BYTES>&) const override
+  {
+    return false;
+  }
+  virtual void delete_archival_settlement_for_epoch(uint64_t) override {}
+  virtual void delete_archival_settlement_before_epoch(uint64_t) override {}
 
   virtual void put_archival_bond_record(const crypto::hash&, const std::vector<uint8_t>&,
     const std::vector<uint8_t>&, const crypto::public_key&, uint64_t,

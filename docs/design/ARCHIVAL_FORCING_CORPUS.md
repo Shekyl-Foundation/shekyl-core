@@ -102,7 +102,7 @@ pair was found by answering a question this round had first filed as open.
 
 ### 3.1 `archival_settlement` apply — no production caller
 
-`set_archival_settlement` has no production caller; `db_lmdb.cpp:7667` says so
+`set_archival_settlement` has no production caller; `db_lmdb.cpp:7668` says so
 in terms. **No block sequence can fire its apply path**, so this is a
 pre-existing exclusion that the corpus inherits, not a corpus defect. It is
 held under the writer round's §5.1 pending SO-D8.
@@ -110,7 +110,7 @@ held under the writer round's §5.1 pending SO-D8.
 ### 3.2 `archival_settlement` revert — vacuous, which is the subtler half
 
 `delete_archival_settlement_for_epoch` *does* execute: it is reached from
-`revert_archival_slashes_at_height` (`db_lmdb.cpp:6433`, defined `:7505`).
+`revert_archival_slashes_at_height` (`db_lmdb.cpp:6433`, defined `:7506`).
 Reachability is not the question. **Discriminability is.** Over a table
 nothing ever writes, "ran and deleted nothing" and "never ran" leave
 identical stores, so no diff can tell an implemented revert from an absent
@@ -134,7 +134,7 @@ SO-D8 lands.**
 
 A test-only raw writer that forced settlement rows would make both cells
 forceable. **Refused**, and the tree has already refused it in this exact
-place. The note at `db_lmdb.cpp:7485-7493` sits just above
+place. The note at `db_lmdb.cpp:7486-7494` sits just above
 `delete_archival_settlement_for_epoch` itself and reads:
 
 > ... this CALL SITE is a corruption tripwire with no red-side test --
@@ -281,8 +281,8 @@ countersignature a format-round decision.
 
 **So both witness families are excluded for want of a producer**, exactly as
 `archival_settlement` is, and both revert halves are vacuous by the §3.2
-argument: `remove_archival_attestation_witness_at_height` (`db_lmdb.cpp:9762`)
-and `remove_archival_alt_attestation_witness` (`db_lmdb.cpp:9807`) are each a
+argument: `remove_archival_attestation_witness_at_height` (`db_lmdb.cpp:9764`)
+and `remove_archival_alt_attestation_witness` (`db_lmdb.cpp:9809`) are each a
 lone `mdb_del` with no counter and no side effect, so neither can be
 discriminated over a table nothing writes. The named blocker is the **Phase 2/3
 template writer**, not SO-D8.
