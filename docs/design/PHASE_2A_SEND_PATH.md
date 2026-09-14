@@ -174,8 +174,11 @@ must never tell the daemon which leaf it is proving membership for.
 
 Rationale (privacy > security > features per `00-mission.mdc`):
 
-- FCMP++ has **no ring**. The anonymity set is the **entire tree**; there is no
-  decoy at the wallet↔daemon boundary. This is the Monero `get_outs` lesson
+- FCMP++ has **no ring**. The set the proof ranges over is the **entire tree**;
+  there is no decoy at the wallet↔daemon boundary. (Necessary, not sufficient:
+  while `PL-D1` is open the spend itself identifies its inputs on-chain, so
+  this boundary rule protects the property the `PL-` round restores, not one
+  the chain has today — [`FCMP_SPEND_LINKABILITY.md`](FCMP_SPEND_LINKABILITY.md).) This is the Monero `get_outs` lesson
   inverted: `get_outs` fetched a ring's worth of outputs *so the daemon could
   not tell which was real* (the decoys were the cover). `60-no-monero-legacy.mdc`
   deleted `get_outs` because FCMP++ needs no ring — but that same absence means

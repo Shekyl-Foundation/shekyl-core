@@ -2028,12 +2028,13 @@ rust/shekyl-crypto-pq/src/multisig_receiving.rs
 > check. Its *actual* effect was to foreclose a
 > solo(1)/multisig(2) **cross-model linkage** — under FCMP++ separate
 > txs are unlinkable, so co-spending is the only proof of common control
-> across key models. That belongs in the wallet, not consensus, on two
-> grounds: **(1) no externality** — the two co-spent outputs are one-time
-> keys and the FCMP++ proof ranges over the whole tree, so no other
-> party's anonymity set shrinks (contrast a small ring, which poisons
-> others' decoys — the reason ring size *is* consensus); it is pure
-> self-harm; **(2)** Shekyl already permits exactly this opt-in class — a
+> across key models. That belongs in the wallet, not consensus. **Re-based
+> 2026-09-14 (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)):**
+> the first of the two grounds recorded here — *"no externality: the FCMP++
+> proof ranges over the whole tree, so no other party's anonymity set
+> shrinks"* — is struck; every FCMP++ spend identifies its input by the
+> public 4th leaf scalar until `PL-D3` lands, so there is no set to shrink.
+> The conclusion stands on the remaining ground: **(2)** Shekyl already permits exactly this opt-in class — a
 > `scheme_id=2` spend provably marks the spender, shipped as a disclosed
 > opt-in cost — so refusing an opt-in cross-model link while permitting
 > the multisig mark would be incoherent. It is therefore a **wallet

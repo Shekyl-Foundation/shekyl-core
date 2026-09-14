@@ -232,9 +232,9 @@ This happens once per layer, alternating between Selene and Helios, all the way 
 
 ### Our 4th scalar
 
-Because of our 4th scalar, the proof also demonstrates: "The PQC key hash committed in my leaf matches the one I'm presenting in the transaction" — again, without revealing which leaf. The verifier provides the expected `H(pqc_pk)` as a public input, and the circuit checks that the 4th leaf scalar equals it.
+Because of our 4th scalar, the proof also demonstrates: "The PQC key hash committed in my leaf matches the one I'm presenting in the transaction." The verifier provides the expected `H(pqc_pk)` as a public input, and the circuit checks that the 4th leaf scalar equals it — and **that is exactly what reveals which leaf.** The same `H(pqc_pk)` was published for the output when it was created (`tx_extra` tag `0x07`), so anyone can hash the key the transaction presents and find the one leaf that carries it. The three blinded scalars hide the leaf; the fourth, unblinded and public, names it (`PL-D1`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md)).
 
-This means an attacker who compromises the classical EC cryptography (e.g., via a quantum computer) still can't steal funds — they'd also need to forge the ML-DSA-65 signature on the PQC key that's bound into the tree leaf. They must break **both** layers.
+What this does and does not give. Against an attacker who breaks Ed25519 but not the Helios/Selene curves the proof runs on, both layers must be broken, as intended: they cannot substitute a key, and they cannot forge an ML-DSA-65 signature under the committed one. Against an attacker who can compute elliptic-curve discrete logs in general (for example with a quantum computer), it does **not** stop theft by itself: the membership proof that enforces the leaf binding is a discrete-log argument, so such an attacker forges it for a key of their own choosing and signs under that key; the ML-DSA-65 layer stops forgery of a signature under a given key, not substitution of the key. The design's answer for a full discrete-log break is the V4 lattice-only transition, with the Keccak-chained `0x07` record of each output's key (`PL-D3a`) as the post-quantum ownership record until then (`PL-D2`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
 
 ### The proof system: Generalized Bulletproofs (GBPs)
 
