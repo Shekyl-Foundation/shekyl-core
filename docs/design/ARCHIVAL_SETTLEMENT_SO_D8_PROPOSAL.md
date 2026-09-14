@@ -11,12 +11,23 @@ site were written for this round (Slices A and B of the 2026-09-13 brief were
 authorized; Slice C — implementation — was not, and §8 is its plan, not its
 work).
 
-> **F5 (§1.4) is a finding outside this round's scope and larger than it:
-> every FCMP++ spend on the tree is linkable to the output it spends, today,
-> by the public 4th leaf scalar.** It was found by running the check Rick
-> asked for before the witness scheme was adopted. It is filed in
-> `docs/FOLLOWUPS.md` as pre-genesis/critical and is **Rick's to open**; this
-> proposal only records what it means for the witness key (§2.2).
+> **F5 (§1.5) → `PL-D1`, CLOSED by `PL-D3` — PR #745
+> (`feat/pl-d3-pedersen-leaf-commitment`), ratified by Rick 2026-09-14.** The
+> finding this proposal filed as `F5` on 2026-09-13 — every FCMP++ spend
+> linkable to its output by the public 4th leaf scalar — was opened by Rick
+> as its own round the same day: `PL-` is the family, `F5` the historical
+> name (`docs/design/FCMP_SPEND_LINKABILITY.md`, lands with #745). The fix is
+> a **hiding Pedersen commitment to the key** in the leaf's 4th scalar, opened
+> in-circuit to the point the verifier derives from the revealed key; it is
+> **the** fix for the v3 era — the hash-mechanism successor `PL-D4` is ruled to
+> **V4** (Rick, 2026-09-14). **Reconciled against #745 on 2026-09-14** per
+> its §12 ruling 11 (*"whichever lands second reconciles to one FOLLOWUPS
+> line and a cross-reference"*): this proposal's `FOLLOWUPS.md` line is
+> withdrawn in favour of the `PL-` round's, and §1.5, §2.2, §8, §9 and Q8 now
+> stand on `PL-D3`'s stated premise — *the key appears once, at spend, and is
+> published nowhere at creation* — rather than on the defect's persistence.
+> **Nothing in `SO-D8` waits on anything beyond #745 landing** (§8,
+> "Sequencing against `PL-D3`").
 
 **Grounded at** `dev@37accf6f` (fresh worktree `~/shekyl/wt-so-settlement`,
 branch `feat/so-a-settlement-surface` carrying the three Slice-A commits
@@ -232,14 +243,15 @@ objection is answered not by a claimed-block field but by **validating `h`**
 recorded in `ARCHIVAL_PER_CHALLENGE_RECORD.md` in-line at `PC-D2` when the
 ruling PR lands (rule 23: the superseded row carries its status in the row).
 
-### 1.5 F5 — every FCMP++ spend is linkable to the output it spends, by the public 4th leaf scalar (**tree-wide; not this round's; Rick's to open**)
+### 1.5 F5 — every FCMP++ spend is linkable to the output it spends, by the public 4th leaf scalar (**tree-wide; → `PL-D1`, CLOSED by `PL-D3` in PR #745, 2026-09-14; the table below is the defect as found at `dev@37accf6f`, 2026-09-13**)
 
 Rick asked, before adopting a witness scheme that reveals a coinbase output's
 per-output hybrid key early: *what prevents `H(revealed hybrid_public_key)`
 from being matched against the chain's published per-output leaf hashes at
 spend time? There must be something — otherwise every FCMP++ spend would be
-trivially linkable.* Read at source, 2026-09-13: **nothing prevents it, and
-every FCMP++ spend is trivially linkable.** The chain, each link verified:
+trivially linkable.* Read at source, 2026-09-13: **nothing prevented it, and
+every FCMP++ spend was trivially linkable.** The chain, each link verified
+at that pin (**records-was**; rows 1, 4 and 5 are the ones `PL-D3` changes):
 
 | # | Fact | Where |
 |---|---|---|
@@ -275,31 +287,61 @@ reopens this finding."* The creating tx's inputs carry the identical
 true when it was written; the analysis was scoped to one vin and did not ask
 whether the ordinary spend had the same shape (`FCMP_MEMBERSHIP_ONLY.md:376–384`
 cross-references the same disposition). §7.3's *"third linkability class"* is
-not a class of the emission vin; it is the tree.
+not a class of the emission vin; it is the tree. *(#745 strikes the §7.3
+invariant at source, marks the tripwire FIRED, and removes the emission
+vin's `pqc_pk_hash` field — its binding becomes the in-proof opening, `PL`
+§12 ruling 9.)*
 
-**Disposition (this proposal's, for Rick to rule on):**
+**Disposition — SUPERSEDED 2026-09-14 by the `PL-` round (#745); the
+2026-09-13 text is retained below, marked.** What was proposed here on
+2026-09-13 was: file in `FOLLOWUPS.md` as pre-genesis priority-2, mint no
+family, Rick opens the round. Rick did, the same day; `PL-D1` is the defect,
+`PL-D3` the fix, `PL-D4` (a proper hash-commitment mechanism) the V4
+successor. The reconciliation this proposal owes under `PL` §12 ruling 11:
 
-- **Filed** in `docs/FOLLOWUPS.md`, `Target: pre-genesis`, as a mission
-  priority-2 (privacy) defect on the consensus wire. Not `SO-`; no family is
-  minted here — it wants its own round with its own identifier, and that is
-  Rick's call (rule 94 §1). No code was touched.
-- **What it is not:** it is not a soundness defect (funds are safe; the PQC
-  binding works exactly as documented). It is a privacy defect that nullifies
-  FCMP++'s reason for existing while every other property holds — the shape
-  rule 16 names as the dangerous one, because nothing fails.
-- **What a fix must do**, stated only so the witness-key ruling below can be
-  made against it: the spend must convince the verifier that the revealed
-  key matches the leaf **without disclosing the leaf's 4th scalar** — an
-  in-circuit hash of the key (expensive over a 1,996-byte input under
-  Blake2b; plausible under an algebraic hash), a blinded commitment to
-  `h_pqc` re-randomised like `C`, or a key structure that is not per-output
-  and per-spend revealed. Every one of those keeps `hybrid_public_key` in
-  cleartext at spend time (ML-DSA cannot be verified without its public
-  key). **That fact is what rules the witness key** (§2.2).
-- **Genesis-frozen surfaces this touches:** the leaf layout, the FCMP++
-  public-input list, `tx.pqc_auths`, `tx_extra` `0x07`. All pre-genesis; the
-  pre-genesis discount (`15-deletion-and-debt`) applies in full and nothing
-  here argues for anything but fixing it structurally before genesis.
+- **The `FOLLOWUPS.md` line is withdrawn** (this branch, 2026-09-14). The one
+  line of record is the `PL-` round's `PL-D4` entry under `Target: V4`, landing
+  with #745. Nothing `SO-` owns is on it.
+- **What `PL-D3` does, as ratified** (`FCMP_SPEND_LINKABILITY.md` §6.2, read on
+  `feat/pl-d3-pedersen-leaf-commitment` 2026-09-14): the leaf's 4th scalar
+  becomes `CM.x`, `CM = k·G_k + r·G_r` (two NUMS generators), with `k = H_ℓ(hybrid_pk)` a cSHAKE256
+  read under `shekyl/pqc-leaf-key-v1` reduced into the Ed25519 scalar field
+  and `r` an HKDF blind from the same `combined_ss`. The circuit opens `CM`
+  to the verifier-derived `K = k·G_k` (`shekyl-oxide/crypto/fcmps`
+  `first_layer`); the `0x07` entry becomes 64 B, `CM ‖ record`, `record =
+  cSHAKE256("shekyl/pqc-leaf-record-v1", pk ‖ r_h)` (`PL-D3a`, the
+  post-quantum binding that survives into V4). New consensus content rule at
+  relay and connect: every `0x07` point canonical, prime-order, non-identity
+  (`check_pqc_leaf_entries`). The wallet verifies both halves at scan;
+  mismatch is received-but-unspendable. `hybrid_public_key` stays in
+  cleartext at spend — as §1.5's 2026-09-13 text predicted every fix would.
+- **Why it fixes `PL-D1`, in the round's own words:** *"`k` (and `K`) appears
+  once, at spend, and is published nowhere at creation; `CM` is published at
+  creation and is a perfectly hiding commitment, so matching `K` to any `CM`
+  requires `r`."* **That sentence is the premise this proposal now builds
+  on.** The fix does not hide `K`; it hides *which `CM`* `K` opens to. A key
+  that is published a second time, under a second label, is linked by byte
+  equality with no commitment involved — which is exactly what a witness
+  scheme keyed on a spendable output's own key would do (§2.2).
+- **What it is not, unchanged:** not a soundness defect; funds were safe
+  throughout. `PL-D2` (the in-circuit binding is only as sound as the
+  discrete-log proof) is ruled and documented at source by the same round;
+  the post-quantum-sound leg is `PL-D4` at V4.
+- **Residual the round records (its §13), and why it does not reach `SO-`:**
+  the output's *creator* holds `combined_ss` and can recognise the spend of
+  the output it created. For the coinbase, creator and recipient are the same
+  party (self-encapsulation), so the residual is empty on the only outputs
+  the witness scheme touches.
+
+*Superseded 2026-09-13 text, retained for the record:* filed in
+`docs/FOLLOWUPS.md`, `Target: pre-genesis`, priority-2, no family minted,
+Rick's to open; not a soundness defect; a fix must convince the verifier the
+revealed key matches the leaf without disclosing the 4th scalar (in-circuit
+hash, blinded commitment re-randomised like `C`, or a non-per-output key
+structure) and every such fix keeps `hybrid_public_key` in cleartext at
+spend; genesis-frozen surfaces touched: leaf layout, public-input list,
+`tx.pqc_auths`, `tx_extra` `0x07`. The prediction held: `PL-D3` is the
+blinded-commitment option, and the key is still in cleartext at spend.
 
 ---
 
@@ -430,43 +472,65 @@ touched. Written down because R-B is the first mechanism where evidence and
 its reference live in different blocks, and a reader will ask. The cache
 (§7) rewinds by the same suffix.
 
-**Linkability of an early witness-key reveal — the answer is F5, and it rules
-the key.** Rick's framing offered two outcomes: *"nothing, because the
-spend-side key is re-randomised or distinct"* → scheme clean; *"the pk is
-sensitive pre-spend"* → dedicated never-spent witness output. The tree gives
-a third: the spend-side key is **not** re-randomised, **is** the same key,
-and its reveal at spend **already** identifies the output — for every output,
-not only coinbase. So, on the tree as it stands, revealing a coinbase
-output's per-output hybrid key at witness time adds **nothing** an observer
-does not get at spend time. That is not a reason to adopt it:
+**Linkability of an early witness-key reveal — the answer was F5; under
+`PL-D3` (#745) it is `PL-D3`'s own premise, and it rules the key the same
+way.** Rick's framing offered two outcomes: *"nothing, because the spend-side
+key is re-randomised or distinct"* → scheme clean; *"the pk is sensitive
+pre-spend"* → dedicated never-spent witness output. On 2026-09-13 the tree
+gave a third: the spend-side key was the same key and its reveal at spend
+already identified the output (§1.5). **Under `PL-D3` the second outcome is
+the true one, and it is now stated by the fix itself:** the spend-side key is
+*not* re-randomised — `pqc_auths[i].hybrid_public_key` is revealed in
+cleartext at spend, the verifier derives `K = H_ℓ(pk)·G_k` from it, and the
+circuit opens the leaf's hiding `CM` to that `K`. The fix holds **because
+`K` appears once, at spend, and is published nowhere at creation** (`PL`
+§6.2, "Why it fixes `PL-D1`"). A key published twice is linked by byte
+equality, with no commitment in the way:
 
-- F5 is a pre-genesis defect that will be fixed, and every plausible fix
-  keeps `hybrid_public_key` in cleartext at spend (§1.5). Under any such fix,
-  a witness reveal of a **spendable** output's key re-creates the link at
-  that one output: `pk` seen at witness time equals `pk` seen at spend time.
-  Coupling the witness to a spendable output's key builds the round's
-  mechanism on the defect's persistence.
+- **The coinbase output's own per-output key — ruled out, on `PL-D3`'s
+  premise.** A witness reveal at `h_incl ≤ h + W₂` publishes that output's
+  `pk` labelled *"producer of `h`"*. When the output is later spent, the same
+  `pk` appears in `pqc_auths`; equality names the spent input as block `h`'s
+  coinbase — anonymity set one for that output, and every coinbase output of
+  every block that ever witnessed. `PL-D3` would be intact for the rest of
+  the tree and void for exactly the outputs the archival mechanism touches.
+  The 2026-09-13 text ruled this out because *"it would leak after F5 is
+  fixed"*; that is no longer a prediction — the fix is on record and the leak
+  is its stated premise, inverted.
 - A **dedicated, never-spent witness output** (Rick's dodge) works but costs
-  one extra coinbase output per block — a leaf, a 0x07 hash, a KEM
-  ciphertext (1,120 B) — permanently, for a key that is never used to spend.
-- **Proposed instead: a dedicated witness key that is not an output.**
-  Derive a hybrid keypair from the coinbase `combined_ss` under a **distinct
-  HKDF `info`/salt** (not `derive_output_secrets`'s per-output path — a
-  registered domain, `CRYPTO_DOMAIN_REGISTRY.tsv` row) and commit
-  `hash_pqc_public_key(witness_pk)` in the coinbase under a **new `tx_extra`
-  tag** (`0x0C` is the next free after `0x0B`, `tx_extra.h:52`): 32 B/block
-  permanent, no output, no leaf, nothing the spend path ever touches. The
-  witness reveals `witness_pk` + a hybrid signature in the record's pruned
-  half; verification is (§2.1 item 3e) hash-compare against `h`'s coinbase
-  tag, then verify. It links to nothing because it *is* nothing but the
-  witness role — which is public by construction (the producer of `h` is the
-  producer of `h`). Same secret-lifetime cost as any alternative (item 7);
-  the node retains `combined_ss` or the derived seed for `W₂` blocks.
+  one extra coinbase output per block — a leaf, a 64-B `0x07` entry (`PL-D3a`),
+  a KEM ciphertext (1,120 B) — permanently, for a key that is never used to
+  spend; and its `0x07` entry must still pass `check_pqc_leaf_entries` and be
+  scan-verified for nothing.
+- **Proposed instead, unchanged: a dedicated witness key that is not an
+  output.** Derive a hybrid keypair from the coinbase `combined_ss` under a
+  **distinct HKDF `info`** — a third child of the same `prk`, beside the
+  per-output path and `PL-D3`'s `r`/`r_h` labels; HKDF is registry mechanism 2,
+  so like those two labels it is a review duty the count-pin does not cover
+  (`PL` §6.2) — and commit the key in the coinbase under a **new `tx_extra`
+  tag** (`0x0C` is the next free after `0x0B`; #745 adds no tag). The
+  commitment is a **transparent** 32-B cSHAKE256 read of the canonical key
+  bytes under its own registered customization (`shekyl/archival-witness-key-v1`,
+  a mechanism-1 row, count-pin +1) — **not** `PL-D3`'s leaf-key scalar
+  (`shekyl/pqc-leaf-key-v1` is a domain for a scalar that opens a Pedersen
+  commitment; reusing it would put a non-leaf key under a leaf domain) and
+  **not** a hiding commitment, because hiding buys nothing here: the witness
+  role is public by construction (the producer of `h` is the producer of `h`)
+  and the key is revealed within `W₂` blocks anyway. 32 B/block permanent, no
+  output, no leaf, nothing the spend path ever touches. The witness reveals
+  `witness_pk` + a hybrid signature in the record's pruned half; verification
+  is (§2.1 item 3e) hash-compare against `h`'s coinbase tag, then verify.
+  HKDF children under distinct `info` are independent under the PRF
+  assumption the derivation already rests on, so the witness key reveals
+  nothing about the sibling per-output key, `r`, or `r_h`. Same
+  secret-lifetime cost as any alternative (item 7); the node retains
+  `combined_ss` or the derived seed for `W₂` blocks.
 
 **This is Q8 (§10); the proposal's recommendation is the dedicated
-non-output key.** What is *ruled out* by F5 is the coinbase output's own
-per-output key — not because it leaks today (nothing can leak more than the
-spend already does) but because it would leak *after* F5 is fixed.
+non-output key, now made against `PL-D3` rather than against the defect.**
+The shape of the commitment (transparent hash vs a `PL-D3a`-style
+`pk ‖ blind` record) and whether the new tag gets a content rule at relay and
+connect modelled on `check_pqc_leaf_entries` are Q12 and Q13.
 
 ---
 
@@ -657,7 +721,7 @@ marshaling shim that dies with the daemon.
 | **How `passes` is obtained** | `archival_serve_credit_pass_count(P,s,E)` (`db_lmdb.cpp:5138`) — a per-pair-epoch count over the `PC-D4` widened key; **complete at `h_close(E) + W₂` and therefore at the slash pass** (`10,000 ≥ 500`). Redb: the same count over the same table. |
 | **Where the emission gather goes** | Same hook, same pass (§5): `gather_archival_emission_epoch_snapshot` is called from `process_archival_slash_for_epoch` after the writer, not from `process_archival_epoch_close_at_height`. The invariant-2 joint pin moves with it. |
 | **Admission changes (one function, `blockchain.cpp:5100–5330`)** | Parse `h` (new kept field); `if (h >= current_height \|\| current_height - h > CHALLENGE_RESPONSE_BLOCKS) reject`; fetch `block_hash(h−1)` by height for the leaf index; `ctx.settlement_epoch = settlement_epoch_at_height(h)` (`SO-D9` (i)); `is_assigned(h, P, s)` via the cache FFI; witness check via a `shekyl_archival_verify_witness(...)` FFI that takes `h`'s coinbase witness tag bytes + the pruned witness pk/sig + the record preimage. Dedup: `archival_serve_credit_present(P,s,E,h)` exact-get replaces the `pass_count > 0` probe at `:5156`; Rust twin in `serve_credit_decisions.rs`. The Rust FFI verifier (`serve_credit.rs`) drops the fire-height path and re-binds `ERR_CREDIT_DEADLINE` to the window. |
-| **Witness key (pending Q8)** | `shekyl-crypto-pq`: `derive_witness_keypair(combined_ss)` under a new registered domain; `hash_pqc_public_key` of it committed under a new `tx_extra` tag by `construct_miner_tx` (`cryptonote_tx_utils.cpp:198` region). Node-side: a `ZeroizeOnDrop` ring of `W₂` witness seeds keyed by height, Rust-owned, with the restart policy Q10 rules. |
+| **Witness key (pending Q8, Q12, Q13)** | `shekyl-crypto-pq`: `derive_witness_keypair(combined_ss)` under a new HKDF `info` (registry mechanism 2, review duty); commitment `cSHAKE256("shekyl/archival-witness-key-v1", canonical witness pk bytes)` (mechanism 1, count-pin +1; **not** `PL-D3`'s `pqc_key_scalar`, which is a leaf-domain scalar) written under the new coinbase `tx_extra` tag by `construct_miner_tx` (`cryptonote_tx_utils.cpp:198` region) — the Rust side produces the bytes, the C++ only appends them. Content rule for the tag at relay and connect (exactly one entry, exactly 32 B) modelled on #745's `check_pqc_leaf_entries` and reached through the same FFI adapter, if Q13 rules it. Node-side: a `ZeroizeOnDrop` ring of `W₂` witness seeds keyed by height, Rust-owned, with the restart policy Q10 rules. |
 | **Batching (pending Q9)** | One `serve_credit` tx per issuing block per witness, carrying all of `h`'s records as vins; the witness pk + sig once, in the tx's prunable region, covering a preimage that binds every vin. Admission semantics per Q9(b). |
 | **Cost** | One epoch replay per settled epoch if the cache is not resident (1.09 s here; Pi-4 owed), inside the slash pass, off the admission path. Admission: `O(1)` ring lookups + one hybrid verify per **batch** (or per record unbatched — 97 ML-DSA-65 verifies per block is the unbatched admission cost and is itself a reason to batch). Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
 | **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk (`db_lmdb.cpp:5870–5890`) must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read at `:5880` is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
@@ -669,9 +733,17 @@ marshaling shim that dies with the daemon.
 it thickens the C++ beyond marshaling. If redb's `apply_block` lands first,
 the FFI half is simply never written.
 
-**Sequencing against F5:** none of the above blocks on F5's fix **provided Q8
-rules the non-output witness key**; with the coinbase output's own key, the
-witness mechanism would have to be re-cut when F5 is fixed.
+**Sequencing against `PL-D3` (#745) — replaces the 2026-09-13 "Sequencing
+against F5":** #745 lands first; the `SO-D8` cutover is built on a worktree
+from `dev` after it. Nothing above touches the leaf, `0x07`, `pqc_auths`, the
+circuit or the FCMP++ public-input list, so there is no textual overlap; the
+only contact is the premise — `PL-D3` holds because the per-output key is
+published once, at spend, and **`SO-D8` must not be the second publication**.
+Q8's non-output witness key is what keeps that true; with the coinbase
+output's own key, `SO-D8` would void `PL-D3` on every witnessing block's
+coinbase. `PL`'s successor `PL-D4` is V4 and changes the commitment
+mechanism, not the reveal-once premise; `SO-D8` does not need to know about
+it.
 
 ---
 
@@ -687,13 +759,13 @@ witness mechanism would have to be re-cut when F5 is fixed.
 | `SO-D8d` | `passes ≤ issued` by construction under membership + dedup-on-`h` + validated `h`; FATAL at settlement, never clamped. | **PROPOSED** |
 | `SO-D8e` | `EpochAssignmentCache` with a `W₂` ring: Rust-owned, in-memory, sequential, checkpointed, never persisted; `λ` from the constant (Q4); retained through the slash deadline (Q7); 5-call opaque FFI as a deletion-surface adaptor; direct call from redb `apply_block`. | **PROPOSED** |
 | `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row re-worded from "no referent" to "referent pending the cutover". | **RESOLVED by R-B** |
-| Witness key (Q8) | **Dedicated non-output hybrid key** derived from the coinbase `combined_ss` under a registered domain, committed under a new coinbase `tx_extra` tag; pk + sig pruned. The coinbase output's own per-output key is **ruled out by F5** (§2.2). | **PROPOSED — Rick's** |
+| Witness key (Q8) | **Dedicated non-output hybrid key** derived from the coinbase `combined_ss` under a registered domain, committed (transparent cSHAKE256, own customization) under a new coinbase `tx_extra` tag; pk + sig pruned. The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise** — the key is published once, at spend; a witness reveal would be the second publication (§2.2). Commitment shape and tag content rule are Q12/Q13. | **PROPOSED — Rick's** |
 | Batching (Q9) | One witness tx per issuing block; consequences (a)–(c) of §2.1 item 8 to be ruled. | **PROPOSED — Rick's** |
 | Slice A1 (Q6) | **Keep**, per review, on grounds narrower than §12 gave. | **ANSWERED — keep** |
 | F3 | First cut's F1 row 1 cited the attestation path for the vin's binding; corrected at source. | **CORRECTED** |
 | F4 | `PC-D2` ↔ mechanism §2 contradiction; `PC-D2`'s herd premise inverted; reversed by R-B. In-line supersession at `PC-D2` owed with the ruling PR. | **RECORDED** |
-| **F5** | **Every FCMP++ spend is linkable to its output by the public 4th leaf scalar.** Tree-wide, pre-genesis, priority-2. Filed in FOLLOWUPS; **not** this round's; needs its own round and identifier. | **FILED — Rick's to open** |
-| Sweep on ruling | `constants.rs:59` W₂ doc (becomes true — keep); `ARCHIVAL_SETTLEMENT_WRITER.md` §6/§12/§13 and the `IMPLEMENTATION_INDEX.md` SO-row `SO-D7` lag sentence (become true — re-date); `PC-D2` and its citations (`ARCHIVAL_PER_CHALLENGE_RECORD.md`, `TJ` `:819–822`) marked SUPERSEDED in-line; `FCMP_PLUS_PLUS.md:102–104,:121–122`, `POST_QUANTUM_CRYPTOGRAPHY.md:735–737`, `MERKLE_TREE.md:235` — **F5's sweep, owed by F5's round, not this one**, but listed so the next reader does not rediscover them as accurate. | owed with the ruling PRs |
+| **F5** → `PL-D1` | **Every FCMP++ spend is linkable to its output by the public 4th leaf scalar.** Tree-wide, pre-genesis, priority-2. Opened by Rick as the `PL-` round 2026-09-13/14; **CLOSED by `PL-D3`** (hiding Pedersen commitment opened in-circuit) in PR #745, ratified 2026-09-14; `PL-D4` (hash mechanism) at V4. This proposal's FOLLOWUPS line withdrawn 2026-09-14 per `PL` §12 ruling 11. | **CLOSED by #745 (pending its merge)** |
+| Sweep on ruling | `constants.rs:59` W₂ doc (becomes true — keep); `ARCHIVAL_SETTLEMENT_WRITER.md` §6/§12/§13 and the `IMPLEMENTATION_INDEX.md` SO-row `SO-D7` lag sentence (become true — re-date); `PC-D2` and its citations (`ARCHIVAL_PER_CHALLENGE_RECORD.md`, `TJ` `:819–822`) marked SUPERSEDED in-line; `FCMP_PLUS_PLUS.md:102–104,:121–122`, `POST_QUANTUM_CRYPTOGRAPHY.md:735–737`, `MERKLE_TREE.md:235` — **F5's sweep, DONE by #745 at source** (`PL` §11; the `REWARD_EMISSION_LEG.md` §7.3 tripwire marked FIRED there too). | owed with the ruling PRs (`PL` half done) |
 
 ### 9.1 Figures flagged for re-derivation
 
@@ -717,7 +789,7 @@ witness mechanism would have to be re-cut when F5 is fixed.
 | **Witness key loss** — producer of `h` restarts and loses the witness seed | Draws at `h` fall to non-observation; nothing errors. Shows up as `β`. | Q10's restart policy; at minimum a metric. Not a consensus concern; an availability one. |
 | **Batch as single point of failure** (Q9) | One witness tx carries ~97 credits; if it is underfunded, malformed, or unrelayed, all ~97 draws at `h` are non-observation. | Q9 (a)–(c). |
 | **Under-issuance regime** (`k_cap` binding) | Pairs with `issued ≤ 1` settle NonObservation with a row (`SO-D1`), so degradation is measured, not silent. Unchanged by R-B. | `SO-D1`/`SO-D2`'s `issued` byte. |
-| **F5 interaction** | On the tree today, nothing the witness reveals is not already revealed at spend. After F5 is fixed, a witness scheme keyed on a spendable output's pk re-creates the link at that output. | Q8: the non-output witness key. |
+| **`PL-D3` interaction** (was "F5 interaction") | `PL-D3` (#745) holds because the per-output key is published once, at spend. A witness scheme keyed on a spendable output's pk publishes it a second time, labelled with `h`; the later spend is linked by byte equality — `PL-D3` void on every witnessing coinbase. Witness key derived under its own HKDF `info` is independent of the sibling per-output key, `r` and `r_h`. | Q8: the non-output witness key; Q12/Q13 for its commitment. |
 
 ---
 
@@ -742,12 +814,15 @@ new ones arise from R-B. **Open: 3, 8, 9, 10, 11.**
 7. **RESOLVED by 1.** The cache must retain `≥ W₂` of per-block draws for
    admission regardless; retaining through the slash deadline is one more
    epoch of ~2 MB and removes the settlement replay. Recommendation: retain.
-8. **OPEN — (Witness key; F5 rules one option out)** Dedicated non-output
-   hybrid key derived from the coinbase `combined_ss` under a registered
-   domain, committed under a new coinbase `tx_extra` tag (proposal's
-   recommendation, §2.2); or a dedicated never-spent coinbase output (your
-   dodge — works, costs a leaf + KEM ciphertext per block); or the coinbase
-   output's own per-output key (**ruled out** — builds on F5's persistence).
+8. **OPEN — (Witness key; `PL-D3` rules one option out)** Dedicated
+   non-output hybrid key derived from the coinbase `combined_ss` under a
+   registered domain, committed under a new coinbase `tx_extra` tag
+   (proposal's recommendation, §2.2); or a dedicated never-spent coinbase
+   output (your dodge — works, costs a leaf + 64-B `0x07` entry + KEM
+   ciphertext per block, all scan-verified for nothing); or the coinbase
+   output's own per-output key (**ruled out** — `PL-D3` holds because that
+   key is published once, at spend; a witness reveal is the second
+   publication and voids the fix on every witnessing coinbase).
 9. **OPEN — (Batching)** One witness tx per issuing block: (a) fee source and
    submission path given it is a single point of failure for ~97 credits;
    (b) all-or-nothing admission or admit-valid-members; (c) its tx-pool
@@ -755,6 +830,28 @@ new ones arise from R-B. **Open: 3, 8, 9, 10, 11.**
 10. **OPEN — (Secret lifetime)** Restart policy for the witness seed ring:
     persist encrypted for `W₂` blocks (a secret at rest, rule 35), or accept
     loss as `β` with a metric. Rust-owned either way.
-11. **OPEN — (F5)** Who opens the round, under what identifier, and does it
-    gate anything currently in flight. This proposal asserts only that it is
-    pre-genesis, priority-2, and that Q8's recommendation is made against it.
+11. **RESOLVED 2026-09-14 — (F5)** You opened it as the `PL-` round the
+    same day; `PL-D1` is the defect, `PL-D3` the fix, ratified and landing in
+    #745; `PL-D4` at V4. It gates nothing in `SO-D8` beyond #745 merging
+    first (§8, "Sequencing against `PL-D3`"). This proposal's FOLLOWUPS line
+    is withdrawn; Q8's recommendation is re-made against `PL-D3`.
+12. **OPEN — (Witness commitment shape, new with #745)** The coinbase tag
+    commits the witness key as a **transparent** 32-B cSHAKE256 read of the
+    canonical key bytes under `shekyl/archival-witness-key-v1` (proposal's
+    recommendation: the role is public by construction and the key is
+    revealed within `W₂`, so hiding buys nothing, and a hash over the key
+    bytes is what a lattice-only verifier can still check at V4). The
+    alternative is `PL-D3a`'s record shape, `cSHAKE256(pk ‖ blind)`, which
+    hides the key until reveal at the cost of one more HKDF child and
+    carrying the blind in the record's pruned half — buying only that an
+    observer cannot test a *guessed* witness key against a block before the
+    reveal, which no adversary model in §9.1 needs. Rule either way; the
+    proposal says transparent.
+13. **OPEN — (Tag content rule, new with #745)** #745 makes `0x07` shape a
+    consensus rule at relay and connect (`check_pqc_leaf_entries`, FFI code
+    10). The new coinbase witness tag should get the same treatment —
+    exactly one entry, exactly 32 B, coinbase only — through the same FFI
+    adapter, so a malformed or absent commitment is refused at admission
+    rather than discovered when the first record citing `h` arrives and
+    cannot be verified. Proposal: yes, same PR as the tag. Cost: one CEN row
+    and one more arm in the adapter; nothing in C++ beyond the call.
