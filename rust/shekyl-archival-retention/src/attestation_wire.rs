@@ -370,13 +370,40 @@ pub fn verify_pass_countersignature(
             last: window.last(),
         },
     )?;
-    let message = record.countersignature_message(anchor_hash);
+    verify_pass_transcript(
+        p_pubkey,
+        &record.nonce,
+        record.anchor_height,
+        anchor_hash,
+        record.shard_id,
+        &record.signature,
+    )
+}
+
+/// Verify a pass countersignature over its transcript, with the anchor hash
+/// supplied by the caller.
+///
+/// This is the signature check alone — steps 1 and 2 of
+/// [`verify_pass_countersignature`] (id binding, admission window) are the
+/// admission path's. The fetch client calls this directly at response time
+/// (`SF-D8`): it holds the requester-side nonce, anchor, and the `P`
+/// pubkey from the bond record, and has no admission window to consult.
+/// Keeping the domain pairing here means admission and fetch cannot drift.
+pub fn verify_pass_transcript(
+    p_pubkey: &HybridPublicKey,
+    nonce: &[u8; PASS_NONCE_LEN],
+    anchor_height: u64,
+    anchor_hash: &[u8; PASS_ANCHOR_HASH_LEN],
+    shard_id: u64,
+    signature: &HybridSignature,
+) -> Result<(), PassCountersignatureError> {
+    let message = pass_countersignature_message(nonce, anchor_height, anchor_hash, shard_id);
     HybridEd25519MlDsa
         .verify(
             p_pubkey,
             shekyl_crypto_pq::signature::SCHEME_DOMAIN_ATTESTATION,
             &message,
-            &record.signature,
+            signature,
         )
         .map_err(|_| PassCountersignatureError::InvalidSignature)
 }
