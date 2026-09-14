@@ -194,6 +194,12 @@ members = [
     # the read-only store handle and never a wallet seed — §7.2(iii) custody.
     "shekyl-p-host",
 
+    # Daemon shard-fetch client: the other half of `shekyl-p-serve`'s
+    # protocol (ARCHIVAL_SHARD_FETCH.md, SF-D1..SF-D8). Tor-zone SOCKS5h dial,
+    # the SF-D5 request header, the SF-D8 countersignature verify, and a
+    # content-verify hole; reads no chain state, holds no key (SF-D4 cut).
+    "shekyl-p-fetch",
+
     # Capability families (PWD-E9): the client speaks the protocol for any
     # owner; the wallet crate is archival-P's Tor instance (`WalletTorControl`);
     # the daemon crate is the P2P overlay's ephemeral-per-boot instance
