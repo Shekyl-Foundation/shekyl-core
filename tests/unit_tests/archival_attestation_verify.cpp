@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-// Cross-language KAT for the credit-wire attestation verify (CW-3,
+// Cross-language pinned-vector test for the credit-wire attestation verify (CW-3,
 // ARCHIVAL_CREDIT_WIRE.md §3-§4; SF-D8 v2 countersignature, ARCHIVAL_SHARD_FETCH.md).
 // The verify LOGIC is exhaustively tested in Rust (shekyl-ffi
 // archival_ffi/attestation_verify_tests.rs); what only C++ can prove is that the C-side
@@ -12,9 +12,11 @@
 // definitions across the real ABI boundary -- the "byte-identical-or-split" surface.
 //
 // The vector is the SHARED deterministic fixture
-// rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_kat.json,
-// consumed unchanged by the retention crate's KAT and shekyl-ffi's
-// `pinned_v2_fixture_verifies_through_ffi`. Reading the same file on all three sides means
+// rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json,
+// consumed unchanged by the retention crate's attestation_wire_kat.rs and shekyl-ffi's
+// `pinned_v2_fixture_verifies_through_ffi`. Rule-50 oracle tier: the signature bytes are
+// SELF-PINNED (tier 3) -- a drift tripwire, not a KAT; only the hand-computed header and
+// transcript pins in the Rust file carry the KAT name. Reading the same file on all three sides means
 // the three cannot drift apart silently; it is regenerated only by the armed regenerator in
 // attestation_wire_kat.rs under a rule-50 decision-log citation (there is no C++-side paste).
 // A passing verdict proves the layout agrees end to end, and each negative control moves
@@ -52,7 +54,7 @@ std::vector<uint8_t> from_hex(const std::string& h)
 
 using hash32 = std::array<uint8_t, 32>;
 
-struct V2Kat
+struct V2Pinned
 {
   std::vector<uint8_t> headers;
   std::vector<uint8_t> witness;
@@ -66,13 +68,13 @@ struct V2Kat
   std::vector<hash32> anchor_window;
 };
 
-const V2Kat& kat()
+const V2Pinned& pinned()
 {
-  static const V2Kat loaded = [] {
-    std::ifstream ifs(ATTESTATION_V2_KAT_FIXTURE_PATH);
+  static const V2Pinned loaded = [] {
+    std::ifstream ifs(ATTESTATION_V2_PINNED_FIXTURE_PATH);
     if (!ifs.good())
       throw std::runtime_error(std::string("missing SF-D8 v2 attestation fixture at ")
-        + ATTESTATION_V2_KAT_FIXTURE_PATH);
+        + ATTESTATION_V2_PINNED_FIXTURE_PATH);
     rapidjson::IStreamWrapper wrapper(ifs);
     rapidjson::Document doc;
     doc.ParseStream(wrapper);
@@ -83,7 +85,7 @@ const V2Kat& kat()
         throw std::runtime_error(std::string("fixture missing string field ") + key);
       return from_hex(doc[key].GetString());
     };
-    V2Kat k{};
+    V2Pinned k{};
     k.headers = hex_field("header_hex");
     k.witness = hex_field("witness_hex");
     k.pubkey = hex_field("hybrid_public_key_hex");
@@ -145,7 +147,7 @@ uint8_t run_verify(const std::vector<uint8_t>& root, uint64_t predecessor_height
   const std::vector<hash32>& table, const std::vector<uint8_t>& pair_pid,
   const std::vector<uint8_t>& pair_pubkey)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
 
   shekyl_archival_pid_pubkey pair{};
   copy32(pair.p_id, pair_pid, "pair_pid");
@@ -170,10 +172,10 @@ uint8_t run_verify(const std::vector<uint8_t>& root, uint64_t predecessor_height
 
 // Step 0 across the ABI: the fixture's table is exactly the one Rust asks C++ to fill for the
 // fixture's predecessor height, and the genesis threshold is pinned at both sides (723 has no
-// window, 724 has one starting at height 0 -- the same pair the retention KAT pins).
+// window, 724 has one starting at height 0 -- the same pair the retention crate pins).
 TEST(archival_attestation_verify, step0_window_matches_fixture_and_pins_threshold)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   uint64_t first = 0;
   size_t len = 0;
   EXPECT_EQ(anchor_window(k.predecessor_height, first, len), SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
@@ -196,7 +198,7 @@ TEST(archival_attestation_verify, step0_window_matches_fixture_and_pins_threshol
 // The layout agrees end to end: the shared fixture, marshaled through the C structs, verifies OK.
 TEST(archival_attestation_verify, pinned_valid_vector_verifies_ok)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   EXPECT_EQ(run_verify(k.root, k.predecessor_height, k.anchor_window, k.p_id, k.pubkey),
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_OK);
 }
@@ -204,7 +206,7 @@ TEST(archival_attestation_verify, pinned_valid_vector_verifies_ok)
 // attestation_root field offset: flip one byte -> ROOT_MISMATCH.
 TEST(archival_attestation_verify, flipped_root_is_root_mismatch)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   std::vector<uint8_t> root = k.root;
   root[0] ^= 0x01;
   EXPECT_EQ(run_verify(root, k.predecessor_height, k.anchor_window, k.p_id, k.pubkey),
@@ -217,7 +219,7 @@ TEST(archival_attestation_verify, flipped_root_is_root_mismatch)
 // disagree. Perturbing a different height's entry changes nothing: one indexed lookup.
 TEST(archival_attestation_verify, forked_anchor_hash_is_countersig_invalid)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   std::vector<hash32> forked = k.anchor_window;
   forked.at(k.anchor_height - k.anchor_window_first_height)[0] ^= 0x01;
   EXPECT_EQ(run_verify(k.root, k.predecessor_height, forked, k.p_id, k.pubkey),
@@ -238,7 +240,7 @@ TEST(archival_attestation_verify, forked_anchor_hash_is_countersig_invalid)
 // verdicts, which precede the hash lookup).
 TEST(archival_attestation_verify, wrong_predecessor_height_moves_the_window)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   const size_t lag = k.anchor_window.size() - 1; // L, learned from step 0 -- C++ holds no copy
   EXPECT_EQ(run_verify(k.root, k.predecessor_height + lag + 1, k.anchor_window, k.p_id, k.pubkey),
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_ANCHOR_OUT_OF_WINDOW);
@@ -253,7 +255,7 @@ TEST(archival_attestation_verify, wrong_predecessor_height_moves_the_window)
 // block (here with the pinned record present; the record-less form is pinned in Rust).
 TEST(archival_attestation_verify, wrong_shape_anchor_table_is_malformed_anchor_table)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   std::vector<hash32> shorter(k.anchor_window.begin(), k.anchor_window.end() - 1);
   EXPECT_EQ(run_verify(k.root, k.predecessor_height, shorter, k.p_id, k.pubkey),
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_MALFORMED_ANCHOR_TABLE);
@@ -271,7 +273,7 @@ TEST(archival_attestation_verify, wrong_shape_anchor_table_is_malformed_anchor_t
 // pubkey_len == 0 is the bond-absent marker (a missing LMDB bond), not a bad signature.
 TEST(archival_attestation_verify, absent_bond_is_bond_absent)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   EXPECT_EQ(run_verify(k.root, k.predecessor_height, k.anchor_window, k.p_id, std::vector<uint8_t>{}),
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_BOND_ABSENT);
 }
@@ -280,7 +282,7 @@ TEST(archival_attestation_verify, absent_bond_is_bond_absent)
 // pair) is a set mismatch, the loud verdict that makes the pairs-not-positional design safe.
 TEST(archival_attestation_verify, wrong_pair_pid_is_set_mismatch)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   const std::vector<uint8_t> wrong_pid(32, 0xAB);
   EXPECT_EQ(run_verify(k.root, k.predecessor_height, k.anchor_window, wrong_pid, k.pubkey),
     SHEKYL_ARCHIVAL_ATTESTATION_VERIFY_ERR_PUBKEY_SET_MISMATCH);
@@ -336,7 +338,7 @@ TEST(archival_attestation_verify, empty_shape_across_ffi)
 // gets back exactly the fixture's pass p_id the ctx above pairs against.
 TEST(archival_attestation_verify, step1_names_the_pinned_pass_pid)
 {
-  const V2Kat& k = kat();
+  const V2Pinned& k = pinned();
   uint8_t out[config::ARCHIVAL_MAX_ATTESTATION_RECORDS][32];
   size_t n = 0;
   const uint8_t code = shekyl_archival_attestation_pass_p_ids(

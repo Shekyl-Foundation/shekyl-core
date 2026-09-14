@@ -224,7 +224,7 @@ fn empty_block_verifies_against_empty_root() {
 /// block shape the new verify recomputes `attestation_root(&[]) == empty_attestation_root()`
 /// (identical by construction) and must reject a non-empty mined root the same way. With the
 /// accept case above, this reproduces the interim EXACTLY on the empty shape — the claim that
-/// licenses deleting it (distinct from the populated KAT that licenses the verify).
+/// licenses deleting it (distinct from the populated pinned fixture that licenses the verify).
 #[test]
 fn empty_block_nonempty_root_is_root_mismatch() {
     let mut wrong = empty_attestation_root();
@@ -717,7 +717,7 @@ fn anchor_table_shape_is_checked_on_every_block() {
 
 /// Step 0's threshold, pinned at both sides through the FFI: `depth + L − 1` has no window,
 /// `depth + L` has one starting at height 0 — the genesis boundary, the same 723 / 724 pair the
-/// retention KAT pins.
+/// retention crate pins.
 #[test]
 fn anchor_window_threshold_is_pinned_at_723_and_724() {
     assert_eq!(PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT, 724);
@@ -792,12 +792,14 @@ fn pass_ids_feeds_step2_coverage() {
     );
 }
 
-/// The deterministic SF-D8 v2 fixture, shared with `shekyl-archival-retention`'s KAT and the C++
-/// cross-language KAT (`tests/unit_tests/archival_attestation_verify.cpp`), which reads the same
-/// file. Regenerated only by the armed regenerator in
+/// The deterministic SF-D8 v2 fixture, shared with `shekyl-archival-retention`'s
+/// `attestation_wire_kat.rs` and the C++ cross-language test
+/// (`tests/unit_tests/archival_attestation_verify.cpp`), which reads the same file. Rule-50
+/// oracle tier: **self-pinned (3)** — a drift tripwire, not a KAT, hence `pinned_*` names
+/// throughout. Regenerated only by the armed regenerator in
 /// `shekyl-archival-retention/tests/attestation_wire_kat.rs` (rule 50 decision-log citation).
 const V2_FIXTURE: &str = include_str!(
-    "../../../shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_kat.json"
+    "../../../shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json"
 );
 
 fn fixture() -> serde_json::Value {
@@ -814,7 +816,7 @@ fn fixture_32(kat: &serde_json::Value, key: &str) -> [u8; 32] {
 }
 
 /// The pinned vector verifies through the FFI exactly as it does through the retention crate:
-/// this is the C ABI half of the cross-language KAT — the same bytes the C++ test marshals through
+/// this is the C ABI half of the cross-language pin — the same bytes the C++ test marshals through
 /// the `#[repr(C)]` mirrors must reach `OK` here first.
 #[test]
 fn pinned_v2_fixture_verifies_through_ffi() {

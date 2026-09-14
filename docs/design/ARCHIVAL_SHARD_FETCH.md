@@ -1104,10 +1104,12 @@ chain above the fork point; `cb_out_key`, `cb_out_key_readable`,
 `BELOW_ANCHOR_THRESHOLD`; C++ sizes the table via
 `shekyl_archival_pass_anchor_window`). Witness cap
 `ATTESTATION_WITNESS_MAX_BYTES = 876 808` (+40/entry versus v1),
-Rust-authoritative, C++ asserted equal. KAT: a deterministic fixture
-(`tests/fixtures/attestation_pass_countersignature_v2_kat.json`, keys
+Rust-authoritative, C++ asserted equal. Pinned vector (rule-50 tier 3, a
+drift tripwire — the hand-computed header/transcript concatenations are the
+KATs): a deterministic fixture
+(`tests/fixtures/attestation_pass_countersignature_v2_pinned.json`, keys
 from `derive_archival_p_keys` at a pinned seed, a deterministic
-`kat_chain_hash` window) shared by the Rust, FFI, and C++ tests,
+`pinned_chain_hash` window) shared by the Rust, FFI, and C++ tests,
 regenerated under the armed regenerator with the decision-log entry of
 2026-09-13. The `P`-side gate and header parse are (a)'s.
 

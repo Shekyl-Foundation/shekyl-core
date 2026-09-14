@@ -10,7 +10,7 @@
     "c20d000000000000c40000000000000000000000000000000000000000000000"
   ],
   "attestation_root_hex": "3155a102c3a7757ca4f482dc8a9c60bceb588c74e35df6df47ce0f4c78f6e0ae",
-  "description": "Deterministic pinned SF-D8 v2 pass countersignature: P's identity keypair from derive_archival_p_keys(master_seed, Mainnet, Bip39, p_slot), ML-DSA leg hedged with ml_dsa_hedge_seed, over the DECODED request header nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] followed by shard_id_le[8], under domain_utf8. anchor_window_hashes_hex[i] is the connecting chain's hash at anchor_window_first_height + i (L + 1 entries, ascending); the verifier must find anchor_hash there at anchor_height. Consumed by shekyl-archival-retention/tests/attestation_wire_kat.rs and the FFI/C++ attestation KATs.",
+  "description": "Deterministic pinned SF-D8 v2 pass countersignature: P's identity keypair from derive_archival_p_keys(master_seed, Mainnet, Bip39, p_slot), ML-DSA leg hedged with ml_dsa_hedge_seed, over the DECODED request header nonce[32] ‖ anchor_height_le[8] ‖ anchor_hash[32] followed by shard_id_le[8], under domain_utf8. anchor_window_hashes_hex[i] is the connecting chain's hash at anchor_window_first_height + i (L + 1 entries, ascending); the verifier must find anchor_hash there at anchor_height. Consumed by shekyl-archival-retention/tests/attestation_wire_kat.rs and the FFI/C++ attestation pinned-vector tests. Rule-50 oracle tier: self-pinned (3).",
   "domain_utf8": "shekyl/archival-attestation-scheme-v2",
   "format_version": 2,
   "header_hex": "b8fcb07ce512dcb0ebe2e935ded2649d4c650ad52fdc7816c15dd3602bd888211100000000000000060000000000000001",

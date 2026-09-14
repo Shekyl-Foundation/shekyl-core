@@ -331,8 +331,9 @@ Rust scheme**, so the C++ differential pair (`get_transaction_signed_payload` /
 `transaction.rs` `pqc_signing_payload_hashes`) stays byte-identical and does
 not move — the wrap is Rust-only. F has no in-repo signer, so its constant is
 assignable now with the KAT writer the only lockstep. E's was assignable the
-same way until `SF-D8` (a0) landed its verifier and armed KAT (2026-09-13); the
-string is now pinned by `attestation_pass_countersignature_v2_kat.json` and
+same way until `SF-D8` (a0) landed its verifier and armed pinned vector
+(2026-09-13); the string is now pinned by
+`attestation_pass_countersignature_v2_pinned.json` and
 moves only with a regeneration recorded in the decision log.
 
 ### Census corrections folded as facts

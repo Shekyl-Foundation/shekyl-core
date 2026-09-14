@@ -3,13 +3,23 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Byte-pinned KAT for the credit-wire record format (`ARCHIVAL_CREDIT_WIRE.md`
-//! §3, amended by `ARCHIVAL_SHARD_FETCH.md` `SF-D8`):
+//! Byte-pinned vectors for the credit-wire record format
+//! (`ARCHIVAL_CREDIT_WIRE.md` §3, amended by `ARCHIVAL_SHARD_FETCH.md` `SF-D8`):
 //! `AttestationHeader::to_canonical_bytes`, `pass_request_header_bytes` /
 //! `pass_countersignature_message`, `attestation_root`, the witness encoding,
 //! the anchor window (both genesis boundaries), and a **deterministic pinned v2
 //! countersignature** that `verify_pass_countersignature` must accept against
 //! a pinned anchor-hash window.
+//!
+//! Oracle tiers (rule 50 — the name is part of the declaration). The header and
+//! transcript pins are **hand-computed (tier 1)**: byte concatenations checkable
+//! by eye, so they are KATs. The root, witness, and signature fixture
+//! (`fixtures/attestation_pass_countersignature_v2_pinned.json`) are
+//! **self-pinned (tier 3)**: produced by this crate and frozen, a drift tripwire
+//! and not a KAT — which is why every one of them is named `pinned_*`. The
+//! signature fixture carries an independent (tier 2) check alongside: the
+//! verifier accepts it and rejects every single-term mutation, so sign/verify
+//! co-drift cannot pass.
 //!
 //! These pins are the tripwire the crate's other attestation tests cannot be:
 //! every unit test in `attestation_wire.rs` is self-consistent (compute twice,
@@ -22,7 +32,7 @@
 //! The signature vector is deterministic end to end: `P`'s identity keypair is
 //! `derive_archival_p_keys` over a fixed master seed, and the ML-DSA leg is
 //! signed with a fixed hedging seed, so a rebuild reproduces the pinned
-//! signature byte-for-byte — sign/verify co-drift cannot pass here. The KAT is
+//! signature byte-for-byte — sign/verify co-drift cannot pass here. The pin is
 //! over the **decoded** 72-byte header in canonical binary (`SF-D8`
 //! clarification): the textual header encoding `RF-R1` owns never enters the
 //! transcript, so Rust and C++ cannot disagree on a case or padding variant.
@@ -32,7 +42,7 @@
 //! `SHEKYL_PINNED_REGEN_DECISION="YYYY-MM-DD <rationale>" \
 //!   cargo test -p shekyl-archival-retention --test attestation_wire_kat \
 //!   regenerate_attestation_wire_vectors -- --ignored --nocapture`
-//! It rewrites `tests/fixtures/attestation_pass_countersignature_v2_kat.json`
+//! It rewrites `tests/fixtures/attestation_pass_countersignature_v2_pinned.json`
 //! and prints the inline hex constants to paste below.
 
 use serde_json::{json, Value};
@@ -53,7 +63,7 @@ use shekyl_crypto_pq::signature::{
     SCHEME_DOMAIN_ATTESTATION,
 };
 
-const SIG_KAT: &str = include_str!("fixtures/attestation_pass_countersignature_v2_kat.json");
+const SIG_PINNED: &str = include_str!("fixtures/attestation_pass_countersignature_v2_pinned.json");
 
 /// The anchor depth IS the segment-freeze margin (`segment.rs`): the pass
 /// countersignature anchors at the depth segment freeze already relies on never
@@ -261,12 +271,12 @@ fn attestation_constants_are_pinned() {
     );
 }
 
-// ---- Anchor window: both genesis boundaries (SF-D8 ruling: KAT at 723 and 724) ----
+// ---- Anchor window: both genesis boundaries (SF-D8 ruling: pin 723 and 724) ----
 
 /// A deterministic stand-in for "the connecting chain's hash at `height`":
 /// `height_le ‖ 0xC4 ‖ zeros`. Hand-readable, so the fixture's window table is
-/// checkable by eye, and shared with the C++ KAT through the fixture file.
-fn kat_chain_hash(height: u64) -> [u8; PASS_ANCHOR_HASH_LEN] {
+/// checkable by eye, and shared with the C++ pinned-vector test through the fixture file.
+fn pinned_chain_hash(height: u64) -> [u8; PASS_ANCHOR_HASH_LEN] {
     let mut h = [0u8; PASS_ANCHOR_HASH_LEN];
     h[..8].copy_from_slice(&height.to_le_bytes());
     h[8] = 0xC4;
@@ -274,11 +284,13 @@ fn kat_chain_hash(height: u64) -> [u8; PASS_ANCHOR_HASH_LEN] {
 }
 
 /// The window a block connecting to `predecessor_height` sees, filled from
-/// `kat_chain_hash` — the same table the fixture carries for the pinned height.
-fn kat_window(predecessor_height: u64) -> PassAnchorWindow {
+/// `pinned_chain_hash` — the same table the fixture carries for the pinned height.
+fn pinned_window(predecessor_height: u64) -> PassAnchorWindow {
     let (first, len) = PassAnchorWindow::shape_for_predecessor(predecessor_height)
         .unwrap_or_else(|| panic!("predecessor {predecessor_height} has a window"));
-    let hashes: Vec<_> = (0..len as u64).map(|i| kat_chain_hash(first + i)).collect();
+    let hashes: Vec<_> = (0..len as u64)
+        .map(|i| pinned_chain_hash(first + i))
+        .collect();
     PassAnchorWindow::from_table(predecessor_height, &hashes).expect("table sized to the window")
 }
 
@@ -299,13 +311,13 @@ fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
     let (first, len) = PassAnchorWindow::shape_for_predecessor(724).expect("724 has a window");
     assert_eq!((first, len), (0, 5));
 
-    let (pk, sk, p_id) = kat_persona();
+    let (pk, sk, p_id) = pinned_persona();
     let anchor = 0u64;
     let sig = HybridEd25519MlDsa
         .sign(
             &sk,
             SCHEME_DOMAIN_ATTESTATION,
-            &pass_countersignature_message(&[0x09; 32], anchor, &kat_chain_hash(anchor), 3),
+            &pass_countersignature_message(&[0x09; 32], anchor, &pinned_chain_hash(anchor), 3),
         )
         .expect("sign");
     let rec = PassRecord {
@@ -317,12 +329,12 @@ fn anchor_window_genesis_boundary_is_pinned_at_723_and_724() {
         signature: sig,
     };
     assert_eq!(
-        verify_pass_countersignature(&kat_window(724), &pk, &rec),
+        verify_pass_countersignature(&pinned_window(724), &pk, &rec),
         Ok(())
     );
     // At 725 the window is [1, 5]: anchor 0 has fallen out of the bottom.
     assert_eq!(
-        verify_pass_countersignature(&kat_window(725), &pk, &rec),
+        verify_pass_countersignature(&pinned_window(725), &pk, &rec),
         Err(PassCountersignatureError::AnchorOutOfWindow {
             anchor_height: 0,
             first: 1,
@@ -497,12 +509,12 @@ fn witness_decode_rejects_corruption_of_the_pin() {
 // Every operand is fixed, so the fixture is a pure function of the code: the
 // persona keypair derives from MASTER_SEED via `derive_archival_p_keys`, the
 // ML-DSA leg is signed with ML_DSA_HEDGE_SEED, and the anchor window's hashes
-// are `kat_chain_hash` over the pinned heights. If sign and verify co-drift (a
+// are `pinned_chain_hash` over the pinned heights. If sign and verify co-drift (a
 // changed domain, a changed transcript layout, a changed nesting) the pinned
 // signature stops verifying — the property the self-consistent unit tests
 // cannot deliver.
 
-/// Fixed 64-byte master seed for the KAT persona. Test material only.
+/// Fixed 64-byte master seed for the pinned persona. Test material only.
 const MASTER_SEED: [u8; 64] = [0x5A; 64];
 const P_SLOT: u32 = 0;
 /// Fixed hedging seed for the deterministic ML-DSA leg.
@@ -517,14 +529,14 @@ const SIG_ANCHOR_HEIGHT: u64 = SIG_PREDECESSOR_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS
 const SIG_SHARD_ID: u64 = 17;
 const SIG_EPOCH: u64 = 6;
 
-fn kat_persona() -> (HybridPublicKey, HybridSecretKey, [u8; 32]) {
+fn pinned_persona() -> (HybridPublicKey, HybridSecretKey, [u8; 32]) {
     let keys = derive_archival_p_keys(
         &MASTER_SEED,
         DerivationNetwork::Mainnet,
         SeedFormat::Bip39,
         P_SLOT,
     )
-    .expect("derive KAT persona");
+    .expect("derive pinned persona");
     let pk_bytes = keys.hybrid_sign_pk.to_canonical_bytes().expect("pk bytes");
     let p_id = *shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&pk_bytes).as_bytes();
     (
@@ -534,11 +546,11 @@ fn kat_persona() -> (HybridPublicKey, HybridSecretKey, [u8; 32]) {
     )
 }
 
-fn kat_signature(sk: &HybridSecretKey) -> HybridSignature {
+fn pinned_signature(sk: &HybridSecretKey) -> HybridSignature {
     let msg = pass_countersignature_message(
         &SIG_NONCE,
         SIG_ANCHOR_HEIGHT,
-        &kat_chain_hash(SIG_ANCHOR_HEIGHT),
+        &pinned_chain_hash(SIG_ANCHOR_HEIGHT),
         SIG_SHARD_ID,
     );
     HybridEd25519MlDsa
@@ -546,7 +558,7 @@ fn kat_signature(sk: &HybridSecretKey) -> HybridSignature {
         .expect("deterministic attestation sign")
 }
 
-fn kat_record(p_id: [u8; 32], signature: HybridSignature) -> PassRecord {
+fn pinned_record(p_id: [u8; 32], signature: HybridSignature) -> PassRecord {
     PassRecord {
         p_id,
         shard_id: SIG_SHARD_ID,
@@ -558,9 +570,9 @@ fn kat_record(p_id: [u8; 32], signature: HybridSignature) -> PassRecord {
 }
 
 fn build_signature_document() -> Value {
-    let (pk, sk, p_id) = kat_persona();
-    let sig = kat_signature(&sk);
-    let record = kat_record(p_id, sig.clone());
+    let (pk, sk, p_id) = pinned_persona();
+    let sig = pinned_signature(&sk);
+    let record = pinned_record(p_id, sig.clone());
     let witness = BlockAttestationWitness {
         passes: vec![PassWitness {
             nonce: SIG_NONCE,
@@ -568,9 +580,9 @@ fn build_signature_document() -> Value {
             signature: sig.clone(),
         }],
     };
-    let window = kat_window(SIG_PREDECESSOR_HEIGHT);
+    let window = pinned_window(SIG_PREDECESSOR_HEIGHT);
     let table: Vec<String> = (window.first()..=window.last())
-        .map(|h| hex::encode(kat_chain_hash(h)))
+        .map(|h| hex::encode(pinned_chain_hash(h)))
         .collect();
     json!({
         "format_version": 2,
@@ -582,7 +594,7 @@ fn build_signature_document() -> Value {
                         hash at anchor_window_first_height + i (L + 1 entries, ascending); the \
                         verifier must find anchor_hash there at anchor_height. Consumed by \
                         shekyl-archival-retention/tests/attestation_wire_kat.rs and the FFI/C++ \
-                        attestation KATs.",
+                        attestation pinned-vector tests. Rule-50 oracle tier: self-pinned (3).",
         "domain_utf8": String::from_utf8(SCHEME_DOMAIN_ATTESTATION.to_vec()).expect("utf8"),
         "master_seed_hex": hex::encode(MASTER_SEED),
         "p_slot": P_SLOT,
@@ -592,14 +604,14 @@ fn build_signature_document() -> Value {
         "nonce_hex": hex::encode(SIG_NONCE),
         "predecessor_height": SIG_PREDECESSOR_HEIGHT,
         "anchor_height": SIG_ANCHOR_HEIGHT,
-        "anchor_hash_hex": hex::encode(kat_chain_hash(SIG_ANCHOR_HEIGHT)),
+        "anchor_hash_hex": hex::encode(pinned_chain_hash(SIG_ANCHOR_HEIGHT)),
         "anchor_window_first_height": window.first(),
         "anchor_window_hashes_hex": table,
         "shard_id": SIG_SHARD_ID,
         "settlement_epoch": SIG_EPOCH,
         "request_header_hex": hex::encode(pass_request_header_bytes(
-            &SIG_NONCE, SIG_ANCHOR_HEIGHT, &kat_chain_hash(SIG_ANCHOR_HEIGHT))),
-        "message_hex": hex::encode(record.countersignature_message(&kat_chain_hash(SIG_ANCHOR_HEIGHT))),
+            &SIG_NONCE, SIG_ANCHOR_HEIGHT, &pinned_chain_hash(SIG_ANCHOR_HEIGHT))),
+        "message_hex": hex::encode(record.countersignature_message(&pinned_chain_hash(SIG_ANCHOR_HEIGHT))),
         "header_hex": hex::encode(record.to_header().to_canonical_bytes()),
         "hybrid_signature_hex": hex::encode(sig.to_canonical_bytes().expect("sig")),
         "witness_hex": hex::encode(witness.to_canonical_bytes().expect("witness")),
@@ -608,7 +620,8 @@ fn build_signature_document() -> Value {
 }
 
 fn read_signature_fixture() -> Value {
-    serde_json::from_str(SIG_KAT).expect("attestation_pass_countersignature_v2_kat.json parses")
+    serde_json::from_str(SIG_PINNED)
+        .expect("attestation_pass_countersignature_v2_pinned.json parses")
 }
 
 fn fixture_hex(kat: &Value, key: &str) -> Vec<u8> {
@@ -616,7 +629,7 @@ fn fixture_hex(kat: &Value, key: &str) -> Vec<u8> {
 }
 
 /// The fixture's anchor window, decoded from `anchor_window_hashes_hex` — the
-/// table the FFI and C++ KATs marshal, so the verify-side pin below reads the
+/// table the FFI and C++ tests marshal, so the verify-side pin below reads the
 /// hashes from the file rather than recomputing them.
 fn fixture_window(kat: &Value) -> PassAnchorWindow {
     let hashes: Vec<[u8; 32]> = kat["anchor_window_hashes_hex"]
@@ -660,14 +673,14 @@ fn pinned_v2_signature_fixture_operands_match_this_test() {
     assert_eq!(kat["anchor_height"].as_u64(), Some(SIG_ANCHOR_HEIGHT));
     assert_eq!(
         fixture_hex(&kat, "anchor_hash_hex"),
-        kat_chain_hash(SIG_ANCHOR_HEIGHT)
+        pinned_chain_hash(SIG_ANCHOR_HEIGHT)
     );
     let (first, _) = PassAnchorWindow::shape_for_predecessor(SIG_PREDECESSOR_HEIGHT).unwrap();
     assert_eq!(kat["anchor_window_first_height"].as_u64(), Some(first));
     let window = fixture_window(&kat);
     assert_eq!(window.first(), first);
     for h in window.first()..=window.last() {
-        assert_eq!(window.hash_at(h), Some(&kat_chain_hash(h)));
+        assert_eq!(window.hash_at(h), Some(&pinned_chain_hash(h)));
     }
     assert_eq!(kat["shard_id"].as_u64(), Some(SIG_SHARD_ID));
     assert_eq!(kat["settlement_epoch"].as_u64(), Some(SIG_EPOCH));
@@ -710,7 +723,7 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
         .expect("pinned signature parses");
     let mut p_id = [0u8; 32];
     p_id.copy_from_slice(&fixture_hex(&kat, "p_id_hex"));
-    let record = kat_record(p_id, sig);
+    let record = pinned_record(p_id, sig);
     let window = fixture_window(&kat);
 
     assert_eq!(
@@ -724,18 +737,18 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
     // above the upper bound: a pre-fetched read) and at h + L + 1 (stale).
     for h in SIG_PREDECESSOR_HEIGHT..=SIG_PREDECESSOR_HEIGHT + PASS_ANCHOR_LAG_BLOCKS {
         assert_eq!(
-            verify_pass_countersignature(&kat_window(h), &pk, &record),
+            verify_pass_countersignature(&pinned_window(h), &pk, &record),
             Ok(()),
             "pinned record must verify at predecessor {h}"
         );
     }
     assert!(matches!(
-        verify_pass_countersignature(&kat_window(SIG_PREDECESSOR_HEIGHT - 1), &pk, &record),
+        verify_pass_countersignature(&pinned_window(SIG_PREDECESSOR_HEIGHT - 1), &pk, &record),
         Err(PassCountersignatureError::AnchorOutOfWindow { .. })
     ));
     assert!(matches!(
         verify_pass_countersignature(
-            &kat_window(SIG_PREDECESSOR_HEIGHT + PASS_ANCHOR_LAG_BLOCKS + 1),
+            &pinned_window(SIG_PREDECESSOR_HEIGHT + PASS_ANCHOR_LAG_BLOCKS + 1),
             &pk,
             &record
         ),
@@ -746,7 +759,7 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
     // transcript term, checked against the CHAIN's value, never the header's.
     let forked_hashes: Vec<_> = (window.first()..=window.last())
         .map(|h| {
-            let mut x = kat_chain_hash(h);
+            let mut x = pinned_chain_hash(h);
             x[9] ^= 0xFF;
             x
         })
@@ -835,7 +848,7 @@ fn regenerate_attestation_wire_vectors() {
     eprintln!("regenerating the attestation wire vectors under decision: {decision}");
 
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/attestation_pass_countersignature_v2_kat.json");
+        .join("tests/fixtures/attestation_pass_countersignature_v2_pinned.json");
     let doc = build_signature_document();
     std::fs::write(&path, serde_json::to_string_pretty(&doc).expect("json")).expect("write");
     eprintln!("wrote {}", path.display());

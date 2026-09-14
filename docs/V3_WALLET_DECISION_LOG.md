@@ -5367,7 +5367,7 @@ here so it is not re-derived.
   `NONCE_EXPECT_HEX` deleted with its function and replaced by the
   hand-computed `REQUEST_HEADER_EXPECT_HEX` and `MSG_EXPECT_HEX`
   concatenation pins.
-- `rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_kat.json`
+- `rust/shekyl-archival-retention/tests/fixtures/attestation_pass_countersignature_v2_pinned.json`
   — **new.** A fully deterministic positive vector: `P`'s identity keypair
   from `derive_archival_p_keys([0x5A; 64], Mainnet, Bip39, slot 0)`, the
   ML-DSA leg hedged with a fixed seed, over a fixed
@@ -5384,8 +5384,10 @@ here so it is not re-derived.
   added `archival_attestation_anchor_lag_blocks` key (a different `L` is
   a different chain).
 - Cross-language: the FFI attestation-verify tests and the C++
-  `archival_attestation_verify` KAT consume the same fixture, under this
-  same citation.
+  `archival_attestation_verify` pinned-vector test consume the same fixture,
+  under this same citation. (Renamed `_kat.json` → `_pinned.json` in review,
+  2026-09-14: the signature bytes are tier 3, and rule 50 reserves the KAT
+  name for tiers 1–2 — the oracle statement below is unchanged.)
 
 **Oracle statement (`50-testing.mdc`).** The root and witness pins remain
 **self-pinned (tier 3)** drift tripwires. The header and message pins are
