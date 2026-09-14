@@ -325,6 +325,8 @@ breath as ruling it defective. The digest **survives with changed status**:
 
 #### 5.4.1 The conformance-exception register (CSR-3a)
 
+<!-- conformance-tally: 127 CHECKED-CONFORMANT, 2 DIVERGENT, 1 UNREVIEWED -->
+
 **A bucket is not a conformance claim.** The census's buckets say whether a
 rule is *specified and ratified on record* — they say nothing about whether the
 C++ **implements** the spec it was ratified against. Those are different axes,

@@ -153,5 +153,54 @@ class CellFlag(unittest.TestCase):
         self.assertTrue(GATE._cell_is_yes("**yes**, all five"))
 
 
+class ArchivalFamilyLeg(unittest.TestCase):
+    """List-bijection, including digit-bearing names. A set() comparison
+    hides a second mapping to the same table; `[a-z_]+` hides `r2`."""
+
+    TABLES = ["blocks", "archival_bond", "archival_r2_market"]
+
+    @staticmethod
+    def _src(body: str) -> str:
+        return "archival_families! {\n" + body + "}\n"
+
+    def test_matching_rows_are_green(self):
+        src = self._src(
+            'ServeCredit => "archival_bond",\n'
+            'R2Market => "archival_r2_market",\n'
+        )
+        self.assertEqual(GATE.check_archival_families(src, self.TABLES), [])
+
+    def test_a_digit_bearing_name_is_visible_in_both_directions(self):
+        src = self._src('Bond => "archival_bond",\n')
+        errors = GATE.check_archival_families(src, self.TABLES)
+        blob = "\n".join(errors)
+        self.assertIn("archival_r2_market", blob)
+        ghost = GATE.check_archival_families(
+            self._src('Bond => "archival_bond",\nR2Market => "archival_r2_market",\n'),
+            ["blocks", "archival_bond"],
+        )
+        self.assertTrue(any("archival_r2_market" in e for e in ghost), ghost)
+
+    def test_a_duplicate_table_mapping_is_red(self):
+        src = self._src(
+            'Bond => "archival_bond",\n'
+            'BondAlias => "archival_bond",\n'
+            'R2 => "archival_r2_market",\n'
+        )
+        errors = GATE.check_archival_families(src, self.TABLES)
+        blob = "\n".join(errors)
+        self.assertIn("duplicate ApplyPolicy table name", blob)
+        self.assertIn("archival_bond", blob)
+
+    def test_zero_rows_is_a_missing_subject(self):
+        errors = GATE.check_archival_families(self._src(""), self.TABLES)
+        self.assertTrue(any("ZERO archival family" in e for e in errors), errors)
+
+    def test_a_missing_macro_is_a_missing_subject(self):
+        errors = GATE.check_archival_families(
+            'Bond => "archival_bond",\n', self.TABLES)
+        self.assertTrue(any("archival_families!" in e for e in errors), errors)
+
+
 if __name__ == "__main__":
     unittest.main()

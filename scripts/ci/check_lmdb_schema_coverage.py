@@ -85,6 +85,64 @@ COVERAGE_ROW = re.compile(
 )
 
 
+FAMILY_ROW = re.compile(
+    r'([A-Za-z][A-Za-z0-9]*)\s*=>\s*"(archival_[a-z0-9_]+)"'
+)
+FAMILY_MACRO = re.compile(r"archival_families!\s*\{(.*?)\}", re.S)
+
+
+def check_archival_families(fam_src: str, tables: list[str]) -> list[str]:
+    """Bijection: ApplyPolicy family rows ↔ X-macro archival tables.
+
+    Parsed as a *list*, not a set: a second mapping to an existing name
+    would leave the sets equal. Digits are in the name class because the
+    X-macro allows them (`archival_r2_market` is the worked case).
+    Reads the `archival_families!` invocation only — the generated
+    `Self::Variant => "…"` match arms are the same list and must not
+    double-count it.
+    """
+    errors: list[str] = []
+    block = FAMILY_MACRO.search(fam_src)
+    if not block:
+        return [
+            "archival_families! { … } not found in apply_policy.rs — the "
+            "leg's subject moved (rule 47)"
+        ]
+    rows = FAMILY_ROW.findall(block.group(1))
+    if not rows:
+        return [
+            "parsed ZERO archival family rows from apply_policy.rs -- the "
+            "leg reads nothing, which is first evidence its subject moved, "
+            "not that the sets agree"
+        ]
+    variants = [v for v, _ in rows]
+    names = [n for _, n in rows]
+    dup_var = duplicates(variants)
+    if dup_var:
+        errors.append(
+            "duplicate ApplyPolicy variant(s):\n  " + "\n  ".join(dup_var))
+    dup_names = duplicates(names)
+    if dup_names:
+        errors.append(
+            "duplicate ApplyPolicy table name(s); converting to a set "
+            "would hide a second mapping to the same table:\n  "
+            + "\n  ".join(dup_names))
+    fam_set = set(names)
+    macro_archival = [t for t in tables if t.startswith("archival_")]
+    missing = [t for t in macro_archival if t not in fam_set]
+    if missing:
+        errors.append(
+            "archival table(s) in SHEKYL_LMDB_TABLES with no ApplyPolicy "
+            "family, so their apply can never be stubbed nor shown "
+            "load-bearing (DRS 7.1.1):\n  " + "\n  ".join(missing))
+    ghosts = sorted(fam_set - set(macro_archival))
+    if ghosts:
+        errors.append(
+            "ApplyPolicy family name(s) that are not archival tables in the "
+            "X-macro:\n  " + "\n  ".join(ghosts))
+    return errors
+
+
 def duplicates(names: list[str]) -> list[str]:
     """Names appearing more than once, sorted.
 
@@ -701,22 +759,7 @@ def main() -> None:
     except OSError as exc:
         sys.exit(f"FAIL: cannot read apply_policy.rs ({exc}) -- the "
                  "archival-family leg has no subject (rule 47)")
-    fam_names = set(re.findall(r'=> "(archival_[a-z_]+)"', fam_src))
-    if not fam_names:
-        sys.exit("FAIL: parsed ZERO archival family names from "
-                 "apply_policy.rs -- the leg reads nothing, which is first "
-                 "evidence its subject moved, not that the sets agree")
-    macro_archival = {t for t in tables if t.startswith("archival_")}
-    if macro_archival - fam_names:
-        errors.append(
-            "archival table(s) in SHEKYL_LMDB_TABLES with no ApplyPolicy "
-            "family, so their apply can never be stubbed nor shown "
-            "load-bearing (DRS 7.1.1):\n  "
-            + ", ".join(sorted(macro_archival - fam_names)))
-    if fam_names - macro_archival:
-        errors.append(
-            "ApplyPolicy family name(s) that are not archival tables in the "
-            "X-macro:\n  " + ", ".join(sorted(fam_names - macro_archival)))
+    errors.extend(check_archival_families(fam_src, tables))
 
     if errors:
         sys.exit("FAIL: the LMDB schema surface is out of step with the live "
@@ -747,7 +790,8 @@ def main() -> None:
           f"The two axes disagree on {len(axis_gap)} rows (v0-excluded with "
           "a real class) \u2014 a v0 exclusion is not an accumulator "
           "exclusion (audit \u00a712).")
-    print(f"    Archival families (DRS-E1): {len(fam_names)} ApplyPolicy "
+    n_archival = sum(1 for t in tables if t.startswith("archival_"))
+    print(f"    Archival families (DRS-E1): {n_archival} ApplyPolicy "
           "variants, bijective with the X-macro's archival tables. Stubbing "
           "by name is what makes 7.1.1's sufficiency control expressible.")
     print(f"    Write patterns (slice A): {len(derived_blind)} of "

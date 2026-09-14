@@ -690,7 +690,7 @@ def daemon_engine_switch():
     body = m.group(1)
     # A switch means a choice: more than one construction, or a branch.
     constructions = set(re.findall(r"new\s+(Blockchain[A-Za-z0-9_]+)\s*\(", body))
-    branches = re.search(r"(if|switch)", body)
+    branches = re.search(r"\b(if|switch)\b", body)
     return (len(constructions) > 1 or bool(branches)), False
 
 
