@@ -74,18 +74,24 @@ DRS-D12 — no store handle by construction).
 
 > **Cross-reference (CSR-6).** This program shares its subject files with the
 > all-Rust consensus rewrite: [`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md)
-> (`CEN-*`) enumerates **173** rules (**164** consensus-flagged + **9** policy-flagged), **18** of which are enforced
-> inside `src/blockchain_db/` — the store DRS-E1 replaces. Its **§10 R8
+> (`CEN-*`) enumerates **173** rules (**164** consensus-flagged + **9** policy-flagged);
+> **19 of 173 census rows** cite a file under `src/blockchain_db/` as an
+> enforcement site (§7.5.2's predicate, re-derived by
+> `check_drs_e6_partition.py`) — surfaces the store DRS replaces. Its **§10 R8
 > batch ("storage-layer enforcement placement")** is the same decision as this
 > document's schema/surface design, and **R8 is the ruling instrument**
 > (CSR-1); §3.5's surface map is its input, not a competing authority.
-> **R8 RULED 2026-09-14** — [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md):
-> of the eighteen, none remains a rule the store enforces — seven were always
-> ratified specs the rewrite consumes, two are validator rules (CEN-K3, CEN-L1),
-> seven dissolved or re-homed as store invariants (`SI-1…SI-8`,
+> **R8 RULED 2026-09-14** — [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
+> — over the **eighteen** rows CSR-6 counted at 2026-09-01: none remains a
+> rule the store enforces — seven were always ratified specs the rewrite
+> consumes, two are validator rules (CEN-K3, CEN-L1), seven dissolved or
+> re-homed as store invariants (`SI-1…SI-8`,
 > [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)), and two are
-> other batches' (CEN-B3 → R4; CEN-L14's semantics → R8b). The store's
-> connect path is designed *after* the rules it used to carry were ruled.
+> other batches' (CEN-B3 → R4; CEN-L14's semantics → R8b). The nineteenth,
+> **CEN-I19** (minted 2026-09-06, bucket 1), joined after CSR-6 and R8 did
+> not rule it: its store citation is an unreachable collector abort that
+> DRS-E3's typed `0x07` entry dissolves (§7.5 table 2). The store's connect
+> path is designed *after* the rules it used to carry were ruled.
 
 ### Substrate inventory (code-anchored)
 
@@ -616,7 +622,7 @@ below is written out so the partition is a set, not a description of one.
 | --- | --- | --- | --- | --- | --- |
 | **S-TXN** | Batch / open / sync / locks | 11 | `batch_abort` `batch_start` `batch_stop` `close` `fixup` `is_open` `is_read_only` `m_synchronization_lock` `reset` `safesyncmode` `sync` | **1** — Every other surface runs **inside** its transactions. Nothing can be extracted before the txn boundary is, so this is not a preference — it is the only position that works. | Stays with the store backend |
 | **S-CHAIN-W** | Connect and pop write set | 7 | `add_block` `add_block_burn` `pop_block` `remove_block_burn` `set_hard_fork` `set_settlement_epoch_blocks_pin` `set_total_burned` | **2** — The connect/pop write set is what the logical-state digest is computed **over**, so extracting it first gives DRS-E2 a subject to compare. Moving it later means every earlier increment is validated against an unported writer. | Long-term Rust `connect(ChainValid<'id>)` / `pop()` — shape ruled by **C2-R8** ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md) Q3–Q6): the store takes a validator-minted `ChainValid` brand-bound to the committing batch, writes the curve-tree root it is handed, journals one undo log per connect, and pops by reverse replay. **Preconditions (DRS-D12):** E1 increment 2.5 (the `WriteBatch<'id>` brand, `StoreError::class()`, `StoreInvariant`, `KeyedTable` `insert`/`upsert`, `StoreCannot`) — **landed 2026-09-15**, §3.6.3 — and **DRS-E6 increment 1** (scheduled) (the `shekyl-chain-rules` scaffold, §7.5) — `connect` takes a `ChainValid<'id>` that only that crate mints. The surface-bound rules that arrive with this increment are CEN-L1 (`SI-1` belt), CEN-H5 (the typed input `enum` that dissolves L5) and CEN-B3 (`set_hard_fork`'s discard belt; body per R4) — §7.5 table 2. The connect writer also mints the halt: a `StoreInvariantViolated` on this path sets `ChainTip.connect` to `Halted` (§3.6.2) |
-| **S-CHAIN-R** | Tip, headers, weights, burns | 23 | `block_exists` `for_blocks_range` `get_block` `get_block_already_generated_coins` `get_block_blob_from_height` `get_block_burn` `get_block_cumulative_difficulty` `get_block_cumulative_rct_outputs` `get_block_difficulty` `get_block_from_height` `get_block_hash_from_height` `get_block_height` `get_block_long_term_weight` `get_block_timestamp` `get_block_weight` `get_block_weights` `get_long_term_block_weights` `get_settlement_epoch_blocks_pin` `get_top_block` `get_top_block_timestamp` `get_total_burned` `height` `top_block_hash` | **3** — Reads the tables S-CHAIN-W writes. Split across increments, the two halves of one table's contract move separately and a digest mismatch cannot be localised to either. | Hot RPC path. **Halt visibility (C2-R8 Q8, §3.6.2):** the tip this surface serves carries `connect: ConnectState` — `Live`, or `Halted { at_height, class }` once the writer has refused a `StoreInvariantViolated` — and `get_info` exposes it, so a node that keeps serving reads after a halt does not present a stale tip as current. The field lands **with S-CHAIN-W** (the producer of the state), as a `CORE_RPC_VERSION` minor bump in `shekyl-rpc-types::chain` |
+| **S-CHAIN-R** | Tip, headers, weights, burns | 23 | `block_exists` `for_blocks_range` `get_block` `get_block_already_generated_coins` `get_block_blob_from_height` `get_block_burn` `get_block_cumulative_difficulty` `get_block_cumulative_rct_outputs` `get_block_difficulty` `get_block_from_height` `get_block_hash_from_height` `get_block_height` `get_block_long_term_weight` `get_block_timestamp` `get_block_weight` `get_block_weights` `get_long_term_block_weights` `get_settlement_epoch_blocks_pin` `get_top_block` `get_top_block_timestamp` `get_total_burned` `height` `top_block_hash` | **3** — Reads the tables S-CHAIN-W writes. Split across increments, the two halves of one table's contract move separately and a digest mismatch cannot be localised to either. | Hot RPC path. **Halt visibility (C2-R8 Q8, §3.6.2):** the tip this surface serves carries `connect: ConnectState` — `Live`, or `Halted { at_height, row }` once the writer has refused a `StoreInvariantViolated` — and `get_info` exposes it, so a node that keeps serving reads after a halt does not present a stale tip as current. The field lands **with S-CHAIN-W** (the producer of the state), as a `CORE_RPC_VERSION` minor bump in `shekyl-rpc-types::chain` |
 | **S-OUT-KI** | Outputs and key images | 8 | `for_all_key_images` `for_all_outputs` `get_output_distribution` `get_output_histogram` `get_output_key` `get_output_tx_and_index` `has_key_image` `has_key_images` | **4** — Consensus-critical (double-spend admission) and needs chain reads for height context, so it follows S-CHAIN-R rather than racing it. |  |
 | **S-TX** | Tx blob and existence | 9 | `for_all_transactions` `get_prunable_tx_blob` `get_prunable_tx_hash` `get_pruned_tx_blob` `get_tx_amount_output_indices` `get_tx_blob` `get_tx_count` `get_tx_unlock_time` `tx_exists` | **5** — Tx blob and existence reads, dependent on chain-R for height context. No writer of its own in this vocabulary — `blockchain.cpp` writes txs only through `add_block`. |  |
 | **S-CURVE** | Curve-tree reads | 5 | `get_curve_tree_depth` `get_curve_tree_leaf_chunk` `get_curve_tree_leaf_count` `get_curve_tree_root` `get_curve_tree_root_at_height` | **6** — Reads only; the arithmetic lives in `shekyl-fcmp`, not here. Depends on chain state but nothing depends on it, so it can move once the chain surfaces are stable. | Storage only; math in `shekyl-fcmp` |
@@ -773,12 +779,18 @@ Neither is done.
 wrong to a wallet" are different properties: a halted node's tip is
 **stale**, and a wallet that reads `height` or `get_top_block` without knowing
 that will refresh against a chain that has moved on without it. So the halt
-is carried **on the tip itself**, not in a log line:
+is carried **on the tip itself**, not in a log line. The tip is a wire type,
+so what rides on it is the register's stable name for the belt, not the store
+crate's enum:
 
 ```rust
+// shekyl-rpc-types::chain — the wire contract. Depends on serde and the
+// portable-storage codec only; never on shekyl-chain-store or redb.
+pub struct StoreInvariantRow(pub u32); // the `n` of the register's `SI-n`
+
 pub enum ConnectState {
     Live,
-    Halted { at_height: BlockHeight, class: StoreInvariant },
+    Halted { at_height: BlockHeight, row: StoreInvariantRow },
 }
 
 pub struct ChainTip { /* height, hash, … */ pub connect: ConnectState }
@@ -789,10 +801,27 @@ pub struct ChainTip { /* height, hash, … */ pub connect: ConnectState }
 `shekyl-rpc-types::chain` when the field lands. It lands **with S-CHAIN-W**,
 because S-CHAIN-W is the only producer of the `Halted` arm — a reader-side
 field with no writer is the bare-`const`-with-no-consuming-arm shape rule 23
-forbids. `class` names the `SI-` row that fired
-([`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)) so the operator
-can read which belt caught the hole without a debugger. Genesis checklist
-§8.1 carries the field.
+forbids.
+
+`row` is the `SI-` ordinal from
+[`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md), so the operator
+can read which belt caught the hole without a debugger and resolve it against
+the register — the one public authority on what each row means. It is
+deliberately **not** `shekyl-chain-store::StoreInvariant`, for two reasons
+that are one reason. *Dependency direction:* `shekyl-rpc-types` is consumed
+by `shekyl-engine-core` and `shekyl-rpc-client`, so embedding the store's
+enum would make every wallet link the redb-backed store crate to decode a
+tip; and the store speaks no wire in the other direction — it computes
+nothing consensus-visible (C2-R8) and imports no RPC type. *Stability:* the
+enum gains a variant each time an increment builds a belt (register §5 step
+1); a wire enum would owe a `CORE_RPC_VERSION` bump per belt, whereas the
+ordinal is data the register already pins. The projection is one expression
+at the connect writer that mints the halt — `StoreInvariantRow(v.row())` via
+`StoreInvariant::row()` (E1 increment 2.5) — in the daemon, where the writer
+queue and the `get_info` producer meet; neither leaf crate imports the other.
+The violation's payload (`key`, `fault`) is the log line at the halt, not
+the tip: the question a tip answers is *which belt*, and the diagnostic
+detail is answered where it fired. Genesis checklist §8.1 carries the field.
 
 #### 3.6.3 The write handle — BUILT (DRS-E1 increments 1–2.5, `rust/shekyl-chain-store/src/store/`)
 
@@ -1494,8 +1523,16 @@ citation, or moves bucket, must be reflected here in the same PR (the row
 moves the schedule). The bound/free regex above is quoted verbatim and checked,
 so this section and the gate define "surface-bound" once. §15's dated entries
 are records-was and are not read as live claims. Rule 47: an empty census, a
-§4 header missing a read column, zero bound rows, or a missing table here is a
-missing subject, not a pass; `--selftest` bites every refusal red.
+§4 header missing a read column (each table's own header — §4.J carries
+three under one heading), a header in either document without its GFM
+delimiter row directly beneath and of the same width (Markdown renders no
+table, so its rows are not on the page — rule 94 §7), a §4 row whose id is
+not a well-formed `CEN-` id, zero bound rows, an unterminated code fence in
+either document, a table-2 row whose `arrives with` names no
+`**E<n> S-<SURFACE>**` / `**E<n> increment <k>**` token (*which* increment is
+this section's ruling; *that* one is named is the gate's), or a missing or
+duplicated table row here is a missing subject, not a pass; `--selftest`
+bites every refusal red and reports the count it fired.
 
 Reopeners (rule 21): **(a)** the completeness gate's `enforced` figure and
 the census's flag/bucket columns disagree — the gate reads the wrong column
@@ -2058,7 +2095,7 @@ the trigger (#507) and was missed there.
 | **2026-09-01** | **Cross-reference established (CSR-6):** this document and `CONSENSUS_RULE_CENSUS.md` had **zero** references to each other while naming the same six files. Census **R8 is the ruling instrument** for store-enforced rules (CSR-1) |
 | **2026-09-02** | **CSR-3 corrected on review (CSR-3a).** The oracle scope propagated on 2026-09-01 was **ratification-only**, and CEN-L11 disproves it: bucket 1, ratified spec (`CURVE_TREE_CLIENT.md`, `FCMP_PLUS_PLUS.md`), implementation silently omits an accepted output from the curve tree (`blockchain_db.cpp:570–576`, no verify-time twin). A bucket says a rule is *ratified*, never that the C++ *implements* it. **A2 / D11 / E2 and the §7 flowchart label now require both ratification and no recorded spec-vs-implementation divergence** — **that second condition was inverted to an affirmative one later the same day; see the next row. This entry records the first formulation and is deliberately not rewritten.** Rows failing it go on the conformance-exception register ([`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md) §5.4.1, seeded with CEN-L11, **not proven complete**). **E2 must consult the register before asserting any parity claim as correctness.** The census header was extended in the same change so the specification input does not retain the unsafe rule |
 | **2026-09-02** | **CSR-3a condition inverted to fail closed (same-day correction).** The conformance condition was first written negatively — *not on the exception register* — which is unsafe while that register is explicitly incomplete: absence means **unreviewed**, not conformant, so an unexamined bucket-1/2 row would have taken correctness-oracle status by default. Now **affirmative**: three states (CHECKED-CONFORMANT / DIVERGENT / UNREVIEWED), default **regression-only**, and the checked-conformant set is **empty today** — **DRS-P0f** populates it per row, on record (corrected the same day: this entry first said P0d, which is Digest v0). A2 / D11 / E2 and the §7 label updated; census header likewise |
-| **2026-09-15** | **Plan amendment owed by C2-R8 §14 ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)).** **DRS-D12** ratified: validation precedes connect; the validation crate is **`shekyl-chain-rules`** (no store handle); replay-that-validates is the Rust store's only pre-cutover writer and D11's redb-side mechanism; the C++-verdict FFI shim is rejected. **DRS-E6** minted in the §7 table and flowchart — increment 1 (the scaffold: `ChainView`, `RuleSet`, `RuleCoverage`, completeness gate, fixture harness) **ahead of S-CHAIN-W**, increments 2+ the surface-free rules by census subsystem in dependency order. **§7.5** derives the partition from the census at `02c086f4b`: 173 rows, 19 surface-bound (12 live), **141 of 153** enforced consensus rows surface-free, policy 9 separate; each live bound row's arriving increment is named, and `check_drs_e6_partition.py` holds the tables to the census. **§3.6.2** `ChainTip.connect` (`Live` / `Halted { at_height, class }`) lands with S-CHAIN-W and is exposed by `get_info`. §8.1 gains the complete-coverage and halt-visibility items. The ruling's §14 pointed at a "§11 plan table" — the work-breakdown table is §7; corrected in the ruling with a dated bracket |
+| **2026-09-15** | **Plan amendment owed by C2-R8 §14 ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)).** **DRS-D12** ratified: validation precedes connect; the validation crate is **`shekyl-chain-rules`** (no store handle); replay-that-validates is the Rust store's only pre-cutover writer and D11's redb-side mechanism; the C++-verdict FFI shim is rejected. **DRS-E6** minted in the §7 table and flowchart — increment 1 (the scaffold: `ChainView`, `RuleSet`, `RuleCoverage`, completeness gate, fixture harness) **ahead of S-CHAIN-W**, increments 2+ the surface-free rules by census subsystem in dependency order. **§7.5** derives the partition from the census at `02c086f4b`: 173 rows, 19 surface-bound (12 live), **141 of 153** enforced consensus rows surface-free, policy 9 separate; each live bound row's arriving increment is named, and `check_drs_e6_partition.py` holds the tables to the census. **§3.6.2** `ChainTip.connect` (`Live` / `Halted { at_height, row }`) lands with S-CHAIN-W and is exposed by `get_info`. §8.1 gains the complete-coverage and halt-visibility items. The ruling's §14 pointed at a "§11 plan table" — the work-breakdown table is §7; corrected in the ruling with a dated bracket |
 | **2026-09-15** | **DRS-E1 increment 2.5 landed** (§3.6.3): the store-side mechanics C2-R8 named — brand, three classes, `StoreInvariant`, two verbs. Two implementation rulings made in landing them, recorded so they are not re-derived: **(a) a violation poisons the batch.** Q2 says an invariant breach is fatal and never converted; making that a discipline asked of each call site would have been the L14 shape again (a property that holds only where every site remembers). So every `StoreInvariantViolated` produced or observed through a `WriteBatch` arms a latch the commit consults; a swallowed violation still cannot land. **(b) no `remove` on `KeyedTable`.** §7.3 names exactly two verbs; the pop path (Q5) is the only consumer of deletion and does not exist yet, so the verb and the row it enforces (SI-6) land with it — pre-provisioning one here is the rule-21 anti-pattern. Falsify (b) by a pop increment that finds `KeyedTable` cannot express its write set. S-CHAIN-W's remaining precondition is DRS-E6 increment 1 |
 
 ---

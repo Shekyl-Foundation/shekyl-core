@@ -309,8 +309,8 @@
   [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md): `DRS-D12` (the
   validation crate `shekyl-chain-rules` precedes the store's connect path;
   replay-that-validates is the only pre-cutover writer), `DRS-E6` (141 of the
-  153 enforced consensus rules have no storage surface and get their own
-  increments, §7.5, gated by `check_drs_e6_partition.py`), and
+  153 enforced consensus rules have no storage surface; E6's per-subsystem
+  increments port them, §7.5, gated by `check_drs_e6_partition.py`), and
   `ChainTip.connect` halt visibility scheduled for `get_info` with S-CHAIN-W.
   DRS-E1 increment 2.5 (2026-09-15) lands the ruling's store-side mechanics
   in `shekyl-chain-store`: the per-batch brand behind `ChainStore::write`,
