@@ -6,9 +6,8 @@
 //! The write handle that discharges DRS-W3, branded per batch (C2-R8 Q3).
 //!
 //! Table modules take [`WriteBatch`], never a raw transaction. Opening a
-//! table consults [`ApplyPolicy`](crate::apply_policy::ApplyPolicy) by name
-//! so a stubbed family's apply cannot run — and cannot create the table
-//! by opening it.
+//! table consults [`ApplyPolicy`] by name so a stubbed family's apply
+//! cannot run — and cannot create the table by opening it.
 //!
 //! A stubbed batch also **taints the file** when it commits: the
 //! provenance cell is widened inside the batch's own transaction (see
@@ -61,7 +60,6 @@ use redb::{
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{ChainState, PropertyCell};
-use crate::provenance::Provenance;
 use crate::schema::PROPERTIES;
 
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
@@ -283,15 +281,20 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         header::upsert::<C>(self.txn(), value)
     }
 
-    /// Commit the batch, returning the file's [`Provenance`] as of this
-    /// commit. Called by [`ChainStore::write`](super::ChainStore::write)
-    /// when the closure returns `Ok`; there is no other caller.
+    /// Commit the batch. Called by
+    /// [`ChainStore::write`](super::ChainStore::write) when the closure
+    /// returns `Ok`; there is no other caller.
     ///
     /// A poisoned batch does not commit: the first invariant violation seen
     /// through it is returned here and the transaction aborts on drop.
     /// Otherwise a stubbed batch widens the persisted provenance cell **in
     /// this transaction** before committing, so the taint is atomic with
-    /// the rows. A `Full` batch leaves the cell as it found it.
+    /// the rows, and publishes the widened [`Provenance`] to the store's
+    /// mirror under the same lock — [`ChainStore::provenance`] is where a
+    /// caller reads it. A `Full` batch leaves the cell as it found it.
+    ///
+    /// [`Provenance`]: crate::provenance::Provenance
+    /// [`ChainStore::provenance`]: super::ChainStore::provenance
     ///
     /// # Errors
     ///
@@ -302,7 +305,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// case the batch is aborted and nothing lands. The transaction is
     /// consumed either way — DRS-W2's swallowed-`batch_stop` failure made
     /// unrepresentable.
-    pub(super) fn commit(mut self) -> Result<Provenance, StoreError> {
+    pub(super) fn commit(mut self) -> Result<(), StoreError> {
         if let Some(row) = self.poison.armed() {
             // `self` drops on this return: the transaction aborts and the
             // write slot is released, exactly as for a closure `Err`.
@@ -319,8 +322,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         // other — and a failed commit publishes nothing, so the mirror
         // cannot over-taint either.
         self.shared
-            .publish(provenance, || txn.commit().map_err(EngineError::Commit))?;
-        Ok(provenance)
+            .publish(provenance, || txn.commit().map_err(EngineError::Commit))
+            .map_err(StoreError::from)
     }
 }
 
