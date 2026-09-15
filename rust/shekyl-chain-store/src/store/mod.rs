@@ -223,6 +223,23 @@ impl ChainStore {
     /// Read from the `apply_policy` cell at open and widened in step with
     /// every stubbed commit this handle makes. This — not
     /// [`apply_policy`](Self::apply_policy) — is what an artifact stamps.
+    ///
+    /// # The mirror is exact, and why
+    ///
+    /// The cell only ever widens, and only a committed stubbed batch widens
+    /// it. While this handle is live no other handle can commit: redb holds
+    /// an exclusive `flock` on the file for the life of a writable
+    /// `Database` and a shared one for a read-only handle
+    /// (`redb-4.1.0/src/tree_store/page_store/file_backend/optimized.rs:27`,
+    /// read at the pinned source), so a second writable open — from this
+    /// process or another — is refused with
+    /// [`redb::DatabaseError::DatabaseAlreadyOpen`] rather than admitted,
+    /// and a read-only handle excludes every writer for as long as it
+    /// exists. The value this method returns is therefore the file's value,
+    /// not a cached approximation of it. Platforms where the lock is
+    /// `Unsupported` (none the daemon targets; redb proceeds unlocked and
+    /// warns) inherit redb's own contract that the operator keeps one
+    /// process on the file.
     #[must_use]
     pub fn provenance(&self) -> Provenance {
         self.shared.provenance()

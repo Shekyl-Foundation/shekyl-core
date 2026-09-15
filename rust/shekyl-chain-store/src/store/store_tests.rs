@@ -261,6 +261,72 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
     cleanup(&path);
 }
 
+// ------------------------------------------------ one file, one writer
+//
+// `provenance()` mirrors the file's `apply_policy` cell and claims the
+// mirror is exact. The claim rests on redb's file lock: exclusive for a
+// writable handle, shared for a read-only one. `flock` locks are per open
+// file description, so a second open in THIS process contends exactly as a
+// second process would, which is what lets the property be tested here
+// without spawning one. THESE BITE AGAINST: a redb bump that drops or
+// relaxes the lock, or an `open` path in this crate that stops going
+// through redb's locked backend.
+
+fn is_already_open(result: &Result<ChainStore, StoreError>) -> bool {
+    matches!(
+        result,
+        Err(StoreError::Open(redb::DatabaseError::DatabaseAlreadyOpen))
+    )
+}
+
+#[test]
+fn a_second_writable_open_is_refused_while_a_writer_is_live() {
+    let path = tmp("lock-w-w");
+    let live = ChainStore::create(&path).expect("create");
+    assert!(
+        is_already_open(&ChainStore::create(&path)),
+        "two writable handles on one file would let the provenance mirror go stale"
+    );
+    drop(live);
+    ChainStore::create(&path).expect("reopen once the lock is released");
+    cleanup(&path);
+}
+
+#[test]
+fn a_read_only_open_is_refused_while_a_writer_is_live() {
+    let path = tmp("lock-w-r");
+    let live = ChainStore::create(&path).expect("create");
+    assert!(is_already_open(&ChainStore::open_read_only(&path)));
+    drop(live);
+    cleanup(&path);
+}
+
+#[test]
+fn a_writable_open_is_refused_while_a_reader_is_live() {
+    let path = tmp("lock-r-w");
+    drop(ChainStore::create(&path).expect("create"));
+    let reader = ChainStore::open_read_only(&path).expect("open ro");
+    assert!(
+        is_already_open(&ChainStore::create(&path)),
+        "a reader's provenance is read once at open; a writer admitted behind it could widen the cell"
+    );
+    drop(reader);
+    cleanup(&path);
+}
+
+#[test]
+fn two_read_only_handles_coexist() {
+    // Shared lock: readers do not exclude readers, and neither can commit,
+    // so neither's mirror can be moved by the other.
+    let path = tmp("lock-r-r");
+    drop(ChainStore::create(&path).expect("create"));
+    let first = ChainStore::open_read_only(&path).expect("first ro");
+    let second = ChainStore::open_read_only(&path).expect("second ro alongside the first");
+    assert_eq!(first.provenance(), second.provenance());
+    drop((first, second));
+    cleanup(&path);
+}
+
 #[test]
 fn open_read_only_refuses_a_store_that_does_not_exist() {
     let path = tmp("absent");
