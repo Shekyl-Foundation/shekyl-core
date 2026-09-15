@@ -602,7 +602,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--describe",
         action="store_true",
-        help="print the figures and the per-subsystem derivation, then exit 0",
+        help="print the figures and the per-subsystem derivation (still exits 1 on a mismatch)",
     )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -616,6 +616,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.describe:
         print(describe(figs))
+        if errors:
+            print(
+                f"\ncheck_chain_rules_coverage: {len(errors)} refusal(s) "
+                "(--describe does not green a mismatch):",
+                file=sys.stderr,
+            )
+            for e in errors:
+                print(f"  - {e}", file=sys.stderr)
+            return 1
         return 0
     if errors:
         print(

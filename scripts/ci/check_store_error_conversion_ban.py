@@ -35,12 +35,13 @@
 # and false-negatives on a differently-named verdict (`BlockVerdict`). A
 # PR that mints a second validation-crate verdict type adds it here.
 #
-# SUBJECT. All three clauses are live. The gate counts verdict-type
-# definitions (`enum|struct InvalidBlock`) across the tree and REFUSES on
-# zero: a clause-3 scan with no verdict type to match is a ban over nothing,
-# and "clean" must not be mistakable for "checked" (rule 47). The type lives
-# in rust/shekyl-chain-rules/src/verdict.rs; if it moves or is renamed, the
-# refusal names VERDICT_TOKEN as the thing to update.
+# SUBJECT. All three clauses are live. The gate asserts the *canonical*
+# definition: `pub struct InvalidBlock` in
+# `rust/shekyl-chain-rules/src/verdict.rs`. Counting any `struct|enum
+# InvalidBlock` anywhere under rust/ is vacuous — a private test fixture
+# would keep clause 3 green after the real type disappeared (rule 47).
+# If the file moves or the type is renamed, the refusal names VERDICT_FILE
+# and VERDICT_TOKEN.
 #
 # Records-was (2026-09-14 → 2026-09-15). At birth clauses 1–2 were live and
 # clause 3 was ARMED: `verdict_defs == 0` was the birth state, printed and
@@ -66,6 +67,8 @@ ROOT = Path(__file__).resolve().parents[2]
 RUST = ROOT / "rust"
 STORE_CRATE = RUST / "shekyl-chain-store"
 STORE_ERROR_FILE = STORE_CRATE / "src/store/error.rs"
+VERDICT_FILE = RUST / "shekyl-chain-rules" / "src" / "verdict.rs"
+VERDICT_REL = VERDICT_FILE.relative_to(RUST)
 SELF = Path(__file__).resolve()
 STRIPPER = ROOT / "scripts" / "ci" / "strip_c_comments.py"
 
@@ -73,7 +76,7 @@ STORE_TOKEN = r"(?:StoreError|StoreInvariant|InvariantViolated|StoreCannot)"
 VERDICT_TOKEN = r"InvalidBlock"
 STORE_RE = re.compile(rf"\b{STORE_TOKEN}\b")
 VERDICT_RE = re.compile(rf"\b{VERDICT_TOKEN}\b")
-VERDICT_DEF_RE = re.compile(rf"\b(?:enum|struct)\s+{VERDICT_TOKEN}\b")
+VERDICT_DEF_RE = re.compile(rf"\bpub\s+struct\s+{VERDICT_TOKEN}\b")
 STORE_ENUM_RE = re.compile(r"pub\s+enum\s+StoreError\s*\{(.*?)\n\}", re.S)
 VARIANT_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9]*)\s*(?:[,({]|$)", re.M)
 # `impl From<A> for B`, `impl Into<B> for A`, `impl TryFrom<A> for B`,
@@ -131,6 +134,27 @@ def assert_subject(rust_root: Path, error_file: Path) -> int:
     if n == 0:
         raise GateError("subject absent: StoreError parsed with zero variants")
     return n
+
+
+def assert_verdict_subject(rust_root: Path) -> None:
+    """The canonical `pub struct InvalidBlock` must exist where it was minted.
+
+    A same-named type anywhere else — a test fixture, a private alias, an
+    enum — is not the API this gate protects.
+    """
+    verdict = rust_root / VERDICT_REL
+    if not verdict.is_file():
+        raise GateError(
+            f"subject absent: no public struct {VERDICT_TOKEN} in {VERDICT_REL} "
+            "(file not found) — if it moved, update VERDICT_FILE"
+        )
+    text = strip_comments(verdict.read_text(encoding="utf-8"))
+    if VERDICT_DEF_RE.search(text) is None:
+        raise GateError(
+            f"subject absent: no public struct {VERDICT_TOKEN} in {VERDICT_REL} — "
+            "InvalidBlock was minted as `pub struct` there; if it moved or was "
+            "renamed, update VERDICT_FILE / VERDICT_TOKEN"
+        )
 
 
 def blank_strings(src: str) -> str:
@@ -253,15 +277,14 @@ def _match_arms(src: str, line_offset: int) -> list[tuple[str, str, int]]:
 
 def check(rust_root: Path, store_crate: Path, error_file: Path, exclude: set[Path] = frozenset()) -> str:
     n_variants = assert_subject(rust_root, error_file)
+    assert_verdict_subject(rust_root)
     files = [p for p in rust_files(rust_root) if p not in exclude]
     if not files:
         raise GateError("subject absent: no .rs files walked")
     findings: list[str] = []
-    verdict_defs = 0
     for path in files:
         text = blank_strings(strip_comments(path.read_text(encoding="utf-8")))
         rel = path.relative_to(rust_root)
-        verdict_defs += len(VERDICT_DEF_RE.findall(text))
         in_store = store_crate in path.parents
         # clause 2
         if in_store:
@@ -289,16 +312,11 @@ def check(rust_root: Path, store_crate: Path, error_file: Path, exclude: set[Pat
                 findings.append(
                     f"clause 3: {rel}:{line} match arm maps a store-error token onto {VERDICT_TOKEN}"
                 )
-    if verdict_defs == 0:
-        raise GateError(
-            "subject absent: no verdict-type definition found — InvalidBlock was minted in "
-            "rust/shekyl-chain-rules/src/verdict.rs; if it moved, update VERDICT_TOKEN"
-        )
     if findings:
         raise GateError("conversion ban violated:\n" + "".join(f"  {f}\n" for f in findings))
     return (
         f"store-error conversion ban: StoreError {n_variants} variants, {len(files)} files walked, "
-        f"{verdict_defs} verdict-type definition(s); clauses 1-3 clean"
+        f"canonical pub struct {VERDICT_TOKEN} in {VERDICT_REL}; clauses 1-3 clean"
     )
 
 
@@ -354,19 +372,37 @@ def selftest() -> None:
     run(
         "subject: no verdict definition",
         {E: STORE_ERR, V: "fn f() {}\n"},
-        "no verdict-type definition",
+        "no public struct InvalidBlock",
         verdict=False,
     )
     run(
         "subject: commented-out verdict definition does not count",
         {E: STORE_ERR, V: "/* pub struct InvalidBlock; */\nfn f() {}\n"},
-        "no verdict-type definition",
+        "no public struct InvalidBlock",
         verdict=False,
     )
     run(
-        "subject: enum-shaped verdict definition counts",
+        "subject: enum-shaped definition in another file does not substitute",
         {E: STORE_ERR, V: "pub enum InvalidBlock {\n    A,\n}\n"},
-        None,
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
+    run(
+        "subject: enum-shaped definition in the canonical file is not the struct",
+        {E: STORE_ERR, D: "pub enum InvalidBlock {\n    A,\n}\n"},
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
+    run(
+        "subject: private struct in the canonical file does not count",
+        {E: STORE_ERR, D: "struct InvalidBlock {\n    pub rule: u8,\n}\n"},
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
+    run(
+        "subject: a pub struct elsewhere does not substitute for the canonical file",
+        {E: STORE_ERR, V: "pub struct InvalidBlock {\n    pub rule: u8,\n}\n"},
+        "no public struct InvalidBlock",
         verdict=False,
     )
     run(

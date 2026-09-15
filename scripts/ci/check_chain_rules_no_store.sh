@@ -63,8 +63,11 @@ for pkg in "${BANNED[@]}"; do
 done
 
 # The closure: every package reachable from CRATE over normal+dev edges, one
-# `name vX.Y.Z …` per line. Captured whole, judged below.
-closure="$(cargo tree --locked -e normal,dev -p "$CRATE" --prefix none)" \
+# `name vX.Y.Z …` per line, **every target**. Host-only would miss a
+# `cfg(windows)` / `target.'cfg(…)'.dependencies` arrival of a banned
+# package while G1 claims the crate never reaches either (Copilot #753).
+TREE=(cargo tree --locked -e normal,dev --target all -p "$CRATE")
+closure="$("${TREE[@]}" --prefix none)" \
   || fail "cargo tree failed; a failed resolve is not a clean graph"
 first_line="${closure%%$'\n'*}"
 case "$first_line" in
@@ -76,7 +79,7 @@ status=0
 for pkg in "${BANNED[@]}"; do
   if grep -qE "^${pkg} v[0-9]" <<<"$closure"; then
     echo "FATAL: check_chain_rules_no_store: '$pkg' is reachable from $CRATE (G1). Path(s):" >&2
-    cargo tree --locked -e normal,dev -p "$CRATE" -i "$pkg" >&2 || true
+    "${TREE[@]}" -i "$pkg" >&2 || true
     status=1
   fi
 done
