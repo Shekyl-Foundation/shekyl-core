@@ -1565,9 +1565,14 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   is `Refused`, kept apart from `Circuit` and `Stall` so the apparatus
   cannot blame Tor for disagreeing with itself. The concurrency sweep
   (`SHEKYL_SPIKE_PERSONAS` wide, powers of two) prints the `SF-D7`
-  churn table with `width × max_body_bytes()` beside each row; the
-  cold arm's single-attempt p99 is printed against the `L` note's two
-  thresholds. The binary picks neither pin. `live_apparatus` passed
+  churn table with `width × max_body_bytes()` beside each row — a row
+  the serve-side cap shed into, or one the client refused, is printed
+  `VOID` and never the ratio baseline. The cold arm's single-attempt
+  p99 is printed against the `L` note's two thresholds as the **lower
+  bound** on fetch-plus-retry it is: it can refute "under two minutes"
+  and establish "over six", never establish "under six" — that needs
+  `SF-D6`'s retry budget, so the middle reads *drop refuted, budget
+  open*, not *holds*. The binary picks neither pin. `live_apparatus` passed
   over real Tor in 110 s (two persona tors + client tor; header sent,
   bodies verified under each persona's key). The run itself waits on a
   real regtest shard (§12.2 of the SP-T3 doc: ~5 h mine, then extract),
