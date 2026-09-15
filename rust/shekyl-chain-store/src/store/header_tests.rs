@@ -16,7 +16,7 @@ use super::store_tests::{cleanup, tmp, PROBE};
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{
-    ApplyPolicyCell, Canonical, ChainState, PropertyCell, SchemaVersion, SchemaVersionCell,
+    ApplyPolicyCell, Canonical, ProbeCell, PropertyCell, SchemaVersion, SchemaVersionCell,
     SCHEMA_VERSION,
 };
 use crate::family_set::FamilySet;
@@ -384,17 +384,11 @@ fn the_taint_commits_atomically_with_the_rows() {
 }
 
 // ------------------------------------------------------- typed cells
-
-/// A chain-state cell that exists only in this test module. The real ones
-/// (`total_burned`, …) land with the surfaces that write them.
-#[derive(Clone, Copy, Debug)]
-struct ProbeCell;
-
-impl PropertyCell for ProbeCell {
-    const KEY: &'static str = "__e1_probe_cell";
-    type Scope = ChainState;
-    type Value = u64;
-}
+//
+// `ProbeCell` is the crate's test-only chain-state cell, declared next to
+// the sealed trait in `codec::property` because that is the only place a
+// cell can be declared (the seal is the point). The real chain-state cells
+// land with the surfaces that write them.
 
 #[test]
 fn a_chain_state_cell_round_trips_through_the_typed_surface() {

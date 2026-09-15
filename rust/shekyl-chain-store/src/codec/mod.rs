@@ -42,8 +42,11 @@ mod schema_version;
 #[path = "snapshot_tests.rs"]
 mod snapshot_tests;
 
+#[cfg(test)]
+pub(crate) use property::ProbeCell;
 pub use property::{
     ApplyPolicyCell, CellScope, ChainState, EngineLocal, PropertyCell, SchemaVersionCell, Scope,
+    PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 
