@@ -165,10 +165,10 @@ to the caller.
 
 ### 3.3 The ban, and its gate (lands with this PR)
 
-1. No `From`/`Into` between any two classes. `InvalidBlock` is a validation
-   crate type; `StoreError` (whose variants class as invariant or cannot —
-   the mapping is in the register's §3) is a store crate type; neither
-   converts into the other.
+1. No `From`/`Into`/`TryFrom`/`TryInto` between any two classes. `InvalidBlock`
+   is a validation crate type; `StoreError` (whose variants class as invariant
+   or cannot — the mapping is in the register's §3) is a store crate type;
+   neither converts into the other.
 2. **`shekyl-chain-store` never names `InvalidBlock`.** The store crate does
    not know the consensus verdict type exists.
 3. No `match` arm anywhere maps a `StoreError` / `StoreInvariant` value onto
@@ -557,7 +557,7 @@ nothing (rule 22).
 | --- | --- |
 | This document; census row moves + re-derived figures (§10); §10 R8 → RULED, R8b added; §7 decision-log entry; CSR §6.2/§8/§9 + register row CEN-L1 | — |
 | [`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md) + `check_store_invariant_register.py` (wired) | rows flip `ruled → built` in the S-CHAIN-W increments that build them |
-| `check_store_error_conversion_ban.py` (wired; clauses 1–2 live, clause 3 armed) | clause 3 acquires a subject when the validation crate lands |
+| `check_store_error_conversion_ban.py` (wired; clauses 1–2 live, clause 3 armed) | the PR that mints `InvalidBlock` turns `verdict_defs == 0` into a failure (today the gate prints 0 so green-with-zero is not silent); falsify by that raise |
 | Index §2: `C2-R` row appended (Q1…Q8), `SI-` family registered, DRS row (S-CHAIN-W's R8 blocker discharged; increment 2.5 named as its precondition) | — |
 | **DRS-E1 increment 2.5** (named, not built here): brand-via-closure `WriteBatch<'id>` + higher-ranked `connect`, `StoreError::class()`, `StoreInvariant` enum, `insert`/`upsert` verbs, `StoreCannot` shape | the next `shekyl-chain-store` PR, **before any consumer of `WriteBatch`**; falsify by `rg "PhantomData<fn\(&'" rust/shekyl-chain-store/src` |
 | **DRS plan amendment** (named, not written here): the validation crate + `ChainView` + `RuleCoverage` + completeness gate on the critical path ahead of S-CHAIN-W; replay-that-validates as D11's mechanism; **DRS-E6** surface-free rules row; the E6 partition table (surface-bound 19 / surface-free rest, from the census location column); `ChainTip.connect` in `get_info` | a `DAEMON_REDB_STORE.md` PR following this one; falsify by the DRS §11 plan table carrying an E6 row |

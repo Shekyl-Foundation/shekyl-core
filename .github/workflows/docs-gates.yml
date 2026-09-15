@@ -355,11 +355,12 @@ jobs:
       - name: Run store-error conversion-ban gate
         # C2-R8 Q2 §3.3: the store's error classes (`StoreInvariantViolated`,
         # `StoreCannot`) are never converted into the consensus verdict
-        # (`InvalidBlock`) — no From/Into/TryFrom between them (bare or
+        # (`InvalidBlock`) — no From/Into/TryFrom/TryInto between them (bare or
         # path-qualified trait), the store crate never names InvalidBlock, and
         # no match arm maps a store-error pattern onto an InvalidBlock body
-        # (brace-depth arm scan, not a line window). A store constraint that
-        # reaches the caller as "invalid block" is a hidden rule
+        # (brace-depth arm scan, nested arms included, strings blanked). A
+        # store constraint that reaches the caller as "invalid block" is a
+        # hidden rule
         # (db_lmdb.cpp:1438 is the instance R8 was convened over); the same
         # constraint as a fatal is a belt. Clauses 1–2 are live; clause 3 is
         # armed and the gate reports how many verdict-type definitions it
@@ -373,7 +374,8 @@ jobs:
         # All three clauses bitten red, plus the three subject-absent cases,
         # the legitimate shapes (a daemon-error From; line and block comments;
         # sibling arms; adjacent functions), and the bypasses a window/bare-
-        # ident scanner would miss (qualified trait path; long match arm).
+        # ident scanner would miss (qualified path; TryInto; nested arm;
+        # `}` inside a string).
         if: '!cancelled()'
         run: python3 scripts/ci/check_store_error_conversion_ban.py --selftest
 

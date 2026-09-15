@@ -16,11 +16,12 @@
 # is the third clause, the one that catches a `match` someone writes by hand.
 #
 # THREE CLAUSES.
-#   1. no `impl From/Into/TryFrom` between a store error type and
+#   1. no `impl From/Into/TryFrom/TryInto` between a store error type and
 #      `InvalidBlock`, anywhere under rust/. The trait name may be bare
-#      (`From`) or a path (`core::convert::From`, `::std::convert::TryFrom`);
+#      (`From`) or a path (`core::convert::From`, `::std::convert::TryInto`);
 #      a regex that only accepted the bare ident would let a legal impl
-#      bypass the ban.
+#      bypass the ban. `TryInto` is the dual of `TryFrom` and a direct impl
+#      is legal; omitting it is a clause-1 hole.
 #   2. `shekyl-chain-store` never NAMES `InvalidBlock` — the store does not
 #      know the consensus verdict type exists;
 #   3. no match arm maps a store-error token (pattern side of `=>`) onto
@@ -37,7 +38,12 @@
 # Clauses 1 and 2 are live at birth. Clause 3 is armed and has no verdict
 # type to match until the validation crate lands; the gate REPORTS how many
 # verdict-type definitions it found so "clean" cannot be mistaken for
-# "checked".
+# "checked". Zero is the birth state, not a silent pass: the printed count
+# is the subject assertion (rule 47). The PR that mints `InvalidBlock` MUST
+# turn `verdict_defs == 0` into a failure — that is when the subject exists.
+# Requiring >= 1 now would red a gate whose subject has not been born, and
+# would block the ruling. Falsify that carrier by the minting PR's diff
+# containing the raise.
 #
 # Instance of 47-gate-subject-assertion.mdc: the gate first parses
 # `pub enum StoreError` with >= 1 variant and counts the .rs files it walked;
@@ -64,10 +70,11 @@ VERDICT_RE = re.compile(rf"\b{VERDICT_TOKEN}\b")
 VERDICT_DEF_RE = re.compile(rf"\b(?:enum|struct)\s+{VERDICT_TOKEN}\b")
 STORE_ENUM_RE = re.compile(r"pub\s+enum\s+StoreError\s*\{(.*?)\n\}", re.S)
 VARIANT_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9]*)\s*(?:[,({]|$)", re.M)
-# `impl From<A> for B`, `impl Into<B> for A`, `impl TryFrom<A> for B`, with
-# optional generics on `impl` and a bare or path-qualified trait name.
-# Matched on a single joined line.
-TRAIT = r"(?:(?:::)?(?:[A-Za-z_][\w]*::)*(?:From|Into|TryFrom))"
+# `impl From<A> for B`, `impl Into<B> for A`, `impl TryFrom<A> for B`,
+# `impl TryInto<B> for A`, with optional generics on `impl` and a bare or
+# path-qualified trait name. Longer names first so `TryFrom` is not eaten
+# as `From`. Matched on a single joined line.
+TRAIT = r"(?:(?:::)?(?:[A-Za-z_][\w]*::)*(?:TryFrom|TryInto|From|Into))"
 CONV_RE = re.compile(
     rf"impl(?:<[^>]*>)?\s+{TRAIT}\s*<\s*([^>]+?)\s*>\s+for\s+([\w:<>' ,]+)"
 )
@@ -120,18 +127,67 @@ def assert_subject(rust_root: Path, error_file: Path) -> int:
     return n
 
 
+def blank_strings(src: str) -> str:
+    """Replace interiors of `"..."` and `'X'` with spaces of the same width.
+
+    Brace-depth then cannot be ended by a `}` that lives in a log string.
+    Line numbers are preserved. Lifetimes (`'a`) are not char literals.
+    Raw strings (`r#"..."#`) are unmodelled, same limit as strip_c_comments.py;
+    a misclassification that lands is the reopening criterion.
+    """
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == '"':
+            out.append('"')
+            i += 1
+            while i < n:
+                if src[i] == "\\" and i + 1 < n:
+                    out.append("  ")
+                    i += 2
+                    continue
+                if src[i] == '"':
+                    out.append('"')
+                    i += 1
+                    break
+                out.append("\n" if src[i] == "\n" else " ")
+                i += 1
+            continue
+        if c == "'" and i + 1 < n:
+            # Char literal `'X'` / `'\n'` / `'{'`; a lifetime has no closer.
+            nxt = src[i + 1]
+            if nxt == "\\" and i + 3 < n and src[i + 3] == "'":
+                out.append("'" + " " * 2 + "'")
+                i += 4
+                continue
+            if i + 2 < n and src[i + 2] == "'":
+                out.append("' '")
+                i += 3
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def match_arms(src: str) -> list[tuple[str, str, int]]:
     """(pattern, body, 1-based line of `=>`) for each fat-arrow arm.
 
     Pattern is the text after the previous `{` or `,` at this brace depth,
     so sibling arms and adjacent functions are not one span. Body runs from
     `=>` until depth returns to the arrow's depth on a `,` or `}`. Nested
-    `=>` produce their own pairs. Strings are not modelled: a `=>` inside a
-    string is a false red, never a false green.
+    `=>` are found by scanning each body; jumping to the arm's end would
+    skip them. Callers blank strings first so a `}` inside a literal cannot
+    close the arm.
     """
+    return _match_arms(src, 0)
+
+
+def _match_arms(src: str, line_offset: int) -> list[tuple[str, str, int]]:
     arms: list[tuple[str, str, int]] = []
     n = len(src)
     depth = 0
+    paren = 0
     last_sep: dict[int, int] = {0: -1}
     i = 0
     while i < n - 1:
@@ -145,7 +201,15 @@ def match_arms(src: str) -> list[tuple[str, str, int]]:
             depth -= 1
             i += 1
             continue
-        if c == ",":
+        if c == "(":
+            paren += 1
+            i += 1
+            continue
+        if c == ")":
+            paren = max(0, paren - 1)
+            i += 1
+            continue
+        if c == "," and paren == 0:
             last_sep[depth] = i
             i += 1
             continue
@@ -153,8 +217,9 @@ def match_arms(src: str) -> list[tuple[str, str, int]]:
             sep = last_sep.get(depth, -1)
             pattern = src[sep + 1 : i]
             arrow_depth = depth
-            line = src[:i].count("\n") + 1
+            line = line_offset + src[:i].count("\n") + 1
             j = i + 2
+            body_paren = paren
             while j < n:
                 ch = src[j]
                 if ch == "{":
@@ -163,10 +228,16 @@ def match_arms(src: str) -> list[tuple[str, str, int]]:
                     if depth == arrow_depth:
                         break
                     depth -= 1
-                elif ch == "," and depth == arrow_depth:
+                elif ch == "(":
+                    body_paren += 1
+                elif ch == ")":
+                    body_paren = max(0, body_paren - 1)
+                elif ch == "," and depth == arrow_depth and body_paren == 0:
                     break
                 j += 1
-            arms.append((pattern, src[i + 2 : j], line))
+            body = src[i + 2 : j]
+            arms.append((pattern, body, line))
+            arms.extend(_match_arms(body, line_offset + src[: i + 2].count("\n")))
             last_sep[arrow_depth] = j
             i = j
             continue
@@ -182,7 +253,7 @@ def check(rust_root: Path, store_crate: Path, error_file: Path, exclude: set[Pat
     findings: list[str] = []
     verdict_defs = 0
     for path in files:
-        text = strip_comments(path.read_text(encoding="utf-8"))
+        text = blank_strings(strip_comments(path.read_text(encoding="utf-8")))
         rel = path.relative_to(rust_root)
         verdict_defs += len(VERDICT_DEF_RE.findall(text))
         in_store = store_crate in path.parents
@@ -279,6 +350,11 @@ def selftest() -> None:
         "clause 1",
     )
     run(
+        "clause 1: TryInto",
+        {E: STORE_ERR, V: "impl TryInto<InvalidBlock> for StoreError {}\n"},
+        "clause 1",
+    )
+    run(
         "clause 1: qualified path",
         {E: STORE_ERR, V: "impl core::convert::From<StoreError> for InvalidBlock {}\n"},
         "clause 1",
@@ -349,12 +425,28 @@ def selftest() -> None:
         },
         None,
     )
+    run(
+        "clause 3: nested arm",
+        {
+            E: STORE_ERR,
+            V: "match x {\n    Foo => match e {\n        StoreError::Open => InvalidBlock::X,\n    },\n}\n",
+        },
+        "clause 3",
+    )
+    run(
+        "clause 3: brace inside string does not hide the arm",
+        {
+            E: STORE_ERR,
+            V: 'match e {\n    StoreError::Open => (log("}"), InvalidBlock::X).1,\n}\n',
+        },
+        "clause 3",
+    )
     if fails:
         print("store-error conversion-ban selftest FAILED:", file=sys.stderr)
         for f in fails:
             print(f"  {f}", file=sys.stderr)
         sys.exit(1)
-    print("store-error conversion-ban selftest: 21 cases held")
+    print("store-error conversion-ban selftest: 24 cases held")
 
 
 def main() -> None:

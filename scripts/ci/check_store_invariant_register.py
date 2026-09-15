@@ -118,8 +118,8 @@ def parse_enum(src_dir: Path) -> list[str] | None:
     Two definitions are a red, not a merge."""
     found: list[list[str]] = []
     for path in sorted(src_dir.rglob("*.rs")):
-        m = ENUM_RE.search(strip_comments(path.read_text(encoding="utf-8")))
-        if m:
+        text = strip_comments(path.read_text(encoding="utf-8"))
+        for m in ENUM_RE.finditer(text):
             found.append(VARIANT_RE.findall(m.group(1)))
     if not found:
         return None
@@ -234,13 +234,19 @@ def selftest() -> None:
             "StoreInvariant::B has no built row",
         )
         expect_red("enum with zero variants", HEADER + _row(1, "ruled"), "pub enum StoreInvariant {\n}\n", "zero variants")
+        expect_red(
+            "two enums in one file",
+            HEADER + _row(1, "ruled"),
+            "pub enum StoreInvariant {\n    A,\n}\npub enum StoreInvariant {\n    B,\n}\n",
+            "more than one",
+        )
         expect_red("wrong column count", HEADER + "| SI-1 | inv | t | — | o | ruled |\n", None, "cells, header has")
     if fails:
         print("store-invariant register selftest FAILED:", file=sys.stderr)
         for f in fails:
             print(f"  {f}", file=sys.stderr)
         sys.exit(1)
-    print("store-invariant register selftest: 13 cases held")
+    print("store-invariant register selftest: 14 cases held")
 
 
 def main() -> None:
