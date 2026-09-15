@@ -25,5 +25,6 @@
 //! `#[no_mangle]` exports survive into the staticlib (verified by the
 //! same mechanism that puts `shekyl_log_*` into `libshekyl_ffi.a`).
 
+pub use shekyl_archival_fetch_sched;
 pub use shekyl_daemon_rpc;
 pub use shekyl_ffi;

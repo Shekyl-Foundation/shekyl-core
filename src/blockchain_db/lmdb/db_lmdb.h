@@ -578,6 +578,7 @@ private:
     const std::vector<uint64_t>& post_shard_ids) override;
   virtual void revert_archival_rebonds_at_height(uint64_t block_height) override;
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const override;
+  virtual void fold_archival_market_bonded_counts(std::vector<uint64_t>& bonded_count) const override;
   virtual std::vector<uint64_t> archival_bond_last_served_epochs(const crypto::hash& p_id,
     const std::vector<uint64_t>& shard_ids) const override;
   virtual std::vector<uint64_t> archival_bond_all_last_served_epochs(

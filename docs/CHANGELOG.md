@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### API
+
+- **`get_archival_shard_coverage` and `request_archival_shard` (RPC 3.31).**
+  Local coverage/profit list (bond-record metadata; no Tor, no bodies, no
+  `p_id`) and an operator view-fetch that names `shard_id` only
+  (`ARCHIVAL_SHARD_SELECTION_LIST.md` SL-D4/D7/D8 reading 1;
+  `ARCHIVAL_SHARD_FETCH.md` SF-D1). Fetch is admin-only
+  (`RESTRICTED_METHODS`); a typed miss answers
+  `-22 CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`, not `-1 WRONG_PARAM`.
+  Omitted `shard_id` is `WRONG_PARAM` (0 is a real shard). Every node
+  prunes: shard bodies sit below the window with stakers, or temporarily
+  after this fetch. The wallet never dials `.onion`.
+  `CORE_RPC_VERSION_MINOR` `30 → 31`.
+
 ### Changed
 
 - **Every FCMP++ spend no longer identifies the output it spends (`PL-D1`

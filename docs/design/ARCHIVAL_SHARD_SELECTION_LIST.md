@@ -1,8 +1,9 @@
 # The shard selection list — design steers (SL)
 
-**Status:** STEERS RECORDED 2026-09-13 — `SL-D1`…`SL-D7` **RULED** by Rick in
-session; `SL-D8` **OPEN**. No code written. This document is the reference an
-implementation round opens against, not an implementation plan.
+**Status:** LIVING CONTRACT — last verified 2026-09-14. `SL-D1`…`SL-D8`
+**RULED**; implementation opened (profit-hint RPC + operator fetch-request
+RPC; GUI picker). `SL-D6` payout-floor filter stays FOLLOWUPS. Market
+`first_stake` posting stays a typed refusal this round.
 
 **Scope:** how a market staker's wallet decides which shards to bond. Nothing
 here is consensus-visible: no wire field moves, no admission rule changes, no
@@ -114,9 +115,15 @@ by bonded count alone disagrees with what actually pays wherever ages differ:
 the operator takes the top row, earns less than a row further down, and stops
 trusting the list.
 
-**Ruled:** order by `scarcity_micro(bonded_count, age_milli, age_weight)` — the
-same function the payout uses, called with the bonded count substituted for the
-served one. One function, two operands.
+**Ruled:** order by the payout function, with the bonded count as operand.
+**UPDATE 2026-09-14 (join-adjusted hint):** the displayed profit is
+`scarcity_micro(bonded_count + 1, age_milli, age_weight)` — the same function
+consensus uses to **pay**, with the tip-bonded count as operand, join-adjusted
+so the card answers “what I earn if I take this shard.” `r_market == 0` scores
+`0` in `scarcity_micro`, so a zero-bonded Foundation-only shard would otherwise
+show zero profit; `+ 1` is the first-holder reading. The GUI projects that
+micro figure into expected SKL per epoch (rule 81: money, not `scarcity_micro`).
+Cards sort by that figure. The user picks. Nothing consensus-visible moves.
 
 **The property this buys:** the ordering cannot drift from the money as the
 curve changes, because there is one definition of the curve. A separate
@@ -257,22 +264,47 @@ common, which `1/R` economics argue against.
 
 ---
 
-## 10. `SL-D8` — OPEN: what the "available set" means
+## 10. `SL-D8` — RULED 2026-09-14: reading 1 (all shards remain legal)
 
 Two readings, and they are different systems:
 
-- **All shards, with an ordering and a payout filter.** Pure presentation.
-  Leaves `SL-D1` untouched. Any shard remains a legal declaration; the filter
-  only decides what is *shown*.
-- **Under-covered shards only, as an admissible set.** Restricts what is
-  declarable. Creates an admission race that does not exist today — the set is
-  derived per height, so a bond assembled at `h` can be inadmissible at `h+1`
-  because someone else covered the pick — and would need a reference-block pin
-  plus a tolerance rule.
+- **Reading 1 — all shards, with an ordering and an advisory payout display.**
+  Pure presentation. Leaves `SL-D1` untouched. Any shard remains a legal
+  declaration; the list only decides what is *shown* and in what order.
+- **Reading 2 — under-covered shards only, as an admissible set.** Restricts
+  what is declarable. Creates an admission race that does not exist today —
+  the set is derived per height, so a bond assembled at `h` can be inadmissible
+  at `h+1` because someone else covered the pick — and would need a
+  reference-block pin plus a tolerance rule.
 
-Everything in §§2–8 is written for the **first** reading. The second is a
-replacement for `SL-D1`, not a refinement of it, and would have to be ruled as
-such.
+**Ruled: reading 1.** Reading 2 is **rejected** for this round: it would *add*
+consensus machinery (an admission rule, an eligible-set, a fork). Do not add
+an admission rule, an eligible-set, a persisted coverage table, or a consensus
+read of this list (`SL-D3`, `SL-D7`). A lying daemon can only steer a bond onto
+a worse-paying shard; payment still uses served `r_market`.
+
+**Rule-21 reopen:** a measured coverage failure the gradient does not correct
+that reading 1 cannot present (the `SL-D1` reopen), not a desire to make the
+list an admission gate.
+
+### 10.1 Operator picker vs CompleteTree D-3
+
+`first_stake` still takes a **posture**, never a raw `HoldingsKind`. When the
+assignment follow-on lands, Market **posts the operator-selected `ShardSet`**.
+This round does **not** change `Engine::first_stake` and does **not** discharge
+`NoShardsAvailable`. Selection lives in GUI session state only.
+
+### 10.2 GUI never fetches (`SF-D1`)
+
+The GUI never retrieves shard bytes. It only **requests a fetch**. The daemon
+is the only process that speaks Tor and `GET /shard/{id}` (`EU-D1`, `SF-D1`:
+no wallet-side client). `shekyl-p-fetch` already exists; a GUI-initiated read
+is another **scheduler** of the same `fetch(&FetchTarget, &header)` entry
+(`SF-D7`), not a second client, not a caller tag on the wire, and not a wallet
+SOCKS stack. The only shard-content verb is a daemon JSON-RPC that names
+`shard_id`. Destination `P` is the daemon’s organic-style draw (`SF-D10`),
+never a GUI parameter. Same in-flight cap `N`; no priority over
+challenge/organic (`SF-D7`).
 
 ---
 
@@ -311,22 +343,25 @@ such.
 | `SL-D1` | Consensus assigns nothing; operator selects | **RULED** |
 | `SL-D2` | List reads bonded holdings at the tip, not served counts | **RULED** |
 | `SL-D3` | Derived from bond records, never stored | **RULED** |
-| `SL-D4` | Ordered by `scarcity_micro(bonded_count, age, age_weight)` | **RULED** |
+| `SL-D4` | Ordered by join-adjusted `scarcity_micro(bonded_count + 1, age, age_weight)` — RULED 2026-09-14 | **RULED** |
 | `SL-D5` | Two columns, bonded and served; payment never leaves the serve gate | **RULED** |
-| `SL-D6` | Payout threshold, not a coverage cap; advisory, no era table | **RULED** |
+| `SL-D6` | Payout threshold, not a coverage cap; advisory, no era table — filter stays FOLLOWUPS | **RULED** |
 | `SL-D7` | The hint never feeds a consensus-checked input | **RULED** |
-| `SL-D8` | Meaning of "available set" — all-shards-filtered vs under-covered-only | **OPEN** |
+| `SL-D8` | Available set = all shards (reading 1); reading 2 rejected — RULED 2026-09-14 | **RULED** |
 
 ---
 
-## 14. What an implementation round would need
+## 14. Implementation (opened 2026-09-14)
 
-Named so they are not discovered mid-build. None is started.
-
-1. **A daemon RPC that does not exist.** The per-`P` claim source is the only
-   archival gather today; the coverage map is not exposed. New read-only method,
-   non-identifying by construction.
-2. **The randomised tie-break** within equal-value bands (§9).
-3. **The payout floor's denomination** — fee-derived per `SL-D6`, with the
-   arithmetic written down rather than picked.
-4. **`SL-D8` ruled** before any presentation work commits to a shape.
+1. **`get_archival_shard_coverage`** — local fold over bond records; empty
+   request; profit hint is `join_scarcity_micro`. No bodies, no aggregates,
+   never persisted (`SL-D3`).
+2. **`request_archival_shard { shard_id }`** — fourth scheduler of
+   `shekyl-p-fetch` (`SF-D1`). Shard bodies sit below the prune window
+   (staker hold, or a temporary view-cache after this fetch). Freeze-row
+   `R_k` is not a body. GUI names `shard_id` only.
+3. **Client-side shuffle** of equal join-profit bands (per-process RNG; not
+   consensus).
+4. **`SL-D6` payout-floor arithmetic** stays FOLLOWUPS — profit is shown, not
+   used as a hide-filter yet.
+5. **`SL-D8` reading 1 RULED** 2026-09-14.

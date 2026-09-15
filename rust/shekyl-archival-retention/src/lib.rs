@@ -66,6 +66,7 @@ pub mod segment_freeze;
 pub mod serve_credit_decisions;
 pub mod serve_eligibility;
 pub mod settlement_row;
+pub mod shard_coverage;
 pub mod wire;
 
 pub use admission::codes as admission_codes;
@@ -198,6 +199,9 @@ pub use serve_credit_decisions::{
     SERVE_CREDIT_KEY_LEN,
 };
 pub use serve_eligibility::serve_credit_epoch_ok;
+pub use shard_coverage::{
+    join_scarcity_micro, order_shard_coverage, ShardCoverageIn, ShardCoverageOut,
+};
 pub use wire::{
     encode_path, hybrid_countersignature, split_countersignature, ArchivalServeCreditPruned,
     ArchivalServeCreditResponse, WireError, ED25519_COUNTERSIGNATURE_LEN,

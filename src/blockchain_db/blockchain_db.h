@@ -2445,6 +2445,17 @@ public:
   /// horizon); the Rust age computation pins a segment that froze at/after
   /// H_close(add_epoch) to the same longest-horizon extreme.
   virtual bool archival_shard_freeze_height(uint64_t shard_id, uint64_t& out) const;
+  /// Market co-holder counts for the operator coverage list
+  /// (`ARCHIVAL_SHARD_SELECTION_LIST.md` SL-D4 / SL-D8 reading 1). Caller
+  /// sizes `bonded_count` to `frozen_segment_count` (zeros). This is an
+  /// LMDB cursor over **bond records** (public metadata), not shard bodies
+  /// — every node prunes; bodies live with stakers or a view-fetch.
+  /// Increments in place for every **market** bond's held shards with
+  /// `shard_id < bonded_count.size()`. CompleteTree records are skipped
+  /// (Foundation is not a market co-holder). Ranking stays Rust-side.
+  /// Default is a no-op so testdb stays empty until a subclass folds
+  /// synthetic bonds. Moves with chain-store when that is Rust.
+  virtual void fold_archival_market_bonded_counts(std::vector<uint64_t>& bonded_count) const;
   /// Release verify marshaling (P2B-8 Q1/Q2): each held shard's last-served
   /// settlement epoch — one reverse-cursor seek per shard over the BE
   /// composite serve-credit key `P_id ‖ BE64(shard) ‖ BE64(epoch) ‖

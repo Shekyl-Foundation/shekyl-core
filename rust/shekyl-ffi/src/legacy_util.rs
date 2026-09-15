@@ -68,6 +68,30 @@ pub(crate) unsafe fn slice_from_typed_ptr<'a, T>(ptr: *const T, len: usize) -> O
     Some(std::slice::from_raw_parts(ptr, len))
 }
 
+/// Write `len` elements of `T` through the same null / zero-length /
+/// `isize::MAX`-byte-bound seam as [`slice_from_typed_ptr`].
+///
+/// # Safety
+///
+/// A non-null `ptr` must be aligned for `T` and address `len` writable
+/// elements. That allocation-size precondition is the caller's contract.
+pub(crate) unsafe fn slice_from_typed_ptr_mut<'a, T>(
+    ptr: *mut T,
+    len: usize,
+) -> Option<&'a mut [T]> {
+    if len == 0 {
+        return Some(&mut []);
+    }
+    if ptr.is_null() {
+        return None;
+    }
+    let byte_len = len.checked_mul(core::mem::size_of::<T>())?;
+    if byte_len > isize::MAX as usize {
+        return None;
+    }
+    Some(std::slice::from_raw_parts_mut(ptr, len))
+}
+
 /// Read a fixed-size **public** array through [`slice_from_ptr`].
 /// One typed construction on top of the seam: null / zero-length /
 /// `isize::MAX` are the helper's, the `N`-byte conversion is this
@@ -177,6 +201,7 @@ mod slice_from_ptr_tests {
             Some(&words[..])
         );
         assert!(unsafe { slice_from_typed_ptr::<u64>(dangling.cast(), too_big) }.is_none());
+        assert!(unsafe { slice_from_typed_ptr_mut::<u64>(dangling.cast(), too_big) }.is_none());
     }
 
     #[test]

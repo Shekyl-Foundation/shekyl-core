@@ -30,6 +30,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "string_tools.h"
 
 #include "cryptonote_protocol/cryptonote_protocol_defs.h"
@@ -1688,6 +1690,105 @@ namespace cryptonote
         KV_SERIALIZE(has_last_settled_slash_epoch)
         KV_SERIALIZE(last_settled_slash_epoch)
         KV_SERIALIZE(epochs)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  /// Operator coverage/profit list (`ARCHIVAL_SHARD_SELECTION_LIST.md` SL-D4).
+  /// Empty request: the answer is identical for every caller (SL-D7). No
+  /// bodies, no aggregates, no `p_id`.
+  struct COMMAND_RPC_GET_ARCHIVAL_SHARD_COVERAGE
+  {
+    struct request_t: public rpc_request_base
+    {
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_request_base)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct coverage_row_t
+    {
+      uint64_t shard_id;
+      uint64_t bonded_count;
+      uint64_t served_count;
+      uint64_t freeze_height;
+      uint64_t join_scarcity_micro;
+      uint64_t expected_profit_atomic;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE(shard_id)
+        KV_SERIALIZE(bonded_count)
+        KV_SERIALIZE(served_count)
+        KV_SERIALIZE(freeze_height)
+        KV_SERIALIZE(join_scarcity_micro)
+        KV_SERIALIZE(expected_profit_atomic)
+      END_KV_SERIALIZE_MAP()
+    };
+
+    struct response_t: public rpc_response_base
+    {
+      uint64_t as_of_height;
+      uint64_t leaf_count;
+      uint64_t frozen_count;
+      uint64_t settled_epoch;
+      uint64_t budget_atomic;
+      uint64_t sigma_work_milli;
+      bool profit_estimate_available;
+      std::vector<coverage_row_t> shards;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_response_base)
+        KV_SERIALIZE(as_of_height)
+        KV_SERIALIZE(leaf_count)
+        KV_SERIALIZE(frozen_count)
+        KV_SERIALIZE(settled_epoch)
+        KV_SERIALIZE(budget_atomic)
+        KV_SERIALIZE(sigma_work_milli)
+        KV_SERIALIZE(profit_estimate_available)
+        KV_SERIALIZE(shards)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<response_t> response;
+  };
+
+  /// Operator fetch that names `shard_id` only (`ARCHIVAL_SHARD_FETCH.md` SF-D1).
+  /// Returns a ruling-A aggregate, never segment bytes.
+  struct COMMAND_RPC_REQUEST_ARCHIVAL_SHARD
+  {
+    struct request_t: public rpc_request_base
+    {
+      /// Omitted on the wire stays this sentinel (`struct_init` + in-class
+      /// initializer). 0 is a real shard; `{}` must not fetch it.
+      uint64_t shard_id = std::numeric_limits<uint64_t>::max();
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_request_base)
+        KV_SERIALIZE(shard_id)
+      END_KV_SERIALIZE_MAP()
+    };
+    typedef epee::misc_utils::struct_init<request_t> request;
+
+    struct response_t: public rpc_response_base
+    {
+      uint64_t shard_id;
+      std::string shard_hash;
+      uint64_t block_count;
+      uint64_t tx_count;
+      uint64_t output_count;
+      uint64_t coinbase_output_count;
+      uint64_t time_range_seconds;
+
+      BEGIN_KV_SERIALIZE_MAP()
+        KV_SERIALIZE_PARENT(rpc_response_base)
+        KV_SERIALIZE(shard_id)
+        KV_SERIALIZE(shard_hash)
+        KV_SERIALIZE(block_count)
+        KV_SERIALIZE(tx_count)
+        KV_SERIALIZE(output_count)
+        KV_SERIALIZE(coinbase_output_count)
+        KV_SERIALIZE(time_range_seconds)
       END_KV_SERIALIZE_MAP()
     };
     typedef epee::misc_utils::struct_init<response_t> response;

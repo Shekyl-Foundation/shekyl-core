@@ -202,9 +202,18 @@ no caller-specific header, path token, or isolation shape that would let
 same client entry point `fetch(&FetchTarget, &header)` (`SF-D7`) — "you
 produced block *h*: fetch shard *s* from assigned `P`" and
 "this daemon needs shard *s*" — and tests are a third scheduler of
-that same entry point, not a separate path. The HTTP request names
-only the shard; the destination is whom the scheduler named, not a
-caller tag on the wire.
+that same entry point, not a separate path. **UPDATE 2026-09-14:** the
+operator GUI's `request_archival_shard` JSON-RPC is a **fourth scheduler of
+the same `fetch()` entry**, not a wallet client (`SL-D8` §10.2). The wallet
+names `shard_id` only; the daemon draws `P` (`SF-D10`) and holds the same
+in-flight cap `N` with no priority over challenge/organic. Every node is a
+full node and every node prunes: shard bodies below the window live with
+stakers, or temporarily on a daemon that requested the shard to view. A
+freeze-row `R_k` is consensus metadata, not a body, and is not a local
+shortcut around fetch. Answering from bytes this node already holds
+(staker set, or a prior view-cache) is still this scheduler, not a second
+protocol. The HTTP request names only the shard; the destination is whom
+the scheduler named, not a caller tag on the wire.
 
 Reopen if a storage-only pruned-daemon path is shown to exercise the
 serve endpoint end to end without a fetch client. (Also if `EU-D1` or
