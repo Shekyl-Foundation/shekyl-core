@@ -1448,8 +1448,11 @@ citation, or moves bucket, must be reflected here in the same PR (the row
 moves the schedule). The bound/free regex above is quoted verbatim and checked,
 so this section and the gate define "surface-bound" once. §15's dated entries
 are records-was and are not read as live claims. Rule 47: an empty census, a
-§4 header missing a read column, zero bound rows, or a missing table here is a
-missing subject, not a pass; `--selftest` bites every refusal red.
+§4 header missing a read column (each table's own header — §4.J carries
+three under one heading), a §4 row whose id is not a well-formed `CEN-` id,
+zero bound rows, an unterminated code fence in either document, or a missing
+or duplicated table row here is a missing subject, not a pass; `--selftest`
+bites every refusal red and reports the count it fired.
 
 Reopeners (rule 21): **(a)** the completeness gate's `enforced` figure and
 the census's flag/bucket columns disagree — the gate reads the wrong column

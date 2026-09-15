@@ -30,9 +30,13 @@
 #   cannot disagree about what "surface-bound" means.
 #
 # Rule 47: the gate asserts its own subject. An empty census, a §4 table whose
-# header lacks the columns the derivation reads, a census with zero bound rows,
-# a DRS doc with no §7.5 or with a table missing — each is a missing subject
-# and a failure, never a vacuous pass. `--selftest` proves each refusal fires.
+# header lacks the columns the derivation reads (every table's own header —
+# §4.J carries three under one heading), a §4 row whose id cell is not a
+# well-formed `CEN-` id or that is too short for its header, a census with
+# zero bound rows, an unterminated code fence in either document (it would
+# hide the rest of the file from the parse), a DRS doc with no §7.5 or with a
+# table missing — each is a missing subject and a failure, never a vacuous
+# pass. `--selftest` proves each refusal fires and reports how many did.
 #
 # Rule 46: the verdict is the process exit code; nothing here pipes it.
 
@@ -113,19 +117,40 @@ def _is_separator(cells: list[str]) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{3,}:?", c) for c in cells)
 
 
+def _unfenced(text: str, what: str) -> tuple[list[str], set[int]]:
+    """The document's lines and the indices inside closed code fences.
+
+    An unterminated fence would make every line after it "fenced" and so
+    invisible to the parse — a prefix of the census could then be derived,
+    and a doc edited to the same prefix would pass. That is a missing subject
+    (rule 47), refused at every entry rather than read as absence.
+    """
+    lines = text.splitlines()
+    fenced, open_fence = fenced_lines(lines)
+    if open_fence:
+        raise Refused(
+            f"{what}: a code fence is left open — everything after it is hidden "
+            "from the parse, so the derivation would be over a prefix"
+        )
+    return lines, fenced
+
+
 def parse_census(text: str) -> list[Row]:
     """Every `CEN-` row of census §4, with the four columns the partition reads.
 
-    The header row of each §4 table names the columns; indices are taken from
+    Each table names its columns in its own header row; indices are taken from
     it rather than assumed, so a re-ordered census fails loudly instead of
-    reading `b` out of the `C/P` column.
+    reading `b` out of the `C/P` column. A GFM table ends at its first
+    non-table line, and a subsection may carry several tables (§4.J does), so
+    the header is re-read at every table start — never inherited from the
+    previous table under the same heading.
     """
-    lines = text.splitlines()
-    fenced, _open = fenced_lines(lines)
+    lines, fenced = _unfenced(text, "census")
     rows: list[Row] = []
     in_rows = False
     subsystem: str | None = None
     columns: dict[str, int] | None = None
+    width = 0
     seen_tables = 0
     for n, raw in enumerate(lines):
         if n in fenced:
@@ -143,8 +168,11 @@ def parse_census(text: str) -> list[Row]:
             subsystem = m.group(1)
             columns = None
             continue
-        if not line.startswith("|") or subsystem is None:
+        if subsystem is None:
             continue  # §4's preamble legend table precedes the first subsection
+        if not line.startswith("|"):
+            columns = None  # the table (if any) ended; the next `|` line is a header
+            continue
         cells = _cells(line)
         if _is_separator(cells):
             continue
@@ -158,11 +186,25 @@ def parse_census(text: str) -> list[Row]:
                     f"needs {sorted(needed)}"
                 )
             columns = {name: header.index(name) for name in needed}
+            width = max(columns.values()) + 1
             seen_tables += 1
             continue
-        rid_m = ROW_ID.match(cells[columns["id"]])
+        if len(cells) < width:
+            raise Refused(
+                f"census §4 table under {subsystem} (line {n + 1}): row has "
+                f"{len(cells)} cells, fewer than the {width} its header's read "
+                f"columns need: {cells!r}"
+            )
+        id_cell = cells[columns["id"]]
+        rid_m = ROW_ID.match(id_cell)
         if not rid_m:
-            continue  # a non-row line inside a table (rare; e.g. a note row)
+            # Every row of a §4 data table is a rule. A cell that is not a
+            # well-formed `CEN-` id is a row the derivation would otherwise
+            # drop from the denominator without a word.
+            raise Refused(
+                f"census §4 table under {subsystem} (line {n + 1}): id cell "
+                f"{id_cell!r} is not a `CEN-` row id"
+            )
         flag = cells[columns["c/p"]].strip("*")
         if flag not in FLAGS:
             raise Refused(
@@ -236,8 +278,7 @@ def derive(rows: list[Row]) -> Derived:
 
 def section_7_5(text: str) -> tuple[list[str], int]:
     """The lines of §7.5 and the 1-based line number where it starts."""
-    lines = text.splitlines()
-    fenced, _open = fenced_lines(lines)
+    lines, fenced = _unfenced(text, "DRS doc")
     start = None
     for n, line in enumerate(lines):
         if n not in fenced and DOC_SECTION_START.match(line):
@@ -255,8 +296,7 @@ def section_7_5(text: str) -> tuple[list[str], int]:
 
 def live_text(text: str) -> str:
     """The DRS doc with fenced code and the §15 decision log removed."""
-    lines = text.splitlines()
-    fenced, _open = fenced_lines(lines)
+    lines, fenced = _unfenced(text, "DRS doc")
     out: list[str] = []
     in_log = False
     for n, line in enumerate(lines):
@@ -312,6 +352,8 @@ def check_table1(body: list[str], d: Derived, errors: list[str]) -> None:
         if key not in d.table1:
             errors.append(f"table 1: unknown (flag, surface) {key!r}")
             continue
+        if key in seen:
+            errors.append(f"table 1: {key[0]}/{key[1]} listed twice")
         seen.add(key)
         got = [_int(c, f"table 1 {key}") for c in cells[2:6]]
         total = _int(cells[6], f"table 1 {key} total")
@@ -544,71 +586,117 @@ Outside.
 """
 
 
-def _expect_ok(census: str, doc: str, name: str) -> None:
-    errs = check(census, doc)
-    if errs:
-        raise SystemExit(f"selftest {name}: expected clean, got:\n  " + "\n  ".join(errs))
+# A census subsection carrying two tables (§4.J's shape). The second table's
+# header re-orders the read columns; a parser that inherited the first table's
+# indices would read `C` as the site and `4` as the flag.
+_CENSUS_TWO_TABLES = _CENSUS_OK.replace(
+    "| **CEN-L3** | bucket-4 belt | `db_lmdb.cpp:700` | C | 4 | x | y | z |\n",
+    "\n"
+    "Second table, same subsection.\n"
+    "\n"
+    "| id | rule | C/P | b | site(s) | class | evidence | notes |\n"
+    "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+    "| **CEN-L3** | bucket-4 belt | C | 4 | `db_lmdb.cpp:700` | x | y | z |\n",
+)
 
 
-def _expect_refusal(census: str, doc: str, needle: str, name: str) -> None:
-    try:
+class _Probe:
+    """Runs the self-test cases and counts the refusals that fired.
+
+    The count is reported, not hard-coded, so the diagnostic cannot say
+    "27 refusals" over 24 cases.
+    """
+
+    def __init__(self) -> None:
+        self.refusals = 0
+
+    @staticmethod
+    def ok(census: str, doc: str, name: str) -> None:
         errs = check(census, doc)
-    except Refused as e:
-        errs = [str(e)]
-    if not any(needle in e for e in errs):
-        raise SystemExit(
-            f"selftest {name}: expected a refusal mentioning {needle!r}, got:\n  "
-            + ("\n  ".join(errs) if errs else "(clean)")
-        )
+        if errs:
+            raise SystemExit(f"selftest {name}: expected clean, got:\n  " + "\n  ".join(errs))
+
+    def refusal(self, census: str, doc: str, needle: str, name: str) -> None:
+        try:
+            errs = check(census, doc)
+        except Refused as e:
+            errs = [str(e)]
+        if not any(needle in e for e in errs):
+            raise SystemExit(
+                f"selftest {name}: expected a refusal mentioning {needle!r}, got:\n  "
+                + ("\n  ".join(errs) if errs else "(clean)")
+            )
+        self.refusals += 1
 
 
 def selftest() -> None:
-    _expect_ok(_CENSUS_OK, _DOC_OK, "consistent pair")
+    p = _Probe()
+    p.ok(_CENSUS_OK, _DOC_OK, "consistent pair")
+    p.ok(_CENSUS_TWO_TABLES, _DOC_OK, "second table under one subsection read against its own header")
 
     # census moves: bucket, citation, new row
     moved = _CENSUS_OK.replace("| CEN-A2 | height | `blockchain.cpp:20` | C | 2 |", "| CEN-A2 | height | `blockchain.cpp:20` | C | 1 |")
-    _expect_refusal(moved, _DOC_OK, "table 1 C/free", "row re-bucketed")
-    _expect_refusal(moved, _DOC_OK, "table 3 4.A", "row re-bucketed (table 3)")
+    p.refusal(moved, _DOC_OK, "table 1 C/free", "row re-bucketed")
+    p.refusal(moved, _DOC_OK, "table 3 4.A", "row re-bucketed (table 3)")
     cited = _CENSUS_OK.replace("`blockchain.cpp:20` | C | 2 |", "`src/blockchain_db/db.cpp:20` | C | 2 |")
-    _expect_refusal(cited, _DOC_OK, "table 2 is missing", "row gains a store citation")
-    _expect_refusal(cited, _DOC_OK, "2 of 4", "headline phrase goes stale")
+    p.refusal(cited, _DOC_OK, "table 2 is missing", "row gains a store citation")
+    p.refusal(cited, _DOC_OK, "2 of 4", "headline phrase goes stale")
     retired = _CENSUS_OK.replace("`db_lmdb.cpp:700` | C | 4 |", "`db_lmdb.cpp:700` | C | 3 |")
-    _expect_refusal(retired, _DOC_OK, "not derive as live", "bound row retires to bucket 3")
+    p.refusal(retired, _DOC_OK, "not derive as live", "bound row retires to bucket 3")
     minted = _CENSUS_OK.replace(
-        "### 4.L Storage layer",
-        "| CEN-A4 | new | `blockchain.cpp:30` | C | 4 | x | y | z |\n\n### 4.L Storage layer",
+        "| CEN-A3 | policy thing | `tx_pool.cpp:5` | P | 1 | x | y | z |\n",
+        "| CEN-A3 | policy thing | `tx_pool.cpp:5` | P | 1 | x | y | z |\n"
+        "| CEN-A4 | new | `blockchain.cpp:30` | C | 4 | x | y | z |\n",
     )
-    _expect_refusal(minted, _DOC_OK, "table 3 4.A", "new surface-free row minted")
+    p.refusal(minted, _DOC_OK, "table 3 4.A", "new surface-free row minted")
+    # a row after the blank line that ends a table is a header-less table, not a row
+    p.refusal(
+        _CENSUS_OK.replace(
+            "### 4.L Storage layer",
+            "| CEN-A4 | new | `blockchain.cpp:30` | C | 4 | x | y | z |\n\n### 4.L Storage layer",
+        ),
+        _DOC_OK,
+        "lacks a column",
+        "a stray row outside any table is not read as a rule",
+    )
 
     # doc drifts
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("| CEN-L3 | 4 | belt | E1 |\n", ""), "missing live surface-bound", "table 2 drops a row")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("| CEN-L1 | 2 |", "| CEN-L1 | 1 |"), "table 2 CEN-L1", "table 2 wrong bucket")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("| 4.A Acceptance topology | 1 | 1 | 0 | 2 |", "| 4.A Acceptance topology | 2 | 0 | 0 | 2 |"), "table 3 4.A", "table 3 wrong split")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("= 4 = **2 bound + 2 free**", "= 4 = **3 bound + 1 free**"), "derived-totals", "totals sentence stale")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("`blockchain_db|db_lmdb|src/blockchain_db|lmdb/`", "`blockchain_db`"), "quote the bound regex", "regex not quoted")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("2 of 4 live", "3 of 4 live"), "disagrees with the census", "phrase disagrees")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("Only 3 of 6 census rows", "Only 4 of 6 census rows"), "cite a store file", "bound-of-all phrase disagrees")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("Only 3 of 6 census rows", "Only three census rows"), "no `N of M census rows`", "bound-of-all phrase absent")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("| CEN-L3 | 4 | belt | E1 |\n", ""), "missing live surface-bound", "table 2 drops a row")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("| CEN-L1 | 2 |", "| CEN-L1 | 1 |"), "table 2 CEN-L1", "table 2 wrong bucket")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("| 4.A Acceptance topology | 1 | 1 | 0 | 2 |", "| 4.A Acceptance topology | 2 | 0 | 0 | 2 |"), "table 3 4.A", "table 3 wrong split")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("= 4 = **2 bound + 2 free**", "= 4 = **3 bound + 1 free**"), "derived-totals", "totals sentence stale")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("`blockchain_db|db_lmdb|src/blockchain_db|lmdb/`", "`blockchain_db`"), "quote the bound regex", "regex not quoted")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("2 of 4 live", "3 of 4 live"), "disagrees with the census", "phrase disagrees")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("Only 3 of 6 census rows", "Only 4 of 6 census rows"), "cite a store file", "bound-of-all phrase disagrees")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("Only 3 of 6 census rows", "Only three census rows"), "no `N of M census rows`", "bound-of-all phrase absent")
     # the decision log's stale figures are records-was and are NOT read as live
-    _expect_ok(_CENSUS_OK, _DOC_OK.replace("1 of 3 live consensus rows", "9 of 9 live consensus rows"), "decision log excluded")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("## 15. Decision log", "## 14. Not the log"), "disagrees with the census", "the same figures outside the log are read")
+    p.ok(_CENSUS_OK, _DOC_OK.replace("1 of 3 live consensus rows", "9 of 9 live consensus rows"), "decision log excluded")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("## 15. Decision log", "## 14. Not the log"), "disagrees with the census", "the same figures outside the log are read")
 
     # subjects missing
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("### 7.5", "### 7.9"), "no `### 7.5`", "no §7.5")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("| flag | surface |", "| flg | surface |"), "table 1", "table 1 header missing")
-    _expect_refusal(_CENSUS_OK, _DOC_OK.replace("2 of 4 live consensus rows", "two of four"), "no `N of M", "headline phrase absent")
-    _expect_refusal("# census\n\n## 4. Rows\n\n### 4.A x\n\ntext\n\n## 5. y\n", _DOC_OK, "no §4 rows tables", "empty census")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("### 7.5", "### 7.9"), "no `### 7.5`", "no §7.5")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("| flag | surface |", "| flg | surface |"), "table 1", "table 1 header missing")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("2 of 4 live consensus rows", "two of four"), "no `N of M", "headline phrase absent")
+    p.refusal("# census\n\n## 4. Rows\n\n### 4.A x\n\ntext\n\n## 5. y\n", _DOC_OK, "no §4 rows tables", "empty census")
     unbound = _CENSUS_OK.replace("src/blockchain_db/lmdb/db_lmdb.cpp:1432", "x.cpp").replace("src/blockchain_db/blockchain_db.cpp:600", "y.cpp").replace("db_lmdb.cpp:700", "z.cpp")
-    _expect_refusal(unbound, _DOC_OK, "zero rows match", "no bound rows")
-    _expect_refusal(_CENSUS_OK.replace("| id | rule | site(s) | C/P | b |", "| id | rule | where | C/P | b |"), _DOC_OK, "lacks a column", "census header changed")
-    _expect_refusal(_CENSUS_OK.replace("| C | 2 | x | y | z |\n| CEN-A3", "| X | 2 | x | y | z |\n| CEN-A3"), _DOC_OK, "not one of", "flag vocabulary")
-    _expect_refusal(_CENSUS_OK.replace("| CEN-A3 | policy thing |", "| CEN-A1 | policy thing |"), _DOC_OK, "duplicate row ids", "duplicate id")
+    p.refusal(unbound, _DOC_OK, "zero rows match", "no bound rows")
+    p.refusal(_CENSUS_OK.replace("| id | rule | site(s) | C/P | b |", "| id | rule | where | C/P | b |"), _DOC_OK, "lacks a column", "census header changed")
+    p.refusal(_CENSUS_OK.replace("| C | 2 | x | y | z |\n| CEN-A3", "| X | 2 | x | y | z |\n| CEN-A3"), _DOC_OK, "not one of", "flag vocabulary")
+    p.refusal(_CENSUS_OK.replace("| CEN-A3 | policy thing |", "| CEN-A1 | policy thing |"), _DOC_OK, "duplicate row ids", "duplicate id")
+    p.refusal(_CENSUS_OK.replace("| CEN-A2 | height |", "| CEN-A2 (see note) | height |"), _DOC_OK, "is not a `CEN-` row id", "malformed id is refused, not dropped")
+    p.refusal(_CENSUS_OK.replace("| CEN-A3 | policy thing | `tx_pool.cpp:5` | P | 1 | x | y | z |", "| CEN-A3 | policy thing | `tx_pool.cpp:5` |"), _DOC_OK, "fewer than", "truncated row")
+    # each table under a subsection is read against its OWN header
+    p.refusal(_CENSUS_TWO_TABLES.replace("| id | rule | C/P | b | site(s) |", "| id | rule | C/P | bucket | site(s) |"), _DOC_OK, "lacks a column", "second table's header is checked, not inherited")
+    # an unterminated fence hides everything after it: refused at every entry
+    p.refusal(_CENSUS_OK.replace("### 4.L Storage layer", "```\n### 4.L Storage layer"), _DOC_OK, "code fence is left open", "open fence in the census")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("**Table 2**", "```\n**Table 2**"), "code fence is left open", "open fence in the DRS doc")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("| C | free | 1 | 1 | 0 | 0 | 2 |\n", "| C | free | 1 | 1 | 0 | 0 | 2 |\n| C | free | 1 | 1 | 0 | 0 | 2 |\n"), "listed twice", "table 1 duplicate row")
 
     # §5's bound row must not leak into the §4 derivation
     leaked = _CENSUS_OK.replace("## 5. Dead surfaces", "### 4.Z Leak")
-    _expect_refusal(leaked, _DOC_OK, "table 2 is missing", "a §4 row outside the doc's tables is caught")
+    p.refusal(leaked, _DOC_OK, "table 2 is missing", "a §4 row outside the doc's tables is caught")
 
-    print("check_drs_e6_partition selftest: 27 refusals fire, consistent pairs pass")
+    print(f"check_drs_e6_partition selftest: {p.refusals} refusals fire, consistent pairs pass")
 
 
 def main(argv: list[str] | None = None) -> int:
