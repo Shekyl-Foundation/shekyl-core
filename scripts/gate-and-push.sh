@@ -109,6 +109,14 @@ case "${DOC_LINK_RC}" in
 		echo "doc-link gate FAILED (above are not submodule artifacts)" >&2
 		exit 1
 	fi
+	# Remaining dead links match external/randomx-v2. Waive only when
+	# that directory is empty (uninitialized). A populated tree plus a
+	# genuinely dead link must fail.
+	if [ -d external/randomx-v2 ] && [ -n "$(ls -A external/randomx-v2 2>/dev/null)" ]; then
+		echo "doc-link gate FAILED: external/randomx-v2 is populated; randomx-v2 dead links are not uninitialised-submodule artifacts" >&2
+		cat "${DOC_LINK_OUT}" >&2
+		exit 1
+	fi
 	echo "   dead links are all uninitialised-submodule artifacts -- waived"
 	;;
 *)
