@@ -27,7 +27,7 @@
 //! # Scope is also the write permission
 //!
 //! Scope is an associated **type**, not only a constant, so a bound can
-//! name it: [`WriteBatch::put_property`](crate::store::WriteBatch::put_property)
+//! name it: [`WriteBatch::upsert_property`](crate::store::WriteBatch::upsert_property)
 //! accepts `C: PropertyCell<Scope = ChainState>` and nothing else. The
 //! two [`EngineLocal`] header cells are therefore unwritable through the
 //! public surface by construction — the store's own seal and commit paths
@@ -82,7 +82,7 @@ pub trait Scope: sealed::Sealed {
 }
 
 /// Type-level [`CellScope::ChainState`]. The only scope
-/// [`WriteBatch::put_property`](crate::store::WriteBatch::put_property) accepts.
+/// [`WriteBatch::upsert_property`](crate::store::WriteBatch::upsert_property) accepts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainState;
 
@@ -130,7 +130,7 @@ pub trait PropertyCell: sealed::Sealed {
     /// comparison, so the bytes are load-bearing for the port).
     const KEY: &'static str;
     /// Whether the cell is in the digest's fold domain — and, through the
-    /// bound on `put_property`, whether callers may write it.
+    /// bound on `upsert_property`, whether callers may write it.
     type Scope: Scope;
     /// The cell's value codec.
     type Value: Canonical;

@@ -46,6 +46,17 @@
 //! **throws** only when a non-batch `m_write_txn` is live (`:4108`). This
 //! store refuses with a typed error and never spins — DRS-W17.
 //!
+//! # Two verbs, and a violation poisons the batch (C2-R8 §7.3, Q2)
+//!
+//! Keyed tables open through the batch as [`KeyedTable`], whose only value
+//! writes are `insert` (fatal on a present key; the site names the `SI-`
+//! register row) and `upsert` (overwrite, declared). Typed `properties`
+//! cells are registers and go through
+//! [`upsert_property`](WriteBatch::upsert_property). Any invariant
+//! violation seen through the batch — a refused `insert`, a cell that will
+//! not decode — arms a latch the commit checks, so a closure that swallows
+//! one still lands nothing: `write` returns the violation instead.
+//!
 //! # Durability is declared, never inherited
 //!
 //! **DRS-D9** takes the strictest practical durability, and **Tier-A A4**
@@ -78,11 +89,13 @@
 mod error;
 mod header;
 mod invariant;
+mod keyed;
 mod read;
 mod shared;
 mod write;
 
 pub use error::{CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant};
+pub use keyed::KeyedTable;
 pub use read::ReadSnapshot;
 pub use write::WriteBatch;
 
@@ -342,10 +355,12 @@ impl ChainStore {
     /// [`StoreCannot::WriteInProgress`] if a batch is already live;
     /// [`EngineError::BeginWrite`] or [`EngineError::Durability`] if the
     /// engine refuses to begin; whatever `f` returns; at commit,
+    /// [`StoreError::InvariantViolated`] if any invariant violation was
+    /// seen through the batch — even one `f` caught and did not return —
     /// [`EngineError::Commit`] if the engine could not commit, or
     /// [`StoreInvariant::CellCorrupt`] / [`EngineError::Storage`] if the
-    /// provenance cell could not be read back or widened — the batch is
-    /// aborted and nothing lands.
+    /// provenance cell could not be read back or widened. In every `Err`
+    /// case the batch is aborted and nothing lands.
     pub fn write<R, E, F>(&self, f: F) -> Result<R, E>
     where
         E: From<StoreError>,

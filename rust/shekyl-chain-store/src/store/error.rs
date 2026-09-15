@@ -200,7 +200,7 @@ pub enum StoreCannot {
     ///
     /// Its cells are typed ([`PropertyCell`](crate::codec::PropertyCell))
     /// and written through
-    /// [`WriteBatch::put_property`](super::WriteBatch::put_property), whose
+    /// [`WriteBatch::upsert_property`](super::WriteBatch::upsert_property), whose
     /// bound admits chain-state cells only. A raw handle would let a string
     /// overwrite `schema_version` or clear the provenance record, so there
     /// is none.
@@ -254,7 +254,7 @@ impl core::fmt::Display for StoreCannot {
             ),
             Self::PropertiesAreTyped => write!(
                 f,
-                "the properties table has no raw write handle: use put_property on a typed cell"
+                "the properties table has no raw write handle: use upsert_property on a typed cell"
             ),
             Self::ReadOnly => write!(f, "write attempted on a read-only chain store"),
             Self::WriteInProgress => {

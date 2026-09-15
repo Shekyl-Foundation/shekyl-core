@@ -19,8 +19,8 @@
 //!   taint commits with the rows it describes or not at all.
 //!
 //! No public write path reaches either cell. [`seal`] and [`widen`] are
-//! their only writers; [`put`] is `pub(super)` and its public caller,
-//! `WriteBatch::put_property`, is bounded to chain-state cells.
+//! their only writers; [`upsert`] is `pub(super)` and its public caller,
+//! `WriteBatch::upsert_property`, is bounded to chain-state cells.
 
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 
@@ -38,8 +38,8 @@ use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvaria
 /// under it from its first byte.
 pub(super) fn seal(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
     let provenance = Provenance::FULL.widened_by(policy);
-    put::<SchemaVersionCell>(txn, &SCHEMA_VERSION)?;
-    put::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
+    upsert::<SchemaVersionCell>(txn, &SCHEMA_VERSION)?;
+    upsert::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
     Ok(provenance)
 }
 
@@ -83,7 +83,7 @@ pub(super) fn widen(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Prove
     };
     let after = Provenance::of(current).widened_by(policy);
     if after.stubbed() != current {
-        put::<ApplyPolicyCell>(txn, &after.stubbed())?;
+        upsert::<ApplyPolicyCell>(txn, &after.stubbed())?;
     }
     Ok(after)
 }
@@ -107,9 +107,10 @@ pub(super) fn get<C: PropertyCell>(
     })
 }
 
-/// Write cell `C` in `txn`. Opens (creating if needed) the `properties`
-/// table for the duration of the write.
-pub(super) fn put<C: PropertyCell>(
+/// Upsert cell `C` in `txn` — a header cell is a register, overwritten by
+/// design, and the verb declares it (C2-R8 §7.3). Opens (creating if
+/// needed) the `properties` table for the duration of the write.
+pub(super) fn upsert<C: PropertyCell>(
     txn: &WriteTransaction,
     value: &C::Value,
 ) -> Result<(), StoreError> {

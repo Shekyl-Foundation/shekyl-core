@@ -385,7 +385,7 @@ fn a_chain_state_cell_round_trips_through_the_typed_surface() {
     store
         .write(|batch| -> Result<(), StoreError> {
             assert_eq!(batch.get_property::<ProbeCell>()?, None);
-            batch.put_property::<ProbeCell>(&0x0102_0304_0506_0708)?;
+            batch.upsert_property::<ProbeCell>(&0x0102_0304_0506_0708)?;
             assert_eq!(
                 batch.get_property::<ProbeCell>()?,
                 Some(0x0102_0304_0506_0708),
@@ -433,6 +433,44 @@ fn a_corrupt_chain_state_cell_is_refused_on_read() {
     cleanup(&path);
 }
 
-// The write bound is the permission: `put_property::<SchemaVersionCell>`
-// and `put_property::<ApplyPolicyCell>` do not compile. Pinned by the
-// `compile_fail` doctests on `WriteBatch::put_property`.
+#[test]
+fn a_corrupt_cell_read_through_a_batch_poisons_it() {
+    // SI-7 seen through the batch, not produced by it: the closure reads
+    // the bad cell, gets the violation, discards it, overwrites the cell
+    // with something valid and returns Ok. The batch still does not land.
+    let path = tmp("typed-corrupt-poison");
+    seeded(&path, ApplyPolicy::Full);
+    raw_put(&path, ProbeCell::KEY, Some(&[1, 2, 3]));
+    let store = ChainStore::create(&path).expect("header is fine");
+    let result = store.write(|batch| -> Result<(), StoreError> {
+        assert!(batch.get_property::<ProbeCell>().is_err());
+        batch.upsert_property::<ProbeCell>(&7)?;
+        assert_eq!(
+            batch.get_property::<ProbeCell>()?,
+            Some(7),
+            "the batch's own repair reads back inside the batch"
+        );
+        Ok(())
+    });
+    assert!(
+        matches!(
+            result,
+            Err(StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key: "__e1_probe_cell",
+                fault: CellFault::Undecodable(_),
+            }))
+        ),
+        "the commit refuses with the violation the closure swallowed: {result:?}"
+    );
+    drop(store);
+    assert_eq!(
+        raw_get(&path, ProbeCell::KEY).as_deref(),
+        Some(&[1u8, 2, 3][..]),
+        "the repair did not land: a poisoned batch aborts"
+    );
+    cleanup(&path);
+}
+
+// The write bound is the permission: `upsert_property::<SchemaVersionCell>`
+// and `upsert_property::<ApplyPolicyCell>` do not compile. Pinned by the
+// `compile_fail` doctests on `WriteBatch::upsert_property`.

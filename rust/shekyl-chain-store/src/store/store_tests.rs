@@ -7,7 +7,7 @@
 //! under the size the decomposition ratchet exists to protect. Header and
 //! provenance tests are in `header_tests.rs`.
 
-use redb::TableDefinition;
+use redb::{ReadableTable, TableDefinition};
 
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
@@ -35,13 +35,30 @@ pub(super) fn abort<T>(_: &mut WriteBatch<'_, '_>) -> Result<T, TestErr> {
     Err(TestErr::Abort)
 }
 
-/// Write one probe row `k = v` inside `batch`.
+/// The row an `insert` on the probe table names when the key is present.
+///
+/// The probe table is a test fixture, not a schema table, so it has no
+/// register row of its own; the verb needs *a* `StoreInvariant` to name
+/// and SI-7's is the only variant built. What the tests below assert is
+/// that the row the site named is the row that comes back — not which
+/// row it is. S-CHAIN-W's sites name SI-1 / SI-3 / SI-4.
+pub(super) const PROBE_ROW: StoreInvariant = StoreInvariant::CellCorrupt {
+    key: "__e1_probe",
+    fault: CellFault::Absent,
+};
+
+/// Write one probe row `k = v` inside `batch`. A probe row is a fixture
+/// register, so this is an `upsert`; the `insert` verb has its own tests.
 pub(super) fn probe_row(batch: &WriteBatch<'_, '_>, k: &str, v: u64) -> Result<(), StoreError> {
-    batch
-        .open_table(PROBE)?
-        .insert(k, &v)
-        .map(drop)
-        .map_err(|e| EngineError::Storage(e).into())
+    batch.open_table(PROBE)?.upsert(k, &v).map(drop)
+}
+
+/// Read probe row `k` from a fresh snapshot: `None` if the table or the
+/// row is absent.
+pub(super) fn probe_val(store: &ChainStore, k: &str) -> Option<u64> {
+    let snap = store.begin_read().expect("read");
+    let table = snap.open_table(PROBE).ok()?;
+    table.get(k).expect("get").map(|g| g.value())
 }
 
 pub(super) fn tmp(name: &str) -> std::path::PathBuf {
@@ -160,6 +177,95 @@ fn a_store_failure_converts_into_the_callers_error_type() {
             StoreError::Cannot(StoreCannot::ReadOnly).to_string()
         ))
     );
+    cleanup(&path);
+}
+
+// ------------------------------------------- two verbs, one poison
+
+#[test]
+fn insert_lands_on_a_fresh_key_and_names_the_row_on_a_present_one() {
+    let path = tmp("insert");
+    let store = ChainStore::create(&path).expect("create");
+    store
+        .write(|batch| batch.open_table(PROBE)?.insert("k", &1, PROBE_ROW))
+        .expect("a fresh key lands");
+    assert_eq!(probe_val(&store, "k"), Some(1));
+
+    // The closure catches the refusal and carries on as if nothing
+    // happened: reads the key, writes another, returns Ok. None of that
+    // rescues the batch — the poison is what commit consults.
+    let result = store.write(|batch| -> Result<(), StoreError> {
+        let mut table = batch.open_table(PROBE)?;
+        assert!(
+            matches!(
+                table.insert("k", &2, PROBE_ROW),
+                Err(StoreError::InvariantViolated(row)) if row == PROBE_ROW
+            ),
+            "the site's row is the row that comes back"
+        );
+        assert_eq!(
+            table.get("k").expect("get").expect("present").value(),
+            1,
+            "a refused insert leaves the table untouched"
+        );
+        table.upsert("other", &9)?;
+        Ok(())
+    });
+    assert!(
+        matches!(result, Err(StoreError::InvariantViolated(row)) if row == PROBE_ROW),
+        "a swallowed violation still refuses the commit, with the same row: {result:?}"
+    );
+    assert_eq!(
+        probe_val(&store, "k"),
+        Some(1),
+        "nothing the batch wrote landed"
+    );
+    assert_eq!(probe_val(&store, "other"), None);
+    // The write slot was released on the way out.
+    store
+        .write(|_| Ok::<(), StoreError>(()))
+        .expect("a later write proceeds");
+    cleanup(&path);
+}
+
+#[test]
+fn a_propagated_violation_reaches_the_caller_in_the_callers_type() {
+    // The ordinary path: the site does not swallow, `?` carries the
+    // violation out through `E: From<StoreError>`, and the batch aborts.
+    let path = tmp("insert-propagated");
+    let store = ChainStore::create(&path).expect("create");
+    store
+        .write(|batch| batch.open_table(PROBE)?.insert("k", &1, PROBE_ROW))
+        .expect("seed");
+    let result = store.write(|batch| -> Result<(), TestErr> {
+        batch.open_table(PROBE)?.insert("k", &2, PROBE_ROW)?;
+        unreachable!("the insert was refused");
+    });
+    assert_eq!(result, Err(TestErr::Store(PROBE_ROW.to_string())));
+    assert_eq!(probe_val(&store, "k"), Some(1));
+    cleanup(&path);
+}
+
+#[test]
+fn upsert_replaces_and_returns_the_displaced_value() {
+    let path = tmp("upsert");
+    let store = ChainStore::create(&path).expect("create");
+    store
+        .write(|batch| -> Result<(), StoreError> {
+            let mut table = batch.open_table(PROBE)?;
+            assert!(
+                table.upsert("k", &1)?.is_none(),
+                "first write displaces nothing"
+            );
+            assert_eq!(
+                table.upsert("k", &2)?.expect("displaced").value(),
+                1,
+                "the pre-image comes back"
+            );
+            Ok(())
+        })
+        .expect("commit");
+    assert_eq!(probe_val(&store, "k"), Some(2));
     cleanup(&path);
 }
 
