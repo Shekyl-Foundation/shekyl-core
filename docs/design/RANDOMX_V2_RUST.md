@@ -1072,8 +1072,9 @@ Discipline applied to this work:
   commitment #1. The gate is satisfied by the Monero-funded delta
   audit because Shekyl is non-divergent from upstream (§1.1); Shekyl
   inherits the audit result without performing it. If the audit
-  surfaces a contraindicating finding, Shekyl unpins to a pre-PR-#317
-  commit and ships v1 per `RANDOMX_V1_FALLBACK.md`.
+  surfaces a contraindicating finding, Shekyl re-adds a CMake v1
+  verifier target (gitlink at `102f8acf` stays; this is not a SHA
+  unpin) and ships v1 per `RANDOMX_V1_FALLBACK.md`.
 - Phase 2 (Rust verifier implementation) has **no external-review
   gate** because it is faithful implementation against a stable spec,
   not an algorithm-soundness decision. Spec-vector and differential

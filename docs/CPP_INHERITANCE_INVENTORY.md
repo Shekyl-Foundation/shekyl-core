@@ -50,7 +50,7 @@ below for the exhaustive rules; the four categories are:
 
 | Category | Disposition | Driving workstream | Status |
 | --- | --- | --- | --- |
-| **F.C++-1** | **DELETED 2026-09-15** | A-4/A-5/A-7/A-8 PoW workstream (RandomX v2 + LWMA-1 difficulty + CryptoNight retirement) | Pre-genesis (discharged) |
+| **F.C++-1** | production CryptoNight **DELETED 2026-09-15**; two residues remain (test-only `variant2_int_sqrt.h`; FCMP Bulletproof stub) | A-4/A-5/A-7/A-8 PoW workstream (RandomX v2 + LWMA-1 difficulty + CryptoNight retirement) | Pre-genesis (production discharged; category not empty) |
 | **F.C++-2** | Keep — justified (production utility, no Rust replacement warranted at V3.0) | Optional docstring sweep folded into PoW workstream | Pre-genesis (docstrings); permanent (files) |
 | **F.C++-3** | Keep — transitional (subsumed by B-3 architectural workstream when Rust holds master keys) | B-3 architectural workstream + wallet2 cluster | Post-genesis V3.1+ |
 | **F.C++-4** | Keep — Rust-FFI wrapper (consumes Rust crypto via FFI; not a parallel implementation) | None — verified Rust-FFI routing | Permanent |

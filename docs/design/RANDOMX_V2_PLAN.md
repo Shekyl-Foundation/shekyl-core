@@ -364,29 +364,29 @@ This exceeds `06-branching.mdc`'s 5-day / 10-commit limit; **the plan acknowledg
   
   Build flag from 3a is removed; Rust path is the only path.
 
-- **Phase 3c — Implementation deletions + cncrypto link drop + CI invariants.** **Ordering precondition:** Phase 3c assumes that every remaining `rx_slow_hash` / `cn_slow_hash` / `slow_hash_allocate_state` / `slow_hash_free_state` call site has already been rewired or deleted by the preceding steps in this plan window. Specifically, before 3c lands: §15 (RPC payments delete) must have removed `src/wallet/wallet_rpc_payments.cpp` and `src/rpc/rpc_payment*`; **and** Phase 4's version-gate + `IPowSchema` deletion must have removed `src/cryptonote_basic/miner.cpp`'s `slow_hash_allocate_state()` / `slow_hash_free_state()` `extern "C"` declarations and calls, plus `src/cryptonote_basic/cryptonote_format_utils.cpp`'s `crypto::rx_slow_hash` and `crypto::cn_slow_hash` call sites. (The KDF `cn_slow_hash` calls in `cryptonote_format_utils.cpp` at lines 1465/1473 are non-PoW and must move to a Rust-side KDF replacement before 3c; this is a Phase 4 deliverable.) If any caller remains at the time 3c is opened, the order is: pull that caller's removal forward into the 3c PR, or land 3c after the Phase 4 deletion lands. Without this ordering, the build's intermediate state has unresolved `slow_hash_*` / `rx_slow_hash` references. Then: delete src/crypto/rx-slow-hash.c, src/crypto/pow_cryptonight.cpp, [src/crypto/slow-hash.c](../../src/crypto/slow-hash.c) together — they are tangled implementation (CryptoNight code references the rx-slow-hash dispatch), deleting separately leaves intermediate states broken. Drop randomx C linkage from `cncrypto` per `RANDOMX_V2_RUST.md` §11 PUBLIC-link survey. Add CI symbol-isolation invariant (`RANDOMX_V2_RUST.md` §7). Add CI per-hash benchmark (`RANDOMX_V2_RUST.md` §8 mechanism: N=1024 hashes, median ratio ≤ 3.0×, deterministic, <30s wall time). Full 600k-block initial-sync wall-time test is added to the release-gate suite (not per-PR).
+- **Phase 3c — LANDED (PR #235).** Implementation deletions + cncrypto link drop + CI invariants. **Ordering precondition (records-was):** 3c assumed every remaining `rx_slow_hash` / `cn_slow_hash` / `slow_hash_allocate_state` / `slow_hash_free_state` call site had already been rewired or deleted. RPC payments were already gone; Phase 4 later deleted miner.cpp lifecycle decls and `slow-hash.c`. Then: deleted `src/crypto/rx-slow-hash.c`, `src/crypto/pow_cryptonight.cpp`. `src/crypto/slow-hash.c` **DELETED 2026-09-15** (Phase 4; do not link — file is gone). Dropped randomx C linkage from `cncrypto` per `RANDOMX_V2_RUST.md` §11. Added CI symbol-isolation (`RANDOMX_V2_RUST.md` §7) and per-hash benchmark (`RANDOMX_V2_RUST.md` §8).
 
 If during Phase 3 planning the work fits in one PR within `06-branching.mdc` limits, the split can be skipped. The default expectation is the split.
 
-### Phase 4: Delete abstractions (no implementation churn)
+### Phase 4: Delete abstractions — LANDED 2026-09-15
 
-Pure abstraction cleanup. Phase 3 handled the implementation files; Phase 4 deletes the rule-violating speculative scaffolding on both sides.
+Pure abstraction cleanup. Phase 3 handled the implementation files; Phase 4 deleted the rule-violating speculative scaffolding on the C++ side.
 
 Per `60-no-monero-legacy.mdc`, `15-deletion-and-debt.mdc`, and `70-modular-consensus.mdc`.
 
-**C++ side:**
+**C++ side (deleted 2026-09-15):**
 
-- Delete [src/crypto/pow_schema.h](../../src/crypto/pow_schema.h) (the `IPowSchema` interface).
-- Delete [src/crypto/pow_registry.h](../../src/crypto/pow_registry.h) and [src/crypto/pow_registry.cpp](../../src/crypto/pow_registry.cpp).
-- Update call sites in [src/cryptonote_core/cryptonote_tx_utils.cpp](../../src/cryptonote_core/cryptonote_tx_utils.cpp), [src/cryptonote_basic/miner.cpp](../../src/cryptonote_basic/miner.cpp), [src/daemon/rpc_command_executor.cpp](../../src/daemon/rpc_command_executor.cpp), [src/rpc/core_rpc_server.cpp](../../src/rpc/core_rpc_server.cpp), [src/rpc/core_rpc_server_commands_defs.h](../../src/rpc/core_rpc_server_commands_defs.h) to call the single RandomX v2 verifier directly via FFI.
+- `src/crypto/pow_schema.h` (the `IPowSchema` interface). **DELETED — do not link.**
+- `src/crypto/pow_registry.h` and `src/crypto/pow_registry.cpp`. **DELETED — do not link.**
+- Call sites in `src/cryptonote_core/cryptonote_tx_utils.cpp`, `src/cryptonote_basic/miner.cpp`, `src/daemon/rpc_command_executor.cpp`, `src/rpc/core_rpc_server.cpp`, `src/rpc/core_rpc_server_commands_defs.h` now call the single RandomX v2 verifier directly via FFI.
 
 **Rust side — SUPERSEDED: do not delete `shekyl-consensus`.** Six live Cargo consumers (`shekyl-curve-tree`, `shekyl-daemon-rpc`, `shekyl-engine-state`, `shekyl-ffi`, `shekyl-genesis-tool`, `shekyl-wire`). The original crate-deletion bullets are withdrawn; Phase 4 is C++ vestige + `slow-hash.c` / `generate_chacha_key*` only.
 
-**Version-gate deletion (mandatory):**
+**Version-gate deletion — LANDED 2026-09-15:**
 
-- Delete `RX_BLOCK_VERSION` constant and every reference.
-- Delete any `if (major_version >= X)` / `if (hf_version >= X)` switch in PoW selection. The switch itself is the failure; even dead branches imply "we might dispatch differently someday."
-- Applies to [src/cryptonote_basic/cryptonote_format_utils.cpp](../../src/cryptonote_basic/cryptonote_format_utils.cpp) and any other site discovered.
+- `RX_BLOCK_VERSION` constant and every reference: **DELETED**.
+- Any `if (major_version >= X)` / `if (hf_version >= X)` switch in PoW selection: **DELETED**. The switch itself was the failure; even dead branches implied "we might dispatch differently someday."
+- Applied at `src/cryptonote_basic/cryptonote_format_utils.cpp` and the other sites in the Phase 3 pin survey.
 
 **Misc cleanup:**
 
@@ -402,7 +402,7 @@ Update:
 - [docs/DOCUMENTATION_TODOS_AND_PQC.md](../../docs/DOCUMENTATION_TODOS_AND_PQC.md) (close RandomX v2 row).
 - [docs/DESIGN_CONCEPTS.md](../../docs/DESIGN_CONCEPTS.md) (cite the permanent architectural decisions; keep `shekyl-consensus` — six live consumers; cite `18-type-placement.mdc` as the rule that shaped the verifier API; cite Decision #6 for why no prewarm).
 - [docs/CHANGELOG.md](../../docs/CHANGELOG.md).
-- [docs/FOLLOWUPS.md](../../docs/FOLLOWUPS.md) — close any RandomX v2 follow-ups this plan introduces along the way (notably: confirm the §22 Guix forward-looking entry was filed at Phase 0 close, and amend or close it once Guix integration lands). **Note this plan is primarily fresh debt clearance**: `IPowSchema`/`pow_registry` and `slow-hash.c` remain; RPC payments and `rx-slow-hash.c` already landed; **do not** delete `shekyl-consensus` (six live consumers). The Phase 5 FOLLOWUPS pass is therefore mostly forward-looking close-records of obligations the plan itself creates, not closure of pre-existing items. **Do not** add a "Rust-port the JIT later" item — Decision #1 is permanent; **do not** add a "consider prewarm" item — Decision #6 is permanent.
+- [docs/FOLLOWUPS.md](../../docs/FOLLOWUPS.md) — close any RandomX v2 follow-ups this plan introduces along the way (notably: confirm the §22 Guix forward-looking entry was filed at Phase 0 close, and amend or close it once Guix integration lands). **Note this plan is primarily fresh debt clearance**: `IPowSchema`/`pow_registry` and `slow-hash.c` **DELETED 2026-09-15**; RPC payments and `rx-slow-hash.c` already landed; **do not** delete `shekyl-consensus` (six live consumers). The Phase 5 FOLLOWUPS pass is therefore mostly forward-looking close-records of obligations the plan itself creates, not closure of pre-existing items. **Do not** add a "Rust-port the JIT later" item — Decision #1 is permanent; **do not** add a "consider prewarm" item — Decision #6 is permanent.
 
 ## Risk acknowledgments
 

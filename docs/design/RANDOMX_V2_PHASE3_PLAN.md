@@ -129,12 +129,13 @@ dropped in 3b. The `max_dataset_init_threads` argument is **dropped**
 — there is no background dataset build (§4.4). Declaration:
 `src/crypto/hash-ops.h` (line 101 at pin `e63701676`; declaration deleted 2026-09-15).
 
-### 2.3 `rx_seedheight` / `rx_seedheights` sites (stay C++; guard-only in 3b)
+### 2.3 `rx_seedheight` / `rx_seedheights` sites (pin-era: stay C++; 3c/Phase 4 LANDED)
 
 These compute seed **heights** for block validation; they do not hash
-and do not manage the cache. They keep calling the C functions (which
-stay until 3c). In 3b only their `RX_BLOCK_VERSION` guards are
-removed.
+and do not manage the cache. At this pin they still called the C
+functions (until 3c). In 3b only their `RX_BLOCK_VERSION` guards were
+removed. **LANDED:** PR #235 exported `shekyl_pow_randomx_v2_seedheight`;
+Phase 4 deleted the C decls.
 
 - `rx_seedheight`: `cryptonote_tx_utils.cpp:888`;
   `blockchain.cpp:589, 711, 1399, 2323, 5577`.
@@ -157,8 +158,8 @@ buckets:
 | Dead CryptoNight-variant RPC | `core_rpc_server.cpp:2031` | **delete branch** (rule 60) |
 | Dead RPC-payment | `wallet_rpc_payments.cpp:156`, `rpc_payment.cpp:237` | **leave** (§1.2 #1) |
 
-The `#define` itself **stays** in 3b (RPC-payment still references
-it); its deletion bundles with §1.2 #1 / Phase 4.
+The `#define` itself **stayed** in 3b (RPC-payment still referenced
+it at this pin); its deletion **LANDED 2026-09-15** with Phase 4.
 
 ### 2.5 The two `202612` fossils (delete, rule 60)
 
@@ -171,7 +172,7 @@ it); its deletion bundles with §1.2 #1 / Phase 4.
 - `cryptonote_format_utils.cpp:1481-1485` — the `height == 202612`
   branch returning the same constant.
 
-### 2.6 Registry / schema / CryptoNight deletion surface (3b)
+### 2.6 Registry / schema / CryptoNight deletion surface (3b pin; Phase 4 LANDED 2026-09-15)
 
 - `src/crypto/pow_registry.cpp` — `get_pow_for_height` collapses to
   always return `get_randomx_pow_schema()`; delete
@@ -580,7 +581,7 @@ Per [`91-documentation-after-plans.mdc`](../../.cursor/rules/91-documentation-af
   version.
 - `USER_GUIDE` / `DESIGN_CONCEPTS` PoW sections — only if touched.
 
-## 13. Status — landed (2026-06)
+## 13. Status — 3a/3b landed 2026-06; 3c PR #235; Phase 4 landed 2026-09-15
 
 The consensus PoW cutover (3a + 3b) is complete. The 3c v1-machinery
 deletion landed in PR #235 (2026-07); `slow-hash.c` and Phase 4
@@ -632,23 +633,17 @@ under C-full-dataset, plus the miner-KAT provenance test). The
 symbol-isolation `nm` gate **landed in the same job**
 (`scripts/ci/check_randomx_symbol_isolation.sh`: §7.1 banned list +
 DAA-family absence + verifier-presence checks against the linked
-`shekyld`). The seedheight spec-vector remains deferred with the
-`slow-hash.c` deletion.
+`shekyld`). The seedheight FFI export **landed in PR #235**; it is
+not blocked on `slow-hash.c`.
 
-**3c — deferred** (blocked by RPC-payment subsystem deletion +
-`wallet2.cpp` PoW touchpoints; tracked in `docs/FOLLOWUPS.md`): delete
-`rx-slow-hash.c` + `slow-hash.c`, drop the `cncrypto` randomx C linkage,
-export `shekyl_pow_randomx_v2_seedheight` + add the
-`shekyl-pow-randomx::consensus` module (`SEEDHASH_EPOCH_BLOCKS`/`_LAG`),
-and add the CI symbol-isolation invariant.
-
-> **Update (2026-06-22): the 3c blocker is gone.** The RPC-payment subsystem
-> was deleted on `chore/rpc-payment-deletion`
-> ([`docs/design/LEGACY_POW_CLEANUP_PLAN.md`](../completed/LEGACY_POW_CLEANUP_PLAN.md);
-> `[Unreleased]` `### Removed`). That re-split the remaining 3c/Phase-4 work and
-> corrected this section's `rx-slow-hash.c` + `slow-hash.c` bundling: **RandomX
-> v1 (`rx-slow-hash.c`) is now retained** as the consensus rollback hatch (with
-> a reversion clause), so the `seedheight` export rides v1 deletion, **not** 3c;
-> only CryptoNight `slow-hash.c` (gated on the C++ KDF→argon2id migration) and
-> the `IPowSchema`/`pow_registry` + `RX_BLOCK_VERSION` `#define` cleanup remain.
-> The updated FOLLOWUPS "Phase 3c / Phase 4" cluster is authoritative.
+**3c — LANDED in PR #235 (2026-07).** Deleted `rx-slow-hash.c`, dropped
+the `cncrypto` randomx C linkage, exported
+`shekyl_pow_randomx_v2_seedheight` + `shekyl-pow-randomx::consensus`
+(`SEEDHASH_EPOCH_BLOCKS`/`_LAG`), and added the CI symbol-isolation
+invariant. RPC-payment / wallet2 were already gone; they were not a
+remaining 3c blocker. `slow-hash.c` and `IPowSchema`/`pow_registry` /
+`RX_BLOCK_VERSION` were Phase 4 and **landed 2026-09-15**. The
+FOLLOWUPS "Phase 3c / Phase 4" cluster for those deletions is closed.
+The v1 gitlink at `102f8acf` remains; 3c deleted the configured CMake
+target, not the submodule. Fallback is a CMake-target re-add, not a
+SHA flip (`RANDOMX_V1_FALLBACK.md`).
