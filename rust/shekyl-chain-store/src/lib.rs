@@ -39,13 +39,24 @@
 //!   atomically with each stubbed commit, so a reopen reads the file's
 //!   history instead of guessing.
 //!
-//! - **DRS-E1 increment 3, commit 1 (S-CHAIN-W)** — the pop journal:
-//!   [`schema::UNDO_LOG`] (the first table with no LMDB twin, named with
-//!   its reason in [`schema::RUST_ONLY_TABLES`]), the [`codec::UndoLog`]
-//!   row codec, and `store::undo` — every declared write journals its own
-//!   pre-image while a batch is recording, and replay walks a height's row
-//!   backwards (C2-R8 Q5; register row SI-6 built). `connect` and `pop`
-//!   are the producers, later in the same PR.
+//! - **DRS-E1 increment 3 (S-CHAIN-W)** — the connect/pop write set
+//!   (`docs/design/DRS_E1_SCHAIN_W.md`). [`store::WriteBatch::connect`]
+//!   takes the validator's `ChainValid` (brand-bound to the batch and to
+//!   [`store::BatchView`], the `ChainView` projected from it) plus
+//!   [`store::ConnectFacts`] — the consensus-visible values the store
+//!   records and never derives, each stamped `Derived` or `PassedThrough`
+//!   — and writes the 17-table set in the C++ funnel's phase order, every
+//!   write a declared verb bound to its `SI-` row and journaled.
+//!   [`store::WriteBatch::pop`] is the reverse replay of one
+//!   [`schema::UNDO_LOG`] row (the first table with no LMDB twin, named
+//!   with its reason in [`schema::RUST_ONLY_TABLES`]; tables are named by
+//!   declaration ordinal, so a reorder or removal is a layout bump).
+//!   [`provenance::Provenance`] has three monotone components — stubbed
+//!   applies, [`codec::CoverageGaps`], [`codec::PassedThroughFacts`] — all
+//!   empty ⇔ parity evidence. A store invariant on connect or pop halts
+//!   the writer ([`store::ChainStore::connect_state`]). The settlement
+//!   -epoch schedule is pinned in the header at create and refused on
+//!   mismatch at every open.
 //!
 //! Slice B's table names are bijection-pinned against
 //! [`accumulator::TABLE_CLASSES`] **and** against the X-macro

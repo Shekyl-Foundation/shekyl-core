@@ -8,7 +8,7 @@ Round-1 (**DRS-R-1…R-19**), Round-2 (**R2-1…R2-8**, **E-1…E-8**), a
 **gap-close pass** (success criteria, surface map, concurrency, P0 multi-PR,
 D2-reopen as first-class good, D10 mandatory reconstructible, IBD floor
 sketch — 2026-07-27), and **post-close pin PC-1** (D2-R1 re-pointed at DRS-C —
-2026-08-21, §14). Engine-swap (**DRS-E\***) **in progress: E1 increment 1 (S-TXN lifecycle, PR #740, 2026-09-13) landed; increment 2 (canonical codecs + rule-42 gate, `schema_version` seal, persisted provenance, typed `properties` cells — §11.1 implementation pointers) landed 2026-09-14; **increment 2.5** (the branded `WriteBatch<'id>` reachable only through `ChainStore::write`, `StoreError`'s three classes as its outer variants, `StoreInvariant` with SI-7 built, `InsertTable`/`UpsertTable`, batch poison — §3.6.3 implementation pointers) landed 2026-09-15; no chain-shaped table is written yet and the daemon still opens LMDB only**; **C2-R8 RULED 2026-09-14** ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)) — the storage-layer placement question that blocked S-CHAIN-W's writers is answered (validator crate with no store handle mints `ChainValid`; `ChainView` projected from the committing `WriteBatch`; the store computes nothing consensus-visible; pop is undo-log reverse replay; three error classes, invariant→verdict conversion banned and gated; belts in [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)). **S-CHAIN-W's E1 precondition (increment 2.5) is discharged; its DRS-E6 precondition — increment 1, the `shekyl-chain-rules` scaffold — landed 2026-09-15 ([`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)), so S-CHAIN-W is unblocked; the plan amendment the ruling's §14 owed — DRS-D12 (validation precedes connect; replay-that-validates is the only pre-cutover writer), the DRS-E6 row and its §7.5 surface partition (141 of 153 live consensus rows have no storage surface at `02c086f4b`), `ChainTip.connect` in `get_info` — landed 2026-09-15**; **P0a–P0d delivered 2026-09-10**; **DRS-0 is UNBLOCKED as of 2026-09-11** — CEN-B5's S1 was re-verified at `e54e5b983` (the sha that merged PR #623) and the row promoted, discharging its last gate. Prior premature “ratified” banner remains withdrawn.
+2026-08-21, §14). Engine-swap (**DRS-E\***) **in progress: E1 increment 1 (S-TXN lifecycle, PR #740, 2026-09-13) landed; increment 2 (canonical codecs + rule-42 gate, `schema_version` seal, persisted provenance, typed `properties` cells — §11.1 implementation pointers) landed 2026-09-14; **increment 2.5** (the branded `WriteBatch<'id>` reachable only through `ChainStore::write`, `StoreError`'s three classes as its outer variants, `StoreInvariant` with SI-7 built, `InsertTable`/`UpsertTable`, batch poison — §3.6.3 implementation pointers) landed 2026-09-15; **increment 3 — S-CHAIN-W, the connect/pop write set — landed 2026-09-15** (`connect(ChainValid, ConnectFacts, RuleSetId)` / `pop()` on the branded batch, one undo log per connect, SI-1/2/3/4/6/8/9 built, the writer halt, `ConnectState` wire type — §3.6.3 implementation pointers; plan and pre-flight in [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md)); the daemon still opens LMDB only — DRS-E2's replay is the store's first production writer**; **C2-R8 RULED 2026-09-14** ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)) — the storage-layer placement question that blocked S-CHAIN-W's writers is answered (validator crate with no store handle mints `ChainValid`; `ChainView` projected from the committing `WriteBatch`; the store computes nothing consensus-visible; pop is undo-log reverse replay; three error classes, invariant→verdict conversion banned and gated; belts in [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)). **S-CHAIN-W's E1 precondition (increment 2.5) is discharged; its DRS-E6 precondition — increment 1, the `shekyl-chain-rules` scaffold — landed 2026-09-15 ([`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)), so S-CHAIN-W is unblocked; the plan amendment the ruling's §14 owed — DRS-D12 (validation precedes connect; replay-that-validates is the only pre-cutover writer), the DRS-E6 row and its §7.5 surface partition (141 of 153 live consensus rows have no storage surface at `02c086f4b`), `ChainTip.connect` in `get_info` — landed 2026-09-15**; **P0a–P0d delivered 2026-09-10**; **DRS-0 is UNBLOCKED as of 2026-09-11** — CEN-B5's S1 was re-verified at `e54e5b983` (the sha that merged PR #623) and the row promoted, discharging its last gate. Prior premature “ratified” banner remains withdrawn.
 **Mission hierarchy** ([`00-mission`](../../.cursor/rules/00-mission.mdc)):
 security/PQC → privacy → longevity. DRS success criteria (§0.1) and BENCH
 columns are ordered by that hierarchy, not by engineering elegance.
@@ -621,7 +621,7 @@ below is written out so the partition is a set, not a description of one.
 | Surface | Role | # | Methods | Extraction order | Path B / genesis note |
 | --- | --- | --- | --- | --- | --- |
 | **S-TXN** | Batch / open / sync / locks | 11 | `batch_abort` `batch_start` `batch_stop` `close` `fixup` `is_open` `is_read_only` `m_synchronization_lock` `reset` `safesyncmode` `sync` | **1** — Every other surface runs **inside** its transactions. Nothing can be extracted before the txn boundary is, so this is not a preference — it is the only position that works. | Stays with the store backend |
-| **S-CHAIN-W** | Connect and pop write set | 7 | `add_block` `add_block_burn` `pop_block` `remove_block_burn` `set_hard_fork` `set_settlement_epoch_blocks_pin` `set_total_burned` | **2** — The connect/pop write set is what the logical-state digest is computed **over**, so extracting it first gives DRS-E2 a subject to compare. Moving it later means every earlier increment is validated against an unported writer. | Long-term Rust `connect(ChainValid<'id>)` / `pop()` — shape ruled by **C2-R8** ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md) Q3–Q6): the store takes a validator-minted `ChainValid` brand-bound to the committing batch, writes the curve-tree root it is handed, journals one undo log per connect, and pops by reverse replay. **Preconditions (DRS-D12):** E1 increment 2.5 (the `WriteBatch<'id>` brand, `StoreError::class()`, `StoreInvariant`, `InsertTable`/`UpsertTable`, `StoreCannot`) — **landed 2026-09-15**, §3.6.3 — and **DRS-E6 increment 1** (**landed 2026-09-15**, [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)) (the `shekyl-chain-rules` scaffold, §7.5) — `connect` takes a `ChainValid<'id>` that only that crate mints. The surface-bound rules that arrive with this increment are CEN-L1 (`SI-1` belt), CEN-H5 (the typed input `enum` that dissolves L5) and CEN-B3 (`set_hard_fork`'s discard belt; body per R4) — §7.5 table 2. The writer also mints the halt: a `StoreInvariantViolated` on connect or pop sets `ChainTip.connect` to `Halted` (§3.6.2) |
+| **S-CHAIN-W** | Connect and pop write set — **LANDED 2026-09-15** (DRS-E1 increment 3, [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md)); six of the seven are connect/pop writes, the seventh (`set_settlement_epoch_blocks_pin`) was **re-homed** (SCW-2) as the `settlement_epoch_blocks` header cell sealed at `ChainStore::create` and checked at every open — an init-time datadir pin, never a connect/pop write | 7 | `add_block` `add_block_burn` `pop_block` `remove_block_burn` `set_hard_fork` `set_settlement_epoch_blocks_pin` `set_total_burned` | **2** — The connect/pop write set is what the logical-state digest is computed **over**, so extracting it first gives DRS-E2 a subject to compare. Moving it later means every earlier increment is validated against an unported writer. | Long-term Rust `connect(ChainValid<'id>)` / `pop()` — shape ruled by **C2-R8** ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md) Q3–Q6): the store takes a validator-minted `ChainValid` brand-bound to the committing batch, writes the curve-tree root it is handed, journals one undo log per connect, and pops by reverse replay. **Preconditions (DRS-D12):** E1 increment 2.5 (the `WriteBatch<'id>` brand, `StoreError::class()`, `StoreInvariant`, `InsertTable`/`UpsertTable`, `StoreCannot`) — **landed 2026-09-15**, §3.6.3 — and **DRS-E6 increment 1** (**landed 2026-09-15**, [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)) (the `shekyl-chain-rules` scaffold, §7.5) — `connect` takes a `ChainValid<'id>` that only that crate mints. The surface-bound rules that arrive with this increment are CEN-L1 (`SI-1` belt), CEN-H5 (the typed input `enum` that dissolves L5) and CEN-B3 (`set_hard_fork`'s discard belt; body per R4) — §7.5 table 2. The writer also mints the halt: a `StoreInvariantViolated` on connect or pop sets `ChainTip.connect` to `Halted` (§3.6.2) |
 | **S-CHAIN-R** | Tip, headers, weights, burns | 23 | `block_exists` `for_blocks_range` `get_block` `get_block_already_generated_coins` `get_block_blob_from_height` `get_block_burn` `get_block_cumulative_difficulty` `get_block_cumulative_rct_outputs` `get_block_difficulty` `get_block_from_height` `get_block_hash_from_height` `get_block_height` `get_block_long_term_weight` `get_block_timestamp` `get_block_weight` `get_block_weights` `get_long_term_block_weights` `get_settlement_epoch_blocks_pin` `get_top_block` `get_top_block_timestamp` `get_total_burned` `height` `top_block_hash` | **3** — Reads the tables S-CHAIN-W writes. Split across increments, the two halves of one table's contract move separately and a digest mismatch cannot be localised to either. | Hot RPC path. **Halt visibility (C2-R8 Q8, §3.6.2):** the tip this surface serves carries `connect: ConnectState` — `Live`, or `Halted { at_height, row }` once the writer has refused a `StoreInvariantViolated` — and `get_info` exposes it, so a node that keeps serving reads after a halt does not present a stale tip as current. The field lands **with S-CHAIN-W** (the producer of the state), as a `CORE_RPC_VERSION` minor bump in `shekyl-rpc-types::chain` |
 | **S-OUT-KI** | Outputs and key images | 8 | `for_all_key_images` `for_all_outputs` `get_output_distribution` `get_output_histogram` `get_output_key` `get_output_tx_and_index` `has_key_image` `has_key_images` | **4** — Consensus-critical (double-spend admission) and needs chain reads for height context, so it follows S-CHAIN-R rather than racing it. |  |
 | **S-TX** | Tx blob and existence | 9 | `for_all_transactions` `get_prunable_tx_blob` `get_prunable_tx_hash` `get_pruned_tx_blob` `get_tx_amount_output_indices` `get_tx_blob` `get_tx_count` `get_tx_unlock_time` `tx_exists` | **5** — Tx blob and existence reads, dependent on chain-R for height context. No writer of its own in this vocabulary — `blockchain.cpp` writes txs only through `add_block`. |  |
@@ -882,7 +882,7 @@ a trigger that is not a deterministic function of committed state, candidate
 and code — would falsify the re-derivation argument and reopens this
 paragraph for a durable latch; none of SI-1…SI-8 is such a cause.
 
-#### 3.6.3 The write handle — BUILT (DRS-E1 increments 1–2.5, `rust/shekyl-chain-store/src/store/`)
+#### 3.6.3 The write handle — BUILT (DRS-E1 increments 1–3, `rust/shekyl-chain-store/src/store/`)
 
 Implementation pointers for the rows above and for C2-R8 Q2/Q3/§7.3 as they
 stand in the crate. Code wins where this list and the code disagree.
@@ -904,7 +904,7 @@ stand in the crate. Code wins where this list and the code disagree.
   `StoreError::class()` is a projection of the outer variant, not a
   judgement beside it. `Display`/`source()` are transparent
   (`store/error.rs`). `StoreInvariant` carries the register's `built`
-  rows — SI-7 `CellCorrupt` today (`store/invariant.rs`), held to
+  rows — every row but SI-5 since increment 3 (`store/invariant.rs`), held to
   [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) by
   `check_store_invariant_register.py`.
 - **Two verbs** (§7.3): a keyed table opens as `InsertTable` or
@@ -912,15 +912,19 @@ stand in the crate. Code wins where this list and the code disagree.
   the handle — redb admits one table handle per transaction, so a set
   cannot upsert and a register cannot insert; a hard-fork that
   reclassifies a table opens the other handle. `open_insert_table(def,
-  row)` binds the `SI-` belt (SI-1/SI-3/SI-4 once S-CHAIN-W writes them);
-  `insert` is fatal on a present key and leaves the table untouched.
+  row)` binds the `SI-` belt (SI-1 `spent_keys`, SI-2 the block tables,
+  SI-3 `tx_indices`, SI-4 `curve_tree_roots`, SI-9 the id-keyed tables —
+  `store/connect.rs`); `insert` is fatal on a present key and leaves the
+  table untouched.
   `open_upsert_table` is declared overwrite and returns the displaced
   value. The wrong verb does not compile (`compile_fail`, E0599); there is
-  no `remove` — the pop path (Q5, SI-6) names its deletion verb when it is
-  the consumer. Reads return `StoreError`. Typed `properties` cells are
-  registers and go through `upsert_property` (store-owned header cells go
-  through `header::put`). Multimap tables open raw: a set per key has no
-  value to overwrite and no verb to declare.
+  no public `remove` — the only deleter is the pop journal's reverse replay
+  (`store/undo.rs`; S-CURVE names a journaling delete when its drain needs
+  one). Reads return `StoreError`. Typed `properties` cells are registers
+  and go through `upsert_property` (store-owned header cells go through
+  `header::put`). Multimap tables open as `SetTable`: a set per key has no
+  value to overwrite and no verb to declare, and `insert` says whether the
+  member was new.
 - **Poison** (Q2 made a property of the batch): every
   `StoreInvariantViolated` produced or observed through a batch — a refused
   `insert`, a `get_property` on a cell that will not decode — arms a
@@ -930,8 +934,47 @@ stand in the crate. Code wins where this list and the code disagree.
   it to a different error, therefore still lands nothing, and `write`
   returns the violation. This is the batch-local half of the writer halt:
   the violation §3.6.2 advertises on `ChainTip.connect` is the one the
-  batch refused to commit, on connect or pop alike. The `Halted` arm itself
-  lands with S-CHAIN-W.
+  batch refused to commit, on connect or pop alike.
+- **The pop journal** (Q5; increment 3, `store/undo.rs`, `codec/undo.rs`):
+  every declared verb records its own pre-image while the batch is
+  recording — `InsertTable::insert` the key, `UpsertTable::upsert` and
+  `upsert_property` the displaced value, `SetTable::insert` a new member —
+  and `connect` seals them as `undo_log[h]` (the first Rust-only table,
+  named with its reason in `schema::RUST_ONLY_TABLES`; tables are named by
+  declaration ordinal, so a reorder **or removal** is a `SCHEMA_VERSION`
+  bump). `pop` replays the tip's row last-first; every inverse asserts the
+  state it expects (SI-6 `UndoLogIncoherent`), bytes are checked before
+  redb's panicking `from_bytes` (SI-7), and the only refusal is
+  `StoreCannot::PopBelowFloor` — genesis, or a row the retention prune has
+  deleted (S-PRUNE's inequality: retention ≥ `D_max`).
+- **`connect` and `pop`** (increment 3, `store/connect.rs`, `store/pop.rs`,
+  `store/view.rs`): `WriteBatch::chain_view()` projects the batch as the
+  validator's `ChainView<'id>` (its own uncommitted writes visible, so block
+  *h*+1 validates against block *h*); `connect(ChainValid<'id, BatchView<'_,
+  'id>>, ConnectFacts, RuleSetId)` writes the 17-table set in the C++
+  funnel's phase order with E3/E4 as empty hook phases, refuses a verdict
+  minted under a rule set other than the one in force (`StoreCannot::
+  RuleSetNotInForce`), and records nothing it did not receive — the
+  consensus-visible values arrive as `Fact<T> { value, origin }` and their
+  origin is stamped into the file (below). `pop()` is the replay.
+- **Provenance has three components** (increment 3, `provenance.rs`,
+  `codec/evidence.rs`): stubbed applies (increment 2), `rule_coverage_gaps`
+  — the rows in force a verdict did not evaluate (C2-R8 §9.4) — and
+  `passed_through_facts`; each an engine-local header cell widened inside
+  the committing batch, all three empty ⇔ parity evidence. Under
+  `RuleSet::GENESIS` today every connect records all enforced rows as gaps,
+  which is the ruling working: no file fed by the scaffold validator can
+  pass as parity evidence, and every evidential run starts from a fresh
+  file.
+- **The writer halt** (§3.6.2; increment 3, `store/halt.rs`,
+  `store/shared.rs`): a poisoned batch that connected or popped latches
+  `Shared::halt` once; `ChainStore::write` then refuses with
+  `StoreCannot::WriterHalted { at_height, row }`, reads stay open,
+  `ChainStore::connect_state()` reports `ConnectState::Halted`. In memory
+  only. The wire form is `shekyl-rpc-types::chain::ConnectState` with
+  `StoreInvariantRow(u32)`; `get_info` grows the field — and
+  `CORE_RPC_VERSION` moves — when the Rust store serves it (cutover), not
+  before.
 
 ---
 
@@ -2166,6 +2209,7 @@ the trigger (#507) and was missed there.
 | **2026-09-15** | **Plan amendment owed by C2-R8 §14 ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)).** **DRS-D12** ratified: validation precedes connect; the validation crate is **`shekyl-chain-rules`** (no store handle); replay-that-validates is the Rust store's only pre-cutover writer and D11's redb-side mechanism; the C++-verdict FFI shim is rejected. **DRS-E6** minted in the §7 table and flowchart — increment 1 (the scaffold: `ChainView`, `RuleSet`, `RuleCoverage`, completeness gate, fixture harness) **ahead of S-CHAIN-W**, increments 2+ the surface-free rules by census subsystem in dependency order. **§7.5** derives the partition from the census at `02c086f4b`: 173 rows, 19 surface-bound (12 live), **141 of 153** enforced consensus rows surface-free, policy 9 separate; each live bound row's arriving increment is named, and `check_drs_e6_partition.py` holds the tables to the census. **§3.6.2** `ChainTip.connect` (`Live` / `Halted { at_height, row }`) lands with S-CHAIN-W and is exposed by `get_info`; pinned in review the same day: the halt arms on **any** `InvariantViolated` the writer observes — connect or pop, every `SI-` row, not only the validator-hole rows — and is **re-derived on restart, never persisted** (its inputs all survive a restart; a durable latch would keep a node halted over a block the network did not keep, and needs a clear path that reintroduces the silently-wrong node). §8.1 gains the complete-coverage and halt-visibility items. The ruling's §14 pointed at a "§11 plan table" — the work-breakdown table is §7; corrected in the ruling with a dated bracket |
 | **2026-09-15** | **DRS-E1 increment 2.5 landed** (§3.6.3): the store-side mechanics C2-R8 named — brand, three classes, `StoreInvariant`, two verbs. Two implementation rulings made in landing them, recorded so they are not re-derived: **(a) a violation poisons the batch.** Q2 says an invariant breach is fatal and never converted; making that a discipline asked of each call site would have been the L14 shape again (a property that holds only where every site remembers). So every `StoreInvariantViolated` produced or observed through a `WriteBatch` arms a latch the commit consults; a swallowed violation still cannot land. **(b) no `remove` on `KeyedTable`.** §7.3 names exactly two verbs; the pop path (Q5) is the only consumer of deletion and does not exist yet, so the verb and the row it enforces (SI-6) land with it — pre-provisioning one here is the rule-21 anti-pattern. Falsify (b) by a pop increment that finds `KeyedTable` cannot express its write set. S-CHAIN-W's remaining precondition is DRS-E6 increment 1 |
 | **2026-09-15** | **Increment 2.5 review close (PR #752).** Three refinements so (a) and (b) above are properties of the type, not of the call site: **(c) poison owns both arms** — `WriteBatch::complete` returns the armed row even when the closure returned a different `Err`, so the Halt cannot be converted by mapping. **(d) one verb per handle** — `InsertTable` / `UpsertTable`; the `SI-` row is bound at `open_insert_table`, reads return `StoreError`, and the wrong verb does not compile. Falsify (b) against `InsertTable`/`UpsertTable` rather than the retired `KeyedTable` two-verb handle. **(e) `header::put`** is the store-owned cell write; `upsert_property` remains the public register verb. |
+| **2026-09-15** | **DRS-E1 increment 3 (S-CHAIN-W) landed** — plan, rule-26 pre-flight and round-1 rulings in [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) (SCW-1…SCW-18). Nine commits: the undo log (first Rust-only table, ordinal-named; bijection gate's `{table: reason}` map keeps the extra-leg refusal), the connect write set's codecs at the LMDB layouts minus the collapsed key + `Transaction::write_segments`, `total_burned` and the re-homed settlement-epoch pin as header cells, `TxIdentity { hash, prunable_hash }` in the rules crate, `BatchView`, `connect` with per-field `Fact` origins, coverage-gap / pass-through provenance, `pop` + `PopBelowFloor` + the writer halt + `ConnectState` wire type. SI-1/2/3/4/6/8 built, SI-9 minted and built; DRS-W6/W9/W15/W17 closed at the port. `SCHEMA_VERSION` 1 → 2. `CORE_RPC_VERSION` not bumped: no `get_info` field changes until the Rust store serves it. |
 | **2026-09-15** | **DRS-E6 increment 1 landed** ([`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md), the crate's contract of record): `shekyl-chain-rules` — `ChainView<'id>`, `RuleSet`/`RuleSchedule`/`AdmissionPolicy`, `Coverage<R>`, `ChainValid<'id>`/`InvalidBlock`, `validate`/`tx_form`/`tx_against`, the census-derived completeness gate (`check_chain_rules_coverage.py`: the 153 + 9 enforced rows of the census at `02c086f4b`, registry ↔ census a bijection in census order), the transitive no-store belt (`check_chain_rules_no_store.sh`), the negative-fixture harness; zero rules ported (increments 2+). **S-CHAIN-W is unblocked.** Landing rulings, recorded so they are not re-derived: **(a) faults are not verdicts.** A view's substrate failure is `ChainView::Fault`, the *outer* `Err` of every entry point, never inspected by the crate — a store error cannot become an `InvalidBlock` by `?`, `From`, or a hand-written arm (clause 3 of the conversion-ban gate now live: `verdict_defs == 0` refuses). **(b) absence is a variant, not `None`.** `block_at`/`root_at` return `AtHeight<T>` (`Recorded | AboveTip`), no `From<Option>`, no `Try` — a rule must match the above-tip case, so CEN-B5 cannot fail open on a `?`. **(c) `output_at` dropped:** FCMP++ inputs reference no output; when the output-key-uniqueness row is ruled it needs `has_output_key`, not a global-index lookup. **(d) `KeyImage` moved to `shekyl-types`** (`hash32!`, new `redact, no_display` arm — truncated `Debug`, *no* `Display`, the wallet-correlation posture kept; `shekyl-crypto-pq` re-exports; serde encoding unchanged, snapshot checked); **`CurveTreeRoot` minted** beside it. **(e) `RuleSetId` is not the header major version** — its own space, `rules_at(nettype, height)` identity today. **(f) `CenRow`/`PolicyRow` are sibling enums** — the flag partition is a type error, not a runtime check. The graded-oracle hook is the `Row::as_str` key; the grader is consulted by E2's replay harness, never imported here. Round 2 of the design (`Fault`, `AtHeight`, cross-view pin) is implemented on its defaults and closes at PR review |
 
 ---
