@@ -144,12 +144,16 @@ arrives with that row (§13).
 
 ### 3.4 Two relocations into `shekyl-types` (round-1 rulings Q1, Q2) — verified
 
-**`KeyImage`.** `shekyl-crypto-pq/src/key_image.rs:89` is
+**`KeyImage`.** *Pre-flight, records-was at `cb5a4a5e9` (dev before this PR
+moved the type):* `shekyl-crypto-pq/src/key_image.rs` line 89 was
 `pub struct KeyImage([u8; 32])` with `Clone, Copy, PartialEq, Eq, Hash,
 PartialOrd, Ord, Zeroize, Serialize, Deserialize`, `#[serde(transparent)]`,
 a **truncated `Debug`** (`KeyImage(0000..)`, first two bytes) and **no
-`Display`** — both deliberate, documented at `:33–40` as a wallet-correlation
-defence (a key image links on-chain spends to a wallet). `shekyl-types`'
+`Display`** — both deliberate, documented at its lines 33–40 as a
+wallet-correlation defence (a key image links on-chain spends to a wallet).
+*Now:* the type is `hash32! { KeyImage, redact, no_display }` at
+`shekyl-types/src/lib.rs:484`, and that file is the 35-line re-export
+described under *Zero breakage* below. `shekyl-types`'
 `hash32!` has a `redact` arm (minted for `PCanonicalId`) whose `Debug` is
 byte-identical (`debug_tuple().field(format_args!("{:02x}{:02x}.."))`), but
 its shared `@body` derives a full-hex `Display` for every arm — which would add
