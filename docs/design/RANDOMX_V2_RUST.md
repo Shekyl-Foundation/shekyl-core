@@ -168,17 +168,16 @@ implementation-time. Before Shekyl's mainnet release:
 
 If either condition fails — Monero finds a v2 issue in production, or
 the audit surfaces a delta-specific weakness — Shekyl's recovery is
-straightforward: **unpin to a pre-PR-#317 commit on the same fork
-(default `102f8acf`) and ship v1 at genesis** per
-[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Because the fork
-has not diverged and the verifier code is structured around the v1+v2
-spec (which is the same `doc/specs.md` with v2 deltas marked inline),
-the unpin is a submodule SHA change plus a `#[cfg]`-style switch in
-the verifier, not a re-implementation.
+**not** an unpin-and-revert of a v1 submodule SHA. Phase 3c deleted
+the v1 C path; Phase 4 deleted `IPowSchema` / `pow_registry`. The
+fallback is: re-add a CMake target that links a v1 verifier, plus the
+v1 `#[cfg]` in `shekyl-pow-randomx`, per
+[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). That is a
+deliberate re-introduction of a deleted path, not a SHA flip.
 
-This is what the non-divergence posture buys: the v1 fallback is a
-late-binding, unpin-and-revert operation, not a "stop everything and
-start over" project.
+This is what the non-divergence posture still buys: the v1 algorithm
+is reconstructible from the same spec. It is **not** a one-line
+submodule revert.
 
 #### What this means for the Phase 2 gate
 
@@ -676,20 +675,15 @@ remote daemon had to compute RandomX themselves to pay for their
 queries, which is why `src/wallet/wallet_rpc_payments.cpp` imports the
 PoW machinery into the wallet tree.
 
-### 15.2 Evidence the wallet-tree PoW touchpoint is unique
+### 15.2 Evidence the wallet-tree PoW touchpoint was unique — LANDED
 
-A targeted grep across `src/wallet/` for `rx_*`, `randomx_*`,
-`cn_slow_hash`, `rx_slow_hash`, and `RX_BLOCK_VERSION` returns exactly
-one file:
-
-- `src/wallet/wallet_rpc_payments.cpp:156` (`if (major_version >= RX_BLOCK_VERSION)`)
-- `src/wallet/wallet_rpc_payments.cpp:158` (`crypto::rx_slow_hash(...)`)
-- `src/wallet/wallet_rpc_payments.cpp:163` (`crypto::cn_slow_hash(...)`)
-
-Deleting RPC payments removes the entire wallet-tree PoW surface in a
-single sweep. The grep above is rerun in Track B's gate check as
-mechanical evidence that no new wallet-tree PoW touchpoint has
-appeared in the meantime.
+**Records-was** at the RPC-payment deletion (wallet2 cutover). A
+targeted grep across `src/wallet/` for `rx_*`, `randomx_*`,
+`cn_slow_hash`, `rx_slow_hash`, and `RX_BLOCK_VERSION` then returned
+exactly one file, `src/wallet/wallet_rpc_payments.cpp` (lines 156/158/163
+at that pin: `RX_BLOCK_VERSION` gate, `rx_slow_hash`, `cn_slow_hash`).
+The file is deleted; the grep now returns empty. That is the Track B
+gate check's expected empty result.
 
 ### 15.3 Why delete (rather than rewrite)
 

@@ -9,7 +9,10 @@
   longhash calls `hash_pow_randomx` (Rust RandomX v2 FFI). CEN-D2 still
   fail-closes via `set_pow_hash_override_for_tests`. `slow-hash.c` and
   `generate_chacha_key*` (the CN-KDF) are deleted; `chacha.h` keeps
-  `xchacha20`. `check_randomx_symbol_isolation.sh` now bans `cn_slow_hash`.
+  `xchacha20`. Miner and longhash-worker threads no longer call the
+  CN scratchpad `slow_hash_{allocate,free}_state` — RandomX FFI owns
+  VM state. `check_randomx_symbol_isolation.sh` bans `cn_slow_hash`
+  and the unprefixed allocate/free names.
 
 ### API
 
