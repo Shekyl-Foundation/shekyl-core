@@ -42,6 +42,14 @@
 //! **without** the variable. [`snapshot_assertions_are_armed`] fails while
 //! it is set, so a regeneration run can never pass as an assertion run.
 
+// Whole-file test module: the parent already gates it with
+// `#[cfg(test)] mod snapshot_tests;`, and this inner marker is how the
+// file declares the same thing to `build.yml`'s debug-macro lint, whose
+// scan keys on the first `#[cfg(test)]` / `#![cfg(test)]` in the file. The
+// regeneration driver's `eprintln!` is test-only output and must not read
+// as production.
+#![cfg(test)]
+
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
