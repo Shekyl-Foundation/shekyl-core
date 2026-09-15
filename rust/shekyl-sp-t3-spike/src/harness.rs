@@ -94,8 +94,8 @@ use shekyl_tor_control_client::control::onion::{
     AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId,
 };
 use shekyl_tor_control_client::control::{
-    BootstrapReadiness, BootstrapState, Command, EventSink, ManagedTor, Signal, SocksPort,
-    TorControlClient, TorControlClientConfig, TorLaunch,
+    parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, EventSink, ManagedTor,
+    Signal, SocksPort, TorControlClient, TorControlClientConfig, TorLaunch,
 };
 use shekyl_types::PSlot;
 
@@ -144,11 +144,16 @@ pub const FETCH_CEILING: Duration = Duration::from_secs(
 /// Headroom above the client's summed bounds, so the two never race.
 const FETCH_CEILING_MARGIN_SECS: u64 = 60;
 
-/// How long to wait for a freshly-published descriptor to become reachable.
+/// How long to wait for every freshly-published descriptor to become
+/// reachable — and for one whole-shard probe of each to complete.
 ///
 /// Descriptor upload to the HSDirs plus a client's fetch of it takes tens of
-/// seconds on a cold service; this bounds the wait rather than assuming it.
-pub const PUBLISH_TIMEOUT: Duration = Duration::from_secs(300);
+/// seconds to a few minutes on a cold service, and the probe that proves
+/// reachability is a full fetch (a 3.3 MB fixture over a fresh rendezvous),
+/// eight of them sharing one uplink. Not a timed quantity — bring-up is
+/// outside every arm — so the bound is generous rather than tight: a rig
+/// that gives up on a slow-but-working publication measures nothing.
+pub const PUBLISH_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Tor's `MAX_SIGNEWNYM_RATE`: a `NEWNYM` within this many seconds of the
 /// last is acknowledged and *deferred*, not applied. The cold arm must not
@@ -194,8 +199,15 @@ impl ManagedInstance {
     /// Expert Bundle is what production launches, so a measurement taken against
     /// an unverified binary would be a measurement of something else. A binary
     /// that fails the pin fails the measurement.
+    ///
+    /// The SOCKS port is [`SocksPort::Auto`] — tor binds a free port itself and
+    /// the address is read back with `GETINFO net/listeners/socks` once
+    /// bootstrapped, the production supervisor's path. Nine tors launch at
+    /// once here, and a "reserve a port, close it, hand the number to tor"
+    /// scheme has a window in which any of the others (or anything else on
+    /// the box) can take the port first, failing an otherwise valid W₂ run
+    /// nondeterministically.
     async fn launch(tor_binary: &Path, data_dir: PathBuf) -> Result<Self, ApparatusError> {
-        let socks_port = free_port();
         let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let verified = shekyl_tor_control_client::binary::discover_and_verify_at(tor_binary)
@@ -204,7 +216,7 @@ impl ManagedInstance {
             launch: TorLaunch::Managed(ManagedTor {
                 tor_binary: verified,
                 data_dir,
-                socks_port: SocksPort::Fixed(socks_port),
+                socks_port: SocksPort::Auto,
                 disable_network: false,
                 exit_observer: None,
             }),
@@ -225,10 +237,15 @@ impl ManagedInstance {
                 .ok();
         }
 
-        Ok(Self {
-            control,
-            socks: SocketAddr::from(([127, 0, 0, 1], socks_port)),
-        })
+        let reply = control
+            .ask(Command::GetInfo(vec!["net/listeners/socks".to_owned()]))
+            .await
+            .map_err(|e| ApparatusError::Control(e.to_string()))?;
+        let socks = parse_socks_listeners(&reply).ok_or_else(|| {
+            ApparatusError::Control("tor reported no TCP SOCKS listener".to_owned())
+        })?;
+
+        Ok(Self { control, socks })
     }
 
     /// Stop the process. `on_stop` issues `DEL_ONION` for every published
@@ -302,7 +319,9 @@ impl Persona {
 /// through a SOCKS shim with no tor in the picture — the wiring the live
 /// test and the measurement then run over real circuits.
 pub struct ClientLeg {
-    lanes: Vec<PFetchClient>,
+    /// `Arc` so a lane can travel into a spawned task (the readiness probes
+    /// run one per persona, at once); the client itself stays `Clone`-free.
+    lanes: Vec<Arc<PFetchClient>>,
 }
 
 impl ClientLeg {
@@ -311,43 +330,53 @@ impl ClientLeg {
     pub fn new(proxy: SocketAddr, lanes: usize) -> Self {
         Self {
             lanes: (0..lanes.max(1))
-                .map(|_| PFetchClient::with_timeouts(proxy, Timeouts::DEFAULT))
+                .map(|_| Arc::new(PFetchClient::with_timeouts(proxy, Timeouts::DEFAULT)))
                 .collect(),
         }
     }
 
+    /// The client on lane `lane` (modulo the lane count).
+    fn lane(&self, lane: usize) -> Arc<PFetchClient> {
+        Arc::clone(&self.lanes[lane % self.lanes.len()])
+    }
+
     /// One fetch on lane `lane` (modulo the lane count), returning the
-    /// verified body length on success.
-    ///
-    /// The header is minted fresh per call ([`RequestHeader::fresh`]) with the
-    /// apparatus anchor, exactly as a daemon mints one per need; the content
-    /// hole accepts every body, because what the rig checks is the
-    /// transport and the countersignature, not `R_k`.
-    ///
-    /// # Panics
-    ///
-    /// If the OS entropy source fails. That is not a fetch outcome — no
-    /// exchange happened, so no [`FailureKind`] describes it — and a rig
-    /// that cannot mint nonces has nothing left to measure. It stops loudly
-    /// rather than filing the failure under a class Tor would be blamed for.
+    /// verified body length on success. See [`fetch_via`].
     pub async fn fetch_once(
         &self,
         lane: usize,
         target: &FetchTarget,
     ) -> Result<usize, FailureKind> {
-        let client = &self.lanes[lane % self.lanes.len()];
-        let header = RequestHeader::fresh(APPARATUS_ANCHOR_HEIGHT, APPARATUS_ANCHOR_HASH)
-            .expect("OS entropy source failed; the apparatus cannot mint request nonces");
-        let fetched = tokio::time::timeout(
-            FETCH_CEILING,
-            client.fetch(target, &header, Arc::new(AcceptAnyContent)),
-        )
-        .await;
-        match fetched {
-            Err(_) => Err(FailureKind::Timeout),
-            Ok(Ok(shard)) => Ok(shard.body().len()),
-            Ok(Err(e)) => Err(classify(&e)),
-        }
+        fetch_via(&self.lanes[lane % self.lanes.len()], target).await
+    }
+}
+
+/// One fetch through `client`, returning the verified body length on
+/// success.
+///
+/// The header is minted fresh per call ([`RequestHeader::fresh`]) with the
+/// apparatus anchor, exactly as a daemon mints one per need; the content
+/// hole accepts every body, because what the rig checks is the transport
+/// and the countersignature, not `R_k`.
+///
+/// # Panics
+///
+/// If the OS entropy source fails. That is not a fetch outcome — no exchange
+/// happened, so no [`FailureKind`] describes it — and a rig that cannot mint
+/// nonces has nothing left to measure. It stops loudly rather than filing
+/// the failure under a class Tor would be blamed for.
+pub async fn fetch_via(client: &PFetchClient, target: &FetchTarget) -> Result<usize, FailureKind> {
+    let header = RequestHeader::fresh(APPARATUS_ANCHOR_HEIGHT, APPARATUS_ANCHOR_HASH)
+        .expect("OS entropy source failed; the apparatus cannot mint request nonces");
+    let fetched = tokio::time::timeout(
+        FETCH_CEILING,
+        client.fetch(target, &header, Arc::new(AcceptAnyContent)),
+    )
+    .await;
+    match fetched {
+        Err(_) => Err(FailureKind::Timeout),
+        Ok(Ok(shard)) => Ok(shard.body().len()),
+        Ok(Err(e)) => Err(classify(&e)),
     }
 }
 
@@ -647,9 +676,15 @@ impl Apparatus {
     /// propagating would have its publication delay recorded as circuit
     /// churn — the very signal `SF-D7` reads `N` from.
     ///
-    /// Each probe is bounded by what remains of [`PUBLISH_TIMEOUT`], so the
-    /// deadline is honoured even when a probe stalls for the client's full
-    /// [`FETCH_CEILING`]. A probe the client **refuses** fails at once as
+    /// The probes run **at once**, one task per persona on its own lane,
+    /// under one shared [`PUBLISH_TIMEOUT`] deadline. A successful probe is
+    /// a whole shard fetched over a fresh rendezvous — tens of seconds for a
+    /// real fixture — so probing eight personas one after another cannot fit
+    /// the deadline even when every descriptor is already up; the first (c)
+    /// bring-up failed exactly that way. Each probe is bounded by what
+    /// remains of the deadline, so it is honoured even when a fetch stalls
+    /// for the client's full [`FETCH_CEILING`]. A probe the client
+    /// **refuses** fails the whole bring-up at once as
     /// [`ApparatusError::Refused`]: the onion answered, so waiting longer
     /// cannot change the outcome, and retrying it to the deadline would file
     /// an apparatus fault under `NotReachable`.
@@ -659,45 +694,21 @@ impl Apparatus {
         if self.personas.is_empty() {
             return Err(ApparatusError::NotReachable);
         }
-        // In slot order, under one shared deadline. The personas publish
-        // concurrently regardless, so by the time the first answers the rest
-        // are usually already up and each later probe is one fetch.
+        let mut probes = tokio::task::JoinSet::new();
         for (index, persona) in self.personas.iter().enumerate() {
-            self.probe_until(index, persona.target(0), deadline).await?;
+            probes.spawn(probe_until(
+                self.client.lane(index),
+                index,
+                persona.target(0),
+                self.expected_len,
+                deadline,
+            ));
+        }
+        while let Some(joined) = probes.join_next().await {
+            // A panicking probe is a rig bug, not a Tor outcome; surface it.
+            joined.expect("readiness probe task panicked")?;
         }
         Ok(started.elapsed())
-    }
-
-    /// Probe one persona until it serves the expected body, the client
-    /// refuses it, or `deadline` passes.
-    async fn probe_until(
-        &self,
-        index: usize,
-        target: FetchTarget,
-        deadline: Instant,
-    ) -> Result<(), ApparatusError> {
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(ApparatusError::NotReachable);
-            }
-            let probe = tokio::time::timeout(remaining, self.client.fetch_once(index, &target));
-            match probe.await {
-                Ok(Ok(bytes)) if bytes == self.expected_len => return Ok(()),
-                Ok(Err(FailureKind::Refused)) => {
-                    return Err(ApparatusError::Refused { persona: index });
-                }
-                // Not yet reachable, a short body, or the deadline passed
-                // mid-probe: retry while the deadline allows.
-                Ok(_) | Err(_) => {}
-            }
-            let pause =
-                Duration::from_secs(5).min(deadline.saturating_duration_since(Instant::now()));
-            if pause.is_zero() {
-                return Err(ApparatusError::NotReachable);
-            }
-            tokio::time::sleep(pause).await;
-        }
     }
 
     /// Make the next fetch **cold**: `SIGNAL NEWNYM` to the client tor, so it
@@ -825,13 +836,37 @@ fn classify(e: &FetchError) -> FailureKind {
     }
 }
 
-/// Reserve a free loopback port for a tor's SOCKS listener.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral")
-        .local_addr()
-        .expect("local_addr")
-        .port()
+/// Probe one persona until it serves a body of `expected_len`, the client
+/// refuses it, or `deadline` passes. Free-standing (owned inputs) so
+/// [`Apparatus::await_reachable`] can run one per persona in its own task.
+async fn probe_until(
+    client: Arc<PFetchClient>,
+    index: usize,
+    target: FetchTarget,
+    expected_len: usize,
+    deadline: Instant,
+) -> Result<(), ApparatusError> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(ApparatusError::NotReachable);
+        }
+        let probe = tokio::time::timeout(remaining, fetch_via(&client, &target));
+        match probe.await {
+            Ok(Ok(bytes)) if bytes == expected_len => return Ok(()),
+            Ok(Err(FailureKind::Refused)) => {
+                return Err(ApparatusError::Refused { persona: index });
+            }
+            // Not yet reachable, a short body, or the deadline passed
+            // mid-probe: retry while the deadline allows.
+            Ok(_) | Err(_) => {}
+        }
+        let pause = Duration::from_secs(5).min(deadline.saturating_duration_since(Instant::now()));
+        if pause.is_zero() {
+            return Err(ApparatusError::NotReachable);
+        }
+        tokio::time::sleep(pause).await;
+    }
 }
 
 #[cfg(test)]

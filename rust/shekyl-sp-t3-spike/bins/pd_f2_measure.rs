@@ -127,7 +127,7 @@ fn report_churn(points: &[SweepPoint]) {
          sweep exists to replace is NOT in the path; a production daemon has one client)"
     );
     println!(
-        "{:>5} {:>5} {:>8} {:>8} {:>9} {:>8} {:>10}  {:>10}  cap",
+        "{:>5} {:>5} {:>8} {:>8} {:>9} {:>8} {:>10}  {:>10}  valid",
         "width", "n", "p50 s", "p99 s", "p99/w1", "circ %", "D* s", "mem MB"
     );
     let per_body = max_body_bytes();
@@ -149,13 +149,14 @@ fn report_churn(points: &[SweepPoint]) {
             mem_bytes / 1_000_000,
             (mem_bytes % 1_000_000) / 100_000
         );
-        let cap = if row.is_void() {
-            format!("VOID ({} shed)", row.cap_refusals)
-        } else {
-            "ok".to_owned()
+        let valid = match (row.cap_refusals, row.refused) {
+            (0, 0) => "ok".to_owned(),
+            (shed, 0) => format!("VOID ({shed} shed at the serve-side cap)"),
+            (0, refused) => format!("VOID ({refused} refused by the client)"),
+            (shed, refused) => format!("VOID ({shed} shed, {refused} refused)"),
         };
         println!(
-            "{:>5} {:>5} {} {} {:>9} {:>7.1}% {d_star}  {mem_mb:>10}  {cap}",
+            "{:>5} {:>5} {} {} {:>9} {:>7.1}% {d_star}  {mem_mb:>10}  {valid}",
             row.width,
             row.n,
             fmt_opt_secs(row.p50),
@@ -168,8 +169,9 @@ fn report_churn(points: &[SweepPoint]) {
     if void_rows != 0 {
         println!(
             "{void_rows} row(s) VOID: the serve-side placeholder cap shed connections while they \
-             ran, so their churn is the cap's, not Tor's. Read N from the remaining rows only, \
-             or raise the cap and re-run the sweep."
+             ran, or the client refused a completed exchange (404 / malformed / bad \
+             countersignature — the apparatus disagreeing with itself), so their churn is not \
+             Tor's. Read N from the remaining rows only, or fix the cause and re-run the sweep."
         );
     }
     println!(
@@ -195,7 +197,11 @@ fn report_l(cold: &Summary) {
                     "verdict: DROP-TO-3 CANDIDATE — necessary, not sufficient: fetch-plus-retry must \
                      also land under two minutes once TJ-D's retry budget is applied"
                 ),
-                LVerdict::Holds => println!("verdict: L = 4 HOLDS on the single-attempt tail"),
+                LVerdict::DropRefutedBudgetOpen => println!(
+                    "verdict: DROP-TO-3 REFUTED (a fetch-plus-retry span starts at this attempt, \
+                     so it cannot land under two minutes); the six-minute branch is OPEN until \
+                     SF-D6's retry budget is applied to this tail — see the attempts line below"
+                ),
                 LVerdict::TightenRetryBudgetNotL => println!(
                     "verdict: OVER SIX MINUTES ON ONE ATTEMPT — the note says tighten SF-D6's \
                      retry budget, do not raise L; a single attempt this long also questions \

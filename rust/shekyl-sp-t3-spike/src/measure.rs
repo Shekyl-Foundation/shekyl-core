@@ -367,17 +367,23 @@ pub const L_BUDGET_TOO_GENEROUS_ABOVE: Duration = Duration::from_secs(360);
 ///
 /// The note's falsifier is *fetch-plus-retry*; this rig makes one attempt
 /// per observation (retry is the scheduler's, `SF-D6` / `TJ-D`), so the
-/// verdict is over the **single-attempt** p99 and the report says so. A
-/// single attempt already over six minutes is the strongest form of the
-/// third arm; a single attempt under two minutes is *necessary* for the
-/// first, not sufficient — the retry budget still has to fit.
+/// verdict is over the **single-attempt** p99 and says only what that
+/// number can decide. A fetch-plus-retry span is never shorter than its
+/// first attempt, so a single-attempt p99 is a **lower bound** on the
+/// note's quantity: it can *refute* the "under two minutes" branch and it
+/// can *establish* the "over six" branch, but it can never establish that
+/// the span stays under six — that needs the retry policy, which is not
+/// in this crate. There is deliberately no `Holds` arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LVerdict {
     /// p99 under [`L_DROP_BELOW`]: the note's "drop to 3" branch is live,
-    /// subject to the retry budget.
+    /// subject to the retry budget — *necessary*, not sufficient.
     DropToThreeCandidate,
-    /// p99 in `[L_DROP_BELOW, L_BUDGET_TOO_GENEROUS_ABOVE]`: the pin holds.
-    Holds,
+    /// p99 in `[L_DROP_BELOW, L_BUDGET_TOO_GENEROUS_ABOVE]`: the drop branch
+    /// is **refuted** (a span that starts at ≥ 2 min cannot end under it);
+    /// the six-minute branch is **open** until `SF-D6`'s retry budget is
+    /// applied to this tail — [`attempts_within_budget`] is that input.
+    DropRefutedBudgetOpen,
     /// p99 over [`L_BUDGET_TOO_GENEROUS_ABOVE`] on a **single** attempt: the
     /// note's "tighten the budget, do not raise `L`" branch — and since no
     /// retry budget can make a single over-budget attempt fit, this is the
@@ -394,7 +400,7 @@ pub fn l_verdict(summary: &Summary) -> LVerdict {
         None => LVerdict::Undefined,
         Some(p) if p < L_DROP_BELOW => LVerdict::DropToThreeCandidate,
         Some(p) if p > L_BUDGET_TOO_GENEROUS_ABOVE => LVerdict::TightenRetryBudgetNotL,
-        Some(_) => LVerdict::Holds,
+        Some(_) => LVerdict::DropRefutedBudgetOpen,
     }
 }
 
@@ -461,32 +467,43 @@ pub struct ChurnRow {
     /// the table so the reader sees *that* it was void rather than a gap,
     /// and it is never the ratio baseline.
     pub cap_refusals: u64,
+    /// Observations at this width the **client** refused after a completed
+    /// exchange ([`FailureKind::Refused`]: `404`, malformed protocol, bad
+    /// countersignature). Any non-zero count is the apparatus being wrong
+    /// (this module's own reading of the class), so the row is **void** on
+    /// the same footing as a cap-bound one: what it measured was not Tor.
+    pub refused: usize,
 }
 
 impl ChurnRow {
-    /// Whether this row can be read as an `N` input at all.
+    /// Whether this row can be read as an `N` input at all: neither the
+    /// serve-side cap nor a client refusal touched it.
     #[must_use]
     pub const fn is_void(&self) -> bool {
-        self.cap_refusals != 0
+        self.cap_refusals != 0 || self.refused != 0
     }
 }
 
 /// Summarise a sweep into the churn table, ordered by width.
 ///
 /// The `p99 / p99(width 1)` ratio takes its baseline from the width-1 row
-/// only when that row is not void; a cap-bound baseline would scale every
-/// other row by the placeholder, so the column is left empty instead.
+/// only when that row is not void; a cap-bound or refusal-tainted baseline
+/// would scale every other row by an apparatus artefact, so the column is
+/// left empty instead.
 #[must_use]
 pub fn churn_table(points: &[SweepPoint]) -> Vec<ChurnRow> {
     let mut rows: Vec<ChurnRow> = points
         .iter()
         .map(|pt| {
             let s = summarize(&pt.observations);
-            let circuits = s
-                .failures
-                .iter()
-                .find(|(k, _)| *k == FailureKind::Circuit)
-                .map_or(0, |(_, c)| *c);
+            let count = |kind: FailureKind| {
+                s.failures
+                    .iter()
+                    .find(|(k, _)| *k == kind)
+                    .map_or(0, |(_, c)| *c)
+            };
+            let circuits = count(FailureKind::Circuit);
+            let refused = count(FailureKind::Refused);
             ChurnRow {
                 width: pt.width,
                 n: s.n,
@@ -500,6 +517,7 @@ pub fn churn_table(points: &[SweepPoint]) -> Vec<ChurnRow> {
                 circuit_rate: ratio(circuits, s.n),
                 d_star: s.d_star,
                 cap_refusals: pt.cap_refusals,
+                refused,
             }
         })
         .collect();
@@ -534,7 +552,7 @@ mod tests {
         assert_eq!(attempts_within_budget(&summarize(&fast)), Some(12));
 
         let mid: Vec<Observation> = (1..=100).map(|_| Observation::success(secs(200))).collect();
-        assert_eq!(l_verdict(&summarize(&mid)), LVerdict::Holds);
+        assert_eq!(l_verdict(&summarize(&mid)), LVerdict::DropRefutedBudgetOpen);
         assert_eq!(attempts_within_budget(&summarize(&mid)), Some(1));
 
         let slow: Vec<Observation> = (1..=100).map(|_| Observation::success(secs(400))).collect();
@@ -552,7 +570,8 @@ mod tests {
     fn l_verdict_is_exactly_the_note_s_boundaries() {
         // At two minutes the note says nothing about dropping; at six it
         // says nothing about the budget. Both boundaries are inclusive to
-        // `Holds`, so the verdict never fires on the number the note names.
+        // the open middle, so the verdict never fires on the number the
+        // note names.
         let at = |s: u64| {
             summarize(
                 &(1..=100)
@@ -560,8 +579,8 @@ mod tests {
                     .collect::<Vec<_>>(),
             )
         };
-        assert_eq!(l_verdict(&at(120)), LVerdict::Holds);
-        assert_eq!(l_verdict(&at(360)), LVerdict::Holds);
+        assert_eq!(l_verdict(&at(120)), LVerdict::DropRefutedBudgetOpen);
+        assert_eq!(l_verdict(&at(360)), LVerdict::DropRefutedBudgetOpen);
         assert_eq!(l_verdict(&at(119)), LVerdict::DropToThreeCandidate);
         assert_eq!(l_verdict(&at(361)), LVerdict::TightenRetryBudgetNotL);
     }
@@ -618,6 +637,33 @@ mod tests {
         // The void row is still *in* the table — a gap would hide that the
         // cap bound; a flagged row shows it.
         assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn a_client_refusal_voids_the_row_like_the_cap_does() {
+        // One `Refused` observation among 100 at width 2: the apparatus was
+        // wrong for at least one exchange, so nothing at that width is a
+        // Tor measurement. Width 1 is clean and stays the baseline.
+        let one = SweepPoint {
+            width: 1,
+            observations: (1..=100).map(|_| Observation::success(secs(10))).collect(),
+            cap_refusals: 0,
+        };
+        let mut tainted: Vec<Observation> =
+            (1..=99).map(|_| Observation::success(secs(12))).collect();
+        tainted.push(Observation::failure(secs(1), FailureKind::Refused));
+        let two = SweepPoint {
+            width: 2,
+            observations: tainted,
+            cap_refusals: 0,
+        };
+        let rows = churn_table(&[one, two]);
+        assert!(!rows[0].is_void());
+        assert_eq!(rows[0].p99_over_width_1, Some(1.0));
+        assert!(rows[1].is_void());
+        assert_eq!(rows[1].refused, 1);
+        assert_eq!(rows[1].cap_refusals, 0);
+        assert_eq!(rows[1].p99_over_width_1, None);
     }
 
     /// `n` successes with the given second-latencies.
