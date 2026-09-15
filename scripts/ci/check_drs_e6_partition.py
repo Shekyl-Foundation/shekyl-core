@@ -31,12 +31,15 @@
 #
 # Rule 47: the gate asserts its own subject. An empty census, a §4 table whose
 # header lacks the columns the derivation reads (every table's own header —
-# §4.J carries three under one heading), a §4 row whose id cell is not a
-# well-formed `CEN-` id or that is too short for its header, a census with
-# zero bound rows, an unterminated code fence in either document (it would
-# hide the rest of the file from the parse), a DRS doc with no §7.5 or with a
-# table missing — each is a missing subject and a failure, never a vacuous
-# pass. `--selftest` proves each refusal fires and reports how many did.
+# §4.J carries three under one heading), a header in either document not
+# followed by its GFM delimiter row of the same width (Markdown renders no
+# table, so the rows under it are not on the page — rule 94 §7), a §4 row
+# whose id cell is not a well-formed `CEN-` id or that is too short for its
+# header, a census with zero bound rows, an unterminated code fence in either
+# document (it would hide the rest of the file from the parse), a DRS doc with
+# no §7.5 or with a table missing, a table-2 row that names no increment —
+# each is a missing subject and a failure, never a vacuous pass. `--selftest`
+# proves each refusal fires and reports how many did.
 #
 # Rule 46: the verdict is the process exit code; nothing here pipes it.
 
@@ -76,6 +79,14 @@ DOC_SECTION_END = re.compile(r"^(### |## )")  # a #### stays inside §7.5
 TABLE1_HEADER = ["flag", "surface", "b1", "b2", "b3", "b4", "total"]
 TABLE2_HEADER = ["row", "b", "store site (per census)", "arrives with"]
 TABLE3_HEADER = ["subsystem", "b1", "b2", "b4", "total"]  # + a free-text column
+
+# Table 2's `arrives with` cell names the increment a live surface-bound row
+# ports with: `**E<n> S-<SURFACE>**` (the surface's increment) or
+# `**E<n> increment <k>**` (a mechanism increment such as E1's 2.5). Which
+# increment is a ruling the doc owns and the gate does not second-guess; that
+# the cell names one is the subject — a live row that "arrives nowhere" is the
+# hole the table exists to close.
+ARRIVES_RE = re.compile(r"\*\*E\d+ (?:S-[A-Z][A-Z0-9-]*|increment \d+(?:\.\d+)?)\*\*")
 
 TOTALS_RE = re.compile(
     r"\(bucket ≠ 3\) = (\d+) = \*\*(\d+) bound \+ (\d+) free\*\*"
@@ -117,6 +128,28 @@ def _is_separator(cells: list[str]) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{3,}:?", c) for c in cells)
 
 
+def _require_delimiter(lines: list[str], at: int, ncols: int, where: str) -> None:
+    """Refuse unless `lines[at + 1]` is the GFM delimiter row for the header at `at`.
+
+    GFM makes a table of a header only when the very next line is a delimiter
+    row with the same number of cells. Anything else and Markdown renders the
+    header as a paragraph — the rows under it do not exist on the page (rule
+    94 §7), so a gate that read them would be checking text no reader sees.
+    """
+    nxt = lines[at + 1] if at + 1 < len(lines) else ""
+    cells = _cells(nxt) if nxt.startswith("|") else []
+    if not _is_separator(cells):
+        raise Refused(
+            f"{where}: header {lines[at].strip()!r} is not followed by a GFM "
+            "delimiter row — Markdown does not render it as a table"
+        )
+    if len(cells) != ncols:
+        raise Refused(
+            f"{where}: delimiter row has {len(cells)} cells, its header has "
+            f"{ncols} — Markdown does not render it as a table"
+        )
+
+
 def _unfenced(text: str, what: str) -> tuple[list[str], set[int]]:
     """The document's lines and the indices inside closed code fences.
 
@@ -152,8 +185,9 @@ def parse_census(text: str) -> list[Row]:
     columns: dict[str, int] | None = None
     width = 0
     seen_tables = 0
+    delimiter_at = -1  # the one line after a header that GFM reads as its delimiter
     for n, raw in enumerate(lines):
-        if n in fenced:
+        if n in fenced or n == delimiter_at:
             continue
         line = raw.rstrip()
         if CENSUS_ROWS_HEADING.match(line):
@@ -174,8 +208,6 @@ def parse_census(text: str) -> list[Row]:
             columns = None  # the table (if any) ended; the next `|` line is a header
             continue
         cells = _cells(line)
-        if _is_separator(cells):
-            continue
         if columns is None:
             header = [c.lower() for c in cells]
             needed = {"id", "site(s)", "c/p", "b"}
@@ -185,10 +217,15 @@ def parse_census(text: str) -> list[Row]:
                     f"column the derivation reads: header={cells!r}, "
                     f"needs {sorted(needed)}"
                 )
+            _require_delimiter(lines, n, len(cells), f"census §4 table under {subsystem}")
+            delimiter_at = n + 1
             columns = {name: header.index(name) for name in needed}
             width = max(columns.values()) + 1
             seen_tables += 1
             continue
+        # Past the header and its delimiter, every `|` line is a data row — a
+        # second separator-looking line is a row whose id cell is `---`, and
+        # is refused below rather than skipped.
         if len(cells) < width:
             raise Refused(
                 f"census §4 table under {subsystem} (line {n + 1}): row has "
@@ -312,26 +349,32 @@ def live_text(text: str) -> str:
 
 
 def find_table(body: list[str], header: list[str], label: str) -> list[list[str]]:
-    """Rows of the first table in `body` whose header starts with `header`."""
+    """Rows of the first table in `body` whose header starts with `header`.
+
+    The header must be followed by its GFM delimiter row, or the "table" is a
+    paragraph and its rows are not a subject. Past the delimiter every `|`
+    line is a data row; a second separator-looking line is a malformed row
+    and fails the table's checks rather than being skipped.
+    """
     want = [h.lower() for h in header]
+    where = f"DRS §7.5 {label}"
     i = 0
     while i < len(body):
         line = body[i]
         if line.startswith("|"):
             cells = _cells(line)
             if [c.lower() for c in cells[: len(want)]] == want:
+                _require_delimiter(body, i, len(cells), where)
                 rows: list[list[str]] = []
-                j = i + 1
+                j = i + 2
                 while j < len(body) and body[j].startswith("|"):
-                    cells_j = _cells(body[j])
-                    if not _is_separator(cells_j):
-                        rows.append(cells_j)
+                    rows.append(_cells(body[j]))
                     j += 1
                 if not rows:
-                    raise Refused(f"DRS §7.5 {label}: header present but no rows")
+                    raise Refused(f"{where}: header present but no rows")
                 return rows
         i += 1
-    raise Refused(f"DRS §7.5 {label}: no table with header {header!r} — subject missing")
+    raise Refused(f"{where}: no table with header {header!r} — subject missing")
 
 
 def _int(cell: str, where: str) -> int:
@@ -372,13 +415,23 @@ def check_table2(body: list[str], d: Derived, errors: list[str]) -> None:
     rows = find_table(body, TABLE2_HEADER, "table 2")
     doc: dict[str, int] = {}
     for cells in rows:
+        if len(cells) < 4:
+            errors.append(f"table 2: row {cells!r} has fewer than 4 cells")
+            continue
         m = ROW_ID.match(cells[0])
         if not m:
             errors.append(f"table 2: first cell {cells[0]!r} is not a CEN- id")
             continue
-        if m.group(1) in doc:
-            errors.append(f"table 2: {m.group(1)} listed twice")
-        doc[m.group(1)] = _int(cells[1], f"table 2 {m.group(1)} b")
+        rid = m.group(1)
+        if rid in doc:
+            errors.append(f"table 2: {rid} listed twice")
+        doc[rid] = _int(cells[1], f"table 2 {rid} b")
+        if not ARRIVES_RE.search(cells[3]):
+            errors.append(
+                f"table 2 {rid}: `arrives with` {cells[3]!r} names no increment "
+                "(`**E<n> S-<SURFACE>**` or `**E<n> increment <k>**`) — a live "
+                "surface-bound row arrives somewhere"
+            )
     extra = sorted(set(doc) - set(d.live_bound))
     missing = sorted(set(d.live_bound) - set(doc))
     if extra:
@@ -399,6 +452,9 @@ def check_table3(body: list[str], d: Derived, errors: list[str]) -> None:
     rows = find_table(body, TABLE3_HEADER, "table 3")
     doc: dict[str, list[int]] = {}
     for cells in rows:
+        if len(cells) < 5:
+            errors.append(f"table 3: row {cells!r} has fewer than 5 cells")
+            continue
         m = SUBSYSTEM_TOKEN.match(cells[0])
         if not m:
             errors.append(f"table 3: subsystem cell {cells[0]!r} does not start with `4.X`")
@@ -561,8 +617,8 @@ Consensus **enforced** (bucket ≠ 3) = 4 = **2 bound + 2 free**.
 
 | row | b | store site (per census) | arrives with |
 | --- | --- | --- | --- |
-| CEN-L1 | 2 | `spent_keys` | E1 |
-| CEN-L3 | 4 | belt | E1 |
+| CEN-L1 | 2 | `spent_keys` | **E1 S-CHAIN-W** — belt `SI-1` |
+| CEN-L3 | 4 | belt | mechanism **E1 increment 2.5**; semantics **E4 S-ARCH** |
 
 **Table 3**
 
@@ -661,8 +717,14 @@ def selftest() -> None:
     )
 
     # doc drifts
-    p.refusal(_CENSUS_OK, _DOC_OK.replace("| CEN-L3 | 4 | belt | E1 |\n", ""), "missing live surface-bound", "table 2 drops a row")
+    l3_row = "| CEN-L3 | 4 | belt | mechanism **E1 increment 2.5**; semantics **E4 S-ARCH** |\n"
+    p.refusal(_CENSUS_OK, _DOC_OK.replace(l3_row, ""), "missing live surface-bound", "table 2 drops a row")
     p.refusal(_CENSUS_OK, _DOC_OK.replace("| CEN-L1 | 2 |", "| CEN-L1 | 1 |"), "table 2 CEN-L1", "table 2 wrong bucket")
+    # a live row must arrive at a named increment, not "later" and not nowhere
+    p.refusal(_CENSUS_OK, _DOC_OK.replace(l3_row, "| CEN-L3 | 4 | belt | later, once R8b-3 names it |\n"), "names no increment", "table 2 row arrives nowhere")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace(l3_row, "| CEN-L3 | 4 | belt | E1 |\n"), "names no increment", "table 2 increment not in the token grammar")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace(l3_row, "| CEN-L3 | 4 |\n"), "fewer than 4 cells", "table 2 truncated row")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace("| 4.A Acceptance topology | 1 | 1 | 0 | 2 | slice 1 |", "| 4.A Acceptance topology | 1 | 1 |"), "fewer than 5 cells", "table 3 truncated row")
     p.refusal(_CENSUS_OK, _DOC_OK.replace("| 4.A Acceptance topology | 1 | 1 | 0 | 2 |", "| 4.A Acceptance topology | 2 | 0 | 0 | 2 |"), "table 3 4.A", "table 3 wrong split")
     p.refusal(_CENSUS_OK, _DOC_OK.replace("= 4 = **2 bound + 2 free**", "= 4 = **3 bound + 1 free**"), "derived-totals", "totals sentence stale")
     p.refusal(_CENSUS_OK, _DOC_OK.replace("`blockchain_db|db_lmdb|src/blockchain_db|lmdb/`", "`blockchain_db`"), "quote the bound regex", "regex not quoted")
@@ -691,6 +753,17 @@ def selftest() -> None:
     p.refusal(_CENSUS_OK.replace("### 4.L Storage layer", "```\n### 4.L Storage layer"), _DOC_OK, "code fence is left open", "open fence in the census")
     p.refusal(_CENSUS_OK, _DOC_OK.replace("**Table 2**", "```\n**Table 2**"), "code fence is left open", "open fence in the DRS doc")
     p.refusal(_CENSUS_OK, _DOC_OK.replace("| C | free | 1 | 1 | 0 | 0 | 2 |\n", "| C | free | 1 | 1 | 0 | 0 | 2 |\n| C | free | 1 | 1 | 0 | 0 | 2 |\n"), "listed twice", "table 1 duplicate row")
+
+    # a header is a table only with its GFM delimiter row directly beneath, of the
+    # same width — otherwise Markdown renders a paragraph and the rows are not on
+    # the page. Both documents, and a second separator-looking line is data.
+    t2_delim = "| row | b | store site (per census) | arrives with |\n| --- | --- | --- | --- |\n"
+    p.refusal(_CENSUS_OK, _DOC_OK.replace(t2_delim, "| row | b | store site (per census) | arrives with |\n"), "not followed by a GFM delimiter", "DRS table header without its delimiter row")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace(t2_delim, "| row | b | store site (per census) | arrives with |\n| --- | --- | --- |\n"), "delimiter row has 3 cells", "DRS delimiter row narrower than its header")
+    p.refusal(_CENSUS_OK, _DOC_OK.replace(t2_delim, "| row | b | store site (per census) | arrives with |\n\n| --- | --- | --- | --- |\n"), "not followed by a GFM delimiter", "DRS delimiter row not directly beneath the header")
+    p.refusal(_CENSUS_OK.replace("| --- | --- | --- | --- | --- | --- | --- | --- |\n| CEN-L1", "| CEN-L1"), _DOC_OK, "not followed by a GFM delimiter", "census table header without its delimiter row")
+    p.refusal(_CENSUS_OK.replace("| --- | --- | --- | --- | --- | --- | --- | --- |\n| CEN-L1", "| --- | --- | --- | --- | --- | --- | --- |\n| CEN-L1"), _DOC_OK, "delimiter row has 7 cells", "census delimiter row narrower than its header")
+    p.refusal(_CENSUS_OK.replace("| CEN-A2 | height |", "| --- | --- | --- | --- | --- | --- | --- | --- |\n| CEN-A2 | height |"), _DOC_OK, "is not a `CEN-` row id", "a second separator-looking line is a data row, refused not skipped")
 
     # §5's bound row must not leak into the §4 derivation
     leaked = _CENSUS_OK.replace("## 5. Dead surfaces", "### 4.Z Leak")

@@ -381,17 +381,22 @@ jobs:
 
       - name: Run DRS-E6 surface-partition gate
         # DAEMON_REDB_STORE.md §7.5 is a dated derivation over the census:
-        # rows by flag × surface × bucket, the twelve live surface-bound
-        # consensus rows and the increment each arrives with, the surface-free
-        # rows per subsystem, and the headline `N of M` phrases. A census row
-        # that moves bucket or gains/loses a store citation moves the schedule
-        # and the completeness gate's denominators; this re-derives every
-        # figure from CONSENSUS_RULE_CENSUS.md §4 and fails on any difference,
-        # printing the derivation. The bound/free regex is quoted verbatim in
-        # §7.5 and checked, so the doc and the gate define "surface-bound"
-        # once. Subject asserted: an empty census, a §4 header missing a read
-        # column, zero bound rows, or a missing §7.5 table is a failure.
-        # Instance of 47-gate-subject-assertion.mdc.
+        # rows by flag × surface × bucket (table 1), the set of live
+        # surface-bound consensus rows and each row's bucket (table 2), the
+        # surface-free rows per subsystem (table 3), and the headline `N of M`
+        # phrases. A census row that moves bucket or gains/loses a store
+        # citation moves the schedule and the completeness gate's
+        # denominators; this re-derives every figure from
+        # CONSENSUS_RULE_CENSUS.md §4 and fails on any difference, printing
+        # the derivation. Table 2's `store site` gloss and *which* increment a
+        # row arrives with are rulings the doc owns, not derivations — the gate
+        # asserts only that every live row names an increment, so none
+        # "arrives nowhere". The bound/free regex is quoted verbatim in §7.5
+        # and checked, so the doc and the gate define "surface-bound" once.
+        # Subject asserted: an empty census, a §4 header missing a read
+        # column, a header without its GFM delimiter row (no table renders),
+        # zero bound rows, or a missing §7.5 table is a failure. Instance of
+        # 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_drs_e6_partition.py
 
