@@ -41,6 +41,9 @@ pub const SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_CAP: u8 = 2;
 /// Order coverage rows. Writes `in_len` ranked rows to `out_ptr` when
 /// `out_cap >= in_len`. `out_len` is always written on OK.
 ///
+/// Input rows are copied before the mutable output slice is formed, so
+/// overlapping `in_ptr`/`out_ptr` is defined (C++ may reuse one buffer).
+///
 /// # Safety
 ///
 /// `in_ptr`/`out_ptr`/`out_len` must be valid for the stated lengths, or
@@ -66,22 +69,28 @@ pub unsafe extern "C" fn shekyl_archival_order_shard_coverage(
         return SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_CAP;
     }
 
-    let Some(inputs) = (unsafe { crate::legacy_util::slice_from_typed_ptr(in_ptr, in_len) }) else {
-        return SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_MARSHAL;
+    // Copy first: forming `&[In]` and `&mut [Out]` over overlapping
+    // regions at once is aliasing UB even when the caller reused one
+    // allocation.
+    let rows: Vec<ShardCoverageIn> = {
+        let Some(inputs) = (unsafe { crate::legacy_util::slice_from_typed_ptr(in_ptr, in_len) })
+        else {
+            return SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_MARSHAL;
+        };
+        inputs
+            .iter()
+            .map(|r| ShardCoverageIn {
+                shard_id: r.shard_id,
+                bonded_count: r.bonded_count,
+                served_count: r.served_count,
+                freeze_height: r.freeze_height,
+            })
+            .collect()
     };
     let Some(out) = (unsafe { crate::legacy_util::slice_from_typed_ptr_mut(out_ptr, in_len) })
     else {
         return SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_MARSHAL;
     };
-    let rows: Vec<ShardCoverageIn> = inputs
-        .iter()
-        .map(|r| ShardCoverageIn {
-            shard_id: r.shard_id,
-            bonded_count: r.bonded_count,
-            served_count: r.served_count,
-            freeze_height: r.freeze_height,
-        })
-        .collect();
     let ranked = order_shard_coverage(tip_height, budget_atomic, sigma_work_milli, &rows);
     debug_assert_eq!(ranked.len(), in_len);
 
@@ -164,5 +173,47 @@ mod tests {
             )
         };
         assert_eq!(rc, SHEKYL_ARCHIVAL_SHARD_COVERAGE_ERR_MARSHAL);
+    }
+
+    #[test]
+    fn overlapping_in_out_is_defined_after_copy() {
+        // One Out row is larger than In; aliasing the first four words
+        // as the input is the overlap the copy-before-mut path exists
+        // to make defined.
+        let mut out = [ShekylArchivalShardCoverageOut {
+            shard_id: 0,
+            bonded_count: 0,
+            served_count: 0,
+            freeze_height: 0,
+            join_scarcity_micro: 0,
+            expected_profit_atomic: 0,
+        }; 1];
+        unsafe {
+            out.as_mut_ptr()
+                .cast::<ShekylArchivalShardCoverageIn>()
+                .write(ShekylArchivalShardCoverageIn {
+                    shard_id: 7,
+                    bonded_count: 0,
+                    served_count: 0,
+                    freeze_height: 1_000,
+                });
+        }
+        let mut n = 0usize;
+        let rc = unsafe {
+            shekyl_archival_order_shard_coverage(
+                50_000,
+                1_000_000,
+                1_000,
+                out.as_ptr().cast(),
+                1,
+                out.as_mut_ptr(),
+                out.len(),
+                std::ptr::from_mut(&mut n),
+            )
+        };
+        assert_eq!(rc, SHEKYL_ARCHIVAL_SHARD_COVERAGE_OK);
+        assert_eq!(n, 1);
+        assert_eq!(out[0].shard_id, 7);
+        assert_eq!(out[0].freeze_height, 1_000);
     }
 }
