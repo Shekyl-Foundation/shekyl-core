@@ -468,7 +468,16 @@ after    C [86, 40, 11, 27] = 164    P [1, 4, 0, 4] = 9     total 173
 | consensus ratified / `E` | 125 / 159 | **126 / 153** | gate output |
 | consensus unratified (bucket 4, C) | 34 | **27** | §9.5 |
 | policy ratified / `E` | 5 / 9 | 5 / 9 | unchanged |
-| UNREVIEWED in the CSR register | 27 | **28** (CEN-L1 added) | census §1, CSR §5.4.1 |
+| CSR register tally (CONFORMANT / DIVERGENT / UNREVIEWED) | 126 / 2 / 2 | **126 / 2 / 3** (CEN-L1 born UNREVIEWED) | CSR §5.4.1 tally comment; `check_conformance_coverage.py` derives it |
+
+**A stale figure found while re-deriving.** Census §1 read *"twenty-seven of
+them are UNREVIEWED until P0f reviews them"* at the pin. The register's own
+count was 2 (CEN-L8 failed closed, CEN-I19 re-amended by PL-D3): P0f slices 9
+and 10 closed the 27-row backlog on 2026-09-11 at `eb1b60198` (CSR §5.4.1,
+"the backlog closes"), and the census sentence — which asserts-is, not
+records-was — was not re-derived. Corrected in this PR with the derivation
+named, per rule 91's sweep; the register is the owner of that figure, the
+census header a quotation of it.
 
 Every cell the PR moves is in §7.1's last column; the row-level `UPDATE` in
 the census carries this doc's section. The gate follows silently; the
