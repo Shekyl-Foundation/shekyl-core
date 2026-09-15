@@ -94,12 +94,6 @@ impl FamilySet {
             .filter(move |f| self.contains(*f))
     }
 
-    /// The raw bits. For the store's atomic mirror of the provenance cell;
-    /// the encoding proper is [`Canonical`].
-    pub(crate) const fn bits(self) -> u32 {
-        self.0
-    }
-
     /// The set whose bits these are, if every set bit names a family.
     pub(crate) const fn from_bits(bits: u32) -> Option<Self> {
         if bits & !VALID_BITS == 0 {

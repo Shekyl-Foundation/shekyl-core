@@ -227,19 +227,21 @@ impl ChainStore {
     /// # The mirror is exact, and why
     ///
     /// The cell only ever widens, and only a committed stubbed batch widens
-    /// it. While this handle is live no other handle can commit: redb holds
-    /// an exclusive `flock` on the file for the life of a writable
-    /// `Database` and a shared one for a read-only handle
-    /// (`redb-4.1.0/src/tree_store/page_store/file_backend/optimized.rs:27`,
-    /// read at the pinned source), so a second writable open — from this
-    /// process or another — is refused with
-    /// [`redb::DatabaseError::DatabaseAlreadyOpen`] rather than admitted,
-    /// and a read-only handle excludes every writer for as long as it
-    /// exists. The value this method returns is therefore the file's value,
-    /// not a cached approximation of it. Platforms where the lock is
-    /// `Unsupported` (none the daemon targets; redb proceeds unlocked and
-    /// warns) inherit redb's own contract that the operator keeps one
-    /// process on the file.
+    /// it. Two locks make the in-memory copy the file's value:
+    ///
+    /// - **Across handles.** redb holds an exclusive `flock` on the file for
+    ///   the life of a writable `Database` and a shared one for a read-only
+    ///   handle (`redb-4.1.0/src/tree_store/page_store/file_backend/optimized.rs:27`,
+    ///   read at the pinned source). A second writable open — this process
+    ///   or another — is [`redb::DatabaseError::DatabaseAlreadyOpen`]; a
+    ///   read-only handle excludes every writer for as long as it exists.
+    ///   Platforms where the lock is `Unsupported` (none the daemon targets;
+    ///   redb proceeds unlocked and warns) inherit redb's own contract that
+    ///   the operator keeps one process on the file.
+    /// - **Inside this handle.** `WriteBatch::commit` holds a write lock on
+    ///   the mirror across the engine commit and the assignment. This method
+    ///   takes the matching read lock, so a concurrent stamp cannot see the
+    ///   file as tainted while the mirror still says [`Provenance::FULL`].
     #[must_use]
     pub fn provenance(&self) -> Provenance {
         self.shared.provenance()

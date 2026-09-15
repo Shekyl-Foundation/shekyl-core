@@ -264,13 +264,16 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
 // ------------------------------------------------ one file, one writer
 //
 // `provenance()` mirrors the file's `apply_policy` cell and claims the
-// mirror is exact. The claim rests on redb's file lock: exclusive for a
-// writable handle, shared for a read-only one. `flock` locks are per open
-// file description, so a second open in THIS process contends exactly as a
-// second process would, which is what lets the property be tested here
-// without spawning one. THESE BITE AGAINST: a redb bump that drops or
-// relaxes the lock, or an `open` path in this crate that stops going
-// through redb's locked backend.
+// mirror is exact. Across handles the claim rests on redb's file lock:
+// exclusive for a writable handle, shared for a read-only one. `flock`
+// locks are per open file description, so a second open in THIS process
+// contends exactly as a second process would, which is what lets the
+// property be tested here without spawning one. Inside one handle, commit
+// holds a write lock on the mirror across the engine commit and the
+// assignment (`shared.rs`). THESE BITE AGAINST: a redb bump that drops or
+// relaxes the flock, an `open` path in this crate that stops going through
+// redb's locked backend, or a commit path that assigns the mirror without
+// holding that write lock.
 
 fn is_already_open(result: &Result<ChainStore, StoreError>) -> bool {
     matches!(

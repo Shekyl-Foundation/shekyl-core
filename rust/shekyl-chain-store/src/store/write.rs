@@ -200,10 +200,13 @@ impl<'store> WriteBatch<'store> {
     pub fn commit(mut self) -> Result<Provenance, StoreError> {
         let txn = take_txn(&mut self.txn);
         let provenance = header::widen(&txn, self.apply_policy)?;
+        // The file is tainted at `commit`; the mirror is tainted by the
+        // assignment. Hold the publish lock across both so `provenance()`
+        // cannot observe one without the other. A failed commit never
+        // assigns, so the mirror cannot over-taint.
+        let mut mirror = self.shared.lock_publish();
         txn.commit().map_err(StoreError::Commit)?;
-        // Mirror only after the engine has committed: a failed commit must
-        // not leave the in-memory record more tainted than the file.
-        self.shared.taint(provenance);
+        *mirror = provenance;
         Ok(provenance)
     }
 
