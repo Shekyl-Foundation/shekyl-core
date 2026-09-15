@@ -1,9 +1,13 @@
 # RandomX v2 — Rust verifier + C miner
 
-**Status.** **DRAFT — Round 0 (initial draft, 2026-05-16).** Phase 0
+**Status:** LIVING CONTRACT (last-verified 2026-09-15). Phase 0
 deliverable for the RandomX v2 Rust port. Companion:
-[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Both documents
-must pass the Phase 0 review cycle before any code lands.
+[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Phase 0
+discharged by Phase 1 landing PR #54 merge
+`c0c4a11e59145a304690589d0856827907b5985b` (2026-05-19); the
+"must pass the Phase 0 review cycle before any code lands" gate
+is discharged at that SHA. Phase 4 deletion of `IPowSchema` /
+`pow_registry` landed 2026-09-15.
 
 **Scope.** Shekyl's target proof-of-work is RandomX v2 from the
 Shekyl-Foundation RandomX fork. Verification is a Rust pure-software

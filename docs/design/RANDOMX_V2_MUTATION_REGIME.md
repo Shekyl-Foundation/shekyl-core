@@ -1,7 +1,7 @@
 # RandomX v2 — mutation-regime redesign (T18 execution shape)
 
 
-**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
+**Status:** OPEN (round 1 CLOSED 2026-08-18; items 2–3 remain design-gated). See front-matter table.
 ## Front-matter
 
 | Field | Value |

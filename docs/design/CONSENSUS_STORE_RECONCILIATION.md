@@ -16,9 +16,12 @@ ten on 2026-09-03/04, then CEN-I19 minted 2026-09-06), which is also why the
 register's 102-row denominator is a dated snapshot rather than the live set.
 **Every current figure is re-derived from the census's own row column, never
 carried forward from this paragraph** — the commands are in
-[`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §3. The **18-row store-enforced set and its 7 / 1 / 10
-bucket split are unchanged** (re-derived mechanically at the later sha); every
-aggregate below is stated in whichever denominator it belongs to.
+[`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §3. The **18-row
+store-enforced set with its 7 / 1 / 10 bucket split is the 2026-09-01 figure**
+and R8's batch; the live set is **19** — CEN-I19 joined 2026-09-06 (§2) — and is
+re-derived by `scripts/ci/check_drs_e6_partition.py --describe`, never carried
+from here; every aggregate below is stated in whichever denominator it belongs
+to.
 
 **Identifier family:** `CSR-*` (registered at birth, rule 94 §1; prefix checked
 tree-wide — zero hits before this document — and unique against every
@@ -132,13 +135,18 @@ against a file the first one reshaped.
 ## 2. The overlap, measured
 
 Of the census's **171** rows (at 2026-09-01; **173** at 2026-09-14 after the
-CEN-K1 split and the CEN-I19 mint), **18** have an enforcement site inside
-`src/blockchain_db/` — the store DRS replaces. The eighteen are the same rows
-throughout; their buckets moved:
+CEN-K1 split and the CEN-I19 mint), **18** had an enforcement site inside
+`src/blockchain_db/` at 2026-09-01 — surfaces the store DRS replaces — and
+that eighteen is R8's batch. **CEN-I19's mint (2026-09-06) made the live set
+19**: its `src/blockchain_db/blockchain_db.cpp:528` collector abort is unreachable, R8 did not
+rule it, and DRS-E3's typed `0x07` entry dissolves it
+([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 table 2). The live figure
+is re-derived (`scripts/ci/check_drs_e6_partition.py --describe`), never
+carried from this table, which tracks the eighteen; their buckets moved:
 
 | Bucket | Rows at 2026-09-01 (records-was) | Rows after C2-R8, 2026-09-14 (current) | Meaning |
 | --- | --- | --- | --- |
-| **1** (Shekyl-spec'd, ratified) | 7 — CEN-H5, L7, L8, L9, L10, L11, L12 | 7 — unchanged | the rewrite consumes the spec directly |
+| **1** (Shekyl-spec'd, ratified) | 7 — CEN-H5, L7, L8, L9, L10, L11, L12 | 7 — unchanged (**CEN-I19**, bucket 1 since 2026-09-06, sits outside this batch: 8 live) | the rewrite consumes the spec directly |
 | **2** (ratified by a round) | 0 | 2 — CEN-K3 (C2-R1c, 2026-09-04), **CEN-L1** (C2-R8: the intra-block key-image rule, born UNREVIEWED in §5.4.1) | the validator implements the ratified text; the store keeps a belt at most |
 | **3** (delete / dissolve) | 1 — CEN-L15 | 7 — CEN-L15, **L2, L3, L4, L5, L6, L13** (C2-R8: absorbed into an existing rule, dissolved into a type, or re-homed as a store invariant `SI-n` in [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)) | not consensus rules; nothing to port as a rule |
 | **4** (open question) | 10 — CEN-B3, K3, L1, L2, L3, L4, L5, L6, L13, L14 | 2 — CEN-B3 (R4's), **CEN-L14** (arm C of R8's test: mechanism ruled — insert-vs-upsert, no silent overwrite — semantics routed to **R8b-3…7**) | **must be ruled before the surface that carries them is designed** |

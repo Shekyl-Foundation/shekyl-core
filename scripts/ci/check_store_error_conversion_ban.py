@@ -35,19 +35,26 @@
 # and false-negatives on a differently-named verdict (`BlockVerdict`). A
 # PR that mints a second validation-crate verdict type adds it here.
 #
-# Clauses 1 and 2 are live at birth. Clause 3 is armed and has no verdict
-# type to match until the validation crate lands; the gate REPORTS how many
-# verdict-type definitions it found so "clean" cannot be mistaken for
-# "checked". Zero is the birth state, not a silent pass: the printed count
-# is the subject assertion (rule 47). The PR that mints `InvalidBlock` MUST
-# turn `verdict_defs == 0` into a failure — that is when the subject exists.
-# Requiring >= 1 now would red a gate whose subject has not been born, and
-# would block the ruling. Falsify that carrier by the minting PR's diff
-# containing the raise.
+# SUBJECT. All three clauses are live. The gate asserts the *canonical*
+# definition: `pub struct InvalidBlock` in
+# `rust/shekyl-chain-rules/src/verdict.rs`. Counting any `struct|enum
+# InvalidBlock` anywhere under rust/ is vacuous — a private test fixture
+# would keep clause 3 green after the real type disappeared (rule 47).
+# If the file moves or the type is renamed, the refusal names VERDICT_FILE
+# and VERDICT_TOKEN.
+#
+# Records-was (2026-09-14 → 2026-09-15). At birth clauses 1–2 were live and
+# clause 3 was ARMED: `verdict_defs == 0` was the birth state, printed and
+# not refused, because requiring >= 1 would have redded a gate whose subject
+# had not been minted. The carrier was "the PR that mints `InvalidBlock`
+# turns zero into a failure"; DRS-E6 increment 1 minted it and raised the
+# gate in the same PR (CHAIN_RULES_CRATE.md §7).
 #
 # Instance of 47-gate-subject-assertion.mdc: the gate first parses
-# `pub enum StoreError` with >= 1 variant and counts the .rs files it walked;
-# zero of either is a failure, because a ban over an empty tree passes.
+# `pub enum StoreError` with >= 1 variant, counts the .rs files it walked,
+# and counts verdict-type definitions; zero of any is a failure, because a
+# ban over an empty tree — or over a tree with nothing to convert *to* —
+# passes.
 from __future__ import annotations
 
 import importlib.util
@@ -60,6 +67,8 @@ ROOT = Path(__file__).resolve().parents[2]
 RUST = ROOT / "rust"
 STORE_CRATE = RUST / "shekyl-chain-store"
 STORE_ERROR_FILE = STORE_CRATE / "src/store/error.rs"
+VERDICT_FILE = RUST / "shekyl-chain-rules" / "src" / "verdict.rs"
+VERDICT_REL = VERDICT_FILE.relative_to(RUST)
 SELF = Path(__file__).resolve()
 STRIPPER = ROOT / "scripts" / "ci" / "strip_c_comments.py"
 
@@ -67,7 +76,7 @@ STORE_TOKEN = r"(?:StoreError|StoreInvariant|InvariantViolated|StoreCannot)"
 VERDICT_TOKEN = r"InvalidBlock"
 STORE_RE = re.compile(rf"\b{STORE_TOKEN}\b")
 VERDICT_RE = re.compile(rf"\b{VERDICT_TOKEN}\b")
-VERDICT_DEF_RE = re.compile(rf"\b(?:enum|struct)\s+{VERDICT_TOKEN}\b")
+VERDICT_DEF_RE = re.compile(rf"\bpub\s+struct\s+{VERDICT_TOKEN}\b")
 STORE_ENUM_RE = re.compile(r"pub\s+enum\s+StoreError\s*\{(.*?)\n\}", re.S)
 VARIANT_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9]*)\s*(?:[,({]|$)", re.M)
 # `impl From<A> for B`, `impl Into<B> for A`, `impl TryFrom<A> for B`,
@@ -125,6 +134,27 @@ def assert_subject(rust_root: Path, error_file: Path) -> int:
     if n == 0:
         raise GateError("subject absent: StoreError parsed with zero variants")
     return n
+
+
+def assert_verdict_subject(rust_root: Path) -> None:
+    """The canonical `pub struct InvalidBlock` must exist where it was minted.
+
+    A same-named type anywhere else — a test fixture, a private alias, an
+    enum — is not the API this gate protects.
+    """
+    verdict = rust_root / VERDICT_REL
+    if not verdict.is_file():
+        raise GateError(
+            f"subject absent: no public struct {VERDICT_TOKEN} in {VERDICT_REL} "
+            "(file not found) — if it moved, update VERDICT_FILE"
+        )
+    text = strip_comments(verdict.read_text(encoding="utf-8"))
+    if VERDICT_DEF_RE.search(text) is None:
+        raise GateError(
+            f"subject absent: no public struct {VERDICT_TOKEN} in {VERDICT_REL} — "
+            "InvalidBlock was minted as `pub struct` there; if it moved or was "
+            "renamed, update VERDICT_FILE / VERDICT_TOKEN"
+        )
 
 
 def blank_strings(src: str) -> str:
@@ -247,15 +277,14 @@ def _match_arms(src: str, line_offset: int) -> list[tuple[str, str, int]]:
 
 def check(rust_root: Path, store_crate: Path, error_file: Path, exclude: set[Path] = frozenset()) -> str:
     n_variants = assert_subject(rust_root, error_file)
+    assert_verdict_subject(rust_root)
     files = [p for p in rust_files(rust_root) if p not in exclude]
     if not files:
         raise GateError("subject absent: no .rs files walked")
     findings: list[str] = []
-    verdict_defs = 0
     for path in files:
         text = blank_strings(strip_comments(path.read_text(encoding="utf-8")))
         rel = path.relative_to(rust_root)
-        verdict_defs += len(VERDICT_DEF_RE.findall(text))
         in_store = store_crate in path.parents
         # clause 2
         if in_store:
@@ -287,13 +316,17 @@ def check(rust_root: Path, store_crate: Path, error_file: Path, exclude: set[Pat
         raise GateError("conversion ban violated:\n" + "".join(f"  {f}\n" for f in findings))
     return (
         f"store-error conversion ban: StoreError {n_variants} variants, {len(files)} files walked, "
-        f"clauses 1-2 clean; clause 3 armed against {verdict_defs} verdict-type definition(s)"
+        f"canonical pub struct {VERDICT_TOKEN} in {VERDICT_REL}; clauses 1-3 clean"
     )
 
 
 # --- selftest ----------------------------------------------------------------
 
 STORE_ERR = "pub enum StoreError {\n    Open,\n    CellCorrupt { key: u8 },\n}\n"
+# The verdict type, where the real one lives. Every fixture carries it unless
+# the case is about its absence: without it the gate refuses on subject before
+# any clause is reached, so a clause case could not be red for its own reason.
+VERDICT_DEF = "pub struct InvalidBlock {\n    pub rule: u8,\n}\n"
 
 
 def selftest() -> None:
@@ -304,12 +337,17 @@ def selftest() -> None:
         sys.exit(1)
 
     fails: list[str] = []
+    cases = 0
 
-    def run(name: str, files: dict[str, str], needle: str | None) -> None:
+    def run(name: str, files: dict[str, str], needle: str | None, *, verdict: bool = True) -> None:
+        nonlocal cases
+        cases += 1
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "rust"
             crate = root / "shekyl-chain-store"
             err = crate / "src/store/error.rs"
+            if verdict:
+                files = {D: VERDICT_DEF, **files}
             for rel, body in files.items():
                 p = root / rel
                 p.parent.mkdir(parents=True, exist_ok=True)
@@ -325,11 +363,48 @@ def selftest() -> None:
                     fails.append(f"{name}: red for the wrong reason: {e}")
 
     E = "shekyl-chain-store/src/store/error.rs"
-    V = "shekyl-validator/src/verdict.rs"
-    run("clean tree", {E: STORE_ERR, V: "pub struct InvalidBlock;\nfn f() {}\n"}, None)
+    D = "shekyl-chain-rules/src/verdict.rs"
+    V = "shekyl-chain-rules/src/validate.rs"
+    run("clean tree", {E: STORE_ERR, V: "fn f() {}\n"}, None)
     run("subject: no error.rs", {V: "fn f() {}\n"}, "not found")
     run("subject: enum absent", {E: "pub struct Other;\n"}, "not parsed")
     run("subject: zero variants", {E: "pub enum StoreError {\n}\n"}, "zero variants")
+    run(
+        "subject: no verdict definition",
+        {E: STORE_ERR, V: "fn f() {}\n"},
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
+    run(
+        "subject: commented-out verdict definition does not count",
+        {E: STORE_ERR, V: "/* pub struct InvalidBlock; */\nfn f() {}\n"},
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
+    run(
+        "subject: enum-shaped definition in another file does not substitute",
+        {E: STORE_ERR, V: "pub enum InvalidBlock {\n    A,\n}\n"},
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
+    run(
+        "subject: enum-shaped definition in the canonical file is not the struct",
+        {E: STORE_ERR, D: "pub enum InvalidBlock {\n    A,\n}\n"},
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
+    run(
+        "subject: private struct in the canonical file does not count",
+        {E: STORE_ERR, D: "struct InvalidBlock {\n    pub rule: u8,\n}\n"},
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
+    run(
+        "subject: a pub struct elsewhere does not substitute for the canonical file",
+        {E: STORE_ERR, V: "pub struct InvalidBlock {\n    pub rule: u8,\n}\n"},
+        "no public struct InvalidBlock",
+        verdict=False,
+    )
     run(
         "clause 1: From store->verdict",
         {
@@ -446,7 +521,7 @@ def selftest() -> None:
         for f in fails:
             print(f"  {f}", file=sys.stderr)
         sys.exit(1)
-    print("store-error conversion-ban selftest: 24 cases held")
+    print(f"store-error conversion-ban selftest: {cases} cases held")
 
 
 def main() -> None:

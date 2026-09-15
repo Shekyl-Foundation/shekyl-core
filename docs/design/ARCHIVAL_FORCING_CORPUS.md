@@ -382,19 +382,20 @@ The landed surface, in `rust/shekyl-chain-store`:
 
 - `ApplyPolicy::{Full, StubbedFamilies(FamilySet)}` via `with_apply_policy`
   is the **session's intent**: `applies(family)` is what `WriteBatch` consults
-  to refuse a stubbed family's table (`StoreError::FamilyStubbed`). An empty
+  to refuse a stubbed family's table (`StoreCannot::FamilyStubbed`). An empty
   stub is rejected at construction. `ArchivalFamily` carries **17** variants,
   one per `archival_*` table, with `table()` giving the X-macro name and `ALL`
   in macro order; `FamilySet` is the `Copy` bitset over them.
 - `Provenance` is the **file's history**: the union of every committed batch's
   stubbed set, persisted in the `properties` cell `apply_policy` and widened
-  **inside the batch's own transaction** — so abort and drop leave no taint, a
-  stubbed commit with zero rows still taints (the event is the commit under a
-  stub, not the row count), and a later `Full` session reads and cannot narrow
-  it. `is_parity_evidence()` is false for any non-empty union;
-  `artifact_stamp()` carries `NOT-PARITY-EVIDENCE`. `ChainStore::provenance()`
-  reports it on writable **and read-only** handles, and `WriteBatch::commit`
-  returns the widened record.
+  **inside the batch's own transaction** — so a closure `Err` (which aborts
+  the batch) and drop leave no taint, a stubbed commit with zero rows still
+  taints (the event is the commit under a stub, not the row count), and a
+  later `Full` session reads and cannot narrow it. `is_parity_evidence()` is
+  false for any non-empty union; `artifact_stamp()` carries
+  `NOT-PARITY-EVIDENCE`. `ChainStore::provenance()` reports it on writable
+  **and read-only** handles; a committing `ChainStore::write` publishes the
+  widened record to that mirror under the same lock as the engine commit.
 
 Why the split: the stamp's subject is *whether redb's apply ran for the rows
 this file holds*, and a session's policy cannot answer that for rows an earlier

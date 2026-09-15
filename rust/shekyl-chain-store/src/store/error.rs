@@ -3,7 +3,30 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Typed failures for the S-TXN surface.
+//! Typed failures for the S-TXN surface, **classed**.
+//!
+//! C2-R8 Q2 (§3.1) rules three error classes for the store, and the class is
+//! the thing a caller acts on: an invariant violation halts connect, a
+//! refusal is retried or handed to the operator, an engine failure is
+//! neither. So the class is **structural** — the outer variant of
+//! [`StoreError`] — rather than a table beside the code. A `match` on
+//! `StoreError` cannot forget a class, [`StoreError::class`] is a projection
+//! rather than a judgement, and `STORE_INVARIANT_REGISTER.md` §3 is read off
+//! these three enums instead of maintained against them.
+//!
+//! - [`EngineError`] — the redb layer failed and the operation did not
+//!   happen. Nothing about the store's contents is implied.
+//! - [`StoreCannot`] — a refusal **before** the write: a capability the
+//!   store does not have in this session or for this file. Not a verdict on
+//!   any block; not incoherence. Whether it is retryable is per variant, and
+//!   [`StoreCannot::WriteInProgress`] in particular is not.
+//! - [`StoreInvariant`] — an `SI-` row broke at the write. Fatal; the
+//!   validator has a hole or the file is corrupt.
+//!
+//! No variant is a consensus verdict and none ever will be: this crate does
+//! not name the verdict type (conversion-ban clause 2,
+//! `check_store_error_conversion_ban.py`), and the invariant arm is never
+//! caught and re-shaped into one (clause 3).
 //!
 //! One variant per condition a caller can act on. The C++ layer raises one
 //! `DB_ERROR` for twenty-two conditions and a `std::runtime_error` for two
@@ -11,14 +34,100 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use crate::codec::{CodecError, SchemaVersion};
+use crate::codec::SchemaVersion;
 
-/// Why a store operation failed.
+pub use super::invariant::{CellFault, StoreInvariant};
+
+/// Why a store operation failed, by class.
+///
+/// The outer variant is the class. Each inner type is self-describing in its
+/// `Display`, so this wrapper is transparent: it adds no message and no
+/// `source` link of its own.
 #[derive(Debug)]
 pub enum StoreError {
+    /// The engine failed; the operation did not happen.
+    Engine(EngineError),
+    /// The store refused before writing; nothing is implied about the file
+    /// or the block.
+    Cannot(StoreCannot),
+    /// A store invariant broke at the write. **Fatal.** The variant names
+    /// the `SI-` row; the caller halts, it does not convert.
+    InvariantViolated(StoreInvariant),
+}
+
+/// The three classes, for a caller that acts on the class and not the
+/// variant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// [`StoreError::Engine`].
+    Engine,
+    /// [`StoreError::Cannot`].
+    Cannot,
+    /// [`StoreError::InvariantViolated`].
+    Invariant,
+}
+
+impl StoreError {
+    /// Which of the three classes this failure is.
+    #[must_use]
+    pub const fn class(&self) -> ErrorClass {
+        match self {
+            Self::Engine(_) => ErrorClass::Engine,
+            Self::Cannot(_) => ErrorClass::Cannot,
+            Self::InvariantViolated(_) => ErrorClass::Invariant,
+        }
+    }
+}
+
+impl From<EngineError> for StoreError {
+    fn from(e: EngineError) -> Self {
+        Self::Engine(e)
+    }
+}
+
+impl From<StoreCannot> for StoreError {
+    fn from(e: StoreCannot) -> Self {
+        Self::Cannot(e)
+    }
+}
+
+impl From<StoreInvariant> for StoreError {
+    fn from(e: StoreInvariant) -> Self {
+        Self::InvariantViolated(e)
+    }
+}
+
+impl core::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Engine(e) => e.fmt(f),
+            Self::Cannot(e) => e.fmt(f),
+            Self::InvariantViolated(e) => e.fmt(f),
+        }
+    }
+}
+
+impl core::error::Error for StoreError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Engine(e) => e.source(),
+            Self::Cannot(e) => e.source(),
+            Self::InvariantViolated(e) => e.source(),
+        }
+    }
+}
+
+/// The redb layer failed. The operation did not happen; the store is as it
+/// was.
+#[derive(Debug)]
+pub enum EngineError {
     /// The database file could not be opened or created.
     Open(redb::DatabaseError),
     /// A write transaction could not be started.
+    ///
+    /// Also where a storage fault during a batch's abort-on-drop surfaces:
+    /// redb latches it and refuses the next `begin_write` with
+    /// `StorageError::PreviousIo` (see [`ChainStore::write`](super::ChainStore::write)).
     BeginWrite(redb::TransactionError),
     /// A read transaction could not be started.
     BeginRead(redb::TransactionError),
@@ -26,12 +135,48 @@ pub enum StoreError {
     Durability(redb::SetDurabilityError),
     /// A commit failed. The transaction is gone; the store is unchanged.
     Commit(redb::CommitError),
-    /// An explicit abort failed. The transaction is gone either way.
-    Abort(redb::StorageError),
     /// Opening a table failed.
     Table(redb::TableError),
     /// A row read or write failed inside the engine.
     Storage(redb::StorageError),
+}
+
+impl core::fmt::Display for EngineError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Open(e) => write!(f, "cannot open chain store: {e}"),
+            Self::BeginWrite(e) => write!(f, "cannot begin write transaction: {e}"),
+            Self::BeginRead(e) => write!(f, "cannot begin read transaction: {e}"),
+            Self::Durability(e) => write!(f, "engine refused the declared durability: {e}"),
+            Self::Commit(e) => write!(f, "commit failed: {e}"),
+            Self::Table(e) => write!(f, "cannot open table: {e}"),
+            Self::Storage(e) => write!(f, "engine storage error: {e}"),
+        }
+    }
+}
+
+impl core::error::Error for EngineError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        match self {
+            Self::Open(e) => Some(e),
+            Self::BeginWrite(e) | Self::BeginRead(e) => Some(e),
+            Self::Durability(e) => Some(e),
+            Self::Commit(e) => Some(e),
+            Self::Table(e) => Some(e),
+            Self::Storage(e) => Some(e),
+        }
+    }
+}
+
+/// The store refused **before** the write.
+///
+/// A capability the store lacks in this session (read-only, a live writer)
+/// or for this file (another layout version). It is not a verdict on any
+/// block — the block was not judged — and not a coherence failure — the
+/// file is as it was. The third class exists so a refusal is never mapped
+/// onto either of the other two (C2-R8 §3.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreCannot {
     /// The file exists but carries no `schema_version` cell.
     ///
     /// **Not a store this binary wrote** — §11.1(a): *absent reads as
@@ -42,32 +187,20 @@ pub enum StoreError {
     /// The file was written under a different layout version.
     ///
     /// Newer refuses and older refuses too (§11.1(a)); there is no
-    /// migration ladder and none will be written. Rebuild.
+    /// migration ladder and none will be written. An incompatible file is
+    /// not an incoherent one, which is why this is a refusal and not
+    /// [`StoreInvariant::CellCorrupt`]. Rebuild.
     SchemaVersionMismatch {
         /// The version the file carries.
         found: SchemaVersion,
         /// The version this binary reads and writes.
         expected: SchemaVersion,
     },
-    /// A typed `properties` cell is present but does not decode, or a
-    /// header cell the seal always writes is missing.
-    ///
-    /// Codecs are strict (`codec` module docs), so this is never "an older
-    /// layout" — that is [`SchemaVersionMismatch`](Self::SchemaVersionMismatch).
-    /// Both header cells land in the seal's one transaction, so a store with
-    /// a valid `schema_version` and a broken `apply_policy` was modified by
-    /// something other than this crate. Rebuild.
-    CellCorrupt {
-        /// The cell's key.
-        key: &'static str,
-        /// What is wrong with it.
-        fault: CellFault,
-    },
     /// The raw `properties` table was requested on the write side.
     ///
     /// Its cells are typed ([`PropertyCell`](crate::codec::PropertyCell))
     /// and written through
-    /// [`WriteBatch::put_property`](super::WriteBatch::put_property), whose
+    /// [`WriteBatch::upsert_property`](super::WriteBatch::upsert_property), whose
     /// bound admits chain-state cells only. A raw handle would let a string
     /// overwrite `schema_version` or clear the provenance record, so there
     /// is none.
@@ -77,7 +210,7 @@ pub enum StoreError {
     /// A write batch is already live on this store.
     ///
     /// redb's `begin_write` **blocks** until the in-progress writer finishes.
-    /// A `begin_batch` while another batch is live. **This is a contract
+    /// A `write` while another batch is live. **This is a contract
     /// violation, not contention — do not retry it.** `write_held` is an
     /// invariant guard on the declared one-live-write contract, released in
     /// `WriteBatch::drop`; it is not a queue, and this error does not mean
@@ -89,7 +222,7 @@ pub enum StoreError {
     /// `bool`, and two core callers *spin* on it —
     /// `blockchain.cpp:6553` `while (!(stop_batch = m_db->batch_start(..)))`
     /// and `:6743` likewise. Those loops must **not** be transliterated to
-    /// `while begin_batch().is_err()`. Serialization of writers is owned by
+    /// `while store.write(..).is_err()`. Serialization of writers is owned by
     /// the core layer above the store (`m_blockchain_lock`,
     /// `CRITICAL_REGION_LOCAL1` at `blockchain.cpp:277`), which is why the
     /// C++ never actually contends there; LMDB's own writer mutex sits below
@@ -106,35 +239,9 @@ pub enum StoreError {
     FamilyStubbed(ArchivalFamily),
 }
 
-/// What is wrong with a typed `properties` cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CellFault {
-    /// The cell is not in the table.
-    Absent,
-    /// The cell's bytes are not an encoding of its value type.
-    Undecodable(CodecError),
-}
-
-impl core::fmt::Display for CellFault {
+impl core::fmt::Display for StoreCannot {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Absent => f.write_str("absent"),
-            Self::Undecodable(e) => write!(f, "undecodable ({e})"),
-        }
-    }
-}
-
-impl core::fmt::Display for StoreError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Open(e) => write!(f, "cannot open chain store: {e}"),
-            Self::BeginWrite(e) => write!(f, "cannot begin write transaction: {e}"),
-            Self::BeginRead(e) => write!(f, "cannot begin read transaction: {e}"),
-            Self::Durability(e) => write!(f, "engine refused the declared durability: {e}"),
-            Self::Commit(e) => write!(f, "commit failed: {e}"),
-            Self::Abort(e) => write!(f, "abort failed: {e}"),
-            Self::Table(e) => write!(f, "cannot open table: {e}"),
-            Self::Storage(e) => write!(f, "engine storage error: {e}"),
             Self::SchemaVersionAbsent => write!(
                 f,
                 "chain store carries no schema_version cell: not a store this binary wrote; \
@@ -145,14 +252,9 @@ impl core::fmt::Display for StoreError {
                 "chain store is {found} but this binary is {expected}: no migration ladder \
                  exists; rebuild from the block corpus"
             ),
-            Self::CellCorrupt { key, fault } => write!(
-                f,
-                "chain store properties cell `{key}` is {fault}: the file was modified \
-                 outside this crate; rebuild from the block corpus"
-            ),
             Self::PropertiesAreTyped => write!(
                 f,
-                "the properties table has no raw write handle: use put_property on a typed cell"
+                "the properties table has no raw write handle: use upsert_property on a typed cell"
             ),
             Self::ReadOnly => write!(f, "write attempted on a read-only chain store"),
             Self::WriteInProgress => {
@@ -171,30 +273,107 @@ impl core::fmt::Display for StoreError {
     }
 }
 
-impl core::error::Error for StoreError {
-    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
-        match self {
-            Self::Open(e) => Some(e),
-            Self::BeginWrite(e) | Self::BeginRead(e) => Some(e),
-            Self::Durability(e) => Some(e),
-            Self::Commit(e) => Some(e),
-            Self::Abort(e) | Self::Storage(e) => Some(e),
-            Self::Table(e) => Some(e),
-            Self::CellCorrupt {
-                fault: CellFault::Undecodable(e),
-                ..
-            } => Some(e),
-            Self::CellCorrupt {
-                fault: CellFault::Absent,
-                ..
-            }
-            | Self::SchemaVersionAbsent
-            | Self::SchemaVersionMismatch { .. }
-            | Self::PropertiesAreTyped
-            | Self::ReadOnly
-            | Self::WriteInProgress
-            | Self::EmptyApplyStub
-            | Self::FamilyStubbed(_) => None,
+impl core::error::Error for StoreCannot {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::CodecError;
+
+    /// One value per class, and the class each is.
+    fn specimens() -> [(StoreError, ErrorClass); 3] {
+        [
+            (
+                StoreError::Engine(EngineError::Table(redb::TableError::TableDoesNotExist(
+                    "t".into(),
+                ))),
+                ErrorClass::Engine,
+            ),
+            (StoreCannot::ReadOnly.into(), ErrorClass::Cannot),
+            (
+                StoreInvariant::CellCorrupt {
+                    key: "k",
+                    fault: CellFault::Absent,
+                }
+                .into(),
+                ErrorClass::Invariant,
+            ),
+        ]
+    }
+
+    #[test]
+    fn class_is_the_outer_variant() {
+        for (e, class) in specimens() {
+            assert_eq!(e.class(), class, "{e:?}");
         }
+    }
+
+    #[test]
+    fn the_lifts_land_in_their_own_class() {
+        // `From` is the only way `?` reaches `StoreError`; each inner type
+        // must land in its own arm and no other.
+        let engine: StoreError =
+            EngineError::Commit(redb::CommitError::Storage(redb::StorageError::PreviousIo)).into();
+        assert!(matches!(engine, StoreError::Engine(EngineError::Commit(_))));
+        let cannot: StoreError = StoreCannot::WriteInProgress.into();
+        assert!(matches!(
+            cannot,
+            StoreError::Cannot(StoreCannot::WriteInProgress)
+        ));
+        let inv: StoreError = StoreInvariant::CellCorrupt {
+            key: "k",
+            fault: CellFault::Undecodable(CodecError::Invalid {
+                codec: "probe",
+                reason: "test",
+            }),
+        }
+        .into();
+        assert!(matches!(
+            inv,
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt { key: "k", .. })
+        ));
+    }
+
+    #[test]
+    fn the_wrapper_is_transparent() {
+        // Display and source both pass through; the class adds no second
+        // line to an error chain.
+        use core::error::Error as _;
+        for (e, _) in specimens() {
+            let inner_display = match &e {
+                StoreError::Engine(i) => i.to_string(),
+                StoreError::Cannot(i) => i.to_string(),
+                StoreError::InvariantViolated(i) => i.to_string(),
+            };
+            assert_eq!(e.to_string(), inner_display);
+        }
+        let inv = StoreError::from(StoreInvariant::CellCorrupt {
+            key: "k",
+            fault: CellFault::Undecodable(CodecError::Invalid {
+                codec: "probe",
+                reason: "test",
+            }),
+        });
+        assert!(inv.source().is_some(), "an undecodable cell has a cause");
+        let absent = StoreError::from(StoreInvariant::CellCorrupt {
+            key: "k",
+            fault: CellFault::Absent,
+        });
+        assert!(
+            absent.source().is_none(),
+            "an absent cell is the root cause"
+        );
+    }
+
+    #[test]
+    fn an_invariant_names_its_register_row() {
+        let si7 = StoreInvariant::CellCorrupt {
+            key: "apply_policy",
+            fault: CellFault::Absent,
+        };
+        assert_eq!(si7.row(), 7);
+        let shown = si7.to_string();
+        assert!(shown.starts_with("SI-7 violated: "), "{shown}");
+        assert!(shown.contains("`apply_policy`"), "{shown}");
     }
 }

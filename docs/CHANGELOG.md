@@ -30,6 +30,12 @@
 
 ### Changed
 
+- **Default clone no longer requires initializing unused RandomX v1.**
+  CMake dropped `check_submodule(external/randomx)`. That gitlink stays
+  in `.gitmodules` for the restated v1 fallback; nothing in the default
+  daemon or test build consumes it. RandomX v2 C sources remain opt-in
+  (`-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON`).
+
 - **Every FCMP++ spend no longer identifies the output it spends (`PL-D1`
   fixed by `PL-D3`).** The leaf's 4th scalar was `H(hybrid_pk)`, published
   per output in `tx_extra` `0x07` and handed to the verifier as a public
@@ -317,6 +323,40 @@
   (`SI-1…SI-8`, including `SI-4` from Q4's curve-tree root, gated by
   `check_store_invariant_register.py`) is the belt home
   ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)).
+  The plan amendment the ruling owed landed 2026-09-15 in
+  [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md): `DRS-D12` (the
+  validation crate `shekyl-chain-rules` precedes the store's connect path;
+  replay-that-validates is the only pre-cutover writer), `DRS-E6` (141 of the
+  153 enforced consensus rules have no storage surface; E6's per-subsystem
+  increments port them, §7.5, gated by `check_drs_e6_partition.py`), and
+  `ChainTip.connect` halt visibility scheduled for `get_info` with S-CHAIN-W.
+  DRS-E1 increment 2.5 (2026-09-15) lands the ruling's store-side mechanics
+  in `shekyl-chain-store`: the per-batch brand behind `ChainStore::write`,
+  the three error classes as `StoreError`'s outer variants, `StoreInvariant`
+  (`SI-7` built), the two declared write verbs as `InsertTable` /
+  `UpsertTable`, and a batch poison so a swallowed invariant violation —
+  including one mapped to a different `Err` — still cannot commit. No
+  daemon path uses the crate yet.
+
+- **`shekyl-chain-rules` — the consensus validation crate, scaffolded
+  (DRS-E6 increment 1; no runtime change in this release).** The crate that
+  alone mints the `ChainValid<'id, V>` the store's connect path will accept
+  ([`CHAIN_RULES_CRATE.md`](design/CHAIN_RULES_CRATE.md)): a candidate, a
+  brand-scoped read-only `ChainView<'id>`, and a named `RuleSet` go in; a
+  `ChainValid<'id, V>` carrying the rows it evaluated, or an `InvalidBlock`
+  naming the census row and the place it failed, comes out. The token is
+  branded with both the batch `'id` and the view type `V`, so an unbranded
+  view cannot satisfy `connect`. It reaches neither `redb` nor
+  `shekyl-chain-store`, transitively — CI holds that with
+  `cargo tree --target all` (`check_chain_rules_no_store.sh`) — and a store
+  fault is the outer `Err` of `validate` / `tx_against`, never a verdict.
+  Its two row registries (`CenRow`, `PolicyRow`) mirror the census's 153 + 9
+  enforced rows and CI refuses a registry that drifts from the census
+  (`check_chain_rules_coverage.py`). Zero rules are ported yet; every entry
+  is `pending`. Type moves in the same change: `KeyImage` now lives in
+  `shekyl-types` (`shekyl-crypto-pq` re-exports it; the persisted encoding
+  is unchanged, and it still has no `Display` and no `AsRef<[u8]>`), and
+  `CurveTreeRoot` is a newtype beside it.
 
 ## [3.1.0-alpha.8] - 2026-09-10
 

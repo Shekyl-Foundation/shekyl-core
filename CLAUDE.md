@@ -145,6 +145,8 @@ shekyl-core/
 Key Rust crates: `shekyl-engine-*` (wallet orchestrator/state/file), `shekyl-scanner`,
 `shekyl-tx-builder`, `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-fcmp`,
 `shekyl-curve-tree`, `shekyl-consensus`, `shekyl-economics`, `shekyl-staking`,
+`shekyl-chain-store` / `shekyl-chain-rules` (daemon store and the consensus
+validator that alone mints what it connects — the two share no code),
 `shekyl-units` / `shekyl-types` (foundational newtypes), and the single FFI
 crate `shekyl-ffi`. See [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
 
@@ -156,6 +158,25 @@ Open residue: [`docs/FOLLOWUPS.md`](docs/FOLLOWUPS.md).
 ---
 
 ## Build & test (practical orientation, not policy)
+
+**Checkout hygiene.** Clone with `git clone --recursive`. After a
+non-recursive clone or a new worktree, run
+`git submodule update --init --recursive` — never `--exclude`
+`shekyl-randomx-differential` / `external/randomx-v2`. Worktrees inherit
+gitlinks, not submodule working trees. Default daemon CMake does not
+need `external/randomx-v2`; the C library is opt-in:
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON
+# RANDOMX_V2_INSTALL_DIR=<build>/external/randomx-v2-install
+```
+
+`-DMANUAL_SUBMODULES=1` is an escape hatch (Guix/gitian), not the happy
+path. The workspace `cargo test` lane **unconditionally** excludes
+`shekyl-randomx-differential` (`.github/workflows/rust-audit-test.yml`);
+setting `RANDOMX_V2_INSTALL_DIR` does not re-include it. The dedicated
+`randomx-v2-differential` workflow is the gate for T13/T14/T15.
 
 C++ (Monero-lineage toolchain):
 
@@ -170,7 +191,7 @@ Rust (workspace under `rust/`; gates per [`45`](.cursor/rules/45-rust-lint-check
 cd rust
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --exclude shekyl-randomx-differential
 ```
 
 CI mirrors these plus `cargo audit` on `Cargo.lock` changes and the

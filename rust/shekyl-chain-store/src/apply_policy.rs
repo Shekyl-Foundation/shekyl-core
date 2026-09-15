@@ -184,7 +184,8 @@ impl ApplyPolicy {
 
     /// Whether `family`'s apply runs under this policy.
     ///
-    /// Consumed by [`WriteBatch::open_table`](crate::store::WriteBatch::open_table).
+    /// Consumed by [`WriteBatch::open_insert_table`](crate::store::WriteBatch::open_insert_table)
+    /// and [`WriteBatch::open_upsert_table`](crate::store::WriteBatch::open_upsert_table).
     #[must_use]
     pub const fn applies(self, family: ArchivalFamily) -> bool {
         !self.stubbed_set().contains(family)

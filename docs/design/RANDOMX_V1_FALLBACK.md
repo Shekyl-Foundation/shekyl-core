@@ -1,9 +1,16 @@
 # RandomX v1 fallback — contingency design
 
-**Status.** **LIVING CONTRACT (as of 2026-09-15).** Companion to
-[`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md). Insurance, not the
-preferred path. **UPDATE 2026-09-15:** fallback is re-add a CMake
-target + v1 verifier — not an unpin-and-revert of `102f8acf`.
+**Status.** **LIVING CONTRACT (last-verified 2026-09-15; mechanism
+restated post-3c).** Companion to
+[`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md). This document is
+insurance, not the preferred path. Invocation is **late-binding** per
+§1: it may be invoked any time between Phase 0 and the genesis release
+in response to a specific finding that makes RandomX v2 the wrong
+genesis primitive under `00-mission.mdc` commitment #1. The release-
+time algorithm-review gate per
+[`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §1.4 is the most common
+trigger, but not the only one — Monero's parallel production
+deployment or audit may surface a blocker at any earlier point.
 
 **Preferred path.** RandomX v2, Rust verifier, C miner.
 
@@ -21,12 +28,16 @@ finding that makes RandomX v2 the wrong genesis primitive under
 preconditions). Because Shekyl is non-divergent from upstream
 tevador/RandomX (`RANDOMX_V2_RUST.md` §1.1) and Monero is the
 parallel production deployer and audit funder (§1.4), the fallback
-is **not** an unpin-and-revert of `external/randomx` at `102f8acf`.
-Phase 3c deleted that v1 C path; Phase 4 deleted `IPowSchema` /
-`pow_registry`. The fallback is: re-add a CMake target that links a
-v1 verifier, plus the v1 `#[cfg]` in `shekyl-pow-randomx`. That is a
-deliberate re-introduction of a deleted path, still a single-algorithm
-deployment (no CryptoNight, no version dispatch).
+is a **re-add**, not an unpin-and-revert SHA flip. `shekyl-pow-randomx`
+is v2 bytecode with zero v1 references; `rx-slow-hash.c` is gone; the
+v1 CMake target was dropped (check_submodule row dropped with it).
+Shipping v1 means: re-add `external/randomx` as a configured CMake
+target at `102f8acf` (the gitlink stays in `.gitmodules`; Phase 3c
+deleted the configured C target / consensus path, not the submodule),
+restore or rewrite a v1 verifier, and restore the
+`check_submodule(external/randomx)` row **with** that target. Phase 4
+deleted `IPowSchema` / `pow_registry`; fallback does not restore that
+dispatch scaffolding.
 
 Trigger classes:
 
@@ -85,9 +96,7 @@ Kept from the v2 plan:
   Shekyl deletes RPC payments whether the genesis algorithm is v2 or
   v1 — so the same deletion checklist applies under fallback.
 
-Changed from the v2 plan (**SUPERSEDED 2026-09-15** for the SHA-flip
-steps: `external/randomx` was deleted in 3c. Fallback now re-adds a
-CMake v1 verifier target; it does not switch a submodule SHA):
+Changed from the v2 plan:
 
 - Phase 1 pins a RandomX v1 source. Because the
   `Shekyl-Foundation/RandomX` fork tracks upstream `tevador/RandomX`

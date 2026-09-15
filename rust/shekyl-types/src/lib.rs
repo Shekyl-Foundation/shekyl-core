@@ -48,6 +48,28 @@
 //! primitive it wraps, so adopting one in a persisted field requires no
 //! serialized-format version bump (it may still require a `postcard-schema`
 //! snapshot regeneration; see `42-serialization-policy.mdc`).
+//!
+//! ## Exposure policy on the 32-byte identities
+//!
+//! Not every 32-byte chain fact may reach a string. The `hash32!` family has
+//! three arms, and the arm a type is minted with is its **exposure policy**
+//! (see the macro's table): public hashes ([`BlockHash`], [`TxHash`],
+//! [`CurveTreeRoot`]) render in full; a persona id ([`PCanonicalId`]) keeps a
+//! full-hex `Display` but truncates `Debug`; a wallet-correlating identity
+//! ([`KeyImage`]) truncates `Debug`, has **no `Display`**, and has **no
+//! `AsRef<[u8]>`** — `to_string()` and `hex::encode(key_image)` do not compile.
+//! A `KeyImage` in a log is an on-chain spend linked to a wallet; the policy
+//! is on the type so no call site has to remember it.
+//!
+//! ```compile_fail
+//! let key_image = shekyl_types::KeyImage::from_bytes([0u8; 32]);
+//! let _ = key_image.to_string(); // no `Display`: this is the type's policy, not an omission
+//! ```
+//!
+//! ```compile_fail
+//! fn assert_as_ref<T: AsRef<[u8]>>() {}
+//! assert_as_ref::<shekyl_types::KeyImage>();
+//! ```
 
 #![deny(unsafe_code)]
 
@@ -98,13 +120,28 @@ macro_rules! scalar_u64 {
 }
 
 /// Defines a `[u8; 32]`-backed, transparent identity-hash newtype with
-/// `from_bytes` / `to_bytes` / `as_bytes` and a lowercase-hex `Display`.
+/// `from_bytes` / `to_bytes` / `as_bytes`.
+///
+/// Three arms, one per **exposure policy** — how much of the value may reach a
+/// string:
+///
+/// | arm | `Debug` | `Display` | `AsRef<[u8]>` | for |
+/// | --- | --- | --- | --- | --- |
+/// | `Name` | full hex | full hex | yes | public, non-correlating hashes (`TxHash`, `BlockHash`) |
+/// | `Name, redact` | first two bytes | full hex | yes | ids whose *log* leak correlates an origin edge, but whose hex encoding is a wire form (`PCanonicalId`) |
+/// | `Name, redact, no_display` | first two bytes | **none** | **no** | ids whose stringly-typed leak correlates a wallet to its on-chain spends (`KeyImage`) — `to_string()` and `hex::encode(value)` must not compile |
+///
+/// The derives and accessors are shared (`@core`); `Display` is opt-in
+/// (`@display`); `AsRef<[u8]>` is opt-in (`@as_ref`) so a `no_display` identity
+/// is not a generic byte sink; each arm picks its `Debug`.
 macro_rules! hash32 {
     // Default `Debug` renders the full hex — public, non-correlating hashes
     // (`TxHash`, `BlockHash`, …) where the whole value aids debugging and the
     // chain already publishes it.
     ($(#[$doc:meta])* $name:ident) => {
-        hash32!(@body $(#[$doc])* $name);
+        hash32!(@core $(#[$doc])* $name);
+        hash32!(@as_ref $name);
+        hash32!(@display $name);
 
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -126,13 +163,32 @@ macro_rules! hash32 {
     // `Display` is deliberately left full: it is the canonical hex *encoding*, not
     // a log line.
     ($(#[$doc:meta])* $name:ident, redact) => {
-        hash32!(@body $(#[$doc])* $name);
+        hash32!(@core $(#[$doc])* $name);
+        hash32!(@as_ref $name);
+        hash32!(@display $name);
+        hash32!(@debug_redacted $name);
+    };
 
+    // `redact, no_display` is the tighter posture: truncated `Debug` **and no
+    // `Display` at all**. For an identity whose leak links a wallet to its
+    // on-chain spends (a key image), a `Display` is not an encoding — it is the
+    // stringly-typed boundary (`to_string()`, `format!("{}")`, a `Display`-based
+    // error message) through which the full value reaches a log. The hex form is
+    // still reachable on purpose through `as_bytes()`; it is not reachable by
+    // accident. Adding a `Display` later is a policy change for the type's owner,
+    // not a convenience for a call site.
+    ($(#[$doc:meta])* $name:ident, redact, no_display) => {
+        hash32!(@core $(#[$doc])* $name);
+        hash32!(@debug_redacted $name);
+    };
+
+    // Truncated `Debug`, shared by both `redact` arms.
+    (@debug_redacted $name:ident) => {
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 // Render through the debug builder, like the default arm — one idiom
-                // for both, just truncated content. `format_args!` (Debug) emits the
-                // two bytes unquoted, so the output is `Name(dead..)`.
+                // for all three, just truncated content. `format_args!` (Debug) emits
+                // the two bytes unquoted, so the output is `Name(dead..)`.
                 f.debug_tuple(stringify!($name))
                     .field(&format_args!("{:02x}{:02x}..", self.0[0], self.0[1]))
                     .finish()
@@ -140,9 +196,37 @@ macro_rules! hash32 {
         }
     };
 
-    // Shared body — derives, accessors, `AsRef`, `Display`; **not** `Debug`, which
-    // the arms above add per redaction policy.
-    (@body $(#[$doc:meta])* $name:ident) => {
+    // Lowercase-hex `Display` — the canonical encoding, opted into by the arms
+    // whose policy allows the full value to reach a string.
+    (@display $name:ident) => {
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                // Iterate by reference: avoids copying the `[u8; 32]` out of
+                // `&self`, and `&self.0` is the form the workspace's denied
+                // `explicit_iter_loop` clippy lint requires over `.iter()`.
+                for &byte in &self.0 {
+                    write!(f, "{byte:02x}")?;
+                }
+                Ok(())
+            }
+        }
+    };
+
+    // Generic byte-view for public hashes. Deliberately **not** on the
+    // `no_display` arm: `AsRef<[u8]>` is the bound `hex::encode` and any
+    // `impl AsRef<[u8]>` logger accept, which is the stringly-typed
+    // accident `no_display` exists to prevent. Named `as_bytes` stays.
+    (@as_ref $name:ident) => {
+        impl AsRef<[u8]> for $name {
+            fn as_ref(&self) -> &[u8] {
+                &self.0
+            }
+        }
+    };
+
+    // Shared core — derives, accessors; **neither** `Debug` nor `Display`
+    // nor `AsRef`, which the arms above add per exposure policy.
+    (@core $(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
         // `PartialOrd`/`Ord` (lexicographic over the bytes) so these hashes
         // can key the `BTreeMap`/`BTreeSet`s that wallet-state uses for
@@ -174,32 +258,6 @@ macro_rules! hash32 {
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; 32] {
                 &self.0
-            }
-        }
-
-        // Generic byte-view for the whole family of `&[u8]` / `AsRef<[u8]>`
-        // consumers (`hex::encode`, hashers, length-prefixed writers). This is
-        // the single point that keeps a typed hash usable as bytes wherever a
-        // generic byte sink is wanted, so call sites need no `.as_bytes()`
-        // sprinkling. It does **not** weaken type distinctness: a function that
-        // names `&$name` still accepts only `$name`; only generic byte APIs are
-        // satisfied. Distinct from the fixed-size `&[u8; 32]` accessor above,
-        // which the crypto layer needs (rule 18).
-        impl AsRef<[u8]> for $name {
-            fn as_ref(&self) -> &[u8] {
-                &self.0
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                // Iterate by reference: avoids copying the `[u8; 32]` out of
-                // `&self`, and `&self.0` is the form the workspace's denied
-                // `explicit_iter_loop` clippy lint requires over `.iter()`.
-                for &byte in &self.0 {
-                    write!(f, "{byte:02x}")?;
-                }
-                Ok(())
             }
         }
 
@@ -350,6 +408,97 @@ hash32! {
     /// Distinct from [`BlockHash`]. Canonical replacement for the ad-hoc
     /// `TxHash([u8; 32])` previously defined in `shekyl-engine-core`.
     TxHash
+}
+
+hash32! {
+    /// The root of the FCMP++ curve tree **as recorded** after a block — the
+    /// membership anchor a spend's proof is verified against.
+    ///
+    /// A *name* for a value the tree crate computes: growing the tree with a
+    /// block's matured leaves and producing the root the next block's header
+    /// must carry is the consensus state transition (`CONSENSUS_C2_R8_STORE_PLACEMENT.md`
+    /// §5), owned by `shekyl-curve-tree` and the validation crate. Minted here
+    /// so a rule can *read* a recorded root without depending on the crate that
+    /// computes it — the low-level wire header stores the raw `[u8; 32]`
+    /// (rule 18 byte-layout) and converts at its edge via
+    /// [`CurveTreeRoot::from_bytes`] / [`CurveTreeRoot::as_bytes`].
+    ///
+    /// Distinct from [`BlockHash`] / [`TxHash`]: a root is a commitment to a set
+    /// of outputs, not an identity, and one can never be passed where the other
+    /// is expected. Public, non-correlating; full-hex `Debug`.
+    CurveTreeRoot
+}
+
+hash32! {
+    /// Per-output key image `I = x · H_p(O)` — the public on-chain
+    /// double-spend identifier.
+    ///
+    /// 32-byte canonical compressed Ed25519 point encoding. `x` is the
+    /// per-output spend-secret derivative and `H_p(O)` the deterministic
+    /// hash-to-point of the output's one-time public key; the *computation*
+    /// lives in `shekyl-crypto-pq` (`output::scan_output_recover` /
+    /// `compute_key_image`), which re-exports this type. Under a well-formed
+    /// spend a second transaction reusing the same output produces the same
+    /// `I`, and consensus rejects it (CEN-I7 chain-wide, CEN-L1 within a
+    /// block).
+    ///
+    /// # Type placement
+    ///
+    /// Moved here from `shekyl-crypto-pq` for DRS-E6 (`CHAIN_RULES_CRATE.md`
+    /// §3.4): the validation crate must *name* a key image without acquiring
+    /// the crypto crate's dependency graph, and two same-named newtypes in two
+    /// crates are an unchecked drift source. The derivation `I = x · H_p(O)`
+    /// remains transform-shaped and stays in `shekyl-crypto-pq` (rule 18);
+    /// the *name* lives here because that is the consumer graph, not because
+    /// the value became state-shaped.
+    ///
+    /// # Privacy-correlation discipline
+    ///
+    /// Pre-spend, a wallet's set of unspent key images is privacy-relevant:
+    /// an observer who learns "these `KeyImage`s belong to wallet X" can
+    /// correlate later on-chain spends to wallet X by direct byte comparison.
+    /// Post-spend the value is public. The defensive posture, `redact,
+    /// no_display`:
+    ///
+    /// - **No `Display` and no `AsRef<[u8]>`.** A `Display` is the
+    ///   stringly-typed boundary (`to_string()`, `format!("{}")`); `AsRef<[u8]>`
+    ///   is the bound `hex::encode` and any generic byte logger accept. The hex
+    ///   form is reachable on purpose through [`KeyImage::as_bytes`], never by
+    ///   accident.
+    /// - **Truncated `Debug`** (`KeyImage(0000..)`): 16 bits disambiguate two
+    ///   values during debugging without reproducing the identifier in a
+    ///   backtrace.
+    /// - **`Zeroize` without `ZeroizeOnDrop`.** Publicly derivable from
+    ///   on-chain data plus the spend secret, so not itself a wipe-on-drop
+    ///   concern — but containers that hold one beside genuinely secret
+    ///   material (`shekyl_engine_state::TransferDetails`,
+    ///   `shekyl_scanner::RecoveredWalletOutput`) wipe every field
+    ///   structurally, and `Copy + Zeroize` lets them without a raw-bytes
+    ///   special case at the wipe site.
+    ///
+    /// # Wire format
+    ///
+    /// `#[serde(transparent)]`: byte-identical to `[u8; 32]`, which is what
+    /// keeps `TransferDetails`' on-disk and postcard-schema layouts unchanged
+    /// (`schema_snapshot` tests, rule 42).
+    KeyImage, redact, no_display
+}
+
+impl KeyImage {
+    /// Wrap the canonical 32-byte key-image encoding.
+    ///
+    /// **Boundary constructor**, kept beside the family's [`KeyImage::from_bytes`]
+    /// because "canonical" is a genuine predicate for a curve point and not for
+    /// a hash: it is the caller's responsibility that the bytes are the
+    /// canonical compressed Ed25519 encoding of `I = x · H_p(O)` produced by
+    /// `shekyl-crypto-pq`'s derivation. The newtype does not re-validate the
+    /// encoding — invalid bytes produce a `KeyImage` that fails downstream
+    /// verification, which is the correct failure surface (consensus rejects a
+    /// malformed key image at block validation, not at construction).
+    #[must_use]
+    pub const fn from_canonical_bytes(bytes: [u8; 32]) -> Self {
+        Self::from_bytes(bytes)
+    }
 }
 
 hash32! {

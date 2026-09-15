@@ -59,13 +59,21 @@ L-items are owned open residue.
 ([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md), `DRS-*`) partitions the same
 files this census enumerates — by **DB call surface** where this census cuts by
 **rule** — and until 2026-09-01 neither document referenced the other.
-**18 rows here are enforced inside `src/blockchain_db/`** (at 2026-09-01: 7
-bucket-1, 1 bucket-3, 10 bucket-4; C2-R1c moved CEN-K3 to bucket 2 on
-2026-09-04; **after C2-R8, 2026-09-14: 7 bucket-1, 2 bucket-2, 7 bucket-3,
-2 bucket-4 (CEN-B3, R4's; CEN-L14, R8b's)** — the rows are the same
-eighteen, the buckets moved), and **§10's R8 batch is the same decision as that
-program's schema design**: R8 is the ruling instrument, the DRS surface map its
-input (CSR-1). **R8 RULED 2026-09-14**
+**19 rows here cite a file under `src/blockchain_db/` as an enforcement
+site** (2026-09-15: 8 bucket-1, 2 bucket-2, 7 bucket-3, 2 bucket-4 — a dated
+snapshot; the figure is re-derived from §4 by
+`scripts/ci/check_drs_e6_partition.py --describe` under the predicate
+[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5.2 quotes, and that gate,
+not this sentence, is the authority). History: at 2026-09-01 the set was
+**18** (7 bucket-1, 1 bucket-3, 10 bucket-4) and that eighteen is R8's batch;
+C2-R1c moved CEN-K3 to bucket 2 on 2026-09-04; **CEN-I19 joined 2026-09-06**
+with its `src/blockchain_db/blockchain_db.cpp:528` collector abort — outside R8's batch, its
+belt dissolved by DRS-E3; after C2-R8, 2026-09-14, the bucket-3 seven are
+CEN-L2…L6, L13, L15 and the bucket-4 two are CEN-B3 (R4's) and CEN-L14
+(R8b's). The 2026-09-14 restatement here read "the same eighteen" — I19 had
+already joined; corrected 2026-09-15. **§10's R8 batch is the same decision as
+that program's schema design**: R8 is the ruling instrument, the DRS surface
+map its input (CSR-1). **R8 RULED 2026-09-14**
 ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)):
 a standing three-arm category test (consensus rule / store invariant /
 unspecified), a three-class error taxonomy with a gated conversion ban, and
