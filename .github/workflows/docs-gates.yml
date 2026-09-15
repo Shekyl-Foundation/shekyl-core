@@ -379,6 +379,31 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_store_error_conversion_ban.py --selftest
 
+      - name: Run DRS-E6 surface-partition gate
+        # DAEMON_REDB_STORE.md §7.5 is a dated derivation over the census:
+        # rows by flag × surface × bucket, the twelve live surface-bound
+        # consensus rows and the increment each arrives with, the surface-free
+        # rows per subsystem, and the headline `N of M` phrases. A census row
+        # that moves bucket or gains/loses a store citation moves the schedule
+        # and the completeness gate's denominators; this re-derives every
+        # figure from CONSENSUS_RULE_CENSUS.md §4 and fails on any difference,
+        # printing the derivation. The bound/free regex is quoted verbatim in
+        # §7.5 and checked, so the doc and the gate define "surface-bound"
+        # once. Subject asserted: an empty census, a §4 header missing a read
+        # column, zero bound rows, or a missing §7.5 table is a failure.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_e6_partition.py
+
+      - name: Run DRS-E6 surface-partition gate self-test
+        # Every refusal bitten red on synthetic inputs: census re-bucket, new
+        # citation, retirement to bucket 3, new row; each doc table wrong or
+        # missing; totals and headline phrases stale; regex not quoted; empty
+        # census, changed header, flag vocabulary, duplicate ids; and the §15
+        # decision log's dated figures proven NOT to be read as live claims.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_e6_partition.py --selftest
+
       - name: Run conformance-coverage gate
         # Every RATIFIED consensus rule (census bucket 1/2) must carry a
         # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
