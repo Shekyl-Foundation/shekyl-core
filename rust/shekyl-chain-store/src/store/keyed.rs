@@ -3,19 +3,19 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The keyed-table write handle: two declared write verbs (C2-R8 §7.3).
+//! Keyed-table write handles: one verb per handle (C2-R8 §7.3).
 //!
-//! A [`WriteBatch`](super::WriteBatch) opens keyed tables as [`KeyedTable`],
-//! never as a raw `redb::Table`, so the only value-writing verbs a site can
-//! reach are [`insert`](KeyedTable::insert) and [`upsert`](KeyedTable::upsert).
-//! redb's own `insert` replaces silently; that verb is not exposed. A site
-//! that has not chosen whether overwrite is intended does not compile, and
-//! the CEN-L14 class — a second write to a key that was meant to be
-//! written once — is unrepresentable rather than caught.
+//! A [`WriteBatch`](super::WriteBatch) opens a keyed table as either an
+//! [`InsertTable`] (fatal on a present key; the `SI-` belt is bound at
+//! open) or an [`UpsertTable`] (overwrite, declared). redb admits one
+//! handle per table per transaction, so the verb is chosen when the table
+//! is opened — not per call, and not as a flag on a common type. A
+//! hard-fork that reclassifies a table from a set to a register opens the
+//! other handle; the wrong verb does not compile.
 //!
-//! Reads are the engine's: `KeyedTable` implements [`ReadableTable`], so
-//! `get` / `range` / `first` / `last` / `len` see the batch's own writes
-//! exactly as a raw table would.
+//! redb's own `insert` replaces silently and is not reachable. Reads are
+//! inherent methods returning [`StoreError`]; the engine's `ReadableTable`
+//! is not implemented, so a write closure can `?` a lookup.
 
 use core::borrow::Borrow;
 use core::ops::RangeBounds;
@@ -27,59 +27,73 @@ use redb::{
 use super::error::{EngineError, StoreError, StoreInvariant};
 use super::write::Poison;
 
+/// This handle's value writes are insert-once, enforcing `row`.
+pub struct InsertOnce {
+    row: StoreInvariant,
+}
+
+/// This handle's value writes are declared overwrite.
+pub struct Overwrite;
+
 /// A keyed table opened for writing inside one
 /// [`WriteBatch`](super::WriteBatch).
 ///
+/// `W` is the write verb: [`InsertOnce`] or [`Overwrite`]. Reads are on
+/// both. Call sites name the aliases [`InsertTable`] and [`UpsertTable`].
+///
 /// Borrows the batch for `'txn`, so it cannot outlive the closure that
-/// opened it. Writes are the two verbs below; there is no third and no
-/// flag. Deletion is not a value write and is not offered here: the pop
-/// path (C2-R8 Q5, register row SI-6) names its own verb and the row it
-/// enforces when it lands, rather than this handle pre-provisioning one.
-///
-/// The redb-shaped two-argument `insert` — replace silently — is the L14
-/// hazard and does not exist on this type:
-///
-/// ```compile_fail,E0061
-/// use redb::TableDefinition;
-/// use shekyl_chain_store::store::{ChainStore, StoreError};
-/// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
-/// let store = ChainStore::create("never-opened.redb").unwrap();
-/// store.write(|batch| -> Result<(), StoreError> {
-///     batch.open_table(T)?.insert("k", &1)?;
-///     Ok(())
-/// });
-/// ```
-#[must_use = "a KeyedTable is a handle on the batch's transaction; dropping it writes nothing"]
-pub struct KeyedTable<'txn, K: Key + 'static, V: Value + 'static> {
+/// opened it. Deletion is not a value write and is not offered here: the
+/// pop path (C2-R8 Q5, register row SI-6) names its own verb and the row
+/// it enforces when it lands, rather than this handle pre-provisioning one.
+#[must_use = "a keyed-table handle is a loan on the batch; dropping it writes nothing"]
+pub struct KeyedTable<'txn, K: Key + 'static, V: Value + 'static, W> {
     inner: Table<'txn, K, V>,
     poison: &'txn Poison,
+    write: W,
 }
 
-impl<'txn, K: Key + 'static, V: Value + 'static> KeyedTable<'txn, K, V> {
-    pub(super) const fn new(inner: Table<'txn, K, V>, poison: &'txn Poison) -> Self {
-        Self { inner, poison }
+/// Insert-once keyed table: a present key is the belt bound at open.
+pub type InsertTable<'txn, K, V> = KeyedTable<'txn, K, V, InsertOnce>;
+
+/// Overwrite keyed table: a present key is replaced, and the verb says so.
+pub type UpsertTable<'txn, K, V> = KeyedTable<'txn, K, V, Overwrite>;
+
+/// One stored pair, as [`KeyedTable::first`] / [`KeyedTable::last`] return it.
+pub type TablePair<'a, K, V> = (AccessGuard<'a, K>, AccessGuard<'a, V>);
+
+impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
+    pub(super) const fn new_insert(
+        inner: Table<'txn, K, V>,
+        poison: &'txn Poison,
+        row: StoreInvariant,
+    ) -> Self {
+        Self {
+            inner,
+            poison,
+            write: InsertOnce { row },
+        }
     }
 
     /// Write `key → value` where `key` must not already be present.
     ///
-    /// A present key is a violation of `row` — the `SI-` register row the
-    /// call site names (SI-1 for `spent_keys`, SI-3 for `txs`, SI-4 for a
-    /// curve-tree root, …). The table is left untouched, this call returns
-    /// the violation, and the batch is **poisoned**: its commit refuses with
-    /// the same violation whether or not the closure propagates it, so
-    /// nothing the batch wrote lands.
+    /// A present key is a violation of the `SI-` row this handle was
+    /// opened with (SI-1 for `spent_keys`, SI-3 for `txs`, SI-4 for a
+    /// curve-tree root, …). The table is left untouched, this call
+    /// returns the violation, and the batch is **poisoned**: finishing
+    /// the batch refuses with the same violation whether or not the
+    /// closure propagates it, so nothing the batch wrote lands.
     ///
     /// # Errors
     ///
-    /// [`StoreError::InvariantViolated`]`(row)` if `key` was present;
-    /// [`EngineError::Storage`] if the engine refused the lookup or the
-    /// write.
+    /// [`StoreError::InvariantViolated`] for the bound row if `key` was
+    /// present; [`EngineError::Storage`] if the engine refused the lookup
+    /// or the write.
     pub fn insert<'k, 'v>(
         &mut self,
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
-        row: StoreInvariant,
     ) -> Result<(), StoreError> {
+        let row = self.write.row;
         if self
             .inner
             .get(key.borrow())
@@ -92,6 +106,16 @@ impl<'txn, K: Key + 'static, V: Value + 'static> KeyedTable<'txn, K, V> {
             .insert(key, value)
             .map(drop)
             .map_err(|e| EngineError::Storage(e).into())
+    }
+}
+
+impl<'txn, K: Key + 'static, V: Value + 'static> UpsertTable<'txn, K, V> {
+    pub(super) const fn new_upsert(inner: Table<'txn, K, V>, poison: &'txn Poison) -> Self {
+        Self {
+            inner,
+            poison,
+            write: Overwrite,
+        }
     }
 
     /// Write `key → value`, replacing any present value — and say so.
@@ -112,36 +136,86 @@ impl<'txn, K: Key + 'static, V: Value + 'static> KeyedTable<'txn, K, V> {
     }
 }
 
-impl<K: Key + 'static, V: Value + 'static> ReadableTableMetadata for KeyedTable<'_, K, V> {
-    fn stats(&self) -> redb::Result<TableStats> {
-        self.inner.stats()
-    }
-
-    fn len(&self) -> redb::Result<u64> {
-        self.inner.len()
-    }
-}
-
-impl<K: Key + 'static, V: Value + 'static> ReadableTable<K, V> for KeyedTable<'_, K, V> {
-    fn get<'a>(
+impl<K: Key + 'static, V: Value + 'static, W> KeyedTable<'_, K, V, W> {
+    /// Look up `key` as of this batch's writes.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Storage`] if the engine refused the read.
+    pub fn get<'a>(
         &self,
         key: impl Borrow<K::SelfType<'a>>,
-    ) -> redb::Result<Option<AccessGuard<'_, V>>> {
-        self.inner.get(key)
+    ) -> Result<Option<AccessGuard<'_, V>>, StoreError> {
+        self.inner
+            .get(key)
+            .map_err(|e| EngineError::Storage(e).into())
     }
 
-    fn range<'a, KR>(&self, range: impl RangeBounds<KR> + 'a) -> redb::Result<Range<'_, K, V>>
+    /// Iterate `range` as of this batch's writes.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Storage`] if the engine refused the read.
+    pub fn range<'a, KR>(
+        &self,
+        range: impl RangeBounds<KR> + 'a,
+    ) -> Result<Range<'_, K, V>, StoreError>
     where
         KR: Borrow<K::SelfType<'a>> + 'a,
     {
-        self.inner.range(range)
+        self.inner
+            .range(range)
+            .map_err(|e| EngineError::Storage(e).into())
     }
 
-    fn first(&self) -> redb::Result<Option<(AccessGuard<'_, K>, AccessGuard<'_, V>)>> {
-        self.inner.first()
+    /// The first key/value pair, if any.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Storage`] if the engine refused the read.
+    pub fn first(&self) -> Result<Option<TablePair<'_, K, V>>, StoreError> {
+        self.inner
+            .first()
+            .map_err(|e| EngineError::Storage(e).into())
     }
 
-    fn last(&self) -> redb::Result<Option<(AccessGuard<'_, K>, AccessGuard<'_, V>)>> {
-        self.inner.last()
+    /// The last key/value pair, if any.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Storage`] if the engine refused the read.
+    pub fn last(&self) -> Result<Option<TablePair<'_, K, V>>, StoreError> {
+        self.inner
+            .last()
+            .map_err(|e| EngineError::Storage(e).into())
+    }
+
+    /// Number of stored key/value pairs.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Storage`] if the engine refused the read.
+    pub fn len(&self) -> Result<u64, StoreError> {
+        self.inner.len().map_err(|e| EngineError::Storage(e).into())
+    }
+
+    /// Whether the table has no stored pairs.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Storage`] if the engine refused the read.
+    pub fn is_empty(&self) -> Result<bool, StoreError> {
+        Ok(self.len()? == 0)
+    }
+
+    /// Engine table stats.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Storage`] if the engine refused the read.
+    pub fn stats(&self) -> Result<TableStats, StoreError> {
+        self.inner
+            .stats()
+            .map_err(|e| EngineError::Storage(e).into())
     }
 }

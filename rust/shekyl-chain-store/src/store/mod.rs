@@ -48,14 +48,14 @@
 //!
 //! # Two verbs, and a violation poisons the batch (C2-R8 §7.3, Q2)
 //!
-//! Keyed tables open through the batch as [`KeyedTable`], whose only value
-//! writes are `insert` (fatal on a present key; the site names the `SI-`
-//! register row) and `upsert` (overwrite, declared). Typed `properties`
-//! cells are registers and go through
-//! [`upsert_property`](WriteBatch::upsert_property). Any invariant
+//! Keyed tables open through the batch as an [`InsertTable`] (fatal on a
+//! present key; the `SI-` row is bound at open) or an [`UpsertTable`]
+//! (overwrite, declared). Typed `properties` cells are registers and go
+//! through [`upsert_property`](WriteBatch::upsert_property). Any invariant
 //! violation seen through the batch — a refused `insert`, a cell that will
-//! not decode — arms a latch the commit checks, so a closure that swallows
-//! one still lands nothing: `write` returns the violation instead.
+//! not decode — arms a latch `complete` checks on **both** the `Ok` and
+//! `Err` arms, so a closure that swallows one, or maps it to a different
+//! error, still lands nothing: `write` returns the violation.
 //!
 //! # Durability is declared, never inherited
 //!
@@ -95,7 +95,7 @@ mod shared;
 mod write;
 
 pub use error::{CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant};
-pub use keyed::KeyedTable;
+pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use read::ReadSnapshot;
 pub use write::WriteBatch;
 
@@ -354,13 +354,14 @@ impl ChainStore {
     /// [`StoreCannot::ReadOnly`] if the store was opened read-only;
     /// [`StoreCannot::WriteInProgress`] if a batch is already live;
     /// [`EngineError::BeginWrite`] or [`EngineError::Durability`] if the
-    /// engine refuses to begin; whatever `f` returns; at commit,
-    /// [`StoreError::InvariantViolated`] if any invariant violation was
-    /// seen through the batch — even one `f` caught and did not return —
-    /// [`EngineError::Commit`] if the engine could not commit, or
-    /// [`StoreInvariant::CellCorrupt`] / [`EngineError::Storage`] if the
-    /// provenance cell could not be read back or widened. In every `Err`
-    /// case the batch is aborted and nothing lands.
+    /// engine refuses to begin; whatever `f` returns, **except** that
+    /// [`StoreError::InvariantViolated`] wins if any invariant violation
+    /// was seen through the batch — even one `f` caught, or mapped to a
+    /// different `Err`; at commit, [`EngineError::Commit`] if the engine
+    /// could not commit, or [`StoreInvariant::CellCorrupt`] /
+    /// [`EngineError::Storage`] if the provenance cell could not be read
+    /// back or widened. In every `Err` case the batch is aborted and
+    /// nothing lands.
     pub fn write<R, E, F>(&self, f: F) -> Result<R, E>
     where
         E: From<StoreError>,
@@ -380,11 +381,10 @@ impl ChainStore {
             }
         };
         // From here the batch owns the write slot: its Drop releases it on
-        // every exit, including the `?` below and an unwind out of `f`.
+        // every exit, including `complete` and an unwind out of `f`.
         let mut batch = WriteBatch::new(txn, self.apply_policy, &self.shared);
-        let value = f(&mut batch)?;
-        batch.commit()?;
-        Ok(value)
+        let outcome = f(&mut batch);
+        batch.complete(outcome)
     }
 
     /// Begin a read snapshot. Concurrent with a live write batch.

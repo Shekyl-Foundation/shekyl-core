@@ -10,10 +10,10 @@
 //! cannot run — and cannot create the table by opening it.
 //!
 //! A stubbed batch also **taints the file** when it commits: the
-//! provenance cell is widened inside the batch's own transaction (see
-//! [`commit`](WriteBatch::commit)), so the record that rows were written
-//! under a stub lands with those rows or not at all. An aborted stubbed
-//! batch leaves no trace, which is correct — it wrote nothing.
+//! provenance cell is widened inside the batch's own transaction, so the
+//! record that rows were written under a stub lands with those rows or
+//! not at all. An aborted stubbed batch leaves no trace, which is
+//! correct — it wrote nothing.
 //!
 //! # The brand
 //!
@@ -32,10 +32,12 @@
 //!
 //! # The verbs
 //!
-//! Keyed tables open as [`KeyedTable`], which exposes exactly two value
-//! writes — `insert` (fatal on a present key; the site names the `SI-`
-//! row) and `upsert` (overwrite, declared) — and no raw `redb::Table`
-//! (C2-R8 §7.3). Typed `properties` cells are registers and are written
+//! Keyed tables open as one of two handles — [`InsertTable`] (fatal on a
+//! present key; the `SI-` row is bound at open) or [`UpsertTable`]
+//! (overwrite, declared) — never as a raw `redb::Table` (C2-R8 §7.3).
+//! The verb is the handle: a set table cannot upsert, a register cannot
+//! insert, and a hard-fork that reclassifies a table opens the other
+//! handle. Typed `properties` cells are registers and are written
 //! through [`upsert_property`](WriteBatch::upsert_property). Multimap
 //! tables are sets of values per key: there is no overwrite to declare,
 //! so they open raw.
@@ -44,9 +46,10 @@
 //!
 //! An invariant violation is fatal to the batch, not just to the call that
 //! hit it. Every `StoreInvariantViolated` produced or observed through the
-//! batch arms a latch, and [`commit`](WriteBatch::commit) refuses with the
-//! first armed row — so a closure that catches a violation and carries on
-//! still cannot land anything. That is what makes "fatal, never
+//! batch arms a latch, and finishing the batch refuses with the first
+//! armed row **whether the closure returned `Ok` or some other `Err`** —
+//! so a closure that catches a violation cannot convert it into a
+//! different error, and nothing lands. That is what makes "fatal, never
 //! converted" (C2-R8 Q2) a property of the batch rather than a discipline
 //! asked of every call site.
 
@@ -64,16 +67,16 @@ use crate::schema::PROPERTIES;
 
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
-use super::keyed::KeyedTable;
+use super::keyed::{InsertTable, UpsertTable};
 use super::shared::Shared;
 
 /// The batch's fatal latch.
 ///
 /// The first violation to arm it is kept; `Poison` never disarms. It is a
-/// `Cell` because arming happens through shared borrows — a `KeyedTable`
-/// holds `&'txn Poison` while the batch is also borrowed — and a batch is
-/// single-threaded by construction (it lives inside one closure), so
-/// interior mutability without a lock is the honest shape.
+/// `Cell` because arming happens through shared borrows — an insert or
+/// upsert handle holds `&'txn Poison` while the batch is also borrowed —
+/// and a batch is single-threaded by construction (it lives inside one
+/// closure), so interior mutability without a lock is the honest shape.
 #[derive(Default)]
 pub(super) struct Poison(Cell<Option<StoreInvariant>>);
 
@@ -165,25 +168,44 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         Ok(())
     }
 
-    /// Open a keyed table for writing. Creates the table if it does not
-    /// exist.
+    /// Open a keyed table whose value writes are insert-once.
     ///
-    /// The handle is a [`KeyedTable`]: reads are the engine's, writes are
-    /// the two declared verbs. Archival families whose apply is stubbed
-    /// are refused *before* the engine sees the name, so a sufficiency run
-    /// cannot accidentally create the table it is proving load-bearing.
-    /// The `properties` table is refused outright: its cells are typed and
-    /// written through [`upsert_property`](Self::upsert_property).
+    /// `row` is the `SI-` belt this table enforces (SI-1 for `spent_keys`,
+    /// SI-3 for `txs`, …). It is bound here, not on each insert, so a site
+    /// cannot name a different belt for two writes to the same handle.
+    /// The `insert` verb is the only value write on the returned type —
+    /// `upsert` does not compile:
+    ///
+    /// ```compile_fail,E0599
+    /// use redb::TableDefinition;
+    /// use shekyl_chain_store::store::{CellFault, ChainStore, StoreError, StoreInvariant};
+    /// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
+    /// const ROW: StoreInvariant = StoreInvariant::CellCorrupt {
+    ///     key: "t",
+    ///     fault: CellFault::Absent,
+    /// };
+    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// store.write(|batch| -> Result<(), StoreError> {
+    ///     batch.open_insert_table(T, ROW)?.upsert("k", &1)?;
+    ///     Ok(())
+    /// });
+    /// ```
+    ///
+    /// Archival families whose apply is stubbed are refused *before* the
+    /// engine sees the name. The `properties` table is refused outright:
+    /// its cells are typed and written through
+    /// [`upsert_property`](Self::upsert_property).
     ///
     /// # Errors
     ///
     /// [`StoreCannot::FamilyStubbed`] if this table is an archival family
     /// the policy skips; [`StoreCannot::PropertiesAreTyped`] for
     /// `properties`; [`EngineError::Table`] if the engine refuses.
-    pub fn open_table<'txn, K, V>(
+    pub fn open_insert_table<'txn, K, V>(
         &'txn self,
         definition: TableDefinition<'_, K, V>,
-    ) -> Result<KeyedTable<'txn, K, V>, StoreError>
+        row: StoreInvariant,
+    ) -> Result<InsertTable<'txn, K, V>, StoreError>
     where
         K: Key + 'static,
         V: Value + 'static,
@@ -191,12 +213,50 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         self.admit(definition.name())?;
         self.txn()
             .open_table(definition)
-            .map(|table| KeyedTable::new(table, &self.poison))
+            .map(|table| InsertTable::new_insert(table, &self.poison, row))
+            .map_err(|e| EngineError::Table(e).into())
+    }
+
+    /// Open a keyed table whose value writes are declared overwrite.
+    ///
+    /// `insert` does not compile on the returned type — a register that
+    /// was meant to be a set is opened with
+    /// [`open_insert_table`](Self::open_insert_table) instead:
+    ///
+    /// ```compile_fail,E0599
+    /// use redb::TableDefinition;
+    /// use shekyl_chain_store::store::{ChainStore, StoreError};
+    /// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
+    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// store.write(|batch| -> Result<(), StoreError> {
+    ///     batch.open_upsert_table(T)?.insert("k", &1)?;
+    ///     Ok(())
+    /// });
+    /// ```
+    ///
+    /// Same by-name refusals as [`open_insert_table`](Self::open_insert_table).
+    ///
+    /// # Errors
+    ///
+    /// [`StoreCannot::FamilyStubbed`], [`StoreCannot::PropertiesAreTyped`]
+    /// or [`EngineError::Table`].
+    pub fn open_upsert_table<'txn, K, V>(
+        &'txn self,
+        definition: TableDefinition<'_, K, V>,
+    ) -> Result<UpsertTable<'txn, K, V>, StoreError>
+    where
+        K: Key + 'static,
+        V: Value + 'static,
+    {
+        self.admit(definition.name())?;
+        self.txn()
+            .open_table(definition)
+            .map(|table| UpsertTable::new_upsert(table, &self.poison))
             .map_err(|e| EngineError::Table(e).into())
     }
 
     /// Open a multimap table for writing. Same refusals as
-    /// [`open_table`](Self::open_table).
+    /// [`open_insert_table`](Self::open_insert_table).
     ///
     /// The handle is raw: a multimap is a set of values per key, so an
     /// insert either adds a member or finds it present — there is no value
@@ -278,18 +338,34 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     where
         C: PropertyCell<Scope = ChainState>,
     {
-        header::upsert::<C>(self.txn(), value)
+        header::put::<C>(self.txn(), value)
     }
 
-    /// Commit the batch. Called by
-    /// [`ChainStore::write`](super::ChainStore::write) when the closure
-    /// returns `Ok`; there is no other caller.
+    /// Finish the batch given the closure's `outcome`.
     ///
-    /// A poisoned batch does not commit: the first invariant violation seen
-    /// through it is returned here and the transaction aborts on drop.
-    /// Otherwise a stubbed batch widens the persisted provenance cell **in
-    /// this transaction** before committing, so the taint is atomic with
-    /// the rows, and publishes the widened [`Provenance`] to the store's
+    /// Poison wins on both arms: a violation seen through the batch is
+    /// returned as `E` (via `From<StoreError>`) even when the closure
+    /// returned a different `Err`, and the transaction aborts on drop.
+    /// Only an unpoisoned `Ok` commits.
+    pub(super) fn complete<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
+        if let Some(row) = self.poison.armed() {
+            return Err(StoreError::from(row).into());
+        }
+        match outcome {
+            Ok(value) => {
+                self.commit()?;
+                Ok(value)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Commit the batch. Called by [`complete`](Self::complete) on an
+    /// unpoisoned `Ok`; there is no other caller.
+    ///
+    /// A stubbed batch widens the persisted provenance cell **in this
+    /// transaction** before committing, so the taint is atomic with the
+    /// rows, and publishes the widened [`Provenance`] to the store's
     /// mirror under the same lock — [`ChainStore::provenance`] is where a
     /// caller reads it. A `Full` batch leaves the cell as it found it.
     ///
@@ -298,19 +374,13 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::InvariantViolated`] if the batch was poisoned;
     /// [`EngineError::Commit`] if the engine could not commit;
     /// [`StoreInvariant::CellCorrupt`] / [`EngineError::Storage`] if the
     /// provenance cell could not be read back or widened. In every `Err`
     /// case the batch is aborted and nothing lands. The transaction is
     /// consumed either way — DRS-W2's swallowed-`batch_stop` failure made
     /// unrepresentable.
-    pub(super) fn commit(mut self) -> Result<(), StoreError> {
-        if let Some(row) = self.poison.armed() {
-            // `self` drops on this return: the transaction aborts and the
-            // write slot is released, exactly as for a closure `Err`.
-            return Err(row.into());
-        }
+    fn commit(mut self) -> Result<(), StoreError> {
         let txn = self
             .txn
             .take()

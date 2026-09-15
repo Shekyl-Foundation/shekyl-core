@@ -7,7 +7,7 @@
 //! under the size the decomposition ratchet exists to protect. Header and
 //! provenance tests are in `header_tests.rs`.
 
-use redb::{ReadableTable, TableDefinition};
+use redb::TableDefinition;
 
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
@@ -35,22 +35,24 @@ pub(super) fn abort<T>(_: &mut WriteBatch<'_, '_>) -> Result<T, TestErr> {
     Err(TestErr::Abort)
 }
 
-/// The row an `insert` on the probe table names when the key is present.
+/// The row an insert-once open of the probe table names.
 ///
 /// The probe table is a test fixture, not a schema table, so it has no
-/// register row of its own; the verb needs *a* `StoreInvariant` to name
-/// and SI-7's is the only variant built. What the tests below assert is
-/// that the row the site named is the row that comes back — not which
-/// row it is. S-CHAIN-W's sites name SI-1 / SI-3 / SI-4.
+/// register row of its own; `open_insert_table` needs *a* `StoreInvariant`
+/// to bind and SI-7's is the only variant built. What the tests below
+/// assert is that the row the handle was opened with is the row that
+/// comes back — not which row it is. S-CHAIN-W's sites bind SI-1 / SI-3
+/// / SI-4 at open. IT DOES NOT COVER: uniqueness *being* SI-7.
 pub(super) const PROBE_ROW: StoreInvariant = StoreInvariant::CellCorrupt {
     key: "__e1_probe",
     fault: CellFault::Absent,
 };
 
 /// Write one probe row `k = v` inside `batch`. A probe row is a fixture
-/// register, so this is an `upsert`; the `insert` verb has its own tests.
+/// register, so this is an `upsert`; the insert-once handle has its own
+/// tests.
 pub(super) fn probe_row(batch: &WriteBatch<'_, '_>, k: &str, v: u64) -> Result<(), StoreError> {
-    batch.open_table(PROBE)?.upsert(k, &v).map(drop)
+    batch.open_upsert_table(PROBE)?.upsert(k, &v).map(drop)
 }
 
 /// Read probe row `k` from a fresh snapshot: `None` if the table or the
@@ -187,28 +189,30 @@ fn insert_lands_on_a_fresh_key_and_names_the_row_on_a_present_one() {
     let path = tmp("insert");
     let store = ChainStore::create(&path).expect("create");
     store
-        .write(|batch| batch.open_table(PROBE)?.insert("k", &1, PROBE_ROW))
+        .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
         .expect("a fresh key lands");
     assert_eq!(probe_val(&store, "k"), Some(1));
 
     // The closure catches the refusal and carries on as if nothing
-    // happened: reads the key, writes another, returns Ok. None of that
-    // rescues the batch — the poison is what commit consults.
+    // happened: reads the key, writes another via the overwrite handle,
+    // returns Ok. None of that rescues the batch — poison is what
+    // `complete` consults.
     let result = store.write(|batch| -> Result<(), StoreError> {
-        let mut table = batch.open_table(PROBE)?;
+        let mut table = batch.open_insert_table(PROBE, PROBE_ROW)?;
         assert!(
             matches!(
-                table.insert("k", &2, PROBE_ROW),
+                table.insert("k", &2),
                 Err(StoreError::InvariantViolated(row)) if row == PROBE_ROW
             ),
-            "the site's row is the row that comes back"
+            "the handle's row is the row that comes back"
         );
         assert_eq!(
-            table.get("k").expect("get").expect("present").value(),
+            table.get("k")?.expect("present").value(),
             1,
             "a refused insert leaves the table untouched"
         );
-        table.upsert("other", &9)?;
+        drop(table);
+        batch.open_upsert_table(PROBE)?.upsert("other", &9)?;
         Ok(())
     });
     assert!(
@@ -235,11 +239,37 @@ fn a_propagated_violation_reaches_the_caller_in_the_callers_type() {
     let path = tmp("insert-propagated");
     let store = ChainStore::create(&path).expect("create");
     store
-        .write(|batch| batch.open_table(PROBE)?.insert("k", &1, PROBE_ROW))
+        .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
         .expect("seed");
     let result = store.write(|batch| -> Result<(), TestErr> {
-        batch.open_table(PROBE)?.insert("k", &2, PROBE_ROW)?;
+        batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &2)?;
         unreachable!("the insert was refused");
+    });
+    assert_eq!(result, Err(TestErr::Store(PROBE_ROW.to_string())));
+    assert_eq!(probe_val(&store, "k"), Some(1));
+    cleanup(&path);
+}
+
+#[test]
+fn a_swallowed_violation_outvotes_a_different_err() {
+    // THIS BITES AGAINST: `complete` returning the closure's `Err` when
+    // poison is armed — that is converting the Halt into something else
+    // (C2-R8 Q2). IT DOES NOT COVER: the Ok-and-swallowed path
+    // (`insert_lands_on_a_fresh_key_and_names_the_row_on_a_present_one`).
+    let path = tmp("insert-err-poison");
+    let store = ChainStore::create(&path).expect("create");
+    store
+        .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
+        .expect("seed");
+    let result = store.write(|batch| -> Result<(), TestErr> {
+        assert!(
+            matches!(
+                batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &2),
+                Err(StoreError::InvariantViolated(row)) if row == PROBE_ROW
+            ),
+            "the handle's row is the row that comes back"
+        );
+        Err(TestErr::Abort)
     });
     assert_eq!(result, Err(TestErr::Store(PROBE_ROW.to_string())));
     assert_eq!(probe_val(&store, "k"), Some(1));
@@ -252,7 +282,7 @@ fn upsert_replaces_and_returns_the_displaced_value() {
     let store = ChainStore::create(&path).expect("create");
     store
         .write(|batch| -> Result<(), StoreError> {
-            let mut table = batch.open_table(PROBE)?;
+            let mut table = batch.open_upsert_table(PROBE)?;
             assert!(
                 table.upsert("k", &1)?.is_none(),
                 "first write displaces nothing"
@@ -368,7 +398,7 @@ fn a_stubbed_family_cannot_open_its_table_on_a_write() {
     store
         .write(|batch| -> Result<(), StoreError> {
             assert!(matches!(
-                batch.open_table(crate::schema::ARCHIVAL_SLASH_LOG),
+                batch.open_upsert_table(crate::schema::ARCHIVAL_SLASH_LOG),
                 Err(StoreError::Cannot(StoreCannot::FamilyStubbed(
                     ArchivalFamily::SlashLog
                 )))
@@ -391,7 +421,11 @@ fn the_properties_table_has_no_raw_write_handle() {
     assert_eq!(
         store.write(|batch| {
             assert!(matches!(
-                batch.open_table(crate::schema::PROPERTIES),
+                batch.open_upsert_table(crate::schema::PROPERTIES),
+                Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
+            ));
+            assert!(matches!(
+                batch.open_insert_table(crate::schema::PROPERTIES, PROBE_ROW),
                 Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
             ));
             // Nor by redefining it under another type: the refusal is by name.

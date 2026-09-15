@@ -19,8 +19,10 @@
 //!   taint commits with the rows it describes or not at all.
 //!
 //! No public write path reaches either cell. [`seal`] and [`widen`] are
-//! their only writers; [`upsert`] is `pub(super)` and its public caller,
+//! their only writers; [`put`] is `pub(super)` and its public caller,
 //! `WriteBatch::upsert_property`, is bounded to chain-state cells.
+//! Store-owned header writes are `put`, not `upsert`: they are not
+//! choosing a keyed-table verb.
 
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 
@@ -38,8 +40,8 @@ use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvaria
 /// under it from its first byte.
 pub(super) fn seal(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
     let provenance = Provenance::FULL.widened_by(policy);
-    upsert::<SchemaVersionCell>(txn, &SCHEMA_VERSION)?;
-    upsert::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
+    put::<SchemaVersionCell>(txn, &SCHEMA_VERSION)?;
+    put::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
     Ok(provenance)
 }
 
@@ -83,7 +85,7 @@ pub(super) fn widen(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Prove
     };
     let after = Provenance::of(current).widened_by(policy);
     if after.stubbed() != current {
-        upsert::<ApplyPolicyCell>(txn, &after.stubbed())?;
+        put::<ApplyPolicyCell>(txn, &after.stubbed())?;
     }
     Ok(after)
 }
@@ -107,10 +109,11 @@ pub(super) fn get<C: PropertyCell>(
     })
 }
 
-/// Upsert cell `C` in `txn` — a header cell is a register, overwritten by
-/// design, and the verb declares it (C2-R8 §7.3). Opens (creating if
-/// needed) the `properties` table for the duration of the write.
-pub(super) fn upsert<C: PropertyCell>(
+/// Write cell `C` in `txn`. Header cells are store-owned registers;
+/// overwrite is the only operation, so this is not the keyed-table
+/// `upsert` verb. Opens (creating if needed) the `properties` table for
+/// the duration of the write.
+pub(super) fn put<C: PropertyCell>(
     txn: &WriteTransaction,
     value: &C::Value,
 ) -> Result<(), StoreError> {
