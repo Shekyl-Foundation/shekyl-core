@@ -209,6 +209,22 @@ function (die msg)
   message(FATAL_ERROR "${BoldRed}${msg}${ColourReset}")
 endfunction ()
 
+# CMake file(GLOB "dir/*") includes dotfiles (cmake 3.31; GLOB * is
+# not shell glob). A `.git`-only interrupted submodule checkout must
+# not count as populated — same contract as T15 and gate-and-push.sh.
+function (dir_populated_ignoring_git dir out_var)
+  file(GLOB _dpi_entries LIST_DIRECTORIES true "${dir}/*")
+  set(_dpi_populated FALSE)
+  foreach(_dpi_e IN LISTS _dpi_entries)
+    get_filename_component(_dpi_bn "${_dpi_e}" NAME)
+    if(NOT _dpi_bn STREQUAL ".git")
+      set(_dpi_populated TRUE)
+      break()
+    endif()
+  endforeach()
+  set(${out_var} ${_dpi_populated} PARENT_SCOPE)
+endfunction ()
+
 function (add_c_flag_if_supported flag var)
   # Prepending the flag with -Werror will only add the flag,
   # if it doesn't result in generation of a warning of using a flag unknown to the compiler.
@@ -456,8 +472,8 @@ if(NOT MANUAL_SUBMODULES)
       if(NOT EXISTS "${_sm_path}" OR NOT IS_DIRECTORY "${_sm_path}")
         message(FATAL_ERROR "Submodule '${relative_path}' is missing or not a directory. Initialize with\ngit submodule update --init --force ${relative_path}\nor run cmake with -DMANUAL_SUBMODULES=1\n")
       endif()
-      file(GLOB _sm_entries LIST_DIRECTORIES true "${_sm_path}/*")
-      if(NOT _sm_entries)
+      dir_populated_ignoring_git("${_sm_path}" _sm_populated)
+      if(NOT _sm_populated)
         message(FATAL_ERROR "Submodule '${relative_path}' is an empty directory (not initialized). git rev-parse HEAD inside it walks up to the superproject. Initialize with\ngit submodule update --init --force ${relative_path}\nor run cmake with -DMANUAL_SUBMODULES=1\n")
       endif()
       execute_process(COMMAND git rev-parse "HEAD" WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${relative_path} OUTPUT_VARIABLE localHead)
@@ -886,8 +902,8 @@ if(BUILD_RANDOMX_V2_MINER_LIB)
       "Initialize with:\n  git submodule update --init external/randomx-v2\n"
       "Default daemon CMake does not need this tree.")
   endif()
-  file(GLOB _RANDOMX_V2_ENTRIES LIST_DIRECTORIES true "${_RANDOMX_V2_SRC}/*")
-  if(NOT _RANDOMX_V2_ENTRIES)
+  dir_populated_ignoring_git("${_RANDOMX_V2_SRC}" _RANDOMX_V2_POPULATED)
+  if(NOT _RANDOMX_V2_POPULATED)
     message(FATAL_ERROR
       "external/randomx-v2 is an empty directory (not initialized). "
       "Initialize with:\n  git submodule update --init external/randomx-v2\n"

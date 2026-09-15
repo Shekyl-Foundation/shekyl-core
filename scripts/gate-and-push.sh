@@ -120,7 +120,10 @@ case "${DOC_LINK_RC}" in
 		exit 1
 	fi
 	_rx_v2_populated=0
-	for _rx_v2_entry in external/randomx-v2/* external/randomx-v2/.[!.]*; do
+	# POSIX hidden-file coverage: `*` (non-dot), `.[!.]*` (one-dot
+	# names except `.` / `..`), `..?*` (two-dot names such as
+	# `..partial`). Skip only `.git`.
+	for _rx_v2_entry in external/randomx-v2/* external/randomx-v2/.[!.]* external/randomx-v2/..?*; do
 		[ -e "${_rx_v2_entry}" ] || continue
 		[ "$(basename "${_rx_v2_entry}")" = ".git" ] && continue
 		_rx_v2_populated=1

@@ -184,8 +184,9 @@ fn t14_randomx_v2_sys_sole_consumer() {
 fn dir_is_populated(path: &Path) -> bool {
     // Fail closed on I/O: a directory we cannot read is not a pin we
     // can attest. Ignore `.git` — a gitfile/gitdir leftover from an
-    // interrupted `submodule update` is not RandomX source, and CMake
-    // `file(GLOB … /*)` already ignores dotfiles.
+    // interrupted `submodule update` is not RandomX source. CMake
+    // `file(GLOB … /*)` *includes* dotfiles; both CMake populate
+    // checks filter `.git` the same way (`dir_populated_ignoring_git`).
     let entries = std::fs::read_dir(path).unwrap_or_else(|e| {
         panic!(
             "read_dir {}: {e} (fail closed — cannot attest population)",
