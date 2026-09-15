@@ -1409,11 +1409,14 @@ preference for bulk-load shape.
 text, retained:* at `ba4b3c73a` rule 42 was scoped by its globs to the wallet
 crates and (a)/(b) had no CI ratchet behind them; the glob was attached at
 DRS-0 with an explicit "no gate" paragraph. The gate landed with the codecs, as
-rule 42 said it should: `codec_snapshot` tests in
-`rust/shekyl-chain-store/src/codec/snapshot_tests.rs` pin the fixture encodings
-of every `Canonical` impl under `rust/shekyl-chain-store/schemas/*.snap`, and
-`.github/workflows/schema-snapshot.yml` runs them and refuses any `.snap` change
-there without `SCHEMA_VERSION` moving in the same PR. See
+rule 42 said it should: the `codec::snapshot_tests` module in
+`rust/shekyl-chain-store/src/codec/` pins the fixture encodings of every
+`Canonical` impl **and** the table catalogue — name, shape, key/value type of
+every `schema.rs` definition, which is (b)'s add/remove/re-key half — under
+`rust/shekyl-chain-store/schemas/*.snap`, and
+`.github/workflows/schema-snapshot.yml` runs the module and refuses any `.snap`
+change there unless `SCHEMA_VERSION` is numerically greater at the PR head than
+at its base. See
 [`42-serialization-policy.mdc`](../../.cursor/rules/42-serialization-policy.mdc)
 §"Two ratchets, one workflow".
 
@@ -1429,7 +1432,15 @@ there without `SCHEMA_VERSION` moving in the same PR. See
 - (b) is `codec::Canonical`: one fixed-width, strict encoding per stored value
   type, used both to store and to digest. Types are `u8`, `u64` (LE, matching
   `digest_v0` and redb's native `u64`), `Hash32`, `SchemaVersion`, `FamilySet`;
-  the table-valued codecs land with their surfaces.
+  the table-valued codecs land with their surfaces. The table set itself is
+  `schema::catalogue()`, emitted by the same `tables!` invocation that declares
+  the definitions, so the layout half of (b) is snapshotted from the
+  declarations rather than from a hand-kept list.
+- `codec::PropertyCell` is **sealed**: a cell can only be declared inside the
+  crate's `property_cells!` invocation, which also emits the `PROPERTY_CELLS`
+  registry. The set of `properties` keys is therefore closed and enumerable —
+  a downstream crate cannot mint a cell whose `KEY` is `schema_version` or
+  `apply_policy` and reach the header's cells through `put_property`.
 - The `properties` table has **no raw write handle**: `WriteBatch::open_table`
   refuses it (`PropertiesAreTyped`). Cells are typed by `codec::PropertyCell`
   with a `Scope` — `ChainState` (digest-visible, writable through

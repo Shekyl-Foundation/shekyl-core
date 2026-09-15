@@ -1582,16 +1582,20 @@ no map iteration order, no varint with multiple valid encodings of one
 value, no padding slack, no platform-dependent integer width, no float.
 **A late encoding change is consensus-visible, not a refactor.**
 
-**That last sentence is a design commitment with no mechanical enforcement
-behind it today, and is recorded as such rather than left to imply one.**
-Rule 42 (persisted-wire change ⇒ version-constant bump, CI-enforced) is
-scoped by globs to the wallet crates; `rust/shekyl-chain-store` is outside
-them. So at the moment this freeze lands, the codec stability it depends on
-is a convention, not a gate. DRS-0 slice C's §11.1 states the matching rule
-from the store side (a value-codec change bumps the store's
-`schema_version`) and has the same gap. Extending rule 42's globs to cover
-the chain-store crate is the mechanism that would close it; that is a
-rules change, and it is escalated rather than assumed here.
+**That last sentence has mechanical enforcement behind it since DRS-E1
+increment 2 (2026-09-14).** Rule 42's `schema-snapshot.yml` runs the chain
+store's `codec::snapshot_tests`: every `codec::Canonical` impl's fixture
+encodings and the table catalogue (`schemas/tables.snap`) are pinned, and any
+snapshot change requires `SCHEMA_VERSION` (`src/codec/schema_version.rs`) to
+be numerically greater at the PR head than at its base. *Superseded text,
+retained:* at the freeze (`ba4b3c73a`) rule 42 was scoped by globs to the
+wallet crates and `rust/shekyl-chain-store` was outside them, so the codec
+stability this section depends on was a convention, not a gate; DRS-0 slice
+C's §11.1 stated the matching store-side rule with the same gap, and
+extending rule 42 to the crate was escalated as a rules change rather than
+assumed. That escalation is discharged; the gate is described in
+[`42-serialization-policy.mdc`](../.cursor/rules/42-serialization-policy.mdc)
+§"Chain-store codec snapshot".
 
 **§6.3 independence, made checkable per value type:** *can the canonical
 encoding be computed from the logical value alone, with no cursor, no txn,
