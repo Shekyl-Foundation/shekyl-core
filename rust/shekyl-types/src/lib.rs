@@ -411,6 +411,23 @@ hash32! {
 }
 
 hash32! {
+    /// `keccak256` of a transaction's **prunable byte region** — the bytes
+    /// past `unprunable_size` (C++ `calculate_transaction_prunable_hash`).
+    ///
+    /// The fourth component of an FCMP++ spend's [`TxHash`], and what the
+    /// chain store records per transaction (`txs_prunable_hash`) so a pruned
+    /// body can be bound back to its txid. Derived once by the validation
+    /// crate beside the txid (S-CHAIN-W SCW-10); the store records it and
+    /// never computes it (C2-R8 Q4).
+    ///
+    /// **Not** the txid's substitute for an absent region: a coinbase's txid
+    /// uses the null hash as its third component, but its prunable region is
+    /// the empty byte string and this value is `keccak256("")`. Distinct
+    /// from [`TxHash`] so the two can never be swapped at a store boundary.
+    PrunableHash
+}
+
+hash32! {
     /// The root of the FCMP++ curve tree **as recorded** after a block — the
     /// membership anchor a spend's proof is verified against.
     ///
