@@ -182,10 +182,24 @@ fn t14_randomx_v2_sys_sole_consumer() {
 // ---------------------------------------------------------------------------
 
 fn dir_is_populated(path: &Path) -> bool {
-    match std::fs::read_dir(path) {
-        Ok(mut entries) => entries.next().is_some(),
-        Err(_) => false,
+    // Fail closed on I/O: a directory we cannot read is not a pin we
+    // can attest. Ignore `.git` — a gitfile/gitdir leftover from an
+    // interrupted `submodule update` is not RandomX source, and CMake
+    // `file(GLOB … /*)` already ignores dotfiles.
+    let entries = std::fs::read_dir(path).unwrap_or_else(|e| {
+        panic!(
+            "read_dir {}: {e} (fail closed — cannot attest population)",
+            path.display()
+        )
+    });
+    for entry in entries {
+        let entry = entry
+            .unwrap_or_else(|e| panic!("read_dir entry {}: {e} (fail closed)", path.display()));
+        if entry.file_name() != ".git" {
+            return true;
+        }
     }
+    false
 }
 
 fn git_rev_parse(cwd: &Path, spec: &str) -> Result<String, String> {
@@ -271,10 +285,12 @@ fn t15_randomx_v2_sys_signature_audit_pin() {
     );
 
     // 3. On-disk HEAD == pin, only if the checkout has its own .git
-    // (file or directory). Tarball exports have no .git; the gitlink
-    // check above is then the whole pin claim. Guard with
-    // --show-toplevel so a leftover .git that still walks up is not
-    // treated as a submodule HEAD.
+    // (file or directory) whose `--show-toplevel` is the submodule
+    // itself. T15 is a git-checkout test: `HEAD:external/randomx-v2`
+    // already required the superproject `.git`, so a source tarball
+    // with no git metadata fails at step 2 — there is no tarball skip
+    // contract. Guard `--show-toplevel` so a leftover `.git` that
+    // still walks up is not treated as a submodule HEAD.
     let git_marker = submodule_dir.join(".git");
     if git_marker.exists() {
         let toplevel = git_rev_parse(&submodule_dir, "--show-toplevel").unwrap_or_else(|err| {

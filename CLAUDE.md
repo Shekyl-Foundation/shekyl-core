@@ -171,9 +171,9 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release \
 ```
 
 `-DMANUAL_SUBMODULES=1` is an escape hatch (Guix/gitian), not the happy
-path. The workspace `cargo test` lane excludes
-`shekyl-randomx-differential` unless `RANDOMX_V2_INSTALL_DIR` is set
-(`.github/workflows/rust-audit-test.yml`); the dedicated
+path. The workspace `cargo test` lane **unconditionally** excludes
+`shekyl-randomx-differential` (`.github/workflows/rust-audit-test.yml`);
+setting `RANDOMX_V2_INSTALL_DIR` does not re-include it. The dedicated
 `randomx-v2-differential` workflow is the gate for T13/T14/T15.
 
 C++ (Monero-lineage toolchain):
@@ -189,7 +189,7 @@ Rust (workspace under `rust/`; gates per [`45`](.cursor/rules/45-rust-lint-check
 cd rust
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --exclude shekyl-randomx-differential
 ```
 
 CI mirrors these plus `cargo audit` on `Cargo.lock` changes and the
