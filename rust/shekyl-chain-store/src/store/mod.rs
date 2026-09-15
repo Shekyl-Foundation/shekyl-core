@@ -19,8 +19,23 @@
 //! and dereferences `*m_write_txn` at **129** sites with no guard at the
 //! dereference (DRS-W3). [`WriteBatch`] makes the precondition
 //! unrepresentable: it cannot be null, table access goes through it (never
-//! a raw `WriteTransaction`), and [`commit`](WriteBatch::commit) /
-//! [`abort`](WriteBatch::abort) consume it.
+//! a raw `WriteTransaction`), and it exists only inside a
+//! [`write`](ChainStore::write) closure — `Ok` commits it, `Err` or an
+//! unwind drops it, and drop aborts.
+//!
+//! # One transaction, one brand (C2-R8 Q3, DRS-E1 increment 2.5)
+//!
+//! The closure is higher-ranked over the batch's brand lifetime `'id`
+//! (`for<'id> FnOnce(&mut WriteBatch<'_, 'id>)`), so every `write` call
+//! mints a batch no other call can name. A value typed with one batch's
+//! brand — the view a validator reads from it, the `ChainValid<'id>` the
+//! validator mints against that view — cannot be presented to another
+//! batch: the two `'id`s are distinct and invariant, and the handoff does
+//! not compile. Validation and apply therefore run against **the same
+//! transaction** by construction, which is what the ruling requires and
+//! what a one-thread block processor would otherwise let someone forget
+//! the first time a parallel read is added. One-live-write below is a
+//! liveness property only; the TOCTOU guarantee rests on the brand.
 //!
 //! A second live batch is a typed [`StoreError::WriteInProgress`], not
 //! redb's blocking `begin_write`. Same-thread re-entry would otherwise
@@ -285,28 +300,75 @@ impl ChainStore {
         matches!(self.backend, Backend::ReadOnly(_))
     }
 
-    /// Begin a write batch. The **only** way to obtain a [`WriteBatch`].
+    /// Run `f` inside a write batch and commit if it returns `Ok`. The
+    /// **only** way to reach a [`WriteBatch`].
+    ///
+    /// The closure is higher-ranked over the batch's brand `'id`, so the
+    /// batch it is handed — and every value typed with that brand — is
+    /// distinct from any other call's:
+    ///
+    /// ```compile_fail,E0521
+    /// use shekyl_chain_store::store::{ChainStore, StoreError, WriteBatch};
+    /// fn same_batch<'id>(_: &WriteBatch<'_, 'id>, _: &WriteBatch<'_, 'id>) {}
+    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// store.write(|outer| {
+    ///     store.write(|inner| -> Result<(), StoreError> {
+    ///         same_batch(outer, inner);
+    ///         Ok(())
+    ///     })
+    /// });
+    /// ```
+    ///
+    /// (Two batches can never be *live* together on one store — the inner
+    /// call would be [`StoreError::WriteInProgress`] — but the point of the
+    /// brand is that the handoff is refused before anything runs.)
+    ///
+    /// `Err` from the closure drops the batch, and drop aborts: nothing the
+    /// closure wrote lands. There is no separate abort verb; an abort that
+    /// the engine fails to complete is not lost either — redb latches the
+    /// storage failure and refuses the next `begin_write` with
+    /// `StorageError::PreviousIo` (`redb-4.1.0/src/transactions.rs:2084`,
+    /// `db.rs:1410`, read at the pinned source), which the next `write`
+    /// surfaces as [`StoreError::BeginWrite`].
+    ///
+    /// `E` is any error the caller's closure may return, provided the
+    /// store's own failures convert into it; a closure that only ever
+    /// returns `Ok` names it (`Ok::<_, StoreError>(())`).
     ///
     /// # Errors
     ///
     /// [`StoreError::ReadOnly`] if the store was opened read-only;
     /// [`StoreError::WriteInProgress`] if a batch is already live;
     /// [`StoreError::BeginWrite`] or [`StoreError::Durability`] if the
-    /// engine refuses.
-    pub fn begin_batch(&self) -> Result<WriteBatch<'_>, StoreError> {
+    /// engine refuses to begin; whatever `f` returns; at commit,
+    /// [`StoreError::Commit`] if the engine could not commit, or
+    /// [`StoreError::CellCorrupt`] / [`StoreError::Storage`] if the
+    /// provenance cell could not be read back or widened — the batch is
+    /// aborted and nothing lands.
+    pub fn write<R, E, F>(&self, f: F) -> Result<R, E>
+    where
+        E: From<StoreError>,
+        F: for<'id> FnOnce(&mut WriteBatch<'_, 'id>) -> Result<R, E>,
+    {
         let Backend::Writable(db) = &self.backend else {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreError::ReadOnly.into());
         };
         if !self.shared.try_hold_write() {
-            return Err(StoreError::WriteInProgress);
+            return Err(StoreError::WriteInProgress.into());
         }
-        match arm_write(db) {
-            Ok(txn) => Ok(WriteBatch::new(txn, self.apply_policy, &self.shared)),
+        let txn = match arm_write(db) {
+            Ok(txn) => txn,
             Err(e) => {
                 self.shared.release_write();
-                Err(e)
+                return Err(e.into());
             }
-        }
+        };
+        // From here the batch owns the write slot: its Drop releases it on
+        // every exit, including the `?` below and an unwind out of `f`.
+        let mut batch = WriteBatch::new(txn, self.apply_policy, &self.shared);
+        let value = f(&mut batch)?;
+        batch.commit()?;
+        Ok(value)
     }
 
     /// Begin a read snapshot. Concurrent with a live write batch.

@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The write handle that discharges DRS-W3.
+//! The write handle that discharges DRS-W3, branded per batch (C2-R8 Q3).
 //!
 //! Table modules take [`WriteBatch`], never a raw transaction. Opening a
 //! table consults [`ApplyPolicy`](crate::apply_policy::ApplyPolicy) by name
@@ -15,6 +15,23 @@
 //! [`commit`](WriteBatch::commit)), so the record that rows were written
 //! under a stub lands with those rows or not at all. An aborted stubbed
 //! batch leaves no trace, which is correct — it wrote nothing.
+//!
+//! # The brand
+//!
+//! `WriteBatch<'store, 'id>` carries an **invariant** lifetime `'id` that
+//! no two batches share. It is minted only by
+//! [`ChainStore::write`](super::ChainStore::write), whose closure is
+//! higher-ranked over `'id`, so `'id` names *this call's* batch and nothing
+//! outside the closure can be typed with it. Any type that borrows the
+//! brand — the `ChainView<'id>` a validator reads, the `ChainValid<'id>` it
+//! mints (DRS-E6) — can therefore only be consumed by the batch it came
+//! from: handing one to another batch is a type error, not a runtime check.
+//! `PhantomData<fn(&'id ()) -> &'id ()>` is what makes the parameter
+//! invariant; a covariant brand would let two batches' regions coerce to a
+//! common shorter one and the cross-handoff would type-check (the ruling's
+//! rejected plain-lifetime shape).
+
+use core::marker::PhantomData;
 
 use redb::{
     Key, MultimapTable, MultimapTableDefinition, MultimapTableHandle, Table, TableDefinition,
@@ -30,24 +47,29 @@ use super::error::StoreError;
 use super::header;
 use super::shared::Shared;
 
-/// An open write transaction.
+/// An open write transaction, branded with the lifetime `'id` of the
+/// [`write`](super::ChainStore::write) call that opened it.
 ///
-/// It cannot be default-constructed, cloned, or observed in a null state;
-/// [`commit`](Self::commit) and [`abort`](Self::abort) take `self` by value.
-/// Dropping it without committing **aborts** it (redb rolls back on drop) —
+/// It cannot be default-constructed, cloned, or observed in a null state,
+/// and it never leaves the closure it was handed to: the closure sees
+/// `&mut WriteBatch`, and `'id` is bound inside the closure's own type, so
+/// neither the batch nor anything carrying its brand can escape. The
+/// closure returning `Ok` commits; returning `Err` — or unwinding — drops
+/// the batch, and dropping **aborts** (redb rolls back on drop). That is
 /// the DRS-W8 direction, where a C++ throw left the write transaction live
 /// and poisoned every later block write.
 ///
 /// Dropping also releases the store's write-held flag, so a later
-/// [`begin_batch`](super::ChainStore::begin_batch) can proceed.
-#[must_use = "dropping a WriteBatch aborts it; call commit or abort"]
-pub struct WriteBatch<'store> {
+/// [`write`](super::ChainStore::write) can proceed.
+#[must_use = "a WriteBatch is only ever handed to a `ChainStore::write` closure"]
+pub struct WriteBatch<'store, 'id> {
     txn: Option<WriteTransaction>,
     apply_policy: ApplyPolicy,
     shared: &'store Shared,
+    _brand: PhantomData<fn(&'id ()) -> &'id ()>,
 }
 
-impl<'store> WriteBatch<'store> {
+impl<'store, 'id> WriteBatch<'store, 'id> {
     pub(super) fn new(
         txn: WriteTransaction,
         apply_policy: ApplyPolicy,
@@ -57,6 +79,7 @@ impl<'store> WriteBatch<'store> {
             txn: Some(txn),
             apply_policy,
             shared,
+            _brand: PhantomData,
         }
     }
 
@@ -70,7 +93,7 @@ impl<'store> WriteBatch<'store> {
     fn txn(&self) -> &WriteTransaction {
         self.txn
             .as_ref()
-            .expect("WriteBatch holds a transaction until commit/abort consume it")
+            .expect("WriteBatch holds a transaction until commit consumes it")
     }
 
     /// The two by-name refusals every raw table open passes through.
@@ -158,19 +181,21 @@ impl<'store> WriteBatch<'store> {
     ///
     /// ```compile_fail,E0271
     /// use shekyl_chain_store::codec::{SchemaVersion, SchemaVersionCell};
-    /// use shekyl_chain_store::store::ChainStore;
+    /// use shekyl_chain_store::store::{ChainStore, StoreError};
     /// let store = ChainStore::create("never-opened.redb").unwrap();
-    /// let batch = store.begin_batch().unwrap();
-    /// batch.put_property::<SchemaVersionCell>(&SchemaVersion::new(9));
+    /// store.write(|batch| -> Result<(), StoreError> {
+    ///     batch.put_property::<SchemaVersionCell>(&SchemaVersion::new(9))
+    /// });
     /// ```
     ///
     /// ```compile_fail,E0271
     /// use shekyl_chain_store::codec::ApplyPolicyCell;
     /// use shekyl_chain_store::family_set::FamilySet;
-    /// use shekyl_chain_store::store::ChainStore;
+    /// use shekyl_chain_store::store::{ChainStore, StoreError};
     /// let store = ChainStore::create("never-opened.redb").unwrap();
-    /// let batch = store.begin_batch().unwrap();
-    /// batch.put_property::<ApplyPolicyCell>(&FamilySet::EMPTY);
+    /// store.write(|batch| -> Result<(), StoreError> {
+    ///     batch.put_property::<ApplyPolicyCell>(&FamilySet::EMPTY)
+    /// });
     /// ```
     ///
     /// # Errors
@@ -184,7 +209,8 @@ impl<'store> WriteBatch<'store> {
     }
 
     /// Commit the batch, returning the file's [`Provenance`] as of this
-    /// commit.
+    /// commit. Called by [`ChainStore::write`](super::ChainStore::write)
+    /// when the closure returns `Ok`; there is no other caller.
     ///
     /// A stubbed batch widens the persisted provenance cell **in this
     /// transaction** before committing, so the taint is atomic with the
@@ -197,8 +223,11 @@ impl<'store> WriteBatch<'store> {
     /// provenance cell could not be read back or widened (the batch is
     /// aborted, nothing lands). The transaction is consumed either way —
     /// DRS-W2's swallowed-`batch_stop` failure made unrepresentable.
-    pub fn commit(mut self) -> Result<Provenance, StoreError> {
-        let txn = take_txn(&mut self.txn);
+    pub(super) fn commit(mut self) -> Result<Provenance, StoreError> {
+        let txn = self
+            .txn
+            .take()
+            .expect("WriteBatch commit runs once; the Option is Some until then");
         let provenance = header::widen(&txn, self.apply_policy)?;
         // The file is tainted when the engine commits; the mirror, when
         // `publish` assigns it. `Shared::publish` holds the mirror's write
@@ -209,33 +238,13 @@ impl<'store> WriteBatch<'store> {
             .publish(provenance, || txn.commit().map_err(StoreError::Commit))?;
         Ok(provenance)
     }
-
-    /// Discard the batch explicitly.
-    ///
-    /// Equivalent to dropping it on the success path; provided so an
-    /// intentional abort reads as a decision. Unlike drop, this surfaces
-    /// an engine abort failure (DRS-W2's shape on the abort path).
-    ///
-    /// # Errors
-    ///
-    /// [`StoreError::Abort`] if the engine could not abort. The handle is
-    /// gone either way.
-    pub fn abort(mut self) -> Result<(), StoreError> {
-        let txn = take_txn(&mut self.txn);
-        txn.abort().map_err(StoreError::Abort)
-    }
 }
 
-fn take_txn(txn: &mut Option<WriteTransaction>) -> WriteTransaction {
-    txn.take()
-        .expect("WriteBatch commit/abort run once; the Option is Some until then")
-}
-
-impl Drop for WriteBatch<'_> {
+impl Drop for WriteBatch<'_, '_> {
     fn drop(&mut self) {
         // WriteTransaction::drop aborts if the txn is still present and not
-        // completed. Clearing the flag after that so the next begin_batch
-        // is not refused for a batch that no longer exists.
+        // completed. Clearing the flag after that so the next `write` is
+        // not refused for a batch that no longer exists.
         self.txn.take();
         self.shared.release_write();
     }

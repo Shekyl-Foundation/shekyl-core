@@ -26,8 +26,6 @@ pub enum StoreError {
     Durability(redb::SetDurabilityError),
     /// A commit failed. The transaction is gone; the store is unchanged.
     Commit(redb::CommitError),
-    /// An explicit abort failed. The transaction is gone either way.
-    Abort(redb::StorageError),
     /// Opening a table failed.
     Table(redb::TableError),
     /// A row read or write failed inside the engine.
@@ -77,7 +75,7 @@ pub enum StoreError {
     /// A write batch is already live on this store.
     ///
     /// redb's `begin_write` **blocks** until the in-progress writer finishes.
-    /// A `begin_batch` while another batch is live. **This is a contract
+    /// A `write` while another batch is live. **This is a contract
     /// violation, not contention — do not retry it.** `write_held` is an
     /// invariant guard on the declared one-live-write contract, released in
     /// `WriteBatch::drop`; it is not a queue, and this error does not mean
@@ -89,7 +87,7 @@ pub enum StoreError {
     /// `bool`, and two core callers *spin* on it —
     /// `blockchain.cpp:6553` `while (!(stop_batch = m_db->batch_start(..)))`
     /// and `:6743` likewise. Those loops must **not** be transliterated to
-    /// `while begin_batch().is_err()`. Serialization of writers is owned by
+    /// `while store.write(..).is_err()`. Serialization of writers is owned by
     /// the core layer above the store (`m_blockchain_lock`,
     /// `CRITICAL_REGION_LOCAL1` at `blockchain.cpp:277`), which is why the
     /// C++ never actually contends there; LMDB's own writer mutex sits below
@@ -132,7 +130,6 @@ impl core::fmt::Display for StoreError {
             Self::BeginRead(e) => write!(f, "cannot begin read transaction: {e}"),
             Self::Durability(e) => write!(f, "engine refused the declared durability: {e}"),
             Self::Commit(e) => write!(f, "commit failed: {e}"),
-            Self::Abort(e) => write!(f, "abort failed: {e}"),
             Self::Table(e) => write!(f, "cannot open table: {e}"),
             Self::Storage(e) => write!(f, "engine storage error: {e}"),
             Self::SchemaVersionAbsent => write!(
@@ -178,7 +175,7 @@ impl core::error::Error for StoreError {
             Self::BeginWrite(e) | Self::BeginRead(e) => Some(e),
             Self::Durability(e) => Some(e),
             Self::Commit(e) => Some(e),
-            Self::Abort(e) | Self::Storage(e) => Some(e),
+            Self::Storage(e) => Some(e),
             Self::Table(e) => Some(e),
             Self::CellCorrupt {
                 fault: CellFault::Undecodable(e),

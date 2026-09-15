@@ -12,7 +12,7 @@
 //! `CellCorrupt` docs describe — because the store's own surface has no
 //! way to damage its header, which is the point.
 
-use super::store_tests::{cleanup, tmp, PROBE};
+use super::store_tests::{cleanup, probe_row, tmp, TestErr, PROBE};
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{
@@ -32,12 +32,15 @@ fn stubbed(families: &[ArchivalFamily]) -> ApplyPolicy {
 /// Create a store, commit one probe row, drop the handle.
 fn seeded(path: &std::path::Path, policy: ApplyPolicy) {
     let store = ChainStore::with_apply_policy(path, policy).expect("create");
-    let batch = store.begin_batch().expect("begin");
-    {
-        let mut t = batch.open_table(PROBE).expect("probe");
-        t.insert("k", &1_u64).expect("insert");
-    }
-    batch.commit().expect("commit");
+    store
+        .write(|batch| probe_row(batch, "k", 1))
+        .expect("commit");
+}
+
+/// Commit an empty batch on `store`; the provenance after it.
+fn commit_empty(store: &ChainStore) -> Provenance {
+    store.write(|_| Ok::<(), StoreError>(())).expect("commit");
+    store.provenance()
 }
 
 /// Write raw bytes to a `properties` cell, bypassing the store entirely.
@@ -232,16 +235,15 @@ fn a_stubbed_commit_taints_the_file_and_a_full_session_cannot_clean_it() {
     let path = tmp("taint");
     seeded(&path, ApplyPolicy::Full);
 
-    // The stubbed session: its commit returns the widened record and the
-    // handle's view moves with it.
+    // The stubbed session: its commit widens the record and the handle's
+    // view moves with it (the mirror is exact — `ChainStore::provenance`).
     let s = ChainStore::with_apply_policy(&path, stubbed(SLASH)).expect("stubbed reopen");
     assert!(
         s.provenance().is_parity_evidence(),
         "not tainted until a commit"
     );
-    let after = s.begin_batch().expect("b").commit().expect("c");
+    let after = commit_empty(&s);
     assert_eq!(after.stubbed(), FamilySet::of(SLASH));
-    assert_eq!(s.provenance(), after);
     drop(s);
 
     // A later Full session reads the file's history, not its own intent.
@@ -254,7 +256,7 @@ fn a_stubbed_commit_taints_the_file_and_a_full_session_cannot_clean_it() {
         .artifact_stamp()
         .contains("NOT-PARITY-EVIDENCE"));
     // And committing under Full does not narrow it.
-    let still = full.begin_batch().expect("b").commit().expect("c");
+    let still = commit_empty(&full);
     assert_eq!(still.stubbed(), FamilySet::of(SLASH));
     drop(full);
 
@@ -278,7 +280,7 @@ fn taint_is_a_union_across_sessions() {
     {
         let s = ChainStore::with_apply_policy(&path, stubbed(SLASH)).expect("reopen");
         assert_eq!(s.provenance().stubbed(), FamilySet::of(BOND), "inherits");
-        let after = s.begin_batch().expect("b").commit().expect("c");
+        let after = commit_empty(&s);
         assert_eq!(
             after.stubbed(),
             FamilySet::of(&[ArchivalFamily::Bond, ArchivalFamily::SlashLog])
@@ -297,27 +299,19 @@ fn taint_is_a_union_across_sessions() {
 }
 
 #[test]
-fn an_aborted_or_dropped_stubbed_batch_leaves_no_taint() {
+fn an_aborted_stubbed_batch_leaves_no_taint() {
     // The taint is written inside the batch's transaction, so it goes
-    // wherever the batch's rows go: nowhere, on abort or drop.
+    // wherever the batch's rows go: nowhere, when the closure aborts.
     let path = tmp("taint-abort");
     seeded(&path, ApplyPolicy::Full);
     {
         let s = ChainStore::with_apply_policy(&path, stubbed(SLASH)).expect("reopen");
-        let b = s.begin_batch().expect("b");
-        b.open_table(PROBE)
-            .expect("probe")
-            .insert("x", &2)
-            .expect("i");
-        b.abort().expect("abort");
+        let result = s.write(|b| -> Result<(), TestErr> {
+            probe_row(b, "x", 2)?;
+            Err(TestErr::Abort)
+        });
+        assert_eq!(result, Err(TestErr::Abort));
         assert!(s.provenance().is_parity_evidence(), "abort");
-        let b = s.begin_batch().expect("b");
-        b.open_table(PROBE)
-            .expect("probe")
-            .insert("x", &2)
-            .expect("i");
-        drop(b);
-        assert!(s.provenance().is_parity_evidence(), "drop");
     }
     assert!(ChainStore::open_read_only(&path)
         .expect("ro")
@@ -334,8 +328,7 @@ fn a_stubbed_commit_with_no_rows_still_taints() {
     let path = tmp("taint-empty");
     seeded(&path, ApplyPolicy::Full);
     let s = ChainStore::with_apply_policy(&path, stubbed(SLASH)).expect("reopen");
-    let after = s.begin_batch().expect("b").commit().expect("c");
-    assert!(!after.is_parity_evidence());
+    assert!(!commit_empty(&s).is_parity_evidence());
     cleanup(&path);
 }
 
@@ -348,12 +341,7 @@ fn the_taint_commits_atomically_with_the_rows() {
     seeded(&path, ApplyPolicy::Full);
     let s = ChainStore::with_apply_policy(&path, stubbed(SLASH)).expect("reopen");
     let before = s.begin_read().expect("snapshot before");
-    let b = s.begin_batch().expect("b");
-    b.open_table(PROBE)
-        .expect("probe")
-        .insert("row", &7)
-        .expect("i");
-    b.commit().expect("c");
+    s.write(|b| probe_row(b, "row", 7)).expect("c");
     let after = s.begin_read().expect("snapshot after");
 
     assert_eq!(
@@ -394,16 +382,18 @@ fn the_taint_commits_atomically_with_the_rows() {
 fn a_chain_state_cell_round_trips_through_the_typed_surface() {
     let path = tmp("typed-cell");
     let store = ChainStore::create(&path).expect("create");
-    let batch = store.begin_batch().expect("b");
-    assert_eq!(batch.get_property::<ProbeCell>().expect("get"), None);
-    batch
-        .put_property::<ProbeCell>(&0x0102_0304_0506_0708)
-        .expect("put");
-    assert_eq!(
-        batch.get_property::<ProbeCell>().expect("get own write"),
-        Some(0x0102_0304_0506_0708)
-    );
-    batch.commit().expect("c");
+    store
+        .write(|batch| -> Result<(), StoreError> {
+            assert_eq!(batch.get_property::<ProbeCell>()?, None);
+            batch.put_property::<ProbeCell>(&0x0102_0304_0506_0708)?;
+            assert_eq!(
+                batch.get_property::<ProbeCell>()?,
+                Some(0x0102_0304_0506_0708),
+                "a batch sees its own write"
+            );
+            Ok(())
+        })
+        .expect("c");
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.get_property::<ProbeCell>().expect("get"),
