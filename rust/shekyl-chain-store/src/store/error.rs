@@ -282,6 +282,33 @@ pub enum StoreCannot {
     /// issued (`RuleSet::for_id` is `None`), so what it enforces — and
     /// therefore what the verdict may have skipped — cannot be known.
     RuleSetUnknown(RuleSetId),
+    /// `pop` on a store with no block recorded.
+    ChainEmpty,
+    /// `pop` at `tip` cannot run: the height is below the pop floor
+    /// (S-CHAIN-W §5.4, SCW-7).
+    ///
+    /// Genesis is never poppable (`floor ≥ 1`), and a height whose
+    /// `undo_log` row the retention prune has deleted is below `floor` —
+    /// the lowest surviving row. A capability limit, never a verdict: a
+    /// legal reorg deeper than the undo-log retention lands here, which is
+    /// why that retention must be ≥ `D_max` (PDM-Q11).
+    PopBelowFloor {
+        /// The current tip.
+        tip: u64,
+        /// The lowest poppable height.
+        floor: u64,
+    },
+    /// A `connect` or `pop` on this store hit a store invariant, and the
+    /// writer is halted until the process restarts (`DAEMON_REDB_STORE.md`
+    /// §3.6.2). Reads stay open. Re-derived on restart, not persisted; the
+    /// operator path is the engine's check or a rebuild from the block
+    /// corpus.
+    WriterHalted {
+        /// The height the halting connect or pop was working at.
+        at_height: u64,
+        /// The belt that caught it.
+        row: StoreInvariant,
+    },
     /// A judged transaction's ct base carries fewer commitments than its
     /// prefix has outputs, so there is no commitment to record for output
     /// `index` (`output_amounts`).
@@ -341,6 +368,17 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "the block was judged under rule set {judged:?} but rule set {in_force:?} is in \
                  force at height {height}; re-validate under the rule set in force"
+            ),
+            Self::ChainEmpty => f.write_str("pop on a chain store with no block recorded"),
+            Self::PopBelowFloor { tip, floor } => write!(
+                f,
+                "cannot pop height {tip}: the pop floor is {floor} (genesis is never poppable; \
+                 below the surviving undo log a reorg is beyond this store's retention)"
+            ),
+            Self::WriterHalted { at_height, row } => write!(
+                f,
+                "the chain store's writer is halted since height {at_height} ({row}); reads stay \
+                 open; restart after the check or rebuild from the block corpus"
             ),
             Self::RuleSetUnknown(id) => write!(
                 f,

@@ -43,19 +43,6 @@
 //! recorded key or value passes [`Restorable::well_formed`] first; a byte
 //! string that would panic the engine's decoder is SI-7 instead.
 
-// Staging (rule 22, named consumers): the recording and replay entry points
-// are reached only from `connect` (S-CHAIN-W commit 6) and `pop` (commit 7),
-// which land later in the same PR. Until then the store's own tests are the
-// sole callers, so the lib build sees this module as dead. Remove with the
-// first of those commits.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "S-CHAIN-W staging: `connect` (commit 6) and `pop` (commit 7) are the producers, same PR"
-    )
-)]
-
 use core::cell::{Cell, RefCell};
 
 use redb::{
@@ -221,6 +208,11 @@ pub(super) struct Journal {
     /// the writes it recorded may have landed in the transaction with no
     /// row to undo them, so `complete` refuses to commit.
     abandoned: Cell<Option<u64>>,
+    /// The height the most recent connect or pop in this batch worked at —
+    /// what the writer halt reports as `at_height` if the batch is
+    /// poisoned. `None` for a batch that did neither, which does not halt
+    /// the writer (§3.6.2 halts on connect / pop).
+    height_hint: Cell<Option<u64>>,
 }
 
 struct Live {
@@ -246,6 +238,16 @@ impl Journal {
     /// The height of a recording that was dropped unsealed, if any.
     pub(super) fn abandoned(&self) -> Option<u64> {
         self.abandoned.get()
+    }
+
+    /// Remember that a connect or pop is working at `height`.
+    pub(super) fn note_height(&self, height: u64) {
+        self.height_hint.set(Some(height));
+    }
+
+    /// The height a connect or pop in this batch worked at, if any.
+    pub(super) fn height_hint(&self) -> Option<u64> {
+        self.height_hint.get()
     }
 }
 
@@ -284,6 +286,7 @@ impl<'txn> Recording<'txn> {
             entries: Vec::new(),
         });
         drop(slot);
+        journal.note_height(height);
         Self {
             journal,
             poison,
