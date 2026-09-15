@@ -94,6 +94,7 @@ mod read;
 mod set;
 mod shared;
 pub(crate) mod undo;
+mod view;
 mod write;
 
 pub use error::{
@@ -102,6 +103,7 @@ pub use error::{
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use read::ReadSnapshot;
 pub use set::SetTable;
+pub use view::BatchView;
 pub use write::WriteBatch;
 
 use std::path::Path;
@@ -481,3 +483,7 @@ mod header_tests;
 #[cfg(test)]
 #[path = "undo_tests.rs"]
 mod undo_tests;
+
+#[cfg(test)]
+#[path = "view_tests.rs"]
+mod view_tests;
