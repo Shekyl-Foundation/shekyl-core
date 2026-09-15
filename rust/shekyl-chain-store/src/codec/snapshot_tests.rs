@@ -80,7 +80,7 @@ use crate::family_set::FamilySet;
 use crate::lmdb_order::Hash32;
 use crate::schema::{self, TableShape};
 
-use super::{Canonical, SchemaVersion, PROPERTY_CELLS, SCHEMA_VERSION};
+use super::{Canonical, ProbeCell, PropertyCell, SchemaVersion, PROPERTY_CELLS, SCHEMA_VERSION};
 
 /// Catalogue snapshot stems under `schemas/`. Not codec names;
 /// [`every_canonical_impl_has_a_snapshot`] holds the two namespaces apart.
@@ -403,30 +403,73 @@ fn every_table_definition_is_catalogued() {
     );
 }
 
-/// Source scan: every `key: "…"` literal in `property.rs` is a
-/// [`PROPERTY_CELLS`] row. `property_cells!` is the only producer of those
-/// literals; a cell declared beside the invocation would be sealed (same
-/// module) but invisible to the snapshot.
+/// The string literal following `prefix` on `line`, if any.
+fn quoted_after(line: &str, prefix: &str) -> Option<String> {
+    let (_, rest) = line.split_once(prefix)?;
+    rest.split_once('"').map(|(lit, _)| lit.to_owned())
+}
+
+/// Source scan of `property.rs` — the one module that can implement the
+/// sealed [`PropertyCell`]. A cell written by hand beside the
+/// `property_cells!` invocation compiles (same module as the seal) but
+/// never reaches [`PROPERTY_CELLS`] or `properties.snap`, so the rule-42
+/// gate would pass a layout change without its bump. Three things hold:
+///
+/// 1. the `impl PropertyCell for` sites are exactly the macro's template
+///    and the test-only [`ProbeCell`] — spelling-independent, so a
+///    hand-written cell is red however it writes its key;
+/// 2. the only hand-spelled `const KEY` is the probe's;
+/// 3. the macro's `key: "…"` rows are exactly [`PROPERTY_CELLS`].
+///
+/// Comment lines are skipped: the `compile_fail` doctest on the trait
+/// declares an impostor on purpose.
 #[test]
 fn every_property_cell_is_catalogued() {
     let text =
         fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/codec/property.rs"))
             .expect("read property.rs");
-    let declared: BTreeSet<String> = text
-        .lines()
-        .filter_map(|line| {
-            let (_, rest) = line.split_once("key: \"")?;
-            rest.split_once('"').map(|(key, _)| key.to_owned())
-        })
-        .collect();
-    assert!(
-        !declared.is_empty(),
-        "property.rs: no property-cell key literals parsed"
-    );
-    let catalogued: BTreeSet<String> = PROPERTY_CELLS.iter().map(|c| c.key.to_owned()).collect();
+    let mut impls = Vec::new();
+    let mut macro_rows = BTreeSet::new();
+    let mut hand_keys = BTreeSet::new();
+    for line in text.lines().map(str::trim_start) {
+        if line.starts_with("//") {
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("impl PropertyCell for ") {
+            impls.push(rest.trim_end_matches('{').trim().to_owned());
+        }
+        if let Some(key) = quoted_after(line, "key: \"") {
+            macro_rows.insert(key);
+        }
+        if let Some(key) = quoted_after(line, "const KEY: &'static str = \"") {
+            hand_keys.insert(key);
+        }
+    }
+
+    impls.sort();
     assert_eq!(
-        declared, catalogued,
-        "every `key: \"…\"` in property.rs must be a PROPERTY_CELLS row so the snapshot sees it"
+        impls,
+        ["$name", "ProbeCell"],
+        "property.rs: the `impl PropertyCell for` sites must be exactly the property_cells! \
+         template and the test-only ProbeCell; declare a production cell through the macro so \
+         PROPERTY_CELLS and properties.snap see it"
+    );
+    assert_eq!(
+        hand_keys,
+        BTreeSet::from([ProbeCell::KEY.to_owned()]),
+        "property.rs: a hand-spelled `const KEY` other than the probe's is a cell outside the \
+         catalogue"
+    );
+
+    let catalogued: BTreeSet<String> = PROPERTY_CELLS.iter().map(|c| c.key.to_owned()).collect();
+    assert!(!catalogued.is_empty(), "PROPERTY_CELLS is empty");
+    assert_eq!(
+        macro_rows, catalogued,
+        "the property_cells! rows in property.rs must be exactly PROPERTY_CELLS"
+    );
+    assert!(
+        !catalogued.contains(ProbeCell::KEY),
+        "the test-only probe must not be a catalogued cell"
     );
 }
 
@@ -582,14 +625,59 @@ fn scan_impls(dir: &Path, out: &mut BTreeSet<String>) {
 const DECL_PREFIX: &str = "pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(";
 const WORKFLOW_VERSION_REGEX: &str = r"SchemaVersion::new\(([0-9_]+)\)";
 
+/// The workflow's job names, as `.github/workflows/schema-snapshot.yml`
+/// spells them.
+const ASSERT_JOB: &str = "assert-snapshots";
+const BUMP_JOB: &str = "enforce-version-bump";
+/// Region key for everything above `jobs:` — the trigger.
+const TRIGGER: &str = "";
+
+/// The workflow's **active** text, split by job: comment lines dropped,
+/// then everything above `jobs:` under [`TRIGGER`] and each job's body
+/// under its name. A needle found here is in YAML the runner executes; a
+/// `cargo test` line commented out, or moved into a job that is not the
+/// assert job, is not a gate (rule 47: read code, not prose).
+fn active_yaml_by_job(yaml: &str) -> BTreeMap<String, String> {
+    let mut regions: BTreeMap<String, String> = BTreeMap::new();
+    let mut region = TRIGGER.to_owned();
+    let mut in_jobs = false;
+    for line in yaml.lines().map(str::trim_end) {
+        let body = line.trim_start();
+        if body.is_empty() || body.starts_with('#') {
+            continue;
+        }
+        if line == "jobs:" {
+            in_jobs = true;
+            continue;
+        }
+        // A job heading: exactly two spaces, a name, a colon, nothing else.
+        if in_jobs {
+            if let Some(name) = line
+                .strip_prefix("  ")
+                .filter(|rest| !rest.starts_with(' '))
+                .and_then(|rest| rest.strip_suffix(':'))
+            {
+                region = name.to_owned();
+                continue;
+            }
+        }
+        let text = regions.entry(region.clone()).or_default();
+        text.push_str(line);
+        text.push('\n');
+    }
+    regions
+}
+
 /// The workflow gates this crate: its trigger paths include the crate, its
 /// assert job runs **this module** (the filter it uses selects
 /// `module_path!()`, so the meta-tests run with the assertions), and its
 /// paired-bump job names this crate's snapshot directory and version
 /// constant and parses that constant in the grammar it is declared in.
-/// Without this, the gate could be silently unwired — or narrowed to the
-/// per-codec tests — by a workflow edit and every test here would still
-/// pass.
+/// Each needle is required in the **active** text of the **job that owns
+/// it** ([`active_yaml_by_job`]). Without this, the gate could be silently
+/// unwired — commented out, narrowed to the per-codec tests, or moved to a
+/// job that does not run — by a workflow edit and every test here would
+/// still pass.
 #[test]
 fn workflow_gates_this_crate() {
     let workflow =
@@ -597,20 +685,41 @@ fn workflow_gates_this_crate() {
     let yaml = fs::read_to_string(&workflow)
         .unwrap_or_else(|e| panic!("read {}: {e}", workflow.display()));
     let run_line = format!("cargo test -p shekyl-chain-store {TEST_FILTER}");
-    for needle in [
-        "- \"rust/shekyl-chain-store/**\"",
-        run_line.as_str(),
-        "rust/shekyl-chain-store/schemas/",
-        "rust/shekyl-chain-store/src/codec/schema_version.rs",
-        "SCHEMA_VERSION",
-        WORKFLOW_VERSION_REGEX,
-    ] {
+    let needles = [
+        (TRIGGER, "- \"rust/shekyl-chain-store/**\""),
+        (ASSERT_JOB, run_line.as_str()),
+        (BUMP_JOB, "rust/shekyl-chain-store/schemas/"),
+        (
+            BUMP_JOB,
+            "rust/shekyl-chain-store/src/codec/schema_version.rs",
+        ),
+        (BUMP_JOB, "SCHEMA_VERSION"),
+        (BUMP_JOB, WORKFLOW_VERSION_REGEX),
+    ];
+    let regions = active_yaml_by_job(&yaml);
+    for job in [ASSERT_JOB, BUMP_JOB] {
         assert!(
-            yaml.contains(needle),
-            "{} does not contain {needle:?}; the codec gate is not wired",
+            regions.contains_key(job),
+            "{}: no job `{job}` in the active YAML; the codec gate is not wired",
             workflow.display()
         );
     }
+    for (job, needle) in needles {
+        assert!(
+            regions.get(job).is_some_and(|text| text.contains(needle)),
+            "{}: the active text of {} does not contain {needle:?}; the codec gate is not wired",
+            workflow.display(),
+            if job == TRIGGER { "the trigger" } else { job }
+        );
+    }
+    // The comment filter is load-bearing, not decoration: the same file
+    // with the run line commented out must lose the needle.
+    let disabled = yaml.replace(&run_line, &format!("# {run_line}"));
+    assert_ne!(disabled, yaml, "the run line was not found to comment out");
+    assert!(
+        !active_yaml_by_job(&disabled)[ASSERT_JOB].contains(&run_line),
+        "a commented-out `cargo test` line still reads as active"
+    );
     // The filter the workflow runs is a substring of every test path in
     // this module and of nothing narrower: it selects the meta-tests too.
     assert!(
