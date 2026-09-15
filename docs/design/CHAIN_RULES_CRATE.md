@@ -1,13 +1,10 @@
 # `shekyl-chain-rules` — the consensus-validation crate (DRS-E6 increment 1)
 
 **Status:** OPEN — increment 1 **implemented 2026-09-15** (branch
-`feat/drs-e6-inc1-chain-rules-scaffold`, 8 commits per §9) on the §12 defaults;
-round 2's three questions (§12) **await the reviewer's ruling at PR review** —
-each default is what landed, and a contrary ruling is a follow-on commit on
-this branch, not a re-scaffold. Round 1 was reviewed and its nine questions
-ruled (§11, each ruling line-local; Q8 amended by finding, §8.3). §4 reflects
-what landed. Stays in `docs/design/` while increments 2+ are open (it owns
-their template, §7.5.1). Implements *from*
+`feat/drs-e6-inc1-chain-rules-scaffold`). Round 1 ruled §11; round 2's three
+questions (§12) **ruled at PR #753 review** (defaults kept; G4 tightened to
+`ChainValid<'id, V>`). §4 reflects what landed. Stays in `docs/design/` while
+increments 2+ are open (it owns their template, §7.5.1). Implements *from*
 [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
 (the ruling, CLOSED-as-record) and
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5.1 (the deliverable list).
@@ -18,13 +15,13 @@ rulings surfaced are in §12 with a proposed default each, not decided silently.
 (DRS-D12; §7.5.1 "Zero rules may land in increment 1"). The crate is
 **STAGED** (rule 23) with **S-CHAIN-W** as its named consumer: S-CHAIN-W
 projects a `ChainView<'id>` from the store's `WriteBatch<'_, 'id>` and takes a
-`ChainValid<'id>` into `connect`. Increments 2+ port the 141 surface-free rules
+`ChainValid<'id, V>` into `connect`. Increments 2+ port the 141 surface-free rules
 one census subsystem at a time (DRS §7.5.2 table 3).
 
 **Sibling lane.** DRS-E1 increment 2.5 (PR #752) built the store side; this
 branch stacks on it. This crate and `rust/shekyl-chain-store` share **no Rust**;
 the interface the two must agree on later (`'id` spelled and invariant,
-`ChainValid<'id>` and `RuleSetId` handed to `connect`, the view's fault channel
+`ChainValid<'id, V>` and `RuleSetId` handed to `connect`, the view's fault channel
 §4.3) is stated here and wired by S-CHAIN-W, not by either lane.
 
 ---
@@ -33,7 +30,7 @@ the interface the two must agree on later (`'id` spelled and invariant,
 
 One crate. Input: a candidate block (header + miner tx + the listed
 transactions' bodies), a `ChainView<'id>` (narrow, read-only trait over
-**recorded** chain facts), and a `RuleSet`. Output: `ChainValid<'id>` or
+**recorded** chain facts), and a `RuleSet`. Output: `ChainValid<'id, V>` or
 `InvalidBlock { rule: CenRow, locus }` — or, when the view's substrate could not
 answer, the view's own fault, which is neither. No store handle, no redb type,
 no `ChainStore` import — every rule is unit-testable against a mock view with no
@@ -52,15 +49,15 @@ is a hope; none of these is.
 
 | # | Guarantee | Held by |
 | --- | --- | --- |
-| G1 | **No store handle.** The crate reaches neither `shekyl-chain-store` nor `redb`, directly or transitively, in normal or dev dependencies. | Two `compile_fail` doctests in `lib.rs` (intent; a direct `use` fails to resolve); the coverage gate refuses either package in any dependency table of the crate's `Cargo.toml`; **the belt** `scripts/ci/check_chain_rules_no_store.sh` (in `rust-audit-test.yml`) captures the crate's `cargo tree -e normal,dev` closure and refuses either package in it (§6.5) — the belt is what sees *transitive* arrival, which the doctest cannot (round-1 ruling). |
+| G1 | **No store handle.** The crate reaches neither `shekyl-chain-store` nor `redb`, directly or transitively, in normal or dev dependencies. | Two `compile_fail` doctests in `lib.rs` (intent; a direct `use` fails to resolve); the coverage gate refuses either package in any dependency table of the crate's `Cargo.toml`; **the belt** `scripts/ci/check_chain_rules_no_store.sh` (in `rust-audit-test.yml`) captures the crate's `cargo tree -e normal,dev --target all` closure and refuses either package in it (§6.5) — the belt is what sees *transitive* arrival, which the doctest cannot (round-1 ruling). |
 | G2 | **The conversion ban.** No `From`/`Into`/`TryFrom`/`TryInto` between any `StoreError`/`StoreInvariant`/`StoreCannot` and `InvalidBlock`; no `match` arm maps a store token onto `InvalidBlock`. This crate never *names* a store error type; the store's fault reaches `validate` only as the opaque `V::Fault` (§4.3), which has no bound a rule could inspect. | `check_store_error_conversion_ban.py` clauses 1 and 3, **raised in this PR** so `verdict_defs == 0` is a failure now that the subject exists (§7); genericity of `Fault`. |
 | G3 | **The verdict names the row.** `InvalidBlock { rule: CenRow, locus: Locus }` — a typed census row id, never a string, never "some rejection". | `CenRow` is a closed `enum`; `InvalidBlock` has no string field. |
-| G4 | **One transaction, one brand.** `ChainValid<'id>` carries an *invariant* brand `PhantomData<fn(&'id ()) -> &'id ()>`; the lifetime is spelled `'id`. Its `'id` is the `'id` of the `ChainView<'id>` it was validated against. | Brand type private to the crate; `validate<'id, V: ChainView<'id>>` ties the output brand to the view's; a `compile_fail` doctest shows the cross-view handoff failing (§8.3). |
+| G4 | **One transaction, one brand.** `ChainValid<'id, V>` carries an *invariant* `'id` and is parameterized by the view type `V` that minted it. An unbranded `impl<'id> ChainView<'id> for Evil` can pick up a batch's `'id`, but produces `ChainValid<'id, Evil>`, which does not unify with the `ChainValid<'id, StoreView<'_, 'id>>` `connect` will demand. | `PhantomData<fn(V) -> V>` plus `'id`; `validate` returns `ChainValid<'id, V>`; two `compile_fail` doctests (cross-`'id` and unbranded-`V`) (§8.3). |
 | G5 | **Private constructor.** Nothing outside the crate can build a `ChainValid` or a `ValidatedBlock`. | Fields private; no `pub` constructor; `compile_fail` doctest. The FFI-shim construction path is rejected by the ruling (§9.2) and does not exist. |
-| G6 | **Coverage is carried, not declared.** Every `ChainValid` carries `RuleCoverage` (rows actually evaluated) and the `RuleSetId` it was checked under. With zero rules, coverage is empty and `is_complete_for` is `false`. | Struct fields, set only by `validate`; unit test pins the zero-rule `false`. |
+| G6 | **Coverage is carried, not declared.** Every `ChainValid` carries `RuleCoverage` (rows actually evaluated) and the `RuleSetId` it was checked under. With zero rules, coverage is empty and `is_complete_for` is `false`. Mint additionally requires `covers_landed` — every *implemented* row the rule set enforces is in coverage — so a forgotten `validate` call cannot produce the token during porting. | Struct fields, set only by `validate`; `ChainValid::mint` panics if `covers_landed` is false; unit tests pin empty/`is_complete_for`/`covers_landed`. |
 | G7 | **The flag partitions first — by type.** Consensus rows and policy rows are **sibling enums** (`CenRow`, `PolicyRow`); a policy row cannot be inserted into a `RuleCoverage`, and `RuleSet` cannot name a `PolicyRow`. `implemented / enforced` and `ratified / enforced` are computed per flag; `E = rows of that flag − bucket 3`; both numbers always printed together with the definition of `E`. | Two enums, two `Coverage<R>` instantiations, two denominators (round-1 ruling Q4); `scripts/ci/check_chain_rules_coverage.py` (§6). |
 | G8 | **Bijection registry ↔ census.** Every enforced census row (bucket ≠ 3) has exactly one entry in the enum of its flag; no entry lacks a row; bucket-3 rows are absent. | The same gate (§6.2); rule 47 subject assertions and `--selftest`. |
-| G9 | **`implemented` is a compile-checked claim.** An entry marked `implemented(path)` names a rule function; a stale path is a **compile error**, and the gate reads the same `census_rows!` invocations the compiler compiled. | Macro emits `let _ = $path;` inside a `const _: () = { … }` block (§5.2). |
+| G9 | **`implemented` is a compile-checked claim.** An entry marked `implemented(path)` names a rule function; a stale path is a **compile error**, and the gate reads the same `census_rows!` invocations the compiler compiled. The pin is `use path as _`, not `let _ = path`, so a generic `fn<'id, V: ChainView<'id>>(...)` compiles (E0283 otherwise). Runtime half: `covers_landed` at mint (G6). | Macro emits `use $path as _;` (§5.2); mint panic; unit test pins the generic form. |
 | G10 | **No pre-provisioning.** No `PoolView` (E5's), no fork version on `ChainView` (ruling Q7), no `Canonical`/codec impl for `RuleCoverage` (the store's, at S-CHAIN-W under rule 42), no second verdict type, no view method without a census row that reads it (Q3 ruling). | This document's API list is exhaustive; anything not in §4 is not in the crate. |
 | G11 | **Absence is matched, never propagated.** A by-height lookup returns `AtHeight<T>` — `Recorded(T)` or `AboveTip` — not `Option<T>`. There is no `?`, `map`, `unwrap_or_*`, or `is_none_or` on it: a rule that reaches `AboveTip` writes its refusal at that arm. A substrate that cannot answer surfaces as `V::Fault`, a different thing from absence (§4.3). | `AtHeight<T>` has no combinator surface and no `Default`; `CurveTreeRoot`/`RecordedBlock` have no `Default`. |
 | G12 | **Hygiene.** `#![deny(unsafe_code)]`; no `println!`/`eprintln!`/`dbg!` outside `#[cfg(test)]`; `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean. | Crate attribute; `build.yml`'s debug-macro lint; rule 45. |
@@ -206,7 +203,7 @@ rust/shekyl-chain-rules/
     ├── view.rs           ChainView<'id>, AtHeight<T>, RecordedBlock
     ├── rule_set.rs       RuleSetId, RuleSet, RuleSchedule; AdmissionPolicyId, AdmissionPolicy
     ├── block.rs          Candidate (input), ValidatedBlock (payload)
-    ├── verdict.rs        ChainValid<'id>, InvalidBlock, Locus, TxSlot, Verdict<T>
+    ├── verdict.rs        ChainValid<'id, V>, InvalidBlock, Locus, TxSlot, Verdict<T>, refused
     ├── validate.rs       validate, tx_form, tx_against
     ├── harness.rs        #[cfg(test)] MockChain / MockView<'_, 'id> / FaultingView<'id>, assert_refused, boundary_pair, fixture::*
     └── *_tests.rs        census_tests, coverage_tests, rule_set_tests, verdict_tests, validate_tests, harness_probe_tests
@@ -396,9 +393,11 @@ never names.
 ### 4.4 `Candidate`, `ValidatedBlock` (`block.rs`)
 
 ```rust
-/// The untrusted input to `validate`: the block as received plus the bodies of
-/// the transactions its header lists, in listed order. Public fields — this is the outside.
+/// The untrusted input to `validate`. Public fields; `#[non_exhaustive]` so a
+/// later component is a constructor-site addition, not a breaking literal.
+#[non_exhaustive]
 pub struct Candidate { pub block: shekyl_wire::Block, pub transactions: Vec<shekyl_wire::Transaction> }
+impl Candidate { pub fn new(block: shekyl_wire::Block, transactions: Vec<shekyl_wire::Transaction>) -> Self; }
 
 /// The typed payload a `ChainValid` wraps. Constructed only by `validate`.
 pub struct ValidatedBlock {
@@ -446,8 +445,8 @@ impl<R: Row> Coverage<R> {
     pub const EMPTY: Self;
     pub fn contains(&self, row: R) -> bool;
     pub fn len(&self) -> usize; pub fn is_empty(&self) -> bool;
-    /// Rows in census order — the form the store encodes at S-CHAIN-W without
-    /// reaching into `words` (per row: `as_str()` or `index()`).
+    /// Rows in census order — persist `as_str()`, never `index()` (the bitset
+    /// slot shifts when the census inserts a row).
     pub fn iter(&self) -> impl Iterator<Item = R> + '_;
     pub(crate) fn insert(&mut self, row: R); pub(crate) fn union(&mut self, other: &Self);
 }
@@ -461,13 +460,14 @@ impl Coverage<CenRow> {
 type Brand<'id> = core::marker::PhantomData<fn(&'id ()) -> &'id ()>;   // private
 
 /// A block judged valid under `rule_set` against one view of one transaction.
-pub struct ChainValid<'id> {
+pub struct ChainValid<'id, V> {
     block: ValidatedBlock,
     rule_set: RuleSetId,
     coverage: RuleCoverage,
     _brand: Brand<'id>,
+    _view: PhantomData<fn(V) -> V>,   // invariant in the view type — G4
 }
-impl<'id> ChainValid<'id> {
+impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     pub fn block(&self) -> &ValidatedBlock;
     pub fn rule_set_id(&self) -> RuleSetId;
     pub fn coverage(&self) -> &RuleCoverage;
@@ -501,7 +501,7 @@ pub type Verdict<T> = Result<T, InvalidBlock>;
 ```rust
 pub fn validate<'id, V: ChainView<'id>>(
     candidate: Candidate, view: &V, rule_set: &RuleSet,
-) -> Result<Verdict<ChainValid<'id>>, V::Fault>;
+) -> Result<Verdict<ChainValid<'id, V>>, V::Fault>;
 
 /// Stateless per-tx rules (4.H). Shared verbatim by connect and pool admission.
 pub fn tx_form(tx: &shekyl_wire::Transaction, rule_set: &RuleSet) -> Verdict<RuleCoverage>;
@@ -564,10 +564,11 @@ comments between entries. Entries are in census §4 order restricted to the flag
 - inherent `ALL`, `as_str` (`concat!("CEN-", stringify!($var))`), `flag`
   (the header flag), `status`, `index` (`self as u8`); `Display`; the `Row`
   impl delegating to them; the sealed-trait impl;
-- the **G9 pin**: `const _: () = { $( $( let _ = $path; )? )+ };` — one
-  `let _ = path;` per `implemented(path)`. A path that does not resolve is a
-  compile error, whatever the rule function's signature. The gate reads the
-  same braces the compiler did.
+- the **G9 pin**: `$( use $path as _; )+` — one `use path as _` per
+  `implemented(path)`. A path that does not resolve is a compile error.
+  `use` names the item without instantiating it, so a generic
+  `fn<'id, V: ChainView<'id>>(...)` compiles (`let _ = path` is E0283 on
+  that shape). The gate reads the same braces the compiler did.
 
 ### 5.3 How the gate reads it
 
@@ -666,10 +667,11 @@ Shape, and why it is not the one-liner round 1 sketched:
   `--locked` alike (measured: `-i redb`, `-i shekyl-chain-store`, and
   `-i no-such-package-xyz` all exit 101 identically). A broken resolve would
   read as a clean graph. The belt instead captures the crate's closure from
-  **one** `cargo tree --locked -e normal,dev -p shekyl-chain-rules --prefix
-  none` call — a cargo failure fails the assignment and the gate — and judges
-  the captured text here: `^redb v` / `^shekyl-chain-store v` present ⇒
-  refuse, printing the path with `-i`.
+  **one** `cargo tree --locked -e normal,dev --target all -p shekyl-chain-rules --prefix
+  none` call — `--target all` so a `cfg(windows)` / target-table arrival is
+  not invisible on Linux CI — a cargo failure fails the assignment and the
+  gate — and judges the captured text here: `^redb v` / `^shekyl-chain-store v`
+  present ⇒ refuse, printing the path with `-i`.
 - **Subjects first (rule 47).** The crate resolves as a workspace member
   (`--depth 0`); each banned name is a package the workspace resolves at all
   (`cargo pkgid`), so a store-engine rename turns the belt red with "update
@@ -753,7 +755,7 @@ lint scans them as production — no debug macros anywhere).
   with_view(|outer| {
       with_view(|inner| {
           let valid = validate(candidate(), &inner, &RuleSet::GENESIS).unwrap().unwrap();
-          connect(&outer, valid);   // fn connect<'id>(_: &View<'id>, _: ChainValid<'id>)
+          connect(&outer, valid);   // fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>)
       })
   });
   ```
@@ -807,8 +809,9 @@ second lines behind the belt and the type shapes, not gates.
 
 - `RuleSchedule::for_network(n).rules_at(h) == GENESIS` for every `Network` and
   `h ∈ {ZERO, 1, u64::MAX}` (the identity seed, pinned).
-- every schedule's first step is at `BlockHeight::ZERO` (bites: a schedule with
-  no rule set in force at genesis).
+- `well_formed` refuses a step at `BlockHeight::ZERO` (it would shadow the
+  non-optional `genesis` field); `genesis` is always issued. The identity
+  schedule has `steps: &[]`.
 - `RuleSet::for_id(GENESIS.id()) == Some(GENESIS)`; `for_id(from_raw(0))` and
   `from_raw(2)` are `None`.
 - `RuleSetId::GENESIS.to_raw() == 1` — documented as coincident with
@@ -858,10 +861,10 @@ pub struct Faulted;
 pub struct FaultingView<'id>(Brand<'id>);                                    // Fault = Faulted; Default
 pub fn infallible<T>(r: Result<T, Infallible>) -> T;                         // exhaustive match, never unwrap
 
-/// Assert `result` is exactly `Err(InvalidBlock { rule, .. })` for the named row.
-#[track_caller] pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow);
-/// The last accepted value passes and the first rejected value fails with `rule`.
-#[track_caller] pub fn boundary_pair<T: Debug, V>(last_ok: V, first_bad: V, rule: CenRow, f: impl Fn(V) -> Verdict<T>);
+/// Assert `result` is exactly `Err(InvalidBlock { rule, locus })`.
+#[track_caller] pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow, locus: Locus);
+/// The last accepted value passes and the first rejected value fails with `rule` at `locus`.
+#[track_caller] pub fn boundary_pair<T: Debug, V>(last_ok: V, first_bad: V, rule: CenRow, locus: Locus, f: impl Fn(V) -> Verdict<T>);
 
 /// Well-formed values to mutate one field of.
 pub mod fixture {
@@ -938,15 +941,11 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
   the E1 increment 2.5 row. E1's own rows are **not** edited: its §15 row
   still ends "remaining precondition is DRS-E6 increment 1", which the next
   row discharges — a dated log entry is records-was.
-- `IMPLEMENTATION_INDEX.md` §7 documents table: one row for this doc. **Not**
-  the `DRS-*` registry row's status cell (rule 94 §6 — the E1 lane owns it and
-  PR #752, which last wrote it, is OPEN). That cell's closing sentence,
-  *"S-CHAIN-W's remaining precondition is DRS-E6 increment 1"*, becomes false
-  when this PR merges. **Carrier (rule 94 §4 / rule 21):** one `UPDATE
-  2026-09-15 (DRS-E6 increment 1 LANDED …)` appended to that cell **in this PR,
-  as its last commit, once #752 is MERGED** — falsify by `gh pr view 752 --json
-  state`; if this PR is ready first, the update lands as a one-line follow-on
-  PR the same day #752 merges. Not "the E1 lane will handle it".
+- `IMPLEMENTATION_INDEX.md` §7 documents table: one row for this doc. The
+  `DRS-*` registry row's status cell: **#752 MERGED 2026-09-15** (falsifier
+  `gh pr view 752 --json state` → `MERGED`); this PR appends `UPDATE 2026-09-15
+  (DRS-E6 increment 1 LANDED, PR #753)` and **S-CHAIN-W is unblocked**. The
+  carrier named in the landing commit fired in the review-fix commit.
 - `docs/CHANGELOG.md` Unreleased: one entry (new crate + its two gates;
   `KeyImage` home, encoding unchanged; `CurveTreeRoot`). `docs/README.md`
   front-door table: one row beside the `SI-` register's.
@@ -974,13 +973,17 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 | Q6 | `InvalidBlock` locus shape | **RULED 2026-09-15 — default.** No `detail` field: an unbounded string is not evidence (the `ReviewedDivergence` reason). |
 | Q7 | Census-parser reuse by import | **RULED 2026-09-15 — default, follow-up named not filed:** import now; extract to `_census.py` after #751 merges (blocker #751; falsifier `gh pr view 751 --json state`). |
 | Q8 | Harness visibility for doctests | **RULED 2026-09-15 — default** (`cfg(any(test, doctest))`). **AMENDED BY FINDING 2026-09-15 (commit 6):** the default's premise fails — `cfg(doctest)` items are not visible to doctest snippets (§8.3); `harness` is `#[cfg(test)]`, the cross-view pin uses an inline view. Disclosed in the commit-6 message. |
-| Q9 | `Candidate` struct vs two args | **RULED 2026-09-15 — default.** It is what `ChainValid` carries, and a third component later is non-breaking. |
+| Q9 | `Candidate` struct vs two args | **RULED 2026-09-15 — default, refined at PR #753 review.** It is what `ChainValid` carries. `#[non_exhaustive]` + `Candidate::new` so a third component later is not a breaking struct literal. |
 | — | G1 mechanism | **RULED 2026-09-15 — added:** a `compile_fail` doctest proves *some* compile error and sees only a direct `use`; it cannot see transitive acquisition, which is the path the adoption increments take. The `cargo tree` belt lands in increment 1 (§6.5; corrected in round 2 to a captured-closure shape in `rust-audit-test.yml` — the `-i`-exit-code sketch was fail-open and `build.yml` has no cargo). |
 | — | Census figures | **Confirmed:** consensus enforced 153 (not 159) — the denominator moved when R8 ruled; the computed-denominator mechanism working on its first real test. |
 
 ---
 
 ## 12. Questions for the reviewer — round 2
+
+**RULED 2026-09-15 at PR #753 review.** Each default kept. G4 was tightened
+in the same review (`ChainValid<'id, V>`) so an unbranded `ChainView` impl
+cannot satisfy `connect`.
 
 Each arose from applying a round-1 ruling; each has a default the
 implementation follows unless ruled otherwise.
@@ -997,8 +1000,8 @@ placeholder, `connect` checks the cell before honouring the verdict (a protocol
 nothing enforces — a wrong `InvalidBlock` can be *reported* before the check).
 The default puts the ruling's three error classes in one signature and enforces
 the conversion ban by genericity. Cost: rules read the view with `?` and write
-refusals as `Ok(Err(..))` — which also means a refusal is never `?`-propagated
-anonymously.
+refusals as `refused(...)` — which also means a refusal is never `?`-propagated
+anonymously. **Ruled: keep the default.**
 
 **Q12-2 — `tip()` on `ChainView`.** CEN-A2 (`prev_id == top_hash`), CEN-B5
 (header root == *tip* root) and 4.C (the height this block will have) all read
@@ -1008,6 +1011,7 @@ increment 1** (no ruling names it; the handoff says methods grow with the
 increment that consumes them); owed to slice 1 as
 `fn tip(&self) -> Result<Tip { height, hash, root }, Self::Fault>` with each
 field's row named (§13). Alternative: add it now, since the shape is settled.
+**Ruled: keep the default.** Slice 1 adds `tip()` before CEN-A2/B5.
 
 **Q12-3 — `shekyl-address` for `Network`.** `rules_at(nettype, height)` needs
 the nettype enum, and the workspace's one is `shekyl_address::Network`.
@@ -1015,6 +1019,7 @@ Default: depend on `shekyl-address` (light; no `redb`; the G1 belt confirms).
 Alternative: relocate `Network` to `shekyl-types` with the same zero-breakage
 re-export move as `KeyImage` — arguably its right home (a foundational
 state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
+**Ruled: keep the default.** Relocate `Network` in its own PR.
 
 ---
 
