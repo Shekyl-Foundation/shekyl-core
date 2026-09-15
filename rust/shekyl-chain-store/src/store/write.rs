@@ -81,6 +81,7 @@ use super::keyed::{Handles, InsertTable, UpsertTable};
 use super::set::SetTable;
 use super::shared::Shared;
 use super::undo::{self, Journal, Recording, Replayed};
+use super::view::BatchView;
 
 /// The batch's fatal latch.
 ///
@@ -174,10 +175,25 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         self.apply_policy
     }
 
-    fn txn(&self) -> &WriteTransaction {
+    pub(super) fn txn(&self) -> &WriteTransaction {
         self.txn
             .as_ref()
             .expect("WriteBatch holds a transaction until commit consumes it")
+    }
+
+    /// The batch's fatal latch, for the projections that read through it.
+    pub(super) const fn poison(&self) -> &Poison {
+        &self.poison
+    }
+
+    /// Project this batch as the [`ChainView`](shekyl_chain_rules::ChainView)
+    /// a rule reads — including this batch's own uncommitted writes, so the
+    /// second block of a batch is validated against the chain the first
+    /// left (`store::view`). `'id` is the batch brand: a `ChainValid` minted
+    /// against the returned view is accepted by this batch's `connect` and
+    /// by nothing else.
+    pub const fn chain_view(&self) -> BatchView<'_, 'id> {
+        BatchView::new(self)
     }
 
     /// The two by-name refusals every raw table open passes through.
