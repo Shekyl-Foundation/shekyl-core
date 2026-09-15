@@ -103,7 +103,7 @@ public:
   gen_block_pow_verifier_failure_base(size_t invalid_block_idx, uint64_t expected_height);
   ~gen_block_pow_verifier_failure_base();
 
-  bool install_failing_pow_schema(cryptonote::core& c, size_t ev_index,
+  bool install_failing_pow_hash(cryptonote::core& c, size_t ev_index,
     const std::vector<test_event_entry>& events);
   bool check_rejected_unproven(cryptonote::core& c, size_t ev_index,
     const std::vector<test_event_entry>& events);

@@ -740,8 +740,8 @@ gen_block_pow_verifier_failure_base::gen_block_pow_verifier_failure_base(
   : m_invalid_block_idx(invalid_block_idx)
   , m_expected_height(expected_height)
 {
-  REGISTER_CALLBACK("install_failing_pow_schema",
-    gen_block_pow_verifier_failure_base::install_failing_pow_schema);
+  REGISTER_CALLBACK("install_failing_pow_hash",
+    gen_block_pow_verifier_failure_base::install_failing_pow_hash);
   REGISTER_CALLBACK("check_rejected_unproven",
     gen_block_pow_verifier_failure_base::check_rejected_unproven);
 }
@@ -753,7 +753,7 @@ gen_block_pow_verifier_failure_base::~gen_block_pow_verifier_failure_base()
   set_pow_hash_override_for_tests(nullptr);
 }
 
-bool gen_block_pow_verifier_failure_base::install_failing_pow_schema(
+bool gen_block_pow_verifier_failure_base::install_failing_pow_hash(
   cryptonote::core& /*c*/, size_t /*ev_index*/,
   const std::vector<test_event_entry>& /*events*/)
 {
@@ -794,7 +794,7 @@ bool gen_block_pow_verifier_failure_main::generate(std::vector<test_event_entry>
 {
   BLOCK_VALIDATION_INIT_GENERATE();
 
-  DO_CALLBACK(events, "install_failing_pow_schema");
+  DO_CALLBACK(events, "install_failing_pow_hash");
 
   // A normal, fully valid block: mined against the real schema at generation
   // time, so the verifier failure at submission is its only defect.
@@ -812,7 +812,7 @@ bool gen_block_pow_verifier_failure_alt::generate(std::vector<test_event_entry>&
   MAKE_NEXT_BLOCK(events, blk_1, blk_0, miner_account);
   MAKE_NEXT_BLOCK(events, blk_2, blk_1, miner_account);
 
-  DO_CALLBACK(events, "install_failing_pow_schema");
+  DO_CALLBACK(events, "install_failing_pow_hash");
 
   // Forks from blk_1 while the tip is blk_2, so it takes
   // handle_alternative_block. Mined to a second account so it differs from
