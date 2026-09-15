@@ -73,7 +73,7 @@ impl Shared {
         // process last published. Loud in debug builds if a caller ever
         // hands the mirror something narrower than the file.
         debug_assert!(
-            provenance.stubbed().union(mirror.stubbed()) == provenance.stubbed(),
+            provenance.union(*mirror) == provenance,
             "the provenance mirror only widens: {} -> {provenance}",
             *mirror
         );

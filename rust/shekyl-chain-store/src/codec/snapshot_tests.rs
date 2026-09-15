@@ -82,11 +82,12 @@ use crate::lmdb_order::Hash32;
 use crate::schema::{self, TableShape};
 
 use super::{
-    BlockInfo, Canonical, CurveRoot, OutKey, OutTx, ProbeCell, PropertyCell, SchemaVersion,
-    SettlementEpochBlocks, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
-    SCHEMA_VERSION,
+    BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, PassedThroughFacts, ProbeCell,
+    PropertyCell, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices, UndoEntry,
+    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::schema::TableOrdinal;
+use shekyl_chain_rules::CenRow;
 
 /// Catalogue snapshot stems under `schemas/`. Not codec names;
 /// [`every_canonical_impl_has_a_snapshot`] holds the two namespaces apart.
@@ -251,6 +252,33 @@ impl Fixtures for SettlementEpochBlocks {
             ("one", pin(1)),
             ("mainnet_shaped", pin(10_000)),
             ("byte_order", pin(0x0102_0304_0506_0708)),
+        ]
+    }
+}
+
+impl Fixtures for CoverageGaps {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // Names, never indices: the bytes spell `CEN-…`. The first and last
+        // census rows, so a row inserted anywhere between them does not
+        // move this snapshot — which is the property the name encoding
+        // buys and this fixture witnesses.
+        let first = CenRow::ALL[0];
+        let last = CenRow::ALL[CenRow::ALL.len() - 1];
+        vec![
+            ("none", CoverageGaps::NONE),
+            ("first_row", CoverageGaps::of([first])),
+            ("first_and_last", CoverageGaps::of([last, first])),
+        ]
+    }
+}
+
+impl Fixtures for PassedThroughFacts {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("none", PassedThroughFacts::NONE),
+            ("burned", PassedThroughFacts::of_positions([4])),
+            // Every field: the six-name spelling is the layout.
+            ("all", PassedThroughFacts::of_positions(0..6)),
         ]
     }
 }
@@ -764,6 +792,8 @@ snapshotted_codecs! {
     FamilySet => codec_snapshot_family_set,
     UndoLog => codec_snapshot_undo_log,
     SettlementEpochBlocks => codec_snapshot_settlement_epoch_blocks,
+    CoverageGaps => codec_snapshot_rule_coverage_gaps,
+    PassedThroughFacts => codec_snapshot_passed_through_facts,
     CurveRoot => codec_snapshot_curve_root,
     BlockInfo => codec_snapshot_block_info,
     TxIndex => codec_snapshot_tx_index,

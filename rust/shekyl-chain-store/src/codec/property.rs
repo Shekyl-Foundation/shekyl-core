@@ -50,7 +50,7 @@
 
 use crate::family_set::FamilySet;
 
-use super::{Canonical, SchemaVersion, SettlementEpochBlocks};
+use super::{Canonical, CoverageGaps, PassedThroughFacts, SchemaVersion, SettlementEpochBlocks};
 
 /// Whose state a `properties` cell is, as a value (for the digest fold).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +232,27 @@ property_cells! {
         value: SettlementEpochBlocks
     },
 
+    /// `rule_coverage_gaps` — census rows some committed `connect` was
+    /// handed a verdict for without the row having been evaluated
+    /// (C2-R8 §9.4, S-CHAIN-W §3.8). The second component of the file's
+    /// [`Provenance`](crate::provenance::Provenance): widened in the
+    /// committing batch's own transaction, never narrowed. Engine-local —
+    /// two correct stores of one chain validated by validators of
+    /// different completeness hold the same chain state and different
+    /// evidence.
+    CoverageGapsCell { key: "rule_coverage_gaps", scope: EngineLocal, value: CoverageGaps },
+
+    /// `passed_through_facts` — `ConnectFacts` fields some committed
+    /// `connect` recorded as passed through rather than derived (SCW-1).
+    /// The third provenance component; same discipline as the second.
+    /// `block_info`'s diff rows are not parity evidence while this is
+    /// non-empty, and it names which E6 rows make them so.
+    PassedThroughFactsCell {
+        key: "passed_through_facts",
+        scope: EngineLocal,
+        value: PassedThroughFacts
+    },
+
     /// `total_burned` — the chain's destroyed-fee fold (C++
     /// `set_total_burned`; `LMDB_SCHEMA.md` `properties`).
     ///
@@ -315,6 +336,16 @@ mod tests {
                     key: SettlementEpochBlocksCell::KEY,
                     scope: SettlementEpochBlocksCell::SCOPE,
                     value: SettlementEpochBlocks::NAME,
+                },
+                PropertyCellSpec {
+                    key: CoverageGapsCell::KEY,
+                    scope: CoverageGapsCell::SCOPE,
+                    value: CoverageGaps::NAME,
+                },
+                PropertyCellSpec {
+                    key: PassedThroughFactsCell::KEY,
+                    scope: PassedThroughFactsCell::SCOPE,
+                    value: PassedThroughFacts::NAME,
                 },
                 PropertyCellSpec {
                     key: TotalBurnedCell::KEY,

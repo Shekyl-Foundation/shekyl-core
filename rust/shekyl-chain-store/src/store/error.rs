@@ -278,6 +278,10 @@ pub enum StoreCannot {
         /// The rule set the caller says is in force at `height`.
         in_force: RuleSetId,
     },
+    /// `connect` was told a rule set is in force that no schedule has
+    /// issued (`RuleSet::for_id` is `None`), so what it enforces — and
+    /// therefore what the verdict may have skipped — cannot be known.
+    RuleSetUnknown(RuleSetId),
     /// A judged transaction's ct base carries fewer commitments than its
     /// prefix has outputs, so there is no commitment to record for output
     /// `index` (`output_amounts`).
@@ -337,6 +341,11 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "the block was judged under rule set {judged:?} but rule set {in_force:?} is in \
                  force at height {height}; re-validate under the rule set in force"
+            ),
+            Self::RuleSetUnknown(id) => write!(
+                f,
+                "rule set {id:?} has not been issued by any schedule; connect cannot know what it \
+                 enforces"
             ),
             Self::OutputWithoutCommitment { tx, index } => write!(
                 f,
