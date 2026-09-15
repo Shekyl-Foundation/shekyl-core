@@ -3877,6 +3877,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-fcmp",
  "shekyl-stats",
+ "shekyl-types",
  "thiserror 2.0.18",
  "trybuild",
  "x25519-dalek",
