@@ -16,12 +16,24 @@
 # is the third clause, the one that catches a `match` someone writes by hand.
 #
 # THREE CLAUSES.
-#   1. no `impl From/Into/TryFrom` between a store error type and a verdict
-#      type, anywhere under rust/;
-#   2. `shekyl-chain-store` never NAMES a verdict type — the store does not
-#      know `InvalidBlock` exists;
-#   3. no match arm: a verdict token within three lines of a store-error token
-#      in any .rs file under rust/ (comments stripped).
+#   1. no `impl From/Into/TryFrom` between a store error type and
+#      `InvalidBlock`, anywhere under rust/. The trait name may be bare
+#      (`From`) or a path (`core::convert::From`, `::std::convert::TryFrom`);
+#      a regex that only accepted the bare ident would let a legal impl
+#      bypass the ban.
+#   2. `shekyl-chain-store` never NAMES `InvalidBlock` — the store does not
+#      know the consensus verdict type exists;
+#   3. no match arm maps a store-error token (pattern side of `=>`) onto
+#      `InvalidBlock` (body side). Arms are scanned by brace depth, not by
+#      a line window: a three-line heuristic misses a body that logs then
+#      constructs, and flags adjacent functions that are not a conversion.
+#
+# VERDICT TOKEN. The ruling names `InvalidBlock`. Aliases (`InvalidTx`,
+# `InvalidTransaction`) are intentionally absent: the latter is already an
+# RPC-client error, and a guessed alias both false-positives on that path
+# and false-negatives on a differently-named verdict (`BlockVerdict`). A
+# PR that mints a second validation-crate verdict type adds it here.
+#
 # Clauses 1 and 2 are live at birth. Clause 3 is armed and has no verdict
 # type to match until the validation crate lands; the gate REPORTS how many
 # verdict-type definitions it found so "clean" cannot be mistaken for
@@ -32,6 +44,7 @@
 # zero of either is a failure, because a ban over an empty tree passes.
 from __future__ import annotations
 
+import importlib.util
 import re
 import sys
 import tempfile
@@ -42,21 +55,37 @@ RUST = ROOT / "rust"
 STORE_CRATE = RUST / "shekyl-chain-store"
 STORE_ERROR_FILE = STORE_CRATE / "src/store/error.rs"
 SELF = Path(__file__).resolve()
+STRIPPER = ROOT / "scripts" / "ci" / "strip_c_comments.py"
 
 STORE_TOKEN = r"(?:StoreError|StoreInvariant|InvariantViolated|StoreCannot)"
-VERDICT_TOKEN = r"Invalid(?:Block|Tx|Transaction)"
+VERDICT_TOKEN = r"InvalidBlock"
 STORE_RE = re.compile(rf"\b{STORE_TOKEN}\b")
 VERDICT_RE = re.compile(rf"\b{VERDICT_TOKEN}\b")
 VERDICT_DEF_RE = re.compile(rf"\b(?:enum|struct)\s+{VERDICT_TOKEN}\b")
 STORE_ENUM_RE = re.compile(r"pub\s+enum\s+StoreError\s*\{(.*?)\n\}", re.S)
 VARIANT_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9]*)\s*(?:[,({]|$)", re.M)
 # `impl From<A> for B`, `impl Into<B> for A`, `impl TryFrom<A> for B`, with
-# optional generics/paths on either side. Matched on a single joined line.
+# optional generics on `impl` and a bare or path-qualified trait name.
+# Matched on a single joined line.
+TRAIT = r"(?:(?:::)?(?:[A-Za-z_][\w]*::)*(?:From|Into|TryFrom))"
 CONV_RE = re.compile(
-    r"impl(?:<[^>]*>)?\s+(?:From|Into|TryFrom)\s*<\s*([^>]+?)\s*>\s+for\s+([\w:<>' ,]+)"
+    rf"impl(?:<[^>]*>)?\s+{TRAIT}\s*<\s*([^>]+?)\s*>\s+for\s+([\w:<>' ,]+)"
 )
 SKIP_DIRS = {"target", ".git"}
-WINDOW = 3
+
+_STRIP_MOD = None
+
+
+def _strip_mod():
+    global _STRIP_MOD
+    if _STRIP_MOD is None:
+        spec = importlib.util.spec_from_file_location("strip_c_comments", STRIPPER)
+        if spec is None or spec.loader is None:
+            raise GateError(f"subject absent: cannot load {STRIPPER}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _STRIP_MOD = mod
+    return _STRIP_MOD
 
 
 class GateError(Exception):
@@ -64,7 +93,12 @@ class GateError(Exception):
 
 
 def strip_comments(src: str) -> str:
-    return "\n".join(line.split("//", 1)[0] for line in src.splitlines())
+    """Delegate to strip_c_comments.py (nested block comments, lifetimes).
+
+    A `//`-only stripper is a clause-2/3 false red on `/* InvalidBlock */`
+    and is not what this gate's header claims.
+    """
+    return _strip_mod().strip(src, rust=True)
 
 
 def rust_files(root: Path):
@@ -84,6 +118,60 @@ def assert_subject(rust_root: Path, error_file: Path) -> int:
     if n == 0:
         raise GateError("subject absent: StoreError parsed with zero variants")
     return n
+
+
+def match_arms(src: str) -> list[tuple[str, str, int]]:
+    """(pattern, body, 1-based line of `=>`) for each fat-arrow arm.
+
+    Pattern is the text after the previous `{` or `,` at this brace depth,
+    so sibling arms and adjacent functions are not one span. Body runs from
+    `=>` until depth returns to the arrow's depth on a `,` or `}`. Nested
+    `=>` produce their own pairs. Strings are not modelled: a `=>` inside a
+    string is a false red, never a false green.
+    """
+    arms: list[tuple[str, str, int]] = []
+    n = len(src)
+    depth = 0
+    last_sep: dict[int, int] = {0: -1}
+    i = 0
+    while i < n - 1:
+        c = src[i]
+        if c == "{":
+            depth += 1
+            last_sep[depth] = i
+            i += 1
+            continue
+        if c == "}":
+            depth -= 1
+            i += 1
+            continue
+        if c == ",":
+            last_sep[depth] = i
+            i += 1
+            continue
+        if c == "=" and src[i + 1] == ">":
+            sep = last_sep.get(depth, -1)
+            pattern = src[sep + 1 : i]
+            arrow_depth = depth
+            line = src[:i].count("\n") + 1
+            j = i + 2
+            while j < n:
+                ch = src[j]
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    if depth == arrow_depth:
+                        break
+                    depth -= 1
+                elif ch == "," and depth == arrow_depth:
+                    break
+                j += 1
+            arms.append((pattern, src[i + 2 : j], line))
+            last_sep[arrow_depth] = j
+            i = j
+            continue
+        i += 1
+    return arms
 
 
 def check(rust_root: Path, store_crate: Path, error_file: Path, exclude: set[Path] = frozenset()) -> str:
@@ -106,24 +194,24 @@ def check(rust_root: Path, store_crate: Path, error_file: Path, exclude: set[Pat
         # clause 1 — join lines so a multi-line impl header still matches
         for m in CONV_RE.finditer(" ".join(text.split())):
             src_t, dst_t = m.group(1), m.group(2)
-            sides = (STORE_RE.search(src_t) is not None, VERDICT_RE.search(src_t) is not None,
-                     STORE_RE.search(dst_t) is not None, VERDICT_RE.search(dst_t) is not None)
+            sides = (
+                STORE_RE.search(src_t) is not None,
+                VERDICT_RE.search(src_t) is not None,
+                STORE_RE.search(dst_t) is not None,
+                VERDICT_RE.search(dst_t) is not None,
+            )
             store_side = sides[0] or sides[2]
             verdict_side = sides[1] or sides[3]
             if store_side and verdict_side:
-                findings.append(f"clause 1: {rel} converts between store error and verdict: `{m.group(0).strip()}`")
-        # clause 3 — a verdict token within WINDOW lines of a store token
-        lines = text.splitlines()
-        for i, line in enumerate(lines):
-            if not STORE_RE.search(line):
-                continue
-            for j in range(i, min(i + WINDOW, len(lines))):
-                if VERDICT_RE.search(lines[j]):
-                    findings.append(
-                        f"clause 3: {rel}:{i + 1}-{j + 1} verdict token within {WINDOW} lines of a store-error token: "
-                        f"{lines[j].strip()}"
-                    )
-                    break
+                findings.append(
+                    f"clause 1: {rel} converts between store error and verdict: `{m.group(0).strip()}`"
+                )
+        # clause 3 — store token on the pattern side of `=>`, verdict on the body
+        for pattern, body, line in match_arms(text):
+            if STORE_RE.search(pattern) and VERDICT_RE.search(body):
+                findings.append(
+                    f"clause 3: {rel}:{line} match arm maps a store-error token onto {VERDICT_TOKEN}"
+                )
     if findings:
         raise GateError("conversion ban violated:\n" + "".join(f"  {f}\n" for f in findings))
     return (
@@ -138,6 +226,12 @@ STORE_ERR = "pub enum StoreError {\n    Open,\n    CellCorrupt { key: u8 },\n}\n
 
 
 def selftest() -> None:
+    # A stripper regression would silently widen every clause. Fail here, not
+    # in a comment, so this gate's --selftest is a subject assertion on its
+    # own comment scanner (rule 47).
+    if _strip_mod().self_test() != 0:
+        sys.exit(1)
+
     fails: list[str] = []
 
     def run(name: str, files: dict[str, str], needle: str | None) -> None:
@@ -165,22 +259,102 @@ def selftest() -> None:
     run("subject: no error.rs", {V: "fn f() {}\n"}, "not found")
     run("subject: enum absent", {E: "pub struct Other;\n"}, "not parsed")
     run("subject: zero variants", {E: "pub enum StoreError {\n}\n"}, "zero variants")
-    run("clause 1: From store->verdict", {E: STORE_ERR, V: "impl From<StoreError> for InvalidBlock {\n    fn from(_: StoreError) -> Self { Self }\n}\n"}, "clause 1")
-    run("clause 1: multi-line header", {E: STORE_ERR, V: "impl From<\n    shekyl_chain_store::StoreInvariant,\n> for InvalidBlock {}\n"}, "clause 1")
+    run(
+        "clause 1: From store->verdict",
+        {
+            E: STORE_ERR,
+            V: "impl From<StoreError> for InvalidBlock {\n    fn from(_: StoreError) -> Self { Self }\n}\n",
+        },
+        "clause 1",
+    )
+    run(
+        "clause 1: multi-line header",
+        {E: STORE_ERR, V: "impl From<\n    shekyl_chain_store::StoreInvariant,\n> for InvalidBlock {}\n"},
+        "clause 1",
+    )
     run("clause 1: Into verdict", {E: STORE_ERR, V: "impl Into<InvalidBlock> for StoreCannot {}\n"}, "clause 1")
-    run("clause 1: TryFrom", {E: STORE_ERR, V: "impl TryFrom<StoreError> for InvalidTx {}\n"}, "clause 1")
+    run(
+        "clause 1: TryFrom",
+        {E: STORE_ERR, V: "impl TryFrom<StoreError> for InvalidBlock {}\n"},
+        "clause 1",
+    )
+    run(
+        "clause 1: qualified path",
+        {E: STORE_ERR, V: "impl core::convert::From<StoreError> for InvalidBlock {}\n"},
+        "clause 1",
+    )
+    run(
+        "clause 1: leading-colon path",
+        {E: STORE_ERR, V: "impl ::std::convert::TryFrom<StoreError> for InvalidBlock {}\n"},
+        "clause 1",
+    )
     run("clause 1 not tripped by daemon error", {E: STORE_ERR, V: "impl From<StoreError> for DaemonError {}\n"}, None)
     run("clause 2: store names verdict", {E: STORE_ERR, "shekyl-chain-store/src/lib.rs": "pub use x::InvalidBlock;\n"}, "clause 2")
     run("clause 2: comment does not count", {E: STORE_ERR, "shekyl-chain-store/src/lib.rs": "// never InvalidBlock here\n"}, None)
-    run("clause 3: match arm", {E: STORE_ERR, V: "fn f(e: StoreError) -> InvalidBlock {\n    match e {\n        StoreError::CellCorrupt { .. } => InvalidBlock::Corrupt,\n    }\n}\n"}, "clause 3")
-    run("clause 3: arm split over lines", {E: STORE_ERR, V: "match e {\n    StoreError::Open =>\n        {\n            InvalidBlock::X\n        }\n}\n"}, "clause 3")
-    run("clause 3: far apart is not an arm", {E: STORE_ERR, V: "fn a(e: StoreError) {}\n\n\n\nfn b() -> InvalidBlock { InvalidBlock }\n"}, None)
+    run(
+        "clause 2: block comment does not count",
+        {E: STORE_ERR, "shekyl-chain-store/src/lib.rs": "/* never InvalidBlock here */\n"},
+        None,
+    )
+    run(
+        "clause 1: block-commented impl does not count",
+        {E: STORE_ERR, V: "/* impl From<StoreError> for InvalidBlock {} */\n"},
+        None,
+    )
+    run(
+        "clause 3: match arm",
+        {
+            E: STORE_ERR,
+            V: "fn f(e: StoreError) -> InvalidBlock {\n    match e {\n        StoreError::CellCorrupt { .. } => InvalidBlock::Corrupt,\n    }\n}\n",
+        },
+        "clause 3",
+    )
+    run(
+        "clause 3: arm split over lines",
+        {E: STORE_ERR, V: "match e {\n    StoreError::Open =>\n        {\n            InvalidBlock::X\n        }\n}\n"},
+        "clause 3",
+    )
+    run(
+        "clause 3: long arm",
+        {
+            E: STORE_ERR,
+            V: (
+                "match e {\n"
+                "    StoreError::Open => {\n"
+                "        let _a = 1;\n"
+                "        let _b = 2;\n"
+                "        let _c = 3;\n"
+                "        InvalidBlock::X\n"
+                "    }\n"
+                "}\n"
+            ),
+        },
+        "clause 3",
+    )
+    run(
+        "clause 3: far apart is not an arm",
+        {E: STORE_ERR, V: "fn a(e: StoreError) {}\n\n\n\nfn b() -> InvalidBlock { InvalidBlock }\n"},
+        None,
+    )
+    run(
+        "clause 3: nearby fns are not an arm",
+        {E: STORE_ERR, V: "fn a(e: StoreError) {}\nfn b() -> InvalidBlock { InvalidBlock }\n"},
+        None,
+    )
+    run(
+        "clause 3: sibling arms are not a conversion",
+        {
+            E: STORE_ERR,
+            V: "match x {\n    Foo => StoreError::Open,\n    Bar => InvalidBlock,\n}\n",
+        },
+        None,
+    )
     if fails:
         print("store-error conversion-ban selftest FAILED:", file=sys.stderr)
         for f in fails:
             print(f"  {f}", file=sys.stderr)
         sys.exit(1)
-    print("store-error conversion-ban selftest: 14 cases held")
+    print("store-error conversion-ban selftest: 21 cases held")
 
 
 def main() -> None:
