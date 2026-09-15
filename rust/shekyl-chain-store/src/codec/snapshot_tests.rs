@@ -83,7 +83,8 @@ use crate::schema::{self, TableShape};
 
 use super::{
     BlockInfo, Canonical, CurveRoot, OutKey, OutTx, ProbeCell, PropertyCell, SchemaVersion,
-    TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    SettlementEpochBlocks, TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS,
+    SCHEMA_VERSION,
 };
 use crate::schema::TableOrdinal;
 
@@ -238,6 +239,18 @@ impl Fixtures for UndoLog {
                     },
                 ]),
             ),
+        ]
+    }
+}
+
+impl Fixtures for SettlementEpochBlocks {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // Literals: the snapshot pins the codec, not any consumer's schedule.
+        let pin = |n| SettlementEpochBlocks::new(n).expect("non-zero fixture");
+        vec![
+            ("one", pin(1)),
+            ("mainnet_shaped", pin(10_000)),
+            ("byte_order", pin(0x0102_0304_0506_0708)),
         ]
     }
 }
@@ -750,6 +763,7 @@ snapshotted_codecs! {
     SchemaVersion => codec_snapshot_schema_version,
     FamilySet => codec_snapshot_family_set,
     UndoLog => codec_snapshot_undo_log,
+    SettlementEpochBlocks => codec_snapshot_settlement_epoch_blocks,
     CurveRoot => codec_snapshot_curve_root,
     BlockInfo => codec_snapshot_block_info,
     TxIndex => codec_snapshot_tx_index,

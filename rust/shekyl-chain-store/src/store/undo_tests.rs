@@ -10,7 +10,7 @@
 
 use redb::ReadableTableMetadata;
 
-use super::store_tests::{cleanup, tmp, TestErr, PROBE, PROBE_ROW};
+use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{Canonical, ProbeCell, PropertyCell, UndoEntry, UndoLog};
@@ -56,7 +56,7 @@ fn undo_row(store: &ChainStore, height: u64) -> Option<UndoLog> {
 #[test]
 fn every_verb_journals_its_pre_image_in_write_order() {
     let path = tmp("undo-record");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let seeded: Result<(), TestErr> = store.write(|batch| {
         // Unjournaled seed, so the `hf_versions[0]` upsert below has a prior.
         batch.open_upsert_table(HF_VERSIONS)?.upsert(0, &7)?;
@@ -110,7 +110,7 @@ fn every_verb_journals_its_pre_image_in_write_order() {
 #[test]
 fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
     let path = tmp("undo-replay");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let seeded: Result<(), TestErr> = store.write(|batch| {
         batch.open_upsert_table(HF_VERSIONS)?.upsert(0, &7)?;
         batch
@@ -194,7 +194,7 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
 #[test]
 fn two_heights_in_one_batch_pop_in_lifo_order() {
     let path = tmp("undo-lifo");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let counts: Result<(usize, usize), TestErr> =
         store.write(|batch| Ok((connect_like(batch, 1)?, connect_like(batch, 2)?)));
     assert_eq!(counts, Ok((6, 6)));
@@ -218,7 +218,7 @@ fn two_heights_in_one_batch_pop_in_lifo_order() {
 #[test]
 fn a_member_already_present_is_not_journaled_and_survives_the_pop() {
     let path = tmp("undo-member");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<(bool, bool, usize), TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
         let mut set = batch.open_multimap_table(OUTPUT_AMOUNTS)?;
@@ -242,7 +242,7 @@ fn a_member_already_present_is_not_journaled_and_survives_the_pop() {
 #[test]
 fn an_unsealed_recording_refuses_the_commit_and_lands_nothing() {
     let path = tmp("undo-unsealed");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<(), TestErr> = store.write(|batch| {
         let recording = batch.record_undo(4);
         batch
@@ -268,7 +268,7 @@ fn an_unsealed_recording_refuses_the_commit_and_lands_nothing() {
 #[test]
 fn sealing_over_a_recorded_height_is_si6_and_poisons_the_batch() {
     let path = tmp("undo-collide");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let first: Result<usize, TestErr> = store.write(|batch| Ok(connect_like(batch, 1)?));
     assert_eq!(first, Ok(6));
     // The closure swallows the violation and returns Ok; the batch still
@@ -313,7 +313,7 @@ fn replay_err(store: &ChainStore, height: u64) -> String {
 #[test]
 fn an_entry_whose_target_is_gone_is_si6() {
     let path = tmp("undo-target");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let row = UndoLog(vec![
         UndoEntry::Inserted {
             table: ordinal_of("blocks").expect("catalogued"),
@@ -342,7 +342,7 @@ fn an_entry_whose_target_is_gone_is_si6() {
 #[test]
 fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     let path = tmp("undo-corrupt");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
 
     plant_row(&store, 1, &[0xff, 0xff]);
     let msg = replay_err(&store, 1);
@@ -397,7 +397,7 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
 #[should_panic(expected = "not in the schema catalogue and cannot be journaled")]
 fn writing_an_uncatalogued_table_while_recording_is_a_crate_bug() {
     let path = tmp("undo-uncatalogued");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let unreachable: Result<(), TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
         batch.open_upsert_table(PROBE)?.upsert("k", &1)?;
@@ -410,7 +410,7 @@ fn writing_an_uncatalogued_table_while_recording_is_a_crate_bug() {
 #[test]
 fn a_probe_table_writes_freely_while_no_recording_is_live() {
     let path = tmp("undo-probe-ok");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<(), TestErr> = store.write(|batch| {
         batch.open_upsert_table(PROBE)?.upsert("k", &1)?;
         Ok(())

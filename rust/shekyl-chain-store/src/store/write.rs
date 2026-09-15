@@ -203,13 +203,15 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     ///
     /// ```compile_fail,E0599
     /// use redb::TableDefinition;
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
     /// use shekyl_chain_store::store::{CellFault, ChainStore, StoreError, StoreInvariant};
     /// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
     /// const ROW: StoreInvariant = StoreInvariant::CellCorrupt {
     ///     key: "t",
     ///     fault: CellFault::Absent,
     /// };
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|batch| -> Result<(), StoreError> {
     ///     batch.open_insert_table(T, ROW)?.upsert("k", &1)?;
     ///     Ok(())
@@ -252,8 +254,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// ```compile_fail,E0599
     /// use redb::TableDefinition;
     /// use shekyl_chain_store::store::{ChainStore, StoreError};
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
     /// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|batch| -> Result<(), StoreError> {
     ///     batch.open_upsert_table(T)?.insert("k", &1)?;
     ///     Ok(())
@@ -344,7 +348,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// ```compile_fail,E0271
     /// use shekyl_chain_store::codec::{SchemaVersion, SchemaVersionCell};
     /// use shekyl_chain_store::store::{ChainStore, StoreError};
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|batch| -> Result<(), StoreError> {
     ///     batch.upsert_property::<SchemaVersionCell>(&SchemaVersion::new(9))
     /// });
@@ -354,7 +360,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// use shekyl_chain_store::codec::ApplyPolicyCell;
     /// use shekyl_chain_store::family_set::FamilySet;
     /// use shekyl_chain_store::store::{ChainStore, StoreError};
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|batch| -> Result<(), StoreError> {
     ///     batch.upsert_property::<ApplyPolicyCell>(&FamilySet::EMPTY)
     /// });

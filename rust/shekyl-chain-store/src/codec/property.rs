@@ -50,7 +50,7 @@
 
 use crate::family_set::FamilySet;
 
-use super::{Canonical, SchemaVersion};
+use super::{Canonical, SchemaVersion, SettlementEpochBlocks};
 
 /// Whose state a `properties` cell is, as a value (for the digest fold).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -214,6 +214,33 @@ property_cells! {
     /// the same chain must digest identically, or the sufficiency red could
     /// not be attributed to the skipped apply.
     ApplyPolicyCell { key: "apply_policy", scope: EngineLocal, value: FamilySet },
+
+    /// `settlement_epoch_blocks` — the archival settlement schedule this
+    /// file was built under (S-CHAIN-W SCW-2; the C++ pin's key, verbatim).
+    ///
+    /// Sealed at create from the session's value, compared at every open,
+    /// refused on mismatch ([`StoreCannot::SettlementEpochMismatch`]):
+    /// epoch-derived rows are only meaningful under the schedule that
+    /// wrote them. Engine-local: two correct stores of one chain hold the
+    /// same chain state whatever schedule label each carries, and a
+    /// mismatch is a refusal to open, never a digest difference.
+    ///
+    /// [`StoreCannot::SettlementEpochMismatch`]: crate::store::StoreCannot::SettlementEpochMismatch
+    SettlementEpochBlocksCell {
+        key: "settlement_epoch_blocks",
+        scope: EngineLocal,
+        value: SettlementEpochBlocks
+    },
+
+    /// `total_burned` — the chain's destroyed-fee fold (C++
+    /// `set_total_burned`; `LMDB_SCHEMA.md` `properties`).
+    ///
+    /// Chain state, and therefore in the `properties` digest domain and
+    /// writable through `upsert_property`. Written by `connect` as
+    /// `checked_add` of the block's burned amount (register row SI-8 — an
+    /// overflow is fatal, never a saturate); `pop` restores the journaled
+    /// pre-image, so there is no subtract and no pop-side saturation.
+    TotalBurnedCell { key: "total_burned", scope: ChainState, value: u64 },
 }
 
 /// A chain-state cell that exists only in this crate's tests, so the typed
@@ -284,8 +311,23 @@ mod tests {
                     scope: ApplyPolicyCell::SCOPE,
                     value: FamilySet::NAME,
                 },
+                PropertyCellSpec {
+                    key: SettlementEpochBlocksCell::KEY,
+                    scope: SettlementEpochBlocksCell::SCOPE,
+                    value: SettlementEpochBlocks::NAME,
+                },
+                PropertyCellSpec {
+                    key: TotalBurnedCell::KEY,
+                    scope: TotalBurnedCell::SCOPE,
+                    value: u64::NAME,
+                },
             ]
         );
+        // The one chain-state cell so far is the digest-domain member.
+        assert_eq!(TotalBurnedCell::SCOPE, CellScope::ChainState);
+        assert_eq!(SettlementEpochBlocksCell::SCOPE, CellScope::EngineLocal);
+        // The pin's key is the C++ store's key, byte for byte.
+        assert_eq!(SettlementEpochBlocksCell::KEY, "settlement_epoch_blocks");
     }
 
     #[test]

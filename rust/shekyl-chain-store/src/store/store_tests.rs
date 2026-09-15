@@ -11,9 +11,25 @@ use redb::TableDefinition;
 
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
+use crate::codec::SettlementEpochBlocks;
 use crate::family_set::FamilySet;
 
 pub(super) const PROBE: TableDefinition<&str, u64> = TableDefinition::new("__e1_probe");
+
+/// The settlement-epoch schedule every test store is pinned to. A test
+/// fixture, not a default: the crate has no default schedule (the value is
+/// the caller's), and the mismatch tests in `header_tests.rs` open under
+/// `OTHER_EPOCH` to watch the refusal fire.
+pub(super) const EPOCH: SettlementEpochBlocks = match SettlementEpochBlocks::new(10_000) {
+    Some(e) => e,
+    None => unreachable!(),
+};
+
+/// A schedule that is not [`EPOCH`].
+pub(super) const OTHER_EPOCH: SettlementEpochBlocks = match SettlementEpochBlocks::new(50) {
+    Some(e) => e,
+    None => unreachable!(),
+};
 
 /// A caller's error type over the store's: what `write`'s `E` is for. A
 /// closure that wants to abort on purpose returns `Abort`; there is no
@@ -82,7 +98,7 @@ pub(super) fn cleanup(path: &std::path::Path) {
 #[test]
 fn a_store_defaults_to_full_apply_and_a_fresh_file_is_evidence() {
     let path = tmp("policy");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     assert_eq!(store.apply_policy(), ApplyPolicy::Full);
     assert!(store.provenance().is_parity_evidence());
     cleanup(&path);
@@ -92,7 +108,7 @@ fn a_store_defaults_to_full_apply_and_a_fresh_file_is_evidence() {
 fn an_empty_stub_is_refused_at_open() {
     let path = tmp("empty-stub");
     assert!(matches!(
-        ChainStore::with_apply_policy(&path, ApplyPolicy::StubbedFamilies(FamilySet::EMPTY)),
+        ChainStore::with_apply_policy(&path, ApplyPolicy::StubbedFamilies(FamilySet::EMPTY), EPOCH),
         Err(StoreError::Cannot(StoreCannot::EmptyApplyStub))
     ));
     assert!(!path.exists(), "a refused policy must not create the store");
@@ -119,7 +135,7 @@ fn declared_commit_policy_constants_are_pinned() {
         "two-phase commit must stay on: redb's default is off"
     );
     let path = tmp("armed");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     // `write` arms the transaction before it runs the closure, so reaching
     // the closure at all is the engine accepting the declared policy.
     assert_eq!(store.write(abort::<()>), Err(TestErr::Abort));
@@ -129,7 +145,7 @@ fn declared_commit_policy_constants_are_pinned() {
 #[test]
 fn ok_from_the_closure_commits_and_the_value_comes_back() {
     let path = tmp("commit");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let answer = store
         .write(|batch| -> Result<u64, StoreError> {
             probe_row(batch, "k", 1)?;
@@ -148,7 +164,7 @@ fn err_from_the_closure_aborts_and_nothing_lands() {
     // There is no abort verb: `Err` is the abort, and it is the caller's
     // error that comes back, not a store error wrapping it.
     let path = tmp("abort");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let result = store.write(|batch| -> Result<(), TestErr> {
         probe_row(batch, "k", 1)?;
         Err(TestErr::Abort)
@@ -171,8 +187,8 @@ fn a_store_failure_converts_into_the_callers_error_type() {
     // caller's type, so a connect path can carry its verdict type and the
     // store's failures in one enum without the store knowing the verdict.
     let path = tmp("convert");
-    drop(ChainStore::create(&path).expect("create"));
-    let ro = ChainStore::open_read_only(&path).expect("ro");
+    drop(ChainStore::create(&path, EPOCH).expect("create"));
+    let ro = ChainStore::open_read_only(&path, EPOCH).expect("ro");
     assert_eq!(
         ro.write(|_| Ok::<(), TestErr>(())),
         Err(TestErr::Store(
@@ -187,7 +203,7 @@ fn a_store_failure_converts_into_the_callers_error_type() {
 #[test]
 fn insert_lands_on_a_fresh_key_and_names_the_row_on_a_present_one() {
     let path = tmp("insert");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     store
         .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
         .expect("a fresh key lands");
@@ -237,7 +253,7 @@ fn a_propagated_violation_reaches_the_caller_in_the_callers_type() {
     // The ordinary path: the site does not swallow, `?` carries the
     // violation out through `E: From<StoreError>`, and the batch aborts.
     let path = tmp("insert-propagated");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     store
         .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
         .expect("seed");
@@ -257,7 +273,7 @@ fn a_swallowed_violation_outvotes_a_different_err() {
     // (C2-R8 Q2). IT DOES NOT COVER: the Ok-and-swallowed path
     // (`insert_lands_on_a_fresh_key_and_names_the_row_on_a_present_one`).
     let path = tmp("insert-err-poison");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     store
         .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
         .expect("seed");
@@ -279,7 +295,7 @@ fn a_swallowed_violation_outvotes_a_different_err() {
 #[test]
 fn upsert_replaces_and_returns_the_displaced_value() {
     let path = tmp("upsert");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     store
         .write(|batch| -> Result<(), StoreError> {
             let mut table = batch.open_upsert_table(PROBE)?;
@@ -302,7 +318,7 @@ fn upsert_replaces_and_returns_the_displaced_value() {
 #[test]
 fn a_second_live_batch_is_a_typed_error_not_a_deadlock() {
     let path = tmp("in-progress");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     store
         .write(|_| -> Result<(), StoreError> {
             assert!(matches!(
@@ -326,7 +342,7 @@ fn the_brand_unifies_within_one_batch_only() {
     // `compile_fail` doctest on `ChainStore::write`.
     fn same_batch<'id>(_: &WriteBatch<'_, 'id>, _: &WriteBatch<'_, 'id>) {}
     let path = tmp("brand");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     store
         .write(|batch| -> Result<(), StoreError> {
             same_batch(batch, batch);
@@ -348,7 +364,7 @@ fn a_second_batch_from_another_thread_is_refused_not_queued() {
     // block on the condvar until the holder is dropped, which it never is
     // until the asker has answered.
     let path = tmp("cross-thread");
-    let store = std::sync::Arc::new(ChainStore::create(&path).expect("create"));
+    let store = std::sync::Arc::new(ChainStore::create(&path, EPOCH).expect("create"));
     let asker = store
         .write(|_| -> Result<std::thread::JoinHandle<()>, StoreError> {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -379,7 +395,7 @@ fn a_second_batch_from_another_thread_is_refused_not_queued() {
 #[test]
 fn a_read_snapshot_is_allowed_while_a_write_is_live() {
     let path = tmp("read-during-write");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     store
         .write(|_| -> Result<(), StoreError> {
             store.begin_read().expect("read during write");
@@ -393,8 +409,9 @@ fn a_read_snapshot_is_allowed_while_a_write_is_live() {
 fn a_stubbed_family_cannot_open_its_table_on_a_write() {
     let path = tmp("stub-open");
     const STUB: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
-    let store = ChainStore::with_apply_policy(&path, ApplyPolicy::stubbed(STUB).expect("stub"))
-        .expect("create");
+    let store =
+        ChainStore::with_apply_policy(&path, ApplyPolicy::stubbed(STUB).expect("stub"), EPOCH)
+            .expect("create");
     store
         .write(|batch| -> Result<(), StoreError> {
             assert!(matches!(
@@ -417,7 +434,7 @@ fn the_properties_table_has_no_raw_write_handle() {
     // to make unrepresentable. Reads stay raw-capable: nothing can be
     // damaged by looking.
     let path = tmp("properties-typed");
-    let store = ChainStore::create(&path).expect("create");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     assert_eq!(
         store.write(|batch| {
             assert!(matches!(
@@ -451,10 +468,10 @@ fn the_properties_table_has_no_raw_write_handle() {
 fn a_read_only_store_refuses_at_the_single_refusal_point() {
     let path = tmp("readonly");
     {
-        let store = ChainStore::create(&path).expect("create");
+        let store = ChainStore::create(&path, EPOCH).expect("create");
         store.write(|_| Ok::<(), StoreError>(())).expect("commit");
     }
-    let store = ChainStore::open_read_only(&path).expect("open ro");
+    let store = ChainStore::open_read_only(&path, EPOCH).expect("open ro");
     assert!(store.is_read_only());
     assert!(matches!(
         store.write(|_| Ok::<(), StoreError>(())),
@@ -490,21 +507,21 @@ fn is_already_open(result: &Result<ChainStore, StoreError>) -> bool {
 #[test]
 fn a_second_writable_open_is_refused_while_a_writer_is_live() {
     let path = tmp("lock-w-w");
-    let live = ChainStore::create(&path).expect("create");
+    let live = ChainStore::create(&path, EPOCH).expect("create");
     assert!(
-        is_already_open(&ChainStore::create(&path)),
+        is_already_open(&ChainStore::create(&path, EPOCH)),
         "two writable handles on one file would let the provenance mirror go stale"
     );
     drop(live);
-    ChainStore::create(&path).expect("reopen once the lock is released");
+    ChainStore::create(&path, EPOCH).expect("reopen once the lock is released");
     cleanup(&path);
 }
 
 #[test]
 fn a_read_only_open_is_refused_while_a_writer_is_live() {
     let path = tmp("lock-w-r");
-    let live = ChainStore::create(&path).expect("create");
-    assert!(is_already_open(&ChainStore::open_read_only(&path)));
+    let live = ChainStore::create(&path, EPOCH).expect("create");
+    assert!(is_already_open(&ChainStore::open_read_only(&path, EPOCH)));
     drop(live);
     cleanup(&path);
 }
@@ -512,10 +529,10 @@ fn a_read_only_open_is_refused_while_a_writer_is_live() {
 #[test]
 fn a_writable_open_is_refused_while_a_reader_is_live() {
     let path = tmp("lock-r-w");
-    drop(ChainStore::create(&path).expect("create"));
-    let reader = ChainStore::open_read_only(&path).expect("open ro");
+    drop(ChainStore::create(&path, EPOCH).expect("create"));
+    let reader = ChainStore::open_read_only(&path, EPOCH).expect("open ro");
     assert!(
-        is_already_open(&ChainStore::create(&path)),
+        is_already_open(&ChainStore::create(&path, EPOCH)),
         "a reader's provenance is read once at open; a writer admitted behind it could widen the cell"
     );
     drop(reader);
@@ -527,9 +544,9 @@ fn two_read_only_handles_coexist() {
     // Shared lock: readers do not exclude readers, and neither can commit,
     // so neither's mirror can be moved by the other.
     let path = tmp("lock-r-r");
-    drop(ChainStore::create(&path).expect("create"));
-    let first = ChainStore::open_read_only(&path).expect("first ro");
-    let second = ChainStore::open_read_only(&path).expect("second ro alongside the first");
+    drop(ChainStore::create(&path, EPOCH).expect("create"));
+    let first = ChainStore::open_read_only(&path, EPOCH).expect("first ro");
+    let second = ChainStore::open_read_only(&path, EPOCH).expect("second ro alongside the first");
     assert_eq!(first.provenance(), second.provenance());
     drop((first, second));
     cleanup(&path);
@@ -540,7 +557,7 @@ fn open_read_only_refuses_a_store_that_does_not_exist() {
     let path = tmp("absent");
     drop(std::fs::remove_file(&path));
     assert!(matches!(
-        ChainStore::open_read_only(&path),
+        ChainStore::open_read_only(&path, EPOCH),
         Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert!(!path.exists(), "a read-only open must not create the store");
@@ -557,7 +574,7 @@ fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
     let path = tmp("not-a-store");
     std::fs::write(&path, b"").expect("empty file");
     assert!(matches!(
-        ChainStore::with_apply_policy(&path, ApplyPolicy::Full),
+        ChainStore::with_apply_policy(&path, ApplyPolicy::Full, EPOCH),
         Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert_eq!(

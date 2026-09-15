@@ -38,6 +38,7 @@ mod chain;
 mod primitives;
 mod property;
 mod schema_version;
+mod settlement_epoch;
 mod undo;
 
 #[cfg(test)]
@@ -49,9 +50,10 @@ pub use chain::{BlockInfo, CurveRoot, OutKey, OutTx, TxIndex, TxOutputIndices};
 pub(crate) use property::ProbeCell;
 pub use property::{
     ApplyPolicyCell, CellScope, ChainState, EngineLocal, PropertyCell, PropertyCellSpec,
-    SchemaVersionCell, Scope, PROPERTY_CELLS,
+    SchemaVersionCell, Scope, SettlementEpochBlocksCell, TotalBurnedCell, PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
+pub use settlement_epoch::SettlementEpochBlocks;
 pub use undo::{UndoEntry, UndoLog};
 
 /// A value with exactly one byte encoding.
