@@ -777,7 +777,7 @@ carries to the operator. Three things follow that are easy to get half-right.
 
 **The halt is a writer property, not a process property.** Any
 `InvariantViolated` the writer observes arms it — on connect **or** pop, a
-refused `insert` or a poisoned batch refusing at `commit` — and the writer
+refused `insert` or a poisoned batch refusing to commit (§3.6.3) — and the writer
 queue (§3.6, *Single writer*) then accepts neither connect nor pop;
 `at_height` is the tip at that moment, the height the refused operation would
 have changed. Read transactions keep serving. A read that itself hits a
@@ -916,9 +916,10 @@ stand in the crate. Code wins where this list and the code disagree.
   that row on **both** the closure's `Ok` and `Err` arms and the
   transaction aborts on drop. A closure that catches a violation, or maps
   it to a different error, therefore still lands nothing, and `write`
-  returns the violation. This is the batch-local half of the connect halt:
+  returns the violation. This is the batch-local half of the writer halt:
   the violation §3.6.2 advertises on `ChainTip.connect` is the one the
-  batch refused to commit. The `Halted` arm itself lands with S-CHAIN-W.
+  batch refused to commit, on connect or pop alike. The `Halted` arm itself
+  lands with S-CHAIN-W.
 
 ---
 
