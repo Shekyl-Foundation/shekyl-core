@@ -1,7 +1,7 @@
 # RandomX v2 — spec-anchor plan (F4: break the C-fork circularity)
 
 
-**Status:** Reviewed 2026-07-04. Landing shape ratified (F4a first). See front-matter table.
+**Status:** OPEN (F4a in progress; landing shape ratified 2026-07-04). See front-matter table.
 ## Front-matter
 
 | Field | Value |

@@ -1,7 +1,7 @@
 # RandomX v2 — Track B Phase 3 plan (genesis PoW cutover: 3a/3b)
 
 
-**Status:** Phase 3a+3b+3c landed (PR #235). `slow-hash.c` / `generate_chacha_key*` and Phase 4 vestigial C++ remain; not blocked on wallet2.
+**Status:** LIVING CONTRACT (last-verified 2026-09-15). Phase 3a+3b+3c landed (PR #235). Remaining Track D (`slow-hash.c` / `generate_chacha_key*` + vestigial C++) is owned by [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) Phase 4.
 ## Front-matter
 
 | Field | Value |

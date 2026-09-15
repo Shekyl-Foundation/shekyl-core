@@ -1,7 +1,7 @@
 # RandomX v2 — mining floor-vs-ceiling asymmetry investigation (pre-genesis-seal security disposition)
 
 
-**Status:** Phase 0 COMPLETE; Phases 1–3 not yet executed (parked). See front-matter table.
+**Status:** OPEN (parked after Phase 0; Phases 1–3 not yet executed). See front-matter table.
 ## Front-matter
 
 | Field | Value |

@@ -1,7 +1,7 @@
 # RandomX v2 — mutation-regime redesign (T18 execution shape)
 
 
-**Status:** RATIFIED 2026-08-18; see front-matter table.
+**Status:** OPEN (round 1 CLOSED 2026-08-18; items 2–3 remain design-gated). See front-matter table.
 ## Front-matter
 
 | Field | Value |
