@@ -115,8 +115,17 @@ pub trait ChainView<'id> {
     /// timestamps).
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
 
-    /// The curve-tree root **as recorded after** the block at `height` — the
-    /// membership anchor a spend that references `height` is verified against.
+    /// The curve-tree state **at** chain height `height` — the root after
+    /// the block at `height − 1` connected and **before** the block at
+    /// `height` drained its own leaves. It is the membership anchor a spend
+    /// that references `height` is verified against, and the root the header
+    /// at `height` must carry (CEN-B5).
+    ///
+    /// Not the root *after* the block at `height`: that is the anchor for a
+    /// reference to `height + 1`. The daemon keys this state at `height`
+    /// (`store_curve_tree_root_at_height(prev_height + 1, …)` from the
+    /// parent's connect), so an implementation reads its per-height table at
+    /// `height`, never `height + 1` (S-CHAIN-W SCW-19).
     ///
     /// CEN-I12.
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
