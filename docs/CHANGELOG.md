@@ -305,6 +305,13 @@
   (`SI-1…SI-8`, including `SI-4` from Q4's curve-tree root, gated by
   `check_store_invariant_register.py`) is the belt home
   ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)).
+  The plan amendment the ruling owed landed 2026-09-15 in
+  [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md): `DRS-D12` (the
+  validation crate `shekyl-chain-rules` precedes the store's connect path;
+  replay-that-validates is the only pre-cutover writer), `DRS-E6` (141 of the
+  153 enforced consensus rules have no storage surface; E6's per-subsystem
+  increments port them, §7.5, gated by `check_drs_e6_partition.py`), and
+  `ChainTip.connect` halt visibility scheduled for `get_info` with S-CHAIN-W.
 
 ## [3.1.0-alpha.8] - 2026-09-10
 
