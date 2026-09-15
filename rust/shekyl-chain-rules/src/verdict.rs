@@ -59,13 +59,25 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// ```
 ///
 /// Not `Clone`: a second copy of a brand-bearing token has no meaning.
-#[derive(Debug)]
 pub struct ChainValid<'id, V> {
     block: ValidatedBlock,
     rule_set: RuleSetId,
     coverage: RuleCoverage,
     _brand: Brand<'id>,
     _view: PhantomData<fn(V) -> V>,
+}
+
+/// Hand-written rather than derived: a derive would add a `V: Debug` bound,
+/// and `V` is a brand — the store's view need not be `Debug` for a token
+/// minted against it to be. Prints what the token asserts, not the marker.
+impl<V> fmt::Debug for ChainValid<'_, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChainValid")
+            .field("block", &self.block)
+            .field("rule_set", &self.rule_set)
+            .field("coverage", &self.coverage)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<'id, V: ChainView<'id>> ChainValid<'id, V> {

@@ -64,8 +64,8 @@ impl MockChain {
     ///
     /// `'id` is fresh per call — `f` must accept *any* brand, so no caller
     /// can name it, and two calls yield two brands. The mock's analogue of
-    /// the store's `write`: a `ChainValid<'id>` minted inside one call is
-    /// not a `ChainValid` of any other.
+    /// the store's `write`: a `ChainValid<'id, MockView<'_, 'id>>` minted
+    /// inside one call is not a `ChainValid` of any other.
     pub fn with_view<R>(&self, f: impl for<'id> FnOnce(MockView<'_, 'id>) -> R) -> R {
         f(MockView {
             chain: self,

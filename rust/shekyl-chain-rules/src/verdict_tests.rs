@@ -69,3 +69,13 @@ fn invalid_block_is_an_error_with_no_source() {
     let refused: Box<dyn std::error::Error> = Box::new(InvalidBlock::new(CenRow::A1, Locus::Block));
     assert!(refused.source().is_none());
 }
+
+/// The token's `Debug` does not require `V: Debug`. A `derive` would, and
+/// the store's view type has no reason to be `Debug`; this pins the
+/// hand-written impl against a future re-derive.
+#[test]
+fn chain_valid_debug_needs_no_debug_view() {
+    struct Undebuggable;
+    fn is_debug<T: core::fmt::Debug>() {}
+    is_debug::<ChainValid<'static, Undebuggable>>();
+}

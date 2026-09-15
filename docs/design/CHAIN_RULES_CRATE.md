@@ -353,8 +353,8 @@ pub struct RecordedBlock { pub hash: BlockHash, pub header: shekyl_wire::BlockHe
 
 /// The narrow, read-only view a rule consumes. Implemented by the store over
 /// its `WriteBatch<'_, 'id>` (S-CHAIN-W) and by `MockView<'id>` in this crate's
-/// tests. `'id` is the transaction brand: a `ChainValid<'id>` is minted only
-/// against a `ChainView<'id>` of the same `'id`.
+/// tests. `'id` is the transaction brand: a `ChainValid<'id, V>` is minted
+/// only against the `V: ChainView<'id>` it names, of the same `'id`.
 pub trait ChainView<'id> {
     /// What the view's **substrate** can fail with: the store's engine error
     /// for the projection, `Infallible` for the mock. Opaque to every rule —
@@ -377,8 +377,8 @@ Three of the ruling's illustrative four (`output_at` — §3.3). No
 (header root == *tip* root) and 4.A/4.C need one and it is owed to slice 1
 (§13, **Q12-2**); it is not added here without its row. The trait has no
 `'id`-carrying method — the brand lives in the implementor's type and in
-`ChainValid<'id>`; the trait's parameter is what ties the two in `validate`'s
-signature.
+`ChainValid<'id, V>`; the trait's parameter is what ties the two in
+`validate`'s signature, and `V` names the implementor itself.
 
 **Why a fault channel (Q12-1).** The store's projection reads a redb
 transaction; reads can fail. An infallible trait would leave the projection
@@ -431,7 +431,7 @@ judged. Keeping the block as received removes the reconstruction; the miner
 tx is then reached through it (`miner_tx()` returns `(TxHash, &Transaction)`)
 rather than duplicated.
 
-### 4.5 `Coverage<R>` (`coverage.rs`); `ChainValid<'id>`, `InvalidBlock`, `Locus` (`verdict.rs`)
+### 4.5 `Coverage<R>` (`coverage.rs`); `ChainValid<'id, V>`, `InvalidBlock`, `Locus` (`verdict.rs`)
 
 ```rust
 /// The set of rows of one flag a verdict actually evaluated. A bitset over
@@ -578,7 +578,7 @@ stripper), locates every `census_rows!` invocation by brace depth, reads each
 header's enum name and flag, and asserts **exactly one invocation per flag**. It
 parses entries with one regex. It also asserts `lib.rs` contains `mod census;`
 so the file it parsed is one the crate compiles. It does **not** run `cargo`;
-the compile-time half of G9 is the `const _` block.
+the compile-time half of G9 is the `use $path as _;` the macro emits (§5.2).
 
 ---
 

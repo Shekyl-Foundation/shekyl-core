@@ -43,7 +43,8 @@
 //! gate prints `implemented 0 / enforced 153` and `0 / 9`, and only complete
 //! coverage is parity evidence. The named consumer is **S-CHAIN-W**
 //! (`DAEMON_REDB_STORE.md` §3.6.2): it projects a `ChainView<'id>` from the
-//! store's `WriteBatch<'_, 'id>` and takes a `ChainValid<'id>` into `connect`.
+//! store's `WriteBatch<'_, 'id>` and takes a `ChainValid<'id, V>` — `V` its
+//! own view type — into `connect`.
 //! Increments 2+ port the 141 surface-free rules one census subsystem at a
 //! time (`DAEMON_REDB_STORE.md` §7.5.2 table 3), flipping entries to
 //! `implemented(...)` as they land.
