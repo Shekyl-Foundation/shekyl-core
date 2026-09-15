@@ -45,7 +45,7 @@ question the row came from.
 | --- | --- | --- | --- | --- | --- | --- |
 | SI-1 | `spent_keys` is a set: inserting a key image already present is fatal | `spent_keys` | CEN-I7 (chain-wide) + CEN-L1 as minted (intra-block) | CEN-L1 | ruled | |
 | SI-2 | A connecting block's parent is the block recorded at height−1, and that block is the tip; one block per height | `block_heights` / `block_info` | CEN-A2 | CEN-L2 | ruled | |
-| SI-3 | `txs` is keyed by tx hash: inserting a hash already present is fatal | `txs` | CEN-G1 (listed txs); CEN-F5 corollary (miner tx — reversion clause in C2-R8 §7.1) | CEN-L3 | ruled | |
+| SI-3 | `tx_indices` is keyed by tx hash: inserting a hash already present is fatal (cell corrected 2026-09-15 from `txs`, which is `u64 → blob`, zero-write and unported — `LMDB_WRITE_ATOMICITY_AUDIT.md` DRS-W4; the invariant C2-R8 §7.1 ruled is unchanged) | `tx_indices` | CEN-G1 (listed txs); CEN-F5 corollary (miner tx — reversion clause in C2-R8 §7.1) | CEN-L3 | ruled | |
 | SI-4 | The curve-tree root at height *h*+1 is written exactly once per connect (declared `insert`) and is the root the consensus transition handed `connect` | curve-tree roots | CEN-B5 reads it | C2-R8 Q4 (ruled `insert`); CEN-L14 curve-root heights (R8b-7 confirms; a rewrite case reopens this row under the ruling's §13, it does not silently override) | ruled | |
 | SI-5 | After a pop trims the tree to height *h*, the tree's root equals the recorded root at *h* | curve tree | CEN-B5 (the recorded root is the oracle) | C2-R8 Q5; CEN-L13 trim bounds | ruled | |
 | SI-6 | The undo log's top entry is the tip height; a pop consumes exactly that entry | undo log | — | C2-R8 Q5; CEN-L13 journal-vs-tip belts | ruled | |

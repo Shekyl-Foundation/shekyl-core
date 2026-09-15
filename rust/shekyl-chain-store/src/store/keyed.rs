@@ -77,8 +77,8 @@ impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
     /// Write `key → value` where `key` must not already be present.
     ///
     /// A present key is a violation of the `SI-` row this handle was
-    /// opened with (SI-1 for `spent_keys`, SI-3 for `txs`, SI-4 for a
-    /// curve-tree root, …). The table is left untouched, this call
+    /// opened with (SI-1 for `spent_keys`, SI-3 for `tx_indices`, SI-4 for
+    /// a curve-tree root, …). The table is left untouched, this call
     /// returns the violation, and the batch is **poisoned**: finishing
     /// the batch refuses with the same violation whether or not the
     /// closure propagates it, so nothing the batch wrote lands.
