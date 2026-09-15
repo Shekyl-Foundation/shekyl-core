@@ -312,6 +312,12 @@
   153 enforced consensus rules have no storage surface and get their own
   increments, §7.5, gated by `check_drs_e6_partition.py`), and
   `ChainTip.connect` halt visibility scheduled for `get_info` with S-CHAIN-W.
+  DRS-E1 increment 2.5 (2026-09-15) lands the ruling's store-side mechanics
+  in `shekyl-chain-store`: the per-batch brand behind `ChainStore::write`,
+  the three error classes as `StoreError`'s outer variants, `StoreInvariant`
+  (`SI-7` built), the two declared write verbs on `KeyedTable`, and a batch
+  poison so a swallowed invariant violation still cannot commit. No daemon
+  path uses the crate yet.
 
 ## [3.1.0-alpha.8] - 2026-09-10
 
