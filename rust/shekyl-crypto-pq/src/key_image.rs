@@ -18,13 +18,13 @@
 //! The **computation** `I = x · H_p(O)` is transform-shaped and lives in
 //! this crate's [`output`](crate::output) module
 //! ([`scan_output_recover`](crate::output::scan_output_recover)). The
-//! **identity** it produces is state-shaped — the same 32-byte chain fact
-//! as `BlockHash` / `TxHash` — and since DRS-E6 increment 1 is defined in
-//! [`shekyl_types`] beside them (`docs/design/CHAIN_RULES_CRATE.md` §3.4):
-//! the consensus-validation crate must name a key image without acquiring
-//! this crate's dependency graph, and two same-named newtypes in two crates
-//! are an unchecked drift source. This module re-exports the type so every
-//! existing `shekyl_crypto_pq::key_image::KeyImage` path, every
+//! **name** lives in [`shekyl_types`] (`docs/design/CHAIN_RULES_CRATE.md`
+//! §3.4) so the consensus-validation crate can mention a key image without
+//! acquiring this crate's dependency graph; two same-named newtypes in two
+//! crates are an unchecked drift source. That is a consumer-graph
+//! placement, not a reclassification of the derivation as state-shaped.
+//! This module re-exports the type so every existing
+//! `shekyl_crypto_pq::key_image::KeyImage` path, every
 //! [`KeyImage::from_canonical_bytes`] and every [`KeyImage::as_bytes`] call
 //! resolves unchanged.
 //!

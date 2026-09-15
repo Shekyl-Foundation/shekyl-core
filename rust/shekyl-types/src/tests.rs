@@ -262,10 +262,13 @@ fn hashes_are_viewable_as_bytes() {
     bytes[31] = 0xAD;
     let tx = TxHash::from_bytes(bytes);
     let block = BlockHash::from_bytes(bytes);
+    let root = CurveTreeRoot::from_bytes(bytes);
     let tx_ref: &[u8] = tx.as_ref();
     let block_ref: &[u8] = block.as_ref();
+    let root_ref: &[u8] = root.as_ref();
     assert_eq!(tx_ref, &bytes[..]);
     assert_eq!(block_ref, &bytes[..]);
+    assert_eq!(root_ref, &bytes[..]);
 }
 
 #[test]

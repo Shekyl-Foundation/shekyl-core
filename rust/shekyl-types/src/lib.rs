@@ -56,13 +56,19 @@
 //! (see the macro's table): public hashes ([`BlockHash`], [`TxHash`],
 //! [`CurveTreeRoot`]) render in full; a persona id ([`PCanonicalId`]) keeps a
 //! full-hex `Display` but truncates `Debug`; a wallet-correlating identity
-//! ([`KeyImage`]) truncates `Debug` **and has no `Display`** — `to_string()`
-//! on it does not compile. A `KeyImage` in a log is an on-chain spend linked
-//! to a wallet; the policy is on the type so no call site has to remember it.
+//! ([`KeyImage`]) truncates `Debug`, has **no `Display`**, and has **no
+//! `AsRef<[u8]>`** — `to_string()` and `hex::encode(key_image)` do not compile.
+//! A `KeyImage` in a log is an on-chain spend linked to a wallet; the policy
+//! is on the type so no call site has to remember it.
 //!
 //! ```compile_fail
 //! let key_image = shekyl_types::KeyImage::from_bytes([0u8; 32]);
 //! let _ = key_image.to_string(); // no `Display`: this is the type's policy, not an omission
+//! ```
+//!
+//! ```compile_fail
+//! fn assert_as_ref<T: AsRef<[u8]>>() {}
+//! assert_as_ref::<shekyl_types::KeyImage>();
 //! ```
 
 #![deny(unsafe_code)]
@@ -119,20 +125,22 @@ macro_rules! scalar_u64 {
 /// Three arms, one per **exposure policy** — how much of the value may reach a
 /// string:
 ///
-/// | arm | `Debug` | `Display` | for |
-/// | --- | --- | --- | --- |
-/// | `Name` | full hex | full hex | public, non-correlating hashes (`TxHash`, `BlockHash`) |
-/// | `Name, redact` | first two bytes | full hex | ids whose *log* leak correlates an origin edge, but whose hex encoding is a wire form (`PCanonicalId`) |
-/// | `Name, redact, no_display` | first two bytes | **none** | ids whose stringly-typed leak correlates a wallet to its on-chain spends (`KeyImage`) — `to_string()` must not compile |
+/// | arm | `Debug` | `Display` | `AsRef<[u8]>` | for |
+/// | --- | --- | --- | --- | --- |
+/// | `Name` | full hex | full hex | yes | public, non-correlating hashes (`TxHash`, `BlockHash`) |
+/// | `Name, redact` | first two bytes | full hex | yes | ids whose *log* leak correlates an origin edge, but whose hex encoding is a wire form (`PCanonicalId`) |
+/// | `Name, redact, no_display` | first two bytes | **none** | **no** | ids whose stringly-typed leak correlates a wallet to its on-chain spends (`KeyImage`) — `to_string()` and `hex::encode(value)` must not compile |
 ///
-/// The derives, accessors and `AsRef<[u8]>` are shared (`@core`); `Display` is
-/// opt-in (`@display`); each arm picks its `Debug`.
+/// The derives and accessors are shared (`@core`); `Display` is opt-in
+/// (`@display`); `AsRef<[u8]>` is opt-in (`@as_ref`) so a `no_display` identity
+/// is not a generic byte sink; each arm picks its `Debug`.
 macro_rules! hash32 {
     // Default `Debug` renders the full hex — public, non-correlating hashes
     // (`TxHash`, `BlockHash`, …) where the whole value aids debugging and the
     // chain already publishes it.
     ($(#[$doc:meta])* $name:ident) => {
         hash32!(@core $(#[$doc])* $name);
+        hash32!(@as_ref $name);
         hash32!(@display $name);
 
         impl fmt::Debug for $name {
@@ -156,6 +164,7 @@ macro_rules! hash32 {
     // a log line.
     ($(#[$doc:meta])* $name:ident, redact) => {
         hash32!(@core $(#[$doc])* $name);
+        hash32!(@as_ref $name);
         hash32!(@display $name);
         hash32!(@debug_redacted $name);
     };
@@ -203,8 +212,20 @@ macro_rules! hash32 {
         }
     };
 
-    // Shared core — derives, accessors, `AsRef`; **neither** `Debug` nor
-    // `Display`, which the arms above add per exposure policy.
+    // Generic byte-view for public hashes. Deliberately **not** on the
+    // `no_display` arm: `AsRef<[u8]>` is the bound `hex::encode` and any
+    // `impl AsRef<[u8]>` logger accept, which is the stringly-typed
+    // accident `no_display` exists to prevent. Named `as_bytes` stays.
+    (@as_ref $name:ident) => {
+        impl AsRef<[u8]> for $name {
+            fn as_ref(&self) -> &[u8] {
+                &self.0
+            }
+        }
+    };
+
+    // Shared core — derives, accessors; **neither** `Debug` nor `Display`
+    // nor `AsRef`, which the arms above add per exposure policy.
     (@core $(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
         // `PartialOrd`/`Ord` (lexicographic over the bytes) so these hashes
@@ -240,19 +261,6 @@ macro_rules! hash32 {
             }
         }
 
-        // Generic byte-view for the whole family of `&[u8]` / `AsRef<[u8]>`
-        // consumers (`hex::encode`, hashers, length-prefixed writers). This is
-        // the single point that keeps a typed hash usable as bytes wherever a
-        // generic byte sink is wanted, so call sites need no `.as_bytes()`
-        // sprinkling. It does **not** weaken type distinctness: a function that
-        // names `&$name` still accepts only `$name`; only generic byte APIs are
-        // satisfied. Distinct from the fixed-size `&[u8; 32]` accessor above,
-        // which the crypto layer needs (rule 18).
-        impl AsRef<[u8]> for $name {
-            fn as_ref(&self) -> &[u8] {
-                &self.0
-            }
-        }
     };
 }
 
@@ -439,9 +447,10 @@ hash32! {
     /// Moved here from `shekyl-crypto-pq` for DRS-E6 (`CHAIN_RULES_CRATE.md`
     /// §3.4): the validation crate must *name* a key image without acquiring
     /// the crypto crate's dependency graph, and two same-named newtypes in two
-    /// crates are an unchecked drift source. The identity is state-shaped —
-    /// the same 32-byte chain fact as [`BlockHash`] / [`TxHash`] — while its
-    /// derivation stays transform-shaped where the derivation is (rule 18).
+    /// crates are an unchecked drift source. The derivation `I = x · H_p(O)`
+    /// remains transform-shaped and stays in `shekyl-crypto-pq` (rule 18);
+    /// the *name* lives here because that is the consumer graph, not because
+    /// the value became state-shaped.
     ///
     /// # Privacy-correlation discipline
     ///
@@ -451,11 +460,11 @@ hash32! {
     /// Post-spend the value is public. The defensive posture, `redact,
     /// no_display`:
     ///
-    /// - **No `Display`** until a use case emerges. A `Display` on a
-    ///   wallet-bound identifier is the stringly-typed boundary
-    ///   (`to_string()`, `format!("{}")`, a `Display`-based error) through
-    ///   which the full value reaches a log; the hex form is reachable on
-    ///   purpose through [`KeyImage::as_bytes`], never by accident.
+    /// - **No `Display` and no `AsRef<[u8]>`.** A `Display` is the
+    ///   stringly-typed boundary (`to_string()`, `format!("{}")`); `AsRef<[u8]>`
+    ///   is the bound `hex::encode` and any generic byte logger accept. The hex
+    ///   form is reachable on purpose through [`KeyImage::as_bytes`], never by
+    ///   accident.
     /// - **Truncated `Debug`** (`KeyImage(0000..)`): 16 bits disambiguate two
     ///   values during debugging without reproducing the identifier in a
     ///   backtrace.
