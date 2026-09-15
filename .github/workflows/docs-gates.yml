@@ -332,6 +332,47 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_redb_schema_bijection.py
 
+      - name: Run store-invariant register bijection gate
+        # C2-R8 §11: STORE_INVARIANT_REGISTER.md §2 is a bijection with the
+        # `StoreInvariant` enum over the rows that say `built`. The `Status`
+        # column is the arming switch — at birth every row is `ruled` and the
+        # enum does not exist (rule 23: no variant before its producer), so
+        # the gate passes on its subject assertions alone and SAYS SO; the
+        # first PR that flips a row to `built` must add the variant, and a
+        # variant with no row is the other red. Same pair-shape as the redb
+        # bijection above, on a doc register and a Rust definition.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_invariant_register.py
+
+      - name: Run store-invariant register gate self-test
+        # Every failure class bitten red on synthetic inputs: empty register,
+        # sparse or duplicate ids, closed-vocabulary status, built-without-
+        # anchor, built-without-enum, and both bijection directions.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_invariant_register.py --selftest
+
+      - name: Run store-error conversion-ban gate
+        # C2-R8 Q2 §3.3: the store's error classes (`StoreInvariantViolated`,
+        # `StoreCannot`) are never converted into the consensus verdict
+        # (`InvalidBlock`) — no From/Into/TryFrom between them, the store
+        # crate never names a verdict type, and no match arm within three
+        # lines maps one onto the other. A store constraint that reaches the
+        # caller as "invalid block" is a hidden rule (db_lmdb.cpp:1438 is the
+        # instance R8 was convened over); the same constraint as a fatal is a
+        # belt. Clauses 1–2 are live; clause 3 is armed and the gate reports
+        # how many verdict-type definitions it found, so "clean" is not
+        # mistaken for "checked" before the validation crate exists.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_error_conversion_ban.py
+
+      - name: Run store-error conversion-ban gate self-test
+        # All three clauses bitten red, plus the three subject-absent cases
+        # and the two legitimate shapes (a daemon-error From; a comment).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_error_conversion_ban.py --selftest
+
       - name: Run conformance-coverage gate
         # Every RATIFIED consensus rule (census bucket 1/2) must carry a
         # conformance record in CONSENSUS_STORE_RECONCILIATION.md §5.4.1, and
