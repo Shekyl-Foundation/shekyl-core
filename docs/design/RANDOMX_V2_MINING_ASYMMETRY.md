@@ -1,14 +1,14 @@
 # RandomX v2 — mining floor-vs-ceiling asymmetry investigation (pre-genesis-seal security disposition)
 
 
-**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
+**Status:** Phase 0 COMPLETE; Phases 1–3 not yet executed (parked). See front-matter table.
 ## Front-matter
 
 | Field | Value |
 |-------|-------|
 | Status | **Measurement design — Phase 0 COMPLETE; Phases 1–3 not yet executed.** No timing number is a result until Appendix B is filled from a source-verified run. **Phase 0 is fully discharged (2026-07-06):** the constant diff shows no delta (§3.1) and the runtime byte-equality differential passes **1024/1024** — stock XMRig 6.26.0 `rx/2` full-dataset is byte-identical to Shekyl's canonical (§3.2), so the ceiling miner is **stock XMRig, no patch** (§3.3). Key nuance: XMRig's *light/verification* path is v2-incomplete; the ceiling must use its full-dataset (mining) mode. Artifact: [`tests/randomx_v2_parity/xmrig_ceiling/`](../../tests/randomx_v2_parity/xmrig_ceiling/). Revised after **red-team rounds 1–2** (§11 — F1–F7 structural: four-factor decomposition, aggregate-H/s basis, whale-produces-Shekyl-blocks gap, threshold arithmetic, two-ended range; R1–R4 polish: decomposition-is-an-aid-not-identity, hash-core-vs-block-framing layer split, §6.4-pinned prototype greenlight, confirmed-huge-page provenance; Intel-first / Ryzen-rig two-machine plan). |
 | Kind | Security investigation (consensus 51%-via-asymmetry, genesis shallow-work window). **Not** a performance-tuning exercise. |
-| Priority order | privacy > security > correctness > performance > features. This study lives at the security tier; the numbers it produces feed a consensus-security decision. "Get-it-right, not get-it-now" ([`00-mission`](../../.cursor/rules/00-mission.mdc), [`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc)). |
+| Priority order | Cite [`00-mission.mdc`](../../.cursor/rules/00-mission.mdc): security and quantum resilience are preconditions, then privacy, then longevity. This study lives at the security tier; the numbers it produces feed a consensus-security decision. "Get-it-right, not get-it-now" ([`05-system-thinking`](../../.cursor/rules/05-system-thinking.mdc)). |
 | Parent plan | [`RANDOMX_V2_PLAN.md`](./RANDOMX_V2_PLAN.md) (Track B); [`RANDOMX_V2_PHASE3_PLAN.md`](./RANDOMX_V2_PHASE3_PLAN.md) (§7 Hole-1 gate, §9 test-gates table — the CI regime this study extends). |
 | Spec authority | [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §6 (no-prewarm / no-dataset decision — the thing disposition option (a) would revisit), §13 (non-goals). This doc **cites**; it does not re-derive. |
 | Sibling (harness) | [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) (the differential harness — **light-vs-light only**; the C-full and XMRig legs this study needs do not exist there). |

@@ -18,6 +18,12 @@
 
 ### Changed
 
+- **Default clone no longer requires initializing unused RandomX v1.**
+  CMake dropped `check_submodule(external/randomx)`. That gitlink stays
+  in `.gitmodules` for the restated v1 fallback; nothing in the default
+  daemon or test build consumes it. RandomX v2 C sources remain opt-in
+  (`-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON`).
+
 - **Every FCMP++ spend no longer identifies the output it spends (`PL-D1`
   fixed by `PL-D3`).** The leaf's 4th scalar was `H(hybrid_pk)`, published
   per output in `tx_extra` `0x07` and handed to the verifier as a public
