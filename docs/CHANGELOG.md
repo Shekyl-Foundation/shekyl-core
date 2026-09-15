@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Consensus
+
+- **RandomX v2 Phase 4: PoW is a free function, CryptoNight is gone.**
+  `IPowSchema` / `pow_registry` / `RX_BLOCK_VERSION` are deleted. Block
+  longhash calls `hash_pow_randomx` (Rust RandomX v2 FFI). CEN-D2 still
+  fail-closes via `set_pow_hash_override_for_tests`. `slow-hash.c` and
+  `generate_chacha_key*` (the CN-KDF) are deleted; `chacha.h` keeps
+  `xchacha20`. `check_randomx_symbol_isolation.sh` now bans `cn_slow_hash`.
+
 ### API
 
 - **`get_archival_shard_coverage` and `request_archival_shard` (RPC 3.31).**

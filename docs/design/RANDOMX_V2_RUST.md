@@ -68,8 +68,8 @@ exceeds the value.
   https://github.com/Shekyl-Foundation/RandomX at the pinned commit.
 - **Current `external/randomx` submodule (v1-era):** pinned at
   `102f8acf` (`bump benchmark version to 1.2.1`), reachable from the
-  pre-PR-#317 history of the same fork. This submodule is dropped by
-  Phase 4 once the v2 verifier rewires the daemon.
+  pre-PR-#317 history of the same fork. Unlinked from consensus in
+  Phase 3c (PR #235). Phase 4 (`IPowSchema` deletion) **landed 2026-09-15**.
 
 ### 1.3 What v2 changes vs v1 (concretely)
 
@@ -198,10 +198,9 @@ because:
 
 The gate moves to **release** (Phase 5+, before mainnet), where it
 becomes the explicit release-checklist item described above. Phase 4
-deletion of `IPowSchema`/`pow_registry` still proceeds before release
-because that work is reversible at the unpin point: switching to v1
-fallback does not re-introduce dispatch scaffolding, since v1-only
-shipping is still a single-algorithm deployment.
+deletion of `IPowSchema`/`pow_registry` **landed 2026-09-15**. Switching
+to v1 fallback would re-add a CMake target, not restore dispatch
+scaffolding: v1-only shipping is still a single-algorithm deployment.
 
 ## 2. Permanent C/Rust Split
 

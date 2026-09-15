@@ -448,9 +448,6 @@ Default. Lands before genesis if it should exist at launch.
 - **CryptoNote fossil — hardcoded key-image fixup for Monero blocks [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)**
   - Target: pre-genesis
 
-- **RandomX v2 Phase 3c / Phase 4 — PoW C-core + abstraction deletion** [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md)
-  - Target: pre-genesis
-
 - **Promote 2c-emergent sub-PR design disciplines to project-level [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)**
   - Target: pre-genesis
 
