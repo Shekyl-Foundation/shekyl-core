@@ -381,17 +381,41 @@ fn property_catalogue_snapshot() {
 /// in `schema.rs` is in [`schema::catalogue`]. The `tables!` macro
 /// catalogues everything declared through it; this catches a definition
 /// declared beside it, which the snapshot above could not see.
+///
+/// Every constructor call is counted, and one whose name is not a string
+/// literal on the same line fails the test rather than falling out of the
+/// comparison: a definition this scan cannot read is one the two Python
+/// schema gates cannot read either, so the literal spelling is the file's
+/// grammar, not a preference.
 #[test]
 fn every_table_definition_is_catalogued() {
+    const CONSTRUCTOR: &str = "TableDefinition::new(";
     let text = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/schema.rs"))
         .expect("read schema.rs");
-    let declared: BTreeSet<String> = text
-        .lines()
-        .filter_map(|line| {
-            let (_, rest) = line.split_once("TableDefinition::new(\"")?;
-            rest.split_once('"').map(|(name, _)| name.to_owned())
-        })
-        .collect();
+    let mut declared = BTreeSet::new();
+    for line in text.lines().map(str::trim_start) {
+        if line.starts_with("//") {
+            continue;
+        }
+        for (at, _) in line.match_indices(CONSTRUCTOR) {
+            let rest = &line[at + CONSTRUCTOR.len()..];
+            let Some(name) = rest
+                .strip_prefix('"')
+                .and_then(|lit| lit.split_once('"'))
+                .map(|(name, _)| name.to_owned())
+            else {
+                panic!(
+                    "schema.rs: {line:?}: a table's name must be a string literal on the \
+                     constructor's line; declare it inside `tables!` that way so the \
+                     catalogue, this scan, and the Python schema gates all read it"
+                );
+            };
+            assert!(
+                declared.insert(name.clone()),
+                "schema.rs: table {name:?} is declared twice"
+            );
+        }
+    }
     assert!(
         !declared.is_empty(),
         "schema.rs: no table definitions parsed"
@@ -594,23 +618,34 @@ fn scan_impls(dir: &Path, out: &mut BTreeSet<String>) {
             let Some(rest) = line.trim_start().strip_prefix("impl") else {
                 continue;
             };
-            assert!(
-                !rest.starts_with('<') || !rest.contains("Canonical for"),
-                "{}: a generic `impl<..> Canonical for` needs an explicit snapshot policy",
-                path.display()
-            );
-            let Some(rest) = rest.strip_prefix(" Canonical for ") else {
+            // Any `impl` of a trait *named* `Canonical` -- however the path
+            // is spelled -- is a codec this census must pair with a
+            // snapshot. Only the plain spelling is readable here, so every
+            // other spelling (path-qualified, generic, trailing generics on
+            // the type) is refused loudly instead of skipped: a codec the
+            // scan cannot see is a codec Rule 42 cannot see.
+            let Some((before, _)) = rest.split_once("Canonical for") else {
                 continue;
             };
-            let ty: String = rest
+            if before
                 .chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect();
-            assert!(
-                !ty.is_empty(),
-                "{}: unparsable impl line {line:?}",
-                path.display()
-            );
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
+                continue; // some other trait whose name ends in `Canonical`
+            }
+            let ty = rest
+                .strip_prefix(" Canonical for ")
+                .and_then(|ty| ty.strip_suffix(" {"))
+                .filter(|ty| !ty.is_empty() && ty.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: {line:?}: spell codec impls exactly `impl Canonical for T {{` \
+                         (no path prefix, no generics) so the snapshot census can read them",
+                        path.display()
+                    )
+                })
+                .to_owned();
             assert!(
                 out.insert(ty.clone()),
                 "duplicate `impl Canonical for {ty}`"
