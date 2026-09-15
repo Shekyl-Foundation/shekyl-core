@@ -22,9 +22,10 @@
 //! against a mock view with no database — the capability the C++ never had
 //! and the reason CEN-L11-class defects survived. The property is held three
 //! ways: the two doctests below refuse a direct `use`; the coverage gate
-//! refuses either token in `Cargo.toml`; the `build.yml` `cargo tree -i` belt
-//! refuses either package anywhere in the resolved graph (the only one of
-//! the three that sees *transitive* arrival).
+//! refuses either token in `Cargo.toml`; `check_chain_rules_no_store.sh`
+//! (`rust-audit-test.yml`) refuses either package anywhere in the resolved
+//! `cargo tree` closure (the only one of the three that sees *transitive*
+//! arrival).
 //!
 //! ```compile_fail
 //! use redb::Database; // shekyl-chain-rules has no store engine

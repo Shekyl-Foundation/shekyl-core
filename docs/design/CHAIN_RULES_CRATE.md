@@ -47,7 +47,7 @@ is a hope; none of these is.
 
 | # | Guarantee | Held by |
 | --- | --- | --- |
-| G1 | **No store handle.** The crate reaches neither `shekyl-chain-store` nor `redb`, directly or transitively, in normal or dev dependencies. | Two `compile_fail` doctests in `lib.rs` (intent; a direct `use` fails to resolve); the coverage gate refuses either token in the crate's `Cargo.toml`; **the `build.yml` belt** `cargo tree -e normal,dev -p shekyl-chain-rules -i redb` / `-i shekyl-chain-store` must find nothing (§6.5) — the belt is what sees *transitive* arrival, which the doctest cannot (round-1 ruling). |
+| G1 | **No store handle.** The crate reaches neither `shekyl-chain-store` nor `redb`, directly or transitively, in normal or dev dependencies. | Two `compile_fail` doctests in `lib.rs` (intent; a direct `use` fails to resolve); the coverage gate refuses either package in any dependency table of the crate's `Cargo.toml`; **the belt** `scripts/ci/check_chain_rules_no_store.sh` (in `rust-audit-test.yml`) captures the crate's `cargo tree -e normal,dev` closure and refuses either package in it (§6.5) — the belt is what sees *transitive* arrival, which the doctest cannot (round-1 ruling). |
 | G2 | **The conversion ban.** No `From`/`Into`/`TryFrom`/`TryInto` between any `StoreError`/`StoreInvariant`/`StoreCannot` and `InvalidBlock`; no `match` arm maps a store token onto `InvalidBlock`. This crate never *names* a store error type; the store's fault reaches `validate` only as the opaque `V::Fault` (§4.3), which has no bound a rule could inspect. | `check_store_error_conversion_ban.py` clauses 1 and 3, **raised in this PR** so `verdict_defs == 0` is a failure now that the subject exists (§7); genericity of `Fault`. |
 | G3 | **The verdict names the row.** `InvalidBlock { rule: CenRow, locus: Locus }` — a typed census row id, never a string, never "some rejection". | `CenRow` is a closed `enum`; `InvalidBlock` has no string field. |
 | G4 | **One transaction, one brand.** `ChainValid<'id>` carries an *invariant* brand `PhantomData<fn(&'id ()) -> &'id ()>`; the lifetime is spelled `'id`. Its `'id` is the `'id` of the `ChainView<'id>` it was validated against. | Brand type private to the crate; `validate<'id, V: ChainView<'id>>` ties the output brand to the view's; a `compile_fail` doctest shows the cross-view handoff failing (§8.3). |
@@ -551,20 +551,26 @@ merges** — blocker #751, falsifier `gh pr view 751 --json state` (§13).
 Every refusal is a non-zero exit with the derivation in the message, and every
 one is exercised red by `--selftest`:
 
-| Subject / property | Refusal |
+Exit codes follow the partition gate: **2** for a missing or unparseable subject
+(`Refused`), **1** for a registry/census disagreement or a G1 violation (the
+figures are still printed, as derived), **0** when they agree.
+
+| Subject / property | Refusal (exit) |
 | --- | --- |
-| census file readable, §4 tables present, ≥ 1 `CEN-` row, ≥ 1 bound row | inherited from `parse_census` |
-| `rust/shekyl-chain-rules/src/census.rs` exists | `registry file missing` |
-| `lib.rs` declares `mod census;` | `registry not compiled by the crate` |
-| exactly one `census_rows!` per flag; header parses | `no registry for flag F` / `N registries for flag F` / `unparseable header` |
-| ≥ 1 entry per registry | `registry <Name> empty` |
-| entry grammar | `unparseable entry at line N` |
-| no duplicate variant across both registries | `duplicate entry X` |
-| every entry maps to an enforced census row (`CEN-` + var) **of its registry's flag** | `entry X has no enforced census row with flag F` (catches bucket-3 rows, typos, and a row filed under the wrong enum) |
-| every enforced census row has an entry in the enum of its flag | `census row X (flag F) missing from registry <Name>` |
-| entries in census order within the flag | `registry <Name> order differs from census at X` |
-| `implemented` carries a path | grammar refusal |
-| `Cargo.toml` names neither `redb` nor `shekyl-chain-store` under `[dependencies]`/`[dev-dependencies]` | `store handle in Cargo.toml` (G1, direct) |
+| census file readable, §4 tables present, ≥ 1 `CEN-` row, ≥ 1 bound row | inherited from `parse_census` (2) |
+| `rust/shekyl-chain-rules/src/census.rs`, `lib.rs`, `Cargo.toml` exist | `registry file missing` / `crate root missing` / `Cargo.toml missing` (2) |
+| `lib.rs` declares `mod census;` (comments stripped first — a commented-out declaration is absent) | `registry not compiled by the crate` (2) |
+| ≥ 1 `census_rows!` invocation; braces balance | `no census_rows! invocation` / `has no closing brace` (2) |
+| exactly one `census_rows!` per flag; header parses; flag ∈ {`Consensus`, `Policy`} | `no registry for flag F` / `N registries for flag F` / `unparseable header at line N` / `unknown flag` (2) |
+| ≥ 1 entry per registry | `registry <Name> empty` (2) |
+| entry grammar — `Var pending,` or `Var implemented(rust::path),`; `implemented` **must** carry a non-empty path | `unparseable entry at line N` (2) |
+| no attribute on an entry (a `#[cfg]` the gate cannot evaluate would let the compiled enum and the counted enum differ; the enum's own attributes are fine) | `attribute on entry at line N` (2) |
+| nothing after the enum's closing brace inside the invocation | `text after the enum body at line N` (2) |
+| no duplicate variant across both registries | `duplicate entry X` (1) |
+| every entry maps to an enforced census row (`CEN-` + var) **of its registry's flag** | `entry X (line N) has no enforced census row with flag F` (1; catches bucket-3 rows, typos, and a row filed under the wrong enum) |
+| every enforced census row has an entry in the enum of its flag | `census row X (flag F) missing from registry <Name>` (1) |
+| entries in census order within the flag — judged on the ids both sides share, so a missing row reports once, not as an order cascade | `registry <Name> order differs from census at X` (1) |
+| `Cargo.toml` names neither `redb` nor `shekyl-chain-store` in **any** dependency table (`[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, `[target.*.dependencies]`; a rename via `package = "redb"` reports the package) — parsed with `tomllib`, so a comment mentioning both is not a hit | `store handle in Cargo.toml: <pkg> under [table]` (1; G1, direct) / `Cargo.toml unparseable` (2) |
 
 ### 6.3 Output format (ruling §9.4, verbatim shape)
 
@@ -587,26 +593,51 @@ and the list of implemented row ids, so a slice PR can quote its own delta.
 
 `.github/workflows/docs-gates.yml`: two steps (`check_chain_rules_coverage.py`,
 `… --selftest`) appended **after** the `check_drs_e6_partition.py` steps
-(handoff §6: shared file, resolve by appending).
+(handoff §6: shared file, resolve by appending). That job has no Rust
+toolchain and needs none for this gate.
 
-### 6.5 The `build.yml` belt (G1, transitive)
+### 6.5 The belt — `scripts/ci/check_chain_rules_no_store.sh` (G1, transitive)
 
-One step in the Rust job, exits unpiped (rule 46), subject first (rule 47):
+One step in **`rust-audit-test.yml`**, immediately after
+`check_test_only_features.py`, for the reason written at that step: it reads
+`cargo tree`, so it runs where `install Rust` has run, not in `docs-gates.yml`
+(relying on the hosted image happening to ship cargo is the accident that
+placement note already names). *Round 2 correction:* round 1 wrote
+"`build.yml`"; `build.yml` has no workspace Rust job — its only Rust step is
+the toolchain-free debug-macro grep — so the belt would have had no cargo to
+call.
 
-```bash
-cargo tree -p shekyl-chain-rules --depth 0 >/dev/null            # subject: the crate is a member
-for banned in redb shekyl-chain-store; do
-  if cargo tree -e normal,dev -p shekyl-chain-rules -i "$banned" >/dev/null 2>&1; then
-    echo "FATAL: $banned reachable from shekyl-chain-rules"; exit 1
-  fi
-done
-```
+Shape, and why it is not the one-liner round 1 sketched:
 
-(`cargo tree -i <pkg>` exits non-zero when `<pkg>` is not in the selected
-graph — that is the clean state.) Today the adoption path is clean by luck of
-the graph (`shekyl-difficulty` 0 deps, `shekyl-economics` 1, none of
-`shekyl-fcmp`/`shekyl-crypto-pq` reach `redb`); the belt is what makes §7.5.1's
-"imports neither" true as the adoption increments arrive rather than asserted.
+- **Fail-closed verdict.** Round 1's `cargo tree -p CRATE -i redb`, reading a
+  non-zero exit as "absent", is fail-open: cargo exits 101 for "not in this
+  subtree", for "no such package anywhere", and for a stale lockfile under
+  `--locked` alike (measured: `-i redb`, `-i shekyl-chain-store`, and
+  `-i no-such-package-xyz` all exit 101 identically). A broken resolve would
+  read as a clean graph. The belt instead captures the crate's closure from
+  **one** `cargo tree --locked -e normal,dev -p shekyl-chain-rules --prefix
+  none` call — a cargo failure fails the assignment and the gate — and judges
+  the captured text here: `^redb v` / `^shekyl-chain-store v` present ⇒
+  refuse, printing the path with `-i`.
+- **Subjects first (rule 47).** The crate resolves as a workspace member
+  (`--depth 0`); each banned name is a package the workspace resolves at all
+  (`cargo pkgid`), so a store-engine rename turns the belt red with "update
+  BANNED" rather than leaving a ban that names nothing; the closure is
+  non-empty and its first line is the crate.
+- **Edges.** `normal,dev` — a test-only store dependency is the mock-view
+  inversion R8 banned, in test clothing. `build` edges are out of scope: a
+  build script's graph is not linked into the crate.
+- Verified red on both faults before wiring: a temporary
+  `[dev-dependencies] shekyl-chain-store` produced two refusals, `redb` (via
+  the store, the transitive case) and `shekyl-chain-store` (direct), each with
+  its `cargo tree -i` path printed.
+
+Today the adoption path is clean by luck of the graph (`shekyl-difficulty` 0
+deps, `shekyl-economics` 1, none of `shekyl-fcmp`/`shekyl-crypto-pq` reach
+`redb`); the belt is what makes §7.5.1's "imports neither" true as the
+adoption increments arrive rather than asserted. `BANNED` in the belt and
+`BANNED_PACKAGES` in the coverage gate are the same two names; keep them
+together.
 
 ---
 
@@ -763,7 +794,8 @@ makes this harness's own green mean something.
    `Cargo.toml`, workspace member, `lib.rs` with staging note and G1 pins,
    `census.rs` fully populated (153 + 9), `census_tests.rs`.
 3. `chain-rules: completeness gate check_chain_rules_coverage.py (ruling §9.4)`
-   — gate + `--selftest` + `--describe`, docs-gates wiring, build.yml belt.
+   — gate + `--selftest` + `--describe`, docs-gates wiring, the
+   `check_chain_rules_no_store.sh` belt in `rust-audit-test.yml`.
 4. `chain-rules: ChainView<'id>, RuleSet/RuleSchedule/AdmissionPolicy, Candidate/ValidatedBlock (§7.5.1 items 2–4)`.
 5. `chain-rules: ChainValid<'id>, InvalidBlock, Coverage<R>, validate/tx_form/tx_against (items 5–6)`
    + brand/ctor doctests + `coverage_tests`, `validate_tests`.
@@ -810,7 +842,7 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 | Q7 | Census-parser reuse by import | **RULED 2026-09-15 — default, follow-up named not filed:** import now; extract to `_census.py` after #751 merges (blocker #751; falsifier `gh pr view 751 --json state`). |
 | Q8 | Harness visibility for doctests | **RULED 2026-09-15 — default** (`cfg(any(test, doctest))`). |
 | Q9 | `Candidate` struct vs two args | **RULED 2026-09-15 — default.** It is what `ChainValid` carries, and a third component later is non-breaking. |
-| — | G1 mechanism | **RULED 2026-09-15 — added:** a `compile_fail` doctest proves *some* compile error and sees only a direct `use`; it cannot see transitive acquisition, which is the path the adoption increments take. The `cargo tree -i` belt lands in increment 1 (§6.5). |
+| — | G1 mechanism | **RULED 2026-09-15 — added:** a `compile_fail` doctest proves *some* compile error and sees only a direct `use`; it cannot see transitive acquisition, which is the path the adoption increments take. The `cargo tree` belt lands in increment 1 (§6.5; corrected in round 2 to a captured-closure shape in `rust-audit-test.yml` — the `-i`-exit-code sketch was fail-open and `build.yml` has no cargo). |
 | — | Census figures | **Confirmed:** consensus enforced 153 (not 159) — the denominator moved when R8 ruled; the computed-denominator mechanism working on its first real test. |
 
 ---
