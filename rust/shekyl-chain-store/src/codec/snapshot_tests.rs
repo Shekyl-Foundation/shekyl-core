@@ -82,8 +82,8 @@ use crate::lmdb_order::Hash32;
 use crate::schema::{self, TableShape};
 
 use super::{
-    Canonical, ProbeCell, PropertyCell, SchemaVersion, UndoEntry, UndoLog, PROPERTY_CELLS,
-    SCHEMA_VERSION,
+    BlockInfo, Canonical, CurveRoot, OutKey, OutTx, ProbeCell, PropertyCell, SchemaVersion,
+    TxIndex, TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::schema::TableOrdinal;
 
@@ -237,6 +237,141 @@ impl Fixtures for UndoLog {
                         value: Box::new([0x01; 9]),
                     },
                 ]),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for CurveRoot {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", CurveRoot::from_bytes([0; 32])),
+            (
+                "ascending",
+                CurveRoot::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i).expect("32 indices fit a byte")
+                })),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for BlockInfo {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "genesis_like",
+                BlockInfo {
+                    timestamp: 0,
+                    coins_generated: 0,
+                    weight: 0,
+                    cumulative_difficulty: 1,
+                    hash: Hash32::from_bytes([0; 32]),
+                    cumulative_rct_outputs: 0,
+                    long_term_weight: 0,
+                },
+            ),
+            // Every field distinct, difficulty straddling the lo/hi split so
+            // the snapshot witnesses `bi_diff_lo` before `bi_diff_hi`.
+            (
+                "distinct_fields",
+                BlockInfo {
+                    timestamp: 0x0102_0304_0506_0708,
+                    coins_generated: 2,
+                    weight: 3,
+                    cumulative_difficulty: (5u128 << 64) | 4,
+                    hash: Hash32::from_bytes([0xab; 32]),
+                    cumulative_rct_outputs: 6,
+                    long_term_weight: 7,
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for TxIndex {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "zero",
+                TxIndex {
+                    tx_id: 0,
+                    unlock_time: 0,
+                    height: 0,
+                },
+            ),
+            (
+                "distinct_fields",
+                TxIndex {
+                    tx_id: 1,
+                    unlock_time: 0x0102_0304_0506_0708,
+                    height: 3,
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for OutTx {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "zero",
+                OutTx {
+                    tx_hash: Hash32::from_bytes([0; 32]),
+                    local_index: 0,
+                },
+            ),
+            (
+                "distinct_fields",
+                OutTx {
+                    tx_hash: Hash32::from_bytes([0x33; 32]),
+                    local_index: 0x0102_0304_0506_0708,
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for OutKey {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "zero",
+                OutKey {
+                    amount_index: 0,
+                    output_id: 0,
+                    pubkey: [0; 32],
+                    unlock_time: 0,
+                    height: 0,
+                    commitment: [0; 32],
+                },
+            ),
+            // The amount_index prefix in byte-order-witness form: a
+            // big-endian regression reads `0102030405060708` at offset 0.
+            (
+                "distinct_fields",
+                OutKey {
+                    amount_index: 0x0102_0304_0506_0708,
+                    output_id: 1,
+                    pubkey: [0x11; 32],
+                    unlock_time: 2,
+                    height: 3,
+                    commitment: [0x22; 32],
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for TxOutputIndices {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("empty", TxOutputIndices::default()),
+            ("one", TxOutputIndices(vec![7])),
+            (
+                "three",
+                TxOutputIndices(vec![0, 0x0102_0304_0506_0708, u64::MAX]),
             ),
         ]
     }
@@ -615,6 +750,12 @@ snapshotted_codecs! {
     SchemaVersion => codec_snapshot_schema_version,
     FamilySet => codec_snapshot_family_set,
     UndoLog => codec_snapshot_undo_log,
+    CurveRoot => codec_snapshot_curve_root,
+    BlockInfo => codec_snapshot_block_info,
+    TxIndex => codec_snapshot_tx_index,
+    OutTx => codec_snapshot_out_tx,
+    OutKey => codec_snapshot_out_key,
+    TxOutputIndices => codec_snapshot_tx_output_indices,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`

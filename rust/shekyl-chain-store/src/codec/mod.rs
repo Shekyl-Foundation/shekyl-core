@@ -34,6 +34,7 @@
 //! §11.1(e) recorded as owed: an encoding cannot move without the version
 //! moving in the same PR.
 
+mod chain;
 mod primitives;
 mod property;
 mod schema_version;
@@ -43,6 +44,7 @@ mod undo;
 #[path = "snapshot_tests.rs"]
 mod snapshot_tests;
 
+pub use chain::{BlockInfo, CurveRoot, OutKey, OutTx, TxIndex, TxOutputIndices};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{
