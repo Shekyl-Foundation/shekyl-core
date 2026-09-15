@@ -15,6 +15,54 @@ use crate::family_set::FamilySet;
 
 pub(super) const PROBE: TableDefinition<&str, u64> = TableDefinition::new("__e1_probe");
 
+/// A caller's error type over the store's: what `write`'s `E` is for. A
+/// closure that wants to abort on purpose returns `Abort`; there is no
+/// abort verb because `Err` *is* the abort.
+#[derive(Debug, PartialEq)]
+pub(super) enum TestErr {
+    Abort,
+    Store(String),
+}
+
+impl From<StoreError> for TestErr {
+    fn from(e: StoreError) -> Self {
+        Self::Store(e.to_string())
+    }
+}
+
+/// Abort the batch on purpose.
+pub(super) fn abort<T>(_: &mut WriteBatch<'_, '_>) -> Result<T, TestErr> {
+    Err(TestErr::Abort)
+}
+
+/// The row an insert-once open of the probe table names.
+///
+/// The probe table is a test fixture, not a schema table, so it has no
+/// register row of its own; `open_insert_table` needs *a* `StoreInvariant`
+/// to bind and SI-7's is the only variant built. What the tests below
+/// assert is that the row the handle was opened with is the row that
+/// comes back — not which row it is. S-CHAIN-W's sites bind SI-1 / SI-3
+/// / SI-4 at open. IT DOES NOT COVER: uniqueness *being* SI-7.
+pub(super) const PROBE_ROW: StoreInvariant = StoreInvariant::CellCorrupt {
+    key: "__e1_probe",
+    fault: CellFault::Absent,
+};
+
+/// Write one probe row `k = v` inside `batch`. A probe row is a fixture
+/// register, so this is an `upsert`; the insert-once handle has its own
+/// tests.
+pub(super) fn probe_row(batch: &WriteBatch<'_, '_>, k: &str, v: u64) -> Result<(), StoreError> {
+    batch.open_upsert_table(PROBE)?.upsert(k, &v).map(drop)
+}
+
+/// Read probe row `k` from a fresh snapshot: `None` if the table or the
+/// row is absent.
+pub(super) fn probe_val(store: &ChainStore, k: &str) -> Option<u64> {
+    let snap = store.begin_read().expect("read");
+    let table = snap.open_table(PROBE).ok()?;
+    table.get(k).expect("get").map(|g| g.value())
+}
+
 pub(super) fn tmp(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!(
@@ -45,7 +93,7 @@ fn an_empty_stub_is_refused_at_open() {
     let path = tmp("empty-stub");
     assert!(matches!(
         ChainStore::with_apply_policy(&path, ApplyPolicy::StubbedFamilies(FamilySet::EMPTY)),
-        Err(StoreError::EmptyApplyStub)
+        Err(StoreError::Cannot(StoreCannot::EmptyApplyStub))
     ));
     assert!(!path.exists(), "a refused policy must not create the store");
 }
@@ -59,8 +107,9 @@ fn declared_commit_policy_constants_are_pinned() {
     // and :1326), so nothing can read the applied value back; an earlier
     // draft copied the consts into the batch and asserted the copy, which
     // compared each const with itself. Deleting the set_* calls in arm_write
-    // leaves this green. Application is proven only by begin_batch returning
-    // Ok through the `?` on set_durability -- a weaker claim, stated as such.
+    // leaves this green. Application is proven only by `write` arming its
+    // batch and passing the `?` on set_durability -- a weaker claim, stated
+    // as such.
     assert!(matches!(DURABILITY, Durability::Immediate));
     assert_eq!(CACHE_SIZE, 1024 * 1024 * 1024);
     // TWO_PHASE_COMMIT is pinned at compile time: a constant assertion is the
@@ -71,24 +120,23 @@ fn declared_commit_policy_constants_are_pinned() {
     );
     let path = tmp("armed");
     let store = ChainStore::create(&path).expect("create");
-    store
-        .begin_batch()
-        .expect("arming the declared policy is accepted by the engine")
-        .abort()
-        .expect("abort");
+    // `write` arms the transaction before it runs the closure, so reaching
+    // the closure at all is the engine accepting the declared policy.
+    assert_eq!(store.write(abort::<()>), Err(TestErr::Abort));
     cleanup(&path);
 }
 
 #[test]
-fn a_committed_row_is_visible_to_a_later_read() {
+fn ok_from_the_closure_commits_and_the_value_comes_back() {
     let path = tmp("commit");
     let store = ChainStore::create(&path).expect("create");
-    let batch = store.begin_batch().expect("begin");
-    {
-        let mut table = batch.open_table(PROBE).expect("open");
-        table.insert("k", &1_u64).expect("insert");
-    }
-    batch.commit().expect("commit");
+    let answer = store
+        .write(|batch| -> Result<u64, StoreError> {
+            probe_row(batch, "k", 1)?;
+            Ok(42)
+        })
+        .expect("commit");
+    assert_eq!(answer, 42);
     let snap = store.begin_read().expect("read");
     let table = snap.open_table(PROBE).expect("open read");
     assert_eq!(table.get("k").expect("get").expect("present").value(), 1);
@@ -96,38 +144,158 @@ fn a_committed_row_is_visible_to_a_later_read() {
 }
 
 #[test]
-fn a_dropped_batch_does_not_persist_its_writes() {
-    let path = tmp("drop");
+fn err_from_the_closure_aborts_and_nothing_lands() {
+    // There is no abort verb: `Err` is the abort, and it is the caller's
+    // error that comes back, not a store error wrapping it.
+    let path = tmp("abort");
     let store = ChainStore::create(&path).expect("create");
-    let batch = store.begin_batch().expect("begin");
-    {
-        let mut table = batch.open_table(PROBE).expect("open");
-        table.insert("k", &1_u64).expect("insert");
-    }
-    drop(batch);
+    let result = store.write(|batch| -> Result<(), TestErr> {
+        probe_row(batch, "k", 1)?;
+        Err(TestErr::Abort)
+    });
+    assert_eq!(result, Err(TestErr::Abort));
     assert!(
         store.begin_read().expect("read").open_table(PROBE).is_err(),
         "an aborted create must not leave the probe table"
     );
+    // The write slot was released on the way out.
     store
-        .begin_batch()
-        .expect("begin after drop")
-        .abort()
-        .expect("abort");
+        .write(|_| Ok::<(), StoreError>(()))
+        .expect("a later write proceeds");
     cleanup(&path);
 }
 
 #[test]
-fn abort_is_a_decision_and_does_not_persist() {
-    let path = tmp("abort");
+fn a_store_failure_converts_into_the_callers_error_type() {
+    // `E: From<StoreError>`: the store's own refusals arrive in the
+    // caller's type, so a connect path can carry its verdict type and the
+    // store's failures in one enum without the store knowing the verdict.
+    let path = tmp("convert");
+    drop(ChainStore::create(&path).expect("create"));
+    let ro = ChainStore::open_read_only(&path).expect("ro");
+    assert_eq!(
+        ro.write(|_| Ok::<(), TestErr>(())),
+        Err(TestErr::Store(
+            StoreError::Cannot(StoreCannot::ReadOnly).to_string()
+        ))
+    );
+    cleanup(&path);
+}
+
+// ------------------------------------------- two verbs, one poison
+
+#[test]
+fn insert_lands_on_a_fresh_key_and_names_the_row_on_a_present_one() {
+    let path = tmp("insert");
     let store = ChainStore::create(&path).expect("create");
-    let batch = store.begin_batch().expect("begin");
-    {
-        let mut table = batch.open_table(PROBE).expect("open");
-        table.insert("k", &1_u64).expect("insert");
-    }
-    batch.abort().expect("abort");
-    assert!(store.begin_read().expect("read").open_table(PROBE).is_err());
+    store
+        .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
+        .expect("a fresh key lands");
+    assert_eq!(probe_val(&store, "k"), Some(1));
+
+    // The closure catches the refusal and carries on as if nothing
+    // happened: reads the key, writes another via the overwrite handle,
+    // returns Ok. None of that rescues the batch — poison is what
+    // `complete` consults.
+    let result = store.write(|batch| -> Result<(), StoreError> {
+        let mut table = batch.open_insert_table(PROBE, PROBE_ROW)?;
+        assert!(
+            matches!(
+                table.insert("k", &2),
+                Err(StoreError::InvariantViolated(row)) if row == PROBE_ROW
+            ),
+            "the handle's row is the row that comes back"
+        );
+        assert_eq!(
+            table.get("k")?.expect("present").value(),
+            1,
+            "a refused insert leaves the table untouched"
+        );
+        drop(table);
+        batch.open_upsert_table(PROBE)?.upsert("other", &9)?;
+        Ok(())
+    });
+    assert!(
+        matches!(result, Err(StoreError::InvariantViolated(row)) if row == PROBE_ROW),
+        "a swallowed violation still refuses the commit, with the same row: {result:?}"
+    );
+    assert_eq!(
+        probe_val(&store, "k"),
+        Some(1),
+        "nothing the batch wrote landed"
+    );
+    assert_eq!(probe_val(&store, "other"), None);
+    // The write slot was released on the way out.
+    store
+        .write(|_| Ok::<(), StoreError>(()))
+        .expect("a later write proceeds");
+    cleanup(&path);
+}
+
+#[test]
+fn a_propagated_violation_reaches_the_caller_in_the_callers_type() {
+    // The ordinary path: the site does not swallow, `?` carries the
+    // violation out through `E: From<StoreError>`, and the batch aborts.
+    let path = tmp("insert-propagated");
+    let store = ChainStore::create(&path).expect("create");
+    store
+        .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
+        .expect("seed");
+    let result = store.write(|batch| -> Result<(), TestErr> {
+        batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &2)?;
+        unreachable!("the insert was refused");
+    });
+    assert_eq!(result, Err(TestErr::Store(PROBE_ROW.to_string())));
+    assert_eq!(probe_val(&store, "k"), Some(1));
+    cleanup(&path);
+}
+
+#[test]
+fn a_swallowed_violation_outvotes_a_different_err() {
+    // THIS BITES AGAINST: `complete` returning the closure's `Err` when
+    // poison is armed — that is converting the Halt into something else
+    // (C2-R8 Q2). IT DOES NOT COVER: the Ok-and-swallowed path
+    // (`insert_lands_on_a_fresh_key_and_names_the_row_on_a_present_one`).
+    let path = tmp("insert-err-poison");
+    let store = ChainStore::create(&path).expect("create");
+    store
+        .write(|batch| batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &1))
+        .expect("seed");
+    let result = store.write(|batch| -> Result<(), TestErr> {
+        assert!(
+            matches!(
+                batch.open_insert_table(PROBE, PROBE_ROW)?.insert("k", &2),
+                Err(StoreError::InvariantViolated(row)) if row == PROBE_ROW
+            ),
+            "the handle's row is the row that comes back"
+        );
+        Err(TestErr::Abort)
+    });
+    assert_eq!(result, Err(TestErr::Store(PROBE_ROW.to_string())));
+    assert_eq!(probe_val(&store, "k"), Some(1));
+    cleanup(&path);
+}
+
+#[test]
+fn upsert_replaces_and_returns_the_displaced_value() {
+    let path = tmp("upsert");
+    let store = ChainStore::create(&path).expect("create");
+    store
+        .write(|batch| -> Result<(), StoreError> {
+            let mut table = batch.open_upsert_table(PROBE)?;
+            assert!(
+                table.upsert("k", &1)?.is_none(),
+                "first write displaces nothing"
+            );
+            assert_eq!(
+                table.upsert("k", &2)?.expect("displaced").value(),
+                1,
+                "the pre-image comes back"
+            );
+            Ok(())
+        })
+        .expect("commit");
+    assert_eq!(probe_val(&store, "k"), Some(2));
     cleanup(&path);
 }
 
@@ -135,17 +303,36 @@ fn abort_is_a_decision_and_does_not_persist() {
 fn a_second_live_batch_is_a_typed_error_not_a_deadlock() {
     let path = tmp("in-progress");
     let store = ChainStore::create(&path).expect("create");
-    let first = store.begin_batch().expect("first");
-    assert!(matches!(
-        store.begin_batch(),
-        Err(StoreError::WriteInProgress)
-    ));
-    first.abort().expect("abort first");
     store
-        .begin_batch()
-        .expect("after abort")
-        .abort()
-        .expect("abort");
+        .write(|_| -> Result<(), StoreError> {
+            assert!(matches!(
+                store.write(|_| Ok::<(), StoreError>(())),
+                Err(StoreError::Cannot(StoreCannot::WriteInProgress))
+            ));
+            Ok(())
+        })
+        .expect("outer commits");
+    store
+        .write(|_| Ok::<(), StoreError>(()))
+        .expect("after the outer batch is gone");
+    cleanup(&path);
+}
+
+#[test]
+fn the_brand_unifies_within_one_batch_only() {
+    // The positive half of the brand: a helper that demands two handles of
+    // the same batch accepts the one batch twice. The negative half — two
+    // `write` calls' batches refused at compile time — is the
+    // `compile_fail` doctest on `ChainStore::write`.
+    fn same_batch<'id>(_: &WriteBatch<'_, 'id>, _: &WriteBatch<'_, 'id>) {}
+    let path = tmp("brand");
+    let store = ChainStore::create(&path).expect("create");
+    store
+        .write(|batch| -> Result<(), StoreError> {
+            same_batch(batch, batch);
+            Ok(())
+        })
+        .expect("commit");
     cleanup(&path);
 }
 
@@ -162,25 +349,29 @@ fn a_second_batch_from_another_thread_is_refused_not_queued() {
     // until the asker has answered.
     let path = tmp("cross-thread");
     let store = std::sync::Arc::new(ChainStore::create(&path).expect("create"));
-    let held = store.begin_batch().expect("holder");
-    let (tx, rx) = std::sync::mpsc::channel();
-    let asker = {
-        let store = std::sync::Arc::clone(&store);
-        std::thread::spawn(move || {
-            let verdict = match store.begin_batch() {
-                Err(StoreError::WriteInProgress) => Ok(()),
-                Err(e) => Err(format!("wrong error: {e}")),
-                Ok(_) => Err("second batch was GRANTED while one was live".to_owned()),
+    let asker = store
+        .write(|_| -> Result<std::thread::JoinHandle<()>, StoreError> {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let asker = {
+                let store = std::sync::Arc::clone(&store);
+                std::thread::spawn(move || {
+                    let verdict = match store.write(|_| Ok::<(), StoreError>(())) {
+                        Err(StoreError::Cannot(StoreCannot::WriteInProgress)) => Ok(()),
+                        Err(e) => Err(format!("wrong error: {e}")),
+                        Ok(()) => Err("second batch was GRANTED while one was live".to_owned()),
+                    };
+                    tx.send(verdict).expect("main is waiting");
+                })
             };
-            tx.send(verdict).expect("main is waiting");
+            let verdict = rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("asker was QUEUED behind the holder instead of refused");
+            // The answer arrived while this batch is still live: refused,
+            // not parked.
+            verdict.expect("refused promptly");
+            Ok(asker)
         })
-    };
-    let verdict = rx
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .expect("asker was QUEUED behind the holder instead of refused");
-    // The answer arrived while `held` is still alive: refused, not parked.
-    verdict.expect("refused promptly");
-    held.abort().expect("abort");
+        .expect("holder commits");
     asker.join().expect("asker thread");
     cleanup(&path);
 }
@@ -189,9 +380,12 @@ fn a_second_batch_from_another_thread_is_refused_not_queued() {
 fn a_read_snapshot_is_allowed_while_a_write_is_live() {
     let path = tmp("read-during-write");
     let store = ChainStore::create(&path).expect("create");
-    let batch = store.begin_batch().expect("write");
-    store.begin_read().expect("read during write");
-    batch.abort().expect("abort");
+    store
+        .write(|_| -> Result<(), StoreError> {
+            store.begin_read().expect("read during write");
+            Ok(())
+        })
+        .expect("commit");
     cleanup(&path);
 }
 
@@ -201,16 +395,18 @@ fn a_stubbed_family_cannot_open_its_table_on_a_write() {
     const STUB: &[ArchivalFamily] = &[ArchivalFamily::SlashLog];
     let store = ChainStore::with_apply_policy(&path, ApplyPolicy::stubbed(STUB).expect("stub"))
         .expect("create");
-    let batch = store.begin_batch().expect("begin");
-    assert!(matches!(
-        batch.open_table(crate::schema::ARCHIVAL_SLASH_LOG),
-        Err(StoreError::FamilyStubbed(ArchivalFamily::SlashLog))
-    ));
-    {
-        let mut table = batch.open_table(PROBE).expect("non-archival still opens");
-        table.insert("k", &1_u64).expect("insert");
-    }
-    batch.commit().expect("commit");
+    store
+        .write(|batch| -> Result<(), StoreError> {
+            assert!(matches!(
+                batch.open_upsert_table(crate::schema::ARCHIVAL_SLASH_LOG),
+                Err(StoreError::Cannot(StoreCannot::FamilyStubbed(
+                    ArchivalFamily::SlashLog
+                )))
+            ));
+            probe_row(batch, "k", 1).expect("non-archival still opens");
+            Ok(())
+        })
+        .expect("commit");
     cleanup(&path);
 }
 
@@ -222,19 +418,27 @@ fn the_properties_table_has_no_raw_write_handle() {
     // damaged by looking.
     let path = tmp("properties-typed");
     let store = ChainStore::create(&path).expect("create");
-    let batch = store.begin_batch().expect("begin");
-    assert!(matches!(
-        batch.open_table(crate::schema::PROPERTIES),
-        Err(StoreError::PropertiesAreTyped)
-    ));
-    // Nor by redefining it under another type: the refusal is by name.
-    const IMPOSTOR: redb::MultimapTableDefinition<&str, &[u8]> =
-        redb::MultimapTableDefinition::new("properties");
-    assert!(matches!(
-        batch.open_multimap_table(IMPOSTOR),
-        Err(StoreError::PropertiesAreTyped)
-    ));
-    batch.abort().expect("abort");
+    assert_eq!(
+        store.write(|batch| {
+            assert!(matches!(
+                batch.open_upsert_table(crate::schema::PROPERTIES),
+                Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
+            ));
+            assert!(matches!(
+                batch.open_insert_table(crate::schema::PROPERTIES, PROBE_ROW),
+                Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
+            ));
+            // Nor by redefining it under another type: the refusal is by name.
+            const IMPOSTOR: redb::MultimapTableDefinition<&str, &[u8]> =
+                redb::MultimapTableDefinition::new("properties");
+            assert!(matches!(
+                batch.open_multimap_table(IMPOSTOR),
+                Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
+            ));
+            abort::<()>(batch)
+        }),
+        Err(TestErr::Abort)
+    );
     store
         .begin_read()
         .expect("read")
@@ -248,15 +452,14 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
     let path = tmp("readonly");
     {
         let store = ChainStore::create(&path).expect("create");
-        store
-            .begin_batch()
-            .expect("begin")
-            .commit()
-            .expect("commit");
+        store.write(|_| Ok::<(), StoreError>(())).expect("commit");
     }
     let store = ChainStore::open_read_only(&path).expect("open ro");
     assert!(store.is_read_only());
-    assert!(matches!(store.begin_batch(), Err(StoreError::ReadOnly)));
+    assert!(matches!(
+        store.write(|_| Ok::<(), StoreError>(())),
+        Err(StoreError::Cannot(StoreCannot::ReadOnly))
+    ));
     store.begin_read().expect("read on a read-only store");
     cleanup(&path);
 }
@@ -278,7 +481,9 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
 fn is_already_open(result: &Result<ChainStore, StoreError>) -> bool {
     matches!(
         result,
-        Err(StoreError::Open(redb::DatabaseError::DatabaseAlreadyOpen))
+        Err(StoreError::Engine(EngineError::Open(
+            redb::DatabaseError::DatabaseAlreadyOpen
+        )))
     )
 }
 
@@ -336,7 +541,7 @@ fn open_read_only_refuses_a_store_that_does_not_exist() {
     drop(std::fs::remove_file(&path));
     assert!(matches!(
         ChainStore::open_read_only(&path),
-        Err(StoreError::Open(_))
+        Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert!(!path.exists(), "a read-only open must not create the store");
 }
@@ -353,7 +558,7 @@ fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
     std::fs::write(&path, b"").expect("empty file");
     assert!(matches!(
         ChainStore::with_apply_policy(&path, ApplyPolicy::Full),
-        Err(StoreError::Open(_))
+        Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert_eq!(
         std::fs::metadata(&path).expect("still present").len(),

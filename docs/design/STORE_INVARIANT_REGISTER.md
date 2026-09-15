@@ -29,8 +29,9 @@ Two consequences of "never decides":
   When it does, the row is a belt behind that rule, and a violation means
   the validator has a hole. When it does not, a violation means the file is
   corrupt or the store's own write path is wrong;
-- a row is enforced at the **write** (an `insert` on an existing key, a root
-  that does not match), not by a scan. There is no "check invariants" pass.
+- a row is enforced at the **write** (an `InsertTable::insert` on a present
+  key, a root that does not match), not by a scan. There is no "check
+  invariants" pass.
 
 ## 2. The register
 
@@ -48,31 +49,50 @@ question the row came from.
 | SI-4 | The curve-tree root at height *h*+1 is written exactly once per connect (declared `insert`) and is the root the consensus transition handed `connect` | curve-tree roots | CEN-B5 reads it | C2-R8 Q4 (ruled `insert`); CEN-L14 curve-root heights (R8b-7 confirms; a rewrite case reopens this row under the ruling's §13, it does not silently override) | ruled | |
 | SI-5 | After a pop trims the tree to height *h*, the tree's root equals the recorded root at *h* | curve tree | CEN-B5 (the recorded root is the oracle) | C2-R8 Q5; CEN-L13 trim bounds | ruled | |
 | SI-6 | The undo log's top entry is the tip height; a pop consumes exactly that entry | undo log | — | C2-R8 Q5; CEN-L13 journal-vs-tip belts | ruled | |
-| SI-7 | Every cell read decodes under its canonical codec; an undecodable or missing sealed cell is fatal | all typed cells | — | CEN-L13 serve-credit re-parse; live today for `properties` cells as `StoreError::CellCorrupt` (PR #749), re-homed under the enum at increment 2.5 | ruled | |
+| SI-7 | Every cell read decodes under its canonical codec; an undecodable or missing sealed cell is fatal | all typed cells | — | CEN-L13 serve-credit re-parse; enforced for `properties` cells since PR #749 (as a flat `StoreError::CellCorrupt`), re-homed under the enum at increment 2.5 | built | `StoreInvariant::CellCorrupt` |
 | SI-8 | Accumulator arithmetic never wraps: every fold uses checked arithmetic and an overflow is fatal, never a saturate or a mint | accumulator cells | — | CEN-L13 bond-counter overflow | ruled | |
 
 Rows are **appended**, never renumbered. A row whose table is deleted is
 marked `retired` in its `Status` cell in the deleting PR with the PR number —
 not removed — so the id is not silently re-minted (rule 23).
 
-## 3. `StoreError` classed at the pin
+## 3. `StoreError` is classed structurally
 
-Until `StoreError::class()` lands (DRS-E1 increment 2.5), this table is the
-taxonomy's code-facing form. `Engine` = the redb layer failed and the
-operation did not happen; `Cannot` = a refusal before the write (not a
-verdict, not incoherence; retryability is per variant — `WriteInProgress`
-is a contract violation and **must not** be retried, per its doc comment);
-`Invariant` = an `SI-` row broke.
+Since DRS-E1 increment 2.5 the class is the **outer variant** of
+`StoreError` (`rust/shekyl-chain-store/src/store/error.rs`), and
+`StoreError::class()` is a projection of it, not a judgement made beside it:
 
-| Variant | Class | Note |
-| --- | --- | --- |
-| `Open`, `BeginWrite`, `BeginRead`, `Durability`, `Commit`, `Abort`, `Table`, `Storage` | Engine | |
-| `SchemaVersionAbsent`, `SchemaVersionMismatch` | Cannot | an incompatible file is not an incoherent one; rebuild |
-| `CellCorrupt` | **Invariant** | SI-7 |
-| `PropertiesAreTyped`, `ReadOnly`, `WriteInProgress`, `EmptyApplyStub`, `FamilyStubbed` | Cannot | |
+| `StoreError` arm | `class()` | Payload | Meaning |
+| --- | --- | --- | --- |
+| `Engine(EngineError)` | `Engine` | `Open`, `BeginWrite`, `BeginRead`, `Durability`, `Commit`, `Table`, `Storage` | the redb layer failed and the operation did not happen |
+| `Cannot(StoreCannot)` | `Cannot` | `SchemaVersionAbsent`, `SchemaVersionMismatch`, `PropertiesAreTyped`, `ReadOnly`, `WriteInProgress`, `EmptyApplyStub`, `FamilyStubbed` | a refusal before the write: not a verdict, not incoherence. An incompatible file is not an incoherent one — rebuild. Retryability is per variant; `WriteInProgress` is a contract violation and **must not** be retried, per its doc comment |
+| `InvariantViolated(StoreInvariant)` | `Invariant` | one variant per `built` row of §2 (the gate in §4 holds the bijection) | an `SI-` row broke; fatal |
+
+The payload columns above are a **reading** of the three enums, not a second
+source: where they and the code disagree, the code is right and this table is
+stale. Before 2.5 the taxonomy was a table here classing a flat enum (which
+also carried an `Abort` arm — deleted with the closure-commit API, an abort is
+a drop). The wrapper is transparent: `Display` and `source()` pass through to
+the inner type, so a class adds no line to an error chain.
 
 No variant is a consensus verdict, and none ever will be: the crate does not
 name `InvalidBlock` (ban clause 2).
+
+**How a violation is produced, and what it does to the batch** (increment
+2.5, `store/keyed.rs`, `store/write.rs`). A keyed table opens as
+`InsertTable` or `UpsertTable` — the verb is the handle. `open_insert_table`
+binds the `SI-` row the site is enforcing; `InsertTable::insert` is fatal on
+a present key and returns `InvariantViolated` for that bound row. `upsert`
+is the declared overwrite and names no row. Every `InvariantViolated`
+produced or observed through a `WriteBatch` (a refused `insert`; a
+`get_property` on a cell that fails SI-7) **poisons** it: the first row to
+arm is kept and `complete` refuses with it on **both** the closure's `Ok`
+and `Err` arms, so a caller that swallows the violation — or maps it to a
+different error — still lands nothing and still surfaces the row. That is
+what makes "fatal, never converted" a property of the batch rather than of
+each call site. SI-1 / SI-3 / SI-4 therefore stay `ruled` until S-CHAIN-W
+opens their tables: the insert handle exists, and the increment that first
+opens one with each row adds the variant (§5 step 1).
 
 ## 4. The gate
 

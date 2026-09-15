@@ -19,10 +19,25 @@
 //! and dereferences `*m_write_txn` at **129** sites with no guard at the
 //! dereference (DRS-W3). [`WriteBatch`] makes the precondition
 //! unrepresentable: it cannot be null, table access goes through it (never
-//! a raw `WriteTransaction`), and [`commit`](WriteBatch::commit) /
-//! [`abort`](WriteBatch::abort) consume it.
+//! a raw `WriteTransaction`), and it exists only inside a
+//! [`write`](ChainStore::write) closure — `Ok` commits it, `Err` or an
+//! unwind drops it, and drop aborts.
 //!
-//! A second live batch is a typed [`StoreError::WriteInProgress`], not
+//! # One transaction, one brand (C2-R8 Q3, DRS-E1 increment 2.5)
+//!
+//! The closure is higher-ranked over the batch's brand lifetime `'id`
+//! (`for<'id> FnOnce(&mut WriteBatch<'_, 'id>)`), so every `write` call
+//! mints a batch no other call can name. A value typed with one batch's
+//! brand — the view a validator reads from it, the `ChainValid<'id>` the
+//! validator mints against that view — cannot be presented to another
+//! batch: the two `'id`s are distinct and invariant, and the handoff does
+//! not compile. Validation and apply therefore run against **the same
+//! transaction** by construction, which is what the ruling requires and
+//! what a one-thread block processor would otherwise let someone forget
+//! the first time a parallel read is added. One-live-write below is a
+//! liveness property only; the TOCTOU guarantee rests on the brand.
+//!
+//! A second live batch is a typed [`StoreCannot::WriteInProgress`], not
 //! redb's blocking `begin_write`. Same-thread re-entry would otherwise
 //! deadlock. The C++ is **not** the same shape, and saying so precisely is
 //! the point: `BlockchainLMDB::batch_start` **returns `false`** for a
@@ -30,6 +45,17 @@
 //! `db_lmdb.cpp:4103`/`:4105`) and two core callers *spin* on that; it
 //! **throws** only when a non-batch `m_write_txn` is live (`:4108`). This
 //! store refuses with a typed error and never spins — DRS-W17.
+//!
+//! # Two verbs, and a violation poisons the batch (C2-R8 §7.3, Q2)
+//!
+//! Keyed tables open through the batch as an [`InsertTable`] (fatal on a
+//! present key; the `SI-` row is bound at open) or an [`UpsertTable`]
+//! (overwrite, declared). Typed `properties` cells are registers and go
+//! through [`upsert_property`](WriteBatch::upsert_property). Any invariant
+//! violation seen through the batch — a refused `insert`, a cell that will
+//! not decode — arms a latch `complete` checks on **both** the `Ok` and
+//! `Err` arms, so a closure that swallows one, or maps it to a different
+//! error, still lands nothing: `write` returns the violation.
 //!
 //! # Durability is declared, never inherited
 //!
@@ -55,18 +81,21 @@
 //! both read back — in a read transaction, so a stale file is never
 //! stamped current in passing — before any table is opened. A file with no
 //! version cell is not one this binary wrote and is refused
-//! ([`StoreError::SchemaVersionAbsent`]); a file at another version is
-//! refused in both directions ([`StoreError::SchemaVersionMismatch`]). The
+//! ([`StoreCannot::SchemaVersionAbsent`]); a file at another version is
+//! refused in both directions ([`StoreCannot::SchemaVersionMismatch`]). The
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
 mod error;
 mod header;
+mod invariant;
+mod keyed;
 mod read;
 mod shared;
 mod write;
 
-pub use error::{CellFault, StoreError};
+pub use error::{CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant};
+pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use read::ReadSnapshot;
 pub use write::WriteBatch;
 
@@ -134,7 +163,7 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Open`] if the file cannot be created or opened; the
+    /// [`EngineError::Open`] if the file cannot be created or opened; the
     /// header refusals listed on [`with_apply_policy`](Self::with_apply_policy).
     pub fn create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         Self::with_apply_policy(path, ApplyPolicy::default())
@@ -152,13 +181,13 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::EmptyApplyStub`] if the policy stubs no families —
-    /// checked before the path is touched; [`StoreError::Open`] if the file
+    /// [`StoreCannot::EmptyApplyStub`] if the policy stubs no families —
+    /// checked before the path is touched; [`EngineError::Open`] if the file
     /// cannot be created or opened, including an existing file that is not
     /// a redb database (refused unread and unwritten, never initialized);
-    /// on an existing database, [`StoreError::SchemaVersionAbsent`],
-    /// [`StoreError::SchemaVersionMismatch`] or
-    /// [`StoreError::CellCorrupt`] if its header is not one this binary
+    /// on an existing database, [`StoreCannot::SchemaVersionAbsent`],
+    /// [`StoreCannot::SchemaVersionMismatch`] or
+    /// [`StoreInvariant::CellCorrupt`] if its header is not one this binary
     /// can vouch for. A fresh file the engine refuses to take, or that
     /// cannot be sealed, is removed again, so a failed create does not
     /// leave a headerless file the next open refuses.
@@ -168,7 +197,7 @@ impl ChainStore {
     ) -> Result<Self, StoreError> {
         apply_policy
             .reject_empty_stub()
-            .map_err(|crate::apply_policy::EmptyApplyStub| StoreError::EmptyApplyStub)?;
+            .map_err(|crate::apply_policy::EmptyApplyStub| StoreCannot::EmptyApplyStub)?;
         // Fresh-vs-existing is decided by the SAME syscall that claims the
         // path, never by a separate probe: `create_new` either creates the
         // file atomically (fresh) or fails with AlreadyExists (reopen). An
@@ -209,11 +238,11 @@ impl ChainStore {
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let db = builder.open(path).map_err(StoreError::Open)?;
-                let provenance = header::verify(&db.begin_read().map_err(StoreError::BeginRead)?)?;
+                let db = builder.open(path).map_err(EngineError::Open)?;
+                let provenance = header::verify(&db.begin_read().map_err(EngineError::BeginRead)?)?;
                 (db, provenance)
             }
-            Err(e) => return Err(StoreError::Open(redb::DatabaseError::Storage(e.into()))),
+            Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
         };
         Ok(Self {
             backend: Backend::Writable(db),
@@ -262,14 +291,14 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Open`] if the file is absent or cannot be opened; the
+    /// [`EngineError::Open`] if the file is absent or cannot be opened; the
     /// same header refusals as [`with_apply_policy`](Self::with_apply_policy).
     pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let db = redb::Builder::new()
             .set_cache_size(CACHE_SIZE)
             .open_read_only(path)
-            .map_err(StoreError::Open)?;
-        let provenance = header::verify(&db.begin_read().map_err(StoreError::BeginRead)?)?;
+            .map_err(EngineError::Open)?;
+        let provenance = header::verify(&db.begin_read().map_err(EngineError::BeginRead)?)?;
         Ok(Self {
             backend: Backend::ReadOnly(db),
             // A read-only handle writes nothing, so its session policy is
@@ -285,49 +314,98 @@ impl ChainStore {
         matches!(self.backend, Backend::ReadOnly(_))
     }
 
-    /// Begin a write batch. The **only** way to obtain a [`WriteBatch`].
+    /// Run `f` inside a write batch and commit if it returns `Ok`. The
+    /// **only** way to reach a [`WriteBatch`].
+    ///
+    /// The closure is higher-ranked over the batch's brand `'id`, so the
+    /// batch it is handed — and every value typed with that brand — is
+    /// distinct from any other call's:
+    ///
+    /// ```compile_fail,E0521
+    /// use shekyl_chain_store::store::{ChainStore, StoreError, WriteBatch};
+    /// fn same_batch<'id>(_: &WriteBatch<'_, 'id>, _: &WriteBatch<'_, 'id>) {}
+    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// store.write(|outer| {
+    ///     store.write(|inner| -> Result<(), StoreError> {
+    ///         same_batch(outer, inner);
+    ///         Ok(())
+    ///     })
+    /// });
+    /// ```
+    ///
+    /// (Two batches can never be *live* together on one store — the inner
+    /// call would be [`StoreCannot::WriteInProgress`] — but the point of the
+    /// brand is that the handoff is refused before anything runs.)
+    ///
+    /// `Err` from the closure drops the batch, and drop aborts: nothing the
+    /// closure wrote lands. There is no separate abort verb; an abort that
+    /// the engine fails to complete is not lost either — redb latches the
+    /// storage failure and refuses the next `begin_write` with
+    /// `StorageError::PreviousIo` (`redb-4.1.0/src/transactions.rs:2084`,
+    /// `db.rs:1410`, read at the pinned source), which the next `write`
+    /// surfaces as [`EngineError::BeginWrite`].
+    ///
+    /// `E` is any error the caller's closure may return, provided the
+    /// store's own failures convert into it; a closure that only ever
+    /// returns `Ok` names it (`Ok::<_, StoreError>(())`).
     ///
     /// # Errors
     ///
-    /// [`StoreError::ReadOnly`] if the store was opened read-only;
-    /// [`StoreError::WriteInProgress`] if a batch is already live;
-    /// [`StoreError::BeginWrite`] or [`StoreError::Durability`] if the
-    /// engine refuses.
-    pub fn begin_batch(&self) -> Result<WriteBatch<'_>, StoreError> {
+    /// [`StoreCannot::ReadOnly`] if the store was opened read-only;
+    /// [`StoreCannot::WriteInProgress`] if a batch is already live;
+    /// [`EngineError::BeginWrite`] or [`EngineError::Durability`] if the
+    /// engine refuses to begin; whatever `f` returns, **except** that
+    /// [`StoreError::InvariantViolated`] wins if any invariant violation
+    /// was seen through the batch — even one `f` caught, or mapped to a
+    /// different `Err`; at commit, [`EngineError::Commit`] if the engine
+    /// could not commit, or [`StoreInvariant::CellCorrupt`] /
+    /// [`EngineError::Storage`] if the provenance cell could not be read
+    /// back or widened. In every `Err` case the batch is aborted and
+    /// nothing lands.
+    pub fn write<R, E, F>(&self, f: F) -> Result<R, E>
+    where
+        E: From<StoreError>,
+        F: for<'id> FnOnce(&mut WriteBatch<'_, 'id>) -> Result<R, E>,
+    {
         let Backend::Writable(db) = &self.backend else {
-            return Err(StoreError::ReadOnly);
+            return Err(StoreError::from(StoreCannot::ReadOnly).into());
         };
         if !self.shared.try_hold_write() {
-            return Err(StoreError::WriteInProgress);
+            return Err(StoreError::from(StoreCannot::WriteInProgress).into());
         }
-        match arm_write(db) {
-            Ok(txn) => Ok(WriteBatch::new(txn, self.apply_policy, &self.shared)),
+        let txn = match arm_write(db) {
+            Ok(txn) => txn,
             Err(e) => {
                 self.shared.release_write();
-                Err(e)
+                return Err(e.into());
             }
-        }
+        };
+        // From here the batch owns the write slot: its Drop releases it on
+        // every exit, including `complete` and an unwind out of `f`.
+        let mut batch = WriteBatch::new(txn, self.apply_policy, &self.shared);
+        let outcome = f(&mut batch);
+        batch.complete(outcome)
     }
 
     /// Begin a read snapshot. Concurrent with a live write batch.
     ///
     /// # Errors
     ///
-    /// [`StoreError::BeginRead`] if the engine refuses.
+    /// [`EngineError::BeginRead`] if the engine refuses.
     pub fn begin_read(&self) -> Result<ReadSnapshot<'_>, StoreError> {
         match &self.backend {
             Backend::Writable(db) => db.begin_read(),
             Backend::ReadOnly(db) => db.begin_read(),
         }
         .map(ReadSnapshot::new)
-        .map_err(StoreError::BeginRead)
+        .map_err(|e| EngineError::BeginRead(e).into())
     }
 }
 
 fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
-    let mut txn = db.begin_write().map_err(StoreError::BeginWrite)?;
+    let mut txn = db.begin_write().map_err(EngineError::BeginWrite)?;
     txn.set_durability(DURABILITY)
-        .map_err(StoreError::Durability)?;
+        .map_err(EngineError::Durability)?;
     txn.set_two_phase_commit(TWO_PHASE_COMMIT);
     Ok(txn)
 }
@@ -345,10 +423,10 @@ fn create_sealed(
     file: std::fs::File,
     policy: ApplyPolicy,
 ) -> Result<(Database, Provenance), StoreError> {
-    let db = builder.create_file(file).map_err(StoreError::Open)?;
+    let db = builder.create_file(file).map_err(EngineError::Open)?;
     let txn = arm_write(&db)?;
     let provenance = header::seal(&txn, policy)?;
-    txn.commit().map_err(StoreError::Commit)?;
+    txn.commit().map_err(EngineError::Commit)?;
     Ok((db, provenance))
 }
 

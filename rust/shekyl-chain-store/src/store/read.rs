@@ -16,7 +16,7 @@ use redb::{
 use crate::codec::PropertyCell;
 use crate::schema::PROPERTIES;
 
-use super::error::StoreError;
+use super::error::{EngineError, StoreError};
 use super::header;
 use super::ChainStore;
 
@@ -41,7 +41,7 @@ impl ReadSnapshot<'_> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Table`] if the table does not exist or the engine refuses.
+    /// [`EngineError::Table`] if the table does not exist or the engine refuses.
     pub fn open_table<K, V>(
         &self,
         definition: TableDefinition<'_, K, V>,
@@ -50,14 +50,16 @@ impl ReadSnapshot<'_> {
         K: Key + 'static,
         V: Value + 'static,
     {
-        self.txn.open_table(definition).map_err(StoreError::Table)
+        self.txn
+            .open_table(definition)
+            .map_err(|e| EngineError::Table(e).into())
     }
 
     /// Open a multimap table for reading.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Table`] if the table does not exist or the engine refuses.
+    /// [`EngineError::Table`] if the table does not exist or the engine refuses.
     pub fn open_multimap_table<K, V>(
         &self,
         definition: MultimapTableDefinition<'_, K, V>,
@@ -68,18 +70,21 @@ impl ReadSnapshot<'_> {
     {
         self.txn
             .open_multimap_table(definition)
-            .map_err(StoreError::Table)
+            .map_err(|e| EngineError::Table(e).into())
     }
 
     /// Read a typed `properties` cell as of this snapshot.
     ///
     /// # Errors
     ///
-    /// [`StoreError::CellCorrupt`] if the cell is present but is not an
-    /// encoding of `C::Value`; [`StoreError::Table`] / [`StoreError::Storage`]
+    /// [`StoreInvariant::CellCorrupt`](super::StoreInvariant::CellCorrupt) if the cell is present but is not an
+    /// encoding of `C::Value`; [`EngineError::Table`] / [`EngineError::Storage`]
     /// if the engine refuses. Absent is `Ok(None)`.
     pub fn get_property<C: PropertyCell>(&self) -> Result<Option<C::Value>, StoreError> {
-        let table = self.txn.open_table(PROPERTIES).map_err(StoreError::Table)?;
+        let table = self
+            .txn
+            .open_table(PROPERTIES)
+            .map_err(EngineError::Table)?;
         header::get::<C>(&table)
     }
 }
