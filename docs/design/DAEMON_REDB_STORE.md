@@ -1304,10 +1304,12 @@ the same family, so the completeness gate reads a fraction instead of nothing.
 No store handle: the crate imports neither `shekyl-chain-store` nor `redb`,
 and a `compile_fail` doctest pins that. It carries:
 
-- `ChainView` — the narrow read trait the rules consume (`has_key_image`,
-  `block_at`, `output_at`, `current_fork_version`, …), implemented by the
-  store over a `WriteBatch<'id>` (one transaction, one brand — ruling Q3) and
-  by a mock in the crate's own tests;
+- `ChainView<'id>` — the narrow read trait the rules consume (`has_key_image`,
+  `block_at`, `output_at`, `root_at`, …), implemented by the store over a
+  `WriteBatch<'id>` (one transaction, one brand — ruling Q3) and by a mock in
+  the crate's own tests. The fork version is **not** a view fact: it enters
+  through `RuleSet` (ruling Q7), and becomes derivable from the view only if
+  R4 rules activation state-dependent;
 - `RuleSet` / `RuleSetId` — the consensus rules **as an explicit input**, so a
   `ChainValid` is valid *under a named rule set* and the first fork cannot be
   invisible (ruling Q7); `AdmissionPolicy` is a separate input with a
