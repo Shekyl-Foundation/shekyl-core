@@ -121,7 +121,7 @@ fn a_different_version_is_refused_in_both_directions() {
         assert!(
             matches!(
                 ChainStore::create(&path),
-                Err(StoreError::SchemaVersionMismatch { found: f, expected })
+                Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found: f, expected }))
                     if f == found && expected == SCHEMA_VERSION
             ),
             "writable reopen at v{other}"
@@ -129,7 +129,7 @@ fn a_different_version_is_refused_in_both_directions() {
         assert!(
             matches!(
                 ChainStore::open_read_only(&path),
-                Err(StoreError::SchemaVersionMismatch { found: f, .. }) if f == found
+                Err(StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found: f, .. })) if f == found
             ),
             "read-only reopen at v{other}"
         );
@@ -151,11 +151,11 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
     raw_put(&path, "schema_version", None);
     assert!(matches!(
         ChainStore::create(&path),
-        Err(StoreError::SchemaVersionAbsent)
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     assert!(matches!(
         ChainStore::open_read_only(&path),
-        Err(StoreError::SchemaVersionAbsent)
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     cleanup(&path);
 
@@ -169,11 +169,11 @@ fn a_file_with_no_version_cell_is_refused_not_read_as_v1() {
     }
     assert!(matches!(
         ChainStore::create(&foreign),
-        Err(StoreError::SchemaVersionAbsent)
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     assert!(matches!(
         ChainStore::open_read_only(&foreign),
-        Err(StoreError::SchemaVersionAbsent)
+        Err(StoreError::Cannot(StoreCannot::SchemaVersionAbsent))
     ));
     assert!(
         raw_get(&foreign, "schema_version").is_none(),
@@ -191,14 +191,14 @@ fn a_malformed_header_cell_is_corruption_not_a_version() {
     raw_put(&path, "schema_version", Some(&[1, 0, 0]));
     assert!(matches!(
         ChainStore::create(&path),
-        Err(StoreError::CellCorrupt {
+        Err(StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
             key: "schema_version",
             fault: CellFault::Undecodable(crate::codec::CodecError::Length {
                 codec: "schema_version",
                 expected: 8,
                 actual: 3,
             }),
-        })
+        }))
     ));
     raw_put(&path, "schema_version", Some(&SCHEMA_VERSION.encode()));
 
@@ -207,23 +207,23 @@ fn a_malformed_header_cell_is_corruption_not_a_version() {
     raw_put(&path, "apply_policy", None);
     assert!(matches!(
         ChainStore::open_read_only(&path),
-        Err(StoreError::CellCorrupt {
+        Err(StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
             key: "apply_policy",
             fault: CellFault::Absent,
-        })
+        }))
     ));
 
     // Provenance with a bit that names no family.
     raw_put(&path, "apply_policy", Some(&[0, 0, 0, 0x80]));
     assert!(matches!(
         ChainStore::create(&path),
-        Err(StoreError::CellCorrupt {
+        Err(StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
             key: "apply_policy",
             fault: CellFault::Undecodable(crate::codec::CodecError::Invalid {
                 codec: "family_set",
                 ..
             }),
-        })
+        }))
     ));
     cleanup(&path);
 }
@@ -425,10 +425,10 @@ fn a_corrupt_chain_state_cell_is_refused_on_read() {
             .begin_read()
             .expect("read")
             .get_property::<ProbeCell>(),
-        Err(StoreError::CellCorrupt {
+        Err(StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
             key: "__e1_probe_cell",
             fault: CellFault::Undecodable(_),
-        })
+        }))
     ));
     cleanup(&path);
 }

@@ -41,7 +41,7 @@ pub(super) fn probe_row(batch: &WriteBatch<'_, '_>, k: &str, v: u64) -> Result<(
         .open_table(PROBE)?
         .insert(k, &v)
         .map(drop)
-        .map_err(StoreError::Storage)
+        .map_err(|e| EngineError::Storage(e).into())
 }
 
 pub(super) fn tmp(name: &str) -> std::path::PathBuf {
@@ -74,7 +74,7 @@ fn an_empty_stub_is_refused_at_open() {
     let path = tmp("empty-stub");
     assert!(matches!(
         ChainStore::with_apply_policy(&path, ApplyPolicy::StubbedFamilies(FamilySet::EMPTY)),
-        Err(StoreError::EmptyApplyStub)
+        Err(StoreError::Cannot(StoreCannot::EmptyApplyStub))
     ));
     assert!(!path.exists(), "a refused policy must not create the store");
 }
@@ -156,7 +156,9 @@ fn a_store_failure_converts_into_the_callers_error_type() {
     let ro = ChainStore::open_read_only(&path).expect("ro");
     assert_eq!(
         ro.write(|_| Ok::<(), TestErr>(())),
-        Err(TestErr::Store(StoreError::ReadOnly.to_string()))
+        Err(TestErr::Store(
+            StoreError::Cannot(StoreCannot::ReadOnly).to_string()
+        ))
     );
     cleanup(&path);
 }
@@ -169,7 +171,7 @@ fn a_second_live_batch_is_a_typed_error_not_a_deadlock() {
         .write(|_| -> Result<(), StoreError> {
             assert!(matches!(
                 store.write(|_| Ok::<(), StoreError>(())),
-                Err(StoreError::WriteInProgress)
+                Err(StoreError::Cannot(StoreCannot::WriteInProgress))
             ));
             Ok(())
         })
@@ -218,7 +220,7 @@ fn a_second_batch_from_another_thread_is_refused_not_queued() {
                 let store = std::sync::Arc::clone(&store);
                 std::thread::spawn(move || {
                     let verdict = match store.write(|_| Ok::<(), StoreError>(())) {
-                        Err(StoreError::WriteInProgress) => Ok(()),
+                        Err(StoreError::Cannot(StoreCannot::WriteInProgress)) => Ok(()),
                         Err(e) => Err(format!("wrong error: {e}")),
                         Ok(()) => Err("second batch was GRANTED while one was live".to_owned()),
                     };
@@ -261,7 +263,9 @@ fn a_stubbed_family_cannot_open_its_table_on_a_write() {
         .write(|batch| -> Result<(), StoreError> {
             assert!(matches!(
                 batch.open_table(crate::schema::ARCHIVAL_SLASH_LOG),
-                Err(StoreError::FamilyStubbed(ArchivalFamily::SlashLog))
+                Err(StoreError::Cannot(StoreCannot::FamilyStubbed(
+                    ArchivalFamily::SlashLog
+                )))
             ));
             probe_row(batch, "k", 1).expect("non-archival still opens");
             Ok(())
@@ -282,14 +286,14 @@ fn the_properties_table_has_no_raw_write_handle() {
         store.write(|batch| {
             assert!(matches!(
                 batch.open_table(crate::schema::PROPERTIES),
-                Err(StoreError::PropertiesAreTyped)
+                Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
             ));
             // Nor by redefining it under another type: the refusal is by name.
             const IMPOSTOR: redb::MultimapTableDefinition<&str, &[u8]> =
                 redb::MultimapTableDefinition::new("properties");
             assert!(matches!(
                 batch.open_multimap_table(IMPOSTOR),
-                Err(StoreError::PropertiesAreTyped)
+                Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
             ));
             abort::<()>(batch)
         }),
@@ -314,7 +318,7 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
     assert!(store.is_read_only());
     assert!(matches!(
         store.write(|_| Ok::<(), StoreError>(())),
-        Err(StoreError::ReadOnly)
+        Err(StoreError::Cannot(StoreCannot::ReadOnly))
     ));
     store.begin_read().expect("read on a read-only store");
     cleanup(&path);
@@ -337,7 +341,9 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
 fn is_already_open(result: &Result<ChainStore, StoreError>) -> bool {
     matches!(
         result,
-        Err(StoreError::Open(redb::DatabaseError::DatabaseAlreadyOpen))
+        Err(StoreError::Engine(EngineError::Open(
+            redb::DatabaseError::DatabaseAlreadyOpen
+        )))
     )
 }
 
@@ -395,7 +401,7 @@ fn open_read_only_refuses_a_store_that_does_not_exist() {
     drop(std::fs::remove_file(&path));
     assert!(matches!(
         ChainStore::open_read_only(&path),
-        Err(StoreError::Open(_))
+        Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert!(!path.exists(), "a read-only open must not create the store");
 }
@@ -412,7 +418,7 @@ fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
     std::fs::write(&path, b"").expect("empty file");
     assert!(matches!(
         ChainStore::with_apply_policy(&path, ApplyPolicy::Full),
-        Err(StoreError::Open(_))
+        Err(StoreError::Engine(EngineError::Open(_)))
     ));
     assert_eq!(
         std::fs::metadata(&path).expect("still present").len(),

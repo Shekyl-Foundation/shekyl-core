@@ -29,7 +29,7 @@ use crate::codec::{ApplyPolicyCell, Canonical, PropertyCell, SchemaVersionCell, 
 use crate::provenance::Provenance;
 use crate::schema::PROPERTIES;
 
-use super::error::{CellFault, StoreError};
+use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 
 /// Write both header cells into a fresh store.
 ///
@@ -47,22 +47,25 @@ pub(super) fn seal(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Proven
 ///
 /// # Errors
 ///
-/// [`StoreError::SchemaVersionAbsent`] if there is no `properties` table
-/// or no `schema_version` cell; [`StoreError::SchemaVersionMismatch`] if
-/// the version is not [`SCHEMA_VERSION`]; [`StoreError::CellCorrupt`] if
+/// [`StoreCannot::SchemaVersionAbsent`] if there is no `properties` table
+/// or no `schema_version` cell; [`StoreCannot::SchemaVersionMismatch`] if
+/// the version is not [`SCHEMA_VERSION`]; [`StoreInvariant::CellCorrupt`] if
 /// a header cell is present but malformed, or `apply_policy` is missing.
 pub(super) fn verify(txn: &ReadTransaction) -> Result<Provenance, StoreError> {
     let table = match txn.open_table(PROPERTIES) {
         Ok(table) => table,
-        Err(redb::TableError::TableDoesNotExist(_)) => return Err(StoreError::SchemaVersionAbsent),
-        Err(e) => return Err(StoreError::Table(e)),
+        Err(redb::TableError::TableDoesNotExist(_)) => {
+            return Err(StoreCannot::SchemaVersionAbsent.into())
+        }
+        Err(e) => return Err(EngineError::Table(e).into()),
     };
-    let found = get::<SchemaVersionCell>(&table)?.ok_or(StoreError::SchemaVersionAbsent)?;
+    let found = get::<SchemaVersionCell>(&table)?.ok_or(StoreCannot::SchemaVersionAbsent)?;
     if found != SCHEMA_VERSION {
-        return Err(StoreError::SchemaVersionMismatch {
+        return Err(StoreCannot::SchemaVersionMismatch {
             found,
             expected: SCHEMA_VERSION,
-        });
+        }
+        .into());
     }
     let stubbed = get::<ApplyPolicyCell>(&table)?.ok_or(absent::<ApplyPolicyCell>())?;
     Ok(Provenance::of(stubbed))
@@ -75,7 +78,7 @@ pub(super) fn verify(txn: &ReadTransaction) -> Result<Provenance, StoreError> {
 /// does. A `Full` policy is a no-op that still reads the cell.
 pub(super) fn widen(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
     let current = {
-        let table = txn.open_table(PROPERTIES).map_err(StoreError::Table)?;
+        let table = txn.open_table(PROPERTIES).map_err(EngineError::Table)?;
         get::<ApplyPolicyCell>(&table)?.ok_or(absent::<ApplyPolicyCell>())?
     };
     let after = Provenance::of(current).widened_by(policy);
@@ -87,20 +90,21 @@ pub(super) fn widen(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Prove
 
 /// Read cell `C` from an open `properties` table.
 ///
-/// `Ok(None)` if absent; [`StoreError::CellCorrupt`] if present but not an
+/// `Ok(None)` if absent; [`StoreInvariant::CellCorrupt`] if present but not an
 /// encoding of `C::Value`.
 pub(super) fn get<C: PropertyCell>(
     table: &impl ReadableTable<&'static str, &'static [u8]>,
 ) -> Result<Option<C::Value>, StoreError> {
-    let Some(guard) = table.get(C::KEY).map_err(StoreError::Storage)? else {
+    let Some(guard) = table.get(C::KEY).map_err(EngineError::Storage)? else {
         return Ok(None);
     };
-    C::Value::decode(guard.value())
-        .map(Some)
-        .map_err(|cause| StoreError::CellCorrupt {
+    C::Value::decode(guard.value()).map(Some).map_err(|cause| {
+        StoreInvariant::CellCorrupt {
             key: C::KEY,
             fault: CellFault::Undecodable(cause),
-        })
+        }
+        .into()
+    })
 }
 
 /// Write cell `C` in `txn`. Opens (creating if needed) the `properties`
@@ -109,16 +113,17 @@ pub(super) fn put<C: PropertyCell>(
     txn: &WriteTransaction,
     value: &C::Value,
 ) -> Result<(), StoreError> {
-    let mut table = txn.open_table(PROPERTIES).map_err(StoreError::Table)?;
+    let mut table = txn.open_table(PROPERTIES).map_err(EngineError::Table)?;
     table
         .insert(C::KEY, value.encode().as_slice())
         .map(drop)
-        .map_err(StoreError::Storage)
+        .map_err(|e| EngineError::Storage(e).into())
 }
 
 fn absent<C: PropertyCell>() -> StoreError {
-    StoreError::CellCorrupt {
+    StoreInvariant::CellCorrupt {
         key: C::KEY,
         fault: CellFault::Absent,
     }
+    .into()
 }

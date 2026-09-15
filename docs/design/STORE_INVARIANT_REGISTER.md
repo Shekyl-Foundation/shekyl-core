@@ -48,28 +48,31 @@ question the row came from.
 | SI-4 | The curve-tree root at height *h*+1 is written exactly once per connect (declared `insert`) and is the root the consensus transition handed `connect` | curve-tree roots | CEN-B5 reads it | C2-R8 Q4 (ruled `insert`); CEN-L14 curve-root heights (R8b-7 confirms; a rewrite case reopens this row under the ruling's §13, it does not silently override) | ruled | |
 | SI-5 | After a pop trims the tree to height *h*, the tree's root equals the recorded root at *h* | curve tree | CEN-B5 (the recorded root is the oracle) | C2-R8 Q5; CEN-L13 trim bounds | ruled | |
 | SI-6 | The undo log's top entry is the tip height; a pop consumes exactly that entry | undo log | — | C2-R8 Q5; CEN-L13 journal-vs-tip belts | ruled | |
-| SI-7 | Every cell read decodes under its canonical codec; an undecodable or missing sealed cell is fatal | all typed cells | — | CEN-L13 serve-credit re-parse; live today for `properties` cells as `StoreError::CellCorrupt` (PR #749), re-homed under the enum at increment 2.5 | ruled | |
+| SI-7 | Every cell read decodes under its canonical codec; an undecodable or missing sealed cell is fatal | all typed cells | — | CEN-L13 serve-credit re-parse; enforced for `properties` cells since PR #749 (as a flat `StoreError::CellCorrupt`), re-homed under the enum at increment 2.5 | built | `StoreInvariant::CellCorrupt` |
 | SI-8 | Accumulator arithmetic never wraps: every fold uses checked arithmetic and an overflow is fatal, never a saturate or a mint | accumulator cells | — | CEN-L13 bond-counter overflow | ruled | |
 
 Rows are **appended**, never renumbered. A row whose table is deleted is
 marked `retired` in its `Status` cell in the deleting PR with the PR number —
 not removed — so the id is not silently re-minted (rule 23).
 
-## 3. `StoreError` classed at the pin
+## 3. `StoreError` is classed structurally
 
-Until `StoreError::class()` lands (DRS-E1 increment 2.5), this table is the
-taxonomy's code-facing form. `Engine` = the redb layer failed and the
-operation did not happen; `Cannot` = a refusal before the write (not a
-verdict, not incoherence; retryability is per variant — `WriteInProgress`
-is a contract violation and **must not** be retried, per its doc comment);
-`Invariant` = an `SI-` row broke.
+Since DRS-E1 increment 2.5 the class is the **outer variant** of
+`StoreError` (`rust/shekyl-chain-store/src/store/error.rs`), and
+`StoreError::class()` is a projection of it, not a judgement made beside it:
 
-| Variant | Class | Note |
-| --- | --- | --- |
-| `Open`, `BeginWrite`, `BeginRead`, `Durability`, `Commit`, `Abort`, `Table`, `Storage` | Engine | |
-| `SchemaVersionAbsent`, `SchemaVersionMismatch` | Cannot | an incompatible file is not an incoherent one; rebuild |
-| `CellCorrupt` | **Invariant** | SI-7 |
-| `PropertiesAreTyped`, `ReadOnly`, `WriteInProgress`, `EmptyApplyStub`, `FamilyStubbed` | Cannot | |
+| `StoreError` arm | `class()` | Payload | Meaning |
+| --- | --- | --- | --- |
+| `Engine(EngineError)` | `Engine` | `Open`, `BeginWrite`, `BeginRead`, `Durability`, `Commit`, `Table`, `Storage` | the redb layer failed and the operation did not happen |
+| `Cannot(StoreCannot)` | `Cannot` | `SchemaVersionAbsent`, `SchemaVersionMismatch`, `PropertiesAreTyped`, `ReadOnly`, `WriteInProgress`, `EmptyApplyStub`, `FamilyStubbed` | a refusal before the write: not a verdict, not incoherence. An incompatible file is not an incoherent one — rebuild. Retryability is per variant; `WriteInProgress` is a contract violation and **must not** be retried, per its doc comment |
+| `InvariantViolated(StoreInvariant)` | `Invariant` | one variant per `built` row of §2 (the gate in §4 holds the bijection) | an `SI-` row broke; fatal |
+
+The payload columns above are a **reading** of the three enums, not a second
+source: where they and the code disagree, the code is right and this table is
+stale. Before 2.5 the taxonomy was a table here classing a flat enum (which
+also carried an `Abort` arm — deleted with the closure-commit API, an abort is
+a drop). The wrapper is transparent: `Display` and `source()` pass through to
+the inner type, so a class adds no line to an error chain.
 
 No variant is a consensus verdict, and none ever will be: the crate does not
 name `InvalidBlock` (ban clause 2).

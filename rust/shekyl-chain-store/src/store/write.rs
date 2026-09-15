@@ -43,7 +43,7 @@ use crate::codec::{ChainState, PropertyCell};
 use crate::provenance::Provenance;
 use crate::schema::PROPERTIES;
 
-use super::error::StoreError;
+use super::error::{EngineError, StoreCannot, StoreError};
 use super::header;
 use super::shared::Shared;
 
@@ -99,11 +99,11 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// The two by-name refusals every raw table open passes through.
     fn admit(&self, name: &str) -> Result<(), StoreError> {
         if name == PROPERTIES.name() {
-            return Err(StoreError::PropertiesAreTyped);
+            return Err(StoreCannot::PropertiesAreTyped.into());
         }
         if let Some(family) = ArchivalFamily::from_table(name) {
             if !self.apply_policy.applies(family) {
-                return Err(StoreError::FamilyStubbed(family));
+                return Err(StoreCannot::FamilyStubbed(family).into());
             }
         }
         Ok(())
@@ -119,9 +119,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::FamilyStubbed`] if this table is an archival family
-    /// the policy skips; [`StoreError::PropertiesAreTyped`] for
-    /// `properties`; [`StoreError::Table`] if the engine refuses.
+    /// [`StoreCannot::FamilyStubbed`] if this table is an archival family
+    /// the policy skips; [`StoreCannot::PropertiesAreTyped`] for
+    /// `properties`; [`EngineError::Table`] if the engine refuses.
     pub fn open_table<'txn, K, V>(
         &'txn self,
         definition: TableDefinition<'_, K, V>,
@@ -131,7 +131,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         V: Value + 'static,
     {
         self.admit(definition.name())?;
-        self.txn().open_table(definition).map_err(StoreError::Table)
+        self.txn()
+            .open_table(definition)
+            .map_err(|e| EngineError::Table(e).into())
     }
 
     /// Open a multimap table for writing. Same refusals as
@@ -139,8 +141,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::FamilyStubbed`], [`StoreError::PropertiesAreTyped`]
-    /// or [`StoreError::Table`].
+    /// [`StoreCannot::FamilyStubbed`], [`StoreCannot::PropertiesAreTyped`]
+    /// or [`EngineError::Table`].
     pub fn open_multimap_table<'txn, K, V>(
         &'txn self,
         definition: MultimapTableDefinition<'_, K, V>,
@@ -152,7 +154,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         self.admit(definition.name())?;
         self.txn()
             .open_multimap_table(definition)
-            .map_err(StoreError::Table)
+            .map_err(|e| EngineError::Table(e).into())
     }
 
     /// Read a typed `properties` cell, seeing this batch's own writes.
@@ -162,14 +164,14 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::CellCorrupt`] if the cell is present but is not an
-    /// encoding of `C::Value`; [`StoreError::Table`] / [`StoreError::Storage`]
+    /// [`StoreInvariant::CellCorrupt`](super::StoreInvariant::CellCorrupt) if the cell is present but is not an
+    /// encoding of `C::Value`; [`EngineError::Table`] / [`EngineError::Storage`]
     /// if the engine refuses. Absent is `Ok(None)`.
     pub fn get_property<C: PropertyCell>(&self) -> Result<Option<C::Value>, StoreError> {
         let table = self
             .txn()
             .open_table(PROPERTIES)
-            .map_err(StoreError::Table)?;
+            .map_err(EngineError::Table)?;
         header::get::<C>(&table)
     }
 
@@ -200,7 +202,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Table`] / [`StoreError::Storage`] if the engine refuses.
+    /// [`EngineError::Table`] / [`EngineError::Storage`] if the engine refuses.
     pub fn put_property<C>(&self, value: &C::Value) -> Result<(), StoreError>
     where
         C: PropertyCell<Scope = ChainState>,
@@ -218,8 +220,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Commit`] if the engine could not commit;
-    /// [`StoreError::CellCorrupt`] / [`StoreError::Storage`] if the
+    /// [`EngineError::Commit`] if the engine could not commit;
+    /// [`StoreInvariant::CellCorrupt`](super::StoreInvariant::CellCorrupt) / [`EngineError::Storage`] if the
     /// provenance cell could not be read back or widened (the batch is
     /// aborted, nothing lands). The transaction is consumed either way —
     /// DRS-W2's swallowed-`batch_stop` failure made unrepresentable.
@@ -235,7 +237,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         // other — and a failed commit publishes nothing, so the mirror
         // cannot over-taint either.
         self.shared
-            .publish(provenance, || txn.commit().map_err(StoreError::Commit))?;
+            .publish(provenance, || txn.commit().map_err(EngineError::Commit))?;
         Ok(provenance)
     }
 }
