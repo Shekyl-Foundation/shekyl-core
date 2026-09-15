@@ -11,7 +11,7 @@
 | Spec authority | [`docs/design/RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §5 (FFI surface), §6 (no-prewarm), §13 (non-goals), §16 (genesis seedhash), §17 (error taxonomy). This doc **cites**; it does not re-derive. |
 | Sibling plans | [`RANDOMX_V2_PHASE2C_PLAN.md`](../completed/RANDOMX_V2_PHASE2C_PLAN.md) §5.11.6 (typed-array-pointer FFI), §5.11.7 (sticky-eviction DoS), §14 Round 5 (C-header form); [`RANDOMX_V2_PHASE2G_PLAN.md`](../completed/RANDOMX_V2_PHASE2G_PLAN.md) (differential harness — light-vs-light only). |
 | Base commit | `e63701676` (`dev` tip at survey time; all line numbers in §2 are against this commit). |
-| Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1) — the library miners run; the byte-for-byte parity target for the Hole-1 gate (§7). `external/randomx` (v1, `102f8acf`) is the **outgoing** consensus path. |
+| Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1) — the library miners run; the byte-for-byte parity target for the Hole-1 gate (§7). `external/randomx` (v1) was the **outgoing** consensus path at this plan's pin; 3c deleted the configured v1 C path. |
 | Working branch | `feat/randomx-v2-genesis-cutover` (off `dev`). |
 | Scope | Consensus PoW cutover only: v1-C → v2-Rust for verification, CryptoNight removed from the consensus path, genesis flipped to RandomX v2. See §1. |
 | Out of scope (deferred, with reversion clauses) | (a) RPC-payment subsystem deletion — **landed** (see 2026-06-22 box). (b) `rx-slow-hash.c` **deleted in PR #235** (2026-07, with the whole v1 machinery); `slow-hash.c` physical deletion remains (CN-KDF `generate_chacha_key*` only; **not** blocked on `wallet2.cpp` — wallet2 is gone; Argon2id already owns the wallet envelope). (c) `IPowSchema` / `pow_registry` abstraction deletion + `RX_BLOCK_VERSION` `#define` deletion — Phase 4, available now. (d) `shekyl_pow_randomx_v2_seedheight` FFI export — the §5 reopening criterion **fired and closed in PR #235** (the export + `…_next_seedheight` landed with the Rust seed-epoch port; the C++ schedule half was deleted). (e) Worst-case per-hash latency gate — **discharged by the test-regime hardening runtime-mode change** (2026-07): T6 adversarial-ratio (≤5.0× − noise-margin per-recipe, in-mode hard gate) runs weekly in `randomx-v2-adversarial-ratio.yml`, and the T5 ≤3.0× median-latency gate runs on the daily cron in `randomx-v2-differential.yml`. |
@@ -64,28 +64,21 @@ CryptoNight from the consensus path:
 Each deferral carries an explicit reopening criterion per
 [`21-reversion-clause-discipline.mdc`](../../.cursor/rules/21-reversion-clause-discipline.mdc).
 
-1. **RPC-payment subsystem deletion.** `wallet_rpc_payments.cpp`,
-   `rpc_payment.{cpp,h}` and their RPC registrations are dead
-   Monero-legacy awaiting deletion (spec §15 "RPC Payments
-   Disposition — Delete"). They are the **only** remaining
-   non-consensus callers of `crypto::rx_slow_hash`
-   (`wallet_rpc_payments.cpp:158`, `rpc_payment.cpp:240`) and of the
-   `RX_BLOCK_VERSION` `#define` (`wallet_rpc_payments.cpp:156`,
-   `rpc_payment.cpp:237`). **No forcing function** drags them into
-   the cutover: 3b leaves the `#define` and the C `rx_slow_hash`
-   alive (both already staying until 3c), so this dead code compiles
-   untouched. Disposition: leave untouched; record a FOLLOWUPS
-   deletion item (target V3.0 pre-genesis). *Reopen criterion:* the
-   dedicated RPC-payment deletion PR (or Phase 4) lands; deleting it
-   unblocks the `RX_BLOCK_VERSION` `#define` deletion and narrows the
-   3c `rx-slow-hash.c` deletion.
+1. **RPC-payment subsystem deletion — LANDED** (wallet2 cutover). The
+   files named below are **records-was**; they are not in this tree.
+   They were the only remaining non-consensus callers of
+   `crypto::rx_slow_hash` and of the `RX_BLOCK_VERSION` `#define`.
+   Deleting them unblocked the `#define` deletion (Phase 4) and
+   narrowed the 3c `rx-slow-hash.c` deletion (already gone in PR #235).
 2. **`rx-slow-hash.c` / `slow-hash.c` physical deletion (Phase 3c / Track D).**
-   `rx-slow-hash.c` **deleted in PR #235**. `slow-hash.c`'s `cn_slow_hash`
-   is reached from `account.cpp`'s out-of-line encrypt family via
-   `generate_chacha_key*` (not from `wallet2.cpp` — wallet2 is gone).
-   Unconditional deletion available now. Keep `chacha.h` xchacha20 /
-   `chacha_key` / `chacha_iv`. *Reopen criterion for the header itself:*
-   none — the CN-KDF helpers go; the stream-cipher surface stays.
+   `rx-slow-hash.c` **deleted in PR #235**. Remaining `cn_slow_hash`
+   callers (not exhaustive via `account.cpp` alone): `account.cpp`'s
+   out-of-line encrypt family via `generate_chacha_key*`, **and**
+   `src/cryptonote_basic/cryptonote_format_utils.cpp` `encrypt_key` /
+   `decrypt_key` (compiled, not a comment). Unconditional deletion
+   available now. Keep `chacha.h` xchacha20 / `chacha_key` / `chacha_iv`.
+   *Reopen criterion for the header itself:* none — the CN-KDF helpers
+   go; the stream-cipher surface stays.
 3. **`IPowSchema` / `pow_registry` abstraction + `RX_BLOCK_VERSION`
    `#define` deletion (Phase 4).** 3b collapses the *dispatch* to
    RandomX-only and deletes the CryptoNight *implementation*
@@ -93,15 +86,15 @@ Each deferral carries an explicit reopening criterion per
    the `#define`. Full abstraction deletion is the parent plan's
    Phase 4 (its own design/review). *Reopen criterion:* Phase 4
    opens.
-4. **`shekyl_pow_randomx_v2_seedheight` FFI export.** Discretionary
-   per spec §5 ("only if the caller survey proves the call cannot be
-   eliminated or moved to a Rust caller cleanly"). The survey (§5)
-   finds the C `rx_seedheight` serves every site and stays until 3c.
-   *Reopen criterion:* 3c deletes `rx-slow-hash.c`; the seedheight
-   export then lands per spec §16's formula + spec-vector test.
-5. **Worst-case (≤5.0×) per-hash latency gate.** Post-2g adversarial
-   corpus round per parent §6 line 241. 3a still activates the
-   per-PR **average** (≤3.0×) gate per parent §6 line 246.
+4. **`shekyl_pow_randomx_v2_seedheight` FFI export — LANDED in PR #235.**
+   The export + `…_next_seedheight` landed with the Rust seed-epoch
+   port; the C++ schedule half was deleted with `rx-slow-hash.c`.
+5. **Worst-case (≤5.0×) per-hash latency gate — discharged** by the
+   test-regime hardening runtime-mode change (2026-07): T6
+   adversarial-ratio (≤5.0× − noise-margin per-recipe, in-mode hard
+   gate) runs weekly in `randomx-v2-adversarial-ratio.yml`, and the
+   T5 ≤3.0× median-latency gate runs on the daily cron in
+   `randomx-v2-differential.yml`.
 
 ### 1.3 Why `07-consensus-atomic-cutovers` does not bind
 
