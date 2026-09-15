@@ -33,46 +33,6 @@
 #include "cryptonote_basic/account.h"
 #include "shekyl/shekyl_ffi.h"
 
-TEST(account, encrypt_keys)
-{
-  cryptonote::keypair recovery_key = cryptonote::keypair::generate(hw::get_device("default"));
-  cryptonote::account_base account;
-  crypto::secret_key key = account.generate(
-      recovery_key.sec, /*recover=*/false, /*two_random=*/false, cryptonote::FAKECHAIN);
-  const cryptonote::account_keys keys = account.get_keys();
-
-  ASSERT_EQ(account.get_keys().m_account_address, keys.m_account_address);
-  ASSERT_EQ(account.get_keys().m_spend_secret_key, keys.m_spend_secret_key);
-  ASSERT_EQ(account.get_keys().m_view_secret_key, keys.m_view_secret_key);
-
-  crypto::chacha_key chacha_key;
-  crypto::generate_chacha_key(&recovery_key, sizeof(recovery_key), chacha_key, 1);
-
-  account.encrypt_keys(chacha_key);
-
-  ASSERT_EQ(account.get_keys().m_account_address, keys.m_account_address);
-  ASSERT_NE(account.get_keys().m_spend_secret_key, keys.m_spend_secret_key);
-  ASSERT_NE(account.get_keys().m_view_secret_key, keys.m_view_secret_key);
-
-  account.decrypt_viewkey(chacha_key);
-
-  ASSERT_EQ(account.get_keys().m_account_address, keys.m_account_address);
-  ASSERT_NE(account.get_keys().m_spend_secret_key, keys.m_spend_secret_key);
-  ASSERT_EQ(account.get_keys().m_view_secret_key, keys.m_view_secret_key);
-
-  account.encrypt_viewkey(chacha_key);
-
-  ASSERT_EQ(account.get_keys().m_account_address, keys.m_account_address);
-  ASSERT_NE(account.get_keys().m_spend_secret_key, keys.m_spend_secret_key);
-  ASSERT_NE(account.get_keys().m_view_secret_key, keys.m_view_secret_key);
-
-  account.decrypt_keys(chacha_key);
-
-  ASSERT_EQ(account.get_keys().m_account_address, keys.m_account_address);
-  ASSERT_EQ(account.get_keys().m_spend_secret_key, keys.m_spend_secret_key);
-  ASSERT_EQ(account.get_keys().m_view_secret_key, keys.m_view_secret_key);
-}
-
 // The legacy `generate_pqc_for_restored_address` helper has been removed
 // because it produced non-reproducible ML-KEM decap keys. Its replacement is
 // the raw-seed / BIP-39 restore path, which runs the whole derivation through

@@ -32,7 +32,6 @@ set(performance_tests_sources
 set(performance_tests_headers
   check_tx_signature.h
   check_hash.h
-  cn_slow_hash.h
   construct_tx.h
   ge_frombytes_vartime.h
   generate_key_derivation.h

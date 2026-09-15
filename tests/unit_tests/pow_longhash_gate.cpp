@@ -8,9 +8,9 @@
 // The 0xff sentinel is a belt, not the gate — at difficulty 1 every hash
 // passes check_hash, so the verifier's returned bool is the gate. These tests
 // pin the verdict contracts at the seams take-able in a unit test:
-//   - get_block_longhash (bool overload): false + belt on schema failure;
+//   - get_block_longhash (bool overload): false + belt on hash failure;
 //   - get_altblock_longhash: same contract, now routed through the one
-//     IPowSchema dispatch point;
+//     hash_pow_randomx dispatch point;
 //   - block_longhash_worker: an uncomputed hash never enters the precompute
 //     table (a table hit is trusted by the consumer without re-checking).
 //
@@ -18,7 +18,7 @@
 // precompute worker here, and the two validation sites by the core-test
 // regressions gen_block_pow_verifier_failure_{main,alt}
 // (tests/core_tests/block_validation.cpp), which submit a fully valid block
-// under a failing schema at difficulty 1 and assert it is rejected as
+// under a failing hash at difficulty 1 and assert it is rejected as
 // unproven. Reverting either consumer to ignore the bool turns those red.
 
 #define IN_UNIT_TESTS
@@ -29,8 +29,7 @@
 #include <unordered_map>
 
 #include "blockchain_db/testdb.h"
-#include "crypto/pow_registry.h"
-#include "crypto/pow_schema.h"
+#include "crypto/pow_randomx.h"
 #include "cryptonote_basic/cryptonote_basic.h"
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_core/blockchain.h"
@@ -45,38 +44,26 @@ using namespace cryptonote;
 namespace
 {
 
-class FailingPowSchema final : public IPowSchema
+bool failing_pow_hash(const void*, size_t, const crypto::hash*, crypto::hash&)
 {
-public:
-  bool hash(const void*, size_t, uint64_t, const crypto::hash*, unsigned,
-    crypto::hash&) const override
-  {
-    return false; // the verifier-failure arm under test
-  }
-  const char* name() const override { return "FailingTestSchema"; }
-};
+  return false; // the verifier-failure arm under test
+}
 
-// Control schema: proves the override seam engages (a test must be able to
+// Control hash: proves the override seam engages (a test must be able to
 // observe its own setup) and pins the success path through the same seams.
-class ConstPowSchema final : public IPowSchema
+bool const_pow_hash(const void*, size_t, const crypto::hash*, crypto::hash& out)
 {
-public:
-  bool hash(const void*, size_t, uint64_t, const crypto::hash*, unsigned,
-    crypto::hash& out) const override
-  {
-    memset(out.data, 0x42, sizeof(out.data));
-    return true;
-  }
-  const char* name() const override { return "ConstTestSchema"; }
-};
+  memset(out.data, 0x42, sizeof(out.data));
+  return true;
+}
 
-struct SchemaOverrideGuard
+struct HashOverrideGuard
 {
-  explicit SchemaOverrideGuard(const IPowSchema* s)
+  explicit HashOverrideGuard(pow_hash_fn fn)
   {
-    set_pow_schema_override_for_tests(s);
+    set_pow_hash_override_for_tests(fn);
   }
-  ~SchemaOverrideGuard() { set_pow_schema_override_for_tests(nullptr); }
+  ~HashOverrideGuard() { set_pow_hash_override_for_tests(nullptr); }
 };
 
 class PowGateTestDB : public BaseTestDB
@@ -129,8 +116,7 @@ bool is_belt_sentinel(const crypto::hash& h)
 
 TEST(pow_longhash_gate, bool_overload_reports_failure_and_seeds_belt)
 {
-  FailingPowSchema failing;
-  SchemaOverrideGuard guard(&failing);
+  HashOverrideGuard guard(failing_pow_hash);
 
   block blk{};
   blk.major_version = 1;
@@ -143,8 +129,7 @@ TEST(pow_longhash_gate, bool_overload_reports_failure_and_seeds_belt)
 
 TEST(pow_longhash_gate, altblock_longhash_reports_failure_and_seeds_belt)
 {
-  FailingPowSchema failing;
-  SchemaOverrideGuard guard(&failing);
+  HashOverrideGuard guard(failing_pow_hash);
 
   block blk{};
   blk.major_version = 1;
@@ -158,8 +143,7 @@ TEST(pow_longhash_gate, altblock_longhash_reports_failure_and_seeds_belt)
 
 TEST(pow_longhash_gate, seam_engages_and_success_path_passes_through)
 {
-  ConstPowSchema constant;
-  SchemaOverrideGuard guard(&constant);
+  HashOverrideGuard guard(const_pow_hash);
 
   block blk{};
   blk.major_version = 1;
@@ -181,8 +165,7 @@ TEST(pow_longhash_gate, seam_engages_and_success_path_passes_through)
 // uncomputed hash entering it would resurrect the fail-open one layer up.
 TEST(pow_longhash_gate, worker_never_caches_uncomputed_hash)
 {
-  FailingPowSchema failing;
-  SchemaOverrideGuard guard(&failing);
+  HashOverrideGuard guard(failing_pow_hash);
 
   PowGateTestDB* db = new PowGateTestDB();
   BlockchainAndPool bap;
@@ -198,8 +181,7 @@ TEST(pow_longhash_gate, worker_never_caches_uncomputed_hash)
 
 TEST(pow_longhash_gate, worker_caches_computed_hash)
 {
-  ConstPowSchema constant;
-  SchemaOverrideGuard guard(&constant);
+  HashOverrideGuard guard(const_pow_hash);
 
   PowGateTestDB* db = new PowGateTestDB();
   BlockchainAndPool bap;

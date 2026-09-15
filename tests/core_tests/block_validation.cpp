@@ -32,8 +32,7 @@
 #include "block_validation.h"
 
 using namespace epee;
-#include "crypto/pow_registry.h"
-#include "crypto/pow_schema.h"
+#include "crypto/pow_randomx.h"
 
 using namespace cryptonote;
 
@@ -728,20 +727,12 @@ namespace
 {
 // Twin of the unit-test double in pow_longhash_gate.cpp -- deliberately
 // duplicated rather than shared: it is five lines of test scaffolding in a
-// different binary, and any IPowSchema change breaks both loudly at compile
+// different binary, and any pow_hash_fn change breaks both loudly at compile
 // time, so there is nothing here that can silently drift.
-class FailingPowSchema final : public IPowSchema
+bool failing_pow_hash(const void*, size_t, const crypto::hash*, crypto::hash&)
 {
-public:
-  bool hash(const void*, size_t, uint64_t, const crypto::hash*, unsigned,
-    crypto::hash&) const override
-  {
-    return false;
-  }
-  const char* name() const override { return "FailingCoreTestSchema"; }
-};
-
-const FailingPowSchema g_failing_pow_schema{};
+  return false;
+}
 } // namespace
 
 gen_block_pow_verifier_failure_base::gen_block_pow_verifier_failure_base(
@@ -759,14 +750,14 @@ gen_block_pow_verifier_failure_base::~gen_block_pow_verifier_failure_base()
 {
   // Belt: an assertion failure between install and check must not leave the
   // override installed for whatever test runs next in this binary.
-  set_pow_schema_override_for_tests(nullptr);
+  set_pow_hash_override_for_tests(nullptr);
 }
 
 bool gen_block_pow_verifier_failure_base::install_failing_pow_schema(
   cryptonote::core& /*c*/, size_t /*ev_index*/,
   const std::vector<test_event_entry>& /*events*/)
 {
-  set_pow_schema_override_for_tests(&g_failing_pow_schema);
+  set_pow_hash_override_for_tests(failing_pow_hash);
   return true;
 }
 
@@ -775,7 +766,7 @@ bool gen_block_pow_verifier_failure_base::check_rejected_unproven(
   const std::vector<test_event_entry>& /*events*/)
 {
   DEFINE_TESTS_ERROR_CONTEXT("gen_block_pow_verifier_failure_base::check_rejected_unproven");
-  set_pow_schema_override_for_tests(nullptr);
+  set_pow_hash_override_for_tests(nullptr);
 
   // The bvc assertions only run if the candidate actually reached them; a
   // harness change that stopped submitting it would otherwise pass here

@@ -7,7 +7,7 @@
 # Binary-level symbol-isolation gate on the linked `shekyld` daemon.
 # Usage: check_randomx_symbol_isolation.sh <path-to-shekyld>
 #
-# Four checks, each anchored to a behavior that must not change
+# Five checks, each anchored to a behavior that must not change
 # silently (no filesystem/convention checks — every check reads the
 # actual linked binary):
 #
@@ -35,8 +35,11 @@
 #      Rust-mangled internals are visible in a verifier-linked static
 #      daemon. Empirically verified against a Release build at the
 #      wiring PR (9 matches).
+#   5. `cn_slow_hash` (and its allocate/free_state siblings) is absent.
+#      Phase 4 deleted CryptoNight from the daemon; a reappearance means
+#      slow-hash.c was re-linked.
 #
-# Checks 3 and 4 make 1 and 2 falsifiable: a stripped binary or a
+# Checks 3 and 4 make 1, 2, and 5 falsifiable: a stripped binary or a
 # wrong path cannot pass all four.
 
 set -euo pipefail
@@ -117,6 +120,18 @@ else
   echo "FAIL: no aes-crate symbols found; the verifier's AES layer is" >&2
   echo "  expected to be visible in a static verifier-linked daemon." >&2
   fail=1
+fi
+
+# --- Check 5: CryptoNight slow-hash must not be linked into the daemon ---
+# Phase 4 deleted cn_slow_hash (wallet2/RPC-payment callers are gone). A
+# daemon that still exports the C ABI would mean the object file was
+# re-linked. Presence of any of the three C symbols is the fail.
+if matches="$(printf '%s\n' "$SYMS" | grep -E '[[:space:]](cn_slow_hash|cn_slow_hash_allocate_state|cn_slow_hash_free_state)$')"; then
+  echo "FAIL: CryptoNight slow-hash symbol present in daemon:" >&2
+  printf '%s\n' "$matches" >&2
+  fail=1
+else
+  echo "OK: no cn_slow_hash family in daemon"
 fi
 
 exit "$fail"

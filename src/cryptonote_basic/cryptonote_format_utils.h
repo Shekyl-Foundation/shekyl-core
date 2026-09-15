@@ -277,8 +277,6 @@ namespace cryptonote
   bool is_valid_decomposed_amount(uint64_t amount);
   void get_hash_stats(uint64_t &tx_hashes_calculated, uint64_t &tx_hashes_cached, uint64_t &block_hashes_calculated, uint64_t & block_hashes_cached);
 
-  crypto::secret_key encrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase);
-  crypto::secret_key decrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase);
 #define CHECKED_GET_SPECIFIC_VARIANT(variant_var, specific_type, variable_name, fail_return_val) \
   CHECK_AND_ASSERT_MES(std::holds_alternative<std::remove_const_t<specific_type>>(variant_var), fail_return_val, "wrong variant type (index " << (variant_var).index() << "), expected " << typeid(specific_type).name()); \
   specific_type& variable_name = std::get<std::remove_const_t<specific_type>>(variant_var);
