@@ -35,8 +35,8 @@
 # The two flags are reported on two lines and never summed: a policy row
 # counted toward consensus coverage is the proximity promotion the sibling
 # enums exist to make unrepresentable. `implemented` is the registry's word;
-# the compiler pins it (the macro emits `let _ = path;`), so this gate does not
-# run cargo and does not need to.
+# the compiler pins it (the macro emits `use path as _;`), so this gate does
+# not run cargo and does not need to.
 #
 # Rule 47: the gate asserts its own subject. A missing registry file, a
 # registry `lib.rs` does not compile (`mod census;` absent), a flag with no
@@ -60,7 +60,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_drs_e6_partition import Refused, Row, parse_census  # noqa: E402
+# The census parser is `_census.py`, shared with `check_drs_e6_partition.py`:
+# one denominator, one reading of what a §4 row is.
+from _census import Refused, Row, parse_census  # noqa: E402
 from strip_c_comments import strip as strip_comments  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]

@@ -586,17 +586,24 @@ the compile-time half of G9 is the `const _` block.
 
 ### 6.1 Census side — reuse, no second parser
 
-`import check_drs_e6_partition as partition` (via `sys.path` on `scripts/ci/`,
-the same way the conversion-ban gate loads the stripper) and call
-`partition.parse_census(text)` → `list[Row(id, subsystem, flag, bucket, bound)]`.
+`from _census import Refused, Row, parse_census` (via `sys.path` on
+`scripts/ci/`, the same way the conversion-ban gate loads the stripper) and
+call `parse_census(text)` → `list[Row(id, subsystem, flag, bucket, bound)]`.
 Header-derived column indices, `_gfm_table.py` fence/pipe handling, and every
 census refusal come from that one parser. The enforced set per flag is
 `{r.id : r.flag == F and r.bucket != 3}`; ratified is `bucket in (1, 2)`.
 
-Cross-script import is a hidden coupling (rename the partition gate and this one
-breaks confusingly). Round 1 ruled: take it now; extract `parse_census`/`Row`
-into `scripts/ci/_census.py` with both gates importing it **after PR #751
-merges** — blocker #751, falsifier `gh pr view 751 --json state` (§13).
+**`scripts/ci/_census.py` is the parser's home** (extracted 2026-09-15, in
+this PR). It carries `Row`, `Refused`, `parse_census`, the bound regex
+(`BOUND_RE_TEXT`) and the GFM table-shape helpers (`row_cells`,
+`require_delimiter`, `unfenced`); `check_drs_e6_partition.py` imports the
+same names, so the two gates are siblings of one parser rather than of each
+other. Round 1 ruled the extraction owed once PR #751 merged (a gate
+importing a sibling gate is a hidden coupling — rename the sibling and the
+importer breaks confusingly); #751 merged 2026-09-15 and the extraction
+landed the same day. Neither gate re-tests the parser separately: both
+`--selftest` runs drive their refusals through `parse_census`, so the
+module's refusals are exercised red twice per CI run.
 
 ### 6.2 Subjects asserted (rule 47) and refusals
 
@@ -971,7 +978,7 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 | Q4 | Policy rows — same enum + `Flag`, or sibling enum? | **RULED 2026-09-15 — override:** sibling enums. A `Flag` field is a check someone can forget; two enums make proximity promotion unrepresentable; two coverage bitsets and two denominators are exactly the two-line record. §7.5.1's gate bullet names the hazard ("a policy row counted toward consensus coverage is proximity promotion arriving through the instrument"). |
 | Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 is true only because the hardfork table has one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the R4 coupling, equality erases it. (§7.5.1 already states the fork version enters through `RuleSet`.) |
 | Q6 | `InvalidBlock` locus shape | **RULED 2026-09-15 — default.** No `detail` field: an unbounded string is not evidence (the `ReviewedDivergence` reason). |
-| Q7 | Census-parser reuse by import | **RULED 2026-09-15 — default, follow-up named not filed:** import now; extract to `_census.py` after #751 merges (blocker #751; falsifier `gh pr view 751 --json state`). |
+| Q7 | Census-parser reuse by import | **RULED 2026-09-15 — default, follow-up named not filed:** import now; extract to `_census.py` after #751 merges (blocker #751; falsifier `gh pr view 751 --json state`). **DISCHARGED 2026-09-15:** #751 merged; `scripts/ci/_census.py` extracted in this PR, both gates import it (§6.1). |
 | Q8 | Harness visibility for doctests | **RULED 2026-09-15 — default** (`cfg(any(test, doctest))`). **AMENDED BY FINDING 2026-09-15 (commit 6):** the default's premise fails — `cfg(doctest)` items are not visible to doctest snippets (§8.3); `harness` is `#[cfg(test)]`, the cross-view pin uses an inline view. Disclosed in the commit-6 message. |
 | Q9 | `Candidate` struct vs two args | **RULED 2026-09-15 — default, refined at PR #753 review.** It is what `ChainValid` carries. `#[non_exhaustive]` + `Candidate::new` so a third component later is not a breaking struct literal. |
 | — | G1 mechanism | **RULED 2026-09-15 — added:** a `compile_fail` doctest proves *some* compile error and sees only a direct `use`; it cannot see transitive acquisition, which is the path the adoption increments take. The `cargo tree` belt lands in increment 1 (§6.5; corrected in round 2 to a captured-closure shape in `rust-audit-test.yml` — the `-i`-exit-code sketch was fail-open and `build.yml` has no cargo). |
@@ -1035,6 +1042,7 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `ChainTip.connect` — S-CHAIN-W.
 - `PoolView`, `AdmissionPolicy` application, `PolicyCoverage` consumer — DRS-E5.
 - Replay harness feeding `grade()` — DRS-E2.
-- `_census.py` extraction — after #751 merges (falsifier `gh pr view 751 --json state`).
 
-Nothing scoped to increment 1 by §7.5.1 is deferred out of it.
+Nothing scoped to increment 1 by §7.5.1 is deferred out of it. The one
+increment-1 deferral this section carried — the `_census.py` extraction,
+blocked on #751 — was discharged in this PR when #751 merged (§6.1, Q7).
