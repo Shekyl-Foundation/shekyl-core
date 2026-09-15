@@ -15,14 +15,33 @@ use shekyl_wire::{Block, BlockHeader, Transaction};
 /// Public fields — this is the outside. Nothing about it has been checked,
 /// including whether `transactions` are the bodies `block.transaction_hashes`
 /// names; that is a 4.G rule and lands with its slice. One value rather than
-/// two arguments (round-1 ruling Q9): it is what a verdict is *about*, and a
-/// third component later is non-breaking.
+/// two arguments (round-1 ruling Q9). `#[non_exhaustive]` so a third
+/// component later is a constructor-site addition, not a breaking struct
+/// literal (the Q9 "non-breaking" claim; Copilot #753).
+///
+/// ```compile_fail
+/// use shekyl_chain_rules::Candidate;
+/// let _ = Candidate { block: todo!(), transactions: todo!() };
+/// ```
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
     /// The block: header, miner transaction, listed transaction hashes.
     pub block: Block,
     /// The listed transactions' bodies, in the header's order.
     pub transactions: Vec<Transaction>,
+}
+
+impl Candidate {
+    /// Assemble a candidate from the block as received and the listed
+    /// bodies, in listed order.
+    #[must_use]
+    pub fn new(block: Block, transactions: Vec<Transaction>) -> Self {
+        Self {
+            block,
+            transactions,
+        }
+    }
 }
 
 /// The typed payload a `ChainValid` wraps.

@@ -10,13 +10,13 @@
 //! stays `pending` — shaped exactly like the rules the porting increments
 //! will write, so the mock, the fault channel and the two assertions are
 //! each shown to bite before the first real rule leans on them. The
-//! `should_panic` trio is what makes this file's green mean something.
+//! `should_panic` cases are what make this file's green mean something.
 
 use super::fixture::{candidate, coinbase, recorded, root};
 use super::*;
 use crate::rule_set::RuleSet;
 use crate::validate::validate;
-use crate::verdict::Locus;
+use crate::verdict::{refused, Locus, TxSlot};
 
 /// The probe: reads the view (so a fault must travel), then refuses on a
 /// zero timestamp under the CEN-C1 label.
@@ -26,10 +26,7 @@ fn probe_cen_c1<'id, V: ChainView<'id>>(
 ) -> Result<Verdict<()>, V::Fault> {
     let _genesis = view.block_at(BlockHeight::ZERO)?;
     if candidate.block.header.timestamp == 0 {
-        return Ok(Err(InvalidBlock {
-            rule: CenRow::C1,
-            locus: Locus::Block,
-        }));
+        return refused(CenRow::C1, Locus::Block);
     }
     Ok(Ok(()))
 }
@@ -121,8 +118,9 @@ fn probe_harness_fires_on_the_named_row() {
         assert_refused(
             infallible(probe_cen_c1(&with_timestamp(0), &view)),
             CenRow::C1,
+            Locus::Block,
         );
-        boundary_pair(1, 0, CenRow::C1, |timestamp| {
+        boundary_pair(1, 0, CenRow::C1, Locus::Block, |timestamp| {
             infallible(probe_cen_c1(&with_timestamp(timestamp), &view))
         });
     });
@@ -139,23 +137,25 @@ fn probe_passes_a_good_candidate() {
 }
 
 #[test]
-#[should_panic(expected = "expected a CEN-C2 refusal, but CEN-C1 refused at block")]
+#[should_panic(expected = "expected CEN-C2 at block, but CEN-C1 refused at block")]
 fn probe_harness_bites_wrong_row() {
     one_block().with_view(|view| {
         assert_refused(
             infallible(probe_cen_c1(&with_timestamp(0), &view)),
             CenRow::C2,
+            Locus::Block,
         );
     });
 }
 
 #[test]
-#[should_panic(expected = "expected a CEN-C1 refusal, but the candidate passed")]
+#[should_panic(expected = "expected CEN-C1 at block, but the candidate passed")]
 fn probe_harness_bites_ok() {
     one_block().with_view(|view| {
         assert_refused(
             infallible(probe_cen_c1(&with_timestamp(1_000), &view)),
             CenRow::C1,
+            Locus::Block,
         );
     });
 }
@@ -164,10 +164,33 @@ fn probe_harness_bites_ok() {
 #[should_panic(expected = "the last acceptable value was refused: CEN-C1 refused at block")]
 fn probe_boundary_bites_inverted_pair() {
     one_block().with_view(|view| {
-        boundary_pair(0, 1, CenRow::C1, |timestamp| {
+        boundary_pair(0, 1, CenRow::C1, Locus::Block, |timestamp| {
             infallible(probe_cen_c1(&with_timestamp(timestamp), &view))
         });
     });
+}
+
+#[test]
+#[should_panic(expected = "expected CEN-C1 at miner tx, but CEN-C1 refused at block")]
+fn probe_harness_bites_wrong_locus() {
+    one_block().with_view(|view| {
+        assert_refused(
+            infallible(probe_cen_c1(&with_timestamp(0), &view)),
+            CenRow::C1,
+            Locus::Tx {
+                slot: TxSlot::Miner,
+            },
+        );
+    });
+}
+
+#[test]
+fn every_faulting_view_method_faults() {
+    let view = FaultingView::default();
+    let image = KeyImage::from_bytes([0; 32]);
+    assert_eq!(view.has_key_image(&image), Err(Faulted));
+    assert_eq!(view.block_at(BlockHeight::ZERO), Err(Faulted));
+    assert_eq!(view.root_at(BlockHeight::ZERO), Err(Faulted));
 }
 
 #[test]

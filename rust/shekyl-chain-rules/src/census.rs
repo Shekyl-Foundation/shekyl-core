@@ -24,9 +24,10 @@
 //! `implemented / enforced` and `ratified / enforced` per flag — two lines,
 //! two denominators, never a merged figure. An entry marked
 //! `implemented(path)` is additionally pinned by the compiler: the macro
-//! emits `let _ = path;` in a `const` block, so a rule function that moves or
-//! is deleted while its entry still claims it is a compile error, not a stale
-//! claim (G9).
+//! emits `use path as _;`, so a rule function that moves or is deleted while
+//! its entry still claims it is a compile error, not a stale claim (G9).
+//! `use` names the item without instantiating it — `let _ = path` is E0283
+//! on the generic `fn<'id, V: ChainView<'id>>(...)` every 4.I rule is.
 //!
 //! # Increment 1
 //!
@@ -97,10 +98,15 @@ macro_rules! census_status {
 }
 
 /// The G9 pin: an `implemented(path)` entry names a function that must exist.
+///
+/// `use $path as _` names the item without instantiating it. `let _ = $path`
+/// is E0283 on a generic rule (`fn<'id, V: ChainView<'id>>(...)`), which is
+/// every stateful (4.I) rule this crate is designed to hold.
 macro_rules! census_pin {
     (pending) => {};
     (implemented($path:path)) => {
-        let _ = $path;
+        #[allow(unused_imports)]
+        use $path as _;
     };
 }
 
@@ -177,11 +183,17 @@ macro_rules! census_rows {
         }
 
         // G9: every `implemented(path)` must name a function that exists.
-        const _: () = {
-            $( census_pin!($status $(($path))?); )+
-        };
+        // `use path as _` names the item without instantiating it, so a
+        // generic `fn<'id, V: ChainView<'id>>(...)` compiles (E0283 on
+        // `let _ = path`). Two registries both expand here; `as _` does
+        // not collide.
+        $( census_pin!($status $(($path))?); )+
     };
 }
+
+#[cfg(test)]
+#[path = "census_tests.rs"]
+mod census_tests;
 
 census_rows! {
     /// The consensus-flagged enforced census rows — the `C` denominator.

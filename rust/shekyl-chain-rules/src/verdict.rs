@@ -16,7 +16,8 @@ use core::marker::PhantomData;
 use crate::block::ValidatedBlock;
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::rule_set::RuleSetId;
+use crate::rule_set::{RuleSet, RuleSetId};
+use crate::view::ChainView;
 
 /// Judged-and-refused (`Err`) or judged-and-passed (`Ok`). Never a fault.
 pub type Verdict<T> = Result<T, InvalidBlock>;
@@ -28,17 +29,18 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// A block judged valid under one rule set against one view of one
 /// transaction.
 ///
-/// The store's `connect` takes this and nothing else (S-CHAIN-W); a
-/// `ChainValid<'id>` in hand *is* the evidence that every rule the set
-/// enforces — and [`coverage`](Self::coverage) records which — passed. It is
-/// minted only by `validate`, from which it inherits `'id`, the brand of the
-/// `ChainView` it was judged against. A verdict cannot be carried from one
-/// transaction to another:
+/// The store's `connect` takes this and nothing else (S-CHAIN-W). The type
+/// carries two brands: `'id` (the batch) and `V` (the view type that minted
+/// it). An unbranded `impl<'id> ChainView<'id> for Evil` can still pick up a
+/// batch's `'id`, but it produces `ChainValid<'id, Evil>`, which does not
+/// unify with the `ChainValid<'id, StoreView<'_, 'id>>` `connect` will
+/// demand — G4 is a type, not a convention. A verdict cannot be carried
+/// from one transaction to another:
 ///
 /// ```compile_fail
 /// use shekyl_chain_rules::ChainValid;
 /// // Would compile if `'id` were covariant; the brand is invariant.
-/// fn relabel<'long: 'short, 'short>(valid: ChainValid<'long>) -> ChainValid<'short> {
+/// fn relabel<'long: 'short, 'short, V>(valid: ChainValid<'long, V>) -> ChainValid<'short, V> {
 ///     valid
 /// }
 /// ```
@@ -47,35 +49,44 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 ///
 /// ```compile_fail
 /// use shekyl_chain_rules::ChainValid;
-/// let forged: ChainValid<'static> = ChainValid {
+/// let forged: ChainValid<'static, ()> = ChainValid {
 ///     block: todo!(),
 ///     rule_set: todo!(),
 ///     coverage: todo!(),
 ///     _brand: todo!(),
+///     _view: todo!(),
 /// };
 /// ```
 ///
 /// Not `Clone`: a second copy of a brand-bearing token has no meaning.
 #[derive(Debug)]
-pub struct ChainValid<'id> {
+pub struct ChainValid<'id, V> {
     block: ValidatedBlock,
     rule_set: RuleSetId,
     coverage: RuleCoverage,
     _brand: Brand<'id>,
+    _view: PhantomData<fn(V) -> V>,
 }
 
-impl<'id> ChainValid<'id> {
+impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
     /// Mint the token. Called by `validate` once every rule has passed.
-    pub(crate) const fn mint(
-        block: ValidatedBlock,
-        rule_set: RuleSetId,
-        coverage: RuleCoverage,
-    ) -> Self {
+    ///
+    /// Panics if an `implemented` row the rule set enforces is missing from
+    /// `coverage` — that is a crate wiring bug (G9), not a verdict about the
+    /// block. The check is a `panic!`, not `debug_assert`, so a release
+    /// build cannot mint a token that skipped a landed rule.
+    pub(crate) fn mint(block: ValidatedBlock, rule_set: &RuleSet, coverage: RuleCoverage) -> Self {
+        if !coverage.covers_landed(rule_set) {
+            panic!(
+                "shekyl-chain-rules: ChainValid minted without evaluating every implemented row the rule set enforces (G9)"
+            );
+        }
         Self {
             block,
-            rule_set,
+            rule_set: rule_set.id(),
             coverage,
             _brand: PhantomData,
+            _view: PhantomData,
         }
     }
 
@@ -180,6 +191,23 @@ pub struct InvalidBlock {
     pub rule: CenRow,
     /// Where it pointed.
     pub locus: Locus,
+}
+
+impl InvalidBlock {
+    /// Name the row and the place. The form a rule writes at the site that
+    /// judged.
+    #[must_use]
+    pub const fn new(rule: CenRow, locus: Locus) -> Self {
+        Self { rule, locus }
+    }
+}
+
+/// A judged-and-refused verdict in the outer-`Result` position every
+/// view-reading entry point uses. `?` cannot produce this — a rule that
+/// refuses writes `return refused(...)`.
+#[inline]
+pub const fn refused<T, F>(rule: CenRow, locus: Locus) -> Result<Verdict<T>, F> {
+    Ok(Err(InvalidBlock::new(rule, locus)))
 }
 
 impl fmt::Display for InvalidBlock {

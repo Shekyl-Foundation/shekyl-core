@@ -6,12 +6,14 @@
 //! The three entry points: [`validate`] for a block, [`tx_form`] and
 //! [`tx_against`] for one transaction.
 //!
-//! All three are generic over the view (`V: ChainView<'id>`, never `&dyn`),
-//! so DRS-E5's pool decorator implements the trait without this crate naming
-//! it, and all three return a fault in the outer position and a verdict in
-//! the inner one. Inside a rule, `?` propagates a fault and only a fault; a
-//! refusal is always written out as `Ok(Err(InvalidBlock { rule, locus }))`
-//! at the site that judged, so the row is named where the decision is made.
+//! [`validate`] and [`tx_against`] are generic over the view (`V: ChainView<'id>`,
+//! never `&dyn`), so DRS-E5's pool decorator implements the trait without this
+//! crate naming it, and return a fault in the outer position and a verdict in
+//! the inner one. [`tx_form`] is stateless: it takes no view and returns
+//! [`Verdict`] directly, with no outer fault. Inside a view-reading rule, `?`
+//! propagates a fault and only a fault; a refusal is always written out as
+//! [`refused`](crate::refused) at the site that judged, so the row is named
+//! where the decision is made.
 //!
 //! # Increment 1
 //!
@@ -46,10 +48,11 @@ use crate::view::ChainView;
 /// [`tx_form`] then [`tx_against`]; a refusal from either is re-homed from
 /// [`TxSlot::Lone`] to the slot the transaction occupies.
 ///
-/// The verdict inherits the view's brand. Judged against one view, it cannot
-/// be connected under another — the store's `connect` takes a
-/// `ChainValid<'id>` for *its* `'id`, and a verdict from a different
-/// transaction's view does not unify with it:
+/// The verdict inherits the view's brand *and* its type. Judged against one
+/// view, it cannot be connected under another — the store's `connect` takes
+/// a `ChainValid<'id, StoreView<'_, 'id>>`, and a verdict from a different
+/// transaction, or from an unbranded view that merely borrowed the `'id`,
+/// does not unify with it:
 ///
 /// ```compile_fail
 /// use core::convert::Infallible;
@@ -75,7 +78,7 @@ use crate::view::ChainView;
 ///     f(View(PhantomData))
 /// }
 /// // The store's `connect`: the verdict must carry *this* view's brand.
-/// fn connect<'id>(_view: &View<'id>, _valid: ChainValid<'id>) {}
+/// fn connect<'id>(_view: &View<'id>, _valid: ChainValid<'id, View<'id>>) {}
 /// fn candidate() -> Candidate {
 ///     unimplemented!()
 /// }
@@ -89,11 +92,55 @@ use crate::view::ChainView;
 ///     })
 /// });
 /// ```
+///
+/// An unbranded view that implements `ChainView` for every `'id` still
+/// cannot satisfy `connect`: it mints `ChainValid<'id, Evil>`, not
+/// `ChainValid<'id, View<'id>>`.
+///
+/// ```compile_fail
+/// use core::convert::Infallible;
+/// use core::marker::PhantomData;
+/// use shekyl_chain_rules::*;
+/// use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
+///
+/// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
+/// impl<'id> ChainView<'id> for View<'id> {
+///     type Fault = Infallible;
+///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
+///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+/// }
+/// struct Evil;
+/// impl<'id> ChainView<'id> for Evil {
+///     type Fault = Infallible;
+///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> { Ok(false) }
+///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+/// }
+/// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}
+/// fn candidate() -> Candidate { unimplemented!() }
+///
+/// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
+///     f(View(PhantomData))
+/// }
+/// with_view(|view| {
+///     let valid = validate(candidate(), &Evil, &RuleSet::GENESIS).unwrap().unwrap();
+///     connect(&view, valid); // ChainValid<Evil> ≠ ChainValid<View>
+/// });
+/// ```
 pub fn validate<'id, V: ChainView<'id>>(
     candidate: Candidate,
     view: &V,
     rule_set: &RuleSet,
-) -> Result<Verdict<ChainValid<'id>>, V::Fault> {
+) -> Result<Verdict<ChainValid<'id, V>>, V::Fault> {
     let mut coverage = RuleCoverage::EMPTY;
 
     // Block-level rules (4.A–4.G): none landed in increment 1.
@@ -108,17 +155,17 @@ pub fn validate<'id, V: ChainView<'id>>(
         match judge_tx(tx, view, rule_set)? {
             Ok(tx_coverage) => coverage.union(&tx_coverage),
             Err(refused) => {
-                return Ok(Err(InvalidBlock {
-                    rule: refused.rule,
-                    locus: refused.locus.rehome(slot),
-                }));
+                return Ok(Err(InvalidBlock::new(
+                    refused.rule,
+                    refused.locus.rehome(slot),
+                )));
             }
         }
     }
 
     Ok(Ok(ChainValid::mint(
         ValidatedBlock::derive(candidate),
-        rule_set.id(),
+        rule_set,
         coverage,
     )))
 }

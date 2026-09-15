@@ -40,41 +40,32 @@ fn rehome_replaces_only_the_lone_slot() {
 
 #[test]
 fn display_names_the_row_and_the_place() {
-    let refused = InvalidBlock {
-        rule: CenRow::C1,
-        locus: Locus::Block,
-    };
+    let refused = InvalidBlock::new(CenRow::C1, Locus::Block);
     assert_eq!(refused.to_string(), "CEN-C1 refused at block");
 
-    let refused = InvalidBlock {
-        rule: CenRow::I3,
-        locus: Locus::Input {
+    let refused = InvalidBlock::new(
+        CenRow::I3,
+        Locus::Input {
             slot: TxSlot::Listed(2),
             input: 0,
         },
-    };
+    );
     assert_eq!(refused.to_string(), "CEN-I3 refused at tx #2 input #0");
 
-    let refused = InvalidBlock {
-        rule: CenRow::F1,
-        locus: Locus::Tx {
+    let refused = InvalidBlock::new(
+        CenRow::F1,
+        Locus::Tx {
             slot: TxSlot::Miner,
         },
-    };
+    );
     assert_eq!(refused.to_string(), "CEN-F1 refused at miner tx");
 
-    let refused = InvalidBlock {
-        rule: CenRow::H1,
-        locus: Locus::Tx { slot: TxSlot::Lone },
-    };
+    let refused = InvalidBlock::new(CenRow::H1, Locus::Tx { slot: TxSlot::Lone });
     assert_eq!(refused.to_string(), "CEN-H1 refused at tx");
 }
 
 #[test]
 fn invalid_block_is_an_error_with_no_source() {
-    let refused: Box<dyn std::error::Error> = Box::new(InvalidBlock {
-        rule: CenRow::A1,
-        locus: Locus::Block,
-    });
+    let refused: Box<dyn std::error::Error> = Box::new(InvalidBlock::new(CenRow::A1, Locus::Block));
     assert!(refused.source().is_none());
 }

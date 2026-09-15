@@ -8,7 +8,7 @@
 //! One crate, one home for every consensus rule the C++ spread across
 //! `blockchain.cpp`, `tx_pool.cpp`, `cryptonote_core.cpp` and the LMDB layer.
 //! Input: a candidate block, a `ChainView<'id>` (narrow, read-only trait over
-//! **recorded** chain facts), a `RuleSet`. Output: `ChainValid<'id>` or
+//! **recorded** chain facts), a `RuleSet`. Output: `ChainValid<'id, V>` or
 //! `InvalidBlock { rule: CenRow, .. }` — or the view's own fault, which is
 //! neither. Ruled in
 //! [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../../docs/completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
@@ -51,8 +51,9 @@
 //! # Consumers
 //!
 //! * **Block connect** (S-CHAIN-W): [`validate`] over the store's projected
-//!   `ChainView<'id>`; the `ChainValid<'id>` it mints is the only thing
-//!   `connect` accepts, and the brand ties it to that one transaction.
+//!   `ChainView<'id>`; the `ChainValid<'id, V>` it mints is the only thing
+//!   `connect` accepts, branded with both the batch `'id` and the view type
+//!   `V` so an unbranded impl cannot satisfy `connect`.
 //! * **Pool admission** (DRS-E5): the *same* [`tx_form`] / [`tx_against`]
 //!   over a `PoolView` the pool defines by decorating a `ChainView` with its
 //!   unconfirmed set. There is no second validator
@@ -68,7 +69,8 @@
 //!
 //! A view's substrate can fail to answer. That is [`ChainView::Fault`], an
 //! associated type the crate never inspects, returned as the *outer* `Err`
-//! of every entry point: `Result<Verdict<_>, V::Fault>`. A refusal is the
+//! of [`validate`] and [`tx_against`]: `Result<Verdict<_>, V::Fault>`.
+//! [`tx_form`] has no view and no outer fault. A refusal is the
 //! inner `Err`, an [`InvalidBlock`] naming its [`CenRow`]. The two never
 //! meet — a store error cannot become a refusal by `?`, by `From`, or by a
 //! hand-written arm (`check_store_error_conversion_ban.py` holds the last of
@@ -95,9 +97,5 @@ pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use rule_set::{AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
 pub use validate::{tx_against, tx_form, validate};
-pub use verdict::{ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
+pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{AtHeight, ChainView, RecordedBlock};
-
-#[cfg(test)]
-#[path = "census_tests.rs"]
-mod census_tests;

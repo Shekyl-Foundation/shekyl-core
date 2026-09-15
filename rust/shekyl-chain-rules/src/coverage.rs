@@ -22,7 +22,7 @@
 use core::fmt;
 use core::marker::PhantomData;
 
-use crate::census::{CenRow, PolicyRow, Row};
+use crate::census::{CenRow, PolicyRow, Row, RowStatus};
 use crate::rule_set::RuleSet;
 
 /// The rows of one census flag a verdict evaluated.
@@ -83,8 +83,9 @@ impl<R: Row> Coverage<R> {
     }
 
     /// The evaluated rows in census order — the form the store encodes at
-    /// S-CHAIN-W (per row, `as_str()` or `index()`) without reaching into
-    /// the words.
+    /// S-CHAIN-W without reaching into the words. Persist [`Row::as_str`],
+    /// never [`Row::index`]: `index` is the bitset slot and shifts when the
+    /// census inserts a row.
     pub fn iter(&self) -> impl Iterator<Item = R> + '_ {
         R::ALL
             .iter()
@@ -117,13 +118,35 @@ impl<R: Row> Coverage<R> {
 }
 
 impl Coverage<CenRow> {
+    /// `true` iff every one of `rows` is present.
+    pub(crate) fn contains_all(&self, rows: impl IntoIterator<Item = CenRow>) -> bool {
+        rows.into_iter().all(|row| self.contains(row))
+    }
+
     /// `true` iff every row `rule_set` enforces was evaluated.
     ///
     /// Empty coverage is never complete — not even against a rule set that
     /// enforces nothing — so a scaffold verdict is never parity evidence.
     #[must_use]
     pub fn is_complete_for(&self, rule_set: &RuleSet) -> bool {
-        !self.is_empty() && rule_set.enforced().all(|row| self.contains(row))
+        !self.is_empty() && self.contains_all(rule_set.enforced())
+    }
+
+    /// `true` iff every row this rule set enforces **and this crate has
+    /// implemented** was evaluated.
+    ///
+    /// The mint gate during porting. [`Self::is_complete_for`] waits until
+    /// 153/153; this is true as soon as every *landed* rule actually ran,
+    /// and vacuously true while every entry is `pending` (DRS-D12). A
+    /// forgotten `validate` call, or a call that forgets [`Self::insert`],
+    /// fails it — G9's runtime half.
+    #[must_use]
+    pub fn covers_landed(&self, rule_set: &RuleSet) -> bool {
+        self.contains_all(
+            rule_set
+                .enforced()
+                .filter(|row| row.status() == RowStatus::Implemented),
+        )
     }
 }
 

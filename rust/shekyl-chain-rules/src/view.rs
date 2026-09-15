@@ -84,12 +84,15 @@ pub struct RecordedBlock {
 
 /// The narrow, read-only view a rule consumes.
 ///
-/// `'id` is the transaction brand (`WriteBatch<'_, 'id>`): a `ChainValid<'id>`
-/// is minted only against a `ChainView<'id>` of the same `'id`, so a verdict
-/// reached against one transaction's view cannot be honoured by another. The
-/// trait has no `'id`-carrying method — the brand lives in the implementor's
-/// type and in the verdict; the parameter is what ties the two together in
-/// `validate`'s signature.
+/// `'id` is the transaction brand (`WriteBatch<'_, 'id>`). `validate` mints
+/// `ChainValid<'id, V>` so the verdict is branded with **both** the batch
+/// lifetime and the view *type*. An unbranded `impl<'id> ChainView<'id> for
+/// Evil` can still pick up a batch's `'id`, but `connect` will demand
+/// `ChainValid<'id, StoreView<'_, 'id>>` and `Evil` will not unify. The trait
+/// has no `'id`-carrying method — well-behaved implementors (the store
+/// projection, the crate's test mock) put `'id` in their type; G4 is
+/// closed at the token, not by sealing the trait (the store crate must
+/// implement it, and this crate cannot name the store).
 ///
 /// Implementors answer about the **recorded** chain only. A pool decorator
 /// (DRS-E5) that also knows the pool's own key images implements this trait

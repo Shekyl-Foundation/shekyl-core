@@ -23,7 +23,7 @@ use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Transaction, TxPrefix};
 
 use crate::block::Candidate;
 use crate::census::CenRow;
-use crate::verdict::{InvalidBlock, Verdict};
+use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView, RecordedBlock};
 
 /// Invariant brand, as in `verdict.rs`.
@@ -141,33 +141,40 @@ pub fn infallible<T>(result: Result<T, Infallible>) -> T {
     }
 }
 
-/// Assert `result` is exactly a refusal on `rule`.
+/// Assert `result` is exactly a refusal on `rule` at `locus`.
 ///
-/// Panics on a pass ("the rule did not fire") and on a refusal by any other
-/// row ("the wrong rule fired") — the two ways a negative fixture goes
-/// vacuous.
+/// Panics on a pass ("the rule did not fire"), on a refusal by any other
+/// row ("the wrong rule fired"), and on the right row at the wrong place
+/// (miner vs listed vs input index) — the three ways a negative fixture
+/// goes vacuous.
 #[track_caller]
-pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow) {
+pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow, locus: Locus) {
     match result {
-        Err(InvalidBlock { rule: fired, .. }) if fired == rule => {}
-        Err(other) => panic!("expected a {rule} refusal, but {other}"),
-        Ok(passed) => panic!("expected a {rule} refusal, but the candidate passed: {passed:?}"),
+        Err(InvalidBlock {
+            rule: fired,
+            locus: at,
+        }) if fired == rule && at == locus => {}
+        Err(other) => panic!("expected {rule} at {locus}, but {other}"),
+        Ok(passed) => {
+            panic!("expected {rule} at {locus}, but the candidate passed: {passed:?}")
+        }
     }
 }
 
-/// Assert `f` passes `last_ok` and refuses `first_bad` on `rule` — the two
-/// sides of a boundary, so an off-by-one in the rule fails here.
+/// Assert `f` passes `last_ok` and refuses `first_bad` on `rule` at `locus`
+/// — the two sides of a boundary, so an off-by-one in the rule fails here.
 #[track_caller]
 pub fn boundary_pair<T: Debug, V>(
     last_ok: V,
     first_bad: V,
     rule: CenRow,
+    locus: Locus,
     f: impl Fn(V) -> Verdict<T>,
 ) {
     if let Err(refused) = f(last_ok) {
         panic!("the last acceptable value was refused: {refused}");
     }
-    assert_refused(f(first_bad), rule);
+    assert_refused(f(first_bad), rule, locus);
 }
 
 /// Fixtures: well-formed values to mutate one field of.
@@ -211,10 +218,7 @@ pub mod fixture {
             miner_transaction: coinbase(60),
             transaction_hashes: listed.iter().map(Transaction::hash).collect(),
         };
-        Candidate {
-            block,
-            transactions: listed,
-        }
+        Candidate::new(block, listed)
     }
 
     /// A recorded block whose header carries `timestamp`, identity derived.

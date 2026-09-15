@@ -113,6 +113,17 @@ fn registries_are_the_expected_size_at_this_increment() {
 }
 
 #[test]
+fn g9_pin_form_accepts_a_generic_rule() {
+    // The pin is `use path as _`, not `let _ = path`. A generic 4.I rule
+    // (`fn<'id, V: ChainView<'id>>(...)`) must compile under that form;
+    // `let _ = generic;` is E0283 (Copilot #753).
+    #[allow(dead_code, reason = "existence pin: use generic as _")]
+    fn generic<'id, V: crate::view::ChainView<'id>>(_: &V) {}
+    #[allow(unused_imports)]
+    use generic as _;
+}
+
+#[test]
 fn rows_are_ordered_by_census_position() {
     // `Ord` derives from the discriminant, so sorting rows sorts them into
     // census order — the order `Coverage::iter` and the gate's `--describe`

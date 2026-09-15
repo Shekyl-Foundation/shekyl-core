@@ -67,6 +67,29 @@ fn union_folds_the_other_side_in() {
 }
 
 #[test]
+fn contains_all_is_the_mint_predicate() {
+    let empty = RuleCoverage::EMPTY;
+    assert!(empty.contains_all([]));
+    assert!(!empty.contains_all([CenRow::A1]));
+    let mut one = RuleCoverage::EMPTY;
+    one.insert(CenRow::A1);
+    assert!(one.contains_all([CenRow::A1]));
+    assert!(!one.contains_all([CenRow::A1, CenRow::A2]));
+}
+
+#[test]
+fn covers_landed_is_vacuous_while_every_row_is_pending() {
+    // DRS-D12: zero implemented rows, so empty coverage covers what has
+    // landed. The false branch is `contains_all` above; flipping a registry
+    // entry to `implemented` without a `validate` call is what makes mint
+    // panic.
+    assert!(RuleCoverage::EMPTY.covers_landed(&RuleSet::GENESIS));
+    assert!(CenRow::ALL
+        .iter()
+        .all(|row| row.status() == crate::census::RowStatus::Pending));
+}
+
+#[test]
 fn complete_means_every_enforced_row_and_nothing_less() {
     let mut coverage = RuleCoverage::EMPTY;
     for row in RuleSet::GENESIS.enforced() {
