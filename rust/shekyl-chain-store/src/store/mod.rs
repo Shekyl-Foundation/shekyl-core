@@ -86,6 +86,7 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod connect;
 mod error;
 mod header;
 mod invariant;
@@ -97,6 +98,7 @@ pub(crate) mod undo;
 mod view;
 mod write;
 
+pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
     CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
@@ -487,3 +489,7 @@ mod undo_tests;
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod view_tests;
+
+#[cfg(test)]
+#[path = "connect_tests.rs"]
+mod connect_tests;
