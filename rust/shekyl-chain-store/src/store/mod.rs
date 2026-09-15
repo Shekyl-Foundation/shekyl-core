@@ -109,6 +109,7 @@ use std::path::Path;
 use redb::{Database, Durability, ReadOnlyDatabase, ReadableDatabase, WriteTransaction};
 
 use crate::apply_policy::ApplyPolicy;
+use crate::codec::SettlementEpochBlocks;
 use crate::provenance::Provenance;
 
 use shared::Shared;
@@ -145,6 +146,7 @@ pub const CACHE_SIZE: usize = 1024 * 1024 * 1024;
 pub struct ChainStore {
     backend: Backend,
     apply_policy: ApplyPolicy,
+    settlement_epoch_blocks: SettlementEpochBlocks,
     shared: Shared,
 }
 
@@ -158,20 +160,26 @@ impl core::fmt::Debug for ChainStore {
         f.debug_struct("ChainStore")
             .field("read_only", &self.is_read_only())
             .field("apply_policy", &self.apply_policy)
+            .field("settlement_epoch_blocks", &self.settlement_epoch_blocks)
             .field("provenance", &self.provenance())
             .finish_non_exhaustive()
     }
 }
 
 impl ChainStore {
-    /// Create or open the store at `path` for reading and writing.
+    /// Create or open the store at `path` for reading and writing, under
+    /// the settlement-epoch schedule `epoch` (a fresh file is pinned to it;
+    /// an existing file must have been built under it).
     ///
     /// # Errors
     ///
     /// [`EngineError::Open`] if the file cannot be created or opened; the
     /// header refusals listed on [`with_apply_policy`](Self::with_apply_policy).
-    pub fn create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        Self::with_apply_policy(path, ApplyPolicy::default())
+    pub fn create(
+        path: impl AsRef<Path>,
+        epoch: SettlementEpochBlocks,
+    ) -> Result<Self, StoreError> {
+        Self::with_apply_policy(path, ApplyPolicy::default(), epoch)
     }
 
     /// Create or open the store with an explicit [`ApplyPolicy`].
@@ -184,6 +192,11 @@ impl ChainStore {
     /// provenance is [`Provenance::FULL`] is parity evidence — a `Full`
     /// session over a tainted file does not clean it.
     ///
+    /// `epoch` is the settlement-epoch schedule this session runs under
+    /// (the caller's — `shekyl-archival-retention`'s effective value; the
+    /// store never reads the environment). A fresh file is **pinned** to it
+    /// in the seal; an existing file's pin must equal it (SCW-2).
+    ///
     /// # Errors
     ///
     /// [`StoreCannot::EmptyApplyStub`] if the policy stubs no families —
@@ -191,7 +204,8 @@ impl ChainStore {
     /// cannot be created or opened, including an existing file that is not
     /// a redb database (refused unread and unwritten, never initialized);
     /// on an existing database, [`StoreCannot::SchemaVersionAbsent`],
-    /// [`StoreCannot::SchemaVersionMismatch`] or
+    /// [`StoreCannot::SchemaVersionMismatch`],
+    /// [`StoreCannot::SettlementEpochMismatch`] or
     /// [`StoreInvariant::CellCorrupt`] if its header is not one this binary
     /// can vouch for. A fresh file the engine refuses to take, or that
     /// cannot be sealed, is removed again, so a failed create does not
@@ -199,6 +213,7 @@ impl ChainStore {
     pub fn with_apply_policy(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
+        epoch: SettlementEpochBlocks,
     ) -> Result<Self, StoreError> {
         apply_policy
             .reject_empty_stub()
@@ -229,7 +244,7 @@ impl ChainStore {
             .create_new(true)
             .open(path)
         {
-            Ok(file) => match create_sealed(&builder, file, apply_policy) {
+            Ok(file) => match create_sealed(&builder, file, apply_policy, epoch) {
                 Ok(fresh) => fresh,
                 Err(e) => {
                     // The path exists only because `create_new` just made
@@ -244,7 +259,8 @@ impl ChainStore {
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let db = builder.open(path).map_err(EngineError::Open)?;
-                let provenance = header::verify(&db.begin_read().map_err(EngineError::BeginRead)?)?;
+                let provenance =
+                    header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
                 (db, provenance)
             }
             Err(e) => return Err(EngineError::Open(redb::DatabaseError::Storage(e.into())).into()),
@@ -252,8 +268,16 @@ impl ChainStore {
         Ok(Self {
             backend: Backend::Writable(db),
             apply_policy,
+            settlement_epoch_blocks: epoch,
             shared: Shared::new(provenance),
         })
+    }
+
+    /// The settlement-epoch schedule this file is pinned to — equal to the
+    /// session's by construction, since a mismatch refuses the open.
+    #[must_use]
+    pub const fn settlement_epoch_blocks(&self) -> SettlementEpochBlocks {
+        self.settlement_epoch_blocks
     }
 
     /// The policy this session was opened under.
@@ -294,21 +318,29 @@ impl ChainStore {
 
     /// Open an **existing** store without the ability to write.
     ///
+    /// The schedule pin is checked here too: a reader interprets
+    /// epoch-derived rows, so a reader under the wrong schedule is as
+    /// mislabeled as a writer.
+    ///
     /// # Errors
     ///
     /// [`EngineError::Open`] if the file is absent or cannot be opened; the
     /// same header refusals as [`with_apply_policy`](Self::with_apply_policy).
-    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+    pub fn open_read_only(
+        path: impl AsRef<Path>,
+        epoch: SettlementEpochBlocks,
+    ) -> Result<Self, StoreError> {
         let db = redb::Builder::new()
             .set_cache_size(CACHE_SIZE)
             .open_read_only(path)
             .map_err(EngineError::Open)?;
-        let provenance = header::verify(&db.begin_read().map_err(EngineError::BeginRead)?)?;
+        let provenance = header::verify(&db.begin_read().map_err(EngineError::BeginRead)?, epoch)?;
         Ok(Self {
             backend: Backend::ReadOnly(db),
             // A read-only handle writes nothing, so its session policy is
             // vacuously Full; the file's history is `provenance`.
             apply_policy: ApplyPolicy::Full,
+            settlement_epoch_blocks: epoch,
             shared: Shared::new(provenance),
         })
     }
@@ -328,8 +360,10 @@ impl ChainStore {
     ///
     /// ```compile_fail,E0521
     /// use shekyl_chain_store::store::{ChainStore, StoreError, WriteBatch};
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
     /// fn same_batch<'id>(_: &WriteBatch<'_, 'id>, _: &WriteBatch<'_, 'id>) {}
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|outer| {
     ///     store.write(|inner| -> Result<(), StoreError> {
     ///         same_batch(outer, inner);
@@ -427,10 +461,11 @@ fn create_sealed(
     builder: &redb::Builder,
     file: std::fs::File,
     policy: ApplyPolicy,
+    epoch: SettlementEpochBlocks,
 ) -> Result<(Database, Provenance), StoreError> {
     let db = builder.create_file(file).map_err(EngineError::Open)?;
     let txn = arm_write(&db)?;
-    let provenance = header::seal(&txn, policy)?;
+    let provenance = header::seal(&txn, policy, epoch)?;
     txn.commit().map_err(EngineError::Commit)?;
     Ok((db, provenance))
 }

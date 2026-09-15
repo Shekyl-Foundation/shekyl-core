@@ -3,8 +3,8 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The store header: two `properties` cells the store owns outright — and
-//! the typed cell access every other `properties` read or write goes
+//! The store header: three `properties` cells the store owns outright —
+//! and the typed cell access every other `properties` read or write goes
 //! through.
 //!
 //! - `schema_version` ([`SchemaVersionCell`]) — sealed into a fresh file's
@@ -17,8 +17,12 @@
 //!   [`Provenance`]: sealed with the creating session's stubbed set and
 //!   [widened](widen) inside every stubbed batch's own transaction, so the
 //!   taint commits with the rows it describes or not at all.
+//! - `settlement_epoch_blocks` ([`SettlementEpochBlocksCell`]) — the
+//!   schedule the file was built under (SCW-2): sealed from the creating
+//!   session's value, compared at every open, refused on mismatch. Never
+//!   widened or rewritten — a datadir has one schedule for its whole life.
 //!
-//! No public write path reaches either cell. [`seal`] and [`widen`] are
+//! No public write path reaches any of them. [`seal`] and [`widen`] are
 //! their only writers; [`put`] is `pub(super)` and its public caller,
 //! `WriteBatch::upsert_property`, is bounded to chain-state cells.
 //! Store-owned header writes are `put`, not `upsert`: they are not
@@ -27,33 +31,49 @@
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 
 use crate::apply_policy::ApplyPolicy;
-use crate::codec::{ApplyPolicyCell, Canonical, PropertyCell, SchemaVersionCell, SCHEMA_VERSION};
+use crate::codec::{
+    ApplyPolicyCell, Canonical, PropertyCell, SchemaVersionCell, SettlementEpochBlocks,
+    SettlementEpochBlocksCell, SCHEMA_VERSION,
+};
 use crate::provenance::Provenance;
 use crate::schema::PROPERTIES;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 
-/// Write both header cells into a fresh store.
+/// Write the three header cells into a fresh store.
 ///
 /// The provenance a fresh file starts with is the creating session's own
 /// stubbed set: a store *created* under a stubbed policy has been written
-/// under it from its first byte.
-pub(super) fn seal(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
+/// under it from its first byte. The schedule pin is the session's value,
+/// and is never written again.
+pub(super) fn seal(
+    txn: &WriteTransaction,
+    policy: ApplyPolicy,
+    epoch: SettlementEpochBlocks,
+) -> Result<Provenance, StoreError> {
     let provenance = Provenance::FULL.widened_by(policy);
     put::<SchemaVersionCell>(txn, &SCHEMA_VERSION)?;
     put::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
+    put::<SettlementEpochBlocksCell>(txn, &epoch)?;
     Ok(provenance)
 }
 
-/// Check an existing store's layout version and read its provenance.
+/// Check an existing store's layout version and schedule pin, and read its
+/// provenance.
 ///
 /// # Errors
 ///
 /// [`StoreCannot::SchemaVersionAbsent`] if there is no `properties` table
 /// or no `schema_version` cell; [`StoreCannot::SchemaVersionMismatch`] if
-/// the version is not [`SCHEMA_VERSION`]; [`StoreInvariant::CellCorrupt`] if
-/// a header cell is present but malformed, or `apply_policy` is missing.
-pub(super) fn verify(txn: &ReadTransaction) -> Result<Provenance, StoreError> {
+/// the version is not [`SCHEMA_VERSION`];
+/// [`StoreCannot::SettlementEpochMismatch`] if the file was built under a
+/// schedule other than `epoch`; [`StoreInvariant::CellCorrupt`] if a header
+/// cell is present but malformed, or `apply_policy` /
+/// `settlement_epoch_blocks` is missing.
+pub(super) fn verify(
+    txn: &ReadTransaction,
+    epoch: SettlementEpochBlocks,
+) -> Result<Provenance, StoreError> {
     let table = match txn.open_table(PROPERTIES) {
         Ok(table) => table,
         Err(redb::TableError::TableDoesNotExist(_)) => {
@@ -66,6 +86,15 @@ pub(super) fn verify(txn: &ReadTransaction) -> Result<Provenance, StoreError> {
         return Err(StoreCannot::SchemaVersionMismatch {
             found,
             expected: SCHEMA_VERSION,
+        }
+        .into());
+    }
+    let pinned =
+        get::<SettlementEpochBlocksCell>(&table)?.ok_or(absent::<SettlementEpochBlocksCell>())?;
+    if pinned != epoch {
+        return Err(StoreCannot::SettlementEpochMismatch {
+            pinned,
+            session: epoch,
         }
         .into());
     }

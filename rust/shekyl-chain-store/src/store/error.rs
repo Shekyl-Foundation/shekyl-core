@@ -34,7 +34,7 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use crate::codec::SchemaVersion;
+use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{CellFault, StoreInvariant, UndoFault};
 
@@ -246,6 +246,20 @@ pub enum StoreCannot {
         /// The height whose recording was abandoned.
         height: u64,
     },
+    /// The file was built under a different settlement-epoch schedule than
+    /// this session's (S-CHAIN-W SCW-2).
+    ///
+    /// Persisted join epochs and serve-credit windows would be silently
+    /// mislabeled under the other schedule, so the open is refused with the
+    /// remedy named — reopen under the pinned schedule, or use a fresh data
+    /// directory. A refusal, not [`StoreInvariant::CellCorrupt`]: the file is
+    /// coherent, the session is wrong for it.
+    SettlementEpochMismatch {
+        /// The schedule the file was built under.
+        pinned: SettlementEpochBlocks,
+        /// The schedule this session runs.
+        session: SettlementEpochBlocks,
+    },
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -282,6 +296,12 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "the pop-journal recording for height {height} was dropped unsealed; the batch \
                  will not commit chain-state writes that have no undo row"
+            ),
+            Self::SettlementEpochMismatch { pinned, session } => write!(
+                f,
+                "this data directory was built with settlement epochs of {pinned} but this \
+                 session runs {session}: persisted join epochs and serve-credit windows would be \
+                 silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
         }
     }
