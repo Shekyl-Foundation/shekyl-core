@@ -289,6 +289,23 @@
   contract (one 404 for every complete-head miss; two personas
   header-identical) is unchanged.
 
+- **Consensus rules leave the storage layer (`C2-R8`, design ruling; no
+  runtime change in this release).** The Rust chain store will never enforce
+  a consensus rule: the validator crate alone mints the `ChainValid` the
+  store's connect path accepts, a store-side constraint breach is
+  `StoreInvariantViolated` (fatal — a validator hole), never an "invalid
+  block", and that conversion is banned and CI-gated
+  (`check_store_error_conversion_ban.py`). The eight LMDB-side-effect rows
+  are ruled: `CEN-L1` is minted as the intra-block key-image rule (belt
+  `SI-1`); L2/L3/L13 re-home as store invariants; L4/L5 dissolve into
+  existing identity/type constraints; L6's unnamed amount-0 indexing and
+  L14's five write semantics route to batch `R8b`. The new store-invariant
+  register
+  [`STORE_INVARIANT_REGISTER.md`](design/STORE_INVARIANT_REGISTER.md)
+  (`SI-1…SI-8`, including `SI-4` from Q4's curve-tree root, gated by
+  `check_store_invariant_register.py`) is the belt home
+  ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)).
+
 ## [3.1.0-alpha.8] - 2026-09-10
 
 ### Added

@@ -21,7 +21,7 @@ coverage is complete over the 2026-09-02 set**, not the live one (P0f is the per
 FAKECHAIN skip — retired with the S1 fix on PR #623, 2026-09-05; **re-reviewed at `e54e5b983` and promoted 2026-09-11**, so no row is DIVERGENT today), 1 failed closed (CEN-L8; CEN-I12 failed closed the
 same way until its anchor source was reconciled, and was promoted 2026-09-05). **The set has since grown:** C2-R1b promoted nine rows into bucket 2 on
 2026-09-03 and C2-R1c ten more on 2026-09-04 (nine promotions plus the
-CEN-K1 → K1a/K1b split), and CEN-I19 was minted into bucket 1 on 2026-09-06 with its implementation (**re-reviewed at `2ec553a3f` and promoted 2026-09-11**), so the live bucket-1/2 count is **130** (counted from the rows, re-counted 2026-09-11: 87 b1 + 43 b2) and **twenty-seven** of them are UNREVIEWED until P0f reviews them — the nineteen promotions and R2's eight. The I19 mint belongs to that growth but is **not** in the backlog: it was promoted 2026-09-11, as the clause above records. *(Corrected 2026-09-11: this sentence read "twenty-eight" and counted I19 as unreviewed in the same breath as recording its promotion. Twenty-seven is a **set difference** — the live bucket-1/2 IDs minus the IDs carrying a §5.4.1 register row — not 130 minus a remembered figure.)* **The review's two S-graded findings are fixed and re-verified** — the S0 by
+CEN-K1 → K1a/K1b split), and CEN-I19 was minted into bucket 1 on 2026-09-06 with its implementation (**re-reviewed at `2ec553a3f` and promoted 2026-09-11**), and C2-R8 promoted CEN-L1 on 2026-09-14 with a minted intra-block rule (§7 #20), so the live bucket-1/2 count is **131** (counted from the rows, re-counted 2026-09-14: 87 b1 + 44 b2) and **three** of them are UNREVIEWED in the §5.4.1 register — CEN-L8 (failed closed), CEN-I19 (re-amended by `PL-D3`), CEN-L1 (born with its ruling) — the register's derived tally **126 / 2 / 3**, the figure `check_conformance_coverage.py` computes. *(Corrected 2026-09-14: from 2026-09-11 this sentence read "twenty-seven of them are UNREVIEWED until P0f reviews them". P0f slices 9 and 10 reviewed those twenty-seven at `eb1b60198` on 2026-09-11 — "the backlog closes", CSR §5.4.1 — and the register derived 126 / 2 / 2 from that day; the sentence was a quotation of the register that was not re-derived when the register moved. The register owns this figure; this header quotes it. The earlier correction on this sentence, 2026-09-11, stands as history: "twenty-eight" → "twenty-seven" was a set difference, and so is three.)* **The review's two S-graded findings are fixed and re-verified** — the S0 by
 PR #602 (M8/G4/J26 promoted) and the S1 by PR #604 (CEN-D2/D1 promoted) — **and a third — CEN-B5's header-check timing, S1, found 2026-09-04 (§7 #17) — is fixed on PR #623 (2026-09-05, §7 #18) and **re-verified at its merged sha `e54e5b983`, the row promoted 2026-09-11** — the same event the clause above records, stated once here rather than twice with two outcomes;** **CEN-L11/L12 promoted at PR #609's merged fix** (2026-09-04); every other row is UNREVIEWED. Bucket-4 rows record
 questions, never answers; the §10
 queue is the design-round program that answers them.
@@ -59,10 +59,19 @@ L-items are owned open residue.
 ([`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md), `DRS-*`) partitions the same
 files this census enumerates — by **DB call surface** where this census cuts by
 **rule** — and until 2026-09-01 neither document referenced the other.
-**18 rows here are enforced inside `src/blockchain_db/`** (7 bucket-1, 1
-bucket-3, 10 bucket-4), and **§10's R8 batch is the same decision as that
+**18 rows here are enforced inside `src/blockchain_db/`** (at 2026-09-01: 7
+bucket-1, 1 bucket-3, 10 bucket-4; C2-R1c moved CEN-K3 to bucket 2 on
+2026-09-04; **after C2-R8, 2026-09-14: 7 bucket-1, 2 bucket-2, 7 bucket-3,
+2 bucket-4 (CEN-B3, R4's; CEN-L14, R8b's)** — the rows are the same
+eighteen, the buckets moved), and **§10's R8 batch is the same decision as that
 program's schema design**: R8 is the ruling instrument, the DRS surface map its
-input (CSR-1). Rick's **2026-09-01 countermand** — the inherited C++ is not a
+input (CSR-1). **R8 RULED 2026-09-14**
+([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)):
+a standing three-arm category test (consensus rule / store invariant /
+unspecified), a three-class error taxonomy with a gated conversion ban, and
+the store-invariant register
+([`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md), `SI-`) as the
+home of what leaves this census. Rick's **2026-09-01 countermand** — the inherited C++ is not a
 base; a complete rewrite gates release — vindicates this census's oracle clause
 and propagates it outward. **The clause was then extended, not merely
 propagated (CSR-3a, 2026-09-02):** CEN-L11 showed ratification alone is
@@ -145,7 +154,7 @@ the binary "bucket 2" judgment with a recorded class per row:
 | `spec` | Bucket-1 rows: Shekyl-designed, written spec is the evidence | 1 |
 | `ratified` | A design round / decision-log entry examined the rule and kept it, with rationale (pointer required) | **2** |
 | `ratified-premise-refuted` | A ratification exists but its factual premise is refuted at the tree (held only CEN-C2, which C2-R3 re-ratified on fresh ground into bucket 2 — the class is currently empty) | **4** |
-| `examined-disposition` | A review examined it on one path (e.g. the `DAEMON_SUBMIT_VERDICT.md` §8 submit-path matrix) without a full ratification; the row states which path | **4** |
+| `examined-disposition` | A review examined it on one path (e.g. the `DAEMON_SUBMIT_VERDICT.md` §8 submit-path matrix) without a full ratification; the row states which path. Also the class of a row a round has examined and found **unspecified** rather than misplaced — C2-R8's arm C (CEN-L14: the write *mechanism* is ruled, the per-site semantic is routed to R8b as a named question) | **4** |
 | `KAT-port` | Moved to Rust pinned by vectors. A seal is not a ratification; the right-for-Shekyl question is open | **4** |
 | `pinned-not-re-derived` | The value is frozen and documented but inherited without derivation | **4** |
 | `none` | Bucket 4 proper — no locatable record | **4** |
@@ -171,17 +180,20 @@ every changed row.
 | — consensus-flagged | 164 |
 | — policy-flagged | 9 |
 | Bucket 1 (Shekyl-specific, spec'd) | 87 |
-| Bucket 2 (inherited, ratified on record) | 43 |
-| Bucket 3 (deletion disposition recorded or executed) | 5 |
-| Bucket 4 (inherited, not ratified — classes recorded) | 38 |
+| Bucket 2 (inherited, ratified on record) | 44 |
+| Bucket 3 (deletion disposition recorded or executed) | 11 |
+| Bucket 4 (inherited, not ratified — classes recorded) | 31 |
 
-Sum check: `87 + 43 + 5 + 38 = 173 = 164 + 9` (recounted 2026-09-06 with the census's own commands below, re-run after R2's eight bucket-4 → 2 promotions were applied to the rows — the earlier same-day recount `87 + 35 + 5 + 46` predated them, and before that the line had read `86 + 25 + 5 + 55 = 171` since the C1 era while the table above it had already moved — records-was). Merged set = 161 CEN rows
+Sum check: `87 + 44 + 11 + 31 = 173 = 164 + 9` (recounted 2026-09-14 with the census's own commands below, after C2-R8 applied CEN-L1 4 → 2 and CEN-L2/L3/L4/L5/L6/L13 4 → 3 to the rows — §7 #20; the line had read `87 + 43 + 5 + 38` from the 2026-09-06 recount after R2's eight bucket-4 → 2 promotions, before that `87 + 35 + 5 + 46` the same day, and before that `86 + 25 + 5 + 55 = 171` since the C1 era while the table above it had already moved — records-was). **By flag** (the cross-tab C2-R8 §10 uses, because a consensus denominator that counts policy rows promotes them by proximity): consensus `[86, 40, 11, 27] = 164`, policy `[1, 4, 0, 4] = 9`. Merged set = 161 CEN rows
 + 9 minted (`CEN-A7, B6, B7, F20, F21, H23, H24, L15`, and `CEN-I19`
 2026-09-06 with its implementation) + 3 split (`CEN-D1b, F14b`, and
 `CEN-K1 → K1a/K1b` on 2026-09-04 — that split was never carried into this
-decomposition, so the line summed to 171 while the table above it said 172). Bucket-4 class split (recounted 2026-09-06 over the bucket-4 rows only,
-after R2's promotions): 1 `examined-disposition` + 1 `KAT-port`
-+ 1 `pinned-not-re-derived` + 35 `none` = 38, the bucket-4 total. The line had read `… + 46 none = 55`,
+decomposition, so the line summed to 171 while the table above it said 172). Bucket-4 class split (recounted 2026-09-14 over the bucket-4 rows only,
+after C2-R8): 2 `examined-disposition` + 1 `KAT-port`
++ 1 `pinned-not-re-derived` + 27 `none` = 31, the bucket-4 total (the seven
+R8 rows that left were all `none`; CEN-L14 stays and moves `none` →
+`examined-disposition` — the mechanism ruled, the per-site semantic routed to
+R8b; the 2026-09-06 line read `1 + 1 + 1 + 35 = 38`). The line had earlier read `… + 46 none = 55`,
 which counted the bucket's own size as its `none` class and summed to a
 figure no column produced (the C1-era
 split additionally held 1 `ratified-premise-refuted` + 56 `none`;
@@ -215,9 +227,9 @@ grep '^| CEN-' "$f" | awk -F'|' '{gsub(/ /,"",$7); print $7}' | sort | uniq -c  
 | I FCMP++ inputs / PQC | 19 | 15 | 4 | 0 | 0 | 0 |
 | J archival tx families | 26 | 26 | 0 | 0 | 0 | 0 |
 | K reorg / alt chains | 12 | 1 | 11 | 0 | 0 | 0 |
-| L storage layer | 15 | 6 | 0 | 1 | 8 | 0 |
+| L storage layer | 15 | 6 | 1 | 7 | 1 | 0 |
 | M mempool admission | 11 | 2 | 4 | 0 | 5 | 9 |
-| **Total** | **173** | **87** | **43** | **5** | **38** | **9** |
+| **Total** | **173** | **87** | **44** | **11** | **31** | **9** |
 
 ### 3.2 Inverse spot-check (union of both walks' tables; all six MUST be present)
 
@@ -520,20 +532,20 @@ Reward emission (per tx; whole-tx shape CEN-H22):
 
 | id | rule | site(s) | C/P | b | class | evidence | notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| CEN-L1 | Key-image uniqueness at block connect is enforced **solely** here: `add_spent_key`'s `MDB_NODUPDATA` put throws `KEY_IMAGE_EXISTS` (covers chain-wide and intra-block duplicates in one txn), caught at blockchain.cpp:6397 → block rejected. The pre-DB `check_for_double_spend` is dead (§5) | lmdb/db_lmdb.cpp:1411–1425 | C | 4 | none | — | RC-144, RC-150, RC-99 (enforcement note) ⇒ merged. Recorded judgment disagreement: RC read this bucket 1 (FCMP nullifier); the *commitment* is CEN-I7's (bucket 1) — this row's open question is the **placement** (validation completed by a side effect of the write path, §6). Inverse spot-check row. §10 R8 |
-| CEN-L2 | A connecting block's `prev_id` must exist and sit at height−1 — wrong-height throws `BLOCK_PARENT_DNE` (:962); missing parent throws `DB_ERROR` (:959); genesis exempt. Block blobs are appended at `m_height` (`MDB_APPEND`) so stored height is strictly increasing | lmdb/db_lmdb.cpp:951–963, 973–978 | C | 4 | none | — | RC-145, RC-146 ⇒ merged |
-| CEN-L3 | Duplicate block hash (`BLOCK_EXISTS`) and duplicate tx hash (`TX_EXISTS`) reject at write | lmdb/db_lmdb.cpp:948–949, 1071–1074 | C | 4 | none | — | RC-143, RC-147, RC-174 ⇒ merged. Belt behind CEN-A1/G1 — and for the **miner tx** (absent from `tx_hashes`, uncovered by CEN-G1) `TX_EXISTS` is the *only* connect-time uniqueness check |
-| CEN-L4 | The base `add_block` recomputes the block hash (identity never trusted) but stores contained txs under the header's claimed hashes verbatim — content/hash agreement lives upstream (CEN-G2); `blk.tx_hashes.size() == txs.size()` is asserted at store time | blockchain_db.cpp:459, 477–480; count belt :455–456 | C | 4 | none | — | RC-175 ⇒ merged. Recorded absence, §6 |
-| CEN-L5 | DB input-type whitelist duplicates CEN-H5 at write time; unknown bond-post kinds fatal | blockchain_db.cpp:398–402, 363–366 | C | 4 | none | — | |
-| CEN-L6 | Every stored output must carry an outPk commitment and yield an output pubkey; coinbase/emission loud amounts store as amount-0 plus the real commitment | blockchain_db.cpp:424–434; lmdb/db_lmdb.cpp:1274–1277, 1361–1368 | C | 4 | none | — | RC-149 ⇒ merged with a recorded judgment disagreement: RC read the amount-0 indexing bucket 1 (amount-0 CT design); no record names the indexing choice, stays 4 |
+| CEN-L1 | **Rule (as minted by C2-R8 Q6): no key image may appear twice among one block's inputs** — the intra-block half of key-image uniqueness; the chain-wide half is CEN-I7's clause, both evaluated by the validator against the same `ChainView`. **At the pin the tree enforces it only here:** `add_spent_key`'s `MDB_NODUPDATA` put throws `KEY_IMAGE_EXISTS` (covers chain-wide and intra-block duplicates in one txn), caught at blockchain.cpp:6115 → block rejected. The pre-DB `check_for_double_spend` is dead (§5) | lmdb/db_lmdb.cpp:1429–1440 (census cited :1411–1425 and blockchain.cpp:6397 at `ab3cc98e6`; re-located at `c405fac0a`) | C | 2 | ratified | [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md) §7.1 (rule minted, arm A + B), §7.2 (the intra-block table); belt `SI-1` in [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) | RC-144, RC-150, RC-99 (enforcement note) ⇒ merged. Recorded judgment disagreement: RC read this bucket 1 (FCMP nullifier); the *commitment* is CEN-I7's (bucket 1). Inverse spot-check row. **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 2.** The placement question is ruled: the storage flag is a **belt** (`SI-1`, fatal, never a verdict) and the rule is the validator's. Register row born UNREVIEWED (CSR §5.4.1); the negative fixture (a block with a sibling-tx duplicate key image, asserting `InvalidBlock { rule: CEN-L1 }`) is the deliverable with the implementation |
+| CEN-L2 | A connecting block's `prev_id` must exist and sit at height−1 — wrong-height throws `BLOCK_PARENT_DNE` (:962); missing parent throws `DB_ERROR` (:959); genesis exempt. Block blobs are appended at `m_height` (`MDB_APPEND`) so stored height is strictly increasing | lmdb/db_lmdb.cpp:951–963, 973–978 | C | 3 | — | C2-R8 §7.1: the rule is CEN-A2's (bucket 2, R1c); the store keeps the parent-at-height−1 / one-block-per-height constraint as `SI-2` (fatal). `BLOCK_PARENT_DNE` ceases to be a consensus outcome | RC-145, RC-146 ⇒ merged. **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 3** — absorbed into CEN-A2; belt registered |
+| CEN-L3 | Duplicate block hash (`BLOCK_EXISTS`) and duplicate tx hash (`TX_EXISTS`) reject at write | lmdb/db_lmdb.cpp:948–949, 1071–1074 | C | 3 | — | C2-R8 §7.1: main-chain block-hash uniqueness follows from `SI-2`; listed-tx uniqueness is CEN-G1's (R5); **miner-tx uniqueness is a corollary of CEN-F5** (coinbase height binding — two main-chain miner txs cannot share a hash while F5 holds; alt blocks are stored whole under K3's idempotent put, so `txs` never sees an alt miner tx). Belt `SI-3` (fatal). **Reversion clause: if R5 rules F5 other than as-is, the miner-tx half is re-derived and a validator rule minted** | RC-143, RC-147, RC-174 ⇒ merged. Belt behind CEN-A1/G1 — and for the **miner tx** (absent from `tx_hashes`, uncovered by CEN-G1) `TX_EXISTS` is the *only* connect-time uniqueness check at the pin. **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 3** with the F5 reversion clause; `SI-3` holds regardless of how R5 rules |
+| CEN-L4 | The base `add_block` recomputes the block hash (identity never trusted) but stores contained txs under the header's claimed hashes verbatim — content/hash agreement lives upstream (CEN-G2); `blk.tx_hashes.size() == txs.size()` is asserted at store time | blockchain_db.cpp:459, 477–480; count belt :455–456 | C | 3 | — | C2-R8 §5 (Q4): identity is CEN-B6's; the validator derives every hash once and a `ValidatedBlock` carries `(TxHash, Tx)` pairs, so the count belt is the type. The store-side recompute is **deleted, not moved** | RC-175 ⇒ merged. Recorded absence, §6. **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 3** |
+| CEN-L5 | DB input-type whitelist duplicates CEN-H5 at write time; unknown bond-post kinds fatal | blockchain_db.cpp:398–402, 363–366 | C | 3 | — | C2-R8 §7.1: dissolves — `ValidatedBlock`'s inputs are a Rust `enum`, the whitelist is match exhaustiveness; CEN-H5 remains the rule. A check you can delete beats a check you relocate | **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 3** |
+| CEN-L6 | Every stored output must carry an outPk commitment and yield an output pubkey; coinbase/emission loud amounts store as amount-0 plus the real commitment | blockchain_db.cpp:424–434; lmdb/db_lmdb.cpp:1274–1277, 1361–1368 | C | 3 | — | C2-R8 §7.1: presence is by construction — the typed output carries a `Commitment` (CEN-H8 count, CEN-H17 canonicity remain the rules). **The amount-0 indexing of loud amounts is arm C → R8b-2** (§10): named as a question, not ruled | RC-149 ⇒ merged with a recorded judgment disagreement: RC read the amount-0 indexing bucket 1 (amount-0 CT design); no record names the indexing choice. **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 3** — the store constraint leaves; R8b may mint a new row if the indexing is ruled consensus-visible |
 | CEN-L7 | Archival connect-writers are fatal verify-backstops (never soft-skip): emission claim requires the bond record, re-runs the claimed-epochs dedup and claimability (already-claimed or unclaimable epoch aborts the connect); bond folds' Rust verdicts abort on failure (missing record, fold fail, holdings invariant breach) | blockchain_db.cpp:301–395; lmdb/db_lmdb.cpp:6428–6484, 6541–6597, 6746–6789 | C | 1 | spec | WS-2 journaled check-and-set (E3); [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) (pinned 2026-06-07) | RC-176, RC-179 ⇒ merged. Checkpoint-fast-path belt |
 | CEN-L8 | Two hooks at each settlement boundary, both inside `BlockchainDB::add_block` and therefore in one write txn: **epoch close** — Rust fold freezes budget(E), r_market and sigma-work rows, accrual-sum overflow aborts (never mints); and **settlement** — a `(passes, issued)` fold refusal aborts the same `add_block` write txn. The settlement clause is homed in the **slash scheduler's per-epoch pass**, NOT at the epoch-close event (`SO-D7`) | epoch close: `src/blockchain_db/lmdb/db_lmdb.cpp` `BlockchainLMDB::process_archival_epoch_close_at_height` (:8385–8506; `shekyl_archival_epoch_close_compute` :8411, accrual-overflow abort :8477); hooks: `src/blockchain_db/blockchain_db.cpp` `process_archival_slash_at_height` (:696) one line above `process_archival_epoch_close_at_height` (:697), both in `BlockchainDB::add_block` (:435–702) — **site column re-resolved at `ba4b3c73a` (2026-09-12); the previous anchors (`:8326–8442`, `hook :654–655`) had drifted onto live curve-tree code, so the probe succeeded on the wrong subject** | C | 1 | spec | [`ARCHIVAL_BUDGET_SCHEDULE.md`](ARCHIVAL_BUDGET_SCHEDULE.md); [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md); [`ARCHIVAL_CONSENSUS_STATE.md`](ARCHIVAL_CONSENSUS_STATE.md) §3.5 | RC-177 ⇒ merged. **The DB is the enforcement site.** Settlement-clause locus corrected 2026-09-12 (`SO-D7`): a refusal thrown from the slash pass reaches `Blockchain::handle_block_to_main_chain`'s `catch` (`src/cryptonote_core/blockchain.cpp:6298`) → `m_batch_success = false`, which gates `batch_stop()` (:6692), so the clause holds verbatim at that home. The clause's **production caller is ruled-blocked on `SO-D8`** (`ARCHIVAL_SETTLEMENT_WRITER.md` §5.1), not missing |
 | CEN-L9 | Slash processing at each height: missed-baseline slashes apply via Rust interval verdicts; no-bond / shard-not-held / interval-decision-fail / bonded-underflow / burned-overflow is FATAL | lmdb/db_lmdb.cpp:6193, 5911–6042 | C | 1 | spec | [`ARCHIVAL_FAILURE_CONFIRMATION_PIN.md`](../completed/ARCHIVAL_FAILURE_CONFIRMATION_PIN.md) §1 (m=11/n=13, genesis-frozen); [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md); `config/consensus_constants.json` | RC-178 ⇒ merged |
 | CEN-L10 | Segment freezes at each height: first-crossing rule over the append-only leaf count; a frozen segment's layer-2 sub-root must exist in the tree; the registry row is CREATE-only (`MDB_NOOVERWRITE` — a second freeze of the same shard is FATAL, the O-2 overwrite adversary refused) | lmdb/db_lmdb.cpp:8035–8085; CREATE-only :8588–8592 | C | 1 | spec | [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md) §5.2; O-2 CREATE-only; `config/consensus_constants.json` `segment_leaf_count` 25992 | RC-173 ⇒ merged. **DB-only** — no Blockchain duplicate check |
 | CEN-L11 | Curve-tree growth per block: every accepted output becomes a leaf (`shekyl_construct_curve_tree_leaf` over key ‖ commitment ‖ the `0x07` entry's commitment point, whose x-coordinate is the 4th scalar — `PL-D3`), added **pending** with a maturity height. The tree-**grow** verdicts abort on failure, and since 2026-09-04 so does the leaf-**construct** verdict (it previously did not) — a false return at :586–589, and the two `continue` arms beside it, used to drop the output from the tree with no verify-time twin. All three now abort (2026-09-04); they were unreachable through admission even before, so this was a latent surface rather than the live loss the row implied — CSR §5.4.1 CEN-L11 carries the walk; **re-reviewed CHECKED-CONFORMANT at `ab4693d0e`** (2026-09-04, containing PR #609's merge) | blockchain_db.cpp:500–617; lmdb/db_lmdb.cpp:8964–9166 | C | 1 | spec | [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md); [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | soft-skip = a deterministic but permanently unspendable output; FOLLOWUPS row **closed 2026-09-04** when the arms were made fail-closed (owner repointed here) |
 | CEN-L12 | Deferred-insertion maturity IS the spend-maturity rule: coinbase leaves enter the tree at height+60, all other outputs at height+`CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE` (10); `tx.unlock_time` plays **no** role in when an output becomes spendable | blockchain_db.cpp:531–575; drain :583 (impl lmdb/db_lmdb.cpp:8589) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1 ("Maturity is enforced by universal deferred tree insertion") | the spec's "staked: max(effective_lock_until…)" arm does not exist in code (claim-era, retired) — §7. Third leg of the unlock_time triple-divergence (§6); CHECKED-CONFORMANT with CEN-L11 since 2026-09-04 (CSR §5.4.1) |
-| CEN-L13 | Corruption/desync guards throughout the write and pop paths (serve-credit re-parse, bond-counter overflow, journal-vs-tip belts, trim bounds, pruned-pop refusal, …) abort the operation rather than storing inconsistent consensus state | blockchain_db.cpp / lmdb/db_lmdb.cpp per traversal | C | 4 | none | — | counted as one row: sanity class, not independently ratifiable chain behavior |
-| CEN-L14 | DB-absent uniqueness (deliberately verify-side only): serve-credit pass bits, bond records (JoinMarket p_id), budget accrual rows, witness rows, curve-root heights are flag-0 overwrites | lmdb/db_lmdb.cpp:5168–5181, 5591–5615, 4916–4928, 9663–9672, 9618 | C | 4 | none | — | recorded absences; the PC-D4 comment at blockchain_db.cpp:775–786 records the bug class this tolerance once masked. §10 R8 |
+| CEN-L13 | Corruption/desync guards throughout the write and pop paths (serve-credit re-parse, bond-counter overflow, journal-vs-tip belts, trim bounds, pruned-pop refusal, …) abort the operation rather than storing inconsistent consensus state | blockchain_db.cpp / lmdb/db_lmdb.cpp per traversal | C | 3 | — | C2-R8 §7.1: not chain rules — arm B, classed into the register: cell decode `SI-7`, accumulator arithmetic `SI-8`, journal-vs-tip `SI-6`, trim bounds `SI-5`; **pruned-pop refusal is `StoreCannot`** (a capability, misfiled as a guard) | counted as one row: sanity class, not independently ratifiable chain behavior. **UPDATE 2026-09-14 (C2-R8, §7 #20): 4 → 3** — [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) owns them |
+| CEN-L14 | DB-absent uniqueness (deliberately verify-side only): serve-credit pass bits, bond records (JoinMarket p_id), budget accrual rows, witness rows, curve-root heights are flag-0 overwrites | lmdb/db_lmdb.cpp:5168–5181, 5591–5615, 4916–4928, 9663–9672, 9618 | C | 4 | examined-disposition | C2-R8 §7.3 ruled the **mechanism** (every keyed write is a declared `insert` or `upsert`; silent overwrite unrepresentable) and found each of the five semantics **unnamed by any document — arm C**, routed as R8b-3…R8b-7 (§10) | recorded absences; the PC-D4 comment at blockchain_db.cpp:775–786 records the bug class this tolerance once masked. **UPDATE 2026-09-14 (C2-R8, §7 #20): stays 4, class `none` → `examined-disposition`.** R8 examined; R8b names — one word per site once ruled |
 | CEN-L15 | `if (blk.major_version >= 4)` cumulative-RCT accumulation in `block_info` never runs (live major is 1); `bi_cum_rct` therefore holds this block's RCT count only — a dead Monero-v4 (RCT-era) dispatch arm on the write path | lmdb/db_lmdb.cpp:988–998 | C | 3 | — | rule 60: `RCTType*` named in the deleted-from-construction list; "delete the dead branch" for Monero-era version dispatch | [m] RC-180 ⇒ minted at RC's bucket. §10 R5 executes |
 
 ### 4.M Mempool admission (the `kept_by_block` axis)
@@ -607,7 +619,13 @@ walking the live function will meet them. Rule-60 material throughout.
    rules have no DB constraint at all (CEN-L14); `HardFork::add`'s reject
    verdict is discarded at the DB call site (CEN-B3). The rewrite must
    *decide* where each rule lives; today's placement is an accident of the
-   write path. (§10 R8.)
+   write path. (§10 R8.) **UPDATE 2026-09-14: decided by C2-R8** — the
+   decision is a *standing test*, not a per-row verdict: would the statement
+   still have to hold if the consensus rules changed? Yes → store invariant
+   (`SI-` register, fatal, never a verdict); no and a document names it →
+   consensus rule (validator); no and nothing names it → arm C, a named
+   question for a spec round. Applied here to L1–L6/L13/L14 (§7 #20) and
+   binding on any rule on any surface thereafter.
 2. **The unlock_time triple-divergence.** One field, three stories:
    consensus accepts any height-form value < 500 000 000 (CEN-H16, ratified);
    relay refuses any nonzero value (CEN-M5, ratified); the curve tree
@@ -1039,6 +1057,61 @@ input, not fixes.
 
     Register: born UNREVIEWED with its implementation; review at the merged
     sha owed. Live bucket-1/2 set 122.
+20. **C2-R8 ruled — storage-layer enforcement placement is a standing test,
+    not eight verdicts** (2026-09-14; ruling doc
+    [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md),
+    C++ read at `c405fac0a`, Rust store at `943592a61`). **The premise held
+    at the pin and was worse than the row said:** `db_lmdb.cpp:1438`'s
+    `MDB_NODUPDATA` put is the *only* intra-block key-image rule on the
+    connect path (CEN-I7's per-input lookup cannot see a sibling tx of the
+    same block; `check_for_double_spend` is dead; `prepare_handle_incoming_blocks`
+    :6761–6787 dedups an incoming *batch* as a drop verdict), and the same
+    fusion sits in two places no row named — `add_block` computes the
+    curve-tree root CEN-B5 compares against (`blockchain_db.cpp:641–664`),
+    and `pop_block` (`:724–927`) reverts six order-dependent journals with no
+    validator at all. **Rulings:** Q1 a three-arm category test (store
+    invariant / consensus rule / unspecified → spec round), binding on any
+    rule on any surface, so a row the test cannot decide goes to arm C and
+    not to an R9; Q2 three error classes — `InvalidBlock` (validator only),
+    `StoreInvariantViolated` (fatal, internal), `StoreCannot` (capability) —
+    with conversion between them **banned and gated**
+    (`check_store_error_conversion_ban.py`, landed with the ruling); Q3 the
+    validator's `ChainView` is projected from the write batch that applies
+    the block, `ChainValid<'id>` invariant-branded through a higher-ranked
+    `connect` closure, one-live-write recorded as liveness not soundness; Q4
+    the store computes nothing consensus-visible — the curve-tree transition
+    is a consensus-owned function handed to `connect`, and L4's store-side
+    recompute is deleted not moved; Q5 pop is reverse replay of one LIFO undo
+    log, the trim the only computed inverse and checked against the recorded
+    root; Q6 per-row (below) plus the intra-block table and declared
+    `insert`/`upsert` writes; Q7 `RuleSet` an explicit input, `AdmissionPolicy`
+    separate; Q8 one validation crate with no store handle, replay-that-
+    validates as D11's mechanism, the C++ oracle *graded* through
+    `conformance.rs`, a negative fixture per rule (replay catches
+    over-rejection only), `RuleCoverage` persisted so a partial validator
+    cannot mint parity evidence, and a completeness gate that **partitions
+    by flag first** (`implemented / 130` would have counted five relay-policy
+    rows toward consensus coverage). **Row moves (all C-flagged):** CEN-L1
+    4 → 2, class `ratified`, with an intra-block rule minted and `SI-1` as
+    its belt; CEN-L2/L3/L4/L5/L6/L13 4 → 3 (absorbed into A2 / F5-corollary
+    with a reversion clause / deleted / dissolved into the type / presence by
+    construction with amount-0 indexing to R8b-2 / classed into the
+    register); CEN-L14 stays 4, `none` → `examined-disposition`, its five
+    semantics routed as R8b-3…7. Denominator `87 + 44 + 11 + 31`; by flag
+    consensus `[86, 40, 11, 27]`, policy unchanged. **New artifacts:** the
+    store-invariant register (`SI-1…SI-8`,
+    [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)) with its
+    bijection gate at birth, and batch **R8b** in §10 (seven arm-C
+    questions). **Stale figure corrected in the same pass:** §1's
+    "twenty-seven UNREVIEWED" had been false since P0f slices 9–10 closed the
+    backlog on 2026-09-11 (register 126 / 2 / 2); re-derived to 126 / 2 / 3
+    with CEN-L1's row. **Handed on with named carriers, not deferred:**
+    DRS-E1 increment 2.5 (brand, `StoreError::class()`, `StoreInvariant`,
+    `insert`/`upsert`, `StoreCannot`) before any consumer of `WriteBatch`;
+    the DRS plan amendment (validation crate ahead of S-CHAIN-W; DRS-E6 for
+    surface-free rules; `ChainTip.connect` in `get_info`). Rule 21 reopeners
+    in the ruling's §13: a store constraint a rule *cites* as its mechanism;
+    one-live-write relaxed.
 
 ---
 
@@ -1237,7 +1310,8 @@ the bucket-3/4 rows at C1 close (counts sum to 70).
 | **R2 — Block-weight / reward-zone / fee constants** — **SIGNED (Rick, 2026-09-06)** ([`CONSENSUS_C2_R2_WEIGHT_FEES.md`](../completed/CONSENSUS_C2_R2_WEIGHT_FEES.md), C2-R2-Q1…Q11 with Q5 recorded as dissolved into §6): Q1/Q2/Q4/Q6/Q7/Q8/Q9/Q10/Q11 ratified (Q1's GAP-7 condition discharged in the passing direction — the census notes carry the FLOOR figure; Q9 = NO consensus fee floor, rule-21 reopeners; Q10 with corrected headroom + the 0x0A no-producer rule-15 row); **Q3 AMENDED: the 100-block window + 51-block hysteresis RATIFIED, the ×50 surge factor REFUTED-NOT-SUPERSEDED by GAP-7's floor measurement** (surge-ceiling cold block ≈ 316 % of T on the Pi 4) — Q2 COUNTERSIGNED on the corrected two-regime rationale (its mandated trace refuted the first reason's early-chain half; **coupling: any future loosening of surge_max reopens Q2, not just Q3** — rationale owned by the round doc's §3 Q2/Q3 and deliberately not restated here: an earlier restatement compressed it to "the sole early-chain weight guard", hardening the countersigned "structurally weak" long-term governor into an absent one — the 17/10 per-block stored-weight clamp still yields the ×1.7-per-chain-doubling ramp-in law and the penalty curve prices saturation; the reopening rule is the operative content and is conservative under either reading); **the re-derived surge factor is SIGNED: ×4, the d24 consensus-max figure** (bound `surge × count × verify_floor ≤ T/3`; verify_floor = 128.77 ms/tx; d2/d7 would have signed 6.5/5.7 — the difference is the decay a today's-depth constant would suffer silently). Reopen conjuncts were verified at the artifacts and both landed on dev with #614. | CEN-G6, G6b, F14b, H1, H3, M3, M4, M10 (8) | The 300 000 reward zone (an explicitly punted "fossil flag" arbitration), the 1.7× clamps, ×50 surge, the ArticMine penalty curve, the 1 MB tx cap, and every fee-formula constant fossilize as Shekyl economics without ever having been derived for Shekyl |
 | **R4 — Header identity + hardfork collapse** | CEN-B2, B3, B6, B7, A5, A6, A7, H23 (8) | The wire-identity binding (no explicit merkle field — B6) and the inert voting machinery freeze; **the V4 lattice-only activation question must be answered by design, per rules 75/21 — recorded here, deliberately not answered**: collapse-vs-redesign of the hardfork subsystem is exactly that question's mechanism half |
 | **R5 — Coinbase + tx structural residue (incl. bucket-3 executions)** | CEN-F1, F5, F6, F7, F12, H4, H8, H9, H10, G1, G2, G3, G5 + H24, L15 (15) | The coinbase contract (pinned-not-re-derived unlock window 60, the load-bearing-dead decomposed arm a naive Rust port would implement as live), the structural belts, and the rule-60 deletions (H24, L15) become permanent — dead branches are the cheapest deletion pre-genesis and a port hazard forever after |
-| **R8 — Storage-layer enforcement placement** | CEN-L1–L6, L13, L14 (8) | "Validation completed by a side effect of the write path" (KI uniqueness as an LMDB exception, verbatim-hash storage, verify-side-only uniqueness) becomes the rewrite's implicit spec — the rewrite must place each rule deliberately or inherit the accident |
+| **R8 — Storage-layer enforcement placement** — **RULED 2026-09-14** ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md), C2-R8-Q1…Q8; §7 #20): Q1 a standing three-arm category test binding any rule on any surface; Q2 three error classes with a gated conversion ban; Q3 `ChainView` from the applying write batch, `ChainValid<'id>` branded; Q4 the store computes nothing consensus-visible; Q5 pop is reverse replay of one undo log; Q6 per-row — **CEN-L1 → bucket 2** (intra-block rule minted, `SI-1` belt), **L2/L3/L4/L5/L6/L13 → bucket 3**, L14 stays 4 as arm C; Q7 `RuleSet` explicit; Q8 one validation crate, replay-that-validates, graded oracle, negative fixture per rule, `RuleCoverage`, flag-partitioned completeness gate. Store-invariant register `SI-1…SI-8` minted with its gate; the conversion-ban gate landed with the ruling) | CEN-L1–L6, L13, L14 (8) | "Validation completed by a side effect of the write path" (KI uniqueness as an LMDB exception, verbatim-hash storage, verify-side-only uniqueness) becomes the rewrite's implicit spec — the rewrite must place each rule deliberately or inherit the accident. **Discharged:** the test, not the eight rows, is what the rewrite applies |
+| **R8b — Unnamed write semantics (arm C of the R8 test)** — *routed 2026-09-14 by C2-R8 §12; not a deferral: no blocker, seven named questions, each answered by one word at a declared `insert`/`upsert` site or by one new census row* | **0 census rows at dispatch** (does not change the frozen 70); questions R8b-1 output-public-key uniqueness (§7.2 of the ruling; Monero permits duplicates), R8b-2 amount-0 indexing of loud amounts (from CEN-L6), R8b-3…7 the five CEN-L14 sites — serve-credit pass bits, bond records, budget accrual rows, witness rows, curve-root heights (R8b-7 confirms Q4's `insert` / `SI-4`; a rewrite case reopens SI-4) | Each site ships as whichever verb the porter reaches for; a behaviour nobody decided becomes a behaviour nobody can change. **Falsify by:** every R8b id carrying a ruling pointer in the ruling doc's §12, and CEN-L14's class leaving `examined-disposition` |
 | **R6 — Inherited crypto verifiers on the acceptance path** | CEN-H11, H19, D1b (3) | The KI-domain check (submit-path-examined only, coupled to the open FCMP y-normalization question), the inherited C++ BP+ verifier (inventory disposition still *pending*), and the KAT-sealed PoW comparison ship as cryptographic consensus surfaces whose right-for-Shekyl was never ruled — a seal is not a ratification |
 | **R7 — Mempool admission semantics** | CEN-M1, M2, M6, M7, M11 (5) | Pool idempotency, NIC caching, and relay-side spend pre-checks freeze as the de-facto admission contract; U-4's open question rides here — whether the pool makes any relay-timing decision independent of the Dandelion++ layer (a privacy-leak channel no relay round examined, because the rounds examined the relay layer and not the pool) |
 | **R9 — Test levers in production consensus paths** | CEN-D7 (1) + the §6.8 carve-out finding (I2/B5/D3-env notes) | Regtest seams compiled into consensus functions fossilize; the rewrite needs a designed test seam, not inherited `FAKECHAIN` branches. **On an S1's critical path 2026-09-04 → 2026-09-05 (§7 #17, #18):** the CEN-B5 fix's regression could not run on FAKECHAIN, and landed as the first non-FAKECHAIN Blockchain fixture instead; the CEN-B5 skip itself was retired on PR #623 (2026-09-05) by a generator that computes real roots through the Rust client (§7 #18); R9 keeps the D7/I2/D3 levers |
