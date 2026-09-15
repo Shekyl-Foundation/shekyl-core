@@ -315,9 +315,10 @@
   DRS-E1 increment 2.5 (2026-09-15) lands the ruling's store-side mechanics
   in `shekyl-chain-store`: the per-batch brand behind `ChainStore::write`,
   the three error classes as `StoreError`'s outer variants, `StoreInvariant`
-  (`SI-7` built), the two declared write verbs on `KeyedTable`, and a batch
-  poison so a swallowed invariant violation still cannot commit. No daemon
-  path uses the crate yet.
+  (`SI-7` built), the two declared write verbs as `InsertTable` /
+  `UpsertTable`, and a batch poison so a swallowed invariant violation —
+  including one mapped to a different `Err` — still cannot commit. No
+  daemon path uses the crate yet.
 
 ## [3.1.0-alpha.8] - 2026-09-10
 

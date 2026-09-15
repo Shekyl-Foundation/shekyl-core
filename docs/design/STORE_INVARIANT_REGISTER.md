@@ -29,7 +29,7 @@ Two consequences of "never decides":
   When it does, the row is a belt behind that rule, and a violation means
   the validator has a hole. When it does not, a violation means the file is
   corrupt or the store's own write path is wrong;
-- a row is enforced at the **write** (a `KeyedTable::insert` on a present
+- a row is enforced at the **write** (an `InsertTable::insert` on a present
   key, a root that does not match), not by a scan. There is no "check
   invariants" pass.
 
@@ -79,18 +79,20 @@ No variant is a consensus verdict, and none ever will be: the crate does not
 name `InvalidBlock` (ban clause 2).
 
 **How a violation is produced, and what it does to the batch** (increment
-2.5, `store/keyed.rs`, `store/write.rs`). `KeyedTable::insert(key, value,
-row)` is fatal on a present key and returns `InvariantViolated(row)` for the
-row the call site names — the site knows which `SI-` it is enforcing, the
-table does not. `upsert` is the declared overwrite and names no row. Every
-`InvariantViolated` produced or observed through a `WriteBatch` (a refused
-`insert`; a `get_property` on a cell that fails SI-7) **poisons** it: the
-first row to arm is kept and `commit` refuses with it, so a caller that
-swallows the violation still lands nothing. That is what makes "fatal, never
-converted" a property of the batch rather than of each call site. SI-1 /
-SI-3 / SI-4 therefore stay `ruled` until S-CHAIN-W writes their tables: the
-verb exists, and the increment that first calls it with each row adds the
-variant (§5 step 1).
+2.5, `store/keyed.rs`, `store/write.rs`). A keyed table opens as
+`InsertTable` or `UpsertTable` — the verb is the handle. `open_insert_table`
+binds the `SI-` row the site is enforcing; `InsertTable::insert` is fatal on
+a present key and returns `InvariantViolated` for that bound row. `upsert`
+is the declared overwrite and names no row. Every `InvariantViolated`
+produced or observed through a `WriteBatch` (a refused `insert`; a
+`get_property` on a cell that fails SI-7) **poisons** it: the first row to
+arm is kept and `complete` refuses with it on **both** the closure's `Ok`
+and `Err` arms, so a caller that swallows the violation — or maps it to a
+different error — still lands nothing and still surfaces the row. That is
+what makes "fatal, never converted" a property of the batch rather than of
+each call site. SI-1 / SI-3 / SI-4 therefore stay `ruled` until S-CHAIN-W
+opens their tables: the insert handle exists, and the increment that first
+opens one with each row adds the variant (§5 step 1).
 
 ## 4. The gate
 
