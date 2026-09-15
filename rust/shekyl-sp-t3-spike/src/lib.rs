@@ -65,12 +65,19 @@
 //!
 //! # What this crate deliberately does not do
 //!
-//! No `ServeCredit` construction, no countersignature, no receipt, no bond
-//! binding, no epoch settlement, no consensus surface, no wire format, no FFI.
-//! The measurement is of a *transport*, and the charter's non-goals are enforced
-//! by this crate's dependency list: it does not depend on `shekyl-wire`,
-//! `shekyl-daemon-rpc`, or `shekyl-ffi`, so it cannot reach a consensus surface
-//! even by accident.
+//! No `ServeCredit` construction, no receipt, no bond binding, no epoch
+//! settlement, no consensus surface, no wire format, no FFI. The measurement is
+//! of a *transport*, and the charter's non-goals are enforced by this crate's
+//! dependency list: it does not depend on `shekyl-wire`, `shekyl-daemon-rpc`,
+//! or `shekyl-ffi`, so it cannot reach a consensus surface even by accident.
+//!
+//! It **does** countersign and verify, since `SF` (a): the personas sign every
+//! body under an ephemeral test key and the client leg refuses a body that does
+//! not verify, because the shipped serve and fetch paths do and a rig that
+//! bypassed either would time a different protocol. What it does *not* do is
+//! look the anchor hash up in a chain — it has none — so the fixed anchor the
+//! apparatus sends is a pass record consensus would reject, and nothing here
+//! ever assembles one. See [`harness`]'s module doc.
 
 pub mod fixture;
 pub mod harness;

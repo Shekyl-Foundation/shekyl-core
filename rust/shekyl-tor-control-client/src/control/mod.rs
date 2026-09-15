@@ -45,8 +45,8 @@ pub mod stream;
 pub mod vanguards;
 
 pub use actor::{
-    BootstrapReadiness, Command, CommandResult, ControlError, EventSink, ManagedTor, SocksPort,
-    TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
+    BootstrapReadiness, Command, CommandResult, ControlError, EventSink, ManagedTor, Signal,
+    SocksPort, TorControlClient, TorControlClientConfig, TorExit, TorLaunch,
 };
 pub use auth::{parse_authchallenge, read_cookie_file, AuthError, ServerHash, ServerNonce};
 pub use bootstrap::{parse_bootstrap_progress, BootstrapState};

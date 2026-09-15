@@ -30,9 +30,22 @@ shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # The harness holds the control actor's `ActorRef` to issue ADD_ONION; kameo is
 # the workspace's actor stack, already pinned there.
 kameo = { workspace = true }
-# The client leg: per-persona SOCKS isolation + the bounded `blocking_get`.
-shekyl-p-transport = { path = "../shekyl-p-transport" }
-# `PCanonicalId` / `PSlot` — the persona identity the derivation binds to.
+# The per-apparatus derivation seed (`harness::fresh_apparatus_seed`): OS
+# entropy, so no two apparatus instances ever publish the same `.onion`. Same
+# crate and pin as `shekyl-p-fetch`'s request nonce.
+getrandom = "0.2"
+# The client leg: the **production** daemon fetch client (`SF-D5` header,
+# `SF-D8` countersignature verify, `SF-D6` typed outcomes). `shekyl-p-transport`
+# used to sit here; its `blocking_get` cannot carry the request header, so every
+# fetch through it was the identical 404 once (a) landed. This crate is the one
+# place both halves of the `SF-D4` dep cut are linked on purpose — it is a rig,
+# not a shipped root, and `check_p_fetch_dep_cut.py` reads its roots from
+# `BuildRust.cmake`, which never names this crate.
+shekyl-p-fetch = { path = "../shekyl-p-fetch" }
+# `PASS_ANCHOR_DEPTH_BLOCKS` — the one burial depth both sides of the apparatus
+# anchor against, read from the same constant the verifier reads.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
+# `PSlot` — the persona identity the derivation binds to.
 shekyl-types = { path = "../shekyl-types" }
 # `derive_p_hs_id_seed` (+ `DerivationNetwork` / `SeedFormat`) — the production
 # GF-9 HS-identity seed the onion encoding consumes (SPIKE-F-4 relocation).
@@ -67,7 +80,8 @@ name = "extract-shard"
 path = "bins/extract_shard.rs"
 
 [dev-dependencies]
-# The live apparatus test drives the harness on a tokio runtime.
+# The live apparatus test drives the harness on a tokio runtime; the loopback
+# client-leg test runs a SOCKS5h shim on it.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 
 [lints]

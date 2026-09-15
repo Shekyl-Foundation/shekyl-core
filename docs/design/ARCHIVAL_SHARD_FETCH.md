@@ -15,9 +15,10 @@ verifier alone → (a) serve side → (b) `shekyl-p-fetch` → (c) W₂ then
 `N`. This file stays in `docs/design/` because it still owns named
 residue — the **integer** `N` (`SF-D7`; `shekyl_p_fetch::MAX_INFLIGHT
 = 4` is the SPIKE-PIN with its lower-bound rationale on the constant)
-and the W₂ measurement (§8, step (c)), which the SP-T3 rig cannot run
-until its client leg is re-based onto `shekyl-p-fetch` (its
-`fetch_once` says so). Discharged: the signature domain string, KAT,
+and the W₂ measurement (§8, step (c)) — the SP-T3 rig's client leg
+**is** re-based onto `shekyl-p-fetch` (2026-09-14, §9.1 (c)); what
+step (c) still waits on is the run itself, against a real regtest
+shard. Discharged: the signature domain string, KAT,
 and nonce-carrying pass record (`SF-D8` message) by (a0); the header
 spelling and encoding (`SF-D5`), the response envelope (`SF-D8`
 carrier), the `P`-side gate, the signer seam (`SF-D13`), the client
@@ -1562,6 +1563,33 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   is measured over the reuse topology is (c)'s design. Falsify by
   `live_apparatus` passing; the upper bound it produces and (b)'s
   lower-bound judgement pin the integer, replacing the SPIKE-PIN.
+
+  **Re-base BUILT 2026-09-14 (`b9c2fdb01`, `b3ec6b79a`); run
+  pending.** The rig is daemon→wallet: one client tor the fetches dial
+  through with no per-fetch isolation (the production posture), each
+  persona behind its own tor with its own guard set. "Cold" is
+  `SIGNAL NEWNYM` on the client tor before the fetch — the daemon's
+  view of a fresh circuit, not a fresh client; "warm" is circuit reuse.
+  Bring-up ends only when one `NEWNYM` round of cold probes to *every*
+  persona succeeds at once: `NEWNYM` drops the descriptor cache, and a
+  minute-old onion has not reached all its HSDirs, so "reachable once,
+  warm" let publication lag into the cold arm's first samples as
+  `Circuit`. A completed exchange the client refuses (anchor gate, key, envelope)
+  is `Refused`, kept apart from `Circuit` and `Stall` so the apparatus
+  cannot blame Tor for disagreeing with itself. The concurrency sweep
+  (`SHEKYL_SPIKE_PERSONAS` wide, powers of two) prints the `SF-D7`
+  churn table with `width × max_body_bytes()` beside each row — a row
+  the serve-side cap shed into, or one the client refused, is printed
+  `VOID` and never the ratio baseline. The cold arm's single-attempt
+  p99 is printed against the `L` note's two thresholds as the **lower
+  bound** on fetch-plus-retry it is: it can refute "under two minutes"
+  and establish "over six", never establish "under six" — that needs
+  `SF-D6`'s retry budget, so the middle reads *drop refuted, budget
+  open*, not *holds*. The binary picks neither pin. `live_apparatus` passed
+  over real Tor in 110 s (two persona tors + client tor; header sent,
+  bodies verified under each persona's key). The run itself waits on a
+  real regtest shard (§12.2 of the SP-T3 doc: ~5 h mine, then extract),
+  then a ≥ 24 h soak.
 
 The round doc archives to `docs/completed/` when (c) lands.
 
