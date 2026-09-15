@@ -38,6 +38,7 @@
 #if defined(__cplusplus)
 #include <cstddef>
 #include "mlocker.h"
+#include "memwipe.h"
 
 namespace crypto {
   extern "C" {

@@ -108,14 +108,17 @@ shared across the kept-set (e.g., `src/crypto/c_threads.h`,
 by default; if a workstream needs to migrate or delete any of these,
 the workstream's PR adds an explicit row.
 
-## F.C++-1 — DELETED 2026-09-15
+## F.C++-1 — production CryptoNight deleted 2026-09-15; two residues remain
 
 CryptoNote PoW residue. The A-4/A-5/A-7/A-8 workstream deleted
 `slow-hash.c`, `pow_cryptonight.cpp`, AES/OAES/JIT/hash-extra, and the
-variant-4 helper. `variant2_int_sqrt.h` remains as a **test-only**
-header (`tests/hash/`); it has no production caller. Per
+variant-4 helper. Two non-production files remain in this category
+because they are not PoW and are not this workstream's deletion
+surface: `variant2_int_sqrt.h` is a **test-only** header
+(`tests/hash/`; no production caller), and `src/fcmp/bulletproofs.{cc,h}`
+is an empty non-plus Bulletproof stub (FCMP, not CryptoNight). Per
 [`60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc),
-Shekyl ships RandomX v2 from genesis.
+Shekyl ships RandomX v2 from genesis. The category is **not empty**.
 
 | File | Inherited role | Notes |
 | --- | --- | --- |
@@ -124,14 +127,14 @@ Shekyl ships RandomX v2 from genesis.
 | `src/crypto/aesb.c` | AES block primitives used by CryptoNight slow-hash | **DELETED 2026-09-15** |
 | `src/crypto/oaes_lib.{c,h}`, `src/crypto/oaes_config.h` | OpenSSL AES library port (CryptoNight dependency) | **DELETED 2026-09-15** |
 | `src/crypto/CryptonightR_JIT.{c,h}`, `src/crypto/CryptonightR_JIT_stub.c`, `src/crypto/CryptonightR_template.{h,S}` | CryptoNight JIT compiler + code-generation template | **DELETED 2026-09-15** |
-| [`src/crypto/variant2_int_sqrt.h`](../src/crypto/variant2_int_sqrt.h) | CryptoNight variant-2 integer sqrt helper | Test-only residue (`tests/hash/`); no production caller |
+| [`src/crypto/variant2_int_sqrt.h`](../src/crypto/variant2_int_sqrt.h) | CryptoNight variant-2 integer sqrt helper | **RESIDUE (test-only).** `tests/hash/` still includes it; no production caller. Not a live PoW path. |
 | `src/crypto/variant4_random_math.h` | CryptoNight variant-4 random-math helper | **DELETED 2026-09-15** |
 | `src/crypto/blake256.{c,h}` | Blake256 (CryptoNight component hash) | **DELETED 2026-09-15** |
 | `src/crypto/groestl.{c,h}`, `src/crypto/groestl_tables.h` | Groestl (CryptoNight component hash) | **DELETED 2026-09-15** |
 | `src/crypto/jh.{c,h}` | JH (CryptoNight component hash) | **DELETED 2026-09-15** |
 | `src/crypto/skein.c`, `src/crypto/skein_port.h` | Skein (CryptoNight component hash) | **DELETED 2026-09-15** |
 | `src/crypto/hash-extra-blake.c`, `src/crypto/hash-extra-groestl.c`, `src/crypto/hash-extra-jh.c`, `src/crypto/hash-extra-skein.c` | CryptoNight component-hash extras | **DELETED 2026-09-15** |
-| [`src/fcmp/bulletproofs.{cc,h}`](../src/fcmp/bulletproofs.cc) | Legacy (non-plus) Bulletproof — already empty stub | `.cc` is `#include "bulletproofs.h"` only ("Legacy (non-plus) Bulletproof implementation removed. Use bulletproofs_plus.cc for BulletproofPlus."); per [`60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc) Rule 60, `RCTTypeBulletproof` is removed at consensus and the stub files become deletion residue |
+| [`src/fcmp/bulletproofs.{cc,h}`](../src/fcmp/bulletproofs.cc) | Legacy (non-plus) Bulletproof — already empty stub | **RESIDUE (FCMP, not PoW).** `.cc` is `#include "bulletproofs.h"` only. `RCTTypeBulletproof` is gone at consensus; the stub is not an FFI wrapper (not F.C++-4) and is not this PoW workstream's delete. |
 
 **Workstream attribution.** A-4/A-5/A-7/A-8 PoW workstream (paired with
 RandomX-v2-from-genesis + LWMA-1 difficulty replacement). Per
@@ -284,8 +287,8 @@ categorization error and must move to F.C++-2 or F.C++-3.
   — the cryptographic surface this inventory categorizes against; PQC
   primitive + tx_extra tag specification.
 - [`docs/STRUCTURAL_TODO.md`](./STRUCTURAL_TODO.md) — adjacent C++
-  cleanup tracks (32-bit fallback gating, Boost migration, `slow-hash.c`
-  retirement).
+  cleanup tracks (32-bit fallback gating, Boost migration; `slow-hash.c`
+  retirement **CLOSED 2026-09-15**).
 - [`docs/DOCUMENTATION_TODOS_AND_PQC.md`](./DOCUMENTATION_TODOS_AND_PQC.md)
   — §1.10 modular PoW schema status (RandomX from genesis; CryptoNight
   variants not supported) and Boost migration table.
@@ -311,8 +314,9 @@ categorization error and must move to F.C++-2 or F.C++-3.
 This document survives until **all four categories are empty or
 permanent**:
 
-- F.C++-1: **emptied 2026-09-15** except test-only `variant2_int_sqrt.h`
-  and the Bulletproof stub. CryptoNight residue is deleted.
+- F.C++-1: production CryptoNight **deleted 2026-09-15**. Two named
+  residues remain (test-only `variant2_int_sqrt.h`; FCMP Bulletproof
+  stub). The category is not empty.
 - F.C++-2: permanent in shape, but individual files may migrate to
   Rust over time (V3.x and beyond). Per-file entries are deleted as
   migrations complete.
