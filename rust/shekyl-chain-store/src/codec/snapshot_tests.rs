@@ -27,8 +27,9 @@
 //! none of which need move a codec fixture's bytes. So:
 //!
 //! - `schemas/tables.snap` pins [`schema::catalogue`]: one row per
-//!   definition with its name, shape and the key/value `TypeName`s redb
-//!   checks at `open_table`.
+//!   definition with its name, its declaration ordinal (the pop journal's
+//!   table identity), its shape and the key/value `TypeName`s redb checks
+//!   at `open_table`.
 //! - `schemas/properties.snap` pins [`PROPERTY_CELLS`]: one row per cell
 //!   with its key, [`CellScope`] and value-codec name. A new
 //!   [`ChainState`](super::ChainState) cell is digest-domain growth even
@@ -80,7 +81,11 @@ use crate::family_set::FamilySet;
 use crate::lmdb_order::Hash32;
 use crate::schema::{self, TableShape};
 
-use super::{Canonical, ProbeCell, PropertyCell, SchemaVersion, PROPERTY_CELLS, SCHEMA_VERSION};
+use super::{
+    Canonical, ProbeCell, PropertyCell, SchemaVersion, UndoEntry, UndoLog, PROPERTY_CELLS,
+    SCHEMA_VERSION,
+};
+use crate::schema::TableOrdinal;
 
 /// Catalogue snapshot stems under `schemas/`. Not codec names;
 /// [`every_canonical_impl_has_a_snapshot`] holds the two namespaces apart.
@@ -175,6 +180,68 @@ impl Fixtures for FamilySet {
     }
 }
 
+impl Fixtures for UndoLog {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // Ordinals as literals: the snapshot pins the *row layout* (tag
+        // bytes, u32 LE lengths, has_prior flag), and must not move when a
+        // table is appended to the catalogue. Every variant appears, with a
+        // multi-byte key so the length prefix is visible in the hex.
+        vec![
+            ("empty", UndoLog::default()),
+            (
+                "inserted",
+                UndoLog(vec![UndoEntry::Inserted {
+                    table: TableOrdinal::from_index(0),
+                    key: Box::new(1u64.to_le_bytes()),
+                }]),
+            ),
+            (
+                "multi_inserted",
+                UndoLog(vec![UndoEntry::MultiInserted {
+                    table: TableOrdinal::from_index(12),
+                    key: Box::new(0u64.to_le_bytes()),
+                    value: Box::new([0xaa, 0xbb, 0xcc]),
+                }]),
+            ),
+            (
+                "replaced_with_prior",
+                UndoLog(vec![UndoEntry::Replaced {
+                    table: TableOrdinal::from_index(19),
+                    key: Box::from(*b"total_burned"),
+                    prior: Some(Box::new(7u64.to_le_bytes())),
+                }]),
+            ),
+            (
+                "replaced_absent",
+                UndoLog(vec![UndoEntry::Replaced {
+                    table: TableOrdinal::from_index(19),
+                    key: Box::from(*b"k"),
+                    prior: None,
+                }]),
+            ),
+            (
+                "three_in_write_order",
+                UndoLog(vec![
+                    UndoEntry::Inserted {
+                        table: TableOrdinal::from_index(1),
+                        key: Box::new([0x11; 32]),
+                    },
+                    UndoEntry::Replaced {
+                        table: TableOrdinal::from_index(18),
+                        key: Box::new(2u64.to_le_bytes()),
+                        prior: Some(Box::new([1])),
+                    },
+                    UndoEntry::MultiInserted {
+                        table: TableOrdinal::from_index(12),
+                        key: Box::new(5u64.to_le_bytes()),
+                        value: Box::new([0x01; 9]),
+                    },
+                ]),
+            ),
+        ]
+    }
+}
+
 /// The type name as written after `impl Canonical for`, for the source scan.
 fn type_name<T>() -> &'static str {
     core::any::type_name::<T>()
@@ -236,12 +303,20 @@ fn render_table_catalogue() -> String {
     let catalogue = schema::catalogue();
     assert!(!catalogue.is_empty(), "schema::catalogue() is empty");
     let mut rows = BTreeMap::new();
-    for spec in &catalogue {
+    for (ordinal, spec) in catalogue.iter().enumerate() {
         let shape = match spec.shape {
             TableShape::Map => "map",
             TableShape::Multimap => "multimap",
         };
-        let row = format!("{shape}<{}, {}>", spec.key.name(), spec.value.name());
+        // The ordinal is part of the layout (schema module docs): the pop
+        // journal names tables by it, so a reorder must move this snapshot
+        // and take the version bump with it, even though the rows are
+        // sorted by name for a stable diff.
+        let row = format!(
+            "#{ordinal} {shape}<{}, {}>",
+            spec.key.name(),
+            spec.value.name()
+        );
         assert!(
             rows.insert(spec.name.as_str(), row).is_none(),
             "duplicate table name `{}` in schema::catalogue()",
@@ -539,6 +614,7 @@ snapshotted_codecs! {
     Hash32 => codec_snapshot_hash32,
     SchemaVersion => codec_snapshot_schema_version,
     FamilySet => codec_snapshot_family_set,
+    UndoLog => codec_snapshot_undo_log,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`

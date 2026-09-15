@@ -328,9 +328,18 @@ jobs:
         # Checks NAMES, not types — ordering is the key-type gate above;
         # comparator evidence is in lmdb_order's tests; class evidence is
         # per-row in the audit's §12.
-        # Instance of 47-gate-subject-assertion.mdc.
+        # Since S-CHAIN-W commit 1 the schema also carries tables LMDB never
+        # had (`RUST_ONLY_TABLES`, a {table: reason} map in schema.rs). A
+        # definition with neither a twin nor an entry there is still red
+        # with the original extra-leg refusal; the map is not a mode switch.
+        # Instance of 47-gate-subject-assertion.mdc; --selftest proves each
+        # refusal.
         if: '!cancelled()'
         run: python3 scripts/ci/check_redb_schema_bijection.py
+
+      - name: Run redb schema bijection gate self-test
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_bijection.py --selftest
 
       - name: Run store-invariant register bijection gate
         # C2-R8 §11: STORE_INVARIANT_REGISTER.md §2 is a bijection with the

@@ -27,6 +27,22 @@ use crate::codec::CodecError;
 /// its register row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StoreInvariant {
+    /// **SI-6** — the undo log's top entry is the tip height, and a pop
+    /// consumes exactly that entry.
+    ///
+    /// Armed at the two places the journal and the tables can disagree:
+    /// sealing a height's journal row when one is already recorded there
+    /// (the tip moved without its row being consumed), and replaying an
+    /// entry whose target is not in the state the entry says it left
+    /// (something wrote around the journal). Either way the file's
+    /// pre-images no longer describe its tables, so no pop can be trusted
+    /// to land on a coherent state; the writer halts (DRS §3.6.2).
+    UndoLogIncoherent {
+        /// The height whose journal row is at issue.
+        height: u64,
+        /// Which disagreement was found.
+        fault: UndoFault,
+    },
     /// **SI-7** — every cell read decodes under its canonical codec; an
     /// undecodable or missing sealed cell is fatal.
     ///
@@ -35,10 +51,12 @@ pub enum StoreInvariant {
     /// [`StoreCannot::SchemaVersionMismatch`](super::StoreCannot::SchemaVersionMismatch),
     /// a refusal. Both header cells land in the seal's one transaction, so a
     /// store with a valid `schema_version` and a broken `apply_policy` was
-    /// modified by something other than this crate. Rebuild from the block
-    /// corpus; there is no repair.
+    /// modified by something other than this crate. The same row covers
+    /// every typed cell the store reads back, `undo_log` rows included.
+    /// Rebuild from the block corpus; there is no repair.
     CellCorrupt {
-        /// The cell's key.
+        /// The cell's key — a `properties` key, or the table name for a
+        /// table-valued cell.
         key: &'static str,
         /// What is wrong with it.
         fault: CellFault,
@@ -50,6 +68,7 @@ impl StoreInvariant {
     #[must_use]
     pub const fn row(&self) -> u32 {
         match self {
+            Self::UndoLogIncoherent { .. } => 6,
             Self::CellCorrupt { .. } => 7,
         }
     }
@@ -59,9 +78,14 @@ impl core::fmt::Display for StoreInvariant {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "SI-{} violated: ", self.row())?;
         match self {
+            Self::UndoLogIncoherent { height, fault } => write!(
+                f,
+                "undo log at height {height}: {fault}; the journal no longer describes the \
+                 tables, rebuild from the block corpus"
+            ),
             Self::CellCorrupt { key, fault } => write!(
                 f,
-                "properties cell `{key}` is {fault}; the file was modified outside this crate, \
+                "typed cell `{key}` is {fault}; the file was modified outside this crate, \
                  rebuild from the block corpus"
             ),
         }
@@ -78,7 +102,36 @@ impl core::error::Error for StoreInvariant {
             Self::CellCorrupt {
                 fault: CellFault::Absent,
                 ..
-            } => None,
+            }
+            | Self::UndoLogIncoherent { .. } => None,
+        }
+    }
+}
+
+/// How the undo log and the tables disagreed (SI-6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UndoFault {
+    /// Sealing this height's journal found a row already recorded there.
+    RowAlreadyRecorded,
+    /// Replaying entry `index` (in write order) found its target key or
+    /// member not in the state the entry left it in — absent where the
+    /// entry inserted, or, for a restore, absent where it replaced.
+    EntryNotReversible {
+        /// Position of the entry in the row, in write order.
+        index: u32,
+    },
+}
+
+impl core::fmt::Display for UndoFault {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::RowAlreadyRecorded => {
+                f.write_str("a journal row is already recorded for this height")
+            }
+            Self::EntryNotReversible { index } => write!(
+                f,
+                "entry {index} cannot be reversed: its target is not in the state the entry left"
+            ),
         }
     }
 }

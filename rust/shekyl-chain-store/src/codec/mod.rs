@@ -37,6 +37,7 @@
 mod primitives;
 mod property;
 mod schema_version;
+mod undo;
 
 #[cfg(test)]
 #[path = "snapshot_tests.rs"]
@@ -49,6 +50,7 @@ pub use property::{
     SchemaVersionCell, Scope, PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
+pub use undo::{UndoEntry, UndoLog};
 
 /// A value with exactly one byte encoding.
 ///

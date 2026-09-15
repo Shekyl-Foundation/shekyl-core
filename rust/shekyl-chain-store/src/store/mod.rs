@@ -91,12 +91,17 @@ mod header;
 mod invariant;
 mod keyed;
 mod read;
+mod set;
 mod shared;
+pub(crate) mod undo;
 mod write;
 
-pub use error::{CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant};
+pub use error::{
+    CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
+};
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use read::ReadSnapshot;
+pub use set::SetTable;
 pub use write::WriteBatch;
 
 use std::path::Path;
@@ -437,3 +442,7 @@ mod store_tests;
 #[cfg(test)]
 #[path = "header_tests.rs"]
 mod header_tests;
+
+#[cfg(test)]
+#[path = "undo_tests.rs"]
+mod undo_tests;
