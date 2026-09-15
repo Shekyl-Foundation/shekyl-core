@@ -157,7 +157,8 @@ members = [
     # Consensus validation (DRS-E6, CONSENSUS_C2_R8_STORE_PLACEMENT.md §9):
     # candidate + ChainView + RuleSet → ChainValid<'id> | InvalidBlock. Shares
     # no Rust with shekyl-chain-store and must never reach it or redb — the
-    # build.yml `cargo tree -i` belt holds that.
+    # rust-audit-test.yml belt (scripts/ci/check_chain_rules_no_store.sh, over
+    # `cargo tree -e normal,dev`) holds that transitively.
     "shekyl-chain-rules",
 
     # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)

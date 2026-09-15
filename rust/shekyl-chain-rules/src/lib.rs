@@ -47,6 +47,33 @@
 //! Increments 2+ port the 141 surface-free rules one census subsystem at a
 //! time (`DAEMON_REDB_STORE.md` §7.5.2 table 3), flipping entries to
 //! `implemented(...)` as they land.
+//!
+//! # Consumers
+//!
+//! * **Block connect** (S-CHAIN-W): [`validate`] over the store's projected
+//!   `ChainView<'id>`; the `ChainValid<'id>` it mints is the only thing
+//!   `connect` accepts, and the brand ties it to that one transaction.
+//! * **Pool admission** (DRS-E5): the *same* [`tx_form`] / [`tx_against`]
+//!   over a `PoolView` the pool defines by decorating a `ChainView` with its
+//!   unconfirmed set. There is no second validator
+//!   (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §9.1).
+//! * **Replay** (DRS-E2): every C++-accepted block through [`validate`]. A
+//!   disagreement is routed through `shekyl_chain_store::conformance::grade`
+//!   keyed by [`Row::as_str`] — where a Rust refusal of a canonical block on
+//!   a DIVERGENT row is the *expected* outcome and agreement is the failure.
+//!   This crate never imports the grader; the harness that does lives with
+//!   the replay.
+//!
+//! # Faults are not verdicts
+//!
+//! A view's substrate can fail to answer. That is [`ChainView::Fault`], an
+//! associated type the crate never inspects, returned as the *outer* `Err`
+//! of every entry point: `Result<Verdict<_>, V::Fault>`. A refusal is the
+//! inner `Err`, an [`InvalidBlock`] naming its [`CenRow`]. The two never
+//! meet — a store error cannot become a refusal by `?`, by `From`, or by a
+//! hand-written arm (`check_store_error_conversion_ban.py` holds the last of
+//! those) — and a height above the tip is an [`AtHeight::AboveTip`] the rule
+//! must match, not an `Option` it can propagate away.
 
 #![deny(unsafe_code)]
 

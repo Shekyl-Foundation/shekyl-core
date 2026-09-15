@@ -320,6 +320,24 @@
   including one mapped to a different `Err` — still cannot commit. No
   daemon path uses the crate yet.
 
+- **`shekyl-chain-rules` — the consensus validation crate, scaffolded
+  (DRS-E6 increment 1; no runtime change in this release).** The crate that
+  alone mints the `ChainValid<'id>` the store's connect path will accept
+  ([`CHAIN_RULES_CRATE.md`](design/CHAIN_RULES_CRATE.md)): a candidate, a
+  brand-scoped read-only `ChainView<'id>`, and a named `RuleSet` go in; a
+  `ChainValid<'id>` carrying the rows it evaluated, or an `InvalidBlock`
+  naming the census row and the place it failed, comes out. It reaches
+  neither `redb` nor `shekyl-chain-store`, transitively — CI holds that with
+  `cargo tree` (`check_chain_rules_no_store.sh`) — and a store fault is the
+  outer `Err` of every entry point, never a verdict. Its two row registries
+  (`CenRow`, `PolicyRow`) mirror the census's 153 + 9 enforced rows and CI
+  refuses a registry that drifts from the census
+  (`check_chain_rules_coverage.py`). Zero rules are ported yet; every entry
+  is `pending`. Type moves in the same change: `KeyImage` now lives in
+  `shekyl-types` (`shekyl-crypto-pq` re-exports it; the persisted encoding
+  is unchanged, and it still has no `Display`), and `CurveTreeRoot` is a
+  newtype beside it.
+
 ## [3.1.0-alpha.8] - 2026-09-10
 
 ### Added

@@ -1,8 +1,13 @@
 # `shekyl-chain-rules` — the consensus-validation crate (DRS-E6 increment 1)
 
-**Status:** OPEN — round 2 (2026-09-15). Round 1 was reviewed and its nine
-questions ruled (§11, each ruling line-local); this text is the reviewed design
-implementation follows (rules 05, 26). Implements *from*
+**Status:** OPEN — increment 1 **implemented 2026-09-15** (branch
+`feat/drs-e6-inc1-chain-rules-scaffold`, 8 commits per §9) on the §12 defaults;
+round 2's three questions (§12) **await the reviewer's ruling at PR review** —
+each default is what landed, and a contrary ruling is a follow-on commit on
+this branch, not a re-scaffold. Round 1 was reviewed and its nine questions
+ruled (§11, each ruling line-local; Q8 amended by finding, §8.3). §4 reflects
+what landed. Stays in `docs/design/` while increments 2+ are open (it owns
+their template, §7.5.1). Implements *from*
 [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
 (the ruling, CLOSED-as-record) and
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5.1 (the deliverable list).
@@ -203,7 +208,7 @@ rust/shekyl-chain-rules/
     ├── block.rs          Candidate (input), ValidatedBlock (payload)
     ├── verdict.rs        ChainValid<'id>, InvalidBlock, Locus, TxSlot, Verdict<T>
     ├── validate.rs       validate, tx_form, tx_against
-    ├── harness.rs        #[cfg(any(test, doctest))] MockChain / MockView<'id>, boundary_pair, assert_refused
+    ├── harness.rs        #[cfg(test)] MockChain / MockView<'_, 'id> / FaultingView<'id>, assert_refused, boundary_pair, fixture::*
     └── *_tests.rs        census_tests, coverage_tests, rule_set_tests, verdict_tests, validate_tests, harness_probe_tests
 ```
 
@@ -687,9 +692,11 @@ together.
 
 ---
 
-## 7. Raising the conversion-ban gate (in this PR)
+## 7. Raising the conversion-ban gate (in this PR) — DONE, commit 7
 
-`check_store_error_conversion_ban.py`:
+`check_store_error_conversion_ban.py` (as landed: 27 selftest cases; the live
+gate on this tree reports `1143 files walked, 1 verdict-type definition(s);
+clauses 1-3 clean`; negative control — renaming the definition — refuses):
 
 - `verdict_defs == 0` becomes a refusal: `subject absent: no verdict-type
   definition found — InvalidBlock was minted in
@@ -741,31 +748,60 @@ lint scans them as production — no debug macros anywhere).
 - `compile_fail`: `use redb::Database;`
 - `compile_fail`: `use shekyl_chain_store::store::ChainStore;`
 - `compile_fail`: `ChainValid { … }` / `ValidatedBlock { … }` from outside.
-- `compile_fail`: cross-view handoff —
+- `compile_fail`: cross-view handoff (on `validate`) —
   ```rust
-  MockChain::default().with_view(|outer| {
-      MockChain::default().with_view(|inner| {
-          let v = validate(candidate(), &inner, &RuleSet::GENESIS).unwrap().unwrap();
-          accept(&outer, v)          // fn accept<'id>(_: &MockView<'id>, _: ChainValid<'id>)
+  with_view(|outer| {
+      with_view(|inner| {
+          let valid = validate(candidate(), &inner, &RuleSet::GENESIS).unwrap().unwrap();
+          connect(&outer, valid);   // fn connect<'id>(_: &View<'id>, _: ChainValid<'id>)
       })
   });
   ```
-  (`with_view` is `for<'id> FnOnce(MockView<'id>) -> R`; the two `'id`s are
-  distinct and invariant, so this does not type-check.) `harness` is
-  `#[cfg(any(test, doctest))]` so doctests see the mock (round-1 ruling Q8).
+  (`with_view` is `for<'id> FnOnce(View<'id>) -> R`; the two `'id`s are
+  distinct and invariant, so this does not type-check.)
 - Also pinned this way (commit 4): `AtHeight` → `Option` via `.into()` and
   via `?`; `RuleSetId == u8`; `AdmissionPolicyId` → `RuleSetId`.
+
+**Q8 amended by finding (commit 6).** The round-1 ruling took the default
+`#[cfg(any(test, doctest))]` on `harness` so doctests could use the mock. That
+does not work: `cfg(doctest)` is set only while rustdoc *scans* the crate to
+collect snippets; each snippet is then compiled as a separate crate that
+links the ordinary library build, where no `cfg(doctest)` item exists to
+resolve (the Rust reference says so of the cfg; verified empirically at
+commit 6 — a snippet naming `shekyl_chain_rules::harness::MockChain` fails
+to resolve under `cargo test --doc`). So `harness` is `#[cfg(test)]` only, and the one
+doctest that needs a branded view — the cross-view pin above — declares an
+inline three-method `View<'id>` with its own `with_view`/`connect`. The
+alternative, a `pub` harness behind a `test-support` feature, was not taken:
+it would put a mock `ChainView` on the crate's public surface for one pin.
 
 **A `compile_fail` proves *some* compile error — and only that, on this
 toolchain.** rustdoc's `compile_fail,E0277` error-code form is checked on
 nightly only; on the pinned stable (`rust-toolchain.toml`) the code is
 silently ignored, so writing one claims a precision the gate does not have
-(verified at commit 4: `E0999` passed). None is written. Instead each pin was
-run once as a *passing* doctest to read the single error it produces
-(`E0277` ×3, `E0308` for the `u8` comparison, `E0432` for the G1 pair), so a
-snippet that fails for a typo rather than for its reason is a review item,
-not a hidden state. Exact-diagnostic pinning (`trybuild`) is not adopted: the
-pins here are second lines behind the belt and the type shapes, not gates.
+(verified at commit 4: `E0999` passed). None is written. Instead every pin
+was compiled once outside rustdoc to read the error it actually produces, so
+a snippet that fails for a typo rather than for its reason is a review item,
+not a hidden state. All eleven, at commit 8:
+
+| pin | where | error |
+| --- | --- | --- |
+| `use redb::Database` | `lib.rs` | `E0432` unresolved import |
+| `use shekyl_chain_store::store::ChainStore` | `lib.rs` | `E0433` failed to resolve |
+| `RuleCoverage::EMPTY.contains(PolicyRow::M1)` | `coverage.rs` | `E0308` mismatched types |
+| `RuleSetId::GENESIS == 1u8` | `rule_set.rs` | `E0308` mismatched types |
+| `RuleSetId::from(AdmissionPolicyId)` | `rule_set.rs` | `E0277` `From` not satisfied |
+| `AtHeight` → `Option` via `.into()` | `view.rs` | `E0277` `From` not satisfied |
+| `AtHeight` via `?` | `view.rs` | `E0277` `Try` not implemented |
+| `ChainValid<'long>` → `ChainValid<'short>` | `verdict.rs` | *lifetime may not live long enough* (no code; the invariance error) |
+| `ChainValid { .. }` from outside | `verdict.rs` | `E0451` field is private |
+| `ValidatedBlock { .. }` from outside | `block.rs` | `E0451` field is private |
+| cross-view `connect(&outer, valid)` | `validate.rs` | `E0521` borrowed data escapes the closure (the inner brand cannot become the outer) |
+
+The G1 pair is *not* `E0432` ×2 as an earlier draft of this section said —
+an unknown crate root is `E0433`, an unknown item in a known crate `E0432`.
+Exact-diagnostic pinning (`trybuild`) is not adopted: the pins here are
+second lines behind the belt and the type shapes, not gates.
 
 ### 8.4 Rule sets and schedule (`rule_set_tests.rs`)
 
@@ -803,25 +839,45 @@ pins here are second lines behind the belt and the type shapes, not gates.
 
 ### 8.7 The harness and its probe (`harness.rs`, `harness_probe_tests.rs`)
 
-Harness surface (test-only):
+Harness surface (`#[cfg(test)]`; as landed, commit 6):
 
 ```rust
-pub struct MockChain { blocks: BTreeMap<BlockHeight, RecordedBlock>, roots: BTreeMap<BlockHeight, CurveTreeRoot>, key_images: BTreeSet<KeyImage> }
+/// A recorded chain: blocks dense from height 0 (a root per block), a key-image set.
+#[derive(Default)]
+pub struct MockChain { recorded: Vec<(RecordedBlock, CurveTreeRoot)>, key_images: BTreeSet<KeyImage> }
 impl MockChain {
-    pub fn with_block(self, h: BlockHeight, b: RecordedBlock) -> Self;   // + with_root / with_key_image
+    pub fn push(self, block: RecordedBlock, root: CurveTreeRoot) -> Self;   // height = recorded.len()
+    pub fn with_key_image(self, key_image: KeyImage) -> Self;
+    pub fn tip(&self) -> Option<BlockHeight>;                               // None when empty
     /// Project a branded view. `'id` is fresh per call (HRTB) — the mock's analogue of `ChainStore::write`.
-    pub fn with_view<R>(&self, f: impl for<'id> FnOnce(MockView<'id>) -> R) -> R;
+    pub fn with_view<R>(&self, f: impl for<'id> FnOnce(MockView<'_, 'id>) -> R) -> R;
 }
 pub struct MockView<'a, 'id> { chain: &'a MockChain, _brand: Brand<'id> }   // impl ChainView<'id>, Fault = Infallible
 /// A view whose every read faults — for the fault-channel tests.
-pub struct FaultingView<'id>;                                                // Fault = Faulted
-pub fn infallible<T>(r: Result<T, Infallible>) -> T;
+pub struct Faulted;
+pub struct FaultingView<'id>(Brand<'id>);                                    // Fault = Faulted; Default
+pub fn infallible<T>(r: Result<T, Infallible>) -> T;                         // exhaustive match, never unwrap
 
 /// Assert `result` is exactly `Err(InvalidBlock { rule, .. })` for the named row.
-pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow);
+#[track_caller] pub fn assert_refused<T: Debug>(result: Verdict<T>, rule: CenRow);
 /// The last accepted value passes and the first rejected value fails with `rule`.
-pub fn boundary_pair<T, V>(last_ok: V, first_bad: V, rule: CenRow, f: impl Fn(V) -> Verdict<T>);
+#[track_caller] pub fn boundary_pair<T: Debug, V>(last_ok: V, first_bad: V, rule: CenRow, f: impl Fn(V) -> Verdict<T>);
+
+/// Well-formed values to mutate one field of.
+pub mod fixture {
+    pub fn coinbase(unlock_time: u64) -> Transaction;
+    pub fn header() -> BlockHeader;
+    pub fn candidate(listed: Vec<Transaction>) -> Candidate;
+    pub fn recorded(timestamp: u64) -> RecordedBlock;
+    pub const fn root(byte: u8) -> CurveTreeRoot;
+}
 ```
+
+`push` rather than `with_block(h, ..)`: the mock records heights densely from
+zero because that is the only shape a recorded chain has, and a builder that
+let a test place height 7 with no height 6 would let a fixture describe a
+chain the store cannot. `validate_tests.rs` was rewritten onto this harness in
+the same commit; its private `Bare` view is gone.
 
 **Probe rule** (the store crate's `ProbeCell` pattern): a `#[cfg(test)]`
 function `probe_cen_c1<'id, V: ChainView<'id>>(&Candidate, &V) ->
@@ -860,7 +916,9 @@ makes this harness's own green mean something.
    + brand/ctor doctests + `coverage_tests`, `validate_tests`.
 6. `chain-rules: negative-fixture harness + probe (item 8)`.
 7. `ci: conversion-ban gate — verdict_defs == 0 is now a refusal (ruling §3.3)`.
-8. `docs: CHAIN_RULES_CRATE.md round 2 → implemented; DRS §7 E6 row + §15; index; CHANGELOG` (§10).
+8. `docs: CHAIN_RULES_CRATE.md increment 1 implemented; DRS §7 E6 row + §15; index; CHANGELOG` (§10).
+   *(Planned title said "round 2 → implemented"; round 2 is implemented on its
+   defaults, not closed — the reviewer closes it at PR review. Banner says so.)*
 
 Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 
@@ -868,18 +926,34 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 
 ## 10. Documentation task (rule 91 — last)
 
-- This doc: banner → `Status: OPEN — rounds 1–2 closed, increment 1 landed (PR #N)`;
-  §11/§12 stay as the record; stays in `docs/design/` while increments 2+ are
-  open (it owns their template).
-- `DAEMON_REDB_STORE.md`: §7 `DRS-E6` row → "increment 1 landed (PR #N)";
-  §15 dated entry (append below the 2026-09-15 rows).
+- This doc: banner → `OPEN — increment 1 implemented … round 2 awaits the
+  reviewer's ruling at PR review` (not "rounds 1–2 closed" as first planned:
+  §12's defaults are what landed, and only the reviewer closes a round); no PR
+  number is written before one exists. §11/§12 stay as the record; stays in
+  `docs/design/` while increments 2+ are open (it owns their template).
+- `DAEMON_REDB_STORE.md`: banner (line 11: S-CHAIN-W no longer "remains gated
+  on DRS-E6 increment 1"), §7 `DRS-E6` row → "increment 1: LANDED 2026-09-15"
+  (no PR number — none exists at write time), §7.5.1's `ChainView` bullet
+  (`output_at` gone; `Fault`/`AtHeight` named), §15 dated entry appended below
+  the E1 increment 2.5 row. E1's own rows are **not** edited: its §15 row
+  still ends "remaining precondition is DRS-E6 increment 1", which the next
+  row discharges — a dated log entry is records-was.
 - `IMPLEMENTATION_INDEX.md` §7 documents table: one row for this doc. **Not**
-  the DRS row's status cell (rule 94 §6 — E1 owns it; when this lands, the DRS
-  row's S-CHAIN-W precondition (ii) needs flipping — told to the user, landed in
-  the E1 lane or as a one-line follow-on).
-- `docs/CHANGELOG.md` Unreleased: one line (new crate + gate; `KeyImage` home).
+  the `DRS-*` registry row's status cell (rule 94 §6 — the E1 lane owns it and
+  PR #752, which last wrote it, is OPEN). That cell's closing sentence,
+  *"S-CHAIN-W's remaining precondition is DRS-E6 increment 1"*, becomes false
+  when this PR merges. **Carrier (rule 94 §4 / rule 21):** one `UPDATE
+  2026-09-15 (DRS-E6 increment 1 LANDED …)` appended to that cell **in this PR,
+  as its last commit, once #752 is MERGED** — falsify by `gh pr view 752 --json
+  state`; if this PR is ready first, the update lands as a one-line follow-on
+  PR the same day #752 merges. Not "the E1 lane will handle it".
+- `docs/CHANGELOG.md` Unreleased: one entry (new crate + its two gates;
+  `KeyImage` home, encoding unchanged; `CurveTreeRoot`). `docs/README.md`
+  front-door table: one row beside the `SI-` register's.
 - `CLAUDE.md` key-crates list: add `shekyl-chain-rules` (it enumerates crates).
   `25-rust-architecture.mdc` does **not** enumerate crates (verified) — no edit.
+  `rust/Cargo.toml`'s member comment said `build.yml`; corrected to the
+  `rust-audit-test.yml` belt script (same correction as §6.5).
 - Crate `//!`: staging note (STAGED; consumer S-CHAIN-W), the graded-oracle
   hook (E2's replay harness routes disagreement through
   `shekyl_chain_store::conformance::grade` keyed by `CenRow::as_str()`; this
@@ -899,7 +973,7 @@ Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
 | Q5 | `RuleSetId` representation | **RULED 2026-09-15 — accept `RuleSetId(u8)`, `GENESIS = 1`, but not defined as the header major version:** its own space with an explicit `rules_at(nettype, height) -> RuleSetId` seeded as identity. The 1:1 is true only because the hardfork table has one entry — the same inertness that hid the `on_block_popped` defect; a function preserves the R4 coupling, equality erases it. (§7.5.1 already states the fork version enters through `RuleSet`.) |
 | Q6 | `InvalidBlock` locus shape | **RULED 2026-09-15 — default.** No `detail` field: an unbounded string is not evidence (the `ReviewedDivergence` reason). |
 | Q7 | Census-parser reuse by import | **RULED 2026-09-15 — default, follow-up named not filed:** import now; extract to `_census.py` after #751 merges (blocker #751; falsifier `gh pr view 751 --json state`). |
-| Q8 | Harness visibility for doctests | **RULED 2026-09-15 — default** (`cfg(any(test, doctest))`). |
+| Q8 | Harness visibility for doctests | **RULED 2026-09-15 — default** (`cfg(any(test, doctest))`). **AMENDED BY FINDING 2026-09-15 (commit 6):** the default's premise fails — `cfg(doctest)` items are not visible to doctest snippets (§8.3); `harness` is `#[cfg(test)]`, the cross-view pin uses an inline view. Disclosed in the commit-6 message. |
 | Q9 | `Candidate` struct vs two args | **RULED 2026-09-15 — default.** It is what `ChainValid` carries, and a third component later is non-breaking. |
 | — | G1 mechanism | **RULED 2026-09-15 — added:** a `compile_fail` doctest proves *some* compile error and sees only a direct `use`; it cannot see transitive acquisition, which is the path the adoption increments take. The `cargo tree` belt lands in increment 1 (§6.5; corrected in round 2 to a captured-closure shape in `rust-audit-test.yml` — the `-i`-exit-code sketch was fail-open and `build.yml` has no cargo). |
 | — | Census figures | **Confirmed:** consensus enforced 153 (not 159) — the denominator moved when R8 ruled; the computed-denominator mechanism working on its first real test. |
