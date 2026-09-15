@@ -694,6 +694,18 @@ establishes (C2-R1b-Q1c). Ported with the writer it would drag the watermark
 contract into an increment that does not otherwise touch retention. If E1 finds
 the pop path cannot be extracted without it, that is the falsifier and it moves.
 
+**UPDATE 2026-09-15 (S-CHAIN-W pre-flight, SCW-7 — ruled):** the falsifier
+did not fire; a third outcome did. `pop_target_allowed` **dissolves**: with pop
+as reverse replay of one undo log (C2-R8 Q5), a block at *h* is poppable iff
+`undo_log[h]` exists, so the predicate is a property of the journal and the
+refusal is `StoreCannot::PopBelowFloor { tip, floor }`. The consequence lands
+on **S-PRUNE**, recorded here as its contract: the retention prune deletes undo
+rows below its watermark in the prune's own transaction, and **the watermark
+may not go shallower than `D_max`** (`ARCHIVAL_PRUNED_DAEMON_MODE.md`
+PDM-Q11, OPEN at `65e7be450`) — undo-log retention ≥ `D_max`, or a legal
+reorg returns a capability refusal. [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md)
+§5.4 carries the mechanism; the method leaves S-PRUNE's row at landing.
+
 **Not in the 102 but adjacent:** full archival *drivers* still inside
 `BlockchainLMDB` (process_archival_*, apply_archival_*) — extracted toward
 **S-ARCH** during C/E4; they are part of the god-object storage class, not

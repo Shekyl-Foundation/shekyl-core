@@ -994,6 +994,20 @@ inherits that question's scope. It is carried here until it is ruled;
 consensus-constants family — if it does, this question closes by
 reference.
 
+**Store constraint (added 2026-09-15, S-CHAIN-W pre-flight SCW-7 —
+[`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) §5.4).** `D_max` is now a
+third derivation, on the store side: in the Rust chain store a block at
+height *h* can be popped **iff** its `undo_log[h]` row exists, and the
+retention prune (S-PRUNE) deletes undo rows below its watermark. So the
+maximum pop depth *is* the undo-log retention horizon, and the inequality
+**undo-log retention ≥ `D_max`** — equivalently, S-PRUNE's watermark may
+not go shallower than `D_max` blocks below the tip — is a constraint this
+question's answer must satisfy, not only a discard one. Getting it wrong
+makes a legal reorg return `StoreCannot::PopBelowFloor`: the correct
+class (a capability limit, loud, not a defect and not a verdict), which is
+why the failure is at least visible. The falsifier is mechanical once both
+constants exist: `undo_log` retention constant `< D_max` is red.
+
 **What `D_max` is, stated so the derivation is possible.** It does
 not raise attack cost — an adversary who can rewrite `k` blocks can
 rewrite them whether or not nodes accept the result. It changes the
@@ -1959,7 +1973,7 @@ consensus question: *does anything read it after admission?*
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
 | `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); candidate under review: the daemon holds the shard as a retention exception on the universal predicate (binding dissolves to `retain(s)`/`release(s)` over the operator leg); lapse tail, coverage floor (F20), recovery fetch OPEN |
 | `PDM-Q10` | RPC contract for "not retained" | OPEN |
-| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2) and F19 (Q1) both derive from; home is `is_alternative_block_allowed` above the checkpoint, so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; candidate 720 (24 h) as coordination with the archival domain, security wants shallower on two grounds (silent-reorg window; F23: an empty table has no cap at all); numeric pinned to the Round-2 re-pin gate with `n` |
+| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2), F19 (Q1) **and the store's undo-log retention (S-CHAIN-W SCW-7, 2026-09-15: retention ≥ `D_max`)** all derive from; home is `is_alternative_block_allowed` above the checkpoint, so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; candidate 720 (24 h) as coordination with the archival domain, security wants shallower on two grounds (silent-reorg window; F23: an empty table has no cap at all); numeric pinned to the Round-2 re-pin gate with `n` |
 | `PDM-Q12` | The freeze pipeline and the wallet-side `LeafStore` under Q6's unit — does the freeze retire when the commitment exists at ingest; `LeafStore` as deletion target (F21) | OPEN — minted 2026-09-13; held as a question because of `TJ-D` / `RF-D6` / `SF-` dependents |
 
 When this round proposes a test, it will name the edit that makes that

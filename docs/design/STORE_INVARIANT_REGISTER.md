@@ -51,6 +51,7 @@ question the row came from.
 | SI-6 | The undo log's top entry is the tip height; a pop consumes exactly that entry | undo log | — | C2-R8 Q5; CEN-L13 journal-vs-tip belts | ruled | |
 | SI-7 | Every cell read decodes under its canonical codec; an undecodable or missing sealed cell is fatal | all typed cells | — | CEN-L13 serve-credit re-parse; enforced for `properties` cells since PR #749 (as a flat `StoreError::CellCorrupt`), re-homed under the enum at increment 2.5 | built | `StoreInvariant::CellCorrupt` |
 | SI-8 | Accumulator arithmetic never wraps: every fold uses checked arithmetic and an overflow is fatal, never a saturate or a mint | accumulator cells | — | CEN-L13 bond-counter overflow | ruled | |
+| SI-9 | Store-derived ids are dense and fresh: `tx_id`, `output_id` and the per-amount `amount_index` are the owning table's entry count at write time, and the slot an `insert` targets under one is absent | `txs_pruned` / `txs_pqc_auths` / `txs_prunable` / `txs_prunable_hash` / `tx_outputs` (`tx_id`); `output_txs` (`output_id`); `output_amounts` (`amount_index`) | — (pure storage integrity; deliberately **not** folded into SI-3, whose twin is CEN-G1 — R8-Q1's three-arm test needs rule-twinned belts and pure invariants to stay distinguishable) | S-CHAIN-W pre-flight SCW-4 ([`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) §6), ruled 2026-09-15 | ruled | |
 
 Rows are **appended**, never renumbered. A row whose table is deleted is
 marked `retired` in its `Status` cell in the deleting PR with the PR number —
