@@ -74,18 +74,24 @@ DRS-D12 — no store handle by construction).
 
 > **Cross-reference (CSR-6).** This program shares its subject files with the
 > all-Rust consensus rewrite: [`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md)
-> (`CEN-*`) enumerates **173** rules (**164** consensus-flagged + **9** policy-flagged), **18** of which are enforced
-> inside `src/blockchain_db/` — the store DRS-E1 replaces. Its **§10 R8
+> (`CEN-*`) enumerates **173** rules (**164** consensus-flagged + **9** policy-flagged);
+> **19 of 173 census rows** cite a file under `src/blockchain_db/` as an
+> enforcement site (§7.5.2's predicate, re-derived by
+> `check_drs_e6_partition.py`) — surfaces the store DRS replaces. Its **§10 R8
 > batch ("storage-layer enforcement placement")** is the same decision as this
 > document's schema/surface design, and **R8 is the ruling instrument**
 > (CSR-1); §3.5's surface map is its input, not a competing authority.
-> **R8 RULED 2026-09-14** — [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md):
-> of the eighteen, none remains a rule the store enforces — seven were always
-> ratified specs the rewrite consumes, two are validator rules (CEN-K3, CEN-L1),
-> seven dissolved or re-homed as store invariants (`SI-1…SI-8`,
+> **R8 RULED 2026-09-14** — [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
+> — over the **eighteen** rows CSR-6 counted at 2026-09-01: none remains a
+> rule the store enforces — seven were always ratified specs the rewrite
+> consumes, two are validator rules (CEN-K3, CEN-L1), seven dissolved or
+> re-homed as store invariants (`SI-1…SI-8`,
 > [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)), and two are
-> other batches' (CEN-B3 → R4; CEN-L14's semantics → R8b). The store's
-> connect path is designed *after* the rules it used to carry were ruled.
+> other batches' (CEN-B3 → R4; CEN-L14's semantics → R8b). The nineteenth,
+> **CEN-I19** (minted 2026-09-06, bucket 1), joined after CSR-6 and R8 did
+> not rule it: its store citation is an unreachable collector abort that
+> DRS-E3's typed `0x07` entry dissolves (§7.5 table 2). The store's connect
+> path is designed *after* the rules it used to carry were ruled.
 
 ### Substrate inventory (code-anchored)
 
