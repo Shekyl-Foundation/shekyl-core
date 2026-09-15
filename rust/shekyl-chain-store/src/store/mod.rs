@@ -158,8 +158,9 @@ impl ChainStore {
     /// [`StoreError::SchemaVersionAbsent`],
     /// [`StoreError::SchemaVersionMismatch`] or
     /// [`StoreError::CellCorrupt`] if its header is not one this binary
-    /// can vouch for. A fresh file that cannot be sealed is removed again,
-    /// so a failed create does not leave a file the next open refuses.
+    /// can vouch for. A fresh file the engine refuses to take, or that
+    /// cannot be sealed, is removed again, so a failed create does not
+    /// leave a headerless file the next open refuses.
     pub fn with_apply_policy(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
@@ -184,17 +185,19 @@ impl ChainStore {
             .create_new(true)
             .open(path)
         {
-            Ok(file) => {
-                let db = builder.create_file(file).map_err(StoreError::Open)?;
-                match seal_fresh(&db, apply_policy) {
-                    Ok(provenance) => (db, provenance),
-                    Err(e) => {
-                        drop(db);
-                        drop(std::fs::remove_file(path));
-                        return Err(e);
-                    }
+            Ok(file) => match create_sealed(&builder, file, apply_policy) {
+                Ok(fresh) => fresh,
+                Err(e) => {
+                    // The path exists only because `create_new` just made
+                    // it. Whatever refused after that -- the engine taking
+                    // the file or the seal -- must not leave it behind for
+                    // the next open to refuse as an existing store with no
+                    // header. `create_sealed` has dropped its `Database` by
+                    // the time we get here, so the file is unlocked.
+                    drop(std::fs::remove_file(path));
+                    return Err(e);
                 }
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                 let db = builder.create(path).map_err(StoreError::Open)?;
                 let provenance = header::verify(&db.begin_read().map_err(StoreError::BeginRead)?)?;
@@ -299,13 +302,24 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
     Ok(txn)
 }
 
-/// Seal a just-created file's header in its first transaction, under the
-/// same durability every batch commits with.
-fn seal_fresh(db: &Database, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
-    let txn = arm_write(db)?;
+/// Hand a just-created, still-empty file to the engine and seal its header
+/// in the first transaction, under the same durability every batch
+/// commits with.
+///
+/// Everything that can fail between `create_new` and a usable store runs
+/// here, so the caller has exactly one place to undo the creation. On
+/// `Err` the `Database` is dropped before returning, releasing the
+/// engine's file lock so the caller's `remove_file` can succeed.
+fn create_sealed(
+    builder: &redb::Builder,
+    file: std::fs::File,
+    policy: ApplyPolicy,
+) -> Result<(Database, Provenance), StoreError> {
+    let db = builder.create_file(file).map_err(StoreError::Open)?;
+    let txn = arm_write(&db)?;
     let provenance = header::seal(&txn, policy)?;
     txn.commit().map_err(StoreError::Commit)?;
-    Ok(provenance)
+    Ok((db, provenance))
 }
 
 #[cfg(test)]
