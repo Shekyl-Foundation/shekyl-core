@@ -1411,8 +1411,11 @@ crates and (a)/(b) had no CI ratchet behind them; the glob was attached at
 DRS-0 with an explicit "no gate" paragraph. The gate landed with the codecs, as
 rule 42 said it should: the `codec::snapshot_tests` module in
 `rust/shekyl-chain-store/src/codec/` pins the fixture encodings of every
-`Canonical` impl **and** the table catalogue — name, shape, key/value type of
-every `schema.rs` definition, which is (b)'s add/remove/re-key half — under
+`Canonical` impl **and** both catalogues — the table catalogue (name, shape,
+key/value type of every `schema.rs` definition, (b)'s add/remove/re-key half)
+and the property-cell catalogue (key, scope, value-codec name of every
+`property_cells!` row, so a new digest-domain cell cannot land without a
+version bump) — under
 `rust/shekyl-chain-store/schemas/*.snap`, and
 `.github/workflows/schema-snapshot.yml` runs the module and refuses any `.snap`
 change there unless `SCHEMA_VERSION` is numerically greater at the PR head than
@@ -1435,7 +1438,9 @@ at its base. See
   the table-valued codecs land with their surfaces. The table set itself is
   `schema::catalogue()`, emitted by the same `tables!` invocation that declares
   the definitions, so the layout half of (b) is snapshotted from the
-  declarations rather than from a hand-kept list.
+  declarations rather than from a hand-kept list. `property_cells!` is the
+  same shape for the `properties` table: it emits `PROPERTY_CELLS` as
+  `(key, scope, value-codec name)` rows, snapshotted as `properties.snap`.
 - `codec::PropertyCell` is **sealed**: a cell can only be declared inside the
   crate's `property_cells!` invocation, which also emits the `PROPERTY_CELLS`
   registry. The set of `properties` keys is therefore closed and enumerable —

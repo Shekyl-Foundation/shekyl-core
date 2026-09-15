@@ -45,8 +45,8 @@ mod snapshot_tests;
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{
-    ApplyPolicyCell, CellScope, ChainState, EngineLocal, PropertyCell, SchemaVersionCell, Scope,
-    PROPERTY_CELLS,
+    ApplyPolicyCell, CellScope, ChainState, EngineLocal, PropertyCell, PropertyCellSpec,
+    SchemaVersionCell, Scope, PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 
@@ -124,6 +124,26 @@ impl core::fmt::Display for CodecError {
 
 impl core::error::Error for CodecError {}
 
+impl CodecError {
+    /// Relabel this error as coming from `codec`.
+    ///
+    /// Wrapping codecs (`SchemaVersion` over `u64`, …) decode via the inner
+    /// impl and then rename the failure so the cell names the codec the
+    /// caller asked for, not the scalar it is stored as.
+    pub(crate) fn in_codec(self, codec: &'static str) -> Self {
+        match self {
+            Self::Length {
+                expected, actual, ..
+            } => Self::Length {
+                codec,
+                expected,
+                actual,
+            },
+            Self::Invalid { reason, .. } => Self::Invalid { codec, reason },
+        }
+    }
+}
+
 /// Take exactly `N` bytes or refuse with [`CodecError::Length`].
 ///
 /// The one length check every fixed-width codec shares, so no codec grows
@@ -161,6 +181,34 @@ mod tests {
                 expected: 4,
                 actual: 5
             })
+        );
+    }
+
+    #[test]
+    fn in_codec_renames_the_codec_and_keeps_the_fault() {
+        let length = CodecError::Length {
+            codec: "u64",
+            expected: 8,
+            actual: 2,
+        };
+        assert_eq!(
+            length.in_codec("schema_version"),
+            CodecError::Length {
+                codec: "schema_version",
+                expected: 8,
+                actual: 2
+            }
+        );
+        let invalid = CodecError::Invalid {
+            codec: "u64",
+            reason: "never",
+        };
+        assert_eq!(
+            invalid.in_codec("schema_version"),
+            CodecError::Invalid {
+                codec: "schema_version",
+                reason: "never"
+            }
         );
     }
 

@@ -1585,7 +1585,8 @@ value, no padding slack, no platform-dependent integer width, no float.
 **That last sentence has mechanical enforcement behind it since DRS-E1
 increment 2 (2026-09-14).** Rule 42's `schema-snapshot.yml` runs the chain
 store's `codec::snapshot_tests`: every `codec::Canonical` impl's fixture
-encodings and the table catalogue (`schemas/tables.snap`) are pinned, and any
+encodings, the table catalogue (`schemas/tables.snap`), and the
+property-cell catalogue (`schemas/properties.snap`) are pinned, and any
 snapshot change requires `SCHEMA_VERSION` (`src/codec/schema_version.rs`) to
 be numerically greater at the PR head than at its base. *Superseded text,
 retained:* at the freeze (`ba4b3c73a`) rule 42 was scoped by globs to the

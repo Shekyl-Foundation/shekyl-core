@@ -63,6 +63,18 @@ pub enum CellScope {
     EngineLocal,
 }
 
+impl CellScope {
+    /// Stable token for the property-catalogue snapshot. Changing a
+    /// spelling here without moving `properties.snap` is a gate failure.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ChainState => "chain_state",
+            Self::EngineLocal => "engine_local",
+        }
+    }
+}
+
 /// A cell scope, as a type (for bounds). Sealed: exactly two exist.
 pub trait Scope: sealed::Sealed {
     /// This scope as a value.
@@ -127,12 +139,28 @@ pub trait PropertyCell: sealed::Sealed {
     const SCOPE: CellScope = <Self::Scope as Scope>::SCOPE;
 }
 
+/// One `properties` cell as the store's layout records it.
+///
+/// Emitted by `property_cells!` as [`PROPERTY_CELLS`]. The property-catalogue
+/// snapshot pins every field: renaming a key, moving a scope, or changing
+/// the value codec is a layout change even when no codec fixture's bytes
+/// move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PropertyCellSpec {
+    /// [`PropertyCell::KEY`].
+    pub key: &'static str,
+    /// Digest-domain membership and write permission.
+    pub scope: CellScope,
+    /// [`Canonical::NAME`] of [`PropertyCell::Value`].
+    pub value: &'static str,
+}
+
 /// Declares the closed set of `properties` cells.
 ///
 /// Each entry mints the marker type, its [`PropertyCell`] impl and its
-/// seal, and adds one `(KEY, CellScope)` row to [`PROPERTY_CELLS`] — so the list a
-/// reader or the digest fold consults and the set of types the compiler
-/// admits are one declaration, not two that can drift.
+/// seal, and adds one [`PropertyCellSpec`] row to [`PROPERTY_CELLS`] — so
+/// the list a reader or the digest fold consults and the set of types the
+/// compiler admits are one declaration, not two that can drift.
 macro_rules! property_cells {
     (
         $(
@@ -154,11 +182,17 @@ macro_rules! property_cells {
             }
         )+
 
-        /// Every cell of the `properties` table, as `(KEY, scope)`, in
-        /// declaration order. **This is the store's cell set**: a key not
-        /// here is not a cell this binary reads or writes, and the
-        /// [`ChainState`] rows are exactly the `properties` digest domain.
-        pub const PROPERTY_CELLS: &[(&str, CellScope)] = &[$(($key, <$scope as Scope>::SCOPE)),+];
+        /// Every cell of the `properties` table, in declaration order.
+        /// **This is the store's cell set**: a key not here is not a cell
+        /// this binary reads or writes, and the [`ChainState`] rows are
+        /// exactly the `properties` digest domain.
+        pub const PROPERTY_CELLS: &[PropertyCellSpec] = &[
+            $(PropertyCellSpec {
+                key: $key,
+                scope: <$scope as Scope>::SCOPE,
+                value: <$value as Canonical>::NAME,
+            }),+
+        ];
     };
 }
 
@@ -228,6 +262,8 @@ mod tests {
         assert_eq!(SchemaVersionCell::SCOPE, CellScope::EngineLocal);
         assert_eq!(ApplyPolicyCell::SCOPE, CellScope::EngineLocal);
         assert_eq!(<ChainState as Scope>::SCOPE, CellScope::ChainState);
+        assert_eq!(CellScope::ChainState.as_str(), "chain_state");
+        assert_eq!(CellScope::EngineLocal.as_str(), "engine_local");
     }
 
     #[test]
@@ -238,8 +274,16 @@ mod tests {
         assert_eq!(
             PROPERTY_CELLS,
             &[
-                (SchemaVersionCell::KEY, SchemaVersionCell::SCOPE),
-                (ApplyPolicyCell::KEY, ApplyPolicyCell::SCOPE),
+                PropertyCellSpec {
+                    key: SchemaVersionCell::KEY,
+                    scope: SchemaVersionCell::SCOPE,
+                    value: SchemaVersion::NAME,
+                },
+                PropertyCellSpec {
+                    key: ApplyPolicyCell::KEY,
+                    scope: ApplyPolicyCell::SCOPE,
+                    value: FamilySet::NAME,
+                },
             ]
         );
     }
@@ -247,13 +291,20 @@ mod tests {
     #[test]
     fn cell_keys_are_plain_lowercase_ascii_and_distinct() {
         let mut seen = BTreeSet::new();
-        for (key, _) in PROPERTY_CELLS {
-            assert!(!key.is_empty() && !key.contains('\0'), "{key:?}");
+        for cell in PROPERTY_CELLS {
+            assert!(!cell.key.is_empty() && !cell.key.contains('\0'), "{cell:?}");
             assert!(
-                key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_'),
-                "{key:?}: `properties` orders by string comparison; keep keys to [a-z_]"
+                cell.key
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b == b'_'),
+                "{:?}: `properties` orders by string comparison; keep keys to [a-z_]",
+                cell.key
             );
-            assert!(seen.insert(*key), "duplicate `properties` key {key:?}");
+            assert!(
+                seen.insert(cell.key),
+                "duplicate `properties` key {:?}",
+                cell.key
+            );
         }
         // The test-only probe must not shadow a real cell either.
         assert!(

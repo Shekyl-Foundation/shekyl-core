@@ -17,10 +17,11 @@
 #                               `shekyl-chain-store`. Fails with a
 #                               unified diff if any persisted block's
 #                               postcard wire schema, any chain-store
-#                               canonical codec's fixture encodings, or
-#                               the chain store's table catalogue (name,
-#                               shape, key/value types per table) drift
-#                               from the committed `.snap`.
+#                               canonical codec's fixture encodings, the
+#                               chain store's table catalogue (name,
+#                               shape, key/value types per table), or the
+#                               property-cell catalogue (key, scope, value
+#                               codec) drift from the committed `.snap`.
 #     - enforce-version-bump:   cross-checks the PR diff. Wallet: if any
 #                               `.snap` under `rust/shekyl-engine-state/
 #                               schemas/` changed, the matching version
@@ -44,7 +45,8 @@
 # the codec is also the digest's fold input, so a silent codec move is a
 # consensus-oracle move; and a table added, removed or re-keyed is a
 # layout change an old binary trips over at `open_table`, which is why
-# the catalogue is a snapshot too (`DAEMON_REDB_STORE.md` §11.1(b)).
+# the catalogues (tables and property cells) are snapshots too
+# (`DAEMON_REDB_STORE.md` §11.1(b)).
 
 name: ci/schema-snapshot
 
@@ -110,11 +112,12 @@ jobs:
         run: |
           # The chain store's counterpart lives in
           # `shekyl-chain-store/src/codec/snapshot_tests.rs`: one `.snap`
-          # of fixture encodings per `Canonical` codec, the table
-          # catalogue snapshot, and the meta-tests that hold the gate's
-          # subject (every impl has a snapshot; the assertions are armed;
-          # this workflow still gates the crate — `workflow_gates_this_crate`
-          # reads this file and checks that THIS filter selects its module).
+          # of fixture encodings per `Canonical` codec, the table and
+          # property-cell catalogue snapshots, and the meta-tests that hold
+          # the gate's subject (every impl has a snapshot; the assertions
+          # are armed; this workflow still gates the crate —
+          # `workflow_gates_this_crate` reads this file and checks that
+          # THIS filter selects its module).
           # The filter is the module path, not a test-name prefix, so the
           # meta-tests cannot be skipped by a name that lacks the prefix.
           cargo test -p shekyl-chain-store codec::snapshot_tests --no-fail-fast
@@ -213,7 +216,7 @@ jobs:
           done
 
           # Chain store (DRS-E1 increment 2). One version constant covers
-          # every codec and the table catalogue, because the store rebuilds
+          # every codec and both catalogues, because the store rebuilds
           # rather than migrates (`DAEMON_REDB_STORE.md` §11.1(a)): if ANY
           # snapshot under the crate's schemas/ directory changed, the
           # VALUE of SCHEMA_VERSION must be greater at the PR head than at
@@ -221,7 +224,7 @@ jobs:
           # line that merely changed shape (`new(1)` → `new(1u64)`) is not
           # a bump. No per-codec registry to keep in sync — the crate's
           # `every_canonical_impl_has_a_snapshot` meta-test guarantees the
-          # snapshot set is the codec set plus the catalogue, and its
+          # snapshot set is the codec set plus the catalogues, and its
           # `workflow_gates_this_crate` meta-test pins the declaration to
           # the grammar the regex below reads.
           CS_SNAP_DIR="rust/shekyl-chain-store/schemas/"

@@ -20,26 +20,34 @@
 //! folds them (`DAEMON_REDB_STORE.md` §11.1(b)), so what must not move is
 //! the **bytes**, and the snapshot is of bytes.
 //!
-//! # The table catalogue is a snapshot too
+//! # The catalogues are snapshots too
 //!
 //! §11.1(b) owes a version bump for a table added, removed or re-keyed,
-//! not only for a codec whose bytes moved — and none of those touch a
-//! codec fixture. So `schemas/tables.snap` pins [`schema::catalogue`]: one
-//! row per definition with its name, shape and the key/value `TypeName`s
-//! redb checks at `open_table`. A layout change of that kind moves this
-//! text and enters the same paired-bump gate as the codec bytes.
+//! and for a `properties` cell added, re-keyed, re-scoped or re-typed —
+//! none of which need move a codec fixture's bytes. So:
+//!
+//! - `schemas/tables.snap` pins [`schema::catalogue`]: one row per
+//!   definition with its name, shape and the key/value `TypeName`s redb
+//!   checks at `open_table`.
+//! - `schemas/properties.snap` pins [`PROPERTY_CELLS`]: one row per cell
+//!   with its key, [`CellScope`] and value-codec name. A new
+//!   [`ChainState`](super::ChainState) cell is digest-domain growth even
+//!   when its value codec already has a fixture.
+//!
+//! A layout change of either kind moves that text and enters the same
+//! paired-bump gate as the codec bytes.
 //!
 //! # One version, so the pairing is a glob
 //!
 //! Every codec in this crate pairs with the same constant —
 //! [`SCHEMA_VERSION`] — because the store has one layout version
 //! (§11.1(a)). `.github/workflows/schema-snapshot.yml` therefore enforces
-//! *any change under `schemas/` ⟹ the value `SCHEMA_VERSION` is declared
-//! with increased in the same PR*, with no per-codec registry to keep in
-//! sync. What this module still has to guard is that the snapshot **set**
-//! is the impl set plus the catalogue ([`every_canonical_impl_has_a_snapshot`])
-//! and that the workflow is actually wired to this crate — runs this whole
-//! module, and parses the declaration in the grammar it is written in
+//! *any change under `schemas/` ⟹ `SCHEMA_VERSION` has a greater value
+//! in the same PR*, with no per-codec registry to keep in sync. What this
+//! module still has to guard is that the snapshot **set** is the impl set
+//! plus the catalogues ([`every_canonical_impl_has_a_snapshot`]) and that
+//! the workflow is actually wired to this crate — runs this whole module,
+//! and parses the declaration in the grammar it is written in
 //! ([`workflow_gates_this_crate`]). A gate whose subject is absent is not a
 //! gate (rule 47).
 //!
@@ -72,12 +80,13 @@ use crate::family_set::FamilySet;
 use crate::lmdb_order::Hash32;
 use crate::schema::{self, TableShape};
 
-use super::{Canonical, SchemaVersion, SCHEMA_VERSION};
+use super::{Canonical, SchemaVersion, PROPERTY_CELLS, SCHEMA_VERSION};
 
-/// The stem of the table-catalogue snapshot under `schemas/`. Not a codec
-/// name; [`every_canonical_impl_has_a_snapshot`] holds the two namespaces
-/// apart.
+/// Catalogue snapshot stems under `schemas/`. Not codec names;
+/// [`every_canonical_impl_has_a_snapshot`] holds the two namespaces apart.
 const TABLE_CATALOGUE_SNAP: &str = "tables";
+const PROPERTY_CATALOGUE_SNAP: &str = "properties";
+const CATALOGUE_SNAPS: &[&str] = &[TABLE_CATALOGUE_SNAP, PROPERTY_CATALOGUE_SNAP];
 
 /// The `cargo test` filter that selects exactly this module — what the
 /// workflow's assert job runs. Pinned here so [`workflow_gates_this_crate`]
@@ -247,6 +256,30 @@ fn render_table_catalogue() -> String {
     out
 }
 
+/// Render the property-cell catalogue: one row per cell, sorted by key
+/// (`properties` orders by string comparison), as `key = scope<value>`.
+fn render_property_catalogue() -> String {
+    assert!(
+        !PROPERTY_CELLS.is_empty(),
+        "PROPERTY_CELLS is empty: the header cells must exist"
+    );
+    let mut rows = BTreeMap::new();
+    for spec in PROPERTY_CELLS {
+        let row = format!("{}<{}>", spec.scope.as_str(), spec.value);
+        assert!(
+            rows.insert(spec.key, row).is_none(),
+            "duplicate properties key `{}` in PROPERTY_CELLS",
+            spec.key
+        );
+    }
+    let mut out = String::from(SNAPSHOT_HEADER);
+    out.push_str(&format!("cells = {}\n[cells]\n", rows.len()));
+    for (key, row) in rows {
+        out.push_str(&format!("{key} = {row}\n"));
+    }
+    out
+}
+
 fn schemas_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas")
 }
@@ -332,6 +365,18 @@ fn table_catalogue_snapshot() {
     );
 }
 
+/// The property-cell catalogue snapshot (`schemas/properties.snap`).
+#[test]
+fn property_catalogue_snapshot() {
+    let rendered = render_property_catalogue();
+    let _ = check_or_update(
+        PROPERTY_CATALOGUE_SNAP,
+        &rendered,
+        "the property-cell catalogue (codec::property)",
+        "A properties cell was added, removed, re-keyed, re-scoped or re-typed.",
+    );
+}
+
 /// Source scan: every `TableDefinition::new(` / `MultimapTableDefinition::new(`
 /// in `schema.rs` is in [`schema::catalogue`]. The `tables!` macro
 /// catalogues everything declared through it; this catches a definition
@@ -355,6 +400,33 @@ fn every_table_definition_is_catalogued() {
     assert_eq!(
         declared, catalogued,
         "every table definition in schema.rs must be declared inside `tables!` so it is catalogued"
+    );
+}
+
+/// Source scan: every `key: "…"` literal in `property.rs` is a
+/// [`PROPERTY_CELLS`] row. `property_cells!` is the only producer of those
+/// literals; a cell declared beside the invocation would be sealed (same
+/// module) but invisible to the snapshot.
+#[test]
+fn every_property_cell_is_catalogued() {
+    let text =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/codec/property.rs"))
+            .expect("read property.rs");
+    let declared: BTreeSet<String> = text
+        .lines()
+        .filter_map(|line| {
+            let (_, rest) = line.split_once("key: \"")?;
+            rest.split_once('"').map(|(key, _)| key.to_owned())
+        })
+        .collect();
+    assert!(
+        !declared.is_empty(),
+        "property.rs: no property-cell key literals parsed"
+    );
+    let catalogued: BTreeSet<String> = PROPERTY_CELLS.iter().map(|c| c.key.to_owned()).collect();
+    assert_eq!(
+        declared, catalogued,
+        "every `key: \"…\"` in property.rs must be a PROPERTY_CELLS row so the snapshot sees it"
     );
 }
 
@@ -443,10 +515,12 @@ fn every_canonical_impl_has_a_snapshot() {
         registered.len(),
         "Canonical::NAME must be unique per codec"
     );
-    assert!(
-        names.insert(TABLE_CATALOGUE_SNAP),
-        "a codec is NAMEd `{TABLE_CATALOGUE_SNAP}`, which is the table catalogue's snapshot stem"
-    );
+    for stem in CATALOGUE_SNAPS {
+        assert!(
+            names.insert(*stem),
+            "a codec is NAMEd `{stem}`, which is a catalogue snapshot stem"
+        );
+    }
     let snaps: BTreeSet<String> = fs::read_dir(schemas_dir())
         .expect("read schemas dir")
         .filter_map(|entry| {
@@ -458,7 +532,7 @@ fn every_canonical_impl_has_a_snapshot() {
         snaps.iter().map(String::as_str).collect::<BTreeSet<_>>(),
         names,
         "rust/shekyl-chain-store/schemas/*.snap must be exactly the registered codecs' NAMEs \
-         plus `{TABLE_CATALOGUE_SNAP}.snap`"
+         plus the catalogue stems {CATALOGUE_SNAPS:?}"
     );
 }
 

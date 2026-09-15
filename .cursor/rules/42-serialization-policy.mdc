@@ -17,27 +17,30 @@ different mechanisms shaped to what each persists:
 | Tree | What is snapshotted | Snapshot dir | Version constant | Regenerate |
 |---|---|---|---|---|
 | `rust/shekyl-engine-state/**` | the `postcard_schema::Schema` of each persisted block | `rust/shekyl-engine-state/schemas/*.snap` | one per block (table below) | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot` |
-| `rust/shekyl-chain-store/**` | the fixture **encodings** of each `codec::Canonical` impl, and the **table catalogue** (name, shape, key/value type per `schema.rs` definition) | `rust/shekyl-chain-store/schemas/*.snap` | `SCHEMA_VERSION` in `src/codec/schema_version.rs`, for the whole store | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests` |
+| `rust/shekyl-chain-store/**` | the fixture **encodings** of each `codec::Canonical` impl, the **table catalogue** (name, shape, key/value type per `schema.rs` definition), and the **property-cell catalogue** (key, scope, value-codec name per `property_cells!` row) | `rust/shekyl-chain-store/schemas/*.snap` | `SCHEMA_VERSION` in `src/codec/schema_version.rs`, for the whole store | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests` |
 
 The chain store snapshots bytes rather than a type schema because its codecs
 are hand-written fixed-width encodings, not serde derives, and because the
 same bytes are the state digest's fold input
 ([`DAEMON_REDB_STORE.md`](../../docs/design/DAEMON_REDB_STORE.md) §11.1(b)):
 a codec move is a consensus-oracle move, so the gate pins the output, not the
-declaration. The table catalogue (`schemas/tables.snap`) is snapshotted for
-the other half of §11.1(b): a table added, removed or re-keyed is a layout an
-old binary trips over at `open_table`, and no codec's bytes move when that
-happens. It has **one** version constant because the store rebuilds
-rather than migrates (§11.1(a)) — any snapshot change under
-`rust/shekyl-chain-store/schemas/` requires `SCHEMA_VERSION` to be
+declaration. Two catalogues cover the rest of §11.1(b), where layout moves
+without any codec's bytes moving: `schemas/tables.snap` (a table added,
+removed or re-keyed — an old binary trips over it at `open_table`) and
+`schemas/properties.snap` (a `properties` cell added, re-keyed, re-scoped
+or re-typed — a new `ChainState` cell is digest-domain growth even when its
+value codec already has a fixture). It has **one** version constant because
+the store rebuilds rather than migrates (§11.1(a)) — any snapshot change
+under `rust/shekyl-chain-store/schemas/` requires `SCHEMA_VERSION` to be
 **numerically greater** at the PR head than at its base, with no per-codec
 registry to keep in sync. Meta-tests in
 [`snapshot_tests.rs`](../../rust/shekyl-chain-store/src/codec/snapshot_tests.rs)
 hold the gate's own subject (rule 47): every `impl Canonical for` in the crate
 has a snapshot and vice versa, every fixture encodes to its codec's
 `FIXED_WIDTH`, every `TableDefinition` / `MultimapTableDefinition` in
-`schema.rs` is inside the `tables!` invocation the catalogue is emitted from,
-the assertion is armed unless `UPDATE_SNAPSHOTS` is set (in which case exactly
+`schema.rs` is inside the `tables!` invocation the table catalogue is emitted
+from, every `key: "…"` in `property.rs` is a `PROPERTY_CELLS` row, the
+assertion is armed unless `UPDATE_SNAPSHOTS` is set (in which case exactly
 one test fails loudly), and the workflow file still runs this module by name
 and reads `SCHEMA_VERSION` with the declaration grammar the source uses.
 
@@ -187,9 +190,9 @@ The same workflow, the same shape, one tree over:
    the hex matches the committed `.snap` under
    `rust/shekyl-chain-store/schemas/`; also asserts each fixture
    decodes back to itself and encodes to exactly `FIXED_WIDTH` bytes.
-   Renders `schema::catalogue()` and asserts it matches `tables.snap`.
-   Drift fails with a unified diff and the rebuild-not-migrate
-   instructions.
+   Renders `schema::catalogue()` against `tables.snap` and
+   `PROPERTY_CELLS` against `properties.snap`. Drift fails with a
+   unified diff and the rebuild-not-migrate instructions.
 2. `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests`
    — regenerates. The `codec_snapshot_assertions_are_armed` test fails
    under this variable on purpose, so a CI run with it set cannot pass.

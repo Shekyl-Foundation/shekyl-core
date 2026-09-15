@@ -66,20 +66,9 @@ impl Canonical for SchemaVersion {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        // Re-labelled so the error names this codec, not the scalar under it.
-        u64::decode(bytes).map(Self).map_err(|e| match e {
-            CodecError::Length {
-                expected, actual, ..
-            } => CodecError::Length {
-                codec: Self::NAME,
-                expected,
-                actual,
-            },
-            CodecError::Invalid { reason, .. } => CodecError::Invalid {
-                codec: Self::NAME,
-                reason,
-            },
-        })
+        u64::decode(bytes)
+            .map(Self)
+            .map_err(|e| e.in_codec(Self::NAME))
     }
 }
 
