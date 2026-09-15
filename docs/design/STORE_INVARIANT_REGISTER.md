@@ -1,7 +1,7 @@
 # Store-invariant register (`SI-`)
 
 **Status:** **LIVING CONTRACT** — minted 2026-09-14 by
-[`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](CONSENSUS_C2_R8_STORE_PLACEMENT.md)
+[`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
 Q1/Q2/Q6; last verified 2026-09-14 at `943592a61` (PR #749's head). Gated
 by `scripts/ci/check_store_invariant_register.py` (§4).
 **Identifier family:** `SI-1…SI-N`, registered in
@@ -34,16 +34,18 @@ Two consequences of "never decides":
 
 ## 2. The register
 
-`Status` ∈ {`ruled`, `built`}. `Anchor` is the `StoreInvariant::` variant
-that carries the row once built (empty while `ruled`). `Origin` names the
-census row or C2-R8 question the row came from.
+`Status` ∈ {`ruled`, `built`, `retired`}. `ruled` / `built` are the live
+states; `retired` is the deleting-PR status (the id is not reused — rule 23).
+`Anchor` is the `StoreInvariant::` variant that carries the row once built
+(empty while `ruled` or `retired`). `Origin` names the census row or C2-R8
+question the row came from.
 
 | Id | Invariant | Table / surface | Consensus twin | Origin | Status | Anchor |
 | --- | --- | --- | --- | --- | --- | --- |
 | SI-1 | `spent_keys` is a set: inserting a key image already present is fatal | `spent_keys` | CEN-I7 (chain-wide) + CEN-L1 as minted (intra-block) | CEN-L1 | ruled | |
 | SI-2 | A connecting block's parent is the block recorded at height−1, and that block is the tip; one block per height | `block_heights` / `block_info` | CEN-A2 | CEN-L2 | ruled | |
 | SI-3 | `txs` is keyed by tx hash: inserting a hash already present is fatal | `txs` | CEN-G1 (listed txs); CEN-F5 corollary (miner tx — reversion clause in C2-R8 §7.1) | CEN-L3 | ruled | |
-| SI-4 | The curve-tree root at height *h*+1 is written exactly once per connect (declared `insert`) and is the root the consensus transition handed `connect` | curve-tree roots | CEN-B5 reads it | C2-R8 Q4; CEN-L14 curve-root heights (provisional pending R8b-7) | ruled | |
+| SI-4 | The curve-tree root at height *h*+1 is written exactly once per connect (declared `insert`) and is the root the consensus transition handed `connect` | curve-tree roots | CEN-B5 reads it | C2-R8 Q4 (ruled `insert`); CEN-L14 curve-root heights (R8b-7 confirms; a rewrite case reopens this row under the ruling's §13, it does not silently override) | ruled | |
 | SI-5 | After a pop trims the tree to height *h*, the tree's root equals the recorded root at *h* | curve tree | CEN-B5 (the recorded root is the oracle) | C2-R8 Q5; CEN-L13 trim bounds | ruled | |
 | SI-6 | The undo log's top entry is the tip height; a pop consumes exactly that entry | undo log | — | C2-R8 Q5; CEN-L13 journal-vs-tip belts | ruled | |
 | SI-7 | Every cell read decodes under its canonical codec; an undecodable or missing sealed cell is fatal | all typed cells | — | CEN-L13 serve-credit re-parse; live today for `properties` cells as `StoreError::CellCorrupt` (PR #749), re-homed under the enum at increment 2.5 | ruled | |

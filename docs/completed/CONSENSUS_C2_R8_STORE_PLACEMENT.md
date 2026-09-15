@@ -1,21 +1,22 @@
 # C2-R8 — Storage-layer enforcement placement design round
 
-**Status:** **OPEN — rulings proposed 2026-09-14, awaiting Rick's signature.**
-Eight rulings (`C2-R8-Q1…Q8`, §2–§9) wargamed in two adversarial passes
-(§15). This PR is the ruling's landing PR: it carries the ruling text, the
-census and CSR effects the ruling has once signed (§10 — every moved cell is
-listed so the signature reviews them), the store-invariant register
-([`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)) with its gate,
-and the conversion-ban gate (§3.3). **Merging this PR is the signature.** On
-signature the banner flips to `CLOSED-as-record` and the file moves to
-`docs/completed/` per index §8; the register stays in `docs/design/` as a
-living contract.
+**Status:** **CLOSED-as-record (2026-09-14)** — eight rulings (`C2-R8-Q1…Q8`)
+signed by merging this landing PR; this document is the round's finished
+ruling record (rule 95 closed-plan class; archived per index §8 in the
+landing PR). It owns no open work: DRS-E1 increment 2.5 and the DRS plan
+amendment (E6, validation crate, `ChainTip.connect`) have named carriers in
+§14; batch R8b lives in the census §10 queue. The store-invariant register
+([`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md)) stays
+in `docs/design/` as a living contract. The landing PR carries the ruling
+text, the census and CSR effects the signature reviews (§10 — every moved
+cell is listed), the register with its gate, and the conversion-ban gate
+(§3.3).
 **Pinned sha:** C++ read at **`c405fac0a`** (`dev` tip 2026-09-14, containing
 PR #747); the Rust store read at **`943592a61`** (PR #749's head, this
 branch's base). Every `file:line` below was re-located at those pins; where a
 census citation had drifted, both numbers are recorded.
 **Identifier family:** `C2-R8-Q1…Q8` (the `C2-R` row of
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2, appended this PR) and
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2, appended this PR) and
 the new **`SI-1…SI-N`** family (store invariants; registered this PR,
 uniqueness checked with `check_index_prefix_uniqueness.py`). Census rows in
 scope: **CEN-L1, L2, L3, L4, L5, L6, L13, L14** — the §10 R8 batch. CSR-1
@@ -25,8 +26,8 @@ re-ruled.
 **Authority chain:** census §10 R8 + §4.L + §6 ("validation completed by a
 side effect of the write path"); CSR-1 (R8 is the ruling instrument, the
 DRS-C surface map is its input) and CSR-5 (R8 before R6) in
-[`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md);
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) D10/D11 (replay is the Rust
+[`CONSENSUS_STORE_RECONCILIATION.md`](../design/CONSENSUS_STORE_RECONCILIATION.md);
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) D10/D11 (replay is the Rust
 store's only writer before cutover); rules 00 / 05 / 16 / 21 / 22 / 23 / 47 /
 50.
 
@@ -103,7 +104,7 @@ have to hold if the consensus rules changed?**
   coherence — a table that is a set, a foreign key, a cell that decodes, an
   accumulator that does not wrap. Not versioned, not forkable, true under any
   rule set. Home: the store, as a **fatal** check (Q2), registered as an
-  `SI-` row ([`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md)).
+  `SI-` row ([`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md)).
 - **No, and a ratified or ratifiable document names it → arm A, a consensus
   rule.** A statement about block legality — versioned, forkable, defined by
   the protocol, meaningful with no database. Home: the validation crate
@@ -488,10 +489,12 @@ landing PR, and not three weeks out.
 
 ## 11. The store-invariant register (new artifact, gated at birth)
 
-[`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) is the arm-B
+[`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md) is the arm-B
 home: one `SI-` row per invariant with the table it constrains, the rule
-that makes it hold, the row it came from, a `Status` (`ruled` → `built`), and
-an `Anchor` (the `StoreInvariant::` variant once built). Eight rows at birth
+that makes it hold, the row it came from, a `Status` (`ruled` → `built`;
+`retired` when the table is deleted), and an `Anchor` (the
+`StoreInvariant::` variant once built; empty while `ruled` or `retired`).
+Eight rows at birth
 (SI-1…SI-8, from §7.1 and §5–§6).
 
 **Its gate, `scripts/ci/check_store_invariant_register.py`,** is the
@@ -521,7 +524,7 @@ at a declared write site (§7.3) or one new census row.
 | R8b-4 | Bond records (JoinMarket `p_id`): same question | CEN-L14 |
 | R8b-5 | Budget accrual rows: same question | CEN-L14 |
 | R8b-6 | Witness rows: same question | CEN-L14 |
-| R8b-7 | Curve-root heights: same question — **provisionally `insert`** (`SI-4`, §5); R8b confirms or names the case where a root is legitimately rewritten | CEN-L14 / Q4 |
+| R8b-7 | Curve-root heights: Q4 already ruled **`insert`** (`SI-4`, §5). This question confirms that ruling at the L14 write site, or names a legitimate rewrite — which is a **reversion of SI-4** (§13), not a silent override | CEN-L14 / Q4 |
 
 ---
 
@@ -553,7 +556,7 @@ nothing (rule 22).
 | Lands in **this PR** | Carrier for what it hands on |
 | --- | --- |
 | This document; census row moves + re-derived figures (§10); §10 R8 → RULED, R8b added; §7 decision-log entry; CSR §6.2/§8/§9 + register row CEN-L1 | — |
-| [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) + `check_store_invariant_register.py` (wired) | rows flip `ruled → built` in the S-CHAIN-W increments that build them |
+| [`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md) + `check_store_invariant_register.py` (wired) | rows flip `ruled → built` in the S-CHAIN-W increments that build them |
 | `check_store_error_conversion_ban.py` (wired; clauses 1–2 live, clause 3 armed) | clause 3 acquires a subject when the validation crate lands |
 | Index §2: `C2-R` row appended (Q1…Q8), `SI-` family registered, DRS row (S-CHAIN-W's R8 blocker discharged; increment 2.5 named as its precondition) | — |
 | **DRS-E1 increment 2.5** (named, not built here): brand-via-closure `WriteBatch<'id>` + higher-ranked `connect`, `StoreError::class()`, `StoreInvariant` enum, `insert`/`upsert` verbs, `StoreCannot` shape | the next `shekyl-chain-store` PR, **before any consumer of `WriteBatch`**; falsify by `rg "PhantomData<fn\(&'" rust/shekyl-chain-store/src` |
@@ -573,3 +576,4 @@ this PR's scope is the ruling and the gates the ruling itself names.
 | 2026-09-14 | **Pass 1 (Rick → agent).** Frame: rule vs invariant; validation is a type; store computes nothing; keep the belt, relabel it fatal; TOCTOU scoping; per-row starting positions; three outputs so there is no R9. Agent verified anchors, endorsed, and added: fusion 1 (curve root, `blockchain_db.cpp:641–664`); L3 is a corollary of F5; pop has the same fusion (fusion 2); intra-block duplicates are a category; fork version is absent from the context; pool admission and the transition are scope questions; three error classes not two; halt visibility. |
 | 2026-09-14 | **Pass 2 (Rick → agent).** Plain lifetimes overstate — brand via closure, one-live-write dependency recorded; undo log instead of a revert function (agent) accepted; graded oracle not comparison; replay catches over-rejection only → negative fixture per rule; partial validator must not produce a fully-trusted type → `RuleCoverage`; denominator computed not declared. Count discrepancy (130 / 168 / ≈159) resolved by cross-tabulating flag × bucket: C `[86, 39, 5, 34] = 164`, P `[1, 4, 0, 4] = 9`; **flag partitions first.** E6 partition; parity-first rationale ("the port is the enabler of R6/R7/R9"). |
 | 2026-09-14 | **Draft instructions (Rick).** Third arm for the test; standing test binding future rows; re-derive figures in the landing PR; register gated at birth; conversion-ban gate lands with the ruling; reversion clause with two triggers. This document. |
+| 2026-09-14 | **Landing PR closeout (rule 95 / index §8).** Banner `CLOSED-as-record`; file moved to `docs/completed/` in the same change. Merge of the landing PR is the signature. |
