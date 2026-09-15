@@ -17,9 +17,12 @@
 //! [`Provenance`] is the file's answer: the union of every stubbed set any
 //! **committed** batch was begun under, persisted in the `apply_policy`
 //! cell and widened in the same transaction as the rows it describes. A
-//! fresh store is [`Provenance::FULL`]; a stubbed session's commit taints
-//! it; nothing untaints it short of a rebuild. Reopen therefore reads the
-//! record instead of guessing, and `Unknown` has no reason to exist.
+//! store created under [`ApplyPolicy::Full`] starts [`Provenance::FULL`];
+//! one created under a stub is sealed with that stub already recorded,
+//! since it has been written under it from its first byte. A stubbed
+//! session's commit taints it; nothing untaints it short of a rebuild.
+//! Reopen therefore reads the record instead of guessing, and `Unknown`
+//! has no reason to exist.
 //!
 //! # What it vouches for
 //!

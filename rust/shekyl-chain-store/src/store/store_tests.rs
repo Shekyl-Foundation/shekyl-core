@@ -340,3 +340,25 @@ fn open_read_only_refuses_a_store_that_does_not_exist() {
     ));
     assert!(!path.exists(), "a read-only open must not create the store");
 }
+
+#[test]
+fn an_existing_file_that_is_not_a_store_is_refused_untouched() {
+    // The reopen arm must never initialize: an empty file at the path --
+    // left by another process, or the shape a path removed between
+    // `create_new`'s AlreadyExists and the open would take under an
+    // open-or-create -- is refused as-is. Were the arm `create`, redb would
+    // turn it into a headerless database, `verify` would refuse that, and
+    // the file would stay behind for every later open to refuse.
+    let path = tmp("not-a-store");
+    std::fs::write(&path, b"").expect("empty file");
+    assert!(matches!(
+        ChainStore::with_apply_policy(&path, ApplyPolicy::Full),
+        Err(StoreError::Open(_))
+    ));
+    assert_eq!(
+        std::fs::metadata(&path).expect("still present").len(),
+        0,
+        "the reopen arm initialized a file it did not create"
+    );
+    cleanup(&path);
+}

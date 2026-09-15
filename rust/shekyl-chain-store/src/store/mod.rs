@@ -154,8 +154,9 @@ impl ChainStore {
     ///
     /// [`StoreError::EmptyApplyStub`] if the policy stubs no families —
     /// checked before the path is touched; [`StoreError::Open`] if the file
-    /// cannot be created or opened; on an existing file,
-    /// [`StoreError::SchemaVersionAbsent`],
+    /// cannot be created or opened, including an existing file that is not
+    /// a redb database (refused unread and unwritten, never initialized);
+    /// on an existing database, [`StoreError::SchemaVersionAbsent`],
     /// [`StoreError::SchemaVersionMismatch`] or
     /// [`StoreError::CellCorrupt`] if its header is not one this binary
     /// can vouch for. A fresh file the engine refuses to take, or that
@@ -176,6 +177,15 @@ impl ChainStore {
         // two would have sealed a file it did not create. redb's own
         // `create` does exactly this open-with-create and hands the file to
         // `create_file`, so a 0-byte file is the path it knows.
+        //
+        // The reopen arm is therefore `open`, which never creates and never
+        // initializes (`redb-4.1.0/src/db.rs:1196`; an empty file is
+        // `InvalidData`, `page_manager.rs:171`). With `create` there, a
+        // path removed between AlreadyExists and the open -- or an empty
+        // file some other process left -- would be initialized as a fresh,
+        // unsealed database and then refused by `verify`, leaving behind
+        // exactly the headerless file the fresh arm's cleanup exists to
+        // prevent. Only the `create_new` winner initializes a file.
         let mut builder = redb::Builder::new();
         builder.set_cache_size(CACHE_SIZE);
         let path = path.as_ref();
@@ -199,7 +209,7 @@ impl ChainStore {
                 }
             },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let db = builder.create(path).map_err(StoreError::Open)?;
+                let db = builder.open(path).map_err(StoreError::Open)?;
                 let provenance = header::verify(&db.begin_read().map_err(StoreError::BeginRead)?)?;
                 (db, provenance)
             }
