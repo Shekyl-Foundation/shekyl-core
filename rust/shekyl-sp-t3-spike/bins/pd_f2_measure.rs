@@ -303,7 +303,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let publish = app.await_reachable().await?;
     println!(
-        "personas reachable after {:.1} s (descriptor publication — EXCLUDED from every arm)",
+        "personas cold-reachable after {:.1} s (publication + HSDir propagation — EXCLUDED from every arm)",
         publish.as_secs_f64()
     );
 

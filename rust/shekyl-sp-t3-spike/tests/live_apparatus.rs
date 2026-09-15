@@ -110,12 +110,12 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
         "warm-circuit fetch must succeed: {warm:?}"
     );
 
-    // Apparatus cross-check: the endpoints served exactly the requests the client
-    // leg believes it made (2 persona fetches + 1 warm + at least 1 reachability
-    // probe). A "success" that the endpoint never saw would mean the bytes came
-    // from somewhere else entirely.
+    // Apparatus cross-check: the endpoints served every request the client
+    // leg believes it made (2 cold fetches + 1 warm + at least one cold
+    // readiness probe per persona). A "success" that the endpoint never saw
+    // would mean the bytes came from somewhere else entirely.
     assert!(
-        app.served_total() >= 4,
+        app.served_total() >= 5,
         "the endpoints must have served every counted fetch, got {}",
         app.served_total()
     );

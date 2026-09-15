@@ -1570,7 +1570,11 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   persona behind its own tor with its own guard set. "Cold" is
   `SIGNAL NEWNYM` on the client tor before the fetch — the daemon's
   view of a fresh circuit, not a fresh client; "warm" is circuit reuse.
-  A completed exchange the client refuses (anchor gate, key, envelope)
+  Bring-up ends only when one `NEWNYM` round of cold probes to *every*
+  persona succeeds at once: `NEWNYM` drops the descriptor cache, and a
+  minute-old onion has not reached all its HSDirs, so "reachable once,
+  warm" let publication lag into the cold arm's first samples as
+  `Circuit`. A completed exchange the client refuses (anchor gate, key, envelope)
   is `Refused`, kept apart from `Circuit` and `Stall` so the apparatus
   cannot blame Tor for disagreeing with itself. The concurrency sweep
   (`SHEKYL_SPIKE_PERSONAS` wide, powers of two) prints the `SF-D7`

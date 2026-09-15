@@ -347,7 +347,41 @@ impl ClientLeg {
         lane: usize,
         target: &FetchTarget,
     ) -> Result<usize, FailureKind> {
-        fetch_via(&self.lanes[lane % self.lanes.len()], target).await
+        fetch_via(&self.lanes[lane % self.lanes.len()], target)
+            .await
+            .map_err(|fault| fault.kind())
+    }
+}
+
+/// Why a fetch did not return a verified body: the harness ceiling fired,
+/// or the client returned its own typed error. The client's error is kept
+/// whole so a bring-up refusal can say *what* was refused; the timed arms
+/// reduce it to a [`FailureKind`] with [`Self::kind`].
+#[derive(Debug)]
+pub enum FetchFault {
+    /// [`FETCH_CEILING`] passed before the client answered.
+    Ceiling,
+    /// The client's own verdict.
+    Client(FetchError),
+}
+
+impl FetchFault {
+    /// The class the measurement records.
+    #[must_use]
+    pub fn kind(&self) -> FailureKind {
+        match self {
+            Self::Ceiling => FailureKind::Timeout,
+            Self::Client(e) => classify(e),
+        }
+    }
+}
+
+impl std::fmt::Display for FetchFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ceiling => write!(f, "harness ceiling of {}s passed", FETCH_CEILING.as_secs()),
+            Self::Client(e) => write!(f, "{e}"),
+        }
     }
 }
 
@@ -365,7 +399,7 @@ impl ClientLeg {
 /// happened, so no [`FailureKind`] describes it — and a rig that cannot mint
 /// nonces has nothing left to measure. It stops loudly rather than filing
 /// the failure under a class Tor would be blamed for.
-pub async fn fetch_via(client: &PFetchClient, target: &FetchTarget) -> Result<usize, FailureKind> {
+pub async fn fetch_via(client: &PFetchClient, target: &FetchTarget) -> Result<usize, FetchFault> {
     let header = RequestHeader::fresh(APPARATUS_ANCHOR_HEIGHT, APPARATUS_ANCHOR_HASH)
         .expect("OS entropy source failed; the apparatus cannot mint request nonces");
     let fetched = tokio::time::timeout(
@@ -374,9 +408,9 @@ pub async fn fetch_via(client: &PFetchClient, target: &FetchTarget) -> Result<us
     )
     .await;
     match fetched {
-        Err(_) => Err(FailureKind::Timeout),
+        Err(_) => Err(FetchFault::Ceiling),
         Ok(Ok(shard)) => Ok(shard.body().len()),
-        Ok(Err(e)) => Err(classify(&e)),
+        Ok(Err(e)) => Err(FetchFault::Client(e)),
     }
 }
 
@@ -444,6 +478,9 @@ pub enum ApparatusError {
     Refused {
         /// Index of the persona whose exchange was refused.
         persona: usize,
+        /// The client's own words for it (`404`, which malformation, bad
+        /// countersignature) — the one thing a reader needs to fix the rig.
+        reason: String,
     },
     /// The payload cannot be served at all: not a whole number of leaves, or
     /// more than one segment. Refused at bring-up, because an apparatus that
@@ -468,10 +505,10 @@ impl std::fmt::Display for ApparatusError {
             Self::NotReachable => {
                 write!(f, "not every persona became reachable before the deadline")
             }
-            Self::Refused { persona } => write!(
+            Self::Refused { persona, reason } => write!(
                 f,
-                "persona {persona} answered but the client refused the exchange (anchor gate, \
-                 key, or fixture disagree)"
+                "persona {persona} answered but the client refused the exchange: {reason} \
+                 (anchor gate, key, or fixture disagree)"
             ),
             Self::Unframeable { bytes } => write!(
                 f,
@@ -676,39 +713,63 @@ impl Apparatus {
     /// propagating would have its publication delay recorded as circuit
     /// churn — the very signal `SF-D7` reads `N` from.
     ///
-    /// The probes run **at once**, one task per persona on its own lane,
-    /// under one shared [`PUBLISH_TIMEOUT`] deadline. A successful probe is
-    /// a whole shard fetched over a fresh rendezvous — tens of seconds for a
-    /// real fixture — so probing eight personas one after another cannot fit
-    /// the deadline even when every descriptor is already up; the first (c)
-    /// bring-up failed exactly that way. Each probe is bounded by what
-    /// remains of the deadline, so it is honoured even when a fetch stalls
-    /// for the client's full [`FETCH_CEILING`]. A probe the client
-    /// **refuses** fails the whole bring-up at once as
-    /// [`ApparatusError::Refused`]: the onion answered, so waiting longer
-    /// cannot change the outcome, and retrying it to the deadline would file
-    /// an apparatus fault under `NotReachable`.
+    /// Readiness is **cold reachability, all personas, in one round**: a
+    /// `SIGNAL NEWNYM` to the client tor, then one probe per persona at
+    /// once (one task each on its own lane), repeated until a round in
+    /// which every probe succeeds, under one shared [`PUBLISH_TIMEOUT`]
+    /// deadline. Two weaker readings were tried and each biased the arms:
+    ///
+    /// - *Probe the personas one after another.* A successful probe is a
+    ///   whole shard over a fresh rendezvous — tens of seconds for a real
+    ///   fixture — so eight in sequence could not fit the deadline even with
+    ///   every descriptor up; the first (c) bring-up failed `NotReachable`
+    ///   that way.
+    /// - *Reachable once, warm.* `NEWNYM` clears the client's onion-service
+    ///   descriptor cache, so the first cold fetch re-fetches the descriptor
+    ///   from an HSDir chosen afresh — and a minute-old service has not
+    ///   reached all of its HSDirs yet. The cold arm's first observations
+    ///   were then publication lag filed as `Circuit`, and `live_apparatus`
+    ///   failed its first cold fetch two runs out of three.
+    ///
+    /// Each probe is bounded by what remains of the deadline, so it is
+    /// honoured even when a fetch stalls for the client's full
+    /// [`FETCH_CEILING`]. A probe the client **refuses** fails the whole
+    /// bring-up at once as [`ApparatusError::Refused`]: the onion answered,
+    /// so waiting longer cannot change the outcome, and retrying it to the
+    /// deadline would file an apparatus fault under `NotReachable`.
     pub async fn await_reachable(&self) -> Result<Duration, ApparatusError> {
         let started = Instant::now();
         let deadline = started + PUBLISH_TIMEOUT;
         if self.personas.is_empty() {
             return Err(ApparatusError::NotReachable);
         }
-        let mut probes = tokio::task::JoinSet::new();
-        for (index, persona) in self.personas.iter().enumerate() {
-            probes.spawn(probe_until(
-                self.client.lane(index),
-                index,
-                persona.target(0),
-                self.expected_len,
-                deadline,
-            ));
+        loop {
+            self.rotate_client_circuits().await?;
+            let mut probes = tokio::task::JoinSet::new();
+            for (index, persona) in self.personas.iter().enumerate() {
+                probes.spawn(probe_once(
+                    self.client.lane(index),
+                    index,
+                    persona.target(0),
+                    self.expected_len,
+                    deadline,
+                ));
+            }
+            let mut all_up = true;
+            while let Some(joined) = probes.join_next().await {
+                // A panicking probe is a rig bug, not a Tor outcome; surface it.
+                all_up &= joined.expect("readiness probe task panicked")?;
+            }
+            if all_up {
+                return Ok(started.elapsed());
+            }
+            let pause =
+                Duration::from_secs(5).min(deadline.saturating_duration_since(Instant::now()));
+            if pause.is_zero() {
+                return Err(ApparatusError::NotReachable);
+            }
+            tokio::time::sleep(pause).await;
         }
-        while let Some(joined) = probes.join_next().await {
-            // A panicking probe is a rig bug, not a Tor outcome; surface it.
-            joined.expect("readiness probe task panicked")?;
-        }
-        Ok(started.elapsed())
     }
 
     /// Make the next fetch **cold**: `SIGNAL NEWNYM` to the client tor, so it
@@ -836,36 +897,29 @@ fn classify(e: &FetchError) -> FailureKind {
     }
 }
 
-/// Probe one persona until it serves a body of `expected_len`, the client
-/// refuses it, or `deadline` passes. Free-standing (owned inputs) so
+/// One cold probe of a persona: `Ok(true)` when it served a body of
+/// `expected_len`, `Ok(false)` when it did not (not yet reachable, short
+/// body, or `deadline` passed mid-probe), `Err` when the client refused a
+/// completed exchange. Free-standing (owned inputs) so
 /// [`Apparatus::await_reachable`] can run one per persona in its own task.
-async fn probe_until(
+async fn probe_once(
     client: Arc<PFetchClient>,
     index: usize,
     target: FetchTarget,
     expected_len: usize,
     deadline: Instant,
-) -> Result<(), ApparatusError> {
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(ApparatusError::NotReachable);
-        }
-        let probe = tokio::time::timeout(remaining, fetch_via(&client, &target));
-        match probe.await {
-            Ok(Ok(bytes)) if bytes == expected_len => return Ok(()),
-            Ok(Err(FailureKind::Refused)) => {
-                return Err(ApparatusError::Refused { persona: index });
-            }
-            // Not yet reachable, a short body, or the deadline passed
-            // mid-probe: retry while the deadline allows.
-            Ok(_) | Err(_) => {}
-        }
-        let pause = Duration::from_secs(5).min(deadline.saturating_duration_since(Instant::now()));
-        if pause.is_zero() {
-            return Err(ApparatusError::NotReachable);
-        }
-        tokio::time::sleep(pause).await;
+) -> Result<bool, ApparatusError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(ApparatusError::NotReachable);
+    }
+    match tokio::time::timeout(remaining, fetch_via(&client, &target)).await {
+        Ok(Ok(bytes)) => Ok(bytes == expected_len),
+        Ok(Err(fault)) if fault.kind() == FailureKind::Refused => Err(ApparatusError::Refused {
+            persona: index,
+            reason: fault.to_string(),
+        }),
+        Ok(Err(_)) | Err(_) => Ok(false),
     }
 }
 
