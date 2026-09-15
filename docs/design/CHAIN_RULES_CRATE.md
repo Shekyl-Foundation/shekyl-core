@@ -96,8 +96,16 @@ crate's own types — the handoff names them as a confusion hazard; they are
 - `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: [u8; 32], nonce: u32, curve_tree_root: [u8; 32], attestation_root: [u8; 32] }`.
 - `Transaction::hash() -> [u8; 32]`, `prefix_hash()`, `pqc_signing_payload_hashes()`.
 - `Input` is an `enum` — L5's whitelist dissolves into match exhaustiveness.
-- Dependency graph: `shekyl-crypto-hash`, `shekyl-curve-generators` only. No
-  `redb`, no store.
+- Dependency graph: `shekyl-crypto-hash`, `shekyl-curve-generators` directly.
+  No `redb`, no store. **Measured at commit 4** (`cargo tree -e normal
+  --prefix none | sort -u | wc -l`): `shekyl-types` 13, `shekyl-address` 21,
+  `shekyl-wire` 73 — of which `shekyl-curve-generators` is 70, the whole
+  helioselene / generalized-bulletproofs / dalek stack behind the `tx_extra
+  0x07` leaf-point check. The rules crate's closure is therefore 85 packages
+  (170 with dev edges), not "almost none". Recorded rather than fought: the
+  candidate type has one home, and the 4.I rows (CEN-I12's anchor, the
+  leaf-point rows) will need that stack in this crate legitimately when they
+  land — so the belt's subject is *which* packages, not how many.
 
 **Delta 1 — five `Input` variants, not four.** The handoff lists
 `Gen | ToKey | ServeCredit | BondPost`; the source has a fifth,
@@ -254,17 +262,21 @@ impl RuleSetId {
     pub const fn from_raw(v: u8) -> Self; pub const fn to_raw(self) -> u8;
 }
 
-/// The consensus rules as an explicit input. Parameters populate as rules land;
-/// the header version a rule set *admits* will be one of them — a parameter,
-/// never the identity.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RuleSet { id: RuleSetId }
+/// The consensus rules as an explicit input. A named, **issued** value: `for_id`
+/// resolves an id to one and nothing else constructs one. Parameters populate
+/// as rules land; the first is `enforced` — the rows this rule set holds a
+/// block to, and the denominator `Coverage::is_complete_for` measures against.
+/// The header version a rule set *admits* will be another — a parameter, never
+/// the identity.
+#[derive(Clone, Copy, PartialEq, Eq)]                 // Debug by hand: prints the row *count*
+pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow] }
 impl RuleSet {
-    pub const GENESIS: Self;
+    pub const GENESIS: Self;                           // enforced: CenRow::ALL
+    const ISSUED: &'static [Self];                     // every rule set a schedule may name
     /// The rule set an id names; `None` for an id no schedule has issued.
     pub fn for_id(id: RuleSetId) -> Option<Self>;
     pub const fn id(&self) -> RuleSetId;
-    /// The consensus rows this rule set enforces — at genesis, every `CenRow`.
+    /// The consensus rows this rule set enforces, in census order.
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_;
 }
 
@@ -275,18 +287,26 @@ impl RuleSet {
 /// function exists so R4's state-dependent activation has a place to land
 /// without touching a caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RuleSchedule { steps: &'static [(BlockHeight, RuleSetId)] }   // non-empty; steps[0].0 == ZERO
+pub struct RuleSchedule {
+    genesis: RuleSetId,                                // in force from ZERO — not optional
+    steps: &'static [(BlockHeight, RuleSetId)],        // later activations, strictly ascending, none at ZERO
+}
 impl RuleSchedule {
     pub const fn for_network(network: shekyl_address::Network) -> Self;
-    /// The rule set in force at `height`: the last step at or below it.
+    /// The rule set in force at `height`: the last step at or below it, else `genesis`.
     pub fn rules_at(&self, height: BlockHeight) -> RuleSetId;
 }
+// `const fn well_formed(&RuleSchedule) -> bool` — steps ascending, none at ZERO
+// (it would shadow `genesis`), every named id in `RuleSet::ISSUED` — is
+// `const`-asserted for each schedule `for_network` can return: a malformed
+// schedule is a compile error, never a height at which `rules_at` has no answer.
 
 /// Relay/pool policy. A separate input with a separate id, never merged into
-/// `RuleSet` (ruling §8). Consumer: DRS-E5. Staged here because §7.5.1 lists it.
+/// `RuleSet` (ruling §8). Consumer: DRS-E5. Staged here because §7.5.1 lists it;
+/// increment 1 stages the identity only (`GENESIS`, `id()`), E5 adds parameters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AdmissionPolicyId(u8);
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AdmissionPolicy { id: AdmissionPolicyId }
 impl AdmissionPolicy { pub const GENESIS: Self; pub const fn id(&self) -> AdmissionPolicyId; }
 ```
@@ -294,7 +314,16 @@ impl AdmissionPolicy { pub const GENESIS: Self; pub const fn id(&self) -> Admiss
 No `From<RuleSetId> for AdmissionPolicyId` or the reverse, ever; no
 `From<u8>`/`PartialEq<u8>` on `RuleSetId` — the 1:1 with `major_version` is a
 fact about today's table, not a definition, and equality would erase the
-distinction the function preserves.
+distinction the function preserves. Both refusals are pinned by `compile_fail`
+doctests on the id types.
+
+*Implementation delta (commit 4).* The round-2 sketch carried the schedule as a
+non-empty `steps` slice with `steps[0].0 == ZERO` as a documented invariant;
+the landed shape splits `genesis` out as a non-optional field so "no rule set
+in force at genesis" is unrepresentable rather than asserted, and `rules_at`
+has no `expect`. `RuleSet` gained its first parameter, `enforced`, so
+`enforced()` reads data rather than returning `CenRow::ALL` regardless of
+`self`. Same public API.
 
 ### 4.3 `ChainView<'id>`, `AtHeight<T>`, `RecordedBlock` (`view.rs`)
 
@@ -707,6 +736,19 @@ lint scans them as production — no debug macros anywhere).
   (`with_view` is `for<'id> FnOnce(MockView<'id>) -> R`; the two `'id`s are
   distinct and invariant, so this does not type-check.) `harness` is
   `#[cfg(any(test, doctest))]` so doctests see the mock (round-1 ruling Q8).
+- Also pinned this way (commit 4): `AtHeight` → `Option` via `.into()` and
+  via `?`; `RuleSetId == u8`; `AdmissionPolicyId` → `RuleSetId`.
+
+**A `compile_fail` proves *some* compile error — and only that, on this
+toolchain.** rustdoc's `compile_fail,E0277` error-code form is checked on
+nightly only; on the pinned stable (`rust-toolchain.toml`) the code is
+silently ignored, so writing one claims a precision the gate does not have
+(verified at commit 4: `E0999` passed). None is written. Instead each pin was
+run once as a *passing* doctest to read the single error it produces
+(`E0277` ×3, `E0308` for the `u8` comparison, `E0432` for the G1 pair), so a
+snippet that fails for a typo rather than for its reason is a review item,
+not a hidden state. Exact-diagnostic pinning (`trybuild`) is not adopted: the
+pins here are second lines behind the belt and the type shapes, not gates.
 
 ### 8.4 Rule sets and schedule (`rule_set_tests.rs`)
 

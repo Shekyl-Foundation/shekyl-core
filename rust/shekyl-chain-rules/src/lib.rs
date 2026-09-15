@@ -50,9 +50,15 @@
 
 #![deny(unsafe_code)]
 
+mod block;
 mod census;
+mod rule_set;
+mod view;
 
+pub use block::{Candidate, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
+pub use rule_set::{AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
+pub use view::{AtHeight, ChainView, RecordedBlock};
 
 #[cfg(test)]
 #[path = "census_tests.rs"]
