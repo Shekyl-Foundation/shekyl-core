@@ -28,19 +28,33 @@
 //!   typed error rather than a deadlock, and drop aborts. Durability,
 //!   two-phase commit, and cache size are declared constants, not library
 //!   defaults by omission.
+//! - **DRS-E1 increment 2** — [`codec`], [`family_set`], [`provenance`],
+//!   and the store header. [`codec::Canonical`] is the one encoding a
+//!   value is stored under *and* the digest folds (§11.1(b)), with a
+//!   committed fixture snapshot per codec gating it under rule 42. The
+//!   store seals [`codec::SCHEMA_VERSION`] into a fresh file's first
+//!   transaction and refuses any other version on reopen (§11.1(a)). The
+//!   file's [`provenance::Provenance`] — which archival applies some
+//!   committed batch skipped — is persisted beside it and widened
+//!   atomically with each stubbed commit, so a reopen reads the file's
+//!   history instead of guessing.
 //!
 //! Slice B's table names are bijection-pinned against
 //! [`accumulator::TABLE_CLASSES`] **and** against the X-macro
 //! `SHEKYL_LMDB_TABLES` by `scripts/ci/check_redb_schema_bijection.py` —
-//! three surfaces, all 49, checked in every direction. Later slices
-//! (codecs) add modules next to these and inherit that pin.
+//! three surfaces, all 49, checked in every direction. Codecs for the
+//! remaining tables' values land per surface (S-CHAIN-W onward) and
+//! inherit both that pin and the snapshot gate.
 
 #![deny(unsafe_code)]
 
 pub mod accumulator;
 pub mod apply_policy;
+pub mod codec;
 pub mod conformance;
 pub mod digest_v0;
+pub mod family_set;
 pub mod lmdb_order;
+pub mod provenance;
 pub mod schema;
 pub mod store;

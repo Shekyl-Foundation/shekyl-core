@@ -10,7 +10,7 @@
 //! ([`DAEMON_REDB_STORE.md`](../../../../docs/design/DAEMON_REDB_STORE.md)
 //! §4's extraction order). This module opens the database, arms its
 //! commit policy, and hands out the write handle. Table *identity* is
-//! consulted only to honour [`ApplyPolicy`](crate::apply_policy::ApplyPolicy);
+//! consulted only to honour [`ApplyPolicy`];
 //! codecs live elsewhere.
 //!
 //! # The write handle is a possession type, and that is the point
@@ -47,21 +47,37 @@
 //! [`CACHE_SIZE`] is redb's 1 GiB default made explicit so a future
 //! engine bump cannot change RSS by omission. The *number* reopens
 //! against DRS-BENCH peak-RSS, never to "go faster" (§5.2).
+//!
+//! # The header is checked before anything else (increment 2)
+//!
+//! A fresh file is **sealed** in its first transaction with the layout
+//! version and the creating session's provenance; an existing file has
+//! both read back — in a read transaction, so a stale file is never
+//! stamped current in passing — before any table is opened. A file with no
+//! version cell is not one this binary wrote and is refused
+//! ([`StoreError::SchemaVersionAbsent`]); a file at another version is
+//! refused in both directions ([`StoreError::SchemaVersionMismatch`]). The
+//! answer to either is a rebuild from the block corpus
+//! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
 mod error;
+mod header;
 mod read;
+mod shared;
 mod write;
 
-pub use error::StoreError;
+pub use error::{CellFault, StoreError};
 pub use read::ReadSnapshot;
 pub use write::WriteBatch;
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use redb::{Database, Durability, ReadOnlyDatabase, ReadableDatabase, WriteTransaction};
 
 use crate::apply_policy::ApplyPolicy;
+use crate::provenance::Provenance;
+
+use shared::Shared;
 
 /// The durability every write transaction is armed with (DRS-D9, Tier-A A4).
 pub const DURABILITY: Durability = Durability::Immediate;
@@ -95,7 +111,7 @@ pub const CACHE_SIZE: usize = 1024 * 1024 * 1024;
 pub struct ChainStore {
     backend: Backend,
     apply_policy: ApplyPolicy,
-    write_held: AtomicBool,
+    shared: Shared,
 }
 
 enum Backend {
@@ -108,6 +124,7 @@ impl core::fmt::Debug for ChainStore {
         f.debug_struct("ChainStore")
             .field("read_only", &self.is_read_only())
             .field("apply_policy", &self.apply_policy)
+            .field("provenance", &self.provenance())
             .finish_non_exhaustive()
     }
 }
@@ -117,22 +134,34 @@ impl ChainStore {
     ///
     /// # Errors
     ///
-    /// [`StoreError::Open`] if the file cannot be created or opened.
+    /// [`StoreError::Open`] if the file cannot be created or opened; the
+    /// header refusals listed on [`with_apply_policy`](Self::with_apply_policy).
     pub fn create(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         Self::with_apply_policy(path, ApplyPolicy::default())
     }
 
     /// Create or open the store with an explicit [`ApplyPolicy`].
     ///
-    /// Anything but [`ApplyPolicy::Full`] produces a run whose comparator
-    /// output is **not** parity evidence. The policy is taken at
-    /// construction rather than per call, so a run cannot change its own
-    /// provenance halfway through.
+    /// The policy is this **session's** intent, taken at construction so a
+    /// run cannot change it halfway through. What the *file* has been
+    /// written under is [`provenance`](Self::provenance): a fresh file is
+    /// sealed with this policy's stubbed set, and a stubbed session's
+    /// commits widen an existing file's record. Only a file whose
+    /// provenance is [`Provenance::FULL`] is parity evidence — a `Full`
+    /// session over a tainted file does not clean it.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Open`] if the file cannot be created or opened;
-    /// [`StoreError::EmptyApplyStub`] if the policy stubs no families.
+    /// [`StoreError::EmptyApplyStub`] if the policy stubs no families —
+    /// checked before the path is touched; [`StoreError::Open`] if the file
+    /// cannot be created or opened, including an existing file that is not
+    /// a redb database (refused unread and unwritten, never initialized);
+    /// on an existing database, [`StoreError::SchemaVersionAbsent`],
+    /// [`StoreError::SchemaVersionMismatch`] or
+    /// [`StoreError::CellCorrupt`] if its header is not one this binary
+    /// can vouch for. A fresh file the engine refuses to take, or that
+    /// cannot be sealed, is removed again, so a failed create does not
+    /// leave a headerless file the next open refuses.
     pub fn with_apply_policy(
         path: impl AsRef<Path>,
         apply_policy: ApplyPolicy,
@@ -145,60 +174,108 @@ impl ChainStore {
         // file atomically (fresh) or fails with AlreadyExists (reopen). An
         // earlier draft checked `exists()` first and then called `create`,
         // which also opens existing files -- a creator racing between the
-        // two would have been stamped `Full` over rows it never wrote.
-        // redb's own `create` does exactly this open-with-create and hands
-        // the file to `create_file`, so a 0-byte file is the path it knows.
+        // two would have sealed a file it did not create. redb's own
+        // `create` does exactly this open-with-create and hands the file to
+        // `create_file`, so a 0-byte file is the path it knows.
+        //
+        // The reopen arm is therefore `open`, which never creates and never
+        // initializes (`redb-4.1.0/src/db.rs:1196`; an empty file is
+        // `InvalidData`, `page_manager.rs:171`). With `create` there, a
+        // path removed between AlreadyExists and the open -- or an empty
+        // file some other process left -- would be initialized as a fresh,
+        // unsealed database and then refused by `verify`, leaving behind
+        // exactly the headerless file the fresh arm's cleanup exists to
+        // prevent. Only the `create_new` winner initializes a file.
         let mut builder = redb::Builder::new();
         builder.set_cache_size(CACHE_SIZE);
-        let (db, fresh) = match std::fs::OpenOptions::new()
+        let path = path.as_ref();
+        let (db, provenance) = match std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create_new(true)
-            .open(path.as_ref())
+            .open(path)
         {
-            Ok(file) => (builder.create_file(file).map_err(StoreError::Open)?, true),
+            Ok(file) => match create_sealed(&builder, file, apply_policy) {
+                Ok(fresh) => fresh,
+                Err(e) => {
+                    // The path exists only because `create_new` just made
+                    // it. Whatever refused after that -- the engine taking
+                    // the file or the seal -- must not leave it behind for
+                    // the next open to refuse as an existing store with no
+                    // header. `create_sealed` has dropped its `Database` by
+                    // the time we get here, so the file is unlocked.
+                    drop(std::fs::remove_file(path));
+                    return Err(e);
+                }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                (builder.create(path).map_err(StoreError::Open)?, false)
+                let db = builder.open(path).map_err(StoreError::Open)?;
+                let provenance = header::verify(&db.begin_read().map_err(StoreError::BeginRead)?)?;
+                (db, provenance)
             }
             Err(e) => return Err(StoreError::Open(redb::DatabaseError::Storage(e.into()))),
-        };
-        // A caller cannot assert `Full` over rows it did not write: on an
-        // existing file, Full is downgraded to Unknown (fail-closed until
-        // the policy is persisted). Non-Full policies stand -- they are
-        // already not evidence, and a stubbed reopen is a legitimate run.
-        let apply_policy = match (fresh, apply_policy) {
-            (false, ApplyPolicy::Full) => ApplyPolicy::Unknown,
-            (_, p) => p,
         };
         Ok(Self {
             backend: Backend::Writable(db),
             apply_policy,
-            write_held: AtomicBool::new(false),
+            shared: Shared::new(provenance),
         })
     }
 
-    /// The policy this store was opened under.
+    /// The policy this session was opened under.
     #[must_use]
     pub const fn apply_policy(&self) -> ApplyPolicy {
         self.apply_policy
+    }
+
+    /// What the file's rows were written under, as persisted in it.
+    ///
+    /// Read from the `apply_policy` cell at open and widened in step with
+    /// every stubbed commit this handle makes. This — not
+    /// [`apply_policy`](Self::apply_policy) — is what an artifact stamps.
+    ///
+    /// # The mirror is exact, and why
+    ///
+    /// The cell only ever widens, and only a committed stubbed batch widens
+    /// it. Two locks make the in-memory copy the file's value:
+    ///
+    /// - **Across handles.** redb holds an exclusive `flock` on the file for
+    ///   the life of a writable `Database` and a shared one for a read-only
+    ///   handle (`redb-4.1.0/src/tree_store/page_store/file_backend/optimized.rs:27`,
+    ///   read at the pinned source). A second writable open — this process
+    ///   or another — is [`redb::DatabaseError::DatabaseAlreadyOpen`]; a
+    ///   read-only handle excludes every writer for as long as it exists.
+    ///   Platforms where the lock is `Unsupported` (none the daemon targets;
+    ///   redb proceeds unlocked and warns) inherit redb's own contract that
+    ///   the operator keeps one process on the file.
+    /// - **Inside this handle.** The mirror's only mutator holds its write
+    ///   lock across the engine commit and the assignment, and publishes
+    ///   nothing if the commit fails. This method takes the matching read
+    ///   lock, so a concurrent stamp can neither see the file as tainted
+    ///   while the mirror still says [`Provenance::FULL`], nor the reverse.
+    #[must_use]
+    pub fn provenance(&self) -> Provenance {
+        self.shared.provenance()
     }
 
     /// Open an **existing** store without the ability to write.
     ///
     /// # Errors
     ///
-    /// [`StoreError::Open`] if the file is absent or cannot be opened.
+    /// [`StoreError::Open`] if the file is absent or cannot be opened; the
+    /// same header refusals as [`with_apply_policy`](Self::with_apply_policy).
     pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let db = redb::Builder::new()
             .set_cache_size(CACHE_SIZE)
             .open_read_only(path)
             .map_err(StoreError::Open)?;
+        let provenance = header::verify(&db.begin_read().map_err(StoreError::BeginRead)?)?;
         Ok(Self {
             backend: Backend::ReadOnly(db),
-            // A read-only handle is always a reopen, and no policy is
-            // persisted yet, so it can never vouch for what it finds.
-            apply_policy: ApplyPolicy::Unknown,
-            write_held: AtomicBool::new(false),
+            // A read-only handle writes nothing, so its session policy is
+            // vacuously Full; the file's history is `provenance`.
+            apply_policy: ApplyPolicy::Full,
+            shared: Shared::new(provenance),
         })
     }
 
@@ -220,17 +297,13 @@ impl ChainStore {
         let Backend::Writable(db) = &self.backend else {
             return Err(StoreError::ReadOnly);
         };
-        if self
-            .write_held
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
-        {
+        if !self.shared.try_hold_write() {
             return Err(StoreError::WriteInProgress);
         }
         match arm_write(db) {
-            Ok(txn) => Ok(WriteBatch::new(txn, self.apply_policy, &self.write_held)),
+            Ok(txn) => Ok(WriteBatch::new(txn, self.apply_policy, &self.shared)),
             Err(e) => {
-                self.write_held.store(false, Ordering::Release);
+                self.shared.release_write();
                 Err(e)
             }
         }
@@ -259,6 +332,30 @@ fn arm_write(db: &Database) -> Result<WriteTransaction, StoreError> {
     Ok(txn)
 }
 
+/// Hand a just-created, still-empty file to the engine and seal its header
+/// in the first transaction, under the same durability every batch
+/// commits with.
+///
+/// Everything that can fail between `create_new` and a usable store runs
+/// here, so the caller has exactly one place to undo the creation. On
+/// `Err` the `Database` is dropped before returning, releasing the
+/// engine's file lock so the caller's `remove_file` can succeed.
+fn create_sealed(
+    builder: &redb::Builder,
+    file: std::fs::File,
+    policy: ApplyPolicy,
+) -> Result<(Database, Provenance), StoreError> {
+    let db = builder.create_file(file).map_err(StoreError::Open)?;
+    let txn = arm_write(&db)?;
+    let provenance = header::seal(&txn, policy)?;
+    txn.commit().map_err(StoreError::Commit)?;
+    Ok((db, provenance))
+}
+
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod store_tests;
+
+#[cfg(test)]
+#[path = "header_tests.rs"]
+mod header_tests;

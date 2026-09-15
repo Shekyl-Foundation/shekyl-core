@@ -26,10 +26,23 @@
 //! policy is as explicit as [`redb::Durability::None`]; the guard is the
 //! **stamp**.
 //!
+//! # Session intent, not file history
+//!
+//! A policy is what **one run** does. What a *file* has been written under
+//! is [`Provenance`](crate::provenance::Provenance): the store persists the
+//! union of every committed batch's stubbed set and widens it at commit.
+//! The stamp and the parity verdict live there, because a file that ever
+//! took a stubbed commit is not parity evidence no matter how the session
+//! reading it was configured. Increment 1's `ApplyPolicy::Unknown` — the
+//! fail-closed stand-in for a reopen that could not know its history — is
+//! gone: the history is in the file.
+//!
 //! The family list is **one** macro invocation. [`ArchivalFamily::ALL`]
 //! and [`ArchivalFamily::table`] cannot drift from each other;
 //! `check_lmdb_schema_coverage.py` pins the table names against the
 //! X-macro.
+
+use crate::family_set::FamilySet;
 
 /// One archival family — an `archival_*` table in `SHEKYL_LMDB_TABLES`.
 ///
@@ -117,37 +130,20 @@ archival_families! {
 
 /// Which archival applies a store run is permitted to perform.
 ///
-/// [`Full`](Self::Full) is the only policy under which a comparator result
-/// is parity evidence. Anything else is a deliberately weakened run whose
+/// A session value: bound at [`ChainStore`](crate::store::ChainStore)
+/// construction so a run cannot change its own provenance halfway
+/// through, and folded into the file's
+/// [`Provenance`](crate::provenance::Provenance) when a batch commits.
+/// Anything but [`Full`](Self::Full) is a deliberately weakened run whose
 /// output exists to prove the comparator **can** fail.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ApplyPolicy {
-    /// Every archival apply runs. The only policy a parity claim may cite.
+    /// Every archival apply runs.
     #[default]
     Full,
     /// The named families' applies are skipped, so the comparator must go
-    /// red. Construct with [`Self::stubbed`]; an empty list is refused.
-    StubbedFamilies(&'static [ArchivalFamily]),
-    /// The store was **reopened** and no policy is persisted in it, so the
-    /// policy its rows were written under is not knowable from the file.
-    ///
-    /// **Fail-closed by construction.** §6.2's fourth verification class is
-    /// *reopen* + full-domain reconciliation — reopen is part of the
-    /// mechanism, not an edge. A store written under a stubbed policy,
-    /// reopened, and stamped `full` would be precisely the artifact this
-    /// type exists to prevent, and a wrong `full` stamp is worse than no
-    /// stamp. So a reopen without a persisted policy is `Unknown`: it still
-    /// **applies every family** (the taint is on the evidence, not on the
-    /// writes), it is never parity evidence, and every artifact-emitting
-    /// path must refuse it.
-    ///
-    /// **Named blocker (rule 22):** persistence lands with the codecs — an
-    /// `apply_policy` key in `PROPERTIES`, which is a value-codec change and
-    /// therefore a `schema_version` bump under slice C §11.1, in the PR
-    /// where the codec gate exists. **No stamped artifact may be published
-    /// until then.** Falsify by: `ChainStore::open_read_only` reading the
-    /// key and returning the persisted policy instead of `Unknown`.
-    Unknown,
+    /// red. Construct with [`Self::stubbed`]; an empty set is refused.
+    StubbedFamilies(FamilySet),
 }
 
 /// [`ApplyPolicy::stubbed`] was given an empty list.
@@ -161,8 +157,8 @@ impl ApplyPolicy {
     /// # Errors
     ///
     /// [`EmptyApplyStub`] if `families` is empty.
-    pub const fn stubbed(families: &'static [ArchivalFamily]) -> Result<Self, EmptyApplyStub> {
-        let policy = Self::StubbedFamilies(families);
+    pub const fn stubbed(families: &[ArchivalFamily]) -> Result<Self, EmptyApplyStub> {
+        let policy = Self::StubbedFamilies(FamilySet::of(families));
         match policy.reject_empty_stub() {
             Ok(()) => Ok(policy),
             Err(e) => Err(e),
@@ -172,51 +168,26 @@ impl ApplyPolicy {
     /// `Err` iff this is a stub of no families.
     pub const fn reject_empty_stub(self) -> Result<(), EmptyApplyStub> {
         match self {
-            Self::StubbedFamilies([]) => Err(EmptyApplyStub),
-            Self::Full | Self::Unknown | Self::StubbedFamilies(_) => Ok(()),
+            Self::StubbedFamilies(set) if set.is_empty() => Err(EmptyApplyStub),
+            Self::Full | Self::StubbedFamilies(_) => Ok(()),
         }
     }
 
-    /// Whether a comparator result under this policy may be cited as parity
-    /// evidence, or archived under §8.1.
+    /// The families this policy skips. Empty for [`Full`](Self::Full).
     #[must_use]
-    pub const fn is_parity_evidence(self) -> bool {
-        // `Unknown` is deliberately not listed: a reopen without a persisted
-        // policy cannot vouch for the rows it finds.
-        matches!(self, Self::Full)
+    pub const fn stubbed_set(self) -> FamilySet {
+        match self {
+            Self::Full => FamilySet::EMPTY,
+            Self::StubbedFamilies(set) => set,
+        }
     }
 
     /// Whether `family`'s apply runs under this policy.
     ///
     /// Consumed by [`WriteBatch::open_table`](crate::store::WriteBatch::open_table).
     #[must_use]
-    pub fn applies(self, family: ArchivalFamily) -> bool {
-        match self {
-            // Unknown applies everything: the doubt is about what was written
-            // before this handle, not about what this handle should write.
-            Self::Full | Self::Unknown => true,
-            Self::StubbedFamilies(list) => !list.contains(&family),
-        }
-    }
-
-    /// A short tag for stamping artifacts.
-    #[must_use]
-    pub fn artifact_stamp(self) -> String {
-        match self {
-            Self::Full => "apply-policy=full".to_owned(),
-            Self::Unknown => {
-                "apply-policy=UNKNOWN NOT-PARITY-EVIDENCE REFUSE-TO-PUBLISH".to_owned()
-            }
-            Self::StubbedFamilies(list) => {
-                let mut names: Vec<&str> = list.iter().map(|f| f.table()).collect();
-                names.sort_unstable();
-                names.dedup();
-                format!(
-                    "apply-policy=STUBBED[{}] NOT-PARITY-EVIDENCE",
-                    names.join(",")
-                )
-            }
-        }
+    pub const fn applies(self, family: ArchivalFamily) -> bool {
+        !self.stubbed_set().contains(family)
     }
 }
 
@@ -225,52 +196,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unknown_applies_everything_but_is_never_evidence() {
-        // The taint is on the evidence, not the writes: a reopened store
-        // keeps applying every family, and nothing it produces may be cited.
-        assert!(!ApplyPolicy::Unknown.is_parity_evidence());
-        for f in ArchivalFamily::ALL {
-            assert!(ApplyPolicy::Unknown.applies(f), "{f:?}");
-        }
-        let s = ApplyPolicy::Unknown.artifact_stamp();
-        assert!(s.contains("UNKNOWN") && s.contains("REFUSE"), "{s}");
-    }
-
-    #[test]
-    fn the_default_is_full_and_only_full_is_parity_evidence() {
+    fn the_default_is_full_and_full_skips_nothing() {
         assert_eq!(ApplyPolicy::default(), ApplyPolicy::Full);
-        assert!(ApplyPolicy::Full.is_parity_evidence());
-        let stubbed = ApplyPolicy::stubbed(&[ArchivalFamily::Bond]).expect("non-empty");
-        assert!(!stubbed.is_parity_evidence());
+        assert!(ApplyPolicy::Full.stubbed_set().is_empty());
+        for f in ArchivalFamily::ALL {
+            assert!(ApplyPolicy::Full.applies(f), "{f:?}");
+        }
     }
 
     #[test]
     fn an_empty_stub_is_refused() {
         assert_eq!(ApplyPolicy::stubbed(&[]), Err(EmptyApplyStub));
-        assert!(ApplyPolicy::StubbedFamilies(&[])
+        assert!(ApplyPolicy::StubbedFamilies(FamilySet::EMPTY)
             .reject_empty_stub()
             .is_err());
-    }
-
-    #[test]
-    fn a_stubbed_stamp_says_so_in_the_artifact() {
-        let s = ApplyPolicy::stubbed(&[ArchivalFamily::SlashLog])
-            .expect("non-empty")
-            .artifact_stamp();
-        assert!(s.contains("NOT-PARITY-EVIDENCE"), "{s}");
-        assert!(s.contains("archival_slash_log"), "{s}");
-        assert!(!ApplyPolicy::Full.artifact_stamp().contains("NOT-PARITY"));
+        assert!(ApplyPolicy::Full.reject_empty_stub().is_ok());
     }
 
     #[test]
     fn stubbing_one_family_leaves_the_others_running() {
         let p = ApplyPolicy::stubbed(&[ArchivalFamily::Bond]).expect("non-empty");
         assert!(!p.applies(ArchivalFamily::Bond));
+        assert_eq!(p.stubbed_set(), FamilySet::of(&[ArchivalFamily::Bond]));
         for f in ArchivalFamily::ALL {
             if f != ArchivalFamily::Bond {
                 assert!(p.applies(f), "{f:?} should still apply");
             }
         }
+    }
+
+    #[test]
+    fn a_policy_can_be_built_in_a_const() {
+        const P: ApplyPolicy = match ApplyPolicy::stubbed(&[ArchivalFamily::SlashLog]) {
+            Ok(p) => p,
+            Err(EmptyApplyStub) => panic!("non-empty"),
+        };
+        assert!(!P.applies(ArchivalFamily::SlashLog));
     }
 
     #[test]
@@ -287,13 +248,5 @@ mod tests {
         }
         assert_eq!(ArchivalFamily::from_table("blocks"), None);
         assert_eq!(ArchivalFamily::from_table("archival_r2_market"), None);
-    }
-
-    #[test]
-    fn a_duplicate_in_the_stub_list_stamps_once() {
-        let s = ApplyPolicy::stubbed(&[ArchivalFamily::Bond, ArchivalFamily::Bond])
-            .expect("non-empty")
-            .artifact_stamp();
-        assert_eq!(s.matches("archival_bond").count(), 1, "{s}");
     }
 }

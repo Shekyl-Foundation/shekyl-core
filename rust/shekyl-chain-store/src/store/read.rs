@@ -13,7 +13,11 @@ use redb::{
     TableDefinition, Value,
 };
 
+use crate::codec::PropertyCell;
+use crate::schema::PROPERTIES;
+
 use super::error::StoreError;
+use super::header;
 use super::ChainStore;
 
 /// A read snapshot of the store.
@@ -65,5 +69,17 @@ impl ReadSnapshot<'_> {
         self.txn
             .open_multimap_table(definition)
             .map_err(StoreError::Table)
+    }
+
+    /// Read a typed `properties` cell as of this snapshot.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::CellCorrupt`] if the cell is present but is not an
+    /// encoding of `C::Value`; [`StoreError::Table`] / [`StoreError::Storage`]
+    /// if the engine refuses. Absent is `Ok(None)`.
+    pub fn get_property<C: PropertyCell>(&self) -> Result<Option<C::Value>, StoreError> {
+        let table = self.txn.open_table(PROPERTIES).map_err(StoreError::Table)?;
+        header::get::<C>(&table)
     }
 }
