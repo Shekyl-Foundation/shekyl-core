@@ -303,16 +303,18 @@ The tower structure enables efficient recursive proof composition:
 
 The curve tree is a Merkle-like structure where:
 
-- Leaves are 4-tuples of Ed25519 scalars: `{O.x, I.x, C.x, H(pqc_pk)}`
+- Leaves are 4-tuples of Selene scalars: `{O.x, I.x, C.x, CM.x}`
   (output key x-coordinate, key image x-coordinate, commitment x-coordinate,
-  hash of PQC public key).
+  x-coordinate of the PQC leaf commitment `CM = k·G_k + r·J`, `k = H_ℓ(pqc_pk)`).
 - Odd-level internal nodes are Helios hash commitments.
 - Even-level internal nodes are Selene hash commitments.
 - The root is committed in the block header as `curve_tree_root`.
 
 The membership proof is classical: a Generalized Bulletproofs argument over
 Helios/Selene whose soundness rests on the discrete-logarithm assumption,
-and the leaf's key-binding constraint is one of its constraints. Precisely:
+and the leaf's key binding — the in-circuit opening of the spent leaf's
+commitment `CM` to the presented key's point (`PL-D3`) — is one of its
+constraints. Precisely:
 
 - Against an adversary that cannot compute EC discrete logs, the argument
   binds the presented `pqc_pk` to the spent leaf, and the ML-DSA-65
@@ -331,9 +333,10 @@ and the leaf's key-binding constraint is one of its constraints. Precisely:
   hidden-output spend (`PL-D2`, `PL-D3a`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
 
 The FCMP++ proof demonstrates membership and, under the discrete-log
-assumption, that the presented key was committed to the spent leaf; each
+assumption, that the presented key opens the spent leaf's commitment; each
 `pqc_auths[i]` proves possession of the ML-DSA-65 secret key for the key
-presented.
+presented. Nothing published per output is a function of the key alone
+(`PL-D3`), so the public input `K` does not identify the spent output.
 
 ## Per-Output PQC Key Derivation
 
@@ -390,8 +393,10 @@ The derivation flow is:
    ```
    (pqc_pk, pqc_sk) = ML-DSA-65.KeyGen(seed = HKDF-Expand(combined_ss, "shekyl-pqc-output", 32))
    ```
-8. **Commit** `H(pqc_pk)` as the 4th scalar in the curve tree leaf for this
-   output.
+8. **Commit** the PQC leaf commitment `CM = H_ℓ(pqc_pk)·G_k + r·J` (blind
+   `r` from the label registry below) as the 4th scalar (`CM.x`) of the curve
+   tree leaf for this output, and publish `CM ‖ record` in `tx_extra` `0x07`
+   (`PL-D3` / `PL-D3a`).
 
 The recipient reverses steps 3-7 using their ML-KEM-768 decapsulation key and
 their Ed25519 view secret as the unclamped Montgomery scalar (see §DH
@@ -473,6 +478,12 @@ fast wallet scanning.
 | `amount_tag` | `shekyl-output-derive-v1` | `shekyl-output-amount-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `label_tag` | `shekyl-output-derive-v1` | `shekyl-output-label-tag` &#124;&#124; index\_le64 | 1 B | first byte |
 | `ml_dsa_seed` | `shekyl-output-derive-v1` | `shekyl-pqc-output` &#124;&#124; index\_le64 | 32 B | raw |
+| `r` (PQC leaf-commitment blind, `PL-D3`) | `shekyl-output-derive-v1` | `shekyl-pqc-leaf-blind` &#124;&#124; index\_le64 &#124;&#124; ctr (1 B guard counter) | 64 B | mod l (wide) |
+| `r_h` (PQC record blind, `PL-D3a`) | `shekyl-output-derive-v1` | `shekyl-pqc-leaf-record-blind` &#124;&#124; index\_le64 | 32 B | raw |
+
+**cSHAKE256 customizations on the leaf path (`PL-D3`; registry mechanism 1):**
+`shekyl/pqc-leaf-key-v1` (`k = H_ℓ(pqc_pk)`: 64-byte read reduced mod l) and
+`shekyl/pqc-leaf-record-v1` (`record = cSHAKE256(pqc_pk ‖ r_h)`, 32 B).
 
 **Secondary derivation (ML-KEM shared secret only, wire pre-filter — FA-6):**
 
@@ -752,31 +763,28 @@ fixed:
 
 ### FCMP++ and PQC ownership binding
 
-FCMP++ verifies per-input PQC ownership with a zero-knowledge membership
-proof. "Anonymous" here is proof-level: the membership leg reveals nothing;
-the composition with its public 4th-scalar input does (next paragraph).
-Each curve tree leaf contains 4 scalars: `{O.x, I.x, C.x, H(pqc_pk)}`.
-The 4th scalar `H(pqc_pk)` is a hash of the output's PQC public key, proven
+FCMP++ solves the anonymous per-input PQC ownership verification problem.
+Each curve tree leaf contains 4 scalars: `{O.x, I.x, C.x, CM.x}`.
+The 4th scalar is the x-coordinate of a Pedersen commitment
+`CM = k·G_k + r·J` to the output's PQC key scalar `k = H_ℓ(pqc_pk)`, opened
 in-circuit during the FCMP++ membership proof. This binds PQC ownership to
-the UTXO -- and **it also identifies the output being spent**, because
-`H(pqc_pk)` is a public input to the proof and the same value was published
-per output in `tx_extra` tag `0x07` at creation (`PL-D1`). The full UTXO set
-is the set the proof ranges over, not the spend's anonymity set.
+the UTXO without revealing which output is being spent -- the full UTXO set
+serves as the anonymity set -- and without publishing any function of the
+key (`PL-D3`).
 
 The binding works as follows:
 
 - When an output is created, the sender derives a per-output PQC keypair via
-  hybrid KEM (X25519 + ML-KEM-768) and commits `H(pqc_pk)` as the 4th leaf
-  scalar in the curve tree.
+  hybrid KEM (X25519 + ML-KEM-768) and commits `CM = H_ℓ(pqc_pk)·G_k + r·J`
+  as the 4th leaf scalar in the curve tree (`CM ‖ record` in `tx_extra` `0x07`).
 - When spending, the FCMP++ proof demonstrates that the referenced leaf
-  (including its `H(pqc_pk)`) exists in the curve tree. The proof does not
-  reveal which leaf; the public `H(pqc_pk)` does, by lookup against the
-  published `0x07` values (`PL-D1`).
+  exists in the curve tree and that its commitment opens to the point of the
+  key presented in `pqc_auths[i]`, without revealing which leaf.
 - Each `pqc_auths[i]` entry then provides the hybrid Ed25519 + ML-DSA-65
   signature for that input, proving knowledge of the corresponding PQC secret key.
 - An attacker who cannot compute EC discrete logs cannot substitute a
-  different PQC key: the in-circuit proof binds the leaf's committed key to
-  the membership proof under that assumption. An attacker who can compute
+  different PQC key: the in-circuit opening binds the leaf's committed key
+  to the membership proof under that assumption. An attacker who can compute
   them can forge the proof for a key of their own choosing (`PL-D2`).
 
 ## Transaction Format
@@ -1090,9 +1098,8 @@ Rules:
   spend authority on its own
 
 PQC spend/ownership authorization works alongside the FCMP++ membership proof
-layer. FCMP++ provides a zero-knowledge membership proof over the full chain
-(proof-level; not transaction-level anonymity while `PL-D1` stands);
-`pqc_auths` provides quantum-resistant spend authorization. Stealth addresses and one-time output derivation remain
+layer. FCMP++ provides full-chain anonymity; `pqc_auths` provides quantum-resistant
+spend authorization. Stealth addresses and one-time output derivation remain
 part of the privacy stack.
 
 V3.0 ships **one reusable primary address per account** (End-state 5); on-chain
@@ -1171,8 +1178,9 @@ Operational consequences:
   - FCMP++ membership proof operates over classical elliptic curves
     (Ed25519 → Helios → Selene curve tower)
   - stealth addressing and one-time output derivation
-  - the proof ranges over the full UTXO set (no ring subset selection); the
-    spend's anonymity set is nevertheless one output while `PL-D1` is open
+  - the proof ranges over the full UTXO set (no ring subset selection), and
+    since `PL-D3` nothing published per output is a function of the spend's
+    revealed key, so that set is the spend's anonymity set
 - **Binding of the PQC key to the leaf — discrete-log sound, not post-quantum**
   - the leaf commitment binds PQC ownership to the UTXO under the
     discrete-logarithm assumption the membership argument itself rests on
@@ -1184,12 +1192,15 @@ Operational consequences:
     transition
 
 Operationally: the FCMP++ EC membership proof is zero-knowledge over the
-full chain; its composition with the public `H(pqc_pk)` input identifies the
-spent output today (`PL-D1`, pre-genesis, fix `PL-D3` in design), and
-`pqc_auths` provides the authorization layer, whose post-quantum property
-is unforgeability of the signature under the key presented — not binding of
-that key to the spent output, which is discrete-log sound until V4
-(`PL-D2`, [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
+full chain. Since `PL-D3` the leaf's 4th scalar is the x-coordinate of a
+Pedersen commitment `CM = k·G_k + r·J`, opened in-circuit to the
+verifier-derived `K = k·G_k` of the revealed key — the key is bound to the
+spent leaf without the published value being a function of the key
+(`PL-D1` closed). `pqc_auths` provides the authorization layer, whose
+post-quantum property is unforgeability of the signature under the key
+presented — not binding of that key to the spent output, which is
+discrete-log sound until V4 (`PL-D2`,
+[`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §4).
 
 ### v3 Rollout Notes
 
@@ -1335,7 +1346,7 @@ All Phase-1 (single-signer) and Phase-2 (multisig) items are implemented. This t
 | 6 | Documentation | Done | `docs/POST_QUANTUM_CRYPTOGRAPHY.md`, `docs/DOCUMENTATION_TODOS_AND_PQC.md`, `docs/CHANGELOG.md` |
 | 7 | Rust multisig core (scheme_id=2) | Done | `rust/shekyl-crypto-pq/src/multisig.rs` |
 | 8 | FFI scheme dispatch + multisig | Done | `rust/shekyl-ffi/src/lib.rs` (`shekyl_pqc_verify` returning typed `u8` error codes) |
-| 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp` (size-format checks), FCMP++ `h_pqc` leaf binding (see `PQC_MULTISIG.md` Attack 1) |
+| 9 | Consensus verification + scheme downgrade | Done | `src/cryptonote_core/tx_pqc_verify.cpp` (size-format checks), FCMP++ in-circuit leaf-commitment opening (`PL-D3`; see `PQC_MULTISIG.md` Attack 1) |
 | 10 | Wallet multisig coordination | Rust rewrite (S2–S5) | Option-D `wallet2.cpp` group-creation fossil **deleted** (MS-5 PR-B; it threw on every input); E′ coordination lives in `rust/shekyl-multisig` + `shekyl-engine-core` |
 | 11 | Fuzz testing (10 targets, 10M each) | Done | `rust/shekyl-crypto-pq/fuzz/fuzz_targets/`, `docs/PQC_TEST_VECTOR_002_MULTISIG.json` |
 | 12 | FCMP++ FFI (prove/verify) | Done | `rust/shekyl-fcmp/`, `rust/shekyl-ffi/src/lib.rs` |

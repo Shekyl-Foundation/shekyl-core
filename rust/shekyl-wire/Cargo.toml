@@ -11,6 +11,9 @@ description = "Canonical Shekyl genesis block/tx binary wire format (serializer)
 # Consensus original Keccak-256 (`shekyl_crypto_hash::keccak256`; 0x01 padding;
 # byte-identical to C++ `cn_fast_hash`). Single source for tx/block hash identities.
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
+# The `tx_extra 0x07` content rule (`PL-D3`): every leaf commitment point must
+# be a canonical prime-order point — `pqc_leaf_point_valid` has one home there.
+shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 
 [dev-dependencies]
 # Test-only: load the captured oracle hash vectors so the JSON is the single source
@@ -43,7 +46,6 @@ shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-ct-balance = { path = "../shekyl-ct-balance" }
 shekyl-bulletproofs = { path = "../shekyl-bulletproofs" }
 shekyl-curve-io = { path = "../shekyl-curve-io" }
-shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
 rand_core = { version = "0.6", features = ["std"] }
 # Deterministic, seedable CSPRNG for the e2e fixture draw. The workspace's

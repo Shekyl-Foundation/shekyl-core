@@ -1,43 +1,45 @@
 # Archival forcing corpus — per-cell forceability register (AFC-1).
 # Pin: a6160a4bd. Denominator: 17 tables x 2 halves = 34 cells.
+# Anchors re-resolved 2026-09-14 after merging origin/dev (PL-D3) into the
+# SL-D coverage branch — same symbols, at the lines the merge moved them to.
 # Table set is derived from the X(LMDB_ARCHIVAL_ ...) X-macro at
-# src/blockchain_db/lmdb/db_lmdb.cpp:350-366 — not hand-listed.
+# src/blockchain_db/lmdb/db_lmdb.cpp:356-372 — not hand-listed.
 # disposition is FORCED-BY:<event> or EXCLUDED:<reason>.
 # symbol is the EXACT identifier that must appear at `site`. It is a typed
 # column, not prose: the anchor leg matches THIS and nothing else, so a note
 # reworded or a line drifted cannot silently keep a citation green.
 table	half	disposition	site	symbol	note
 archival_serve_credit	apply	FORCED-BY:tx-with-serve-credit-response-vin	blockchain_db.cpp:294	set_archival_serve_credit_bit	set_archival_serve_credit_bit from txin_archival_serve_credit_response
-archival_serve_credit	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:946	remove_archival_serve_credit_bit	remove_archival_serve_credit_bit
-archival_settlement	apply	EXCLUDED:no-production-caller	db_lmdb.cpp:7459	set_archival_settlement	held under writer-round 5.1 pending SO-D8; unit KAT exists, LMDB-bound
-archival_settlement	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:7545	delete_archival_settlement_for_epoch	delete runs but cannot discriminate; only write is mdb_cursor_del, no counter
-archival_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:6110	connect.attestation_witness	no emitter exists: tree says "Empty on local mine and until the Phase 2/3 template writer populates it"; FFI exposes verify + pass_p_ids only
-archival_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:9803	remove_archival_attestation_witness_at_height	remove_archival_attestation_witness_at_height is a lone mdb_del, no counter, no side effect
+archival_serve_credit	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:952	remove_archival_serve_credit_bit	remove_archival_serve_credit_bit
+archival_settlement	apply	EXCLUDED:no-production-caller	db_lmdb.cpp:7465	set_archival_settlement	held under writer-round 5.1 pending SO-D8; unit KAT exists, LMDB-bound
+archival_settlement	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:7551	delete_archival_settlement_for_epoch	delete runs but cannot discriminate; only write is mdb_cursor_del, no counter
+archival_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:6113	connect.attestation_witness	no emitter exists: tree says "Empty on local mine and until the Phase 2/3 template writer populates it"; FFI exposes verify + pass_p_ids only
+archival_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:9809	remove_archival_attestation_witness_at_height	remove_archival_attestation_witness_at_height is a lone mdb_del, no counter, no side effect
 archival_alt_attestation_witness	apply	EXCLUDED:no-producer-at-this-pin	blockchain.cpp:2377	store_archival_alt_attestation_witness	stores connect.attestation_witness, which no in-tree emitter ever populates; same blocker as the main-chain row
-archival_alt_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:9848	remove_archival_alt_attestation_witness	remove_archival_alt_attestation_witness is a lone mdb_del, no counter, no side effect
+archival_alt_attestation_witness	revert	EXCLUDED:vacuous-over-never-written-table	db_lmdb.cpp:9854	remove_archival_alt_attestation_witness	remove_archival_alt_attestation_witness is a lone mdb_del, no counter, no side effect
 archival_bond	apply	FORCED-BY:bond-post-JoinMarket	blockchain_db.cpp:309	put_archival_bond_record	put_archival_bond_record
-archival_bond	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:957	remove_archival_bond_record	remove_archival_bond_record
-archival_shard_segment	apply	FORCED-BY:segment-freeze-first-crossing	blockchain_db.cpp:643	process_archival_segment_freezes_at_height	process_archival_segment_freezes_at_height; COST: needs 25992 curve-tree leaves, segment_leaf_count is NOT a tunable
-archival_shard_segment	revert	FORCED-BY:pop-across-the-freeze-boundary	blockchain_db.cpp:904	revert_archival_segment_freezes	revert_archival_segment_freezes
-archival_slash_applied	apply	FORCED-BY:bonded-P-fails-challenge-across-a-settlement-epoch	db_lmdb.cpp:5711	m_archival_slash_applied	mdb_put m_archival_slash_applied via apply_archival_slash_one; needs a bond record + failed challenge, NOT a settlement row
-archival_slash_applied	revert	FORCED-BY:pop-across-the-slash	blockchain_db.cpp:749	revert_archival_slashes_at_height	revert_archival_slashes_at_height
-archival_slash_log	apply	FORCED-BY:height-past-an-epoch-slash-deadline	db_lmdb.cpp:5739	m_archival_slash_log	mdb_put m_archival_slash_log; the epoch MARKER is unconditional once per such height, so cheaper to force than slash_applied
-archival_slash_log	revert	FORCED-BY:pop-across-the-slash	blockchain_db.cpp:749	revert_archival_slashes_at_height	revert_archival_slashes_at_height
+archival_bond	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:963	remove_archival_bond_record	remove_archival_bond_record
+archival_shard_segment	apply	FORCED-BY:segment-freeze-first-crossing	blockchain_db.cpp:649	process_archival_segment_freezes_at_height	process_archival_segment_freezes_at_height; COST: needs 25992 curve-tree leaves, segment_leaf_count is NOT a tunable
+archival_shard_segment	revert	FORCED-BY:pop-across-the-freeze-boundary	blockchain_db.cpp:910	revert_archival_segment_freezes	revert_archival_segment_freezes
+archival_slash_applied	apply	FORCED-BY:bonded-P-fails-challenge-across-a-settlement-epoch	db_lmdb.cpp:5717	m_archival_slash_applied	mdb_put m_archival_slash_applied via apply_archival_slash_one; needs a bond record + failed challenge, NOT a settlement row
+archival_slash_applied	revert	FORCED-BY:pop-across-the-slash	blockchain_db.cpp:755	revert_archival_slashes_at_height	revert_archival_slashes_at_height
+archival_slash_log	apply	FORCED-BY:height-past-an-epoch-slash-deadline	db_lmdb.cpp:5745	m_archival_slash_log	mdb_put m_archival_slash_log; the epoch MARKER is unconditional once per such height, so cheaper to force than slash_applied
+archival_slash_log	revert	FORCED-BY:pop-across-the-slash	blockchain_db.cpp:755	revert_archival_slashes_at_height	revert_archival_slashes_at_height
 archival_emission_claim_log	apply	FORCED-BY:tx-with-reward-emission-vin	blockchain_db.cpp:388	apply_archival_emission_claim	apply_archival_emission_claim
-archival_emission_claim_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:766	revert_archival_emission_claims_at_height	revert_archival_emission_claims_at_height
+archival_emission_claim_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:772	revert_archival_emission_claims_at_height	revert_archival_emission_claims_at_height
 archival_bond_unbond_log	apply	FORCED-BY:bond-post-Release	blockchain_db.cpp:327	apply_archival_unbond	apply_archival_unbond
-archival_bond_unbond_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:777	revert_archival_unbonds_at_height	revert_archival_unbonds_at_height
+archival_bond_unbond_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:783	revert_archival_unbonds_at_height	revert_archival_unbonds_at_height
 archival_bond_holdings_update_log	apply	FORCED-BY:bond-post-HoldingsUpdate	blockchain_db.cpp:338	apply_archival_holdings_update_add	apply_archival_holdings_update_add/drop
-archival_bond_holdings_update_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:791	revert_archival_holdings_updates_at_height	revert_archival_holdings_updates_at_height
+archival_bond_holdings_update_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:797	revert_archival_holdings_updates_at_height	revert_archival_holdings_updates_at_height
 archival_bond_rebond_log	apply	FORCED-BY:bond-post-Rebond	blockchain_db.cpp:353	apply_archival_rebond	apply_archival_rebond
-archival_bond_rebond_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:799	revert_archival_rebonds_at_height	revert_archival_rebonds_at_height
-archival_r_market	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8481	m_archival_r_market	written by process_archival_epoch_close_at_height
-archival_r_market	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:7328	delete_archival_r_market_for_epoch	delete_archival_r_market_for_epoch from the close revert
-archival_sigma_work	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8491	m_archival_sigma_work	written by process_archival_epoch_close_at_height
-archival_sigma_work	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:7385	delete_archival_sigma_work_for_epoch	delete_archival_sigma_work_for_epoch from the close revert
-archival_epoch_close_log	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8549	m_archival_epoch_close_log	written by process_archival_epoch_close_at_height
-archival_epoch_close_log	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:8587	m_archival_epoch_close_log	mdb_del in revert_archival_epoch_close_at_height
-archival_budget_accrual	apply	FORCED-BY:block-with-nonzero-accrual	blockchain_db.cpp:695	add_archival_budget_accrual	add_archival_budget_accrual
-archival_budget_accrual	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:805	remove_archival_budget_accrual	remove_archival_budget_accrual
-archival_budget	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8540	m_archival_budget	written by process_archival_epoch_close_at_height
-archival_budget	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:7610	delete_archival_budget_for_epoch	delete_archival_budget_for_epoch from the close revert
+archival_bond_rebond_log	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:805	revert_archival_rebonds_at_height	revert_archival_rebonds_at_height
+archival_r_market	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8487	m_archival_r_market	written by process_archival_epoch_close_at_height
+archival_r_market	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:7334	delete_archival_r_market_for_epoch	delete_archival_r_market_for_epoch from the close revert
+archival_sigma_work	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8497	m_archival_sigma_work	written by process_archival_epoch_close_at_height
+archival_sigma_work	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:7391	delete_archival_sigma_work_for_epoch	delete_archival_sigma_work_for_epoch from the close revert
+archival_epoch_close_log	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8555	m_archival_epoch_close_log	written by process_archival_epoch_close_at_height
+archival_epoch_close_log	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:8593	m_archival_epoch_close_log	mdb_del in revert_archival_epoch_close_at_height
+archival_budget_accrual	apply	FORCED-BY:block-with-nonzero-accrual	blockchain_db.cpp:701	add_archival_budget_accrual	add_archival_budget_accrual
+archival_budget_accrual	revert	FORCED-BY:pop-of-that-block	blockchain_db.cpp:811	remove_archival_budget_accrual	remove_archival_budget_accrual
+archival_budget	apply	FORCED-BY:epoch-close	db_lmdb.cpp:8546	m_archival_budget	written by process_archival_epoch_close_at_height
+archival_budget	revert	FORCED-BY:pop-across-the-epoch-close	db_lmdb.cpp:7616	delete_archival_budget_for_epoch	delete_archival_budget_for_epoch from the close revert

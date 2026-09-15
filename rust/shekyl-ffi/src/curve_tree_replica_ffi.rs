@@ -72,12 +72,12 @@ pub struct ShekylCurveTreeReplicaOutput {
 pub struct ShekylCurveTreeReplicaTx {
     /// `1` for the block's coinbase, `0` otherwise (decides maturity).
     pub is_miner: u8,
-    /// `1` when the transaction carries a `tx_extra` `0x07` leaf-hash tag.
-    pub has_leaf_hash_blob: u8,
-    /// The raw `0x07` payload (`leaf_hash_blob_len` bytes); ignored when
-    /// `has_leaf_hash_blob == 0`.
-    pub leaf_hash_blob: *const u8,
-    pub leaf_hash_blob_len: usize,
+    /// `1` when the transaction carries a `tx_extra` `0x07` leaf-entry tag.
+    pub has_leaf_entry_blob: u8,
+    /// The raw `0x07` payload (`leaf_entry_blob_len` bytes); ignored when
+    /// `has_leaf_entry_blob == 0`.
+    pub leaf_entry_blob: *const u8,
+    pub leaf_entry_blob_len: usize,
     /// `n_outputs` entries in `vout` order.
     pub outputs: *const ShekylCurveTreeReplicaOutput,
     pub n_outputs: usize,
@@ -93,10 +93,10 @@ const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaOutput, target_
 const _: () = assert!(std::mem::size_of::<ShekylCurveTreeReplicaOutput>() == 66);
 const PTR: usize = std::mem::size_of::<usize>();
 const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, is_miner) == 0);
-const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, has_leaf_hash_blob) == 1);
-const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, leaf_hash_blob) == PTR);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, has_leaf_entry_blob) == 1);
+const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, leaf_entry_blob) == PTR);
 const _: () =
-    assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, leaf_hash_blob_len) == 2 * PTR);
+    assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, leaf_entry_blob_len) == 2 * PTR);
 const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, outputs) == 3 * PTR);
 const _: () = assert!(std::mem::offset_of!(ShekylCurveTreeReplicaTx, n_outputs) == 4 * PTR);
 const _: () = assert!(std::mem::size_of::<ShekylCurveTreeReplicaTx>() == 5 * PTR);
@@ -152,7 +152,7 @@ unsafe fn borrow<'a, T>(ptr: *const T, len: usize) -> Option<&'a [T]> {
 }
 
 /// One decoded transaction before the borrowing `TxLeafInputs` view is built:
-/// `(is_miner, leaf-hash blob, outputs)`.
+/// `(is_miner, `0x07` leaf-entry blob, outputs)`.
 type DecodedTx<'a> = (bool, Option<&'a [u8]>, Vec<RawOutput>);
 
 fn target_kind(raw: u8) -> Option<TargetKind> {
@@ -199,9 +199,9 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
     for (ti, tx) in raw_txs.iter().enumerate() {
         // SAFETY: caller contract on the inner pointers.
         let (blob, outs) = unsafe {
-            let blob = if tx.has_leaf_hash_blob != 0 {
-                let Some(b) = slice_from_ptr(tx.leaf_hash_blob, tx.leaf_hash_blob_len) else {
-                    tracing::error!("curve-tree replica: tx {ti} has a null leaf-hash blob");
+            let blob = if tx.has_leaf_entry_blob != 0 {
+                let Some(b) = slice_from_ptr(tx.leaf_entry_blob, tx.leaf_entry_blob_len) else {
+                    tracing::error!("curve-tree replica: tx {ti} has a null 0x07 leaf-entry blob");
                     return false;
                 };
                 Some(b)
@@ -235,7 +235,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
         .iter()
         .map(|(is_miner, blob, outputs)| TxLeafInputs {
             is_miner: *is_miner,
-            leaf_hash_blob: *blob,
+            leaf_entry_blob: *blob,
             outputs,
         })
         .collect();
@@ -355,12 +355,20 @@ mod tests {
         }
     }
 
+    /// A coinbase carrying one conforming `0x07` entry per output (a valid
+    /// commitment point — the basepoint — and an opaque record): the replica
+    /// refuses a transaction with outputs and no entries (`PL-D3`, no zero
+    /// fallback), exactly as admission does. The blob is leaked for the
+    /// raw-pointer struct's sake; test-only.
     fn coinbase(outs: &[ShekylCurveTreeReplicaOutput]) -> ShekylCurveTreeReplicaTx {
+        let mut entry = [0x07u8; 64];
+        entry[..32].copy_from_slice(&tagged().output_key);
+        let blob: &'static [u8] = Box::leak(entry.repeat(outs.len()).into_boxed_slice());
         ShekylCurveTreeReplicaTx {
             is_miner: 1,
-            has_leaf_hash_blob: 0,
-            leaf_hash_blob: std::ptr::null(),
-            leaf_hash_blob_len: 0,
+            has_leaf_entry_blob: 1,
+            leaf_entry_blob: blob.as_ptr(),
+            leaf_entry_blob_len: blob.len(),
             outputs: outs.as_ptr(),
             n_outputs: outs.len(),
         }

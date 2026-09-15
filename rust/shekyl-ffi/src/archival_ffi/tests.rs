@@ -1645,7 +1645,6 @@ use shekyl_archival_retention::{
     reward_share_floor, sigma_work_milli, EmissionAuthRole, MembershipOnlyBacking, ShardWorkEntry,
     WorkEpochClaim,
 };
-use shekyl_crypto_pq::derivation::hash_pqc_public_key;
 use shekyl_crypto_pq::multisig::{SINGLE_KEY_CANONICAL_LEN, SINGLE_SIG_CANONICAL_LEN};
 
 const EM_EPOCH: u64 = 5;
@@ -1760,7 +1759,6 @@ impl EmissionFfiFixture {
             backing: MembershipOnlyBacking {
                 proof: vec![0xAB; 64],
                 pseudo_out: [0x22; 32],
-                pqc_pk_hash: [0; 32],
                 backing_pubkey: b_pk.to_canonical_bytes().expect("canonical backing pubkey"),
                 tree_depth: 3,
             },
@@ -1768,7 +1766,6 @@ impl EmissionFfiFixture {
             auth_backing: vec![0x55; SINGLE_SIG_CANONICAL_LEN],
             auth_claim: vec![0x66; SINGLE_SIG_CANONICAL_LEN],
         };
-        vin.backing.pqc_pk_hash = hash_pqc_public_key(&vin.backing.backing_pubkey);
         assert_eq!(vin.p_pubkey.len(), SINGLE_KEY_CANONICAL_LEN);
 
         let commits = [RewardCommit {

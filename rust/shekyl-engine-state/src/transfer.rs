@@ -163,6 +163,28 @@ pub struct FcmpPrecomputedPath {
 /// If a caller legitimately needs two copies, they must `Serialize` into
 /// a buffer and `Deserialize` back; the process is explicit about the
 /// boundary.
+/// Why a received output can never be spent by this wallet (rule 82: a
+/// failure mode is design scope; `FCMP_SPEND_LINKABILITY.md` §6.2, `PL-D3`).
+///
+/// Set by the scanner at receive time, never by consensus: the sender
+/// publishes the output's `tx_extra` `0x07` entry (`CM ‖ record`) and only
+/// the recipient can check that it opens to its own derivation. An output
+/// classified here is **retained in the ledger** (the money is on chain and
+/// the row names the sender's transaction) but excluded from every
+/// spendable view — coin selection, `unlocked`, the RPC `CONFIRMED` state —
+/// because signing would fail at the leaf (`TxBuilderError::PqcLeafMismatch`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, postcard_schema::Schema)]
+pub enum UnspendableReason {
+    /// The published `0x07` entry is not this wallet's derivation of
+    /// `(CM, record)` for the output: the leaf the chain holds does not open
+    /// to the wallet's `(k, r)`, so no membership proof can be built.
+    PqcLeafMismatch,
+    /// The transaction carries no `0x07` entry for this output index (a
+    /// shape consensus refuses, so reachable only through a non-consensus
+    /// block source — recorded rather than assumed away).
+    PqcLeafEntryAbsent,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct TransferDetails {
     // ── Base output data (from scanner) ──
@@ -277,6 +299,13 @@ pub struct TransferDetails {
     pub frozen: bool,
     pub fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
 
+    /// Received-but-unspendable classification (`PL-D3` §6.2, rule 82).
+    /// `None` for every output whose published `0x07` entry opened to the
+    /// wallet's own derivation at scan; `Some` names why the output can
+    /// never be spent. Scan-derived, so a rescan re-derives it.
+    #[serde(default)]
+    pub unspendable: Option<UnspendableReason>,
+
     /// Receive-side bookkeeping attribution (FA-8, §5.7.9).
     #[serde(default)]
     pub receive_attribution: ReceiveAttribution,
@@ -286,7 +315,9 @@ impl TransferDetails {
     /// Whether this output is available for regular spending.
     ///
     /// Outputs below `eligible_height` are immature (no curve-tree path yet)
-    /// and cannot be spent. Outputs with a network-exposed spend awaiting
+    /// and cannot be spent. A received-but-unspendable output
+    /// ([`Self::unspendable`]) never is: its chain leaf does not open to the
+    /// wallet's derivation, so selecting it would fail at proving. Outputs with a network-exposed spend awaiting
     /// chain confirmation (the F14 lock, §2.6) are excluded: selecting one
     /// would build a second tx bearing the same key image. The lock map is
     /// journal-derived (PR-SJ-1b — [`crate::SendJournalBlock::spend_locks`]
@@ -301,6 +332,7 @@ impl TransferDetails {
     ) -> bool {
         !self.spent
             && !self.frozen
+            && self.unspendable.is_none()
             && !spend_locks.contains(self.global_output_index)
             && current_height >= self.eligible_height
     }
@@ -362,6 +394,7 @@ struct TransferDetailsSchema {
     eligible_height: u64,
     frozen: bool,
     fcmp_precomputed_path: Option<FcmpPrecomputedPath>,
+    unspendable: Option<UnspendableReason>,
     receive_attribution: ReceiveAttribution,
 }
 
@@ -428,6 +461,7 @@ impl std::fmt::Debug for TransferDetails {
             .field("spent", &self.spent)
             .field("eligible_height", &self.eligible_height)
             .field("frozen", &self.frozen)
+            .field("unspendable", &self.unspendable)
             .finish_non_exhaustive()
     }
 }
@@ -495,6 +529,7 @@ mod tests {
             output_handle: None,
             eligible_height: 110,
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: ReceiveAttribution::default(),
         }

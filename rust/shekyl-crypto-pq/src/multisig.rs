@@ -9,7 +9,6 @@
 
 use crate::error::PqcVerifyError;
 use crate::signature::{HybridEd25519MlDsa, HybridPublicKey, HybridSignature, SignatureScheme};
-use shekyl_crypto_hash::keccak256;
 
 /// Largest multisig group served (MSW-G, settled 2026-07-15: 2f+1 at f=2;
 /// withdrew the same-day MAX=8 pick). The value is the *correctness* cap —
@@ -391,23 +390,6 @@ pub fn verify_multisig(
     }
 
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// FCMP++ multisig helpers
-// ---------------------------------------------------------------------------
-
-/// Compute the PQC leaf hash for a multisig key container.
-///
-/// In FCMP++ transactions, each curve-tree leaf contains H(pqc_pk). For
-/// multisig outputs, pqc_pk is the canonical encoding of the
-/// MultisigKeyContainer. This function returns H(container_bytes) as a
-/// 32-byte hash suitable for the prover and verifier.
-pub fn multisig_pqc_leaf_hash(
-    container: &MultisigKeyContainer,
-) -> Result<[u8; 32], PqcVerifyError> {
-    let canonical = container.to_canonical_bytes()?;
-    Ok(keccak256(&canonical))
 }
 
 // ---------------------------------------------------------------------------
@@ -954,26 +936,33 @@ mod tests {
         }
     }
 
-    // -- FCMP++ multisig helpers --
+    // -- FCMP++ leaf key scalar over multisig containers --
+    //
+    // For a scheme-2 output the revealed `pqc_pk` IS the canonical encoding of
+    // the `MultisigKeyContainer`, so `k` is `pqc_key_scalar` over exactly those
+    // bytes — the same derivation every single-signer key goes through. These
+    // tests pin that on the container's canonical bytes directly; there is no
+    // multisig-specific wrapper to call.
 
     #[test]
-    fn multisig_pqc_leaf_hash_deterministic() {
+    fn multisig_container_key_scalar_deterministic() {
         let pairs = gen_keypairs(3);
         let kc = make_key_container(&pairs, 2);
-        let h1 = super::multisig_pqc_leaf_hash(&kc).unwrap();
-        let h2 = super::multisig_pqc_leaf_hash(&kc).unwrap();
+        let canonical = kc.to_canonical_bytes().unwrap();
+        let h1 = crate::leaf_commitment::pqc_key_scalar(&canonical);
+        let h2 = crate::leaf_commitment::pqc_key_scalar(&canonical);
         assert_eq!(h1, h2);
     }
 
     #[test]
-    fn multisig_pqc_leaf_hash_differs_for_different_groups() {
+    fn multisig_container_key_scalar_differs_for_different_groups() {
         let pairs1 = gen_keypairs(3);
         let pairs2 = gen_keypairs(3);
         let kc1 = make_key_container(&pairs1, 2);
         let kc2 = make_key_container(&pairs2, 2);
         assert_ne!(
-            super::multisig_pqc_leaf_hash(&kc1).unwrap(),
-            super::multisig_pqc_leaf_hash(&kc2).unwrap()
+            crate::leaf_commitment::pqc_key_scalar(&kc1.to_canonical_bytes().unwrap()),
+            crate::leaf_commitment::pqc_key_scalar(&kc2.to_canonical_bytes().unwrap())
         );
     }
 }

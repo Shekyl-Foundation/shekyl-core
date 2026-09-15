@@ -11,10 +11,7 @@
 use rand_core::{CryptoRng, OsRng, RngCore};
 
 use ciphersuite::{
-    group::{
-        ff::{Field, PrimeField},
-        Group, GroupEncoding,
-    },
+    group::{ff::PrimeField, Group, GroupEncoding},
     Ciphersuite,
 };
 use dalek_ff_group::{Ed25519, EdwardsPoint, Scalar};
@@ -57,7 +54,7 @@ struct Leaf {
     x: Scalar,
     y: Scalar,
     output: Output,
-    h_pqc: <Selene as Ciphersuite>::F,
+    pqc: super::PqcLeaf,
 }
 
 fn make_leaf() -> Leaf {
@@ -70,7 +67,7 @@ fn make_leaf() -> Leaf {
         x,
         y,
         output: Output::new(O, I, C).unwrap(),
-        h_pqc: <Selene as Ciphersuite>::F::random(&mut OsRng),
+        pqc: super::random_pqc_leaf(),
     }
 }
 
@@ -83,8 +80,8 @@ fn tree_and_fcmp(
     assert_eq!(leaves.len(), rerandomized.len());
 
     let leaf_outputs: Vec<Output> = leaves.iter().map(|leaf| leaf.output).collect();
-    let leaves_extra_scalars: Vec<Vec<<Selene as Ciphersuite>::F>> =
-        leaves.iter().map(|leaf| vec![leaf.h_pqc]).collect();
+    let leaves_cm_x: Vec<<Selene as Ciphersuite>::F> =
+        leaves.iter().map(|leaf| leaf.pqc.x).collect();
 
     let mut hash_scalars = vec![];
     for leaf in leaves {
@@ -103,7 +100,7 @@ fn tree_and_fcmp(
                 .unwrap()
                 .0,
         );
-        hash_scalars.push(leaf.h_pqc);
+        hash_scalars.push(leaf.pqc.x);
     }
     let tree = TreeRoot::<Selene, Helios>::C1(
         *SELENE_HASH_INIT
@@ -126,9 +123,9 @@ fn tree_and_fcmp(
     for (leaf, rerandomized) in leaves.iter().zip(rerandomized) {
         paths.push(Path {
             output: leaf.output,
-            output_extra_scalars: vec![leaf.h_pqc],
+            output_cm: leaf.pqc.cm,
             leaves: leaf_outputs.clone(),
-            leaves_extra_scalars: leaves_extra_scalars.clone(),
+            leaves_cm_x: leaves_cm_x.clone(),
             curve_2_layers: vec![],
             curve_1_layers: vec![],
         });
@@ -150,6 +147,7 @@ fn tree_and_fcmp(
                 EdwardsPoint::generator(),
                 ScalarDecomposition::new(rerandomized.c_blind()).unwrap(),
             ),
+            super::k_blind(&leaf.pqc),
         ));
     }
 
@@ -224,7 +222,7 @@ fn membership_only_roundtrip() {
             tree,
             1,
             tx_hash,
-            vec![leaf.h_pqc],
+            vec![leaf.pqc.K],
         )
         .unwrap();
     assert!(verifiers.all_valid());
@@ -253,7 +251,7 @@ fn membership_only_roundtrip() {
             tree,
             1,
             tx_hash,
-            vec![leaf.h_pqc],
+            vec![leaf.pqc.K],
         )
         .unwrap();
     assert!(verifiers.all_valid());
@@ -276,7 +274,7 @@ fn membership_only_multi_input_roundtrip() {
             tree,
             1,
             tx_hash,
-            vec![leaf_a.h_pqc, leaf_b.h_pqc],
+            vec![leaf_a.pqc.K, leaf_b.pqc.K],
         )
         .unwrap();
     assert!(verifiers.all_valid());
@@ -337,7 +335,7 @@ fn membership_only_bytes_rejected_by_full_path() {
                 tx_hash,
                 vec![InputVerification {
                     key_image,
-                    pqc_pk_hash: leaf.h_pqc,
+                    pqc_key_point: leaf.pqc.K,
                 }],
             );
             assert!(
@@ -376,7 +374,7 @@ fn full_proof_bytes_rejected_by_membership_only_path() {
                 tree,
                 1,
                 tx_hash,
-                vec![leaf.h_pqc],
+                vec![leaf.pqc.K],
             );
             assert!(
                 result.is_err() || !verifiers.all_valid(),
@@ -531,7 +529,7 @@ fn mixed_type_batch_rejects() {
             tx_hash,
             vec![InputVerification {
                 key_image,
-                pqc_pk_hash: full_leaf.h_pqc,
+                pqc_key_point: full_leaf.pqc.K,
             }],
         )
         .unwrap();
@@ -544,7 +542,7 @@ fn mixed_type_batch_rejects() {
                 mo_tree,
                 1,
                 tx_hash,
-                vec![mo_leaf.h_pqc],
+                vec![mo_leaf.pqc.K],
             )
             .unwrap();
         assert!(
@@ -567,7 +565,7 @@ fn mixed_type_batch_rejects() {
                 tx_hash,
                 vec![InputVerification {
                     key_image,
-                    pqc_pk_hash: full_leaf.h_pqc,
+                    pqc_key_point: full_leaf.pqc.K,
                 }],
             )
             .unwrap();
@@ -579,7 +577,7 @@ fn mixed_type_batch_rejects() {
             mo_tree,
             1,
             tx_hash,
-            vec![mo_leaf.h_pqc],
+            vec![mo_leaf.pqc.K],
         )
         .unwrap();
         assert!(
@@ -601,7 +599,7 @@ fn mixed_type_batch_rejects() {
             tx_hash,
             vec![InputVerification {
                 key_image,
-                pqc_pk_hash: full_leaf.h_pqc,
+                pqc_key_point: full_leaf.pqc.K,
             }],
         )
         .unwrap();
@@ -613,7 +611,7 @@ fn mixed_type_batch_rejects() {
             mo_tree,
             1,
             tx_hash,
-            vec![mo_leaf.h_pqc],
+            vec![mo_leaf.pqc.K],
         )
         .unwrap();
         assert!(verifiers.all_valid());
@@ -686,7 +684,7 @@ fn membership_only_blob_swap_rejects() {
             tree,
             1,
             tx_hash,
-            vec![leaf_a.h_pqc, leaf_b.h_pqc],
+            vec![leaf_a.pqc.K, leaf_b.pqc.K],
         )
         .unwrap();
     assert!(!verifiers.all_valid(), "blob swap verified");
@@ -708,7 +706,7 @@ fn membership_only_replay_rejects() {
             tree,
             1,
             [11; 32],
-            vec![leaf.h_pqc],
+            vec![leaf.pqc.K],
         )
         .unwrap();
     assert!(
@@ -737,7 +735,7 @@ fn membership_only_wrong_root_rejects() {
         other_tree,
         1,
         tx_hash,
-        vec![leaf.h_pqc],
+        vec![leaf.pqc.K],
     );
     assert!(
         result.is_err() || !verifiers.all_valid(),
@@ -781,7 +779,7 @@ fn membership_only_tamper_rejects() {
                     tree,
                     1,
                     tx_hash,
-                    vec![leaf.h_pqc],
+                    vec![leaf.pqc.K],
                 );
                 assert!(
                     result.is_err() || !verifiers.all_valid(),

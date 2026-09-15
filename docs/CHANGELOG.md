@@ -18,15 +18,47 @@
 
 ### Changed
 
-- **Every FCMP++ spend currently identifies the output it spends (`PL-D1`),
-  and the documents that claimed otherwise are corrected at source.** The
-  input's revealed `pqc_auths[i].hybrid_public_key` hashes to the per-output
-  value published in `tx_extra` `0x07` at creation, and consensus hands that
-  hash to the verifier as a public input — one hash and one lookup, no proof
-  inspection. Amounts and destinations stay hidden; the spend graph does not.
+- **Every FCMP++ spend no longer identifies the output it spends (`PL-D1`
+  fixed by `PL-D3`).** The leaf's 4th scalar was `H(hybrid_pk)`, published
+  per output in `tx_extra` `0x07` and handed to the verifier as a public
+  input, so hashing the key a spend reveals and looking it up named the
+  spent output. It is now the x-coordinate of a Pedersen commitment
+  `CM = k·G_k + r·J` (`k = H_ℓ(hybrid_pk)` by cSHAKE256 under
+  `shekyl/pqc-leaf-key-v1`; `r` an HKDF blind with an exceptional-value
+  guard) that the circuit opens in-circuit to the verifier-derived point
+  `K = k·G_k` (`shekyl-oxide/crypto/fcmps` `first_layer`). The `0x07` entry
+  is 64 bytes per output, `CM ‖ cSHAKE256("shekyl/pqc-leaf-record-v1",
+  pk ‖ r_h)` (`PL-D3a`), and admission checks every entry's point at relay
+  and connect (`check_pqc_leaf_entries`, FFI code 10). The wallet verifies
+  both halves of the published entry at scan and classifies a mismatch or a
+  missing entry received-but-unspendable (`TransferDetails::unspendable`,
+  `LEDGER_BLOCK_VERSION 11`; retained, never selectable, wallet-RPC state
+  `UNSPENDABLE` + `unspendable_reason`, `get_balance.unspendable`; wallet-RPC
+  OpenAPI `0.5.0`), with the
+  signer's own refusal before proving kept as defence in depth
+  (`TxBuilderError::PqcLeafMismatch`, FFI −32). The emission vin drops
+  `pqc_pk_hash` (the binding is the proof); `VerifyError` gains
+  `PqcKeyCountMismatch` (9) and retires code 3 (`K` is computed directly); the FFI helpers
+  are renamed for what they now return (`shekyl_derive_pqc_leaf_hash` →
+  `shekyl_derive_pqc_leaf_entry`, `shekyl_fcmp_pqc_leaf_hash` →
+  `shekyl_fcmp_pqc_key_scalar`); the wallet's curve-tree replica surfaces an undecodable leaf point as an error instead of skipping that leaf; the multisig witness header is 288 B; and the genesis transactions, block-0 ids, curve-tree fixtures, proof-size and weight tables (the dust boundary's marginal input weight 9136 → 9008),
+  emission/serve-credit fixtures and the leaf KATs are
+  re-pinned; LMDB `VERSION 14`, wallet curve-tree store `SCHEMA_VERSION 5`
+  (pre-genesis: delete and resync). Fix-falsifier
+  `rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`; binding-falsifier
+  `test_wrong_opening_fails`
+  ([`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §6.2,
+  §9, §12; decision log 2026-09-14).
+
+- **Every FCMP++ spend identified the output it spent (`PL-D1`; closed
+  pre-genesis by the `PL-D3` entry above), and the documents that claimed
+  otherwise are corrected at source.** The input's revealed
+  `pqc_auths[i].hybrid_public_key` hashed to the per-output value published
+  in `tx_extra` `0x07` at creation, and consensus handed that hash to the
+  verifier as a public input — one hash, one lookup, no proof inspection. Amounts and destinations stay hidden; the spend graph, until `PL-D3`, did not.
   Pre-genesis; nothing has leaked. Design round 1, ratified by Rick on
-  2026-09-14 (this branch carries no wire, leaf, or circuit change; the
-  implementation is the separate rule-07 PR; the fix `PL-D3` is a Pedersen commitment to the key in the
+  2026-09-14 (the implementation is the `PL-D3` entry above; the fix is a
+  Pedersen commitment to the key in the
   leaf, opened in-circuit by the existing discrete-log gadget, with a proper
   hash-commitment mechanism as the successor round `PL-D4`) is
   [`FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md);

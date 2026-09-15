@@ -950,10 +950,11 @@ the round kept trying to add forensics underneath it.
    source): `hybrid_sign` hot is safe, because the emission claim is
    two-of-two and only one factor is the identity hybrid.**
    `emission_vin_verify_auth` requires Auth-P (hybrid signature under
-   `p_pubkey`) AND Auth-B (leaf-gated:
-   `hash_pqc_public_key(backing_pubkey) == pqc_pk_hash` checked FIRST —
-   order pinned, `emission_verify.rs:670/:703` — then the hybrid
-   signature under `backing_pubkey`), with `reward_commits` +
+   `p_pubkey`) AND Auth-B (the hybrid signature under `backing_pubkey`,
+   whose key point the step-6 membership-only proof opens the backing
+   leaf's commitment to in-circuit — `PL-D3`, 2026-09-14; the former
+   hash gate `hash_pqc_public_key(backing_pubkey) == pqc_pk_hash` left the
+   vin with its field), with `reward_commits` +
    `signable_tx_hash` binding the destination. A compromised serving
    host holding `hybrid_sign` produces Auth-P and nothing else: the
    backing key is the funding output's per-output PQC key, not in

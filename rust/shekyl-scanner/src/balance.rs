@@ -21,6 +21,12 @@ pub struct BalanceSummary {
     pub locked_by_timelock: AtomicUnits,
     /// Balance in frozen outputs.
     pub frozen: AtomicUnits,
+    /// Balance in received-but-unspendable outputs
+    /// (`TransferDetails::unspendable`, `PL-D3` §6.2): on chain and
+    /// retained in the ledger, so counted in `total`, but never in
+    /// `unlocked` — the chain leaf does not open to this wallet's
+    /// derivation, so no spend can ever be proven.
+    pub unspendable: AtomicUnits,
     /// Balance committed to a network-exposed spend awaiting chain
     /// confirmation (the F14 lock, `DAEMON_SUBMIT_VERDICT.md` §2.6).
     /// Counted in `total` (the spend has not settled) but never in
@@ -64,6 +70,11 @@ impl BalanceSummary {
 
             let amount = td.amount();
             summary.total = accumulate(summary.total, amount);
+
+            if td.unspendable.is_some() {
+                summary.unspendable = accumulate(summary.unspendable, amount);
+                continue;
+            }
 
             if spend_locks.contains(td.global_output_index) {
                 summary.awaiting_confirmation = accumulate(summary.awaiting_confirmation, amount);
@@ -114,6 +125,7 @@ mod tests {
             output_handle: None,
             eligible_height: height + SPENDABLE_AGE,
             frozen: false,
+            unspendable: None,
             fcmp_precomputed_path: None,
             receive_attribution: shekyl_engine_state::ReceiveAttribution::default(),
         }
@@ -215,5 +227,31 @@ mod tests {
         assert_eq!(summary.total, AtomicUnits::from_raw(1000));
         assert_eq!(summary.unlocked, AtomicUnits::ZERO);
         assert_eq!(summary.frozen, AtomicUnits::from_raw(1000));
+    }
+
+    /// A received-but-unspendable output (`PL-D3` §6.2) is retained — it is
+    /// on chain, so `total` counts it — but never spendable, in either
+    /// reason.
+    #[test]
+    fn unspendable_counted_in_total_never_in_unlocked() {
+        use shekyl_engine_state::UnspendableReason;
+        for reason in [
+            UnspendableReason::PqcLeafMismatch,
+            UnspendableReason::PqcLeafEntryAbsent,
+        ] {
+            let mut td = make_td(1000, 50);
+            td.unspendable = Some(reason);
+            let transfers = vec![td];
+            let summary = BalanceSummary::compute(&transfers, 100, &no_locks());
+            assert_eq!(summary.total, AtomicUnits::from_raw(1000), "{reason:?}");
+            assert_eq!(summary.unlocked, AtomicUnits::ZERO, "{reason:?}");
+            assert_eq!(
+                summary.unspendable,
+                AtomicUnits::from_raw(1000),
+                "{reason:?}"
+            );
+            assert_eq!(summary.frozen, AtomicUnits::ZERO, "{reason:?}");
+            assert_eq!(summary.locked_by_timelock, AtomicUnits::ZERO, "{reason:?}");
+        }
     }
 }

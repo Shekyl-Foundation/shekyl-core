@@ -109,6 +109,54 @@ fn test_release_multiplier_ffi() {
 // shekyl_emission_vin_verify, whose Rust body emission_vin_verify_auth pins the
 // leaf-gate-first order and per-role domains — see emission_verify_kat.rs.)
 
+/// The census `d-12` split crosses the FFI: a PQC key-scalar count that
+/// disagrees with the key-image count returns 9 (`PqcKeyCountMismatch`)
+/// from the pre-slicing check — the code the entry point advertises —
+/// while a pseudo-out mismatch keeps the invalid-parameters code (1).
+#[test]
+fn full_verify_ffi_distinguishes_pqc_count_mismatch() {
+    let root = [0u8; 32];
+    let txh = [0u8; 32];
+    let proof = [0u8; 8];
+    let two = [1u8; 64];
+
+    // 2 key images, 2 pseudo-outs, 1 PQC scalar: the d-12 discriminant.
+    let r = unsafe {
+        shekyl_fcmp_verify(
+            proof.as_ptr(),
+            proof.len(),
+            two.as_ptr(),
+            2,
+            two.as_ptr(),
+            2,
+            two.as_ptr(),
+            1,
+            root.as_ptr(),
+            1,
+            txh.as_ptr(),
+        )
+    };
+    assert_eq!(r, 9, "PQC key count mismatch must surface as 9, not 1");
+
+    // 2 key images, 1 pseudo-out, 2 PQC scalars: still invalid parameters.
+    let r = unsafe {
+        shekyl_fcmp_verify(
+            proof.as_ptr(),
+            proof.len(),
+            two.as_ptr(),
+            2,
+            two.as_ptr(),
+            1,
+            two.as_ptr(),
+            2,
+            root.as_ptr(),
+            1,
+            txh.as_ptr(),
+        )
+    };
+    assert_eq!(r, 1, "pseudo-out count mismatch keeps code 1");
+}
+
 /// The full-path FFI shares the membership-only hardening: matched-but-huge
 /// or over-cap counts reject with code 1 before any slice/allocation.
 #[test]
@@ -588,7 +636,7 @@ fn test_frost_sal_get_rerand_null_returns_empty() {
 // ── Witness header round-trip tests ──────────────────────────────────
 //
 // Verifies that shekyl_fcmp_build_witness_header (writer) and
-// parse_prove_witness (reader) agree byte-for-byte on all 8 header
+// parse_prove_witness (reader) agree byte-for-byte on all 9 header
 // fields, using locked vectors from docs/test_vectors/WITNESS_HEADER.json.
 
 #[cfg(feature = "multisig")]
@@ -597,7 +645,8 @@ struct WitnessHeaderVector {
     output_key: String,
     key_image_gen: String,
     commitment: String,
-    h_pqc: String,
+    pqc_leaf_commitment: String,
+    pqc_leaf_blind: String,
     spend_key_x: String,
     spend_key_y: String,
     commitment_mask: String,
@@ -636,21 +685,22 @@ fn witness_header_build_then_parse_roundtrip() {
             output_key: decode_32(&v.output_key, "output_key", i),
             key_image_gen: decode_32(&v.key_image_gen, "key_image_gen", i),
             commitment: decode_32(&v.commitment, "commitment", i),
-            h_pqc: decode_32(&v.h_pqc, "h_pqc", i),
+            pqc_leaf_commitment: decode_32(&v.pqc_leaf_commitment, "pqc_leaf_commitment", i),
+            pqc_leaf_blind: decode_32(&v.pqc_leaf_blind, "pqc_leaf_blind", i),
             spend_key_x: decode_32(&v.spend_key_x, "spend_key_x", i),
             spend_key_y: decode_32(&v.spend_key_y, "spend_key_y", i),
             commitment_mask: decode_32(&v.commitment_mask, "commitment_mask", i),
             pseudo_out_blind: decode_32(&v.pseudo_out_blind, "pseudo_out_blind", i),
         };
 
-        // Build: typed struct → 256-byte blob (same path as C++ FFI)
+        // Build: typed struct → 288-byte blob (the multisig witness seam)
         let mut blob = vec![0u8; SHEKYL_PROVE_WITNESS_HEADER_BYTES];
         let ok = unsafe { shekyl_fcmp_build_witness_header(&raw const fields, blob.as_mut_ptr()) };
         assert!(
             ok,
             "vector {i}: shekyl_fcmp_build_witness_header returned false"
         );
-        assert_eq!(blob.len(), 256, "vector {i}: blob not 256 bytes");
+        assert_eq!(blob.len(), 288, "vector {i}: blob not 288 bytes");
 
         // Verify raw byte layout matches the field offsets
         assert_eq!(
@@ -670,41 +720,46 @@ fn witness_header_build_then_parse_roundtrip() {
         );
         assert_eq!(
             &blob[96..128],
-            fields.h_pqc.as_slice(),
-            "vector {i}: h_pqc mismatch in blob"
+            fields.pqc_leaf_commitment.as_slice(),
+            "vector {i}: CM mismatch in blob"
         );
         assert_eq!(
             &blob[128..160],
+            fields.pqc_leaf_blind.as_slice(),
+            "vector {i}: r mismatch in blob"
+        );
+        assert_eq!(
+            &blob[160..192],
             fields.spend_key_x.as_slice(),
             "vector {i}: x mismatch in blob"
         );
         assert_eq!(
-            &blob[160..192],
+            &blob[192..224],
             fields.spend_key_y.as_slice(),
             "vector {i}: y mismatch in blob"
         );
         assert_eq!(
-            &blob[192..224],
+            &blob[224..256],
             fields.commitment_mask.as_slice(),
             "vector {i}: z mismatch in blob"
         );
         assert_eq!(
-            &blob[224..256],
+            &blob[256..288],
             fields.pseudo_out_blind.as_slice(),
             "vector {i}: a mismatch in blob"
         );
 
-        // Parse: 256-byte blob → ProveInput (same path as Rust FFI verifier).
+        // Parse: 288-byte blob → ProveInput (same path as the multisig prover).
         // parse_prove_witness expects a full witness (header + leaf + branch data).
         // We append a minimal valid trailer: 1 leaf entry + 0 branch layers.
         let mut witness = blob.clone();
         // leaf chunk_count = 1 (must have at least 1 to parse)
         witness.extend_from_slice(&1u32.to_le_bytes());
-        // one leaf entry: 4 x 32 bytes (O, I, C, h_pqc)
+        // one leaf entry: 4 x 32 bytes (O, I, C, CM.x) — layout only here
         witness.extend_from_slice(&fields.output_key);
         witness.extend_from_slice(&fields.key_image_gen);
         witness.extend_from_slice(&fields.commitment);
-        witness.extend_from_slice(&fields.h_pqc);
+        witness.extend_from_slice(&fields.pqc_leaf_commitment);
         // c1_layer_count = 0
         witness.extend_from_slice(&0u32.to_le_bytes());
         // c2_layer_count = 0
@@ -732,8 +787,12 @@ fn witness_header_build_then_parse_roundtrip() {
             "vector {i}: parsed C mismatch"
         );
         assert_eq!(
-            pi.h_pqc.0, fields.h_pqc,
-            "vector {i}: parsed h_pqc mismatch"
+            pi.pqc_leaf_commitment, fields.pqc_leaf_commitment,
+            "vector {i}: parsed CM mismatch"
+        );
+        assert_eq!(
+            pi.pqc_leaf_blind, fields.pqc_leaf_blind,
+            "vector {i}: parsed r mismatch"
         );
         assert_eq!(
             pi.spend_key_x, fields.spend_key_x,

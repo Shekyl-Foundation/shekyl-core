@@ -1,9 +1,9 @@
 # PL — FCMP++ spend linkability through the public 4th leaf scalar
 
 **Status:** OPEN — round 1 **RATIFIED by Rick, 2026-09-14** (§12); the
-implementation proceeds under §10 on its own branch from current `dev`; no
-implementation in this document's PR. `PL-D1` (the linkability defect) is verified at source and
-is not refuted. `PL-D2` (the in-circuit PQ binding is only as sound as the
+implementation, built under §10 on its own worktree from `dev`, **lands in
+this document's PR** under rule 07 (§12.1; the clause "no implementation in this document's PR" that stood here was true of the doc-only PR #744 and was superseded 2026-09-14 by #745, which carries both). `PL-D1` (the linkability defect) is verified at source,
+not refuted, and **closed by `PL-D3` in this PR** (§12.1). `PL-D2` (the in-circuit PQ binding is only as sound as the
 discrete-log proof enforcing it) is raised here; **ruled 2026-09-14** — the
 four documents that claimed otherwise are corrected at source (§4.5), on
 Rick's instruction that this is security information, not marketing.
@@ -12,11 +12,10 @@ Rick's instruction that this is security information, not marketing.
 in the middle of everything else"): a **Pedersen commitment** to the key in
 the leaf's 4th scalar, opened in-circuit by the discrete-log gadget the first
 layer already runs; the hash mechanism is the named successor round `PL-D4`
-(§6.5). Rick ratified the written form on 2026-09-14 (§12); the
-implementation is the separate rule-07 PR (§10). The document
-corrections `PL-D1` requires are applied at source in the same branch as
-separately landable commits (§11). Nothing on the wire, in the leaf format,
-or in the circuit changes in this branch.
+(§6.5). Rick ratified the written form on 2026-09-14 (§12) and the
+implementation landed with it under rule 07 (§10, §12.1). The document
+corrections `PL-D1` requires are applied at source (§11). The wire, the
+leaf format and the circuit change exactly as §6.2 specifies.
 **Grounded at** `dev` = `42333d34f` (2026-09-13), fresh worktree
 `~/shekyl/wt-pl-linkability`. Every `file:line` below was read at that tree
 on 2026-09-13; citations into the documents this branch itself corrects
@@ -33,7 +32,7 @@ were clear of the 77 registered families at the anchor
 its own family and `F5` stays as the historical name.
 **Process:** [`26-sub-pr-design-discipline`](../../.cursor/rules/26-sub-pr-design-discipline.mdc)
 is invoked — the fix crosses the circuit, the FFI (`shekyl_fcmp_verify`,
-`shekyl_construct_curve_tree_leaf`, `shekyl_fcmp_pqc_leaf_hash`), the wire
+`shekyl_construct_curve_tree_leaf`, `shekyl_fcmp_pqc_leaf_hash` — renamed `shekyl_fcmp_pqc_key_scalar` by the fix), the wire
 (`tx_extra` `0x07`), and the genesis-frozen leaf format.
 [`07-consensus-atomic-cutovers`](../../.cursor/rules/07-consensus-atomic-cutovers.mdc)
 is named for the implementation PR (§10); this round is the design-first
@@ -52,7 +51,7 @@ inherits it). Both are pre-genesis: nothing has leaked, nothing migrates.
 
 ---
 
-## 0. The defect in one paragraph (`PL-D1`)
+## 0. The defect in one paragraph (`PL-D1`) — CLOSED by `PL-D3` in this PR, 2026-09-14; described below as found at the 2026-09-13 pin
 
 Every FCMP++ spend reveals the spent output's hybrid PQC public key in
 cleartext (`tx.pqc_auths[i].hybrid_public_key`). That key's hash was published
@@ -192,8 +191,7 @@ special-purpose indexer is needed.
    re-based on the `scheme_id=2` precedent alone, applied with dated notes
    at `verifier.rs`, `PQC_MULTISIG.md` and the `V3_1_MULTISIG_RUST_ENGINE.md`
    row. The `blockchain.cpp` comment is off the ledger by that ruling (the
-   code is going away) and is rewritten by the implementation PR
-   regardless — the historical exception is explicit, not silent.
+   code is going away) and is rewritten in this PR regardless — the historical exception is explicit, not silent.
 3. **`docs/DESIGN_CONCEPTS.md` §14 Mechanism A (2026-07-17).** *"An FCMP++
    spend never reveals which output it consumes, so N is unobservable ...
    Do not build this."* The observable exists today. Corrected at source;
@@ -794,7 +792,7 @@ A5-1…A5-7 are a firewall re-ruling, not a leaf fix — their carrier is the
 | A5-5 | `docs/completed/ARCHIVAL_EXIT_STANDOFF_FD4_WINDOW.md:172, 189, 1292, 1331, 1364` | closed record | In-line refutation markers (rule 95), same shape as `FCMP_MEMBERSHIP_ONLY.md:376` |
 | A5-6 | `docs/design/PRINCIPAL_STAKE_LIFECYCLE.md:173`, `docs/design/STAKER_ARCHIVAL_SIM.md:3533`, `docs/design/ARCHIVAL_BOND_2C_GF7_HOOKS.md:180`, `docs/design/ARCHIVAL_BOND_WI4_MEASUREMENT.md:3445, 3721, 3888, 3922` | "FCMP++-hidden" premises in live design docs | Correct at source once §6 is ruled (the fix restores the premise; the docs then state it as restored, not as always-true) |
 | A5-7 | `rust/shekyl-standoff/src/lib.rs:55`, `rust/shekyl-standoff/src/conformance.rs:213`, `rust/shekyl-engine-state/src/pscan_state.rs:124`, `rust/shekyl-engine-core/src/engine/drain_select.rs:18`, `rust/shekyl-staking-sim/src/standoff.rs:63` | crate/module docs stating consensus cannot classify funding because it is FCMP++-hidden | Rewrite from the ruled design |
-| A5-8 | `src/cryptonote_core/blockchain.cpp:4276–4290`, `rust/shekyl-daemon-rpc/src/submit/verifier.rs:1077–1086`, `docs/PQC_MULTISIG.md:2026–2040`, `docs/design/V3_1_MULTISIG_RUST_ENGINE.md:172` | MSW-6 "no other set shrinks" ground | **RULED (Rick, 2026-09-14, §12 item 5):** re-based on the `scheme_id=2` precedent alone; applied with dated notes at `verifier.rs`, `PQC_MULTISIG.md` and the `V3_1_MULTISIG_RUST_ENGINE.md` row. The `blockchain.cpp` comment is off the ledger by the same ruling (the code is going away) and is rewritten by the implementation PR regardless |
+| A5-8 | `src/cryptonote_core/blockchain.cpp:4276–4290`, `rust/shekyl-daemon-rpc/src/submit/verifier.rs:1077–1086`, `docs/PQC_MULTISIG.md:2026–2040`, `docs/design/V3_1_MULTISIG_RUST_ENGINE.md:172` | MSW-6 "no other set shrinks" ground | **RULED (Rick, 2026-09-14, §12 item 5):** re-based on the `scheme_id=2` precedent alone; applied with dated notes at `verifier.rs`, `PQC_MULTISIG.md` and the `V3_1_MULTISIG_RUST_ENGINE.md` row. The `blockchain.cpp` comment is off the ledger by the same ruling (the code is going away) and is rewritten in this PR regardless |
 | A5-9 | `docs/DESIGN_CONCEPTS.md` §14 Mechanism A | "do not build this" on a refuted premise | Premise corrected at source in this branch; the disposition is re-ruled with §6 |
 | A5-10 | `docs/CHANGELOG.md:5969` and other ledger lines | historical wording | Ledger; not edited (rule 95) |
 | A5-11 | `docs/POST_QUANTUM_CRYPTOGRAPHY.md` (Security Goals, curve tower, ownership binding, privacy boundary); `docs/MERKLE_TREE.md` §"Our 4th scalar"; `docs/FCMP_PLUS_PLUS.md` §2; `docs/completed/FCMP_MEMBERSHIP_ONLY.md` §7 wargame | `PL-D2` claims | **Applied** in this branch (§4.5), ruled 2026-09-14 |
@@ -867,7 +865,7 @@ must be done by hand:** the rule-42 snapshot (silent), the domain registry
 
 ---
 
-## 10. The implementation PR, when ratified (rule 07 framing — not this round)
+## 10. The implementation PR, when ratified (rule 07 framing — not this round) — EXECUTED 2026-09-14, record in §12.1
 
 - **Criterion 1** met: leaf content and the verifier's public-input shape
   are byte-identical-reproduction rules. **Criterion 2** follows. **Criterion 3**: §9 at `Base commit`.
@@ -1005,6 +1003,53 @@ settled; nothing here is still pending except where an item says so:**
     reconciles to one FOLLOWUPS line and a cross-reference.
 
 ---
+
+### 12.1 Implementation record (2026-09-14)
+
+Landed on `feat/pl-d3-pedersen-leaf-commitment` (a clean worktree from
+`dev` at `a6160a4bd`, ruling 10), rule-07 framing per §10:
+
+- **Fix-falsifier first** (`rust/shekyl-wire/tests/pl_d1_fix_falsifier.rs`,
+  commit `cf063a744`): red on the pre-`PL-D3` tree with exactly one match
+  on each surface at the spent index; green after the fix with zero matches
+  on both. Binding-falsifier `test_wrong_opening_fails` (vendored circuit
+  crate) rejects a wrong `K`.
+- **Rule 26 pre-flight** measured before the first production commit
+  (census companion §8) and the cost table in §6.3 corrected to the
+  measured figures.
+- Everything §6.2 specifies is implemented: `k` and the record on cSHAKE256
+  under registered customizations (Tier B), the HKDF blinds with the
+  exceptional-value guard, the two NUMS generators pinned, the 64-byte
+  `0x07` entry with the point-admission rule at relay and connect (Rust rule
+  + C++ adapter passing the payload), `K` derived by every verifier and
+  never on the wire, the circuit's opening leg, scan-time verification of
+  both halves of the published entry against the recipient's own derivation
+  (`shekyl-scanner` compares `CM ‖ record` with `derive_pqc_leaf`'s entry; a
+  mismatch or a missing entry is classified received-but-unspendable on the
+  persisted row — `TransferDetails::unspendable`, `LEDGER_BLOCK_VERSION 11`
+  — retained in the ledger, excluded from coin selection and `unlocked`,
+  surfaced as the wallet-RPC state `UNSPENDABLE` with `unspendable_reason`
+  and the sender's `tx_hash`, and totalled in `get_balance.unspendable`;
+  the persona funding extractor skips such an output rather than counting
+  it as bond funding, warning loudly but anonymously — the log line names
+  no slot, transaction, or index, because any sender can mint the trigger
+  and log sinks travel beyond the custody boundary; the ledger row and
+  RPC carry the specifics (the D-A1 / rule-82 reconciliation, pinned by
+  `unspendable_warn_is_loud_but_names_no_persona_or_tx`) —
+  `pscan/scan_step.rs`; census `d-14`, rule 82; this reconciliation and
+  the sign-input JSON key rename (`h_pqc` → `cm_x` at both producers, no
+  serde alias) ratified by Rick, 2026-09-14) with the signer-side refusal kept as defence in
+  depth (`TxBuilderError::PqcLeafMismatch`, FFI −32), the emission vin without
+  `pqc_pk_hash` (ruling 9), census `d-3`/`d-4` (no zero fallback anywhere),
+  `d-1` (fuzz targets rebuilt and compiling), `d-2` (`hp_of_O` left the
+  signing JSON contract with the aliasing), `d-11` (test comments
+  rewritten), `d-12` (`PqcKeyPointInvalid` /
+  `PqcKeyCountMismatch` split), A5-12 (the discrete-log soundness
+  assumption stated in both vendored crate docs).
+- Every §9 S1 vector regenerated under the decision-log citation; LMDB
+  `VERSION 14` and the wallet curve-tree store `SCHEMA_VERSION 5`.
+- Open by design: A5-1…A5-7 (gate-6 owner, ruling 4, now that the premise
+  is restored), `PL-D4` (`Target: V4`), the fuzz-crate CI gap (FOLLOWUPS).
 
 ## 13. What this round did not find (denominator, rule 26)
 

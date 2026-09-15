@@ -45,7 +45,7 @@
 #define TX_EXTRA_TAG_ADDITIONAL_PUBKEYS     0x04
 #define TX_EXTRA_TAG_PQC_OWNERSHIP          0x05
 #define TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT     0x06
-#define TX_EXTRA_TAG_PQC_LEAF_HASHES        0x07
+#define TX_EXTRA_TAG_PQC_LEAF_ENTRIES       0x07
 #define TX_EXTRA_TAG_MULTISIG_MIGRATION     0x08
 #define TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS     0x09
 #define TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS 0x0A
@@ -165,9 +165,16 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  static constexpr size_t PQC_LEAF_HASH_BYTES = 32;
+  // One 0x07 entry per output: the PQC leaf commitment point CM (32 bytes,
+  // compressed Ed25519; its x-coordinate is the leaf's 4th scalar) followed by
+  // the post-quantum record (32 bytes). PL-D3 / PL-D3a
+  // (docs/design/FCMP_SPEND_LINKABILITY.md §6.2). Admission checks the point
+  // (shekyl_tx_extra_pqc_field_shape); consensus never validates the record —
+  // the recipient's wallet scan verifies the full entry against its own
+  // derivation and quarantines a mismatch as received-but-unspendable.
+  static constexpr size_t PQC_LEAF_ENTRY_LEN = 64;
 
-  struct tx_extra_pqc_leaf_hashes
+  struct tx_extra_pqc_leaf_entries
   {
     std::string blob;
 
@@ -220,7 +227,7 @@ namespace cryptonote
     END_SERIALIZE()
   };
 
-  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_additional_pub_keys, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_hashes, tx_extra_multisig_migration, tx_extra_pqc_view_tag_hints, tx_extra_pqc_spend_auth_pubkeys, tx_extra_archival_attestation> tx_extra_field;
+  typedef std::variant<tx_extra_padding, tx_extra_pub_key, tx_extra_nonce, tx_extra_additional_pub_keys, tx_extra_pqc_ownership, tx_extra_pqc_kem_ciphertext, tx_extra_pqc_leaf_entries, tx_extra_multisig_migration, tx_extra_pqc_view_tag_hints, tx_extra_pqc_spend_auth_pubkeys, tx_extra_archival_attestation> tx_extra_field;
 }
 
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_padding, TX_EXTRA_TAG_PADDING);
@@ -229,7 +236,7 @@ VARIANT_TAG(binary_archive, cryptonote::tx_extra_nonce, TX_EXTRA_NONCE);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_additional_pub_keys, TX_EXTRA_TAG_ADDITIONAL_PUBKEYS);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_ownership, TX_EXTRA_TAG_PQC_OWNERSHIP);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_kem_ciphertext, TX_EXTRA_TAG_PQC_KEM_CIPHERTEXT);
-VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_leaf_hashes, TX_EXTRA_TAG_PQC_LEAF_HASHES);
+VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_leaf_entries, TX_EXTRA_TAG_PQC_LEAF_ENTRIES);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_multisig_migration, TX_EXTRA_TAG_MULTISIG_MIGRATION);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_view_tag_hints, TX_EXTRA_TAG_PQC_VIEW_TAG_HINTS);
 VARIANT_TAG(binary_archive, cryptonote::tx_extra_pqc_spend_auth_pubkeys, TX_EXTRA_TAG_PQC_SPEND_AUTH_PUBKEYS);

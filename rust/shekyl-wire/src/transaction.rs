@@ -1824,7 +1824,7 @@ impl Transaction {
             )));
         }
         // CEN-I19 (`GENESIS_TX_WIRE_FORMAT.md` §9.6a): exactly one `0x06` of
-        // `1120·n` and one `0x07` of `32·n` when the transaction has `n > 0`
+        // `1120·n` and one `0x07` of `64·n` when the transaction has `n > 0`
         // outputs, neither when `n == 0`. The daemon enforces this at admission
         // through the same [`check_pqc_field_shape_of`]; enforcing it here is
         // what makes that one rule, rather than one rule and a claim.

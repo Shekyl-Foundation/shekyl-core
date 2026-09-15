@@ -61,6 +61,12 @@ shekyl-win-sec = { path = "../shekyl-win-sec" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+# The receive-row projection tests build a real `TransferDetails` through
+# the scanner's `test-utils` constructor (same edge shekyl-engine-state's
+# tests use); feature unification keeps the production edge unchanged.
+shekyl-scanner = { path = "../shekyl-scanner", features = ["test-utils"] }
+curve25519-dalek = { version = "4", features = ["alloc", "zeroize"] }
+shekyl-curve-primitives = { path = "../shekyl-curve-primitives" }
 # The startup-disclosure wiring test reads what `run_server` logs. The
 # workspace already compiles this version (with more features) through
 # shekyl-logging; feature unification makes this edge free.
