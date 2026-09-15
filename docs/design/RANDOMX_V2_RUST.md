@@ -1,9 +1,12 @@
 # RandomX v2 — Rust verifier + C miner
 
-**Status.** **DRAFT — Round 0 (initial draft, 2026-05-16).** Phase 0
+**Status:** LIVING CONTRACT (last-verified 2026-09-15). Phase 0
 deliverable for the RandomX v2 Rust port. Companion:
-[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Both documents
-must pass the Phase 0 review cycle before any code lands.
+[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Phase 0
+discharged by Phase 1 landing PR #54 merge
+`c0c4a11e59145a304690589d0856827907b5985b` (2026-05-19); the
+"must pass the Phase 0 review cycle before any code lands" gate
+is discharged at that SHA.
 
 **Scope.** Shekyl's target proof-of-work is RandomX v2 from the
 Shekyl-Foundation RandomX fork. Verification is a Rust pure-software
@@ -168,17 +171,15 @@ implementation-time. Before Shekyl's mainnet release:
 
 If either condition fails — Monero finds a v2 issue in production, or
 the audit surfaces a delta-specific weakness — Shekyl's recovery is
-straightforward: **unpin to a pre-PR-#317 commit on the same fork
-(default `102f8acf`) and ship v1 at genesis** per
-[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Because the fork
-has not diverged and the verifier code is structured around the v1+v2
-spec (which is the same `doc/specs.md` with v2 deltas marked inline),
-the unpin is a submodule SHA change plus a `#[cfg]`-style switch in
-the verifier, not a re-implementation.
+**not** an unpin-and-revert of a v1 submodule SHA. Phase 3c deleted
+the v1 C path. The fallback is: re-add a CMake target that links a
+v1 verifier, plus a v1 `#[cfg]` in `shekyl-pow-randomx`, per
+[`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). That is a
+deliberate re-introduction of a deleted path, not a SHA flip.
 
-This is what the non-divergence posture buys: the v1 fallback is a
-late-binding, unpin-and-revert operation, not a "stop everything and
-start over" project.
+This is what the non-divergence posture still buys: the v1 algorithm
+is reconstructible from the same spec. It is **not** a one-line
+submodule revert.
 
 #### What this means for the Phase 2 gate
 
@@ -199,9 +200,10 @@ because:
 The gate moves to **release** (Phase 5+, before mainnet), where it
 becomes the explicit release-checklist item described above. Phase 4
 deletion of `IPowSchema`/`pow_registry` still proceeds before release
-because that work is reversible at the unpin point: switching to v1
+because that work is reversible at the fallback: switching to v1
 fallback does not re-introduce dispatch scaffolding, since v1-only
-shipping is still a single-algorithm deployment.
+shipping is still a single-algorithm deployment. Fallback is a CMake
+target re-add, not a SHA unpin.
 
 ## 2. Permanent C/Rust Split
 
@@ -1075,8 +1077,9 @@ Discipline applied to this work:
   commitment #1. The gate is satisfied by the Monero-funded delta
   audit because Shekyl is non-divergent from upstream (§1.1); Shekyl
   inherits the audit result without performing it. If the audit
-  surfaces a contraindicating finding, Shekyl unpins to a pre-PR-#317
-  commit and ships v1 per `RANDOMX_V1_FALLBACK.md`.
+  surfaces a contraindicating finding, Shekyl re-adds a CMake v1
+  verifier target and ships v1 per `RANDOMX_V1_FALLBACK.md` (not an
+  unpin of `102f8acf`).
 - Phase 2 (Rust verifier implementation) has **no external-review
   gate** because it is faithful implementation against a stable spec,
   not an algorithm-soundness decision. Spec-vector and differential
