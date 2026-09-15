@@ -146,6 +146,7 @@ There is no V3.1 / V3.2 / V3.x release train. Allowed FOLLOWUPS / plan `Target:`
 | Reward emission | [design/REWARD_EMISSION_LEG.md](design/REWARD_EMISSION_LEG.md) |
 | Address format (operator) | [USER_GUIDE.md](USER_GUIDE.md); message-signing / address v2: [design/WALLET_MESSAGE_SIGNING.md](design/WALLET_MESSAGE_SIGNING.md) |
 | Tor cover posture | [design/TOR_COVER_POSTURE.md](design/TOR_COVER_POSTURE.md) — relay contribution, not a protocol carrier (TRC) |
+| Daemon chain-store invariants (`SI-`) | [design/STORE_INVARIANT_REGISTER.md](design/STORE_INVARIANT_REGISTER.md) — what the Rust store must hold regardless of consensus; never a consensus rule (C2-R8) |
 | Staker operations | [STAKER_OPERATOR_GUIDE.md](STAKER_OPERATOR_GUIDE.md) |
 
 Identifier collisions (Phase 2 vs Bond-PR 2, and the rest): [design/IMPLEMENTATION_INDEX.md](design/IMPLEMENTATION_INDEX.md).

@@ -275,6 +275,21 @@
   contract (one 404 for every complete-head miss; two personas
   header-identical) is unchanged.
 
+- **Consensus rules leave the storage layer (`C2-R8`, design ruling; no
+  runtime change in this release).** The Rust chain store will never enforce
+  a consensus rule: the validator crate alone mints the `ChainValid` the
+  store's connect path accepts, a store-side constraint breach is
+  `StoreInvariantViolated` (fatal — a validator hole), never an "invalid
+  block", and that conversion is banned and CI-gated
+  (`check_store_error_conversion_ban.py`). The eight rules the C++ LMDB write
+  path enforced by side effect (`MDB_NODUPDATA` as the double-spend check
+  among them) are ruled — one minted as the intra-block key-image rule
+  `CEN-L1`, six dissolved or re-homed as store invariants in the new
+  [`STORE_INVARIANT_REGISTER.md`](design/STORE_INVARIANT_REGISTER.md)
+  (`SI-1…SI-8`, gated by `check_store_invariant_register.py`), one's write
+  semantics routed to batch `R8b`
+  ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](design/CONSENSUS_C2_R8_STORE_PLACEMENT.md)).
+
 ## [3.1.0-alpha.8] - 2026-09-10
 
 ### Added
