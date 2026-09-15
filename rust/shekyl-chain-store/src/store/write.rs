@@ -40,7 +40,17 @@
 //! handle. Typed `properties` cells are registers and are written
 //! through [`upsert_property`](WriteBatch::upsert_property). Multimap
 //! tables are sets of values per key: there is no overwrite to declare,
-//! so they open raw.
+//! so they open as a [`SetTable`] with one `insert` that says whether the
+//! member was new.
+//!
+//! # The pop journal
+//!
+//! Every one of those verbs journals its own pre-image while the batch is
+//! recording ([`record_undo`](WriteBatch::record_undo), S-CHAIN-W); the
+//! recording's `seal` writes `undo_log[height]`, and
+//! [`replay_undo`](WriteBatch::replay_undo) walks such a row backwards
+//! (`store::undo`). A recording that is dropped unsealed makes the batch
+//! refuse to commit — writes with no pre-images never land.
 //!
 //! # Poison
 //!
@@ -57,18 +67,20 @@ use core::cell::Cell;
 use core::marker::PhantomData;
 
 use redb::{
-    Key, MultimapTable, MultimapTableDefinition, MultimapTableHandle, TableDefinition, TableHandle,
+    Key, MultimapTableDefinition, MultimapTableHandle, ReadableTable, TableDefinition, TableHandle,
     Value, WriteTransaction,
 };
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
-use crate::codec::{ChainState, PropertyCell};
-use crate::schema::PROPERTIES;
+use crate::codec::{ChainState, PropertyCell, UndoEntry};
+use crate::schema::{self, PROPERTIES};
 
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
-use super::keyed::{InsertTable, UpsertTable};
+use super::keyed::{Handles, InsertTable, UpsertTable};
+use super::set::SetTable;
 use super::shared::Shared;
+use super::undo::{self, Journal, Recording, Replayed};
 
 /// The batch's fatal latch.
 ///
@@ -124,6 +136,7 @@ pub struct WriteBatch<'store, 'id> {
     apply_policy: ApplyPolicy,
     shared: &'store Shared,
     poison: Poison,
+    journal: Journal,
     _brand: PhantomData<fn(&'id ()) -> &'id ()>,
 }
 
@@ -138,7 +151,19 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             apply_policy,
             shared,
             poison: Poison::default(),
+            journal: Journal::default(),
             _brand: PhantomData,
+        }
+    }
+
+    /// The latch, the journal and `name`'s ordinal, for a handle to write
+    /// through.
+    fn handles(&self, name: &str) -> Handles<'_> {
+        Handles {
+            poison: &self.poison,
+            journal: &self.journal,
+            ordinal: schema::ordinal_of(name),
+            name: name.into(),
         }
     }
 
@@ -211,9 +236,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         V: Value + 'static,
     {
         self.admit(definition.name())?;
+        let handles = self.handles(definition.name());
         self.txn()
             .open_table(definition)
-            .map(|table| InsertTable::new_insert(table, &self.poison, row))
+            .map(|table| InsertTable::new_insert(table, handles, row))
             .map_err(|e| EngineError::Table(e).into())
     }
 
@@ -249,19 +275,20 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         V: Value + 'static,
     {
         self.admit(definition.name())?;
+        let handles = self.handles(definition.name());
         self.txn()
             .open_table(definition)
-            .map(|table| UpsertTable::new_upsert(table, &self.poison))
+            .map(|table| UpsertTable::new_upsert(table, handles))
             .map_err(|e| EngineError::Table(e).into())
     }
 
     /// Open a multimap table for writing. Same refusals as
     /// [`open_insert_table`](Self::open_insert_table).
     ///
-    /// The handle is raw: a multimap is a set of values per key, so an
-    /// insert either adds a member or finds it present — there is no value
-    /// to overwrite and no verb to declare (C2-R8 §7.3 is about keyed
-    /// tables).
+    /// A multimap is a set of members per key, so an insert either adds a
+    /// member or finds it present — there is no value to overwrite and no
+    /// verb to declare (C2-R8 §7.3 is about keyed tables). The handle
+    /// journals an added member while the batch is recording.
     ///
     /// # Errors
     ///
@@ -270,14 +297,16 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     pub fn open_multimap_table<'txn, K, V>(
         &'txn self,
         definition: MultimapTableDefinition<'_, K, V>,
-    ) -> Result<MultimapTable<'txn, K, V>, StoreError>
+    ) -> Result<SetTable<'txn, K, V>, StoreError>
     where
         K: Key + 'static,
         V: Key + 'static,
     {
         self.admit(definition.name())?;
+        let handles = self.handles(definition.name());
         self.txn()
             .open_multimap_table(definition)
+            .map(|table| SetTable::new(table, handles))
             .map_err(|e| EngineError::Table(e).into())
     }
 
@@ -331,6 +360,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// });
     /// ```
     ///
+    /// While the batch is recording a pop journal, the cell's prior bytes
+    /// (or their absence) are journaled so `pop` restores the register.
+    ///
     /// # Errors
     ///
     /// [`EngineError::Table`] / [`EngineError::Storage`] if the engine refuses.
@@ -338,7 +370,74 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     where
         C: PropertyCell<Scope = ChainState>,
     {
-        header::put::<C>(self.txn(), value)
+        let prior = if self.journal.is_recording() {
+            let table = self
+                .txn()
+                .open_table(PROPERTIES)
+                .map_err(EngineError::Table)?;
+            let prior = table
+                .get(C::KEY)
+                .map_err(EngineError::Storage)?
+                .map(|guard| Box::<[u8]>::from(guard.value()));
+            Some(prior)
+        } else {
+            None
+        };
+        header::put::<C>(self.txn(), value)?;
+        if let Some(prior) = prior {
+            self.handles(PROPERTIES.name())
+                .journal(|table| UndoEntry::Replaced {
+                    table,
+                    key: Box::from(C::KEY.as_bytes()),
+                    prior,
+                });
+        }
+        Ok(())
+    }
+
+    /// Begin journaling this batch's declared writes as the pre-images of
+    /// `height`, until the returned [`Recording`] is sealed.
+    ///
+    /// `connect`'s first act; its last is `seal`, which writes
+    /// `undo_log[height]`. There is at most one live recording per batch
+    /// (a second `record_undo` before `seal` is a bug in this crate and
+    /// panics), and a recording dropped unsealed makes `complete` refuse
+    /// with [`StoreCannot::UndoUnsealed`].
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "S-CHAIN-W staging: the producer is commit 6 (`connect`), same PR; the store's tests are the callers until then"
+        )
+    )]
+    pub(crate) fn record_undo(&self, height: u64) -> Recording<'_> {
+        Recording::begin(&self.journal, &self.poison, self.txn(), height)
+    }
+
+    /// Reverse-replay `undo_log[height]` and delete the row.
+    ///
+    /// `pop`'s mechanism (C2-R8 Q5). Every SI-6 / SI-7 outcome poisons the
+    /// batch. A recording must not be live: replay is not itself journaled.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreInvariant::UndoLogIncoherent`] (SI-6) if an entry's target is
+    /// not in the state the entry left; [`StoreInvariant::CellCorrupt`]
+    /// (SI-7) if the row does not decode or names a table the catalogue
+    /// lacks; engine errors.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "S-CHAIN-W staging: the producer is commit 7 (`pop`), same PR; the store's tests are the callers until then"
+        )
+    )]
+    pub(crate) fn replay_undo(&self, height: u64) -> Result<Replayed, StoreError> {
+        assert!(
+            !self.journal.is_recording(),
+            "replay_undo while a recording is live: pop does not run inside connect"
+        );
+        undo::replay(self.txn(), &self.poison, height)
     }
 
     /// Finish the batch given the closure's `outcome`.
@@ -350,6 +449,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     pub(super) fn complete<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
         if let Some(row) = self.poison.armed() {
             return Err(StoreError::from(row).into());
+        }
+        if let Some(height) = self.journal.abandoned() {
+            return Err(StoreError::from(undo::unsealed(height)).into());
         }
         match outcome {
             Ok(value) => {

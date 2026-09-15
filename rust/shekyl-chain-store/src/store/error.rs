@@ -36,7 +36,7 @@
 use crate::apply_policy::ArchivalFamily;
 use crate::codec::SchemaVersion;
 
-pub use super::invariant::{CellFault, StoreInvariant};
+pub use super::invariant::{CellFault, StoreInvariant, UndoFault};
 
 /// Why a store operation failed, by class.
 ///
@@ -237,6 +237,15 @@ pub enum StoreCannot {
     /// This family's apply is stubbed under the store's policy, so the write
     /// path must not open its table (opening a write table creates it).
     FamilyStubbed(ArchivalFamily),
+    /// A pop-journal recording for `height` was begun in this batch and
+    /// dropped without being sealed, so the chain-state writes it recorded
+    /// would land with no `undo_log` row to reverse them. The batch refuses
+    /// to commit. Only the store's own `connect` begins a recording, so
+    /// this names a bug in that path, never a caller's misuse.
+    UndoUnsealed {
+        /// The height whose recording was abandoned.
+        height: u64,
+    },
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -268,6 +277,11 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "apply of {} is stubbed under this store's policy",
                 family.table()
+            ),
+            Self::UndoUnsealed { height } => write!(
+                f,
+                "the pop-journal recording for height {height} was dropped unsealed; the batch \
+                 will not commit chain-state writes that have no undo row"
             ),
         }
     }

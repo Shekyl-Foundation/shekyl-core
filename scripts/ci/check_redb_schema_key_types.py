@@ -46,6 +46,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from check_redb_schema_bijection import parse_rust_only  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 LMDB = ROOT / "src/blockchain_db/lmdb/db_lmdb.cpp"
 SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
@@ -206,11 +209,23 @@ def main():
     if not names:
         report([f"{LMDB.name}: parsed ZERO tables — subject missing"])
 
+    # Rust-only tables (schema.rs `RUST_ONLY_TABLES`) have no LMDB flags to
+    # derive a key type from, so they are outside this gate's domain — but
+    # only when named there. An unnamed extra is still red below: naming a
+    # table Rust-only is the bijection gate's decision, and this gate reads
+    # the same map rather than growing a second list.
+    rust_only = parse_rust_only(schema)
+
     checked = 0
+    skipped = []
     for multimap, key, value, name in defs:
+        if name in rust_only and name not in facts:
+            skipped.append(name)
+            continue
         if name not in facts:
             failures.append(
-                f"{name}: TableDefinition has no matching X-macro/open facts"
+                f"{name}: TableDefinition has no matching X-macro/open facts "
+                f"(and is not named in RUST_ONLY_TABLES)"
             )
             continue
         flags, cmps, _const = facts[name]
@@ -248,6 +263,8 @@ def main():
     print(
         f"redb key-type ordering: {len(defs)} definitions parsed, {checked} ordering "
         f"constraints checked against db_lmdb.cpp, all satisfied"
+        + (f"; {len(skipped)} Rust-only table(s) outside the LMDB-flag domain: "
+           f"{', '.join(skipped)}" if skipped else "")
     )
 
 
