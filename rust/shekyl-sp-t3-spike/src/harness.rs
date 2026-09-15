@@ -164,26 +164,37 @@ pub const NEWNYM_MIN_SPACING: Duration = Duration::from_secs(10);
 /// How long a managed tor may take to bootstrap before bring-up gives up.
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// The apparatus's **pinned** derivation seed — the harness takes no seed from
-/// its caller, by design.
+/// The apparatus's derivation seed: **fresh OS entropy per apparatus**, never
+/// taken from the caller — by design.
 ///
 /// SPIKE-F-4 relocated the onion-key derivation onto the *production* GF-9 path
 /// ([`derive_onion_identity`] → `shekyl_crypto_pq::archival_p::derive_p_hs_id_seed`).
 /// A consequence the old spike-local label used to mask: feeding a real wallet's
 /// `master_seed_64` here would now serve at the persona's **actual production
 /// `.onion`** — the co-activation Model D forbids (`BOND_CONSTRUCTION.md:667`,
-/// one persona on the wire per wallet). The apparatus is *retained* (rule 15) for
-/// the owed Tor hop-latency measurement, so it will be run again; pinning the
-/// seed makes "never point this at a wallet" an enforced invariant rather than
-/// operator discipline. Distinct personas come from the `p_slot` sweep, not from
-/// distinct seeds, so parameterizing the seed bought nothing the sweep does not.
+/// one persona on the wire per wallet). The harness therefore mints its own seed
+/// and exposes no way to supply one, which makes "never point this at a wallet"
+/// an enforced invariant rather than operator discipline. Distinct personas
+/// come from the `p_slot` sweep, not from distinct seeds.
 ///
-/// Kept **private**: it is the harness's internal fixed context, not public API —
-/// a `publish = false` spike must not invite external coupling to a test seed. The
-/// derivation network/format are pinned alongside it at the one call site
-/// (`Mainnet`/`Bip39`; the `.onion` value is irrelevant to a latency measurement,
-/// so any fixed context works, and this one matches the KAT's slot-0 vector).
-const APPARATUS_PINNED_SEED: [u8; 64] = [0x11u8; 64];
+/// The seed used to be a pinned constant (`[0x11; 64]`), which had a hazard the
+/// (c) bring-up found: every apparatus instance then published the **same**
+/// eight `.onion`s. Two instances alive at once (a `live_apparatus` run beside
+/// a `pd-f2-measure` run), or one instance beside the orphaned persona tors of
+/// a crashed predecessor, race their descriptors at the HSDirs — and the
+/// client reaches whichever won, i.e. a persona with a *different* ephemeral
+/// attestation key (`BadCountersignature`) or a dead endpoint (`Circuit`).
+/// Onion-service descriptors live for hours at the HSDirs, so the poisoning
+/// outlasts the process that caused it. A per-apparatus seed makes the race
+/// unreachable; the `.onion` values are irrelevant to a latency measurement,
+/// so nothing is lost. The derivation network/format stay pinned at the one
+/// call site (`Mainnet`/`Bip39`).
+fn fresh_apparatus_seed() -> [u8; 64] {
+    let mut seed = [0u8; 64];
+    getrandom::getrandom(&mut seed)
+        .expect("OS entropy source failed; the apparatus cannot derive persona onions");
+    seed
+}
 
 /// One managed tor process: its control actor and the SOCKS port it listens on.
 struct ManagedInstance {
@@ -604,19 +615,16 @@ impl Apparatus {
         }
         let client_tor = client_tor.ok_or(ApparatusError::Bootstrap)?;
 
+        // One derivation context for this apparatus (see
+        // `fresh_apparatus_seed`): its own seed under mainnet/bip39. Explicit
+        // here, not hidden in the derivation.
+        let seed = fresh_apparatus_seed();
         let mut personas = Vec::new();
         for (slot, tor) in serving_tors.into_iter().enumerate() {
             let tor = tor.ok_or(ApparatusError::Bootstrap)?;
             let slot = PSlot::from_raw(u32::try_from(slot).expect("slot fits u32"));
-            // One pinned derivation context (see `APPARATUS_PINNED_SEED`): the
-            // fixed test seed under mainnet/bip39. Explicit here, not hidden in
-            // the derivation.
-            let identity = derive_onion_identity(
-                &APPARATUS_PINNED_SEED,
-                DerivationNetwork::Mainnet,
-                SeedFormat::Bip39,
-                slot,
-            );
+            let identity =
+                derive_onion_identity(&seed, DerivationNetwork::Mainnet, SeedFormat::Bip39, slot);
             let service_id = identity.service_id().clone();
             // The "bond record" the client leg will dial from: the endpoint
             // column is the onion's public key, and the two encodings of it

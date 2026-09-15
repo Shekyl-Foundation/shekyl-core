@@ -30,6 +30,10 @@ shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
 # The harness holds the control actor's `ActorRef` to issue ADD_ONION; kameo is
 # the workspace's actor stack, already pinned there.
 kameo = { workspace = true }
+# The per-apparatus derivation seed (`harness::fresh_apparatus_seed`): OS
+# entropy, so no two apparatus instances ever publish the same `.onion`. Same
+# crate and pin as `shekyl-p-fetch`'s request nonce.
+getrandom = "0.2"
 # The client leg: the **production** daemon fetch client (`SF-D5` header,
 # `SF-D8` countersignature verify, `SF-D6` typed outcomes). `shekyl-p-transport`
 # used to sit here; its `blocking_get` cannot carry the request header, so every
