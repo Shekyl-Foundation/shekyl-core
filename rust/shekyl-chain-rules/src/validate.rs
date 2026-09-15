@@ -45,6 +45,50 @@ use crate::view::ChainView;
 /// The miner transaction and each listed transaction are judged by
 /// [`tx_form`] then [`tx_against`]; a refusal from either is re-homed from
 /// [`TxSlot::Lone`] to the slot the transaction occupies.
+///
+/// The verdict inherits the view's brand. Judged against one view, it cannot
+/// be connected under another — the store's `connect` takes a
+/// `ChainValid<'id>` for *its* `'id`, and a verdict from a different
+/// transaction's view does not unify with it:
+///
+/// ```compile_fail
+/// use core::convert::Infallible;
+/// use core::marker::PhantomData;
+/// use shekyl_chain_rules::*;
+/// use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
+///
+/// struct View<'id>(PhantomData<fn(&'id ()) -> &'id ()>);
+/// impl<'id> ChainView<'id> for View<'id> {
+///     type Fault = Infallible;
+///     fn has_key_image(&self, _: &KeyImage) -> Result<bool, Infallible> {
+///         Ok(false)
+///     }
+///     fn block_at(&self, _: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
+///         Ok(AtHeight::AboveTip)
+///     }
+/// }
+/// // Each call brands a fresh view, as the store's `write` does.
+/// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
+///     f(View(PhantomData))
+/// }
+/// // The store's `connect`: the verdict must carry *this* view's brand.
+/// fn connect<'id>(_view: &View<'id>, _valid: ChainValid<'id>) {}
+/// fn candidate() -> Candidate {
+///     unimplemented!()
+/// }
+///
+/// with_view(|outer| {
+///     with_view(|inner| {
+///         let valid = validate(candidate(), &inner, &RuleSet::GENESIS)
+///             .unwrap()
+///             .unwrap();
+///         connect(&outer, valid); // judged against `inner`: does not compile
+///     })
+/// });
+/// ```
 pub fn validate<'id, V: ChainView<'id>>(
     candidate: Candidate,
     view: &V,

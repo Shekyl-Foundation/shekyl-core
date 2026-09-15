@@ -58,6 +58,11 @@ mod validate;
 mod verdict;
 mod view;
 
+/// The negative-fixture harness (§8.2). Test-only: an in-memory `ChainView`
+/// with the `assert_refused` / `boundary_pair` idiom every rule test uses.
+#[cfg(test)]
+mod harness;
+
 pub use block::{Candidate, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
