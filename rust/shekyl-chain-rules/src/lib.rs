@@ -52,12 +52,18 @@
 
 mod block;
 mod census;
+mod coverage;
 mod rule_set;
+mod validate;
+mod verdict;
 mod view;
 
 pub use block::{Candidate, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
+pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use rule_set::{AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
+pub use validate::{tx_against, tx_form, validate};
+pub use verdict::{ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{AtHeight, ChainView, RecordedBlock};
 
 #[cfg(test)]

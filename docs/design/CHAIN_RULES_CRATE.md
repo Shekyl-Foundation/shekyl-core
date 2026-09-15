@@ -193,7 +193,7 @@ style, `#[cfg(test)] #[path = "…"] mod …;`):
 
 ```text
 rust/shekyl-chain-rules/
-├── Cargo.toml            shekyl-types, shekyl-wire, shekyl-address, thiserror
+├── Cargo.toml            shekyl-types, shekyl-wire, shekyl-address
 └── src/
     ├── lib.rs            //! crate docs (staging note, consumer map, graded-oracle hook), compile_fail pins
     ├── census.rs         Flag, RowStatus, Row (sealed), census_rows!, CenRow, PolicyRow
@@ -201,10 +201,10 @@ rust/shekyl-chain-rules/
     ├── view.rs           ChainView<'id>, AtHeight<T>, RecordedBlock
     ├── rule_set.rs       RuleSetId, RuleSet, RuleSchedule; AdmissionPolicyId, AdmissionPolicy
     ├── block.rs          Candidate (input), ValidatedBlock (payload)
-    ├── verdict.rs        ChainValid<'id>, InvalidBlock, Locus, TxSlot
+    ├── verdict.rs        ChainValid<'id>, InvalidBlock, Locus, TxSlot, Verdict<T>
     ├── validate.rs       validate, tx_form, tx_against
     ├── harness.rs        #[cfg(any(test, doctest))] MockChain / MockView<'id>, boundary_pair, assert_refused
-    └── *_tests.rs        census_tests, coverage_tests, rule_set_tests, validate_tests, harness_probe_tests
+    └── *_tests.rs        census_tests, coverage_tests, rule_set_tests, verdict_tests, validate_tests, harness_probe_tests
 ```
 
 ### 4.1 `Flag`, `RowStatus`, `Row`, `CenRow`, `PolicyRow` (`census.rs`)
@@ -398,14 +398,15 @@ pub struct Candidate { pub block: shekyl_wire::Block, pub transactions: Vec<shek
 /// The typed payload a `ChainValid` wraps. Constructed only by `validate`.
 pub struct ValidatedBlock {
     hash: BlockHash,
-    header: shekyl_wire::BlockHeader,
-    miner_tx: (TxHash, shekyl_wire::Transaction),
+    block: shekyl_wire::Block,          // kept whole: what the store persists is what the rules saw
+    miner_tx_hash: TxHash,
     transactions: Vec<(TxHash, shekyl_wire::Transaction)>,   // ruling Q4/L4: one value per identity
 }
 impl ValidatedBlock {
     pub fn hash(&self) -> BlockHash;
+    pub fn block(&self) -> &shekyl_wire::Block;
     pub fn header(&self) -> &shekyl_wire::BlockHeader;
-    pub fn miner_tx(&self) -> &(TxHash, shekyl_wire::Transaction);
+    pub fn miner_tx(&self) -> (TxHash, &shekyl_wire::Transaction);
     pub fn transactions(&self) -> &[(TxHash, shekyl_wire::Transaction)];
 }
 ```
@@ -415,6 +416,16 @@ In increment 1, `validate` derives `hash` and every `TxHash` (`Block::hash`,
 against `block.transaction_hashes` — that is a 4.G rule and lands with slice 7;
 empty coverage says so. Identity derivation is not a rule (it is CEN-B6's
 definition applied), so it is not a row and does not touch coverage.
+
+The `Block` is kept **whole** rather than decomposed into header + miner tx
+(the round-2 sketch): the header's `transaction_hashes` are part of what
+`Block::hash` commits to and part of what S-CHAIN-W persists, and until the
+4.G body rule lands nothing has established that they equal the supplied
+bodies' hashes — so a store reconstructing the block from `(header, miner_tx,
+transactions)` could write a blob that differs from the candidate the rules
+judged. Keeping the block as received removes the reconstruction; the miner
+tx is then reached through it (`miner_tx()` returns `(TxHash, &Transaction)`)
+rather than duplicated.
 
 ### 4.5 `Coverage<R>` (`coverage.rs`); `ChainValid<'id>`, `InvalidBlock`, `Locus` (`verdict.rs`)
 
@@ -456,27 +467,33 @@ impl<'id> ChainValid<'id> {
     pub fn rule_set_id(&self) -> RuleSetId;
     pub fn coverage(&self) -> &RuleCoverage;
 }
-// no Clone (a second copy of a brand-bearing token has no meaning).
+// Debug, no Clone (a second copy of a brand-bearing token has no meaning). The
+// brand is invariant: a `compile_fail` doctest pins that `ChainValid<'long>`
+// does not coerce to `ChainValid<'short>` even with `'long: 'short`.
 
 /// Where in the candidate a refusal points. One verdict type for block-, tx- and
 /// input-level refusals (handoff §2: "prefer one verdict type with a locus field").
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TxSlot { Miner, Listed(u32), Lone }     // Lone: judged by tx_form/tx_against outside a block (the pool)
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Locus { Block, Tx { slot: TxSlot }, Input { slot: TxSlot, input: u32 } }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TxSlot { Miner, Listed(usize), Lone }   // Lone: judged by tx_form/tx_against outside a block (the pool)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Locus { Block, Tx { slot: TxSlot }, Input { slot: TxSlot, input: usize } }
+// Positions are `usize`: a locus indexes the candidate's in-memory `Vec`s, and
+// is not a wire field (the round-2 sketch's `u32` was). Both `Display`:
+// `tx #2 input #0`, `miner tx`, `block`.
 
 /// The verdict. Names the census row; carries nothing a store error could map onto.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("{rule} refused at {locus:?}")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct InvalidBlock { pub rule: CenRow, pub locus: Locus }
+// Display `"{rule} refused at {locus}"` and `std::error::Error` are written by
+// hand (eight lines); `thiserror` is not pulled into the crate for them.
+
+/// Judged-and-refused (`Err`) or judged-and-passed (`Ok`). Never a fault.
+pub type Verdict<T> = Result<T, InvalidBlock>;
 ```
 
 ### 4.6 `validate`, `tx_form`, `tx_against` (`validate.rs`)
 
 ```rust
-/// Judged-and-refused (`Err`) or judged-and-passed (`Ok`). Never a fault.
-pub type Verdict<T> = Result<T, InvalidBlock>;
-
 pub fn validate<'id, V: ChainView<'id>>(
     candidate: Candidate, view: &V, rule_set: &RuleSet,
 ) -> Result<Verdict<ChainValid<'id>>, V::Fault>;
