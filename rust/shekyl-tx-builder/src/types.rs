@@ -162,9 +162,10 @@ pub struct LeafEntry {
     /// Pedersen commitment C to the output amount.
     #[serde(with = "hex_bytes32")]
     pub commitment: [u8; 32],
-    /// PQC leaf hash H(pqc_pk) for this output.
+    /// The leaf's 4th scalar for this output: `CM.x`, the Wei25519
+    /// x-coordinate of its PQC leaf commitment (`PL-D3`).
     #[serde(with = "hex_bytes32")]
-    pub h_pqc: [u8; 32],
+    pub cm_x: [u8; 32],
 }
 
 /// A spendable input with its secret keys, curve tree membership proof path,
@@ -196,9 +197,12 @@ pub struct SpendInput {
     /// Pedersen commitment mask z where C = zG + amount*H.
     #[serde(with = "hex_bytes32")]
     pub commitment_mask: [u8; 32],
-    /// Hash of the PQC public key for this output: H(pqc_pk).
-    #[serde(with = "hex_bytes32")]
-    pub h_pqc: [u8; 32],
+    // The input's own PQC leaf commitment `CM = k·G_k + r·J` and blind `r`
+    // (`PL-D3`) are not fields: the signer re-derives both from `combined_ss`
+    // and `output_index` (`shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf`) —
+    // the same derivation that produced the published `0x07` entry — and
+    // checks the derived `CM.x` against this output's entry in `leaf_chunk`
+    // before proving ([`crate::error::TxBuilderError::PqcLeafMismatch`]).
     /// Combined KEM shared secret (X25519 || ML-KEM) for PQC key derivation.
     /// Zeroized on drop.
     #[serde(with = "hex_blob")]
@@ -207,7 +211,7 @@ pub struct SpendInput {
     pub output_index: u64,
 
     /// All outputs in the same Selene leaf chunk as this input.
-    /// Each entry contains (O, I, C, h_pqc). Must be non-empty and contain
+    /// Each entry contains (O, I, C, CM.x). Must be non-empty and contain
     /// at most `SELENE_CHUNK_WIDTH` entries.
     pub leaf_chunk: Vec<LeafEntry>,
     /// Selene (C1) branch layers, ordered bottom-to-top.

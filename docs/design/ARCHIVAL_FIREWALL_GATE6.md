@@ -560,7 +560,10 @@ artifact where one exists.
       scan contexts; §9.6). **→ R5.**
 - [x] **C-1 forgery negative (emission vin ML-DSA equality check):** a backing input that
       proves leaf membership while supplying a `pqc_pk` whose `H(pqc_pk)` does **not** equal the
-      leaf-committed extra scalar is **rejected** by the emission vin verifier. **code (PR #277,
+      leaf-committed extra scalar is **rejected** by the emission vin verifier. *(`PL-D3`,
+      2026-09-14: the equality moved into the proof — the leaf commitment is opened to the
+      supplied key's point in-circuit and the vin field is gone; the negative holds as a proof
+      rejection.)* **code (PR #277,
       `dev` `13c368707`):** `emission_verify.rs`; quantum spend-authority no longer classical-only
       (§9.8 C-1 discharged). The honest-path stressnet "staking lifecycle completes 100 full
       cycles" criterion + the blob-boundary arm remain the **regtest e2e residue** (E4/E5 gate,
@@ -899,16 +902,16 @@ leg. Because there is **no key image** on this path, the entire quantum spend-au
 rests on one binding: the membership proof and the ML-DSA check must reference the **same proven
 leaf at the same input index**, not merely each reference *a* leaf. The mechanism that delivers
 this ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7, verified at source 2026-06-13): the
-`Fcmp` membership leg commits `H(pqc_pk)` as an **in-circuit extra leaf scalar**
-(`fcmps::Input::with_extra_scalars`) on the proven leaf, and the per-input challenge binds the
-input index (§4.2/§8.2); the vin layer recomputes `H(pqc_pk)` from the supplied key and demands
-equality with *that leaf's* committed scalar. An attacker who proves membership of a victim's
-leaf cannot substitute their own `pqc_pk` (its hash would not match the leaf-committed scalar),
-and cannot forge ML-DSA under the victim's `pqc_pk`. **Caveat (C-1) — DISCHARGED (#277; stale
-"not-yet-landed" wording corrected by SA-6):** the in-circuit half is implemented in
-`FcmpMembershipOnly`, and the **vin-layer ML-DSA equality check is landed consensus** —
-`emission_verify.rs::emission_vin_verify_auth` recomputes `H(pqc_pk)` from the supplied key and
-demands equality with the leaf-committed scalar (the CBOM §5 surface-2 evidence). Only the
+`Fcmp` membership leg opens the proven leaf's PQC commitment `CM` to the supplied key's point
+`K = H_ℓ(pqc_pk)·G_k` **in-circuit** (`fcmps::Input::new(.., K)`; `PL-D3`, 2026-09-14 — before
+it, the leaf committed the hash `H(pqc_pk)` as a public extra scalar and the vin layer compared
+it), and the per-input challenge binds the input index (§4.2/§8.2). An attacker who proves
+membership of a victim's leaf cannot substitute their own `pqc_pk` (the commitment would not
+open to its point), and cannot forge ML-DSA under the victim's `pqc_pk`. **Caveat (C-1) —
+DISCHARGED (#277; stale "not-yet-landed" wording corrected by SA-6; mechanism moved into the
+proof by `PL-D3`):** the binding is landed consensus inside `FcmpMembershipOnly`, and
+`emission_verify.rs::emission_vin_verify_auth` verifies the hybrid signature under the same
+`backing_pubkey` step 6 opened the leaf to (the CBOM §5 surface-2 evidence). Only the
 bond-record **identity** (`P_pubkey`) is `P`'s account-level hybrid
 material; the spend authority is per-output, per the table above.
 
@@ -963,8 +966,9 @@ note).
   contract rests entirely on the membership proof and the ML-DSA check binding the **same
   proven leaf at the same input index**. **Verified at source (2026-06-13,
   [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9):** the in-circuit
-  `H(pqc_pk)` extra-leaf-scalar binding (`with_extra_scalars`) is index-bound and **implemented**
-  in `FcmpMembershipOnly`; the **vin-layer ML-DSA equality check** (recompute `H(pqc_pk)` from
+  leaf binding is index-bound and **implemented** in `FcmpMembershipOnly` (since `PL-D3`, as an
+  in-circuit commitment opening to the supplied key's point rather than a public `H(pqc_pk)`
+  extra scalar); the **vin-layer ML-DSA equality check** (recompute `H(pqc_pk)` from
   the supplied key, demand equality with the leaf-committed scalar) was a **hard merge blocker**
   named in `FCMP_MEMBERSHIP_ONLY.md` §7/§9 and `REWARD_EMISSION_LEG.md` §12 — **DISCHARGED
   (#277; stale wording corrected by SA-6)**: it is landed, tested consensus at
@@ -3695,7 +3699,7 @@ an R5 S-2 ledger row. R4 remains open on conditions (i) and (ii) only — F-D1 a
   as a **named carried dependency** (§9.8) rather than a citation that read as closed; verified
   at source ([`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md) §7/§8.2/§9) that the membership
   proof and ML-DSA check bind the **same proven leaf at the same input index** (in-circuit
-  `H(pqc_pk)` extra scalar, index-bound — implemented), and that the **vin-layer ML-DSA equality
+  leaf binding, index-bound — implemented; since `PL-D3` an in-circuit opening), and that the **vin-layer ML-DSA equality
   check is a hard merge blocker** preceding the `archival_p` impl + emission
   verifier *(both since DISCHARGED — #277 landed the check; wording corrected by SA-6)*;
   sharpened the §9.6 emission row and membership-only paragraph accordingly. **C-2** —

@@ -281,22 +281,24 @@ fn build_funding_setup() -> FundingSetup {
 
     // Genesis coinbase: the spent output at vout 0 plus decoys — one chunk
     // overflowed, so the tree is depth 2. Every decoy shares the spent
-    // output's (valid) h_pqc; distinct O/C points keep leaf hashes distinct.
+    // output's (valid) 0x07 entry; distinct O/C points keep leaf hashes
+    // distinct.
+    let spent_entry = spent.pqc_leaf.entry_bytes();
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
-    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 32);
+    let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
         output_key: spent.output_key,
         commitment: Some(spent.commitment),
         target: TargetKind::TaggedKey,
     });
-    genesis_blob.extend_from_slice(&spent.h_pqc);
+    genesis_blob.extend_from_slice(&spent_entry);
     for _ in 1..TREE_OUTPUTS {
         genesis_outputs.push(RawOutput {
             output_key: random_point(&mut rng),
             commitment: Some(random_point(&mut rng)),
             target: TargetKind::TaggedKey,
         });
-        genesis_blob.extend_from_slice(&spent.h_pqc);
+        genesis_blob.extend_from_slice(&spent_entry);
     }
 
     // Consecutive block ingestion with one decoy coinbase per filler block;
@@ -317,12 +319,12 @@ fn build_funding_setup() -> FundingSetup {
                     commitment: Some(filler_commitment),
                     target: TargetKind::TaggedKey,
                 }],
-                spent.h_pqc.to_vec(),
+                spent_entry.to_vec(),
             )
         };
         let txs = [TxLeafInputs {
             is_miner: true,
-            leaf_hash_blob: Some(blob.as_slice()),
+            leaf_entry_blob: Some(blob.as_slice()),
             outputs: outputs.as_slice(),
         }];
         client
@@ -376,7 +378,7 @@ fn build_funding_setup() -> FundingSetup {
             output_key: cl.output_key,
             key_image_gen: cl.key_image_gen,
             commitment: cl.commitment,
-            h_pqc: cl.h_pqc,
+            cm_x: cl.cm_x,
         })
         .collect();
     let spend_input = SpendInput {
@@ -386,7 +388,6 @@ fn build_funding_setup() -> FundingSetup {
         spend_key_x: *ki.spend_secret_x,
         spend_key_y: spent.y,
         commitment_mask: spent.z,
-        h_pqc: spent.h_pqc,
         combined_ss: combined_ss.0.to_vec(),
         output_index: spent_index,
         leaf_chunk,

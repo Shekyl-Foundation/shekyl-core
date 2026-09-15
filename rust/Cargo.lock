@@ -3741,6 +3741,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-archival-fetch-sched"
+version = "3.1.0"
+dependencies = [
+ "shekyl-p-fetch",
+]
+
+[[package]]
 name = "shekyl-archival-retention"
 version = "3.1.0"
 dependencies = [
@@ -3937,6 +3944,7 @@ dependencies = [
  "redb",
  "serde_json",
  "shekyl-consensus",
+ "shekyl-crypto-pq",
  "shekyl-curve-io",
  "shekyl-fcmp",
  "tempfile",
@@ -3946,6 +3954,7 @@ dependencies = [
 name = "shekyl-daemon-image"
 version = "3.1.0"
 dependencies = [
+ "shekyl-archival-fetch-sched",
  "shekyl-daemon-rpc",
  "shekyl-ffi",
 ]
@@ -4173,6 +4182,7 @@ dependencies = [
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
  "serde",
+ "serde_json",
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp-proofs",
@@ -4743,6 +4753,7 @@ dependencies = [
  "axum",
  "base64",
  "clap",
+ "curve25519-dalek",
  "hex",
  "http",
  "http-body-util",
@@ -4751,6 +4762,7 @@ dependencies = [
  "serde_json",
  "shekyl-address",
  "shekyl-crypto-pq",
+ "shekyl-curve-primitives",
  "shekyl-engine-core",
  "shekyl-engine-file",
  "shekyl-engine-prefs",

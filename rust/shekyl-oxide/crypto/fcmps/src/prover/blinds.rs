@@ -140,6 +140,23 @@ where
     }
 }
 
+/// The blind `r` over `J` opening the PQC leaf commitment `CM = k·G_k + r·J`
+/// (Shekyl `PL-D3`).
+#[derive(Clone, Zeroize)]
+pub struct KBlind<G: DivisorCurve>(pub(crate) PreparedBlind<G>)
+where
+    G::Scalar: Zeroize + PrimeFieldBits;
+
+impl<G: DivisorCurve> KBlind<G>
+where
+    G::Scalar: Zeroize + PrimeFieldBits,
+{
+    /// Prepare the blind `r` over the generator `J`.
+    pub fn new(J: G, scalar: ScalarDecomposition<G::Scalar>) -> Self {
+        Self(PreparedBlind::new(J, scalar))
+    }
+}
+
 /// All of the blinds used for an output, prepared for usage within the circuit.
 #[allow(clippy::struct_field_names)]
 #[derive(Clone, Zeroize)]
@@ -151,6 +168,7 @@ where
     pub(crate) i_blind: IBlind<G>,
     pub(crate) i_blind_blind: IBlindBlind<G>,
     pub(crate) c_blind: CBlind<G>,
+    pub(crate) k_blind: KBlind<G>,
 }
 
 impl<G: DivisorCurve> OutputBlinds<G>
@@ -163,19 +181,25 @@ where
         i_blind: IBlind<G>,
         i_blind_blind: IBlindBlind<G>,
         c_blind: CBlind<G>,
+        k_blind: KBlind<G>,
     ) -> Self {
         Self {
             o_blind,
             i_blind,
             i_blind_blind,
             c_blind,
+            k_blind,
         }
     }
 
     /// Blind an output.
+    /// `cm` is the spent leaf's PQC commitment point `CM = k·G_k + r·J`; the
+    /// resulting `K = CM - r·J` is the public point the verifier recomputes as
+    /// `k·G_k` from the revealed key.
     pub(crate) fn blind(
         &self,
         output: &Output<G>,
+        cm: G,
     ) -> Result<Input<<G as DivisorCurve>::FieldElement>, FcmpError> {
         // We add the proven results of the blinds to the input tuple to recalculate the output
         // tuple
@@ -187,7 +211,8 @@ where
         // I's blind's blind is not inverted, yet I's blind was prior inverted and remains
         // inverted
         let R = *self.i_blind_blind.0.scalar_mul_and_divisor.point - self.i_blind.v.point.deref();
-        Input::new(O_tilde, I_tilde, R, C_tilde)
+        let K = cm - self.k_blind.0.scalar_mul_and_divisor.point.deref();
+        Input::new(O_tilde, I_tilde, R, C_tilde, K)
     }
 }
 

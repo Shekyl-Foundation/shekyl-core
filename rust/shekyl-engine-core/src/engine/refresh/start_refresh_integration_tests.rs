@@ -1374,7 +1374,7 @@ fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
                 // maturity offset in the client's drain order.
                 leaves: vec![crate::scan::OwnedTxLeaves {
                     is_miner: true,
-                    leaf_hash_blob: Some(blob),
+                    leaf_entry_blob: Some(blob),
                     outputs,
                 }],
             }

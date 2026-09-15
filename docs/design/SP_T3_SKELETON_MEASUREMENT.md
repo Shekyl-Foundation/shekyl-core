@@ -346,7 +346,7 @@ so a short extraction cannot pass unnoticed.
 
 One correctness point the extractor does not paper over: `chunk_outputs_blob`
 carries compressed **Ed25519 points**, while a curve-tree leaf is
-`construct_leaf`'s `O.x ‖ I.x ‖ C.x ‖ h_pqc` over Wei25519 x-coordinates. Serving
+`construct_leaf`'s `O.x ‖ I.x ‖ C.x ‖ CM.x` over Wei25519 x-coordinates. Serving
 the blob verbatim would serve real chain data that is nonetheless *not what a
 persona archives*, so the conversion runs locally through the same function the
 wallet path uses. The blob's `I` is skipped rather than trusted —

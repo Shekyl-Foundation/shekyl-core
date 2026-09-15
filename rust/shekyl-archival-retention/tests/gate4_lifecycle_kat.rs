@@ -208,35 +208,13 @@ fn gate4_emission_phase2_vectors(emission: &Value) {
     );
 }
 
-/// Environment variable that arms [`regenerate_gate4_lifecycle_fixture`]:
-/// `YYYY-MM-DD <rationale>`, the date naming the `docs/V3_WALLET_DECISION_LOG.md`
-/// entry that authorizes moving the pinned wire. The fixture is a self-pinned
-/// tripwire (rule 50): a regenerator that rewrites it on request is a
-/// one-command silencer for a failing pin, so it refuses without a citation
-/// (the `wallet_envelope.rs` `pinned_fixtures_regenerate` shape).
-const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
-
 #[test]
 #[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn regenerate_gate4_lifecycle_fixture() {
-    let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
-    let cited = decision.len() > 11
-        && decision.as_bytes()[..10]
-            .iter()
-            .enumerate()
-            .all(|(i, b)| match i {
-                4 | 7 => *b == b'-',
-                _ => b.is_ascii_digit(),
-            })
-        && decision.as_bytes()[10] == b' ';
-    assert!(
-        cited,
-        "refusing to regenerate the gate-4 lifecycle fixture: set \
-         {PINNED_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
-         docs/V3_WALLET_DECISION_LOG.md entry that authorizes moving it (got: \
-         {decision:?}). Moving a pinned vector is a format decision, not a test \
-         fix — see 50-testing.mdc."
-    );
+    // The fixture is a self-pinned tripwire (rule 50): the shared guard
+    // refuses to move it without a docs/V3_WALLET_DECISION_LOG.md citation.
+    let decision =
+        shekyl_crypto_pq::test_support::regen_decision_or_refuse("the gate-4 lifecycle fixture");
     eprintln!("regenerating the gate-4 lifecycle fixture under decision: {decision}");
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/gate4_lifecycle_kat_v1.json");

@@ -69,10 +69,16 @@ const META_PRUNE_DISABLED: &str = "prune_disabled";
 /// retires that shape with a typed error. Version 4 retires the claim-era
 /// `StakedKey` target (tag 2 in the `leaf_meta` target byte + its
 /// `lock_blocks` extra at bytes 114..122): a ≤3 store may contain tag-2
-/// rows this build cannot represent. Pre-genesis disposition for any
-/// mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
+/// rows this build cannot represent. Version 5 is `PL-D3`
+/// (`FCMP_SPEND_LINKABILITY.md` §6.2): **byte-identical layout to version
+/// 4**, but the leaf's 4th scalar is now the x-coordinate of the output's
+/// PQC leaf commitment and `leaf_meta[81..113)` holds the published
+/// commitment point, not the key hash — every leaf, layer hash and root a
+/// ≤4 store holds came from a derivation no current build reproduces, and
+/// would resume into a baffling root mismatch. Pre-genesis disposition for
+/// any mismatch: delete the store and re-sync (`15-deletion-and-debt.mdc` —
 /// no in-Shekyl migration code).
-const SCHEMA_VERSION: u64 = 4;
+const SCHEMA_VERSION: u64 = 5;
 
 /// The CT-3a layout version: same byte layout as [`SCHEMA_VERSION`] 3 but
 /// without the maintained-pending-table contract. Test-only — production
@@ -2180,7 +2186,7 @@ fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
         }
         None => buf[48] = 0,
     }
-    buf[81..113].copy_from_slice(&entry.identity.h_pqc);
+    buf[81..113].copy_from_slice(&entry.identity.cm);
     buf[113] = encode_target(&entry.identity.target);
     // Schema v2: creation_height in the formerly-free range. The value
     // stays `&[u8; 192]` (TypeName unchanged), which is exactly why the
@@ -2203,8 +2209,8 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
         }
         _ => return Err(StoreError::CorruptMeta("invalid leaf commitment tag")),
     };
-    let mut h_pqc = [0u8; 32];
-    h_pqc.copy_from_slice(&buf[81..113]);
+    let mut cm = [0u8; 32];
+    cm.copy_from_slice(&buf[81..113]);
     let target = decode_target(buf[113], &buf[114..122])?;
     let creation_height = BlockHeight(u64::from_be_bytes(
         buf[122..130].try_into().expect("8 bytes"),
@@ -2216,7 +2222,7 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
         identity: crate::types::OutputIdentity {
             output_key,
             commitment,
-            h_pqc,
+            cm,
             target,
         },
     })
@@ -2307,7 +2313,7 @@ mod tests {
             identity: OutputIdentity {
                 output_key: [1u8; 32],
                 commitment: Some([2u8; 32]),
-                h_pqc: [3u8; 32],
+                cm: [3u8; 32],
                 target: TargetKind::TaggedKey,
             },
         }
@@ -2892,8 +2898,8 @@ mod tests {
     fn random_entry(rng: &mut ChaCha20Rng, gindex: u64, maturity: u64, creation: u64) -> LeafEntry {
         let mut output_key = [0u8; 32];
         rng.fill_bytes(&mut output_key);
-        let mut h_pqc = [0u8; 32];
-        rng.fill_bytes(&mut h_pqc);
+        let mut cm = [0u8; 32];
+        rng.fill_bytes(&mut cm);
         let commitment = if rng.next_u32().is_multiple_of(2) {
             let mut c = [0u8; 32];
             rng.fill_bytes(&mut c);
@@ -2914,7 +2920,7 @@ mod tests {
             identity: OutputIdentity {
                 output_key,
                 commitment,
-                h_pqc,
+                cm,
                 target,
             },
         }

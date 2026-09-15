@@ -87,7 +87,9 @@ fn output_key_gate_accepts_only_what_the_leaf_builder_encodes() {
     for (name, probe) in probe_points() {
         let gate_ok =
             unsafe { shekyl_check_output_keys(probe.as_ptr(), 1) } == SHEKYL_OUTPUT_POINTS_OK;
-        let leaf_ok = construct_leaf(&probe, &good, &[0u8; 32]).is_some();
+        // The 4th input is the output's `0x07` commitment point (PL-D3), gated
+        // separately by the content rule; a known-good point isolates this gate.
+        let leaf_ok = construct_leaf(&probe, &good, &good).is_some();
         assert!(
             !gate_ok || leaf_ok,
             "output-key gate accepts {name}, but construct_leaf cannot encode it: \
@@ -103,7 +105,7 @@ fn commitment_mask_gate_accepts_only_what_the_leaf_builder_encodes() {
         let gate_ok =
             unsafe { shekyl_check_commitment_masks(probe.as_ptr(), 1, std::ptr::null(), 0) }
                 == SHEKYL_OUTPUT_POINTS_OK;
-        let leaf_ok = construct_leaf(&good, &probe, &[0u8; 32]).is_some();
+        let leaf_ok = construct_leaf(&good, &probe, &good).is_some();
         assert!(
             !gate_ok || leaf_ok,
             "commitment gate accepts {name}, but construct_leaf cannot encode it: \
@@ -162,5 +164,5 @@ fn probe_set_exercises_both_verdicts_for_each_gate() {
 
     // And the known-good point must encode, or every implication above holds
     // for the wrong reason.
-    assert!(construct_leaf(&good, &good, &[0u8; 32]).is_some());
+    assert!(construct_leaf(&good, &good, &good).is_some());
 }

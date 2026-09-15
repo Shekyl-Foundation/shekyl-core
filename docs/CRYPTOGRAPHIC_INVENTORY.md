@@ -281,8 +281,10 @@ takes **three** things, and consensus requires all of them (the
 1. an **FCMP++ membership-only proof** — genuinely **no key image**; anti-replay
    on this surface is the per-epoch dedup layer, not a linking tag
    (`emission_vin_verify_backing`, `FCMP_MEMBERSHIP_ONLY.md` §7);
-2. the **leaf gate** — `hash_pqc_public_key(backing_pubkey) == pqc_pk_hash`,
-   binding the revealed key to the in-circuit committed leaf scalar (C-1, #277);
+2. the **leaf binding** — the proof in (1) takes `backing_pubkey`'s key point
+   `K = H_ℓ(backing_pubkey)·G_k` as its public value and opens the proven
+   leaf's commitment `CM = K + r·J` to it in-circuit (`PL-D3`, 2026-09-14;
+   replacing the C-1 hash gate of #277, whose `pqc_pk_hash` field left the vin);
 3. **Auth-B — a hybrid Ed25519 + ML-DSA-65 signature** under that same
    `backing_pubkey` over the role-separated Q1 binding message
    (`emission_vin_verify_auth` → `verify_hybrid_auth` →
@@ -291,7 +293,7 @@ takes **three** things, and consensus requires all of them (the
    the vin's `backing_pubkey`).
 
 Step 3 is the classical backstop, and step 2 does not weaken it:
-`hash_pqc_public_key` is `Blake2b512(DOMAIN_PQC_LEAF ‖ pk_bytes)` over the
+`pqc_key_scalar` is a cSHAKE256 read (`shekyl/pqc-leaf-key-v1`) over the
 **full canonical `HybridPublicKey`** (Ed25519 ‖ ML-DSA — see
 `derive_pqc_public_key`), so the committed leaf commits *both* halves. There is
 no point on this path where ML-DSA is the sole authority. The module's own

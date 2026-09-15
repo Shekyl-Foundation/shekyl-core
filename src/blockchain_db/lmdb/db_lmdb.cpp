@@ -146,7 +146,13 @@ using namespace crypto;
 // value gains the 32-byte serving endpoint column after `bond_spend_pk`
 // (kVersion 6→7; every V12 record fails decode's version pin, so a V12
 // datadir cannot be read). No new table. Pre-genesis: delete and resync.
-#define VERSION 13
+// V14: PL-D3 (docs/design/FCMP_SPEND_LINKABILITY.md §6.2) — content. The
+// curve-tree leaf's 4th scalar is the x-coordinate of the output's PQC leaf
+// commitment, not the key hash; every stored leaf, layer hash and root a V13
+// datadir holds was built from a derivation no current node reproduces. Same
+// byte layout (128-byte leaves), so only the version pin makes the stale tree
+// loud. Pre-genesis: delete and resync.
+#define VERSION 14
 
 namespace
 {
@@ -7090,6 +7096,45 @@ bool BlockchainLMDB::archival_shard_freeze_height(uint64_t shard_id, uint64_t& o
     return false;
   out = segment.freeze_height;
   return true;
+}
+
+void BlockchainLMDB::fold_archival_market_bonded_counts(std::vector<uint64_t>& bonded_count) const
+{
+  // Bond-record cursor only. Shard bodies are below prune; ranking is Rust.
+  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
+  check_open();
+  if (bonded_count.empty())
+    return;
+
+  TXN_PREFIX_RDONLY();
+  MDB_cursor* cur = nullptr;
+  int rc = mdb_cursor_open(m_txn, m_archival_bond, &cur);
+  if (rc)
+    throw0(DB_ERROR(lmdb_error("Failed to open archival_bond cursor for coverage fold: ", rc).c_str()));
+
+  MDB_val k, v;
+  rc = mdb_cursor_get(cur, &k, &v, MDB_FIRST);
+  while (rc == 0)
+  {
+    if (k.mv_size != 32)
+      throw std::runtime_error("FATAL: archival_bond key size mismatch during coverage fold");
+    shekyl::db::ArchivalBondValue bond{};
+    if (!shekyl::db::ArchivalBondValue::decode(v.mv_data, v.mv_size, bond))
+      throw std::runtime_error("FATAL: archival_bond decode failed during coverage fold");
+    if (!bond.is_complete_tree())
+    {
+      for (const uint64_t shard_id : bond.held_shard_ids)
+      {
+        if (shard_id < bonded_count.size())
+          bonded_count[static_cast<size_t>(shard_id)] += 1;
+      }
+    }
+    rc = mdb_cursor_get(cur, &k, &v, MDB_NEXT);
+  }
+  mdb_cursor_close(cur);
+  if (rc != MDB_NOTFOUND)
+    throw0(DB_ERROR(lmdb_error("archival_bond coverage fold cursor failed: ", rc).c_str()));
+  TXN_POSTFIX_RDONLY();
 }
 
 std::vector<uint64_t> BlockchainLMDB::archival_bond_last_served_epochs(

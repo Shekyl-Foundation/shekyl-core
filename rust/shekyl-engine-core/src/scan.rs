@@ -80,7 +80,7 @@ use shekyl_scanner::RecoveredWalletOutput;
 /// [`CurveTreeActor`](crate::engine::curve_tree_actor) message boundary.
 ///
 /// This is the owned mirror of [`shekyl_curve_tree::TxLeafInputs`], which
-/// borrows (`leaf_hash_blob: Option<&[u8]>`, `outputs: &[RawOutput]`). The
+/// borrows (`leaf_entry_blob: Option<&[u8]>`, `outputs: &[RawOutput]`). The
 /// producer materializes these vecs while the `ScannableBlock` is in hand
 /// (CT-5a commit 3); the merge carries them to the actor, whose `IngestBlock`
 /// handler re-borrows them into a [`shekyl_curve_tree::BlockLeaves`].
@@ -95,7 +95,7 @@ pub struct OwnedTxLeaves {
     pub is_miner: bool,
     /// The `tx_extra 0x07` curve-tree leaf-hash blob, if the tag is present.
     /// Carried verbatim; the client validates and slices it at ingest.
-    pub leaf_hash_blob: Option<Vec<u8>>,
+    pub leaf_entry_blob: Option<Vec<u8>>,
     /// The transaction's outputs in on-chain `vout` order.
     pub outputs: Vec<RawOutput>,
 }

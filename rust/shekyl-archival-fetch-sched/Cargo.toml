@@ -1,0 +1,17 @@
+[package]
+name = "shekyl-archival-fetch-sched"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Daemon-only operator scheduler of shekyl-p-fetch (ARCHIVAL_SHARD_FETCH.md SF-D1)"
+publish = false
+
+[dependencies]
+# The fetch client itself. This crate is the only production edge that may
+# name it besides `shekyl-daemon-image` (SF-D4; check_p_fetch_dep_cut.py).
+shekyl-p-fetch = { path = "../shekyl-p-fetch" }
+
+[lints]
+workspace = true

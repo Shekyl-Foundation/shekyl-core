@@ -43,7 +43,9 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.30: `get_fee_estimate.fees` drops the dead
+/// `CORE_RPC_VERSION_MINOR`. 3.31: `get_archival_shard_coverage` and
+/// `request_archival_shard` (`ARCHIVAL_SHARD_SELECTION_LIST.md` `SL-D`).
+/// 3.30: `get_fee_estimate.fees` drops the dead
 /// fourth slot — three priced tiers, one slot each (FL-R25; the RK-5 bridge
 /// mirrored slot 1 for a `FeePriority::Elevated` caller that never existed).
 /// 3.29: `get_version` gains the three identity-
@@ -57,7 +59,7 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// honestly and git merging them character-for-character, because `= 25` →
 /// `= 26` is textually identical whoever writes it. This value was read on
 /// the tree cut from PR #658's merge.
-pub const CORE_RPC_VERSION_MINOR: u32 = 30;
+pub const CORE_RPC_VERSION_MINOR: u32 = 31;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -133,6 +135,13 @@ pub const CORE_RPC_ERROR_CODE_INTERNAL_ERROR: i64 = -5;
 /// (`pow_hash_or_refuse`, and `5b0c32f51`'s "loud, never the degrade arm"):
 /// a method that declines to answer must not report success.
 pub const CORE_RPC_ERROR_CODE_CORE_BUSY: i64 = -9;
+
+/// JSON-RPC error code for an operator shard-fetch that did not produce a
+/// body (`CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE`). Typed miss — not
+/// `WRONG_PARAM`. The requested `shard_id` was well-formed; this node
+/// does not currently hold the archive (pruned, or the scheduler returned
+/// MISS).
+pub const CORE_RPC_ERROR_CODE_ARCHIVAL_UNAVAILABLE: i64 = -22;
 
 /// The REST error envelope a natively-served endpoint answers with when it
 /// cannot produce its reply (HTTP 500): `status` is never `OK`, and `error`
@@ -402,10 +411,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_638);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 30);
+        assert_eq!(CORE_RPC_VERSION, 196_639);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 31);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 30);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 31);
     }
 
     #[test]

@@ -135,12 +135,13 @@ bool get_transaction_signed_payload(const transaction& tx, size_t input_index, s
   // invalidating other inputs' signatures.
   //
   // NOTE: this uses cn_fast_hash (Keccak-256) via get_blob_hash, which is
-  // intentionally different from shekyl_fcmp_pqc_leaf_hash (Blake2b-512
-  // with domain separator "shekyl-pqc-leaf") used for the in-circuit 4th
-  // leaf scalar.  The two serve different purposes: the leaf hash is the
-  // curve tree commitment verified inside the FCMP++ proof; the Keccak
-  // hash here is a signature-domain binding preventing key substitution
-  // across inputs.  Neither depends on the other's collision resistance.
+  // intentionally different from shekyl_fcmp_pqc_key_scalar (cSHAKE256 under
+  // "shekyl/pqc-leaf-key-v1", reduced to the Ed25519 scalar k whose point
+  // the FCMP++ circuit opens the spent leaf's commitment to -- PL-D3). The
+  // two serve different purposes: the key scalar is the in-circuit binding
+  // of the revealed key to the spent leaf; the Keccak hash here is a
+  // signature-domain binding preventing key substitution across inputs.
+  // Neither depends on the other's collision resistance.
   std::string all_pqc_key_hashes;
   {
     for (size_t i = 0; i < tx.pqc_auths.size(); ++i)

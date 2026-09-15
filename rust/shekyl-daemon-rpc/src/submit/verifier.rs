@@ -98,7 +98,7 @@ use shekyl_crypto_pq::signature::{
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof, VerifyError};
-use shekyl_fcmp::PqcLeafScalar;
+use shekyl_fcmp::PqcKeyScalar;
 use shekyl_units::{AtomicUnits, NonZeroAtomicUnits};
 use shekyl_wire::transaction::{
     BondPost as WireBondPost, BondPostKind as WireBondPostKind, BpPlus, Ct, CtBase, Holdings,
@@ -1003,10 +1003,11 @@ fn verify_fcmp(
     tree_root: &[u8; 32],
     layers: u8,
 ) -> Result<(), VerifyReject> {
-    // One leaf hash per spending input, submission order — the same
-    // `H_blake2b(dst ‖ hybrid_public_key)` Selene scalar the C++ caller
-    // computes per input via `shekyl_fcmp_pqc_leaf_hash`
-    // (blockchain.cpp:3810-3820). The caller passes `leaf_auths` already
+    // One PQC key scalar `k = H_ℓ(hybrid_public_key)` per spending input,
+    // submission order — the same value the C++ caller computes per input via
+    // `shekyl_fcmp_pqc_key_scalar`; the verifier derives `K = k·G_k` and the
+    // circuit opens the spent leaf's commitment to it (`PL-D3`,
+    // `FCMP_SPEND_LINKABILITY.md` §6.2). The caller passes `leaf_auths` already
     // narrowed to the leaf-contributing subset (every auth for a spend, the
     // `ToKey` funding subset for a bond-post), and `parsed.key_images` is the
     // matching subset by construction; the count check below enforces that
@@ -1018,9 +1019,9 @@ fn verify_fcmp(
         .iter()
         .map(|ki| KeyImage::from_canonical_bytes(*ki))
         .collect();
-    let pqc_hashes: Vec<PqcLeafScalar> = leaf_auths
+    let pqc_hashes: Vec<PqcKeyScalar> = leaf_auths
         .iter()
-        .map(|auth| PqcLeafScalar::from_pqc_public_key(&auth.hybrid_public_key))
+        .map(|auth| PqcKeyScalar::from_pqc_public_key(&auth.hybrid_public_key))
         .collect();
     if pqc_hashes.len() != key_images.len() {
         return Err(VerifyReject::malformed(
@@ -1076,17 +1077,19 @@ fn verify_fcmp(
 ///
 /// MSW-6 (PQC_MULTISIG.md §16.3) withdrew the former tx-wide scheme-id
 /// agreement (every input matching `pqc_auths[0]`). Its stated scheme-downgrade
-/// purpose was vacuous — self-referential, and per-output binding is the leaf
-/// hash `h_pqc = H(hybrid_public_key)`; its actual effect, foreclosing a
-/// solo/multisig cross-model linkage, mirrors the opt-in scheme_id=2
-/// self-marking cost Shekyl already permits, so it is a wallet coin-selection
-/// invariant — a blocking E′/MS-5 ship gate, not merely tracked — not a
-/// consensus rule (and not TM-1, whose disposition rests on the linkage being
-/// unmechanizable). Re-based 2026-09-14 (PL-D1): the former first ground,
-/// "the FCMP++ proof ranges over the whole tree, so no other set shrinks",
-/// is struck — every FCMP++ spend identifies its input by the public 4th
-/// leaf scalar until PL-D3 lands (docs/design/FCMP_SPEND_LINKABILITY.md), so
-/// there is no set to shrink; the conclusion stands on the precedent alone.
+/// purpose was vacuous — self-referential, and per-output binding is the
+/// in-circuit opening of the spent leaf's PQC commitment to the revealed key's
+/// point (`PL-D3`); its actual effect, foreclosing a
+/// solo/multisig cross-model linkage, has no externality (one-time keys, FCMP++
+/// proof over the whole tree — no other set shrinks) and mirrors the opt-in
+/// scheme_id=2 self-marking cost, so it is a wallet coin-selection invariant —
+/// a blocking E′/MS-5 ship gate, not merely tracked — not a consensus rule (and
+/// not TM-1, whose disposition rests on the linkage being unmechanizable).
+/// Re-based 2026-09-14 (PL-D1 → PL-D3): the "no other set shrinks" ground was
+/// struck while every FCMP++ spend identified its input by the public 4th leaf
+/// scalar; PL-D3 (the hiding leaf commitment opened in-circuit) restores it,
+/// and the conclusion stood on the scheme_id=2 precedent alone in between
+/// (docs/design/FCMP_SPEND_LINKABILITY.md §12, ruling 5).
 /// Dropped here in lockstep with the C++ battery so the K13 differential holds.
 ///
 /// [`pqc_signing_payload_hashes`]: shekyl_wire::transaction::Transaction::pqc_signing_payload_hashes

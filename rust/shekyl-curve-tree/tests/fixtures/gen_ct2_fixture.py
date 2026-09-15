@@ -58,9 +58,10 @@ SHALLOW_REGEN = 7
 
 # Genesis treasury address (regtest accepts the mainnet genesis address
 # for generateblocks; coinbase outputs land in the curve tree identically).
+# The recipients file lives in this repo's `config/` (the genesis tool's
+# source of truth), not in the retired `shekyl-dev` tooling tree.
 GENESIS_RECIPIENTS = (
-    Path(__file__).resolve().parents[5]
-    / "shekyl-dev/tools/genesis_builder/genesis_recipients.mainnet.json"
+    Path(__file__).resolve().parents[4] / "config/genesis_recipients.mainnet.json"
 )
 
 
@@ -133,7 +134,7 @@ class Daemon:
             data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"},
         )
-        resp = json.load(urllib.request.urlopen(req, timeout=120))
+        resp = json.load(urllib.request.urlopen(req, timeout=900))
         if "error" in resp and resp["error"]:
             raise RuntimeError(f"{method} failed: {resp['error']}")
         return resp["result"]
@@ -144,7 +145,7 @@ class Daemon:
             data=json.dumps(params).encode(),
             headers={"Content-Type": "application/json"},
         )
-        return json.load(urllib.request.urlopen(req, timeout=120))
+        return json.load(urllib.request.urlopen(req, timeout=900))
 
     def height(self) -> int:
         return self.json_rpc("get_info")["height"]
@@ -245,9 +246,10 @@ def record_block(daemon: Daemon, height: int) -> dict:
         )
     extra = bytes(miner.get("extra", []))
     leaf_blob = extract_leaf_hash_blob(extra)
-    # Guard: a well-formed Tier-A coinbase carries one 32-byte h_pqc per
-    # output. A mis-parsed walk would not line up here.
-    expected = len(outputs) * 32
+    # Guard: a well-formed Tier-A coinbase carries one 64-byte 0x07 entry
+    # (leaf commitment point ‖ record, PL-D3) per output. A mis-parsed walk
+    # would not line up here.
+    expected = len(outputs) * 64
     if len(leaf_blob) != expected:
         raise RuntimeError(
             f"height {height}: 0x07 blob is {len(leaf_blob)} B, expected {expected}"

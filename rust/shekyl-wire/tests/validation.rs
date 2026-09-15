@@ -559,7 +559,7 @@ fn pqc_fields(kem_len: usize, leaf_len: usize) -> Vec<u8> {
     use shekyl_wire::tx_extra::{serialize, TxExtraField};
     serialize(&[
         TxExtraField::PqcKemCiphertext(vec![0x6a; kem_len]),
-        TxExtraField::PqcLeafHashes(vec![0x7b; leaf_len]),
+        TxExtraField::PqcLeafEntries(vec![0x7b; leaf_len]),
     ])
     .expect("test tx_extra serializes")
 }
@@ -581,12 +581,12 @@ fn validator_rejects_both_pqc_fields_absent() {
 
 #[test]
 fn validator_rejects_a_duplicate_leaf_hash_field() {
-    use shekyl_wire::tx_extra::{serialize, TxExtraField, PQC_LEAF_HASH_BYTES};
+    use shekyl_wire::tx_extra::{serialize, TxExtraField, PQC_LEAF_ENTRY_LEN};
     let mut extra = conforming_pqc_extra(2);
     extra.extend_from_slice(
-        &serialize(&[TxExtraField::PqcLeafHashes(vec![
+        &serialize(&[TxExtraField::PqcLeafEntries(vec![
             0x7b;
-            PQC_LEAF_HASH_BYTES * 2
+            PQC_LEAF_ENTRY_LEN * 2
         ])])
         .expect("second 0x07 serializes"),
     );
@@ -599,12 +599,13 @@ fn validator_rejects_a_duplicate_leaf_hash_field() {
 
 #[test]
 fn validator_rejects_a_leaf_hash_field_of_the_wrong_length() {
-    // 32*(n-1) — the shape the DB used to zero-fill into a leaf.
+    // A 32-byte field for two outputs — the pre-PL-D3 single-entry width, and
+    // the shape the DB used to zero-fill into a leaf.
     let err = spend_with_extra(pqc_fields(1120 * 2, 32))
         .validate_context_free_pruned()
         .unwrap_err();
     assert!(err.to_string().contains("0x07"), "{err}");
-    assert!(err.to_string().contains("64 required"), "{err}");
+    assert!(err.to_string().contains("128 required"), "{err}");
 }
 
 /// An `extra` that does not parse is refused outright.

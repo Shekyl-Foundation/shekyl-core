@@ -104,12 +104,23 @@ jobs:
       # reads as a bug, and the tempting "fix" is a vestigial no-op `multisig`
       # feature on the crate. That fake feature is what this split exists to
       # prevent: the crate is always fully compiled, and the argv says so.
+      #
+      # shekyl-fcmp and shekyl-fcmp-proofs joined the feature list in the
+      # PL-D3 review round (PR #745): both DEFINE a `multisig` feature of
+      # their own, and while their gated *library* code was compiled
+      # transitively through ffi's dep edge (that transitive compile is what
+      # turned this lane red on the broken `prove_with_sal`), their gated
+      # TEST targets were built and run nowhere in CI. Naming them makes the
+      # FROST SAL / witness-header suites part of the gate instead of
+      # local-only coverage.
 
-      - name: cargo check (engine-core + ffi, --features multisig)
+      - name: cargo check (engine-core + ffi + fcmp + fcmp-proofs, --features multisig)
         run: >
           cargo check --locked
           -p shekyl-engine-core
           -p shekyl-ffi
+          -p shekyl-fcmp
+          -p shekyl-fcmp-proofs
           --features multisig
 
       - name: cargo check (shekyl-multisig — always compiled, no feature)
@@ -122,6 +133,8 @@ jobs:
           cargo clippy --locked
           -p shekyl-engine-core
           -p shekyl-ffi
+          -p shekyl-fcmp
+          -p shekyl-fcmp-proofs
           --features multisig
           --all-targets
           --keep-going
@@ -135,11 +148,13 @@ jobs:
           --keep-going
           -- -D warnings
 
-      - name: cargo test (engine-core + ffi, --features multisig)
+      - name: cargo test (engine-core + ffi + fcmp + fcmp-proofs, --features multisig)
         run: >
           cargo test --locked
           -p shekyl-engine-core
           -p shekyl-ffi
+          -p shekyl-fcmp
+          -p shekyl-fcmp-proofs
           --features multisig
 
       - name: cargo test (shekyl-multisig — always compiled, no feature)

@@ -3948,7 +3948,7 @@ fn capture_block(
                 .ok()
                 .and_then(|fields| {
                     fields.into_iter().find_map(|f| match f {
-                        TxExtraField::PqcLeafHashes(b) => Some(b),
+                        TxExtraField::PqcLeafEntries(b) => Some(b),
                         _ => None,
                     })
                 })

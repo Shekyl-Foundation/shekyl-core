@@ -58,7 +58,7 @@ const PARITY_FIXTURE: &str = "tests/fixtures/pruned_tx_hash_parity_v1.json";
 const LIVE_ORACLE_FIXTURE: &str = "tests/fixtures/live_oracle_spend_v1.json";
 
 /// The pinned transaction's output count, which its `tx_extra` must match
-/// (CEN-I19: one `0x06` of `1120·n`, one `0x07` of `32·n`).
+/// (CEN-I19: one `0x06` of `1120·n`, one `0x07` of `64·n`).
 const N_OUT: usize = 2;
 
 /// The compressed Ed25519 basepoint. `expand_transaction_1` multiplies each

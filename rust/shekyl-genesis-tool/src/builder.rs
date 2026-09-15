@@ -13,7 +13,8 @@
 //!
 //! `tx_extra` is emitted directly in the C++ `sort_tx_extra` fixed-point
 //! order for the genesis field subset — `0x01` pubkey, one aggregated `0x06`
-//! KEM-ciphertext blob, one aggregated `0x07` leaf-hash blob (pick order:
+//! KEM-ciphertext blob, one aggregated `0x07` leaf-entry blob (`CM ‖ record`
+//! per output; pick order:
 //! `cryptonote_format_utils.cpp`, `sort_tx_extra`) — so no general sorter is
 //! needed and the emitted extra is already canonical.
 
@@ -22,7 +23,7 @@ use shekyl_crypto_pq::montgomery::ed25519_pk_to_x25519_pk;
 use shekyl_crypto_pq::output::construct_output;
 use shekyl_wire::block::{Block, BlockHeader};
 use shekyl_wire::transaction::{Ct, CtBase, Input, Output, Transaction, TxPrefix};
-use shekyl_wire::tx_extra::{self, TxExtraField, ML_KEM_768_CT_BYTES, PQC_LEAF_HASH_BYTES};
+use shekyl_wire::tx_extra::{self, TxExtraField, ML_KEM_768_CT_BYTES, PQC_LEAF_ENTRY_LEN};
 
 use crate::recipients::{Recipient, GENESIS_TOTAL_ATOMIC};
 use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
@@ -107,7 +108,7 @@ pub fn build_genesis_tx(
 
         kem_blob.extend_from_slice(&od.kem_ciphertext_x25519);
         kem_blob.extend_from_slice(&od.kem_ciphertext_ml_kem);
-        leaf_blob.extend_from_slice(&od.h_pqc);
+        leaf_blob.extend_from_slice(&od.pqc_leaf.entry_bytes());
 
         total = total
             .checked_add(r.amount)
@@ -119,12 +120,12 @@ pub fn build_genesis_tx(
             "built output sum {total} != genesis total {GENESIS_TOTAL_ATOMIC}"
         )));
     }
-    debug_assert_eq!(leaf_blob.len(), recipients.len() * PQC_LEAF_HASH_BYTES);
+    debug_assert_eq!(leaf_blob.len(), recipients.len() * PQC_LEAF_ENTRY_LEN);
 
     let extra = tx_extra::serialize(&[
         TxExtraField::PubKey(tx_pub),
         TxExtraField::PqcKemCiphertext(kem_blob),
-        TxExtraField::PqcLeafHashes(leaf_blob),
+        TxExtraField::PqcLeafEntries(leaf_blob),
     ])?;
 
     let tx = Transaction {

@@ -116,7 +116,7 @@ pub(crate) async fn assemble_signed_bond_post(
         output_keys,
         view_tags,
         kem_blobs,
-        leaf_hash_blob,
+        leaf_entry_blob,
     } = construct_vouts_to_base(
         args.keys,
         &tx_key_secret,
@@ -126,7 +126,7 @@ pub(crate) async fn assemble_signed_bond_post(
     )?;
 
     let mut extra = Extra::for_hybrid_transfer(tx_pubkey, kem_blobs);
-    extra.push_pqc_leaf_hashes(leaf_hash_blob);
+    extra.push_pqc_leaf_entries(leaf_entry_blob);
     let tx_extra = extra.serialize();
 
     let prepared = prepare_funding_inputs(args.keys, args.funding)?;

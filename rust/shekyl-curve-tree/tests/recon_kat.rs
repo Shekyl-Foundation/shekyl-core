@@ -23,8 +23,8 @@
 
 use serde_json::Value;
 use shekyl_curve_tree::recon::{
-    assemble_leaf_stream, collect_block_leaves, extract_leaf_hashes, per_output_h_pqc,
-    root_from_scalars, TxOutputs,
+    assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
+    TxOutputs,
 };
 use shekyl_curve_tree::{
     BlockHeight, BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
@@ -71,18 +71,19 @@ fn decode_block(b: &Value) -> Block {
     let root = decode_hex32(b["curve_tree_root"].as_str().expect("root hex"));
     let mt = &b["miner_tx"];
     let blob = decode_hex(mt["pqc_leaf_hashes"].as_str().expect("0x07 blob hex"));
-    // Real post-parse validation/slicing — the recon-owned half of the
-    // daemon's extract_leaf_hashes (the %32 check + per-output slice).
-    let leaf_hashes = extract_leaf_hashes(Some(&blob));
+    // The recon-owned slice of the `0x07` payload: one 64-byte `CM ‖ record`
+    // entry per output; the leaf commitment point is its first 32 bytes.
+    let n_outputs = mt["outputs"].as_array().expect("outputs array").len();
+    let commitments = extract_leaf_commitments(Some(&blob), n_outputs).expect("0x07 entries");
     let outputs = mt["outputs"]
         .as_array()
         .expect("outputs array")
         .iter()
-        .enumerate()
-        .map(|(i, o)| OutputIdentity {
+        .zip(commitments)
+        .map(|(o, cm)| OutputIdentity {
             output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
             commitment: o["commitment"].as_str().map(decode_hex32),
-            h_pqc: per_output_h_pqc(&leaf_hashes, i),
+            cm,
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();
@@ -119,7 +120,8 @@ fn reconstruct_roots(blocks: &[Block]) -> Vec<[u8; 32]> {
             is_miner: true,
             outputs: &blk.outputs,
         }];
-        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries);
+        gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries)
+            .expect("KAT chain has no bad published point");
         let drained_through = blk.height.saturating_sub(1);
         let scalars = assemble_leaf_stream(&entries, drained_through);
         roots.push(root_from_scalars(&scalars));
@@ -274,7 +276,7 @@ fn decode_client_chain(chain: &Value) -> Vec<ClientBlock> {
 fn ingest_client_block(client: &mut CurveTreeClient, blk: &ClientBlock) {
     let txs = [TxLeafInputs {
         is_miner: true,
-        leaf_hash_blob: Some(&blk.blob),
+        leaf_entry_blob: Some(&blk.blob),
         outputs: &blk.outputs,
     }];
     client
@@ -306,7 +308,7 @@ fn client_reconstructs_consensus_root_at_every_height() {
         for blk in &blocks {
             let txs = [TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blk.blob),
+                leaf_entry_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
             client
@@ -384,7 +386,7 @@ fn client_path_matches_recon_path() {
         for (blk, recon_root) in client_blocks.iter().zip(&recon) {
             let txs = [TxLeafInputs {
                 is_miner: true,
-                leaf_hash_blob: Some(&blk.blob),
+                leaf_entry_blob: Some(&blk.blob),
                 outputs: &blk.outputs,
             }];
             client

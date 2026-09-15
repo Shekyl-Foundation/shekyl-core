@@ -200,6 +200,11 @@ members = [
     # content-verify hole; reads no chain state, holds no key (SF-D4 cut).
     "shekyl-p-fetch",
 
+    # Daemon-only operator scheduler of `shekyl-p-fetch` (SF-D1). Linked
+    # from `shekyl-daemon-image` only — never from `shekyl-ffi` or an RPC
+    # crate (`check_p_fetch_dep_cut.py`).
+    "shekyl-archival-fetch-sched",
+
     # rend-spec-v3 onion hostname from an Ed25519 public key. Encoding
     # only — no Tor instance. Wallet serving (`OnionIdentity`) and daemon
     # fetch (`ServingEndpoint`) both read it so the address a persona

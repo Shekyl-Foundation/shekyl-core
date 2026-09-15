@@ -816,35 +816,13 @@ fn pinned_v2_signature_verifies_and_is_bound_to_every_term() {
     );
 }
 
-/// Environment variable that arms [`regenerate_attestation_wire_vectors`]:
-/// `YYYY-MM-DD <rationale>`, the date naming the `docs/V3_WALLET_DECISION_LOG.md`
-/// entry that authorizes moving the pinned wire. These are consensus pins
-/// (rule 50): a regenerator that rewrites them on request is a one-command
-/// silencer for a failing pin, so it refuses without a citation (the
-/// `wallet_envelope.rs` `pinned_fixtures_regenerate` shape).
-const PINNED_REGEN_DECISION_ENV: &str = "SHEKYL_PINNED_REGEN_DECISION";
-
 #[test]
 #[ignore = "armed fixture regenerator; requires SHEKYL_PINNED_REGEN_DECISION"]
 fn regenerate_attestation_wire_vectors() {
-    let decision = std::env::var(PINNED_REGEN_DECISION_ENV).unwrap_or_default();
-    let cited = decision.len() > 11
-        && decision.as_bytes()[..10]
-            .iter()
-            .enumerate()
-            .all(|(i, b)| match i {
-                4 | 7 => *b == b'-',
-                _ => b.is_ascii_digit(),
-            })
-        && decision.as_bytes()[10] == b' ';
-    assert!(
-        cited,
-        "refusing to regenerate the attestation wire vectors: set \
-         {PINNED_REGEN_DECISION_ENV}=\"YYYY-MM-DD <rationale>\" citing the \
-         docs/V3_WALLET_DECISION_LOG.md entry that authorizes moving them (got: \
-         {decision:?}). Moving a pinned vector is a format decision, not a test \
-         fix — see 50-testing.mdc."
-    );
+    // These are consensus pins (rule 50): the shared guard refuses to move
+    // them without a docs/V3_WALLET_DECISION_LOG.md citation.
+    let decision =
+        shekyl_crypto_pq::test_support::regen_decision_or_refuse("the attestation wire vectors");
     eprintln!("regenerating the attestation wire vectors under decision: {decision}");
 
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

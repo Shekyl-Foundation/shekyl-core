@@ -11,6 +11,7 @@
 //! compilation before later bodies are type-checked, so a single fixture
 //! holding both routes reports only the first.
 
+use shekyl_crypto_pq::leaf_commitment::PqcLeafCommitment;
 use shekyl_crypto_pq::output::{EncryptedOutputField, OutputData};
 
 pub fn literal(
@@ -26,7 +27,13 @@ pub fn literal(
         kem_ciphertext_x25519: [0u8; 32],
         kem_ciphertext_ml_kem: Vec::new(),
         pqc_public_key: Vec::new(),
-        h_pqc: [0u8; 32],
+        pqc_leaf: PqcLeafCommitment {
+            point: [0u8; 32],
+            record: [0u8; 32],
+            blind: [0u8; 32],
+            record_blind: [0u8; 32],
+            counter: 0,
+        },
         y: [0u8; 32],
         z: [0u8; 32],
         k_amount: [0u8; 32],

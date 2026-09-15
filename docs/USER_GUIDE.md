@@ -1256,7 +1256,7 @@ Behavior changes to be aware of when upgrading:
 | **Daemon** | The background program (`shekyld`) that connects to the Shekyl network and maintains the blockchain. |
 | **Difficulty** | A measure of how hard mining puzzles are. Adjusts automatically to target ~2-minute blocks. |
 | **Emission** | The schedule by which new SKL is created. The total supply is mathematically capped. |
-| **FCMP++ membership proof** | A zero-knowledge proof that the spent output exists in the full UTXO set. The proof reveals nothing about which output, but a separate field in today's transaction format does identify it (a pre-genesis defect tracked as `PL-D1`, being fixed before launch); amounts and recipients remain hidden. |
+| **FCMP++ membership proof** | A zero-knowledge proof that the spent output exists in the full UTXO set. The proof does not identify which output, transactions publish no per-output value derived from the key a spend reveals, and amounts and recipients remain hidden. (A pre-genesis defect, `PL-D1`, briefly published such a value; `PL-D3` closed it on 2026-09-14, before launch, by publishing a blinded commitment instead — one only the proof itself can check, without revealing it.) |
 | **Hybrid signature** | Two signatures on every transaction: Ed25519 (classical) and ML-DSA-65 (quantum-resistant). |
 | **Key images** | Cryptographic markers that prevent double-spending. Derived and tracked internally by the wallet; there is no export surface. |
 | **KDF rounds** | Key derivation function iterations; higher values make wallet password brute-forcing harder. |

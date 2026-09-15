@@ -150,7 +150,13 @@ impl CurveTreeClient {
                     .identity
                     .commitment
                     .expect("drained leaf has a commitment"),
-                h_pqc: e.identity.h_pqc,
+                // The 4th scalar as the leaf holds it — `CM.x`, already
+                // extracted by `construct_leaf` — not the published point.
+                cm_x: {
+                    let mut x = [0u8; 32];
+                    x.copy_from_slice(&e.leaf[96..128]);
+                    x
+                },
             })
             .collect();
 

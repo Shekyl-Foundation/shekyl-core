@@ -461,7 +461,7 @@ mod tests {
                         identity: OutputIdentity {
                             output_key: [1u8; 32],
                             commitment: Some([2u8; 32]),
-                            h_pqc: [3u8; 32],
+                            cm: [3u8; 32],
                             target: TargetKind::TaggedKey,
                         },
                     }

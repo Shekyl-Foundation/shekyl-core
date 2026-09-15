@@ -649,7 +649,7 @@ where
                         output_key: cl.output_key,
                         key_image_gen: cl.key_image_gen,
                         commitment: cl.commitment,
-                        h_pqc: cl.h_pqc,
+                        cm_x: cl.cm_x,
                     })
                     .collect(),
                 c1_layers: path.c1_layers,

@@ -22,6 +22,7 @@
 #include "cryptonote_basic/cryptonote_format_utils.h"
 #include "cryptonote_basic/tx_extra.h"
 #include "serialization/binary_archive.h"
+#include "shekyl/shekyl_ffi.h"
 
 namespace shekyl_test_fixtures
 {
@@ -62,11 +63,29 @@ inline void append_pqc_kem_field(cryptonote::transaction& tx, size_t bytes)
   tx.extra.insert(tx.extra.end(), b.begin(), b.end());
 }
 
-/// Append a 0x07 leaf-hash field of `bytes` bytes (arbitrary payload).
+/// One conforming 0x07 entry (PL-D3): a valid commitment point -- the
+/// compressed `PQC_LEAF_COMMITMENT_J` generator, any prime-order non-identity
+/// point admits -- followed by the fixed opaque 32-byte record. Fetched
+/// through the FFI from shekyl-wire's `conforming_pqc_leaf_entry` -- the same
+/// code path the Rust side uses (the pruned-tx-hash parity pin builds the
+/// same transaction on both sides), so the bytes cannot drift.
+inline std::string conforming_pqc_leaf_entry()
+{
+  uint8_t entry[cryptonote::PQC_LEAF_ENTRY_LEN] = {0};
+  shekyl_test_conforming_pqc_leaf_entry(entry);
+  return std::string(reinterpret_cast<const char*>(entry), sizeof(entry));
+}
+
+/// Append a 0x07 leaf-entry field of `bytes` bytes: conforming 64-byte entries
+/// repeated and cut to `bytes` (so a wrong-length vector is wrong in length
+/// only, and a right-length one passes the content rule too).
 inline void append_pqc_leaf_field(cryptonote::transaction& tx, size_t bytes)
 {
-  cryptonote::tx_extra_pqc_leaf_hashes f;
-  f.blob.assign(bytes, '\x7b');
+  cryptonote::tx_extra_pqc_leaf_entries f;
+  const std::string entry = conforming_pqc_leaf_entry();
+  while (f.blob.size() < bytes)
+    f.blob += entry;
+  f.blob.resize(bytes);
   const std::string b = serialize_tx_extra_field(f);
   tx.extra.insert(tx.extra.end(), b.begin(), b.end());
 }
@@ -82,14 +101,14 @@ inline void append_pqc_fields(cryptonote::transaction& tx)
   if (n == 0)
     return;
   append_pqc_kem_field(tx, cryptonote::HYBRID_KEM_CT_BYTES * n);
-  append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_HASH_BYTES * n);
+  append_pqc_leaf_field(tx, cryptonote::PQC_LEAF_ENTRY_LEN * n);
 }
 
 /// Strip both PQC fields (the pre-rule shape every red-first vector starts from).
 inline void strip_pqc_fields(cryptonote::transaction& tx)
 {
   cryptonote::remove_field_from_tx_extra(tx.extra, typeid(cryptonote::tx_extra_pqc_kem_ciphertext));
-  cryptonote::remove_field_from_tx_extra(tx.extra, typeid(cryptonote::tx_extra_pqc_leaf_hashes));
+  cryptonote::remove_field_from_tx_extra(tx.extra, typeid(cryptonote::tx_extra_pqc_leaf_entries));
 }
 
 inline cryptonote::transaction make_pqc_spend()
@@ -158,9 +177,10 @@ inline cryptonote::transaction make_pqc_spend()
 
   // The per-output PQC fields every transaction with outputs must carry
   // (GENESIS_TX_WIRE_FORMAT.md §9.6a, CEN-I19): one 0x06 of 1120 bytes and
-  // one 0x07 of 32 bytes per output. The shape rule looks at counts and
-  // lengths only, so the payloads are arbitrary; without them the DB
-  // collector aborts (it used to zero-fill h_pqc silently).
+  // one 0x07 of 64 bytes per output. The 0x07 entries carry a valid
+  // commitment point (PL-D3 content rule); the rest of the payloads are
+  // arbitrary. Without the fields the DB collector aborts (it used to
+  // zero-fill h_pqc silently).
   append_pqc_fields(tx);
 
   return tx;
