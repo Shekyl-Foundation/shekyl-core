@@ -22,8 +22,8 @@ use super::undo::Replayed;
 use super::view::BatchView;
 use super::*;
 use crate::codec::{
-    BlockInfo, Canonical, CurveRoot, OutKey, OutTx, TotalBurnedCell, TxIndex, TxOutputIndices,
-    UndoLog,
+    BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, TotalBurnedCell, TxIndex,
+    TxOutputIndices, UndoLog, FACT_FIELDS,
 };
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{
@@ -694,6 +694,156 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
     });
     expect_row(&out, StoreInvariant::RootRewritten);
     cleanup(&path);
+}
+
+// -------------------------------------------------------- provenance
+
+#[test]
+fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_not() {
+    let path = tmp("connect-provenance");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    assert!(store.provenance().is_parity_evidence(), "fresh file");
+
+    // Fully derived facts (the E6-complete shape): nothing is stamped.
+    let derived = ConnectFacts {
+        weight: Fact::derived(1_000),
+        long_term_weight: Fact::derived(900),
+        cumulative_difficulty: Fact::derived(100),
+        coins_generated: Fact::derived(1_000_000),
+        burned: Fact::derived(0),
+        root_after: Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32])),
+    };
+    let g = candidate(0, [0; 32], Vec::new());
+    let g_hash = g.block.hash();
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, g)?, derived, GENESIS_ID)?)
+    });
+    out.expect("genesis");
+    // Derived facts stamp no pass-through. But GENESIS *enforces* every
+    // consensus row while zero are implemented, so the verdict evaluated
+    // none of them — and the file records exactly that: every enforced row
+    // is a coverage gap, and the file is NOT parity evidence. That is
+    // C2-R8 §9.4 doing its job, not a defect: a store fed by the scaffold
+    // validator can never be mistaken for one fed by a complete one.
+    let after_genesis = store.provenance();
+    assert!(after_genesis.passed_through().is_empty());
+    let enforced: Vec<_> = RuleSet::GENESIS.enforced().collect();
+    assert!(
+        !enforced.is_empty(),
+        "GENESIS enforces the census's consensus rows"
+    );
+    assert_eq!(
+        after_genesis.coverage_gaps().iter().collect::<Vec<_>>(),
+        enforced
+    );
+    assert!(!after_genesis.is_parity_evidence());
+    assert!(after_genesis
+        .artifact_stamp()
+        .starts_with("apply-policy=full coverage-gaps=[CEN-"));
+    assert!(after_genesis
+        .artifact_stamp()
+        .ends_with("NOT-PARITY-EVIDENCE"));
+
+    // An aborted pass-through connect leaves no new taint.
+    let b1 = candidate(1, g_hash, Vec::new());
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        batch.connect(judge(&view, b1.clone())?, facts(1, 0), GENESIS_ID)?;
+        Err(TestErr::Abort)
+    });
+    assert_eq!(out, Err(TestErr::Abort));
+    assert_eq!(
+        store.provenance(),
+        after_genesis,
+        "abort: nothing landed, no new taint"
+    );
+
+    // A committed pass-through connect stamps exactly the passed fields.
+    let mut partial = facts(1, 0);
+    partial.burned = Fact::derived(0);
+    partial.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc1; 32]));
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, b1)?, partial, GENESIS_ID)?)
+    });
+    out.expect("block 1");
+    let prov = store.provenance();
+    assert!(!prov.is_parity_evidence());
+    assert_eq!(
+        prov.passed_through().iter().collect::<Vec<_>>(),
+        [
+            "weight",
+            "long_term_weight",
+            "cumulative_difficulty",
+            "coins_generated"
+        ]
+    );
+    assert_eq!(
+        prov.coverage_gaps(),
+        after_genesis.coverage_gaps(),
+        "unchanged"
+    );
+    assert!(prov.artifact_stamp().contains(
+        "passed-through=[weight,long_term_weight,cumulative_difficulty,coins_generated] \
+         NOT-PARITY-EVIDENCE"
+    ));
+    // Monotone: a later fully-derived connect cannot narrow it, and a
+    // read-only reopen reads the same record from the file.
+    drop(store);
+    let ro = ChainStore::open_read_only(&path, EPOCH).expect("ro");
+    assert_eq!(ro.provenance(), prov);
+    assert_eq!(ro.provenance().artifact_stamp(), prov.artifact_stamp());
+    cleanup(&path);
+}
+
+#[test]
+fn coverage_gaps_widen_in_the_committing_batch_and_never_narrow() {
+    // No issued rule set enforces a row yet, so `connect` cannot produce a
+    // gap end to end; the mechanism is exercised at the header, exactly as
+    // `connect` calls it.
+    let path = tmp("connect-gaps");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let row = shekyl_chain_rules::CenRow::ALL[3];
+    let aborted: Result<(), TestErr> = store.write(|batch| {
+        super::header::widen_gaps(batch.txn(), CoverageGaps::of([row]))?;
+        Err(TestErr::Abort)
+    });
+    assert_eq!(aborted, Err(TestErr::Abort));
+    assert!(
+        store.provenance().coverage_gaps().is_empty(),
+        "abort leaves no gap"
+    );
+
+    let out: Result<(), TestErr> = store.write(|batch| {
+        super::header::widen_gaps(batch.txn(), CoverageGaps::of([row]))?;
+        Ok(())
+    });
+    assert_eq!(out, Ok(()));
+    let prov = store.provenance();
+    assert!(prov.coverage_gaps().contains(row));
+    assert!(!prov.is_parity_evidence());
+    assert_eq!(
+        prov.artifact_stamp(),
+        format!("apply-policy=full coverage-gaps=[{row}] NOT-PARITY-EVIDENCE")
+    );
+    // A later batch that widens by nothing changes nothing.
+    let out: Result<(), TestErr> = store.write(|batch| {
+        super::header::widen_gaps(batch.txn(), CoverageGaps::NONE)?;
+        Ok(())
+    });
+    assert_eq!(out, Ok(()));
+    assert_eq!(store.provenance(), prov);
+    cleanup(&path);
+}
+
+#[test]
+fn deleted_by_and_the_persisted_field_names_are_one_list() {
+    let declared: Vec<&str> = ConnectFacts::DELETED_BY.iter().map(|d| d.field).collect();
+    assert_eq!(
+        declared, FACT_FIELDS,
+        "ConnectFacts::DELETED_BY order is the codec's bit order"
+    );
 }
 
 #[test]

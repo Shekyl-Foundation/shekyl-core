@@ -32,6 +32,18 @@
 //! A `[hook]` phase has no body here; E3 / E4 land bodies, not new phases.
 //! `pop` has no phase list — it is the reverse replay of step 10's row.
 //!
+//! # What the connect stamps (§3.8)
+//!
+//! Between the belts and the writes, `connect` widens the file's
+//! [`Provenance`](crate::provenance::Provenance) inside this batch's own
+//! transaction with two things a parity claim must know: the census rows
+//! `in_force` enforces that the verdict's coverage did **not** evaluate
+//! (C2-R8 §9.4), and the [`ConnectFacts`] fields that were passed through
+//! rather than derived (SCW-1). Both are unions that never narrow; an
+//! aborted batch leaves no taint. A file with either non-empty is not
+//! parity evidence, and says which rows or fields have to land for it to
+//! become so.
+//!
 //! # What the store keys by itself
 //!
 //! `tx_id`, `output_id` and the per-amount `amount_index` are the owning
@@ -47,13 +59,13 @@
 //! multimap has the shape the LMDB parity oracle has, and whether
 //! `amount_index` is ever *exposed* stays R8b-2's question.
 
-use shekyl_chain_rules::{ChainValid, RuleSetId, TxIdentity};
+use shekyl_chain_rules::{ChainValid, RuleSet, RuleSetId, TxIdentity};
 use shekyl_types::{BlockHeight, CurveTreeRoot};
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
-    BlockInfo, Canonical, CurveRoot, OutKey, OutTx, PropertyCell, TotalBurnedCell, TxIndex,
-    TxOutputIndices,
+    BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, PassedThroughFacts, PropertyCell,
+    TotalBurnedCell, TxIndex, TxOutputIndices,
 };
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{
@@ -63,6 +75,7 @@ use crate::schema::{
 };
 
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
+use super::header;
 use super::view::BatchView;
 use super::write::WriteBatch;
 
@@ -182,24 +195,38 @@ impl ConnectFacts {
         },
     ];
 
-    /// The fields still passed through, each with the rows that will
-    /// delete it. Empty when every field is derived — the moment `Fact`
-    /// and `Origin` themselves are deleted. `count()` is the progress
-    /// number; the items are the critical path.
-    pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_ {
-        let origins = [
+    const fn origins(&self) -> [Origin; 6] {
+        [
             self.weight.origin,
             self.long_term_weight.origin,
             self.cumulative_difficulty.origin,
             self.coins_generated.origin,
             self.burned.origin,
             self.root_after.origin,
-        ];
+        ]
+    }
+
+    /// The fields still passed through, each with the rows that will
+    /// delete it. Empty when every field is derived — the moment `Fact`
+    /// and `Origin` themselves are deleted. `count()` is the progress
+    /// number; the items are the critical path.
+    pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_ {
         Self::DELETED_BY
             .into_iter()
-            .zip(origins)
+            .zip(self.origins())
             .filter(|(_, origin)| *origin == Origin::PassedThrough)
             .map(|(field, _)| field)
+    }
+
+    /// The passed-through fields as the file records them (§3.8).
+    fn passed_through_set(&self) -> PassedThroughFacts {
+        PassedThroughFacts::of_positions(
+            self.origins()
+                .into_iter()
+                .enumerate()
+                .filter(|(_, origin)| *origin == Origin::PassedThrough)
+                .map(|(i, _)| i),
+        )
     }
 }
 
@@ -270,6 +297,23 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             .into());
         }
+        let rule_set = RuleSet::for_id(in_force).ok_or(StoreCannot::RuleSetUnknown(in_force))?;
+
+        // ---- provenance (§3.8): what this verdict did NOT bring ----------
+        // Widened before the writes and inside this transaction, so it
+        // lands with the rows or not at all; header cells are engine-local
+        // and are not journaled (a popped block's verdict is still evidence
+        // the file once accepted it).
+        header::widen_gaps(
+            self.txn(),
+            CoverageGaps::of(
+                rule_set
+                    .enforced()
+                    .filter(|row| !valid.coverage().contains(*row)),
+            ),
+        )?;
+        header::widen_passed_through(self.txn(), facts.passed_through_set())?;
+
         let block = valid.block();
         let recording = self.record_undo(height);
 
