@@ -6,13 +6,22 @@
 //! State a live [`WriteBatch`](super::WriteBatch) shares with its store.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{PoisonError, RwLock};
+use std::sync::{OnceLock, PoisonError, RwLock};
 
 use crate::provenance::Provenance;
 
-/// The one-live-write guard and the in-memory mirror of the provenance cell.
+use super::error::StoreInvariant;
+
+/// The one-live-write guard, the in-memory mirror of the provenance cell,
+/// and the writer halt.
 pub(super) struct Shared {
     write_held: AtomicBool,
+    /// The writer halt (`DAEMON_REDB_STORE.md` §3.6.2): set once, by the
+    /// first connect or pop batch to be poisoned, never cleared for the
+    /// life of this handle. Not persisted — re-derived on restart by the
+    /// check that reruns the belts, so a restart with a repaired file is
+    /// not refused by a stale latch.
+    halt: OnceLock<(u64, StoreInvariant)>,
     /// Mirror of the persisted `apply_policy` cell. Readers (`provenance`)
     /// take the read side; [`Self::publish`] — the only mutator — holds the
     /// write side across the engine commit *and* the assignment, so a
@@ -25,8 +34,23 @@ impl Shared {
     pub(super) fn new(provenance: Provenance) -> Self {
         Self {
             write_held: AtomicBool::new(false),
+            halt: OnceLock::new(),
             provenance: RwLock::new(provenance),
         }
+    }
+
+    /// Halt the writer at `at_height` on `row`. The first halt wins: a
+    /// second poisoned batch cannot exist once `write` refuses, and if one
+    /// races the latch anyway the first record stands.
+    pub(super) fn halt(&self, at_height: u64, row: StoreInvariant) {
+        if self.halt.set((at_height, row)).is_err() {
+            // Already halted: the first record stands.
+        }
+    }
+
+    /// The halt, if the writer is halted.
+    pub(super) fn halted(&self) -> Option<(u64, StoreInvariant)> {
+        self.halt.get().copied()
     }
 
     /// Claim the single write slot. `false` if it is already held.

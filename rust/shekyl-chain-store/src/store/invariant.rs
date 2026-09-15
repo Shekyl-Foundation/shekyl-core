@@ -187,6 +187,11 @@ impl core::error::Error for StoreInvariant {
 pub enum UndoFault {
     /// Sealing this height's journal found a row already recorded there.
     RowAlreadyRecorded,
+    /// `pop` found the journal's top row at `top`, not at the tip.
+    TopIsNotTip {
+        /// The height of the journal's highest row.
+        top: u64,
+    },
     /// Replaying entry `index` (in write order) found its target key or
     /// member not in the state the entry left it in — absent where the
     /// entry inserted, or, for a restore, absent where it replaced.
@@ -202,6 +207,10 @@ impl core::fmt::Display for UndoFault {
             Self::RowAlreadyRecorded => {
                 f.write_str("a journal row is already recorded for this height")
             }
+            Self::TopIsNotTip { top } => write!(
+                f,
+                "the journal's top row is at height {top}, not at the tip"
+            ),
             Self::EntryNotReversible { index } => write!(
                 f,
                 "entry {index} cannot be reversed: its target is not in the state the entry left"

@@ -186,6 +186,11 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         &self.poison
     }
 
+    /// The batch's pop journal, for `pop` to note the height it works at.
+    pub(super) const fn journal(&self) -> &Journal {
+        &self.journal
+    }
+
     /// Project this batch as the [`ChainView`](shekyl_chain_rules::ChainView)
     /// a rule reads — including this batch's own uncommitted writes, so the
     /// second block of a batch is validated against the chain the first
@@ -427,13 +432,6 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// (a second `record_undo` before `seal` is a bug in this crate and
     /// panics), and a recording dropped unsealed makes `complete` refuse
     /// with [`StoreCannot::UndoUnsealed`].
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "S-CHAIN-W staging: the producer is commit 6 (`connect`), same PR; the store's tests are the callers until then"
-        )
-    )]
     pub(crate) fn record_undo(&self, height: u64) -> Recording<'_> {
         Recording::begin(&self.journal, &self.poison, self.txn(), height)
     }
@@ -449,13 +447,6 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// not in the state the entry left; [`StoreInvariant::CellCorrupt`]
     /// (SI-7) if the row does not decode or names a table the catalogue
     /// lacks; engine errors.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "S-CHAIN-W staging: the producer is commit 7 (`pop`), same PR; the store's tests are the callers until then"
-        )
-    )]
     pub(crate) fn replay_undo(&self, height: u64) -> Result<Replayed, StoreError> {
         assert!(
             !self.journal.is_recording(),
@@ -472,6 +463,13 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// Only an unpoisoned `Ok` commits.
     pub(super) fn complete<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
         if let Some(row) = self.poison.armed() {
+            // A violation on a connect or pop halts the writer (§3.6.2): the
+            // file's coherence is in doubt at that height and every later
+            // write would build on it. A violation in a batch that did
+            // neither (a table-level test probe) aborts this batch only.
+            if let Some(at_height) = self.journal.height_hint() {
+                self.shared.halt(at_height, row);
+            }
             return Err(StoreError::from(row).into());
         }
         if let Some(height) = self.journal.abandoned() {

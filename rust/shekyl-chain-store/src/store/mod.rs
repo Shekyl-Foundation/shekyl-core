@@ -88,9 +88,11 @@
 
 mod connect;
 mod error;
+mod halt;
 mod header;
 mod invariant;
 mod keyed;
+mod pop;
 mod read;
 mod set;
 mod shared;
@@ -102,7 +104,9 @@ pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
     CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
+pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
+pub use pop::Popped;
 pub use read::ReadSnapshot;
 pub use set::SetTable;
 pub use view::BatchView;
@@ -349,6 +353,26 @@ impl ChainStore {
         })
     }
 
+    /// Whether the writer is live or halted (`DAEMON_REDB_STORE.md` §3.6.2).
+    ///
+    /// A `connect` or `pop` that hit a store invariant halts the writer for
+    /// the life of this handle: every later [`write`](Self::write) is
+    /// refused with [`StoreCannot::WriterHalted`], reads stay open, and the
+    /// tip a wallet refreshes against carries the halt
+    /// (`shekyl-rpc-types::chain::ConnectState`, wired at cutover). Not
+    /// persisted: a restart re-derives it by rerunning the belts, so a
+    /// repaired file is not refused by a stale latch.
+    #[must_use]
+    pub fn connect_state(&self) -> ConnectState {
+        match self.shared.halted() {
+            None => ConnectState::Live,
+            Some((at_height, row)) => ConnectState::Halted {
+                at_height: shekyl_types::BlockHeight::from_raw(at_height),
+                row,
+            },
+        }
+    }
+
     /// Whether this store refuses writes.
     #[must_use]
     pub const fn is_read_only(&self) -> bool {
@@ -413,6 +437,9 @@ impl ChainStore {
         let Backend::Writable(db) = &self.backend else {
             return Err(StoreError::from(StoreCannot::ReadOnly).into());
         };
+        if let Some((at_height, row)) = self.shared.halted() {
+            return Err(StoreError::from(StoreCannot::WriterHalted { at_height, row }).into());
+        }
         if !self.shared.try_hold_write() {
             return Err(StoreError::from(StoreCannot::WriteInProgress).into());
         }
@@ -493,3 +520,7 @@ mod view_tests;
 #[cfg(test)]
 #[path = "connect_tests.rs"]
 mod connect_tests;
+
+#[cfg(test)]
+#[path = "pop_tests.rs"]
+mod pop_tests;

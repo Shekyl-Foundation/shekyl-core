@@ -61,7 +61,7 @@ fn coinbase(height: u64, outputs: usize) -> Transaction {
 /// A spend-shaped listed transaction in the storage-pruned form (no
 /// prunable, no pqc_auths): one key image in, `outputs` outputs. Zero rules
 /// admit it; what it exercises is the write set, not consensus.
-fn spend(key_image: u8, outputs: usize) -> Transaction {
+pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
@@ -95,7 +95,7 @@ fn spend(key_image: u8, outputs: usize) -> Transaction {
     }
 }
 
-fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction>) -> Candidate {
+pub(super) fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction>) -> Candidate {
     let block = Block {
         header: BlockHeader {
             major_version: 1,
@@ -112,7 +112,7 @@ fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction>) -> Candi
     Candidate::new(block, listed)
 }
 
-fn facts(height: u64, burned: u64) -> ConnectFacts {
+pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
     ConnectFacts {
         weight: Fact::passed_through(1_000 + height),
         long_term_weight: Fact::passed_through(900 + height),
