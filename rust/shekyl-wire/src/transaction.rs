@@ -1630,6 +1630,26 @@ impl Transaction {
         self.hash_with_prunable(None)
     }
 
+    /// `keccak256` of the **prunable byte region** — exactly the bytes
+    /// [`Self::write_segments`] puts in `prunable`, which is what the C++
+    /// `calculate_transaction_prunable_hash` hashes
+    /// (`blob[unprunable_size..]`) and what the chain store records in
+    /// `txs_prunable_hash`.
+    ///
+    /// This is **not** the txid's prunable component in every case: when the
+    /// region is absent (a coinbase, or a storage-pruned spend) the txid
+    /// substitutes the null hash, while this is `keccak256("")` — the C++
+    /// store's row for a coinbase is the latter. When the region is present
+    /// the two coincide, and [`Self::hash`] is built from this value.
+    #[must_use]
+    pub fn prunable_hash(&self) -> [u8; 32] {
+        let mut prunable = Vec::new();
+        self.ct
+            .write_prunable(&mut prunable)
+            .expect("Vec write is infallible");
+        keccak256(&prunable)
+    }
+
     /// The consensus transaction hash of a **pruned** body, with the prunable
     /// digest supplied instead of computed.
     ///
@@ -1692,13 +1712,9 @@ impl Transaction {
                 // section is absent and its hash is the caller's operand.
                 let h_prunable = match (supplied_prunable, prunable) {
                     (Some(h), _) => h,
-                    (None, Some(prunable)) => {
-                        let mut prunable_buf = Vec::new();
-                        prunable
-                            .write(&mut prunable_buf)
-                            .expect("Vec write is infallible");
-                        keccak256(&prunable_buf)
-                    }
+                    // Present: the region's digest, the same bytes
+                    // `prunable_hash` hashes (one construction).
+                    (None, Some(_)) => self.prunable_hash(),
                     (None, None) => [0u8; 32],
                 };
 

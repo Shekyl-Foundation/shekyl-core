@@ -67,6 +67,39 @@ fn spend_segments_concatenate_to_the_blob_and_the_first_two_to_serialize_base() 
 }
 
 #[test]
+fn prunable_hash_is_keccak_of_the_prunable_segment_on_both_shapes() {
+    // Spend: the pinned `prunable_hash_hex` (C++ `calculate_transaction_prunable_hash`).
+    let pin = fixture("tests/fixtures/pruned_tx_hash_parity_v1.json");
+    let tx = Transaction::from_bytes(&hex_bytes(pin["tx_hex"].as_str().expect("tx_hex")))
+        .expect("parse spend");
+    let want = hex_bytes(
+        pin["prunable_hash_hex"]
+            .as_str()
+            .expect("prunable_hash_hex"),
+    );
+    assert_eq!(tx.prunable_hash().as_slice(), want.as_slice());
+    assert_eq!(
+        tx.prunable_hash(),
+        shekyl_crypto_hash::keccak256(&tx.write_segments().expect("segments").prunable)
+    );
+
+    // Coinbase: an empty region hashes to keccak256(""), which is what the
+    // C++ store writes to `txs_prunable_hash` — NOT the null hash the txid
+    // substitutes for its third component.
+    let block =
+        Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h1.block")).expect("block");
+    let miner = &block.miner_transaction;
+    assert_eq!(miner.prunable_hash(), shekyl_crypto_hash::keccak256(&[]));
+    assert_ne!(miner.prunable_hash(), [0u8; 32]);
+    // And the txid is unchanged by having factored the digest out.
+    assert_eq!(
+        miner.hash(),
+        miner.hash_with_supplied_prunable([0x77; 32]),
+        "a coinbase txid ignores any supplied digest (Null arm)"
+    );
+}
+
+#[test]
 fn live_oracle_spend_segments_concatenate_to_the_daemon_accepted_bytes() {
     let pin = fixture("tests/fixtures/live_oracle_spend_v1.json");
     let tx_bytes = hex_bytes(pin["tx_hex"].as_str().expect("tx_hex"));
