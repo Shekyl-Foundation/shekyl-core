@@ -1387,10 +1387,12 @@ pin the types to this document.
 **`properties` is `small` over a SCOPED domain, pinned 2026-09-14 (DRS-E1
 increment 2).** The table is two jurisdictions under one name. Its chain-state
 cells — `total_burned`, `total_bonded_atomic`, `archival_last_slash_epoch`,
-`archival_frozen_shard_count` (each written on connect and reversed on pop),
-`settlement_epoch_blocks_pin` — are consensus state two honest nodes at one
-height must agree on. Its engine-local cells — `version` (the redb store's
-`schema_version`), `pruning_seed`, `tx_prune_next_block`,
+`archival_frozen_shard_count` (each written on connect and reversed on pop)
+— are consensus state two honest nodes at one height must agree on
+(`settlement_epoch_blocks_pin` was listed here until 2026-09-15; it is
+**engine-local** per the `UPDATE` below). Its engine-local cells — `version`
+(the redb store's `schema_version`), `settlement_epoch_blocks_pin` (the redb
+store's `settlement_epoch_blocks`), `pruning_seed`, `tx_prune_next_block`,
 `last_pruned_tx_data_height`, and the redb store's `apply_policy` provenance
 — are per-node facts two honest nodes legitimately differ on: a prune seed is
 random, a provenance is a test-harness history. Folding the whole table would
@@ -1400,8 +1402,21 @@ makes the boundary a type: `codec::PropertyCell::Scope` is `ChainState` or
 `EngineLocal` per cell, a cell cannot be declared without one, `properties`
 has no raw write handle, and the fold domain is "every `ChainState` cell" —
 derived from the type at the surface that defines the cell, not from a list
-here. This paragraph is the LMDB-side record of the same line. **One cell is
-neither, and its scope is the surface owner's ruling, not this paragraph's:**
+here. This paragraph is the LMDB-side record of the same line. **UPDATE
+2026-09-15 (S-CHAIN-W pre-flight, SCW-2 amended on PR #756 review):** the
+chain-state list above named `settlement_epoch_blocks_pin`; the surface that
+defines the cell (`SettlementEpochBlocksCell`, DRS-E1 increment 3) scopes it
+**`EngineLocal`**, and by this paragraph's own rule the type wins. It is a
+file-identity pin like `schema_version` — sealed at `create`, compared at
+`open`, refused on mismatch — not a per-height state written on connect and
+reversed on pop, and a `ChainState` scope would make it overwritable by any
+batch and restorable by pop. The divergence it guards is already
+digest-visible through the epoch-shaped archival rows; the open-time refusal
+fails before a row is written. Reopener: a schedule divergence the comparator
+sees in no table flips the scope, with a create-only bound on
+`upsert_property` in the same change (`DRS_E1_SCHAIN_W.md` §7 SCW-2). **One
+cell is neither, and its scope is the surface owner's ruling, not this
+paragraph's:**
 `archival_prune_watermark_epoch` is consensus-driven but **exempt from pop
 reversal** by design (`LMDB_SCHEMA.md`'s row: a pop cannot restore pruned
 rows, so the floor never retreats), which means two honest nodes at one

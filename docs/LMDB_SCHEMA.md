@@ -934,16 +934,16 @@ Offset  Size  Field
 
 ### `curve_tree_roots`
 
-Per-block curve-tree root hash for fast lookup without deserializing checkpoints.
+Per-height curve-tree root hash for fast lookup without deserializing checkpoints.
 
 | Property | Value |
 |---|---|
 | LMDB name | `"curve_tree_roots"` |
 | Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` block height (8 bytes) |
+| Key | `uint64_t` block height (8 bytes) — key *h* holds the tree state **at** height *h*: block *h−1*'s connect writes it as `prev_height + 1` (`blockchain_db.cpp:664`), so it is the anchor CEN-I12 reads for `ref_height = h` and the root block *h*'s header must carry (CEN-B5) |
 | Value | 32-byte root hash |
-| Writers | `set_curve_tree_root_at_height` (block connect), deleted on `pop_block` |
-| Readers | `get_curve_tree_root_at_height` |
+| Writers | `store_curve_tree_root_at_height` (block connect) — **only when the block's drain grew the tree** (`if (new_output_count > 0)`, `blockchain_db.cpp:639`); a block that matured no leaf writes no row, so the table is sparse in the bootstrap window and dense once every block drains a coinbase leaf. Deleted on `pop_block` |
+| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** root on a missing key (`db_lmdb.cpp:9757`, `MDB_NOTFOUND` → zeroed array), not the tree state at that height; recorded as S-CHAIN-W SCW-19 (`docs/design/DRS_E1_SCHAIN_W.md` §7), open |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
 
 ### `pending_tree_leaves`

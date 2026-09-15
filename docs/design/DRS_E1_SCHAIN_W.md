@@ -4,21 +4,24 @@
 `65e7be450` against `shekyl-chain-rules` as it stands on PR #753
 (`f03b44452`; the API read here is unchanged since `0bb238896`); **round-1
 rulings taken 2026-09-15** on every §10 question (each entry carries its
-ruling line-local). §3 is the contract as ruled; §7 the substrate findings
-with dispositions; §8 the commit sequence, of which commits 1–3 may start
-before #753 merges. Implements *from*
+ruling line-local); **one round-2 question OPEN** (§10.1, SCW-19: the
+`curve_tree_roots` write condition). §3 is the contract as ruled; §7 the
+substrate findings with dispositions; §8 the commit sequence, of which
+commits 1–3 may start before #753 merges (#753 merged 2026-09-15; this
+document was rebased onto it). Implements *from*
 [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
 (Q3–Q6, §7.3, §9, §11 — the ruling, CLOSED-as-record),
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §3.6.2–§3.6.3 and §7 (the
 S-CHAIN-W row and DRS-D12), and
-[`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) (SI-1…SI-8).
-Nothing in this document re-opens any of them; where the substrate disagrees
+[`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) (SI-1…SI-8 as
+found; **SI-9** is minted by this document, §6, and the register has nine rows
+from this PR on). Nothing in this document re-opens any of them; where the substrate disagrees
 with a ruling's *wording* the disagreement is a §7 finding with a disposition,
 not a silent override.
 
 **Why a separate document.** The S-CHAIN-W row in DRS §7 is one table line.
 The increment it names is the largest single write surface in the store (17
-LMDB tables, two funnels, a journal that replaces five C++ journals, three
+LMDB tables, two funnels, a journal that replaces seven C++ journals, three
 consensus rows arriving surface-bound, and the writer halt the RPC exposes).
 Rule 26's pre-flight pass is a re-check of substrate and execution of
 artifacts between design closure and production code; the ruling closed the
@@ -41,7 +44,7 @@ are the same item.
 | Precondition (DRS §7 S-CHAIN-W row) | State at `65e7be450` | Evidence |
 | --- | --- | --- |
 | DRS-E1 increment 2.5 — `WriteBatch<'store, 'id>` brand, `StoreError::class()`, `StoreInvariant`, `InsertTable`/`UpsertTable`, `StoreCannot`, poison-on-`InvariantViolated` | **landed** (PR #752, merged 2026-09-15) | `rust/shekyl-chain-store/src/store/{write,keyed,error,invariant}.rs`; DRS §3.6.3 |
-| DRS-E6 increment 1 — `shekyl-chain-rules` scaffold: `ChainView<'id>` + `AtHeight`/`RecordedBlock`, `RuleSet`/`RuleSetId`/`RuleSchedule`, `ChainValid<'id, V>`/`InvalidBlock`/`Verdict`, `Candidate`/`ValidatedBlock`, `validate` | **open** — PR #753 at `f03b44452`, retargeted to `dev` 2026-09-15, `MERGEABLE`; the crate has no store dependency (`Cargo.toml`: `shekyl-types`, `shekyl-wire`, `shekyl-address` only) | `git show pr/753:rust/shekyl-chain-rules/src/{view,verdict,block,rule_set}.rs` |
+| DRS-E6 increment 1 — `shekyl-chain-rules` scaffold: `ChainView<'id>` + `AtHeight`/`RecordedBlock`, `RuleSet`/`RuleSetId`/`RuleSchedule`, `ChainValid<'id, V>`/`InvalidBlock`/`Verdict`, `Candidate`/`ValidatedBlock`, `validate` | **landed** — PR #753 merged to `dev` 2026-09-15 (`66a2bb215`; read here at `f03b44452`, API unchanged at merge); the crate has no store dependency (`Cargo.toml`: `shekyl-types`, `shekyl-wire`, `shekyl-address` only) | `rust/shekyl-chain-rules/src/{view,verdict,block,rule_set}.rs` on `dev` |
 | DRS-D12 — replay-that-validates is the Rust store's only writer before cutover | ratified 2026-09-15 (DRS §7 decision table) | S-CHAIN-W is therefore a **callee**; its production caller is DRS-E2's replay. Rule 22 is satisfied by staging with a named consumer, provided this increment's own tests exercise `connect`/`pop` through the public API (§8) |
 
 **Hard dependency.** `connect` takes a `ChainValid<'id, V>` that only the rules
@@ -89,13 +92,22 @@ connect(valid, facts, in_force):
                   output_amounts, spent_keys                                 (SI-3, SI-9, SI-1)
   3. [E3 hook]    pending leaves → drain → grow → segment freeze            (S-CURVE)
   4. root         curve_tree_roots[h+1] = facts.root_after                  (SI-4)
+                  — the C++ writes this row only when the drain grew the
+                    tree (`:639`–`:664`); the Rust condition is SCW-19 (§10)
   5. [E4 hook]    attestation witness                                       (S-ARCH)
   6. block        blocks[h], block_heights[hash], block_info[h]             (SI-2)
   7. rule set     hf_versions[h] = in_force                                 (B3 belt)
-  8. burn         block_burn[h] (if nonzero), total_burned += burned        (SI-8)
+  8. burn         only if h > 0 && burned > 0 (`blockchain.cpp:6148`):
+                  block_burn[h], total_burned += burned                     (SI-8)
   9. [E4 hook]    accrual row, slash, epoch close                           (S-ARCH)
  10. journal      undo_log[h] = entries recorded by 2–9                     (SI-6)
 ```
+
+Phase 8 is conditional as a whole, not per row: a zero-burn block (and
+genesis, whatever its amount) writes neither the `block_burn` row nor a
+`total_burned` pre-image, so the declared write set and the undo row are the
+C++'s exactly — the guard is one `if`, and a no-op `Replaced` entry per
+block would be a divergence the digest cannot see but the row diff can.
 
 Each `[hook]` is a phase with no body in this increment; E3/E4 land bodies,
 not new phases. `pop` has no phase list: it is the reverse replay of step 10's
@@ -147,10 +159,16 @@ pub struct ConnectFacts {
     pub long_term_weight: Fact<u64>,
     pub cumulative_difficulty: Fact<u128>,
     pub coins_generated: Fact<u64>,
-    /// This block's destroyed amount. 0 writes no `block_burn` row (LMDB's
-    /// absent-reads-as-0 convention, kept so the digest domain matches).
+    /// This block's destroyed amount. 0 writes no `block_burn` row and no
+    /// `total_burned` fold (LMDB's absent-reads-as-0 convention and the
+    /// `blockchain.cpp:6148` guard, kept so the digest domain matches).
     pub burned: Fact<u64>,
-    /// The tree root after this block — `curve_tree_roots[h+1]` (SI-4).
+    /// The tree root **after this block's drain** — the state the *next*
+    /// header must carry (CEN-B5) and a spend referencing height `h+1`
+    /// anchors to (CEN-I12); recorded at `curve_tree_roots[h+1]` (SI-4).
+    /// Not this block's own header root: that is the state *before* its
+    /// drain, already at `curve_tree_roots[h]` from the parent's connect.
+    /// Whether a row is written when the drain grew nothing is SCW-19.
     pub root_after: Fact<CurveTreeRoot>,
 }
 /// Which census rows derive a fact — and so delete its `Fact` wrapper.
@@ -184,11 +202,18 @@ impl ConnectFacts {
 So `block_info` becomes parity evidence when slices 2, 4 and 7 have landed
 and S-CURVE grows the tree — a named critical path, not a countdown.
 
-These are exactly the values `Blockchain` hands `BlockchainDB::add_block`
-today (`blockchain_db.cpp:435`–`:440`: `block_weight`,
-`long_term_block_weight`, `cumulative_difficulty`, `coins_generated`;
-`:664` the root; `blockchain.cpp:6157` the burn), minus
-`archival_budget_accrual` (E4's).
+These are the values the C++ funnel *records without deriving*, and they
+reach LMDB by three different routes — which is why the C++ has three
+provenances where the Rust has one struct. Four are `BlockchainDB::add_block`'s
+own arguments (`blockchain_db.cpp:435`–`:440`: `block_weight`,
+`long_term_block_weight`, `cumulative_difficulty`, `coins_generated`). The
+root is **not** an argument: the tree grow inside `add_block` computes it and
+hands it to `store_curve_tree_root_at_height` (`:663`–`:664`) before the
+block row is written. The burn is written **outside** `add_block`, after it
+returns, by `Blockchain::handle_block_to_main_chain` through `add_block_burn`
+/ `set_total_burned` (`blockchain.cpp:6148`–`:6160`) — the second logical
+unit SCW-5 pulls into the funnel. `archival_budget_accrual` (a sixth
+`add_block` argument) is E4's and is not here.
 
 **Ruled 2026-09-15 (SCW-1): the driver supplies them, stamped.** Under
 DRS-E2's parity replay the source is the LMDB `block_info` row being replayed
@@ -199,7 +224,12 @@ weight arrive with 4.D / 4.G — never ahead of them") and the field is
 pass-through field names inside the committing batch — exactly as increment
 2 widens it with stubbed families — so `is_parity_evidence()` is `false`
 while any field is pass-through and **`block_info`'s diff rows are not parity
-evidence until `passed_through()` is empty**. The alternative — blocking
+evidence while the file's `passed_through_facts` cell is non-empty**. The cell
+is monotone (§3.8): one pass-through connect disqualifies the *file*, and a
+later all-derived block does not restore it — `passed_through()` reaching
+zero on the current block is the E6 progress signal, not the evidence test;
+the evidence test is a fresh file whose every connect was derived (§8's
+fresh-file rule). The alternative — blocking
 S-CHAIN-W on E6's DAA / emission / weight increments — was rejected: it puts
 the store's write path behind the largest E6 increments for values the store
 only records, and the stamp makes the deferral visible instead of trusted.
@@ -224,8 +254,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
 | `ChainView<'id>` method | Reads | Note |
 | --- | --- | --- |
 | `has_key_image(ki)` | `spent_keys.get(ki).is_some()` | the chain half of CEN-L1 / CEN-I7 |
-| `block_at(h)` | `block_info[h]` → `RecordedBlock { hash, header }`; absent → `AtHeight::AboveTip` | `RecordedBlock` grows with E6 rows, never ahead of them |
-| `root_at(h)` | `curve_tree_roots[h + 1]` | **off-by-one is the contract**: the trait documents `root_at(h)` as the root *after* the block at *h*; LMDB keys that root at *h+1* (`store_curve_tree_root_at_height(prev_height + 1, …)`, `blockchain_db.cpp:664`). One place maps it, with a test at both ends |
+| `block_at(h)` | `block_info[h]` for the hash and the recorded-at-all test; `blocks[h]` decoded by `shekyl-wire` for the header → `RecordedBlock { hash, header }`; `block_info` absent → `AtHeight::AboveTip`; `block_info` present and `blocks` absent → `EngineError::Corrupt` | `BlockInfo` is the 88-byte metadata row (`LMDB_SCHEMA.md` "Block Info") and carries **no** header, so CEN-C2/C3's timestamps and CEN-A2/A4's parent hash come from the block blob; `RecordedBlock` grows with E6 rows, never ahead of them |
+| `root_at(h)` | `curve_tree_roots[h]` | **The tree state *at* chain height *h***: the root block *h−1*'s connect wrote at key *h* (`store_curve_tree_root_at_height(prev_height + 1, …)`, `blockchain_db.cpp:664`), which is what CEN-I12's three `get_curve_tree_root_at_height(ref_height)` reads return and what block *h*'s own header must equal (CEN-B5). **Not `h + 1`** — that is the root *after* *h*'s drain, the anchor for a reference to *h+1*. The trait comment's "as recorded **after** the block at `height`" clause reads one height high against its own second clause ("the anchor a spend that references `height` is verified against"); the census row is the tie-break and the comment is corrected in this PR (SCW-19). One place maps it, with a test at both ends. A recorded height with **no** row is SCW-19's open half |
 | `type Fault` | `StoreError` | opaque to every rule (the trait puts no bound on it) |
 
 `BatchView<'txn, 'id>` is a `WriteBatch` projection, not a `ReadSnapshot`
@@ -268,17 +298,19 @@ impl ChainStore {
 
 | Item | Where | Why |
 | --- | --- | --- |
-| `BlockInfo` (canonical, 96 B: height, timestamp, coins, weight, cumulative difficulty as `u128`, hash, cumulative RCT outputs, long-term weight) | `codec/block_info.rs` | `block_info` value; today `&[u8]` with no writer |
+| `BlockInfo` (canonical, **88 B** — the 96-byte LMDB row minus `bi_height`, which is the redb key and is not repeated: timestamp, coins, weight, cumulative difficulty as `u128`, hash, **this block's** RCT output count, long-term weight) | `codec/chain.rs` | `block_info` value; today `&[u8]` with no writer. `bi_cum_rct` is **per-block at this pin, not cumulative**: `db_lmdb.cpp:1006` sets it to `num_rct_outs` and only `blk.major_version >= 4` adds the parent's — a dead Monero-v4 arm (CEN-L15: "delete, do not port"; live major is 1). The Rust field is `rct_outputs`, written from this block's output count alone; a port that accumulates diverges from LMDB at height 1 |
 | `TxIndex` (tx id, unlock time, height) | `codec/tx_index.rs` | `tx_indices` value under the hash key (zerokval collapse) |
 | `OutTx` (tx hash, local index) | `codec/output.rs` | `output_txs` value under the output-id key |
 | `OutKey` (amount index ‖ output id ‖ pubkey ‖ unlock time ‖ height ‖ commitment) | `codec/output.rs` | `output_amounts` multimap value (`U64PrefixBytes` — the amount index is the sort prefix) |
 | `TxOutputIndices` (`Vec<u64>` amount indices) | `codec/tx_index.rs` | `tx_outputs` value |
 | `CurveTreeRoot` codec | `codec/primitives.rs` | `curve_tree_roots` value |
 | `TotalBurnedCell` — `KEY = "total_burned"`, `Scope = ChainState`, `Value = u64` | `codec/property.rs` `property_cells!` | the one chain-state cell this increment writes; `upsert_property` already bounds to `ChainState` |
-| `CoverageGapsCell` — `KEY = "rule_coverage_gaps"`, `Scope = EngineLocal`, `Value = RowSet` (sorted, deduplicated `CenRow::as_str()` names, length-prefixed) | `codec/property.rs`, `codec/row_set.rs` | §3.8; the `Provenance` pattern applied to coverage (C2-R8 §9.4) |
+| `CoverageGapsCell` — `KEY = "rule_coverage_gaps"`, `Scope = EngineLocal`, `Value = CoverageGaps` (on the wire: sorted, deduplicated `CenRow::as_str()` names, length-prefixed; in memory a `Copy` bitset so `Provenance` stays `Copy`) | `codec/property.rs`, `codec/evidence.rs` | §3.8; the `Provenance` pattern applied to coverage (C2-R8 §9.4) |
+| `PassedThroughFactsCell` — `KEY = "passed_through_facts"`, `Scope = EngineLocal`, `Value = PassedThroughFacts` (the `ConnectFacts` field names, same encoding) | `codec/property.rs`, `codec/evidence.rs` | §3.2 / §3.8; the third `Provenance` component. A name the running binary does not know refuses to decode (SI-7): a field that became `Derived` is a layout change and bumps `SCHEMA_VERSION` |
+| `SettlementEpochBlocksCell` — `KEY = "settlement_epoch_blocks"`, `Scope = EngineLocal`, `Value = SettlementEpochBlocks(NonZeroU64)` | `codec/property.rs`, `codec/settlement_epoch.rs` | SCW-2 (the C++ pin's key verbatim); sealed at `create`, compared at `open`, `StoreCannot::SettlementEpochMismatch` |
 | `UndoEntry` / `undo_log` table + `TableOrdinal` | `schema.rs`, `store/undo.rs` | §5 |
 | `StoreInvariant::{KeyImageNotFresh, TipMismatch, TxHashNotFresh, RootRewritten, UndoTopNotTip, FoldOverflow, IdNotFresh}` | `store/invariant.rs` | SI-1/2/3/4/6/8 + SI-9 (§6) |
-| `StoreCannot::{RuleSetNotInForce, PopBelowFloor, WriterHalted}` | `store/error.rs` | §3.1, §3.3, §3.6 |
+| `StoreCannot::{RuleSetNotInForce, RuleSetUnknown, PopBelowFloor, WriterHalted, SettlementEpochMismatch}` | `store/error.rs` | §3.1, §3.3, §3.6, §3.8 (`RuleSetUnknown`: `in_force` names an id no schedule issued), SCW-2 |
 | `ConnectFacts`, `Connected`, `Popped`, `ConnectState`, `BatchView` | `store/connect.rs`, `store/view.rs` | §3.1–§3.6 |
 
 Every codec is a rule-42 layout change: `SCHEMA_VERSION` bumps once for the
@@ -289,8 +321,12 @@ increment, the snapshot tests move with it, and `catalogue()` gains one row.
 C2-R8 §9.4 rules that coverage is persisted with anything the verdict writes,
 **in the `Provenance` pattern** — `ApplyPolicy` is what a session applies,
 `Provenance` is what the file has *ever* skipped, only `Full` is parity
-evidence. Applied to coverage: `connect` computes
-`gaps = in_force.enforced() − valid.coverage()` and, if non-empty, widens the
+evidence. Applied to coverage: `connect` resolves the id it was handed —
+`RuleSet::for_id(in_force)` (`rule_set.rs`; `RuleSetId` is a `u8` newtype and
+has no `enforced()` of its own), refusing an id no schedule issued as
+`StoreCannot::RuleSetUnknown(in_force)` (what it enforces, and so what the
+verdict may have skipped, cannot be known) — then computes
+`gaps = rule_set.enforced() − valid.coverage()` and, if non-empty, widens the
 `rule_coverage_gaps` header cell by union **inside the batch's own
 transaction** (so abort/drop leave no taint, and a later complete validator
 cannot narrow it). The same widening records `facts.passed_through()`'s field
@@ -309,10 +345,25 @@ block's verdict is still evidence the file once accepted it. Names, not bitset i
 shifts when the census inserts a row), which is why the cell is
 `EngineLocal` and outside the digest domain: two correct stores of one chain
 validated by validators of different completeness hold the same chain state
-and different evidence. Under `RuleSet::GENESIS` (zero rules) `enforced()` is
-empty, gaps are empty, and the cell is never written — so the E2 harness at
-this pin stamps parity evidence honestly: nothing was skipped because nothing
-was required.
+and different evidence.
+
+**What the stamp says at this pin — corrected 2026-09-15 on review.** An
+earlier draft of this paragraph read `RuleSet::GENESIS` as "zero rules, so
+`enforced()` is empty and the cell is never written". That is wrong at
+`rule_set.rs` as merged: `GENESIS` enforces **`CenRow::ALL` — every one of
+the 153 consensus rows** — while the crate *implements* none of them (the
+census-coverage gate reports `implemented 0/153`, the probe rule its only
+subject), and `RuleCoverage::is_complete_for` refuses empty coverage rather
+than treating it as vacuously complete. So the **first** `connect` on a fresh
+file widens `rule_coverage_gaps` to all 153 names, `is_parity_evidence()` is
+`false` from height 0, and it stays `false` until a validator that implements
+every enforced row has connected every block of a fresh file. That is the
+honest statement: at this pin nothing *was* validated, and a scaffold file
+must not read as parity evidence. The increment's own tests assert exactly
+this (`connect_tests.rs`: the fresh file is evidence, the file after genesis
+is not, and the gap set equals `GENESIS.enforced()`). The E2 diff harness is
+unaffected in what it *compares* — table digests — and gains a stamp that
+says, per file, which rows the comparison was not evidence for.
 
 ---
 
@@ -326,23 +377,23 @@ is journaled (§5); pop is not a column because pop is the same for all.
 
 | Table | Key → value (redb, `schema.rs`) | C++ writer (connect) | Rust verb · SI row | Class | Note |
 | --- | --- | --- | --- | --- | --- |
-| `blocks` | `u64` h → block blob | `add_block` `db_lmdb.cpp:955` (`MDB_APPEND`) | `insert` · SI-2 | append-mostly | blob is `valid.block()` re-serialized by `shekyl-wire`, not the candidate bytes — identity is CEN-B6's (Q4) |
-| `block_heights` | `LmdbHashKey` hash → h | `add_block` | `insert` · SI-2 | set-shaped | zerokval collapse; the hash is `valid.hash()` |
-| `block_info` | `u64` h → `BlockInfo` | `add_block` | `insert` · SI-2 | append-mostly | `cum_rct` is a store-maintained count (`prev.cum_rct + outputs in block`), a storage index like `tx_id`, not a Q4 value |
+| `blocks` | `u64` h → block blob | `add_block` `db_lmdb.cpp:994` (`MDB_APPEND`) | `insert` · SI-2 | append-mostly | blob is `valid.block()` re-serialized by `shekyl-wire`, not the candidate bytes — identity is CEN-B6's (Q4) |
+| `block_heights` | `LmdbHashKey` hash → h | `add_block` `:1023` | `insert` · SI-2 | set-shaped | zerokval collapse; the hash is `valid.hash()` |
+| `block_info` | `u64` h → `BlockInfo` | `add_block` `:1006`–`:1019` (`MDB_APPENDDUP`) | `insert` · SI-2 | append-mostly | `bi_cum_rct` is **this block's** RCT output count (`:1006`), a storage index like `tx_id`, not a Q4 value; the `major_version >= 4` accumulation at `:1007`–`:1015` never runs and is not ported (CEN-L15). 88 B under the redb key (§3.7) |
 | `tx_indices` | `LmdbHashKey` tx hash → `TxIndex` | `add_transaction_data` `:1070` | `insert` · **SI-3** | set-shaped | the hash-keyed tx table (SCW-3) |
-| `txs_pruned` | `u64` tx id → prefix ‖ ct base | `add_transaction_data` `:1149` | `insert` · SI-9 | append-mostly | segment boundaries: SCW-9 |
-| `txs_pqc_auths` | `u64` tx id → pqc auths | `add_transaction_data` `:1156` (v≥3, non-coinbase, inputs) | `insert` · SI-9 | append-mostly | absent for the miner tx |
-| `txs_prunable` | `u64` tx id → prunable | `add_transaction_data` `:1162` | `insert` · SI-9 | excluded (pruned) | |
-| `txs_prunable_hash` | `u64` tx id → `Hash32` | `add_transaction_data` `:1177` (v>1) | `insert` · SI-9 | append-mostly | the hash is a Q4 value: the validator derives it (SCW-10) |
-| `tx_outputs` | `u64` tx id → `TxOutputIndices` | `add_tx_amount_output_indices` `:1341` | `insert` · SI-9 | append-mostly | |
-| `output_txs` | `u64` output id → `OutTx` | `add_output` `:1274` | `insert` · SI-9 | set-shaped | zerokval collapse |
-| `output_amounts` | `u64` amount ⇉ `OutKey` (multimap) | `add_output` `:1314`–`:1326` | multimap `insert` · SI-9 | set-shaped | amount-0 keying verbatim; R8b-2 open (SCW-8) |
+| `txs_pruned` | `u64` tx id → prefix ‖ ct base | `add_transaction_data` `:1149` | `insert` · SI-9 | append-mostly | **the `tx_id` primary**: dense, `tx_id` = its entry count; segment boundaries: SCW-9 |
+| `txs_pqc_auths` | `u64` tx id → pqc auths | `add_transaction_data` `:1156` (v≥3, non-coinbase, inputs) | `insert` · SI-9 | append-mostly | **sparse side table** under the shared `tx_id`: absent for the miner tx; SI-9 asserts the slot is fresh, not that the table is dense |
+| `txs_prunable` | `u64` tx id → prunable | `add_transaction_data` `:1162` | `insert` · SI-9 | excluded (pruned) | side table under `tx_id` |
+| `txs_prunable_hash` | `u64` tx id → `Hash32` | `add_transaction_data` `:1177` (v>1) | `insert` · SI-9 | append-mostly | **sparse side table** (v1 txs have no row); the hash is a Q4 value: the validator derives it (SCW-10) |
+| `tx_outputs` | `u64` tx id → `TxOutputIndices` | `add_tx_amount_output_indices` `:1341` | `insert` · SI-9 | append-mostly | side table under `tx_id` |
+| `output_txs` | `u64` output id → `OutTx` | `add_output` `:1274` | `insert` · SI-9 | set-shaped | **the `output_id` primary**: zerokval collapse; `num_outputs()` reads its last key + 1 (`:3234`), which equals its entry count exactly because SI-9 holds |
+| `output_amounts` | `u64` amount ⇉ `OutKey` (multimap) | `add_output` `:1307`–`:1326` | `SetTable::insert` · SI-9 | set-shaped | `amount_index` = the member count under **that amount** (`mdb_cursor_count` after positioning on the amount key, `:1307`–`:1314`), never a whole-table count; amount-0 keying verbatim; R8b-2 open (SCW-8) |
 | `spent_keys` | `LmdbHashKey` key image → `()` | `add_spent_key` `:1429` (`MDB_NODUPDATA`) | `insert` · **SI-1** | set-shaped (v0) | the belt beneath CEN-L1 / CEN-I7 |
-| `curve_tree_roots` | `u64` h+1 → `CurveTreeRoot` | `store_curve_tree_root_at_height` `:9733` | `insert` · **SI-4** | set-shaped | written from `facts.root_after` |
+| `curve_tree_roots` | `u64` h+1 → `CurveTreeRoot` | `store_curve_tree_root_at_height` `:9740`, called at `blockchain_db.cpp:664` **only inside `if (new_output_count > 0)`** (`:639`) | `insert` · **SI-4** | set-shaped | written from `facts.root_after`; the write *condition* is SCW-19 |
 | `hf_versions` | `u64` h → `u8` | `set_hard_fork_version` `:4702` (via `hardfork.cpp:141`) | `insert` · SI-2 | small | §3.5; W15 closes |
-| `block_burn` | `u64` h → `u64` | `add_block_burn` `:4878` (`blockchain.cpp:6157`, nonzero only) | `insert` · SI-2 | set-shaped | inside the funnel — W9 closes |
-| `properties` · `total_burned` | `TotalBurnedCell` | `set_total_burned` `:5066` (`blockchain.cpp:6160`) | `upsert_property`, `checked_add` · **SI-8** | small (`ChainState` fold) | inside the funnel — W6/W9 close |
-| `undo_log` (**new**) | `u64` h → `Vec<UndoEntry>` | — (replaces five C++ journals) | `insert` · **SI-6** | excluded (engine-local; named reason: derivable from the write set) | §5 |
+| `block_burn` | `u64` h → `u64` | `add_block_burn` `:4878` (`blockchain.cpp:6148`–`:6157`: `new_height > 0 && block_burn_amount > 0`) | `insert` · SI-2 | set-shaped | inside the funnel — W9 closes |
+| `properties` · `total_burned` | `TotalBurnedCell` | `set_total_burned` `:5066` (`blockchain.cpp:6160`, same guard) | `upsert_property`, `checked_add` · **SI-8** | small (`ChainState` fold) | inside the funnel — W6/W9 close |
+| `undo_log` (**new**) | `u64` h → `Vec<UndoEntry>` | — (replaces seven C++ journals, §5) | `insert` · **SI-6** | excluded (engine-local; named reason: derivable from the write set) | §5 |
 
 Not written by `connect` and therefore not in the set: `txs` (dead, DRS-W4),
 `txs_prunable_tip` (ruled not to port), `output_metadata` (depth prune only),
@@ -350,22 +401,35 @@ Not written by `connect` and therefore not in the set: `txs` (dead, DRS-W4),
 other than `roots`, `pending_tree_*`, `block_pending_additions`,
 `output_to_leaf`/`leaf_to_output` (E3/E4 hooks), `txpool_*`, `alt_blocks`.
 
-**Storage ids.** `tx_id`, `output_id` and the per-amount `amount_index` are
-LMDB's `mdb_stat` entry counts at write time (`:1078` `get_tx_count()`,
-`:1284` `num_outputs()`, `:1314` `num_elems`). The Rust port derives them the
-same way (`Table::len()`), so the ids are dense and pop-symmetric without a
-counter cell. A collision on any of them is not a consensus fact and not
-SI-3's set-ness; it is a corrupted index and gets its own row (**SI-9**, §6).
+**Storage ids.** Three ids are derived at write time, each from **one owning
+table**, by three different LMDB reads that agree only because the owner is
+dense: `tx_id` is `get_tx_count()` = `mdb_stat(txs_pruned).ms_entries`
+(`:1078` → `:3636`–`:3641`); `output_id` is `num_outputs()` = the **last key
+of `output_txs` + 1** (`:1284` → `:3234`); `amount_index` is `num_elems` =
+`mdb_cursor_count` of the duplicates under **the current amount key** after
+`MDB_SET` on it (`:1307`–`:1314`) — a per-amount count, not a table count.
+The Rust port reads one thing per id: `txs_pruned.len()`, `output_txs.len()`,
+`output_amounts.get(amount).len()`. Under SI-9 the primaries are dense, so
+count and last-key-plus-one coincide and no counter cell is needed. The
+**side tables** keyed by a shared id — `txs_pqc_auths`, `txs_prunable`,
+`txs_prunable_hash`, `tx_outputs` under `tx_id` — are **sparse by design**
+(the miner tx has no PQC auths; a v1 tx has no prunable hash), so SI-9 does
+**not** say they are dense: it says the slot each `insert` targets is absent.
+A collision on any of them is not a consensus fact and not SI-3's set-ness;
+it is a corrupted index and gets its own row (**SI-9**, §6 — wording
+tightened 2026-09-15 on review to primary-dense / side-table-fresh).
 
 ---
 
 ## 5. Pop as reverse replay — the undo log
 
 C2-R8 Q5 ruled pop a reverse replay of one journal. The C++ pop funnel walks
-five journals with three different height bases (audit §3 table: slash /
-epoch-close at *h*, emission-claim / unbond / holdings / rebond at *h−1*,
-plus the drain journal), each with its own revert function. The Rust
-mechanism replaces all of them with one entry per connect.
+**seven** journals on two height bases (audit §3 table: the six archival
+pre-image journals — slash and epoch-close at *h*, emission-claim, unbond,
+holdings-update and rebond at *h−1* — plus the curve-tree drain journal),
+each with its own revert function and an order that is load-bearing between
+them (audit R-4). The Rust mechanism replaces all of them with one entry per
+connect, in which order is the recording order and nothing else.
 
 ### 5.1 Recording
 
@@ -384,8 +448,11 @@ enum UndoEntry {
 }
 ```
 
-`KeyedTable::insert` / `upsert`, the multimap insert, and
-`WriteBatch::upsert_property` each push one entry. `connect` step 10 writes
+`InsertTable::insert` / `UpsertTable::upsert`, `SetTable::insert` (the
+multimap handle `open_multimap_table` returns — increment 2.5's raw
+`redb::MultimapTable` return is retired in commit 1, because a handle whose
+`insert` does not journal would leave `output_amounts` rows behind on pop),
+and `WriteBatch::upsert_property` each push one entry. `connect` step 10 writes
 the accumulated `Vec<UndoEntry>` as `undo_log[h]` (itself an `insert`, SI-6,
 and itself the last thing journaled — so the row's own entry is *not* in the
 row, and pop deletes the row explicitly after replay).
@@ -469,7 +536,7 @@ construction).
 | SI-4 | `curve_tree_roots` insert | `RootRewritten` | `ruled → built` |
 | SI-6 | `undo_log` insert; pop's top-is-tip check | `UndoTopNotTip` | `ruled → built` |
 | SI-8 | `total_burned` fold (`checked_add`) | `FoldOverflow` | `ruled → built` |
-| **SI-9** | `txs_*[tx_id]`, `tx_outputs[tx_id]`, `output_txs[output_id]`, `output_amounts` inserts | `IdNotFresh` | **minted `ruled` 2026-09-15** in the register (SCW-4 ruled) — "store-derived ids (`tx_id`, `output_id`, `amount_index`) are dense and fresh: the next id equals the table length and its slot is absent"; `ruled → built` at §8 commit 6 |
+| **SI-9** | `txs_*[tx_id]`, `tx_outputs[tx_id]`, `output_txs[output_id]`, `output_amounts` inserts | `IdNotFresh` | **minted `ruled` 2026-09-15** in the register (SCW-4 ruled) — "store-derived ids are dense in their **primary** (`tx_id` = `txs_pruned`'s entry count, `output_id` = `output_txs`'s, `amount_index` = the member count under that amount) and **fresh in every table keyed by them** — the slot an `insert` targets is absent; side tables under a shared id are sparse by design and SI-9 does not say otherwise" (wording tightened on review, §4 "Storage ids"); `ruled → built` at §8 commit 6 |
 | SI-5 | — | — | stays `ruled` (the trim is S-CURVE's) |
 | SI-7 | — | `CellCorrupt` | already `built` |
 
@@ -507,8 +574,35 @@ cell (written at `create`, compared at `open`, refused loudly on mismatch).
 → Re-home as a third `EngineLocal` header cell (`settlement_epoch_blocks`),
 written by `ChainStore::create` from a parameter and checked by `open`; a
 small S-TXN-territory commit in the S-CHAIN-W PR (§8 commit 3). The DRS §7
-S-CHAIN-W row's method list shrinks to six; the row is edited in the same
-PR. Fix: S-CHAIN-W.
+S-CHAIN-W row's method list shrinks to six; that row is edited by the
+**increment** PR (#757), not this one — at this PR's checkout the row still
+reads seven with the pin among them, and that is correct until the cell
+lands. Fix: S-CHAIN-W.
+
+**SCW-2, amended 2026-09-15 on review — the scope is a contract change and
+is recorded as one.** `LMDB_WRITE_ATOMICITY_AUDIT.md`'s `properties`
+paragraph (pinned 2026-09-14, increment 2) lists `settlement_epoch_blocks_pin`
+among the table's **chain-state** cells; the cell this increment builds is
+**`EngineLocal`**. The two cannot both stand, because that paragraph is the
+LMDB side of the digest domain the E2 comparator folds. The disposition taken
+— **`EngineLocal`, and the audit paragraph is amended in this PR with a dated
+`UPDATE`** — rests on three things the audit's own definition supplies. (1)
+A `ChainState` scope is not only a fold domain, it is a **write permission**:
+`upsert_property` is bounded to `Scope = ChainState`, so a chain-state pin
+would be overwritable by any batch and *restored by pop* — a create-time
+constant with an undo entry is a category error the type currently cannot
+refuse without a second marker trait. (2) The divergence the pin guards
+against is **already digest-visible** through every epoch-shaped archival row
+the schedule produced; two stores of one chain under different schedules do
+not agree on those tables, so folding the pin adds no discrimination. (3) The
+open-time refusal is the **stronger** guard: it fails before a single row is
+written, where a digest fails after. The audit paragraph's own sentence — "the
+fold domain is every `ChainState` cell, derived from the type at the surface
+that defines the cell, not from a list here" — makes the type the authority
+and the list the record to correct. **Reopener** (rule 21): if the E2
+comparator finds a schedule divergence that no table exposes, the scope flips
+to `ChainState` and `upsert_property` gains a create-only bound in the same
+change.
 
 **SCW-3 — SI-3 names the dead table.** The register row reads "`txs` is
 keyed by tx hash" with table `txs`. `txs` is `u64 → blob`, opened and never
@@ -659,6 +753,71 @@ would make the migration 153 call sites instead of one. Owner: DRS-E6
 (`CHAIN_RULES_CRATE.md`; handed over on PR #753). Not this increment's
 code.
 
+**SCW-19 — `curve_tree_roots` is keyed one height from where this document
+first read it, and is sparse where the tree did not grow** (found 2026-09-15
+verifying review finding "`root_after` naming" against `blockchain_db.cpp`
+and CEN-I12; **half fixed here, half a round-2 question**, §10).
+
+*The keying half — fixed here.* Block *h*'s connect writes the post-drain
+root at key *h+1* (`store_curve_tree_root_at_height(prev_height + 1, …)`,
+`:664`). So key *h* holds the tree state **at** chain height *h* — after
+*h−1*'s drain, before *h*'s — which is exactly the state CEN-I12 names as the
+anchor for `ref_height = h` (all three `get_curve_tree_root_at_height(ref_height)`
+reads, `blockchain.cpp:3767`/`:3916`/`:4178`) and exactly what block *h*'s
+header must carry under CEN-B5. The rules crate's `ChainView::root_at` doc
+comment says two things: "as recorded **after** the block at `height`" and
+"the membership anchor a spend that references `height` is verified
+against". They differ by one — the anchor for a reference to *h* is the root
+*before* *h*'s drain — and §3.4's first draft (and #757's `BatchView`, cut
+from it) followed the first clause to `curve_tree_roots[h + 1]`, i.e. one
+height high: a rule calling `root_at(ref_height)` would have verified against
+the *next* anchor. This is the off-by-one SCW-12 warned about, reached from
+the other side. → §3.4 now maps `root_at(h)` to **key *h***; the trait
+comment is corrected in this PR to the CEN-I12 wording (one line,
+`shekyl-chain-rules/src/view.rs`), and #757's `BatchView` follows in its
+review. The both-ends test in §8 commit 5 pins it.
+
+*The sparsity half — open.* The C++ writes the row **only when the drain
+grew the tree** (`if (new_output_count > 0)`, `:639`–`:664`); a block that
+matured no leaf writes no root row. The reader returns an **all-zero root**
+on a missing key (`db_lmdb.cpp:9757`, `MDB_NOTFOUND` → zeroed array), so a
+spend referencing such a height would verify against zeros and fail —
+unreachable in steady state (from height `maturity + 1` on, every block
+drains at least the coinbase output matured from `h − maturity`, so the table
+is dense), reachable only in the bootstrap window where nothing is spendable
+anyway. Neither `LMDB_SCHEMA.md` ("per-block") nor the audit's §10 row
+records the condition, and CEN-I12 defines the anchor as a *state*, which
+exists at every height whether or not the tree changed. Three shapes:
+
+- **(A) dense** — `connect` writes `curve_tree_roots[h+1]` on every block
+  (what #757 does today). Spec-exact and total; but the redb table gains rows
+  LMDB lacks wherever a block grew nothing, so the E2 diff over this table
+  is red on day one unless the comparator is taught that "redb row present,
+  LMDB absent, value equals the previous root" is the recorded wart. That is
+  a comparator special case, which is the thing E1's discipline exists to
+  avoid.
+- **(B) reproduce the write, fix the read** — `root_after` becomes a
+  `TreeAfter::{Grew(root), Unchanged}` (the driver knows: E3's grow returns
+  the count), the row is written iff `Grew`, and `BatchView::root_at(h)` on a
+  recorded height with no row returns the **latest root at a key ≤ h** — the
+  tree state at *h*, which is what CEN-I12 defines and what the C++ reader
+  gets wrong. Table bytes identical to LMDB (parity clean); the read is
+  spec-correct; the C++ zero-root wart is recorded as a finding against the
+  reader, not reproduced. Open sub-question: what `root_at(h)` returns when
+  **no** root exists at or below *h* (the bootstrap window: the tree is empty,
+  the empty-tree root is Selene `hash_init`, a constant the store does not
+  own — E3's).
+- **(C) reproduce both** — sparse write and zero-root read. Byte-parity
+  and behaviour-parity, at the cost of porting a defect into the crate that
+  is supposed to end it (rule 16).
+
+*Recommended:* **(B)**, with the bootstrap arm answered by E3 (S-CURVE owns
+the empty root; until it lands, `root_at` on a height with no row at or
+below it is `AtHeight::AboveTip`'s sibling arm or a `StoreCannot`, not a
+zero). Whichever is ruled, the write condition is a `ConnectFacts` shape
+change and lands in #757 before it merges; a DRS-W row for the C++ reader
+is owed to the audit either way.
+
 ---
 
 ## 8. Commit sequence (rule 90; one PR, ≤ 10 commits, cut from `dev` after #753)
@@ -669,7 +828,7 @@ code.
 | 2 | `store+wire: canonical codecs for the connect write set` | `BlockInfo`, `TxIndex`, `OutTx`, `OutKey`, `TxOutputIndices`, `CurveTreeRoot`; `Transaction::write_segments` (SCW-9) | rule-42 snapshots pinned against the `LMDB_SCHEMA.md` byte layouts; segments concat test |
 | 3 | `store: TotalBurned chain-state cell; settlement-epoch pin as a header cell` | `TotalBurnedCell`; `settlement_epoch_blocks` `EngineLocal` cell at `create`/`open` (SCW-2) | property-catalogue snapshot; open-mismatch refusal test |
 | 4 | `rules: ValidatedBlock carries TxIdentity { hash, prunable_hash }` | SCW-10 — in `shekyl-chain-rules`, the owed-to-consumer item | existing rules tests + one identity test |
-| 5 | `store: BatchView — ChainView<'id> over WriteBatch` | §3.4; store → rules dependency (SCW-14) | `root_at` off-by-one test at both ends; two-block-batch visibility test (SCW-13) |
+| 5 | `store: BatchView — ChainView<'id> over WriteBatch` | §3.4; store → rules dependency (SCW-14); `block_at` decodes `blocks[h]` for the header | `root_at(h)` = key *h* pinned at both ends (the root block *h−1* wrote is what a reference to *h* anchors to; SCW-19); two-block-batch visibility test (SCW-13) |
 | 6 | `store: connect(ChainValid, ConnectFacts, RuleSetId) — the write set` | §3.1/§3.2/§3.5/§3.8; SI-1/2/3/4/8 + SI-9 `built`; `RuleSetNotInForce`; `Fact<T>`/`Origin` with `Provenance` widening on pass-through (SCW-1); `CoverageGapsCell` + `PassedThroughFactsCell` + `RowSet` codec (SCW-17); CEN-L1/H5/B3 arrive | per-table write test against `LMDB_SCHEMA.md` layouts; every SI belt fires from a hand-built violation; conversion-ban gate; E6-partition gate row statuses |
 | 7 | `store: pop() by reverse replay; PopBelowFloor; writer halt + ChainTip.connect` | §3.3/§3.6; `StoreCannot::{PopBelowFloor, WriterHalted}`; `ConnectState`; `shekyl-rpc-types` field + `StoreInvariantRow`, `CORE_RPC_VERSION` minor | connect→pop→digest-equal round-trip; halt-then-refuse test; RPC type snapshot |
 | 8 | `docs: S-CHAIN-W landed — DRS §7 row + §3.6.3, register flips, index, audit W6/W9/W15/W17, CHANGELOG` | rule 91 sweep; this document's banner → landed, §7 dispositions → done | docs gates |
@@ -751,6 +910,17 @@ not the vote), the digest over the table is unchanged, and it is what makes
 alternative — persist `valid.rule_set_id()` — is the same byte unless
 `RuleSetNotInForce` fires, in which case nothing is written at all.
 
+### 10.1 Round-2 question — OPEN 2026-09-15
+
+**SCW-19 — what does `connect` write to `curve_tree_roots` when the drain
+grew nothing, and what does `root_at` read there?** §7 SCW-19 lays out (A)
+dense / (B) reproduce-the-write-fix-the-read / (C) reproduce both, and
+recommends **(B)** with the bootstrap arm (no root at or below *h*) answered
+by E3. *Not defaulted*: (A) is what #757 has today and (B) changes
+`ConnectFacts`' shape, so the choice lands in #757's review before it merges.
+The keying half of SCW-19 (`root_at(h)` = key *h*) is **not** part of the
+question — it is fixed by the census row and corrected in this PR.
+
 ---
 
 ## 11. Documentation owed by the increment (rule 91)
@@ -761,7 +931,9 @@ alternative — persist `valid.rule_set_id()` — is the same byte unless
 - `CONSENSUS_STORE_RECONCILIATION.md` / `CONSENSUS_RULE_CENSUS.md`: CEN-L1/L2/L3/L4/L5/L15/B3/H5 S-CHAIN-W column → landed (the *rules* stay E6's).
 - `IMPLEMENTATION_INDEX.md`: `SCW` family and §7 doc row (this PR); the DRS row `UPDATE` is the increment PR's (rule 94 §6 — PR #753's lane is editing that row now).
 - `docs/CHANGELOG.md`: one Unreleased line at landing (`ChainTip.connect` is API-visible).
-- `shekyl-wire/src/block.rs:63` (this PR, SCW-12).
+- `shekyl-wire/src/block.rs:63` (this PR, SCW-12); `docs/MERKLE_TREE.md` "The Block Header Commitment" (this PR — the same pre-correction wording, "the tree root after all of that block's outputs", which CEN-B5's 2026-09-05 correction and SCW-12 both contradict); `shekyl-chain-store/src/store/write.rs` `open_insert_table` doc (this PR, SCW-3's sibling); `shekyl-chain-rules/src/view.rs` `root_at` doc (this PR, SCW-19).
+- `LMDB_WRITE_ATOMICITY_AUDIT.md` `properties` paragraph: `settlement_epoch_blocks_pin` moves from the chain-state list to a dated `UPDATE` naming it engine-local by mechanism (this PR, SCW-2 amended); a DRS-W row for the zero-root reader (increment, SCW-19).
+- `IMPLEMENTATION_INDEX.md` SI family row: SI-1…SI-9 and `tx_indices` (this PR, SCW-3/SCW-4's sibling).
 - This document: banner flips to *implemented*, §7 dispositions to *done*, then archive-or-contract per index §8 once S-CHAIN-R has consumed the codecs (the reopening condition for keeping it in `design/`).
 
 ---
@@ -773,3 +945,4 @@ alternative — persist `valid.rule_set_id()` — is the same byte unless
 | 2026-09-15 | Round 0 executed at `dev` `65e7be450` / #753 `f03b44452`. Fifteen findings (SCW-1…SCW-14, SCW-17) and two questions minted as such (SCW-15, SCW-16); two findings fixed in this PR (SCW-3, SCW-12), six items routed to the round (SCW-1/4/7/15/16 and SCW-17's one point — SCW-7 carrying its S-PRUNE consequence), the rest dispositioned into §8's commits. Contract §3 **proposed, not ruled**. |
 | 2026-09-15 | **Round 1 rulings (maintainer, same day):** SCW-1 driver-supplied `ConnectFacts` with per-field `Origin`, pass-through widens `Provenance`, `passed_through()` is the E6 progress count; SCW-4 SI-9 minted `ruled`; SCW-7 dissolves, coupling **undo-log retention ≥ `D_max`** written into DRS §7 and PDM-Q11; SCW-15 ruled by the brand, not a question; SCW-16 belt written against `rule_set.rs` as landed; SCW-17 approved, fresh-file rule stated in §8; SCW-11 allowlist is a named `{table: reason}` map that keeps the extra-leg refusal, never a mode switch. §3 is the contract as ruled. Commits 1–3 authorised to start before #753 merges; the increment branch still cuts from `dev` after it. |
 | 2026-09-15 | **Round-1 follow-ups (maintainer, same day):** `passed_through()` names the rows that delete each `Fact`, not only a count (§3.2 table); the SCW-7 inequality gets its third copy on the S-PRUNE row itself, and the vacuous-today floor is recorded as the hazard (§3.3, §5.4); **SCW-18** minted — the `implemented(path)` pin's shape decided (`trait Rule { const ROW }`, structural row binding) ahead of the first real rule, owner E6; ordinal *removal* recorded as a bump in the increment's codec docs (commit 1). |
+| 2026-09-15 | **PR #756 review (Copilot, 5 inline + 17 suppressed; every one re-verified at source, 21 taken, 1 refuted):** substrate corrections — `bi_cum_rct` is **per-block** at this pin (CEN-L15; the cumulative reading was wrong), `block_at` decodes `blocks[h]` (`BlockInfo` has no header), `RuleSet::GENESIS` enforces all 153 rows so a scaffold file is **not** evidence, `RuleSet::for_id` before `enforced()` with `RuleSetUnknown`, the burn phase is conditional as a whole (`h > 0 && burned > 0`), `amount_index` is per-amount and `output_id` is last-key+1, SI-9 tightened to primary-dense / side-table-fresh, seven journals not five, `SetTable` journals the multimap, `PassedThroughFactsCell` listed, three `ConnectFacts` provenances named, monotone-floor sentence fixed, SI-1…SI-9. **SCW-2 amended**: the audit's chain-state listing of the pin conflicts with the `EngineLocal` cell; disposition `EngineLocal`, audit paragraph `UPDATE`d, reopener stated. **SCW-19 minted**: `root_at(h)` is key *h* (CEN-I12), not *h+1* — fixed here, trait doc corrected, #757's `BatchView` to follow; the sparse-write / zero-root-read half is **§10.1, OPEN**, recommendation (B). Refuted: the suppressed "`root_after` is the header root at *h*'s own height" — it is the root after *h*'s drain, i.e. the *next* header's (the finding's premise was the same off-by-one, from the other side). Rebased onto `dev` post-#753 (index conflicts: #753's `DRS-*` row kept, rule 94 §6). |
