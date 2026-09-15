@@ -268,12 +268,12 @@ fn a_read_only_store_refuses_at_the_single_refusal_point() {
 // exclusive for a writable handle, shared for a read-only one. `flock`
 // locks are per open file description, so a second open in THIS process
 // contends exactly as a second process would, which is what lets the
-// property be tested here without spawning one. Inside one handle, commit
-// holds a write lock on the mirror across the engine commit and the
-// assignment (`shared.rs`). THESE BITE AGAINST: a redb bump that drops or
-// relaxes the flock, an `open` path in this crate that stops going through
-// redb's locked backend, or a commit path that assigns the mirror without
-// holding that write lock.
+// property be tested here without spawning one. Inside one handle the
+// mirror's only mutator, `Shared::publish`, takes its write lock itself and
+// holds it across the engine commit and the assignment (`shared.rs`, tested
+// there), so a commit path that assigns without the lock is not writable.
+// THESE BITE AGAINST: a redb bump that drops or relaxes the flock, or an
+// `open` path in this crate that stops going through redb's locked backend.
 
 fn is_already_open(result: &Result<ChainStore, StoreError>) -> bool {
     matches!(

@@ -238,10 +238,11 @@ impl ChainStore {
     ///   Platforms where the lock is `Unsupported` (none the daemon targets;
     ///   redb proceeds unlocked and warns) inherit redb's own contract that
     ///   the operator keeps one process on the file.
-    /// - **Inside this handle.** `WriteBatch::commit` holds a write lock on
-    ///   the mirror across the engine commit and the assignment. This method
-    ///   takes the matching read lock, so a concurrent stamp cannot see the
-    ///   file as tainted while the mirror still says [`Provenance::FULL`].
+    /// - **Inside this handle.** The mirror's only mutator holds its write
+    ///   lock across the engine commit and the assignment, and publishes
+    ///   nothing if the commit fails. This method takes the matching read
+    ///   lock, so a concurrent stamp can neither see the file as tainted
+    ///   while the mirror still says [`Provenance::FULL`], nor the reverse.
     #[must_use]
     pub fn provenance(&self) -> Provenance {
         self.shared.provenance()
