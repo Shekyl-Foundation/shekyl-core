@@ -153,12 +153,36 @@ pub struct ConnectFacts {
     /// The tree root after this block — `curve_tree_roots[h+1]` (SI-4).
     pub root_after: Fact<CurveTreeRoot>,
 }
+/// Which census rows derive a fact — and so delete its `Fact` wrapper.
+/// Named on the type, so the store shows its own E6 dependency rather
+/// than only E6's plan showing it.
+pub struct DeletedBy {
+    pub field: &'static str,
+    /// The census rows whose landing makes this field `Derived`.
+    pub rows: &'static [&'static str],
+    /// The DRS §7.5.2 E6 slice those rows arrive in.
+    pub slice: &'static str,
+}
+
 impl ConnectFacts {
-    /// Fields that were passed through rather than derived — the E6 progress
-    /// signal: it reaches zero when the deriving rows land, mechanically.
-    pub fn passed_through(&self) -> usize;
+    /// The fields still passed through, each with the rows that will
+    /// delete it. Empty when every field is derived — the moment `Fact`
+    /// and `Origin` themselves are deleted. `count()` is the progress
+    /// number; the items are the critical path.
+    pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_;
 }
 ```
+
+| Field | Derived by (deletes the `Fact`) | E6 slice (DRS §7.5.2) |
+| --- | --- | --- |
+| `cumulative_difficulty` | CEN-D4 (LWMA-1 next difficulty; cumulative = parent's + this block's), CEN-D5 on the alt path | slice 2 — 4.D, body in `shekyl-difficulty` |
+| `coins_generated` | CEN-F13 (base subsidy from `already_generated`), CEN-F14/F14b (weight penalty) | slice 4 — 4.F, body in `shekyl-economics` |
+| `burned` | CEN-F17 (fee-burn split's destroyed share), recorded per CEN-G11 | slice 4 — 4.F; the G11 recording is this increment's own row |
+| `weight`, `long_term_weight` | CEN-G6/G6b (long-term window, effective median) over the tx-weight function CEN-H3 / CEN-F14 share | slice 7 — 4.G, aggregating 4.F/4.H |
+| `root_after` | CEN-B5 (header root = tip root) and CEN-I12 (anchor at `ref_height`) — the value itself is S-CURVE's (E3) grow, checked by those rows | slice 1 (B5) / slice 6 (I12), through the curve-tree crate |
+
+So `block_info` becomes parity evidence when slices 2, 4 and 7 have landed
+and S-CURVE grows the tree — a named critical path, not a countdown.
 
 These are exactly the values `Blockchain` hands `BlockchainDB::add_block`
 today (`blockchain_db.cpp:435`–`:440`: `block_weight`,
@@ -175,7 +199,7 @@ weight arrive with 4.D / 4.G — never ahead of them") and the field is
 pass-through field names inside the committing batch — exactly as increment
 2 widens it with stubbed families — so `is_parity_evidence()` is `false`
 while any field is pass-through and **`block_info`'s diff rows are not parity
-evidence until `passed_through() == 0`**. The alternative — blocking
+evidence until `passed_through()` is empty**. The alternative — blocking
 S-CHAIN-W on E6's DAA / emission / weight increments — was rejected: it puts
 the store's write path behind the largest E6 increments for values the store
 only records, and the stamp makes the deferral visible instead of trusted.
@@ -192,7 +216,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
 ```
 
 - Belt **SI-6**: the top `undo_log` key equals the recorded tip height, else `StoreInvariantViolated(UndoTopNotTip)`.
-- Floor: no entry for the tip → `StoreCannot::PopBelowFloor { tip, floor }` (§5.4, SCW-7). Popping genesis is below the floor by definition (`floor ≥ 1`), which is the C++ `pop_blocks` guard made structural.
+- Floor: no entry for the tip → `StoreCannot::PopBelowFloor { tip, floor }` (§5.4, SCW-7). Genesis is never poppable: `pop` refuses `tip == 0` before consulting the journal (`floor ≥ 1` always), which is the C++ `pop_blocks` guard made structural. **Until S-PRUNE lands nothing deletes undo rows, so the floor is 1 and `PopBelowFloor` is reachable only at genesis** — the refusal exists from this increment, its retention arm arrives with S-PRUNE (§5.4).
 - `Popped` carries the popped height and the block as recorded (the C++ signature returns `blk` and `txs` to the caller for alt-chain handoff; the Rust caller reads them through the view **before** popping, as the reorg already does for the witness — audit R-5).
 
 ### 3.4 `BatchView` — the `ChainView` projection
@@ -413,6 +437,15 @@ found a third outcome — it **dissolves** — and **it was ruled so 2026-09-15
   correct error class, which is exactly what makes it read as a capability
   limit rather than a defect or a verdict. Falsifier once both constants
   exist: a retention constant `< D_max` is a red test, not a review note.
+- **The floor is vacuous today, and that is the hazard, not the comfort.**
+  Nothing deletes undo rows until S-PRUNE lands, so the floor is genesis and
+  the retention arm of `PopBelowFloor` is unreachable. S-PRUNE's own row
+  (DRS §7, "NOT EXTRACTED … `pop_target_allowed` needs a home") is the line
+  whoever starts that work reads first — so the inequality has a **third
+  copy on that row** (this PR), not only in the `pop_target_allowed`
+  paragraph and PDM-Q11. A constant settled by whichever implementation
+  arrives first, because the round that owns it was never dispatched, is
+  R8's shape exactly; the row is where it is prevented.
 
 ### 5.5 Size
 
@@ -610,6 +643,22 @@ per-height-journaled alternative rejected (`Provenance` is deliberately
 monotone, and a popped block's verdict is still evidence the file once
 accepted it).
 
+**SCW-18 — the rules crate's `implemented(path)` pin checks existence, not
+identity** (found 2026-09-15 verifying #753; **shape decided the same day**,
+lands in E6 with the first real rule). The G9 pin `use $path as _;` refuses
+a path that does not exist — verified: a claim pointing at the test-only
+probe fails `cargo check` — but accepts any item that does, so
+`implemented(crate::rules::cen_c2)` would compile and count toward CEN-C1's
+row. A typed pin binding the path to a rule *signature* closes signature,
+not identity. The shape that closes both is the one the C2-R8 exchange
+sketched: `trait Rule { const ROW: CenRow; fn check(…) }`, the registry
+entry takes a **type**, and the pin asserts `<T as Rule>::ROW == CenRow::C1`
+at compile time — row binding becomes structural instead of nominal. →
+Decided now so the first real rule is written against it; deciding it after
+would make the migration 153 call sites instead of one. Owner: DRS-E6
+(`CHAIN_RULES_CRATE.md`; handed over on PR #753). Not this increment's
+code.
+
 ---
 
 ## 8. Commit sequence (rule 90; one PR, ≤ 10 commits, cut from `dev` after #753)
@@ -723,3 +772,4 @@ alternative — persist `valid.rule_set_id()` — is the same byte unless
 | --- | --- |
 | 2026-09-15 | Round 0 executed at `dev` `65e7be450` / #753 `f03b44452`. Fifteen findings (SCW-1…SCW-14, SCW-17) and two questions minted as such (SCW-15, SCW-16); two findings fixed in this PR (SCW-3, SCW-12), six items routed to the round (SCW-1/4/7/15/16 and SCW-17's one point — SCW-7 carrying its S-PRUNE consequence), the rest dispositioned into §8's commits. Contract §3 **proposed, not ruled**. |
 | 2026-09-15 | **Round 1 rulings (maintainer, same day):** SCW-1 driver-supplied `ConnectFacts` with per-field `Origin`, pass-through widens `Provenance`, `passed_through()` is the E6 progress count; SCW-4 SI-9 minted `ruled`; SCW-7 dissolves, coupling **undo-log retention ≥ `D_max`** written into DRS §7 and PDM-Q11; SCW-15 ruled by the brand, not a question; SCW-16 belt written against `rule_set.rs` as landed; SCW-17 approved, fresh-file rule stated in §8; SCW-11 allowlist is a named `{table: reason}` map that keeps the extra-leg refusal, never a mode switch. §3 is the contract as ruled. Commits 1–3 authorised to start before #753 merges; the increment branch still cuts from `dev` after it. |
+| 2026-09-15 | **Round-1 follow-ups (maintainer, same day):** `passed_through()` names the rows that delete each `Fact`, not only a count (§3.2 table); the SCW-7 inequality gets its third copy on the S-PRUNE row itself, and the vacuous-today floor is recorded as the hazard (§3.3, §5.4); **SCW-18** minted — the `implemented(path)` pin's shape decided (`trait Rule { const ROW }`, structural row binding) ahead of the first real rule, owner E6; ordinal *removal* recorded as a bump in the increment's codec docs (commit 1). |
