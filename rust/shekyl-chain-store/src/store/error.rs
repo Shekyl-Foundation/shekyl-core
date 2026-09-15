@@ -34,6 +34,9 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
+use shekyl_chain_rules::RuleSetId;
+use shekyl_types::TxHash;
+
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
 
 pub use super::invariant::{CellFault, StoreInvariant, UndoFault};
@@ -260,6 +263,35 @@ pub enum StoreCannot {
         /// The schedule this session runs.
         session: SettlementEpochBlocks,
     },
+    /// A `ChainValid` judged under one rule set was handed to `connect` at
+    /// a height where another is in force (S-CHAIN-W §3.1, SCW-16).
+    ///
+    /// A capability refusal, not a verdict: the block may be valid under the
+    /// rules it was judged by — it was handed to the wrong height. The
+    /// driver resolves height → rule set (`RuleSchedule::rules_at`); the
+    /// store only compares.
+    RuleSetNotInForce {
+        /// The height the block would have been recorded at.
+        height: u64,
+        /// The rule set the verdict was minted under.
+        judged: RuleSetId,
+        /// The rule set the caller says is in force at `height`.
+        in_force: RuleSetId,
+    },
+    /// A judged transaction's ct base carries fewer commitments than its
+    /// prefix has outputs, so there is no commitment to record for output
+    /// `index` (`output_amounts`).
+    ///
+    /// The wire parser sizes the base arrays by the output count, so a
+    /// parsed transaction cannot reach this; a hand-built candidate can,
+    /// until the 4.H shape rows land in the validator. Refused, never
+    /// recorded with a zero commitment.
+    OutputWithoutCommitment {
+        /// The transaction.
+        tx: TxHash,
+        /// The `vout` position with no commitment.
+        index: u64,
+    },
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -296,6 +328,20 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "the pop-journal recording for height {height} was dropped unsealed; the batch \
                  will not commit chain-state writes that have no undo row"
+            ),
+            Self::RuleSetNotInForce {
+                height,
+                judged,
+                in_force,
+            } => write!(
+                f,
+                "the block was judged under rule set {judged:?} but rule set {in_force:?} is in \
+                 force at height {height}; re-validate under the rule set in force"
+            ),
+            Self::OutputWithoutCommitment { tx, index } => write!(
+                f,
+                "transaction {tx:?} output {index} has no commitment in its ct base; the store \
+                 records nothing for it"
             ),
             Self::SettlementEpochMismatch { pinned, session } => write!(
                 f,
