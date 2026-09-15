@@ -24,10 +24,13 @@ use super::{Canonical, CodecError};
 ///
 /// - `1` — DRS-E1 increment 2: the `properties` header cells
 ///   (`schema_version`, `apply_policy`) and the scalar codecs.
-/// - `2` — DRS-E1 increment 3 (S-CHAIN-W) commit 1: the `undo_log` table
-///   (first Rust-only table; `TableOrdinal` 49) and its `UndoLog` row
-///   codec. Ordinals are now load-bearing, so any later reorder of the
-///   `tables!` list is also a bump.
+/// - `2` — DRS-E1 increment 3 (S-CHAIN-W): the `undo_log` table (first
+///   Rust-only table; `TableOrdinal` 49) and its `UndoLog` row codec
+///   (commit 1); the connect write set's value codecs — `BlockInfo`,
+///   `TxIndex`, `OutTx`, `OutKey`, `TxOutputIndices`, `CurveRoot` — pinned
+///   to the LMDB layouts minus the collapsed key (commit 2). Ordinals are
+///   now load-bearing, so any later reorder **or removal** in the `tables!`
+///   list is also a bump.
 pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(2);
 
 /// A layout version as stored in the `schema_version` cell.
