@@ -1,0 +1,138 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+use super::*;
+
+#[test]
+fn empty_evaluated_nothing_and_is_never_complete() {
+    let empty = RuleCoverage::EMPTY;
+    assert!(empty.is_empty());
+    assert_eq!(empty.len(), 0);
+    assert_eq!(empty.iter().count(), 0);
+    assert!(CenRow::ALL.iter().all(|row| !empty.contains(*row)));
+    // Not complete even for GENESIS, whose enforced set is the whole census;
+    // the scaffold verdict is never parity evidence.
+    assert!(!empty.is_complete_for(&RuleSet::GENESIS));
+    assert_eq!(format!("{empty:?}"), "Coverage{}");
+}
+
+#[test]
+fn insert_records_exactly_the_row_and_iter_yields_census_order() {
+    let mut coverage = RuleCoverage::EMPTY;
+    // Rows from three different words of the bitset, inserted out of order.
+    let picked = [CenRow::ALL[130], CenRow::A1, CenRow::ALL[70]];
+    for row in picked {
+        coverage.insert(row);
+    }
+    assert_eq!(coverage.len(), 3);
+    assert!(!coverage.is_empty());
+    for row in picked {
+        assert!(coverage.contains(row));
+    }
+    let others = CenRow::ALL.iter().filter(|row| !picked.contains(row));
+    for row in others {
+        assert!(!coverage.contains(*row), "{row} leaked in");
+    }
+    // Iteration order is census order, not insertion order.
+    let mut expected = picked.to_vec();
+    expected.sort();
+    assert_eq!(coverage.iter().collect::<Vec<_>>(), expected);
+}
+
+#[test]
+fn insert_is_idempotent() {
+    let mut coverage = RuleCoverage::EMPTY;
+    coverage.insert(CenRow::B5);
+    coverage.insert(CenRow::B5);
+    assert_eq!(coverage.len(), 1);
+}
+
+#[test]
+fn union_folds_the_other_side_in() {
+    let mut left = RuleCoverage::EMPTY;
+    left.insert(CenRow::A1);
+    left.insert(CenRow::I1);
+    let mut right = RuleCoverage::EMPTY;
+    right.insert(CenRow::I1);
+    right.insert(CenRow::M8);
+    left.union(&right);
+    assert_eq!(
+        left.iter().collect::<Vec<_>>(),
+        [CenRow::A1, CenRow::I1, CenRow::M8]
+    );
+    // `right` is unchanged.
+    assert_eq!(right.iter().collect::<Vec<_>>(), [CenRow::I1, CenRow::M8]);
+}
+
+#[test]
+fn contains_all_is_the_mint_predicate() {
+    let empty = RuleCoverage::EMPTY;
+    assert!(empty.contains_all([]));
+    assert!(!empty.contains_all([CenRow::A1]));
+    let mut one = RuleCoverage::EMPTY;
+    one.insert(CenRow::A1);
+    assert!(one.contains_all([CenRow::A1]));
+    assert!(!one.contains_all([CenRow::A1, CenRow::A2]));
+}
+
+#[test]
+fn covers_landed_is_vacuous_while_every_row_is_pending() {
+    // DRS-D12: zero implemented rows, so empty coverage covers what has
+    // landed. The false branch is `contains_all` above; flipping a registry
+    // entry to `implemented` without a `validate` call is what makes mint
+    // panic.
+    assert!(RuleCoverage::EMPTY.covers_landed(&RuleSet::GENESIS));
+    assert!(CenRow::ALL
+        .iter()
+        .all(|row| row.status() == crate::census::RowStatus::Pending));
+}
+
+#[test]
+fn complete_means_every_enforced_row_and_nothing_less() {
+    let mut coverage = RuleCoverage::EMPTY;
+    for row in RuleSet::GENESIS.enforced() {
+        coverage.insert(row);
+    }
+    assert!(coverage.is_complete_for(&RuleSet::GENESIS));
+    assert_eq!(coverage.len(), CenRow::ALL.len());
+
+    // Drop one row: no longer complete.
+    let mut short = RuleCoverage::EMPTY;
+    for row in RuleSet::GENESIS.enforced().skip(1) {
+        short.insert(row);
+    }
+    assert_eq!(short.len(), CenRow::ALL.len() - 1);
+    assert!(!short.is_complete_for(&RuleSet::GENESIS));
+}
+
+#[test]
+fn debug_prints_the_register_form() {
+    let mut coverage = RuleCoverage::EMPTY;
+    coverage.insert(CenRow::D1b);
+    coverage.insert(CenRow::A1);
+    assert_eq!(format!("{coverage:?}"), "Coverage{CEN-A1, CEN-D1b}");
+
+    let mut policy = PolicyCoverage::EMPTY;
+    policy.insert(PolicyRow::M1);
+    assert_eq!(format!("{policy:?}"), "Coverage{CEN-M1}");
+}
+
+#[test]
+fn every_row_of_both_registries_has_a_distinct_slot() {
+    // The bitset relies on `index()` being injective within a registry.
+    let mut all = RuleCoverage::EMPTY;
+    for (n, row) in CenRow::ALL.iter().enumerate() {
+        assert_eq!(all.len(), n);
+        all.insert(*row);
+    }
+    assert_eq!(all.len(), CenRow::ALL.len());
+
+    let mut all = PolicyCoverage::EMPTY;
+    for (n, row) in PolicyRow::ALL.iter().enumerate() {
+        assert_eq!(all.len(), n);
+        all.insert(*row);
+    }
+    assert_eq!(all.len(), PolicyRow::ALL.len());
+}

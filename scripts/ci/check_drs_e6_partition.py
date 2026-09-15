@@ -48,30 +48,30 @@ from __future__ import annotations
 import argparse
 import re
 import sys
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _gfm_table import fenced_lines, split_cells  # noqa: E402
+from _census import (  # noqa: E402
+    BOUND_RE_TEXT,
+    FLAGS,
+    H2,
+    ROW_ID,
+    Refused,
+    Row,
+    parse_census,
+    require_delimiter,
+    row_cells,
+    unfenced,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_CENSUS = REPO / "docs" / "design" / "CONSENSUS_RULE_CENSUS.md"
 DEFAULT_DOC = REPO / "docs" / "design" / "DAEMON_REDB_STORE.md"
 
-# The one definition of "surface-bound". §7.5.2 quotes this string in a code
-# span and the gate checks the quote, so the doc cannot describe a different
-# partition from the one the gate computes.
-BOUND_RE_TEXT = r"blockchain_db|db_lmdb|src/blockchain_db|lmdb/"
-BOUND_RE = re.compile(BOUND_RE_TEXT)
-
-FLAGS = ("C", "P")
-BUCKETS = (1, 2, 3, 4)
-
-CENSUS_ROWS_HEADING = re.compile(r"^## 4\. ")
-CENSUS_SUBSECTION = re.compile(r"^### (4\.[A-Z])\b")
-H2 = re.compile(r"^## ")
-ROW_ID = re.compile(r"^\**(CEN-[A-Z]+\d+[a-z]?)\**$")
+# Census parsing — `Row`, `Refused`, `parse_census`, the bound regex and the
+# GFM table-shape helpers — is `_census.py`, shared with
+# `check_chain_rules_coverage.py` so the two gates divide by one denominator.
 
 DOC_SECTION_START = re.compile(r"^### 7\.5\b")
 DOC_SECTION_END = re.compile(r"^(### |## )")  # a #### stays inside §7.5
@@ -100,180 +100,6 @@ SUBSYSTEM_TOKEN = re.compile(r"^\**(4\.[A-Z])\b")
 # records-was and stay when the census moves (rule 95). Everything else in
 # the doc asserts the present and is scanned.
 DECISION_LOG = re.compile(r"^## 15\. ")
-
-
-@dataclass(frozen=True)
-class Row:
-    id: str
-    subsystem: str
-    flag: str
-    bucket: int
-    bound: bool
-
-
-class Refused(Exception):
-    """A checked property does not hold, or the subject is missing."""
-
-
-# --------------------------------------------------------------------------
-# census side
-# --------------------------------------------------------------------------
-
-
-def _cells(line: str) -> list[str]:
-    return [c.strip() for c in split_cells(line)]
-
-
-def _is_separator(cells: list[str]) -> bool:
-    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", c) for c in cells)
-
-
-def _require_delimiter(lines: list[str], at: int, ncols: int, where: str) -> None:
-    """Refuse unless `lines[at + 1]` is the GFM delimiter row for the header at `at`.
-
-    GFM makes a table of a header only when the very next line is a delimiter
-    row with the same number of cells. Anything else and Markdown renders the
-    header as a paragraph — the rows under it do not exist on the page (rule
-    94 §7), so a gate that read them would be checking text no reader sees.
-    """
-    nxt = lines[at + 1] if at + 1 < len(lines) else ""
-    cells = _cells(nxt) if nxt.startswith("|") else []
-    if not _is_separator(cells):
-        raise Refused(
-            f"{where}: header {lines[at].strip()!r} is not followed by a GFM "
-            "delimiter row — Markdown does not render it as a table"
-        )
-    if len(cells) != ncols:
-        raise Refused(
-            f"{where}: delimiter row has {len(cells)} cells, its header has "
-            f"{ncols} — Markdown does not render it as a table"
-        )
-
-
-def _unfenced(text: str, what: str) -> tuple[list[str], set[int]]:
-    """The document's lines and the indices inside closed code fences.
-
-    An unterminated fence would make every line after it "fenced" and so
-    invisible to the parse — a prefix of the census could then be derived,
-    and a doc edited to the same prefix would pass. That is a missing subject
-    (rule 47), refused at every entry rather than read as absence.
-    """
-    lines = text.splitlines()
-    fenced, open_fence = fenced_lines(lines)
-    if open_fence:
-        raise Refused(
-            f"{what}: a code fence is left open — everything after it is hidden "
-            "from the parse, so the derivation would be over a prefix"
-        )
-    return lines, fenced
-
-
-def parse_census(text: str) -> list[Row]:
-    """Every `CEN-` row of census §4, with the four columns the partition reads.
-
-    Each table names its columns in its own header row; indices are taken from
-    it rather than assumed, so a re-ordered census fails loudly instead of
-    reading `b` out of the `C/P` column. A GFM table ends at its first
-    non-table line, and a subsection may carry several tables (§4.J does), so
-    the header is re-read at every table start — never inherited from the
-    previous table under the same heading.
-    """
-    lines, fenced = _unfenced(text, "census")
-    rows: list[Row] = []
-    in_rows = False
-    subsystem: str | None = None
-    columns: dict[str, int] | None = None
-    width = 0
-    seen_tables = 0
-    delimiter_at = -1  # the one line after a header that GFM reads as its delimiter
-    for n, raw in enumerate(lines):
-        if n in fenced or n == delimiter_at:
-            continue
-        line = raw.rstrip()
-        if CENSUS_ROWS_HEADING.match(line):
-            in_rows = True
-            continue
-        if not in_rows:
-            continue
-        if H2.match(line):
-            break
-        m = CENSUS_SUBSECTION.match(line)
-        if m:
-            subsystem = m.group(1)
-            columns = None
-            continue
-        if subsystem is None:
-            continue  # §4's preamble legend table precedes the first subsection
-        if not line.startswith("|"):
-            columns = None  # the table (if any) ended; the next `|` line is a header
-            continue
-        cells = _cells(line)
-        if columns is None:
-            header = [c.lower() for c in cells]
-            needed = {"id", "site(s)", "c/p", "b"}
-            if not needed <= set(header):
-                raise Refused(
-                    f"census §4 table under {subsystem} (line {n + 1}) lacks a "
-                    f"column the derivation reads: header={cells!r}, "
-                    f"needs {sorted(needed)}"
-                )
-            _require_delimiter(lines, n, len(cells), f"census §4 table under {subsystem}")
-            delimiter_at = n + 1
-            columns = {name: header.index(name) for name in needed}
-            width = max(columns.values()) + 1
-            seen_tables += 1
-            continue
-        # Past the header and its delimiter, every `|` line is a data row — a
-        # second separator-looking line is a row whose id cell is `---`, and
-        # is refused below rather than skipped.
-        if len(cells) < width:
-            raise Refused(
-                f"census §4 table under {subsystem} (line {n + 1}): row has "
-                f"{len(cells)} cells, fewer than the {width} its header's read "
-                f"columns need: {cells!r}"
-            )
-        id_cell = cells[columns["id"]]
-        rid_m = ROW_ID.match(id_cell)
-        if not rid_m:
-            # Every row of a §4 data table is a rule. A cell that is not a
-            # well-formed `CEN-` id is a row the derivation would otherwise
-            # drop from the denominator without a word.
-            raise Refused(
-                f"census §4 table under {subsystem} (line {n + 1}): id cell "
-                f"{id_cell!r} is not a `CEN-` row id"
-            )
-        flag = cells[columns["c/p"]].strip("*")
-        if flag not in FLAGS:
-            raise Refused(
-                f"{rid_m.group(1)} (line {n + 1}): C/P cell {flag!r} is not one of {FLAGS}"
-            )
-        bucket_text = cells[columns["b"]].strip("*")
-        if not re.fullmatch(r"[1-4]", bucket_text):
-            raise Refused(
-                f"{rid_m.group(1)} (line {n + 1}): b cell {bucket_text!r} is not one of {BUCKETS}"
-            )
-        rows.append(
-            Row(
-                id=rid_m.group(1),
-                subsystem=subsystem,
-                flag=flag,
-                bucket=int(bucket_text),
-                bound=bool(BOUND_RE.search(cells[columns["site(s)"]])),
-            )
-        )
-    if seen_tables == 0:
-        raise Refused("census: no §4 rows tables found — subject missing")
-    if not rows:
-        raise Refused("census: §4 tables carry no CEN- rows — subject missing")
-    dupes = [rid for rid, k in Counter(r.id for r in rows).items() if k > 1]
-    if dupes:
-        raise Refused(f"census: duplicate row ids {sorted(dupes)}")
-    if not any(r.bound for r in rows):
-        raise Refused(
-            f"census: zero rows match the bound regex `{BOUND_RE_TEXT}` — the "
-            "storage subsystem has no rows or the site column changed shape"
-        )
-    return rows
 
 
 @dataclass(frozen=True)
@@ -315,7 +141,7 @@ def derive(rows: list[Row]) -> Derived:
 
 def section_7_5(text: str) -> tuple[list[str], int]:
     """The lines of §7.5 and the 1-based line number where it starts."""
-    lines, fenced = _unfenced(text, "DRS doc")
+    lines, fenced = unfenced(text, "DRS doc")
     start = None
     for n, line in enumerate(lines):
         if n not in fenced and DOC_SECTION_START.match(line):
@@ -333,7 +159,7 @@ def section_7_5(text: str) -> tuple[list[str], int]:
 
 def live_text(text: str) -> str:
     """The DRS doc with fenced code and the §15 decision log removed."""
-    lines, fenced = _unfenced(text, "DRS doc")
+    lines, fenced = unfenced(text, "DRS doc")
     out: list[str] = []
     in_log = False
     for n, line in enumerate(lines):
@@ -362,13 +188,13 @@ def find_table(body: list[str], header: list[str], label: str) -> list[list[str]
     while i < len(body):
         line = body[i]
         if line.startswith("|"):
-            cells = _cells(line)
+            cells = row_cells(line)
             if [c.lower() for c in cells[: len(want)]] == want:
-                _require_delimiter(body, i, len(cells), where)
+                require_delimiter(body, i, len(cells), where)
                 rows: list[list[str]] = []
                 j = i + 2
                 while j < len(body) and body[j].startswith("|"):
-                    rows.append(_cells(body[j]))
+                    rows.append(row_cells(body[j]))
                     j += 1
                 if not rows:
                     raise Refused(f"{where}: header present but no rows")

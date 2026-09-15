@@ -145,6 +145,8 @@ shekyl-core/
 Key Rust crates: `shekyl-engine-*` (wallet orchestrator/state/file), `shekyl-scanner`,
 `shekyl-tx-builder`, `shekyl-crypto-pq`, `shekyl-proofs`, `shekyl-fcmp`,
 `shekyl-curve-tree`, `shekyl-consensus`, `shekyl-economics`, `shekyl-staking`,
+`shekyl-chain-store` / `shekyl-chain-rules` (daemon store and the consensus
+validator that alone mints what it connects — the two share no code),
 `shekyl-units` / `shekyl-types` (foundational newtypes), and the single FFI
 crate `shekyl-ffi`. See [`25-rust-architecture`](.cursor/rules/25-rust-architecture.mdc).
 
