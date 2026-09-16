@@ -1,8 +1,8 @@
 # Archival serving route — request contract
 
 **Status: LIVING CONTRACT.** Ruled 2026-09-10 (`RF-R1`). Last verified
-2026-09-13 (`SF` (a)+(b): the request header and the countersignature
-envelope landed on both ends; grammar homed in
+2026-09-16 (client `shekyl_p_fetch::MAX_INFLIGHT = 8` W₂ pin; request
+header / envelope still the 2026-09-13 (a)+(b) landing; grammar homed in
 `shekyl_curve_tree::serving_route`).
 
 This is the request half that
@@ -172,8 +172,8 @@ headers are the fingerprint this contract forbids. The endpoint binds
 `MAX_INFLIGHT`, `MAX_REQUEST_BYTES`, and the write/stall timeouts are
 **not** this contract, on either end. The server's `MAX_INFLIGHT`
 remains SPIKE-PIN-2 (a placeholder the W₂ rig derives); the client's
-`shekyl_p_fetch::MAX_INFLIGHT = 4` is `SF-D7`'s SPIKE-PIN with its
-lower-bound rationale on the constant; `shekyl_p_fetch::Timeouts` and
+`shekyl_p_fetch::MAX_INFLIGHT = 8` is `SF-D7`'s W₂ pin (`ARCHIVAL_SHARD_FETCH.md`
+§9.1 (c), 2026-09-16); `shekyl_p_fetch::Timeouts` and
 `max_body_bytes()` are operational bounds. They decide when an attempt
 is a stall or a refusal, never what a completed exchange means.
 
