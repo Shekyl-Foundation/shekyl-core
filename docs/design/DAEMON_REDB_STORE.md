@@ -1658,6 +1658,87 @@ schedule question and the ruling's Q1 test is re-run for that row. **(c)** A
 wrong for that row and it moves, with a census update, before either side
 ports it.
 
+### 7.6 Parity first, then repair — the phase boundary and its gates (RULED 2026-09-16)
+
+Ruled at the S-CHAIN-R pre-flight review
+([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) Q4 and the encoding
+discussion beneath it), and recorded here because it is a property of the
+whole E-series, not of one surface.
+
+**The ported partition is transitional.** The redb schema at this pin is
+Monero's schema in a different engine — 46 tables, the same partition,
+`output_amounts` keyed verbatim with R8b-2 open. Reproducing it first is the
+parity-first choice already ruled: a shape cannot be redesigned before it is
+characterised, and redesigning mid-port retires the comparator. But that is
+a **decision with a named reopening, not an inheritance** (rule 16's whole
+subject is inherited structure surviving because nobody decided to keep
+it). The schema is **reopened after cutover**, when the C++ is gone and
+there is one language to repair in. The reopening's scope is everything
+*except* the encodings consensus pins.
+
+**What actually constrains encoding — stated once.** Byte parity with LMDB
+was never a constraint, and the tree already proves it: zerokval is an LMDB
+`DUPSORT` workaround — a dummy 8-zero-byte primary key with the real
+identifier in the duplicate value ([`LMDB_SCHEMA.md`](../LMDB_SCHEMA.md)
+"Zerokval pattern") — and `schema.rs` already collapses it because redb has
+no `DUPSORT` to work around. The redb schema diverges structurally from LMDB
+on those tables today, and the E2 comparator was always going to compare
+**logical content through per-table projections**. `SCHEMA_VERSION` is a
+discipline with a bump mechanism — the thing that makes changing the layout
+cheap and loud, the opposite of a constraint. The constraint is narrower:
+**consensus-visible bytes** — hash preimages (the txid's component
+structure, the block hash, the curve-tree leaf encoding) and the digest
+fold's input. Those are pinned by consensus. Nothing else in the store's
+layout is, and a layout choice argued from "the LMDB struct" (as
+S-CHAIN-R's Q4 default was, and was overturned for) is argued from a
+description of Monero's storage, not a specification of ours.
+
+**Parity is a phase with a defined end; repairs start after it.** Every
+deviation and glitch found during the port is *reproduced* under parity
+and *repaired* after cutover — in Rust, with one language left. This is the
+proper resolution of the CEN-I12 argument: the reason not to touch the C++
+is not cosmetics, it is that a repair landing half in C++ and half in Rust
+is two implementations of one correction, which is the thing every ruling
+this month has been built to avoid. Three things the repair phase needs:
+
+1. **The repair backlog is one artifact, not an accumulation.** A
+   knowingly-reproduced deviation lands today in a different home by type:
+   consensus ones as DIVERGENT rows in the CSR register
+   ([`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
+   §5.4.1), store ones in
+   [`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md), schema-shape
+   ones as inline notes (R8b-2), sentinels in a surface plan's finding list.
+   Four homes, four lifecycles. The shape is already right where it matters
+   — a DIVERGENT row carries a pass condition naming the ratified state — so
+   the ask is narrow: **every reproduced deviation lands in a form carrying
+   its ratified state ("what correct looks like"), and they share one
+   query.** The query and its gate (rule 47: it asserts its subject) are
+   DRS-E2's pre-flight deliverable, because E2 is the phase that produces
+   DIVERGENT rows; carried in [`../FOLLOWUPS.md`](../FOLLOWUPS.md).
+2. **Bucket-4 and the repair backlog share one denominator.** The
+   inherited-enforced-never-ratified rows (the census's bucket-4 total,
+   re-derived by its own sum-check line —
+   [`CONSENSUS_RULE_CENSUS.md`](CONSENSUS_RULE_CENSUS.md) §7 — never
+   restated here) and every deviation reproduced during the port are both
+   "things we carry that nobody has judged". One phase resolves both; two
+   finish lines that each look nearly done while the union is not is the
+   failure the shared denominator prevents.
+3. **The repair phase has a gate from day one.** Under parity the
+   comparator is red until the store matches — a gate that cannot be argued
+   past. After cutover the comparator retires and nothing goes red because
+   a deviation is still unrepaired — the first phase in this programme that
+   would otherwise run on intent. The instrument already exists: the
+   coverage record's second number, **`ratified / enforced`**
+   (`check_chain_rules_coverage.py`, G7), survives cutover. Declared here:
+   **the comparator gates cutover; the ratification fraction gates
+   release.** Parity evidence was already defined as
+   `implemented == ratified == enforced` (§8.1's E6 item, D12); the
+   repair phase's end is that equality holding, not a resolution.
+
+Reopener (rule 21): a consensus-visible encoding found *outside* the set
+named above (hash preimages, digest input) reopens the "nothing else is
+pinned" sentence for that encoding, with the row that pins it named.
+
 ---
 
 ## 8. Genesis gate checklists (R2-8 — not subtraction)
@@ -1672,6 +1753,7 @@ ports it.
 - [ ] DRS-D9 + **DRS-D10 reconstructible derived state implemented** (mandatory)
 - [ ] Writer/reader concurrency rules (§3.6) implemented and tested; `ChainTip.connect` exposed in `get_info` (§3.6.2)
 - [ ] **DRS-E6 complete consensus coverage (DRS-D12):** the completeness gate reports `implemented = enforced` for consensus-flagged census rows, computed from the census (policy rows are E5's `AdmissionPolicy` denominator, reported separately); every rule carries its negative fixture; the `RuleCoverage` the store persists is complete
+- [ ] **Release gate (§7.6):** the comparator gated **cutover**; **`ratified / enforced = 1`** over consensus-flagged rows gates **release** — the repair backlog (reproduced deviations + bucket-4, one denominator) is empty, read from the one query §7.6 item 1 names
 - [ ] Cross-store KAT (DRS-D3c) green
 - [ ] Supply-chain governance (§10) for production redb
 - [ ] Affirmative digest artifacts archived (survive LMDB deletion)
@@ -2215,6 +2297,7 @@ the trigger (#507) and was missed there.
 | **2026-09-15** | **Increment 2.5 review close (PR #752).** Three refinements so (a) and (b) above are properties of the type, not of the call site: **(c) poison owns both arms** — `WriteBatch::complete` returns the armed row even when the closure returned a different `Err`, so the Halt cannot be converted by mapping. **(d) one verb per handle** — `InsertTable` / `UpsertTable`; the `SI-` row is bound at `open_insert_table`, reads return `StoreError`, and the wrong verb does not compile. Falsify (b) against `InsertTable`/`UpsertTable` rather than the retired `KeyedTable` two-verb handle. **(e) `header::put`** is the store-owned cell write; `upsert_property` remains the public register verb. |
 | **2026-09-15** | **DRS-E1 increment 3 (S-CHAIN-W) landed** — plan, rule-26 pre-flight and round-1 rulings in [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) (SCW-1…SCW-18). Nine commits: the undo log (first Rust-only table, ordinal-named; bijection gate's `{table: reason}` map keeps the extra-leg refusal), the connect write set's codecs at the LMDB layouts minus the collapsed key + `Transaction::write_segments`, `total_burned` and the re-homed settlement-epoch pin as header cells, `TxIdentity { hash, prunable_hash }` in the rules crate, `BatchView`, `connect` with per-field `Fact` origins, coverage-gap / pass-through provenance, `pop` + `PopBelowFloor` + the writer halt + `ConnectState` wire type. SI-1/2/3/4/6/8 built, SI-9 minted and built; DRS-W6/W9/W15/W17 closed at the port. `SCHEMA_VERSION` 1 → 2. `CORE_RPC_VERSION` not bumped: no `get_info` field changes until the Rust store serves it. **Review (same day, PR #757 + the pre-flight's #756 findings):** `BatchView::root_at(h)` reads key *h* — the state *at* *h*, CEN-I12's anchor — not *h+1* (SCW-19), with height 0 the pinned `CurveTreeRoot::EMPTY` (KAT in `shekyl-fcmp`); absence in `block_at` / `root_at` classified against the tip (`AboveTip` only above it, a hole below is SI-7) and the block blob held to `block_info`'s identity; `BlockInfo.rct_outputs` per-block (CEN-L15, the accumulation arm is dead); burn phase guarded `h > 0 && burned > 0` as a whole; the connecting height noted before the belts so an SI-2 halts the writer; provenance SI-7s and the commit-time widen routed through the halt; `complete` returns the closure's own error (the unsealed refusal only over a swallowed one); `Recording::sealed` set after the row insert; undo entries carry a cSHAKE256 post-image so SI-6's second arm is exact (`PostImageMismatch`, pop never silently repairs); an empty journal under a recorded tip is SI-6 `NoRowForTip` until S-PRUNE persists its floor; evidence cells refuse non-canonical name order; the bijection gate refuses unparsed map content. |
 | **2026-09-15** | **DRS-E6 increment 1 landed** ([`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md), the crate's contract of record): `shekyl-chain-rules` — `ChainView<'id>`, `RuleSet`/`RuleSchedule`/`AdmissionPolicy`, `Coverage<R>`, `ChainValid<'id>`/`InvalidBlock`, `validate`/`tx_form`/`tx_against`, the census-derived completeness gate (`check_chain_rules_coverage.py`: the 153 + 9 enforced rows of the census at `02c086f4b`, registry ↔ census a bijection in census order), the transitive no-store belt (`check_chain_rules_no_store.sh`), the negative-fixture harness; zero rules ported (increments 2+). **S-CHAIN-W is unblocked.** Landing rulings, recorded so they are not re-derived: **(a) faults are not verdicts.** A view's substrate failure is `ChainView::Fault`, the *outer* `Err` of every entry point, never inspected by the crate — a store error cannot become an `InvalidBlock` by `?`, `From`, or a hand-written arm (clause 3 of the conversion-ban gate now live: `verdict_defs == 0` refuses). **(b) absence is a variant, not `None`.** `block_at`/`root_at` return `AtHeight<T>` (`Recorded | AboveTip`), no `From<Option>`, no `Try` — a rule must match the above-tip case, so CEN-B5 cannot fail open on a `?`. **(c) `output_at` dropped:** FCMP++ inputs reference no output; when the output-key-uniqueness row is ruled it needs `has_output_key`, not a global-index lookup. **(d) `KeyImage` moved to `shekyl-types`** (`hash32!`, new `redact, no_display` arm — truncated `Debug`, *no* `Display`, the wallet-correlation posture kept; `shekyl-crypto-pq` re-exports; serde encoding unchanged, snapshot checked); **`CurveTreeRoot` minted** beside it. **(e) `RuleSetId` is not the header major version** — its own space, `rules_at(nettype, height)` identity today. **(f) `CenRow`/`PolicyRow` are sibling enums** — the flag partition is a type error, not a runtime check. The graded-oracle hook is the `Row::as_str` key; the grader is consulted by E2's replay harness, never imported here. Round 2 of the design (`Fault`, `AtHeight`, cross-view pin) is implemented on its defaults and closes at PR review |
+| **2026-09-16** | **DRS-E1 increment 4 (S-CHAIN-R) plan + Round-0 pre-flight** ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md)) **and round-1 rulings the same day.** Q1 no `difficulty(h)` store read — **C2-R8 applied to a read for the first time**: per-block difficulty is a consensus computation, cumulative difficulty the stored quantity; `shekyl-chain-rules` owns `difficulty_at` (E6 slice 2), one implementation. Q2 the unverified blob read returns a distinct type (`RawBlockBytes`) no consensus path can consume without a greppable decode — the `ChainValid` move, not a method name. Q3/Q5/Q6/Q7 as defaulted. **Q4 overturned on its own ground:** the default (a Rust-only `block_fold` table, argued from `BlockInfo` = "the LMDB struct minus the key") imported a layout constraint that does not exist — zerokval is already collapsed in `schema.rs`, the comparator compares logical content through projections; decide on the codec: both fields fixed-width → **widen `BlockInfo` 88 → 104 B**, one read, no second table. **§7.6 minted:** the ported partition is transitional and reopens after cutover; consensus-visible bytes (hash preimages, digest input) are the only pinned encodings; parity is a phase with a defined end and repairs land after it in Rust only (the CEN-I12 argument resolved — a half-C++/half-Rust repair is two implementations of one correction); the repair backlog is one artifact sharing a denominator with bucket-4; **the comparator gates cutover, `ratified / enforced` gates release** (§8.1 item added). SCR-4 `Option<RecordedTip>` stays an `Option` — a bespoke absence type earns its keep only when the default lies inside the type's valid range. SCR-10 `passed_through()` rises by one when the long-term effective median lands; the counter is the set of facts the store does not derive, not a progress bar (sentence written beside it in `connect.rs`). |
 
 ---
 
