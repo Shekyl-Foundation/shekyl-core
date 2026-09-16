@@ -707,6 +707,19 @@ change, owed to this consumer the way `CHAIN_RULES_CRATE.md` Q12-2 owes
 `tip()` to E6 slice 1 — methods and fields grow with the increment that
 consumes them. Fix: S-CHAIN-W (§8 commit 4, the first commit that names the
 rules crate).
+**UPDATE 2026-09-16 (received from `PDM-Q`, `PDM-Q-F26`):** *"one of the
+three component hashes"* is the coinbase's arity; a spend's txid is
+**4-part**, and the component this finding skipped — `H(pqc_auths)`, the
+third — is the one `PDM-Q6` item 2 needs persisted per tx before the
+`pqc_auths` slice can be discarded. `TxIdentity` as landed carries one of
+Q6's two occupants. The identity and the store owe `pqc_auth_hash` (the
+txid's count-prefixed component, not `keccak256` of the raw segment) at
+this finding's own standard — contract on the row before the
+implementation that omits it — and before DRS-E2's first production
+writer. The bijection-gate objection (SCW-11) no longer applies: the
+`RUST_ONLY_TABLES` map that landed here admits the row. Detail and the
+deadline: `ARCHIVAL_PRUNED_DAEMON_MODE.md` F26; the requirement is written
+on the type's doc comment (`rust/shekyl-chain-rules/src/block.rs`).
 
 **SCW-11 — the Rust-only table breaks the 49↔49 bijection gate.**
 `check_redb_schema_bijection.py` demands every `TableDefinition` have an

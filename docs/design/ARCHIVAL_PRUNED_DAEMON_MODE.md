@@ -27,6 +27,11 @@ variable (`PDM-Q-F24`: it had silently inherited `D_max`, which would
 put every node with a day's downtime on the archival market; floor
 `D_max`, candidate F19's ~195-day retirement floor). `PDM-Q12` (freeze pipeline
 and wallet-side `LeafStore` under Q6's unit) is minted OPEN.
+**`PDM-Q-F26` (2026-09-16, `645d09dc3`): the Rust store's `TxIdentity` is
+`{ hash, prunable_hash }` — one of Q6's two occupants; `pqc_auth_hash`,
+the txid's third component, is owed on the identity and as a row, and
+Q6 items 1–2 are ruled before DRS-E2's first production writer or E2
+rules them by construction.**
 `PDM-Q-S0` is RULED. This is the design home TJ-D named; it is not
 yet the design. **What this document is for:** nothing here is built
 while DRS is in progress — the implementation waits on the C++→Rust
@@ -1214,6 +1219,16 @@ Named now so they are not discovered later.
   assigned out of [`ARCHIVAL_SETTLEMENT_WRITER.md`](ARCHIVAL_SETTLEMENT_WRITER.md)
   to the credit-wire §5 cutover. Scope addition 2026-09-12
   (`ba4b3c73a`): promote the settlement write path onto `BlockchainDB`.
+  **UPDATE 2026-09-16 (`PDM-Q-F26`):** the in-flight re-homing of
+  SO-D8/D9 onto `shekyl-chain-rules` (DRS-D12) is the right move; what
+  it inherits from this round is (a) the serve-credit tx's prunable
+  region is F13's good — the witness pk + signature SO-D8's batching
+  puts there is not on an ordinary node below `W`, so every settlement
+  read must be stated as admission-time or not, and (b) a settlement
+  write set landing on the Rust store before Q6 rules fixes by
+  construction what a pruned node persists about a serve-credit tx —
+  the same ordering that binds DRS-E2 binds its writer. F26 carries
+  the detail.
 - **`DRS-0` / `DRS-D10`** — redb store port. D10 still reads universally
   at [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) line 310: *All
   non-block-corpus tables must be rebuildable by replaying local blocks
@@ -1281,7 +1296,12 @@ Named now so they are not discovered later.
   the C++ side that this round does **not** make (`PDM-Q-S0`); it is
   the Rust store's to carry at `DRS-E*`, and slice A's `AppendMostly`
   grade on `txs_pqc_auths` (`class.rs:161`) re-grades with the three
-  curve-tree rows.
+  curve-tree rows. **UPDATE 2026-09-16 (`PDM-Q-F26`):** the Rust store
+  has begun carrying the identity without it — `TxIdentity` is
+  `{ hash, prunable_hash }` (S-CHAIN-W). The row is requested of the
+  DRS-E lane now, on SCW-7's precedent, not at "`DRS-E*`" in general;
+  the bijection-gate blocker that made it a second change has expired
+  (SCW-11's `RUST_ONLY_TABLES` map).
 - **`CURVE_TREE_CLIENT.md` remaining (b)** — store-backed / pruned-tree
   assembly (F5). A PDM ruling that wallets assemble against `R_k` +
   fetched chunks is that item's substrate.
@@ -1903,6 +1923,113 @@ consensus question: *does anything read it after admission?*
   hole is a hole, not an interface. The `SF-` implement-row in
   `docs/FOLLOWUPS.md` carries this split (edited on steering's ruling).
 
+### Established by reading (2026-09-16, `dev@645d09dc3` — the store-shaping pass)
+
+Read a day past the round's pin, after DRS-E1 increment 3 (S-CHAIN-W,
+PR #757) and DRS-E6 slice 1 (PR #761) landed. Nothing above is
+contradicted; S-CHAIN-W's SCW-7 is exactly F10's shape — the undo-log
+watermark asserted `≥ D_max` on the deletion side, `StoreCannot::PopBelowFloor`
+as a typed refusal on the read side, landed in the Rust store before the
+C++ is ever fixed. One finding, and it is the actionable one.
+
+- **PDM-Q-F26.** **The Rust store is being shaped for one of Q6's two
+  occupants.** `TxIdentity` (`rust/shekyl-chain-rules/src/block.rs:22-27`)
+  is `{ hash, prunable_hash }`, minted once in `validate` and carried by
+  `ValidatedBlock` into `connect` (SCW-10). There is no `pqc_auth_hash`
+  anywhere in `rust/` — not on the identity, not as a row, not as a type
+  (`rg pqc_auth_hash rust/` is empty at this sha). F14 named `pqc_auths`
+  — ~60 % of spend bytes — as the good's second occupant, GOOD **only if
+  its hash is a persisted per-tx row**; Q6 items 1 and 2 are ruled
+  jointly because the prunable region alone is ~35 % of the bytes and
+  the two together ~95 %. DRS-E1 has committed the per-tx identity to
+  one hash, by default, before Q6 ruled either. This is the hazard the
+  banner names — *the store trait shaped for universal discard rather
+  than retrofitted* — arriving in the first increment that could carry
+  it. Three things make it cheap to correct now and expensive later:
+  1. **The value already exists on the write path.** The v3 spend txid
+     is **4-part** — `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`
+     (`rust/shekyl-wire/src/transaction.rs:1624-1631`, oracle
+     `format_utils.cpp:1137/1163-1182`) — so `Transaction::hash()`
+     computes the `pqc_auths` component on the way to the txid
+     (`:1734-1739`). Persisting it is a field on `TxIdentity` and a
+     row, not a new computation and not a new consensus value: it is
+     the third component the txid already commits, exactly as
+     `prunable_hash` is the fourth (SCW-10's argument, applied to the
+     component it skipped — SCW-10 describes the identity as *"one of
+     the three component hashes"*, which is the coinbase's arity, not
+     the spend's).
+  2. **Which bytes the row hashes is a KAT question, and the answer is
+     already forced.** The txid's `pqc_auths` component hashes
+     `varint(count) ‖ auths` — the oracle's generic-vector serializer
+     writes a leading count (`:1729-1737`) — while the store's
+     `txs_pqc_auths` segment carries the auths with **no** length
+     prefix (`TxSegments`, `:1358-1361`; `write_pqc_auths`, `:1141-1144`).
+     `keccak256(txs_pqc_auths[tx_id])` is therefore **not** the txid
+     component. The row that lets a node discard the segment and
+     re-verify a fetched copy against something the txid commits is the
+     count-prefixed component; a row over the raw segment would verify
+     nothing the chain signed. The identity field should be that
+     component, named for what it is (`pqc_auth_hash`, the txid's third
+     part), with a KAT pinning it against `Transaction::hash()` the way
+     `prunable_hash` is pinned.
+  3. **The bijection blocker has expired.** The `SF-`-era note in
+     `docs/FOLLOWUPS.md` (*"the first redb-only table fails CI, which is
+     why F14's `txs_pqc_auths_hash` cannot be added without a second
+     change"*) was true at `edb35dbb1`. S-CHAIN-W landed the first
+     Rust-only table (the undo log) with a `RUST_ONLY_TABLES` `{table:
+     reason}` allowlist in `check_redb_schema_bijection.py` (SCW-11), so
+     a `txs_pqc_auth_hash` row is admissible today on the same map.
+     Nothing outside DRS's own increment sequence blocks it.
+
+  **Handoff (to the DRS-E lane; the shape is theirs to land, the
+  requirement is this round's).** `TxIdentity` carries both hashes —
+  `{ hash, pqc_auth_hash, prunable_hash }` — and the store records the
+  second beside `txs_prunable_hash`, at S-CHAIN-W's own standard: the
+  contract written on the row **before** the implementation that would
+  omit it (SCW-7's precedent, which put `D_max` on S-PRUNE's row while
+  the prune had no home). The field is owed to `PDM-Q6` item 2 and is
+  **not optional**: a Q6 ruling that keeps `pqc_auths` universal is a
+  ruling that a per-tx row is unnecessary, not that the identity may
+  omit a component the txid commits. The doc comment on `TxIdentity`
+  now says so, so the lane that next touches the type reads the
+  requirement at the type.
+
+  **The deadline this names.** *"DRS-E2's replay is the store's first
+  production writer."* Every DRS increment that lands while Q6 is
+  unruled narrows what Q6 can rule; `TxIdentity` is the first instance,
+  and E2 — which decides what happens to the prunable body and the
+  `pqc_auths` slice on the write path — is the next and larger one.
+  **Q6 items 1 and 2 are ruled before E2's first production writer, or
+  E2 rules them by construction.** That is a date, and it is closer
+  than "the ruling pass has not started" reads. Q6 items 1–3 are
+  argued to the point where the ruling is a transcription of F13 / F14
+  / F17 with rule-21 shape against §3's six adversarial items; nothing
+  is blocked on code. Q11 is the other item with a clock: its *shape*
+  is written (§7 row), what it lacks is a **named consensus-side
+  owner** — a person, today, not a further round. Both are steering's.
+  **Falsifier for the deadline:** an E2 replay PR opens while the Q6
+  row in `IMPLEMENTATION_INDEX.md` still reads OPEN — at that point the
+  deferral is void, and that PR's description must state which Q6
+  items it is ruling by construction, or it does not merge.
+
+  **Contact with `SO-`** (the settlement writer, §5 first bullet;
+  `docs/so-d8-d12-reshaping` in flight re-homes SO-D8/D9 onto
+  `shekyl-chain-rules` under DRS-D12). Two consequences of F13/F14 the
+  SO lane should read before its Slice C: (a) the serve-credit tx's
+  prunable region — where SO-D8's batching shape puts the witness pk
+  and signature once per tx (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`
+  §9 batching row) — **is F13's good**: below `W` an ordinary node does
+  not have those bytes. Admission-time reads survive; any settlement,
+  slash or reward path that re-reads a witness signature from the store
+  after `W` does not, and F15's `serve_credit_pruned` form is the
+  witness that the design already assumes this. State per read which
+  it is. (b) A settlement write set that lands on the Rust store before
+  Q6 rules inherits F26's hazard in the same shape as `TxIdentity` — it
+  fixes what a pruned node persists about a serve-credit tx by
+  construction. The re-homing onto chain-rules is the right move
+  (validation precedes connect, DRS-D12); the Q6 ordering applies to
+  its writer the same way it applies to E2's.
+
 ### Retracted
 
 - **PDM-Q-F6 RETRACTED 2026-09-12** as a launch-state fork. Was
@@ -1968,7 +2095,7 @@ consensus question: *does anything read it after admission?*
 | `PDM-Q3` | Residual consensus reads after TJ-A | OPEN — today not node-local (`PDM-Q-F8`) |
 | `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | OPEN — collapsed 2026-09-13 (F20/F23/F24); TJ-F sentence stated |
 | `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's |
-| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22) | OPEN — the round's subject 2026-09-13; ruled before Q1 |
+| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)** | OPEN — the round's subject 2026-09-13; ruled before Q1; **items 1–2 ruled before DRS-E2's first production writer (F26, 2026-09-16) — `TxIdentity` today carries only `prunable_hash`; `pqc_auth_hash` owed on the identity and as a row** |
 | `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; unbonded exceptions OPEN (candidate: permitted, serving needs the bond) |
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
 | `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); candidate under review: the daemon holds the shard as a retention exception on the universal predicate (binding dissolves to `retain(s)`/`release(s)` over the operator leg); lapse tail, coverage floor (F20), recovery fetch OPEN |
@@ -2041,6 +2168,16 @@ is *not* off the path — the launch window, stale binaries, downtime
 past `W`, `assumevalid=0` auditors, history read-back — is named,
 `W` is the parameter that decides how often (F24), and the coverage floor is sized to those
 readers rather than to a liveness claim that does not hold.
+
+**The store-shaping pass (F26, 2026-09-16) adds a clock.** Q6 items 1–2
+are ruled **before DRS-E2's first production writer** — the increment
+that decides what the write path does with the prunable body and the
+`pqc_auths` slice — or E2 rules them by construction; `TxIdentity`
+already did so for the identity. Two requests go out of this round now
+rather than at the ruling pass: to the DRS-E lane, `TxIdentity` and the
+store carry `pqc_auth_hash` beside `prunable_hash`, contract-on-the-row
+first (SCW-7's standard); to steering, a named consensus-side owner for
+Q11 — the shape is written, the person is not.
 
 ---
 

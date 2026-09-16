@@ -18,6 +18,22 @@ use shekyl_wire::{Block, BlockHeader, Transaction};
 /// a consensus-visible value (C2-R8 Q4). For a coinbase `prunable_hash` is
 /// `keccak256("")` — what the C++ store writes — not the txid's null-hash
 /// substitute; see [`PrunableHash`].
+///
+/// **Incomplete by one component — owed, not optional (`PDM-Q-F26`,
+/// `ARCHIVAL_PRUNED_DAEMON_MODE.md`).** A spend's txid is 4-part:
+/// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. This identity carries
+/// the fourth component and omits the third. Under `PDM-Q6` the `pqc_auths`
+/// slice (~60 % of spend bytes) is the archival good's second occupant and
+/// is discardable only against a persisted per-tx hash of it; the txid
+/// already commits that hash, and `Transaction::hash()` computes it on the
+/// way. The next increment that touches this type adds `pqc_auth_hash` —
+/// the txid's third component, over `varint(count) ‖ auths` exactly as the
+/// txid hashes it, **not** `keccak256` of the raw `txs_pqc_auths` segment
+/// (which has no count prefix and so verifies nothing the chain signed) —
+/// with a KAT against `Transaction::hash()`, and the store records it
+/// beside `txs_prunable_hash`. Contract on the row before the
+/// implementation that would omit it (SCW-7's standard). A `PDM-Q6` ruling
+/// that keeps `pqc_auths` universal retires the *row*, not the component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TxIdentity {
     /// The transaction hash (txid).
