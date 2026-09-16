@@ -361,9 +361,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 1 trait-extraction chain — closeout audit (2026-05-29, [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)**
   - Target: pre-genesis
 
-- **Post-2g adversarial-corpus methodology + implementation [`docs/completed/RANDOMX_V2_PHASE2H_PLAN.md`](./completed/RANDOMX_V2_PHASE2H_PLAN.md)**
-  - Target: pre-genesis
-
 - **Refresh bandwidth tradeoff under α — round-trip-bound block [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
   - Target: pre-genesis
 
@@ -445,7 +442,25 @@ Default. Lands before genesis if it should exist at launch.
 - **CryptoNote fossil — hardcoded key-image fixup for Monero blocks [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)**
   - Target: pre-genesis
 
-- **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: checkout-hygiene landing merged **and** a pin-bump or tarball-CI need. [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
+- **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: the first conjunct (checkout-hygiene landing) **fired 2026-09-16** with PR #754; what remains is a pin-bump of `external/randomx-v2` or a tarball-CI need — falsify by either event. [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
+  - Target: pre-genesis
+
+- **RandomX v2 algorithm-review gate (genesis release checklist)** — the v2 spec/consensus cutover is landed; what is owed before mainnet is the external review [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1.4 names: Monero's production observation window on RandomX v2 **and** the funded v1→v2 delta audit. `RANDOMX_V2_PLAN.md` YAML `algorithm-review-gate` stays `pending` until both exist. Falsify by: the observation window recorded on the release checklist and the audit report published with no finding that contraindicates v2 under `00-mission` #1. Fallback if it fails is `RANDOMX_V1_FALLBACK.md` (re-add the v1 CMake target at `102f8acf`), not an unpin.
+  - Target: pre-genesis
+
+- **RandomX v2 mining floor-vs-ceiling asymmetry — Phases 1–3 parked after Phase 0** [`RANDOMX_V2_MINING_ASYMMETRY.md`](./design/RANDOMX_V2_MINING_ASYMMETRY.md). Phase 0 (2026-07-06) fixed the ceiling as stock XMRig 6.26.0 `rx/2` full-dataset, byte-identical 1024/1024. Reopen: a genesis-seal 51%-via-asymmetry disposition is wanted. Falsify the *parked* status by: Appendix B filled from a source-verified run (a design number is not a result). The row's binding claim — **C/XMRig/CUDA-class miner code is never linked into `shekyld`; the whale and any honest fast miner run out-of-process over RPC** — is falsified by isolation check 1 (`scripts/ci/check_randomx_symbol_isolation.sh`, the banned `randomx_*` C-ABI list), so doc and gate point at each other. Disposition inputs, per `RANDOMX_V2_RUST.md` §2 (the C-for-mining / Rust-for-verification split is permanent): (a) a first-party Rust dataset/JIT miner is **not** the default because the daemon is going Rust — it contradicts §2; (b) is the *interface*, not a blessed binary — next row; (c) "accept the gap" is a containment position, not a shrug: a genesis chain has no sunk-ASIC installed base, so max reorg depth and the late-block penalty are load-bearing regardless of the floor/ceiling ratio, which makes the ratio an accessibility/decentralization concern unless Appendix B shows it is a consensus one.
+  - Target: pre-genesis
+
+- **Miner template conformance vector (bless the interface, not a miner)** — what this repo owns of the mining ceiling is the template contract: `get_block_template` → block-hashing-blob framing → `submitblock`, plus the seed-epoch schedule (`RANDOMX_V2_MINING_ASYMMETRY.md` §6.3). Publish it as a **versioned** conformance vector (a fixed template, the expected blob bytes, the expected canonical v2 hash, a submit round-trip) plus a reference config and build hashes for a known-good XMRig as *an example*, and support any miner that passes. This raises the accessible ceiling without touching §2, avoids a single-artifact monoculture, and costs no code in `shekyld`. Not gated on Appendix B. Sequencing: publish before genesis seal — after genesis the framing is a consensus-adjacent compatibility commitment. Falsify by: a third-party miner passing the published vector against `dev`. No identifier family until the successor mints tests.
+  - Target: pre-genesis
+
+- **PoW test seam and isolation checks 3/4/6 across the daemon Rust cutover** — `scripts/ci/check_pow_test_seam.sh` pins `src/crypto/pow_randomx.{h,cpp}` and isolation check 6 anchors on `cryptonote::hash_pow_randomx`; both go red the moment the C++ PoW dispatch moves (correct: loud, not silent). Isolation checks 3 (`shekyl_pow_randomx_v2_hash` exported) and 4 (`_ZN3aes` visible) assume a C++ caller of the Rust C ABI and may become vacuous on a native-Rust daemon. Owner is the PR that relocates or deletes the dispatch (the daemon cutover, **not** DRS-E1's store). Falsify by: that PR's description records the seam disposition (re-home to the Rust dispatch, or retire it with a rule-23 record) and re-derives checks 3/4/6 against the new binary. Checks 1, 2 and 5 are unchanged by the rewrite.
+  - Target: pre-genesis
+
+- **Ungated production test seam: `BlockchainLMDB::get_archival_shard_segment_raw_for_test`** (`src/blockchain_db/lmdb/db_lmdb.{h,cpp}`) — same pattern CEN-D2 contained for the PoW seam (a `_for_test` accessor in a production header), far lower severity (a read, not a consensus-path override). Falsify by: a `check_pow_test_seam.sh`-shaped source gate (pinned decl/defn, ≥1 test caller, zero production callers) or deletion of the accessor. DRS-E1 replaces the LMDB store; if the accessor dies with it, delete this row.
+  - Target: pre-genesis
+
+- **`rust/shekyl-consensus` fold** — Phase 4 did not delete the crate (live Cargo consumers: `shekyl-curve-tree`, `shekyl-daemon-rpc`, `shekyl-engine-state`, `shekyl-ffi`, `shekyl-genesis-tool`, `shekyl-wire`). Reopen only when a design round removes those consumers; **DRS-E\* is not that round** — the store/daemon rewrite changes who calls it, not whether it exists. Falsify by: `rg -l 'shekyl-consensus' rust/*/Cargo.toml` returning only the crate itself.
   - Target: pre-genesis
 
 - **Promote 2c-emergent sub-PR design disciplines to project-level [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)**
@@ -511,7 +526,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Async `Engine::close` / `change_password` lifecycle (PR 6 PR #83).** [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
   - Target: pre-genesis
 
-- **RandomX v2 — Guix reproducible-build obligation pickup (trigger: [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md)**
+- **RandomX v2 — Guix reproducible-build obligation pickup** (trigger: the first Guix-built `shekyld` that vendors `external/randomx-v2`; the daemon Rust rewrite does not substitute for it) [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §22
   - Target: pre-genesis
 
 - **Rules-queue: reconcile the priority-ordering statements across [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)**
@@ -751,7 +766,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Workspace clippy `-D warnings` cleanup.** Surfaced by the Phase 0
   - Target: pre-genesis
 
-- **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and [`external/CMakeLists.txt`](../external/CMakeLists.txt)**
+- **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path** in [`external/CMakeLists.txt`](../external/CMakeLists.txt) (multi-config generators; harness/miner-lib opt-in only — the default daemon never builds the C library, so this does not gate `shekyld`)
   - Target: pre-genesis
 
 - **A UDS listener for the daemon RPC (posture 1 on the daemon)** (added
