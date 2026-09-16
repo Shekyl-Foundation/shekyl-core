@@ -961,6 +961,17 @@ stand in the crate. Code wins where this list and the code disagree.
   RuleSetNotInForce`), and records nothing it did not receive — the
   consensus-visible values arrive as `Fact<T> { value, origin }` and their
   origin is stamped into the file (below). `pop()` is the replay.
+- **One read body for both transactions** (S-CHAIN-R commit 1,
+  `store/chain_reads.rs`): the decode / verify / classify work behind
+  `BatchView` — tip from `block_info`'s last row, typed cells, the block
+  body parsed from `blocks` and verified to hash to the recorded identity,
+  absence classified against the tip (SI-7 below it, `AboveTip` above) —
+  is a private module generic over the transaction (`ReadTables`,
+  implemented for redb's write and read transactions). `BatchView` adds
+  only what a fault does (arm the poison); the snapshot reader that
+  S-CHAIN-R's later commits add will add the other answer (return it).
+  Two readers of one table cannot drift because there is one body
+  ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) SCR-13, SCR-7).
 - **Provenance has three components** (increment 3, `provenance.rs`,
   `codec/evidence.rs`): stubbed applies (increment 2), `rule_coverage_gaps`
   — the rows in force a verdict did not evaluate (C2-R8 §9.4) — and

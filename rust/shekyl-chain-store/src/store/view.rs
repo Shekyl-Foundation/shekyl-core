@@ -63,16 +63,26 @@
 //! records for it is SI-7 and **poisons the batch** through the same latch
 //! every other read arms, so a verdict minted over a corrupt read cannot
 //! commit.
+//!
+//! # One body, two transactions
+//!
+//! The decode / verify / classify work is not here: it is
+//! [`chain_reads`](super::chain_reads), generic over the transaction and
+//! shared with the read snapshot (S-CHAIN-R, SCR-13). This type contributes
+//! exactly one thing to each read — **what a fault does** — and here a
+//! fault arms the batch's poison ([`Self::arm`]). A reader that reproduces
+//! the body instead of calling it has re-created the two-readers-of-one-
+//! table drift the shared module exists to prevent.
 
 use redb::ReadableTable;
 use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
-use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, Canonical, CodecError, CurveRoot};
+use crate::codec::CurveRoot;
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
+use crate::schema::{CURVE_TREE_ROOTS, SPENT_KEYS};
 
+use super::chain_reads::{self, ReadFault};
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
 use super::write::WriteBatch;
 
@@ -92,64 +102,33 @@ impl<'b, 'id> BatchView<'b, 'id> {
         Self { batch }
     }
 
-    /// The recorded tip height as this batch sees it, `None` for an empty
-    /// chain. `block_info` is dense (SI-2), so its last key is the tip.
-    fn tip(&self) -> Result<Option<u64>, StoreError> {
-        let table = self
-            .batch
-            .txn()
-            .open_table(BLOCK_INFO)
-            .map_err(EngineError::Table)?;
-        let tip = table
-            .last()
-            .map_err(EngineError::Storage)?
-            .map(|(height, _)| height.value());
-        Ok(tip)
+    /// What a fault does on this reader: an invariant violation **arms the
+    /// batch's poison** (the first row wins; `complete` refuses with it on
+    /// both arms), an engine failure passes through. This is the one line
+    /// that distinguishes `BatchView` from a snapshot reader over the same
+    /// body.
+    fn arm(&self, fault: ReadFault) -> StoreError {
+        match fault {
+            ReadFault::Engine(e) => e.into(),
+            ReadFault::Invariant(row) => self.batch.poison().arm(row),
+        }
     }
 
-    /// Read a typed cell of table `T` at `key`, decoding under `V`; absent
-    /// is `Ok(None)`, undecodable is SI-7 and poisons the batch.
-    fn cell<V: Canonical>(
-        &self,
-        table: redb::TableDefinition<'static, u64, &'static [u8]>,
-        key: u64,
-        cell_name: &'static str,
-    ) -> Result<Option<V>, StoreError> {
-        let table = self
-            .batch
-            .txn()
-            .open_table(table)
-            .map_err(EngineError::Table)?;
-        let Some(guard) = table.get(key).map_err(EngineError::Storage)? else {
-            return Ok(None);
-        };
-        V::decode(guard.value()).map(Some).map_err(|cause| {
-            self.batch.poison().arm(StoreInvariant::CellCorrupt {
-                key: cell_name,
-                fault: CellFault::Undecodable(cause),
-            })
-        })
+    /// The recorded tip height as this batch sees it, `None` for an empty
+    /// chain.
+    fn tip(&self) -> Result<Option<u64>, StoreError> {
+        chain_reads::tip_of(self.batch.txn())
+            .map(|tip| tip.map(|(height, _)| height))
+            .map_err(|f| self.arm(f))
     }
 
     /// SI-7 for a row that the dense ranges say must exist and does not:
     /// poisons the batch and returns the fault.
     fn absent_below_tip(&self, cell_name: &'static str) -> StoreError {
-        self.batch.poison().arm(StoreInvariant::CellCorrupt {
+        self.arm(ReadFault::Invariant(StoreInvariant::CellCorrupt {
             key: cell_name,
             fault: CellFault::Absent,
-        })
-    }
-
-    /// SI-7 for a `blocks` row that is present but not a canonical block for
-    /// its height.
-    fn blocks_invalid(&self, reason: &'static str) -> StoreError {
-        self.batch.poison().arm(StoreInvariant::CellCorrupt {
-            key: "blocks",
-            fault: CellFault::Undecodable(CodecError::Invalid {
-                codec: "block",
-                reason,
-            }),
-        })
+        }))
     }
 }
 
@@ -181,32 +160,16 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// missing `block_info` or `blocks` row at or below the tip is SI-7
     /// (module docs).
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, StoreError> {
-        let h = height.to_raw();
-        match self.tip()? {
-            Some(tip) if h <= tip => {}
-            _ => return Ok(AtHeight::AboveTip),
-        }
-        let info = self
-            .cell::<BlockInfo>(BLOCK_INFO, h, "block_info")?
-            .ok_or_else(|| self.absent_below_tip("block_info"))?;
-        let table = self
-            .batch
-            .txn()
-            .open_table(BLOCKS)
-            .map_err(EngineError::Table)?;
-        let blob = table
-            .get(h)
-            .map_err(EngineError::Storage)?
-            .ok_or_else(|| self.absent_below_tip("blocks"))?;
-        let block = Block::from_bytes(blob.value())
-            .map_err(|_| self.blocks_invalid("block blob does not parse"))?;
-        if block.hash() != info.hash.to_bytes() {
-            return Err(self.blocks_invalid("block blob does not hash to block_info.hash"));
-        }
-        Ok(AtHeight::Recorded(RecordedBlock {
-            hash: BlockHash::from_bytes(info.hash.to_bytes()),
-            header: block.header,
-        }))
+        let tip = self.tip()?;
+        let body = chain_reads::block_body(self.batch.txn(), tip, height.to_raw())
+            .map_err(|f| self.arm(f))?;
+        Ok(match body {
+            AtHeight::AboveTip => AtHeight::AboveTip,
+            AtHeight::Recorded((hash, block)) => AtHeight::Recorded(RecordedBlock {
+                hash: BlockHash::from_bytes(hash.to_bytes()),
+                header: block.header,
+            }),
+        })
     }
 
     /// `curve_tree_roots[height]` — the tree state **at** `height`, written
@@ -224,9 +187,10 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
             Some(tip) if h <= tip.saturating_add(1) => {}
             _ => return Ok(AtHeight::AboveTip),
         }
-        let root = self
-            .cell::<CurveRoot>(CURVE_TREE_ROOTS, h, "curve_tree_roots")?
-            .ok_or_else(|| self.absent_below_tip("curve_tree_roots"))?;
+        let root: CurveRoot =
+            chain_reads::cell(self.batch.txn(), CURVE_TREE_ROOTS, h, "curve_tree_roots")
+                .map_err(|f| self.arm(f))?
+                .ok_or_else(|| self.absent_below_tip("curve_tree_roots"))?;
         Ok(AtHeight::Recorded(CurveTreeRoot::from_bytes(
             *root.as_bytes(),
         )))

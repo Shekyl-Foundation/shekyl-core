@@ -419,3 +419,125 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
     assert!(matches!(out, Err(TestErr::Store(_))), "{out:?}");
     cleanup(&path);
 }
+
+// --- chain_reads: one body, two transactions (S-CHAIN-R commit 1) --------
+
+/// The shared body over a **read** transaction returns exactly what the
+/// batch view returned over the **write** transaction for the same rows —
+/// tip, identity, verified body. Read after the store is dropped, through a
+/// raw redb handle: the snapshot reader (S-CHAIN-R commit 3) will sit on the
+/// same `ReadTransaction` impl, and this pins that the impl exists and
+/// agrees before it has a production caller.
+#[test]
+fn the_read_transaction_body_agrees_with_the_batch_body() {
+    use super::chain_reads;
+    use shekyl_chain_rules::RecordedBlock;
+    let path = tmp("view-chain-reads-agree");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let blk0 = block(0, 1_000);
+    let blk1 = block(1, 1_060);
+    let seen: Result<(AtHeight<RecordedBlock>, AtHeight<RecordedBlock>), TestErr> =
+        store.write(|batch| {
+            record_block(batch, 0, &blk0)?;
+            record_block(batch, 1, &blk1)?;
+            let view = batch.chain_view();
+            Ok((
+                view.block_at(BlockHeight::from_raw(1))?,
+                view.block_at(BlockHeight::from_raw(2))?,
+            ))
+        });
+    let (batch_tip_block, batch_above) = seen.expect("write");
+    drop(store);
+
+    let db = redb::Database::open(&path).expect("raw open");
+    let txn = db.begin_read().expect("raw read");
+    let (tip, info) = chain_reads::tip_of(&txn)
+        .expect("tip_of")
+        .expect("two blocks recorded");
+    assert_eq!(tip, 1);
+    assert_eq!(info.hash.to_bytes(), blk1.hash());
+    match chain_reads::block_body(&txn, Some(tip), 1).expect("block_body") {
+        AtHeight::Recorded((hash, body)) => {
+            assert_eq!(hash.to_bytes(), blk1.hash());
+            assert_eq!(body, blk1);
+            assert_eq!(
+                batch_tip_block,
+                AtHeight::Recorded(RecordedBlock {
+                    hash: BlockHash::from_bytes(hash.to_bytes()),
+                    header: body.header,
+                }),
+                "the batch view is the same body wrapped"
+            );
+        }
+        AtHeight::AboveTip => panic!("height 1 is the tip"),
+    }
+    assert!(matches!(
+        chain_reads::block_body(&txn, Some(tip), 2).expect("above tip"),
+        AtHeight::AboveTip
+    ));
+    assert_eq!(batch_above, AtHeight::AboveTip);
+    drop(txn);
+    drop(db);
+    cleanup(&path);
+}
+
+/// On the read side a hole below the tip is the same SI-7 `Absent` the
+/// batch view arms — classified in the shared body — and a corrupt blob is
+/// the same SI-7 on `blocks`. Nothing is poisoned: there is no batch. The
+/// difference between the two readers is the wrap, not the classification.
+#[test]
+fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
+    use super::chain_reads::{self, ReadFault};
+    let path = tmp("view-chain-reads-holes");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        record_block(batch, 0, &block(0, 1_000))?;
+        record_block(batch, 1, &block(1, 1_060))?;
+        record_block(batch, 2, &block(2, 1_120))?;
+        Ok(())
+    });
+    planted.expect("plant");
+    drop(store);
+
+    // Punch a hole at 1 and corrupt the blob at 2, bypassing the store.
+    let db = redb::Database::open(&path).expect("raw open");
+    {
+        let txn = db.begin_write().expect("raw write");
+        {
+            let mut blocks = txn.open_table(BLOCKS).expect("blocks");
+            blocks.remove(1).expect("remove 1");
+            let rewritten = block(2, 9_999).serialize();
+            blocks.insert(2, rewritten.as_slice()).expect("rewrite 2");
+        }
+        txn.commit().expect("commit");
+    }
+    let txn = db.begin_read().expect("raw read");
+    let tip = Some(2);
+    match chain_reads::block_body(&txn, tip, 1) {
+        Err(ReadFault::Invariant(StoreInvariant::CellCorrupt {
+            key: "blocks",
+            fault: CellFault::Absent,
+        })) => {}
+        other => panic!("a hole below the tip is SI-7 Absent on `blocks`, got {other:?}"),
+    }
+    match chain_reads::block_body(&txn, tip, 2) {
+        Err(ReadFault::Invariant(StoreInvariant::CellCorrupt {
+            key: "blocks",
+            fault: CellFault::Undecodable(_),
+        })) => {}
+        other => panic!(
+            "a blob that does not hash to block_info.hash is SI-7 on `blocks`, got {other:?}"
+        ),
+    }
+    // And a plain absent cell in a table that exists is `Ok(None)`: the
+    // caller classifies it. (Asked of `block_info`, not `curve_tree_roots`:
+    // nothing in this fixture has written a root, and until the layout
+    // commit seals the chain table set an unwritten table is
+    // `TableDoesNotExist` — SCR-17, amendment A2, S-CHAIN-R commit 2.)
+    let none: Option<BlockInfo> =
+        chain_reads::cell(&txn, BLOCK_INFO, 5, "block_info").expect("cell");
+    assert!(none.is_none());
+    drop(txn);
+    drop(db);
+    cleanup(&path);
+}
