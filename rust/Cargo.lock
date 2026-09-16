@@ -4199,6 +4199,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp-proofs",
+ "shekyl-types",
  "thiserror 2.0.18",
  "tracing",
  "zeroize",
