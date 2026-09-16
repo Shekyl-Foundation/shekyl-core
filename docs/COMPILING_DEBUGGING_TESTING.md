@@ -160,10 +160,14 @@ const size_t checkpoints_len = 0;
 
 Consumers check `_len` rather than `sizeof()` to detect empty data.
 
-#### ICE 2: PDB type server crash (`obj_cncrypto`)
+#### ICE 2: PDB type server crash (`obj_cncrypto`) — SUPERSEDED 2026-09-16
 
-**Symptom:** All individual `.c`/`.cpp` files in `src/crypto/` compile
-successfully, then the compiler crashes during the `Generating Code...`
+**Current layout:** `cncrypto` is a single library. CryptonightR / the MSVC
+`OBJECT` split / `obj_cncrypto_rx` do not exist. This section is the ICE
+diagnosis record, not a live build recipe.
+
+**Symptom (historical):** All individual `.c`/`.cpp` files in `src/crypto/` compiled
+successfully, then the compiler crashed during the `Generating Code...`
 phase with:
 
 ```text
@@ -206,6 +210,8 @@ CryptoNight):**
 
 - `src/crypto/CMakeLists.txt` previously split `cncrypto` into six
   OBJECT library groups (`hash`, `ops`, `slowhash`, `rx`, `jit`, `cpp`).
+  The remnant two-way split after CryptonightR deletion was collapsed
+  **2026-09-16**; `cncrypto` is one library.
 - `src/crypto/CryptonightR_JIT.c` previously guarded
   `#include "CryptonightR_template.h"` behind `__x86_64__`.
 - `src/crypto/c_threads.h` includes `<process.h>` on Windows for correct

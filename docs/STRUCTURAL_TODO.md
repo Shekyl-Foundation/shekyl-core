@@ -294,9 +294,9 @@ question.
     been introduced by a vendor refresh.
   - SUPERSEDED 2026-09-15: Delete the CryptonightR 32-bit software
     fallback body in `src/crypto/slow-hash.c` — **file deleted**
-    with Phase 4. The paired `sqrt_result` inline-asm block in
-    `tests/hash/main.cpp:192, 206` is **not** being deleted; see
-    the disambiguation note below.
+    with Phase 4. The paired CN variant-2 `sqrt_result` coverage in
+    `tests/hash/main.cpp` was **DELETED** with the Phase 4 follow-on
+    (the remaining hash tests are keccak / tree-hash, not CryptoNight).
   - Delete the `#if ARCH_WIDTH != 32` default-`db_batch_size`
     branch in `src/blockchain_utilities/blockchain_import.cpp:64`
     (collapse to the 64-bit default).
@@ -393,16 +393,11 @@ other three tripwires explicitly, leads with the KyberSlash
 citation, and points at the `CHANGELOG.md` entry. Defense-in-depth
 is the design property, not an accident of redundancy.
 
-**Note on `tests/hash/main.cpp:192, 206`.** Those lines use
-`sqrt_result` inline-asm guarded on the *64-bit* branch (SSE
-intrinsics on x86_64, equivalent on aarch64). They are not 32-bit
-gates and are *not* being deleted by Chore #3 — deleting them
-would remove 64-bit coverage, which is the opposite of the intent.
-The earlier framing that lumped them with the 32-bit retirement
-was imprecise; this entry supersedes it. The 32-bit-specific
-changes inside that test file (if any) were covered by the
-`slow-hash.c` retirement (**DELETED 2026-09-15**), not by touching
-the `sqrt_result` block.
+**Note on `tests/hash/main.cpp` CN variant-2 coverage — DELETED 2026-09-16.**
+The `sqrt_result` / `variant2_int_sqrt` block that used to sit on the 64-bit
+SSE path is gone with the Phase 4 follow-on. Remaining coverage in that file
+is keccak `cn_fast_hash` and `tree_hash`, not CryptoNight. An earlier
+disambiguation that said those lines "are not being deleted" is **SUPERSEDED**.
 
 **Migration-on-touch rubric (active immediately, for reviewers
 encountering similar guards):** any of the following sites in a
@@ -621,11 +616,12 @@ section) for full status. See `FCMP_BUILD_PLAN.md` (formerly
   size and layout. Full FCMP++ verification pipeline (Phases 1-6)
   complete. See `docs/FCMP_PLUS_PLUS.md` in shekyl-core for the
   complete specification.
-- **Monero #10084 — `wallet2_basic` library extraction.** Decomposes
-  monolithic `wallet2` into minimal file-I/O types. Relevant to the
-  MSVC ICE on `obj_blocks`/`obj_cncrypto` (smaller TUs sidestep ICEs)
-  and to the wallet Rust migration (extracted types map to what needs
-  Rust equivalents). Shekyl's parallel path is `wallet2_ffi.cpp`.
+- **Monero #10084 — `wallet2_basic` library extraction.** SUPERSEDED
+  2026-09-16: Shekyl's C++ `wallet2` / `wallet2_ffi.cpp` path is gone
+  (Phase 5), and the `obj_cncrypto` OBJECT split that this was
+  relevant to collapsed with CryptonightR. The live wallet is the
+  Rust stack. Left here so a grep for the ICE names does not revive
+  a C++ wallet extraction.
 - **Monero #9801 — Rust in Guix reproducible builds.**
   **Status: 🔴 BLOCKING for reproducible release.**
   Three Rust crates now in the build (`shekyl-crypto-pq`, `shekyl-ffi`,
@@ -644,7 +640,7 @@ helpers + variable-latency `u64` multiply + KyberSlash headline +
 policy-framed FCMP++ + node-only-retirement argument), the
 four-tripwire defense-in-depth (A/B/C/D) with Tripwire B's
 structural-not-observable note, the `tests/hash/main.cpp`
-disambiguation, the six real `Makefile` 32-bit targets deleted
+CN variant-2 deletion, the six real `Makefile` 32-bit targets deleted
 (`release-static-win32`, `debug-static-win32`,
 `release-static-linux-i686`, `release-static-linux-armv6`,
 `release-static-linux-armv7`, `release-static-android-armv7`), the
