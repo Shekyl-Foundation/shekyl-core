@@ -7,8 +7,10 @@
 //!
 //! **This is not the measurement.** It proves the apparatus works: two personas
 //! publish (each behind its own tor), both are reachable from the client tor
-//! over real rendezvous circuits, both serve bodies the production client
-//! verifies intact, the derived `.onion` is the one tor published, `NEWNYM`
+//! over real rendezvous circuits, both serve bodies whose countersignature
+//! verifies under the persona's key and whose length matches the serving
+//! contract (frame + leaves), the derived `.onion` is the one tor published,
+//! `NEWNYM`
 //! is accepted by the client tor, and the services are withdrawn on shutdown.
 //! The measurement itself is the `pd-f2-measure`
 //! binary, which is deliberately not a test (§7: tests must not depend on network
@@ -41,10 +43,13 @@ fn tor_binary() -> std::path::PathBuf {
 #[tokio::test]
 #[ignore = "requires the pinned Tor binary via SHEKYL_SPIKE_TOR (bootstraps, publishes onions, network)"]
 async fn two_personas_publish_and_serve_over_real_rendezvous() {
-    // A payload with structure, so a truncated or substituted response fails the
-    // byte comparison rather than passing a length check. 64 000 B is exactly
-    // 500 leaves: the served frame requires a whole number of them, and the
-    // apparatus derives the expected body length (frame + leaves) itself.
+    // A payload whose length is a whole number of leaves: the served frame
+    // requires that, and the apparatus derives expected body length (frame +
+    // leaves) itself. The live gate asserts that derived length plus a valid
+    // countersignature — `fetch_via` plugs `ContentVerify` open so a short
+    // body stays `Truncated` (stream) rather than a content refusal the
+    // measurement would void as apparatus error. Same-length substitution is
+    // not this gate's subject (the endpoint is ours).
     let payload: Vec<u8> = (0..64_000u32).map(|i| (i % 251) as u8).collect();
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -76,8 +81,8 @@ async fn two_personas_publish_and_serve_over_real_rendezvous() {
         .await
         .expect("every persona becomes reachable and none is refused");
 
-    // Both personas serve, cold, and the production client verifies each body:
-    // right length, countersignature valid under the persona's key. A `NEWNYM`
+    // Both personas serve, cold: countersignature valid under the persona's
+    // key, derived body length matches. A `NEWNYM`
     // before each is the cold arm's mechanism, so its acceptance by the client
     // tor is asserted here too — a rig whose "cold" signal was silently
     // refused would time warm circuits and call them cold.

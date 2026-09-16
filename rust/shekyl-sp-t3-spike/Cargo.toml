@@ -20,13 +20,18 @@ publish = false
 # out of every graph that ships.
 shekyl-p-serve = { path = "../shekyl-p-serve", features = ["test-signer"] }
 # The harness's own async plumbing (bring-up, timed fetches, teardown). The v3
-# onion encoding that used to live here (and its ed25519-dalek/sha3/sha2/zeroize
-# deps) relocated to `shekyl-tor-control-client::onion_identity` — SPIKE-F-4 completed — so the
-# spike carries no crypto deps of its own now.
+# onion encoding that used to live here (and its ed25519-dalek/sha3/sha2
+# deps) relocated to `shekyl-tor-control-client::onion_identity` — SPIKE-F-4
+# completed. `zeroize` stays as a direct dep for the apparatus master seed.
 tokio = { version = "1", features = ["net", "io-util", "rt", "rt-multi-thread", "time", "macros", "sync"] }
 # Speaks the control protocol directly (ADD_ONION, managed launch) — the client
 # crate, not the wallet supervisor.
 shekyl-tor-control-client = { path = "../shekyl-tor-control-client" }
+# The per-apparatus onion-identity master seed (`harness::fresh_apparatus_seed`)
+# is a cryptographic secret: wrap it in `Zeroizing` at mint (rule 35). Direct
+# dep, same workspace pin as the rest of the tree — not a leftover of the
+# relocated onion-encoding stack.
+zeroize = { workspace = true }
 # The harness holds the control actor's `ActorRef` to issue ADD_ONION; kameo is
 # the workspace's actor stack, already pinned there.
 kameo = { workspace = true }

@@ -98,6 +98,7 @@ use shekyl_tor_control_client::control::{
     Signal, SocksPort, TorControlClient, TorControlClientConfig, TorLaunch,
 };
 use shekyl_types::PSlot;
+use zeroize::Zeroizing;
 
 use shekyl_p_serve::{PServeEndpoint, ShardBody, TestKeySigner};
 
@@ -189,9 +190,9 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(300);
 /// unreachable; the `.onion` values are irrelevant to a latency measurement,
 /// so nothing is lost. The derivation network/format stay pinned at the one
 /// call site (`Mainnet`/`Bip39`).
-fn fresh_apparatus_seed() -> [u8; 64] {
-    let mut seed = [0u8; 64];
-    getrandom::getrandom(&mut seed)
+fn fresh_apparatus_seed() -> Zeroizing<[u8; 64]> {
+    let mut seed = Zeroizing::new([0u8; 64]);
+    getrandom::getrandom(&mut seed[..])
         .expect("OS entropy source failed; the apparatus cannot derive persona onions");
     seed
 }
@@ -219,7 +220,6 @@ impl ManagedInstance {
     /// the box) can take the port first, failing an otherwise valid W₂ run
     /// nondeterministically.
     async fn launch(tor_binary: &Path, data_dir: PathBuf) -> Result<Self, ApparatusError> {
-        let (events_tx, _events_rx) = tokio::sync::mpsc::unbounded_channel();
         let (readiness, mut ready_rx) = BootstrapReadiness::new();
         let verified = shekyl_tor_control_client::binary::discover_and_verify_at(tor_binary)
             .map_err(|e| ApparatusError::Control(e.to_string()))?;
@@ -231,7 +231,7 @@ impl ManagedInstance {
                 disable_network: false,
                 exit_observer: None,
             }),
-            events: EventSink::new(events_tx),
+            events: EventSink::unsubscribed(),
             readiness,
         });
 
