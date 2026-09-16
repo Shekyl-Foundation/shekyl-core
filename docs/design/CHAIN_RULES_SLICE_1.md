@@ -319,9 +319,15 @@ one.
 | B7 | `cen_b7_never_refuses` — `major_version = 2` is refused by **B1**, `assert_refused(.., CenRow::B1, ..)`, never B7 |
 | all | `slice_1_coverage_names_exactly_its_rows` — a passing candidate's `coverage().iter()` is `{A2, B1, B2, B5, B6, B7}`; `covers_landed` holds |
 
-Commit plan (rule 90; each builds, `fmt`/`clippy` clean, tests green):
+Commit plan (rule 90; each builds, `fmt`/`clippy` clean, tests green).
+**Amended 2026-09-16 (maintainer OK at PR #761 review, cross-lane):** commit 1
+ships as **its own PR**, cut the day S-CHAIN-R's `chain_reads` PR merges,
+because S-CHAIN-R's `RecordedTip { tip: Tip, connect }` composes this crate's
+`Tip` and its commit 2 must not wait on Q2–Q6. That PR depends only on Q1
+(ruled) and is the one time this slice touches `store/view.rs`. Commits 2–6
+stay here behind Q2–Q6.
 
-1. `chain-rules: ChainView::tip() + Tip; BatchView/MockChain/FaultingView impls (Q12-2)`
+1. `chain-rules: ChainView::tip() + Tip; BatchView/MockChain/FaultingView impls (Q12-2)` — **own PR** (above); `BatchView` reads through `chain_reads::tip_of`.
 2. `chain-rules: Rule/BlockRule traits; census_rows! emits the SCW-18 ROW pin`
 3. `chain-rules: CEN-A2 parent-is-tip; CEN-B1/B2/B7 header version rows` (+ `RuleSet::header_major_version`, Q4)
 4. `chain-rules: CEN-B5 header root == root_at(connecting height); CEN-B6 identity under the row`
