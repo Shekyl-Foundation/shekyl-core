@@ -57,8 +57,10 @@ use super::{Canonical, CodecError};
 use crate::schema::TableOrdinal;
 
 /// The cSHAKE256 customization string under which an undo entry's
-/// post-image is digested. Frozen: it is part of the row layout.
-pub const POST_IMAGE_DST: &[u8] = b"shekyl.chain_store.undo_log.post_image.v1";
+/// post-image is digested. Frozen: it is part of the row layout, and
+/// registered in `docs/design/CRYPTO_DOMAIN_REGISTRY.tsv` (SA-3b) — the
+/// gate pins its bytes here and its call site in the mech-1 count.
+pub const POST_IMAGE_DST: &[u8] = b"shekyl/chain-store/undo-log/post-image-v1";
 
 /// The digest of the value a journaled write left under its key —
 /// what replay must find there to count the entry reversed.

@@ -270,7 +270,12 @@ count_pattern() {
 # (shekyl/pqc-leaf-record-v1) -- plus three inline #[cfg(test)] sites: the
 # domain-separation negative control hashes one preimage under both
 # customizations (two sites) and the record test recomputes the record (one).
-MECH1_EXPECTED=54
+# S-CHAIN-W (2026-09-15, PR #757): 54 -> 56. One production site in
+# rust/shekyl-chain-store/src/codec/undo.rs -- `post_image`
+# (shekyl/chain-store/undo-log/post-image-v1, the undo entry's post-image
+# digest) -- plus one inline #[cfg(test)] site: the domain-separation
+# negative control hashes one preimage under an unrelated customization.
+MECH1_EXPECTED=56
 mech1=$(count_pattern 'cshake256_(?:32|64)\(|CShake256Core::new\(')
 if [[ "$mech1" != "$MECH1_EXPECTED" ]]; then
   echo "COUNT DRIFT mech 1 (cSHAKE call sites): found $mech1, pinned $MECH1_EXPECTED." >&2
