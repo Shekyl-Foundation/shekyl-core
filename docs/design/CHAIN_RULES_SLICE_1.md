@@ -1,10 +1,10 @@
 # `shekyl-chain-rules` slice 1 — census 4.A + 4.B (DRS-E6 increment 2)
 
 **Status:** OPEN — **round 1 = pre-flight (rule 26 Round 0), written
-2026-09-16** against `dev` @ `3560b80c2` (S-CHAIN-W landed, PR #757). **Q2–Q6
-RULED 2026-09-16 (§8); Q1 ruled `Option<Tip>` at 12:55 and contradicted at
-13:40 — flagged in §8, unresolved. No production commit lands until Q1 is
-settled** — rule 26's halt condition, cited here on purpose. §9 points at
+2026-09-16** against `dev` @ `3560b80c2` (S-CHAIN-W landed, PR #757). **Round 1
+RULED in full 2026-09-16 (Q1 §2, Q2–Q6 §8); the pre-flight pass is
+discharged and rule 26's halt condition is lifted.** Code lands as two PRs
+(§7): `tip()` after S-CHAIN-R's `chain_reads`, then the rules. §9 points at
 DRS §7.6 (PR #760), the same-day parity-then-repair ruling, and records what
 slice 1 owes to it. Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)
 §7.5.1 (the increment's pre-flight names its parents, audits each row's body,
@@ -330,7 +330,12 @@ wire-format port, which is also where A6/A7's wire-invariant register lives
 (§4). **Route (A5 carry):** one `FOLLOWUPS.md` line in this PR's doc commit,
 Target pre-genesis, falsifier "one constant with a derivation record, or the
 divergence ruled". A7's value is arm C: nobody decided it, and this finding
-says so rather than inventing an answer.
+says so rather than inventing an answer. *The reading error itself is the
+case for Rust typing (maintainer, 13:57):* a units mismatch between two bare
+integers — a count read as a byte length because 268 M "looks like a size" —
+is the class of error C++'s `size_t` invites and a `TxCount` / `ByteLen`
+newtype makes a compile error. When the wire-format port derives the one
+constant, it should be typed, not bare.
 
 **F3 — the store already holds A2's belt but nothing holds A2's rule.**
 `connect.rs:303` refuses `previous != tip.hash` as SI-2 `TipMismatch`
@@ -379,10 +384,19 @@ because S-CHAIN-R's `RecordedTip { tip: Tip, connect }` composes this crate's
 stay here behind Q2–Q6.
 
 1. `chain-rules: ChainView::tip() + Tip; BatchView/MockChain/FaultingView impls (Q12-2)` — **own PR** (above); `BatchView` reads through `chain_reads::tip_of`.
+   *PR shape, settled 2026-09-16 13:57:* this document lands as the docs PR
+   (#761); commit 1 is the `tip()` PR; commits 2–6 are the **rules PR**, cut
+   after the `tip()` PR merges (A2 and B5 read the tip). Three PRs, each
+   under the 5-day / 10-commit ceiling.
 2. `chain-rules: Rule/BlockRule traits; census_rows! emits the SCW-18 ROW pin`
 3. `chain-rules: CEN-A2 parent-is-tip; CEN-B1/B2/B7 header version rows` (+ `RuleSet::header_major_version`, Q4)
 4. `chain-rules: CEN-B5 header root == root_at(connecting height); CEN-B6 identity under the row`
-5. `chain-rules: held_by_cxx(test) entry status; A1/A4 held; gate prints the subtraction` — macro arm, gate grammar + `--selftest`, `RuleSet::enforced` excludes held rows; **plus the two C++ core tests the entries name** (§4.1 condition 1, F4). A5 gains its `subsumed-by` note in the registry comment (no status: it stays `pending` until slice 7 closes it); A6/A7 stay `pending` with the wire-invariant disposition in their registry comment until the wire-format port mints the register and moves the census rows
+5. `chain-rules: held_by_cxx(test) entry status; A1/A4 held; gate prints the subtraction` — macro arm, gate grammar + `--selftest`, `RuleSet::enforced` excludes held rows; **plus the two C++ core tests the entries name** (§4.1 condition 1, F4).
+*Rule 20, stated in the commit message rather than in a review reply:* these
+are C++ tests for code that will be deleted, which reads cold as new C++.
+Rule 20 bars new C++ *logic*; a test establishing that the holder actually
+refuses is the evidence the `held_by_cxx` status requires, and without it the
+status is a grep wearing a test's name (PWD-B10). A5 gains its `subsumed-by` note in the registry comment (no status: it stays `pending` until slice 7 closes it); A6/A7 stay `pending` with the wire-invariant disposition in their registry comment until the wire-format port mints the register and moves the census rows
 6. `docs: slice 1 landed — CHAIN_RULES_CRATE.md §13, DRS §7 row + §15, index, FOLLOWUPS F2, CHANGELOG`
 
 Gate figure expected after commit 5 (today's shape, verified at this tip:
@@ -396,23 +410,27 @@ enforced 153`; 4.A `1/7` (+2 held), 4.B `5/7`.
 
 Each has a default the implementation follows unless ruled otherwise.
 
-**Q1 — `tip()` shape.** **RULED 2026-09-16 (maintainer, PR #761 review):
+**Q1 — `tip()` shape.** **RULED 2026-09-16 (maintainer, PR #761 review;
+re-affirmed 13:57 after a same-day contradiction — §2):
 `Result<Option<Tip { height, hash }>, Fault>`** — §2 carries the reasoning
-(SCR-4's discriminator; the two C++ sentinels). The round-1 draft's default
+(SCR-4's discriminator, refined: absence with caller-actionable semantics
+earns a type; an empty chain has none). The round-1 draft's default
 was a bespoke `enum Tip { Empty, Recorded {..} }`, withdrawn: it would have
 bought nothing over `Option` and cost consistency with the store's own tip
 read. No `root` in either shape (one read path to the root cell; SCW-19).
-**Conflict flagged 2026-09-16 13:40, unresolved:** the same day's second
-review said "`Tip::Empty` over `Option` is right … an enum makes the empty
-case something the caller has to name", reading the round-1 draft's default.
-That contradicts the 12:55 SCR-4 ruling this section already folded (`Option`;
-"a bespoke enum would buy nothing"), on which S-CHAIN-R has since composed
-`RecordedTip { tip: Tip, connect }` over the *struct* `Tip`. §2 is left on
-`Option` until the maintainer says which ruling stands; the slice's own
-recommendation is `Option` — both shapes let `if let` fall through, both make
-the two C++ sentinels unrepresentable, and only `Option` matches the store's
-read — but the reversal is the maintainer's to make, not this document's to
-assume. Neither lane writes `tip()` code before it is settled.
+**Two same-day rulings, resolved 13:57 — `Option` stands.** The 13:40 review
+approved the round-1 draft's `Tip::Empty` on the `top_block_hash` reasoning;
+the maintainer withdrew it: that reasoning does not discriminate (both shapes
+make `UINT64_MAX` + `null_hash` unrepresentable; `if let Some(t)` and `if let
+Tip::Recorded {..}` are the same ergonomics), and applying the `AtHeight`
+pattern without its test is the cargo-culting the 12:55 ruling warned
+against. **The discriminator, refined:** a bespoke absence type earns its
+keep when its absence case carries *specific semantics the caller must act
+on* — `AtHeight::AboveTip` (walk back to the latest key ≤ h) and S-CHAIN-R's
+`TreeAfter` (the tree did not grow) do; an empty chain is one behaviour and
+`Empty` would carry none. Add that the store's read is already
+`Option`-shaped, and it is not close. Both lanes released on `Option<Tip>`,
+with `RecordedTip { tip, connect }` composed over it.
 
 **Q2 — the five topology rows (A1, A4, A5, A6, A7).** **RULED 2026-09-16
 (maintainer): check the grouping first; mint `held` only under three
