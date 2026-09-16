@@ -660,6 +660,24 @@ against the census in this worktree, not copied from the handoff):
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.
 
+**What each figure gates (RULED 2026-09-16; authority
+[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.6, minted by PR #760 —
+this paragraph is the crate-side statement, not a second recording).** The
+two numbers have two lifetimes. `implemented / enforced` is the
+**parity-phase** figure: with the E2 comparator green over the replayed
+chain, `implemented == enforced` — every enforced row evaluated, the
+`is_complete_for` half of parity evidence — gates **cutover**, then stops
+moving. `ratified / enforced` is the figure that **survives cutover**: C++
+gone, comparator retired, this is the one line that stays red while an
+inherited-never-judged row is still enforced, and it gates **release** —
+`ratified == enforced` on the consensus line, each remaining bucket-4 row
+either ratified/diverged by an R-round or ruled dead (bucket 3, leaving the
+denominator). *Read against the landed text:* until this ruling the second
+figure was printed (this section) and gated nothing — parity evidence as
+defined (§3 of the DRS: coverage gaps, stubbed applies and passed-through
+facts all empty) requires `implemented == enforced` only. The printing is
+the mechanism; the gate is what §7.6 adds.
+
 ### 6.4 Wiring
 
 `.github/workflows/docs-gates.yml`: two steps (`check_chain_rules_coverage.py`,
@@ -1045,7 +1063,15 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
 
 ## 13. Owed to later increments (named, with consumers) — none deferred from this one
 
-- `ChainView::tip()` — slice 1 (4.A) / CEN-B5; Q12-2.
+- `ChainView::tip()` — slice 1 (4.A) / CEN-B5; Q12-2. **Shape RULED
+  2026-09-16** at [`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §2:
+  `Result<Option<Tip { height, hash }>, Fault>`.
+- `difficulty_at` — **slice 2 (4.D)**, handed to this crate by S-CHAIN-R's
+  round-1 Q1 (`DRS_E1_SCHAIN_R.md` (PR #760, not yet on `dev` — linked at landing) SCR-3): the store
+  exposes `cumulative_difficulty` (a `RecordedBlock` field, 4.D) and never
+  the per-block difference — per-block difficulty is a consensus
+  computation and C2-R8 Q4 bans the store from computing consensus-visible
+  values, on the *read* side as on the write side. One implementation, here.
 - `ChainView::has_output_key` — the output-key-uniqueness row when ruled; §3.3.
 - `RecordedBlock` field growth (cumulative difficulty, weight) — 4.D / 4.G
   slices, each field with its row.
