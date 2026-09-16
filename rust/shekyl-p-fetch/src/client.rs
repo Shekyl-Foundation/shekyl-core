@@ -30,32 +30,33 @@ use crate::target::{ContentVerify, FetchTarget, ServingEndpoint, VerifiedShard};
 /// in-flight cap `N`. Shared by both callers; there is no queue behind
 /// it — a scheduler wanting another transfer waits for a slot.
 ///
-/// **4, provisional.** The shape is ruled; the integer is this PR's
-/// judgement inside the ruled range, and it is bounded by memory, not by
-/// how many transfers a Tor client can juggle:
+/// **8, pinned 2026-09-16** by the §9.1 (c) W₂ run on the production
+/// `PFetchClient` (daemon→wallet, one client tor, 3.33 MB shard-0,
+/// PR #746). The pin is `min(largest non-churning width, Pi 4 memory)`:
 ///
+/// - **Upper bound (circuit churn).** Widths 1, 2, 4, 8 were all valid
+///   (no VOID rows, zero serve-side cap sheds). Circuit-failure rates
+///   0.0 / 1.0 / 0.0 / 0.0 %; p50 12.4 → 13.2 s. 8 is the largest
+///   width that apparatus could exercise (eight personas); 16 was not
+///   measured. Raising above 8 is a new sweep, not a silent bump.
 /// - **Upper bound (memory).** The client materialises each body until
 ///   both verifications finish (`SF-D8`: verified-or-refused, no
 ///   streaming accept), so `N × max_body_bytes()` is resident in the worst
-///   case. At the leaf figure that is `4 × ~6.7 MB ≈ 27 MB` on the Pi 4
-///   floor (rule 76) — comfortably under the placeholder-64 figure
-///   `SF-D7` refused (213 MB), and small next to the daemon's own
-///   working set. The circuit-churn upper bound is W₂'s to measure over
-///   this topology; nothing here presumes its answer.
+///   case. At the leaf figure that is `8 × ~6.7 MB ≈ 53 MB` on the Pi 4
+///   floor (rule 76) — still well under the placeholder-64 figure
+///   `SF-D7` refused (213 MB). Memory does not bind at 8.
 /// - **Lower bound (throughput).** Reconstruct is a sustained fill over a
 ///   single Tor instance whose per-stream throughput, not the client's
 ///   parallelism, is the ceiling (`SF-D3`: no per-fetch circuit build).
-///   Four outstanding transfers keep the stream busy while one is in the
-///   rendezvous or verify tail; one at a time would leave it idle for the
-///   whole of each dial. Two would already do that; four is a small
-///   margin for a `P` that stalls.
+///   The (b) judgement that four outstanding transfers keep the stream
+///   busy still holds; eight is that judgement plus the W₂ room.
 ///
 /// **Re-derive under `PDM-Q6`'s unit** once the body is a tx-range's and
 /// not a leaf shard's — the memory term changes, the shape does not.
 /// Reopen otherwise on `SF-D7`'s criteria: capped reconstruct throughput
 /// below TJ-D's chain-growth requirement, or wait-for-a-slot plus transfer
 /// for a challenge fetch approaching `CHALLENGE_RESPONSE_BLOCKS`.
-pub const MAX_INFLIGHT: usize = 4;
+pub const MAX_INFLIGHT: usize = 8;
 
 /// Width of the countersignature envelope that leads the body: the
 /// canonical `HybridSignature` encoding and nothing else (`SF-D8`). Both
