@@ -103,8 +103,10 @@ pub enum Stall {
     Dial(String),
     /// No complete head arrived within the head bound.
     HeadTimeout,
-    /// The connection closed before a complete head — `P`'s over-capacity
-    /// or oversized-request close (`RF-R1`), or a mid-head drop.
+    /// No complete head: the connection closed or reset while the request
+    /// was being written or the head was being read — `P`'s over-capacity
+    /// or oversized-request close (`RF-R1`), a mid-head drop, or any other
+    /// pre-head I/O error. No exchange happened.
     ClosedBeforeHead,
     /// A body read made no progress within the stall bound, or the whole
     /// body did not arrive within its deadline.
@@ -123,7 +125,9 @@ pub enum Stall {
     /// is retried like any other stall — and it is the only way the client
     /// can tell "nothing more came" from "nothing more came *yet*".
     NoClose,
-    /// Any other I/O error on the stream.
+    /// An I/O error on the stream **after** a complete head (body drain or
+    /// the close probe). Pre-head I/O is [`Self::ClosedBeforeHead`]: no
+    /// exchange happened, so it is not a short body.
     Io(io::Error),
 }
 

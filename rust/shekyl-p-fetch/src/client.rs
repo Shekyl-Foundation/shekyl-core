@@ -235,7 +235,9 @@ impl PFetchClient {
         timeout(self.timeouts.head, stream.write_all(&request))
             .await
             .map_err(|_| FetchError::Stall(Stall::HeadTimeout))?
-            .map_err(|e| FetchError::Stall(Stall::Io(e)))?;
+            // No complete head: a write error is the same class as a mid-head
+            // close, not a short body (`Stall::Io` is body-phase only).
+            .map_err(|_| FetchError::Stall(Stall::ClosedBeforeHead))?;
 
         let (head, mut body) = read_head(&mut stream, self.timeouts.head).await?;
         let head = parse_head(&head)?;
@@ -361,7 +363,7 @@ async fn read_head<S: AsyncRead + Unpin>(
             let n = stream
                 .read(&mut chunk)
                 .await
-                .map_err(|e| FetchError::Stall(Stall::Io(e)))?;
+                .map_err(|_| FetchError::Stall(Stall::ClosedBeforeHead))?;
             if n == 0 {
                 return Err(FetchError::Stall(Stall::ClosedBeforeHead));
             }
