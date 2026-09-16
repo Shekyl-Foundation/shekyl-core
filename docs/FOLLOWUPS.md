@@ -957,6 +957,9 @@ Default. Lands before genesis if it should exist at launch.
 - **Repair backlog as one query (DRS §7.6 item 1)** — one gate script over the four homes a knowingly-reproduced deviation lands in (CSR DIVERGENT rows, `STORE_INVARIANT_REGISTER.md`, inline schema notes such as R8b-2, surface-plan finding lists), returning every entry with its ratified state on one denominator with the census's bucket-4 rows; carrier: DRS-E2's pre-flight. Rationale: [DAEMON_REDB_STORE.md](design/DAEMON_REDB_STORE.md) §7.6. Falsify by `scripts/ci/check_repair_backlog.py` (or the name E2's pre-flight picks) printing that denominator.
   - Target: pre-genesis
 
+- **E2 comparator negative control** — every other gate in this programme has been forced red once (rule 47); the LMDB↔redb diff has no such control. One mutation per redb table (flip a byte, drop a row, reorder a dup set) asserting the diff goes red **naming table and key**, written *with* each per-table projection rather than retrofitted; carrier: DRS-E2's pre-flight, beside the repair-backlog query above. Relayed by the maintainer via the E6 slice-1 lane, 2026-09-16. Falsify by the E2 harness's test list containing one forced-red case per table in `rust/shekyl-chain-store/schemas/tables.snap`.
+  - Target: pre-genesis
+
 - ~~**Measure boundary-cell occupancy**~~ — **DONE at round 18**: occupancy 741‰, mean residence 637 blocks, max 13 597; it selected `P` = 720. [FEE_LADDER_DERIVATION.md](design/FEE_LADDER_DERIVATION.md) §10.10 (the figures) and §9 FL-D8 (row closed).
   - Target: pre-genesis
 

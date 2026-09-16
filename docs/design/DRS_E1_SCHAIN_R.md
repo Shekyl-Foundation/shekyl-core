@@ -71,6 +71,22 @@ and it is the only commit the other lane depends on. Slice 1 keeps
 `ChainView::tip()` at exactly three implementors (`BatchView`, `MockChain`,
 `FaultingView`); SCR-16 keeps `ReadSnapshot` off the trait.
 
+**The dependency runs the other way too, and the order is settled
+(maintainer OK 2026-09-16 13:31 on #761).** `TipState` composes
+`shekyl_chain_rules::Tip`, which does not exist until E6 lands it. E6
+therefore ships `Tip` + `ChainView::tip()` + its three impls as **its own
+small PR cut the day `chain_reads` merges** (Q1-only dependency; touches
+`view.rs` once, through `chain_reads::tip_of`). The full order:
+**#760 → `chain_reads` PR (this increment's commit 1) → E6 `tip()` PR →
+this increment's PR (commits 2–7) ∥ E6 slice-1 rules PR.** This increment
+does **not** define a local `(height, hash)` pair type to start early —
+one definition of the tip in the workspace is the point, and a stopgap
+type is the same-shape duplicate rule 18 exists to stop. `Tip`'s shape is
+frozen for composition: `#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tip { pub height: BlockHeight, pub hash: BlockHash }`,
+re-exported at the crate root; no `Default` (G11), no `Hash`/`Ord` (no
+caller). `TipState` derives the same five and needs nothing more.
+
 ---
 
 ## 2. Scope
@@ -585,8 +601,10 @@ those; the comparator never saw them.
 6. `store: narrow ReadSnapshot::open_table to pub(crate)` (Q3) — the in-crate tests keep it; no external caller.
 7. `docs: S-CHAIN-R landed — DRS §7 row, §3.6.3 pointers, register SI-8 cell, FOLLOWUPS FL-R3-STORE store half, index, CHANGELOG; archive DRS_E1_SCHAIN_W.md` (§10).
 
-Every question is ruled; all seven commits may start once this document
-merges. Each commit builds, `fmt`/`clippy` clean, tests green (rule 26 B5).
+Every question is ruled. Commit 1 starts the day this document merges, as
+its own PR; commits 2–7 cut from `dev` after E6's `tip()` PR lands (§1 —
+commit 3 imports `Tip`). Each commit builds, `fmt`/`clippy` clean, tests
+green (rule 26 B5).
 
 ---
 
