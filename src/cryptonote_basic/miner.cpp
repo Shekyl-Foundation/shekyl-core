@@ -414,6 +414,15 @@ namespace cryptonote
     else
       MINFO("Mining has started with " << threads_count << " threads, good luck!" );
 
+    // Rule 82: say this where the decision is made, not only in a doc.
+    // The built-in miner hashes through the daemon's RandomX v2 light-mode
+    // verifier path (RANDOMX_V2_RUST.md §2: Rust verifies, C mines). The
+    // H/s it reports is honest but is the verification floor, not what a
+    // tuned miner reaches on the same CPU.
+    MGINFO("Built-in miner uses the node's light-mode RandomX v2 verifier path; "
+           "for competitive hashrate run a dedicated RandomX v2 miner as a separate "
+           "process against this node (docs/USER_GUIDE.md, Mining).");
+
     if( get_is_background_mining_enabled() )
     {
       m_background_mining_thread = boost::thread(m_attrs, boost::bind(&miner::background_worker_thread, this));

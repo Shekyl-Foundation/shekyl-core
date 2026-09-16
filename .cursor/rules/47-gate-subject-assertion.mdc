@@ -19,7 +19,7 @@ reported it as a clean signal.
 ## Where this has already bitten
 
 Promoted from the RandomX v2 T18 mutation-regime round
-([`docs/design/RANDOMX_V2_MUTATION_REGIME.md`](../../docs/design/RANDOMX_V2_MUTATION_REGIME.md)
+([`docs/completed/RANDOMX_V2_MUTATION_REGIME.md`](../../docs/completed/RANDOMX_V2_MUTATION_REGIME.md)
 §13), which found six instances of the shape and three more in its own
 proposed fixes:
 

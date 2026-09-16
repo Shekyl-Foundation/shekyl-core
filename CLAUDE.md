@@ -172,6 +172,10 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release \
 # RANDOMX_V2_INSTALL_DIR=<build>/external/randomx-v2-install
 ```
 
+That flag (and `-DBUILD_RANDOMX_V2_MINER_LIB=ON`) builds the C library
+for the differential harness and the out-of-process miner reference only;
+it never links into `shekyld`, whose PoW is the Rust verifier
+(`RANDOMX_V2_RUST.md` §2; gate: `scripts/ci/check_randomx_symbol_isolation.sh`).
 `-DMANUAL_SUBMODULES=1` is an escape hatch (Guix/gitian), not the happy
 path. The workspace `cargo test` lane **unconditionally** excludes
 `shekyl-randomx-differential` (`.github/workflows/rust-audit-test.yml`);

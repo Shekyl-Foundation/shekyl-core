@@ -1,6 +1,6 @@
 # Shekyl Design Concepts
 
-> **Last updated:** 2026-07-19
+> **Last updated:** 2026-09-16 (Proof-of-work pointer added; economics text unchanged since 2026-07-19)
 
 > **Staking-model correction (2026-07-19).** Earlier revisions of this document
 > described a **passive lock-tier PoS** staking model ("lock SHEKYL for a duration
@@ -42,6 +42,32 @@ generation-invariant differential tests (engine vs `shekyl-economics-sim` on the
 shared primitive) vs calibration-tagged value vectors (expected to churn each
 generation). See that doc for `CALIBRATION-PENDING` code markers and the
 `as_of` / param-epoch calibration-generation tag.
+
+## Proof of work (pointer, not a second source of truth)
+
+Shekyl's PoW is **RandomX v2**; the specification of record is
+[`docs/design/RANDOMX_V2_RUST.md`](design/RANDOMX_V2_RUST.md). The
+architectural decisions this document's economics assume, cited rather than
+restated:
+
+- **Rust verifies, C mines — permanently** (§2; `RANDOMX_V2_PLAN.md`
+  Decision #1). The daemon
+  embeds only the pure-software Rust verifier; the RandomX C JIT and the
+  XMRig-class miner ecosystem consume the C ABI **out of process**. The
+  built-in `start_mining` is a light-mode convenience, not the ceiling.
+  Enforced on the linked binary by `scripts/ci/check_randomx_symbol_isolation.sh`.
+- **No prewarm, lazy derivation** (§6; `RANDOMX_V2_PLAN.md` Decision #6):
+  the cache derivation (≤ 200 ms) is paid once per seed epoch on first use.
+- **Verifier API shaped by [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc)**:
+  cache/dataset/hash are transform-shaped; memoization is a function-level
+  memo inside `shekyl-ffi`, invisible to C++ callers.
+- **`rust/shekyl-consensus` stays** — six live Cargo consumers; it is not a
+  PoW vestige.
+- **Genesis-era mining asymmetry** (the honest light-mode floor vs the tuned
+  miner ceiling) is a *security* disposition owned by
+  [`docs/design/RANDOMX_V2_MINING_ASYMMETRY.md`](design/RANDOMX_V2_MINING_ASYMMETRY.md),
+  not an economics parameter; the §8 security-budget reasoning below assumes
+  that disposition is made, not that the gap is zero.
 
 ---
 

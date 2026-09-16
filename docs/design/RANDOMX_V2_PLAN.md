@@ -39,8 +39,8 @@ todos:
     content: "Track B / Phase 4 LANDED 2026-09-15: deleted pow_schema.h (IPowSchema), pow_registry.{h,cpp}, RX_BLOCK_VERSION, set_pow_schema_override_for_tests, and major_version branching in PoW selection; rewrote the three test call sites. Did NOT delete rust/shekyl-consensus (live consumers: shekyl-curve-tree, shekyl-daemon-rpc, shekyl-engine-state, shekyl-ffi, shekyl-genesis-tool, shekyl-wire). Also deleted slow-hash.c and generate_chacha_key*. Follow-on cleanup deleted C++ chacha.h / the xchacha20 C ABI (no C++ consumer; wallet AEAD is Rust XChaCha20-Poly1305) and dropped unused major_version/miners from get_block_longhash. wallet_rpc_payments.cpp is gone. Isolation gate extended. Track D nm falsifier RECORDS-WAS 2026-09-16 (PR #755 comment): T cn_slow_hash with U from account.cpp at shekyld stamp 3.1.0-6c3e91bf0; isolation script exit 0 at 483fdb967."
     status: completed
   - id: phase5-docs
-    content: "Track B / Phase 5: Update USER_GUIDE, SHEKYLD_PREREQUISITES, DESIGN_CONCEPTS, CHANGELOG, FOLLOWUPS per 91-documentation-after-plans.mdc after Phase 4 lands. Remaining Phase-5 debt is not rx-slow-hash.c, RPC payments, or shekyl-consensus crate deletion. Forward obligation: \u00a722 Guix entry (FOLLOWUPS)."
-    status: pending
+    content: "Track B / Phase 5 LANDED 2026-09-16 (followup-sweep PR off dbf818619): USER_GUIDE (user-level: built-in miner = light-mode verifier path; competitive hashrate = external RandomX v2 miner), SHEKYLD_PREREQUISITES + CLAUDE.md (harness/miner-lib flags never change what shekyld links), DESIGN_CONCEPTS PoW pointer (Decision #1, #6, 18-type-placement, shekyl-consensus keep, mining-asymmetry owner), miner::start MGINFO (rule 82), CHANGELOG, FOLLOWUPS truth (post-2g closed; algorithm-review, mining-asymmetry, template-conformance, cutover-seam, archival-seam, consensus-fold rows with falsifiers). DOCUMENTATION_TODOS_AND_PQC.md struck (RETIRED). Remaining Phase-5 debt is not rx-slow-hash.c, RPC payments, or shekyl-consensus crate deletion. Forward obligation: \u00a722 Guix entry stays in FOLLOWUPS."
+    status: completed
 isProject: false
 ---
 
@@ -398,16 +398,19 @@ Per `60-no-monero-legacy.mdc`, `15-deletion-and-debt.mdc`, and `70-modular-conse
 - `src/wallet/wallet_rpc_payments.cpp` is gone (wallet2 cutover). Not a remaining Phase 4 site.
 - Update PoW unit tests under [tests/unit_tests/](../../tests/unit_tests/) to v2-only.
 
-### Phase 5: Docs
+### Phase 5: Docs — LANDED 2026-09-16
 
-Update:
+What landed (the followup-sweep PR off `dbf818619`):
 
-- [docs/USER_GUIDE.md](../../docs/USER_GUIDE.md) (PoW description; mining instructions referencing the miner-only C build flag; note that former `MONERO_RANDOMX_*` env vars are gone, replaced by constructor parameters or removed entirely).
-- [docs/SHEKYLD_PREREQUISITES.md](../../docs/SHEKYLD_PREREQUISITES.md) (Rust toolchain version if bumped).
-- [docs/DOCUMENTATION_TODOS_AND_PQC.md](../../docs/DOCUMENTATION_TODOS_AND_PQC.md) (close RandomX v2 row).
-- [docs/DESIGN_CONCEPTS.md](../../docs/DESIGN_CONCEPTS.md) (cite the permanent architectural decisions; keep `shekyl-consensus` — six live consumers; cite `18-type-placement.mdc` as the rule that shaped the verifier API; cite Decision #6 for why no prewarm).
-- [docs/CHANGELOG.md](../../docs/CHANGELOG.md).
-- [docs/FOLLOWUPS.md](../../docs/FOLLOWUPS.md) — close any RandomX v2 follow-ups this plan introduces along the way (notably: confirm the §22 Guix forward-looking entry was filed at Phase 0 close, and amend or close it once Guix integration lands). **Note this plan is primarily fresh debt clearance**: `IPowSchema`/`pow_registry` and `slow-hash.c` **DELETED 2026-09-15**; RPC payments and `rx-slow-hash.c` already landed; **do not** delete `shekyl-consensus` (six live consumers). The Phase 5 FOLLOWUPS pass is therefore mostly forward-looking close-records of obligations the plan itself creates, not closure of pre-existing items. **Do not** add a "Rust-port the JIT later" item — Decision #1 is permanent; **do not** add a "consider prewarm" item — Decision #6 is permanent.
+- [docs/USER_GUIDE.md](../../docs/USER_GUIDE.md) — user-level (rule 81): the built-in miner is the node's light-mode verifier path; competitive hashrate is a dedicated RandomX v2 miner run as a separate process. No CMake flags in the user guide. (The plan's original "miner-only C build flag" bullet moved to builder docs; there were no `MONERO_RANDOMX_*` env-var mentions left to strike.)
+- [docs/SHEKYLD_PREREQUISITES.md](../../docs/SHEKYLD_PREREQUISITES.md) §1 caveats and [`CLAUDE.md`](../../CLAUDE.md) build notes — the default daemon links only the Rust verifier; `-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` / `-DBUILD_RANDOMX_V2_MINER_LIB=ON` are harness / out-of-process-miner reference builds and never change what `shekyld` links.
+- [docs/DESIGN_CONCEPTS.md](../../docs/DESIGN_CONCEPTS.md) — a "Proof of work" pointer section citing Decision #1, Decision #6, `18-type-placement.mdc`, the `shekyl-consensus` keep, and the mining-asymmetry disposition doc. Cite, not a second SoT.
+- `src/cryptonote_basic/miner.cpp` — one `MGINFO` at `miner::start` (rule 82): the built-in miner is the light-mode path; competitive hashrate needs an external miner. Surfaces the asymmetry where the operator makes the decision.
+- [docs/CHANGELOG.md](../../docs/CHANGELOG.md) — isolation check 6 and the miner-start notice.
+- [docs/FOLLOWUPS.md](../../docs/FOLLOWUPS.md) — post-2g row closed; algorithm-review, mining-asymmetry, miner-template-conformance, cutover-seam, archival-seam and `shekyl-consensus`-fold rows added with falsifiers; SHA-256 / Guix / ExternalProject reopen text amended.
+- `DOCUMENTATION_TODOS_AND_PQC.md` was **struck** from this list: that file is RETIRED and takes no new rows.
+
+Standing constraints, unchanged: **do not** delete `shekyl-consensus` (six live consumers); **do not** add a "Rust-port the JIT later" item — Decision #1 is permanent; **do not** add a "consider prewarm" item — Decision #6 is permanent. The daemon's own Rust cutover does not reopen Decision #1: competitive mining stays C/XMRig-class and out of process.
 
 ## Risk acknowledgments
 
