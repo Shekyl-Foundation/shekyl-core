@@ -453,7 +453,7 @@ pub(crate) fn cache_canonical_verdict(
 ///
 /// # Why this is a separate function
 ///
-/// Per `RANDOMX_V2_MUTATION_REGIME.md` MR-F10, this comparison lived
+/// Per `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` MR-F10, this comparison lived
 /// inline in a loop over live sessions, so exercising any failing
 /// branch required a full 256-MiB derive plus a linked C oracle — and
 /// no negative test for it existed. §4.5 T-A1 names *this* assertion
@@ -506,7 +506,7 @@ mod tests {
     // three-leg verdict. §4.5 T-A1 names this assertion FIRST; before
     // this block it lived inline in a loop over live sessions and had
     // no negative test at any cost. See
-    // `docs/design/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 1.
+    // `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 1.
 
     const SH: [u8; 32] = [0x55; 32];
 

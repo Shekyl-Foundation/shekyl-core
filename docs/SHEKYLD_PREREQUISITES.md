@@ -156,7 +156,9 @@ does **not** compile or link the RandomX v2 C library.
 are opt-in harness and out-of-process-miner reference builds and never
 change what `shekyld` links (`scripts/ci/check_randomx_symbol_isolation.sh`
 is the gate). A harness that needs fast block production on a real
-difficulty uses an external miner over RPC, the same way a user would.
+difficulty uses an external miner over this node's `get_block_template`
+/ `submitblock` RPC — a miner that speaks another coin's template
+dialect will not produce accepted blocks.
 
 **Regtest hard-fork table.**
 `src/cryptonote_core/cryptonote_core.cpp:674–678` defines

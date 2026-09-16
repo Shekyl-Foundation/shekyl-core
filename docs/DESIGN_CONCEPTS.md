@@ -56,8 +56,12 @@ restated:
   XMRig-class miner ecosystem consume the C ABI **out of process**. The
   built-in `start_mining` is a light-mode convenience, not the ceiling.
   Enforced on the linked binary by `scripts/ci/check_randomx_symbol_isolation.sh`.
-- **No prewarm, lazy derivation** (§6; `RANDOMX_V2_PLAN.md` Decision #6):
-  the cache derivation (≤ 200 ms) is paid once per seed epoch on first use.
+- **No prewarm FFI; lazy non-canonical derivation** (§6; `RANDOMX_V2_PLAN.md`
+  Decision #6): a non-canonical cache derives on first use (≤ 200 ms, once
+  per seed epoch). The canonical cache at the chain tip is pinned and
+  derived synchronously by `shekyl_pow_randomx_v2_set_canonical` — that
+  eager pin is the sanctioned replacement for async/fake prewarm, not a
+  contradiction of Decision #6.
 - **Verifier API shaped by [`18-type-placement.mdc`](../.cursor/rules/18-type-placement.mdc)**:
   cache/dataset/hash are transform-shaped; memoization is a function-level
   memo inside `shekyl-ffi`, invisible to C++ callers.

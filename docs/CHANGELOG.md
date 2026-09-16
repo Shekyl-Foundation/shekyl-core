@@ -65,21 +65,25 @@
 
 ### Changed
 
-- **Isolation gate check 6: the PoW test seam is proven link-time
+- **Isolation gate check 6: the pinned PoW test setter is link-time
   unreachable from production.** `check_randomx_symbol_isolation.sh`
-  now asserts on the linked `shekyld` that no `set_pow_*override*`
-  setter survived `--gc-sections` (a production reference, a second
-  seam, or a build without gc-sections would keep it) — the binary
-  counterpart of `check_pow_test_seam.sh` (CEN-D2). Anchored on
+  asserts on the linked `shekyld` that `cryptonote::set_pow_hash_override_for_tests`
+  and the deleted schema-level names (`IPowSchema`,
+  `set_pow_schema_override_for_tests`, `get_pow_for_height`) are absent
+  — exact names, same dialect as the rest of that script. Source
+  counterpart: `check_pow_test_seam.sh` (CEN-D2). Anchored on
   `cryptonote::hash_pow_randomx` and the seam slot being present, so
   the daemon Rust cutover reds it loudly rather than passing vacuously.
+  Runs per-PR on the Ubuntu 24.04 `shekyld` artifact (`build.yml`) as
+  well as on the differential cron.
 
-- **The built-in miner says what it is.** `start_mining` logs once at
-  start that it hashes through the node's light-mode RandomX v2 verifier
-  path and that competitive hashrate needs a dedicated miner run as a
-  separate process against the node. The reported H/s is unchanged and
-  honest; it is the verification floor, not a tuned miner's ceiling
-  (`RANDOMX_V2_RUST.md` §2). `docs/USER_GUIDE.md` Mining says the same.
+- **The built-in miner says what it is, from the wallet CLI.**
+  `shekyl-cli mine start` prints that the daemon is using its built-in
+  checker and that a miner built for another coin will not produce
+  accepted blocks. The reported H/s is unchanged and honest; it is the
+  verification floor, not a tuned miner's ceiling (`RANDOMX_V2_RUST.md`
+  §2). `docs/USER_GUIDE.md` Mining says the same. No new C++ in
+  `miner.cpp`.
 
 - **Default clone no longer requires initializing unused RandomX v1.**
   CMake dropped `check_submodule(external/randomx)`. That gitlink stays

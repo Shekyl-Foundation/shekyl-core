@@ -615,14 +615,14 @@ Mining secures the network and earns you block rewards. Shekyl uses
 **RandomX v2**, an algorithm designed for ordinary CPUs.
 
 The commands below run the node's **built-in miner**. It is the same
-code the node uses to verify blocks, so it is always correct, but it is
+code the node uses to check blocks, so it is always correct, but it is
 tuned for checking one block at a time, not for hashing as fast as your
 CPU can. It is fine for testing, for a small contribution, or for
-learning the flow. If you want competitive hashrate, run a **dedicated
-RandomX v2 miner** (XMRig-class software) as a separate program pointed
-at your node — the node stays the verifier, the miner does the heavy
-lifting. The node prints a reminder to that effect when the built-in
-miner starts.
+learning the flow. If you want more hashrate, run a **dedicated miner**
+as a separate program that uses **this node's** block template. A miner
+built for another coin (including stock Monero XMRig) will not produce
+blocks this network accepts. `shekyl-cli mine start` prints that
+reminder when the built-in miner starts.
 
 ### From the daemon console
 

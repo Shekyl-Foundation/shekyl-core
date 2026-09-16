@@ -169,6 +169,8 @@ jobs:
             python3 scripts/ci/check_drop_verdict_classification.py
           run_one "PoW test-seam containment (CEN-D2)" \
             scripts/ci/check_pow_test_seam.sh
+          run_one "RandomX symbol-isolation negatives (rule 50)" \
+            scripts/ci/test_check_randomx_symbol_isolation.sh
           run_one "LV-1: levin wire-constant parity" \
             ./scripts/ci/check_levin_constant_parity.sh
           run_one "C++ clamp-ban (address-freeze)" \

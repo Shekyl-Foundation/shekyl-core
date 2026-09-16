@@ -138,7 +138,7 @@ enum Mode {
     /// bound assertion; per-PR cadence (§5.1.13).
     Concurrent,
     /// `rotating` — the exploring differential lane
-    /// (`RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2). Derives a fresh
+    /// (`docs/completed/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2). Derives a fresh
     /// input set per rotation index and runs rust-vs-C over inputs
     /// outside the pinned corpus. Weekly/nightly cadence; advances
     /// the **explored** boundary, never the pinned one.

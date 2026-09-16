@@ -39,23 +39,19 @@
 #      C ABI are absent. Phase 4 deleted CryptoNight; a reappearance
 #      means slow-hash.c was re-linked. The daemon called the unprefixed
 #      names (miner.cpp / blockchain.cpp), not `cn_slow_hash_allocate_state`.
-#   6. The PoW test seam is unreachable from production, proven by the
-#      linker. Phase 4 deleted the schema-level override
-#      (`set_pow_schema_override_for_tests`, `IPowSchema`) but KEPT the
-#      hash-level seam `cryptonote::set_pow_hash_override_for_tests`
-#      (src/crypto/pow_randomx.h) so CEN-D2's verifier-failure arms stay
-#      testable. Its source containment is scripts/ci/check_pow_test_seam.sh
-#      (declaration + definition pinned, >=1 test caller, zero production
-#      callers). This check is that gate's binary counterpart: the daemon
-#      builds with -ffunction-sections/--gc-sections, so a setter nobody in
-#      production references is dropped at link time — its PRESENCE in
-#      shekyld means some linked production object reached it (or a second
-#      seam was spelled differently), which is the capability CEN-D2 forbids.
-#      Anchored (rule 47) on the dispatch `cryptonote::hash_pow_randomx` and
-#      the seam's slot `s_pow_hash_override_for_tests` both being present:
-#      absence of either means the PoW dispatch moved (the daemon-store /
-#      daemon Rust cutover) and BOTH this check and check_pow_test_seam.sh
-#      must be re-homed in that PR, not left to pass vacuously.
+#   6. The pinned PoW test setter is absent from the linked daemon, and
+#      the deleted schema-level names stay deleted. Source containment
+#      of `cryptonote::set_pow_hash_override_for_tests` is
+#      scripts/ci/check_pow_test_seam.sh. This is the binary counterpart:
+#      -ffunction-sections/--gc-sections must drop that setter, so its
+#      PRESENCE means a production object referenced it or gc-sections
+#      fell off. Exact names, same dialect as checks 1/2/5 — a glob
+#      cannot catch an arbitrarily renamed seam, and this check does
+#      not claim to. A new setter is a new name added here and in
+#      check_pow_test_seam.sh together. Anchored (rule 47) on
+#      `cryptonote::hash_pow_randomx` and the slot
+#      `s_pow_hash_override_for_tests`: if either is gone the dispatch
+#      moved and both gates re-home in that PR.
 #
 # Checks 3, 4 and 6's anchors make 1, 2, 5 and 6 falsifiable: a stripped
 # binary or a wrong path cannot pass all six.
@@ -152,11 +148,12 @@ else
   echo "OK: no cn_slow_hash family in daemon"
 fi
 
-# --- Check 6: PoW test seam unreachable from production (demangled) ---
+# --- Check 6: pinned PoW test setter unreachable from production ---
 # Anchor first: the dispatch that consults the seam, and the seam's slot,
-# must both be in the binary. Without them, the absence assertion below
+# must both be in the binary. Without them, the absence assertions below
 # would pass over a daemon whose PoW path moved elsewhere.
-if printf '%s\n' "$SYMS_DEMANGLED" | grep -E ' [Tt] cryptonote::hash_pow_randomx\(' >/dev/null; then
+# [[:space:]] not a literal space: same dialect as check 1.
+if printf '%s\n' "$SYMS_DEMANGLED" | grep -E '[[:space:]][Tt][[:space:]]cryptonote::hash_pow_randomx\(' >/dev/null; then
   echo "OK: PoW dispatch cryptonote::hash_pow_randomx present"
 else
   echo "FAIL: cryptonote::hash_pow_randomx absent from '$BIN'." >&2
@@ -164,6 +161,8 @@ else
   echo "  and scripts/ci/check_pow_test_seam.sh in the same PR." >&2
   fail=1
 fi
+# Demangled GNU nm: `b cryptonote::(anonymous namespace)::s_pow_hash_override_for_tests`
+# — the name is preceded by `::`, not a space. End-anchor the unique slot name.
 if printf '%s\n' "$SYMS_DEMANGLED" | grep -E 's_pow_hash_override_for_tests$' >/dev/null; then
   echo "OK: PoW test-seam slot s_pow_hash_override_for_tests present (seam still consulted)"
 else
@@ -172,18 +171,25 @@ else
   echo "  update this check and check_pow_test_seam.sh together." >&2
   fail=1
 fi
-# The assertion: no PoW override SETTER survived the link. Function
-# symbols only — the slot above is data and expected. Any spelling of a
-# hash- or schema-level override setter is caught, not just the current one.
-if matches="$(printf '%s\n' "$SYMS_DEMANGLED" | grep -E ' [TtWw] .*set_pow_[A-Za-z_]*override[A-Za-z_]*\(')"; then
-  echo "FAIL: PoW override setter reachable from production (survived --gc-sections):" >&2
+# Exact setter: function symbols only. The slot above is data and expected.
+if matches="$(printf '%s\n' "$SYMS_DEMANGLED" | grep -E '[[:space:]][TtWw][[:space:]]cryptonote::set_pow_hash_override_for_tests\(')"; then
+  echo "FAIL: PoW hash override setter reachable from production (survived --gc-sections):" >&2
   printf '%s\n' "$matches" >&2
   echo "  Production must never install a PoW hash override (CEN-D2)." >&2
-  echo "  Either a production object references the seam, a second seam" >&2
-  echo "  was added, or the build lost -ffunction-sections/--gc-sections." >&2
+  echo "  A production object references the seam, or the build lost" >&2
+  echo "  -ffunction-sections/--gc-sections." >&2
   fail=1
 else
-  echo "OK: no PoW override setter in daemon (test seam is link-time unreachable from production)"
+  echo "OK: set_pow_hash_override_for_tests absent from daemon (link-time unreachable)"
+fi
+# Deleted schema-level names (same shape as check 5). Currently absent;
+# the check exists so a re-link turns red, not because they are present.
+if matches="$(printf '%s\n' "$SYMS_DEMANGLED" | grep -E 'IPowSchema|set_pow_schema_override_for_tests|get_pow_for_height')"; then
+  echo "FAIL: deleted PoW-schema symbol present in daemon:" >&2
+  printf '%s\n' "$matches" >&2
+  fail=1
+else
+  echo "OK: no deleted PoW-schema symbol (IPowSchema / schema override / get_pow_for_height)"
 fi
 
 exit "$fail"

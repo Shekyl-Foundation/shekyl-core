@@ -17,7 +17,7 @@
 | Working branch (doc) | `docs/randomx-mining-asymmetry` (off `dev`; design docs land on `dev` per branch policy). |
 | Working branch (code) | The bench legs, XMRig integration, whale harness, and any Rust-full prototype get **their own** branch off `dev` — this doc does not carry code. |
 | Reopen clause | §10 — "accept the gap" is itself a security choice with a threat model; recorded with a [`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc) reopen criterion, not left implicit. |
-| Tracked in FOLLOWUPS (2026-09-16) | Two rows in [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md): **"RandomX v2 mining floor-vs-ceiling asymmetry — Phases 1–3 parked after Phase 0"** (parked-status falsifier: Appendix B from a source-verified run; never-link falsifier: isolation check 1) and **"Miner template conformance vector (bless the interface, not a miner)"** — option (b)'s honest form is a versioned template/blob/submit conformance vector any miner can pass, not one blessed XMRig artifact; it is **not** gated on Appendix B and publishes before genesis seal. Per [`RANDOMX_V2_RUST.md`](./RANDOMX_V2_RUST.md) §2 the C-for-mining / Rust-for-verification split is permanent: option (a) is not the default merely because the daemon is moving to Rust, and the whale (§6.1) stays out-of-process. |
+| Tracked in FOLLOWUPS (2026-09-16) | Two one-liners in [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md): parked Phases 1–3 (falsify by Appendix B from a source-verified run; never-link falsifier is isolation check 1's §7.1 10-symbol C-ABI list) and the miner template conformance vector (§6.3; not gated on Appendix B). Disposition options (a)/(b)/(c) live in this document, not in the queue. |
 
 ---
 

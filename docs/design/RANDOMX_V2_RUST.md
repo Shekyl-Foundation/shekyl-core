@@ -1,6 +1,6 @@
 # RandomX v2 — Rust verifier + C miner
 
-**Status:** LIVING CONTRACT (last-verified 2026-09-15). Phase 0
+**Status:** LIVING CONTRACT (last-verified 2026-09-16). Phase 0
 deliverable for the RandomX v2 Rust port. Companion:
 [`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). Phase 0
 discharged by Phase 1 landing PR #54 merge
@@ -461,6 +461,31 @@ the other.
 The verifier crate also forbids module-level runtime-mutable state.
 Immutable tables are allowed; `static mut`, `Mutex`, `RwLock`, `OnceCell`,
 `OnceLock`, `Lazy`, and atomics at module scope are not.
+
+### 7.3 `shekyld` binary checks (`check_randomx_symbol_isolation.sh`)
+
+The script in `scripts/ci/check_randomx_symbol_isolation.sh` is the
+binary half of §7.1. It reads `nm` / `nm --demangle` of a linked
+`shekyld` (per-PR on the Ubuntu 24.04 artifact in `build.yml`; also the
+differential cron). Six checks, exact names, never a `randomx_*` glob:
+
+1. The ten §7.1 C-ABI entry points are absent.
+2. Deleted CryptoNote DAA (`cryptonote::next_difficulty` family) is absent.
+3. `shekyl_pow_randomx_v2_hash` is present (the daemon still embeds the
+   Rust verifier).
+4. `aes`-crate internals (`_ZN3aes`) are present, per the Phase 2b
+   disposition.
+5. `cn_slow_hash` / unprefixed `slow_hash_{allocate,free}_state` are
+   absent (Phase 4 deleted CryptoNight).
+6. `cryptonote::set_pow_hash_override_for_tests` is absent (gc-sections
+   dropped the CEN-D2 setter), and the deleted schema-level names
+   (`IPowSchema`, `set_pow_schema_override_for_tests`,
+   `get_pow_for_height`) stay deleted. Anchored on
+   `cryptonote::hash_pow_randomx` and the slot
+   `s_pow_hash_override_for_tests` so a moved dispatch cannot pass
+   vacuously. Source counterpart: `check_pow_test_seam.sh`. A new
+   setter is a new name, added here and in the source gate together —
+   this check does not glob.
 
 ## 8. Performance Targets
 

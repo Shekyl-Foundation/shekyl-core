@@ -356,6 +356,15 @@ jobs:
       # tracking issue (the visibility route #660's ruling required of any
       # cost tier). Either way this is not the critical path: depends.yml
       # (74-113 min) and randomx (90 min) already run longer, concurrently.
+      # Binary isolation on the shekyld this job just linked (Release,
+      # --gc-sections). Cron in randomx-v2-differential.yml still runs
+      # the same script; this is the per-PR copy so a production
+      # reference of the PoW test setter cannot merge on a green source
+      # grep alone. nm is binutils, pulled in by build-essential.
+      - name: symbol isolation on linked daemon (nm)
+        if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
+        shell: bash
+        run: scripts/ci/check_randomx_symbol_isolation.sh build/bin/shekyld
       - name: live-daemon gates
         if: matrix.pack_ctest && needs.changes.outputs.docs_only != 'true'
         # `shell: bash` like the CTest-artifact step below, and for the same
