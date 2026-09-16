@@ -78,15 +78,32 @@ fn contains_all_is_the_mint_predicate() {
 }
 
 #[test]
-fn covers_landed_is_vacuous_while_every_row_is_pending() {
-    // DRS-D12: zero implemented rows, so empty coverage covers what has
-    // landed. The false branch is `contains_all` above; flipping a registry
-    // entry to `implemented` without a `validate` call is what makes mint
-    // panic.
-    assert!(RuleCoverage::EMPTY.covers_landed(&RuleSet::GENESIS));
-    assert!(CenRow::ALL
+fn covers_landed_requires_exactly_the_implemented_rows() {
+    // Was `covers_landed_is_vacuous_while_every_row_is_pending` in the
+    // scaffold (DRS-D12). Slice 1 flipped rows, so empty coverage no longer
+    // covers what has landed — a `validate` that forgot a landed rule would
+    // reach the mint with this false, and the mint panics (G9's runtime
+    // half). Coverage of exactly the implemented rows suffices; pending rows
+    // are not required.
+    assert!(!RuleCoverage::EMPTY.covers_landed(&RuleSet::GENESIS));
+    let mut landed = RuleCoverage::EMPTY;
+    for row in CenRow::ALL
         .iter()
-        .all(|row| row.status() == crate::census::RowStatus::Pending));
+        .copied()
+        .filter(|row| row.status() == crate::census::RowStatus::Implemented)
+    {
+        landed.insert(row);
+    }
+    assert!(!landed.is_empty(), "slice 1 flipped at least one row");
+    assert!(landed.covers_landed(&RuleSet::GENESIS));
+    assert!(!landed.is_complete_for(&RuleSet::GENESIS));
+    // One implemented row missing is enough to refuse the mint.
+    let mut short = landed;
+    short.words = [0; 4];
+    for row in landed.iter().skip(1) {
+        short.insert(row);
+    }
+    assert!(!short.covers_landed(&RuleSet::GENESIS));
 }
 
 #[test]

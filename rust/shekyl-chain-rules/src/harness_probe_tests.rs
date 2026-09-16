@@ -104,9 +104,10 @@ fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
             &view,
             &RuleSet::GENESIS,
         ))
-        .expect("zero rules refuse nothing");
+        .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSet::GENESIS.id());
-        assert!(valid.coverage().is_empty());
+        // The landed block rules ran; the probe is not among them.
+        assert!(!valid.coverage().contains(CenRow::C1));
     });
 }
 

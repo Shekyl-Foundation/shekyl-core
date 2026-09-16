@@ -258,19 +258,33 @@ enforced 153   ratified 126 / enforced 153`.
 pub(crate) trait Rule {
     const ROW: CenRow;
 }
-/// Block-level rules of this slice: one signature, so `validate` runs them
-/// from a list and records `R::ROW` itself — a rule cannot record another
-/// row's coverage.
+/// The registry-generic face of `Rule`, so one macro serves both enums;
+/// every `Rule` is `Bound<CenRow>`, a policy rule (E5) will be `Bound<PolicyRow>`.
+pub(crate) trait Bound<R> { const ROW: R; }
+/// What a block rule reads besides the view. A struct so the set can grow
+/// without moving any rule's signature; the view is passed *beside* it so a
+/// new chain fact is a new `ChainView` method, never a new parameter.
+pub(crate) struct BlockContext<'a> { candidate: &'a Candidate, rule_set: &'a RuleSet }
 pub(crate) trait BlockRule: Rule {
-    fn check<'id, V: ChainView<'id>>(
-        candidate: &Candidate, tip: &Tip, view: &V, rule_set: &RuleSet,
-    ) -> Result<Verdict<()>, V::Fault>;
+    fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
+        -> Result<Verdict<()>, V::Fault>;
 }
+/// The only writer of block-level coverage: inserts `R::ROW` iff `R` passed.
+pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(cx, view, coverage) -> Result<Verdict<()>, V::Fault>;
+
 // census.rs — the entry names a TYPE; the macro emits both pins:
-//   use $path as _;                                              (G9: exists)
-//   const _: () = assert!(<$path as Rule>::ROW as u8 == CenRow::$var as u8); (SCW-18: is this row)
-A2 implemented(crate::rules::topology::A2),
+//   use $path as _;                                                      (G9: exists)
+//   const _: () = assert!(matches!(<$path as Bound<$name>>::ROW, $name::$var)); (SCW-18: is this row)
+B1 implemented(crate::rules::header::B1),
 ```
+
+*As landed (rules PR, commit "Rule/BlockRule + B1/B2/B7"):* the pre-flight
+sketch passed `tip: &Tip` positionally; the landed shape reads the tip from
+the view inside the rules that need it (A2, B5), so `tip()` landing on
+`ChainView` moves no rule signature — the property the parallel start relied
+on. The pin was forced red once before landing: registering `header::B1`
+under the `B2` entry fails with `E0080: evaluation panicked: … the type
+registered under B2 is bound to a different census row (SCW-18)`.
 
 Unit structs per row (`rules/topology.rs`: `A2`; `rules/header.rs`: `B1 B2 B5
 B6 B7`). `validate` runs `for each R in slice-1 list { match R::check(..)? {
@@ -388,8 +402,16 @@ stay here behind Q2–Q6.
    (#761); commit 1 is the `tip()` PR; commits 2–6 are the **rules PR**, cut
    after the `tip()` PR merges (A2 and B5 read the tip). Three PRs, each
    under the 5-day / 10-commit ceiling.
-2. `chain-rules: Rule/BlockRule traits; census_rows! emits the SCW-18 ROW pin`
-3. `chain-rules: CEN-A2 parent-is-tip; CEN-B1/B2/B7 header version rows` (+ `RuleSet::header_major_version`, Q4)
+2. `chain-rules: Rule/BlockRule + SCW-18 pin; CEN-B1/B2/B7; RuleSet::header_major_version`
+   — commits 2 and 3 of the sketch **landed as one** (rule 26 B5): the traits
+   with no rule are dead code at the intermediate SHA, and `-D warnings`
+   would need a transient `expect(dead_code)` there that the next commit
+   removes — a marker with a one-commit life is noise, not staging. Cut
+   before the `tip()` PR on the maintainer's 14:43 ruling: none of these
+   reads the tip. Touches one store test (`connect_tests.rs`: coverage gaps
+   are now `enforced − implemented`, as the test's own comment anticipated)
+   — disclosed to S-CHAIN-R.
+3. `chain-rules: CEN-A2 parent-is-tip` — after the `tip()` PR
 4. `chain-rules: CEN-B5 header root == root_at(connecting height); CEN-B6 identity under the row`
 5. `chain-rules: held_by_cxx(test) entry status; A1/A4 held; gate prints the subtraction` — macro arm, gate grammar + `--selftest`, `RuleSet::enforced` excludes held rows; **plus the two C++ core tests the entries name** (§4.1 condition 1, F4).
 *Rule 20, stated in the commit message rather than in a review reply:* these

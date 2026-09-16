@@ -13,7 +13,7 @@
 //! a fresh file (SCW-17).
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
+use shekyl_chain_rules::{validate, Candidate, ChainValid, RowStatus, RuleSet, RuleSetId};
 use shekyl_types::{BlockHeight, CurveTreeRoot};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
@@ -862,21 +862,32 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     });
     out.expect("genesis");
     // Derived facts stamp no pass-through. But GENESIS *enforces* every
-    // consensus row while zero are implemented, so the verdict evaluated
-    // none of them — and the file records exactly that: every enforced row
-    // is a coverage gap, and the file is NOT parity evidence. That is
-    // C2-R8 §9.4 doing its job, not a defect: a store fed by the scaffold
-    // validator can never be mistaken for one fed by a complete one.
+    // consensus row and the port has implemented only some, so the verdict
+    // evaluated exactly the implemented ones — and the file records exactly
+    // that: every enforced row the validator has not landed is a coverage
+    // gap, and the file is NOT parity evidence. That is C2-R8 §9.4 doing its
+    // job, not a defect: a store fed by a partial validator can never be
+    // mistaken for one fed by a complete one. (Written against the scaffold
+    // as "every enforced row"; E6 slice 1 landed the first rules, so the
+    // expectation is now `enforced − implemented`, read off the registry.)
     let after_genesis = store.provenance();
     assert!(after_genesis.passed_through().is_empty());
-    let enforced: Vec<_> = RuleSet::GENESIS.enforced().collect();
+    let not_yet_landed: Vec<_> = RuleSet::GENESIS
+        .enforced()
+        .filter(|row| row.status() == RowStatus::Pending)
+        .collect();
     assert!(
-        !enforced.is_empty(),
-        "GENESIS enforces the census's consensus rows"
+        !not_yet_landed.is_empty(),
+        "the port is not complete: GENESIS still enforces unimplemented rows"
+    );
+    assert_ne!(
+        not_yet_landed.len(),
+        RuleSet::GENESIS.enforced().count(),
+        "at least one rule has landed, so at least one enforced row is not a gap"
     );
     assert_eq!(
         after_genesis.coverage_gaps().iter().collect::<Vec<_>>(),
-        enforced
+        not_yet_landed
     );
     assert!(!after_genesis.is_parity_evidence());
     assert!(after_genesis

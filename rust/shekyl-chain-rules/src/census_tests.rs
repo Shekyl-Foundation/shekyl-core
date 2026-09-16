@@ -77,12 +77,17 @@ fn the_two_registries_are_disjoint() {
 }
 
 #[test]
-fn increment_one_registers_no_rule() {
-    // DRS-D12: zero rules in the scaffold. When the first slice flips an entry
-    // to `implemented(...)`, this test is *expected* to be rewritten to name
-    // the slice's rows — it exists so that flip is a visible, reviewed change
-    // rather than a quiet numerator move.
-    assert!(CenRow::ALL.iter().all(|r| r.status() == RowStatus::Pending));
+fn the_implemented_rows_are_exactly_the_landed_slices() {
+    // Rewritten from `increment_one_registers_no_rule` as that test said it
+    // would be: every flip to `implemented(...)` is a visible, reviewed
+    // change here rather than a quiet numerator move. Slice 1: 4.B's version
+    // rows (A2, B5, B6 join with `ChainView::tip()`).
+    let implemented: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|r| r.status() == RowStatus::Implemented)
+        .collect();
+    assert_eq!(implemented, [CenRow::B1, CenRow::B2, CenRow::B7]);
     assert!(PolicyRow::ALL
         .iter()
         .all(|r| r.status() == RowStatus::Pending));

@@ -29,11 +29,14 @@
 //! `use` names the item without instantiating it — `let _ = path` is E0283
 //! on the generic `fn<'id, V: ChainView<'id>>(...)` every 4.I rule is.
 //!
-//! # Increment 1
+//! # Entries flip as slices land
 //!
-//! Every entry is `pending`. Zero rules land in the scaffold (DRS-D12); the
-//! increments that port a census subsystem flip its entries to
-//! `implemented(...)` and the gate's printed numerator moves with them.
+//! The scaffold landed every entry `pending` (DRS-D12). Each porting slice
+//! flips its rows to `implemented(<rule type>)` — slice 1 began with 4.B's
+//! version rows — and the gate's printed numerator moves with them. An
+//! `implemented` entry names a **type** implementing `rules::Rule`; the
+//! macro pins both that it exists (G9) and that its `ROW` is this entry
+//! (SCW-18).
 
 use core::fmt;
 use core::hash::Hash;
@@ -97,16 +100,31 @@ macro_rules! census_status {
     };
 }
 
-/// The G9 pin: an `implemented(path)` entry names a function that must exist.
+/// The two pins on an `implemented(path)` entry.
 ///
-/// `use $path as _` names the item without instantiating it. `let _ = $path`
-/// is E0283 on a generic rule (`fn<'id, V: ChainView<'id>>(...)`), which is
-/// every stateful (4.I) rule this crate is designed to hold.
+/// **G9 — the path exists.** `use $path as _` names the item without
+/// instantiating it, so a rule that moved or was deleted while its entry
+/// still claims it is a compile error.
+///
+/// **SCW-18 — the path is *this row's* rule.** Existence alone accepts
+/// `implemented(rules::header::B2)` under the `B1` entry. The entry names a
+/// **type** implementing [`crate::rules::Rule`], and the `const` assertion
+/// below refuses one whose `ROW` is not the entry's own variant — row
+/// binding is structural, not nominal (`rules/mod.rs`). `Bound<$name>` is
+/// the registry-generic face of `Rule`, so the one macro serves both enums.
 macro_rules! census_pin {
-    (pending) => {};
-    (implemented($path:path)) => {
+    (pending, $name:ident, $var:ident) => {};
+    (implemented($path:path), $name:ident, $var:ident) => {
         #[allow(unused_imports)]
         use $path as _;
+        const _: () = assert!(
+            matches!(<$path as $crate::rules::Bound<$name>>::ROW, $name::$var),
+            concat!(
+                "shekyl-chain-rules: the type registered under ",
+                stringify!($var),
+                " is bound to a different census row (SCW-18)"
+            )
+        );
     };
 }
 
@@ -182,12 +200,10 @@ macro_rules! census_rows {
             fn index(self) -> u8 { Self::index(self) }
         }
 
-        // G9: every `implemented(path)` must name a function that exists.
-        // `use path as _` names the item without instantiating it, so a
-        // generic `fn<'id, V: ChainView<'id>>(...)` compiles (E0283 on
-        // `let _ = path`). Two registries both expand here; `as _` does
-        // not collide.
-        $( census_pin!($status $(($path))?); )+
+        // G9 + SCW-18: every `implemented(path)` names a type that exists
+        // and whose `ROW` is this entry's variant (`census_pin!`). Two
+        // registries both expand here; `as _` does not collide.
+        $( census_pin!($status $(($path))?, $name, $var); )+
     };
 }
 
@@ -211,13 +227,13 @@ census_rows! {
         A6 pending,
         A7 pending,
         // 4.B Block header: version, attestation, curve-tree root
-        B1 pending,
-        B2 pending,
+        B1 implemented(crate::rules::header::B1),
+        B2 implemented(crate::rules::header::B2),
         B3 pending,
         B4 pending,
         B5 pending,
         B6 pending,
-        B7 pending,
+        B7 implemented(crate::rules::header::B7),
         // 4.C Timestamps
         C1 pending,
         C2 pending,

@@ -14,10 +14,11 @@
 //! be counted toward consensus coverage (round-1 ruling Q4): proximity
 //! promotion through the instrument does not compile.
 //!
-//! Only **complete** coverage is parity evidence. `RuleCoverage::EMPTY` —
-//! what every verdict carries while zero rules are landed (DRS-D12) — is
-//! never complete, so the scaffold's `ChainValid` cannot be mistaken for a
-//! judged block by anything that checks.
+//! Only **complete** coverage is parity evidence. A verdict carries the rows
+//! that actually ran — three of 153 after slice 1 — and `is_complete_for`
+//! is `false` until every enforced row has landed, so no `ChainValid` minted
+//! during the port can be mistaken for parity evidence by anything that
+//! checks.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -93,16 +94,10 @@ impl<R: Row> Coverage<R> {
             .filter(move |row| self.contains(*row))
     }
 
-    /// Record that `row` was evaluated. Crate-private: coverage is written
-    /// only by the rule that ran.
-    // STAGED (rule 23): the writer is the first rule function the porting
-    // increments land (DRS-D12; `DAEMON_REDB_STORE.md` §7.5.2 table 3). Zero
-    // rules exist in the scaffold, so only the tests call this yet; `expect`
-    // turns the marker into a compile error the moment a rule does.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "written by the first landed rule; DRS-D12")
-    )]
+    /// Record that `row` was evaluated. Crate-private: written only by
+    /// [`crate::rules::run`] after the rule bound to `row` passed (slice 1
+    /// un-staged this; the scaffold's `expect(dead_code)` marker went with
+    /// the first rule, as it was written to).
     pub(crate) fn insert(&mut self, row: R) {
         let (word, bit) = Self::slot(row);
         self.words[word] |= bit;
@@ -137,7 +132,7 @@ impl Coverage<CenRow> {
     ///
     /// The mint gate during porting. [`Self::is_complete_for`] waits until
     /// 153/153; this is true as soon as every *landed* rule actually ran,
-    /// and vacuously true while every entry is `pending` (DRS-D12). A
+    /// and was vacuously true while every entry was `pending` (DRS-D12). A
     /// forgotten `validate` call, or a call that forgets [`Self::insert`],
     /// fails it — G9's runtime half.
     #[must_use]
