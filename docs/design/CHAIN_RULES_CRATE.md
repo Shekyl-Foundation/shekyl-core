@@ -660,6 +660,23 @@ against the census in this worktree, not copied from the handoff):
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.
 
+**What each figure gates (RULED 2026-09-16, maintainer, at
+[`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §9).** The two numbers
+have two lifetimes. `implemented / enforced` is the **parity-phase** figure:
+with the E2 comparator green over the replayed chain, `implemented ==
+enforced` (every enforced row evaluated — the `is_complete_for` half of
+parity evidence) gates **cutover**. It then stops moving. `ratified /
+enforced` is the figure that **survives cutover** — C++ is gone, the
+comparator retires, and this is the only thing that stays red while an
+inherited-never-judged row is still enforced — and it gates **release**:
+`ratified == enforced` on the consensus line, each remaining bucket-4 row
+either ratified/diverged by an R-round or ruled dead (bucket 3, leaving the
+denominator). Until this ruling the second figure was printed and gated
+nothing; the printing is the mechanism, the gate is the ruling. Repairs of
+knowingly-reproduced deviations are the same phase's work and are judged
+against the same denominator (`DAEMON_REDB_STORE.md` §7.5.1, "Parity, then
+repair").
+
 ### 6.4 Wiring
 
 `.github/workflows/docs-gates.yml`: two steps (`check_chain_rules_coverage.py`,

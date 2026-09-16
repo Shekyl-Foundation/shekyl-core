@@ -1549,6 +1549,35 @@ that round an isolated function with a boundary pair instead of a
 read-around (ruling §9.5). The 25 surface-free bucket-4 rows are therefore
 E6 work like any other, not rows to leave for the round that ratifies them.
 
+**Parity, then repair (RULED 2026-09-16, maintainer; recorded at
+[`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §9).** Parity is a
+**phase with a defined end**: the port reproduces the C++ verdict,
+deviations included, until the E2 comparator is green over the replayed
+chain and `implemented == enforced` — that pair gates **cutover**. Repairs
+of what was knowingly reproduced start **after cutover, in Rust only**: a
+repair landing half in C++ and half in Rust is two implementations of one
+correction (the CEN-I12 argument, resolved on that ground rather than on
+cosmetics). Three consequences bind every E-increment from here:
+
+- **Every knowingly-reproduced deviation lands carrying its ratified
+  state** — what was reproduced, why, and *what correct looks like* (the
+  shape a DIVERGENT conformance row's pass condition already has) —
+  whichever of today's four homes it lands in (a conformance row, an `SI-`
+  row, an inline schema note such as R8b-2, a surface doc's finding list).
+  The **one query** over all of them — the repair backlog as an artifact,
+  not an accumulation across documents — is **owed** and not yet minted;
+  rows are written now so the migration into it is a move.
+- **The bucket-4 rows and the reproduced deviations are one backlog** —
+  both are things carried that nobody has judged; one phase resolves both,
+  so they share the `ratified / enforced` denominator. At this pin the
+  enforced-and-unratified consensus figure is **27** (table 1, `b4`: 25
+  free + 2 bound), not the pre-R8 34.
+- **`ratified / enforced` gates release.** The coverage gate's second
+  figure is the one that survives cutover, when the comparator has retired
+  and nothing else goes red for an unrepaired deviation
+  (`CHAIN_RULES_CRATE.md` §6.3). It was printed and gated nothing; it now
+  gates release.
+
 **Replay catches over-rejection only.** Every block replay sees is one C++
 already accepted; a Rust rejection is a signal, a Rust acceptance says nothing
 about invalid blocks. The negative fixture is the deliverable and the replay
@@ -2215,6 +2244,7 @@ the trigger (#507) and was missed there.
 | **2026-09-15** | **Increment 2.5 review close (PR #752).** Three refinements so (a) and (b) above are properties of the type, not of the call site: **(c) poison owns both arms** — `WriteBatch::complete` returns the armed row even when the closure returned a different `Err`, so the Halt cannot be converted by mapping. **(d) one verb per handle** — `InsertTable` / `UpsertTable`; the `SI-` row is bound at `open_insert_table`, reads return `StoreError`, and the wrong verb does not compile. Falsify (b) against `InsertTable`/`UpsertTable` rather than the retired `KeyedTable` two-verb handle. **(e) `header::put`** is the store-owned cell write; `upsert_property` remains the public register verb. |
 | **2026-09-15** | **DRS-E1 increment 3 (S-CHAIN-W) landed** — plan, rule-26 pre-flight and round-1 rulings in [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) (SCW-1…SCW-18). Nine commits: the undo log (first Rust-only table, ordinal-named; bijection gate's `{table: reason}` map keeps the extra-leg refusal), the connect write set's codecs at the LMDB layouts minus the collapsed key + `Transaction::write_segments`, `total_burned` and the re-homed settlement-epoch pin as header cells, `TxIdentity { hash, prunable_hash }` in the rules crate, `BatchView`, `connect` with per-field `Fact` origins, coverage-gap / pass-through provenance, `pop` + `PopBelowFloor` + the writer halt + `ConnectState` wire type. SI-1/2/3/4/6/8 built, SI-9 minted and built; DRS-W6/W9/W15/W17 closed at the port. `SCHEMA_VERSION` 1 → 2. `CORE_RPC_VERSION` not bumped: no `get_info` field changes until the Rust store serves it. **Review (same day, PR #757 + the pre-flight's #756 findings):** `BatchView::root_at(h)` reads key *h* — the state *at* *h*, CEN-I12's anchor — not *h+1* (SCW-19), with height 0 the pinned `CurveTreeRoot::EMPTY` (KAT in `shekyl-fcmp`); absence in `block_at` / `root_at` classified against the tip (`AboveTip` only above it, a hole below is SI-7) and the block blob held to `block_info`'s identity; `BlockInfo.rct_outputs` per-block (CEN-L15, the accumulation arm is dead); burn phase guarded `h > 0 && burned > 0` as a whole; the connecting height noted before the belts so an SI-2 halts the writer; provenance SI-7s and the commit-time widen routed through the halt; `complete` returns the closure's own error (the unsealed refusal only over a swallowed one); `Recording::sealed` set after the row insert; undo entries carry a cSHAKE256 post-image so SI-6's second arm is exact (`PostImageMismatch`, pop never silently repairs); an empty journal under a recorded tip is SI-6 `NoRowForTip` until S-PRUNE persists its floor; evidence cells refuse non-canonical name order; the bijection gate refuses unparsed map content. |
 | **2026-09-15** | **DRS-E6 increment 1 landed** ([`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md), the crate's contract of record): `shekyl-chain-rules` — `ChainView<'id>`, `RuleSet`/`RuleSchedule`/`AdmissionPolicy`, `Coverage<R>`, `ChainValid<'id>`/`InvalidBlock`, `validate`/`tx_form`/`tx_against`, the census-derived completeness gate (`check_chain_rules_coverage.py`: the 153 + 9 enforced rows of the census at `02c086f4b`, registry ↔ census a bijection in census order), the transitive no-store belt (`check_chain_rules_no_store.sh`), the negative-fixture harness; zero rules ported (increments 2+). **S-CHAIN-W is unblocked.** Landing rulings, recorded so they are not re-derived: **(a) faults are not verdicts.** A view's substrate failure is `ChainView::Fault`, the *outer* `Err` of every entry point, never inspected by the crate — a store error cannot become an `InvalidBlock` by `?`, `From`, or a hand-written arm (clause 3 of the conversion-ban gate now live: `verdict_defs == 0` refuses). **(b) absence is a variant, not `None`.** `block_at`/`root_at` return `AtHeight<T>` (`Recorded | AboveTip`), no `From<Option>`, no `Try` — a rule must match the above-tip case, so CEN-B5 cannot fail open on a `?`. **(c) `output_at` dropped:** FCMP++ inputs reference no output; when the output-key-uniqueness row is ruled it needs `has_output_key`, not a global-index lookup. **(d) `KeyImage` moved to `shekyl-types`** (`hash32!`, new `redact, no_display` arm — truncated `Debug`, *no* `Display`, the wallet-correlation posture kept; `shekyl-crypto-pq` re-exports; serde encoding unchanged, snapshot checked); **`CurveTreeRoot` minted** beside it. **(e) `RuleSetId` is not the header major version** — its own space, `rules_at(nettype, height)` identity today. **(f) `CenRow`/`PolicyRow` are sibling enums** — the flag partition is a type error, not a runtime check. The graded-oracle hook is the `Row::as_str` key; the grader is consulted by E2's replay harness, never imported here. Round 2 of the design (`Fault`, `AtHeight`, cross-view pin) is implemented on its defaults and closes at PR review |
+| **2026-09-16** | **Parity, then repair (maintainer ruling, recorded at DRS-E6 slice 1 pre-flight, PR #761; §7.5.1).** Parity is a phase with a defined end — comparator green + `implemented == enforced` gates **cutover**; repairs of knowingly-reproduced deviations start after cutover, in Rust only (a half-C++/half-Rust repair is two implementations of one correction — the CEN-I12 ground). Every reproduced deviation lands carrying its ratified state; the one-query repair-backlog artifact is **owed, not minted**; bucket-4 rows (27 enforced consensus at this pin, per the partition gate — not the pre-R8 34) and reproduced deviations share the `ratified / enforced` denominator, and **that figure gates release** (`CHAIN_RULES_CRATE.md` §6.3). Same day, same review: DRS-E6 slice 1 pre-flight opened ([`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md)); `ChainView::tip()` ruled `Result<Option<Tip>, Fault>` on the SCR-4 discriminator. |
 
 ---
 

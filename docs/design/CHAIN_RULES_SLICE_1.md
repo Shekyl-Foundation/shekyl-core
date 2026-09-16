@@ -1,9 +1,10 @@
 # `shekyl-chain-rules` slice 1 — census 4.A + 4.B (DRS-E6 increment 2)
 
 **Status:** OPEN — **round 1 = pre-flight (rule 26 Round 0), written
-2026-09-16** against `dev` @ `3560b80c2` (S-CHAIN-W landed, PR #757). **No
-production commit lands until Q1–Q6 (§8) are ruled** — rule 26's halt
-condition, cited here on purpose. Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)
+2026-09-16** against `dev` @ `3560b80c2` (S-CHAIN-W landed, PR #757). **Q1
+RULED 2026-09-16 (§2); Q2–Q6 (§8) open. No production commit lands until they
+are ruled** — rule 26's halt condition, cited here on purpose. §9 records the
+program-level parity-then-repair ruling of the same day. Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)
 §7.5.1 (the increment's pre-flight names its parents, audits each row's body,
 lists the fixture per row). Parent plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
 §7.5 (table 3 row "slice 1"). Cites `26-sub-pr-design-discipline.mdc`
@@ -47,33 +48,46 @@ No parent is missing for the six predicate rows. B4's parent is not landed
 
 ---
 
-## 2. `ChainView::tip()` — the owed method (Q12-2), shape proposed
+## 2. `ChainView::tip()` — the owed method (Q12-2), shape RULED 2026-09-16
 
 Round-2 sketch was `fn tip(&self) -> Result<Tip { height, hash, root }, Fault>`.
 Two of the three fields survive contact with the substrate; the third does not,
 and the empty chain needs a case.
 
 ```rust
-/// The recorded tip. The recorded chain has exactly two states, and a rule
-/// that reads the tip says at *each* arm what it does — `Empty` is genesis
-/// admission, not an absence to fall through (G11 shape; no `Option`).
-#[must_use]
+/// The last recorded block. `None` from `tip()` is the empty chain — the
+/// candidate is genesis — and a rule that reads the tip writes that arm.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Tip {
-    /// Nothing recorded: the candidate is genesis (height 0).
-    Empty,
-    /// The last recorded block.
-    Recorded { height: BlockHeight, hash: BlockHash },
+pub struct Tip {
+    pub height: BlockHeight,
+    pub hash: BlockHash,
 }
 
 pub trait ChainView<'id> {
     // …existing three…
     /// CEN-A2 (`hash`: `previous` must be the tip's hash); the connecting
     /// height every height-indexed rule is stated at (`height`: B1, B5 here;
-    /// C2/C3, F5 later).
-    fn tip(&self) -> Result<Tip, Self::Fault>;
+    /// C2/C3, F5 later). `None`: nothing recorded (genesis admission).
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
 }
 ```
+
+**RULED 2026-09-16 (maintainer, at PR #761 review) — `Option<Tip>`, not a
+bespoke enum.** The round-1 draft proposed `enum Tip { Empty, Recorded {..} }`
+"for consistency with `AtHeight`". The S-CHAIN-R ruling on the store's own
+`RecordedTip` (SCR-4) states the discriminator, and it applies here
+unchanged: a custom absence type earns its keep when the default **lies
+inside the valid range of the type** — `AtHeight` exists because the LMDB
+reader once returned 32 zero bytes for a missing root, a *valid* encoding of
+the identity point; `curve_tree_roots[0]` read as data. A tip has no such
+alternative: there is no zero tip that reads as a recorded block, so `None`
+cannot be mistaken for one, and an enum would buy nothing. The C++ shows the
+hazard in the other direction — `top_block_hash` hands back **two** sentinels
+on an empty chain, `null_hash` *and* `*block_height = UINT64_MAX`
+(`db_lmdb.cpp:3185` writes `m_height − 1` before the `:3186` guard), neither
+distinguishable from data — and `Option` is what makes both unrepresentable.
+The genesis arm is still written explicitly in every rule that reads the tip
+(A2, B5 here), and `MockChain::tip()` already has this shape.
 
 - **`height`** — justified by B1 (the rule set in force is `rules_at(height)`)
   and B5 (`root_at(connecting height)`); later by 4.C and CEN-F5 (the
@@ -88,25 +102,30 @@ pub trait ChainView<'id> {
   (SCW-19, key `h`), and the store implements it. A second root on `Tip`
   would be a second read path to the same cell, and which-key ambiguity is
   the defect SCW-19 just closed. One read path.
-- **`Empty` rather than `Option`** — G11's reason applies: `tip()?.map(...)`
-  is how genesis becomes a silent pass. Genesis is a *case*: A2 at `Empty`
-  requires `previous == [0; 32]` (`get_tail_id()` → `top_block_hash()` →
-  `null_hash` on an empty store, `db_lmdb.cpp:3186–3191`); B5 at `Empty`
-  reads `root_at(0) == CurveTreeRoot::EMPTY` (`view.rs:218–220`), which is
-  what the genesis header carries.
+- **Genesis is a case, written at the `None` arm**: A2 at `None` requires
+  `previous == [0; 32]` (`get_tail_id()` → `top_block_hash()` → `null_hash` on
+  an empty store, `db_lmdb.cpp:3186–3191`); B5 at `None` reads `root_at(0) ==
+  CurveTreeRoot::EMPTY` (`view.rs:218–220`), which is what the genesis header
+  carries. The round-1 draft's worry — `tip()?.map(..)` letting genesis fall
+  through as a pass — is answered by the fixtures, not the type:
+  `cen_a2_genesis_previous_is_zero` and `cen_b5_genesis_root_is_empty` (§7)
+  both refuse a wrong genesis, so a rule that forgot the arm is red.
 
 **Connecting height** is a crate-private helper, `fn connecting_height(tip:
-&Tip) -> BlockHeight` (`Empty → 0`, `Recorded { height } → height + 1`), used
+Option<&Tip>) -> BlockHeight` (`None → 0`, `Some(t) → t.height + 1`), used
 by every height-indexed rule so the operand is derived once from the view and
 never from the candidate (F5's spoof).
 
 **Store side, same PR.** `BatchView` already has a private `fn tip() ->
 Result<Option<u64>, StoreError>` (`view.rs:97–108`) that reads
-`block_info.last()`. It becomes the trait impl: `last()` → `Recorded {
-height, hash: BlockInfo.hash }`, `None` → `Empty`. `block_at`/`root_at`'s
+`block_info.last()`. It becomes the trait impl: `last()` → `Some(Tip {
+height, hash: BlockInfo.hash })`, else `None`. `block_at`/`root_at`'s
 AboveTip classification reads through it unchanged. `MockChain::tip()`
-(`harness.rs:58–61`, today `Option<BlockHeight>`) becomes `Tip`;
-`FaultingView::tip` faults. The workspace must compile at every commit (rule 26
+(`harness.rs:58–61`, today `Option<BlockHeight>`) grows the hash;
+`FaultingView::tip` faults. S-CHAIN-R's `ReadSnapshot::tip()` returns the
+store's own `Option<RecordedTip { height, hash, connect }>` — a wider type for
+a different reader (RPC/wallet), not this trait's; the two share the `Option`
+shape and the SCR-4 reason for it. The workspace must compile at every commit (rule 26
 B5), so the trait method and its two implementors are **one commit**.
 
 ---
@@ -122,7 +141,7 @@ predicate over `(Candidate, recorded chain)` — Q2; **deferred** — Q3.
 | row | b | C++ body (this tree) | Rust body | class | view read | disposition |
 | --- | --- | --- | --- | --- | --- | --- |
 | CEN-A1 | 2 | `have_block_unlocked` `blockchain.cpp:3011–3041`: main (`block_exists`) ∪ alt (`get_alt_block`) ∪ `m_invalid_blocks`; consumer `add_new_block` `:6338–6343` → outcome byte `ALREADY_EXISTS`, `return false` | — | **topology** | none possible: two of the three stores are not recorded-chain facts, and the outcome is not `InvalidBlock` | Q2 |
-| CEN-A2 | 2 | routing `:6346–6355` (`prev_id == get_tail_id()` → main, else alt); **re-check** `:5423–5428` `bl.prev_id != top_hash` → `reject_block_internal` | store **belt** SI-2 `TipMismatch` `connect.rs:303` | **rule** (the re-check); routing is the driver's | `tip()` | lands: `previous == tip.hash`; at `Empty`, `previous == [0; 32]` |
+| CEN-A2 | 2 | routing `:6346–6355` (`prev_id == get_tail_id()` → main, else alt); **re-check** `:5423–5428` `bl.prev_id != top_hash` → `reject_block_internal` | store **belt** SI-2 `TipMismatch` `connect.rs:303` | **rule** (the re-check); routing is the driver's | `tip()` | lands: `previous == tip.hash`; at `None` (empty chain), `previous == [0; 32]` |
 | CEN-A3 | 1 | 2-arg `add_new_block` guard `:6320–6322`: `attestation_root == empty_attestation_root()` or assert | `shekyl_archival_retention::empty_attestation_root` | **deferred with B4** | — | the guard is about a C++ *overload* ("a caller dropped the witness"); once `Candidate` carries the witness there is no witness-less entry and A3 is B4's empty-witness arm. Q3 |
 | CEN-A4 | 2 | orphan marking `:2462–2464` in `handle_alternative_block`: parent in neither main nor alt → `ORPHANED`, not stored | — | **topology** | alt-store membership is not a recorded-chain fact (E5 S-ALT) | Q2 |
 | CEN-A5 | 4 | `cryptonote_core.cpp:1450` `block_blob.size() > cumulative_block_weight_limit + BLOCK_SIZE_SANITY_LEEWAY (100, :71)` — **pre-parse** | — (`shekyl_wire::MAX_BLOCK_BLOB_SIZE` is a parse-DoS cap, `block.rs:48`, a different bound) | **topology** (ingest) | operand is 4.G state (the weight limit) | Q2; a slice-7 dependency if it ever becomes a predicate |
@@ -246,10 +265,19 @@ sites are read as *this tree's*. No action.
 bounds; the values differ by ~268×. Not a slice-1 rule (A7 is topology) and not
 a consensus divergence today (no block approaches either), but it is exactly
 the "value has no derivation record" the census row already flags, now with a
-second undocumented value beside it. **Route (A5 carry):** to
-`BLOCK_TX_WIRE_FORMAT_PORT.md`'s owner via one `FOLLOWUPS.md` line in this
-PR's doc commit, Target pre-genesis, falsifier "the two bounds are one
-constant with a derivation record or the divergence is ruled".
+second undocumented value beside it. **This is a knowingly-reproduced
+deviation** in the sense of §9 (the parity phase reproduces; the repair phase
+judges), so it is recorded in the form every such deviation must carry —
+*what we reproduced, why, and what correct looks like:* reproduced — two
+structural bounds on one field, 2^28 (C++) and 10^6 (Rust), neither derived;
+why — parity first, and no block approaches either; **correct** — one
+constant, one derivation record (a per-block tx-count bound derived from the
+block-weight limit, or ruled unbounded-below-weight), owned by the wire-format
+port. **Route (A5 carry):** one `FOLLOWUPS.md` line in this PR's doc commit
+carrying those three fields, Target pre-genesis, falsifier "one constant with
+a derivation record, or the divergence ruled"; it migrates into the unified
+repair backlog when that artifact is minted (§9) — the row is written so the
+migration is a move, not a rewrite.
 
 **F3 — the store already holds A2's belt but nothing holds A2's rule.**
 `connect.rs:303` refuses `previous != tip.hash` as SI-2 `TipMismatch`
@@ -297,10 +325,12 @@ tip: `consensus: implemented 0 / enforced 153`): `implemented 6 / enforced
 
 Each has a default the implementation follows unless ruled otherwise.
 
-**Q1 — `tip()` shape.** Default §2: `enum Tip { Empty, Recorded { height,
-hash } }`, no `root`, no `Option`. Alternatives: the round-2 three-field
-struct (rejected: second read path to the root cell, SCW-19's hazard);
-`Option<Tip>` (rejected: G11).
+**Q1 — `tip()` shape.** **RULED 2026-09-16 (maintainer, PR #761 review):
+`Result<Option<Tip { height, hash }>, Fault>`** — §2 carries the reasoning
+(SCR-4's discriminator; the two C++ sentinels). The round-1 draft's default
+was a bespoke `enum Tip { Empty, Recorded {..} }`, withdrawn: it would have
+bought nothing over `Option` and cost consistency with the store's own tip
+read. No `root` in either shape (one read path to the root cell; SCW-19).
 
 **Q2 — the five topology rows (A1, A4, A5, A6, A7).** Default §4 (a):
 `held(<holder>)` status, excluded from `RuleSet::enforced`, third gate figure,
@@ -316,7 +346,14 @@ returning a table. **Lands with** slice 8 (4.J archival — the same crate,
 `shekyl-archival-retention`, already the Rust body) or with E4, whichever
 comes first; `Candidate` gains its `attestation_witness` component there
 (`#[non_exhaustive]` was minted for this). A3 dissolves into B4's
-empty-witness arm and is registered with it. Alternative: land B4's
+empty-witness arm and is registered with it. **The archival side is
+greenfield and still iterating** (maintainer, 2026-09-16: "we may have more
+than one iteration of design and refine") — so the landing target is named as
+*the increment that lands the bond-pubkey read*, not as a fixed slice number,
+and B4's shape here (witness as a `Candidate` component, pairs through a
+`ChainView` method) is what the census row implies today, to be re-read
+against the archival design in force when that increment opens. The falsifier
+does not move. Alternative: land B4's
 empty-witness half now — rejected: a rule that can only refuse when the
 witness is empty and must *fault* when it is not is not a rule, it is the
 pre-population special case wearing a row id. Disclosed here and in the
@@ -340,7 +377,64 @@ function paths and bind the row by signature only — rejected by SCW-18 itself
 
 ---
 
-## 9. What this round did not find (denominator)
+## 9. Program ruling folded in (maintainer, 2026-09-16): parity, then repair
+
+Recorded here because slice 1 is the first increment that reproduces
+inherited behaviour on purpose (B2, B6, B7; F2), and the ruling decides what
+that reproduction *is*. The contract text lands in `CHAIN_RULES_CRATE.md` §6.3
+and `DAEMON_REDB_STORE.md` §7.5.1 / §15 in this PR; this section is the
+slice's reading of it, validated against the landed figures.
+
+1. **Parity is a phase with a defined end.** The port reproduces the C++
+   verdict, deviations included, until the comparator (DRS-E2) is green over
+   the replayed chain. Repairs — of consensus deviations, store sentinels,
+   schema shape — start **after cutover, in Rust only**: a repair landing
+   half in C++ and half in Rust is two implementations of one correction,
+   which is what every ruling this month has been built to avoid (the CEN-I12
+   argument, resolved). Slice 1's port-as-is rows are that phase's work: the
+   fixture pins the inherited behaviour so the repair round has a boundary
+   pair to move, not a read-around to find.
+
+2. **One repair backlog, one query.** Today a knowingly-reproduced deviation
+   lands in one of four homes by type — a DIVERGENT conformance row
+   (`CONSENSUS_STORE_RECONCILIATION.md`), a store-invariant row
+   (`STORE_INVARIANT_REGISTER.md`), an inline schema note (R8b-2), or a
+   surface doc's finding list (SCR-4's `UINT64_MAX`; this document's F2).
+   The ruling: every such deviation lands in a form that **names its ratified
+   state** ("what correct looks like" — the shape a DIVERGENT row's pass
+   condition already has), and they share one query. The artifact that is
+   that query is **owed, not yet minted**; F2 above is written in the
+   three-field form so it moves into it unchanged.
+
+3. **Bucket-4 rows and reproduced deviations are one backlog.** Both are
+   "things we are carrying that nobody has judged", and one phase resolves
+   both, so they share a denominator. *Figure verified at this tip
+   (rule 26 B6):* the consensus rows that are enforced (bucket ≠ 3) and
+   unratified (bucket 4) number **27** — 25 surface-free + 2 surface-bound
+   (`check_drs_e6_partition.py --describe`, table 1; C2-R8 §9.5 recorded the
+   move 34 → 27 when R8's rulings ratified rows). The "thirty-four" in the
+   ruling as relayed is the pre-R8 figure; the gate's is the one to quote.
+
+4. **The gate that survives cutover.** During parity the comparator is red
+   until Rust matches — a hard gate. After cutover C++ is gone, the
+   comparator retires, and nothing goes red because a deviation is still
+   unrepaired — unless the second figure the coverage gate already prints is
+   made the gate. **Ruled:** `implemented / enforced` (with the comparator)
+   gates **cutover**; **`ratified / enforced` gates release.** *Validated
+   against landed text:* the figure exists and is printed today
+   (`CHAIN_RULES_CRATE.md` §6.3: `ratified 126 / enforced 153`), but nothing
+   landed *gates* on it — parity evidence as defined (`DAEMON_REDB_STORE.md`
+   §3: coverage gaps, stubbed applies and passed-through facts all empty)
+   requires `implemented == enforced`, not `ratified == enforced`. So the
+   mechanism is the printed figure; the gate is new and is what this ruling
+   adds. Release = `ratified 153 / enforced 153` on the consensus line, or
+   every remaining bucket-4 row ruled bucket 3 (dead) by an R-round.
+
+Denominator of this section: the four homes named in (2) were each grepped
+for a prior statement of (1)–(4); none carries one, so this is the first
+recording, not a restatement.
+
+## 10. What this round did not find (denominator)
 
 No finding against: the scaffold's `AtHeight` shape (B5's `AboveTip` arm is
 writable as G11 asks); `RecordedBlock`'s fields (no slice-1 row needs a new
