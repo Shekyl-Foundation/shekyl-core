@@ -611,10 +611,10 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
 
 /// SI-9 for the derived `amount_index`: redb orders `output_amounts`
 /// members by index prefix *then* payload, so a second member under one
-/// index with a different payload is "new" to redb. `connect` checks the
-/// bucket's shape instead — the highest member's prefix must be `len - 1` —
-/// so a bucket with a duplicate or a hole poisons the writer before a
-/// second member under one index can be written.
+/// index with a different payload is "new" to redb. `connect` checks
+/// `last + 1 == len` and that the first/last prefixes are not duplicated
+/// at the ends, so a hole or Copilot's `[0, 2, 2]` poisons before a second
+/// member under one index can be written.
 #[test]
 fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
     let path = tmp("connect-amount-bucket");
@@ -634,6 +634,78 @@ fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
         batch
             .open_multimap_table(OUTPUT_AMOUNTS)?
             .insert(0, hole.encode().as_slice())?;
+        Ok(())
+    });
+    planted.expect("plant");
+    let b1 = candidate(1, genesis.hash(), Vec::new());
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+    });
+    expect_row(&out, StoreInvariant::IdNotFresh);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row: StoreInvariant::IdNotFresh,
+        }
+    );
+    cleanup(&path);
+}
+
+fn amount_member(amount_index: u64, output_id: u64) -> OutKey {
+    OutKey {
+        amount_index,
+        output_id,
+        pubkey: [u8::try_from(output_id & 0xff).expect("byte"); 32],
+        unlock_time: 0,
+        height: 0,
+        commitment: [9; 32],
+    }
+}
+
+/// Compensating hole+duplicate at the high end: prefixes `[0, 2, 2]` have
+/// `len == 3` and `last == 2`, so `last + 1 == len` alone would accept.
+/// The end-peek refuses the duplicated last prefix.
+#[test]
+fn a_compensating_duplicate_at_the_amount_bucket_end_is_si9() {
+    let path = tmp("connect-amount-dup-end");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (_, genesis) = connect_genesis(&store, 0);
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        let mut amounts = batch.open_multimap_table(OUTPUT_AMOUNTS)?;
+        amounts.insert(0, amount_member(2, 98).encode().as_slice())?;
+        amounts.insert(0, amount_member(2, 99).encode().as_slice())?;
+        Ok(())
+    });
+    planted.expect("plant");
+    let b1 = candidate(1, genesis.hash(), Vec::new());
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+    });
+    expect_row(&out, StoreInvariant::IdNotFresh);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row: StoreInvariant::IdNotFresh,
+        }
+    );
+    cleanup(&path);
+}
+
+/// Unique-key primary: `txs_pruned` keys `{0, 3}` have `len == 2`; using
+/// `len` as the next id would insert 2 over the hole.
+#[test]
+fn a_gapped_txs_pruned_primary_is_si9() {
+    let path = tmp("connect-txid-gap");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (_, genesis) = connect_genesis(&store, 0);
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_insert_table(TXS_PRUNED, StoreInvariant::IdNotFresh)?
+            .insert(3, [0u8; 1].as_slice())?;
         Ok(())
     });
     planted.expect("plant");

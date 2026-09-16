@@ -223,10 +223,10 @@ pub(super) struct Journal {
     /// the writes it recorded may have landed in the transaction with no
     /// row to undo them, so `complete` refuses to commit.
     abandoned: Cell<Option<u64>>,
-    /// The height the most recent connect or pop in this batch worked at —
-    /// what the writer halt reports as `at_height` if the batch is
-    /// poisoned. `None` for a batch that did neither, which does not halt
-    /// the writer (§3.6.2 halts on connect / pop).
+    /// The height the most recent connect, pop, or branded `chain_view`
+    /// in this batch worked at — what the writer halt reports as
+    /// `at_height` if the batch is poisoned. `None` for a batch that did
+    /// none of those, which does not halt the writer (§3.6.2).
     height_hint: Cell<Option<u64>>,
 }
 
@@ -255,12 +255,13 @@ impl Journal {
         self.abandoned.get()
     }
 
-    /// Remember that a connect or pop is working at `height`.
+    /// Remember that a connect, pop, or branded `chain_view` is working at
+    /// `height`.
     pub(super) fn note_height(&self, height: u64) {
         self.height_hint.set(Some(height));
     }
 
-    /// The height a connect or pop in this batch worked at, if any.
+    /// The height chain work in this batch was at, if any.
     pub(super) fn height_hint(&self) -> Option<u64> {
         self.height_hint.get()
     }

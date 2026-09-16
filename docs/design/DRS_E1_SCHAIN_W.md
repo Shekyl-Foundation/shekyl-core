@@ -289,9 +289,10 @@ port keeps the datum and drops the discard:
 
 ### 3.6 The writer halt
 
-Per DRS §3.6.2, a `StoreInvariantViolated` on `connect` or `pop` poisons the
-batch (increment 2.5), `complete` refuses with the row, and this increment
-adds what happens *next*:
+Per DRS §3.6.2, a `StoreInvariantViolated` on `connect`, `pop`, or a branded
+`chain_view` read (the production validation path, which runs before
+`connect` can) poisons the batch (increment 2.5), `complete` refuses with
+the row, and this increment adds what happens *next*:
 
 ```rust
 pub enum ConnectState { Live, Halted { at_height: BlockHeight, row: StoreInvariant } }

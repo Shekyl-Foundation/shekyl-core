@@ -50,11 +50,14 @@
 //! # What the store keys by itself
 //!
 //! `tx_id`, `output_id` and the per-amount `amount_index` are the owning
-//! table's entry count at write time, exactly as LMDB derives them from
-//! `mdb_stat` / `mdb_cursor_count` (`db_lmdb.cpp:1078`, `:1284`, `:1314`),
-//! so the ids are dense and pop-symmetric without a counter cell. The
-//! insert under each is bound to **SI-9**: a collision is a corrupted index,
-//! not a consensus fact.
+//! table's next dense key at write time (`last + 1`, which equals the
+//! entry count when the primary is dense — LMDB's `mdb_stat` /
+//! `mdb_cursor_count` at `db_lmdb.cpp:1078`, `:1284`, `:1314`). Unique-key
+//! primaries make `last + 1 == len` complete; the `output_amounts` bucket
+//! is a multimap, so the same check is paired with an O(1) end-peek that
+//! refuses a duplicate prefix at first or last. The insert under each is
+//! bound to **SI-9**: a collision or a hole is a corrupted index, not a
+//! consensus fact.
 //!
 //! `output_amounts` is keyed **verbatim** (SCW-8): every coinbase and
 //! emission vout is stored under amount `0` with its ct-base commitment, and
@@ -70,7 +73,7 @@ use crate::codec::{
     BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, PassedThroughFacts, PropertyCell,
     TotalBurnedCell, TxIndex, TxOutputIndices,
 };
-use crate::lmdb_order::{Hash32, LmdbHashKey};
+use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
     OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
@@ -442,8 +445,15 @@ impl<'id> WriteBatch<'_, 'id> {
         drop(spent);
 
         // The hash-keyed index (SI-3), then the id-keyed bodies (SI-9).
+        // `tx_id` is `txs_pruned`'s next dense key: unique keys make
+        // `last + 1 == len` complete, so a hole (`{0, 3}` → len 2) poisons
+        // instead of minting key 2 over the gap (PR #757 review).
         let mut pruned = self.open_insert_table(TXS_PRUNED, StoreInvariant::IdNotFresh)?;
-        let tx_id = pruned.len()?;
+        let tx_id = next_dense_id(
+            pruned.last()?.as_ref().map(|(k, _)| k.value()),
+            pruned.len()?,
+        )
+        .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?;
         self.open_insert_table(TX_INDICES, StoreInvariant::TxHashNotFresh)?
             .insert(
                 LmdbHashKey::from(tx_hash),
@@ -491,7 +501,11 @@ impl<'id> WriteBatch<'_, 'id> {
                 }
                 .into());
             };
-            let output_id = output_txs.len()?;
+            let output_id = next_dense_id(
+                output_txs.last()?.as_ref().map(|(k, _)| k.value()),
+                output_txs.len()?,
+            )
+            .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?;
             output_txs.insert(
                 output_id,
                 OutTx {
@@ -503,35 +517,18 @@ impl<'id> WriteBatch<'_, 'id> {
             )?;
             let amount = if miner || emission { 0 } else { output.amount };
             // `amount_index` is the bucket's member count (LMDB's
-            // `mdb_cursor_count` after positioning on the amount). SI-9 asks
-            // that the derived index be **fresh**, and redb cannot tell us:
-            // members order by the index prefix *then* the payload
-            // (`U64PrefixBytes::compare`), so a second member under the
-            // same index but a different payload is distinct to redb and
-            // `insert` would report it new. The bucket is dense by
-            // construction (every insert appends `len`), so freshness is
-            // checked from the shape: the highest member's prefix must be
-            // `len - 1` (or the bucket is empty). A hole or a duplicate
-            // breaks that at the next insert, before a second member under
-            // one index can exist (PR #757 review).
-            let (amount_index, last_prefix) = {
-                let mut members = amounts.get(amount)?;
-                let len = members.len();
-                let last = members
-                    .next_back()
-                    .transpose()
-                    .map_err(EngineError::Storage)?
-                    .map(|guard| OutKey::amount_index_of(guard.value()));
-                (len, last)
-            };
-            let dense = match (amount_index, last_prefix) {
-                (0, None) => true,
-                (len, Some(Some(prefix))) => prefix.checked_add(1) == Some(len),
-                _ => false,
-            };
-            if !dense {
-                return Err(self.poison().arm(StoreInvariant::IdNotFresh));
-            }
+            // `mdb_cursor_count` after positioning on the amount). redb
+            // orders members by index prefix *then* payload, so a second
+            // member under one index is distinct and `insert` would report
+            // it new. Unique-key primaries make `last + 1 == len` complete;
+            // this bucket is a multimap, so that check alone accepts a
+            // compensating hole+duplicate at the high end (`[0, 2, 2]`:
+            // last 2, len 3). The O(1) end-peek also requires prefix 0 at
+            // the low end and no adjacent duplicate of first or last —
+            // Copilot's cited shape, without walking the amount-0 UTXO
+            // set on every output (PR #757 review).
+            let amount_index = next_amount_index(&mut amounts.get(amount)?)?
+                .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?;
             let member = OutKey {
                 amount_index,
                 output_id,
@@ -554,4 +551,73 @@ impl<'id> WriteBatch<'_, 'id> {
             .insert(tx_id, TxOutputIndices(indices).encode().as_slice())?;
         Ok(rct)
     }
+}
+
+/// Next store-derived id for a unique-key primary. Dense iff the table is
+/// empty or `last + 1 == len`; unique keys make that complete (keys
+/// `{0, 3}` have `len == 2` and fail).
+fn next_dense_id(last: Option<u64>, len: u64) -> Option<u64> {
+    match last {
+        None if len == 0 => Some(0),
+        Some(last) if last.checked_add(1) == Some(len) => Some(len),
+        _ => None,
+    }
+}
+
+/// Next `amount_index` for one amount's bucket, or `None` if the bucket is
+/// not a dense unique prefix sequence at the ends.
+///
+/// `last + 1 == len` plus prefix 0 at the front, with no adjacent duplicate
+/// of first or last. That is O(1) in the bucket size: it catches a hole,
+/// a trailing duplicate, a compensating `[0, 2, 2]`, and `[0, 0, 2]`. An
+/// interior compensating pair (`[0, 1, 1, 3]`) would need a linear scan of
+/// the amount-0 UTXO set, which this path will not do.
+fn next_amount_index(
+    members: &mut redb::MultimapValue<'_, U64PrefixBytes>,
+) -> Result<Option<u64>, StoreError> {
+    let prefix_of =
+        |guard: redb::AccessGuard<'_, U64PrefixBytes>| OutKey::amount_index_of(guard.value());
+    let len = members.len();
+    let mut step = |back: bool| -> Result<Option<Option<u64>>, StoreError> {
+        let item = if back {
+            members.next_back()
+        } else {
+            members.next()
+        };
+        Ok(item
+            .transpose()
+            .map_err(EngineError::Storage)?
+            .map(prefix_of))
+    };
+    let dense = match len {
+        0 => true,
+        1 => matches!(step(false)?, Some(Some(0))),
+        n => {
+            let first = step(false)?;
+            let last = step(true)?;
+            let last2 = step(true)?;
+            let first2 = step(false)?;
+            let Some(Some(0)) = first else {
+                return Ok(None);
+            };
+            let Some(Some(last_p)) = last else {
+                return Ok(None);
+            };
+            if last_p.checked_add(1) != Some(n) {
+                return Ok(None);
+            }
+            if let Some(Some(p)) = last2 {
+                if p == last_p || p == 0 {
+                    return Ok(None);
+                }
+            }
+            if let Some(Some(p)) = first2 {
+                if p == 0 || p == last_p {
+                    return Ok(None);
+                }
+            }
+            true
+        }
+    };
+    Ok(dense.then_some(len))
 }

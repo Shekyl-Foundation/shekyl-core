@@ -183,6 +183,18 @@ fn a_root_hole_below_the_tip_is_si7_not_above_tip() {
         matches!(out, Err(TestErr::Store(ref msg)) if msg.contains("typed cell `curve_tree_roots`")),
         "{out:?}"
     );
+    // Obtaining the branded view is chain work: the SI-7 latches the halt
+    // even though `connect` was never called (PR #757 review).
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(2),
+            row: StoreInvariant::CellCorrupt {
+                key: "curve_tree_roots",
+                fault: CellFault::Absent,
+            },
+        }
+    );
     cleanup(&path);
 }
 
@@ -373,8 +385,13 @@ fn a_corrupt_typed_cell_read_through_the_view_is_si7_and_poisons_the_batch() {
         ),
         "{out:?}"
     );
+    cleanup(&path);
+}
 
-    // A `block_info` row with no `blocks` row is the other SI-7 shape.
+#[test]
+fn a_block_info_row_with_no_blocks_row_is_si7() {
+    let path = tmp("view-info-without-blocks");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
     let planted: Result<(), TestErr> = store.write(|batch| {
         let info = BlockInfo {
             timestamp: 1,

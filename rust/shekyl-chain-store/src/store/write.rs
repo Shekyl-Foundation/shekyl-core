@@ -73,7 +73,7 @@ use redb::{
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{post_image, Canonical, ChainState, PropertyCell, UndoEntry};
-use crate::schema::{self, PROPERTIES};
+use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
@@ -210,8 +210,34 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// left (`store::view`). `'id` is the batch brand: a `ChainValid` minted
     /// against the returned view is accepted by this batch's `connect` and
     /// by nothing else.
-    pub const fn chain_view(&self) -> BatchView<'_, 'id> {
+    ///
+    /// Obtaining the branded view is chain work: production validation
+    /// reads through it **before** `connect` can run, so an SI-7 here must
+    /// latch the writer halt even when `connect` is never reached. The
+    /// height noted is the connecting height (`tip + 1`, or `0` on an empty
+    /// chain). Table-level probes never call this, and still do not halt
+    /// (§3.6.2; PR #757 review).
+    pub fn chain_view(&self) -> BatchView<'_, 'id> {
+        self.note_chain_work();
         BatchView::new(self)
+    }
+
+    /// Remember that this batch is chain work at `tip + 1`, so a poisoned
+    /// validation read latches [`halt_for`](Self::halt_for).
+    fn note_chain_work(&self) {
+        let height = self
+            .txn()
+            .open_table(BLOCK_INFO)
+            .ok()
+            .and_then(|table| {
+                table
+                    .last()
+                    .ok()
+                    .flatten()
+                    .map(|(h, _)| h.value().saturating_add(1))
+            })
+            .unwrap_or(0);
+        self.journal.note_height(height);
     }
 
     /// The two by-name refusals every raw table open passes through.
@@ -495,9 +521,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         Ok(value)
     }
 
-    /// A violation on a connect or pop halts the writer (§3.6.2): the
-    /// file's coherence is in doubt at that height and every later write
-    /// would build on it. A violation in a batch that did neither (a
+    /// A violation on a connect, a pop, or a branded `chain_view` read
+    /// (production validation) halts the writer (§3.6.2): the file's
+    /// coherence is in doubt at that height and every later write would
+    /// build on it. A violation in a batch that did none of those (a
     /// table-level test probe) aborts this batch only.
     fn halt_for(&self, row: StoreInvariant) {
         if let Some(at_height) = self.journal.height_hint() {
