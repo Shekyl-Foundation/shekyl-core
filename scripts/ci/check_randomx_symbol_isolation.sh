@@ -7,7 +7,7 @@
 # Binary-level symbol-isolation gate on the linked `shekyld` daemon.
 # Usage: check_randomx_symbol_isolation.sh <path-to-shekyld>
 #
-# Five checks, each anchored to a behavior that must not change
+# Six checks, each anchored to a behavior that must not change
 # silently (no filesystem/convention checks — every check reads the
 # actual linked binary):
 #
@@ -39,9 +39,26 @@
 #      C ABI are absent. Phase 4 deleted CryptoNight; a reappearance
 #      means slow-hash.c was re-linked. The daemon called the unprefixed
 #      names (miner.cpp / blockchain.cpp), not `cn_slow_hash_allocate_state`.
+#   6. The PoW test seam is unreachable from production, proven by the
+#      linker. Phase 4 deleted the schema-level override
+#      (`set_pow_schema_override_for_tests`, `IPowSchema`) but KEPT the
+#      hash-level seam `cryptonote::set_pow_hash_override_for_tests`
+#      (src/crypto/pow_randomx.h) so CEN-D2's verifier-failure arms stay
+#      testable. Its source containment is scripts/ci/check_pow_test_seam.sh
+#      (declaration + definition pinned, >=1 test caller, zero production
+#      callers). This check is that gate's binary counterpart: the daemon
+#      builds with -ffunction-sections/--gc-sections, so a setter nobody in
+#      production references is dropped at link time — its PRESENCE in
+#      shekyld means some linked production object reached it (or a second
+#      seam was spelled differently), which is the capability CEN-D2 forbids.
+#      Anchored (rule 47) on the dispatch `cryptonote::hash_pow_randomx` and
+#      the seam's slot `s_pow_hash_override_for_tests` both being present:
+#      absence of either means the PoW dispatch moved (the daemon-store /
+#      daemon Rust cutover) and BOTH this check and check_pow_test_seam.sh
+#      must be re-homed in that PR, not left to pass vacuously.
 #
-# Checks 3 and 4 make 1, 2, and 5 falsifiable: a stripped binary or a
-# wrong path cannot pass all five.
+# Checks 3, 4 and 6's anchors make 1, 2, 5 and 6 falsifiable: a stripped
+# binary or a wrong path cannot pass all six.
 
 set -euo pipefail
 
@@ -133,6 +150,40 @@ if matches="$(printf '%s\n' "$SYMS" | grep -E '[[:space:]](cn_slow_hash|cn_slow_
   fail=1
 else
   echo "OK: no cn_slow_hash family in daemon"
+fi
+
+# --- Check 6: PoW test seam unreachable from production (demangled) ---
+# Anchor first: the dispatch that consults the seam, and the seam's slot,
+# must both be in the binary. Without them, the absence assertion below
+# would pass over a daemon whose PoW path moved elsewhere.
+if printf '%s\n' "$SYMS_DEMANGLED" | grep -E ' [Tt] cryptonote::hash_pow_randomx\(' >/dev/null; then
+  echo "OK: PoW dispatch cryptonote::hash_pow_randomx present"
+else
+  echo "FAIL: cryptonote::hash_pow_randomx absent from '$BIN'." >&2
+  echo "  The PoW dispatch moved (daemon Rust cutover?). Re-home this check" >&2
+  echo "  and scripts/ci/check_pow_test_seam.sh in the same PR." >&2
+  fail=1
+fi
+if printf '%s\n' "$SYMS_DEMANGLED" | grep -E 's_pow_hash_override_for_tests$' >/dev/null; then
+  echo "OK: PoW test-seam slot s_pow_hash_override_for_tests present (seam still consulted)"
+else
+  echo "FAIL: s_pow_hash_override_for_tests absent from '$BIN'." >&2
+  echo "  The seam slot was renamed or the dispatch no longer consults it;" >&2
+  echo "  update this check and check_pow_test_seam.sh together." >&2
+  fail=1
+fi
+# The assertion: no PoW override SETTER survived the link. Function
+# symbols only — the slot above is data and expected. Any spelling of a
+# hash- or schema-level override setter is caught, not just the current one.
+if matches="$(printf '%s\n' "$SYMS_DEMANGLED" | grep -E ' [TtWw] .*set_pow_[A-Za-z_]*override[A-Za-z_]*\(')"; then
+  echo "FAIL: PoW override setter reachable from production (survived --gc-sections):" >&2
+  printf '%s\n' "$matches" >&2
+  echo "  Production must never install a PoW hash override (CEN-D2)." >&2
+  echo "  Either a production object references the seam, a second seam" >&2
+  echo "  was added, or the build lost -ffunction-sections/--gc-sections." >&2
+  fail=1
+else
+  echo "OK: no PoW override setter in daemon (test seam is link-time unreachable from production)"
 fi
 
 exit "$fail"
