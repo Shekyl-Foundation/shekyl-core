@@ -16,7 +16,7 @@ use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, Tx
 
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
-use crate::codec::{BlockInfo, Canonical, CurveRoot};
+use crate::codec::{BlockInfo, Canonical, CodecError, CurveRoot};
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
 
@@ -573,9 +573,19 @@ fn an_undecodable_tip_row_is_si7_on_every_classified_read() {
         }
         txn.commit().expect("commit");
     }
-    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    // One handle per height: the branded-view SI-7 halts the *writer*, and
+    // the halt lives in the handle (DRS §3.6.2 — re-derived on restart,
+    // never persisted). A second `write` on the same handle is refused at
+    // admission as `WriterHalted` before the closure runs, which would let
+    // the outer assertion pass without `block_at` ever being called — the
+    // PR #764 review caught exactly that. The outer assertion also names
+    // the row, so a refusal cannot satisfy it.
     for asked in [0u64, 1, 2] {
+        let store = ChainStore::create(&path, EPOCH).expect("reopen");
+        assert_eq!(store.connect_state(), ConnectState::Live, "fresh handle");
+        let mut ran = false;
         let out: Result<(), TestErr> = store.write(|batch| {
+            ran = true;
             let e = batch
                 .chain_view()
                 .block_at(BlockHeight::from_raw(asked))
@@ -592,9 +602,24 @@ fn an_undecodable_tip_row_is_si7_on_every_classified_read() {
             );
             Ok(())
         });
+        assert!(ran, "block_at({asked}) must actually run");
+        let expected = StoreError::from(StoreInvariant::CellCorrupt {
+            key: "block_info",
+            fault: CellFault::Undecodable(CodecError::Length {
+                codec: "block_info",
+                expected: 88,
+                actual: 87,
+            }),
+        })
+        .to_string();
+        assert_eq!(
+            out,
+            Err(TestErr::Store(expected)),
+            "block_at({asked}) must poison the batch with the tip row's SI-7"
+        );
         assert!(
-            matches!(out, Err(TestErr::Store(_))),
-            "block_at({asked}) must poison the batch: {out:?}"
+            matches!(store.connect_state(), ConnectState::Halted { .. }),
+            "the branded-view SI-7 halts the writer (block_at({asked}))"
         );
     }
     cleanup(&path);
