@@ -1598,20 +1598,4 @@ namespace cryptonote
     block_hashes_calculated = block_hashes_calculated_count;
     block_hashes_cached = block_hashes_cached_count;
   }
-  //---------------------------------------------------------------
-  crypto::secret_key encrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase)
-  {
-    crypto::hash hash;
-    crypto::cn_slow_hash(passphrase.data(), passphrase.size(), hash);
-    sc_add((unsigned char*)key.data, (const unsigned char*)key.data, (const unsigned char*)hash.data);
-    return key;
-  }
-  //---------------------------------------------------------------
-  crypto::secret_key decrypt_key(crypto::secret_key key, const epee::wipeable_string &passphrase)
-  {
-    crypto::hash hash;
-    crypto::cn_slow_hash(passphrase.data(), passphrase.size(), hash);
-    sc_sub((unsigned char*)key.data, (const unsigned char*)key.data, (const unsigned char*)hash.data);
-    return key;
-  }
 }

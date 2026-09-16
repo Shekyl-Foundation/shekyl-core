@@ -684,7 +684,7 @@ void test_generator::fill_nonce(cryptonote::block& blk, const difficulty_type& d
   const cryptonote::Blockchain *blockchain = nullptr;
   std::unique_ptr<cryptonote::Blockchain> bc;
 
-  if (blk.major_version >= RX_BLOCK_VERSION && diffic > 1)
+  if (diffic > 1)
   {
     if (m_events == nullptr)
     {

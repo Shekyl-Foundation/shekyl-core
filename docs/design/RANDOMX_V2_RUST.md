@@ -6,7 +6,8 @@ deliverable for the RandomX v2 Rust port. Companion:
 discharged by Phase 1 landing PR #54 merge
 `c0c4a11e59145a304690589d0856827907b5985b` (2026-05-19); the
 "must pass the Phase 0 review cycle before any code lands" gate
-is discharged at that SHA.
+is discharged at that SHA. Phase 4 deletion of `IPowSchema` /
+`pow_registry` landed 2026-09-15.
 
 **Scope.** Shekyl's target proof-of-work is RandomX v2 from the
 Shekyl-Foundation RandomX fork. Verification is a Rust pure-software
@@ -71,8 +72,8 @@ exceeds the value.
   https://github.com/Shekyl-Foundation/RandomX at the pinned commit.
 - **Current `external/randomx` submodule (v1-era):** pinned at
   `102f8acf` (`bump benchmark version to 1.2.1`), reachable from the
-  pre-PR-#317 history of the same fork. This submodule is dropped by
-  Phase 4 once the v2 verifier rewires the daemon.
+  pre-PR-#317 history of the same fork. Unlinked from consensus in
+  Phase 3c (PR #235). Phase 4 (`IPowSchema` deletion) **landed 2026-09-15**.
 
 ### 1.3 What v2 changes vs v1 (concretely)
 
@@ -172,8 +173,9 @@ implementation-time. Before Shekyl's mainnet release:
 If either condition fails — Monero finds a v2 issue in production, or
 the audit surfaces a delta-specific weakness — Shekyl's recovery is
 **not** an unpin-and-revert of a v1 submodule SHA. Phase 3c deleted
-the v1 C path. The fallback is: re-add a CMake target that links a
-v1 verifier, plus a v1 `#[cfg]` in `shekyl-pow-randomx`, per
+the v1 C path; Phase 4 deleted `IPowSchema` / `pow_registry`. The
+fallback is: re-add a CMake target that links a v1 verifier, plus the
+v1 `#[cfg]` in `shekyl-pow-randomx`, per
 [`RANDOMX_V1_FALLBACK.md`](./RANDOMX_V1_FALLBACK.md). That is a
 deliberate re-introduction of a deleted path, not a SHA flip.
 
@@ -199,11 +201,9 @@ because:
 
 The gate moves to **release** (Phase 5+, before mainnet), where it
 becomes the explicit release-checklist item described above. Phase 4
-deletion of `IPowSchema`/`pow_registry` still proceeds before release
-because that work is reversible at the fallback: switching to v1
-fallback does not re-introduce dispatch scaffolding, since v1-only
-shipping is still a single-algorithm deployment. Fallback is a CMake
-target re-add, not a SHA unpin.
+deletion of `IPowSchema`/`pow_registry` **landed 2026-09-15**. Switching
+to v1 fallback would re-add a CMake target, not restore dispatch
+scaffolding: v1-only shipping is still a single-algorithm deployment.
 
 ## 2. Permanent C/Rust Split
 
@@ -679,20 +679,15 @@ remote daemon had to compute RandomX themselves to pay for their
 queries, which is why `src/wallet/wallet_rpc_payments.cpp` imports the
 PoW machinery into the wallet tree.
 
-### 15.2 Evidence the wallet-tree PoW touchpoint is unique
+### 15.2 Evidence the wallet-tree PoW touchpoint was unique — LANDED
 
-A targeted grep across `src/wallet/` for `rx_*`, `randomx_*`,
-`cn_slow_hash`, `rx_slow_hash`, and `RX_BLOCK_VERSION` returns exactly
-one file:
-
-- `src/wallet/wallet_rpc_payments.cpp:156` (`if (major_version >= RX_BLOCK_VERSION)`)
-- `src/wallet/wallet_rpc_payments.cpp:158` (`crypto::rx_slow_hash(...)`)
-- `src/wallet/wallet_rpc_payments.cpp:163` (`crypto::cn_slow_hash(...)`)
-
-Deleting RPC payments removes the entire wallet-tree PoW surface in a
-single sweep. The grep above is rerun in Track B's gate check as
-mechanical evidence that no new wallet-tree PoW touchpoint has
-appeared in the meantime.
+**Records-was** at the RPC-payment deletion (wallet2 cutover). A
+targeted grep across `src/wallet/` for `rx_*`, `randomx_*`,
+`cn_slow_hash`, `rx_slow_hash`, and `RX_BLOCK_VERSION` then returned
+exactly one file, `src/wallet/wallet_rpc_payments.cpp` (lines 156/158/163
+at that pin: `RX_BLOCK_VERSION` gate, `rx_slow_hash`, `cn_slow_hash`).
+The file is deleted; the grep now returns empty. That is the Track B
+gate check's expected empty result.
 
 ### 15.3 Why delete (rather than rewrite)
 
@@ -1078,8 +1073,8 @@ Discipline applied to this work:
   audit because Shekyl is non-divergent from upstream (§1.1); Shekyl
   inherits the audit result without performing it. If the audit
   surfaces a contraindicating finding, Shekyl re-adds a CMake v1
-  verifier target and ships v1 per `RANDOMX_V1_FALLBACK.md` (not an
-  unpin of `102f8acf`).
+  verifier target (gitlink at `102f8acf` stays; this is not a SHA
+  unpin) and ships v1 per `RANDOMX_V1_FALLBACK.md`.
 - Phase 2 (Rust verifier implementation) has **no external-review
   gate** because it is faithful implementation against a stable spec,
   not an algorithm-soundness decision. Spec-vector and differential

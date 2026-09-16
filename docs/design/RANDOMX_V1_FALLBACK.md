@@ -32,9 +32,12 @@ is a **re-add**, not an unpin-and-revert SHA flip. `shekyl-pow-randomx`
 is v2 bytecode with zero v1 references; `rx-slow-hash.c` is gone; the
 v1 CMake target was dropped (check_submodule row dropped with it).
 Shipping v1 means: re-add `external/randomx` as a configured CMake
-target at `102f8acf` (the gitlink stays in `.gitmodules`), restore or
-rewrite a v1 verifier, and restore the `check_submodule(external/randomx)`
-row **with** that target.
+target at `102f8acf` (the gitlink stays in `.gitmodules`; Phase 3c
+deleted the configured C target / consensus path, not the submodule),
+restore or rewrite a v1 verifier, and restore the
+`check_submodule(external/randomx)` row **with** that target. Phase 4
+deleted `IPowSchema` / `pow_registry`; fallback does not restore that
+dispatch scaffolding.
 
 Trigger classes:
 

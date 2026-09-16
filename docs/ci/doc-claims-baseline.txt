@@ -71,7 +71,11 @@
 # ELIDED path written in prose. The `..` parts guard does not catch `...`, so
 # the token resolves to no file and counts as rot. It is not a claim about a
 # tree path at all, which is the same disposition that guard already encodes.
-dead-citations: 54
+# Lowered 54 -> 49 on 2026-09-15 (RandomX Phase 4 / PR #755): live
+# citations to deleted CryptoNight / IPowSchema / wallet_rpc_payments /
+# pow_registry paths were re-anchored or marked records-was. Rot was
+# repaired, so the ratchet tightens.
+dead-citations: 49
 
 # ── declares ──────────────────────────────────────────────────────────────────
 # Documents that have opted a leg in cannot quietly opt back out: dropping a

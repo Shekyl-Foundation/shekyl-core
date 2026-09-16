@@ -64,11 +64,11 @@ deferral".
 
 ### 32-bit targets cannot safely run Shekyl, and the wider "bit-width carve-out without coverage" pattern
 **Priority**: **High** — the 32-bit branches of the PQC pair
-(`ml-kem` / `ml-dsa`) and the `slow-hash.c` PoW fallback are both
-security-bearing, and "it compiles" does not imply "the constant-time
-proof still holds." Dormant platform-gated code with no CI coverage
-is the single most-likely source of CI-green shipped regressions in
-this project.
+(`ml-kem` / `ml-dsa`) are security-bearing, and "it compiles" does
+not imply "the constant-time proof still holds." The `slow-hash.c`
+PoW fallback named here was **DELETED 2026-09-15** (Phase 4). Dormant
+platform-gated code with no CI coverage is the single most-likely
+source of CI-green shipped regressions in this project.
 **Target**: v3.1.0-alpha.5 (Chore #3 — retire every 32-bit target in one chore).
 V3.x alpha.0 (current Chore #2) covers only the awareness entry and
 the one one-line CI-green repair that exposed it.
@@ -219,10 +219,10 @@ the narrow side:
 | Site | Gated branch | Severity under PQC argument |
 | --- | --- | --- |
 | `external/db_drivers/liblmdb/CMakeLists.txt:49` | `MDB_VL32` when `ARCH_WIDTH == 32` | **Consensus-adjacent storage.** Materially different blockchain-storage path, never exercised by any CI runner. Sync against live block data on any 32-bit target hits this code first. Delete with Chore #3. |
-| `src/crypto/slow-hash.c:374, 421` | CryptonightR AES-NI gated on `__x86_64__ \|\| (_MSC_VER && _WIN64)`; 32-bit software fallback active otherwise | **Consensus-adjacent PoW.** The 32-bit software fallback is PoW verification code. Any 32-bit miner hashing against the network runs an untested consensus-adjacent path against live block hashes. Delete with Chore #3. |
+| `src/crypto/slow-hash.c:374, 421` | SUPERSEDED 2026-09-15: file **DELETED** with Phase 4 CryptoNight removal | **CLOSED.** Consensus-adjacent 32-bit PoW fallback no longer exists. |
 | `src/blockchain_utilities/blockchain_import.cpp:64` | `#if ARCH_WIDTH != 32` branches default `db_batch_size` | Recoverability UX. 32-bit users bootstrapping hit an untested batch-size path; failure mode is silent (slow import, no crash). Delete with Chore #3. |
 | `CMakeLists.txt:1352` | `libatomic` link pulled on `Clang AND ARCH_WIDTH==32 AND !IOS AND !FREEBSD` | Build-only, untested. Delete with Chore #3 as dead scaffolding. |
-| `tests/hash/main.cpp:192, 206` | `sqrt_result` inline-asm under the same 64-bit guard | Test-only. Hazard is inverted: the test is width-gated away from exercising the production path it should be covering. Delete with Chore #3 (the 32-bit branch) or with `slow-hash.c` retirement. |
+| `tests/hash/main.cpp:192, 206` | `sqrt_result` inline-asm under the same 64-bit guard | Test-only residue of CryptoNight variant-2 (`variant2_int_sqrt.h`). Production `slow-hash.c` **DELETED 2026-09-15**. Remaining hazard is inverted test coverage, not live PoW. |
 | `contrib/depends/packages/{boost,openssl}.mk` | Separate `i686_mingw32` / `x86_64_mingw32` config variants | Build-only; parallel config paths, one CI runner. Delete the `i686_mingw32` variants under Chore #3. |
 | `contrib/gitian/gitian-win.yml:26-30`, `Makefile` 32-bit targets — `debug-static-win32` (L84), `release-static-linux-armv6` (L117), `release-static-linux-armv7` (L121), `release-static-android-armv7` (L125), `release-static-linux-i686` (L151), `release-static-win32` (L159) — `cmake/32-bit-toolchain.cmake`, `contrib/depends/README.md:31` | Entire `i686-w64-mingw32` + 32-bit Linux + Android ARM32 target set | Advertised build targets with no CI runners and no release workflow shipping binaries. Delete with Chore #3. (Earlier drafts of this row named `release-static-armv7` / `release-static-armv6` *without* the `linux-` prefix; those two identifiers are phantoms and do not exist in `Makefile` at any point on `dev`. The live 32-bit `Makefile` targets are the six above.) |
 
@@ -292,15 +292,9 @@ question.
     `docs/VENDORED_DEPENDENCIES.md` for the future-LMDB-update
     note that checks no new `MDB_VL32`-dependent code paths have
     been introduced by a vendor refresh.
-  - Delete the CryptonightR 32-bit software fallback body in
-    `src/crypto/slow-hash.c` (the code between the L374 x86_64
-    AES-NI gate and the L1015 ARM gate), and tighten the L1015
-    gate from `__arm__ || __aarch64__` to `__aarch64__`. Gated by
-    an execution-time `nm` check on x86_64 *and* aarch64 builds
-    confirming no 64-bit target links the 32-bit fallback symbols
-    — per `81-no-protocol-knowledge.mdc`, the "no 64-bit target
-    reaches the fallback" claim must be a verified zero, not an
-    assumed zero. The paired `sqrt_result` inline-asm block in
+  - SUPERSEDED 2026-09-15: Delete the CryptonightR 32-bit software
+    fallback body in `src/crypto/slow-hash.c` — **file deleted**
+    with Phase 4. The paired `sqrt_result` inline-asm block in
     `tests/hash/main.cpp:192, 206` is **not** being deleted; see
     the disambiguation note below.
   - Delete the `#if ARCH_WIDTH != 32` default-`db_batch_size`
@@ -406,8 +400,9 @@ gates and are *not* being deleted by Chore #3 — deleting them
 would remove 64-bit coverage, which is the opposite of the intent.
 The earlier framing that lumped them with the 32-bit retirement
 was imprecise; this entry supersedes it. The 32-bit-specific
-changes inside that test file (if any) are covered by the
-`slow-hash.c` retirement, not by touching the `sqrt_result` block.
+changes inside that test file (if any) were covered by the
+`slow-hash.c` retirement (**DELETED 2026-09-15**), not by touching
+the `sqrt_result` block.
 
 **Migration-on-touch rubric (active immediately, for reviewers
 encountering similar guards):** any of the following sites in a

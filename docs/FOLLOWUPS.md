@@ -448,9 +448,6 @@ Default. Lands before genesis if it should exist at launch.
 - **CryptoNote fossil — hardcoded key-image fixup for Monero blocks [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)**
   - Target: pre-genesis
 
-- **RandomX v2 Phase 4 vestige + `slow-hash.c` / `generate_chacha_key*` deletion** — 3c closed (PR #235). Remaining: delete `IPowSchema`/`pow_registry`/`RX_BLOCK_VERSION`/`set_pow_schema_override_for_tests`; delete `slow-hash.c` and the CN-KDF helpers (`generate_chacha_key*`), not the rest of `chacha.h`. Unconditional; not blocked on wallet2. [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
-  - Target: pre-genesis
-
 - **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: checkout-hygiene landing merged **and** a pin-bump or tarball-CI need. [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
   - Target: pre-genesis
 

@@ -36,7 +36,6 @@
 #include "cryptonote_basic_impl.h"
 #include "cryptonote_format_utils.h"
 #include "cryptonote_core/cryptonote_tx_utils.h"
-#include "crypto/pow_registry.h"
 #include "file_io_utils.h"
 #include "common/command_line.h"
 #include "common/util.h"
@@ -86,9 +85,6 @@ using namespace epee;
 #include "crypto/hash.h"
 #include "cryptonote_basic/block_ingest.h"
 
-
-extern "C" void slow_hash_allocate_state();
-extern "C" void slow_hash_free_state();
 namespace cryptonote
 {
 
@@ -540,7 +536,6 @@ namespace cryptonote
     difficulty_type local_diff = 0;
     uint32_t local_template_ver = 0;
     block b;
-    slow_hash_allocate_state();
     ++m_threads_active;
     while(!m_stop)
     {
@@ -606,7 +601,6 @@ namespace cryptonote
       ++m_hashes;
       ++m_total_hashes;
     }
-    slow_hash_free_state();
     MGINFO("Miner thread stopped ["<< th_local_index << "]");
     --m_threads_active;
     return true;

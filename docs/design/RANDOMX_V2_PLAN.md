@@ -1,6 +1,6 @@
 ---
 name: RandomX v2 Rust port
-overview: "Port Shekyl's PoW from Monero's RandomX v1 (C) to RandomX v2 (Rust pure-software verifier + C library compiled only as an opt-in miner/harness reference) via the Shekyl-Foundation fork (non-divergent from upstream tevador/RandomX at pin aaafe71; Monero is the parallel production deployer and v1->v2 delta audit funder per RANDOMX_V2_RUST.md \u00a71.4). No backward compatibility. The C-for-mining / Rust-for-verification split is permanent. Per 18-type-placement.mdc, Cache/Dataset/Hash are transform-shaped (defined by their derivation function); memoization is a transparent function-level memo inside shekyl-ffi, invisible to C++ callers. No prewarm \u2014 lazy derivation on first use is honest about the cost (~150ms hit once per ~2.8 days; above Nielsen's 100ms 'feels instant' threshold by ~50ms but well below the 1s 'continuous flow' threshold, and invisible in practical RPC-round-trip context). Phase 0 discharged by PR #54 merge c0c4a11e59145a304690589d0856827907b5985b (2026-05-19). Track A (design + submodule + isolated Rust verifier crate) landed. Phase 2 is NOT gated on external algorithm review (the algorithm-review gate is release-time, not Phase-2 time, per RANDOMX_V2_RUST.md \u00a71.4). Phase 3 (cutover 3a/3b/3c) landed in PR #235. YAML trackb-gate-check deleted (moot: Phase 3 landed; no discharge recorded). Phase 4 deletes the vestigial C++ IPowSchema/pow_registry/RX_BLOCK_VERSION and set_pow_schema_override_for_tests; do not delete the shekyl-consensus crate (six live Cargo consumers). Release gate \u2014 Monero deployment-experience window plus completed delta audit without contraindicating findings; v1 fallback is a re-add of the CMake target plus a v1 verifier, not a SHA flip (RANDOMX_V1_FALLBACK.md \u00a71)."
+overview: "Port Shekyl's PoW from Monero's RandomX v1 (C) to RandomX v2 (Rust pure-software verifier + C library compiled only as an opt-in miner/harness reference) via the Shekyl-Foundation fork (non-divergent from upstream tevador/RandomX at pin aaafe71; Monero is the parallel production deployer and v1->v2 delta audit funder per RANDOMX_V2_RUST.md \u00a71.4). No backward compatibility. The C-for-mining / Rust-for-verification split is permanent. Per 18-type-placement.mdc, Cache/Dataset/Hash are transform-shaped (defined by their derivation function); memoization is a transparent function-level memo inside shekyl-ffi, invisible to C++ callers. No prewarm \u2014 lazy derivation on first use is honest about the cost (~150ms hit once per ~2.8 days; above Nielsen's 100ms 'feels instant' threshold by ~50ms but well below the 1s 'continuous flow' threshold, and invisible in practical RPC-round-trip context). Phase 0 discharged by PR #54 merge c0c4a11e59145a304690589d0856827907b5985b (2026-05-19). Track A (design + submodule + isolated Rust verifier crate) landed. Phase 2 is NOT gated on external algorithm review (the algorithm-review gate is release-time, not Phase-2 time, per RANDOMX_V2_RUST.md \u00a71.4). Phase 3 (cutover 3a/3b/3c) landed in PR #235. YAML trackb-gate-check deleted (moot: Phase 3 landed; no discharge recorded). Phase 4 landed 2026-09-15: deleted vestigial C++ IPowSchema/pow_registry/RX_BLOCK_VERSION/set_pow_schema_override_for_tests plus slow-hash.c and generate_chacha_key*; did not delete the shekyl-consensus crate (six live Cargo consumers). Release gate \u2014 Monero deployment-experience window plus completed delta audit without contraindicating findings; v1 fallback is a re-add of the CMake target plus a v1 verifier, not a SHA flip (RANDOMX_V1_FALLBACK.md \u00a71)."
 todos:
   - id: phase0-design
     content: "Track A / Phase 0: Write docs/design/RANDOMX_V2_RUST.md AND docs/design/RANDOMX_V1_FALLBACK.md. Cover: (a) permanent C-JIT-for-mining / Rust-interpreter-for-verification split; (b) derived-first design per 18-type-placement.mdc; (c) memoization inside shekyl-ffi only (no prewarm; lazy derivation with documented perception-threshold rationale); (d) 1-function FFI surface (hash), with seedheight as discretionary Phase 3 addition; (e) v2 algorithm review prerequisites and spec-as-source-of-truth doctrine; (f) interpreter performance target (\u22643.0\u00d7 C light-VM-JIT) + concrete initial-sync wall-time delta (~4 hours per current math) for review ratification; (g) structural isolation invariants with specific v2 C library export symbol list AND companion 'shekyl-pow-randomx never uses #[no_mangle]' invariant; (h) consensus constants become typed const, env-var overrides deleted entirely; (i) Grover-bound argument for PoW surviving lattice transition; (j) v1 fallback (depth calibrated to algorithm-review confidence; honest framing, not theater); (k) cncrypto PUBLIC link survey results; (l) what irreducibly stays state and where. Pass 4-6 review rounds before any code lands. DISCHARGED by Phase 1 landing PR #54 merge c0c4a11e59145a304690589d0856827907b5985b (2026-05-19)."
@@ -33,11 +33,11 @@ todos:
     content: "Track A / Phase 2h: Adversarial-corpus methodology + first-class evaluator + initial recipe corpus + canonical-output pinning + mode_adversarial_ratio measurement mode + T2/T6 reactivation + CI workflow scaffolding + M5 mechanical citation-validation script. Closes the post-2g forward-actions cluster (R7-D1/R7-D2/R7-D3/R7-D4). T2 (adversarial_corpus_byte_equality) runs per-PR; T6 (worst_case_ratio) runs weekly (`cron: 0 6 * * 2`) plus workflow_dispatch in randomx-v2-adversarial-ratio.yml. RECORDS-WAS: both tests landed #[ignore]-gated behind the compute_hash-divergence FOLLOWUP; that FOLLOWUP closed on PR #79 merge 989610cac (2026-05-26) and T2's #[ignore] was lifted. M5 citation-validation lands at scripts/ci/check_phase2h_citations.sh. C1\u2013C10 commit sequence landed on dev per RANDOMX_V2_PHASE2H_PLAN.md \u00a711 Round 4."
     status: completed
   - id: phase3-cutover
-    content: "Track B / Phase 3 (split 3a/3b/3c): Export the 1-2 function FFI surface from rust/shekyl-ffi; add matching declarations in src/shekyl/shekyl_ffi.h; rewire C++ callers; delete lifecycle calls; drop randomx C linkage from cncrypto; add CI symbol-isolation. LANDED: 3a+3b consensus PoW cutover; 3c v1 machinery (rx-slow-hash.c, cncrypto randomx C-linkage, seedheight export + shekyl-pow-randomx::consensus) landed in PR #235. slow-hash.c / generate_chacha_key* and IPowSchema/pow_registry are Phase 4 / Track D, not 3c, and are not blocked on wallet2 (wallet2 was deleted in Phase 5). The DELETED_CALL_AUDIT was folded into RANDOMX_V2_PHASE3_PLAN.md \u00a72."
+    content: "Track B / Phase 3 (split 3a/3b/3c): Export the 1-2 function FFI surface from rust/shekyl-ffi; add matching declarations in src/shekyl/shekyl_ffi.h; rewire C++ callers; delete lifecycle calls; drop randomx C linkage from cncrypto; add CI symbol-isolation. LANDED: 3a+3b consensus PoW cutover; 3c v1 machinery (rx-slow-hash.c, cncrypto randomx C-linkage, seedheight export + shekyl-pow-randomx::consensus) landed in PR #235. slow-hash.c / generate_chacha_key* and IPowSchema/pow_registry LANDED 2026-09-15 as Phase 4 / Track D (not 3c); they were not blocked on wallet2 (wallet2 was deleted in Phase 5). The DELETED_CALL_AUDIT was folded into RANDOMX_V2_PHASE3_PLAN.md \u00a72."
     status: completed
   - id: phase4-delete-abstractions
-    content: "Track B / Phase 4: Vestigial C++ cleanup. Delete pow_schema.h (IPowSchema), pow_registry.{h,cpp}, RX_BLOCK_VERSION, set_pow_schema_override_for_tests (production symbol; tests-only callers), and any major_version branching in PoW selection; rewrite the three test call sites. Do NOT delete rust/shekyl-consensus (live consumers: shekyl-curve-tree, shekyl-daemon-rpc, shekyl-engine-state, shekyl-ffi, shekyl-genesis-tool, shekyl-wire). Also delete slow-hash.c and generate_chacha_key* (keep chacha.h xchacha20/chacha_key/iv). wallet_rpc_payments.cpp is gone. Update unit tests; extend check_randomx_symbol_isolation.sh."
-    status: pending
+    content: "Track B / Phase 4 LANDED 2026-09-15: deleted pow_schema.h (IPowSchema), pow_registry.{h,cpp}, RX_BLOCK_VERSION, set_pow_schema_override_for_tests, and major_version branching in PoW selection; rewrote the three test call sites. Did NOT delete rust/shekyl-consensus (live consumers: shekyl-curve-tree, shekyl-daemon-rpc, shekyl-engine-state, shekyl-ffi, shekyl-genesis-tool, shekyl-wire). Also deleted slow-hash.c and generate_chacha_key* (kept chacha.h xchacha20/chacha_key/iv). wallet_rpc_payments.cpp is gone. Isolation gate extended."
+    status: completed
   - id: phase5-docs
     content: "Track B / Phase 5: Update USER_GUIDE, SHEKYLD_PREREQUISITES, DESIGN_CONCEPTS, CHANGELOG, FOLLOWUPS per 91-documentation-after-plans.mdc after Phase 4 lands. Remaining Phase-5 debt is not rx-slow-hash.c, RPC payments, or shekyl-consensus crate deletion. Forward obligation: \u00a722 Guix entry (FOLLOWUPS)."
     status: pending
@@ -48,7 +48,7 @@ isProject: false
 # RandomX v2 Rust port (Track A / Track B)
 
 
-**Status:** LIVING CONTRACT (as of 2026-09-15). Phases 0–3 landed; Phase 4 (vestigial C++ + `slow-hash.c` / `generate_chacha_key*`) and the release-time algorithm-review gate remain. YAML `trackb-gate-check` deleted (moot: Phase 3 landed; no discharge recorded).
+**Status:** LIVING CONTRACT (as of 2026-09-15). Phases 0–4 landed; the release-time algorithm-review gate remains. YAML `trackb-gate-check` deleted (moot: Phase 3 landed; no discharge recorded).
 ## Sequencing rationale
 
 Three independent gates govern when phases land.
@@ -69,7 +69,7 @@ flowchart LR
   end
   subgraph TrackB [Track B - pre-genesis; Phase 3 landed]
     P3[Phase 3 3a/3b/3c landed PR 235]
-    P4[Phase 4: vestigial C++ + slow-hash.c<br/>keep shekyl-consensus crate]
+    P4[Phase 4 landed: vestigial C++ + slow-hash.c deleted<br/>kept shekyl-consensus crate]
     P5[Phase 5: Docs + CHANGELOG]
   end
   subgraph Release [Release gate - external dependencies]
@@ -364,29 +364,29 @@ This exceeds `06-branching.mdc`'s 5-day / 10-commit limit; **the plan acknowledg
   
   Build flag from 3a is removed; Rust path is the only path.
 
-- **Phase 3c — Implementation deletions + cncrypto link drop + CI invariants.** **Ordering precondition:** Phase 3c assumes that every remaining `rx_slow_hash` / `cn_slow_hash` / `slow_hash_allocate_state` / `slow_hash_free_state` call site has already been rewired or deleted by the preceding steps in this plan window. Specifically, before 3c lands: §15 (RPC payments delete) must have removed `src/wallet/wallet_rpc_payments.cpp` and `src/rpc/rpc_payment*`; **and** Phase 4's version-gate + `IPowSchema` deletion must have removed `src/cryptonote_basic/miner.cpp`'s `slow_hash_allocate_state()` / `slow_hash_free_state()` `extern "C"` declarations and calls, plus `src/cryptonote_basic/cryptonote_format_utils.cpp`'s `crypto::rx_slow_hash` and `crypto::cn_slow_hash` call sites. (The KDF `cn_slow_hash` calls in `cryptonote_format_utils.cpp` at lines 1465/1473 are non-PoW and must move to a Rust-side KDF replacement before 3c; this is a Phase 4 deliverable.) If any caller remains at the time 3c is opened, the order is: pull that caller's removal forward into the 3c PR, or land 3c after the Phase 4 deletion lands. Without this ordering, the build's intermediate state has unresolved `slow_hash_*` / `rx_slow_hash` references. Then: delete src/crypto/rx-slow-hash.c, src/crypto/pow_cryptonight.cpp, [src/crypto/slow-hash.c](../../src/crypto/slow-hash.c) together — they are tangled implementation (CryptoNight code references the rx-slow-hash dispatch), deleting separately leaves intermediate states broken. Drop randomx C linkage from `cncrypto` per `RANDOMX_V2_RUST.md` §11 PUBLIC-link survey. Add CI symbol-isolation invariant (`RANDOMX_V2_RUST.md` §7). Add CI per-hash benchmark (`RANDOMX_V2_RUST.md` §8 mechanism: N=1024 hashes, median ratio ≤ 3.0×, deterministic, <30s wall time). Full 600k-block initial-sync wall-time test is added to the release-gate suite (not per-PR).
+- **Phase 3c — LANDED (PR #235).** Implementation deletions + cncrypto link drop + CI invariants. **Ordering precondition (records-was):** 3c assumed every remaining `rx_slow_hash` / `cn_slow_hash` / `slow_hash_allocate_state` / `slow_hash_free_state` call site had already been rewired or deleted. RPC payments were already gone; Phase 4 later deleted miner.cpp lifecycle decls and `slow-hash.c`. Then: deleted `src/crypto/rx-slow-hash.c`, `src/crypto/pow_cryptonight.cpp`. `src/crypto/slow-hash.c` **DELETED 2026-09-15** (Phase 4; do not link — file is gone). Dropped randomx C linkage from `cncrypto` per `RANDOMX_V2_RUST.md` §11. Added CI symbol-isolation (`RANDOMX_V2_RUST.md` §7) and per-hash benchmark (`RANDOMX_V2_RUST.md` §8).
 
 If during Phase 3 planning the work fits in one PR within `06-branching.mdc` limits, the split can be skipped. The default expectation is the split.
 
-### Phase 4: Delete abstractions (no implementation churn)
+### Phase 4: Delete abstractions — LANDED 2026-09-15
 
-Pure abstraction cleanup. Phase 3 handled the implementation files; Phase 4 deletes the rule-violating speculative scaffolding on both sides.
+Pure abstraction cleanup. Phase 3 handled the implementation files; Phase 4 deleted the rule-violating speculative scaffolding on the C++ side.
 
 Per `60-no-monero-legacy.mdc`, `15-deletion-and-debt.mdc`, and `70-modular-consensus.mdc`.
 
-**C++ side:**
+**C++ side (deleted 2026-09-15):**
 
-- Delete [src/crypto/pow_schema.h](../../src/crypto/pow_schema.h) (the `IPowSchema` interface).
-- Delete [src/crypto/pow_registry.h](../../src/crypto/pow_registry.h) and [src/crypto/pow_registry.cpp](../../src/crypto/pow_registry.cpp).
-- Update call sites in [src/cryptonote_core/cryptonote_tx_utils.cpp](../../src/cryptonote_core/cryptonote_tx_utils.cpp), [src/cryptonote_basic/miner.cpp](../../src/cryptonote_basic/miner.cpp), [src/daemon/rpc_command_executor.cpp](../../src/daemon/rpc_command_executor.cpp), [src/rpc/core_rpc_server.cpp](../../src/rpc/core_rpc_server.cpp), [src/rpc/core_rpc_server_commands_defs.h](../../src/rpc/core_rpc_server_commands_defs.h) to call the single RandomX v2 verifier directly via FFI.
+- `src/crypto/pow_schema.h` (the `IPowSchema` interface). **DELETED — do not link.**
+- `src/crypto/pow_registry.h` and `src/crypto/pow_registry.cpp`. **DELETED — do not link.**
+- Call sites in `src/cryptonote_core/cryptonote_tx_utils.cpp`, `src/cryptonote_basic/miner.cpp`, `src/daemon/rpc_command_executor.cpp`, `src/rpc/core_rpc_server.cpp`, `src/rpc/core_rpc_server_commands_defs.h` now call the single RandomX v2 verifier directly via FFI.
 
 **Rust side — SUPERSEDED: do not delete `shekyl-consensus`.** Six live Cargo consumers (`shekyl-curve-tree`, `shekyl-daemon-rpc`, `shekyl-engine-state`, `shekyl-ffi`, `shekyl-genesis-tool`, `shekyl-wire`). The original crate-deletion bullets are withdrawn; Phase 4 is C++ vestige + `slow-hash.c` / `generate_chacha_key*` only.
 
-**Version-gate deletion (mandatory):**
+**Version-gate deletion — LANDED 2026-09-15:**
 
-- Delete `RX_BLOCK_VERSION` constant and every reference.
-- Delete any `if (major_version >= X)` / `if (hf_version >= X)` switch in PoW selection. The switch itself is the failure; even dead branches imply "we might dispatch differently someday."
-- Applies to [src/cryptonote_basic/cryptonote_format_utils.cpp](../../src/cryptonote_basic/cryptonote_format_utils.cpp) and any other site discovered.
+- `RX_BLOCK_VERSION` constant and every reference: **DELETED**.
+- Any `if (major_version >= X)` / `if (hf_version >= X)` switch in PoW selection: **DELETED**. The switch itself was the failure; even dead branches implied "we might dispatch differently someday."
+- Applied at `src/cryptonote_basic/cryptonote_format_utils.cpp` and the other sites in the Phase 3 pin survey.
 
 **Misc cleanup:**
 
@@ -402,7 +402,7 @@ Update:
 - [docs/DOCUMENTATION_TODOS_AND_PQC.md](../../docs/DOCUMENTATION_TODOS_AND_PQC.md) (close RandomX v2 row).
 - [docs/DESIGN_CONCEPTS.md](../../docs/DESIGN_CONCEPTS.md) (cite the permanent architectural decisions; keep `shekyl-consensus` — six live consumers; cite `18-type-placement.mdc` as the rule that shaped the verifier API; cite Decision #6 for why no prewarm).
 - [docs/CHANGELOG.md](../../docs/CHANGELOG.md).
-- [docs/FOLLOWUPS.md](../../docs/FOLLOWUPS.md) — close any RandomX v2 follow-ups this plan introduces along the way (notably: confirm the §22 Guix forward-looking entry was filed at Phase 0 close, and amend or close it once Guix integration lands). **Note this plan is primarily fresh debt clearance**: `IPowSchema`/`pow_registry` and `slow-hash.c` remain; RPC payments and `rx-slow-hash.c` already landed; **do not** delete `shekyl-consensus` (six live consumers). The Phase 5 FOLLOWUPS pass is therefore mostly forward-looking close-records of obligations the plan itself creates, not closure of pre-existing items. **Do not** add a "Rust-port the JIT later" item — Decision #1 is permanent; **do not** add a "consider prewarm" item — Decision #6 is permanent.
+- [docs/FOLLOWUPS.md](../../docs/FOLLOWUPS.md) — close any RandomX v2 follow-ups this plan introduces along the way (notably: confirm the §22 Guix forward-looking entry was filed at Phase 0 close, and amend or close it once Guix integration lands). **Note this plan is primarily fresh debt clearance**: `IPowSchema`/`pow_registry` and `slow-hash.c` **DELETED 2026-09-15**; RPC payments and `rx-slow-hash.c` already landed; **do not** delete `shekyl-consensus` (six live consumers). The Phase 5 FOLLOWUPS pass is therefore mostly forward-looking close-records of obligations the plan itself creates, not closure of pre-existing items. **Do not** add a "Rust-port the JIT later" item — Decision #1 is permanent; **do not** add a "consider prewarm" item — Decision #6 is permanent.
 
 ## Risk acknowledgments
 
