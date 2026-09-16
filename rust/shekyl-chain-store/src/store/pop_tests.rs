@@ -25,7 +25,8 @@ fn judge<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    Ok(validate(candidate, view, &RuleSet::GENESIS)?.expect("zero rules refuse nothing"))
+    Ok(validate(candidate, view, &RuleSet::GENESIS)?
+        .expect("the fixtures satisfy every landed rule"))
 }
 
 /// Connect `blocks` (genesis first) in one batch; returns each block's hash.

@@ -258,19 +258,33 @@ enforced 153   ratified 126 / enforced 153`.
 pub(crate) trait Rule {
     const ROW: CenRow;
 }
-/// Block-level rules of this slice: one signature, so `validate` runs them
-/// from a list and records `R::ROW` itself — a rule cannot record another
-/// row's coverage.
+/// The registry-generic face of `Rule`, so one macro serves both enums;
+/// every `Rule` is `Bound<CenRow>`, a policy rule (E5) will be `Bound<PolicyRow>`.
+pub(crate) trait Bound<R> { const ROW: R; }
+/// What a block rule reads besides the view. A struct so the set can grow
+/// without moving any rule's signature; the view is passed *beside* it so a
+/// new chain fact is a new `ChainView` method, never a new parameter.
+pub(crate) struct BlockContext<'a> { candidate: &'a Candidate, rule_set: &'a RuleSet }
 pub(crate) trait BlockRule: Rule {
-    fn check<'id, V: ChainView<'id>>(
-        candidate: &Candidate, tip: &Tip, view: &V, rule_set: &RuleSet,
-    ) -> Result<Verdict<()>, V::Fault>;
+    fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
+        -> Result<Verdict<()>, V::Fault>;
 }
+/// The only writer of block-level coverage: inserts `R::ROW` iff `R` passed.
+pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(cx, view, coverage) -> Result<Verdict<()>, V::Fault>;
+
 // census.rs — the entry names a TYPE; the macro emits both pins:
-//   use $path as _;                                              (G9: exists)
-//   const _: () = assert!(<$path as Rule>::ROW as u8 == CenRow::$var as u8); (SCW-18: is this row)
-A2 implemented(crate::rules::topology::A2),
+//   use $path as _;                                                      (G9: exists)
+//   const _: () = assert!(matches!(<$path as Bound<$name>>::ROW, $name::$var)); (SCW-18: is this row)
+B1 implemented(crate::rules::header::B1),
 ```
+
+*As landed (rules PR, commit "Rule/BlockRule + B1/B2/B7"):* the pre-flight
+sketch passed `tip: &Tip` positionally; the landed shape reads the tip from
+the view inside the rules that need it (A2, B5), so `tip()` landing on
+`ChainView` moves no rule signature — the property the parallel start relied
+on. The pin was forced red once before landing: registering `header::B1`
+under the `B2` entry fails with `E0080: evaluation panicked: … the type
+registered under B2 is bound to a different census row (SCW-18)`.
 
 Unit structs per row (`rules/topology.rs`: `A2`; `rules/header.rs`: `B1 B2 B5
 B6 B7`). `validate` runs `for each R in slice-1 list { match R::check(..)? {
@@ -368,12 +382,13 @@ one.
 | row | fixture (in `rules/*_tests.rs`, against `MockChain`) |
 | --- | --- |
 | A2 | `cen_a2_previous_must_be_the_tip_hash` (tip recorded; `previous` ← other hash → A2/Block); `cen_a2_genesis_previous_is_zero` (`Empty`; `[0;32]` passes, any other refused); `cen_a2_propagates_a_fault` (`FaultingView`) |
-| B1 | `cen_b1_major_version_must_be_the_admitted_one` — `boundary_pair(1, 2)` and `0` refused, at `Locus::Block` |
-| B2 | `cen_b2_minor_version_is_unconstrained` — `0`, `1`, `255` all pass; no row fires |
+| B1 | `cen_b1_major_version_must_be_the_admitted_one` — `boundary_pair(1, 2)`, `0` and `255` refused, at `Locus::Block` |
+| B2 | `cen_b2_minor_version_is_unconstrained_under_genesis` — `0`, `1`, `2`, `127`, `255` all pass; no row fires |
 | B5 | `cen_b5_header_root_is_the_root_at_the_connecting_height` (mutated root → B5); `cen_b5_reads_tip_plus_one_not_tip` (a chain whose root at `tip` ≠ root at `tip+1`: the header carrying the *tip's* root is **refused** — the SCW-19 off-by-one, bitten from the rules side); `cen_b5_genesis_root_is_empty`; `cen_b5_above_tip_refuses` (a mock with no root at `tip+1`) |
 | B6 | `cen_b6_identity_is_block_hash` (already `validate_tests.rs`; re-homed under the row) |
-| B7 | `cen_b7_never_refuses` — `major_version = 2` is refused by **B1**, `assert_refused(.., CenRow::B1, ..)`, never B7 |
-| all | `slice_1_coverage_names_exactly_its_rows` — a passing candidate's `coverage().iter()` is `{A2, B1, B2, B5, B6, B7}`; `covers_landed` holds |
+| B7 | `cen_b7_never_refuses_a_future_version_is_b1s_refusal` — B7 **called alone** passes `major_version ∈ {2, 7, 255}` (the pipeline stops at B1, so this is the only way to observe B7 on such a header — PR #762 review); through the pipeline the same header is refused by **B1**, `assert_refused(.., CenRow::B1, ..)`, never B7 |
+| B2 (later set) | `cen_b2_ports_the_predicate_not_the_effect` — under `RuleSet::admitting_for_tests(2)` (a `#[cfg(test)]` crate-private constructor: no second set is issued, and the refusal arm has no other way to run), `boundary_pair(2, 1)` on the vote refuses B2 with the rule alone, and through the pipeline `(major 2, minor 1)` is refused B2 while `(2, 2)` passes — PR #762 review |
+| all | `slice_1_version_rows_are_exactly_what_a_pass_covers` — after PR #762 a passing candidate's `coverage().iter()` is `{B1, B2, B7}`; grows to `{A2, B1, B2, B5, B6, B7}` at the `tip()` PR; `covers_landed` holds, `is_complete_for` does not |
 
 Commit plan (rule 90; each builds, `fmt`/`clippy` clean, tests green).
 **Amended 2026-09-16 (maintainer OK at PR #761 review, cross-lane):** commit 1
@@ -388,8 +403,16 @@ stay here behind Q2–Q6.
    (#761); commit 1 is the `tip()` PR; commits 2–6 are the **rules PR**, cut
    after the `tip()` PR merges (A2 and B5 read the tip). Three PRs, each
    under the 5-day / 10-commit ceiling.
-2. `chain-rules: Rule/BlockRule traits; census_rows! emits the SCW-18 ROW pin`
-3. `chain-rules: CEN-A2 parent-is-tip; CEN-B1/B2/B7 header version rows` (+ `RuleSet::header_major_version`, Q4)
+2. `chain-rules: Rule/BlockRule + SCW-18 pin; CEN-B1/B2/B7; RuleSet::header_major_version`
+   — commits 2 and 3 of the sketch **landed as one** (rule 26 B5): the traits
+   with no rule are dead code at the intermediate SHA, and `-D warnings`
+   would need a transient `expect(dead_code)` there that the next commit
+   removes — a marker with a one-commit life is noise, not staging. Cut
+   before the `tip()` PR on the maintainer's 14:43 ruling: none of these
+   reads the tip. Touches one store test (`connect_tests.rs`: coverage gaps
+   are now `enforced − implemented`, as the test's own comment anticipated)
+   — disclosed to S-CHAIN-R.
+3. `chain-rules: CEN-A2 parent-is-tip` — after the `tip()` PR
 4. `chain-rules: CEN-B5 header root == root_at(connecting height); CEN-B6 identity under the row`
 5. `chain-rules: held_by_cxx(test) entry status; A1/A4 held; gate prints the subtraction` — macro arm, gate grammar + `--selftest`, `RuleSet::enforced` excludes held rows; **plus the two C++ core tests the entries name** (§4.1 condition 1, F4).
 *Rule 20, stated in the commit message rather than in a review reply:* these

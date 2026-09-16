@@ -12,8 +12,8 @@
 //! the `on_block_popped` defect — and the coincidence is a fact about the
 //! table, not a definition. So there is no `From<u8>`, no `PartialEq<u8>`,
 //! and no reading of the header version anywhere here: the header version
-//! a rule set *admits* becomes one of its parameters when the rule that
-//! checks it lands, never its identity.
+//! a rule set *admits* is one of its parameters ([`RuleSet::header_major_version`],
+//! landed with CEN-B1 in slice 1), never its identity.
 //!
 //! [`RuleSchedule`] is where R4's state-dependent activation has its seat.
 //! `rules_at(height)` is a function, seeded as the identity (every network,
@@ -77,18 +77,23 @@ impl RuleSetId {
 /// id to one, and there is no way to build one that was not issued.
 /// Parameters populate as rules land. The first is `enforced` — the census
 /// rows this rule set holds a block to, which is also the denominator a
-/// verdict's coverage is measured complete against.
+/// verdict's coverage is measured complete against. The second is
+/// `header_major_version` — the `BlockHeader.major_version` this rule set
+/// admits (CEN-B1; the vote floor of CEN-B2), landed with slice 1.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
     enforced: &'static [CenRow],
+    header_major_version: u8,
 }
 
 impl RuleSet {
-    /// The genesis rule set: every consensus row of the census.
+    /// The genesis rule set: every consensus row of the census; admits
+    /// header version `1` (`hardforks.cpp:35–50`, the one-entry table).
     pub const GENESIS: Self = Self {
         id: RuleSetId::GENESIS,
         enforced: CenRow::ALL,
+        header_major_version: 1,
     };
 
     /// Every rule set a schedule may name, in id order. A schedule step that
@@ -114,6 +119,31 @@ impl RuleSet {
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
         self.enforced.iter().copied()
     }
+
+    /// A rule set that admits `header_major_version`, for the version-rule
+    /// fixtures only: `ISSUED` holds one set today, and B1/B2's refusal
+    /// arms under a later set have no other way to be exercised. Never
+    /// issued, never named by a schedule, not constructible outside tests.
+    #[cfg(test)]
+    pub(crate) const fn admitting_for_tests(header_major_version: u8) -> Self {
+        Self {
+            id: RuleSetId::from_raw(u8::MAX),
+            enforced: CenRow::ALL,
+            header_major_version,
+        }
+    }
+
+    /// The `BlockHeader.major_version` this rule set admits (CEN-B1), and
+    /// the floor a header's version vote must reach (CEN-B2).
+    ///
+    /// A **parameter**, not the identity: it equals
+    /// `RuleSetId::GENESIS.to_raw()` today because the shipped hardfork table
+    /// has one entry, and nothing here reads one as the other
+    /// (`CHAIN_RULES_CRATE.md` §4.2, ruling Q5).
+    #[must_use]
+    pub const fn header_major_version(&self) -> u8 {
+        self.header_major_version
+    }
 }
 
 impl fmt::Debug for RuleSet {
@@ -125,6 +155,7 @@ impl fmt::Debug for RuleSet {
                 "enforced",
                 &format_args!("{} of {} rows", self.enforced.len(), CenRow::ALL.len()),
             )
+            .field("header_major_version", &self.header_major_version)
             .finish()
     }
 }

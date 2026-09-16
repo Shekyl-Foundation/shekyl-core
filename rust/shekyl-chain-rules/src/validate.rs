@@ -15,23 +15,43 @@
 //! [`refused`](crate::refused) at the site that judged, so the row is named
 //! where the decision is made.
 //!
-//! # Increment 1
+//! # The pipeline
 //!
-//! Zero rules are landed (DRS-D12). The pipeline below is the shape the
-//! porting increments fill: block-level rules run first, then each
-//! transaction is judged by form and then against the view, coverages are
-//! unioned, and the `ChainValid` is minted only after the last rule passed.
-//! Today every path reaches the mint with `RuleCoverage::EMPTY`, which is
-//! never complete for any rule set — a scaffold verdict is not parity
-//! evidence, and nothing that checks can mistake it for one.
+//! Block-level rules run first, in census order, each through
+//! [`rules::run`] so its row enters coverage only if it ran and passed; then
+//! each transaction is judged by form and then against the view, coverages
+//! are unioned, and the `ChainValid` is minted only after the last rule
+//! passed. Slice 1 (`CHAIN_RULES_SLICE_1.md`) landed the first block rules;
+//! the per-transaction entry points are still empty (DRS-D12) and return
+//! `RuleCoverage::EMPTY`. Coverage is never complete for any rule set until
+//! every row has landed, so no verdict minted before then can be mistaken
+//! for parity evidence.
 
 use shekyl_wire::Transaction;
 
 use crate::block::{Candidate, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
+use crate::rules::header::{B1, B2, B7};
+use crate::rules::{self, BlockContext};
 use crate::verdict::{ChainValid, InvalidBlock, TxSlot, Verdict};
 use crate::view::ChainView;
+
+/// Run the listed block rules in order; the first refusal is the verdict.
+///
+/// A macro rather than a loop because each rule is a distinct *type*
+/// (SCW-18): the list is the slice's declaration of which rows `validate`
+/// evaluates, and a rule missing from it is a row missing from coverage —
+/// which `ChainValid::mint` refuses if the row is `implemented` (G9).
+macro_rules! judge_block {
+    ($cx:expr, $view:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
+        $(
+            if let Err(refused) = rules::run::<$rule, V>(&$cx, $view, &mut $coverage)? {
+                return Ok(Err(refused));
+            }
+        )+
+    };
+}
 
 /// Judge a candidate block under `rule_set` against `view`.
 ///
@@ -143,7 +163,10 @@ pub fn validate<'id, V: ChainView<'id>>(
 ) -> Result<Verdict<ChainValid<'id, V>>, V::Fault> {
     let mut coverage = RuleCoverage::EMPTY;
 
-    // Block-level rules (4.A–4.G): none landed in increment 1.
+    // Block-level rules (4.A–4.G), in census order. Slice 1: 4.B's version
+    // rows. A2, B5, B6 join when `ChainView::tip()` lands.
+    let cx = BlockContext::new(&candidate, rule_set);
+    judge_block!(cx, view, coverage; B1, B2, B7);
 
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
     let listed = candidate

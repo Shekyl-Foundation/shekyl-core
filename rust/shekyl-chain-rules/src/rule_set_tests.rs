@@ -129,7 +129,7 @@ fn genesis_enforces_the_whole_census_in_order() {
     assert_eq!(
         format!("{genesis:?}"),
         format!(
-            "RuleSet {{ id: RuleSetId(1), enforced: {n} of {n} rows }}",
+            "RuleSet {{ id: RuleSetId(1), enforced: {n} of {n} rows, header_major_version: 1 }}",
             n = CenRow::ALL.len()
         )
     );

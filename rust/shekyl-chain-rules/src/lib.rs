@@ -35,19 +35,19 @@
 //! use shekyl_chain_store::store::ChainStore; // and no store crate
 //! ```
 //!
-//! # Staging (rule 23: STAGED, consumer named)
+//! # Where the port stands
 //!
-//! Increment 1 is the scaffold: the census registry ([`CenRow`],
-//! [`PolicyRow`]) and the gate that holds it to the census. **Zero consensus
-//! rules land here** (DRS-D12); every registry entry is `pending`, so the
-//! gate prints `implemented 0 / enforced 153` and `0 / 9`, and only complete
-//! coverage is parity evidence. The named consumer is **S-CHAIN-W**
-//! (`DAEMON_REDB_STORE.md` §3.6.2): it projects a `ChainView<'id>` from the
-//! store's `WriteBatch<'_, 'id>` and takes a `ChainValid<'id, V>` — `V` its
-//! own view type — into `connect`.
-//! Increments 2+ port the 141 surface-free rules one census subsystem at a
-//! time (`DAEMON_REDB_STORE.md` §7.5.2 table 3), flipping entries to
-//! `implemented(...)` as they land.
+//! Increment 1 landed the scaffold: the census registry ([`CenRow`],
+//! [`PolicyRow`]), the gate that holds it to the census, and zero rules
+//! (DRS-D12). Its consumer, **S-CHAIN-W**, landed next (`DAEMON_REDB_STORE.md`
+//! §3.6.2): the store projects a `ChainView<'id>` from its `WriteBatch<'_,
+//! 'id>` and takes a `ChainValid<'id, V>` — `V` its own view type — into
+//! `connect`. Increments 2+ port the 141 surface-free rules one census
+//! subsystem at a time (`DAEMON_REDB_STORE.md` §7.5.2 table 3), flipping
+//! entries to `implemented(<rule type>)` as they land; slice 1
+//! (`CHAIN_RULES_SLICE_1.md`) began with 4.B's version rows. Only complete
+//! coverage is parity evidence, so no verdict minted before the last slice
+//! can be read as one.
 //!
 //! # Consumers
 //!
@@ -84,6 +84,7 @@ mod block;
 mod census;
 mod coverage;
 mod rule_set;
+mod rules;
 mod validate;
 mod verdict;
 mod view;

@@ -12,14 +12,17 @@ use crate::rule_set::RuleSetId;
 use crate::TxIdentity;
 
 #[test]
-fn with_zero_rules_every_candidate_passes_with_empty_coverage() {
+fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
     MockChain::default().with_view(|view| {
         let input = candidate(vec![coinbase(1), coinbase(2)]);
         let valid = infallible(validate(input, &view, &RuleSet::GENESIS))
-            .expect("zero rules refuse nothing");
+            .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
-        assert!(valid.coverage().is_empty());
-        // The scaffold verdict is not parity evidence.
+        // Slice 1's version rows and nothing else (the per-tx entry points
+        // are still empty).
+        assert_eq!(valid.coverage().len(), 3);
+        assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
+        // Not parity evidence until every row has landed.
         assert!(!valid.coverage().is_complete_for(&RuleSet::GENESIS));
     });
 }
@@ -53,7 +56,7 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
 
     MockChain::default().with_view(|view| {
         let valid = infallible(validate(input, &view, &RuleSet::GENESIS))
-            .expect("zero rules refuse nothing");
+            .expect("the fixture satisfies every landed rule");
         let block = valid.block();
         assert_eq!(block.hash(), expected_hash);
         assert_eq!(block.block(), &expected_block);
@@ -70,7 +73,7 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
 fn a_block_with_no_listed_transactions_passes() {
     MockChain::default().with_view(|view| {
         let valid = infallible(validate(candidate(Vec::new()), &view, &RuleSet::GENESIS))
-            .expect("zero rules refuse nothing");
+            .expect("the fixture satisfies every landed rule");
         assert!(valid.block().transactions().is_empty());
     });
 }

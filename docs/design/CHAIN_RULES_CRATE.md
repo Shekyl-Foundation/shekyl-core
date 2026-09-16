@@ -57,7 +57,7 @@ is a hope; none of these is.
 | G6 | **Coverage is carried, not declared.** Every `ChainValid` carries `RuleCoverage` (rows actually evaluated) and the `RuleSetId` it was checked under. With zero rules, coverage is empty and `is_complete_for` is `false`. Mint additionally requires `covers_landed` — every *implemented* row the rule set enforces is in coverage — so a forgotten `validate` call cannot produce the token during porting. | Struct fields, set only by `validate`; `ChainValid::mint` panics if `covers_landed` is false; unit tests pin empty/`is_complete_for`/`covers_landed`. |
 | G7 | **The flag partitions first — by type.** Consensus rows and policy rows are **sibling enums** (`CenRow`, `PolicyRow`); a policy row cannot be inserted into a `RuleCoverage`, and `RuleSet` cannot name a `PolicyRow`. `implemented / enforced` and `ratified / enforced` are computed per flag; `E = rows of that flag − bucket 3`; both numbers always printed together with the definition of `E`. | Two enums, two `Coverage<R>` instantiations, two denominators (round-1 ruling Q4); `scripts/ci/check_chain_rules_coverage.py` (§6). |
 | G8 | **Bijection registry ↔ census.** Every enforced census row (bucket ≠ 3) has exactly one entry in the enum of its flag; no entry lacks a row; bucket-3 rows are absent. | The same gate (§6.2); rule 47 subject assertions and `--selftest`. |
-| G9 | **`implemented` is a compile-checked claim.** An entry marked `implemented(path)` names a rule function; a stale path is a **compile error**, and the gate reads the same `census_rows!` invocations the compiler compiled. The pin is `use path as _`, not `let _ = path`, so a generic `fn<'id, V: ChainView<'id>>(...)` compiles (E0283 otherwise). Runtime half: `covers_landed` at mint (G6). | Macro emits `use $path as _;` (§5.2); mint panic; unit test pins the generic form. |
+| G9 | **`implemented` is a compile-checked claim — of existence *and* identity.** An entry marked `implemented(path)` names a rule **type** (`rules::Rule`, one unit struct per row — slice 1, SCW-18; *records-was:* increment 1 wrote "names a rule function" and pinned existence only); a stale path is a **compile error**, and a type bound to another row's `ROW` is a **compile error** (`const _: () = assert!(matches!(<T as Bound<Name>>::ROW, Name::Var))`, forced red once at PR #762: `E0080 … bound to a different census row (SCW-18)`). The gate reads the same `census_rows!` invocations the compiler compiled. Runtime half: `covers_landed` at mint (G6). | Macro emits `use $path as _;` (§5.2); mint panic; unit test pins the generic form. |
 | G10 | **No pre-provisioning.** No `PoolView` (E5's), no fork version on `ChainView` (ruling Q7), no `Canonical`/codec impl for `RuleCoverage` (the store's, at S-CHAIN-W under rule 42), no second verdict type, no view method without a census row that reads it (Q3 ruling). | This document's API list is exhaustive; anything not in §4 is not in the crate. |
 | G11 | **Absence is matched, never propagated.** A by-height lookup returns `AtHeight<T>` — `Recorded(T)` or `AboveTip` — not `Option<T>`. There is no `?`, `map`, `unwrap_or_*`, or `is_none_or` on it: a rule that reaches `AboveTip` writes its refusal at that arm. A substrate that cannot answer surfaces as `V::Fault`, a different thing from absence (§4.3). | `AtHeight<T>` has no combinator surface and no `Default`; `CurveTreeRoot`/`RecordedBlock` have no `Default`. |
 | G12 | **Hygiene.** `#![deny(unsafe_code)]`; no `println!`/`eprintln!`/`dbg!` outside `#[cfg(test)]`; `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean. | Crate attribute; `build.yml`'s debug-macro lint; rule 45. |
@@ -531,7 +531,10 @@ rule, locus }))` at the site that judged — the row is named where the decision
 is made. `validate` calls `tx_form` then `tx_against` for the miner tx and each
 listed tx, re-homing a `Locus::Tx { slot: Lone }` / `Locus::Input { slot: Lone,
 .. }` to the real `TxSlot`, unions the coverages, and mints the `ChainValid`.
-With zero rules all three return `Ok(Ok(..))` with `RuleCoverage::EMPTY`.
+Block-level rules run first, in census order, each through `rules::run`
+(the only writer of block coverage — inserts `R::ROW` iff `R` passed); the
+first refusal is the verdict. Slice 1 landed B1/B2/B7 there; `tx_form` /
+`tx_against` are still empty and return `RuleCoverage::EMPTY` until 4.H/4.I.
 
 ---
 
@@ -576,11 +579,15 @@ comments between entries. Entries are in census §4 order restricted to the flag
 - inherent `ALL`, `as_str` (`concat!("CEN-", stringify!($var))`), `flag`
   (the header flag), `status`, `index` (`self as u8`); `Display`; the `Row`
   impl delegating to them; the sealed-trait impl;
-- the **G9 pin**: `$( use $path as _; )+` — one `use path as _` per
-  `implemented(path)`. A path that does not resolve is a compile error.
-  `use` names the item without instantiating it, so a generic
-  `fn<'id, V: ChainView<'id>>(...)` compiles (`let _ = path` is E0283 on
-  that shape). The gate reads the same braces the compiler did.
+- the **two pins** per `implemented(path)` (slice 1 shape, PR #762): the
+  **G9 pin** `use $path as _;` — a path that does not resolve is a compile
+  error (`use` names the item without instantiating it) — and the **SCW-18
+  pin** `const _: () = assert!(matches!(<$path as rules::Bound<$name>>::ROW,
+  $name::$var), …)` — a type bound to another row is a compile error.
+  `Bound<R>` is the registry-generic face of `rules::Rule` (every `Rule` is
+  `Bound<CenRow>`; E5's policy rules will be `Bound<PolicyRow>`), so the one
+  macro serves both enums. The gate reads the same braces the compiler did;
+  its entry grammar is unchanged (a type path is a `rust::path`).
 
 ### 5.3 How the gate reads it
 
@@ -652,10 +659,12 @@ policy:    implemented I / enforced E   ratified R / enforced E   (E = P-rows �
 
 `I` = entries of that registry with status `implemented`; `E` = enforced rows
 of that flag from the census; `R` = census rows of that flag in bucket 1 or 2.
-Expected at this increment (verified with `check_drs_e6_partition.py --describe`
-against the census in this worktree, not copied from the handoff):
-`consensus: implemented 0 / enforced 153   ratified 126 / enforced 153` and
-`policy:    implemented 0 / enforced 9     ratified 5 / enforced 9`.
+At increment 1 (records-was, verified with `check_drs_e6_partition.py
+--describe` against the census in that worktree): `consensus: implemented 0 /
+enforced 153   ratified 126 / enforced 153` and `policy: implemented 0 /
+enforced 9     ratified 5 / enforced 9`. **After slice 1's first rules (PR
+#762):** `consensus: implemented 3 / enforced 153` (4.B `3/7`), policy
+unchanged; the figure moves with each slice and the landing PR quotes its own.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.
@@ -856,13 +865,15 @@ second lines behind the belt and the type shapes, not gates.
 
 ### 8.5 `validate` / `tx_form` / `tx_against` (`validate_tests.rs`)
 
-- zero rules: `Ok(Ok(v))`, `v.coverage().is_empty()`, `v.rule_set_id() ==
-  GENESIS.id()`.
+- a well-formed candidate: `Ok(Ok(v))`, `v.coverage()` is exactly the landed
+  block rows (`{B1, B2, B7}` after PR #762 — `covers_landed` holds,
+  `is_complete_for` does not), `v.rule_set_id() == GENESIS.id()`. *Records-was:*
+  increment 1 asserted empty coverage here.
 - payload: `block().hash() == BlockHash::from_bytes(candidate.block.hash())`;
   `transactions()[i].0 == TxIdentity { hash, prunable_hash }` of `tx`; `miner_tx().0`
   likewise, with the coinbase's `prunable_hash` pinned to `keccak256("")` (bites: a
   pairing that hashes the wrong body, drops the miner tx, or conflates the two digests).
-- `tx_form` / `tx_against` with zero rules: `Ok(EMPTY)` / `Ok(Ok(EMPTY))`.
+- `tx_form` / `tx_against` before 4.H/4.I land: `Ok(EMPTY)` / `Ok(Ok(EMPTY))`.
 - a mock whose `Fault` is a unit type and whose `block_at` faults: `validate`
   returns `Err(fault)`, not a verdict (bites: a fault swallowed into a pass or a
   refusal). Increment 1 has no rule that reads the view, so this is exercised
