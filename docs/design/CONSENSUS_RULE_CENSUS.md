@@ -465,7 +465,7 @@ Enforced at pool admission (`tx_pool.cpp:304` → `Blockchain::check_tx_inputs`)
 | CEN-I9 | `pseudoOuts` count == input count (regular spend; archival shapes use their spend-subset counts, CEN-H21/H22) | 3645–3654 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | RC-88 ⇒ merged |
 | CEN-I10 | `referenceBlock` must be an existing main-chain block | 4191–4198 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1a | RC-89 ⇒ merged |
 | CEN-I11 | `referenceBlock` age window: ≥ `FCMP_REFERENCE_BLOCK_MIN_AGE` (5) and ≤ `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) blocks old | 4200–4220 | C | 1 | spec | `config/consensus_constants.json`; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1 (MIN_AGE=5 reorg-margin rationale); value pin = Decision 14 (`docs/CHANGELOG.md` :26404–26407; `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` :69) | RC-90, RC-91 ⇒ merged. **No docs/design pin for the values** — the CHANGELOG Decision-14 entry is the ruling record (enforcement-status caveat carried from §8) |
-| CEN-I12 | The membership anchor is the curve-tree state **at chain height `ref_height`** — after `referenceBlock`'s parent connects, before `referenceBlock`'s own drain — a state property with two witnesses: the header's `curve_tree_root` (filled from that state at template time, `blockchain.cpp:2006`) and the node's per-height root record (key `ref_height`, post-add keying from the parent's connect, `blockchain_db.cpp:636`); the wallet's `drained_through = ref_height − 1` and the CT-2 KAT at 61 name the same state. The verifier reads its own computed record, never the header — all three `check_tx_inputs` arms do (`:3810`, `:3959`, `:4217` at `667817d47`, the re-review anchor; identical at `d9d27c752`, where the ruling first cited them) | 3810, 3959, 4217 (the three `get_curve_tree_root_at_height(ref_height)` reads at `667817d47`) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2 — **reconciled 2026-09-04**: split from its first commit — the pseudocode named the record, the prose narrated the header read the code performed until `292c00aff7` (2026-04-13) | Ruled 2026-09-04 (§7 #16): state, not claim. The in-code FAKECHAIN comment states a consequence, not the rationale — the two witnesses differ only where CEN-B5 is skipped (R9), so the choice is observable only in tests. CSR register re-reviewed at the merged sha `667817d47` and promoted CHECKED-CONFORMANT (2026-09-05, PR #622) |
+| CEN-I12 | The membership anchor is the curve-tree state **at chain height `ref_height`** — after `referenceBlock`'s parent connects, before `referenceBlock`'s own drain — a state property with two witnesses: the header's `curve_tree_root` (filled from that state at template time, `blockchain.cpp:2006`) and the node's per-height root record (key `ref_height`, post-add keying from the parent's connect, `blockchain_db.cpp:636`); the wallet's `drained_through = ref_height − 1` and the CT-2 KAT at 61 name the same state. The verifier reads its own computed record, never the header — all three `check_tx_inputs` arms do (`:3810`, `:3959`, `:4217` at `667817d47`, the re-review anchor; identical at `d9d27c752`, where the ruling first cited them) | 3810, 3959, 4217 (the three `get_curve_tree_root_at_height(ref_height)` reads at `667817d47`) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2 — **reconciled 2026-09-04**: split from its first commit — the pseudocode named the record, the prose narrated the header read the code performed until `292c00aff7` (2026-04-13) | Ruled 2026-09-04 (§7 #16): state, not claim. The in-code FAKECHAIN comment states a consequence, not the rationale — the two witnesses differ only where CEN-B5 is skipped (R9), so the choice is observable only in tests. CSR register re-reviewed at the merged sha `667817d47` and promoted CHECKED-CONFORMANT (2026-09-05, PR #622). **DIVERGENT 2026-09-15 at `0aeb67619` (§7 #21, S-CHAIN-W SCW-19):** the per-height record is written only when the drain grew the tree (`blockchain_db.cpp:639`), so keys `0..60` never exist, and the reader returns an all-zero root — the identity point after decode — for a missing key (`db_lmdb.cpp:9757`); `ref_height` is bounded by age only, so the gap is spender-selectable while `chain_height ≤ 160`. Fail-closed (valid spends rejected; forging against *O* is a DL break; no fork). Ruling owed on the C++; the Rust store reads the ratified state (SCW-19 **B**) |
 | CEN-I13 | `curve_trees_tree_depth` ∈ [1, current tree depth]; layers passed to verify are depth+1 | 4236–4244, 4291–4292 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2c; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-92 ⇒ merged. **Found, not ruled (§7 #16):** step 2b/2c's pseudocode says equality with the depth *at `referenceBlock`*; the code range-checks against the *current* depth, and the FFI binds the claimed depth to the proof (`proof.rs`: `proof.tree_depth != tree_depth` rejects; the root is deserialized at that layer count). Same internally-split shape as CEN-I12; the spec column still needs its own reconciliation |
 | CEN-I14 | The FCMP++ proof must be non-empty | 4246–4252 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | RC-93 ⇒ merged |
 | CEN-I15 | FCMP++ membership+spend-auth proof verifies in Rust (`shekyl_fcmp_verify`) over: proof bytes, all key images, all pseudoOuts, per-input PQC key scalars (`shekyl_fcmp_pqc_key_scalar` = `k = H_ℓ(hybrid_pubkey)`; the verifier derives `K = k·G_k` and the circuit opens the spent leaf's commitment `CM` to it — `PL-D3`, 2026-09-14; per-input derivation failure rejects), tree root, layers = depth+1, and the tx prefix hash | 4254–4314 (leaf hashes 4265–4274) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 4; [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md); PQC leaf KATs | RC-94, RC-95 ⇒ merged. **Inverse spot-check row.** Skippable on block connect only via the pool cache (CEN-M8) — load-bearing for D++ `hop` |
@@ -1120,6 +1120,65 @@ input, not fixes.
     surface-free rules; `ChainTip.connect` in `get_info`). Rule 21 reopeners
     in the ruling's §13: a store constraint a rule *cites* as its mechanism;
     one-live-write relaxed.
+
+21. **CEN-I12 is DIVERGENT on a spender-selectable input — the per-height
+    root record is sparse and the reader substitutes the identity point for
+    a missing key** (found 2026-09-15 by the S-CHAIN-W pre-flight, SCW-19,
+    C++ read at `dev` `0aeb67619`; register row flipped the same day).
+    **Premise, both halves verified.** (a) The record is written **only when
+    the drain grew the tree**: `blockchain_db.cpp:632` `new_output_count +=
+    drained_count` — *matured* leaves, not this block's outputs — and the
+    `store_curve_tree_root_at_height(prev_height + 1, …)` write at `:664`
+    sits inside `if (new_output_count > 0)` (`:639`). A block that matured
+    no leaf writes no row. With `CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW = 60`
+    the first coinbase leaf matures at height 60, so **keys `0..60` are
+    never written** on a chain with no spendable funds before that (key 0
+    by construction, keys `1..60` because nothing can mature), and every key
+    `≥ 61` exists (block *h* ≥ 60 drains block *h−60*'s coinbase). (b) The
+    reader zero-initialises `std::array<uint8_t, 32> root{}` and returns it
+    **silently** on `MDB_NOTFOUND` (`db_lmdb.cpp:9745`–`:9760`) — no error,
+    no sentinel. **Consumers:** the three `check_tx_inputs` arms
+    (`blockchain.cpp:3767`, `:3916`, `:4178`) and the RPC submit path
+    (`daemon_submit_ffi.cpp:417`), all reading
+    `get_curve_tree_root_at_height(ref_height)`. **The constraint on
+    `ref_height` does not exclude a gap:** `block_exists(rv.referenceBlock)`
+    plus `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` / `MAX_AGE = 100`
+    (`blockchain.cpp:3748`–`:3763`, `cryptonote_config.h:329`–`:331`) — a
+    row-existence check is nowhere. So while `chain_height ≤ 160` a spender
+    can name a `ref_height` in `0..60` and the verifier anchors against
+    zeros. **What zeros are:** `deserialize_tree_root` (`shekyl-fcmp/src/proof.rs:1184`)
+    decodes them through `helioselene`'s `from_bytes`, which maps `x = 0` to
+    the **identity point** with `y := 1` (`point.rs:373`–`:409`) on both
+    curves — so the proof is verified against root = *O*, not rejected at
+    decode. **Direction: fail-closed.** A legitimate proof against the real
+    state is rejected (its root ≠ *O*); a forged proof against *O* needs
+    `Σ cᵢ·Gᵢ = −HASH_INIT`, a discrete-log break. Every node computes the
+    same gap set, so the defect cannot fork the chain; it deterministically
+    rejects valid spends that reference a pre-maturity height, in the first
+    ~160 blocks of any chain and **permanently on FAKECHAIN/regtest chains
+    shorter than that** (an e2e that references a height `≤ 60` on such a
+    chain is rejected by this path, not by the proof). **Why it is a divergence and
+    not a storage detail:** §7 #16 ruled the anchor a **state** — the tree
+    at chain height `ref_height` — and a state exists at every height
+    whether or not the tree changed; the record's sparsity is the
+    implementation's, and the reader's substitution of *O* for "no row"
+    is the implementation disagreeing with the ratified state at exactly
+    those heights. The register's CHECKED-CONFORMANT (2026-09-05) rested on
+    "record key `ref_height` holds the state after blocks `0..ref_height−1`
+    connected", which is true when the key exists and was not checked for
+    when it does not. **Disposition:** CSR register row → **DIVERGENT** at
+    `0aeb67619` with this citation (CSR-3a: identity with the C++ read
+    FAILS — a store that returns *O* for a gap height reproduces the defect;
+    the pass condition is the ratified state, the latest root recorded at a
+    key `≤ ref_height`, and `HASH_INIT` when none is). The Rust store's
+    `root_at` implements the pass condition (S-CHAIN-W SCW-19 ruled **B**
+    2026-09-15: byte-parity on the write — the row is written iff the tree
+    grew — and the ratified state on the read). **Ruling owed on the live
+    C++** (FIX — write the row at every connect, or fall back to the last
+    row `≤ h` in the reader — versus carry as a recorded divergence until
+    cutover); either way the register row is the record, not a design-doc
+    note. Rule 21 reopener: none needed — the row closes when a sha
+    containing the fix is re-reviewed.
 
 ---
 
