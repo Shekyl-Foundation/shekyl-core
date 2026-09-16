@@ -868,7 +868,10 @@ exercised through its public signature. **Every evidential run — these tests a
 DRS-E2 harness — starts from a fresh file** (SCW-17: the provenance floor is
 monotone per file; a reused datadir is non-evidential from its first
 partial-coverage or pass-through connect, and the stamp is the only place
-that says so). **DRS-TLB is not a blocker**: it is the
+that says so). **Fixtures never reference genesis** (SCW-19's walk: key 0 has
+no root row in either store; on the C++ side the spend fails inside proof
+verification with no mention of the missing row — `ARCHIVAL_FORCING_CORPUS.md`
+§7 carries the line and the `tip ≥ 67` arithmetic). **DRS-TLB is not a blocker**: it is the
 better fixture source and will replace hand-built candidates when it lands
 (falsify by: `rust/shekyl-test-ledger` exists on `dev`).
 

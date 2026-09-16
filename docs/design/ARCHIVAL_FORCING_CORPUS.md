@@ -477,6 +477,20 @@ Pop depth is a **scoped parameter**, not a default: the reorg segments must pop
 deeper than one epoch to reach `revert_archival_epoch_close_at_height`, and
 shallower than the retention horizon per the ratified refusal.
 
+**Never use genesis as a `referenceBlock`** (added 2026-09-15, CEN-I12's
+absent-key walk, `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1). `curve_tree_roots`
+is dense from key 1 but has **no row at key 0**; `get_curve_tree_root_at_height(0)`
+returns 32 zero bytes, which decode to the identity point, so a spend whose
+`referenceBlock` is genesis is rejected inside `shekyl_fcmp_verify` at
+`blockchain.cpp:3767` / `:3916` / `:4178` with a **proof-verification error that
+says nothing about a missing root row**. No honest wallet does this (the tree at
+height 0 is empty), so it only bites a hand-built fixture — and it costs an
+afternoon when it does. The only chain-length constraint that follows is the one
+the maturity window already imposes: the first coinbase (height 1) matures at
+`1 + 60`, its leaf is in the state at `62`, and `ref_height ≤ tip − 5`, so the
+first FCMP spend on a fresh regtest chain is possible from `tip ≥ 67` — a
+`generateblocks` call, not a design constraint.
+
 ---
 
 ## 8. What this round does and does not build
