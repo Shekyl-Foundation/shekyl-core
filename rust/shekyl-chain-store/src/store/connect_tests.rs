@@ -198,7 +198,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             weight: 1_000,
             cumulative_difficulty: 100,
             hash: block_hash,
-            cumulative_rct_outputs: 1,
+            rct_outputs: 1,
             long_term_weight: 900,
         }
     );
@@ -448,7 +448,10 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
             .value(),
     )
     .expect("decodes");
-    assert_eq!(info1.cumulative_rct_outputs, 4, "1 + (1 + 2)");
+    assert_eq!(
+        info1.rct_outputs, 3,
+        "this block's outputs only (1 + 2): per-block, not cumulative (CEN-L15)"
+    );
     assert_eq!(
         snap.open_table(BLOCK_BURN)
             .expect("t")
@@ -506,7 +509,10 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
         )
     };
     let after_genesis = counts(&store);
-    assert_eq!(after_genesis, (1, 1, 1, 1, 0, Some(3)));
+    // Genesis was handed `burned = 3` and recorded none: the burn phase is
+    // guarded `h > 0 && burned > 0` as a whole (`blockchain.cpp:6148`), so
+    // there is no `total_burned` cell yet.
+    assert_eq!(after_genesis, (1, 1, 1, 1, 0, None));
 
     let b1 = candidate(1, genesis.hash(), vec![spend(0x5e, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
@@ -514,7 +520,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
         Ok(batch.connect(judge(&view, b1)?, facts(1, 4), GENESIS_ID)?)
     });
     out.expect("block 1 connects");
-    assert_eq!(counts(&store), (2, 3, 3, 2, 1, Some(7)));
+    assert_eq!(counts(&store), (2, 3, 3, 2, 1, Some(4)));
 
     let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
     assert!(matches!(popped, Ok(Replayed::Entries(_))));
@@ -561,6 +567,16 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
     });
     expect_row(&out, StoreInvariant::TipMismatch);
     assert_eq!(StoreInvariant::TipMismatch.row(), 2);
+    // The belt fired before any row was journaled, and the writer still
+    // halted at the connecting height: the height is noted before the
+    // belts run, not by the recording (§3.6.2; PR #757 review).
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row: StoreInvariant::TipMismatch,
+        }
+    );
     cleanup(&path);
 }
 
@@ -645,6 +661,9 @@ fn the_same_transaction_in_two_blocks_is_si3() {
 fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
     let path = tmp("connect-fold");
     let store = ChainStore::create(&path, EPOCH).expect("create");
+    // Genesis records no burn (the `h > 0` guard), so the fold that must
+    // overflow is block 1's.
+    let (_, genesis) = connect_genesis(&store, 0);
     let seeded: Result<(), TestErr> = store.write(|batch| {
         batch.upsert_property::<TotalBurnedCell>(&u64::MAX)?;
         Ok(())
@@ -653,8 +672,8 @@ fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(
-            judge(&view, candidate(0, [0; 32], Vec::new()))?,
-            facts(0, 1),
+            judge(&view, candidate(1, genesis.hash(), Vec::new()))?,
+            facts(1, 1),
             GENESIS_ID,
         )?)
     });

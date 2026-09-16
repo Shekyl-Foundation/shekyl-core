@@ -82,9 +82,9 @@ use crate::lmdb_order::Hash32;
 use crate::schema::{self, TableShape};
 
 use super::{
-    BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, PassedThroughFacts, ProbeCell,
-    PropertyCell, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices, UndoEntry,
-    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, PassedThroughFacts,
+    ProbeCell, PropertyCell, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices,
+    UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::schema::TableOrdinal;
 use shekyl_chain_rules::CenRow;
@@ -185,8 +185,9 @@ impl Fixtures for FamilySet {
 impl Fixtures for UndoLog {
     fn fixtures() -> Vec<(&'static str, Self)> {
         // Ordinals as literals: the snapshot pins the *row layout* (tag
-        // bytes, u32 LE lengths, has_prior flag), and must not move when a
-        // table is appended to the catalogue. Every variant appears, with a
+        // bytes, u32 LE lengths, has_prior flag, the 32-byte post-image
+        // digest on keyed entries), and must not move when a table is
+        // appended to the catalogue. Every variant appears, with a
         // multi-byte key so the length prefix is visible in the hex.
         vec![
             ("empty", UndoLog::default()),
@@ -195,6 +196,7 @@ impl Fixtures for UndoLog {
                 UndoLog(vec![UndoEntry::Inserted {
                     table: TableOrdinal::from_index(0),
                     key: Box::new(1u64.to_le_bytes()),
+                    post: post_image(&[0xb1, 0x0c]),
                 }]),
             ),
             (
@@ -211,6 +213,7 @@ impl Fixtures for UndoLog {
                     table: TableOrdinal::from_index(19),
                     key: Box::from(*b"total_burned"),
                     prior: Some(Box::new(7u64.to_le_bytes())),
+                    post: post_image(&9u64.to_le_bytes()),
                 }]),
             ),
             (
@@ -219,6 +222,7 @@ impl Fixtures for UndoLog {
                     table: TableOrdinal::from_index(19),
                     key: Box::from(*b"k"),
                     prior: None,
+                    post: post_image(&[1]),
                 }]),
             ),
             (
@@ -227,11 +231,13 @@ impl Fixtures for UndoLog {
                     UndoEntry::Inserted {
                         table: TableOrdinal::from_index(1),
                         key: Box::new([0x11; 32]),
+                        post: post_image(&3u64.to_le_bytes()),
                     },
                     UndoEntry::Replaced {
                         table: TableOrdinal::from_index(18),
                         key: Box::new(2u64.to_le_bytes()),
                         prior: Some(Box::new([1])),
+                        post: post_image(&[2]),
                     },
                     UndoEntry::MultiInserted {
                         table: TableOrdinal::from_index(12),
@@ -308,7 +314,7 @@ impl Fixtures for BlockInfo {
                     weight: 0,
                     cumulative_difficulty: 1,
                     hash: Hash32::from_bytes([0; 32]),
-                    cumulative_rct_outputs: 0,
+                    rct_outputs: 0,
                     long_term_weight: 0,
                 },
             ),
@@ -322,7 +328,7 @@ impl Fixtures for BlockInfo {
                     weight: 3,
                     cumulative_difficulty: (5u128 << 64) | 4,
                     hash: Hash32::from_bytes([0xab; 32]),
-                    cumulative_rct_outputs: 6,
+                    rct_outputs: 6,
                     long_term_weight: 7,
                 },
             ),

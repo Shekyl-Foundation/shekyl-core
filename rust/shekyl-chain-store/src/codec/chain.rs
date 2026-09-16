@@ -59,10 +59,14 @@ impl Canonical for CurveRoot {
 
 /// `block_info[height]` — LMDB `mdb_block_info_4` minus `bi_height`, 88 bytes.
 ///
-/// Every field but `hash` and `cumulative_rct_outputs` is a consensus-visible
-/// value the store records and never derives (C2-R8 Q4; `ConnectFacts`).
-/// `cumulative_rct_outputs` is a storage index — the output count through
-/// this block, like `tx_id` — that the store does maintain.
+/// Every field but `hash` and `rct_outputs` is a consensus-visible value the
+/// store records and never derives (C2-R8 Q4; `ConnectFacts`). `rct_outputs`
+/// is a storage count the store does maintain — **this block's** RCT output
+/// count, not a running total: LMDB's `bi_cum_rct` is set to `num_rct_outs`
+/// (`db_lmdb.cpp:1006`) and the `major_version >= 4` arm that would add the
+/// parent's value is the dead Monero-v4 dispatch CEN-L15 rules "delete, do
+/// not port" (live major is 1). The field name follows what the bytes hold;
+/// a port that accumulated would diverge from LMDB at height 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockInfo {
     /// `bi_timestamp`.
@@ -75,8 +79,9 @@ pub struct BlockInfo {
     pub cumulative_difficulty: u128,
     /// `bi_hash` — the block's identity (CEN-B6).
     pub hash: Hash32,
-    /// `bi_cum_rct` — outputs recorded through this block.
-    pub cumulative_rct_outputs: u64,
+    /// `bi_cum_rct` — **this block's** RCT output count (per-block at this
+    /// pin, CEN-L15; the LMDB field name is a misnomer).
+    pub rct_outputs: u64,
     /// `bi_long_term_block_weight`.
     pub long_term_weight: u64,
 }
@@ -92,7 +97,7 @@ impl Canonical for BlockInfo {
         // `bi_diff_lo` then `bi_diff_hi`: a little-endian u128.
         out.extend_from_slice(&self.cumulative_difficulty.to_le_bytes());
         out.extend_from_slice(self.hash.as_bytes());
-        out.extend_from_slice(&self.cumulative_rct_outputs.to_le_bytes());
+        out.extend_from_slice(&self.rct_outputs.to_le_bytes());
         out.extend_from_slice(&self.long_term_weight.to_le_bytes());
     }
 
@@ -106,7 +111,7 @@ impl Canonical for BlockInfo {
                 b[24..40].try_into().expect("16-byte slice"),
             ),
             hash: Hash32::from_bytes(b[40..72].try_into().expect("32-byte slice")),
-            cumulative_rct_outputs: le_u64(&b[72..80]),
+            rct_outputs: le_u64(&b[72..80]),
             long_term_weight: le_u64(&b[80..88]),
         })
     }
@@ -268,7 +273,7 @@ mod tests {
             weight: 3,
             cumulative_difficulty: (5u128 << 64) | 4, // lo = 4, hi = 5
             hash: h(0xab),
-            cumulative_rct_outputs: 6,
+            rct_outputs: 6,
             long_term_weight: 7,
         };
         let bytes = info.encode();

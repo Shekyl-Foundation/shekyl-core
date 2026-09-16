@@ -20,11 +20,14 @@
 //!  2. transactions miner tx then listed → tx_indices, txs_*, tx_outputs,
 //!                  output_txs, output_amounts, spent_keys (SI-3, SI-9, SI-1)
 //!  3. [E3 hook]    pending leaves → drain → grow → segment freeze
-//!  4. root         curve_tree_roots[h + 1] = facts.root_after (SI-4)
+//!  4. root         curve_tree_roots[h + 1] = facts.root_after (SI-4) — every
+//!                  connect, grown or not (the C++ write at :663–:664 is
+//!                  outside the growth gate; SCW-19)
 //!  5. [E4 hook]    attestation witness
 //!  6. block        blocks[h], block_heights[hash], block_info[h] (SI-2)
 //!  7. rule set     hf_versions[h] = in_force (the CEN-B3 belt)
-//!  8. burn         block_burn[h] if nonzero; total_burned += burned (SI-8)
+//!  8. burn         only if h > 0 && burned > 0 (blockchain.cpp:6148):
+//!                  block_burn[h]; total_burned += burned (SI-8)
 //!  9. [E4 hook]    accrual row, slash, epoch close
 //! 10. journal      undo_log[h] (SI-6)
 //! ```
@@ -151,11 +154,17 @@ pub struct ConnectFacts {
     pub cumulative_difficulty: Fact<u128>,
     /// Coins generated through this block (`already_generated_coins`).
     pub coins_generated: Fact<u64>,
-    /// This block's destroyed amount. `0` writes no `block_burn` row —
-    /// LMDB's absent-reads-as-0 convention, kept so the digest domain
-    /// matches.
+    /// This block's destroyed amount. `0` (and genesis, whatever its amount)
+    /// writes no `block_burn` row and no `total_burned` fold — LMDB's
+    /// absent-reads-as-0 convention and the `blockchain.cpp:6148` guard,
+    /// kept so the digest domain and the undo row match.
     pub burned: Fact<u64>,
-    /// The tree root **after** this block — `curve_tree_roots[h + 1]` (SI-4).
+    /// The tree root **after this block's drain** — the state the *next*
+    /// header must carry (CEN-B5) and a spend referencing `h + 1` anchors to
+    /// (CEN-I12); recorded at `curve_tree_roots[h + 1]` on every connect
+    /// (SI-4: one row per connect), grown or not. Not this block's own
+    /// header root: that is the state *before* its drain, already at key `h`
+    /// from the parent's connect (SCW-19).
     pub root_after: Fact<CurveTreeRoot>,
 }
 
@@ -272,10 +281,16 @@ impl<'id> WriteBatch<'_, 'id> {
         in_force: RuleSetId,
     ) -> Result<Connected, StoreError> {
         // ---- 1. belts -------------------------------------------------
-        let tip = self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?;
-        let (height, parent_cum_rct) = match tip.last()? {
-            None => (0u64, 0u64),
-            Some((h, info)) => {
+        // The connecting height is known from the tip's key alone and is
+        // noted **before** any belt can fire: a violation here must halt
+        // the writer at this height (§3.6.2), and the halt reads the noted
+        // height — a belt that poisoned first would leave the writer live.
+        let height = {
+            let tip = self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?;
+            let last = tip.last()?;
+            let height = last.as_ref().map_or(0, |(h, _)| h.value() + 1);
+            self.journal().note_height(height);
+            if let Some((_, info)) = last {
                 let info = BlockInfo::decode(info.value()).map_err(|cause| {
                     self.poison().arm(StoreInvariant::CellCorrupt {
                         key: "block_info",
@@ -285,10 +300,9 @@ impl<'id> WriteBatch<'_, 'id> {
                 if valid.block().header().previous != info.hash.to_bytes() {
                     return Err(self.poison().arm(StoreInvariant::TipMismatch));
                 }
-                (h.value() + 1, info.cumulative_rct_outputs)
             }
+            height
         };
-        drop(tip);
         if valid.rule_set_id() != in_force {
             return Err(StoreCannot::RuleSetNotInForce {
                 height,
@@ -304,6 +318,9 @@ impl<'id> WriteBatch<'_, 'id> {
         // lands with the rows or not at all; header cells are engine-local
         // and are not journaled (a popped block's verdict is still evidence
         // the file once accepted it).
+        // An SI-7 from either cell is routed through the poison latch so
+        // `complete` halts the writer for it like every other violation a
+        // connect observes (§3.6.2).
         header::widen_gaps(
             self.txn(),
             CoverageGaps::of(
@@ -311,8 +328,10 @@ impl<'id> WriteBatch<'_, 'id> {
                     .enforced()
                     .filter(|row| !valid.coverage().contains(*row)),
             ),
-        )?;
-        header::widen_passed_through(self.txn(), facts.passed_through_set())?;
+        )
+        .map_err(|e| self.arm_if_invariant(e))?;
+        header::widen_passed_through(self.txn(), facts.passed_through_set())
+            .map_err(|e| self.arm_if_invariant(e))?;
 
         let block = valid.block();
         let recording = self.record_undo(height);
@@ -347,12 +366,10 @@ impl<'id> WriteBatch<'_, 'id> {
             weight: facts.weight.value,
             cumulative_difficulty: facts.cumulative_difficulty.value,
             hash,
-            cumulative_rct_outputs: parent_cum_rct
-                .checked_add(rct_outputs)
-                .ok_or(StoreInvariant::FoldOverflow {
-                    cell: "block_info.cumulative_rct_outputs",
-                })
-                .map_err(|row| self.poison().arm(row))?,
+            // Per-block, not accumulated: LMDB's `bi_cum_rct` is this block's
+            // count and the accumulation arm is dead (CEN-L15) — see
+            // `BlockInfo::rct_outputs`.
+            rct_outputs,
             long_term_weight: facts.long_term_weight.value,
         };
         self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?
@@ -363,8 +380,12 @@ impl<'id> WriteBatch<'_, 'id> {
             .insert(height, &in_force.to_raw())?;
 
         // ---- 8. burn ---------------------------------------------------
+        // Conditional as a whole, exactly as `blockchain.cpp:6148`
+        // (`new_height > 0 && block_burn_amount > 0`): a zero-burn block and
+        // genesis write neither row nor a `total_burned` pre-image, so the
+        // declared write set and the undo row are the C++'s.
         let burned = facts.burned.value;
-        if burned > 0 {
+        if height > 0 && burned > 0 {
             self.open_insert_table(BLOCK_BURN, StoreInvariant::TipMismatch)?
                 .insert(height, &burned)?;
             let total = self
@@ -389,7 +410,7 @@ impl<'id> WriteBatch<'_, 'id> {
 
     /// One transaction's rows (`add_transaction` / `add_transaction_data` /
     /// `add_output` / `add_tx_amount_output_indices`). Returns how many of
-    /// its outputs count toward `block_info.cumulative_rct_outputs`.
+    /// its outputs count toward `block_info.rct_outputs`.
     fn record_tx(
         &self,
         height: u64,

@@ -13,7 +13,7 @@ use redb::ReadableTableMetadata;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::undo::Replayed;
 use super::*;
-use crate::codec::{Canonical, ProbeCell, PropertyCell, UndoEntry, UndoLog};
+use crate::codec::{post_image, Canonical, ProbeCell, PropertyCell, UndoEntry, UndoLog};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
     ordinal_of, BLOCKS, BLOCK_HEIGHTS, HF_VERSIONS, OUTPUT_AMOUNTS, PROPERTIES, UNDO_LOG,
@@ -74,20 +74,24 @@ fn every_verb_journals_its_pre_image_in_write_order() {
             UndoEntry::Inserted {
                 table: ord("blocks"),
                 key: Box::new(1u64.to_le_bytes()),
+                post: post_image(&[0xb0, 1]),
             },
             UndoEntry::Inserted {
                 table: ord("block_heights"),
                 key: Box::new([1u8; 32]),
+                post: post_image(&1u64.to_le_bytes()),
             },
             UndoEntry::Replaced {
                 table: ord("hf_versions"),
                 key: Box::new(0u64.to_le_bytes()),
                 prior: Some(Box::new([7])),
+                post: post_image(&[1]),
             },
             UndoEntry::Replaced {
                 table: ord("hf_versions"),
                 key: Box::new(1u64.to_le_bytes()),
                 prior: None,
+                post: post_image(&[1]),
             },
             UndoEntry::MultiInserted {
                 table: ord("output_amounts"),
@@ -98,6 +102,7 @@ fn every_verb_journals_its_pre_image_in_write_order() {
                 table: ord("properties"),
                 key: Box::from(ProbeCell::KEY.as_bytes()),
                 prior: None,
+                post: post_image(&101u64.encode()),
             },
         ]
     );
@@ -318,11 +323,13 @@ fn an_entry_whose_target_is_gone_is_si6() {
         UndoEntry::Inserted {
             table: ordinal_of("blocks").expect("catalogued"),
             key: Box::new(77u64.to_le_bytes()), // never written
+            post: post_image(&[0]),
         },
         UndoEntry::Replaced {
             table: ordinal_of("hf_versions").expect("catalogued"),
             key: Box::new(3u64.to_le_bytes()), // never written either
             prior: Some(Box::new([1])),
+            post: post_image(&[2]),
         },
     ]);
     plant_row(&store, 9, &row.encode());
@@ -354,6 +361,7 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     let no_such_table = UndoLog(vec![UndoEntry::Inserted {
         table: crate::schema::TableOrdinal::from_index(9_999),
         key: Box::new([0; 8]),
+        post: post_image(&[0]),
     }]);
     plant_row(&store, 2, &no_such_table.encode());
     let msg = replay_err(&store, 2);
@@ -377,6 +385,7 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     let wrong_width = UndoLog(vec![UndoEntry::Inserted {
         table: ordinal_of("blocks").expect("catalogued"),
         key: Box::new([0; 3]), // `blocks` is keyed by u64: from_bytes would panic
+        post: post_image(&[0]),
     }]);
     plant_row(&store, 4, &wrong_width.encode());
     let msg = replay_err(&store, 4);
@@ -386,6 +395,7 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
         table: ordinal_of("properties").expect("catalogued"),
         key: Box::new([0xff, 0xfe]),
         prior: None,
+        post: post_image(&[0]),
     }]);
     plant_row(&store, 5, &not_utf8.encode());
     let msg = replay_err(&store, 5);

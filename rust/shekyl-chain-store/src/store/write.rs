@@ -72,7 +72,7 @@ use redb::{
 };
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
-use crate::codec::{ChainState, PropertyCell, UndoEntry};
+use crate::codec::{post_image, Canonical, ChainState, PropertyCell, UndoEntry};
 use crate::schema::{self, PROPERTIES};
 
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
@@ -189,6 +189,19 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// The batch's pop journal, for `pop` to note the height it works at.
     pub(super) const fn journal(&self) -> &Journal {
         &self.journal
+    }
+
+    /// Route an error that may be an invariant violation through the fatal
+    /// latch: a [`StoreError::InvariantViolated`] arms the poison (so
+    /// `complete` halts the writer for it, §3.6.2) and is returned; any
+    /// other error passes through unchanged. For the paths that read a
+    /// typed cell without going through a handle that arms on its own
+    /// (`header::widen_*`).
+    pub(super) fn arm_if_invariant(&self, e: StoreError) -> StoreError {
+        match e {
+            StoreError::InvariantViolated(row) => self.poison.arm(row),
+            other => other,
+        }
     }
 
     /// Project this batch as the [`ChainView`](shekyl_chain_rules::ChainView)
@@ -414,11 +427,13 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         };
         header::put::<C>(self.txn(), value)?;
         if let Some(prior) = prior {
+            let post = post_image(&value.encode());
             self.handles(PROPERTIES.name())
                 .journal(|table| UndoEntry::Replaced {
                     table,
                     key: Box::from(C::KEY.as_bytes()),
                     prior,
+                    post,
                 });
         }
         Ok(())
@@ -460,27 +475,33 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// Poison wins on both arms: a violation seen through the batch is
     /// returned as `E` (via `From<StoreError>`) even when the closure
     /// returned a different `Err`, and the transaction aborts on drop.
-    /// Only an unpoisoned `Ok` commits.
+    /// Only an unpoisoned `Ok` commits. An `Err` from the closure is
+    /// returned **as the closure raised it**: a connect that refused a
+    /// malformed block after it had started journaling leaves an unsealed
+    /// recording behind, and that is the refusal's consequence, not a
+    /// second error to report in its place — the unsealed refusal
+    /// ([`StoreCannot::UndoUnsealed`]) is for a closure that swallowed the
+    /// failure and returned `Ok`.
     pub(super) fn complete<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
         if let Some(row) = self.poison.armed() {
-            // A violation on a connect or pop halts the writer (§3.6.2): the
-            // file's coherence is in doubt at that height and every later
-            // write would build on it. A violation in a batch that did
-            // neither (a table-level test probe) aborts this batch only.
-            if let Some(at_height) = self.journal.height_hint() {
-                self.shared.halt(at_height, row);
-            }
+            self.halt_for(row);
             return Err(StoreError::from(row).into());
         }
+        let value = outcome?;
         if let Some(height) = self.journal.abandoned() {
             return Err(StoreError::from(undo::unsealed(height)).into());
         }
-        match outcome {
-            Ok(value) => {
-                self.commit()?;
-                Ok(value)
-            }
-            Err(e) => Err(e),
+        self.commit()?;
+        Ok(value)
+    }
+
+    /// A violation on a connect or pop halts the writer (§3.6.2): the
+    /// file's coherence is in doubt at that height and every later write
+    /// would build on it. A violation in a batch that did neither (a
+    /// table-level test probe) aborts this batch only.
+    fn halt_for(&self, row: StoreInvariant) {
+        if let Some(at_height) = self.journal.height_hint() {
+            self.shared.halt(at_height, row);
         }
     }
 
@@ -509,7 +530,15 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             .txn
             .take()
             .expect("WriteBatch commit runs once; the Option is Some until then");
-        let provenance = header::widen(&txn, self.apply_policy)?;
+        // The commit-time widen reads a typed cell; an SI-7 here is a
+        // violation this batch observed and halts the writer like one seen
+        // inside the closure.
+        let provenance = header::widen(&txn, self.apply_policy).map_err(|e| {
+            if let StoreError::InvariantViolated(row) = e {
+                self.halt_for(row);
+            }
+            e
+        })?;
         // The file is tainted when the engine commits; the mirror, when
         // `publish` assigns it. `Shared::publish` holds the mirror's write
         // lock across both, so `provenance()` cannot observe one without the

@@ -69,7 +69,10 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
         let snap = store.begin_read().expect("read");
         snap.get_property::<TotalBurnedCell>().expect("cell")
     };
-    assert_eq!(burned_after_three, Some(9));
+    // Three blocks each handed `burned = 3`; genesis records none (the
+    // `h > 0` half of the C++ guard, `blockchain.cpp:6148`), so the fold is
+    // two blocks' worth.
+    assert_eq!(burned_after_three, Some(6));
 
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
     let popped = out.expect("pop 2");
@@ -80,7 +83,8 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
         let snap = store.begin_read().expect("read");
         assert_eq!(
             snap.get_property::<TotalBurnedCell>().expect("cell"),
-            Some(6)
+            Some(3),
+            "block 2's burn restored to the pre-image block 1 left"
         );
         assert!(snap
             .open_table(SPENT_KEYS)
@@ -227,5 +231,61 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
         refused,
         Err(TestErr::Store(ref m)) if m.contains("writer is halted since height 2")
     ));
+    cleanup(&path);
+}
+
+/// SI-6's second arm is exact: an inverse that finds the key present but
+/// holding a value other than the one the journaled write left — something
+/// wrote around the journal — is `PostImageMismatch`, poisons the batch and
+/// halts the writer. Pop never quietly "repairs" a row it did not write.
+#[test]
+fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
+    let path = tmp("pop-post-image");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
+    // Write around the journal: overwrite `blocks[1]` through an upsert
+    // handle in a batch that records nothing.
+    let around: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_upsert_table(BLOCKS)?
+            .upsert(1, [0xde, 0xad].as_slice())?;
+        Ok(())
+    });
+    around.expect("the unjournaled overwrite lands");
+
+    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    assert!(
+        matches!(
+            out,
+            Err(TestErr::Store(ref m))
+                if m.starts_with("SI-6 violated") && m.contains("not the one the journaled write left")
+        ),
+        "{out:?}"
+    );
+    assert!(
+        matches!(
+            store.connect_state(),
+            ConnectState::Halted {
+                row: StoreInvariant::UndoLogIncoherent {
+                    height: 1,
+                    fault: UndoFault::PostImageMismatch { .. },
+                },
+                ..
+            }
+        ),
+        "{:?}",
+        store.connect_state()
+    );
+    // Nothing landed: the tip is still 1 and the rewritten row is intact.
+    assert_eq!(tip_height(&store), Some(1));
+    let snap = store.begin_read().expect("read");
+    assert_eq!(
+        snap.open_table(BLOCKS)
+            .expect("t")
+            .get(1)
+            .expect("g")
+            .map(|g| g.value().to_vec()),
+        Some(vec![0xde, 0xad])
+    );
     cleanup(&path);
 }
