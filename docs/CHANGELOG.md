@@ -25,6 +25,11 @@
 
 ### API
 
+- **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
+  (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured
+  width; `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor. Serve-side
+  `shekyl-p-serve::MAX_INFLIGHT` is unchanged.
+
 - **`ConnectState` / `StoreInvariantRow` wire types (`shekyl-rpc-types::chain`).**
   The chain-store writer halt as a wallet will see it on the tip
   (`DAEMON_REDB_STORE.md` §3.6.2): `{"state":"live"}` or

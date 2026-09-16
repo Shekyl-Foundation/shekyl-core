@@ -750,6 +750,25 @@ confirmed they served what the client leg believed it fetched.
 
 ### 12.2 How to produce the numbers
 
+> **Amendment 2026-09-14 — the rig below is the re-based one, not the one
+> §12.0–§12.1 and §13 measured with.** The records above stand as measured:
+> persona↔persona over one tor, every fetch under a unique SOCKS proxy-user
+> (per-fetch isolation), body unsigned. Since
+> [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) §9.1 (c) the rig is
+> **daemon→wallet**: one client tor the fetches dial through with **no
+> per-fetch isolation** (the production posture of `shekyl-p-fetch`), each
+> persona behind **its own tor**. "Cold" is `SIGNAL NEWNYM` on the client tor
+> before the fetch; "warm" is circuit reuse. Every fetch carries the `SF-D5`
+> header and verifies the `SF-D8` countersignature; a completed exchange the
+> client refuses is a `Refused` outcome, distinct from `Circuit`/`Stall`. The
+> two-persona concurrent arm became a **sweep** over `SHEKYL_SPIKE_PERSONAS`
+> (powers of two), which prints the `SF-D7` churn table; the cold arm's p99
+> is printed against the `L` note's two thresholds. Neither pin is picked by
+> the binary. Numbers from the re-based rig are **not comparable** to the
+> tables above without this note, and go in the (c) record, not here.
+> `live_apparatus` passed over real Tor on the re-based rig in 110 s
+> (three bootstraps, header sent, bodies verified under each persona's key).
+
 ```bash
 # 1. Mine a regtest chain past the shard-0 leaf range (~5 h at ~0.69 s/block).
 # 2. Extract the real shard.
@@ -761,19 +780,38 @@ SHEKYL_SPIKE_SHARD_OUT=/path/shard.bin \
 SHEKYL_SPIKE_TOR=/path/to/pinned/tor \
 SHEKYL_SPIKE_SHARD=/path/shard.bin \
 SHEKYL_SPIKE_OUT=/path/observations.tsv \
+SHEKYL_SPIKE_PERSONAS=8 \
 SHEKYL_SPIKE_COLD=200 SHEKYL_SPIKE_WARM=200 SHEKYL_SPIKE_CONC=100 \
 SHEKYL_SPIKE_HOURS=24 \
   cargo run -p shekyl-sp-t3-spike --release --bin pd-f2-measure
 ```
 
+`SHEKYL_SPIKE_PERSONAS` (2026-09-14) is the sweep width: that many persona
+tors come up beside the client tor, and the concurrent arm runs widths
+`1, 2, 4, …` up to it, `CONC` rounds each. Every tor shares the box's uplink,
+which biases the sweep pessimistic — named in the table header.
+
 ### 12.3 Arms and their sample sizes
+
+**As run on the persona↔persona rig, 2026-08 (records-was; §13 reads from
+these):**
 
 | Arm | Purpose | `N` run |
 |---|---|---|
 | Cold circuit, single stream | Pessimistic; circuit build + rendezvous inside the timed path. The faithful model — each drawn miner *is* a different client | **60** |
 | Warm circuit, single stream | Optimistic; circuit reused | **60** |
-| 2 personas concurrent | §5.2 contention datum | **30 pairs (60 obs)** |
+| 2 personas concurrent | §5.2 contention datum — **SUPERSEDED** on the re-based rig by the sweep below; the contention datum it doubled as is SPIKE-F-11's, measured from other hosts | **30 pairs (60 obs)** |
 | Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | **RUN — 2,680 fetches over a full 25 h diurnal span (§13a)** |
+
+**RUN 2026-09-16 on the re-based daemon→wallet rig (`ARCHIVAL_SHARD_FETCH.md`
+§9.1 (c) LANDED, PR #746 — numbers live there, not here):**
+
+| Arm | Purpose | `N` run |
+|---|---|---|
+| Cold (`NEWNYM` before each), single stream | Pessimistic; descriptor + intro + rendezvous inside the timed path. Its single-attempt p99 is the `L` falsifier's input | **200** (p99 48.27 s) |
+| Warm (circuit reuse), single stream | Optimistic; the organic fill scheduler's steady state against one `P` | **200** (p99 12.26 s) |
+| Concurrency sweep, widths `1, 2, 4, 8` | `SF-D7`'s client-side churn table — the upper-bound input for `N`; one `NEWNYM` per round, `width` cold fetches to `width` personas at once | **100 rounds per width** (all valid; pin `N = 8`) |
+| Soak, ≥ 24 h | As above — span, not count | **1774** over ≥ 24 h (p99 86.06 s) |
 
 **On `N`, and on what more `N` can and cannot buy.** The gate turns on a **10 %
 tail**, so the p90 needs a usable confidence interval. At `N = 200` the binomial
