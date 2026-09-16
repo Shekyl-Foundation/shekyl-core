@@ -3,8 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! `BatchView` tests (S-CHAIN-W commit 5): the `root_at` off-by-one held at
-//! both ends, `block_at` parsed from the recorded blob, batch-local
+//! `BatchView` tests (S-CHAIN-W commit 5): `root_at(h)` reads key `h` with
+//! height 0 the empty tree (SCW-19), absence classified against the tip
+//! (`AboveTip` only above it; a hole below it is SI-7), `block_at` parsed
+//! from the recorded blob and held to `block_info`'s identity, batch-local
 //! visibility across two blocks (SCW-13), and the corrupt-read → SI-7 →
 //! poison path.
 
@@ -90,36 +92,97 @@ fn record_root(batch: &WriteBatch<'_, '_>, key: u64, byte: u8) -> Result<(), Sto
 }
 
 #[test]
-fn root_at_reads_the_row_one_above_the_height_at_both_ends() {
+fn root_at_reads_key_h_and_height_zero_is_the_empty_tree() {
     let path = tmp("view-root");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<(), TestErr> = store.write(|batch| {
-        // LMDB keys the root after block h at h + 1: after genesis is row 1.
+        // Two blocks recorded (tip = 1). Block h's connect writes the
+        // post-drain root at h + 1, so the rows are 1 and 2 — and the state
+        // *at* height h is key h.
+        record_block(batch, 0, &block(0, 1_000))?;
+        record_block(batch, 1, &block(1, 1_060))?;
         record_root(batch, 1, 0xa1)?;
         record_root(batch, 2, 0xa2)?;
         let view = batch.chain_view();
         assert_eq!(
             view.root_at(BlockHeight::from_raw(0))?,
-            AtHeight::Recorded(CurveTreeRoot::from_bytes([0xa1; 32])),
-            "root_at(0) is the row at 1"
+            AtHeight::Recorded(CurveTreeRoot::EMPTY),
+            "height 0 has no row in either store: the tree there is empty"
         );
         assert_eq!(
             view.root_at(BlockHeight::from_raw(1))?,
-            AtHeight::Recorded(CurveTreeRoot::from_bytes([0xa2; 32]))
+            AtHeight::Recorded(CurveTreeRoot::from_bytes([0xa1; 32])),
+            "root_at(1) is key 1 — written by block 0's connect, the anchor for a reference to 1"
         );
         assert_eq!(
             view.root_at(BlockHeight::from_raw(2))?,
+            AtHeight::Recorded(CurveTreeRoot::from_bytes([0xa2; 32])),
+            "tip + 1 is recorded: the state a candidate at 2 is checked against (CEN-B5)"
+        );
+        assert_eq!(
+            view.root_at(BlockHeight::from_raw(3))?,
             AtHeight::AboveTip,
-            "no row at 3: the root after block 2 is not recorded"
+            "nothing has connected into height 3"
         );
         assert_eq!(
             view.root_at(BlockHeight::from_raw(u64::MAX))?,
-            AtHeight::AboveTip,
-            "h + 1 overflows: nothing is above the last representable height"
+            AtHeight::AboveTip
         );
         Ok(())
     });
     assert_eq!(out, Ok(()));
+    cleanup(&path);
+}
+
+#[test]
+fn root_at_on_an_empty_chain_is_the_empty_tree_at_zero_and_above_tip_after() {
+    let path = tmp("view-root-empty");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        assert_eq!(
+            view.root_at(BlockHeight::ZERO)?,
+            AtHeight::Recorded(CurveTreeRoot::EMPTY)
+        );
+        assert_eq!(view.root_at(BlockHeight::from_raw(1))?, AtHeight::AboveTip);
+        Ok(())
+    });
+    assert_eq!(out, Ok(()));
+    cleanup(&path);
+}
+
+/// A root row missing **inside** `1..=tip + 1` is store corruption, not
+/// "above the tip": SI-7 with `Absent`, and the batch is poisoned. This is
+/// the shape the LMDB reader got wrong (32 zero bytes for a missing key,
+/// CEN-I12's absent-key walk) made unrepresentable.
+#[test]
+fn a_root_hole_below_the_tip_is_si7_not_above_tip() {
+    let path = tmp("view-root-hole");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        record_block(batch, 0, &block(0, 1_000))?;
+        record_block(batch, 1, &block(1, 1_060))?;
+        record_root(batch, 2, 0xa2)?; // key 1 deliberately missing
+        let e = batch
+            .chain_view()
+            .root_at(BlockHeight::from_raw(1))
+            .expect_err("key 1 must exist once block 0 has connected");
+        assert!(
+            matches!(
+                e,
+                StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                    key: "curve_tree_roots",
+                    fault: CellFault::Absent,
+                })
+            ),
+            "{e}"
+        );
+        Ok(())
+    });
+    assert!(
+        matches!(out, Err(TestErr::Store(ref msg)) if msg.contains("typed cell `curve_tree_roots`")),
+        "{out:?}"
+    );
     cleanup(&path);
 }
 
@@ -144,6 +207,73 @@ fn block_at_returns_the_identity_and_the_header_parsed_from_the_recorded_blob() 
         Ok(())
     });
     assert_eq!(out, Ok(()));
+    cleanup(&path);
+}
+
+/// A `block_info` row missing below the tip is a hole, not an above-tip
+/// absence: SI-7 `Absent`, batch poisoned.
+#[test]
+fn a_block_info_hole_below_the_tip_is_si7_not_above_tip() {
+    let path = tmp("view-block-hole");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        record_block(batch, 0, &block(0, 1_000))?;
+        record_block(batch, 2, &block(2, 1_120))?; // height 1 deliberately missing
+        let e = batch
+            .chain_view()
+            .block_at(BlockHeight::from_raw(1))
+            .expect_err("height 1 is below the tip and must be recorded");
+        assert!(
+            matches!(
+                e,
+                StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                    key: "block_info",
+                    fault: CellFault::Absent,
+                })
+            ),
+            "{e}"
+        );
+        Ok(())
+    });
+    assert!(matches!(out, Err(TestErr::Store(_))), "{out:?}");
+    cleanup(&path);
+}
+
+/// The blob must hash to the identity `block_info` records for it: a
+/// replaced blob is never exposed to a rule as a `(hash, header)` pair.
+#[test]
+fn a_block_blob_that_does_not_hash_to_block_info_is_si7() {
+    let path = tmp("view-block-identity");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let recorded = block(0, 1_000);
+        let replaced = block(0, 2_000); // parses, wrong identity
+        let info = BlockInfo {
+            timestamp: recorded.header.timestamp,
+            coins_generated: 0,
+            weight: 0,
+            cumulative_difficulty: 1,
+            hash: Hash32::from_bytes(recorded.hash()),
+            cumulative_rct_outputs: 0,
+            long_term_weight: 0,
+        };
+        batch
+            .open_insert_table(BLOCK_INFO, PROBE_ROW)?
+            .insert(0, info.encode().as_slice())?;
+        batch
+            .open_insert_table(BLOCKS, PROBE_ROW)?
+            .insert(0, replaced.serialize().as_slice())?;
+        let e = batch
+            .chain_view()
+            .block_at(BlockHeight::ZERO)
+            .expect_err("blob identity differs from block_info.hash");
+        assert!(
+            e.to_string().contains("does not hash to block_info.hash"),
+            "{e}"
+        );
+        Ok(())
+    });
+    assert!(matches!(out, Err(TestErr::Store(_))), "{out:?}");
     cleanup(&path);
 }
 
