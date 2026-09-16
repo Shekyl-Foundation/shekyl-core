@@ -39,7 +39,6 @@
 #include "construct_tx.h"
 #include "check_tx_signature.h"
 #include "check_hash.h"
-#include "cn_slow_hash.h"
 #include "ge_frombytes_vartime.h"
 #include "ge_tobytes.h"
 #include "generate_key_derivation.h"
@@ -144,10 +143,6 @@ int main(int argc, char** argv)
 
 
 
-  TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 0);
-  TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 1);
-  TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 2);
-  TEST_PERFORMANCE1(filter, p, test_cn_slow_hash, 4);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 32);
   TEST_PERFORMANCE1(filter, p, test_cn_fast_hash, 16384);
 

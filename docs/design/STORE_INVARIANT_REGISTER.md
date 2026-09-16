@@ -1,0 +1,132 @@
+# Store-invariant register (`SI-`)
+
+**Status:** **LIVING CONTRACT** — minted 2026-09-14 by
+[`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
+Q1/Q2/Q6; last verified 2026-09-14 at `943592a61` (PR #749's head). Gated
+by `scripts/ci/check_store_invariant_register.py` (§4).
+**Identifier family:** `SI-1…SI-N`, registered in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 at birth.
+**Owner:** the `shekyl-chain-store` crate. A row's `Status` cell is written
+only by the increment that builds it (rule 94 §6).
+
+---
+
+## 1. What a row is
+
+A row is a statement that passes **arm B** of the C2-R8 category test:
+*it would still have to hold if the consensus rules changed.* It is about the
+store's own coherence — a table that is a set, a foreign key, a cell that
+decodes, an accumulator that does not wrap. It is **not** a consensus rule
+(arm A lives in the census and the validation crate) and it **never decides
+an outcome the caller sees**: breaking it is `StoreInvariantViolated`,
+fatal, never converted to `InvalidBlock` (C2-R8 Q2, gated by
+`check_store_error_conversion_ban.py`).
+
+Two consequences of "never decides":
+
+- a row may have a **consensus twin** — the rule in the validation crate
+  whose correct implementation makes the invariant hold by construction.
+  When it does, the row is a belt behind that rule, and a violation means
+  the validator has a hole. When it does not, a violation means the file is
+  corrupt or the store's own write path is wrong;
+- a row is enforced at the **write** (an `InsertTable::insert` on a present
+  key, a root that does not match), not by a scan. There is no "check
+  invariants" pass.
+
+## 2. The register
+
+`Status` ∈ {`ruled`, `built`, `retired`}. `ruled` / `built` are the live
+states; `retired` is the deleting-PR status (the id is not reused — rule 23).
+`Anchor` is the `StoreInvariant::` variant that carries the row once built
+(empty while `ruled` or `retired`). `Origin` names the census row or C2-R8
+question the row came from.
+
+| Id | Invariant | Table / surface | Consensus twin | Origin | Status | Anchor |
+| --- | --- | --- | --- | --- | --- | --- |
+| SI-1 | `spent_keys` is a set: inserting a key image already present is fatal — built S-CHAIN-W commit 6 (`connect` → `spent_keys` insert) | `spent_keys` | CEN-I7 (chain-wide) + CEN-L1 as minted (intra-block) | CEN-L1 | built | `StoreInvariant::KeyImageNotFresh` |
+| SI-2 | A connecting block's parent is the block recorded at height−1, and that block is the tip; one block per height — built S-CHAIN-W commit 6 (`connect` parent-is-tip pre-check; `blocks` / `block_heights` / `block_info` / `hf_versions` / `block_burn` inserts) | `block_heights` / `block_info` | CEN-A2 | CEN-L2 | built | `StoreInvariant::TipMismatch` |
+| SI-3 | `tx_indices` is keyed by tx hash: inserting a hash already present is fatal (cell corrected 2026-09-15 from `txs`, which is `u64 → blob`, zero-write and unported — `LMDB_WRITE_ATOMICITY_AUDIT.md` DRS-W4; the invariant C2-R8 §7.1 ruled is unchanged) — built S-CHAIN-W commit 6 (`connect` → `tx_indices` insert) | `tx_indices` | CEN-G1 (listed txs); CEN-F5 corollary (miner tx — reversion clause in C2-R8 §7.1) | CEN-L3 | built | `StoreInvariant::TxHashNotFresh` |
+| SI-4 | The curve-tree root at height *h*+1 is written exactly once per connect (declared `insert`) and is the root the consensus transition handed `connect` — built S-CHAIN-W commit 6 (`connect` → `curve_tree_roots[h+1]` insert) | curve-tree roots | CEN-B5 reads it | C2-R8 Q4 (ruled `insert`); CEN-L14 curve-root heights (R8b-7 confirms; a rewrite case reopens this row under the ruling's §13, it does not silently override) | built | `StoreInvariant::RootRewritten` |
+| SI-5 | After a pop trims the tree to height *h*, the tree's root equals the recorded root at *h* | curve tree | CEN-B5 (the recorded root is the oracle) | C2-R8 Q5; CEN-L13 trim bounds | ruled |  |
+| SI-6 | The undo log's top entry is the tip height; a pop consumes exactly that entry — armed where the journal and the tables can disagree: sealing a height whose row is already recorded (`RowAlreadyRecorded`), and replaying an entry whose target is not in the state the entry left (`EntryNotReversible`); the top-is-tip check itself arms at `pop` (S-CHAIN-W commit 7) | `undo_log` | — | C2-R8 Q5; CEN-L13 journal-vs-tip belts | built | `StoreInvariant::UndoLogIncoherent` |
+| SI-7 | Every cell read decodes under its canonical codec; an undecodable or missing sealed cell is fatal | all typed cells | — | CEN-L13 serve-credit re-parse; enforced for `properties` cells since PR #749 (as a flat `StoreError::CellCorrupt`), re-homed under the enum at increment 2.5 | built | `StoreInvariant::CellCorrupt` |
+| SI-8 | Accumulator arithmetic never wraps: every fold uses checked arithmetic and an overflow is fatal, never a saturate or a mint — built S-CHAIN-W commit 6 (`connect` → `total_burned` `checked_add`; `block_info.cumulative_rct_outputs` likewise) | accumulator cells | — | CEN-L13 bond-counter overflow | built | `StoreInvariant::FoldOverflow` |
+| SI-9 | Store-derived ids are dense in their **primary** and fresh in **every** table keyed by them: `tx_id` is `txs_pruned`'s entry count, `output_id` is `output_txs`'s, `amount_index` is the member count under that amount in `output_amounts` (each derived from that one table at write time), and the slot an `insert` targets under one — primary or side table — is absent. Side tables under a shared id (`txs_pqc_auths`, `txs_prunable_hash`) are **sparse by design** (no PQC auths on the miner tx, no prunable hash on a v1 tx); SI-9 asserts their slots are fresh, not that they are dense *(wording tightened 2026-09-15 on PR #756 review)* — built S-CHAIN-W commit 6 (`connect` → `txs_*[tx_id]`, `tx_outputs[tx_id]`, `output_txs[output_id]`, `output_amounts` member inserts) | primaries: `txs_pruned` (`tx_id`), `output_txs` (`output_id`), `output_amounts` (`amount_index`); side tables under `tx_id`: `txs_pqc_auths` / `txs_prunable` / `txs_prunable_hash` / `tx_outputs` | — (pure storage integrity; deliberately **not** folded into SI-3, whose twin is CEN-G1 — R8-Q1's three-arm test needs rule-twinned belts and pure invariants to stay distinguishable) | S-CHAIN-W pre-flight SCW-4 ([`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) §6), ruled 2026-09-15 | built | `StoreInvariant::IdNotFresh` |
+
+Rows are **appended**, never renumbered. A row whose table is deleted is
+marked `retired` in its `Status` cell in the deleting PR with the PR number —
+not removed — so the id is not silently re-minted (rule 23).
+
+## 3. `StoreError` is classed structurally
+
+Since DRS-E1 increment 2.5 the class is the **outer variant** of
+`StoreError` (`rust/shekyl-chain-store/src/store/error.rs`), and
+`StoreError::class()` is a projection of it, not a judgement made beside it:
+
+| `StoreError` arm | `class()` | Payload | Meaning |
+| --- | --- | --- | --- |
+| `Engine(EngineError)` | `Engine` | `Open`, `BeginWrite`, `BeginRead`, `Durability`, `Commit`, `Table`, `Storage` | the redb layer failed and the operation did not happen |
+| `Cannot(StoreCannot)` | `Cannot` | `SchemaVersionAbsent`, `SchemaVersionMismatch`, `PropertiesAreTyped`, `ReadOnly`, `WriteInProgress`, `EmptyApplyStub`, `FamilyStubbed` | a refusal before the write: not a verdict, not incoherence. An incompatible file is not an incoherent one — rebuild. Retryability is per variant; `WriteInProgress` is a contract violation and **must not** be retried, per its doc comment |
+| `InvariantViolated(StoreInvariant)` | `Invariant` | one variant per `built` row of §2 (the gate in §4 holds the bijection) | an `SI-` row broke; fatal |
+
+The payload columns above are a **reading** of the three enums, not a second
+source: where they and the code disagree, the code is right and this table is
+stale. Before 2.5 the taxonomy was a table here classing a flat enum (which
+also carried an `Abort` arm — deleted with the closure-commit API, an abort is
+a drop). The wrapper is transparent: `Display` and `source()` pass through to
+the inner type, so a class adds no line to an error chain.
+
+No variant is a consensus verdict, and none ever will be: the crate does not
+name `InvalidBlock` (ban clause 2).
+
+**How a violation is produced, and what it does to the batch** (increment
+2.5, `store/keyed.rs`, `store/write.rs`). A keyed table opens as
+`InsertTable` or `UpsertTable` — the verb is the handle. `open_insert_table`
+binds the `SI-` row the site is enforcing; `InsertTable::insert` is fatal on
+a present key and returns `InvariantViolated` for that bound row. `upsert`
+is the declared overwrite and names no row. Every `InvariantViolated`
+produced or observed through a `WriteBatch` (a refused `insert`; a
+`get_property` on a cell that fails SI-7) **poisons** it: the first row to
+arm is kept and `complete` refuses with it on **both** the closure's `Ok`
+and `Err` arms, so a caller that swallows the violation — or maps it to a
+different error — still lands nothing and still surfaces the row. That is
+what makes "fatal, never converted" a property of the batch rather than of
+each call site. SI-1 / SI-3 / SI-4 stayed `ruled` until S-CHAIN-W opened
+their tables — the insert handle existed first, and the increment that first
+opened a table with each row added the variant (§5 step 1); **as of
+S-CHAIN-W commit 6 (2026-09-15) every row but SI-5 is `built`**, SI-5 waiting
+on S-CURVE's trim.
+
+## 4. The gate
+
+`scripts/ci/check_store_invariant_register.py` (in `docs-gates.yml`) holds
+this file to the crate in both directions, the same shape as
+`check_redb_schema_bijection.py`:
+
+- **Subject assertions** (rule 47): §2 parses with ≥ 1 row; ids are
+  `SI-1…SI-n`, dense and unique; every `Status` is in the closed vocabulary
+  {`ruled`, `built`, `retired`}; a `built` row has a non-empty `Anchor` of
+  the form `StoreInvariant::Name`, a `ruled` row has none.
+- **Register → code:** every `built` row's anchor is a variant of
+  `pub enum StoreInvariant` in `rust/shekyl-chain-store/src/`. If any row is
+  `built` and the enum cannot be parsed, the gate fails — the enum is the
+  subject, and an absent subject is a failure, not an empty pass.
+- **Code → register:** every variant of `StoreInvariant` is named by exactly
+  one `built` row.
+
+At birth every row is `ruled` and the enum does not exist: the gate passes
+on its subject assertions alone and says so in its output. **Flipping a row
+to `built` without adding the variant, or adding a variant without a row,
+is red.** `--selftest` exercises each failure class against synthetic inputs.
+
+## 5. How a row moves
+
+1. The increment that first enforces the invariant adds the
+   `StoreInvariant` variant, makes the write site produce
+   `StoreError::InvariantViolated(StoreInvariant::Name)`, and flips the
+   row's `Status` to `built` with the anchor — one PR.
+2. A row is never weakened to accommodate a validator that fails it: that
+   is the validator's hole, and the fatal is the finding.
+3. A new invariant is added **here first** (`ruled`) by the design that
+   needs it, then built. An invariant that exists in code without a row is
+   the gate's other red.

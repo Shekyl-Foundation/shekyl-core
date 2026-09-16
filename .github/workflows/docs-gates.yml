@@ -328,9 +328,133 @@ jobs:
         # Checks NAMES, not types — ordering is the key-type gate above;
         # comparator evidence is in lmdb_order's tests; class evidence is
         # per-row in the audit's §12.
-        # Instance of 47-gate-subject-assertion.mdc.
+        # Since S-CHAIN-W commit 1 the schema also carries tables LMDB never
+        # had (`RUST_ONLY_TABLES`, a {table: reason} map in schema.rs). A
+        # definition with neither a twin nor an entry there is still red
+        # with the original extra-leg refusal; the map is not a mode switch.
+        # Instance of 47-gate-subject-assertion.mdc; --selftest proves each
+        # refusal.
         if: '!cancelled()'
         run: python3 scripts/ci/check_redb_schema_bijection.py
+
+      - name: Run redb schema bijection gate self-test
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_redb_schema_bijection.py --selftest
+
+      - name: Run store-invariant register bijection gate
+        # C2-R8 §11: STORE_INVARIANT_REGISTER.md §2 is a bijection with the
+        # `StoreInvariant` enum over the rows that say `built`. The `Status`
+        # column is the arming switch — at birth every row is `ruled` and the
+        # enum does not exist (rule 23: no variant before its producer), so
+        # the gate passes on its subject assertions alone and SAYS SO; the
+        # first PR that flips a row to `built` must add the variant, and a
+        # variant with no row is the other red. Same pair-shape as the redb
+        # bijection above, on a doc register and a Rust definition.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_invariant_register.py
+
+      - name: Run store-invariant register gate self-test
+        # Every failure class bitten red on synthetic inputs: empty register,
+        # sparse or duplicate ids, closed-vocabulary status, built-without-
+        # anchor, built-without-enum, and both bijection directions.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_invariant_register.py --selftest
+
+      - name: Run store-error conversion-ban gate
+        # C2-R8 Q2 §3.3: the store's error classes (`StoreInvariantViolated`,
+        # `StoreCannot`) are never converted into the consensus verdict
+        # (`InvalidBlock`) — no From/Into/TryFrom/TryInto between them (bare or
+        # path-qualified trait), the store crate never names InvalidBlock, and
+        # no match arm maps a store-error pattern onto an InvalidBlock body
+        # (brace-depth arm scan, nested arms included, strings blanked). A
+        # store constraint that reaches the caller as "invalid block" is a
+        # hidden rule
+        # (db_lmdb.cpp:1438 is the instance R8 was convened over); the same
+        # constraint as a fatal is a belt. All three clauses are live: the
+        # gate counts verdict-type definitions and refuses on zero, so a
+        # clause-3 scan with nothing to match cannot pass as "clean" (raised
+        # 2026-09-15 by DRS-E6 increment 1, the PR that minted `InvalidBlock`
+        # in shekyl-chain-rules — CHAIN_RULES_CRATE.md §7).
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_error_conversion_ban.py
+
+      - name: Run store-error conversion-ban gate self-test
+        # All three clauses bitten red, plus the subject-absent cases (no
+        # error.rs; enum absent; zero variants; no verdict-type definition,
+        # including one hidden in a comment), the legitimate shapes (a
+        # daemon-error From; line and block comments; sibling arms; adjacent
+        # functions; an enum-shaped verdict), and the bypasses a window/bare-
+        # ident scanner would miss (qualified path; TryInto; nested arm;
+        # `}` inside a string).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_store_error_conversion_ban.py --selftest
+
+      - name: Run DRS-E6 surface-partition gate
+        # DAEMON_REDB_STORE.md §7.5 is a dated derivation over the census:
+        # rows by flag × surface × bucket (table 1), the set of live
+        # surface-bound consensus rows and each row's bucket (table 2), the
+        # surface-free rows per subsystem (table 3), and the headline `N of M`
+        # phrases. A census row that moves bucket or gains/loses a store
+        # citation moves the schedule and the completeness gate's
+        # denominators; this re-derives every figure from
+        # CONSENSUS_RULE_CENSUS.md §4 and fails on any difference, printing
+        # the derivation. Table 2's `store site` gloss and *which* increment a
+        # row arrives with are rulings the doc owns, not derivations — the gate
+        # asserts only that every live row names an increment, so none
+        # "arrives nowhere". The bound/free regex is quoted verbatim in §7.5
+        # and checked, so the doc and the gate define "surface-bound" once.
+        # Subject asserted: an empty census, a §4 header missing a read
+        # column, a header without its GFM delimiter row (no table renders),
+        # zero bound rows, or a missing §7.5 table is a failure. Instance of
+        # 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_e6_partition.py
+
+      - name: Run DRS-E6 surface-partition gate self-test
+        # Every refusal bitten red on synthetic inputs: census re-bucket, new
+        # citation, retirement to bucket 3, new row; each doc table wrong or
+        # missing; totals and headline phrases stale; regex not quoted; empty
+        # census, changed header, flag vocabulary, duplicate ids; and the §15
+        # decision log's dated figures proven NOT to be read as live claims.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_drs_e6_partition.py --selftest
+
+      - name: Run chain-rules census-coverage gate
+        # rust/shekyl-chain-rules/src/census.rs declares two `census_rows!`
+        # registries — CenRow (consensus flag), PolicyRow (policy flag) — one
+        # variant per ENFORCED census row (bucket ≠ 3), in census order, each
+        # `pending` or `implemented(path)`. This holds the registry to
+        # CONSENSUS_RULE_CENSUS.md §4 as a bijection per flag (no missing row,
+        # no entry without a row of ITS registry's flag, census order) and
+        # prints the crate's coverage as two lines over two denominators —
+        # `implemented / enforced` and `ratified / enforced`, consensus and
+        # policy never summed (CHAIN_RULES_CRATE.md §6; R8 §9.4). It is the
+        # only place the crate's "N of M" figure is computed. Also refuses
+        # `redb` / `shekyl-chain-store` in the crate's Cargo.toml (G1, direct;
+        # the transitive half needs cargo and runs in rust-audit-test.yml).
+        # Subject asserted: missing registry, `mod census;` absent from lib.rs,
+        # a flag with no registry, an empty registry, an unparseable census —
+        # each exits 2, never a vacuous pass. Instance of
+        # 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_chain_rules_coverage.py
+
+      - name: Run chain-rules census-coverage gate self-test
+        # Every refusal bitten red on synthetic inputs: row missing, bucket-3
+        # row registered, policy row under the consensus enum, duplicate id,
+        # order swapped (and a missing row proven NOT to cascade into an order
+        # fault); census re-bucketed / re-flagged / new row under a fixed
+        # registry; header, flag vocabulary, entry grammar, `implemented`
+        # without a path, an attribute on an entry, empty registry, trailing
+        # text, unclosed invocation; each input file missing, `mod census;`
+        # commented out, no invocation, two registries for one flag, a flag
+        # with none; `redb` / `shekyl-chain-store` under dependencies,
+        # dev-dependencies, build-dependencies, a target table, and renamed
+        # via `package =`; a comment mentioning both proven NOT to trip it.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_chain_rules_coverage.py --selftest
 
       - name: Run conformance-coverage gate
         # Every RATIFIED consensus rule (census bucket 1/2) must carry a

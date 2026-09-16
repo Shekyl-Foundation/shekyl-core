@@ -1,0 +1,36 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-rules"
+description = "Consensus validation: candidate block + ChainView + RuleSet → ChainValid or InvalidBlock. No store handle (DRS-E6)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The crate's defining property is what is *absent* here: no `redb`, no
+# `shekyl-chain-store`, directly or transitively, in any dependency section
+# (CHAIN_RULES_CRATE.md G1). `check_chain_rules_coverage.py` refuses either
+# token in this file; `check_chain_rules_no_store.sh` (rust-audit-test.yml)
+# refuses either package anywhere in the resolved `cargo tree` closure. Every
+# rule must stay unit-testable against a mock view with no database
+# (CONSENSUS_C2_R8_STORE_PLACEMENT.md §9.1) — a dependency that reaches a
+# store is the inversion R8 banned.
+[dependencies]
+# Chain identities and the recorded facts a rule reads: BlockHeight,
+# BlockHash, TxHash, KeyImage, CurveTreeRoot.
+shekyl-types = { path = "../shekyl-types" }
+# The candidate's own shape — Block, BlockHeader, Transaction — and the
+# consensus hash identities (`Block::hash`, `Transaction::hash`) CEN-B6
+# defines. Deps: shekyl-crypto-hash, shekyl-curve-generators; no store.
+shekyl-wire = { path = "../shekyl-wire" }
+# `Network`, the one nettype enum in the workspace: it selects a
+# `RuleSchedule` (rule 71 — data, never control flow). Default features only;
+# `serde` stays off.
+shekyl-address = { path = "../shekyl-address" }
+
+[lints]
+workspace = true

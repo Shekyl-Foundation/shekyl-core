@@ -73,8 +73,8 @@ void fill_test_nonce(block& blk, const difficulty_type& diffic, uint64_t height)
   const Blockchain* blockchain = nullptr;
   blk.nonce = 0;
   while (!miner::find_nonce_for_given_block(
-      [blockchain](const block& b, uint64_t h, const crypto::hash* seed_hash, unsigned int threads, crypto::hash& hash) {
-        return get_block_longhash(blockchain, b, hash, h, seed_hash, threads);
+      [blockchain](const block& b, uint64_t h, const crypto::hash* seed_hash, crypto::hash& hash) {
+        return get_block_longhash(blockchain, b, hash, h, seed_hash);
       },
       blk,
       diffic,

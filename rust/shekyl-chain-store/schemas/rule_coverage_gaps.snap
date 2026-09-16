@@ -1,0 +1,9 @@
+# shekyl-chain-store canonical codec snapshot (rule 42). Do not edit by hand:
+#   UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests
+# and bump SCHEMA_VERSION in src/codec/schema_version.rs in the same PR.
+codec = rule_coverage_gaps
+fixed_width = variable
+[fixtures]
+none = 00000000
+first_row = 010000000643454e2d4131
+first_and_last = 020000000643454e2d41310643454e2d4d38

@@ -1,5 +1,5 @@
 ---
-description: Every on-disk wire-format change to a persisted Rust block must be paired with a version-constant bump in the same commit. The schema-snapshot CI enforces this mechanically for the WALLET crates only; rust/shekyl-chain-store is attached to this rule but NOT covered by that CI, and its ratchet is owed at DRS-E1 with the codecs.
+description: Every on-disk wire-format change to a persisted Rust block must be paired with a version-constant bump in the same commit. The schema-snapshot CI enforces this mechanically for the wallet crates (postcard schema snapshots, one constant per block) and for rust/shekyl-chain-store (canonical-codec fixture snapshots, one SCHEMA_VERSION for the store).
 globs:
   - rust/shekyl-engine-state/**
   - rust/shekyl-engine-file/**
@@ -8,39 +8,46 @@ globs:
 
 # Serialization policy
 
-## The glob is rule attachment, not a ratchet
+## Two ratchets, one workflow
 
-**`rust/shekyl-chain-store/**` is in the globs above so this rule is ATTACHED
-when the daemon chain store is edited. It is NOT covered by the CI that
-enforces the rule.** Verified at `2026-09-13`:
+The wallet and the daemon chain store are both gated by
+[`schema-snapshot.yml`](../../.github/workflows/schema-snapshot.yml), by
+different mechanisms shaped to what each persists:
 
-- [`schema-snapshot.yml`](../../.github/workflows/schema-snapshot.yml) is
-  path-filtered to `rust/shekyl-engine-state/**`, `rust/Cargo.lock`,
-  `rust/Cargo.toml` and the workflow file itself — the chain store is not
-  among them, so a chain-store-only change does not run the job at all.
-- the job runs `cargo test -p shekyl-engine-state schema_snapshot`, which is
-  scoped to one crate by package name.
-- `check_or_update_snapshot` drives off **ten** hardcoded crate-local call
-  sites in
-  [`schema_snapshot.rs`](../../rust/shekyl-engine-state/src/schema_snapshot.rs)
-  (`:219`-`:264`), each naming a wallet type. Adding a chain-store type does
-  not register it.
+| Tree | What is snapshotted | Snapshot dir | Version constant | Regenerate |
+|---|---|---|---|---|
+| `rust/shekyl-engine-state/**` | the `postcard_schema::Schema` of each persisted block | `rust/shekyl-engine-state/schemas/*.snap` | one per block (table below) | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-engine-state schema_snapshot` |
+| `rust/shekyl-chain-store/**` | the fixture **encodings** of each `codec::Canonical` impl, the **table catalogue** (name, shape, key/value type per `schema.rs` definition), and the **property-cell catalogue** (key, scope, value-codec name per `property_cells!` row) | `rust/shekyl-chain-store/schemas/*.snap` | `SCHEMA_VERSION` in `src/codec/schema_version.rs`, for the whole store | `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests` |
 
-**Why this paragraph exists.** `DRS-0` froze the redb value codec as the
-canonical encoding the state digest folds, and
-[`DAEMON_REDB_STORE.md`](../../docs/design/DAEMON_REDB_STORE.md) §11.1 rules
-that a value-codec change bumps `schema_version`. Two merged documents now
-depend on codec stability for the daemon store. Attaching the glob and saying
-nothing would let that read as enforced, when the enforcing mechanism reaches
-only the wallet crates — the failure this rule exists to prevent, committed in
-the rule itself.
+The chain store snapshots bytes rather than a type schema because its codecs
+are hand-written fixed-width encodings, not serde derives, and because the
+same bytes are the state digest's fold input
+([`DAEMON_REDB_STORE.md`](../../docs/design/DAEMON_REDB_STORE.md) §11.1(b)):
+a codec move is a consensus-oracle move, so the gate pins the output, not the
+declaration. Two catalogues cover the rest of §11.1(b), where layout moves
+without any codec's bytes moving: `schemas/tables.snap` (a table added,
+removed or re-keyed — an old binary trips over it at `open_table`) and
+`schemas/properties.snap` (a `properties` cell added, re-keyed, re-scoped
+or re-typed — a new `ChainState` cell is digest-domain growth even when its
+value codec already has a fixture). It has **one** version constant because
+the store rebuilds rather than migrates (§11.1(a)) — any snapshot change
+under `rust/shekyl-chain-store/schemas/` requires `SCHEMA_VERSION` to be
+**numerically greater** at the PR head than at its base, with no per-codec
+registry to keep in sync. Meta-tests in
+[`snapshot_tests.rs`](../../rust/shekyl-chain-store/src/codec/snapshot_tests.rs)
+hold the gate's own subject (rule 47): every `impl Canonical for` in the crate
+has a snapshot and vice versa, every fixture encodes to its codec's
+`FIXED_WIDTH`, every `TableDefinition` / `MultimapTableDefinition` in
+`schema.rs` is inside the `tables!` invocation the table catalogue is emitted
+from, every `key: "…"` in `property.rs` is a `PROPERTY_CELLS` row, the
+assertion is armed unless `UPDATE_SNAPSHOTS` is set (in which case exactly
+one test fails loudly), and the workflow file still runs this module by name
+and reads `SCHEMA_VERSION` with the declaration grammar the source uses.
 
-**The real ratchet is owed and belongs with the codecs.** `DRS-E1` writes the
-chain store's value codecs; the gate lands with them — a `codec_snapshot` test
-with its own `.snap` paired against `schema_version`, or a frozen
-encode-fixture KAT. Until that lands, the obligation here is a **commitment
-with no gate behind it**, and is recorded as such rather than implied to be
-checked.
+History: from `DRS-0` (2026-09-13) to `DRS-E1` increment 2 the chain-store
+glob was attached to this rule with **no gate behind it**, and said so here.
+That paragraph is gone because its subject is; the FOLLOWUPS row that carried
+the gap closed with the gate.
 
 Persisted blocks in Rust — today the six inside
 `rust/shekyl-engine-state/` (`WalletLedger`, `LedgerBlock`,
@@ -103,6 +110,18 @@ inner block bumps that block's constant; a change that restructures
 the bundle envelope bumps `WALLET_LEDGER_FORMAT_VERSION`; a change
 that does both bumps both.
 
+The chain store's pairing is one row, deliberately:
+
+| Store | Version constant | Source file |
+|---|---|---|
+| every `codec::Canonical` impl in `shekyl-chain-store` | `SCHEMA_VERSION` | `rust/shekyl-chain-store/src/codec/schema_version.rs` |
+
+`SCHEMA_VERSION` is sealed into a fresh store's first transaction and any
+other value on reopen is a refusal, not a migration. Its declaration carries
+a History list; the bump edits the list in the same commit (rule 91's
+"a constant's doc is part of the edit"), and a meta-test checks the current
+value has an entry.
+
 ## What counts as a wire-format change
 
 Any of these, on any persisted block, requires a constant bump:
@@ -161,6 +180,28 @@ snapshot structurally cannot see (since `Zeroizing<[u8; 32]>` and
    either side of that file's unified diff. PRs that change a `.snap`
    without bumping the paired constant fail the workflow with a
    GitHub annotation on the offending file.
+
+### Chain-store codec snapshot (DRS-E1 increment 2)
+
+The same workflow, the same shape, one tree over:
+
+1. `cargo test -p shekyl-chain-store codec::snapshot_tests` — for each
+   `codec::Canonical` impl, encodes a fixed fixture set and asserts
+   the hex matches the committed `.snap` under
+   `rust/shekyl-chain-store/schemas/`; also asserts each fixture
+   decodes back to itself and encodes to exactly `FIXED_WIDTH` bytes.
+   Renders `schema::catalogue()` against `tables.snap` and
+   `PROPERTY_CELLS` against `properties.snap`. Drift fails with a
+   unified diff and the rebuild-not-migrate instructions.
+2. `UPDATE_SNAPSHOTS=1 cargo test -p shekyl-chain-store codec::snapshot_tests`
+   — regenerates. The `codec_snapshot_assertions_are_armed` test fails
+   under this variable on purpose, so a CI run with it set cannot pass.
+3. The workflow's bump job: if any `.snap` under the chain-store
+   `schemas/` directory is in the PR diff, the value of
+   `SCHEMA_VERSION` parsed from `src/codec/schema_version.rs` at the
+   PR head must be greater than the value parsed at the PR base (or
+   the file must be born in the PR). A rewrite of the declaration line
+   that leaves the number alone does not pass.
 
 ### Zeroizing-field grep (commit 5 — §3.5)
 

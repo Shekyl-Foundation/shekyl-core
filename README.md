@@ -234,18 +234,36 @@ pkg install git gmake cmake pkgconf boost-libs libsodium
 Clone recursively to pull-in needed submodule(s):
 
 ```
-git clone --recursive https://github.com/Shekyl/Shekyl
+git clone --recursive https://github.com/Shekyl-Foundation/shekyl-core
 ```
 
 If you already have a repo cloned, initialize and update:
 
 ```
-cd Shekyl && git submodule init && git submodule update
+cd shekyl-core && git submodule init && git submodule update
 ```
 
 *Note*: If there are submodule differences between branches, you may need 
 to use `git submodule sync && git submodule update` after changing branches
 to build successfully.
+
+**Checkout hygiene.** A non-recursive clone leaves `external/randomx-v2`
+empty. `git -C` that path then walks up and reports the superproject SHA,
+which is not the pin. Default daemon CMake does **not** need that tree
+(production PoW is the Rust verifier). Initialize it when you run the
+differential harness or T15:
+
+```
+git submodule update --init --recursive
+cmake -B build -DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON
+# then: RANDOMX_V2_INSTALL_DIR=<build>/external/randomx-v2-install
+```
+
+Never `git submodule update --init --recursive --exclude …` for this crate.
+Worktrees inherit gitlinks, not submodule working trees — re-run init in
+the worktree. `-DMANUAL_SUBMODULES=1` is an escape hatch, not the happy
+path. `external/randomx` (tevador v1) is a gitlink-only pin and is **not**
+required for a default clone.
 
 ### Build instructions
 
@@ -258,7 +276,7 @@ invokes cmake commands as needed.
 * Change to the root of the source code directory, change to the most recent release branch, and build:
 
     ```bash
-    cd Shekyl
+    cd shekyl-core
     git checkout dev
     make
     ```
@@ -376,7 +394,7 @@ application.
 * To git clone, run:
 
     ```bash
-    git clone --recursive https://github.com/Shekyl/Shekyl.git
+    git clone --recursive https://github.com/Shekyl-Foundation/shekyl-core.git
     ```
 
 **Building**
@@ -384,10 +402,10 @@ application.
 * Change to the cloned directory, run:
 
     ```bash
-    cd Shekyl
+    cd shekyl-core
     ```
 
-* If you would like a specific [version/tag](https://github.com/Shekyl/Shekyl/tags), do a git checkout for that version. If you do not care about version pinning and want binaries from `dev`, skip this step:
+* If you would like a specific [version/tag](https://github.com/Shekyl-Foundation/shekyl-core/tags), do a git checkout for that version. If you do not care about version pinning and want binaries from `dev`, skip this step:
 
     ```bash
     git checkout <tag>

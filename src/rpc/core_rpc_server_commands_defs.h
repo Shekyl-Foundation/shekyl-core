@@ -521,14 +521,12 @@ namespace cryptonote
   {
     struct request_t: public rpc_request_base
     {
-      uint8_t major_version;
       uint64_t height;
       blobdata block_blob;
       std::string seed_hash;
 
       BEGIN_KV_SERIALIZE_MAP()
         KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(major_version)
         KV_SERIALIZE(height)
         KV_SERIALIZE(block_blob)
         KV_SERIALIZE(seed_hash)

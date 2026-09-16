@@ -2,12 +2,54 @@
 
 ## [Unreleased]
 
+### Consensus
+
+- **RandomX v2 Phase 4 follow-on: leftover schema operands and CN
+  vestiges are gone.** `get_block_longhash` no longer takes
+  `major_version` / `miners`. `hash_pow_randomx` takes a
+  `const crypto::hash&` seed (no nullable pointer). C++ `chacha.h`,
+  the `xchacha20` C ABI, `variant2_int_sqrt`, `hmac-keccak`, unused
+  `HASH_KEY_*` domain separators, and the `on_mining_status`
+  Cryptonight label table are deleted. `cncrypto` is a single library again (the MSVC
+  OBJECT split existed to dodge a CryptonightR PDB ICE).
+
+- **RandomX v2 Phase 4: PoW is a free function, CryptoNight is gone.**
+  `IPowSchema` / `pow_registry` / `RX_BLOCK_VERSION` are deleted. Block
+  longhash calls `hash_pow_randomx` (Rust RandomX v2 FFI). CEN-D2 still
+  fail-closes via `set_pow_hash_override_for_tests`. `slow-hash.c` and
+  `generate_chacha_key*` (the CN-KDF) are deleted. Miner and
+  longhash-worker threads no longer call the CN scratchpad
+  `slow_hash_{allocate,free}_state` — RandomX FFI owns VM state.
+  `check_randomx_symbol_isolation.sh` bans `cn_slow_hash` and the
+  unprefixed allocate/free names.
+
 ### API
 
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
   (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured
   width; `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor. Serve-side
   `shekyl-p-serve::MAX_INFLIGHT` is unchanged.
+
+- **`ConnectState` / `StoreInvariantRow` wire types (`shekyl-rpc-types::chain`).**
+  The chain-store writer halt as a wallet will see it on the tip
+  (`DAEMON_REDB_STORE.md` §3.6.2): `{"state":"live"}` or
+  `{"state":"halted","at_height":…,"row":n}` with `n` the
+  `STORE_INVARIANT_REGISTER.md` `SI-n` row. Types only at this pin — the
+  daemon still serves LMDB, so `get_info` does not carry the field yet and
+  `CORE_RPC_VERSION` is unchanged; the bump lands with the field.
+- **`shekyl-chain-store` DRS-E1 increment 3 (S-CHAIN-W).** `connect` /
+  `pop` on the branded write batch, one undo log per connect, the settlement
+  -epoch schedule pinned in the store header and refused on mismatch at every
+  open (`StoreCannot::SettlementEpochMismatch`), `ChainStore::create` /
+  `open_read_only` now take the schedule. Store layout `SCHEMA_VERSION` 1 → 2
+  (rebuild, never migrate). Not yet wired into the daemon.
+
+- **`calc_pow` drops leftover `major_version` (RPC 3.32).** The field was
+  a Cryptonight schema operand. HTTP is Rust (`shekyl-daemon-rpc`); the
+  handler is still C++ `core_rpc_server::on_calcpow` via `core_rpc_ffi`.
+  Extra JSON keys remain ignored by epee. `CORE_RPC_VERSION_MINOR`
+  `31 → 32`. `get_miner_data.major_version` is unchanged (block-template
+  header version).
 
 - **`get_archival_shard_coverage` and `request_archival_shard` (RPC 3.31).**
   Local coverage/profit list (bond-record metadata; no Tor, no bodies, no
@@ -22,6 +64,12 @@
   `CORE_RPC_VERSION_MINOR` `30 → 31`.
 
 ### Changed
+
+- **Default clone no longer requires initializing unused RandomX v1.**
+  CMake dropped `check_submodule(external/randomx)`. That gitlink stays
+  in `.gitmodules` for the restated v1 fallback; nothing in the default
+  daemon or test build consumes it. RandomX v2 C sources remain opt-in
+  (`-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON`).
 
 - **Every FCMP++ spend no longer identifies the output it spends (`PL-D1`
   fixed by `PL-D3`).** The leaf's 4th scalar was `H(hybrid_pk)`, published
@@ -293,6 +341,57 @@
   `/x-provisional/v0/shard/` path is discarded. The status/header privacy
   contract (one 404 for every complete-head miss; two personas
   header-identical) is unchanged.
+
+- **Consensus rules leave the storage layer (`C2-R8`, design ruling; no
+  runtime change in this release).** The Rust chain store will never enforce
+  a consensus rule: the validator crate alone mints the `ChainValid` the
+  store's connect path accepts, a store-side constraint breach is
+  `StoreInvariantViolated` (fatal — a validator hole), never an "invalid
+  block", and that conversion is banned and CI-gated
+  (`check_store_error_conversion_ban.py`). The eight LMDB-side-effect rows
+  are ruled: `CEN-L1` is minted as the intra-block key-image rule (belt
+  `SI-1`); L2/L3/L13 re-home as store invariants; L4/L5 dissolve into
+  existing identity/type constraints; L6's unnamed amount-0 indexing and
+  L14's five write semantics route to batch `R8b`. The new store-invariant
+  register
+  [`STORE_INVARIANT_REGISTER.md`](design/STORE_INVARIANT_REGISTER.md)
+  (`SI-1…SI-8`, including `SI-4` from Q4's curve-tree root, gated by
+  `check_store_invariant_register.py`) is the belt home
+  ([`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)).
+  The plan amendment the ruling owed landed 2026-09-15 in
+  [`DAEMON_REDB_STORE.md`](design/DAEMON_REDB_STORE.md): `DRS-D12` (the
+  validation crate `shekyl-chain-rules` precedes the store's connect path;
+  replay-that-validates is the only pre-cutover writer), `DRS-E6` (141 of the
+  153 enforced consensus rules have no storage surface; E6's per-subsystem
+  increments port them, §7.5, gated by `check_drs_e6_partition.py`), and
+  `ChainTip.connect` halt visibility scheduled for `get_info` with S-CHAIN-W.
+  DRS-E1 increment 2.5 (2026-09-15) lands the ruling's store-side mechanics
+  in `shekyl-chain-store`: the per-batch brand behind `ChainStore::write`,
+  the three error classes as `StoreError`'s outer variants, `StoreInvariant`
+  (`SI-7` built), the two declared write verbs as `InsertTable` /
+  `UpsertTable`, and a batch poison so a swallowed invariant violation —
+  including one mapped to a different `Err` — still cannot commit. No
+  daemon path uses the crate yet.
+
+- **`shekyl-chain-rules` — the consensus validation crate, scaffolded
+  (DRS-E6 increment 1; no runtime change in this release).** The crate that
+  alone mints the `ChainValid<'id, V>` the store's connect path will accept
+  ([`CHAIN_RULES_CRATE.md`](design/CHAIN_RULES_CRATE.md)): a candidate, a
+  brand-scoped read-only `ChainView<'id>`, and a named `RuleSet` go in; a
+  `ChainValid<'id, V>` carrying the rows it evaluated, or an `InvalidBlock`
+  naming the census row and the place it failed, comes out. The token is
+  branded with both the batch `'id` and the view type `V`, so an unbranded
+  view cannot satisfy `connect`. It reaches neither `redb` nor
+  `shekyl-chain-store`, transitively — CI holds that with
+  `cargo tree --target all` (`check_chain_rules_no_store.sh`) — and a store
+  fault is the outer `Err` of `validate` / `tx_against`, never a verdict.
+  Its two row registries (`CenRow`, `PolicyRow`) mirror the census's 153 + 9
+  enforced rows and CI refuses a registry that drifts from the census
+  (`check_chain_rules_coverage.py`). Zero rules are ported yet; every entry
+  is `pending`. Type moves in the same change: `KeyImage` now lives in
+  `shekyl-types` (`shekyl-crypto-pq` re-exports it; the persisted encoding
+  is unchanged, and it still has no `Display` and no `AsRef<[u8]>`), and
+  `CurveTreeRoot` is a newtype beside it.
 
 ## [3.1.0-alpha.8] - 2026-09-10
 

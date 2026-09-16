@@ -934,16 +934,16 @@ Offset  Size  Field
 
 ### `curve_tree_roots`
 
-Per-block curve-tree root hash for fast lookup without deserializing checkpoints.
+Per-height curve-tree root hash for fast lookup without deserializing checkpoints.
 
 | Property | Value |
 |---|---|
 | LMDB name | `"curve_tree_roots"` |
 | Flags | `MDB_INTEGERKEY` |
-| Key | `uint64_t` block height (8 bytes) |
+| Key | `uint64_t` block height (8 bytes) — key *h* holds the tree state **at** height *h*: block *h−1*'s connect writes it as `prev_height + 1` (`blockchain_db.cpp:664`), so it is the anchor CEN-I12 reads for `ref_height = h` and the root block *h*'s header must carry (CEN-B5) |
 | Value | 32-byte root hash |
-| Writers | `set_curve_tree_root_at_height` (block connect), deleted on `pop_block` |
-| Readers | `get_curve_tree_root_at_height` |
+| Writers | `store_curve_tree_root_at_height` (block connect, `src/blockchain_db/blockchain_db.cpp:663`–`:664`) — **on every connect**, whether or not the drain grew the tree: the call is inside the `blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` gate (`:493`, always true) and *outside* the `if (new_output_count > 0)` block that closes at `:650`. The table is therefore **dense from key 1**; **key 0 is never written** (no connect produces it). Deleted on `pop_block` |
+| Readers | `get_curve_tree_root_at_height` — returns an **all-zero** array silently on a missing key (`src/blockchain_db/lmdb/db_lmdb.cpp:9745`–`:9760`, `MDB_NOTFOUND`), which is reachable only for key 0 in a healthy file (`ref_height = 0` is age-selectable while `chain_height ≤ 100`); the zeros decode to the identity point, so a proof anchored at genesis is verified against *O* — consequence-free (the empty tree has no members; forging against *O* is a DL break). Walked and recorded on CEN-I12's CSR row 2026-09-15 (`docs/design/CONSENSUS_RULE_CENSUS.md` §7 #21; S-CHAIN-W SCW-19); the verdict stands |
 | Introduced | HF_VERSION_FCMP_PLUS_PLUS_PQC |
 
 ### `pending_tree_leaves`

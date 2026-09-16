@@ -50,9 +50,7 @@ namespace cryptonote
     //
     // m_master_seed_64 is the only byte sequence that is *persisted* as a
     // secret; every other secret below is rederived on wallet open via
-    // shekyl_account_rederive. Its in-memory copy is XOR-encrypted at rest
-    // with the same chacha keystream as m_spend_secret_key / m_view_secret_key
-    // and is wiped on destruction.
+    // shekyl_account_rederive. The in-memory copy is wiped on destruction.
     //
     // m_seed_format records whether the master seed originated from a
     // BIP-39 mnemonic (mainnet/stagenet) or from a 32-byte raw seed
@@ -81,7 +79,6 @@ namespace cryptonote
     bool m_has_msg_sign_pk = false;
 
     hw::device *m_device = &hw::get_device("default");
-    crypto::chacha_iv m_encryption_iv;
 
     account_keys() = default;
     ~account_keys();
@@ -96,20 +93,10 @@ namespace cryptonote
       KV_SERIALIZE_VAL_POD_AS_BLOB_FORCE(m_view_secret_key)
       KV_SERIALIZE_OPT(m_master_seed_64, std::vector<uint8_t>())
       KV_SERIALIZE_OPT(m_seed_format, (uint8_t)SHEKYL_SEED_FORMAT_RAW32)
-      const crypto::chacha_iv default_iv{{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}};
-      KV_SERIALIZE_VAL_POD_AS_BLOB_OPT(m_encryption_iv, default_iv)
     END_KV_SERIALIZE_MAP()
-
-    void encrypt(const crypto::chacha_key &key);
-    void decrypt(const crypto::chacha_key &key);
-    void encrypt_viewkey(const crypto::chacha_key &key);
-    void decrypt_viewkey(const crypto::chacha_key &key);
 
     hw::device& get_device()  const ;
     void set_device( hw::device &hwdev) ;
-
-  private:
-    void xor_with_key_stream(const crypto::chacha_key &key);
   };
 
   /************************************************************************/
@@ -218,11 +205,6 @@ namespace cryptonote
 
     void forget_spend_key();
     void set_spend_key(const crypto::secret_key& spend_secret_key);
-
-    void encrypt_keys(const crypto::chacha_key &key) { m_keys.encrypt(key); }
-    void decrypt_keys(const crypto::chacha_key &key) { m_keys.decrypt(key); }
-    void encrypt_viewkey(const crypto::chacha_key &key) { m_keys.encrypt_viewkey(key); }
-    void decrypt_viewkey(const crypto::chacha_key &key) { m_keys.decrypt_viewkey(key); }
 
     template <class t_archive>
     inline void serialize(t_archive &a, const unsigned int /*ver*/)

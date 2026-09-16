@@ -60,7 +60,10 @@ pub struct BlockHeader {
     pub previous: [u8; 32],
     /// The PoW nonce.
     pub nonce: u32,
-    /// The FCMP++ curve-tree root committing to the chain's outputs after this block.
+    /// The FCMP++ curve-tree root **at this block's own height**: the tree
+    /// grown with every leaf that matured through the parent, before any of
+    /// this block's outputs (CEN-B5, wording corrected 2026-09-05). The root
+    /// *after* this block is the next header's.
     pub curve_tree_root: [u8; 32],
     /// The archival credit-wire attestation root over this block's pass records
     /// (`ARCHIVAL_CREDIT_WIRE.md` §3). A `block_header` field alongside

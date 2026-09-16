@@ -1,7 +1,7 @@
 # RandomX v2 — spec-anchor plan (F4: break the C-fork circularity)
 
 
-**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
+**Status:** OPEN (F4a in progress; landing shape ratified 2026-07-04). See front-matter table.
 ## Front-matter
 
 | Field | Value |

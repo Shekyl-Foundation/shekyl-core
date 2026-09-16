@@ -116,9 +116,10 @@ static libraries.
 ### Prerequisites
 
 - **Visual Studio 2022 (17.x)** or **Visual Studio 2026 (18.x)** with the
-  C++ Desktop workload.  The CI uses VS 2026 for forward compatibility,
-  but the build works on VS 2022 as well thanks to the
-  `CryptonightR_JIT_stub.c` workaround for the PDB ICE (see below).
+  C++ Desktop workload.  The CI uses VS 2026 for forward compatibility;
+  VS 2022 is also supported. RECORDS-WAS (pre-2026-09-15): the
+  `CryptonightR_JIT_stub.c` workaround for the PDB ICE (see below)
+  is gone with the CryptoNight deletion; MSVC no longer compiles that TU.
 - vcpkg (for Boost, libsodium, OpenSSL, LMDB)
 - Rust toolchain (`stable-x86_64-pc-windows-msvc`)
 - CMake 3.25+ (or CMake 4.0+ if using VS 2026)
@@ -159,10 +160,14 @@ const size_t checkpoints_len = 0;
 
 Consumers check `_len` rather than `sizeof()` to detect empty data.
 
-#### ICE 2: PDB type server crash (`obj_cncrypto`)
+#### ICE 2: PDB type server crash (`obj_cncrypto`) — SUPERSEDED 2026-09-16
 
-**Symptom:** All individual `.c`/`.cpp` files in `src/crypto/` compile
-successfully, then the compiler crashes during the `Generating Code...`
+**Current layout:** `cncrypto` is a single library. CryptonightR / the MSVC
+`OBJECT` split / `obj_cncrypto_rx` do not exist. This section is the ICE
+diagnosis record, not a live build recipe.
+
+**Symptom (historical):** All individual `.c`/`.cpp` files in `src/crypto/` compiled
+successfully, then the compiler crashed during the `Generating Code...`
 phase with:
 
 ```text
@@ -193,23 +198,27 @@ includes (`variant4_random_math.h` with 70 unrolled switch cases,
 `CryptonightR_template.h` with 514 assembly symbol declarations)
 overwhelm the PDB type server during the "Generating Code..." phase.
 
-**Fix:** `src/crypto/CryptonightR_JIT_stub.c` provides the same
-`v4_generate_JIT_code() { return -1; }` stub without the problematic
-includes.  On MSVC, the CMake build uses the stub; on GCC/Clang, the
-full implementation with assembly template is used as before.
+**Fix (SUPERSEDED 2026-09-15):** `src/crypto/CryptonightR_JIT_stub.c`
+provided the same `v4_generate_JIT_code() { return -1; }` stub without
+the problematic includes. Phase 4 deleted CryptoNight (`slow-hash.c`,
+JIT, AES/OAES, hash-extra). The stub, six OBJECT groups, and
+`slow-hash.c` `_M_X64` guard are gone; this section is the ICE
+diagnosis record, not a live build recipe.
 
-**Additional hardening kept in the codebase** (harmless, good hygiene):
+**Additional hardening (SUPERSEDED 2026-09-15 — files deleted with
+CryptoNight):**
 
-- `src/crypto/CMakeLists.txt` splits `cncrypto` into six OBJECT library
-  groups (`hash`, `ops`, `slowhash`, `rx`, `jit`, `cpp`).  This reduces
-  per-target TU count and is harmless on all compilers.
-- `src/crypto/CryptonightR_JIT.c` guards `#include "CryptonightR_template.h"`
-  behind `__x86_64__` (GCC/Clang only) since the 514 assembly symbol
-  declarations it contains are dead on MSVC.
+- `src/crypto/CMakeLists.txt` previously split `cncrypto` into six
+  OBJECT library groups (`hash`, `ops`, `slowhash`, `rx`, `jit`, `cpp`).
+  The remnant two-way split after CryptonightR deletion was collapsed
+  **2026-09-16**; `cncrypto` is one library.
+- `src/crypto/CryptonightR_JIT.c` previously guarded
+  `#include "CryptonightR_template.h"` behind `__x86_64__`.
 - `src/crypto/c_threads.h` includes `<process.h>` on Windows for correct
   `_beginthreadex` prototype (prevents handle truncation on 64-bit).
-- `src/crypto/slow-hash.c` extends the `force_software_aes()` guard to
-  include `_M_X64`.
+  **This header remains.**
+- `src/crypto/slow-hash.c` previously extended `force_software_aes()`
+  to include `_M_X64`. **DELETED 2026-09-15.**
 
 ---
 

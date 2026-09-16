@@ -30,7 +30,6 @@
 #pragma once
 
 #include "crypto/crypto.h"
-#include "crypto/chacha.h"
 #include "fcmp/ct_types.h"
 #include "cryptonote_config.h"
 
@@ -153,7 +152,6 @@ namespace hw {
         /* ======================================================================= */
         virtual bool  get_public_address(cryptonote::account_public_address &pubkey) = 0;
         virtual bool  get_secret_keys(crypto::secret_key &viewkey , crypto::secret_key &spendkey)  = 0;
-        virtual bool  generate_chacha_key(const cryptonote::account_keys &keys, crypto::chacha_key &key, uint64_t kdf_rounds) = 0;
 
         /* ======================================================================= */
         /*                               SUB ADDRESS                               */

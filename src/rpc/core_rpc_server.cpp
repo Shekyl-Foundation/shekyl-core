@@ -424,17 +424,7 @@ namespace cryptonote
     // address (no msg_sign_pk field).
     if (lMiner.is_mining() || lMiner.get_is_background_mining_enabled())
       res.address = lMiner.get_mining_address_str();
-    const uint8_t major_version = m_core.get_blockchain_storage().get_current_hard_fork_version();
-    const unsigned variant = major_version >= 7 ? major_version - 6 : 0;
-    switch (variant)
-    {
-      case 0: res.pow_algorithm = "Cryptonight"; break;
-      case 1: res.pow_algorithm = "CNv1 (Cryptonight variant 1)"; break;
-      case 2: case 3: res.pow_algorithm = "CNv2 (Cryptonight variant 2)"; break;
-      case 4: case 5: res.pow_algorithm = "CNv4 (Cryptonight variant 4)"; break;
-      case 6: case 7: case 8: case 9: res.pow_algorithm = "RandomX"; break;
-      default: res.pow_algorithm = "RandomX"; break; // assumed
-    }
+    res.pow_algorithm = "RandomX";
     if (res.is_background_mining_enabled)
     {
       res.bg_idle_threshold = lMiner.get_idle_threshold();
@@ -791,7 +781,7 @@ namespace cryptonote
     try
     {
       cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), blockblob, pow_hash, req.height,
-        req.major_version, req.seed_hash.size() ? &seed_hash : NULL, 0);
+        req.seed_hash.size() ? &seed_hash : NULL);
     }
     catch (const std::exception &e)
     {
@@ -916,8 +906,8 @@ namespace cryptonote
         error_resp.message = "Error converting seed hash";
         return false;
       }
-      miner::find_nonce_for_given_block([this](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, unsigned int threads, crypto::hash &hash) {
-        return cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), b, hash, height, seed_hash, threads);
+      miner::find_nonce_for_given_block([this](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, crypto::hash &hash) {
+        return cryptonote::get_block_longhash(&(m_core.get_blockchain_storage()), b, hash, height, seed_hash);
       }, b, template_res.difficulty, template_res.height, &seed_hash);
 
       submit_req.front() = string_tools::buff_to_hex_nodelimer(block_to_blob(b));

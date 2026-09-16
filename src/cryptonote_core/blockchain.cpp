@@ -92,8 +92,6 @@ using namespace crypto;
 
 using namespace cryptonote;
 using epee::string_tools::pod_to_hex;
-extern "C" void slow_hash_allocate_state();
-extern "C" void slow_hash_free_state();
 
 DISABLE_VS_WARNINGS(4267)
 
@@ -5519,7 +5517,7 @@ leave:
       precomputed = true;
       proof_of_work = it->second;
     }
-    else if (!get_block_longhash(this, bl, proof_of_work, blockchain_height, nullptr, 0))
+    else if (!get_block_longhash(this, bl, proof_of_work, blockchain_height, nullptr))
     {
       // CEN-D2: a longhash the verifier could not compute must reject the
       // block at EVERY difficulty — the 0xff sentinel alone passes
@@ -6468,7 +6466,6 @@ bool Blockchain::enforce_checkpoints()
 void Blockchain::block_longhash_worker(uint64_t height, const epee::span<const block> &blocks, std::unordered_map<crypto::hash, crypto::hash> &map) const
 {
   TIME_MEASURE_START(t);
-  slow_hash_allocate_state();
 
   for (const auto & block : blocks)
   {
@@ -6476,7 +6473,7 @@ void Blockchain::block_longhash_worker(uint64_t height, const epee::span<const b
        break;
     crypto::hash id = get_block_hash(block);
     crypto::hash pow;
-    if (!get_block_longhash(this, block, pow, height++, nullptr, 0))
+    if (!get_block_longhash(this, block, pow, height++, nullptr))
     {
       // CEN-D2: an uncomputed hash must never enter the precompute table --
       // the consumer trusts table hits without re-checking. Skipping the
@@ -6489,7 +6486,6 @@ void Blockchain::block_longhash_worker(uint64_t height, const epee::span<const b
     map.emplace(id, pow);
   }
 
-  slow_hash_free_state();
   TIME_MEASURE_FINISH(t);
 }
 

@@ -167,6 +167,69 @@ fn pcanonical_id_debug_is_truncated_but_display_is_full() {
 }
 
 #[test]
+fn key_image_debug_is_truncated() {
+    // Moved verbatim from `shekyl-crypto-pq/src/key_image.rs` with the type
+    // (CHAIN_RULES_CRATE.md §3.4): the first two bytes shown, the remaining 30
+    // must not appear. `redact, no_display` renders through the same debug
+    // builder as `PCanonicalId`, so the shape is `KeyImage(0000..)`; the
+    // absence of `Display` is pinned by the crate-docs `compile_fail` doctest,
+    // which is the only way to assert a trait is *not* implemented.
+    let ki = KeyImage::from_canonical_bytes([0u8; 32]);
+    assert_eq!(format!("{ki:?}"), "KeyImage(0000..)");
+
+    let mut bytes = [0xABu8; 32];
+    bytes[0] = 0xDE;
+    bytes[1] = 0xAD;
+    let ki = KeyImage::from_canonical_bytes(bytes);
+    assert_eq!(format!("{ki:?}"), "KeyImage(dead..)");
+    assert!(!format!("{ki:?}").contains("abab"));
+}
+
+#[test]
+fn key_image_canonical_constructor_is_the_family_constructor() {
+    // `from_canonical_bytes` is kept beside `from_bytes` for its meaning, not
+    // for a different value: both wrap the same bytes, and `as_bytes` /
+    // `to_bytes` round-trip them. Equality is by bytes.
+    let bytes = [0xAB; 32];
+    let canonical = KeyImage::from_canonical_bytes(bytes);
+    assert_eq!(canonical, KeyImage::from_bytes(bytes));
+    assert_eq!(canonical.as_bytes(), &bytes);
+    assert_eq!(canonical.to_bytes(), bytes);
+    assert_ne!(canonical, KeyImage::from_canonical_bytes([2u8; 32]));
+}
+
+#[test]
+fn key_image_wire_form_is_the_bare_array() {
+    // `#[serde(transparent)]` is what keeps `TransferDetails`' persisted
+    // `Option<KeyImage>` byte-identical to `Option<[u8; 32]>` (rule 42). Pinned
+    // here so the family's derive, not the old hand-written type, is what the
+    // snapshot tests downstream are relying on.
+    let bytes = [0x5Au8; 32];
+    let typed = postcard::to_allocvec(&KeyImage::from_canonical_bytes(bytes)).unwrap();
+    let bare = postcard::to_allocvec(&bytes).unwrap();
+    assert_eq!(typed, bare);
+    let back: KeyImage = postcard::from_bytes(&typed).unwrap();
+    assert_eq!(back.to_bytes(), bytes);
+}
+
+#[test]
+fn curve_tree_root_is_a_public_hash() {
+    // Default arm: a recorded root is a public commitment, so `Debug` and
+    // `Display` both render the full hex — and it is a distinct type from the
+    // hashes it sits beside (a header's `previous` and `curve_tree_root` are
+    // both `[u8; 32]` on the wire; lifted, one cannot be passed for the other).
+    let mut bytes = [0u8; 32];
+    bytes[0] = 0xDE;
+    bytes[1] = 0xAD;
+    let root = CurveTreeRoot::from_bytes(bytes);
+    let shown = root.to_string();
+    assert_eq!(shown.len(), 64);
+    assert!(shown.starts_with("dead"));
+    assert_eq!(format!("{root:?}"), format!("CurveTreeRoot({shown})"));
+    assert_eq!(root.to_bytes(), bytes);
+}
+
+#[test]
 fn hashes_order_lexicographically_for_btree_keys() {
     // Hashes must be `Ord` so they can key the `BTreeMap`/`BTreeSet`s that
     // wallet-state uses for deterministic txid ordering (PR C). Ordering is
@@ -199,10 +262,13 @@ fn hashes_are_viewable_as_bytes() {
     bytes[31] = 0xAD;
     let tx = TxHash::from_bytes(bytes);
     let block = BlockHash::from_bytes(bytes);
+    let root = CurveTreeRoot::from_bytes(bytes);
     let tx_ref: &[u8] = tx.as_ref();
     let block_ref: &[u8] = block.as_ref();
+    let root_ref: &[u8] = root.as_ref();
     assert_eq!(tx_ref, &bytes[..]);
     assert_eq!(block_ref, &bytes[..]);
+    assert_eq!(root_ref, &bytes[..]);
 }
 
 #[test]

@@ -109,6 +109,31 @@ case "${DOC_LINK_RC}" in
 		echo "doc-link gate FAILED (above are not submodule artifacts)" >&2
 		exit 1
 	fi
+	# Remaining dead links match external/randomx-v2. Waive only when
+	# that directory exists and is empty except a possible `.git`
+	# marker (interrupted submodule update). Missing path is not the
+	# uninitialized-dir case — fail closed. A populated tree plus a
+	# genuinely dead link must fail.
+	if [ ! -d external/randomx-v2 ]; then
+		echo "doc-link gate FAILED: external/randomx-v2 is missing; the dead-link waiver is for an empty uninitialized checkout, not absence" >&2
+		cat "${DOC_LINK_OUT}" >&2
+		exit 1
+	fi
+	_rx_v2_populated=0
+	# POSIX hidden-file coverage: `*` (non-dot), `.[!.]*` (one-dot
+	# names except `.` / `..`), `..?*` (two-dot names such as
+	# `..partial`). Skip only `.git`.
+	for _rx_v2_entry in external/randomx-v2/* external/randomx-v2/.[!.]* external/randomx-v2/..?*; do
+		[ -e "${_rx_v2_entry}" ] || continue
+		[ "$(basename "${_rx_v2_entry}")" = ".git" ] && continue
+		_rx_v2_populated=1
+		break
+	done
+	if [ "${_rx_v2_populated}" -eq 1 ]; then
+		echo "doc-link gate FAILED: external/randomx-v2 is populated; randomx-v2 dead links are not uninitialised-submodule artifacts" >&2
+		cat "${DOC_LINK_OUT}" >&2
+		exit 1
+	fi
 	echo "   dead links are all uninitialised-submodule artifacts -- waived"
 	;;
 *)

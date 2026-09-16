@@ -3795,11 +3795,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-chain-rules"
+version = "3.1.0"
+dependencies = [
+ "shekyl-address",
+ "shekyl-types",
+ "shekyl-wire",
+]
+
+[[package]]
 name = "shekyl-chain-store"
 version = "3.1.0"
 dependencies = [
  "redb",
+ "shekyl-chain-rules",
  "shekyl-crypto-hash",
+ "shekyl-types",
+ "shekyl-wire",
 ]
 
 [[package]]
@@ -3877,6 +3889,7 @@ dependencies = [
  "shekyl-curve-primitives",
  "shekyl-fcmp",
  "shekyl-stats",
+ "shekyl-types",
  "thiserror 2.0.18",
  "trybuild",
  "x25519-dalek",
@@ -4186,6 +4199,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp-proofs",
+ "shekyl-types",
  "thiserror 2.0.18",
  "tracing",
  "zeroize",
