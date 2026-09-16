@@ -198,7 +198,7 @@ TEST(mining_parity, randomx_hash_routes_through_v2_ffi)
       std::string(kCanonicalKatHex + 2 * i, 2), nullptr, 16));
 
   crypto::hash via_dispatch = crypto::null_hash;
-  ASSERT_TRUE(cryptonote::hash_pow_randomx(blob.data(), blob.size(), &seed, via_dispatch));
+  ASSERT_TRUE(cryptonote::hash_pow_randomx(blob.data(), blob.size(), seed, via_dispatch));
   ASSERT_EQ(0, std::memcmp(via_dispatch.data, expected.data(), expected.size()));
 
   // A direct v2 FFI call must produce the same bytes, cross-checking the

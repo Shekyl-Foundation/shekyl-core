@@ -745,8 +745,8 @@ namespace cryptonote
     // attestation_root: block_header() already defaults to empty_attestation_root()
     // (Rust attestation_root(&[]) via FFI) — the valid empty-set commitment, not
     // null_hash (ARCHIVAL_CREDIT_WIRE.md §3). Genesis has no pass records.
-    miner::find_nonce_for_given_block([](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, unsigned int threads, crypto::hash &hash){
-      return cryptonote::get_block_longhash(NULL, b, hash, height, seed_hash, threads);
+    miner::find_nonce_for_given_block([](const cryptonote::block &b, uint64_t height, const crypto::hash *seed_hash, crypto::hash &hash){
+      return cryptonote::get_block_longhash(NULL, b, hash, height, seed_hash);
     }, bl, 1, 0, NULL);
     bl.invalidate_hashes();
     return true;
@@ -755,9 +755,7 @@ namespace cryptonote
   bool get_altblock_longhash(const block& b, crypto::hash& res, const crypto::hash& seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
-    // One PoW dispatch point: hash_pow_randomx. Height/version are ignored
-    // (Phase 3b: RandomX is the only PoW; CEN-D2's schema half is gone).
-    if (!hash_pow_randomx(bd.data(), bd.size(), &seed_hash, res))
+    if (!hash_pow_randomx(bd.data(), bd.size(), seed_hash, res))
     {
       // The 0xff..ff sentinel is a BELT, not the gate: check_hash() rejects
       // it only at difficulty > 1 — at difficulty 1 every hash passes, so a
@@ -769,26 +767,18 @@ namespace cryptonote
     return true;
   }
 
-  bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const int major_version, const crypto::hash *seed_hash, const int miners)
+  bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash)
   {
-    const crypto::hash* resolved_seed_hash = seed_hash;
-    crypto::hash resolved_seed = crypto::null_hash;
-
-    if (pbc != NULL)
+    crypto::hash looked_up = crypto::null_hash;
+    const crypto::hash *resolved = seed_hash;
+    if (resolved == nullptr)
     {
-      const uint64_t seed_height = shekyl_pow_randomx_v2_seedheight(height);
-      resolved_seed = seed_hash ? *seed_hash : pbc->get_pending_block_id_by_height(seed_height);
-      resolved_seed_hash = &resolved_seed;
+      if (pbc != nullptr)
+        looked_up = pbc->get_pending_block_id_by_height(shekyl_pow_randomx_v2_seedheight(height));
+      resolved = &looked_up;
     }
-    else
-    {
-      memset(&resolved_seed, 0, sizeof(resolved_seed));
-      resolved_seed_hash = &resolved_seed;
-    }
-    (void)major_version;
-    (void)miners;
 
-    if (!hash_pow_randomx(bd.data(), bd.size(), resolved_seed_hash, res))
+    if (!hash_pow_randomx(bd.data(), bd.size(), *resolved, res))
     {
       // The 0xff..ff sentinel is a BELT, not the gate: it makes check_hash()
       // reject at any difficulty > 1, but at difficulty 1 every hash passes
@@ -803,16 +793,16 @@ namespace cryptonote
     return true;
   }
 
-  bool get_block_longhash(const Blockchain *pbc, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash, const int miners)
+  bool get_block_longhash(const Blockchain *pbc, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash)
   {
     blobdata bd = get_block_hashing_blob(b);
-	return get_block_longhash(pbc, bd, res, height, b.major_version, seed_hash, miners);
+    return get_block_longhash(pbc, bd, res, height, seed_hash);
   }
 
-  crypto::hash get_block_longhash(const Blockchain *pbc, const block& b, const uint64_t height, const crypto::hash *seed_hash, const int miners)
+  crypto::hash get_block_longhash(const Blockchain *pbc, const block& b, const uint64_t height, const crypto::hash *seed_hash)
   {
     crypto::hash p = crypto::null_hash;
-    get_block_longhash(pbc, b, p, height, seed_hash, miners);
+    get_block_longhash(pbc, b, p, height, seed_hash);
     return p;
   }
 }

@@ -44,14 +44,14 @@ using namespace cryptonote;
 namespace
 {
 
-bool failing_pow_hash(const void*, size_t, const crypto::hash*, crypto::hash&)
+bool failing_pow_hash(const void*, size_t, const crypto::hash&, crypto::hash&)
 {
   return false; // the verifier-failure arm under test
 }
 
 // Control hash: proves the override seam engages (a test must be able to
 // observe its own setup) and pins the success path through the same seams.
-bool const_pow_hash(const void*, size_t, const crypto::hash*, crypto::hash& out)
+bool const_pow_hash(const void*, size_t, const crypto::hash&, crypto::hash& out)
 {
   memset(out.data, 0x42, sizeof(out.data));
   return true;
@@ -121,7 +121,7 @@ TEST(pow_longhash_gate, bool_overload_reports_failure_and_seeds_belt)
   block blk{};
   blk.major_version = 1;
   crypto::hash res = crypto::null_hash;
-  EXPECT_FALSE(get_block_longhash(nullptr, blk, res, 1, nullptr, 0))
+  EXPECT_FALSE(get_block_longhash(nullptr, blk, res, 1, nullptr))
     << "verifier failure must surface through the bool";
   EXPECT_TRUE(is_belt_sentinel(res))
     << "the 0xff belt must still be written for bool-ignoring callers";
@@ -148,7 +148,7 @@ TEST(pow_longhash_gate, seam_engages_and_success_path_passes_through)
   block blk{};
   blk.major_version = 1;
   crypto::hash res = crypto::null_hash;
-  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr, 0));
+  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr));
   for (size_t i = 0; i < sizeof(res.data); ++i)
     ASSERT_EQ(0x42, static_cast<unsigned char>(res.data[i]));
 

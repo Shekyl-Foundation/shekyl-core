@@ -267,11 +267,8 @@ pub fn cmd_mine_stop(rpc: &RpcSession, daemon: Option<&DaemonClient>, network: &
 }
 
 /// `mine status` — the daemon's mining state. The daemon's `pow_algorithm`
-/// string is deliberately not rendered: the inherited label table still
-/// emits Cryptonight names for dead pre-RandomX variants
-/// (`core_rpc_server.cpp` `on_mining_status`); deleting those arms is
-/// daemon-side rule-60 cleanup tracked in docs/FOLLOWUPS.md
-/// (Target: pre-genesis).
+/// string is deliberately not rendered (CU-3: operators do not need a
+/// protocol-algorithm name; the daemon now always reports RandomX).
 pub fn cmd_mine_status(rpc: &RpcSession, daemon: Option<&DaemonClient>, network: &str) {
     let Some((dc, _info)) = gate(rpc, daemon, network) else {
         return;
