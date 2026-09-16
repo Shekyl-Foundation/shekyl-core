@@ -1,9 +1,10 @@
 # `shekyl-chain-rules` slice 1 — census 4.A + 4.B (DRS-E6 increment 2)
 
 **Status:** OPEN — **round 1 = pre-flight (rule 26 Round 0), written
-2026-09-16** against `dev` @ `3560b80c2` (S-CHAIN-W landed, PR #757). **Q1
-RULED 2026-09-16 (§2); Q2–Q6 (§8) open. No production commit lands until they
-are ruled** — rule 26's halt condition, cited here on purpose. §9 points at
+2026-09-16** against `dev` @ `3560b80c2` (S-CHAIN-W landed, PR #757). **Q2–Q6
+RULED 2026-09-16 (§8); Q1 ruled `Option<Tip>` at 12:55 and contradicted at
+13:40 — flagged in §8, unresolved. No production commit lands until Q1 is
+settled** — rule 26's halt condition, cited here on purpose. §9 points at
 DRS §7.6 (PR #760), the same-day parity-then-repair ruling, and records what
 slice 1 owes to it. Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)
 §7.5.1 (the increment's pre-flight names its parents, audits each row's body,
@@ -146,24 +147,27 @@ B5), so the trait method and its two implementors are **one commit**.
 ## 3. Row-body audit (§7.5.1 (b)) — 13 rows at `3560b80c2`
 
 Sites re-read at the dev tip, not copied from the census's pinned lines (which
-have drifted by ~15 lines in `blockchain.cpp`). *class*: **rule** = a predicate
-`validate` evaluates and lands here; **adopt** = Rust body exists, wrapped;
-**topology** = an acceptance-path outcome or ingest bound that is not a
-predicate over `(Candidate, recorded chain)` — Q2; **deferred** — Q3.
+have drifted by ~15 lines in `blockchain.cpp`). *class* (as ruled 2026-09-16, Q2/Q3):
+**rule** = a predicate `validate` evaluates and lands here; **adopt** = Rust
+body exists, wrapped; **wire invariant** = holds under any rule set, held by
+the parser (R8 arm B with a wire holder — §4); **subsumed-by-X** = never
+arrives as its own rule, its row closes when X lands; **held-by-cxx** =
+acceptance topology the C++ ingest driver decides, a deferral that expires at
+cutover (§4); **deferred** = rule-22 shape, blocker named (Q3).
 
 | row | b | C++ body (this tree) | Rust body | class | view read | disposition |
 | --- | --- | --- | --- | --- | --- | --- |
-| CEN-A1 | 2 | `have_block_unlocked` `blockchain.cpp:3011–3041`: main (`block_exists`) ∪ alt (`get_alt_block`) ∪ `m_invalid_blocks`; consumer `add_new_block` `:6338–6343` → outcome byte `ALREADY_EXISTS`, `return false` | — | **topology** | none possible: two of the three stores are not recorded-chain facts, and the outcome is not `InvalidBlock` | Q2 |
+| CEN-A1 | 2 | `have_block_unlocked` `blockchain.cpp:3011–3041`: main (`block_exists`) ∪ alt (`get_alt_block`) ∪ `m_invalid_blocks`; consumer `add_new_block` `:6338–6343` → outcome byte `ALREADY_EXISTS`, `return false` | — | **held-by-cxx** | none possible: two of the three stores are not recorded-chain facts, and the outcome is not `InvalidBlock` | where a block *goes*, not whether it is valid — the ingest driver's; §4 |
 | CEN-A2 | 2 | routing `:6346–6355` (`prev_id == get_tail_id()` → main, else alt); **re-check** `:5423–5428` `bl.prev_id != top_hash` → `reject_block_internal` | store **belt** SI-2 `TipMismatch` `connect.rs:303` | **rule** (the re-check); routing is the driver's | `tip()` | lands: `previous == tip.hash`; at `None` (empty chain), `previous == [0; 32]` |
-| CEN-A3 | 1 | 2-arg `add_new_block` guard `:6320–6322`: `attestation_root == empty_attestation_root()` or assert | `shekyl_archival_retention::empty_attestation_root` | **deferred with B4** | — | the guard is about a C++ *overload* ("a caller dropped the witness"); once `Candidate` carries the witness there is no witness-less entry and A3 is B4's empty-witness arm. Q3 |
-| CEN-A4 | 2 | orphan marking `:2462–2464` in `handle_alternative_block`: parent in neither main nor alt → `ORPHANED`, not stored | — | **topology** | alt-store membership is not a recorded-chain fact (E5 S-ALT) | Q2 |
-| CEN-A5 | 4 | `cryptonote_core.cpp:1450` `block_blob.size() > cumulative_block_weight_limit + BLOCK_SIZE_SANITY_LEEWAY (100, :71)` — **pre-parse** | — (`shekyl_wire::MAX_BLOCK_BLOB_SIZE` is a parse-DoS cap, `block.rs:48`, a different bound) | **topology** (ingest) | operand is 4.G state (the weight limit) | Q2; a slice-7 dependency if it ever becomes a predicate |
-| CEN-A6 | 4 | `cryptonote_core.cpp:1381` parse failure rejects | `shekyl_wire::Block::from_bytes` (exact consumption, `block.rs:186–206`) | **topology** (wire boundary) | `validate` takes a parsed `Block`; the parse is `BLOCK_TX_WIRE_FORMAT_PORT.md`'s subject | Q2 |
-| CEN-A7 | 4 | `cryptonote_basic.h:914` `tx_hashes.size() > 0x10000000` fails (de)serialization | `Block::read` caps `n_tx` at `READ_LEN_CAP = 1_000_000` (`lib.rs:67`, `block.rs:162–167`) | **topology** (wire boundary) | — | Q2; **value divergence** recorded, §6 F2 |
+| CEN-A3 | 1 | 2-arg `add_new_block` guard `:6320–6322`: `attestation_root == empty_attestation_root()` or assert | `shekyl_archival_retention::empty_attestation_root` | **subsumed-by-B4** | — | **RULED Q3:** the guard is about a C++ *overload* ("a caller dropped the witness"); once `Candidate` carries the witness there is no witness-less entry and A3 *is* B4's empty-witness arm — it never arrives as its own rule; its row closes when B4 lands (not "deferred": a deferral would send B4's implementer looking for a rule that does not exist) |
+| CEN-A4 | 2 | orphan marking `:2462–2464` in `handle_alternative_block`: parent in neither main nor alt → `ORPHANED`, not stored | — | **held-by-cxx** | alt-store membership is not a recorded-chain fact (E5 S-ALT) | routing, not validity — the ingest driver's; the store half (a parentless block cannot connect) is already SI-2; §4 |
+| CEN-A5 | 4 | `cryptonote_core.cpp:1450` `block_blob.size() > cumulative_block_weight_limit + BLOCK_SIZE_SANITY_LEEWAY (100, :71)` — **pre-parse** | — (`shekyl_wire::MAX_BLOCK_BLOB_SIZE` is a parse-DoS cap, `block.rs:48`, a different bound) | **subsumed-by-4.G** (proposed) | operand is 4.G state (the weight limit) | fails the R8 invariant test (the limit is a consensus parameter, so it would *not* hold under a rule change) and is not a rule of its own: the census names it "pre-parse approximation of CEN-G6b"; any blob it rejects has weight > limit and is refused by the 4.G weight rule at slice 7. Its row closes there; the pre-parse fast path is an ingest-DoS choice the Rust driver makes or drops consciously (bucket-4 keep-or-drop), not a row. §4 |
+| CEN-A6 | 4 | `cryptonote_core.cpp:1381` parse failure rejects | `shekyl_wire::Block::from_bytes` (exact consumption, `block.rs:186–206`) | **wire invariant** | `validate` takes a parsed `Block`; the parse is `BLOCK_TX_WIRE_FORMAT_PORT.md`'s subject | passes the R8 test (a blob that does not parse cannot be judged under *any* rule set); home is a wire-side invariant register, the SI register's analogue, owned by the wire-format port — re-homed there the way L2–L6 went to `SI-` (census bucket 3, leaves the denominator). §4 |
+| CEN-A7 | 4 | `cryptonote_basic.h:914` `tx_hashes.size() > 0x10000000` fails (de)serialization | `Block::read` caps `n_tx` at `READ_LEN_CAP = 1_000_000` (`lib.rs:67`, `block.rs:162–167`) | **wire invariant** + arm-C value | — | the *existence* of a count bound passes the R8 test (you need one to deserialize at all) → wire invariant beside A6; the *value* (2^28 vs 10^6, neither derived) is arm C — nobody decided it — routed to the wire-format port as F2 (§6, re-derived) |
 | CEN-B1 | 2 | `:5445` `m_hardfork->check(bl)` → `do_check` `hardfork.cpp:109–113`: `major == heights[cur].version && vote ≥ version`; alt `check_for_height` `:121–126` (ideal at height) | — | **rule** | none (the rule set is an input) | lands: `header.major_version == rule_set.header_major_version()` — a new `RuleSet` parameter, Q4. The alt arm collapses: the caller passes `rules_at(height)` |
 | CEN-B2 | 4 | `hardfork.cpp:41–50` vote normalisation (`minor 0 → 1`); `vote ≥ 1` unfailable | — | **rule, port-as-is** | none | lands: evaluates, never refuses; coverage records B2 |
 | CEN-B3 | 4 | — | store belt `hf_versions[h]` `connect.rs:387` | **out** — surface-bound, table 2 (S-CHAIN-W) | — | not this slice |
-| CEN-B4 | 1 | `:5463–5470` `verify_block_attestation(bl, predecessor_height, …, witness)` → FFI `shekyl_archival_verify_attestation` with `ShekylArchivalAttestationVerifyCtx { predecessor_height, anchor_hashes[L+1], headers, pairs(p_id, pubkey) }` | `shekyl-ffi/src/archival_ffi/attestation.rs:117–164`; `shekyl-archival-retention::attestation_wire` | **deferred** | `block_at` for the anchor window (landed); **bond `(p_id, pubkey)` pairs — no table, no view method until E4 S-ARCH**; the witness is not a `Candidate` component | Q3 |
+| CEN-B4 | 1 | `:5463–5470` `verify_block_attestation(bl, predecessor_height, …, witness)` → FFI `shekyl_archival_verify_attestation` with `ShekylArchivalAttestationVerifyCtx { predecessor_height, anchor_hashes[L+1], headers, pairs(p_id, pubkey) }` | `shekyl-ffi/src/archival_ffi/attestation.rs:117–164`; `shekyl-archival-retention::attestation_wire` | **deferred** | `block_at` for the anchor window (landed); **bond `(p_id, pubkey)` pairs — no table, no view method until E4 S-ARCH**; the witness is not a `Candidate` component | **RULED Q3 — DEFERRED** (rule 22: blocker E4 S-ARCH, consumer the increment landing the bond-pubkey read, falsifier §8 Q3). A3 is subsumed into it, not deferred beside it |
 | CEN-B5 | 1 | `:5579–5591` `bl.curve_tree_root != m_db->get_curve_tree_root()` (tip root = state at the connecting height) → `reject_block_form` | store `root_at(h)` key `h` (`view.rs:216–233`) | **rule** | `tip()`, `root_at(connecting_height)` | lands: `Recorded(root) if root == header.curve_tree_root` passes; else refuses; `AboveTip` refuses (unreachable against a conforming view — SI-4 keeps `tip + 1` recorded — written as the fail-closed arm G11 requires) |
 | CEN-B6 | 4 | `get_block_hashing_blob` (cryptonote_format_utils) | `shekyl_wire::Block::hash` (`block.rs:217–247`); KAT `coinbase_hash.rs` | **adopt** | none | lands: the identity derivation site moves behind the row's function (Q5) |
 | CEN-B7 | 4 | `:5431–5441` one-time `MCLOG_RED` warning if `major > get_ideal_version()`; **no reject** | — | **rule, port-as-is** | none | lands: evaluates, never refuses; the log side-effect is not ported (the crate has no logging, G12) — recorded, not hidden |
@@ -174,53 +178,78 @@ outside 4.A/4.B was examined for slice 1; 4.C–4.M are the later slices'.
 
 ---
 
-## 4. The registration gap (Q2) — what the audit surfaced
+## 4. The registration gap (Q2) — the grouping, then the mechanism
 
 `census_rows!` knows two statuses: `pending` and `implemented(path)`
 (`census.rs:91–111`). `RuleSet::GENESIS.enforced == CenRow::ALL` (153), and
 `Coverage::is_complete_for` is true only when every enforced row is in
-coverage. Five slice-1 rows can **never** be in coverage because `validate`
-cannot evaluate them; so with the registry as it stands, `is_complete_for` is
-permanently false and *no* `ChainValid` is ever parity evidence — which is
-true today and would stay true after all 141 free rows land. The gap is not
-slice-1-specific: table 2's CEN-H5 ("dissolves into `ValidatedBlock`'s typed
-input `enum`") and CEN-B3 ("the surface; body as R4 rules") already have no
-representable status either. Slice 1 is the first increment where it bites.
+coverage. Five slice-1 rows can never be in coverage because `validate`
+cannot evaluate them, so with the registry as it stands `is_complete_for` is
+permanently false. The round-1 draft proposed one new status for all five;
+**the review (2026-09-16) asked for the grouping to be checked first, and
+the five are not one thing.** C2-R8's category test (§2 there: *would this
+still have to hold if the consensus rules changed?*) applied per row:
 
-Options, with the proposed default first:
+| row | R8 test | disposition |
+| --- | --- | --- |
+| A6 parse failure rejects | **yes** — a blob that does not parse cannot be judged under any rule set | **wire invariant**: arm B with a wire holder (`shekyl_wire::Block::from_bytes`). Home: a **wire-side invariant register**, the `SI-` register's analogue, owned by the wire-format port (`BLOCK_TX_WIRE_FORMAT_PORT.md`), which does not exist yet. Re-homed the way L2–L6 went to `SI-` — the census row moves to bucket 3 and leaves the enforced denominator — **when that register is minted**; not a rules-registry status |
+| A7 tx-count bound | **yes** for the bound's existence (you need a length bound to deserialize at all); **no document names the value** | **wire invariant** (existence) beside A6; the **value** is arm C, routed to the wire-format port as F2 |
+| A5 blob size vs weight limit + 100 | **no** — the weight limit is a consensus parameter; the row would not have to hold under a rule change | **subsumed by the 4.G weight rule** (slice 7): the census already calls it a "pre-parse approximation of CEN-G6b", and any blob it rejects has weight > limit. Its row closes when the 4.G rule lands (the A3 → B4 model); the pre-parse fast path is an ingest-DoS choice for the Rust driver to keep or drop consciously, not a row |
+| A1 dedup across main / alt / invalid | the *store* half holds under any rule set (a hash is recorded once) — but the row's subject is the **outcome byte** `ALREADY_EXISTS` and *which* store answered | **held-by-cxx**: where a block goes, not whether it is valid. Acceptance topology is the ingest driver's, and the driver is C++ until the daemon rewrite / E2 replay driver |
+| A4 orphan → not stored | same shape: the store half is **SI-2** already (a parentless block cannot connect); the row is the routing outcome `ORPHANED` | **held-by-cxx**, beside A1 |
 
-**(a) — default — a third entry status, `held(<holder>)`.** The row is
-enforced, but by a **named component that is not this validator**, and is
-therefore excluded from `RuleSet::enforced` (the parameter that already
-exists for "the rows this rule set holds a block to"). The gate prints a third
-figure, `held H`, beside `implemented I` and `enforced E`, with `E` unchanged
-(the census denominator does not move) and completeness measured over
-`enforced − held`. Rule 47: every `held(...)` names a holder that **exists** —
-a Rust path is compile-pinned exactly like `implemented` (`use $path as _`);
-a C++ holder is a `file:token` the gate greps for. Slice 1's five: A6, A7 →
-`held(shekyl_wire::Block::from_bytes)`; A1, A4 → `held("src/cryptonote_core/blockchain.cpp:have_block_unlocked")`
-/ `…:handle_alternative_block`; A5 → `held("src/cryptonote_core/cryptonote_core.cpp:BLOCK_SIZE_SANITY_LEEWAY")`.
-Falsifier for each C++ holder: the daemon-driver rewrite that re-homes it
-(the token disappears → gate red → the row is re-classified then).
-*Cost:* macro arm, gate grammar + selftest, one `RuleSet` field. *Why not
-just leave them `pending`:* "pending" reads as *owed to this crate*; these are
-not, and a queue that says they are will have someone write an `ingest()`
-here to clear it.
+So: **two** rows need a new status (A1, A4), **two** re-home to a register
+that the wire-format port mints (A6, A7 — until then they stay `pending`
+with this disposition written on them, and the denominator they leave is the
+census's to move, not this crate's), **one** is subsumed (A5). The
+`held(<rust path>)` variant the draft proposed is **not minted**: it has no
+consumer today (rule 21) — it reopens when the Rust ingest driver takes A1/A4
+over, at which point the question is whether those rows re-home (a driver
+register) or the registry needs a Rust holder status.
 
-**(b) — leave `pending`, accept `is_complete_for == false` until the daemon
-driver is Rust.** Honest but silent: the five rows are indistinguishable from
-the 128 that *are* owed here, and the parity-evidence bit stays dark for the
-whole E-series for a reason nobody can read off the gate.
+### 4.1 `held_by_cxx(<test>)` — the mechanism, under the review's three conditions
 
-**(c) — widen the crate:** `ingest(blob) -> Verdict<Candidate>` (A5, A6, A7)
-and `route(candidate, view) -> Route` (A1, A2-routing, A4). **Rejected by this
-pre-flight** for A1/A4: they need alt-store and invalid-set membership, which
-are not recorded-chain facts, so `ChainView` would grow methods that violate
-Q3's "recorded chain only" and the mock stops being smaller than the store.
-`ingest` is arguable for A6/A7 but adds an entry point whose only body is a
-call into `shekyl-wire` — a shim.
+**Condition 1 — holder-*enforces*, not holder-*exists*.** A `file:token` grep
+succeeding proves a token appears in a file (PWD-B10: the probe ran, the
+output was real, the verdict was about the wrong subject). The entry therefore
+names **a test that the holder rejects** — the same standard the negative
+fixtures get — and the gate asserts that test's *name* exists at the cited
+path (rule 47: the gate's subject is the test) while the C++ CI lane runs it.
+**Finding F4 (§6): no such test exists today for either row.** The C++ tests
+that mention `ALREADY_EXISTS` / `ORPHANED` exercise the outcome-byte plumbing
+(`tests/unit_tests/peer_policy_block_ingest.cpp:33–108`) and the sync arm
+(`tests/unit_tests/sync_orphan_arm.cpp`), not `add_new_block` refusing a
+duplicate or an orphan. Minting `held_by_cxx` for A1/A4 therefore **costs two
+C++ core tests** — `gen_block_already_known_is_already_exists` and
+`gen_block_unknown_parent_is_orphaned_and_not_stored` — written in
+`tests/core_tests/block_validation.cpp`, the minimum C++ touch (rule 20: test
+code for a C++ holder, not logic), and the entries name them.
 
----
+**Condition 2 — a C++ holder is not a durable home; type it.** `held_by_cxx`
+is a **deferral with a known expiry**: it is *not* `held(<rust path>)` (not
+minted), and the gate refuses an entry whose cited test file no longer exists
+— which is what cutover does by construction, so cutover **forces** the
+resolution of every held row at the moment the C++ leaves, instead of leaving
+them quietly held by a deleted file. Rule-22 shape on each: *blocked on the
+Rust ingest driver — falsify by the driver PR that routes `ALREADY_EXISTS` /
+`ORPHANED`*.
+
+**Condition 3 — the third figure is a subtraction, not a denominator.** The
+record keeps `enforced E` fixed and prints, on the consensus line:
+`implemented I / validator-enforced (E − H)   held-by-cxx H   enforced E
+ratified R / enforced E`. `RuleSet::enforced` excludes held rows so
+`is_complete_for` measures `E − H`; `E` never moves for a hold, so coverage
+cannot improve by moving rows out of scope — the failure the two-number
+format exists to prevent, and which this programme has relearned twice
+already. `--describe` lists the held rows by id with their cited test.
+
+Grammar: `A1 held_by_cxx("tests/core_tests/block_validation.cpp",
+"gen_block_already_known_is_already_exists"),` — the gate parses the pair,
+asserts the file exists and contains the test name, refuses a bare path, and
+refuses `held_by_cxx` on a row whose census `site(s)` cell cites no C++ file.
+`--selftest` exercises all three refusals red. Expected record after slice 1
+lands: `consensus: implemented 6 / validator-enforced 151   held-by-cxx 2
+enforced 153   ratified 126 / enforced 153`.
 
 ## 5. SCW-18 — `trait Rule { const ROW }`, the first real rule's shape (Q6)
 
@@ -272,25 +301,36 @@ tree has `5423`, `5445`, `5579–5591`, `5431–5441`. The census header carries
 its own pinned sha, so this is not a census defect; recorded so this document's
 sites are read as *this tree's*. No action.
 
-**F2 — CEN-A7's bound is not the Rust parser's bound.** C++ refuses
-`tx_hashes.size() > 0x10000000` (2^28); `shekyl_wire::Block::read` refuses
-`n_tx > READ_LEN_CAP = 1_000_000` (`lib.rs:67`). Both are structural parse
-bounds; the values differ by ~268×. Not a slice-1 rule (A7 is topology) and not
-a consensus divergence today (no block approaches either), but it is exactly
-the "value has no derivation record" the census row already flags, now with a
-second undocumented value beside it. **This is a knowingly-reproduced
-deviation** in the sense of DRS §7.6 item 1 (the parity phase reproduces; the
-repair phase judges — §9), so it is recorded in the form every such deviation must carry —
-*what we reproduced, why, and what correct looks like:* reproduced — two
-structural bounds on one field, 2^28 (C++) and 10^6 (Rust), neither derived;
-why — parity first, and no block approaches either; **correct** — one
-constant, one derivation record (a per-block tx-count bound derived from the
-block-weight limit, or ruled unbounded-below-weight), owned by the wire-format
-port. **Route (A5 carry):** one `FOLLOWUPS.md` line in this PR's doc commit
-carrying those three fields, Target pre-genesis, falsifier "one constant with
-a derivation record, or the divergence ruled"; it migrates into the unified
-repair backlog when E2 mints that artifact (DRS §7.6 item 1) — the row is written so the
-migration is a move, not a rewrite.
+**F2 — CEN-A7: two count bounds on one field, neither derived (re-derived
+2026-09-16 after the review asked for the units to be checked).** The review
+read C++'s `0x10000000` as a blob *byte* bound and proposed comparing it with
+`MAX_BLOCK_BLOB_SIZE`; **read at source it is not**: `cryptonote_basic.h:914`
+is `if (tx_hashes.size() > CRYPTONOTE_MAX_TX_PER_BLOCK) return false;` — an
+**element count**, inside the serializer. So the matched-units pair is the one
+first stated: C++ refuses `tx_hashes.size() > 2^28`; `shekyl_wire::Block::read`
+refuses `n_tx > READ_LEN_CAP = 1_000_000` (`block.rs:163`). Same subject,
+same unit, values apart by ~268×, Rust tighter and fail-closed. The *byte*
+pair, for completeness: C++ has **no** fixed blob byte cap on 64-bit hosts
+(`cryptonote_core.cpp:1374`'s `0x3fffffff` is inside a `sizeof(size_t) == 4`
+guard); its operative byte bound is CEN-A5's `weight_limit + 100`. Rust's
+`MAX_BLOCK_BLOB_SIZE = MAX_TX_SIZE + READ_LEN_CAP × 32 + 128` (≈ 33 MB,
+`block.rs:48`) is documented as a DoS pre-allocation guard "**not** a
+consensus bound", provably `≥` any blob `read` accepts — it never rejects a
+parseable block, so it is not a second consensus bound. Nothing in the
+conclusion changes; the mismatch the review feared was in the *reading*, and
+it is now pinned at both sources so the wire-port owner is handed one
+comparison in one unit.
+
+In the three-field form (§9): *reproduced* — a per-block tx-count bound
+whose value is `2^28` in C++ and `10^6` in Rust, neither with a derivation
+record; *why* — parity first, and no real block approaches either; *correct*
+— one constant with a derivation (a count bound derived from the
+block-weight limit, or ruled unbounded-below-weight), owned by the
+wire-format port, which is also where A6/A7's wire-invariant register lives
+(§4). **Route (A5 carry):** one `FOLLOWUPS.md` line in this PR's doc commit,
+Target pre-genesis, falsifier "one constant with a derivation record, or the
+divergence ruled". A7's value is arm C: nobody decided it, and this finding
+says so rather than inventing an answer.
 
 **F3 — the store already holds A2's belt but nothing holds A2's rule.**
 `connect.rs:303` refuses `previous != tip.hash` as SI-2 `TipMismatch`
@@ -298,6 +338,17 @@ migration is a move, not a rewrite.
 route a wrong-parent block into a fatal. Not a defect — the belt is doing what
 a belt does — but it makes A2 the first rule to land, before any driver
 connects real blocks.
+
+**F4 — the C++ holders of A1 and A4 have no rejection test.** Searched
+`tests/core_tests/` and `tests/unit_tests/` for a test that submits a
+duplicate block to `add_new_block` and observes `ALREADY_EXISTS`, or an
+unknown-parent block and observes `ORPHANED` + not stored: none.
+`peer_policy_block_ingest.cpp` tests the outcome-byte encoding;
+`sync_orphan_arm.cpp` tests the p2p re-request arm. Both rows are ratified
+(bucket 2, C2-R1 Q3a/Q3b) on the strength of reading the code. Under §4.1
+condition 1 the `held_by_cxx` entries need those two tests to exist, so slice
+1 writes them (commit 5). Same standard as the negative fixtures: a hold
+without a rejection test is a claim, not a check.
 
 ---
 
@@ -331,12 +382,13 @@ stay here behind Q2–Q6.
 2. `chain-rules: Rule/BlockRule traits; census_rows! emits the SCW-18 ROW pin`
 3. `chain-rules: CEN-A2 parent-is-tip; CEN-B1/B2/B7 header version rows` (+ `RuleSet::header_major_version`, Q4)
 4. `chain-rules: CEN-B5 header root == root_at(connecting height); CEN-B6 identity under the row`
-5. `chain-rules: held(...) entry status + gate figure` — **only if Q2 rules (a)**; else this commit is the `pending` disclosure in the doc
+5. `chain-rules: held_by_cxx(test) entry status; A1/A4 held; gate prints the subtraction` — macro arm, gate grammar + `--selftest`, `RuleSet::enforced` excludes held rows; **plus the two C++ core tests the entries name** (§4.1 condition 1, F4). A5 gains its `subsumed-by` note in the registry comment (no status: it stays `pending` until slice 7 closes it); A6/A7 stay `pending` with the wire-invariant disposition in their registry comment until the wire-format port mints the register and moves the census rows
 6. `docs: slice 1 landed — CHAIN_RULES_CRATE.md §13, DRS §7 row + §15, index, FOLLOWUPS F2, CHANGELOG`
 
-Gate figure expected after commit 4 (verified shape from `--describe` at this
-tip: `consensus: implemented 0 / enforced 153`): `implemented 6 / enforced
-153`, 4.A `1/7`, 4.B `5/7`; with (a), `held 5`.
+Gate figure expected after commit 5 (today's shape, verified at this tip:
+`consensus: implemented 0 / enforced 153`): `consensus: implemented 6 /
+validator-enforced 151   held-by-cxx 2   enforced 153   ratified 126 /
+enforced 153`; 4.A `1/7` (+2 held), 4.B `5/7`.
 
 ---
 
@@ -350,15 +402,40 @@ Each has a default the implementation follows unless ruled otherwise.
 was a bespoke `enum Tip { Empty, Recorded {..} }`, withdrawn: it would have
 bought nothing over `Option` and cost consistency with the store's own tip
 read. No `root` in either shape (one read path to the root cell; SCW-19).
+**Conflict flagged 2026-09-16 13:40, unresolved:** the same day's second
+review said "`Tip::Empty` over `Option` is right … an enum makes the empty
+case something the caller has to name", reading the round-1 draft's default.
+That contradicts the 12:55 SCR-4 ruling this section already folded (`Option`;
+"a bespoke enum would buy nothing"), on which S-CHAIN-R has since composed
+`RecordedTip { tip: Tip, connect }` over the *struct* `Tip`. §2 is left on
+`Option` until the maintainer says which ruling stands; the slice's own
+recommendation is `Option` — both shapes let `if let` fall through, both make
+the two C++ sentinels unrepresentable, and only `Option` matches the store's
+read — but the reversal is the maintainer's to make, not this document's to
+assume. Neither lane writes `tip()` code before it is settled.
 
-**Q2 — the five topology rows (A1, A4, A5, A6, A7).** Default §4 (a):
-`held(<holder>)` status, excluded from `RuleSet::enforced`, third gate figure,
-holder existence asserted. Alternatives (b) leave `pending`; (c) widen the
-crate. This is the load-bearing ruling: it decides what "141 surface-free rows
-are E6's" means for every later slice (H5, and 4.K's routing rows, are the
-same class).
+**Q2 — the five topology rows (A1, A4, A5, A6, A7).** **RULED 2026-09-16
+(maintainer): check the grouping first; mint `held` only under three
+conditions.** Grouping done (§4): A6/A7 are **wire invariants** (R8 arm B,
+wire holder; re-home to a wire-side invariant register the wire-format port
+mints; A7's value is arm C → F2); A5 is **subsumed by the 4.G weight rule**;
+only **A1/A4** take the new status, typed **`held_by_cxx(<test>)`** — a
+deferral with cutover expiry, holder-*rejects* test not holder-exists grep,
+and the third figure printed as the subtraction `validator-enforced = E − H`
+with `E` fixed (§4.1). `held(<rust path>)` is not minted (no consumer). The
+round-1 draft's single-status default is withdrawn. *Open detail for the
+reviewer:* A5's subsumption and A6/A7's re-homing are proposed here from the
+R8 test; each moves a census row's disposition, which is a census edit — the
+landing PR makes A5's and A6/A7's registry comments say so, and the census
+row edits ride with the increments that close them (slice 7; the register's
+minting PR), not with slice 1.
 
-**Q3 — defer CEN-B4 and CEN-A3 out of slice 1.** Rule 22 shape: **blocked on**
+**Q3 — CEN-B4 and CEN-A3 out of slice 1.** **RULED 2026-09-16 (maintainer):
+approved as two dispositions, not one.** **B4 is DEFERRED** (below, rule 22
+clean). **A3 is SUBSUMED-by-B4**: it dissolves into B4's empty-witness arm
+and never arrives as its own rule; its row closes when B4 lands. Filed apart
+so B4's implementer is not sent looking for an A3 rule that does not exist.
+B4's rule-22 record — **blocked on**
 a `ChainView` read of the bond `(p_id, pubkey)` pairs, which has no store
 table until **E4 S-ARCH**; **falsify by** `rg -n "bond.*pubkey|PidPubkey" rust/shekyl-chain-store/src/schema.rs`
 returning a table. **Lands with** slice 8 (4.J archival — the same crate,
@@ -378,17 +455,19 @@ witness is empty and must *fault* when it is not is not a rule, it is the
 pre-population special case wearing a row id. Disclosed here and in the
 landing commit; `FOLLOWUPS.md` gets the one-liner in commit 6.
 
-**Q4 — `RuleSet::header_major_version`.** Default: a `u8` parameter on
+**Q4 — `RuleSet::header_major_version`.** **RULED 2026-09-16: default.** a `u8` parameter on
 `RuleSet` (`GENESIS` → `1`), read by B1. `CHAIN_RULES_CRATE.md` §4.2 already
 names "the header version a rule set admits" as the next parameter. Not
 `RuleSetId` (the 1:1 is a fact about today's table; both `compile_fail` pins
 stay).
 
-**Q5 — B6 registration.** Default §5: `B6::identity` is the derivation site
+**Q5 — B6 registration.** **RULED 2026-09-16: default** ("a check that
+always passes is a gate that cannot fail, which is the one thing this
+programme has decided it doesn't ship"). §5: `B6::identity` is the derivation site
 `ValidatedBlock::derive` calls; coverage records B6 there. Alternative: a
 no-op `check` — rejected as a vacuous pass wearing a row.
 
-**Q6 — SCW-18 pin shape.** Default §5: entry names a unit-struct type; macro
+**Q6 — SCW-18 pin shape.** **RULED 2026-09-16: default.** §5: entry names a unit-struct type; macro
 emits `use path as _` **and** `const _: () = assert!(ROW == variant)`;
 `BlockRule::check` with one signature for the slice. Alternative: keep
 function paths and bind the row by signature only — rejected by SCW-18 itself
