@@ -1971,7 +1971,30 @@ C++ is ever fixed. One finding, and it is the actionable one.
      nothing the chain signed. The identity field should be that
      component, named for what it is (`pqc_auth_hash`, the txid's third
      part), with a KAT pinning it against `Transaction::hash()` the way
-     `prunable_hash` is pinned.
+     `prunable_hash` is pinned. The C++ oracle agrees: the pruned-txid
+     path serialises `std::vector<pqc_authentication>` through
+     `binary_archive` — count first — before hashing
+     (`cryptonote_format_utils.cpp:1319-1325`). The older FOLLOWUPS row
+     that read *"computed from the raw `txs_pqc_auths` bytes"* was wrong
+     on exactly this point and is folded into F26's row (one hashing
+     contract in the repo, not two).
+     **The component is absent from two shapes, not one.** The txid is
+     3-part for the coinbase (`Ct::Null`) **and** for any spend whose
+     `pqc_auths` is empty — the serve-credit form (`:1725-1726`,
+     `pqc_auths.is_empty() || first_is_gen`). `TxIdentity` is also the
+     miner tx's identity (`ValidatedBlock::miner_tx`), so the field is
+     `Option<PqcAuthHash>`: `None` means *the txid has no such
+     component*, and a sentinel — the null hash, `keccak256(varint(0))`
+     — would label the miner tx with a value the chain never committed.
+     `prunable_hash`'s coinbase value is a sentinel only because
+     C++-store parity forced one (`keccak256("")` is the row the C++
+     store writes); no C++ row exists for this hash, so nothing forces
+     one here. The store row is sparse on the predicate `txs_pqc_auths`
+     already uses (no row for an empty segment): segment present ⇔ hash
+     row present ⇔ txid 4-part, with `validate` rejecting the one shape
+     (gen-first with auths) that could split them, so a row without a
+     segment or a segment without a row is a store invariant, never a
+     `None`.
   3. **The bijection blocker has expired.** The `SF-`-era note in
      `docs/FOLLOWUPS.md` (*"the first redb-only table fails CI, which is
      why F14's `txs_pqc_auths_hash` cannot be added without a second
@@ -1983,8 +2006,9 @@ C++ is ever fixed. One finding, and it is the actionable one.
 
   **Handoff (to the DRS-E lane; the shape is theirs to land, the
   requirement is this round's).** `TxIdentity` carries both hashes —
-  `{ hash, pqc_auth_hash, prunable_hash }` — and the store records the
-  second beside `txs_prunable_hash`, at S-CHAIN-W's own standard: the
+  `{ hash, pqc_auth_hash: Option<_>, prunable_hash }`, `None` ⇔ 3-part
+  txid — and the store records the second beside `txs_prunable_hash` as
+  a sparse row on the segment's own presence, at S-CHAIN-W's own standard: the
   contract written on the row **before** the implementation that would
   omit it (SCW-7's precedent, which put `D_max` on S-PRUNE's row while
   the prune had no home). The field is owed to `PDM-Q6` item 2 and is
