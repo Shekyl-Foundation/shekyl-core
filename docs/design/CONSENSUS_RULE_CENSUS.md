@@ -465,7 +465,7 @@ Enforced at pool admission (`tx_pool.cpp:304` → `Blockchain::check_tx_inputs`)
 | CEN-I9 | `pseudoOuts` count == input count (regular spend; archival shapes use their spend-subset counts, CEN-H21/H22) | 3645–3654 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | RC-88 ⇒ merged |
 | CEN-I10 | `referenceBlock` must be an existing main-chain block | 4191–4198 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1a | RC-89 ⇒ merged |
 | CEN-I11 | `referenceBlock` age window: ≥ `FCMP_REFERENCE_BLOCK_MIN_AGE` (5) and ≤ `FCMP_REFERENCE_BLOCK_MAX_AGE` (100) blocks old | 4200–4220 | C | 1 | spec | `config/consensus_constants.json`; [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 1 (MIN_AGE=5 reorg-margin rationale); value pin = Decision 14 (`docs/CHANGELOG.md` :26404–26407; `docs/audit_trail/2026-05-ffi-constant-drift-audit.md` :69) | RC-90, RC-91 ⇒ merged. **No docs/design pin for the values** — the CHANGELOG Decision-14 entry is the ruling record (enforcement-status caveat carried from §8) |
-| CEN-I12 | The membership anchor is the curve-tree state **at chain height `ref_height`** — after `referenceBlock`'s parent connects, before `referenceBlock`'s own drain — a state property with two witnesses: the header's `curve_tree_root` (filled from that state at template time, `blockchain.cpp:2006`) and the node's per-height root record (key `ref_height`, post-add keying from the parent's connect, `blockchain_db.cpp:636`); the wallet's `drained_through = ref_height − 1` and the CT-2 KAT at 61 name the same state. The verifier reads its own computed record, never the header — all three `check_tx_inputs` arms do (`:3810`, `:3959`, `:4217` at `667817d47`, the re-review anchor; identical at `d9d27c752`, where the ruling first cited them) | 3810, 3959, 4217 (the three `get_curve_tree_root_at_height(ref_height)` reads at `667817d47`) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2 — **reconciled 2026-09-04**: split from its first commit — the pseudocode named the record, the prose narrated the header read the code performed until `292c00aff7` (2026-04-13) | Ruled 2026-09-04 (§7 #16): state, not claim. The in-code FAKECHAIN comment states a consequence, not the rationale — the two witnesses differ only where CEN-B5 is skipped (R9), so the choice is observable only in tests. CSR register re-reviewed at the merged sha `667817d47` and promoted CHECKED-CONFORMANT (2026-09-05, PR #622) |
+| CEN-I12 | The membership anchor is the curve-tree state **at chain height `ref_height`** — after `referenceBlock`'s parent connects, before `referenceBlock`'s own drain — a state property with two witnesses: the header's `curve_tree_root` (filled from that state at template time, `blockchain.cpp:2006`) and the node's per-height root record (key `ref_height`, post-add keying from the parent's connect, `blockchain_db.cpp:636`); the wallet's `drained_through = ref_height − 1` and the CT-2 KAT at 61 name the same state. The verifier reads its own computed record, never the header — all three `check_tx_inputs` arms do (`:3810`, `:3959`, `:4217` at `667817d47`, the re-review anchor; identical at `d9d27c752`, where the ruling first cited them) | 3810, 3959, 4217 (the three `get_curve_tree_root_at_height(ref_height)` reads at `667817d47`) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2 — **reconciled 2026-09-04**: split from its first commit — the pseudocode named the record, the prose narrated the header read the code performed until `292c00aff7` (2026-04-13) | Ruled 2026-09-04 (§7 #16): state, not claim. The in-code FAKECHAIN comment states a consequence, not the rationale — the two witnesses differ only where CEN-B5 is skipped (R9), so the choice is observable only in tests. CSR register re-reviewed at the merged sha `667817d47` and promoted CHECKED-CONFORMANT (2026-09-05, PR #622). **Absent-key arm walked 2026-09-15 at `0aeb67619` (§7 #21, S-CHAIN-W SCW-19) — verdict stands:** the record is dense from key 1 (the write at `src/blockchain_db/blockchain_db.cpp:663`–`:664` is outside the growth gate that closes at `:650`); only key 0 is unwritten; the reader returns zeros there (`src/blockchain_db/lmdb/db_lmdb.cpp:9757`), which decode to the identity point — consequence-free (the empty tree has no members; forging against *O* is a DL break). What a reference to genesis should resolve to is routed to E6 slice 6 |
 | CEN-I13 | `curve_trees_tree_depth` ∈ [1, current tree depth]; layers passed to verify are depth+1 | 4236–4244, 4291–4292 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 2c; [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) | RC-92 ⇒ merged. **Found, not ruled (§7 #16):** step 2b/2c's pseudocode says equality with the depth *at `referenceBlock`*; the code range-checks against the *current* depth, and the FFI binds the claimed depth to the proof (`proof.rs`: `proof.tree_depth != tree_depth` rejects; the root is deserialized at that layer count). Same internally-split shape as CEN-I12; the spec column still needs its own reconciliation |
 | CEN-I14 | The FCMP++ proof must be non-empty | 4246–4252 | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) | RC-93 ⇒ merged |
 | CEN-I15 | FCMP++ membership+spend-auth proof verifies in Rust (`shekyl_fcmp_verify`) over: proof bytes, all key images, all pseudoOuts, per-input PQC key scalars (`shekyl_fcmp_pqc_key_scalar` = `k = H_ℓ(hybrid_pubkey)`; the verifier derives `K = k·G_k` and the circuit opens the spent leaf's commitment `CM` to it — `PL-D3`, 2026-09-14; per-input derivation failure rejects), tree root, layers = depth+1, and the tx prefix hash | 4254–4314 (leaf hashes 4265–4274) | C | 1 | spec | [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) §7 step 4; [`FCMP_MEMBERSHIP_ONLY.md`](../completed/FCMP_MEMBERSHIP_ONLY.md); PQC leaf KATs | RC-94, RC-95 ⇒ merged. **Inverse spot-check row.** Skippable on block connect only via the pool cache (CEN-M8) — load-bearing for D++ `hop` |
@@ -1120,6 +1120,57 @@ input, not fixes.
     surface-free rules; `ChainTip.connect` in `get_info`). Rule 21 reopeners
     in the ruling's §13: a store constraint a rule *cites* as its mechanism;
     one-live-write relaxed.
+
+21. **CEN-I12's absent-key arm walked — the per-height root record is dense
+    from key 1, only key 0 is unwritten, and the zero-root read there is
+    consequence-free; the verdict stands** (S-CHAIN-W pre-flight SCW-19,
+    2026-09-15, C++ read at `dev` `0aeb67619`). **What was walked.** The
+    2026-09-05 CHECKED-CONFORMANT (#16's re-review) rested on "record key
+    `ref_height` holds the state after blocks `0..ref_height − 1`
+    connected" and did not say what happens when the key is absent. (a) The
+    write: `store_curve_tree_root_at_height(prev_height + 1, …)` at
+    `src/blockchain_db/blockchain_db.cpp:663`–`:664` is inside the
+    `blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC` gate (`:493`;
+    the constant is `1`, so every Shekyl block) and **outside** the
+    `if (new_output_count > 0)` block, which closes at `:650` and guards
+    only `grow_curve_tree` and the segment-freeze hook. Every connect writes
+    its row whether or not the tree grew; **the only key never written is
+    0.** (b) The reader zero-initialises `std::array<uint8_t, 32> root{}`
+    and returns it silently on `MDB_NOTFOUND`
+    (`src/blockchain_db/lmdb/db_lmdb.cpp:9745`–`:9760`). (c) `ref_height` is
+    bounded by `block_exists` and `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` /
+    `MAX_AGE = 100` only (`src/cryptonote_core/blockchain.cpp:3748`–`:3763`,
+    `src/cryptonote_config.h:329`–`:331`), so `ref_height = 0` is
+    selectable while `chain_height ≤ 100`, and all four consumers
+    (`blockchain.cpp:3767`, `:3916`, `:4178`; `src/rpc/daemon_submit_ffi.cpp:417`)
+    then hand zeros to `shekyl_fcmp_verify`. (d) Zeros are not rejected at
+    decode: `deserialize_tree_root` (`rust/shekyl-fcmp/src/proof.rs:1184`)
+    goes through `helioselene`'s `from_bytes`, which maps `x = 0` to the
+    **identity point** (`rust/shekyl-oxide/crypto/helioselene/src/point.rs:373`–`:409`),
+    so a proof anchored at genesis is verified against root = *O*.
+    **Why this is consequence-free and the verdict stands:** the state at
+    height 0 is the empty tree, which has no members, so no honest proof
+    can anchor there; a forged proof against *O* needs `Σ cᵢ·Gᵢ =
+    −HASH_INIT`, a discrete-log break; every node computes the same result.
+    Fail-closed on an input no honest spender uses is not a divergence from
+    #16's ruled state — it is the ruled state (an empty tree) rendered as a
+    value nobody can open. **Routed, not ruled here:** what a reference to
+    genesis *should* resolve to — the empty-tree root `HASH_INIT` (which,
+    unlike *O*, is the Pedersen hash of an all-zero layer and so has a
+    trivially constructible "member"), or a refusal of `ref_height = 0` —
+    is CEN-I12's own rule to close, E6 slice 6, with this entry as the
+    citation; the rewrite's store returns key `h`, treats a missing row at
+    a recorded height `≥ 1` as corruption (`Fault`), and does not decide
+    the genesis anchor. **Record of the walk, kept because the register
+    must be able to show its own corrections:** a pre-flight draft misread
+    the `:639`–`:650` brace scope as enclosing `:664`, concluded the record
+    was sparse over keys `0..60` (every height where no leaf matured), and
+    flipped the CSR row to DIVERGENT for a few hours on 2026-09-15; a
+    Copilot re-read of the source caught the scope error the same day and
+    the flip was reverted before it merged. The correction is the useful
+    residue: `LMDB_SCHEMA.md`'s `curve_tree_roots` row now states the
+    density, the key-0 exception and the reader's zero substitute, none of
+    which any document carried before.
 
 ---
 

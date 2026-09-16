@@ -171,7 +171,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// Open a keyed table whose value writes are insert-once.
     ///
     /// `row` is the `SI-` belt this table enforces (SI-1 for `spent_keys`,
-    /// SI-3 for `txs`, …). It is bound here, not on each insert, so a site
+    /// SI-3 for `tx_indices`, …). It is bound here, not on each insert, so a site
     /// cannot name a different belt for two writes to the same handle.
     /// The `insert` verb is the only value write on the returned type —
     /// `upsert` does not compile:

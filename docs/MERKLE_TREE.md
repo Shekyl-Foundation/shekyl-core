@@ -208,11 +208,11 @@ Third, **reorg safety.** With a minimum reference block age of 5 blocks, the wal
 
 ## The Block Header Commitment
 
-Every block header contains a `curve_tree_root` — the tree root after all of that block's outputs have been added. This field participates in the block hash, making the tree state a **consensus commitment**.
+Every block header contains a `curve_tree_root` — the tree root **at the block's own height**: the tree grown with every leaf that matured through its parent, *before* this block's own outputs are drained into it (CEN-B5, wording corrected 2026-09-05; the root after this block's drain is what the *next* header carries). This field participates in the block hash, making the tree state a **consensus commitment**.
 
 Why does this matter? Without it, two nodes could compute subtly different tree roots (due to a bug, different library version, or database corruption) and silently fork — they'd disagree on which transactions are valid. By committing the root in the header, any tree divergence shows up immediately as a block hash mismatch.
 
-When you construct a transaction, you pick a recent block as your `referenceBlock`. The verifier looks up `curve_tree_root` from that block's header and uses it to check your proof. This connects the proof to a specific, consensus-verified tree state.
+When you construct a transaction, you pick a recent block as your `referenceBlock`. The verifier anchors your proof to the tree state at that block's height — its own per-height root record, which CEN-B5 has already checked equals that header's `curve_tree_root` (CEN-I12: the verifier reads its computed record, never the header). This connects the proof to a specific, consensus-verified tree state.
 
 ---
 
