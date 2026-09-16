@@ -220,8 +220,14 @@ impl ConnectFacts {
 
     /// The fields still passed through, each with the rows that will
     /// delete it. Empty when every field is derived — the moment `Fact`
-    /// and `Origin` themselves are deleted. `count()` is the progress
-    /// number; the items are the critical path.
+    /// and `Origin` themselves are deleted.
+    ///
+    /// `count()` is **the set of facts the store does not derive**, not a
+    /// progress bar: it grows as facts are discovered (S-CHAIN-R adds
+    /// `long_term_effective_median`, so it rises by one when that lands —
+    /// `DRS_E1_SCHAIN_R.md` §3.6) and shrinks as E6 lands the rows that
+    /// derive them. An increase is not a regression; the items are the
+    /// critical path.
     pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_ {
         Self::DELETED_BY
             .into_iter()
