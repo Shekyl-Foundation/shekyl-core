@@ -419,6 +419,9 @@ impl ChainStore {
     /// # Errors
     ///
     /// [`StoreCannot::ReadOnly`] if the store was opened read-only;
+    /// [`StoreCannot::WriterHalted`] if a prior connect, pop, or branded
+    /// view hit a store invariant (the slot is claimed before that look,
+    /// so a halt cannot land between the check and the claim);
     /// [`StoreCannot::WriteInProgress`] if a batch is already live;
     /// [`EngineError::BeginWrite`] or [`EngineError::Durability`] if the
     /// engine refuses to begin; whatever `f` returns, **except** that
@@ -437,11 +440,10 @@ impl ChainStore {
         let Backend::Writable(db) = &self.backend else {
             return Err(StoreError::from(StoreCannot::ReadOnly).into());
         };
-        if let Some((at_height, row)) = self.shared.halted() {
-            return Err(StoreError::from(StoreCannot::WriterHalted { at_height, row }).into());
-        }
-        if !self.shared.try_hold_write() {
-            return Err(StoreError::from(StoreCannot::WriteInProgress).into());
+        // Slot first, then halt, while holding: a load-then-CAS lets the
+        // live batch halt and drop between the two looks.
+        if let Err(cannot) = self.shared.admit_write() {
+            return Err(StoreError::from(cannot).into());
         }
         let txn = match arm_write(db) {
             Ok(txn) => txn,

@@ -302,7 +302,7 @@ impl ChainStore {
 }
 ```
 
-- `ChainStore` records the halt in memory (a `OnceLock`-shaped cell) when a batch completes with `InvariantViolated`. Every subsequent `ChainStore::write` refuses with `StoreCannot::WriterHalted { at_height, row }`; reads stay open.
+- `ChainStore` records the halt in memory (a `OnceLock`-shaped cell) when a batch completes with `InvariantViolated`. Every subsequent `ChainStore::write` claims the write slot first, then looks at the latch while holding it, and refuses with `StoreCannot::WriterHalted { at_height, row }` (a load-then-CAS lets the live batch halt and drop between the two looks); reads stay open. The slot is released on that refusal so the next call is `WriterHalted`, not `WriteInProgress`.
 - Not persisted, re-derived on restart (DRS §3.6.2's ruling, with its reopener). The operator path is the engine's `--check` (SI-7/SI-8) or the file-restore path.
 - RPC: `ChainTip.connect: ConnectState` in `shekyl-rpc-types::chain`, with `Halted { at_height, row: StoreInvariantRow(u32) }` — the ordinal newtype, not the store's enum (PR #751 disposition). `CORE_RPC_VERSION` minor bump. The daemon still serves LMDB at this pin, so the field's producer is wired at cutover; the type and the store-side state land here so the E2 harness can assert on them.
 
