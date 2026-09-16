@@ -1786,93 +1786,71 @@ Reopener (rule 21): a consensus-visible encoding found *outside* the set
 named above (hash preimages, digest input) reopens the "nothing else is
 pinned" sentence for that encoding, with the row that pins it named.
 
-### 7.7 The per-tx identity is shaped for both of Q6's occupants — an E2 precondition (RULED 2026-09-16)
+### 7.7 Landing plan for `PDM-Q-F26` — the per-tx identity carries both of Q6's occupants before E2 (RULED 2026-09-16)
 
-Raised from the pruning side against `dev` `645d09dc3` (post-#761), where
-nothing landed contradicts the pruning contract as written — SCW-7's
-pairing (retention watermark ≥ `D_max` asserted on the deletion side,
-`StoreCannot::PopBelowFloor` a typed refusal on the read side, never a
-fatal mid-transaction) is the shape PDM's F10 asked for, landed in the
-Rust store before the C++ is ever fixed. One gap the read does not see,
-and it is the actionable one.
+**The finding is the pruning round's, not this document's.** `PDM-Q-F26`
+([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §6,
+PR #765) records it: S-CHAIN-W landed `TxIdentity { hash, prunable_hash }`
+(`rust/shekyl-chain-rules/src/block.rs`) — the spend txid's fourth
+component without its third, `H(pqc_auths)` — and `rg pqc_auth_hash rust/`
+is empty, so the store is shaped for one of `PDM-Q6`'s two jointly-ruled
+occupants before Q6 ruled either. F26 also fixes two facts this plan
+inherits rather than re-derives. **The hash shape:** the txid component is
+`keccak256(varint(count) ‖ auths)` (`rust/shekyl-wire/src/transaction.rs`,
+`hash_with_prunable`), while the stored `txs_pqc_auths` segment has *no*
+count prefix, so `keccak256(txs_pqc_auths[tx_id])` verifies nothing the
+chain signed and the row must be the txid's component, KAT-pinned against
+`Transaction::hash()`. **`Option`:** the coinbase and the empty-auths
+serve-credit form hash 3-part, so the component is absent from the *txid*,
+`None` is "the txid has no such component", and the store row is sparse on
+the same predicate as `txs_pqc_auths` itself (segment present ⇔ row
+present ⇔ txid 4-part; a split is a store invariant, never a `None`).
+This section is what DRS **owes** against F26 and where each piece lands.
 
-**The gap, verified at source.** [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
-`PDM-Q6` has two occupants that it rules **jointly** (items 1 and 2: the
-storage case for either alone is weak — ~35 % or ~60 % of a transaction's
-bytes — and strong together, ~95 %). The second, `pqc_auths`
-(`PDM-Q-F14`), is archival subject matter **only if its hash is a
-persisted per-tx row**. The store has just committed the per-tx identity
-to the first occupant alone: `shekyl-chain-rules/src/block.rs`
-`TxIdentity { hash, prunable_hash }`, and `pqc_auth_hash` has **zero**
-occurrences in `rust/` — not a field, not a row, not a type. That is the
-hazard the PDM banner names — the store shaped for one occupant and
-retrofitted for the other — arriving in the first increment it could
-have, before Q6 ruled either.
+**Three pieces, three crates, one deadline.** The field alone is
+insufficient: `Transaction::hash_with_supplied_prunable` exists because a
+pruned body has no prunable region to hash, and there is no equivalent for
+the `pqc_auths` component — a node discarding `pqc_auths` under Q6 item 2
+could not compute a txid even holding the persisted digest. What is owed:
 
-**The fix is a transcription, not a design.** The v3 txid is 4-part for a
-spend, `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`
-(`rust/shekyl-wire/src/transaction.rs:1626`–`:1628`), so
-`Transaction::hash_with_prunable` already computes the third component on
-the way to the txid and discards it. Persisting it is a field and a row,
-not a computation. And `TxIdentity`'s own doc comment already carries the
-argument: *"Both come from the same `validate`, so no consumer re-hashes a
-body and the store never derives a consensus-visible value (C2-R8 Q4)."*
-That sentence applies verbatim to the component left out — carry two of
-four and the third is exactly the value some later consumer re-hashes a
-body to obtain, which is what Q4 exists to prevent.
+1. **`TxIdentity.pqc_auth_hash: Option<PqcAuthHash>`** (`shekyl-types`
+   `hash32!` sibling of `PrunableHash`), from the one `validate` — the
+   type's own doc comment ("no consumer re-hashes a body and the store
+   never derives a consensus-visible value", C2-R8 Q4) applies verbatim to
+   the component it omitted. **Rules crate (E6 lane).** Rides E6's `Tip`
+   PR, which is cut for the same S-CHAIN-R window.
+2. **`Transaction::pqc_auth_hash()` and `hash_with_supplied_pqc_auth`**
+   sharing `hash_with_prunable`'s body, so the pruned and unpruned paths
+   cannot hash one transaction two ways; KAT against `hash()`. **Wire
+   crate — owner: the S-CHAIN-R lane**, because the store row below is
+   its consumer and the crate has no lane of its own. Its own small PR.
+3. **The row** — `txs_pqc_auth_hash: u64 → Hash32`, written by `connect`
+   beside `txs_prunable_hash` from the identity it is handed, sparse on
+   `txs_pqc_auths`' predicate, Rust-only until an LMDB twin exists
+   (`RUST_ONLY_TABLES`, SCW-11), journaled, SI-9-fresh under `tx_id`.
+   **Store crate: S-CHAIN-W amendment A3**, riding S-CHAIN-R's one
+   layout commit ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) §7 commit 2)
+   so the `SCHEMA_VERSION` bump is paid once; that commit therefore waits
+   on 1 and 2 as it waits on `Tip`.
 
-**The field alone is insufficient, and the second half is the one that
-will be forgotten.** `Transaction::hash_with_supplied_prunable` exists
-because a pruned body has no prunable region to hash — `hash()` would
-substitute the null hash and return an identity no transaction has. There
-is no equivalent for the `pqc_auths` component: a node that discards
-`pqc_auths` under Q6 item 2 could not compute a txid at all, even holding
-the persisted digest, because no constructor accepts it. The row would be
-inert for the one job it exists to do. So what is owed is a **pair**:
-
-1. **`TxIdentity` carries both hashes** — `pqc_auth_hash: PqcAuthHash`
-   beside `prunable_hash: PrunableHash` (a `shekyl-types` `hash32!`
-   sibling), both from the one `validate`, with a note that the second is
-   owed to `PDM-Q6` item 2 and is **not optional**. Rules crate (E6's).
-2. **A supplied-component constructor** on `Transaction` —
-   `hash_with_supplied_pqc_auth`, or a generalised two-supplied form
-   sharing `hash_with_prunable`'s body so the pruned and unpruned paths
-   cannot hash one transaction two ways. Wire crate.
-3. **The row** — `txs_pqc_auth_hash: u64 → Hash32` per tx, written by
-   `connect` beside `txs_prunable_hash` from the identity it is handed;
-   Rust-only until the LMDB twin exists (`RUST_ONLY_TABLES`, SCW-11),
-   journaled and SI-9-fresh like its sibling. Store crate: **S-CHAIN-W
-   amendment A3**, riding S-CHAIN-R's one layout commit
-   ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) §7 commit 2) so the
-   `SCHEMA_VERSION` bump is paid once.
-
-**Precedent, so the ruling on Q6 item 2 reads as a third application, not
-a new capability.** The reconstruct-from-stored-digest shape already
-exists twice in this tree: `hash_with_supplied_prunable` for the txid,
-and `get_pruned_transaction_weight`
+**Precedent, so Q6 item 2 reads as a third application, not a new
+capability.** Reconstruct-from-stored-digest exists twice already:
+`hash_with_supplied_prunable` for the txid, and
+`get_pruned_transaction_weight`
 (`src/cryptonote_basic/cryptonote_format_utils.cpp:336`) adding
-`ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES × n` back for weight. Item 2's
-mechanism is the third instance of a settled shape.
+`ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES × n` back for weight.
 
-**The deadline, named.** *E2's replay is the store's first production
-writer* (banner). Every DRS increment that lands while Q6 is unruled
-narrows what Q6 can rule: `TxIdentity` is the first instance; E2 replay —
-which decides what happens to the prunable body and to `pqc_auths` on the
-write path — is the next and larger one. **`PDM-Q6` items 1 and 2 are
-ruled before E2's first production writer, or E2 rules them by
-construction.** The cost asymmetry is why this reads as free and is not:
-adding the field before E2 is a field addition; adding it after means
-migrating every replay-derived identity row, every KAT and every fixture
-that pins the struct. Pre-genesis there is no chain to migrate — the cost
-is in derived state and frozen vectors, and it steps at **E2**, not at
-genesis. Q6 items 1–3 are argued to the point where the ruling is a
-transcription of F13/F14/F17 with rule-21 shape against the round's
-adversarial items; `PDM-Q11` needs a named consensus-side owner, not a
-shape. Both are steering, and both sit on E2's critical path from here.
-
-Carried as a `FOLLOWUPS.md` row with the E2 pre-flight as carrier and
-`rg pqc_auth_hash rust/` — returning the field, the constructor and the
-row — as falsifier.
+**The deadline, as F26 states it and the E2 row carries it.** *E2's replay
+is the store's first production writer.* `PDM-Q6` items 1–2 are ruled
+before it, or E2 rules them by construction — the field added before E2
+is a field; after E2 it is a migration of every replay-derived identity
+row, KAT and fixture. Pre-genesis there is no chain to migrate, which is
+exactly why this reads as free and is not: the cost is in derived state
+and frozen vectors, and it steps at **E2**, not at genesis. F26's
+falsifier: an E2 replay PR opening while the Q6 index row reads OPEN
+voids the deferral — that PR states which items it rules, or does not
+merge. The FOLLOWUPS row is F26's (PR #765); this section adds no second
+one.
 
 ---
 
@@ -2433,7 +2411,7 @@ the trigger (#507) and was missed there.
 | **2026-09-15** | **DRS-E1 increment 3 (S-CHAIN-W) landed** — plan, rule-26 pre-flight and round-1 rulings in [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) (SCW-1…SCW-18). Nine commits: the undo log (first Rust-only table, ordinal-named; bijection gate's `{table: reason}` map keeps the extra-leg refusal), the connect write set's codecs at the LMDB layouts minus the collapsed key + `Transaction::write_segments`, `total_burned` and the re-homed settlement-epoch pin as header cells, `TxIdentity { hash, prunable_hash }` in the rules crate, `BatchView`, `connect` with per-field `Fact` origins, coverage-gap / pass-through provenance, `pop` + `PopBelowFloor` + the writer halt + `ConnectState` wire type. SI-1/2/3/4/6/8 built, SI-9 minted and built; DRS-W6/W9/W15/W17 closed at the port. `SCHEMA_VERSION` 1 → 2. `CORE_RPC_VERSION` not bumped: no `get_info` field changes until the Rust store serves it. **Review (same day, PR #757 + the pre-flight's #756 findings):** `BatchView::root_at(h)` reads key *h* — the state *at* *h*, CEN-I12's anchor — not *h+1* (SCW-19), with height 0 the pinned `CurveTreeRoot::EMPTY` (KAT in `shekyl-fcmp`); absence in `block_at` / `root_at` classified against the tip (`AboveTip` only above it, a hole below is SI-7) and the block blob held to `block_info`'s identity; `BlockInfo.rct_outputs` per-block (CEN-L15, the accumulation arm is dead); burn phase guarded `h > 0 && burned > 0` as a whole; the connecting height noted before the belts so an SI-2 halts the writer; provenance SI-7s and the commit-time widen routed through the halt; `complete` returns the closure's own error (the unsealed refusal only over a swallowed one); `Recording::sealed` set after the row insert; undo entries carry a cSHAKE256 post-image so SI-6's second arm is exact (`PostImageMismatch`, pop never silently repairs); an empty journal under a recorded tip is SI-6 `NoRowForTip` until S-PRUNE persists its floor; evidence cells refuse non-canonical name order; the bijection gate refuses unparsed map content. |
 | **2026-09-15** | **DRS-E6 increment 1 landed** ([`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md), the crate's contract of record): `shekyl-chain-rules` — `ChainView<'id>`, `RuleSet`/`RuleSchedule`/`AdmissionPolicy`, `Coverage<R>`, `ChainValid<'id>`/`InvalidBlock`, `validate`/`tx_form`/`tx_against`, the census-derived completeness gate (`check_chain_rules_coverage.py`: the 153 + 9 enforced rows of the census at `02c086f4b`, registry ↔ census a bijection in census order), the transitive no-store belt (`check_chain_rules_no_store.sh`), the negative-fixture harness; zero rules ported (increments 2+). **S-CHAIN-W is unblocked.** Landing rulings, recorded so they are not re-derived: **(a) faults are not verdicts.** A view's substrate failure is `ChainView::Fault`, the *outer* `Err` of every entry point, never inspected by the crate — a store error cannot become an `InvalidBlock` by `?`, `From`, or a hand-written arm (clause 3 of the conversion-ban gate now live: `verdict_defs == 0` refuses). **(b) absence is a variant, not `None`.** `block_at`/`root_at` return `AtHeight<T>` (`Recorded | AboveTip`), no `From<Option>`, no `Try` — a rule must match the above-tip case, so CEN-B5 cannot fail open on a `?`. **(c) `output_at` dropped:** FCMP++ inputs reference no output; when the output-key-uniqueness row is ruled it needs `has_output_key`, not a global-index lookup. **(d) `KeyImage` moved to `shekyl-types`** (`hash32!`, new `redact, no_display` arm — truncated `Debug`, *no* `Display`, the wallet-correlation posture kept; `shekyl-crypto-pq` re-exports; serde encoding unchanged, snapshot checked); **`CurveTreeRoot` minted** beside it. **(e) `RuleSetId` is not the header major version** — its own space, `rules_at(nettype, height)` identity today. **(f) `CenRow`/`PolicyRow` are sibling enums** — the flag partition is a type error, not a runtime check. The graded-oracle hook is the `Row::as_str` key; the grader is consulted by E2's replay harness, never imported here. Round 2 of the design (`Fault`, `AtHeight`, cross-view pin) is implemented on its defaults and closes at PR review |
 | **2026-09-16** | **Received from `PDM-Q` (`PDM-Q-F26`, [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §6): the store is shaped for one of Q6's two occupants.** `TxIdentity { hash, prunable_hash }` (S-CHAIN-W SCW-10) carries the spend txid's fourth component and omits its third, `H(pqc_auths)` — the per-tx hash `PDM-Q6` item 2 needs persisted before the `pqc_auths` slice (~60 % of spend bytes, `txs_pqc_auths`) can be discarded. `Transaction::hash()` already computes it (4-part txid, `shekyl-wire`), so the fix is a field on the identity plus a row beside `txs_prunable_hash`, not a new consensus value; the row hashes the txid's **count-prefixed** component, not the raw segment. The field is `Option<PqcAuthHash>` — the txid is 3-part for the coinbase **and** for a spend with empty `pqc_auths` (serve-credit form), and `TxIdentity` is also `miner_tx`'s identity, so `None` is *no such component in the txid* and a sentinel would mislabel the miner tx. The store invariant has **three legs** (corrected 2026-09-16: the two-leg form made universal discard itself a violation): hash row present ⇔ txid 4-part (permanent, never deleted); segment present ⇒ hash row present; hash row present ∧ segment absent ⇔ discarded — below `W`, not in exceptions, or never held (band 1). Band-1 and post-discard are one store state. SCW-11's `RUST_ONLY_TABLES` map admits the row today. **Requested of this lane now, at SCW-7's standard (contract on the row before the implementation that omits it); the requirement is written on the type's doc comment.** **Ordering constraint PDM names:** `PDM-Q6` items 1–2 are ruled before **DRS-E2's first production writer**, or E2 rules them by construction — an E2 replay PR that opens while the Q6 index row reads OPEN states which items it rules, or does not merge. S-PRUNE's row already carries PDM-Q11's `D_max` floor (SCW-7); this is the second PDM constraint on the store's write surface, same shape. **Same day, on review (`PDM-Q-F27`, `F29`, to DRS-E6):** band 1 of `PDM-Q5` (skeleton below the release anchor) has **no writer under DRS-D12** unless `shekyl-chain-rules` issues a below-anchor `RuleSet` whose `enforced` omits the proof rows — the seam exists (`RuleSet { id, enforced }`, `ISSUED`), the set does not, and pre-cutover replay over a full chain never meets a skeleton so E2 will not surface it; and `PDM-Q3`'s instrument is `ChainView`'s surface — no recorded-body accessor without a `CenRow` and an above-`W` marking, held as a standing property. Both written on the DRS-E6 row and in [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §13. `PDM-Q-F28` (the skeleton wire entry grows `pqc_auth_hash` under Q6 item 2) is the `LV-`/`PWC-` lanes', not this one's; ingest accepts it. |
-| **2026-09-16** | **§7.7 minted — the per-tx identity is shaped for both of `PDM-Q6`'s occupants, an E2 precondition** (raised from the pruning lane; verified at `645d09dc3`: `TxIdentity { hash, prunable_hash }`, zero `pqc_auth_hash` in `rust/`, the 4-part txid computing and discarding `H(pqc_auths)`, no supplied-component constructor for it). Owed as a pair plus a row: `TxIdentity.pqc_auth_hash` (rules crate), `Transaction::hash_with_supplied_pqc_auth` (wire crate; the half that would be forgotten — without it a node discarding `pqc_auths` cannot compute a txid even holding the digest), and the `txs_pqc_auth_hash` row written by `connect` (store; **S-CHAIN-W amendment A3**, riding S-CHAIN-R's layout commit so the bump is paid once). Third instance of the reconstruct-from-stored-digest shape (`hash_with_supplied_prunable`, `get_pruned_transaction_weight`). **Deadline:** `PDM-Q6` items 1–2 ruled before E2's first production writer, or E2 rules them by construction; the cost steps at E2, not genesis. `PDM-Q11` needs a named consensus-side owner. E2 row carries the precondition; FOLLOWUPS row carries the falsifier. |
+| **2026-09-16** | **§7.7 minted — DRS's landing plan for `PDM-Q-F26`** (the finding is PR #765's, recorded there and in its own received-finding row here). Three pieces, three crates: `TxIdentity.pqc_auth_hash: Option<PqcAuthHash>` (rules crate; rides E6's `Tip` PR), `Transaction::pqc_auth_hash` + `hash_with_supplied_pqc_auth` (wire crate; owner the S-CHAIN-R lane, its own small PR, KAT against `hash()`), the sparse `txs_pqc_auth_hash` row from the identity (store; **S-CHAIN-W amendment A3** on S-CHAIN-R's layout commit, one bump). Hash shape (`varint(count) ‖ auths`, not the raw segment) and the `Option` predicate are F26's, inherited. E2 row carries the deadline as a precondition; F26's FOLLOWUPS row carries the falsifier — no second row here. |
 
 ---
 
