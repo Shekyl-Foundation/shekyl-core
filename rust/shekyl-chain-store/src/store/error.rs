@@ -34,9 +34,12 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use crate::codec::SchemaVersion;
+use shekyl_chain_rules::RuleSetId;
+use shekyl_types::TxHash;
 
-pub use super::invariant::{CellFault, StoreInvariant};
+use crate::codec::{SchemaVersion, SettlementEpochBlocks};
+
+pub use super::invariant::{CellFault, StoreInvariant, UndoFault};
 
 /// Why a store operation failed, by class.
 ///
@@ -237,6 +240,89 @@ pub enum StoreCannot {
     /// This family's apply is stubbed under the store's policy, so the write
     /// path must not open its table (opening a write table creates it).
     FamilyStubbed(ArchivalFamily),
+    /// A pop-journal recording for `height` was begun in this batch and
+    /// dropped without being sealed, so the chain-state writes it recorded
+    /// would land with no `undo_log` row to reverse them. The batch refuses
+    /// to commit. Only the store's own `connect` begins a recording, so
+    /// this names a bug in that path, never a caller's misuse.
+    UndoUnsealed {
+        /// The height whose recording was abandoned.
+        height: u64,
+    },
+    /// The file was built under a different settlement-epoch schedule than
+    /// this session's (S-CHAIN-W SCW-2).
+    ///
+    /// Persisted join epochs and serve-credit windows would be silently
+    /// mislabeled under the other schedule, so the open is refused with the
+    /// remedy named — reopen under the pinned schedule, or use a fresh data
+    /// directory. A refusal, not [`StoreInvariant::CellCorrupt`]: the file is
+    /// coherent, the session is wrong for it.
+    SettlementEpochMismatch {
+        /// The schedule the file was built under.
+        pinned: SettlementEpochBlocks,
+        /// The schedule this session runs.
+        session: SettlementEpochBlocks,
+    },
+    /// A `ChainValid` judged under one rule set was handed to `connect` at
+    /// a height where another is in force (S-CHAIN-W §3.1, SCW-16).
+    ///
+    /// A capability refusal, not a verdict: the block may be valid under the
+    /// rules it was judged by — it was handed to the wrong height. The
+    /// driver resolves height → rule set (`RuleSchedule::rules_at`); the
+    /// store only compares.
+    RuleSetNotInForce {
+        /// The height the block would have been recorded at.
+        height: u64,
+        /// The rule set the verdict was minted under.
+        judged: RuleSetId,
+        /// The rule set the caller says is in force at `height`.
+        in_force: RuleSetId,
+    },
+    /// `connect` was told a rule set is in force that no schedule has
+    /// issued (`RuleSet::for_id` is `None`), so what it enforces — and
+    /// therefore what the verdict may have skipped — cannot be known.
+    RuleSetUnknown(RuleSetId),
+    /// `pop` on a store with no block recorded.
+    ChainEmpty,
+    /// `pop` at `tip` cannot run: the height is below the pop floor
+    /// (S-CHAIN-W §5.4, SCW-7).
+    ///
+    /// Genesis is never poppable (`floor ≥ 1`), and a height whose
+    /// `undo_log` row the retention prune has deleted is below `floor` —
+    /// the lowest surviving row. A capability limit, never a verdict: a
+    /// legal reorg deeper than the undo-log retention lands here, which is
+    /// why that retention must be ≥ `D_max` (PDM-Q11).
+    PopBelowFloor {
+        /// The current tip.
+        tip: u64,
+        /// The lowest poppable height.
+        floor: u64,
+    },
+    /// A `connect` or `pop` on this store hit a store invariant, and the
+    /// writer is halted until the process restarts (`DAEMON_REDB_STORE.md`
+    /// §3.6.2). Reads stay open. Re-derived on restart, not persisted; the
+    /// operator path is the engine's check or a rebuild from the block
+    /// corpus.
+    WriterHalted {
+        /// The height the halting connect or pop was working at.
+        at_height: u64,
+        /// The belt that caught it.
+        row: StoreInvariant,
+    },
+    /// A judged transaction's ct base carries fewer commitments than its
+    /// prefix has outputs, so there is no commitment to record for output
+    /// `index` (`output_amounts`).
+    ///
+    /// The wire parser sizes the base arrays by the output count, so a
+    /// parsed transaction cannot reach this; a hand-built candidate can,
+    /// until the 4.H shape rows land in the validator. Refused, never
+    /// recorded with a zero commitment.
+    OutputWithoutCommitment {
+        /// The transaction.
+        tx: TxHash,
+        /// The `vout` position with no commitment.
+        index: u64,
+    },
 }
 
 impl core::fmt::Display for StoreCannot {
@@ -268,6 +354,47 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "apply of {} is stubbed under this store's policy",
                 family.table()
+            ),
+            Self::UndoUnsealed { height } => write!(
+                f,
+                "the pop-journal recording for height {height} was dropped unsealed; the batch \
+                 will not commit chain-state writes that have no undo row"
+            ),
+            Self::RuleSetNotInForce {
+                height,
+                judged,
+                in_force,
+            } => write!(
+                f,
+                "the block was judged under rule set {judged:?} but rule set {in_force:?} is in \
+                 force at height {height}; re-validate under the rule set in force"
+            ),
+            Self::ChainEmpty => f.write_str("pop on a chain store with no block recorded"),
+            Self::PopBelowFloor { tip, floor } => write!(
+                f,
+                "cannot pop height {tip}: the pop floor is {floor} (genesis is never poppable; \
+                 below the surviving undo log a reorg is beyond this store's retention)"
+            ),
+            Self::WriterHalted { at_height, row } => write!(
+                f,
+                "the chain store's writer is halted since height {at_height} ({row}); reads stay \
+                 open; restart after the check or rebuild from the block corpus"
+            ),
+            Self::RuleSetUnknown(id) => write!(
+                f,
+                "rule set {id:?} has not been issued by any schedule; connect cannot know what it \
+                 enforces"
+            ),
+            Self::OutputWithoutCommitment { tx, index } => write!(
+                f,
+                "transaction {tx:?} output {index} has no commitment in its ct base; the store \
+                 records nothing for it"
+            ),
+            Self::SettlementEpochMismatch { pinned, session } => write!(
+                f,
+                "this data directory was built with settlement epochs of {pinned} but this \
+                 session runs {session}: persisted join epochs and serve-credit windows would be \
+                 silently mislabeled; reopen under the pinned schedule or use a fresh data directory"
             ),
         }
     }

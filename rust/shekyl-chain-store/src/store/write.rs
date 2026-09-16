@@ -40,7 +40,17 @@
 //! handle. Typed `properties` cells are registers and are written
 //! through [`upsert_property`](WriteBatch::upsert_property). Multimap
 //! tables are sets of values per key: there is no overwrite to declare,
-//! so they open raw.
+//! so they open as a [`SetTable`] with one `insert` that says whether the
+//! member was new.
+//!
+//! # The pop journal
+//!
+//! Every one of those verbs journals its own pre-image while the batch is
+//! recording ([`record_undo`](WriteBatch::record_undo), S-CHAIN-W); the
+//! recording's `seal` writes `undo_log[height]`, and
+//! [`replay_undo`](WriteBatch::replay_undo) walks such a row backwards
+//! (`store::undo`). A recording that is dropped unsealed makes the batch
+//! refuse to commit — writes with no pre-images never land.
 //!
 //! # Poison
 //!
@@ -57,18 +67,21 @@ use core::cell::Cell;
 use core::marker::PhantomData;
 
 use redb::{
-    Key, MultimapTable, MultimapTableDefinition, MultimapTableHandle, TableDefinition, TableHandle,
+    Key, MultimapTableDefinition, MultimapTableHandle, ReadableTable, TableDefinition, TableHandle,
     Value, WriteTransaction,
 };
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
-use crate::codec::{ChainState, PropertyCell};
-use crate::schema::PROPERTIES;
+use crate::codec::{post_image, Canonical, ChainState, PropertyCell, UndoEntry};
+use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
-use super::keyed::{InsertTable, UpsertTable};
+use super::keyed::{Handles, InsertTable, UpsertTable};
+use super::set::SetTable;
 use super::shared::Shared;
+use super::undo::{self, Journal, Recording, Replayed};
+use super::view::BatchView;
 
 /// The batch's fatal latch.
 ///
@@ -124,6 +137,7 @@ pub struct WriteBatch<'store, 'id> {
     apply_policy: ApplyPolicy,
     shared: &'store Shared,
     poison: Poison,
+    journal: Journal,
     _brand: PhantomData<fn(&'id ()) -> &'id ()>,
 }
 
@@ -138,7 +152,19 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             apply_policy,
             shared,
             poison: Poison::default(),
+            journal: Journal::default(),
             _brand: PhantomData,
+        }
+    }
+
+    /// The latch, the journal and `name`'s ordinal, for a handle to write
+    /// through.
+    fn handles(&self, name: &str) -> Handles<'_> {
+        Handles {
+            poison: &self.poison,
+            journal: &self.journal,
+            ordinal: schema::ordinal_of(name),
+            name: name.into(),
         }
     }
 
@@ -149,10 +175,69 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         self.apply_policy
     }
 
-    fn txn(&self) -> &WriteTransaction {
+    pub(super) fn txn(&self) -> &WriteTransaction {
         self.txn
             .as_ref()
             .expect("WriteBatch holds a transaction until commit consumes it")
+    }
+
+    /// The batch's fatal latch, for the projections that read through it.
+    pub(super) const fn poison(&self) -> &Poison {
+        &self.poison
+    }
+
+    /// The batch's pop journal, for `pop` to note the height it works at.
+    pub(super) const fn journal(&self) -> &Journal {
+        &self.journal
+    }
+
+    /// Route an error that may be an invariant violation through the fatal
+    /// latch: a [`StoreError::InvariantViolated`] arms the poison (so
+    /// `complete` halts the writer for it, §3.6.2) and is returned; any
+    /// other error passes through unchanged. For the paths that read a
+    /// typed cell without going through a handle that arms on its own
+    /// (`header::widen_*`).
+    pub(super) fn arm_if_invariant(&self, e: StoreError) -> StoreError {
+        match e {
+            StoreError::InvariantViolated(row) => self.poison.arm(row),
+            other => other,
+        }
+    }
+
+    /// Project this batch as the [`ChainView`](shekyl_chain_rules::ChainView)
+    /// a rule reads — including this batch's own uncommitted writes, so the
+    /// second block of a batch is validated against the chain the first
+    /// left (`store::view`). `'id` is the batch brand: a `ChainValid` minted
+    /// against the returned view is accepted by this batch's `connect` and
+    /// by nothing else.
+    ///
+    /// Obtaining the branded view is chain work: production validation
+    /// reads through it **before** `connect` can run, so an SI-7 here must
+    /// latch the writer halt even when `connect` is never reached. The
+    /// height noted is the connecting height (`tip + 1`, or `0` on an empty
+    /// chain). Table-level probes never call this, and still do not halt
+    /// (§3.6.2; PR #757 review).
+    pub fn chain_view(&self) -> BatchView<'_, 'id> {
+        self.note_chain_work();
+        BatchView::new(self)
+    }
+
+    /// Remember that this batch is chain work at `tip + 1`, so a poisoned
+    /// validation read latches [`halt_for`](Self::halt_for).
+    fn note_chain_work(&self) {
+        let height = self
+            .txn()
+            .open_table(BLOCK_INFO)
+            .ok()
+            .and_then(|table| {
+                table
+                    .last()
+                    .ok()
+                    .flatten()
+                    .map(|(h, _)| h.value().saturating_add(1))
+            })
+            .unwrap_or(0);
+        self.journal.note_height(height);
     }
 
     /// The two by-name refusals every raw table open passes through.
@@ -178,13 +263,15 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     ///
     /// ```compile_fail,E0599
     /// use redb::TableDefinition;
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
     /// use shekyl_chain_store::store::{CellFault, ChainStore, StoreError, StoreInvariant};
     /// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
     /// const ROW: StoreInvariant = StoreInvariant::CellCorrupt {
     ///     key: "t",
     ///     fault: CellFault::Absent,
     /// };
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|batch| -> Result<(), StoreError> {
     ///     batch.open_insert_table(T, ROW)?.upsert("k", &1)?;
     ///     Ok(())
@@ -211,9 +298,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         V: Value + 'static,
     {
         self.admit(definition.name())?;
+        let handles = self.handles(definition.name());
         self.txn()
             .open_table(definition)
-            .map(|table| InsertTable::new_insert(table, &self.poison, row))
+            .map(|table| InsertTable::new_insert(table, handles, row))
             .map_err(|e| EngineError::Table(e).into())
     }
 
@@ -226,8 +314,10 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// ```compile_fail,E0599
     /// use redb::TableDefinition;
     /// use shekyl_chain_store::store::{ChainStore, StoreError};
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
     /// const T: TableDefinition<&str, u64> = TableDefinition::new("t");
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|batch| -> Result<(), StoreError> {
     ///     batch.open_upsert_table(T)?.insert("k", &1)?;
     ///     Ok(())
@@ -249,19 +339,20 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         V: Value + 'static,
     {
         self.admit(definition.name())?;
+        let handles = self.handles(definition.name());
         self.txn()
             .open_table(definition)
-            .map(|table| UpsertTable::new_upsert(table, &self.poison))
+            .map(|table| UpsertTable::new_upsert(table, handles))
             .map_err(|e| EngineError::Table(e).into())
     }
 
     /// Open a multimap table for writing. Same refusals as
     /// [`open_insert_table`](Self::open_insert_table).
     ///
-    /// The handle is raw: a multimap is a set of values per key, so an
-    /// insert either adds a member or finds it present — there is no value
-    /// to overwrite and no verb to declare (C2-R8 §7.3 is about keyed
-    /// tables).
+    /// A multimap is a set of members per key, so an insert either adds a
+    /// member or finds it present — there is no value to overwrite and no
+    /// verb to declare (C2-R8 §7.3 is about keyed tables). The handle
+    /// journals an added member while the batch is recording.
     ///
     /// # Errors
     ///
@@ -270,14 +361,16 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     pub fn open_multimap_table<'txn, K, V>(
         &'txn self,
         definition: MultimapTableDefinition<'_, K, V>,
-    ) -> Result<MultimapTable<'txn, K, V>, StoreError>
+    ) -> Result<SetTable<'txn, K, V>, StoreError>
     where
         K: Key + 'static,
         V: Key + 'static,
     {
         self.admit(definition.name())?;
+        let handles = self.handles(definition.name());
         self.txn()
             .open_multimap_table(definition)
+            .map(|table| SetTable::new(table, handles))
             .map_err(|e| EngineError::Table(e).into())
     }
 
@@ -315,7 +408,9 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// ```compile_fail,E0271
     /// use shekyl_chain_store::codec::{SchemaVersion, SchemaVersionCell};
     /// use shekyl_chain_store::store::{ChainStore, StoreError};
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|batch| -> Result<(), StoreError> {
     ///     batch.upsert_property::<SchemaVersionCell>(&SchemaVersion::new(9))
     /// });
@@ -325,11 +420,16 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// use shekyl_chain_store::codec::ApplyPolicyCell;
     /// use shekyl_chain_store::family_set::FamilySet;
     /// use shekyl_chain_store::store::{ChainStore, StoreError};
-    /// let store = ChainStore::create("never-opened.redb").unwrap();
+    /// use shekyl_chain_store::codec::SettlementEpochBlocks;
+    /// let epoch = SettlementEpochBlocks::new(10_000).unwrap();
+    /// let store = ChainStore::create("never-opened.redb", epoch).unwrap();
     /// store.write(|batch| -> Result<(), StoreError> {
     ///     batch.upsert_property::<ApplyPolicyCell>(&FamilySet::EMPTY)
     /// });
     /// ```
+    ///
+    /// While the batch is recording a pop journal, the cell's prior bytes
+    /// (or their absence) are journaled so `pop` restores the register.
     ///
     /// # Errors
     ///
@@ -338,7 +438,62 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     where
         C: PropertyCell<Scope = ChainState>,
     {
-        header::put::<C>(self.txn(), value)
+        let prior = if self.journal.is_recording() {
+            let table = self
+                .txn()
+                .open_table(PROPERTIES)
+                .map_err(EngineError::Table)?;
+            let prior = table
+                .get(C::KEY)
+                .map_err(EngineError::Storage)?
+                .map(|guard| Box::<[u8]>::from(guard.value()));
+            Some(prior)
+        } else {
+            None
+        };
+        header::put::<C>(self.txn(), value)?;
+        if let Some(prior) = prior {
+            let post = post_image(&value.encode());
+            self.handles(PROPERTIES.name())
+                .journal(|table| UndoEntry::Replaced {
+                    table,
+                    key: Box::from(C::KEY.as_bytes()),
+                    prior,
+                    post,
+                });
+        }
+        Ok(())
+    }
+
+    /// Begin journaling this batch's declared writes as the pre-images of
+    /// `height`, until the returned [`Recording`] is sealed.
+    ///
+    /// `connect`'s first act; its last is `seal`, which writes
+    /// `undo_log[height]`. There is at most one live recording per batch
+    /// (a second `record_undo` before `seal` is a bug in this crate and
+    /// panics), and a recording dropped unsealed makes `complete` refuse
+    /// with [`StoreCannot::UndoUnsealed`].
+    pub(crate) fn record_undo(&self, height: u64) -> Recording<'_> {
+        Recording::begin(&self.journal, &self.poison, self.txn(), height)
+    }
+
+    /// Reverse-replay `undo_log[height]` and delete the row.
+    ///
+    /// `pop`'s mechanism (C2-R8 Q5). Every SI-6 / SI-7 outcome poisons the
+    /// batch. A recording must not be live: replay is not itself journaled.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreInvariant::UndoLogIncoherent`] (SI-6) if an entry's target is
+    /// not in the state the entry left; [`StoreInvariant::CellCorrupt`]
+    /// (SI-7) if the row does not decode or names a table the catalogue
+    /// lacks; engine errors.
+    pub(crate) fn replay_undo(&self, height: u64) -> Result<Replayed, StoreError> {
+        assert!(
+            !self.journal.is_recording(),
+            "replay_undo while a recording is live: pop does not run inside connect"
+        );
+        undo::replay(self.txn(), &self.poison, height)
     }
 
     /// Finish the batch given the closure's `outcome`.
@@ -346,17 +501,34 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// Poison wins on both arms: a violation seen through the batch is
     /// returned as `E` (via `From<StoreError>`) even when the closure
     /// returned a different `Err`, and the transaction aborts on drop.
-    /// Only an unpoisoned `Ok` commits.
+    /// Only an unpoisoned `Ok` commits. An `Err` from the closure is
+    /// returned **as the closure raised it**: a connect that refused a
+    /// malformed block after it had started journaling leaves an unsealed
+    /// recording behind, and that is the refusal's consequence, not a
+    /// second error to report in its place — the unsealed refusal
+    /// ([`StoreCannot::UndoUnsealed`]) is for a closure that swallowed the
+    /// failure and returned `Ok`.
     pub(super) fn complete<R, E: From<StoreError>>(self, outcome: Result<R, E>) -> Result<R, E> {
         if let Some(row) = self.poison.armed() {
+            self.halt_for(row);
             return Err(StoreError::from(row).into());
         }
-        match outcome {
-            Ok(value) => {
-                self.commit()?;
-                Ok(value)
-            }
-            Err(e) => Err(e),
+        let value = outcome?;
+        if let Some(height) = self.journal.abandoned() {
+            return Err(StoreError::from(undo::unsealed(height)).into());
+        }
+        self.commit()?;
+        Ok(value)
+    }
+
+    /// A violation on a connect, a pop, or a branded `chain_view` read
+    /// (production validation) halts the writer (§3.6.2): the file's
+    /// coherence is in doubt at that height and every later write would
+    /// build on it. A violation in a batch that did none of those (a
+    /// table-level test probe) aborts this batch only.
+    fn halt_for(&self, row: StoreInvariant) {
+        if let Some(at_height) = self.journal.height_hint() {
+            self.shared.halt(at_height, row);
         }
     }
 
@@ -385,7 +557,15 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             .txn
             .take()
             .expect("WriteBatch commit runs once; the Option is Some until then");
-        let provenance = header::widen(&txn, self.apply_policy)?;
+        // The commit-time widen reads a typed cell; an SI-7 here is a
+        // violation this batch observed and halts the writer like one seen
+        // inside the closure.
+        let provenance = header::widen(&txn, self.apply_policy).map_err(|e| {
+            if let StoreError::InvariantViolated(row) = e {
+                self.halt_for(row);
+            }
+            e
+        })?;
         // The file is tainted when the engine commits; the mirror, when
         // `publish` assigns it. `Shared::publish` holds the mirror's write
         // lock across both, so `provenance()` cannot observe one without the

@@ -34,21 +34,30 @@
 //! §11.1(e) recorded as owed: an encoding cannot move without the version
 //! moving in the same PR.
 
+mod chain;
+mod evidence;
 mod primitives;
 mod property;
 mod schema_version;
+mod settlement_epoch;
+mod undo;
 
 #[cfg(test)]
 #[path = "snapshot_tests.rs"]
 mod snapshot_tests;
 
+pub use chain::{BlockInfo, CurveRoot, OutKey, OutTx, TxIndex, TxOutputIndices};
+pub use evidence::{CoverageGaps, PassedThroughFacts, FACT_FIELDS};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{
-    ApplyPolicyCell, CellScope, ChainState, EngineLocal, PropertyCell, PropertyCellSpec,
-    SchemaVersionCell, Scope, PROPERTY_CELLS,
+    ApplyPolicyCell, CellScope, ChainState, CoverageGapsCell, EngineLocal, PassedThroughFactsCell,
+    PropertyCell, PropertyCellSpec, SchemaVersionCell, Scope, SettlementEpochBlocksCell,
+    TotalBurnedCell, PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
+pub use settlement_epoch::SettlementEpochBlocks;
+pub use undo::{post_image, UndoEntry, UndoLog, POST_IMAGE_DST};
 
 /// A value with exactly one byte encoding.
 ///

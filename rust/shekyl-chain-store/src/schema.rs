@@ -73,10 +73,105 @@
 //! removing or re-keying a table moves the snapshot and therefore requires
 //! the `SCHEMA_VERSION` bump §11.1(b) owes. A definition cannot be added
 //! outside the invocation without that module's source scan failing.
+//!
+//! # Ordinals, and the one table LMDB does not have
+//!
+//! The same invocation numbers its declarations: a table's
+//! [`TableOrdinal`] is its position in the list, and the pop journal
+//! (`undo_log`, S-CHAIN-W) names tables by ordinal rather than by name.
+//! Reordering declarations would therefore replay old journal rows into
+//! the wrong tables — which is why an ordinal change is a layout change:
+//! the catalogue snapshot moves (each row carries its `#ordinal`),
+//! `SCHEMA_VERSION` bumps, and the header seal refuses to open a file
+//! written under the old numbering before any row is read. The journal
+//! row carries no per-row version for that reason; the file-level seal is
+//! the guard.
+//!
+//! **Removing a table is a bump too, not only reordering.** `UNDO_TARGETS`
+//! is indexed by ordinal, so deleting a declaration silently renumbers
+//! every table after it — the same hazard as a reorder, from an edit that
+//! looks like a deletion. The snapshot catches both; and because the store
+//! is rebuild-never-migrate (§11.1(a)), the bump *is* the resolution: a
+//! file under the old numbering is refused, not renumbered. A future reader
+//! who finds "bumped for a removal" in the history is looking at this
+//! sentence's consequence, not over-caution.
+//!
+//! `undo_log` is the first — and so far only — table with no X-macro twin
+//! (`DRS_E1_SCHAIN_W.md` §5, SCW-11). It is declared in [`RUST_ONLY_TABLES`]
+//! with the reason it exists, and the bijection gate reads that map: a
+//! definition with neither a twin **nor** a named reason is still red with
+//! the extra-leg's original refusal, so the mirror assumption retires one
+//! table at a time, never as a mode switch.
 
 use redb::{MultimapTableDefinition, MultimapTableHandle, TableDefinition, TableHandle, TypeName};
 
 use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
+use crate::store::undo::UndoTarget;
+
+/// A table's position in the `tables!` declaration list — the identity the
+/// pop journal records (module docs, *Ordinals*).
+///
+/// Dense from zero, one per catalogued table. Minted only by
+/// [`ordinal_of`]; the journal codec reads one back from the file and the
+/// replay resolves it against the catalogue, refusing an index it does not
+/// have rather than guessing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TableOrdinal(u32);
+
+impl TableOrdinal {
+    /// The raw index, as the journal codec stores it.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        self.0
+    }
+
+    /// Wrap a raw index read from the file. Not a lookup: the replay is
+    /// where an out-of-range index is refused.
+    #[must_use]
+    pub(crate) const fn from_index(index: u32) -> Self {
+        Self(index)
+    }
+}
+
+impl core::fmt::Display for TableOrdinal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match undo_target(*self) {
+            Some(target) => write!(f, "#{} ({})", self.0, target.name()),
+            None => write!(f, "#{} (no such table)", self.0),
+        }
+    }
+}
+
+/// The ordinal of the catalogued table named `name`, or `None` if no
+/// declaration carries that name.
+#[must_use]
+pub fn ordinal_of(name: &str) -> Option<TableOrdinal> {
+    UNDO_TARGETS
+        .iter()
+        .position(|target| target.name() == name)
+        .and_then(|i| u32::try_from(i).ok())
+        .map(TableOrdinal)
+}
+
+/// The table `ordinal` names, as the journal replays into it.
+#[must_use]
+pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarget> {
+    UNDO_TARGETS.get(usize::try_from(ordinal.0).ok()?).copied()
+}
+
+/// Tables this crate defines that have **no** X-macro twin, each with the
+/// reason it exists. Read by `check_redb_schema_bijection.py` (a definition
+/// is either mirrored or named here — never silently extra) and by
+/// `check_redb_schema_key_types.py` (no LMDB flags to derive a key type
+/// from). Out of the digest domain by construction: the accumulator's
+/// class table is the LMDB inventory, and a table absent from it with a
+/// reason here is a named exclusion, not an omission.
+pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[(
+    "undo_log",
+    "the pop journal: one LIFO row of pre-images per connected height, replacing the C++ \
+     per-surface journals (C2-R8 Q5); a function of the journaled writes, so two correct stores \
+     of one chain agree on it by construction and it is not folded",
+)];
 
 /// Whether a table holds one value per key or many.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -153,6 +248,14 @@ macro_rules! tables {
         pub fn catalogue() -> Vec<TableSpec> {
             vec![$($name.spec(),)+]
         }
+
+        /// Every table as a journal-replay target, in the same order as
+        /// [`catalogue`] — index *i* here **is** [`TableOrdinal`] *i*. A
+        /// table whose key or value type cannot be checked before
+        /// `Value::from_bytes` does not compile into this list, so a
+        /// declaration that the journal could not replay is refused at
+        /// build time rather than at pop time.
+        pub(crate) const UNDO_TARGETS: &[&dyn UndoTarget] = &[$(&$name,)+];
     };
 }
 
@@ -328,4 +431,88 @@ tables! {
 
     /// `output_metadata` — INTEGERKEY. Node-local; excluded from the accumulator.
     pub const OUTPUT_METADATA: TableDefinition<u64, &[u8]> = TableDefinition::new("output_metadata");
+
+    /// `undo_log` — **Rust-only** ([`RUST_ONLY_TABLES`]); height → the
+    /// [`UndoLog`](crate::codec::UndoLog) of pre-images `connect` recorded
+    /// at that height, replayed in reverse by `pop` (C2-R8 Q5; register row
+    /// SI-6). Declared **last** so no existing ordinal moved when it was
+    /// added; a later table is likewise appended, never inserted.
+    pub const UNDO_LOG: TableDefinition<u64, &[u8]> = TableDefinition::new("undo_log");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordinals_are_the_catalogue_positions() {
+        let catalogue = catalogue();
+        assert_eq!(catalogue.len(), UNDO_TARGETS.len());
+        for (i, spec) in catalogue.iter().enumerate() {
+            let ordinal =
+                ordinal_of(&spec.name).unwrap_or_else(|| panic!("{} has no ordinal", spec.name));
+            assert_eq!(ordinal.index(), u32::try_from(i).expect("fits"));
+            assert_eq!(
+                undo_target(ordinal).map(UndoTarget::name),
+                Some(spec.name.as_str())
+            );
+        }
+        assert_eq!(ordinal_of("not_a_table"), None);
+        let past_end = TableOrdinal::from_index(u32::try_from(catalogue.len()).expect("fits"));
+        assert!(undo_target(past_end).is_none());
+        assert_eq!(
+            past_end.to_string(),
+            format!("#{} (no such table)", catalogue.len())
+        );
+    }
+
+    /// The pin that makes "append, never insert" checkable: the ordinal of
+    /// every table declared before this test was written. A reorder that
+    /// moves one of these is a layout change and must move the catalogue
+    /// snapshot and `SCHEMA_VERSION` with it — this test is the reminder
+    /// that fires before the snapshot diff does.
+    #[test]
+    fn pinned_ordinals_have_not_moved() {
+        let pinned: &[(&str, u32)] = &[
+            ("blocks", 0),
+            ("block_heights", 1),
+            ("block_info", 2),
+            ("tx_indices", 9),
+            ("output_amounts", 12),
+            ("spent_keys", 13),
+            ("hf_versions", 18),
+            ("properties", 19),
+            ("block_burn", 20),
+            ("curve_tree_roots", 47),
+            ("output_metadata", 48),
+            ("undo_log", 49),
+        ];
+        for &(name, index) in pinned {
+            assert_eq!(
+                ordinal_of(name).map(TableOrdinal::index),
+                Some(index),
+                "{name}: ordinal moved — a declaration was inserted or reordered above it"
+            );
+        }
+    }
+
+    #[test]
+    fn rust_only_tables_are_catalogued_and_carry_a_reason() {
+        let catalogued: Vec<String> = catalogue().into_iter().map(|s| s.name).collect();
+        assert!(!RUST_ONLY_TABLES.is_empty());
+        for &(name, reason) in RUST_ONLY_TABLES {
+            assert!(
+                catalogued.iter().any(|c| c == name),
+                "{name}: named Rust-only but not declared"
+            );
+            assert!(
+                reason.split_whitespace().count() >= 8,
+                "{name}: a Rust-only table's reason is a sentence, not a token"
+            );
+            assert!(
+                crate::accumulator::class_for_table(name).is_none(),
+                "{name}: a Rust-only table has no LMDB class row; its exclusion is the reason here"
+            );
+        }
+    }
 }

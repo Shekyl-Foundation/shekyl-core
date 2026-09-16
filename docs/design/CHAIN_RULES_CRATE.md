@@ -432,8 +432,16 @@ The `Block` is kept **whole** rather than decomposed into header + miner tx
 bodies' hashes — so a store reconstructing the block from `(header, miner_tx,
 transactions)` could write a blob that differs from the candidate the rules
 judged. Keeping the block as received removes the reconstruction; the miner
-tx is then reached through it (`miner_tx()` returns `(TxHash, &Transaction)`)
+tx is then reached through it (`miner_tx()` returns `(TxIdentity, &Transaction)`)
 rather than duplicated.
+
+**UPDATE 2026-09-15 (S-CHAIN-W commit 4, SCW-10 — owed to this consumer, landed by it):** the per-tx identity is
+`TxIdentity { hash: TxHash, prunable_hash: PrunableHash }`, both derived once in
+`validate` (`Transaction::hash`, `Transaction::prunable_hash`). The prunable digest is
+the fourth component of a spend's txid and the value the store records as
+`txs_prunable_hash`; for a coinbase it is `keccak256("")` — what the C++ store
+writes — not the txid's null-hash substitute. Q4 holds: the store records it and
+never derives it.
 
 ### 4.5 `Coverage<R>` (`coverage.rs`); `ChainValid<'id, V>`, `InvalidBlock`, `Locus` (`verdict.rs`)
 
@@ -833,8 +841,9 @@ second lines behind the belt and the type shapes, not gates.
 - zero rules: `Ok(Ok(v))`, `v.coverage().is_empty()`, `v.rule_set_id() ==
   GENESIS.id()`.
 - payload: `block().hash() == BlockHash::from_bytes(candidate.block.hash())`;
-  `transactions()[i].0 == TxHash::from_bytes(tx.hash())`; `miner_tx().0`
-  likewise (bites: a pairing that hashes the wrong body or drops the miner tx).
+  `transactions()[i].0 == TxIdentity { hash, prunable_hash }` of `tx`; `miner_tx().0`
+  likewise, with the coinbase's `prunable_hash` pinned to `keccak256("")` (bites: a
+  pairing that hashes the wrong body, drops the miner tx, or conflates the two digests).
 - `tx_form` / `tx_against` with zero rules: `Ok(EMPTY)` / `Ok(Ok(EMPTY))`.
 - a mock whose `Fault` is a unit type and whose `block_at` faults: `validate`
   returns `Err(fault)`, not a verdict (bites: a fault swallowed into a pass or a

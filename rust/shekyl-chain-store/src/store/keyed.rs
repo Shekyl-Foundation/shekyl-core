@@ -16,6 +16,11 @@
 //! redb's own `insert` replaces silently and is not reachable. Reads are
 //! inherent methods returning [`StoreError`]; the engine's `ReadableTable`
 //! is not implemented, so a write closure can `?` a lookup.
+//!
+//! Both verbs **journal** themselves: while the batch is recording a pop
+//! journal (`store::undo`), a successful `insert` records the key it added
+//! and a successful `upsert` records the value it displaced, so `pop` can
+//! reverse either without knowing which surface made the write.
 
 use core::borrow::Borrow;
 use core::ops::RangeBounds;
@@ -24,7 +29,11 @@ use redb::{
     AccessGuard, Key, Range, ReadableTable, ReadableTableMetadata, Table, TableStats, Value,
 };
 
+use crate::codec::{post_image, UndoEntry};
+use crate::schema::TableOrdinal;
+
 use super::error::{EngineError, StoreError, StoreInvariant};
+use super::undo::Journal;
 use super::write::Poison;
 
 /// This handle's value writes are insert-once, enforcing `row`.
@@ -43,13 +52,56 @@ pub struct Overwrite;
 ///
 /// Borrows the batch for `'txn`, so it cannot outlive the closure that
 /// opened it. Deletion is not a value write and is not offered here: the
-/// pop path (C2-R8 Q5, register row SI-6) names its own verb and the row
-/// it enforces when it lands, rather than this handle pre-provisioning one.
+/// only deleter in the store is the pop journal's replay (`store::undo`),
+/// and S-CURVE names a journaling delete verb — with the row it enforces —
+/// when the drain needs one, rather than this handle pre-provisioning it.
 #[must_use = "a keyed-table handle is a loan on the batch; dropping it writes nothing"]
 pub struct KeyedTable<'txn, K: Key + 'static, V: Value + 'static, W> {
     inner: Table<'txn, K, V>,
-    poison: &'txn Poison,
+    batch: Handles<'txn>,
     write: W,
+}
+
+/// The batch state a table handle writes through: the fatal latch, the
+/// pop journal, and this table's identity in the journal.
+///
+/// `ordinal` is `None` for a table outside the schema catalogue — a test
+/// fixture. Such a table can be written while no journal is recording;
+/// writing it *during* a recording is a bug in this crate (only `connect`
+/// records, and it opens catalogued tables), so [`Handles::journal`]
+/// panics rather than journal a row `pop` could never replay.
+pub(super) struct Handles<'txn> {
+    pub(super) poison: &'txn Poison,
+    pub(super) journal: &'txn Journal,
+    pub(super) ordinal: Option<TableOrdinal>,
+    /// The table name, for the message when `ordinal` is `None` and a
+    /// recording is live.
+    pub(super) name: Box<str>,
+}
+
+impl Handles<'_> {
+    /// Record `entry(ordinal)` if the batch is recording.
+    pub(super) fn journal(&self, entry: impl FnOnce(TableOrdinal) -> UndoEntry) {
+        if !self.journal.is_recording() {
+            return;
+        }
+        let ordinal = self.ordinal.unwrap_or_else(|| {
+            panic!(
+                "table `{}` is not in the schema catalogue and cannot be journaled; connect \
+                 writes catalogued tables only",
+                self.name
+            )
+        });
+        self.journal.record(|| entry(ordinal));
+    }
+
+    /// `bytes` boxed, but only while the journal is recording — the copy
+    /// is the price of a pop, and a non-recording batch does not pay it.
+    pub(super) fn capture(&self, bytes: impl AsRef<[u8]>) -> Option<Box<[u8]>> {
+        self.journal
+            .is_recording()
+            .then(|| Box::from(bytes.as_ref()))
+    }
 }
 
 /// Insert-once keyed table: a present key is the belt bound at open.
@@ -64,12 +116,12 @@ pub type TablePair<'a, K, V> = (AccessGuard<'a, K>, AccessGuard<'a, V>);
 impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
     pub(super) const fn new_insert(
         inner: Table<'txn, K, V>,
-        poison: &'txn Poison,
+        batch: Handles<'txn>,
         row: StoreInvariant,
     ) -> Self {
         Self {
             inner,
-            poison,
+            batch,
             write: InsertOnce { row },
         }
     }
@@ -82,6 +134,9 @@ impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
     /// returns the violation, and the batch is **poisoned**: finishing
     /// the batch refuses with the same violation whether or not the
     /// closure propagates it, so nothing the batch wrote lands.
+    ///
+    /// While the batch is recording a pop journal, a successful insert
+    /// records the key so `pop` can remove it.
     ///
     /// # Errors
     ///
@@ -100,27 +155,39 @@ impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
             .map_err(EngineError::Storage)?
             .is_some()
         {
-            return Err(self.poison.arm(row));
+            return Err(self.batch.poison.arm(row));
         }
+        let key_bytes = self.batch.capture(K::as_bytes(key.borrow()));
+        // The post-image is what replay must find under the key to count
+        // the removal as reversing *this* write (codec docs).
+        let post = key_bytes
+            .is_some()
+            .then(|| post_image(V::as_bytes(value.borrow()).as_ref()));
         self.inner
             .insert(key, value)
-            .map(drop)
-            .map_err(|e| EngineError::Storage(e).into())
+            .map_err(EngineError::Storage)?;
+        if let (Some(key), Some(post)) = (key_bytes, post) {
+            self.batch
+                .journal(|table| UndoEntry::Inserted { table, key, post });
+        }
+        Ok(())
     }
 }
 
 impl<'txn, K: Key + 'static, V: Value + 'static> UpsertTable<'txn, K, V> {
-    pub(super) const fn new_upsert(inner: Table<'txn, K, V>, poison: &'txn Poison) -> Self {
+    pub(super) const fn new_upsert(inner: Table<'txn, K, V>, batch: Handles<'txn>) -> Self {
         Self {
             inner,
-            poison,
+            batch,
             write: Overwrite,
         }
     }
 
     /// Write `key → value`, replacing any present value — and say so.
     ///
-    /// Returns the displaced value, if there was one.
+    /// Returns the displaced value, if there was one. While the batch is
+    /// recording a pop journal, the displaced value (or its absence) is
+    /// recorded so `pop` can restore it.
     ///
     /// # Errors
     ///
@@ -130,9 +197,26 @@ impl<'txn, K: Key + 'static, V: Value + 'static> UpsertTable<'txn, K, V> {
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<Option<AccessGuard<'_, V>>, StoreError> {
-        self.inner
+        let key_bytes = self.batch.capture(K::as_bytes(key.borrow()));
+        let post = key_bytes
+            .is_some()
+            .then(|| post_image(V::as_bytes(value.borrow()).as_ref()));
+        let displaced = self
+            .inner
             .insert(key, value)
-            .map_err(|e| EngineError::Storage(e).into())
+            .map_err(EngineError::Storage)?;
+        if let (Some(key), Some(post)) = (key_bytes, post) {
+            let prior = displaced
+                .as_ref()
+                .map(|guard| Box::<[u8]>::from(V::as_bytes(&guard.value()).as_ref()));
+            self.batch.journal(|table| UndoEntry::Replaced {
+                table,
+                key,
+                prior,
+                post,
+            });
+        }
+        Ok(displaced)
     }
 }
 

@@ -25,6 +25,20 @@
 
 ### API
 
+- **`ConnectState` / `StoreInvariantRow` wire types (`shekyl-rpc-types::chain`).**
+  The chain-store writer halt as a wallet will see it on the tip
+  (`DAEMON_REDB_STORE.md` §3.6.2): `{"state":"live"}` or
+  `{"state":"halted","at_height":…,"row":n}` with `n` the
+  `STORE_INVARIANT_REGISTER.md` `SI-n` row. Types only at this pin — the
+  daemon still serves LMDB, so `get_info` does not carry the field yet and
+  `CORE_RPC_VERSION` is unchanged; the bump lands with the field.
+- **`shekyl-chain-store` DRS-E1 increment 3 (S-CHAIN-W).** `connect` /
+  `pop` on the branded write batch, one undo log per connect, the settlement
+  -epoch schedule pinned in the store header and refused on mismatch at every
+  open (`StoreCannot::SettlementEpochMismatch`), `ChainStore::create` /
+  `open_read_only` now take the schedule. Store layout `SCHEMA_VERSION` 1 → 2
+  (rebuild, never migrate). Not yet wired into the daemon.
+
 - **`calc_pow` drops leftover `major_version` (RPC 3.32).** The field was
   a Cryptonight schema operand. HTTP is Rust (`shekyl-daemon-rpc`); the
   handler is still C++ `core_rpc_server::on_calcpow` via `core_rpc_ffi`.
