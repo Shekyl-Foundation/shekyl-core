@@ -3808,7 +3808,10 @@ name = "shekyl-chain-store"
 version = "3.1.0"
 dependencies = [
  "redb",
+ "shekyl-chain-rules",
  "shekyl-crypto-hash",
+ "shekyl-types",
+ "shekyl-wire",
 ]
 
 [[package]]
@@ -4196,6 +4199,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-generators",
  "shekyl-fcmp-proofs",
+ "shekyl-types",
  "thiserror 2.0.18",
  "tracing",
  "zeroize",

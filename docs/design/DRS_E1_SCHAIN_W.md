@@ -1,6 +1,12 @@
 # DRS-E1 S-CHAIN-W — the connect/pop write set: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **Round 0 (pre-flight) executed 2026-09-15** at `dev`
+**Status:** OPEN — **increment LANDED (PR #757, 2026-09-16)**: the §3
+contract is code (`rust/shekyl-chain-store/src/store/{connect,pop,view,undo,halt}.rs`),
+SI-1/2/3/4/6/8/9 are `built`, and every SCW-19 residue (`root_at(h)` = key
+*h*, tip-classified absence, `CurveTreeRoot::EMPTY`) landed in the same PR.
+The document stays in `design/` only for the §11 archive condition (S-CHAIN-R
+consuming the codecs); nothing here is still proposed. History: **Round 0
+(pre-flight) executed 2026-09-15** at `dev`
 `65e7be450` against `shekyl-chain-rules` as it stands on PR #753
 (`f03b44452`; the API read here is unchanged since `0bb238896`); **round-1
 rulings taken 2026-09-15** on every §10 question (each entry carries its
@@ -283,9 +289,10 @@ port keeps the datum and drops the discard:
 
 ### 3.6 The writer halt
 
-Per DRS §3.6.2, a `StoreInvariantViolated` on `connect` or `pop` poisons the
-batch (increment 2.5), `complete` refuses with the row, and this increment
-adds what happens *next*:
+Per DRS §3.6.2, a `StoreInvariantViolated` on `connect`, `pop`, or a branded
+`chain_view` read (the production validation path, which runs before
+`connect` can) poisons the batch (increment 2.5), `complete` refuses with
+the row, and this increment adds what happens *next*:
 
 ```rust
 pub enum ConnectState { Live, Halted { at_height: BlockHeight, row: StoreInvariant } }
@@ -295,7 +302,7 @@ impl ChainStore {
 }
 ```
 
-- `ChainStore` records the halt in memory (a `OnceLock`-shaped cell) when a batch completes with `InvariantViolated`. Every subsequent `ChainStore::write` refuses with `StoreCannot::WriterHalted { at_height, row }`; reads stay open.
+- `ChainStore` records the halt in memory (a `OnceLock`-shaped cell) when a batch completes with `InvariantViolated`. Every subsequent `ChainStore::write` claims the write slot first, then looks at the latch while holding it, and refuses with `StoreCannot::WriterHalted { at_height, row }` (a load-then-CAS lets the live batch halt and drop between the two looks); reads stay open. The slot is released on that refusal so the next call is `WriterHalted`, not `WriteInProgress`.
 - Not persisted, re-derived on restart (DRS §3.6.2's ruling, with its reopener). The operator path is the engine's `--check` (SI-7/SI-8) or the file-restore path.
 - RPC: `ChainTip.connect: ConnectState` in `shekyl-rpc-types::chain`, with `Halted { at_height, row: StoreInvariantRow(u32) }` — the ordinal newtype, not the store's enum (PR #751 disposition). `CORE_RPC_VERSION` minor bump. The daemon still serves LMDB at this pin, so the field's producer is wired at cutover; the type and the store-side state land here so the E2 harness can assert on them.
 
@@ -839,9 +846,13 @@ treats it exactly as the C++ does at the type level — no row, and the read
 of a recorded height `≥ 1` with no row is `EngineError::Corrupt` (dense by
 construction, so absence is corruption).
 
-*What stays owed.* Nothing in #757 for the write path. The `root_at` keying
-fix (key *h*), the tip-classified absence in `block_at`/`root_at` (§3.4),
-and the trait-doc correction are the SCW-19 residue.
+*What stayed owed — landed in #757 (2026-09-16).* Nothing for the write path.
+The `root_at` keying fix (key *h*), the tip-classified absence in
+`block_at`/`root_at` (§3.4, with the blob held to `block_info`'s identity),
+`CurveTreeRoot::EMPTY` for height 0 (pinned in `shekyl-types`, KAT in
+`shekyl-fcmp`'s suite) and the trait-doc correction are all in; the
+both-ends test pins key *h*, `tip + 1` recorded, and a hole below the tip as
+SI-7.
 
 ---
 
@@ -978,7 +989,7 @@ cell moves to `ChainState`.
 - `LMDB_WRITE_ATOMICITY_AUDIT.md` `properties` paragraph: `settlement_epoch_blocks_pin` moves from the chain-state list to a dated `UPDATE` naming it engine-local by mechanism (this PR, SCW-2 amended).
 - `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1 CEN-I12 row: **CHECKED-CONFORMANT stands**, absent-key arm walked and recorded at `0aeb67619` (key 0 only; consequence-free); tally unchanged `126 / 2 / 3`; `CONSENSUS_RULE_CENSUS.md` §7 #21 (the walk and the withdrawn flip) and the CEN-I12 row's status cell; `LMDB_SCHEMA.md` `curve_tree_roots` row (dense from key 1, key 0 never, zero-root reader) — this PR, SCW-19. The genesis-anchor question is E6 slice 6's.
 - `IMPLEMENTATION_INDEX.md` SI family row: SI-1…SI-9 and `tx_indices` (this PR, SCW-3/SCW-4's sibling).
-- This document: banner flips to *implemented*, §7 dispositions to *done*, then archive-or-contract per index §8 once S-CHAIN-R has consumed the codecs (the reopening condition for keeping it in `design/`).
+- This document: banner flipped to *landed* by PR #757 (2026-09-16); §7 dispositions done; archive-or-contract per index §8 once S-CHAIN-R has consumed the codecs (the reopening condition for keeping it in `design/`).
 
 ---
 
@@ -992,3 +1003,4 @@ cell moves to `ChainState`.
 | 2026-09-15 | **PR #756 review (Copilot, 5 inline + 17 suppressed; every one re-verified at source, 21 taken, 1 refuted):** substrate corrections — `bi_cum_rct` is **per-block** at this pin (CEN-L15; the cumulative reading was wrong), `block_at` decodes `blocks[h]` (`BlockInfo` has no header), `RuleSet::GENESIS` enforces all 153 rows so a scaffold file is **not** evidence, `RuleSet::for_id` before `enforced()` with `RuleSetUnknown`, the burn phase is conditional as a whole (`h > 0 && burned > 0`), `amount_index` is per-amount and `output_id` is last-key+1, SI-9 tightened to primary-dense / side-table-fresh, seven journals not five, `SetTable` journals the multimap, `PassedThroughFactsCell` listed, three `ConnectFacts` provenances named, monotone-floor sentence fixed, SI-1…SI-9. **SCW-2 amended**: the audit's chain-state listing of the pin conflicts with the `EngineLocal` cell; disposition `EngineLocal`, audit paragraph `UPDATE`d, reopener stated. **SCW-19 minted**: `root_at(h)` is key *h* (CEN-I12), not *h+1* — fixed here, trait doc corrected, #757's `BatchView` to follow; the sparse-write / zero-root-read half is **§10.1, OPEN**, recommendation (B). Refuted: the suppressed "`root_after` is the header root at *h*'s own height" — it is the root after *h*'s drain, i.e. the *next* header's (the finding's premise was the same off-by-one, from the other side). Rebased onto `dev` post-#753 (index conflicts: #753's `DRS-*` row kept, rule 94 §6). |
 | 2026-09-15 | **Round-2 rulings (maintainer, same day) — the SCW-19 half of this row is VOID, see the next row; the SCW-2 half stands.** **SCW-2 confirmed `EngineLocal`** — an init-time datadir pin is not chain state; reopener written beside it: safe because `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is regtest-scoped with typed refusals outside it (verified: FAKECHAIN-only arming behind a fail-closed startup gate, unarmed processes compute the genesis schedule), and the cell moves to `ChainState` if that scoping relaxes. **SCW-19 stopped before choosing:** the maintainer asked whether `ref_height` is constrained to a row-bearing height. Checked — it is not (`block_exists` + age 5/100 only); the gap set is keys `0..60` (drain counts *matured* leaves); the zero substitute decodes to the identity point; fail-closed, deterministic, forging needs a DL break. **CEN-I12 → DIVERGENT** in the CSR register at `0aeb67619`, census §7 #21, tally `125 / 3 / 3` — before #757 decides how to reproduce it. Then **B ruled**: `TreeAfter::{Grew, Unchanged}` on the write (byte-parity), ratified state on the read (latest root `≤ h`, `CurveTreeRoot::EMPTY` when none), the divergence recorded **in the register** as CSR-3a requires (identity FAILS), never as a doc note. (A) rejected — reddens the comparator for a reason unrelated to the port; (C) rejected on principle — two sources of truth for one read. Lands in #757 before merge. |
 | 2026-09-15 | **Round-2 SCW-19 ruling VOID — premise refuted at re-read (same evening).** Copilot's second review read the source correctly where this document had not: `store_curve_tree_root_at_height` at `src/blockchain_db/blockchain_db.cpp:663`–`:664` is **outside** the `if (new_output_count > 0)` block (closes `:650`) and inside the always-true HF gate (`:493`), so the record is **dense from key 1** and only key 0 is unwritten. Everything built on "sparse over `0..60`" is withdrawn: `TreeAfter`, the walk-back read, CEN-I12 → DIVERGENT, tally `125/3/3`. Restored: `root_after: Fact<CurveTreeRoot>` written every connect (what #757 does; SI-4 one row per connect), CEN-I12 CHECKED-CONFORMANT with the absent-key arm now walked on the row (key 0 only; zeros → identity point; consequence-free), tally `126/2/3`; census §7 #21 rewritten as the record of the walk and the correction. The conditional ruling ("B, assuming the check comes back benign") is void because its premise failed, not overridden (rule 16: premise refuted). Kept: `root_at(h)` = key *h* (independent of density); absence classified against the tip in `block_at`/`root_at` (Copilot :265 — `AboveTip` only above the tip, holes below it are `Fault`); the genesis-anchor question routed to E6 slice 6. Also taken this round: "17 LMDB tables" → 16 + `undo_log`; the §8 test paragraph no longer calls GENESIS zero rules. CI: the CSR row's `blockchain_db.cpp` citation qualified to `src/blockchain_db/…` (two tracked files match the bare name). |
+| 2026-09-16 | **Increment landed — PR #757 merged onto `dev` after #756.** Commits 1–8 plus the review pass: `root_at(h)` = key *h* with `CurveTreeRoot::EMPTY` at 0 and tip-classified absence (SCW-19 residue); `rct_outputs` per-block (CEN-L15); burn phase `h > 0 && burned > 0`; connecting height noted before the belts, provenance SI-7s and the commit-time widen routed through the halt; `complete` returns the closure's own error; `Recording::sealed` after the insert; undo entries carry a cSHAKE256 post-image (`shekyl/chain-store/undo-log/post-image-v1`, registered SA-3b) so SI-6's second arm is exact; an empty journal under a recorded tip is SI-6 `NoRowForTip` until S-PRUNE persists its floor; evidence cells refuse non-canonical order; `in_force` resolved before the verdict comparison (`RuleSetUnknown` reachable); `amount_index` freshness checked from the bucket's shape; bijection gate refuses unparsed map content. This document stays in `design/` for the S-CHAIN-R archive condition only. |

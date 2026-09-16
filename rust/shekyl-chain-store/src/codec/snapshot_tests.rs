@@ -27,8 +27,9 @@
 //! none of which need move a codec fixture's bytes. So:
 //!
 //! - `schemas/tables.snap` pins [`schema::catalogue`]: one row per
-//!   definition with its name, shape and the key/value `TypeName`s redb
-//!   checks at `open_table`.
+//!   definition with its name, its declaration ordinal (the pop journal's
+//!   table identity), its shape and the key/value `TypeName`s redb checks
+//!   at `open_table`.
 //! - `schemas/properties.snap` pins [`PROPERTY_CELLS`]: one row per cell
 //!   with its key, [`CellScope`] and value-codec name. A new
 //!   [`ChainState`](super::ChainState) cell is digest-domain growth even
@@ -80,7 +81,13 @@ use crate::family_set::FamilySet;
 use crate::lmdb_order::Hash32;
 use crate::schema::{self, TableShape};
 
-use super::{Canonical, ProbeCell, PropertyCell, SchemaVersion, PROPERTY_CELLS, SCHEMA_VERSION};
+use super::{
+    post_image, BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, PassedThroughFacts,
+    ProbeCell, PropertyCell, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices,
+    UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+};
+use crate::schema::TableOrdinal;
+use shekyl_chain_rules::CenRow;
 
 /// Catalogue snapshot stems under `schemas/`. Not codec names;
 /// [`every_canonical_impl_has_a_snapshot`] holds the two namespaces apart.
@@ -175,6 +182,248 @@ impl Fixtures for FamilySet {
     }
 }
 
+impl Fixtures for UndoLog {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // Ordinals as literals: the snapshot pins the *row layout* (tag
+        // bytes, u32 LE lengths, has_prior flag, the 32-byte post-image
+        // digest on keyed entries), and must not move when a table is
+        // appended to the catalogue. Every variant appears, with a
+        // multi-byte key so the length prefix is visible in the hex.
+        vec![
+            ("empty", UndoLog::default()),
+            (
+                "inserted",
+                UndoLog(vec![UndoEntry::Inserted {
+                    table: TableOrdinal::from_index(0),
+                    key: Box::new(1u64.to_le_bytes()),
+                    post: post_image(&[0xb1, 0x0c]),
+                }]),
+            ),
+            (
+                "multi_inserted",
+                UndoLog(vec![UndoEntry::MultiInserted {
+                    table: TableOrdinal::from_index(12),
+                    key: Box::new(0u64.to_le_bytes()),
+                    value: Box::new([0xaa, 0xbb, 0xcc]),
+                }]),
+            ),
+            (
+                "replaced_with_prior",
+                UndoLog(vec![UndoEntry::Replaced {
+                    table: TableOrdinal::from_index(19),
+                    key: Box::from(*b"total_burned"),
+                    prior: Some(Box::new(7u64.to_le_bytes())),
+                    post: post_image(&9u64.to_le_bytes()),
+                }]),
+            ),
+            (
+                "replaced_absent",
+                UndoLog(vec![UndoEntry::Replaced {
+                    table: TableOrdinal::from_index(19),
+                    key: Box::from(*b"k"),
+                    prior: None,
+                    post: post_image(&[1]),
+                }]),
+            ),
+            (
+                "three_in_write_order",
+                UndoLog(vec![
+                    UndoEntry::Inserted {
+                        table: TableOrdinal::from_index(1),
+                        key: Box::new([0x11; 32]),
+                        post: post_image(&3u64.to_le_bytes()),
+                    },
+                    UndoEntry::Replaced {
+                        table: TableOrdinal::from_index(18),
+                        key: Box::new(2u64.to_le_bytes()),
+                        prior: Some(Box::new([1])),
+                        post: post_image(&[2]),
+                    },
+                    UndoEntry::MultiInserted {
+                        table: TableOrdinal::from_index(12),
+                        key: Box::new(5u64.to_le_bytes()),
+                        value: Box::new([0x01; 9]),
+                    },
+                ]),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for SettlementEpochBlocks {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // Literals: the snapshot pins the codec, not any consumer's schedule.
+        let pin = |n| SettlementEpochBlocks::new(n).expect("non-zero fixture");
+        vec![
+            ("one", pin(1)),
+            ("mainnet_shaped", pin(10_000)),
+            ("byte_order", pin(0x0102_0304_0506_0708)),
+        ]
+    }
+}
+
+impl Fixtures for CoverageGaps {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // Names, never indices: the bytes spell `CEN-…`. The first and last
+        // census rows, so a row inserted anywhere between them does not
+        // move this snapshot — which is the property the name encoding
+        // buys and this fixture witnesses.
+        let first = CenRow::ALL[0];
+        let last = CenRow::ALL[CenRow::ALL.len() - 1];
+        vec![
+            ("none", CoverageGaps::NONE),
+            ("first_row", CoverageGaps::of([first])),
+            ("first_and_last", CoverageGaps::of([last, first])),
+        ]
+    }
+}
+
+impl Fixtures for PassedThroughFacts {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("none", PassedThroughFacts::NONE),
+            ("burned", PassedThroughFacts::of_positions([4])),
+            // Every field: the six-name spelling is the layout.
+            ("all", PassedThroughFacts::of_positions(0..6)),
+        ]
+    }
+}
+
+impl Fixtures for CurveRoot {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", CurveRoot::from_bytes([0; 32])),
+            (
+                "ascending",
+                CurveRoot::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i).expect("32 indices fit a byte")
+                })),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for BlockInfo {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "genesis_like",
+                BlockInfo {
+                    timestamp: 0,
+                    coins_generated: 0,
+                    weight: 0,
+                    cumulative_difficulty: 1,
+                    hash: Hash32::from_bytes([0; 32]),
+                    rct_outputs: 0,
+                    long_term_weight: 0,
+                },
+            ),
+            // Every field distinct, difficulty straddling the lo/hi split so
+            // the snapshot witnesses `bi_diff_lo` before `bi_diff_hi`.
+            (
+                "distinct_fields",
+                BlockInfo {
+                    timestamp: 0x0102_0304_0506_0708,
+                    coins_generated: 2,
+                    weight: 3,
+                    cumulative_difficulty: (5u128 << 64) | 4,
+                    hash: Hash32::from_bytes([0xab; 32]),
+                    rct_outputs: 6,
+                    long_term_weight: 7,
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for TxIndex {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "zero",
+                TxIndex {
+                    tx_id: 0,
+                    unlock_time: 0,
+                    height: 0,
+                },
+            ),
+            (
+                "distinct_fields",
+                TxIndex {
+                    tx_id: 1,
+                    unlock_time: 0x0102_0304_0506_0708,
+                    height: 3,
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for OutTx {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "zero",
+                OutTx {
+                    tx_hash: Hash32::from_bytes([0; 32]),
+                    local_index: 0,
+                },
+            ),
+            (
+                "distinct_fields",
+                OutTx {
+                    tx_hash: Hash32::from_bytes([0x33; 32]),
+                    local_index: 0x0102_0304_0506_0708,
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for OutKey {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            (
+                "zero",
+                OutKey {
+                    amount_index: 0,
+                    output_id: 0,
+                    pubkey: [0; 32],
+                    unlock_time: 0,
+                    height: 0,
+                    commitment: [0; 32],
+                },
+            ),
+            // The amount_index prefix in byte-order-witness form: a
+            // big-endian regression reads `0102030405060708` at offset 0.
+            (
+                "distinct_fields",
+                OutKey {
+                    amount_index: 0x0102_0304_0506_0708,
+                    output_id: 1,
+                    pubkey: [0x11; 32],
+                    unlock_time: 2,
+                    height: 3,
+                    commitment: [0x22; 32],
+                },
+            ),
+        ]
+    }
+}
+
+impl Fixtures for TxOutputIndices {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("empty", TxOutputIndices::default()),
+            ("one", TxOutputIndices(vec![7])),
+            (
+                "three",
+                TxOutputIndices(vec![0, 0x0102_0304_0506_0708, u64::MAX]),
+            ),
+        ]
+    }
+}
+
 /// The type name as written after `impl Canonical for`, for the source scan.
 fn type_name<T>() -> &'static str {
     core::any::type_name::<T>()
@@ -236,12 +485,20 @@ fn render_table_catalogue() -> String {
     let catalogue = schema::catalogue();
     assert!(!catalogue.is_empty(), "schema::catalogue() is empty");
     let mut rows = BTreeMap::new();
-    for spec in &catalogue {
+    for (ordinal, spec) in catalogue.iter().enumerate() {
         let shape = match spec.shape {
             TableShape::Map => "map",
             TableShape::Multimap => "multimap",
         };
-        let row = format!("{shape}<{}, {}>", spec.key.name(), spec.value.name());
+        // The ordinal is part of the layout (schema module docs): the pop
+        // journal names tables by it, so a reorder must move this snapshot
+        // and take the version bump with it, even though the rows are
+        // sorted by name for a stable diff.
+        let row = format!(
+            "#{ordinal} {shape}<{}, {}>",
+            spec.key.name(),
+            spec.value.name()
+        );
         assert!(
             rows.insert(spec.name.as_str(), row).is_none(),
             "duplicate table name `{}` in schema::catalogue()",
@@ -539,6 +796,16 @@ snapshotted_codecs! {
     Hash32 => codec_snapshot_hash32,
     SchemaVersion => codec_snapshot_schema_version,
     FamilySet => codec_snapshot_family_set,
+    UndoLog => codec_snapshot_undo_log,
+    SettlementEpochBlocks => codec_snapshot_settlement_epoch_blocks,
+    CoverageGaps => codec_snapshot_rule_coverage_gaps,
+    PassedThroughFacts => codec_snapshot_passed_through_facts,
+    CurveRoot => codec_snapshot_curve_root,
+    BlockInfo => codec_snapshot_block_info,
+    TxIndex => codec_snapshot_tx_index,
+    OutTx => codec_snapshot_out_tx,
+    OutKey => codec_snapshot_out_key,
+    TxOutputIndices => codec_snapshot_tx_output_indices,
 }
 
 /// The gate asserts its own arming state (rule 47). `UPDATE_SNAPSHOTS`

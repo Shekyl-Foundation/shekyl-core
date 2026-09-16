@@ -6,13 +6,22 @@
 //! State a live [`WriteBatch`](super::WriteBatch) shares with its store.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{PoisonError, RwLock};
+use std::sync::{OnceLock, PoisonError, RwLock};
 
 use crate::provenance::Provenance;
 
-/// The one-live-write guard and the in-memory mirror of the provenance cell.
+use super::error::{StoreCannot, StoreInvariant};
+
+/// The one-live-write guard, the in-memory mirror of the provenance cell,
+/// and the writer halt.
 pub(super) struct Shared {
     write_held: AtomicBool,
+    /// The writer halt (`DAEMON_REDB_STORE.md` §3.6.2): set once, by the
+    /// first connect, pop, or branded-view batch to be poisoned, never
+    /// cleared for the life of this handle. Not persisted — re-derived
+    /// on restart by the check that reruns the belts, so a restart with
+    /// a repaired file is not refused by a stale latch.
+    halt: OnceLock<(u64, StoreInvariant)>,
     /// Mirror of the persisted `apply_policy` cell. Readers (`provenance`)
     /// take the read side; [`Self::publish`] — the only mutator — holds the
     /// write side across the engine commit *and* the assignment, so a
@@ -25,8 +34,43 @@ impl Shared {
     pub(super) fn new(provenance: Provenance) -> Self {
         Self {
             write_held: AtomicBool::new(false),
+            halt: OnceLock::new(),
             provenance: RwLock::new(provenance),
         }
+    }
+
+    /// Halt the writer at `at_height` on `row`. The first halt wins: a
+    /// second poisoned batch cannot exist once `write` refuses, and if one
+    /// races the latch anyway the first record stands.
+    pub(super) fn halt(&self, at_height: u64, row: StoreInvariant) {
+        if self.halt.set((at_height, row)).is_err() {
+            // Already halted: the first record stands.
+        }
+    }
+
+    /// The halt, if the writer is halted.
+    pub(super) fn halted(&self) -> Option<(u64, StoreInvariant)> {
+        self.halt.get().copied()
+    }
+
+    /// Claim the single write slot, or refuse.
+    ///
+    /// The slot is taken **before** the halt is observed, then the halt is
+    /// rechecked while holding it. A load-then-CAS lets a batch halt and
+    /// drop between the two, and the next caller begins a write on a
+    /// halted handle; holding the slot across the look closes that
+    /// window. Halt never clears, so a refusal here is permanent for this
+    /// process. The slot is released on every refusal so a later
+    /// `WriterHalted` is not reported as `WriteInProgress`.
+    pub(super) fn admit_write(&self) -> Result<(), StoreCannot> {
+        if !self.try_hold_write() {
+            return Err(StoreCannot::WriteInProgress);
+        }
+        if let Some((at_height, row)) = self.halted() {
+            self.release_write();
+            return Err(StoreCannot::WriterHalted { at_height, row });
+        }
+        Ok(())
     }
 
     /// Claim the single write slot. `false` if it is already held.
@@ -73,7 +117,7 @@ impl Shared {
         // process last published. Loud in debug builds if a caller ever
         // hands the mirror something narrower than the file.
         debug_assert!(
-            provenance.stubbed().union(mirror.stubbed()) == provenance.stubbed(),
+            provenance.union(*mirror) == provenance,
             "the provenance mirror only widens: {} -> {provenance}",
             *mirror
         );
@@ -92,6 +136,7 @@ mod tests {
     use super::*;
     use crate::apply_policy::ArchivalFamily;
     use crate::family_set::FamilySet;
+    use crate::store::error::{StoreCannot, StoreInvariant};
 
     fn tainted() -> Provenance {
         let tainted = Provenance::of(FamilySet::of(&[ArchivalFamily::Bond]));
@@ -150,6 +195,41 @@ mod tests {
         assert_eq!(seen, tainted, "reader must observe the published value");
         publisher.join().expect("publisher thread");
         reader.join().expect("reader thread");
+    }
+
+    #[test]
+    fn admit_write_refuses_a_halt_and_leaves_the_slot_free() {
+        // The window: halt is already latched, nobody holds the slot (the
+        // batch that set it has dropped). Claiming first, then looking,
+        // must still refuse and must not leave `write_held` set — or the
+        // next call would be `WriteInProgress` instead of `WriterHalted`.
+        let shared = Shared::new(Provenance::FULL);
+        shared.halt(7, StoreInvariant::IdNotFresh);
+        assert!(matches!(
+            shared.admit_write(),
+            Err(StoreCannot::WriterHalted {
+                at_height: 7,
+                row: StoreInvariant::IdNotFresh,
+            })
+        ));
+        assert!(
+            shared.try_hold_write(),
+            "a halt refusal must release the write slot"
+        );
+        shared.release_write();
+    }
+
+    #[test]
+    fn admit_write_is_in_progress_while_the_slot_is_held() {
+        let shared = Shared::new(Provenance::FULL);
+        assert!(shared.try_hold_write());
+        assert!(matches!(
+            shared.admit_write(),
+            Err(StoreCannot::WriteInProgress)
+        ));
+        shared.release_write();
+        shared.admit_write().expect("slot free");
+        shared.release_write();
     }
 
     #[test]

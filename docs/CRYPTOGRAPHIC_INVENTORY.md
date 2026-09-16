@@ -132,11 +132,16 @@ block-bound pass-countersignature nonce. `SF-D8` (`ARCHIVAL_SHARD_FETCH.md`)
 replaced the derived nonce with a requester-random one carried on the record,
 so the derivation — and its domain — has no call site. The signing-scheme
 domain (also mechanism 1, `shekyl/archival-attestation-scheme-v1`) was
-re-versioned to `-v2` in the same change; a rename, not a count change.
+re-versioned to `-v2` in the same change; a rename, not a count change. The
+2026-09-15 refresh adds one mechanism-1 customization:
+`shekyl/chain-store/undo-log/post-image-v1`, the chain store's undo-entry
+post-image digest (S-CHAIN-W, DRS-E1 increment 3) — and brings the table's
+mechanism-1 count current with `PRODUCTION_PINS` (30), which the 2026-09-10
+and 2026-09-13 refreshes had moved without editing the row below.
 
 | Mechanism | Entry point | Count | Frozen-inherited |
 |---|---|---|---|
-| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 27 | 0 |
+| 1 — cSHAKE256 customization | `cshake256_*`, `CShake256Core::new` | 30 | 0 |
 | 2 — HKDF salt + info | `Hkdf::new(Some(salt))`, `.expand(info)` | 8 salts + 34 infos | 0 |
 | 3 — FROST transcript label | `RecommendedTranscript::new`, `.domain_separate`, `Curve::CONTEXT/ID` | 4 | 3 |
 | 4 — Blake2b DST | first `Blake2b512::update`; `sal_dst` tags | 9 | 0 |

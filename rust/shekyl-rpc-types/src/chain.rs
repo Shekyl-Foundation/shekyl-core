@@ -384,6 +384,45 @@ pub struct GetVersionResponse {
     pub genesis_hash: HashHex,
 }
 
+/// The `n` of a `STORE_INVARIANT_REGISTER.md` `SI-n` row — the register's
+/// stable name for a store belt, as the wire carries it.
+///
+/// Deliberately **not** `shekyl-chain-store::StoreInvariant`
+/// (`DAEMON_REDB_STORE.md` §3.6.2; PR #751 disposition): this crate is
+/// consumed by every wallet, and embedding the store's enum would make each
+/// of them link the redb-backed store to decode a tip; and that enum gains a
+/// variant each time an increment builds a belt, while the register's
+/// numbering is append-only. The operator resolves the number against the
+/// register — the one public authority on what each row means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct StoreInvariantRow(pub u32);
+
+/// Whether the daemon's chain-store writer is live or halted
+/// (`DAEMON_REDB_STORE.md` §3.6.2) — the halt a wallet must be able to see
+/// before it refreshes against a chain that has moved on without it.
+///
+/// Minted with S-CHAIN-W, the only producer of the `Halted` arm
+/// (`shekyl-chain-store::ConnectState` is the store-side value). Carried on
+/// the tip (`ChainTip.connect`) when the Rust store serves `get_info` —
+/// the `CORE_RPC_VERSION` minor bump lands with that field, not with these
+/// types: the daemon still serves LMDB at this pin, and a version moves when
+/// a wire shape does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum ConnectState {
+    /// Connects and pops are accepted.
+    Live,
+    /// A connect or pop hit a store invariant; the writer refuses until
+    /// restart, reads stay open.
+    Halted {
+        /// The height the halting connect or pop was working at.
+        at_height: u64,
+        /// The belt that caught it.
+        row: StoreInvariantRow,
+    },
+}
+
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip_serializing_if signature
 fn is_zero(v: &u64) -> bool {
     *v == 0
@@ -392,6 +431,20 @@ fn is_zero(v: &u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connect_state_serializes_as_a_tagged_state_with_the_register_row_number() {
+        let live = serde_json::to_string(&ConnectState::Live).expect("json");
+        assert_eq!(live, r#"{"state":"live"}"#);
+        let halted = ConnectState::Halted {
+            at_height: 4_200,
+            row: StoreInvariantRow(6),
+        };
+        let json = serde_json::to_string(&halted).expect("json");
+        assert_eq!(json, r#"{"state":"halted","at_height":4200,"row":6}"#);
+        let back: ConnectState = serde_json::from_str(&json).expect("round trip");
+        assert_eq!(back, halted);
+    }
 
     #[test]
     fn core_rpc_version_packs_like_the_cpp_macro() {

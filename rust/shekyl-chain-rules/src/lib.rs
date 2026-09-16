@@ -93,7 +93,7 @@ mod view;
 #[cfg(test)]
 mod harness;
 
-pub use block::{Candidate, ValidatedBlock};
+pub use block::{Candidate, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use rule_set::{AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
