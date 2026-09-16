@@ -6,13 +6,13 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **CLOSED-as-record 2026-09-16.** Item 1 landed `1cbb21fab`; items 2 (rotating exploring lane) and 3 (verdict-scoped ratchet) are the `rotating-pr` and `verdict-ratchet` jobs of `randomx-v2-differential.yml` (verified at `dev` `dbf818619`; job names since PR #552, 2026-08-24). MR-DQ-2 and MR-DQ-6 RULED 2026-08-19 (§5); MR-DQ-4 DISSOLVED. No T18 work is owed by this document. Archived under `IMPLEMENTATION_INDEX.md` §8. The OPEN / "items 2–3 design-gated" status this cell carried on 2026-08-19 is git history, not current. |
+| Status | **CLOSED-as-record 2026-09-16.** Item 1 landed `1cbb21fab`. Item 2 is the scheduled `rotating` job (`randomx-v2-differential.yml` `:809`) — the exploring lane. `rotating-pr` (`:667`) is the same-day PR tripwire and does **not** advance coverage. Item 3 is `verdict-ratchet`. Verified at `dev` `dbf818619`; job names since PR #552, 2026-08-24. MR-DQ-2 and MR-DQ-6 RULED 2026-08-19 (§5); MR-DQ-4 DISSOLVED. No T18 work is owed by this document. Archived under `IMPLEMENTATION_INDEX.md` §8. The OPEN / "items 2–3 design-gated" status this cell carried on 2026-08-19 is git history, not current. |
 | Kind | Test-regime redesign. **Opened** as execution-shape-only; the second review round established that T18 is the wrong instrument for two of its three claimed threats (MR-F10, MR-F11), so the round now also re-scopes **what T18 is for** — §7.5. §4.6 M2's premise is amended, not merely its cadence. |
 | Amends | [`RANDOMX_V2_PHASE2G_PLAN.md`](./RANDOMX_V2_PHASE2G_PLAN.md) **§5.5.6** (the nightly-mutants CI row) and **§4.6 M2** (mutation testing as active-threat-surface mitigation). The 2g plan's §5.7 + §8.3 require that any change to harness behavior carry a plan-doc amendment; this document **is** that amendment carrier. The 2g plan is in `docs/completed/` and is not reopened as an active design — §11 records the amendment against it. |
 | Spec authority | 2g plan §4.5 (active threat surface T-A1–T-A11), §4.6 M2 (mitigation premise), §6 T18 row (the assertion). This doc **cites**; it does not re-derive the threat model. |
 | Substrate pin | `6441c1e29` (`dev` tip at survey time). All mutant counts, timings, and line references in §2 are against this commit. |
 | Fork pin | `external/randomx-v2` at `aaafe71` (v2.0.1) — unchanged by this round. |
-| Tooling pin | `cargo-mutants 27.1.0` (the version measured in §2). CI currently installs via `cargo install cargo-mutants --locked`, which does **not** pin the version — see MR-F7. |
+| Tooling pin | `cargo-mutants 27.1.0` (the version measured in §2). **UPDATE 2026-09-16:** `verdict-ratchet` installs `cargo install cargo-mutants --version 27.1.0 --locked` (`randomx-v2-differential.yml`:597–604) — MR-F7 is closed. *RECORDS-WAS 2026-08-18:* CI installed via `cargo install cargo-mutants --locked` with no version pin. |
 | Working branch | `design/randomx-mutation-regime` (off `dev`; design docs land on `dev` per [`06-branching`](../../.cursor/rules/06-branching.mdc) and the design-branch policy). |
 | Scope | The **execution shape** of T18 only: invocation, cadence, scoping, parallelism, branch coverage, and the skip-list mechanism. See §1. |
 | Out of scope | (a) The `dev` → `main` sync carrying `50cf03545` (T8 ceiling) + `477a448b1` (severed-header restore) — a separate validation surface per [`19-validation-surface-discipline`](../../.cursor/rules/19-validation-surface-discipline.mdc); this round neither blocks nor depends on it. (b) What T18 asserts (survival bounded by the skip-list) — unchanged. (c) The T5/T7/T8 runtime modes. (d) Any change to the verifier or harness under test. |
@@ -555,7 +555,7 @@ is gated on an explicit `inputs.runtime_modes` boolean precisely so a
 dispatch does not spend a runner on an unrelated leg. Mutants should
 take the same shape.
 
-### MR-F7 — the tool version is unpinned
+### MR-F7 — the tool version is unpinned — RECORDS-WAS (closed; CI pins 27.1.0)
 
 ```yaml
 run: cargo install cargo-mutants --locked
