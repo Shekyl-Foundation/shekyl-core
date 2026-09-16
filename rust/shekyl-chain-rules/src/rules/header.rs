@@ -11,8 +11,9 @@
 //! # What the C++ does, read at `dev` `3560b80c2`
 //!
 //! `handle_block_to_main_chain` (`blockchain.cpp:5431–5450`) first warns
-//! once if `major_version > get_ideal_version()` and does **not** reject
-//! (CEN-B7), then calls `HardFork::check` → `do_check`
+//! once if `major_version > get_ideal_version()` — the **latest scheduled**
+//! version, `heights.back().version` (`hardfork.cpp:366–370`), not the one
+//! in force — and does **not** reject (CEN-B7), then calls `HardFork::check` → `do_check`
 //! (`hardfork.cpp:109–113`): `block_version == heights[current].version &&
 //! voting_version >= heights[current].version`, where `voting_version` is
 //! `minor_version` with `0` read as `1` (`hardfork.cpp:41–50`). The first
@@ -28,10 +29,15 @@
 //! (admits `1`) B2 cannot refuse — exactly as the C++ cannot — but the
 //! comparison is the C++'s comparison, so a rule set that admits `2`
 //! refuses a stale vote here as the C++ would have. B7 is the no-reject
-//! branch: it evaluates the C++'s condition and refuses nothing, because the
-//! row it is stated against says so; a header that trips it is refused by
-//! **B1**, and the fixture pins that it is B1 and never B7. The one-time
-//! `MCLOG_RED` warning is not ported (the crate has no logging, G12).
+//! branch, ported as what it is: a row whose only effect is a one-time
+//! `MCLOG_RED` warning, and the crate has no logging (G12). Its operand is
+//! the latest *scheduled* version, which a rule cannot read — a `RuleSet` is
+//! the set in force, and the schedule is the caller's (rule 71) — so the
+//! condition is **not** re-computed here against the wrong operand; the rule
+//! evaluates (records its row) and refuses nothing, and the header that
+//! would have tripped the warning is refused by **B1**. The fixture pins both
+//! halves: B7 passes such a header when called directly, and the pipeline
+//! refuses it under B1, never B7.
 //!
 //! The alt-admission arm (`check_for_height`, ideal version *at* the block's
 //! height) collapses into the same predicates: the caller hands `validate`
@@ -97,19 +103,18 @@ impl BlockRule for B2 {
     }
 }
 
-/// CEN-B7: a `major_version` above the admitted one is **not** a refusal on
-/// this row (the C++ logs once and continues; B1 then refuses). The rule
-/// evaluates the branch condition — so the row is *evaluated*, not skipped —
-/// and passes.
+/// CEN-B7: a `major_version` above the latest scheduled version is **not**
+/// a refusal on this row — the C++ (`blockchain.cpp:5431–5441`) logs once
+/// and continues, and B1 then refuses. Bucket 4, ported as-is: the row's
+/// whole effect is a log line the crate does not have, and its operand
+/// (`get_ideal_version()`, the schedule's last entry) is not a rule's to
+/// read, so nothing is computed here in its name. The row is *evaluated* —
+/// it enters coverage — and passes every header.
+///
+/// If the R-round that judges this row ratifies a refusal instead, the
+/// operand arrives as a `RuleSet` parameter with it; until then a computed
+/// condition with no consumer would be a claim the code does not act on.
 pub(crate) struct B7;
-
-impl B7 {
-    /// The C++'s branch condition, `blockchain.cpp:5432`. Returned rather
-    /// than discarded so the fixture can pin which header trips it.
-    pub(crate) const fn is_future_version(major_version: u8, admitted: u8) -> bool {
-        major_version > admitted
-    }
-}
 
 impl Rule for B7 {
     const ROW: CenRow = CenRow::B7;
@@ -117,15 +122,9 @@ impl Rule for B7 {
 
 impl BlockRule for B7 {
     fn check<'id, V: ChainView<'id>>(
-        cx: &BlockContext<'_>,
+        _cx: &BlockContext<'_>,
         _view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
-        // Evaluated, never refused: the row's statement is "does not
-        // reject". The refusal a future version earns is B1's.
-        let _tripped = Self::is_future_version(
-            cx.candidate.block.header.major_version,
-            cx.rule_set.header_major_version(),
-        );
         Ok(Ok(()))
     }
 }

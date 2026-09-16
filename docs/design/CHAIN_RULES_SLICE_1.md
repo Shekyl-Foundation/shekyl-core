@@ -382,12 +382,13 @@ one.
 | row | fixture (in `rules/*_tests.rs`, against `MockChain`) |
 | --- | --- |
 | A2 | `cen_a2_previous_must_be_the_tip_hash` (tip recorded; `previous` ← other hash → A2/Block); `cen_a2_genesis_previous_is_zero` (`Empty`; `[0;32]` passes, any other refused); `cen_a2_propagates_a_fault` (`FaultingView`) |
-| B1 | `cen_b1_major_version_must_be_the_admitted_one` — `boundary_pair(1, 2)` and `0` refused, at `Locus::Block` |
-| B2 | `cen_b2_minor_version_is_unconstrained` — `0`, `1`, `255` all pass; no row fires |
+| B1 | `cen_b1_major_version_must_be_the_admitted_one` — `boundary_pair(1, 2)`, `0` and `255` refused, at `Locus::Block` |
+| B2 | `cen_b2_minor_version_is_unconstrained_under_genesis` — `0`, `1`, `2`, `127`, `255` all pass; no row fires |
 | B5 | `cen_b5_header_root_is_the_root_at_the_connecting_height` (mutated root → B5); `cen_b5_reads_tip_plus_one_not_tip` (a chain whose root at `tip` ≠ root at `tip+1`: the header carrying the *tip's* root is **refused** — the SCW-19 off-by-one, bitten from the rules side); `cen_b5_genesis_root_is_empty`; `cen_b5_above_tip_refuses` (a mock with no root at `tip+1`) |
 | B6 | `cen_b6_identity_is_block_hash` (already `validate_tests.rs`; re-homed under the row) |
-| B7 | `cen_b7_never_refuses` — `major_version = 2` is refused by **B1**, `assert_refused(.., CenRow::B1, ..)`, never B7 |
-| all | `slice_1_coverage_names_exactly_its_rows` — a passing candidate's `coverage().iter()` is `{A2, B1, B2, B5, B6, B7}`; `covers_landed` holds |
+| B7 | `cen_b7_never_refuses_a_future_version_is_b1s_refusal` — B7 **called alone** passes `major_version ∈ {2, 7, 255}` (the pipeline stops at B1, so this is the only way to observe B7 on such a header — PR #762 review); through the pipeline the same header is refused by **B1**, `assert_refused(.., CenRow::B1, ..)`, never B7 |
+| B2 (later set) | `cen_b2_ports_the_predicate_not_the_effect` — under `RuleSet::admitting_for_tests(2)` (a `#[cfg(test)]` crate-private constructor: no second set is issued, and the refusal arm has no other way to run), `boundary_pair(2, 1)` on the vote refuses B2 with the rule alone, and through the pipeline `(major 2, minor 1)` is refused B2 while `(2, 2)` passes — PR #762 review |
+| all | `slice_1_version_rows_are_exactly_what_a_pass_covers` — after PR #762 a passing candidate's `coverage().iter()` is `{B1, B2, B7}`; grows to `{A2, B1, B2, B5, B6, B7}` at the `tip()` PR; `covers_landed` holds, `is_complete_for` does not |
 
 Commit plan (rule 90; each builds, `fmt`/`clippy` clean, tests green).
 **Amended 2026-09-16 (maintainer OK at PR #761 review, cross-lane):** commit 1

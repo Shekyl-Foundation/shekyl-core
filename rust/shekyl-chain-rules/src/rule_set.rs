@@ -120,6 +120,19 @@ impl RuleSet {
         self.enforced.iter().copied()
     }
 
+    /// A rule set that admits `header_major_version`, for the version-rule
+    /// fixtures only: `ISSUED` holds one set today, and B1/B2's refusal
+    /// arms under a later set have no other way to be exercised. Never
+    /// issued, never named by a schedule, not constructible outside tests.
+    #[cfg(test)]
+    pub(crate) const fn admitting_for_tests(header_major_version: u8) -> Self {
+        Self {
+            id: RuleSetId::from_raw(u8::MAX),
+            enforced: CenRow::ALL,
+            header_major_version,
+        }
+    }
+
     /// The `BlockHeader.major_version` this rule set admits (CEN-B1), and
     /// the floor a header's version vote must reach (CEN-B2).
     ///

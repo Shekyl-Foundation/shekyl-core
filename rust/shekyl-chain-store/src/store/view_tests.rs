@@ -323,15 +323,15 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         record_root(batch, 1, 0xaa)?;
         let view = batch.chain_view();
         // A verdict minted against this batch's view, over a view that
-        // already contains block 0 — `validate` with zero rules reads
-        // nothing, so what this pins is the type plumbing: the verdict is
+        // already contains block 0 — no landed rule reads the view yet
+        // (A2/B5 arrive with `tip()`), so what this pins is the type plumbing: the verdict is
         // `ChainValid<'id, BatchView<'_, 'id>>` and its view saw the block.
         let valid = validate(
             Candidate::new(block(1, 1_060), Vec::new()),
             &view,
             &RuleSet::GENESIS,
         )?
-        .expect("zero rules refuse nothing");
+        .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSet::GENESIS.id());
         let AtHeight::Recorded(recorded) = view.block_at(BlockHeight::ZERO)? else {
             panic!("block 0 is visible to the second block's validation");
