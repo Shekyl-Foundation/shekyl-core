@@ -69,16 +69,27 @@
 //! The decode / verify / classify work is not here: it is
 //! [`chain_reads`](super::chain_reads), generic over the transaction and
 //! shared with the read snapshot (S-CHAIN-R, SCR-13). This type contributes
-//! exactly one thing to each read — **what a fault does** — and here a
-//! fault arms the batch's poison ([`Self::arm`]). A reader that reproduces
-//! the body instead of calling it has re-created the two-readers-of-one-
-//! table drift the shared module exists to prevent.
+//! exactly one thing to each read — **what a fault does** ([`Self::arm`]):
+//! an **invariant** fault (SI-7 — a hole below the tip, an undecodable row,
+//! a blob that does not hash to its recorded identity) **arms the batch's
+//! poison**, so a verdict minted over the corrupt read cannot commit; an
+//! **engine** fault passes through unchanged, because it implies nothing
+//! about the file and there is nothing to latch. The snapshot reader
+//! differs on the first branch only (it returns the row, arming nothing —
+//! the halt is the writer's state). A reader that reproduces the body
+//! instead of calling it has re-created the two-readers-of-one-table drift
+//! the shared module exists to prevent.
+//!
+//! One tightening arrived with the shared body and is deliberate: the tip
+//! is read **decoded**, so an undecodable `block_info[tip]` is SI-7 on
+//! every classified read, not only on a read of the tip itself
+//! (`chain_reads` module docs, *The tip is one decoded read*).
 
 use redb::ReadableTable;
 use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 
-use crate::codec::CurveRoot;
+use crate::codec::{BlockInfo, CurveRoot};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{CURVE_TREE_ROOTS, SPENT_KEYS};
 
@@ -114,12 +125,10 @@ impl<'b, 'id> BatchView<'b, 'id> {
         }
     }
 
-    /// The recorded tip height as this batch sees it, `None` for an empty
-    /// chain.
-    fn tip(&self) -> Result<Option<u64>, StoreError> {
-        chain_reads::tip_of(self.batch.txn())
-            .map(|tip| tip.map(|(height, _)| height))
-            .map_err(|f| self.arm(f))
+    /// The recorded tip as this batch sees it — its height and decoded
+    /// `block_info` row — `None` for an empty chain.
+    fn tip(&self) -> Result<Option<(u64, BlockInfo)>, StoreError> {
+        chain_reads::tip_of(self.batch.txn()).map_err(|f| self.arm(f))
     }
 
     /// SI-7 for a row that the dense ranges say must exist and does not:
@@ -161,7 +170,7 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// (module docs).
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, StoreError> {
         let tip = self.tip()?;
-        let body = chain_reads::block_body(self.batch.txn(), tip, height.to_raw())
+        let body = chain_reads::block_body(self.batch.txn(), tip.as_ref(), height.to_raw())
             .map_err(|f| self.arm(f))?;
         Ok(match body {
             AtHeight::AboveTip => AtHeight::AboveTip,
@@ -184,7 +193,7 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         match self.tip()? {
             // `tip + 1` is the state a candidate at `tip + 1` is checked
             // against — CEN-B5's read — and the last row `connect` wrote.
-            Some(tip) if h <= tip.saturating_add(1) => {}
+            Some((tip, _)) if h <= tip.saturating_add(1) => {}
             _ => return Ok(AtHeight::AboveTip),
         }
         let root: CurveRoot =

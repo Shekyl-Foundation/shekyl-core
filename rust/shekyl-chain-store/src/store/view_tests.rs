@@ -451,12 +451,12 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
 
     let db = redb::Database::open(&path).expect("raw open");
     let txn = db.begin_read().expect("raw read");
-    let (tip, info) = chain_reads::tip_of(&txn)
+    let tip = chain_reads::tip_of(&txn)
         .expect("tip_of")
         .expect("two blocks recorded");
-    assert_eq!(tip, 1);
-    assert_eq!(info.hash.to_bytes(), blk1.hash());
-    match chain_reads::block_body(&txn, Some(tip), 1).expect("block_body") {
+    assert_eq!(tip.0, 1);
+    assert_eq!(tip.1.hash.to_bytes(), blk1.hash());
+    match chain_reads::block_body(&txn, Some(&tip), 1).expect("block_body") {
         AtHeight::Recorded((hash, body)) => {
             assert_eq!(hash.to_bytes(), blk1.hash());
             assert_eq!(body, blk1);
@@ -472,7 +472,7 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
         AtHeight::AboveTip => panic!("height 1 is the tip"),
     }
     assert!(matches!(
-        chain_reads::block_body(&txn, Some(tip), 2).expect("above tip"),
+        chain_reads::block_body(&txn, Some(&tip), 2).expect("above tip"),
         AtHeight::AboveTip
     ));
     assert_eq!(batch_above, AtHeight::AboveTip);
@@ -512,15 +512,16 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
         txn.commit().expect("commit");
     }
     let txn = db.begin_read().expect("raw read");
-    let tip = Some(2);
-    match chain_reads::block_body(&txn, tip, 1) {
+    let tip = chain_reads::tip_of(&txn).expect("tip_of");
+    assert_eq!(tip.as_ref().map(|t| t.0), Some(2));
+    match chain_reads::block_body(&txn, tip.as_ref(), 1) {
         Err(ReadFault::Invariant(StoreInvariant::CellCorrupt {
             key: "blocks",
             fault: CellFault::Absent,
         })) => {}
         other => panic!("a hole below the tip is SI-7 Absent on `blocks`, got {other:?}"),
     }
-    match chain_reads::block_body(&txn, tip, 2) {
+    match chain_reads::block_body(&txn, tip.as_ref(), 2) {
         Err(ReadFault::Invariant(StoreInvariant::CellCorrupt {
             key: "blocks",
             fault: CellFault::Undecodable(_),
@@ -539,5 +540,62 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
     assert!(none.is_none());
     drop(txn);
     drop(db);
+    cleanup(&path);
+}
+
+/// The one deliberate tightening the shared body brought (its module docs,
+/// *The tip is one decoded read*), pinned as the scenario the PR #764 review
+/// named: heights 0 and 1 recorded, `block_info[1]` — the tip — rewritten
+/// to bytes that do not decode. Before, `block_at(0)` succeeded and
+/// `block_at(2)` was `AboveTip` because the tip was read by key alone; now
+/// **every** classified read is SI-7 `block_info` / `Undecodable` and the
+/// batch is poisoned — a store whose tip row does not decode has no trusted
+/// tip, and `connect` would poison on this same row before its first belt.
+#[test]
+fn an_undecodable_tip_row_is_si7_on_every_classified_read() {
+    let path = tmp("view-undecodable-tip");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        record_block(batch, 0, &block(0, 1_000))?;
+        record_block(batch, 1, &block(1, 1_060))?;
+        Ok(())
+    });
+    planted.expect("plant");
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("raw open");
+        let txn = db.begin_write().expect("raw write");
+        {
+            let mut infos = txn.open_table(BLOCK_INFO).expect("block_info");
+            infos
+                .insert(1, &[0xee; 87][..])
+                .expect("87 bytes: not a BlockInfo");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    for asked in [0u64, 1, 2] {
+        let out: Result<(), TestErr> = store.write(|batch| {
+            let e = batch
+                .chain_view()
+                .block_at(BlockHeight::from_raw(asked))
+                .expect_err("the tip row does not decode");
+            assert!(
+                matches!(
+                    e,
+                    StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                        key: "block_info",
+                        fault: CellFault::Undecodable(_),
+                    })
+                ),
+                "block_at({asked}): {e}"
+            );
+            Ok(())
+        });
+        assert!(
+            matches!(out, Err(TestErr::Store(_))),
+            "block_at({asked}) must poison the batch: {out:?}"
+        );
+    }
     cleanup(&path);
 }

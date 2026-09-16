@@ -18,7 +18,29 @@
 //! halves of one table's contract moving separately, so that a mismatch
 //! cannot be blamed on either. So the body lives here once, generic over
 //! the transaction, and each implementor only decides **what a fault
-//! does** — the batch arms its poison, a snapshot returns the error.
+//! does**. Two kinds of fault, two policies: an [`ReadFault::Invariant`]
+//! (an `SI-` row broke) is what the implementors differ on — the batch
+//! **arms its poison** so no verdict minted over the read can commit, a
+//! snapshot **returns it** and arms nothing (the halt is the writer's
+//! state, `DAEMON_REDB_STORE.md` §3.6.2); an [`ReadFault::Engine`] failure
+//! passes through on both — nothing about the file is implied, so there is
+//! nothing to latch.
+//!
+//! # The tip is one decoded read
+//!
+//! [`tip_of`] returns the last `block_info` row **decoded**, not its key
+//! alone. The batch view's first implementation read only the key, so a
+//! corrupt tip row went unnoticed by a read of a lower height. That is
+//! **deliberately tightened here**: an undecodable `block_info[tip]` is
+//! SI-7 on any classified read of that chain — the store's tip row does not
+//! decode, so no read of it can be trusted, and `connect` decodes exactly
+//! this row before its first belt and poisons on the same failure
+//! (`store/connect.rs`, phase 1). One tip read, decoded, serves every
+//! reader — `ChainView::tip()` needs the hash, the snapshot's tip needs the
+//! hash, and a second key-only path would be two readings of one row, the
+//! which-key ambiguity SCW-19 closed for `curve_tree_roots`. The cost is
+//! one 88-byte decode per read; the test that pins the tightening is
+//! `view_tests::an_undecodable_tip_row_is_si7_on_every_classified_read`.
 //!
 //! # Absence is classified against the tip, never mapped to a value
 //!
@@ -180,8 +202,10 @@ fn blocks_invalid(reason: &'static str) -> ReadFault {
     )
 }
 
-/// The recorded tip: the last `block_info` row, decoded. `None` is an
-/// empty chain. `block_info` is dense (SI-2), so its last key is the tip.
+/// The recorded tip: the last `block_info` row, **decoded** (module docs,
+/// *The tip is one decoded read*). `None` is an empty chain. `block_info`
+/// is dense (SI-2), so its last key is the tip. An undecodable tip row is
+/// SI-7 here, whatever height the caller went on to ask about.
 pub(super) fn tip_of<T: ReadTables>(txn: &T) -> Result<Option<(u64, BlockInfo)>, ReadFault> {
     let table = txn.table(BLOCK_INFO)?;
     let Some((height, info)) = table.last()? else {
@@ -212,22 +236,24 @@ pub(super) fn cell<T: ReadTables, V: Canonical>(
 /// The block recorded at `height`: its identity from `block_info`, its body
 /// parsed from `blocks` and **verified to hash to that identity**.
 ///
-/// Classified against `tip` (the caller's `tip_of`, so one read of the tip
-/// serves a whole range): above it is [`AtHeight::AboveTip`]; a missing
-/// `block_info` or `blocks` row at or below it is SI-7 `Absent`; a blob that
-/// does not parse, or hashes to something other than `block_info.hash`, is
-/// SI-7 on `blocks`.
+/// Classified against `tip` — the caller's [`tip_of`], passed in whole so
+/// one read of the tip serves a whole range and a read **of** the tip
+/// reuses the row already decoded instead of decoding it twice: above it is
+/// [`AtHeight::AboveTip`]; a missing `block_info` or `blocks` row at or
+/// below it is SI-7 `Absent`; a blob that does not parse, or hashes to
+/// something other than `block_info.hash`, is SI-7 on `blocks`.
 pub(super) fn block_body<T: ReadTables>(
     txn: &T,
-    tip: Option<u64>,
+    tip: Option<&(u64, BlockInfo)>,
     height: u64,
 ) -> Result<AtHeight<(Hash32, Block)>, ReadFault> {
-    match tip {
-        Some(tip) if height <= tip => {}
+    let info: BlockInfo = match tip {
+        Some((tip, info)) if height == *tip => *info,
+        Some((tip, _)) if height < *tip => {
+            cell(txn, BLOCK_INFO, height, "block_info")?.ok_or_else(|| absent("block_info"))?
+        }
         _ => return Ok(AtHeight::AboveTip),
-    }
-    let info: BlockInfo =
-        cell(txn, BLOCK_INFO, height, "block_info")?.ok_or_else(|| absent("block_info"))?;
+    };
     let blocks = txn.table(BLOCKS)?;
     let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
     let block =

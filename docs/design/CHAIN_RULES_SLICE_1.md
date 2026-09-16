@@ -39,7 +39,7 @@ Three substrate findings were made on the way (§6).
 | parent | needed by | state at `3560b80c2` | verified |
 | --- | --- | --- | --- |
 | `shekyl-chain-rules` scaffold (increment 1) | everything | LANDED PR #753 | `rust/shekyl-chain-rules/src/{census,view,validate,verdict,block,harness}.rs` read in this worktree |
-| S-CHAIN-W: `BatchView: ChainView`, `connect`, `root_at(h)` = key `h` | `tip()` gets a store implementor in the same PR; B5's read | LANDED PR #757 | `rust/shekyl-chain-store/src/store/view.rs:155–234`; `connect.rs:280–320` |
+| S-CHAIN-W: `BatchView: ChainView`, `connect`, `root_at(h)` = key `h` | `tip()` gets a store implementor in the same PR; B5's read | LANDED PR #757 | `rust/shekyl-chain-store/src/store/view.rs:144–207` (re-anchored by PR #764, which moved the body into `store/chain_reads.rs`); `connect.rs:280–320` |
 | SCW-19 (`root_at(h)` is the state **at** `h`) | B5 | fixed in #757; trait doc `view.rs:117–131` agrees | both ends read |
 | SCW-18 (`trait Rule { const ROW }` shape) | first `implemented(...)` entry | shape decided, "lands in E6 with the first real rule" | `DRS_E1_SCHAIN_W.md:766–780` |
 | `CurveTreeRoot::EMPTY == selene_hash_init()` | B5 at genesis | present | `shekyl-types/src/lib.rs:460–467`; genesis header root `shekyl-genesis-tool/src/builder.rs:185` |
