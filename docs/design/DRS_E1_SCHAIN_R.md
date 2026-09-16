@@ -53,14 +53,21 @@ share a number.
 | DRS-E2 has no subject yet | E2's replay needs a committed-chain reader to compare against LMDB; the row's own rationale for order 3 | DRS §7: "Split across increments, the two halves of one table's contract move separately and a digest mismatch cannot be localised to either" |
 | **E6 slice 1 (concurrent lane, PR #761)** — `ChainView::tip() -> Option<Tip { height, hash }>` with `BatchView`'s private `tip()` becoming the trait impl | **pre-flight OPEN, Q1 (`Option<Tip>`) RULED 2026-09-16**; its commit 1 edits `store/view.rs:97`–`:108`, the same lines S-CHAIN-R's commit 1 (`chain_reads`, SCR-13) factors | `CHAIN_RULES_SLICE_1.md` (PR #761, not yet on `dev` — named, not linked) §2, §7; its §10 names "the S-CHAIN-R driver's use of `Tip`" as read *by this document*, not the reverse — so the composition in §3.4 is this document's to state |
 
-**One ordering dependency on a concurrent PR, and it is a rebase, not a
-stack.** The increment branch cuts from `dev` after this document's PR
-merges (the S-CHAIN-W rule, §1 there). E6 slice 1's commit 1 and this
-increment's commit 1 both touch `BatchView::tip()`; whichever lands second
-rebases, and the shared body (`chain_reads::tip_of`, §3.7) is written so
-that `BatchView::tip()` → `Some(Tip { height, hash })` and
-`ReadSnapshot::tip()` → `Some(RecordedTip { tip, connect })` are two
-projections of one read. Neither lane blocks the other.
+**One ordering dependency on a concurrent PR — agreed between the lanes
+2026-09-16 (PR #760 / #761 comments).** The increment branch cuts from
+`dev` after this document's PR merges (the S-CHAIN-W rule, §1 there). E6
+slice 1's commit 1 and this increment's commit 1 both touch
+`BatchView::tip()`. **Order: this increment's `chain_reads` lands first;**
+slice 1's `ChainView::tip()` impl for `BatchView` then reads through
+`chain_reads::tip_of` — one read body, written so that `BatchView::tip()`
+→ `Some(Tip { height, hash })` and `ReadSnapshot::tip()` →
+`Some(RecordedTip { tip, connect })` are two projections of one read. So
+that slice 1 is not waiting on seven commits, **commit 1 ships as its own
+PR** the day this document merges: a private module and a rewire with no
+behaviour change is exactly the small, bisectable unit rule 06 prefers,
+and it is the only commit the other lane depends on. Slice 1 keeps
+`ChainView::tip()` at exactly three implementors (`BatchView`, `MockChain`,
+`FaultingView`); SCR-16 keeps `ReadSnapshot` off the trait.
 
 ---
 
@@ -477,7 +484,7 @@ those; the comparator never saw them.
 
 ## 7. Commit sequence (rule 90; one PR, ≤ 8 commits, cut from `dev` after this document merges)
 
-1. `store: chain_reads — one decode/verify/classify body for BatchView and ReadSnapshot` — the private generic module; `BatchView` rewired onto it (SCR-13, SCR-7), including its `tip()` once E6 slice 1's trait impl has landed (§1: rebase, not stack); no behaviour change; `view_tests.rs` green unchanged.
+1. `store: chain_reads — one decode/verify/classify body for BatchView and ReadSnapshot` — the private generic module (`tip_of`, `cell`, `block_body`); `BatchView` rewired onto it including its private `tip()` (SCR-13, SCR-7); no behaviour change; `view_tests.rs` green unchanged. **Ships as its own PR first** (§1) — E6 slice 1's `BatchView: ChainView::tip()` impl reads through `tip_of`.
 2. `store: ReadSnapshot::{tip, height_of, block_info, block_infos}` — R1–R4; `RecordedTip` with `connect` (Q5); `ReadSnapshot` holds `&'store ChainStore`; tests: empty chain → `None`; tip after `connect`; `AboveTip` above it; a deleted `block_info` row below it → SI-7 **without** halting the writer (`connect_state()` stays `Live` — the read-side half of §3.6.2, pinned).
 3. `store: ReadSnapshot::{block_blob, block, blocks}` — R5–R7; `RecordedBlockBody`; `RawBlockBytes` (Q2 — a `compile_fail` doctest pins that it does not deref to `[u8]` and does not convert into `Block`); tests: body hashes to identity; a rewritten blob → SI-7 on `block`/`blocks`, bytes still returned by `block_blob`; range clamps at the tip.
 4. `store: ReadSnapshot::{block_burn, total_burned}` — R8–R9; tests: zero-burn block reads `Recorded(0)` with no row; genesis burn reads `0`; the cell after two burns is their sum (against `connect`'s `checked_add`).
@@ -553,5 +560,5 @@ gating release (§3.8 points at it).
 | Date | Entry |
 | --- | --- |
 | 2026-09-16 | Round 0 executed at `dev` `3560b80c2` (post-#757). Sixteen findings (SCR-1…SCR-16); seven routed to round 1 as Q1–Q7 with defaults; the rest dispositioned into §3 and §7. Contract §3 **proposed, not ruled**. FL-R3-STORE taken into scope as S-CHAIN-W amendment A1 on FOLLOWUPS' explicit routing (rule 22). |
-| 2026-09-16 | **Cross-lane check against E6 slice 1 (PR #761, same day).** Consistent: `Option` for the tip on both sides for the same SCR-4 reason; `difficulty_at` owned by the rules crate; the parity-then-repair ruling read the same way. Taken from that lane: `RecordedTip` **composes** its `Tip` (§3.4); the `view.rs:97`–`:108` overlap is a rebase (§1). Corrected in DRS §7.6 from that lane's landed-text check: parity evidence requires `implemented == enforced`, not `ratified == enforced` — the second figure was printed and gated nothing, the gate is new; bucket-4 consensus figure 27 at the pin, not 34. **Open for the maintainer:** both PRs record the ruling in `DAEMON_REDB_STORE.md` (#761 inline at §7.5.1 with a §15 row; #760 as §7.6 + §8.1 + §15) — one home, the other a pointer, before the second merges. |
+| 2026-09-16 | **Cross-lane check against E6 slice 1 (PR #761, same day).** Consistent: `Option` for the tip on both sides for the same SCR-4 reason; `difficulty_at` owned by the rules crate; the parity-then-repair ruling read the same way. Taken from that lane: `RecordedTip` **composes** its `Tip` (§3.4); the `view.rs:97`–`:108` overlap is a rebase (§1). Corrected in DRS §7.6 from that lane's landed-text check: parity evidence requires `implemented == enforced`, not `ratified == enforced` — the second figure was printed and gated nothing, the gate is new; bucket-4 consensus figure 27 at the pin, not 34. **Resolved the same hour by the E6 lane** (`789f5b0f5` on #761): its DRS edits withdrawn, `CHAIN_RULES_SLICE_1.md` §9 and `CHAIN_RULES_CRATE.md` §6.3 point at §7.6 as the one home; `view.rs` order agreed — this increment's `chain_reads` lands first, as its own PR, then slice 1's `tip()` impl reads through it. |
 | 2026-09-16 | **Round-1 rulings (maintainer, same day; PR #760 remote review).** Both SCR-2 and SCR-4 anchors verified at source. Q1 approved and refined — no store `difficulty(h)`, **and** not the caller's: `shekyl-chain-rules` owns `difficulty_at`; the row states that C2-R8 constrains a read for the first time. Q2 approved as a distinct **type** (`RawBlockBytes`), not a distinct name. Q3/Q5/Q6/Q7 approved as defaulted. **Q4 overturned:** widen `BlockInfo` 88 → 104 B — the default argued from byte parity with the LMDB struct, and byte parity was never a constraint (zerokval already collapsed; the comparator projects); decide on the codec, both fields fixed-width. SCR-4: `Option` stays `Option`. SCR-10: `passed_through()` rises by one and is not a regression — written beside the counter. **DRS §7.6 minted** from this review: the ported partition is transitional; consensus-visible bytes are the only pinned encodings; parity first, repair after, in Rust only (CEN-I12's argument resolved); one repair backlog sharing a denominator with bucket-4; the comparator gates cutover, `ratified / enforced` gates release. Contract §3 is now **as ruled**; §7 may start once this document merges. |
