@@ -4,8 +4,9 @@
 `65e7be450` against `shekyl-chain-rules` as it stands on PR #753
 (`f03b44452`; the API read here is unchanged since `0bb238896`); **round-1
 rulings taken 2026-09-15** on every §10 question (each entry carries its
-ruling line-local); **round-2 (§10.1) ruled the same day** — SCW-19 B, and
-the CEN-I12 divergence it exposed sent to the CSR register; SCW-2 confirmed.
+ruling line-local); **round-2 (§10.1) superseded the same day** — SCW-19's
+sparsity premise was refuted at re-read (the root record is dense; the
+conditional ruling is void), its keying fix stands; SCW-2 confirmed.
 §3 is the contract as ruled; §7 the
 substrate findings with dispositions; §8 the commit sequence, of which
 commits 1–3 may start before #753 merges (#753 merged 2026-09-15; this
@@ -21,8 +22,9 @@ with a ruling's *wording* the disagreement is a §7 finding with a disposition,
 not a silent override.
 
 **Why a separate document.** The S-CHAIN-W row in DRS §7 is one table line.
-The increment it names is the largest single write surface in the store (17
-LMDB tables, two funnels, a journal that replaces seven C++ journals, three
+The increment it names is the largest single write surface in the store (16
+LMDB tables plus one Rust-only journal that replaces seven C++ journals — §4's
+17 rows — two funnels, three
 consensus rows arriving surface-bound, and the writer halt the RPC exposes).
 Rule 26's pre-flight pass is a re-check of substrate and execution of
 artifacts between design closure and production code; the ruling closed the
@@ -92,10 +94,9 @@ connect(valid, facts, in_force):
   2. transactions miner tx then listed txs → tx_indices, txs_*, tx_outputs, output_txs,
                   output_amounts, spent_keys                                 (SI-3, SI-9, SI-1)
   3. [E3 hook]    pending leaves → drain → grow → segment freeze            (S-CURVE)
-  4. root         curve_tree_roots[h+1] = root  iff facts.tree_after is Grew(root)  (SI-4)
-                  — the C++ writes this row only when the drain grew the
-                    tree (`:639`–`:664`); the Rust write reproduces that
-                    exactly and the READ supplies the state (SCW-19, ruled B)
+  4. root         curve_tree_roots[h+1] = facts.root_after                  (SI-4)
+                  — every connect, grown or not: the C++ write at `:663`–`:664`
+                    is outside the growth gate that closes at `:650` (SCW-19)
   5. [E4 hook]    attestation witness                                       (S-ARCH)
   6. block        blocks[h], block_heights[hash], block_info[h]             (SI-2)
   7. rule set     hf_versions[h] = in_force                                 (B3 belt)
@@ -165,20 +166,16 @@ pub struct ConnectFacts {
     /// `total_burned` fold (LMDB's absent-reads-as-0 convention and the
     /// `blockchain.cpp:6148` guard, kept so the digest domain matches).
     pub burned: Fact<u64>,
-    /// What this block's drain did to the tree. `Grew(root)` is the root
-    /// **after the drain** — the state the *next* header must carry (CEN-B5)
-    /// and a spend referencing height `h+1` anchors to (CEN-I12) — and is
-    /// recorded at `curve_tree_roots[h+1]` (SI-4); `Unchanged` records no
-    /// row, exactly as the C++ does when nothing matured (SCW-19, ruled B:
-    /// byte-parity on the write, the ratified state on the read). Not this
-    /// block's own header root: that is the state *before* its drain,
-    /// already at `curve_tree_roots[h]` from the parent's connect.
-    pub tree_after: Fact<TreeAfter>,
+    /// The tree root **after this block's drain** — the state the *next*
+    /// header must carry (CEN-B5) and a spend referencing height `h+1`
+    /// anchors to (CEN-I12); recorded at `curve_tree_roots[h+1]` on every
+    /// connect, grown or not, exactly as the C++ does (SI-4: one row per
+    /// connect). Not this block's own header root: that is the state
+    /// *before* its drain, already at `curve_tree_roots[h]` from the
+    /// parent's connect. When nothing matured the value equals the parent's
+    /// row — recorded anyway, because the record is dense (SCW-19).
+    pub root_after: Fact<CurveTreeRoot>,
 }
-
-/// The drain's effect on the tree at one connect. The driver knows it
-/// (E3's grow returns the drained count); the store records it.
-pub enum TreeAfter { Grew(CurveTreeRoot), Unchanged }
 /// Which census rows derive a fact — and so delete its `Fact` wrapper.
 /// Named on the type, so the store shows its own E6 dependency rather
 /// than only E6's plan showing it.
@@ -205,7 +202,7 @@ impl ConnectFacts {
 | `coins_generated` | CEN-F13 (base subsidy from `already_generated`), CEN-F14/F14b (weight penalty) | slice 4 — 4.F, body in `shekyl-economics` |
 | `burned` | CEN-F17 (fee-burn split's destroyed share), recorded per CEN-G11 | slice 4 — 4.F; the G11 recording is this increment's own row |
 | `weight`, `long_term_weight` | CEN-G6/G6b (long-term window, effective median) over the tx-weight function CEN-H3 / CEN-F14 share | slice 7 — 4.G, aggregating 4.F/4.H |
-| `tree_after` | CEN-B5 (header root = tip root) and CEN-I12 (anchor at `ref_height`) — the value itself is S-CURVE's (E3) grow, checked by those rows | slice 1 (B5) / slice 6 (I12), through the curve-tree crate |
+| `root_after` | CEN-B5 (header root = tip root) and CEN-I12 (anchor at `ref_height`) — the value itself is S-CURVE's (E3) grow, checked by those rows | slice 1 (B5) / slice 6 (I12), through the curve-tree crate |
 
 So `block_info` becomes parity evidence when slices 2, 4 and 7 have landed
 and S-CURVE grows the tree — a named critical path, not a countdown.
@@ -262,8 +259,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
 | `ChainView<'id>` method | Reads | Note |
 | --- | --- | --- |
 | `has_key_image(ki)` | `spent_keys.get(ki).is_some()` | the chain half of CEN-L1 / CEN-I7 |
-| `block_at(h)` | `block_info[h]` for the hash and the recorded-at-all test; `blocks[h]` decoded by `shekyl-wire` for the header → `RecordedBlock { hash, header }`; `block_info` absent → `AtHeight::AboveTip`; `block_info` present and `blocks` absent → `EngineError::Corrupt` | `BlockInfo` is the 88-byte metadata row (`LMDB_SCHEMA.md` "Block Info") and carries **no** header, so CEN-C2/C3's timestamps and CEN-A2/A4's parent hash come from the block blob; `RecordedBlock` grows with E6 rows, never ahead of them |
-| `root_at(h)` | `curve_tree_roots[h]` | **The tree state *at* chain height *h***: the root block *h−1*'s connect wrote at key *h* (`store_curve_tree_root_at_height(prev_height + 1, …)`, `blockchain_db.cpp:664`), which is what CEN-I12's three `get_curve_tree_root_at_height(ref_height)` reads return and what block *h*'s own header must equal (CEN-B5). **Not `h + 1`** — that is the root *after* *h*'s drain, the anchor for a reference to *h+1*. The trait comment's "as recorded **after** the block at `height`" clause reads one height high against its own second clause ("the anchor a spend that references `height` is verified against"); the census row is the tie-break and the comment is corrected in this PR (SCW-19). One place maps it, with a test at both ends. **A recorded height with no row** (the tree did not grow at *h−1*; keys `0..60` on every chain) returns **the ratified state** — the latest root recorded at a key `≤ h`, and the empty-tree root when there is none — never the C++ reader's all-zero substitute, which decodes to the identity point and is the CEN-I12 divergence the CSR register records (census §7 #21). Identity with the C++ read **FAILS** here by ruling (CSR-3a); the register row, not this table, is the record. Shape for the empty-tree root: pin `CurveTreeRoot::EMPTY` in `shekyl-types` with a KAT in `shekyl-fcmp` asserting it equals `SELENE_HASH_INIT.to_bytes()`, so the store names the constant without depending on the proof crate (#757) |
+| `block_at(h)` | `block_info[h]` for the hash; `blocks[h]` decoded by `shekyl-wire` for the header → `RecordedBlock { hash, header }`. **Absence is classified against the tip**, never mapped straight to a rule outcome: `h > tip` → `AtHeight::AboveTip`; `h ≤ tip` with `block_info[h]` missing, or `block_info` present with `blocks[h]` missing → `EngineError::Corrupt` (`Fault`) — `AtHeight` permits `AboveTip` only above the dense tip, and a hole below it is store corruption that must halt, not become `InvalidBlock` | `BlockInfo` is the 88-byte metadata row (`LMDB_SCHEMA.md` "Block Info") and carries **no** header, so CEN-C2/C3's timestamps and CEN-A2/A4's parent hash come from the block blob; `RecordedBlock` grows with E6 rows, never ahead of them |
+| `root_at(h)` | `curve_tree_roots[h]` | **The tree state *at* chain height *h***: the root block *h−1*'s connect wrote at key *h* (`store_curve_tree_root_at_height(prev_height + 1, …)`, `src/blockchain_db/blockchain_db.cpp:664`), which is what CEN-I12's `get_curve_tree_root_at_height(ref_height)` reads return and what block *h*'s own header must equal (CEN-B5). **Not `h + 1`** — that is the root *after* *h*'s drain, the anchor for a reference to *h+1*. The trait comment's "as recorded **after** the block at `height`" clause read one height high against its own second clause; the census row is the tie-break and the comment is corrected in this PR (SCW-19). The record is **dense from key 1** (every connect writes its row, §4), so: `1 ≤ h ≤ tip + 1` → `Recorded` (`tip + 1` is the state a candidate at `tip + 1` is checked against — B5's read); `h > tip + 1` → `AboveTip`; `1 ≤ h ≤ tip + 1` with no row → `EngineError::Corrupt`, never a rule outcome. **`h = 0`** has no row in either store (nothing writes key 0): the state is the empty tree, and what a reference to genesis resolves to is CEN-I12's rule to close (E6 slice 6; census §7 #21) — the store does not decide it. One place maps it, with a test at both ends |
 | `type Fault` | `StoreError` | opaque to every rule (the trait puts no bound on it) |
 
 `BatchView<'txn, 'id>` is a `WriteBatch` projection, not a `ReadSnapshot`
@@ -319,7 +316,7 @@ impl ChainStore {
 | `UndoEntry` / `undo_log` table + `TableOrdinal` | `schema.rs`, `store/undo.rs` | §5 |
 | `StoreInvariant::{KeyImageNotFresh, TipMismatch, TxHashNotFresh, RootRewritten, UndoTopNotTip, FoldOverflow, IdNotFresh}` | `store/invariant.rs` | SI-1/2/3/4/6/8 + SI-9 (§6) |
 | `StoreCannot::{RuleSetNotInForce, RuleSetUnknown, PopBelowFloor, WriterHalted, SettlementEpochMismatch}` | `store/error.rs` | §3.1, §3.3, §3.6, §3.8 (`RuleSetUnknown`: `in_force` names an id no schedule issued), SCW-2 |
-| `ConnectFacts` (+ `Fact<T>`, `Origin`, `TreeAfter`, `DeletedBy`), `Connected`, `Popped`, `ConnectState`, `BatchView` | `store/connect.rs`, `store/view.rs` | §3.1–§3.6; `TreeAfter` per SCW-19 (B) |
+| `ConnectFacts` (+ `Fact<T>`, `Origin`, `DeletedBy`), `Connected`, `Popped`, `ConnectState`, `BatchView` | `store/connect.rs`, `store/view.rs` | §3.1–§3.6 |
 
 Every codec is a rule-42 layout change: `SCHEMA_VERSION` bumps once for the
 increment, the snapshot tests move with it, and `catalogue()` gains one row.
@@ -397,7 +394,7 @@ is journaled (§5); pop is not a column because pop is the same for all.
 | `output_txs` | `u64` output id → `OutTx` | `add_output` `:1274` | `insert` · SI-9 | set-shaped | **the `output_id` primary**: zerokval collapse; `num_outputs()` reads its last key + 1 (`:3234`), which equals its entry count exactly because SI-9 holds |
 | `output_amounts` | `u64` amount ⇉ `OutKey` (multimap) | `add_output` `:1307`–`:1326` | `SetTable::insert` · SI-9 | set-shaped | `amount_index` = the member count under **that amount** (`mdb_cursor_count` after positioning on the amount key, `:1307`–`:1314`), never a whole-table count; amount-0 keying verbatim; R8b-2 open (SCW-8) |
 | `spent_keys` | `LmdbHashKey` key image → `()` | `add_spent_key` `:1429` (`MDB_NODUPDATA`) | `insert` · **SI-1** | set-shaped (v0) | the belt beneath CEN-L1 / CEN-I7 |
-| `curve_tree_roots` | `u64` h+1 → `CurveTreeRoot` | `store_curve_tree_root_at_height` `:9740`, called at `blockchain_db.cpp:664` **only inside `if (new_output_count > 0)`** (`:639`) | `insert` · **SI-4** | set-shaped | written iff `facts.tree_after` is `Grew(root)` — the C++ condition reproduced, byte-parity on this table (SCW-19, ruled B); the *read* for a height with no row is `BatchView::root_at`'s, §3.4 |
+| `curve_tree_roots` | `u64` h+1 → `CurveTreeRoot` | `store_curve_tree_root_at_height` `db_lmdb.cpp:9740`, called at `src/blockchain_db/blockchain_db.cpp:663`–`:664` — inside the `HF_VERSION_FCMP_PLUS_PLUS_PQC` gate (`:493`, always true) and **outside** the `if (new_output_count > 0)` block that closes at `:650` | `insert` · **SI-4** | set-shaped | written from `facts.root_after` on **every** connect (one row per connect, dense from key 1; key 0 never); a first draft of this row misread the brace scope as growth-conditional — corrected on review, SCW-19 |
 | `hf_versions` | `u64` h → `u8` | `set_hard_fork_version` `:4702` (via `hardfork.cpp:141`) | `insert` · SI-2 | small | §3.5; W15 closes |
 | `block_burn` | `u64` h → `u64` | `add_block_burn` `:4878` (`blockchain.cpp:6148`–`:6157`: `new_height > 0 && block_burn_amount > 0`) | `insert` · SI-2 | set-shaped | inside the funnel — W9 closes |
 | `properties` · `total_burned` | `TotalBurnedCell` | `set_total_burned` `:5066` (`blockchain.cpp:6160`, same guard) | `upsert_property`, `checked_add` · **SI-8** | small (`ChainState` fold) | inside the funnel — W6/W9 close |
@@ -776,91 +773,75 @@ would make the migration 153 call sites instead of one. Owner: DRS-E6
 code.
 
 **SCW-19 — `curve_tree_roots` is keyed one height from where this document
-first read it, and is sparse where the tree did not grow** (found 2026-09-15
-verifying review finding "`root_after` naming" against `blockchain_db.cpp`
-and CEN-I12; **keying half fixed here; sparsity half checked and ruled B the
-same day, with the C++ defect it exposed sent to the CSR register**, §10.1).
+first read it; a second claim, that the record is sparse, was refuted at
+re-read** (found 2026-09-15 verifying review finding "`root_after` naming"
+against `blockchain_db.cpp` and CEN-I12; keying half **fixed here**; sparsity
+half **withdrawn the same day** — see below, and census §7 #21 for the
+record).
 
 *The keying half — fixed here.* Block *h*'s connect writes the post-drain
 root at key *h+1* (`store_curve_tree_root_at_height(prev_height + 1, …)`,
-`:664`). So key *h* holds the tree state **at** chain height *h* — after
-*h−1*'s drain, before *h*'s — which is exactly the state CEN-I12 names as the
-anchor for `ref_height = h` (all three `get_curve_tree_root_at_height(ref_height)`
-reads, `blockchain.cpp:3767`/`:3916`/`:4178`) and exactly what block *h*'s
+`src/blockchain_db/blockchain_db.cpp:664`). So key *h* holds the tree state
+**at** chain height *h* — after *h−1*'s drain, before *h*'s — which is exactly
+the state CEN-I12 names as the anchor for `ref_height = h` (all four
+`get_curve_tree_root_at_height(ref_height)` reads, `blockchain.cpp:3767`/
+`:3916`/`:4178`, `daemon_submit_ffi.cpp:417`) and exactly what block *h*'s
 header must carry under CEN-B5. The rules crate's `ChainView::root_at` doc
-comment says two things: "as recorded **after** the block at `height`" and
+comment said two things: "as recorded **after** the block at `height`" and
 "the membership anchor a spend that references `height` is verified
 against". They differ by one — the anchor for a reference to *h* is the root
 *before* *h*'s drain — and §3.4's first draft (and #757's `BatchView`, cut
 from it) followed the first clause to `curve_tree_roots[h + 1]`, i.e. one
 height high: a rule calling `root_at(ref_height)` would have verified against
 the *next* anchor. This is the off-by-one SCW-12 warned about, reached from
-the other side. → §3.4 now maps `root_at(h)` to **key *h***; the trait
-comment is corrected in this PR to the CEN-I12 wording (one line,
-`shekyl-chain-rules/src/view.rs`), and #757's `BatchView` follows in its
-review. The both-ends test in §8 commit 5 pins it.
+the other side. → §3.4 maps `root_at(h)` to **key *h***; the trait comment
+is corrected in this PR to the CEN-I12 wording (`shekyl-chain-rules/src/view.rs`);
+#757's `BatchView` follows in its review. The both-ends test in §8 commit 5
+pins it.
 
-*The sparsity half — checked, then ruled (maintainer, 2026-09-15).* The C++
-writes the row **only when the drain grew the tree** (`if (new_output_count >
-0)`, `:639`–`:664`), and `new_output_count` is `drained_count` (`:632`) —
-*matured* leaves, not this block's outputs — so gaps are not an edge case:
-every height where nothing matured has no row, which with
-`CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW = 60` is **keys `0..60` on every
-chain** (nothing can mature before the first coinbase does; every key `≥ 61`
-exists because block *h* ≥ 60 drains block *h−60*'s coinbase). The reader
-zero-initialises `std::array<uint8_t, 32> root{}` and returns it **silently**
-on `MDB_NOTFOUND` (`db_lmdb.cpp:9745`–`:9760`). The first draft of this
-paragraph called that a wart reachable only "where nothing is spendable
-anyway"; the maintainer stopped the ruling on the question that decides
-everything — **is `ref_height` constrained to a height that has a row?** —
-and the answer, one read of the validation path, is **no**: all three
-`check_tx_inputs` arms and the RPC submit path (`daemon_submit_ffi.cpp:417`)
-bound `ref_height` by `block_exists` and `FCMP_REFERENCE_BLOCK_MIN_AGE = 5` /
-`MAX_AGE = 100` only (`blockchain.cpp:3748`–`:3763`), so while
-`chain_height ≤ 160` a spender can name a gap height and the verifier
-anchors against zeros. And zeros are not rejected at decode:
-`deserialize_tree_root` (`shekyl-fcmp/src/proof.rs:1184`) goes through
-`helioselene`'s `from_bytes`, which maps `x = 0` to the **identity point**
-(`point.rs:373`–`:409`). **Direction: fail-closed** — a valid proof is
-rejected (real root ≠ *O*), a forged one needs `Σ cᵢ·Gᵢ = −HASH_INIT` (a
-discrete-log break), and every node has the same gap set (no fork). That
-makes it a **census finding on a spender-selectable input, not a wart**, and
-it went to the register before this increment decided how to reproduce it:
-**CEN-I12 → DIVERGENT** at `0aeb67619` in the CSR conformance-exception
-register (this PR), census §7 #21, tally `125 / 3 / 3`. A ruling on the live
-C++ (FIX vs carry-as-recorded until cutover) is owed there, not here.
+*The sparsity half — withdrawn.* A first draft of this finding read the root
+write at `:663`–`:664` as sitting inside `if (new_output_count > 0)` (`:639`)
+and concluded the record was sparse wherever no leaf matured — keys `0..60`
+on every chain. **That was a misread of the brace scope**: the
+`new_output_count > 0` block closes at `:650` and guards only
+`grow_curve_tree` and the segment-freeze hook; `get_curve_tree_root()` and
+`store_curve_tree_root_at_height(prev_height + 1, …)` at `:663`–`:664` are
+inside the enclosing `blk.major_version >= HF_VERSION_FCMP_PLUS_PLUS_PQC`
+gate (`:493`, the constant is `1`) and run on **every** connect. The record
+is **dense from key 1**; the only key never written is **0**. The draft's
+consequences — a `TreeAfter::{Grew, Unchanged}` write shape, a walk-back
+read, a DIVERGENT verdict on CEN-I12's CSR row and a `125 / 3 / 3` tally —
+were all built on the misread and are **all withdrawn**: the CSR row is back
+to CHECKED-CONFORMANT with the absent-key arm now *walked* and recorded on
+it (which the 2026-09-05 verdict had not done), the tally is `126 / 2 / 3`,
+and `ConnectFacts.root_after: Fact<CurveTreeRoot>` is written on every
+connect, which is what #757 already does and what SI-4's one-row-per-connect
+contract says. Copilot's re-read of the source caught the scope error; the
+maintainer's instruction to *check `ref_height`'s constraint before choosing*
+is what turned the check into a walk of the real absent-key arm instead of a
+ruling on a false one.
 
-Three shapes were on the table:
+*What the walk did establish (kept).* Key 0 is absent in every store;
+`ref_height = 0` is selectable by age alone while `chain_height ≤ 100`; the
+C++ reader returns zeros for it (`src/blockchain_db/lmdb/db_lmdb.cpp:9745`–`:9760`),
+which `deserialize_tree_root` decodes to the **identity point**
+(`helioselene/src/point.rs:373`–`:409`), so a proof anchored at genesis is
+verified against *O*. Consequence-free: the state at height 0 is the empty
+tree, which has no members, so no honest proof anchors there, and forging
+against *O* needs a discrete-log break. What a reference to genesis *should*
+resolve to — the empty-tree root `HASH_INIT` (which, unlike *O*, is the
+Pedersen hash of an all-zero layer and so has a trivially constructible
+"member"), or a refusal of `ref_height = 0` — is **CEN-I12's rule to close,
+routed to E6 slice 6** with census §7 #21 as the citation. The store does
+not decide it: `BatchView::root_at(0)` reads key 0, finds nothing, and the
+arm it returns there is whatever E6's ruling names; until then the increment
+treats it exactly as the C++ does at the type level — no row, and the read
+of a recorded height `≥ 1` with no row is `EngineError::Corrupt` (dense by
+construction, so absence is corruption).
 
-- **(A) dense** — `connect` writes `curve_tree_roots[h+1]` on every block
-  (what #757 does today). Spec-exact and total; but the redb table gains rows
-  LMDB lacks wherever a block grew nothing, so the E2 diff over this table is
-  red for a reason unrelated to the port unless the comparator learns a
-  special case — the thing E1's discipline exists to avoid. **Rejected.**
-- **(B) reproduce the write, read the ratified state** — `tree_after:
-  Fact<TreeAfter>` with `TreeAfter::{Grew(root), Unchanged}` (the driver
-  knows: E3's grow returns the count); the row is written iff `Grew`;
-  `BatchView::root_at(h)` on a recorded height with no row returns the
-  **latest root at a key ≤ h**, and the empty-tree root when there is none
-  (`CurveTreeRoot::EMPTY` pinned in `shekyl-types`, KAT against
-  `SELENE_HASH_INIT` in `shekyl-fcmp`, so the store never depends on the
-  proof crate). Table bytes identical to LMDB, so the E2 diff over
-  `curve_tree_roots` stays clean and the divergence is confined to the
-  **read path** — S-CHAIN-R's surface, not this one. **Ruled.**
-- **(C) reproduce both** — sparse write and zero-root read. Two
-  implementations of one read is the two-sources-of-truth problem the whole
-  R8 ruling is built to avoid. **Rejected on principle, not on cost.**
-
-**How B lands — corrected on ruling.** "C++ wart recorded, not ported"
-understated what B does: the corrected read changes what a rule *sees* —
-`root_at` feeds CEN-B5 and CEN-I12 — so it is a consensus-visible behaviour
-change introduced by the port. Under CSR-3a that is a divergence and it
-belongs **in the register as a recorded expected divergence with its
-citation** (done: the CEN-I12 row's pass condition is the ratified state;
-identity with the C++ read FAILS), not as a note in this document — a doc
-note is exactly the shape of "the port ratified something by implementing
-it", which R8 exists to prevent. The `ConnectFacts` shape change and the
-`root_at` read land in #757 before it merges.
+*What stays owed.* Nothing in #757 for the write path. The `root_at` keying
+fix (key *h*), the tip-classified absence in `block_at`/`root_at` (§3.4),
+and the trait-doc correction are the SCW-19 residue.
 
 ---
 
@@ -873,14 +854,17 @@ it", which R8 exists to prevent. The `ConnectFacts` shape change and the
 | 3 | `store: TotalBurned chain-state cell; settlement-epoch pin as a header cell` | `TotalBurnedCell`; `settlement_epoch_blocks` `EngineLocal` cell at `create`/`open` (SCW-2) | property-catalogue snapshot; open-mismatch refusal test |
 | 4 | `rules: ValidatedBlock carries TxIdentity { hash, prunable_hash }` | SCW-10 — in `shekyl-chain-rules`, the owed-to-consumer item | existing rules tests + one identity test |
 | 5 | `store: BatchView — ChainView<'id> over WriteBatch` | §3.4; store → rules dependency (SCW-14); `block_at` decodes `blocks[h]` for the header | `root_at(h)` = key *h* pinned at both ends (the root block *h−1* wrote is what a reference to *h* anchors to; SCW-19); two-block-batch visibility test (SCW-13) |
-| 6 | `store: connect(ChainValid, ConnectFacts, RuleSetId) — the write set` | §3.1/§3.2/§3.5/§3.8; SI-1/2/3/4/8 + SI-9 `built`; `RuleSetNotInForce`; `Fact<T>`/`Origin` with `Provenance` widening on pass-through (SCW-1); `tree_after: Fact<TreeAfter>` — root row iff `Grew` (SCW-19 B); `rct_outputs` per-block (CEN-L15); burn phase guarded `h > 0 && burned > 0`; `CoverageGapsCell` + `PassedThroughFactsCell` + `RowSet` codec (SCW-17); CEN-L1/H5/B3 arrive | per-table write test against `LMDB_SCHEMA.md` layouts; every SI belt fires from a hand-built violation; conversion-ban gate; E6-partition gate row statuses |
+| 6 | `store: connect(ChainValid, ConnectFacts, RuleSetId) — the write set` | §3.1/§3.2/§3.5/§3.8; SI-1/2/3/4/8 + SI-9 `built`; `RuleSetNotInForce`; `Fact<T>`/`Origin` with `Provenance` widening on pass-through (SCW-1); `root_after` written on every connect (dense record, SCW-19); `rct_outputs` per-block (CEN-L15); burn phase guarded `h > 0 && burned > 0`; `CoverageGapsCell` + `PassedThroughFactsCell` + `RowSet` codec (SCW-17); CEN-L1/H5/B3 arrive | per-table write test against `LMDB_SCHEMA.md` layouts; every SI belt fires from a hand-built violation; conversion-ban gate; E6-partition gate row statuses |
 | 7 | `store: pop() by reverse replay; PopBelowFloor; writer halt + ChainTip.connect` | §3.3/§3.6; `StoreCannot::{PopBelowFloor, WriterHalted}`; `ConnectState`; `shekyl-rpc-types` field + `StoreInvariantRow`, `CORE_RPC_VERSION` minor | connect→pop→digest-equal round-trip; halt-then-refuse test; RPC type snapshot |
 | 8 | `docs: S-CHAIN-W landed — DRS §7 row + §3.6.3, register flips, index, audit W6/W9/W15/W17, CHANGELOG` | rule 91 sweep; this document's banner → landed, §7 dispositions → done | docs gates |
 
 Tests in 5–7 build blocks with `shekyl-wire` fixtures and validate them
-through the real `validate` with `RuleSet::GENESIS` (zero rules → coverage
-complete, every well-formed candidate `Valid`), so `connect` is exercised
-through its public signature. **Every evidential run — these tests and the
+through the real `validate` with `RuleSet::GENESIS` — which **enforces all
+153 rows while the crate implements none** (§3.8), so every well-formed
+candidate is `Valid` with *empty* coverage and the first connect widens
+`rule_coverage_gaps` to every enforced row; the tests assert that stamp (a
+scaffold file is not parity evidence), not completeness — so `connect` is
+exercised through its public signature. **Every evidential run — these tests and the
 DRS-E2 harness — starts from a fresh file** (SCW-17: the provenance floor is
 monotone per file; a reused datadir is non-evidential from its first
 partial-coverage or pass-through connect, and the stamp is the only place
@@ -954,27 +938,23 @@ not the vote), the digest over the table is unchanged, and it is what makes
 alternative — persist `valid.rule_set_id()` — is the same byte unless
 `RuleSetNotInForce` fires, in which case nothing is written at all.
 
-### 10.1 Round-2 question — RULED 2026-09-15
+### 10.1 Round-2 question — SUPERSEDED 2026-09-15 (premise refuted)
 
 **SCW-19 — what does `connect` write to `curve_tree_roots` when the drain
-grew nothing, and what does `root_at` read there? RULED: B — byte-parity on
-the write (`TreeAfter::{Grew, Unchanged}`, row iff `Grew`), the ratified
-state on the read (latest root at a key `≤ h`, `CurveTreeRoot::EMPTY` when
-none) — with the divergence recorded in the CSR register, not here.** The
-ruling was **stopped before choosing** to check whether `ref_height` is
-constrained to a row-bearing height; it is not (age bounds only), the gap
-set is keys `0..60`, and the zero substitute decodes to the identity point —
-so the C++ carries a live, fail-closed CEN-I12 divergence on a
-spender-selectable input, now **DIVERGENT** in the register (census §7 #21).
-(A) rejected: reddens the E2 comparator for a reason unrelated to the port.
-(C) rejected on principle: two implementations of one read is the
-two-sources-of-truth problem R8 exists to prevent. Under CSR-3a the corrected
-read is a consensus-visible change the port introduces, so the register row
-(pass = ratified state; identity FAILS) is the record and a doc note would
-have been "the port ratified something by implementing it". `ConnectFacts`
-shape change and `root_at` read land in #757 before merge. The keying half
-(`root_at(h)` = key *h*) was never part of the question — fixed by the census
-row and corrected in this PR.
+grew nothing?** The question **does not arise**: the C++ writes the row on
+every connect (`:663`–`:664` is outside the growth gate that closes at
+`:650`), so the record is dense from key 1 and the Rust `insert` on every
+connect — what #757 does — is byte-parity with LMDB. The maintainer's ruling
+of the same day ("B, assuming the check comes back benign") was conditional
+on a premise this document supplied and Copilot's re-read of the source
+refuted; the ruling is therefore **void, not overridden** (rule 16: premise
+refuted, not superseded), and its artifacts — `TreeAfter`, the walk-back
+read, the DIVERGENT flip, the `125 / 3 / 3` tally — are withdrawn (§7
+SCW-19). What the maintainer's *stop-before-choosing* instruction did
+produce, and what is kept: the absent-key arm of CEN-I12 walked for the
+first time (key 0 only; consequence-free; recorded on the CSR row), and the
+genesis-anchor question routed to E6 slice 6 (census §7 #21). The keying half
+(`root_at(h)` = key *h*) is unaffected and stands.
 
 **SCW-2 — confirmed `EngineLocal` (same day)**, with the reopening criterion
 written beside it in §7: safe because `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is
@@ -993,7 +973,7 @@ cell moves to `ChainState`.
 - `docs/CHANGELOG.md`: one Unreleased line at landing (`ChainTip.connect` is API-visible).
 - `shekyl-wire/src/block.rs:63` (this PR, SCW-12); `docs/MERKLE_TREE.md` "The Block Header Commitment" (this PR — the same pre-correction wording, "the tree root after all of that block's outputs", which CEN-B5's 2026-09-05 correction and SCW-12 both contradict); `shekyl-chain-store/src/store/write.rs` `open_insert_table` doc (this PR, SCW-3's sibling); `shekyl-chain-rules/src/view.rs` `root_at` doc (this PR, SCW-19).
 - `LMDB_WRITE_ATOMICITY_AUDIT.md` `properties` paragraph: `settlement_epoch_blocks_pin` moves from the chain-state list to a dated `UPDATE` naming it engine-local by mechanism (this PR, SCW-2 amended).
-- `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1 CEN-I12 row → **DIVERGENT** at `0aeb67619`, tally `125 / 3 / 3`; `CONSENSUS_RULE_CENSUS.md` §7 #21 and the CEN-I12 row's status cell (this PR, SCW-19). The C++ ruling (FIX vs carry) is owed on that row.
+- `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1 CEN-I12 row: **CHECKED-CONFORMANT stands**, absent-key arm walked and recorded at `0aeb67619` (key 0 only; consequence-free); tally unchanged `126 / 2 / 3`; `CONSENSUS_RULE_CENSUS.md` §7 #21 (the walk and the withdrawn flip) and the CEN-I12 row's status cell; `LMDB_SCHEMA.md` `curve_tree_roots` row (dense from key 1, key 0 never, zero-root reader) — this PR, SCW-19. The genesis-anchor question is E6 slice 6's.
 - `IMPLEMENTATION_INDEX.md` SI family row: SI-1…SI-9 and `tx_indices` (this PR, SCW-3/SCW-4's sibling).
 - This document: banner flips to *implemented*, §7 dispositions to *done*, then archive-or-contract per index §8 once S-CHAIN-R has consumed the codecs (the reopening condition for keeping it in `design/`).
 
@@ -1007,4 +987,5 @@ cell moves to `ChainState`.
 | 2026-09-15 | **Round 1 rulings (maintainer, same day):** SCW-1 driver-supplied `ConnectFacts` with per-field `Origin`, pass-through widens `Provenance`, `passed_through()` is the E6 progress count; SCW-4 SI-9 minted `ruled`; SCW-7 dissolves, coupling **undo-log retention ≥ `D_max`** written into DRS §7 and PDM-Q11; SCW-15 ruled by the brand, not a question; SCW-16 belt written against `rule_set.rs` as landed; SCW-17 approved, fresh-file rule stated in §8; SCW-11 allowlist is a named `{table: reason}` map that keeps the extra-leg refusal, never a mode switch. §3 is the contract as ruled. Commits 1–3 authorised to start before #753 merges; the increment branch still cuts from `dev` after it. |
 | 2026-09-15 | **Round-1 follow-ups (maintainer, same day):** `passed_through()` names the rows that delete each `Fact`, not only a count (§3.2 table); the SCW-7 inequality gets its third copy on the S-PRUNE row itself, and the vacuous-today floor is recorded as the hazard (§3.3, §5.4); **SCW-18** minted — the `implemented(path)` pin's shape decided (`trait Rule { const ROW }`, structural row binding) ahead of the first real rule, owner E6; ordinal *removal* recorded as a bump in the increment's codec docs (commit 1). |
 | 2026-09-15 | **PR #756 review (Copilot, 5 inline + 17 suppressed; every one re-verified at source, 21 taken, 1 refuted):** substrate corrections — `bi_cum_rct` is **per-block** at this pin (CEN-L15; the cumulative reading was wrong), `block_at` decodes `blocks[h]` (`BlockInfo` has no header), `RuleSet::GENESIS` enforces all 153 rows so a scaffold file is **not** evidence, `RuleSet::for_id` before `enforced()` with `RuleSetUnknown`, the burn phase is conditional as a whole (`h > 0 && burned > 0`), `amount_index` is per-amount and `output_id` is last-key+1, SI-9 tightened to primary-dense / side-table-fresh, seven journals not five, `SetTable` journals the multimap, `PassedThroughFactsCell` listed, three `ConnectFacts` provenances named, monotone-floor sentence fixed, SI-1…SI-9. **SCW-2 amended**: the audit's chain-state listing of the pin conflicts with the `EngineLocal` cell; disposition `EngineLocal`, audit paragraph `UPDATE`d, reopener stated. **SCW-19 minted**: `root_at(h)` is key *h* (CEN-I12), not *h+1* — fixed here, trait doc corrected, #757's `BatchView` to follow; the sparse-write / zero-root-read half is **§10.1, OPEN**, recommendation (B). Refuted: the suppressed "`root_after` is the header root at *h*'s own height" — it is the root after *h*'s drain, i.e. the *next* header's (the finding's premise was the same off-by-one, from the other side). Rebased onto `dev` post-#753 (index conflicts: #753's `DRS-*` row kept, rule 94 §6). |
-| 2026-09-15 | **Round-2 rulings (maintainer, same day).** **SCW-2 confirmed `EngineLocal`** — an init-time datadir pin is not chain state; reopener written beside it: safe because `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is regtest-scoped with typed refusals outside it (verified: FAKECHAIN-only arming behind a fail-closed startup gate, unarmed processes compute the genesis schedule), and the cell moves to `ChainState` if that scoping relaxes. **SCW-19 stopped before choosing:** the maintainer asked whether `ref_height` is constrained to a row-bearing height. Checked — it is not (`block_exists` + age 5/100 only); the gap set is keys `0..60` (drain counts *matured* leaves); the zero substitute decodes to the identity point; fail-closed, deterministic, forging needs a DL break. **CEN-I12 → DIVERGENT** in the CSR register at `0aeb67619`, census §7 #21, tally `125 / 3 / 3` — before #757 decides how to reproduce it. Then **B ruled**: `TreeAfter::{Grew, Unchanged}` on the write (byte-parity), ratified state on the read (latest root `≤ h`, `CurveTreeRoot::EMPTY` when none), the divergence recorded **in the register** as CSR-3a requires (identity FAILS), never as a doc note. (A) rejected — reddens the comparator for a reason unrelated to the port; (C) rejected on principle — two sources of truth for one read. Lands in #757 before merge. |
+| 2026-09-15 | **Round-2 rulings (maintainer, same day) — the SCW-19 half of this row is VOID, see the next row; the SCW-2 half stands.** **SCW-2 confirmed `EngineLocal`** — an init-time datadir pin is not chain state; reopener written beside it: safe because `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` is regtest-scoped with typed refusals outside it (verified: FAKECHAIN-only arming behind a fail-closed startup gate, unarmed processes compute the genesis schedule), and the cell moves to `ChainState` if that scoping relaxes. **SCW-19 stopped before choosing:** the maintainer asked whether `ref_height` is constrained to a row-bearing height. Checked — it is not (`block_exists` + age 5/100 only); the gap set is keys `0..60` (drain counts *matured* leaves); the zero substitute decodes to the identity point; fail-closed, deterministic, forging needs a DL break. **CEN-I12 → DIVERGENT** in the CSR register at `0aeb67619`, census §7 #21, tally `125 / 3 / 3` — before #757 decides how to reproduce it. Then **B ruled**: `TreeAfter::{Grew, Unchanged}` on the write (byte-parity), ratified state on the read (latest root `≤ h`, `CurveTreeRoot::EMPTY` when none), the divergence recorded **in the register** as CSR-3a requires (identity FAILS), never as a doc note. (A) rejected — reddens the comparator for a reason unrelated to the port; (C) rejected on principle — two sources of truth for one read. Lands in #757 before merge. |
+| 2026-09-15 | **Round-2 SCW-19 ruling VOID — premise refuted at re-read (same evening).** Copilot's second review read the source correctly where this document had not: `store_curve_tree_root_at_height` at `src/blockchain_db/blockchain_db.cpp:663`–`:664` is **outside** the `if (new_output_count > 0)` block (closes `:650`) and inside the always-true HF gate (`:493`), so the record is **dense from key 1** and only key 0 is unwritten. Everything built on "sparse over `0..60`" is withdrawn: `TreeAfter`, the walk-back read, CEN-I12 → DIVERGENT, tally `125/3/3`. Restored: `root_after: Fact<CurveTreeRoot>` written every connect (what #757 does; SI-4 one row per connect), CEN-I12 CHECKED-CONFORMANT with the absent-key arm now walked on the row (key 0 only; zeros → identity point; consequence-free), tally `126/2/3`; census §7 #21 rewritten as the record of the walk and the correction. The conditional ruling ("B, assuming the check comes back benign") is void because its premise failed, not overridden (rule 16: premise refuted). Kept: `root_at(h)` = key *h* (independent of density); absence classified against the tip in `block_at`/`root_at` (Copilot :265 — `AboveTip` only above the tip, holes below it are `Fault`); the genesis-anchor question routed to E6 slice 6. Also taken this round: "17 LMDB tables" → 16 + `undo_log`; the §8 test paragraph no longer calls GENESIS zero rules. CI: the CSR row's `blockchain_db.cpp` citation qualified to `src/blockchain_db/…` (two tracked files match the bare name). |
