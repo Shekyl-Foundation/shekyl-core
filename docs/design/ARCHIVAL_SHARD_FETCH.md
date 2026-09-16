@@ -157,7 +157,7 @@ inherited as "the client waits."
 | Overlay SOCKS credentials | `src/net/socks.cpp:246–271` — empty `userinfo` emits SOCKS5 no-auth | What overlay P2P presents on the managed instance. `SF-D3` matches it |
 | Daemon `SocksPort` flags | `rust/shekyl-tor-control-client/src/control/actor.rs:859` — `--SocksPort` with `SocksPort::Auto`; no `Isolate*` flags on the spawn | Tor's own defaults apply. `SF-D3`: this client sets none |
 | Daemon Tor today | SOCKS is discovered (`rust/shekyl-tor-control-daemon/src/ephemeral.rs:18` crate-doc; `:240` — `GETINFO net/listeners/socks`) and consumed (`src/p2p/net_node.inl:878` — `zone.m_connect = &socks_connect`; `:879` — `zone.m_proxy_address`). Default posture is inbound onion **plus** SOCKS outbound on the tor zone. `--tx-proxy` / `--anonymous-inbound` yield the managed instance (`net_node.inl:815–819`) | `SF-D2` RULED: reuse **this** zone proxy. Object of reuse is the zone's SOCKS, not always `DaemonTorControl`. Does not re-rule PWD-E7 |
-| Discovery | `EU-D3`/`EU-D4` — endpoint = raw 32-byte Ed25519 key on the bond record; witness reads it from the drawable snapshot at epoch open, joined by `p_id` (`DrawablePair`, `rust/shekyl-archival-retention/src/challenge_assignment.rs:71`) | `SF-D5`'s input: key → onion is derivation, not lookup. `SF-D10` reads the holder set of `s` from the same snapshot |
+| Discovery | `EU-D3`/`EU-D4` — endpoint = raw 32-byte Ed25519 key on the bond record; witness reads it from the drawable snapshot at epoch open, joined by `p_id` (`DrawablePair`, `rust/shekyl-archival-retention/src/challenge_assignment.rs:71`). **Producer RULED 2026-09-16 (SO-D8 Q3):** `DrawableSet::at_epoch_open` (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.4) | `SF-D5`'s input: key → onion is derivation, not lookup. `SF-D10` reads the holder set of `s` from the same snapshot |
 | Derived assignment | [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §2: assignment for block *h* is a pure function of *h*−1's hash over the epoch-open drawable set. Public at *h*−1's publication; every node including `P` computes it identically. Witness = producer. Window = `CHALLENGE_RESPONSE_BLOCKS`. *(The v1 block-bound `attestation_nonce = H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` was deleted with `SF-D8` (a0), 2026-09-13.)* | Assignment stays derived. **It does not go on the fetch.** Both callers send requester-random bytes plus their own chain anchor at `tip − 720` (height and hash; `SF-D5` as amended). Nothing derived from the assignment is a request field |
 | Request parse | `rust/shekyl-p-serve/src/serve.rs:558–560` — `path.strip_prefix(ROUTE_PREFIX)` then `parse::<u64>()`; comment: "Exact decimal id — no path suffix, no query string" | The request unit is a whole shard (`§4`) |
 | Segment size | `rust/shekyl-curve-tree/src/segment.rs:36` — `LEAF_BYTES`; `:63` — `leaves_per_segment()` | Honest-holder egress of a challenge fetch: one full segment (`leaves_per_segment() × LEAF_BYTES`) |
@@ -1197,7 +1197,8 @@ not a parenthetical in the living contract.
 ### `SF-D10` — organic selection — RULED 2026-09-12
 
 Uniform memoryless draw over the holder set of shard `s`, read from the
-drawable snapshot, performed by the **organic scheduler**. Per-need
+drawable snapshot (`DrawableSet::at_epoch_open`, SO-D8 Q3 RULED 2026-09-16),
+performed by the **organic scheduler**. Per-need
 exclusion permitted. No persistent state. `shekyl-p-fetch` does not
 draw; it is given a destination.
 
