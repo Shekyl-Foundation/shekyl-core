@@ -144,22 +144,26 @@ impl Canonical for CoverageGaps {
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut gaps = Self::NONE;
+        // `encode_into` emits names in census order; only that encoding is
+        // accepted (`Canonical` promises one encoding per value), so the
+        // position must strictly increase — which also refuses a repeat.
+        let mut last: Option<usize> = None;
         decode_names(Self::NAME, bytes, |name| {
-            let row = CenRow::ALL
+            let position = CenRow::ALL
                 .iter()
-                .copied()
-                .find(|row| row.as_str() == name)
+                .position(|row| row.as_str() == name)
                 .ok_or(CodecError::Invalid {
                     codec: Self::NAME,
                     reason: "names a census row this binary does not have",
                 })?;
-            let (word, bit) = Self::slot(row);
-            if gaps.words[word] & bit != 0 {
+            if last.is_some_and(|prev| position <= prev) {
                 return Err(CodecError::Invalid {
                     codec: Self::NAME,
-                    reason: "a row is named twice",
+                    reason: "rows are not in census order (repeated or out of order)",
                 });
             }
+            last = Some(position);
+            let (word, bit) = Self::slot(CenRow::ALL[position]);
             gaps.words[word] |= bit;
             Ok(())
         })?;
@@ -254,6 +258,8 @@ impl Canonical for PassedThroughFacts {
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut set = Self::NONE;
+        // Declaration order is the one encoding (see `CoverageGaps`).
+        let mut last: Option<usize> = None;
         decode_names(Self::NAME, bytes, |name| {
             let position =
                 FACT_FIELDS
@@ -263,12 +269,13 @@ impl Canonical for PassedThroughFacts {
                         codec: Self::NAME,
                         reason: "names a ConnectFacts field this binary does not have",
                     })?;
-            if set.contains(position) {
+            if last.is_some_and(|prev| position <= prev) {
                 return Err(CodecError::Invalid {
                     codec: Self::NAME,
-                    reason: "a field is named twice",
+                    reason: "fields are not in declaration order (repeated or out of order)",
                 });
             }
+            last = Some(position);
             set.bits |= 1 << position;
             Ok(())
         })?;
@@ -367,6 +374,47 @@ mod tests {
         let mut twice = Vec::new();
         encode_names(&mut twice, [CenRow::ALL[0].as_str(); 2].into_iter());
         assert!(CoverageGaps::decode(&twice).is_err());
+    }
+
+    /// `Canonical::decode` accepts exactly one encoding per value: the
+    /// names in census / declaration order. A row naming the same set out
+    /// of order would normalise to the same bitset and is refused instead
+    /// (PR #757 review) — a non-canonical evidence cell is SI-7.
+    #[test]
+    fn evidence_cells_refuse_names_out_of_canonical_order() {
+        let mut out_of_order = Vec::new();
+        encode_names(
+            &mut out_of_order,
+            [CenRow::ALL[5].as_str(), CenRow::ALL[0].as_str()].into_iter(),
+        );
+        assert_eq!(
+            CoverageGaps::decode(&out_of_order),
+            Err(CodecError::Invalid {
+                codec: "rule_coverage_gaps",
+                reason: "rows are not in census order (repeated or out of order)",
+            })
+        );
+        let mut fields = Vec::new();
+        encode_names(&mut fields, ["burned", "weight"].into_iter());
+        assert_eq!(
+            PassedThroughFacts::decode(&fields),
+            Err(CodecError::Invalid {
+                codec: "passed_through_facts",
+                reason: "fields are not in declaration order (repeated or out of order)",
+            })
+        );
+        // The canonical order round-trips, and is what `encode` emits.
+        let set = PassedThroughFacts::of_positions([4, 1]);
+        let mut canonical = Vec::new();
+        encode_names(
+            &mut canonical,
+            ["weight", "long_term_weight", "burned"].into_iter(),
+        );
+        assert_eq!(
+            PassedThroughFacts::decode(&canonical).map(|s| s.iter().count()),
+            Ok(3)
+        );
+        assert_eq!(PassedThroughFacts::decode(&set.encode()), Ok(set));
     }
 
     #[test]
