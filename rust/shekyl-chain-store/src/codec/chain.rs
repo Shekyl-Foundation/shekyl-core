@@ -198,6 +198,18 @@ pub struct OutKey {
     pub commitment: [u8; 32],
 }
 
+impl OutKey {
+    /// The `amount_index` an encoded member carries — its `U64PrefixBytes`
+    /// sort prefix, read without decoding the rest. `None` for bytes too
+    /// short to carry one (a member this codec never wrote).
+    #[must_use]
+    pub fn amount_index_of(encoded: &[u8]) -> Option<u64> {
+        encoded
+            .first_chunk::<8>()
+            .map(|prefix| u64::from_le_bytes(*prefix))
+    }
+}
+
 impl Canonical for OutKey {
     const NAME: &'static str = "out_key";
     const FIXED_WIDTH: Option<usize> = Some(96);

@@ -581,25 +581,75 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
 }
 
 #[test]
-fn a_verdict_under_another_rule_set_than_the_one_in_force_is_refused_not_fatal() {
+fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
     let path = tmp("connect-ruleset");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let other = RuleSetId::from_raw(7);
+    // Raw id 7 is issued by no schedule. The verdict necessarily carries an
+    // issued id, so comparing first would always report a mismatch and the
+    // unknown-id refusal could never fire; `connect` resolves `in_force`
+    // first (PR #757 review). `RuleSetNotInForce` is reached only once a
+    // second rule set is issued — with GENESIS the sole set, a verdict's id
+    // and an issued `in_force` cannot differ.
+    let unissued = RuleSetId::from_raw(7);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let valid = judge(&view, candidate(0, [0; 32], Vec::new()))?;
-        Ok(batch.connect(valid, facts(0, 0), other)?)
+        Ok(batch.connect(valid, facts(0, 0), unissued)?)
     });
-    let want = StoreCannot::RuleSetNotInForce {
-        height: 0,
-        judged: GENESIS_ID,
-        in_force: other,
-    };
+    let want = StoreCannot::RuleSetUnknown(unissued);
     assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
     assert_eq!(StoreError::from(want).class(), ErrorClass::Cannot);
+    assert!(
+        RuleSet::for_id(unissued).is_none(),
+        "the premise of the test"
+    );
     // Nothing landed: the refusal came before any write.
     let snap = store.begin_read().expect("read");
     assert!(snap.open_table(BLOCKS).is_err());
+    cleanup(&path);
+}
+
+/// SI-9 for the derived `amount_index`: redb orders `output_amounts`
+/// members by index prefix *then* payload, so a second member under one
+/// index with a different payload is "new" to redb. `connect` checks the
+/// bucket's shape instead — the highest member's prefix must be `len - 1` —
+/// so a bucket with a duplicate or a hole poisons the writer before a
+/// second member under one index can be written.
+#[test]
+fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
+    let path = tmp("connect-amount-bucket");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (_, genesis) = connect_genesis(&store, 0);
+    // Genesis put one member (index 0) under amount 0. Plant a foreign member
+    // whose prefix skips to 5: len becomes 2 but the highest prefix is 5.
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        let hole = OutKey {
+            amount_index: 5,
+            output_id: 99,
+            pubkey: [9; 32],
+            unlock_time: 0,
+            height: 0,
+            commitment: [9; 32],
+        };
+        batch
+            .open_multimap_table(OUTPUT_AMOUNTS)?
+            .insert(0, hole.encode().as_slice())?;
+        Ok(())
+    });
+    planted.expect("plant");
+    let b1 = candidate(1, genesis.hash(), Vec::new());
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+    });
+    expect_row(&out, StoreInvariant::IdNotFresh);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row: StoreInvariant::IdNotFresh,
+        }
+    );
     cleanup(&path);
 }
 

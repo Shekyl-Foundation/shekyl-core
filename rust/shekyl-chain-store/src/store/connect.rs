@@ -77,7 +77,7 @@ use crate::schema::{
     TX_OUTPUTS,
 };
 
-use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
+use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::view::BatchView;
 use super::write::WriteBatch;
@@ -303,6 +303,13 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             height
         };
+        // Resolve `in_force` before comparing it with the verdict's id: a
+        // `ChainValid` only ever carries an issued id, so an unissued
+        // `in_force` would otherwise always report as a mismatch and the
+        // unknown-id refusal could never fire (PR #757 review). With one
+        // rule set issued today the mismatch arm is reached only once a
+        // second set exists; it is the contract, not dead code.
+        let rule_set = RuleSet::for_id(in_force).ok_or(StoreCannot::RuleSetUnknown(in_force))?;
         if valid.rule_set_id() != in_force {
             return Err(StoreCannot::RuleSetNotInForce {
                 height,
@@ -311,7 +318,6 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             .into());
         }
-        let rule_set = RuleSet::for_id(in_force).ok_or(StoreCannot::RuleSetUnknown(in_force))?;
 
         // ---- provenance (§3.8): what this verdict did NOT bring ----------
         // Widened before the writes and inside this transaction, so it
@@ -496,7 +502,36 @@ impl<'id> WriteBatch<'_, 'id> {
                 .as_slice(),
             )?;
             let amount = if miner || emission { 0 } else { output.amount };
-            let amount_index = amounts.get(amount)?.len();
+            // `amount_index` is the bucket's member count (LMDB's
+            // `mdb_cursor_count` after positioning on the amount). SI-9 asks
+            // that the derived index be **fresh**, and redb cannot tell us:
+            // members order by the index prefix *then* the payload
+            // (`U64PrefixBytes::compare`), so a second member under the
+            // same index but a different payload is distinct to redb and
+            // `insert` would report it new. The bucket is dense by
+            // construction (every insert appends `len`), so freshness is
+            // checked from the shape: the highest member's prefix must be
+            // `len - 1` (or the bucket is empty). A hole or a duplicate
+            // breaks that at the next insert, before a second member under
+            // one index can exist (PR #757 review).
+            let (amount_index, last_prefix) = {
+                let mut members = amounts.get(amount)?;
+                let len = members.len();
+                let last = members
+                    .next_back()
+                    .transpose()
+                    .map_err(EngineError::Storage)?
+                    .map(|guard| OutKey::amount_index_of(guard.value()));
+                (len, last)
+            };
+            let dense = match (amount_index, last_prefix) {
+                (0, None) => true,
+                (len, Some(Some(prefix))) => prefix.checked_add(1) == Some(len),
+                _ => false,
+            };
+            if !dense {
+                return Err(self.poison().arm(StoreInvariant::IdNotFresh));
+            }
             let member = OutKey {
                 amount_index,
                 output_id,
