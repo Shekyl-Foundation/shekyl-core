@@ -803,16 +803,15 @@ these):**
 | 2 personas concurrent | §5.2 contention datum — **SUPERSEDED** on the re-based rig by the sweep below; the contention datum it doubled as is SPIKE-F-11's, measured from other hosts | **30 pairs (60 obs)** |
 | Soak, ≥ 24 h | Dispersion is time-varying; a one-hour sample understates the tail | **RUN — 2,680 fetches over a full 25 h diurnal span (§13a)** |
 
-**Planned on the re-based daemon→wallet rig (`ARCHIVAL_SHARD_FETCH.md`
-§9.1 (c), 2026-09-14; run pending — its numbers go in the (c) record, not
-here):**
+**RUN 2026-09-16 on the re-based daemon→wallet rig (`ARCHIVAL_SHARD_FETCH.md`
+§9.1 (c) LANDED, PR #746 — numbers live there, not here):**
 
-| Arm | Purpose | `N` planned |
+| Arm | Purpose | `N` run |
 |---|---|---|
-| Cold (`NEWNYM` before each), single stream | Pessimistic; descriptor + intro + rendezvous inside the timed path. Its single-attempt p99 is the `L` falsifier's input | **200** |
-| Warm (circuit reuse), single stream | Optimistic; the organic fill scheduler's steady state against one `P` | **200** |
-| Concurrency sweep, widths `1, 2, 4, 8` | `SF-D7`'s client-side churn table — the upper-bound input for `N`; one `NEWNYM` per round, `width` cold fetches to `width` personas at once | **100 rounds per width** |
-| Soak, ≥ 24 h | As above — span, not count | **≥ 24 h, one cold fetch per ~30 s** |
+| Cold (`NEWNYM` before each), single stream | Pessimistic; descriptor + intro + rendezvous inside the timed path. Its single-attempt p99 is the `L` falsifier's input | **200** (p99 48.27 s) |
+| Warm (circuit reuse), single stream | Optimistic; the organic fill scheduler's steady state against one `P` | **200** (p99 12.26 s) |
+| Concurrency sweep, widths `1, 2, 4, 8` | `SF-D7`'s client-side churn table — the upper-bound input for `N`; one `NEWNYM` per round, `width` cold fetches to `width` personas at once | **100 rounds per width** (all valid; pin `N = 8`) |
+| Soak, ≥ 24 h | As above — span, not count | **1774** over ≥ 24 h (p99 86.06 s) |
 
 **On `N`, and on what more `N` can and cannot buy.** The gate turns on a **10 %
 tail**, so the p90 needs a usable confidence interval. At `N = 200` the binomial

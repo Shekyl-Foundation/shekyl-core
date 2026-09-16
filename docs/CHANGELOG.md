@@ -4,6 +4,11 @@
 
 ### API
 
+- **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
+  (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured
+  width; `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor. Serve-side
+  `shekyl-p-serve::MAX_INFLIGHT` is unchanged.
+
 - **`get_archival_shard_coverage` and `request_archival_shard` (RPC 3.31).**
   Local coverage/profit list (bond-record metadata; no Tor, no bodies, no
   `p_id`) and an operator view-fetch that names `shard_id` only

@@ -3,7 +3,7 @@
 **Status: RULED — Round 1 CLOSED 2026-09-13; implementation in
 progress: (a0) LANDED 2026-09-13 (#734); (a)+(b) BUILT 2026-09-13 as
 one stacked PR on #734 (sub-PR 1 of the FOLLOWUPS row; §9.1
-amendment); (c) pending.**
+amendment); (c) LANDED 2026-09-16 — `N = 8` pinned (PR #746).**
 Round 1 opened 2026-09-12, grounded `dev@ba4b3c73a`. Every `SF-D`
 question is disposed: `SF-D2`, `SF-D3`, `SF-D4`, `SF-D6`, `SF-D7`,
 `SF-D10`, `SF-D13` RULED; `SF-D5` RULED and amended with the request
@@ -13,17 +13,13 @@ rule-26 halt is lifted:** implementation may begin, in the landing
 sequence §9.1 fixes (2026-09-13): (a0) the v2 pass-countersignature
 verifier alone → (a) serve side → (b) `shekyl-p-fetch` → (c) W₂ then
 `N`. This file stays in `docs/design/` because it still owns named
-residue — the **integer** `N` (`SF-D7`; `shekyl_p_fetch::MAX_INFLIGHT
-= 4` is the SPIKE-PIN with its lower-bound rationale on the constant)
-and the W₂ measurement (§8, step (c)) — the SP-T3 rig's client leg
-**is** re-based onto `shekyl-p-fetch` (2026-09-14, §9.1 (c)); what
-step (c) still waits on is the run itself, against a real regtest
-shard. Discharged: the signature domain string, KAT,
-and nonce-carrying pass record (`SF-D8` message) by (a0); the header
-spelling and encoding (`SF-D5`), the response envelope (`SF-D8`
-carrier), the `P`-side gate, the signer seam (`SF-D13`), the client
-and its `SF-D6` taxonomy, and the `SF-D4` dep-cut gate by (a)+(b).
-Archives to `docs/completed/` when (c) pins `N`. Organic draw bound `k`
+residue — `L` (`SF-D8`; `archival_attestation_anchor_lag_blocks = 4`
+PROVISIONAL; drop-to-3 is a candidate, not a pin), Sub-PR 2
+(`PDM-Q6`), and SH-2. The integer `N` (`SF-D7`;
+`shekyl_p_fetch::MAX_INFLIGHT = 8`) and the W₂ measurement are
+discharged. Archives to `docs/completed/` when this file owns no named
+residue (the "when (c) pins `N`" criterion expired 2026-09-16: `N` is
+pinned and `L` / Sub-PR 2 / SH-2 remain). Organic draw bound `k`
 is `TJ-D`'s, not this PR's.
 Identifier family `SF-` (index row `SF-D1…SF-Dn`, registered at
 birth per rule 94 §1). Process per
@@ -778,7 +774,8 @@ A scheduler that wants another transfer waits for a slot. Organic
 fill of many shards is the scheduler's loop, back-pressured by `N`,
 not an internal queue the challenge caller sits behind.
 
-**The integer is unpinned.** This round rules the *shape* (one fixed
+**The integer was unpinned at ruling (2026-09-12); PINNED `N = 8`
+2026-09-16 (amendment below).** This round rules the *shape* (one fixed
 `N`, one shared admission path, `fetch(&FetchTarget, &header)` for
 both callers — target typed per the 2026-09-13 amendment below). Caller-blind is the HTTP request, not the API:
 the path is `/shard/{id}`; the scheduler supplies the destination.
@@ -795,16 +792,26 @@ integer from that range. Not a function of `D`.
   the same `fetch(&FetchTarget, &header)` for challenge and
   organic requests (target typed; amendment below). No priority or reservation. Concurrent transfers,
   not `k`, not circuit-build cost, not a per-`D` scaling constant.
-  Integer SPIKE-PIN `N = 4` (`shekyl_p_fetch::MAX_INFLIGHT`, (b),
-  2026-09-13): the lower-bound throughput judgement and the memory
-  term (`4 × max_body_bytes() ≈ 27 MB` at the leaf figure) are on the
-  constant's doc; the SP-T3 re-base's upper bound (step (c)) replaces
-  the SPIKE-PIN.
+  Integer PINNED `N = 8` (`shekyl_p_fetch::MAX_INFLIGHT`, (c),
+  2026-09-16): largest non-churning measured width; memory
+  (`8 × max_body_bytes() ≈ 53 MB` at the leaf figure) does not bind.
+  Widths 1/2/4/8 all valid, zero serve-side sheds. Raising above 8 is a
+  new sweep (16 was not measured). Re-derive the memory term under
+  `PDM-Q6`. The constant's doc carries the reopen criteria.
 - **Reopen if:** reconstruct throughput at the cap falls below what
   TJ-D's fill scheduler requires to keep pace with chain growth; or
   wait-for-a-slot plus transfer for a challenge request approaches
   `CHALLENGE_RESPONSE_BLOCKS`. Not reopened by coverage math at
   maturity — that quantity cannot answer this question.
+
+**AMENDMENT 2026-09-16 — the integer is pinned `N = 8`.** The W₂
+run (PR #746) measured widths 1, 2, 4, 8 over the production
+`PFetchClient` (daemon→wallet, one client tor, 3.33 MB shard-0).
+All four rows valid; circuit-failure 0.0 / 1.0 / 0.0 / 0.0 %; p50
+12.41 → 13.21 s; width-8 resident 53.2 MB. Pin =
+`min(largest non-churning width, Pi 4 memory)` = 8 (memory does not
+bind). 16 was not measured. The constant's doc carries the reopen
+criteria (`SF-D7`) and the `PDM-Q6` re-derive.
 
 **AMENDMENT 2026-09-13 — the fetch target is typed, caller-supplied,
 and read from local chain state.** `fetch(destination, shard_id,
@@ -1075,6 +1082,12 @@ two minutes, drop to 3. If it lands over six, the answer is **not**
 "raise `L`" — it is that `SF-D6`'s retry budget is too generous,
 because `L` would be absorbing what the budget should bound. The
 re-pin must not simply track the measurement upward.
+
+**W₂ 2026-09-16 (single-attempt, PR #746):** cold p99 = 48.27 s;
+soak p99 = 86.06 s; both under 120 s. Verdict: DROP-TO-3 CANDIDATE —
+necessary, not sufficient. Seven attempts of the cold p99 fit under
+six minutes. `L` stays 4 until fetch-plus-retry exists (`SF-D6` /
+TJ-D). Soak p99 does not walk the candidate back and does not pin.
 
 **Residuals, recorded rather than inherited:**
 
@@ -1427,10 +1440,9 @@ Named attacker objectives this round's rulings are evaluated against:
   regenerator-arming row, already in FOLLOWUPS.
 - Vin-carried opening deletion (TJ-1 closer; a consensus cutover, not
   this client).
-- W₂ numeric pin — needs this topology measured first. The
-  measurement is daemon→wallet fetch, which needs the client: it runs
-  as §9.1 step (c) on the (b) client with a SPIKE-PIN `N`, then pins
-  `N`. Not part of this round.
+- W₂ numeric pin — **LANDED 2026-09-16** as §9.1 (c) on PR #746:
+  `shekyl_p_fetch::MAX_INFLIGHT = 8`. Serve-side SPIKE-PIN-1/2 stay
+  where `SF-D7` left them.
 - Failure-window `m`/`n` re-pin — already a FOLLOWUPS item, joint with
   reopen (d). This round adds no sizing input to it. Owner:
   `failure_window.rs` /
@@ -1553,45 +1565,38 @@ change with HTTP framing. Four PRs, each green alone, in this order:
   (a)→(b) order, stacked on #734 because the client compiles against
   (a0)'s `pass_anchor`; under the rule-06 ceiling. The stacked PR's
   description carries this disclosure.
-- **(c) W₂ on (b), then pin `N`.** The SP-T3 daemon→wallet re-base
-  runs against the (b) client — and **re-bases the rig's client leg
-  onto it**: `shekyl-p-transport::blocking_get` cannot carry the
-  `SF-D5` header, so since (a) the rig's every fetch is the identical
-  404 (disclosed at `harness.rs::fetch_once`). The leg was not swapped
-  in (b) because the production client dials without SOCKS isolation
-  and the rig's cold/warm arms *are* per-client isolation; how "cold"
-  is measured over the reuse topology is (c)'s design. Falsify by
-  `live_apparatus` passing; the upper bound it produces and (b)'s
-  lower-bound judgement pin the integer, replacing the SPIKE-PIN.
+- **(c) W₂ on (b), then pin `N` — LANDED 2026-09-16 (PR #746).** The
+  SP-T3 daemon→wallet re-base runs against the (b) client — and
+  **re-based the rig's client leg onto it**: `shekyl-p-transport::blocking_get`
+  cannot carry the `SF-D5` header. Topology: one client tor the fetches
+  dial through with no per-fetch isolation (the production posture),
+  each persona behind its own tor. "Cold" is `SIGNAL NEWNYM` on the
+  client tor; "warm" is circuit reuse. `live_apparatus` passed over
+  real Tor (user shell, 51 s). Fixture: shard-0, 3 326 976 bytes
+  (served body 3 326 980). Endpoints served 3 642, shed 0.
 
-  **Re-base BUILT 2026-09-14 (`b9c2fdb01`, `b3ec6b79a`); run
-  pending.** The rig is daemon→wallet: one client tor the fetches dial
-  through with no per-fetch isolation (the production posture), each
-  persona behind its own tor with its own guard set. "Cold" is
-  `SIGNAL NEWNYM` on the client tor before the fetch — the daemon's
-  view of a fresh circuit, not a fresh client; "warm" is circuit reuse.
-  Bring-up ends only when one `NEWNYM` round of cold probes to *every*
-  persona succeeds at once: `NEWNYM` drops the descriptor cache, and a
-  minute-old onion has not reached all its HSDirs, so "reachable once,
-  warm" let publication lag into the cold arm's first samples as
-  `Circuit`. A completed exchange the client refuses (anchor gate, key, envelope)
-  is `Refused`, kept apart from `Circuit` and `Stall` so the apparatus
-  cannot blame Tor for disagreeing with itself. The concurrency sweep
-  (`SHEKYL_SPIKE_PERSONAS` wide, powers of two) prints the `SF-D7`
-  churn table with `width × max_body_bytes()` beside each row — a row
-  the serve-side cap shed into, or one the client refused, is printed
-  `VOID` and never the ratio baseline. The cold arm's single-attempt
-  p99 is printed against the `L` note's two thresholds as the **lower
-  bound** on fetch-plus-retry it is: it can refute "under two minutes"
-  and establish "over six", never establish "under six" — that needs
-  `SF-D6`'s retry budget, so the middle reads *drop refuted, budget
-  open*, not *holds*. The binary picks neither pin. `live_apparatus` passed
-  over real Tor in 110 s (two persona tors + client tor; header sent,
-  bodies verified under each persona's key). The run itself waits on a
-  real regtest shard (§12.2 of the SP-T3 doc: ~5 h mine, then extract),
-  then a ≥ 24 h soak.
+  | Arm | n | ok | p50 | p99 | D* |
+  |---|---|---|---|---|---|
+  | Cold (`NEWNYM`) | 200 | 99.0% | 11.31 s | **48.27 s** | 17.74 s |
+  | Warm | 200 | 99.5% | 5.09 s | 12.26 s | 6.96 s |
+  | Soak ≥24 h | 1774 | 98.0% | 13.43 s | **86.06 s** | 28.13 s |
 
-The round doc archives to `docs/completed/` when (c) lands.
+  Churn (all valid, 0 VOID rows, 0 cap sheds): w1 n=100 p50=12.41 s
+  p99=32.60 s circ 0%; w2 n=200 p50=11.36 s p99=57.50 s circ 1.0%;
+  w4 n=400 p50=11.53 s p99=50.09 s circ 0%; w8 n=800 p50=13.21 s
+  p99=57.16 s circ 0% mem 53.2 MB. Pin
+  `N = min(largest non-churning width, Pi 4 memory) = 8`. Memory
+  does not bind. 16 was not measured.
+
+  **`L` verdict (printed, not pinned):** DROP-TO-3 CANDIDATE
+  (cold p99 48.3 s < 120 s); 7 attempts of that p99 fit under 6 min.
+  Soak p99 86 s still < 120 s — does not walk the candidate back,
+  still not fetch-plus-retry. `archival_attestation_anchor_lag_blocks`
+  stays 4. No further tests required for (c).
+
+The round doc stays in `docs/design/` while `L` is PROVISIONAL and
+Sub-PR 2 / SH-2 remain (the "archive when (c) lands" criterion
+expired 2026-09-16).
 
 ## 10. What this round did not find
 
