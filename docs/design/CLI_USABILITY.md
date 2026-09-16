@@ -133,11 +133,8 @@ REPL verbs:
 - `mine stop`.
 - `mine status` — active/idle, threads, hash rate in H/s, payout
   address (short form per CU-4), difficulty. The daemon's
-  `pow_algorithm` string is **not** rendered: the inherited label table
-  still emits Cryptonight names for dead pre-RandomX variants
-  (`core_rpc_server.cpp` `on_mining_status`); deleting those arms is
-  daemon-side rule-60 cleanup outside this PR's scope (FOLLOWUPS row,
-  Target: pre-genesis).
+  `pow_algorithm` string is **not** rendered (operators do not need a
+  protocol-algorithm name; the daemon always reports RandomX).
 - Aliases: `start_mining [threads]` / `stop_mining` / `mining_status`
   (Monero muscle memory; also what `USER_GUIDE.md` had been teaching).
 

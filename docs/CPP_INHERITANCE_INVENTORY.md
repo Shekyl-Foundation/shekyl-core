@@ -50,9 +50,9 @@ below for the exhaustive rules; the four categories are:
 
 | Category | Disposition | Driving workstream | Status |
 | --- | --- | --- | --- |
-| **F.C++-1** | production CryptoNight **DELETED 2026-09-15**; two residues remain (test-only `variant2_int_sqrt.h`; FCMP Bulletproof stub) | A-4/A-5/A-7/A-8 PoW workstream (RandomX v2 + LWMA-1 difficulty + CryptoNight retirement) | Pre-genesis (production discharged; category not empty) |
+| **F.C++-1** | production CryptoNight **DELETED 2026-09-15**; one residue remains (FCMP Bulletproof stub) | A-4/A-5/A-7/A-8 PoW workstream (RandomX v2 + LWMA-1 difficulty + CryptoNight retirement) | Pre-genesis (production discharged; category not empty) |
 | **F.C++-2** | Keep — justified (production utility, no Rust replacement warranted at V3.0) | Optional docstring sweep folded into PoW workstream | Pre-genesis (docstrings); permanent (files) |
-| **F.C++-3** | Keep — transitional (subsumed by B-3 architectural workstream when Rust holds master keys) | B-3 architectural workstream + wallet2 cluster | Post-genesis V3.1+ |
+| **F.C++-3** | C++ ChaCha/hmac **DELETED 2026-09-16**; remaining row is the C++ BulletproofPlus prover (transitional; B-3) | B-3 architectural workstream + remaining BP+ surface | ChaCha/hmac discharged; BP+ still transitional |
 | **F.C++-4** | Keep — Rust-FFI wrapper (consumes Rust crypto via FFI; not a parallel implementation) | None — verified Rust-FFI routing | Permanent |
 
 The category boundary is **structural** (what is the file's role in the
@@ -108,14 +108,13 @@ shared across the kept-set (e.g., `src/crypto/c_threads.h`,
 by default; if a workstream needs to migrate or delete any of these,
 the workstream's PR adds an explicit row.
 
-## F.C++-1 — production CryptoNight deleted 2026-09-15; two residues remain
+## F.C++-1 — production CryptoNight deleted 2026-09-15; one residue remains
 
 CryptoNote PoW residue. The A-4/A-5/A-7/A-8 workstream deleted
-`slow-hash.c`, `pow_cryptonight.cpp`, AES/OAES/JIT/hash-extra, and the
-variant-4 helper. Two non-production files remain in this category
-because they are not PoW and are not this workstream's deletion
-surface: `variant2_int_sqrt.h` is a **test-only** header
-(`tests/hash/`; no production caller), and `src/fcmp/bulletproofs.{cc,h}`
+`slow-hash.c`, `pow_cryptonight.cpp`, AES/OAES/JIT/hash-extra, the
+variant-4 helper, and the test-only `variant2_int_sqrt.h`. One
+non-production file remains in this category because it is not PoW and
+is not this workstream's deletion surface: `src/fcmp/bulletproofs.{cc,h}`
 is an empty non-plus Bulletproof stub (FCMP, not CryptoNight). Per
 [`60-no-monero-legacy.mdc`](../.cursor/rules/60-no-monero-legacy.mdc),
 Shekyl ships RandomX v2 from genesis. The category is **not empty**.
@@ -127,7 +126,7 @@ Shekyl ships RandomX v2 from genesis. The category is **not empty**.
 | `src/crypto/aesb.c` | AES block primitives used by CryptoNight slow-hash | **DELETED 2026-09-15** |
 | `src/crypto/oaes_lib.{c,h}`, `src/crypto/oaes_config.h` | OpenSSL AES library port (CryptoNight dependency) | **DELETED 2026-09-15** |
 | `src/crypto/CryptonightR_JIT.{c,h}`, `src/crypto/CryptonightR_JIT_stub.c`, `src/crypto/CryptonightR_template.{h,S}` | CryptoNight JIT compiler + code-generation template | **DELETED 2026-09-15** |
-| [`src/crypto/variant2_int_sqrt.h`](../src/crypto/variant2_int_sqrt.h) | CryptoNight variant-2 integer sqrt helper | **RESIDUE (test-only).** `tests/hash/` still includes it; no production caller. Not a live PoW path. |
+| `src/crypto/variant2_int_sqrt.h` | CryptoNight variant-2 integer sqrt helper | **DELETED** (test-only residue; production `slow-hash.c` already gone) |
 | `src/crypto/variant4_random_math.h` | CryptoNight variant-4 random-math helper | **DELETED 2026-09-15** |
 | `src/crypto/blake256.{c,h}` | Blake256 (CryptoNight component hash) | **DELETED 2026-09-15** |
 | `src/crypto/groestl.{c,h}`, `src/crypto/groestl_tables.h` | Groestl (CryptoNight component hash) | **DELETED 2026-09-15** |
@@ -173,30 +172,23 @@ complete enough to replace the C++ call surface without functional
 regression, or (b) external audit surfaces a concern at a specific
 file that warrants accelerated Rust migration.
 
-## F.C++-3 — Keep (transitional; B-3 architectural workstream subsumes)
+## F.C++-3 — ChaCha/hmac DELETED 2026-09-16; BulletproofPlus remains transitional
 
-Files in this category remain in C++ at V3.0 because they're load-bearing
-for the wallet2 encrypt/decrypt + auth surfaces that the B-3
-architectural workstream is migrating to Rust. Per Lens B / Lens C
-dispositions, the wallet2 cluster (B-1 deletion + B-2/C-1/C-3/C-4/C-5
-migration with stop-gap framing) lands first at V3.0; the B-3
-architectural workstream (Rust holds master keys; C++ holds encrypted
-blob; Rust handles encrypt/decrypt) lands at V3.1 and subsumes these
-files when it completes.
+`chacha.{h,cpp}` and `hmac-keccak.{h,c}` are **DELETED** (no C++ production
+caller after the CN-KDF / `account_keys` encrypt cut). The remaining row
+is the C++ BulletproofPlus prover, still transitional pending the
+re-verification subsection below.
 
 | File | Inherited role | Subsumption path |
 | --- | --- | --- |
-| [`src/crypto/chacha.{h,cpp}`](../src/crypto/chacha.h) | ChaCha20 stream cipher (used by wallet2 encrypt/decrypt) | B-3 architectural workstream: Rust handles encrypt/decrypt of on-disk blob with master key Rust holds internally; the C++ `chacha::generate_chacha_key` + `chacha::chacha_encrypt` / `chacha_decrypt` surfaces cease to exist when wallet2 cluster + B-3 land |
-| [`src/crypto/hmac-keccak.{h,c}`](../src/crypto/hmac-keccak.h) | HMAC-Keccak (used by ChaCha cipher integrity check) | Subsumed alongside `chacha.{h,cpp}` when B-3 lands; verify usage during the wallet2-cluster pre-flight to confirm no non-wallet2 callers |
-| [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc), [`src/fcmp/multiexp.{cc,h}`](../src/fcmp/multiexp.cc) | C++ BulletproofPlus prover/verifier (parallel implementation) + multi-exponentiation support | **Tentative categorization pending re-verification** — see "bulletproofs_plus re-verification" subsection below. Active C++ callers exist (`wallet2.cpp:10036`, `device_trezor/protocol.cpp:700`, `ct_semantics.cpp:326,135,142`); the F.C++-4 entry for `bulletproofs_plus.h` framed it as Rust-FFI-routed, but the call graph shows the `.cc` is the live implementation those sites call. Disposition lands when the per-call-site walk confirms FCMP++-vs-pre-FCMP++ scope and whether a Rust-side replacement is intended at V3.0 or V3.1+ |
+| `src/crypto/chacha.{h,cpp}` | ChaCha20 stream cipher (used by wallet2 encrypt/decrypt) | **DELETED.** No C++ production caller after the CN-KDF / `account_keys` encrypt cut; wallet AEAD is Rust XChaCha20-Poly1305. |
+| `src/crypto/hmac-keccak.{h,c}` | HMAC-Keccak (used by ChaCha cipher integrity check) | **DELETED.** Sole remaining callers were the unit tests; no production C++ consumer after the C++ chacha cut. |
+| [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc), [`src/fcmp/multiexp.{cc,h}`](../src/fcmp/multiexp.cc) | C++ BulletproofPlus prover/verifier (parallel implementation) + multi-exponentiation support | **Tentative categorization pending re-verification** — see "bulletproofs_plus re-verification" subsection below. Live C++ callers are `ct_semantics.cpp` VERIFY (lines 135, 142) plus unit-test PROVE sites; `wallet2.cpp` is **DELETED** (Phase 5) and the Trezor caller is **Retired 2026-08-18**. The F.C++-4 entry for `bulletproofs_plus.h` framed it as Rust-FFI-routed, but the call graph shows the `.cc` is the live implementation those remaining sites call. |
 
-**Workstream attribution.** B-3 architectural workstream + wallet2
-cluster (Lens B + C dispositions). The C-4/C-5 stop-gap context applies:
-the V3.0 wallet2 cluster PR fixes the immediate Rule violations; the
-V3.1 B-3 architectural workstream collapses the file set entirely. PR
-descriptions for both PRs must record this subsumption so reviewers and
-future auditors don't double-count the work or get confused by the
-eventual collapse.
+**Workstream attribution.** B-3 architectural workstream. ChaCha/hmac are
+**DELETED**; the remaining BP+ row is still transitional. The wallet2 cluster
+that originally shared this category is gone (Phase 5). The B-3 workstream
+collapses the remaining C++ prover when Rust holds the canonical path.
 
 ### `bulletproofs_plus` re-verification (inventory-triggered finding)
 
@@ -208,18 +200,17 @@ This claim was surfaced during PR #46 Copilot review as needing
 verification, because [`src/fcmp/bulletproofs_plus.cc`](../src/fcmp/bulletproofs_plus.cc)
 exists as a ~1000-line C++ implementation with active callers:
 
-- `src/wallet/wallet2.cpp:10036` calls
-  `ct::bulletproof_plus_PROVE`.
-- ~~`src/device_trezor/trezor/protocol.cpp:700` called
-  `bulletproof_plus_PROVE` and (line 720)
-  `ct::bulletproof_plus_VERIFY`.~~ **Retired 2026-08-18:** the Trezor
+- ~~`src/wallet/wallet2.cpp` `bulletproof_plus_PROVE`.~~ **DELETED with Phase 5:** `src/wallet/`
+  is gone; this is not a live caller.
+- ~~`src/device_trezor/trezor/protocol.cpp` `bulletproof_plus_PROVE` /
+  `bulletproof_plus_VERIFY`.~~ **Retired 2026-08-18:** the Trezor
   backend is deleted (no PQC firmware support), so this caller no
   longer exists.
-- [`src/fcmp/ct_semantics.cpp:135,142,326`](../src/fcmp/ct_semantics.cpp) calls
-  `bulletproof_plus_VERIFY` and `bulletproof_plus_PROVE` (the
-  `make_dummy_bulletproof_plus` at lines 53-81 is the
+- [`src/fcmp/ct_semantics.cpp`](../src/fcmp/ct_semantics.cpp) `bulletproof_plus_VERIFY`
+  (the `make_dummy_bulletproof_plus` helper is the
   transaction-construction-shape stand-in the F.C++-4 entry referred to,
-  not the actual prove/verify path).
+  not the actual prove/verify path). An older census also named a bond-post
+  helper; that is not a prove/verify call.
 
 These call sites resolve to the symbols defined in
 `bulletproofs_plus.cc` (line 502, etc.), not to a Rust-FFI shim. The
@@ -314,9 +305,8 @@ categorization error and must move to F.C++-2 or F.C++-3.
 This document survives until **all four categories are empty or
 permanent**:
 
-- F.C++-1: production CryptoNight **deleted 2026-09-15**. Two named
-  residues remain (test-only `variant2_int_sqrt.h`; FCMP Bulletproof
-  stub). The category is not empty.
+- F.C++-1: production CryptoNight **deleted 2026-09-15**. One named
+  residue remains (FCMP Bulletproof stub). The category is not empty.
 - F.C++-2: permanent in shape, but individual files may migrate to
   Rust over time (V3.x and beyond). Per-file entries are deleted as
   migrations complete.

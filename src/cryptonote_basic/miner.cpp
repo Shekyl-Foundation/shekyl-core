@@ -482,7 +482,7 @@ namespace cryptonote
     for(; bl.nonce != std::numeric_limits<uint32_t>::max(); bl.nonce++)
     {
       crypto::hash h;
-      gbh(bl, height, seed_hash, diffic <= 100 ? 0 : tools::get_max_concurrency(), h);
+      gbh(bl, height, seed_hash, h);
 
       if(check_hash(h, diffic))
       {
@@ -579,7 +579,7 @@ namespace cryptonote
       b.nonce = nonce;
       crypto::hash h;
 
-      m_gbh(b, height, NULL, tools::get_max_concurrency(), h);
+      m_gbh(b, height, NULL, h);
 
       if(check_hash(h, local_diff))
       {
