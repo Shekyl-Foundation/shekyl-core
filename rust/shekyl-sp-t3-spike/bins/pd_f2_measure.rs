@@ -23,10 +23,12 @@
 //! sweep: that many personas come up, **each behind its own tor**, plus the
 //! client tor every fetch dials through. The sweep runs widths
 //! `1, 2, 4, …` up to `P` (and `P` itself if not a power of two), `CONC`
-//! rounds each; every round is `NEWNYM` then `width` fetches at once. Its
-//! table is the client-side circuit-churn input `SF-D7` names as the upper
-//! bound on `N`. The box's uplink is shared across every tor here, which
-//! biases the sweep *pessimistic* — named in the report, not hidden.
+//! rounds each; every round is `NEWNYM` then `width` fetches at once, with
+//! the starting persona rotating by round so every width samples every
+//! persona. Its table is the client-side circuit-churn input `SF-D7` names
+//! as the upper bound on `N`. The box's uplink is shared across every tor
+//! here, which biases the sweep *pessimistic* — named in the report, not
+//! hidden.
 //!
 //! # What it prints for the two pins
 //!
@@ -64,9 +66,9 @@ use shekyl_p_fetch::max_body_bytes;
 use shekyl_sp_t3_spike::fixture::ShardFixture;
 use shekyl_sp_t3_spike::harness::Apparatus;
 use shekyl_sp_t3_spike::measure::{
-    attempts_within_budget, churn_table, l_verdict, p99, summarize, warmup_drift, DStar,
-    FailureKind, LVerdict, Observation, Summary, SweepPoint, L_BUDGET_TOO_GENEROUS_ABOVE,
-    L_DROP_BELOW, Q_RISK_STAR,
+    attempts_within_budget, churn_table, l_verdict, p99, summarize, sweep_round_indices,
+    warmup_drift, DStar, FailureKind, LVerdict, Observation, Summary, SweepPoint,
+    L_BUDGET_TOO_GENEROUS_ABOVE, L_DROP_BELOW, Q_RISK_STAR,
 };
 
 fn env_path(key: &str) -> Option<PathBuf> {
@@ -121,7 +123,7 @@ fn fmt_opt_secs(d: Option<Duration>) -> String {
 /// The `SF-D7` churn table, with the memory term beside each row.
 fn report_churn(points: &[SweepPoint]) {
     println!("\n=== SF-D7 upper-bound inputs: client-side churn by in-flight width ===");
-    println!("(one client tor; `width` cold fetches to `width` personas at once; shared uplink → pessimistic)");
+    println!("(one client tor; `width` cold fetches to `width` personas at once, start rotating by round; shared uplink → pessimistic)");
     println!(
         "(one PFetchClient per persona on purpose: the SPIKE-PIN admission semaphore this \
          sweep exists to replace is NOT in the path; a production daemon has one client)"
@@ -347,11 +349,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Arm 3: the concurrency sweep. At each width, `NEWNYM` once, then
     // `width` cold fetches to `width` distinct personas at once through the
     // one client tor — `width` rendezvous circuits building together on the
-    // daemon's tor. This is `SF-D7`'s client-side churn question, and the
-    // table it produces is the upper-bound input for `N`. (The serve-side
-    // contention datum the old two-persona arm doubled as is gone on
-    // purpose: the personas are on separate tors now, and serve-side load is
-    // SPIKE-F-11's, measured from other hosts.)
+    // daemon's tor. The starting persona rotates by round so a width-1 row
+    // is not "always persona 0" and a width-8 row is not "the first eight
+    // plus whatever was added." (The recorded W₂ pin used the prefix; the
+    // N=8 pin already included every persona, so it is not re-run.) This is
+    // `SF-D7`'s client-side churn question, and the table it produces is
+    // the upper-bound input for `N`. (The serve-side contention datum the
+    // old two-persona arm doubled as is gone on purpose: the personas are
+    // on separate tors now, and serve-side load is SPIKE-F-11's, measured
+    // from other hosts.)
     let mut sweep = Vec::new();
     for width in sweep_widths(personas) {
         let mut at_width = Vec::with_capacity(conc_n * width);
@@ -362,7 +368,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app.rotate_client_circuits().await?;
             // One task per fetch, as a daemon's scheduler would issue them;
             // joined in order so the round's observations land together.
-            let tasks: Vec<_> = (0..width)
+            // Starting persona rotates by round (`sweep_round_indices`).
+            let tasks: Vec<_> = sweep_round_indices(i, width, personas)
+                .into_iter()
                 .map(|p| {
                     let app = Arc::clone(&app);
                     tokio::spawn(async move { app.timed_fetch(p).await })

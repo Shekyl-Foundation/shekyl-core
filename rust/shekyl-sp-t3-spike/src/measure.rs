@@ -59,8 +59,8 @@ pub const Q_RISK_STAR: f64 = 0.1011;
 /// Why a fetch did not deliver a shard. The taxonomy §6.4 asks for.
 ///
 /// Kept coarse on purpose: a finer split would need per-request detail that §6.4
-/// forbids retaining, and these four are what distinguish "Tor was slow" from
-/// "the apparatus broke", which is the distinction the verdict turns on.
+/// forbids retaining. Timeout/Circuit/Truncated are the path; Refused is the
+/// apparatus — the distinction the void-row rule and the `q` inversion share.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureKind {
     /// The request exceeded the harness's own ceiling without completing.
@@ -68,8 +68,12 @@ pub enum FailureKind {
     /// The circuit or rendezvous could not be established, or the connection
     /// closed before any response head — no exchange happened.
     Circuit,
-    /// A response began but stopped short, or the stream broke mid-body —
-    /// the apparatus-failure signal (a truncated shard is not a slow shard).
+    /// A response head arrived, then the stream broke or closed short of
+    /// `content-length`. That is a **transport** failure (not a slow
+    /// success): it counts in `q`/`D*`, and it is **not** an `N`-void.
+    /// Voiding the row would throw away the width as a circuit-churn
+    /// sample because a mid-body RST is Tor. A complete exchange of the
+    /// wrong body length is [`Self::Refused`] instead (the apparatus).
     Truncated,
     /// A **completed** exchange the production client refused: the identical
     /// 404, a malformed head or envelope, a countersignature that does not
@@ -477,7 +481,9 @@ pub struct ChurnRow {
 
 impl ChurnRow {
     /// Whether this row can be read as an `N` input at all: neither the
-    /// serve-side cap nor a client refusal touched it.
+    /// serve-side cap nor a client refusal touched it. Mid-body
+    /// [`FailureKind::Truncated`] observations stay in the row — they are
+    /// Tor, and they do not void the width.
     #[must_use]
     pub const fn is_void(&self) -> bool {
         self.cap_refusals != 0 || self.refused != 0
@@ -534,6 +540,23 @@ pub fn churn_table(points: &[SweepPoint]) -> Vec<ChurnRow> {
         };
     }
     rows
+}
+
+/// Persona indices for one concurrency-sweep round: `width` consecutive
+/// slots wrapping from `round`, so every width samples every persona
+/// across rounds rather than always taking the prefix `0..width`.
+///
+/// The recorded W₂ pin used the prefix (`round == 0` start every time).
+/// That cannot have hidden churn at the pinned width: width 8 already
+/// included every persona. Rotation is so a later `SF-D7` re-derive is
+/// not confounded with which serving tors were in the batch.
+#[must_use]
+pub fn sweep_round_indices(round: usize, width: usize, personas: usize) -> Vec<usize> {
+    if personas == 0 || width == 0 {
+        return Vec::new();
+    }
+    let width = width.min(personas);
+    (0..width).map(|k| (round + k) % personas).collect()
 }
 
 #[cfg(test)]
@@ -664,6 +687,52 @@ mod tests {
         assert_eq!(rows[1].refused, 1);
         assert_eq!(rows[1].cap_refusals, 0);
         assert_eq!(rows[1].p99_over_width_1, None);
+    }
+
+    #[test]
+    fn a_truncated_row_is_not_void() {
+        // Mid-body RST is Tor. Voiding the width would discard the circuit-
+        // churn sample because a body that started is evidence the
+        // rendezvous came up. A complete wrong-length body is `Refused`
+        // (the apparatus) and voids; this class does not.
+        let one = SweepPoint {
+            width: 1,
+            observations: (1..=100).map(|_| Observation::success(secs(10))).collect(),
+            cap_refusals: 0,
+        };
+        let mut mixed: Vec<Observation> =
+            (1..=99).map(|_| Observation::success(secs(12))).collect();
+        mixed.push(Observation::failure(secs(1), FailureKind::Truncated));
+        let two = SweepPoint {
+            width: 2,
+            observations: mixed,
+            cap_refusals: 0,
+        };
+        let rows = churn_table(&[one, two]);
+        assert!(!rows[1].is_void());
+        assert_eq!(rows[1].refused, 0);
+        assert_eq!(rows[1].p99_over_width_1, Some(1.2));
+    }
+
+    #[test]
+    fn sweep_round_indices_rotate_the_start_and_stay_distinct() {
+        assert_eq!(sweep_round_indices(0, 1, 8), vec![0]);
+        assert_eq!(sweep_round_indices(1, 1, 8), vec![1]);
+        assert_eq!(sweep_round_indices(0, 4, 8), vec![0, 1, 2, 3]);
+        assert_eq!(sweep_round_indices(1, 4, 8), vec![1, 2, 3, 4]);
+        assert_eq!(sweep_round_indices(7, 2, 8), vec![7, 0]);
+        assert_eq!(sweep_round_indices(0, 8, 8), (0..8).collect::<Vec<_>>());
+        let wrapped = sweep_round_indices(5, 8, 8);
+        let mut sorted = wrapped.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..8).collect::<Vec<_>>());
+        assert_eq!(
+            wrapped.len(),
+            wrapped
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        );
     }
 
     /// `n` successes with the given second-latencies.
@@ -809,7 +878,7 @@ mod tests {
         assert_eq!(s.successes, 3);
         assert_eq!(s.failures, vec![(FailureKind::Truncated, 1)]);
         assert!((s.completion_rate() - 0.75).abs() < 1e-12);
-        // A truncated response is an apparatus failure, and it must not be able to
+        // A truncated response is a failure, and it must not be able to
         // masquerade as a fast success in the percentiles.
         assert_eq!(s.percentiles[0], (50, secs(4)));
     }

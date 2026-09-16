@@ -94,8 +94,9 @@ use shekyl_tor_control_client::control::onion::{
     AddOnion, OnionFlags, OnionPort, OnionPow, ServiceId,
 };
 use shekyl_tor_control_client::control::{
-    parse_socks_listeners, BootstrapReadiness, BootstrapState, Command, EventSink, ManagedTor,
-    Signal, SocksPort, TorControlClient, TorControlClientConfig, TorLaunch,
+    ask_timed, parse_socks_listeners, wait_until_ready, AskError, BootstrapReadiness, Command,
+    EventSink, ManagedTor, Signal, SocksPort, TorControlClient, TorControlClientConfig, TorLaunch,
+    WaitReadyError,
 };
 use shekyl_types::PSlot;
 use zeroize::Zeroizing;
@@ -161,6 +162,13 @@ pub const PUBLISH_TIMEOUT: Duration = Duration::from_secs(600);
 /// time a fetch believing the rotation happened when tor is still holding
 /// it, so [`Apparatus::rotate_client_circuits`] waits this out first.
 pub const NEWNYM_MIN_SPACING: Duration = Duration::from_secs(10);
+
+/// Bound on the control round-trip for `SIGNAL NEWNYM`. The signal itself
+/// is acknowledged immediately; thirty seconds is an order of magnitude
+/// above a healthy reply and far below [`PUBLISH_TIMEOUT`], so a wedged
+/// control actor fails the rotation instead of hanging a bring-up past
+/// its shared deadline.
+const NEWNYM_ASK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long a managed tor may take to bootstrap before bring-up gives up.
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(300);
@@ -235,17 +243,22 @@ impl ManagedInstance {
             readiness,
         });
 
-        let deadline = Instant::now() + BOOTSTRAP_TIMEOUT;
-        loop {
-            if matches!(*ready_rx.borrow_and_update(), BootstrapState::Ready) {
-                break;
-            }
-            if Instant::now() >= deadline {
+        match wait_until_ready(
+            &control,
+            &mut ready_rx,
+            tokio::time::Instant::now() + BOOTSTRAP_TIMEOUT,
+        )
+        .await
+        {
+            Ok(()) => {}
+            Err(WaitReadyError::Timeout | WaitReadyError::Failed) => {
                 return Err(ApparatusError::Bootstrap);
             }
-            tokio::time::timeout(Duration::from_secs(10), ready_rx.changed())
-                .await
-                .ok();
+            Err(WaitReadyError::Died) => {
+                return Err(ApparatusError::Control(
+                    "tor control actor died during bootstrap".to_owned(),
+                ));
+            }
         }
 
         let reply = control
@@ -426,8 +439,10 @@ pub async fn fetch_via(client: &PFetchClient, target: &FetchTarget) -> Result<us
 }
 
 /// The content-verify hole, plugged open: the rig measures transport and
-/// the countersignature, and compares body *length* itself so a short body
-/// stays `Truncated` rather than becoming a content refusal.
+/// the countersignature. A complete body of the wrong length is classified
+/// after the fetch (`Refused`), not inside the hole — injecting the length
+/// check here would turn a mid-body stall into a content refusal and VOID
+/// a Tor measurement.
 struct AcceptAnyContent;
 
 impl ContentVerify for AcceptAnyContent {
@@ -752,7 +767,19 @@ impl Apparatus {
             return Err(ApparatusError::NotReachable);
         }
         loop {
-            self.rotate_client_circuits().await?;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(ApparatusError::NotReachable);
+            }
+            // Rotation includes the ten-second NEWNYM spacing and a control
+            // ask; both must sit inside the shared deadline this method
+            // promises, otherwise a failed round can start a rotation after
+            // `PUBLISH_TIMEOUT` has elapsed.
+            match tokio::time::timeout(remaining, self.rotate_client_circuits()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(_elapsed) => return Err(ApparatusError::NotReachable),
+            }
             let mut probes = tokio::task::JoinSet::new();
             for (index, persona) in self.personas.iter().enumerate() {
                 probes.spawn(probe_once(
@@ -785,9 +812,10 @@ impl Apparatus {
     ///
     /// Waits out tor's ten-second rate limit first — a signal inside the
     /// window is acknowledged and deferred, which would let the "cold" fetch
-    /// run on the old circuits. The wait is not timed; call this, then
-    /// [`Self::timed_fetch`]. Process-global by nature, so a concurrent arm
-    /// rotates once before its batch, not once per fetch.
+    /// run on the old circuits. Callers that share a deadline (publication
+    /// bring-up) wrap this future; the spacing wait plus the bounded
+    /// control ask must both fit. Process-global by nature, so a concurrent
+    /// arm rotates once before its batch, not once per fetch.
     pub async fn rotate_client_circuits(&self) -> Result<(), ApparatusError> {
         let wait = {
             let last = self.last_newnym.lock().expect("newnym clock");
@@ -796,12 +824,21 @@ impl Apparatus {
         if let Some(wait) = wait.filter(|w| !w.is_zero()) {
             tokio::time::sleep(wait).await;
         }
-        let reply = self
-            .client_tor
-            .control
-            .ask(Command::Signal(Signal::NewNym))
-            .await
-            .map_err(|e| ApparatusError::Control(e.to_string()))?;
+        let reply = ask_timed(
+            &self.client_tor.control,
+            Command::Signal(Signal::NewNym),
+            NEWNYM_ASK_TIMEOUT,
+        )
+        .await
+        .map_err(|e| match e {
+            AskError::Timeout => {
+                ApparatusError::Control("SIGNAL NEWNYM did not reply in time".to_owned())
+            }
+            AskError::Control(c) => ApparatusError::Control(c.to_string()),
+            AskError::ActorGone => {
+                ApparatusError::Control("tor control actor gone during SIGNAL NEWNYM".to_owned())
+            }
+        })?;
         if reply.status() != 250 {
             return Err(ApparatusError::Control(format!(
                 "SIGNAL NEWNYM answered {}",
@@ -819,7 +856,9 @@ impl Apparatus {
     /// [`Self::rotate_client_circuits`]) descriptor fetch, intro, and
     /// rendezvous are inside the timed path (§6.2), and on a warm one only
     /// the stream is. Success means the verified body was exactly
-    /// [`Self::expected_body_len`] bytes; anything shorter is `Truncated`.
+    /// [`Self::expected_body_len`] bytes. A complete exchange of the wrong
+    /// length is [`FailureKind::Refused`] (the apparatus served the wrong
+    /// shard); a stream that broke mid-body is [`FailureKind::Truncated`].
     pub async fn timed_fetch(&self, persona_index: usize) -> Observation {
         let Some(persona) = self.personas.get(persona_index) else {
             return Observation::failure(Duration::ZERO, FailureKind::Refused);
@@ -829,10 +868,9 @@ impl Apparatus {
         let outcome = self.client.fetch_once(persona_index, &target).await;
         let elapsed = start.elapsed();
         match outcome {
-            // A short body is an apparatus failure, not a fast success — the
-            // distinction the `Truncated` class exists to keep visible.
             Ok(len) if len == self.expected_len => Observation::success(elapsed),
-            Ok(_) => Observation::failure(elapsed, FailureKind::Truncated),
+            // Complete exchange, wrong size: the fixture/endpoint, not Tor.
+            Ok(_) => Observation::failure(elapsed, FailureKind::Refused),
             Err(kind) => Observation::failure(elapsed, kind),
         }
     }
@@ -895,8 +933,9 @@ fn classify(e: &FetchError) -> FailureKind {
         FetchError::Stall(Stall::HeadTimeout | Stall::BodyTimeout | Stall::NoClose) => {
             FailureKind::Timeout
         }
-        // A response began and then stopped short, or the stream broke
-        // under it.
+        // The head arrived, then the stream broke or closed short of
+        // `content-length`. Pre-head I/O is `ClosedBeforeHead` at the
+        // emission site — `Stall::Io` is body-phase only.
         FetchError::Stall(Stall::Truncated { .. } | Stall::Io(_)) => FailureKind::Truncated,
         FetchError::Miss
         | FetchError::Malformed(_)
@@ -906,9 +945,9 @@ fn classify(e: &FetchError) -> FailureKind {
 }
 
 /// One cold probe of a persona: `Ok(true)` when it served a body of
-/// `expected_len`, `Ok(false)` when it did not (not yet reachable, short
-/// body, or `deadline` passed mid-probe), `Err` when the client refused a
-/// completed exchange. Free-standing (owned inputs) so
+/// `expected_len`, `Ok(false)` when it is not yet reachable (stall or
+/// deadline), `Err` when the client refused a completed exchange or the
+/// body length is wrong. Free-standing (owned inputs) so
 /// [`Apparatus::await_reachable`] can run one per persona in its own task.
 async fn probe_once(
     client: Arc<PFetchClient>,
@@ -922,7 +961,11 @@ async fn probe_once(
         return Err(ApparatusError::NotReachable);
     }
     match tokio::time::timeout(remaining, fetch_via(&client, &target)).await {
-        Ok(Ok(bytes)) => Ok(bytes == expected_len),
+        Ok(Ok(bytes)) if bytes == expected_len => Ok(true),
+        Ok(Ok(bytes)) => Err(ApparatusError::Refused {
+            persona: index,
+            reason: format!("served {bytes} bytes, expected {expected_len}"),
+        }),
         Ok(Err(fault)) if fault.kind() == FailureKind::Refused => Err(ApparatusError::Refused {
             persona: index,
             reason: fault.to_string(),
@@ -984,6 +1027,14 @@ mod tests {
                 declared: 10,
                 received: 3
             })),
+            FailureKind::Truncated
+        );
+        // Body-phase I/O (the only remaining `Stall::Io` site) is a mid-body
+        // break, not a missing head.
+        assert_eq!(
+            classify(&FetchError::Stall(Stall::Io(std::io::Error::from(
+                std::io::ErrorKind::ConnectionReset
+            )))),
             FailureKind::Truncated
         );
         assert_eq!(classify(&FetchError::Miss), FailureKind::Refused);
