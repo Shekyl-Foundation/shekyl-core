@@ -411,6 +411,23 @@ hash32! {
 }
 
 hash32! {
+    /// `keccak256` of a transaction's **prunable byte region** — the bytes
+    /// past `unprunable_size` (C++ `calculate_transaction_prunable_hash`).
+    ///
+    /// The fourth component of an FCMP++ spend's [`TxHash`], and what the
+    /// chain store records per transaction (`txs_prunable_hash`) so a pruned
+    /// body can be bound back to its txid. Derived once by the validation
+    /// crate beside the txid (S-CHAIN-W SCW-10); the store records it and
+    /// never computes it (C2-R8 Q4).
+    ///
+    /// **Not** the txid's substitute for an absent region: a coinbase's txid
+    /// uses the null hash as its third component, but its prunable region is
+    /// the empty byte string and this value is `keccak256("")`. Distinct
+    /// from [`TxHash`] so the two can never be swapped at a store boundary.
+    PrunableHash
+}
+
+hash32! {
     /// The root of the FCMP++ curve tree **as recorded** after a block — the
     /// membership anchor a spend's proof is verified against.
     ///
@@ -427,6 +444,31 @@ hash32! {
     /// of outputs, not an identity, and one can never be passed where the other
     /// is expected. Public, non-correlating; full-hex `Debug`.
     CurveTreeRoot
+}
+
+impl CurveTreeRoot {
+    /// The root of the **empty** curve tree — the tree state at chain height
+    /// 0, before genesis drains anything: the Selene hash-initialisation
+    /// point (`SELENE_HASH_INIT`, `shekyl-curve-generators`) in its
+    /// compressed encoding, which is what the daemon's `get_curve_tree_root`
+    /// returns for a tree with no leaves.
+    ///
+    /// Pinned **here**, as bytes, so a store can name the empty state
+    /// (`root_at(0)`, S-CHAIN-W §3.4) without depending on the crate that
+    /// computes generators. A constant pinned in one crate and defined in
+    /// another is exactly the shape that drifts silently, so the equality
+    /// `CurveTreeRoot::EMPTY == shekyl_fcmp::tree::selene_hash_init()` is
+    /// held by a KAT in `shekyl-fcmp`'s own test suite
+    /// (`tests/empty_root_kat.rs`), not by this comment.
+    ///
+    /// **Not** the all-zero encoding: 32 zero bytes decode to the identity
+    /// point, which is *not* the empty tree's root (CEN-I12's absent-key
+    /// walk, `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1).
+    pub const EMPTY: Self = Self::from_bytes([
+        0x86, 0x81, 0x75, 0x9f, 0xee, 0x95, 0xc1, 0xc9, 0x71, 0x69, 0xb8, 0xd1, 0x47, 0x6c, 0xfa,
+        0xb7, 0xda, 0x10, 0x1e, 0xde, 0xf5, 0x93, 0x2c, 0xf0, 0x30, 0x53, 0xae, 0x56, 0xf7, 0x08,
+        0x1d, 0x07,
+    ]);
 }
 
 hash32! {

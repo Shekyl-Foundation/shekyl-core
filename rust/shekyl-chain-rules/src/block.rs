@@ -6,8 +6,34 @@
 //! The block on either side of `validate`: the untrusted [`Candidate`] going
 //! in, the typed [`ValidatedBlock`] coming out inside a `ChainValid`.
 
-use shekyl_types::{BlockHash, TxHash};
+use shekyl_types::{BlockHash, PrunableHash, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
+
+/// A transaction's identities, derived once (CEN-B6) beside its body.
+///
+/// The txid, and the digest of its prunable region — the fourth component
+/// of a spend's txid and the value the chain store records as
+/// `txs_prunable_hash` (S-CHAIN-W SCW-10). Both come from the same
+/// `validate`, so no consumer re-hashes a body and the store never derives
+/// a consensus-visible value (C2-R8 Q4). For a coinbase `prunable_hash` is
+/// `keccak256("")` — what the C++ store writes — not the txid's null-hash
+/// substitute; see [`PrunableHash`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TxIdentity {
+    /// The transaction hash (txid).
+    pub hash: TxHash,
+    /// `keccak256` of the prunable byte region.
+    pub prunable_hash: PrunableHash,
+}
+
+impl TxIdentity {
+    fn of(tx: &Transaction) -> Self {
+        Self {
+            hash: TxHash::from_bytes(tx.hash()),
+            prunable_hash: PrunableHash::from_bytes(tx.prunable_hash()),
+        }
+    }
+}
 
 /// The untrusted input to `validate`: the block as received, plus the bodies
 /// of the transactions its header lists, in listed order.
@@ -48,7 +74,8 @@ impl Candidate {
 ///
 /// The candidate exactly as judged — the block is kept whole, so what the
 /// store persists is what the rules saw — with every identity derived once:
-/// `Block::hash` and `Transaction::hash`, CEN-B6's definition applied, each
+/// `Block::hash`, and per transaction a [`TxIdentity`] (`Transaction::hash`
+/// and `Transaction::prunable_hash`), CEN-B6's definition applied, each
 /// paired with its body. No consumer re-hashes and no two values can disagree
 /// about which block or transaction they describe (ruling Q4/L4: one value
 /// per identity).
@@ -61,7 +88,7 @@ impl Candidate {
 /// let forged = ValidatedBlock {
 ///     hash: todo!(),
 ///     block: todo!(),
-///     miner_tx_hash: todo!(),
+///     miner_tx: todo!(),
 ///     transactions: todo!(),
 /// };
 /// ```
@@ -69,8 +96,8 @@ impl Candidate {
 pub struct ValidatedBlock {
     hash: BlockHash,
     block: Block,
-    miner_tx_hash: TxHash,
-    transactions: Vec<(TxHash, Transaction)>,
+    miner_tx: TxIdentity,
+    transactions: Vec<(TxIdentity, Transaction)>,
 }
 
 impl ValidatedBlock {
@@ -83,11 +110,11 @@ impl ValidatedBlock {
         } = candidate;
         Self {
             hash: BlockHash::from_bytes(block.hash()),
-            miner_tx_hash: TxHash::from_bytes(block.miner_transaction.hash()),
+            miner_tx: TxIdentity::of(&block.miner_transaction),
             block,
             transactions: transactions
                 .into_iter()
-                .map(|tx| (TxHash::from_bytes(tx.hash()), tx))
+                .map(|tx| (TxIdentity::of(&tx), tx))
                 .collect(),
         }
     }
@@ -110,16 +137,16 @@ impl ValidatedBlock {
         &self.block.header
     }
 
-    /// The miner transaction with its identity.
+    /// The miner transaction with its identities.
     #[must_use]
-    pub const fn miner_tx(&self) -> (TxHash, &Transaction) {
-        (self.miner_tx_hash, &self.block.miner_transaction)
+    pub const fn miner_tx(&self) -> (TxIdentity, &Transaction) {
+        (self.miner_tx, &self.block.miner_transaction)
     }
 
     /// The listed transactions' bodies with their identities, in the
     /// header's order.
     #[must_use]
-    pub fn transactions(&self) -> &[(TxHash, Transaction)] {
+    pub fn transactions(&self) -> &[(TxIdentity, Transaction)] {
         &self.transactions
     }
 }

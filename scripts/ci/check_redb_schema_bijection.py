@@ -28,6 +28,20 @@
 
 import re
 import sys
+#
+# RUST-ONLY TABLES (S-CHAIN-W commit 1, SCW-11). The mirror assumption retires
+# one table at a time, never as a mode switch: `schema.rs` carries a named map
+# `RUST_ONLY_TABLES: &[(&str, &str)]` of tables that have NO X-macro twin, each
+# with the sentence that says why it exists. A TableDefinition with neither a
+# twin nor an entry in that map is still red with the extra-leg's original
+# refusal below — "this is how a plausible concept becomes an invented table" —
+# because that catch is the one that has to survive the transition it is now
+# in. The map asserts its own subject too (rule 47): an entry naming a table
+# that IS in the X-macro, or that has no definition, or with an empty reason,
+# is red. `--selftest` proves each refusal fires on the input built to trip it.
+
+import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +52,11 @@ CLASSES = ROOT / "rust/shekyl-chain-store/src/accumulator/class.rs"
 MACRO_RE = re.compile(r"#define SHEKYL_LMDB_TABLES\(X\)(.*?)\n\n", re.S)
 ENTRY_RE = re.compile(r'X\(\s*\w+\s*,\s*"([^"]+)"\s*\)')
 DEF_RE = re.compile(r'(?:Multimap)?TableDefinition::new\("([^"]+)"\)')
+RUST_ONLY_RE = re.compile(r"pub const RUST_ONLY_TABLES\s*:[^=]*=\s*&\[(.*?)\];", re.S)
+# One `("name", "reason")` pair; the reason may span lines via `\` string
+# continuation or adjacent literals, so it is captured loosely and joined.
+PAIR_RE = re.compile(r'\(\s*"([a-z_0-9]+)"\s*,\s*((?:"(?:[^"\\]|\\.)*"\s*)+),?\s*\)', re.S)
+LIT_RE = re.compile(r'"((?:[^"\\]|\\.)*)"', re.S)
 
 
 def dupes(names):
@@ -47,6 +66,117 @@ def dupes(names):
             out.append(n)
         seen.add(n)
     return out
+
+
+def parse_rust_only(schema: str):
+    """`RUST_ONLY_TABLES` as {name: reason}. Raises if the const is absent —
+    the map is part of the gate's subject now that one Rust-only table
+    exists, so a missing const is a missing subject, not an empty map."""
+    m = RUST_ONLY_RE.search(schema)
+    if not m:
+        raise ValueError("schema.rs: `pub const RUST_ONLY_TABLES` did not parse — subject missing")
+    body = m.group(1)
+    out = {}
+    # Every byte of the body must be consumed by a well-formed pair, a
+    # separating comma, a comment, or whitespace. `findall` alone would skip
+    # an entry it could not parse — a table named with a hyphen, a reason
+    # that is not a string literal — and the gate would then report a clean
+    # bijection over a map it had silently shortened (rule 47: the gate
+    # asserts its own subject).
+    pos = 0
+    while pos < len(body):
+        ws = re.compile(r"\s+|//[^\n]*\n?|,").match(body, pos)
+        if ws:
+            pos = ws.end()
+            continue
+        pair = PAIR_RE.match(body, pos)
+        if not pair:
+            snippet = body[pos:pos + 60].strip().splitlines()[0] if body[pos:].strip() else ""
+            raise ValueError(
+                f"RUST_ONLY_TABLES: unparsed content at offset {pos}: `{snippet}` — every "
+                "entry must be `(\"table_name\", \"reason\")` with a [a-z0-9_] name")
+        name, lits = pair.group(1), pair.group(2)
+        reason = "".join(LIT_RE.findall(lits))
+        # Rust string continuation: `\` + newline + leading whitespace is elided.
+        reason = re.sub(r"\\\n\s*", "", reason)
+        if name in out:
+            raise ValueError(f"RUST_ONLY_TABLES: `{name}` listed twice")
+        out[name] = reason.strip()
+        pos = pair.end()
+    return out
+
+
+def check(censused, defined, classed, rust_only):
+    """The set arithmetic over the three surfaces plus the Rust-only map.
+    Returns the failure list; empty means the surfaces agree."""
+    failures = []
+    for label, names in (("SHEKYL_LMDB_TABLES", censused), ("schema.rs", defined)):
+        d = dupes(names)
+        if d:
+            failures.append(f"{label}: duplicate table name(s): {', '.join(sorted(set(d)))}")
+
+    # THIRD SURFACE: slice A's accumulator class table. lib.rs requires slice B's
+    # names to be bijection-pinned against it, and two lanes maintaining one
+    # table list is precisely where drift lives — so it is checked here rather
+    # than asserted in prose. Rust-only tables have no class row: their
+    # exclusion is the reason in the map, and the class table stays the LMDB
+    # inventory.
+    d = dupes(classed)
+    if d:
+        failures.append(f"TABLE_CLASSES: duplicate table name(s): {', '.join(sorted(set(d)))}")
+    only_class = sorted(set(classed) - set(censused))
+    only_macro = sorted(set(censused) - set(classed))
+    if only_class:
+        failures.append(
+            f"{len(only_class)} name(s) in TABLE_CLASSES are NOT in the X-macro:\n    "
+            + ", ".join(only_class))
+    if only_macro:
+        failures.append(
+            f"{len(only_macro)} censused table(s) carry NO accumulator class:\n    "
+            + ", ".join(only_macro)
+            + "\n    Slice A assigns one of five tokens to every table; a gap here means "
+              "the two slices disagree about the inventory.")
+
+    missing = sorted(set(censused) - set(defined))
+    extra = sorted(set(defined) - set(censused))
+    if missing:
+        failures.append(
+            f"{len(missing)} censused table(s) have NO redb TableDefinition:\n    "
+            + ", ".join(missing)
+            + "\n    Every table in the X-macro must be mapped; a gap here ships a store "
+              "missing a table LMDB has.")
+
+    # FOURTH SURFACE: the Rust-only map. Every extra definition must be named
+    # there with a reason; everything named there must be an extra definition.
+    unnamed = sorted(set(extra) - set(rust_only))
+    if unnamed:
+        failures.append(
+            f"{len(unnamed)} TableDefinition(s) name a table that is NOT in the X-macro "
+            f"and NOT in RUST_ONLY_TABLES:\n    "
+            + ", ".join(unnamed)
+            + "\n    This is how a plausible concept becomes an invented table — check "
+              "whether it is really a row inside another table. If it is genuinely a "
+              "table LMDB never had, name it in RUST_ONLY_TABLES with the sentence that "
+              "says why.")
+    mirrored = sorted(set(rust_only) & set(censused))
+    if mirrored:
+        failures.append(
+            f"{len(mirrored)} RUST_ONLY_TABLES entr(y/ies) name a table that IS in the X-macro:\n    "
+            + ", ".join(mirrored)
+            + "\n    A mirrored table is not Rust-only; the map is for tables with no twin.")
+    dangling = sorted(set(rust_only) - set(defined))
+    if dangling:
+        failures.append(
+            f"{len(dangling)} RUST_ONLY_TABLES entr(y/ies) have NO TableDefinition:\n    "
+            + ", ".join(dangling)
+            + "\n    The map names definitions that exist; a stale entry is a deleted table "
+              "whose reason outlived it.")
+    unreasoned = sorted(n for n, r in rust_only.items() if len(r.split()) < 8)
+    if unreasoned:
+        failures.append(
+            f"{len(unreasoned)} RUST_ONLY_TABLES entr(y/ies) carry no reason (a sentence, "
+            f"not a token):\n    " + ", ".join(unreasoned))
+    return failures
 
 
 def main():
@@ -65,6 +195,10 @@ def main():
 
     schema = SCHEMA.read_text(encoding="utf-8")
     defined = DEF_RE.findall(schema)
+    try:
+        rust_only = parse_rust_only(schema)
+    except ValueError as e:
+        report([str(e)])
 
     # Subject assertions: an empty side covers trivially.
     if not censused:
@@ -74,61 +208,23 @@ def main():
     if failures:
         report(failures)
 
-    for label, names in (("SHEKYL_LMDB_TABLES", censused), ("schema.rs", defined)):
-        d = dupes(names)
-        if d:
-            failures.append(f"{label}: duplicate table name(s): {', '.join(sorted(set(d)))}")
-
-    # THIRD SURFACE: slice A's accumulator class table. lib.rs requires slice B's
-    # names to be bijection-pinned against it, and two lanes maintaining one
-    # table list is precisely where drift lives — so it is checked here rather
-    # than asserted in prose.
     ctext = CLASSES.read_text(encoding="utf-8")
     cstart = ctext.find("pub const TABLE_CLASSES")
-    classed = []
     if cstart < 0:
-        failures.append(f"{CLASSES.name}: TABLE_CLASSES did not parse — third surface missing")
-    else:
-        block = ctext[cstart:]
-        block = block[: block.index("\n];")]
-        classed = re.findall(r'"([a-z_0-9]+)"', block)
-        if not classed:
-            failures.append(f"{CLASSES.name}: parsed ZERO class entries — third surface missing")
-        d = dupes(classed)
-        if d:
-            failures.append(f"TABLE_CLASSES: duplicate table name(s): {', '.join(sorted(set(d)))}")
-        only_class = sorted(set(classed) - set(censused))
-        only_macro = sorted(set(censused) - set(classed))
-        if only_class:
-            failures.append(
-                f"{len(only_class)} name(s) in TABLE_CLASSES are NOT in the X-macro:\n    "
-                + ", ".join(only_class))
-        if only_macro:
-            failures.append(
-                f"{len(only_macro)} censused table(s) carry NO accumulator class:\n    "
-                + ", ".join(only_macro)
-                + "\n    Slice A assigns one of five tokens to every table; a gap here means "
-                  "the two slices disagree about the inventory.")
+        report([f"{CLASSES.name}: TABLE_CLASSES did not parse — third surface missing"])
+    block = ctext[cstart:]
+    block = block[: block.index("\n];")]
+    classed = re.findall(r'"([a-z_0-9]+)"', block)
+    if not classed:
+        report([f"{CLASSES.name}: parsed ZERO class entries — third surface missing"])
 
-    missing = sorted(set(censused) - set(defined))
-    extra = sorted(set(defined) - set(censused))
-    if missing:
-        failures.append(
-            f"{len(missing)} censused table(s) have NO redb TableDefinition:\n    "
-            + ", ".join(missing)
-            + "\n    Every table in the X-macro must be mapped; a gap here ships a store "
-              "missing a table LMDB has.")
-    if extra:
-        failures.append(
-            f"{len(extra)} TableDefinition(s) name a table that is NOT in the X-macro:\n    "
-            + ", ".join(extra)
-            + "\n    This is how a plausible concept becomes an invented table — check "
-              "whether it is really a row inside another table.")
-
-    report(failures)
+    report(check(censused, defined, classed, rust_only))
+    mirrored = len(set(defined) & set(censused))
     print(f"redb schema bijection: {len(censused)} censused LMDB tables <-> "
-          f"{len(defined)} redb table definitions <-> {len(classed)} accumulator classes; "
-          f"no duplicates, no gaps in any direction")
+          f"{mirrored} mirrored redb table definitions <-> {len(classed)} accumulator classes; "
+          f"+ {len(rust_only)} Rust-only table(s) with a named reason "
+          f"({', '.join(sorted(rust_only))}); {len(defined)} definitions total; "
+          f"no duplicates, no unnamed extras, no gaps in any direction")
 
 
 def report(failures):
@@ -139,5 +235,101 @@ def report(failures):
         sys.exit(1)
 
 
+# --- self-test: every refusal fires on the input built to trip it ---------
+
+_OK_SCHEMA = '''
+pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[(
+    "undo_log",
+    "the pop journal: one row of pre-images per height, replacing the C++ \\
+     journals",
+)];
+'''
+
+
+def _expect(name, failures, needle):
+    if not any(needle in f for f in failures):
+        raise SystemExit(
+            f"selftest {name}: expected a refusal mentioning {needle!r}, got:\n  "
+            + "\n  ".join(failures or ["<clean>"]))
+
+
+def selftest():
+    censused = ["a", "b", "c"]
+    classed = ["a", "b", "c"]
+    rust_only = parse_rust_only(_OK_SCHEMA)
+    if rust_only != {"undo_log": "the pop journal: one row of pre-images per height, replacing the C++ journals"}:
+        raise SystemExit(f"selftest parse: got {rust_only!r}")
+
+    clean = check(censused, ["a", "b", "c", "undo_log"], classed, rust_only)
+    if clean:
+        raise SystemExit("selftest clean: expected no failures, got:\n  " + "\n  ".join(clean))
+    also_clean = check(censused, censused, classed, {})
+    if also_clean:
+        raise SystemExit("selftest mirror-only: expected no failures, got:\n  " + "\n  ".join(also_clean))
+
+    _expect("unnamed extra keeps the original refusal",
+            check(censused, ["a", "b", "c", "undo_log", "invented"], classed, rust_only),
+            "This is how a plausible concept becomes an invented table")
+    _expect("unnamed extra names the table",
+            check(censused, ["a", "b", "c", "invented"], classed, rust_only),
+            "invented")
+    _expect("map entry that is mirrored",
+            check(censused, ["a", "b", "c"], classed, {"a": "eight words of reason are required here now"}),
+            "IS in the X-macro")
+    _expect("map entry with no definition",
+            check(censused, ["a", "b", "c"], classed, rust_only),
+            "have NO TableDefinition")
+    _expect("map entry with a token for a reason",
+            check(censused, ["a", "b", "c", "undo_log"], classed, {"undo_log": "journal"}),
+            "carry no reason")
+    _expect("missing definition",
+            check(censused, ["a", "b", "undo_log"], classed, rust_only),
+            "have NO redb TableDefinition")
+    _expect("class table drift",
+            check(censused, ["a", "b", "c", "undo_log"], ["a", "b"], rust_only),
+            "carry NO accumulator class")
+    _expect("duplicate definition",
+            check(censused, ["a", "a", "b", "c", "undo_log"], classed, rust_only),
+            "duplicate table name")
+    try:
+        parse_rust_only("pub const OTHER: u8 = 1;")
+    except ValueError as e:
+        if "subject missing" not in str(e):
+            raise SystemExit(f"selftest absent map: wrong message {e}")
+    else:
+        raise SystemExit("selftest absent map: expected a refusal")
+    # A malformed entry beside a valid one must be refused, not skipped: with
+    # `findall` the hyphenated name below vanished and the map read as one
+    # clean entry (PR #757 review).
+    malformed = '''
+pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
+    ("undo_log", "the pop journal: one row of pre-images per height, replacing the C++ journals"),
+    ("bad-name", "a reason long enough to pass the eight-word floor of the reason check"),
+];
+'''
+    try:
+        parse_rust_only(malformed)
+    except ValueError as e:
+        if "unparsed content" not in str(e) or "bad-name" not in str(e):
+            raise SystemExit(f"selftest unparsed entry: wrong message {e}")
+    else:
+        raise SystemExit("selftest unparsed entry: expected a refusal")
+    # Comments and trailing commas between entries are fine.
+    commented = '''
+pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
+    // the journal
+    ("undo_log", "the pop journal: one row of pre-images per height, replacing the C++ journals"),
+];
+'''
+    if parse_rust_only(commented) != {
+        "undo_log": "the pop journal: one row of pre-images per height, replacing the C++ journals"
+    }:
+        raise SystemExit("selftest commented map: did not parse")
+    print("redb schema bijection selftest: 2 clean shapes pass, 9 refusals fire")
+
+
 if __name__ == "__main__":
-    main()
+    if "--selftest" in sys.argv:
+        selftest()
+    else:
+        main()

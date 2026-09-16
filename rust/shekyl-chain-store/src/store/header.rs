@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The store header: two `properties` cells the store owns outright — and
+//! The store header: the `properties` cells the store owns outright — and
 //! the typed cell access every other `properties` read or write goes
 //! through.
 //!
@@ -17,9 +17,19 @@
 //!   [`Provenance`]: sealed with the creating session's stubbed set and
 //!   [widened](widen) inside every stubbed batch's own transaction, so the
 //!   taint commits with the rows it describes or not at all.
+//! - `settlement_epoch_blocks` ([`SettlementEpochBlocksCell`]) — the
+//!   schedule the file was built under (SCW-2): sealed from the creating
+//!   session's value, compared at every open, refused on mismatch. Never
+//!   widened or rewritten — a datadir has one schedule for its whole life.
+//! - `rule_coverage_gaps` ([`CoverageGapsCell`]) and `passed_through_facts`
+//!   ([`PassedThroughFactsCell`]) — the other two [`Provenance`] components
+//!   (S-CHAIN-W §3.8, §3.2): sealed empty, [widened](widen_gaps) by
+//!   `connect` inside its own batch, read back with `apply_policy` at
+//!   every open and every commit.
 //!
-//! No public write path reaches either cell. [`seal`] and [`widen`] are
-//! their only writers; [`put`] is `pub(super)` and its public caller,
+//! No public write path reaches any of them. [`seal`], [`widen`],
+//! [`widen_gaps`] and [`widen_passed_through`] are their only writers;
+//! [`put`] is `pub(super)` and its public caller,
 //! `WriteBatch::upsert_property`, is bounded to chain-state cells.
 //! Store-owned header writes are `put`, not `upsert`: they are not
 //! choosing a keyed-table verb.
@@ -27,33 +37,64 @@
 use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 
 use crate::apply_policy::ApplyPolicy;
-use crate::codec::{ApplyPolicyCell, Canonical, PropertyCell, SchemaVersionCell, SCHEMA_VERSION};
+use crate::codec::{
+    ApplyPolicyCell, Canonical, CoverageGaps, CoverageGapsCell, PassedThroughFacts,
+    PassedThroughFactsCell, PropertyCell, SchemaVersionCell, SettlementEpochBlocks,
+    SettlementEpochBlocksCell, SCHEMA_VERSION,
+};
 use crate::provenance::Provenance;
 use crate::schema::PROPERTIES;
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 
-/// Write both header cells into a fresh store.
+/// Write the header cells into a fresh store.
 ///
 /// The provenance a fresh file starts with is the creating session's own
-/// stubbed set: a store *created* under a stubbed policy has been written
-/// under it from its first byte.
-pub(super) fn seal(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
+/// stubbed set (and no gaps, no pass-through — nothing has been connected):
+/// a store *created* under a stubbed policy has been written under it from
+/// its first byte. The schedule pin is the session's value, and is never
+/// written again.
+pub(super) fn seal(
+    txn: &WriteTransaction,
+    policy: ApplyPolicy,
+    epoch: SettlementEpochBlocks,
+) -> Result<Provenance, StoreError> {
     let provenance = Provenance::FULL.widened_by(policy);
     put::<SchemaVersionCell>(txn, &SCHEMA_VERSION)?;
     put::<ApplyPolicyCell>(txn, &provenance.stubbed())?;
+    put::<SettlementEpochBlocksCell>(txn, &epoch)?;
+    put::<CoverageGapsCell>(txn, &CoverageGaps::NONE)?;
+    put::<PassedThroughFactsCell>(txn, &PassedThroughFacts::NONE)?;
     Ok(provenance)
 }
 
-/// Check an existing store's layout version and read its provenance.
+/// Read the three provenance components from an open `properties` table.
+/// Each is sealed at create, so absence is corruption, not "fresh".
+fn provenance_of(
+    table: &impl ReadableTable<&'static str, &'static [u8]>,
+) -> Result<Provenance, StoreError> {
+    let stubbed = get::<ApplyPolicyCell>(table)?.ok_or(absent::<ApplyPolicyCell>())?;
+    let gaps = get::<CoverageGapsCell>(table)?.ok_or(absent::<CoverageGapsCell>())?;
+    let passed = get::<PassedThroughFactsCell>(table)?.ok_or(absent::<PassedThroughFactsCell>())?;
+    Ok(Provenance::of_parts(stubbed, gaps, passed))
+}
+
+/// Check an existing store's layout version and schedule pin, and read its
+/// provenance.
 ///
 /// # Errors
 ///
 /// [`StoreCannot::SchemaVersionAbsent`] if there is no `properties` table
 /// or no `schema_version` cell; [`StoreCannot::SchemaVersionMismatch`] if
-/// the version is not [`SCHEMA_VERSION`]; [`StoreInvariant::CellCorrupt`] if
-/// a header cell is present but malformed, or `apply_policy` is missing.
-pub(super) fn verify(txn: &ReadTransaction) -> Result<Provenance, StoreError> {
+/// the version is not [`SCHEMA_VERSION`];
+/// [`StoreCannot::SettlementEpochMismatch`] if the file was built under a
+/// schedule other than `epoch`; [`StoreInvariant::CellCorrupt`] if a header
+/// cell is present but malformed, or `apply_policy` /
+/// `settlement_epoch_blocks` is missing.
+pub(super) fn verify(
+    txn: &ReadTransaction,
+    epoch: SettlementEpochBlocks,
+) -> Result<Provenance, StoreError> {
     let table = match txn.open_table(PROPERTIES) {
         Ok(table) => table,
         Err(redb::TableError::TableDoesNotExist(_)) => {
@@ -69,25 +110,74 @@ pub(super) fn verify(txn: &ReadTransaction) -> Result<Provenance, StoreError> {
         }
         .into());
     }
-    let stubbed = get::<ApplyPolicyCell>(&table)?.ok_or(absent::<ApplyPolicyCell>())?;
-    Ok(Provenance::of(stubbed))
+    let pinned =
+        get::<SettlementEpochBlocksCell>(&table)?.ok_or(absent::<SettlementEpochBlocksCell>())?;
+    if pinned != epoch {
+        return Err(StoreCannot::SettlementEpochMismatch {
+            pinned,
+            session: epoch,
+        }
+        .into());
+    }
+    provenance_of(&table)
 }
 
-/// Widen the provenance cell by `policy`'s stubbed set, in `txn`.
+/// Widen the `apply_policy` cell by `policy`'s stubbed set, in `txn`, and
+/// read back the whole provenance the file now records.
 ///
 /// Read-modify-write inside the batch's own transaction: the union is
-/// over what the file *currently* records, and it commits when the batch
-/// does. A `Full` policy is a no-op that still reads the cell.
+/// over what the file *currently* records — including any gaps or
+/// pass-through the batch's own connects widened — and it commits when
+/// the batch does. A `Full` policy is a no-op that still reads the cells.
 pub(super) fn widen(txn: &WriteTransaction, policy: ApplyPolicy) -> Result<Provenance, StoreError> {
     let current = {
         let table = txn.open_table(PROPERTIES).map_err(EngineError::Table)?;
-        get::<ApplyPolicyCell>(&table)?.ok_or(absent::<ApplyPolicyCell>())?
+        provenance_of(&table)?
     };
-    let after = Provenance::of(current).widened_by(policy);
-    if after.stubbed() != current {
+    let after = current.widened_by(policy);
+    if after.stubbed() != current.stubbed() {
         put::<ApplyPolicyCell>(txn, &after.stubbed())?;
     }
     Ok(after)
+}
+
+/// Widen the `rule_coverage_gaps` cell by `gaps`, in `txn` (a connect that
+/// was handed a verdict which did not evaluate them). Empty `gaps` is a
+/// no-op that does not touch the cell.
+pub(super) fn widen_gaps(txn: &WriteTransaction, gaps: CoverageGaps) -> Result<(), StoreError> {
+    if gaps.is_empty() {
+        return Ok(());
+    }
+    let current = {
+        let table = txn.open_table(PROPERTIES).map_err(EngineError::Table)?;
+        get::<CoverageGapsCell>(&table)?.ok_or(absent::<CoverageGapsCell>())?
+    };
+    let after = current.union(gaps);
+    if after != current {
+        put::<CoverageGapsCell>(txn, &after)?;
+    }
+    Ok(())
+}
+
+/// Widen the `passed_through_facts` cell by `facts`, in `txn` (a connect
+/// that recorded them without the validator deriving them). Empty is a
+/// no-op that does not touch the cell.
+pub(super) fn widen_passed_through(
+    txn: &WriteTransaction,
+    facts: PassedThroughFacts,
+) -> Result<(), StoreError> {
+    if facts.is_empty() {
+        return Ok(());
+    }
+    let current = {
+        let table = txn.open_table(PROPERTIES).map_err(EngineError::Table)?;
+        get::<PassedThroughFactsCell>(&table)?.ok_or(absent::<PassedThroughFactsCell>())?
+    };
+    let after = current.union(facts);
+    if after != current {
+        put::<PassedThroughFactsCell>(txn, &after)?;
+    }
+    Ok(())
 }
 
 /// Read cell `C` from an open `properties` table.

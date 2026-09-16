@@ -39,10 +39,30 @@
 //!   atomically with each stubbed commit, so a reopen reads the file's
 //!   history instead of guessing.
 //!
+//! - **DRS-E1 increment 3 (S-CHAIN-W)** — the connect/pop write set
+//!   (`docs/design/DRS_E1_SCHAIN_W.md`). [`store::WriteBatch::connect`]
+//!   takes the validator's `ChainValid` (brand-bound to the batch and to
+//!   [`store::BatchView`], the `ChainView` projected from it) plus
+//!   [`store::ConnectFacts`] — the consensus-visible values the store
+//!   records and never derives, each stamped `Derived` or `PassedThrough`
+//!   — and writes the 17-table set in the C++ funnel's phase order, every
+//!   write a declared verb bound to its `SI-` row and journaled.
+//!   [`store::WriteBatch::pop`] is the reverse replay of one
+//!   [`schema::UNDO_LOG`] row (the first table with no LMDB twin, named
+//!   with its reason in [`schema::RUST_ONLY_TABLES`]; tables are named by
+//!   declaration ordinal, so a reorder or removal is a layout bump).
+//!   [`provenance::Provenance`] has three monotone components — stubbed
+//!   applies, [`codec::CoverageGaps`], [`codec::PassedThroughFacts`] — all
+//!   empty ⇔ parity evidence. A store invariant on connect or pop halts
+//!   the writer ([`store::ChainStore::connect_state`]). The settlement
+//!   -epoch schedule is pinned in the header at create and refused on
+//!   mismatch at every open.
+//!
 //! Slice B's table names are bijection-pinned against
 //! [`accumulator::TABLE_CLASSES`] **and** against the X-macro
 //! `SHEKYL_LMDB_TABLES` by `scripts/ci/check_redb_schema_bijection.py` —
-//! three surfaces, all 49, checked in every direction. Codecs for the
+//! three surfaces, all 49 mirrored tables, checked in every direction, plus
+//! the Rust-only map for the tables LMDB never had. Codecs for the
 //! remaining tables' values land per surface (S-CHAIN-W onward) and
 //! inherit both that pin and the snapshot gate.
 

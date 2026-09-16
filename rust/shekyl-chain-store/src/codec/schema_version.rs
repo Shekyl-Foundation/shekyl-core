@@ -24,7 +24,14 @@ use super::{Canonical, CodecError};
 ///
 /// - `1` — DRS-E1 increment 2: the `properties` header cells
 ///   (`schema_version`, `apply_policy`) and the scalar codecs.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(1);
+/// - `2` — DRS-E1 increment 3 (S-CHAIN-W): the `undo_log` table (first
+///   Rust-only table; `TableOrdinal` 49) and its `UndoLog` row codec
+///   (commit 1); the connect write set's value codecs — `BlockInfo`,
+///   `TxIndex`, `OutTx`, `OutKey`, `TxOutputIndices`, `CurveRoot` — pinned
+///   to the LMDB layouts minus the collapsed key (commit 2). Ordinals are
+///   now load-bearing, so any later reorder **or removal** in the `tables!`
+///   list is also a bump.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(2);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -77,11 +84,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_current_version_is_the_first_and_encodes_as_u64_le() {
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(1));
-        assert_eq!(SCHEMA_VERSION.encode(), [1, 0, 0, 0, 0, 0, 0, 0]);
+    fn the_current_version_is_pinned_and_encodes_as_u64_le() {
+        // Moves with every layout bump, on purpose: the history list above
+        // this constant is the record, and this line is what makes a bump
+        // without a history entry visible in review.
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(2));
+        assert_eq!(SCHEMA_VERSION.encode(), [2, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[1, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[2, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

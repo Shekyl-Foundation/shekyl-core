@@ -1110,6 +1110,15 @@ pub enum Ct {
 impl Ct {
     /// Write the ct section.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        self.write_base(w)?;
+        self.write_pqc_auths(w)?;
+        self.write_prunable(w)
+    }
+
+    /// The ct type byte, the fee / reference block (FCMP only) and the
+    /// committed base — everything before the tx-level `pqc_auths`. The
+    /// store's `txs_pruned` segment ends here.
+    fn write_base<W: Write>(&self, w: &mut W) -> io::Result<()> {
         match self {
             Ct::Null(base) => {
                 w.write_all(&[CT_TYPE_NULL])?;
@@ -1119,26 +1128,40 @@ impl Ct {
                 fee,
                 reference_block,
                 base,
-                pqc_auths,
-                prunable,
+                ..
             } => {
                 w.write_all(&[CT_TYPE_FCMP])?;
                 write_varint(*fee, w)?;
                 w.write_all(reference_block)?;
-                base.write(w)?;
-                // tx-level pqc_auths: count == nvin, no length prefix (empty in
-                // the serve-credit form).
-                for auth in pqc_auths {
-                    auth.write(w)?;
-                }
-                // prunable follows iff present (absent only for the
-                // storage-pruned spend form).
-                if let Some(prunable) = prunable {
-                    prunable.write(w)?;
-                }
-                Ok(())
+                base.write(w)
             }
         }
+    }
+
+    /// The tx-level `pqc_auths`: count == nvin, no length prefix (empty in
+    /// the serve-credit form; absent for `Null`). The store's
+    /// `txs_pqc_auths` segment.
+    fn write_pqc_auths<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        if let Ct::Fcmp { pqc_auths, .. } = self {
+            for auth in pqc_auths {
+                auth.write(w)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The prunable region: present iff the spend carries one (absent for
+    /// `Null` and for the storage-pruned spend form). The store's
+    /// `txs_prunable` segment.
+    fn write_prunable<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        if let Ct::Fcmp {
+            prunable: Some(prunable),
+            ..
+        } = self
+        {
+            prunable.write(w)?;
+        }
+        Ok(())
     }
 
     /// Read the ct section. `inputs`/`outputs` (the vin/vout counts) size the
@@ -1319,12 +1342,70 @@ pub struct Transaction {
     pub ct: Ct,
 }
 
+/// A transaction's bytes as the chain store's three segments.
+///
+/// `concat(pruned, pqc_auths, prunable)` is exactly [`Transaction::write`]'s
+/// output; the cuts are the two offsets the C++ store takes as
+/// `pqc_auths_offset` and `unprunable_size` (`db_lmdb.cpp`
+/// `add_transaction_data`), so `txs_pruned` / `txs_pqc_auths` /
+/// `txs_prunable` hold byte-identical rows on both engines. Layout, not
+/// consensus: nothing here changes what [`Transaction::write`] emits.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TxSegments {
+    /// Version, prefix, ct type byte, fee / reference block (FCMP) and the
+    /// committed base — `txs_pruned`.
+    pub pruned: Vec<u8>,
+    /// The tx-level `pqc_auths` — `txs_pqc_auths`. Empty for a coinbase,
+    /// for the serve-credit form, and for a spend with no inputs; the
+    /// store writes no row for an empty segment (LMDB parity).
+    pub pqc_auths: Vec<u8>,
+    /// The prunable region — `txs_prunable`. Empty when absent; the store
+    /// writes the (empty) row regardless (LMDB parity).
+    pub prunable: Vec<u8>,
+}
+
+impl TxSegments {
+    /// The whole transaction, as [`Transaction::write`] emits it.
+    #[must_use]
+    pub fn concat(&self) -> Vec<u8> {
+        let mut out =
+            Vec::with_capacity(self.pruned.len() + self.pqc_auths.len() + self.prunable.len());
+        out.extend_from_slice(&self.pruned);
+        out.extend_from_slice(&self.pqc_auths);
+        out.extend_from_slice(&self.prunable);
+        out
+    }
+}
+
 impl Transaction {
     /// Write the transaction.
     pub fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(TX_VERSION, w)?;
         self.prefix.write(w)?;
         self.ct.write(w)
+    }
+
+    /// The transaction's bytes cut into the store's three segments
+    /// ([`TxSegments`]). Same bytes as [`Self::write`], split where the
+    /// store keeps them.
+    ///
+    /// # Errors
+    ///
+    /// Only what writing into a `Vec` can raise — in practice, none.
+    pub fn write_segments(&self) -> io::Result<TxSegments> {
+        let mut pruned = Vec::new();
+        write_varint(TX_VERSION, &mut pruned)?;
+        self.prefix.write(&mut pruned)?;
+        self.ct.write_base(&mut pruned)?;
+        let mut pqc_auths = Vec::new();
+        self.ct.write_pqc_auths(&mut pqc_auths)?;
+        let mut prunable = Vec::new();
+        self.ct.write_prunable(&mut prunable)?;
+        Ok(TxSegments {
+            pruned,
+            pqc_auths,
+            prunable,
+        })
     }
 
     /// Read the transaction.
@@ -1549,6 +1630,26 @@ impl Transaction {
         self.hash_with_prunable(None)
     }
 
+    /// `keccak256` of the **prunable byte region** — exactly the bytes
+    /// [`Self::write_segments`] puts in `prunable`, which is what the C++
+    /// `calculate_transaction_prunable_hash` hashes
+    /// (`blob[unprunable_size..]`) and what the chain store records in
+    /// `txs_prunable_hash`.
+    ///
+    /// This is **not** the txid's prunable component in every case: when the
+    /// region is absent (a coinbase, or a storage-pruned spend) the txid
+    /// substitutes the null hash, while this is `keccak256("")` — the C++
+    /// store's row for a coinbase is the latter. When the region is present
+    /// the two coincide, and [`Self::hash`] is built from this value.
+    #[must_use]
+    pub fn prunable_hash(&self) -> [u8; 32] {
+        let mut prunable = Vec::new();
+        self.ct
+            .write_prunable(&mut prunable)
+            .expect("Vec write is infallible");
+        keccak256(&prunable)
+    }
+
     /// The consensus transaction hash of a **pruned** body, with the prunable
     /// digest supplied instead of computed.
     ///
@@ -1611,13 +1712,9 @@ impl Transaction {
                 // section is absent and its hash is the caller's operand.
                 let h_prunable = match (supplied_prunable, prunable) {
                     (Some(h), _) => h,
-                    (None, Some(prunable)) => {
-                        let mut prunable_buf = Vec::new();
-                        prunable
-                            .write(&mut prunable_buf)
-                            .expect("Vec write is infallible");
-                        keccak256(&prunable_buf)
-                    }
+                    // Present: the region's digest, the same bytes
+                    // `prunable_hash` hashes (one construction).
+                    (None, Some(_)) => self.prunable_hash(),
                     (None, None) => [0u8; 32],
                 };
 
