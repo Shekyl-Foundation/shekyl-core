@@ -23,30 +23,63 @@
 //! ```text
 //! UndoLog   := count:u32 LE, then `count` entries
 //! UndoEntry := tag:u8, table:u32 LE, key:bytes, payload
-//!   tag 1  Inserted       payload = ∅
+//!   tag 1  Inserted       payload = post:[u8; 32]
 //!   tag 2  MultiInserted  payload = value:bytes
-//!   tag 3  Replaced       payload = 0x00 | 0x01 prior:bytes
+//!   tag 3  Replaced       payload = (0x00 | 0x01 prior:bytes), post:[u8; 32]
 //! bytes     := len:u32 LE, len raw bytes
+//! post      := cSHAKE256-32(POST_IMAGE_DST, value the write left under key)
 //! ```
+//!
+//! # The post-image makes SI-6's second arm exact
+//!
+//! An `Inserted` entry's inverse removes the key and a `Replaced` entry's
+//! restores `prior`; both would also "succeed" against a key whose value is
+//! not what the connect wrote — something wrote around the journal, or the
+//! file is corrupt — and pop would report `Reversed` while quietly moving
+//! the store to a state no journal describes. So every keyed entry carries
+//! a 32-byte digest of the value the write **left** under the key, and
+//! replay compares it against the value it displaces before counting the
+//! entry reversed; a mismatch is SI-6 (`UndoLogIncoherent`). A multimap
+//! member needs none: its inverse removes exactly `(key, value)`, which is
+//! already the full post-image. The digest is domain-separated
+//! ([`POST_IMAGE_DST`]) so a value's digest cannot be confused with any
+//! other 32-byte quantity the store hashes (rule 30).
 //!
 //! Variable-width, so `FIXED_WIDTH` is `None`; strict as every codec here
 //! is — a short buffer, a tag that names no variant, a `has_prior` byte
-//! other than 0/1, or trailing bytes are each [`CodecError`], and the row
-//! is then SI-7's (`undo_log` is a typed cell like any other).
+//! other than 0/1, a count the bytes cannot hold, or trailing bytes are
+//! each [`CodecError`], and the row is then SI-7's (`undo_log` is a typed
+//! cell like any other).
+
+use shekyl_crypto_hash::cshake256_32;
 
 use super::{Canonical, CodecError};
 use crate::schema::TableOrdinal;
+
+/// The cSHAKE256 customization string under which an undo entry's
+/// post-image is digested. Frozen: it is part of the row layout.
+pub const POST_IMAGE_DST: &[u8] = b"shekyl.chain_store.undo_log.post_image.v1";
+
+/// The digest of the value a journaled write left under its key —
+/// what replay must find there to count the entry reversed.
+#[must_use]
+pub fn post_image(value: &[u8]) -> [u8; 32] {
+    cshake256_32(POST_IMAGE_DST, value)
+}
 
 /// One journaled write's pre-image: what `pop` does to undo it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UndoEntry {
     /// An insert-once write landed on an absent key. Undo **removes** the
-    /// key; the key must be present when it does.
+    /// key; the key must be present when it does, holding a value whose
+    /// [`post_image`] is `post`.
     Inserted {
         /// The table, by declaration ordinal.
         table: TableOrdinal,
         /// The key's redb bytes (`Key::as_bytes`).
         key: Box<[u8]>,
+        /// [`post_image`] of the value the insert wrote.
+        post: [u8; 32],
     },
     /// A multimap write added a `(key, value)` member that was not
     /// present. Undo **removes** exactly that member; it must be present.
@@ -61,7 +94,7 @@ pub enum UndoEntry {
     /// A declared overwrite (`upsert`, `upsert_property`) replaced `prior`
     /// — or nothing, if the key was absent. Undo **restores** `prior`
     /// (re-inserting it) or removes the key; the key must be present when
-    /// it does.
+    /// it does, holding a value whose [`post_image`] is `post`.
     Replaced {
         /// The table, by declaration ordinal.
         table: TableOrdinal,
@@ -69,6 +102,8 @@ pub enum UndoEntry {
         key: Box<[u8]>,
         /// The displaced value's redb bytes, if there was one.
         prior: Option<Box<[u8]>>,
+        /// [`post_image`] of the value the overwrite wrote.
+        post: [u8; 32],
     },
 }
 
@@ -87,12 +122,19 @@ impl UndoEntry {
     const TAG_MULTI_INSERTED: u8 = 2;
     const TAG_REPLACED: u8 = 3;
 
+    /// The fewest bytes any entry can occupy: tag, table, an empty key's
+    /// length prefix, and the shortest payload (a multimap member with an
+    /// empty value's length prefix). Bounds how many entries a row's bytes
+    /// can hold, so a corrupt count never drives an allocation.
+    const MIN_ENTRY_LEN: usize = 1 + 4 + 4 + 4;
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
-            Self::Inserted { table, key } => {
+            Self::Inserted { table, key, post } => {
                 out.push(Self::TAG_INSERTED);
                 out.extend_from_slice(&table.index().to_le_bytes());
                 bytes(out, key);
+                out.extend_from_slice(post);
             }
             Self::MultiInserted { table, key, value } => {
                 out.push(Self::TAG_MULTI_INSERTED);
@@ -100,7 +142,12 @@ impl UndoEntry {
                 bytes(out, key);
                 bytes(out, value);
             }
-            Self::Replaced { table, key, prior } => {
+            Self::Replaced {
+                table,
+                key,
+                prior,
+                post,
+            } => {
                 out.push(Self::TAG_REPLACED);
                 out.extend_from_slice(&table.index().to_le_bytes());
                 bytes(out, key);
@@ -111,6 +158,7 @@ impl UndoEntry {
                         bytes(out, prior);
                     }
                 }
+                out.extend_from_slice(post);
             }
         }
     }
@@ -120,7 +168,10 @@ impl UndoEntry {
         let table = TableOrdinal::from_index(r.u32()?);
         let key = r.bytes()?;
         match tag {
-            Self::TAG_INSERTED => Ok(Self::Inserted { table, key }),
+            Self::TAG_INSERTED => {
+                let post = r.post()?;
+                Ok(Self::Inserted { table, key, post })
+            }
             Self::TAG_MULTI_INSERTED => {
                 let value = r.bytes()?;
                 Ok(Self::MultiInserted { table, key, value })
@@ -131,7 +182,13 @@ impl UndoEntry {
                     1 => Some(r.bytes()?),
                     _ => return Err(invalid("has_prior byte is neither 0 nor 1")),
                 };
-                Ok(Self::Replaced { table, key, prior })
+                let post = r.post()?;
+                Ok(Self::Replaced {
+                    table,
+                    key,
+                    prior,
+                    post,
+                })
             }
             _ => Err(invalid("entry tag names no variant")),
         }
@@ -158,9 +215,16 @@ impl Canonical for UndoLog {
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let mut r = Reader(bytes);
         let count = r.u32()?;
-        let mut entries = Vec::with_capacity(
-            usize::try_from(count).map_err(|_| invalid("entry count exceeds the address space"))?,
-        );
+        // The count is untrusted bytes: never preallocate from it. Every
+        // entry is at least `MIN_ENTRY_LEN` bytes, so the remaining input
+        // bounds how many can exist; a row claiming more is refused before
+        // an allocation is made for it.
+        let count =
+            usize::try_from(count).map_err(|_| invalid("entry count exceeds the address space"))?;
+        if count > r.0.len() / UndoEntry::MIN_ENTRY_LEN {
+            return Err(invalid("entry count exceeds what the row's bytes can hold"));
+        }
+        let mut entries = Vec::with_capacity(count);
         for _ in 0..count {
             entries.push(UndoEntry::decode(&mut r)?);
         }
@@ -214,6 +278,11 @@ impl Reader<'_> {
         self.take(len, "buffer ends inside a byte field")
             .map(Box::from)
     }
+
+    fn post(&mut self) -> Result<[u8; 32], CodecError> {
+        self.take(32, "buffer ends inside a post-image digest")
+            .map(|b| b.try_into().expect("take(32) yields 32 bytes"))
+    }
 }
 
 #[cfg(test)]
@@ -225,6 +294,7 @@ mod tests {
             UndoEntry::Inserted {
                 table: TableOrdinal::from_index(0),
                 key: Box::new([1, 2, 3]),
+                post: post_image(&[4, 5, 6]),
             },
             UndoEntry::MultiInserted {
                 table: TableOrdinal::from_index(12),
@@ -235,13 +305,37 @@ mod tests {
                 table: TableOrdinal::from_index(19),
                 key: Box::from(*b"total_burned"),
                 prior: Some(Box::new(9u64.to_le_bytes())),
+                post: post_image(&10u64.to_le_bytes()),
             },
             UndoEntry::Replaced {
                 table: TableOrdinal::from_index(19),
                 key: Box::from(*b"fresh"),
                 prior: None,
+                post: post_image(&[]),
             },
         ]
+    }
+
+    #[test]
+    fn post_image_is_domain_separated_and_value_sensitive() {
+        assert_ne!(post_image(&[]), [0u8; 32]);
+        assert_ne!(post_image(&[1]), post_image(&[2]));
+        assert_ne!(
+            post_image(b"x"),
+            shekyl_crypto_hash::cshake256_32(b"other", b"x"),
+            "the DST is part of the layout"
+        );
+    }
+
+    #[test]
+    fn refuses_a_count_the_bytes_cannot_hold_before_allocating() {
+        // A count of u32::MAX with no entries behind it: refused on the
+        // bound, never preallocated.
+        let bytes = u32::MAX.to_le_bytes();
+        assert_eq!(
+            UndoLog::decode(&bytes),
+            Err(invalid("entry count exceeds what the row's bytes can hold"))
+        );
     }
 
     #[test]
@@ -290,7 +384,7 @@ mod tests {
         );
 
         let mut replaced = UndoLog(entries()[3..].to_vec()).encode();
-        let flag = replaced.len() - 1; // `prior: None` ends the row with its flag byte
+        let flag = replaced.len() - 1 - 32; // `prior: None`'s flag byte precedes the post-image
         assert_eq!(replaced[flag], 0);
         replaced[flag] = 2;
         assert_eq!(

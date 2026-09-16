@@ -199,6 +199,15 @@ pub enum UndoFault {
         /// Position of the entry in the row, in write order.
         index: u32,
     },
+    /// Replaying entry `index` found its key present but holding a value
+    /// whose post-image digest is not the one the journaled write left —
+    /// something wrote around the journal, or the file is corrupt. Found
+    /// after the inverse displaced the value, inside the poisoned
+    /// transaction, so nothing lands.
+    PostImageMismatch {
+        /// Position of the entry in the row, in write order.
+        index: u32,
+    },
 }
 
 impl core::fmt::Display for UndoFault {
@@ -214,6 +223,10 @@ impl core::fmt::Display for UndoFault {
             Self::EntryNotReversible { index } => write!(
                 f,
                 "entry {index} cannot be reversed: its target is not in the state the entry left"
+            ),
+            Self::PostImageMismatch { index } => write!(
+                f,
+                "entry {index} cannot be reversed: the value under its key is not the one the journaled write left"
             ),
         }
     }

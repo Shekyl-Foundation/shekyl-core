@@ -57,7 +57,7 @@ pub use property::{
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 pub use settlement_epoch::SettlementEpochBlocks;
-pub use undo::{UndoEntry, UndoLog};
+pub use undo::{post_image, UndoEntry, UndoLog, POST_IMAGE_DST};
 
 /// A value with exactly one byte encoding.
 ///

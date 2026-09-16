@@ -50,7 +50,7 @@ use redb::{
     Value, WriteTransaction,
 };
 
-use crate::codec::{Canonical, CodecError, UndoEntry, UndoLog};
+use crate::codec::{post_image, Canonical, CodecError, UndoEntry, UndoLog};
 use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
 use crate::schema::{self, UNDO_LOG};
 
@@ -97,8 +97,13 @@ impl Restorable for &str {
 pub(crate) enum Undone {
     /// The inverse applied and found the state the entry described.
     Reversed,
-    /// The target was not in the state the entry left it in (SI-6).
+    /// The target key or member was absent where the entry said it was
+    /// present (SI-6).
     TargetMismatch,
+    /// The key was present, but the value under it was not the one the
+    /// journaled write left — its post-image digest disagrees (SI-6):
+    /// something wrote around the journal, or the file is corrupt.
+    PostImageMismatch,
     /// The entry's shape does not fit this table (a multimap member against
     /// a keyed table or vice versa), or its bytes would not decode (SI-7).
     Malformed(&'static str),
@@ -130,9 +135,11 @@ where
     }
 
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
-        let (key, prior) = match entry {
-            UndoEntry::Inserted { key, .. } => (key, None),
-            UndoEntry::Replaced { key, prior, .. } => (key, prior.as_deref()),
+        let (key, prior, post) = match entry {
+            UndoEntry::Inserted { key, post, .. } => (key, None, post),
+            UndoEntry::Replaced {
+                key, prior, post, ..
+            } => (key, prior.as_deref(), post),
             UndoEntry::MultiInserted { .. } => {
                 return Ok(Undone::Malformed(
                     "multimap member recorded against a keyed table",
@@ -147,21 +154,29 @@ where
         }
         let mut table = txn.open_table(*self).map_err(EngineError::Table)?;
         let key = K::from_bytes(key);
-        let displaced = match prior {
+        // The inverse displaces whatever is under the key now; that value
+        // is compared against the journaled post-image **after** the
+        // displacement, inside the same transaction — a mismatch poisons
+        // the batch and nothing lands, so verify-after-displace costs no
+        // extra read.
+        let displaced: Option<[u8; 32]> = match prior {
             // Undo of an insert, or of an overwrite that found nothing:
             // the key must be present now, and goes.
-            None => table.remove(&key).map_err(EngineError::Storage)?.is_some(),
+            None => table
+                .remove(&key)
+                .map_err(EngineError::Storage)?
+                .map(|guard| post_image(V::as_bytes(&guard.value()).as_ref())),
             // Undo of an overwrite that displaced `prior`: the key must be
             // present now, and gets `prior` back.
             Some(prior) => table
                 .insert(&key, V::from_bytes(prior))
                 .map_err(EngineError::Storage)?
-                .is_some(),
+                .map(|guard| post_image(V::as_bytes(&guard.value()).as_ref())),
         };
-        Ok(if displaced {
-            Undone::Reversed
-        } else {
-            Undone::TargetMismatch
+        Ok(match displaced {
+            None => Undone::TargetMismatch,
+            Some(found) if found == *post => Undone::Reversed,
+            Some(_) => Undone::PostImageMismatch,
         })
     }
 }
@@ -264,6 +279,12 @@ pub(crate) struct Recording<'txn> {
     journal: &'txn Journal,
     poison: &'txn Poison,
     txn: &'txn WriteTransaction,
+    /// The height this recording is for — kept on the recording itself so
+    /// `Drop` can mark the journal abandoned even after `seal` has taken
+    /// the live slot and then failed to write the row.
+    height: u64,
+    /// Set only once the row's insert has **succeeded**: every failed seal
+    /// leaves the recording unsealed, and `Drop` marks it abandoned.
     sealed: bool,
 }
 
@@ -291,6 +312,7 @@ impl<'txn> Recording<'txn> {
             journal,
             poison,
             txn,
+            height,
             sealed: false,
         }
     }
@@ -313,7 +335,7 @@ impl<'txn> Recording<'txn> {
             .borrow_mut()
             .take()
             .expect("a Recording holds the journal slot until it is sealed or dropped");
-        self.sealed = true;
+        debug_assert_eq!(height, self.height);
         let count = entries.len();
         let mut table = self.txn.open_table(UNDO_LOG).map_err(EngineError::Table)?;
         if table.get(height).map_err(EngineError::Storage)?.is_some() {
@@ -325,6 +347,10 @@ impl<'txn> Recording<'txn> {
         table
             .insert(height, UndoLog(entries).encode().as_slice())
             .map_err(EngineError::Storage)?;
+        // Only now: an open/read/insert failure above returns with
+        // `sealed == false`, so a caller that swallows the error still
+        // cannot commit the journaled writes without their row.
+        self.sealed = true;
         Ok(count)
     }
 }
@@ -334,9 +360,10 @@ impl Drop for Recording<'_> {
         if self.sealed {
             return;
         }
-        if let Some(live) = self.journal.live.borrow_mut().take() {
-            self.journal.abandoned.set(Some(live.height));
-        }
+        // The live slot may already be empty (a `seal` that failed after
+        // taking it); the height on the recording is what `complete` names.
+        self.journal.live.borrow_mut().take();
+        self.journal.abandoned.set(Some(self.height));
     }
 }
 
@@ -388,6 +415,12 @@ pub(super) fn replay(
                 return Err(poison.arm(StoreInvariant::UndoLogIncoherent {
                     height,
                     fault: UndoFault::EntryNotReversible { index },
+                }))
+            }
+            Undone::PostImageMismatch => {
+                return Err(poison.arm(StoreInvariant::UndoLogIncoherent {
+                    height,
+                    fault: UndoFault::PostImageMismatch { index },
                 }))
             }
             Undone::Malformed(reason) => {

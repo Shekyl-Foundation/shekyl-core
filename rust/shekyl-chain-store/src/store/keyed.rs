@@ -29,7 +29,7 @@ use redb::{
     AccessGuard, Key, Range, ReadableTable, ReadableTableMetadata, Table, TableStats, Value,
 };
 
-use crate::codec::UndoEntry;
+use crate::codec::{post_image, UndoEntry};
 use crate::schema::TableOrdinal;
 
 use super::error::{EngineError, StoreError, StoreInvariant};
@@ -158,12 +158,17 @@ impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
             return Err(self.batch.poison.arm(row));
         }
         let key_bytes = self.batch.capture(K::as_bytes(key.borrow()));
+        // The post-image is what replay must find under the key to count
+        // the removal as reversing *this* write (codec docs).
+        let post = key_bytes
+            .is_some()
+            .then(|| post_image(V::as_bytes(value.borrow()).as_ref()));
         self.inner
             .insert(key, value)
             .map_err(EngineError::Storage)?;
-        if let Some(key) = key_bytes {
+        if let (Some(key), Some(post)) = (key_bytes, post) {
             self.batch
-                .journal(|table| UndoEntry::Inserted { table, key });
+                .journal(|table| UndoEntry::Inserted { table, key, post });
         }
         Ok(())
     }
@@ -193,16 +198,23 @@ impl<'txn, K: Key + 'static, V: Value + 'static> UpsertTable<'txn, K, V> {
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<Option<AccessGuard<'_, V>>, StoreError> {
         let key_bytes = self.batch.capture(K::as_bytes(key.borrow()));
+        let post = key_bytes
+            .is_some()
+            .then(|| post_image(V::as_bytes(value.borrow()).as_ref()));
         let displaced = self
             .inner
             .insert(key, value)
             .map_err(EngineError::Storage)?;
-        if let Some(key) = key_bytes {
+        if let (Some(key), Some(post)) = (key_bytes, post) {
             let prior = displaced
                 .as_ref()
                 .map(|guard| Box::<[u8]>::from(V::as_bytes(&guard.value()).as_ref()));
-            self.batch
-                .journal(|table| UndoEntry::Replaced { table, key, prior });
+            self.batch.journal(|table| UndoEntry::Replaced {
+                table,
+                key,
+                prior,
+                post,
+            });
         }
         Ok(displaced)
     }
