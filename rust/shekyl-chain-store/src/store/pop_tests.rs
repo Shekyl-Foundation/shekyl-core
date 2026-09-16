@@ -289,3 +289,53 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
     );
     cleanup(&path);
 }
+
+/// A block recorded at the tip with no journal row is SI-6, not the pop
+/// floor: nothing deletes undo rows until S-PRUNE lands (and it will
+/// persist the floor it establishes), so an empty journal under a
+/// non-empty chain is a journal that does not describe its tables.
+#[test]
+fn a_recorded_tip_with_no_journal_row_is_si6_not_the_floor() {
+    let path = tmp("pop-no-row");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    // Two heights written by hand, journaling nothing.
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        for h in 0..2u64 {
+            let info = crate::codec::BlockInfo {
+                timestamp: h,
+                coins_generated: 0,
+                weight: 0,
+                cumulative_difficulty: 1,
+                hash: crate::lmdb_order::Hash32::from_bytes(
+                    [u8::try_from(h).expect("two heights"); 32],
+                ),
+                rct_outputs: 0,
+                long_term_weight: 0,
+            };
+            batch
+                .open_insert_table(BLOCK_INFO, PROBE_ROW)?
+                .insert(h, crate::codec::Canonical::encode(&info).as_slice())?;
+        }
+        Ok(())
+    });
+    planted.expect("plant");
+    let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
+    assert!(
+        matches!(
+            out,
+            Err(TestErr::Store(ref m)) if m.starts_with("SI-6 violated") && m.contains("no row for it")
+        ),
+        "{out:?}"
+    );
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row: StoreInvariant::UndoLogIncoherent {
+                height: 1,
+                fault: UndoFault::NoRowForTip,
+            },
+        }
+    );
+    cleanup(&path);
+}

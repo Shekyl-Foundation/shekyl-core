@@ -192,6 +192,11 @@ pub enum UndoFault {
         /// The height of the journal's highest row.
         top: u64,
     },
+    /// `pop` found a block recorded at the tip and **no** journal row for
+    /// it. Nothing deletes undo rows until S-PRUNE lands (which persists
+    /// the floor it establishes), so this is a journal that does not
+    /// describe its tables, not a retention limit.
+    NoRowForTip,
     /// Replaying entry `index` (in write order) found its target key or
     /// member not in the state the entry left it in — absent where the
     /// entry inserted, or, for a restore, absent where it replaced.
@@ -219,6 +224,10 @@ impl core::fmt::Display for UndoFault {
             Self::TopIsNotTip { top } => write!(
                 f,
                 "the journal's top row is at height {top}, not at the tip"
+            ),
+            Self::NoRowForTip => f.write_str(
+                "a block is recorded at the tip but the journal has no row for it (nothing prunes \
+                 undo rows yet)",
             ),
             Self::EntryNotReversible { index } => write!(
                 f,

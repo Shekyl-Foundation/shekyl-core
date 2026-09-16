@@ -63,9 +63,14 @@ impl WriteBatch<'_, '_> {
     /// # Errors
     ///
     /// [`StoreCannot::ChainEmpty`] with no block recorded;
-    /// [`StoreCannot::PopBelowFloor`] at genesis or below the surviving
-    /// journal; [`StoreInvariant::UndoLogIncoherent`] (SI-6, poisons) if the
-    /// journal's top row is not the tip's or an entry cannot be reversed;
+    /// [`StoreCannot::PopBelowFloor`] at genesis — the only floor that
+    /// exists until S-PRUNE lands and **persists** the one it establishes
+    /// (S-CHAIN-W §5.4): nothing deletes undo rows today, so a recorded tip
+    /// with no journal row is a journal that does not describe its tables,
+    /// [`StoreInvariant::UndoLogIncoherent`] (SI-6, poisons), never a
+    /// retention limit the store cannot have reached;
+    /// [`StoreInvariant::UndoLogIncoherent`] also if the journal's top row
+    /// is not the tip's or an entry cannot be reversed;
     /// [`StoreInvariant::CellCorrupt`] (SI-7, poisons) if the row does not
     /// decode; engine errors.
     pub fn pop(&self) -> Result<Popped, StoreError> {
@@ -81,7 +86,7 @@ impl WriteBatch<'_, '_> {
         if tip == 0 {
             return Err(StoreCannot::PopBelowFloor { tip, floor: 1 }.into());
         }
-        let (floor, top) = {
+        let top = {
             let undo = self.open_insert_table(
                 UNDO_LOG,
                 StoreInvariant::UndoLogIncoherent {
@@ -89,19 +94,22 @@ impl WriteBatch<'_, '_> {
                     fault: UndoFault::RowAlreadyRecorded,
                 },
             )?;
-            let floor = undo.first()?.map(|(h, _)| h.value());
             let top = undo.last()?.map(|(h, _)| h.value());
-            (floor, top)
+            top
         };
         match top {
-            // Nothing journaled at all: every row was pruned (or none was
-            // ever written). The floor is above the tip.
+            // A block is recorded at `tip` and the journal has no row at
+            // all. Nothing deletes undo rows until S-PRUNE lands, and when
+            // it does it persists the floor it establishes (§5.4) so this
+            // arm can tell "pruned below" from "lost"; until then this is a
+            // journal that does not describe its tables — SI-6, not a
+            // retention limit the store cannot have reached (PR #757
+            // review).
             None => {
-                return Err(StoreCannot::PopBelowFloor {
-                    tip,
-                    floor: tip + 1,
-                }
-                .into())
+                return Err(self.poison().arm(StoreInvariant::UndoLogIncoherent {
+                    height: tip,
+                    fault: UndoFault::NoRowForTip,
+                }));
             }
             Some(top) if top != tip => {
                 return Err(self.poison().arm(StoreInvariant::UndoLogIncoherent {
@@ -111,20 +119,18 @@ impl WriteBatch<'_, '_> {
             }
             Some(_) => {}
         }
-        // `floor` is the lowest surviving row; the tip's row is at or above
-        // it, so the only way replay finds no row is a journal that lost the
-        // tip between the check above and here — impossible inside one
-        // transaction, and named rather than assumed.
+        // The tip's row was seen above; the only way replay finds no row is
+        // a journal that lost the tip between the check and here —
+        // impossible inside one transaction, and named rather than assumed.
         match self.replay_undo(tip)? {
             Replayed::Entries(reversed) => Ok(Popped {
                 height: BlockHeight::from_raw(tip),
                 reversed,
             }),
-            Replayed::NoRow => Err(StoreCannot::PopBelowFloor {
-                tip,
-                floor: floor.unwrap_or(tip + 1),
-            }
-            .into()),
+            Replayed::NoRow => Err(self.poison().arm(StoreInvariant::UndoLogIncoherent {
+                height: tip,
+                fault: UndoFault::NoRowForTip,
+            })),
         }
     }
 }
