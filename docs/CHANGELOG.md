@@ -25,6 +25,13 @@
 
 ### API
 
+- **`calc_pow` drops leftover `major_version` (RPC 3.32).** The field was
+  a Cryptonight schema operand. HTTP is Rust (`shekyl-daemon-rpc`); the
+  handler is still C++ `core_rpc_server::on_calcpow` via `core_rpc_ffi`.
+  Extra JSON keys remain ignored by epee. `CORE_RPC_VERSION_MINOR`
+  `31 → 32`. `get_miner_data.major_version` is unchanged (block-template
+  header version).
+
 - **`get_archival_shard_coverage` and `request_archival_shard` (RPC 3.31).**
   Local coverage/profit list (bond-record metadata; no Tor, no bodies, no
   `p_id`) and an operator view-fetch that names `shard_id` only

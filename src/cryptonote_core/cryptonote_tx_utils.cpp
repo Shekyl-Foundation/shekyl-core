@@ -769,16 +769,15 @@ namespace cryptonote
 
   bool get_block_longhash(const Blockchain *pbc, const blobdata& bd, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash)
   {
-    crypto::hash looked_up = crypto::null_hash;
-    const crypto::hash *resolved = seed_hash;
-    if (resolved == nullptr)
-    {
-      if (pbc != nullptr)
-        looked_up = pbc->get_pending_block_id_by_height(shekyl_pow_randomx_v2_seedheight(height));
-      resolved = &looked_up;
-    }
+    // nullptr means "look it up". The all-zero hash is a valid RandomX
+    // genesis seed, so this cannot collapse to a non-null reference.
+    const crypto::hash seed = seed_hash != nullptr
+      ? *seed_hash
+      : (pbc != nullptr
+           ? pbc->get_pending_block_id_by_height(shekyl_pow_randomx_v2_seedheight(height))
+           : crypto::null_hash);
 
-    if (!hash_pow_randomx(bd.data(), bd.size(), *resolved, res))
+    if (!hash_pow_randomx(bd.data(), bd.size(), seed, res))
     {
       // The 0xff..ff sentinel is a BELT, not the gate: it makes check_hash()
       // reject at any difficulty > 1, but at difficulty 1 every hash passes

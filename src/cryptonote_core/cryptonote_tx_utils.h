@@ -136,6 +136,8 @@ namespace cryptonote
     );
 
   class Blockchain;
+  // seed_hash nullptr = look up from `pb` (or zeros at genesis). The
+  // all-zero hash is a valid RandomX seed, so this stays nullable.
   bool get_block_longhash(const Blockchain *pb, const blobdata& bd, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash = nullptr);
   bool get_block_longhash(const Blockchain *pb, const block& b, crypto::hash& res, const uint64_t height, const crypto::hash *seed_hash = nullptr);
   crypto::hash get_block_longhash(const Blockchain *pb, const block& b, const uint64_t height, const crypto::hash *seed_hash = nullptr);
