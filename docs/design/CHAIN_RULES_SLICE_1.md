@@ -3,8 +3,9 @@
 **Status:** OPEN — **round 1 = pre-flight (rule 26 Round 0), written
 2026-09-16** against `dev` @ `3560b80c2` (S-CHAIN-W landed, PR #757). **Q1
 RULED 2026-09-16 (§2); Q2–Q6 (§8) open. No production commit lands until they
-are ruled** — rule 26's halt condition, cited here on purpose. §9 records the
-program-level parity-then-repair ruling of the same day. Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)
+are ruled** — rule 26's halt condition, cited here on purpose. §9 points at
+DRS §7.6 (PR #760), the same-day parity-then-repair ruling, and records what
+slice 1 owes to it. Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)
 §7.5.1 (the increment's pre-flight names its parents, audits each row's body,
 lists the fixture per row). Parent plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
 §7.5 (table 3 row "slice 1"). Cites `26-sub-pr-design-discipline.mdc`
@@ -116,11 +117,23 @@ Option<&Tip>) -> BlockHeight` (`None → 0`, `Some(t) → t.height + 1`), used
 by every height-indexed rule so the operand is derived once from the view and
 never from the candidate (F5's spoof).
 
-**Store side, same PR.** `BatchView` already has a private `fn tip() ->
-Result<Option<u64>, StoreError>` (`view.rs:97–108`) that reads
-`block_info.last()`. It becomes the trait impl: `last()` → `Some(Tip {
-height, hash: BlockInfo.hash })`, else `None`. `block_at`/`root_at`'s
-AboveTip classification reads through it unchanged. `MockChain::tip()`
+**Store side, same PR — sequenced with S-CHAIN-R.** `BatchView` today has a
+private `fn tip() -> Result<Option<u64>, StoreError>` (`view.rs:97–108`)
+reading `block_info.last()`. S-CHAIN-R's commit 1 (`DRS_E1_SCHAIN_R.md` (PR #760, not yet on `dev` — linked at landing)
+§7, SCR-13) replaces that helper with a private `store/chain_reads.rs`
+(`tip_of`, `cell`, `block_body`) shared by `BatchView` and `ReadSnapshot`, so
+both lanes edit `store/view.rs`. **Order agreed 2026-09-16:** S-CHAIN-R's
+`chain_reads` lands first (its code may start once #760 merges; this slice
+waits on Q2–Q6), and this slice's commit 1 then implements
+`ChainView::tip` for `BatchView` as `chain_reads::tip_of(..)` → `Some(Tip {
+height, hash: BlockInfo.hash })` / `None` — one read body, no second
+`last()`. If the order inverts, this slice adds the impl on the private
+helper and S-CHAIN-R's rewire absorbs it; either way `view.rs` is touched by
+one lane at a time and the trait method lands with its implementor. No
+`ReadSnapshot: ChainView` impl exists or is planned (SCR-16, out), so the
+new trait method has exactly three implementors: `BatchView`, `MockView`,
+`FaultingView`. `block_at`/`root_at`'s AboveTip classification reads through
+the same body unchanged. `MockChain::tip()`
 (`harness.rs:58–61`, today `Option<BlockHeight>`) grows the hash;
 `FaultingView::tip` faults. S-CHAIN-R's `ReadSnapshot::tip()` returns the
 store's own `Option<RecordedTip { height, hash, connect }>` — a wider type for
@@ -266,8 +279,8 @@ bounds; the values differ by ~268×. Not a slice-1 rule (A7 is topology) and not
 a consensus divergence today (no block approaches either), but it is exactly
 the "value has no derivation record" the census row already flags, now with a
 second undocumented value beside it. **This is a knowingly-reproduced
-deviation** in the sense of §9 (the parity phase reproduces; the repair phase
-judges), so it is recorded in the form every such deviation must carry —
+deviation** in the sense of DRS §7.6 item 1 (the parity phase reproduces; the
+repair phase judges — §9), so it is recorded in the form every such deviation must carry —
 *what we reproduced, why, and what correct looks like:* reproduced — two
 structural bounds on one field, 2^28 (C++) and 10^6 (Rust), neither derived;
 why — parity first, and no block approaches either; **correct** — one
@@ -276,7 +289,7 @@ block-weight limit, or ruled unbounded-below-weight), owned by the wire-format
 port. **Route (A5 carry):** one `FOLLOWUPS.md` line in this PR's doc commit
 carrying those three fields, Target pre-genesis, falsifier "one constant with
 a derivation record, or the divergence ruled"; it migrates into the unified
-repair backlog when that artifact is minted (§9) — the row is written so the
+repair backlog when E2 mints that artifact (DRS §7.6 item 1) — the row is written so the
 migration is a move, not a rewrite.
 
 **F3 — the store already holds A2's belt but nothing holds A2's rule.**
@@ -377,62 +390,43 @@ function paths and bind the row by signature only — rejected by SCW-18 itself
 
 ---
 
-## 9. Program ruling folded in (maintainer, 2026-09-16): parity, then repair
+## 9. Program ruling: parity, then repair — authority is DRS §7.6 (PR #760)
 
-Recorded here because slice 1 is the first increment that reproduces
-inherited behaviour on purpose (B2, B6, B7; F2), and the ruling decides what
-that reproduction *is*. The contract text lands in `CHAIN_RULES_CRATE.md` §6.3
-and `DAEMON_REDB_STORE.md` §7.5.1 / §15 in this PR; this section is the
-slice's reading of it, validated against the landed figures.
+The 2026-09-16 ruling — the ported partition is transitional; parity is a
+phase with a defined end; repairs land after cutover in Rust only (the
+CEN-I12 ground: a half-C++/half-Rust repair is two implementations of one
+correction); every knowingly-reproduced deviation carries its ratified state
+and they share one query, owed to DRS-E2's pre-flight; bucket-4 rows and
+reproduced deviations share one denominator; the comparator gates cutover
+and `ratified / enforced` gates release — is **recorded once, at
+[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.6**, minted by the
+S-CHAIN-R lane's PR #760 at the same review, with the §8.1 release-gate
+checklist item beside it. This document does **not** restate it (an earlier
+revision of this PR did, in DRS §7.5.1 and §15; withdrawn 2026-09-16 when
+the two lanes synchronised — one ruling, one home). What slice 1 owes to
+§7.6 is narrower and is recorded here:
 
-1. **Parity is a phase with a defined end.** The port reproduces the C++
-   verdict, deviations included, until the comparator (DRS-E2) is green over
-   the replayed chain. Repairs — of consensus deviations, store sentinels,
-   schema shape — start **after cutover, in Rust only**: a repair landing
-   half in C++ and half in Rust is two implementations of one correction,
-   which is what every ruling this month has been built to avoid (the CEN-I12
-   argument, resolved). Slice 1's port-as-is rows are that phase's work: the
-   fixture pins the inherited behaviour so the repair round has a boundary
-   pair to move, not a read-around to find.
-
-2. **One repair backlog, one query.** Today a knowingly-reproduced deviation
-   lands in one of four homes by type — a DIVERGENT conformance row
-   (`CONSENSUS_STORE_RECONCILIATION.md`), a store-invariant row
-   (`STORE_INVARIANT_REGISTER.md`), an inline schema note (R8b-2), or a
-   surface doc's finding list (SCR-4's `UINT64_MAX`; this document's F2).
-   The ruling: every such deviation lands in a form that **names its ratified
-   state** ("what correct looks like" — the shape a DIVERGENT row's pass
-   condition already has), and they share one query. The artifact that is
-   that query is **owed, not yet minted**; F2 above is written in the
-   three-field form so it moves into it unchanged.
-
-3. **Bucket-4 rows and reproduced deviations are one backlog.** Both are
-   "things we are carrying that nobody has judged", and one phase resolves
-   both, so they share a denominator. *Figure verified at this tip
-   (rule 26 B6):* the consensus rows that are enforced (bucket ≠ 3) and
-   unratified (bucket 4) number **27** — 25 surface-free + 2 surface-bound
-   (`check_drs_e6_partition.py --describe`, table 1; C2-R8 §9.5 recorded the
-   move 34 → 27 when R8's rulings ratified rows). The "thirty-four" in the
-   ruling as relayed is the pre-R8 figure; the gate's is the one to quote.
-
-4. **The gate that survives cutover.** During parity the comparator is red
-   until Rust matches — a hard gate. After cutover C++ is gone, the
-   comparator retires, and nothing goes red because a deviation is still
-   unrepaired — unless the second figure the coverage gate already prints is
-   made the gate. **Ruled:** `implemented / enforced` (with the comparator)
-   gates **cutover**; **`ratified / enforced` gates release.** *Validated
-   against landed text:* the figure exists and is printed today
-   (`CHAIN_RULES_CRATE.md` §6.3: `ratified 126 / enforced 153`), but nothing
-   landed *gates* on it — parity evidence as defined (`DAEMON_REDB_STORE.md`
-   §3: coverage gaps, stubbed applies and passed-through facts all empty)
-   requires `implemented == enforced`, not `ratified == enforced`. So the
-   mechanism is the printed figure; the gate is new and is what this ruling
-   adds. Release = `ratified 153 / enforced 153` on the consensus line, or
-   every remaining bucket-4 row ruled bucket 3 (dead) by an R-round.
-
-Denominator of this section: the four homes named in (2) were each grepped
-for a prior statement of (1)–(4); none carries one, so this is the first
-recording, not a restatement.
+- **Slice 1's port-as-is rows (B2, B6, B7) and F2 are §7.6 item-1 work.**
+  The fixture pins the inherited behaviour so the repair round has a
+  boundary pair to move, not a read-around to find; F2 is written in the
+  three-field form (reproduced / why / what correct looks like) so it moves
+  into the one query unchanged when E2 mints it.
+- **The crate-side statement of what its two figures gate** is
+  [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §6.3, pointing at §7.6.
+- **Two figures checked against landed text while folding (rule 26 B6),
+  reported to the §7.6 owner on PR #760 rather than edited across lanes:**
+  (i) §7.6 item 3 says parity evidence "was already defined as `implemented
+  == ratified == enforced` (§8.1's E6 item, D12)" — the landed definition
+  (DRS §3 provenance: coverage gaps, stubbed applies, passed-through facts all
+  empty; §8.1's E6 item: `implemented = enforced`) has **no `ratified` term**;
+  the second figure is printed (`ratified 126 / enforced 153` at this tip)
+  and gated nothing until §7.6 — the printing is the mechanism, the gate is
+  what §7.6 adds. (ii) The enforced-and-unratified consensus figure at this
+  tip is **27** (`check_drs_e6_partition.py --describe`, table 1: `b4` = 25
+  free + 2 bound; C2-R8 §9.5 recorded 34 → 27); §7.6 item 2 correctly defers
+  to the census's own sum-check rather than quoting a number, so nothing to
+  change there — recorded so "thirty-four" is not copied from the review
+  transcript into any doc.
 
 ## 10. What this round did not find (denominator)
 
