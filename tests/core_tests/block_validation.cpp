@@ -729,7 +729,7 @@ namespace
 // duplicated rather than shared: it is five lines of test scaffolding in a
 // different binary, and any pow_hash_fn change breaks both loudly at compile
 // time, so there is nothing here that can silently drift.
-bool failing_pow_hash(const void*, size_t, const crypto::hash*, crypto::hash&)
+bool failing_pow_hash(const void*, size_t, const crypto::hash&, crypto::hash&)
 {
   return false;
 }

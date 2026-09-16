@@ -112,8 +112,7 @@ DISABLE_VS_WARNINGS(4244 4345)
 
       // --- classical scalar secrets ----------------------------------------
       // Write through the `data` array rather than the mlocked wrapper so we
-      // don't trip -Wclass-memaccess; this matches the xor_with_key_stream
-      // access pattern above.
+      // don't trip -Wclass-memaccess.
       std::memcpy(keys.m_spend_secret_key.data, blob.spend_sk, 32);
       std::memcpy(keys.m_view_secret_key.data,  blob.view_sk,  32);
 

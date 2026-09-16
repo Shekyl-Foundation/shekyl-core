@@ -44,17 +44,43 @@ using namespace cryptonote;
 namespace
 {
 
-bool failing_pow_hash(const void*, size_t, const crypto::hash*, crypto::hash&)
+bool failing_pow_hash(const void*, size_t, const crypto::hash&, crypto::hash&)
 {
   return false; // the verifier-failure arm under test
 }
 
 // Control hash: proves the override seam engages (a test must be able to
 // observe its own setup) and pins the success path through the same seams.
-bool const_pow_hash(const void*, size_t, const crypto::hash*, crypto::hash& out)
+bool const_pow_hash(const void*, size_t, const crypto::hash&, crypto::hash& out)
 {
   memset(out.data, 0x42, sizeof(out.data));
   return true;
+}
+
+// Records the seed the dispatch received. The existing gate tests ignore the
+// seed, so they stay green if explicit seeds stop winning, lookup is skipped,
+// or the no-chain fallback stops being zeros. This override is the pin.
+crypto::hash g_seen_seed{};
+bool g_saw_seed = false;
+
+bool record_seed_pow(const void*, size_t, const crypto::hash& seed, crypto::hash& out)
+{
+  g_seen_seed = seed;
+  g_saw_seed = true;
+  memset(out.data, 0x42, sizeof(out.data));
+  return true;
+}
+
+crypto::hash tagged_seed(uint8_t fill)
+{
+  crypto::hash h = crypto::null_hash;
+  memset(h.data, fill, sizeof(h.data));
+  return h;
+}
+
+bool hashes_eq(const crypto::hash& a, const crypto::hash& b)
+{
+  return std::memcmp(a.data, b.data, sizeof(a.data)) == 0;
 }
 
 struct HashOverrideGuard
@@ -121,7 +147,7 @@ TEST(pow_longhash_gate, bool_overload_reports_failure_and_seeds_belt)
   block blk{};
   blk.major_version = 1;
   crypto::hash res = crypto::null_hash;
-  EXPECT_FALSE(get_block_longhash(nullptr, blk, res, 1, nullptr, 0))
+  EXPECT_FALSE(get_block_longhash(nullptr, blk, res, 1, nullptr))
     << "verifier failure must surface through the bool";
   EXPECT_TRUE(is_belt_sentinel(res))
     << "the 0xff belt must still be written for bool-ignoring callers";
@@ -148,7 +174,7 @@ TEST(pow_longhash_gate, seam_engages_and_success_path_passes_through)
   block blk{};
   blk.major_version = 1;
   crypto::hash res = crypto::null_hash;
-  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr, 0));
+  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr));
   for (size_t i = 0; i < sizeof(res.data); ++i)
     ASSERT_EQ(0x42, static_cast<unsigned char>(res.data[i]));
 
@@ -193,4 +219,46 @@ TEST(pow_longhash_gate, worker_caches_computed_hash)
   bap.bc.block_longhash_worker(1, epee::span<const block>(&blk, 1), map);
   ASSERT_EQ(1u, map.size());
   ASSERT_EQ(0x42, static_cast<unsigned char>(map.begin()->second.data[0]));
+}
+
+// Pins the three seed-resolution arms, plus "explicit seed wins over lookup"
+// (the previous `pbc == nullptr` path dropped a caller-supplied seed).
+TEST(pow_longhash_gate, seed_selection_arms)
+{
+  HashOverrideGuard guard(record_seed_pow);
+
+  block blk{};
+  blk.major_version = 1;
+  crypto::hash res = crypto::null_hash;
+  const crypto::hash explicit_seed = tagged_seed(0xAB);
+
+  g_saw_seed = false;
+  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, nullptr));
+  ASSERT_TRUE(g_saw_seed);
+  EXPECT_TRUE(hashes_eq(g_seen_seed, crypto::null_hash))
+    << "no chain and no seed must hash under the all-zero genesis seed";
+
+  g_saw_seed = false;
+  ASSERT_TRUE(get_block_longhash(nullptr, blk, res, 1, &explicit_seed));
+  ASSERT_TRUE(g_saw_seed);
+  EXPECT_TRUE(hashes_eq(g_seen_seed, explicit_seed))
+    << "an explicit seed must win even when there is no Blockchain";
+
+  PowGateTestDB* db = new PowGateTestDB();
+  BlockchainAndPool bap;
+  ASSERT_TRUE(init_blockchain(bap.bc, db));
+  const crypto::hash looked_up =
+    bap.bc.get_pending_block_id_by_height(shekyl_pow_randomx_v2_seedheight(1));
+
+  g_saw_seed = false;
+  ASSERT_TRUE(get_block_longhash(&bap.bc, blk, res, 1, nullptr));
+  ASSERT_TRUE(g_saw_seed);
+  EXPECT_TRUE(hashes_eq(g_seen_seed, looked_up))
+    << "nullptr seed with a chain must look the seed up";
+
+  g_saw_seed = false;
+  ASSERT_TRUE(get_block_longhash(&bap.bc, blk, res, 1, &explicit_seed));
+  ASSERT_TRUE(g_saw_seed);
+  EXPECT_TRUE(hashes_eq(g_seen_seed, explicit_seed))
+    << "an explicit seed must win over the chain lookup";
 }

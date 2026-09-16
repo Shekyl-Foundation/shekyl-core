@@ -36,7 +36,7 @@ todos:
     content: "Track B / Phase 3 (split 3a/3b/3c): Export the 1-2 function FFI surface from rust/shekyl-ffi; add matching declarations in src/shekyl/shekyl_ffi.h; rewire C++ callers; delete lifecycle calls; drop randomx C linkage from cncrypto; add CI symbol-isolation. LANDED: 3a+3b consensus PoW cutover; 3c v1 machinery (rx-slow-hash.c, cncrypto randomx C-linkage, seedheight export + shekyl-pow-randomx::consensus) landed in PR #235. slow-hash.c / generate_chacha_key* and IPowSchema/pow_registry LANDED 2026-09-15 as Phase 4 / Track D (not 3c); they were not blocked on wallet2 (wallet2 was deleted in Phase 5). The DELETED_CALL_AUDIT was folded into RANDOMX_V2_PHASE3_PLAN.md \u00a72."
     status: completed
   - id: phase4-delete-abstractions
-    content: "Track B / Phase 4 LANDED 2026-09-15: deleted pow_schema.h (IPowSchema), pow_registry.{h,cpp}, RX_BLOCK_VERSION, set_pow_schema_override_for_tests, and major_version branching in PoW selection; rewrote the three test call sites. Did NOT delete rust/shekyl-consensus (live consumers: shekyl-curve-tree, shekyl-daemon-rpc, shekyl-engine-state, shekyl-ffi, shekyl-genesis-tool, shekyl-wire). Also deleted slow-hash.c and generate_chacha_key* (kept chacha.h xchacha20/chacha_key/iv). wallet_rpc_payments.cpp is gone. Isolation gate extended."
+    content: "Track B / Phase 4 LANDED 2026-09-15: deleted pow_schema.h (IPowSchema), pow_registry.{h,cpp}, RX_BLOCK_VERSION, set_pow_schema_override_for_tests, and major_version branching in PoW selection; rewrote the three test call sites. Did NOT delete rust/shekyl-consensus (live consumers: shekyl-curve-tree, shekyl-daemon-rpc, shekyl-engine-state, shekyl-ffi, shekyl-genesis-tool, shekyl-wire). Also deleted slow-hash.c and generate_chacha_key*. Follow-on cleanup deleted C++ chacha.h / the xchacha20 C ABI (no C++ consumer; wallet AEAD is Rust XChaCha20-Poly1305) and dropped unused major_version/miners from get_block_longhash. wallet_rpc_payments.cpp is gone. Isolation gate extended."
     status: completed
   - id: phase5-docs
     content: "Track B / Phase 5: Update USER_GUIDE, SHEKYLD_PREREQUISITES, DESIGN_CONCEPTS, CHANGELOG, FOLLOWUPS per 91-documentation-after-plans.mdc after Phase 4 lands. Remaining Phase-5 debt is not rx-slow-hash.c, RPC payments, or shekyl-consensus crate deletion. Forward obligation: \u00a722 Guix entry (FOLLOWUPS)."
@@ -378,7 +378,10 @@ Per `60-no-monero-legacy.mdc`, `15-deletion-and-debt.mdc`, and `70-modular-conse
 
 - `src/crypto/pow_schema.h` (the `IPowSchema` interface). **DELETED — do not link.**
 - `src/crypto/pow_registry.h` and `src/crypto/pow_registry.cpp`. **DELETED — do not link.**
-- Call sites in `src/cryptonote_core/cryptonote_tx_utils.cpp`, `src/cryptonote_basic/miner.cpp`, `src/daemon/rpc_command_executor.cpp`, `src/rpc/core_rpc_server.cpp`, `src/rpc/core_rpc_server_commands_defs.h` now call the single RandomX v2 verifier directly via FFI.
+- `src/cryptonote_core/cryptonote_tx_utils.cpp` (`get_block_longhash` /
+  `get_altblock_longhash`) is the only C++ call site of `hash_pow_randomx`.
+  Miner, RPC, and daemon hashing go through those two functions; they do
+  not call the RandomX v2 FFI directly.
 
 **Rust side — SUPERSEDED: do not delete `shekyl-consensus`.** Six live Cargo consumers (`shekyl-curve-tree`, `shekyl-daemon-rpc`, `shekyl-engine-state`, `shekyl-ffi`, `shekyl-genesis-tool`, `shekyl-wire`). The original crate-deletion bullets are withdrawn; Phase 4 is C++ vestige + `slow-hash.c` / `generate_chacha_key*` only.
 

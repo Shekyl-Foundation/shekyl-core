@@ -36,7 +36,6 @@ set(unit_tests_sources
   bulletproofs_plus.cpp
   gap7_bp_bench.cpp
   canonical_amounts.cpp
-  chacha.cpp
   checkpoints.cpp
   command_line.cpp
   crypto.cpp
@@ -56,7 +55,6 @@ set(unit_tests_sources
   expect.cpp
   json_serialization.cpp
   get_xtype_from_string.cpp
-  hmac_keccak.cpp
   keccak.cpp
   levin.cpp
   logging.cpp

@@ -184,13 +184,11 @@ it at this pin); its deletion **LANDED 2026-09-15** with Phase 4.
   not gated). Independent of `slow-hash.c` (it only *calls*
   `cn_slow_hash`; deleting the caller doesn't require deleting the
   callee).
-- `src/crypto/pow_randomx.cpp` — **kept** (the RandomX schema); its
-  `rx_slow_hash` call is swapped in 3a. Its
-  `prepare_miner_thread`/`rx_set_miner_thread` (line 22) is
-  miner-lifecycle, not verification-consensus, and is **not** an FFI
-  export (spec §5); it is vestigial post-cutover but harmless and is
-  removed with the `IPowSchema` abstraction in Phase 4.
-- `src/crypto/pow_schema.h` (`IPowSchema`) — **kept** (Phase 4).
+- `src/crypto/pow_randomx.cpp` — **kept** as `hash_pow_randomx` (the
+  RandomX schema wrapper is gone). `rx_slow_hash` was swapped in 3a;
+  `prepare_miner_thread`/`rx_set_miner_thread` were already gone with 3c.
+- `src/crypto/pow_schema.h` (`IPowSchema`) — **DELETED 2026-09-15**
+  (Phase 4).
 
 ### 2.7 Corpus errata caught during the survey
 

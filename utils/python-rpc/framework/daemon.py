@@ -62,11 +62,10 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(get_miner_data)
 
-    def calc_pow(self, major_version, height, block_blob, seed_hash = ''):
+    def calc_pow(self, height, block_blob, seed_hash = ''):
         calc_pow = {
             'method': 'calc_pow',
             'params': {
-                'major_version': major_version,
                 'height': height,
                 'block_blob' : block_blob,
                 'seed_hash' : seed_hash,

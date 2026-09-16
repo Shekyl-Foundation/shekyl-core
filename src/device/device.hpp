@@ -30,7 +30,6 @@
 #pragma once
 
 #include "crypto/crypto.h"
-#include "crypto/chacha.h"
 #include "fcmp/ct_types.h"
 #include "cryptonote_config.h"
 

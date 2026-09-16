@@ -83,7 +83,9 @@ const BASELINE: &[(&str, usize, usize)] = &[
     // retargeted: a check that measured a C++ boundary does not become a check
     // of the Rust wallet stack by re-pointing it. `shekyl-engine-file` is
     // consumed directly as a Rust crate now, with no `extern "C"` edge to bound.
-    ("legacy_core.rs", 4, 0),
+    // 4 -> 2: the xchacha20 C ABI was deleted with the Phase 4 follow-on
+    // (no C++ consumer; wallet AEAD is Rust). Tightened so the win cannot grow back.
+    ("legacy_core.rs", 2, 0),
     ("legacy_curve_tree.rs", 4, 0),
     // 6 -> 5: the legacy `shekyl_fcmp_prove` entry point was deleted with the
     // C++ wrapper that was its only caller, taking one reservation with it.

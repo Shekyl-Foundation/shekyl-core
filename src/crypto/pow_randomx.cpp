@@ -23,17 +23,13 @@ namespace
 // would have no happens-before edge to that function's construction.
 std::atomic<pow_hash_fn> s_pow_hash_override_for_tests{nullptr};
 
-bool hash_pow_randomx_ffi(const void* blob, size_t len, const crypto::hash* seed_hash, crypto::hash& out)
+bool hash_pow_randomx_ffi(const void* blob, size_t len, const crypto::hash& seed_hash, crypto::hash& out)
 {
-  if (seed_hash == nullptr)
-    return false;
-  if (shekyl_pow_randomx_v2_hash(
-        reinterpret_cast<const uint8_t (*)[32]>(seed_hash->data),
-        static_cast<const uint8_t*>(blob),
-        len,
-        reinterpret_cast<uint8_t (*)[32]>(out.data)) != SHEKYL_POW_RANDOMX_V2_OK)
-    return false;
-  return true;
+  return shekyl_pow_randomx_v2_hash(
+           reinterpret_cast<const uint8_t (*)[32]>(seed_hash.data),
+           static_cast<const uint8_t*>(blob),
+           len,
+           reinterpret_cast<uint8_t (*)[32]>(out.data)) == SHEKYL_POW_RANDOMX_V2_OK;
 }
 } // namespace
 
@@ -42,7 +38,7 @@ void set_pow_hash_override_for_tests(pow_hash_fn fn)
   s_pow_hash_override_for_tests.store(fn, std::memory_order_release);
 }
 
-bool hash_pow_randomx(const void* blob, size_t len, const crypto::hash* seed_hash, crypto::hash& out)
+bool hash_pow_randomx(const void* blob, size_t len, const crypto::hash& seed_hash, crypto::hash& out)
 {
   const pow_hash_fn override_fn =
     s_pow_hash_override_for_tests.load(std::memory_order_acquire);

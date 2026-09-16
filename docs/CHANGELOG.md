@@ -4,17 +4,33 @@
 
 ### Consensus
 
+- **RandomX v2 Phase 4 follow-on: leftover schema operands and CN
+  vestiges are gone.** `get_block_longhash` no longer takes
+  `major_version` / `miners`. `hash_pow_randomx` takes a
+  `const crypto::hash&` seed (no nullable pointer). C++ `chacha.h`,
+  the `xchacha20` C ABI, `variant2_int_sqrt`, `hmac-keccak`, unused
+  `HASH_KEY_*` domain separators, and the `on_mining_status`
+  Cryptonight label table are deleted. `cncrypto` is a single library again (the MSVC
+  OBJECT split existed to dodge a CryptonightR PDB ICE).
+
 - **RandomX v2 Phase 4: PoW is a free function, CryptoNight is gone.**
   `IPowSchema` / `pow_registry` / `RX_BLOCK_VERSION` are deleted. Block
   longhash calls `hash_pow_randomx` (Rust RandomX v2 FFI). CEN-D2 still
   fail-closes via `set_pow_hash_override_for_tests`. `slow-hash.c` and
-  `generate_chacha_key*` (the CN-KDF) are deleted; `chacha.h` keeps
-  `xchacha20`. Miner and longhash-worker threads no longer call the
-  CN scratchpad `slow_hash_{allocate,free}_state` — RandomX FFI owns
-  VM state. `check_randomx_symbol_isolation.sh` bans `cn_slow_hash`
-  and the unprefixed allocate/free names.
+  `generate_chacha_key*` (the CN-KDF) are deleted. Miner and
+  longhash-worker threads no longer call the CN scratchpad
+  `slow_hash_{allocate,free}_state` — RandomX FFI owns VM state.
+  `check_randomx_symbol_isolation.sh` bans `cn_slow_hash` and the
+  unprefixed allocate/free names.
 
 ### API
+
+- **`calc_pow` drops leftover `major_version` (RPC 3.32).** The field was
+  a Cryptonight schema operand. HTTP is Rust (`shekyl-daemon-rpc`); the
+  handler is still C++ `core_rpc_server::on_calcpow` via `core_rpc_ffi`.
+  Extra JSON keys remain ignored by epee. `CORE_RPC_VERSION_MINOR`
+  `31 → 32`. `get_miner_data.major_version` is unchanged (block-template
+  header version).
 
 - **`get_archival_shard_coverage` and `request_archival_shard` (RPC 3.31).**
   Local coverage/profit list (bond-record metadata; no Tor, no bodies, no

@@ -29,9 +29,6 @@ Default. Lands before genesis if it should exist at launch.
 - **DRS-W16: `remove_block` deletes at an implicit cursor position its caller sets.** The positioning `mdb_cursor_get(…, MDB_SET)` was removed by inherited commit `22c0fae47b` (subject unrelated to block removal); the delete is correct today only because `BlockchainDB::pop_block` reads the top block through the same write-cursor member one call earlier. Latent, not reachable in this tree — but any `blocks` read inserted between those two calls, or any second caller of `remove_block`, deletes at a valid-but-wrong position, which **succeeds silently** while the explicitly-positioned `block_info` and `block_heights` deletes remove the right rows. Either restore the dropped `MDB_SET` or land the guard at the Rust port. Falsify by `grep -n "MDB_SET" ` over `remove_block` in `src/blockchain_db/lmdb/db_lmdb.cpp`. Mechanism in [`LMDB_WRITE_ATOMICITY_AUDIT.md`](LMDB_WRITE_ATOMICITY_AUDIT.md) §9.
   - Target: pre-genesis
 
-- **`on_mining_status` still labels dead pre-RandomX variants "Cryptonight" (rule 60).** The daemon's `pow_algorithm` label table (`src/rpc/core_rpc_server.cpp` `on_mining_status`) emits Cryptonight names for PoW variants Shekyl never had; the CLI deliberately does not render the field (CU-3, [`CLI_USABILITY.md`](design/CLI_USABILITY.md) §CU-3) but the daemon-side arms are dead-branch deletion work — falsify by `grep -n "Cryptonight" src/rpc/core_rpc_server.cpp` returning nothing.
-  - Target: pre-genesis
-
 - **Delete or justify `tx_extra` 0x0A (`PQC_SPEND_AUTH_PUBKEYS`) — it has no producer.** Found at the C2-R2 signing round (Rick, verified at source): declared (`src/cryptonote_basic/tx_extra.h:48`, `rust/shekyl-wire/src/tx_extra.rs:50`), parsed (`tx_extra.rs:233`), picked (`src/cryptonote_basic/cryptonote_format_utils.cpp:540`) — and nothing anywhere constructs the field; the only write arm is the codec's generic `write_blob` branch. A parse surface with no producer is rule-15 debt and a fuzzing surface for free. Rule 15: delete at the port, or record the future producer that justifies it. — [`CONSENSUS_C2_R2_WEIGHT_FEES.md`](completed/CONSENSUS_C2_R2_WEIGHT_FEES.md) Q10
   - Target: pre-genesis
 
@@ -449,9 +446,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: checkout-hygiene landing merged **and** a pin-bump or tarball-CI need. [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
-  - Target: pre-genesis
-
-- **C++ XChaCha20 consumer census after Track D** — once `account_keys` encrypt family is gone, `crypto::xchacha20` has tests + a serializer only. Rust `wallet_envelope.rs` uses XChaCha20-Poly1305, a different implementation. Reopen: Track D merged; determine whether the C++ surface has any consumer. [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
   - Target: pre-genesis
 
 - **Promote 2c-emergent sub-PR design disciplines to project-level [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)**
