@@ -75,14 +75,34 @@ def parse_rust_only(schema: str):
     m = RUST_ONLY_RE.search(schema)
     if not m:
         raise ValueError("schema.rs: `pub const RUST_ONLY_TABLES` did not parse — subject missing")
+    body = m.group(1)
     out = {}
-    for name, lits in PAIR_RE.findall(m.group(1)):
+    # Every byte of the body must be consumed by a well-formed pair, a
+    # separating comma, a comment, or whitespace. `findall` alone would skip
+    # an entry it could not parse — a table named with a hyphen, a reason
+    # that is not a string literal — and the gate would then report a clean
+    # bijection over a map it had silently shortened (rule 47: the gate
+    # asserts its own subject).
+    pos = 0
+    while pos < len(body):
+        ws = re.compile(r"\s+|//[^\n]*\n?|,").match(body, pos)
+        if ws:
+            pos = ws.end()
+            continue
+        pair = PAIR_RE.match(body, pos)
+        if not pair:
+            snippet = body[pos:pos + 60].strip().splitlines()[0] if body[pos:].strip() else ""
+            raise ValueError(
+                f"RUST_ONLY_TABLES: unparsed content at offset {pos}: `{snippet}` — every "
+                "entry must be `(\"table_name\", \"reason\")` with a [a-z0-9_] name")
+        name, lits = pair.group(1), pair.group(2)
         reason = "".join(LIT_RE.findall(lits))
         # Rust string continuation: `\` + newline + leading whitespace is elided.
         reason = re.sub(r"\\\n\s*", "", reason)
         if name in out:
             raise ValueError(f"RUST_ONLY_TABLES: `{name}` listed twice")
         out[name] = reason.strip()
+        pos = pair.end()
     return out
 
 
@@ -278,6 +298,33 @@ def selftest():
             raise SystemExit(f"selftest absent map: wrong message {e}")
     else:
         raise SystemExit("selftest absent map: expected a refusal")
+    # A malformed entry beside a valid one must be refused, not skipped: with
+    # `findall` the hyphenated name below vanished and the map read as one
+    # clean entry (PR #757 review).
+    malformed = '''
+pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
+    ("undo_log", "the pop journal: one row of pre-images per height, replacing the C++ journals"),
+    ("bad-name", "a reason long enough to pass the eight-word floor of the reason check"),
+];
+'''
+    try:
+        parse_rust_only(malformed)
+    except ValueError as e:
+        if "unparsed content" not in str(e) or "bad-name" not in str(e):
+            raise SystemExit(f"selftest unparsed entry: wrong message {e}")
+    else:
+        raise SystemExit("selftest unparsed entry: expected a refusal")
+    # Comments and trailing commas between entries are fine.
+    commented = '''
+pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
+    // the journal
+    ("undo_log", "the pop journal: one row of pre-images per height, replacing the C++ journals"),
+];
+'''
+    if parse_rust_only(commented) != {
+        "undo_log": "the pop journal: one row of pre-images per height, replacing the C++ journals"
+    }:
+        raise SystemExit("selftest commented map: did not parse")
     print("redb schema bijection selftest: 2 clean shapes pass, 9 refusals fire")
 
 
