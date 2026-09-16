@@ -1666,7 +1666,10 @@ discussion beneath it), and recorded here because it is a property of the
 whole E-series, not of one surface.
 
 **The ported partition is transitional.** The redb schema at this pin is
-Monero's schema in a different engine — 46 tables, the same partition,
+Monero's schema in a different engine — the gated catalogue
+(`rust/shekyl-chain-store/schemas/tables.snap`) declares **50** tables, the
+49 LMDB mirrors plus Rust-only `undo_log`, of which **46** are E1's write
+target after the three ruled-not-to-port (§3.5); the same partition,
 `output_amounts` keyed verbatim with R8b-2 open. Reproducing it first is the
 parity-first choice already ruled: a shape cannot be redesigned before it is
 characterised, and redesigning mid-port retires the comparator. But that is
@@ -1694,8 +1697,16 @@ S-CHAIN-R's Q4 default was, and was overturned for) is argued from a
 description of Monero's storage, not a specification of ours.
 
 **Parity is a phase with a defined end; repairs start after it.** Every
-deviation and glitch found during the port is *reproduced* under parity
-and *repaired* after cutover — in Rust, with one language left. This is the
+**comparator-visible** deviation and glitch found during the port — one
+the E2 diff over committed content would observe — is *reproduced* under
+parity and *repaired* after cutover, in Rust, with one language left. A
+**comparator-invisible** difference — a read-side API shape the diff never
+sees (a C++ sentinel that becomes an `Option`, an unchecked `memcpy` that
+becomes a codec refusal, an exception that becomes a typed arm) — is
+**corrected at port**, because reproducing it buys parity nothing and
+costs a second correction later; the test is "would the comparator see
+it?", and the record of such a correction names both behaviours
+(`DRS_E1_SCHAIN_R.md` §6.1, *corrected-at-port*). This is the
 proper resolution of the CEN-I12 argument: the reason not to touch the C++
 is not cosmetics, it is that a repair landing half in C++ and half in Rust
 is two implementations of one correction, which is the thing every ruling
@@ -1740,7 +1751,14 @@ this month has been built to avoid. Three things the repair phase needs:
    printing is the mechanism; the gate is what this ruling adds. Release
    is `ratified == enforced` on the consensus line — every remaining
    bucket-4 row ratified or diverged by an R-round, or ruled dead
-   (bucket 3, leaving the denominator). The E6 slice-1 pre-flight
+   (bucket 3, leaving the denominator) — **and the repair-backlog query
+   (item 1) at zero unresolved entries.** The ratio alone cannot carry the
+   gate: `check_chain_rules_coverage.py` computes `ratified` from the
+   census's consensus buckets only, so the store-invariant, schema-shape
+   and surface-plan deviations item 1 puts in the backlog are outside it,
+   and a ratified consensus row can still be *implemented* divergently
+   with a DIVERGENT record open. The two instruments together are the one
+   denominator item 2 names; either alone is half of it. The E6 slice-1 pre-flight
    (`CHAIN_RULES_SLICE_1.md` (PR #761, not yet on `dev` — named, not linked) §9) carries the
    same ruling read from the rules crate's side and verified the
    figure at `3560b80c2`: 27 enforced-and-unratified consensus rows (25
@@ -1765,7 +1783,7 @@ pinned" sentence for that encoding, with the row that pins it named.
 - [ ] DRS-D9 + **DRS-D10 reconstructible derived state implemented** (mandatory)
 - [ ] Writer/reader concurrency rules (§3.6) implemented and tested; `ChainTip.connect` exposed in `get_info` (§3.6.2)
 - [ ] **DRS-E6 complete consensus coverage (DRS-D12):** the completeness gate reports `implemented = enforced` for consensus-flagged census rows, computed from the census (policy rows are E5's `AdmissionPolicy` denominator, reported separately); every rule carries its negative fixture; the `RuleCoverage` the store persists is complete
-- [ ] **Release gate (§7.6):** the comparator plus `implemented == enforced` gated **cutover**; **`ratified == enforced`** over consensus-flagged rows gates **release** — the repair backlog (reproduced deviations + bucket-4, one denominator) is empty, read from the one query §7.6 item 1 names
+- [ ] **Release gate (§7.6):** the comparator plus `implemented == enforced` gated **cutover**; **release** requires both **`ratified == enforced`** over consensus-flagged rows (`check_chain_rules_coverage.py`) **and** the repair-backlog query (§7.6 item 1) at **zero unresolved entries** — the ratio covers consensus rows only; the query covers the store-invariant, schema-shape and surface-plan deviations; together they are the one denominator
 - [ ] Cross-store KAT (DRS-D3c) green
 - [ ] Supply-chain governance (§10) for production redb
 - [ ] Affirmative digest artifacts archived (survive LMDB deletion)
