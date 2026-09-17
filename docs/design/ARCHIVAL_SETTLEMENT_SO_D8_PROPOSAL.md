@@ -1214,9 +1214,10 @@ fire height), so absence reads NonObservation and the drop contributes
 further observations (`SO-D5`'s inversion: absent row ⇒ non-observation ⇒
 the denominator shrinks). Its window cannot grow:
 `failure_window_slashable` (`failure_window.rs:361–385`) needs a miss at
-the head **and** `m = 11` of `n ≤ 13` (`:150–155`). A pair at 10-of-12
-before the drop stays at 10-of-12 for good — the drop cannot land a
-slash, and there is no "next epoch" in which it could. *SUPERSEDED:
+the head **and** `m = 11` misses within `n ≤ 13` (`:150–155`). A pair
+with ten misses in twelve observations before the drop stays there for
+good — the drop cannot land a slash, and there is no "next epoch" in
+which it could. *SUPERSEDED:
 "accumulates exactly one bad observation"; "slashable next epoch
 regardless" — both written against the pre-(3.3) worst case, and the
 second was wrong even there (an eleventh miss at the head slashes at
