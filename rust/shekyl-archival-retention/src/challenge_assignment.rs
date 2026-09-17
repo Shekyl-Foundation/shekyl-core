@@ -43,8 +43,19 @@
 //!   attempt_le)`, first 8 bytes as a little-endian `u64`, rejection-
 //!   sampled into `[0, remaining)` with the modulo-bias zone; `attempt`
 //!   increments on rejection. Never a general-purpose PRNG.
-//! - **λ_target is a parameter (§9.5 pin 3):** the 2-of-3 ruling's value
-//!   (3) is supplied by the caller; nothing here hardcodes it.
+//! - **λ_target is read from the constant at the entry points (Q4,
+//!   2026-09-17):** [`ChallengeUrn::new`] and [`assign_epoch`] take no λ
+//!   and read [`crate::CHALLENGES_PER_PAIR_PER_EPOCH`], so the urn and
+//!   the settlement threshold (`attestation.rs` const-asserts the pair)
+//!   cannot disagree. The λ-taking doors — [`ChallengeUrn::with_lambda`],
+//!   [`assign_epoch_with_lambda`] — are `pub(crate)`, for this module's
+//!   tests, which need λ ∈ {0, 1, 2, `u32::MAX`} to exercise the
+//!   rejections and the small-wave shapes. *SUPERSEDED (§9.5 pin 3 as
+//!   landed 2026-08-11): "λ_target is a parameter … supplied by the
+//!   caller" — two `pub` doors were exactly what let the urn and the
+//!   threshold drift apart silently.* Reopen to a `pub` door only for a
+//!   named out-of-crate consumer (e.g. an economics-sim sweep over λ),
+//!   documented as sim-facing at the signature; today none exists.
 //!
 //! ## Streaming shape
 //!
@@ -60,6 +71,7 @@
 //! only on `block_hash(h−1)`, which exists one block before the draws it
 //! seeds (the §7.1 exposure arithmetic, `3τ/SEB`, prices exactly this).
 
+use crate::constants::CHALLENGES_PER_PAIR_PER_EPOCH;
 use crate::hash::cshake256_32;
 
 /// SP 800-185 customization label for the per-draw stream (rule 30:
@@ -86,7 +98,11 @@ pub enum AssignmentError {
         index: usize,
     },
     /// `λ_target = 0` schedules nothing and is a misconfiguration, not an
-    /// epoch with no work.
+    /// epoch with no work. Unreachable from [`ChallengeUrn::new`] and
+    /// [`assign_epoch`]: they read [`CHALLENGES_PER_PAIR_PER_EPOCH`], which
+    /// `attestation.rs` const-asserts at or above `SERVE_THRESHOLD_PASSES`.
+    /// Reachable only through the crate-private λ door, where the tests pin
+    /// it.
     #[error("λ_target must be positive")]
     ZeroLambda,
     /// `epoch_blocks = 0` has no block to schedule into.
@@ -144,10 +160,20 @@ pub struct ChallengeUrn {
 }
 
 impl ChallengeUrn {
-    /// Build the urn for one epoch. `pairs` must be strictly increasing by
-    /// `(p_id, shard_id)` — the canonical order every node derives
-    /// identically. An empty set is a valid epoch with no draws.
-    pub fn new(
+    /// Build the urn for one epoch at the ruled coverage,
+    /// [`CHALLENGES_PER_PAIR_PER_EPOCH`] — the production entry point takes
+    /// no λ (Q4). `pairs` must be strictly increasing by `(p_id, shard_id)`
+    /// — the canonical order every node derives identically. An empty set
+    /// is a valid epoch with no draws.
+    pub fn new(pairs: Vec<DrawablePair>, epoch_blocks: u64) -> Result<Self, AssignmentError> {
+        Self::with_lambda(pairs, CHALLENGES_PER_PAIR_PER_EPOCH, epoch_blocks)
+    }
+
+    /// The λ-taking constructor. Crate-private by decision (Q4): a `pub`
+    /// door here is how the urn and the settlement threshold were able to
+    /// disagree. Tests use it for the rejection arms and the small-wave
+    /// shapes; production goes through [`ChallengeUrn::new`].
+    pub(crate) fn with_lambda(
         pairs: Vec<DrawablePair>,
         lambda_target: u32,
         epoch_blocks: u64,
@@ -255,17 +281,28 @@ impl ChallengeUrn {
 }
 
 /// Assign every block of an epoch in one shot — the pure, desync-free form
-/// of a full-epoch recompute. `prev_hashes.len()` is the epoch length;
-/// entry `h` is the predecessor hash for epoch-relative block `h` (i.e.
-/// `block_hash` of the block at absolute height one below that block).
-/// An empty slice is [`AssignmentError::ZeroEpochBlocks`].
+/// of a full-epoch recompute, at the ruled coverage
+/// [`CHALLENGES_PER_PAIR_PER_EPOCH`] (Q4: no λ parameter).
+/// `prev_hashes.len()` is the epoch length; entry `h` is the predecessor
+/// hash for epoch-relative block `h` (i.e. `block_hash` of the block at
+/// absolute height one below that block). An empty slice is
+/// [`AssignmentError::ZeroEpochBlocks`].
 pub fn assign_epoch(
+    pairs: Vec<DrawablePair>,
+    prev_hashes: &[[u8; 32]],
+) -> Result<Vec<Vec<DrawablePair>>, AssignmentError> {
+    assign_epoch_with_lambda(pairs, CHALLENGES_PER_PAIR_PER_EPOCH, prev_hashes)
+}
+
+/// [`assign_epoch`] with an explicit λ. Crate-private by decision (Q4);
+/// see [`ChallengeUrn::with_lambda`].
+pub(crate) fn assign_epoch_with_lambda(
     pairs: Vec<DrawablePair>,
     lambda_target: u32,
     prev_hashes: &[[u8; 32]],
 ) -> Result<Vec<Vec<DrawablePair>>, AssignmentError> {
     let epoch_blocks = prev_hashes.len() as u64;
-    let mut urn = ChallengeUrn::new(pairs, lambda_target, epoch_blocks)?;
+    let mut urn = ChallengeUrn::with_lambda(pairs, lambda_target, epoch_blocks)?;
     let mut out = Vec::with_capacity(prev_hashes.len());
     for prev in prev_hashes {
         // Sequential feed cannot fail mid-epoch after a successful `new`
@@ -339,7 +376,7 @@ mod tests {
 
     fn run(pairs: Vec<DrawablePair>, lambda: u32, blocks: u64) -> Vec<Vec<DrawablePair>> {
         let prevs: Vec<[u8; 32]> = (0..blocks).map(prev_hash_for).collect();
-        assign_epoch(pairs, lambda, &prevs).expect("valid epoch")
+        assign_epoch_with_lambda(pairs, lambda, &prevs).expect("valid epoch")
     }
 
     #[test]
@@ -348,20 +385,20 @@ mod tests {
         // the §9.5 pin as a type-level property, not a convention.
         let unsorted = vec![pair(2, 0), pair(1, 0)];
         assert_eq!(
-            ChallengeUrn::new(unsorted, 3, 10).unwrap_err(),
+            ChallengeUrn::new(unsorted, 10).unwrap_err(),
             AssignmentError::NotCanonicallyOrdered { index: 1 }
         );
         let dup = vec![pair(1, 7), pair(1, 7)];
         assert_eq!(
-            ChallengeUrn::new(dup, 3, 10).unwrap_err(),
+            ChallengeUrn::new(dup, 10).unwrap_err(),
             AssignmentError::NotCanonicallyOrdered { index: 1 }
         );
         assert_eq!(
-            ChallengeUrn::new(vec![], 0, 10).unwrap_err(),
+            ChallengeUrn::with_lambda(vec![], 0, 10).unwrap_err(),
             AssignmentError::ZeroLambda
         );
         assert_eq!(
-            ChallengeUrn::new(vec![], 3, 0).unwrap_err(),
+            ChallengeUrn::new(vec![], 0).unwrap_err(),
             AssignmentError::ZeroEpochBlocks
         );
     }
@@ -374,10 +411,10 @@ mod tests {
         // (p, 1); the canonical order says the opposite, and this test is
         // what a divergent second implementation fails.
         let ordered = vec![pair(1, 1), pair(1, 256)];
-        assert!(ChallengeUrn::new(ordered, 3, 10).is_ok());
+        assert!(ChallengeUrn::new(ordered, 10).is_ok());
         let le_byte_order = vec![pair(1, 256), pair(1, 1)];
         assert_eq!(
-            ChallengeUrn::new(le_byte_order, 3, 10).unwrap_err(),
+            ChallengeUrn::new(le_byte_order, 10).unwrap_err(),
             AssignmentError::NotCanonicallyOrdered { index: 1 }
         );
     }
@@ -391,7 +428,7 @@ mod tests {
         // with λ·D = 3·(2³²−1) > u32::MAX.
         let small: Vec<_> = (0..3u8).map(|t| pair(t, 0)).collect();
         assert_eq!(
-            ChallengeUrn::new(small, u32::MAX, 1).unwrap_err(),
+            ChallengeUrn::with_lambda(small, u32::MAX, 1).unwrap_err(),
             AssignmentError::PerBlockDrawsOverflow
         );
     }
@@ -432,7 +469,7 @@ mod tests {
         // The exact-min invariant: at every block boundary, issued counts
         // across pairs differ by at most one.
         let pairs: Vec<_> = (0..6u8).map(|t| pair(t, 1)).collect();
-        let mut urn = ChallengeUrn::new(pairs.clone(), 3, 9).expect("valid urn");
+        let mut urn = ChallengeUrn::new(pairs.clone(), 9).expect("valid urn");
         let mut counts: BTreeMap<DrawablePair, u32> = BTreeMap::new();
         for h in 0..9 {
             for p in urn.advance_block(&prev_hash_for(h)).expect("in-order feed") {
@@ -469,7 +506,7 @@ mod tests {
         // once per wave. That is the §7.1 accepted 3τ/SEB exposure in
         // miniature; a perturbation landing on a forced draw changes
         // nothing, which is why this test perturbs an entropic block.
-        let mut urn = ChallengeUrn::new(pairs, 2, 7).expect("valid urn");
+        let mut urn = ChallengeUrn::with_lambda(pairs, 2, 7).expect("valid urn");
         let mut c = Vec::new();
         for h in 0..7 {
             let hash = if h == 1 { [0xAB; 32] } else { prev_hash_for(h) };
@@ -485,7 +522,7 @@ mod tests {
 
     #[test]
     fn empty_drawable_set_is_a_valid_epoch_with_no_draws() {
-        let mut urn = ChallengeUrn::new(vec![], 3, 4).expect("valid urn");
+        let mut urn = ChallengeUrn::new(vec![], 4).expect("valid urn");
         for h in 0..4 {
             assert!(urn
                 .advance_block(&prev_hash_for(h))
@@ -507,7 +544,7 @@ mod tests {
         // height — those states are unrepresentable. After E successful
         // advances the only remaining error is EpochComplete.
         let pairs: Vec<_> = (0..3u8).map(|t| pair(t, 0)).collect();
-        let mut urn = ChallengeUrn::new(pairs, 2, 6).expect("valid urn");
+        let mut urn = ChallengeUrn::with_lambda(pairs, 2, 6).expect("valid urn");
         assert_eq!(urn.next_block(), 0);
         urn.advance_block(&prev_hash_for(0)).expect("first feed");
         assert_eq!(urn.next_block(), 1);
@@ -521,10 +558,34 @@ mod tests {
     }
 
     #[test]
+    fn production_doors_read_the_constant_and_take_no_lambda() {
+        // Q4's falsifier, as a test: `new` / `assign_epoch` derive exactly
+        // what `with_lambda(CHALLENGES_PER_PAIR_PER_EPOCH)` derives, and
+        // issue λ·D draws with λ read from the constant the settlement
+        // threshold is const-asserted against. A second `pub` door taking λ
+        // is what this pin refuses — the urn and the threshold could then
+        // disagree with nothing failing.
+        let pairs: Vec<_> = (0..5u8).map(|t| pair(t, 1)).collect();
+        let prevs: Vec<[u8; 32]> = (0..8).map(prev_hash_for).collect();
+        let via_constant = assign_epoch(pairs.clone(), &prevs).expect("valid epoch");
+        let via_door =
+            assign_epoch_with_lambda(pairs.clone(), CHALLENGES_PER_PAIR_PER_EPOCH, &prevs)
+                .expect("valid epoch");
+        assert_eq!(via_constant, via_door);
+        let draws: usize = via_constant.iter().map(Vec::len).sum();
+        assert_eq!(
+            draws,
+            usize::try_from(CHALLENGES_PER_PAIR_PER_EPOCH).expect("small") * pairs.len()
+        );
+        let urn = ChallengeUrn::new(pairs, 8).expect("valid urn");
+        assert_eq!(urn.next_block(), 0);
+    }
+
+    #[test]
     fn assign_epoch_empty_hashes_is_zero_epoch_blocks() {
         let pairs = vec![pair(0, 0)];
         assert_eq!(
-            assign_epoch(pairs, 1, &[]).unwrap_err(),
+            assign_epoch_with_lambda(pairs, 1, &[]).unwrap_err(),
             AssignmentError::ZeroEpochBlocks
         );
     }
@@ -546,14 +607,17 @@ mod tests {
                 DrawablePair { p_id, shard_id: 0 }
             })
             .collect();
-        let mut urn = ChallengeUrn::new(pairs, 3, 10_000).expect("valid urn");
+        let mut urn = ChallengeUrn::new(pairs, 10_000).expect("valid urn");
         let start = std::time::Instant::now();
         for h in 0..10_000 {
             urn.advance_block(&prev_hash_for(h)).expect("in-order feed");
         }
         let elapsed = start.elapsed();
-        assert_eq!(urn.draws_done(), 972_000);
-        eprintln!("full-epoch replay at maturity: {elapsed:?} for 972,000 draws");
+        // λ·D from the constant, not typed by hand: 3 × 324,000 = 972,000
+        // at the ruled coverage.
+        let expected = u64::from(CHALLENGES_PER_PAIR_PER_EPOCH) * 324_000;
+        assert_eq!(urn.draws_done(), expected);
+        eprintln!("full-epoch replay at maturity: {elapsed:?} for {expected} draws");
     }
 
     /// Golden KAT — the cross-version determinism seed (consensus-port
