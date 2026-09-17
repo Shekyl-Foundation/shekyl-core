@@ -61,6 +61,7 @@ is a hope; none of these is.
 | G10 | **No pre-provisioning.** No `PoolView` (E5's), no fork version on `ChainView` (ruling Q7), no `Canonical`/codec impl for `RuleCoverage` (the store's, at S-CHAIN-W under rule 42), no second verdict type, no view method without a census row that reads it (Q3 ruling). | This document's API list is exhaustive; anything not in §4 is not in the crate. |
 | G11 | **Absence is matched, never propagated.** A by-height lookup returns `AtHeight<T>` — `Recorded(T)` or `AboveTip` — not `Option<T>`. There is no `?`, `map`, `unwrap_or_*`, or `is_none_or` on it: a rule that reaches `AboveTip` writes its refusal at that arm. A substrate that cannot answer surfaces as `V::Fault`, a different thing from absence (§4.3). | `AtHeight<T>` has no combinator surface and no `Default`; `CurveTreeRoot`/`RecordedBlock` have no `Default`. |
 | G12 | **Hygiene.** `#![deny(unsafe_code)]`; no `println!`/`eprintln!`/`dbg!` outside `#[cfg(test)]`; `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean. | Crate attribute; `build.yml`'s debug-macro lint; rule 45. |
+| G13 | **No recorded transaction body crosses `ChainView`.** The trait's reads are the recorded chain's *permanent* facts — a key image's presence, a block's identity and header, a root, the tip — never a recorded transaction's bytes. Under `PDM-Q6` bodies below the retention watermark `W` are discarded, so a rule that read one would be an above-`W`-only rule with nothing marking it so; with no accessor, every rule in this crate is by construction one a body-less node can run, and Q3's owed instrument ("a consensus read reaches a discarded body") is a property of the trait's surface rather than a grep over `src/`. **Reopening (rule 21):** a census row that reads a *recorded* body — none does today; 4.I reads the *candidate's* bodies, which are in `Candidate`, and CEN-I12 reads a root — arrives with an accessor that is `Option`-shaped (`None` ⇔ discarded, never a sentinel) and a rule type marked above-`W` in the registry, both in that row's slice pre-flight. Shaping request from the pruning lane's review of `PDM-Q-F26` (PR #765), taken 2026-09-16. | The Q3 ruling (every `ChainView` method is justified by a named row) already refuses an unjustified accessor; this row names the *kind* of method that needs the extra mark. `RecordedBlock { hash, header }` — no body field (§4.3). |
 
 ---
 
@@ -373,13 +374,21 @@ pub trait ChainView<'id> {
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
     /// CEN-I12 (the membership anchor is the tree state at `ref_height`).
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
+    /// CEN-A2 (`hash`); the connecting height of B1/B5 (and 4.C, CEN-F5 later)
+    /// via `Tip::connecting_height`. `None` is the empty chain — slice 1, Q1.
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
 }
+
+/// The last recorded block. `Option`, not a bespoke absence enum: an empty
+/// chain has no valid-looking alternative, so `None` cannot read as data
+/// (`CHAIN_RULES_SLICE_1.md` §2). Composed by the store's `RecordedTip`.
+pub struct Tip { pub height: BlockHeight, pub hash: BlockHash }
 ```
 
-Three of the ruling's illustrative four (`output_at` — §3.3). No
-`fork_version()` / `rule_set()` on the view (ruling Q7). No `tip()` yet: CEN-B5
-(header root == *tip* root) and 4.A/4.C need one and it is owed to slice 1
-(§13, **Q12-2**); it is not added here without its row. The trait has no
+Three of the ruling's illustrative four (`output_at` — §3.3) plus `tip()`,
+added by slice 1 with CEN-A2 and CEN-B5 (**Q12-2 discharged**; *records-was:*
+increment 1 shipped without it, "not added here without its row"). No
+`fork_version()` / `rule_set()` on the view (ruling Q7). The trait has no
 `'id`-carrying method — the brand lives in the implementor's type and in
 `ChainValid<'id, V>`; the trait's parameter is what ties the two in
 `validate`'s signature, and `V` names the implementor itself.
@@ -894,13 +903,15 @@ second lines behind the belt and the type shapes, not gates.
 Harness surface (`#[cfg(test)]`; as landed, commit 6):
 
 ```rust
-/// A recorded chain: blocks dense from height 0 (a root per block), a key-image set.
-#[derive(Default)]
-pub struct MockChain { recorded: Vec<(RecordedBlock, CurveTreeRoot)>, key_images: BTreeSet<KeyImage> }
+/// A recorded chain: blocks dense from height 0, roots keyed as the store keys
+/// them (SCW-19: roots[h] = the state AT h; roots[0] = EMPTY; the root pushed with
+/// block h is roots[h + 1]) — corrected by slice 1, whose B5 fixture caught the
+/// mock one height off the store — and a key-image set.
+pub struct MockChain { recorded: Vec<RecordedBlock>, roots: Vec<CurveTreeRoot>, key_images: BTreeSet<KeyImage> }
 impl MockChain {
-    pub fn push(self, block: RecordedBlock, root: CurveTreeRoot) -> Self;   // height = recorded.len()
+    pub fn push(self, block: RecordedBlock, root_after: CurveTreeRoot) -> Self; // height = recorded.len()
     pub fn with_key_image(self, key_image: KeyImage) -> Self;
-    pub fn tip(&self) -> Option<BlockHeight>;                               // None when empty
+    pub fn tip(&self) -> Option<Tip>;                                          // None when empty
     /// Project a branded view. `'id` is fresh per call (HRTB) — the mock's analogue of `ChainStore::write`.
     pub fn with_view<R>(&self, f: impl for<'id> FnOnce(MockView<'_, 'id>) -> R) -> R;
 }
@@ -919,7 +930,8 @@ pub fn infallible<T>(r: Result<T, Infallible>) -> T;                         // 
 pub mod fixture {
     pub fn coinbase(unlock_time: u64) -> Transaction;
     pub fn header() -> BlockHeader;
-    pub fn candidate(listed: Vec<Transaction>) -> Candidate;
+    pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate; // on the tip: previous + root set (A2, B5)
+    pub fn candidate(listed: Vec<Transaction>) -> Candidate;                        // genesis-shaped
     pub fn recorded(timestamp: u64) -> RecordedBlock;
     pub const fn root(byte: u8) -> CurveTreeRoot;
 }
@@ -1074,9 +1086,9 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
 
 ## 13. Owed to later increments (named, with consumers) — none deferred from this one
 
-- `ChainView::tip()` — slice 1 (4.A) / CEN-B5; Q12-2. **Shape RULED
-  2026-09-16** at [`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §2:
-  `Result<Option<Tip { height, hash }>, Fault>`.
+- ~~`ChainView::tip()`~~ — **DISCHARGED** by slice 1 (shape ruled at
+  [`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §2:
+  `Result<Option<Tip { height, hash }>, Fault>`; §4.3 above).
 - `difficulty_at` — **slice 2 (4.D)**, handed to this crate by S-CHAIN-R's
   round-1 Q1 (`DRS_E1_SCHAIN_R.md` (PR #760, not yet on `dev` — linked at landing) SCR-3): the store
   exposes `cumulative_difficulty` (a `RecordedBlock` field, 4.D) and never
@@ -1092,7 +1104,51 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `ChainTip.connect` — S-CHAIN-W.
 - `PoolView`, `AdmissionPolicy` application, `PolicyCoverage` consumer — DRS-E5.
 - Replay harness feeding `grade()` — DRS-E2.
+- **A below-anchor validation mode** — owed to **slice 3 (4.E) or slice 6
+  (4.I), whichever opens first**; consumer the band-1 sync driver
+  (`PDM-Q5`: below the release anchor `C` a fresh node holds skeleton only —
+  no prunable body, no `pqc_auths` — and proof validity is asserted by the
+  anchor, not checked). Shaping request from the pruning lane's review of
+  `PDM-Q-F26` (PR #765), taken 2026-09-16: **DRS-D12 and PDM-Q5 band 1
+  collide at `validate`** — a skeleton block cannot pass a `validate` that
+  checks proofs, so under D12 it can never be connected unless `validate`
+  can be told to omit the proof rows and record the omission. *Read against
+  the landed types:* the omission is already expressible — `RuleSet::
+  enforced` is "the rows this set holds a block to" and `RuleCoverage`
+  records what ran — and the anchor rule already has a row, **CEN-E1** (the
+  release-carried `assumevalid` checkpoint after `PDM-Q-F23` removed E5). What
+  does **not** exist is the *mode*: a below-anchor rule set as a second
+  `RuleSetId` would be refused by `connect` (`StoreCannot::RuleSetNotInForce`
+  — `in_force` comes from the consensus schedule, and "this node has no
+  bodies below `C`" is node state, not consensus). **Default for the ruling
+  (not decided here):** a `Trust`-shaped input to `validate` orthogonal to
+  `RuleSet` — `Full` | `BelowAnchor(anchor)` — under which the proof rows are
+  not run, their rows are absent from coverage, `connect`'s provenance
+  records them as `rule_coverage_gaps` (so a band-1 file is never parity
+  evidence, which is true), and the `in_force` check is untouched.
+  Alternative: a below-anchor `RuleSet` variant with its own id, requiring
+  `connect` to accept a second in-force set per height. Decide **before**
+  `validate` acquires callers beyond the store tests and the E2 driver —
+  the signature is one parameter today and every later caller is a retrofit
+  (SCW-7's standard). Falsify by: a band-1 sync test that connects a
+  skeleton block under `RuleSet::GENESIS` and is refused.
+- **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — the txid's third
+  component, owed by `PDM-Q-F26` (PR #765; its doc comment on `TxIdentity`
+  says "the next increment that touches this type adds it"). Named here so
+  the increment that touches `block.rs` for B6 (the `tip()` PR, slice 1)
+  can **scope it out by name rather than by omission**: the field pairs with
+  a store row beside `txs_prunable_hash` (S-CHAIN-W amendment, S-CHAIN-R's
+  surface) and a KAT against `Transaction::hash()`; it lands with the
+  increment that lands the row, and B6's move of the derivation site is not
+  that increment. F26's own invariant ("segment present ⇔ hash row present
+  ⇔ txid 4-part") needs a third leg before the store builds a belt on it —
+  a hash row with no segment is the *normal* below-`W` state under `PDM-Q6`,
+  not a violation — raised to the PDM owner on PR #765, not E6's to fix.
 
 Nothing scoped to increment 1 by §7.5.1 is deferred out of it. The one
 increment-1 deferral this section carried — the `_census.py` extraction,
 blocked on #751 — was discharged in this PR when #751 merged (§6.1, Q7).
+Slice 1's own deferrals (CEN-B4 to the increment landing the bond-pubkey
+read; CEN-A3 subsumed into it; CEN-A5 subsumed into 4.G; CEN-A6/A7 to the
+wire-side invariant register) are recorded at
+[`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §3–§4 and §8 Q2/Q3.

@@ -25,6 +25,19 @@
 
 ### API
 
+- **`shekyl-chain-rules` slice 1: the first consensus rules, and
+  `ChainView::tip()`.** CEN-A2 (parent is the tip), B1/B2/B7 (header
+  version), B5 (header root is the tree state at the connecting height,
+  SCW-19 keying) and B6 (identity, adopted from `shekyl_wire::Block::hash`)
+  are evaluated by `validate`; each registry entry names a rule *type* whose
+  `ROW` is compile-pinned to its row (SCW-18). `ChainView` gains
+  `tip() -> Result<Option<Tip { height, hash }>, Fault>`, implemented by the
+  store's `BatchView` through `chain_reads`. CEN-A1/A4 are `held_by_cxx`:
+  acceptance topology the C++ ingest driver decides until cutover, each
+  entry naming the core test that proves it, printed by the coverage gate as
+  `validator-enforced = E − H` beside a fixed `E`. No daemon path calls
+  `validate` yet ([`CHAIN_RULES_SLICE_1.md`](design/CHAIN_RULES_SLICE_1.md)).
+
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
   (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured
   width; `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor. Serve-side
