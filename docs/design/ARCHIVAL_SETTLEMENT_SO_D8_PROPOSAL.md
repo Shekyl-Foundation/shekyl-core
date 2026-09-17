@@ -8,8 +8,10 @@ Q3, Q8 (incl. P1/P2), Q9, Q10, Q12, Q13, Q15; Q14 closed by Q15;
 amended same day against `dev@5fde3b1ce` — §6.3); `SO-D8e` (forward
 urn + `W₂` ring, no checkpoints, one set live, digest carve-out — §7.2).
 **Still to be ruled:** Q9's set-commitment bytes (§7.6.1, PROPOSED —
-one customization + KAT; carrier semantics RULED (B), §7.6.2); Q4 (`λ`
-unpinned — must pin before any production caller). Slice C is not
+one customization + KAT; carrier semantics RULED (B), §7.6.2). **Q4
+RESOLVED 2026-09-17** (one production constructor reads the constant;
+`assign_epoch` feeds it; explicit λ is `#[cfg(test)]` —
+`fix/so-q4-pin-lambda`). Slice C is not
 authorized. `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold on the
 writer's call site **stands**. No admission code, no consensus code, and
 no writer call site were written for this round (Slices A and B of the
@@ -519,8 +521,8 @@ that recommendation is **withdrawn** and the reason it was wrong is F4.
 
 Items **7 and 8 RULED 2026-09-16** (Q10, Q9). **`SO-D8a`/`b`/`c` RULED
 2026-09-16** (items 3b/fire, 4, 5 — transcriptions). **`SO-D8d` RULED
-2026-09-16** (§6). **`SO-D8e` RULED 2026-09-16** (§7.2). Q4 still unpinned
-inside item 6.
+2026-09-16** (§6). **`SO-D8e` RULED 2026-09-16** (§7.2). **Q4 RESOLVED
+2026-09-17** (item 6's λ pin landed).
 
 Rick's enumeration of 2026-09-13, re-grounded at source; where the tree
 disagrees with the enumeration the correction is marked.
@@ -588,8 +590,9 @@ disagrees with the enumeration the correction is marked.
    per-challenge deadline its doc string (`constants.rs:59`) already
    describes — that reader is `SO-D8a` **RULED 2026-09-16**; the FOLLOWUPS
    row **discharged**. `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`
-   (`:183–185`) becomes load-bearing (item 5 depends on it). `λ` **must** be
-   pinned to `CHALLENGES_PER_PAIR_PER_EPOCH` before any of this (Q4, §7.3).
+   (`:183–185`) becomes load-bearing (item 5 depends on it). `λ` is
+   pinned to `CHALLENGES_PER_PAIR_PER_EPOCH` at the urn's entry points
+   (Q4 RESOLVED 2026-09-17, §7.3).
 7. **New daemon-side secret lifetime — Q10 RULED 2026-09-16 (§7.7): accept
    loss.** The producer of `h` retains the material to sign as witness
    until the batch is included (deadline `W₂`, expected latency much
@@ -762,8 +765,8 @@ checked, no collision; TSV row at Slice C). Hiding is theater because
 the reveal publishes `pk`. The join identifies `h`'s coinbase (stealth
 payout already in the block), not a miner identity. Real residual is
 P2 / fixture 12. Reopen if `h` is removed **in order to conceal** the
-issuing block. Open: Q4 (`λ` unpinned); Q9 set-commitment bytes
-(§7.6.1). `SO-D8e` RULED (§7.2); Q9 carrier semantics RULED (B) (§7.6.2).
+issuing block. Open: Q9 set-commitment vectors (§7.6.1). Q4 RESOLVED
+2026-09-17. `SO-D8e` RULED (§7.2); Q9 carrier semantics RULED (B) (§7.6.2).
 
 ---
 
@@ -1011,12 +1014,19 @@ read an unreachable check as dead:
   the layers**, as §7.4 pin 4's refusal or SI-7 `CellCorrupt { fault:
   Absent }` on the view read, and escalates to the Fault at the slash
   pass (§6.3 item 3);
-- **λ divergence between the two doors** (Q4: `assign_epoch` reads the
-  constant; `ChallengeUrn::new` is `pub` and re-exported) — the pair set
-  is identical so layer 2 passes; layer 1 fires on replay. **Q4 is
-  therefore a precondition for `SO-D8d` having complete coverage**, not
-  only for correctness in general; recorded in Q4's own entry (§10 item
-  4) so the second door is not closed halfway.
+- **λ divergence between the two doors** — **RESOLVED 2026-09-17**
+  (`fix/so-q4-pin-lambda`): `assign_epoch` feeds `ChallengeUrn::new`;
+  that constructor reads `CHALLENGES_PER_PAIR_PER_EPOCH`; the
+  explicit-λ constructor is `#[cfg(test)]`. A production module in this
+  crate cannot pass a coverage that disagrees with the settlement
+  threshold. *Records-was:* Q4 named two independent `pub` λ parameters
+  (`assign_epoch`, `ChallengeUrn::new`); a λ that differed between them
+  left the pair set identical so layer 2 passed and only layer 1 fired
+  on replay — a coverage precondition for `SO-D8d`, not only
+  correctness. The first landing made the doors `pub(crate)`, which
+  still left every non-test module in the crate able to pass a
+  divergent λ. Retained as the named falsifier for a `cfg(test)`
+  constructor compiled into production.
 
 ### 6.6 REJECTED: an on-chain digest of `D` at `h_open(E)`
 
@@ -1267,20 +1277,28 @@ through the slash deadline is the recommendation" (Q7).*
   projection of the append-only bond journals, evaluated at `h_open(E)`.
   No snapshot table. Body lands with Slice C. Freeze point is `h_open(E)`,
   not the seal (Pin 5, already ruled).
-- **`lambda_target`** — a bare `u32` parameter at `challenge_assignment.rs:152`
-  and `:264`. `CHALLENGES_PER_PAIR_PER_EPOCH = 3` exists (`constants.rs:27`)
-  and is const-asserted against `SERVE_THRESHOLD_PASSES` (`attestation.rs:77,
-  :82`), but **nothing connects it to the urn** — its only non-test consumers
-  are in `shekyl-economics-sim`. The 972,000 figure assumes `λ = 3` by hand.
-  **Must be pinned before any production caller** (Q4, confirmed by review):
-  `EpochAssignmentCache::open` takes no `lambda_target` argument and reads the
-  constant. Filed in `docs/FOLLOWUPS.md`.
+- **`λ` — RESOLVED 2026-09-17 (Q4, `fix/so-q4-pin-lambda`).**
+  `ChallengeUrn::new(pairs, epoch_blocks)` reads
+  `CHALLENGES_PER_PAIR_PER_EPOCH` and takes no λ. `assign_epoch(pairs,
+  prev_hashes)` feeds that constructor — one production site, so the
+  one-shot cannot diverge from the streaming urn.
+  `EpochAssignmentCache::open` inherits the same shape. The explicit-λ
+  constructor (`with_lambda`) is `#[cfg(test)]` (`pub(crate)` under
+  test) for λ ∈ {0, 1, 2, `u32::MAX`}; there is no
+  `assign_epoch_with_lambda`. The 972,000 maturity figure is derived
+  from the constant in the measurement test, not typed. Pinned by
+  `production_doors_read_the_constant_and_take_no_lambda`. Reopen a `pub`
+  sim-facing door only for a named out-of-crate consumer (none exists; the
+  sim uses the constant analytically). *SUPERSEDED: "a bare `u32` parameter
+  at `:152` / `:264` … nothing connects it to the urn … must be pinned
+  before any production caller"; the FOLLOWUPS `lambda_target` row
+  (removed).*
 - **The witness commitment** (§2.2) — a new coinbase `tx_extra` tag and its
   derivation domain. Neither exists.
 
 ### 7.4 Q3 RULED 2026-09-16 — the enumerator
 
-`assign_epoch(pairs, lambda_target, prev_hashes)` (`challenge_assignment.rs:262–268`)
+`assign_epoch(pairs, prev_hashes)` (`challenge_assignment.rs`, λ from the constant since Q4)
 consumes the set of `(p_id, shard_id)` pairs eligible for challenge in epoch
 `E`. **Q3 is what produces that vector:** from which tables, evaluated at
 which height, under which rule.
@@ -2296,7 +2314,7 @@ about it.
 
 | Figure | Source | Status 2026-09-13 |
 |---|---|---|
-| ~972,000 assignments / epoch | `3 × 324,000`, `challenge_assignment.rs:534`, asserted at `:555` | **Holds** as `λ·pairs`; `λ = 3` is a test parameter, not a pinned constant (Q4). Cost **measured** 1.09 s release on this host; Pi-4 owed. |
+| ~972,000 assignments / epoch | `CHALLENGES_PER_PAIR_PER_EPOCH × 324,000`, `measure_full_epoch_replay_cost_at_maturity` | **Holds** as `λ·pairs`; since Q4 (2026-09-17) `λ` is the constant, read at the urn's entry points and in the measurement test. *SUPERSEDED: "`λ = 3` is a test parameter, not a pinned constant."* Cost **measured** 1.09 s release on this host; Pi-4 owed. |
 | ~97 draws / block at maturity | `972,000 / 10,000` | Arithmetic; the per-block witness load and the ring size derive from it. |
 | 72 % unobservable at `k_cap = 30` | `ARCHIVAL_CHALLENGE_MECHANISM.md:1185` histogram `{0: 35 %, 1: 37 %, 2: 28 %}` | **Not re-derived** — doc-only figure, no code artifact. Under R-B the capped-regime mechanics are unchanged (the window changes when a draw is answered, not how many are drawn). Flagged *unverifiable at source*. |
 | ~3,411 B record; 5,107 B pre-`RF-D6` | `ARCHIVAL_RESPONSE_FORMAT.md:1012`, `cryptonote_config.h:432–433` | 3,411 B is the post-`RF-D8`-retraction record; 5,107 B is `ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES` (today's pruned-weight reconstruction constant). R-B adds `h` (≤ 10 B kept) and the witness material (1,996 + 3,385 B pruned, once per carrier; no per-record path bytes under the amended Q9; 42 records per carrier against `TX_WEIGHT_LIMIT`). |
@@ -2325,9 +2343,9 @@ Seven were posed in the first cut; four answered in the 2026-09-13 review,
 `SO-D9` ruled, and R-B ratified the same day, which resolves 1, 2 and 7. Four
 new ones arise from R-B; Q11 is resolved by the `PL-` round and #745; Q12–Q13
 were opened in the 2026-09-14 reconciliation; Q14 was opened by #747 review
-and is resolved by Q15 (2026-09-16). **Open questions: Q4 (`λ` unpinned);
-Q9's set-commitment bytes (§7.6.1, PROPOSED — one customization and a
-KAT, registry row at Slice C).** Q9's carrier semantics RULED 2026-09-16
+and is resolved by Q15 (2026-09-16). **Open question: Q9's set-commitment
+vectors (§7.6.1, PROPOSED — one customization and a KAT, registry row at
+Slice C).** Q4 RESOLVED 2026-09-17. Q9's carrier semantics RULED 2026-09-16
 (§7.6.2 (B)); Merkle-root batching SUPERSEDED the same day. `SO-D8e`
 RULED 2026-09-16 (§7.2). `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
 PC-D4 / SO-D7). `SO-D8d` RULED 2026-09-16 (§6), amended same day:
@@ -2358,18 +2376,27 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
    been dropped **stays in `D`**; the drop filter lives at settlement and
    at the witness, not at draw. Construction, drop-stability finding,
    pins, empty-`D` and slash-vs-drop: §7.4. Body lands with Slice C.
-4. **ANSWERED — unpinned, must be pinned before any production caller.**
-   `lambda_target` is a bare `u32` at `challenge_assignment.rs:152` / `:264`.
-   §7.2's `open()` drops the parameter and reads the constant. Filed.
-   **Two doors** (2026-09-16): `assign_epoch` reads the constant, but
-   `ChallengeUrn::new` is `pub` and re-exported, so the strong form is a
-   `pub(crate)` constructor or a documented sim-facing second door — say
-   "the epoch entry point reads the constant", not "λ cannot be passed
-   wrong". **`SO-D8d` makes Q4 a coverage precondition, not only a
-   correctness one** (§6.5): a λ that differs between admission and
-   settlement leaves the pair set identical, so layer 2 passes; only
-   layer 1 fires, and only on replay. Close both doors before Slice C.
-   Lands in its own PR after #759 (rule 19: Rust gates, not docs gates).
+4. **RESOLVED 2026-09-17 (`fix/so-q4-pin-lambda`).** `ChallengeUrn::new`
+   reads `CHALLENGES_PER_PAIR_PER_EPOCH` and takes no λ; `assign_epoch`
+   feeds that constructor. The explicit-λ constructor is `#[cfg(test)]`
+   (tests need λ ∈ {0, 1, 2, `u32::MAX`}). One production site; pinned
+   by `production_doors_read_the_constant_and_take_no_lambda`. The
+   mechanism doc's §9.5 pin 3 ("λ_target is a parameter … supplied by the
+   caller") is SUPERSEDED in place. *Records-was:* `lambda_target` was a
+   bare `u32` at `challenge_assignment.rs:152` / `:264`; two independent
+   `pub` doors; the first landing made them `pub(crate)`, which still
+   left every non-test module in the crate able to pass a divergent λ.
+   §7.2's `open()` drops the parameter and reads the constant.
+   *Records-was (2026-09-16, "Two doors"):* `assign_epoch` reads the
+   constant, but `ChallengeUrn::new` is `pub` and re-exported, so the
+   strong form is a `pub(crate)` constructor or a documented sim-facing
+   second door — say "the epoch entry point reads the constant", not "λ
+   cannot be passed wrong". **`SO-D8d` makes Q4 a coverage precondition,
+   not only a correctness one** (§6.5): a λ that differs between
+   admission and settlement leaves the pair set identical, so layer 2
+   passes; only layer 1 fires, and only on replay. Closed ahead of
+   Slice C; landed in its own PR after #759 (rule 19: Rust gates, not
+   docs gates).
 5. **ANSWERED, then RULED.** `ERR_CREDIT_DEADLINE`'s disposition changed with
    R-B — it is **re-bound** to the `W₂` window, not kept as `h_close` (§3).
    The vacuous check was `ERR_EPOCH_MISMATCH` (`SO-D9`), ruled (i).

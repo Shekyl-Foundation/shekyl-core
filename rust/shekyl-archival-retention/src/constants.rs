@@ -17,7 +17,10 @@
 /// **Per *pair*, not per block.** The urn issues `λ·D/E` draws in each block
 /// (`D` = drawable pairs, `E` = `SETTLEMENT_EPOCH_BLOCKS`); that per-block
 /// count is *derived* by [`crate::challenge_assignment`], never pinned. This
-/// constant is the coverage target the urn is given.
+/// constant is the coverage target [`crate::ChallengeUrn::new`] **reads**
+/// (Q4, 2026-09-17); [`crate::assign_epoch`] feeds that constructor, so it
+/// is not a parameter a caller supplies, and the urn and the settlement
+/// threshold below cannot be given different values.
 ///
 /// Jointly pinned with [`crate::SERVE_THRESHOLD_PASSES`] — 2-of-3 is one
 /// decision, and `attestation.rs` const-asserts the two properties that make

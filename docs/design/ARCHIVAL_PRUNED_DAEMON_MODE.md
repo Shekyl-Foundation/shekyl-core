@@ -31,11 +31,23 @@ and wallet-side `LeafStore` under Q6's unit) is minted OPEN.
 `{ hash, prunable_hash }` — one of Q6's two occupants; `pqc_auth_hash`,
 the txid's third component, is owed on the identity and as a row, and
 Q6 items 1–2 are ruled before DRS-E2's first production writer or E2
-rules them by construction.** **UPDATE 2026-09-17:** items 1–2 landed on
+rules them by construction.** **UPDATE 2026-09-17:** DRS §7.7 items 1–2 landed on
 #768 (`TxIdentity.pqc_auth_hash` + `Transaction::txid_parts` /
 `hash_with_supplied_components`); the store row (item 3) remains A3. **F27–F29 (same day, on review): band 1
 needs a below-anchor `RuleSet` E6 is shaping now; the skeleton wire
 needs both txid components; Q3's instrument is `ChainView`'s surface.**
+**F30–F31 (2026-09-17, `4bc378d68`): Q11's census home is `CEN-E2`, and
+F27's Rust-held anchor fires `CEN-E1`/`CEN-E2`'s recorded reopening
+trigger — re-key owed in F27's PR; S-PRUNE owes a rule-26 plan doc before
+its first increment; §3's six adversarial items now carry status and
+owner; Q6 item 2 is the second increment built on an unruled default;
+Q11's owner is unnamed at day five. §3 WALKED the same day by steering:
+all six dispositioned — three DISCHARGED (withholding, eclipse,
+free-riding on the ruled bootstrap subsidy; a `bond_duration` vs `W`
+condition was drawn and withdrawn the same day), three conditional (on
+Q6 item 3 / F17 naming one unit; on Q9 ruling the coverage floor
+structural; on Q11 existing); Sybil's economics DISCHARGED with no
+residual on the self-diluting scarcity reward; Q6's gate is open.**
 `PDM-Q-S0` is RULED. This is the design home TJ-D named; it is not
 yet the design. **What this document is for:** nothing here is built
 while DRS is in progress — the implementation waits on the C++→Rust
@@ -1069,6 +1081,14 @@ a **detectability boundary**, not a security margin.
   tracked in three questions; the gate is **one** entry — re-pin `n`
   and the other two are downstream of the same measurement. The
   Round-2 re-pin task names all three or it is incomplete.
+  *WITHDRAWN the same day it was proposed (2026-09-17):* a fourth gate
+  entry, the relation `bond_duration(0) · SEB ≥ W`, was added here by
+  the §3 free-riding walk and withdrawn by steering hours later — the
+  free-regime reward is the ruled bootstrap subsidy
+  (`DESIGN_CONCEPTS.md` Component 4), favouring early adopters by
+  intent, and a bond releasing before scarcity is that subsidy working.
+  **The gate is three entries.** The §3 bullet keeps the arithmetic as
+  a record.
 
 - *Second reason it wants to be shallow (2026-09-13, from Q5).* Under
   Q5's anchor model a **synced** node trusts nothing it did not verify
@@ -1135,9 +1155,73 @@ Held as a question, not a claim, because the pipeline has dependents
 
 Named so they cannot be discovered after a ruling. Not answered here.
 
+**Status and owner (added 2026-09-17, `4bc378d68`; walked the same
+day).** Q6 is the critical path, and its ruling is "a transcription of
+F13/F14/F17 against these six items" — so the *walk of the six against
+the tx-range unit* is the actual gate on Q6, not the transcription.
+Owner for every row is **steering (the ruling pass)**; a row cannot be
+closed by a code lane. The walk was taken by steering on 2026-09-17
+against the design as it stands — tx-range unit, two hash rows, uniform
+`W`, daemon retention exceptions, wallet-fronted serving, three-band
+sync, `D_max` — positioning `T` before saying what `T` gains. Each
+bullet below carries the original question (kept, so what was asked is
+visible), then the walk. **A "DISCHARGED" here is a steering
+disposition on the design's *shape*; it is not a `PDM-Q*` ruling, and
+the conditions named on each row are owed to the questions named.**
+
+| Item | Walked? | Disposition (2026-09-17) | Owes |
+| --- | --- | --- | --- |
+| Withholding | Yes | **DISCHARGED** on four properties: request indistinguishability, requester anonymity, per-tx verify, timeout = miss. Collapses to unreliability, which the m-of-n window prices | Per-shard detection latency on a large holder → the credit wire's draw design; honest-P-behind-flaky-Tor false positive → Round-2 numerics |
+| Free-riding in the free regime | Yes | **DISCHARGED on the ruled bootstrap subsidy** (`DESIGN_CONCEPTS.md` Component 4 / `ECONOMY_EXPLAINED.md` Loop 4): the free regime is the window the staker emission share exists for; favouring early adopters is the intent; a bond releasing before scarcity is the subsidy working, and re-bonding at scarcity is the market's test. The `bond_duration(0) · SEB ≥ W` condition first written here is **WITHDRAWN** (steering, same day); arithmetic kept as record on the bullet | Nothing on `bond_duration` vs `W`. Q2 states `W` and names the regime's market behaviour as *bootstrap* |
+| Eclipse and fetch | Yes | **DISCHARGED.** Running node under `W`: never fetches to verify — identical to today. Band-2 syncer: anchor below `C`, PoW + verified bodies over Tor from the bond table above; residual is nuisance (wasted egress, tip lies) and already P2P-2's | Nothing PDM-shaped |
+| Stripe / shard interaction | Yes | **DISCHARGED conditional** on Q6 item 3 and F17 naming **one unit**: whatever the wire echoes as holdings commits `T` to the same unit the bond names and the challenge draws from | Q6 item 3 / F17 one-unit requirement |
+| Sybil economics | Yes | **Economics DISCHARGED, no residual**, on the **self-diluting scarcity reward** — `scarcity(s,E) = (1/R_market(s,E)) · g(age)`, [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) channel 1 — which makes same-shard Sybil and inefficiency the same act. **Correlated-failure residual DISCHARGED conditional** on Q9 ruling the coverage floor *structural* (Foundation / explorers holding `CompleteTree`, Foundation work outside `Σwork`, `:310`) — Q9 is OPEN on that item today | Q9: rule the floor structural, and say it counts **personas**, not hosts (Model D cannot see the difference) |
+| Reorg | Yes | **DISCHARGED conditional** on Q11 existing (which is Q11's point): `D_max` caps depth (`CEN-E2`); discard only below `tip − W` with `W ≥ D_max` (F10); undo-log floor `≥ D_max` + `PopBelowFloor` (SCW-7); pops within `D_max` re-pool full bodies; trim's leaf reads regenerate from the skeleton (F12) and the `:9361` throw dies with the C++ | The predicate asserted where retirement is decided — S-PRUNE's row (F31), not discovered at revert |
+
+**What falls out across the six that sits in no single item.** Q9's
+coverage floor needs to be ruled **structural** and to say it **counts
+personas** — a persona count can overstate hosts and Model D forbids
+seeing it, which is why a market-derived floor cannot carry the Sybil
+residual. (A second cross-cutting output — a `bond_duration` vs `W`
+relation for the Round-2 gate — was proposed and **withdrawn** the same
+day: the free-regime reward is the ruled bootstrap subsidy, and the
+walk had re-derived a constraint against a decided incentive. The
+free-riding bullet keeps the record.) Everything else discharges on
+properties already in the design, which is evidence the shape is right
+rather than a reason to stop checking.
+
 - **Withholding.** An archiver that holds leaves but refuses selected
   requests. What distinguishes that from an offline archiver, and does
   the challenge mechanism see the difference?
+  **Walk (2026-09-17) — DISCHARGED.** `T` is a bonded archiver `P`, or a
+  set of them under one operator, that holds the bytes and refuses
+  selected requests. `T` controls its own onion's responses (404,
+  delay, serve), its bond, its published holdings. `T` cannot see who
+  is asking (the requester is a Tor client with no identity) and cannot
+  tell a challenge from an organic read — `SF-D8`'s one client, one
+  header, one nonce is indistinguishable on the wire; a visualiser
+  fetch and a challenge look identical. So there is **no dimension to
+  select on**: `T` cannot withhold from anyone in particular and cannot
+  withhold only organic reads. The axes left are: *by shard* (serve
+  `s'`, refuse `s`) — challenges are drawn per `(P, s)`, so this is a
+  per-shard failure and slashes on `s`; *by content* (serve `s` with a
+  corrupted or missing tx) — the per-tx hash verify catches it (Q4's
+  TJ-F sentence: a body that does not hash to the retained row fails
+  loudly), and the read fails whole on one bad member, the same
+  fail-whole `SO-D8e` ruled for its carrier (§7.6.2 (B)); *by latency*
+  — `SF-D6`'s taxonomy scores a stall as a miss. Withholding therefore
+  collapses to **unreliability at every granularity `T` can act on**,
+  and unreliability is what the m-of-n failure window prices.
+  Discharged on four properties: request indistinguishability,
+  requester anonymity, per-tx verify, timeout = miss. **Named
+  remaining, not PDM's:** (a) detection latency for per-shard
+  withholding on a large holder — with `k` shards and
+  `CHALLENGES_PER_PAIR_PER_EPOCH = 3`
+  ([`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md))
+  a refused shard waits on average `k/3` epochs to be drawn; that is a
+  draw-design parameter, routed to the credit wire; (b) the
+  false-positive side — an honest `P` behind a flaky Tor path looks
+  like `T`; that is the window's job and Round-2 numerics.
 - **Free-riding during the free regime.** The free regime is
   structural, not a rewrite-schedule artifact. Even with PDM shipped
   at height 1, an "archiver" needs no storage until the first segment
@@ -1147,11 +1231,74 @@ Named so they cannot be discovered after a ruling. Not answered here.
   question is Q2's output. Q2 must state the duration and what the
   market does during it; this bullet is discharged against that
   duration, not against `DRS-E*`'s calendar.
+  **Walk (2026-09-17) — DISCHARGED on the ruled bootstrap subsidy;
+  the `bond_duration(0) · SEB ≥ W` condition first written here is
+  WITHDRAWN (steering, same day).**
+  `T` is anyone who bonds before the first tx crosses `tip − W`. `T`
+  controls when to bond, what holdings to declare, when to release. `T`
+  cannot avoid being challenged, and cannot answer a challenge on bytes
+  it dropped once they are scarce. The regime, precisely: for the first
+  `W` blocks nothing is beyond the window, every node holds every body,
+  no archiver holds anything scarce, and challenges are answerable by
+  anyone with a synced node. Duration is exactly `W` (~195 days at the
+  F19 candidate). What `T` gains: rewards for `W` blocks against a
+  *promise*, not a possession. That is a subsidy, and a good one — it
+  funds archiver capacity before it is needed. **And that subsidy is
+  already ruled**, not something this walk gets to condition: the
+  staker emission share — 15 % of block emission to the staker pool at
+  genesis, decaying ×0.90 per year — exists precisely because early
+  fee yield is ~50× short of what participation needs, and it is
+  documented as the *bootstrap subsidy* that favours early adopters on
+  purpose ([`DESIGN_CONCEPTS.md`](../DESIGN_CONCEPTS.md) Component 4;
+  [`ECONOMY_EXPLAINED.md`](../ECONOMY_EXPLAINED.md) Loop 4). The free
+  regime — the window in which no shard is scarce — is exactly the
+  window that subsidy is for: staking is a new process, and the
+  incentive to adopt it is the point. A bond that collects for its
+  horizon and releases before scarcity is therefore the subsidy
+  working, not a farm; the market's test of the promise is
+  re-bonding when scarcity arrives, and the diluting reward (Sybil
+  walk) prices that market once it exists. **Discharged on the
+  ruling.**
+  *Record, kept line-local so it is not re-derived:* this walk was
+  first written (earlier the same day) as *"DISCHARGED conditional on
+  `bond_duration(0) · SEB ≥ W`, violated at today's candidates"* —
+  `bond_duration` is age-scaled in settlement epochs,
+  `bond_duration(age) = BASE · (1 + SCALE · age)`, `BASE = 4`,
+  `SCALE = 4` (`config/consensus_constants.json:37-39`,
+  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1),
+  `SEB = 10,000` (`:22`), so an age-0 bond is `40,000` blocks (~55
+  days) against `W`'s F19 candidate `≈ 140,720` (~195 days). The
+  arithmetic stands as a fact about the regime's length relative to
+  the bond horizon; **the condition drawn from it is WITHDRAWN** —
+  steering, 2026-09-17: the free regime favouring early adopters is
+  decided, ruled and documented, and a charter condition against it
+  would be pre-provisioning a constraint on an incentive the economics
+  already chose. Nothing is owed on `bond_duration` against `W`; the
+  Round-2 gate keeps its three numerics. What Q2 owes here is only
+  what §2 already says: state the regime's duration (`W`) and what the
+  market does during it — which is *bootstrap*.
 - **Eclipse and fetch.** If a node must fetch to verify, an eclipsing
   adversary controls what it can verify. Compare against today, where it
   verifies locally. TJ-F's "no store handle" face is the intended
   dissolution for *new-block verify*; spend-path assembly is a different
   fetch.
+  **Walk (2026-09-17) — DISCHARGED.** `T` controls a target node's P2P
+  view — peer set, blocks seen, believed tip. `T` does not control the
+  target's Tor client (host compromise is a different `T`), the chain,
+  or the bond table. *Running node, downtime under `W`:* never fetches
+  to verify (Q3 empty after TJ-A / F29; Q4 collapsed). `T`'s eclipse
+  gets exactly what a P2P eclipse gets today — control over block
+  delivery — and nothing PDM adds. Dissolved for this population;
+  compare-to-today is identical. *Band-2 syncer:* `T` can feed it a
+  chain. Below `C` the anchor pins the hash — `T`'s chain matches or is
+  refused. Above `C`, `T` needs valid PoW **and** valid proofs, because
+  bands 2/3 verify bodies, and the bodies come from onions named by the
+  on-chain bond table over Tor, which `T` does not control. `T`'s only
+  remaining lever is the heavier-valid-chain above `C`, which is the
+  `D_max` split (Q11, Q5), not a fetch attack. What `T` can still do:
+  waste the syncer's egress by making it fetch bodies for a stale range
+  it will discard, and delay sync by lying about the tip. Nuisance, not
+  verification compromise; the residual is P2P-2's and already there.
 - **Stripe/shard interaction.** The C++ stripe engine survives until
   this design is complete and is removed at `DRS-E*` (`PDM-Q7`).
   ~~Until then the two partitions are unrelated.~~ **Refuted under
@@ -1162,11 +1309,82 @@ Named so they cannot be discovered after a ruling. Not answered here.
   a stripe of the prunable region can and cannot answer to a leaf-
   shaped challenge, and what the `u32` seed does and does not commit
   it to.
+  **Walk (2026-09-17) — DISCHARGED conditional on one unit.** `T` is an
+  archiver whose holdings are a height-stripe of the prunable region,
+  facing a challenge drawn in a different unit. Under Q6 this dissolves
+  by construction: if the challenge draws a tx-range and holdings name
+  a tx-range, there is no cross-unit challenge. The inverted work
+  reduces to **one consistency requirement**: whatever F17 echoes on
+  the wire as the holdings advertisement must commit `T` to the same
+  unit the bond's `holdings` names and the challenge draws from. If the
+  echo is a `u32` stripe seed (heights) and the bond is a tx-index
+  range, `T` can advertise one and be bonded to another, and a
+  challenge against either finds a gap. Discharged conditional on Q6
+  item 3 and F17 naming one unit; no residual once they do.
 - **Sybil economics.** Does the market price scarcity in a way that
   survives an adversary who runs many cheap archivers holding overlapping
   popular shards? Build on
   [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
   `r ≫ 1000`; do not re-derive.
+  **Walk (2026-09-17) — economics DISCHARGED with no residual on the
+  self-diluting scarcity reward, cited by name so it is not re-derived;
+  the correlated-failure residual DISCHARGED conditional on Q9 ruling
+  the coverage floor structural (corrected on review: Q9 is OPEN on the
+  floor, so the floor is a condition here, not a premise).**
+  `T` is one operator running `k` personas, `k` bonds, `k` onions, and
+  one disk holding shard `s` once. `T` controls persona count; `T`
+  cannot make the personas look related, and Model D makes that a
+  feature. The design already permits this *shape*: daemon storage
+  serves many personas from one daemon with a union of exceptions (Q9
+  candidate) — `T` is that shape with different intent, and storage
+  cannot discriminate because it is the same storage. So the discharge
+  is economic and it is the reward leg's, not PDM's:
+  [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) channel 1,
+  `scarcity(s,E) = (1 / R_market(s,E)) · g(age(s))` — **self-diluting
+  scarcity**, where `R_market` is the market holder count of `s`.
+  Walked: *rewards* — no harm; `T` locks `k` bonds and earns `k`
+  rewards, per bond identical to an honest archiver; the only free
+  component is storage (stored once, paid `k` margins), and disk is the
+  cheap input (~195 days of bodies is a few hundred GB) while the bond
+  is the expensive one, so `T`'s return on locked capital barely
+  moves — `r ≫ 1000` territory. *Possession test* — no harm; `k`
+  personas answer `k` challenges from one disk, correctly; `T`
+  possesses. *Privacy* — no harm; requests are anonymous and
+  indistinguishable. *Chain integrity* — no harm; the skeleton is
+  universal. **The one exact harm:** the network believes `s` has `k`
+  independent holders and has one host; if the host dies, `s` goes
+  from well-covered to zero in one event, and Model D makes the `k`
+  onions unlinkable by design, so the network cannot see or price the
+  correlated-failure risk. That harm is real only if redundancy for
+  `s` can actually fall to one — and it cannot if the coverage floor is
+  **structural**: Foundation (and explorers) holding `CompleteTree`
+  regardless of the market, with Foundation work kept *out* of
+  `Σwork` (`REWARD_EMISSION_LEG.md:310`) so the floor neither dilutes
+  nor is diluted. Then Sybil cannot push coverage below the floor, and
+  what is left is a small, bounded storage overpayment that costs `T`
+  `k` bonds of locked capital to collect. Two shapes, told apart: a
+  `k`-persona, one-host operator holding `k` **different** shards is a
+  datacenter archiver — the professional participant the market wants,
+  and daemon storage was designed to make that shape cheap; not an
+  adversary. A `k`-persona, one-host operator holding the **same**
+  shard `k` times is the only Sybil — and with reward per shard falling
+  as `R_market` rises, that operator dilutes its own reward `k`-fold
+  while paying `k` bonds. The profitable move is always `k` different
+  shards, which is `k×` storage, which is honest: **the reward curve
+  makes the attack and the inefficiency the same act.** It also inverts
+  the "false redundancy" harm: `s` looking covered *lowers* its reward,
+  which pushes honest archivers toward under-served shards — the market
+  working, not being corrupted. The signal is wrong only if `T` acts
+  against its own interest to make `s` look covered and then fail;
+  that is griefing, priced at `k` locked bonds and a diluted reward,
+  for the payoff of one range going unverifiable if the host dies —
+  and a structural floor makes even that moot. **Owed to Q9, and the
+  condition on this discharge:** rule the coverage floor **structural**
+  (Foundation / explorers holding `CompleteTree` regardless of the
+  market, outside `Σwork`), and say that any market-derived count
+  **counts personas, not hosts** and cannot see the difference. Until
+  Q9 rules it, the dilution argument alone leaves the one exact harm
+  above open — bounded, griefing-priced, but open.
 - **Reorg.** Discarded-then-reorged. The retention prune is un-journaled.
   State revert behaviour explicitly.
   [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) is
@@ -1184,6 +1402,22 @@ Named so they cannot be discovered after a ruling. Not answered here.
   `shekyl-engine-state/src/safety_constants.rs:61`). That missing cap
   is `PDM-Q11` (`D_max`), minted 2026-09-13 because F10's discard
   floor and F19's journal horizon both derive from it.
+  **Walk (2026-09-17) — DISCHARGED conditional on Q11 existing, which
+  is Q11's point.** `T` is Q11's adversary — rentable RandomX CPU
+  exceeding a young chain's hashrate (Q11 §, *adversary, positioned*) —
+  producing a reorg of depth `d`. `T` controls depth up to `d_afford`.
+  `T` cannot make a node accept `d > D_max` once Q11 lands (`CEN-E2`'s
+  refusal, F30). The design's response, landed or owed by name:
+  `D_max` caps accepted depth (Q11, `CEN-E2`); a body discards only
+  once `height(tx) < tip − W` with `W ≥ D_max` (F10 / F24 — one
+  predicate); undo-log floor `≥ D_max` with `StoreCannot::PopBelowFloor`
+  as the typed refusal (SCW-7, landed); pops within `D_max` re-pool
+  full transactions because their bodies are inside `W`; trim's leaf
+  reads regenerate from the skeleton (F12 — every leaf-derivation input
+  is in the unprunable base), so the `db_lmdb.cpp:9361` throw dies with
+  the C++ rather than needing a defined failure of its own. Remaining,
+  as F10 already says: the predicate **asserted where retirement is
+  decided** — S-PRUNE's row (F31) — not discovered at revert.
 
 ---
 
@@ -2185,6 +2419,103 @@ enforcement point (both S-PRUNE, not extracted — `DAEMON_REDB_STORE.md`
 sides, the `AppendMostly` running hash is already over the permanent
 hash rows, so `W` enters the digest only when the prune surface does.
 
+### Established by reading (2026-09-17, `dev@4bc378d68` — the census-consequence pass)
+
+Read after PR #767 (E6 slice 1 `held_by_cxx`). `pqc_auth_hash` is still
+absent from `rust/` as a field — it sits in the unmerged E6 `tip` branch;
+#766 landed DRS §7.7 as the landing plan. F26–F29 are in this charter and
+nothing in them is contradicted. Four gaps, one of them a census
+consequence that no lane had recorded.
+
+- **PDM-Q-F30.** **Q11's home is `CEN-E2`, not `CEN-E1` — and F27's
+  implementation fires both rows' recorded reopening trigger.** This
+  charter has said since 2026-09-13 that `D_max`'s home is
+  `is_alternative_block_allowed` above the checkpoint (Q11 row; Q5 item
+  5). At HEAD the census puts that function on **`CEN-E2`**
+  (`CONSENSUS_RULE_CENSUS.md:369`: *an alternative block at or below the
+  last checkpoint is refused*, `checkpoints.cpp:137`). **`CEN-E1`**
+  (`:368`) is a different rule — *hash equality at a checkpointed
+  height*, `check_block`. The E6 lane's unmerged `tip` text for F27
+  says *"the anchor rule already has a row, CEN-E1"* and the 2026-09-17
+  status report repeated it; both are one row off for the refusal arm.
+  The anchor model uses **both**: E1 is the band-1 trust assertion
+  (block `C` has hash `H`), E2 is the reorg fence `D_max` hangs from. A
+  consensus-side owner pointed at E1 alone would be reading the wrong
+  function for Q11. **The larger consequence:** both rows are
+  ratified under the same C2-R1b premise — *existence HELD for C2-R0;
+  semantics ratified **while the mechanism exists*** — and they word
+  the consequence differently (corrected on review, read at `:368-369`):
+  **`CEN-E1`** states the trigger explicitly — *crossing reopens when
+  DRS/R8 moves checkpoint state (trigger re-checked at #595: not
+  live)* — while **`CEN-E2`** records only the premise (*the alt-height
+  floor stands as the checkpoint arm's admission fence*) with no
+  explicit reopening clause. F27's `Trust::BelowAnchor(anchor)` sourced
+  from a release-carried table in Rust **is** moving checkpoint state
+  into Rust. For E1 that is the named trigger firing; for E2 it is the
+  ratification premise ceasing to hold — the mechanism the row was
+  ratified *while it exists* stops being the C++ one. Same event, two
+  wordings, both rows reopen; E2's row should gain the explicit clause
+  in the re-key so the next reader does not have to infer it from the
+  premise. It fires the day E6's slice 3 or 6 lands the mode. The Q2 crossing question
+  those rows closed — *derivation-free hash equality, nothing for Rust
+  to hold* — was closed on the premise that the mechanism stays in C++.
+  Under the anchor model it does not, and under `assumevalid`
+  semantics E1 also does more than equality (it asserts validity of
+  everything beneath). **Owed, in F27's landing PR, not after:** a
+  re-key of `CEN-E1` and `CEN-E2` — new site (the Rust `Trust` arm and
+  the store's anchor row), the Q2 crossing answered for a Rust-held
+  table, and the C2-R0 existence HOLD closed one way or the other — or
+  the census carries two rows whose stated trigger has fired. Also
+  line-local: `CEN-E1`'s rule text still reads *"hardcoded/JSON-loaded
+  checkpoint hash"*; with `CEN-E5` removed (F23, PR #733) the
+  JSON-loaded half is dead text inside a ratified rule, and the re-key
+  retires it. This charter does not edit census rows (the C2 lane's);
+  it names the carrier. The `CEN-E1` claim in E6's `tip` text is
+  flagged here as another lane's line, to be corrected when that branch
+  lands.
+- **PDM-Q-F31.** **S-PRUNE has no plan doc, and the store-side
+  implementation items in this charter land on or adjacent to it.**
+  Scoped on review (2026-09-17): not *every* §8 item — F27's
+  below-anchor mode is E6's and F28's skeleton wire field is
+  `LV-`/`PWC-`'s, and neither belongs in an S-PRUNE plan. What is
+  S-PRUNE's: the discard predicate on `eligible_height` vs `tip − W`
+  (F10), retention exceptions (`retain(s)`/`release(s)`, Q9), the
+  undo-log floor (SCW-7), the `pqc_auths` discard consuming the hash
+  row (F26), and `W` entering D11's digest domain. S-PRUNE is deliberately **not
+  extracted** (`DAEMON_REDB_STORE.md` §7: five of six methods are the
+  stripe engine, superseded before they can be ported) and already
+  carries two contracts written on its row before it has a home (SCW-7,
+  F26's three-leg invariant). It has no `DRS_E*_SPRUNE.md`. Rule 26:
+  design closure precedes any cut; E1 got `DRS_E1_SCHAIN_W.md` before
+  its writers. S-PRUNE's successor needs the same before its first
+  increment — and the plan doc is the natural place for the three-leg
+  invariant, the discard predicate's enforcement point, the exceptions
+  structure and the reorg item's discard-side half to stop being
+  scattered across F10 / F26 / SCW-7 / §3. **It can be written now
+  against this charter without Q6's numeric**: the unit (a tx range),
+  the predicate (`retain`), the verifier (two hash rows) and the
+  invariant are all stated; only `W`'s value and the exceptions'
+  binding are open, and a plan doc carries those as named inputs. This
+  is compatible with `PDM-Q-S0` — S-PRUNE *is* `DRS-E*`, and a plan
+  doc is design, not implementation. **Owed by the DRS-E lane**;
+  FOLLOWUPS row with the falsifier.
+- **Q6 item 2 is now being built on an unruled default — stated
+  plainly.** F26's default (`pqc_auth_hash: Option<PqcAuthHash>`,
+  count-prefixed component, three-leg invariant) is in E6's `tip`
+  branch as a field and a wire form, and DRS §7.7 schedules the
+  `txs_pqc_auth_hash` row on S-CHAIN-R's layout commit. That is the
+  right call — the default is the cheap one to have been wrong about —
+  but it is the **second** increment building on an item Q6 has not
+  ruled (the first was `TxIdentity` itself). When Q6 rules item 2 it
+  is **confirming** a landed shape, not deciding one, and the ruling
+  should say which. Recorded so the distinction is visible at ruling
+  time rather than inferred.
+- **Q11 owner: day five, still unnamed.** Minted 2026-09-13. Three
+  derivers (F10, F19, SCW-7) and a fourth arriving with F27 (the anchor
+  is `D_max`'s precondition, and `D_max` is the fence E2 enforces).
+  Two rows of the census will reopen on its account (F30). It is a
+  person, not a round; the shape has been written since the 13th.
+
 ### Retracted
 
 - **PDM-Q-F6 RETRACTED 2026-09-12** as a launch-state fork. Was
@@ -2246,16 +2577,16 @@ hash rows, so `W` enters the digest only when the prune surface does.
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
 | `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory; journal horizon `tip − (CRB + n·SEB + D_max)`, F19) | OPEN — widened 2026-09-13; ruled after Q6 (F13); horizon blocked on Q11 |
-| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24) | OPEN — blocked on Q11 |
+| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24); the free regime's market behaviour is **bootstrap** — the ruled staker emission share (`DESIGN_CONCEPTS.md` Component 4) favours early adopters by intent; the `bond_duration` vs `W` relation proposed by the §3 walk on 2026-09-17 is WITHDRAWN the same day, no gate entry | OPEN — blocked on Q11 |
 | `PDM-Q3` | Residual consensus reads after TJ-A; **the instrument is `ChainView`'s surface (F29)** | OPEN — today not node-local (`PDM-Q-F8`); in the Rust validator the residual set is empty by construction at `645d09dc3` (no recorded-body accessor), instrument handed to E6 as a standing trait property (F29, 2026-09-16) |
 | `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | OPEN — collapsed 2026-09-13 (F20/F23/F24); TJ-F sentence stated |
 | `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's; **band 1 is unbuildable against DRS-D12's writer until E6 issues a below-anchor set (F27, handed off 2026-09-16); `TxBlobEntry` grows `pqc_auth_hash` under Q6 item 2 (F28, owner `LV-`/`PWC-`)** |
-| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)** | OPEN — the round's subject 2026-09-13; ruled before Q1; **items 1–2 LANDED 2026-09-17 on #768** (`TxIdentity { hash, pqc_auth_hash: Option<_>, prunable_hash }` from `Transaction::txid_parts()`); **item 3 — the `txs_pqc_auth_hash` row — still owed** (S-CHAIN-R amendment A3) |
+| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)**; **item 3 names one unit for bond `holdings`, F17's wire echo and the challenge draw alike (§3 stripe/shard walk, 2026-09-17)** | OPEN — the round's subject 2026-09-13; ruled before Q1; **items 1–2 ruled before DRS-E2's first production writer (F26, 2026-09-16)** — `TxIdentity` carries both occupants' hashes since #768 (2026-09-17: `{ hash, pqc_auth_hash: Option<_>, prunable_hash }` from `Transaction::txid_parts()`, DRS §7.7 items 1–2); the `txs_pqc_auth_hash` **row** is still owed (S-CHAIN-R amendment A3, DRS §7.7 item 3) |
 | `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; unbonded exceptions OPEN (candidate: permitted, serving needs the bond) |
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
-| `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); candidate under review: the daemon holds the shard as a retention exception on the universal predicate (binding dissolves to `retain(s)`/`release(s)` over the operator leg); lapse tail, coverage floor (F20), recovery fetch OPEN |
+| `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); candidate under review: the daemon holds the shard as a retention exception on the universal predicate (binding dissolves to `retain(s)`/`release(s)` over the operator leg); lapse tail, coverage floor (F20), recovery fetch OPEN. **Coverage floor owes one sentence (§3 Sybil walk, 2026-09-17): it counts personas, not hosts, and under Model D cannot see the difference — so the floor that carries weight is structural (Foundation / explorers holding `CompleteTree`, Foundation work outside `Σwork`), not the market's holder count** |
 | `PDM-Q10` | RPC contract for "not retained" | OPEN |
-| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2), F19 (Q1) **and the store's undo-log retention (S-CHAIN-W SCW-7, 2026-09-15: retention ≥ `D_max`)** all derive from; home is `is_alternative_block_allowed` above the checkpoint, so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; candidate 720 (24 h) as coordination with the archival domain, security wants shallower on two grounds (silent-reorg window; F23: an empty table has no cap at all); numeric pinned to the Round-2 re-pin gate with `n` |
+| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2), F19 (Q1) **and the store's undo-log retention (S-CHAIN-W SCW-7, 2026-09-15: retention ≥ `D_max`)** all derive from; home is `is_alternative_block_allowed` above the checkpoint — census row **`CEN-E2`** (F30; `CEN-E1` is the equality rule, the band-1 trust assertion) — so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; **owner unnamed at day five (2026-09-17, F30)**; F27's `Trust::BelowAnchor` fires `CEN-E1`/`CEN-E2`'s C2-R1b reopening trigger — re-key owed in F27's PR; candidate 720 (24 h) as coordination with the archival domain, security wants shallower on two grounds (silent-reorg window; F23: an empty table has no cap at all); numeric pinned to the Round-2 re-pin gate with `n` |
 | `PDM-Q12` | The freeze pipeline and the wallet-side `LeafStore` under Q6's unit — does the freeze retire when the commitment exists at ingest; `LeafStore` as deletion target (F21) | OPEN — minted 2026-09-13; held as a question because of `TJ-D` / `RF-D6` / `SF-` dependents |
 
 When this round proposes a test, it will name the edit that makes that
@@ -2338,6 +2669,35 @@ band 1 has no writer (F27); the skeleton wire entry grows the second
 txid component under Q6 item 2, owner `LV-`/`PWC-` (F28); Q3's
 instrument is `ChainView`'s own surface, held as a standing property
 with a compile-shaped falsifier (F29). Each is cheap exactly once.
+
+**The census-consequence pass (F30–F31, 2026-09-17) adds three items and
+one clock.** F27's landing PR re-keys `CEN-E1` and `CEN-E2` — their
+C2-R1b "reopens when DRS/R8 moves checkpoint state" trigger fires the
+day a Rust-held anchor table exists, and E1's rule text still names the
+JSON channel F23 deleted (F30). The DRS-E lane writes S-PRUNE's rule-26
+plan doc before its first increment; it can be written now against this
+charter (F31). And Q6 item 2 is now the second increment
+built on an unruled default: when Q6 rules it, it confirms a landed
+shape and says so. Q11's owner: day five.
+
+**§3 walked (steering, 2026-09-17, same day the table was added) — Q6's
+gate is now open.** All six items positioned and dispositioned against
+the design as it stands: withholding and eclipse DISCHARGED outright;
+free-riding DISCHARGED on the ruled bootstrap subsidy (`DESIGN_CONCEPTS.md`
+Component 4 — the free regime is the window it exists for; the
+`bond_duration` vs `W` condition first drawn was withdrawn by steering
+the same day); stripe/shard conditional on Q6 item 3 and F17 naming
+**one unit**; Sybil's economics DISCHARGED with no residual on the
+self-diluting scarcity reward (`REWARD_EMISSION_LEG.md` channel 1), its
+correlated-failure residual conditional on Q9 ruling the floor
+structural; reorg conditional on Q11 existing. What the walk hands to
+the ruling pass: Q2 states `W` and names the regime's behaviour as
+bootstrap; Q6 item 3 states the unit once, for bond, wire echo and draw
+alike; Q9 rules the coverage floor structural and says it counts
+personas; S-PRUNE's plan doc (F31) carries the discard-side predicate
+assertion. Nothing in the six requires a mechanism the design lacks.
+The ruling pass for Q6 items 1–3 can now be the transcription it was
+said to be.
 
 ---
 
