@@ -25,11 +25,17 @@
 //! [`BlockRule::check`] is the block-level shape: the candidate and the rule
 //! set through a [`BlockContext`], and the view beside it. A rule that needs
 //! a chain fact (the tip, for A2 and B5) reads it from the view, so a new
-//! fact is a new `ChainView` method and no rule's signature moves. `validate` runs the
-//! landed block rules from a list and records `R::ROW` itself: a rule
-//! cannot record another row's coverage, and a rule that was not run is not
-//! in coverage (G6, G9's runtime half). The per-transaction classes (4.H
-//! `tx_form`, 4.I `tx_against`) get their own traits with their slices.
+//! fact is a new `ChainView` method and no rule's signature moves. `validate`
+//! runs the landed **predicate** rows from a list and [`run`] records
+//! `R::ROW` itself: a rule cannot record another row's coverage, and a rule
+//! that was not run is not in coverage (G6, G9's runtime half). A
+//! **definition** row — one whose "check" is a derivation the verdict
+//! carries, today only CEN-B6 — is not in that list: it records its own
+//! `ROW` at the derivation site ([`header::B6::identity`]), so a gate that
+//! could never fail is never run as one (slice 1 Q5). Those are the two
+//! writers of coverage, and `RuleCoverage::insert` names both. The
+//! per-transaction classes (4.H `tx_form`, 4.I `tx_against`) get their own
+//! traits with their slices.
 //!
 //! # Where a refusal is written
 //!
