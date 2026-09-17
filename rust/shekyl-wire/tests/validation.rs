@@ -494,6 +494,37 @@ fn bond_post_spend_round_trips_with_spend_subset_pseudo_outs() {
     assert_eq!(reparsed, tx, "round trip must be value-identical");
 }
 
+/// `PDM-Q-F26`: the txid's third component is decided by the one arity
+/// predicate, not per input arm. A coinbase has none (`Null` ct); a bond-post
+/// carries its identity signature in a tx-level `pqc_auths` slot and is
+/// 4-part like any spend — and a coinbase told a component anyway stays
+/// 3-part, because pruning cannot give it one.
+#[test]
+fn txid_arity_is_the_predicate_s_not_the_input_arm_s() {
+    let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
+    let coinbase = &blk.miner_transaction;
+    assert_eq!(coinbase.pqc_auth_hash(), None, "a coinbase is 3-part");
+    assert_eq!(
+        coinbase.hash_with_supplied_components(Some([0xAB; 32]), [0xCD; 32]),
+        coinbase.hash(),
+        "a coinbase ignores supplied components: it has neither region"
+    );
+
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.inputs.push(join_market_bond_post());
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths.push(pqc_auths[0].clone());
+    }
+    tx.validate().expect("bond-post spend must validate");
+    let pqc_auth = tx
+        .pqc_auth_hash()
+        .expect("a bond-post spend is 4-part: the identity signature is a tx-level auth");
+    assert_eq!(
+        tx.hash_with_supplied_components(Some(pqc_auth), tx.prunable_hash()),
+        tx.hash()
+    );
+}
+
 #[test]
 fn bond_post_spend_with_per_vin_pseudo_outs_rejected() {
     // The pre-coupling shape (pseudoOuts sized by vin.size(), bond slot

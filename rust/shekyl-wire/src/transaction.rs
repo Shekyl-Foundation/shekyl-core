@@ -1626,8 +1626,12 @@ impl Transaction {
     /// `H(prefix) · H(base) · null_hash`; **4-part** for an FCMP++ spend —
     /// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. `H(prefix)` includes
     /// the version varint (the first field of the C++ `transaction_prefix`).
+    ///
+    /// Both components computed from the body in hand; see
+    /// [`Self::hash_with_supplied_components`] for the one construction every
+    /// hashing path shares.
     pub fn hash(&self) -> [u8; 32] {
-        self.hash_with_prunable(None)
+        self.hash_from_components(self.pqc_auth_hash(), self.prunable_component(None))
     }
 
     /// `keccak256` of the **prunable byte region** — exactly the bytes
@@ -1650,6 +1654,42 @@ impl Transaction {
         keccak256(&prunable)
     }
 
+    /// The txid's **third component** — `keccak256(varint(count) ‖ auths)`
+    /// over the per-input `pqc_auths` — or `None` when the txid has no such
+    /// component and is **3-part** (`PDM-Q-F26`; `DAEMON_REDB_STORE.md` §7.7
+    /// item 2).
+    ///
+    /// `None` is a fact about the *txid*, not about which bytes a node holds:
+    /// the coinbase (`Null` ct), the serve-credit form (empty `pqc_auths`,
+    /// the countersignature rides the vin) and the malformed gen-first shape
+    /// all hash 3-part, so no component exists to be stored, discarded or
+    /// supplied. The arity is decided by [`Self::has_pqc_component`] — the
+    /// one predicate every hashing path shares — never per input arm: a
+    /// bond-post carries its identity signature in a tx-level `pqc_auths`
+    /// slot and so is 4-part like any spend; an emission takes whatever
+    /// arity its auth count yields.
+    ///
+    /// **Not** `keccak256` of the stored `txs_pqc_auths` segment, which has no
+    /// count prefix and so verifies nothing the chain signed: the count
+    /// varint mirrors the C++ generic `std::vector` serializer the oracle
+    /// hashes with (`cryptonote_format_utils.cpp:1169`, `begin_array(cnt)`),
+    /// unlike the tx *body*, where the count is implicit in `vin.size()`.
+    #[must_use]
+    pub fn pqc_auth_hash(&self) -> Option<[u8; 32]> {
+        let Ct::Fcmp { pqc_auths, .. } = &self.ct else {
+            return None;
+        };
+        if !self.has_pqc_component(!pqc_auths.is_empty()) {
+            return None;
+        }
+        let mut auth_buf = Vec::new();
+        write_varint(pqc_auths.len(), &mut auth_buf).expect("Vec write is infallible");
+        for auth in pqc_auths {
+            auth.write(&mut auth_buf).expect("Vec write is infallible");
+        }
+        Some(keccak256(&auth_buf))
+    }
+
     /// The consensus transaction hash of a **pruned** body, with the prunable
     /// digest supplied instead of computed.
     ///
@@ -1662,14 +1702,87 @@ impl Transaction {
     /// nothing — the daemon chooses it — and so does `prunable_hash` on its
     /// own; what the daemon cannot choose is a body and a digest that mix to a
     /// txid someone else named first, which is a keccak preimage.
+    ///
+    /// The `pqc_auths` component is still computed from the body: this is the
+    /// storage-pruned *spend* form, which keeps them. A body holding neither
+    /// region is [`Self::hash_with_supplied_components`]'s case.
     pub fn hash_with_supplied_prunable(&self, prunable_hash: [u8; 32]) -> [u8; 32] {
-        self.hash_with_prunable(Some(prunable_hash))
+        self.hash_from_components(
+            self.pqc_auth_hash(),
+            self.prunable_component(Some(prunable_hash)),
+        )
     }
 
-    /// Shared body of [`Self::hash`] and [`Self::hash_with_supplied_prunable`]:
-    /// one construction, so the pruned and unpruned paths cannot drift into
-    /// hashing the same transaction two ways.
-    fn hash_with_prunable(&self, supplied_prunable: Option<[u8; 32]>) -> [u8; 32] {
+    /// The consensus transaction hash of a **skeleton** — prefix and base
+    /// only — with **both** discardable components supplied (`PDM-Q-F26`,
+    /// `DAEMON_REDB_STORE.md` §7.7 item 2): the txid's third component as
+    /// [`Self::pqc_auth_hash`] would have computed it (`None` ⇔ the txid is
+    /// 3-part), and the prunable digest as [`Self::prunable_hash`] would have.
+    ///
+    /// Reconstruct-from-stored-digest, applied a second time. A node that has
+    /// discarded `pqc_auths` under `PDM-Q6` item 2, or that holds a band-1
+    /// skeleton (`PDM-Q-F28`) with neither region, cannot derive the txid's
+    /// arity from `pqc_auths.is_empty()` on a body that is not there — so the
+    /// arity is read off `pqc_auth.is_some()`, through the same predicate the
+    /// full-body paths use. [`Self::hash`] (both computed) and
+    /// [`Self::hash_with_supplied_prunable`] (one supplied) are the special
+    /// cases of this one construction, so no two paths can hash one
+    /// transaction two ways.
+    ///
+    /// For a coinbase (`Null` ct) the third component is the null hash
+    /// whatever is supplied — pruning cannot give a coinbase a prunable
+    /// region, and its `pqc_auth` is necessarily `None`.
+    pub fn hash_with_supplied_components(
+        &self,
+        pqc_auth: Option<[u8; 32]>,
+        prunable_hash: [u8; 32],
+    ) -> [u8; 32] {
+        self.hash_from_components(pqc_auth, self.prunable_component(Some(prunable_hash)))
+    }
+
+    /// The one arity predicate (C++ oracle, `format_utils.cpp:1137/1163-1182`):
+    /// a txid is **4-part** iff the ct is `Fcmp`, the auths are present
+    /// (`auths_present`: `!pqc_auths.is_empty()` on a body, `pqc_auth.is_some()`
+    /// when supplied) and the first input is not `gen` — `has_pqc = version>=3
+    /// && vin[0] != gen`, so the malformed gen-first-with-auths shape hashes
+    /// 3-part like a coinbase rather than misclassifying as a spend. The
+    /// prefix is part of every form, skeleton included, so the `gen` half of
+    /// the predicate is always computable.
+    fn has_pqc_component(&self, auths_present: bool) -> bool {
+        let first_is_gen = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
+        matches!(self.ct, Ct::Fcmp { .. }) && auths_present && !first_is_gen
+    }
+
+    /// The txid's prunable component: for `Fcmp`, a supplied digest wins (the
+    /// pruned case, where the region is absent and its hash is the caller's
+    /// operand), else the region's digest when present (the same bytes
+    /// [`Self::prunable_hash`] hashes — one construction), else the null hash;
+    /// for `Null`, the null hash regardless — a coinbase has no prunable
+    /// region at all, so its component is fixed whether or not a digest was
+    /// supplied.
+    fn prunable_component(&self, supplied: Option<[u8; 32]>) -> [u8; 32] {
+        match (&self.ct, supplied) {
+            (Ct::Fcmp { .. }, Some(h)) => h,
+            (
+                Ct::Fcmp {
+                    prunable: Some(_), ..
+                },
+                None,
+            ) => self.prunable_hash(),
+            // A coinbase regardless of what was supplied; a spend whose region
+            // is absent and whose digest was not supplied.
+            (Ct::Null(_), _) | (Ct::Fcmp { prunable: None, .. }, None) => [0u8; 32],
+        }
+    }
+
+    /// Shared body of every txid path: `H(prefix)` and `H(base)` from the
+    /// parts every form carries, then 3 or 4 components by
+    /// [`Self::has_pqc_component`]. Both arms carry struct-derived
+    /// cross-language hash parity (`pruned_tx_hash_parity` and
+    /// `serve_credit_tx_parity`, each with a C++ leg asserting the same pin);
+    /// the live-oracle pin (`live_oracle_spend_v1.json`) binds both languages
+    /// to a daemon-accepted spend.
+    fn hash_from_components(&self, pqc_auth: Option<[u8; 32]>, prunable: [u8; 32]) -> [u8; 32] {
         let mut prefix_buf = Vec::new();
         write_varint(TX_VERSION, &mut prefix_buf).expect("Vec write is infallible");
         self.prefix
@@ -1679,64 +1792,26 @@ impl Transaction {
 
         match &self.ct {
             Ct::Null(base) => {
-                // A coinbase has no prunable section at all, so its third
-                // component is the null hash whether or not a digest was
-                // supplied — pruning cannot give it one.
                 let mut base_buf = vec![CT_TYPE_NULL];
                 base.write(&mut base_buf).expect("Vec write is infallible");
-                hash_concat(&[h_prefix, keccak256(&base_buf), [0u8; 32]])
+                hash_concat(&[h_prefix, keccak256(&base_buf), prunable])
             }
             Ct::Fcmp {
                 fee,
                 reference_block,
                 base,
-                pqc_auths,
-                prunable,
+                ..
             } => {
                 let mut base_buf = vec![CT_TYPE_FCMP];
                 write_varint(*fee, &mut base_buf).expect("Vec write is infallible");
                 base_buf.extend_from_slice(reference_block);
                 base.write(&mut base_buf).expect("Vec write is infallible");
                 let h_base = keccak256(&base_buf);
-
-                // Per the C++ oracle (format_utils.cpp:1137/1163-1182): **4-part**
-                // `{prefix, base, pqc_auths, prunable}` iff `has_pqc && !pqc_auths
-                // .empty()`, where `has_pqc = version>=3 && vin[0] != gen`; otherwise
-                // **3-part** `{prefix, base, prunable}`. The prunable component is
-                // `H(prunable)` when present, else the null hash. Both arms carry
-                // struct-derived cross-language hash parity (`pruned_tx_hash_parity`
-                // and `serve_credit_tx_parity`, each with a C++ leg asserting the
-                // same pin); the live-oracle pin (`live_oracle_spend_v1.json`) binds
-                // both languages to a daemon-accepted spend.
-                // A supplied digest wins: it is the pruned case, where the
-                // section is absent and its hash is the caller's operand.
-                let h_prunable = match (supplied_prunable, prunable) {
-                    (Some(h), _) => h,
-                    // Present: the region's digest, the same bytes
-                    // `prunable_hash` hashes (one construction).
-                    (None, Some(_)) => self.prunable_hash(),
-                    (None, None) => [0u8; 32],
-                };
-
-                // `has_pqc` excludes the (malformed) gen-first shape, exactly as the
-                // oracle does — so a `gen` input + `Fcmp` ct hashes 3-part like a
-                // coinbase rather than misclassifying as a spend.
-                let first_is_gen = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
-                if pqc_auths.is_empty() || first_is_gen {
-                    hash_concat(&[h_prefix, h_base, h_prunable])
-                } else {
-                    // The pqc component mirrors the oracle's generic `std::vector`
-                    // serializer (format_utils.cpp:1169), whose `begin_array(cnt)`
-                    // writes the element **count as a leading varint** before the
-                    // entries — unlike the tx *body*, where the count is implicit
-                    // (`vin.size()`, no prefix). Both must match their respective C++
-                    // paths; they legitimately differ.
-                    let mut auth_buf = Vec::new();
-                    write_varint(pqc_auths.len(), &mut auth_buf).expect("Vec write is infallible");
-                    for auth in pqc_auths {
-                        auth.write(&mut auth_buf).expect("Vec write is infallible");
+                match pqc_auth {
+                    Some(h_auths) if self.has_pqc_component(true) => {
+                        hash_concat(&[h_prefix, h_base, h_auths, prunable])
                     }
-                    hash_concat(&[h_prefix, h_base, keccak256(&auth_buf), h_prunable])
+                    _ => hash_concat(&[h_prefix, h_base, prunable]),
                 }
             }
         }

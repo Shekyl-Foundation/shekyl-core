@@ -241,6 +241,22 @@ fn serve_credit_tx(n: usize) -> Transaction {
     }
 }
 
+/// `PDM-Q-F26`: the serve-credit form has **no** third txid component. Its
+/// countersignature rides the vin, `pqc_auths` is empty by mandate, and the
+/// C++ oracle hashes it 3-part — so `pqc_auth_hash()` is `None`, and the
+/// skeleton reconstruction with `None` is the body's own hash. `None` here is
+/// a fact about the txid's arity, not a discarded value.
+#[test]
+fn serve_credit_txid_has_no_pqc_component() {
+    let tx = serve_credit_tx(2);
+    assert_eq!(tx.pqc_auth_hash(), None, "serve-credit hashes 3-part");
+    assert_eq!(
+        tx.hash_with_supplied_components(None, tx.prunable_hash()),
+        tx.hash(),
+        "3-part reconstruction from the stored prunable digest alone"
+    );
+}
+
 #[test]
 fn serve_credit_tx_round_trips_and_validates() {
     // The §2.5 serve-credit shape, INVERTED by RF-D1: one non-spending
