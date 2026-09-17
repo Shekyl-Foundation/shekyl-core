@@ -34,6 +34,13 @@ Q6 items 1–2 are ruled before DRS-E2's first production writer or E2
 rules them by construction.** **F27–F29 (same day, on review): band 1
 needs a below-anchor `RuleSet` E6 is shaping now; the skeleton wire
 needs both txid components; Q3's instrument is `ChainView`'s surface.**
+**F30–F31 (2026-09-17, `4bc378d68`): Q11's census home is `CEN-E2`, and
+F27's Rust-held anchor fires `CEN-E1`/`CEN-E2`'s recorded reopening
+trigger — re-key owed in F27's PR; S-PRUNE owes a rule-26 plan doc before
+its first increment; §3's six adversarial items now carry status and
+owner (none walked against the tx-range unit); Q6 item 2 is the second
+increment built on an unruled default; Q11's owner is unnamed at day
+five.**
 `PDM-Q-S0` is RULED. This is the design home TJ-D named; it is not
 yet the design. **What this document is for:** nothing here is built
 while DRS is in progress — the implementation waits on the C++→Rust
@@ -1133,6 +1140,24 @@ Held as a question, not a claim, because the pipeline has dependents
 
 Named so they cannot be discovered after a ruling. Not answered here.
 
+**Status and owner (added 2026-09-17, `4bc378d68`).** Q6 is the critical
+path, and its ruling is "a transcription of F13/F14/F17 against these six
+items" — so the *walk of the six against the tx-range unit* is the actual
+gate on Q6, not the transcription. As of this date none is discharged
+and, until this table existed, none was assigned. Owner for every row is
+**steering (the ruling pass)**; a row cannot be closed by a code lane.
+"Partial" means a finding touched the item in passing, not that it was
+walked against the new unit.
+
+| Item | Walked against the tx-range unit? | What exists | Owner |
+| --- | --- | --- | --- |
+| Withholding | **No** | Nothing beyond R2's challenge deadline | steering |
+| Free-riding in the free regime | **No** | Duration is Q2's output (`W`, F24); no walk | steering |
+| Eclipse and fetch | **No** | TJ-F's no-store-handle face named; F29 covers the *validator*, not the *fetch* | steering |
+| Stripe / shard interaction | Partial | F17 inverted the item; the inverse enumeration (what a stripe-shaped archiver can answer to a tx-range challenge, and what the `u32` seed commits it to) is not written | steering |
+| Sybil economics | **No** | `r ≫ 1000` inherited; nothing re-derived for a per-tx verifier | steering |
+| Reorg | Partial | F10 names both halves; SCW-7 built the store half (`≥ D_max`, `PopBelowFloor`); the *discard-side* half (trim's defined failure, the predicate asserted at the discard decision) is S-PRUNE's and S-PRUNE has no plan doc (F31) | steering, then S-PRUNE |
+
 - **Withholding.** An archiver that holds leaves but refuses selected
   requests. What distinguishes that from an offline archiver, and does
   the challenge mechanism see the difference?
@@ -2183,6 +2208,93 @@ enforcement point (both S-PRUNE, not extracted — `DAEMON_REDB_STORE.md`
 sides, the `AppendMostly` running hash is already over the permanent
 hash rows, so `W` enters the digest only when the prune surface does.
 
+### Established by reading (2026-09-17, `dev@4bc378d68` — the census-consequence pass)
+
+Read after PR #767 (E6 slice 1 `held_by_cxx`). `pqc_auth_hash` is still
+absent from `rust/` as a field — it sits in the unmerged E6 `tip` branch;
+#766 landed DRS §7.7 as the landing plan. F26–F29 are in this charter and
+nothing in them is contradicted. Four gaps, one of them a census
+consequence that no lane had recorded.
+
+- **PDM-Q-F30.** **Q11's home is `CEN-E2`, not `CEN-E1` — and F27's
+  implementation fires both rows' recorded reopening trigger.** This
+  charter has said since 2026-09-13 that `D_max`'s home is
+  `is_alternative_block_allowed` above the checkpoint (Q11 row; Q5 item
+  5). At HEAD the census puts that function on **`CEN-E2`**
+  (`CONSENSUS_RULE_CENSUS.md:369`: *an alternative block at or below the
+  last checkpoint is refused*, `checkpoints.cpp:137`). **`CEN-E1`**
+  (`:368`) is a different rule — *hash equality at a checkpointed
+  height*, `check_block`. The E6 lane's unmerged `tip` text for F27
+  says *"the anchor rule already has a row, CEN-E1"* and the 2026-09-17
+  status report repeated it; both are one row off for the refusal arm.
+  The anchor model uses **both**: E1 is the band-1 trust assertion
+  (block `C` has hash `H`), E2 is the reorg fence `D_max` hangs from. A
+  consensus-side owner pointed at E1 alone would be reading the wrong
+  function for Q11. **The larger consequence:** both rows carry the
+  same C2-R1b caveat — *existence HELD for C2-R0; semantics ratified
+  while the mechanism exists; crossing reopens when DRS/R8 moves
+  checkpoint state* (E1 adds *"trigger re-checked at #595: not
+  live"*). F27's `Trust::BelowAnchor(anchor)` sourced from a
+  release-carried table in Rust **is** moving checkpoint state into
+  Rust. That is the named trigger, on two ratified rows, and it fires
+  the day E6's slice 3 or 6 lands the mode. The Q2 crossing question
+  those rows closed — *derivation-free hash equality, nothing for Rust
+  to hold* — was closed on the premise that the mechanism stays in C++.
+  Under the anchor model it does not, and under `assumevalid`
+  semantics E1 also does more than equality (it asserts validity of
+  everything beneath). **Owed, in F27's landing PR, not after:** a
+  re-key of `CEN-E1` and `CEN-E2` — new site (the Rust `Trust` arm and
+  the store's anchor row), the Q2 crossing answered for a Rust-held
+  table, and the C2-R0 existence HOLD closed one way or the other — or
+  the census carries two rows whose stated trigger has fired. Also
+  line-local: `CEN-E1`'s rule text still reads *"hardcoded/JSON-loaded
+  checkpoint hash"*; with `CEN-E5` removed (F23, PR #733) the
+  JSON-loaded half is dead text inside a ratified rule, and the re-key
+  retires it. This charter does not edit census rows (the C2 lane's);
+  it names the carrier. The `CEN-E1` claim in E6's `tip` text is
+  flagged here as another lane's line, to be corrected when that branch
+  lands.
+- **PDM-Q-F31.** **S-PRUNE has no plan doc, and every implementation
+  item in this charter lands on or adjacent to it.** The §8
+  "implementation after rulings" list — the discard predicate on
+  `eligible_height` vs `tip − W` (F10), retention exceptions
+  (`retain(s)`/`release(s)`, Q9), the undo-log floor (SCW-7), the
+  `pqc_auths` discard consuming the hash row (F26), `W` entering D11's
+  digest domain — is S-PRUNE's surface. S-PRUNE is deliberately **not
+  extracted** (`DAEMON_REDB_STORE.md` §7: five of six methods are the
+  stripe engine, superseded before they can be ported) and already
+  carries two contracts written on its row before it has a home (SCW-7,
+  F26's three-leg invariant). It has no `DRS_E*_SPRUNE.md`. Rule 26:
+  design closure precedes any cut; E1 got `DRS_E1_SCHAIN_W.md` before
+  its writers. S-PRUNE's successor needs the same before its first
+  increment — and the plan doc is the natural place for the three-leg
+  invariant, the discard predicate's enforcement point, the exceptions
+  structure and the reorg item's discard-side half to stop being
+  scattered across F10 / F26 / SCW-7 / §3. **It can be written now
+  against this charter without Q6's numeric**: the unit (a tx range),
+  the predicate (`retain`), the verifier (two hash rows) and the
+  invariant are all stated; only `W`'s value and the exceptions'
+  binding are open, and a plan doc carries those as named inputs. This
+  is compatible with `PDM-Q-S0` — S-PRUNE *is* `DRS-E*`, and a plan
+  doc is design, not implementation. **Owed by the DRS-E lane**;
+  FOLLOWUPS row with the falsifier.
+- **Q6 item 2 is now being built on an unruled default — stated
+  plainly.** F26's default (`pqc_auth_hash: Option<PqcAuthHash>`,
+  count-prefixed component, three-leg invariant) is in E6's `tip`
+  branch as a field and a wire form, and DRS §7.7 schedules the
+  `txs_pqc_auth_hash` row on S-CHAIN-R's layout commit. That is the
+  right call — the default is the cheap one to have been wrong about —
+  but it is the **second** increment building on an item Q6 has not
+  ruled (the first was `TxIdentity` itself). When Q6 rules item 2 it
+  is **confirming** a landed shape, not deciding one, and the ruling
+  should say which. Recorded so the distinction is visible at ruling
+  time rather than inferred.
+- **Q11 owner: day five, still unnamed.** Minted 2026-09-13. Three
+  derivers (F10, F19, SCW-7) and a fourth arriving with F27 (the anchor
+  is `D_max`'s precondition, and `D_max` is the fence E2 enforces).
+  Two rows of the census will reopen on its account (F30). It is a
+  person, not a round; the shape has been written since the 13th.
+
 ### Retracted
 
 - **PDM-Q-F6 RETRACTED 2026-09-12** as a launch-state fork. Was
@@ -2253,7 +2365,7 @@ hash rows, so `W` enters the digest only when the prune surface does.
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
 | `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); candidate under review: the daemon holds the shard as a retention exception on the universal predicate (binding dissolves to `retain(s)`/`release(s)` over the operator leg); lapse tail, coverage floor (F20), recovery fetch OPEN |
 | `PDM-Q10` | RPC contract for "not retained" | OPEN |
-| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2), F19 (Q1) **and the store's undo-log retention (S-CHAIN-W SCW-7, 2026-09-15: retention ≥ `D_max`)** all derive from; home is `is_alternative_block_allowed` above the checkpoint, so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; candidate 720 (24 h) as coordination with the archival domain, security wants shallower on two grounds (silent-reorg window; F23: an empty table has no cap at all); numeric pinned to the Round-2 re-pin gate with `n` |
+| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2), F19 (Q1) **and the store's undo-log retention (S-CHAIN-W SCW-7, 2026-09-15: retention ≥ `D_max`)** all derive from; home is `is_alternative_block_allowed` above the checkpoint — census row **`CEN-E2`** (F30; `CEN-E1` is the equality rule, the band-1 trust assertion) — so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; **owner unnamed at day five (2026-09-17, F30)**; F27's `Trust::BelowAnchor` fires `CEN-E1`/`CEN-E2`'s C2-R1b reopening trigger — re-key owed in F27's PR; candidate 720 (24 h) as coordination with the archival domain, security wants shallower on two grounds (silent-reorg window; F23: an empty table has no cap at all); numeric pinned to the Round-2 re-pin gate with `n` |
 | `PDM-Q12` | The freeze pipeline and the wallet-side `LeafStore` under Q6's unit — does the freeze retire when the commitment exists at ingest; `LeafStore` as deletion target (F21) | OPEN — minted 2026-09-13; held as a question because of `TJ-D` / `RF-D6` / `SF-` dependents |
 
 When this round proposes a test, it will name the edit that makes that
@@ -2336,6 +2448,18 @@ band 1 has no writer (F27); the skeleton wire entry grows the second
 txid component under Q6 item 2, owner `LV-`/`PWC-` (F28); Q3's
 instrument is `ChainView`'s own surface, held as a standing property
 with a compile-shaped falsifier (F29). Each is cheap exactly once.
+
+**The census-consequence pass (F30–F31, 2026-09-17) adds three items and
+one clock.** F27's landing PR re-keys `CEN-E1` and `CEN-E2` — their
+C2-R1b "reopens when DRS/R8 moves checkpoint state" trigger fires the
+day a Rust-held anchor table exists, and E1's rule text still names the
+JSON channel F23 deleted (F30). The DRS-E lane writes S-PRUNE's rule-26
+plan doc before its first increment; it can be written now against this
+charter (F31). Steering walks §3's six items against the tx-range unit —
+the table there now carries status and owner, and that walk, not the
+transcription, is Q6's gate. And Q6 item 2 is now the second increment
+built on an unruled default: when Q6 rules it, it confirms a landed
+shape and says so. Q11's owner: day five.
 
 ---
 
