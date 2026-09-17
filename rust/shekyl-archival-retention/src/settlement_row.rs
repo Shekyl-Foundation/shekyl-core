@@ -396,8 +396,8 @@ mod tests {
         );
     }
 
-    /// A desynced accounting input is a typed refusal, never a clamp — the
-    /// posture `SettleError` sets, preserved through the row constructor.
+    /// Layer-3 mapping pin (`SO-D8d`): a backstop refusal, never a clamp.
+    /// Not the Q3 reconstruction fixture (divergent urns at Slice C).
     #[test]
     fn more_passes_than_issued_is_refused_not_clamped() {
         assert_eq!(

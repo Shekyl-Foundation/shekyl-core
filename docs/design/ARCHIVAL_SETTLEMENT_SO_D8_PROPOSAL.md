@@ -3,8 +3,10 @@
 **Status:** OPEN — **PROPOSAL; direction RATIFIED.** Rick ratified shape
 **R-B** (post-issuance window, §2) on 2026-09-13. **RULED 2026-09-16:**
 Q3, Q8 (incl. P1/P2), Q9, Q10, Q12, Q13, Q15; Q14 closed by Q15;
-`SO-D8a`, `SO-D8b`, `SO-D8c` (transcriptions of R-B / PC-D4 / SO-D7).
-**Still to be ruled:** `SO-D8d`–`SO-D8e`; Q4 (`λ`
+`SO-D8a`, `SO-D8b`, `SO-D8c` (transcriptions of R-B / PC-D4 / SO-D7);
+`SO-D8d` (three local layers; store-invariant Fault, not a verdict;
+amended same day against `dev@5fde3b1ce` — §6.3).
+**Still to be ruled:** `SO-D8e`; Q4 (`λ`
 unpinned — must pin before any production caller). Slice C is not
 authorized. `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold on the
 writer's call site **stands**. No admission code, no consensus code, and
@@ -490,7 +492,7 @@ must pick one of:
 | `h_close` gate (`blockchain.cpp:5186`) | stays | **replaced** by the per-challenge deadline `h_incl ≤ h + CHALLENGE_RESPONSE_BLOCKS` (§3) |
 | Dedup (`blockchain.cpp:5156`) | pair-epoch-wide `pass_count > 0` is **exact** — one draw per block | **`(P, s, E, h)`** — and the exact-get *resolves* because `h` is in the DB (§4) |
 | Emission gather at `h_close(E)` (`db_lmdb.cpp:8334`) | complete | **incomplete** until `h_close(E) + W₂`; moves to the slash pass (§5) — `SO-D7` applied to a second consumer |
-| `passes > issued` | unreachable once the membership gate lands | unreachable once membership + dedup-on-`h` + validated-`h` hold (§6) |
+| `passes > issued` | unreachable once the membership gate lands | **asymmetric as originally stated** — fires only when `issued` is too low; `issued` too high settles Missed with no detector. Under `SO-D8b` the named inequality is unreachable by construction. Three **local** layers guard Q3 reconstruction instead; the harmful direction is layer 2's alone (persisted digest + re-walk); FATAL retained as a dominated backstop; desync is a store-invariant Fault; on-chain digest **REJECTED** (§6) |
 | Who fetches, and when | **every** miner attempting `h`, speculatively, inside the block interval — the herd (F4) | **the winner of `h`**, within `W₂` blocks |
 | Who is the witness, and how is that proven | implicit: the record rides the producer's block | the producer of `h`, **authenticated** by a hybrid signature under a key `h` committed (§2.2) |
 | Frozen surfaces touched | none on the wire | record format (RF round reopens, rule 21), rule-42 version bump, one new `tx_extra` tag (§2.2) |
@@ -509,8 +511,8 @@ that recommendation is **withdrawn** and the reason it was wrong is F4.
 ### 2.1 What R-B modifies — eight items
 
 Items **7 and 8 RULED 2026-09-16** (Q10, Q9). **`SO-D8a`/`b`/`c` RULED
-2026-09-16** (items 3b/fire, 4, 5 — transcriptions). Items **d–e remain**;
-Q4 still unpinned inside item 6.
+2026-09-16** (items 3b/fire, 4, 5 — transcriptions). **`SO-D8d` RULED
+2026-09-16** (§6). Item **e remains**; Q4 still unpinned inside item 6.
 
 Rick's enumeration of 2026-09-13, re-grounded at source; where the tree
 disagrees with the enumeration the correction is marked.
@@ -746,7 +748,7 @@ checked, no collision; TSV row at Slice C). Hiding is theater because
 the reveal publishes `pk`. The join identifies `h`'s coinbase (stealth
 payout already in the block), not a miner identity. Real residual is
 P2 / fixture 12. Reopen if `h` is removed **in order to conceal** the
-issuing block. Open: Q4 (`λ` unpinned); `SO-D8d`–`e`.
+issuing block. Open: Q4 (`λ` unpinned); `SO-D8e`.
 
 ---
 
@@ -829,23 +831,228 @@ at `h_close` must be re-pinned to the slash pass in the same change.
 settlement slashes on absolute-2; `PC-D6` says *"no economic disposition
 opens"* and this proposal does not open one.
 
-## 6. `SO-D8d` — `passes > issued`
+## 6. `SO-D8d` RULED 2026-09-16 — three local layers, none of them on chain; amended same day against `dev@5fde3b1ce`
 
-**Proposed: unreachable once membership (§4), dedup on `(P,s,E,h)` (§4) and
-validated `h` (§2.1 item 3a) all hold — each `h` contributes at most one
-record per pair, and only if `(P,s)` was drawn at `h`, so `passes ≤ issued`
-by construction. Kept as a typed refusal that is FATAL at settlement, never
-clamped.** `settle_epoch` (`attestation.rs:142–145`) already returns
-`SettleError::MorePassesThanIssued`; `SettlementRow::settle`
-(`settlement_row.rs:150`) refuses to compose a row; the writer maps that to a
-FATAL (`db_lmdb.cpp` `set_archival_settlement` throws) rather than
-`min(passes, issued)`: a clamp converts the collusion of §4 into **Served**,
-silently, which is the one outcome the check exists to prevent. Rule 50's
-"check that cannot fail" in its useful form — unreachable only while the
-gates hold, and the FATAL is the alarm that they stopped holding. The
-edit that makes it fail is **reverting `SO-D8b`'s dedup widening**
-(back to pair-epoch-wide `pass_count > 0`); name that at the site so a
-later sweep does not read the FATAL as dead.
+**RULED 2026-09-16; amended 2026-09-16** after examination against
+`dev@5fde3b1ce` (#761, #762, #764 merged). The check is not
+`passes > issued` as an accounting alarm. Under `SO-D8b` that named
+condition is unreachable by construction: one record per `(P, s, E, h)`
+by exact-get, each `h` tied to a draw by the membership gate,
+`E = epoch(h)` by `SO-D8a`. So `passes ≤ issued` is not guarding
+arithmetic. All three layers guard **Q3** — whether the drawable-set
+reconstruction is stable between admission at `h_incl` and settlement at
+the slash deadline, hundreds of blocks later. That rationale is written
+at the site (`SettleError`, this section, the writer caller).
+
+### 6.1 Which direction costs a bond, and which layer sees it
+
+The fold is absolute-2 on `passes`; `issued` only gates
+`NonObservation` (`issued < 2`). So a wrong `issued` matters in exactly
+two cases, and `passes > issued` sees neither:
+
+- **Over-derived** — `issued_true < 2 ≤ issued_derived`, `passes < 2`. A
+  pair that should settle `NonObservation` settles **Missed**, and an
+  archiver who served correctly accumulates a bad observation toward a
+  slash. When `passes ≥ 2` an over-derived `issued` is harmless — the
+  fold returns Served regardless.
+- **Under-derived** — `issued_derived < 2 ≤ issued_true`. A pair that
+  should settle **Missed** settles `NonObservation`: the free-exit
+  direction `SO-D1` exists to close. `passes ≤ 1 ≤ issued_derived`
+  holds, so layer 3 is silent here too.
+
+Layer 3 fires only when `passes ≥ issued_derived + 1`, which requires
+records, which layer 1 already covers. **Layer 3 is strictly dominated**
+— retained as a cheap backstop, never as the guard.
+
+Layer 1 compares records to assignments pair-by-pair. An over-derived
+`issued` produces records that *agree* with the writer's `assignment(h)`
+at every `h` a record names; the divergence is in the **count of draws**,
+not in whether any particular `h` was drawn. So **layer 1 structurally
+cannot see the harmful direction.** The security-priority direction —
+both the wrongful slash and the free exit — rests on **layer 2 alone**.
+That is why the amendments in §6.3 are load-bearing, not polish: as
+first recorded, layer 2 had no operand (§6.3, finding 1), and the only
+clause that matters had no working guard.
+
+### 6.2 Three layers, none on chain
+
+1. **Per-record assignment equality.** For each record the writer reads
+   at `(P, s, E, h)`, verify that the writer's own `assignment(h)` names
+   `(P, s)`. The record is evidence of what admission believed; this
+   compares the two derivations directly rather than a consequence of
+   them. Catches admission-side defects (a membership gate that let a
+   non-member through, a λ that differed between the two doors — §6.5).
+   Streamed: replay `ChallengeUrn::advance_block` against the epoch's
+   records grouped by `h`, `O(97 × 40 B)` resident — **not**
+   `assign_epoch`'s materialised `Vec<Vec<DrawablePair>>` (≈ 39 MB at
+   maturity before overhead; rule 76, the Pi 4 is the floor).
+2. **Local drawable-set digest.** The node digests `D` when it first
+   builds it at `h_open(E)`; the writer **re-walks `D` from the journals
+   at every slash pass** (§7.4's enumerator, `O(holdings changes since
+   h_open)`) and compares. Catches reconstruction drift, including for
+   pairs with **no** records, which layer 1 cannot see. Local only: no
+   wire field, no consensus surface, no validity coupling — the cell is
+   written, never read by validation.
+3. **`passes ≤ issued`, FATAL, never clamped** — retained beneath both as
+   a cheap backstop. `settle_epoch` (`attestation.rs`) already returns
+   `SettleError::MorePassesThanIssued`; `SettlementRow::settle` refuses
+   to compose a row.
+
+### 6.3 Amendments of 2026-09-16 (examination against `dev@5fde3b1ce`)
+
+1. **The digest is persisted — one local 32-byte cell per epoch.** As
+   first recorded the digest had no operand: `SO-D8e` said the cache is
+   never persisted, and on the resident path the writer's `D` *is* the
+   cache's `D` (a digest compared to itself), while on the restart path
+   the original digest was lost with the cache (nothing to compare
+   against). The cell is written **in the connect batch at `h_open(E)`**,
+   so it is undo-logged (SI-6 shape) and therefore reorg-safe for free —
+   a pop below `h_open(E)` removes it with the block, which also closes
+   the reorg-across-`h_open` staleness a local digest otherwise shares
+   with the rejected on-chain one. Not on the wire; never read by any
+   rule. `SO-D8e`'s "never persisted" carries this one carve-out
+   (§7.2). Not an `SO-D3` violation: a checksum of a derivation is not
+   stored state, and it is the only way "compare at settlement" has an
+   operand.
+2. **Layer 2 re-derives at every slash pass — option (b) — and that
+   collapses Q7.** Layer 2 needs two operands: something to compare *to*
+   (the persisted digest) and something to compare (a re-derivation). A
+   resident cache supplies neither. So the re-walk is not a cost bolted
+   on; it is what makes layer 2 exist. Once the writer re-walks at every
+   slash pass, retaining the cache past `h_close(E) + W₂` buys nothing at
+   settlement, which was its whole justification — so **Q7 drops from
+   "retain through the slash deadline" to "drop after `h_close(E) + W₂`"**
+   as a consequence, restoring the pure-function property `SO-D1` §4.2
+   and `SO-D6` rest on (the writer at `h_slash` is a function of chain
+   data, not of what this process happened to keep resident). Layer 1
+   then always replays (1.09 s here; Pi-4 owed), inside connect phase 9
+   once per epoch — off the admission path, on the connect path once
+   per 10,000 blocks. **Conditional on §7.4's churn benchmark.**
+   **Stated fallback (a):** if the backward walk proves too expensive
+   for the floor device inside connect, layer 2 compares only when the
+   cache is non-resident (after a restart) and Q7's retention returns.
+   The benchmark number is the falsifier; do not discover the fallback.
+3. **Pin 4 reconciled — same refusal, two dispositions, by call site.**
+   §7.4 pin 4's "capability limit, not a defect and not a verdict" is
+   right *at the enumerator during ordinary operation*: a below-horizon
+   request is refused and the caller lives. At the slash pass the same
+   refusal means the node cannot settle an epoch it is obligated to
+   settle, and skipping is forbidden — so it **escalates to the Fault**
+   (§6.4). The call site is what distinguishes them.
+4. **Direction analysis** — §6.1 (the harmful direction is layer 2's
+   alone; layer 3 dominated).
+5. **λ is a fourth falsifier class** — §6.5; and a precondition on Q4.
+6. **Ground (3) of the on-chain rejection WITHDRAWN** — §6.6.
+7. **Layer 1 streams** — §6.2 item 1.
+
+### 6.4 Disposition at the site: a store-invariant Fault, never a verdict
+
+`dev@5fde3b1ce` already has the vocabulary. `shekyl-chain-rules`
+`view.rs:19–23`: a `Fault` is handed back *outside*
+`Result<ChainValid, InvalidBlock>` and the caller halts; a refusal is a
+verdict that names a `CenRow`. `shekyl-chain-store` `store/halt.rs:12`:
+a halt fires when *"a validator hole let something through a belt"* —
+layer 1 verbatim — and `ConnectState::Halted { at_height, row:
+StoreInvariant }` (`:37–41`) is in memory, re-derived on restart, never
+persisted, reads stay open, armed by `poison().arm(row)`.
+
+**An `SO-D8d` desync is therefore a store-invariant Fault carrying a new
+`SI-` row, minted at Slice C in `STORE_INVARIANT_REGISTER.md` — never a
+`CenRow`, never `InvalidBlock`.** Same posture as the urn's `FeedError`:
+a typed refusal from the fold, the poison latch at the slash-pass caller,
+never a panic, never a clamp, never a skip.
+
+**The connect phase-9 nuance, stated so it is not "fixed".** The slash
+pass runs inside the connect batch (`connect.rs:31,:417`, `[E4 hook]
+accrual row, slash, epoch close`). A poisoned batch means **the block at
+the slash height is not written on this node — because the writer
+halted, not because the block is invalid.** Other nodes connect it. The
+old `SettleError` text — "must reject (the block, upstream)" — was
+written when the writer ran inside `add_block`; there is no verdict to
+issue here, and the records were admitted and connected long ago.
+
+**Forbidden explicitly: clamping, and skipping.** Skip writes no row;
+absent reads as NonObservation (`SO-D5`'s inversion), which is the most
+forgiving outcome available — a clamp by omission, and the one that will
+arrive as a quiet `continue`.
+
+### 6.5 Falsifiers — four classes, named at the site
+
+Each is a different real defect; name them so a later sweep does not
+read an unreachable check as dead:
+
+- **revert the `SO-D8b` dedup widening** (back to pair-epoch-wide
+  `pass_count > 0`) — layer 1 / layer 3;
+- **perturb the drawable-set reconstruction** so admission and
+  settlement disagree — layer 2 (and layer 1 if any record's `h` moves);
+- **prune a journal above the retention horizon** — fires **upstream of
+  the layers**, as §7.4 pin 4's refusal or SI-7 `CellCorrupt { fault:
+  Absent }` on the view read, and escalates to the Fault at the slash
+  pass (§6.3 item 3);
+- **λ divergence between the two doors** (Q4: `assign_epoch` reads the
+  constant; `ChallengeUrn::new` is `pub` and re-exported) — the pair set
+  is identical so layer 2 passes; layer 1 fires on replay. **Q4 is
+  therefore a precondition for `SO-D8d` having complete coverage**, not
+  only for correctness in general; recorded in Q4's own entry (§10 item
+  4) so the second door is not closed halfway.
+
+### 6.6 REJECTED: an on-chain digest of `D` at `h_open(E)`
+
+Complete and symmetric, 32 bytes per epoch — refused on **four**
+grounds. (1) It converts a one-row accounting error in a four-journal
+backward reconstruction into a chain split. (2) `h_open` is publicly
+predictable, so any off-by-one in the reconstruction becomes a fork
+trigger an attacker can fire on a schedule for one transaction.
+(4) A reorg across an epoch boundary re-judges every record admitted
+since `h_open`. (5) Decisively, the inter-node case is already caught by
+consensus — a node with the wrong `D` admits records others reject,
+which is a fork the ordinary machinery detects. The digest's only
+addition is detecting it a few blocks earlier, and that is what all the
+rest would be paid for.
+
+**Ground (3) WITHDRAWN 2026-09-16** — *"it makes block validity depend on
+journal retention, locking out pruned nodes."* The slash pass is
+consensus-visible and every node runs it, so reconstruction back to
+`h_open(E)` at `h_slash ≈ h_open + 20,000` is already a participation
+requirement, on the local design as much as the on-chain one; the
+journals are already outside `prune_archival_epochs_before` (§7.4). The
+difference between the two designs is *timing*, which is weak, and
+*fork versus local halt*, which grounds (1), (2) and (5) already carry.
+Withdrawn rather than softened, so the rejection is not re-argued on
+the wrong ground.
+
+**REJECTED, so it is not re-proposed: counting `issued` from records
+instead of deriving it.** `SO-D1` §4.2 refuses it — an absent record
+would read as never-issued, which is the free-exit hole the scheme exists
+to close.
+
+### 6.7 Fixture, and what is carried elsewhere
+
+**Fixture.** Not a unit test of `settle_epoch` — that returns the error
+trivially and proves nothing. Seed an admission-side urn from `D` as
+built at `h_open` and a settlement-side urn from a `D` **re-walked from
+divergent journals**, and show the fold refusing through the Fault path.
+That is also the only end-to-end test that Q3's reconstruction and the
+admission path are looking at the same object — and it must run the
+re-derivation, not the resident cache, or it tests nothing (§6.3 item
+2). Lands with Slice C; `attestation.rs`'s existing
+`MorePassesThanIssued` unit test stays as the layer-3 mapping pin, not
+as this fixture.
+
+**Carried elsewhere, not this item:** serving the epoch's drawable set as
+a **served artifact** a pruned node fetches the way it fetches segment
+data. Wrong tool for `SO-D8d` (it does not close the local reconstruction
+hole without becoming a consensus surface). It addresses the
+reconstruction burden that §6.6's withdrawn ground (3) now states as a
+participation requirement on every node, and belongs on record against
+PDM — do not mint a `PDM-` id here (rule 94 §6).
+
+*SUPERSEDED: "`passes > issued` is the check"; "FATAL means reject the
+connecting block"; "the edit that makes it fire is only reverting the
+dedup widening"; on-chain `D`-digest; skip-as-continue; "retain the cache
+through the slash deadline" (Q7, collapsed by §6.3 item 2); "three edits
+make these layers fire" (the pruned-journal edit fires upstream); the
+five-ground rejection (ground 3 withdrawn).*
 
 ## 7. `SO-D8e` — the `assign_epoch` FFI shape (the real item)
 
@@ -871,7 +1078,9 @@ sequential form (`advance_block(prev_hash)` per block, `draws_done()`;
 a wrapper type in `shekyl-archival-retention`, no new crate:
 
 ```text
-EpochAssignmentCache  (derived state; NEVER persisted — SO-D3 derive-don't-store)
+EpochAssignmentCache  (derived state; NEVER persisted — SO-D3 derive-don't-store;
+                       one carve-out: the 32-B digest of D, written in the connect
+                       batch at h_open(E) — SO-D8d §6.3 item 1; undo-logged, never read by a rule)
   open(E, DrawableSet::at_epoch_open(view, E))              // Q3 RULED; λ = CHALLENGES_PER_PAIR_PER_EPOCH, not a parameter (Q4); holds E-1's set too for the first W₂ of E
   advance(h, prev_hash) -> &[DrawablePair]                 // assignment(h); O(λ·pairs/SEB) per block; pushed onto the ring
   is_assigned(h, P, s) -> bool                             // admission gate; O(1) for any h in the trailing W₂ ring, refuse-not-guess outside it
@@ -902,14 +1111,19 @@ EpochAssignmentCache  (derived state; NEVER persisted — SO-D3 derive-don't-sto
   popped `h_incl` never leaves a dangling reference to a live `h`.
 - **Restart mid-epoch:** replay from `h_open(E)` on first use, rebuilding the
   ring for the trailing `W₂`. Same bound.
-- **Retention (Q7, answered by construction):** the cache for `E` must live
-  until the last record for `E` can be admitted — `h_close(E) + W₂` — and,
-  if it is to feed the writer without a replay, until the slash pass at
-  `h_close(E) + 10,000`. The first 500 blocks of `E` are the overlap the
-  ring already names: two `DrawableSet`s resident (`E-1` and `E`), because
-  a record at `h_incl` can cite an `h` in the previous epoch. Retaining
-  through the slash deadline (zero replay at settlement) is the
-  recommendation and costs one more epoch of a ~2 MB structure.
+- **Retention (Q7 — COLLAPSED 2026-09-16 by `SO-D8d` §6.3 item 2):** the
+  cache for `E` must live until the last record for `E` can be admitted —
+  `h_close(E) + W₂` — and **no longer**. The first 500 blocks of `E` are
+  the overlap the ring already names: two `DrawableSet`s resident (`E-1`
+  and `E`), because a record at `h_incl` can cite an `h` in the previous
+  epoch. The writer at the slash pass re-walks `D` and replays the urn
+  from chain data (layer 2 needs the re-derivation to exist at all), so
+  retaining through the slash deadline buys nothing at settlement; the
+  writer is a pure function of chain data, which is the property `SO-D1`
+  §4.2 and `SO-D6` rest on. *SUPERSEDED: "retaining through the slash
+  deadline (zero replay at settlement) is the recommendation."* Stated
+  fallback if §7.4's churn benchmark refuses the re-walk on the floor
+  device: retention returns and layer 2 compares only when non-resident.
 - **Ordering hazard, named:** the cache must be advanced with the *validated*
   predecessor's hash, never `prev_id` as supplied on an alt path — the same
   constraint `RF-D5` states for the attestation path's `prev_block_hash`.
@@ -1080,9 +1294,14 @@ record's holdings as they stood → filter → emit in canonical order.
 4. **Below the retention watermark, refuse — do not degrade.** The
    backward walk will otherwise stop early and silently return something
    nearer tip holdings than `h_open` holdings: a wrong `D` with no
-   error. Model the refusal on `StoreCannot::PopBelowFloor`
+   error.    Model the refusal on `StoreCannot::PopBelowFloor`
    (`shekyl-chain-store` `store/error.rs:295`) — a loud capability
-   limit, not a defect and not a verdict.
+   limit, not a defect and not a verdict — **at the enumerator during
+   ordinary operation.** At the slash pass the same refusal means the
+   node cannot settle an epoch it is obligated to settle, and skipping
+   is forbidden, so it escalates to the `SO-D8d` Fault (§6.3 item 3,
+   §6.4). Same refusal, two dispositions; the call site distinguishes
+   them.
 5. **`SO-D1`'s absent-row theorem restates** from *absent ⇒ never
    issued* to *absent ⇒ no live obligation in `E`*, covering both
    never-issued and issued-then-exited. Landed in
@@ -1723,17 +1942,18 @@ gates until `shekyl-chain-rules` is the live validator.
 | Item | Plan |
 |---|---|
 | **Where the enumeration walk goes** | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` (Q3 RULED, §7.4) seeds the cache. Writer: `shekyl-archival-retention::settlement::settle_epoch_rows(issued: impl Iterator<(DrawablePair,u32)>, passes: impl Fn(&DrawablePair)->u32) -> Vec<(ArchivalPairEpochKey, SettlementRow)>` — pure, testable, no storage. `issued` from `EpochAssignmentCache::issued_histogram()` (or one `assign_epoch` replay if not resident). Per drawn pair, `holds_shard_of` at the fire height: not held ⇒ write no row (Q3 §7.4 (3.3)). The Rust apply/slash path (S-ARCH, DRS-E4) calls it and writes the rows **before** the fold, per `SO-D7`. No FFI; no C++ loop. |
-| **How `issued` is obtained** | From the urn (§7), never from records (`SO-D1`: the forcing case has zero records). |
+| **How `issued` is obtained** | From the urn (§7), never from records. **`SO-D8d` restates `SO-D1` §4.2 so it is not re-proposed:** an absent record would read as never-issued, which is the free-exit hole the scheme exists to close. |
 | **How `passes` is obtained** | The S-ARCH `archival_serve_credit_pass_count(P,s,E)` read — a per-pair-epoch count over the `PC-D4` widened key; **complete at `h_close(E) + W₂` and therefore at the slash pass** (`10,000 ≥ 500`). Same count, same table, Rust store. |
 | **Where the emission gather goes** | Same hook, same pass (§5): `gather_archival_emission_epoch_snapshot` is called from the Rust slash pass after the writer, not from epoch-close. The invariant-2 joint pin moves with it. |
+| **Settlement integrity (`SO-D8d` RULED, amended 2026-09-16)** | Three local layers at the Rust slash-pass writer, none on chain: (1) each record at `(P,s,E,h)` must equal the writer's `assignment(h)` — streamed replay, not a materialised epoch; (2) **persisted** local 32-B digest of `D`, written in the connect batch at `h_open(E)` (undo-logged), compared against a **re-walk of `D` at every slash pass** (§7.4; conditional on its churn benchmark, fallback = compare only when non-resident); (3) `passes ≤ issued` FATAL as backstop (strictly dominated — §6.1). The harmful direction (`NonObservation → Missed`, and the free exit) is layer 2's alone. Desync is a **store-invariant Fault** with a new `SI-` row (minted at Slice C) — `poison().arm(row)` → `ConnectState::Halted`; never a `CenRow`, never `InvalidBlock`, never clamp, never skip. The block at the slash height is not written on this node *because the writer halted*, not because it is invalid. On-chain `D`-digest **REJECTED** (four grounds; ground 3 withdrawn). Counting `issued` from records **REJECTED**. Layers 1–2 and the SI row land with Slice C; layer 3 already exists as `SettleError::MorePassesThanIssued`. |
 | **Admission changes (new `CEN-` rows in `shekyl-chain-rules`, not `blockchain.cpp`)** | Parse `h` (new kept field); admit only if `h_incl − CHALLENGE_RESPONSE_BLOCKS ≤ h < h_incl` **and** `ChainView` has `block_at(h)`. `h_incl` is the candidate's height (`tip + 1` on connect), so a response to the immediately preceding block (`h = tip`) is in range. **`h ≥ tip` as a refusal is SUPERSEDED** — it would reject that valid case. `block_hash(h−1)` from `ChainView` for the leaf index; `settlement_epoch_at_height(h)` is `SO-D9` (i); `is_assigned(h, P, s)` against the in-process cache; witness check takes `h`'s coinbase witness tag bytes + the pruned witness pk/sig + the record preimage. Dedup: `archival_serve_credit_present(P,s,E,h)` exact-get replaces the `pass_count > 0` probe. The fire-height path is deleted; `ERR_CREDIT_DEADLINE` rebinds to the `W₂` window. Each refusal is a typed `InvalidBlock { rule: CenRow, … }` (CHAIN_RULES G3). Negative fixture per row (CHAIN_RULES §8). |
 | **Witness key (Q8 RULED; Q13 RULED; Q12 RULED)** | `shekyl-crypto-pq`: `derive_witness_keypair(combined_ss)` from coinbase output 0, existing `HKDF_SALT_OUTPUT_DERIVE`, new labels `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519`, **info without `output_index`** (registry mechanism 2, review duty). Commitment written under **`TX_EXTRA` tag `0x0C`** by the Rust miner-tx constructor; `combined_ss` never crosses the FFI. Fresh `tx_key` per block is a **derivation requirement** with a same-address / distinct-`tx_key` fixture (§7.5 P2), not a KEM inheritance. **Q12 RULED (§7.9):** the 32-B value is a bare `cSHAKE256` of the canonical witness pk under `shekyl/archival-witness-key-v1` (mechanism 1; TSV row + census pin `30 → 31` at Slice C; **not** `PL-D3`'s `pqc_key_scalar`). Independent of F5: hiding is theater because the reveal publishes `pk`; the join identifies `h`'s coinbase, not a miner identity. Reopen if `h` is removed in order to conceal the issuing block. Content rule (Q13 RULED, §7.8): one `CEN-` row, five fixtures, genesis-unconditional; dedicated parser must not copy `0x0B`'s empty-set; length is `WITNESS_COMMITMENT_BYTES` = 32; modelled on #745's `check_pqc_leaf_entries` — no FFI adapter. Q13 does not re-open optionality. **SUPERSEDED: extend `0x0B`; sequenced behind F5.** Node-side (Q10 RULED): a memory-only `ZeroizeOnDrop` ring of 32-B seeds keyed by height, Rust-owned; capacity `W₂` = 500, depth tracks fill-to-inclusion; evict on inclusion; file promptly. Orderly shutdown logs remaining depth then drops; unclean restart logs that in-flight count is **unknown** (capability limit, not error). Persist-encrypted **REJECTED**. A persisted cardinality beside the datadir is also refused (new at-rest surface for a log line; a crash still loses it unless fsynced on every fill). Re-derivable `tx_key` is the named fallback, not built. |
 | **Batching (Q9 RULED)** | Merkle-root batching: one pk + one signature over a Merkle root of the record set, each record carrying its inclusion path (⌈log₂ n⌉ hashes). Fail-whole refused — a corrupt member is excluded, the rest verify. Dedup stays `(P,s,E,h)` per record; a batch is a carrier, not a unit of credit. Admission of a record proves inclusion in a set that witness authored, not completeness. Class is `serve_credit_only` (fee-less by construction). Each carrier still obeys `TX_WEIGHT_LIMIT` = 149,400; at maturity 97 draws split 39 / 39 / 19 (depth 6, 192 B path; ≈ 365 KB/block; 39:1 amortization; +10.8 KB witness vs a single batch). Inter-batch blast radius is 39; `W₂` is resubmission headroom. Partition leaks nothing. Cap-raise (~11 KB/block ≈ 2.9 GB/year) and unpaid inclusion are a fee-and-weight round, not this row. |
-| **Cost** | One epoch replay per settled epoch if the cache is not resident (1.09 s here; Pi-4 owed), inside the slash pass, off the admission path. Admission: `O(1)` ring lookups + one hybrid verify per **Merkle-batch** (unbatched would be 97 ML-DSA-65 verifies per block — itself a reason to batch). Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
+| **Cost** | One epoch replay per settled epoch — **always**, under `SO-D8d` §6.3 item 2 (the cache is dropped at `h_close(E) + W₂`; Q7 collapsed) — 1.09 s here, Pi-4 owed, streamed; plus the §7.4 `D` re-walk, `O(holdings changes since h_open)`, benchmark owed. Both inside connect phase 9 at the slash height, once per 10,000 blocks, off the admission path. *SUPERSEDED: "if the cache is not resident."* Admission: `O(1)` ring lookups + one hybrid verify per **Merkle-batch** (unbatched would be 97 ML-DSA-65 verifies per block — itself a reason to batch). Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
 | **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
-| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 12 (§7.5 P2):** uniqueness — two miner-tx constructions to the same payout address with independently generated `tx_key`s yield distinct `0x0C` commitments; identical `(combined_ss)` yields the same witness key. Red: a constructor that reuses `tx_key`, or drops it from the KEM IKM, makes the two commitments equal. **New 13 (§7.6):** Merkle-batch — a carrier whose Merkle root is signed, with one member's record bytes mutated, admits the other members and refuses the mutant; a fail-whole signature over the concatenated set is the red edit (one mutant fails the honest members). **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 16 (§7.9):** named-hash — `0x0C` bytes equal `cSHAKE256(canonical witness_pk, custom=shekyl/archival-witness-key-v1)`. Red: a hiding Pedersen opening (theater: pk is still published), or a different customization. |
+| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 12 (§7.5 P2):** uniqueness — two miner-tx constructions to the same payout address with independently generated `tx_key`s yield distinct `0x0C` commitments; identical `(combined_ss)` yields the same witness key. Red: a constructor that reuses `tx_key`, or drops it from the KEM IKM, makes the two commitments equal. **New 13 (§7.6):** Merkle-batch — a carrier whose Merkle root is signed, with one member's record bytes mutated, admits the other members and refuses the mutant; a fail-whole signature over the concatenated set is the red edit (one mutant fails the honest members). **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 16 (§7.9):** named-hash — `0x0C` bytes equal `cSHAKE256(canonical witness_pk, custom=shekyl/archival-witness-key-v1)`. Red: a hiding Pedersen opening (theater: pk is still published), or a different customization. **New 17 (`SO-D8d`):** seed an admission-side urn from `D` as built at `h_open` and a settlement-side urn from a `D` **re-walked from divergent journals**; show the fold refusing through the Fault path (`poison().arm(<SI- row>)` → `ConnectState::Halted`, reads open). Must run the re-derivation, not the resident cache. A unit test of `settle_epoch(3, 2)` is **not** this fixture. Red: skip (write no row — `SO-D5` inversion), clamp (`min(passes, issued)`), an `InvalidBlock` verdict, or a persisted latch. **New 18 (`SO-D8d` §6.1):** the over-derived case — `issued_true = 1`, `issued_derived = 2`, `passes = 1` — is caught by layer 2's digest mismatch and by nothing else; red edit: skip the re-walk when a cache is resident. |
 | **`CEN-L8` promotion path** | Census already homes settlement in the slash pass (`CONSENSUS_RULE_CENSUS.md` CEN-L8, corrected 2026-09-12 against `SO-D7`); the production caller is ruled-blocked on `SO-D8`, not missing-from-the-row. Path: (1) this ruling lands → (2) emission gather joins the slash pass (`SO-D8c`; invariant-2 joint pin) — the close hook stays for budget freeze, not gather → (3) writer + gather call sites land with the gates on S-ARCH → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. **SUPERSEDED:** "re-word the census row off epoch-close" as a live task — `SO-D7` already did that. |
-| **What changes at the same cutover** | **Added:** `SO-D9` (i) at `h`; membership gate; deadline re-bound to `W₂`; witness authentication; `h` on the kept wire; new coinbase tag; dedup exact-get on `(P,s,E,h)`; Merkle-root batching of serve-credit records (Q9) — one pk + one sig over a Merkle root per carrier, inclusion path per record; fail-whole refused; memory-only witness-seed ring (Q10; persist-encrypted REJECTED); `0x0C` content rule (Q13; one CEN row, five fixtures, genesis-unconditional); bare-hash witness commitment (Q12; `cSHAKE256` under `shekyl/archival-witness-key-v1`). **Deleted:** `challenge_fire_height` path, `ERR_FIRE_NOT_REACHED`, `ctx.block_hash_at_seal`; `archival_baseline_observed_at_epoch` as the interim `issued`; the `h_close` bound as a deadline. **Moved:** emission gather to the slash pass. **Superseded in-line (rule 23):** `PC-D2`; the `constants.rs:59` doc string becomes true and stays. |
+| **What changes at the same cutover** | **Added:** `SO-D9` (i) at `h`; membership gate; deadline re-bound to `W₂`; witness authentication; `h` on the kept wire; new coinbase tag; dedup exact-get on `(P,s,E,h)`; Merkle-root batching of serve-credit records (Q9) — one pk + one sig over a Merkle root per carrier, inclusion path per record; fail-whole refused; memory-only witness-seed ring (Q10; persist-encrypted REJECTED); `0x0C` content rule (Q13; one CEN row, five fixtures, genesis-unconditional); bare-hash witness commitment (Q12; `cSHAKE256` under `shekyl/archival-witness-key-v1`); `SO-D8d` three local integrity layers (assignment equality, persisted local `D`-digest + re-walk at the slash pass, `passes ≤ issued` backstop; store-invariant Fault with a new `SI-` row, not a verdict); one local 32-B digest cell per epoch (rule-42 schema snapshot moves). **Deleted:** `challenge_fire_height` path, `ERR_FIRE_NOT_REACHED`, `ctx.block_hash_at_seal`; `archival_baseline_observed_at_epoch` as the interim `issued`; the `h_close` bound as a deadline. **Moved:** emission gather to the slash pass. **Superseded in-line (rule 23):** `PC-D2`; the `constants.rs:59` doc string becomes true and stays. |
 
 **Sequencing against DRS — SUPERSEDED 2026-09-16 (Q15), amended same
 day.** *Superseded text: "none of the above blocks on redb, and none of
@@ -1742,8 +1962,15 @@ first, the FFI half is simply never written."* DRS-D12 turned the if
 into the ruling. **S-CHAIN-W increment 3 landed 2026-09-15** (PR #757
 merged 2026-09-16); the store has `connect`/`pop` on the branded batch.
 The daemon still opens LMDB only. `shekyl-chain-rules` is scaffold
-without rule bodies. Two preconditions, both named, both falsifiable —
-and the six gates do **not** all wait on the second:
+without rule bodies. **UPDATE 2026-09-16 (`dev@5fde3b1ce`):** #761 and
+#762 (E6 slice 1: `Rule`/`BlockRule`, CEN-B1/B2/B7, `RuleSet` with
+`held_by_cxx` rows) and #764 (S-CHAIN-R `chain_reads`; `BatchView`
+implements `ChainView`; `connect` takes `ChainValid<'id, BatchView>`)
+have landed since. **The falsifier is unchanged and has not fired:**
+LMDB still serves production, and `held_by_cxx` rows mean the validator's
+verdict still rests partly on C++ tests. Nothing moved the hold; nothing
+lapsed it. Two preconditions, both named, both falsifiable — and the six
+gates do **not** all wait on the second:
 
 1. **`shekyl-chain-rules` is the live connect validator** — `ChainValid`
    minted only by that crate, no C++-verdict shim (DRS-D12 (ii)). E6
@@ -1786,13 +2013,13 @@ about it.
 
 | ID | Disposition | State |
 |---|---|---|
-| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; `SO-D8a`/`b`/`c` **RULED 2026-09-16** (transcriptions); d–e remain; Q3, Q8, Q9, Q10, Q12, Q13 **RULED 2026-09-16** |
+| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; `SO-D8a`/`b`/`c`/`d` **RULED 2026-09-16**; e remains; Q3, Q8, Q9, Q10, Q12, Q13 **RULED 2026-09-16** |
 | `SO-D9` (standalone) | `ERR_EPOCH_MISMATCH` is a tautology. **(i)**: the record's epoch equals `settlement_epoch_at_height(h)` of the validated issuing block. Lands as a `shekyl-chain-rules` row with the R-B cutover (Q15); not a C++ one-liner. FOLLOWUPS row carries it. | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
 | `SO-D8a` | Boundary rule `E = epoch(h)`; `ERR_FIRE_NOT_REACHED` dies; **`h_close` deadline replaced** by the per-challenge `W₂` bound. Transcription of the R-B ratification. First admission-path reader of `CHALLENGE_RESPONSE_BLOCKS`; that FOLLOWUPS row **discharged**. | **RULED 2026-09-16** |
 | `SO-D8b` | Dedup **widens** to `(P,s,E,h)` exact-get; membership against `assignment(h)`. Exact-get resolves because `h` is in the past and in the DB — what `PC-D4` could not do. Needs `SO-D8e`'s epoch-spanning window; unimplementable without it. | **RULED 2026-09-16** |
 | `SO-D8c` | Emission gather **moves to the slash pass** — `SO-D7` applied to its second consumer; invariant-2 joint pin moves with it. Presence-vs-absolute-2 recorded, not opened. | **RULED 2026-09-16** |
-| `SO-D8d` | `passes ≤ issued` by construction under membership + dedup-on-`h` + validated `h`; FATAL at settlement, never clamped. Under `SO-D8b`'s exact-get, `passes > issued` is unreachable (one record per `(P,s,E,h)`, at most λ values of `h` per pair-epoch). The edit that makes the FATAL fire is reverting the dedup widening — name it at the site so a sweep does not read the check as dead. | **PROPOSED** |
-| `SO-D8e` | `EpochAssignmentCache` with a `W₂` ring: Rust-owned, in-memory, sequential, checkpointed, never persisted; seeded by `DrawableSet::at_epoch_open` (Q3 RULED); `λ` from the constant (Q4); retained through the slash deadline (Q7); called from the Rust apply/pop path only. The 5-call C++ FFI adaptor is **SUPERSEDED** (Q15). **Structural claim:** the cache is a 500-deep window over past assignments, not a rolling current-epoch value; it spans epoch boundaries and holds two `DrawableSet`s during the overlap, because `SO-D8b` needs `assignment(h)` for any `h` in `[h_incl − W₂, h_incl)`. `SO-D8b` is unimplementable without this; do not rule the two as independent. | **PROPOSED** |
+| `SO-D8d` | Three **local** layers, none on chain: (1) per-record assignment equality against the writer's `assignment(h)`, streamed; (2) **persisted** local 32-B digest of `D` written in the connect batch at `h_open(E)` (undo-logged), compared against a **re-walk at every slash pass** (option (b); conditional on §7.4's churn benchmark; fallback (a) stated); (3) `passes ≤ issued` FATAL backstop, **strictly dominated**. Guards Q3 reconstruction, not arithmetic. The harmful direction (`NonObservation → Missed`; the free exit) is layer 2's alone — layer 1 cannot see a count divergence (§6.1). Desync is a **store-invariant Fault** with a new `SI-` row (Slice C), never `CenRow`/`InvalidBlock`; block at the slash height unwritten *because the writer halted* (§6.4). Q7 **collapsed**: cache drops at `h_close + W₂`. Pin 4 reconciled by call site. Clamp and skip **FORBIDDEN**. On-chain `D`-digest **REJECTED** on four grounds — **ground 3 WITHDRAWN**. Counting `issued` from records **REJECTED** (`SO-D1` §4.2). Four falsifier classes at the site (dedup revert; reconstruction perturbation; journal prune — fires upstream; λ divergence — Q4 is a coverage precondition). Fixture 17 runs the re-derivation; fixture 18 pins the over-derived case. Served-artifact `D` carried against PDM. | **RULED 2026-09-16; amended 2026-09-16 vs `dev@5fde3b1ce`** |
+| `SO-D8e` | `EpochAssignmentCache` with a `W₂` ring: Rust-owned, in-memory, sequential, checkpointed, never persisted; seeded by `DrawableSet::at_epoch_open` (Q3 RULED); `λ` from the constant (Q4); retained to `h_close(E) + W₂` only — Q7 **collapsed** by `SO-D8d` §6.3 item 2 (*SUPERSEDED: through the slash deadline*); one persisted carve-out, the 32-B `D` digest in the connect batch at `h_open(E)`; called from the Rust apply/pop path only. The 5-call C++ FFI adaptor is **SUPERSEDED** (Q15). **Structural claim:** the cache is a 500-deep window over past assignments, not a rolling current-epoch value; it spans epoch boundaries and holds two `DrawableSet`s during the overlap, because `SO-D8b` needs `assignment(h)` for any `h` in `[h_incl − W₂, h_incl)`. `SO-D8b` is unimplementable without this; do not rule the two as independent. | **PROPOSED** |
 | Drawable set (Q3) | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` over `ChainView`; no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
 | `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row **discharged 2026-09-16** by `SO-D8a` RULED (first admission-path reader). | **RESOLVED by R-B**; referent **RULED 2026-09-16 (`SO-D8a`)** |
 | Witness key (Q8) | **Dedicated non-output hybrid key** derived from coinbase output 0's `combined_ss` under `HKDF_SALT_OUTPUT_DERIVE` + `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519` (no `output_index` in info); 32-B commitment under **`0x0C`**; pk + sig pruned. Combined_ss stays in Rust. The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise**. **SUPERSEDED: extend `0x0B`.** Q13 RULED (§7.8) owns the CEN wording: **mandatory-present** (commitment 2, not byte count); **fresh `combined_ss` per block** is a derivation requirement with a fixture, not a KEM inheritance. Q10 RULED: `W₂` ring is memory-only, restart loss is β. Q12 RULED (§7.9): bare 32-B `cSHAKE256` under `shekyl/archival-witness-key-v1`; hiding is theater (reveal publishes `pk`); reopen if `h` is removed **in order to conceal** the issuing block. Construction §7.5. | **RULED 2026-09-16** |
@@ -1839,8 +2066,11 @@ Seven were posed in the first cut; four answered in the 2026-09-13 review,
 new ones arise from R-B; Q11 is resolved by the `PL-` round and #745; Q12–Q13
 were opened in the 2026-09-14 reconciliation; Q14 was opened by #747 review
 and is resolved by Q15 (2026-09-16). **Open questions: Q4 (`λ` unpinned);
-`SO-D8d`–`e`.** `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
-PC-D4 / SO-D7). Q3 RULED
+`SO-D8e`.** `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
+PC-D4 / SO-D7). `SO-D8d` RULED 2026-09-16 (§6), amended same day:
+three local layers; persisted `D` digest + re-walk at every slash pass
+(Q7 collapsed); store-invariant Fault with an `SI-` row, never a
+verdict; on-chain digest REJECTED (ground 3 withdrawn). Q3 RULED
 2026-09-16 (§7.4). Q8 RULED 2026-09-16 (§7.5): dedicated non-output key,
 tag `0x0C` not `0x0B`; P1 mandatory-present and P2 `combined_ss`
 freshness. Q9 RULED 2026-09-16 (§7.6):
@@ -1867,13 +2097,27 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
 4. **ANSWERED — unpinned, must be pinned before any production caller.**
    `lambda_target` is a bare `u32` at `challenge_assignment.rs:152` / `:264`.
    §7.2's `open()` drops the parameter and reads the constant. Filed.
+   **Two doors** (2026-09-16): `assign_epoch` reads the constant, but
+   `ChallengeUrn::new` is `pub` and re-exported, so the strong form is a
+   `pub(crate)` constructor or a documented sim-facing second door — say
+   "the epoch entry point reads the constant", not "λ cannot be passed
+   wrong". **`SO-D8d` makes Q4 a coverage precondition, not only a
+   correctness one** (§6.5): a λ that differs between admission and
+   settlement leaves the pair set identical, so layer 2 passes; only
+   layer 1 fires, and only on replay. Close both doors before Slice C.
+   Lands in its own PR after #759 (rule 19: Rust gates, not docs gates).
 5. **ANSWERED, then RULED.** `ERR_CREDIT_DEADLINE`'s disposition changed with
    R-B — it is **re-bound** to the `W₂` window, not kept as `h_close` (§3).
    The vacuous check was `ERR_EPOCH_MISMATCH` (`SO-D9`), ruled (i).
 6. **ANSWERED — keep A1.**
-7. **RESOLVED by 1.** The cache must retain `≥ W₂` of per-block draws for
-   admission regardless; retaining through the slash deadline is one more
-   epoch of ~2 MB and removes the settlement replay. Recommendation: retain.
+7. **RESOLVED by 1; COLLAPSED 2026-09-16 by `SO-D8d` §6.3 item 2.** The
+   cache must retain `≥ W₂` of per-block draws for admission regardless,
+   and drops at `h_close(E) + W₂`. The writer re-derives at every slash
+   pass (layer 2 cannot exist otherwise), so retention past `h_close + W₂`
+   buys nothing at settlement; the writer is a pure function of chain
+   data (`SO-D1` §4.2, `SO-D6`). *SUPERSEDED: "Recommendation: retain."*
+   Fallback if §7.4's churn benchmark refuses the re-walk on the Pi 4:
+   retention returns, layer 2 compares only when non-resident.
 8. **RULED 2026-09-16 — (Witness key).** Dedicated non-output hybrid key
    from coinbase output 0's `combined_ss`, existing salt, new labels,
    info without `output_index`; 32-B commitment under **`0x0C`**. Combined_ss
