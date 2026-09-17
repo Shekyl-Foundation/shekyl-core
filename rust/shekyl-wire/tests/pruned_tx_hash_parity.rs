@@ -457,9 +457,18 @@ fn pqc_auth_hash_is_the_txid_third_component() {
          the third component"
     );
 
-    // `hash()` mixes this value in: the pinned txid KAT above still holds,
-    // and a 3-part mix of prefix+base+prunable cannot equal a 4-part spend.
-    assert_ne!(tx.hash(), tx.prunable_hash().to_bytes());
+    // `hash()` mixes this value in: supplying the same component
+    // reconstructs the txid; dropping it (3-part prefix+base+prunable)
+    // cannot.
+    assert_eq!(
+        tx.hash(),
+        tx.hash_with_supplied_components(Some(h_pqc), tx.prunable_hash())
+    );
+    assert_ne!(
+        tx.hash(),
+        tx.hash_with_supplied_components(None, tx.prunable_hash()),
+        "a 3-part mix of prefix+base+prunable cannot equal a 4-part spend"
+    );
 }
 
 #[test]
