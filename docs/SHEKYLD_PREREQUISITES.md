@@ -144,6 +144,22 @@ immediately" will fail validation.
 modern hardware), but the path is exercised. There is no separate
 "skip PoW" toggle.
 
+**PoW is the Rust RandomX v2 light-mode verifier, in the daemon and in
+`generateblocks`.** Since the Phase 3/4 cutover
+([`design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §2)
+`shekyld` links only the Rust verifier (`shekyl_pow_randomx_v2_hash`);
+`find_nonce_for_given_block` and the built-in `start_mining` miner hash
+through that same light-mode path, so harness hashrate expectations
+should be set against a verifier, not a miner. The default daemon build
+does **not** compile or link the RandomX v2 C library.
+`-DBUILD_RANDOMX_V2_DIFFERENTIAL_HARNESS=ON` / `-DBUILD_RANDOMX_V2_MINER_LIB=ON`
+are opt-in harness and out-of-process-miner reference builds and never
+change what `shekyld` links (`scripts/ci/check_randomx_symbol_isolation.sh`
+is the gate). A harness that needs fast block production on a real
+difficulty uses an external miner over this node's `get_block_template`
+/ `submitblock` RPC — a miner that speaks another coin's template
+dialect will not produce accepted blocks.
+
 **Regtest hard-fork table.**
 `src/cryptonote_core/cryptonote_core.cpp:674–678` defines
 `regtest_hard_forks` to force HF1 at height 0, then jump to the latest

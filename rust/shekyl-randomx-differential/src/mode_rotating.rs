@@ -5,7 +5,7 @@
 
 //! `--mode=rotating` — the exploring differential lane (re-scope item 2).
 //!
-//! Per `docs/design/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2, this is
+//! Per `docs/completed/RANDOMX_V2_MUTATION_REGIME.md` §7.5 item 2, this is
 //! the lane that moves the **explored** coverage boundary. Every other
 //! differential lane re-verifies the same 1024 pinned pairs on every
 //! run, on every branch, in five places; this one derives a fresh input

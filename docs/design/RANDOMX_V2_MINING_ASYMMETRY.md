@@ -17,6 +17,7 @@
 | Working branch (doc) | `docs/randomx-mining-asymmetry` (off `dev`; design docs land on `dev` per branch policy). |
 | Working branch (code) | The bench legs, XMRig integration, whale harness, and any Rust-full prototype get **their own** branch off `dev` — this doc does not carry code. |
 | Reopen clause | §10 — "accept the gap" is itself a security choice with a threat model; recorded with a [`21-reversion-clause-discipline`](../../.cursor/rules/21-reversion-clause-discipline.mdc) reopen criterion, not left implicit. |
+| Tracked in FOLLOWUPS (2026-09-16) | Two one-liners in [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md): parked Phases 1–3 (falsify by Appendix B from a source-verified run; never-link falsifier is isolation check 1's §7.1 10-symbol C-ABI list) and the miner template conformance vector (§6.3; not gated on Appendix B). Disposition options (a)/(b)/(c) live in this document, not in the queue. |
 
 ---
 

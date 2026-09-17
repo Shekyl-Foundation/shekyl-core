@@ -361,9 +361,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Stage 1 trait-extraction chain — closeout audit (2026-05-29, [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)**
   - Target: pre-genesis
 
-- **Post-2g adversarial-corpus methodology + implementation [`docs/completed/RANDOMX_V2_PHASE2H_PLAN.md`](./completed/RANDOMX_V2_PHASE2H_PLAN.md)**
-  - Target: pre-genesis
-
 - **Refresh bandwidth tradeoff under α — round-trip-bound block [`docs/design/STAGE_1_PR_4_REFRESH_ENGINE.md`](./completed/STAGE_1_PR_4_REFRESH_ENGINE.md)**
   - Target: pre-genesis
 
@@ -445,7 +442,22 @@ Default. Lands before genesis if it should exist at launch.
 - **CryptoNote fossil — hardcoded key-image fixup for Monero blocks [`src/blockchain_db/blockchain_db.cpp`](../src/blockchain_db/blockchain_db.cpp)**
   - Target: pre-genesis
 
-- **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: checkout-hygiene landing merged **and** a pin-bump or tarball-CI need. [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
+- **RandomX v2 SHA-256 digest of the 7-symbol `randomx.h` surface** beside `fork-pin-sha` in `randomx-v2-sys`. Reopen: pin-bump of `external/randomx-v2` or a tarball-CI need (checkout-hygiene conjunct fired in PR #754). [`RANDOMX_V2_PLAN.md`](./design/RANDOMX_V2_PLAN.md)
+  - Target: pre-genesis
+
+- **RandomX v2 algorithm-review gate (genesis release checklist)** — Monero production observation window **and** funded v1→v2 delta audit, both recorded with no `00-mission` #1 contraindication. YAML `algorithm-review-gate` stays pending until then. Fallback: `RANDOMX_V1_FALLBACK.md`, not an unpin. [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §1.4
+  - Target: pre-genesis
+
+- **RandomX v2 mining floor-vs-ceiling asymmetry — Phases 1–3 parked after Phase 0.** Falsify parked status by Appendix B from a source-verified run. The never-link claim is the §7.1 10-symbol C-ABI list (isolation check 1), not “any miner code under any name.” [`RANDOMX_V2_MINING_ASYMMETRY.md`](./design/RANDOMX_V2_MINING_ASYMMETRY.md)
+  - Target: pre-genesis
+
+- **Miner template conformance vector (bless the interface, not a miner).** Publish a versioned `get_block_template` → blob framing → `submitblock` + seed-epoch vector before genesis seal. Falsify by a third-party miner passing it against `dev`. [`RANDOMX_V2_MINING_ASYMMETRY.md`](./design/RANDOMX_V2_MINING_ASYMMETRY.md) §6.3
+  - Target: pre-genesis
+
+- **PoW test seam and isolation checks 3/4/6 across the daemon Rust cutover.** Owner: the PR that moves `src/crypto/pow_randomx.{h,cpp}`. Falsify by that PR recording the seam disposition and re-deriving checks 3/4/6 against the new binary. [`RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §7
+  - Target: pre-genesis
+
+- **`rust/shekyl-consensus` fold** — six live Cargo consumers; DRS-E* is not the round that removes them. Falsify by `rg -l 'shekyl-consensus' rust/*/Cargo.toml` returning only the crate itself.
   - Target: pre-genesis
 
 - **Promote 2c-emergent sub-PR design disciplines to project-level [`.cursor/rules/26-sub-pr-design-discipline.mdc`](../.cursor/rules/26-sub-pr-design-discipline.mdc)**
@@ -511,7 +523,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Async `Engine::close` / `change_password` lifecycle (PR 6 PR #83).** [`V3_ENGINE_TRAIT_BOUNDARIES.md`](./V3_ENGINE_TRAIT_BOUNDARIES.md)
   - Target: pre-genesis
 
-- **RandomX v2 — Guix reproducible-build obligation pickup (trigger: [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md)**
+- **RandomX v2 — Guix reproducible-build obligation pickup** (trigger: the first Guix-built `shekyld` that vendors `external/randomx-v2`; the daemon Rust rewrite does not substitute for it) [`docs/design/RANDOMX_V2_RUST.md`](./design/RANDOMX_V2_RUST.md) §22
   - Target: pre-genesis
 
 - **Rules-queue: reconcile the priority-ordering statements across [`00-mission.mdc`](../.cursor/rules/00-mission.mdc)**
@@ -751,7 +763,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Workspace clippy `-D warnings` cleanup.** Surfaced by the Phase 0
   - Target: pre-genesis
 
-- **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path and [`external/CMakeLists.txt`](../external/CMakeLists.txt)**
+- **RandomX v2 `ExternalProject_Add`: per-`CONFIG` install path** in [`external/CMakeLists.txt`](../external/CMakeLists.txt) (multi-config generators; harness/miner-lib opt-in only — the default daemon never builds the C library, so this does not gate `shekyld`)
   - Target: pre-genesis
 
 - **A UDS listener for the daemon RPC (posture 1 on the daemon)** (added

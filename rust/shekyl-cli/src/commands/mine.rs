@@ -9,6 +9,10 @@
 //! process. The original "the CLI doesn't mine" cut was about the wallet
 //! *doing* the work, not *controlling* it (CLI_USABILITY.md §1).
 //!
+//! The daemon's built-in hasher is the same path it uses to check blocks:
+//! always correct, not a competitive miner. A miner built for another coin
+//! will not produce blocks this network accepts.
+//!
 //! Shared fail-closed gates before any mining daemon call (CLI_USABILITY.md
 //! §CU-3): wallet open, unrestricted RPC, matching network. `mine start`
 //! additionally refuses a daemon that is not synced (the daemon's own
@@ -174,6 +178,15 @@ fn remind_if_remote(dc: &DaemonClient) {
     );
 }
 
+/// Printed after a successful `mine start`. The built-in hasher is the
+/// node's checker, not a competitive miner; a miner for another coin
+/// (including stock Monero XMRig) will not produce accepted blocks.
+const BUILT_IN_MINER_NOTICE: &str = "\
+The daemon is using its built-in checker, which is correct but not the \
+fastest miner for this CPU. For more hashrate, run a dedicated miner that \
+uses this node's block template — a miner built for another coin will not \
+produce blocks this network accepts.";
+
 /// `mine start [threads|auto]` — start mining on the daemon, paying to this
 /// wallet's primary address.
 pub fn cmd_mine_start(
@@ -236,6 +249,7 @@ pub fn cmd_mine_start(
                 "The daemon owns the mining threads — they keep running after this \
                  CLI exits. \"mine stop\" stops them."
             );
+            println!("{BUILT_IN_MINER_NOTICE}");
         }
         Err(e) => eprintln!("Failed to start mining: {e}"),
     }
@@ -296,7 +310,9 @@ pub fn cmd_mine_status(rpc: &RpcSession, daemon: Option<&DaemonClient>, network:
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_mine, parse_noarg_alias, parse_start_mining_alias, ParsedMine};
+    use super::{
+        parse_mine, parse_noarg_alias, parse_start_mining_alias, ParsedMine, BUILT_IN_MINER_NOTICE,
+    };
 
     #[test]
     fn mine_grammar_accepts_exact_arity_and_rejects_strays() {
@@ -326,6 +342,22 @@ mod tests {
         ] {
             assert!(parse_mine(args).is_err(), "{args:?}");
         }
+    }
+
+    #[test]
+    fn built_in_miner_notice_names_the_template_not_a_drop_in_xmrig() {
+        assert!(
+            BUILT_IN_MINER_NOTICE.contains("block template"),
+            "notice must tell the operator the work comes from this node"
+        );
+        assert!(
+            BUILT_IN_MINER_NOTICE.contains("another coin"),
+            "notice must refuse the stock-Monero-miner reading"
+        );
+        assert!(
+            !BUILT_IN_MINER_NOTICE.contains("XMRig"),
+            "do not name a miner that speaks a different template dialect"
+        );
     }
 
     #[test]

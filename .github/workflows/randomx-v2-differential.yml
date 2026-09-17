@@ -807,7 +807,7 @@ jobs:
           retention-days: 90
 
   rotating:
-    # The exploring differential lane (RANDOMX_V2_MUTATION_REGIME.md
+    # The exploring differential lane (docs/completed/RANDOMX_V2_MUTATION_REGIME.md
     # §7.5 item 2). Every other differential lane re-verifies the same
     # 1024 pinned pairs; this one derives a fresh input set per
     # rotation index and runs rust-vs-C over inputs the project has
@@ -1053,9 +1053,10 @@ jobs:
     # BUILD_RANDOMX_V2_MINER_LIB=ON by design — do not "fix" that guard.
     #
     # The job also runs the binary symbol-isolation gate on the linked
-    # daemon (scripts/ci/check_randomx_symbol_isolation.sh): the daemon
-    # build is already paid for here, and this is the only workflow that
-    # builds one on a cadence.
+    # daemon (scripts/ci/check_randomx_symbol_isolation.sh). The same
+    # script runs per-PR on the Ubuntu 24.04 daemon artifact in
+    # build.yml; this cron copy is the cadence that still fires when no
+    # daemon-building PR ran that day.
     name: 'cron: full-dataset parity gate + symbol isolation'
     runs-on: ubuntu-latest
     timeout-minutes: 300
