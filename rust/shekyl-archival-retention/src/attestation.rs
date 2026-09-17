@@ -153,13 +153,20 @@ pub enum EpochSettlement {
 /// the arithmetic sense; "must reject (the block, upstream)".*
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SettleError {
-    /// More passes counted than challenges assigned — the cheap backstop
-    /// under the Q3 reconstruction layers (`SO-D8d`). Not an arithmetic
-    /// disagreement that can arise on its own once `SO-D8b` holds.
+    /// More admitted pass records than derived issuance for the pair-epoch —
+    /// the cheap backstop under the `SO-D8d` layers. Not an arithmetic
+    /// disagreement that can arise on its own once `SO-D8b` holds: either
+    /// admission let in records the derivation never assigned (a dedup or
+    /// membership regression — §6.5's first falsifier, with reconstruction
+    /// agreeing), or the drawable-set derivation itself disagrees between
+    /// admission and settlement (the Q3 case). The message names both so an
+    /// operator is not sent to one subsystem when the fault is in the other.
     #[error(
-        "more passes ({passes}) than issued challenges ({issued}): backstop for \
-         a drawable-set reconstruction disagreement between admission and \
-         settlement (SO-D8d), not a settlement state"
+        "more admitted pass records ({passes}) than derived issuance ({issued}) \
+         for the pair-epoch: admission credited records the derivation did not \
+         assign (dedup/membership regression) or the drawable-set derivation \
+         disagrees between admission and settlement (SO-D8d); a store-invariant \
+         fault, not a settlement state"
     )]
     MorePassesThanIssued {
         /// Admission-verified pass records counted for the pair-epoch.
