@@ -12,6 +12,8 @@
 //! `CellCorrupt` docs describe — because the store's own surface has no
 //! way to damage its header, which is the point.
 
+use shekyl_units::AtomicUnits;
+
 use super::store_tests::{cleanup, probe_row, tmp, TestErr, EPOCH, OTHER_EPOCH, PROBE};
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
@@ -186,13 +188,13 @@ fn total_burned_is_a_writable_chain_state_cell() {
     store
         .write(|batch| -> Result<(), StoreError> {
             assert_eq!(batch.get_property::<TotalBurnedCell>()?, None);
-            batch.upsert_property::<TotalBurnedCell>(&5)?;
+            batch.upsert_property::<TotalBurnedCell>(&AtomicUnits::from_raw(5))?;
             // The connect-side fold: checked, never saturating (SI-8 is the
             // belt `connect` binds; this is the cell it folds into).
             let next = batch
                 .get_property::<TotalBurnedCell>()?
-                .unwrap_or(0)
-                .checked_add(7)
+                .unwrap_or(AtomicUnits::ZERO)
+                .checked_add(AtomicUnits::from_raw(7))
                 .expect("no overflow in test");
             batch.upsert_property::<TotalBurnedCell>(&next)
         })
@@ -200,7 +202,7 @@ fn total_burned_is_a_writable_chain_state_cell() {
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.get_property::<TotalBurnedCell>().expect("get"),
-        Some(12)
+        Some(AtomicUnits::from_raw(12))
     );
     drop(snap);
     drop(store);

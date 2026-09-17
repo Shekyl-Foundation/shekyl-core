@@ -440,8 +440,8 @@ impl<'id> WriteBatch<'_, 'id> {
                 .insert(height, burned.encoded().as_encoded())?;
             let total = self
                 .get_property::<TotalBurnedCell>()?
-                .unwrap_or(0)
-                .checked_add(burned.to_raw())
+                .unwrap_or(AtomicUnits::ZERO)
+                .checked_add(burned)
                 .ok_or(StoreInvariant::FoldOverflow {
                     cell: TotalBurnedCell::KEY,
                 })

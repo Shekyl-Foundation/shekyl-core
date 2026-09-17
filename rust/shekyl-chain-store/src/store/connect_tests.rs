@@ -367,7 +367,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
         .is_none());
     assert_eq!(
         snap.get_property::<TotalBurnedCell>().expect("cell"),
-        Some(25)
+        Some(AtomicUnits::from_raw(25))
     );
     // The spend's prunable row is empty (storage-pruned form) and its
     // prunable hash is keccak256("") — the same value a coinbase carries.
@@ -396,7 +396,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
             .map(|t| t.len().expect("len"))
             .unwrap_or(0)
     }
-    let counts = |store: &ChainStore| -> (u64, u64, u64, u64, u64, Option<u64>) {
+    let counts = |store: &ChainStore| -> (u64, u64, u64, u64, u64, Option<AtomicUnits>) {
         let snap = store.begin_read().expect("read");
         (
             len(&snap, BLOCKS),
@@ -419,7 +419,10 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
         Ok(batch.connect(judge(&view, b1)?, facts(1, 4), GENESIS_ID)?)
     });
     out.expect("block 1 connects");
-    assert_eq!(counts(&store), (2, 3, 3, 2, 1, Some(4)));
+    assert_eq!(
+        counts(&store),
+        (2, 3, 3, 2, 1, Some(AtomicUnits::from_raw(4)))
+    );
 
     let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
     assert!(matches!(popped, Ok(Replayed::Entries(_))));
@@ -706,7 +709,7 @@ fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
     // overflow is block 1's.
     let (_, genesis) = connect_genesis(&store, 0);
     let seeded: Result<(), TestErr> = store.write(|batch| {
-        batch.upsert_property::<TotalBurnedCell>(&u64::MAX)?;
+        batch.upsert_property::<TotalBurnedCell>(&AtomicUnits::from_raw(u64::MAX))?;
         Ok(())
     });
     seeded.expect("seed");
@@ -727,7 +730,7 @@ fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.get_property::<TotalBurnedCell>().expect("cell"),
-        Some(u64::MAX),
+        Some(AtomicUnits::from_raw(u64::MAX)),
         "unchanged: the batch aborted"
     );
     cleanup(&path);

@@ -12,6 +12,7 @@
 use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
 use shekyl_types::BlockHeight;
+use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{candidate, facts, spend};
@@ -73,7 +74,7 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
     // Three blocks each handed `burned = 3`; genesis records none (the
     // `h > 0` half of the C++ guard, `blockchain.cpp:6148`), so the fold is
     // two blocks' worth.
-    assert_eq!(burned_after_three, Some(6));
+    assert_eq!(burned_after_three, Some(AtomicUnits::from_raw(6)));
 
     let out: Result<Popped, TestErr> = store.write(|batch| Ok(batch.pop()?));
     let popped = out.expect("pop 2");
@@ -84,7 +85,7 @@ fn pop_removes_the_tip_and_pops_a_reorg_depth_in_one_batch() {
         let snap = store.begin_read().expect("read");
         assert_eq!(
             snap.get_property::<TotalBurnedCell>().expect("cell"),
-            Some(3),
+            Some(AtomicUnits::from_raw(3)),
             "block 2's burn restored to the pre-image block 1 left"
         );
         assert!(snap

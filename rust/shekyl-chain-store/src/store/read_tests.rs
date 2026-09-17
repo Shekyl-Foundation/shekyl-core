@@ -13,14 +13,15 @@
 //! (`DAEMON_REDB_STORE.md` §3.6.2, the read-side half).
 
 use shekyl_chain_rules::{AtHeight, RuleSetId};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{candidate, facts, judge, spend};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
-use crate::codec::{Canonical, CurveRoot};
+use crate::codec::Canonical;
 use crate::schema::{BLOCK_INFO, CURVE_TREE_ROOTS};
 
 fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
@@ -85,7 +86,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
     let planted: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
-            .insert(1, CurveRoot::from_bytes([1; 32]).encoded().as_encoded())?;
+            .insert(1, CurveTreeRoot::from_bytes([1; 32]).encoded().as_encoded())?;
         Ok(())
     });
     planted.expect("plant");
@@ -159,7 +160,11 @@ fn block_info_is_recorded_at_and_below_the_tip_and_above_tip_above_it() {
         let AtHeight::Recorded(info) = snap.block_info(h(height)).expect("read") else {
             panic!("height {height} is recorded");
         };
-        assert_eq!(info.timestamp, 1_000 + 60 * height, "the fixture's clock");
+        assert_eq!(
+            info.timestamp,
+            shekyl_types::Timestamp::from_raw(1_000 + 60 * height),
+            "the fixture's clock"
+        );
         assert_eq!(info.cumulative_tx_count, u64::from(height >= 1), "0, 1, 1");
     }
     assert!(matches!(
@@ -403,6 +408,128 @@ fn block_blob_above_the_tip_is_above_tip_and_a_hole_is_si7() {
         store.connect_state(),
         ConnectState::Live,
         "a read never arms the halt"
+    );
+    cleanup(&path);
+}
+
+// ------------------------------------------------------------------ R8–R9 and the fold reads
+
+/// Connect three blocks handing `burned` per height, so R8/R9 have a fold
+/// to read: genesis records none whatever it is handed (the `h > 0` half of
+/// the C++ guard), a zero writes no row.
+fn connect_burning(store: &ChainStore, burns: &[u64]) {
+    let mut previous = [0u8; 32];
+    let mut cands = Vec::new();
+    for h in 0..burns.len() as u64 {
+        let cand = candidate(h, previous, Vec::new());
+        previous = cand.block.hash();
+        cands.push(cand);
+    }
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        for (h, cand) in cands.into_iter().enumerate() {
+            batch.connect(
+                judge(&view, cand)?,
+                facts(h as u64, burns[h]),
+                RuleSetId::GENESIS,
+            )?;
+        }
+        Ok(())
+    });
+    out.expect("chain connects");
+}
+
+#[test]
+fn block_burn_reads_zero_for_a_block_with_no_row_and_the_amount_otherwise() {
+    let path = tmp("read-block-burn");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    // genesis is handed 9 and records none; block 1 burns 0 (no row);
+    // block 2 burns 25 (a row).
+    connect_burning(&store, &[9, 0, 25]);
+    let snap = store.begin_read().expect("read");
+    assert_eq!(
+        snap.block_burn(h(0)).expect("read"),
+        AtHeight::Recorded(AtomicUnits::from_raw(0)),
+        "genesis: no row"
+    );
+    assert_eq!(
+        snap.block_burn(h(1)).expect("read"),
+        AtHeight::Recorded(AtomicUnits::from_raw(0)),
+        "zero burn: no row"
+    );
+    assert_eq!(
+        snap.block_burn(h(2)).expect("read"),
+        AtHeight::Recorded(AtomicUnits::from_raw(25))
+    );
+    assert_eq!(snap.block_burn(h(3)).expect("read"), AtHeight::AboveTip);
+    cleanup(&path);
+}
+
+#[test]
+fn block_burn_on_a_chain_that_has_never_burned_is_zero_not_an_engine_error() {
+    let path = tmp("read-block-burn-never");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![]]);
+    let snap = store.begin_read().expect("read");
+    // SCR-17's case: the table exists from the seal (A2), so the absent row
+    // is the writer's zero, not `TableDoesNotExist`.
+    assert_eq!(
+        snap.block_burn(h(1)).expect("read"),
+        AtHeight::Recorded(AtomicUnits::ZERO)
+    );
+    assert_eq!(
+        snap.total_burned().expect("read"),
+        AtomicUnits::ZERO,
+        "absent cell is 0"
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn total_burned_is_the_sum_connect_folded() {
+    let path = tmp("read-total-burned");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_burning(&store, &[9, 3, 25]);
+    let snap = store.begin_read().expect("read");
+    // Genesis's 9 is not folded (no row, no pre-image); 3 + 25 is.
+    assert_eq!(
+        snap.total_burned().expect("read"),
+        AtomicUnits::from_raw(28)
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn the_fold_reads_return_exactly_what_connect_wrote() {
+    let path = tmp("read-fold-reads");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(
+        &store,
+        &[
+            vec![],
+            vec![spend(0x5e, 1), spend(0x5f, 1)],
+            vec![spend(0x60, 1)],
+        ],
+    );
+    let snap = store.begin_read().expect("read");
+    for (height, cum) in [(0u64, 0u64), (1, 2), (2, 3)] {
+        assert_eq!(
+            snap.cumulative_tx_count(h(height)).expect("read"),
+            AtHeight::Recorded(cum)
+        );
+        assert_eq!(
+            snap.long_term_effective_median(h(height)).expect("read"),
+            AtHeight::Recorded(facts(height, 0).long_term_effective_median.value),
+            "the median handed FOR {height}, at {height}"
+        );
+    }
+    assert_eq!(
+        snap.cumulative_tx_count(h(3)).expect("read"),
+        AtHeight::AboveTip
+    );
+    assert_eq!(
+        snap.long_term_effective_median(h(3)).expect("read"),
+        AtHeight::AboveTip
     );
     cleanup(&path);
 }

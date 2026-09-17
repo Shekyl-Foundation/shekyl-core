@@ -48,6 +48,8 @@
 //! domain from the same list), and its key cannot collide with another
 //! cell's without a test in this module failing.
 
+use shekyl_units::AtomicUnits;
+
 use crate::family_set::FamilySet;
 
 use super::{
@@ -278,7 +280,7 @@ property_cells! {
     /// `checked_add` of the block's burned amount (register row SI-8 — an
     /// overflow is fatal, never a saturate); `pop` restores the journaled
     /// pre-image, so there is no subtract and no pop-side saturation.
-    TotalBurnedCell { key: "total_burned", scope: ChainState, value: u64 },
+    TotalBurnedCell { key: "total_burned", scope: ChainState, value: AtomicUnits },
 }
 
 /// A chain-state cell that exists only in this crate's tests, so the typed
@@ -367,7 +369,7 @@ mod tests {
                 PropertyCellSpec {
                     key: TotalBurnedCell::KEY,
                     scope: TotalBurnedCell::SCOPE,
-                    value: u64::NAME,
+                    value: AtomicUnits::NAME,
                 },
             ]
         );

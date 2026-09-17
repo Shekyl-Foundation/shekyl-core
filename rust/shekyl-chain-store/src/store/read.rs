@@ -42,12 +42,13 @@ use redb::{
     TableDefinition, Value,
 };
 use shekyl_chain_rules::{AtHeight, Tip};
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockHash, BlockHeight, LongTermWeight};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, PropertyCell};
+use crate::codec::{BlockInfo, PropertyCell, TotalBurnedCell};
 use crate::lmdb_order::{Hash32, LmdbHashKey};
-use crate::schema::{BLOCK_HEIGHTS, PROPERTIES};
+use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES};
 
 use super::chain_reads;
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
@@ -377,6 +378,85 @@ impl ReadSnapshot<'_> {
                 .into()),
             }
         })))
+    }
+}
+
+impl ReadSnapshot<'_> {
+    // ------------------------------------------------------------------
+    // R8–R9 and the fold reads
+    // ------------------------------------------------------------------
+
+    /// **R8.** Atomic units burned by the block at `height`, as the
+    /// `shekyl-units` newtype (§11.1(f): the scalar takes the domain type that
+    /// exists). An absent
+    /// **row** at or below the tip is `Recorded(0)` — the writer's own
+    /// convention (`connect` phase 8 writes no row for a zero burn, and
+    /// none at genesis, `blockchain.cpp:6148`); an absent **table** is not
+    /// a value (the table exists from the seal, amendment A2). Replaces
+    /// `get_block_burn`.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 if the row does not decode; engine errors pass through. Above
+    /// the tip is [`AtHeight::AboveTip`].
+    pub fn block_burn(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, StoreError> {
+        let tip = self.tip_row()?;
+        match tip {
+            Some((tip, _)) if height.to_raw() <= tip => {}
+            _ => return Ok(AtHeight::AboveTip),
+        }
+        let burned = chain_reads::cell(&self.txn, BLOCK_BURN, height.to_raw(), "block_burn")
+            .map_err(chain_reads::ReadFault::into_plain)?
+            .unwrap_or(AtomicUnits::ZERO);
+        Ok(AtHeight::Recorded(burned))
+    }
+
+    /// **R9.** Atomic units burned by the whole chain — the `total_burned`
+    /// fold `connect` maintains under SI-8. An absent cell is `0`: nothing
+    /// has burned, and `connect` reads it the same way before its first
+    /// `checked_add`. Replaces `get_total_burned` (whose unchecked 8-byte
+    /// `memcpy`, `:5097`, is SCR-5's example; this decode is strict).
+    ///
+    /// # Errors
+    ///
+    /// SI-7 if the cell does not decode; engine errors pass through.
+    pub fn total_burned(&self) -> Result<AtomicUnits, StoreError> {
+        Ok(self
+            .get_property::<TotalBurnedCell>()?
+            .unwrap_or(AtomicUnits::ZERO))
+    }
+
+    /// Non-coinbase transactions recorded through `height` —
+    /// `Σ_{i ≤ h} |transactions(i)|`, the O(1) read FL-R3-STORE owes
+    /// (`FEE_LADDER_DERIVATION.md` §10.12.2) in place of
+    /// `get_tx_volume_window`'s 720-block blob walk. A projection of R3.
+    ///
+    /// # Errors
+    ///
+    /// As [`block_info`](Self::block_info).
+    pub fn cumulative_tx_count(&self, height: BlockHeight) -> Result<AtHeight<u64>, StoreError> {
+        Ok(match self.block_info(height)? {
+            AtHeight::Recorded(info) => AtHeight::Recorded(info.cumulative_tx_count),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
+    }
+
+    /// The long-term weight median **in force for** the block at `height`
+    /// — the value it was validated and fee-floored against (SCR-19), the
+    /// O(1) read that retires `rebuild_relay_floor_ring`'s stepped median
+    /// (FL-R3-STORE). A projection of R3.
+    ///
+    /// # Errors
+    ///
+    /// As [`block_info`](Self::block_info).
+    pub fn long_term_effective_median(
+        &self,
+        height: BlockHeight,
+    ) -> Result<AtHeight<LongTermWeight>, StoreError> {
+        Ok(match self.block_info(height)? {
+            AtHeight::Recorded(info) => AtHeight::Recorded(info.long_term_effective_median),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        })
     }
 }
 
