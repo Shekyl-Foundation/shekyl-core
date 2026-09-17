@@ -47,8 +47,8 @@
 //!   2026-09-17):** [`ChallengeUrn::new`] and [`assign_epoch`] take no λ
 //!   and read [`crate::CHALLENGES_PER_PAIR_PER_EPOCH`], so the urn and
 //!   the settlement threshold (`attestation.rs` const-asserts the pair)
-//!   cannot disagree. The λ-taking doors — [`ChallengeUrn::with_lambda`],
-//!   [`assign_epoch_with_lambda`] — are `pub(crate)`, for this module's
+//!   cannot disagree. The λ-taking doors — `ChallengeUrn::with_lambda`,
+//!   `assign_epoch_with_lambda` — are `pub(crate)`, for this module's
 //!   tests, which need λ ∈ {0, 1, 2, `u32::MAX`} to exercise the
 //!   rejections and the small-wave shapes. *SUPERSEDED (§9.5 pin 3 as
 //!   landed 2026-08-11): "λ_target is a parameter … supplied by the
@@ -567,18 +567,33 @@ mod tests {
         // disagree with nothing failing.
         let pairs: Vec<_> = (0..5u8).map(|t| pair(t, 1)).collect();
         let prevs: Vec<[u8; 32]> = (0..8).map(prev_hash_for).collect();
-        let via_constant = assign_epoch(pairs.clone(), &prevs).expect("valid epoch");
         let via_door =
             assign_epoch_with_lambda(pairs.clone(), CHALLENGES_PER_PAIR_PER_EPOCH, &prevs)
                 .expect("valid epoch");
-        assert_eq!(via_constant, via_door);
-        let draws: usize = via_constant.iter().map(Vec::len).sum();
+        let expected_draws =
+            usize::try_from(CHALLENGES_PER_PAIR_PER_EPOCH).expect("small") * pairs.len();
+
+        // Door 1: `assign_epoch`.
+        let via_assign_epoch = assign_epoch(pairs.clone(), &prevs).expect("valid epoch");
+        assert_eq!(via_assign_epoch, via_door);
         assert_eq!(
-            draws,
-            usize::try_from(CHALLENGES_PER_PAIR_PER_EPOCH).expect("small") * pairs.len()
+            via_assign_epoch.iter().map(Vec::len).sum::<usize>(),
+            expected_draws
         );
-        let urn = ChallengeUrn::new(pairs, 8).expect("valid urn");
-        assert_eq!(urn.next_block(), 0);
+
+        // Door 2: `ChallengeUrn::new`, fed block by block — the same
+        // assignments and the same total, so a `new` that read a different
+        // λ than `assign_epoch` fails here, not only in the one-shot form.
+        let mut urn = ChallengeUrn::new(pairs, 8).expect("valid urn");
+        let via_urn: Vec<Vec<DrawablePair>> = prevs
+            .iter()
+            .map(|prev| urn.advance_block(prev).expect("in-order feed"))
+            .collect();
+        assert_eq!(via_urn, via_door);
+        assert_eq!(
+            usize::try_from(urn.draws_done()).expect("small"),
+            expected_draws
+        );
     }
 
     #[test]
