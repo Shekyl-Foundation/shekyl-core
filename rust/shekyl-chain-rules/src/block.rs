@@ -9,65 +9,62 @@
 use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
+use crate::coverage::RuleCoverage;
+use crate::rules::header::B6;
+
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
-/// The txid, the digest of its prunable region (`txs_prunable_hash`,
-/// SCW-10), and — when the txid is 4-part — the third component
-/// `H(varint(count) ‖ auths)` as [`Transaction::hash`] / [`Transaction::pqc_auth_hash`]
-/// compute it (`PDM-Q-F26` / RTN-3). All three come from the same
-/// `validate`, so no consumer re-hashes a body and the store never derives
-/// a consensus-visible value (C2-R8 Q4). This is **not** a second identity:
-/// `pqc_auth_hash` is the txid's own third component, typed.
+/// The txid and the two **discardable components** it was built over: the
+/// digest of the per-input `pqc_auths` (the txid's third component,
+/// `PDM-Q-F26`) and the digest of the prunable region (its fourth, S-CHAIN-W
+/// SCW-10) — the values the chain store records as `txs_pqc_auth_hash` and
+/// `txs_prunable_hash` so a node that keeps only the skeleton can still
+/// reconstruct the txid it accepted (`Transaction::hash_with_supplied_components`).
+/// All three come from the same `validate`, copied from
+/// [`Transaction::txid_parts`] so no consumer re-hashes a body and the store
+/// never derives a consensus-visible value (C2-R8 Q4).
 ///
+/// `pqc_auth_hash` is `None` exactly when the txid is **3-part** — a
+/// coinbase, a serve-credit, the malformed gen-first and no-input shapes —
+/// a fact about the identity, not about what was kept; see [`PqcAuthHash`].
 /// For a coinbase `prunable_hash` is `keccak256("")` — what the C++ store
 /// writes — not the txid's null-hash substitute; see [`PrunableHash`].
 ///
-/// `pqc_auth_hash` is `Option` because the component is absent from the
-/// txid itself, not merely from the store: the coinbase (`Ct::Null`) and
-/// any spend whose `pqc_auths` is empty (the serve-credit form) hash
-/// **3-part**, so `None` is "the txid has no such component" and a sentinel
-/// — the null hash, or `keccak256(varint(0))` — would label the miner tx
-/// with a value the chain never committed. (`prunable_hash`'s coinbase
-/// value is a sentinel only because C++-store parity forced one; no C++
-/// row exists here to force anything.)
-///
-/// The store row beside `txs_prunable_hash` (present ⇔ 4-part, never
-/// deleted; hash without segment is *discarded* below `W`) is S-CHAIN-R /
-/// `PDM-Q6` item 2: a new table, not a type-only codec change, and
-/// therefore a `SCHEMA_VERSION` bump outside this slice. The type carries
-/// the value so that increment does not fork a second identity. The store
-/// invariant has three legs, because under `PDM-Q6` a hash row **without**
-/// its segment is the steady state of every 4-part tx below the universal
-/// window `W`, not a fault:
+/// The store row this feeds (`txs_pqc_auth_hash`, `DAEMON_REDB_STORE.md`
+/// §7.7 item 3) is held to a **three-leg** invariant, because under
+/// `PDM-Q6` a hash row *without* its segment is the steady state of every
+/// 4-part tx below the universal window `W`, not a fault:
 ///
 /// 1. hash row present ⇔ txid 4-part — permanent, written at connect,
-///    never deleted (`validate` rejects the one shape, gen-first with
-///    auths, that could split "4-part" from "segment non-empty");
+///    never deleted (`validate` rejects the shapes — gen-first or no-input
+///    with auths — that could split "4-part" from "segment non-empty");
 /// 2. segment present ⇒ hash row present — a body the store cannot verify
-///    is the invariant violation;
+///    is the violation;
 /// 3. hash row present ∧ segment absent ⇔ *discarded* — below `W` and not
 ///    a retention exception, or never held (a band-1 skeleton). One store
 ///    state with one meaning, however the node arrived at it.
 ///
 /// So `None` here is *the txid has no third component*; leg 3 is *the
-/// component exists and the bytes do not*. They are different facts and
-/// must not share a representation.
+/// component exists and the bytes do not*. Different facts, never one
+/// representation. A `PDM-Q6` ruling that keeps `pqc_auths` universal
+/// retires the *row*, not the component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TxIdentity {
     /// The transaction hash (txid).
     pub hash: TxHash,
+    /// The txid's third component, or `None` for a 3-part txid.
+    pub pqc_auth_hash: Option<PqcAuthHash>,
     /// `keccak256` of the prunable byte region.
     pub prunable_hash: PrunableHash,
-    /// The txid's third component, or `None` when the txid is 3-part.
-    pub pqc_auth_hash: Option<PqcAuthHash>,
 }
 
 impl TxIdentity {
     fn of(tx: &Transaction) -> Self {
+        let parts = tx.txid_parts();
         Self {
-            hash: TxHash::from_bytes(tx.hash()),
-            prunable_hash: PrunableHash::from_bytes(tx.prunable_hash()),
-            pqc_auth_hash: tx.pqc_auth_hash().map(PqcAuthHash::from_bytes),
+            hash: parts.hash,
+            pqc_auth_hash: parts.pqc_auth_hash,
+            prunable_hash: parts.prunable_hash,
         }
     }
 }
@@ -111,10 +108,9 @@ impl Candidate {
 ///
 /// The candidate exactly as judged — the block is kept whole, so what the
 /// store persists is what the rules saw — with every identity derived once:
-/// `Block::hash`, and per transaction a [`TxIdentity`] (`Transaction::hash`,
-/// `Transaction::prunable_hash`, and `Transaction::pqc_auth_hash`), CEN-B6's
-/// definition applied, each
-/// paired with its body. No consumer re-hashes and no two values can disagree
+/// `Block::hash`, and per transaction a [`TxIdentity`] copied from
+/// [`Transaction::txid_parts`] (CEN-B6's definition applied), each paired
+/// with its body. No consumer re-hashes and no two values can disagree
 /// about which block or transaction they describe (ruling Q4/L4: one value
 /// per identity).
 ///
@@ -140,14 +136,15 @@ pub struct ValidatedBlock {
 
 impl ValidatedBlock {
     /// Derive every identity once. Called by `validate` after the last rule
-    /// has passed and nowhere else.
-    pub(crate) fn derive(candidate: Candidate) -> Self {
+    /// has passed and nowhere else. The block's identity comes from CEN-B6's
+    /// function, which records the row in `coverage` (slice 1, Q5).
+    pub(crate) fn derive(candidate: Candidate, coverage: &mut RuleCoverage) -> Self {
         let Candidate {
             block,
             transactions,
         } = candidate;
         Self {
-            hash: BlockHash::from_bytes(block.hash()),
+            hash: B6::identity(&block, coverage),
             miner_tx: TxIdentity::of(&block.miner_transaction),
             block,
             transactions: transactions

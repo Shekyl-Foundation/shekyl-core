@@ -15,6 +15,7 @@ use super::*;
 // Named rather than inherited through `use super::*`: these are wire types
 // the fixtures build with, not workflow items, and the proofs module no
 // longer imports them now that the chain-facing half owns that work.
+use shekyl_types::PrunableHash;
 use shekyl_wire::{Ct, Transaction};
 
 use shekyl_address::Network;
@@ -492,7 +493,7 @@ mod check_workflows {
         // substitution a hostile daemon performs, and the proofs path is
         // exactly where it lands. The mock serves `prunable_hash: ZERO`, so
         // that is the digest the identity mixes.
-        let txid = tx.hash_with_supplied_prunable([0u8; 32]);
+        let txid = tx.hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]));
         let mut txs = BTreeMap::new();
         txs.insert(hex::encode(txid), hex::encode(tx.serialize()));
 
@@ -810,7 +811,7 @@ mod check_workflows {
         };
         let mut second = base.clone();
         second.prefix.unlock_time = 1;
-        let txid2 = second.hash_with_supplied_prunable([0u8; 32]);
+        let txid2 = second.hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]));
         assert_ne!(txid2, fx.txid, "the second body must be a different tx");
         let mut txs = (*fx.rpc.txs).clone();
         txs.insert(hex::encode(txid2), hex::encode(second.serialize()));
@@ -855,7 +856,7 @@ mod check_workflows {
         for i in 0..250u64 {
             let mut tx = base.clone();
             tx.prefix.unlock_time = i;
-            let id = tx.hash_with_supplied_prunable([0u8; 32]);
+            let id = tx.hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]));
             ids.push(id);
             txs.insert(hex::encode(id), hex::encode(tx.serialize()));
         }

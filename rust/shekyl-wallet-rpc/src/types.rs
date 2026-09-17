@@ -776,7 +776,7 @@ pub struct ParseUriResult {
     /// `rid` query parameter (decimal string), if present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rid: Option<String>,
-    /// `expiry` query parameter (absolute block height), if present.
+    /// `expiry` query parameter (Unix seconds, UTC), if present.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiry: Option<i64>,
 }

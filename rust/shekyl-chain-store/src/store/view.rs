@@ -86,7 +86,7 @@
 //! (`chain_reads` module docs, *The tip is one decoded read*).
 
 use redb::ReadableTable;
-use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock};
+use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock, Tip};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 
 use crate::codec::BlockInfo;
@@ -126,8 +126,10 @@ impl<'b, 'id> BatchView<'b, 'id> {
     }
 
     /// The recorded tip as this batch sees it — its height and decoded
-    /// `block_info` row — `None` for an empty chain.
-    fn tip(&self) -> Result<Option<(u64, BlockInfo)>, StoreError> {
+    /// `block_info` row — `None` for an empty chain. The trait's `tip()`
+    /// projects the rules crate's `Tip` from this; `block_at` / `root_at`
+    /// classify absence against it.
+    fn tip_row(&self) -> Result<Option<(u64, BlockInfo)>, StoreError> {
         chain_reads::tip_of(self.batch.txn()).map_err(|f| self.arm(f))
     }
 
@@ -169,7 +171,7 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     /// missing `block_info` or `blocks` row at or below the tip is SI-7
     /// (module docs).
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, StoreError> {
-        let tip = self.tip()?;
+        let tip = self.tip_row()?;
         let body = chain_reads::block_body(self.batch.txn(), tip.as_ref(), height.to_raw())
             .map_err(|f| self.arm(f))?;
         Ok(match body {
@@ -181,6 +183,17 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         })
     }
 
+    /// `block_info.last()` through the shared read body — the same row
+    /// `block_at` / `root_at` classify against, so the tip a rule reads and
+    /// the tip absence is judged by are one read (SCW-13). `None` is the
+    /// empty chain; an undecodable last row is SI-7 through `arm`.
+    fn tip(&self) -> Result<Option<Tip>, StoreError> {
+        Ok(self.tip_row()?.map(|(height, info)| Tip {
+            height: BlockHeight::from_raw(height),
+            hash: BlockHash::from_bytes(info.hash.to_bytes()),
+        }))
+    }
+
     /// `curve_tree_roots[height]` — the tree state **at** `height`, written
     /// by the connect of `height − 1` (module docs). Height 0 is the empty
     /// tree, [`CurveTreeRoot::EMPTY`]; `1..=tip + 1` must be present (SI-7
@@ -190,7 +203,7 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         if h == 0 {
             return Ok(AtHeight::Recorded(CurveTreeRoot::EMPTY));
         }
-        match self.tip()? {
+        match self.tip_row()? {
             // `tip + 1` is the state a candidate at `tip + 1` is checked
             // against — CEN-B5's read — and the last row `connect` wrote.
             Some((tip, _)) if h <= tip.saturating_add(1) => {}

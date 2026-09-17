@@ -2170,8 +2170,11 @@ components:
         expiry:
           type: integer
           format: int64
-          minimum: 0
-          description: Optional absolute expiry as Unix seconds (UTC).
+          minimum: 1000000000
+          description: >
+            Optional absolute expiry as Unix seconds (UTC). Values below
+            1e9 are refused as height-shaped leftovers of the pre-RTN-6
+            `--expiry <height>` CLI.
 
     CreatePaymentRequestResult:
       type: object
@@ -2227,7 +2230,11 @@ components:
         expiry:
           type: integer
           format: int64
-          minimum: 0
+          minimum: 1000000000
+          description: >
+            Optional absolute expiry as Unix seconds (UTC). Values below
+            1e9 are refused as height-shaped leftovers of the pre-RTN-6
+            `--expiry <height>` CLI.
 
     MakeUriResult:
       type: object

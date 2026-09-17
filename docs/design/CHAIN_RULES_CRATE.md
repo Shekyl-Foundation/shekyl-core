@@ -61,6 +61,7 @@ is a hope; none of these is.
 | G10 | **No pre-provisioning.** No `PoolView` (E5's), no fork version on `ChainView` (ruling Q7), no `Canonical`/codec impl for `RuleCoverage` (the store's, at S-CHAIN-W under rule 42), no second verdict type, no view method without a census row that reads it (Q3 ruling). | This document's API list is exhaustive; anything not in §4 is not in the crate. |
 | G11 | **Absence is matched, never propagated.** A by-height lookup returns `AtHeight<T>` — `Recorded(T)` or `AboveTip` — not `Option<T>`. There is no `?`, `map`, `unwrap_or_*`, or `is_none_or` on it: a rule that reaches `AboveTip` writes its refusal at that arm. A substrate that cannot answer surfaces as `V::Fault`, a different thing from absence (§4.3). | `AtHeight<T>` has no combinator surface and no `Default`; `CurveTreeRoot`/`RecordedBlock` have no `Default`. |
 | G12 | **Hygiene.** `#![deny(unsafe_code)]`; no `println!`/`eprintln!`/`dbg!` outside `#[cfg(test)]`; `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean. | Crate attribute; `build.yml`'s debug-macro lint; rule 45. |
+| G13 | **No recorded transaction body crosses `ChainView`.** The trait's reads are the recorded chain's *permanent* facts — a key image's presence, a block's identity and header, a root, the tip — never a recorded transaction's bytes. Under `PDM-Q6` bodies below the retention watermark `W` are discarded, so a rule that read one would be an above-`W`-only rule with nothing marking it so; with no accessor, every rule in this crate is by construction one a body-less node can run, and Q3's owed instrument ("a consensus read reaches a discarded body") is a property of the trait's surface rather than a grep over `src/`. **Reopening (rule 21):** a census row that reads a *recorded* body — none does today; 4.I reads the *candidate's* bodies, which are in `Candidate`, and CEN-I12 reads a root — arrives with an accessor that is `Option`-shaped (`None` ⇔ discarded, never a sentinel) and a rule type marked above-`W` in the registry, both in that row's slice pre-flight. Shaping request from the pruning lane's review of `PDM-Q-F26` (PR #765), taken 2026-09-16. | The Q3 ruling (every `ChainView` method is justified by a named row) already refuses an unjustified accessor; this row names the *kind* of method that needs the extra mark. `RecordedBlock { hash, header }` — no body field (§4.3). |
 
 ---
 
@@ -373,13 +374,22 @@ pub trait ChainView<'id> {
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
     /// CEN-I12 (the membership anchor is the tree state at `ref_height`).
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
+    /// CEN-A2 (`hash`); B5 (and 4.C, CEN-F5 later) via `Tip::connecting_height`.
+    /// B1 does not read the tip: the rule set is an input. `None` is the empty
+    /// chain — slice 1, Q1.
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
 }
+
+/// The last recorded block. `Option`, not a bespoke absence enum: an empty
+/// chain has no valid-looking alternative, so `None` cannot read as data
+/// (`CHAIN_RULES_SLICE_1.md` §2). Composed by the store's `RecordedTip`.
+pub struct Tip { pub height: BlockHeight, pub hash: BlockHash }
 ```
 
-Three of the ruling's illustrative four (`output_at` — §3.3). No
-`fork_version()` / `rule_set()` on the view (ruling Q7). No `tip()` yet: CEN-B5
-(header root == *tip* root) and 4.A/4.C need one and it is owed to slice 1
-(§13, **Q12-2**); it is not added here without its row. The trait has no
+Three of the ruling's illustrative four (`output_at` — §3.3) plus `tip()`,
+added by slice 1 with CEN-A2 and CEN-B5 (**Q12-2 discharged**; *records-was:*
+increment 1 shipped without it, "not added here without its row"). No
+`fork_version()` / `rule_set()` on the view (ruling Q7). The trait has no
 `'id`-carrying method — the brand lives in the implementor's type and in
 `ChainValid<'id, V>`; the trait's parameter is what ties the two in
 `validate`'s signature, and `V` names the implementor itself.
@@ -421,9 +431,11 @@ impl ValidatedBlock {
 
 In increment 1, `validate` derives `hash` and every `TxHash` (`Block::hash`,
 `Transaction::hash`) and pairs them. It does **not** check the supplied bodies
-against `block.transaction_hashes` — that is a 4.G rule and lands with slice 7;
-empty coverage says so. Identity derivation is not a rule (it is CEN-B6's
-definition applied), so it is not a row and does not touch coverage.
+against `block.transaction_hashes` — that is a 4.G rule and lands with slice 7.
+CEN-B6 is the block-identity **definition**: `ValidatedBlock::derive` obtains
+the hash from `B6::identity`, which records the row in coverage there — not a
+`BlockRule` with a check that always passes (B7 is the no-op *policy* that
+still runs through `rules::run`).
 
 The `Block` is kept **whole** rather than decomposed into header + miner tx
 (the round-2 sketch): the header's `transaction_hashes` are part of what
@@ -442,6 +454,11 @@ the fourth component of a spend's txid and the value the store records as
 `txs_prunable_hash`; for a coinbase it is `keccak256("")` — what the C++ store
 writes — not the txid's null-hash substitute. Q4 holds: the store records it and
 never derives it.
+**UPDATE 2026-09-17 (slice 1 / `PDM-Q-F26` items 1–2):** the identity is
+`TxIdentity { hash, pqc_auth_hash: Option<PqcAuthHash>, prunable_hash }`,
+populated from `Transaction::txid_parts()` — one construction, each
+discardable region hashed once. The `txs_pqc_auth_hash` store row (item 3)
+is still S-CHAIN-R amendment A3.
 
 ### 4.5 `Coverage<R>` (`coverage.rs`); `ChainValid<'id, V>`, `InvalidBlock`, `Locus` (`verdict.rs`)
 
@@ -531,10 +548,12 @@ rule, locus }))` at the site that judged — the row is named where the decision
 is made. `validate` calls `tx_form` then `tx_against` for the miner tx and each
 listed tx, re-homing a `Locus::Tx { slot: Lone }` / `Locus::Input { slot: Lone,
 .. }` to the real `TxSlot`, unions the coverages, and mints the `ChainValid`.
-Block-level rules run first, in census order, each through `rules::run`
-(the only writer of block coverage — inserts `R::ROW` iff `R` passed); the
-first refusal is the verdict. Slice 1 landed B1/B2/B7 there; `tx_form` /
-`tx_against` are still empty and return `RuleCoverage::EMPTY` until 4.H/4.I.
+Block-level **predicates** run first, in census order, each through
+`rules::run` (inserts `R::ROW` iff `R` passed). Definition rows record at
+their derivation site: CEN-B6 at `B6::identity`, called from
+`ValidatedBlock::derive`. Slice 1's predicates are A2, B1, B2, B5, B7;
+B6 is the identity function. `tx_form` / `tx_against` are still empty and
+return `RuleCoverage::EMPTY` until 4.H/4.I.
 
 ---
 
@@ -569,7 +588,7 @@ census_rows! {
 Grammar: header `pub enum <Name>: <Consensus|Policy> { … }`; per entry
 `<Var> <pending | implemented(<rust::path>) | held_by_cxx("<repo/file.cpp>", "<test>")> ,`
 with optional `///` doc and `//` comments between entries. `held_by_cxx`
-(slice 1, Q2 — [`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §4.1) marks
+(slice 1, Q2 — [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §4.1) marks
 acceptance topology the C++ ingest driver decides until cutover; the value is
 the C++ **test that proves the holder refuses**, which the gate asserts
 exists, and the row leaves `RuleSet::enforced()` so completeness is `E − H`. Entries are in census §4 order restricted to the flag
@@ -884,13 +903,15 @@ second lines behind the belt and the type shapes, not gates.
 ### 8.5 `validate` / `tx_form` / `tx_against` (`validate_tests.rs`)
 
 - a well-formed candidate: `Ok(Ok(v))`, `v.coverage()` is exactly the landed
-  block rows (`{B1, B2, B7}` after PR #762 — `covers_landed` holds,
-  `is_complete_for` does not), `v.rule_set_id() == GENESIS.id()`. *Records-was:*
-  increment 1 asserted empty coverage here.
+  block rows (`{A2, B1, B2, B5, B6, B7}` after the `tip()` PR — `covers_landed`
+  holds, `is_complete_for` does not), `v.rule_set_id() == GENESIS.id()`.
+  *Records-was:* increment 1 asserted empty coverage; #762 `{B1, B2, B7}`.
 - payload: `block().hash() == BlockHash::from_bytes(candidate.block.hash())`;
-  `transactions()[i].0 == TxIdentity { hash, prunable_hash }` of `tx`; `miner_tx().0`
-  likewise, with the coinbase's `prunable_hash` pinned to `keccak256("")` (bites: a
-  pairing that hashes the wrong body, drops the miner tx, or conflates the two digests).
+  `transactions()[i].0 == TxIdentity { hash, pqc_auth_hash, prunable_hash }`
+  of `tx` (from `Transaction::txid_parts`); `miner_tx().0` likewise, with the
+  coinbase's `prunable_hash` pinned to `keccak256("")` and `pqc_auth_hash`
+  `None` (bites: a pairing that hashes the wrong body, drops the miner tx,
+  conflates the two digests, or labels a 3-part txid with a third component).
 - `tx_form` / `tx_against` before 4.H/4.I land: `Ok(EMPTY)` / `Ok(Ok(EMPTY))`.
 - a mock whose `Fault` is a unit type and whose `block_at` faults: `validate`
   returns `Err(fault)`, not a verdict (bites: a fault swallowed into a pass or a
@@ -912,13 +933,15 @@ second lines behind the belt and the type shapes, not gates.
 Harness surface (`#[cfg(test)]`; as landed, commit 6):
 
 ```rust
-/// A recorded chain: blocks dense from height 0 (a root per block), a key-image set.
-#[derive(Default)]
-pub struct MockChain { recorded: Vec<(RecordedBlock, CurveTreeRoot)>, key_images: BTreeSet<KeyImage> }
+/// A recorded chain: blocks dense from height 0, roots keyed as the store keys
+/// them (SCW-19: roots[h] = the state AT h; roots[0] = EMPTY; the root pushed with
+/// block h is roots[h + 1]) — corrected by slice 1, whose B5 fixture caught the
+/// mock one height off the store — and a key-image set.
+pub struct MockChain { recorded: Vec<RecordedBlock>, roots: Vec<CurveTreeRoot>, key_images: BTreeSet<KeyImage> }
 impl MockChain {
-    pub fn push(self, block: RecordedBlock, root: CurveTreeRoot) -> Self;   // height = recorded.len()
+    pub fn push(self, block: RecordedBlock, root_after: CurveTreeRoot) -> Self; // height = recorded.len()
     pub fn with_key_image(self, key_image: KeyImage) -> Self;
-    pub fn tip(&self) -> Option<BlockHeight>;                               // None when empty
+    pub fn tip(&self) -> Option<Tip>;                                          // None when empty
     /// Project a branded view. `'id` is fresh per call (HRTB) — the mock's analogue of `ChainStore::write`.
     pub fn with_view<R>(&self, f: impl for<'id> FnOnce(MockView<'_, 'id>) -> R) -> R;
 }
@@ -937,7 +960,8 @@ pub fn infallible<T>(r: Result<T, Infallible>) -> T;                         // 
 pub mod fixture {
     pub fn coinbase(unlock_time: u64) -> Transaction;
     pub fn header() -> BlockHeader;
-    pub fn candidate(listed: Vec<Transaction>) -> Candidate;
+    pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate; // on the tip: previous + root set (A2, B5)
+    pub fn candidate(listed: Vec<Transaction>) -> Candidate;                        // genesis-shaped
     pub fn recorded(timestamp: u64) -> RecordedBlock;
     pub const fn root(byte: u8) -> CurveTreeRoot;
 }
@@ -1079,6 +1103,14 @@ increment that consumes them); owed to slice 1 as
 `fn tip(&self) -> Result<Tip { height, hash, root }, Self::Fault>` with each
 field's row named (§13). Alternative: add it now, since the shape is settled.
 **Ruled: keep the default.** Slice 1 adds `tip()` before CEN-A2/B5.
+**DISCHARGED by slice 1 (PR #768), in a shape that refined this sketch:**
+`fn tip(&self) -> Result<Option<Tip { height, hash }>, Fault>` — `Option`
+for the empty chain (slice 1 Q1), and **no `root` field**: B5 reads
+`root_at(connecting_height)`, the one read path SCW-19 keyed (key `h` = the
+state at `h`), and a second root on `Tip` would have been a second path to
+the same cell. The "unreachable `AboveTip` arm" this question worried about
+is real and is written as a refusal (G11), pinned by a fixture against a view
+with no roots. §4.3 is the contract; this paragraph is the record.
 
 **Q12-3 — `shekyl-address` for `Network`.** `rules_at(nettype, height)` needs
 the nettype enum, and the workspace's one is `shekyl_address::Network`.
@@ -1092,9 +1124,9 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
 
 ## 13. Owed to later increments (named, with consumers) — none deferred from this one
 
-- `ChainView::tip()` — slice 1 (4.A) / CEN-B5; Q12-2. **Shape RULED
-  2026-09-16** at [`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §2:
-  `Result<Option<Tip { height, hash }>, Fault>`.
+- ~~`ChainView::tip()`~~ — **DISCHARGED** by slice 1 (shape ruled at
+  [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §2:
+  `Result<Option<Tip { height, hash }>, Fault>`; §4.3 above).
 - `difficulty_at` — **slice 2 (4.D)**, handed to this crate by S-CHAIN-R's
   round-1 Q1 (`DRS_E1_SCHAIN_R.md` (PR #760, not yet on `dev` — linked at landing) SCR-3): the store
   exposes `cumulative_difficulty` (a `RecordedBlock` field, 4.D) and never
@@ -1110,6 +1142,64 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `ChainTip.connect` — S-CHAIN-W.
 - `PoolView`, `AdmissionPolicy` application, `PolicyCoverage` consumer — DRS-E5.
 - Replay harness feeding `grade()` — DRS-E2.
+- **A below-anchor validation mode** — owed to **slice 3 (4.E) or slice 6
+  (4.I), whichever opens first**; consumer the band-1 sync driver
+  (`PDM-Q5`: below the release anchor `C` a fresh node holds skeleton only —
+  no prunable body, no `pqc_auths` — and proof validity is asserted by the
+  anchor, not checked). Shaping request from the pruning lane's review of
+  `PDM-Q-F26` (PR #765), taken 2026-09-16: **DRS-D12 and PDM-Q5 band 1
+  collide at `validate`** — a skeleton block cannot pass a `validate` that
+  checks proofs, so under D12 it can never be connected unless `validate`
+  can be told to omit the proof rows and record the omission. *Read against
+  the landed types:* the omission is already expressible — `RuleSet::
+  enforced` is "the rows this set holds a block to" and `RuleCoverage`
+  records what ran — and the anchor rule already has a row, **CEN-E1** (the
+  release-carried `assumevalid` checkpoint after `PDM-Q-F23` removed E5). What
+  does **not** exist is the *mode*: a below-anchor rule set as a second
+  `RuleSetId` would be refused by `connect` (`StoreCannot::RuleSetNotInForce`
+  — `in_force` comes from the consensus schedule, and "this node has no
+  bodies below `C`" is node state, not consensus). **Default for the ruling
+  (not decided here):** a `Trust`-shaped input to `validate` orthogonal to
+  `RuleSet` — `Full` | `BelowAnchor(anchor)` — under which the proof rows are
+  not run, their rows are absent from coverage, `connect`'s provenance
+  records them as `rule_coverage_gaps` (so a band-1 file is never parity
+  evidence, which is true), and the `in_force` check is untouched.
+  Alternative: a below-anchor `RuleSet` variant with its own id, requiring
+  `connect` to accept a second in-force set per height. Decide **before**
+  `validate` acquires callers beyond the store tests and the E2 driver —
+  the signature is one parameter today and every later caller is a retrofit
+  (SCW-7's standard). Falsify by: a band-1 sync test that connects a
+  skeleton block under `RuleSet::GENESIS` and is refused.
+- **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — **LANDED in the
+  `tip()` PR (slice 1, 2026-09-17)**, items 1 **and** 2 of
+  `DAEMON_REDB_STORE.md` §7.7's plan for `PDM-Q-F26` (PR #765): the
+  `shekyl-types` `hash32!` sibling `PqcAuthHash`; the field on
+  `TxIdentity`, populated from `Transaction::txid_parts()` (one
+  construction: each discardable region hashed once, the txid mixed from
+  those values); and, in `shekyl-wire`, `Transaction::pqc_auth_hash()`
+  (`None` ⇔ the txid is 3-part) plus the two-supplied form
+  `hash_with_supplied_components(pqc_auth, prunable)`, of which `hash()`
+  is `txid_parts().hash` as bytes and `hash_with_supplied_prunable` is the
+  one-supplied mixer. The mixer's arity is the `Option` after
+  `prefix_carries_pqc_component` drops a `Some` the prefix cannot carry,
+  so a supplied component on a 3-part prefix is dropped, not mixed, and
+  the skeleton (`PDM-Q-F28`: neither region held)
+  reconstructs its 4-part txid from the two stored digests. KAT'd
+  against the pinned oracle txid on the full body **and** the skeleton
+  (`pruned_tx_hash_parity`), and on the 3-part forms — coinbase,
+  serve-credit (`None`; the countersignature rides the vin), a coinbase
+  handed components anyway — and on the bond-post (4-part like any spend:
+  the identity signature is a tx-level `pqc_auths` slot, so the arity is
+  the predicate's, never an input arm's). The wire surface is **typed as
+  §7.7 wrote it** — `Option<PqcAuthHash>` / `PrunableHash` in and out of
+  `shekyl-wire`, which takes the `shekyl-types` dependency for it — so a
+  txid, a `PqcAuthHash` and a `PrunableHash` cannot be transposed into the
+  supplied forms; the raw `[u8; 32]` the crate carried there was unfinished
+  migration (`RAW_TYPE_NEWTYPE_MIGRATION.md` §6), not a boundary, and
+  `hash()`'s own return type is that plan's remaining row. Item
+  3 — the `txs_pqc_auth_hash` row — stays where §7.7 put it: S-CHAIN-W
+  amendment A3 on S-CHAIN-R's layout commit, one `SCHEMA_VERSION` bump;
+  its input now exists on the identity `connect` is handed.
 
 **Received from `PDM-Q` 2026-09-16 (`PDM-Q-F27`, `F29`,
 [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §6) —
@@ -1160,3 +1250,7 @@ Neither is a rule to port; both are properties of the surface.**
 Nothing scoped to increment 1 by §7.5.1 is deferred out of it. The one
 increment-1 deferral this section carried — the `_census.py` extraction,
 blocked on #751 — was discharged in this PR when #751 merged (§6.1, Q7).
+Slice 1's own deferrals (CEN-B4 to the increment landing the bond-pubkey
+read; CEN-A3 subsumed into it; CEN-A5 subsumed into 4.G; CEN-A6/A7 to the
+wire-side invariant register) are recorded at
+[`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §3–§4 and §8 Q2/Q3.

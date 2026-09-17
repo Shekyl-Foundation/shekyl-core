@@ -32,6 +32,41 @@
   documents `created_at`/`expiry` as Unix seconds (OpenAPI `0.6.0`;
   `api_version` stays 1). Invoice expiry was never a chain instant.
 
+- **`shekyl-chain-rules` slice 1: the first consensus rules, and
+  `ChainView::tip()`.** CEN-A2 (parent is the tip), B1/B2/B7 (header
+  version), B5 (header root is the tree state at the connecting height,
+  SCW-19 keying) and B6 (identity, adopted from `shekyl_wire::Block::hash`)
+  are evaluated by `validate`; each registry entry names a rule *type* whose
+  `ROW` is compile-pinned to its row (SCW-18). `ChainView` gains
+  `tip() -> Result<Option<Tip { height, hash }>, Fault>`, implemented by the
+  store's `BatchView` through `chain_reads`. CEN-A1/A4 are `held_by_cxx`:
+  acceptance topology the C++ ingest driver decides until cutover, each
+  entry naming the core test that proves it, printed by the coverage gate as
+  `validator-enforced = E − H` beside a fixed `E`. No daemon path calls
+  `validate` yet ([`CHAIN_RULES_SLICE_1.md`](completed/CHAIN_RULES_SLICE_1.md)).
+
+- **The txid's third component is derived and carried (`PDM-Q-F26`, items
+  1–2 of `DAEMON_REDB_STORE.md` §7.7).** `TxIdentity` gains
+  `pqc_auth_hash: Option<PqcAuthHash>` (new `shekyl-types` newtype) —
+  `keccak256(varint(count) ‖ pqc_auths)`, `None` exactly when the txid is
+  3-part (coinbase, serve-credit, gen-first), from the same `validate` as
+  `hash` and `prunable_hash`. `shekyl-wire` gains
+  `Transaction::txid_parts()` (the txid and both store-row digests, each
+  region hashed once), `pqc_auth_hash()`, and
+  `hash_with_supplied_components(pqc_auth, prunable)`: `hash()` is
+  `txid_parts().hash` as bytes, and `hash_with_supplied_prunable` is the
+  one-supplied form of the same mixer. A node holding only a skeleton
+  (neither `pqc_auths` nor the prunable region) reconstructs its 4-part
+  txid from the two stored digests — pinned to the oracle txid in
+  `pruned_tx_hash_parity`. The mixer's arity is the `Option` after
+  `prefix_carries_pqc_component` drops a `Some` the prefix cannot carry.
+  **The component surface is typed:**
+  `prunable_hash()` now returns `PrunableHash` and both supplied forms take
+  `PrunableHash` / `Option<PqcAuthHash>` (`shekyl-wire` depends on
+  `shekyl-types`), so the two digests a store hands back cannot be swapped
+  into the wrong operand. The `txs_pqc_auth_hash` store row (item 3) lands
+  with S-CHAIN-R's layout commit.
+
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
   (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured
   width; `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor. Serve-side

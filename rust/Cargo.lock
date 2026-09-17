@@ -4835,6 +4835,7 @@ dependencies = [
  "shekyl-curve-tree",
  "shekyl-fcmp",
  "shekyl-tx-builder",
+ "shekyl-types",
  "shekyl-units",
 ]
 

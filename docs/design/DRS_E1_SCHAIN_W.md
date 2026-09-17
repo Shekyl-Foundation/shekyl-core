@@ -711,15 +711,16 @@ rules crate).
 three component hashes"* is the coinbase's arity; a spend's txid is
 **4-part**, and the component this finding skipped — `H(pqc_auths)`, the
 third — is the one `PDM-Q6` item 2 needs persisted per tx before the
-`pqc_auths` slice can be discarded. `TxIdentity` as landed carries one of
-Q6's two occupants. The identity and the store owe `pqc_auth_hash` (the
-txid's count-prefixed component, not `keccak256` of the raw segment;
-`Option`-shaped, `None` ⇔ 3-part txid — coinbase and empty-auths spend —
-since a sentinel would mislabel `miner_tx`; the row is present ⇔ 4-part and
-never deleted — a hash row without its segment is *discarded*, the steady
-state below `W`, not a fault) at this finding's own standard — contract on the row before the
-implementation that omits it — and before DRS-E2's first production
-writer. The bijection-gate objection (SCW-11) no longer applies: the
+`pqc_auths` slice can be discarded. `TxIdentity` as landed at this finding carried one of
+Q6's two occupants. **UPDATE 2026-09-17:** the identity field landed on
+#768 (`TxIdentity.pqc_auth_hash: Option<PqcAuthHash>` from
+`Transaction::txid_parts()`; `None` ⇔ 3-part txid). The **store row**
+(`txs_pqc_auth_hash`, count-prefixed component not `keccak256` of the raw
+segment; present ⇔ 4-part and never deleted — a hash row without its
+segment is *discarded*, the steady state below `W`, not a fault) remains
+S-CHAIN-W amendment A3 on S-CHAIN-R's layout commit, at this finding's
+own standard — contract on the row before the implementation that omits
+it — and before DRS-E2's first production writer. The bijection-gate objection (SCW-11) no longer applies: the
 `RUST_ONLY_TABLES` map that landed here admits the row. Detail and the
 deadline: `ARCHIVAL_PRUNED_DAEMON_MODE.md` F26; the requirement is written
 on the type's doc comment (`rust/shekyl-chain-rules/src/block.rs`).

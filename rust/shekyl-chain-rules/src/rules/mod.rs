@@ -25,11 +25,17 @@
 //! [`BlockRule::check`] is the block-level shape: the candidate and the rule
 //! set through a [`BlockContext`], and the view beside it. A rule that needs
 //! a chain fact (the tip, for A2 and B5) reads it from the view, so a new
-//! fact is a new `ChainView` method and no rule's signature moves. `validate` runs the
-//! landed block rules from a list and records `R::ROW` itself: a rule
-//! cannot record another row's coverage, and a rule that was not run is not
-//! in coverage (G6, G9's runtime half). The per-transaction classes (4.H
-//! `tx_form`, 4.I `tx_against`) get their own traits with their slices.
+//! fact is a new `ChainView` method and no rule's signature moves. `validate`
+//! runs the landed **predicate** rows from a list and [`run`] records
+//! `R::ROW` itself: a rule cannot record another row's coverage, and a rule
+//! that was not run is not in coverage (G6, G9's runtime half). A
+//! **definition** row — one whose "check" is a derivation the verdict
+//! carries, today only CEN-B6 — is not in that list: it records its own
+//! `ROW` at the derivation site ([`header::B6::identity`]), so a gate that
+//! could never fail is never run as one (slice 1 Q5). Those are the two
+//! writers of coverage, and `RuleCoverage::insert` names both. The
+//! per-transaction classes (4.H `tx_form`, 4.I `tx_against`) get their own
+//! traits with their slices.
 //!
 //! # Where a refusal is written
 //!
@@ -41,6 +47,7 @@
 //! (`view.rs`, "Three answers, three positions").
 
 pub(crate) mod header;
+pub(crate) mod topology;
 
 use crate::block::Candidate;
 use crate::census::CenRow;
@@ -107,8 +114,13 @@ pub(crate) trait BlockRule: Rule {
 
 /// Run one block rule and, if it passed, record its row.
 ///
-/// The only writer of block-level coverage: a rule that ran and passed is
-/// in coverage under its own `ROW`, and nothing else can put it there.
+/// Records a **predicate** row that ran and passed.
+///
+/// Definition rows (CEN-B6) are not [`BlockRule`]s — nothing about a
+/// candidate can fail them — and record at their derivation site
+/// ([`crate::rules::header::B6::identity`]), when the identity is
+/// derived. Predicate rows go through this function; a definition row
+/// named `implemented(...)` is the function that produces the value.
 pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
     cx: &BlockContext<'_>,
     view: &V,

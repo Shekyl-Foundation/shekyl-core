@@ -27,6 +27,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
+use shekyl_types::PrunableHash;
 use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction, TxPrefix};
 
 const GATE2_FIXTURE: &str =
@@ -168,7 +169,7 @@ fn serve_credit_tx_serializes_to_the_pinned_bytes() {
     );
     let digest = shekyl_crypto_hash::keccak256(&bytes[pruned_form.len()..]);
     assert_eq!(
-        hex_str(&tx.hash_with_supplied_prunable(digest)),
+        hex_str(&tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
         pin["tx_hash_hex"].as_str().unwrap(),
         "pruned identity (supplied digest) diverged from the pinned hash"
     );

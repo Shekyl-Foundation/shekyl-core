@@ -11,6 +11,7 @@
 mod common;
 use common::conforming_pqc_extra;
 
+use shekyl_types::{PqcAuthHash, PrunableHash};
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
@@ -492,6 +493,70 @@ fn bond_post_spend_round_trips_with_spend_subset_pseudo_outs() {
     tx.validate().expect("bond-post spend must validate");
     let reparsed = Transaction::from_bytes(&tx.serialize()).expect("bond-post spend re-parses");
     assert_eq!(reparsed, tx, "round trip must be value-identical");
+}
+
+/// `PDM-Q-F26`: the txid's third component is decided by the one arity
+/// predicate, not per input arm. A coinbase has none (`Null` ct); a bond-post
+/// carries its identity signature in a tx-level `pqc_auths` slot and is
+/// 4-part like any spend — and a coinbase told a component anyway stays
+/// 3-part, because pruning cannot give it one.
+#[test]
+fn txid_arity_is_the_predicate_s_not_the_input_arm_s() {
+    let blk = Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h0.block")).unwrap();
+    let coinbase = &blk.miner_transaction;
+    assert_eq!(coinbase.pqc_auth_hash(), None, "a coinbase is 3-part");
+    assert_eq!(
+        coinbase.hash_with_supplied_components(
+            Some(PqcAuthHash::from_bytes([0xAB; 32])),
+            PrunableHash::from_bytes([0xCD; 32])
+        ),
+        coinbase.hash(),
+        "a coinbase ignores supplied components: it has neither region"
+    );
+
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.inputs.push(join_market_bond_post());
+    if let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct {
+        pqc_auths.push(pqc_auths[0].clone());
+    }
+    tx.validate().expect("bond-post spend must validate");
+    let pqc_auth = tx
+        .pqc_auth_hash()
+        .expect("a bond-post spend is 4-part: the identity signature is a tx-level auth");
+    assert_eq!(
+        tx.hash_with_supplied_components(Some(pqc_auth), tx.prunable_hash()),
+        tx.hash()
+    );
+}
+
+/// The oracle's predicate is `!vin.empty() && vin[0] != gen`
+/// (`cryptonote_format_utils.cpp:1290`): a body with **no inputs** and a
+/// `pqc_auths` entry hashes 3-part in C++. It is malformed — `validate`
+/// refuses it — but its identity is consensus-visible before that (relay
+/// dedup), so the Rust predicate must agree on it too, not only on valid
+/// shapes. Reading `vin[0] != gen` as "first is not gen" would call this
+/// 4-part.
+#[test]
+fn a_body_with_no_inputs_and_an_auth_is_3_part_like_the_oracle() {
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.inputs.clear();
+    if let Ct::Fcmp { pqc_auths, .. } = &tx.ct {
+        assert_eq!(
+            pqc_auths.len(),
+            1,
+            "the auth stays; only the vin is emptied"
+        );
+    }
+    tx.validate().expect_err("no-input spend is malformed");
+    assert_eq!(tx.pqc_auth_hash(), None, "no inputs ⇒ no third component");
+    assert_eq!(
+        tx.hash_with_supplied_components(
+            Some(PqcAuthHash::from_bytes([0xAB; 32])),
+            tx.prunable_hash()
+        ),
+        tx.hash(),
+        "a supplied component is ignored where the txid has no slot for it"
+    );
 }
 
 #[test]

@@ -14,6 +14,7 @@ use std::net::TcpListener;
 use std::os::raw::c_char;
 
 use shekyl_rpc_types::{HashHex, RpcStatus};
+use shekyl_types::PrunableHash;
 
 fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
     let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
@@ -410,7 +411,7 @@ fn a_retained_transaction_is_not_reported_pruned() {
 fn a_pruned_transaction_is_reported_pruned() {
     // The prunable half is gone, so the identity mixes the reply's
     // supplied digest — the same recomputation the binding performs.
-    let txid = console_spend().hash_with_supplied_prunable([0x5A; 32]);
+    let txid = console_spend().hash_with_supplied_prunable(PrunableHash::from_bytes([0x5A; 32]));
     let addr = one_shot_projected(mined_slot(Vec::new()), txid);
     let (_, out) = run(&["print_transaction", &hex::encode(txid)], Some(&addr));
     assert!(
@@ -482,12 +483,12 @@ fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
     // the daemon will also supply — so only the body differs.
     let mut other = console_spend();
     other.prefix.unlock_time = 5;
-    let requested = other.hash_with_supplied_prunable(CHOSEN);
+    let requested = other.hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN));
     // Sanity: the two bodies really do have different pruned identities,
     // or the refusal below would prove nothing.
     assert_ne!(
         requested,
-        console_spend().hash_with_supplied_prunable(CHOSEN),
+        console_spend().hash_with_supplied_prunable(PrunableHash::from_bytes(CHOSEN)),
         "the fixture must substitute a genuinely different body"
     );
     let (pruned, _tail) = console_spend_halves();

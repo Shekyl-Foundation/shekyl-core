@@ -248,11 +248,14 @@ fn parse_rid(s: &str) -> Result<u64, WalletRpcError> {
 }
 
 fn parse_unix_timestamp(h: i64) -> Result<shekyl_types::Timestamp, WalletRpcError> {
-    u64::try_from(h)
-        .map(shekyl_types::Timestamp::from_raw)
-        .map_err(|_| {
-            WalletRpcError::InvalidParams("expiry must be a non-negative unix timestamp".into())
-        })
+    let secs = u64::try_from(h).map_err(|_| {
+        WalletRpcError::InvalidParams("expiry must be a non-negative unix timestamp".into())
+    })?;
+    shekyl_types::Timestamp::from_invoice_unix(secs).ok_or_else(|| {
+        WalletRpcError::InvalidParams(
+            "expiry must be unix seconds, not a chain height (values below 1e9 are refused)".into(),
+        )
+    })
 }
 
 fn unix_now() -> shekyl_types::Timestamp {

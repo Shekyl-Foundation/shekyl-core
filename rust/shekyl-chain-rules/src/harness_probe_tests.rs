@@ -12,7 +12,7 @@
 //! each shown to bite before the first real rule leans on them. The
 //! `should_panic` cases are what make this file's green mean something.
 
-use super::fixture::{candidate, coinbase, recorded, root};
+use super::fixture::{candidate, candidate_on, coinbase, recorded, root};
 use super::*;
 use crate::rule_set::RuleSet;
 use crate::validate::validate;
@@ -48,10 +48,22 @@ fn an_empty_chain_has_no_tip_and_every_height_is_above_it() {
     let chain = MockChain::default();
     assert_eq!(chain.tip(), None);
     chain.with_view(|view| {
+        assert_eq!(infallible(view.tip()), None);
+        // Height 0 has no block, but it has a tree state — the empty tree —
+        // exactly as the store answers (`root_at(0)` is `EMPTY` there too).
+        assert_eq!(
+            infallible(view.root_at(BlockHeight::ZERO)),
+            AtHeight::Recorded(CurveTreeRoot::EMPTY)
+        );
         for height in [0, 1, u64::MAX] {
             let height = BlockHeight::from_raw(height);
             assert_eq!(infallible(view.block_at(height)), AtHeight::AboveTip);
-            assert_eq!(infallible(view.root_at(height)), AtHeight::AboveTip);
+        }
+        for height in [1, 2, u64::MAX] {
+            assert_eq!(
+                infallible(view.root_at(BlockHeight::from_raw(height))),
+                AtHeight::AboveTip
+            );
         }
     });
 }
@@ -62,20 +74,48 @@ fn push_records_densely_from_zero_and_reads_back_by_height() {
         .push(recorded(1_000), root(0xa0))
         .push(recorded(1_060), root(0xa1))
         .push(recorded(1_120), root(0xa2));
-    assert_eq!(chain.tip(), Some(BlockHeight::from_raw(2)));
+    let tip = chain.tip().expect("three blocks recorded");
+    assert_eq!(tip.height, BlockHeight::from_raw(2));
+    assert_eq!(
+        tip.hash,
+        recorded(1_120).hash,
+        "the tip's identity is the last block's"
+    );
+    assert_eq!(Tip::connecting_height(Some(&tip)), BlockHeight::from_raw(3));
+    assert_eq!(Tip::connecting_height(None), BlockHeight::ZERO);
+    chain.with_view(|view| assert_eq!(infallible(view.tip()), Some(tip)));
     chain.with_view(|view| {
-        for (height, (stamp, byte)) in (0u64..).zip([(1_000, 0xa0), (1_060, 0xa1), (1_120, 0xa2)]) {
+        for (height, stamp) in (0u64..).zip([1_000, 1_060, 1_120]) {
             let height = BlockHeight::from_raw(height);
             let block = infallible(view.block_at(height));
             assert_eq!(block, AtHeight::Recorded(recorded(stamp)));
+        }
+        // Roots are keyed one height after the block they were pushed with
+        // (SCW-19): the state *at* h is what h − 1 left. Height 0 is the
+        // empty tree; tip + 1 is recorded; tip + 2 is not.
+        assert_eq!(
+            infallible(view.root_at(BlockHeight::ZERO)),
+            AtHeight::Recorded(CurveTreeRoot::EMPTY)
+        );
+        for (height, byte) in (1u64..).zip([0xa0, 0xa1, 0xa2]) {
             assert_eq!(
-                infallible(view.root_at(height)),
-                AtHeight::Recorded(root(byte))
+                infallible(view.root_at(BlockHeight::from_raw(height))),
+                AtHeight::Recorded(root(byte)),
+                "root_at({height}) is the root pushed with block {}",
+                height - 1
             );
         }
-        // One past the tip, and far past it.
+        // One past the tip: no block, but a recorded root (CEN-B5's read).
         assert_eq!(
             infallible(view.block_at(BlockHeight::from_raw(3))),
+            AtHeight::AboveTip
+        );
+        assert_eq!(
+            infallible(view.root_at(BlockHeight::from_raw(3))),
+            AtHeight::Recorded(root(0xa2))
+        );
+        assert_eq!(
+            infallible(view.root_at(BlockHeight::from_raw(4))),
             AtHeight::AboveTip
         );
         assert_eq!(
@@ -98,13 +138,14 @@ fn key_images_are_a_set() {
 
 #[test]
 fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
-    one_block().with_view(|view| {
+    let chain = one_block();
+    chain.with_view(|view| {
         let valid = infallible(validate(
-            candidate(vec![coinbase(1)]),
+            candidate_on(&chain, vec![coinbase(1)]),
             &view,
             &RuleSet::GENESIS,
         ))
-        .expect("the fixture satisfies every landed rule");
+        .expect("a candidate built on the chain's tip satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSet::GENESIS.id());
         // The landed block rules ran; the probe is not among them.
         assert!(!valid.coverage().contains(CenRow::C1));

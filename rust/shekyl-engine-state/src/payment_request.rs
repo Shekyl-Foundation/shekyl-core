@@ -79,9 +79,12 @@ pub enum PaymentRequestState {
 
 /// Off-chain invoice persisted in [`crate::bookkeeping_block::BookkeepingBlock`].
 ///
-/// `created_at` / `expiry` are wall-clock [`Timestamp`]s (RTN-6). Pre-genesis
-/// files that stored a chain height in those fields are discarded
-/// (`rm -rf ~/.shekyl`; rule 15).
+/// `created_at` / `expiry` are wall-clock [`Timestamp`]s (RTN-6). The
+/// postcard encoding is the same `u64` it was as a height, so
+/// [`crate::bookkeeping_block::BOOKKEEPING_BLOCK_VERSION`] does not bump
+/// (rule 42 type-only). Pre-genesis wallets that wrote a height here are
+/// wiped by the operator (`rm -rf ~/.shekyl`; rule 15) — there is no
+/// in-file format detector.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentRequest {
     pub id: PaymentRequestId,
@@ -134,6 +137,20 @@ impl PaymentRequest {
     pub fn is_expired_at(&self, now: Timestamp) -> bool {
         self.expiry.is_some_and(|e| now > e)
     }
+
+    /// Display and filter state at `now`.
+    ///
+    /// A still-[`PaymentRequestState::Pending`] request whose wall-clock
+    /// expiry has passed is [`PaymentRequestState::Expired`]
+    /// (`SUBADDRESS_UNDER_PQC.md` §5.7.9 `Pending --> Expired`).
+    /// Matched / cancelled rows are unchanged — match overrides expiry.
+    #[must_use]
+    pub fn state_at(&self, now: Timestamp) -> PaymentRequestState {
+        match self.state {
+            PaymentRequestState::Pending if self.is_expired_at(now) => PaymentRequestState::Expired,
+            other => other,
+        }
+    }
 }
 
 /// Why the user flagged a receive as disputed (bookkeeping only).
@@ -172,6 +189,35 @@ mod tests {
             assert_ne!(id, PaymentRequestId::INVALID);
             assert!(PaymentRequestId::rid_fits_wire(id.as_u64()));
         }
+    }
+
+    #[test]
+    fn pending_request_is_expired_once_the_clock_passes() {
+        let mut req = PaymentRequest {
+            id: PaymentRequestId(1),
+            label: LocalLabel::from_str("INV"),
+            amount_atomic: AtomicUnits::from_raw(1),
+            created_at: Timestamp::from_raw(1_000_000_000),
+            expiry: Some(Timestamp::from_raw(1_000_000_100)),
+            state: PaymentRequestState::Pending,
+            matched_tx_hash: None,
+            matched_output_index: None,
+        };
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_100)),
+            PaymentRequestState::Pending,
+            "expiry is exclusive: now == expiry is still pending"
+        );
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_101)),
+            PaymentRequestState::Expired
+        );
+        req.state = PaymentRequestState::Matched;
+        assert_eq!(
+            req.state_at(Timestamp::from_raw(1_000_000_101)),
+            PaymentRequestState::Matched,
+            "match overrides expiry"
+        );
     }
 
     #[test]

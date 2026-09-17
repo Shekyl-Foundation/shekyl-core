@@ -60,6 +60,15 @@ fn serde_is_transparent_to_inner_bytes() {
 }
 
 #[test]
+fn invoice_unix_floor_refuses_height_shaped_seconds() {
+    assert!(Timestamp::from_invoice_unix(999_999_999).is_none());
+    assert_eq!(
+        Timestamp::from_invoice_unix(Timestamp::INVOICE_UNIX_FLOOR),
+        Some(Timestamp::from_raw(Timestamp::INVOICE_UNIX_FLOOR))
+    );
+}
+
+#[test]
 fn height_plus_count_is_height() {
     let h = BlockHeight::from_raw(100);
     let span = BlockCount::from_raw(10);

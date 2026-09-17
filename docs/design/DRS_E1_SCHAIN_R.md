@@ -72,22 +72,26 @@ and it is the only commit the other lane depends on. Slice 1 keeps
 `FaultingView`); SCR-16 keeps `ReadSnapshot` off the trait.
 
 **A second upstream dependency, ruled 2026-09-16 (DRS §7.7, from
-`PDM-Q-F26`).** Commit 2's layout carries the `txs_pqc_auth_hash` row
-(amendment A3), written from `TxIdentity.pqc_auth_hash: Option<_>` — a
-field the rules crate does not have yet (E6's `Tip` PR carries it, with
-`shekyl_types::PqcAuthHash`), fed by a `Transaction::pqc_auth_hash` the
-wire crate does not expose yet (`hash_with_prunable` computes and discards
-it). **This lane** lands the wire half as its own small PR: the accessor
-plus **one two-supplied txid entry point** — `pqc_auth: Option<PqcAuthHash>`
-and `prunable: PrunableHash` supplied, arity read off `pqc_auth.is_some()`,
-with `hash()` and `hash_with_supplied_prunable` as its special cases over
-`hash_with_prunable`'s one body — KAT'd against `hash()` on a full body and
-on a skeleton. A PQC-only supplied method would not do: a band-1 skeleton
-(F28) holds neither `pqc_auths` nor the prunable region, and the existing
-form derives arity from `pqc_auths.is_empty()` on a body a skeleton does
-not have. Both land before this increment's PR cuts; commit 2 waits on
-them exactly as commit 3 waits on `Tip`. The row is not added with a locally computed
-hash: the identity comes from the one `validate`, or the store derives a
+`PDM-Q-F26`) — SATISFIED 2026-09-17 on E6's PR #768.** Commit 2's layout
+carries the `txs_pqc_auth_hash` row (amendment A3), written from
+`TxIdentity.pqc_auth_hash: Option<PqcAuthHash>`. Both halves it needed are
+on `dev` once #768 merges, and both came from the one PR: the rules-crate
+field (fed by `Transaction::txid_parts()`, one construction for the txid
+and its two store-row digests) and the wire half — `pqc_auth_hash() ->
+Option<PqcAuthHash>`, `prunable_hash() -> PrunableHash`, and the
+two-supplied entry `hash_with_supplied_components(pqc_auth:
+Option<PqcAuthHash>, prunable: PrunableHash)`, arity read off the supplied
+`Option` after the prefix predicate, with `hash()` and
+`hash_with_supplied_prunable` as its special cases over one mixer
+(`transaction/txid.rs`), KAT'd against the pinned oracle txid on a full
+body and on a skeleton. §7.7 had assigned the wire half to this lane as
+its own small PR; it landed with item 1 instead, because the KAT for one
+is the KAT for the other. **This lane owes no wire PR.** A PQC-only
+supplied method would not have done: a band-1 skeleton (F28) holds neither
+`pqc_auths` nor the prunable region, so the arity cannot be read off a
+body that is not there. Commit 2 now waits on nothing outside this
+increment. The row is not added with a locally computed hash: the
+identity comes from the one `validate`, or the store derives a
 consensus-visible value (C2-R8 Q4).
 
 **The dependency runs the other way too, and the order is settled
@@ -692,6 +696,7 @@ gating release (§3.8 points at it).
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-17 | **A3's two upstream dependencies landed together on E6's PR #768** (DRS §7.7 items 1–2): `TxIdentity::pqc_auth_hash: Option<PqcAuthHash>` and, in the wire crate, `Transaction::pqc_auth_hash() -> Option<PqcAuthHash>`, `prunable_hash() -> PrunableHash` and `hash_with_supplied_components(Option<PqcAuthHash>, PrunableHash)` — typed as §7.7 wrote them (`shekyl-wire` now depends on `shekyl-types`). **This lane's "own small wire PR" is not owed.** Commit 2 waits on nothing but itself: the row's input is on the identity `connect` is handed, and the KAT the row binds to is `pruned_tx_hash_parity`'s skeleton reconstruction against the pinned oracle txid. |
 | 2026-09-16 | Round 0 executed at `dev` `3560b80c2` (post-#757). Sixteen findings (SCR-1…SCR-16); seven routed to round 1 as Q1–Q7 with defaults; the rest dispositioned into §3 and §7. Contract §3 **proposed, not ruled**. FL-R3-STORE taken into scope as S-CHAIN-W amendment A1 on FOLLOWUPS' explicit routing (rule 22). |
 | 2026-09-16 | **PR #766 review (Copilot, 7 findings; all valid, all taken) against the *merged* F26/F28.** A3's invariant corrected from a three-way equivalence to F26's three legs — row ⇔ 4-part (never deleted), segment ⇒ row, row ∧ no segment = *discarded* — the draft would have made every pruned tx an SI violation. The wire dependency is a **two-supplied** txid form (F28: a skeleton holds neither component; arity from the supplied third, not from `pqc_auths.is_empty()`), not a PQC-only method. `PqcAuthHash` in `shekyl-types` named as E6's on the `Tip` PR. `get_pruned_transaction_weight` is a retained-metadata precedent, not a stored-digest one — `hash_with_supplied_prunable` is the only such precedent, item 2 its second application. §10 gains the two sentences A3 makes stale (`schema.rs` "first — and so far only"; DRS §7.6's 50/46). Rebased onto `dev` post-#765; §15 rows kept in F26-then-plan order. |
 | 2026-09-16 | **Amendment A3 added to the layout commit (DRS §7.7; the finding is `PDM-Q-F26`, PR #765).** `TxIdentity` committed the per-tx identity to `PDM-Q6`'s first occupant alone; the `txs_pqc_auth_hash` row — the txid's third component over `varint(count) ‖ auths`, sparse, `Option` on the identity — rides commit 2 so the bump is paid once. Commit 2 gains a second upstream dependency beside `Tip`: the rules-crate field (E6's `Tip` PR) and the wire-crate `pqc_auth_hash` / `hash_with_supplied_pqc_auth` (this lane's own small PR). |

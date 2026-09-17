@@ -13,10 +13,10 @@ use shekyl_crypto_pq::label::{
 use shekyl_engine_state::{
     LedgerBlock, PaymentRequest, PaymentRequestId, PaymentRequestState, ReceiveAttribution,
 };
-use shekyl_types::TxHash;
+use shekyl_types::{OutputIndexInTx, TxHash};
 use shekyl_units::AtomicUnits;
 
-type LabelResidue = HashMap<([u8; 32], u64), [u8; 8]>;
+type LabelResidue = HashMap<(TxHash, OutputIndexInTx), [u8; 8]>;
 
 /// Lift decrypted label plaintext from a scan result before merge consumes it.
 pub(crate) fn collect_label_residue(
@@ -26,7 +26,10 @@ pub(crate) fn collect_label_residue(
     for dt in new_transfers {
         let wo = dt.output.wallet_output();
         map.insert(
-            (wo.transaction(), wo.index_in_transaction()),
+            (
+                TxHash::from_bytes(wo.transaction()),
+                OutputIndexInTx::from_raw(wo.index_in_transaction()),
+            ),
             *dt.output.label_plaintext(),
         );
     }
@@ -97,8 +100,7 @@ pub(crate) fn apply_receive_attributions(
         let Some(td) = ledger.transfer_mut(idx) else {
             continue;
         };
-        // `residue` is keyed by the scanner's raw `[u8; 32]` txid; convert.
-        let key = (td.tx_hash.to_bytes(), td.internal_output_index.to_raw());
+        let key = (td.tx_hash, td.internal_output_index);
         let label_pt = residue
             .get(&key)
             .copied()

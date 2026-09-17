@@ -98,7 +98,7 @@ async fn payment_request_create_list_uri_round_trip_and_persistence() {
     let created = rpc(
         state.clone(),
         "create_payment_request",
-        json!({ "label": "invoice-7", "amount": "12345", "expiry": 9_000 }),
+        json!({ "label": "invoice-7", "amount": "12345", "expiry": 2_000_000_000 }),
     )
     .await;
     assert!(created.get("error").is_none(), "{created}");
@@ -113,7 +113,7 @@ async fn payment_request_create_list_uri_round_trip_and_persistence() {
     assert_eq!(parsed["result"]["rid"], id);
     assert_eq!(parsed["result"]["amount"], "12345");
     assert_eq!(parsed["result"]["label"], "invoice-7");
-    assert_eq!(parsed["result"]["expiry"], 9_000);
+    assert_eq!(parsed["result"]["expiry"], 2_000_000_000);
 
     // ALL and PENDING contain it; MATCHED does not (nothing paid it).
     for filter in ["ALL", "PENDING"] {
@@ -171,6 +171,23 @@ async fn payment_request_create_list_uri_round_trip_and_persistence() {
     assert_eq!(reqs[0]["id"], id);
 }
 
+/// Height-shaped expiry integers are refused at the minting edge (RTN-6),
+/// the same floor the CLI `--expiry` flag uses.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_payment_request_refuses_height_shaped_expiry() {
+    let dir = TempDir::new().expect("tempdir");
+    let state = state(&dir);
+    create_wallet(&state, "recv").await;
+
+    let created = rpc(
+        state.clone(),
+        "create_payment_request",
+        json!({ "label": "invoice-height", "amount": "1", "expiry": 9_000 }),
+    )
+    .await;
+    assert_eq!(created["error"]["code"], -32602, "{created}");
+}
+
 /// `make_uri` ↔ `parse_uri` round-trip with an explicit address (no open
 /// wallet needed), and the `rid` wire bounds: zero and >u48 are rejected as
 /// invalid params, never silently dropped or clamped.
@@ -187,7 +204,7 @@ async fn make_uri_parse_uri_round_trip_and_rid_bounds() {
             "amount": "777",
             "label": "till 4",
             "rid": "281474976710655", // u48::MAX — largest wire-valid rid
-            "expiry": 42
+            "expiry": 2_000_000_000
         }),
     )
     .await;
@@ -200,7 +217,7 @@ async fn make_uri_parse_uri_round_trip_and_rid_bounds() {
     assert_eq!(parsed["result"]["amount"], "777");
     assert_eq!(parsed["result"]["label"], "till 4");
     assert_eq!(parsed["result"]["rid"], "281474976710655");
-    assert_eq!(parsed["result"]["expiry"], 42);
+    assert_eq!(parsed["result"]["expiry"], 2_000_000_000);
 
     // rid == 0 → invalid params.
     let zero = rpc(

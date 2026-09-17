@@ -100,4 +100,4 @@ pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use rule_set::{AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
 pub use validate::{tx_against, tx_form, validate};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
-pub use view::{AtHeight, ChainView, RecordedBlock};
+pub use view::{AtHeight, ChainView, RecordedBlock, Tip};

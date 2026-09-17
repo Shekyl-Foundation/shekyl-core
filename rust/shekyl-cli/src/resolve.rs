@@ -890,13 +890,10 @@ fn unix_now() -> Timestamp {
 /// added to `now`. Invoice expiry is wall-clock, not block height (RTN-6).
 fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestamp> {
     if let Ok(secs) = raw.parse::<u64>() {
-        // A bare integer below 1e9 is a height-shaped leftover of the
-        // pre-RTN-6 CLI (`--expiry <height>`). Refuse it rather than
-        // minting a 1970 timestamp.
-        if secs < 1_000_000_000 {
-            return None;
-        }
-        return Some(Timestamp::from_raw(secs));
+        // A bare integer below INVOICE_UNIX_FLOOR is a height-shaped
+        // leftover of the pre-RTN-6 CLI (`--expiry <height>`). Refuse
+        // it rather than minting a 1970 timestamp.
+        return Timestamp::from_invoice_unix(secs);
     }
     let duration = parse_duration_secs(raw)?;
     now.checked_add_secs(duration)
