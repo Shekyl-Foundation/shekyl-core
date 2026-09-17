@@ -44,7 +44,7 @@
 use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
-use shekyl_types::{PqcAuthHash, PrunableHash};
+use shekyl_types::{PqcAuthHash, PrunableHash, TxHash};
 
 use crate::bytes::{read_array, read_byte};
 use crate::hash::hash_concat;
@@ -1343,6 +1343,27 @@ pub struct Transaction {
     pub ct: Ct,
 }
 
+/// The consensus txid and the two store-row digests it was built over.
+///
+/// One construction: [`Transaction::txid_parts`] hashes each discardable
+/// region once and mixes the txid from those values, so the three fields
+/// cannot disagree. [`Transaction::hash`] is the `hash` field as bytes
+/// (`RAW_TYPE_NEWTYPE_MIGRATION.md` §6 still owns that return type).
+/// `TxIdentity::of` is this value, not three independent accessors.
+///
+/// [`Self::prunable_hash`] is the store row (`keccak256` of the region,
+/// `keccak256("")` when empty) — not always the txid's prunable *component*,
+/// which is the null hash for a coinbase or a body whose region is absent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TxidParts {
+    /// The consensus transaction hash.
+    pub hash: TxHash,
+    /// The txid's third component, or `None` for a 3-part txid.
+    pub pqc_auth_hash: Option<PqcAuthHash>,
+    /// `keccak256` of the prunable byte region (the store row).
+    pub prunable_hash: PrunableHash,
+}
+
 /// A transaction's bytes as the chain store's three segments.
 ///
 /// `concat(pruned, pqc_auths, prunable)` is exactly [`Transaction::write`]'s
@@ -1628,11 +1649,34 @@ impl Transaction {
     /// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. `H(prefix)` includes
     /// the version varint (the first field of the C++ `transaction_prefix`).
     ///
-    /// Both components computed from the body in hand; see
-    /// [`Self::hash_with_supplied_components`] for the one construction every
-    /// hashing path shares.
+    /// The `hash` field of [`Self::txid_parts`]. Reconstruction of a body that
+    /// no longer holds a discardable region is
+    /// [`Self::hash_with_supplied_components`].
     pub fn hash(&self) -> [u8; 32] {
-        self.hash_from_components(self.pqc_auth_hash(), self.prunable_component(None))
+        self.txid_parts().hash.to_bytes()
+    }
+
+    /// The consensus txid and the two store-row digests, hashed once each.
+    ///
+    /// [`Self::hash`], [`Self::pqc_auth_hash`] and [`Self::prunable_hash`]
+    /// are the fields of this value. Call this when more than one is needed
+    /// — `TxIdentity::of` — so a spend's ~16 KB of discardable bytes is not
+    /// serialised and Keccak'd twice.
+    #[must_use]
+    pub fn txid_parts(&self) -> TxidParts {
+        let pqc_auth_hash = self.pqc_auth_hash();
+        let prunable_hash = self.prunable_hash();
+        let mix_prunable = match &self.ct {
+            Ct::Fcmp {
+                prunable: Some(_), ..
+            } => prunable_hash.to_bytes(),
+            Ct::Null(_) | Ct::Fcmp { prunable: None, .. } => [0u8; 32],
+        };
+        TxidParts {
+            hash: TxHash::from_bytes(self.hash_from_components(pqc_auth_hash, mix_prunable)),
+            pqc_auth_hash,
+            prunable_hash,
+        }
     }
 
     /// `keccak256` of the **prunable byte region** — exactly the bytes
@@ -1741,6 +1785,10 @@ impl Transaction {
         pqc_auth: Option<PqcAuthHash>,
         prunable_hash: PrunableHash,
     ) -> [u8; 32] {
+        // The Option is the arity. A supplied `Some` on a prefix the oracle
+        // hashes 3-part (coinbase, gen-first, empty vin) is dropped here so
+        // the mixer never has a second opinion.
+        let pqc_auth = pqc_auth.filter(|_| self.has_pqc_component(true));
         self.hash_from_components(pqc_auth, self.prunable_component(Some(prunable_hash)))
     }
 
@@ -1788,13 +1836,16 @@ impl Transaction {
         }
     }
 
-    /// Shared body of every txid path: `H(prefix)` and `H(base)` from the
-    /// parts every form carries, then 3 or 4 components by
-    /// [`Self::has_pqc_component`]. Both arms carry struct-derived
-    /// cross-language hash parity (`pruned_tx_hash_parity` and
-    /// `serve_credit_tx_parity`, each with a C++ leg asserting the same pin);
-    /// the live-oracle pin (`live_oracle_spend_v1.json`) binds both languages
-    /// to a daemon-accepted spend.
+    /// Shared mixer of every txid path: `H(prefix)` and `H(base)` from the
+    /// parts every form carries, then 3-part or 4-part by whether
+    /// `pqc_auth` is `Some`. Callers that can supply a lying `Some` (the
+    /// skeleton form) filter through [`Self::has_pqc_component`] first;
+    /// [`Self::pqc_auth_hash`] already returns `None` unless the body is
+    /// 4-part. Both arms carry struct-derived cross-language hash parity
+    /// (`pruned_tx_hash_parity` and `serve_credit_tx_parity`, each with a
+    /// C++ leg asserting the same pin); the live-oracle pin
+    /// (`live_oracle_spend_v1.json`) binds both languages to a
+    /// daemon-accepted spend.
     fn hash_from_components(&self, pqc_auth: Option<PqcAuthHash>, prunable: [u8; 32]) -> [u8; 32] {
         let mut prefix_buf = Vec::new();
         write_varint(TX_VERSION, &mut prefix_buf).expect("Vec write is infallible");
@@ -1821,10 +1872,8 @@ impl Transaction {
                 base.write(&mut base_buf).expect("Vec write is infallible");
                 let h_base = keccak256(&base_buf);
                 match pqc_auth {
-                    Some(h_auths) if self.has_pqc_component(true) => {
-                        hash_concat(&[h_prefix, h_base, h_auths.to_bytes(), prunable])
-                    }
-                    _ => hash_concat(&[h_prefix, h_base, prunable]),
+                    Some(h_auths) => hash_concat(&[h_prefix, h_base, h_auths.to_bytes(), prunable]),
+                    None => hash_concat(&[h_prefix, h_base, prunable]),
                 }
             }
         }

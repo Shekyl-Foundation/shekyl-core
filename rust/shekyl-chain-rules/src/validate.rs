@@ -173,8 +173,8 @@ pub fn validate<'id, V: ChainView<'id>>(
 ) -> Result<Verdict<ChainValid<'id, V>>, V::Fault> {
     let mut coverage = RuleCoverage::EMPTY;
 
-    // Block-level rules (4.A–4.G), in census order. Slice 1: A2 (parent is
-    // the tip), the 4.B header rows. B6 (identity) is applied at `derive`.
+    // Block-level predicates (4.A–4.G), in census order. Definition rows
+    // (B6) record at `ValidatedBlock::derive`, not in this list.
     let cx = BlockContext::new(&candidate, rule_set);
     judge_block!(cx, view, coverage; A2, B1, B2, B5, B7);
 

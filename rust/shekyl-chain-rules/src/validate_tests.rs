@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-use shekyl_types::{BlockHash, TxHash};
+use shekyl_types::BlockHash;
 
 use super::*;
 use crate::census::CenRow;
@@ -43,10 +43,13 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
 fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     let input = candidate(vec![coinbase(1), coinbase(2)]);
     let expected_hash = BlockHash::from_bytes(input.block.hash());
-    let identity = |tx: &Transaction| TxIdentity {
-        hash: TxHash::from_bytes(tx.hash()),
-        pqc_auth_hash: tx.pqc_auth_hash(),
-        prunable_hash: tx.prunable_hash(),
+    let identity = |tx: &Transaction| {
+        let parts = tx.txid_parts();
+        TxIdentity {
+            hash: parts.hash,
+            pqc_auth_hash: parts.pqc_auth_hash,
+            prunable_hash: parts.prunable_hash,
+        }
     };
     let expected_miner = identity(&input.block.miner_transaction);
     let expected_listed: Vec<(TxIdentity, Transaction)> = input

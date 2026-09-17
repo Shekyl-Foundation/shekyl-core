@@ -82,8 +82,10 @@ pub enum AtHeight<T> {
 /// (`RecordedTip { tip: Tip, connect }`, S-CHAIN-R) composes this struct.
 ///
 /// Fields justified per ruling Q3: `hash` — CEN-A2 (`previous` must be the
-/// tip's hash); `height` — the connecting height every height-indexed rule
-/// is stated at (B1, B5 here; 4.C and CEN-F5 later).
+/// tip's hash); `height` — the connecting height height-indexed rules
+/// read (B5 here via [`Tip::connecting_height`]; 4.C and CEN-F5 later).
+/// B1 does not read this: the rule set in force is an input the caller
+/// chose with `rules_at(height)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tip {
     /// The tip's height.
@@ -182,7 +184,7 @@ pub trait ChainView<'id> {
     /// The last recorded block, or `None` for an empty chain (genesis
     /// admission). See [`Tip`] for why `Option`.
     ///
-    /// CEN-A2 (`hash`); the connecting height of B1, B5, and later 4.C /
-    /// CEN-F5 (`height`, via [`Tip::connecting_height`]).
+    /// CEN-A2 (`hash`); B5 and later 4.C / CEN-F5 (`height`, via
+    /// [`Tip::connecting_height`]).
     fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
 }

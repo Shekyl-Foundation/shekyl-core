@@ -59,10 +59,11 @@ pub struct TxIdentity {
 
 impl TxIdentity {
     fn of(tx: &Transaction) -> Self {
+        let parts = tx.txid_parts();
         Self {
-            hash: TxHash::from_bytes(tx.hash()),
-            pqc_auth_hash: tx.pqc_auth_hash(),
-            prunable_hash: tx.prunable_hash(),
+            hash: parts.hash,
+            pqc_auth_hash: parts.pqc_auth_hash,
+            prunable_hash: parts.prunable_hash,
         }
     }
 }

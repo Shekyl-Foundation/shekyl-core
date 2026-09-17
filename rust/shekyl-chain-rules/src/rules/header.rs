@@ -177,13 +177,13 @@ impl BlockRule for B5 {
 /// (live-oracle vectors; height 0 equals the published mainnet genesis id).
 ///
 /// A definition, not a predicate: nothing about a candidate can fail it.
-/// So it is not a [`BlockRule`] with a check that always passes — a gate
-/// that cannot fail is the one thing this crate does not ship — but the
-/// **derivation site**: `ValidatedBlock::derive` obtains the identity the
-/// verdict will carry from [`B6::identity`] and nowhere else, and coverage
-/// records the row there, when the identity is derived. The registry entry
-/// `implemented(rules::header::B6)` therefore names the function the
-/// identity comes from (slice 1, Q5).
+/// B7 is a no-op *policy* the C++ still evaluates, so it runs through
+/// [`BlockRule`] and [`crate::rules::run`]. B6 is the identity function,
+/// so it is not a check that always passes — coverage is recorded here,
+/// when the identity is derived, and `implemented(rules::header::B6)`
+/// names this function (slice 1, Q5). `ValidatedBlock::derive` obtains
+/// the identity the verdict will carry from [`B6::identity`] and nowhere
+/// else.
 pub(crate) struct B6;
 
 impl Rule for B6 {

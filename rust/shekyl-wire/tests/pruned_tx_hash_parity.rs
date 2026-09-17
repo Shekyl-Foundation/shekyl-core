@@ -270,10 +270,16 @@ fn skeleton_identity_reconstructs_the_pinned_txid_from_both_stored_digests() {
     let tx_hash_hex = pin["tx_hash_hex"].as_str().expect("tx_hash_hex");
 
     let tx = build_tx(true);
-    let pqc_auth = tx
-        .pqc_auth_hash()
+    let parts = tx.txid_parts();
+    let pqc_auth = parts
+        .pqc_auth_hash
         .expect("a spend's txid is 4-part, so its third component exists");
-    let prunable = tx.prunable_hash();
+    let prunable = parts.prunable_hash;
+    assert_eq!(
+        parts.hash.to_bytes(),
+        tx.hash(),
+        "txid_parts.hash is hash(), not a second construction"
+    );
 
     // The third component is the hash the txid was built over, independently
     // derived here so the accessor cannot drift from `hash()`: the count

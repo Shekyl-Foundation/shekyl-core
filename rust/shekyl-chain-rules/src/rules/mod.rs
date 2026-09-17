@@ -108,8 +108,13 @@ pub(crate) trait BlockRule: Rule {
 
 /// Run one block rule and, if it passed, record its row.
 ///
-/// The only writer of block-level coverage: a rule that ran and passed is
-/// in coverage under its own `ROW`, and nothing else can put it there.
+/// Records a **predicate** row that ran and passed.
+///
+/// Definition rows (CEN-B6) are not [`BlockRule`]s — nothing about a
+/// candidate can fail them — and record at their derivation site
+/// ([`crate::rules::header::B6::identity`]), when the identity is
+/// derived. Predicate rows go through this function; a definition row
+/// named `implemented(...)` is the function that produces the value.
 pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(
     cx: &BlockContext<'_>,
     view: &V,
