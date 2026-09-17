@@ -9,6 +9,9 @@
 use shekyl_types::{BlockHash, PrunableHash, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
+use crate::coverage::RuleCoverage;
+use crate::rules::header::B6;
+
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
 /// The txid, and the digest of its prunable region — the fourth component
@@ -102,14 +105,15 @@ pub struct ValidatedBlock {
 
 impl ValidatedBlock {
     /// Derive every identity once. Called by `validate` after the last rule
-    /// has passed and nowhere else.
-    pub(crate) fn derive(candidate: Candidate) -> Self {
+    /// has passed and nowhere else. The block's identity comes from CEN-B6's
+    /// function, which records the row in `coverage` (slice 1, Q5).
+    pub(crate) fn derive(candidate: Candidate, coverage: &mut RuleCoverage) -> Self {
         let Candidate {
             block,
             transactions,
         } = candidate;
         Self {
-            hash: BlockHash::from_bytes(block.hash()),
+            hash: B6::identity(&block, coverage),
             miner_tx: TxIdentity::of(&block.miner_transaction),
             block,
             transactions: transactions

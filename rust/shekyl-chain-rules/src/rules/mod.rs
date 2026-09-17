@@ -41,6 +41,7 @@
 //! (`view.rs`, "Three answers, three positions").
 
 pub(crate) mod header;
+pub(crate) mod topology;
 
 use crate::block::Candidate;
 use crate::census::CenRow;

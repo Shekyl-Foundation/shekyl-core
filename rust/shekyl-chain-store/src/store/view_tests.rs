@@ -52,6 +52,9 @@ fn block(height: u64, timestamp: u64) -> Block {
             timestamp,
             previous: [0x11; 32],
             nonce: 7,
+            // Recorded blocks are written straight into the tables here
+            // (not through `validate`), so this header is not judged under
+            // CEN-B5; the value is a placeholder, as it is in LMDB fixtures.
             curve_tree_root: [0x22; 32],
             attestation_root: [0x33; 32],
         },
@@ -365,16 +368,31 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         record_root(batch, 1, 0xaa)?;
         let view = batch.chain_view();
         // A verdict minted against this batch's view, over a view that
-        // already contains block 0 — no landed rule reads the view yet
-        // (A2/B5 arrive with `tip()`), so what this pins is the type plumbing: the verdict is
-        // `ChainValid<'id, BatchView<'_, 'id>>` and its view saw the block.
-        let valid = validate(
-            Candidate::new(block(1, 1_060), Vec::new()),
-            &view,
-            &RuleSet::GENESIS,
-        )?
-        .expect("the fixture satisfies every landed rule");
+        // already contains block 0. Since E6 slice 1 the rules READ the view:
+        // CEN-A2 wants `previous == tip.hash` and CEN-B5 wants the header's
+        // root to be `root_at(1)` — the row recorded above — so block 1
+        // passes only if the projection shows it block 0 and the root block
+        // 0 left. The title's claim is now the verdict, not just the type.
+        let mut b1 = block(1, 1_060);
+        b1.header.previous = genesis.hash();
+        b1.header.curve_tree_root = [0xaa; 32];
+        let valid = validate(Candidate::new(b1, Vec::new()), &view, &RuleSet::GENESIS)?
+            .expect("block 1 built on block 0 satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSet::GENESIS.id());
+        assert!(valid.coverage().contains(shekyl_chain_rules::CenRow::A2));
+        assert!(valid.coverage().contains(shekyl_chain_rules::CenRow::B5));
+        // And a block 1 that does not build on block 0 is refused, not
+        // connected-then-caught: the rule sits in front of SI-2's belt.
+        let mut orphan = block(1, 1_060);
+        orphan.header.curve_tree_root = [0xaa; 32];
+        let Err(refused) = validate(Candidate::new(orphan, Vec::new()), &view, &RuleSet::GENESIS)?
+        else {
+            panic!("a block 1 not built on block 0 is refused");
+        };
+        // The row and the locus, read off the refusal — this crate never
+        // names the verdict type (conversion-ban clause 2).
+        assert_eq!(refused.rule, shekyl_chain_rules::CenRow::A2);
+        assert_eq!(refused.locus, shekyl_chain_rules::Locus::Block);
         let AtHeight::Recorded(recorded) = view.block_at(BlockHeight::ZERO)? else {
             panic!("block 0 is visible to the second block's validation");
         };

@@ -80,14 +80,24 @@ fn the_two_registries_are_disjoint() {
 fn the_implemented_rows_are_exactly_the_landed_slices() {
     // Rewritten from `increment_one_registers_no_rule` as that test said it
     // would be: every flip to `implemented(...)` is a visible, reviewed
-    // change here rather than a quiet numerator move. Slice 1: 4.B's version
-    // rows (A2, B5, B6 join with `ChainView::tip()`).
+    // change here rather than a quiet numerator move. Slice 1: the six
+    // predicate rows of 4.A/4.B (`CHAIN_RULES_SLICE_1.md` §3).
     let implemented: Vec<CenRow> = CenRow::ALL
         .iter()
         .copied()
         .filter(|r| r.status() == RowStatus::Implemented)
         .collect();
-    assert_eq!(implemented, [CenRow::B1, CenRow::B2, CenRow::B7]);
+    assert_eq!(
+        implemented,
+        [
+            CenRow::A2,
+            CenRow::B1,
+            CenRow::B2,
+            CenRow::B5,
+            CenRow::B6,
+            CenRow::B7
+        ]
+    );
     assert!(PolicyRow::ALL
         .iter()
         .all(|r| r.status() == RowStatus::Pending));

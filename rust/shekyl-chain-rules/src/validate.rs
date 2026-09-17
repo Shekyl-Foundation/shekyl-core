@@ -32,7 +32,8 @@ use shekyl_wire::Transaction;
 use crate::block::{Candidate, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
-use crate::rules::header::{B1, B2, B7};
+use crate::rules::header::{B1, B2, B5, B7};
+use crate::rules::topology::A2;
 use crate::rules::{self, BlockContext};
 use crate::verdict::{ChainValid, InvalidBlock, TxSlot, Verdict};
 use crate::view::ChainView;
@@ -172,10 +173,10 @@ pub fn validate<'id, V: ChainView<'id>>(
 ) -> Result<Verdict<ChainValid<'id, V>>, V::Fault> {
     let mut coverage = RuleCoverage::EMPTY;
 
-    // Block-level rules (4.A–4.G), in census order. Slice 1: 4.B's version
-    // rows. A2, B5, B6 join when `ChainView::tip()` lands.
+    // Block-level rules (4.A–4.G), in census order. Slice 1: A2 (parent is
+    // the tip), the 4.B header rows. B6 (identity) is applied at `derive`.
     let cx = BlockContext::new(&candidate, rule_set);
-    judge_block!(cx, view, coverage; B1, B2, B7);
+    judge_block!(cx, view, coverage; A2, B1, B2, B5, B7);
 
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
     let listed = candidate
@@ -195,11 +196,8 @@ pub fn validate<'id, V: ChainView<'id>>(
         }
     }
 
-    Ok(Ok(ChainValid::mint(
-        ValidatedBlock::derive(candidate),
-        rule_set,
-        coverage,
-    )))
+    let block = ValidatedBlock::derive(candidate, &mut coverage);
+    Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }
 
 /// Stateless per-transaction rules (census 4.H): everything decidable from

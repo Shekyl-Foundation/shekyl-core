@@ -97,6 +97,17 @@ pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
     }
 }
 
+/// The root the header at `height` must carry under CEN-B5: the tree state
+/// *at* `height` — the `root_after` the connect of `height − 1` wrote
+/// (`facts(height − 1)`), or the empty tree at genesis. Kept in one place
+/// with `facts` so the two cannot drift.
+pub(super) fn root_at_height(height: u64) -> CurveTreeRoot {
+    match height.checked_sub(1) {
+        None => CurveTreeRoot::EMPTY,
+        Some(parent) => facts(parent, 0).root_after.value,
+    }
+}
+
 pub(super) fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction>) -> Candidate {
     let block = Block {
         header: BlockHeader {
@@ -105,7 +116,9 @@ pub(super) fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction
             timestamp: 1_000 + height * 60,
             previous,
             nonce: 7,
-            curve_tree_root: [0x22; 32],
+            // CEN-B5 landed (E6 slice 1): the header carries the state at
+            // its height, not a placeholder.
+            curve_tree_root: root_at_height(height).to_bytes(),
             attestation_root: [0x33; 32],
         },
         miner_transaction: coinbase(height, 1),
@@ -562,21 +575,33 @@ fn expect_row(out: &Result<Connected, TestErr>, want: StoreInvariant) {
 fn a_block_whose_parent_is_not_the_tip_is_si2() {
     let path = tmp("connect-parent");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_genesis(&store, 0);
-    let wrong = candidate(1, [0xde; 32], Vec::new());
+    let (_, genesis) = connect_genesis(&store, 0);
+    // CEN-A2 now stands in front of this belt (E6 slice 1): a candidate
+    // whose `previous` is not the tip is refused as a verdict and never
+    // reaches `connect`. The belt's remaining subject is a verdict that was
+    // TRUE when minted and is stale by the time it connects — two siblings
+    // judged against the same tip, the second connected after the first
+    // moved it. That is exactly what a belt beneath a rule is for.
+    let mut sibling = candidate(1, genesis.hash(), Vec::new());
+    sibling.block.header.nonce = 8;
+    let stale = candidate(1, genesis.hash(), Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, wrong)?, facts(1, 0), GENESIS_ID)?)
+        let first = judge(&view, sibling)?;
+        let second = judge(&view, stale)?; // judged against the same tip: passes A2
+        batch.connect(first, facts(1, 0), GENESIS_ID)?; // the tip moves
+        Ok(batch.connect(second, facts(1, 0), GENESIS_ID)?) // stale: SI-2
     });
     expect_row(&out, StoreInvariant::TipMismatch);
     assert_eq!(StoreInvariant::TipMismatch.row(), 2);
-    // The belt fired before any row was journaled, and the writer still
-    // halted at the connecting height: the height is noted before the
-    // belts run, not by the recording (§3.6.2; PR #757 review).
+    // The belt fired before any row of the second block was journaled, and
+    // the writer halted at the connecting height it noted for that block —
+    // 2, because the first sibling had connected (§3.6.2; PR #757 review).
+    // The aborted batch also un-connects the first sibling: nothing landed.
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(1),
+            at_height: BlockHeight::from_raw(2),
             row: StoreInvariant::TipMismatch,
         }
     );

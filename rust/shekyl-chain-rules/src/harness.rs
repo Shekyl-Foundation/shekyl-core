@@ -34,16 +34,41 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// Blocks and roots are **dense by construction**: [`push`](Self::push)
 /// appends at `tip + 1`, so — like the store — the only absence the view can
 /// report is above the tip. Key images are a set.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Roots are keyed the way the store keys them (S-CHAIN-W SCW-19):
+/// `root_at(h)` is the tree state **at** `h` — after block `h − 1` connected,
+/// before block `h` drained — so `roots[0]` is the empty tree, the root
+/// pushed *with* block `h` is `roots[h + 1]`, and `root_at(tip + 1)` is
+/// recorded (the state the next candidate is checked against, CEN-B5) while
+/// `root_at(tip + 2)` is `AboveTip`. The first draft of this mock returned
+/// the root pushed with block `h` at `h` and `AboveTip` at `tip + 1`; B5's
+/// fixture (slice 1) is what caught the one-height disagreement with the
+/// store — the same axis SCW-19 corrected there.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MockChain {
-    recorded: Vec<(RecordedBlock, CurveTreeRoot)>,
+    recorded: Vec<RecordedBlock>,
+    /// `roots[h]` = the tree state at height `h`; `roots.len() == recorded.len() + 1`.
+    roots: Vec<CurveTreeRoot>,
     key_images: BTreeSet<KeyImage>,
 }
 
+impl Default for MockChain {
+    fn default() -> Self {
+        Self {
+            recorded: Vec::new(),
+            roots: vec![CurveTreeRoot::EMPTY],
+            key_images: BTreeSet::new(),
+        }
+    }
+}
+
 impl MockChain {
-    /// Append a block and the curve-tree root after it at the next height.
-    pub fn push(mut self, block: RecordedBlock, root: CurveTreeRoot) -> Self {
-        self.recorded.push((block, root));
+    /// Append a block at `tip + 1` and the tree state **after** it — what
+    /// `root_at(tip + 2)` will return, and what the header of the block
+    /// after it must carry (CEN-B5).
+    pub fn push(mut self, block: RecordedBlock, root_after: CurveTreeRoot) -> Self {
+        self.recorded.push(block);
+        self.roots.push(root_after);
         self
     }
 
@@ -58,7 +83,7 @@ impl MockChain {
     pub fn tip(&self) -> Option<Tip> {
         let len = u64::try_from(self.recorded.len()).expect("a Vec fits in u64");
         let height = BlockHeight::from_raw(len.checked_sub(1)?);
-        let (block, _) = self.recorded.last()?;
+        let block = self.recorded.last()?;
         Some(Tip {
             height,
             hash: block.hash,
@@ -78,11 +103,18 @@ impl MockChain {
         })
     }
 
-    fn at(&self, height: BlockHeight) -> AtHeight<&(RecordedBlock, CurveTreeRoot)> {
+    fn block(&self, height: BlockHeight) -> AtHeight<&RecordedBlock> {
         usize::try_from(height.to_raw())
             .ok()
             .and_then(|index| self.recorded.get(index))
             .map_or(AtHeight::AboveTip, AtHeight::Recorded)
+    }
+
+    fn root(&self, height: BlockHeight) -> AtHeight<CurveTreeRoot> {
+        usize::try_from(height.to_raw())
+            .ok()
+            .and_then(|index| self.roots.get(index))
+            .map_or(AtHeight::AboveTip, |root| AtHeight::Recorded(*root))
     }
 }
 
@@ -100,17 +132,14 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
     }
 
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Infallible> {
-        Ok(match self.chain.at(height) {
-            AtHeight::Recorded((block, _)) => AtHeight::Recorded(block.clone()),
+        Ok(match self.chain.block(height) {
+            AtHeight::Recorded(block) => AtHeight::Recorded(block.clone()),
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }
 
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
-        Ok(match self.chain.at(height) {
-            AtHeight::Recorded((_, root)) => AtHeight::Recorded(*root),
-            AtHeight::AboveTip => AtHeight::AboveTip,
-        })
+        Ok(self.chain.root(height))
     }
 
     fn tip(&self) -> Result<Option<Tip>, Infallible> {
@@ -211,7 +240,9 @@ pub mod fixture {
         }
     }
 
-    /// A header with every field set to a recognisable non-zero value.
+    /// A header with every field set to a recognisable non-zero value —
+    /// the shape of a *recorded* block. A candidate takes its `previous` and
+    /// `curve_tree_root` from the chain it is built on ([`candidate_on`]).
     pub fn header() -> BlockHeader {
         BlockHeader {
             major_version: 1,
@@ -224,14 +255,33 @@ pub mod fixture {
         }
     }
 
-    /// A candidate whose header lists exactly the bodies it carries.
-    pub fn candidate(listed: Vec<Transaction>) -> Candidate {
+    /// A well-formed candidate **on `chain`'s tip**: `previous` is the tip's
+    /// hash (the null hash on an empty chain — CEN-A2) and `curve_tree_root`
+    /// is the tree state at the connecting height (`root_at(tip + 1)`; the
+    /// empty tree at genesis — CEN-B5); the header lists exactly the bodies
+    /// it carries. Mutate one field to build a negative fixture.
+    pub fn candidate_on(chain: &MockChain, listed: Vec<Transaction>) -> Candidate {
+        let tip = chain.tip();
+        let connecting = Tip::connecting_height(tip.as_ref());
+        let root = match chain.root(connecting) {
+            AtHeight::Recorded(root) => root,
+            AtHeight::AboveTip => unreachable!("the mock records the root at tip + 1"),
+        };
         let block = Block {
-            header: header(),
+            header: BlockHeader {
+                previous: tip.map_or([0; 32], |t| t.hash.to_bytes()),
+                curve_tree_root: root.to_bytes(),
+                ..header()
+            },
             miner_transaction: coinbase(60),
             transaction_hashes: listed.iter().map(Transaction::hash).collect(),
         };
         Candidate::new(block, listed)
+    }
+
+    /// A well-formed **genesis** candidate: [`candidate_on`] an empty chain.
+    pub fn candidate(listed: Vec<Transaction>) -> Candidate {
+        candidate_on(&MockChain::default(), listed)
     }
 
     /// A recorded block whose header carries `timestamp`, identity derived.

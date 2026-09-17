@@ -6,6 +6,7 @@
 use shekyl_types::{BlockHash, PrunableHash, TxHash};
 
 use super::*;
+use crate::census::CenRow;
 use crate::harness::fixture::{candidate, coinbase};
 use crate::harness::{infallible, MockChain};
 use crate::rule_set::RuleSetId;
@@ -18,9 +19,20 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         let valid = infallible(validate(input, &view, &RuleSet::GENESIS))
             .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
-        // Slice 1's version rows and nothing else (the per-tx entry points
+        // Slice 1's block rows — A2, B1, B2, B5, B7 from the pipeline and
+        // B6 from the derivation — and nothing else (the per-tx entry points
         // are still empty).
-        assert_eq!(valid.coverage().len(), 3);
+        assert_eq!(
+            valid.coverage().iter().collect::<Vec<_>>(),
+            [
+                CenRow::A2,
+                CenRow::B1,
+                CenRow::B2,
+                CenRow::B5,
+                CenRow::B6,
+                CenRow::B7
+            ]
+        );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
         // Not parity evidence until every row has landed.
         assert!(!valid.coverage().is_complete_for(&RuleSet::GENESIS));

@@ -220,7 +220,7 @@ census_rows! {
     pub enum CenRow: Consensus {
         // 4.A Acceptance topology
         A1 pending,
-        A2 pending,
+        A2 implemented(crate::rules::topology::A2),
         A3 pending,
         A4 pending,
         A5 pending,
@@ -231,8 +231,8 @@ census_rows! {
         B2 implemented(crate::rules::header::B2),
         B3 pending,
         B4 pending,
-        B5 pending,
-        B6 pending,
+        B5 implemented(crate::rules::header::B5),
+        B6 implemented(crate::rules::header::B6),
         B7 implemented(crate::rules::header::B7),
         // 4.C Timestamps
         C1 pending,
