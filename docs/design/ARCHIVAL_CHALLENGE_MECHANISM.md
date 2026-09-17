@@ -1374,12 +1374,18 @@ than repealing it:
      explicit customization label + version) seeded by
      `block_hash(h−1)`, with the draw index within the block as a stream
      counter — never a general-purpose PRNG.
-   - **λ_target is a parameter** (derive-don't-hardcode): the module
-     takes challenges-per-pair as input; 3 is the 2-of-3 ruling's value,
-     supplied by the caller (landed 2026-08-11 as
-     `CHALLENGES_PER_PAIR_PER_EPOCH = 3`), and the legacy constant retires
-     with
-     its consumers (§4.4).
+   - **λ_target is read from the constant at the urn's entry points**
+     — **SUPERSEDED 2026-09-17 (SO-D8 Q4):** *"λ_target is a parameter
+     (derive-don't-hardcode): the module takes challenges-per-pair as
+     input; 3 is the 2-of-3 ruling's value, supplied by the caller."*
+     Two `pub` doors taking λ were what let the urn and the settlement
+     threshold be given different values silently. `ChallengeUrn::new`
+     and `assign_epoch` now read `CHALLENGES_PER_PAIR_PER_EPOCH = 3`
+     (landed 2026-08-11) and take no λ; the λ-taking constructors are
+     `pub(crate)` for the module's tests. The constant is
+     const-asserted against `SERVE_THRESHOLD_PASSES` in
+     `attestation.rs`, so 2-of-3 stays one decision. The legacy
+     constant retires with its consumers (§4.4).
 2. **The persona key hierarchy** — cold bond root separate; hot serving
    root with onion/attestation/SOCKS as labeled siblings under
    `keygen_from_seed`. Ruled, no wire dependency, prerequisite for the
