@@ -7,6 +7,9 @@
 
 use std::sync::{Mutex, PoisonError};
 
+use shekyl_curve_tree::{AssembleInput, CommitmentBytes, OneTimePubkey};
+use shekyl_engine_state::TransferDetails;
+
 use super::super::curve_tree_actor::CurveTreeHandleError;
 use super::super::diagnostics::{
     emit_pending_tx_diagnostic, BuildErrorKind, DiagnosticSink, PendingTxDiagnostic,
@@ -15,6 +18,18 @@ use super::super::error::{FeeEstimatorError, OutputSelectorError, SendError, Sig
 use super::super::pending::ReservationId;
 
 use super::types::{PendingTxState, ReanchorError};
+
+/// Curve-tree leaf operands from a selected [`TransferDetails`].
+///
+/// One minting site so the two assemble paths (build and re-anchor) cannot
+/// wrap the compressed key and commitment two ways.
+pub(super) fn assemble_input(td: &TransferDetails) -> AssembleInput {
+    AssembleInput {
+        gindex: td.global_output_index,
+        output_key: OneTimePubkey::from_bytes(td.key.compress().to_bytes()),
+        commitment: CommitmentBytes::from_bytes(td.commitment.calculate().compress().to_bytes()),
+    }
+}
 
 #[allow(private_bounds)]
 pub(super) fn release_output_locks_for(state: &mut PendingTxState, rid: ReservationId) {

@@ -42,7 +42,7 @@ use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
 use super::support::{
-    build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
+    assemble_input, build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
     map_handle_err_to_reanchor, map_output_selector_error, map_signer_error,
     release_output_locks_for, with_pending_tx_state_mut, TreeSpendGate,
 };
@@ -768,15 +768,7 @@ where
                 let td = transfers.get(index).ok_or(SendError::CannotSign {
                     reason: "selected transfer index out of range",
                 })?;
-                assemble_inputs.push(AssembleInput {
-                    gindex: td.global_output_index,
-                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(
-                        td.key.compress().to_bytes(),
-                    ),
-                    commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(
-                        td.commitment.calculate().compress().to_bytes(),
-                    ),
-                });
+                assemble_inputs.push(assemble_input(td));
             }
             Ok::<_, SendError>(assemble_inputs)
         })?;
@@ -1199,15 +1191,7 @@ where
                                 .ok_or(SendError::CannotSign {
                                     reason: "selected-input sum overflowed during re-anchor",
                                 })?;
-                        assemble_inputs.push(AssembleInput {
-                            gindex: td.global_output_index,
-                            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(
-                                td.key.compress().to_bytes(),
-                            ),
-                            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(
-                                td.commitment.calculate().compress().to_bytes(),
-                            ),
-                        });
+                        assemble_inputs.push(assemble_input(td));
                     }
                     Ok::<_, SendError>((assemble_inputs, covered))
                 })
