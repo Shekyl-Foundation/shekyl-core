@@ -67,7 +67,7 @@ use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTra
 use shekyl_chain_rules::AtHeight;
 use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, Canonical, CodecError};
+use crate::codec::{BlockInfo, Canonical, CodecError, Coded};
 use crate::lmdb_order::Hash32;
 use crate::schema::{BLOCKS, BLOCK_INFO};
 
@@ -211,16 +211,22 @@ pub(super) fn tip_of<T: ReadTables>(txn: &T) -> Result<Option<(u64, BlockInfo)>,
     let Some((height, info)) = table.last()? else {
         return Ok(None);
     };
-    let info = BlockInfo::decode(info.value()).map_err(|cause| undecodable("block_info", cause))?;
+    let info = info
+        .value()
+        .decode()
+        .map_err(|cause| undecodable("block_info", cause))?;
     Ok(Some((height.value(), info)))
 }
 
-/// One typed cell of a `u64 → bytes` table, decoded under `V`. Absent is
-/// `Ok(None)` — **the caller classifies it** against the tip, because
-/// whether an absent row is a hole is not this function's to know.
-pub(super) fn cell<T: ReadTables, V: Canonical>(
+/// One cell of a `u64 → Coded<V>` table, decoded under **the table's**
+/// codec: `V` is inferred from the definition, never named independently,
+/// so table identity and codec identity are one inference (`codec::shape`
+/// module docs, *Two guards*). Absent is `Ok(None)` — **the caller
+/// classifies it** against the tip, because whether an absent row is a
+/// hole is not this function's to know.
+pub(super) fn cell<T: ReadTables, V: Canonical + 'static>(
     txn: &T,
-    table: TableDefinition<'static, u64, &'static [u8]>,
+    table: TableDefinition<'static, u64, Coded<V>>,
     key: u64,
     cell_name: &'static str,
 ) -> Result<Option<V>, ReadFault> {
@@ -228,7 +234,9 @@ pub(super) fn cell<T: ReadTables, V: Canonical>(
     let Some(guard) = table.get(key)? else {
         return Ok(None);
     };
-    V::decode(guard.value())
+    guard
+        .value()
+        .decode()
         .map(Some)
         .map_err(|cause| undecodable(cell_name, cause))
 }
@@ -256,8 +264,8 @@ pub(super) fn block_body<T: ReadTables>(
     };
     let blocks = txn.table(BLOCKS)?;
     let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
-    let block =
-        Block::from_bytes(blob.value()).map_err(|_| blocks_invalid("block blob does not parse"))?;
+    let block = Block::from_bytes(blob.value().bytes())
+        .map_err(|_| blocks_invalid("block blob does not parse"))?;
     if block.hash() != info.hash.to_bytes() {
         return Err(blocks_invalid(
             "block blob does not hash to block_info.hash",

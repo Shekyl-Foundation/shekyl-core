@@ -31,7 +31,14 @@ use super::{Canonical, CodecError};
 ///   to the LMDB layouts minus the collapsed key (commit 2). Ordinals are
 ///   now load-bearing, so any later reorder **or removal** in the `tables!`
 ///   list is also a bump.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(2);
+/// - `3` — DRS-E1 increment 4 (S-CHAIN-R) layout commit, first half: the
+///   value side is typed (§11.1(f), `codec::shape`). Every table's value is
+///   `Coded<V>` / `Blob<K>` / `Unshaped`; each value `TypeName` in the
+///   catalogue moved, and every fixed-width codec table now declares its
+///   width to the engine (a leaf-page layout change from `&[u8]`, which is
+///   variable-width). No codec's **bytes** moved — the row fixtures are
+///   unchanged — so the digest is unchanged; the file format is not.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(3);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -88,10 +95,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(2));
-        assert_eq!(SCHEMA_VERSION.encode(), [2, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(3));
+        assert_eq!(SCHEMA_VERSION.encode(), [3, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[2, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[3, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

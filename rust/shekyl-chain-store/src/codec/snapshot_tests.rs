@@ -88,11 +88,11 @@ use super::{
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
-use shekyl_chain_rules::CenRow;
+use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
-    OneTimePubkey, OutputIndexInTx, Timestamp, TxHash,
+    OneTimePubkey, OutputIndexInTx, PrunableHash, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -292,6 +292,55 @@ impl Fixtures for PassedThroughFacts {
             ("burned", PassedThroughFacts::of_positions([4])),
             // Every field: the six-name spelling is the layout.
             ("all", PassedThroughFacts::of_positions(0..6)),
+        ]
+    }
+}
+
+impl Fixtures for BlockHeight {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        // The `u64` fixtures, named: the bytes are the scalar's, and the
+        // snapshot is the witness that the newtype did not re-encode them.
+        vec![
+            ("zero", BlockHeight::ZERO),
+            ("one", BlockHeight::from_raw(1)),
+            ("byte_order", BlockHeight::from_raw(0x0102_0304_0506_0708)),
+            ("max", BlockHeight::from_raw(u64::MAX)),
+        ]
+    }
+}
+
+impl Fixtures for RuleSetId {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", RuleSetId::from_raw(0)),
+            ("genesis", RuleSetId::GENESIS),
+            ("high_bit", RuleSetId::from_raw(0x80)),
+            ("max", RuleSetId::from_raw(0xff)),
+        ]
+    }
+}
+
+impl Fixtures for PrunableHash {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", PrunableHash::from_bytes([0; 32])),
+            (
+                "ascending",
+                PrunableHash::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i).expect("32 indices fit a byte")
+                })),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for AtomicUnits {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", AtomicUnits::ZERO),
+            ("one", AtomicUnits::from_raw(1)),
+            ("byte_order", AtomicUnits::from_raw(0x0102_0304_0506_0708)),
+            ("max", AtomicUnits::from_raw(u64::MAX)),
         ]
     }
 }
@@ -812,6 +861,10 @@ snapshotted_codecs! {
     CoverageGaps => codec_snapshot_rule_coverage_gaps,
     PassedThroughFacts => codec_snapshot_passed_through_facts,
     CurveTreeRoot => codec_snapshot_curve_root,
+    BlockHeight => codec_snapshot_block_height,
+    RuleSetId => codec_snapshot_rule_set_id,
+    PrunableHash => codec_snapshot_prunable_hash,
+    AtomicUnits => codec_snapshot_atomic_units,
     BlockInfo => codec_snapshot_block_info,
     TxIndex => codec_snapshot_tx_index,
     OutTx => codec_snapshot_out_tx,

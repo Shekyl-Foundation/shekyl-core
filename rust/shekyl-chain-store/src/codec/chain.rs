@@ -21,14 +21,16 @@
 //! codec ([`TxOutputIndices`]) refuses a length that is not a whole number of
 //! entries. All of it is strict both ways (`codec` module docs).
 
+use shekyl_chain_rules::RuleSetId;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
-    OneTimePubkey, OutputIndexInTx, Timelock, Timestamp, TxHash,
+    OneTimePubkey, OutputIndexInTx, PrunableHash, Timelock, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
+use shekyl_wire::Block;
 
-use super::{exact, Canonical, CodecError};
+use super::{exact, BlobKind, Canonical, CodecError};
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 
 /// Decode a stored `unlock_time` word.
@@ -278,6 +280,132 @@ impl Canonical for TxOutputIndices {
 /// bounded (every call site is inside an `exact::<N>` or `chunks_exact(8)`).
 fn le_u64(b: &[u8]) -> u64 {
     u64::from_le_bytes(b.try_into().expect("8-byte slice"))
+}
+
+// ---------------------------------------------------------------------------
+// Scalar columns: the domain newtype where one exists, a named column
+// codec where none does (§11.1(f)). Bytes are what the `u64` / `u8` /
+// `hash32` codecs already wrote — only the value's *name* is new.
+// ---------------------------------------------------------------------------
+
+/// `block_heights[hash]` — the height a block hash sits at. The
+/// `shekyl-types` newtype, stored as its raw LE `u64`.
+impl Canonical for BlockHeight {
+    const NAME: &'static str = "block_height";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `hf_versions[height]` — the rule set in force at a height (CEN-B3's
+/// belt). The rules crate's id, stored as its raw `u8`.
+impl Canonical for RuleSetId {
+    const NAME: &'static str = "rule_set_id";
+    const FIXED_WIDTH: Option<usize> = Some(1);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u8::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `txs_prunable_hash[tx_id]` — the digest of a transaction's prunable
+/// region, the txid's fourth component (S-CHAIN-W SCW-10). The
+/// `shekyl-types` identity type, stored as its 32 bytes; a `Hash32` at the
+/// engine (`lmdb_order`) only where an LMDB *ordering* is carried, which a
+/// value is not.
+impl Canonical for PrunableHash {
+    const NAME: &'static str = "prunable_hash";
+    const FIXED_WIDTH: Option<usize> = Some(32);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        exact::<32>(Self::NAME, bytes).map(Self::from_bytes)
+    }
+}
+
+/// `block_burn[height]` — atomic units burned by the block, per
+/// `blockchain.cpp:6148`; written only when non-zero (`store/connect.rs`
+/// phase 8). The `shekyl-units` newtype (RTN-2 put it on `ConnectFacts`),
+/// stored as its raw LE `u64` — the bytes the `u64` codec wrote before the
+/// value had a name.
+impl Canonical for AtomicUnits {
+    const NAME: &'static str = "atomic_units";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wire blobs: bytes the chain encodes and the store does not re-codec
+// (`shape` module docs, `Blob`).
+// ---------------------------------------------------------------------------
+
+/// `blocks[height]` — a block body in the chain's wire encoding. Well-formed
+/// iff it parses; that it hashes to `block_info[height].hash` is checked
+/// where both are in hand (`store/chain_reads.rs`, *The blob is verified
+/// where it is decoded*).
+#[derive(Debug)]
+pub struct BlockBody;
+
+impl BlobKind for BlockBody {
+    const NAME: &'static str = "block";
+
+    fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
+        Block::from_bytes(bytes)
+            .map(drop)
+            .map_err(|_| "block blob does not parse")
+    }
+}
+
+/// `txs_pruned[tx_id]` — a transaction's pruned segment (prefix and base),
+/// as `Transaction::write_segments` emits it.
+#[derive(Debug)]
+pub struct TxPrunedSegment;
+
+impl BlobKind for TxPrunedSegment {
+    const NAME: &'static str = "tx_pruned";
+}
+
+/// `txs_pqc_auths[tx_id]` — a transaction's `pqc_auths` segment; absent
+/// for a 3-part txid (`PDM-Q-F26`).
+#[derive(Debug)]
+pub struct TxPqcAuthsSegment;
+
+impl BlobKind for TxPqcAuthsSegment {
+    const NAME: &'static str = "tx_pqc_auths";
+}
+
+/// `txs_prunable[tx_id]` — a transaction's prunable segment.
+#[derive(Debug)]
+pub struct TxPrunableSegment;
+
+impl BlobKind for TxPrunableSegment {
+    const NAME: &'static str = "tx_prunable";
 }
 
 #[cfg(test)]

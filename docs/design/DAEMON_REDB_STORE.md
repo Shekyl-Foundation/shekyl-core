@@ -1870,11 +1870,12 @@ not there. What was owed, and where each piece stands:
    three-leg invariant above (present ⇔ 4-part; never deleted by a
    prune), Rust-only until an LMDB twin exists (`RUST_ONLY_TABLES`,
    SCW-11), journaled, SI-9-fresh under `tx_id`. **Store crate: S-CHAIN-W
-   amendment A3**, riding S-CHAIN-R's one layout commit
-   ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) §7 commit 2) so the
-   `SCHEMA_VERSION` bump is paid once; that commit waited on 1 and 2 as it
-   waited on `Tip`, and all three are now on `dev` — **item 3 is the one
-   piece still owed**, its input present on the identity `connect` is
+   amendment A3**, riding S-CHAIN-R's amendments layout commit
+   ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) §7 commit 2b, `SCHEMA_VERSION
+   3 → 4`; commit 2a's value shapes, §11.1(f), took 2 → 3 ahead of it) so
+   the three amendments share one bump. That commit waited on 1 and 2 as it
+   waited on `Tip`, and all three are now on `dev` (#768) — **item 3 is the
+   one piece still owed**, its input present on the identity `connect` is
    handed. The second Rust-only table retires two
    sentences the first one wrote — §7.6's "50 tables, 49 mirrors plus
    Rust-only `undo_log`" (51, plus one) and `schema.rs`'s "first — and so
@@ -2105,6 +2106,87 @@ change there unless `SCHEMA_VERSION` is numerically greater at the PR head than
 at its base. See
 [`42-serialization-policy.mdc`](../../.cursor/rules/42-serialization-policy.mdc)
 §"Two ratchets, one workflow".
+
+**(f) Every table's value type is a named shape; `&[u8]` is not a value
+type — RULED 2026-09-17 (S-CHAIN-R layout commit, `SCHEMA_VERSION 2 → 3`).**
+The key side had this from the first increment: `lmdb_order` carries LMDB's
+orderings into typed keys, and redb refuses at `open_table` a definition whose
+stored key `TypeName` disagrees. The value side had no stated position, so
+every table inherited `&[u8]` — two tables of identical `(u64, &[u8])` shape
+were indistinguishable to the engine however different their meanings, and
+each increment ahead (S-ARCH, E3, E5) would have answered the question locally
+(the `TxIdentity` lesson, §7.7: the store takes its shape from the first
+increment that touches it). Stated once, in `codec::shape`:
+
+- A value is one of exactly three shapes. **`Coded<V>`** — rows are
+  `V::encode` under a `Canonical` codec, `TypeName` = `V::NAME` (which the
+  codec contract already forbids reusing for a different layout).
+  **`Blob<K>`** — wire bytes the chain itself encodes and the store does not
+  re-codec (`blocks`, the three tx segments, `properties`' per-key cells);
+  `BlobKind` names the kind and says what well-formed is. **`Unshaped`** — a
+  censused table no Rust writer has reached; its row type is uninhabited, so
+  the table can be sealed, catalogued and journal-replayed (to a refusal) but
+  **not inserted into**: "no writer yet" is a fact of the type. The increment
+  that first writes such a table replaces `Unshaped` with the table's codec
+  and bumps `SCHEMA_VERSION`. At the ruling: 15 tables `Coded`/`Blob`, 33
+  `Unshaped`, plus `spent_keys`' `()` and `output_amounts`' order-bearing
+  multimap member (a key type, `lmdb_order`). Scalar-valued tables take the
+  domain newtype where one exists (`BlockHeight`, `RuleSetId`,
+  `PrunableHash`) and a named column codec where none does (`BlockBurn`); the
+  `Fact<u64>` → `AtomicUnits` lift is
+  [`RAW_TYPE_NEWTYPE_MIGRATION.md`](RAW_TYPE_NEWTYPE_MIGRATION.md)'s, not the
+  store's.
+- **Two guards, with different reach — neither is "the name guards the
+  type."** redb's `TypeName` check is at `open_table` and covers **table
+  confusion**: a definition opened against a table whose stored value type is
+  named differently is refused before any row is read. It sees nothing inside
+  a correctly opened table. **Codec confusion** — decoding a row under the
+  wrong codec, inserting bytes of the wrong codec — is closed by the Rust
+  type: a `Coded<V>` table yields `Encoded<'_, V>` from every read and accepts
+  only `Encoded<'_, V>` on every write, and the only constructor outside the
+  codec module is `Canonical::encoded`. `chain_reads::cell` infers `V` from
+  the `TableDefinition<u64, Coded<V>>` it reads; table identity and codec
+  identity are one inference.
+- **The decode path did not move.** `redb::Value::from_bytes` is infallible —
+  every typed impl in the tree panics on malformed input — so decoding inside
+  the engine would have turned `CodecError → SI-7 → halted writer` into a
+  panic. `Coded<V>::from_bytes` hands back the bytes tagged; `Encoded::decode`
+  runs `V::decode`, strict and fallible, where `cell` ran it before.
+- **`fixed_width` is reported, deliberately, and it is a layout change.** A
+  `Coded<V>` tells redb `V::FIXED_WIDTH`; redb lays fixed-width values down
+  without per-entry offsets and **asserts** the width in `LeafBuilder::append`
+  (4.1.0 `btree_base.rs:884`) — a panic, not a `Result`, and it poisons the
+  transaction lock. Reporting `None` would have been a second width
+  declaration that could drift from the codec's snapshot-pinned one, the
+  thing (b) exists to prevent; reporting it is *sound* only because the guard
+  above makes wrong-width bytes unreachable — the only bytes redb receives for
+  a `Coded<V>` came out of `V::encode`, and the journal replay runs `V::decode`
+  as `Restorable::well_formed` before `from_bytes`. Two consequences: this is
+  a leaf-page layout change from `&[u8]` (variable-width), paid by the bump
+  the commit already owed; and for a fixed-width codec whose only check is
+  its width (`BlockInfo`, `CurveRoot`, the scalars) an *undecodable* row is
+  now **unrepresentable** in a file the engine accepted — SI-7's
+  `Undecodable` arm keeps its instances on variable-width codecs' content
+  checks and on `Blob` kinds (`view_tests::a_wrong_width_row_cannot_reach_a_coded_table`
+  pins the refusal; `a_corrupt_row_read_through_the_view_is_si7_and_poisons_the_batch`
+  pins what remains reachable).
+- **No codec's bytes moved.** The row fixtures under `schemas/*.snap` are
+  unchanged (`block_height.snap` is byte-identical to `u64.snap`: the newtype
+  re-encoded nothing); `tables.snap` moved on its value column alone. The
+  digest is unchanged — `digest_v0` folds hashes, not encodings, and
+  `TypeName` never enters it. The file format is not: a file under version 2
+  is refused at the header seal, per (a).
+- **One trait, two stores; the rule stays with the digest.** `Canonical`,
+  `CodecError` and the three shapes are store-engine-generic and will move to
+  a redb-only shared crate when the wallet-side curve-tree backend
+  (`shekyl-curve-tree/src/store/redb_backend.rs`: `leaves`,
+  `owned_identities`, `leaf_meta`, `frozen_segments`, today `&[u8; N]`) adopts
+  them — as the first commit of *that* PR, with `shekyl-chain-store`
+  re-exporting so import paths move once. What does **not** travel: (b)'s
+  bump obligation, the snapshot gate and the `impl Canonical` source scan are
+  properties of the daemon store's implementations — the consensus
+  obligation lives where the digest is, and a general-purpose trait must not
+  look like the thing someone could later relax for the wallet's convenience.
 
 **Implementation pointers (DRS-E1 increment 2, 2026-09-14).**
 
@@ -2466,6 +2548,7 @@ the trigger (#507) and was missed there.
 | **2026-09-16** | **§7.7 minted — DRS's landing plan for `PDM-Q-F26`** (the finding is PR #765's, recorded there and in its own received-finding row here). Three pieces, three crates: `TxIdentity.pqc_auth_hash: Option<PqcAuthHash>` (rules crate; rides E6's `Tip` PR), `Transaction::pqc_auth_hash` + `hash_with_supplied_pqc_auth` (wire crate; owner the S-CHAIN-R lane, its own small PR, KAT against `hash()`), the sparse `txs_pqc_auth_hash` row from the identity (store; **S-CHAIN-W amendment A3** on S-CHAIN-R's layout commit, one bump). Hash shape (`varint(count) ‖ auths`, not the raw segment) and the `Option` predicate are F26's, inherited. E2 row carries the deadline as a precondition; F26's FOLLOWUPS row carries the falsifier — no second row here. |
 | **2026-09-16** | **DRS-E6 slice 1 (increment 2, census 4.A + 4.B) landing** ([`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md)): rule-26 pre-flight ruled in full; `ChainView::tip() -> Result<Option<Tip>, Fault>` (Q1: `Option`, the SCR-4 discriminator — absence with caller-actionable semantics earns a type; an empty chain has none); `trait Rule { const ROW }` with the SCW-18 compile-time row pin; CEN-A2, B1, B2, B5, B6, B7 landed with negative fixtures; CEN-A1/A4 `held_by_cxx(<test>)` — a deferral with cutover expiry whose entry names the C++ test that proves the holder refuses, printed as the subtraction `validator-enforced = E − H` beside a fixed `E`; B4 DEFERRED (E4 S-ARCH), A3 SUBSUMED-by-B4, A5 SUBSUMED-by-4.G, A6/A7 → wire-side invariant register (R8 arm B). Findings: A7's count bound is `2^28` in C++ and `10^6` in `shekyl-wire` (both undocumented; FOLLOWUPS); the harness's mock was one height off the store on the SCW-19 axis, caught by B5's fixture. G13 added to the crate contract on the pruning lane's F26 review: no recorded transaction body crosses `ChainView`. |
 | **2026-09-17** | **§7.7 items 1–2 LANDED on PR #768 (E6), item 2 there rather than on the S-CHAIN-R lane.** `PqcAuthHash` (`shekyl-types`); `TxIdentity::pqc_auth_hash: Option<PqcAuthHash>` from the one `validate`; `Transaction::pqc_auth_hash()`, `prunable_hash() -> PrunableHash`, `hash_with_supplied_components(Option<PqcAuthHash>, PrunableHash)` over one mixer (`hash_from_components`, `transaction/txid.rs`) whose arity is the `Option` after the prefix predicate `prefix_carries_pqc_component` — the oracle's `version >= 3 && !vin.empty() && vin[0] != gen` (`cryptonote_format_utils.cpp:1290`) — with auth presence a separate fact (`!pqc_auths.is_empty()` on a body, `pqc_auth.is_some()` when supplied); a Copilot review caught the `!vin.empty()` half missing, fixed with a KAT, and a second pass split the predicate from the presence boolean. Typed as §7.7 wrote it: `shekyl-wire` took the `shekyl-types` dependency; an earlier revision kept `[u8; 32]` at the wire boundary on a misreading of rule 17 and was reversed the same day — the raw surface there was `RAW_TYPE_NEWTYPE_MIGRATION.md` §6's unfinished work, not a boundary. KATs: skeleton → pinned oracle txid from both digests; serve-credit, coinbase, no-input `None`; bond-post `Some`. **Item 3 (the row) is the one piece still owed**, on S-CHAIN-R's layout commit. Section heading and items 1–2 annotated in place; E2 precondition updated. |
+| **2026-09-17** | **§11.1(f) ruled — every table's value is a named shape; `&[u8]` is not a value type** (S-CHAIN-R commit 2a, `SCHEMA_VERSION 2 → 3`). `codec::shape`: `Coded<V>` (rows are `V::encode`, `TypeName` = `V::NAME`), `Blob<K>` (chain-encoded bytes, kind-named), `Unshaped` (censused, no Rust writer, uninhabited row type — insert does not type-check). 15 tables typed, 33 `Unshaped`; scalars take the existing domain newtype (`BlockHeight`, `RuleSetId`, `PrunableHash`) or a named column codec (`BlockBurn`). Two guards with different reach, stated as such; decode path unmoved (`from_bytes` is infallible, so decoding in the engine would have made SI-7 a panic); `fixed_width` reported deliberately and recorded as the leaf-page layout change it is; no row fixture moved, digest unchanged, file format not. The wallet-side curve-tree backend (`leaves` / `owned_identities` / `leaf_meta` / `frozen_segments`, `&[u8; N]`) is the same finding on the other store and takes the same shapes in its own PR, which also moves `Canonical` to a shared crate — (b)'s bump obligation does not travel with it. |
 
 ---
 

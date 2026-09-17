@@ -18,7 +18,7 @@ use super::connect_fixtures::{candidate, facts, spend};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::view::BatchView;
 use super::*;
-use crate::codec::TotalBurnedCell;
+use crate::codec::{BlockBody, Canonical, Encoded, Raw, TotalBurnedCell};
 use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS, UNDO_LOG};
 
 fn judge<'b, 'id>(
@@ -148,8 +148,8 @@ fn a_journal_whose_top_is_not_the_tip_is_si6_and_halts_the_writer() {
     // Write around the journal: a third block-info row with no undo row.
     let planted: Result<(), TestErr> = store.write(|batch| {
         let mut info = batch.open_insert_table(BLOCK_INFO, PROBE_ROW)?;
-        let row = info.get(1)?.expect("block 1").value().to_vec();
-        info.insert(2, row.as_slice())?;
+        let row = info.get(1)?.expect("block 1").value().bytes().to_vec();
+        info.insert(2, Encoded::forged(&row))?;
         Ok(())
     });
     planted.expect("plant");
@@ -249,7 +249,7 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
     let around: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_upsert_table(BLOCKS)?
-            .upsert(1, [0xde, 0xad].as_slice())?;
+            .upsert(1, Raw::<BlockBody>::new(&[0xde, 0xad]))?;
         Ok(())
     });
     around.expect("the unjournaled overwrite lands");
@@ -285,7 +285,7 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
             .expect("t")
             .get(1)
             .expect("g")
-            .map(|g| g.value().to_vec()),
+            .map(|g| g.value().bytes().to_vec()),
         Some(vec![0xde, 0xad])
     );
     cleanup(&path);
@@ -315,7 +315,7 @@ fn a_recorded_tip_with_no_journal_row_is_si6_not_the_floor() {
             };
             batch
                 .open_insert_table(BLOCK_INFO, PROBE_ROW)?
-                .insert(h, crate::codec::Canonical::encode(&info).as_slice())?;
+                .insert(h, info.encoded().as_encoded())?;
         }
         Ok(())
     });

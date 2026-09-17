@@ -75,11 +75,12 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
-    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, PassedThroughFacts,
-    PropertyCell, TotalBurnedCell, TxIndex, TxOutputIndices,
+    stored_timelock, BlockBody, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx,
+    PassedThroughFacts, PropertyCell, Raw, TotalBurnedCell, TxIndex, TxOutputIndices,
+    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
-use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
+use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
     OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
@@ -306,7 +307,7 @@ impl<'id> WriteBatch<'_, 'id> {
             let height = last.as_ref().map_or(0, |(h, _)| h.value() + 1);
             self.journal().note_height(height);
             if let Some((_, info)) = last {
-                let info = BlockInfo::decode(info.value()).map_err(|cause| {
+                let info = info.value().decode().map_err(|cause| {
                     self.poison().arm(StoreInvariant::CellCorrupt {
                         key: "block_info",
                         fault: CellFault::Undecodable(cause),
@@ -367,15 +368,18 @@ impl<'id> WriteBatch<'_, 'id> {
         // ---- 3. [E3 hook] pending leaves → drain → grow → segment freeze --
         // ---- 4. root ---------------------------------------------------
         self.open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
-            .insert(height + 1, facts.root_after.value.encode().as_slice())?;
+            .insert(height + 1, facts.root_after.value.encoded().as_encoded())?;
 
         // ---- 5. [E4 hook] attestation witness --------------------------
         // ---- 6. block --------------------------------------------------
         let hash = BlockHash::from_bytes(*block.hash().as_bytes());
         self.open_insert_table(BLOCKS, StoreInvariant::TipMismatch)?
-            .insert(height, block.block().serialize().as_slice())?;
+            .insert(height, Raw::<BlockBody>::new(&block.block().serialize()))?;
         self.open_insert_table(BLOCK_HEIGHTS, StoreInvariant::TipMismatch)?
-            .insert(LmdbHashKey::from(hash), &height)?;
+            .insert(
+                LmdbHashKey::from(hash),
+                BlockHeight::from_raw(height).encoded().as_encoded(),
+            )?;
         let info = BlockInfo {
             timestamp: shekyl_types::Timestamp::from_raw(block.header().timestamp),
             coins_generated: facts.coins_generated.value,
@@ -389,11 +393,11 @@ impl<'id> WriteBatch<'_, 'id> {
             long_term_weight: facts.long_term_weight.value,
         };
         self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?
-            .insert(height, info.encode().as_slice())?;
+            .insert(height, info.encoded().as_encoded())?;
 
         // ---- 7. rule set (CEN-B3's belt) --------------------------------
         self.open_insert_table(HF_VERSIONS, StoreInvariant::TipMismatch)?
-            .insert(height, &in_force.to_raw())?;
+            .insert(height, in_force.encoded().as_encoded())?;
 
         // ---- 8. burn ---------------------------------------------------
         // Conditional as a whole, exactly as `blockchain.cpp:6148`
@@ -403,7 +407,7 @@ impl<'id> WriteBatch<'_, 'id> {
         let burned = facts.burned.value;
         if height > 0 && burned != AtomicUnits::ZERO {
             self.open_insert_table(BLOCK_BURN, StoreInvariant::TipMismatch)?
-                .insert(height, &burned.to_raw())?;
+                .insert(height, burned.encoded().as_encoded())?;
             let total = self
                 .get_property::<TotalBurnedCell>()?
                 .unwrap_or(0)
@@ -471,24 +475,33 @@ impl<'id> WriteBatch<'_, 'id> {
                     unlock_time: stored_timelock(tx.prefix.unlock_time),
                     height: BlockHeight::from_raw(height),
                 }
-                .encode()
-                .as_slice(),
+                .encoded()
+                .as_encoded(),
             )?;
         let segments = tx
             .write_segments()
             .expect("write_segments writes into Vecs; Vec writes are infallible");
-        pruned.insert(tx_id.to_raw(), segments.pruned.as_slice())?;
+        pruned.insert(
+            tx_id.to_raw(),
+            Raw::<TxPrunedSegment>::new(&segments.pruned),
+        )?;
         drop(pruned);
         if !segments.pqc_auths.is_empty() {
             self.open_insert_table(TXS_PQC_AUTHS, StoreInvariant::IdNotFresh)?
-                .insert(tx_id.to_raw(), segments.pqc_auths.as_slice())?;
+                .insert(
+                    tx_id.to_raw(),
+                    Raw::<TxPqcAuthsSegment>::new(&segments.pqc_auths),
+                )?;
         }
         self.open_insert_table(TXS_PRUNABLE, StoreInvariant::IdNotFresh)?
-            .insert(tx_id.to_raw(), segments.prunable.as_slice())?;
+            .insert(
+                tx_id.to_raw(),
+                Raw::<TxPrunableSegment>::new(&segments.prunable),
+            )?;
         self.open_insert_table(TXS_PRUNABLE_HASH, StoreInvariant::IdNotFresh)?
             .insert(
                 tx_id.to_raw(),
-                Hash32::from_bytes(*identity.prunable_hash.as_bytes()),
+                identity.prunable_hash.encoded().as_encoded(),
             )?;
 
         // Outputs: `output_txs` by global id, `output_amounts` member under
@@ -523,8 +536,8 @@ impl<'id> WriteBatch<'_, 'id> {
                     tx_hash,
                     local_index: OutputIndexInTx::from_raw(local_index),
                 }
-                .encode()
-                .as_slice(),
+                .encoded()
+                .as_encoded(),
             )?;
             let amount = if miner || emission { 0 } else { output.amount };
             // `amount_index` is the bucket's member count (LMDB's
@@ -561,7 +574,10 @@ impl<'id> WriteBatch<'_, 'id> {
         drop(output_txs);
         drop(amounts);
         self.open_insert_table(TX_OUTPUTS, StoreInvariant::IdNotFresh)?
-            .insert(tx_id.to_raw(), TxOutputIndices(indices).encode().as_slice())?;
+            .insert(
+                tx_id.to_raw(),
+                TxOutputIndices(indices).encoded().as_encoded(),
+            )?;
         Ok(rct)
     }
 }

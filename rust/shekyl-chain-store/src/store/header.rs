@@ -38,9 +38,9 @@ use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 
 use crate::apply_policy::ApplyPolicy;
 use crate::codec::{
-    ApplyPolicyCell, Canonical, CoverageGaps, CoverageGapsCell, PassedThroughFacts,
-    PassedThroughFactsCell, PropertyCell, SchemaVersionCell, SettlementEpochBlocks,
-    SettlementEpochBlocksCell, SCHEMA_VERSION,
+    ApplyPolicyCell, Blob, Canonical, CoverageGaps, CoverageGapsCell, PassedThroughFacts,
+    PassedThroughFactsCell, PropertyCell, PropertyCellBytes, Raw, SchemaVersionCell,
+    SettlementEpochBlocks, SettlementEpochBlocksCell, SCHEMA_VERSION,
 };
 use crate::provenance::Provenance;
 use crate::schema::PROPERTIES;
@@ -71,7 +71,7 @@ pub(super) fn seal(
 /// Read the three provenance components from an open `properties` table.
 /// Each is sealed at create, so absence is corruption, not "fresh".
 fn provenance_of(
-    table: &impl ReadableTable<&'static str, &'static [u8]>,
+    table: &impl ReadableTable<&'static str, Blob<PropertyCellBytes>>,
 ) -> Result<Provenance, StoreError> {
     let stubbed = get::<ApplyPolicyCell>(table)?.ok_or(absent::<ApplyPolicyCell>())?;
     let gaps = get::<CoverageGapsCell>(table)?.ok_or(absent::<CoverageGapsCell>())?;
@@ -185,18 +185,20 @@ pub(super) fn widen_passed_through(
 /// `Ok(None)` if absent; [`StoreInvariant::CellCorrupt`] if present but not an
 /// encoding of `C::Value`.
 pub(super) fn get<C: PropertyCell>(
-    table: &impl ReadableTable<&'static str, &'static [u8]>,
+    table: &impl ReadableTable<&'static str, Blob<PropertyCellBytes>>,
 ) -> Result<Option<C::Value>, StoreError> {
     let Some(guard) = table.get(C::KEY).map_err(EngineError::Storage)? else {
         return Ok(None);
     };
-    C::Value::decode(guard.value()).map(Some).map_err(|cause| {
-        StoreInvariant::CellCorrupt {
-            key: C::KEY,
-            fault: CellFault::Undecodable(cause),
-        }
-        .into()
-    })
+    C::Value::decode(guard.value().bytes())
+        .map(Some)
+        .map_err(|cause| {
+            StoreInvariant::CellCorrupt {
+                key: C::KEY,
+                fault: CellFault::Undecodable(cause),
+            }
+            .into()
+        })
 }
 
 /// Write cell `C` in `txn`. Header cells are store-owned registers;
@@ -209,7 +211,7 @@ pub(super) fn put<C: PropertyCell>(
 ) -> Result<(), StoreError> {
     let mut table = txn.open_table(PROPERTIES).map_err(EngineError::Table)?;
     table
-        .insert(C::KEY, value.encode().as_slice())
+        .insert(C::KEY, Raw::<PropertyCellBytes>::new(&value.encode()))
         .map(drop)
         .map_err(|e| EngineError::Storage(e).into())
 }

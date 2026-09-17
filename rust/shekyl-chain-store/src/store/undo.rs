@@ -50,8 +50,10 @@ use redb::{
     Value, WriteTransaction,
 };
 
-use crate::codec::{post_image, Canonical, CodecError, UndoEntry, UndoLog};
-use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
+use crate::codec::{
+    post_image, Blob, BlobKind, Canonical, CodecError, Coded, UndoEntry, UndoLog, Unshaped,
+};
+use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
 use crate::schema::{self, UNDO_LOG};
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
@@ -59,13 +61,14 @@ use super::write::Poison;
 
 /// A stored type whose bytes can be checked before `Value::from_bytes`.
 ///
-/// Implemented for exactly the key and value types `schema.rs` uses; a
-/// table declared over a type without this impl does not compile into
-/// `UNDO_TARGETS`, so a table the journal could not safely replay is a
-/// build error. The default is the fixed-width check, which is what every
-/// panicking `from_bytes` in the set (`u64`, `u8`, `Hash32`,
-/// `LmdbHashKey`, `()`) needs; `&str` adds UTF-8; the byte-string types
-/// accept anything.
+/// Implemented for exactly the key types `schema.rs` uses and the three
+/// value shapes (`codec::shape`); a table declared over a type without
+/// this impl does not compile into `UNDO_TARGETS`, so a table the journal
+/// could not safely replay is a build error. The default is the
+/// fixed-width check, which is what every panicking `from_bytes` among
+/// the keys (`u64`, `LmdbHashKey`, `()`) needs; `&str` adds UTF-8; the
+/// byte-string key accepts anything. A `Coded<V>` row is checked by
+/// `V::decode` itself — the same strict decode the read path runs.
 pub(crate) trait Restorable: Value {
     /// `Err(reason)` if `from_bytes` would panic or misread `bytes`.
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
@@ -76,13 +79,37 @@ pub(crate) trait Restorable: Value {
     }
 }
 
-impl Restorable for u8 {}
+// Key types (and the multimap member, which redb types as a key).
 impl Restorable for u64 {}
 impl Restorable for () {}
-impl Restorable for Hash32 {}
 impl Restorable for LmdbHashKey {}
 impl Restorable for &[u8] {}
 impl Restorable for U64PrefixBytes {}
+
+// The three value shapes (`codec::shape`). A codec row is well-formed iff
+// it decodes — strictly, under its own codec, which is a stronger check
+// than the width the default performs and the one the read path makes; a
+// blob row iff its kind says so; an unshaped table has no rows at all, so
+// a journal entry naming one is malformed by construction.
+impl<V: Canonical + 'static> Restorable for Coded<V> {
+    fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
+        V::decode(bytes)
+            .map(drop)
+            .map_err(|_| "row does not decode under the table's codec")
+    }
+}
+
+impl<K: BlobKind> Restorable for Blob<K> {
+    fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
+        K::well_formed(bytes)
+    }
+}
+
+impl Restorable for Unshaped {
+    fn well_formed(_bytes: &[u8]) -> Result<(), &'static str> {
+        Err("an unshaped table has no rows")
+    }
+}
 
 impl Restorable for &str {
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
@@ -346,7 +373,7 @@ impl<'txn> Recording<'txn> {
             }));
         }
         table
-            .insert(height, UndoLog(entries).encode().as_slice())
+            .insert(height, UndoLog(entries).encoded().as_encoded())
             .map_err(EngineError::Storage)?;
         // Only now: an open/read/insert failure above returns with
         // `sealed == false`, so a caller that swallows the error still
@@ -400,7 +427,10 @@ pub(super) fn replay(
         let Some(guard) = table.get(height).map_err(EngineError::Storage)? else {
             return Ok(Replayed::NoRow);
         };
-        UndoLog::decode(guard.value()).map_err(|cause| poison.arm(corrupt(cause)))?
+        guard
+            .value()
+            .decode()
+            .map_err(|cause| poison.arm(corrupt(cause)))?
     };
     for (index, entry) in row.0.iter().enumerate().rev() {
         let index = u32::try_from(index).expect("a decoded row has a u32 count");

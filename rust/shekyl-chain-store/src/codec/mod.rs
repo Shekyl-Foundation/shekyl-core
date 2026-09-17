@@ -40,6 +40,7 @@ mod primitives;
 mod property;
 mod schema_version;
 mod settlement_epoch;
+mod shape;
 mod undo;
 
 #[cfg(test)]
@@ -47,17 +48,21 @@ mod undo;
 mod snapshot_tests;
 
 pub(crate) use chain::stored_timelock;
-pub use chain::{BlockInfo, OutKey, OutTx, TxIndex, TxOutputIndices};
+pub use chain::{
+    BlockBody, BlockInfo, OutKey, OutTx, TxIndex, TxOutputIndices, TxPqcAuthsSegment,
+    TxPrunableSegment, TxPrunedSegment,
+};
 pub use evidence::{CoverageGaps, PassedThroughFacts, FACT_FIELDS};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;
 pub use property::{
     ApplyPolicyCell, CellScope, ChainState, CoverageGapsCell, EngineLocal, PassedThroughFactsCell,
-    PropertyCell, PropertyCellSpec, SchemaVersionCell, Scope, SettlementEpochBlocksCell,
-    TotalBurnedCell, PROPERTY_CELLS,
+    PropertyCell, PropertyCellBytes, PropertyCellSpec, SchemaVersionCell, Scope,
+    SettlementEpochBlocksCell, TotalBurnedCell, PROPERTY_CELLS,
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 pub use settlement_epoch::SettlementEpochBlocks;
+pub use shape::{Blob, BlobKind, Coded, Encoded, EncodedBuf, NoRow, Raw, Unshaped};
 pub use undo::{post_image, UndoEntry, UndoLog, POST_IMAGE_DST};
 
 /// A value with exactly one byte encoding.
@@ -92,6 +97,17 @@ pub trait Canonical: Sized {
         let mut out = Vec::with_capacity(Self::FIXED_WIDTH.unwrap_or(0));
         self.encode_into(&mut out);
         out
+    }
+
+    /// The canonical encoding as the row a `Coded<Self>` table inserts.
+    ///
+    /// The **only** constructor of an [`Encoded`] outside the `shape`
+    /// module (via [`EncodedBuf::as_encoded`]): a `Coded<V>` table cannot
+    /// be handed bytes that did not come out of `V::encode` (`shape`
+    /// module docs, *Two guards*).
+    #[must_use]
+    fn encoded(&self) -> EncodedBuf<Self> {
+        EncodedBuf::of(self)
     }
 }
 

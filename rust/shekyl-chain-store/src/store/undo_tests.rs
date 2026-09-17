@@ -13,11 +13,15 @@ use redb::ReadableTableMetadata;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::undo::Replayed;
 use super::*;
-use crate::codec::{post_image, Canonical, ProbeCell, PropertyCell, UndoEntry, UndoLog};
+use crate::codec::{
+    post_image, BlockBody, Canonical, Encoded, ProbeCell, PropertyCell, Raw, UndoEntry, UndoLog,
+};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
     ordinal_of, BLOCKS, BLOCK_HEIGHTS, HF_VERSIONS, OUTPUT_AMOUNTS, PROPERTIES, UNDO_LOG,
 };
+use shekyl_chain_rules::RuleSetId;
+use shekyl_types::BlockHeight;
 
 fn hash(byte: u8) -> LmdbHashKey {
     LmdbHashKey::from_bytes([byte; 32])
@@ -31,13 +35,14 @@ fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreE
     let recording = batch.record_undo(height);
     batch
         .open_insert_table(BLOCKS, PROBE_ROW)?
-        .insert(height, [0xb0, byte].as_slice())?;
-    batch
-        .open_insert_table(BLOCK_HEIGHTS, PROBE_ROW)?
-        .insert(hash(byte), &height)?;
+        .insert(height, Raw::<BlockBody>::new(&[0xb0, byte]))?;
+    batch.open_insert_table(BLOCK_HEIGHTS, PROBE_ROW)?.insert(
+        hash(byte),
+        BlockHeight::from_raw(height).encoded().as_encoded(),
+    )?;
     let mut hf = batch.open_upsert_table(HF_VERSIONS)?;
-    hf.upsert(0, &byte)?; // present after the first connect: prior restored
-    hf.upsert(height, &1)?; // absent: undo removes it
+    hf.upsert(0, RuleSetId::from_raw(byte).encoded().as_encoded())?; // present after the first connect: prior restored
+    hf.upsert(height, RuleSetId::from_raw(1).encoded().as_encoded())?; // absent: undo removes it
     drop(hf);
     batch
         .open_multimap_table(OUTPUT_AMOUNTS)?
@@ -50,7 +55,7 @@ fn undo_row(store: &ChainStore, height: u64) -> Option<UndoLog> {
     let snap = store.begin_read().expect("read");
     let table = snap.open_table(UNDO_LOG).ok()?;
     let guard = table.get(height).expect("get")?;
-    Some(UndoLog::decode(guard.value()).expect("row decodes"))
+    Some(guard.value().decode().expect("row decodes"))
 }
 
 #[test]
@@ -59,7 +64,9 @@ fn every_verb_journals_its_pre_image_in_write_order() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let seeded: Result<(), TestErr> = store.write(|batch| {
         // Unjournaled seed, so the `hf_versions[0]` upsert below has a prior.
-        batch.open_upsert_table(HF_VERSIONS)?.upsert(0, &7)?;
+        batch
+            .open_upsert_table(HF_VERSIONS)?
+            .upsert(0, RuleSetId::from_raw(7).encoded().as_encoded())?;
         Ok(())
     });
     seeded.expect("seed");
@@ -117,7 +124,9 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
     let path = tmp("undo-replay");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let seeded: Result<(), TestErr> = store.write(|batch| {
-        batch.open_upsert_table(HF_VERSIONS)?.upsert(0, &7)?;
+        batch
+            .open_upsert_table(HF_VERSIONS)?
+            .upsert(0, RuleSetId::from_raw(7).encoded().as_encoded())?;
         batch
             .open_multimap_table(OUTPUT_AMOUNTS)?
             .insert(0, [0xee; 9].as_slice())?;
@@ -142,8 +151,8 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
                 .expect("t")
                 .get(0)
                 .expect("g")
-                .map(|g| g.value()),
-            Some(1)
+                .map(|g| g.value().decode().expect("decodes")),
+            Some(RuleSetId::from_raw(1))
         );
         assert_eq!(snap.get_property::<ProbeCell>().expect("cell"), Some(101));
     }
@@ -166,8 +175,10 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
         .is_none());
     let hf = snap.open_table(HF_VERSIONS).expect("t");
     assert_eq!(
-        hf.get(0).expect("g").map(|g| g.value()),
-        Some(7),
+        hf.get(0)
+            .expect("g")
+            .map(|g| g.value().decode().expect("decodes")),
+        Some(RuleSetId::from_raw(7)),
         "prior restored"
     );
     assert!(hf.get(1).expect("g").is_none(), "absent-before key removed");
@@ -252,7 +263,7 @@ fn an_unsealed_recording_refuses_the_commit_and_lands_nothing() {
         let recording = batch.record_undo(4);
         batch
             .open_insert_table(BLOCKS, PROBE_ROW)?
-            .insert(4, [1u8].as_slice())?;
+            .insert(4, Raw::<BlockBody>::new(&[1u8]))?;
         drop(recording);
         Ok(())
     });
@@ -301,7 +312,7 @@ fn plant_row(store: &ChainStore, height: u64, bytes: &[u8]) {
     let out: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(UNDO_LOG, PROBE_ROW)?
-            .insert(height, bytes)?;
+            .insert(height, Encoded::forged(bytes))?;
         Ok(())
     });
     out.expect("planted");

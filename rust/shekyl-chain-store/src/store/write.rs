@@ -446,7 +446,7 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
             let prior = table
                 .get(C::KEY)
                 .map_err(EngineError::Storage)?
-                .map(|guard| Box::<[u8]>::from(guard.value()));
+                .map(|guard| Box::<[u8]>::from(guard.value().bytes()));
             Some(prior)
         } else {
             None

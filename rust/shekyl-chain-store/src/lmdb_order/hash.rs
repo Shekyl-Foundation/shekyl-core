@@ -44,10 +44,15 @@ use redb::{Key, TypeName, Value};
 
 /// A 32-byte hash in its natural stored form.
 ///
-/// Implements [`Value`] so it can sit in a table as a *value* (e.g.
-/// `txs_prunable_hash`). Does **not** implement [`Key`]: byte-lexicographic
-/// order on a hash is the order [`LmdbHashKey`] exists to reject, and making
-/// that unrepresentable as a table key is the point. Convert with
+/// A **layout** type, not a table type: it is the 32 bytes inside
+/// [`LmdbHashKey`] and inside the row codecs (`BlockInfo::hash`,
+/// `OutTx::tx_hash`), and it implements neither [`redb::Key`] nor
+/// [`redb::Value`]. Not `Key`, because byte-lexicographic order on a hash is
+/// the order [`LmdbHashKey`] exists to reject, and making that
+/// unrepresentable as a table key is the point. Not `Value`, since
+/// `DAEMON_REDB_STORE.md` §11.1(f): a hash *value* is the identity type under
+/// its codec (`Coded<PrunableHash>` for `txs_prunable_hash`), and a value
+/// carries no LMDB ordering for this module to supply. Convert with
 /// [`LmdbHashKey::from`] when the hash is the key.
 ///
 /// `Ord` is byte-lexicographic (memcmp). That is the stored-byte order, not
@@ -121,36 +126,6 @@ impl AsRef<[u8; 32]> for Hash32 {
 impl AsRef<[u8]> for Hash32 {
     fn as_ref(&self) -> &[u8] {
         &self.0
-    }
-}
-
-impl Value for Hash32 {
-    type SelfType<'a> = Hash32;
-    type AsBytes<'a> = [u8; 32];
-
-    fn fixed_width() -> Option<usize> {
-        Some(32)
-    }
-
-    fn from_bytes<'a>(data: &'a [u8]) -> Hash32
-    where
-        Self: 'a,
-    {
-        Hash32(
-            data.try_into()
-                .expect("Hash32 is 32 bytes (redb fixed_width)"),
-        )
-    }
-
-    fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> [u8; 32]
-    where
-        Self: 'b,
-    {
-        value.0
-    }
-
-    fn type_name() -> TypeName {
-        TypeName::new("shekyl::Hash32")
     }
 }
 
@@ -418,12 +393,10 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_through_the_value_impls_without_reordering() {
+    fn round_trips_through_the_key_impl_without_reordering() {
         let h = pairs(1)[0].0;
         let stored = Hash32::from_bytes(h);
-        let encoded = <Hash32 as Value>::as_bytes(&stored);
-        assert_eq!(encoded, h, "as_bytes must not re-order the stored form");
-        assert_eq!(<Hash32 as Value>::from_bytes(&encoded), stored);
+        assert_eq!(stored.to_bytes(), h, "the stored form is the bytes given");
 
         let key = LmdbHashKey::from_hash(stored);
         let key_encoded = <LmdbHashKey as Value>::as_bytes(&key);

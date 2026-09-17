@@ -50,7 +50,24 @@
 
 use crate::family_set::FamilySet;
 
-use super::{Canonical, CoverageGaps, PassedThroughFacts, SchemaVersion, SettlementEpochBlocks};
+use super::{
+    BlobKind, Canonical, CoverageGaps, PassedThroughFacts, SchemaVersion, SettlementEpochBlocks,
+};
+
+/// The value shape of the `properties` table (`shape` module docs).
+///
+/// `properties` is the one table whose codec is chosen **per key**: each
+/// [`PropertyCell`] names its own `Value: Canonical`, and the store decodes
+/// a cell under the codec its key selects (`store/header.rs`). No single
+/// `Coded<V>` can name that, so the table is a [`Blob`](super::Blob) of
+/// this kind, and `well_formed` checks what can be checked without the
+/// key: nothing. The per-cell strictness lives where the key is.
+#[derive(Debug)]
+pub struct PropertyCellBytes;
+
+impl BlobKind for PropertyCellBytes {
+    const NAME: &'static str = "property_cell";
+}
 
 /// Whose state a `properties` cell is, as a value (for the digest fold).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
