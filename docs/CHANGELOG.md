@@ -44,12 +44,16 @@
   `keccak256(varint(count) ‖ pqc_auths)`, `None` exactly when the txid is
   3-part (coinbase, serve-credit, gen-first), from the same `validate` as
   `hash` and `prunable_hash`. `shekyl-wire` gains
-  `Transaction::pqc_auth_hash()` and `hash_with_supplied_components(pqc_auth,
-  prunable)`: `hash()` and `hash_with_supplied_prunable` become special cases
-  of one construction with one arity predicate, so a node holding only a
-  skeleton (neither `pqc_auths` nor the prunable region) reconstructs its
-  4-part txid from the two stored digests — pinned to the oracle txid in
-  `pruned_tx_hash_parity`. **The component surface is typed:**
+  `Transaction::txid_parts()` (the txid and both store-row digests, each
+  region hashed once), `pqc_auth_hash()`, and
+  `hash_with_supplied_components(pqc_auth, prunable)`: `hash()` is
+  `txid_parts().hash` as bytes, and `hash_with_supplied_prunable` is the
+  one-supplied form of the same mixer. A node holding only a skeleton
+  (neither `pqc_auths` nor the prunable region) reconstructs its 4-part
+  txid from the two stored digests — pinned to the oracle txid in
+  `pruned_tx_hash_parity`. The mixer's arity is the `Option` after a
+  prefix filter; a supplied `Some` on a 3-part prefix is dropped, not
+  mixed. **The component surface is typed:**
   `prunable_hash()` now returns `PrunableHash` and both supplied forms take
   `PrunableHash` / `Option<PqcAuthHash>` (`shekyl-wire` depends on
   `shekyl-types`), so the two digests a store hands back cannot be swapped

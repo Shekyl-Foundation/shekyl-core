@@ -374,8 +374,9 @@ pub trait ChainView<'id> {
     fn block_at(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlock>, Self::Fault>;
     /// CEN-I12 (the membership anchor is the tree state at `ref_height`).
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
-    /// CEN-A2 (`hash`); the connecting height of B1/B5 (and 4.C, CEN-F5 later)
-    /// via `Tip::connecting_height`. `None` is the empty chain — slice 1, Q1.
+    /// CEN-A2 (`hash`); B5 (and 4.C, CEN-F5 later) via `Tip::connecting_height`.
+    /// B1 does not read the tip: the rule set is an input. `None` is the empty
+    /// chain — slice 1, Q1.
     fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
 }
 
@@ -430,9 +431,11 @@ impl ValidatedBlock {
 
 In increment 1, `validate` derives `hash` and every `TxHash` (`Block::hash`,
 `Transaction::hash`) and pairs them. It does **not** check the supplied bodies
-against `block.transaction_hashes` — that is a 4.G rule and lands with slice 7;
-empty coverage says so. Identity derivation is not a rule (it is CEN-B6's
-definition applied), so it is not a row and does not touch coverage.
+against `block.transaction_hashes` — that is a 4.G rule and lands with slice 7.
+CEN-B6 is the block-identity **definition**: `ValidatedBlock::derive` obtains
+the hash from `B6::identity`, which records the row in coverage there — not a
+`BlockRule` with a check that always passes (B7 is the no-op *policy* that
+still runs through `rules::run`).
 
 The `Block` is kept **whole** rather than decomposed into header + miner tx
 (the round-2 sketch): the header's `transaction_hashes` are part of what
@@ -451,6 +454,11 @@ the fourth component of a spend's txid and the value the store records as
 `txs_prunable_hash`; for a coinbase it is `keccak256("")` — what the C++ store
 writes — not the txid's null-hash substitute. Q4 holds: the store records it and
 never derives it.
+**UPDATE 2026-09-17 (slice 1 / `PDM-Q-F26` items 1–2):** the identity is
+`TxIdentity { hash, pqc_auth_hash: Option<PqcAuthHash>, prunable_hash }`,
+populated from `Transaction::txid_parts()` — one construction, each
+discardable region hashed once. The `txs_pqc_auth_hash` store row (item 3)
+is still S-CHAIN-R amendment A3.
 
 ### 4.5 `Coverage<R>` (`coverage.rs`); `ChainValid<'id, V>`, `InvalidBlock`, `Locus` (`verdict.rs`)
 
@@ -540,10 +548,12 @@ rule, locus }))` at the site that judged — the row is named where the decision
 is made. `validate` calls `tx_form` then `tx_against` for the miner tx and each
 listed tx, re-homing a `Locus::Tx { slot: Lone }` / `Locus::Input { slot: Lone,
 .. }` to the real `TxSlot`, unions the coverages, and mints the `ChainValid`.
-Block-level rules run first, in census order, each through `rules::run`
-(the only writer of block coverage — inserts `R::ROW` iff `R` passed); the
-first refusal is the verdict. Slice 1 landed B1/B2/B7 there; `tx_form` /
-`tx_against` are still empty and return `RuleCoverage::EMPTY` until 4.H/4.I.
+Block-level **predicates** run first, in census order, each through
+`rules::run` (inserts `R::ROW` iff `R` passed). Definition rows record at
+their derivation site: CEN-B6 at `B6::identity`, called from
+`ValidatedBlock::derive`. Slice 1's predicates are A2, B1, B2, B5, B7;
+B6 is the identity function. `tx_form` / `tx_against` are still empty and
+return `RuleCoverage::EMPTY` until 4.H/4.I.
 
 ---
 
@@ -893,13 +903,15 @@ second lines behind the belt and the type shapes, not gates.
 ### 8.5 `validate` / `tx_form` / `tx_against` (`validate_tests.rs`)
 
 - a well-formed candidate: `Ok(Ok(v))`, `v.coverage()` is exactly the landed
-  block rows (`{B1, B2, B7}` after PR #762 — `covers_landed` holds,
-  `is_complete_for` does not), `v.rule_set_id() == GENESIS.id()`. *Records-was:*
-  increment 1 asserted empty coverage here.
+  block rows (`{A2, B1, B2, B5, B6, B7}` after the `tip()` PR — `covers_landed`
+  holds, `is_complete_for` does not), `v.rule_set_id() == GENESIS.id()`.
+  *Records-was:* increment 1 asserted empty coverage; #762 `{B1, B2, B7}`.
 - payload: `block().hash() == BlockHash::from_bytes(candidate.block.hash())`;
-  `transactions()[i].0 == TxIdentity { hash, prunable_hash }` of `tx`; `miner_tx().0`
-  likewise, with the coinbase's `prunable_hash` pinned to `keccak256("")` (bites: a
-  pairing that hashes the wrong body, drops the miner tx, or conflates the two digests).
+  `transactions()[i].0 == TxIdentity { hash, pqc_auth_hash, prunable_hash }`
+  of `tx` (from `Transaction::txid_parts`); `miner_tx().0` likewise, with the
+  coinbase's `prunable_hash` pinned to `keccak256("")` and `pqc_auth_hash`
+  `None` (bites: a pairing that hashes the wrong body, drops the miner tx,
+  conflates the two digests, or labels a 3-part txid with a third component).
 - `tx_form` / `tx_against` before 4.H/4.I land: `Ok(EMPTY)` / `Ok(Ok(EMPTY))`.
 - a mock whose `Fault` is a unit type and whose `block_at` faults: `validate`
   returns `Err(fault)`, not a verdict (bites: a fault swallowed into a pass or a
@@ -1162,15 +1174,16 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `tip()` PR (slice 1, 2026-09-17)**, items 1 **and** 2 of
   `DAEMON_REDB_STORE.md` §7.7's plan for `PDM-Q-F26` (PR #765): the
   `shekyl-types` `hash32!` sibling `PqcAuthHash`; the field on
-  `TxIdentity`, populated by the one `validate` beside `hash` and
-  `prunable_hash`; and, in `shekyl-wire`, `Transaction::pqc_auth_hash()`
+  `TxIdentity`, populated from `Transaction::txid_parts()` (one
+  construction: each discardable region hashed once, the txid mixed from
+  those values); and, in `shekyl-wire`, `Transaction::pqc_auth_hash()`
   (`None` ⇔ the txid is 3-part) plus the two-supplied form
   `hash_with_supplied_components(pqc_auth, prunable)`, of which `hash()`
-  and `hash_with_supplied_prunable` are now the special cases — one body
-  (`hash_from_components`) and **one arity predicate**
-  (`has_pqc_component`), so no two paths can hash one transaction two ways
-  and the skeleton (`PDM-Q-F28`: neither region held) reconstructs its
-  4-part txid with the arity read off the *supplied* component. KAT'd
+  is `txid_parts().hash` as bytes and `hash_with_supplied_prunable` is the
+  one-supplied mixer. The mixer's arity is the `Option` after a prefix
+  filter (`has_pqc_component`), so a supplied `Some` on a 3-part prefix is
+  dropped, not mixed, and the skeleton (`PDM-Q-F28`: neither region held)
+  reconstructs its 4-part txid from the two stored digests. KAT'd
   against the pinned oracle txid on the full body **and** the skeleton
   (`pruned_tx_hash_parity`), and on the 3-part forms — coinbase,
   serve-credit (`None`; the countersignature rides the vin), a coinbase

@@ -1,12 +1,12 @@
 # `shekyl-chain-rules` slice 1 — census 4.A + 4.B (DRS-E6 increment 2)
 
-**Status:** OPEN — **implementation LANDING across three PRs** (2026-09-16):
+**Status:** OPEN — **implementation LANDING** (2026-09-16):
 #762 (`Rule`/`BlockRule`, SCW-18 pin, B1/B2/B7 — **merged**), #767
-(`held_by_cxx`, A1/A4 — **in flight**) and #768 (`ChainView::tip()`, A2, B5,
-B6 — **in flight, stacked on #767**). Not landed until both are on `dev`.
-Round 1 = pre-flight written against `dev` @ `3560b80c2`; ruled in full the
-same day (Q1 §2, Q2–Q6 §8). **Closes when #767 and the `tip()` PR are both
-on `dev`; the later of the two `git mv`s this document to `docs/completed/`**
+(`held_by_cxx`, A1/A4 — **merged**, `origin/dev` `4bc378d68`) and #768
+(`ChainView::tip()`, A2, B5, B6 — **in flight**). Not landed until #768 is
+on `dev`. Round 1 = pre-flight written against `dev` @ `3560b80c2`; ruled in
+full the same day (Q1 §2, Q2–Q6 §8). **Closes when the `tip()` PR is on
+`dev`; that PR `git mv`s this document to `docs/completed/`**
 (rule 95 archive-or-contract). Record at close: `consensus: implemented 6 /
 validator-enforced 151   held-by-cxx 2   enforced 153   ratified 126 /
 enforced 153`. §9 points at
@@ -96,10 +96,10 @@ distinguishable from data — and `Option` is what makes both unrepresentable.
 The genesis arm is still written explicitly in every rule that reads the tip
 (A2, B5 here), and `MockChain::tip()` already has this shape.
 
-- **`height`** — justified by B1 (the rule set in force is `rules_at(height)`)
-  and B5 (`root_at(connecting height)`); later by 4.C and CEN-F5 (the
-  caller-derived height operand the census names against `txin_gen.height`
-  spoofing, census 4.F notes).
+- **`height`** — justified by B5 (`root_at(connecting height)`); later by 4.C
+  and CEN-F5 (the caller-derived height operand the census names against
+  `txin_gen.height` spoofing, census 4.F notes). B1 does not read it: the
+  rule set in force is an input the caller chose with `rules_at(height)`.
 - **`hash`** — justified by CEN-A2: the fail-closed re-check
   `bl.prev_id != top_hash` (`blockchain.cpp:5423`). The store already has
   this as **belt** SI-2 `TipMismatch` (`connect.rs:303`); without the rule, a
@@ -294,7 +294,8 @@ pub(crate) trait BlockRule: Rule {
     fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
         -> Result<Verdict<()>, V::Fault>;
 }
-/// The only writer of block-level coverage: inserts `R::ROW` iff `R` passed.
+/// Predicate rows: inserts `R::ROW` iff `R` passed. Definition rows (B6)
+/// record at the derivation site `implemented(...)` names.
 pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(cx, view, coverage) -> Result<Verdict<()>, V::Fault>;
 
 // census.rs — the entry names a TYPE; the macro emits both pins:
