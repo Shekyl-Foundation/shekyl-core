@@ -32,7 +32,7 @@ use core::fmt;
 use shekyl_address::Network;
 use shekyl_types::BlockHeight;
 
-use crate::census::CenRow;
+use crate::census::{CenRow, RowStatus};
 
 /// Identifies the consensus rule set a `ChainValid` was checked under.
 ///
@@ -115,9 +115,17 @@ impl RuleSet {
         self.id
     }
 
-    /// The consensus rows this rule set enforces, in census order.
+    /// The consensus rows this rule set holds a block to **and the
+    /// validator can evaluate**, in census order: rows held by the C++
+    /// ingest driver ([`RowStatus::HeldByCxx`]) are not the validator's and
+    /// are excluded, so `Coverage::is_complete_for` measures
+    /// `enforced − held` — the census denominator itself never moves for a
+    /// hold (the gate prints both figures side by side).
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
-        self.enforced.iter().copied()
+        self.enforced
+            .iter()
+            .copied()
+            .filter(|row| row.status() != RowStatus::HeldByCxx)
     }
 
     /// A rule set that admits `header_major_version`, for the version-rule
@@ -153,7 +161,11 @@ impl fmt::Debug for RuleSet {
             .field("id", &self.id)
             .field(
                 "enforced",
-                &format_args!("{} of {} rows", self.enforced.len(), CenRow::ALL.len()),
+                &format_args!(
+                    "{} of {} rows (validator-enforced; held rows excluded)",
+                    self.enforced().count(),
+                    CenRow::ALL.len()
+                ),
             )
             .field("header_major_version", &self.header_major_version)
             .finish()

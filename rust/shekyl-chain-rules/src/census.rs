@@ -55,13 +55,27 @@ pub enum Flag {
     Policy,
 }
 
-/// Whether a rule function exists for a row in this crate.
+/// How a row is held: not yet, by a rule type in this crate, or by the C++
+/// ingest driver until cutover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowStatus {
     /// No rule yet; the row is counted in the denominator only.
     Pending,
-    /// A rule function is registered and compile-pinned.
+    /// A rule type is registered and compile-pinned (G9 + SCW-18).
     Implemented,
+    /// Acceptance topology the C++ ingest driver decides — where a block
+    /// *goes* (`ALREADY_EXISTS`, `ORPHANED`), not whether it is valid — and
+    /// so not a predicate `validate` can evaluate (`CHAIN_RULES_SLICE_1.md`
+    /// §4, Q2). The registry entry cites the C++ **test that proves the
+    /// holder refuses** (`held_by_cxx("<file>", "<test>")`); the gate asserts
+    /// the file exists and contains the test, never merely that a token
+    /// appears (PWD-B10). A **deferral with a known expiry**: the cited file
+    /// leaves the tree at cutover, the gate goes red, and the row is
+    /// re-classified then — held rows cannot outlive the C++ silently.
+    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced), so
+    /// completeness is measured over what the validator can hold; the gate
+    /// prints the subtraction beside the fixed denominator.
+    HeldByCxx,
 }
 
 mod sealed {
@@ -89,14 +103,18 @@ pub trait Row:
     fn index(self) -> u8;
 }
 
-/// `RowStatus` from an entry's status token. A status other than `pending`
-/// or `implemented(path)` is a macro error at the entry.
+/// `RowStatus` from an entry's status token. A status other than `pending`,
+/// `implemented(path)` or `held_by_cxx("file", "test")` is a macro error at
+/// the entry.
 macro_rules! census_status {
     (pending) => {
         $crate::census::RowStatus::Pending
     };
     (implemented($path:path)) => {
         $crate::census::RowStatus::Implemented
+    };
+    (held_by_cxx($file:literal, $test:literal)) => {
+        $crate::census::RowStatus::HeldByCxx
     };
 }
 
@@ -114,6 +132,9 @@ macro_rules! census_status {
 /// the registry-generic face of `Rule`, so the one macro serves both enums.
 macro_rules! census_pin {
     (pending, $name:ident, $var:ident) => {};
+    // Nothing the compiler can pin: the holder is a C++ test. The gate
+    // asserts the cited file exists and contains the test (rule 47).
+    (held_by_cxx($file:literal, $test:literal), $name:ident, $var:ident) => {};
     (implemented($path:path), $name:ident, $var:ident) => {
         #[allow(unused_imports)]
         use $path as _;
@@ -130,7 +151,8 @@ macro_rules! census_pin {
 
 /// Defines one census registry enum: `pub enum Name: Flag { Var status, … }`.
 ///
-/// Per entry, `status` is `pending` or `implemented(rust::path::to::rule)`.
+/// Per entry, `status` is `pending`, `implemented(rust::path::to::RuleType)`
+/// or `held_by_cxx("tests/…​.cpp", "gen_test_name")`.
 /// Entries must be listed in census §4 order restricted to the flag; the gate
 /// asserts this so `index()` is census-derived. The variant name is the census
 /// id without its `CEN-` prefix (`CEN-D1b` → `D1b`).
@@ -140,7 +162,7 @@ macro_rules! census_rows {
         pub enum $name:ident : $flag:ident {
             $(
                 $(#[$vdoc:meta])*
-                $var:ident $status:tt $(($path:path))?,
+                $var:ident $status:ident $( ( $($arg:tt)* ) )?,
             )+
         }
     ) => {
@@ -173,7 +195,7 @@ macro_rules! census_rows {
             #[must_use]
             pub const fn status(self) -> RowStatus {
                 match self {
-                    $(Self::$var => census_status!($status $(($path))?),)+
+                    $(Self::$var => census_status!($status $( ( $($arg)* ) )?),)+
                 }
             }
 
@@ -203,7 +225,7 @@ macro_rules! census_rows {
         // G9 + SCW-18: every `implemented(path)` names a type that exists
         // and whose `ROW` is this entry's variant (`census_pin!`). Two
         // registries both expand here; `as _` does not collide.
-        $( census_pin!($status $(($path))?, $name, $var); )+
+        $( census_pin!($status $( ( $($arg)* ) )?, $name, $var); )+
     };
 }
 
@@ -218,12 +240,22 @@ census_rows! {
     /// bucket ≠ 3, in census order. Sections follow the census subsystems;
     /// the gate holds the bijection.
     pub enum CenRow: Consensus {
-        // 4.A Acceptance topology
-        A1 pending,
+        // 4.A Acceptance topology (`CHAIN_RULES_SLICE_1.md` §3–§4)
+        // A1/A4: where a block goes, not whether it is valid — the C++
+        // ingest driver's until cutover; each cites the core test that
+        // observes the outcome byte.
+        A1 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known_is_already_exists"),
         A2 pending,
+        // A3: subsumed by B4's empty-witness arm — never its own rule; the
+        // row closes when B4 lands (Q3).
         A3 pending,
-        A4 pending,
+        A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_invalid_prev_id"),
+        // A5: subsumed by the 4.G weight rule (slice 7); the pre-parse fast
+        // path is the driver's DoS choice, not a row.
         A5 pending,
+        // A6/A7: wire invariants (R8 arm B, holder `shekyl_wire::Block::
+        // from_bytes`); re-homed to the wire-side invariant register when
+        // the wire-format port mints it. A7's *value* is arm C (F2).
         A6 pending,
         A7 pending,
         // 4.B Block header: version, attestation, curve-tree root

@@ -11,7 +11,7 @@ use shekyl_address::Network;
 use shekyl_types::BlockHeight;
 
 use super::{well_formed, AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
-use crate::census::CenRow;
+use crate::census::{CenRow, RowStatus};
 
 const NETWORKS: [Network; 3] = [Network::Mainnet, Network::Testnet, Network::Stagenet];
 
@@ -119,17 +119,25 @@ fn genesis_id_is_one_and_round_trips() {
     assert_eq!(RuleSetId::from_raw(1), RuleSetId::GENESIS);
 }
 
-/// Bites: a genesis rule set that omits a consensus row, or lists one out of
-/// census order — the denominator coverage is measured against.
+/// Bites: a genesis rule set that omits a validator-enforced consensus row,
+/// lists one out of census order, or lets a `held_by_cxx` row into the
+/// denominator coverage is measured against.
 #[test]
-fn genesis_enforces_the_whole_census_in_order() {
+fn genesis_enforces_the_census_minus_held_rows_in_order() {
     let genesis = RuleSet::GENESIS;
     let enforced: Vec<CenRow> = genesis.enforced().collect();
-    assert_eq!(enforced, CenRow::ALL);
+    let expected: Vec<CenRow> = CenRow::ALL
+        .iter()
+        .copied()
+        .filter(|row| row.status() != RowStatus::HeldByCxx)
+        .collect();
+    assert_eq!(enforced, expected);
+    assert_eq!(enforced.len(), CenRow::ALL.len() - 2, "A1 and A4 are held");
     assert_eq!(
         format!("{genesis:?}"),
         format!(
-            "RuleSet {{ id: RuleSetId(1), enforced: {n} of {n} rows, header_major_version: 1 }}",
+            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (validator-enforced; held rows excluded), header_major_version: 1 }}",
+            v = CenRow::ALL.len() - 2,
             n = CenRow::ALL.len()
         )
     );
