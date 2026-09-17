@@ -19,22 +19,32 @@ use super::{Ct, Input, Transaction, CT_TYPE_FCMP, CT_TYPE_NULL, TX_VERSION};
 use crate::hash::hash_concat;
 use crate::varint::write_varint;
 
-/// The consensus txid and the two store-row digests it was built over.
+/// This **body's** consensus txid and the two store-row digests computed
+/// from it.
 ///
 /// One construction: [`Transaction::txid_parts`] hashes each discardable
 /// region once and mixes the txid from those values, so the three fields
 /// cannot disagree. [`Transaction::hash`] is the `hash` field as bytes
 /// (`RAW_TYPE_NEWTYPE_MIGRATION.md` §6 still owns that return type).
-/// `TxIdentity::of` is this value, not three independent accessors.
+/// `TxIdentity::of` is this value, not three independent accessors — and
+/// `validate` only calls it on the candidate as received, which still
+/// holds the regions it is judged against.
+///
+/// `pqc_auth_hash: None` means **this body** hashes 3-part, not "the
+/// accepted txid of some other body is 3-part." A skeleton of a 4-part
+/// spend (auths cleared) hashes 3-part as a body; the accepted txid is
+/// [`Transaction::hash_with_supplied_components`] with the stored digest.
+/// A second `Transaction` type for "regions discarded" would leak store
+/// retention into the wire crate; the two functions are the two contracts.
 ///
 /// [`Self::prunable_hash`] is the store row (`keccak256` of the region,
 /// `keccak256("")` when empty) — not always the txid's prunable *component*,
 /// which is the null hash for a coinbase or a body whose region is absent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TxidParts {
-    /// The consensus transaction hash.
+    /// This body's consensus transaction hash.
     pub hash: TxHash,
-    /// The txid's third component, or `None` for a 3-part txid.
+    /// This body's third component, or `None` when this body hashes 3-part.
     pub pqc_auth_hash: Option<PqcAuthHash>,
     /// `keccak256` of the prunable byte region (the store row).
     pub prunable_hash: PrunableHash,
@@ -54,12 +64,15 @@ impl Transaction {
         self.txid_parts().hash.to_bytes()
     }
 
-    /// The consensus txid and the two store-row digests, hashed once each.
+    /// This body's consensus txid and the two store-row digests, hashed
+    /// once each.
     ///
     /// [`Self::hash`], [`Self::pqc_auth_hash`] and [`Self::prunable_hash`]
     /// are the fields of this value. Call this when more than one is needed
     /// — `TxIdentity::of` — so a spend's ~16 KB of discardable bytes is not
-    /// serialised and Keccak'd twice.
+    /// serialised and Keccak'd twice. Do not call it on a skeleton expecting
+    /// the accepted 4-part txid: that is
+    /// [`Self::hash_with_supplied_components`].
     #[must_use]
     pub fn txid_parts(&self) -> TxidParts {
         let pqc_auth_hash = self.pqc_auth_hash();
@@ -102,13 +115,14 @@ impl Transaction {
     /// component and is **3-part** (`PDM-Q-F26`; `DAEMON_REDB_STORE.md` §7.7
     /// item 2).
     ///
-    /// `None` is a fact about the *txid*, not about which bytes a node holds:
-    /// the coinbase (`Null` ct), the serve-credit form (empty `pqc_auths`,
-    /// the countersignature rides the vin) and the malformed gen-first and
-    /// no-input shapes all hash 3-part, so no component exists to be stored,
-    /// discarded or supplied. The arity is decided by
+    /// `None` means **this body** hashes 3-part: the coinbase (`Null` ct),
+    /// the serve-credit form (empty `pqc_auths`), the malformed gen-first and
+    /// no-input shapes, **and** a skeleton whose auths have been cleared.
+    /// That last case is not "the accepted txid is 3-part" — the accepted
+    /// identity of a discarded-auths spend is reconstructed with
+    /// [`Self::hash_with_supplied_components`]. The arity of this body is
     /// [`Self::prefix_carries_pqc_component`] together with whether auths are
-    /// present — never per input arm: a bond-post carries its identity
+    /// present on it — never per input arm: a bond-post carries its identity
     /// signature in a tx-level `pqc_auths` slot and so is 4-part like any
     /// spend; an emission takes whatever arity its auth count yields.
     ///
