@@ -194,11 +194,8 @@ tautological consensus check is a defect whether or not this round makes it
 load-bearing. Two dispositions, one of which is a consensus tightening and is
 therefore **Rick's**:
 
-- **(i) Make it fire:** populate `ctx.settlement_epoch` from
-  `shekyl_archival_settlement_epoch_at_height(current_height)`
-  (`shekyl_ffi.h:2594`, exists) — one C++ line — so *"the record's epoch is the
-  including block's epoch"* becomes an explicit enforced rule.
-- **(ii) Delete it** and let the row-5 `h_close` gate be the single expression.
+- **(i) Make it fire — RULED as the *rule*; C++ *site* SUPERSEDED 2026-09-16 (Q15).** Records-was of 2026-09-13: populate `ctx.settlement_epoch` from `shekyl_archival_settlement_epoch_at_height(current_height)` (`shekyl_ffi.h:2594`) — one C++ line. **Do not build that line.** The rule lands as a `shekyl-chain-rules` `CenRow` whose operand is the validated issuing `h`; the tautology never ports to C++.
+- **(ii) Delete it** and let the row-5 `h_close` gate be the single expression. **REJECTED 2026-09-13** (the quote below).
 
 > **RULED 2026-09-13 — (i).** Rick: *"Deleting leaves the rule implicit in an
 > `h_close` comparison, which is a bound on **when**, not a statement that the
@@ -227,12 +224,14 @@ therefore **Rick's**:
 >   validated issuing block `h` (next bullet) and the same record is admitted
 >   again when `epoch(h) = E`, so (i)-alone is a one-block behaviour change
 >   the cutover reverses — build them together, or accept the interim flip
->   knowingly (Q14); (c) the test for (i) is an **isolated verifier test**
->   (`shekyl-ffi/src/archival_ffi/tests.rs` already drives
->   `shekyl_archival_verify_serve_credit_vin` directly) with
->   `ctx.settlement_epoch` derived from height and a header that disagrees —
->   not a full-path future-epoch vector, which the seal gate would refuse
->   first and mis-attribute. The cutover that deletes the beacon gates
+>   knowingly (Q14); (c) **SUPERSEDED 2026-09-16 (Q15):** the 2026-09-13
+>   coverage plan was an isolated FFI test
+>   (`shekyl-ffi/src/archival_ffi/tests.rs` driving
+>   `shekyl_archival_verify_serve_credit_vin`). That test cannot cover the
+>   new row. The falsifier is a `shekyl-chain-rules` `CenRow` whose
+>   negative fixture refuses `settlement_epoch ≠ settlement_epoch_at_height(h)`
+>   with typed `InvalidBlock` — not a full-path future-epoch vector, which
+>   the seal gate would refuse first and mis-attribute. The cutover that deletes the beacon gates
 >   (§2.1 item 1) removes both pre-FFI bounds; after it, `EPOCH_MISMATCH` is
 >   the *only* rule relating `E` to a height, which is why it must exist.
 > - **What is ruled is the site, not the value's provenance.** Under R-A the
@@ -254,8 +253,8 @@ therefore **Rick's**:
 > consensus tightening on the live LMDB daemon for a path being replaced,
 > on the shorter-lived of the two implementations. In chain-rules it is a
 > positive row with a negative fixture; the tautology never ports. The
-> isolated verifier test still covers the check
-> once the row exists; the full-path vectors (stale → deadline, future →
+> FOLLOWUPS falsifier is that `CenRow` fixture. The FFI isolated test is
+> **not** coverage of the new row. The full-path vectors (stale → deadline, future →
 > seal) die with the beacon gates they live on. FOLLOWUPS row carries it.
 
 ### 1.1 What is true about `W₂`, and why it makes the round larger
@@ -544,7 +543,8 @@ disagrees with the enumeration the correction is marked.
    five changes land as `CEN-` rows in `shekyl-chain-rules` (§8), not in
    that function:
    (a) parse `h`; validate it is a real block with `h_incl − W₂ ≤ h < h_incl`
-   (`h_incl = current_height`); (b) **replace** the `h_close` gate (`:5186`)
+   (`h_incl` is the candidate's height = `ChainView` tip + 1 on connect;
+   `h = tip` is in range); (b) **replace** the `h_close` gate (`:5186`)
    with the per-challenge deadline — the upper bound in (a) *is* the deadline;
    (c) `SO-D9` (i) as `settlement_epoch_at_height(h) == E`; (d) membership:
    `(P, s) ∈ assignment(h)` — the urn must answer for the last `W₂` blocks,
@@ -730,7 +730,8 @@ resubmission headroom. Partition leaks nothing.
 
 **Q10 RULED 2026-09-16 (§7.7): accept loss.** Memory-only
 `ZeroizeOnDrop` ring; persist-encrypted **REJECTED**. File promptly;
-evict on inclusion; log dropped in-flight on restart. Named fallback:
+evict on inclusion. Orderly shutdown logs remaining depth then drops;
+unclean restart logs that in-flight count is **unknown**. Named fallback:
 re-derivable `tx_key` from a long-lived node secret and `h`, not persist.
 
 **Q13 RULED 2026-09-16 (§7.8): one `CEN-` row, five fixtures.** Exactly
@@ -1445,11 +1446,17 @@ obligations.
    resubmission and slow fetches, not a schedule.
 3. **Evict on inclusion.** A seed whose batch is confirmed is dead;
    drop it. Ring depth then tracks real latency instead of `W₂`.
-4. **Make the loss observable.** On restart, log the count of dropped
-   in-flight obligations. Not an error — it is a capability limit —
-   but an operator who restarts hourly should be able to see that they
-   are a poor witness, because nothing else in the system will tell
-   them.
+4. **Make the loss observable without inventing a count the process
+   no longer has.** Orderly shutdown: log the exact remaining ring
+   depth, then drop. Unclean restart (crash / OOM): the ring is gone;
+   log that this node's in-flight witness obligations are lost and
+   the count is **unknown**. Do **not** persist a cardinality beside
+   the datadir — that is a new at-rest surface for a log line, and a
+   crash still loses it unless it is fsynced on every fill, which is
+   persistence by another name (refused with this ruling). A generic
+   potential-loss warning on every unclean start is the signal. Not an
+   error — it is a capability limit — but an operator who restarts
+   hourly should be able to see that they are a poor witness.
 
 **β is common-mode, and restart-correlated loss is the worst shape.**
 `ARCHIVAL_CHALLENGE_MECHANISM.md` §7 item 7 (`:1150–1155`) requires
@@ -1719,13 +1726,13 @@ gates until `shekyl-chain-rules` is the live validator.
 | **How `issued` is obtained** | From the urn (§7), never from records (`SO-D1`: the forcing case has zero records). |
 | **How `passes` is obtained** | The S-ARCH `archival_serve_credit_pass_count(P,s,E)` read — a per-pair-epoch count over the `PC-D4` widened key; **complete at `h_close(E) + W₂` and therefore at the slash pass** (`10,000 ≥ 500`). Same count, same table, Rust store. |
 | **Where the emission gather goes** | Same hook, same pass (§5): `gather_archival_emission_epoch_snapshot` is called from the Rust slash pass after the writer, not from epoch-close. The invariant-2 joint pin moves with it. |
-| **Admission changes (new `CEN-` rows in `shekyl-chain-rules`, not `blockchain.cpp`)** | Parse `h` (new kept field); refuse `h ≥ tip` or `h_incl − h > CHALLENGE_RESPONSE_BLOCKS`; `block_hash(h−1)` from `ChainView` for the leaf index; `settlement_epoch_at_height(h)` is `SO-D9` (i); `is_assigned(h, P, s)` against the in-process cache; witness check takes `h`'s coinbase witness tag bytes + the pruned witness pk/sig + the record preimage. Dedup: `archival_serve_credit_present(P,s,E,h)` exact-get replaces the `pass_count > 0` probe. The fire-height path is deleted; `ERR_CREDIT_DEADLINE` rebinds to the `W₂` window. Each refusal is a typed `InvalidBlock { rule: CenRow, … }` (CHAIN_RULES G3). Negative fixture per row (CHAIN_RULES §8). |
-| **Witness key (Q8 RULED; Q13 RULED; Q12 RULED)** | `shekyl-crypto-pq`: `derive_witness_keypair(combined_ss)` from coinbase output 0, existing `HKDF_SALT_OUTPUT_DERIVE`, new labels `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519`, **info without `output_index`** (registry mechanism 2, review duty). Commitment written under **`TX_EXTRA` tag `0x0C`** by the Rust miner-tx constructor; `combined_ss` never crosses the FFI. Fresh `tx_key` per block is a **derivation requirement** with a same-address / distinct-`tx_key` fixture (§7.5 P2), not a KEM inheritance. **Q12 RULED (§7.9):** the 32-B value is a bare `cSHAKE256` of the canonical witness pk under `shekyl/archival-witness-key-v1` (mechanism 1; TSV row + census pin `30 → 31` at Slice C; **not** `PL-D3`'s `pqc_key_scalar`). Independent of F5: hiding is theater because the reveal publishes `pk`; the join identifies `h`'s coinbase, not a miner identity. Reopen if `h` is removed in order to conceal the issuing block. Content rule (Q13 RULED, §7.8): one `CEN-` row, five fixtures, genesis-unconditional; dedicated parser must not copy `0x0B`'s empty-set; length is `WITNESS_COMMITMENT_BYTES` = 32; modelled on #745's `check_pqc_leaf_entries` — no FFI adapter. Q13 does not re-open optionality. **SUPERSEDED: extend `0x0B`; sequenced behind F5.** Node-side (Q10 RULED): a memory-only `ZeroizeOnDrop` ring of 32-B seeds keyed by height, Rust-owned; capacity `W₂` = 500, depth tracks fill-to-inclusion; evict on inclusion; file promptly; on restart log the dropped in-flight count (capability limit, not error). Persist-encrypted **REJECTED**. Re-derivable `tx_key` is the named fallback, not built. |
+| **Admission changes (new `CEN-` rows in `shekyl-chain-rules`, not `blockchain.cpp`)** | Parse `h` (new kept field); admit only if `h_incl − CHALLENGE_RESPONSE_BLOCKS ≤ h < h_incl` **and** `ChainView` has `block_at(h)`. `h_incl` is the candidate's height (`tip + 1` on connect), so a response to the immediately preceding block (`h = tip`) is in range. **`h ≥ tip` as a refusal is SUPERSEDED** — it would reject that valid case. `block_hash(h−1)` from `ChainView` for the leaf index; `settlement_epoch_at_height(h)` is `SO-D9` (i); `is_assigned(h, P, s)` against the in-process cache; witness check takes `h`'s coinbase witness tag bytes + the pruned witness pk/sig + the record preimage. Dedup: `archival_serve_credit_present(P,s,E,h)` exact-get replaces the `pass_count > 0` probe. The fire-height path is deleted; `ERR_CREDIT_DEADLINE` rebinds to the `W₂` window. Each refusal is a typed `InvalidBlock { rule: CenRow, … }` (CHAIN_RULES G3). Negative fixture per row (CHAIN_RULES §8). |
+| **Witness key (Q8 RULED; Q13 RULED; Q12 RULED)** | `shekyl-crypto-pq`: `derive_witness_keypair(combined_ss)` from coinbase output 0, existing `HKDF_SALT_OUTPUT_DERIVE`, new labels `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519`, **info without `output_index`** (registry mechanism 2, review duty). Commitment written under **`TX_EXTRA` tag `0x0C`** by the Rust miner-tx constructor; `combined_ss` never crosses the FFI. Fresh `tx_key` per block is a **derivation requirement** with a same-address / distinct-`tx_key` fixture (§7.5 P2), not a KEM inheritance. **Q12 RULED (§7.9):** the 32-B value is a bare `cSHAKE256` of the canonical witness pk under `shekyl/archival-witness-key-v1` (mechanism 1; TSV row + census pin `30 → 31` at Slice C; **not** `PL-D3`'s `pqc_key_scalar`). Independent of F5: hiding is theater because the reveal publishes `pk`; the join identifies `h`'s coinbase, not a miner identity. Reopen if `h` is removed in order to conceal the issuing block. Content rule (Q13 RULED, §7.8): one `CEN-` row, five fixtures, genesis-unconditional; dedicated parser must not copy `0x0B`'s empty-set; length is `WITNESS_COMMITMENT_BYTES` = 32; modelled on #745's `check_pqc_leaf_entries` — no FFI adapter. Q13 does not re-open optionality. **SUPERSEDED: extend `0x0B`; sequenced behind F5.** Node-side (Q10 RULED): a memory-only `ZeroizeOnDrop` ring of 32-B seeds keyed by height, Rust-owned; capacity `W₂` = 500, depth tracks fill-to-inclusion; evict on inclusion; file promptly. Orderly shutdown logs remaining depth then drops; unclean restart logs that in-flight count is **unknown** (capability limit, not error). Persist-encrypted **REJECTED**. A persisted cardinality beside the datadir is also refused (new at-rest surface for a log line; a crash still loses it unless fsynced on every fill). Re-derivable `tx_key` is the named fallback, not built. |
 | **Batching (Q9 RULED)** | Merkle-root batching: one pk + one signature over a Merkle root of the record set, each record carrying its inclusion path (⌈log₂ n⌉ hashes). Fail-whole refused — a corrupt member is excluded, the rest verify. Dedup stays `(P,s,E,h)` per record; a batch is a carrier, not a unit of credit. Admission of a record proves inclusion in a set that witness authored, not completeness. Class is `serve_credit_only` (fee-less by construction). Each carrier still obeys `TX_WEIGHT_LIMIT` = 149,400; at maturity 97 draws split 39 / 39 / 19 (depth 6, 192 B path; ≈ 365 KB/block; 39:1 amortization; +10.8 KB witness vs a single batch). Inter-batch blast radius is 39; `W₂` is resubmission headroom. Partition leaks nothing. Cap-raise (~11 KB/block ≈ 2.9 GB/year) and unpaid inclusion are a fee-and-weight round, not this row. |
 | **Cost** | One epoch replay per settled epoch if the cache is not resident (1.09 s here; Pi-4 owed), inside the slash pass, off the admission path. Admission: `O(1)` ring lookups + one hybrid verify per **Merkle-batch** (unbatched would be 97 ML-DSA-65 verifies per block — itself a reason to batch). Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
 | **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
-| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused with `EPOCH_MISMATCH`. Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 12 (§7.5 P2):** uniqueness — two miner-tx constructions to the same payout address with independently generated `tx_key`s yield distinct `0x0C` commitments; identical `(combined_ss)` yields the same witness key. Red: a constructor that reuses `tx_key`, or drops it from the KEM IKM, makes the two commitments equal. **New 13 (§7.6):** Merkle-batch — a carrier whose Merkle root is signed, with one member's record bytes mutated, admits the other members and refuses the mutant; a fail-whole signature over the concatenated set is the red edit (one mutant fails the honest members). **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is restarted before inclusion, logs the dropped in-flight count and does not answer those heights; persist-across-restart is the red edit (a key file beside the data directory). **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 16 (§7.9):** named-hash — `0x0C` bytes equal `cSHAKE256(canonical witness_pk, custom=shekyl/archival-witness-key-v1)`. Red: a hiding Pedersen opening (theater: pk is still published), or a different customization. |
-| **`CEN-L8` promotion path** | The census row's settlement clause names *"an unwired writer"* and puts settlement at epoch close; `SO-D7` puts it in the slash pass, and §5 now puts the emission gather there too. Path: (1) ruling lands here → (2) census row re-worded: two hooks per boundary stay (close + settlement), but the close hook no longer gathers emission → (3) writer + gather call sites land with the gates → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. |
+| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 12 (§7.5 P2):** uniqueness — two miner-tx constructions to the same payout address with independently generated `tx_key`s yield distinct `0x0C` commitments; identical `(combined_ss)` yields the same witness key. Red: a constructor that reuses `tx_key`, or drops it from the KEM IKM, makes the two commitments equal. **New 13 (§7.6):** Merkle-batch — a carrier whose Merkle root is signed, with one member's record bytes mutated, admits the other members and refuses the mutant; a fail-whole signature over the concatenated set is the red edit (one mutant fails the honest members). **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 16 (§7.9):** named-hash — `0x0C` bytes equal `cSHAKE256(canonical witness_pk, custom=shekyl/archival-witness-key-v1)`. Red: a hiding Pedersen opening (theater: pk is still published), or a different customization. |
+| **`CEN-L8` promotion path** | Census already homes settlement in the slash pass (`CONSENSUS_RULE_CENSUS.md` CEN-L8, corrected 2026-09-12 against `SO-D7`); the production caller is ruled-blocked on `SO-D8`, not missing-from-the-row. Path: (1) this ruling lands → (2) emission gather joins the slash pass (`SO-D8c`; invariant-2 joint pin) — the close hook stays for budget freeze, not gather → (3) writer + gather call sites land with the gates on S-ARCH → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. **SUPERSEDED:** "re-word the census row off epoch-close" as a live task — `SO-D7` already did that. |
 | **What changes at the same cutover** | **Added:** `SO-D9` (i) at `h`; membership gate; deadline re-bound to `W₂`; witness authentication; `h` on the kept wire; new coinbase tag; dedup exact-get on `(P,s,E,h)`; Merkle-root batching of serve-credit records (Q9) — one pk + one sig over a Merkle root per carrier, inclusion path per record; fail-whole refused; memory-only witness-seed ring (Q10; persist-encrypted REJECTED); `0x0C` content rule (Q13; one CEN row, five fixtures, genesis-unconditional); bare-hash witness commitment (Q12; `cSHAKE256` under `shekyl/archival-witness-key-v1`). **Deleted:** `challenge_fire_height` path, `ERR_FIRE_NOT_REACHED`, `ctx.block_hash_at_seal`; `archival_baseline_observed_at_epoch` as the interim `issued`; the `h_close` bound as a deadline. **Moved:** emission gather to the slash pass. **Superseded in-line (rule 23):** `PC-D2`; the `constants.rs:59` doc string becomes true and stays. |
 
 **Sequencing against DRS — SUPERSEDED 2026-09-16 (Q15), amended same
@@ -1910,8 +1917,12 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
     `ZeroizeOnDrop` ring of 32-B seeds keyed by height; persist-encrypted
     **REJECTED** (daemon has no passphrase; rule 36 §3 is a wallet
     envelope; a key file beside the data protects nothing with disk
-    access). File promptly; evict on inclusion; log dropped in-flight
-    count on restart (capability limit, not error). Ring *capacity* is
+    access). File promptly; evict on inclusion. Orderly shutdown logs
+    remaining depth then drops; unclean restart (crash / OOM) logs that
+    in-flight count is **unknown** — the ring is gone. Do not persist a
+    cardinality beside the datadir (new at-rest surface for a log line;
+    a crash still loses it unless fsynced on every fill, which is
+    persist by another name). Ring *capacity* is
     `CHALLENGE_RESPONSE_BLOCKS` = 500; steady-state depth tracks
     fill-to-inclusion. Restart loss is β, and β is common-mode
     (`ARCHIVAL_CHALLENGE_MECHANISM.md` §7 item 7). Named fallback if a
@@ -1919,7 +1930,9 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
     routinely dragging toward `W₂`: re-derivable coinbase `tx_key` from
     a long-lived node secret and `h` — **not persist**; consensus-adjacent,
     held, not built. Construction §7.7. **SUPERSEDED:** persist-encrypted
-    as the restart policy; "500 live seeds" as expected ring depth.
+    as the restart policy; "500 live seeds" as expected ring depth;
+    "log the exact dropped count on every restart" (unclean restart
+    cannot).
 11. **RESOLVED 2026-09-14 — (F5)** You opened it as the `PL-` round the
     same day; `PL-D1` is the defect, `PL-D3` the fix, ratified and landing in
     #745; `PL-D4` at V4. #745 merging is discharged (§8, "Sequencing against `PL-D3`").
@@ -1974,19 +1987,18 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
     parser; unread 600-byte extra ceiling; a literal `32` as the length
     clause. *Superseded: "through the same FFI adapter."*
 14. **RULED 2026-09-16 by Q15 — (`SO-D9` (i) sequencing, surfaced by review of #747).** With the
-    two pre-FFI bounds in place (§1, "Ordering"), (i) built alone changes the
-    verdict on exactly one block per epoch: a record for `E` in block
-    `(E+1)·N` goes from admitted to refused, and R-B's `epoch(h)` operand
-    admits it again. Rule one of: (a) land (i) **with** the R-B cutover, as
-    the same site (`:5304`) with its final operand — no interim flip, and the
-    isolated verifier test covers the check either way; or (b) land (i) now
-    on `current_height`, accept the one-block refusal as the interim rule
-    (it is the stricter reading), and re-target the operand in the cutover.
-    Proposal: **(a)** — the check's reason to exist is the post-cutover path,
-    and (b) writes a consensus change that the next PR reverses.
+    two pre-FFI bounds in place (§1, "Ordering"), (i) built alone on the
+    LMDB path would change the verdict on exactly one block per epoch: a
+    record for `E` in block `(E+1)·N` goes from admitted to refused, and
+    R-B's `epoch(h)` operand admits it again. *SUPERSEDED alternatives
+    (records-was of the pre-Q15 choice): (a) land (i) **with** the R-B
+    cutover as the same C++ site (`:5304`) with its final operand, with
+    an isolated FFI verifier test covering the check; or (b) land (i)
+    now on `current_height` and re-target the operand in the cutover.*
     **RULED 2026-09-16 by Q15 as (a), stronger:** not merely "with the
     cutover" but *in* `shekyl-chain-rules`, never as a C++ one-liner on
-    the LMDB path. The one-block flip does not ship. **Prohibition:** do
+    the LMDB path. The one-block flip does not ship. The isolated FFI
+    test is **not** coverage of the new row. **Prohibition:** do
     not repair the tautology in `blockchain.cpp`. Making it fire is a
     consensus tightening on the live LMDB daemon for a path being
     replaced, on the shorter-lived implementation. In chain-rules it is
