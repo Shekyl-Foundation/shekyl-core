@@ -9,8 +9,9 @@ amended same day against `dev@5fde3b1ce` — §6.3); `SO-D8e` (forward
 urn + `W₂` ring, no checkpoints, one set live, digest carve-out — §7.2).
 **Still to be ruled:** Q9's set-commitment bytes (§7.6.1, PROPOSED —
 one customization + KAT; carrier semantics RULED (B), §7.6.2). **Q4
-RESOLVED 2026-09-17** (λ read from the constant at the urn's entry
-points; λ doors `pub(crate)` — `fix/so-q4-pin-lambda`). Slice C is not
+RESOLVED 2026-09-17** (one production constructor reads the constant;
+`assign_epoch` feeds it; explicit λ is `#[cfg(test)]` —
+`fix/so-q4-pin-lambda`). Slice C is not
 authorized. `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold on the
 writer's call site **stands**. No admission code, no consensus code, and
 no writer call site were written for this round (Slices A and B of the
@@ -1013,14 +1014,19 @@ read an unreachable check as dead:
   the layers**, as §7.4 pin 4's refusal or SI-7 `CellCorrupt { fault:
   Absent }` on the view read, and escalates to the Fault at the slash
   pass (§6.3 item 3);
-- **λ divergence between the two doors** (Q4: `assign_epoch` reads the
-  constant; `ChallengeUrn::new` is `pub` and re-exported) — the pair set
-  is identical so layer 2 passes; layer 1 fires on replay. **Q4 was
-  therefore a precondition for `SO-D8d` having complete coverage**, not
-  only for correctness in general — **RESOLVED 2026-09-17**: both doors
-  closed (`pub(crate)`), so this class is now unreachable outside the
-  crate's own tests; retained as the named falsifier for the in-crate
-  door.
+- **λ divergence between the two doors** — **RESOLVED 2026-09-17**
+  (`fix/so-q4-pin-lambda`): `assign_epoch` feeds `ChallengeUrn::new`;
+  that constructor reads `CHALLENGES_PER_PAIR_PER_EPOCH`; the
+  explicit-λ constructor is `#[cfg(test)]`. A production module in this
+  crate cannot pass a coverage that disagrees with the settlement
+  threshold. *Records-was:* Q4 named two independent `pub` λ parameters
+  (`assign_epoch`, `ChallengeUrn::new`); a λ that differed between them
+  left the pair set identical so layer 2 passed and only layer 1 fired
+  on replay — a coverage precondition for `SO-D8d`, not only
+  correctness. The first landing made the doors `pub(crate)`, which
+  still left every non-test module in the crate able to pass a
+  divergent λ. Retained as the named falsifier for a `cfg(test)`
+  constructor compiled into production.
 
 ### 6.6 REJECTED: an on-chain digest of `D` at `h_open(E)`
 
@@ -1272,12 +1278,15 @@ through the slash deadline is the recommendation" (Q7).*
   No snapshot table. Body lands with Slice C. Freeze point is `h_open(E)`,
   not the seal (Pin 5, already ruled).
 - **`λ` — RESOLVED 2026-09-17 (Q4, `fix/so-q4-pin-lambda`).**
-  `ChallengeUrn::new(pairs, epoch_blocks)` and `assign_epoch(pairs,
-  prev_hashes)` take no λ and read `CHALLENGES_PER_PAIR_PER_EPOCH`; the
-  λ-taking doors (`with_lambda`, `assign_epoch_with_lambda`) are
-  `pub(crate)` for the module's tests. `EpochAssignmentCache::open` inherits
-  the same shape. The 972,000 maturity figure is now derived from the
-  constant in the measurement test, not typed. Pinned by
+  `ChallengeUrn::new(pairs, epoch_blocks)` reads
+  `CHALLENGES_PER_PAIR_PER_EPOCH` and takes no λ. `assign_epoch(pairs,
+  prev_hashes)` feeds that constructor — one production site, so the
+  one-shot cannot diverge from the streaming urn.
+  `EpochAssignmentCache::open` inherits the same shape. The explicit-λ
+  constructor (`with_lambda`) is `#[cfg(test)]` (`pub(crate)` under
+  test) for λ ∈ {0, 1, 2, `u32::MAX`}; there is no
+  `assign_epoch_with_lambda`. The 972,000 maturity figure is derived
+  from the constant in the measurement test, not typed. Pinned by
   `production_doors_read_the_constant_and_take_no_lambda`. Reopen a `pub`
   sim-facing door only for a named out-of-crate consumer (none exists; the
   sim uses the constant analytically). *SUPERSEDED: "a bare `u32` parameter
@@ -2368,21 +2377,24 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
    at the witness, not at draw. Construction, drop-stability finding,
    pins, empty-`D` and slash-vs-drop: §7.4. Body lands with Slice C.
 4. **RESOLVED 2026-09-17 (`fix/so-q4-pin-lambda`).** `ChallengeUrn::new`
-   and `assign_epoch` take no λ and read `CHALLENGES_PER_PAIR_PER_EPOCH`;
-   `with_lambda` / `assign_epoch_with_lambda` are `pub(crate)` (tests need
-   λ ∈ {0, 1, 2, `u32::MAX`}). Both doors closed; pinned by test. The
+   reads `CHALLENGES_PER_PAIR_PER_EPOCH` and takes no λ; `assign_epoch`
+   feeds that constructor. The explicit-λ constructor is `#[cfg(test)]`
+   (tests need λ ∈ {0, 1, 2, `u32::MAX`}). One production site; pinned
+   by `production_doors_read_the_constant_and_take_no_lambda`. The
    mechanism doc's §9.5 pin 3 ("λ_target is a parameter … supplied by the
    caller") is SUPERSEDED in place. *Records-was:* `lambda_target` was a
-   bare `u32` at `challenge_assignment.rs:152` / `:264`; §7.2's `open()`
-   drops the parameter and reads the constant.
-   **Two doors** (2026-09-16): `assign_epoch` reads the constant, but
-   `ChallengeUrn::new` is `pub` and re-exported, so the strong form is a
-   `pub(crate)` constructor or a documented sim-facing second door — say
-   "the epoch entry point reads the constant", not "λ cannot be passed
-   wrong". **`SO-D8d` makes Q4 a coverage precondition, not only a
-   correctness one** (§6.5): a λ that differs between admission and
-   settlement leaves the pair set identical, so layer 2 passes; only
-   layer 1 fires, and only on replay. Both doors are closed ahead of
+   bare `u32` at `challenge_assignment.rs:152` / `:264`; two independent
+   `pub` doors; the first landing made them `pub(crate)`, which still
+   left every non-test module in the crate able to pass a divergent λ.
+   §7.2's `open()` drops the parameter and reads the constant.
+   *Records-was (2026-09-16, "Two doors"):* `assign_epoch` reads the
+   constant, but `ChallengeUrn::new` is `pub` and re-exported, so the
+   strong form is a `pub(crate)` constructor or a documented sim-facing
+   second door — say "the epoch entry point reads the constant", not "λ
+   cannot be passed wrong". **`SO-D8d` makes Q4 a coverage precondition,
+   not only a correctness one** (§6.5): a λ that differs between
+   admission and settlement leaves the pair set identical, so layer 2
+   passes; only layer 1 fires, and only on replay. Closed ahead of
    Slice C; landed in its own PR after #759 (rule 19: Rust gates, not
    docs gates).
 5. **ANSWERED, then RULED.** `ERR_CREDIT_DEADLINE`'s disposition changed with

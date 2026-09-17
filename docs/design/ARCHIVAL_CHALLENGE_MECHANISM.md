@@ -1380,10 +1380,10 @@ than repealing it:
      input; 3 is the 2-of-3 ruling's value, supplied by the caller."*
      Two `pub` doors taking λ were what let the urn and the settlement
      threshold be given different values silently. `ChallengeUrn::new`
-     and `assign_epoch` now read `CHALLENGES_PER_PAIR_PER_EPOCH = 3`
-     (landed 2026-08-11) and take no λ; the λ-taking constructors are
-     `pub(crate)` for the module's tests. The constant is
-     const-asserted against `SERVE_THRESHOLD_PASSES` in
+     now reads `CHALLENGES_PER_PAIR_PER_EPOCH = 3` (landed 2026-08-11)
+     and takes no λ; `assign_epoch` feeds that constructor. The
+     explicit-λ constructor is `#[cfg(test)]` for the module's tests.
+     The constant is const-asserted against `SERVE_THRESHOLD_PASSES` in
      `attestation.rs`, so 2-of-3 stays one decision. The legacy
      constant retires with its consumers (§4.4).
 2. **The persona key hierarchy** — cold bond root separate; hot serving

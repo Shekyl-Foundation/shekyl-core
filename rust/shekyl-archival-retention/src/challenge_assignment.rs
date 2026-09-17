@@ -43,17 +43,21 @@
 //!   attempt_le)`, first 8 bytes as a little-endian `u64`, rejection-
 //!   sampled into `[0, remaining)` with the modulo-bias zone; `attempt`
 //!   increments on rejection. Never a general-purpose PRNG.
-//! - **λ_target is read from the constant at the entry points (Q4,
-//!   2026-09-17):** [`ChallengeUrn::new`] and [`assign_epoch`] take no λ
-//!   and read [`crate::CHALLENGES_PER_PAIR_PER_EPOCH`], so the urn and
-//!   the settlement threshold (`attestation.rs` const-asserts the pair)
-//!   cannot disagree. The λ-taking doors — `ChallengeUrn::with_lambda`,
-//!   `assign_epoch_with_lambda` — are `pub(crate)`, for this module's
-//!   tests, which need λ ∈ {0, 1, 2, `u32::MAX`} to exercise the
-//!   rejections and the small-wave shapes. *SUPERSEDED (§9.5 pin 3 as
-//!   landed 2026-08-11): "λ_target is a parameter … supplied by the
-//!   caller" — two `pub` doors were exactly what let the urn and the
-//!   threshold drift apart silently.* Reopen to a `pub` door only for a
+//! - **λ_target is read from the constant at the one production
+//!   constructor (Q4, 2026-09-17):** [`ChallengeUrn::new`] takes no λ
+//!   and reads [`crate::CHALLENGES_PER_PAIR_PER_EPOCH`]; [`assign_epoch`]
+//!   feeds that constructor, so the one-shot cannot carry a different
+//!   coverage than the streaming urn. The settlement threshold
+//!   (`attestation.rs` const-asserts the pair) therefore cannot disagree
+//!   with either public door. The explicit-λ constructor
+//!   (`ChallengeUrn::with_lambda`) is `#[cfg(test)]` — compiled out of
+//!   production — for this module's tests, which need λ ∈ {0, 1, 2,
+//!   `u32::MAX`} to exercise the rejections and the small-wave shapes.
+//!   *SUPERSEDED (§9.5 pin 3 as landed 2026-08-11): "λ_target is a
+//!   parameter … supplied by the caller" — two `pub` doors were exactly
+//!   what let the urn and the threshold drift apart silently. A later
+//!   `pub(crate)` pair still left every non-test module in this crate
+//!   able to pass a divergent λ.* Reopen to a `pub` door only for a
 //!   named out-of-crate consumer (e.g. an economics-sim sweep over λ),
 //!   documented as sim-facing at the signature; today none exists.
 //!
@@ -101,8 +105,8 @@ pub enum AssignmentError {
     /// epoch with no work. Unreachable from [`ChallengeUrn::new`] and
     /// [`assign_epoch`]: they read [`CHALLENGES_PER_PAIR_PER_EPOCH`], which
     /// `attestation.rs` const-asserts at or above `SERVE_THRESHOLD_PASSES`.
-    /// Reachable only through the crate-private λ door, where the tests pin
-    /// it.
+    /// Reachable only through the `#[cfg(test)]` constructor, where the
+    /// tests pin it.
     #[error("λ_target must be positive")]
     ZeroLambda,
     /// `epoch_blocks = 0` has no block to schedule into.
@@ -161,19 +165,28 @@ pub struct ChallengeUrn {
 
 impl ChallengeUrn {
     /// Build the urn for one epoch at the ruled coverage,
-    /// [`CHALLENGES_PER_PAIR_PER_EPOCH`] — the production entry point takes
-    /// no λ (Q4). `pairs` must be strictly increasing by `(p_id, shard_id)`
-    /// — the canonical order every node derives identically. An empty set
-    /// is a valid epoch with no draws.
+    /// [`CHALLENGES_PER_PAIR_PER_EPOCH`] — the sole production constructor
+    /// takes no λ (Q4). `pairs` must be strictly increasing by
+    /// `(p_id, shard_id)` — the canonical order every node derives
+    /// identically. An empty set is a valid epoch with no draws.
     pub fn new(pairs: Vec<DrawablePair>, epoch_blocks: u64) -> Result<Self, AssignmentError> {
-        Self::with_lambda(pairs, CHALLENGES_PER_PAIR_PER_EPOCH, epoch_blocks)
+        Self::construct(pairs, CHALLENGES_PER_PAIR_PER_EPOCH, epoch_blocks)
     }
 
-    /// The λ-taking constructor. Crate-private by decision (Q4): a `pub`
-    /// door here is how the urn and the settlement threshold were able to
-    /// disagree. Tests use it for the rejection arms and the small-wave
-    /// shapes; production goes through [`ChallengeUrn::new`].
+    /// Explicit-λ constructor. Compiled only under `cfg(test)`: a
+    /// production module cannot pass a coverage that disagrees with the
+    /// settlement threshold. Tests use it for the rejection arms and the
+    /// small-wave shapes; production goes through [`ChallengeUrn::new`].
+    #[cfg(test)]
     pub(crate) fn with_lambda(
+        pairs: Vec<DrawablePair>,
+        lambda_target: u32,
+        epoch_blocks: u64,
+    ) -> Result<Self, AssignmentError> {
+        Self::construct(pairs, lambda_target, epoch_blocks)
+    }
+
+    fn construct(
         pairs: Vec<DrawablePair>,
         lambda_target: u32,
         epoch_blocks: u64,
@@ -281,8 +294,8 @@ impl ChallengeUrn {
 }
 
 /// Assign every block of an epoch in one shot — the pure, desync-free form
-/// of a full-epoch recompute, at the ruled coverage
-/// [`CHALLENGES_PER_PAIR_PER_EPOCH`] (Q4: no λ parameter).
+/// of a full-epoch recompute. Feeds [`ChallengeUrn::new`], so coverage is
+/// [`CHALLENGES_PER_PAIR_PER_EPOCH`] with no second λ site (Q4).
 /// `prev_hashes.len()` is the epoch length; entry `h` is the predecessor
 /// hash for epoch-relative block `h` (i.e. `block_hash` of the block at
 /// absolute height one below that block). An empty slice is
@@ -291,28 +304,21 @@ pub fn assign_epoch(
     pairs: Vec<DrawablePair>,
     prev_hashes: &[[u8; 32]],
 ) -> Result<Vec<Vec<DrawablePair>>, AssignmentError> {
-    assign_epoch_with_lambda(pairs, CHALLENGES_PER_PAIR_PER_EPOCH, prev_hashes)
+    let urn = ChallengeUrn::new(pairs, prev_hashes.len() as u64)?;
+    Ok(feed_epoch(urn, prev_hashes))
 }
 
-/// [`assign_epoch`] with an explicit λ. Crate-private by decision (Q4);
-/// see [`ChallengeUrn::with_lambda`].
-pub(crate) fn assign_epoch_with_lambda(
-    pairs: Vec<DrawablePair>,
-    lambda_target: u32,
-    prev_hashes: &[[u8; 32]],
-) -> Result<Vec<Vec<DrawablePair>>, AssignmentError> {
-    let epoch_blocks = prev_hashes.len() as u64;
-    let mut urn = ChallengeUrn::with_lambda(pairs, lambda_target, epoch_blocks)?;
-    let mut out = Vec::with_capacity(prev_hashes.len());
-    for prev in prev_hashes {
-        // Sequential feed cannot fail mid-epoch after a successful `new`
-        // for this hash count — EpochComplete only after E feeds.
-        out.push(
+/// Sequential feed of every predecessor hash into an already-constructed
+/// urn. After a successful constructor call for this hash count,
+/// `EpochComplete` is unreachable until the last hash is consumed.
+fn feed_epoch(mut urn: ChallengeUrn, prev_hashes: &[[u8; 32]]) -> Vec<Vec<DrawablePair>> {
+    prev_hashes
+        .iter()
+        .map(|prev| {
             urn.advance_block(prev)
-                .expect("exactly epoch_blocks feeds before EpochComplete"),
-        );
-    }
-    Ok(out)
+                .expect("exactly epoch_blocks feeds before EpochComplete")
+        })
+        .collect()
 }
 
 /// Uniform draw in `[0, n)` from the domain-separated stream: rejection
@@ -376,7 +382,8 @@ mod tests {
 
     fn run(pairs: Vec<DrawablePair>, lambda: u32, blocks: u64) -> Vec<Vec<DrawablePair>> {
         let prevs: Vec<[u8; 32]> = (0..blocks).map(prev_hash_for).collect();
-        assign_epoch_with_lambda(pairs, lambda, &prevs).expect("valid epoch")
+        let urn = ChallengeUrn::with_lambda(pairs, lambda, blocks).expect("valid epoch");
+        feed_epoch(urn, &prevs)
     }
 
     #[test]
@@ -559,37 +566,34 @@ mod tests {
 
     #[test]
     fn production_doors_read_the_constant_and_take_no_lambda() {
-        // Q4's falsifier, as a test: `new` / `assign_epoch` derive exactly
-        // what `with_lambda(CHALLENGES_PER_PAIR_PER_EPOCH)` derives, and
-        // issue λ·D draws with λ read from the constant the settlement
-        // threshold is const-asserted against. A second `pub` door taking λ
-        // is what this pin refuses — the urn and the threshold could then
-        // disagree with nothing failing.
+        // Q4's falsifier: the public doors (`new` / `assign_epoch`) derive
+        // exactly what `with_lambda(CHALLENGES_PER_PAIR_PER_EPOCH)` derives,
+        // and issue λ·D draws. `assign_epoch` feeds `ChallengeUrn::new`, so
+        // the one-shot cannot carry a different λ than the streaming urn.
+        // Compiling `with_lambda` into a production module is what this pin
+        // refuses.
         let pairs: Vec<_> = (0..5u8).map(|t| pair(t, 1)).collect();
         let prevs: Vec<[u8; 32]> = (0..8).map(prev_hash_for).collect();
-        let via_door =
-            assign_epoch_with_lambda(pairs.clone(), CHALLENGES_PER_PAIR_PER_EPOCH, &prevs)
-                .expect("valid epoch");
+        let via_lambda = run(pairs.clone(), CHALLENGES_PER_PAIR_PER_EPOCH, 8);
         let expected_draws =
             usize::try_from(CHALLENGES_PER_PAIR_PER_EPOCH).expect("small") * pairs.len();
 
-        // Door 1: `assign_epoch`.
         let via_assign_epoch = assign_epoch(pairs.clone(), &prevs).expect("valid epoch");
-        assert_eq!(via_assign_epoch, via_door);
+        assert_eq!(via_assign_epoch, via_lambda);
         assert_eq!(
             via_assign_epoch.iter().map(Vec::len).sum::<usize>(),
             expected_draws
         );
 
-        // Door 2: `ChallengeUrn::new`, fed block by block — the same
-        // assignments and the same total, so a `new` that read a different
-        // λ than `assign_epoch` fails here, not only in the one-shot form.
+        // Streaming `new`, fed block by block — a `new` that read a
+        // different λ than the constant fails here, and a `feed_epoch`
+        // that disagreed with the public sequential API fails here too.
         let mut urn = ChallengeUrn::new(pairs, 8).expect("valid urn");
         let via_urn: Vec<Vec<DrawablePair>> = prevs
             .iter()
             .map(|prev| urn.advance_block(prev).expect("in-order feed"))
             .collect();
-        assert_eq!(via_urn, via_door);
+        assert_eq!(via_urn, via_lambda);
         assert_eq!(
             usize::try_from(urn.draws_done()).expect("small"),
             expected_draws
@@ -600,7 +604,7 @@ mod tests {
     fn assign_epoch_empty_hashes_is_zero_epoch_blocks() {
         let pairs = vec![pair(0, 0)];
         assert_eq!(
-            assign_epoch_with_lambda(pairs, 1, &[]).unwrap_err(),
+            assign_epoch(pairs, &[]).unwrap_err(),
             AssignmentError::ZeroEpochBlocks
         );
     }

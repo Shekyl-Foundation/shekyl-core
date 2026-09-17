@@ -131,10 +131,10 @@ pub enum EpochSettlement {
 /// the dedup widening (layers 1/3); perturb the reconstruction so
 /// admission and settlement disagree (layer 2); prune a journal above the
 /// retention horizon (fires upstream, as the enumerator's refusal or an
-/// SI-7 view fault, and escalates at the slash pass); let λ differ between
-/// `assign_epoch` and `ChallengeUrn::new` (layer 1 only — Q4 is a
-/// coverage precondition). Named here so a sweep does not read an
-/// unreachable check as dead.
+/// SI-7 view fault, and escalates at the slash pass); compile the
+/// `cfg(test)` λ constructor into a production module (layer 1 only —
+/// Q4 is a coverage precondition). Named here so a sweep does not read
+/// an unreachable check as dead.
 ///
 /// # What the caller must do
 ///
