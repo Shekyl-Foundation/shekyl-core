@@ -43,6 +43,7 @@ use redb::{
 };
 use shekyl_chain_rules::{AtHeight, Tip};
 use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_wire::Block;
 
 use crate::codec::{BlockInfo, PropertyCell};
 use crate::lmdb_order::{Hash32, LmdbHashKey};
@@ -74,6 +75,60 @@ pub struct TipState {
     /// latched shows a tip the refused write did not move, and a `Halted`
     /// read afterwards is at a height ≥ that tip.
     pub connect: ConnectState,
+}
+
+/// A recorded block's body **with** its recorded identity (R6, R7).
+///
+/// The identity is `block_info[h].hash` (CEN-B6) and the body was verified
+/// to hash to it where it was decoded (`chain_reads::block_body`), so the
+/// pair cannot disagree. A bare `Block` would let a caller re-hash and reach
+/// a second notion of the block's identity — the two-identities defect
+/// SCR-7 closed in the C++ `for_blocks_range`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecordedBlockBody {
+    /// The block's recorded identity.
+    pub hash: BlockHash,
+    /// The body, parsed from the recorded blob and verified against `hash`.
+    pub block: Block,
+}
+
+/// The recorded bytes of a block, **not** verified against the recorded
+/// identity (R5; Q2, ruled).
+///
+/// For the relay and sync path, which forwards bytes and would only
+/// re-verify to discard the result. The hazard Q2 names is a consensus
+/// caller reaching for the cheap reader because it differs from
+/// [`block`](ReadSnapshot::block) only by name — so it differs by **type**:
+/// no `Deref<Target = [u8]>`, no `AsRef<[u8]>`, no `From<RawBlockBytes>`
+/// for `Block` or [`RecordedBlockBody`], no parse method. The one way out
+/// is [`into_wire_bytes`](Self::into_wire_bytes), named for its consumer;
+/// the one way to a parsed block is `ReadSnapshot::block`, which re-reads
+/// and verifies. `rg RawBlockBytes` is the audit.
+///
+/// ```compile_fail
+/// # use shekyl_chain_store::store::RawBlockBytes;
+/// fn consensus_path(bytes: RawBlockBytes) -> usize {
+///     bytes.len() // no Deref, no AsRef: the bytes are not a slice here
+/// }
+/// ```
+///
+/// ```compile_fail
+/// # use shekyl_chain_store::store::RawBlockBytes;
+/// # use shekyl_wire::Block;
+/// fn parse(bytes: RawBlockBytes) -> Block {
+///     bytes.into() // no From<RawBlockBytes> for Block
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawBlockBytes(Vec<u8>);
+
+impl RawBlockBytes {
+    /// The bytes, for the writer that puts them on the wire. Consumes the
+    /// value: there is no borrowed view.
+    #[must_use]
+    pub fn into_wire_bytes(self) -> Vec<u8> {
+        self.0
+    }
 }
 
 /// One row of a range read (R4, R7): the height and what the store
@@ -252,6 +307,98 @@ impl<'store> ReadSnapshot<'store> {
             }
         })))
     }
+}
+
+impl ReadSnapshot<'_> {
+    // ------------------------------------------------------------------
+    // R5–R7: the block body
+    // ------------------------------------------------------------------
+
+    /// **R5.** The recorded blob at `height`, unverified, as
+    /// [`RawBlockBytes`] (Q2). Replaces `get_block_blob_from_height`; the
+    /// by-hash `get_block_blob` is R2 then R5.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a hole at or below the tip; engine errors pass through.
+    /// Above the tip is [`AtHeight::AboveTip`].
+    pub fn block_blob(&self, height: BlockHeight) -> Result<AtHeight<RawBlockBytes>, StoreError> {
+        let tip = self.tip_row()?;
+        Ok(
+            match chain_reads::blob_at(&self.txn, tip.as_ref(), height.to_raw())
+                .map_err(chain_reads::ReadFault::into_plain)?
+            {
+                AtHeight::Recorded(bytes) => AtHeight::Recorded(RawBlockBytes(bytes)),
+                AtHeight::AboveTip => AtHeight::AboveTip,
+            },
+        )
+    }
+
+    /// **R6.** The block at `height`: its recorded identity and its body,
+    /// parsed and **verified to hash to that identity** (SCR-7). Replaces
+    /// `get_block_from_height`; the by-hash `get_block` is R2 then R6.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 for a hole, a blob that does not parse, or one that hashes to
+    /// something other than `block_info[h].hash`; engine errors pass
+    /// through. Above the tip is [`AtHeight::AboveTip`].
+    pub fn block(&self, height: BlockHeight) -> Result<AtHeight<RecordedBlockBody>, StoreError> {
+        let tip = self.tip_row()?;
+        body_at(&self.txn, tip.as_ref(), height.to_raw())
+    }
+
+    /// **R7.** The blocks for a **half-open** range of heights, ascending,
+    /// each verified as in [`block`](Self::block); the same range rules as
+    /// [`block_infos`](Self::block_infos) (§3.5). Replaces
+    /// `for_blocks_range(h1, h2, f)`, whose `h2` is **inclusive** — its
+    /// caller's `start..=start + count − 1` is `start..start + count` here
+    /// (SCR-20) — and whose early-stop closure is the caller's `take_while`
+    /// or `?` over this iterator.
+    ///
+    /// # Errors
+    ///
+    /// The outer `Err` is the tip read; each item is its own row's.
+    pub fn blocks(
+        &self,
+        range: core::ops::Range<BlockHeight>,
+    ) -> Result<AtHeight<impl Iterator<Item = RangeItem<RecordedBlockBody>> + '_>, StoreError> {
+        let tip = self.tip_row()?;
+        let Some(clamped) = clamp_to_tip(&range, tip.as_ref().map(|(h, _)| *h)) else {
+            return Ok(AtHeight::AboveTip);
+        };
+        Ok(AtHeight::Recorded(clamped.map(move |h| {
+            match body_at(&self.txn, tip.as_ref(), h)? {
+                AtHeight::Recorded(body) => Ok((BlockHeight::from_raw(h), body)),
+                AtHeight::AboveTip => Err(StoreInvariant::CellCorrupt {
+                    key: "blocks",
+                    fault: CellFault::Absent,
+                }
+                .into()),
+            }
+        })))
+    }
+}
+
+/// R6's and R7's shared step: the verified `(identity, body)` pair from the
+/// shared read body, wrapped as [`RecordedBlockBody`], the fault returned
+/// plain (the snapshot's policy).
+fn body_at(
+    txn: &ReadTransaction,
+    tip: Option<&(u64, BlockInfo)>,
+    height: u64,
+) -> Result<AtHeight<RecordedBlockBody>, StoreError> {
+    Ok(
+        match chain_reads::block_body(txn, tip, height)
+            .map_err(chain_reads::ReadFault::into_plain)?
+        {
+            AtHeight::Recorded((hash, block)) => AtHeight::Recorded(RecordedBlockBody {
+                hash: BlockHash::from_bytes(hash.to_bytes()),
+                block,
+            }),
+            AtHeight::AboveTip => AtHeight::AboveTip,
+        },
+    )
 }
 
 /// The heights of `range` that are at or below `tip`, or `None` when

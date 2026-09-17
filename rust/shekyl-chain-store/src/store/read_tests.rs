@@ -261,3 +261,148 @@ fn block_infos_is_above_tip_when_the_start_is_and_clamps_the_end_otherwise() {
     cleanup(&empty);
     cleanup(&path);
 }
+
+// ------------------------------------------------------------------ R5–R7
+
+#[test]
+fn block_returns_the_body_verified_against_the_recorded_identity() {
+    let path = tmp("read-block");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let hashes = connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
+    let snap = store.begin_read().expect("read");
+    let AtHeight::Recorded(body) = snap.block(h(1)).expect("read") else {
+        panic!("height 1 is recorded");
+    };
+    assert_eq!(body.hash, BlockHash::from_bytes(hashes[1]));
+    assert_eq!(
+        body.block.hash(),
+        hashes[1],
+        "the body hashes to its identity"
+    );
+    assert_eq!(body.block.transaction_hashes.len(), 1);
+    assert!(matches!(
+        snap.block(h(2)).expect("read"),
+        AtHeight::AboveTip
+    ));
+    cleanup(&path);
+}
+
+#[test]
+fn a_rewritten_blob_is_si7_on_block_and_blocks_but_block_blob_still_hands_out_the_bytes() {
+    let path = tmp("read-rewritten-blob");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![], vec![]]);
+    // Rewrite `blocks[1]` to a different, parseable block: the identity on
+    // `block_info[1]` no longer matches.
+    let impostor = candidate(1, [0x77; 32], Vec::new()).block.serialize();
+    let out: Result<(), TestErr> = store.write(|batch| {
+        batch.open_upsert_table(crate::schema::BLOCKS)?.upsert(
+            1,
+            crate::codec::Raw::<crate::codec::BlockBody>::new(&impostor),
+        )?;
+        Ok(())
+    });
+    out.expect("rewrite");
+    let snap = store.begin_read().expect("read");
+    let e = snap.block(h(1)).expect_err("verified read refuses");
+    assert!(
+        matches!(
+            e,
+            StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                key: "blocks",
+                fault: CellFault::Undecodable(_),
+            })
+        ),
+        "{e}"
+    );
+    let AtHeight::Recorded(rows) = snap.blocks(h(0)..h(3)).expect("range") else {
+        panic!("start 0 is recorded");
+    };
+    let rows: Vec<_> = rows.collect();
+    assert!(
+        rows[0].is_ok() && rows[2].is_ok(),
+        "the neighbours are fine"
+    );
+    assert!(rows[1].is_err(), "the rewritten row is that item's fault");
+    // The unverified reader hands out exactly the bytes on disk (Q2): the
+    // sync path forwards them, and a consensus caller cannot get here
+    // without naming `RawBlockBytes`.
+    let AtHeight::Recorded(raw) = snap.block_blob(h(1)).expect("blob") else {
+        panic!("height 1 is recorded");
+    };
+    assert_eq!(raw.into_wire_bytes(), impostor);
+    // And none of it halted the writer.
+    assert_eq!(store.connect_state(), ConnectState::Live);
+    cleanup(&path);
+}
+
+#[test]
+fn blocks_range_clamps_at_the_tip_and_yields_the_last_height_of_a_half_open_range() {
+    let path = tmp("read-blocks-range");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let hashes = connect_chain(&store, &[vec![], vec![], vec![], vec![]]);
+    let snap = store.begin_read().expect("read");
+    // `start..start + count` yields `count` rows, the last one included —
+    // the inclusive-`h2` port hazard (SCR-20).
+    let (start, count) = (1u64, 3u64);
+    let AtHeight::Recorded(rows) = snap.blocks(h(start)..h(start + count)).expect("range") else {
+        panic!("start 1 is recorded");
+    };
+    let got: Vec<(u64, [u8; 32])> = rows
+        .map(|r| {
+            let (height, body) = r.expect("row");
+            (height.to_raw(), body.block.hash())
+        })
+        .collect();
+    assert_eq!(got.len(), usize::try_from(count).expect("small"));
+    assert_eq!(
+        got.last().expect("three rows").0,
+        start + count - 1,
+        "the last height is yielded"
+    );
+    for (height, hash) in &got {
+        assert_eq!(*hash, hashes[usize::try_from(*height).expect("small")]);
+    }
+    // End past the tip clamps; start past the tip is the typed arm.
+    let AtHeight::Recorded(rows) = snap.blocks(h(2)..h(100)).expect("range") else {
+        panic!("start 2 is recorded");
+    };
+    assert_eq!(rows.count(), 2);
+    assert!(matches!(
+        snap.blocks(h(4)..h(5)).expect("range"),
+        AtHeight::AboveTip
+    ));
+    cleanup(&path);
+}
+
+#[test]
+fn block_blob_above_the_tip_is_above_tip_and_a_hole_is_si7() {
+    let path = tmp("read-blob-classify");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![]]);
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("raw open");
+        let txn = db.begin_write().expect("raw write");
+        txn.open_table(crate::schema::BLOCKS)
+            .expect("t")
+            .remove(0)
+            .expect("remove")
+            .expect("row 0 existed");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    assert!(matches!(
+        snap.block_blob(h(2)).expect("read"),
+        AtHeight::AboveTip
+    ));
+    let e = snap.block_blob(h(0)).expect_err("a hole below the tip");
+    assert!(is_si7_absent(&e, "blocks"), "{e}");
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Live,
+        "a read never arms the halt"
+    );
+    cleanup(&path);
+}

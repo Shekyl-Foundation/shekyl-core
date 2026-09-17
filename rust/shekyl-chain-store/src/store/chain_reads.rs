@@ -274,6 +274,26 @@ pub(super) fn info_at<T: ReadTables>(
     })
 }
 
+/// The recorded `blocks` blob at `height`, **unverified** — R5's body. The
+/// same classification as [`block_body`] (above the tip is `AboveTip`, a
+/// hole is SI-7), and none of its verification: the bytes are for the relay
+/// and sync path, which forwards them and would only re-verify to discard
+/// the result (Q2). The identity lives on `block_info`; the two are checked
+/// against each other only where a parsed body is handed out.
+pub(super) fn blob_at<T: ReadTables>(
+    txn: &T,
+    tip: Option<&(u64, BlockInfo)>,
+    height: u64,
+) -> Result<AtHeight<Vec<u8>>, ReadFault> {
+    match tip {
+        Some((tip, _)) if height <= *tip => {}
+        _ => return Ok(AtHeight::AboveTip),
+    }
+    let blocks = txn.table(BLOCKS)?;
+    let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
+    Ok(AtHeight::Recorded(blob.value().bytes().to_vec()))
+}
+
 /// The block recorded at `height`: its identity from `block_info`, its body
 /// parsed from `blocks` and **verified to hash to that identity**.
 ///

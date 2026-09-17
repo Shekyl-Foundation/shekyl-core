@@ -108,7 +108,7 @@ pub use error::{
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use pop::Popped;
-pub use read::{RangeItem, ReadSnapshot, TipState};
+pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState};
 pub use set::SetTable;
 pub use view::BatchView;
 pub use write::WriteBatch;
