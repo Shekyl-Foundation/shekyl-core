@@ -1,6 +1,6 @@
 # DRS-E1 S-CHAIN-R — the committed-chain read surface: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **Round 0 (pre-flight) executed 2026-09-16** at `dev`
+**Status:** OPEN — **increment LANDED (PR #772, 2026-09-17)**: the §3 contract is code (`rust/shekyl-chain-store/src/store/{read,chain_reads}.rs`), the three amendments and §11.1(f)'s value shapes are the layout (`SCHEMA_VERSION 2 → 4`), `DRS_E1_SCHAIN_W.md` is archived; nothing here is still proposed. Stays in `design/` until S-OUT-KI's pre-flight has read it (archive-or-contract per index §8 then). History: **Round 0 (pre-flight) executed 2026-09-16** at `dev`
 `3560b80c2` (the tree that merged PR #757, S-CHAIN-W); **round-1 rulings
 taken 2026-09-16 on every §9 question** (each entry carries its ruling
 line-local; Q4 overturned its own default — §3.6). §3 is the contract as
@@ -15,7 +15,7 @@ the tip), §3.5/§7 (the S-CHAIN-R row: extraction order **3**, "reads the
 tables S-CHAIN-W writes") and DRS-D12 (replay-that-validates is the only
 pre-cutover writer — this increment writes nothing on the connect path
 except what §3.6 names); from
-[`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) (the codecs and tables this
+[`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) (the codecs and tables this
 surface decodes, landed PR #757); and from
 [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) G11 (absence is matched,
 never propagated — the `AtHeight<T>` discipline, adopted here for every
@@ -32,7 +32,7 @@ Rust read each C++ method becomes, what each returns when the height is
 above the tip or the row is missing, and which C++ sentinels do not
 survive — plus the two per-block fold fields FL-R3-STORE routes to this
 surface. Rule 26's pre-flight pass is the instrument; this is the same shape
-as [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) and stays in `docs/design/`
+as [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) and stays in `docs/design/`
 while the increment is open.
 
 **Identifier family.** Findings and questions here are **SCR-n**, registered
@@ -197,8 +197,8 @@ there rather than on a new type:
   straddle a connect. The C++ has exactly this hazard and warns about it in
   prose (`src/cryptonote_core/blockchain.cpp:2735`–`:2738`: "no getheight +
   gethash(height-1)"). Here it is the handle's shape.
-- `ReadSnapshot` currently carries `PhantomData<&'store ChainStore>`. This
-  increment makes that a real `&'store ChainStore` so `tip()` can read the
+- `ReadSnapshot` carried `PhantomData<&'store ChainStore>` at the pin. This
+  increment made it a real `&'store ChainStore` (commit 3) so `tip()` can read the
   writer's halt (§3.4). Same lifetime, one field, no API change for
   existing callers.
 
@@ -289,8 +289,8 @@ derives it from `blockchain.cpp`, not from this table).
   R3 answers `block_info(0)` — but the arm is the rules crate's to write
   and its fixture's to pin (`cen_d*_difficulty_at_genesis_is_cumulative`).
 - **A missing table is corruption, never a value (S-CHAIN-W amendment
-  A2).** A fresh file seals only `properties` (`store/mod.rs`
-  `create_sealed` → `header::seal`); every chain table is created lazily by
+  A2).** At the pin a fresh file sealed only `properties` (`store/mod.rs`
+  `create_sealed` → `header::seal`) and every chain table was created lazily by
   the first `connect`'s `open_insert_table`, and `ReadSnapshot::open_table`
   on an absent table is `EngineError::Table(TableDoesNotExist)`. So on an
   empty store R1/R2/R3 would fail with an engine error rather than answer
@@ -689,7 +689,7 @@ gating release (§3.8 points at it).
 - `codec/chain.rs` module docs: the "LMDB struct minus the key" framing goes (commit 2); the record is described by what its bytes hold and which are consensus-visible (none of `BlockInfo`'s — the block hash is a preimage-derived identity *stored* here, not *defined* here).
 - `IMPLEMENTATION_INDEX.md`: `SCR` family and §7 doc row (this PR); the `DRS-*` row `UPDATE` for the increment is the increment PR's (rule 94 §4).
 - `docs/CHANGELOG.md`: one Unreleased line at landing (`SCHEMA_VERSION` 2 → 4 across commits 2a/2b is a rebuild; the reads are a crate API).
-- **Archive:** [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) becomes **eligible** when commit 5 lands (its stated archive condition, "S-CHAIN-R has consumed the codecs", is met once every S-CHAIN-W codec has a snapshot read) and is **`git mv`'d** to `docs/completed/` in commit 7, the increment's documentation commit — same PR, two commits apart. Its index §7 row moves with it in commit 7.
+- **Archive:** [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) becomes **eligible** when commit 5 lands (its stated archive condition, "S-CHAIN-R has consumed the codecs", is met once every S-CHAIN-W codec has a snapshot read) and is **`git mv`'d** to `docs/completed/` in commit 7, the increment's documentation commit — same PR, two commits apart. Its index §7 row moves with it in commit 7.
 - This document: banner flips to *landed* at the increment PR; archive-or-contract per index §8 when S-OUT-KI's pre-flight has read it (the next surface's pre-flight is the reader this document exists for).
 
 ---

@@ -1016,7 +1016,7 @@ consensus-constants family — if it does, this question closes by
 reference.
 
 **Store constraint (added 2026-09-15, S-CHAIN-W pre-flight SCW-7 —
-[`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) §5.4).** `D_max` is now a
+[`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) §5.4).** `D_max` is now a
 third derivation, on the store side: in the Rust chain store a block at
 height *h* can be popped **iff** its `undo_log[h]` row exists, and the
 retention prune (S-PRUNE) deletes undo rows below its watermark. So the

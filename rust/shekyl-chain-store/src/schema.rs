@@ -94,7 +94,7 @@
 //! the `SCHEMA_VERSION` bump §11.1(b) owes. A definition cannot be added
 //! outside the invocation without that module's source scan failing.
 //!
-//! # Ordinals, and the one table LMDB does not have
+//! # Ordinals, and the tables LMDB does not have
 //!
 //! The same invocation numbers its declarations: a table's
 //! [`TableOrdinal`] is its position in the list, and the pop journal

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Daemon chain store
+
+- **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 4` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
+
 ### Consensus
 
 - **RandomX v2 Phase 4 follow-on: leftover schema operands and CN
