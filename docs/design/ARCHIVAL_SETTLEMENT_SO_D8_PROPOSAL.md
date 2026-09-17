@@ -6,7 +6,8 @@ Q3, Q8 (incl. P1/P2), Q9, Q10, Q12, Q13, Q15; Q14 closed by Q15;
 `SO-D8a`, `SO-D8b`, `SO-D8c` (transcriptions of R-B / PC-D4 / SO-D7);
 `SO-D8d` (three local layers; store-invariant Fault, not a verdict;
 amended same day against `dev@5fde3b1ce` — §6.3).
-**Still to be ruled:** `SO-D8e`; Q4 (`λ`
+**Still to be ruled:** `SO-D8e`; Q9's byte construction and carrier
+semantics (§7.6.1–§7.6.2, review 2026-09-16); Q4 (`λ`
 unpinned — must pin before any production caller). Slice C is not
 authorized. `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold on the
 writer's call site **stands**. No admission code, no consensus code, and
@@ -267,7 +268,12 @@ const-asserts and `lib.rs:139` is the re-export; nothing else reads it.
 Its doc string — *"blocks after a challenge's issuing block to accept its
 serve-credit response"* (`constants.rs:59`) — described a gate that did
 not exist. **`SO-D8a` RULED 2026-09-16 is that reader (design); Slice C is
-the first code read; the FOLLOWUPS row is discharged.** Its value is
+the first code read; the FOLLOWUPS row is discharged.** The implementation
+obligation did not vanish with the row — it is STAGED (rule 23) with a
+named consumer: §8's admission row (`ERR_CREDIT_DEADLINE` rebinds to the
+`W₂` window; evidence item 9) and the FOLLOWUPS `CEN-L8` / Slice C row,
+which names the deadline row as the constant's first code reader
+alongside the writer. Its value is
 `SETTLEMENT_EPOCH_BLOCKS / W2_EPOCH_DIVISOR = 10,000 / 20 = 500`
 (`constants.rs:147,:153,:202`) — about 16.7 hours at 2-minute blocks.
 
@@ -748,7 +754,8 @@ checked, no collision; TSV row at Slice C). Hiding is theater because
 the reveal publishes `pk`. The join identifies `h`'s coinbase (stealth
 payout already in the block), not a miner identity. Real residual is
 P2 / fixture 12. Reopen if `h` is removed **in order to conceal** the
-issuing block. Open: Q4 (`λ` unpinned); `SO-D8e`.
+issuing block. Open: Q4 (`λ` unpinned); `SO-D8e`; Q9 bytes + carrier
+semantics (§7.6.1–2).
 
 ---
 
@@ -812,6 +819,13 @@ is in the past and in the DB, which is what `PC-D4` could not do.
   across the epoch boundary** — a record arriving at `h_incl` can cite an
   `h` in the previous epoch. That window is `SO-D8e`'s structural claim;
   `SO-D8b` is unimplementable without it. See `SO-D8e`.
+- **Authority, stated (review 2026-09-16):** `SO-D8b` is RULED as to the
+  **key and predicate** — what admission checks. Its implementation is
+  STAGED behind `SO-D8e` — how `assignment(h)` is served for a past `h`
+  — which must be RULED before Slice C and is on the Open list (§10).
+  Rule 23: a staged item with a named consumer in a live plan, not a
+  silent deferral; the two are not independent, and only one of them is
+  a design decision still to make.
 
 ## 5. `SO-D8c` — emission gather, under R-B — RULED 2026-09-16
 
@@ -1192,15 +1206,21 @@ computes the same assignment. Only the expected response changes.
 Do **not** remove such pairs from `D`. That is the failure this ruling
 exists to prevent — see the drop-stability finding below.
 
-Why the slash outcome does not matter. After a drop the pair is not held
-at `h_open(E+1)`, so it is not drawable in `E+1` or after. Non-drawable
-epochs are not observations (`SO-D5`'s inversion: absent row ⇒
-non-observation ⇒ the denominator shrinks). The pair accumulates exactly
-one bad observation against a required `m = 11` of `n = 13`
-(`failure_window.rs:150–155`). The threshold is unreachable, not merely
-unlikely. The sole case where the drop epoch's miss lands a slash is a
-pair already at 10 of 12 — which had been failing for ~5 months and was
-slashable next epoch regardless.
+Why the slash outcome does not matter — **corrected 2026-09-16 (review).**
+Under (3.3) the drop epoch writes **no row** for the pair (not held at the
+fire height), so absence reads NonObservation and the drop contributes
+**zero** bad observations. After the drop the pair is not held at
+`h_open(E+1)`, so it is not drawable in `E+1` or after and receives no
+further observations (`SO-D5`'s inversion: absent row ⇒ non-observation ⇒
+the denominator shrinks). Its window cannot grow:
+`failure_window_slashable` (`failure_window.rs:361–385`) needs a miss at
+the head **and** `m = 11` of `n ≤ 13` (`:150–155`). A pair at 10-of-12
+before the drop stays at 10-of-12 for good — the drop cannot land a
+slash, and there is no "next epoch" in which it could. *SUPERSEDED:
+"accumulates exactly one bad observation"; "slashable next epoch
+regardless" — both written against the pre-(3.3) worst case, and the
+second was wrong even there (an eleventh miss at the head slashes at
+that settlement, and a non-drawable pair never gets one).*
 
 The obvious gaming case is already closed by landed code. Hold at open,
 drop early, collect anyway does not pay: `db_lmdb.cpp:5377–5383` forfeits
@@ -1614,11 +1634,101 @@ the same decision as the weight-path fact above, approached from the
 other side. Both belong to a fee-and-weight round, not Q9. Cap-raise
 value (~11 KB/block) sits on the same round.
 
+**FOLLOWUPS row added 2026-09-16** (rule 22: a deferral names its
+carrier): *Serve-credit inclusion incentive and archival weight pricing
+(the fee-and-weight round)* — unpaid inclusion, prunable-weight
+discount, cap-raise; falsified by the economics sim's inclusion rate at
+median-bound blocks.
+
+#### 7.6.1 Canonical construction — PROPOSED 2026-09-16, ruled before Slice C
+
+**Review finding (valid).** Q9 ruled the shape and did not fix bytes.
+"A Merkle root over the record set" admits several roots for one set —
+leaf encoding, leaf-vs-node hash domain, ordering, odd-level rule, path
+direction — and rule 30 requires every hash to sit under an explicit,
+versioned domain. Rule 05: the bytes fall out of the spec, so the spec
+is written before Slice C writes the bytes. Proposed, each a named
+choice, none ruled:
+
+- **Leaf.** `cSHAKE256_32(record_bytes)` under
+  `shekyl/archival-serve-credit-leaf-v1`, where `record_bytes` is the
+  record's full serialization (kept vin ‖ pruned pass record). Witness
+  authentication is itself pruned (§2.2) and re-verified only by
+  unpruned nodes, so the leaf covers what those nodes hold.
+- **Node.** `cSHAKE256_32(left ‖ right)` under
+  `shekyl/archival-serve-credit-node-v1`. A distinct label from the leaf,
+  so a leaf cannot be presented as a node (the second-preimage class
+  RFC 6962 closes with a prefix byte; here the customization does it).
+- **Order.** Leaves in vin order — the order the witness signed. Dedup is
+  per record, so order carries no credit semantics.
+- **Odd level.** Promote the unpaired node unchanged; never duplicate it
+  (duplication lets one member be proven twice).
+- **Path (only if §7.6.2 branch A is ruled).** Sibling hashes bottom-up;
+  direction from the leaf index bits, and the leaf index is the vin
+  index already on the carrier — no direction bytes.
+- **Singleton.** Root = leaf; path empty.
+- **KAT.** One pinned vector over a 3-record set (exercises the odd
+  level) and one over a 1-record set. The two registry rows land with
+  the KAT at Slice C — not minted here.
+
+Falsifier: the KAT. Until it exists this subsection is a proposal.
+
+#### 7.6.2 Carrier semantics — OPEN 2026-09-16, ruled before Slice C
+
+**Review finding (valid).** "Merkle inclusion lets a bad record be
+excluded and the rest verify" is not what the carrier does today. All
+records of a batch are vins of **one** transaction; the inherited
+contract refuses the whole transaction when any serve-credit vin fails
+(`blockchain.cpp:3682–3691`, `return false` on input `i`), and a
+`shekyl-chain-rules` row returns `InvalidBlock` for the candidate. So
+per-record isolation *at admission* does not follow from the Merkle form;
+it requires a carrier semantics the current contract does not have, and
+fixture 13 as first written cannot be built on the current one. Two
+branches:
+
+- **(A) Per-vin admission — Q9's stated intent.** The carrier is valid
+  iff its structural checks pass (kind `serve_credit_only`, fee 0,
+  weight, pruned-record count, witness signature over the root). A
+  member failing its own record predicate is **not credited** and does
+  not invalidate the carrier. Isolation as ruled. Cost: a new consensus
+  semantics — *a valid block may carry serve-credit vins that yield no
+  credit* — and a **free-weight channel**: the witness is the producer
+  of `h` and can author junk members under a root it signs; with no fee,
+  junk carriers consume block weight for nothing. Closing it needs a
+  further rule (a carrier with zero admitted members is invalid; or at
+  most `k` failed members), which is itself a CEN row.
+- **(B) Carrier fail-whole + resubmission — the inherited contract.**
+  Any failing member refuses the carrier (`InvalidBlock`, naming member
+  `i`'s predicate, as today). The honest members resubmit in another
+  carrier within `W₂` — which §7.6 already prices as *resubmission
+  headroom* and *inter-batch blast radius*. Isolation is by resubmission,
+  not by admission. Corollary: **inclusion paths are redundant** — every
+  member is present, so the verifier recomputes the root over all
+  leaves; 224 B/record ≈ 22 KB/block and the path rule in §7.6.1 both go.
+  The witness's incentive to pre-verify is intact (its carrier fails
+  otherwise), and its seed is still in the ring (Q10 evicts on
+  inclusion, and a refused carrier was not included), so re-signing is
+  possible.
+
+**Recommendation: (B).** It adds no consensus semantics, opens no
+free-weight channel, removes 22 KB/block and a path-encoding rule, and
+the archiver's cost is one resubmission inside `W₂` rather than lost
+credit — the incidence Q9 was protecting. "Fail-whole refused" then
+narrows to what the Merkle form actually bought: the witness signs a
+**set commitment**, so a mutated member fails identifiably at its own
+predicate rather than as an opaque signature failure over a
+concatenation, and a subset resubmission needs no new construction.
+Rick to rule; fixture 13 is written per branch (§8). Neither branch
+touches dedup (`(P, s, E, h)` per record) or the kept-wire ceiling.
+
 **SUPERSEDED** in this section: "against a 300 KB penalty-free zone";
 "Prunable bytes still count toward block weight" as an unread claim
 (now confirmed); "who pays the fee"; fail-whole as the default batch
 shape; "a single-tx ~357 KB Merkle-batch" as the maturity headline
-(the inherited cap splits it to ≈ 365 KB in three carriers).
+(the inherited cap splits it to ≈ 365 KB in three carriers); "Merkle
+inclusion lets a bad record be excluded and the rest verify" as a
+statement about admission (§7.6.2 — it is true of the signature, not
+of the carrier).
 
 ### 7.7 Q10 RULED 2026-09-16 — accept loss
 
@@ -1951,7 +2061,7 @@ gates until `shekyl-chain-rules` is the live validator.
 | **Batching (Q9 RULED)** | Merkle-root batching: one pk + one signature over a Merkle root of the record set, each record carrying its inclusion path (⌈log₂ n⌉ hashes). Fail-whole refused — a corrupt member is excluded, the rest verify. Dedup stays `(P,s,E,h)` per record; a batch is a carrier, not a unit of credit. Admission of a record proves inclusion in a set that witness authored, not completeness. Class is `serve_credit_only` (fee-less by construction). Each carrier still obeys `TX_WEIGHT_LIMIT` = 149,400; at maturity 97 draws split 39 / 39 / 19 (depth 6, 192 B path; ≈ 365 KB/block; 39:1 amortization; +10.8 KB witness vs a single batch). Inter-batch blast radius is 39; `W₂` is resubmission headroom. Partition leaks nothing. Cap-raise (~11 KB/block ≈ 2.9 GB/year) and unpaid inclusion are a fee-and-weight round, not this row. |
 | **Cost** | One epoch replay per settled epoch — **always**, under `SO-D8d` §6.3 item 2 (the cache is dropped at `h_close(E) + W₂`; Q7 collapsed) — 1.09 s here, Pi-4 owed, streamed; plus the §7.4 `D` re-walk, `O(holdings changes since h_open)`, benchmark owed. Both inside connect phase 9 at the slash height, once per 10,000 blocks, off the admission path. *SUPERSEDED: "if the cache is not resident."* Admission: `O(1)` ring lookups + one hybrid verify per **Merkle-batch** (unbatched would be 97 ML-DSA-65 verifies per block — itself a reason to batch). Row writes: one per pair with `issued ≥ 1` (~324,000 × 51 B ≈ 16.5 MB per epoch at maturity, pruned at `MAX_CLAIM_AGE_W`). |
 | **Reader precondition (`SO-D7`'s lag)** | Rows for `E` are absent until the slash pass at `h > h_slash_deadline(E)`; the window walk must **exclude** `E` until settled, not read absence as non-observation. Under R-B the *pass* table is also incomplete for `E` during `(h_close(E), h_close(E) + W₂]`, so the interim `> 0` presence read is wrong for one more reason during those 500 blocks. Stated as a reader constraint and tested (§10 item 5). |
-| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 12 (§7.5 P2):** uniqueness — two miner-tx constructions to the same payout address with independently generated `tx_key`s yield distinct `0x0C` commitments; identical `(combined_ss)` yields the same witness key. Red: a constructor that reuses `tx_key`, or drops it from the KEM IKM, makes the two commitments equal. **New 13 (§7.6):** Merkle-batch — a carrier whose Merkle root is signed, with one member's record bytes mutated, admits the other members and refuses the mutant; a fail-whole signature over the concatenated set is the red edit (one mutant fails the honest members). **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 16 (§7.9):** named-hash — `0x0C` bytes equal `cSHAKE256(canonical witness_pk, custom=shekyl/archival-witness-key-v1)`. Red: a hiding Pedersen opening (theater: pk is still published), or a different customization. **New 17 (`SO-D8d`):** seed an admission-side urn from `D` as built at `h_open` and a settlement-side urn from a `D` **re-walked from divergent journals**; show the fold refusing through the Fault path (`poison().arm(<SI- row>)` → `ConnectState::Halted`, reads open). Must run the re-derivation, not the resident cache. A unit test of `settle_epoch(3, 2)` is **not** this fixture. Red: skip (write no row — `SO-D5` inversion), clamp (`min(passes, issued)`), an `InvalidBlock` verdict, or a persisted latch. **New 18 (`SO-D8d` §6.1):** the over-derived case — `issued_true = 1`, `issued_derived = 2`, `passes = 1` — is caught by layer 2's digest mismatch and by nothing else; red edit: skip the re-walk when a cache is resident. |
+| **Evidence plan (`ARCHIVAL_SETTLEMENT_WRITER.md` §10)** | Items 1, 2, 3, 6 unchanged. **Item 4 restated:** *a pass drawn at epoch-relative 9,999 and included at epoch-relative 400 of `E+1` is counted for `E`*. Its red edit — the **mutation that must turn the test red**, not the implementation — is to evaluate `SO-D9` at `h_incl` instead of `h`: that asserts the including block's epoch, `E+1`, and the vector must then be refused as typed `InvalidBlock { rule: CenRow, … }` (the `SO-D9` row; **not** the FFI `EPOCH_MISMATCH` code on the LMDB tautology path). Green requires `settlement_epoch_at_height(h)` (§2.1 item 3, §3). **Item 5** as above. **New 7:** membership — a record citing an `h` at which `(P,s)` was not drawn is refused; red edit: delete the gate. **New 8:** collusion — records for one pair from a miner that won two *unassigned* heights settle **NonObservation/Missed**, never Served. **New 9:** deadline — a record with `h_incl − h = W₂ + 1` is refused, `= W₂` admits. **New 10:** witness — a record whose witness pk does not hash to `h`'s coinbase commitment is refused; a valid record re-signed under another block's witness key is refused. **New 11:** reorg — pop `h_incl`, reconnect on an alt suffix that keeps `h`: the record is gone, `h`'s draws are intact, re-inclusion admits. **New 12 (§7.5 P2):** uniqueness — two miner-tx constructions to the same payout address with independently generated `tx_key`s yield distinct `0x0C` commitments; identical `(combined_ss)` yields the same witness key. Red: a constructor that reuses `tx_key`, or drops it from the KEM IKM, makes the two commitments equal. **New 13 (§7.6, branch-conditional on §7.6.2):** Merkle-batch — under **(B)** a carrier whose signed root covers one mutated member is refused whole, naming member `i`'s predicate; the other members resubmit in a later carrier within `W₂` and admit; red edit: measuring the resubmission's deadline from the first carrier's `h_incl` instead of `h`, or a signature form under which the mutation makes the *honest* members' resubmission unverifiable. Under **(A)** as first written: the mutant is refused, the others admit in the same carrier; red edit: a carrier with zero admitted members accepted (the free-weight channel). **New 19 (§7.6.1):** the Merkle KAT — 3-record and 1-record vectors; red edit: duplicate the odd node, or hash a leaf under the node label. **New 14 (§7.7):** restart — a node that produced `h`, stashed the seed, and is **orderly-shutdown** before inclusion, logs the remaining ring depth then drops, and does not answer those heights; an **unclean** restart logs that in-flight count is unknown (ring empty). Persist-across-restart (key file **or** a persisted cardinality) is the red edit. **New 15 (§7.8):** `0x0C` content — five fixtures of one row: (a) exactly one `WITNESS_COMMITMENT_BYTES` field on coinbase admits; (b) tag absent from coinbase refuses (red: `0x0B` empty-set convention); (c) two `0x0C` fields refuse (red: `find_tx_extra_field_by_type` first-wins); (d) length ±1 refuses (red: a minimum instead of exact); (e) `0x0C` on a non-coinbase tx refuses that tx (red: known-tag tolerance). **New 16 (§7.9):** named-hash — `0x0C` bytes equal `cSHAKE256(canonical witness_pk, custom=shekyl/archival-witness-key-v1)`. Red: a hiding Pedersen opening (theater: pk is still published), or a different customization. **New 17 (`SO-D8d`):** seed an admission-side urn from `D` as built at `h_open` and a settlement-side urn from a `D` **re-walked from divergent journals**; show the fold refusing through the Fault path (`poison().arm(<SI- row>)` → `ConnectState::Halted`, reads open). Must run the re-derivation, not the resident cache. A unit test of `settle_epoch(3, 2)` is **not** this fixture. Red: skip (write no row — `SO-D5` inversion), clamp (`min(passes, issued)`), an `InvalidBlock` verdict, or a persisted latch. **New 18 (`SO-D8d` §6.1):** the over-derived case — `issued_true = 1`, `issued_derived = 2`, `passes = 1` — is caught by layer 2's digest mismatch and by nothing else; red edit: skip the re-walk when a cache is resident. |
 | **`CEN-L8` promotion path** | Census already homes settlement in the slash pass (`CONSENSUS_RULE_CENSUS.md` CEN-L8, corrected 2026-09-12 against `SO-D7`); the production caller is ruled-blocked on `SO-D8`, not missing-from-the-row. Path: (1) this ruling lands → (2) emission gather joins the slash pass (`SO-D8c`; invariant-2 joint pin) — the close hook stays for budget freeze, not gather → (3) writer + gather call sites land with the gates on S-ARCH → (4) `DRS-P0f` re-reviews against the merged sha and records CHECKED-CONFORMANT. Not before step 3. **SUPERSEDED:** "re-word the census row off epoch-close" as a live task — `SO-D7` already did that. |
 | **What changes at the same cutover** | **Added:** `SO-D9` (i) at `h`; membership gate; deadline re-bound to `W₂`; witness authentication; `h` on the kept wire; new coinbase tag; dedup exact-get on `(P,s,E,h)`; Merkle-root batching of serve-credit records (Q9) — one pk + one sig over a Merkle root per carrier, inclusion path per record; fail-whole refused; memory-only witness-seed ring (Q10; persist-encrypted REJECTED); `0x0C` content rule (Q13; one CEN row, five fixtures, genesis-unconditional); bare-hash witness commitment (Q12; `cSHAKE256` under `shekyl/archival-witness-key-v1`); `SO-D8d` three local integrity layers (assignment equality, persisted local `D`-digest + re-walk at the slash pass, `passes ≤ issued` backstop; store-invariant Fault with a new `SI-` row, not a verdict); one local 32-B digest cell per epoch (rule-42 schema snapshot moves). **Deleted:** `challenge_fire_height` path, `ERR_FIRE_NOT_REACHED`, `ctx.block_hash_at_seal`; `archival_baseline_observed_at_epoch` as the interim `issued`; the `h_close` bound as a deadline. **Moved:** emission gather to the slash pass. **Superseded in-line (rule 23):** `PC-D2`; the `constants.rs:59` doc string becomes true and stays. |
 
@@ -2023,7 +2133,7 @@ about it.
 | Drawable set (Q3) | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` over `ChainView`; no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
 | `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row **discharged 2026-09-16** by `SO-D8a` RULED (first admission-path reader). | **RESOLVED by R-B**; referent **RULED 2026-09-16 (`SO-D8a`)** |
 | Witness key (Q8) | **Dedicated non-output hybrid key** derived from coinbase output 0's `combined_ss` under `HKDF_SALT_OUTPUT_DERIVE` + `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519` (no `output_index` in info); 32-B commitment under **`0x0C`**; pk + sig pruned. Combined_ss stays in Rust. The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise**. **SUPERSEDED: extend `0x0B`.** Q13 RULED (§7.8) owns the CEN wording: **mandatory-present** (commitment 2, not byte count); **fresh `combined_ss` per block** is a derivation requirement with a fixture, not a KEM inheritance. Q10 RULED: `W₂` ring is memory-only, restart loss is β. Q12 RULED (§7.9): bare 32-B `cSHAKE256` under `shekyl/archival-witness-key-v1`; hiding is theater (reveal publishes `pk`); reopen if `h` is removed **in order to conceal** the issuing block. Construction §7.5. | **RULED 2026-09-16** |
-| Batching (Q9) | Merkle-root batching: one pk, one signature over a Merkle root of the record set, each record carrying its inclusion path. Fail-whole refused (authorship ≠ incidence). Dedup stays `(P,s,E,h)` per record. Serve-credit is fee-less by construction. 300,000 is `get_min_block_weight` (a floor). Prunable bytes count toward weight (read at `get_transaction_weight` / `get_pruned_transaction_weight`). Against `TX_WEIGHT_LIMIT` the 97-record set splits 39 / 39 / 19 (≈ 365 KB/block; 39:1). Inter-batch blast radius is 39; `W₂` is resubmission headroom. Partition leaks nothing. Unpaid inclusion, any prunable-weight discount, and the ~11 KB/block cap-raise belong to a fee-and-weight round. Construction §7.6. | **RULED 2026-09-16** |
+| Batching (Q9) | Merkle-root batching: one pk, one signature over a Merkle root of the record set, each record carrying its inclusion path. Fail-whole refused (authorship ≠ incidence). Dedup stays `(P,s,E,h)` per record. Serve-credit is fee-less by construction. 300,000 is `get_min_block_weight` (a floor). Prunable bytes count toward weight (read at `get_transaction_weight` / `get_pruned_transaction_weight`). Against `TX_WEIGHT_LIMIT` the 97-record set splits 39 / 39 / 19 (≈ 365 KB/block; 39:1). Inter-batch blast radius is 39; `W₂` is resubmission headroom. Partition leaks nothing. Unpaid inclusion, any prunable-weight discount, and the ~11 KB/block cap-raise belong to a fee-and-weight round (FOLLOWUPS row added 2026-09-16). Construction §7.6. **Review 2026-09-16:** the byte construction (§7.6.1, PROPOSED) and the carrier semantics (§7.6.2, OPEN — per-vin admission vs carrier fail-whole + resubmission; recommendation (B)) are ruled before Slice C; the shape is ruled, the bytes are not. | **RULED 2026-09-16 (shape)**; bytes + carrier **OPEN** |
 | Secret lifetime (Q10) | Accept loss. Memory-only `ZeroizeOnDrop` ring of 32-B seeds; persist-encrypted **REJECTED** (daemon has no passphrase; rule 36 §3 is a wallet envelope). File promptly; evict on inclusion; log dropped in-flight on restart. Named fallback: re-derivable `tx_key` from a long-lived node secret and `h` — not persist; reopens if a sim of restart-to-restart vs fill-to-inclusion shows batches routinely dragging toward `W₂`. Construction §7.7. | **RULED 2026-09-16** |
 | `0x0C` content (Q13) | One `CEN-` row (id at Slice C), one predicate, five fixtures. Exactly one entry, length `WITNESS_COMMITMENT_BYTES` (32; Q12 RULED; a reopener revises the constant), coinbase only, **present**, from genesis. Dedicated parser must not copy `0x0B`'s empty-set. First-wins is the red edit for duplicates. Surface-free; E6-landable. Construction §7.8. **SUPERSEDED:** four rows; copying the `0x0B` parser; unread 600-byte extra ceiling. | **RULED 2026-09-16** |
 | Slice A1 (Q6) | **Keep**, per review, on grounds narrower than §12 gave. | **ANSWERED — keep** |
@@ -2066,7 +2176,8 @@ Seven were posed in the first cut; four answered in the 2026-09-13 review,
 new ones arise from R-B; Q11 is resolved by the `PL-` round and #745; Q12–Q13
 were opened in the 2026-09-14 reconciliation; Q14 was opened by #747 review
 and is resolved by Q15 (2026-09-16). **Open questions: Q4 (`λ` unpinned);
-`SO-D8e`.** `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
+`SO-D8e`; Q9's byte construction and carrier semantics (§7.6.1–§7.6.2,
+opened by review 2026-09-16 — the shape is RULED, the bytes are not).** `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
 PC-D4 / SO-D7). `SO-D8d` RULED 2026-09-16 (§6), amended same day:
 three local layers; persisted `D` digest + re-walk at every slash pass
 (Q7 collapsed); store-invariant Fault with an `SI-` row, never a
@@ -2154,9 +2265,19 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
    resubmission headroom, not only fetch time. Partition leaks nothing
    (set at `h` is public from `block_hash(h−1)`). Unpaid inclusion of
    zero-fee data, any discount of prunable archival bytes, and the
-   ~11 KB/block cap-raise belong to a fee-and-weight round. Construction
-   §7.6. **SUPERSEDED:** "against a 300 KB penalty-free zone"; "who pays
-   the fee"; unread "prunable bytes still count toward block weight."
+   ~11 KB/block cap-raise belong to a fee-and-weight round (FOLLOWUPS
+   row added 2026-09-16). Construction §7.6. **Review 2026-09-16 — two
+   sub-items OPEN, ruled before Slice C:** the byte construction
+   (§7.6.1, PROPOSED: leaf/node labels, vin order, no odd-node
+   duplication, KAT) and the carrier semantics (§7.6.2: the inherited
+   contract refuses the whole carrier on one bad vin, so "Merkle lets a
+   bad record be excluded" is true of the signature, not of admission;
+   branches (A) per-vin admission vs (B) carrier fail-whole +
+   resubmission within `W₂`; recommendation (B), under which inclusion
+   paths are redundant). **SUPERSEDED:** "against a 300 KB penalty-free
+   zone"; "who pays the fee"; unread "prunable bytes still count toward
+   block weight"; "Merkle lets a bad record be excluded" as an admission
+   claim.
 10. **RULED 2026-09-16 — (Secret lifetime).** Accept loss. Memory-only
     `ZeroizeOnDrop` ring of 32-B seeds keyed by height; persist-encrypted
     **REJECTED** (daemon has no passphrase; rule 36 §3 is a wallet
