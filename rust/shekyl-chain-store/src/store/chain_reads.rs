@@ -71,7 +71,7 @@ use crate::codec::{BlockInfo, Canonical, CodecError, Coded};
 use crate::lmdb_order::Hash32;
 use crate::schema::{BLOCKS, BLOCK_INFO};
 
-use super::error::{CellFault, EngineError, StoreInvariant};
+use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
 
 /// A transaction the chain tables can be opened from for reading.
 ///
@@ -174,6 +174,20 @@ impl From<redb::StorageError> for ReadFault {
     }
 }
 
+impl ReadFault {
+    /// The snapshot reader's policy: **return** the fault, arm nothing
+    /// (`DAEMON_REDB_STORE.md` §3.6.2 — the halt is the writer's state).
+    /// A named conversion rather than `From<ReadFault> for StoreError` on
+    /// purpose: `BatchView` must go through its `arm`, and a `From` would
+    /// let a `?` there choose this policy silently.
+    pub(super) fn into_plain(self) -> StoreError {
+        match self {
+            Self::Engine(e) => e.into(),
+            Self::Invariant(row) => row.into(),
+        }
+    }
+}
+
 /// SI-7 for a row the dense ranges say must exist and does not.
 fn absent(cell: &'static str) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::CellCorrupt {
@@ -241,6 +255,25 @@ pub(super) fn cell<T: ReadTables, V: Canonical + 'static>(
         .map_err(|cause| undecodable(cell_name, cause))
 }
 
+/// The `block_info` row at `height`, classified against `tip` (the caller's
+/// [`tip_of`]): above it is [`AtHeight::AboveTip`]; **at** it the row
+/// already decoded is reused; below it the row is read and its absence is
+/// SI-7 (SI-2: `block_info` is dense to the tip). R3's body, and the first
+/// half of [`block_body`]'s.
+pub(super) fn info_at<T: ReadTables>(
+    txn: &T,
+    tip: Option<&(u64, BlockInfo)>,
+    height: u64,
+) -> Result<AtHeight<BlockInfo>, ReadFault> {
+    Ok(match tip {
+        Some((tip, info)) if height == *tip => AtHeight::Recorded(*info),
+        Some((tip, _)) if height < *tip => AtHeight::Recorded(
+            cell(txn, BLOCK_INFO, height, "block_info")?.ok_or_else(|| absent("block_info"))?,
+        ),
+        _ => AtHeight::AboveTip,
+    })
+}
+
 /// The block recorded at `height`: its identity from `block_info`, its body
 /// parsed from `blocks` and **verified to hash to that identity**.
 ///
@@ -255,12 +288,9 @@ pub(super) fn block_body<T: ReadTables>(
     tip: Option<&(u64, BlockInfo)>,
     height: u64,
 ) -> Result<AtHeight<(Hash32, Block)>, ReadFault> {
-    let info: BlockInfo = match tip {
-        Some((tip, info)) if height == *tip => *info,
-        Some((tip, _)) if height < *tip => {
-            cell(txn, BLOCK_INFO, height, "block_info")?.ok_or_else(|| absent("block_info"))?
-        }
-        _ => return Ok(AtHeight::AboveTip),
+    let info = match info_at(txn, tip, height)? {
+        AtHeight::Recorded(info) => info,
+        AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
     };
     let blocks = txn.table(BLOCKS)?;
     let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
