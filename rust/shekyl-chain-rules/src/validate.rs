@@ -92,6 +92,9 @@ macro_rules! judge_block {
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
 ///     }
+///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
+///         Ok(None)
+///     }
 /// }
 /// // Each call brands a fresh view, as the store's `write` does.
 /// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
@@ -133,6 +136,9 @@ macro_rules! judge_block {
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
 ///     }
+///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
+///         Ok(None)
+///     }
 /// }
 /// struct Evil;
 /// impl<'id> ChainView<'id> for Evil {
@@ -143,6 +149,9 @@ macro_rules! judge_block {
 ///     }
 ///     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Infallible> {
 ///         Ok(AtHeight::AboveTip)
+///     }
+///     fn tip(&self) -> Result<Option<Tip>, Infallible> {
+///         Ok(None)
 ///     }
 /// }
 /// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}

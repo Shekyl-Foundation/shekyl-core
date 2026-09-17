@@ -24,7 +24,7 @@ use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Transaction, TxPrefix};
 use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
-use crate::view::{AtHeight, ChainView, RecordedBlock};
+use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
 
 /// Invariant brand, as in `verdict.rs`.
 type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
@@ -53,11 +53,16 @@ impl MockChain {
         self
     }
 
-    /// The height of the last recorded block, if any.
+    /// The last recorded block — height and identity — if any.
     #[must_use]
-    pub fn tip(&self) -> Option<BlockHeight> {
+    pub fn tip(&self) -> Option<Tip> {
         let len = u64::try_from(self.recorded.len()).expect("a Vec fits in u64");
-        len.checked_sub(1).map(BlockHeight::from_raw)
+        let height = BlockHeight::from_raw(len.checked_sub(1)?);
+        let (block, _) = self.recorded.last()?;
+        Some(Tip {
+            height,
+            hash: block.hash,
+        })
     }
 
     /// Project a branded view and run `f` against it.
@@ -107,6 +112,10 @@ impl<'id> ChainView<'id> for MockView<'_, 'id> {
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }
+
+    fn tip(&self) -> Result<Option<Tip>, Infallible> {
+        Ok(self.chain.tip())
+    }
 }
 
 /// The fault a [`FaultingView`] raises.
@@ -129,6 +138,10 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     }
 
     fn root_at(&self, _: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Faulted> {
+        Err(Faulted)
+    }
+
+    fn tip(&self) -> Result<Option<Tip>, Faulted> {
         Err(Faulted)
     }
 }

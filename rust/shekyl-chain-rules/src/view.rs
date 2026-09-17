@@ -67,6 +67,49 @@ pub enum AtHeight<T> {
     AboveTip,
 }
 
+/// The last recorded block: its height and identity.
+///
+/// `ChainView::tip()` returns `Option<Tip>` — `None` is the empty chain, and
+/// the candidate is genesis. **`Option`, not a bespoke absence enum** (slice
+/// 1, Q1, ruled 2026-09-16): a custom absence type earns its keep when its
+/// absence case carries semantics the caller must act on — `AtHeight::
+/// AboveTip` does (walk back; the state is not there) — and an empty chain
+/// is one behaviour with no valid-looking alternative, so `None` cannot be
+/// read as data. What `Option` does rule out is the C++ shape:
+/// `top_block_hash` hands back **two** sentinels on an empty chain,
+/// `null_hash` and `*block_height = UINT64_MAX`, neither distinguishable
+/// from a recorded value (`db_lmdb.cpp:3185–3191`). The store's own read
+/// (`RecordedTip { tip: Tip, connect }`, S-CHAIN-R) composes this struct.
+///
+/// Fields justified per ruling Q3: `hash` — CEN-A2 (`previous` must be the
+/// tip's hash); `height` — the connecting height every height-indexed rule
+/// is stated at (B1, B5 here; 4.C and CEN-F5 later).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tip {
+    /// The tip's height.
+    pub height: BlockHeight,
+    /// The tip's identity (CEN-B6).
+    pub hash: BlockHash,
+}
+
+impl Tip {
+    /// The height a candidate connecting onto `tip` will have: `0` for an
+    /// empty chain, `tip.height + 1` otherwise. Derived from the view and
+    /// never from the candidate (CEN-F5: `txin_gen.height` is producer-
+    /// chosen; the height operand is caller-derived), so every rule that is
+    /// stated at "this block's height" reads it from one place.
+    ///
+    /// `u64::MAX` is unreachable — a dense chain of 2^64 blocks — so the
+    /// saturation can never be observed; it is written rather than
+    /// `unwrap`ped so no rule carries a panic path.
+    #[must_use]
+    pub fn connecting_height(tip: Option<&Self>) -> BlockHeight {
+        tip.map_or(BlockHeight::ZERO, |t| {
+            BlockHeight::from_raw(t.height.to_raw().saturating_add(1))
+        })
+    }
+}
+
 /// A block the chain has recorded, as a rule reads it.
 ///
 /// Every field is here because a named row reads it (round-1 ruling Q3):
@@ -129,4 +172,11 @@ pub trait ChainView<'id> {
     ///
     /// CEN-I12.
     fn root_at(&self, height: BlockHeight) -> Result<AtHeight<CurveTreeRoot>, Self::Fault>;
+
+    /// The last recorded block, or `None` for an empty chain (genesis
+    /// admission). See [`Tip`] for why `Option`.
+    ///
+    /// CEN-A2 (`hash`); the connecting height of B1, B5, and later 4.C /
+    /// CEN-F5 (`height`, via [`Tip::connecting_height`]).
+    fn tip(&self) -> Result<Option<Tip>, Self::Fault>;
 }

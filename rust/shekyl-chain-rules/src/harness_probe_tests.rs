@@ -48,6 +48,7 @@ fn an_empty_chain_has_no_tip_and_every_height_is_above_it() {
     let chain = MockChain::default();
     assert_eq!(chain.tip(), None);
     chain.with_view(|view| {
+        assert_eq!(infallible(view.tip()), None);
         for height in [0, 1, u64::MAX] {
             let height = BlockHeight::from_raw(height);
             assert_eq!(infallible(view.block_at(height)), AtHeight::AboveTip);
@@ -62,7 +63,16 @@ fn push_records_densely_from_zero_and_reads_back_by_height() {
         .push(recorded(1_000), root(0xa0))
         .push(recorded(1_060), root(0xa1))
         .push(recorded(1_120), root(0xa2));
-    assert_eq!(chain.tip(), Some(BlockHeight::from_raw(2)));
+    let tip = chain.tip().expect("three blocks recorded");
+    assert_eq!(tip.height, BlockHeight::from_raw(2));
+    assert_eq!(
+        tip.hash,
+        recorded(1_120).hash,
+        "the tip's identity is the last block's"
+    );
+    assert_eq!(Tip::connecting_height(Some(&tip)), BlockHeight::from_raw(3));
+    assert_eq!(Tip::connecting_height(None), BlockHeight::ZERO);
+    chain.with_view(|view| assert_eq!(infallible(view.tip()), Some(tip)));
     chain.with_view(|view| {
         for (height, (stamp, byte)) in (0u64..).zip([(1_000, 0xa0), (1_060, 0xa1), (1_120, 0xa2)]) {
             let height = BlockHeight::from_raw(height);

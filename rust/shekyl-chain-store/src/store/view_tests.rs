@@ -10,7 +10,7 @@
 //! visibility across two blocks (SCW-13), and the corrupt-read → SI-7 →
 //! poison path.
 
-use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, RuleSet};
+use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, RuleSet, Tip};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
@@ -145,6 +145,48 @@ fn root_at_on_an_empty_chain_is_the_empty_tree_at_zero_and_above_tip_after() {
             AtHeight::Recorded(CurveTreeRoot::EMPTY)
         );
         assert_eq!(view.root_at(BlockHeight::from_raw(1))?, AtHeight::AboveTip);
+        Ok(())
+    });
+    assert_eq!(out, Ok(()));
+    cleanup(&path);
+}
+
+/// `tip()` is the trait's read of the same `block_info.last()` the other
+/// two classify against: `None` on an empty chain, then the last recorded
+/// block's height and identity — the identity `block_at` returns for that
+/// height, so a rule reading `previous == tip.hash` (CEN-A2) and one reading
+/// `block_at(tip.height)` agree by construction (E6 slice 1).
+#[test]
+fn tip_is_none_on_an_empty_chain_and_the_last_recorded_identity_after() {
+    let path = tmp("view-tip");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        assert_eq!(view.tip()?, None, "empty chain: no tip, not a sentinel");
+        assert_eq!(
+            Tip::connecting_height(view.tip()?.as_ref()),
+            BlockHeight::ZERO
+        );
+
+        let b0 = block(0, 1_000);
+        record_block(batch, 0, &b0)?;
+        let tip = view.tip()?.expect("one block recorded");
+        assert_eq!(tip.height, BlockHeight::ZERO);
+        assert_eq!(tip.hash, BlockHash::from_bytes(b0.hash()));
+        assert_eq!(Tip::connecting_height(Some(&tip)), BlockHeight::from_raw(1));
+
+        let b1 = block(1, 1_060);
+        record_block(batch, 1, &b1)?;
+        let tip = view.tip()?.expect("two blocks recorded");
+        assert_eq!(tip.height, BlockHeight::from_raw(1));
+        assert_eq!(tip.hash, BlockHash::from_bytes(b1.hash()));
+        let AtHeight::Recorded(recorded) = view.block_at(tip.height)? else {
+            panic!("the tip's height is recorded");
+        };
+        assert_eq!(
+            recorded.hash, tip.hash,
+            "tip() and block_at(tip.height) name one block"
+        );
         Ok(())
     });
     assert_eq!(out, Ok(()));
