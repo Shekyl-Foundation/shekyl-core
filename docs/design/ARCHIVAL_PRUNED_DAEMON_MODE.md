@@ -40,10 +40,11 @@ trigger — re-key owed in F27's PR; S-PRUNE owes a rule-26 plan doc before
 its first increment; §3's six adversarial items now carry status and
 owner; Q6 item 2 is the second increment built on an unruled default;
 Q11's owner is unnamed at day five. §3 WALKED the same day by steering:
-all six dispositioned — two DISCHARGED, three conditional (on
-`bond_duration ≥ W`, on Q6 item 3 / F17 naming one unit, on Q11
-existing), Sybil DISCHARGED with no residual on the self-diluting
-scarcity reward; Q6's gate is open.**
+all six dispositioned — two DISCHARGED, four conditional (on
+`bond_duration(0) · SEB ≥ W`, **violated at today's candidates**; on Q6
+item 3 / F17 naming one unit; on Q9 ruling the coverage floor
+structural; on Q11 existing); Sybil's economics DISCHARGED with no
+residual on the self-diluting scarcity reward; Q6's gate is open.**
 `PDM-Q-S0` is RULED. This is the design home TJ-D named; it is not
 yet the design. **What this document is for:** nothing here is built
 while DRS is in progress — the implementation waits on the C++→Rust
@@ -1078,14 +1079,16 @@ a **detectability boundary**, not a security margin.
   and the other two are downstream of the same measurement. The
   Round-2 re-pin task names all three or it is incomplete.
   **Amended 2026-09-17 (§3 free-riding walk): the gate carries a
-  fourth entry that is a *relation*, not a numeric — `bond_duration ≥
-  W`** (the minimum of the age-scaled `bond_duration` over its range,
-  `consensus_constants.json:37-38`, against Q2's `W`). Below it, a bond
-  posted in the free regime can collect for `W` blocks and release
-  before its promise is ever tested — the regime is farmable. The two
-  are pinned independently today; the Round-2 task re-pins them
-  **together** and asserts the relation, or it is incomplete. The
-  relation is Q2's to state and the gate's to hold.
+  fourth entry that is a *relation*, not a numeric — in one unit,
+  `bond_duration(0) · SEB ≥ W`** — the age-0 bond horizon in blocks
+  (`bond_duration_base_epochs · settlement_epoch_blocks`,
+  `consensus_constants.json:22, :38`) against Q2's `W` in blocks. Below
+  it, a bond posted in the free regime can collect for `W` blocks and
+  release before its promise is ever tested — the regime is farmable.
+  **At today's candidates it is below it:** `40,000` blocks against
+  `≈ 140,720`. The two are pinned independently; the Round-2 task
+  re-pins them **together** and asserts the relation, or it is
+  incomplete. The relation is Q2's to state and the gate's to hold.
 
 - *Second reason it wants to be shallow (2026-09-13, from Q5).* Under
   Q5's anchor model a **synced** node trusts nothing it did not verify
@@ -1169,18 +1172,21 @@ the conditions named on each row are owed to the questions named.**
 | Item | Walked? | Disposition (2026-09-17) | Owes |
 | --- | --- | --- | --- |
 | Withholding | Yes | **DISCHARGED** on four properties: request indistinguishability, requester anonymity, per-tx verify, timeout = miss. Collapses to unreliability, which the m-of-n window prices | Per-shard detection latency on a large holder → the credit wire's draw design; honest-P-behind-flaky-Tor false positive → Round-2 numerics |
-| Free-riding in the free regime | Yes | **DISCHARGED conditional** on a relation: **`bond_duration ≥ W`**, or the regime is farmable. Pay during the regime (the subsidy funds capacity before scarcity) *and* bind the bond | The relation → Q2 and the Round-2 gate (a fourth entry, a *relation*, not a numeric) |
+| Free-riding in the free regime | Yes | **DISCHARGED conditional** on a relation, in blocks: **`bond_duration(0) · SEB ≥ W`**, or the regime is farmable. **Violated at the current candidates** (`40,000` vs `≈ 140,720`). Pay during the regime (the subsidy funds capacity before scarcity) *and* bind the bond | The relation → Q2 and the Round-2 gate (a fourth entry, a *relation*, not a numeric); re-pin `BASE`, `SEB`, `W` together |
 | Eclipse and fetch | Yes | **DISCHARGED.** Running node under `W`: never fetches to verify — identical to today. Band-2 syncer: anchor below `C`, PoW + verified bodies over Tor from the bond table above; residual is nuisance (wasted egress, tip lies) and already P2P-2's | Nothing PDM-shaped |
 | Stripe / shard interaction | Yes | **DISCHARGED conditional** on Q6 item 3 and F17 naming **one unit**: whatever the wire echoes as holdings commits `T` to the same unit the bond names and the challenge draws from | Q6 item 3 / F17 one-unit requirement |
-| Sybil economics | Yes | **DISCHARGED, no residual.** The mechanism is the **self-diluting scarcity reward** — `scarcity(s,E) = (1/R_market(s,E)) · g(age)`, [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) channel 1 — which makes same-shard Sybil and inefficiency the same act; the correlated-failure harm is bounded by a *structural* floor (Foundation work outside `Σwork`, `:310`) | One sentence on Q9's coverage floor: it counts **personas**, not hosts, and cannot see the difference (Model D) — so the floor that matters is structural |
+| Sybil economics | Yes | **Economics DISCHARGED, no residual**, on the **self-diluting scarcity reward** — `scarcity(s,E) = (1/R_market(s,E)) · g(age)`, [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md) channel 1 — which makes same-shard Sybil and inefficiency the same act. **Correlated-failure residual DISCHARGED conditional** on Q9 ruling the coverage floor *structural* (Foundation / explorers holding `CompleteTree`, Foundation work outside `Σwork`, `:310`) — Q9 is OPEN on that item today | Q9: rule the floor structural, and say it counts **personas**, not hosts (Model D cannot see the difference) |
 | Reorg | Yes | **DISCHARGED conditional** on Q11 existing (which is Q11's point): `D_max` caps depth (`CEN-E2`); discard only below `tip − W` with `W ≥ D_max` (F10); undo-log floor `≥ D_max` + `PopBelowFloor` (SCW-7); pops within `D_max` re-pool full bodies; trim's leaf reads regenerate from the skeleton (F12) and the `:9361` throw dies with the C++ | The predicate asserted where retirement is decided — S-PRUNE's row (F31), not discovered at revert |
 
 **Two things fall out across the six that sit in no single item.** The
-Round-2 gate now carries a **relation** (`bond_duration ≥ W`), not only
-three numerics — Q11's gate paragraph is amended below. And Q9's
-coverage floor needs one sentence saying it **counts personas** — a
-persona count can overstate hosts and Model D forbids seeing it, which
-is why the floor that carries weight is structural, not market-derived.
+Round-2 gate now carries a **relation** (`bond_duration(0) · SEB ≥ W`,
+in blocks), not only three numerics — Q11's gate paragraph is amended
+below — **and the relation fails at today's candidates** (`40,000` vs
+`≈ 140,720` blocks), which is the first concrete thing this walk found
+that the design as pinned does not already handle. And Q9's coverage
+floor needs to be ruled **structural** and to say it **counts personas**
+— a persona count can overstate hosts and Model D forbids seeing it,
+which is why a market-derived floor cannot carry the Sybil residual.
 Everything else discharges on properties already in the design, which is
 evidence the shape is right rather than a reason to stop checking.
 
@@ -1225,7 +1231,9 @@ evidence the shape is right rather than a reason to stop checking.
   question is Q2's output. Q2 must state the duration and what the
   market does during it; this bullet is discharged against that
   duration, not against `DRS-E*`'s calendar.
-  **Walk (2026-09-17) — DISCHARGED conditional on `bond_duration ≥ W`.**
+  **Walk (2026-09-17) — DISCHARGED conditional on
+  `bond_duration(0) · SEB ≥ W`; the relation is VIOLATED at the current
+  candidates.**
   `T` is anyone who bonds before the first tx crosses `tip − W`. `T`
   controls when to bond, what holdings to declare, when to release. `T`
   cannot avoid being challenged, and cannot answer a challenge on bytes
@@ -1238,14 +1246,32 @@ evidence the shape is right rather than a reason to stop checking.
   funds archiver capacity before it is needed — **provided the promise
   is tested**, which it is at `W`, when holdings become scarce and
   dropped bytes fail challenges. The attack form is *bond, collect for
-  `W`, release before scarcity*, and it works iff
-  `bond_duration < W`. So the discharge is a **relation between two
-  genesis-frozen numerics currently pinned independently**:
-  **`bond_duration ≥ W`, or the free regime is farmable.**
-  (`bond_duration` is age-scaled, `config/consensus_constants.json:37`;
-  the relation binds its *minimum* over the age range.) Both go to the
-  Round-2 gate and must be re-pinned together; the gate item now says
-  so (Q11 §, amended 2026-09-17). The other face: paying zero during
+  `W`, release before scarcity*, and it works iff the bond expires
+  before the window does. So the discharge is a **relation between two
+  genesis-frozen numerics currently pinned independently, in one
+  unit**. `bond_duration` is counted in settlement *epochs* and is
+  age-scaled — `bond_duration(age) = BASE · (1 + SCALE · age)`,
+  `BASE = 4`, `SCALE = 4`, `age ∈ [0, 1]`
+  (`config/consensus_constants.json:37-39`,
+  [`ARCHIVAL_TIMING_CONSTANTS.md`](ARCHIVAL_TIMING_CONSTANTS.md) §1) —
+  while `W` is in blocks; `SEB = settlement_epoch_blocks = 10,000`
+  (`:22`) converts. A shard bonded in the free regime is young by
+  construction, so the binding case is `age = 0`:
+  **`bond_duration(0) · SEB ≥ W`, or the free regime is farmable.**
+  (Corrected 2026-09-17 on review from a unitless `bond_duration ≥ W`,
+  which could have been read as satisfied by an epoch count against a
+  block count.) **At the current candidates the relation fails:**
+  `4 · 10,000 = 40,000` blocks (~55 days) against `W`'s F19 candidate
+  `≈ 140,720` blocks (~195 days) — a bond posted at genesis on a young
+  shard expires about 140 days before the first body it promised to
+  hold becomes scarce, so the free regime *as currently pinned* is the
+  farm this walk describes. That is not a defect in the walk; it is
+  what the walk is for. Either `BASE · SEB` rises to cover `W`, or `W`
+  falls toward `D_max`'s floor, or the free-regime reward is shaped so
+  the promise is tested before the bond can release — Q2's to state.
+  Both numerics go to the Round-2 gate and must be re-pinned
+  **together**; the gate item now says so (Q11 §, amended 2026-09-17).
+  The other face: paying zero during
   the regime closes the farm but nobody bonds until day 195 and the
   market does not exist when scarcity arrives. **Pay, and bind the
   bond.** The relation is owed to Q2 and to the gate.
@@ -1298,8 +1324,11 @@ evidence the shape is right rather than a reason to stop checking.
   popular shards? Build on
   [`ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md`](ARCHIVAL_WORK_PRECISION_AND_ESCALATION.md)
   `r ≫ 1000`; do not re-derive.
-  **Walk (2026-09-17) — DISCHARGED, no residual; the mechanism is the
-  self-diluting scarcity reward, cited by name so it is not re-derived.**
+  **Walk (2026-09-17) — economics DISCHARGED with no residual on the
+  self-diluting scarcity reward, cited by name so it is not re-derived;
+  the correlated-failure residual DISCHARGED conditional on Q9 ruling
+  the coverage floor structural (corrected on review: Q9 is OPEN on the
+  floor, so the floor is a condition here, not a premise).**
   `T` is one operator running `k` personas, `k` bonds, `k` onions, and
   one disk holding shard `s` once. `T` controls persona count; `T`
   cannot make the personas look related, and Model D makes that a
@@ -1347,10 +1376,13 @@ evidence the shape is right rather than a reason to stop checking.
   against its own interest to make `s` look covered and then fail;
   that is griefing, priced at `k` locked bonds and a diluted reward,
   for the payoff of one range going unverifiable if the host dies —
-  and the structural floor makes even that moot. **Owed:** one
-  sentence on Q9's coverage floor — it **counts personas, not hosts**,
-  cannot see the difference, and is therefore structural rather than
-  market-derived.
+  and a structural floor makes even that moot. **Owed to Q9, and the
+  condition on this discharge:** rule the coverage floor **structural**
+  (Foundation / explorers holding `CompleteTree` regardless of the
+  market, outside `Σwork`), and say that any market-derived count
+  **counts personas, not hosts** and cannot see the difference. Until
+  Q9 rules it, the dilution argument alone leaves the one exact harm
+  above open — bounded, griefing-priced, but open.
 - **Reorg.** Discarded-then-reorged. The retention prune is un-journaled.
   State revert behaviour explicitly.
   [`CONSENSUS_C2_R1_REORG.md`](../completed/CONSENSUS_C2_R1_REORG.md) is
@@ -2407,14 +2439,22 @@ consequence that no lane had recorded.
   The anchor model uses **both**: E1 is the band-1 trust assertion
   (block `C` has hash `H`), E2 is the reorg fence `D_max` hangs from. A
   consensus-side owner pointed at E1 alone would be reading the wrong
-  function for Q11. **The larger consequence:** both rows carry the
-  same C2-R1b caveat — *existence HELD for C2-R0; semantics ratified
-  while the mechanism exists; crossing reopens when DRS/R8 moves
-  checkpoint state* (E1 adds *"trigger re-checked at #595: not
-  live"*). F27's `Trust::BelowAnchor(anchor)` sourced from a
-  release-carried table in Rust **is** moving checkpoint state into
-  Rust. That is the named trigger, on two ratified rows, and it fires
-  the day E6's slice 3 or 6 lands the mode. The Q2 crossing question
+  function for Q11. **The larger consequence:** both rows are
+  ratified under the same C2-R1b premise — *existence HELD for C2-R0;
+  semantics ratified **while the mechanism exists*** — and they word
+  the consequence differently (corrected on review, read at `:368-369`):
+  **`CEN-E1`** states the trigger explicitly — *crossing reopens when
+  DRS/R8 moves checkpoint state (trigger re-checked at #595: not
+  live)* — while **`CEN-E2`** records only the premise (*the alt-height
+  floor stands as the checkpoint arm's admission fence*) with no
+  explicit reopening clause. F27's `Trust::BelowAnchor(anchor)` sourced
+  from a release-carried table in Rust **is** moving checkpoint state
+  into Rust. For E1 that is the named trigger firing; for E2 it is the
+  ratification premise ceasing to hold — the mechanism the row was
+  ratified *while it exists* stops being the C++ one. Same event, two
+  wordings, both rows reopen; E2's row should gain the explicit clause
+  in the re-key so the next reader does not have to infer it from the
+  premise. It fires the day E6's slice 3 or 6 lands the mode. The Q2 crossing question
   those rows closed — *derivation-free hash equality, nothing for Rust
   to hold* — was closed on the premise that the mechanism stays in C++.
   Under the anchor model it does not, and under `assumevalid`
@@ -2431,13 +2471,15 @@ consequence that no lane had recorded.
   it names the carrier. The `CEN-E1` claim in E6's `tip` text is
   flagged here as another lane's line, to be corrected when that branch
   lands.
-- **PDM-Q-F31.** **S-PRUNE has no plan doc, and every implementation
-  item in this charter lands on or adjacent to it.** The §8
-  "implementation after rulings" list — the discard predicate on
-  `eligible_height` vs `tip − W` (F10), retention exceptions
-  (`retain(s)`/`release(s)`, Q9), the undo-log floor (SCW-7), the
-  `pqc_auths` discard consuming the hash row (F26), `W` entering D11's
-  digest domain — is S-PRUNE's surface. S-PRUNE is deliberately **not
+- **PDM-Q-F31.** **S-PRUNE has no plan doc, and the store-side
+  implementation items in this charter land on or adjacent to it.**
+  Scoped on review (2026-09-17): not *every* §8 item — F27's
+  below-anchor mode is E6's and F28's skeleton wire field is
+  `LV-`/`PWC-`'s, and neither belongs in an S-PRUNE plan. What is
+  S-PRUNE's: the discard predicate on `eligible_height` vs `tip − W`
+  (F10), retention exceptions (`retain(s)`/`release(s)`, Q9), the
+  undo-log floor (SCW-7), the `pqc_auths` discard consuming the hash
+  row (F26), and `W` entering D11's digest domain. S-PRUNE is deliberately **not
   extracted** (`DAEMON_REDB_STORE.md` §7: five of six methods are the
   stripe engine, superseded before they can be ported) and already
   carries two contracts written on its row before it has a home (SCW-7,
@@ -2533,7 +2575,7 @@ consequence that no lane had recorded.
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
 | `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory; journal horizon `tip − (CRB + n·SEB + D_max)`, F19) | OPEN — widened 2026-09-13; ruled after Q6 (F13); horizon blocked on Q11 |
-| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24); **the relation `bond_duration ≥ W`** (§3 free-riding walk, 2026-09-17 — below it the free regime is farmable; Q2 states it, the Round-2 gate holds it as its fourth entry) | OPEN — blocked on Q11 |
+| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24); **the relation `bond_duration(0) · SEB ≥ W`**, in blocks (§3 free-riding walk, 2026-09-17 — below it the free regime is farmable; **violated at today's candidates, 40,000 vs ≈ 140,720**; Q2 states and resolves it, the Round-2 gate holds it as its fourth entry) | OPEN — blocked on Q11 |
 | `PDM-Q3` | Residual consensus reads after TJ-A; **the instrument is `ChainView`'s surface (F29)** | OPEN — today not node-local (`PDM-Q-F8`); in the Rust validator the residual set is empty by construction at `645d09dc3` (no recorded-body accessor), instrument handed to E6 as a standing trait property (F29, 2026-09-16) |
 | `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | OPEN — collapsed 2026-09-13 (F20/F23/F24); TJ-F sentence stated |
 | `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's; **band 1 is unbuildable against DRS-D12's writer until E6 issues a below-anchor set (F27, handed off 2026-09-16); `TxBlobEntry` grows `pqc_auth_hash` under Q6 item 2 (F28, owner `LV-`/`PWC-`)** |
@@ -2639,17 +2681,21 @@ shape and says so. Q11's owner: day five.
 **§3 walked (steering, 2026-09-17, same day the table was added) — Q6's
 gate is now open.** All six items positioned and dispositioned against
 the design as it stands: withholding and eclipse DISCHARGED outright;
-free-riding conditional on **`bond_duration ≥ W`** (a relation the
-Round-2 gate now carries as its fourth entry); stripe/shard conditional
-on Q6 item 3 and F17 naming **one unit**; Sybil DISCHARGED with no
-residual on the self-diluting scarcity reward
-(`REWARD_EMISSION_LEG.md` channel 1) plus a structural floor; reorg
-conditional on Q11 existing. What the walk hands to the ruling pass:
-Q2 states the relation; Q6 item 3 states the unit once, for bond,
-wire echo and draw alike; Q9's coverage floor says it counts personas;
-S-PRUNE's plan doc (F31) carries the discard-side predicate assertion.
-Nothing in the six requires a mechanism the design lacks. The ruling
-pass for Q6 items 1–3 can now be the transcription it was said to be.
+free-riding conditional on **`bond_duration(0) · SEB ≥ W`** (a relation
+the Round-2 gate now carries as its fourth entry — **and which fails at
+today's candidates, `40,000` vs `≈ 140,720` blocks**); stripe/shard
+conditional on Q6 item 3 and F17 naming **one unit**; Sybil's economics
+DISCHARGED with no residual on the self-diluting scarcity reward
+(`REWARD_EMISSION_LEG.md` channel 1), its correlated-failure residual
+conditional on Q9 ruling the floor structural; reorg conditional on Q11
+existing. What the walk hands to the ruling pass:
+Q2 states the relation and resolves its violation; Q6 item 3 states
+the unit once, for bond, wire echo and draw alike; Q9 rules the coverage
+floor structural and says it counts personas; S-PRUNE's plan doc (F31)
+carries the discard-side predicate assertion. Nothing in the six
+requires a mechanism the design lacks; one requires a numeric the
+design has wrong. The ruling pass for Q6 items 1–3 can now be the
+transcription it was said to be.
 
 ---
 
