@@ -37,10 +37,9 @@
 //!   writer exists from the seal (amendment A2), so `TableDoesNotExist` on
 //!   a chain table is a file this store did not write, not an empty chain.
 
-use redb::{
-    Key, MultimapTableDefinition, ReadOnlyMultimapTable, ReadOnlyTable, ReadTransaction,
-    TableDefinition, Value,
-};
+use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
+#[cfg(test)]
+use redb::{MultimapTableDefinition, ReadOnlyMultimapTable};
 use shekyl_chain_rules::{AtHeight, Tip};
 use shekyl_types::{BlockHash, BlockHeight, LongTermWeight};
 use shekyl_units::AtomicUnits;
@@ -139,8 +138,9 @@ pub type RangeItem<T> = Result<(BlockHeight, T), StoreError>;
 
 /// A read snapshot of the store.
 ///
-/// Table access goes through this type, not a raw `ReadTransaction`, so
-/// later read paths cannot grow a second way to open tables. Holds the
+/// Table access goes through this type, not a raw `ReadTransaction`, and
+/// from S-CHAIN-R commit 6 the raw handles are crate-private too (Q3): what
+/// a caller outside the crate reads is the typed surface above. Holds the
 /// store it was taken from so [`tip`](Self::tip) can report the writer's
 /// state beside the recorded tip.
 pub struct ReadSnapshot<'store> {
@@ -153,12 +153,17 @@ impl<'store> ReadSnapshot<'store> {
         Self { txn, store }
     }
 
-    /// Open a table for reading.
+    /// Open a table for reading — the raw handle, **crate-private** (Q3,
+    /// SCR-9). Every table this surface serves has a typed read above;
+    /// a raw handle on the read side is the mirror of the raw `properties`
+    /// handle the write side already refuses (`PropertiesAreTyped`), and
+    /// a later surface lands its own typed reads rather than reaching for
+    /// this. In-crate tests keep it.
     ///
     /// # Errors
     ///
     /// [`EngineError::Table`] if the table does not exist or the engine refuses.
-    pub fn open_table<K, V>(
+    pub(crate) fn open_table<K, V>(
         &self,
         definition: TableDefinition<'_, K, V>,
     ) -> Result<ReadOnlyTable<K, V>, StoreError>
@@ -171,12 +176,17 @@ impl<'store> ReadSnapshot<'store> {
             .map_err(|e| EngineError::Table(e).into())
     }
 
-    /// Open a multimap table for reading.
+    /// Open a multimap table for reading — crate-private as
+    /// [`open_table`](Self::open_table), and **test-only**: no production
+    /// read in the crate opens a multimap raw (`output_amounts` has no
+    /// S-CHAIN-R read; S-ARCH lands its own typed ones), so outside tests
+    /// this would be dead code.
     ///
     /// # Errors
     ///
     /// [`EngineError::Table`] if the table does not exist or the engine refuses.
-    pub fn open_multimap_table<K, V>(
+    #[cfg(test)]
+    pub(crate) fn open_multimap_table<K, V>(
         &self,
         definition: MultimapTableDefinition<'_, K, V>,
     ) -> Result<ReadOnlyMultimapTable<K, V>, StoreError>
