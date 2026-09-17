@@ -1073,6 +1073,14 @@ increment that consumes them); owed to slice 1 as
 `fn tip(&self) -> Result<Tip { height, hash, root }, Self::Fault>` with each
 field's row named (§13). Alternative: add it now, since the shape is settled.
 **Ruled: keep the default.** Slice 1 adds `tip()` before CEN-A2/B5.
+**DISCHARGED by slice 1 (PR #768), in a shape that refined this sketch:**
+`fn tip(&self) -> Result<Option<Tip { height, hash }>, Fault>` — `Option`
+for the empty chain (slice 1 Q1), and **no `root` field**: B5 reads
+`root_at(connecting_height)`, the one read path SCW-19 keyed (key `h` = the
+state at `h`), and a second root on `Tip` would have been a second path to
+the same cell. The "unreachable `AboveTip` arm" this question worried about
+is real and is written as a refusal (G11), pinned by a fixture against a view
+with no roots. §4.3 is the contract; this paragraph is the record.
 
 **Q12-3 — `shekyl-address` for `Network`.** `rules_at(nettype, height)` needs
 the nettype enum, and the workspace's one is `shekyl_address::Network`.

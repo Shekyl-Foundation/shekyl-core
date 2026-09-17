@@ -10,7 +10,7 @@
 //! visibility across two blocks (SCW-13), and the corrupt-read → SI-7 →
 //! poison path.
 
-use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, RuleSet, Tip};
+use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, RuleSet};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
@@ -166,17 +166,12 @@ fn tip_is_none_on_an_empty_chain_and_the_last_recorded_identity_after() {
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         assert_eq!(view.tip()?, None, "empty chain: no tip, not a sentinel");
-        assert_eq!(
-            Tip::connecting_height(view.tip()?.as_ref()),
-            BlockHeight::ZERO
-        );
 
         let b0 = block(0, 1_000);
         record_block(batch, 0, &b0)?;
         let tip = view.tip()?.expect("one block recorded");
         assert_eq!(tip.height, BlockHeight::ZERO);
         assert_eq!(tip.hash, BlockHash::from_bytes(b0.hash()));
-        assert_eq!(Tip::connecting_height(Some(&tip)), BlockHeight::from_raw(1));
 
         let b1 = block(1, 1_060);
         record_block(batch, 1, &b1)?;

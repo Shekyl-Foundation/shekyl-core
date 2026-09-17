@@ -114,8 +114,9 @@ The genesis arm is still written explicitly in every rule that reads the tip
   CurveTreeRoot::EMPTY` (`view.rs:218–220`), which is what the genesis header
   carries. The round-1 draft's worry — `tip()?.map(..)` letting genesis fall
   through as a pass — is answered by the fixtures, not the type:
-  `cen_a2_genesis_previous_is_zero` and `cen_b5_genesis_root_is_empty` (§7)
-  both refuse a wrong genesis, so a rule that forgot the arm is red.
+  `cen_a2_genesis_previous_is_the_null_hash` and
+  `cen_b5_genesis_root_is_the_empty_tree` (§7) both refuse a wrong genesis, so
+  a rule that forgot the arm is red.
 
 **Connecting height** is a crate-private helper, `fn connecting_height(tip:
 Option<&Tip>) -> BlockHeight` (`None → 0`, `Some(t) → t.height + 1`), used
@@ -406,7 +407,7 @@ one.
 | B6 | *landed as:* `cen_b6_identity_is_block_hash_and_records_the_row` — `B6::identity` equals `Block::hash` and inserts exactly its row; the derivation site is the row's function (Q5) |
 | B7 | `cen_b7_never_refuses_a_future_version_is_b1s_refusal` — B7 **called alone** passes `major_version ∈ {2, 7, 255}` (the pipeline stops at B1, so this is the only way to observe B7 on such a header — PR #762 review); through the pipeline the same header is refused by **B1**, `assert_refused(.., CenRow::B1, ..)`, never B7 |
 | B2 (later set) | `cen_b2_ports_the_predicate_not_the_effect` — under `RuleSet::admitting_for_tests(2)` (a `#[cfg(test)]` crate-private constructor: no second set is issued, and the refusal arm has no other way to run), `boundary_pair(2, 1)` on the vote refuses B2 with the rule alone, and through the pipeline `(major 2, minor 1)` is refused B2 while `(2, 2)` passes — PR #762 review |
-| all | `slice_1_version_rows_are_exactly_what_a_pass_covers` — after PR #762 a passing candidate's `coverage().iter()` is `{B1, B2, B7}`; grows to `{A2, B1, B2, B5, B6, B7}` at the `tip()` PR; `covers_landed` holds, `is_complete_for` does not |
+| all | `slice_1_rows_are_exactly_what_a_pass_covers` (named `slice_1_version_rows_…` at #762) — a passing candidate's `coverage().iter()` is `{A2, B1, B2, B5, B6, B7}` after the `tip()` PR (`{B1, B2, B7}` after #762); `covers_landed` holds, `is_complete_for` does not |
 
 Commit plan (rule 90; each builds, `fmt`/`clippy` clean, tests green).
 **Amended 2026-09-16 (maintainer OK at PR #761 review, cross-lane):** commit 1

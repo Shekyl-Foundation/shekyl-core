@@ -102,8 +102,14 @@ impl Tip {
     /// `u64::MAX` is unreachable — a dense chain of 2^64 blocks — so the
     /// saturation can never be observed; it is written rather than
     /// `unwrap`ped so no rule carries a panic path.
+    ///
+    /// Crate-private (`CHAIN_RULES_SLICE_1.md` §2): the connecting height is
+    /// a rule's operand, and the store derives its own from `block_info`'s
+    /// last key at `connect` (SI-2). A second consumer would be a reason to
+    /// reopen, documented with its call site (rule 21), not a `pub` in
+    /// advance.
     #[must_use]
-    pub fn connecting_height(tip: Option<&Self>) -> BlockHeight {
+    pub(crate) fn connecting_height(tip: Option<&Self>) -> BlockHeight {
         tip.map_or(BlockHeight::ZERO, |t| {
             BlockHeight::from_raw(t.height.to_raw().saturating_add(1))
         })
