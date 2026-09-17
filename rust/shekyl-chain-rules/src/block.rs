@@ -24,10 +24,29 @@ use crate::rules::header::B6;
 /// and the store never derives a consensus-visible value (C2-R8 Q4).
 ///
 /// `pqc_auth_hash` is `None` exactly when the txid is **3-part** — a
-/// coinbase, a serve-credit, the malformed gen-first and no-input shapes — a fact about
-/// the identity, not about what was kept; see [`PqcAuthHash`]. For a
-/// coinbase `prunable_hash` is `keccak256("")` — what the C++ store writes —
-/// not the txid's null-hash substitute; see [`PrunableHash`].
+/// coinbase, a serve-credit, the malformed gen-first and no-input shapes —
+/// a fact about the identity, not about what was kept; see [`PqcAuthHash`].
+/// For a coinbase `prunable_hash` is `keccak256("")` — what the C++ store
+/// writes — not the txid's null-hash substitute; see [`PrunableHash`].
+///
+/// The store row this feeds (`txs_pqc_auth_hash`, `DAEMON_REDB_STORE.md`
+/// §7.7 item 3) is held to a **three-leg** invariant, because under
+/// `PDM-Q6` a hash row *without* its segment is the steady state of every
+/// 4-part tx below the universal window `W`, not a fault:
+///
+/// 1. hash row present ⇔ txid 4-part — permanent, written at connect,
+///    never deleted (`validate` rejects the shapes — gen-first or no-input
+///    with auths — that could split "4-part" from "segment non-empty");
+/// 2. segment present ⇒ hash row present — a body the store cannot verify
+///    is the violation;
+/// 3. hash row present ∧ segment absent ⇔ *discarded* — below `W` and not
+///    a retention exception, or never held (a band-1 skeleton). One store
+///    state with one meaning, however the node arrived at it.
+///
+/// So `None` here is *the txid has no third component*; leg 3 is *the
+/// component exists and the bytes do not*. Different facts, never one
+/// representation. A `PDM-Q6` ruling that keeps `pqc_auths` universal
+/// retires the *row*, not the component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TxIdentity {
     /// The transaction hash (txid).
