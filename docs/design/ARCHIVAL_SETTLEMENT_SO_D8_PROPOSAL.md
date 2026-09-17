@@ -2,8 +2,9 @@
 
 **Status:** OPEN — **PROPOSAL; direction RATIFIED.** Rick ratified shape
 **R-B** (post-issuance window, §2) on 2026-09-13. **RULED 2026-09-16:**
-Q3, Q8 (incl. P1/P2), Q9, Q10, Q12, Q13, Q15; Q14 closed by Q15.
-**Still to be ruled:** `SO-D8a`–`SO-D8e` (§2.1 items 1–6); Q4 (`λ`
+Q3, Q8 (incl. P1/P2), Q9, Q10, Q12, Q13, Q15; Q14 closed by Q15;
+`SO-D8a`, `SO-D8b`, `SO-D8c` (transcriptions of R-B / PC-D4 / SO-D7).
+**Still to be ruled:** `SO-D8d`–`SO-D8e`; Q4 (`λ`
 unpinned — must pin before any production caller). Slice C is not
 authorized. `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold on the
 writer's call site **stands**. No admission code, no consensus code, and
@@ -259,21 +260,24 @@ therefore **Rick's**:
 
 ### 1.1 What is true about `W₂`, and why it makes the round larger
 
-`CHALLENGE_RESPONSE_BLOCKS` has **no admission consumer** — verified:
-`constants.rs:171`, `:183–185`, `:194–195` are const-asserts and `lib.rs:139`
-is the re-export; nothing else reads it. Its doc string — *"blocks after a
-challenge's issuing block to accept its serve-credit response"*
-(`constants.rs:59`) — describes a gate that does not exist. **There is no
-per-challenge deadline anywhere in code.** Its value is
+`CHALLENGE_RESPONSE_BLOCKS` has **no admission consumer in code** —
+verified 2026-09-13: `constants.rs:171`, `:183–185`, `:194–195` are
+const-asserts and `lib.rs:139` is the re-export; nothing else reads it.
+Its doc string — *"blocks after a challenge's issuing block to accept its
+serve-credit response"* (`constants.rs:59`) — described a gate that did
+not exist. **`SO-D8a` RULED 2026-09-16 is that reader (design); Slice C is
+the first code read; the FOLLOWUPS row is discharged.** Its value is
 `SETTLEMENT_EPOCH_BLOCKS / W2_EPOCH_DIVISOR = 10,000 / 20 = 500`
 (`constants.rs:147,:153,:202`) — about 16.7 hours at 2-minute blocks.
 
 This does not shrink `SO-D8`; it removes its escape hatch. §12's argument was
 *"the ruled per-challenge deadline already exists and is per-challenge"*, so
-the `h_close` gate could simply be re-pointed at it. It does not exist. Under
+the `h_close` gate could simply be re-pointed at it. It did not exist
+(2026-09-13). Under
 the ratified shape R-B the round must **design** that deadline, not re-point
 to it — and the constant then acquires the consumer its doc string already
-describes (§2.1 item 6).
+describes (`SO-D8a` / §3 **RULED 2026-09-16**; the FOLLOWUPS row
+**discharged** with that item — first admission-path reader).
 
 `SO-D7`'s lag argument (*"a challenge drawn at epoch-relative block 9,999
 resolves 500 blocks into `E+1`"*, `IMPLEMENTATION_INDEX.md` SO row) reads the
@@ -351,6 +355,16 @@ recorded in `ARCHIVAL_PER_CHALLENGE_RECORD.md` in-line at `PC-D2` when the
 ruling PR lands (rule 23: the superseded row carries its status in the row).
 
 ### 1.5 F5 — every FCMP++ spend is linkable to the output it spends, by the public 4th leaf scalar (**tree-wide; → `PL-D1`, CLOSED by `PL-D3` in PR #745, 2026-09-14; the table below is the defect as found at `dev@37accf6f`, 2026-09-13**)
+
+**The 2026-09-16 F5 agent brief is WITHDRAWN, not amended.** It instructed
+an agent to verify the defect, census the blast radius, correct
+`FCMP_PLUS_PLUS.md` / `MERKLE_TREE.md` / `POST_QUANTUM_CRYPTOGRAPHY.md` /
+`REWARD_EMISSION_LEG.md` at source, and produce a fix round — against a
+round already CLOSED by `PL-D3` (#745, 2026-09-14). Re-deriving it would
+rewrite the documents #745 already corrected (the RF-D8 (i) fifth-site
+shape). The brief never landed in the tree. The living surface is the
+`PL-` index row and `FCMP_SPEND_LINKABILITY.md`. Do not reopen `PL-D3`.
+Do not edit the `PL-` row from this lane (rule 94 §6).
 
 Rick asked, before adopting a witness scheme that reveals a coinbase output's
 per-output hybrid key early: *what prevents `H(revealed hybrid_public_key)`
@@ -495,8 +509,9 @@ that recommendation is **withdrawn** and the reason it was wrong is F4.
 
 ### 2.1 What R-B modifies — eight items
 
-Items **7 and 8 RULED 2026-09-16** (Q10, Q9). Items **1–6 remain** with
-`SO-D8a`–`e` (Q4 still unpinned inside item 6).
+Items **7 and 8 RULED 2026-09-16** (Q10, Q9). **`SO-D8a`/`b`/`c` RULED
+2026-09-16** (items 3b/fire, 4, 5 — transcriptions). Items **d–e remain**;
+Q4 still unpinned inside item 6.
 
 Rick's enumeration of 2026-09-13, re-grounded at source; where the tree
 disagrees with the enumeration the correction is marked.
@@ -561,7 +576,8 @@ disagrees with the enumeration the correction is marked.
    with the verification scoped to a mechanism R-B replaces.
 6. **Constants get their referents.** `CHALLENGE_RESPONSE_BLOCKS` becomes the
    per-challenge deadline its doc string (`constants.rs:59`) already
-   describes; `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`
+   describes — that reader is `SO-D8a` **RULED 2026-09-16**; the FOLLOWUPS
+   row **discharged**. `CHALLENGE_RESOLUTION_BLOCKS ≥ CHALLENGE_RESPONSE_BLOCKS`
    (`:183–185`) becomes load-bearing (item 5 depends on it). `λ` **must** be
    pinned to `CHALLENGES_PER_PAIR_PER_EPOCH` before any of this (Q4, §7.3).
 7. **New daemon-side secret lifetime — Q10 RULED 2026-09-16 (§7.7): accept
@@ -729,18 +745,21 @@ checked, no collision; TSV row at Slice C). Hiding is theater because
 the reveal publishes `pk`. The join identifies `h`'s coinbase (stealth
 payout already in the block), not a miner identity. Real residual is
 P2 / fixture 12. Reopen if `h` is removed **in order to conceal** the
-issuing block. Open: Q4 (`λ` unpinned); `SO-D8a`–`e`.
+issuing block. Open: Q4 (`λ` unpinned); `SO-D8d`–`e`.
 
 ---
 
-## 3. `SO-D8a` — boundary arithmetic and the deadline gates, under R-B
+## 3. `SO-D8a` — boundary arithmetic and the deadline gates, under R-B — RULED 2026-09-16
 
-**Proposed: the boundary rule is `E = epoch(h)` — the issuing block's epoch —
-enforced by `SO-D9` (i) evaluated at `h`; the deadline is per-challenge,
-`h < h_incl ≤ h + CHALLENGE_RESPONSE_BLOCKS`.** A draw at epoch-relative block
+**RULED 2026-09-16: transcription of the R-B ratification.** `E = epoch(h)` —
+the issuing block's epoch — enforced by `SO-D9` (i) evaluated at `h`. The
+fire gate dies. `h_close` is replaced by the per-challenge `W₂` bound:
+`h < h_incl ≤ h + CHALLENGE_RESPONSE_BLOCKS`. A draw at epoch-relative block
 9,999 of `E` is answerable in any block up to epoch-relative 499 of `E+1`,
 names `E`, and is counted for `E`. Nothing "straddles": the record's epoch is
-a function of a validated height.
+a function of a validated height. This bound is the constant's first
+admission-path reader; the `CHALLENGE_RESPONSE_BLOCKS` FOLLOWUPS row
+**discharges** with this item.
 
 The gates at `serve_credit.rs:208–212` and their C++ twins:
 
@@ -762,17 +781,20 @@ Consensus-visibility: three admission changes (`SO-D9` (i), membership, the
 deadline re-bound) plus witness authentication. All belong to the §8 atomic
 cutover.
 
-## 4. `SO-D8b` — dedup and the membership gate, under R-B
+## 4. `SO-D8b` — dedup and the membership gate, under R-B — RULED 2026-09-16
 
-**Proposed: dedup widens to `(P, s, E, h)` as an exact-get; add `PC-D7`'s
-membership gate against `assignment(h)`.**
+**RULED 2026-09-16: transcription.** Dedup widens to `(P, s, E, h)` exact-get;
+membership against `assignment(h)`. The exact-get resolves here because `h`
+is in the past and in the DB, which is what `PC-D4` could not do.
 
 - Dedup today (`blockchain.cpp:5156`): one serve-credit vin per `(P,s,E)`
   **per epoch** — pair-epoch-wide, `pass_count > 0`. Correct under the beacon
   (one challenge per pair-epoch). Under derived assignment with `λ = 3` draws
   per pair-epoch it would refuse the second and third honest passes, so it
   **must** widen. The widened key `(P,s,E,h)` exact-gets against the `PC-D4`
-  ledger whose height field now means *issuing* block (§2.1 item 4); two
+  ledger whose height field now means *issuing* block (§2.1 item 4) —
+  **resolves because `h` is in the past and in the DB**, which is what
+  `PC-D4` could not do. Two
   records answering different draws of the same pair may share `h_incl` and
   both admit. Mirror in `serve_credit_decisions.rs` in lockstep.
 - **Membership gate, consensus-visible:** admitted only if
@@ -783,13 +805,16 @@ membership gate against `assignment(h)`.**
   block at an assigned height* **and** that block's witness key, which is the
   2-of-3 quadratic's pricing assumption.
 - Cost: answering `(P,s) ∈ assignment(h)` for any `h` in the trailing `W₂`
-  window needs the urn's per-block draws retained for `W₂` blocks. See
-  `SO-D8e`.
+  window needs the urn's per-block draws retained for `W₂` blocks, **including
+  across the epoch boundary** — a record arriving at `h_incl` can cite an
+  `h` in the previous epoch. That window is `SO-D8e`'s structural claim;
+  `SO-D8b` is unimplementable without it. See `SO-D8e`.
 
-## 5. `SO-D8c` — emission gather, under R-B
+## 5. `SO-D8c` — emission gather, under R-B — RULED 2026-09-16
 
-**Proposed: the gather moves from `process_archival_epoch_close_at_height`
-to the slash pass, alongside the settlement writer.** At `h_close(E)` the
+**RULED 2026-09-16: transcription of `SO-D7` applied to a second consumer.**
+The gather moves from `process_archival_epoch_close_at_height`
+to the slash pass, alongside the settlement writer. At `h_close(E)` the
 table is incomplete by up to `W₂` blocks of records; at the slash deadline
 `h_close(E) + 10,000` it is final. `PC-D6`'s fold (one credit per pair-epoch,
 `db_lmdb.cpp:8195` in the writer doc's numbering) is unchanged in shape and
@@ -816,7 +841,10 @@ FATAL (`db_lmdb.cpp` `set_archival_settlement` throws) rather than
 `min(passes, issued)`: a clamp converts the collusion of §4 into **Served**,
 silently, which is the one outcome the check exists to prevent. Rule 50's
 "check that cannot fail" in its useful form — unreachable only while the
-gates hold, and the FATAL is the alarm that they stopped holding.
+gates hold, and the FATAL is the alarm that they stopped holding. The
+edit that makes it fail is **reverting `SO-D8b`'s dedup widening**
+(back to pair-epoch-wide `pass_count > 0`); name that at the site so a
+later sweep does not read the FATAL as dead.
 
 ## 7. `SO-D8e` — the `assign_epoch` FFI shape (the real item)
 
@@ -843,19 +871,27 @@ a wrapper type in `shekyl-archival-retention`, no new crate:
 
 ```text
 EpochAssignmentCache  (derived state; NEVER persisted — SO-D3 derive-don't-store)
-  open(E, DrawableSet::at_epoch_open(view, E))              // Q3 RULED; λ = CHALLENGES_PER_PAIR_PER_EPOCH, not a parameter (Q4)
+  open(E, DrawableSet::at_epoch_open(view, E))              // Q3 RULED; λ = CHALLENGES_PER_PAIR_PER_EPOCH, not a parameter (Q4); holds E-1's set too for the first W₂ of E
   advance(h, prev_hash) -> &[DrawablePair]                 // assignment(h); O(λ·pairs/SEB) per block; pushed onto the ring
   is_assigned(h, P, s) -> bool                             // admission gate; O(1) for any h in the trailing W₂ ring, refuse-not-guess outside it
   issued_histogram() -> impl Iterator<(DrawablePair, u32)> // writer input at settlement
   checkpoint() / rewind_to(h)                              // pop_block; pops the ring and the urn together
 ```
 
-- **The `W₂` ring is R-B's addition.** Admission asks about *past* blocks, so
-  the per-block draw sets must be retained: `W₂ × ~97 × 40 B ≈ 2 MB` at
-  maturity. An `h` outside the ring is a **refusal**, never a replay on the
-  admission path — the deadline gate (§3) has already refused anything older
-  than `W₂`, so the ring's depth and the deadline are the same constant and
-  must be read from the same place.
+- **The `W₂` ring is R-B's addition, and it is a 500-deep window over
+  past assignments, not a rolling current-epoch value.** `SO-D8b` asks
+  `(P,s) ∈ assignment(h)` for any `h` in `[h_incl − W₂, h_incl)`. A
+  record arriving at `h_incl` can cite an `h` in the previous epoch, so
+  the ring spans epoch boundaries and must hold **two `DrawableSet`s**
+  during the overlap. Sourcing is settled (Q3 reconstruction, λ from
+  the constant once Q4 lands, Q10 memory-only); this window is what
+  isn't. `SO-D8b` is unimplementable without it — do not rule the two
+  as independent. Admission asks about *past* blocks, so the per-block
+  draw sets must be retained: `W₂ × ~97 × 40 B ≈ 2 MB` at maturity. An
+  `h` outside the ring is a **refusal**, never a replay on the
+  admission path — the deadline gate (§3) has already refused anything
+  older than `W₂`, so the ring's depth and the deadline are the same
+  constant and must be read from the same place.
 - **Precedent:** `ArchivalSealHashCache` — derived, in-memory, rebuilt from
   chain on restart, the pattern `SO-D3` named.
 - **Reorg:** `pop_block` rewinds urn and ring to the popped height; a reorg
@@ -868,10 +904,11 @@ EpochAssignmentCache  (derived state; NEVER persisted — SO-D3 derive-don't-sto
 - **Retention (Q7, answered by construction):** the cache for `E` must live
   until the last record for `E` can be admitted — `h_close(E) + W₂` — and,
   if it is to feed the writer without a replay, until the slash pass at
-  `h_close(E) + 10,000`. So two epochs' urns are resident by necessity for
-  the first 500 blocks of each epoch; retaining through the slash deadline
-  (zero replay at settlement) is the recommendation and costs one more
-  epoch of a ~2 MB structure.
+  `h_close(E) + 10,000`. The first 500 blocks of `E` are the overlap the
+  ring already names: two `DrawableSet`s resident (`E-1` and `E`), because
+  a record at `h_incl` can cite an `h` in the previous epoch. Retaining
+  through the slash deadline (zero replay at settlement) is the
+  recommendation and costs one more epoch of a ~2 MB structure.
 - **Ordering hazard, named:** the cache must be advanced with the *validated*
   predecessor's hash, never `prev_id` as supplied on an alt path — the same
   constraint `RF-D5` states for the attestation path's `prev_block_hash`.
@@ -1566,7 +1603,11 @@ literal `32` as the length clause; "land the tag ahead of Q12/F5."
 
 **Bare `WITNESS_COMMITMENT_BYTES` (= 32) hash of the canonical witness
 pk, `cSHAKE256` under customization `shekyl/archival-witness-key-v1`.
-Ruled on its own analysis, not as an inheritance from F5.** Not
+Ruled on its own analysis, not as an inheritance from F5.** Located by
+question (2) against `PL-D3`'s reveal-once: the circuit opens `CM`
+without publishing `pk`; Q12's ML-DSA verify publishes `pk`. Conclusion
+unchanged. *SUPERSEDED: arguing as if F5 were still an open round
+(the 2026-09-16 F5 agent brief, WITHDRAWN §1.5).* Not
 `PL-D3`'s `pqc_key_scalar`. The real residual is P2 (fixture 12), not
 the hash shape.
 
@@ -1586,10 +1627,13 @@ count-pin +1 land with Slice C — a row without a defining site fails
 the gate. Do not mint the row in this docs PR.
 
 F5's mechanism and Q12's question look identical and aren't. The
-decision procedure, three questions **in this order**, is what F5's
-round should apply rather than reaching for hiding reflexively. A
-reader who starts at (3) will propose hiding for objects where it
-buys nothing.
+decision procedure, three questions **in this order**, is what locates
+Q12 relative to `PL-D3`. F5's round already answered (2) with
+reveal-once (in-circuit opening, `pk` unpublished until spend). Q12
+fails (2) because ML-DSA verify publishes `pk`. A reader who starts
+at (3) will propose hiding for objects where it buys nothing.
+*SUPERSEDED: "is what F5's round should apply" — that round closed
+two days before the 2026-09-16 brief treated it as open.*
 
 1. **Is the preimage enumerable?** If yes, the digest is an index;
    hiding or a larger domain is required. `pre_shard_ids` fails here.
@@ -1636,11 +1680,9 @@ witnessed: records already name `h`; P1 priced always-present.
 2. **A blanket "all published commitments hide" is a process
    reopener, not an analysis inversion.** Pedersen-then-open-in-the-clear
    still reveals `pk`; what an observer learns does not change.
-   `WITNESS_COMMITMENT_BYTES` still moves if the bytes do. Argue the
-   three-question procedure in F5/`PL`'s round so Q12 does not inherit
-   a larger constant and an opening it cannot use. Falsify: a `PL-`
-   ruling whose stated scope includes `0x0C` *and* forbids publishing
-   `pk`.
+   `WITNESS_COMMITMENT_BYTES` still moves if the bytes do. Do not
+   re-derive `PL-D3`. Falsify: a `PL-` ruling whose stated scope
+   includes `0x0C` *and* forbids publishing `pk`.
 
 A firing reopener revises `WITNESS_COMMITMENT_BYTES` in the Q13 row —
 one edit, one place — not a new row.
@@ -1650,7 +1692,8 @@ one edit, one place — not a new row.
 longer sequenced behind F5.
 
 **SUPERSEDED:** "Q12 is sequenced behind F5 / `PL-D3`" (right in shape,
-wrong in conclusion); `PL-D3a`'s `cSHAKE256(pk ‖ blind)` as Q12's
+wrong in conclusion); arguing as if F5 were still an open round (the
+2026-09-16 F5 agent brief, WITHDRAWN §1.5); `PL-D3a`'s `cSHAKE256(pk ‖ blind)` as Q12's
 default; hiding as a purchasable upgrade for an object that publishes
 `pk`; "a published hash of a low-entropy value is a lookup table" as
 F5's attack; "Q12 revises the 32" as if hiding were expected; reopener
@@ -1736,15 +1779,15 @@ about it.
 
 | ID | Disposition | State |
 |---|---|---|
-| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; items §2.1 1–8 to be ruled individually; Q3, Q8, Q9, Q10, Q12, Q13 **RULED 2026-09-16** |
+| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; `SO-D8a`/`b`/`c` **RULED 2026-09-16** (transcriptions); d–e remain; Q3, Q8, Q9, Q10, Q12, Q13 **RULED 2026-09-16** |
 | `SO-D9` (standalone) | `ERR_EPOCH_MISMATCH` is a tautology. **(i)**: the record's epoch equals `settlement_epoch_at_height(h)` of the validated issuing block. Lands as a `shekyl-chain-rules` row with the R-B cutover (Q15); not a C++ one-liner. FOLLOWUPS row carries it. | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
-| `SO-D8a` | Boundary rule `E = epoch(h)`; `ERR_FIRE_NOT_REACHED` dies; **`h_close` deadline replaced** by the per-challenge `W₂` bound in both twins (the first cut's "keep untouched" was under R-A). | **PROPOSED** |
-| `SO-D8b` | Dedup **widens** to `(P,s,E,h)` exact-get (resolves — `PC-D7`'s deferred half discharges); add `PC-D7`'s membership gate against `assignment(h)`. | **PROPOSED** |
-| `SO-D8c` | Emission gather **moves to the slash pass** — `SO-D7` applied to its second consumer; invariant-2 joint pin moves with it. Presence-vs-absolute-2 recorded, not opened. | **PROPOSED** |
-| `SO-D8d` | `passes ≤ issued` by construction under membership + dedup-on-`h` + validated `h`; FATAL at settlement, never clamped. | **PROPOSED** |
-| `SO-D8e` | `EpochAssignmentCache` with a `W₂` ring: Rust-owned, in-memory, sequential, checkpointed, never persisted; seeded by `DrawableSet::at_epoch_open` (Q3 RULED); `λ` from the constant (Q4); retained through the slash deadline (Q7); called from the Rust apply/pop path only. The 5-call C++ FFI adaptor is **SUPERSEDED** (Q15). | **PROPOSED** |
+| `SO-D8a` | Boundary rule `E = epoch(h)`; `ERR_FIRE_NOT_REACHED` dies; **`h_close` deadline replaced** by the per-challenge `W₂` bound. Transcription of the R-B ratification. First admission-path reader of `CHALLENGE_RESPONSE_BLOCKS`; that FOLLOWUPS row **discharged**. | **RULED 2026-09-16** |
+| `SO-D8b` | Dedup **widens** to `(P,s,E,h)` exact-get; membership against `assignment(h)`. Exact-get resolves because `h` is in the past and in the DB — what `PC-D4` could not do. Needs `SO-D8e`'s epoch-spanning window; unimplementable without it. | **RULED 2026-09-16** |
+| `SO-D8c` | Emission gather **moves to the slash pass** — `SO-D7` applied to its second consumer; invariant-2 joint pin moves with it. Presence-vs-absolute-2 recorded, not opened. | **RULED 2026-09-16** |
+| `SO-D8d` | `passes ≤ issued` by construction under membership + dedup-on-`h` + validated `h`; FATAL at settlement, never clamped. Under `SO-D8b`'s exact-get, `passes > issued` is unreachable (one record per `(P,s,E,h)`, at most λ values of `h` per pair-epoch). The edit that makes the FATAL fire is reverting the dedup widening — name it at the site so a sweep does not read the check as dead. | **PROPOSED** |
+| `SO-D8e` | `EpochAssignmentCache` with a `W₂` ring: Rust-owned, in-memory, sequential, checkpointed, never persisted; seeded by `DrawableSet::at_epoch_open` (Q3 RULED); `λ` from the constant (Q4); retained through the slash deadline (Q7); called from the Rust apply/pop path only. The 5-call C++ FFI adaptor is **SUPERSEDED** (Q15). **Structural claim:** the cache is a 500-deep window over past assignments, not a rolling current-epoch value; it spans epoch boundaries and holds two `DrawableSet`s during the overlap, because `SO-D8b` needs `assignment(h)` for any `h` in `[h_incl − W₂, h_incl)`. `SO-D8b` is unimplementable without this; do not rule the two as independent. | **PROPOSED** |
 | Drawable set (Q3) | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` over `ChainView`; no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
-| `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row re-worded from "no referent" to "referent pending the cutover". | **RESOLVED by R-B** |
+| `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row **discharged 2026-09-16** by `SO-D8a` RULED (first admission-path reader). | **RESOLVED by R-B**; referent **RULED 2026-09-16 (`SO-D8a`)** |
 | Witness key (Q8) | **Dedicated non-output hybrid key** derived from coinbase output 0's `combined_ss` under `HKDF_SALT_OUTPUT_DERIVE` + `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519` (no `output_index` in info); 32-B commitment under **`0x0C`**; pk + sig pruned. Combined_ss stays in Rust. The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise**. **SUPERSEDED: extend `0x0B`.** Q13 RULED (§7.8) owns the CEN wording: **mandatory-present** (commitment 2, not byte count); **fresh `combined_ss` per block** is a derivation requirement with a fixture, not a KEM inheritance. Q10 RULED: `W₂` ring is memory-only, restart loss is β. Q12 RULED (§7.9): bare 32-B `cSHAKE256` under `shekyl/archival-witness-key-v1`; hiding is theater (reveal publishes `pk`); reopen if `h` is removed **in order to conceal** the issuing block. Construction §7.5. | **RULED 2026-09-16** |
 | Batching (Q9) | Merkle-root batching: one pk, one signature over a Merkle root of the record set, each record carrying its inclusion path. Fail-whole refused (authorship ≠ incidence). Dedup stays `(P,s,E,h)` per record. Serve-credit is fee-less by construction. 300,000 is `get_min_block_weight` (a floor). Prunable bytes count toward weight (read at `get_transaction_weight` / `get_pruned_transaction_weight`). Against `TX_WEIGHT_LIMIT` the 97-record set splits 39 / 39 / 19 (≈ 365 KB/block; 39:1). Inter-batch blast radius is 39; `W₂` is resubmission headroom. Partition leaks nothing. Unpaid inclusion, any prunable-weight discount, and the ~11 KB/block cap-raise belong to a fee-and-weight round. Construction §7.6. | **RULED 2026-09-16** |
 | Secret lifetime (Q10) | Accept loss. Memory-only `ZeroizeOnDrop` ring of 32-B seeds; persist-encrypted **REJECTED** (daemon has no passphrase; rule 36 §3 is a wallet envelope). File promptly; evict on inclusion; log dropped in-flight on restart. Named fallback: re-derivable `tx_key` from a long-lived node secret and `h` — not persist; reopens if a sim of restart-to-restart vs fill-to-inclusion shows batches routinely dragging toward `W₂`. Construction §7.7. | **RULED 2026-09-16** |
@@ -1752,7 +1795,7 @@ about it.
 | Slice A1 (Q6) | **Keep**, per review, on grounds narrower than §12 gave. | **ANSWERED — keep** |
 | F3 | First cut's F1 row 1 cited the attestation path for the vin's binding; corrected at source. **SUPERSEDED 2026-09-16 (Q9):** the surviving half — "who pays the fee" — there is no fee, and there cannot be one (`serve_credit_only` is non-spending; `txnFee != 0` is a refusal). | **CORRECTED**; fee-half **SUPERSEDED** |
 | F4 | `PC-D2` ↔ mechanism §2 contradiction; `PC-D2`'s herd premise inverted; reversed by R-B. In-line supersession at `PC-D2` owed with the ruling PR. | **RECORDED** |
-| **F5** → `PL-D1` | **Every FCMP++ spend is linkable to its output by the public 4th leaf scalar.** Tree-wide, pre-genesis, priority-2. Opened by Rick as the `PL-` round 2026-09-13/14; **CLOSED by `PL-D3`** (hiding Pedersen commitment opened in-circuit) in PR #745, **merged 2026-09-14**; `PL-D4` (hash mechanism) at V4. This proposal's FOLLOWUPS line withdrawn 2026-09-14 per `PL` §12 ruling 11. Decision procedure for a published per-object commitment, in order (§7.9): (1) enumerable preimage? (2) does the reveal publish the preimage? (3) does the join identify more than the reveal was entitled to? F5 fails (3) and passes (2) only because the circuit opens without revealing. Q12 fails (2) — ML-DSA verify requires the key — so hiding is theater and a bare hash is correct. Argue this order in `PL`'s round; a reader who starts at (3) will hide objects where it buys nothing. | **CLOSED by #745 (merged)** |
+| **F5** → `PL-D1` | **Every FCMP++ spend is linkable to its output by the public 4th leaf scalar.** Tree-wide, pre-genesis, priority-2. Opened by Rick as the `PL-` round 2026-09-13/14; **CLOSED by `PL-D3`** (hiding Pedersen commitment opened in-circuit) in PR #745, **merged 2026-09-14**; `PL-D4` (hash mechanism) at V4. This proposal's FOLLOWUPS line withdrawn 2026-09-14 per `PL` §12 ruling 11. **The 2026-09-16 F5 agent brief is WITHDRAWN, not amended (§1.5).** Decision procedure for a published per-object commitment, in order (§7.9): (1) enumerable preimage? (2) does the reveal publish the preimage? (3) does the join identify more than the reveal was entitled to? F5 fails (3) and passes (2) only because the circuit opens without revealing (`PL-D3` reveal-once). Q12 fails (2) — ML-DSA verify requires the key — so hiding is theater and a bare hash is correct. Do not re-derive `PL-D3`. | **CLOSED by #745 (merged)** |
 | Sweep on ruling | `constants.rs:59` W₂ doc (becomes true — keep); `ARCHIVAL_SETTLEMENT_WRITER.md` §6/§12/§13 and the `IMPLEMENTATION_INDEX.md` SO-row `SO-D7` lag sentence (become true — re-date); `PC-D2` and its citations (`ARCHIVAL_PER_CHALLENGE_RECORD.md`, `TJ` `:819–822`) marked SUPERSEDED in-line; `FCMP_PLUS_PLUS.md:102–104,:121–122`, `POST_QUANTUM_CRYPTOGRAPHY.md:735–737`, `MERKLE_TREE.md:235` — **F5's sweep, DONE by #745 at source** (`PL` §11; the `REWARD_EMISSION_LEG.md` §7.3 tripwire marked FIRED there too). | owed with the ruling PRs (`PL` half done) |
 
 ### 9.1 Figures flagged for re-derivation
@@ -1789,7 +1832,8 @@ Seven were posed in the first cut; four answered in the 2026-09-13 review,
 new ones arise from R-B; Q11 is resolved by the `PL-` round and #745; Q12–Q13
 were opened in the 2026-09-14 reconciliation; Q14 was opened by #747 review
 and is resolved by Q15 (2026-09-16). **Open questions: Q4 (`λ` unpinned);
-`SO-D8a`–`e`.** Q3 RULED
+`SO-D8d`–`e`.** `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
+PC-D4 / SO-D7). Q3 RULED
 2026-09-16 (§7.4). Q8 RULED 2026-09-16 (§7.5): dedicated non-output key,
 tag `0x0C` not `0x0B`; P1 mandatory-present and P2 `combined_ss`
 freshness. Q9 RULED 2026-09-16 (§7.6):
