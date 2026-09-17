@@ -60,8 +60,10 @@ use crate::recon::{
     TxOutputs,
 };
 use crate::store::{LeafStore, PostureDeclaration, SegmentPin, ServingReader, StoreError};
-use crate::types::{BlockHeight, Gindex, LeafEntry, OutputIdentity, ReferenceBlock, TargetKind};
-use shekyl_fcmp::tree::selene_hash_init;
+use crate::types::{
+    BlockHeight, CommitmentBytes, CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity,
+    ReferenceBlock, TargetKind,
+};
 
 /// One output's leaf-relevant facts as decoded at the caller's boundary,
 /// **before** `h_pqc` resolution. The client resolves `h_pqc` from the
@@ -70,10 +72,10 @@ use shekyl_fcmp::tree::selene_hash_init;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct RawOutput {
     /// Compressed Ed25519 output public key (`O`).
-    pub output_key: [u8; 32],
+    pub output_key: OneTimePubkey,
     /// Amount commitment (`C`); `None` when the output has no commitment
     /// slot (`i >= outPk.size()`), which makes it leaf-ineligible.
-    pub commitment: Option<[u8; 32]>,
+    pub commitment: Option<CommitmentBytes>,
     /// Output target kind (decides maturity and leaf candidacy).
     pub target: TargetKind,
 }
@@ -111,9 +113,9 @@ pub enum ClientError {
         /// Reference height whose root failed to match.
         height: BlockHeight,
         /// Consensus header root the wallet must reproduce.
-        expected: [u8; 32],
+        expected: CurveTreeRoot,
         /// Root the client reconstructed from its leaves.
-        got: [u8; 32],
+        got: CurveTreeRoot,
     },
     /// The requested output is not a drained leaf at the reference height,
     /// so no membership path exists for it there (the §4.3 lookup miss).
@@ -123,7 +125,7 @@ pub enum ClientError {
         /// desync or a caller passing a not-yet-drained output.
         gindex: Gindex,
         /// Compressed output key the caller supplied alongside `gindex`.
-        output_key: [u8; 32],
+        output_key: OneTimePubkey,
     },
     /// `gindex` resolved to a drained leaf whose `(output_key, commitment)`
     /// does not match the caller-supplied [`crate::AssembleInput`] (X3,
@@ -138,9 +140,9 @@ pub enum ClientError {
         /// Global output index whose resolved leaf failed the identity check.
         gindex: Gindex,
         /// Output key the caller expected at `gindex`.
-        expected_output_key: [u8; 32],
+        expected_output_key: OneTimePubkey,
         /// Output key actually found at `gindex` among the drained leaves.
-        got_output_key: [u8; 32],
+        got_output_key: OneTimePubkey,
         /// Whether the resolved leaf's amount commitment matched the expected
         /// one. The check is on the full `(output_key, commitment)` pair, so
         /// this disambiguates a commitment-only divergence (keys match,
@@ -766,11 +768,10 @@ impl CurveTreeClient {
     /// re-derives from the store.
     pub fn ingest_block(&mut self, block: BlockLeaves<'_>) -> Result<(), ClientError> {
         self.ensure_live()?;
-        let expected = self
-            .ingested_tip_height
-            .map_or(BlockHeight::from_raw(0), |last| {
-                BlockHeight::from_raw(last.to_raw().checked_add(1).expect("chain height fits u64"))
-            });
+        let expected = self.ingested_tip_height.map_or(BlockHeight::ZERO, |last| {
+            last.checked_add(shekyl_types::BlockCount::ONE)
+                .expect("chain height fits u64")
+        });
         if block.height != expected {
             return Err(ClientError::NonConsecutiveBlockHeight {
                 got: block.height,
@@ -915,7 +916,7 @@ impl CurveTreeClient {
     fn canonical_drained_count_on_ingest(&self, through: BlockHeight) -> u64 {
         let canonical = match self.drained_through_counts.last() {
             Some(&(t, count)) if t == through => count,
-            Some(&(t, count)) if t.to_raw().checked_add(1) == Some(through.to_raw()) => {
+            Some(&(t, count)) if t.checked_add(shekyl_types::BlockCount::ONE) == Some(through) => {
                 let bucket = self.entries_by_maturity.get(&through).map_or(0, |indices| {
                     u64::try_from(indices.len()).expect("bucket fits u64")
                 });
@@ -961,7 +962,7 @@ impl CurveTreeClient {
     /// reference-height → drain-cutoff mapping.
     #[must_use]
     pub(crate) fn drained_through(reference_height: BlockHeight) -> BlockHeight {
-        BlockHeight::from_raw(reference_height.to_raw().saturating_sub(1))
+        reference_height.saturating_sub_count(shekyl_types::BlockCount::ONE)
     }
 
     /// The last block height passed to [`Self::ingest_block`] — or rebuilt by
@@ -1004,7 +1005,7 @@ impl CurveTreeClient {
     /// not `build_layers(&[])` (`CT2_DRAIN_ORDER.md` §5). Errors from the
     /// store propagate — there is no silent fallback to the replay oracle, so
     /// KATs and callers gate the CT-1 hot path rather than masking corruption.
-    pub fn root_at(&self, reference_height: BlockHeight) -> Result<[u8; 32], ClientError> {
+    pub fn root_at(&self, reference_height: BlockHeight) -> Result<CurveTreeRoot, ClientError> {
         // Single-source the reconstruction: defer to `root_and_depth_at` and
         // drop the depth (CT-5c Q1). Both the root-only read (this method, the
         // §3.3 verify hot path) and the root+depth read go through the one
@@ -1034,7 +1035,7 @@ impl CurveTreeClient {
     pub fn root_and_depth_at(
         &self,
         reference_height: BlockHeight,
-    ) -> Result<([u8; 32], u8), ClientError> {
+    ) -> Result<(CurveTreeRoot, u8), ClientError> {
         self.ensure_live()?;
         let within_chain = self
             .ingested_tip_height
@@ -1047,7 +1048,8 @@ impl CurveTreeClient {
         }
         let through = Self::drained_through(reference_height);
         let n = self.drained_leaf_count_at(through);
-        let root = self.store.root_at_count(n).map_err(ClientError::from)?;
+        let root =
+            CurveTreeRoot::from_bytes(self.store.root_at_count(n).map_err(ClientError::from)?);
         let depth = shekyl_fcmp::tree::layer_count_for_leaves(n);
         Ok((root, depth))
     }
@@ -1077,19 +1079,20 @@ impl CurveTreeClient {
     /// the oracle the store KATs are pinned to) — linear in the drained
     /// leaves per call. A producer-side read (test generator, template
     /// construction on a store-less node), not the verify hot path.
-    pub fn next_block_root(&self) -> Result<[u8; 32], ClientError> {
+    pub fn next_block_root(&self) -> Result<CurveTreeRoot, ClientError> {
         self.ensure_live()?;
         let Some(tip) = self.ingested_tip_height else {
-            return Ok(selene_hash_init());
+            return Ok(CurveTreeRoot::EMPTY);
         };
         let n = self.drained_leaf_count_at(tip);
         let stored = self.store.leaf_count().map_err(ClientError::from)?;
         if n <= stored {
-            return self.store.root_at_count(n).map_err(ClientError::from);
+            return Ok(CurveTreeRoot::from_bytes(
+                self.store.root_at_count(n).map_err(ClientError::from)?,
+            ));
         }
-        Ok(root_from_scalars(&assemble_leaf_stream(
-            &self.entries,
-            tip.to_raw(),
+        Ok(CurveTreeRoot::from_bytes(root_from_scalars(
+            &assemble_leaf_stream(&self.entries, tip),
         )))
     }
 
@@ -1099,12 +1102,12 @@ impl CurveTreeClient {
     /// build a proof against a tree it cannot reproduce.
     pub fn verify_root(&self, reference: &ReferenceBlock) -> Result<(), ClientError> {
         let got = self.root_at(reference.height)?;
-        if got == reference.curve_tree_root.to_bytes() {
+        if got == reference.curve_tree_root {
             Ok(())
         } else {
             Err(ClientError::RootMismatch {
                 height: reference.height,
-                expected: reference.curve_tree_root.to_bytes(),
+                expected: reference.curve_tree_root,
                 got,
             })
         }
@@ -1132,7 +1135,6 @@ mod tests {
     };
     use crate::types::{BlockHash, CurveTreeRoot};
     use shekyl_consensus::COINBASE_LOCK_WINDOW;
-    use shekyl_fcmp::tree::selene_hash_init;
 
     /// Standard Ed25519 basepoint, compressed — a valid, torsion-free
     /// point `construct_leaf` accepts for both `O` and `C`.
@@ -1144,8 +1146,8 @@ mod tests {
 
     fn coinbase_raw() -> RawOutput {
         RawOutput {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
+            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
+            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
             target: TargetKind::TaggedKey,
         }
     }
@@ -1244,7 +1246,7 @@ mod tests {
         for through in 0..=61u64 {
             assert_eq!(
                 client.newly_drained_from_index(BlockHeight::from_raw(through)),
-                newly_drained_at_cutoff(&client.entries, through),
+                newly_drained_at_cutoff(&client.entries, BlockHeight::from_raw(through)),
                 "through={through}"
             );
         }
@@ -1309,7 +1311,7 @@ mod tests {
         ingest_coinbase_blocks(&mut client, 0, 0);
         assert_eq!(
             client.root_at(BlockHeight::from_raw(0)).unwrap(),
-            selene_hash_init()
+            CurveTreeRoot::EMPTY
         );
         assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(0)), 0);
     }
@@ -1401,8 +1403,8 @@ mod tests {
         // every cutoff (the ingest-path debug_assert also checks each step).
         let cb = coinbase_raw();
         let regular = RawOutput {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
+            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
+            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
             target: TargetKind::TaggedKey,
         };
         let blob = leaf_blob(1);
@@ -1453,8 +1455,8 @@ mod tests {
         // produce the canonical-order root anyway.
         let outs_cb = [coinbase_raw()];
         let regular = RawOutput {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
+            output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
+            commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
             target: TargetKind::TaggedKey,
         };
         // Three byte-distinct entries (distinct commitment points), so the
@@ -1504,13 +1506,16 @@ mod tests {
 
         // At through=61 the drained set is m=11 (regular), m=60 (cb 0),
         // m=61 (cb 1) — none of the later coinbases.
-        let drained = drained_sorted(&client.entries, 61);
+        let drained = drained_sorted(&client.entries, BlockHeight::from_raw(61));
         assert_eq!(drained.len(), 3);
         assert!(drained
             .windows(2)
             .all(|w| (w[0].maturity, w[0].gindex) <= (w[1].maturity, w[1].gindex)));
 
-        let oracle = root_from_scalars(&assemble_leaf_stream(&client.entries, 61));
+        let oracle = CurveTreeRoot::from_bytes(root_from_scalars(&assemble_leaf_stream(
+            &client.entries,
+            BlockHeight::from_raw(61),
+        )));
         assert_eq!(
             client.root_at(BlockHeight::from_raw(62)).unwrap(),
             oracle,
@@ -1540,13 +1545,13 @@ mod tests {
         // Empty through the maturity height itself...
         assert_eq!(
             client.root_at(BlockHeight::from_raw(60)).unwrap(),
-            selene_hash_init()
+            CurveTreeRoot::EMPTY
         );
         assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(60)), 0);
         // ...non-empty from the next block.
         assert_ne!(
             client.root_at(BlockHeight::from_raw(61)).unwrap(),
-            selene_hash_init()
+            CurveTreeRoot::EMPTY
         );
         assert_eq!(client.drained_leaf_count(BlockHeight::from_raw(61)), 1);
         assert_eq!(COINBASE_LOCK_WINDOW as u64, 60);
@@ -1916,9 +1921,7 @@ mod tests {
         // The reconstructed root at height 61 is the consensus value.
         let good = ReferenceBlock {
             height: BlockHeight::from_raw(61),
-            curve_tree_root: CurveTreeRoot::from_bytes(
-                client.root_at(BlockHeight::from_raw(61)).unwrap(),
-            ),
+            curve_tree_root: client.root_at(BlockHeight::from_raw(61)).unwrap(),
             block_hash: BlockHash::from_bytes([0u8; 32]),
         };
         assert!(client.verify_root(&good).is_ok());
@@ -1935,7 +1938,7 @@ mod tests {
                 got,
             }) => {
                 assert_eq!(height, BlockHeight::from_raw(61));
-                assert_eq!(expected, [0xFFu8; 32]);
+                assert_eq!(expected, CurveTreeRoot::from_bytes([0xFFu8; 32]));
                 assert_eq!(got, client.root_at(BlockHeight::from_raw(61)).unwrap());
             }
             other => panic!("expected RootMismatch, got {other:?}"),
@@ -1967,8 +1970,8 @@ mod tests {
             creation_height: BlockHeight::from_raw(creation),
             leaf,
             identity: OutputIdentity {
-                output_key: [1u8; 32],
-                commitment: Some([2u8; 32]),
+                output_key: OneTimePubkey::from_bytes([1u8; 32]),
+                commitment: Some(CommitmentBytes::from_bytes([2u8; 32])),
                 cm: [3u8; 32],
                 target: TargetKind::TaggedKey,
             },
@@ -2019,7 +2022,7 @@ mod tests {
         ingest_coinbase_blocks(&mut client, 0, 0);
         assert_eq!(
             client.root_at(BlockHeight::from_raw(0)).unwrap(),
-            selene_hash_init()
+            CurveTreeRoot::EMPTY
         );
         drop(client);
         std::fs::remove_file(&path).unwrap();
@@ -2060,7 +2063,7 @@ mod tests {
         // must agree with the store's drained prefix.
         assert_eq!(
             client.root_at(BlockHeight::from_raw(62)).unwrap(),
-            client.store.root_at_count(2).unwrap()
+            CurveTreeRoot::from_bytes(client.store.root_at_count(2).unwrap())
         );
         drop(client);
         std::fs::remove_file(&path).unwrap();

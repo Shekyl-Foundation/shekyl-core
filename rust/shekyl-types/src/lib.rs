@@ -709,6 +709,12 @@ impl Add<BlockCount> for BlockCount {
     }
 }
 
+impl BlockCount {
+    /// A one-block span. Consecutive-height and drain-cutoff arithmetic
+    /// uses this instead of punching through to `u64`.
+    pub const ONE: Self = Self(1);
+}
+
 impl BlockHeight {
     /// Advance by a span, returning `None` on overflow.
     #[must_use]
@@ -735,6 +741,15 @@ impl BlockHeight {
     pub const fn saturating_sub(self, earlier: BlockHeight) -> BlockCount {
         BlockCount(self.0.saturating_sub(earlier.0))
     }
+
+    /// Rewind by a span, saturating at genesis rather than panicking.
+    ///
+    /// [`Sub<BlockCount>`](core::ops::Sub) panics below genesis; drain
+    /// cutoffs and height-0 predecessors need a floor.
+    #[must_use]
+    pub const fn saturating_sub_count(self, rhs: BlockCount) -> BlockHeight {
+        BlockHeight(self.0.saturating_sub(rhs.0))
+    }
 }
 
 impl Timestamp {
@@ -743,6 +758,15 @@ impl Timestamp {
     #[must_use]
     pub const fn checked_secs_since(self, earlier: Timestamp) -> Option<u64> {
         self.0.checked_sub(earlier.0)
+    }
+
+    /// Advance by whole seconds, returning `None` on `u64` overflow.
+    #[must_use]
+    pub const fn checked_add_secs(self, secs: u64) -> Option<Timestamp> {
+        match self.0.checked_add(secs) {
+            Some(v) => Some(Timestamp(v)),
+            None => None,
+        }
     }
 }
 

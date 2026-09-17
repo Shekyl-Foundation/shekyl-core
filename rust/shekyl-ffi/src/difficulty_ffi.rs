@@ -110,7 +110,7 @@ use core::slice;
 
 use shekyl_difficulty::{
     check_hash, check_timestamp_rule, lwma1_next, CumulativeDifficulty, Difficulty,
-    Error as DifficultyError,
+    Error as DifficultyError, MTP_WINDOW_USIZE,
 };
 use shekyl_types::{BlockHeight, Timestamp};
 
@@ -410,11 +410,19 @@ pub unsafe extern "C" fn shekyl_difficulty_check_timestamp_rule(
         // slice-invariant bounds.
         slice::from_raw_parts(window, window_len)
     };
-    let win: Vec<Timestamp> = win_raw.iter().copied().map(Timestamp::from_raw).collect();
+    let mut win_buf = [Timestamp::ZERO; MTP_WINDOW_USIZE];
+    let win: &[Timestamp] = if win_raw.is_empty() {
+        &[]
+    } else {
+        for (slot, &raw) in win_buf.iter_mut().zip(win_raw) {
+            *slot = Timestamp::from_raw(raw);
+        }
+        &win_buf[..win_raw.len()]
+    };
 
     let (verdict, median) = check_timestamp_rule(
         Timestamp::from_raw(candidate_ts),
-        &win,
+        win,
         Timestamp::from_raw(genesis_ts),
         Timestamp::from_raw(local_clock),
     );

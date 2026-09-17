@@ -2185,11 +2185,11 @@ fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
     let mut buf = [0u8; 192];
     buf[0..8].copy_from_slice(&entry.gindex.to_raw().to_be_bytes());
     buf[8..16].copy_from_slice(&entry.maturity.to_raw().to_be_bytes());
-    buf[16..48].copy_from_slice(&entry.identity.output_key);
+    buf[16..48].copy_from_slice(entry.identity.output_key.as_bytes());
     match entry.identity.commitment {
         Some(c) => {
             buf[48] = 1;
-            buf[49..81].copy_from_slice(&c);
+            buf[49..81].copy_from_slice(c.as_bytes());
         }
         None => buf[48] = 0,
     }
@@ -2228,8 +2228,8 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
         maturity,
         creation_height,
         identity: crate::types::OutputIdentity {
-            output_key,
-            commitment,
+            output_key: crate::types::OneTimePubkey::from_bytes(output_key),
+            commitment: commitment.map(crate::types::CommitmentBytes::from_bytes),
             cm,
             target,
         },
@@ -2319,8 +2319,8 @@ mod tests {
             creation_height: BlockHeight::from_raw(maturity.saturating_sub(60)),
             leaf: [1u8; 128],
             identity: OutputIdentity {
-                output_key: [1u8; 32],
-                commitment: Some([2u8; 32]),
+                output_key: crate::types::OneTimePubkey::from_bytes([1u8; 32]),
+                commitment: Some(crate::types::CommitmentBytes::from_bytes([2u8; 32])),
                 cm: [3u8; 32],
                 target: TargetKind::TaggedKey,
             },
@@ -2372,7 +2372,7 @@ mod tests {
         pending
             .iter()
             .unwrap()
-            .map(|row| row.unwrap().0.value().0)
+            .map(|row| Gindex::from(row.unwrap().0.value()).to_raw())
             .collect()
     }
 
@@ -2956,8 +2956,8 @@ mod tests {
             creation_height: BlockHeight::from_raw(creation),
             leaf: random_canonical_leaf(rng),
             identity: OutputIdentity {
-                output_key,
-                commitment,
+                output_key: crate::types::OneTimePubkey::from_bytes(output_key),
+                commitment: commitment.map(crate::types::CommitmentBytes::from_bytes),
                 cm,
                 target,
             },
@@ -3956,7 +3956,7 @@ mod tests {
         }
 
         check_u64::<TreePosition>(TreePosition);
-        check_u64::<GindexKey>(GindexKey);
+        check_u64::<GindexKey>(|v| GindexKey::from(Gindex::from_raw(v)));
 
         // SegmentId wraps u32; same parity properties against the u32 impl.
         let samples = [0u32, 1, 2, u32::MAX - 1, u32::MAX];

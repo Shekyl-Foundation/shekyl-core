@@ -722,9 +722,9 @@ pub struct PaymentRequestView {
     pub label: String,
     /// Requested amount.
     pub amount: AtomicUnitsString,
-    /// Block height at creation (the request clock is block height).
+    /// Wall-clock Unix seconds at creation (UTC).
     pub created_at: i64,
-    /// Absolute expiry height, if any.
+    /// Absolute expiry as Unix seconds (UTC), if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expiry: Option<i64>,
     /// Lifecycle state.

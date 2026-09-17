@@ -25,8 +25,9 @@
 
 use serde_json::Value;
 use shekyl_curve_tree::{
-    AssembleInput, AssembledPath, BlockHash, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient,
-    CurveTreeRoot, Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, AssembledPath, BlockHash, BlockHeight, BlockLeaves, ChunkLeaf, CommitmentBytes,
+    CurveTreeClient, CurveTreeRoot, Gindex, OneTimePubkey, RawOutput, ReferenceBlock, TargetKind,
+    TxLeafInputs,
 };
 use shekyl_fcmp::tree::{
     ed25519_point_to_selene_scalar, hash_grow_helios, hash_grow_selene, helios_hash_init,
@@ -77,8 +78,13 @@ fn decode_block(b: &Value) -> Block {
         .expect("outputs array")
         .iter()
         .map(|o| RawOutput {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
+            output_key: OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O hex"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(CommitmentBytes::from_bytes),
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();
@@ -160,9 +166,9 @@ fn coinbase_input(blocks: &[Block], target_height: u64) -> AssembleInput {
 fn leaf_node_point(chunk: &[ChunkLeaf]) -> [u8; 32] {
     let mut scalars = Vec::with_capacity(chunk.len() * 4);
     for cl in chunk {
-        scalars.push(ed25519_point_to_selene_scalar(&cl.output_key).expect("O.x"));
+        scalars.push(ed25519_point_to_selene_scalar(cl.output_key.as_bytes()).expect("O.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
-        scalars.push(ed25519_point_to_selene_scalar(&cl.commitment).expect("C.x"));
+        scalars.push(ed25519_point_to_selene_scalar(cl.commitment.as_bytes()).expect("C.x"));
         scalars.push(cl.cm_x);
     }
     hash_grow_selene(&selene_hash_init(), 0, &ZERO, &scalars).expect("leaf node")
@@ -337,7 +343,7 @@ fn assemble_path_rejects_identity_mismatch() {
     let last_drained = reference.height.to_raw().saturating_sub(61);
     let mut tampered = coinbase_input(&blocks, last_drained);
     let real_key = tampered.output_key;
-    tampered.output_key = [0x99u8; 32];
+    tampered.output_key = OneTimePubkey::from_bytes([0x99u8; 32]);
     assert_ne!(tampered.output_key, real_key, "tamper must change the key");
 
     match client.assemble_path(&tampered, &reference) {
@@ -348,7 +354,7 @@ fn assemble_path_rejects_identity_mismatch() {
             ..
         }) => {
             assert_eq!(gindex, tampered.gindex);
-            assert_eq!(expected_output_key, [0x99u8; 32]);
+            assert_eq!(expected_output_key, OneTimePubkey::from_bytes([0x99u8; 32]));
             assert_eq!(got_output_key, real_key);
         }
         other => panic!("expected IdentityMismatch, got {other:?}"),

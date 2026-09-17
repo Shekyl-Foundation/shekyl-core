@@ -41,7 +41,7 @@ use shekyl_crypto_pq::output::{
 };
 use shekyl_curve_tree::{
     AssembleInput, BlockHash as TreeHash, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient,
-    CurveTreeRoot, Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
+    Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_daemon_rpc::submit::{
     parse_submission, CommitOutcome, DaemonTxVerifier, EngineFault, KeyImageConflict,
@@ -287,15 +287,19 @@ fn build_funding_setup() -> FundingSetup {
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
     let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
-        output_key: spent.output_key,
-        commitment: Some(spent.commitment),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+            spent.commitment,
+        )),
         target: TargetKind::TaggedKey,
     });
     genesis_blob.extend_from_slice(&spent_entry);
     for _ in 1..TREE_OUTPUTS {
         genesis_outputs.push(RawOutput {
-            output_key: random_point(&mut rng),
-            commitment: Some(random_point(&mut rng)),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(random_point(&mut rng)),
+            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                random_point(&mut rng),
+            )),
             target: TargetKind::TaggedKey,
         });
         genesis_blob.extend_from_slice(&spent_entry);
@@ -315,8 +319,10 @@ fn build_funding_setup() -> FundingSetup {
         } else {
             (
                 vec![RawOutput {
-                    output_key: filler_key,
-                    commitment: Some(filler_commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(filler_key),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        filler_commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 }],
                 spent_entry.to_vec(),
@@ -354,13 +360,13 @@ fn build_funding_setup() -> FundingSetup {
     // ── Membership path + SpendInput ────────────────────────────────────
     let reference = ReferenceBlock {
         height: TreeHeight::from_raw(reference_height),
-        curve_tree_root: CurveTreeRoot::from_bytes(tree_root),
+        curve_tree_root: tree_root,
         block_hash: TreeHash::from_bytes([0xAB; 32]),
     };
     let target = AssembleInput {
         gindex: Gindex::from_raw(spent_index),
-        output_key: spent.output_key,
-        commitment: spent.commitment,
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
     };
     let path = client
         .assemble_path(&target, &reference)
@@ -375,9 +381,9 @@ fn build_funding_setup() -> FundingSetup {
         .leaf_chunk
         .iter()
         .map(|cl| LeafEntry {
-            output_key: cl.output_key,
+            output_key: cl.output_key.to_bytes(),
             key_image_gen: cl.key_image_gen,
-            commitment: cl.commitment,
+            commitment: cl.commitment.to_bytes(),
             cm_x: cl.cm_x,
         })
         .collect();
@@ -409,8 +415,8 @@ fn build_funding_setup() -> FundingSetup {
         spend_input,
         pqc_pk,
         tree_ctx,
-        tree_root,
-        other_root,
+        tree_root: tree_root.to_bytes(),
+        other_root: other_root.to_bytes(),
         reference_height,
         lmdb_depth: tree_depth - 1,
     }

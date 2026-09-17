@@ -19,8 +19,8 @@ use super::{Engine, EngineSignerKind, LocalLedger};
 pub struct NewPaymentRequest {
     pub label: String,
     pub amount_atomic: AtomicUnits,
-    pub created_at: u64,
-    pub expiry: Option<u64>,
+    pub created_at: shekyl_types::Timestamp,
+    pub expiry: Option<shekyl_types::Timestamp>,
 }
 
 /// Filter for listing payment requests (minimal V3.0).
@@ -67,8 +67,8 @@ impl<
             id,
             label: LocalLabel::from_owned(req.label),
             amount_atomic: req.amount_atomic,
-            created_at: shekyl_types::Timestamp::from_raw(req.created_at),
-            expiry: req.expiry.map(shekyl_types::Timestamp::from_raw),
+            created_at: req.created_at,
+            expiry: req.expiry,
             state: PaymentRequestState::Pending,
             matched_tx_hash: None,
             matched_output_index: None,

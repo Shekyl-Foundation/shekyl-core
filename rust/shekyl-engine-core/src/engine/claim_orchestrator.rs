@@ -305,8 +305,8 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
         .path_records()
         .map(|r| AssembleInput {
             gindex: Gindex::from_raw(r.gindex.to_raw()),
-            output_key: r.output_key,
-            commitment: r.commitment,
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
+            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
         })
         .collect();
     let paths = ctx
@@ -586,13 +586,19 @@ mod tests {
             let leaf_blob: Vec<u8> = [backing_entry, fee_entry].concat();
             let raw_outputs = vec![
                 RawOutput {
-                    output_key: backing_leaf.output_key,
-                    commitment: Some(backing_leaf.commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(
+                        backing_leaf.output_key,
+                    ),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        backing_leaf.commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 },
                 RawOutput {
-                    output_key: fee_leaf.output_key,
-                    commitment: Some(fee_leaf.commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(fee_leaf.output_key),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        fee_leaf.commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 },
             ];

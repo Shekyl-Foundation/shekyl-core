@@ -137,8 +137,11 @@ fn decode_tx(tx: &Transaction, is_miner: bool) -> Result<OwnedTxLeaves, DecodeEr
         .iter()
         .enumerate()
         .map(|(o, output)| RawOutput {
-            output_key: output.key,
-            commitment: commitments.get(o).copied(),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(output.key),
+            commitment: commitments
+                .get(o)
+                .copied()
+                .map(shekyl_curve_tree::CommitmentBytes::from_bytes),
             target: classify_target(output),
         })
         .collect();
@@ -293,10 +296,16 @@ mod tests {
                 );
                 for (i, (row, got)) in rows.iter().zip(&decoded.outputs).enumerate() {
                     let key = hex_to_32(row["output_key"].as_str().unwrap());
-                    assert_eq!(got.output_key, key, "chain {name} out {i}: output_key");
+                    assert_eq!(
+                        got.output_key,
+                        shekyl_curve_tree::OneTimePubkey::from_bytes(key),
+                        "chain {name} out {i}: output_key"
+                    );
                     assert_eq!(
                         got.commitment,
-                        Some(commitments[i]),
+                        Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                            commitments[i]
+                        )),
                         "chain {name} out {i}: commitment from committed base",
                     );
                     assert_eq!(
@@ -337,7 +346,10 @@ mod tests {
         let outputs = vec![tagged_output([4u8; 32]), tagged_output([5u8; 32])];
         let tx = null_tx(outputs, vec![[9u8; 32]], None);
         let decoded = decode_tx(&tx, false).expect("decodes");
-        assert_eq!(decoded.outputs[0].commitment, Some([9u8; 32]));
+        assert_eq!(
+            decoded.outputs[0].commitment,
+            Some(shekyl_curve_tree::CommitmentBytes::from_bytes([9u8; 32]))
+        );
         assert_eq!(decoded.outputs[1].commitment, None);
     }
 
@@ -395,7 +407,13 @@ mod tests {
         assert_eq!(decoded.len(), 2, "coinbase + one non-miner tx");
         assert!(decoded[0].is_miner, "coinbase first");
         assert!(!decoded[1].is_miner, "non-miner second");
-        assert_eq!(decoded[0].outputs[0].output_key, [7u8; 32]);
-        assert_eq!(decoded[1].outputs[0].output_key, [8u8; 32]);
+        assert_eq!(
+            decoded[0].outputs[0].output_key,
+            shekyl_curve_tree::OneTimePubkey::from_bytes([7u8; 32])
+        );
+        assert_eq!(
+            decoded[1].outputs[0].output_key,
+            shekyl_curve_tree::OneTimePubkey::from_bytes([8u8; 32])
+        );
     }
 }

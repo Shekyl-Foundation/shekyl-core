@@ -413,8 +413,13 @@ fn ct2_main_chain() -> Vec<Ct2Block> {
                     .expect("outputs")
                     .iter()
                     .map(|o| RawOutput {
-                        output_key: decode_hex32(o["output_key"].as_str().expect("O")),
-                        commitment: o["commitment"].as_str().map(decode_hex32),
+                        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(decode_hex32(
+                            o["output_key"].as_str().expect("O"),
+                        )),
+                        commitment: o["commitment"]
+                            .as_str()
+                            .map(decode_hex32)
+                            .map(shekyl_curve_tree::CommitmentBytes::from_bytes),
                         target: TargetKind::TaggedKey,
                     })
                     .collect(),
@@ -466,9 +471,13 @@ fn ct2_opening_at(
         .find(|cl| cl.output_key == input.output_key)
         .expect("chunk leaf for opened output");
     // The chunk carries the 4th scalar (CM.x), not the commitment point.
-    let leaf_bytes =
-        leaf_from_chunk_entry(&cl.output_key, &cl.key_image_gen, &cl.commitment, &cl.cm_x)
-            .expect("leaf");
+    let leaf_bytes = leaf_from_chunk_entry(
+        cl.output_key.as_bytes(),
+        &cl.key_image_gen,
+        cl.commitment.as_bytes(),
+        &cl.cm_x,
+    )
+    .expect("leaf");
     let layer_scalars = leaf_layer_scalars(&path.leaf_chunk);
     let opening = SegmentPathOpening {
         c1_layers: path.c1_layers,
@@ -515,9 +524,9 @@ fn ct2_full_chunk_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8
 fn leaf_layer_scalars(chunk: &[ChunkLeaf]) -> Vec<[u8; 32]> {
     let mut scalars = Vec::with_capacity(chunk.len() * 4);
     for cl in chunk {
-        scalars.push(ed25519_point_to_selene_scalar(&cl.output_key).expect("O.x"));
+        scalars.push(ed25519_point_to_selene_scalar(cl.output_key.as_bytes()).expect("O.x"));
         scalars.push(ed25519_point_to_selene_scalar(&cl.key_image_gen).expect("I.x"));
-        scalars.push(ed25519_point_to_selene_scalar(&cl.commitment).expect("C.x"));
+        scalars.push(ed25519_point_to_selene_scalar(cl.commitment.as_bytes()).expect("C.x"));
         scalars.push(cl.cm_x);
     }
     scalars

@@ -58,8 +58,8 @@ fn segment_entries() -> Vec<LeafEntry> {
                 creation_height: BlockHeight::from_raw(0),
                 leaf,
                 identity: OutputIdentity {
-                    output_key: [1u8; 32],
-                    commitment: Some([2u8; 32]),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([1u8; 32]),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes([2u8; 32])),
                     cm: [3u8; 32],
                     target: TargetKind::TaggedKey,
                 },

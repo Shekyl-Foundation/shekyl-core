@@ -494,8 +494,8 @@ where
             .iter()
             .map(|r| AssembleInput {
                 gindex: Gindex::from_raw(r.gindex.to_raw()),
-                output_key: r.output_key,
-                commitment: r.commitment,
+                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
+                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
             })
             .collect();
         let paths = curve_tree

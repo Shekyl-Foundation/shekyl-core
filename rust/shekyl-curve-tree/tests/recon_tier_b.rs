@@ -28,7 +28,7 @@ use shekyl_curve_tree::recon::{
     assemble_leaf_stream, collect_block_leaves, extract_leaf_commitments, root_from_scalars,
     TxOutputs,
 };
-use shekyl_curve_tree::{OutputIdentity, TargetKind};
+use shekyl_curve_tree::{BlockHeight, CommitmentBytes, OneTimePubkey, OutputIdentity, TargetKind};
 
 const FIXTURE_B: &str = include_str!("fixtures/ct2_tier_b.json");
 
@@ -87,8 +87,13 @@ fn decode_tx(t: &Value) -> TxFix {
         .iter()
         .zip(commitments)
         .map(|(o, cm)| OutputIdentity {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O hex")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
+            output_key: OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O hex"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(CommitmentBytes::from_bytes),
             cm,
             target: target_kind(o["target"].as_str().expect("target")),
         })
@@ -152,7 +157,7 @@ fn reconstruct_roots(blocks: &[BlockFix]) -> Vec<[u8; 32]> {
             .collect();
         gindex = collect_block_leaves(blk.height, &txs, gindex, &mut entries)
             .expect("KAT chain has no bad published point");
-        let drained_through = blk.height.saturating_sub(1);
+        let drained_through = BlockHeight::from_raw(blk.height.saturating_sub(1));
         let scalars = assemble_leaf_stream(&entries, drained_through);
         roots.push(root_from_scalars(&scalars));
     }

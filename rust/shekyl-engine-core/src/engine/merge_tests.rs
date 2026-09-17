@@ -654,7 +654,13 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     let view_secret = [0x55u8; 32];
     let ct = ciphertext_for_seed(0xAA);
     let mut residue = HashMap::new();
-    residue.insert((tx_hash, internal_idx), ct.clone());
+    residue.insert(
+        (
+            shekyl_types::TxHash::from_bytes(tx_hash),
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx),
+        ),
+        ct.clone(),
+    );
 
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
@@ -714,7 +720,13 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
 
     let view_secret = [0x77u8; 32];
     let mut residue = HashMap::new();
-    residue.insert((matched_tx, matched_idx), ciphertext_for_seed(0x01));
+    residue.insert(
+        (
+            shekyl_types::TxHash::from_bytes(matched_tx),
+            shekyl_types::OutputIndexInTx::from_raw(matched_idx),
+        ),
+        ciphertext_for_seed(0x01),
+    );
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     let m = ledger
@@ -767,7 +779,13 @@ fn populate_engine_handle_fields_is_idempotent() {
     let view_secret = [0xAAu8; 32];
     let ct1 = ciphertext_for_seed(0x33);
     let mut residue = HashMap::new();
-    residue.insert((tx_hash, internal_idx), ct1.clone());
+    residue.insert(
+        (
+            shekyl_types::TxHash::from_bytes(tx_hash),
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx),
+        ),
+        ct1.clone(),
+    );
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     // Second call with a different ciphertext for the same key
@@ -776,7 +794,13 @@ fn populate_engine_handle_fields_is_idempotent() {
     // Both fields populated by call 1 ⇒ both skipped by call 2.
     let ct2 = ciphertext_for_seed(0xBB);
     let mut residue2 = HashMap::new();
-    residue2.insert((tx_hash, internal_idx), ct2);
+    residue2.insert(
+        (
+            shekyl_types::TxHash::from_bytes(tx_hash),
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx),
+        ),
+        ct2,
+    );
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue2, &inserted);
 
     let td = ledger
@@ -862,8 +886,20 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let real_ct_a = ciphertext_for_seed(0x55);
     let real_ct_b = ciphertext_for_seed(0x66);
     let mut residue = HashMap::new();
-    residue.insert((tx_hash_a, internal_idx_a), real_ct_a.clone());
-    residue.insert((tx_hash_b, internal_idx_b), real_ct_b.clone());
+    residue.insert(
+        (
+            shekyl_types::TxHash::from_bytes(tx_hash_a),
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx_a),
+        ),
+        real_ct_a.clone(),
+    );
+    residue.insert(
+        (
+            shekyl_types::TxHash::from_bytes(tx_hash_b),
+            shekyl_types::OutputIndexInTx::from_raw(internal_idx_b),
+        ),
+        real_ct_b.clone(),
+    );
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     let td_a = ledger
@@ -1008,7 +1044,13 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
 
     let view_secret = [0xCCu8; 32];
     let mut residue = HashMap::new();
-    residue.insert((new_tx, new_idx), ciphertext_for_seed(0xB0));
+    residue.insert(
+        (
+            shekyl_types::TxHash::from_bytes(new_tx),
+            shekyl_types::OutputIndexInTx::from_raw(new_idx),
+        ),
+        ciphertext_for_seed(0xB0),
+    );
     // Prior-key residue entries: read the ACTUAL prior
     // transfers' `(tx_hash, internal_output_index)` keys from
     // the ledger after the first merge, rather than relying
@@ -1020,11 +1062,11 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     // gets a residue entry. Under O(n), every prior matches
     // and gets populated; under O(k), priors are never
     // visited so the residue match is unreachable.
-    let prior_keys: Vec<([u8; 32], u64)> = ledger
+    let prior_keys: Vec<(shekyl_types::TxHash, shekyl_types::OutputIndexInTx)> = ledger
         .transfers()
         .iter()
         .take(100)
-        .map(|td| (td.tx_hash.to_bytes(), td.internal_output_index.to_raw()))
+        .map(|td| (td.tx_hash, td.internal_output_index))
         .collect();
     for (i, key) in prior_keys.iter().enumerate() {
         residue.insert(*key, ciphertext_for_seed(u8::try_from(i & 0xFF).unwrap()));
@@ -1090,7 +1132,8 @@ fn populate_engine_handle_fields_no_op_on_empty_residue() {
     let inserted = apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
 
     let view_secret = [0u8; 32];
-    let residue: HashMap<([u8; 32], u64), HybridCiphertext> = HashMap::new();
+    let residue: HashMap<(shekyl_types::TxHash, shekyl_types::OutputIndexInTx), HybridCiphertext> =
+        HashMap::new();
     populate_engine_handle_fields(&mut ledger, &view_secret, &residue, &inserted);
 
     let td = ledger

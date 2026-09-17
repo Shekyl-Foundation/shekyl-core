@@ -100,6 +100,18 @@ fn checked_and_saturating_boundaries() {
     // `earlier` ahead of `self` → None (checked) / ZERO (saturating).
     assert_eq!(earlier.checked_sub(later), None);
     assert_eq!(earlier.saturating_sub(later), BlockCount::ZERO);
+    assert_eq!(
+        BlockHeight::from_raw(0).saturating_sub_count(BlockCount::ONE),
+        BlockHeight::ZERO
+    );
+    assert_eq!(
+        BlockHeight::from_raw(5).saturating_sub_count(BlockCount::ONE),
+        BlockHeight::from_raw(4)
+    );
+    assert_eq!(
+        BlockHeight::from_raw(5).checked_add(BlockCount::ONE),
+        Some(BlockHeight::from_raw(6))
+    );
 }
 
 #[test]
@@ -114,6 +126,8 @@ fn timestamp_secs_since() {
     let before = Timestamp::from_raw(600);
     assert_eq!(now.checked_secs_since(before), Some(400));
     assert_eq!(before.checked_secs_since(now), None);
+    assert_eq!(now.checked_add_secs(50), Some(Timestamp::from_raw(1_050)));
+    assert_eq!(Timestamp::from_raw(u64::MAX).checked_add_secs(1), None);
 }
 
 /// The two chain facts a [`ChainCount`] carries: the tip is one below the

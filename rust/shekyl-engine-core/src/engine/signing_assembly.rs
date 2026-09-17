@@ -182,9 +182,9 @@ fn input_context_from_transfer(
 /// boundary.
 pub(crate) fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
     LeafEntry {
-        output_key: cl.output_key,
+        output_key: cl.output_key.to_bytes(),
         key_image_gen: cl.key_image_gen,
-        commitment: cl.commitment,
+        commitment: cl.commitment.to_bytes(),
         cm_x: cl.cm_x,
     }
 }

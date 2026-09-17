@@ -78,6 +78,10 @@ pub enum PaymentRequestState {
 }
 
 /// Off-chain invoice persisted in [`crate::bookkeeping_block::BookkeepingBlock`].
+///
+/// `created_at` / `expiry` are wall-clock [`Timestamp`]s (RTN-6). Pre-genesis
+/// files that stored a chain height in those fields are discarded
+/// (`rm -rf ~/.shekyl`; rule 15).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaymentRequest {
     pub id: PaymentRequestId,

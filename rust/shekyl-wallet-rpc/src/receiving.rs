@@ -64,16 +64,16 @@ pub(crate) async fn create_payment_request(
 ) -> Result<Value, WalletRpcError> {
     let p: CreatePaymentRequestParams = parse_required_object(params, "create_payment_request")?;
     let amount = parse_atomic_units(&p.amount)?;
-    let expiry = p.expiry.map(parse_height_param).transpose()?;
+    let expiry = p.expiry.map(parse_unix_timestamp).transpose()?;
 
     let shared = require_open_engine(tenants).await?;
     // Write guard: this is the one receiving method that mutates (local
     // bookkeeping, committed via the normal crash-atomic ledger save).
     let engine = shared.write().await;
 
-    // The request clock is block height (`PaymentRequest::is_expired_at`);
-    // stamp creation with the wallet's synced height.
-    let created_at = engine.ledger().ledger.height();
+    // Invoice clocks are wall-clock Unix seconds (RTN-6). Stamp creation
+    // from the host clock so `created_at` cannot be a chain height.
+    let created_at = unix_now();
     let id = engine
         .create_payment_request_persisted(NewPaymentRequest {
             label: p.label,
@@ -135,7 +135,11 @@ pub(crate) async fn make_uri(
     let p: MakeUriParams = parse_required_object(params, "make_uri")?;
     let amount = p.amount.as_deref().map(parse_atomic_units).transpose()?;
     let rid = p.rid.as_deref().map(parse_rid).transpose()?;
-    let expiry = p.expiry.map(parse_height_param).transpose()?;
+    let expiry = p
+        .expiry
+        .map(parse_unix_timestamp)
+        .transpose()?
+        .map(shekyl_types::Timestamp::to_raw);
 
     let address = match p.address {
         // Reject — never trim-and-repair — per the boundary discipline the
@@ -243,8 +247,19 @@ fn parse_rid(s: &str) -> Result<u64, WalletRpcError> {
     Ok(raw)
 }
 
-fn parse_height_param(h: i64) -> Result<u64, WalletRpcError> {
-    u64::try_from(h).map_err(|_| {
-        WalletRpcError::InvalidParams("expiry must be a non-negative block height".into())
-    })
+fn parse_unix_timestamp(h: i64) -> Result<shekyl_types::Timestamp, WalletRpcError> {
+    u64::try_from(h)
+        .map(shekyl_types::Timestamp::from_raw)
+        .map_err(|_| {
+            WalletRpcError::InvalidParams("expiry must be a non-negative unix timestamp".into())
+        })
+}
+
+fn unix_now() -> shekyl_types::Timestamp {
+    shekyl_types::Timestamp::from_raw(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    )
 }

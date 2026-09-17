@@ -945,7 +945,8 @@ pub(crate) fn apply_scan_result_to_state(
 /// [`apply_scan_result_to_state`] has destructured the
 /// [`ScanResult`]. The key matches the corresponding fields on
 /// [`shekyl_engine_state::TransferDetails`] post-merge.
-type DetectionResidue = HashMap<([u8; 32], u64), HybridCiphertext>;
+type DetectionResidue =
+    HashMap<(shekyl_types::TxHash, shekyl_types::OutputIndexInTx), HybridCiphertext>;
 
 /// Build a [`DetectionResidue`] map from a [`ScanResult`]'s detected
 /// transfers before they are consumed by
@@ -961,7 +962,10 @@ fn collect_detection_residue(result: &ScanResult) -> DetectionResidue {
     for dt in &result.new_transfers {
         let wo = dt.output.wallet_output();
         map.insert(
-            (wo.transaction(), wo.index_in_transaction()),
+            (
+                shekyl_types::TxHash::from_bytes(wo.transaction()),
+                shekyl_types::OutputIndexInTx::from_raw(wo.index_in_transaction()),
+            ),
             dt.output.source_ciphertext().clone(),
         );
     }
@@ -1060,7 +1064,7 @@ pub(crate) fn populate_engine_handle_fields(
     for &i in inserted {
         let td = &mut ledger.transfers[i];
         // `residue` is keyed by the scanner's raw `[u8; 32]` txid; convert.
-        let key = (td.tx_hash.to_bytes(), td.internal_output_index.to_raw());
+        let key = (td.tx_hash, td.internal_output_index);
         let Some(ciphertext) = residue.get(&key) else {
             continue;
         };

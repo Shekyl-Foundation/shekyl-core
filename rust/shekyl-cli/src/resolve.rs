@@ -890,24 +890,31 @@ fn unix_now() -> Timestamp {
 /// added to `now`. Invoice expiry is wall-clock, not block height (RTN-6).
 fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestamp> {
     if let Ok(secs) = raw.parse::<u64>() {
+        // A bare integer below 1e9 is a height-shaped leftover of the
+        // pre-RTN-6 CLI (`--expiry <height>`). Refuse it rather than
+        // minting a 1970 timestamp.
+        if secs < 1_000_000_000 {
+            return None;
+        }
         return Some(Timestamp::from_raw(secs));
     }
     let duration = parse_duration_secs(raw)?;
-    now.to_raw().checked_add(duration).map(Timestamp::from_raw)
+    now.checked_add_secs(duration)
 }
 
 fn parse_duration_secs(raw: &str) -> Option<u64> {
     let raw = raw.trim();
-    if raw.len() < 2 {
+    let (last_idx, unit) = raw.char_indices().next_back()?;
+    if last_idx == 0 {
         return None;
     }
-    let (digits, unit) = raw.split_at(raw.len() - 1);
+    let digits = raw.get(..last_idx)?;
     let n: u64 = digits.parse().ok()?;
     let mul = match unit {
-        "s" => 1,
-        "m" => 60,
-        "h" => 3600,
-        "d" => 86400,
+        's' => 1,
+        'm' => 60,
+        'h' => 3600,
+        'd' => 86400,
         _ => return None,
     };
     n.checked_mul(mul)
@@ -1019,7 +1026,7 @@ mod tests {
 
     #[test]
     fn test_request_new_with_expiry() {
-        match parse("request new 2.5 coffee order 42 --expiry 1000") {
+        match parse("request new 2.5 coffee order 42 --expiry 1735689600") {
             ResolvedCommand::RequestNew {
                 amount,
                 label,
@@ -1027,10 +1034,24 @@ mod tests {
             } => {
                 assert_eq!(amount, 2_500_000_000);
                 assert_eq!(label, "coffee order 42");
-                assert_eq!(expiry, Some(Timestamp::from_raw(1000)));
+                assert_eq!(expiry, Some(Timestamp::from_raw(1_735_689_600)));
             }
             other => panic!("expected RequestNew, got {other:?}"),
         }
+        assert!(
+            matches!(
+                parse("request new 2.5 coffee --expiry 1000"),
+                ResolvedCommand::Diagnostic { .. }
+            ),
+            "a height-shaped integer must not become a 1970 timestamp"
+        );
+        assert!(
+            matches!(
+                parse("request new 2.5 coffee --expiry é"),
+                ResolvedCommand::Diagnostic { .. }
+            ),
+            "a non-ASCII unit must diagnose, not panic"
+        );
     }
 
     #[test]
@@ -1136,10 +1157,10 @@ mod tests {
     /// is stripped so it never leaks into the positional args (label/amount).
     #[test]
     fn flags_accept_the_equals_form_without_leaking() {
-        match parse("request new 5.0 rent --expiry=1000") {
+        match parse("request new 5.0 rent --expiry=1735689600") {
             ResolvedCommand::RequestNew { label, expiry, .. } => {
                 assert_eq!(label, "rent", "the =flag must not leak into the label");
-                assert_eq!(expiry, Some(Timestamp::from_raw(1000)));
+                assert_eq!(expiry, Some(Timestamp::from_raw(1_735_689_600)));
             }
             other => panic!("expected RequestNew, got {other:?}"),
         }

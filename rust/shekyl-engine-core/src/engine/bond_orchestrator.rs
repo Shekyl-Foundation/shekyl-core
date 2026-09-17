@@ -597,8 +597,8 @@ where
             .iter()
             .map(|r| AssembleInput {
                 gindex: Gindex::from_raw(r.gindex.to_raw()),
-                output_key: r.output_key,
-                commitment: r.commitment,
+                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(r.output_key),
+                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(r.commitment),
             })
             .collect();
 
@@ -648,9 +648,9 @@ where
                     .leaf_chunk
                     .iter()
                     .map(|cl| LeafEntry {
-                        output_key: cl.output_key,
+                        output_key: cl.output_key.to_bytes(),
                         key_image_gen: cl.key_image_gen,
-                        commitment: cl.commitment,
+                        commitment: cl.commitment.to_bytes(),
                         cm_x: cl.cm_x,
                     })
                     .collect(),

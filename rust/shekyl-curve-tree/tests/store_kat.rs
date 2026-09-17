@@ -9,8 +9,8 @@ use shekyl_curve_tree::recon::{
     assemble_leaf_stream, collect_block_leaves, root_from_scalars, TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, CurveTreeRoot, OutputIdentity, RawOutput,
-    ReferenceBlock, TargetKind, TxLeafInputs,
+    BlockHash, BlockHeight, BlockLeaves, CommitmentBytes, CurveTreeClient, CurveTreeRoot,
+    OneTimePubkey, OutputIdentity, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
@@ -53,8 +53,13 @@ fn decode_client_block(b: &serde_json::Value) -> ClientBlock {
         .expect("outputs")
         .iter()
         .map(|o| RawOutput {
-            output_key: decode_hex32(o["output_key"].as_str().expect("O")),
-            commitment: o["commitment"].as_str().map(decode_hex32),
+            output_key: OneTimePubkey::from_bytes(decode_hex32(
+                o["output_key"].as_str().expect("O"),
+            )),
+            commitment: o["commitment"]
+                .as_str()
+                .map(decode_hex32)
+                .map(CommitmentBytes::from_bytes),
             target: target_kind(o["target"].as_str().expect("target")),
         })
         .collect();
@@ -129,8 +134,11 @@ fn store_root_matches_oracle_and_header_tier_a() {
             }];
             gindex = collect_block_leaves(blk.height, &txs, gindex, &mut recon_entries)
                 .expect("KAT chain has no bad published point");
-            let through = blk.height.saturating_sub(1);
-            let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
+            let through = BlockHeight::from_raw(blk.height.saturating_sub(1));
+            let oracle = CurveTreeRoot::from_bytes(root_from_scalars(&assemble_leaf_stream(
+                &recon_entries,
+                through,
+            )));
             let store_root = client
                 .root_at(BlockHeight::from_raw(blk.height))
                 .expect("store hot path must not error during Tier-A KAT");
@@ -141,7 +149,8 @@ fn store_root_matches_oracle_and_header_tier_a() {
             );
             if blk.height >= 5 {
                 assert_eq!(
-                    store_root, blk.root,
+                    store_root,
+                    CurveTreeRoot::from_bytes(blk.root),
                     "{name} h={} store vs header",
                     blk.height
                 );
@@ -166,13 +175,13 @@ fn store_root_mixed_maturity_drain_order() {
     // Coinbase (m=60) then regular (m=10) in block 0. At height 61 both are
     // drained; canonical order is by maturity, not block insertion order.
     let coinbase = RawOutput {
-        output_key: ED25519_BASEPOINT,
-        commitment: Some(ED25519_BASEPOINT),
+        output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
+        commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
         target: TargetKind::TaggedKey,
     };
     let regular = RawOutput {
-        output_key: ED25519_BASEPOINT,
-        commitment: Some(ED25519_BASEPOINT),
+        output_key: OneTimePubkey::from_bytes(ED25519_BASEPOINT),
+        commitment: Some(CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
         target: TargetKind::TaggedKey,
     };
     // One 64-byte `0x07` entry per output (`CM ‖ record`, PL-D3): the point
@@ -255,8 +264,11 @@ fn store_root_mixed_maturity_drain_order() {
     collect_block_leaves(0, &recon_txs, 0, &mut recon_entries)
         .expect("fixture has no bad published point");
 
-    let through = 60u64;
-    let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
+    let through = BlockHeight::from_raw(60);
+    let oracle = CurveTreeRoot::from_bytes(root_from_scalars(&assemble_leaf_stream(
+        &recon_entries,
+        through,
+    )));
     let store_root = client
         .root_at(BlockHeight::from_raw(61))
         .expect("store hot path must not error");

@@ -1357,8 +1357,13 @@ fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
                 .expect("outputs array")
                 .iter()
                 .map(|o| RawOutput {
-                    output_key: ct2_hex32(o["output_key"].as_str().expect("O hex")),
-                    commitment: o["commitment"].as_str().map(ct2_hex32),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(ct2_hex32(
+                        o["output_key"].as_str().expect("O hex"),
+                    )),
+                    commitment: o["commitment"]
+                        .as_str()
+                        .map(ct2_hex32)
+                        .map(shekyl_curve_tree::CommitmentBytes::from_bytes),
                     target: match o["target"].as_str().expect("target") {
                         "tagged_key" => TargetKind::TaggedKey,
                         "key" => TargetKind::Key,

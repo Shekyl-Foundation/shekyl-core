@@ -365,7 +365,9 @@ info:
   # 0.5.0: PL-D3 — get_balance.unspendable (required) and TransferView
   # state UNSPENDABLE + unspendable_reason, for received-but-unspendable
   # outputs whose published 0x07 entry does not open to this wallet.
-  version: 0.5.0
+  # 0.6.0: RTN-6 — PaymentRequest created_at / expiry are wall-clock Unix
+  # seconds (not block heights). api_version stays 1 (pre-genesis cutover).
+  version: 0.6.0
   description: >
     JSON-RPC 2.0 interface served by `shekyl-wallet-rpc` (Phase 4 of the
     wallet rewrite; replaces the C++ `wallet_rpc_server`). One wallet-bearing
@@ -2135,11 +2137,15 @@ components:
         created_at:
           type: integer
           format: int64
-          description: Block height at creation (the request clock is height).
+          description: >
+            Wall-clock Unix seconds at creation (UTC). Invoice clocks are
+            timestamps, not chain heights.
         expiry:
           type: integer
           format: int64
-          description: Absolute expiry height. Absent when the request has none.
+          description: >
+            Absolute expiry as Unix seconds (UTC). Absent when the request
+            has none.
         state:
           $ref: "#/components/schemas/PaymentRequestState"
         matched_tx_hash:
@@ -2165,7 +2171,7 @@ components:
           type: integer
           format: int64
           minimum: 0
-          description: Optional absolute expiry height.
+          description: Optional absolute expiry as Unix seconds (UTC).
 
     CreatePaymentRequestResult:
       type: object

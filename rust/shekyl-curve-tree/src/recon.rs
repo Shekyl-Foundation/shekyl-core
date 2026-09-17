@@ -206,15 +206,15 @@ pub fn try_build_leaf(out: &OutputIdentity) -> Result<Option<[u8; 128]>, LeafPoi
     // (c2) leaf construction succeeds (shared FFI primitive with the
     // daemon, so x-extraction of all four points — `CM.x` included —
     // cannot diverge; CT2_DRAIN_ORDER.md §3.2).
-    match construct_leaf(&out.output_key, &commitment, &out.cm) {
+    match construct_leaf(out.output_key.as_bytes(), commitment.as_bytes(), &out.cm) {
         Some(leaf) => Ok(Some(leaf)),
         None => {
             // Name the failing input, in `construct_leaf`'s own probe
             // order. `I = Hp(O)` is derived (hash-to-point, infallible),
             // so if `O` and `C` decompress the failure is `CM`.
-            let point = if ed25519_point_to_selene_scalar(&out.output_key).is_none() {
+            let point = if ed25519_point_to_selene_scalar(out.output_key.as_bytes()).is_none() {
                 LeafPoint::OutputKey
-            } else if ed25519_point_to_selene_scalar(&commitment).is_none() {
+            } else if ed25519_point_to_selene_scalar(commitment.as_bytes()).is_none() {
                 LeafPoint::Commitment
             } else {
                 LeafPoint::LeafCommitment
@@ -296,10 +296,10 @@ pub fn collect_block_leaves(
 /// inclusive/exclusive boundary) is pinned by the CT-2 KAT and owned by
 /// `client` (CT-3).
 #[must_use]
-pub fn drained_sorted(entries: &[LeafEntry], drained_through: u64) -> Vec<&LeafEntry> {
+pub fn drained_sorted(entries: &[LeafEntry], drained_through: BlockHeight) -> Vec<&LeafEntry> {
     let mut drained: Vec<&LeafEntry> = entries
         .iter()
-        .filter(|e| e.maturity <= BlockHeight::from_raw(drained_through))
+        .filter(|e| e.maturity <= drained_through)
         .collect();
     drained.sort_by_key(|e| (e.maturity, e.gindex));
     drained
@@ -313,10 +313,13 @@ pub fn drained_sorted(entries: &[LeafEntry], drained_through: u64) -> Vec<&LeafE
 /// (all lower maturities were persisted on prior blocks). Sorted by `gindex`
 /// within the maturity class so append order matches canonical drain order.
 #[must_use]
-pub fn newly_drained_at_cutoff(entries: &[LeafEntry], drained_through: u64) -> Vec<LeafEntry> {
+pub fn newly_drained_at_cutoff(
+    entries: &[LeafEntry],
+    drained_through: BlockHeight,
+) -> Vec<LeafEntry> {
     let mut batch: Vec<&LeafEntry> = entries
         .iter()
-        .filter(|e| e.maturity == BlockHeight::from_raw(drained_through))
+        .filter(|e| e.maturity == drained_through)
         .collect();
     batch.sort_by_key(|e| e.gindex);
     batch.into_iter().copied().collect()
@@ -326,7 +329,7 @@ pub fn newly_drained_at_cutoff(entries: &[LeafEntry], drained_through: u64) -> V
 /// `drained_through`, in canonical drain order `(maturity, gindex)` (S2).
 /// The result feeds [`shekyl_fcmp::tree::build_layers`].
 #[must_use]
-pub fn assemble_leaf_stream(entries: &[LeafEntry], drained_through: u64) -> Vec<[u8; 32]> {
+pub fn assemble_leaf_stream(entries: &[LeafEntry], drained_through: BlockHeight) -> Vec<[u8; 32]> {
     let drained = drained_sorted(entries, drained_through);
     let mut scalars = Vec::with_capacity(drained.len() * SCALARS_PER_LEAF);
     for entry in drained {
@@ -373,8 +376,8 @@ mod tests {
 
     fn coinbase_output() -> OutputIdentity {
         OutputIdentity {
-            output_key: ED25519_BASEPOINT,
-            commitment: Some(ED25519_BASEPOINT),
+            output_key: crate::types::OneTimePubkey::from_bytes(ED25519_BASEPOINT),
+            commitment: Some(crate::types::CommitmentBytes::from_bytes(ED25519_BASEPOINT)),
             cm: ED25519_BASEPOINT,
             target: TargetKind::TaggedKey,
         }
@@ -478,11 +481,11 @@ mod tests {
         assert_eq!(try_build_leaf(&bad_cm), Err(LeafPoint::LeafCommitment));
 
         let mut bad_o = coinbase_output();
-        bad_o.output_key = [7u8; 32];
+        bad_o.output_key = crate::types::OneTimePubkey::from_bytes([7u8; 32]);
         assert_eq!(try_build_leaf(&bad_o), Err(LeafPoint::OutputKey));
 
         let mut bad_c = coinbase_output();
-        bad_c.commitment = Some([7u8; 32]);
+        bad_c.commitment = Some(crate::types::CommitmentBytes::from_bytes([7u8; 32]));
         assert_eq!(try_build_leaf(&bad_c), Err(LeafPoint::Commitment));
     }
 
@@ -515,10 +518,10 @@ mod tests {
         // holds there without a CM-style admission check, and the error
         // still names the right arm.
         let mut id_o = coinbase_output();
-        id_o.output_key = identity;
+        id_o.output_key = crate::types::OneTimePubkey::from_bytes(identity);
         assert_eq!(try_build_leaf(&id_o), Err(LeafPoint::OutputKey));
         let mut id_c = coinbase_output();
-        id_c.commitment = Some(identity);
+        id_c.commitment = Some(crate::types::CommitmentBytes::from_bytes(identity));
         assert_eq!(try_build_leaf(&id_c), Err(LeafPoint::Commitment));
     }
 
@@ -592,7 +595,7 @@ mod tests {
             leaf,
             identity: id,
         };
-        let scalars = assemble_leaf_stream(&[entry], 120);
+        let scalars = assemble_leaf_stream(&[entry], BlockHeight::from_raw(120));
         assert_eq!(scalars.len(), SCALARS_PER_LEAF, "one leaf → 4 scalars");
         let root = root_from_scalars(&scalars);
         assert_ne!(root, selene_hash_init(), "a populated tree is not empty");
@@ -626,7 +629,7 @@ mod tests {
                 identity: id,
             },
         ];
-        let scalars = assemble_leaf_stream(&entries, 70);
+        let scalars = assemble_leaf_stream(&entries, BlockHeight::from_raw(70));
         // Two drained leaves → 8 scalars (the maturity-71 leaf excluded).
         assert_eq!(scalars.len(), 2 * SCALARS_PER_LEAF);
     }
@@ -655,9 +658,15 @@ mod tests {
         ];
         let mut incremental = Vec::new();
         for through in 0..=60u64 {
-            incremental.extend(newly_drained_at_cutoff(&entries, through));
+            incremental.extend(newly_drained_at_cutoff(
+                &entries,
+                BlockHeight::from_raw(through),
+            ));
         }
-        let oracle: Vec<LeafEntry> = drained_sorted(&entries, 60).into_iter().copied().collect();
+        let oracle: Vec<LeafEntry> = drained_sorted(&entries, BlockHeight::from_raw(60))
+            .into_iter()
+            .copied()
+            .collect();
         assert_eq!(incremental, oracle);
     }
 }

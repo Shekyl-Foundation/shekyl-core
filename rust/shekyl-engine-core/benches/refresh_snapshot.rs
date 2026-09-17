@@ -67,7 +67,7 @@ fn sample_transfer(seed: u64) -> TransferDetails {
         // keep the raw `[u8; 32]` local for the `derive_output_handle` call
         // below (crypto takes `&[u8; 32]`); wrap only at the typed field.
         tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
-        internal_output_index,
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(internal_output_index),
         global_output_index: shekyl_types::GlobalOutputIndex::from_raw(1_000 + seed),
         block_height: shekyl_types::BlockHeight::from_raw(100),
         key: ED25519_BASEPOINT_POINT,

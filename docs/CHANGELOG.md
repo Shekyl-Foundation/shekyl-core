@@ -27,8 +27,10 @@
 
 - **CLI `request new --expiry` is wall-clock Unix seconds, not block height
   (RTN-6).** Absolute unix timestamps and relative durations (`1h`, `30m`,
-  `7d`) are accepted; the JSON-RPC DTO still carries a raw integer. Invoice
-  expiry was never a chain instant — humans set it against a clock.
+  `7d`) are accepted; a height-shaped integer (`< 1e9`) is refused. Wallet
+  RPC `create_payment_request` stamps `created_at` from the host clock and
+  documents `created_at`/`expiry` as Unix seconds (OpenAPI `0.6.0`;
+  `api_version` stays 1). Invoice expiry was never a chain instant.
 
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
   (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured

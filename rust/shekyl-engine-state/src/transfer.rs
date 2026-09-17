@@ -117,25 +117,34 @@ pub struct FcmpPrecomputedPath {
     pub path_blob: Vec<u8>,
 }
 
-// Wire-native Schema mirror: `BlockHash`/`BlockHeight` are transparent
-// over `[u8; 32]`/`u64`, so postcard bytes are unchanged. The snapshot
-// must keep the primitive names (`42-serialization-policy.mdc` /
-// `RAW_TYPE_NEWTYPE_MIGRATION.md` §1) — a named-schema rename would
-// force a `LEDGER_BLOCK_VERSION` bump for a type-only change.
-#[derive(postcard_schema::Schema)]
-#[allow(dead_code)]
-struct FcmpPrecomputedPathSchema {
-    reference_block: [u8; 32],
-    tree_depth: u32,
-    precompute_height: u64,
-    path_blob: Vec<u8>,
-}
-
 impl postcard_schema::Schema for FcmpPrecomputedPath {
+    // Wire-native named schema: `BlockHash`/`BlockHeight` are transparent
+    // over `[u8; 32]`/`u64`, so postcard bytes are unchanged. Reporting
+    // the primitive names keeps `ledger_block.snap` stable (no
+    // `LEDGER_BLOCK_VERSION` bump for a type-only change). No dummy
+    // struct: a shadow type with `[u8; 32]`/`Vec<u8>` fields trips the
+    // zeroize-field gate without owning any bytes.
     const SCHEMA: &'static postcard_schema::schema::NamedType =
         &postcard_schema::schema::NamedType {
             name: "FcmpPrecomputedPath",
-            ty: <FcmpPrecomputedPathSchema as postcard_schema::Schema>::SCHEMA.ty,
+            ty: &postcard_schema::schema::DataModelType::Struct(&[
+                &postcard_schema::schema::NamedValue {
+                    name: "reference_block",
+                    ty: <[u8; 32] as postcard_schema::Schema>::SCHEMA,
+                },
+                &postcard_schema::schema::NamedValue {
+                    name: "tree_depth",
+                    ty: <u32 as postcard_schema::Schema>::SCHEMA,
+                },
+                &postcard_schema::schema::NamedValue {
+                    name: "precompute_height",
+                    ty: <u64 as postcard_schema::Schema>::SCHEMA,
+                },
+                &postcard_schema::schema::NamedValue {
+                    name: "path_blob",
+                    ty: <Vec<u8> as postcard_schema::Schema>::SCHEMA,
+                },
+            ]),
         };
 }
 

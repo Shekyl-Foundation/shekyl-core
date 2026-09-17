@@ -446,12 +446,13 @@ impl Message<VerifyRoot> for CurveTreeActor {
         // error from `root_at` (e.g. `Poisoned`) propagates as-is; only a
         // genuine divergence becomes `RootMismatch`.
         let got = self.client.root_at(msg.height)?;
-        if got == msg.expected_root {
+        let expected = shekyl_curve_tree::CurveTreeRoot::from_bytes(msg.expected_root);
+        if got == expected {
             Ok(())
         } else {
             Err(ClientError::RootMismatch {
                 height: msg.height,
-                expected: msg.expected_root,
+                expected,
                 got,
             })
         }
@@ -466,7 +467,9 @@ impl Message<RootAndDepthAt> for CurveTreeActor {
         msg: RootAndDepthAt,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.client.root_and_depth_at(msg.height)
+        self.client
+            .root_and_depth_at(msg.height)
+            .map(|(root, depth)| (root.to_bytes(), depth))
     }
 }
 

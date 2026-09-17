@@ -136,10 +136,9 @@ rust/shekyl-engine-state/src/sync_state_block.rs|pub pending_tx_hashes: Vec<[u8;
 
 # ── transfer.rs ───────────────────────────────────────────────────────
 #
-# FCMP++ precomputed-path reference block is the block hash the path
-# was computed against — public chain state.
-rust/shekyl-engine-state/src/transfer.rs|pub reference_block: [u8; 32]
-# `path_blob` holds the serialized FCMP++ precomputed path (opaque
+# FCMP++ precomputed-path reference block is now `BlockHash` (public
+# chain state); the newtype is not byte-shaped to the grep. `path_blob`
+# holds the serialized FCMP++ precomputed path (opaque
 # merkle-proof bytes). The proof is a public-input artifact of the
 # full-chain-membership argument; it does not carry private scalar
 # material. Leaks the chosen anonymity-set positions but not the

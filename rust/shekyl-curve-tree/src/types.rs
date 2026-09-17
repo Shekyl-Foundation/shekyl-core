@@ -35,12 +35,12 @@ pub enum TargetKind {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct OutputIdentity {
     /// Compressed Ed25519 output public key (`O`).
-    pub output_key: [u8; 32],
+    pub output_key: OneTimePubkey,
     /// Amount commitment mask (`C = ct_signatures.outPk[i].mask`).
     /// `None` when the output has no commitment slot
     /// (`i >= outPk.size()`), which makes it leaf-ineligible (the C++
     /// skip (b)).
-    pub commitment: Option<[u8; 32]>,
+    pub commitment: Option<CommitmentBytes>,
     /// The output's published PQC leaf commitment point `CM` (compressed
     /// Ed25519; the first 32 bytes of its `0x07` entry, `PL-D3`), sliced by
     /// [`crate::recon::extract_leaf_commitments`]. The leaf's 4th scalar is
@@ -74,10 +74,10 @@ pub struct AssembleInput {
     pub gindex: Gindex,
     /// Compressed Ed25519 output public key (`O`) the caller expects at
     /// `gindex`.
-    pub output_key: [u8; 32],
+    pub output_key: OneTimePubkey,
     /// Amount commitment (`C`) the caller expects at `gindex`. Non-optional:
     /// an owned output is always leaf-eligible and commitment-bearing.
-    pub commitment: [u8; 32],
+    pub commitment: CommitmentBytes,
 }
 
 /// Implement `redb::Value` + `redb::Key` for an integer newtype by
@@ -132,7 +132,9 @@ pub(crate) use redb_delegated_key;
 /// a height can never be swapped with a tree position, gindex, or leaf
 /// count at a store seam — and so this crate cannot mint a second
 /// `BlockHeight` that is not the vocabulary type (RTN-4).
-pub use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex};
+pub use shekyl_types::{
+    BlockHash, BlockHeight, CommitmentBytes, CurveTreeRoot, GlobalOutputIndex, OneTimePubkey,
+};
 
 /// Global output index (the daemon's `next_output_seq` counter), assigned
 /// to every `vout` in C++ drain order. Same type as
@@ -145,7 +147,7 @@ pub type Gindex = GlobalOutputIndex;
 /// existing stores still open (layout identical to the retired tuple
 /// struct).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub(crate) struct GindexKey(pub u64);
+pub(crate) struct GindexKey(u64);
 
 impl From<Gindex> for GindexKey {
     fn from(g: Gindex) -> Self {
@@ -211,11 +213,11 @@ pub struct LeafEntry {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ChunkLeaf {
     /// Compressed Ed25519 output public key (`O`).
-    pub output_key: [u8; 32],
+    pub output_key: OneTimePubkey,
     /// Key image generator `I = Hp(O)` (compressed), derived in-crate.
     pub key_image_gen: [u8; 32],
     /// Compressed amount commitment (`C`).
-    pub commitment: [u8; 32],
+    pub commitment: CommitmentBytes,
     /// The leaf's 4th scalar: `CM.x`, the Wei25519 x-coordinate of the
     /// output's PQC leaf commitment (`PL-D3`) — what the prover holds for
     /// every sibling in the chunk.

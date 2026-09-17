@@ -338,7 +338,7 @@ pub const MERGE_BENCH_OUTPUT_COUNT: usize = 256;
 pub struct MergeProjectionBenchFixture {
     ledger: LedgerBlock,
     view_secret: [u8; 32],
-    residue: HashMap<([u8; 32], u64), HybridCiphertext>,
+    residue: HashMap<(TxHash, shekyl_types::OutputIndexInTx), HybridCiphertext>,
     inserted: Vec<usize>,
 }
 
@@ -384,7 +384,7 @@ impl MergeProjectionBenchFixture {
             let seed = i as u64;
             let td = unpopulated_transfer(seed);
             // residue is keyed by the scanner's raw `[u8; 32]` txid; convert.
-            let key = (td.tx_hash.to_bytes(), td.internal_output_index);
+            let key = (td.tx_hash, td.internal_output_index);
             // A realistically-sized on-chain hybrid ciphertext (~1088-byte
             // ML-KEM + 32-byte X25519), so the per-output `clone()` in the
             // post-pass reflects production memcpy cost.

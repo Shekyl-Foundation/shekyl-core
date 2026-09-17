@@ -81,6 +81,7 @@ pub use store::{
     LeafStore, MixedRootError, PostureDeclaration, SegmentPin, ServingReader, StoreError,
 };
 pub use types::{
-    AssembleInput, AssembledPath, BlockHash, BlockHeight, ChunkLeaf, CurveTreeRoot, Gindex,
-    LeafEntry, OutputIdentity, ReferenceBlock, TargetKind, TreeContext, TreePosition,
+    AssembleInput, AssembledPath, BlockHash, BlockHeight, ChunkLeaf, CommitmentBytes,
+    CurveTreeRoot, Gindex, LeafEntry, OneTimePubkey, OutputIdentity, ReferenceBlock, TargetKind,
+    TreeContext, TreePosition,
 };

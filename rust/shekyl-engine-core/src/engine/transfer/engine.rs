@@ -770,8 +770,12 @@ where
                 })?;
                 assemble_inputs.push(AssembleInput {
                     gindex: td.global_output_index,
-                    output_key: td.key.compress().to_bytes(),
-                    commitment: td.commitment.calculate().compress().to_bytes(),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(
+                        td.key.compress().to_bytes(),
+                    ),
+                    commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        td.commitment.calculate().compress().to_bytes(),
+                    ),
                 });
             }
             Ok::<_, SendError>(assemble_inputs)
@@ -1197,8 +1201,12 @@ where
                                 })?;
                         assemble_inputs.push(AssembleInput {
                             gindex: td.global_output_index,
-                            output_key: td.key.compress().to_bytes(),
-                            commitment: td.commitment.calculate().compress().to_bytes(),
+                            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(
+                                td.key.compress().to_bytes(),
+                            ),
+                            commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(
+                                td.commitment.calculate().compress().to_bytes(),
+                            ),
                         });
                     }
                     Ok::<_, SendError>((assemble_inputs, covered))

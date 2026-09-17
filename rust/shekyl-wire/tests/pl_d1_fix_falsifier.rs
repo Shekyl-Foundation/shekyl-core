@@ -51,8 +51,8 @@ use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
 use shekyl_curve_tree::{
-    AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, CurveTreeRoot, Gindex,
-    RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
+    ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::{tree::ed25519_point_to_selene_scalar, PqcKeyScalar};
 use shekyl_tx_builder::{sign_pqc_auths, tx_prefix_hash_from_parts, LeafEntry, SpendInput};
@@ -118,8 +118,10 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     let mut published_0x07: Vec<[u8; 64]> = Vec::new();
 
     genesis_outputs.push(RawOutput {
-        output_key: spent.output_key,
-        commitment: Some(spent.commitment),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+            spent.commitment,
+        )),
         target: TargetKind::TaggedKey,
     });
     genesis_blob.extend_from_slice(&spent.pqc_leaf.entry_bytes());
@@ -127,8 +129,10 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     for _ in 1..TREE_OUTPUTS {
         let decoy = real_output(&mut rng, 1);
         genesis_outputs.push(RawOutput {
-            output_key: decoy.output_key,
-            commitment: Some(decoy.commitment),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(decoy.output_key),
+            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                decoy.commitment,
+            )),
             target: TargetKind::TaggedKey,
         });
         genesis_blob.extend_from_slice(&decoy.pqc_leaf.entry_bytes());
@@ -145,8 +149,10 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
             published_0x07.push(filler.pqc_leaf.entry_bytes());
             (
                 vec![RawOutput {
-                    output_key: filler.output_key,
-                    commitment: Some(filler.commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(filler.output_key),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        filler.commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 }],
                 filler.pqc_leaf.entry_bytes().to_vec(),
@@ -188,15 +194,15 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     // ── The spend, on the production path ────────────────────────────────
     let reference = ReferenceBlock {
         height: BlockHeight::from_raw(reference_height),
-        curve_tree_root: CurveTreeRoot::from_bytes(tree_root),
+        curve_tree_root: tree_root,
         block_hash: BlockHash::from_bytes([0xAB; 32]),
     };
     let path = client
         .assemble_path(
             &AssembleInput {
                 gindex: Gindex::from_raw(spent_index),
-                output_key: spent.output_key,
-                commitment: spent.commitment,
+                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
             },
             &reference,
         )
@@ -205,9 +211,9 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         .leaf_chunk
         .iter()
         .map(|cl| LeafEntry {
-            output_key: cl.output_key,
+            output_key: cl.output_key.to_bytes(),
             key_image_gen: cl.key_image_gen,
-            commitment: cl.commitment,
+            commitment: cl.commitment.to_bytes(),
             cm_x: cl.cm_x,
         })
         .collect();

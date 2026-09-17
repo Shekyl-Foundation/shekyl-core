@@ -224,8 +224,9 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
                 return false;
             };
             outputs.push(RawOutput {
-                output_key: o.output_key,
-                commitment: (o.has_commitment != 0).then_some(o.commitment),
+                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(o.output_key),
+                commitment: (o.has_commitment != 0)
+                    .then_some(shekyl_curve_tree::CommitmentBytes::from_bytes(o.commitment)),
                 target,
             });
         }
@@ -329,7 +330,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_next_block_root(
     match replica.client.next_block_root() {
         Ok(root) => {
             // SAFETY: caller contract on `out_root`.
-            unsafe { *out_root = root };
+            unsafe { *out_root = root.to_bytes() };
             true
         }
         Err(err) => {

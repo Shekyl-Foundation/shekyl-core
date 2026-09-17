@@ -498,8 +498,8 @@ async fn funded_ledger_and_tree(
         .compress()
         .to_bytes();
         raw_outputs.push(RawOutput {
-            output_key: c.output_key,
-            commitment: Some(commitment),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(c.output_key),
+            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(commitment)),
             target: TargetKind::TaggedKey,
         });
         leaf_blob.extend_from_slice(&c.pqc_leaf.entry_bytes());
@@ -2393,8 +2393,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
             reference,
             vec![AssembleInput {
                 gindex: Gindex::from_raw(0),
-                output_key: constructed.output_key,
-                commitment: constructed.commitment,
+                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(constructed.output_key),
+                commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(constructed.commitment),
             }],
         )
         .await
@@ -2420,9 +2420,9 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         .leaf_chunk
         .iter()
         .map(|cl| LeafEntry {
-            output_key: cl.output_key,
+            output_key: cl.output_key.to_bytes(),
             key_image_gen: cl.key_image_gen,
-            commitment: cl.commitment,
+            commitment: cl.commitment.to_bytes(),
             cm_x: cl.cm_x,
         })
         .collect();
@@ -3396,8 +3396,8 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
     // that check fires, so a placeholder suffices.
     let assemble_inputs = vec![AssembleInput {
         gindex: Gindex::from_raw(100),
-        output_key: [0u8; 32],
-        commitment: [0u8; 32],
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([0u8; 32]),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes([0u8; 32]),
     }];
     let paths = vec![AssembledPath {
         leaf_chunk: Vec::new(),
