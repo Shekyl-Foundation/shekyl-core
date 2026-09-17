@@ -128,6 +128,7 @@ int main(int argc, char* argv[])
     GENERATE_AND_PLAY(gen_checkpoint_conflict_rollback);
     GENERATE_AND_PLAY(gen_block_ts_in_future);
     GENERATE_AND_PLAY(gen_block_invalid_prev_id);
+    GENERATE_AND_PLAY(gen_block_already_known_is_already_exists);
     GENERATE_AND_PLAY(gen_block_invalid_attestation_root);
     GENERATE_AND_PLAY(gen_block_no_miner_tx);
     GENERATE_AND_PLAY(gen_block_unlock_time_is_low);

@@ -264,6 +264,33 @@ bool gen_block_invalid_prev_id::check_block_verification_context(const cryptonot
     return !cryptonote::block_orphaned(bvc) && cryptonote::block_added(bvc) && !cryptonote::block_rejected(bvc);
 }
 
+bool gen_block_already_known_is_already_exists::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  block blk_1;
+  generator.construct_block(blk_1, blk_0, miner_account);
+  events.push_back(blk_1);
+  // The same block again: `prepare_handle_incoming_blocks` sees a known hash
+  // and skips the PoW pre-compute; `add_new_block` then answers from
+  // `have_block` before any rule runs (blockchain.cpp `add_new_block`).
+  events.push_back(blk_1);
+
+  DO_CALLBACK(events, "check_block_accepted");
+
+  return true;
+}
+
+bool gen_block_already_known_is_already_exists::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+{
+  if (2 == event_idx)
+    return cryptonote::block_already_exists(bvc) && !cryptonote::block_added(bvc)
+      && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+  else
+    return cryptonote::block_added(bvc) && !cryptonote::block_already_exists(bvc)
+      && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+}
+
 bool gen_block_invalid_attestation_root::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
