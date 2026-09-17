@@ -180,12 +180,14 @@ outside 4.A/4.B was examined for slice 1; 4.C–4.M are the later slices'.
 
 ## 4. The registration gap (Q2) — the grouping, then the mechanism
 
-`census_rows!` knows two statuses: `pending` and `implemented(path)`
-(`census.rs:91–111`). `RuleSet::GENESIS.enforced == CenRow::ALL` (153), and
-`Coverage::is_complete_for` is true only when every enforced row is in
-coverage. Five slice-1 rows can never be in coverage because `validate`
-cannot evaluate them, so with the registry as it stands `is_complete_for` is
-permanently false. The round-1 draft proposed one new status for all five;
+*As found at pre-flight (records-was):* `census_rows!` knew two statuses,
+`pending` and `implemented(path)`; `RuleSet::GENESIS.enforced` was
+`CenRow::ALL` (153); and `Coverage::is_complete_for` was true only when every
+enforced row was in coverage. Five slice-1 rows can never be in coverage
+because `validate` cannot evaluate them, so with the registry as it then
+stood `is_complete_for` was permanently false. *As landed (#767):* a third
+status `held_by_cxx("<file>", "<test>")` for A1/A4, and `RuleSet::enforced()`
+excludes held rows so completeness is `E − H` (§4.1). The round-1 draft proposed one new status for all five;
 **the review (2026-09-16) asked for the grouping to be checked first, and
 the five are not one thing.** C2-R8's category test (§2 there: *would this
 still have to hold if the consensus rules changed?*) applied per row:
@@ -438,10 +440,13 @@ refuses is the evidence the `held_by_cxx` status requires, and without it the
 status is a grep wearing a test's name (PWD-B10). A5 gains its `subsumed-by` note in the registry comment (no status: it stays `pending` until slice 7 closes it); A6/A7 stay `pending` with the wire-invariant disposition in their registry comment until the wire-format port mints the register and moves the census rows
 6. `docs: slice 1 landed — CHAIN_RULES_CRATE.md §13, DRS §7 row + §15, index, FOLLOWUPS F2, CHANGELOG`
 
-Gate figure expected after commit 5 (today's shape, verified at this tip:
-`consensus: implemented 0 / enforced 153`): `consensus: implemented 6 /
+Gate figures, dated: *at the pre-flight tip (`3560b80c2`)* `consensus:
+implemented 0 / enforced 153`; *after #762* `implemented 3 / enforced 153`
+(4.B `3/7`); *after #767* `implemented 3 / validator-enforced 151
+held-by-cxx 2   enforced 153   ratified 126 / enforced 153` (4.A `0/7`, held
+2); *at slice close (after the `tip()` PR)* `implemented 6 /
 validator-enforced 151   held-by-cxx 2   enforced 153   ratified 126 /
-enforced 153`; 4.A `1/7` (+2 held), 4.B `5/7`.
+enforced 153` — 4.A `1/7` (+2 held), 4.B `5/7`.
 
 ---
 

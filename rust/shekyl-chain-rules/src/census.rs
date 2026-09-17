@@ -241,9 +241,9 @@ census_rows! {
     /// the gate holds the bijection.
     pub enum CenRow: Consensus {
         // 4.A Acceptance topology (`CHAIN_RULES_SLICE_1.md` §3–§4)
-        // A1/A4: where a block goes, not whether it is valid — the C++
-        // ingest driver's until cutover; each cites the core test that
-        // observes the outcome byte.
+        // A1/A4: where a block goes, not whether it is valid. The C++ ingest
+        // driver holds these rows until cutover; each entry cites the core
+        // test that observes the outcome byte.
         A1 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known_is_already_exists"),
         A2 pending,
         // A3: subsumed by B4's empty-witness arm — never its own rule; the

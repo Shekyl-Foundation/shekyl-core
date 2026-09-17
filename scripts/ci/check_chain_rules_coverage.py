@@ -110,12 +110,22 @@ ENTRY_RE = re.compile(
     r'|(held_by_cxx)\(\s*"([^"\s]+)"\s*,\s*"([A-Za-z_]\w*)"\s*\))'
     r"\s*,$"
 )
+# The C++ source suffixes this tree uses (`.cc` — `src/fcmp/bulletproofs_plus.cc`
+# is a census site; `.inl` — the protocol handler). One list, two consumers:
+# the census `site(s)` check and the holder-path check below.
+CXX_SUFFIXES = ("cc", "cpp", "cxx", "h", "hpp", "inl")
+_CXX_SUFFIX = "|".join(CXX_SUFFIXES)
 # A census `site(s)` cell that places the rule in C++: the only rows
 # `held_by_cxx` may claim (the holder is the C++ ingest driver). Either the
 # cell names a C++ source, or it is a bare line citation — the census's
 # stated default (§4 preamble: "`blockchain.cpp` under `src/cryptonote_core/`
 # unless another file is named"). A Rust site (`rust/….rs:N`) matches neither.
-CXX_SITE_RE = re.compile(r"\.(?:cpp|h|hpp|inl)\b|^\s*\d+")
+CXX_SITE_RE = re.compile(rf"\.(?:{_CXX_SUFFIX})\b|^\s*\d+")
+# The holder a `held_by_cxx` entry cites: a repo-relative C++ file. A Rust or
+# Markdown file that happens to contain the identifier is not a C++ holder,
+# and an absolute path is not repo-relative — both are refused before the
+# file is read, so the registry cannot become environment-specific.
+CXX_HOLDER_RE = re.compile(rf"^(?!/)(?!\w:)(?!\.\.)[^\s]+\.(?:{_CXX_SUFFIX})$")
 MOD_DECL_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+census\s*;\s*$", re.M)
 DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 
@@ -382,6 +392,12 @@ def check_held(entries: list[Entry], rows: list[Row], cxx: Callable[[str], str |
                 f"held_by_cxx entry {e.id} (line {e.line}): the census places this row at "
                 f"{site!r}, which cites no C++ source — only a C++-held row may be held_by_cxx"
             )
+        if not CXX_HOLDER_RE.match(file):
+            errors.append(
+                f"held_by_cxx entry {e.id} (line {e.line}): holder {file!r} is not a "
+                f"repo-relative C++ file (.{', .'.join(CXX_SUFFIXES)}; no absolute path, no `..`)"
+            )
+            continue
         text = cxx(file)
         if text is None:
             errors.append(
@@ -656,6 +672,31 @@ def selftest() -> None:
     _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/core_tests/block_validation.cpp"),'), "unparseable entry at line 10", "held_by_cxx with a bare path and no test")
     _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx(tests/core_tests/block_validation.cpp, gen_block_already_known),'), "unparseable entry at line 10", "held_by_cxx without quotes")
     _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen-block"),'), "unparseable entry at line 10", "held_by_cxx test name is not an identifier")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("/abs/tests/core_tests/block_validation.cpp", "gen_block_already_known"),', cxx={"/abs/tests/core_tests/block_validation.cpp": "gen_block_already_known"}), "is not a repo-relative C++ file", "absolute holder path")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("../elsewhere/x.cpp", "gen_block_already_known"),', cxx={"../elsewhere/x.cpp": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder path escapes the repo")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("rust/shekyl-chain-rules/src/lib.rs", "gen_block_already_known"),', cxx={"rust/shekyl-chain-rules/src/lib.rs": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder is a Rust file that contains the identifier")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("docs/design/X.md", "gen_block_already_known"),', cxx={"docs/design/X.md": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder is a Markdown file")
+    _expect_ok(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/unit_tests/ingest.cc", "gen_block_already_known"),', cxx={"tests/unit_tests/ingest.cc": "gen_block_already_known"}), "a .cc holder is a C++ holder")
+    _expect_ok(_inputs(census=_CENSUS_OK.replace("| CEN-A4 | already known | 6626 (bare line: the census default `blockchain.cpp`) |", "| CEN-A4 | already known | `src/fcmp/bulletproofs_plus.cc:40` |")), "a .cc census site is a C++ site")
+    # the production reader refuses what the grammar cannot see: an absolute
+    # path pointing INSIDE the checkout, and a `..` that resolves inside it
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        (repo / "tests").mkdir()
+        (repo / "tests" / "a.cpp").write_text("struct gen_x {};\n", encoding="utf-8")
+        reader = repo_reader(repo)
+        if reader("tests/a.cpp") != "struct gen_x {};\n":
+            raise SystemExit("selftest repo_reader: relative path inside the repo must read")
+        if reader(str(repo / "tests" / "a.cpp")) is not None:
+            raise SystemExit("selftest repo_reader: an absolute path must be refused even inside the checkout")
+        if reader("tests/../tests/a.cpp") is not None:
+            raise SystemExit("selftest repo_reader: a `..` component must be refused even when it resolves inside")
+        if reader("tests/missing.cpp") is not None:
+            raise SystemExit("selftest repo_reader: a missing file is None")
+        if reader("tests") is not None:
+            raise SystemExit("selftest repo_reader: a directory is None")
+        _FIRED.append("repo_reader refusals (absolute, .., missing, directory)")
     # a held row is still a registered row: the bijection sees it
     _expect_refusal(_reg('        A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),\n', ""), "census row CEN-A4 (flag C) missing from registry CenRow", "held row removed from the registry")
 
@@ -724,18 +765,33 @@ def load(census: Path, registry: Path, lib: Path, manifest: Path) -> Inputs:
         if not p.is_file():
             raise Refused(f"{label}: {p}")
     read = lambda p: p.read_text(encoding="utf-8")  # noqa: E731
+    return Inputs(
+        census=read(census),
+        registry=read(registry),
+        lib=read(lib),
+        manifest=read(manifest),
+        cxx=repo_reader(REPO),
+    )
+
+
+def repo_reader(repo: Path) -> Callable[[str], str | None]:
+    """The production `cxx` reader: a repo-relative path → the file's text,
+    or `None` when it is absolute, escapes `repo`, or is not a regular file.
+    A hold cites a file in this tree or it cites nothing — an absolute path
+    that happens to point inside the checkout would make the registry
+    environment-specific, so it is refused before resolution (PR #767 review).
+    """
 
     def cxx(rel: str) -> str | None:
-        # Repo-relative, and refused if it escapes the repo: a hold cites a
-        # file in this tree or it cites nothing.
-        target = (REPO / rel).resolve()
-        if REPO not in target.parents or not target.is_file():
+        candidate = Path(rel)
+        if candidate.is_absolute() or ".." in candidate.parts:
             return None
-        return read(target)
+        target = (repo / candidate).resolve()
+        if repo.resolve() not in target.parents or not target.is_file():
+            return None
+        return target.read_text(encoding="utf-8")
 
-    return Inputs(
-        census=read(census), registry=read(registry), lib=read(lib), manifest=read(manifest), cxx=cxx
-    )
+    return cxx
 
 
 def main(argv: list[str] | None = None) -> int:

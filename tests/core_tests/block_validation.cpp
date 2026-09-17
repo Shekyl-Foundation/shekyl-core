@@ -291,6 +291,54 @@ bool gen_block_already_known_is_already_exists::check_block_verification_context
       && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
 }
 
+bool gen_block_already_known_in_alt_store_is_already_exists::generate(std::vector<test_event_entry>& events) const
+{
+  BLOCK_VALIDATION_INIT_GENERATE();
+
+  block blk_1;
+  generator.construct_block(blk_1, blk_0, miner_account);
+  events.push_back(blk_1);
+  // A second child of genesis: not the tip's child, so `add_new_block`
+  // routes it to `handle_alternative_block`, which stores it as an alt block.
+  block blk_1_alt;
+  generator.construct_block_manually(blk_1_alt, blk_0, miner_account, test_generator::bf_timestamp, 0, 0, blk_1.timestamp + 1);
+  events.push_back(blk_1_alt);
+  // The alt block again: `have_block` finds it in the alt store —
+  // ALREADY_EXISTS from the second arm, before any routing.
+  events.push_back(blk_1_alt);
+
+  DO_CALLBACK(events, "check_one_alt_block");
+  DO_CALLBACK(events, "check_block_accepted");
+
+  return true;
+}
+
+bool gen_block_already_known_in_alt_store_is_already_exists::check_block_verification_context(const cryptonote::block_verification_context& bvc, size_t event_idx, const cryptonote::block& /*blk*/)
+{
+  switch (event_idx)
+  {
+    case 1: // main-chain child
+      return cryptonote::block_added(bvc) && !cryptonote::block_already_exists(bvc)
+        && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+    case 2: // admitted as an alt block: not added to main, not rejected
+      return !cryptonote::block_added(bvc) && !cryptonote::block_already_exists(bvc)
+        && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+    case 3: // the alt block resubmitted
+      return cryptonote::block_already_exists(bvc) && !cryptonote::block_added(bvc)
+        && !cryptonote::block_rejected(bvc) && !cryptonote::block_orphaned(bvc);
+    default:
+      return !cryptonote::block_rejected(bvc);
+  }
+}
+
+bool gen_block_already_known_in_alt_store_is_already_exists::check_one_alt_block(cryptonote::core& c, size_t /*ev_index*/, const std::vector<test_event_entry>& /*events*/)
+{
+  DEFINE_TESTS_ERROR_CONTEXT("gen_block_already_known_in_alt_store_is_already_exists::check_one_alt_block");
+  // The resubmission stored nothing: one alt block, not two.
+  CHECK_EQ(1, c.get_alternative_blocks_count());
+  return true;
+}
+
 bool gen_block_invalid_attestation_root::generate(std::vector<test_event_entry>& events) const
 {
   BLOCK_VALIDATION_INIT_GENERATE();
