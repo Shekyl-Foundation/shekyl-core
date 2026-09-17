@@ -31,7 +31,9 @@ and wallet-side `LeafStore` under Q6's unit) is minted OPEN.
 `{ hash, prunable_hash }` — one of Q6's two occupants; `pqc_auth_hash`,
 the txid's third component, is owed on the identity and as a row, and
 Q6 items 1–2 are ruled before DRS-E2's first production writer or E2
-rules them by construction.**
+rules them by construction.** **F27–F29 (same day, on review): band 1
+needs a below-anchor `RuleSet` E6 is shaping now; the skeleton wire
+needs both txid components; Q3's instrument is `ChainView`'s surface.**
 `PDM-Q-S0` is RULED. This is the design home TJ-D named; it is not
 yet the design. **What this document is for:** nothing here is built
 while DRS is in progress — the implementation waits on the C++→Rust
@@ -1272,6 +1274,17 @@ Named now so they are not discovered later.
   [`ARCHIVAL_PER_CHALLENGE_RECORD.md`](ARCHIVAL_PER_CHALLENGE_RECORD.md):
   `PC-D1`…`PC-D7` are RULED and the leaf-opening cluster they hardened
   is on that surface (`RF-D8` (i) retracted 2026-08-26).
+- **`LV-` / P2P-2 (`PWC-`) — the skeleton block payload** (`PDM-Q-F28`,
+  2026-09-16). `tx_blob_entry { blob, prunable_hash }` and its
+  KAT-pinned Rust mirror `shekyl-levin::payload::block::TxBlobEntry`
+  carry one txid component; under Q6 item 2 a skeleton needs two. A
+  wire-census row and a KAT change, owned there, gated on Q6 item 2.
+- **DRS-E6 (`shekyl-chain-rules`)** — `RuleSet` issuance and `ChainView`'s
+  surface (`PDM-Q-F27`, `F29`, 2026-09-16): band 1 needs an issued
+  below-anchor set or it has no writer under DRS-D12; Q3's instrument
+  is the trait having no recorded-body accessor without a row and an
+  above-`W` marking. Both written to `CHAIN_RULES_CRATE.md` §13 and the
+  DRS-E6 row.
 - **`tests/unit_tests/tx_prunable_region_sole_occupant.cpp`** — the
   prunable region has exactly one occupant; blob vs re-serialize hash
   paths agree only *positionally*. Read this test before proposing
@@ -1989,12 +2002,23 @@ C++ is ever fixed. One finding, and it is the actionable one.
      `prunable_hash`'s coinbase value is a sentinel only because
      C++-store parity forced one (`keccak256("")` is the row the C++
      store writes); no C++ row exists for this hash, so nothing forces
-     one here. The store row is sparse on the predicate `txs_pqc_auths`
-     already uses (no row for an empty segment): segment present ⇔ hash
-     row present ⇔ txid 4-part, with `validate` rejecting the one shape
-     (gen-first with auths) that could split them, so a row without a
-     segment or a segment without a row is a store invariant, never a
-     `None`.
+     one here. **The store invariant has three legs** (corrected
+     2026-09-16 on review — the two-leg form first written here made
+     universal discard itself a violation): (i) hash row present ⇔ txid
+     4-part, permanent, written at connect and never deleted, with
+     `validate` rejecting the one shape (gen-first with auths) that
+     could split "4-part" from "segment non-empty"; (ii) segment present
+     ⇒ hash row present — a body the store cannot verify is the fault;
+     (iii) hash row present ∧ segment absent ⇔ **discarded** — below `W`
+     and not a retention exception, or never held (a band-1 skeleton,
+     Q5). Leg (iii) is the design's steady state for every 4-part tx
+     below `W`, and it is one store state with one meaning however the
+     node arrived at it: post-discard and band-1 are not two conditions
+     to be told apart, which is what lets the fetch primitive, band-2
+     fill, recovery and read-back be the same read (§8). `None` on the
+     identity is *the txid has no third component*; leg (iii) is *the
+     component exists and the bytes do not*. Different facts, no shared
+     representation.
   3. **The bijection blocker has expired.** The `SF-`-era note in
      `docs/FOLLOWUPS.md` (*"the first redb-only table fails CI, which is
      why F14's `txs_pqc_auths_hash` cannot be added without a second
@@ -2007,8 +2031,8 @@ C++ is ever fixed. One finding, and it is the actionable one.
   **Handoff (to the DRS-E lane; the shape is theirs to land, the
   requirement is this round's).** `TxIdentity` carries both hashes —
   `{ hash, pqc_auth_hash: Option<_>, prunable_hash }`, `None` ⇔ 3-part
-  txid — and the store records the second beside `txs_prunable_hash` as
-  a sparse row on the segment's own presence, at S-CHAIN-W's own standard: the
+  txid — and the store records the second beside `txs_prunable_hash`,
+  present ⇔ 4-part and never deleted, at S-CHAIN-W's own standard: the
   contract written on the row **before** the implementation that would
   omit it (SCW-7's precedent, which put `D_max` on S-PRUNE's row while
   the prune had no home). The field is owed to `PDM-Q6` item 2 and is
@@ -2053,6 +2077,111 @@ C++ is ever fixed. One finding, and it is the actionable one.
   construction. The re-homing onto chain-rules is the right move
   (validation precedes connect, DRS-D12); the Q6 ordering applies to
   its writer the same way it applies to E2's.
+
+Three more, read on review of F26 the same day (`ee5609cb9`), in the
+order they bite. Each is a shaping request to a lane that is freezing
+the relevant type *now*; none is a ruling.
+
+- **PDM-Q-F27.** **`RuleSet` needs a below-anchor mode, and E6 is
+  shaping `RuleSet` now.** DRS-D12: validation precedes connect;
+  replay-that-validates is the only pre-cutover writer; every block
+  passes `shekyl-chain-rules::validate` before `connect`, and a
+  `ChainValid` carries a `RuleCoverage` that must cover every
+  implemented row the rule set enforces
+  (`rust/shekyl-chain-rules/src/verdict.rs:86-95`, a `panic!`, not a
+  `debug_assert`). Q5 band 1: below the release anchor `C` a fresh
+  node holds skeleton only — no prunable body, no `pqc_auths` — and
+  proof validity is asserted by the anchor, not checked (§2, Q5 bands
+  table). Those two meet at one type. A skeleton block cannot pass a
+  `validate` that checks proofs, so under D12 it can never be connected
+  — **band 1 is unbuildable against the only writer** unless the rule
+  set it is validated under omits the proof rows. The type already has
+  the seam: `RuleSet { id, enforced: &'static [CenRow] }`
+  (`rule_set.rs:82-85`), `ISSUED` is the closed list of sets that
+  exist (`:96`), and coverage is measured complete against *that set's*
+  `enforced`. What is missing is (a) an issued below-anchor set whose
+  `enforced` omits the proof rows, (b) a selector for it that is not
+  `RuleSchedule` — the schedule is height → set per network, and
+  below-anchor is a position relative to *this node's* `C`, not a
+  height at which the chain's rules changed (rule 71: `C`/`H` are
+  per-network *data*; the arm that consumes them is one code path),
+  and (c) a home for the anchor check itself (block `C` has hash `H`):
+  `CenRow` is a bijection with the census
+  (`check_chain_rules_coverage.py`), so it is either a census row or a
+  node-policy check outside `CenRow` — Q5 names which; either way it
+  lands *with* the set. The store already persists `RuleSetId` and
+  `RuleCoverage` per connected block (S-CHAIN-W), so a band-1 connect
+  is legible on disk as one — that is the property, not a by-product.
+  Pre-cutover replay runs over the full LMDB chain and never meets a
+  skeleton, which is why E2 will not notice; `RuleSet` and
+  `RuleCoverage` are being frozen in E6's slices today, and a `RuleSet`
+  with no below-anchor arm is `TxIdentity` with one hash — cheap now,
+  a retrofit later. **Handoff:** on the DRS-E6 row and in
+  `CHAIN_RULES_CRATE.md` §13, at SCW-7's standard. Falsifier: E6
+  closes `ISSUED` (declares the rule-set list complete, or lands the
+  slice that consumes `RuleSetId` from the store on the read side)
+  with only `GENESIS` issued and no recorded decision on the
+  below-anchor arm.
+- **PDM-Q-F28.** **Band-1 sync needs both hash components on the
+  wire, and the payload is KAT-pinned.** A skeleton block on the wire
+  is the pruned blob plus the txid components the receiver cannot
+  compute. Today that is one: `tx_blob_entry { blob, prunable_hash }`
+  (`src/cryptonote_protocol/cryptonote_protocol_defs.h:49-58`), mirrored
+  byte-for-byte by `shekyl-levin::payload::block::TxBlobEntry`
+  (`rust/shekyl-levin/src/payload/block.rs:33-38`, KATs in
+  `tests/notify_kats.rs`), and the receiver rebuilds the txid with
+  `Transaction::hash_with_supplied_prunable`
+  (`rust/shekyl-wire/src/transaction.rs:1665`) because the pruned blob
+  still carries `pqc_auths`. Under Q6 item 2 the skeleton drops the
+  `pqc_auths` slice too, so the receiver cannot compute the third
+  component either: **without `pqc_auth_hash` on the wire a band-1
+  receiver cannot reconstruct the 4-part txid and cannot verify the
+  block's tx list.** Two consequences: `TxBlobEntry` grows a field
+  (`Option`-shaped on the same predicate as the identity — absent for a
+  3-part tx), and `shekyl-wire` gains the two-supplied form of the
+  pruned txid. Not DRS-E's to own — it is the `LV-` payload crate and a
+  `PWC-` wire-census row (P2P-2) — but DRS-E's ingest has to accept it,
+  and the skeleton format grew a field that nobody was named for.
+  **Handoff:** FOLLOWUPS row naming `LV-` / `PWC-` as owner, gated on
+  Q6 item 2 (the field exists only if the slice is discardable).
+  Falsifier: Q6 item 2 rules `pqc_auths` discardable while
+  `TxBlobEntry` still has one hash field and no `PWC-` row records the
+  growth.
+- **PDM-Q-F29.** **Q3's instrument is a property of `ChainView`'s
+  surface, and it holds today by construction.** Q3 owes an instrument
+  that goes red if a consensus read reaches a discarded body. D12's
+  architecture makes it nearly free: `shekyl-chain-rules` has no store
+  handle (`check_chain_rules_no_store.sh`, transitive) and reads the
+  recorded chain only through `ChainView<'id>`, whose surface at this
+  sha is `has_key_image`, `block_at` (hash + header, no bodies) and
+  `root_at` (`view.rs:100-132`) — **no accessor returns recorded
+  transaction bytes**, and round-1 Q3 already rules that a view field
+  exists only when a named `CenRow` reads it
+  (`CHAIN_RULES_CRATE.md` §3.3, `output_at` refused on exactly that
+  ground). So the residual-consensus-read set Q3 asks about is empty
+  *in the Rust validator* by construction, and the instrument is the
+  surface itself: either `ChainView` never gains a recorded-body
+  accessor, or the one that arrives returns the discarded case as a
+  variant (the `AtHeight` discipline, `view.rs:61-68` — absence is a
+  variant, not `None`, so a rule must match it) and every rule that
+  takes the recorded arm is by construction an above-`W` rule and says
+  so in its row. The falsifier is then compile-shaped — *a
+  `ChainView` method returning recorded tx bytes with no `CenRow`
+  justifying it, or a rule matching its recorded arm without an
+  above-`W` marking* — rather than a grep over `src/`. This does not
+  discharge F8: `blockchain.cpp:5327` still reads leaves in the C++
+  path, which is why Q3 is conditional on TJ-A. It says where the
+  instrument lives once the validator is the Rust one. **Handoff:**
+  `CHAIN_RULES_CRATE.md` §13, as a standing property of the trait with
+  its falsifier, at SCW-7's standard; the last time it is cheap is
+  before the first body-shaped row lands.
+
+**Deferrable without harm, named so the omission is a decision:** the
+retention-exception structure and the body-discard predicate's
+enforcement point (both S-PRUNE, not extracted — `DAEMON_REDB_STORE.md`
+§7); and D11's digest domain — pre-cutover it is the full chain on both
+sides, the `AppendMostly` running hash is already over the permanent
+hash rows, so `W` enters the digest only when the prune surface does.
 
 ### Retracted
 
@@ -2116,9 +2245,9 @@ C++ is ever fixed. One finding, and it is the actionable one.
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
 | `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory; journal horizon `tip − (CRB + n·SEB + D_max)`, F19) | OPEN — widened 2026-09-13; ruled after Q6 (F13); horizon blocked on Q11 |
 | `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24) | OPEN — blocked on Q11 |
-| `PDM-Q3` | Residual consensus reads after TJ-A | OPEN — today not node-local (`PDM-Q-F8`) |
+| `PDM-Q3` | Residual consensus reads after TJ-A; **the instrument is `ChainView`'s surface (F29)** | OPEN — today not node-local (`PDM-Q-F8`); in the Rust validator the residual set is empty by construction at `645d09dc3` (no recorded-body accessor), instrument handed to E6 as a standing trait property (F29, 2026-09-16) |
 | `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | OPEN — collapsed 2026-09-13 (F20/F23/F24); TJ-F sentence stated |
-| `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's |
+| `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's; **band 1 is unbuildable against DRS-D12's writer until E6 issues a below-anchor set (F27, handed off 2026-09-16); `TxBlobEntry` grows `pqc_auth_hash` under Q6 item 2 (F28, owner `LV-`/`PWC-`)** |
 | `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)** | OPEN — the round's subject 2026-09-13; ruled before Q1; **items 1–2 ruled before DRS-E2's first production writer (F26, 2026-09-16) — `TxIdentity` today carries only `prunable_hash`; `pqc_auth_hash` owed on the identity and as a row** |
 | `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; unbonded exceptions OPEN (candidate: permitted, serving needs the bond) |
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
@@ -2201,7 +2330,12 @@ already did so for the identity. Two requests go out of this round now
 rather than at the ruling pass: to the DRS-E lane, `TxIdentity` and the
 store carry `pqc_auth_hash` beside `prunable_hash`, contract-on-the-row
 first (SCW-7's standard); to steering, a named consensus-side owner for
-Q11 — the shape is written, the person is not.
+Q11 — the shape is written, the person is not. **Three shaping requests
+follow on review (F27–F29):** E6 issues a below-anchor `RuleSet` or
+band 1 has no writer (F27); the skeleton wire entry grows the second
+txid component under Q6 item 2, owner `LV-`/`PWC-` (F28); Q3's
+instrument is `ChainView`'s own surface, held as a standing property
+with a compile-shaped falsifier (F29). Each is cheap exactly once.
 
 ---
 

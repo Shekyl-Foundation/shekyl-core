@@ -1082,6 +1082,52 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
 - `PoolView`, `AdmissionPolicy` application, `PolicyCoverage` consumer — DRS-E5.
 - Replay harness feeding `grade()` — DRS-E2.
 
+**Received from `PDM-Q` 2026-09-16 (`PDM-Q-F27`, `F29`,
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §6) —
+two shaping constraints on types this crate is freezing, written here at
+SCW-7's standard (contract before the increment that would omit it).
+Neither is a rule to port; both are properties of the surface.**
+
+- **A below-anchor `RuleSet` must be issuable** (`F27`). Under DRS-D12
+  every connected block passes `validate`, and `ChainValid::mint` panics
+  on coverage short of the rule set's `enforced`. `PDM-Q5` band 1 — a
+  fresh node below the release anchor `C` — holds skeleton only: no
+  prunable body, no `pqc_auths`, proof validity asserted by the anchor.
+  A skeleton cannot pass a proof-checking set, so **band 1 has no writer
+  unless a set exists whose `enforced` omits the proof rows.** The seam
+  is already here (`RuleSet { id, enforced }`, `ISSUED`); what is owed
+  when `ISSUED` is next touched: (a) the below-anchor set is issued, or
+  its absence is a recorded decision with `PDM-Q5` named; (b) its
+  selector is *not* `RuleSchedule` — the schedule is height → set per
+  network, and below-anchor is position relative to this node's `C`
+  (rule 71: `C`/`H` are per-network data consumed by one arm); (c) the
+  anchor check itself (block `C` has hash `H`) is either a census row
+  (`CenRow` ↔ census is a bijection) or a node-policy check outside
+  `CenRow` — `PDM-Q5` rules which, and it lands with the set. The store
+  persists `RuleSetId` + `RuleCoverage` per block, so a band-1 connect
+  is legible on disk as one; that is the property. Pre-cutover replay
+  over a full LMDB chain never meets a skeleton, so E2 will not surface
+  this. *Falsifier:* `ISSUED` is declared complete, or the read-side
+  slice that consumes `RuleSetId` from the store lands, with only
+  `GENESIS` issued and no recorded below-anchor decision.
+- **`ChainView` exposes no recorded transaction bytes without a row and
+  an above-`W` marking** (`F29`; `PDM-Q3`'s instrument). At `645d09dc3`
+  the trait's surface is `has_key_image`, `block_at` (hash + header),
+  `root_at` — no body accessor — and round-1 Q3 (§3.3) already makes a
+  view field conditional on a named `CenRow`. So the residual set of
+  consensus reads that could reach a discarded body is **empty by
+  construction in this crate**, and the instrument `PDM-Q3` owes is this
+  surface held as a standing property: a recorded-body accessor, if one
+  ever arrives, returns the discarded case as a variant (the `AtHeight`
+  discipline — absence is matched, never `?`'d away), and every rule
+  that takes the recorded arm is by construction an above-`W` rule and
+  says so in its row. *Falsifier:* a `ChainView` method returning
+  recorded tx bytes with no `CenRow` justifying it, or a rule matching
+  its recorded arm without an above-`W` marking. This is compile-shaped,
+  not a grep; it does not discharge `PDM-Q-F8` (the C++ path still reads
+  leaves at `blockchain.cpp:5327`), it says where the instrument lives
+  once the validator is this crate.
+
 Nothing scoped to increment 1 by §7.5.1 is deferred out of it. The one
 increment-1 deferral this section carried — the `_census.py` extraction,
 blocked on #751 — was discharged in this PR when #751 merged (§6.1, Q7).

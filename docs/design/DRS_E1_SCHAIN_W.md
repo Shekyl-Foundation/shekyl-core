@@ -715,8 +715,9 @@ third — is the one `PDM-Q6` item 2 needs persisted per tx before the
 Q6's two occupants. The identity and the store owe `pqc_auth_hash` (the
 txid's count-prefixed component, not `keccak256` of the raw segment;
 `Option`-shaped, `None` ⇔ 3-part txid — coinbase and empty-auths spend —
-since a sentinel would mislabel `miner_tx`; sparse row on the segment's own
-presence) at this finding's own standard — contract on the row before the
+since a sentinel would mislabel `miner_tx`; the row is present ⇔ 4-part and
+never deleted — a hash row without its segment is *discarded*, the steady
+state below `W`, not a fault) at this finding's own standard — contract on the row before the
 implementation that omits it — and before DRS-E2's first production
 writer. The bijection-gate objection (SCW-11) no longer applies: the
 `RUST_ONLY_TABLES` map that landed here admits the row. Detail and the
