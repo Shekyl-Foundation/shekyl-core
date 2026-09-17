@@ -245,7 +245,7 @@ census_rows! {
         // driver holds these rows until cutover; each entry cites the core
         // test that observes the outcome byte.
         A1 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known_is_already_exists"),
-        A2 pending,
+        A2 implemented(crate::rules::topology::A2),
         // A3: subsumed by B4's empty-witness arm — never its own rule; the
         // row closes when B4 lands (Q3).
         A3 pending,
@@ -263,8 +263,8 @@ census_rows! {
         B2 implemented(crate::rules::header::B2),
         B3 pending,
         B4 pending,
-        B5 pending,
-        B6 pending,
+        B5 implemented(crate::rules::header::B5),
+        B6 implemented(crate::rules::header::B6),
         B7 implemented(crate::rules::header::B7),
         // 4.C Timestamps
         C1 pending,

@@ -46,7 +46,6 @@ use std::io::{self, BufRead, Read, Write};
 use shekyl_crypto_hash::keccak256;
 
 use crate::bytes::{read_array, read_byte};
-use crate::hash::hash_concat;
 use crate::tx_extra::{check_pqc_field_shape_of, parse as parse_tx_extra};
 use crate::varint::{read_varint, write_varint};
 use crate::READ_LEN_CAP;
@@ -1342,6 +1341,9 @@ pub struct Transaction {
     pub ct: Ct,
 }
 
+mod txid;
+pub use txid::TxidParts;
+
 /// A transaction's bytes as the chain store's three segments.
 ///
 /// `concat(pruned, pqc_auths, prunable)` is exactly [`Transaction::write`]'s
@@ -1619,127 +1621,6 @@ impl Transaction {
             )));
         }
         Ok(tx)
-    }
-
-    /// The consensus transaction hash (`keccak256` over component hashes,
-    /// GENESIS_TX_WIRE_FORMAT.md §11): **3-part** for the coinbase (`Null`) —
-    /// `H(prefix) · H(base) · null_hash`; **4-part** for an FCMP++ spend —
-    /// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. `H(prefix)` includes
-    /// the version varint (the first field of the C++ `transaction_prefix`).
-    pub fn hash(&self) -> [u8; 32] {
-        self.hash_with_prunable(None)
-    }
-
-    /// `keccak256` of the **prunable byte region** — exactly the bytes
-    /// [`Self::write_segments`] puts in `prunable`, which is what the C++
-    /// `calculate_transaction_prunable_hash` hashes
-    /// (`blob[unprunable_size..]`) and what the chain store records in
-    /// `txs_prunable_hash`.
-    ///
-    /// This is **not** the txid's prunable component in every case: when the
-    /// region is absent (a coinbase, or a storage-pruned spend) the txid
-    /// substitutes the null hash, while this is `keccak256("")` — the C++
-    /// store's row for a coinbase is the latter. When the region is present
-    /// the two coincide, and [`Self::hash`] is built from this value.
-    #[must_use]
-    pub fn prunable_hash(&self) -> [u8; 32] {
-        let mut prunable = Vec::new();
-        self.ct
-            .write_prunable(&mut prunable)
-            .expect("Vec write is infallible");
-        keccak256(&prunable)
-    }
-
-    /// The consensus transaction hash of a **pruned** body, with the prunable
-    /// digest supplied instead of computed.
-    ///
-    /// The C++ equivalent is `get_pruned_transaction_hash`. It exists because a
-    /// pruned body has no prunable section to hash: [`Self::hash`] would
-    /// substitute the null hash and return an identity no transaction has.
-    ///
-    /// This is what lets a caller **bind** a pruned body served by an untrusted
-    /// daemon to the hash it asked for. The reply's `tx_hash` label proves
-    /// nothing — the daemon chooses it — and so does `prunable_hash` on its
-    /// own; what the daemon cannot choose is a body and a digest that mix to a
-    /// txid someone else named first, which is a keccak preimage.
-    pub fn hash_with_supplied_prunable(&self, prunable_hash: [u8; 32]) -> [u8; 32] {
-        self.hash_with_prunable(Some(prunable_hash))
-    }
-
-    /// Shared body of [`Self::hash`] and [`Self::hash_with_supplied_prunable`]:
-    /// one construction, so the pruned and unpruned paths cannot drift into
-    /// hashing the same transaction two ways.
-    fn hash_with_prunable(&self, supplied_prunable: Option<[u8; 32]>) -> [u8; 32] {
-        let mut prefix_buf = Vec::new();
-        write_varint(TX_VERSION, &mut prefix_buf).expect("Vec write is infallible");
-        self.prefix
-            .write(&mut prefix_buf)
-            .expect("Vec write is infallible");
-        let h_prefix = keccak256(&prefix_buf);
-
-        match &self.ct {
-            Ct::Null(base) => {
-                // A coinbase has no prunable section at all, so its third
-                // component is the null hash whether or not a digest was
-                // supplied — pruning cannot give it one.
-                let mut base_buf = vec![CT_TYPE_NULL];
-                base.write(&mut base_buf).expect("Vec write is infallible");
-                hash_concat(&[h_prefix, keccak256(&base_buf), [0u8; 32]])
-            }
-            Ct::Fcmp {
-                fee,
-                reference_block,
-                base,
-                pqc_auths,
-                prunable,
-            } => {
-                let mut base_buf = vec![CT_TYPE_FCMP];
-                write_varint(*fee, &mut base_buf).expect("Vec write is infallible");
-                base_buf.extend_from_slice(reference_block);
-                base.write(&mut base_buf).expect("Vec write is infallible");
-                let h_base = keccak256(&base_buf);
-
-                // Per the C++ oracle (format_utils.cpp:1137/1163-1182): **4-part**
-                // `{prefix, base, pqc_auths, prunable}` iff `has_pqc && !pqc_auths
-                // .empty()`, where `has_pqc = version>=3 && vin[0] != gen`; otherwise
-                // **3-part** `{prefix, base, prunable}`. The prunable component is
-                // `H(prunable)` when present, else the null hash. Both arms carry
-                // struct-derived cross-language hash parity (`pruned_tx_hash_parity`
-                // and `serve_credit_tx_parity`, each with a C++ leg asserting the
-                // same pin); the live-oracle pin (`live_oracle_spend_v1.json`) binds
-                // both languages to a daemon-accepted spend.
-                // A supplied digest wins: it is the pruned case, where the
-                // section is absent and its hash is the caller's operand.
-                let h_prunable = match (supplied_prunable, prunable) {
-                    (Some(h), _) => h,
-                    // Present: the region's digest, the same bytes
-                    // `prunable_hash` hashes (one construction).
-                    (None, Some(_)) => self.prunable_hash(),
-                    (None, None) => [0u8; 32],
-                };
-
-                // `has_pqc` excludes the (malformed) gen-first shape, exactly as the
-                // oracle does — so a `gen` input + `Fcmp` ct hashes 3-part like a
-                // coinbase rather than misclassifying as a spend.
-                let first_is_gen = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
-                if pqc_auths.is_empty() || first_is_gen {
-                    hash_concat(&[h_prefix, h_base, h_prunable])
-                } else {
-                    // The pqc component mirrors the oracle's generic `std::vector`
-                    // serializer (format_utils.cpp:1169), whose `begin_array(cnt)`
-                    // writes the element **count as a leading varint** before the
-                    // entries — unlike the tx *body*, where the count is implicit
-                    // (`vin.size()`, no prefix). Both must match their respective C++
-                    // paths; they legitimately differ.
-                    let mut auth_buf = Vec::new();
-                    write_varint(pqc_auths.len(), &mut auth_buf).expect("Vec write is infallible");
-                    for auth in pqc_auths {
-                        auth.write(&mut auth_buf).expect("Vec write is infallible");
-                    }
-                    hash_concat(&[h_prefix, h_base, keccak256(&auth_buf), h_prunable])
-                }
-            }
-        }
     }
 
     /// Structural / canonical-form validation for an ingested **pruned** transaction:

@@ -37,6 +37,7 @@ mod tests;
 
 use alt_chain::alt_chain_info;
 use blockchain::{print_blockchain_dynamic_stats, print_blockchain_info};
+use shekyl_types::PrunableHash;
 use status::{hard_fork_info, show_status};
 
 /// Rendered; `out` holds the text to print as success output.
@@ -439,7 +440,7 @@ fn print_transaction(src: &Source, args: &[String]) -> Result<String, String> {
         format!("print_transaction: the daemon's body for {hash} is not a transaction")
     })?;
     let derived = if pruned {
-        parsed.hash_with_supplied_prunable(tx.prunable_hash.to_bytes())
+        parsed.hash_with_supplied_prunable(PrunableHash::from_bytes(tx.prunable_hash.to_bytes()))
     } else {
         parsed.hash()
     };

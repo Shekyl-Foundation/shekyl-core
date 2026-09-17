@@ -3,10 +3,10 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Census 4.B — the block header's version fields (slice 1;
-//! `CHAIN_RULES_SLICE_1.md` §3). B5 (the curve-tree root) and B6 (identity)
-//! land with `ChainView::tip()`; B3 is surface-bound and the store's; B4 is
-//! deferred (E4 S-ARCH).
+//! Census 4.B — the block header (slice 1; `CHAIN_RULES_SLICE_1.md` §3):
+//! the version fields (B1, B2, B7), the curve-tree root (B5) and the block's
+//! identity (B6). B3 is surface-bound and the store's; B4 is deferred (E4
+//! S-ARCH) and A3 is subsumed into it.
 //!
 //! # What the C++ does, read at `dev` `3560b80c2`
 //!
@@ -44,10 +44,14 @@
 //! the rule set `RuleSchedule::rules_at(height)` names, so "the version at
 //! this height" is a property of the input, not a second code path.
 
+use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_wire::Block;
+
 use crate::census::CenRow;
+use crate::coverage::RuleCoverage;
 use crate::rules::{BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
-use crate::view::ChainView;
+use crate::view::{AtHeight, ChainView, Tip};
 
 /// CEN-B1: `major_version` must equal the version the rule set admits.
 pub(crate) struct B1;
@@ -126,6 +130,72 @@ impl BlockRule for B7 {
         _view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
         Ok(Ok(()))
+    }
+}
+
+/// CEN-B5: the header's `curve_tree_root` is the tree state **at the
+/// connecting height** — after the parent connected, before this block
+/// drains its own leaves — i.e. `root_at(tip + 1)`, the last row the parent's
+/// connect wrote (SCW-19: key `h` is the state at `h`).
+///
+/// The C++ compares against `m_db->get_curve_tree_root()`, the tip root,
+/// *after* the `prev_id == top_hash` check has made the tip the parent
+/// (`blockchain.cpp:5579–5591`); here the same operand is read by height.
+/// At genesis the connecting height is `0` and `root_at(0)` is the empty
+/// tree, which is what the genesis header carries
+/// (`shekyl-genesis-tool/src/builder.rs:185`).
+///
+/// `AboveTip` is unreachable against a conforming view — SI-4 keeps
+/// `tip + 1` recorded — and is written as a refusal anyway: a view with no
+/// state at the connecting height has nothing to compare the header to, and
+/// G11 says the arm is a decision, not a fall-through.
+pub(crate) struct B5;
+
+impl Rule for B5 {
+    const ROW: CenRow = CenRow::B5;
+}
+
+impl BlockRule for B5 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        view: &V,
+    ) -> Result<Verdict<()>, V::Fault> {
+        let connecting = Tip::connecting_height(view.tip()?.as_ref());
+        let claimed = CurveTreeRoot::from_bytes(cx.candidate.block.header.curve_tree_root);
+        match view.root_at(connecting)? {
+            AtHeight::Recorded(root) if root == claimed => Ok(Ok(())),
+            AtHeight::Recorded(_) | AtHeight::AboveTip => refused(Self::ROW, Locus::Block),
+        }
+    }
+}
+
+/// CEN-B6: block identity is `keccak256(varint(len) ‖ header ‖
+/// merkle(miner_tx_hash ‖ tx_hashes) ‖ varint(n_tx + 1))` — the PoW blob
+/// with its length prefix (`get_block_hashing_blob`; `shekyl_wire::Block::
+/// hash`, `block.rs:217–247`). **Adopted**, not re-implemented: the KAT that
+/// pins it to the daemon's hashes is `shekyl-wire/tests/coinbase_hash.rs`
+/// (live-oracle vectors; height 0 equals the published mainnet genesis id).
+///
+/// A definition, not a predicate: nothing about a candidate can fail it.
+/// B7 is a no-op *policy* the C++ still evaluates, so it runs through
+/// [`BlockRule`] and [`crate::rules::run`]. B6 is the identity function,
+/// so it is not a check that always passes — coverage is recorded here,
+/// when the identity is derived, and `implemented(rules::header::B6)`
+/// names this function (slice 1, Q5). `ValidatedBlock::derive` obtains
+/// the identity the verdict will carry from [`B6::identity`] and nowhere
+/// else.
+pub(crate) struct B6;
+
+impl Rule for B6 {
+    const ROW: CenRow = CenRow::B6;
+}
+
+impl B6 {
+    /// The block's identity under CEN-B6, recorded in `coverage` as this
+    /// row having been applied.
+    pub(crate) fn identity(block: &Block, coverage: &mut RuleCoverage) -> BlockHash {
+        coverage.insert(Self::ROW);
+        BlockHash::from_bytes(block.hash())
     }
 }
 

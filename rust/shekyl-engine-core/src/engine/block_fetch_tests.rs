@@ -16,6 +16,7 @@ use crate::engine::test_support::conforming_pqc_extra;
 use core::future::Future;
 use shekyl_rpc_types::HashHex;
 
+use shekyl_types::PrunableHash;
 use shekyl_wire::transaction::UNLOCK_TIME_BLOCK_SENTINEL;
 use shekyl_wire::{BlockHeader, Ct, CtBase, Input, Output, TxPrefix};
 
@@ -54,7 +55,7 @@ async fn a_refusal_carrying_a_body_is_refused_not_parsed() {
     // pinning the binding while claiming to pin the status guard.
     let tx = pruned_spend_tx(0);
     let prunable_digest = [0x5Au8; 32];
-    let txid = tx.hash_with_supplied_prunable(prunable_digest);
+    let txid = tx.hash_with_supplied_prunable(PrunableHash::from_bytes(prunable_digest));
     let mut body = Vec::new();
     tx.write(&mut body).expect("Vec write is infallible");
     let reply = shekyl_rpc_types::GetTransactionsResponse {
@@ -333,7 +334,7 @@ fn pruned_tx_hex() -> String {
 /// `parse_tx_batch` now binds the body, so a fixture that invents a hash is
 /// staging the substitution it is supposed to reject.
 fn pruned_id(tx: &Transaction) -> [u8; 32] {
-    tx.hash_with_supplied_prunable([0u8; 32])
+    tx.hash_with_supplied_prunable(PrunableHash::from_bytes([0u8; 32]))
 }
 
 /// A **full** (unpruned) non-miner spend: [`pruned_spend_tx`] with the

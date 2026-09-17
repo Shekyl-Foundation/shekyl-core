@@ -103,10 +103,16 @@ impl<R: Row> Coverage<R> {
             .filter(move |row| self.contains(*row))
     }
 
-    /// Record that `row` was evaluated. Crate-private: written only by
-    /// [`crate::rules::run`] after the rule bound to `row` passed (slice 1
-    /// un-staged this; the scaffold's `expect(dead_code)` marker went with
-    /// the first rule, as it was written to).
+    /// Record that `row` was evaluated. Crate-private, with exactly two
+    /// writers, one per row kind: [`crate::rules::run`] for a **predicate**
+    /// row, after the rule bound to it passed; and a **definition** row's
+    /// derivation function, at the site that derived — today
+    /// [`crate::rules::header::B6::identity`], the only definition row
+    /// landed (slice 1 Q5: B6 is registered as the derivation, not as a
+    /// check that always passes). A third writer is a new row kind and a
+    /// registry decision, not a convenience. (Slice 1 un-staged this; the
+    /// scaffold's `expect(dead_code)` marker went with the first rule, as it
+    /// was written to.)
     pub(crate) fn insert(&mut self, row: R) {
         let (word, bit) = Self::slot(row);
         self.words[word] |= bit;

@@ -428,6 +428,31 @@ hash32! {
 }
 
 hash32! {
+    /// The **third component** of an FCMP++ spend's [`TxHash`]:
+    /// `keccak256(varint(count) ‖ pqc_auths)` over the per-input hybrid
+    /// authorizations (`PDM-Q-F26`; `DAEMON_REDB_STORE.md` §7.7).
+    ///
+    /// Exists so a node that discards `pqc_auths` after verification
+    /// (`PDM-Q6` item 2) can still reconstruct the txid from what it kept:
+    /// this and the [`PrunableHash`], mixed with the retained skeleton.
+    /// Derived once by the validation crate beside the txid; the store
+    /// records it and never computes it (C2-R8 Q4).
+    ///
+    /// Carried as `Option<PqcAuthHash>` wherever a txid's components are
+    /// named, and the `None` is a fact about the **txid**, not about what a
+    /// node holds: a coinbase, a serve-credit and the malformed gen-first
+    /// shape hash **3-part**, so no third component exists to be stored or
+    /// supplied. The arity is the wire crate's one predicate, never a
+    /// per-input-arm judgment — a bond-post is 4-part like any spend.
+    ///
+    /// **Not** the hash of the stored `txs_pqc_auths` segment, which carries
+    /// no count prefix and so verifies nothing the chain signed. Distinct
+    /// from [`PrunableHash`] so the two components can never be swapped when
+    /// a store hands them back for reconstruction.
+    PqcAuthHash
+}
+
+hash32! {
     /// The root of the FCMP++ curve tree **as recorded** after a block — the
     /// membership anchor a spend's proof is verified against.
     ///

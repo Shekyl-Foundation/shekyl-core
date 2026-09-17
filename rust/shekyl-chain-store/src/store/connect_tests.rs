@@ -8,19 +8,20 @@
 //! digest-equal, and every belt fired from a hand-built violation.
 //!
 //! Blocks go through the real `validate` under `RuleSet::GENESIS` — the
-//! rules landed so far (E6 slice 1: 4.B's version rows) pass every
+//! rules landed so far (E6 slice 1: A2, B1, B2, B5, B6, B7) pass every
 //! well-formed fixture here, and coverage records exactly those rows — so
 //! `connect` is exercised through its public signature. Every store here is
-//! a fresh file (SCW-17).
+//! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{validate, Candidate, ChainValid, RowStatus, RuleSet, RuleSetId};
+use shekyl_chain_rules::{RowStatus, RuleSet, RuleSetId};
 use shekyl_types::{BlockHeight, CurveTreeRoot};
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
+use super::connect_fixtures::{
+    candidate, coinbase, connect_genesis, facts, judge, spend, GENESIS_ID,
+};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
-use super::view::BatchView;
 use super::*;
 use crate::codec::{
     BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, TotalBurnedCell, TxIndex,
@@ -32,121 +33,6 @@ use crate::schema::{
     OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
     TX_OUTPUTS, UNDO_LOG,
 };
-
-// ------------------------------------------------------------ fixtures
-
-fn coinbase(height: u64, outputs: usize) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: height + 60,
-            inputs: vec![Input::Gen(height)],
-            outputs: (0..outputs)
-                .map(|i| Output {
-                    amount: 0,
-                    key: [0x40 + u8::try_from(i).expect("small"); 32],
-                    view_tag: 1,
-                })
-                .collect(),
-            extra: Vec::new(),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]; outputs],
-            enc_labels: vec![[0x66; 9]; outputs],
-            commitments: (0..outputs)
-                .map(|i| [0x70 + u8::try_from(i).expect("small"); 32])
-                .collect(),
-        }),
-    }
-}
-
-/// A spend-shaped listed transaction in the storage-pruned form (no
-/// prunable, no pqc_auths): one key image in, `outputs` outputs. No landed
-/// rule reads a transaction yet (4.H/4.I are later slices), so it is
-/// admitted; what it exercises is the write set, not consensus.
-pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image: [key_image; 32],
-            }],
-            outputs: (0..outputs)
-                .map(|i| Output {
-                    amount: 0,
-                    key: [0x80 + u8::try_from(i).expect("small"); 32],
-                    view_tag: 2,
-                })
-                .collect(),
-            extra: Vec::new(),
-        },
-        ct: Ct::Fcmp {
-            fee: 7,
-            reference_block: [0x99; 32],
-            base: CtBase {
-                enc_amounts: vec![[0x11; 9]; outputs],
-                enc_labels: vec![[0x22; 9]; outputs],
-                commitments: (0..outputs)
-                    .map(|i| [0xa0 + u8::try_from(i).expect("small"); 32])
-                    .collect(),
-            },
-            pqc_auths: Vec::new(),
-            prunable: None,
-        },
-    }
-}
-
-pub(super) fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction>) -> Candidate {
-    let block = Block {
-        header: BlockHeader {
-            major_version: 1,
-            minor_version: 0,
-            timestamp: 1_000 + height * 60,
-            previous,
-            nonce: 7,
-            curve_tree_root: [0x22; 32],
-            attestation_root: [0x33; 32],
-        },
-        miner_transaction: coinbase(height, 1),
-        transaction_hashes: listed.iter().map(Transaction::hash).collect(),
-    };
-    Candidate::new(block, listed)
-}
-
-pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
-    ConnectFacts {
-        weight: Fact::passed_through(1_000 + height),
-        long_term_weight: Fact::passed_through(900 + height),
-        cumulative_difficulty: Fact::passed_through(u128::from(height + 1) * 100),
-        coins_generated: Fact::passed_through((height + 1) * 1_000_000),
-        burned: Fact::passed_through(burned),
-        root_after: Fact::passed_through(CurveTreeRoot::from_bytes(
-            [0xc0 + u8::try_from(height).expect("small"); 32],
-        )),
-    }
-}
-
-fn judge<'b, 'id>(
-    view: &BatchView<'b, 'id>,
-    candidate: Candidate,
-) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    Ok(validate(candidate, view, &RuleSet::GENESIS)?
-        .expect("the fixtures satisfy every landed rule"))
-}
-
-const GENESIS_ID: RuleSetId = RuleSetId::GENESIS;
-
-fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Block) {
-    let cand = candidate(0, [0; 32], Vec::new());
-    let block = cand.block.clone();
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let valid = judge(&view, cand)?;
-        Ok(batch.connect(valid, facts(0, burned), GENESIS_ID)?)
-    });
-    (out.expect("genesis connects"), block)
-}
 
 // ---------------------------------------------------------------- rows
 
@@ -285,7 +171,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .get(0)
             .expect("g")
             .map(|g| g.value()),
-        Some(Hash32::from_bytes(miner.prunable_hash())),
+        Some(Hash32::from_bytes(miner.prunable_hash().to_bytes())),
         "keccak256 of the empty region, not the null hash"
     );
     assert_eq!(
@@ -562,21 +448,33 @@ fn expect_row(out: &Result<Connected, TestErr>, want: StoreInvariant) {
 fn a_block_whose_parent_is_not_the_tip_is_si2() {
     let path = tmp("connect-parent");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_genesis(&store, 0);
-    let wrong = candidate(1, [0xde; 32], Vec::new());
+    let (_, genesis) = connect_genesis(&store, 0);
+    // CEN-A2 now stands in front of this belt (E6 slice 1): a candidate
+    // whose `previous` is not the tip is refused as a verdict and never
+    // reaches `connect`. The belt's remaining subject is a verdict that was
+    // TRUE when minted and is stale by the time it connects — two siblings
+    // judged against the same tip, the second connected after the first
+    // moved it. That is exactly what a belt beneath a rule is for.
+    let mut sibling = candidate(1, genesis.hash(), Vec::new());
+    sibling.block.header.nonce = 8;
+    let stale = candidate(1, genesis.hash(), Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, wrong)?, facts(1, 0), GENESIS_ID)?)
+        let first = judge(&view, sibling)?;
+        let second = judge(&view, stale)?; // judged against the same tip: passes A2
+        batch.connect(first, facts(1, 0), GENESIS_ID)?; // the tip moves
+        Ok(batch.connect(second, facts(1, 0), GENESIS_ID)?) // stale: SI-2
     });
     expect_row(&out, StoreInvariant::TipMismatch);
     assert_eq!(StoreInvariant::TipMismatch.row(), 2);
-    // The belt fired before any row was journaled, and the writer still
-    // halted at the connecting height: the height is noted before the
-    // belts run, not by the recording (§3.6.2; PR #757 review).
+    // The belt fired before any row of the second block was journaled, and
+    // the writer halted at the connecting height it noted for that block —
+    // 2, because the first sibling had connected (§3.6.2; PR #757 review).
+    // The aborted batch also un-connects the first sibling: nothing landed.
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
-            at_height: BlockHeight::from_raw(1),
+            at_height: BlockHeight::from_raw(2),
             row: StoreInvariant::TipMismatch,
         }
     );

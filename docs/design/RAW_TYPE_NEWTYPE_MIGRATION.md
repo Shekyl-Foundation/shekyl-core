@@ -123,6 +123,7 @@ field per §1).
 | [`tx_meta_block.rs:174,178`](../../rust/shekyl-engine-state/src/tx_meta_block.rs) map keys keyed by txid | persisted |
 | [`consensus types.rs:18,25`](../../rust/shekyl-consensus/src/types.rs) `prev_hash`, `top_hash` | |
 | `shekyl-wire` block `previous` / `curve_tree_root` / `transactions` | the oxide `block.rs` was deleted in the slice-1 wire extraction; these wire fields now live in `shekyl-wire`'s block serializer — distinguish `BlockHash` vs `CurveTreeRoot` |
+| `shekyl-wire` `Transaction::hash()` / `hash_with_supplied_*` **return** | still `[u8; 32]` → `TxHash`; ~70 call sites. The txid's *component* surface — `prunable_hash() -> PrunableHash`, `pqc_auth_hash() -> Option<PqcAuthHash>`, and both supplied forms' operands — was typed 2026-09-17 with `PDM-Q-F26` (`DAEMON_REDB_STORE.md` §7.7), which added the `shekyl-types` dependency to `shekyl-wire`; the return type is the remaining raw scalar on that surface |
 | curve-tree [`types.rs:189-191,245-250`](../../rust/shekyl-curve-tree/src/types.rs) `reference_block`/`tree_root`/`curve_tree_root` | |
 
 ## 7. PR D — Heights, indices, timestamps (the clock-semantics decision)

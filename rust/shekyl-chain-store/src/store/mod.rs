@@ -521,6 +521,10 @@ mod undo_tests;
 mod view_tests;
 
 #[cfg(test)]
+#[path = "connect_fixtures.rs"]
+mod connect_fixtures;
+
+#[cfg(test)]
 #[path = "connect_tests.rs"]
 mod connect_tests;
 

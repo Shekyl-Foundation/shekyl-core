@@ -1,17 +1,19 @@
 # `shekyl-chain-rules` slice 1 — census 4.A + 4.B (DRS-E6 increment 2)
 
-**Status:** OPEN — **round 1 = pre-flight (rule 26 Round 0), written
-2026-09-16** against `dev` @ `3560b80c2` (S-CHAIN-W landed, PR #757). **Round 1
-RULED in full 2026-09-16 (Q1 §2, Q2–Q6 §8); the pre-flight pass is
-discharged and rule 26's halt condition is lifted.** Code lands as two PRs
-(§7): `tip()` after S-CHAIN-R's `chain_reads`, then the rules. §9 points at
-DRS §7.6 (PR #760), the same-day parity-then-repair ruling, and records what
-slice 1 owes to it. Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)
-§7.5.1 (the increment's pre-flight names its parents, audits each row's body,
-lists the fixture per row). Parent plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
-§7.5 (table 3 row "slice 1"). Cites `26-sub-pr-design-discipline.mdc`
-(A2 audit-against-actual-code, B5 per-commit cleanliness, B6 numeric
-verification, the review-round denominator).
+**Status:** CLOSED-as-record — **implementation LANDED** on PR #768
+(2026-09-17). #762 (`Rule`/`BlockRule`, SCW-18 pin, B1/B2/B7), #767
+(`held_by_cxx`, A1/A4) and #768 (`ChainView::tip()`, A2, B5, B6;
+`PDM-Q-F26` items 1–2) are the three landing PRs; this file archives with
+the last of them. Round 1 = pre-flight written against `dev` @ `3560b80c2`;
+ruled in full the same day (Q1 §2, Q2–Q6 §8). Record at close:
+`consensus: implemented 6 / validator-enforced 151   held-by-cxx 2
+enforced 153   ratified 126 / enforced 153`. Residue F2 (CEN-A7 count
+bounds) lives in FOLLOWUPS, owner the wire-format port. Template:
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §7.5.1. Parent
+plan: [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7.5.
+Cites `26-sub-pr-design-discipline.mdc`. The living contract is
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md); do not implement
+from this file.
 
 **Scope (table 3).** The surface-free rows of 4.A (7) and 4.B (6; CEN-B3 is
 surface-bound and arrived with S-CHAIN-W — table 2). Plus the one `ChainView`
@@ -91,10 +93,10 @@ distinguishable from data — and `Option` is what makes both unrepresentable.
 The genesis arm is still written explicitly in every rule that reads the tip
 (A2, B5 here), and `MockChain::tip()` already has this shape.
 
-- **`height`** — justified by B1 (the rule set in force is `rules_at(height)`)
-  and B5 (`root_at(connecting height)`); later by 4.C and CEN-F5 (the
-  caller-derived height operand the census names against `txin_gen.height`
-  spoofing, census 4.F notes).
+- **`height`** — justified by B5 (`root_at(connecting height)`); later by 4.C
+  and CEN-F5 (the caller-derived height operand the census names against
+  `txin_gen.height` spoofing, census 4.F notes). B1 does not read it: the
+  rule set in force is an input the caller chose with `rules_at(height)`.
 - **`hash`** — justified by CEN-A2: the fail-closed re-check
   `bl.prev_id != top_hash` (`blockchain.cpp:5423`). The store already has
   this as **belt** SI-2 `TipMismatch` (`connect.rs:303`); without the rule, a
@@ -110,15 +112,18 @@ The genesis arm is still written explicitly in every rule that reads the tip
   CurveTreeRoot::EMPTY` (`view.rs:218–220`), which is what the genesis header
   carries. The round-1 draft's worry — `tip()?.map(..)` letting genesis fall
   through as a pass — is answered by the fixtures, not the type:
-  `cen_a2_genesis_previous_is_zero` and `cen_b5_genesis_root_is_empty` (§7)
-  both refuse a wrong genesis, so a rule that forgot the arm is red.
+  `cen_a2_genesis_previous_is_the_null_hash` and
+  `cen_b5_genesis_root_is_the_empty_tree` (§7) both refuse a wrong genesis, so
+  a rule that forgot the arm is red.
 
 **Connecting height** is a crate-private helper, `fn connecting_height(tip:
 Option<&Tip>) -> BlockHeight` (`None → 0`, `Some(t) → t.height + 1`), used
 by every height-indexed rule so the operand is derived once from the view and
 never from the candidate (F5's spoof).
 
-**Store side, same PR — sequenced with S-CHAIN-R.** `BatchView` today has a
+**Store side — landed as sequenced with S-CHAIN-R** (#764 first, then the
+`tip()` PR; `BatchView::tip()` reads through `chain_reads::tip_of`, the
+inherent helper renamed `tip_row`). *Pre-flight text:* `BatchView` today has a
 private `fn tip() -> Result<Option<u64>, StoreError>` (`view.rs:97–108`)
 reading `block_info.last()`. S-CHAIN-R's commit 1 (`DRS_E1_SCHAIN_R.md` (PR #760, not yet on `dev` — linked at landing)
 §7, SCR-13) replaces that helper with a private `store/chain_reads.rs`
@@ -286,7 +291,8 @@ pub(crate) trait BlockRule: Rule {
     fn check<'id, V: ChainView<'id>>(cx: &BlockContext<'_>, view: &V)
         -> Result<Verdict<()>, V::Fault>;
 }
-/// The only writer of block-level coverage: inserts `R::ROW` iff `R` passed.
+/// Predicate rows: inserts `R::ROW` iff `R` passed. Definition rows (B6)
+/// record at the derivation site `implemented(...)` names.
 pub(crate) fn run<'id, R: BlockRule, V: ChainView<'id>>(cx, view, coverage) -> Result<Verdict<()>, V::Fault>;
 
 // census.rs — the entry names a TYPE; the macro emits both pins:
@@ -368,6 +374,18 @@ is the class of error C++'s `size_t` invites and a `TxCount` / `ByteLen`
 newtype makes a compile error. When the wire-format port derives the one
 constant, it should be typed, not bare.
 
+**F5 — the mock was one height off the store on the SCW-19 axis (found by
+B5's fixture at implementation).** `MockChain::root_at(h)` returned the root
+pushed *with* block `h`, and `AboveTip` at `tip + 1`; the store returns key
+`h` (the state at `h`, written by `h − 1`'s connect) and has `tip + 1`
+recorded. A B5 fixture written against the old mock would have passed with
+the wrong operand and failed against the store. Corrected in the `tip()` PR:
+`roots[0] = EMPTY`, the root pushed with block `h` is `roots[h + 1]`,
+`root_at(tip + 1)` recorded, `root_at(tip + 2)` `AboveTip`; the harness's own
+probe tests pin both ends. The same class as SCW-19 (a which-key ambiguity),
+reached from the mock side — the reason the pre-flight fixture list carried
+`cen_b5_reads_tip_plus_one_not_tip`, which is what bit.
+
 **F3 — the store already holds A2's belt but nothing holds A2's rule.**
 `connect.rs:303` refuses `previous != tip.hash` as SI-2 `TipMismatch`
 (fatal, poisons the batch). Until A2 lands here, the S-CHAIN-R driver would
@@ -401,14 +419,14 @@ one.
 
 | row | fixture (in `rules/*_tests.rs`, against `MockChain`) |
 | --- | --- |
-| A2 | `cen_a2_previous_must_be_the_tip_hash` (tip recorded; `previous` ← other hash → A2/Block); `cen_a2_genesis_previous_is_zero` (`Empty`; `[0;32]` passes, any other refused); `cen_a2_propagates_a_fault` (`FaultingView`) |
+| A2 | *landed as:* `cen_a2_previous_must_be_the_tip_hash` (tip recorded; a flipped bit and the null hash → A2/Block); `cen_a2_genesis_previous_is_the_null_hash` (`None`; `[0;32]` passes, any other refused); `cen_a2_propagates_a_fault_and_does_not_judge` (`FaultingView` → `Err(Faulted)`) |
 | B1 | `cen_b1_major_version_must_be_the_admitted_one` — `boundary_pair(1, 2)`, `0` and `255` refused, at `Locus::Block` |
 | B2 | `cen_b2_minor_version_is_unconstrained_under_genesis` — `0`, `1`, `2`, `127`, `255` all pass; no row fires |
-| B5 | `cen_b5_header_root_is_the_root_at_the_connecting_height` (mutated root → B5); `cen_b5_reads_tip_plus_one_not_tip` (a chain whose root at `tip` ≠ root at `tip+1`: the header carrying the *tip's* root is **refused** — the SCW-19 off-by-one, bitten from the rules side); `cen_b5_genesis_root_is_empty`; `cen_b5_above_tip_refuses` (a mock with no root at `tip+1`) |
-| B6 | `cen_b6_identity_is_block_hash` (already `validate_tests.rs`; re-homed under the row) |
+| B5 | *landed as:* `cen_b5_header_root_is_the_root_at_the_connecting_height` (mutated root → B5); `cen_b5_reads_the_state_at_the_connecting_height_not_the_tips_own` (the header carrying the *tip's* root is **refused** — the SCW-19 off-by-one, bitten from the rules side; it also caught the mock, F5); `cen_b5_genesis_root_is_the_empty_tree`; `cen_b5_above_tip_is_a_refusal_not_a_pass` (a view with no roots) |
+| B6 | *landed as:* `cen_b6_identity_is_block_hash_and_records_the_row` — `B6::identity` equals `Block::hash` and inserts exactly its row; the derivation site is the row's function (Q5) |
 | B7 | `cen_b7_never_refuses_a_future_version_is_b1s_refusal` — B7 **called alone** passes `major_version ∈ {2, 7, 255}` (the pipeline stops at B1, so this is the only way to observe B7 on such a header — PR #762 review); through the pipeline the same header is refused by **B1**, `assert_refused(.., CenRow::B1, ..)`, never B7 |
 | B2 (later set) | `cen_b2_ports_the_predicate_not_the_effect` — under `RuleSet::admitting_for_tests(2)` (a `#[cfg(test)]` crate-private constructor: no second set is issued, and the refusal arm has no other way to run), `boundary_pair(2, 1)` on the vote refuses B2 with the rule alone, and through the pipeline `(major 2, minor 1)` is refused B2 while `(2, 2)` passes — PR #762 review |
-| all | `slice_1_version_rows_are_exactly_what_a_pass_covers` — after PR #762 a passing candidate's `coverage().iter()` is `{B1, B2, B7}`; grows to `{A2, B1, B2, B5, B6, B7}` at the `tip()` PR; `covers_landed` holds, `is_complete_for` does not |
+| all | `a_well_formed_candidate_passes_and_covers_only_the_landed_rows` (`validate_tests.rs`) — a passing candidate's `coverage().iter()` is `{A2, B1, B2, B5, B6, B7}`; `covers_landed` holds, `is_complete_for` does not. *Records-was:* `slice_1_version_rows_…` at #762 (`{B1, B2, B7}`); `slice_1_rows_are_exactly_what_a_pass_covers` in `header_tests.rs` was the same assertion and is deleted. |
 
 Commit plan (rule 90; each builds, `fmt`/`clippy` clean, tests green).
 **Amended 2026-09-16 (maintainer OK at PR #761 review, cross-lane):** commit 1
@@ -418,7 +436,7 @@ because S-CHAIN-R's `RecordedTip { tip: Tip, connect }` composes this crate's
 (ruled) and is the one time this slice touches `store/view.rs`. Commits 2–6
 stay here behind Q2–Q6.
 
-1. `chain-rules: ChainView::tip() + Tip; BatchView/MockChain/FaultingView impls (Q12-2)` — **own PR** (above); `BatchView` reads through `chain_reads::tip_of`.
+1. `chain-rules: ChainView::tip() + Tip; BatchView/MockChain/FaultingView impls (Q12-2)` — **own PR** (above); `BatchView` reads through `chain_reads::tip_of`. *Landed* with commits 3–4 folded in (A2, B5, B6 share the harness correction F5), as the `tip()` PR.
    *PR shape, settled 2026-09-16 13:57:* this document lands as the docs PR
    (#761); commit 1 is the `tip()` PR; commits 2–6 are the **rules PR**, cut
    after the `tip()` PR merges (A2 and B5 read the tip). Three PRs, each
@@ -548,7 +566,7 @@ correction); every knowingly-reproduced deviation carries its ratified state
 and they share one query, owed to DRS-E2's pre-flight; bucket-4 rows and
 reproduced deviations share one denominator; the comparator gates cutover
 and `ratified / enforced` gates release — is **recorded once, at
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.6**, minted by the
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7.6**, minted by the
 S-CHAIN-R lane's PR #760 at the same review, with the §8.1 release-gate
 checklist item beside it. This document does **not** restate it (an earlier
 revision of this PR did, in DRS §7.5.1 and §15; withdrawn 2026-09-16 when
@@ -561,7 +579,7 @@ the two lanes synchronised — one ruling, one home). What slice 1 owes to
   three-field form (reproduced / why / what correct looks like) so it moves
   into the one query unchanged when E2 mints it.
 - **The crate-side statement of what its two figures gate** is
-  [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §6.3, pointing at §7.6.
+  [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §6.3, pointing at §7.6.
 - **Two figures checked against landed text while folding (rule 26 B6),
   reported to the §7.6 owner on PR #760 rather than edited across lanes:**
   (i) §7.6 item 3 says parity evidence "was already defined as `implemented
