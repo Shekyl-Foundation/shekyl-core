@@ -5,9 +5,10 @@
 Q3, Q8 (incl. P1/P2), Q9, Q10, Q12, Q13, Q15; Q14 closed by Q15;
 `SO-D8a`, `SO-D8b`, `SO-D8c` (transcriptions of R-B / PC-D4 / SO-D7);
 `SO-D8d` (three local layers; store-invariant Fault, not a verdict;
-amended same day against `dev@5fde3b1ce` — §6.3).
-**Still to be ruled:** `SO-D8e`; Q9's byte construction and carrier
-semantics (§7.6.1–§7.6.2, review 2026-09-16); Q4 (`λ`
+amended same day against `dev@5fde3b1ce` — §6.3); `SO-D8e` (forward
+urn + `W₂` ring, no checkpoints, one set live, digest carve-out — §7.2).
+**Still to be ruled:** Q9's byte construction and carrier semantics
+(§7.6.1–§7.6.2, review 2026-09-16); Q4 (`λ`
 unpinned — must pin before any production caller). Slice C is not
 authorized. `ARCHIVAL_SETTLEMENT_WRITER.md` §12's rule-22 hold on the
 writer's call site **stands**. No admission code, no consensus code, and
@@ -518,7 +519,8 @@ that recommendation is **withdrawn** and the reason it was wrong is F4.
 
 Items **7 and 8 RULED 2026-09-16** (Q10, Q9). **`SO-D8a`/`b`/`c` RULED
 2026-09-16** (items 3b/fire, 4, 5 — transcriptions). **`SO-D8d` RULED
-2026-09-16** (§6). Item **e remains**; Q4 still unpinned inside item 6.
+2026-09-16** (§6). **`SO-D8e` RULED 2026-09-16** (§7.2). Q4 still unpinned
+inside item 6.
 
 Rick's enumeration of 2026-09-13, re-grounded at source; where the tree
 disagrees with the enumeration the correction is marked.
@@ -754,8 +756,8 @@ checked, no collision; TSV row at Slice C). Hiding is theater because
 the reveal publishes `pk`. The join identifies `h`'s coinbase (stealth
 payout already in the block), not a miner identity. Real residual is
 P2 / fixture 12. Reopen if `h` is removed **in order to conceal** the
-issuing block. Open: Q4 (`λ` unpinned); `SO-D8e`; Q9 bytes + carrier
-semantics (§7.6.1–2).
+issuing block. Open: Q4 (`λ` unpinned); Q9 bytes + carrier semantics
+(§7.6.1–2). `SO-D8e` RULED (§7.2).
 
 ---
 
@@ -822,7 +824,7 @@ is in the past and in the DB, which is what `PC-D4` could not do.
 - **Authority, stated (review 2026-09-16):** `SO-D8b` is RULED as to the
   **key and predicate** — what admission checks. Its implementation is
   STAGED behind `SO-D8e` — how `assignment(h)` is served for a past `h`
-  — which must be RULED before Slice C and is on the Open list (§10).
+  — RULED 2026-09-16 (§7.2: the `W₂` ring).
   Rule 23: a staged item with a named consumer in a live plan, not a
   silent deferral; the two are not independent, and only one of them is
   a design decision still to make.
@@ -1068,7 +1070,7 @@ through the slash deadline" (Q7, collapsed by §6.3 item 2); "three edits
 make these layers fire" (the pruned-journal edit fires upstream); the
 five-ground rejection (ground 3 withdrawn).*
 
-## 7. `SO-D8e` — the `assign_epoch` FFI shape (the real item)
+## 7. `SO-D8e` RULED 2026-09-16 — the `EpochAssignmentCache`
 
 ### 7.1 Two consumers, two cadences
 
@@ -1084,63 +1086,159 @@ not estimated here. Even at this host's speed, ~1 s of pure derivation per
 block on the admission path is not acceptable; per epoch in the slash pass it
 is.
 
-### 7.2 Proposed shape: a Rust-owned, in-memory, sequentially-fed urn with a `W₂` ring and checkpoints
+### 7.2 `SO-D8e` RULED 2026-09-16 — a forward urn, a `W₂` ring, no checkpoints, one set live
+
+**What.** The structure, lifetime, persistence and rewind of the derived
+assignment state that `SO-D8b`'s membership gate, `SO-D8d` layer 2, and
+Q3's seed all depend on.
+
+**Why.** `SO-D8b` needs `assignment(h)` for any `h` in
+`[h_incl − W₂, h_incl)` — 500 blocks back, across an epoch boundary.
+`ChallengeUrn` is a sequential stream, so answering a past query naively
+means replaying from `h_open`: 1.09 s, on the admission path, per record.
+And `assign_epoch`'s full materialisation is ~39 MB of
+`Vec<Vec<DrawablePair>>` at maturity, on a floor device (rule 76).
 
 **Rust owns the urn; nothing else does.** `ChallengeUrn` already is the
 sequential form (`advance_block(prev_hash)` per block, `draws_done()`;
-`challenge_assignment.rs:131–255`, `advance_block` at `:211`). The proposal is
-a wrapper type in `shekyl-archival-retention`, no new crate:
+`challenge_assignment.rs:131–255`). The wrapper is a type in
+`shekyl-archival-retention`, no new crate:
 
 ```text
 EpochAssignmentCache  (derived state; NEVER persisted — SO-D3 derive-don't-store;
                        one carve-out: the 32-B digest of D, written in the connect
-                       batch at h_open(E) — SO-D8d §6.3 item 1; undo-logged, never read by a rule)
-  open(E, DrawableSet::at_epoch_open(view, E))              // Q3 RULED; λ = CHALLENGES_PER_PAIR_PER_EPOCH, not a parameter (Q4); holds E-1's set too for the first W₂ of E
-  advance(h, prev_hash) -> &[DrawablePair]                 // assignment(h); O(λ·pairs/SEB) per block; pushed onto the ring
-  is_assigned(h, P, s) -> bool                             // admission gate; O(1) for any h in the trailing W₂ ring, refuse-not-guess outside it
-  issued_histogram() -> impl Iterator<(DrawablePair, u32)> // writer input at settlement
-  checkpoint() / rewind_to(h)                              // pop_block; pops the ring and the urn together
+                       batch at h_open(E) — item 5 below; undo-logged, never read by a rule)
+  open(E, DrawableSet::at_epoch_open(view, E))   // Q3 RULED; λ = CHALLENGES_PER_PAIR_PER_EPOCH read at the entry point (Q4); ONE set live
+  advance(h, prev_hash) -> &[DrawablePair]      // assignment(h); pushed onto the ring
+  is_assigned(h, P, s) -> bool                  // admission gate; O(1) for any h in the trailing W₂ ring; refuse-not-guess outside it
+  rewind_to(h)                                  // pop: truncate the ring; replay the urn forward from the wave boundary at or below h
 ```
 
-- **The `W₂` ring is R-B's addition, and it is a 500-deep window over
-  past assignments, not a rolling current-epoch value.** `SO-D8b` asks
-  `(P,s) ∈ assignment(h)` for any `h` in `[h_incl − W₂, h_incl)`. A
-  record arriving at `h_incl` can cite an `h` in the previous epoch, so
-  the ring spans epoch boundaries and must hold **two `DrawableSet`s**
-  during the overlap. Sourcing is settled (Q3 reconstruction, λ from
-  the constant once Q4 lands, Q10 memory-only); this window is what
-  isn't. `SO-D8b` is unimplementable without it — do not rule the two
-  as independent. Admission asks about *past* blocks, so the per-block
-  draw sets must be retained: `W₂ × ~97 × 40 B ≈ 2 MB` at maturity. An
-  `h` outside the ring is a **refusal**, never a replay on the
-  admission path — the deadline gate (§3) has already refused anything
-  older than `W₂`, so the ring's depth and the deadline are the same
-  constant and must be read from the same place.
-- **Precedent:** `ArchivalSealHashCache` — derived, in-memory, rebuilt from
-  chain on restart, the pattern `SO-D3` named.
-- **Reorg:** `pop_block` rewinds urn and ring to the popped height; a reorg
-  deeper than the retained checkpoints replays from `h_open(E)` (bounded by
-  one epoch = 1.09 s here). `SO-D6` already deletes settlement rows on
-  revert; the cache follows the same height. §2.2's suffix argument means a
-  popped `h_incl` never leaves a dangling reference to a live `h`.
-- **Restart mid-epoch:** replay from `h_open(E)` on first use, rebuilding the
-  ring for the trailing `W₂`. Same bound.
-- **Retention (Q7 — COLLAPSED 2026-09-16 by `SO-D8d` §6.3 item 2):** the
-  cache for `E` must live until the last record for `E` can be admitted —
-  `h_close(E) + W₂` — and **no longer**. The first 500 blocks of `E` are
-  the overlap the ring already names: two `DrawableSet`s resident (`E-1`
-  and `E`), because a record at `h_incl` can cite an `h` in the previous
-  epoch. The writer at the slash pass re-walks `D` and replays the urn
-  from chain data (layer 2 needs the re-derivation to exist at all), so
-  retaining through the slash deadline buys nothing at settlement; the
-  writer is a pure function of chain data, which is the property `SO-D1`
-  §4.2 and `SO-D6` rest on. *SUPERSEDED: "retaining through the slash
-  deadline (zero replay at settlement) is the recommendation."* Stated
-  fallback if §7.4's churn benchmark refuses the re-walk on the floor
-  device: retention returns and layer 2 compares only when non-resident.
-- **Ordering hazard, named:** the cache must be advanced with the *validated*
-  predecessor's hash, never `prev_id` as supplied on an alt path — the same
-  constraint `RF-D5` states for the attestation path's `prev_block_hash`.
+**The design — five items.**
+
+1. **Forward-advancing urn plus a `W₂` ring of outputs.** The urn advances
+   as blocks connect, which happens anyway. Keep 500 blocks of assignment
+   outputs: `97 × 500 × 40 B ≈ 1.9 MB`. The membership gate reads the ring
+   — `O(1)`, nothing on the admission path. An `h` outside the ring is a
+   **refusal**, never a replay: the deadline gate (§3) has already refused
+   anything older than `W₂`, so the ring's depth and the deadline are the
+   same constant and are read from the same place.
+2. **No checkpoints. Replay from the wave boundary.** `advance_block`
+   resets `working` to canonical order at `remaining == 0`
+   (`challenge_assignment.rs:224–230`), so each wave is an independent
+   selection-without-replacement from a known state. Zero checkpoint
+   state, zero snapshot memory, no cadence to tune. *SUPERSEDED:
+   `checkpoint()`; "a reorg deeper than the retained checkpoints."*
+3. **One `DrawableSet` live, not two.** The ring holds self-contained
+   `(p_id, shard_id)` pairs, so `E`'s set drops at `h_close(E)` and only the
+   **ring** spans the boundary. Settlement rebuilds `E`'s set from the
+   journals under `SO-D8d` §6.3 item 2. *SUPERSEDED: "holds two
+   `DrawableSet`s during the overlap" (§4, §9, the R-B table) — the
+   overlap is real, the second set is not; the ring carries it.*
+4. **Lifetime `[h_open(E), h_close(E) + W₂]`**, then dropped. Settlement
+   does not read the cache; that is what gives `SO-D8d` layer 2 two
+   operands (Q7 collapsed, §6.3 item 2).
+5. **One carve-out to "never persisted": the 32-byte digest** of `D` at
+   `h_open(E)`, written in the connect batch, undo-logged via SI-6,
+   reorg-safe for free. No wire field, never read by validation, and safe
+   in the batch: the only store-wide digest, `digest_v0` (DRS-P0d), folds a
+   fixed family list and **deliberately excludes** the archival journals and
+   "every other table" (`digest_v0.rs` module docs), so a new local cell
+   does not perturb it; the rule-42 schema snapshot moves, as any new table
+   does.
+
+**Memory at maturity:** pairs `324k × 40 B ≈ 13 MB` + working list
+`324k × u32 ≈ 1.3 MB` + ring `1.9 MB` ≈ **16 MB**. Against `assign_epoch`'s
+~39 MB materialisation, and on the floor device.
+
+**Ordering hazard, named:** the cache is advanced with the *validated*
+predecessor's hash, never `prev_id` as supplied on an alt path — the same
+constraint `RF-D5` states for the attestation path's `prev_block_hash`.
+
+**Precedent:** `ArchivalSealHashCache` — derived, in-memory, rebuilt from
+chain on restart, the pattern `SO-D3` named. **Restart mid-epoch:** rebuild
+`D` from the journals (§7.4), replay from `h_open(E)` on first use,
+refill the ring for the trailing `W₂` — bounded by one epoch, 1.09 s here.
+
+#### Reorg — closed, two bounded paths
+
+- **Fork at or above `h_open(E)`** — `D` is untouched. `h_open`'s own
+  contents cannot change it in either direction, verified at source: a bond
+  posted there has `E_join = E` and `E_first = E_join + 1` excludes it
+  (`serve_eligibility.rs:8–18`); a **re-bond** there opens its interval at
+  `E_rebond + 1` (`db_lmdb.cpp:6959–6987`), excluded the same way; **drops**
+  do not remove pairs (Q3 §7.4 (3.1)); a **release** clears nothing that
+  was held — an `Exited` record already holds no shards
+  (`db_lmdb.cpp:6626–6627`, "v6 coupling"); and a **slash** applied at an
+  epoch-open height is the slash pass's deterministic function of
+  settlement rows complete since `h_close + W₂`, ≥ 9,500 blocks below any
+  fork there, so both branches remove the same shard. Replay the urn
+  forward from the wave boundary at or below the fork, truncate the ring.
+  Bounded by one wave: ~324k draws, ~0.36 s.
+- **Fork below `h_open(E)`** — possible only in the first 720 blocks of an
+  epoch (`ARCHIVAL_REORG_DEPTH_BLOCKS = 720` against `SEB = 10,000`: 7.2 %).
+  Rebuild `D` from the journals, rebuild the urn from `h_open`, rewrite the
+  digest — the batch undo already rewinds the old one. When the fork lies
+  in `E − 1` (the tip is inside `E`'s first 720 blocks), `E − 1`'s tail is
+  reconnected on the alt suffix too: rebuild `E − 1`'s `D` (one more §7.4
+  walk) and replay its last wave from the wave boundary at or below the
+  fork, so the ring entries for those heights are recomputed. Same bound,
+  applied twice.
+
+**Wave boundaries are hash-independent** — `done` advances on the
+Bresenham schedule `⌊(h+1)·total/E⌋` (`due_through`,
+`challenge_assignment.rs:196–204`), a function of block index alone — so
+a reorg never moves one and the anchor is always valid.
+
+**Records survive reorgs and are re-submittable verbatim.**
+`assignment(h)` binds `block_hash(h−1)`, so every assignment at `h ≤ fork`
+is untouched. An orphaned record carries the same `h`, nonce,
+countersignature and witness signature, so the archiver does not
+re-serve, `P` does not re-sign, and the witness does not re-fetch 3.33 MB.
+`W₂ = 500` against a 720-block ceiling is the headroom that makes
+re-inclusion work.
+
+**Pin for Slice C (verified-shape, not a design choice):** the instant
+`D` is taken at is the same instant `archival_bond_holds_shard_of(·, h_open(E))`
+answers for — the two must share one convention (state after block
+`h_open(E)` connects, including its phase-9 slash pass), because the
+settlement filter (3.3) and the seed are the same predicate at the same
+height. Fixture: a slash applied at `h_open(E)` removes the pair from
+both, or from neither.
+
+#### Foreclosed, with reasons on record
+
+**Stateless per-block draws with replacement.** It would delete this
+entire disposition — pure `assignment(h)`, no ring, no replay, no rewind
+— and it is memoryless, so unlike the wave structure it leaks no timing at
+all. Refused on three grounds: ~20 % of pairs unobservable per epoch at
+`λ = 3` (`P(draws < 2) = e^{−3}(1 + 3) ≈ 0.199`, not the 5 % first
+quoted), ~25 % longer time-to-slash, and decisively it invalidates the
+absolute-2 ratification, since two passes required from exactly two
+draws and two passes required from six draws are not the same test.
+Matching exact-λ coverage would cost roughly double the witness fetch
+load.
+
+**Known property, recorded not fixed:** without-replacement leaks a
+widening warning window at each wave's tail — `P(next draw is me) =
+1/remaining`, publicly computable, so a still-undrawn pair late in a wave
+can anticipate its challenge. Relevant to the `TJ` free-rider case. Not
+grounds to reopen the urn.
+
+#### Owed
+
+- **`SI-` row for `SO-D8d`'s Fault: a new row, `SI-10`.** Checked against
+  `STORE_INVARIANT_REGISTER.md` on `dev@5fde3b1ce`: rows **SI-1 through
+  SI-9 all exist** — `SI-5` is present and *ruled, unbuilt* (after a pop
+  trims the tree to `h`, its root equals the recorded root at `h`), which
+  is why it has no `StoreInvariant` variant yet. Reuse refused: `SI-5`'s
+  subject is the curve tree, not settlement. The row is minted in the
+  register by the Slice C PR that arms it (rule 94 §6 — the DRS lane owns
+  the register); this record reserves nothing there.
+- **`D_max` ≠ `ARCHIVAL_REORG_DEPTH_BLOCKS`.** 720 is the archival reorg
+  depth (`build.rs`, from the economics config); `D_max` is `PDM-Q11`'s
+  constant, and `PDM-Q-F24` exists because a ruling already inherited it
+  wrongly once. This record uses 720 explicitly and does not name `D_max`.
 
 **No FFI. SUPERSEDED 2026-09-16 (Q15).** *Superseded text: "one opaque
 handle, five entry points … C++ marshals heights … In the redb store this
@@ -1149,6 +1247,11 @@ refused. `EpochAssignmentCache` is called from the Rust apply/pop path
 only (`DAEMON_REDB_STORE.md` S-CHAIN-W / S-ARCH). It is designed for that
 caller; nothing is listed on a deletion surface because nothing temporary
 is written.
+
+*SUPERSEDED in this section: "Proposed shape … with checkpoints";
+`checkpoint()`; "two `DrawableSet`s during the overlap"; "a reorg deeper
+than the retained checkpoints replays from `h_open(E)`"; "retaining
+through the slash deadline is the recommendation" (Q7).*
 
 ### 7.3 Inputs the shape needs
 
@@ -2052,7 +2155,7 @@ gates until `shekyl-chain-rules` is the live validator.
 
 | Item | Plan |
 |---|---|
-| **Where the enumeration walk goes** | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` (Q3 RULED, §7.4) seeds the cache. Writer: `shekyl-archival-retention::settlement::settle_epoch_rows(issued: impl Iterator<(DrawablePair,u32)>, passes: impl Fn(&DrawablePair)->u32) -> Vec<(ArchivalPairEpochKey, SettlementRow)>` — pure, testable, no storage. `issued` from `EpochAssignmentCache::issued_histogram()` (or one `assign_epoch` replay if not resident). Per drawn pair, `holds_shard_of` at the fire height: not held ⇒ write no row (Q3 §7.4 (3.3)). The Rust apply/slash path (S-ARCH, DRS-E4) calls it and writes the rows **before** the fold, per `SO-D7`. No FFI; no C++ loop. |
+| **Where the enumeration walk goes** | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` (Q3 RULED, §7.4) seeds the cache. Writer: `shekyl-archival-retention::settlement::settle_epoch_rows(issued: impl Iterator<(DrawablePair,u32)>, passes: impl Fn(&DrawablePair)->u32) -> Vec<(ArchivalPairEpochKey, SettlementRow)>` — pure, testable, no storage. `issued` from a streamed urn replay at the slash pass over the re-walked `D` (`SO-D8d` §6.3 item 2, `SO-D8e` item 4 — the cache is dropped at `h_close + W₂` and settlement never reads it). *SUPERSEDED: `EpochAssignmentCache::issued_histogram()`; "if not resident."* Per drawn pair, `holds_shard_of` at the fire height: not held ⇒ write no row (Q3 §7.4 (3.3)). The Rust apply/slash path (S-ARCH, DRS-E4) calls it and writes the rows **before** the fold, per `SO-D7`. No FFI; no C++ loop. |
 | **How `issued` is obtained** | From the urn (§7), never from records. **`SO-D8d` restates `SO-D1` §4.2 so it is not re-proposed:** an absent record would read as never-issued, which is the free-exit hole the scheme exists to close. |
 | **How `passes` is obtained** | The S-ARCH `archival_serve_credit_pass_count(P,s,E)` read — a per-pair-epoch count over the `PC-D4` widened key; **complete at `h_close(E) + W₂` and therefore at the slash pass** (`10,000 ≥ 500`). Same count, same table, Rust store. |
 | **Where the emission gather goes** | Same hook, same pass (§5): `gather_archival_emission_epoch_snapshot` is called from the Rust slash pass after the writer, not from epoch-close. The invariant-2 joint pin moves with it. |
@@ -2124,13 +2227,13 @@ about it.
 
 | ID | Disposition | State |
 |---|---|---|
-| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; `SO-D8a`/`b`/`c`/`d` **RULED 2026-09-16**; e remains; Q3, Q8, Q9, Q10, Q12, Q13 **RULED 2026-09-16** |
+| `SO-D8` (parent) | Premise **stands** (§1). Shape **R-B** adopted: the record names and validates its issuing block `h`; `E = epoch(h)`; deadline `h_incl ≤ h + W₂`. `PC-D2` reversed (F4). | **DIRECTION RATIFIED 2026-09-13**; `SO-D8a`–`e` **RULED 2026-09-16**; Q3, Q8, Q9 (shape), Q10, Q12, Q13 **RULED 2026-09-16**; Q9 bytes + carrier OPEN |
 | `SO-D9` (standalone) | `ERR_EPOCH_MISMATCH` is a tautology. **(i)**: the record's epoch equals `settlement_epoch_at_height(h)` of the validated issuing block. Lands as a `shekyl-chain-rules` row with the R-B cutover (Q15); not a C++ one-liner. FOLLOWUPS row carries it. | **RULED 2026-09-13 — (i)**; site **re-homed 2026-09-16 (Q15)** |
 | `SO-D8a` | Boundary rule `E = epoch(h)`; `ERR_FIRE_NOT_REACHED` dies; **`h_close` deadline replaced** by the per-challenge `W₂` bound. Transcription of the R-B ratification. First admission-path reader of `CHALLENGE_RESPONSE_BLOCKS`; that FOLLOWUPS row **discharged**. | **RULED 2026-09-16** |
-| `SO-D8b` | Dedup **widens** to `(P,s,E,h)` exact-get; membership against `assignment(h)`. Exact-get resolves because `h` is in the past and in the DB — what `PC-D4` could not do. Needs `SO-D8e`'s epoch-spanning window; unimplementable without it. | **RULED 2026-09-16** |
+| `SO-D8b` | Dedup **widens** to `(P,s,E,h)` exact-get; membership against `assignment(h)`. Exact-get resolves because `h` is in the past and in the DB — what `PC-D4` could not do. Served by `SO-D8e`'s `W₂` ring (RULED 2026-09-16); the key and predicate ruled here, the structure there. | **RULED 2026-09-16** |
 | `SO-D8c` | Emission gather **moves to the slash pass** — `SO-D7` applied to its second consumer; invariant-2 joint pin moves with it. Presence-vs-absolute-2 recorded, not opened. | **RULED 2026-09-16** |
 | `SO-D8d` | Three **local** layers, none on chain: (1) per-record assignment equality against the writer's `assignment(h)`, streamed; (2) **persisted** local 32-B digest of `D` written in the connect batch at `h_open(E)` (undo-logged), compared against a **re-walk at every slash pass** (option (b); conditional on §7.4's churn benchmark; fallback (a) stated); (3) `passes ≤ issued` FATAL backstop, **strictly dominated**. Guards Q3 reconstruction, not arithmetic. The harmful direction (`NonObservation → Missed`; the free exit) is layer 2's alone — layer 1 cannot see a count divergence (§6.1). Desync is a **store-invariant Fault** with a new `SI-` row (Slice C), never `CenRow`/`InvalidBlock`; block at the slash height unwritten *because the writer halted* (§6.4). Q7 **collapsed**: cache drops at `h_close + W₂`. Pin 4 reconciled by call site. Clamp and skip **FORBIDDEN**. On-chain `D`-digest **REJECTED** on four grounds — **ground 3 WITHDRAWN**. Counting `issued` from records **REJECTED** (`SO-D1` §4.2). Four falsifier classes at the site (dedup revert; reconstruction perturbation; journal prune — fires upstream; λ divergence — Q4 is a coverage precondition). Fixture 17 runs the re-derivation; fixture 18 pins the over-derived case. Served-artifact `D` carried against PDM. | **RULED 2026-09-16; amended 2026-09-16 vs `dev@5fde3b1ce`** |
-| `SO-D8e` | `EpochAssignmentCache` with a `W₂` ring: Rust-owned, in-memory, sequential, checkpointed, never persisted; seeded by `DrawableSet::at_epoch_open` (Q3 RULED); `λ` from the constant (Q4); retained to `h_close(E) + W₂` only — Q7 **collapsed** by `SO-D8d` §6.3 item 2 (*SUPERSEDED: through the slash deadline*); one persisted carve-out, the 32-B `D` digest in the connect batch at `h_open(E)`; called from the Rust apply/pop path only. The 5-call C++ FFI adaptor is **SUPERSEDED** (Q15). **Structural claim:** the cache is a 500-deep window over past assignments, not a rolling current-epoch value; it spans epoch boundaries and holds two `DrawableSet`s during the overlap, because `SO-D8b` needs `assignment(h)` for any `h` in `[h_incl − W₂, h_incl)`. `SO-D8b` is unimplementable without this; do not rule the two as independent. | **PROPOSED** |
+| `SO-D8e` | `EpochAssignmentCache`: forward-advancing `ChallengeUrn` plus a `W₂` ring of self-contained `(p_id, shard_id)` outputs (`≈ 1.9 MB`); membership gate reads the ring, `O(1)`, refuse outside it. **No checkpoints** — rewind replays from the wave boundary (`remaining == 0` resets `working`; boundaries are `⌊(h+1)·total/E⌋`, hash-independent). **One `DrawableSet` live** — only the ring spans the epoch boundary. Lifetime `[h_open(E), h_close(E) + W₂]`, then dropped; settlement never reads it (Q7 collapsed). One carve-out to never-persisted: the 32-B `D` digest in the connect batch at `h_open(E)` (undo-logged; `digest_v0` excludes it by construction). ~16 MB at maturity. Reorg: fork at/above `h_open` — `D` untouched (post, re-bond, drop, release, slash each verified at source), replay one wave (~0.36 s); fork below `h_open` (first 720 blocks, `ARCHIVAL_REORG_DEPTH_BLOCKS`) — rebuild `D`, urn, digest. Records survive reorgs verbatim. Stateless draws-with-replacement **FORECLOSED** (≈20 % unobservable at λ = 3; invalidates absolute-2). Wave-tail warning window recorded, not fixed. Owed: `SI-10` for `SO-D8d` (SI-5 exists, ruled-unbuilt; reuse refused); 720 not `D_max`. λ from the constant (Q4). Rust apply/pop path only; no FFI (Q15). *SUPERSEDED: checkpoints; two `DrawableSet`s; retain through the slash deadline.* | **RULED 2026-09-16** |
 | Drawable set (Q3) | `DrawableSet::at_epoch_open(view, E)` in `shekyl-chain-rules` over `ChainView`; no snapshot table. A dropped pair stays in `D`; filter at settlement and witness. Construction §7.4. | **RULED 2026-09-16** |
 | `W₂` (Q2) | Under R-B `CHALLENGE_RESPONSE_BLOCKS` **is** the per-challenge deadline and the const-assert coupling it to `CHALLENGE_RESOLUTION_BLOCKS` is load-bearing (§5 depends on it). FOLLOWUPS row **discharged 2026-09-16** by `SO-D8a` RULED (first admission-path reader). | **RESOLVED by R-B**; referent **RULED 2026-09-16 (`SO-D8a`)** |
 | Witness key (Q8) | **Dedicated non-output hybrid key** derived from coinbase output 0's `combined_ss` under `HKDF_SALT_OUTPUT_DERIVE` + `LABEL_WITNESS_PQC` / `LABEL_WITNESS_ED25519` (no `output_index` in info); 32-B commitment under **`0x0C`**; pk + sig pruned. Combined_ss stays in Rust. The coinbase output's own per-output key is **ruled out by `PL-D3`'s premise**. **SUPERSEDED: extend `0x0B`.** Q13 RULED (§7.8) owns the CEN wording: **mandatory-present** (commitment 2, not byte count); **fresh `combined_ss` per block** is a derivation requirement with a fixture, not a KEM inheritance. Q10 RULED: `W₂` ring is memory-only, restart loss is β. Q12 RULED (§7.9): bare 32-B `cSHAKE256` under `shekyl/archival-witness-key-v1`; hiding is theater (reveal publishes `pk`); reopen if `h` is removed **in order to conceal** the issuing block. Construction §7.5. | **RULED 2026-09-16** |
@@ -2177,8 +2280,9 @@ Seven were posed in the first cut; four answered in the 2026-09-13 review,
 new ones arise from R-B; Q11 is resolved by the `PL-` round and #745; Q12–Q13
 were opened in the 2026-09-14 reconciliation; Q14 was opened by #747 review
 and is resolved by Q15 (2026-09-16). **Open questions: Q4 (`λ` unpinned);
-`SO-D8e`; Q9's byte construction and carrier semantics (§7.6.1–§7.6.2,
-opened by review 2026-09-16 — the shape is RULED, the bytes are not).** `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
+Q9's byte construction and carrier semantics (§7.6.1–§7.6.2, opened by
+review 2026-09-16 — the shape is RULED, the bytes are not).** `SO-D8e`
+RULED 2026-09-16 (§7.2). `SO-D8a`/`b`/`c` RULED 2026-09-16 (transcriptions of R-B /
 PC-D4 / SO-D7). `SO-D8d` RULED 2026-09-16 (§6), amended same day:
 three local layers; persisted `D` digest + re-walk at every slash pass
 (Q7 collapsed); store-invariant Fault with an `SI-` row, never a
