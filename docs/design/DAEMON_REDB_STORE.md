@@ -1801,44 +1801,78 @@ inherits rather than re-derives. **The hash shape:** the txid component is
 count prefix, so `keccak256(txs_pqc_auths[tx_id])` verifies nothing the
 chain signed and the row must be the txid's component, KAT-pinned against
 `Transaction::hash()`. **`Option`:** the coinbase and the empty-auths
-serve-credit form hash 3-part, so the component is absent from the *txid*,
-`None` is "the txid has no such component", and the store row is sparse on
-the same predicate as `txs_pqc_auths` itself (segment present ⇔ row
-present ⇔ txid 4-part; a split is a store invariant, never a `None`).
-This section is what DRS **owes** against F26 and where each piece lands.
+serve-credit form hash 3-part, so the component is absent from the *txid*
+and `None` is "the txid has no such component" — a different fact from
+"the component exists and the bytes do not", which is a store state, and
+the two never share a representation. **The store invariant has three
+legs (F26, on `TxIdentity`'s doc comment), because under Q6 a hash row
+*without* its segment is the steady state of every 4-part tx below the
+universal window `W`, not a fault:** (1) hash row present ⇔ txid 4-part —
+permanent, written at connect, never deleted (`validate` rejects the one
+shape, gen-first with auths, that could split "4-part" from "segment
+non-empty"); (2) segment present ⇒ hash row present — a body the store
+cannot verify is the violation; (3) hash row present ∧ segment absent ⇔
+**discarded** — below `W` and not a retention exception, or never held (a
+band-1 skeleton, F28). One store state, one meaning, however the node
+arrived at it. This section is what DRS **owes** against F26 and where
+each piece lands.
 
-**Three pieces, three crates, one deadline.** The field alone is
-insufficient: `Transaction::hash_with_supplied_prunable` exists because a
-pruned body has no prunable region to hash, and there is no equivalent for
-the `pqc_auths` component — a node discarding `pqc_auths` under Q6 item 2
-could not compute a txid even holding the persisted digest. What is owed:
+**Three pieces, four crates, one deadline.** The field alone is
+insufficient, twice over. `Transaction::hash_with_supplied_prunable`
+exists because a pruned body has no prunable region to hash, and it has no
+`pqc_auths` twin — a node discarding `pqc_auths` under Q6 item 2 could not
+compute a txid even holding the persisted digest. And the existing form
+derives the txid's arity from `pqc_auths.is_empty()` on the body in hand
+(`transaction.rs`, `hash_with_prunable`): a **band-1 skeleton (F28) holds
+neither `pqc_auths` nor the prunable region**, so supplying one component
+at a time cannot reconstruct its 4-part txid at all — the arity must come
+from the *supplied* third component's presence, not from a body that is
+not there. What is owed:
 
-1. **`TxIdentity.pqc_auth_hash: Option<PqcAuthHash>`** (`shekyl-types`
-   `hash32!` sibling of `PrunableHash`), from the one `validate` — the
-   type's own doc comment ("no consumer re-hashes a body and the store
-   never derives a consensus-visible value", C2-R8 Q4) applies verbatim to
-   the component it omitted. **Rules crate (E6 lane).** Rides E6's `Tip`
-   PR, which is cut for the same S-CHAIN-R window.
-2. **`Transaction::pqc_auth_hash()` and `hash_with_supplied_pqc_auth`**
-   sharing `hash_with_prunable`'s body, so the pruned and unpruned paths
-   cannot hash one transaction two ways; KAT against `hash()`. **Wire
-   crate — owner: the S-CHAIN-R lane**, because the store row below is
-   its consumer and the crate has no lane of its own. Its own small PR.
+1. **`TxIdentity.pqc_auth_hash: Option<PqcAuthHash>`**, from the one
+   `validate` — the type's own doc comment ("no consumer re-hashes a body
+   and the store never derives a consensus-visible value", C2-R8 Q4)
+   applies verbatim to the component it omitted. **Two crates:**
+   `PqcAuthHash` is a `shekyl-types` `hash32!` sibling of `PrunableHash`
+   (the same move E6's scaffold PR made for `KeyImage` and `CurveTreeRoot`
+   — `CHAIN_RULES_CRATE.md` Q1/Q2), and the field lives in the **rules
+   crate**. **Owner: the E6 lane**, both crates, on its `Tip` PR, which is
+   cut for the same S-CHAIN-R window.
+2. **The two-supplied txid form on `Transaction`** — one entry point that
+   takes `pqc_auth: Option<PqcAuthHash>` and `prunable: PrunableHash` and
+   yields the txid with the arity read off `pqc_auth.is_some()`, of which
+   `hash()` (both computed) and `hash_with_supplied_prunable` (one
+   supplied) are the special cases, all sharing `hash_with_prunable`'s one
+   body so no two paths can hash one transaction two ways; plus the
+   `pqc_auth_hash()` accessor `validate` reads. KAT'd against `hash()` on a
+   full body **and** on a skeleton (prefix + base only, both components
+   supplied). **Wire crate — owner: the S-CHAIN-R lane**, because the
+   store row below is its first consumer and the crate has no lane of its
+   own. Its own small PR.
 3. **The row** — `txs_pqc_auth_hash: u64 → Hash32`, written by `connect`
-   beside `txs_prunable_hash` from the identity it is handed, sparse on
-   `txs_pqc_auths`' predicate, Rust-only until an LMDB twin exists
-   (`RUST_ONLY_TABLES`, SCW-11), journaled, SI-9-fresh under `tx_id`.
-   **Store crate: S-CHAIN-W amendment A3**, riding S-CHAIN-R's one
-   layout commit ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) §7 commit 2)
-   so the `SCHEMA_VERSION` bump is paid once; that commit therefore waits
-   on 1 and 2 as it waits on `Tip`.
+   beside `txs_prunable_hash` from the identity it is handed, under the
+   three-leg invariant above (present ⇔ 4-part; never deleted by a
+   prune), Rust-only until an LMDB twin exists (`RUST_ONLY_TABLES`,
+   SCW-11), journaled, SI-9-fresh under `tx_id`. **Store crate: S-CHAIN-W
+   amendment A3**, riding S-CHAIN-R's one layout commit
+   ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) §7 commit 2) so the
+   `SCHEMA_VERSION` bump is paid once; that commit therefore waits on 1
+   and 2 as it waits on `Tip`. The second Rust-only table retires two
+   sentences the first one wrote — §7.6's "50 tables, 49 mirrors plus
+   Rust-only `undo_log`" (51, plus one) and `schema.rs`'s "first — and so
+   far only" — in the same commit, and §7.6's write-target denominator
+   moves with it.
 
-**Precedent, so Q6 item 2 reads as a third application, not a new
-capability.** Reconstruct-from-stored-digest exists twice already:
-`hash_with_supplied_prunable` for the txid, and
-`get_pruned_transaction_weight`
-(`src/cryptonote_basic/cryptonote_format_utils.cpp:336`) adding
-`ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES × n` back for weight.
+**Precedent, stated exactly.** Reconstruct-from-stored-digest exists
+**once** in this tree — `hash_with_supplied_prunable`, a stored 32-byte
+digest standing in for a body the node does not hold — and item 2 is its
+second application. `get_pruned_transaction_weight`
+(`src/cryptonote_basic/cryptonote_format_utils.cpp:336`) is a *sibling*
+shape, not the same one: it reconstructs weight from **retained metadata**
+— it serialises the pruned body and adds deterministic sizes,
+`ARCHIVAL_SERVE_CREDIT_PRUNED_RECORD_BYTES × n` among them — and consumes
+no digest. Both say the same thing about Q6 item 2: a discarded region is
+reconstructed from what was kept, by a rule written where the discard is.
 
 **The deadline, as F26 states it and the E2 row carries it.** *E2's replay
 is the store's first production writer.* `PDM-Q6` items 1–2 are ruled
