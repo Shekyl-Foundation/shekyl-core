@@ -16,7 +16,7 @@ use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, Tx
 
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
-use crate::codec::{BlockInfo, Canonical, CurveRoot};
+use crate::codec::{BlockInfo, Canonical, CodecError, CurveRoot};
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
 
@@ -417,5 +417,210 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
         Ok(())
     });
     assert!(matches!(out, Err(TestErr::Store(_))), "{out:?}");
+    cleanup(&path);
+}
+
+// --- chain_reads: one body, two transactions (S-CHAIN-R commit 1) --------
+
+/// The shared body over a **read** transaction returns exactly what the
+/// batch view returned over the **write** transaction for the same rows —
+/// tip, identity, verified body. Read after the store is dropped, through a
+/// raw redb handle: the snapshot reader (S-CHAIN-R commit 3) will sit on the
+/// same `ReadTransaction` impl, and this pins that the impl exists and
+/// agrees before it has a production caller.
+#[test]
+fn the_read_transaction_body_agrees_with_the_batch_body() {
+    use super::chain_reads;
+    use shekyl_chain_rules::RecordedBlock;
+    let path = tmp("view-chain-reads-agree");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let blk0 = block(0, 1_000);
+    let blk1 = block(1, 1_060);
+    let seen: Result<(AtHeight<RecordedBlock>, AtHeight<RecordedBlock>), TestErr> =
+        store.write(|batch| {
+            record_block(batch, 0, &blk0)?;
+            record_block(batch, 1, &blk1)?;
+            let view = batch.chain_view();
+            Ok((
+                view.block_at(BlockHeight::from_raw(1))?,
+                view.block_at(BlockHeight::from_raw(2))?,
+            ))
+        });
+    let (batch_tip_block, batch_above) = seen.expect("write");
+    drop(store);
+
+    let db = redb::Database::open(&path).expect("raw open");
+    let txn = db.begin_read().expect("raw read");
+    let tip = chain_reads::tip_of(&txn)
+        .expect("tip_of")
+        .expect("two blocks recorded");
+    assert_eq!(tip.0, 1);
+    assert_eq!(tip.1.hash.to_bytes(), blk1.hash());
+    match chain_reads::block_body(&txn, Some(&tip), 1).expect("block_body") {
+        AtHeight::Recorded((hash, body)) => {
+            assert_eq!(hash.to_bytes(), blk1.hash());
+            assert_eq!(body, blk1);
+            assert_eq!(
+                batch_tip_block,
+                AtHeight::Recorded(RecordedBlock {
+                    hash: BlockHash::from_bytes(hash.to_bytes()),
+                    header: body.header,
+                }),
+                "the batch view is the same body wrapped"
+            );
+        }
+        AtHeight::AboveTip => panic!("height 1 is the tip"),
+    }
+    assert!(matches!(
+        chain_reads::block_body(&txn, Some(&tip), 2).expect("above tip"),
+        AtHeight::AboveTip
+    ));
+    assert_eq!(batch_above, AtHeight::AboveTip);
+    drop(txn);
+    drop(db);
+    cleanup(&path);
+}
+
+/// On the read side a hole below the tip is the same SI-7 `Absent` the
+/// batch view arms — classified in the shared body — and a corrupt blob is
+/// the same SI-7 on `blocks`. Nothing is poisoned: there is no batch. The
+/// difference between the two readers is the wrap, not the classification.
+#[test]
+fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
+    use super::chain_reads::{self, ReadFault};
+    let path = tmp("view-chain-reads-holes");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        record_block(batch, 0, &block(0, 1_000))?;
+        record_block(batch, 1, &block(1, 1_060))?;
+        record_block(batch, 2, &block(2, 1_120))?;
+        Ok(())
+    });
+    planted.expect("plant");
+    drop(store);
+
+    // Punch a hole at 1 and corrupt the blob at 2, bypassing the store.
+    let db = redb::Database::open(&path).expect("raw open");
+    {
+        let txn = db.begin_write().expect("raw write");
+        {
+            let mut blocks = txn.open_table(BLOCKS).expect("blocks");
+            blocks.remove(1).expect("remove 1");
+            let rewritten = block(2, 9_999).serialize();
+            blocks.insert(2, rewritten.as_slice()).expect("rewrite 2");
+        }
+        txn.commit().expect("commit");
+    }
+    let txn = db.begin_read().expect("raw read");
+    let tip = chain_reads::tip_of(&txn).expect("tip_of");
+    assert_eq!(tip.as_ref().map(|t| t.0), Some(2));
+    match chain_reads::block_body(&txn, tip.as_ref(), 1) {
+        Err(ReadFault::Invariant(StoreInvariant::CellCorrupt {
+            key: "blocks",
+            fault: CellFault::Absent,
+        })) => {}
+        other => panic!("a hole below the tip is SI-7 Absent on `blocks`, got {other:?}"),
+    }
+    match chain_reads::block_body(&txn, tip.as_ref(), 2) {
+        Err(ReadFault::Invariant(StoreInvariant::CellCorrupt {
+            key: "blocks",
+            fault: CellFault::Undecodable(_),
+        })) => {}
+        other => panic!(
+            "a blob that does not hash to block_info.hash is SI-7 on `blocks`, got {other:?}"
+        ),
+    }
+    // And a plain absent cell in a table that exists is `Ok(None)`: the
+    // caller classifies it. (Asked of `block_info`, not `curve_tree_roots`:
+    // nothing in this fixture has written a root, and until the layout
+    // commit seals the chain table set an unwritten table is
+    // `TableDoesNotExist` — SCR-17, amendment A2, S-CHAIN-R commit 2.)
+    let none: Option<BlockInfo> =
+        chain_reads::cell(&txn, BLOCK_INFO, 5, "block_info").expect("cell");
+    assert!(none.is_none());
+    drop(txn);
+    drop(db);
+    cleanup(&path);
+}
+
+/// The one deliberate tightening the shared body brought (its module docs,
+/// *The tip is one decoded read*), pinned as the scenario the PR #764 review
+/// named: heights 0 and 1 recorded, `block_info[1]` — the tip — rewritten
+/// to bytes that do not decode. Before, `block_at(0)` succeeded and
+/// `block_at(2)` was `AboveTip` because the tip was read by key alone; now
+/// **every** classified read is SI-7 `block_info` / `Undecodable` and the
+/// batch is poisoned — a store whose tip row does not decode has no trusted
+/// tip, and `connect` would poison on this same row before its first belt.
+#[test]
+fn an_undecodable_tip_row_is_si7_on_every_classified_read() {
+    let path = tmp("view-undecodable-tip");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        record_block(batch, 0, &block(0, 1_000))?;
+        record_block(batch, 1, &block(1, 1_060))?;
+        Ok(())
+    });
+    planted.expect("plant");
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("raw open");
+        let txn = db.begin_write().expect("raw write");
+        {
+            let mut infos = txn.open_table(BLOCK_INFO).expect("block_info");
+            infos
+                .insert(1, &[0xee; 87][..])
+                .expect("87 bytes: not a BlockInfo");
+        }
+        txn.commit().expect("commit");
+    }
+    // One handle per height: the branded-view SI-7 halts the *writer*, and
+    // the halt lives in the handle (DRS §3.6.2 — re-derived on restart,
+    // never persisted). A second `write` on the same handle is refused at
+    // admission as `WriterHalted` before the closure runs, which would let
+    // the outer assertion pass without `block_at` ever being called — the
+    // PR #764 review caught exactly that. The outer assertion also names
+    // the row, so a refusal cannot satisfy it.
+    for asked in [0u64, 1, 2] {
+        let store = ChainStore::create(&path, EPOCH).expect("reopen");
+        assert_eq!(store.connect_state(), ConnectState::Live, "fresh handle");
+        let mut ran = false;
+        let out: Result<(), TestErr> = store.write(|batch| {
+            ran = true;
+            let e = batch
+                .chain_view()
+                .block_at(BlockHeight::from_raw(asked))
+                .expect_err("the tip row does not decode");
+            assert!(
+                matches!(
+                    e,
+                    StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
+                        key: "block_info",
+                        fault: CellFault::Undecodable(_),
+                    })
+                ),
+                "block_at({asked}): {e}"
+            );
+            Ok(())
+        });
+        assert!(ran, "block_at({asked}) must actually run");
+        let expected = StoreError::from(StoreInvariant::CellCorrupt {
+            key: "block_info",
+            fault: CellFault::Undecodable(CodecError::Length {
+                codec: "block_info",
+                expected: 88,
+                actual: 87,
+            }),
+        })
+        .to_string();
+        assert_eq!(
+            out,
+            Err(TestErr::Store(expected)),
+            "block_at({asked}) must poison the batch with the tip row's SI-7"
+        );
+        assert!(
+            matches!(store.connect_state(), ConnectState::Halted { .. }),
+            "the branded-view SI-7 halts the writer (block_at({asked}))"
+        );
+    }
     cleanup(&path);
 }

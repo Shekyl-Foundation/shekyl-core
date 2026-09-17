@@ -86,6 +86,7 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod chain_reads;
 mod connect;
 mod error;
 mod halt;
