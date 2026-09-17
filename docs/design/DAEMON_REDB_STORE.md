@@ -1852,11 +1852,11 @@ not there. What was owed, and where each piece stands:
    skeleton (prefix + base only, both components supplied). Written for
    the S-CHAIN-R lane; **LANDED 2026-09-17 on PR #768 instead**, with
    item 1 — one contract, one KAT, one PR. As
-   `Transaction::hash_with_supplied_components(Option<PqcAuthHash>,
-   PrunableHash)`, the shared body `hash_from_components` and the one
-   arity predicate `has_pqc_component` (the oracle's `!vin.empty() &&
-   vin[0] != gen && !pqc_auths.empty()`, read off the *supplied*
-   component's presence when the body is a skeleton). Typed exactly as
+   `Transaction::txid_parts()` (one construction) and
+   `hash_with_supplied_components(Option<PqcAuthHash>, PrunableHash)`.
+   The mixer's arity is the `Option` after `prefix_carries_pqc_component`
+   (the oracle's `!vin.empty() && vin[0] != gen`) drops a `Some` the
+   prefix cannot carry; auth presence is a separate fact. Typed exactly as
    written here — `shekyl-wire` took the `shekyl-types` dependency for it,
    and `prunable_hash()` now returns `PrunableHash`; the crate's raw
    `[u8; 32]` there was unfinished migration

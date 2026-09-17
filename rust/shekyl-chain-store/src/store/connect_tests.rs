@@ -8,19 +8,20 @@
 //! digest-equal, and every belt fired from a hand-built violation.
 //!
 //! Blocks go through the real `validate` under `RuleSet::GENESIS` — the
-//! rules landed so far (E6 slice 1: 4.B's version rows) pass every
+//! rules landed so far (E6 slice 1: A2, B1, B2, B5, B6, B7) pass every
 //! well-formed fixture here, and coverage records exactly those rows — so
 //! `connect` is exercised through its public signature. Every store here is
-//! a fresh file (SCW-17).
+//! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{validate, Candidate, ChainValid, RowStatus, RuleSet, RuleSetId};
+use shekyl_chain_rules::{RowStatus, RuleSet, RuleSetId};
 use shekyl_types::{BlockHeight, CurveTreeRoot};
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
+use super::connect_fixtures::{
+    candidate, coinbase, connect_genesis, facts, judge, spend, GENESIS_ID,
+};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
-use super::view::BatchView;
 use super::*;
 use crate::codec::{
     BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, TotalBurnedCell, TxIndex,
@@ -32,134 +33,6 @@ use crate::schema::{
     OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
     TX_OUTPUTS, UNDO_LOG,
 };
-
-// ------------------------------------------------------------ fixtures
-
-fn coinbase(height: u64, outputs: usize) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: height + 60,
-            inputs: vec![Input::Gen(height)],
-            outputs: (0..outputs)
-                .map(|i| Output {
-                    amount: 0,
-                    key: [0x40 + u8::try_from(i).expect("small"); 32],
-                    view_tag: 1,
-                })
-                .collect(),
-            extra: Vec::new(),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]; outputs],
-            enc_labels: vec![[0x66; 9]; outputs],
-            commitments: (0..outputs)
-                .map(|i| [0x70 + u8::try_from(i).expect("small"); 32])
-                .collect(),
-        }),
-    }
-}
-
-/// A spend-shaped listed transaction in the storage-pruned form (no
-/// prunable, no pqc_auths): one key image in, `outputs` outputs. No landed
-/// rule reads a transaction yet (4.H/4.I are later slices), so it is
-/// admitted; what it exercises is the write set, not consensus.
-pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image: [key_image; 32],
-            }],
-            outputs: (0..outputs)
-                .map(|i| Output {
-                    amount: 0,
-                    key: [0x80 + u8::try_from(i).expect("small"); 32],
-                    view_tag: 2,
-                })
-                .collect(),
-            extra: Vec::new(),
-        },
-        ct: Ct::Fcmp {
-            fee: 7,
-            reference_block: [0x99; 32],
-            base: CtBase {
-                enc_amounts: vec![[0x11; 9]; outputs],
-                enc_labels: vec![[0x22; 9]; outputs],
-                commitments: (0..outputs)
-                    .map(|i| [0xa0 + u8::try_from(i).expect("small"); 32])
-                    .collect(),
-            },
-            pqc_auths: Vec::new(),
-            prunable: None,
-        },
-    }
-}
-
-/// The root the header at `height` must carry under CEN-B5: the tree state
-/// *at* `height` — the `root_after` the connect of `height − 1` wrote
-/// (`facts(height − 1)`), or the empty tree at genesis. Kept in one place
-/// with `facts` so the two cannot drift.
-pub(super) fn root_at_height(height: u64) -> CurveTreeRoot {
-    match height.checked_sub(1) {
-        None => CurveTreeRoot::EMPTY,
-        Some(parent) => facts(parent, 0).root_after.value,
-    }
-}
-
-pub(super) fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction>) -> Candidate {
-    let block = Block {
-        header: BlockHeader {
-            major_version: 1,
-            minor_version: 0,
-            timestamp: 1_000 + height * 60,
-            previous,
-            nonce: 7,
-            // CEN-B5 landed (E6 slice 1): the header carries the state at
-            // its height, not a placeholder.
-            curve_tree_root: root_at_height(height).to_bytes(),
-            attestation_root: [0x33; 32],
-        },
-        miner_transaction: coinbase(height, 1),
-        transaction_hashes: listed.iter().map(Transaction::hash).collect(),
-    };
-    Candidate::new(block, listed)
-}
-
-pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
-    ConnectFacts {
-        weight: Fact::passed_through(1_000 + height),
-        long_term_weight: Fact::passed_through(900 + height),
-        cumulative_difficulty: Fact::passed_through(u128::from(height + 1) * 100),
-        coins_generated: Fact::passed_through((height + 1) * 1_000_000),
-        burned: Fact::passed_through(burned),
-        root_after: Fact::passed_through(CurveTreeRoot::from_bytes(
-            [0xc0 + u8::try_from(height).expect("small"); 32],
-        )),
-    }
-}
-
-fn judge<'b, 'id>(
-    view: &BatchView<'b, 'id>,
-    candidate: Candidate,
-) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    Ok(validate(candidate, view, &RuleSet::GENESIS)?
-        .expect("the fixtures satisfy every landed rule"))
-}
-
-const GENESIS_ID: RuleSetId = RuleSetId::GENESIS;
-
-fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Block) {
-    let cand = candidate(0, [0; 32], Vec::new());
-    let block = cand.block.clone();
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let valid = judge(&view, cand)?;
-        Ok(batch.connect(valid, facts(0, burned), GENESIS_ID)?)
-    });
-    (out.expect("genesis connects"), block)
-}
 
 // ---------------------------------------------------------------- rows
 

@@ -51,9 +51,9 @@
   one-supplied form of the same mixer. A node holding only a skeleton
   (neither `pqc_auths` nor the prunable region) reconstructs its 4-part
   txid from the two stored digests — pinned to the oracle txid in
-  `pruned_tx_hash_parity`. The mixer's arity is the `Option` after a
-  prefix filter; a supplied `Some` on a 3-part prefix is dropped, not
-  mixed. **The component surface is typed:**
+  `pruned_tx_hash_parity`. The mixer's arity is the `Option` after
+  `prefix_carries_pqc_component` drops a `Some` the prefix cannot carry.
+  **The component surface is typed:**
   `prunable_hash()` now returns `PrunableHash` and both supplied forms take
   `PrunableHash` / `Option<PqcAuthHash>` (`shekyl-wire` depends on
   `shekyl-types`), so the two digests a store hands back cannot be swapped

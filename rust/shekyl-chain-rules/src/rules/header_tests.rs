@@ -3,11 +3,13 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Negative fixtures for census 4.B's version rows (`CHAIN_RULES_SLICE_1.md`
-//! §7). Each test names its row; each asserts a *refusal* where the row
-//! refuses, and — for the two rows whose statement is "does not reject" —
-//! that the mutated field trips **no** row, or the row that does trip is the
-//! one the census says.
+//! Negative fixtures for census 4.B (`CHAIN_RULES_SLICE_1.md` §7): version
+//! rows (B1, B2, B7), the curve-tree root (B5) and identity (B6). Each test
+//! names its row; each asserts a *refusal* where the row refuses, and — for
+//! the two rows whose statement is "does not reject" — that the mutated
+//! field trips **no** row, or the row that does trip is the one the census
+//! says. Pipeline coverage of the six landed rows lives in
+//! `validate_tests.rs`.
 
 use super::*;
 use crate::block::Candidate;
@@ -129,31 +131,6 @@ fn cen_b7_never_refuses_a_future_version_is_b1s_refusal() {
     assert_refused(judge(with_versions(u8::MAX, 0)), CenRow::B1, Locus::Block);
 }
 
-// --- coverage -------------------------------------------------------------
-
-#[test]
-fn slice_1_rows_are_exactly_what_a_pass_covers() {
-    MockChain::default().with_view(|view| {
-        let valid = infallible(validate(candidate(Vec::new()), &view, &RuleSet::GENESIS))
-            .expect("a well-formed fixture passes every slice-1 row");
-        let covered: Vec<CenRow> = valid.coverage().iter().collect();
-        assert_eq!(
-            covered,
-            [
-                CenRow::A2,
-                CenRow::B1,
-                CenRow::B2,
-                CenRow::B5,
-                CenRow::B6,
-                CenRow::B7
-            ]
-        );
-        assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
-        // Six rows of 153 is not parity evidence.
-        assert!(!valid.coverage().is_complete_for(&RuleSet::GENESIS));
-    });
-}
-
 // --- CEN-B5 ---------------------------------------------------------------
 
 fn three_blocks() -> MockChain {
@@ -267,16 +244,4 @@ fn a_refusal_leaves_no_coverage_behind_it() {
     // B1 refuses before B2/B7 run; the verdict is the refusal, and there is
     // no partial coverage to read — `validate` returns before the mint.
     assert_refused(judge(with_versions(2, 0)), CenRow::B1, Locus::Block);
-}
-
-#[test]
-fn the_registry_binds_each_type_to_its_row() {
-    // The compile-time pin (`census_pin!`) is what holds this; the runtime
-    // echo makes the binding visible in a test name.
-    assert_eq!(<B1 as Rule>::ROW, CenRow::B1);
-    assert_eq!(<B2 as Rule>::ROW, CenRow::B2);
-    assert_eq!(<B7 as Rule>::ROW, CenRow::B7);
-    for row in [CenRow::B1, CenRow::B2, CenRow::B7] {
-        assert_eq!(row.status(), crate::census::RowStatus::Implemented);
-    }
 }

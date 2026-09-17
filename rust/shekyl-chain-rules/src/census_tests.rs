@@ -11,6 +11,9 @@
 use std::collections::BTreeSet;
 
 use crate::census::{CenRow, Flag, PolicyRow, Row, RowStatus};
+use crate::rules::header::{B1, B2, B5, B6, B7};
+use crate::rules::topology::A2;
+use crate::rules::Rule;
 
 /// Every generic property a registry must hold, checked once per `R`.
 fn registry_invariants<R: Row>() {
@@ -101,6 +104,15 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     assert!(PolicyRow::ALL
         .iter()
         .all(|r| r.status() == RowStatus::Pending));
+    // SCW-18's compile-time pin is the check; this is the runtime echo so a
+    // swapped `implemented(B2)` under the B1 entry cannot hide behind a
+    // matching status list.
+    assert_eq!(<A2 as Rule>::ROW, CenRow::A2);
+    assert_eq!(<B1 as Rule>::ROW, CenRow::B1);
+    assert_eq!(<B2 as Rule>::ROW, CenRow::B2);
+    assert_eq!(<B5 as Rule>::ROW, CenRow::B5);
+    assert_eq!(<B6 as Rule>::ROW, CenRow::B6);
+    assert_eq!(<B7 as Rule>::ROW, CenRow::B7);
 }
 
 #[test]

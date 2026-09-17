@@ -40,10 +40,7 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// before block `h` drained — so `roots[0]` is the empty tree, the root
 /// pushed *with* block `h` is `roots[h + 1]`, and `root_at(tip + 1)` is
 /// recorded (the state the next candidate is checked against, CEN-B5) while
-/// `root_at(tip + 2)` is `AboveTip`. The first draft of this mock returned
-/// the root pushed with block `h` at `h` and `AboveTip` at `tip + 1`; B5's
-/// fixture (slice 1) is what caught the one-height disagreement with the
-/// store — the same axis SCW-19 corrected there.
+/// `root_at(tip + 2)` is `AboveTip`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MockChain {
     recorded: Vec<RecordedBlock>,

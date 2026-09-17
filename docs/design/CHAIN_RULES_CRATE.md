@@ -1180,9 +1180,10 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   (`None` ⇔ the txid is 3-part) plus the two-supplied form
   `hash_with_supplied_components(pqc_auth, prunable)`, of which `hash()`
   is `txid_parts().hash` as bytes and `hash_with_supplied_prunable` is the
-  one-supplied mixer. The mixer's arity is the `Option` after a prefix
-  filter (`has_pqc_component`), so a supplied `Some` on a 3-part prefix is
-  dropped, not mixed, and the skeleton (`PDM-Q-F28`: neither region held)
+  one-supplied mixer. The mixer's arity is the `Option` after
+  `prefix_carries_pqc_component` drops a `Some` the prefix cannot carry,
+  so a supplied component on a 3-part prefix is dropped, not mixed, and
+  the skeleton (`PDM-Q-F28`: neither region held)
   reconstructs its 4-part txid from the two stored digests. KAT'd
   against the pinned oracle txid on the full body **and** the skeleton
   (`pruned_tx_hash_parity`), and on the 3-part forms — coinbase,

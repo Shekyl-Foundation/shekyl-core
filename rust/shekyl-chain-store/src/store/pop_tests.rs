@@ -14,7 +14,7 @@ use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
 use shekyl_types::BlockHeight;
 use shekyl_wire::Transaction;
 
-use super::connect_tests::{candidate, facts, spend};
+use super::connect_fixtures::{candidate, facts, spend};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::view::BatchView;
 use super::*;
