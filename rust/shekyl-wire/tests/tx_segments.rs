@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
+use shekyl_types::PrunableHash;
 use shekyl_wire::{Block, Transaction};
 
 fn hex_bytes(s: &str) -> Vec<u8> {
@@ -77,9 +78,9 @@ fn prunable_hash_is_keccak_of_the_prunable_segment_on_both_shapes() {
             .as_str()
             .expect("prunable_hash_hex"),
     );
-    assert_eq!(tx.prunable_hash().as_slice(), want.as_slice());
+    assert_eq!(tx.prunable_hash().as_bytes().as_slice(), want.as_slice());
     assert_eq!(
-        tx.prunable_hash(),
+        tx.prunable_hash().to_bytes(),
         shekyl_crypto_hash::keccak256(&tx.write_segments().expect("segments").prunable)
     );
 
@@ -89,12 +90,15 @@ fn prunable_hash_is_keccak_of_the_prunable_segment_on_both_shapes() {
     let block =
         Block::from_bytes(include_bytes!("vectors/regtest_coinbase_h1.block")).expect("block");
     let miner = &block.miner_transaction;
-    assert_eq!(miner.prunable_hash(), shekyl_crypto_hash::keccak256(&[]));
-    assert_ne!(miner.prunable_hash(), [0u8; 32]);
+    assert_eq!(
+        miner.prunable_hash().to_bytes(),
+        shekyl_crypto_hash::keccak256(&[])
+    );
+    assert_ne!(miner.prunable_hash().to_bytes(), [0u8; 32]);
     // And the txid is unchanged by having factored the digest out.
     assert_eq!(
         miner.hash(),
-        miner.hash_with_supplied_prunable([0x77; 32]),
+        miner.hash_with_supplied_prunable(PrunableHash::from_bytes([0x77; 32])),
         "a coinbase txid ignores any supplied digest (Null arm)"
     );
 }

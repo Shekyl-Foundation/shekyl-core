@@ -1176,12 +1176,13 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   serve-credit (`None`; the countersignature rides the vin), a coinbase
   handed components anyway — and on the bond-post (4-part like any spend:
   the identity signature is a tx-level `pqc_auths` slot, so the arity is
-  the predicate's, never an input arm's). **One §7.7 deviation, recorded
-  there when this lands:** item 2 was written as taking
-  `Option<PqcAuthHash>` / `PrunableHash`; the wire crate is a leaf with no
-  `shekyl-types` dependency (as `hash_with_supplied_prunable([u8; 32])`
-  already shows), so the wire surface stays `[u8; 32]` and the typed
-  boundary is `TxIdentity`, where it already was for `PrunableHash`. Item
+  the predicate's, never an input arm's). The wire surface is **typed as
+  §7.7 wrote it** — `Option<PqcAuthHash>` / `PrunableHash` in and out of
+  `shekyl-wire`, which takes the `shekyl-types` dependency for it — so a
+  txid, a `PqcAuthHash` and a `PrunableHash` cannot be transposed into the
+  supplied forms; the raw `[u8; 32]` the crate carried there was unfinished
+  migration (`RAW_TYPE_NEWTYPE_MIGRATION.md` §6), not a boundary, and
+  `hash()`'s own return type is that plan's remaining row. Item
   3 — the `txs_pqc_auth_hash` row — stays where §7.7 put it: S-CHAIN-W
   amendment A3 on S-CHAIN-R's layout commit, one `SCHEMA_VERSION` bump;
   its input now exists on the identity `connect` is handed.

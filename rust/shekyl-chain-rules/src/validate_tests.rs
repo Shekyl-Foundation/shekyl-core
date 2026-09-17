@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, TxHash};
+use shekyl_types::{BlockHash, TxHash};
 
 use super::*;
 use crate::census::CenRow;
@@ -45,8 +45,8 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     let expected_hash = BlockHash::from_bytes(input.block.hash());
     let identity = |tx: &Transaction| TxIdentity {
         hash: TxHash::from_bytes(tx.hash()),
-        pqc_auth_hash: tx.pqc_auth_hash().map(PqcAuthHash::from_bytes),
-        prunable_hash: PrunableHash::from_bytes(tx.prunable_hash()),
+        pqc_auth_hash: tx.pqc_auth_hash(),
+        prunable_hash: tx.prunable_hash(),
     };
     let expected_miner = identity(&input.block.miner_transaction);
     let expected_listed: Vec<(TxIdentity, Transaction)> = input

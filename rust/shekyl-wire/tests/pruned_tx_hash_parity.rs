@@ -45,6 +45,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
+use shekyl_types::PrunableHash;
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
@@ -174,7 +175,10 @@ fn regenerate_pruned_tx_hash_parity_fixture() {
     let digest = prunable_digest();
     // The two derivations must already agree in Rust before either is pinned:
     // the pruned identity with the true digest supplied IS the txid.
-    assert_eq!(tx.hash(), tx.hash_with_supplied_prunable(digest));
+    assert_eq!(
+        tx.hash(),
+        tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))
+    );
     let doc = serde_json::json!({
         "format_version": 1,
         "description": "Pruned-identity KAT for the 4-part FCMP++/PQC spend arm \
@@ -239,7 +243,7 @@ fn pruned_spend_identity_matches_the_pinned_oracle() {
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&hex_bytes(prunable_hash_hex));
     assert_eq!(
-        hex_str(&pruned.hash_with_supplied_prunable(digest)),
+        hex_str(&pruned.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
         tx_hash_hex,
         "pruned identity (supplied digest) diverged from the pinned txid"
     );
@@ -279,9 +283,13 @@ fn skeleton_identity_reconstructs_the_pinned_txid_from_both_stored_digests() {
     let segments = tx.write_segments().expect("segments");
     let mut auth_buf = vec![1u8]; // varint(1): build_tx carries one auth
     auth_buf.extend_from_slice(&segments.pqc_auths);
-    assert_eq!(pqc_auth, keccak256(&auth_buf), "third component derivation");
+    assert_eq!(
+        pqc_auth.to_bytes(),
+        keccak256(&auth_buf),
+        "third component derivation"
+    );
     assert_ne!(
-        pqc_auth,
+        pqc_auth.to_bytes(),
         keccak256(&segments.pqc_auths),
         "the stored segment's hash is not the txid component"
     );
@@ -401,7 +409,7 @@ fn live_oracle_spend_identity_matches_the_accepted_bytes() {
     );
     let digest = keccak256(&bytes[pruned_form.len()..]);
     assert_eq!(
-        hex_str(&tx.hash_with_supplied_prunable(digest)),
+        hex_str(&tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
         tx_hash_hex,
         "pruned identity (supplied digest) diverged from the accepted txid"
     );

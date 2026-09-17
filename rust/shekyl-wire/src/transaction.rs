@@ -44,6 +44,7 @@
 use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
+use shekyl_types::{PqcAuthHash, PrunableHash};
 
 use crate::bytes::{read_array, read_byte};
 use crate::hash::hash_concat;
@@ -1646,12 +1647,12 @@ impl Transaction {
     /// store's row for a coinbase is the latter. When the region is present
     /// the two coincide, and [`Self::hash`] is built from this value.
     #[must_use]
-    pub fn prunable_hash(&self) -> [u8; 32] {
+    pub fn prunable_hash(&self) -> PrunableHash {
         let mut prunable = Vec::new();
         self.ct
             .write_prunable(&mut prunable)
             .expect("Vec write is infallible");
-        keccak256(&prunable)
+        PrunableHash::from_bytes(keccak256(&prunable))
     }
 
     /// The txid's **third component** — `keccak256(varint(count) ‖ auths)`
@@ -1675,7 +1676,7 @@ impl Transaction {
     /// hashes with (`cryptonote_format_utils.cpp:1169`, `begin_array(cnt)`),
     /// unlike the tx *body*, where the count is implicit in `vin.size()`.
     #[must_use]
-    pub fn pqc_auth_hash(&self) -> Option<[u8; 32]> {
+    pub fn pqc_auth_hash(&self) -> Option<PqcAuthHash> {
         let Ct::Fcmp { pqc_auths, .. } = &self.ct else {
             return None;
         };
@@ -1687,7 +1688,7 @@ impl Transaction {
         for auth in pqc_auths {
             auth.write(&mut auth_buf).expect("Vec write is infallible");
         }
-        Some(keccak256(&auth_buf))
+        Some(PqcAuthHash::from_bytes(keccak256(&auth_buf)))
     }
 
     /// The consensus transaction hash of a **pruned** body, with the prunable
@@ -1705,8 +1706,11 @@ impl Transaction {
     ///
     /// The `pqc_auths` component is still computed from the body: this is the
     /// storage-pruned *spend* form, which keeps them. A body holding neither
-    /// region is [`Self::hash_with_supplied_components`]'s case.
-    pub fn hash_with_supplied_prunable(&self, prunable_hash: [u8; 32]) -> [u8; 32] {
+    /// region is [`Self::hash_with_supplied_components`]'s case. The operand
+    /// is a [`PrunableHash`], not a bare `[u8; 32]`: what the store hands
+    /// back is typed at the row, and a txid or a `PqcAuthHash` passed here is
+    /// a compile error rather than a wrong identity.
+    pub fn hash_with_supplied_prunable(&self, prunable_hash: PrunableHash) -> [u8; 32] {
         self.hash_from_components(
             self.pqc_auth_hash(),
             self.prunable_component(Some(prunable_hash)),
@@ -1734,8 +1738,8 @@ impl Transaction {
     /// region, and its `pqc_auth` is necessarily `None`.
     pub fn hash_with_supplied_components(
         &self,
-        pqc_auth: Option<[u8; 32]>,
-        prunable_hash: [u8; 32],
+        pqc_auth: Option<PqcAuthHash>,
+        prunable_hash: PrunableHash,
     ) -> [u8; 32] {
         self.hash_from_components(pqc_auth, self.prunable_component(Some(prunable_hash)))
     }
@@ -1760,15 +1764,15 @@ impl Transaction {
     /// for `Null`, the null hash regardless — a coinbase has no prunable
     /// region at all, so its component is fixed whether or not a digest was
     /// supplied.
-    fn prunable_component(&self, supplied: Option<[u8; 32]>) -> [u8; 32] {
+    fn prunable_component(&self, supplied: Option<PrunableHash>) -> [u8; 32] {
         match (&self.ct, supplied) {
-            (Ct::Fcmp { .. }, Some(h)) => h,
+            (Ct::Fcmp { .. }, Some(h)) => h.to_bytes(),
             (
                 Ct::Fcmp {
                     prunable: Some(_), ..
                 },
                 None,
-            ) => self.prunable_hash(),
+            ) => self.prunable_hash().to_bytes(),
             // A coinbase regardless of what was supplied; a spend whose region
             // is absent and whose digest was not supplied.
             (Ct::Null(_), _) | (Ct::Fcmp { prunable: None, .. }, None) => [0u8; 32],
@@ -1782,7 +1786,7 @@ impl Transaction {
     /// `serve_credit_tx_parity`, each with a C++ leg asserting the same pin);
     /// the live-oracle pin (`live_oracle_spend_v1.json`) binds both languages
     /// to a daemon-accepted spend.
-    fn hash_from_components(&self, pqc_auth: Option<[u8; 32]>, prunable: [u8; 32]) -> [u8; 32] {
+    fn hash_from_components(&self, pqc_auth: Option<PqcAuthHash>, prunable: [u8; 32]) -> [u8; 32] {
         let mut prefix_buf = Vec::new();
         write_varint(TX_VERSION, &mut prefix_buf).expect("Vec write is infallible");
         self.prefix
@@ -1809,7 +1813,7 @@ impl Transaction {
                 let h_base = keccak256(&base_buf);
                 match pqc_auth {
                     Some(h_auths) if self.has_pqc_component(true) => {
-                        hash_concat(&[h_prefix, h_base, h_auths, prunable])
+                        hash_concat(&[h_prefix, h_base, h_auths.to_bytes(), prunable])
                     }
                     _ => hash_concat(&[h_prefix, h_base, prunable]),
                 }

@@ -49,7 +49,11 @@
   of one construction with one arity predicate, so a node holding only a
   skeleton (neither `pqc_auths` nor the prunable region) reconstructs its
   4-part txid from the two stored digests — pinned to the oracle txid in
-  `pruned_tx_hash_parity`. The `txs_pqc_auth_hash` store row (item 3) lands
+  `pruned_tx_hash_parity`. **The component surface is typed:**
+  `prunable_hash()` now returns `PrunableHash` and both supplied forms take
+  `PrunableHash` / `Option<PqcAuthHash>` (`shekyl-wire` depends on
+  `shekyl-types`), so the two digests a store hands back cannot be swapped
+  into the wrong operand. The `txs_pqc_auth_hash` store row (item 3) lands
   with S-CHAIN-R's layout commit.
 
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin

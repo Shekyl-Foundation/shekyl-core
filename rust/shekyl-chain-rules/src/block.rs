@@ -42,8 +42,8 @@ impl TxIdentity {
     fn of(tx: &Transaction) -> Self {
         Self {
             hash: TxHash::from_bytes(tx.hash()),
-            pqc_auth_hash: tx.pqc_auth_hash().map(PqcAuthHash::from_bytes),
-            prunable_hash: PrunableHash::from_bytes(tx.prunable_hash()),
+            pqc_auth_hash: tx.pqc_auth_hash(),
+            prunable_hash: tx.prunable_hash(),
         }
     }
 }

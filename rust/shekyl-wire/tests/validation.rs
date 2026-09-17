@@ -11,6 +11,7 @@
 mod common;
 use common::conforming_pqc_extra;
 
+use shekyl_types::{PqcAuthHash, PrunableHash};
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
@@ -505,7 +506,10 @@ fn txid_arity_is_the_predicate_s_not_the_input_arm_s() {
     let coinbase = &blk.miner_transaction;
     assert_eq!(coinbase.pqc_auth_hash(), None, "a coinbase is 3-part");
     assert_eq!(
-        coinbase.hash_with_supplied_components(Some([0xAB; 32]), [0xCD; 32]),
+        coinbase.hash_with_supplied_components(
+            Some(PqcAuthHash::from_bytes([0xAB; 32])),
+            PrunableHash::from_bytes([0xCD; 32])
+        ),
         coinbase.hash(),
         "a coinbase ignores supplied components: it has neither region"
     );

@@ -69,6 +69,7 @@ use shekyl_rpc_types::{
     TxEntry,
 };
 use shekyl_scanner::ScannableBlock;
+use shekyl_types::PrunableHash;
 use shekyl_wire::{block::MAX_BLOCK_BLOB_SIZE, transaction::MAX_TX_SIZE, Block, Transaction};
 
 /// Monero restricts `get_transactions` to 100 hashes per call on the
@@ -469,7 +470,8 @@ pub(crate) fn parse_tx_batch(
         // digest freely leaves it solving `H(prefix ‖ base ‖ pqc ‖ X) = txid`
         // for `X`, a keccak preimage, not a substitution.
         let recomputed = match form {
-            TxBodyForm::Pruned => parsed.hash_with_supplied_prunable(t.prunable_hash.to_bytes()),
+            TxBodyForm::Pruned => parsed
+                .hash_with_supplied_prunable(PrunableHash::from_bytes(t.prunable_hash.to_bytes())),
             TxBodyForm::Full => parsed.hash(),
         };
         if recomputed != *expected_hash {

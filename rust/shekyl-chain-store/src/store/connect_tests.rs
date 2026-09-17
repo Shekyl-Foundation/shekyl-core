@@ -298,7 +298,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .get(0)
             .expect("g")
             .map(|g| g.value()),
-        Some(Hash32::from_bytes(miner.prunable_hash())),
+        Some(Hash32::from_bytes(miner.prunable_hash().to_bytes())),
         "keccak256 of the empty region, not the null hash"
     );
     assert_eq!(
