@@ -588,7 +588,7 @@ census_rows! {
 Grammar: header `pub enum <Name>: <Consensus|Policy> { … }`; per entry
 `<Var> <pending | implemented(<rust::path>) | held_by_cxx("<repo/file.cpp>", "<test>")> ,`
 with optional `///` doc and `//` comments between entries. `held_by_cxx`
-(slice 1, Q2 — [`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §4.1) marks
+(slice 1, Q2 — [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §4.1) marks
 acceptance topology the C++ ingest driver decides until cutover; the value is
 the C++ **test that proves the holder refuses**, which the gate asserts
 exists, and the row leaves `RuleSet::enforced()` so completeness is `E − H`. Entries are in census §4 order restricted to the flag
@@ -1125,7 +1125,7 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
 ## 13. Owed to later increments (named, with consumers) — none deferred from this one
 
 - ~~`ChainView::tip()`~~ — **DISCHARGED** by slice 1 (shape ruled at
-  [`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §2:
+  [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §2:
   `Result<Option<Tip { height, hash }>, Fault>`; §4.3 above).
 - `difficulty_at` — **slice 2 (4.D)**, handed to this crate by S-CHAIN-R's
   round-1 Q1 (`DRS_E1_SCHAIN_R.md` (PR #760, not yet on `dev` — linked at landing) SCR-3): the store
@@ -1253,4 +1253,4 @@ blocked on #751 — was discharged in this PR when #751 merged (§6.1, Q7).
 Slice 1's own deferrals (CEN-B4 to the increment landing the bond-pubkey
 read; CEN-A3 subsumed into it; CEN-A5 subsumed into 4.G; CEN-A6/A7 to the
 wire-side invariant register) are recorded at
-[`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §3–§4 and §8 Q2/Q3.
+[`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §3–§4 and §8 Q2/Q3.

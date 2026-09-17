@@ -1,22 +1,19 @@
 # `shekyl-chain-rules` slice 1 — census 4.A + 4.B (DRS-E6 increment 2)
 
-**Status:** OPEN — **implementation LANDING** (2026-09-16):
-#762 (`Rule`/`BlockRule`, SCW-18 pin, B1/B2/B7 — **merged**), #767
-(`held_by_cxx`, A1/A4 — **merged**, `origin/dev` `4bc378d68`) and #768
-(`ChainView::tip()`, A2, B5, B6 — **in flight**). Not landed until #768 is
-on `dev`. Round 1 = pre-flight written against `dev` @ `3560b80c2`; ruled in
-full the same day (Q1 §2, Q2–Q6 §8). **Closes when the `tip()` PR is on
-`dev`; that PR `git mv`s this document to `docs/completed/`**
-(rule 95 archive-or-contract). Record at close: `consensus: implemented 6 /
-validator-enforced 151   held-by-cxx 2   enforced 153   ratified 126 /
-enforced 153`. §9 points at
-DRS §7.6 (PR #760), the same-day parity-then-repair ruling, and records what
-slice 1 owes to it. Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md)
-§7.5.1 (the increment's pre-flight names its parents, audits each row's body,
-lists the fixture per row). Parent plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
-§7.5 (table 3 row "slice 1"). Cites `26-sub-pr-design-discipline.mdc`
-(A2 audit-against-actual-code, B5 per-commit cleanliness, B6 numeric
-verification, the review-round denominator).
+**Status:** CLOSED-as-record — **implementation LANDED** on PR #768
+(2026-09-17). #762 (`Rule`/`BlockRule`, SCW-18 pin, B1/B2/B7), #767
+(`held_by_cxx`, A1/A4) and #768 (`ChainView::tip()`, A2, B5, B6;
+`PDM-Q-F26` items 1–2) are the three landing PRs; this file archives with
+the last of them. Round 1 = pre-flight written against `dev` @ `3560b80c2`;
+ruled in full the same day (Q1 §2, Q2–Q6 §8). Record at close:
+`consensus: implemented 6 / validator-enforced 151   held-by-cxx 2
+enforced 153   ratified 126 / enforced 153`. Residue F2 (CEN-A7 count
+bounds) lives in FOLLOWUPS, owner the wire-format port. Template:
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §7.5.1. Parent
+plan: [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7.5.
+Cites `26-sub-pr-design-discipline.mdc`. The living contract is
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md); do not implement
+from this file.
 
 **Scope (table 3).** The surface-free rows of 4.A (7) and 4.B (6; CEN-B3 is
 surface-bound and arrived with S-CHAIN-W — table 2). Plus the one `ChainView`
@@ -569,7 +566,7 @@ correction); every knowingly-reproduced deviation carries its ratified state
 and they share one query, owed to DRS-E2's pre-flight; bucket-4 rows and
 reproduced deviations share one denominator; the comparator gates cutover
 and `ratified / enforced` gates release — is **recorded once, at
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.6**, minted by the
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7.6**, minted by the
 S-CHAIN-R lane's PR #760 at the same review, with the §8.1 release-gate
 checklist item beside it. This document does **not** restate it (an earlier
 revision of this PR did, in DRS §7.5.1 and §15; withdrawn 2026-09-16 when
@@ -582,7 +579,7 @@ the two lanes synchronised — one ruling, one home). What slice 1 owes to
   three-field form (reproduced / why / what correct looks like) so it moves
   into the one query unchanged when E2 mints it.
 - **The crate-side statement of what its two figures gate** is
-  [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §6.3, pointing at §7.6.
+  [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §6.3, pointing at §7.6.
 - **Two figures checked against landed text while folding (rule 26 B6),
   reported to the §7.6 owner on PR #760 rather than edited across lanes:**
   (i) §7.6 item 3 says parity evidence "was already defined as `implemented

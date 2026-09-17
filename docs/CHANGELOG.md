@@ -36,7 +36,7 @@
   acceptance topology the C++ ingest driver decides until cutover, each
   entry naming the core test that proves it, printed by the coverage gate as
   `validator-enforced = E − H` beside a fixed `E`. No daemon path calls
-  `validate` yet ([`CHAIN_RULES_SLICE_1.md`](design/CHAIN_RULES_SLICE_1.md)).
+  `validate` yet ([`CHAIN_RULES_SLICE_1.md`](completed/CHAIN_RULES_SLICE_1.md)).
 
 - **The txid's third component is derived and carried (`PDM-Q-F26`, items
   1–2 of `DAEMON_REDB_STORE.md` §7.7).** `TxIdentity` gains
