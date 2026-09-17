@@ -18,6 +18,48 @@ use shekyl_wire::{Block, BlockHeader, Transaction};
 /// a consensus-visible value (C2-R8 Q4). For a coinbase `prunable_hash` is
 /// `keccak256("")` — what the C++ store writes — not the txid's null-hash
 /// substitute; see [`PrunableHash`].
+///
+/// **Incomplete by one component — owed, not optional (`PDM-Q-F26`,
+/// `ARCHIVAL_PRUNED_DAEMON_MODE.md`).** A spend's txid is 4-part:
+/// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. This identity carries
+/// the fourth component and omits the third. Under `PDM-Q6` the `pqc_auths`
+/// slice (~60 % of spend bytes) is the archival good's second occupant and
+/// is discardable only against a persisted per-tx hash of it; the txid
+/// already commits that hash, and `Transaction::hash()` computes it on the
+/// way. The next increment that touches this type adds
+/// `pqc_auth_hash: Option<PqcAuthHash>` — the txid's third component, over
+/// `varint(count) ‖ auths` exactly as the txid hashes it, **not**
+/// `keccak256` of the raw `txs_pqc_auths` segment (which has no count
+/// prefix and so verifies nothing the chain signed) — with a KAT against
+/// `Transaction::hash()`, and the store records it beside
+/// `txs_prunable_hash`.
+///
+/// `Option`, because the component is absent from the txid itself, not
+/// merely from the store: the coinbase (`Ct::Null`) and any spend whose
+/// `pqc_auths` is empty (the serve-credit form) hash **3-part**, so `None`
+/// is "the txid has no such component" and a sentinel — the null hash, or
+/// `keccak256(varint(0))` — would label the miner tx with a value the chain
+/// never committed. (`prunable_hash`'s coinbase value is a sentinel only
+/// because C++-store parity forced one; no C++ row exists here to force
+/// anything.) The store invariant has three legs, because under `PDM-Q6`
+/// a hash row **without** its segment is the steady state of every 4-part
+/// tx below the universal window `W`, not a fault:
+///
+/// 1. hash row present ⇔ txid 4-part — permanent, written at connect,
+///    never deleted (`validate` rejects the one shape, gen-first with
+///    auths, that could split "4-part" from "segment non-empty");
+/// 2. segment present ⇒ hash row present — a body the store cannot verify
+///    is the invariant violation;
+/// 3. hash row present ∧ segment absent ⇔ *discarded* — below `W` and not
+///    a retention exception, or never held (a band-1 skeleton). One store
+///    state with one meaning, however the node arrived at it.
+///
+/// So `None` here is *the txid has no third component*; leg 3 is *the
+/// component exists and the bytes do not*. They are different facts and
+/// must not share a representation. Contract on the row before the
+/// implementation that would omit it (SCW-7's standard). A `PDM-Q6`
+/// ruling that keeps `pqc_auths` universal retires the *row*, not the
+/// component.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TxIdentity {
     /// The transaction hash (txid).
