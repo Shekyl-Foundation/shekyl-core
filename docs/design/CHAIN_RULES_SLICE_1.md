@@ -258,7 +258,9 @@ does not match), refuses a bare path / unquoted / non-identifier form as an
 unparseable entry, and refuses `held_by_cxx` on a row whose census `site(s)`
 cell places the rule outside C++ (a Rust `.rs:N` site; a bare line citation
 is C++ by the census's own §4 default, `blockchain.cpp`). `--selftest`
-exercises every refusal red (41 in total after this PR). Rust side:
+exercises every refusal red (49 in total at #767's second review pass — the
+first cut had 41; the review added the holder-path, registration and
+comment-stripping refusals). Rust side:
 `RowStatus::HeldByCxx`, and `RuleSet::enforced()` filters held rows so
 `is_complete_for` measures `E − H`; the `RuleSet` `Debug` prints
 "151 of 153 rows (validator-enforced; held rows excluded)". **Record as

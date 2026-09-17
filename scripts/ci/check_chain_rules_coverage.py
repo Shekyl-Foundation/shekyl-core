@@ -126,6 +126,14 @@ CXX_SITE_RE = re.compile(rf"\.(?:{_CXX_SUFFIX})\b|^\s*\d+")
 # and an absolute path is not repo-relative — both are refused before the
 # file is read, so the registry cannot become environment-specific.
 CXX_HOLDER_RE = re.compile(rf"^(?!/)(?!\w:)(?!\.\.)[^\s]+\.(?:{_CXX_SUFFIX})$")
+# `core_tests` generators run only if registered with `GENERATE_AND_PLAY(name)`
+# in this one file; a generator that is defined but unregistered compiles,
+# is never played, and would leave a hold green while CTest ran without it
+# (PR #767 review). gtest cases (`tests/unit_tests/`) self-register through
+# their `TEST(...)` macro, so the definition is the registration there.
+CORE_TESTS_DIR = "tests/core_tests/"
+CORE_TESTS_REGISTRY = "tests/core_tests/chaingen_main.cpp"
+
 MOD_DECL_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+census\s*;\s*$", re.M)
 DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 
@@ -405,11 +413,27 @@ def check_held(entries: list[Entry], rows: list[Row], cxx: Callable[[str], str |
                 "tree — the hold has expired with its holder (cutover); re-classify the row"
             )
             continue
-        if not re.search(rf"\b{re.escape(test)}\b", text):
+        if not re.search(rf"\b{re.escape(test)}\b", strip_comments(text)):
             errors.append(
                 f"held_by_cxx entry {e.id} (line {e.line}): holder test {test!r} is not in "
                 f"{file!r} — a hold names a test that proves the holder refuses"
             )
+            continue
+        if file.startswith(CORE_TESTS_DIR):
+            registry = cxx(CORE_TESTS_REGISTRY)
+            if registry is None:
+                errors.append(
+                    f"held_by_cxx entry {e.id} (line {e.line}): core_tests registry "
+                    f"{CORE_TESTS_REGISTRY!r} is not in the tree — cannot show {test!r} is played"
+                )
+            elif not re.search(
+                rf"GENERATE_AND_PLAY\(\s*{re.escape(test)}\s*\)", strip_comments(registry)
+            ):
+                errors.append(
+                    f"held_by_cxx entry {e.id} (line {e.line}): holder test {test!r} is defined "
+                    f"but not registered with GENERATE_AND_PLAY in {CORE_TESTS_REGISTRY!r} — "
+                    "an unregistered generator is never played, and the hold would be vacuous"
+                )
 
 
 def check(inputs: Inputs) -> tuple[list[str], dict[str, Figures]]:
@@ -593,13 +617,23 @@ workspace = true
 # The fake C++ tree a `held_by_cxx` entry is checked against: one file, one
 # test. `_cxx_missing_test` has the file without the test; the empty tree is
 # cutover.
+_CXX_REGISTRY_OK = "int main() {\n    GENERATE_AND_PLAY(gen_block_already_known);\n}\n"
 _CXX_OK = {
     "tests/core_tests/block_validation.cpp": (
         "struct gen_block_already_known : public gen_block_accepted_base<2> {};\n"
         "// gen_block_already_known_is_not_this — a longer identifier must not match\n"
-    )
+    ),
+    CORE_TESTS_REGISTRY: _CXX_REGISTRY_OK,
 }
-_CXX_MISSING_TEST = {"tests/core_tests/block_validation.cpp": "struct gen_block_other {};\n"}
+_CXX_MISSING_TEST = {
+    "tests/core_tests/block_validation.cpp": "struct gen_block_other {};\n",
+    CORE_TESTS_REGISTRY: _CXX_REGISTRY_OK,
+}
+# Defined but never registered: the generator compiles and is never played.
+_CXX_UNREGISTERED = {
+    "tests/core_tests/block_validation.cpp": _CXX_OK["tests/core_tests/block_validation.cpp"],
+    CORE_TESTS_REGISTRY: "int main() {\n    GENERATE_AND_PLAY(gen_block_other);\n    // GENERATE_AND_PLAY(gen_block_already_known); — commented out is not registered\n}\n",
+}
 
 
 def _inputs(cxx: dict[str, str] | None = None, **over: str | None) -> Inputs:
@@ -666,7 +700,11 @@ def selftest() -> None:
     # held_by_cxx — the three refusals (CHAIN_RULES_SLICE_1.md §4.1) and the grammar
     _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', cxx={}), "holder file 'tests/core_tests/block_validation.cpp' is not in the tree — the hold has expired", "holder file gone (cutover)")
     _expect_refusal(_inputs(cxx=_CXX_MISSING_TEST), "holder test 'gen_block_already_known' is not in 'tests/core_tests/block_validation.cpp'", "holder test missing")
-    _expect_refusal(_inputs(cxx={"tests/core_tests/block_validation.cpp": "gen_block_already_known_is_not_this\n"}), "holder test 'gen_block_already_known' is not in", "holder test only as a prefix of a longer identifier")
+    _expect_refusal(_inputs(cxx={"tests/core_tests/block_validation.cpp": "gen_block_already_known_is_not_this\n", CORE_TESTS_REGISTRY: _CXX_REGISTRY_OK}), "holder test 'gen_block_already_known' is not in", "holder test only as a prefix of a longer identifier")
+    _expect_refusal(_inputs(cxx=_CXX_UNREGISTERED), "is defined but not registered with GENERATE_AND_PLAY", "core_tests generator defined but unregistered (a commented-out registration is not one)")
+    _expect_refusal(_inputs(cxx={"tests/core_tests/block_validation.cpp": "// TODO: gen_block_already_known\n", CORE_TESTS_REGISTRY: _CXX_REGISTRY_OK}), "holder test 'gen_block_already_known' is not in", "holder test named only in a comment")
+    _expect_refusal(_inputs(cxx={"tests/core_tests/block_validation.cpp": _CXX_OK["tests/core_tests/block_validation.cpp"]}), "core_tests registry 'tests/core_tests/chaingen_main.cpp' is not in the tree", "core_tests registry file missing")
+    _expect_ok(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/unit_tests/ingest.cpp", "gen_block_already_known"),', cxx={"tests/unit_tests/ingest.cpp": "TEST(ingest, gen_block_already_known) {}\n"}), "a gtest case self-registers: the definition is the registration")
     _expect_refusal(_inputs(census=_CENSUS_OK.replace("| CEN-A4 | already known | 6626 (bare line: the census default `blockchain.cpp`) |", "| CEN-A4 | already known | `rust/shekyl-daemon/src/ingest.rs:40` |")), "cites no C++ source — only a C++-held row may be held_by_cxx", "held row whose census site is Rust")
     _expect_ok(_inputs(census=_CENSUS_OK.replace("| CEN-A4 | already known | 6626 (bare line: the census default `blockchain.cpp`) |", "| CEN-A4 | already known | `src/cryptonote_core/cryptonote_core.cpp:1450` |")), "an explicit C++ site is a C++ site")
     _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/core_tests/block_validation.cpp"),'), "unparseable entry at line 10", "held_by_cxx with a bare path and no test")
@@ -676,7 +714,7 @@ def selftest() -> None:
     _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("../elsewhere/x.cpp", "gen_block_already_known"),', cxx={"../elsewhere/x.cpp": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder path escapes the repo")
     _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("rust/shekyl-chain-rules/src/lib.rs", "gen_block_already_known"),', cxx={"rust/shekyl-chain-rules/src/lib.rs": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder is a Rust file that contains the identifier")
     _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("docs/design/X.md", "gen_block_already_known"),', cxx={"docs/design/X.md": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder is a Markdown file")
-    _expect_ok(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/unit_tests/ingest.cc", "gen_block_already_known"),', cxx={"tests/unit_tests/ingest.cc": "gen_block_already_known"}), "a .cc holder is a C++ holder")
+    _expect_ok(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/unit_tests/ingest.cc", "gen_block_already_known"),', cxx={"tests/unit_tests/ingest.cc": "TEST(ingest, gen_block_already_known) {}\n"}), "a .cc holder is a C++ holder")
     _expect_ok(_inputs(census=_CENSUS_OK.replace("| CEN-A4 | already known | 6626 (bare line: the census default `blockchain.cpp`) |", "| CEN-A4 | already known | `src/fcmp/bulletproofs_plus.cc:40` |")), "a .cc census site is a C++ site")
     # the production reader refuses what the grammar cannot see: an absolute
     # path pointing INSIDE the checkout, and a `..` that resolves inside it
