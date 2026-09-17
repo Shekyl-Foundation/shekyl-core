@@ -10,9 +10,10 @@
 # `rust/shekyl-chain-rules/src/census.rs` declares two `census_rows!`
 # registries — `CenRow` for the consensus flag, `PolicyRow` for the policy
 # flag — one variant per ENFORCED row (bucket ≠ 3) of CONSENSUS_RULE_CENSUS.md
-# §4, in census order, each marked `pending` or `implemented(path)`. The
-# registry is the crate's claim about which rules exist; the census is the
-# denominator that claim is measured against. Nothing else compares them, so
+# §4, in census order, each marked `pending`, `implemented(path)` or
+# `held_by_cxx("file", "test")`. The registry is the crate's claim about which
+# rules exist and which rows the C++ ingest driver still holds; the census is
+# the denominator that claim is measured against. Nothing else compares them, so
 # this gate does, and it is the ONLY place the crate's "N of M" figure is
 # computed (CHAIN_RULES_CRATE.md §6; CONSENSUS_C2_R8_STORE_PLACEMENT.md §9.4).
 #
@@ -25,9 +26,17 @@
 #   order     — entries appear in census §4 order, so `Row::index()` is
 #               census-derived rather than editorial;
 #   grammar   — one `census_rows!` per flag, a parseable header, every entry
-#               `Var pending,` or `Var implemented(rust::path),`, no attribute
+#               `Var pending,`, `Var implemented(rust::path),` or
+#               `Var held_by_cxx("tests/….cpp", "gen_test"),`, no attribute
 #               on an entry (a `#[cfg]` the gate cannot evaluate would let the
 #               compiled enum and the counted enum differ);
+#   held      — a `held_by_cxx` row (CHAIN_RULES_SLICE_1.md §4.1, Q2) cites
+#               the C++ TEST that proves the holder refuses, not a token: the
+#               cited file must exist and contain the test name, and the
+#               census row's own `site(s)` cell must cite a C++ file. The file
+#               leaving the tree at cutover turns this red — a hold expires
+#               with its holder, never silently (PWD-B10: holder-exists is
+#               not holder-enforces);
 #   G1 direct — the crate's Cargo.toml names neither `redb` nor
 #               `shekyl-chain-store` in any dependency table (the transitive
 #               half is `check_chain_rules_no_store.sh`, which needs cargo).
@@ -35,8 +44,12 @@
 # The two flags are reported on two lines and never summed: a policy row
 # counted toward consensus coverage is the proximity promotion the sibling
 # enums exist to make unrepresentable. `implemented` is the registry's word;
-# the compiler pins it (the macro emits `use path as _;`), so this gate does
-# not run cargo and does not need to.
+# the compiler pins it (the macro emits `use path as _;` and the SCW-18 ROW
+# assertion), so this gate does not run cargo and does not need to.
+#
+# The held figure is a SUBTRACTION, not a third denominator: the line prints
+# `implemented I / validator-enforced (E − H)   held-by-cxx H   enforced E`
+# with E fixed, so coverage cannot improve by moving rows out of scope.
 #
 # Rule 47: the gate asserts its own subject. A missing registry file, a
 # registry `lib.rs` does not compile (`mod census;` absent), a flag with no
@@ -56,6 +69,7 @@ import re
 import sys
 import tomllib
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,13 +99,41 @@ BANNED_PACKAGES = ("redb", "shekyl-chain-store")
 
 INVOCATION_RE = re.compile(r"\bcensus_rows!\s*\{")
 HEADER_RE = re.compile(r"^pub\s+enum\s+([A-Z][A-Za-z0-9]*)\s*:\s*([A-Z][A-Za-z]*)\s*\{$")
-# One entry: `Var pending,` or `Var implemented(a::b::c),`. The variant is
-# the census id without `CEN-` (`D1b`, `K1a`); the path is a plain Rust path.
+# One entry: `Var pending,`, `Var implemented(a::b::c),` or
+# `Var held_by_cxx("path/in/repo.cpp", "test_name"),`. The variant is the
+# census id without `CEN-` (`D1b`, `K1a`); the path is a plain Rust path; the
+# holder is a repo-relative file and a C identifier.
 ENTRY_RE = re.compile(
     r"^([A-Z]+\d+[a-z]?)\s+"
-    r"(?:(pending)|(implemented)\(\s*([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*\))"
+    r"(?:(pending)"
+    r"|(implemented)\(\s*([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\s*\)"
+    r'|(held_by_cxx)\(\s*"([^"\s]+)"\s*,\s*"([A-Za-z_]\w*)"\s*\))'
     r"\s*,$"
 )
+# The C++ source suffixes this tree uses (`.cc` — `src/fcmp/bulletproofs_plus.cc`
+# is a census site; `.inl` — the protocol handler). One list, two consumers:
+# the census `site(s)` check and the holder-path check below.
+CXX_SUFFIXES = ("cc", "cpp", "cxx", "h", "hpp", "inl")
+_CXX_SUFFIX = "|".join(CXX_SUFFIXES)
+# A census `site(s)` cell that places the rule in C++: the only rows
+# `held_by_cxx` may claim (the holder is the C++ ingest driver). Either the
+# cell names a C++ source, or it is a bare line citation — the census's
+# stated default (§4 preamble: "`blockchain.cpp` under `src/cryptonote_core/`
+# unless another file is named"). A Rust site (`rust/….rs:N`) matches neither.
+CXX_SITE_RE = re.compile(rf"\.(?:{_CXX_SUFFIX})\b|^\s*\d+")
+# The holder a `held_by_cxx` entry cites: a repo-relative C++ file. A Rust or
+# Markdown file that happens to contain the identifier is not a C++ holder,
+# and an absolute path is not repo-relative — both are refused before the
+# file is read, so the registry cannot become environment-specific.
+CXX_HOLDER_RE = re.compile(rf"^(?!/)(?!\w:)(?!\.\.)[^\s]+\.(?:{_CXX_SUFFIX})$")
+# `core_tests` generators run only if registered with `GENERATE_AND_PLAY(name)`
+# in this one file; a generator that is defined but unregistered compiles,
+# is never played, and would leave a hold green while CTest ran without it
+# (PR #767 review). gtest cases (`tests/unit_tests/`) self-register through
+# their `TEST(...)` macro, so the definition is the registration there.
+CORE_TESTS_DIR = "tests/core_tests/"
+CORE_TESTS_REGISTRY = "tests/core_tests/chaingen_main.cpp"
+
 MOD_DECL_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+census\s*;\s*$", re.M)
 DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 
@@ -99,13 +141,22 @@ DEP_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 @dataclass(frozen=True)
 class Entry:
     variant: str  # "A1"
-    implemented: bool
-    path: str | None
+    status: str  # "pending" | "implemented" | "held_by_cxx"
+    path: str | None  # implemented: the rule type's Rust path
+    holder: tuple[str, str] | None  # held_by_cxx: (repo-relative file, test name)
     line: int  # 1-based, in the registry file
 
     @property
     def id(self) -> str:
         return f"CEN-{self.variant}"
+
+    @property
+    def implemented(self) -> bool:
+        return self.status == "implemented"
+
+    @property
+    def held(self) -> bool:
+        return self.status == "held_by_cxx"
 
 
 @dataclass(frozen=True)
@@ -122,6 +173,10 @@ class Inputs:
     registry: str | None  # None: file missing
     lib: str | None
     manifest: str | None
+    # Text of a repo-relative C++ file a `held_by_cxx` entry cites, or None
+    # when it does not exist. The repo reader in production; a dict in the
+    # self-test, so a holder's disappearance is a case the test can build.
+    cxx: Callable[[str], str | None] = lambda _path: None
 
 
 @dataclass(frozen=True)
@@ -129,10 +184,16 @@ class Figures:
     flag: str
     registry: str
     implemented: int
-    enforced: int
+    held: int  # rows the C++ ingest driver holds until cutover
+    enforced: int  # the census denominator; never moves for a hold
     ratified: int
-    by_subsystem: dict[str, tuple[int, int]]  # subsystem -> (implemented, enforced)
+    by_subsystem: dict[str, tuple[int, int, int]]  # subsystem -> (implemented, held, enforced)
     implemented_ids: tuple[str, ...]
+    held_rows: tuple[tuple[str, str, str], ...]  # (id, file, test)
+
+    @property
+    def validator_enforced(self) -> int:
+        return self.enforced - self.held
 
 
 # --------------------------------------------------------------------------
@@ -212,11 +273,13 @@ def _parse_one(start_line: int, body: str) -> Registry:
         em = ENTRY_RE.match(line)
         if not em:
             raise Refused(f"registry: unparseable entry at line {n} in {header[0]}: {line!r}")
+        status = "pending" if em.group(2) else ("implemented" if em.group(3) else "held_by_cxx")
         entries.append(
             Entry(
                 variant=em.group(1),
-                implemented=em.group(3) is not None,
+                status=status,
                 path=em.group(4),
+                holder=(em.group(6), em.group(7)) if status == "held_by_cxx" else None,
                 line=n,
             )
         )
@@ -295,20 +358,82 @@ def figures(rows: list[Row], reg: Registry) -> Figures:
     enforced = _enforced(rows, reg.flag)
     subsystem_of = {r.id: r.subsystem for r in enforced}
     implemented = [e for e in reg.entries if e.implemented and e.id in subsystem_of]
+    held = [e for e in reg.entries if e.held and e.id in subsystem_of]
     by_sub: dict[str, list[int]] = {}
     for r in enforced:
-        by_sub.setdefault(r.subsystem, [0, 0])[1] += 1
+        by_sub.setdefault(r.subsystem, [0, 0, 0])[2] += 1
     for e in implemented:
         by_sub[subsystem_of[e.id]][0] += 1
+    for e in held:
+        by_sub[subsystem_of[e.id]][1] += 1
     return Figures(
         flag=reg.flag,
         registry=reg.name,
         implemented=len(implemented),
+        held=len(held),
         enforced=len(enforced),
         ratified=sum(1 for r in enforced if r.bucket in RATIFIED_BUCKETS),
-        by_subsystem={k: (v[0], v[1]) for k, v in by_sub.items()},
+        by_subsystem={k: (v[0], v[1], v[2]) for k, v in by_sub.items()},
         implemented_ids=tuple(e.id for e in implemented),
+        held_rows=tuple((e.id, e.holder[0], e.holder[1]) for e in held if e.holder),
     )
+
+
+def check_held(entries: list[Entry], rows: list[Row], cxx: Callable[[str], str | None], errors: list[str]) -> None:
+    """Every `held_by_cxx` entry names a holder that exists and refuses.
+
+    Three refusals, each its own subject: the census places the row in C++
+    (its `site(s)` cell cites a C++ file — a row the census puts elsewhere
+    is not the ingest driver's to hold); the cited file exists (its absence
+    is cutover, and the hold expires with it); the cited test is in it (a
+    token that exists is not a test that refuses — PWD-B10 — so the entry
+    names the test and the gate checks for that identifier, not the file).
+    """
+    sites = {r.id: r.sites for r in rows}
+    for e in entries:
+        if not e.held or e.holder is None:
+            continue
+        file, test = e.holder
+        site = sites.get(e.id, "")
+        if not CXX_SITE_RE.search(site):
+            errors.append(
+                f"held_by_cxx entry {e.id} (line {e.line}): the census places this row at "
+                f"{site!r}, which cites no C++ source — only a C++-held row may be held_by_cxx"
+            )
+        if not CXX_HOLDER_RE.match(file):
+            errors.append(
+                f"held_by_cxx entry {e.id} (line {e.line}): holder {file!r} is not a "
+                f"repo-relative C++ file (.{', .'.join(CXX_SUFFIXES)}; no absolute path, no `..`)"
+            )
+            continue
+        text = cxx(file)
+        if text is None:
+            errors.append(
+                f"held_by_cxx entry {e.id} (line {e.line}): holder file {file!r} is not in the "
+                "tree — the hold has expired with its holder (cutover); re-classify the row"
+            )
+            continue
+        if not re.search(rf"\b{re.escape(test)}\b", strip_comments(text)):
+            errors.append(
+                f"held_by_cxx entry {e.id} (line {e.line}): holder test {test!r} is not in "
+                f"{file!r} — a hold names a test that proves the holder refuses"
+            )
+            continue
+        if file.startswith(CORE_TESTS_DIR):
+            registry = cxx(CORE_TESTS_REGISTRY)
+            if registry is None:
+                errors.append(
+                    f"held_by_cxx entry {e.id} (line {e.line}): core_tests registry "
+                    f"{CORE_TESTS_REGISTRY!r} is not in the tree — cannot show {test!r} is played"
+                )
+            elif not re.search(
+                rf"GENERATE_AND_PLAY\(\s*{re.escape(test)}\s*\)", strip_comments(registry)
+            ):
+                errors.append(
+                    f"held_by_cxx entry {e.id} (line {e.line}): holder test {test!r} is defined "
+                    f"but not registered with GENERATE_AND_PLAY in {CORE_TESTS_REGISTRY!r} — "
+                    "an unregistered generator is never played, and the hold would be vacuous"
+                )
 
 
 def check(inputs: Inputs) -> tuple[list[str], dict[str, Figures]]:
@@ -365,20 +490,26 @@ def check(inputs: Inputs) -> tuple[list[str], dict[str, Figures]]:
                 break
 
     check_manifest(inputs.manifest, errors)
+    check_held(all_entries, rows, inputs.cxx, errors)
     return errors, {flag: figures(rows, reg) for flag, reg in registries.items()}
 
 
 def summary(figs: dict[str, Figures]) -> str:
-    """The two-line figure (CHAIN_RULES_CRATE.md §6.3), consensus first."""
-    w = max(len(str(n)) for f in figs.values() for n in (f.implemented, f.enforced, f.ratified))
+    """The two-line figure (CHAIN_RULES_CRATE.md §6.3), consensus first.
+
+    `validator-enforced` is `E − H`, printed beside a fixed `E` so a hold is
+    visibly a subtraction, never a smaller denominator.
+    """
+    w = max(len(str(n)) for f in figs.values() for n in (f.implemented, f.enforced, f.ratified, f.held))
     out = []
     for flag in sorted(figs, key=lambda f: list(FLAG_OF.values()).index(f)):
         f = figs[flag]
         out.append(
             f"{LABEL[flag] + ':':<11}"
-            f"implemented {f.implemented:>{w}} / enforced {f.enforced:<{w}}   "
+            f"implemented {f.implemented:>{w}} / validator-enforced {f.validator_enforced:<{w}}   "
+            f"held-by-cxx {f.held:>{w}}   enforced {f.enforced:<{w}}   "
             f"ratified {f.ratified:>{w}} / enforced {f.enforced:<{w}}   "
-            f"(E = {flag}-rows − bucket 3)"
+            f"(E = {flag}-rows − bucket 3; validator-enforced = E − held)"
         )
     return "\n".join(out)
 
@@ -388,10 +519,15 @@ def describe(figs: dict[str, Figures]) -> str:
     for flag in sorted(figs, key=lambda f: list(FLAG_OF.values()).index(f)):
         f = figs[flag]
         out.append(f"{LABEL[flag]} ({f.registry}), per census subsystem:")
-        for sub, (impl, enf) in sorted(f.by_subsystem.items()):
-            out.append(f"  {sub}: implemented {impl} / enforced {enf}")
+        for sub, (impl, held, enf) in sorted(f.by_subsystem.items()):
+            held_note = f" (held-by-cxx {held})" if held else ""
+            out.append(f"  {sub}: implemented {impl} / enforced {enf}{held_note}")
         ids = ", ".join(f.implemented_ids) if f.implemented_ids else "(none)"
         out.append(f"  implemented: {ids}")
+        if f.held_rows:
+            out.append("  held-by-cxx (expires with the holder at cutover):")
+            for rid, file, test in f.held_rows:
+                out.append(f"    {rid}: {file} :: {test}")
     return "\n".join(out)
 
 
@@ -411,6 +547,7 @@ _CENSUS_OK = """\
 | CEN-A1 | parent exists | `blockchain.cpp:10` | C | 1 | x | y | z |
 | CEN-A2 | height | `blockchain.cpp:20` | C | 4 | x | y | z |
 | CEN-A3 | retired | `blockchain.cpp:30` | C | 3 | x | y | z |
+| CEN-A4 | already known | 6626 (bare line: the census default `blockchain.cpp`) | C | 2 | x | y | z |
 
 ### 4.L Storage layer
 
@@ -426,7 +563,8 @@ _CENSUS_OK = """\
 | CEN-M2 | kept_by_block | `tx_pool.cpp:9` | C | 2 | x | y | z |
 | CEN-M3 | relay policy | `tx_pool.cpp:12` | P | 3 | x | y | z |
 """
-# enforced C: A1(b1) A2(b4) L1(b2) M2(b2) → 4, ratified 3; enforced P: M1 → 1, ratified 1.
+# enforced C: A1(b1) A2(b4) A4(b2) L1(b2) M2(b2) → 5, ratified 4; enforced P: M1 → 1, ratified 1.
+# A4 is held_by_cxx in the OK registry → validator-enforced 4, held 1.
 
 _REGISTRY_OK = """\
 //! The registry. `check_chain_rules_coverage.py` reads the two `census_rows!`
@@ -438,6 +576,7 @@ census_rows! {
         // 4.A Acceptance topology
         A1 pending,
         A2 implemented(crate::topology::height),
+        A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),
         // 4.L Storage layer
         L1 pending,
         // 4.M — `// A9 pending,` in a comment is not an entry either
@@ -475,10 +614,33 @@ workspace = true
 """
 
 
-def _inputs(**over: str | None) -> Inputs:
+# The fake C++ tree a `held_by_cxx` entry is checked against: one file, one
+# test. `_cxx_missing_test` has the file without the test; the empty tree is
+# cutover.
+_CXX_REGISTRY_OK = "int main() {\n    GENERATE_AND_PLAY(gen_block_already_known);\n}\n"
+_CXX_OK = {
+    "tests/core_tests/block_validation.cpp": (
+        "struct gen_block_already_known : public gen_block_accepted_base<2> {};\n"
+        "// gen_block_already_known_is_not_this — a longer identifier must not match\n"
+    ),
+    CORE_TESTS_REGISTRY: _CXX_REGISTRY_OK,
+}
+_CXX_MISSING_TEST = {
+    "tests/core_tests/block_validation.cpp": "struct gen_block_other {};\n",
+    CORE_TESTS_REGISTRY: _CXX_REGISTRY_OK,
+}
+# Defined but never registered: the generator compiles and is never played.
+_CXX_UNREGISTERED = {
+    "tests/core_tests/block_validation.cpp": _CXX_OK["tests/core_tests/block_validation.cpp"],
+    CORE_TESTS_REGISTRY: "int main() {\n    GENERATE_AND_PLAY(gen_block_other);\n    // GENERATE_AND_PLAY(gen_block_already_known); — commented out is not registered\n}\n",
+}
+
+
+def _inputs(cxx: dict[str, str] | None = None, **over: str | None) -> Inputs:
     base = dict(census=_CENSUS_OK, registry=_REGISTRY_OK, lib=_LIB_OK, manifest=_MANIFEST_OK)
     base.update(over)
-    return Inputs(**base)  # type: ignore[arg-type]
+    tree = _CXX_OK if cxx is None else cxx
+    return Inputs(cxx=tree.get, **base)  # type: ignore[arg-type]
 
 
 def _expect_ok(inputs: Inputs, name: str) -> dict[str, Figures]:
@@ -504,34 +666,83 @@ def _expect_refusal(inputs: Inputs, needle: str, name: str) -> None:
     _FIRED.append(name)
 
 
-def _reg(old: str, new: str) -> Inputs:
+def _reg(old: str, new: str, cxx: dict[str, str] | None = None) -> Inputs:
     assert old in _REGISTRY_OK, old
-    return _inputs(registry=_REGISTRY_OK.replace(old, new))
+    return _inputs(cxx=cxx, registry=_REGISTRY_OK.replace(old, new))
 
 
 def selftest() -> None:
     figs = _expect_ok(_inputs(), "consistent set")
-    got = {f: (v.implemented, v.enforced, v.ratified) for f, v in figs.items()}
-    want = {"C": (1, 4, 3), "P": (0, 1, 1)}
+    got = {f: (v.implemented, v.held, v.enforced, v.ratified) for f, v in figs.items()}
+    want = {"C": (1, 1, 5, 4), "P": (0, 0, 1, 1)}
     if got != want:
         raise SystemExit(f"selftest figures: got {got}, want {want}")
-    if figs["C"].by_subsystem != {"4.A": (1, 2), "4.L": (0, 1), "4.M": (0, 1)}:
+    if figs["C"].validator_enforced != 4:
+        raise SystemExit(f"selftest validator-enforced: got {figs['C'].validator_enforced}, want 4")
+    if figs["C"].by_subsystem != {"4.A": (1, 1, 3), "4.L": (0, 0, 1), "4.M": (0, 0, 1)}:
         raise SystemExit(f"selftest per-subsystem: got {figs['C'].by_subsystem}")
     if figs["C"].implemented_ids != ("CEN-A2",):
         raise SystemExit(f"selftest implemented ids: got {figs['C'].implemented_ids}")
+    if figs["C"].held_rows != (("CEN-A4", "tests/core_tests/block_validation.cpp", "gen_block_already_known"),):
+        raise SystemExit(f"selftest held rows: got {figs['C'].held_rows}")
     text = summary(figs)
-    if "consensus: implemented 1 / enforced 4   ratified 3 / enforced 4" not in text:
+    # E stays 5 on the line while validator-enforced reads 4: a subtraction, not a smaller denominator.
+    if "consensus: implemented 1 / validator-enforced 4   held-by-cxx 1   enforced 5   ratified 4 / enforced 5" not in text:
         raise SystemExit(f"selftest summary shape:\n{text}")
-    if "policy:    implemented 0 / enforced 1   ratified 1 / enforced 1" not in text:
+    if "policy:    implemented 0 / validator-enforced 1   held-by-cxx 0   enforced 1   ratified 1 / enforced 1" not in text:
         raise SystemExit(f"selftest summary shape (policy):\n{text}")
-    if "4.A: implemented 1 / enforced 2" not in describe(figs):
-        raise SystemExit("selftest describe lacks the per-subsystem line")
+    desc = describe(figs)
+    if "4.A: implemented 1 / enforced 3 (held-by-cxx 1)" not in desc:
+        raise SystemExit("selftest describe lacks the per-subsystem line with the held note")
+    if "CEN-A4: tests/core_tests/block_validation.cpp :: gen_block_already_known" not in desc:
+        raise SystemExit("selftest describe lacks the held-row citation")
+
+    # held_by_cxx — the three refusals (CHAIN_RULES_SLICE_1.md §4.1) and the grammar
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', cxx={}), "holder file 'tests/core_tests/block_validation.cpp' is not in the tree — the hold has expired", "holder file gone (cutover)")
+    _expect_refusal(_inputs(cxx=_CXX_MISSING_TEST), "holder test 'gen_block_already_known' is not in 'tests/core_tests/block_validation.cpp'", "holder test missing")
+    _expect_refusal(_inputs(cxx={"tests/core_tests/block_validation.cpp": "gen_block_already_known_is_not_this\n", CORE_TESTS_REGISTRY: _CXX_REGISTRY_OK}), "holder test 'gen_block_already_known' is not in", "holder test only as a prefix of a longer identifier")
+    _expect_refusal(_inputs(cxx=_CXX_UNREGISTERED), "is defined but not registered with GENERATE_AND_PLAY", "core_tests generator defined but unregistered (a commented-out registration is not one)")
+    _expect_refusal(_inputs(cxx={"tests/core_tests/block_validation.cpp": "// TODO: gen_block_already_known\n", CORE_TESTS_REGISTRY: _CXX_REGISTRY_OK}), "holder test 'gen_block_already_known' is not in", "holder test named only in a comment")
+    _expect_refusal(_inputs(cxx={"tests/core_tests/block_validation.cpp": _CXX_OK["tests/core_tests/block_validation.cpp"]}), "core_tests registry 'tests/core_tests/chaingen_main.cpp' is not in the tree", "core_tests registry file missing")
+    _expect_ok(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/unit_tests/ingest.cpp", "gen_block_already_known"),', cxx={"tests/unit_tests/ingest.cpp": "TEST(ingest, gen_block_already_known) {}\n"}), "a gtest case self-registers: the definition is the registration")
+    _expect_refusal(_inputs(census=_CENSUS_OK.replace("| CEN-A4 | already known | 6626 (bare line: the census default `blockchain.cpp`) |", "| CEN-A4 | already known | `rust/shekyl-daemon/src/ingest.rs:40` |")), "cites no C++ source — only a C++-held row may be held_by_cxx", "held row whose census site is Rust")
+    _expect_ok(_inputs(census=_CENSUS_OK.replace("| CEN-A4 | already known | 6626 (bare line: the census default `blockchain.cpp`) |", "| CEN-A4 | already known | `src/cryptonote_core/cryptonote_core.cpp:1450` |")), "an explicit C++ site is a C++ site")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/core_tests/block_validation.cpp"),'), "unparseable entry at line 10", "held_by_cxx with a bare path and no test")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx(tests/core_tests/block_validation.cpp, gen_block_already_known),'), "unparseable entry at line 10", "held_by_cxx without quotes")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen-block"),'), "unparseable entry at line 10", "held_by_cxx test name is not an identifier")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("/abs/tests/core_tests/block_validation.cpp", "gen_block_already_known"),', cxx={"/abs/tests/core_tests/block_validation.cpp": "gen_block_already_known"}), "is not a repo-relative C++ file", "absolute holder path")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("../elsewhere/x.cpp", "gen_block_already_known"),', cxx={"../elsewhere/x.cpp": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder path escapes the repo")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("rust/shekyl-chain-rules/src/lib.rs", "gen_block_already_known"),', cxx={"rust/shekyl-chain-rules/src/lib.rs": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder is a Rust file that contains the identifier")
+    _expect_refusal(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("docs/design/X.md", "gen_block_already_known"),', cxx={"docs/design/X.md": "gen_block_already_known"}), "is not a repo-relative C++ file", "holder is a Markdown file")
+    _expect_ok(_reg('A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),', 'A4 held_by_cxx("tests/unit_tests/ingest.cc", "gen_block_already_known"),', cxx={"tests/unit_tests/ingest.cc": "TEST(ingest, gen_block_already_known) {}\n"}), "a .cc holder is a C++ holder")
+    _expect_ok(_inputs(census=_CENSUS_OK.replace("| CEN-A4 | already known | 6626 (bare line: the census default `blockchain.cpp`) |", "| CEN-A4 | already known | `src/fcmp/bulletproofs_plus.cc:40` |")), "a .cc census site is a C++ site")
+    # the production reader refuses what the grammar cannot see: an absolute
+    # path pointing INSIDE the checkout, and a `..` that resolves inside it
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp)
+        (repo / "tests").mkdir()
+        (repo / "tests" / "a.cpp").write_text("struct gen_x {};\n", encoding="utf-8")
+        reader = repo_reader(repo)
+        if reader("tests/a.cpp") != "struct gen_x {};\n":
+            raise SystemExit("selftest repo_reader: relative path inside the repo must read")
+        if reader(str(repo / "tests" / "a.cpp")) is not None:
+            raise SystemExit("selftest repo_reader: an absolute path must be refused even inside the checkout")
+        if reader("tests/../tests/a.cpp") is not None:
+            raise SystemExit("selftest repo_reader: a `..` component must be refused even when it resolves inside")
+        if reader("tests/missing.cpp") is not None:
+            raise SystemExit("selftest repo_reader: a missing file is None")
+        if reader("tests") is not None:
+            raise SystemExit("selftest repo_reader: a directory is None")
+        _FIRED.append("repo_reader refusals (absolute, .., missing, directory)")
+    # a held row is still a registered row: the bijection sees it
+    _expect_refusal(_reg('        A4 held_by_cxx("tests/core_tests/block_validation.cpp", "gen_block_already_known"),\n', ""), "census row CEN-A4 (flag C) missing from registry CenRow", "held row removed from the registry")
 
     # bijection
     _expect_refusal(_reg("        L1 pending,\n", ""), "census row CEN-L1 (flag C) missing from registry CenRow", "row missing")
-    _expect_refusal(_reg("        M2 pending,\n", "        M2 pending,\n        A3 pending,\n"), "entry CEN-A3 (line 14) has no enforced census row with flag C", "bucket-3 row registered")
+    _expect_refusal(_reg("        M2 pending,\n", "        M2 pending,\n        A3 pending,\n"), "entry CEN-A3 (line 15) has no enforced census row with flag C", "bucket-3 row registered")
     _expect_refusal(_reg("        M2 pending,\n", "        M2 pending,\n        A9 pending,\n"), "entry CEN-A9", "mistyped entry")
-    _expect_refusal(_reg("        M2 pending,\n", "        M2 pending,\n        M1 pending,\n"), "entry CEN-M1 (line 14) has no enforced census row with flag C", "policy row under the consensus enum")
+    _expect_refusal(_reg("        M2 pending,\n", "        M2 pending,\n        M1 pending,\n"), "entry CEN-M1 (line 15) has no enforced census row with flag C", "policy row under the consensus enum")
     _expect_refusal(_reg("        M2 pending,\n", "        M2 pending,\n        M1 pending,\n"), "duplicate entry CEN-M1", "same id in both registries")
     _expect_refusal(_reg("        L1 pending,\n", "        L1 pending,\n        L1 pending,\n"), "duplicate entry CEN-L1", "same id twice in one registry")
     _expect_refusal(_reg("        A1 pending,\n        A2 implemented(crate::topology::height),\n", "        A2 implemented(crate::topology::height),\n        A1 pending,\n"), "registry CenRow order differs from census at CEN-A2: census has CEN-A1 there", "order")
@@ -545,7 +756,7 @@ def selftest() -> None:
     _expect_refusal(_inputs(census=_CENSUS_OK.replace("| CEN-M2 | kept_by_block | `tx_pool.cpp:9` | C | 2 |", "| CEN-M2 | kept_by_block | `tx_pool.cpp:9` | P | 2 |")), "census row CEN-M2 (flag P) missing from registry PolicyRow", "row re-flagged")
     # Appended inside the 4.A table: a blank line ends a GFM table, so a row
     # placed after one would be read as a headerless new table, not a new row.
-    _expect_refusal(_inputs(census=_CENSUS_OK.replace("| CEN-A3 | retired | `blockchain.cpp:30` | C | 3 | x | y | z |\n", "| CEN-A3 | retired | `blockchain.cpp:30` | C | 3 | x | y | z |\n| CEN-A4 | new | `blockchain.cpp:40` | C | 1 | x | y | z |\n")), "census row CEN-A4 (flag C) missing", "new row minted")
+    _expect_refusal(_inputs(census=_CENSUS_OK.replace("| CEN-A3 | retired | `blockchain.cpp:30` | C | 3 | x | y | z |\n", "| CEN-A3 | retired | `blockchain.cpp:30` | C | 3 | x | y | z |\n| CEN-A5 | new | `blockchain.cpp:40` | C | 1 | x | y | z |\n")), "census row CEN-A5 (flag C) missing", "new row minted")
 
     # grammar
     _expect_refusal(_reg("pub enum CenRow: Consensus {", "pub enum CenRow Consensus {"), "unparseable header at line 6", "header")
@@ -592,7 +803,33 @@ def load(census: Path, registry: Path, lib: Path, manifest: Path) -> Inputs:
         if not p.is_file():
             raise Refused(f"{label}: {p}")
     read = lambda p: p.read_text(encoding="utf-8")  # noqa: E731
-    return Inputs(census=read(census), registry=read(registry), lib=read(lib), manifest=read(manifest))
+    return Inputs(
+        census=read(census),
+        registry=read(registry),
+        lib=read(lib),
+        manifest=read(manifest),
+        cxx=repo_reader(REPO),
+    )
+
+
+def repo_reader(repo: Path) -> Callable[[str], str | None]:
+    """The production `cxx` reader: a repo-relative path → the file's text,
+    or `None` when it is absolute, escapes `repo`, or is not a regular file.
+    A hold cites a file in this tree or it cites nothing — an absolute path
+    that happens to point inside the checkout would make the registry
+    environment-specific, so it is refused before resolution (PR #767 review).
+    """
+
+    def cxx(rel: str) -> str | None:
+        candidate = Path(rel)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            return None
+        target = (repo / candidate).resolve()
+        if repo.resolve() not in target.parents or not target.is_file():
+            return None
+        return target.read_text(encoding="utf-8")
+
+    return cxx
 
 
 def main(argv: list[str] | None = None) -> int:

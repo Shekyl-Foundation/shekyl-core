@@ -15,10 +15,19 @@
 //! promotion through the instrument does not compile.
 //!
 //! Only **complete** coverage is parity evidence. A verdict carries the rows
-//! that actually ran — three of 153 after slice 1 — and `is_complete_for`
-//! is `false` until every enforced row has landed, so no `ChainValid` minted
+//! that actually ran, and `is_complete_for` is `false` until every row the
+//! rule set holds the validator to has landed, so no `ChainValid` minted
 //! during the port can be mistaken for parity evidence by anything that
-//! checks.
+//! checks. The denominator has two readings, and the gate prints both
+//! (`check_chain_rules_coverage.py`): **enforced** `E` is the census's — every
+//! consensus row of bucket ≠ 3, fixed by the census and moved by nothing in
+//! this crate — and **validator-enforced** `E − H` excludes the rows the C++
+//! ingest driver holds until cutover (`RowStatus::HeldByCxx`), which
+//! `RuleSet::enforced()` leaves out because they are not predicates
+//! `validate` can evaluate. Completeness is measured against the second;
+//! the first is printed beside it so a hold reads as a subtraction, never as
+//! a smaller denominator. The live figures are the gate's, not this
+//! comment's.
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -118,7 +127,10 @@ impl Coverage<CenRow> {
         rows.into_iter().all(|row| self.contains(row))
     }
 
-    /// `true` iff every row `rule_set` enforces was evaluated.
+    /// `true` iff every row `rule_set` holds the validator to was evaluated
+    /// — `RuleSet::enforced()`, which excludes the rows held by the C++
+    /// ingest driver (`RowStatus::HeldByCxx`); see the module docs for the
+    /// two denominators.
     ///
     /// Empty coverage is never complete — not even against a rule set that
     /// enforces nothing — so a scaffold verdict is never parity evidence.
@@ -131,10 +143,10 @@ impl Coverage<CenRow> {
     /// implemented** was evaluated.
     ///
     /// The mint gate during porting. [`Self::is_complete_for`] waits until
-    /// 153/153; this is true as soon as every *landed* rule actually ran,
-    /// and was vacuously true while every entry was `pending` (DRS-D12). A
-    /// forgotten `validate` call, or a call that forgets [`Self::insert`],
-    /// fails it — G9's runtime half.
+    /// every validator-enforced row has landed; this is true as soon as
+    /// every *landed* rule actually ran, and was vacuously true while every
+    /// entry was `pending` (DRS-D12). A forgotten `validate` call, or a call
+    /// that forgets [`Self::insert`], fails it — G9's runtime half.
     #[must_use]
     pub fn covers_landed(&self, rule_set: &RuleSet) -> bool {
         self.contains_all(

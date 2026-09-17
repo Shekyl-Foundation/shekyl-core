@@ -64,6 +64,9 @@ class Row:
     flag: str
     bucket: int
     bound: bool
+    # The `site(s)` cell verbatim — read by `check_chain_rules_coverage.py`
+    # to refuse a `held_by_cxx` entry on a row whose census site is not C++.
+    sites: str = ""
 
 
 class Refused(Exception):
@@ -224,6 +227,7 @@ def parse_census(text: str) -> list[Row]:
                 flag=flag,
                 bucket=int(bucket_text),
                 bound=bool(BOUND_RE.search(cells[columns["site(s)"]])),
+                sites=cells[columns["site(s)"]],
             )
         )
     if seen_tables == 0:

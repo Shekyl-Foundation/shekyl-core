@@ -107,20 +107,36 @@ fn covers_landed_requires_exactly_the_implemented_rows() {
 }
 
 #[test]
-fn complete_means_every_enforced_row_and_nothing_less() {
+fn complete_means_every_validator_enforced_row_and_nothing_less() {
+    let held = CenRow::ALL
+        .iter()
+        .filter(|row| row.status() == crate::census::RowStatus::HeldByCxx)
+        .count();
     let mut coverage = RuleCoverage::EMPTY;
     for row in RuleSet::GENESIS.enforced() {
         coverage.insert(row);
     }
     assert!(coverage.is_complete_for(&RuleSet::GENESIS));
-    assert_eq!(coverage.len(), CenRow::ALL.len());
+    // Complete is `enforced − held`: the rows the C++ ingest driver holds
+    // (A1, A4 after slice 1) are not the validator's to evaluate, and the
+    // census denominator itself does not move for a hold.
+    assert_eq!(coverage.len(), CenRow::ALL.len() - held);
+    assert_eq!(held, 2, "slice 1 holds exactly A1 and A4");
+    for row in [CenRow::A1, CenRow::A4] {
+        assert!(!coverage.contains(row));
+        assert!(!RuleSet::GENESIS.enforced().any(|r| r == row));
+    }
+    // Recording a held row anyway does not make coverage more complete and
+    // does not make it less — it is outside the denominator.
+    coverage.insert(CenRow::A1);
+    assert!(coverage.is_complete_for(&RuleSet::GENESIS));
 
-    // Drop one row: no longer complete.
+    // Drop one validator-enforced row: no longer complete.
     let mut short = RuleCoverage::EMPTY;
     for row in RuleSet::GENESIS.enforced().skip(1) {
         short.insert(row);
     }
-    assert_eq!(short.len(), CenRow::ALL.len() - 1);
+    assert_eq!(short.len(), CenRow::ALL.len() - held - 1);
     assert!(!short.is_complete_for(&RuleSet::GENESIS));
 }
 
