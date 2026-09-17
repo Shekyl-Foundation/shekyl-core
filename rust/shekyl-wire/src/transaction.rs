@@ -1662,9 +1662,9 @@ impl Transaction {
     ///
     /// `None` is a fact about the *txid*, not about which bytes a node holds:
     /// the coinbase (`Null` ct), the serve-credit form (empty `pqc_auths`,
-    /// the countersignature rides the vin) and the malformed gen-first shape
-    /// all hash 3-part, so no component exists to be stored, discarded or
-    /// supplied. The arity is decided by [`Self::has_pqc_component`] — the
+    /// the countersignature rides the vin) and the malformed gen-first and
+    /// no-input shapes all hash 3-part, so no component exists to be stored,
+    /// discarded or supplied. The arity is decided by [`Self::has_pqc_component`] — the
     /// one predicate every hashing path shares — never per input arm: a
     /// bond-post carries its identity signature in a tx-level `pqc_auths`
     /// slot and so is 4-part like any spend; an emission takes whatever
@@ -1744,17 +1744,26 @@ impl Transaction {
         self.hash_from_components(pqc_auth, self.prunable_component(Some(prunable_hash)))
     }
 
-    /// The one arity predicate (C++ oracle, `format_utils.cpp:1137/1163-1182`):
-    /// a txid is **4-part** iff the ct is `Fcmp`, the auths are present
-    /// (`auths_present`: `!pqc_auths.is_empty()` on a body, `pqc_auth.is_some()`
-    /// when supplied) and the first input is not `gen` — `has_pqc = version>=3
-    /// && vin[0] != gen`, so the malformed gen-first-with-auths shape hashes
-    /// 3-part like a coinbase rather than misclassifying as a spend. The
-    /// prefix is part of every form, skeleton included, so the `gen` half of
-    /// the predicate is always computable.
+    /// The one arity predicate (C++ oracle,
+    /// `cryptonote_format_utils.cpp:1290` and `:1359`, applied at `:1316` /
+    /// `:1386`): `has_pqc = version >= 3 && !vin.empty() && vin[0] != gen`,
+    /// then 4-part iff `has_pqc && !pqc_auths.empty()`. Here: the ct is `Fcmp`
+    /// (version 3), the auths are present (`auths_present`:
+    /// `!pqc_auths.is_empty()` on a body, `pqc_auth.is_some()` when
+    /// supplied), and the first input **exists and is not `gen`** — so both
+    /// malformed shapes the oracle hashes 3-part, gen-first-with-auths and
+    /// no-inputs-with-auths, hash 3-part here too rather than misclassifying
+    /// as a spend. A malformed body's identity is still consensus-visible
+    /// (relay dedup, the `already known` arm) before `validate` refuses it,
+    /// so the predicate matches the oracle on every input, not only valid
+    /// ones. The prefix is part of every form, skeleton included, so the
+    /// input half of the predicate is always computable.
     fn has_pqc_component(&self, auths_present: bool) -> bool {
-        let first_is_gen = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
-        matches!(self.ct, Ct::Fcmp { .. }) && auths_present && !first_is_gen
+        let first_is_spend = matches!(
+            self.prefix.inputs.first(),
+            Some(first) if !matches!(first, Input::Gen(_))
+        );
+        matches!(self.ct, Ct::Fcmp { .. }) && auths_present && first_is_spend
     }
 
     /// The txid's prunable component: for `Fcmp`, a supplied digest wins (the

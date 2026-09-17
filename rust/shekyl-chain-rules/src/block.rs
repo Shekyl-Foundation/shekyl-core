@@ -24,7 +24,7 @@ use crate::rules::header::B6;
 /// and the store never derives a consensus-visible value (C2-R8 Q4).
 ///
 /// `pqc_auth_hash` is `None` exactly when the txid is **3-part** — a
-/// coinbase, a serve-credit, the malformed gen-first shape — a fact about
+/// coinbase, a serve-credit, the malformed gen-first and no-input shapes — a fact about
 /// the identity, not about what was kept; see [`PqcAuthHash`]. For a
 /// coinbase `prunable_hash` is `keccak256("")` — what the C++ store writes —
 /// not the txid's null-hash substitute; see [`PrunableHash`].

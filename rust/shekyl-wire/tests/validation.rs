@@ -529,6 +529,36 @@ fn txid_arity_is_the_predicate_s_not_the_input_arm_s() {
     );
 }
 
+/// The oracle's predicate is `!vin.empty() && vin[0] != gen`
+/// (`cryptonote_format_utils.cpp:1290`): a body with **no inputs** and a
+/// `pqc_auths` entry hashes 3-part in C++. It is malformed — `validate`
+/// refuses it — but its identity is consensus-visible before that (relay
+/// dedup), so the Rust predicate must agree on it too, not only on valid
+/// shapes. Reading `vin[0] != gen` as "first is not gen" would call this
+/// 4-part.
+#[test]
+fn a_body_with_no_inputs_and_an_auth_is_3_part_like_the_oracle() {
+    let mut tx = spend(vec![ki(1)], vec![out(), out()], 0, 1);
+    tx.prefix.inputs.clear();
+    if let Ct::Fcmp { pqc_auths, .. } = &tx.ct {
+        assert_eq!(
+            pqc_auths.len(),
+            1,
+            "the auth stays; only the vin is emptied"
+        );
+    }
+    tx.validate().expect_err("no-input spend is malformed");
+    assert_eq!(tx.pqc_auth_hash(), None, "no inputs ⇒ no third component");
+    assert_eq!(
+        tx.hash_with_supplied_components(
+            Some(PqcAuthHash::from_bytes([0xAB; 32])),
+            tx.prunable_hash()
+        ),
+        tx.hash(),
+        "a supplied component is ignored where the txid has no slot for it"
+    );
+}
+
 #[test]
 fn bond_post_spend_with_per_vin_pseudo_outs_rejected() {
     // The pre-coupling shape (pseudoOuts sized by vin.size(), bond slot
