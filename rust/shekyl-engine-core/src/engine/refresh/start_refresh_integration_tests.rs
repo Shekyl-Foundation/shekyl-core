@@ -515,7 +515,7 @@ async fn hybrid_linear_scan_5_blocks_advances_synced_height() {
 /// [`hybrid_linear_scan_5_blocks_advances_synced_height`] asserts the
 /// *ledger* tip, this asserts the *tree* cursor: a fresh wallet whose
 /// producer range is `1..6` must leave the tree's
-/// [`CurveTreeHandle::ingested_tip_height`] at `Some(BlockHeight(5))`
+/// [`CurveTreeHandle::ingested_tip_height`] at `Some(BlockHeight::from_raw(5))`
 /// — height `0` came from the genesis/birthday backfill (daemon-
 /// fetched + decoded by the ingest pre-pass, since the producer's
 /// floored range never includes it), heights `1..6` from the
@@ -580,7 +580,7 @@ async fn hybrid_refresh_feeds_curve_tree_from_genesis() {
             .expect("cursor read on the live actor");
         assert_eq!(
             tip,
-            Some(shekyl_curve_tree::BlockHeight(5)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(5)),
             "tree cursor covers genesis (backfilled) through the producer range tip"
         );
     }
@@ -625,18 +625,18 @@ fn membership_rebuilding_predicate() {
     );
     // Partially-rebuilt tree still behind the ledger.
     assert!(
-        membership_rebuilding(Some(BlockHeight(3)), 5),
+        membership_rebuilding(Some(BlockHeight::from_raw(3)), 5),
         "a tree cursor below the ledger tip is rebuilding"
     );
     // Caught up: tree cursor equals the ledger tip.
     assert!(
-        !membership_rebuilding(Some(BlockHeight(5)), 5),
+        !membership_rebuilding(Some(BlockHeight::from_raw(5)), 5),
         "a tree caught up to the ledger is not rebuilding"
     );
     // Tree ahead of the ledger (does not occur under ack-before-
     // commit, but the predicate must not flag it).
     assert!(
-        !membership_rebuilding(Some(BlockHeight(7)), 5),
+        !membership_rebuilding(Some(BlockHeight::from_raw(7)), 5),
         "a tree ahead of the ledger is not rebuilding"
     );
 }
@@ -761,7 +761,7 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
-            Some(shekyl_curve_tree::BlockHeight(5)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(5)),
             "forward feed leaves the tree at tip 5",
         );
     }
@@ -784,7 +784,7 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
-            Some(shekyl_curve_tree::BlockHeight(4)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(4)),
             "tree rolled back to keep fork_height-1 (=2) then resumed on \
              the shorter fork to tip 4, dropping the orphaned height 5",
         );
@@ -838,7 +838,7 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
-            Some(shekyl_curve_tree::BlockHeight(5)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(5)),
             "forward feed leaves the tree at tip 5",
         );
     }
@@ -884,7 +884,7 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
                 .ingested_tip_height()
                 .await
                 .expect("cursor read"),
-            Some(shekyl_curve_tree::BlockHeight(7)),
+            Some(shekyl_curve_tree::BlockHeight::from_raw(7)),
             "post-respawn the tree resumed from persisted tip 5 and ingested \
              6, 7 to tip 7 — the heal progressed, it did not merely reopen",
         );
@@ -1447,7 +1447,7 @@ async fn engine_ingest_reconstructs_ct2_tier_a_root_at_every_height() {
             .ingested_tip_height()
             .await
             .expect("cursor read"),
-        Some(BlockHeight(blocks.last().unwrap().height)),
+        Some(BlockHeight::from_raw(blocks.last().unwrap().height)),
         "the cursor advanced to the chain tip",
     );
 
@@ -1455,7 +1455,7 @@ async fn engine_ingest_reconstructs_ct2_tier_a_root_at_every_height() {
     for b in &blocks {
         let (got, _depth) = g
             .curve_tree
-            .reference_root_and_depth(BlockHeight(b.height))
+            .reference_root_and_depth(BlockHeight::from_raw(b.height))
             .await
             .expect("root read");
         if got != b.root {
@@ -1523,7 +1523,7 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
             .ingested_tip_height()
             .await
             .expect("cursor read"),
-        Some(BlockHeight(main.last().unwrap().height)),
+        Some(BlockHeight::from_raw(main.last().unwrap().height)),
         "main forward feed leaves the tree at the main tip",
     );
 
@@ -1554,7 +1554,7 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
             .ingested_tip_height()
             .await
             .expect("cursor read"),
-        Some(BlockHeight(deep.last().unwrap().height)),
+        Some(BlockHeight::from_raw(deep.last().unwrap().height)),
         "post-reorg the cursor advanced to the reorg_deep tip",
     );
 
@@ -1565,7 +1565,7 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
     for b in &deep {
         let (got, _depth) = g
             .curve_tree
-            .reference_root_and_depth(BlockHeight(b.height))
+            .reference_root_and_depth(BlockHeight::from_raw(b.height))
             .await
             .expect("root read");
         if got != b.root {

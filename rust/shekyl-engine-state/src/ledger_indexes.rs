@@ -139,7 +139,7 @@ impl LedgerIndexes {
             if self.pub_keys.contains_key(&pub_key_bytes) {
                 warn!(
                     tx = hex::encode(td.tx_hash),
-                    output_idx = td.internal_output_index,
+                    output_idx = td.internal_output_index.to_raw(),
                     "duplicate output key detected (potential burning bug) -- skipping"
                 );
                 continue;
@@ -185,7 +185,7 @@ impl LedgerIndexes {
         if let Some(&idx) = self.key_images.get(key_image) {
             if let Some(td) = ledger.transfers.get_mut(idx) {
                 td.spent = true;
-                td.spent_height = Some(spent_height);
+                td.spent_height = Some(shekyl_types::BlockHeight::from_raw(spent_height));
                 td.spending_tx_hash = Some(spending_tx);
                 // F14 confirmed-present release (§2.6) needs no write
                 // since PR-SJ-1b: the derived lock view is superseded by
@@ -300,8 +300,9 @@ impl LedgerIndexes {
     /// `ledger.reorg_blocks`, rewinds `ledger.tip` to the highest
     /// remaining block, and rebuilds `key_images` and `pub_keys`.
     pub fn handle_reorg(&mut self, ledger: &mut LedgerBlock, fork_height: u64) {
+        let fork = shekyl_types::BlockHeight::from_raw(fork_height);
         for idx in (0..ledger.transfers.len()).rev() {
-            if ledger.transfers[idx].block_height >= fork_height {
+            if ledger.transfers[idx].block_height >= fork {
                 ledger.transfers.remove(idx);
             }
         }
@@ -314,7 +315,7 @@ impl LedgerIndexes {
         // never in a block) are left untouched: a reorg of confirmed blocks does not
         // affect a spend that was never confirmed.
         for td in &mut ledger.transfers {
-            if td.spent_height.is_some_and(|h| h >= fork_height) {
+            if td.spent_height.is_some_and(|h| h >= fork) {
                 td.spent = false;
                 td.spent_height = None;
                 // The spending tx's block is gone with the fork; the
@@ -532,9 +533,9 @@ mod tests {
     fn mk_transfer(seed: u8, block_height: u64, key_image: Option<KeyImage>) -> TransferDetails {
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
-            internal_output_index: u64::from(seed),
-            global_output_index: u64::from(seed),
-            block_height,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(u64::from(seed)),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(u64::from(seed)),
+            block_height: shekyl_types::BlockHeight::from_raw(block_height),
             key: ED25519_BASEPOINT_POINT * Scalar::from(u64::from(seed) + 1),
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000),
@@ -545,7 +546,7 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: block_height + SPENDABLE_AGE,
+            eligible_height: shekyl_types::BlockHeight::from_raw(block_height) + SPENDABLE_AGE,
             frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,

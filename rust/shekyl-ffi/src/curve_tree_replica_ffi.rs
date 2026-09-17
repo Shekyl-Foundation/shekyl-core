@@ -241,7 +241,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
         .collect();
 
     match replica.client.ingest_block(BlockLeaves {
-        height: BlockHeight(height),
+        height: BlockHeight::from_raw(height),
         txs: &views,
     }) {
         Ok(()) => true,
@@ -270,7 +270,10 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_rollback_to_fork(
     }
     // SAFETY: caller contract.
     let replica = unsafe { &mut *replica };
-    match replica.client.rollback_to_fork(BlockHeight(fork_height)) {
+    match replica
+        .client
+        .rollback_to_fork(BlockHeight::from_raw(fork_height))
+    {
         Ok(()) => true,
         Err(err) => {
             tracing::error!("curve-tree replica: rollback to {fork_height} failed: {err:?}");
@@ -297,7 +300,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_tip_height(
     match replica.client.ingested_tip_height() {
         Some(tip) => {
             // SAFETY: caller contract on `out_height`.
-            unsafe { *out_height = tip.0 };
+            unsafe { *out_height = tip.to_raw() };
             true
         }
         None => false,

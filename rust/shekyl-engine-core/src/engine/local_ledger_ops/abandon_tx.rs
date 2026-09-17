@@ -165,9 +165,9 @@ mod tests {
     fn mk_row(seed: u8, gindex: u64) -> TransferDetails {
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
-            internal_output_index: 0,
-            global_output_index: gindex,
-            block_height: 10,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(gindex),
+            block_height: shekyl_types::BlockHeight::from_raw(10),
             key: curve25519_dalek::constants::ED25519_BASEPOINT_POINT,
             key_offset: curve25519_dalek::Scalar::ONE,
             commitment: shekyl_curve_primitives::Commitment::new(
@@ -181,7 +181,7 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: 10,
+            eligible_height: shekyl_types::BlockHeight::from_raw(10),
             frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
@@ -349,7 +349,7 @@ mod tests {
             let wallet = &mut guard.ledger;
             let mut spent = mk_row(0x10, 7);
             spent.spent = true;
-            spent.spent_height = Some(30);
+            spent.spent_height = Some(shekyl_types::BlockHeight::from_raw(30));
             spent.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                 [0x33; 32],
             ));
@@ -419,12 +419,16 @@ mod tests {
         // derivation reads it directly.
         let locks = wallet.spend_locks();
         let lock = locks
-            .get(7)
+            .get(shekyl_types::GlobalOutputIndex::from_raw(7))
             .expect("the abandoned row's carried input stays locked across the wipe");
         assert_eq!(lock.tx_hash.to_bytes(), txid);
-        assert_eq!(lock.accepted_at_height, 25);
+        assert_eq!(
+            lock.accepted_at_height,
+            shekyl_types::BlockHeight::from_raw(25)
+        );
         assert!(
-            !wallet.ledger.transfers[0].is_spendable(u64::MAX, &locks),
+            !wallet.ledger.transfers[0]
+                .is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &locks),
             "the replayed funding row is excluded from selection"
         );
         assert_eq!(

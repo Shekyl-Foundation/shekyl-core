@@ -13,8 +13,8 @@ use shekyl_address::ShekylAddress;
 use shekyl_crypto_pq::account::AllKeysBlob;
 use shekyl_crypto_pq::account::{generate_account_from_raw_seed, DerivationNetwork};
 use shekyl_curve_tree::{
-    select_reference_height, AssembleInput, BlockHeight, CurveTreeClient, Gindex, ReferenceBlock,
-    REF_ANCHOR_AGE,
+    select_reference_height, AssembleInput, BlockHash, BlockHeight, CurveTreeClient, CurveTreeRoot,
+    Gindex, ReferenceBlock, REF_ANCHOR_AGE,
 };
 use shekyl_engine_state::LedgerBlock;
 use shekyl_rpc_client::FeeRate;
@@ -297,7 +297,7 @@ fn populate_ledger(
             continue;
         };
         let amount = td.amount().to_raw();
-        let output_index = td.internal_output_index;
+        let output_index = td.internal_output_index.to_raw();
         let constructed = construct_output(
             &TEST_OUTPUT_TX_KEY,
             &blob.x25519_pk,
@@ -429,7 +429,7 @@ async fn tree_handle_ingested_through(cap: u64) -> (TempDir, CurveTreeHandle) {
     let (dir, handle) = fresh_tree_handle();
     for h in 0..=cap {
         handle
-            .ingest(BlockHeight(h), std::sync::Arc::new(Vec::new()))
+            .ingest(BlockHeight::from_raw(h), std::sync::Arc::new(Vec::new()))
             .await
             .expect("empty-leaf ingest advances the cursor");
     }
@@ -517,7 +517,7 @@ async fn funded_ledger_and_tree(
             Arc::new(Vec::new())
         };
         handle
-            .ingest(BlockHeight(h), txs)
+            .ingest(BlockHeight::from_raw(h), txs)
             .await
             .expect("consistent-fixture ingest");
     }
@@ -963,7 +963,7 @@ async fn submit_reanchors_at_horizon_then_broadcasts() {
     advance_ledger_empty_blocks(ledger.as_ref(), 21, 80);
     for h in 21..=80 {
         tree_for_advance
-            .ingest(BlockHeight(h), std::sync::Arc::new(Vec::new()))
+            .ingest(BlockHeight::from_raw(h), std::sync::Arc::new(Vec::new()))
             .await
             .expect("advance tree cursor");
     }
@@ -1101,7 +1101,7 @@ async fn build_then_submit_places_awaiting_confirmation_lock() {
             .expect("submit-accept arms the journal-derived F14 lock");
         assert_eq!(lock.tx_hash, tx_hash);
         assert!(
-            !td.is_spendable(u64::MAX, &spend_locks),
+            !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
             "journal-locked output must be excluded from selection"
         );
     }
@@ -1433,18 +1433,19 @@ async fn submit_already_in_chain_above_synced_clamps_the_lock_baseline() {
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert_eq!(
-                lock.accepted_at_height, 20,
+                lock.accepted_at_height,
+                shekyl_types::BlockHeight::from_raw(20),
                 "the lock is baselined at a height the wallet has reached — \
                  the claimed 25 clamped to the synced 20, so the watchdog \
                  horizon stays measurable"
             );
             assert_eq!(
                 row.lock_baseline,
-                Some(lock.accepted_at_height),
+                Some(lock.accepted_at_height.to_raw()),
                 "the derived lock carries exactly the journal baseline"
             );
             assert!(
-                !td.is_spendable(u64::MAX, &spend_locks),
+                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -1533,7 +1534,10 @@ async fn submit_already_in_chain_at_or_below_synced_requests_rescan_never_releas
                 .get(td.global_output_index)
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
-            assert_eq!(lock.accepted_at_height, 15);
+            assert_eq!(
+                lock.accepted_at_height,
+                shekyl_types::BlockHeight::from_raw(15)
+            );
         }
     }
 
@@ -1618,7 +1622,7 @@ async fn submit_already_in_pool_surfaces_verdict_without_changing_disposition() 
                 .expect("the filtered row is locked");
             assert_eq!(lock.tx_hash, expected_hash);
             assert!(
-                !td.is_spendable(u64::MAX, &spend_locks),
+                !td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &spend_locks),
                 "journal-locked output must be excluded from selection"
             );
         }
@@ -2036,9 +2040,11 @@ async fn dispatch_writes_the_send_journal_row() {
     // and the derived lock map carries the row's inputs under it.
     let spend_locks = guard.ledger.spend_locks();
     let lock = spend_locks
-        .get(row.inputs[0].gindex)
+        .get(shekyl_types::GlobalOutputIndex::from_raw(
+            row.inputs[0].gindex,
+        ))
         .expect("accept armed the journal-derived F14 lock over the carried input");
-    assert_eq!(row.lock_baseline, Some(lock.accepted_at_height));
+    assert_eq!(row.lock_baseline, Some(lock.accepted_at_height.to_raw()));
     assert_eq!(lock.tx_hash, txid);
     guard
         .ledger
@@ -2369,16 +2375,16 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let synced = ledger.with_ledger_block(LedgerBlock::height);
     let rh = select_reference_height(synced).expect("reference height resolves");
     let (curve_tree_root, ref_depth) = tree
-        .reference_root_and_depth(BlockHeight(rh))
+        .reference_root_and_depth(BlockHeight::from_raw(rh))
         .await
         .expect("reference root+depth");
     let block_hash = ledger
         .with_ledger_block(|ledger| ledger.block_hash_at(rh).copied())
         .expect("reference block hash present");
     let reference = ReferenceBlock {
-        height: BlockHeight(rh),
-        curve_tree_root,
-        block_hash,
+        height: BlockHeight::from_raw(rh),
+        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+        block_hash: BlockHash::from_bytes(block_hash),
     };
 
     // ── Assemble the REAL membership path for the funding output ─────
@@ -2386,7 +2392,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         .assemble_tx(
             reference,
             vec![AssembleInput {
-                gindex: Gindex(0),
+                gindex: Gindex::from_raw(0),
                 output_key: constructed.output_key,
                 commitment: constructed.commitment,
             }],
@@ -2421,8 +2427,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         })
         .collect();
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
+        reference_block: path.tree.reference_block.to_bytes(),
+        tree_root: path.tree.tree_root.to_bytes(),
         tree_depth: path.tree.tree_depth,
     };
 
@@ -3363,7 +3369,10 @@ async fn reserved_outputs_blocked_from_second_build() {
 fn assemble_tx_to_sign_rejects_missing_key_image() {
     use crate::engine::signing_assembly::assemble_tx_to_sign;
     use crate::engine::tx_fee_model::build_fee_directive;
-    use shekyl_curve_tree::{AssembleInput, AssembledPath, Gindex, TreeContext as CtTreeContext};
+    use shekyl_curve_tree::{
+        AssembleInput, AssembledPath, BlockHash, CurveTreeRoot, Gindex,
+        TreeContext as CtTreeContext,
+    };
     use shekyl_rpc_client::FeeRate;
 
     let ledger = Arc::new(test_ledger());
@@ -3386,7 +3395,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
     // `input_context_from_transfer` is reached. The path is unused before
     // that check fires, so a placeholder suffices.
     let assemble_inputs = vec![AssembleInput {
-        gindex: Gindex(100),
+        gindex: Gindex::from_raw(100),
         output_key: [0u8; 32],
         commitment: [0u8; 32],
     }];
@@ -3395,8 +3404,8 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         c1_layers: Vec::new(),
         c2_layers: Vec::new(),
         tree: CtTreeContext {
-            reference_block: [0u8; 32],
-            tree_root: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
+            tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
             tree_depth: 1,
         },
     }];

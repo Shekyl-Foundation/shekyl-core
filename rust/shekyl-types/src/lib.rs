@@ -16,9 +16,12 @@
 //! This crate is the canonical home for these types per
 //! `18-type-placement.mdc` (state-shaped types live with a foundational
 //! semantic owner, not in `shekyl-curve-tree` where some predecessors
-//! incidentally landed). It is the PR-0 deliverable of
-//! `docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md`; downstream crates re-export
-//! or import from here rather than redefining.
+//! incidentally landed). It is the vocabulary crate of
+//! `docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md` (`RTN-1…RTN-N`); downstream
+//! crates import from here rather than redefining. `#![no_std]` so a leaf
+//! math crate (`shekyl-difficulty`) can consume the same types the store
+//! and wallet do — refusing that edge is how `BlockHeight` got redefined
+//! as `u64` in the DAA.
 //!
 //! ## Two clocks, three types
 //!
@@ -71,6 +74,7 @@
 //! assert_as_ref::<shekyl_types::KeyImage>();
 //! ```
 
+#![no_std]
 #![deny(unsafe_code)]
 
 use core::fmt;
@@ -84,7 +88,7 @@ macro_rules! scalar_u64 {
         $(#[$doc])*
         #[derive(
             Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default,
-            ::serde::Serialize, ::serde::Deserialize,
+            ::serde::Serialize, ::serde::Deserialize, ::zeroize::Zeroize,
         )]
         #[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
         #[serde(transparent)]
@@ -114,6 +118,12 @@ macro_rules! scalar_u64 {
             #[must_use]
             pub const fn is_zero(self) -> bool {
                 self.0 == 0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(&self.0, f)
             }
         }
     };
@@ -394,6 +404,38 @@ scalar_u64! {
     SettlementEpoch
 }
 
+scalar_u64! {
+    /// An archival **shard** identifier — a corpus partition, not a height,
+    /// epoch, or gindex.
+    ///
+    /// Bond-post `shard_ids`, serve-credit `(P, s, E)`, and emission preimages
+    /// all name shards. A bare `u64` here transposes against [`SettlementEpoch`]
+    /// or [`BlockHeight`] and binds the wrong commitment.
+    ShardId
+}
+
+scalar_u64! {
+    /// A leaf's position **inside a frozen segment** (the archival serve unit),
+    /// not a ledger-wide [`GlobalOutputIndex`] and not a curve-tree
+    /// drain-order `TreePosition`.
+    LeafIndex
+}
+
+scalar_u64! {
+    /// A block's **weight** (serialized size used by the median / long-term
+    /// window), not an amount and not a difficulty.
+    ///
+    /// Distinct from [`LongTermWeight`] so a connect fact cannot pass one
+    /// where the other is expected.
+    BlockWeight
+}
+
+scalar_u64! {
+    /// A block's **long-term weight** (the clipped weight that feeds the
+    /// long-term median), not [`BlockWeight`] and not an amount.
+    LongTermWeight
+}
+
 hash32! {
     /// A block identity hash.
     ///
@@ -425,6 +467,46 @@ hash32! {
     /// the empty byte string and this value is `keccak256("")`. Distinct
     /// from [`TxHash`] so the two can never be swapped at a store boundary.
     PrunableHash
+}
+
+hash32! {
+    /// `keccak256(varint(count) ‖ pqc_auths)` — the **third** component of an
+    /// FCMP++ spend's txid (`PDM-Q-F26`, S-CHAIN-W SCW-10 / S-CHAIN-R A3).
+    ///
+    /// Distinct from [`PrunableHash`] (fourth component, the prunable region)
+    /// and from [`TxHash`] (the composed txid). A coinbase and a spend whose
+    /// `pqc_auths` is empty hash **3-part**, so the identity carries
+    /// `Option<PqcAuthHash>`: `None` is "the txid has no such component",
+    /// never a sentinel hash. Public, non-correlating; full-hex `Debug`.
+    PqcAuthHash
+}
+
+hash32! {
+    /// The block-header **attestation root** (archival credit-wire witness
+    /// commitment), not a [`CurveTreeRoot`] and not a [`BlockHash`].
+    ///
+    /// The wire header stores `[u8; 32]`; convert at the edge via
+    /// [`AttestationRoot::from_bytes`] / [`AttestationRoot::as_bytes`].
+    AttestationRoot
+}
+
+hash32! {
+    /// An output's **one-time public key** (CryptoNote `P = H_s(rA) G + B`),
+    /// 32-byte compressed Ed25519 encoding.
+    ///
+    /// Distinct from [`KeyImage`] (the spend identifier `I = x · H_p(P)`),
+    /// from [`CommitmentBytes`] (the amount commitment), and from [`TxHash`].
+    /// On-chain public; full-hex `Debug`.
+    OneTimePubkey
+}
+
+hash32! {
+    /// An output's **Pedersen amount commitment** as 32 compressed bytes.
+    ///
+    /// Distinct from [`OneTimePubkey`] and from [`KeyImage`]. The curve type
+    /// lives in `shekyl-curve-primitives`; this is the store/wire *name* so a
+    /// commitment cannot be passed where a pubkey is expected.
+    CommitmentBytes
 }
 
 hash32! {

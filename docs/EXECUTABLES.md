@@ -223,7 +223,7 @@ is [`docs/CLI_PARITY_MATRIX.md`](CLI_PARITY_MATRIX.md).
 
 | Command | Description |
 |---------|-------------|
-| `request new <amount> <label> [--expiry <height>]` | Create a payment request (`shekyl:` URI) |
+| `request new <amount> <label> [--expiry <unix\|1h\|7d>]` | Create a payment request (`shekyl:` URI); expiry is wall-clock unix seconds or a duration from now |
 | `requests list [pending\|matched\|all]` | List payment requests |
 | `make_uri [--amount X] [--label L] [--address ADDR]` | Compose a `shekyl:` payment URI |
 | `parse_uri <uri>` | Decode a `shekyl:` payment URI |

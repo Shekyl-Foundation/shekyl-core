@@ -226,7 +226,10 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("merge ok");
     assert_eq!(ledger.transfers().len(), 1);
-    assert_eq!(ledger.transfers()[0].block_height, 1);
+    assert_eq!(
+        ledger.transfers()[0].block_height,
+        shekyl_types::BlockHeight::from_raw(1)
+    );
 
     // The test fixture's `RecoveredWalletOutput` carries a zeroed
     // key image (see `RecoveredWalletOutput::new_for_test`), so
@@ -255,7 +258,10 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
     };
     apply_scan_result_to_state(&mut ledger, &mut indexes, result).expect("spend merge ok");
     assert!(ledger.transfers()[0].spent);
-    assert_eq!(ledger.transfers()[0].spent_height, Some(3));
+    assert_eq!(
+        ledger.transfers()[0].spent_height,
+        Some(shekyl_types::BlockHeight::from_raw(3))
+    );
 }
 
 /// Cross-batch invariant pin (PERF_MERGE_INSERTION_INDICES_PREFLIGHT
@@ -388,7 +394,10 @@ fn apply_handles_reorg_rewind_before_per_height_events() {
     apply_scan_result_to_state(&mut ledger, &mut indexes, second).expect("reorg ok");
     assert_eq!(ledger.height(), 5);
     assert_eq!(ledger.transfers().len(), 1);
-    assert_eq!(ledger.transfers()[0].block_height, 4);
+    assert_eq!(
+        ledger.transfers()[0].block_height,
+        shekyl_types::BlockHeight::from_raw(4)
+    );
     assert_eq!(ledger.block_hash_at(3), Some(&[0xA3; 32]));
     assert_eq!(ledger.block_hash_at(4), Some(&[0xA4; 32]));
 }
@@ -634,7 +643,10 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     let td = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
+        .find(|t| {
+            t.tx_hash.as_bytes() == &tx_hash
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
+        })
         .expect("merged transfer present");
     assert!(td.source_ciphertext.is_none());
     assert!(td.output_handle.is_none());
@@ -649,7 +661,10 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     let td = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
+        .find(|t| {
+            t.tx_hash.as_bytes() == &tx_hash
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
+        })
         .expect("merged transfer still present");
     let stored_ct = td
         .source_ciphertext
@@ -705,7 +720,10 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
     let m = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &matched_tx && t.internal_output_index == matched_idx)
+        .find(|t| {
+            t.tx_hash.as_bytes() == &matched_tx
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(matched_idx)
+        })
         .expect("matched transfer present");
     assert!(m.source_ciphertext.is_some());
     assert!(m.output_handle.is_some());
@@ -713,7 +731,10 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
     let u = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &unmatched_tx && t.internal_output_index == unmatched_idx)
+        .find(|t| {
+            t.tx_hash.as_bytes() == &unmatched_tx
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(unmatched_idx)
+        })
         .expect("unmatched transfer present");
     assert!(u.source_ciphertext.is_none());
     assert!(u.output_handle.is_none());
@@ -761,7 +782,10 @@ fn populate_engine_handle_fields_is_idempotent() {
     let td = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
+        .find(|t| {
+            t.tx_hash.as_bytes() == &tx_hash
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
+        })
         .expect("merged transfer present");
     let stored_ct = td
         .source_ciphertext
@@ -819,11 +843,14 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let sentinel_ct = ciphertext_for_seed(0xEE);
     let sentinel_handle = derive_output_handle(&[0xCC; 32], &[0xCC; 32], 0xCC);
     for td in &mut ledger.transfers {
-        if td.tx_hash.as_bytes() == &tx_hash_a && td.internal_output_index == internal_idx_a {
+        if td.tx_hash.as_bytes() == &tx_hash_a
+            && td.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx_a)
+        {
             // Transfer A: source_ciphertext pre-populated, output_handle still None.
             td.source_ciphertext = Some(sentinel_ct.clone());
             td.output_handle = None;
-        } else if td.tx_hash.as_bytes() == &tx_hash_b && td.internal_output_index == internal_idx_b
+        } else if td.tx_hash.as_bytes() == &tx_hash_b
+            && td.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx_b)
         {
             // Transfer B: output_handle pre-populated, source_ciphertext still None.
             td.source_ciphertext = None;
@@ -842,7 +869,11 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let td_a = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash_a && t.internal_output_index == internal_idx_a)
+        .find(|t| {
+            t.tx_hash.as_bytes() == &tx_hash_a
+                && t.internal_output_index
+                    == shekyl_types::OutputIndexInTx::from_raw(internal_idx_a)
+        })
         .expect("transfer A present");
     // A: source_ciphertext kept (sentinel, not real_ct_a); output_handle filled.
     let stored_ct_a = td_a
@@ -863,7 +894,11 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let td_b = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash_b && t.internal_output_index == internal_idx_b)
+        .find(|t| {
+            t.tx_hash.as_bytes() == &tx_hash_b
+                && t.internal_output_index
+                    == shekyl_types::OutputIndexInTx::from_raw(internal_idx_b)
+        })
         .expect("transfer B present");
     // B: output_handle kept (sentinel, not derived); source_ciphertext filled.
     assert_eq!(
@@ -989,7 +1024,7 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
         .transfers()
         .iter()
         .take(100)
-        .map(|td| (td.tx_hash.to_bytes(), td.internal_output_index))
+        .map(|td| (td.tx_hash.to_bytes(), td.internal_output_index.to_raw()))
         .collect();
     for (i, key) in prior_keys.iter().enumerate() {
         residue.insert(*key, ciphertext_for_seed(u8::try_from(i & 0xFF).unwrap()));
@@ -1061,7 +1096,10 @@ fn populate_engine_handle_fields_no_op_on_empty_residue() {
     let td = ledger
         .transfers()
         .iter()
-        .find(|t| t.tx_hash.as_bytes() == &tx_hash && t.internal_output_index == internal_idx)
+        .find(|t| {
+            t.tx_hash.as_bytes() == &tx_hash
+                && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
+        })
         .expect("merged transfer present");
     assert!(td.source_ciphertext.is_none());
     assert!(td.output_handle.is_none());

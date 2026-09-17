@@ -73,8 +73,8 @@ use shekyl_crypto_pq::output::{
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, CurveTreeRoot, Gindex,
+    RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
@@ -266,14 +266,14 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(height),
+                height: BlockHeight::from_raw(height),
                 txs: &txs,
             })
             .expect("ingest block");
     }
 
     let (tree_root, tree_depth) = client
-        .root_and_depth_at(BlockHeight(reference_height))
+        .root_and_depth_at(BlockHeight::from_raw(reference_height))
         .expect("tree root + depth at reference height");
     assert!(
         tree_depth >= 3,
@@ -282,12 +282,12 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 3. Assemble the membership path via the production client ─────────
     let reference = ReferenceBlock {
-        height: BlockHeight(reference_height),
-        curve_tree_root: tree_root,
-        block_hash: [0xAB; 32],
+        height: BlockHeight::from_raw(reference_height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tree_root),
+        block_hash: BlockHash::from_bytes([0xAB; 32]),
     };
     let target = AssembleInput {
-        gindex: Gindex(spent_index), // genesis vout 0 → first drained leaf
+        gindex: Gindex::from_raw(spent_index), // genesis vout 0 → first drained leaf
         output_key: spent.output_key,
         commitment: spent.commitment,
     };
@@ -373,8 +373,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 6. Sign via the production transaction builder ────────────────────
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
+        reference_block: path.tree.reference_block.to_bytes(),
+        tree_root: path.tree.tree_root.to_bytes(),
         tree_depth: path.tree.tree_depth,
     };
     // Bind the proof + PQC auths to the *real* transaction prefix, exactly as

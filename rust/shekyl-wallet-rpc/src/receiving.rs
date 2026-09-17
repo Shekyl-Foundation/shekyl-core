@@ -196,8 +196,10 @@ fn payment_request_view(r: &PaymentRequest) -> PaymentRequestView {
         id: r.id.as_u64().to_string(),
         label: r.label.expose().as_str().to_owned(),
         amount: atomic_units_string(r.amount_atomic),
-        created_at: i64::try_from(r.created_at).unwrap_or(i64::MAX),
-        expiry: r.expiry.map(|e| i64::try_from(e).unwrap_or(i64::MAX)),
+        created_at: i64::try_from(r.created_at.to_raw()).unwrap_or(i64::MAX),
+        expiry: r
+            .expiry
+            .map(|e| i64::try_from(e.to_raw()).unwrap_or(i64::MAX)),
         state: match r.state {
             PaymentRequestState::Pending => PaymentRequestStateView::Pending,
             PaymentRequestState::Matched => PaymentRequestStateView::Matched,
@@ -207,7 +209,7 @@ fn payment_request_view(r: &PaymentRequest) -> PaymentRequestView {
         matched_tx_hash: r.matched_tx_hash.map(|h| h.to_string()),
         matched_output_index: r
             .matched_output_index
-            .map(|i| i64::try_from(i).unwrap_or(i64::MAX)),
+            .map(|i| i64::try_from(i.to_raw()).unwrap_or(i64::MAX)),
     }
 }
 

@@ -409,7 +409,7 @@ async fn generate_inbound<D: Rpc>(
                 // every incoming path); a vout above u32::MAX cannot
                 // occur in a canonical tx.
                 let ciphertext = td.source_ciphertext.clone()?;
-                let vout_index = u32::try_from(td.internal_output_index).ok()?;
+                let vout_index = u32::try_from(td.internal_output_index.to_raw()).ok()?;
                 Some(InboundProofOutput {
                     vout_index,
                     ciphertext,
@@ -570,7 +570,7 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
                 // disclosed and are skipped rather than failing the proof.
                 Some(ReserveCandidate {
                     txid: td.tx_hash.to_bytes(),
-                    vout: u32::try_from(td.internal_output_index).ok()?,
+                    vout: u32::try_from(td.internal_output_index.to_raw()).ok()?,
                     amount: td.amount(),
                     ciphertext: td.source_ciphertext.clone()?,
                     key_image: td.key_image?,

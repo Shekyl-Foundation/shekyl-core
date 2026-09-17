@@ -81,20 +81,20 @@ impl CurveTreeClient {
         // `entries` + `build_layers(assemble_leaf_stream(...))` (CT-4), because
         // `prune_frozen` may drop non-owned leaf bytes from frozen segments.
         let got = self.root_at(reference.height)?;
-        if got != reference.curve_tree_root {
+        if got != reference.curve_tree_root.to_bytes() {
             return Err(ClientError::RootMismatch {
                 height: reference.height,
-                expected: reference.curve_tree_root,
+                expected: reference.curve_tree_root.to_bytes(),
                 got,
             });
         }
 
-        let stream = assemble_leaf_stream(&self.entries, cutoff.0);
+        let stream = assemble_leaf_stream(&self.entries, cutoff.to_raw());
         let layers = build_layers(&stream);
 
         // One drain-order definition shared with the scalar stream, so a
         // leaf's index here equals its index in `stream` (recon §S2).
-        let drained = drained_sorted(&self.entries, cutoff.0);
+        let drained = drained_sorted(&self.entries, cutoff.to_raw());
         // X3: resolve by `gindex`, the tree's unique key, not by `(O, C)`
         // content. The owned output's gindex is always present among drained
         // leaves, so this is total — no collision case.

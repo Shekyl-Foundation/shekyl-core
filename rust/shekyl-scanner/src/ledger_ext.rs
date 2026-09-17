@@ -53,9 +53,13 @@ impl TransferDetailsExt for TransferDetails {
     fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self {
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes(output.transaction()),
-            internal_output_index: output.index_in_transaction(),
-            global_output_index: output.index_on_blockchain(),
-            block_height,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(
+                output.index_in_transaction(),
+            ),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(
+                output.index_on_blockchain(),
+            ),
+            block_height: shekyl_types::BlockHeight::from_raw(block_height),
             key: output.key(),
             key_offset: output.key_offset(),
             commitment: output.commitment().clone(),
@@ -98,13 +102,11 @@ impl TransferDetailsExt for TransferDetails {
             // computation is the shared `transfer::eligible_height` — the
             // single definition of "in the tree yet," also stored by the
             // pscan funding path as `spendable_height` (GF4b-6,
-            // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6). This legacy field is
-            // `u64`-shaped, so the typed result converts at this edge.
+            // ARCHIVAL_GF4B_BACKING_LINEAGE.md §3.6).
             eligible_height: eligible_height(
                 shekyl_types::BlockHeight::from_raw(block_height),
                 output.additional_timelock(),
-            )
-            .to_raw(),
+            ),
             frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
@@ -234,7 +236,10 @@ mod x5_eligible_height_tests {
     #[test]
     fn eligible_height_baseline_is_spendable_age() {
         let td = TransferDetails::from_wallet_output(&dummy_output(), 100);
-        assert_eq!(td.eligible_height, 100 + SPENDABLE_AGE);
+        assert_eq!(
+            td.eligible_height,
+            shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE
+        );
     }
 
     /// X5 core: a block-based additional timelock (the coinbase +60 lock) floors
@@ -247,7 +252,8 @@ mod x5_eligible_height_tests {
             dummy_output().with_additional_timelock(Timelock::Block(BlockHeight::from_raw(160)));
         let td = TransferDetails::from_wallet_output(&out, 100);
         assert_eq!(
-            td.eligible_height, 160,
+            td.eligible_height,
+            shekyl_types::BlockHeight::from_raw(160),
             "block timelock (160) floors eligible_height above block + SPENDABLE_AGE (110)"
         );
     }

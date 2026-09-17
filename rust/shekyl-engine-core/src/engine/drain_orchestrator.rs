@@ -758,7 +758,7 @@ pub(crate) async fn orchestrate_drain(
         .map_err(|e| DrainOrchestrationError::ReferenceUnanchorable {
             detail: e.to_string(),
         })?;
-    let reference_height = BlockHeight::from_raw(reference.height.0);
+    let reference_height = BlockHeight::from_raw(reference.height.to_raw());
 
     // 2. Scope to the persona's own unreserved records, then plan per the
     //    intent: the F-D1 planner (project → amount → select) for a payment
@@ -865,7 +865,7 @@ pub(crate) async fn orchestrate_drain(
     let assemble_inputs: Vec<AssembleInput> = selected
         .iter()
         .map(|r| AssembleInput {
-            gindex: Gindex(r.gindex.to_raw()),
+            gindex: Gindex::from_raw(r.gindex.to_raw()),
             output_key: r.output_key,
             commitment: r.commitment,
         })
@@ -890,8 +890,8 @@ pub(crate) async fn orchestrate_drain(
             detail: "assemble_tx returned no paths for a non-empty selection".to_owned(),
         })?;
     let tree_ctx = TreeContext {
-        reference_block: first.tree.reference_block,
-        tree_root: first.tree.tree_root,
+        reference_block: first.tree.reference_block.to_bytes(),
+        tree_root: first.tree.tree_root.to_bytes(),
         tree_depth: first.tree.tree_depth,
     };
     let funding: Vec<FundingInputContext> = selected

@@ -1,14 +1,49 @@
 # Raw-primitive → domain-newtype migration (work plan)
 
-**Status:** Design / work plan (2026-06-14). Scopes a PR series that lifts
-raw `u64` / `u128` / `[u8; N]` / `Vec<u8>` carrying domain meaning into
-domain newtypes across the `shekyl-core` Rust stack, finishing the migration
-that `AtomicUnits` and `KeyImage` started. Not yet executed; this doc is the
-contract the PRs cut against. The clock-semantics decision in §7 (PR D) is
-recorded as a binding entry in
+**Status:** LANDED — `RTN-1…RTN-6` (as of 2026-09-17). Living work plan for
+adopting domain newtypes before the redb writers freeze. Last verified
+against this branch 2026-09-17. The June 2026 PR-0 types crate **landed**;
+RTN-1…RTN-6 are the remaining adoption, landed in this family PR. The
+clock-semantics decision in §7 is recorded as a binding entry in
 [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) (2026-06-14 —
 "Time fields: block-height vs wall-clock dichotomy + the
 `BlockHeight`/`Timestamp`/`BlockCount` type trio").
+
+## 0. HEAD validity (2026-09-17) — grep surface
+
+A June 2026 finding is **not** automatically still owed. This table is the
+status of record; a section below that disagrees with a row is
+**records-was** (the 2026-06-14 plan), not current.
+
+| Item | Status at HEAD (2026-09-17) | Carrier |
+| --- | --- | --- |
+| `shekyl-types` crate (`BlockHeight`, `BlockCount`, `Timestamp`, `TxHash`, `BlockHash`, `GlobalOutputIndex`, `OutputIndexInTx`, `KeyImage`, `CurveTreeRoot`, `PrunableHash`, `Timelock`, `PCanonicalId`, `SettlementEpoch`, …) | LANDED (PR 0, June 2026) | `rust/shekyl-types` |
+| `PqcAuthHash`, `ShardId`, `LeafIndex`, `BlockWeight`, `LongTermWeight`, `OneTimePubkey`, `CommitmentBytes`, `AttestationRoot`; crate `#![no_std]` | LANDED — RTN-1 | `rust/shekyl-types` |
+| Store codecs (`BlockInfo`, `TxIndex`, `OutTx`, `OutKey`, `TxOutputIndices`, `ConnectFacts`) typed; `CurveRoot` deleted in favor of `CurveTreeRoot`; type-only codec change, no `SCHEMA_VERSION` bump | LANDED — RTN-2 | `shekyl-chain-store` |
+| `TxIdentity.pqc_auth_hash: Option<PqcAuthHash>` (`PDM-Q-F26`, DRS §7.7 / S-CHAIN-R A3) | LANDED — RTN-3 | `shekyl-chain-rules` |
+| `shekyl-curve-tree` uses `shekyl-types` `BlockHeight` / `Gindex` (`pub type Gindex = GlobalOutputIndex`) | LANDED — RTN-4 | `shekyl-curve-tree` |
+| `shekyl-difficulty` `lwma1_next(BlockHeight, &[Timestamp], &[CumulativeDifficulty]) -> Difficulty`; leftover `shekyl-consensus::Difficulty` deleted (re-export) | LANDED — RTN-5 | `shekyl-difficulty` |
+| `TransferDetails` indices/heights typed; `PaymentRequest.expiry` is wall-clock `Timestamp`; CLI `--expiry` unix seconds or duration | LANDED — RTN-6 | `shekyl-engine-state` / CLI |
+| Money-path `AtomicUnits` adoption (original PR A) | PARTIAL — not this family's freeze gate | original §4 |
+| Secret-material wrapping (original PR B) | OPEN, not the redb freeze | original §5 |
+| Crypto-object newtypes (original PR E) | DEFERRED — transform-shaped, live in defining crates | original §8 |
+
+**What this family will not do.** Role-tagged heights (`CreationHeight` /
+`EvalHeight`) — one [`BlockHeight`], named fields. Wire/RPC DTO newtypes.
+`impl redb::Key for shekyl_types::BlockHeight` (orphan rule — thin local
+key wrappers). Bumping `SCHEMA_VERSION` for type-only codec field changes
+that encode identically. Putting `Difficulty` in `shekyl-types` (it is
+transform-shaped; it lives in `shekyl-difficulty`).
+
+**Payment-request clock (RTN-6 LANDED 2026-09-17, restating §7.2).** Humans /
+off-chain invoices use wall-clock [`Timestamp`]. Daemon-internal deadlines
+use [`BlockHeight`]. The CLI that shipped `--expiry <height>` (pre-RTN-6)
+was a defect against the 2026-06-14 ruling; RTN-6 restored `Timestamp` and
+corrected the flag.
+
+Original PR sequence (PR 0 / A / B / C / D / E) is the 2026-06-14
+unbundling. **RTN-1…RTN-6** is the remaining adoption, registered in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2.
 
 ## 1. Thesis & precedent
 

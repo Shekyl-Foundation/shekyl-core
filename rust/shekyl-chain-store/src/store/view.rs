@@ -89,7 +89,7 @@ use redb::ReadableTable;
 use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 
-use crate::codec::{BlockInfo, CurveRoot};
+use crate::codec::BlockInfo;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{CURVE_TREE_ROOTS, SPENT_KEYS};
 
@@ -196,12 +196,10 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
             Some((tip, _)) if h <= tip.saturating_add(1) => {}
             _ => return Ok(AtHeight::AboveTip),
         }
-        let root: CurveRoot =
+        let root: CurveTreeRoot =
             chain_reads::cell(self.batch.txn(), CURVE_TREE_ROOTS, h, "curve_tree_roots")
                 .map_err(|f| self.arm(f))?
                 .ok_or_else(|| self.absent_below_tip("curve_tree_roots"))?;
-        Ok(AtHeight::Recorded(CurveTreeRoot::from_bytes(
-            *root.as_bytes(),
-        )))
+        Ok(AtHeight::Recorded(root))
     }
 }

@@ -32,7 +32,7 @@ pub fn relatedness(a: &TransferDetails, b: &TransferDetails) -> u32 {
     }
 
     // Close block heights suggest temporal correlation
-    let height_diff = a.block_height.abs_diff(b.block_height);
+    let height_diff = a.block_height.to_raw().abs_diff(b.block_height.to_raw());
     if height_diff > 0 && height_diff <= 10 {
         score += 1;
     }

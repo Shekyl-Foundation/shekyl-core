@@ -24,8 +24,8 @@ use shekyl_crypto_pq::signature::{
     HybridEd25519MlDsa, HybridPublicKey, HybridSecretKey, SignatureScheme,
 };
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, Gindex, RawOutput,
-    ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, ChunkLeaf, CurveTreeClient, CurveTreeRoot,
+    Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::{
     ed25519_point_to_selene_scalar, leaf_from_chunk_entry, SELENE_CHUNK_WIDTH,
@@ -434,16 +434,16 @@ fn ct2_ingested() -> (CurveTreeClient, Vec<Ct2Block>, ReferenceBlock) {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(blk.height),
+                height: BlockHeight::from_raw(blk.height),
                 txs: &txs,
             })
             .unwrap();
     }
     let tip = blocks.last().expect("non-empty");
     let reference = ReferenceBlock {
-        height: BlockHeight(tip.height),
-        curve_tree_root: tip.root,
-        block_hash: [0u8; 32],
+        height: BlockHeight::from_raw(tip.height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
+        block_hash: BlockHash::from_bytes([0u8; 32]),
     };
     (client, blocks, reference)
 }
@@ -455,7 +455,7 @@ fn ct2_opening_at(
     raw: RawOutput,
 ) -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
     let input = AssembleInput {
-        gindex: Gindex(gindex),
+        gindex: Gindex::from_raw(gindex),
         output_key: raw.output_key,
         commitment: raw.commitment.expect("coinbase output has a commitment"),
     };
@@ -476,7 +476,7 @@ fn ct2_opening_at(
     };
     (
         leaf_bytes,
-        reference.curve_tree_root,
+        reference.curve_tree_root.to_bytes(),
         opening,
         layer_scalars,
     )
@@ -484,7 +484,7 @@ fn ct2_opening_at(
 
 fn ct2_founder_opening() -> ([u8; 128], [u8; 32], SegmentPathOpening, Vec<[u8; 32]>) {
     let (client, blocks, reference) = ct2_ingested();
-    let last_drained = reference.height.0.saturating_sub(61);
+    let last_drained = reference.height.to_raw().saturating_sub(61);
     let drained = blocks
         .iter()
         .find(|b| b.height == last_drained)

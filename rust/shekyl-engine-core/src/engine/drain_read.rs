@@ -245,7 +245,7 @@ where
         let reference = anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
             .await
             .map_err(anchor_err_to_read_err)?;
-        let reference_height = BlockHeight::from_raw(reference.height.0);
+        let reference_height = reference.height;
 
         scoped_spendable(
             pscan_state.funding_outputs(),

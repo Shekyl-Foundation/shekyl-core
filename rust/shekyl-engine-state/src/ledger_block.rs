@@ -357,7 +357,10 @@ impl LedgerBlock {
             .iter()
             .enumerate()
             .filter(|(_, td)| {
-                if !td.is_spendable(current_height, spend_locks) {
+                if !td.is_spendable(
+                    shekyl_types::BlockHeight::from_raw(current_height),
+                    spend_locks,
+                ) {
                     return false;
                 }
                 if let Some(min) = min_amount {
@@ -424,9 +427,9 @@ mod tests {
         let internal_output_index = u64::from(seed);
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes(tx_hash),
-            internal_output_index,
-            global_output_index: 1_000 + u64::from(seed),
-            block_height: 100,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(internal_output_index),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(1_000 + u64::from(seed)),
+            block_height: shekyl_types::BlockHeight::from_raw(100),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000_000 + u64::from(seed)),
@@ -454,7 +457,7 @@ mod tests {
                 &tx_hash,
                 internal_output_index,
             )),
-            eligible_height: 100 + SPENDABLE_AGE,
+            eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
             frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,

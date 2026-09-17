@@ -468,7 +468,7 @@ where
         let reference = anchored_reference_block(&curve_tree, chain_tip, block_hash_at)
             .await
             .map_err(StakeEngineError::from)?;
-        let reference_height = BlockHeight::from_raw(reference.height.0);
+        let reference_height = BlockHeight::from_raw(reference.height.to_raw());
         let required = AtomicUnits::from_raw(
             fee.to_raw()
                 .saturating_add(2)
@@ -493,7 +493,7 @@ where
             .records
             .iter()
             .map(|r| AssembleInput {
-                gindex: Gindex(r.gindex.to_raw()),
+                gindex: Gindex::from_raw(r.gindex.to_raw()),
                 output_key: r.output_key,
                 commitment: r.commitment,
             })
@@ -505,7 +505,9 @@ where
                 // The one retryable path-assembly refusal, kept typed across
                 // the boundary (same as the bond path).
                 CurveTreeHandleError::Client(ClientError::OutputNotDrained { gindex, .. }) => {
-                    BondAssemblyError::OutputNotYetDrained { gindex: gindex.0 }
+                    BondAssemblyError::OutputNotYetDrained {
+                        gindex: gindex.to_raw(),
+                    }
                 }
                 other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
             })

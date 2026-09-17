@@ -461,9 +461,9 @@ mod tests {
         use curve25519_dalek::{constants::ED25519_BASEPOINT_POINT, Scalar};
         TransferDetails {
             tx_hash: TxHash::from_bytes([seed; 32]),
-            internal_output_index: u64::from(seed),
-            global_output_index: u64::from(seed),
-            block_height: 100,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(u64::from(seed)),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(u64::from(seed)),
+            block_height: shekyl_types::BlockHeight::from_raw(100),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: shekyl_curve_primitives::Commitment::new(Scalar::ONE, 1_000),
@@ -474,7 +474,7 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: 100 + SPENDABLE_AGE,
+            eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
             frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
@@ -575,7 +575,7 @@ mod tests {
                 (|wallet: &mut shekyl_engine_state::WalletLedger| {
                     let mut td = transfer_at(1);
                     td.spent = true;
-                    td.spent_height = Some(4_100);
+                    td.spent_height = Some(shekyl_types::BlockHeight::from_raw(4_100));
                     td.spending_tx_hash = Some(TxHash::from_bytes([0xEE; 32]));
                     wallet.ledger = ledger_with(vec![td]);
                 }) as fn(&mut shekyl_engine_state::WalletLedger),
@@ -660,12 +660,12 @@ mod tests {
         // carried input (gindex 3) stays locked.
         let locks = wallet.spend_locks();
         assert_eq!(locks.len(), 1);
-        assert!(locks.contains(3));
+        assert!(locks.contains(shekyl_types::GlobalOutputIndex::from_raw(3)));
         let ledger = &wallet.ledger;
         for td in ledger.transfers() {
             let locked = locks.contains(td.global_output_index);
             assert_eq!(
-                td.is_spendable(u64::MAX, &locks),
+                td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &locks),
                 !locked,
                 "gindex {} spendability must mirror the derived lock",
                 td.global_output_index

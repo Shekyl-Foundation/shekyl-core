@@ -51,8 +51,8 @@ use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, CurveTreeRoot, Gindex,
+    RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::{tree::ed25519_point_to_selene_scalar, PqcKeyScalar};
 use shekyl_tx_builder::{sign_pqc_auths, tx_prefix_hash_from_parts, LeafEntry, SpendInput};
@@ -159,7 +159,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(height),
+                height: BlockHeight::from_raw(height),
                 txs: &txs,
             })
             .expect("ingest block");
@@ -178,7 +178,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
     );
 
     let (tree_root, tree_depth) = client
-        .root_and_depth_at(BlockHeight(reference_height))
+        .root_and_depth_at(BlockHeight::from_raw(reference_height))
         .expect("tree root + depth at reference height");
     assert!(
         tree_depth >= 3,
@@ -187,14 +187,14 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
 
     // ── The spend, on the production path ────────────────────────────────
     let reference = ReferenceBlock {
-        height: BlockHeight(reference_height),
-        curve_tree_root: tree_root,
-        block_hash: [0xAB; 32],
+        height: BlockHeight::from_raw(reference_height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tree_root),
+        block_hash: BlockHash::from_bytes([0xAB; 32]),
     };
     let path = client
         .assemble_path(
             &AssembleInput {
-                gindex: Gindex(spent_index),
+                gindex: Gindex::from_raw(spent_index),
                 output_key: spent.output_key,
                 commitment: spent.commitment,
             },

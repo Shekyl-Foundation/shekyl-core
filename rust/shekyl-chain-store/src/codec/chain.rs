@@ -21,39 +21,45 @@
 //! codec ([`TxOutputIndices`]) refuses a length that is not a whole number of
 //! entries. All of it is strict both ways (`codec` module docs).
 
+use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_types::{
+    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
+    OneTimePubkey, OutputIndexInTx, Timelock, Timestamp, TxHash,
+};
+use shekyl_units::AtomicUnits;
+
 use super::{exact, Canonical, CodecError};
-use crate::lmdb_order::Hash32;
+use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 
-/// A 32-byte curve-tree root as the chain records it — a Selene field
-/// element, not a hash, so it is not a [`Hash32`] even though it is the
-/// same width. Value of `curve_tree_roots[h + 1]` (register row SI-4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct CurveRoot([u8; 32]);
-
-impl CurveRoot {
-    /// Wrap the serialized root. An *edge* constructor.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// The serialized root.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+/// Decode a stored `unlock_time` word.
+///
+/// The reverse of [`Timelock::to_unlock_raw`] is **not** in `shekyl-types`
+/// (the owning wire format owns the lift). Store cells treat `0` as
+/// [`Timelock::None`] and every other value as a block-height lock — the
+/// only encoding Shekyl writes.
+#[must_use]
+pub(crate) fn stored_timelock(raw: u64) -> Timelock {
+    if raw == 0 {
+        Timelock::None
+    } else {
+        Timelock::Block(BlockHeight::from_raw(raw))
     }
 }
 
-impl Canonical for CurveRoot {
+/// `curve_tree_roots[h + 1]` — a Selene field element, not a [`Hash32`].
+///
+/// Codec `NAME` stays `"curve_root"` so the committed snapshot identity
+/// does not move; the wrapper type `CurveRoot` is deleted (RTN-2).
+impl Canonical for CurveTreeRoot {
     const NAME: &'static str = "curve_root";
     const FIXED_WIDTH: Option<usize> = Some(32);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.0);
+        out.extend_from_slice(self.as_bytes());
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        exact::<32>(Self::NAME, bytes).map(Self)
+        exact::<32>(Self::NAME, bytes).map(Self::from_bytes)
     }
 }
 
@@ -70,20 +76,20 @@ impl Canonical for CurveRoot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockInfo {
     /// `bi_timestamp`.
-    pub timestamp: u64,
+    pub timestamp: Timestamp,
     /// `bi_coins` — coins generated through this block.
-    pub coins_generated: u64,
+    pub coins_generated: AtomicUnits,
     /// `bi_weight`.
-    pub weight: u64,
+    pub weight: BlockWeight,
     /// `bi_diff_lo ‖ bi_diff_hi` as one integer.
-    pub cumulative_difficulty: u128,
+    pub cumulative_difficulty: CumulativeDifficulty,
     /// `bi_hash` — the block's identity (CEN-B6).
-    pub hash: Hash32,
+    pub hash: BlockHash,
     /// `bi_cum_rct` — **this block's** RCT output count (per-block at this
     /// pin, CEN-L15; the LMDB field name is a misnomer).
     pub rct_outputs: u64,
     /// `bi_long_term_block_weight`.
-    pub long_term_weight: u64,
+    pub long_term_weight: LongTermWeight,
 }
 
 impl Canonical for BlockInfo {
@@ -91,28 +97,28 @@ impl Canonical for BlockInfo {
     const FIXED_WIDTH: Option<usize> = Some(88);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.timestamp.to_le_bytes());
-        out.extend_from_slice(&self.coins_generated.to_le_bytes());
-        out.extend_from_slice(&self.weight.to_le_bytes());
+        out.extend_from_slice(&self.timestamp.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.coins_generated.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.weight.to_raw().to_le_bytes());
         // `bi_diff_lo` then `bi_diff_hi`: a little-endian u128.
-        out.extend_from_slice(&self.cumulative_difficulty.to_le_bytes());
+        out.extend_from_slice(&self.cumulative_difficulty.to_raw().to_le_bytes());
         out.extend_from_slice(self.hash.as_bytes());
         out.extend_from_slice(&self.rct_outputs.to_le_bytes());
-        out.extend_from_slice(&self.long_term_weight.to_le_bytes());
+        out.extend_from_slice(&self.long_term_weight.to_raw().to_le_bytes());
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let b = exact::<88>(Self::NAME, bytes)?;
         Ok(Self {
-            timestamp: le_u64(&b[0..8]),
-            coins_generated: le_u64(&b[8..16]),
-            weight: le_u64(&b[16..24]),
-            cumulative_difficulty: u128::from_le_bytes(
+            timestamp: Timestamp::from_raw(le_u64(&b[0..8])),
+            coins_generated: AtomicUnits::from_raw(le_u64(&b[8..16])),
+            weight: BlockWeight::from_raw(le_u64(&b[16..24])),
+            cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from_le_bytes(
                 b[24..40].try_into().expect("16-byte slice"),
-            ),
-            hash: Hash32::from_bytes(b[40..72].try_into().expect("32-byte slice")),
+            )),
+            hash: BlockHash::from_bytes(b[40..72].try_into().expect("32-byte slice")),
             rct_outputs: le_u64(&b[72..80]),
-            long_term_weight: le_u64(&b[80..88]),
+            long_term_weight: LongTermWeight::from_raw(le_u64(&b[80..88])),
         })
     }
 }
@@ -121,11 +127,11 @@ impl Canonical for BlockInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TxIndex {
     /// The storage id: the transaction's position in the `txs_*` tables.
-    pub tx_id: u64,
+    pub tx_id: TxStorageId,
     /// The transaction's `unlock_time`, as its prefix carries it.
-    pub unlock_time: u64,
+    pub unlock_time: Timelock,
     /// `block_id` — the height of the block that recorded it.
-    pub height: u64,
+    pub height: BlockHeight,
 }
 
 impl Canonical for TxIndex {
@@ -133,17 +139,17 @@ impl Canonical for TxIndex {
     const FIXED_WIDTH: Option<usize> = Some(24);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.tx_id.to_le_bytes());
-        out.extend_from_slice(&self.unlock_time.to_le_bytes());
-        out.extend_from_slice(&self.height.to_le_bytes());
+        out.extend_from_slice(&self.tx_id.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.unlock_time.to_unlock_raw().to_le_bytes());
+        out.extend_from_slice(&self.height.to_raw().to_le_bytes());
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let b = exact::<24>(Self::NAME, bytes)?;
         Ok(Self {
-            tx_id: le_u64(&b[0..8]),
-            unlock_time: le_u64(&b[8..16]),
-            height: le_u64(&b[16..24]),
+            tx_id: TxStorageId::from_raw(le_u64(&b[0..8])),
+            unlock_time: stored_timelock(le_u64(&b[8..16])),
+            height: BlockHeight::from_raw(le_u64(&b[16..24])),
         })
     }
 }
@@ -152,9 +158,9 @@ impl Canonical for TxIndex {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutTx {
     /// The transaction that created the output.
-    pub tx_hash: Hash32,
+    pub tx_hash: TxHash,
     /// The output's position in that transaction's `vout`.
-    pub local_index: u64,
+    pub local_index: OutputIndexInTx,
 }
 
 impl Canonical for OutTx {
@@ -163,14 +169,14 @@ impl Canonical for OutTx {
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(self.tx_hash.as_bytes());
-        out.extend_from_slice(&self.local_index.to_le_bytes());
+        out.extend_from_slice(&self.local_index.to_raw().to_le_bytes());
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let b = exact::<40>(Self::NAME, bytes)?;
         Ok(Self {
-            tx_hash: Hash32::from_bytes(b[0..32].try_into().expect("32-byte slice")),
-            local_index: le_u64(&b[32..40]),
+            tx_hash: TxHash::from_bytes(b[0..32].try_into().expect("32-byte slice")),
+            local_index: OutputIndexInTx::from_raw(le_u64(&b[32..40])),
         })
     }
 }
@@ -185,17 +191,17 @@ impl Canonical for OutTx {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutKey {
     /// Position among this amount's outputs — the member's sort prefix.
-    pub amount_index: u64,
+    pub amount_index: AmountIndex,
     /// The global output id (`output_txs` key).
-    pub output_id: u64,
+    pub output_id: OutputStorageId,
     /// The output's one-time public key.
-    pub pubkey: [u8; 32],
+    pub pubkey: OneTimePubkey,
     /// The output's `unlock_time`.
-    pub unlock_time: u64,
+    pub unlock_time: Timelock,
     /// The height of the block that created it.
-    pub height: u64,
+    pub height: BlockHeight,
     /// The amount commitment.
-    pub commitment: [u8; 32],
+    pub commitment: CommitmentBytes,
 }
 
 impl OutKey {
@@ -203,10 +209,10 @@ impl OutKey {
     /// sort prefix, read without decoding the rest. `None` for bytes too
     /// short to carry one (a member this codec never wrote).
     #[must_use]
-    pub fn amount_index_of(encoded: &[u8]) -> Option<u64> {
+    pub fn amount_index_of(encoded: &[u8]) -> Option<AmountIndex> {
         encoded
             .first_chunk::<8>()
-            .map(|prefix| u64::from_le_bytes(*prefix))
+            .map(|prefix| AmountIndex::from_raw(u64::from_le_bytes(*prefix)))
     }
 }
 
@@ -215,23 +221,23 @@ impl Canonical for OutKey {
     const FIXED_WIDTH: Option<usize> = Some(96);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.amount_index.to_le_bytes());
-        out.extend_from_slice(&self.output_id.to_le_bytes());
-        out.extend_from_slice(&self.pubkey);
-        out.extend_from_slice(&self.unlock_time.to_le_bytes());
-        out.extend_from_slice(&self.height.to_le_bytes());
-        out.extend_from_slice(&self.commitment);
+        out.extend_from_slice(&self.amount_index.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.output_id.to_raw().to_le_bytes());
+        out.extend_from_slice(self.pubkey.as_bytes());
+        out.extend_from_slice(&self.unlock_time.to_unlock_raw().to_le_bytes());
+        out.extend_from_slice(&self.height.to_raw().to_le_bytes());
+        out.extend_from_slice(self.commitment.as_bytes());
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let b = exact::<96>(Self::NAME, bytes)?;
         Ok(Self {
-            amount_index: le_u64(&b[0..8]),
-            output_id: le_u64(&b[8..16]),
-            pubkey: b[16..48].try_into().expect("32-byte slice"),
-            unlock_time: le_u64(&b[48..56]),
-            height: le_u64(&b[56..64]),
-            commitment: b[64..96].try_into().expect("32-byte slice"),
+            amount_index: AmountIndex::from_raw(le_u64(&b[0..8])),
+            output_id: OutputStorageId::from_raw(le_u64(&b[8..16])),
+            pubkey: OneTimePubkey::from_bytes(b[16..48].try_into().expect("32-byte slice")),
+            unlock_time: stored_timelock(le_u64(&b[48..56])),
+            height: BlockHeight::from_raw(le_u64(&b[56..64])),
+            commitment: CommitmentBytes::from_bytes(b[64..96].try_into().expect("32-byte slice")),
         })
     }
 }
@@ -240,7 +246,7 @@ impl Canonical for OutKey {
 /// indices, one per `vout` entry, in `vout` order. Variable width: exactly
 /// `8 · n` bytes for `n` outputs; `n = 0` is the empty encoding.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct TxOutputIndices(pub Vec<u64>);
+pub struct TxOutputIndices(pub Vec<AmountIndex>);
 
 impl Canonical for TxOutputIndices {
     const NAME: &'static str = "tx_output_indices";
@@ -248,7 +254,7 @@ impl Canonical for TxOutputIndices {
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         for index in &self.0 {
-            out.extend_from_slice(&index.to_le_bytes());
+            out.extend_from_slice(&index.to_raw().to_le_bytes());
         }
     }
 
@@ -259,7 +265,12 @@ impl Canonical for TxOutputIndices {
                 reason: "length is not a whole number of u64 entries",
             });
         }
-        Ok(Self(bytes.chunks_exact(8).map(le_u64).collect()))
+        Ok(Self(
+            bytes
+                .chunks_exact(8)
+                .map(|chunk| AmountIndex::from_raw(le_u64(chunk)))
+                .collect(),
+        ))
     }
 }
 
@@ -272,21 +283,22 @@ fn le_u64(b: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lmdb_order::Hash32;
 
-    fn h(byte: u8) -> Hash32 {
-        Hash32::from_bytes([byte; 32])
+    fn h(byte: u8) -> BlockHash {
+        BlockHash::from_bytes([byte; 32])
     }
 
     #[test]
     fn block_info_layout_is_the_lmdb_struct_minus_height() {
         let info = BlockInfo {
-            timestamp: 1,
-            coins_generated: 2,
-            weight: 3,
-            cumulative_difficulty: (5u128 << 64) | 4, // lo = 4, hi = 5
+            timestamp: Timestamp::from_raw(1),
+            coins_generated: AtomicUnits::from_raw(2),
+            weight: BlockWeight::from_raw(3),
+            cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4), // lo = 4, hi = 5
             hash: h(0xab),
             rct_outputs: 6,
-            long_term_weight: 7,
+            long_term_weight: LongTermWeight::from_raw(7),
         };
         let bytes = info.encode();
         assert_eq!(bytes.len(), 88);
@@ -312,17 +324,17 @@ mod tests {
     #[test]
     fn tx_index_and_out_tx_round_trip_at_their_lmdb_widths() {
         let ti = TxIndex {
-            tx_id: 9,
-            unlock_time: 10,
-            height: 11,
+            tx_id: TxStorageId::from_raw(9),
+            unlock_time: stored_timelock(10),
+            height: BlockHeight::from_raw(11),
         };
         let bytes = ti.encode();
         assert_eq!(bytes.len(), 24);
         assert_eq!(TxIndex::decode(&bytes), Ok(ti));
 
         let ot = OutTx {
-            tx_hash: h(0x33),
-            local_index: 2,
+            tx_hash: TxHash::from_bytes([0x33; 32]),
+            local_index: OutputIndexInTx::from_raw(2),
         };
         let bytes = ot.encode();
         assert_eq!(bytes.len(), 40);
@@ -334,12 +346,12 @@ mod tests {
     #[test]
     fn out_key_is_the_96_byte_outkey_with_amount_index_first() {
         let ok = OutKey {
-            amount_index: 0x0102_0304_0506_0708,
-            output_id: 1,
-            pubkey: [0x11; 32],
-            unlock_time: 2,
-            height: 3,
-            commitment: [0x22; 32],
+            amount_index: AmountIndex::from_raw(0x0102_0304_0506_0708),
+            output_id: OutputStorageId::from_raw(1),
+            pubkey: OneTimePubkey::from_bytes([0x11; 32]),
+            unlock_time: stored_timelock(2),
+            height: BlockHeight::from_raw(3),
+            commitment: CommitmentBytes::from_bytes([0x22; 32]),
         };
         let bytes = ok.encode();
         assert_eq!(bytes.len(), 96);
@@ -352,7 +364,11 @@ mod tests {
 
     #[test]
     fn tx_output_indices_are_dense_u64s_and_refuse_a_partial_entry() {
-        let v = TxOutputIndices(vec![0, 7, u64::MAX]);
+        let v = TxOutputIndices(vec![
+            AmountIndex::from_raw(0),
+            AmountIndex::from_raw(7),
+            AmountIndex::from_raw(u64::MAX),
+        ]);
         let bytes = v.encode();
         assert_eq!(bytes.len(), 24);
         assert_eq!(TxOutputIndices::decode(&bytes), Ok(v));
@@ -368,11 +384,11 @@ mod tests {
 
     #[test]
     fn curve_root_is_32_bytes_and_not_a_hash32() {
-        let root = CurveRoot::from_bytes([0x5e; 32]);
+        let root = CurveTreeRoot::from_bytes([0x5e; 32]);
         assert_eq!(root.encode(), vec![0x5e; 32]);
-        assert_eq!(CurveRoot::decode(&[0x5e; 32]), Ok(root));
-        assert!(CurveRoot::decode(&[0x5e; 31]).is_err());
-        assert_eq!(CurveRoot::NAME, "curve_root");
-        assert_ne!(CurveRoot::NAME, Hash32::NAME);
+        assert_eq!(CurveTreeRoot::decode(&[0x5e; 32]), Ok(root));
+        assert!(CurveTreeRoot::decode(&[0x5e; 31]).is_err());
+        assert_eq!(CurveTreeRoot::NAME, "curve_root");
+        assert_ne!(CurveTreeRoot::NAME, Hash32::NAME);
     }
 }

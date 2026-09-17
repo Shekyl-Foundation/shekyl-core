@@ -25,6 +25,11 @@
 
 ### API
 
+- **CLI `request new --expiry` is wall-clock Unix seconds, not block height
+  (RTN-6).** Absolute unix timestamps and relative durations (`1h`, `30m`,
+  `7d`) are accepted; the JSON-RPC DTO still carries a raw integer. Invoice
+  expiry was never a chain instant — humans set it against a clock.
+
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
   (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured
   width; `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor. Serve-side

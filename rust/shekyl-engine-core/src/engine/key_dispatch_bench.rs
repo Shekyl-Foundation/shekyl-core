@@ -352,9 +352,9 @@ fn unpopulated_transfer(seed: u64) -> TransferDetails {
     let tx_hash = TxHash::from_bytes([lo; 32]);
     TransferDetails {
         tx_hash,
-        internal_output_index: seed,
-        global_output_index: 1_000 + seed,
-        block_height: 100,
+        internal_output_index: shekyl_types::OutputIndexInTx::from_raw(seed),
+        global_output_index: shekyl_types::GlobalOutputIndex::from_raw(1_000 + seed),
+        block_height: shekyl_types::BlockHeight::from_raw(100),
         key: ED25519_BASEPOINT_POINT,
         key_offset: Scalar::ONE,
         commitment: Commitment::new(Scalar::ONE, 1_000_000 + seed),
@@ -366,7 +366,7 @@ fn unpopulated_transfer(seed: u64) -> TransferDetails {
         // The post-pass populates these from `None`; that is the measured work.
         source_ciphertext: None,
         output_handle: None,
-        eligible_height: 100 + SPENDABLE_AGE,
+        eligible_height: shekyl_types::BlockHeight::from_raw(100) + SPENDABLE_AGE,
         frozen: false,
         unspendable: None,
         fcmp_precomputed_path: None,

@@ -73,8 +73,8 @@
 use std::collections::BTreeSet;
 
 use shekyl_curve_tree::{
-    two_sided_reference_height, AssembleInput, BlockHeight as TreeBlockHeight, Gindex,
-    ReferenceBlock, TwoSidedRefusal,
+    two_sided_reference_height, AssembleInput, BlockHash, BlockHeight as TreeBlockHeight,
+    CurveTreeRoot, Gindex, ReferenceBlock, TwoSidedRefusal,
 };
 use shekyl_engine_state::pscan_state::{BondPostRecord, PFundingOutputRecord};
 use shekyl_types::{BlockHeight, ChainCount, GlobalOutputIndex, PCanonicalId};
@@ -251,8 +251,10 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     //    cannot be laundered into a height) and the reference height (the
     //    shared two-sided gate over gather tip × ingested tip), from one
     //    derivation.
-    let (gather_tip, reference_height) =
-        claim_reference_height(source.chain_height, ingested.map(|h| h.0))?;
+    let (gather_tip, reference_height) = claim_reference_height(
+        source.chain_height,
+        ingested.map(shekyl_types::BlockHeight::to_raw),
+    )?;
 
     // Provability pre-filter (module docs): only outputs drained into the
     // tree at the reference height can carry a membership proof.
@@ -287,7 +289,7 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     // 5. One reference snapshot, every membership path against it.
     let (curve_tree_root, _depth) = ctx
         .tree
-        .reference_root_and_depth(TreeBlockHeight(reference_height))
+        .reference_root_and_depth(TreeBlockHeight::from_raw(reference_height))
         .await
         .map_err(ClaimOrchestrationError::Tree)?;
     let block_hash =
@@ -295,14 +297,14 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
             height: reference_height,
         })?;
     let reference = ReferenceBlock {
-        height: TreeBlockHeight(reference_height),
-        curve_tree_root,
-        block_hash,
+        height: TreeBlockHeight::from_raw(reference_height),
+        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+        block_hash: BlockHash::from_bytes(block_hash),
     };
     let assemble_inputs: Vec<AssembleInput> = swept
         .path_records()
         .map(|r| AssembleInput {
-            gindex: Gindex(r.gindex.to_raw()),
+            gindex: Gindex::from_raw(r.gindex.to_raw()),
             output_key: r.output_key,
             commitment: r.commitment,
         })
@@ -608,7 +610,7 @@ mod tests {
                     };
                     client
                         .ingest_block(BlockLeaves {
-                            height: TreeBlockHeight(h),
+                            height: TreeBlockHeight::from_raw(h),
                             txs: &txs,
                         })
                         .expect("fixture chain ingests");
@@ -680,7 +682,7 @@ mod tests {
             // leaf gate, and both auths against the root and depth the tree
             // reports at the anchored reference.
             let (root, depth) = tree
-                .reference_root_and_depth(TreeBlockHeight(expected_reference))
+                .reference_root_and_depth(TreeBlockHeight::from_raw(expected_reference))
                 .await
                 .expect("reference root resolves");
             let mut cursor: &[u8] = reply.bound_tx.bytes();

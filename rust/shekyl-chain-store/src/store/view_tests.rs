@@ -16,8 +16,8 @@ use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, Tx
 
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
-use crate::codec::{BlockInfo, Canonical, CodecError, CurveRoot};
-use crate::lmdb_order::{Hash32, LmdbHashKey};
+use crate::codec::{BlockInfo, Canonical, CodecError};
+use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
 
 /// A coinbase the block parser accepts back (§2.5: a sole `gen` input and
@@ -68,13 +68,13 @@ fn block(height: u64, timestamp: u64) -> Block {
 /// Write the two rows `block_at` reads, as a connect will.
 fn record_block(batch: &WriteBatch<'_, '_>, height: u64, blk: &Block) -> Result<(), StoreError> {
     let info = BlockInfo {
-        timestamp: blk.header.timestamp,
-        coins_generated: 0,
-        weight: 0,
-        cumulative_difficulty: 1,
-        hash: Hash32::from_bytes(blk.hash()),
+        timestamp: shekyl_types::Timestamp::from_raw(blk.header.timestamp),
+        coins_generated: shekyl_units::AtomicUnits::ZERO,
+        weight: shekyl_types::BlockWeight::ZERO,
+        cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty::from_raw(1),
+        hash: shekyl_types::BlockHash::from_bytes(blk.hash()),
         rct_outputs: 0,
-        long_term_weight: 0,
+        long_term_weight: shekyl_types::LongTermWeight::ZERO,
     };
     batch
         .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -88,7 +88,10 @@ fn record_block(batch: &WriteBatch<'_, '_>, height: u64, blk: &Block) -> Result<
 fn record_root(batch: &WriteBatch<'_, '_>, key: u64, byte: u8) -> Result<(), StoreError> {
     batch
         .open_insert_table(CURVE_TREE_ROOTS, PROBE_ROW)?
-        .insert(key, CurveRoot::from_bytes([byte; 32]).encode().as_slice())
+        .insert(
+            key,
+            CurveTreeRoot::from_bytes([byte; 32]).encode().as_slice(),
+        )
 }
 
 #[test]
@@ -261,13 +264,13 @@ fn a_block_blob_that_does_not_hash_to_block_info_is_si7() {
         let recorded = block(0, 1_000);
         let replaced = block(0, 2_000); // parses, wrong identity
         let info = BlockInfo {
-            timestamp: recorded.header.timestamp,
-            coins_generated: 0,
-            weight: 0,
-            cumulative_difficulty: 1,
-            hash: Hash32::from_bytes(recorded.hash()),
+            timestamp: shekyl_types::Timestamp::from_raw(recorded.header.timestamp),
+            coins_generated: shekyl_units::AtomicUnits::ZERO,
+            weight: shekyl_types::BlockWeight::ZERO,
+            cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty::from_raw(1),
+            hash: shekyl_types::BlockHash::from_bytes(recorded.hash()),
             rct_outputs: 0,
-            long_term_weight: 0,
+            long_term_weight: shekyl_types::LongTermWeight::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?
@@ -394,13 +397,13 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let planted: Result<(), TestErr> = store.write(|batch| {
         let info = BlockInfo {
-            timestamp: 1,
-            coins_generated: 0,
-            weight: 0,
-            cumulative_difficulty: 1,
-            hash: Hash32::from_bytes([9; 32]),
+            timestamp: shekyl_types::Timestamp::from_raw(1),
+            coins_generated: shekyl_units::AtomicUnits::ZERO,
+            weight: shekyl_types::BlockWeight::ZERO,
+            cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty::from_raw(1),
+            hash: shekyl_types::BlockHash::from_bytes([9; 32]),
             rct_outputs: 0,
-            long_term_weight: 0,
+            long_term_weight: shekyl_types::LongTermWeight::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?

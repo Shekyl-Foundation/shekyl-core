@@ -69,7 +69,9 @@ const _: () = assert!(ATOMIC_UNITS_PER_SKL == 10u64.pow(DISPLAY_DECIMAL_POINT as
 /// posture this replaces. Secret hygiene stays at the container level
 /// (`OutputClaim` is `ZeroizeOnDrop`; this type is [`Zeroize`] so that keeps
 /// compiling).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Zeroize, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Zeroize, Serialize, Deserialize,
+)]
 #[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
 #[serde(transparent)]
 #[repr(transparent)]

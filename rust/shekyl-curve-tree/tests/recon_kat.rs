@@ -27,8 +27,8 @@ use shekyl_curve_tree::recon::{
     TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockHeight, BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, CurveTreeRoot, OutputIdentity, RawOutput,
+    ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::tree::selene_hash_init;
 
@@ -281,7 +281,7 @@ fn ingest_client_block(client: &mut CurveTreeClient, blk: &ClientBlock) {
     }];
     client
         .ingest_block(BlockLeaves {
-            height: BlockHeight(blk.height),
+            height: BlockHeight::from_raw(blk.height),
             txs: &txs,
         })
         .unwrap();
@@ -313,14 +313,14 @@ fn client_reconstructs_consensus_root_at_every_height() {
             }];
             client
                 .ingest_block(BlockLeaves {
-                    height: BlockHeight(blk.height),
+                    height: BlockHeight::from_raw(blk.height),
                     txs: &txs,
                 })
                 .unwrap();
             let reference = ReferenceBlock {
-                height: BlockHeight(blk.height),
-                curve_tree_root: blk.root,
-                block_hash: [0u8; 32],
+                height: BlockHeight::from_raw(blk.height),
+                curve_tree_root: CurveTreeRoot::from_bytes(blk.root),
+                block_hash: BlockHash::from_bytes([0u8; 32]),
             };
             if client.verify_root(&reference).is_err() {
                 mismatches.push(blk.height);
@@ -357,7 +357,7 @@ fn next_block_root_is_the_header_of_the_block_about_to_be_built() {
             ingest_client_block(&mut client, blk);
             // Once ingested, the verifier-side read names the same state.
             assert_eq!(
-                client.root_at(BlockHeight(blk.height)).unwrap(),
+                client.root_at(BlockHeight::from_raw(blk.height)).unwrap(),
                 produced,
                 "chain {name}: root_at({}) disagrees with the header it was built from",
                 blk.height
@@ -391,13 +391,13 @@ fn client_path_matches_recon_path() {
             }];
             client
                 .ingest_block(BlockLeaves {
-                    height: BlockHeight(blk.height),
+                    height: BlockHeight::from_raw(blk.height),
                     txs: &txs,
                 })
                 .unwrap();
             assert_eq!(
                 client
-                    .root_at(BlockHeight(blk.height))
+                    .root_at(BlockHeight::from_raw(blk.height))
                     .expect("store hot path"),
                 *recon_root,
                 "client/recon divergence at height {}",
@@ -435,7 +435,9 @@ fn persistent_rollback_reorg_deep_matches_fresh_replay() {
         ingest_client_block(&mut persistent, blk);
     }
 
-    persistent.rollback_to_fork(BlockHeight(fork)).unwrap();
+    persistent
+        .rollback_to_fork(BlockHeight::from_raw(fork))
+        .unwrap();
     for blk in deep.iter().skip(fork_index + 1) {
         ingest_client_block(&mut persistent, blk);
     }
@@ -446,12 +448,12 @@ fn persistent_rollback_reorg_deep_matches_fresh_replay() {
     }
 
     assert_eq!(
-        persistent.root_at(BlockHeight(fork)).unwrap(),
-        fresh.root_at(BlockHeight(fork)).unwrap(),
+        persistent.root_at(BlockHeight::from_raw(fork)).unwrap(),
+        fresh.root_at(BlockHeight::from_raw(fork)).unwrap(),
         "shared-prefix root at fork"
     );
     for blk in deep.iter().skip(fork_index + 1) {
-        let height = BlockHeight(blk.height);
+        let height = BlockHeight::from_raw(blk.height);
         let persistent_root = persistent.root_at(height).unwrap();
         assert_eq!(
             persistent_root,

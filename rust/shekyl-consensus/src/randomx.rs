@@ -57,9 +57,13 @@ impl ConsensusProof for RandomXProof {
         // (next_difficulty_v2). This returns the chain's current difficulty
         // as a baseline for the Rust-side interface.
         if chain.height == 0 {
-            return Ok(Difficulty(1));
+            return Ok(Difficulty::from_raw(1));
         }
-        Ok(chain.cumulative_difficulty)
+        // Stub: the live DAA is C++ `lwma1_next`. This placeholder
+        // previously returned the cumulative as if it were a target
+        // because both were the same leftover newtype. Keep the
+        // numeric behaviour via an explicit edge conversion.
+        Ok(Difficulty::from_raw(chain.cumulative_difficulty.to_raw()))
     }
 
     fn proof_type(&self) -> ProofType {
@@ -74,13 +78,13 @@ impl ConsensusProof for RandomXProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::ChainState;
+    use crate::types::{ChainState, CumulativeDifficulty};
 
     fn test_chain() -> ChainState {
         ChainState {
             height: 100,
             top_hash: [0u8; 32],
-            cumulative_difficulty: Difficulty(1000),
+            cumulative_difficulty: CumulativeDifficulty::from_raw(1000),
             timestamp: 1700000000,
         }
     }
@@ -120,10 +124,13 @@ mod tests {
         let chain = ChainState {
             height: 0,
             top_hash: [0u8; 32],
-            cumulative_difficulty: Difficulty(0),
+            cumulative_difficulty: CumulativeDifficulty::ZERO,
             timestamp: 0,
         };
-        assert_eq!(rx.difficulty_for_next_block(&chain).unwrap(), Difficulty(1));
+        assert_eq!(
+            rx.difficulty_for_next_block(&chain).unwrap(),
+            Difficulty::from_raw(1)
+        );
     }
 
     #[test]

@@ -7,6 +7,10 @@
 //! identity to the wrapped primitive), the height/count algebra, and the
 //! hex hash formatting.
 
+extern crate std;
+
+use std::prelude::v1::*;
+
 use super::*;
 
 #[test]
@@ -21,6 +25,14 @@ fn edge_round_trip() {
     let bytes = [3u8; 32];
     assert_eq!(TxHash::from_bytes(bytes).to_bytes(), bytes);
     assert_eq!(BlockHash::from_bytes(bytes).as_bytes(), &bytes);
+    assert_eq!(ShardId::from_raw(9).to_raw(), 9);
+    assert_eq!(LeafIndex::from_raw(4).to_raw(), 4);
+    assert_eq!(BlockWeight::from_raw(1_000).to_raw(), 1_000);
+    assert_eq!(LongTermWeight::from_raw(800).to_raw(), 800);
+    assert_eq!(PqcAuthHash::from_bytes(bytes).to_bytes(), bytes);
+    assert_eq!(AttestationRoot::from_bytes(bytes).as_bytes(), &bytes);
+    assert_eq!(OneTimePubkey::from_bytes(bytes).to_bytes(), bytes);
+    assert_eq!(CommitmentBytes::from_bytes(bytes).to_bytes(), bytes);
 }
 
 #[test]
@@ -235,6 +247,7 @@ fn hashes_order_lexicographically_for_btree_keys() {
     // wallet-state uses for deterministic txid ordering (PR C). Ordering is
     // lexicographic over the raw bytes, matching `[u8; 32]`.
     use std::collections::BTreeSet;
+    use std::vec::Vec;
 
     let mut a = [0u8; 32];
     a[0] = 1;
@@ -314,9 +327,14 @@ fn schema_is_derivable() {
     use postcard_schema::Schema;
     assert_eq!(BlockHeight::SCHEMA.name, "BlockHeight");
     assert_eq!(TxHash::SCHEMA.name, "TxHash");
+    assert_eq!(PqcAuthHash::SCHEMA.name, "PqcAuthHash");
+    assert_eq!(ShardId::SCHEMA.name, "ShardId");
+    assert_eq!(OneTimePubkey::SCHEMA.name, "OneTimePubkey");
     assert_ne!(
         BlockHeight::SCHEMA.name,
         TxHash::SCHEMA.name,
         "distinct newtypes must carry distinct named schemas"
     );
+    assert_ne!(PqcAuthHash::SCHEMA.name, PrunableHash::SCHEMA.name);
+    assert_ne!(BlockWeight::SCHEMA.name, LongTermWeight::SCHEMA.name);
 }

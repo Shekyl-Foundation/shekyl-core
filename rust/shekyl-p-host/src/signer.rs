@@ -94,7 +94,10 @@ impl PassSigner for HostSigner {
     /// persona that has lost its store shows up in `ServeCounters` rather
     /// than refusing every anchor behind an indistinguishable sentinel.
     fn own_height(&self) -> Option<u64> {
-        self.reader.sync_tip_height().ok().map(|h| h.0)
+        self.reader
+            .sync_tip_height()
+            .ok()
+            .map(shekyl_curve_tree::BlockHeight::to_raw)
     }
 }
 
@@ -122,7 +125,7 @@ mod tests {
             "a fresh store is readable at height 0 — below the gate, not unreadable"
         );
         store
-            .append_block_deltas(&[], &[], &[], BlockHeight(4_321))
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(4_321))
             .expect("advance tip");
         assert_eq!(
             signer.own_height(),

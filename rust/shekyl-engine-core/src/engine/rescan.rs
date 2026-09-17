@@ -62,7 +62,7 @@
 //! - runtime `LedgerIndexes`
 //! - `tx_meta.scanned_pool_txs`
 //! - payment-request match fields (via attribution rewind, classified
-//!   against the **pre-reset** height)
+//!   against wall-clock Unix seconds — invoice expiry is not block height)
 //!
 //! # The curve tree is not touched
 //!
@@ -94,28 +94,21 @@ use crate::attribution::rewind_matched_payment_requests_after_reorg;
 /// provenance rule that draws the line). Callers must persist before
 /// scanning; [`Engine::start_rescan`] is the only production caller.
 pub(crate) fn reset_scan_derived_state(wallet: &mut WalletLedger, indexes: &mut LedgerIndexes) {
-    // Captured before the tip is zeroed: the rewind below classifies an
-    // unwound request's expiry against this height. Read from the emptied
-    // ledger it would be 0, and `is_expired_at(0)` is false for every
-    // non-zero expiry — a years-expired invoice would come back `Pending`
-    // and sit in `get_payment_requests` as "awaiting payment" forever.
-    let pre_reset_height = wallet.ledger.height();
-
     // Total reconstruction, not a field-by-field clear. `LedgerBlock` is
     // entirely scan-derived, so "reset" is "a fresh one at the current block
     // version" — and a field added to it later is then reset because it
     // exists, not because someone remembered to extend this function.
+    //
+    // Invoice expiry is wall-clock Unix seconds (RTN-6), not chain height.
     wallet.ledger = LedgerBlock::empty();
     *indexes = LedgerIndexes::empty();
 
     wallet.tx_meta.scanned_pool_txs.clear();
 
-    // Preserve payment-request *rows*; unwind matches against the emptied
-    // transfer set so a subsequent scan can re-attribute.
     rewind_matched_payment_requests_after_reorg(
         &mut wallet.bookkeeping.payment_requests,
         &wallet.ledger,
-        pre_reset_height,
+        crate::attribution::unix_now(),
     );
 }
 
@@ -295,9 +288,9 @@ mod tests {
     pub(super) fn sample_transfer(seed: u8) -> TransferDetails {
         TransferDetails {
             tx_hash: TxHash::from_bytes([seed; 32]),
-            internal_output_index: 0,
-            global_output_index: 0,
-            block_height: 10,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(0),
+            block_height: shekyl_types::BlockHeight::from_raw(10),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1000),
@@ -308,7 +301,7 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: 0,
+            eligible_height: shekyl_types::BlockHeight::from_raw(0),
             frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
@@ -348,11 +341,11 @@ mod tests {
             id: PaymentRequestId(0x00_00_00_00_00_06),
             label: LocalLabel::from_str("invoice"),
             amount_atomic: AtomicUnits::from_raw(100),
-            created_at: 1,
+            created_at: shekyl_types::Timestamp::from_raw(1),
             expiry: None,
             state: PaymentRequestState::Matched,
             matched_tx_hash: Some(TxHash::from_bytes([1u8; 32])),
-            matched_output_index: Some(0),
+            matched_output_index: Some(shekyl_types::OutputIndexInTx::from_raw(0)),
         });
 
         wallet.staking.staking_enabled = true;
@@ -450,22 +443,21 @@ mod tests {
         );
     }
 
-    /// An invoice whose expiry height has already passed is unwound to
-    /// `Expired`, not `Pending`: the rewind is classified against the
-    /// pre-reset tip, not the zeroed one.
+    /// An invoice whose wall-clock expiry has already passed is unwound to
+    /// `Expired`, not `Pending` (RTN-6: invoice expiry is Unix seconds).
     #[test]
-    fn reset_expires_payment_request_past_its_expiry_height() {
+    fn reset_expires_payment_request_past_its_expiry() {
         let mut wallet = WalletLedger::empty();
         wallet.ledger.tip = BlockchainTip::new(500, [8u8; 32]);
         wallet.bookkeeping.payment_requests.push(PaymentRequest {
             id: PaymentRequestId(0x00_00_00_00_00_07),
             label: LocalLabel::from_str("stale invoice"),
             amount_atomic: AtomicUnits::from_raw(100),
-            created_at: 1,
-            expiry: Some(100),
+            created_at: shekyl_types::Timestamp::from_raw(1),
+            expiry: Some(shekyl_types::Timestamp::from_raw(100)),
             state: PaymentRequestState::Matched,
             matched_tx_hash: Some(TxHash::from_bytes([1u8; 32])),
-            matched_output_index: Some(0),
+            matched_output_index: Some(shekyl_types::OutputIndexInTx::from_raw(0)),
         });
 
         let mut indexes = LedgerIndexes::empty();
@@ -474,7 +466,7 @@ mod tests {
         assert_eq!(
             wallet.bookkeeping.payment_requests[0].state,
             PaymentRequestState::Expired,
-            "expiry is classified against the pre-reset height"
+            "unix 100 is in the past relative to wall-clock now"
         );
     }
 
@@ -744,7 +736,7 @@ mod start_rescan_integration_tests {
             let mut guard = engine.ledger.write();
             let mut phantom = super::tests::sample_transfer(0xDD);
             phantom.tx_hash = phantom_tx;
-            phantom.block_height = 3;
+            phantom.block_height = shekyl_types::BlockHeight::from_raw(3);
             guard.ledger.ledger.transfers.push(phantom);
             guard
                 .ledger
@@ -754,11 +746,11 @@ mod start_rescan_integration_tests {
                     id: PaymentRequestId(0x00_00_00_00_00_0A),
                     label: LocalLabel::from_str("invoice"),
                     amount_atomic: AtomicUnits::from_raw(1000),
-                    created_at: 1,
+                    created_at: shekyl_types::Timestamp::from_raw(1),
                     expiry: None,
                     state: PaymentRequestState::Matched,
                     matched_tx_hash: Some(phantom_tx),
-                    matched_output_index: Some(0),
+                    matched_output_index: Some(shekyl_types::OutputIndexInTx::from_raw(0)),
                 });
         }
 

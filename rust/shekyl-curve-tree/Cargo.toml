@@ -39,6 +39,11 @@ shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # `COINBASE_LOCK_WINDOW` (+60). Sourced from the low-level protocol
 # crate rather than re-declared, per `17-dependency-discipline.mdc`.
 shekyl-consensus = { path = "../shekyl-consensus" }
+# Vocabulary crate for `BlockHeight` / `GlobalOutputIndex` / `BlockHash` /
+# `CurveTreeRoot`. Local tuple-struct copies of those types are retired
+# (RTN-4); this crate keeps only `TreePosition` (tree-local) and the
+# redb key wrapper `GindexKey` (orphan rule).
+shekyl-types = { path = "../shekyl-types" }
 # The workspace varint used by the served-frame header (`served_frame.rs`).
 # The same encoder/decoder the archival wire modules use, so one length has
 # one encoding across every Shekyl format.

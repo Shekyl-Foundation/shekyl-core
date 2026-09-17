@@ -76,6 +76,30 @@ impl Hash32 {
     }
 }
 
+impl From<shekyl_types::BlockHash> for Hash32 {
+    fn from(hash: shekyl_types::BlockHash) -> Self {
+        Self::from_bytes(*hash.as_bytes())
+    }
+}
+
+impl From<Hash32> for shekyl_types::BlockHash {
+    fn from(hash: Hash32) -> Self {
+        Self::from_bytes(hash.to_bytes())
+    }
+}
+
+impl From<shekyl_types::TxHash> for Hash32 {
+    fn from(hash: shekyl_types::TxHash) -> Self {
+        Self::from_bytes(*hash.as_bytes())
+    }
+}
+
+impl From<Hash32> for shekyl_types::TxHash {
+    fn from(hash: Hash32) -> Self {
+        Self::from_bytes(hash.to_bytes())
+    }
+}
+
 impl From<[u8; 32]> for Hash32 {
     fn from(bytes: [u8; 32]) -> Self {
         Self::from_bytes(bytes)
@@ -188,6 +212,18 @@ impl LmdbHashKey {
 impl From<Hash32> for LmdbHashKey {
     fn from(hash: Hash32) -> Self {
         Self::from_hash(hash)
+    }
+}
+
+impl From<shekyl_types::BlockHash> for LmdbHashKey {
+    fn from(hash: shekyl_types::BlockHash) -> Self {
+        Self::from(Hash32::from(hash))
+    }
+}
+
+impl From<shekyl_types::TxHash> for LmdbHashKey {
+    fn from(hash: shekyl_types::TxHash) -> Self {
+        Self::from(Hash32::from(hash))
     }
 }
 

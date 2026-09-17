@@ -263,5 +263,5 @@ pub(super) fn block_body<T: ReadTables>(
             "block blob does not hash to block_info.hash",
         ));
     }
-    Ok(AtHeight::Recorded((info.hash, block)))
+    Ok(AtHeight::Recorded((Hash32::from(info.hash), block)))
 }

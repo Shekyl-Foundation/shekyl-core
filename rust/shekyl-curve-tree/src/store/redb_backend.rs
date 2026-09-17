@@ -16,7 +16,7 @@ use crate::served_frame::ServedFrameHeader;
 use crate::store::ops::{
     full_build_root, mixed_composition_root, recompute_segment_r_k, MixedRootError,
 };
-use crate::types::{BlockHeight, Gindex, LeafEntry, TargetKind, TreePosition};
+use crate::types::{BlockHeight, Gindex, GindexKey, LeafEntry, TargetKind, TreePosition};
 use shekyl_fcmp::tree::{hash_grow_selene, selene_hash_init, SCALARS_PER_LEAF};
 
 const LEAVES_TABLE: TableDefinition<TreePosition, &[u8; 128]> = TableDefinition::new("leaves");
@@ -34,7 +34,7 @@ const PINNED_SEGMENTS_TABLE: TableDefinition<SegmentId, u32> =
 // so a pending row migrates to/from the drained tables without
 // re-encoding. Rows enter on block ingest, leave on drain
 // (`append_block_deltas`) or on the rollback creation-height filter.
-const PENDING_TABLE: TableDefinition<Gindex, &[u8; 320]> = TableDefinition::new("pending");
+const PENDING_TABLE: TableDefinition<GindexKey, &[u8; 320]> = TableDefinition::new("pending");
 // `META_TABLE` is a heterogeneous `&str`-keyed counter store; its `u64`
 // values convert to `BlockHeight`/counts at the API boundary. This is the
 // one legitimate raw-`u64` value site in the store.
@@ -728,7 +728,7 @@ impl LeafStore {
     pub fn sync_tip_height(&self) -> Result<BlockHeight, StoreError> {
         let txn = self.db.begin_read()?;
         let meta = txn.open_table(META_TABLE)?;
-        Ok(BlockHeight(
+        Ok(BlockHeight::from_raw(
             meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0),
         ))
     }
@@ -1013,8 +1013,10 @@ impl LeafStore {
         if !pending_removed.is_empty() || !pending_added.is_empty() {
             let mut pending = txn.open_table(PENDING_TABLE)?;
             for &gindex in pending_removed {
-                if pending.remove(gindex)?.is_none() {
-                    return Err(StoreError::PendingRowMissing { gindex: gindex.0 });
+                if pending.remove(GindexKey::from(gindex))?.is_none() {
+                    return Err(StoreError::PendingRowMissing {
+                        gindex: gindex.to_raw(),
+                    });
                 }
             }
             for (offset, entry) in pending_added.iter().enumerate() {
@@ -1023,18 +1025,18 @@ impl LeafStore {
                         batch_index: drained.len() + offset,
                     });
                 }
-                if pending.get(entry.gindex)?.is_some() {
+                if pending.get(GindexKey::from(entry.gindex))?.is_some() {
                     return Err(StoreError::PendingGindexCollision {
-                        gindex: entry.gindex.0,
+                        gindex: entry.gindex.to_raw(),
                     });
                 }
-                pending.insert(entry.gindex, &encode_pending(entry))?;
+                pending.insert(GindexKey::from(entry.gindex), &encode_pending(entry))?;
             }
         }
         let effective_tip = {
             let meta = txn.open_table(META_TABLE)?;
             let sync_tip = meta.get(META_SYNC_TIP)?.map(|v| v.value()).unwrap_or(0);
-            tip_height.0.max(sync_tip)
+            tip_height.to_raw().max(sync_tip)
         };
         {
             let mut meta = txn.open_table(META_TABLE)?;
@@ -1064,7 +1066,7 @@ impl LeafStore {
         for row in pending.iter()? {
             let (key, value) = row?;
             let entry = decode_pending(value.value())?;
-            if entry.gindex != key.value() {
+            if entry.gindex != Gindex::from(key.value()) {
                 return Err(StoreError::CorruptMeta(
                     "pending row gindex disagrees with its key",
                 ));
@@ -1177,8 +1179,8 @@ impl LeafStore {
             let record = FrozenSegmentRecord {
                 r_k,
                 end_tree_pos: TreePosition(end_tree_pos),
-                end_block_height: BlockHeight(end_block_height),
-                frozen_at_height: BlockHeight(tip_height),
+                end_block_height: BlockHeight::from_raw(end_block_height),
+                frozen_at_height: BlockHeight::from_raw(tip_height),
             };
             let mut frozen = txn.open_table(FROZEN_SEGMENTS_TABLE)?;
             frozen.insert(segment_id, &encode_frozen_segment(&record))?;
@@ -1198,7 +1200,8 @@ impl LeafStore {
             let v = meta.get(META_LEAF_COUNT)?;
             v.map(|g| g.value()).unwrap_or(0)
         };
-        let next_freeze_seg = Self::maybe_freeze_segments_in_txn(&txn, tip_height.0, leaf_count)?;
+        let next_freeze_seg =
+            Self::maybe_freeze_segments_in_txn(&txn, tip_height.to_raw(), leaf_count)?;
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
@@ -1265,7 +1268,7 @@ impl LeafStore {
     /// [`Self::append_drained`]) and recomputes the segment-freeze cursor.
     pub fn truncate_from_tree_position(&self, pos: TreePosition) -> Result<(), StoreError> {
         let txn = self.db.begin_write()?;
-        Self::truncate_internals(&txn, pos, BlockHeight(0))?;
+        Self::truncate_internals(&txn, pos, BlockHeight::from_raw(0))?;
         txn.commit()?;
         Ok(())
     }
@@ -1360,7 +1363,7 @@ impl LeafStore {
         {
             let mut meta = txn.open_table(META_TABLE)?;
             meta.insert(META_LEAF_COUNT, &pos)?;
-            meta.insert(META_SYNC_TIP, &new_tip.0)?;
+            meta.insert(META_SYNC_TIP, &new_tip.to_raw())?;
             meta.insert(META_NEXT_FREEZE_SEG, &next_freeze_seg)?;
         }
         Ok(())
@@ -1455,9 +1458,9 @@ impl LeafStore {
             let count = meta.get(META_LEAF_COUNT)?.map(|v| v.value()).unwrap_or(0);
             (tip, count)
         };
-        if fork_height.0 > sync_tip {
+        if fork_height.to_raw() > sync_tip {
             return Err(StoreError::InvalidRollback {
-                fork_height: fork_height.0,
+                fork_height: fork_height.to_raw(),
                 sync_tip,
             });
         }
@@ -1473,7 +1476,7 @@ impl LeafStore {
                     .ok_or(StoreError::CorruptMeta(
                         "hole in present suffix during partition search",
                     ))?;
-                Ok(decode_stored_leaf_meta(row.value())?.maturity.0)
+                Ok(decode_stored_leaf_meta(row.value())?.maturity.to_raw())
             };
             // partition_point over [frontier, leaf_count): first present
             // position with maturity > drained_through(fork). Maturity is
@@ -1481,7 +1484,7 @@ impl LeafStore {
             // equal-maturity run (F7). Height 0 saturates at cutoff 0; no
             // real leaf has maturity 0, so genesis rollback still truncates
             // the whole drained tree.
-            let drain_cutoff = fork_height.0.saturating_sub(1);
+            let drain_cutoff = fork_height.to_raw().saturating_sub(1);
             let mut lo = frontier;
             let mut hi = leaf_count;
             while lo < hi {
@@ -1527,12 +1530,12 @@ impl LeafStore {
         {
             let mut pending = txn.open_table(PENDING_TABLE)?;
             for entry in &migrated {
-                if pending.get(entry.gindex)?.is_some() {
+                if pending.get(GindexKey::from(entry.gindex))?.is_some() {
                     return Err(StoreError::PendingGindexCollision {
-                        gindex: entry.gindex.0,
+                        gindex: entry.gindex.to_raw(),
                     });
                 }
-                pending.insert(entry.gindex, &encode_pending(entry))?;
+                pending.insert(GindexKey::from(entry.gindex), &encode_pending(entry))?;
             }
             let mut orphaned = Vec::new();
             for row in pending.iter()? {
@@ -2075,7 +2078,7 @@ fn read_drain_height(txn: &redb::WriteTransaction, tree_pos: u64) -> Result<u64,
         .get(TreePosition(tree_pos))?
         .ok_or(StoreError::CorruptMeta("missing leaf meta"))?;
     let stored = decode_stored_leaf_meta(m.value())?;
-    Ok(stored.maturity.0.saturating_add(1))
+    Ok(stored.maturity.to_raw().saturating_add(1))
 }
 
 /// Metadata persisted in `LEAF_META_TABLE` (leaf bytes live in `LEAVES_TABLE`).
@@ -2158,8 +2161,8 @@ fn encode_frozen_segment(rec: &FrozenSegmentRecord) -> [u8; 56] {
     let mut buf = [0u8; 56];
     buf[..32].copy_from_slice(&rec.r_k);
     buf[32..40].copy_from_slice(&rec.end_tree_pos.0.to_be_bytes());
-    buf[40..48].copy_from_slice(&rec.end_block_height.0.to_be_bytes());
-    buf[48..56].copy_from_slice(&rec.frozen_at_height.0.to_be_bytes());
+    buf[40..48].copy_from_slice(&rec.end_block_height.to_raw().to_be_bytes());
+    buf[48..56].copy_from_slice(&rec.frozen_at_height.to_raw().to_be_bytes());
     buf
 }
 
@@ -2169,15 +2172,19 @@ fn decode_frozen_segment(buf: &[u8; 56]) -> FrozenSegmentRecord {
     FrozenSegmentRecord {
         r_k,
         end_tree_pos: TreePosition(u64::from_be_bytes(buf[32..40].try_into().expect("8 bytes"))),
-        end_block_height: BlockHeight(u64::from_be_bytes(buf[40..48].try_into().expect("8 bytes"))),
-        frozen_at_height: BlockHeight(u64::from_be_bytes(buf[48..56].try_into().expect("8 bytes"))),
+        end_block_height: BlockHeight::from_raw(u64::from_be_bytes(
+            buf[40..48].try_into().expect("8 bytes"),
+        )),
+        frozen_at_height: BlockHeight::from_raw(u64::from_be_bytes(
+            buf[48..56].try_into().expect("8 bytes"),
+        )),
     }
 }
 
 fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
     let mut buf = [0u8; 192];
-    buf[0..8].copy_from_slice(&entry.gindex.0.to_be_bytes());
-    buf[8..16].copy_from_slice(&entry.maturity.0.to_be_bytes());
+    buf[0..8].copy_from_slice(&entry.gindex.to_raw().to_be_bytes());
+    buf[8..16].copy_from_slice(&entry.maturity.to_raw().to_be_bytes());
     buf[16..48].copy_from_slice(&entry.identity.output_key);
     match entry.identity.commitment {
         Some(c) => {
@@ -2191,13 +2198,14 @@ fn encode_leaf_meta(entry: &LeafEntry) -> [u8; 192] {
     // Schema v2: creation_height in the formerly-free range. The value
     // stays `&[u8; 192]` (TypeName unchanged), which is exactly why the
     // schema_version cell exists — redb cannot see this layout change.
-    buf[122..130].copy_from_slice(&entry.creation_height.0.to_be_bytes());
+    buf[122..130].copy_from_slice(&entry.creation_height.to_raw().to_be_bytes());
     buf
 }
 
 fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError> {
-    let gindex = Gindex(u64::from_be_bytes(buf[0..8].try_into().expect("8 bytes")));
-    let maturity = BlockHeight(u64::from_be_bytes(buf[8..16].try_into().expect("8 bytes")));
+    let gindex = Gindex::from_raw(u64::from_be_bytes(buf[0..8].try_into().expect("8 bytes")));
+    let maturity =
+        BlockHeight::from_raw(u64::from_be_bytes(buf[8..16].try_into().expect("8 bytes")));
     let mut output_key = [0u8; 32];
     output_key.copy_from_slice(&buf[16..48]);
     let commitment = match buf[48] {
@@ -2212,7 +2220,7 @@ fn decode_stored_leaf_meta(buf: &[u8; 192]) -> Result<StoredLeafMeta, StoreError
     let mut cm = [0u8; 32];
     cm.copy_from_slice(&buf[81..113]);
     let target = decode_target(buf[113], &buf[114..122])?;
-    let creation_height = BlockHeight(u64::from_be_bytes(
+    let creation_height = BlockHeight::from_raw(u64::from_be_bytes(
         buf[122..130].try_into().expect("8 bytes"),
     ));
     Ok(StoredLeafMeta {
@@ -2304,11 +2312,11 @@ mod tests {
 
     fn sample_entry(gindex: u64, maturity: u64) -> LeafEntry {
         LeafEntry {
-            gindex: Gindex(gindex),
-            maturity: BlockHeight(maturity),
+            gindex: Gindex::from_raw(gindex),
+            maturity: BlockHeight::from_raw(maturity),
             // Coinbase-shaped offset; tests that exercise the rollback
             // creation-height filter construct entries explicitly.
-            creation_height: BlockHeight(maturity.saturating_sub(60)),
+            creation_height: BlockHeight::from_raw(maturity.saturating_sub(60)),
             leaf: [1u8; 128],
             identity: OutputIdentity {
                 output_key: [1u8; 32],
@@ -2327,7 +2335,7 @@ mod tests {
         let mut bad = sample_entry(1, 0);
         bad.leaf = [0xff; 128];
         let err = store
-            .append_drained(&[sample_entry(0, 0), bad], BlockHeight(1))
+            .append_drained(&[sample_entry(0, 0), bad], BlockHeight::from_raw(1))
             .unwrap_err();
         assert!(matches!(
             err,
@@ -2338,7 +2346,7 @@ mod tests {
             0,
             "aborted batch must not partially land"
         );
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
     }
 
     #[test]
@@ -2349,11 +2357,11 @@ mod tests {
         // this value, so a silent zero here would misclassify every leaf
         // as genesis-created.
         let mut entry = sample_entry(7, 130);
-        entry.creation_height = BlockHeight(70);
+        entry.creation_height = BlockHeight::from_raw(70);
         let stored = decode_stored_leaf_meta(&encode_leaf_meta(&entry)).unwrap();
-        assert_eq!(stored.gindex, Gindex(7));
-        assert_eq!(stored.maturity, BlockHeight(130));
-        assert_eq!(stored.creation_height, BlockHeight(70));
+        assert_eq!(stored.gindex, Gindex::from_raw(7));
+        assert_eq!(stored.maturity, BlockHeight::from_raw(130));
+        assert_eq!(stored.creation_height, BlockHeight::from_raw(70));
         assert_eq!(stored.identity, entry.identity);
     }
 
@@ -2377,24 +2385,24 @@ mod tests {
         let a = sample_entry(3, 70);
         let b = sample_entry(4, 71);
         store
-            .append_block_deltas(&[], &[a, b], &[], BlockHeight(10))
+            .append_block_deltas(&[], &[a, b], &[], BlockHeight::from_raw(10))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![3, 4]);
         assert_eq!(store.leaf_count().unwrap(), 0);
 
         store
-            .append_block_deltas(&[a], &[], &[Gindex(3)], BlockHeight(70))
+            .append_block_deltas(&[a], &[], &[Gindex::from_raw(3)], BlockHeight::from_raw(70))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![4]);
         assert_eq!(store.leaf_count().unwrap(), 1);
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
     }
 
     #[test]
     fn block_deltas_reject_pending_gindex_collision_and_abort() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(5, 70)], &[], BlockHeight(10))
+            .append_block_deltas(&[], &[sample_entry(5, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         // Colliding insert rides with a drained append: the whole txn must
         // abort — the drained leaf cannot land either.
@@ -2403,7 +2411,7 @@ mod tests {
                 &[sample_entry(1, 61)],
                 &[sample_entry(5, 99)],
                 &[],
-                BlockHeight(11),
+                BlockHeight::from_raw(11),
             )
             .unwrap_err();
         assert!(matches!(
@@ -2411,17 +2419,17 @@ mod tests {
             StoreError::PendingGindexCollision { gindex: 5 }
         ));
         assert_eq!(store.leaf_count().unwrap(), 0, "aborted txn left no trace");
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(10));
     }
 
     #[test]
     fn block_deltas_reject_missing_pending_removal_and_abort() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(7, 70)], &[], BlockHeight(10))
+            .append_block_deltas(&[], &[sample_entry(7, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         let err = store
-            .append_block_deltas(&[], &[], &[Gindex(8)], BlockHeight(11))
+            .append_block_deltas(&[], &[], &[Gindex::from_raw(8)], BlockHeight::from_raw(11))
             .unwrap_err();
         assert!(matches!(err, StoreError::PendingRowMissing { gindex: 8 }));
         assert_eq!(
@@ -2437,7 +2445,12 @@ mod tests {
         let mut bad = sample_entry(2, 70);
         bad.leaf = [0xFFu8; 128];
         let err = store
-            .append_block_deltas(&[sample_entry(1, 61)], &[bad], &[], BlockHeight(10))
+            .append_block_deltas(
+                &[sample_entry(1, 61)],
+                &[bad],
+                &[],
+                BlockHeight::from_raw(10),
+            )
             .unwrap_err();
         // batch_index counts drained first, then pending_added.
         assert!(matches!(
@@ -2451,9 +2464,9 @@ mod tests {
     fn block_deltas_all_empty_advance_tip_and_freeze_clock() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[], &[], BlockHeight(42))
+            .append_block_deltas(&[], &[], &[], BlockHeight::from_raw(42))
             .unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(42));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(42));
         assert_eq!(store.leaf_count().unwrap(), 0);
         assert!(pending_gindexes(&store).is_empty());
     }
@@ -2462,7 +2475,7 @@ mod tests {
     fn clear_empties_pending_table() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_block_deltas(&[], &[sample_entry(9, 70)], &[], BlockHeight(10))
+            .append_block_deltas(&[], &[sample_entry(9, 70)], &[], BlockHeight::from_raw(10))
             .unwrap();
         assert_eq!(pending_gindexes(&store), vec![9]);
         store.clear().unwrap();
@@ -2480,7 +2493,7 @@ mod tests {
         let drained = [sample_entry(0, 60), sample_entry(1, 61)];
         let pending = [sample_entry(5, 90), sample_entry(3, 80)];
         store
-            .append_block_deltas(&drained, &pending, &[], BlockHeight(61))
+            .append_block_deltas(&drained, &pending, &[], BlockHeight::from_raw(61))
             .unwrap();
 
         assert_eq!(store.read_drained_entries().unwrap(), drained.to_vec());
@@ -2499,7 +2512,10 @@ mod tests {
         // search that assumes sortedness.
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 70), sample_entry(1, 61)], BlockHeight(70))
+            .append_drained(
+                &[sample_entry(0, 70), sample_entry(1, 61)],
+                BlockHeight::from_raw(70),
+            )
             .unwrap();
         let err = store.read_drained_entries().unwrap_err();
         assert!(matches!(err, StoreError::CorruptMeta(_)));
@@ -2513,7 +2529,10 @@ mod tests {
         // directly to prove the detector fires.
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 60), sample_entry(1, 61)], BlockHeight(61))
+            .append_drained(
+                &[sample_entry(0, 60), sample_entry(1, 61)],
+                BlockHeight::from_raw(61),
+            )
             .unwrap();
         {
             let txn = store.db.begin_write().unwrap();
@@ -2531,7 +2550,7 @@ mod tests {
     /// two-class partition filters on it).
     fn entry_created_at(gindex: u64, maturity: u64, created: u64) -> LeafEntry {
         let mut entry = sample_entry(gindex, maturity);
-        entry.creation_height = BlockHeight(created);
+        entry.creation_height = BlockHeight::from_raw(created);
         entry
     }
 
@@ -2557,11 +2576,11 @@ mod tests {
                 ],
                 &[entry_created_at(3, 150, 90), entry_created_at(4, 162, 102)],
                 &[],
-                BlockHeight(161),
+                BlockHeight::from_raw(161),
             )
             .unwrap();
 
-        store.rollback_to_fork(BlockHeight(100)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(100)).unwrap();
 
         let drained = store.read_drained_entries().unwrap();
         assert_eq!(drained, vec![entry_created_at(0, 70, 10)]);
@@ -2570,7 +2589,7 @@ mod tests {
             store.read_pending_candidates().unwrap(),
             vec![entry_created_at(1, 101, 40), entry_created_at(3, 150, 90)]
         );
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
         assert_eq!(store.leaf_count().unwrap(), 1);
     }
 
@@ -2582,20 +2601,24 @@ mod tests {
                 &[entry_created_at(0, 69, 10)],
                 &[entry_created_at(1, 150, 60)],
                 &[],
-                BlockHeight(70),
+                BlockHeight::from_raw(70),
             )
             .unwrap();
-        store.rollback_to_fork(BlockHeight(70)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(70)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 1);
         assert_eq!(store.read_pending_candidates().unwrap().len(), 1);
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
     }
 
     #[test]
     fn rollback_above_tip_is_invalid() {
         let store = LeafStore::open_ephemeral().unwrap();
-        store.append_drained(&[], BlockHeight(50)).unwrap();
-        let err = store.rollback_to_fork(BlockHeight(51)).unwrap_err();
+        store
+            .append_drained(&[], BlockHeight::from_raw(50))
+            .unwrap();
+        let err = store
+            .rollback_to_fork(BlockHeight::from_raw(51))
+            .unwrap_err();
         assert!(matches!(
             err,
             StoreError::InvalidRollback {
@@ -2649,10 +2672,10 @@ mod tests {
                 ],
                 &[],
                 &[],
-                BlockHeight(120),
+                BlockHeight::from_raw(120),
             )
             .unwrap();
-        store.rollback_to_fork(BlockHeight(100)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(100)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 1, "cut at first of the run");
         assert_eq!(
             store.read_drained_entries().unwrap(),
@@ -2664,7 +2687,7 @@ mod tests {
                 .read_pending_candidates()
                 .unwrap()
                 .iter()
-                .map(|e| e.gindex.0)
+                .map(|e| e.gindex.to_raw())
                 .collect::<Vec<_>>(),
             vec![1, 2, 3, 4]
         );
@@ -2681,12 +2704,12 @@ mod tests {
                 &[entry_created_at(0, 60, 0), entry_created_at(1, 65, 5)],
                 &[],
                 &[],
-                BlockHeight(65),
+                BlockHeight::from_raw(65),
             )
             .unwrap();
-        store.rollback_to_fork(BlockHeight(0)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(0)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
         assert_eq!(
             store.read_pending_candidates().unwrap(),
             vec![entry_created_at(0, 60, 0)]
@@ -2701,11 +2724,11 @@ mod tests {
         // fork 0 ≤ tip 0 passes validation and every step degenerates to a
         // no-op on empty tables.
         let store = LeafStore::open_ephemeral().unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
-        store.rollback_to_fork(BlockHeight(0)).unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
+        store.rollback_to_fork(BlockHeight::from_raw(0)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
         assert!(store.read_pending_candidates().unwrap().is_empty());
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
     }
 
     #[test]
@@ -2720,17 +2743,17 @@ mod tests {
                 &[entry_created_at(0, 50, 0)],
                 &[entry_created_at(1, 140, 80), entry_created_at(2, 130, 20)],
                 &[],
-                BlockHeight(100),
+                BlockHeight::from_raw(100),
             )
             .unwrap();
-        store.rollback_to_fork(BlockHeight(70)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(70)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 1, "no truncation");
         assert_eq!(
             store.read_pending_candidates().unwrap(),
             vec![entry_created_at(2, 130, 20)],
             "orphaned-creation pending row filtered, prefix row kept"
         );
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(70));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(70));
     }
 
     #[test]
@@ -2743,21 +2766,28 @@ mod tests {
         let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         let mut entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 10)).collect();
         entries.push(entry_created_at(e, 5_000, 4_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(
             store.frozen_segment(SegmentId(0)).unwrap().is_some(),
             "segment 0 must be frozen for the prune to bite"
         );
         store.prune_frozen(&[]).unwrap();
 
-        let err = store.rollback_to_fork(BlockHeight(40)).unwrap_err();
+        let err = store
+            .rollback_to_fork(BlockHeight::from_raw(40))
+            .unwrap_err();
         assert!(matches!(
             err,
             StoreError::TruncatedIntoPrunedRange { pos } if pos == e
         ));
         // Error-before-write: the store is untouched.
         assert_eq!(store.leaf_count().unwrap(), e + 1);
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10_000));
+        assert_eq!(
+            store.sync_tip_height().unwrap(),
+            BlockHeight::from_raw(10_000)
+        );
     }
 
     #[test]
@@ -2769,10 +2799,12 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 100, 10)).collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
 
-        store.rollback_to_fork(BlockHeight(50)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(50)).unwrap();
         assert!(
             store.frozen_segment(SegmentId(0)).unwrap().is_none(),
             "freeze record rolled back with its segment"
@@ -2786,7 +2818,9 @@ mod tests {
         // Cursor rewind, observed through the production freeze path:
         // re-draining a full segment must freeze it again. A stale cursor
         // would skip segment 0 silently.
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
     }
 
@@ -2797,7 +2831,9 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 0)).collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         let mut record = store
             .frozen_segment(SegmentId(0))
             .unwrap()
@@ -2830,7 +2866,9 @@ mod tests {
         let store = LeafStore::open_ephemeral().unwrap();
         let e = u64::try_from(leaves_per_segment()).expect("segment size fits u64");
         let entries: Vec<LeafEntry> = (0..e).map(|i| entry_created_at(i, 50, 0)).collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
         let txn = store.db.begin_write().unwrap();
         {
@@ -2860,7 +2898,7 @@ mod tests {
                 &[entry_created_at(0, 50, 0)],
                 &[entry_created_at(5, 140, 80)],
                 &[],
-                BlockHeight(90),
+                BlockHeight::from_raw(90),
             )
             .unwrap();
         let before = logical_snapshot(&store);
@@ -2871,8 +2909,8 @@ mod tests {
             .append_block_deltas(
                 &[entry_created_at(1, 95, 35)],
                 &[bad],
-                &[Gindex(5)],
-                BlockHeight(95),
+                &[Gindex::from_raw(5)],
+                BlockHeight::from_raw(95),
             )
             .unwrap_err();
         assert!(matches!(
@@ -2913,9 +2951,9 @@ mod tests {
             _ => TargetKind::Other,
         };
         LeafEntry {
-            gindex: Gindex(gindex),
-            maturity: BlockHeight(maturity),
-            creation_height: BlockHeight(creation),
+            gindex: Gindex::from_raw(gindex),
+            maturity: BlockHeight::from_raw(maturity),
+            creation_height: BlockHeight::from_raw(creation),
             leaf: random_canonical_leaf(rng),
             identity: OutputIdentity {
                 output_key,
@@ -2969,7 +3007,12 @@ mod tests {
             let store = LeafStore::open_ephemeral().unwrap();
             for b in blocks.iter().filter(|b| b.height <= fork) {
                 store
-                    .append_block_deltas(&b.drained, &b.added, &b.removed, BlockHeight(b.height))
+                    .append_block_deltas(
+                        &b.drained,
+                        &b.added,
+                        &b.removed,
+                        BlockHeight::from_raw(b.height),
+                    )
                     .unwrap();
             }
             store
@@ -2980,13 +3023,13 @@ mod tests {
                 .read_drained_entries()
                 .unwrap()
                 .iter()
-                .map(|e| e.gindex.0)
+                .map(|e| e.gindex.to_raw())
                 .collect();
             let pending: std::collections::BTreeSet<u64> = store
                 .read_pending_candidates()
                 .unwrap()
                 .iter()
-                .map(|e| e.gindex.0)
+                .map(|e| e.gindex.to_raw())
                 .collect();
             assert!(drained.is_disjoint(&pending));
         }
@@ -3004,7 +3047,7 @@ mod tests {
                 let lock = locks[(rng.next_u32() as usize) % locks.len()];
                 let entry = random_entry(&mut rng, next_gindex, height + lock, height);
                 next_gindex += 1;
-                live_pending.insert(entry.gindex.0, entry);
+                live_pending.insert(entry.gindex.to_raw(), entry);
                 added.push(entry);
             }
             // Production drain convention (CT-2 KAT, owned by
@@ -3015,8 +3058,8 @@ mod tests {
             // until a random pattern put a maturity on a fork height.
             let due: Vec<u64> = live_pending
                 .values()
-                .filter(|e| e.maturity.0 + 1 == height)
-                .map(|e| e.gindex.0)
+                .filter(|e| e.maturity.to_raw() + 1 == height)
+                .map(|e| e.gindex.to_raw())
                 .collect();
             let drained: Vec<LeafEntry> = due
                 .iter()
@@ -3024,7 +3067,7 @@ mod tests {
                 .collect();
             let removed: Vec<Gindex> = drained.iter().map(|e| e.gindex).collect();
             store
-                .append_block_deltas(&drained, &added, &removed, BlockHeight(height))
+                .append_block_deltas(&drained, &added, &removed, BlockHeight::from_raw(height))
                 .unwrap();
             blocks.push(SimBlock {
                 height,
@@ -3042,13 +3085,13 @@ mod tests {
         // First rollback, then a second deeper one on the same store —
         // sequential reorgs compose.
         for fork in [55u64, 21] {
-            store.rollback_to_fork(BlockHeight(fork)).unwrap();
+            store.rollback_to_fork(BlockHeight::from_raw(fork)).unwrap();
             let fresh = replay_prefix(&blocks, fork);
             let a = logical_snapshot(&store);
             let b = logical_snapshot(&fresh);
             if a != b {
                 // Set-level diff: a raw Snapshot assert is unreadable.
-                let g = |v: &[LeafEntry]| v.iter().map(|e| e.gindex.0).collect::<Vec<_>>();
+                let g = |v: &[LeafEntry]| v.iter().map(|e| e.gindex.to_raw()).collect::<Vec<_>>();
                 eprintln!("fork={fork}");
                 eprintln!("drained rollback={:?} replay={:?}", g(&a.0), g(&b.0));
                 eprintln!("pending rollback={:?} replay={:?}", g(&a.1), g(&b.1));
@@ -3071,7 +3114,10 @@ mod tests {
     fn append_and_truncate_round_trip() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0), sample_entry(1, 0)], BlockHeight(1))
+            .append_drained(
+                &[sample_entry(0, 0), sample_entry(1, 0)],
+                BlockHeight::from_raw(1),
+            )
             .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 2);
         store.truncate_from_tree_position(TreePosition(1)).unwrap();
@@ -3137,7 +3183,7 @@ mod tests {
             .is_none());
 
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         let body = serve_body(&store, SegmentId(0));
         assert_eq!(body.len(), leaves_per_segment() * LEAF_BYTES);
@@ -3169,7 +3215,7 @@ mod tests {
             .map(|i| {
                 let gindex = u64::try_from(i).expect("index fits u64");
                 let mut entry = sample_entry(gindex, created + 60);
-                entry.creation_height = BlockHeight(created);
+                entry.creation_height = BlockHeight::from_raw(created);
                 entry.leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
                 entry
             })
@@ -3182,7 +3228,7 @@ mod tests {
     fn releasing_a_pin_lets_the_prune_reclaim_the_segment() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.pin_serve_set(&[0]).unwrap();
         assert_eq!(store.pinned_shard_ids().unwrap(), vec![0]);
@@ -3214,7 +3260,7 @@ mod tests {
     fn releasing_an_unpinned_shard_is_idempotent() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         assert_eq!(store.release_pins(&[0]).unwrap(), 0);
         store.pin_serve_set(&[0]).unwrap();
@@ -3229,7 +3275,7 @@ mod tests {
     fn pinned_shard_ids_reports_what_no_current_record_would_mention() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.pin_serve_set(&[0, 1]).unwrap();
         let mut pinned = store.pinned_shard_ids().unwrap();
@@ -3266,7 +3312,10 @@ mod tests {
     fn a_rollback_drops_the_pins_the_staleness_tripwire_reads() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .append_drained(
+                &segment_entries_created_at(940),
+                BlockHeight::from_raw(10_000),
+            )
             .unwrap();
 
         // Segment 0 is frozen and pinned; the tripwire sees nothing missing.
@@ -3280,7 +3329,7 @@ mod tests {
         );
 
         // A chain reorg takes the tree back below the leaves' creation height.
-        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(500)).unwrap();
 
         assert_eq!(
             store.members_missing_pins(&[0]).unwrap(),
@@ -3300,16 +3349,22 @@ mod tests {
     fn re_pinning_after_a_rollback_clears_the_dropped_pin() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .append_drained(
+                &segment_entries_created_at(940),
+                BlockHeight::from_raw(10_000),
+            )
             .unwrap();
         store.pin_serve_set(&[0]).unwrap();
-        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(500)).unwrap();
         assert_eq!(store.members_missing_pins(&[0]).unwrap(), vec![0]);
 
         // Re-ingest past the fork and re-pin, exactly as the serving host's
         // unconditional refresh does.
         store
-            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .append_drained(
+                &segment_entries_created_at(940),
+                BlockHeight::from_raw(10_000),
+            )
             .unwrap();
         store.pin_serve_set(&[0]).unwrap();
         assert!(
@@ -3327,7 +3382,7 @@ mod tests {
         // which of them is disqualifying.
         let store = Arc::new(LeafStore::open_ephemeral().unwrap());
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         assert_eq!(
             store.pin_serve_set(&[0, 1]).unwrap(),
@@ -3340,7 +3395,7 @@ mod tests {
 
         let pruned = Arc::new(LeafStore::open_ephemeral().unwrap());
         pruned
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         pruned.prune_frozen(&[]).unwrap();
         assert_eq!(
@@ -3354,7 +3409,7 @@ mod tests {
         // runs, so a bad set cannot leave the store half-pinned.
         let refused = Arc::new(LeafStore::open_ephemeral().unwrap());
         refused
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         let bad = u64::from(u32::MAX) + 1;
         assert!(matches!(
@@ -3390,7 +3445,9 @@ mod tests {
         let e = leaves_per_segment() as u64;
         let mut entries = distinct_segment_entries();
         entries.push(sample_entry(e, 5_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 1);
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(1)).unwrap().is_none());
@@ -3398,7 +3455,9 @@ mod tests {
         // Segment 1 completes and is buried: the cursor crosses the
         // boundary and the table crosses with it.
         let more: Vec<LeafEntry> = (e + 1..2 * e).map(|g| sample_entry(g, 5_000)).collect();
-        store.append_drained(&more, BlockHeight(20_000)).unwrap();
+        store
+            .append_drained(&more, BlockHeight::from_raw(20_000))
+            .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 2);
         assert!(store.frozen_segment(SegmentId(1)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
@@ -3406,13 +3465,17 @@ mod tests {
         // Segment 2 completes but is NOT yet buried (recent maturity):
         // the cursor must not advance on completion alone…
         let tail: Vec<LeafEntry> = (2 * e..3 * e).map(|g| sample_entry(g, 19_900)).collect();
-        store.append_drained(&tail, BlockHeight(20_000)).unwrap();
+        store
+            .append_drained(&tail, BlockHeight::from_raw(20_000))
+            .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 2);
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_none());
 
         // …and advances through the public wrapper once burial is deep
         // enough, table agreeing at the new boundary.
-        store.maybe_freeze_segments(BlockHeight(30_000)).unwrap();
+        store
+            .maybe_freeze_segments(BlockHeight::from_raw(30_000))
+            .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 3);
         assert!(store.frozen_segment(SegmentId(2)).unwrap().is_some());
         assert!(store.frozen_segment(SegmentId(3)).unwrap().is_none());
@@ -3427,7 +3490,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+                .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
                 .unwrap();
             assert_eq!(store.next_freeze_seg().unwrap(), 1);
         }
@@ -3444,11 +3507,14 @@ mod tests {
     fn next_freeze_seg_agrees_after_rollback_recompute() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&segment_entries_created_at(940), BlockHeight(10_000))
+            .append_drained(
+                &segment_entries_created_at(940),
+                BlockHeight::from_raw(10_000),
+            )
             .unwrap();
         assert_eq!(store.next_freeze_seg().unwrap(), 1);
 
-        store.rollback_to_fork(BlockHeight(500)).unwrap();
+        store.rollback_to_fork(BlockHeight::from_raw(500)).unwrap();
         assert_eq!(
             store.next_freeze_seg().unwrap(),
             0,
@@ -3541,7 +3607,9 @@ mod tests {
         let e = leaves_per_segment() as u64;
         let mut entries = distinct_segment_entries();
         entries.push(sample_entry(e, 5_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
 
         assert!(
             store.pruned_frozen_segments().unwrap().is_empty(),
@@ -3565,7 +3633,7 @@ mod tests {
     fn prune_frozen_refuses_typed_under_the_declared_posture() {
         let store = Arc::new(LeafStore::open_ephemeral().unwrap());
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.set_prune_disabled().unwrap();
 
@@ -3587,7 +3655,7 @@ mod tests {
         // the misconfiguration as a typed error instead of a silent miss.
         let store = Arc::new(LeafStore::open_ephemeral().unwrap());
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.prune_frozen(&[]).unwrap();
         assert!(matches!(
@@ -3598,7 +3666,7 @@ mod tests {
         // Pinned: the same sequence keeps the segment fully servable.
         let pinned = Arc::new(LeafStore::open_ephemeral().unwrap());
         pinned
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         assert_eq!(
             pinned.pin_segment_for_serving(SegmentId(0)).unwrap(),
@@ -3621,7 +3689,7 @@ mod tests {
         // — and the persona would learn that from a slash.
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         store.prune_frozen(&[]).unwrap();
         assert_eq!(
@@ -3646,7 +3714,7 @@ mod tests {
         // bond is slashed.
         let store = Arc::new(LeafStore::open_ephemeral().unwrap());
         store
-            .append_drained(&distinct_segment_entries(), BlockHeight(10_000))
+            .append_drained(&distinct_segment_entries(), BlockHeight::from_raw(10_000))
             .unwrap();
         assert_eq!(
             store.pin_segment_for_serving(SegmentId(0)).unwrap(),
@@ -3685,7 +3753,9 @@ mod tests {
         // design and would not exercise the search).
         entries.push(entry_created_at(2 * e, 100, 20));
         entries.push(entry_created_at(2 * e + 1, 5_000, 4_000));
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(
             store.frozen_segment(SegmentId(1)).unwrap().is_some(),
             "both segments must freeze for segment 0 to become an island"
@@ -3697,7 +3767,9 @@ mod tests {
         );
         store.prune_frozen(&[]).unwrap();
 
-        store.rollback_to_fork(BlockHeight(4_500)).unwrap();
+        store
+            .rollback_to_fork(BlockHeight::from_raw(4_500))
+            .unwrap();
         assert_eq!(store.leaf_count().unwrap(), 2 * e + 1);
         assert_eq!(
             serve_body(&store, SegmentId(0)).len(),
@@ -3713,7 +3785,9 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
         assert_eq!(store.leaf_count().unwrap(), 0);
@@ -3727,11 +3801,18 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, BlockHeight(100)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
+        store
+            .append_drained(&entries, BlockHeight::from_raw(100))
+            .unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_none());
-        store.append_drained(&[], BlockHeight(10_000)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(10_000));
+        store
+            .append_drained(&[], BlockHeight::from_raw(10_000))
+            .unwrap();
+        assert_eq!(
+            store.sync_tip_height().unwrap(),
+            BlockHeight::from_raw(10_000)
+        );
         assert!(store.frozen_segment(SegmentId(0)).unwrap().is_some());
     }
 
@@ -3742,10 +3823,14 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         store.pin_segment_for_serving(SegmentId(0)).unwrap();
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
-        store.append_drained(&entries, BlockHeight(20_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(20_000))
+            .unwrap();
         store.prune_frozen(&[]).unwrap();
         let txn = store.db.begin_read().unwrap();
         let leaves = txn.open_table(LEAVES_TABLE).unwrap();
@@ -3759,11 +3844,11 @@ mod tests {
     fn truncate_invalidates_sync_tip() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(500))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(500))
             .unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(500));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(500));
         store.truncate_from_tree_position(TreePosition(0)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(0));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(0));
     }
 
     #[test]
@@ -3773,7 +3858,9 @@ mod tests {
         let entries: Vec<_> = (0..e)
             .map(|i| sample_entry(u64::try_from(i).expect("index fits u64"), 0))
             .collect();
-        store.append_drained(&entries, BlockHeight(10_000)).unwrap();
+        store
+            .append_drained(&entries, BlockHeight::from_raw(10_000))
+            .unwrap();
         store.prune_frozen(&[]).unwrap();
         let pos_in_seg = e / 2;
         let err = store
@@ -3792,18 +3879,20 @@ mod tests {
     fn append_drained_sync_tip_is_monotonic() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(100))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(100))
             .unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
-        store.append_drained(&[], BlockHeight(50)).unwrap();
-        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(100));
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
+        store
+            .append_drained(&[], BlockHeight::from_raw(50))
+            .unwrap();
+        assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(100));
     }
 
     #[test]
     fn root_at_count_rejects_request_beyond_stored() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
             .unwrap();
         let err = store.root_at_count(2).unwrap_err();
         assert!(matches!(
@@ -3819,7 +3908,7 @@ mod tests {
     fn truncate_beyond_leaf_count_rejects() {
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
             .unwrap();
         let err = store
             .truncate_from_tree_position(TreePosition(2))
@@ -3867,8 +3956,7 @@ mod tests {
         }
 
         check_u64::<TreePosition>(TreePosition);
-        check_u64::<BlockHeight>(BlockHeight);
-        check_u64::<Gindex>(Gindex);
+        check_u64::<GindexKey>(GindexKey);
 
         // SegmentId wraps u32; same parity properties against the u32 impl.
         let samples = [0u32, 1, 2, u32::MAX - 1, u32::MAX];
@@ -3899,12 +3987,12 @@ mod tests {
     /// not silent cross-keyed reads.
     #[test]
     fn typed_key_table_type_guard_fires() {
-        const WRONG_KEY_LEAVES: TableDefinition<Gindex, &[u8; 128]> =
+        const WRONG_KEY_LEAVES: TableDefinition<GindexKey, &[u8; 128]> =
             TableDefinition::new("leaves");
 
         let store = LeafStore::open_ephemeral().unwrap();
         store
-            .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+            .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
             .unwrap();
         let txn = store.db.begin_read().unwrap();
         let err = txn.open_table(WRONG_KEY_LEAVES).unwrap_err();
@@ -3950,7 +4038,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
                 .unwrap();
         }
         {
@@ -4000,7 +4088,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             assert_eq!(store.leaf_count().unwrap(), 1);
-            assert_eq!(store.sync_tip_height().unwrap(), BlockHeight(1));
+            assert_eq!(store.sync_tip_height().unwrap(), BlockHeight::from_raw(1));
         }
 
         std::fs::remove_file(&path).unwrap();
@@ -4027,7 +4115,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
                 .unwrap();
         }
         {
@@ -4075,7 +4163,7 @@ mod tests {
         {
             let store = LeafStore::open(&path).unwrap();
             store
-                .append_drained(&[sample_entry(0, 0)], BlockHeight(1))
+                .append_drained(&[sample_entry(0, 0)], BlockHeight::from_raw(1))
                 .unwrap();
         }
         const PRIOR_V3: u64 = 3;

@@ -363,8 +363,14 @@ enforces it in documentation. The type-system enforcement is the
 correct disposition.
 
 The Rust crate is **`shekyl-difficulty`**, a new workspace member
-under `rust/`. It is a **leaf crate**: it has zero internal
-workspace dependencies; only `shekyl-ffi` depends on it (to export
+under `rust/`. It is a **leaf crate** in the cycle-ban sense:
+it does **not** depend on `shekyl-ffi`, engine, store, or
+`shekyl-consensus`. UPDATE 2026-09-17 (RTN-5): first-party
+vocabulary (`shekyl-types`: `BlockHeight`, `Timestamp`) is
+**required**, not forbidden — §2.1's "zero internal workspace
+dependencies" was a cycle ban, not a type ban. `Difficulty` /
+`CumulativeDifficulty` live in this crate (transform-shaped).
+`shekyl-ffi` depends on it (to export
 the C ABI per §6). It is a sibling, at the leaf level, of the
 existing computation-primitive crates `shekyl-consensus` (where
 RandomX-related Rust code lives today) and `shekyl-fcmp` (FCMP++
@@ -382,15 +388,13 @@ layering discipline:
 ```text
 C++ Blockchain  ──(FFI)──>  shekyl-ffi  ──(rust dep)──>  shekyl-difficulty
                                                               │
-                                                              └─> (no internal deps)
+                                                              └─> shekyl-types (vocabulary)
 ```
 
 `shekyl-difficulty` does not depend on `shekyl-ffi`,
-`shekyl-engine-state`, `shekyl-consensus`, or any other workspace
-crate. It uses only `core`/`std` and (optionally) workspace-shared
-utility crates like `thiserror` (see
-[`DAA_LWMA1_PLAN.md`](./DAA_LWMA1_PLAN.md) "Phase 1 — `shekyl-difficulty`
-crate scaffold").
+`shekyl-engine-state`, `shekyl-consensus`, or the store. UPDATE
+2026-09-17 (RTN-5): it **does** depend on `shekyl-types` for
+`BlockHeight` / `Timestamp`. The cycle-ban still holds.
 
 ### 2.2 Single algorithm path, no version dispatch
 
@@ -978,7 +982,9 @@ The cross-language generation pipeline is the existing one:
   `shekyl-difficulty/src/consts.rs` `include!`s the generated file
   and re-exports the constants under the canonical zawy12 names
   (`N`, `T_SECONDS`, etc.). This preserves the leaf-crate property
-  per §2.1 (zero internal workspace deps; `serde_json` is a
+  per §2.1 (cycle-ban: no FFI/engine/store/consensus dep;
+  `shekyl-types` is the vocabulary dep as of RTN-5 2026-09-17;
+  `serde_json` is a
   build-time dep only, not a runtime dep). Extending
   `rust/shekyl-engine-core/build.rs` to emit the LWMA-1 keys was
   considered and rejected: it would introduce a workspace-internal

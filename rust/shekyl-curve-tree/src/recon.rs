@@ -262,9 +262,9 @@ pub fn collect_block_leaves(
             };
             match try_build_leaf(output) {
                 Ok(Some(leaf)) => out.push(LeafEntry {
-                    gindex: Gindex(this_gindex),
-                    maturity: BlockHeight(maturity),
-                    creation_height: BlockHeight(block_height),
+                    gindex: Gindex::from_raw(this_gindex),
+                    maturity: BlockHeight::from_raw(maturity),
+                    creation_height: BlockHeight::from_raw(block_height),
                     leaf,
                     identity: *output,
                 }),
@@ -272,7 +272,7 @@ pub fn collect_block_leaves(
                 Ok(None) => {}
                 Err(point) => {
                     return Err(LeafPointError {
-                        gindex: Gindex(this_gindex),
+                        gindex: Gindex::from_raw(this_gindex),
                         point,
                     });
                 }
@@ -299,7 +299,7 @@ pub fn collect_block_leaves(
 pub fn drained_sorted(entries: &[LeafEntry], drained_through: u64) -> Vec<&LeafEntry> {
     let mut drained: Vec<&LeafEntry> = entries
         .iter()
-        .filter(|e| e.maturity <= BlockHeight(drained_through))
+        .filter(|e| e.maturity <= BlockHeight::from_raw(drained_through))
         .collect();
     drained.sort_by_key(|e| (e.maturity, e.gindex));
     drained
@@ -316,7 +316,7 @@ pub fn drained_sorted(entries: &[LeafEntry], drained_through: u64) -> Vec<&LeafE
 pub fn newly_drained_at_cutoff(entries: &[LeafEntry], drained_through: u64) -> Vec<LeafEntry> {
     let mut batch: Vec<&LeafEntry> = entries
         .iter()
-        .filter(|e| e.maturity == BlockHeight(drained_through))
+        .filter(|e| e.maturity == BlockHeight::from_raw(drained_through))
         .collect();
     batch.sort_by_key(|e| e.gindex);
     batch.into_iter().copied().collect()
@@ -538,7 +538,7 @@ mod tests {
         assert_eq!(
             collect_block_leaves(60, &txs, 0, &mut leaves),
             Err(LeafPointError {
-                gindex: Gindex(1),
+                gindex: Gindex::from_raw(1),
                 point: LeafPoint::LeafCommitment,
             })
         );
@@ -562,16 +562,16 @@ mod tests {
         assert_eq!(leaves.len(), 1, "only the valid output is a leaf");
         assert_eq!(
             leaves[0].gindex,
-            Gindex(1),
+            Gindex::from_raw(1),
             "leaf carries its true global index"
         );
         assert_eq!(
             leaves[0].maturity,
-            BlockHeight(60 + COINBASE_LOCK_WINDOW as u64)
+            BlockHeight::from_raw(60 + COINBASE_LOCK_WINDOW as u64)
         );
         assert_eq!(
             leaves[0].creation_height,
-            BlockHeight(60),
+            BlockHeight::from_raw(60),
             "leaf records the block it was created in"
         );
     }
@@ -586,9 +586,9 @@ mod tests {
         let id = coinbase_output();
         let leaf = try_build_leaf(&id).expect("no bad point").expect("leaf");
         let entry = LeafEntry {
-            gindex: Gindex(0),
-            maturity: BlockHeight(120),
-            creation_height: BlockHeight(60),
+            gindex: Gindex::from_raw(0),
+            maturity: BlockHeight::from_raw(120),
+            creation_height: BlockHeight::from_raw(60),
             leaf,
             identity: id,
         };
@@ -604,24 +604,24 @@ mod tests {
         let leaf = try_build_leaf(&id).expect("no bad point").expect("leaf");
         let entries = [
             LeafEntry {
-                gindex: Gindex(5),
-                maturity: BlockHeight(70),
-                creation_height: BlockHeight(10),
+                gindex: Gindex::from_raw(5),
+                maturity: BlockHeight::from_raw(70),
+                creation_height: BlockHeight::from_raw(10),
                 leaf,
                 identity: id,
             },
             LeafEntry {
-                gindex: Gindex(2),
-                maturity: BlockHeight(70),
-                creation_height: BlockHeight(10),
+                gindex: Gindex::from_raw(2),
+                maturity: BlockHeight::from_raw(70),
+                creation_height: BlockHeight::from_raw(10),
                 leaf,
                 identity: id,
             },
             // Not yet drained at cutoff 70.
             LeafEntry {
-                gindex: Gindex(1),
-                maturity: BlockHeight(71),
-                creation_height: BlockHeight(11),
+                gindex: Gindex::from_raw(1),
+                maturity: BlockHeight::from_raw(71),
+                creation_height: BlockHeight::from_raw(11),
                 leaf,
                 identity: id,
             },
@@ -639,16 +639,16 @@ mod tests {
             .expect("valid leaf");
         let entries = vec![
             LeafEntry {
-                gindex: Gindex(0),
-                maturity: BlockHeight(60),
-                creation_height: BlockHeight(0),
+                gindex: Gindex::from_raw(0),
+                maturity: BlockHeight::from_raw(60),
+                creation_height: BlockHeight::from_raw(0),
                 leaf,
                 identity: id,
             },
             LeafEntry {
-                gindex: Gindex(1),
-                maturity: BlockHeight(10),
-                creation_height: BlockHeight(0),
+                gindex: Gindex::from_raw(1),
+                maturity: BlockHeight::from_raw(10),
+                creation_height: BlockHeight::from_raw(0),
                 leaf,
                 identity: id,
             },

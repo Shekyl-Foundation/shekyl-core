@@ -334,7 +334,11 @@ mod tests {
             "cursor raised one past the highest sighting"
         );
         assert_eq!(
-            staking.bond_sightings.get(&2).map(|h| h.to_raw()),
+            staking
+                .bond_sightings
+                .get(&2)
+                .copied()
+                .map(shekyl_types::BlockHeight::to_raw),
             Some(130),
             "first-sighting height recorded"
         );
@@ -369,13 +373,34 @@ mod tests {
         let mut staking = shekyl_engine_state::StakingBlock::empty();
         // One batch, high then low: the batch min wins, not the first row.
         adopt_bond_sightings(&mut staking, &[sighting(0, 90), sighting(0, 40)]);
-        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
+        assert_eq!(
+            staking
+                .bond_sightings
+                .get(&0)
+                .copied()
+                .map(shekyl_types::BlockHeight::to_raw),
+            Some(40)
+        );
         assert_eq!(staking.bonded_slots, vec![0]);
         // Later batches — higher OR lower — leave the committed row alone.
         adopt_bond_sightings(&mut staking, &[sighting(0, 80)]);
-        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
+        assert_eq!(
+            staking
+                .bond_sightings
+                .get(&0)
+                .copied()
+                .map(shekyl_types::BlockHeight::to_raw),
+            Some(40)
+        );
         adopt_bond_sightings(&mut staking, &[sighting(0, 10)]);
-        assert_eq!(staking.bond_sightings.get(&0).map(|h| h.to_raw()), Some(40));
+        assert_eq!(
+            staking
+                .bond_sightings
+                .get(&0)
+                .copied()
+                .map(shekyl_types::BlockHeight::to_raw),
+            Some(40)
+        );
         assert_eq!(staking.bonded_slots, vec![0]);
     }
 

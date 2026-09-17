@@ -3810,7 +3810,9 @@ dependencies = [
  "redb",
  "shekyl-chain-rules",
  "shekyl-crypto-hash",
+ "shekyl-difficulty",
  "shekyl-types",
+ "shekyl-units",
  "shekyl-wire",
 ]
 
@@ -3844,6 +3846,7 @@ name = "shekyl-consensus"
 version = "3.1.0"
 dependencies = [
  "serde",
+ "shekyl-difficulty",
  "thiserror 2.0.18",
 ]
 
@@ -3960,6 +3963,7 @@ dependencies = [
  "shekyl-crypto-pq",
  "shekyl-curve-io",
  "shekyl-fcmp",
+ "shekyl-types",
  "tempfile",
 ]
 
@@ -4014,6 +4018,7 @@ version = "3.1.0"
 dependencies = [
  "proptest",
  "serde_json",
+ "shekyl-types",
 ]
 
 [[package]]
@@ -4276,6 +4281,7 @@ dependencies = [
  "shekyl-relay-privacy",
  "shekyl-tor-control-daemon",
  "shekyl-tx-builder",
+ "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
  "tempfile",

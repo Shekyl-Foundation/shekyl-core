@@ -432,7 +432,7 @@ pub(crate) fn membership_rebuilding(
     tree_cursor: Option<shekyl_curve_tree::BlockHeight>,
     ledger_synced: u64,
 ) -> bool {
-    let covered = tree_cursor.map_or(0, |h| h.0);
+    let covered = tree_cursor.map_or(0, shekyl_types::BlockHeight::to_raw);
     covered < ledger_synced
 }
 

@@ -12,12 +12,12 @@
 //! account/subaddress model (rule 60; WI-RPC-1 pin 1).
 
 use serde_json::{json, Value};
-use shekyl_types::BlockHeight;
+use shekyl_types::Timestamp;
 
 use super::{format_amount, format_amount_str, opt_amount, require_open};
 use crate::rpc_client::RpcSession;
 
-pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Option<BlockHeight>) {
+pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Option<Timestamp>) {
     if !require_open(rpc) {
         return;
     }
@@ -25,10 +25,10 @@ pub fn cmd_request_new(rpc: &RpcSession, amount: u64, label: &str, expiry: Optio
         "label": label,
         "amount": amount.to_string(),
     });
-    if let Some(h) = expiry {
-        // BlockHeight is #[serde(transparent)] over u64 — the wire stays a
-        // plain height number.
-        params["expiry"] = json!(h.to_raw());
+    if let Some(ts) = expiry {
+        // Timestamp is #[serde(transparent)] over u64 — the wire stays a
+        // plain unix-seconds integer.
+        params["expiry"] = json!(ts.to_raw());
     }
     match rpc.call("create_payment_request", params) {
         Ok(val) => {
@@ -106,7 +106,7 @@ fn print_request_row(r: &Value) {
         println!("{:<16} matched by tx {tx}", "");
     }
     if let Some(expiry) = r.get("expiry").and_then(serde_json::Value::as_i64) {
-        println!("{:<16} expires at height {expiry}", "");
+        println!("{:<16} expires at unix {expiry}", "");
     }
 }
 
@@ -159,7 +159,7 @@ pub fn cmd_parse_uri(rpc: &RpcSession, uri: &str) {
                 println!("Request: {}", safe(rid));
             }
             if let Some(expiry) = val.get("expiry").and_then(serde_json::Value::as_i64) {
-                println!("Expiry:  height {expiry}");
+                println!("Expiry:  unix {expiry}");
             }
         }
         Err(e) => rpc.report("Failed to parse URI", &e),

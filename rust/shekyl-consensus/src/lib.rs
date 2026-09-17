@@ -16,7 +16,7 @@ pub use error::ConsensusError;
 pub use proof::{ConsensusProof, ProofType};
 pub use randomx::RandomXProof;
 pub use registry::ConsensusRegistry;
-pub use types::{BlockHeader, ChainState, Difficulty};
+pub use types::{BlockHeader, ChainState, CumulativeDifficulty, Difficulty};
 
 /// The minimum number of blocks a non-coinbase output is locked for before it is
 /// spendable.

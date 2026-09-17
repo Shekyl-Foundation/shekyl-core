@@ -118,7 +118,7 @@ fn collect_transfers(
     if want_incoming {
         for td in ledger_rows {
             // Ledger rows are scanner-observed, so always mined.
-            if below_since(Some(td.block_height), since) {
+            if below_since(Some(td.block_height.to_raw()), since) {
                 continue;
             }
             if filters
@@ -139,7 +139,7 @@ fn collect_transfers(
                     block_height: view.block_height,
                     outgoing: false,
                     tx_hash: td.tx_hash.to_bytes(),
-                    output_index: td.internal_output_index,
+                    output_index: td.internal_output_index.to_raw(),
                 },
                 view,
             ));
@@ -393,7 +393,11 @@ pub(crate) async fn get_transfer_by_id(
             .ledger
             .transfers()
             .iter()
-            .find(|td| td.tx_hash == tx_hash && td.internal_output_index == output_index)
+            .find(|td| {
+                td.tx_hash == tx_hash
+                    && td.internal_output_index
+                        == shekyl_types::OutputIndexInTx::from_raw(output_index)
+            })
             .map(|td| transfer_view(td, &ledger.spend_locks(), ledger.tx_meta.notes())),
         TransferLookupId::Outgoing { tx_hash } => ledger
             .send_journal

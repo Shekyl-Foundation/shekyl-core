@@ -1650,6 +1650,44 @@ impl Transaction {
         keccak256(&prunable)
     }
 
+    /// The txid's third component: `keccak256(varint(count) ‖ auths)` as
+    /// [`Self::hash`] computes it (C++ `cryptonote_format_utils.cpp:1319-1325`),
+    /// **not** `keccak256` of the raw `txs_pqc_auths` segment (no count
+    /// prefix; that hash verifies nothing the chain signed).
+    ///
+    /// `None` iff the txid is 3-part: coinbase (`Ct::Null`), a spend whose
+    /// `pqc_auths` is empty, or a gen-first `Fcmp` shape the oracle hashes
+    /// 3-part. A sentinel (the null hash, or `keccak256(varint(0))`) would
+    /// label a coinbase with a value the chain never committed.
+    #[must_use]
+    pub fn pqc_auth_hash(&self) -> Option<[u8; 32]> {
+        match &self.ct {
+            Ct::Null(_) => None,
+            Ct::Fcmp { pqc_auths, .. } => {
+                let first_is_gen = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
+                if pqc_auths.is_empty() || first_is_gen {
+                    None
+                } else {
+                    Some(Self::hash_pqc_auths_txid_component(pqc_auths))
+                }
+            }
+        }
+    }
+
+    /// `keccak256(varint(count) ‖ auths)` — the C++ generic `std::vector`
+    /// serializer (`format_utils.cpp:1169`) writes `begin_array(cnt)` as a
+    /// leading varint, unlike the tx *body* where the count is implicit
+    /// (`vin.size()`, no prefix). Both must match their respective C++ paths;
+    /// they legitimately differ.
+    fn hash_pqc_auths_txid_component(pqc_auths: &[PqcAuth]) -> [u8; 32] {
+        let mut auth_buf = Vec::new();
+        write_varint(pqc_auths.len(), &mut auth_buf).expect("Vec write is infallible");
+        for auth in pqc_auths {
+            auth.write(&mut auth_buf).expect("Vec write is infallible");
+        }
+        keccak256(&auth_buf)
+    }
+
     /// The consensus transaction hash of a **pruned** body, with the prunable
     /// digest supplied instead of computed.
     ///
@@ -1690,7 +1728,7 @@ impl Transaction {
                 fee,
                 reference_block,
                 base,
-                pqc_auths,
+                pqc_auths: _,
                 prunable,
             } => {
                 let mut base_buf = vec![CT_TYPE_FCMP];
@@ -1720,23 +1758,12 @@ impl Transaction {
 
                 // `has_pqc` excludes the (malformed) gen-first shape, exactly as the
                 // oracle does — so a `gen` input + `Fcmp` ct hashes 3-part like a
-                // coinbase rather than misclassifying as a spend.
-                let first_is_gen = matches!(self.prefix.inputs.first(), Some(Input::Gen(_)));
-                if pqc_auths.is_empty() || first_is_gen {
-                    hash_concat(&[h_prefix, h_base, h_prunable])
-                } else {
-                    // The pqc component mirrors the oracle's generic `std::vector`
-                    // serializer (format_utils.cpp:1169), whose `begin_array(cnt)`
-                    // writes the element **count as a leading varint** before the
-                    // entries — unlike the tx *body*, where the count is implicit
-                    // (`vin.size()`, no prefix). Both must match their respective C++
-                    // paths; they legitimately differ.
-                    let mut auth_buf = Vec::new();
-                    write_varint(pqc_auths.len(), &mut auth_buf).expect("Vec write is infallible");
-                    for auth in pqc_auths {
-                        auth.write(&mut auth_buf).expect("Vec write is infallible");
-                    }
-                    hash_concat(&[h_prefix, h_base, keccak256(&auth_buf), h_prunable])
+                // coinbase rather than misclassifying as a spend. One construction
+                // with [`Self::pqc_auth_hash`]: a second serializer here would be
+                // a second identity.
+                match self.pqc_auth_hash() {
+                    None => hash_concat(&[h_prefix, h_base, h_prunable]),
+                    Some(h_pqc) => hash_concat(&[h_prefix, h_base, h_pqc, h_prunable]),
                 }
             }
         }

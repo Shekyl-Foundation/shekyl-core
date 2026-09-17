@@ -67,8 +67,8 @@ impl<
             id,
             label: LocalLabel::from_owned(req.label),
             amount_atomic: req.amount_atomic,
-            created_at: req.created_at,
-            expiry: req.expiry,
+            created_at: shekyl_types::Timestamp::from_raw(req.created_at),
+            expiry: req.expiry.map(shekyl_types::Timestamp::from_raw),
             state: PaymentRequestState::Pending,
             matched_tx_hash: None,
             matched_output_index: None,
@@ -160,7 +160,7 @@ impl<
             Some(req.amount_atomic.to_raw()),
             label,
             Some(req.id.as_u64()),
-            req.expiry,
+            req.expiry.map(shekyl_types::Timestamp::to_raw),
         ))
     }
 

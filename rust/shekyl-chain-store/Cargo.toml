@@ -23,6 +23,11 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # Chain identities at the engine API: BlockHash / TxHash / KeyImage /
 # CurveTreeRoot / BlockHeight convert to storage types (`lmdb_order`) here.
 shekyl-types = { path = "../shekyl-types" }
+# Domain amounts on ConnectFacts / BlockInfo.coins_generated (RTN-2).
+shekyl-units = { path = "../shekyl-units" }
+# CumulativeDifficulty is transform-shaped and lives in shekyl-difficulty
+# (RTN-5); the store records it, it does not redefine it.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
 # The block and transaction shapes the store persists as judged.
 shekyl-wire = { path = "../shekyl-wire" }
 

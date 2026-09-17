@@ -19,7 +19,7 @@
 //! implementation, one vector file — drift between the native and
 //! boundary views cannot pass both.
 
-use shekyl_difficulty::{alt_window_plan, fork_choice, ForkChoiceVerdict};
+use shekyl_difficulty::{alt_window_plan, fork_choice, CumulativeDifficulty, ForkChoiceVerdict};
 
 const VECTOR_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -52,8 +52,8 @@ fn fork_choice_cases_pin_the_rule() {
     for case in cases {
         let name = case["name"].as_str().expect("case name");
         let verdict = fork_choice(
-            u128_of(case, "current_lo", "current_hi"),
-            u128_of(case, "alternative_lo", "alternative_hi"),
+            CumulativeDifficulty::from_raw(u128_of(case, "current_lo", "current_hi")),
+            CumulativeDifficulty::from_raw(u128_of(case, "alternative_lo", "alternative_hi")),
             case["checkpoint_match"]
                 .as_bool()
                 .expect("checkpoint_match"),

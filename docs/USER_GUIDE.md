@@ -425,7 +425,7 @@ real string — see "Understanding Bech32m addresses" above).
 optional expiry) and share a `shekyl:` URI with query parameters:
 
 ```
-mainnet> request new <amount> <label> [--expiry <height>]
+mainnet> request new <amount> <label> [--expiry <unix|1h|7d>]
 mainnet> requests list [pending|matched|all]
 ```
 

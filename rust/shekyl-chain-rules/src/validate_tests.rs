@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-use shekyl_types::{BlockHash, PrunableHash, TxHash};
+use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, TxHash};
 
 use super::*;
 use crate::harness::fixture::{candidate, coinbase};
@@ -34,6 +34,7 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     let identity = |tx: &Transaction| TxIdentity {
         hash: TxHash::from_bytes(tx.hash()),
         prunable_hash: PrunableHash::from_bytes(tx.prunable_hash()),
+        pqc_auth_hash: tx.pqc_auth_hash().map(PqcAuthHash::from_bytes),
     };
     let expected_miner = identity(&input.block.miner_transaction);
     let expected_listed: Vec<(TxIdentity, Transaction)> = input
@@ -53,6 +54,13 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     ];
     assert_eq!(expected_miner.prunable_hash.as_bytes(), &KECCAK256_OF_EMPTY);
     assert_ne!(expected_miner.prunable_hash.as_bytes(), &[0u8; 32]);
+    // Coinbase hashes 3-part: the third component is absent from the txid
+    // (`PDM-Q-F26`). A sentinel would label the miner tx with a value the
+    // chain never committed.
+    assert_eq!(expected_miner.pqc_auth_hash, None);
+    for (id, _) in &expected_listed {
+        assert_eq!(id.pqc_auth_hash, None);
+    }
 
     MockChain::default().with_view(|view| {
         let valid = infallible(validate(input, &view, &RuleSet::GENESIS))

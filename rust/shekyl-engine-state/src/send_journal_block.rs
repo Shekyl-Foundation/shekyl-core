@@ -79,7 +79,9 @@ pub const SEND_JOURNAL_BLOCK_VERSION: u32 = 2;
 /// `SendJournalBlock::empty().spend_locks()` and say so
 /// out loud.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InFlightSpendLocks(BTreeMap<u64, crate::transfer::AwaitingConfirmation>);
+pub struct InFlightSpendLocks(
+    BTreeMap<shekyl_types::GlobalOutputIndex, crate::transfer::AwaitingConfirmation>,
+);
 
 /// Every accessor is `#[inline]`, and that is load-bearing rather than
 /// decorative. [`crate::WalletLedger::spendable_outputs`] and the
@@ -98,14 +100,17 @@ impl InFlightSpendLocks {
     /// awaiting confirmation — the §7.1 self-link check.
     #[inline]
     #[must_use]
-    pub fn contains(&self, gindex: u64) -> bool {
+    pub fn contains(&self, gindex: shekyl_types::GlobalOutputIndex) -> bool {
         self.0.contains_key(&gindex)
     }
 
     /// The lock covering `gindex`, if any.
     #[inline]
     #[must_use]
-    pub fn get(&self, gindex: u64) -> Option<&crate::transfer::AwaitingConfirmation> {
+    pub fn get(
+        &self,
+        gindex: shekyl_types::GlobalOutputIndex,
+    ) -> Option<&crate::transfer::AwaitingConfirmation> {
         self.0.get(&gindex)
     }
 
@@ -494,7 +499,10 @@ impl SendJournalBlock {
     /// selected — the SJ-DQ-4 self-link defence this map implements),
     /// so the tie-break is a determinism guarantee, not a policy.
     pub fn spend_locks(&self) -> InFlightSpendLocks {
-        let mut locks: BTreeMap<u64, crate::transfer::AwaitingConfirmation> = BTreeMap::new();
+        let mut locks: BTreeMap<
+            shekyl_types::GlobalOutputIndex,
+            crate::transfer::AwaitingConfirmation,
+        > = BTreeMap::new();
         for (txid, row) in &self.rows {
             if !row.state.locks_carried_inputs() {
                 continue;
@@ -504,10 +512,10 @@ impl SendJournalBlock {
             };
             for inp in &row.inputs {
                 locks
-                    .entry(inp.gindex)
+                    .entry(shekyl_types::GlobalOutputIndex::from_raw(inp.gindex))
                     .or_insert(crate::transfer::AwaitingConfirmation {
                         tx_hash: shekyl_types::TxHash::from_bytes(*txid),
-                        accepted_at_height,
+                        accepted_at_height: shekyl_types::BlockHeight::from_raw(accepted_at_height),
                     });
             }
         }
@@ -782,10 +790,13 @@ mod tests {
         );
         for (gindex, txid, baseline) in [(100, dispatched, 25), (101, abandoned, 30)] {
             let lock = locks
-                .get(gindex)
+                .get(shekyl_types::GlobalOutputIndex::from_raw(gindex))
                 .unwrap_or_else(|| panic!("gindex {gindex} must be locked"));
             assert_eq!(lock.tx_hash.to_bytes(), txid);
-            assert_eq!(lock.accepted_at_height, baseline);
+            assert_eq!(
+                lock.accepted_at_height,
+                shekyl_types::BlockHeight::from_raw(baseline)
+            );
         }
     }
 
@@ -815,10 +826,13 @@ mod tests {
         assert_eq!(a.len(), 2);
         for g in [200, 201] {
             let lock = a
-                .get(g)
+                .get(shekyl_types::GlobalOutputIndex::from_raw(g))
                 .unwrap_or_else(|| panic!("gindex {g} must be locked"));
             assert_eq!(lock.tx_hash.to_bytes(), txid);
-            assert_eq!(lock.accepted_at_height, 50);
+            assert_eq!(
+                lock.accepted_at_height,
+                shekyl_types::BlockHeight::from_raw(50)
+            );
         }
     }
 

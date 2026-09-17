@@ -9,8 +9,8 @@ use shekyl_curve_tree::recon::{
     assemble_leaf_stream, collect_block_leaves, root_from_scalars, TxOutputs,
 };
 use shekyl_curve_tree::{
-    BlockHeight, BlockLeaves, CurveTreeClient, OutputIdentity, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, CurveTreeRoot, OutputIdentity, RawOutput,
+    ReferenceBlock, TargetKind, TxLeafInputs,
 };
 
 const FIXTURE: &str = include_str!("fixtures/ct2_tier_a.json");
@@ -75,7 +75,7 @@ fn ingest_chain(client: &mut CurveTreeClient, blocks: &[ClientBlock]) {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(blk.height),
+                height: BlockHeight::from_raw(blk.height),
                 txs: &txs,
             })
             .unwrap();
@@ -132,7 +132,7 @@ fn store_root_matches_oracle_and_header_tier_a() {
             let through = blk.height.saturating_sub(1);
             let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
             let store_root = client
-                .root_at(BlockHeight(blk.height))
+                .root_at(BlockHeight::from_raw(blk.height))
                 .expect("store hot path must not error during Tier-A KAT");
             assert_eq!(
                 store_root, oracle,
@@ -146,9 +146,9 @@ fn store_root_matches_oracle_and_header_tier_a() {
                     blk.height
                 );
                 let reference = ReferenceBlock {
-                    height: BlockHeight(blk.height),
-                    curve_tree_root: blk.root,
-                    block_hash: [0u8; 32],
+                    height: BlockHeight::from_raw(blk.height),
+                    curve_tree_root: CurveTreeRoot::from_bytes(blk.root),
+                    block_hash: BlockHash::from_bytes([0u8; 32]),
                 };
                 assert!(client.verify_root(&reference).is_ok());
             }
@@ -197,7 +197,7 @@ fn store_root_mixed_maturity_drain_order() {
     let mut client = CurveTreeClient::new();
     client
         .ingest_block(BlockLeaves {
-            height: BlockHeight(0),
+            height: BlockHeight::from_raw(0),
             txs: &txs,
         })
         .unwrap();
@@ -213,7 +213,7 @@ fn store_root_mixed_maturity_drain_order() {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(height),
+                height: BlockHeight::from_raw(height),
                 txs: &txs_cb,
             })
             .unwrap();
@@ -258,7 +258,7 @@ fn store_root_mixed_maturity_drain_order() {
     let through = 60u64;
     let oracle = root_from_scalars(&assemble_leaf_stream(&recon_entries, through));
     let store_root = client
-        .root_at(BlockHeight(61))
+        .root_at(BlockHeight::from_raw(61))
         .expect("store hot path must not error");
     assert_eq!(
         store_root, oracle,
@@ -298,10 +298,10 @@ fn truncate_and_replay_matches_from_blocks() {
 
     for blk in prefix {
         assert_eq!(
-            full.root_at(BlockHeight(blk.height))
+            full.root_at(BlockHeight::from_raw(blk.height))
                 .expect("store hot path"),
             rebuilt
-                .root_at(BlockHeight(blk.height))
+                .root_at(BlockHeight::from_raw(blk.height))
                 .expect("store hot path"),
             "reorg replay at {}",
             blk.height

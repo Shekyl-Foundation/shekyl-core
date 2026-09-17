@@ -74,7 +74,10 @@ pub mod codec;
 pub mod conformance;
 pub mod digest_v0;
 pub mod family_set;
+pub mod ids;
 pub mod lmdb_order;
 pub mod provenance;
 pub mod schema;
 pub mod store;
+
+pub use ids::{AmountIndex, OutputStorageId, TxStorageId};

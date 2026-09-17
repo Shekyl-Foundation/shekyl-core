@@ -17,8 +17,8 @@ use std::sync::Arc;
 use super::local_ledger::LocalLedger;
 use shekyl_archival_retention::{bond_floor, HoldingsDescriptor, HoldingsKind, ShardSet};
 use shekyl_curve_tree::{
-    select_reference_height, should_reanchor, AssembleInput, BlockHeight as CtBlockHeight, Gindex,
-    ReferenceBlock,
+    select_reference_height, should_reanchor, AssembleInput, BlockHash,
+    BlockHeight as CtBlockHeight, CurveTreeRoot, Gindex, ReferenceBlock,
 };
 use shekyl_engine_file::WalletFile;
 use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
@@ -448,7 +448,7 @@ pub(crate) async fn anchored_reference_block(
         .ingested_tip_height()
         .await
         .map_err(|err| BondAssemblyError::build("curve-tree ingested tip", format!("{err:?}")))?
-        .map(|bh| bh.0);
+        .map(shekyl_types::BlockHeight::to_raw);
     let ingested = covered_through.ok_or(BondAssemblyError::ReferenceResyncing {
         detail: "curve tree has not ingested any block yet",
     })?;
@@ -465,7 +465,7 @@ pub(crate) async fn anchored_reference_block(
         });
     }
     let (curve_tree_root, _depth) = curve_tree
-        .reference_root_and_depth(CtBlockHeight(reference_height))
+        .reference_root_and_depth(CtBlockHeight::from_raw(reference_height))
         .await
         .map_err(|err| BondAssemblyError::build("reference root and depth", format!("{err:?}")))?;
     let block_hash =
@@ -473,9 +473,9 @@ pub(crate) async fn anchored_reference_block(
             detail: "reference-height block hash missing from ledger",
         })?;
     Ok(ReferenceBlock {
-        height: CtBlockHeight(reference_height),
-        curve_tree_root,
-        block_hash,
+        height: CtBlockHeight::from_raw(reference_height),
+        curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+        block_hash: BlockHash::from_bytes(block_hash),
     })
 }
 
@@ -596,7 +596,7 @@ where
             .records
             .iter()
             .map(|r| AssembleInput {
-                gindex: Gindex(r.gindex.to_raw()),
+                gindex: Gindex::from_raw(r.gindex.to_raw()),
                 output_key: r.output_key,
                 commitment: r.commitment,
             })
@@ -610,7 +610,9 @@ where
                 // the boundary (a rendered `Build.detail` would force retry
                 // policy into substring-matching the error text).
                 CurveTreeHandleError::Client(ClientError::OutputNotDrained { gindex, .. }) => {
-                    BondAssemblyError::OutputNotYetDrained { gindex: gindex.0 }
+                    BondAssemblyError::OutputNotYetDrained {
+                        gindex: gindex.to_raw(),
+                    }
                 }
                 other => BondAssemblyError::build("assemble_tx", format!("{other:?}")),
             })?;
@@ -631,8 +633,8 @@ where
         })?;
 
         let tree_ctx = TreeContext {
-            reference_block: first.tree.reference_block,
-            tree_root: first.tree.tree_root,
+            reference_block: first.tree.reference_block.to_bytes(),
+            tree_root: first.tree.tree_root.to_bytes(),
             tree_depth: first.tree.tree_depth,
         };
 
@@ -732,7 +734,7 @@ where
     ) -> Result<(FundingSelection, ReferenceBlock, u64), BondAssemblyError> {
         // Anchored ReferenceBlock via the ordinary procedure (WI-2 F-6).
         let reference = anchored_reference_block(curve_tree, chain_tip, tip_hash_at).await?;
-        let reference_height = BlockHeight::from_raw(reference.height.0);
+        let reference_height = BlockHeight::from_raw(reference.height.to_raw());
 
         // The seal basis is ONE ordered read — pending block, then pscan seal.
         // The order is `load_seal_basis`'s guarantee: loading the pscan seal

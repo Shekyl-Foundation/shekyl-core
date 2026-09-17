@@ -40,8 +40,8 @@ use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
-    ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash as TreeHash, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient,
+    CurveTreeRoot, Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_daemon_rpc::submit::{
     parse_submission, CommitOutcome, DaemonTxVerifier, EngineFault, KeyImageConflict,
@@ -329,14 +329,14 @@ fn build_funding_setup() -> FundingSetup {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: TreeHeight(height),
+                height: TreeHeight::from_raw(height),
                 txs: &txs,
             })
             .expect("ingest block");
     }
 
     let (tree_root, tree_depth) = client
-        .root_and_depth_at(TreeHeight(reference_height))
+        .root_and_depth_at(TreeHeight::from_raw(reference_height))
         .expect("tree root + depth at reference height");
     assert_eq!(
         usize::from(tree_depth),
@@ -346,19 +346,19 @@ fn build_funding_setup() -> FundingSetup {
     // One block later the height-1 filler has matured into the tree: a
     // different, equally valid root at the same depth.
     let (other_root, other_depth) = client
-        .root_and_depth_at(TreeHeight(reference_height + 1))
+        .root_and_depth_at(TreeHeight::from_raw(reference_height + 1))
         .expect("tree root + depth one block later");
     assert_eq!(other_depth, tree_depth, "one extra leaf keeps depth 2");
     assert_ne!(other_root, tree_root, "one extra leaf moves the root");
 
     // ── Membership path + SpendInput ────────────────────────────────────
     let reference = ReferenceBlock {
-        height: TreeHeight(reference_height),
-        curve_tree_root: tree_root,
-        block_hash: [0xAB; 32],
+        height: TreeHeight::from_raw(reference_height),
+        curve_tree_root: CurveTreeRoot::from_bytes(tree_root),
+        block_hash: TreeHash::from_bytes([0xAB; 32]),
     };
     let target = AssembleInput {
-        gindex: Gindex(spent_index),
+        gindex: Gindex::from_raw(spent_index),
         output_key: spent.output_key,
         commitment: spent.commitment,
     };
@@ -398,8 +398,8 @@ fn build_funding_setup() -> FundingSetup {
     let pqc_pk =
         derive_pqc_public_key(&combined_ss.0, spent_index).expect("derive hybrid public key");
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
+        reference_block: path.tree.reference_block.to_bytes(),
+        tree_root: path.tree.tree_root.to_bytes(),
         tree_depth: path.tree.tree_depth,
     };
 

@@ -566,8 +566,8 @@ where
 /// Both operands come off the witness: `as_of_height` is the chain height the
 /// bond record was read at, `sync_tip_height` is what this wallet has ingested.
 fn caught_up(pinned: &PinnedServeSet) -> Option<bool> {
-    let chain = pinned.serve_set().as_of_height().0;
-    let ingested = pinned.reader().sync_tip_height().ok()?.0;
+    let chain = pinned.serve_set().as_of_height().to_raw();
+    let ingested = pinned.reader().sync_tip_height().ok()?.to_raw();
     Some(chain.saturating_sub(ingested) <= CAUGHT_UP_SLACK_BLOCKS)
 }
 
@@ -642,7 +642,7 @@ mod lifecycle_tests {
                     shard_ids: Vec::new(),
                     outcomes: Vec::new(),
                 },
-                as_of_height: BlockHeight(0),
+                as_of_height: BlockHeight::from_raw(0),
                 reader: ServingReader::new(Arc::clone(&self.store)),
             })
         }

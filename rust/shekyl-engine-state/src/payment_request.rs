@@ -8,7 +8,7 @@
 //! Normative: `docs/design/SUBADDRESS_UNDER_PQC.md` §5.7.9, §5.7.11.
 
 use serde::{Deserialize, Serialize};
-use shekyl_types::TxHash;
+use shekyl_types::{OutputIndexInTx, Timestamp, TxHash};
 use shekyl_units::AtomicUnits;
 
 use crate::local_label::LocalLabel;
@@ -84,14 +84,14 @@ pub struct PaymentRequest {
     #[serde(with = "crate::serde_helpers::local_label")]
     pub label: LocalLabel,
     pub amount_atomic: AtomicUnits,
-    pub created_at: u64,
+    pub created_at: Timestamp,
     #[serde(default)]
-    pub expiry: Option<u64>,
+    pub expiry: Option<Timestamp>,
     pub state: PaymentRequestState,
     #[serde(default)]
     pub matched_tx_hash: Option<TxHash>,
     #[serde(default)]
-    pub matched_output_index: Option<u64>,
+    pub matched_output_index: Option<OutputIndexInTx>,
 }
 
 #[derive(postcard_schema::Schema)]
@@ -121,10 +121,14 @@ impl postcard_schema::Schema for PaymentRequest {
 }
 
 impl PaymentRequest {
-    /// True when `expiry` has passed at `current_height` (block-height clock).
+    /// True when `expiry` has passed at `now` (wall-clock Unix seconds).
+    ///
+    /// Off-chain invoices are human-set and travel to unsynced payers, so
+    /// the clock is [`Timestamp`], not [`shekyl_types::BlockHeight`]
+    /// (2026-06-14 decision log; RTN-6).
     #[must_use]
-    pub fn is_expired_at(&self, current_height: u64) -> bool {
-        self.expiry.is_some_and(|e| current_height > e)
+    pub fn is_expired_at(&self, now: Timestamp) -> bool {
+        self.expiry.is_some_and(|e| now > e)
     }
 }
 
@@ -172,8 +176,8 @@ mod tests {
             id: PaymentRequestId(0x0000_1234_5678_9ABC),
             label: LocalLabel::from_str("INV-2026-0042"),
             amount_atomic: AtomicUnits::from_raw(150_000_000_000),
-            created_at: 100,
-            expiry: Some(200),
+            created_at: Timestamp::from_raw(100),
+            expiry: Some(Timestamp::from_raw(200)),
             state: PaymentRequestState::Pending,
             matched_tx_hash: None,
             matched_output_index: None,

@@ -6,44 +6,39 @@
 //! The block on either side of `validate`: the untrusted [`Candidate`] going
 //! in, the typed [`ValidatedBlock`] coming out inside a `ChainValid`.
 
-use shekyl_types::{BlockHash, PrunableHash, TxHash};
+use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
-/// The txid, and the digest of its prunable region — the fourth component
-/// of a spend's txid and the value the chain store records as
-/// `txs_prunable_hash` (S-CHAIN-W SCW-10). Both come from the same
+/// The txid, the digest of its prunable region (`txs_prunable_hash`,
+/// SCW-10), and — when the txid is 4-part — the third component
+/// `H(varint(count) ‖ auths)` as [`Transaction::hash`] / [`Transaction::pqc_auth_hash`]
+/// compute it (`PDM-Q-F26` / RTN-3). All three come from the same
 /// `validate`, so no consumer re-hashes a body and the store never derives
-/// a consensus-visible value (C2-R8 Q4). For a coinbase `prunable_hash` is
-/// `keccak256("")` — what the C++ store writes — not the txid's null-hash
-/// substitute; see [`PrunableHash`].
+/// a consensus-visible value (C2-R8 Q4). This is **not** a second identity:
+/// `pqc_auth_hash` is the txid's own third component, typed.
 ///
-/// **Incomplete by one component — owed, not optional (`PDM-Q-F26`,
-/// `ARCHIVAL_PRUNED_DAEMON_MODE.md`).** A spend's txid is 4-part:
-/// `H(prefix) · H(base) · H(pqc_auths) · H(prunable)`. This identity carries
-/// the fourth component and omits the third. Under `PDM-Q6` the `pqc_auths`
-/// slice (~60 % of spend bytes) is the archival good's second occupant and
-/// is discardable only against a persisted per-tx hash of it; the txid
-/// already commits that hash, and `Transaction::hash()` computes it on the
-/// way. The next increment that touches this type adds
-/// `pqc_auth_hash: Option<PqcAuthHash>` — the txid's third component, over
-/// `varint(count) ‖ auths` exactly as the txid hashes it, **not**
-/// `keccak256` of the raw `txs_pqc_auths` segment (which has no count
-/// prefix and so verifies nothing the chain signed) — with a KAT against
-/// `Transaction::hash()`, and the store records it beside
-/// `txs_prunable_hash`.
+/// For a coinbase `prunable_hash` is `keccak256("")` — what the C++ store
+/// writes — not the txid's null-hash substitute; see [`PrunableHash`].
 ///
-/// `Option`, because the component is absent from the txid itself, not
-/// merely from the store: the coinbase (`Ct::Null`) and any spend whose
-/// `pqc_auths` is empty (the serve-credit form) hash **3-part**, so `None`
-/// is "the txid has no such component" and a sentinel — the null hash, or
-/// `keccak256(varint(0))` — would label the miner tx with a value the chain
-/// never committed. (`prunable_hash`'s coinbase value is a sentinel only
-/// because C++-store parity forced one; no C++ row exists here to force
-/// anything.) The store invariant has three legs, because under `PDM-Q6`
-/// a hash row **without** its segment is the steady state of every 4-part
-/// tx below the universal window `W`, not a fault:
+/// `pqc_auth_hash` is `Option` because the component is absent from the
+/// txid itself, not merely from the store: the coinbase (`Ct::Null`) and
+/// any spend whose `pqc_auths` is empty (the serve-credit form) hash
+/// **3-part**, so `None` is "the txid has no such component" and a sentinel
+/// — the null hash, or `keccak256(varint(0))` — would label the miner tx
+/// with a value the chain never committed. (`prunable_hash`'s coinbase
+/// value is a sentinel only because C++-store parity forced one; no C++
+/// row exists here to force anything.)
+///
+/// The store row beside `txs_prunable_hash` (present ⇔ 4-part, never
+/// deleted; hash without segment is *discarded* below `W`) is S-CHAIN-R /
+/// `PDM-Q6` item 2: a new table, not a type-only codec change, and
+/// therefore a `SCHEMA_VERSION` bump outside this slice. The type carries
+/// the value so that increment does not fork a second identity. The store
+/// invariant has three legs, because under `PDM-Q6` a hash row **without**
+/// its segment is the steady state of every 4-part tx below the universal
+/// window `W`, not a fault:
 ///
 /// 1. hash row present ⇔ txid 4-part — permanent, written at connect,
 ///    never deleted (`validate` rejects the one shape, gen-first with
@@ -56,16 +51,15 @@ use shekyl_wire::{Block, BlockHeader, Transaction};
 ///
 /// So `None` here is *the txid has no third component*; leg 3 is *the
 /// component exists and the bytes do not*. They are different facts and
-/// must not share a representation. Contract on the row before the
-/// implementation that would omit it (SCW-7's standard). A `PDM-Q6`
-/// ruling that keeps `pqc_auths` universal retires the *row*, not the
-/// component.
+/// must not share a representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TxIdentity {
     /// The transaction hash (txid).
     pub hash: TxHash,
     /// `keccak256` of the prunable byte region.
     pub prunable_hash: PrunableHash,
+    /// The txid's third component, or `None` when the txid is 3-part.
+    pub pqc_auth_hash: Option<PqcAuthHash>,
 }
 
 impl TxIdentity {
@@ -73,6 +67,7 @@ impl TxIdentity {
         Self {
             hash: TxHash::from_bytes(tx.hash()),
             prunable_hash: PrunableHash::from_bytes(tx.prunable_hash()),
+            pqc_auth_hash: tx.pqc_auth_hash().map(PqcAuthHash::from_bytes),
         }
     }
 }
@@ -116,8 +111,9 @@ impl Candidate {
 ///
 /// The candidate exactly as judged — the block is kept whole, so what the
 /// store persists is what the rules saw — with every identity derived once:
-/// `Block::hash`, and per transaction a [`TxIdentity`] (`Transaction::hash`
-/// and `Transaction::prunable_hash`), CEN-B6's definition applied, each
+/// `Block::hash`, and per transaction a [`TxIdentity`] (`Transaction::hash`,
+/// `Transaction::prunable_hash`, and `Transaction::pqc_auth_hash`), CEN-B6's
+/// definition applied, each
 /// paired with its body. No consumer re-hashes and no two values can disagree
 /// about which block or transaction they describe (ruling Q4/L4: one value
 /// per identity).
