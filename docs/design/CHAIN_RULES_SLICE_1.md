@@ -187,12 +187,14 @@ outside 4.A/4.B was examined for slice 1; 4.C–4.M are the later slices'.
 
 ## 4. The registration gap (Q2) — the grouping, then the mechanism
 
-`census_rows!` knows two statuses: `pending` and `implemented(path)`
-(`census.rs:91–111`). `RuleSet::GENESIS.enforced == CenRow::ALL` (153), and
-`Coverage::is_complete_for` is true only when every enforced row is in
-coverage. Five slice-1 rows can never be in coverage because `validate`
-cannot evaluate them, so with the registry as it stands `is_complete_for` is
-permanently false. The round-1 draft proposed one new status for all five;
+*As found at pre-flight (records-was):* `census_rows!` knew two statuses,
+`pending` and `implemented(path)`; `RuleSet::GENESIS.enforced` was
+`CenRow::ALL` (153); and `Coverage::is_complete_for` was true only when every
+enforced row was in coverage. Five slice-1 rows can never be in coverage
+because `validate` cannot evaluate them, so with the registry as it then
+stood `is_complete_for` was permanently false. *As landed (#767):* a third
+status `held_by_cxx("<file>", "<test>")` for A1/A4, and `RuleSet::enforced()`
+excludes held rows so completeness is `E − H` (§4.1). The round-1 draft proposed one new status for all five;
 **the review (2026-09-16) asked for the grouping to be checked first, and
 the five are not one thing.** C2-R8's category test (§2 there: *would this
 still have to hold if the consensus rules changed?*) applied per row:
@@ -222,15 +224,20 @@ output was real, the verdict was about the wrong subject). The entry therefore
 names **a test that the holder rejects** — the same standard the negative
 fixtures get — and the gate asserts that test's *name* exists at the cited
 path (rule 47: the gate's subject is the test) while the C++ CI lane runs it.
-**Finding F4 (§6): no such test exists today for either row.** The C++ tests
-that mention `ALREADY_EXISTS` / `ORPHANED` exercise the outcome-byte plumbing
-(`tests/unit_tests/peer_policy_block_ingest.cpp:33–108`) and the sync arm
-(`tests/unit_tests/sync_orphan_arm.cpp`), not `add_new_block` refusing a
-duplicate or an orphan. Minting `held_by_cxx` for A1/A4 therefore **costs two
-C++ core tests** — `gen_block_already_known_is_already_exists` and
-`gen_block_unknown_parent_is_orphaned_and_not_stored` — written in
-`tests/core_tests/block_validation.cpp`, the minimum C++ touch (rule 20: test
-code for a C++ holder, not logic), and the entries name them.
+**Finding F4 (§6), as corrected at implementation:** A4's rejection test
+**already existed** — `gen_block_invalid_prev_id`
+(`tests/core_tests/block_validation.cpp:244–265`) submits a block whose parent
+is unknown and asserts `orphaned ∧ ¬added ∧ ¬rejected` plus `check_block_purged`
+(height unmoved); the pre-flight's search read its name and missed its
+assertion. A1's did not exist: nothing submitted a known block and observed
+`ALREADY_EXISTS`. Minting `held_by_cxx` therefore cost **one** C++ core test,
+`gen_block_already_known_is_already_exists` (same block submitted twice; the
+second submission asserts `already_exists ∧ ¬added ∧ ¬rejected ∧ ¬orphaned`,
+height 2), in `block_validation.cpp` — the minimum C++ touch (rule 20 bars new
+C++ *logic*; a test that proves the holder refuses is the evidence the status
+requires). The entries name `gen_block_already_known_is_already_exists` (A1)
+and `gen_block_invalid_prev_id` (A4); the existing test gained a comment
+naming CEN-A4 and the gate's dependence on its name.
 
 **Condition 2 — a C++ holder is not a durable home; type it.** `held_by_cxx`
 is a **deferral with a known expiry**: it is *not* `held(<rust path>)` (not
@@ -252,11 +259,21 @@ already. `--describe` lists the held rows by id with their cited test.
 
 Grammar: `A1 held_by_cxx("tests/core_tests/block_validation.cpp",
 "gen_block_already_known_is_already_exists"),` — the gate parses the pair,
-asserts the file exists and contains the test name, refuses a bare path, and
-refuses `held_by_cxx` on a row whose census `site(s)` cell cites no C++ file.
-`--selftest` exercises all three refusals red. Expected record after slice 1
-lands: `consensus: implemented 6 / validator-enforced 151   held-by-cxx 2
-enforced 153   ratified 126 / enforced 153`.
+asserts the file exists (repo-relative, inside the repo) and contains the
+test **identifier** (word-bounded: a longer identifier with the same prefix
+does not match), refuses a bare path / unquoted / non-identifier form as an
+unparseable entry, and refuses `held_by_cxx` on a row whose census `site(s)`
+cell places the rule outside C++ (a Rust `.rs:N` site; a bare line citation
+is C++ by the census's own §4 default, `blockchain.cpp`). `--selftest`
+exercises every refusal red (49 in total at #767's second review pass — the
+first cut had 41; the review added the holder-path, registration and
+comment-stripping refusals). Rust side:
+`RowStatus::HeldByCxx`, and `RuleSet::enforced()` filters held rows so
+`is_complete_for` measures `E − H`; the `RuleSet` `Debug` prints
+"151 of 153 rows (validator-enforced; held rows excluded)". **Record as
+landed (this PR):** `consensus: implemented 3 / validator-enforced 151
+held-by-cxx 2   enforced 153   ratified 126 / enforced 153`; the `tip()` PR
+takes `implemented` to 6.
 
 ## 5. SCW-18 — `trait Rule { const ROW }`, the first real rule's shape (Q6)
 
@@ -377,16 +394,19 @@ route a wrong-parent block into a fatal. Not a defect — the belt is doing what
 a belt does — but it makes A2 the first rule to land, before any driver
 connects real blocks.
 
-**F4 — the C++ holders of A1 and A4 have no rejection test.** Searched
-`tests/core_tests/` and `tests/unit_tests/` for a test that submits a
-duplicate block to `add_new_block` and observes `ALREADY_EXISTS`, or an
-unknown-parent block and observes `ORPHANED` + not stored: none.
-`peer_policy_block_ingest.cpp` tests the outcome-byte encoding;
-`sync_orphan_arm.cpp` tests the p2p re-request arm. Both rows are ratified
-(bucket 2, C2-R1 Q3a/Q3b) on the strength of reading the code. Under §4.1
-condition 1 the `held_by_cxx` entries need those two tests to exist, so slice
-1 writes them (commit 5). Same standard as the negative fixtures: a hold
-without a rejection test is a claim, not a check.
+**F4 — the C++ holder of A1 has no rejection test; A4's exists under a name
+that does not say so** (*corrected at implementation — the pre-flight said
+"neither"*). Searched `tests/core_tests/` and `tests/unit_tests/` for a test
+that submits a duplicate block to `add_new_block` and observes
+`ALREADY_EXISTS`: none — `peer_policy_block_ingest.cpp` tests the
+outcome-byte encoding, `sync_orphan_arm.cpp` the p2p re-request arm. For an
+unknown parent observed as `ORPHANED` + not stored: `gen_block_invalid_prev_id`
+(`block_validation.cpp:244–265`) is exactly that test; the search matched its
+line and misread it as the sync arm — a records-was worth keeping, since the
+next reader will grep the same way. Under §4.1 condition 1 the `held_by_cxx`
+entries need a rejection test each, so commit 5 writes A1's and names A4's.
+Same standard as the negative fixtures: a hold without a rejection test is a
+claim, not a check.
 
 ---
 
@@ -433,7 +453,7 @@ stay here behind Q2–Q6.
    — disclosed to S-CHAIN-R.
 3. `chain-rules: CEN-A2 parent-is-tip` — after the `tip()` PR
 4. `chain-rules: CEN-B5 header root == root_at(connecting height); CEN-B6 identity under the row`
-5. `chain-rules: held_by_cxx(test) entry status; A1/A4 held; gate prints the subtraction` — macro arm, gate grammar + `--selftest`, `RuleSet::enforced` excludes held rows; **plus the two C++ core tests the entries name** (§4.1 condition 1, F4).
+5. `chain-rules: held_by_cxx(test) entry status; A1/A4 held; gate prints the subtraction` — macro arm, gate grammar + `--selftest`, `RuleSet::enforced` excludes held rows; **plus the C++ core test A1's entry names** (`gen_block_already_known_is_already_exists`; A4's, `gen_block_invalid_prev_id`, already existed — F4 as corrected). Shipped as its own PR before `tip()` (maintainer, 2026-09-16 20:49: nothing in it reads the tip).
 *Rule 20, stated in the commit message rather than in a review reply:* these
 are C++ tests for code that will be deleted, which reads cold as new C++.
 Rule 20 bars new C++ *logic*; a test establishing that the holder actually
@@ -441,10 +461,13 @@ refuses is the evidence the `held_by_cxx` status requires, and without it the
 status is a grep wearing a test's name (PWD-B10). A5 gains its `subsumed-by` note in the registry comment (no status: it stays `pending` until slice 7 closes it); A6/A7 stay `pending` with the wire-invariant disposition in their registry comment until the wire-format port mints the register and moves the census rows
 6. `docs: slice 1 landed — CHAIN_RULES_CRATE.md §13, DRS §7 row + §15, index, FOLLOWUPS F2, CHANGELOG`
 
-Gate figure expected after commit 5 (today's shape, verified at this tip:
-`consensus: implemented 0 / enforced 153`): `consensus: implemented 6 /
+Gate figures, dated: *at the pre-flight tip (`3560b80c2`)* `consensus:
+implemented 0 / enforced 153`; *after #762* `implemented 3 / enforced 153`
+(4.B `3/7`); *after #767* `implemented 3 / validator-enforced 151
+held-by-cxx 2   enforced 153   ratified 126 / enforced 153` (4.A `0/7`, held
+2); *at slice close (after the `tip()` PR)* `implemented 6 /
 validator-enforced 151   held-by-cxx 2   enforced 153   ratified 126 /
-enforced 153`; 4.A `1/7` (+2 held), 4.B `5/7`.
+enforced 153` — 4.A `1/7` (+2 held), 4.B `5/7`.
 
 ---
 

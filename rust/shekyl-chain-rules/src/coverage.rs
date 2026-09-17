@@ -127,7 +127,10 @@ impl Coverage<CenRow> {
         rows.into_iter().all(|row| self.contains(row))
     }
 
-    /// `true` iff every row `rule_set` enforces was evaluated.
+    /// `true` iff every row `rule_set` holds the validator to was evaluated
+    /// — `RuleSet::enforced()`, which excludes the rows held by the C++
+    /// ingest driver (`RowStatus::HeldByCxx`); see the module docs for the
+    /// two denominators.
     ///
     /// Empty coverage is never complete — not even against a rule set that
     /// enforces nothing — so a scaffold verdict is never parity evidence.
@@ -140,10 +143,10 @@ impl Coverage<CenRow> {
     /// implemented** was evaluated.
     ///
     /// The mint gate during porting. [`Self::is_complete_for`] waits until
-    /// 153/153; this is true as soon as every *landed* rule actually ran,
-    /// and was vacuously true while every entry was `pending` (DRS-D12). A
-    /// forgotten `validate` call, or a call that forgets [`Self::insert`],
-    /// fails it — G9's runtime half.
+    /// every validator-enforced row has landed; this is true as soon as
+    /// every *landed* rule actually ran, and was vacuously true while every
+    /// entry was `pending` (DRS-D12). A forgotten `validate` call, or a call
+    /// that forgets [`Self::insert`], fails it — G9's runtime half.
     #[must_use]
     pub fn covers_landed(&self, rule_set: &RuleSet) -> bool {
         self.contains_all(

@@ -576,8 +576,12 @@ census_rows! {
 ```
 
 Grammar: header `pub enum <Name>: <Consensus|Policy> { … }`; per entry
-`<Var> <pending | implemented(<rust::path>)> ,` with optional `///` doc and `//`
-comments between entries. Entries are in census §4 order restricted to the flag
+`<Var> <pending | implemented(<rust::path>) | held_by_cxx("<repo/file.cpp>", "<test>")> ,`
+with optional `///` doc and `//` comments between entries. `held_by_cxx`
+(slice 1, Q2 — [`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md) §4.1) marks
+acceptance topology the C++ ingest driver decides until cutover; the value is
+the C++ **test that proves the holder refuses**, which the gate asserts
+exists, and the row leaves `RuleSet::enforced()` so completeness is `E − H`. Entries are in census §4 order restricted to the flag
 (subsystem, then row order within the table) — the gate asserts this so
 `index()` is census-derived, not arbitrary.
 
@@ -650,30 +654,44 @@ figures are still printed, as derived), **0** when they agree.
 | ≥ 1 `census_rows!` invocation; braces balance | `no census_rows! invocation` / `has no closing brace` (2) |
 | exactly one `census_rows!` per flag; header parses; flag ∈ {`Consensus`, `Policy`} | `no registry for flag F` / `N registries for flag F` / `unparseable header at line N` / `unknown flag` (2) |
 | ≥ 1 entry per registry | `registry <Name> empty` (2) |
-| entry grammar — `Var pending,` or `Var implemented(rust::path),`; `implemented` **must** carry a non-empty path | `unparseable entry at line N` (2) |
+| entry grammar — `Var pending,`, `Var implemented(rust::path),` or `Var held_by_cxx("file", "test"),`; `implemented` **must** carry a non-empty path; `held_by_cxx` **must** carry a quoted repo-relative file and a quoted identifier | `unparseable entry at line N` (2) |
 | no attribute on an entry (a `#[cfg]` the gate cannot evaluate would let the compiled enum and the counted enum differ; the enum's own attributes are fine) | `attribute on entry at line N` (2) |
 | nothing after the enum's closing brace inside the invocation | `text after the enum body at line N` (2) |
 | no duplicate variant across both registries | `duplicate entry X` (1) |
 | every entry maps to an enforced census row (`CEN-` + var) **of its registry's flag** | `entry X (line N) has no enforced census row with flag F` (1; catches bucket-3 rows, typos, and a row filed under the wrong enum) |
 | every enforced census row has an entry in the enum of its flag | `census row X (flag F) missing from registry <Name>` (1) |
 | entries in census order within the flag — judged on the ids both sides share, so a missing row reports once, not as an order cascade | `registry <Name> order differs from census at X` (1) |
+| every `held_by_cxx` entry's census row places the rule in C++ (`site(s)` names a C++ source — `.cc .cpp .cxx .h .hpp .inl`, one shared list `CXX_SUFFIXES` — or is a bare line citation, the census's §4 default `blockchain.cpp`) | `held_by_cxx entry X (line N): the census places this row at … which cites no C++ source` (1) |
+| every `held_by_cxx` entry's holder is a **repo-relative C++ file** (same suffix list; no absolute path, no `..`) — a Rust or Markdown file that contains the identifier is not a C++ holder, and the reader also refuses absolute/`..` before resolution so the registry cannot be environment-specific | `held_by_cxx entry X (line N): holder … is not a repo-relative C++ file` (1) |
+| every `held_by_cxx` entry's cited file is in the repo — its absence is cutover, and the hold expires with its holder | `held_by_cxx entry X (line N): holder file … is not in the tree — the hold has expired` (1) |
+| every `held_by_cxx` entry's cited test identifier is in that file (word-bounded, comments stripped), so a hold names a test that proves the holder refuses, not a token (PWD-B10) | `held_by_cxx entry X (line N): holder test … is not in …` (1) |
+| a `core_tests` holder (`tests/core_tests/…`) is **registered** — `GENERATE_AND_PLAY(<test>)` in `tests/core_tests/chaingen_main.cpp`, comments stripped — because an unregistered generator compiles and is never played; gtest holders self-register through `TEST(...)` | `… is defined but not registered with GENERATE_AND_PLAY …` / `core_tests registry … is not in the tree` (1) |
 | `Cargo.toml` names neither `redb` nor `shekyl-chain-store` in **any** dependency table (`[dependencies]`, `[dev-dependencies]`, `[build-dependencies]`, `[target.*.dependencies]`; a rename via `package = "redb"` reports the package) — parsed with `tomllib`, so a comment mentioning both is not a hit | `store handle in Cargo.toml: <pkg> under [table]` (1; G1, direct) / `Cargo.toml unparseable` (2) |
 
 ### 6.3 Output format (ruling §9.4, verbatim shape)
 
 ```text
-consensus: implemented I / enforced E   ratified R / enforced E   (E = C-rows − bucket 3)
-policy:    implemented I / enforced E   ratified R / enforced E   (E = P-rows − bucket 3)
+consensus: implemented I / validator-enforced (E−H)   held-by-cxx H   enforced E   ratified R / enforced E   (E = C-rows − bucket 3; validator-enforced = E − held)
+policy:    implemented I / validator-enforced (E−H)   held-by-cxx H   enforced E   ratified R / enforced E   (E = P-rows − bucket 3; validator-enforced = E − held)
 ```
 
-`I` = entries of that registry with status `implemented`; `E` = enforced rows
-of that flag from the census; `R` = census rows of that flag in bucket 1 or 2.
+`I` = entries of that registry with status `implemented`; `H` = entries with
+status `held_by_cxx`; `E` = enforced rows of that flag from the census; `R` =
+census rows of that flag in bucket 1 or 2. **`H` is a subtraction, not a
+denominator** (slice 1, Q2 condition 3): `E` is printed and never moves for a
+hold, so coverage cannot improve by moving rows out of scope — the failure the
+two-number format exists to prevent. *Records-was:* increment 1's line was
+`implemented I / enforced E   ratified R / enforced E`; the held terms were
+added by the slice-1 `held_by_cxx` PR.
 At increment 1 (records-was, verified with `check_drs_e6_partition.py
 --describe` against the census in that worktree): `consensus: implemented 0 /
 enforced 153   ratified 126 / enforced 153` and `policy: implemented 0 /
 enforced 9     ratified 5 / enforced 9`. **After slice 1's first rules (PR
 #762):** `consensus: implemented 3 / enforced 153` (4.B `3/7`), policy
-unchanged; the figure moves with each slice and the landing PR quotes its own.
+unchanged. **After the `held_by_cxx` PR:** `consensus: implemented 3 /
+validator-enforced 151   held-by-cxx 2   enforced 153   ratified 126 /
+enforced 153` (A1, A4 held). The figure moves with each slice and the landing
+PR quotes its own.
 
 `--describe` additionally prints, per census subsystem, `implemented / enforced`
 and the list of implemented row ids, so a slice PR can quote its own delta.
