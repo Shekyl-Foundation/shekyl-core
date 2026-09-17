@@ -30,7 +30,8 @@
   `7d`) are accepted; a height-shaped integer (`< 1e9`) is refused. Wallet
   RPC `create_payment_request` stamps `created_at` from the host clock and
   documents `created_at`/`expiry` as Unix seconds (OpenAPI `0.6.0`;
-  `api_version` stays 1). Invoice expiry was never a chain instant.
+  `api_version` stays 1). Invoice expiry is a wall-clock instant (RTN-6),
+  not a chain height.
 
 - **`shekyl-chain-rules` slice 1: the first consensus rules, and
   `ChainView::tip()`.** CEN-A2 (parent is the tip), B1/B2/B7 (header

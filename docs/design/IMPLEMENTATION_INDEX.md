@@ -34,7 +34,16 @@ branch actually contains (stamping a newer `dev` would claim verification
 against a tree the verifying run never read); the same run verified
 `TxIdentity::pqc_auth_hash` **present** at
 `rust/shekyl-chain-rules/src/block.rs`, closing the `PDM-Q-F26` absence
-the previous stamp recorded. *Previous stamps:* `645d09dc3` (2026-09-16,
+the previous stamp recorded. **RTN-1…RTN-N (PR #771, this branch) is a
+row-local re-verification, not a new unified stamp** — RTN-1…6 LANDED
+(`PaymentRequest.expiry: Option<Timestamp>` in
+`rust/shekyl-engine-state/src/payment_request.rs`;
+`Difficulty`/`CumulativeDifficulty` in `shekyl-difficulty`;
+`TransferDetails` indices typed) and RTN-7 OPEN (`Transaction::hash()`
+still returns `[u8; 32]` in `rust/shekyl-wire`). The unified `dev` SHA
+stays `071dfd2f5` because this pass did not re-run the DRS-E6 coverage
+gate; stamping HEAD would claim verification against a tree that gate
+never read. *Previous stamps:* `645d09dc3` (2026-09-16,
 the PDM-Q store-shaping pass, `PDM-Q-F26`, re-verified with `rg` —
 `pqc_auth_hash` then absent from `rust/`); `ab4693d0e` (2026-09-04, the
 P2P-2 cluster-B sub-round, rows re-verified with `git grep`; the C2-R3-Q
