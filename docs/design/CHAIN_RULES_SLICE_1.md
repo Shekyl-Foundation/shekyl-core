@@ -1,8 +1,9 @@
 # `shekyl-chain-rules` slice 1 — census 4.A + 4.B (DRS-E6 increment 2)
 
-**Status:** OPEN — **implementation landed across three PRs** (2026-09-16):
-#762 (`Rule`/`BlockRule`, SCW-18 pin, B1/B2/B7), #767 (`held_by_cxx`,
-A1/A4, in flight) and the `tip()` PR (this: `ChainView::tip()`, A2, B5, B6).
+**Status:** OPEN — **implementation LANDING across three PRs** (2026-09-16):
+#762 (`Rule`/`BlockRule`, SCW-18 pin, B1/B2/B7 — **merged**), #767
+(`held_by_cxx`, A1/A4 — **in flight**) and #768 (`ChainView::tip()`, A2, B5,
+B6 — **in flight, stacked on #767**). Not landed until both are on `dev`.
 Round 1 = pre-flight written against `dev` @ `3560b80c2`; ruled in full the
 same day (Q1 §2, Q2–Q6 §8). **Closes when #767 and the `tip()` PR are both
 on `dev`; the later of the two `git mv`s this document to `docs/completed/`**

@@ -24,11 +24,15 @@ the 2D2 plan §2/§12, the WI-1 "made the chain live" comment — PR #333 and th
 Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
-The unified stamp is `dev` = `ab4693d0e` as of 2026-09-04 (§5) — moved by the
-P2P-2 cluster-B sub-round, whose rows were re-verified against code with
-`git grep` at that revision, which is the dev commit this branch actually
-contains (stamping a newer `dev` would claim verification against a tree the
-verifying run never read); the
+The unified stamp is `dev` = `5fde3b1ce` as of 2026-09-17 (§5) — moved by
+DRS-E6 slice 1 (PR #768), whose rows (`CHAIN_RULES_CRATE.md`,
+`CHAIN_RULES_SLICE_1.md`) were re-verified against code at that revision —
+`check_chain_rules_coverage.py --describe` and the crate's tests on the
+branch tree, which is the dev commit this branch actually contains
+(stamping a newer `dev` would claim verification against a tree the
+verifying run never read). *Previous stamp:* `ab4693d0e` as of 2026-09-04,
+moved by the P2P-2 cluster-B sub-round, whose rows were re-verified with
+`git grep` at that revision; the
 C2-R3-Q row and the CEN / census-pass status cells it updated were
 additionally verified at PR #592's branch tip (the R3 landing), which
 contains that dev revision. Older code-anchored rows keep the SHA they
