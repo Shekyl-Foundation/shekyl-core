@@ -1158,18 +1158,33 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   the signature is one parameter today and every later caller is a retrofit
   (SCW-7's standard). Falsify by: a band-1 sync test that connects a
   skeleton block under `RuleSet::GENESIS` and is refused.
-- **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — the txid's third
-  component, owed by `PDM-Q-F26` (PR #765; its doc comment on `TxIdentity`
-  says "the next increment that touches this type adds it"). Named here so
-  the increment that touches `block.rs` for B6 (the `tip()` PR, slice 1)
-  can **scope it out by name rather than by omission**: the field pairs with
-  a store row beside `txs_prunable_hash` (S-CHAIN-W amendment, S-CHAIN-R's
-  surface) and a KAT against `Transaction::hash()`; it lands with the
-  increment that lands the row, and B6's move of the derivation site is not
-  that increment. F26's own invariant ("segment present ⇔ hash row present
-  ⇔ txid 4-part") needs a third leg before the store builds a belt on it —
-  a hash row with no segment is the *normal* below-`W` state under `PDM-Q6`,
-  not a violation — raised to the PDM owner on PR #765, not E6's to fix.
+- **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — **LANDED in the
+  `tip()` PR (slice 1, 2026-09-17)**, items 1 **and** 2 of
+  `DAEMON_REDB_STORE.md` §7.7's plan for `PDM-Q-F26` (PR #765): the
+  `shekyl-types` `hash32!` sibling `PqcAuthHash`; the field on
+  `TxIdentity`, populated by the one `validate` beside `hash` and
+  `prunable_hash`; and, in `shekyl-wire`, `Transaction::pqc_auth_hash()`
+  (`None` ⇔ the txid is 3-part) plus the two-supplied form
+  `hash_with_supplied_components(pqc_auth, prunable)`, of which `hash()`
+  and `hash_with_supplied_prunable` are now the special cases — one body
+  (`hash_from_components`) and **one arity predicate**
+  (`has_pqc_component`), so no two paths can hash one transaction two ways
+  and the skeleton (`PDM-Q-F28`: neither region held) reconstructs its
+  4-part txid with the arity read off the *supplied* component. KAT'd
+  against the pinned oracle txid on the full body **and** the skeleton
+  (`pruned_tx_hash_parity`), and on the 3-part forms — coinbase,
+  serve-credit (`None`; the countersignature rides the vin), a coinbase
+  handed components anyway — and on the bond-post (4-part like any spend:
+  the identity signature is a tx-level `pqc_auths` slot, so the arity is
+  the predicate's, never an input arm's). **One §7.7 deviation, recorded
+  there when this lands:** item 2 was written as taking
+  `Option<PqcAuthHash>` / `PrunableHash`; the wire crate is a leaf with no
+  `shekyl-types` dependency (as `hash_with_supplied_prunable([u8; 32])`
+  already shows), so the wire surface stays `[u8; 32]` and the typed
+  boundary is `TxIdentity`, where it already was for `PrunableHash`. Item
+  3 — the `txs_pqc_auth_hash` row — stays where §7.7 put it: S-CHAIN-W
+  amendment A3 on S-CHAIN-R's layout commit, one `SCHEMA_VERSION` bump;
+  its input now exists on the identity `connect` is handed.
 
 Nothing scoped to increment 1 by §7.5.1 is deferred out of it. The one
 increment-1 deferral this section carried — the `_census.py` extraction,

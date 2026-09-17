@@ -3,7 +3,7 @@
 // All rights reserved.
 // BSD-3-Clause
 
-use shekyl_types::{BlockHash, PrunableHash, TxHash};
+use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, TxHash};
 
 use super::*;
 use crate::census::CenRow;
@@ -45,6 +45,7 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     let expected_hash = BlockHash::from_bytes(input.block.hash());
     let identity = |tx: &Transaction| TxIdentity {
         hash: TxHash::from_bytes(tx.hash()),
+        pqc_auth_hash: tx.pqc_auth_hash().map(PqcAuthHash::from_bytes),
         prunable_hash: PrunableHash::from_bytes(tx.prunable_hash()),
     };
     let expected_miner = identity(&input.block.miner_transaction);
@@ -65,6 +66,9 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     ];
     assert_eq!(expected_miner.prunable_hash.as_bytes(), &KECCAK256_OF_EMPTY);
     assert_ne!(expected_miner.prunable_hash.as_bytes(), &[0u8; 32]);
+    // A coinbase txid is 3-part: there is no third component to record
+    // (PDM-Q-F26) — `None` is the identity's arity, not a discarded value.
+    assert_eq!(expected_miner.pqc_auth_hash, None);
 
     MockChain::default().with_view(|view| {
         let valid = infallible(validate(input, &view, &RuleSet::GENESIS))

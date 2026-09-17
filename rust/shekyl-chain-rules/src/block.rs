@@ -6,7 +6,7 @@
 //! The block on either side of `validate`: the untrusted [`Candidate`] going
 //! in, the typed [`ValidatedBlock`] coming out inside a `ChainValid`.
 
-use shekyl_types::{BlockHash, PrunableHash, TxHash};
+use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use crate::coverage::RuleCoverage;
@@ -14,17 +14,26 @@ use crate::rules::header::B6;
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
 ///
-/// The txid, and the digest of its prunable region — the fourth component
-/// of a spend's txid and the value the chain store records as
-/// `txs_prunable_hash` (S-CHAIN-W SCW-10). Both come from the same
-/// `validate`, so no consumer re-hashes a body and the store never derives
-/// a consensus-visible value (C2-R8 Q4). For a coinbase `prunable_hash` is
-/// `keccak256("")` — what the C++ store writes — not the txid's null-hash
-/// substitute; see [`PrunableHash`].
+/// The txid and the two **discardable components** it was built over: the
+/// digest of the per-input `pqc_auths` (the txid's third component,
+/// `PDM-Q-F26`) and the digest of the prunable region (its fourth, S-CHAIN-W
+/// SCW-10) — the values the chain store records as `txs_pqc_auth_hash` and
+/// `txs_prunable_hash` so a node that keeps only the skeleton can still
+/// reconstruct the txid it accepted (`Transaction::hash_with_supplied_components`).
+/// All three come from the same `validate`, so no consumer re-hashes a body
+/// and the store never derives a consensus-visible value (C2-R8 Q4).
+///
+/// `pqc_auth_hash` is `None` exactly when the txid is **3-part** — a
+/// coinbase, a serve-credit, the malformed gen-first shape — a fact about
+/// the identity, not about what was kept; see [`PqcAuthHash`]. For a
+/// coinbase `prunable_hash` is `keccak256("")` — what the C++ store writes —
+/// not the txid's null-hash substitute; see [`PrunableHash`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TxIdentity {
     /// The transaction hash (txid).
     pub hash: TxHash,
+    /// The txid's third component, or `None` for a 3-part txid.
+    pub pqc_auth_hash: Option<PqcAuthHash>,
     /// `keccak256` of the prunable byte region.
     pub prunable_hash: PrunableHash,
 }
@@ -33,6 +42,7 @@ impl TxIdentity {
     fn of(tx: &Transaction) -> Self {
         Self {
             hash: TxHash::from_bytes(tx.hash()),
+            pqc_auth_hash: tx.pqc_auth_hash().map(PqcAuthHash::from_bytes),
             prunable_hash: PrunableHash::from_bytes(tx.prunable_hash()),
         }
     }

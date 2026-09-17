@@ -38,6 +38,20 @@
   `validator-enforced = E − H` beside a fixed `E`. No daemon path calls
   `validate` yet ([`CHAIN_RULES_SLICE_1.md`](design/CHAIN_RULES_SLICE_1.md)).
 
+- **The txid's third component is derived and carried (`PDM-Q-F26`, items
+  1–2 of `DAEMON_REDB_STORE.md` §7.7).** `TxIdentity` gains
+  `pqc_auth_hash: Option<PqcAuthHash>` (new `shekyl-types` newtype) —
+  `keccak256(varint(count) ‖ pqc_auths)`, `None` exactly when the txid is
+  3-part (coinbase, serve-credit, gen-first), from the same `validate` as
+  `hash` and `prunable_hash`. `shekyl-wire` gains
+  `Transaction::pqc_auth_hash()` and `hash_with_supplied_components(pqc_auth,
+  prunable)`: `hash()` and `hash_with_supplied_prunable` become special cases
+  of one construction with one arity predicate, so a node holding only a
+  skeleton (neither `pqc_auths` nor the prunable region) reconstructs its
+  4-part txid from the two stored digests — pinned to the oracle txid in
+  `pruned_tx_hash_parity`. The `txs_pqc_auth_hash` store row (item 3) lands
+  with S-CHAIN-R's layout commit.
+
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
   (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured
   width; `8 × ~6.7 MB ≈ 53 MB` on the Pi 4 floor. Serve-side
