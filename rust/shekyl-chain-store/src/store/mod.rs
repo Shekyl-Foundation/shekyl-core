@@ -531,3 +531,7 @@ mod connect_tests;
 #[cfg(test)]
 #[path = "pop_tests.rs"]
 mod pop_tests;
+
+#[cfg(test)]
+#[path = "amendments_tests.rs"]
+mod amendments_tests;

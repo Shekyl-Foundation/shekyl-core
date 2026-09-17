@@ -91,6 +91,11 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             hash: shekyl_types::BlockHash::from(block_hash),
             rct_outputs: 1,
             long_term_weight: shekyl_types::LongTermWeight::from_raw(900),
+            // `cum(0) == |transactions(0)|`: the genesis fixture lists none.
+            cumulative_tx_count: 0,
+            // The value handed **for** height 0, read back at height 0
+            // (SCR-19): the fixture's `300_000 + 7 * h`.
+            long_term_effective_median: shekyl_types::LongTermWeight::from_raw(300_000),
         }
     );
     assert_eq!(
@@ -221,8 +226,13 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         "stored under amount 0 with the ct-base commitment"
     );
 
-    // no burn, no key images, no total_burned yet
-    assert!(snap.open_table(BLOCK_BURN).is_err());
+    // no burn, no key images, no total_burned yet — and the table *exists*
+    // from the seal (A2, SCR-17): absent-table is never read as empty-table.
+    assert!(snap
+        .open_table(BLOCK_BURN)
+        .expect("sealed: exists on a chain that never burned")
+        .is_empty()
+        .expect("len"));
     assert!(snap
         .open_table(SPENT_KEYS)
         .expect("t")
@@ -504,9 +514,14 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
         RuleSet::for_id(unissued).is_none(),
         "the premise of the test"
     );
-    // Nothing landed: the refusal came before any write.
+    // Nothing landed: the refusal came before any write. (The table itself
+    // exists from the seal, A2; emptiness is the evidence.)
     let snap = store.begin_read().expect("read");
-    assert!(snap.open_table(BLOCKS).is_err());
+    assert!(snap
+        .open_table(BLOCKS)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
     cleanup(&path);
 }
 
@@ -757,6 +772,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         coins_generated: Fact::derived(AtomicUnits::from_raw(1_000_000)),
         burned: Fact::derived(AtomicUnits::ZERO),
         root_after: Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32])),
+        long_term_effective_median: Fact::derived(shekyl_types::LongTermWeight::from_raw(300_000)),
     };
     let g = candidate(0, [0; 32], Vec::new());
     let g_hash = g.block.hash();
@@ -832,7 +848,8 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
             "weight",
             "long_term_weight",
             "cumulative_difficulty",
-            "coins_generated"
+            "coins_generated",
+            "long_term_effective_median"
         ]
     );
     assert_eq!(
@@ -841,8 +858,8 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         "unchanged"
     );
     assert!(prov.artifact_stamp().contains(
-        "passed-through=[weight,long_term_weight,cumulative_difficulty,coins_generated] \
-         NOT-PARITY-EVIDENCE"
+        "passed-through=[weight,long_term_weight,cumulative_difficulty,coins_generated,\
+         long_term_effective_median] NOT-PARITY-EVIDENCE"
     ));
     // Monotone: a later fully-derived connect cannot narrow it, and a
     // read-only reopen reads the same record from the file.
@@ -914,19 +931,20 @@ fn passed_through_names_the_rows_that_delete_each_fact() {
             "cumulative_difficulty",
             "coins_generated",
             "burned",
-            "root_after"
+            "root_after",
+            "long_term_effective_median"
         ]
     );
     let mut some = all;
     some.cumulative_difficulty = Fact::derived(CumulativeDifficulty::from_raw(100));
     some.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32]));
     let remaining: Vec<DeletedBy> = some.passed_through().collect();
-    assert_eq!(remaining.len(), 4);
+    assert_eq!(remaining.len(), 5);
     assert!(remaining
         .iter()
         .all(|d| !d.rows.is_empty() && !d.slice.is_empty()));
     assert!(remaining
         .iter()
         .any(|d| d.field == "burned" && d.rows.contains(&"CEN-F17")));
-    assert_eq!(ConnectFacts::DELETED_BY.len(), 6);
+    assert_eq!(ConnectFacts::DELETED_BY.len(), 7);
 }

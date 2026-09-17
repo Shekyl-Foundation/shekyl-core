@@ -46,8 +46,8 @@
 use core::cell::{Cell, RefCell};
 
 use redb::{
-    Key, MultimapTableDefinition, MultimapTableHandle, ReadableTable, TableDefinition, TableHandle,
-    Value, WriteTransaction,
+    Key, MultimapTableDefinition, MultimapTableHandle, ReadTransaction, ReadableTable,
+    TableDefinition, TableHandle, Value, WriteTransaction,
 };
 
 use crate::codec::{
@@ -70,6 +70,13 @@ use super::write::Poison;
 /// byte-string key accepts anything. A `Coded<V>` row is checked by
 /// `V::decode` itself — the same strict decode the read path runs.
 pub(crate) trait Restorable: Value {
+    /// Whether a table over this value type has a writer and is therefore
+    /// **created by the seal** (S-CHAIN-R amendment A2). `true` for every
+    /// shape but [`Unshaped`]: the seal set is derived from the value
+    /// shapes, never kept as a second list (`schema` module docs, *The seal
+    /// creates every table with a writer*).
+    const SEALED: bool = true;
+
     /// `Err(reason)` if `from_bytes` would panic or misread `bytes`.
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
         match Self::fixed_width() {
@@ -106,6 +113,8 @@ impl<K: BlobKind> Restorable for Blob<K> {
 }
 
 impl Restorable for Unshaped {
+    const SEALED: bool = false;
+
     fn well_formed(_bytes: &[u8]) -> Result<(), &'static str> {
         Err("an unshaped table has no rows")
     }
@@ -136,9 +145,13 @@ pub(crate) enum Undone {
     Malformed(&'static str),
 }
 
-/// A table as a replay target: dispatch from a [`TableOrdinal`] to a typed
-/// `open_table`, implemented for both definition shapes. Object-safe so
-/// the schema can hold every table in one `&[&dyn UndoTarget]`.
+/// A table as the catalogue dispatches to it: a replay target (from a
+/// [`TableOrdinal`] to a typed `open_table`) and, since S-CHAIN-R amendment
+/// A2, a **seal** target — created at `ChainStore::create` and required by
+/// `header::verify` iff its value shape has a writer
+/// ([`Restorable::SEALED`]). Implemented for both definition shapes;
+/// object-safe so the schema can hold every table in one
+/// `&[&dyn UndoTarget]`.
 pub(crate) trait UndoTarget {
     /// The table name, as the definition declares it.
     fn name(&self) -> &str;
@@ -150,6 +163,34 @@ pub(crate) trait UndoTarget {
     /// Only engine errors; the journal-level outcomes are the [`Undone`]
     /// value, so the caller names the row.
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError>;
+
+    /// Whether the seal creates this table (its value shape has a writer).
+    fn sealed(&self) -> bool;
+
+    /// Open — and so create — the table in the seal transaction. A no-op
+    /// for a table the seal does not cover.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Table`] if the engine refuses.
+    fn create(&self, txn: &WriteTransaction) -> Result<(), EngineError>;
+
+    /// Whether the table exists in `txn`'s view of the file.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Table`] on any refusal other than *does not exist*.
+    fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError>;
+}
+
+/// Map redb's *does not exist* onto `false`, every other refusal onto the
+/// engine error, for the two `exists` impls.
+fn exists_or<T>(opened: Result<T, redb::TableError>) -> Result<bool, EngineError> {
+    match opened {
+        Ok(_) => Ok(true),
+        Err(redb::TableError::TableDoesNotExist(_)) => Ok(false),
+        Err(e) => Err(EngineError::Table(e)),
+    }
 }
 
 impl<K, V> UndoTarget for TableDefinition<'static, K, V>
@@ -159,6 +200,21 @@ where
 {
     fn name(&self) -> &str {
         TableHandle::name(self)
+    }
+
+    fn sealed(&self) -> bool {
+        V::SEALED
+    }
+
+    fn create(&self, txn: &WriteTransaction) -> Result<(), EngineError> {
+        if V::SEALED {
+            txn.open_table(*self).map_err(EngineError::Table)?;
+        }
+        Ok(())
+    }
+
+    fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError> {
+        exists_or(txn.open_table(*self))
     }
 
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
@@ -215,6 +271,21 @@ where
 {
     fn name(&self) -> &str {
         MultimapTableHandle::name(self)
+    }
+
+    fn sealed(&self) -> bool {
+        V::SEALED
+    }
+
+    fn create(&self, txn: &WriteTransaction) -> Result<(), EngineError> {
+        if V::SEALED {
+            txn.open_multimap_table(*self).map_err(EngineError::Table)?;
+        }
+        Ok(())
+    }
+
+    fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError> {
+        exists_or(txn.open_multimap_table(*self))
     }
 
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {

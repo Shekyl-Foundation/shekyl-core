@@ -43,13 +43,17 @@ use super::{Canonical, CodecError};
 /// The `ConnectFacts` fields, in declaration order — the bit assignment of
 /// [`PassedThroughFacts`] and the names it encodes. `ConnectFacts::DELETED_BY`
 /// is held to this list by a test in `store::connect`.
-pub const FACT_FIELDS: [&str; 6] = [
+pub const FACT_FIELDS: [&str; 7] = [
     "weight",
     "long_term_weight",
     "cumulative_difficulty",
     "coins_generated",
     "burned",
     "root_after",
+    // Appended, not inserted: the six positions above keep their bits
+    // (S-CHAIN-R §3.6; the widening is still a layout change to this cell's
+    // encoding and rides that commit's SCHEMA_VERSION bump).
+    "long_term_effective_median",
 ];
 
 /// Census rows some committed `connect` was handed a verdict for without

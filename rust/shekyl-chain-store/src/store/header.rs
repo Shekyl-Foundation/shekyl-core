@@ -43,7 +43,7 @@ use crate::codec::{
     SettlementEpochBlocks, SettlementEpochBlocksCell, SCHEMA_VERSION,
 };
 use crate::provenance::Provenance;
-use crate::schema::PROPERTIES;
+use crate::schema::{self, PROPERTIES};
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 
@@ -65,7 +65,29 @@ pub(super) fn seal(
     put::<SettlementEpochBlocksCell>(txn, &epoch)?;
     put::<CoverageGapsCell>(txn, &CoverageGaps::NONE)?;
     put::<PassedThroughFactsCell>(txn, &PassedThroughFacts::NONE)?;
+    // Amendment A2 (SCR-17): every table with a writer exists from the
+    // first commit, so no reader ever has to read *absent table* as *empty
+    // table*. The set is the catalogue's, filtered by value shape.
+    for table in schema::UNDO_TARGETS {
+        table.create(txn)?;
+    }
     Ok(provenance)
+}
+
+/// Amendment A2's other half: a sealed file has every table with a writer.
+/// One that lacks a table this store's seal would have created was not
+/// written by this store — SI-7, the table named as the cell.
+fn verify_sealed_tables(txn: &ReadTransaction) -> Result<(), StoreError> {
+    for table in schema::UNDO_TARGETS.iter().filter(|t| t.sealed()) {
+        if !table.exists(txn)? {
+            return Err(StoreInvariant::CellCorrupt {
+                key: table.name(),
+                fault: CellFault::Absent,
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Read the three provenance components from an open `properties` table.
@@ -102,6 +124,7 @@ pub(super) fn verify(
         }
         Err(e) => return Err(EngineError::Table(e).into()),
     };
+    verify_sealed_tables(txn)?;
     let found = get::<SchemaVersionCell>(&table)?.ok_or(StoreCannot::SchemaVersionAbsent)?;
     if found != SCHEMA_VERSION {
         return Err(StoreCannot::SchemaVersionMismatch {

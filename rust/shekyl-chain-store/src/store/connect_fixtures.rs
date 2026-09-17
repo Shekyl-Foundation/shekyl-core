@@ -11,7 +11,7 @@ use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, PqcAuth, Transaction, TxPrefix};
 
 use super::store_tests::TestErr;
 use super::view::BatchView;
@@ -79,6 +79,27 @@ pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
     }
 }
 
+/// [`spend`] with one `pqc_auths` entry, so its txid is **4-part** and its
+/// identity carries `pqc_auth_hash: Some(_)` — the shape that writes a
+/// `txs_pqc_auth_hash` row (amendment A3, `PDM-Q-F26` leg 1). The auth is
+/// the minimal well-formed header (`auth_version 1`, `scheme_id 1`, empty
+/// blobs): no landed rule verifies it, and what the store records is its
+/// count-prefixed digest, not its validity.
+pub(super) fn spend_with_pqc_auth(key_image: u8, outputs: usize) -> Transaction {
+    let mut tx = spend(key_image, outputs);
+    let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct else {
+        unreachable!("spend() builds Ct::Fcmp");
+    };
+    pqc_auths.push(PqcAuth {
+        auth_version: 1,
+        scheme_id: 1,
+        flags: 0,
+        hybrid_public_key: Vec::new(),
+        hybrid_signature: Vec::new(),
+    });
+    tx
+}
+
 /// The root the header at `height` must carry under CEN-B5: the tree state
 /// *at* `height` — the `root_after` the connect of `height − 1` wrote
 /// (`facts(height − 1)`), or the empty tree at genesis. Kept in one place
@@ -118,6 +139,11 @@ pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
         burned: Fact::passed_through(AtomicUnits::from_raw(burned)),
         root_after: Fact::passed_through(CurveTreeRoot::from_bytes(
             [0xc0 + u8::try_from(height).expect("small"); 32],
+        )),
+        // Distinct per height, so a test that reads it back can tell `h`
+        // from `h ± 1` (the SCR-19 indexing rule as a test, §3.6).
+        long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(
+            300_000 + 7 * height,
         )),
     }
 }

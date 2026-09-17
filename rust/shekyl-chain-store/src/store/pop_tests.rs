@@ -312,6 +312,8 @@ fn a_recorded_tip_with_no_journal_row_is_si6_not_the_floor() {
                 ),
                 rct_outputs: 0,
                 long_term_weight: shekyl_types::LongTermWeight::ZERO,
+                cumulative_tx_count: 0,
+                long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
             };
             batch
                 .open_insert_table(BLOCK_INFO, PROBE_ROW)?

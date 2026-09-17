@@ -412,6 +412,8 @@ mod tests {
             hash: BlockHash::from_bytes([0xAB; 32]),
             rct_outputs: 19,
             long_term_weight: LongTermWeight::from_raw(23),
+            cumulative_tx_count: 0,
+            long_term_effective_median: LongTermWeight::ZERO,
         }
     }
 

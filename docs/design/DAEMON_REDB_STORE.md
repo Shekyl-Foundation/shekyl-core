@@ -1684,9 +1684,14 @@ whole E-series, not of one surface.
 
 **The ported partition is transitional.** The redb schema at this pin is
 Monero's schema in a different engine — the gated catalogue
-(`rust/shekyl-chain-store/schemas/tables.snap`) declares **50** tables, the
-49 LMDB mirrors plus Rust-only `undo_log`, of which **46** are E1's write
-target after the three ruled-not-to-port (§3.5); the same partition,
+(`rust/shekyl-chain-store/schemas/tables.snap`) declares **51** tables at
+layout v4: the 49 LMDB mirrors plus two Rust-only (`undo_log`, and
+`txs_pqc_auth_hash` from S-CHAIN-R amendment A3). E1's write target is the
+46 mirrors that survive the three ruled-not-to-port (§3.5) plus both
+Rust-only tables — **48** — of which **18** have a live writer at this
+layout (every table whose value shape is not `Unshaped`, §11.1(f); the
+count is the catalogue's, `amendments_tests`) and the rest wait as
+`Unshaped` for the increment that writes them; the same partition,
 `output_amounts` keyed verbatim with R8b-2 open. Reproducing it first is the
 parity-first choice already ruled: a shape cannot be redesigned before it is
 characterised, and redesigning mid-port retires the comparator. But that is

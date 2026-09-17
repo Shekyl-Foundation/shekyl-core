@@ -92,7 +92,7 @@ use shekyl_chain_rules::{CenRow, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
-    OneTimePubkey, OutputIndexInTx, PrunableHash, Timestamp, TxHash,
+    OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 
@@ -290,8 +290,9 @@ impl Fixtures for PassedThroughFacts {
         vec![
             ("none", PassedThroughFacts::NONE),
             ("burned", PassedThroughFacts::of_positions([4])),
-            // Every field: the six-name spelling is the layout.
-            ("all", PassedThroughFacts::of_positions(0..6)),
+            // Every field: the seven-name spelling is the layout (the
+            // seventh, `long_term_effective_median`, S-CHAIN-R §3.6).
+            ("all", PassedThroughFacts::of_positions(0..7)),
         ]
     }
 }
@@ -327,6 +328,20 @@ impl Fixtures for PrunableHash {
             (
                 "ascending",
                 PrunableHash::from_bytes(core::array::from_fn(|i| {
+                    u8::try_from(i).expect("32 indices fit a byte")
+                })),
+            ),
+        ]
+    }
+}
+
+impl Fixtures for PqcAuthHash {
+    fn fixtures() -> Vec<(&'static str, Self)> {
+        vec![
+            ("zero", PqcAuthHash::from_bytes([0; 32])),
+            (
+                "ascending",
+                PqcAuthHash::from_bytes(core::array::from_fn(|i| {
                     u8::try_from(i).expect("32 indices fit a byte")
                 })),
             ),
@@ -372,6 +387,8 @@ impl Fixtures for BlockInfo {
                     hash: BlockHash::from_bytes([0; 32]),
                     rct_outputs: 0,
                     long_term_weight: LongTermWeight::from_raw(0),
+                    cumulative_tx_count: 0,
+                    long_term_effective_median: LongTermWeight::from_raw(0),
                 },
             ),
             // Every field distinct, difficulty straddling the lo/hi split so
@@ -386,6 +403,8 @@ impl Fixtures for BlockInfo {
                     hash: BlockHash::from_bytes([0xab; 32]),
                     rct_outputs: 6,
                     long_term_weight: LongTermWeight::from_raw(7),
+                    cumulative_tx_count: 8,
+                    long_term_effective_median: LongTermWeight::from_raw(9),
                 },
             ),
         ]
@@ -865,6 +884,7 @@ snapshotted_codecs! {
     RuleSetId => codec_snapshot_rule_set_id,
     PrunableHash => codec_snapshot_prunable_hash,
     AtomicUnits => codec_snapshot_atomic_units,
+    PqcAuthHash => codec_snapshot_pqc_auth_hash,
     BlockInfo => codec_snapshot_block_info,
     TxIndex => codec_snapshot_tx_index,
     OutTx => codec_snapshot_out_tx,

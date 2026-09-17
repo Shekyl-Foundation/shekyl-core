@@ -275,8 +275,11 @@ fn an_unsealed_recording_refuses_the_commit_and_lands_nothing() {
     );
     let snap = store.begin_read().expect("read");
     assert!(
-        snap.open_table(BLOCKS).is_err(),
-        "nothing landed — the table was never created"
+        snap.open_table(BLOCKS)
+            .expect("sealed: exists from create (A2)")
+            .is_empty()
+            .expect("len"),
+        "nothing landed"
     );
     cleanup(&path);
 }

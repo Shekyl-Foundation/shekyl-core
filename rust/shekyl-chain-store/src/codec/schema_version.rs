@@ -38,7 +38,16 @@ use super::{Canonical, CodecError};
 ///   width to the engine (a leaf-page layout change from `&[u8]`, which is
 ///   variable-width). No codec's **bytes** moved — the row fixtures are
 ///   unchanged — so the digest is unchanged; the file format is not.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(3);
+/// - `4` — DRS-E1 increment 4 (S-CHAIN-R) layout commit, second half — the
+///   three S-CHAIN-W amendments (`DRS_E1_SCHAIN_R.md` §3.7): **A1**
+///   `BlockInfo` grows `cumulative_tx_count` and
+///   `long_term_effective_median` (88 → 104 B; FL-R3-STORE, Q4) and
+///   `ConnectFacts` a seventh passed-through fact, so `PassedThroughFacts`
+///   gains a bit; **A2** the seal creates every table with a writer (SCR-17);
+///   **A3** `txs_pqc_auth_hash` (`TableOrdinal` 50, the second Rust-only
+///   table; `PDM-Q-F26`). Row fixtures move for `block_info` and
+///   `passed_through_facts`; the catalogue gains a row.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(4);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -95,10 +104,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(3));
-        assert_eq!(SCHEMA_VERSION.encode(), [3, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(4));
+        assert_eq!(SCHEMA_VERSION.encode(), [4, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[3, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[4, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

@@ -116,18 +116,29 @@
 //! who finds "bumped for a removal" in the history is looking at this
 //! sentence's consequence, not over-caution.
 //!
-//! `undo_log` is the first — and so far only — table with no X-macro twin
-//! (`DRS_E1_SCHAIN_W.md` §5, SCW-11). It is declared in [`RUST_ONLY_TABLES`]
-//! with the reason it exists, and the bijection gate reads that map: a
-//! definition with neither a twin **nor** a named reason is still red with
-//! the extra-leg's original refusal, so the mirror assumption retires one
-//! table at a time, never as a mode switch.
+//! Two tables have no X-macro twin (`DRS_E1_SCHAIN_W.md` §5, SCW-11):
+//! `undo_log`, the first, and `txs_pqc_auth_hash`, the second (S-CHAIN-R
+//! amendment A3, `PDM-Q-F26`). Each is declared in [`RUST_ONLY_TABLES`] with
+//! the reason it exists, and the bijection gate reads that map: a definition
+//! with neither a twin **nor** a named reason is still red with the
+//! extra-leg's original refusal, so the mirror assumption retires one table
+//! at a time, never as a mode switch.
+//!
+//! # The seal creates every table with a writer
+//!
+//! From S-CHAIN-R's layout commit (amendment A2, SCR-17) `header::seal` opens
+//! — and so creates — every table whose value shape is not [`Unshaped`], in
+//! the create transaction, and `header::verify` refuses a sealed file that
+//! lacks one (SI-7, the table named as the cell). So a reader that meets
+//! `TableDoesNotExist` on a chain table is looking at a file this store did
+//! not write, and *absent table* never has to be read as *empty table*. The
+//! set is derived from the shapes, not kept as a second list: a table gets a
+//! writer by leaving `Unshaped`, and is sealed by the same edit.
 
 use redb::{MultimapTableDefinition, MultimapTableHandle, TableDefinition, TableHandle, TypeName};
 
 use shekyl_chain_rules::RuleSetId;
-use shekyl_types::{BlockHeight, CurveTreeRoot, PrunableHash};
-
+use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash};
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
@@ -195,12 +206,21 @@ pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarg
 /// from). Out of the digest domain by construction: the accumulator's
 /// class table is the LMDB inventory, and a table absent from it with a
 /// reason here is a named exclusion, not an omission.
-pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[(
-    "undo_log",
-    "the pop journal: one LIFO row of pre-images per connected height, replacing the C++ \
-     per-surface journals (C2-R8 Q5); a function of the journaled writes, so two correct stores \
-     of one chain agree on it by construction and it is not folded",
-)];
+pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
+    (
+        "undo_log",
+        "the pop journal: one LIFO row of pre-images per connected height, replacing the C++ \
+         per-surface journals (C2-R8 Q5); a function of the journaled writes, so two correct \
+         stores of one chain agree on it by construction and it is not folded",
+    ),
+    (
+        "txs_pqc_auth_hash",
+        "the txid's third component per 4-part transaction (PDM-Q-F26, DRS §7.7): the persisted \
+         digest that lets PDM-Q6 discard the pqc_auths segment; the C++ store never held it \
+         because it never discarded that segment. Out of the digest domain: the txid the \
+         digest already folds commits to the same value",
+    ),
+];
 
 /// Whether a table holds one value per key or many.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -468,9 +488,19 @@ tables! {
     /// `undo_log` — **Rust-only** ([`RUST_ONLY_TABLES`]); height → the
     /// [`UndoLog`](crate::codec::UndoLog) of pre-images `connect` recorded
     /// at that height, replayed in reverse by `pop` (C2-R8 Q5; register row
-    /// SI-6). Declared **last** so no existing ordinal moved when it was
-    /// added; a later table is likewise appended, never inserted.
+    /// SI-6). Appended when added so no existing ordinal moved; a later
+    /// table is likewise appended, never inserted.
     pub const UNDO_LOG: TableDefinition<u64, Coded<UndoLog>> = TableDefinition::new("undo_log");
+
+    /// `txs_pqc_auth_hash` — **Rust-only** ([`RUST_ONLY_TABLES`]); tx_id →
+    /// the txid's third component, `keccak256(varint(count) ‖ auths)`, for
+    /// every 4-part transaction (`PDM-Q-F26`; S-CHAIN-R amendment A3). Row
+    /// present ⇔ txid 4-part, written by `connect` beside
+    /// `txs_prunable_hash`, **never deleted** — a row without its
+    /// `txs_pqc_auths` segment is *discarded*, not a fault. Appended last
+    /// (ordinal 50).
+    pub const TXS_PQC_AUTH_HASH: TableDefinition<u64, Coded<PqcAuthHash>> =
+        TableDefinition::new("txs_pqc_auth_hash");
 }
 
 #[cfg(test)]
