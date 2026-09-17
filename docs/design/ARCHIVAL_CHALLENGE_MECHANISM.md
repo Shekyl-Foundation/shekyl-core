@@ -194,7 +194,13 @@ witness's read is wasted and P re-serves under the re-derived assignment (an
 economic residual, not a consensus one). And §4.1's quantization quietly buys
 a property worth naming: drawability is evaluated at epoch open, which is
 deep history relative to any plausible reorg, so the **drawable set is
-reorg-stable** — only assignments churn, never the set.
+reorg-stable** — only assignments churn, never the set. That argument is
+**reorg** stability. **Drop** stability is a different axis and is ruled
+in `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.4 (Q3, 2026-09-16): do not
+filter `D` by `holds_shard_of` at tip — a later drop retroactively
+falsifies the point query (`db_lmdb.cpp:5377–5383`) and makes `D`
+time-varying. A dropped pair stays in `D` for `E`; the filter lives at
+settlement and at the witness.
 
 ## 3. Nested measurement: 2-of-3 within an epoch, m-of-n across epochs
 
