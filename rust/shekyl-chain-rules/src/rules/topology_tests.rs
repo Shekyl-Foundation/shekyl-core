@@ -43,7 +43,7 @@ fn cen_a2_previous_must_be_the_tip_hash() {
     };
     assert_refused(check_on(&chain, &flipped), CenRow::A2, Locus::Block);
     let mut zero = good.clone();
-    zero.block.header.previous = BlockHash::from_bytes([0; 32]);
+    zero.block.header.previous = BlockHash::NULL;
     assert_refused(check_on(&chain, &zero), CenRow::A2, Locus::Block);
 }
 
@@ -54,10 +54,7 @@ fn cen_a2_genesis_previous_is_the_null_hash() {
     let chain = MockChain::default();
     assert_eq!(chain.tip(), None);
     let genesis = candidate_on(&chain, Vec::new());
-    assert_eq!(
-        genesis.block.header.previous,
-        BlockHash::from_bytes([0; 32])
-    );
+    assert_eq!(genesis.block.header.previous, BlockHash::NULL);
     check_on(&chain, &genesis).expect("genesis with a null previous passes A2");
 
     let mut not_genesis = genesis;

@@ -287,7 +287,7 @@ fn assemble_path_rejects_undrained_output() {
     let reference = ReferenceBlock {
         height: BlockHeight::from_raw(tip.height),
         curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
-        block_hash: BlockHash::from_bytes([0u8; 32]),
+        block_hash: BlockHash::NULL,
     };
 
     // The tip's own coinbase has not matured (let alone drained) at the tip, so
@@ -315,7 +315,7 @@ fn assemble_path_rejects_root_mismatch() {
     let bad = ReferenceBlock {
         height: BlockHeight::from_raw(tip.height),
         curve_tree_root: CurveTreeRoot::from_bytes([0xFFu8; 32]),
-        block_hash: BlockHash::from_bytes([0u8; 32]),
+        block_hash: BlockHash::NULL,
     };
     match client.assemble_path(&founder, &bad) {
         Err(shekyl_curve_tree::ClientError::RootMismatch { height, .. }) => {
@@ -334,7 +334,7 @@ fn assemble_path_rejects_identity_mismatch() {
     let reference = ReferenceBlock {
         height: BlockHeight::from_raw(tip.height),
         curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
-        block_hash: BlockHash::from_bytes([0u8; 32]),
+        block_hash: BlockHash::NULL,
     };
 
     // A genuinely drained coinbase, but with the expected output_key tampered:
