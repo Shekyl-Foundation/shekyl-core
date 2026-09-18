@@ -16,9 +16,9 @@ use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, Tx
 
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
-use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Encoded, Raw};
+use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Encoded, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
+use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG};
 
 /// A coinbase the block parser accepts back (§2.5: a sole `gen` input and
 /// a `Null` ct), with one output so the per-output base arrays are
@@ -347,7 +347,7 @@ fn has_key_image_reads_spent_keys_and_sees_the_batch_s_own_writes() {
         assert!(!view.has_key_image(&spent)?, "empty chain");
         batch
             .open_insert_table(SPENT_KEYS, PROBE_ROW)?
-            .insert(LmdbHashKey::from_bytes(*spent.as_bytes()), ())?;
+            .insert(LmdbHashKey::from_bytes(*spent.as_bytes()), Present)?;
         // The same view, no new snapshot: a write earlier in this batch is
         // visible to a validation later in it (SCW-13).
         assert!(view.has_key_image(&spent)?);
@@ -422,14 +422,23 @@ fn a_corrupt_row_read_through_the_view_is_si7_and_poisons_the_batch() {
         record_block(batch, 0, &block(0, 1_000))?;
         record_block(batch, 1, &block(1, 1_060))?;
         record_block(batch, 2, &block(2, 1_120))?;
-        // Below the tip, with its `block_info` row intact: the blob alone is
-        // what does not decode.
-        batch
-            .open_upsert_table(BLOCKS)?
-            .upsert(1, Raw::<BlockBody>::new(&[1u8, 2, 3]))?;
         Ok(())
     });
     planted.expect("plant");
+    drop(store);
+    // Below the tip, with its `block_info` row intact: the blob alone is
+    // what does not decode. Planted around the write boundary — a crate
+    // handle would refuse an unparseable `BlockBody` as `RowIllFormed`.
+    {
+        let db = redb::Database::open(&path).expect("raw open");
+        let txn = db.begin_write().expect("raw write");
+        txn.open_table(BLOCKS)
+            .expect("t")
+            .insert(1, Raw::<BlockBody>::new(&[1u8, 2, 3]))
+            .expect("plant");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
 
     // The closure swallows the fault and returns Ok; the batch still refuses.
     let out: Result<(), TestErr> = store.write(|batch| {
@@ -637,9 +646,8 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
 /// `Canonical::encoded` cannot produce it, but redb's `Value::from_bytes` is
 /// a public trait method and can (`Encoded::forged` is that path under
 /// `cfg(test)`), so every write through the crate's handles checks the
-/// width first (`keyed::check_width`) and returns `StoreCannot::RowWidth`.
-/// Nothing lands, nothing panics, and the store is still usable afterwards
-/// (PR #772 review: the earlier form of this test leaked a poisoned handle).
+/// width first (`keyed::check_row`) and returns `StoreCannot::RowWidth`.
+/// Nothing lands, nothing panics, and the store is still usable afterwards.
 #[test]
 fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
     let path = tmp("view-wrong-width");
@@ -678,5 +686,29 @@ fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
         Ok(())
     });
     assert_eq!(out, Ok(()), "the recorded rows are as they were");
+    cleanup(&path);
+}
+
+/// Variable-width `Coded<V>` reports `fixed_width() == None`, so the width
+/// check is a no-op. The insertion boundary still runs `V::decode` via
+/// `Restorable::well_formed`: a forged `Encoded<UndoLog>` that is not a
+/// row never reaches the file.
+#[test]
+fn a_variable_width_coded_row_that_does_not_decode_is_refused() {
+    let path = tmp("view-ill-formed-undo");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let refused: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_upsert_table(UNDO_LOG)?
+            .upsert(0, Encoded::forged(&[0xee; 3]))?;
+        Ok(())
+    });
+    let expected = StoreError::from(StoreCannot::RowIllFormed {
+        table: "undo_log",
+        reason: "row does not decode under the table's codec",
+    })
+    .to_string();
+    assert_eq!(refused, Err(TestErr::Store(expected)));
+    assert_eq!(store.connect_state(), ConnectState::Live);
     cleanup(&path);
 }

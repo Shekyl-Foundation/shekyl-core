@@ -227,6 +227,21 @@ pub enum StoreCannot {
         /// The width handed in.
         actual: usize,
     },
+    /// A value handed to a typed table's `insert` / `upsert` is not a
+    /// well-formed row of that table's shape. Unreachable through
+    /// `Canonical::encoded` / a `BlobKind` the chain itself serialized;
+    /// reachable through redb's public `Value::from_bytes`. The width
+    /// mismatch is [`Self::RowWidth`]; this arm is everything else — a
+    /// variable-width codec that does not decode, a blob that does not
+    /// parse. Refused as a `Result` so it never becomes SI-7: the file
+    /// was not written.
+    RowIllFormed {
+        /// The table.
+        table: &'static str,
+        /// Why [`Restorable::well_formed`](super::undo::Restorable::well_formed)
+        /// refused.
+        reason: &'static str,
+    },
     /// The raw `properties` table was requested on the write side.
     ///
     /// Its cells are typed ([`PropertyCell`](crate::codec::PropertyCell))
@@ -379,6 +394,10 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "`{table}` row is {actual} byte(s); its value shape is fixed at {expected}: \
                  refused before the engine"
+            ),
+            Self::RowIllFormed { table, reason } => write!(
+                f,
+                "`{table}` row is not well-formed ({reason}): refused before the engine"
             ),
             Self::PropertiesAreTyped => write!(
                 f,

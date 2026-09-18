@@ -69,10 +69,10 @@
 
 use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
 use shekyl_chain_rules::AtHeight;
+use shekyl_types::BlockHash;
 use shekyl_wire::Block;
 
 use crate::codec::{BlockInfo, Canonical, CodecError, Coded};
-use crate::lmdb_order::Hash32;
 use crate::schema::{BLOCKS, BLOCK_INFO};
 
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
@@ -259,6 +259,25 @@ pub(super) fn cell<T: ReadTables, V: Canonical + 'static>(
         .map_err(|cause| undecodable(cell_name, cause))
 }
 
+/// Where `height` sits relative to the recorded tip. One match; every
+/// classified read dispatches on this so `==` / `<` / `<=` cannot drift.
+pub(super) enum HeightClass<'a> {
+    /// `height` is above the dense tip, or the chain is empty.
+    AboveTip,
+    /// `height` is the tip: the decoded row is already in hand.
+    AtTip(&'a BlockInfo),
+    /// `height` is strictly below the tip: the row must exist (SI-2).
+    Below,
+}
+
+pub(super) fn class_of(tip: Option<&(u64, BlockInfo)>, height: u64) -> HeightClass<'_> {
+    match tip {
+        Some((t, info)) if height == *t => HeightClass::AtTip(info),
+        Some((t, _)) if height < *t => HeightClass::Below,
+        _ => HeightClass::AboveTip,
+    }
+}
+
 /// The `block_info` row at `height`, classified against `tip` (the caller's
 /// [`tip_of`]): above it is [`AtHeight::AboveTip`]; **at** it the row
 /// already decoded is reused; below it the row is read and its absence is
@@ -269,12 +288,12 @@ pub(super) fn info_at<T: ReadTables>(
     tip: Option<&(u64, BlockInfo)>,
     height: u64,
 ) -> Result<AtHeight<BlockInfo>, ReadFault> {
-    Ok(match tip {
-        Some((tip, info)) if height == *tip => AtHeight::Recorded(*info),
-        Some((tip, _)) if height < *tip => AtHeight::Recorded(
+    Ok(match class_of(tip, height) {
+        HeightClass::AtTip(info) => AtHeight::Recorded(*info),
+        HeightClass::Below => AtHeight::Recorded(
             cell(txn, BLOCK_INFO, height, "block_info")?.ok_or_else(|| absent("block_info"))?,
         ),
-        _ => AtHeight::AboveTip,
+        HeightClass::AboveTip => AtHeight::AboveTip,
     })
 }
 
@@ -289,9 +308,9 @@ pub(super) fn blob_at<T: ReadTables>(
     tip: Option<&(u64, BlockInfo)>,
     height: u64,
 ) -> Result<AtHeight<Vec<u8>>, ReadFault> {
-    match tip {
-        Some((tip, _)) if height <= *tip => {}
-        _ => return Ok(AtHeight::AboveTip),
+    match class_of(tip, height) {
+        HeightClass::AboveTip => return Ok(AtHeight::AboveTip),
+        HeightClass::AtTip(_) | HeightClass::Below => {}
     }
     let blocks = txn.table(BLOCKS)?;
     let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
@@ -311,7 +330,7 @@ pub(super) fn block_body<T: ReadTables>(
     txn: &T,
     tip: Option<&(u64, BlockInfo)>,
     height: u64,
-) -> Result<AtHeight<(Hash32, Block)>, ReadFault> {
+) -> Result<AtHeight<(BlockHash, Block)>, ReadFault> {
     let info = match info_at(txn, tip, height)? {
         AtHeight::Recorded(info) => info,
         AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
@@ -325,5 +344,5 @@ pub(super) fn block_body<T: ReadTables>(
             "block blob does not hash to block_info.hash",
         ));
     }
-    Ok(AtHeight::Recorded((Hash32::from(info.hash), block)))
+    Ok(AtHeight::Recorded((info.hash, block)))
 }

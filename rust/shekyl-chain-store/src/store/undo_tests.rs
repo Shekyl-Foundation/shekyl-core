@@ -10,6 +10,7 @@
 
 use redb::ReadableTableMetadata;
 
+use super::connect_fixtures::candidate;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::undo::Replayed;
 use super::*;
@@ -33,9 +34,10 @@ fn hash(byte: u8) -> LmdbHashKey {
 fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreError> {
     let byte = u8::try_from(height).expect("test heights fit a byte");
     let recording = batch.record_undo(height);
+    let blob = candidate(height, [0; 32], Vec::new()).block.serialize();
     batch
         .open_insert_table(BLOCKS, PROBE_ROW)?
-        .insert(height, Raw::<BlockBody>::new(&[0xb0, byte]))?;
+        .insert(height, Raw::<BlockBody>::new(&blob))?;
     batch.open_insert_table(BLOCK_HEIGHTS, PROBE_ROW)?.insert(
         hash(byte),
         BlockHeight::from_raw(height).encoded().as_encoded(),
@@ -81,7 +83,7 @@ fn every_verb_journals_its_pre_image_in_write_order() {
             UndoEntry::Inserted {
                 table: ord("blocks"),
                 key: Box::new(1u64.to_le_bytes()),
-                post: post_image(&[0xb0, 1]),
+                post: post_image(&candidate(1, [0; 32], Vec::new()).block.serialize()),
             },
             UndoEntry::Inserted {
                 table: ord("block_heights"),
@@ -261,9 +263,10 @@ fn an_unsealed_recording_refuses_the_commit_and_lands_nothing() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<(), TestErr> = store.write(|batch| {
         let recording = batch.record_undo(4);
+        let blob = candidate(4, [0; 32], Vec::new()).block.serialize();
         batch
             .open_insert_table(BLOCKS, PROBE_ROW)?
-            .insert(4, Raw::<BlockBody>::new(&[1u8]))?;
+            .insert(4, Raw::<BlockBody>::new(&blob))?;
         drop(recording);
         Ok(())
     });
@@ -365,7 +368,19 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     let path = tmp("undo-corrupt");
     let store = ChainStore::create(&path, EPOCH).expect("create");
 
-    plant_row(&store, 1, &[0xff, 0xff]);
+    drop(store);
+    // Garbage bytes cannot go through the crate handle: `check_row` refuses
+    // them as `RowIllFormed`. SI-7 is a file that already holds them.
+    {
+        let db = redb::Database::open(&path).expect("raw open");
+        let txn = db.begin_write().expect("raw write");
+        txn.open_table(UNDO_LOG)
+            .expect("t")
+            .insert(1, Encoded::forged(&[0xff, 0xff]))
+            .expect("plant");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
     let msg = replay_err(&store, 1);
     assert!(
         msg.starts_with("SI-7 violated: typed cell `undo_log` is undecodable"),
@@ -417,8 +432,8 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
 
     // An `Inserted` entry has no `prior` for `well_formed` to refuse, so an
     // entry naming an `Unshaped` table must be refused on the shape alone —
-    // before `remove` could reach the uninhabited `from_bytes` (PR #772
-    // review). `txs_prunable_tip` has no Rust writer at this layout.
+    // before `remove` could reach the uninhabited `from_bytes`.
+    // `txs_prunable_tip` has no Rust writer at this layout.
     let unshaped = UndoLog(vec![UndoEntry::Inserted {
         table: ordinal_of("txs_prunable_tip").expect("catalogued"),
         key: Box::new([0; 8]),

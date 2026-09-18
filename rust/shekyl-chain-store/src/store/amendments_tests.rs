@@ -20,9 +20,8 @@
 use redb::ReadableTableMetadata;
 use shekyl_chain_rules::RuleSetId;
 use shekyl_types::{BlockHeight, LongTermWeight};
-use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{candidate, facts, judge, spend, spend_with_pqc_auth};
+use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, spend_with_pqc_auth};
 use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -31,29 +30,6 @@ use crate::schema::{
     self, BLOCKS, BLOCK_BURN, BLOCK_INFO, CURVE_TREE_LEAVES, TXS_PQC_AUTH_HASH, TXS_PRUNABLE_TIP,
     UNDO_LOG,
 };
-
-/// Connect `listed` as consecutive blocks from genesis in one batch,
-/// handing each `facts(h, 0)`; returns the block hashes.
-fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
-    let mut hashes = Vec::new();
-    let mut previous = [0u8; 32];
-    let mut cands = Vec::new();
-    for (h, txs) in listed.iter().enumerate() {
-        let cand = candidate(h as u64, previous, txs.clone());
-        previous = cand.block.hash();
-        hashes.push(previous);
-        cands.push(cand);
-    }
-    let out: Result<(), TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        for (h, cand) in cands.into_iter().enumerate() {
-            batch.connect(judge(&view, cand)?, facts(h as u64, 0), RuleSetId::GENESIS)?;
-        }
-        Ok(())
-    });
-    out.expect("chain connects");
-    hashes
-}
 
 fn block_info(store: &ChainStore, height: u64) -> Option<BlockInfo> {
     let snap = store.begin_read().expect("read");
@@ -248,7 +224,7 @@ fn a_sealed_file_missing_a_sealed_table_is_refused_as_si7() {
 
 /// The version check comes **before** the seal-set check: a file at another
 /// version is *foreign*, not *corrupt*, and is named as such even where its
-/// table set would also fail the current seal's check (PR #772 review).
+/// table set would also fail the current seal's check.
 #[test]
 fn a_file_at_another_version_is_a_version_mismatch_not_a_missing_table() {
     let path = tmp("a2-version-before-seal-set");
@@ -285,7 +261,7 @@ fn a_file_at_another_version_is_a_version_mismatch_not_a_missing_table() {
 /// A file whose `properties` table was written under another value shape
 /// cannot be opened far enough to read its version: redb refuses the table
 /// type first. That is `StoreCannot::LayoutForeign`, not an engine error —
-/// §11.1(a)'s "older refuses too", one step earlier (PR #772 review).
+/// §11.1(a)'s "older refuses too", one step earlier.
 #[test]
 fn a_file_with_a_foreign_header_table_type_is_layout_foreign() {
     let path = tmp("a2-layout-foreign");

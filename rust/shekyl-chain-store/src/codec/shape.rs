@@ -19,7 +19,7 @@
 //! value side's statement, made once, so that the increments still ahead
 //! (S-ARCH, E3, E5) do not each answer it locally.
 //!
-//! A table's value is one of exactly three shapes:
+//! A **map** table's value is one of exactly four shapes:
 //!
 //! - [`Coded<V>`] — a value with a [`Canonical`] codec. The stored bytes
 //!   **are** `V::encode`, the digest's fold input (§11.1(b)); the
@@ -30,6 +30,10 @@
 //!   does not re-codec: a block body, a transaction segment. [`BlobKind`]
 //!   names the kind; the bytes are verified where they are read (a block
 //!   blob against the identity `block_info` records, `store/chain_reads.rs`).
+//! - [`Present`] — a set-table's value: the key is the fact, the value is
+//!   a zero-width witness that the key is a member. `spent_keys` is the
+//!   one catalogued instance. Named, so two set-tables cannot silently
+//!   share redb's `()` `TypeName`.
 //! - [`Unshaped`] — a table the LMDB census declares and no Rust writer
 //!   has reached. Its value type is uninhabited: the table is catalogued
 //!   (it has an ordinal) and dispatched to by the journal replay, which
@@ -39,7 +43,9 @@
 //!   increment that first writes the table replaces this shape with the
 //!   table's codec and bumps `SCHEMA_VERSION`.
 //!
-//! `&[u8]` is not a value type.
+//! `&[u8]` is not a value type. Multimap **members** are key types
+//! (`lmdb_order`) because redb types a member as a key: they carry
+//! ordering, not a codec.
 //!
 //! # Two guards, stated exactly
 //!
@@ -81,8 +87,9 @@
 //! wrong width. But `redb::Value::from_bytes` is a **public trait method**,
 //! so a caller can construct an `Encoded<V>` over any bytes — constructor
 //! visibility alone is not the guarantee. So every write through this
-//! crate's table handles checks the width first (`store::keyed::check_width`)
-//! and refuses as `StoreCannot::RowWidth`, and the journal replay runs
+//! crate's table handles checks the row first (`store::keyed::check_row`)
+//! and refuses as `StoreCannot::RowWidth` or `StoreCannot::RowIllFormed`,
+//! and the journal replay runs
 //! `V::decode` — exact width — as [`Restorable::well_formed`] before
 //! `from_bytes`. Reporting the width is a layout change from `&[u8]` (which
 //! is variable-width), not pure metadata; it rides the `SCHEMA_VERSION` bump
@@ -350,6 +357,48 @@ impl<K: BlobKind> Value for Blob<K> {
 }
 
 // ---------------------------------------------------------------------------
+// Present
+// ---------------------------------------------------------------------------
+
+/// The value shape of a set-table: the key is the member, the value is a
+/// zero-width witness (module docs).
+///
+/// Constructible only as the unit [`Present`]. `insert(key, Present)` is
+/// the write; a `()` would have been redb's untyped unit, sharing a
+/// `TypeName` with any other table that inherited it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Present;
+
+impl Value for Present {
+    type SelfType<'a> = Present;
+    type AsBytes<'a> = [u8; 0];
+
+    fn fixed_width() -> Option<usize> {
+        Some(0)
+    }
+
+    fn from_bytes<'a>(_data: &'a [u8]) -> Present
+    where
+        Self: 'a,
+    {
+        // Width is the engine's and this crate's write boundary; replay
+        // runs `Restorable::well_formed` (the width check) first.
+        Present
+    }
+
+    fn as_bytes<'a, 'b: 'a>(_value: &'a Present) -> [u8; 0]
+    where
+        Self: 'b,
+    {
+        []
+    }
+
+    fn type_name() -> TypeName {
+        TypeName::new("shekyl::Present")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unshaped
 // ---------------------------------------------------------------------------
 
@@ -480,5 +529,16 @@ mod tests {
             <Unshaped as Value>::type_name(),
             TypeName::new("shekyl::Unshaped")
         );
+    }
+
+    #[test]
+    fn present_is_zero_width_and_named() {
+        assert_eq!(<Present as Value>::fixed_width(), Some(0));
+        assert_eq!(
+            <Present as Value>::type_name(),
+            TypeName::new("shekyl::Present")
+        );
+        assert_eq!(<Present as Value>::as_bytes(&Present), [0u8; 0]);
+        assert_eq!(<Present as Value>::from_bytes(&[]), Present);
     }
 }

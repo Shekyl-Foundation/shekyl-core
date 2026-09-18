@@ -15,35 +15,13 @@
 use shekyl_chain_rules::{AtHeight, RuleSetId};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{candidate, facts, judge, spend};
+use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::Canonical;
 use crate::schema::{BLOCK_INFO, CURVE_TREE_ROOTS};
-
-fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
-    let mut hashes = Vec::new();
-    let mut previous = [0u8; 32];
-    let mut cands = Vec::new();
-    for (h, txs) in listed.iter().enumerate() {
-        let cand = candidate(h as u64, previous, txs.clone());
-        previous = cand.block.hash();
-        hashes.push(previous);
-        cands.push(cand);
-    }
-    let out: Result<(), TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        for (h, cand) in cands.into_iter().enumerate() {
-            batch.connect(judge(&view, cand)?, facts(h as u64, 0), RuleSetId::GENESIS)?;
-        }
-        Ok(())
-    });
-    out.expect("chain connects");
-    hashes
-}
 
 fn h(raw: u64) -> BlockHeight {
     BlockHeight::from_raw(raw)

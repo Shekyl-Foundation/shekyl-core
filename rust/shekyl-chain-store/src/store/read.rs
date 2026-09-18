@@ -46,7 +46,7 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
 use crate::codec::{BlockInfo, PropertyCell, TotalBurnedCell};
-use crate::lmdb_order::{Hash32, LmdbHashKey};
+use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES};
 
 use super::chain_reads;
@@ -79,7 +79,7 @@ pub struct TipState {
     /// caller may **not** rely on: an ordering between `at_height` and
     /// `recorded.height`. Another batch can pop below this snapshot's tip
     /// and then halt at the lower current height, so `at_height` may be
-    /// below `recorded` (PR #772 review).
+    /// below `recorded`.
     pub connect: ConnectState,
 }
 
@@ -259,7 +259,7 @@ impl<'store> ReadSnapshot<'store> {
     pub fn height_of(&self, hash: &BlockHash) -> Result<Option<BlockHeight>, StoreError> {
         let table = self.open_table(BLOCK_HEIGHTS)?;
         let Some(guard) = table
-            .get(LmdbHashKey::from(Hash32::from_bytes(*hash.as_bytes())))
+            .get(LmdbHashKey::from(*hash))
             .map_err(EngineError::Storage)?
         else {
             return Ok(None);
@@ -306,23 +306,9 @@ impl<'store> ReadSnapshot<'store> {
         range: core::ops::Range<BlockHeight>,
     ) -> Result<AtHeight<impl Iterator<Item = RangeItem<BlockInfo>> + '_>, StoreError> {
         let tip = self.tip_row()?;
-        let Some(clamped) = clamp_to_tip(&range, tip.as_ref().map(|(h, _)| *h)) else {
-            return Ok(AtHeight::AboveTip);
-        };
-        Ok(AtHeight::Recorded(clamped.map(move |h| {
-            match chain_reads::info_at(&self.txn, tip.as_ref(), h)
-                .map_err(chain_reads::ReadFault::into_plain)?
-            {
-                AtHeight::Recorded(info) => Ok((BlockHeight::from_raw(h), info)),
-                // Unreachable by construction — `clamp_to_tip` stopped at the
-                // tip — and said so rather than silently ending the iterator.
-                AtHeight::AboveTip => Err(StoreInvariant::CellCorrupt {
-                    key: "block_info",
-                    fault: CellFault::Absent,
-                }
-                .into()),
-            }
-        })))
+        Ok(range_at(&range, tip, "block_info", |tip, h| {
+            chain_reads::info_at(&self.txn, tip, h).map_err(chain_reads::ReadFault::into_plain)
+        }))
     }
 }
 
@@ -381,19 +367,9 @@ impl ReadSnapshot<'_> {
         range: core::ops::Range<BlockHeight>,
     ) -> Result<AtHeight<impl Iterator<Item = RangeItem<RecordedBlockBody>> + '_>, StoreError> {
         let tip = self.tip_row()?;
-        let Some(clamped) = clamp_to_tip(&range, tip.as_ref().map(|(h, _)| *h)) else {
-            return Ok(AtHeight::AboveTip);
-        };
-        Ok(AtHeight::Recorded(clamped.map(move |h| {
-            match body_at(&self.txn, tip.as_ref(), h)? {
-                AtHeight::Recorded(body) => Ok((BlockHeight::from_raw(h), body)),
-                AtHeight::AboveTip => Err(StoreInvariant::CellCorrupt {
-                    key: "blocks",
-                    fault: CellFault::Absent,
-                }
-                .into()),
-            }
-        })))
+        Ok(range_at(&range, tip, "blocks", |tip, h| {
+            body_at(&self.txn, tip, h)
+        }))
     }
 }
 
@@ -417,9 +393,9 @@ impl ReadSnapshot<'_> {
     /// the tip is [`AtHeight::AboveTip`].
     pub fn block_burn(&self, height: BlockHeight) -> Result<AtHeight<AtomicUnits>, StoreError> {
         let tip = self.tip_row()?;
-        match tip {
-            Some((tip, _)) if height.to_raw() <= tip => {}
-            _ => return Ok(AtHeight::AboveTip),
+        match chain_reads::class_of(tip.as_ref(), height.to_raw()) {
+            chain_reads::HeightClass::AboveTip => return Ok(AtHeight::AboveTip),
+            chain_reads::HeightClass::AtTip(_) | chain_reads::HeightClass::Below => {}
         }
         let burned = chain_reads::cell(&self.txn, BLOCK_BURN, height.to_raw(), "block_burn")
             .map_err(chain_reads::ReadFault::into_plain)?
@@ -488,13 +464,36 @@ fn body_at(
         match chain_reads::block_body(txn, tip, height)
             .map_err(chain_reads::ReadFault::into_plain)?
         {
-            AtHeight::Recorded((hash, block)) => AtHeight::Recorded(RecordedBlockBody {
-                hash: BlockHash::from_bytes(hash.to_bytes()),
-                block,
-            }),
+            AtHeight::Recorded((hash, block)) => {
+                AtHeight::Recorded(RecordedBlockBody { hash, block })
+            }
             AtHeight::AboveTip => AtHeight::AboveTip,
         },
     )
+}
+
+/// R4 / R7: clamp `range` to the dense tip and yield each height's read.
+/// `AboveTip` from `at` inside the clamped range is a hole (SI-7) — the
+/// clamp already excluded heights above the tip.
+fn range_at<'a, T>(
+    range: &core::ops::Range<BlockHeight>,
+    tip: Option<(u64, BlockInfo)>,
+    cell: &'static str,
+    mut at: impl FnMut(Option<&(u64, BlockInfo)>, u64) -> Result<AtHeight<T>, StoreError> + 'a,
+) -> AtHeight<impl Iterator<Item = RangeItem<T>> + 'a> {
+    let Some(clamped) = clamp_to_tip(range, tip.as_ref().map(|(h, _)| *h)) else {
+        return AtHeight::AboveTip;
+    };
+    AtHeight::Recorded(clamped.map(move |h| {
+        match at(tip.as_ref(), h)? {
+            AtHeight::Recorded(v) => Ok((BlockHeight::from_raw(h), v)),
+            AtHeight::AboveTip => Err(StoreInvariant::CellCorrupt {
+                key: cell,
+                fault: CellFault::Absent,
+            }
+            .into()),
+        }
+    }))
 }
 
 /// The heights of `range` that are at or below `tip`, or `None` when

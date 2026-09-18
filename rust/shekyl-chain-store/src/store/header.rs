@@ -124,7 +124,7 @@ pub(super) fn verify(
         }
         // The header table's stored type is not this layout's (§11.1(f)
         // moved it): a file from another layout, refused one step before
-        // the version cell could say which (PR #772 review).
+        // the version cell could say which.
         Err(redb::TableError::TableTypeMismatch { .. }) => {
             return Err(StoreCannot::LayoutForeign {
                 expected: SCHEMA_VERSION,
@@ -135,7 +135,7 @@ pub(super) fn verify(
     };
     // Version before table set: a file at another version is *foreign*,
     // not *corrupt*, and must be named as such even where its table set
-    // would also fail the current seal's check (PR #772 review).
+    // would also fail the current seal's check.
     let found = get::<SchemaVersionCell>(&table)?.ok_or(StoreCannot::SchemaVersionAbsent)?;
     if found != SCHEMA_VERSION {
         return Err(StoreCannot::SchemaVersionMismatch {

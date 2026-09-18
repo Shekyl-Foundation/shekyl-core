@@ -9,53 +9,25 @@
 //! poisoned connect or pop, refusing every later write while reads stay
 //! open, and NOT latched by a violation in a batch that connected nothing.
 
-use redb::{ReadableTable, ReadableTableMetadata};
-use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
+use redb::ReadableTableMetadata;
+use shekyl_chain_rules::RuleSetId;
 use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
-use super::connect_fixtures::{candidate, facts, spend};
+use super::connect_fixtures::{candidate, connect_chain_with_burn, facts, judge, spend};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
-use super::view::BatchView;
 use super::*;
 use crate::codec::{BlockBody, Canonical, Encoded, Raw, TotalBurnedCell};
 use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS, UNDO_LOG};
 
-fn judge<'b, 'id>(
-    view: &BatchView<'b, 'id>,
-    candidate: Candidate,
-) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    Ok(validate(candidate, view, &RuleSet::GENESIS)?
-        .expect("the fixtures satisfy every landed rule"))
-}
-
-/// Connect `blocks` (genesis first) in one batch; returns each block's hash.
 fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
-    let mut hashes = Vec::new();
-    let mut previous = [0u8; 32];
-    let mut cands = Vec::new();
-    for (h, txs) in listed.iter().enumerate() {
-        let cand = candidate(h as u64, previous, txs.clone());
-        previous = cand.block.hash();
-        hashes.push(previous);
-        cands.push(cand);
-    }
-    let out: Result<(), TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        for (h, cand) in cands.into_iter().enumerate() {
-            batch.connect(judge(&view, cand)?, facts(h as u64, 3), RuleSetId::GENESIS)?;
-        }
-        Ok(())
-    });
-    out.expect("chain connects");
-    hashes
+    connect_chain_with_burn(store, listed, 3)
 }
 
 fn tip_height(store: &ChainStore) -> Option<u64> {
     let snap = store.begin_read().expect("read");
-    let table = snap.open_table(BLOCK_INFO).ok()?;
-    table.last().expect("last").map(|(h, _)| h.value())
+    snap.tip().expect("tip").recorded.map(|t| t.height.to_raw())
 }
 
 #[test]
@@ -247,10 +219,11 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
     connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
     // Write around the journal: overwrite `blocks[1]` through an upsert
     // handle in a batch that records nothing.
+    let impostor = candidate(1, [0x77; 32], Vec::new()).block.serialize();
     let around: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_upsert_table(BLOCKS)?
-            .upsert(1, Raw::<BlockBody>::new(&[0xde, 0xad]))?;
+            .upsert(1, Raw::<BlockBody>::new(&impostor))?;
         Ok(())
     });
     around.expect("the unjournaled overwrite lands");
@@ -287,7 +260,7 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
             .get(1)
             .expect("g")
             .map(|g| g.value().bytes().to_vec()),
-        Some(vec![0xde, 0xad])
+        Some(impostor)
     );
     cleanup(&path);
 }

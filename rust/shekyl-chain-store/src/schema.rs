@@ -54,7 +54,7 @@
 //!
 //! # Value types
 //!
-//! Every value is one of three named shapes (`codec::shape`;
+//! Every **map** value is one of four named shapes (`codec::shape`;
 //! `DAEMON_REDB_STORE.md` §11.1(f)) — `&[u8]` is not a value type:
 //!
 //! - [`Coded<V>`] — rows are `V::encode` under a [`Canonical`] codec; the
@@ -65,11 +65,16 @@
 //! - [`Blob<K>`] — wire bytes the chain encodes and this crate does not
 //!   re-codec (`blocks`, the tx segments, `properties`' per-key cells);
 //!   [`BlobKind`] names the kind.
+//! - [`Present`] — a set-table: the key is the member, the value is a
+//!   zero-width witness (`spent_keys`).
 //! - [`Unshaped`] — a censused table no Rust writer has reached. Its row
 //!   type is uninhabited: catalogued (it has an ordinal), refused by the
 //!   journal replay, **not seal-created** (`Restorable::SEALED = false`),
 //!   **not insertable**. The increment that first writes the
 //!   table replaces this with its codec and bumps `SCHEMA_VERSION`.
+//!
+//! Multimap members (`output_amounts`) are key types: redb types a member
+//! as a key, so they carry LMDB order, not a codec.
 //!
 //! Keys are typed for **ordering** (`lmdb_order`); values for **codec**.
 //! Both are checked by redb at `open_table` (`TypeName`), which covers a
@@ -82,6 +87,7 @@
 //!
 //! [`Canonical`]: crate::codec::Canonical
 //! [`BlobKind`]: crate::codec::BlobKind
+//! [`Present`]: crate::codec::Present
 //!
 //! # The catalogue is the declaration
 //!
@@ -117,7 +123,7 @@
 //! who finds "bumped for a removal" in the history is looking at this
 //! sentence's consequence, not over-caution.
 //!
-//! Two tables have no X-macro twin (`DRS_E1_SCHAIN_W.md` §5, SCW-11):
+//! Two tables have no X-macro twin (`docs/completed/DRS_E1_SCHAIN_W.md` §5, SCW-11):
 //! `undo_log`, the first, and `txs_pqc_auth_hash`, the second (S-CHAIN-R
 //! amendment A3, `PDM-Q-F26`). Each is declared in [`RUST_ONLY_TABLES`] with
 //! the reason it exists, and the bijection gate reads that map: a definition
@@ -143,7 +149,7 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash};
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    Blob, BlockBody, BlockInfo, Coded, OutTx, PropertyCellBytes, TxIndex, TxOutputIndices,
+    Blob, BlockBody, BlockInfo, Coded, OutTx, Present, PropertyCellBytes, TxIndex, TxOutputIndices,
     TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
 };
 use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
@@ -354,7 +360,8 @@ tables! {
         MultimapTableDefinition::new("output_amounts");
 
     /// `spent_keys` — zerokval collapse: dup key image (`compare_hash32`) becomes the key.
-    pub const SPENT_KEYS: TableDefinition<LmdbHashKey, ()> = TableDefinition::new("spent_keys");
+    /// A set-table: the key is the member; [`Present`] is the zero-width witness.
+    pub const SPENT_KEYS: TableDefinition<LmdbHashKey, Present> = TableDefinition::new("spent_keys");
 
     /// `txpool_meta` — key order `compare_hash32`.
     pub const TXPOOL_META: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("txpool_meta");
@@ -497,8 +504,10 @@ tables! {
     /// the txid's third component, `keccak256(varint(count) ‖ auths)`, for
     /// every 4-part transaction (`PDM-Q-F26`; S-CHAIN-R amendment A3). Row
     /// present ⇔ txid 4-part, written by `connect` beside
-    /// `txs_prunable_hash`, **never deleted** — a row without its
-    /// `txs_pqc_auths` segment is *discarded*, not a fault. Appended last
+    /// `txs_prunable_hash`. A prune of the `txs_pqc_auths` segment does
+    /// **not** delete this digest — a row without its segment is
+    /// *discarded*, not a fault (`PDM-Q-F26` leg 3). `pop` reverses the
+    /// journaled insert with the rest of the block. Appended last
     /// (ordinal 50).
     pub const TXS_PQC_AUTH_HASH: TableDefinition<u64, Coded<PqcAuthHash>> =
         TableDefinition::new("txs_pqc_auth_hash");

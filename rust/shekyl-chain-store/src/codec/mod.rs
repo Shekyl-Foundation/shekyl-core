@@ -62,7 +62,7 @@ pub use property::{
 };
 pub use schema_version::{SchemaVersion, SCHEMA_VERSION};
 pub use settlement_epoch::SettlementEpochBlocks;
-pub use shape::{Blob, BlobKind, Coded, Encoded, EncodedBuf, NoRow, Raw, Unshaped};
+pub use shape::{Blob, BlobKind, Coded, Encoded, EncodedBuf, NoRow, Present, Raw, Unshaped};
 pub use undo::{post_image, UndoEntry, UndoLog, POST_IMAGE_DST};
 
 /// A value with exactly one byte encoding.

@@ -2177,7 +2177,10 @@ increment that touches it). Stated once, in `codec::shape`:
   forbids reusing for a different layout; `tables.snap` pins the string.
   **`Blob<K>`** — wire bytes the chain itself encodes and the store does not
   re-codec (`blocks`, the three tx segments, `properties`' per-key cells);
-  `BlobKind` names the kind and says what well-formed is. **`Unshaped`** — a
+  `BlobKind` names the kind and says what well-formed is. **`Present`** — a
+  set-table's value: the key is the member, the value is a zero-width
+  witness (`spent_keys`; `TypeName` `shekyl::Present`, SCHEMA_VERSION 5).
+  **`Unshaped`** — a
   censused table no Rust writer has reached; its row type is uninhabited, so
   the table is catalogued (it has an ordinal) and refused by the journal
   replay, but it is **not** created by the seal (`Restorable::SEALED` is
@@ -2185,7 +2188,7 @@ increment that touches it). Stated once, in `codec::shape`:
   yet" is a fact of the type. The increment
   that first writes such a table replaces `Unshaped` with the table's codec
   and bumps `SCHEMA_VERSION`. At the ruling: 15 tables `Coded`/`Blob`, 33
-  `Unshaped`, plus `spent_keys`' `()` and `output_amounts`' order-bearing
+  `Unshaped`, `spent_keys` as `Present`, and `output_amounts`' order-bearing
   multimap member (a key type, `lmdb_order`). Scalar-valued tables take the
   domain newtype where one exists (`BlockHeight`, `RuleSetId`,
   `PrunableHash`) and a named column codec where none does (`BlockBurn`); the
@@ -2201,10 +2204,12 @@ increment that touches it). Stated once, in `codec::shape`:
   type: a `Coded<V>` table yields `Encoded<'_, V>` from every read and accepts
   only `Encoded<'_, V>` on every write. The **ergonomic** constructor is
   `Canonical::encoded`; but `redb::Value::from_bytes` is a public trait
-  method, so constructor visibility is not the guarantee (PR #772 review) —
+  method, so constructor visibility is not the guarantee —
   the guarantee is the **insertion boundary**: every write through the
-  crate's table handles checks a fixed-width shape's declared width first
-  (`store::keyed::check_width`) and refuses as `StoreCannot::RowWidth`, a
+  crate's table handles runs `Restorable::well_formed` first
+  (`store::keyed::check_row`) and refuses as `StoreCannot::RowWidth` (wrong
+  declared width) or `StoreCannot::RowIllFormed` (a variable-width codec
+  that does not decode, a blob that does not parse), a
   value, where the engine would have asserted. `chain_reads::cell` infers
   `V` from the `TableDefinition<u64, Coded<V>>` it reads; table identity and
   codec identity are one inference.

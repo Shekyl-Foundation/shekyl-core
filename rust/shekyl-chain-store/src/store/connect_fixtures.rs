@@ -158,6 +158,39 @@ pub(super) fn judge<'b, 'id>(
 
 pub(super) const GENESIS_ID: RuleSetId = RuleSetId::GENESIS;
 
+/// Connect `listed` as consecutive blocks from genesis in one batch,
+/// handing each `facts(h, 0)`. Returns each block's hash.
+pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
+    connect_chain_with_burn(store, listed, 0)
+}
+
+/// [`connect_chain`] with a uniform per-block `burned` fact (pop tests
+/// fold a non-zero burn so they can assert the pre-image on pop).
+pub(super) fn connect_chain_with_burn(
+    store: &ChainStore,
+    listed: &[Vec<Transaction>],
+    burned: u64,
+) -> Vec<[u8; 32]> {
+    let mut hashes = Vec::new();
+    let mut previous = [0u8; 32];
+    let mut cands = Vec::new();
+    for (h, txs) in listed.iter().enumerate() {
+        let cand = candidate(h as u64, previous, txs.clone());
+        previous = cand.block.hash();
+        hashes.push(previous);
+        cands.push(cand);
+    }
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        for (h, cand) in cands.into_iter().enumerate() {
+            batch.connect(judge(&view, cand)?, facts(h as u64, burned), GENESIS_ID)?;
+        }
+        Ok(())
+    });
+    out.expect("chain connects");
+    hashes
+}
+
 pub(super) fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Block) {
     let cand = candidate(0, [0; 32], Vec::new());
     let block = cand.block.clone();

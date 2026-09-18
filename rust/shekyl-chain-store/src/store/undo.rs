@@ -51,7 +51,7 @@ use redb::{
 };
 
 use crate::codec::{
-    post_image, Blob, BlobKind, Canonical, CodecError, Coded, UndoEntry, UndoLog, Unshaped,
+    post_image, Blob, BlobKind, Canonical, CodecError, Coded, Present, UndoEntry, UndoLog, Unshaped,
 };
 use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
 use crate::schema::{self, UNDO_LOG};
@@ -61,15 +61,15 @@ use super::write::Poison;
 
 /// A stored type whose bytes can be checked before `Value::from_bytes`.
 ///
-/// Implemented for exactly the key types `schema.rs` uses and the three
-/// value shapes (`codec::shape`); a table declared over a type without
+/// Implemented for exactly the key types `schema.rs` uses and the four
+/// map-value shapes (`codec::shape`); a table declared over a type without
 /// this impl does not compile into `UNDO_TARGETS`, so a table the journal
 /// could not safely replay is a build error. The default is the
 /// fixed-width check, which is what every panicking `from_bytes` among
-/// the keys (`u64`, `LmdbHashKey`, `()`) needs; `&str` adds UTF-8; the
+/// the keys (`u64`, `LmdbHashKey`, [`Present`]) needs; `&str` adds UTF-8; the
 /// byte-string key accepts anything. A `Coded<V>` row is checked by
 /// `V::decode` itself — the same strict decode the read path runs.
-pub(crate) trait Restorable: Value {
+pub trait Restorable: Value {
     /// Whether a table over this value type has a writer and is therefore
     /// **created by the seal** (S-CHAIN-R amendment A2). `true` for every
     /// shape but [`Unshaped`]: the seal set is derived from the value
@@ -88,16 +88,17 @@ pub(crate) trait Restorable: Value {
 
 // Key types (and the multimap member, which redb types as a key).
 impl Restorable for u64 {}
-impl Restorable for () {}
 impl Restorable for LmdbHashKey {}
 impl Restorable for &[u8] {}
 impl Restorable for U64PrefixBytes {}
 
-// The three value shapes (`codec::shape`). A codec row is well-formed iff
+// The four map-value shapes (`codec::shape`). A codec row is well-formed iff
 // it decodes — strictly, under its own codec, which is a stronger check
 // than the width the default performs and the one the read path makes; a
-// blob row iff its kind says so; an unshaped table has no rows at all, so
-// a journal entry naming one is malformed by construction.
+// blob row iff its kind says so; a set-table row iff it is zero-width; an
+// unshaped table has no rows at all, so a journal entry naming one is
+// malformed by construction.
+impl Restorable for Present {}
 impl<V: Canonical + 'static> Restorable for Coded<V> {
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
         V::decode(bytes)
@@ -220,8 +221,8 @@ where
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
         // An `Unshaped` table has no writer, so no journal row can name it
         // honestly; refuse before `remove` could reach the uninhabited
-        // `from_bytes` (PR #772 review — `well_formed` alone guards only
-        // `prior`, and an `Inserted` entry has none).
+        // `from_bytes`. `well_formed` alone guards only `prior`, and an
+        // `Inserted` entry has none.
         if !V::SEALED {
             return Ok(Undone::Malformed("journal entry names an unshaped table"));
         }

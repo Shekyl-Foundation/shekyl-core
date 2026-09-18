@@ -47,7 +47,10 @@ use super::{Canonical, CodecError};
 ///   **A3** `txs_pqc_auth_hash` (`TableOrdinal` 50, the second Rust-only
 ///   table; `PDM-Q-F26`). Row fixtures move for `block_info` and
 ///   `passed_through_facts`; the catalogue gains a row.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(4);
+/// - `5` — `spent_keys` value is [`Present`](super::Present) (`shekyl::Present`),
+///   not redb's `()`. Completes §11.1(f): every map value is a named shape.
+///   Zero stored bytes change; the `TypeName` is a layout change.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(5);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -104,10 +107,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(4));
-        assert_eq!(SCHEMA_VERSION.encode(), [4, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(5));
+        assert_eq!(SCHEMA_VERSION.encode(), [5, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[4, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[5, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

@@ -68,7 +68,7 @@ use core::marker::PhantomData;
 
 use redb::{
     Key, MultimapTableDefinition, MultimapTableHandle, ReadableTable, TableDefinition, TableHandle,
-    Value, WriteTransaction,
+    WriteTransaction,
 };
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
@@ -80,7 +80,7 @@ use super::header;
 use super::keyed::{Handles, InsertTable, UpsertTable};
 use super::set::SetTable;
 use super::shared::Shared;
-use super::undo::{self, Journal, Recording, Replayed};
+use super::undo::{self, Journal, Recording, Replayed, Restorable};
 use super::view::BatchView;
 
 /// The batch's fatal latch.
@@ -294,8 +294,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         row: StoreInvariant,
     ) -> Result<InsertTable<'txn, K, V>, StoreError>
     where
-        K: Key + 'static,
-        V: Value + 'static,
+        K: Key + Restorable + 'static,
+        V: Restorable + 'static,
     {
         self.admit(definition.name())?;
         let handles = self.handles(definition.name());
@@ -335,8 +335,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         definition: TableDefinition<'_, K, V>,
     ) -> Result<UpsertTable<'txn, K, V>, StoreError>
     where
-        K: Key + 'static,
-        V: Value + 'static,
+        K: Key + Restorable + 'static,
+        V: Restorable + 'static,
     {
         self.admit(definition.name())?;
         let handles = self.handles(definition.name());
@@ -363,8 +363,8 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         definition: MultimapTableDefinition<'_, K, V>,
     ) -> Result<SetTable<'txn, K, V>, StoreError>
     where
-        K: Key + 'static,
-        V: Key + 'static,
+        K: Key + Restorable + 'static,
+        V: Key + Restorable + 'static,
     {
         self.admit(definition.name())?;
         let handles = self.handles(definition.name());

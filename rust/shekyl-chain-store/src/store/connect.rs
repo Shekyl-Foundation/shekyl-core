@@ -76,7 +76,7 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
     stored_timelock, BlockBody, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx,
-    PassedThroughFacts, PropertyCell, Raw, TotalBurnedCell, TxIndex, TxOutputIndices,
+    PassedThroughFacts, Present, PropertyCell, Raw, TotalBurnedCell, TxIndex, TxOutputIndices,
     TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
@@ -480,7 +480,7 @@ impl<'id> WriteBatch<'_, 'id> {
         let mut spent = self.open_insert_table(SPENT_KEYS, StoreInvariant::KeyImageNotFresh)?;
         for input in &tx.prefix.inputs {
             if let Input::ToKey { key_image, .. } = input {
-                spent.insert(LmdbHashKey::from_bytes(*key_image), ())?;
+                spent.insert(LmdbHashKey::from_bytes(*key_image), Present)?;
             }
         }
         drop(spent);
