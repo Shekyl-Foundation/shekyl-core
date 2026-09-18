@@ -409,9 +409,10 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
 /// commit even when the closure swallows the fault. Planted on the surface
 /// where a corrupt row is still **representable**: a `blocks` blob that does
 /// not parse. It used to be planted as a 3-byte `block_info` row; under
-/// §11.1(f) `block_info` is `Coded<BlockInfo>`, fixed-width 88, and redb
-/// holds that width at insert — a wrong-width `block_info` row cannot reach
-/// the file (`a_wrong_width_row_cannot_reach_a_coded_table` below), so its
+/// §11.1(f) `block_info` is `Coded<BlockInfo>`, fixed-width 104, and the
+/// crate refuses a wrong width before redb would assert it — a wrong-width
+/// `block_info` row cannot reach
+/// the file (`a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table` below), so its
 /// `Undecodable` arm has no instance to pin.
 #[test]
 fn a_corrupt_row_read_through_the_view_is_si7_and_poisons_the_batch() {
@@ -621,26 +622,26 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
 }
 
 /// §11.1(f): a `Coded<V>` table reports `V::FIXED_WIDTH` to the engine, and
-/// the engine **holds** it — `LeafBuilder::append` asserts the width of
-/// every fixed-width value it lays down (redb 4.1 `btree_base.rs`). So the
+/// the engine **asserts** it in `LeafBuilder::append` (redb 4.1
+/// `btree_base.rs`) — a panic that poisons the transaction lock. So the
 /// scenario this test used to pin — `block_info[tip]` rewritten to 87 bytes,
 /// then SI-7 `Undecodable` on every classified read (the PR #764 review's
 /// case) — has **no representable instance**: the bytes never reach the
 /// file. The tightening it motivated stands (`chain_reads` module docs, *The
 /// tip is one decoded read*); what changed is that `BlockInfo`, whose codec
-/// checks only width, can no longer be undecodable in a file redb accepted.
-/// This test pins the fact that replaced the scenario: the wrong-width write
-/// is refused.
+/// checks only width (now 104 bytes), can no longer be undecodable in a file
+/// redb accepted.
 ///
-/// Refused by **panic**, and the panic poisons the engine's transaction
-/// lock, so the handle is unusable afterwards (dropping it panics again).
-/// That is not a test artefact; it is what the engine does, and it is why
-/// the width must be unreachable in production rather than merely checked:
-/// `Encoded` is constructible only from `V::encode`, whose width the
-/// snapshot gate holds, and the journal replay runs `V::decode` before
-/// `from_bytes`. The only door past that is `Encoded::forged`, `cfg(test)`.
+/// This test pins what replaced the scenario: the wrong-width write is
+/// refused **by this crate, as a value**, before the engine's assertion.
+/// `Canonical::encoded` cannot produce it, but redb's `Value::from_bytes` is
+/// a public trait method and can (`Encoded::forged` is that path under
+/// `cfg(test)`), so every write through the crate's handles checks the
+/// width first (`keyed::check_width`) and returns `StoreCannot::RowWidth`.
+/// Nothing lands, nothing panics, and the store is still usable afterwards
+/// (PR #772 review: the earlier form of this test leaked a poisoned handle).
 #[test]
-fn a_wrong_width_row_cannot_reach_a_coded_table() {
+fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
     let path = tmp("view-wrong-width");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let planted: Result<(), TestErr> = store.write(|batch| {
@@ -649,20 +650,33 @@ fn a_wrong_width_row_cannot_reach_a_coded_table() {
         Ok(())
     });
     planted.expect("plant");
-    drop(store);
-    let db = redb::Database::open(&path).expect("raw open");
-    let txn = db.begin_write().expect("raw write");
-    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut infos = txn.open_table(BLOCK_INFO).expect("block_info");
-        infos.insert(1, Encoded::forged(&[0xee; 87])).map(drop)
-    }));
-    assert!(
-        refused.is_err(),
-        "87 bytes into a fixed-width-88 table must be refused by the engine"
-    );
-    // The engine's lock is poisoned by its own panic; a drop would panic
-    // again. Leak the dead handle — the file is removed below regardless.
-    core::mem::forget(txn);
-    core::mem::forget(db);
+    let refused: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_upsert_table(BLOCK_INFO)?
+            .upsert(1, Encoded::forged(&[0xee; 103]))?;
+        Ok(())
+    });
+    let expected = StoreError::from(StoreCannot::RowWidth {
+        table: "block_info",
+        expected: BlockInfo::FIXED_WIDTH.expect("fixed"),
+        actual: 103,
+    })
+    .to_string();
+    assert_eq!(refused, Err(TestErr::Store(expected)));
+    // The refused write left nothing behind, and the writer is not halted:
+    // a caller error is a refusal (`StoreCannot`), not an invariant.
+    assert_eq!(store.connect_state(), ConnectState::Live);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let AtHeight::Recorded(recorded) = batch
+            .chain_view()
+            .block_at(BlockHeight::from_raw(1))
+            .expect("block_at(1)")
+        else {
+            panic!("height 1 is recorded");
+        };
+        assert_eq!(recorded.hash, BlockHash::from_bytes(block(1, 1_060).hash()));
+        Ok(())
+    });
+    assert_eq!(out, Ok(()), "the recorded rows are as they were");
     cleanup(&path);
 }

@@ -1010,8 +1010,12 @@ connect (the hazard `blockchain.cpp:2735` warns about in prose).
   Option<Tip>, connect: ConnectState }` — `Tip` is the rules crate's one
   definition; `connect` sits **outside** the `Option` because a genesis
   connect that halts has nothing recorded and a halt to report (SCR-18), and
-  is read after `begin_read`, sound because the halt is monotonic. `None`
-  replaces the C++'s three empty-chain sentinels and one underflow (SCR-4).
+  is read after `begin_read` as the writer's **current** state — `Halted`
+  means halted now, and the halt is monotonic so a snapshot never shows a
+  tip a halting write produced; but `at_height` carries no ordering against
+  the snapshot's tip (a pop below it and a halt at the lower height is
+  possible; PR #772 review). `None` replaces the C++'s three empty-chain
+  sentinels and one underflow (SCR-4).
 - **Absence is classified, never a value.** By-height reads return
   `AtHeight<T>`: `AboveTip` only above the dense tip; a `block_info` or
   `blocks` row missing at or below it is SI-7 `CellCorrupt { Absent }` —
@@ -2168,14 +2172,17 @@ each increment ahead (S-ARCH, E3, E5) would have answered the question locally
 increment that touches it). Stated once, in `codec::shape`:
 
 - A value is one of exactly three shapes. **`Coded<V>`** — rows are
-  `V::encode` under a `Canonical` codec, `TypeName` = `V::NAME` (which the
-  codec contract already forbids reusing for a different layout).
+  `V::encode` under a `Canonical` codec, `TypeName` = `shekyl::Coded<{V::NAME}>`
+  — the wrapper's name carrying the codec's, which the codec contract already
+  forbids reusing for a different layout; `tables.snap` pins the string.
   **`Blob<K>`** — wire bytes the chain itself encodes and the store does not
   re-codec (`blocks`, the three tx segments, `properties`' per-key cells);
   `BlobKind` names the kind and says what well-formed is. **`Unshaped`** — a
   censused table no Rust writer has reached; its row type is uninhabited, so
-  the table can be sealed, catalogued and journal-replayed (to a refusal) but
-  **not inserted into**: "no writer yet" is a fact of the type. The increment
+  the table is catalogued (it has an ordinal) and refused by the journal
+  replay, but it is **not** created by the seal (`Restorable::SEALED` is
+  `false` for exactly this shape) and cannot be inserted into: "no writer
+  yet" is a fact of the type. The increment
   that first writes such a table replaces `Unshaped` with the table's codec
   and bumps `SCHEMA_VERSION`. At the ruling: 15 tables `Coded`/`Blob`, 33
   `Unshaped`, plus `spent_keys`' `()` and `output_amounts`' order-bearing
@@ -2192,10 +2199,15 @@ increment that touches it). Stated once, in `codec::shape`:
   a correctly opened table. **Codec confusion** — decoding a row under the
   wrong codec, inserting bytes of the wrong codec — is closed by the Rust
   type: a `Coded<V>` table yields `Encoded<'_, V>` from every read and accepts
-  only `Encoded<'_, V>` on every write, and the only constructor outside the
-  codec module is `Canonical::encoded`. `chain_reads::cell` infers `V` from
-  the `TableDefinition<u64, Coded<V>>` it reads; table identity and codec
-  identity are one inference.
+  only `Encoded<'_, V>` on every write. The **ergonomic** constructor is
+  `Canonical::encoded`; but `redb::Value::from_bytes` is a public trait
+  method, so constructor visibility is not the guarantee (PR #772 review) —
+  the guarantee is the **insertion boundary**: every write through the
+  crate's table handles checks a fixed-width shape's declared width first
+  (`store::keyed::check_width`) and refuses as `StoreCannot::RowWidth`, a
+  value, where the engine would have asserted. `chain_reads::cell` infers
+  `V` from the `TableDefinition<u64, Coded<V>>` it reads; table identity and
+  codec identity are one inference.
 - **The decode path did not move.** `redb::Value::from_bytes` is infallible —
   every typed impl in the tree panics on malformed input — so decoding inside
   the engine would have turned `CodecError → SI-7 → halted writer` into a
@@ -2207,10 +2219,12 @@ increment that touches it). Stated once, in `codec::shape`:
   (4.1.0 `btree_base.rs:884`) — a panic, not a `Result`, and it poisons the
   transaction lock. Reporting `None` would have been a second width
   declaration that could drift from the codec's snapshot-pinned one, the
-  thing (b) exists to prevent; reporting it is *sound* only because the guard
-  above makes wrong-width bytes unreachable — the only bytes redb receives for
-  a `Coded<V>` came out of `V::encode`, and the journal replay runs `V::decode`
-  as `Restorable::well_formed` before `from_bytes`. Two consequences: this is
+  thing (b) exists to prevent; reporting it is *sound* because two boundaries
+  keep the assertion unreachable — the write boundary above refuses a
+  wrong-width value before the engine sees it, and the journal replay runs
+  `V::decode` as `Restorable::well_formed` before `from_bytes` (and refuses an
+  `Unshaped` target outright, since an `Inserted` entry has no `prior` for
+  `well_formed` to check). Two consequences: this is
   a leaf-page layout change from `&[u8]` (variable-width), paid by the bump
   the commit already owed; and for a fixed-width codec whose only check is
   its width (`BlockInfo`, `CurveRoot`, the scalars) an *undecodable* row is

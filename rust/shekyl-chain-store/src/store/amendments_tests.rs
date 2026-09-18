@@ -235,14 +235,80 @@ fn a_sealed_file_missing_a_sealed_table_is_refused_as_si7() {
         .to_string(),
         "the missing table is named as the cell"
     );
-    // Not a version or schedule problem: those checks come after the table
-    // set, so a file this store did not write is named for what it is.
+    // Not a version or schedule problem: the version cell was current, so
+    // the table set is what is wrong, and the file is named for that.
     assert!(!matches!(
         refused,
         StoreError::Cannot(
             StoreCannot::SchemaVersionAbsent | StoreCannot::SchemaVersionMismatch { .. }
         )
     ));
+    cleanup(&path);
+}
+
+/// The version check comes **before** the seal-set check: a file at another
+/// version is *foreign*, not *corrupt*, and is named as such even where its
+/// table set would also fail the current seal's check (PR #772 review).
+#[test]
+fn a_file_at_another_version_is_a_version_mismatch_not_a_missing_table() {
+    let path = tmp("a2-version-before-seal-set");
+    ChainStore::create(&path, EPOCH).expect("create");
+    {
+        let db = redb::Database::open(&path).expect("raw open");
+        let txn = db.begin_write().expect("raw write");
+        // Both at once: the version cell says v3, and a v4-sealed table is
+        // gone. The refusal must name the version.
+        txn.open_table(crate::schema::PROPERTIES)
+            .expect("properties")
+            .insert(
+                <crate::codec::SchemaVersionCell as crate::codec::PropertyCell>::KEY,
+                crate::codec::Raw::<crate::codec::PropertyCellBytes>::new(
+                    &crate::codec::SchemaVersion::new(3).encode(),
+                ),
+            )
+            .expect("rewrite version");
+        assert!(txn.delete_table(TXS_PQC_AUTH_HASH).expect("delete"));
+        txn.commit().expect("commit");
+    }
+    let refused = ChainStore::create(&path, EPOCH).expect_err("verify refuses");
+    assert!(
+        matches!(
+            refused,
+            StoreError::Cannot(StoreCannot::SchemaVersionMismatch { found, .. })
+                if found == crate::codec::SchemaVersion::new(3)
+        ),
+        "{refused}"
+    );
+    cleanup(&path);
+}
+
+/// A file whose `properties` table was written under another value shape
+/// cannot be opened far enough to read its version: redb refuses the table
+/// type first. That is `StoreCannot::LayoutForeign`, not an engine error —
+/// §11.1(a)'s "older refuses too", one step earlier (PR #772 review).
+#[test]
+fn a_file_with_a_foreign_header_table_type_is_layout_foreign() {
+    let path = tmp("a2-layout-foreign");
+    {
+        // A `properties` table under the pre-§11.1(f) shape, with nothing
+        // else: the raw engine writes what this store never will.
+        const OLD: redb::TableDefinition<&str, &[u8]> = redb::TableDefinition::new("properties");
+        let db = redb::Database::create(&path).expect("raw create");
+        let txn = db.begin_write().expect("raw write");
+        txn.open_table(OLD)
+            .expect("old-shaped properties")
+            .insert("schema_version", 2u64.to_le_bytes().as_slice())
+            .expect("v2 cell");
+        txn.commit().expect("commit");
+    }
+    let refused = ChainStore::create(&path, EPOCH).expect_err("verify refuses");
+    assert_eq!(
+        refused.to_string(),
+        StoreError::from(StoreCannot::LayoutForeign {
+            expected: crate::codec::SCHEMA_VERSION,
+        })
+        .to_string()
+    );
     cleanup(&path);
 }
 

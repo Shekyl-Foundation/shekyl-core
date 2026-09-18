@@ -23,16 +23,19 @@
 //!
 //! - [`Coded<V>`] — a value with a [`Canonical`] codec. The stored bytes
 //!   **are** `V::encode`, the digest's fold input (§11.1(b)); the
-//!   `TypeName` is `V::NAME`, which the codec contract already forbids
-//!   reusing for a different layout.
+//!   `TypeName` is `shekyl::Coded<{V::NAME}>` — the wrapper's name carrying
+//!   the codec's, which the codec contract already forbids reusing for a
+//!   different layout (`tables.snap` pins the exact string).
 //! - [`Blob<K>`] — wire bytes the chain itself encodes and that this crate
 //!   does not re-codec: a block body, a transaction segment. [`BlobKind`]
 //!   names the kind; the bytes are verified where they are read (a block
 //!   blob against the identity `block_info` records, `store/chain_reads.rs`).
 //! - [`Unshaped`] — a table the LMDB census declares and no Rust writer
-//!   has reached. Its value type is uninhabited: the table can be sealed,
-//!   catalogued and journal-replayed (to a refusal), but not inserted
-//!   into. "No writer yet" is a fact of the type, not of the code; the
+//!   has reached. Its value type is uninhabited: the table is catalogued
+//!   (it has an ordinal) and dispatched to by the journal replay, which
+//!   refuses it; it is **not** created by the seal (`Restorable::SEALED`
+//!   is `false` for exactly this shape) and cannot be inserted into. "No
+//!   writer yet" is a fact of the type, not of the code; the
 //!   increment that first writes the table replaces this shape with the
 //!   table's codec and bumps `SCHEMA_VERSION`.
 //!
@@ -65,19 +68,24 @@
 //! # `fixed_width` is a layout choice, made deliberately
 //!
 //! redb stores a fixed-width value without the per-entry offset it keeps
-//! for variable-width ones and locates row *n* as `key_end + width × (n+1)`
-//! — and checks **nothing** on insert. A fixed-width type that handed redb
-//! bytes of the wrong length would silently corrupt the leaf page for
-//! every neighbour. `Coded<V>` reports [`Canonical::FIXED_WIDTH`] anyway,
-//! for two reasons. The codec has already declared its width and the
-//! snapshot gate already holds every fixture to it; reporting `None` to the
-//! engine would be a second declaration that could drift from the first,
-//! which is what §11.1(b) exists to prevent. And it is *sound* to report
-//! it only because of the guard above: the only bytes redb ever receives
-//! for a `Coded<V>` came out of `V::encode`, and the journal replay runs
+//! for variable-width ones, locates row *n* as `key_end + width × (n+1)`,
+//! and **asserts** the width in `LeafBuilder::append` (4.1.0
+//! `btree_base.rs:884`): a wrong-width value is a panic, and the panic
+//! poisons the transaction lock — a process-level failure, not a `Result`.
+//! `Coded<V>` reports [`Canonical::FIXED_WIDTH`] anyway, for two reasons.
+//! The codec has already declared its width and the snapshot gate already
+//! holds every fixture to it; reporting `None` to the engine would be a
+//! second declaration that could drift from the first, which is what
+//! §11.1(b) exists to prevent. And the assertion is kept unreachable by
+//! two boundaries, stated exactly. `Canonical::encoded` cannot produce the
+//! wrong width. But `redb::Value::from_bytes` is a **public trait method**,
+//! so a caller can construct an `Encoded<V>` over any bytes — constructor
+//! visibility alone is not the guarantee. So every write through this
+//! crate's table handles checks the width first (`store::keyed::check_width`)
+//! and refuses as `StoreCannot::RowWidth`, and the journal replay runs
 //! `V::decode` — exact width — as [`Restorable::well_formed`] before
-//! `from_bytes`. That is a layout change from `&[u8]` (which is
-//! variable-width), not pure metadata; it rides the `SCHEMA_VERSION` bump
+//! `from_bytes`. Reporting the width is a layout change from `&[u8]` (which
+//! is variable-width), not pure metadata; it rides the `SCHEMA_VERSION` bump
 //! of the commit that lands it, as any layout change does.
 //!
 //! [`Restorable::well_formed`]: crate::store::undo::Restorable::well_formed

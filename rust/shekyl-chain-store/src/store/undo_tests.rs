@@ -414,6 +414,19 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
     plant_row(&store, 5, &not_utf8.encode());
     let msg = replay_err(&store, 5);
     assert!(msg.contains("not UTF-8"), "{msg}");
+
+    // An `Inserted` entry has no `prior` for `well_formed` to refuse, so an
+    // entry naming an `Unshaped` table must be refused on the shape alone —
+    // before `remove` could reach the uninhabited `from_bytes` (PR #772
+    // review). `txs_prunable_tip` has no Rust writer at this layout.
+    let unshaped = UndoLog(vec![UndoEntry::Inserted {
+        table: ordinal_of("txs_prunable_tip").expect("catalogued"),
+        key: Box::new([0; 8]),
+        post: post_image(&[0]),
+    }]);
+    plant_row(&store, 6, &unshaped.encode());
+    let msg = replay_err(&store, 6);
+    assert!(msg.contains("names an unshaped table"), "{msg}");
     cleanup(&path);
 }
 

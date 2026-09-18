@@ -70,10 +70,16 @@ pub struct TipState {
     /// The last recorded block — the rules crate's one definition of "the
     /// tip". `None`: nothing recorded.
     pub recorded: Option<Tip>,
-    /// [`ChainStore::connect_state`] read **after** the snapshot was taken.
-    /// Sound because the halt is monotonic: a snapshot taken before a halt
-    /// latched shows a tip the refused write did not move, and a `Halted`
-    /// read afterwards is at a height ≥ that tip.
+    /// [`ChainStore::connect_state`] read **after** the snapshot was taken:
+    /// the writer's **current** state, not a property of the snapshot.
+    /// What a caller may rely on: `Halted` means the writer is halted now
+    /// and `recorded` is the last committed tip this snapshot sees; the
+    /// halt is monotonic (it latches, and a refused write moved nothing),
+    /// so a snapshot never shows a tip a halting write produced. What a
+    /// caller may **not** rely on: an ordering between `at_height` and
+    /// `recorded.height`. Another batch can pop below this snapshot's tip
+    /// and then halt at the lower current height, so `at_height` may be
+    /// below `recorded` (PR #772 review).
     pub connect: ConnectState,
 }
 

@@ -49,6 +49,7 @@ impl<'txn, K: Key + 'static, V: Key + 'static> SetTable<'txn, K, V> {
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<bool, StoreError> {
+        super::keyed::check_width::<V>(self.batch.table_name(), value.borrow())?;
         let captured = self
             .batch
             .capture(K::as_bytes(key.borrow()))

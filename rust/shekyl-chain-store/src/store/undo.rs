@@ -218,6 +218,13 @@ where
     }
 
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
+        // An `Unshaped` table has no writer, so no journal row can name it
+        // honestly; refuse before `remove` could reach the uninhabited
+        // `from_bytes` (PR #772 review — `well_formed` alone guards only
+        // `prior`, and an `Inserted` entry has none).
+        if !V::SEALED {
+            return Ok(Undone::Malformed("journal entry names an unshaped table"));
+        }
         let (key, prior, post) = match entry {
             UndoEntry::Inserted { key, post, .. } => (key, None, post),
             UndoEntry::Replaced {
@@ -289,6 +296,9 @@ where
     }
 
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
+        if !V::SEALED {
+            return Ok(Undone::Malformed("journal entry names an unshaped table"));
+        }
         let UndoEntry::MultiInserted { key, value, .. } = entry else {
             return Ok(Undone::Malformed(
                 "keyed-table entry recorded against a multimap",

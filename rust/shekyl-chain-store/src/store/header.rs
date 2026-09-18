@@ -122,9 +122,20 @@ pub(super) fn verify(
         Err(redb::TableError::TableDoesNotExist(_)) => {
             return Err(StoreCannot::SchemaVersionAbsent.into())
         }
+        // The header table's stored type is not this layout's (§11.1(f)
+        // moved it): a file from another layout, refused one step before
+        // the version cell could say which (PR #772 review).
+        Err(redb::TableError::TableTypeMismatch { .. }) => {
+            return Err(StoreCannot::LayoutForeign {
+                expected: SCHEMA_VERSION,
+            }
+            .into())
+        }
         Err(e) => return Err(EngineError::Table(e).into()),
     };
-    verify_sealed_tables(txn)?;
+    // Version before table set: a file at another version is *foreign*,
+    // not *corrupt*, and must be named as such even where its table set
+    // would also fail the current seal's check (PR #772 review).
     let found = get::<SchemaVersionCell>(&table)?.ok_or(StoreCannot::SchemaVersionAbsent)?;
     if found != SCHEMA_VERSION {
         return Err(StoreCannot::SchemaVersionMismatch {
@@ -133,6 +144,7 @@ pub(super) fn verify(
         }
         .into());
     }
+    verify_sealed_tables(txn)?;
     let pinned =
         get::<SettlementEpochBlocksCell>(&table)?.ok_or(absent::<SettlementEpochBlocksCell>())?;
     if pinned != epoch {

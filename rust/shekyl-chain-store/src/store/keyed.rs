@@ -32,7 +32,7 @@ use redb::{
 use crate::codec::{post_image, UndoEntry};
 use crate::schema::TableOrdinal;
 
-use super::error::{EngineError, StoreError, StoreInvariant};
+use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::undo::Journal;
 use super::write::Poison;
 
@@ -80,6 +80,14 @@ pub(super) struct Handles<'txn> {
 }
 
 impl Handles<'_> {
+    /// The table's catalogue name, `'static` through its ordinal; a table
+    /// outside the catalogue (a test fixture) is named as such.
+    pub(super) fn table_name(&self) -> &'static str {
+        self.ordinal
+            .and_then(crate::schema::undo_target)
+            .map_or("<uncatalogued table>", |t| t.name())
+    }
+
     /// Record `entry(ordinal)` if the batch is recording.
     pub(super) fn journal(&self, entry: impl FnOnce(TableOrdinal) -> UndoEntry) {
         if !self.journal.is_recording() {
@@ -148,6 +156,7 @@ impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<(), StoreError> {
+        check_width::<V>(self.batch.table_name(), value.borrow())?;
         let row = self.write.row;
         if self
             .inner
@@ -197,6 +206,7 @@ impl<'txn, K: Key + 'static, V: Value + 'static> UpsertTable<'txn, K, V> {
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<Option<AccessGuard<'_, V>>, StoreError> {
+        check_width::<V>(self.batch.table_name(), value.borrow())?;
         let key_bytes = self.batch.capture(K::as_bytes(key.borrow()));
         let post = key_bytes
             .is_some()
@@ -302,4 +312,30 @@ impl<K: Key + 'static, V: Value + 'static, W> KeyedTable<'_, K, V, W> {
             .stats()
             .map_err(|e| EngineError::Storage(e).into())
     }
+}
+
+/// The fallible insertion boundary for fixed-width value shapes.
+///
+/// A `Coded<V>` reports `V::FIXED_WIDTH` to the engine, and redb **asserts**
+/// it in `LeafBuilder::append` — a panic that poisons the transaction lock.
+/// `Canonical::encoded` cannot produce the wrong width, but redb's
+/// `Value::from_bytes` is a public trait method and can; so every write
+/// through this crate's handles checks here first and refuses as a value.
+/// Variable-width shapes (`fixed_width() == None`) have nothing to check.
+pub(super) fn check_width<V: Value>(
+    table: &'static str,
+    value: &V::SelfType<'_>,
+) -> Result<(), StoreError> {
+    if let Some(expected) = V::fixed_width() {
+        let actual = V::as_bytes(value).as_ref().len();
+        if actual != expected {
+            return Err(StoreCannot::RowWidth {
+                table,
+                expected,
+                actual,
+            }
+            .into());
+        }
+    }
+    Ok(())
 }

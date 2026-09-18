@@ -58,7 +58,7 @@
 //! `DAEMON_REDB_STORE.md` §11.1(f)) — `&[u8]` is not a value type:
 //!
 //! - [`Coded<V>`] — rows are `V::encode` under a [`Canonical`] codec; the
-//!   value `TypeName` is `V::NAME`. Per DRS-0 slice A the accumulator folds
+//!   value `TypeName` is `shekyl::Coded<{V::NAME}>`. Per DRS-0 slice A the accumulator folds
 //!   exactly that encoding, never storage bytes. Hash *values* are the
 //!   identity type (`PrunableHash`), not a `Hash32`: a value carries no
 //!   LMDB ordering, and `lmdb_order` is for orderings.
@@ -66,8 +66,9 @@
 //!   re-codec (`blocks`, the tx segments, `properties`' per-key cells);
 //!   [`BlobKind`] names the kind.
 //! - [`Unshaped`] — a censused table no Rust writer has reached. Its row
-//!   type is uninhabited: sealable, catalogued, journal-replayable to a
-//!   refusal, **not insertable**. The increment that first writes the
+//!   type is uninhabited: catalogued (it has an ordinal), refused by the
+//!   journal replay, **not seal-created** (`Restorable::SEALED = false`),
+//!   **not insertable**. The increment that first writes the
 //!   table replaces this with its codec and bumps `SCHEMA_VERSION`.
 //!
 //! Keys are typed for **ordering** (`lmdb_order`); values for **codec**.
