@@ -42,7 +42,9 @@
   unchanged. Raw `[u8; 32]` on that surface is now refused by
   `scripts/ci/check_wire_raw_hash_surface.py`, whose allowlist names each
   remaining occurrence (curve points, proof scalars, KEM ciphertexts, the
-  per-input signing payloads) and the crate that owns typing it.
+  per-input signing payloads) and the crate that owns typing it. The builder
+  `TreeContext` matches the curve-tree twin: `tree_root` is `CurveTreeRoot`,
+  so a block hash cannot be passed where the header root belongs.
 
 - **CLI `request new --expiry` is wall-clock Unix seconds, not block height
   (RTN-6).** Absolute unix timestamps and relative durations (`1h`, `30m`,

@@ -48,17 +48,13 @@ either. Returns and fields are one unit.
   `shekyl-wire/src/hash.rs` are `pub(crate)` and take `[u8; 32]`; they stay
   raw (they are the mixer, not the surface) and convert at the call.
 - **The store's key boundary.** `Hash32` (`shekyl-chain-store/src/lmdb_order/hash.rs`)
-  is the redb key wrapper; its `redb::Value::from_bytes` carries the one
-  `.expect("Hash32 is 32 bytes (redb fixed_width)")` on a typed daemon
-  value (`:117`). RTN-7 adds `From<BlockHash>` / `From<TxHash>` on it (the
-  orphan rule keeps `impl redb::Key for shekyl_types::*` out; #771's "will
-  not do" list). **Finding:** the `Tagged<V>` retrofit that is meant to fold
-  that `expect` in is **not recorded anywhere greppable** — not in
-  `FOLLOWUPS.md`, `DAEMON_REDB_STORE.md`, `DRS_E1_SCHAIN_R.md`, nor the
-  S-CHAIN-R worktree. Under rule 23 an intended change with no row is
-  undisposed. Owed to whoever owns it: a FOLLOWUPS row naming `Hash32`'s
-  `expect` and this PR's `From` impls as the signature it lands against.
-  Falsify by `rg 'Tagged<' docs/ rust/` returning a row.
+  is the layout type inside [`LmdbHashKey`]; `LmdbHashKey`'s `redb::Value::from_bytes`
+  / `Key::compare` carry `.expect("LmdbHashKey is 32 bytes (redb fixed_width)")`.
+  RTN-7's `From<BlockHash>` / `From<TxHash>` on `Hash32` (and on `LmdbHashKey`)
+  is the signature a later `Tagged<V>` retrofit lands against (orphan rule
+  keeps `impl redb::Key for shekyl_types::*` out; #771's "will not do" list).
+  **Finding, filed 2026-09-18:** the `Tagged<V>` retrofit is a FOLLOWUPS
+  pre-genesis row (rule 23). Falsify by `rg 'Tagged<' docs/FOLLOWUPS.md`.
 
 ## 3. Scope
 
@@ -150,8 +146,8 @@ unnamed occurrences red.
 9. `docs:` — §6 rows closed in `RAW_TYPE_NEWTYPE_MIGRATION.md` (status
    table gains the RTN-7 row, LANDED); index RTN row `UPDATE`; CHANGELOG
    API entry; this doc's banner → LANDED and `git mv` to `docs/completed/`
-   (rule 95). FOLLOWUPS row for the `Tagged<V>` finding (§2) if its owner
-   has not landed one.
+   (rule 95). FOLLOWUPS row for the `Tagged<V>` finding (§2) — **filed
+   2026-09-18** (pre-genesis, `LmdbHashKey` expect).
 
 ## 6. Questions — ruled 2026-09-17
 
