@@ -489,6 +489,24 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_index_table_shape.py
 
+      - name: Run wire raw-hash-surface check
+        # RTN-7: every 32-byte chain identity leaves `shekyl-wire` as a
+        # `shekyl-types` newtype, so the two digests a store hands back for
+        # txid reconstruction cannot be transposed. Without this gate the
+        # typing is a cleanup that decays one field at a time —
+        # RAW_TYPE_NEWTYPE_MIGRATION.md §6 records the intent, and rows do
+        # not gate. Red in both directions: an unnamed occurrence, an
+        # allowlist entry whose item is gone, or an empty scan (rule 47).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_wire_raw_hash_surface.py
+
+      - name: Self-test the wire raw-hash-surface check
+        # Each leg fires on its own axis, including the enum-variant-field
+        # case this gate's own first run exposed (variant fields are public
+        # with no `pub` keyword, so a `pub`-only scan missed the key image).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_wire_raw_hash_surface.py --selftest
+
       - name: Run consensus-digest independent oracle
         # Re-implements the canonical form (CLIENT_VERSION_CONSTANTS_VALIDATION.md
         # §3.3) in Python and compares to build.rs's PINNED_DIGEST. The build

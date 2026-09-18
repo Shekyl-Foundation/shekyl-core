@@ -4745,6 +4745,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-scanner",
  "shekyl-tx-builder",
+ "shekyl-types",
  "shekyl-wire",
 ]
 

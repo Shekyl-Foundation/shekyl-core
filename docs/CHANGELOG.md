@@ -29,6 +29,21 @@
 
 ### API
 
+- **`shekyl-wire`'s hash surface is typed (RTN-7).** `Transaction::hash()`,
+  `hash_with_supplied_prunable` and `hash_with_supplied_components` return
+  `TxHash`; `Block::hash()` returns `BlockHash`; `prefix_hash()` returns the
+  new `shekyl_types::PrefixHash` — the txid preimage's *first* component,
+  minted beside `PqcAuthHash` (third) and `PrunableHash` (fourth) rather
+  than as a signing-specific name, so the txid and its components refuse
+  each other in both directions. `BlockHeader.previous` / `.curve_tree_root`
+  / `.attestation_root`, `Block.transaction_hashes`, `Ct::Fcmp.reference_block`
+  and `BondPost.p_canonical_id` carry their newtypes. Type-only: every
+  serializer writes the same bytes and every cross-language parity KAT passes
+  unchanged. Raw `[u8; 32]` on that surface is now refused by
+  `scripts/ci/check_wire_raw_hash_surface.py`, whose allowlist names each
+  remaining occurrence (curve points, proof scalars, KEM ciphertexts, the
+  per-input signing payloads) and the crate that owns typing it.
+
 - **CLI `request new --expiry` is wall-clock Unix seconds, not block height
   (RTN-6).** Absolute unix timestamps and relative durations (`1h`, `30m`,
   `7d`) are accepted; a height-shaped integer (`< 1e9`) is refused. Wallet

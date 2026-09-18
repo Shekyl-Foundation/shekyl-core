@@ -1,13 +1,17 @@
 # RTN-7 — the wire crate's hash surface is typed, and a gate keeps it so
 
-**Status:** OPEN — Round 0 **ruled 2026-09-17 (Q1–Q5, §6)**; implementing
-against `dev` = `eac99894a` (post-#771). Written 2026-09-17 against
+**Status:** CLOSED-as-record — **LANDED 2026-09-17** against `dev` =
+`eac99894a` (post-#771). Round 0 ruled the same day (Q1–Q5, §6). Archived
+per rule 95 when the work it owns landed; the living contract for the
+newtype family is
+[`RAW_TYPE_NEWTYPE_MIGRATION.md`](../design/RAW_TYPE_NEWTYPE_MIGRATION.md).
+Originally written against `dev` = `398d85e7b` (post-#768). Written 2026-09-17 against
 `398d85e7b`; the halt (no production code until #771, which brings
 `AttestationRoot` and `#![no_std]` `shekyl-types`) lifted when #771 merged
 the same day. Family: `RTN-1…RTN-N`, registered by #771
-([`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2); this is the
+([`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2); this is the
 seventh item. Work plan of record:
-[`RAW_TYPE_NEWTYPE_MIGRATION.md`](RAW_TYPE_NEWTYPE_MIGRATION.md) §6, whose
+[`RAW_TYPE_NEWTYPE_MIGRATION.md`](../design/RAW_TYPE_NEWTYPE_MIGRATION.md) §6, whose
 two open wire rows this item closes.
 
 ## 1. The property, stated once
@@ -162,3 +166,68 @@ unnamed occurrences red.
 - **Q5** Reviewer for the `reference_block` commit — the implementer's
   call; the commit states the narrow subject (type only, no selection
   logic moved) so the review stays that narrow (§3.1).
+
+## 7. What the gate found about this document (2026-09-17)
+
+`check_wire_raw_hash_surface.py`'s **first run failed** — on its author's
+own §3.2 enumeration. That is the outcome the gate exists for, so it is
+recorded rather than quietly fixed:
+
+- **Four occurrences §3.2 missed:** `BpPlus.r1`, `BpPlus.s1`,
+  `KemCiphertext.x25519` (`tx_extra.rs`), and
+  `pqc_signing_payload_hashes() -> Vec<[u8; 32]>`. The enumeration was
+  written by reading the structs I expected to matter; the gate read every
+  `pub` item.
+- **Three allowlist entries with no subject:** `BpPlus.v` and
+  `CtBase.enc_amounts` do not exist in that shape — `enc_amounts` is
+  `Vec<[u8; 9]>`, and I allowlisted it from a recollection of "an array
+  field on `CtBase`", which is the recall-instead-of-reading failure rule
+  17 names. The third, `Input::ToKey.key_image`, was **present but
+  unscanned**.
+- **That last one was a gate defect, not a bad entry.** An enum variant's
+  fields are public with **no `pub` keyword**, so a `pub`-only scan misses
+  them — and `key_image` is a 32-byte public wire field. Fixed in the
+  scanner (`VARIANT_FIELD_RE`) with its own self-test leg, rather than by
+  deleting the entry, which would have closed the report and left the hole.
+
+Two dispositions the run forced, both now in the allowlist with reasons and
+addressees:
+
+- **`pqc_signing_payload_hashes()` stays `[u8; 32]`.** Q3 typed
+  `prefix_hash` because it *is* the txid's first component and the
+  component-hash family already existed. These are per-input §1.5 signing
+  messages and components of no txid, so the same reasoning gives the
+  opposite answer: minting a name for one consumer is the
+  fresh-name-for-nothing Q3 declined. Reopen if a second consumer appears,
+  or if any site can pass one where a txid component is expected.
+- **`Input::ToKey.key_image` stays raw here.** `shekyl_types::KeyImage`
+  exists but is `redact, no_display`, and the wire codec's RPC projections
+  hex-encode this field — typing it is the key-image *exposure* question,
+  owned by the wallet-RPC and scanner lanes, not this slice.
+
+Final figure: **78 public items scanned, 15 raw occurrences, all 15
+allowlisted with a named addressee.**
+
+## 8. Two boundaries the implementation named that §3 did not
+
+- **Persisted rows stay bytes.** `engine-state`'s `BlockchainTip`,
+  `ReorgBlocks`, `LedgerIndexes::ingest_block` and the pscan cursor take
+  `[u8; 32]`; their typing is `RAW_TYPE_NEWTYPE_MIGRATION.md` PR C's, and
+  changing them touches postcard schemas. RTN-7 converts **at** those
+  boundaries, once each, with the reason in a comment
+  (`anchor_ledger_block`, `merge`'s `process_scanned_outputs`,
+  `parent_hash_for_start`, `VerifiedBatch::frontier_hash`).
+- **Transform-shaped crates take the signable hash as bytes.**
+  `shekyl-fcmp`'s `proof::prove` / `verify` and
+  `shekyl-archival-retention`'s `emission_vin_verify_*` / `auth_msgs` are
+  original-PR-E territory. `PrefixHash` reaches their call site and becomes
+  `to_bytes()` / `as_bytes()` there — visibly, at one line per call, which
+  is what makes the un-typing reviewable instead of ambient.
+
+Found by the types, disclosed rather than fixed: two tests
+(`fcmp_spend_e2e`, `pl_d1_fix_falsifier`) sign the **prefix hash's bytes**
+as a PQC payload message, where production signs
+`phase1_payload_hashes()`. Their own comments already call it a stand-in
+and never verify the auths, so the types now force a visible
+`.to_bytes()`; switching them to the real payload is the e2e oracle
+owner's call.
