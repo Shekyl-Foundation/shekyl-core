@@ -18,7 +18,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_primitives::Commitment;
-use shekyl_types::{BlockHeight, Timelock};
+use shekyl_types::{BlockHeight, Timelock, TxHash};
 use shekyl_wire::{transaction::UNLOCK_TIME_BLOCK_SENTINEL, Block, Ct, Transaction};
 
 use shekyl_crypto_pq::{
@@ -495,7 +495,7 @@ impl InternalScanner {
     fn scan_transaction_with_cancel(
         &self,
         first_output_index: u64,
-        tx_hash: [u8; 32],
+        tx_hash: TxHash,
         tx: &Transaction,
         is_cancelled: &mut dyn FnMut() -> bool,
     ) -> Result<ScanOutcome, ScanError> {
@@ -1176,7 +1176,7 @@ mod gate_tests {
             },
             ct: Ct::Fcmp {
                 fee: 0,
-                reference_block: [0u8; 32],
+                reference_block: shekyl_types::BlockHash::from_bytes([0u8; 32]),
                 base: CtBase {
                     enc_amounts: vec![],
                     enc_labels: vec![],
@@ -1195,7 +1195,8 @@ mod gate_tests {
 
         let capture = EventCapture::default();
         let result = tracing::subscriber::with_default(capture.clone(), || {
-            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
+            scanner
+                .scan_transaction_with_cancel(0, TxHash::from_bytes([0u8; 32]), &tx, &mut || false)
         });
 
         let outcome = result.expect("gate skips the tx without surfacing a ScanError");
@@ -1237,7 +1238,8 @@ mod gate_tests {
 
         let capture = EventCapture::default();
         let result = tracing::subscriber::with_default(capture.clone(), || {
-            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
+            scanner
+                .scan_transaction_with_cancel(0, TxHash::from_bytes([0u8; 32]), &tx, &mut || false)
         });
 
         let outcome =
@@ -1281,7 +1283,8 @@ mod gate_tests {
 
         let capture = EventCapture::default();
         let result = tracing::subscriber::with_default(capture.clone(), || {
-            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
+            scanner
+                .scan_transaction_with_cancel(0, TxHash::from_bytes([0u8; 32]), &tx, &mut || false)
         });
 
         let timelocked = match result.expect("gate skips the tx without a ScanError") {
@@ -1319,7 +1322,8 @@ mod gate_tests {
 
         let capture = EventCapture::default();
         let result = tracing::subscriber::with_default(capture.clone(), || {
-            scanner.scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut || false)
+            scanner
+                .scan_transaction_with_cancel(0, TxHash::from_bytes([0u8; 32]), &tx, &mut || false)
         });
 
         let timelocked = match result.expect("block-form tx scans without ScanError") {
@@ -1454,7 +1458,7 @@ mod cancel_tests {
             },
             ct: Ct::Fcmp {
                 fee: 0,
-                reference_block: [0u8; 32],
+                reference_block: shekyl_types::BlockHash::from_bytes([0u8; 32]),
                 base: CtBase {
                     enc_amounts: vec![],
                     enc_labels: vec![],
@@ -1495,7 +1499,7 @@ mod cancel_tests {
         let (mut closure, counter) = cancel_on_nth_call(4);
 
         let outcome = scanner
-            .scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut closure)
+            .scan_transaction_with_cancel(0, TxHash::from_bytes([0u8; 32]), &tx, &mut closure)
             .expect("placeholder tx is structurally valid; size gate passes");
 
         assert!(
@@ -1529,7 +1533,7 @@ mod cancel_tests {
         };
 
         let outcome = scanner
-            .scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut closure)
+            .scan_transaction_with_cancel(0, TxHash::from_bytes([0u8; 32]), &tx, &mut closure)
             .expect("placeholder tx is structurally valid; size gate passes");
 
         match outcome {
@@ -1559,7 +1563,7 @@ mod cancel_tests {
         let (mut closure, counter) = cancel_on_nth_call(1);
 
         let outcome = scanner
-            .scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut closure)
+            .scan_transaction_with_cancel(0, TxHash::from_bytes([0u8; 32]), &tx, &mut closure)
             .expect("placeholder tx is structurally valid; size gate passes");
 
         assert!(
@@ -1620,10 +1624,12 @@ mod cancel_tests {
             major_version: 1,
             minor_version: 0,
             timestamp: 0,
-            previous: [0u8; 32],
+            previous: shekyl_types::BlockHash::from_bytes([0u8; 32]),
             nonce: 0,
-            curve_tree_root: [0u8; 32],
-            attestation_root: shekyl_archival_retention::empty_attestation_root(),
+            curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
+            attestation_root: shekyl_types::AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
         };
         // Coinbase-shaped miner tx: a sole `gen` input and a `Null` ct (§2.5),
         // no outputs — so the inner per-output loop runs zero iterations and
@@ -1688,10 +1694,12 @@ mod cancel_tests {
             major_version: 1,
             minor_version: 0,
             timestamp: 0,
-            previous: [0u8; 32],
+            previous: shekyl_types::BlockHash::from_bytes([0u8; 32]),
             nonce: 0,
-            curve_tree_root: [0u8; 32],
-            attestation_root: shekyl_archival_retention::empty_attestation_root(),
+            curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
+            attestation_root: shekyl_types::AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
         };
         let miner_tx = Transaction {
             prefix: TxPrefix {
@@ -1743,7 +1751,7 @@ mod cancel_tests {
         let (mut closure, counter) = cancel_on_nth_call(1);
 
         let outcome = scanner
-            .scan_transaction_with_cancel(0, [0u8; 32], &tx, &mut closure)
+            .scan_transaction_with_cancel(0, TxHash::from_bytes([0u8; 32]), &tx, &mut closure)
             .expect("oversized tx surfaces a gate-skip, not a ScanError");
 
         match outcome {

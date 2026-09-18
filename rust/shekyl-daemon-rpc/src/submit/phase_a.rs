@@ -296,7 +296,7 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
             fee,
             reference_block,
             ..
-        } => (*fee, BlockHash::from_bytes(*reference_block)),
+        } => (*fee, *reference_block),
         Ct::Null(_) => {
             return Err(PhaseAReject::new("Null ct on a non-coinbase submission"));
         }
@@ -439,7 +439,7 @@ pub fn parse_submission(tx_hex: &str) -> Result<ParsedSubmission, PhaseAReject> 
 
     // Canonical engine txid (§3.4) and consensus weight (row I3), both
     // over the validated canonical bytes.
-    let txid = TxHash::from_bytes(tx.hash());
+    let txid = tx.hash();
     let weight = tx.weight() as u64;
 
     Ok(ParsedSubmission {

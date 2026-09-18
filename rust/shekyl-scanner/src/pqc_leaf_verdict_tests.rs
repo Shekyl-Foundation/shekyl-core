@@ -165,8 +165,7 @@ fn verdict_reaches_the_ledger_row_and_the_balance() {
     let td = &ledger.transfers[0];
     assert_eq!(td.unspendable, Some(UnspendableReason::PqcLeafMismatch));
     assert_eq!(
-        td.tx_hash.to_bytes(),
-        sender_tx_hash,
+        td.tx_hash, sender_tx_hash,
         "the row names the sender's transaction (rule 82)"
     );
     assert!(!td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &no_locks()));

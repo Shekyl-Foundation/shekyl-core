@@ -14,7 +14,7 @@ use std::net::TcpListener;
 use std::os::raw::c_char;
 
 use shekyl_rpc_types::{HashHex, RpcStatus};
-use shekyl_types::PrunableHash;
+use shekyl_types::{BlockHash, PrunableHash, TxHash};
 
 fn run(args: &[&str], address: Option<&str>) -> (i32, String) {
     let cstrs: Vec<CString> = args.iter().map(|a| CString::new(*a).unwrap()).collect();
@@ -240,7 +240,7 @@ fn read_request(s: &mut std::net::TcpStream) -> Option<(String, String)> {
 /// fills, so a fixture that always returns split-form data would pass
 /// whatever the console asked for. Serving the projection makes the
 /// request an input rather than a formality.
-fn one_shot_projected(slot: crate::core::TxSlot, txid: [u8; 32]) -> String {
+fn one_shot_projected(slot: crate::core::TxSlot, txid: TxHash) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap().to_string();
     std::thread::spawn(move || {
@@ -267,14 +267,19 @@ fn one_shot_projected(slot: crate::core::TxSlot, txid: [u8; 32]) -> String {
         let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_owned();
         let request: shekyl_rpc_types::GetTransactionsRequest =
             serde_json::from_str(&body).expect("the console sends a typed request");
-        let reply =
-            crate::methods::project_transactions(&request, &[txid], &[slot], 9, |blob, pruned| {
+        let reply = crate::methods::project_transactions(
+            &request,
+            &[txid.to_bytes()],
+            &[slot],
+            9,
+            |blob, pruned| {
                 Ok(format!(
                     "{{\"json\":\"{}\",\"pruned\":{pruned}}}",
                     hex::encode(blob)
                 ))
-            })
-            .expect("projection succeeds");
+            },
+        )
+        .expect("projection succeeds");
         let out = serde_json::to_string(&reply).unwrap();
         let head = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -318,7 +323,7 @@ fn console_spend() -> shekyl_wire::Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0; 32],
+            reference_block: BlockHash::from_bytes([0; 32]),
             base: CtBase {
                 enc_amounts: vec![[0; 9], [0; 9]],
                 enc_labels: vec![[0; 9], [0; 9]],
@@ -436,7 +441,7 @@ fn an_echoed_label_over_a_substituted_body_is_refused() {
     let requested = other.hash();
     let (pruned, tail) = console_spend_halves();
     let entry = shekyl_rpc_types::TxEntry {
-        tx_hash: HashHex::from_bytes(requested),
+        tx_hash: HashHex::from_bytes(requested.to_bytes()),
         as_hex: String::new(),
         pruned_as_hex: hex::encode(pruned),
         prunable_as_hex: hex::encode(tail),
@@ -493,7 +498,7 @@ fn a_substituted_pruned_body_is_refused_even_with_a_chosen_digest() {
     );
     let (pruned, _tail) = console_spend_halves();
     let entry = shekyl_rpc_types::TxEntry {
-        tx_hash: HashHex::from_bytes(requested),
+        tx_hash: HashHex::from_bytes(requested.to_bytes()),
         as_hex: String::new(),
         pruned_as_hex: hex::encode(pruned),
         // The half is gone, so the binding takes the pruned arm.

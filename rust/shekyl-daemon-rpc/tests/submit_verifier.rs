@@ -56,7 +56,7 @@ use shekyl_tx_builder::{
     tx_prefix_hash_from_parts, LeafEntry, OutputInfo, PqcAuth as BuilderPqcAuth, SpendInput,
     TreeContext, WireEncodeInput,
 };
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{BlockHeight, ChainCount, PCanonicalId};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, CtBase, PqcAuth, Prunable, Transaction};
 
@@ -404,7 +404,7 @@ fn build_funding_setup() -> FundingSetup {
     let pqc_pk =
         derive_pqc_public_key(&combined_ss.0, spent_index).expect("derive hybrid public key");
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block.to_bytes(),
+        reference_block: path.tree.reference_block,
         tree_root: path.tree.tree_root.to_bytes(),
         tree_depth: path.tree.tree_depth,
     };
@@ -650,8 +650,7 @@ fn build_bond_fixture() -> BondFixture {
         .expect("encode bond_spend_pk");
     let prefix_bond_input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: p_pubkey.clone(),
-        p_canonical_id: *shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&p_pubkey)
-            .as_bytes(),
+        p_canonical_id: shekyl_archival_retention::p_canonical_id_from_hybrid_pubkey(&p_pubkey),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: bond_spend_pk.clone(),
             endpoint: [0xEE; 32],
@@ -1178,7 +1177,9 @@ fn bond_canonical_id_hint_mismatch_is_rejected() {
     let parsed = bond_mutated(|tx| {
         for input in &mut tx.prefix.inputs {
             if let shekyl_wire::transaction::Input::BondPost(bp) = input {
-                bp.p_canonical_id[0] ^= 0x01;
+                let mut id = bp.p_canonical_id.to_bytes();
+                id[0] ^= 0x01;
+                bp.p_canonical_id = PCanonicalId::from_bytes(id);
             }
         }
     });
@@ -1561,7 +1562,7 @@ fn build_release_fixture(auth_key: ReleaseAuthKey) -> ReleaseFixture {
     // reason UB3 has to read the record instead of the vin.
     let prefix_bond_input = Input::BondPost(Box::new(BondPost {
         hybrid_public_key: identity_pk.clone(),
-        p_canonical_id: built.vin().p_canonical_id,
+        p_canonical_id: PCanonicalId::from_bytes(built.vin().p_canonical_id),
         kind: BondPostKind::Other(shekyl_archival_retention::BondPostKind::Release as u8),
         holdings: Holdings::ShardSetCompact(Vec::new()),
         bonded_total_atomic: 0,

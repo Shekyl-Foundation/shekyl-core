@@ -14,6 +14,7 @@ mod submit_fixtures;
 
 use shekyl_daemon_rpc::submit::{parse_submission, SubmitTxKind};
 use shekyl_rpc_types::{RejectCause, SubmitVerdict};
+use shekyl_types::PCanonicalId;
 use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
 use shekyl_wire::{
     BondPost, BondPostKind, Ct, CtBase, Holdings, Input, Output, Transaction, TxPrefix,
@@ -48,12 +49,12 @@ fn valid_spend_parses_with_extracted_facts() {
     assert_eq!(parsed.blob, blob, "blob must be the exact decoded bytes");
     assert_eq!(parsed.tx, tx);
     assert_eq!(
-        parsed.txid.to_bytes(),
+        parsed.txid,
         tx.hash(),
         "txid must be the canonical shekyl-wire hash (§3.4)"
     );
     assert_eq!(parsed.key_images, kis, "key images in vin order");
-    assert_eq!(parsed.reference_block.to_bytes(), FIXTURE_REF_BLOCK);
+    assert_eq!(parsed.reference_block, FIXTURE_REF_BLOCK);
     assert_eq!(parsed.fee, 12_345);
     assert_eq!(parsed.weight, tx.weight() as u64, "row I3 weight");
     assert_eq!(parsed.kind, SubmitTxKind::Spend);
@@ -241,7 +242,7 @@ fn non_canonical_key_image_encoding_rejects() {
 fn bond_post_input() -> Input {
     Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0xAB; PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [0x77; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0x77; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![0xCD; PQC_HYBRID_SINGLE_KEY_LEN],
             endpoint: [0xEE; 32],

@@ -52,7 +52,7 @@ pub trait TransferDetailsExt {
 impl TransferDetailsExt for TransferDetails {
     fn from_wallet_output(output: &WalletOutput, block_height: u64) -> Self {
         TransferDetails {
-            tx_hash: shekyl_types::TxHash::from_bytes(output.transaction()),
+            tx_hash: output.transaction(),
             internal_output_index: shekyl_types::OutputIndexInTx::from_raw(
                 output.index_in_transaction(),
             ),
@@ -223,7 +223,7 @@ mod x5_eligible_height_tests {
     fn dummy_output() -> WalletOutput {
         let key = &Scalar::from_bytes_mod_order([7u8; 32]) * ED25519_BASEPOINT_TABLE;
         WalletOutput::new_for_test(
-            [0x11; 32],
+            shekyl_types::TxHash::from_bytes([0x11; 32]),
             0,
             1,
             key,

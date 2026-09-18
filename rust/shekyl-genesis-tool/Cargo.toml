@@ -15,6 +15,9 @@ path = "src/main.rs"
 [dependencies]
 # Wire format: the genesis tx/block serializer, tx_extra grammar, varint.
 shekyl-wire = { path = "../shekyl-wire" }
+# The genesis block header and coinbase txid leave `shekyl-wire` typed
+# (`BlockHash`, `CurveTreeRoot`, `AttestationRoot`, `TxHash`; RTN-7).
+shekyl-types = { path = "../shekyl-types" }
 # Output construction (deterministic KEM), account derivation (gen-wallets),
 # BIP-39 helpers, Edwards→Montgomery map for the recipient X25519 key.
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }

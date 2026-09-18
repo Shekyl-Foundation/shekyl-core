@@ -28,7 +28,7 @@ fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
 }
 
 fn build_state_and_outputs(k: usize) -> (LedgerBlock, LedgerIndexes, Timelocked) {
-    let tx_hash = [0x42u8; 32];
+    let tx_hash = shekyl_types::TxHash::from_bytes([0x42u8; 32]);
     let recovered: Vec<RecoveredWalletOutput> = (0..k as u64)
         .map(|i| {
             let wo = WalletOutput::new_for_test(

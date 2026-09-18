@@ -46,7 +46,7 @@ pub(crate) mod ledger_ops {
     }
 
     pub(crate) fn make_wallet_output(
-        tx_hash: [u8; 32],
+        tx_hash: shekyl_types::TxHash,
         index: u64,
         global_index: u64,
         amount: u64,
@@ -122,11 +122,21 @@ pub(crate) mod ledger_ops {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output([60; 32], 0, 800, 1_000_000_000),
+                make_wallet_output(
+                    shekyl_types::TxHash::from_bytes([60; 32]),
+                    0,
+                    800,
+                    1_000_000_000,
+                ),
                 1_000_000_000,
             ),
             (
-                make_wallet_output([60; 32], 1, 801, 2_000_000_000),
+                make_wallet_output(
+                    shekyl_types::TxHash::from_bytes([60; 32]),
+                    1,
+                    801,
+                    2_000_000_000,
+                ),
                 2_000_000_000,
             ),
         ];
@@ -173,7 +183,12 @@ pub(crate) mod ledger_ops {
     fn unmark_spent_unknown_key_image_is_noop() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output([61; 32], 0, 810, 1_000_000_000),
+            make_wallet_output(
+                shekyl_types::TxHash::from_bytes([61; 32]),
+                0,
+                810,
+                1_000_000_000,
+            ),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA1; 32], make_timelocked(outputs));
@@ -188,7 +203,12 @@ pub(crate) mod ledger_ops {
     fn unmark_spent_idempotent_on_already_unspent() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output([62; 32], 0, 820, 1_000_000_000),
+            make_wallet_output(
+                shekyl_types::TxHash::from_bytes([62; 32]),
+                0,
+                820,
+                1_000_000_000,
+            ),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA2; 32], make_timelocked(outputs));
@@ -203,15 +223,30 @@ pub(crate) mod ledger_ops {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output([63; 32], 0, 830, 1_000_000_000),
+                make_wallet_output(
+                    shekyl_types::TxHash::from_bytes([63; 32]),
+                    0,
+                    830,
+                    1_000_000_000,
+                ),
                 1_000_000_000,
             ),
             (
-                make_wallet_output([63; 32], 1, 831, 2_000_000_000),
+                make_wallet_output(
+                    shekyl_types::TxHash::from_bytes([63; 32]),
+                    1,
+                    831,
+                    2_000_000_000,
+                ),
                 2_000_000_000,
             ),
             (
-                make_wallet_output([63; 32], 2, 832, 3_000_000_000),
+                make_wallet_output(
+                    shekyl_types::TxHash::from_bytes([63; 32]),
+                    2,
+                    832,
+                    3_000_000_000,
+                ),
                 3_000_000_000,
             ),
         ];
@@ -256,11 +291,21 @@ pub(crate) mod ledger_ops {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output([64; 32], 0, 840, 500_000_000),
+                make_wallet_output(
+                    shekyl_types::TxHash::from_bytes([64; 32]),
+                    0,
+                    840,
+                    500_000_000,
+                ),
                 500_000_000,
             ),
             (
-                make_wallet_output([64; 32], 1, 841, 1_000_000_000),
+                make_wallet_output(
+                    shekyl_types::TxHash::from_bytes([64; 32]),
+                    1,
+                    841,
+                    1_000_000_000,
+                ),
                 1_000_000_000,
             ),
         ];
@@ -302,7 +347,12 @@ pub(crate) mod ledger_ops {
     fn immature_output_not_spendable() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output([65; 32], 0, 850, 1_000_000_000),
+            make_wallet_output(
+                shekyl_types::TxHash::from_bytes([65; 32]),
+                0,
+                850,
+                1_000_000_000,
+            ),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA5; 32], make_timelocked(outputs));
@@ -335,8 +385,14 @@ pub(crate) mod ledger_ops {
     fn invariants_hold_after_process_and_spend_cycle() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
-            (make_wallet_output([66; 32], 0, 860, 1_000), 1_000),
-            (make_wallet_output([66; 32], 1, 861, 2_000), 2_000),
+            (
+                make_wallet_output(shekyl_types::TxHash::from_bytes([66; 32]), 0, 860, 1_000),
+                1_000,
+            ),
+            (
+                make_wallet_output(shekyl_types::TxHash::from_bytes([66; 32]), 1, 861, 2_000),
+                2_000,
+            ),
         ];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xB0; 32], make_timelocked(outputs));
         indexes.check_invariants(&ledger).expect("after process");
@@ -381,19 +437,28 @@ pub(crate) mod ledger_ops {
             &mut ledger,
             100,
             [0xC0; 32],
-            make_timelocked(vec![(make_wallet_output([70; 32], 0, 900, 1_000), 1_000)]),
+            make_timelocked(vec![(
+                make_wallet_output(shekyl_types::TxHash::from_bytes([70; 32]), 0, 900, 1_000),
+                1_000,
+            )]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             200,
             [0xC1; 32],
-            make_timelocked(vec![(make_wallet_output([71; 32], 0, 901, 2_000), 2_000)]),
+            make_timelocked(vec![(
+                make_wallet_output(shekyl_types::TxHash::from_bytes([71; 32]), 0, 901, 2_000),
+                2_000,
+            )]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             300,
             [0xC2; 32],
-            make_timelocked(vec![(make_wallet_output([72; 32], 0, 902, 3_000), 3_000)]),
+            make_timelocked(vec![(
+                make_wallet_output(shekyl_types::TxHash::from_bytes([72; 32]), 0, 902, 3_000),
+                3_000,
+            )]),
         );
         indexes.check_invariants(&ledger).expect("3 blocks");
 
@@ -448,7 +513,7 @@ mod ledger_proptest {
                 transaction: {
                     let mut h = [0u8; 32];
                     h[..8].copy_from_slice(&global_index.to_le_bytes());
-                    h
+                    shekyl_types::TxHash::from_bytes(h)
                 },
                 index_in_transaction: 0,
             },
@@ -663,7 +728,7 @@ mod sync_bookkeeping {
                     transaction: {
                         let mut h = [0u8; 32];
                         h[..8].copy_from_slice(&global_index.to_le_bytes());
-                        h
+                        shekyl_types::TxHash::from_bytes(h)
                     },
                     index_in_transaction: 0,
                 },

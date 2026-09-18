@@ -100,6 +100,7 @@ use shekyl_crypto_pq::{
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use crate::{extra::Extra, view_pair::ViewPair, ScannableBlock};
+use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
 
 /// Fixed per-transaction key for deterministic fixture construction.
 /// Real transactions use a fresh random `tx_key`; here we pin a
@@ -335,7 +336,7 @@ fn assemble_scannable_block(
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts,
                 enc_labels,
@@ -350,16 +351,18 @@ fn assemble_scannable_block(
     // must equal `transactions.len()`), never the hash values themselves, so
     // a placeholder hash is structurally sufficient and invariant across
     // iterations.
-    let placeholder_tx_hash = [0xAAu8; 32];
+    let placeholder_tx_hash = TxHash::from_bytes([0xAAu8; 32]);
 
     let header = BlockHeader {
         major_version: 1,
         minor_version: 0,
         timestamp: 0,
-        previous: [0u8; 32],
+        previous: BlockHash::from_bytes([0u8; 32]),
         nonce: 0,
-        curve_tree_root: [0u8; 32],
-        attestation_root: shekyl_archival_retention::empty_attestation_root(),
+        curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+        attestation_root: AttestationRoot::from_bytes(
+            shekyl_archival_retention::empty_attestation_root(),
+        ),
     };
 
     // Minimal coinbase miner-tx: a sole `gen` input and a `Null` ct (§2.5),
