@@ -3,9 +3,10 @@
 **Status:** OPEN — **Round 0 (pre-flight) executed 2026-09-18** at `dev` =
 `d89f99791` (the tree that merged PR #772, S-CHAIN-R). Round-1 questions (§9)
 are **proposed with defaults, not ruled**; the increment (§7) does not start
-until they are, and its code commits do not start until PR #777 (RTN-7) has
-merged — it retypes `store/connect.rs` and `store/chain_reads.rs`, which §7
-commits 1, 2 and 4 edit. Implements *from*
+until they are. (The code gate on PR #777 — RTN-7 retyped `store/connect.rs`
+and `store/chain_reads.rs`, which §7 commits 1, 2 and 4 edit — **lifted
+2026-09-18: #777 merged**, and this document was re-based and re-verified on
+that tree, `51d7f2416`; every code anchor re-read.) Implements *from*
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §3.5/§7 (the S-OUT-KI row:
 extraction order **4**, "consensus-critical (double-spend admission) and
 needs chain reads for height context, so it follows S-CHAIN-R"), §7.6 (parity
@@ -102,14 +103,18 @@ well as by a `U64PrefixBytes` multimap value — the gate asserts ordering,
 and a tuple key orders `amount` numerically then `amount_index` numerically,
 which is `MDB_INTEGERKEY` then `compare_uint64`.
 
-**D. Deletions the correction leaves dead (rule 15).** `U64PrefixBytes`
-(`lmdb_order/u64_prefix.rs`, one consumer); `OutKey::amount_index_of`
-(`codec/chain.rs:240`); `UndoEntry::MultiInserted` (`codec/undo.rs:88`) and
-`impl UndoTarget for MultimapTableDefinition` (`store/undo.rs:275`) — after C
-the catalogue has **no multimap**, so the journal's multimap arm has nothing
-to replay; `WriteBatch::open_multimap_table` and the multimap
-`ReadSnapshot::open_multimap_table`. The `UndoEntry` variant removal is a
-codec change and rides the same bump as C.
+**D. Deletions the correction leaves dead (rule 15), in the same commit as C.**
+`U64PrefixBytes` (`lmdb_order/u64_prefix.rs`, one consumer) and its
+`Restorable` (`store/undo.rs:93`); `OutKey::amount_index_of`
+(`codec/chain.rs:240`); `UndoEntry::MultiInserted` (`codec/undo.rs:88`), the
+`SetTable` that constructs it (`store/set.rs`, re-exported at
+`store/mod.rs:112`), `WriteBatch::open_multimap_table` (`write.rs:361`) that
+returns it, `impl UndoTarget for MultimapTableDefinition` (`store/undo.rs:275`)
+and `ReadSnapshot::open_multimap_table` — after C the catalogue has **no
+multimap**, so none of it has a caller. They go together because they do not
+compile apart (§7 commit 2). **Added, same commit:** `impl Restorable for
+(u64, u64)` — the tuple key needs one to pass `open_insert_table`'s
+`K: Key + Restorable` bound (`write.rs:291`–`:293`).
 
 **E. Docs:** this document; DRS §7 S-OUT-KI row; §7.6's "`output_amounts`
 keyed verbatim with R8b-2 open" gets its dated UPDATE; `STORE_INVARIANT_REGISTER.md`
@@ -184,8 +189,8 @@ wants them, not before (rule 21: no pre-provisioned second arm).
 | `has_key_image` | `Blockchain::have_tx_keyimg_as_spent` (`blockchain.cpp:254`) ← CEN-I7's per-input check (`:3366`, `:3502`, `:3526`, `:3555`), the pool's chain half (`tx_pool.cpp:1711`), the submit verdict (`daemon_submit_ffi.cpp:126`); the block-level double-spend visitor (`blockchain.cpp:3097`) | **K1** `has_key_image(&KeyImage) -> Result<bool>` | Shared body with `BatchView` (SCR-13 shape). The C++ warns in prose that this read takes no lock and must not be paired with another (`blockchain.cpp:250`–`:253`); the snapshot is the lock. |
 | `has_key_images` | `have_tx_keyimges_as_spent` (`:3380`) ← `is_key_image_spent` RPC (`rpc_facts_ffi.cpp:915`) | **dissolves into K1** (SOK-3) | The batch form exists to hold one `rtxn` across N keys (`db_lmdb.cpp:3851`–`:3869`). A `ReadSnapshot` *is* one transaction; N calls to K1 on it are the batch. |
 | `for_all_key_images` | the digest oracle (`logical_state_digest.cpp:73`) | **K2** `key_images() -> impl Iterator<Item = Result<KeyImage, StoreError>>` | Order is the table's (`LmdbHashKey`); the one consumer is order-insensitive. |
-| `get_output_key` (single, `db_lmdb.cpp:3728`; batch `:4460`) | `Blockchain::get_output_key` (`blockchain.cpp:2616`) — **no caller**; the path builder reads the DB directly, `db.get_output_key(0, pos)` (`curve_tree_path.cpp:67`); `blockchain_utilities` (LMDB tools, die with LMDB) | **O1** `output(GlobalOutputIndex) -> Result<AtIndex<RecordedOutput>>` | `RecordedOutput { pubkey: OneTimePubkey, commitment: CommitmentBytes, height: BlockHeight, unlock_time: Timelock }` — `OutKey` minus the ids. The batch form (`allow_partial`) dissolves like SOK-3: the caller loops on one snapshot and stops at the first `BeyondCount`. |
-| `get_output_tx_and_index` (single `:3778`; batch `:4506`) | `get_output_key_mask_unlocked` (`blockchain.cpp:2623`–`:2631`) — **no caller**; the histogram's `unlocked` walk (`db_lmdb.cpp:4603`) — not ported | **O2** `output_origin(GlobalOutputIndex) -> Result<AtIndex<OutTx>>` | `OutTx { tx_hash: TxHash, local_index: OutputIndexInTx }` as it exists (`codec/chain.rs:187`–`:192`; SOK-Q4: re-exported, not renamed) from `output_txs[output_id]`. Kept although its C++ callers are dead: E2's comparator projects `output_txs` through it, and it is the read that makes SOK-2's coincidence checkable. |
+| `get_output_key` (single, `db_lmdb.cpp:3728`; batch `:4460`) | `Blockchain::get_output_key` (`blockchain.cpp:2616`) — **no caller**; the path builder reads the DB directly, `db.get_output_key(0, pos)` (`curve_tree_path.cpp:67`; SOK-10); `BlockchainLMDB::prune_tx_data`'s stripe walk (`db_lmdb.cpp:10282`, reached from `Blockchain::{prune_blockchain, update_blockchain_pruning}` `:6221`, `:6232`) — **dies with the stripe engine** (`PDM-Q7`, S-PRUNE), so it is a current caller with no redb successor; `blockchain_utilities` (LMDB tools, die with LMDB) | **O1** `output(GlobalOutputIndex) -> Result<AtIndex<RecordedOutput>>` | `RecordedOutput { pubkey: OneTimePubkey, commitment: CommitmentBytes, height: BlockHeight, unlock_time: Timelock }` — `OutKey` minus the ids. The batch form (`allow_partial`) dissolves like SOK-3: the caller loops on one snapshot and stops at the first `BeyondCount`. |
+| `get_output_tx_and_index` (amount-specific: single `:3778`, batch `:4506`, both composing `output_amounts[(amount, index)].output_id` → `output_txs`) and `get_output_tx_and_index_from_global` (`:3755`, reading `output_txs[output_id]` directly — **not** in the S-OUT-KI vocabulary, `blockchain.cpp` never calls it; the LMDB body's own helper) | `get_output_key_mask_unlocked` (`blockchain.cpp:2623`–`:2631`) — **no caller**; the histogram's `unlocked` walk (`db_lmdb.cpp:4603`) — not ported | **O2** `output_origin(GlobalOutputIndex) -> Result<AtIndex<OutTx>>` | **Index domain, stated so the implementation cannot pick the wrong one (PR #779 review):** O2 takes a *global* index and is the `_from_global` read — `output_txs[output_id]`, one lookup. It is **not** the amount-specific composition; that path (`(0, i)` → `OutKey.output_id` → `output_txs`) equals the direct read only by SOK-2's belt, and a read that depends on a belt to be right is the wrong read. `OutTx { tx_hash: TxHash, local_index: OutputIndexInTx }` as it exists (`codec/chain.rs:187`–`:192`; SOK-Q4). Kept although its `blockchain.cpp` callers are dead: E2's comparator projects `output_txs` through it, and O1(i).`output_id` vs O2(i) is how SOK-2's belt is checked from the read side. |
 | `for_all_outputs` ×2 (`:4028`, `:4063`) | **none** — `Blockchain::for_all_outputs` (`blockchain.cpp:7029`, `:7034`) has no caller in `src/` or `tests/` | **not ported** (SOK-4) | Zero consumers at HEAD; the row keeps the names. |
 | `get_output_distribution` (`:4635`) | `Blockchain::get_output_distribution` (`blockchain.cpp:2633`) ← `core::get_output_distribution` ← `RpcHandler::get_output_distribution` (`src/rpc/rpc_handler.cpp:29`) — **no RPC route**: `core_rpc_server.cpp` has no `on_get_output_distribution`; the only caller is `tests/unit_tests/output_distribution.cpp:92` | **not ported** (SOK-5) | SCR-2 found the `amount == 0` arm's helper dead; this confirms the whole method is. Its `m_nettype != FAKECHAIN` branch (`blockchain.cpp:2636`) — a rule-71 divergence — dies with it. |
 | `get_output_histogram` (`:4542`) | `on_get_output_histogram` (`src/rpc/core_rpc_server.cpp:1160`; routed `core_rpc_ffi.cpp:273`) — a **live RPC** with two in-tree clients: the daemon CLI command `output_histogram` (`src/daemon/rpc_command_executor.cpp:1204`–`:1226`, remote and local modes) and a regtest asserting the restricted listener *refuses* the whole-chain query (`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:4090`) | **not ported** (SOK-6; SOK-Q3) | Monero decoy-selection tooling: per-amount output counts with `unlocked` / `recent_cutoff` walks. FCMP++ selects no decoys (rule 60; census U-7, `CONSENSUS_RULE_CENSUS_1.md:233`). |
@@ -382,9 +387,12 @@ reproduces knowingly is in §6.1.
   (SOK-Q2): duplicates are unrepresentable by the key; density per bucket is
   `last + 1 == count`, where `count` is exact for the whole table when one
   bucket exists — and a *second* bucket appearing at `connect` is itself the
-  belt firing, because a non-zero amount on a connected vout is what CEN-H14
-  forbids and the validator admitted it (`StoreInvariantViolated`, never a
-  verdict; the validator has the bug). The SOK-2 coincidence (`output_id ==
+  belt firing: `connect` stores every miner and emission vout under `0`
+  regardless of its loud amount (`connect.rs:584`–`:598`; CEN-H14 *permits*
+  those), so a second bucket can only mean a **non-miner, non-emission** vout
+  with a non-zero amount reached the store — the case CEN-H14 forbids — and
+  the validator admitted it (`StoreInvariantViolated`, never a verdict; the
+  validator has the bug). The SOK-2 coincidence (`output_id ==
   amount_index` under `0`) joins the row; the leaf position does not (SOK-10).
 - **SI-7** — every decode strict, unchanged.
 
@@ -417,23 +425,23 @@ intermediate (O(n) scan) was wrong, and it never ships.
 
 ---
 
-## 7. Commit sequence (rule 90; one PR, ≤ 6 commits, cut from `dev` after this document merges **and PR #777 has merged**)
+## 7. Commit sequence (rule 90; one PR, ≤ 5 commits, cut from `dev` after this document merges; the #777 gate has lifted)
 
 1. `store: ReadSnapshot::has_key_image + key_images — spent_keys membership shared with BatchView` — K1, K2; the shared body moves to `chain_reads.rs` (SCR-13 shape); tests: membership on a connected chain, the scan equals the connected set, the snapshot sees one state across a concurrent connect. No layout change.
-2. `store: layout v6 — output_amounts is a keyed (amount, amount_index) table; OutKey drops its prefix; MultiInserted retired; SCHEMA_VERSION 5 → 6` — **the one layout commit**: `schema.rs`, `OutKey`, `UndoEntry`, `connect`'s output write and `next_amount_index`, SI-9 restated (SOK-Q2), `check_redb_schema_key_types.py`'s tuple rule, snapshots re-pinned, the `SCHEMA_VERSION` history entry.
-3. `store: delete the multimap machinery — U64PrefixBytes, UndoTarget for MultimapTableDefinition, open_multimap_table` — pure deletion; `undo_tests` that used `OUTPUT_AMOUNTS` as their multimap example are rewritten against the keyed table (no assertion weakened — each names what it now pins). One caller of the generic opener is **not** an `OUTPUT_AMOUNTS` site: `store_tests.rs:449`–`:453` redefines `properties` as an `IMPOSTOR` multimap to prove the typed-properties refusal is **by name, not by type** (PR #779 review). That leg is the only one proving the by-name half, so it is kept, not dropped — re-shaped as a keyed impostor (`TableDefinition<&str, &[u8]>::new("properties")` through `open_insert_table`), which asserts the same property against the opener that survives.
-4. `store: ReadSnapshot::output / output_origin — AtIndex, RecordedOutput` — O1, O2, `AtIndex<T>` with its `compile_fail` doctests, the SOK-2 two-counter test, `BeyondCount` at the count and SI-9 on a planted hole.
-5. `store: DRS §7 row, SI-9 cell, §7.6 UPDATE, index, CHANGELOG` — §10.
-6. (`docs`, if not folded into 5) `DAEMON_RPC_KV_CUTOVER.md` row for `get_output_histogram` per SOK-Q3's ruling.
+2. `store: layout v6 — output_amounts is a keyed (amount, amount_index) table; the multimap machinery goes with it; SCHEMA_VERSION 5 → 6` — **the one layout commit, and it is one unit** (PR #779 review, round 3): the multimap's deletions cannot follow in a later commit because they do not compile apart. `UndoEntry::MultiInserted` is constructed by `SetTable` (`store/set.rs:68`), which `WriteBatch::open_multimap_table` returns (`write.rs:364`) and `store/mod.rs:112` re-exports; deleting the variant (a codec change, so it rides the bump) deletes its constructor, its opener, the multimap `UndoTarget` (`undo.rs:275`), `U64PrefixBytes` and its `Restorable` (`undo.rs:93`), and `ReadSnapshot::open_multimap_table` — in this commit. In the same commit: `impl Restorable for (u64, u64)` (well-formed iff 16 bytes) — `open_insert_table` requires `K: Key + Restorable` (`write.rs:291`–`:293`) and no tuple has one today, so without it `connect`'s write does not compile; `schema.rs`, `OutKey` minus its prefix, `connect`'s output write and `next_amount_index` as a `range(..).next_back()`, SI-9 restated (SOK-Q2), `check_redb_schema_key_types.py`'s tuple rule, snapshots re-pinned, the `SCHEMA_VERSION` history entry; and every test the shape names (§8's list) rewritten against the keyed table — no assertion weakened, each names what it now pins. The one opener caller that is **not** an `OUTPUT_AMOUNTS` site, `store_tests.rs:449`–`:453` (the `properties` `IMPOSTOR` multimap, the only leg proving the typed-properties refusal is **by name, not by type**), is kept as a keyed impostor (`TableDefinition<&str, &[u8]>::new("properties")` through `open_insert_table`). `rg 'MultimapTableDefinition|SetTable|U64PrefixBytes|open_multimap_table' rust/shekyl-chain-store/src` returning nothing is the commit's exit check.
+3. `store: ReadSnapshot::output / output_origin — AtIndex, RecordedOutput` — O1, O2, `AtIndex<T>` with its `compile_fail` doctests, the SOK-2 two-counter test, `BeyondCount` at the count and SI-9 on a planted hole.
+4. `store: DRS §7 row, SI-9 cell, §7.6 UPDATE, index, CHANGELOG` — §10.
+5. (`docs`, if not folded into 4) `DAEMON_RPC_KV_CUTOVER.md` row for `get_output_histogram` per SOK-Q3's ruling.
 
-Commit 2 is the one a reviewer reads line by line; 3 is a deletion diff; 1
-and 4 are reads in the S-CHAIN-R shape.
+Commit 2 is the one a reviewer reads line by line — a layout change and
+the deletions it forces, reviewable as one because they are one; 1 and 3
+are reads in the S-CHAIN-R shape.
 
 ---
 
 ## 8. Denominator — what must stay green, what must be extended
 
-- `cargo test -p shekyl-chain-store` — S-CHAIN-W's connect/pop/undo tests are the writer-side denominator for commit 2; every literal that names `output_amounts`' shape (`connect_tests.rs:210`, `:334`, `:554`, `:597`; `undo_tests.rs:50`, `:133`, `:188`, `:242`, `:253`) changes with it and is listed here so the diff is checked against a list, not discovered. Commit 3's opener deletion has one more caller, the `IMPOSTOR` leg at `store_tests.rs:452` — re-shaped to a keyed impostor, not removed (commit 3). `rg open_multimap_table rust/shekyl-chain-store/src` returning anything after commit 3 is the check.
+- `cargo test -p shekyl-chain-store` — S-CHAIN-W's connect/pop/undo tests are the writer-side denominator for commit 2; every literal that names `output_amounts`' shape (`connect_tests.rs:210`, `:334`, `:554`, `:597`; `undo_tests.rs:52`, `:135`, `:190`, `:244`, `:255`) changes with it and is listed here so the diff is checked against a list, not discovered. Commit 2's opener deletion has one more caller, the `IMPOSTOR` leg at `store_tests.rs:452` — re-shaped to a keyed impostor, not removed (commit 2). `rg 'MultimapTableDefinition|SetTable|U64PrefixBytes|open_multimap_table' rust/shekyl-chain-store/src` returning anything after commit 2 is the check; `SetTable`'s own tests (`store/set.rs`, if any beside `undo_tests`) go with it.
 - `scripts/ci/check_redb_schema_key_types.py` — **extended** (tuple key parse; `DUPSORT compare_uint64 → (K, u64)` accepted); its `--selftest` gains the tuple case; its floor of 30 constraints holds (the table is still constrained, differently).
 - `check_redb_schema_coverage.py` (bijection) — unchanged; the table keeps its name.
 - The codec snapshot gate — `OutKey` and `UndoLog` fixtures change; the bump in commit 2 is what §11.1(b) demands.
@@ -471,6 +479,7 @@ and 4 are reads in the S-CHAIN-R shape.
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-18 | **PR #779 review round 3 (Copilot: 4 open + 4 suppressed; 8 taken, 0 refuted) — and the #777 gate lifted.** Re-based onto `51d7f2416` (#777 RTN-7 and #780 landed **code**); every code anchor re-read — only the five `undo_tests.rs` lines moved (+2); stamp moved with the checks actually re-run (242 + 8; census 6/151, held 2, 153, 126/153; policy 0/9; `tables.snap` 51; `SCHEMA_VERSION 5`). Two findings reshaped the commit sequence: the tuple key needs `impl Restorable for (u64, u64)` to pass `open_insert_table`'s bound (`write.rs:291`–`:293`), and `MultiInserted` cannot outlive its constructor — `SetTable` (`set.rs:68`) is returned by `open_multimap_table` and re-exported at `store/mod.rs:112` — so the layout change and the multimap deletions are **one commit** (6 → 5). O2's index domain pinned: the `_from_global` read (`output_txs[output_id]`), never the amount-specific composition that is right only by SOK-2's belt. `prune_tx_data`'s `get_output_key` (`db_lmdb.cpp:10282`) joins the census: a current caller that dies with the stripe engine (PDM-Q7). CEN-H14 wording corrected — miner/emission loud amounts are stored under `0` and permitted; a second bucket means a non-miner, non-emission vout escaped. Census records updated in-line (`CONSENSUS_RULE_CENSUS.md` §5.2 ×2: `get_output_key_mask_unlocked` has zero callers; `CONSENSUS_RULE_CENSUS_1.md` U-7: `get_output_distribution` has no route). Archived S-CHAIN-R doc's §10 archive bullet put in the past tense. PR title/description updated to SOK-1…SOK-10. |
 | 2026-09-18 | **PR #779 review round 2 (Copilot: 4 open + 1 suppressed; 5 taken, 0 refuted).** Commit 3's opener deletion has a non-`OUTPUT_AMOUNTS` caller — the `properties` `IMPOSTOR` multimap leg at `store_tests.rs:449`–`:453`, the only test of the by-name half of the typed-properties refusal — kept as a keyed impostor, named in §7 and §8; Q1 arm B no longer carries the refuted `== leaf` equality; Q3's default is stated as the future doc action it is (RK-8 still lists the route); the index `SOK-` row and `DRS-*` cell synchronised to two counters and SOK-10; the archived S-CHAIN-R doc's lifecycle sentence put in the past tense. Rebased onto `cb6b72b47` (#778); the two lanes' stamp moves to `eee838d4d` merged into one stamp crediting both. |
 | 2026-09-18 | **PR #779 review (Copilot: 4 open + 11 suppressed; 15 taken, 0 refuted).** The one that changed the plan was suppressed: the leaf position is **not** a third member of SOK-2's equality — `OutputIndex ≠ TreePosition`, leaves drain in `(maturity, gindex)` order — and reading the call chain behind the wrong premise found **SOK-10**: the path builder passes a tree position to `get_output_key(0, pos)` unresolved (`curve_tree_path.cpp:67`, `rpc_path.rs:85`–`:89`), inherited from the pre-extraction C++; a reordered chunk fails proof verification. Routed to the path-FFI lane with a `FOLLOWUPS.md` row and falsifier; O1's `GlobalOutputIndex` parameter is the store's half. Also taken: the `output_histogram` CLI command joins SOK-6/Q3's caller set; O2 returns `OutTx` as it exists (`local_index`); the `BeyondCount` boundary stated as `≥ count`; preamble reworded (K2 named, two lookups not one record, no-caller vs no-route, the SOK-1 sentence); the redb falsifier without a pipe; `#760` = plan PR, `#772` = increment in the two chain-rules docs; the archived S-CHAIN-R doc's two live instructions marked done; CTS's two name-mentions linked to `completed/`; index stamp moved to `eee838d4d` with its checks re-run. |
 | 2026-09-18 | **Substrate re-check at `eee838d4d`** (#774 PDM-Q second ruling pass + S-PRUNE skeleton, #775 two-store record, #776 curve-tree plan — all docs-only; no `rust/` or `src/` change, anchors hold). One interaction found and recorded in §3.3: `PDM-Q1` grades this surface's output tables CACHE and `spent_keys` KEEP-C; `PDM-Q2`'s predicate discards only the GOOD region, so the dense-index absence model stands, with the reopener named if a CACHE discard is ever ruled. `CURVE_TREE_STORE_SHAPES.md` landed (#776) and is now linked. Nothing in this plan is re-addressed. |

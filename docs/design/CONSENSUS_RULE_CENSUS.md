@@ -591,7 +591,11 @@ walking the live function will meet them. Rule-60 material throughout.
    off the acceptance path.** Verified at the pin: the only live caller of
    `is_tx_spendtime_unlocked` is the RPC-serving
    `get_output_key_mask_unlocked` (:2681); the other caller is dead
-   surface #1. RC rowed these (RC-80, RC-32) as consensus; the merge
+   surface #1. **UPDATE 2026-09-18 (S-OUT-KI pre-flight, SOK-7):**
+   `get_output_key_mask_unlocked` itself has **no caller** at `51d7f2416`
+   (`rg get_output_key_mask_unlocked src tests` → its declaration and
+   definition only), so `is_tx_spendtime_unlocked`'s live-caller count is
+   **zero**; the conclusion below is unchanged and stronger. RC rowed these (RC-80, RC-32) as consensus; the merge
    resolves them here — the unix-time arm and the `+(WINDOW+1)*T/2`
    time projection constrain nothing a block or tx can do. The *stored*
    `unlock_time` semantics they would have interpreted are inert by
@@ -725,8 +729,10 @@ input, not fixes.
    effect). Verified at hardfork.cpp:41–50, 109–113.
 4. **RC-32/RC-80 are not on the acceptance path** (§5.2): the only live
    `is_tx_spendtime_unlocked` caller is the RPC-serving
-   `get_output_key_mask_unlocked` (:2670–2682). RC's consensus flag on
-   those rows does not survive contact with the caller graph.
+   `get_output_key_mask_unlocked` (:2670–2682) — **UPDATE 2026-09-18 (SOK-7):
+   which is itself uncalled at `51d7f2416`; zero live callers**. RC's
+   consensus flag on those rows does not survive contact with the caller
+   graph.
 5. **The Fh = 14,000,000 ceiling is wallet-side** (CEN-M3): the decision-log
    :4684–4690 ruling covers the fee-tier cap "on every tier including
    Custom"; no such constant exists in `src/` (grepped). It is evidence
