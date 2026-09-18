@@ -13,10 +13,10 @@
 //! (`DAEMON_REDB_STORE.md` §3.6.2, the read-side half).
 
 use shekyl_chain_rules::{AtHeight, RuleSetId};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
+use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, GENESIS_ID};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -508,5 +508,135 @@ fn the_fold_reads_return_exactly_what_connect_wrote() {
         snap.long_term_effective_median(h(3)).expect("read"),
         AtHeight::AboveTip
     );
+    cleanup(&path);
+}
+
+// ------------------------------------------------------------ S-OUT-KI K1
+
+#[test]
+fn has_key_image_is_true_for_a_spent_image_and_false_otherwise_on_one_snapshot() {
+    let path = tmp("read-has-key-image");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(
+        &store,
+        &[vec![], vec![spend(0x5e, 1)], vec![spend(0x6f, 1)]],
+    );
+    let snap = store.begin_read().expect("read");
+    // N calls on one snapshot are the batch form `has_key_images` was
+    // (SOK-3): every answer is against the same committed state.
+    for (image, spent) in [(0x5e, true), (0x6f, true), (0x00, false), (0xee, false)] {
+        assert_eq!(
+            snap.has_key_image(&KeyImage::from_bytes([image; 32]))
+                .expect("read"),
+            spent,
+            "key image {image:#04x}: membership is exact, `bool` is the shape"
+        );
+    }
+    cleanup(&path);
+}
+
+#[test]
+fn has_key_image_on_the_snapshot_and_in_the_batch_are_one_body() {
+    let path = tmp("read-has-key-image-two-readers");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
+    let snap = store.begin_read().expect("read");
+    let images = [0x5eu8, 0x00];
+    let from_snapshot: Vec<bool> = images
+        .iter()
+        .map(|b| {
+            snap.has_key_image(&KeyImage::from_bytes([*b; 32]))
+                .expect("read")
+        })
+        .collect();
+    let from_batch: Result<Vec<bool>, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(images
+            .iter()
+            .map(|b| {
+                shekyl_chain_rules::ChainView::has_key_image(&view, &KeyImage::from_bytes([*b; 32]))
+                    .expect("read")
+            })
+            .collect())
+    });
+    assert_eq!(
+        from_snapshot,
+        from_batch.expect("batch"),
+        "the validator's view and the read snapshot answer from one body"
+    );
+    cleanup(&path);
+}
+
+// ------------------------------------------------------------ S-OUT-KI K2
+
+#[test]
+fn key_images_yields_exactly_the_connected_set() {
+    let path = tmp("read-key-images");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(
+        &store,
+        &[
+            vec![],
+            vec![spend(0x5e, 1), spend(0x01, 1)],
+            vec![spend(0x6f, 1)],
+        ],
+    );
+    let snap = store.begin_read().expect("read");
+    let mut scanned: Vec<[u8; 32]> = snap
+        .key_images()
+        .expect("open")
+        .map(|r| r.expect("item").to_bytes())
+        .collect();
+    scanned.sort_unstable();
+    let mut expected = vec![[0x5eu8; 32], [0x01; 32], [0x6f; 32]];
+    expected.sort_unstable();
+    assert_eq!(
+        scanned, expected,
+        "the scan is the connected set, no more and no less — compared as a set, \
+         because the digest consumer is order-insensitive and no other consumer exists"
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn key_images_on_an_empty_chain_is_an_empty_scan_not_an_error() {
+    let path = tmp("read-key-images-empty");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let snap = store.begin_read().expect("read");
+    assert_eq!(
+        snap.key_images().expect("open").count(),
+        0,
+        "the seal creates `spent_keys` (amendment A2), so an empty chain scans as empty"
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
+    let path = tmp("read-key-images-snapshot-isolation");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let hashes = connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
+    let snap = store.begin_read().expect("read");
+    // Connect another spend after the snapshot was taken.
+    let cand = candidate(2, hashes[1], vec![spend(0x6f, 1)]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        batch.connect(judge(&view, cand)?, facts(2, 0), GENESIS_ID)?;
+        Ok(())
+    });
+    out.expect("connect");
+    // The older snapshot still answers from the state it was opened on —
+    // the C++'s "no getheight + gethash(height-1)" hazard is the handle's
+    // shape here, not a warning in prose.
+    assert!(!snap
+        .has_key_image(&KeyImage::from_bytes([0x6f; 32]))
+        .expect("read"));
+    assert_eq!(snap.key_images().expect("open").count(), 1);
+    // A fresh snapshot sees both.
+    let fresh = store.begin_read().expect("read");
+    assert!(fresh
+        .has_key_image(&KeyImage::from_bytes([0x6f; 32]))
+        .expect("read"));
+    assert_eq!(fresh.key_images().expect("open").count(), 2);
     cleanup(&path);
 }
