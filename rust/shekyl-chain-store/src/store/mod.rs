@@ -108,8 +108,9 @@ pub use error::{
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use pop::Popped;
-pub use read::ReadSnapshot;
+pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState};
 pub use set::SetTable;
+pub use undo::Restorable;
 pub use view::BatchView;
 pub use write::WriteBatch;
 
@@ -470,7 +471,7 @@ impl ChainStore {
             Backend::Writable(db) => db.begin_read(),
             Backend::ReadOnly(db) => db.begin_read(),
         }
-        .map(ReadSnapshot::new)
+        .map(|txn| ReadSnapshot::new(txn, self))
         .map_err(|e| EngineError::BeginRead(e).into())
     }
 }
@@ -531,3 +532,11 @@ mod connect_tests;
 #[cfg(test)]
 #[path = "pop_tests.rs"]
 mod pop_tests;
+
+#[cfg(test)]
+#[path = "amendments_tests.rs"]
+mod amendments_tests;
+
+#[cfg(test)]
+#[path = "read_tests.rs"]
+mod read_tests;

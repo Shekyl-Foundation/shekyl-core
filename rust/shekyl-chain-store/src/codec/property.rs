@@ -48,9 +48,28 @@
 //! domain from the same list), and its key cannot collide with another
 //! cell's without a test in this module failing.
 
+use shekyl_units::AtomicUnits;
+
 use crate::family_set::FamilySet;
 
-use super::{Canonical, CoverageGaps, PassedThroughFacts, SchemaVersion, SettlementEpochBlocks};
+use super::{
+    BlobKind, Canonical, CoverageGaps, PassedThroughFacts, SchemaVersion, SettlementEpochBlocks,
+};
+
+/// The value shape of the `properties` table (`shape` module docs).
+///
+/// `properties` is the one table whose codec is chosen **per key**: each
+/// [`PropertyCell`] names its own `Value: Canonical`, and the store decodes
+/// a cell under the codec its key selects (`store/header.rs`). No single
+/// `Coded<V>` can name that, so the table is a [`Blob`](super::Blob) of
+/// this kind, and `well_formed` checks what can be checked without the
+/// key: nothing. The per-cell strictness lives where the key is.
+#[derive(Debug)]
+pub struct PropertyCellBytes;
+
+impl BlobKind for PropertyCellBytes {
+    const NAME: &'static str = "property_cell";
+}
 
 /// Whose state a `properties` cell is, as a value (for the digest fold).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,7 +280,7 @@ property_cells! {
     /// `checked_add` of the block's burned amount (register row SI-8 — an
     /// overflow is fatal, never a saturate); `pop` restores the journaled
     /// pre-image, so there is no subtract and no pop-side saturation.
-    TotalBurnedCell { key: "total_burned", scope: ChainState, value: u64 },
+    TotalBurnedCell { key: "total_burned", scope: ChainState, value: AtomicUnits },
 }
 
 /// A chain-state cell that exists only in this crate's tests, so the typed
@@ -350,7 +369,7 @@ mod tests {
                 PropertyCellSpec {
                     key: TotalBurnedCell::KEY,
                     scope: TotalBurnedCell::SCOPE,
-                    value: u64::NAME,
+                    value: AtomicUnits::NAME,
                 },
             ]
         );

@@ -8,4 +8,4 @@ passed_through_facts = engine_local<passed_through_facts>
 rule_coverage_gaps = engine_local<rule_coverage_gaps>
 schema_version = engine_local<schema_version>
 settlement_epoch_blocks = engine_local<settlement_epoch_blocks>
-total_burned = chain_state<u64>
+total_burned = chain_state<atomic_units>

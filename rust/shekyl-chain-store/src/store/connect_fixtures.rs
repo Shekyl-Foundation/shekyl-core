@@ -11,7 +11,7 @@ use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, PqcAuth, Transaction, TxPrefix};
 
 use super::store_tests::TestErr;
 use super::view::BatchView;
@@ -79,6 +79,27 @@ pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
     }
 }
 
+/// [`spend`] with one `pqc_auths` entry, so its txid is **4-part** and its
+/// identity carries `pqc_auth_hash: Some(_)` — the shape that writes a
+/// `txs_pqc_auth_hash` row (amendment A3, `PDM-Q-F26` leg 1). The auth is
+/// the minimal well-formed header (`auth_version 1`, `scheme_id 1`, empty
+/// blobs): no landed rule verifies it, and what the store records is its
+/// count-prefixed digest, not its validity.
+pub(super) fn spend_with_pqc_auth(key_image: u8, outputs: usize) -> Transaction {
+    let mut tx = spend(key_image, outputs);
+    let Ct::Fcmp { pqc_auths, .. } = &mut tx.ct else {
+        unreachable!("spend() builds Ct::Fcmp");
+    };
+    pqc_auths.push(PqcAuth {
+        auth_version: 1,
+        scheme_id: 1,
+        flags: 0,
+        hybrid_public_key: Vec::new(),
+        hybrid_signature: Vec::new(),
+    });
+    tx
+}
+
 /// The root the header at `height` must carry under CEN-B5: the tree state
 /// *at* `height` — the `root_after` the connect of `height − 1` wrote
 /// (`facts(height − 1)`), or the empty tree at genesis. Kept in one place
@@ -119,6 +140,11 @@ pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
         root_after: Fact::passed_through(CurveTreeRoot::from_bytes(
             [0xc0 + u8::try_from(height).expect("small"); 32],
         )),
+        // Distinct per height, so a test that reads it back can tell `h`
+        // from `h ± 1` (the SCR-19 indexing rule as a test, §3.6).
+        long_term_effective_median: Fact::passed_through(LongTermWeight::from_raw(
+            300_000 + 7 * height,
+        )),
     }
 }
 
@@ -131,6 +157,39 @@ pub(super) fn judge<'b, 'id>(
 }
 
 pub(super) const GENESIS_ID: RuleSetId = RuleSetId::GENESIS;
+
+/// Connect `listed` as consecutive blocks from genesis in one batch,
+/// handing each `facts(h, 0)`. Returns each block's hash.
+pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
+    connect_chain_with_burn(store, listed, 0)
+}
+
+/// [`connect_chain`] with a uniform per-block `burned` fact (pop tests
+/// fold a non-zero burn so they can assert the pre-image on pop).
+pub(super) fn connect_chain_with_burn(
+    store: &ChainStore,
+    listed: &[Vec<Transaction>],
+    burned: u64,
+) -> Vec<[u8; 32]> {
+    let mut hashes = Vec::new();
+    let mut previous = [0u8; 32];
+    let mut cands = Vec::new();
+    for (h, txs) in listed.iter().enumerate() {
+        let cand = candidate(h as u64, previous, txs.clone());
+        previous = cand.block.hash();
+        hashes.push(previous);
+        cands.push(cand);
+    }
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        for (h, cand) in cands.into_iter().enumerate() {
+            batch.connect(judge(&view, cand)?, facts(h as u64, burned), GENESIS_ID)?;
+        }
+        Ok(())
+    });
+    out.expect("chain connects");
+    hashes
+}
 
 pub(super) fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Block) {
     let cand = candidate(0, [0; 32], Vec::new());

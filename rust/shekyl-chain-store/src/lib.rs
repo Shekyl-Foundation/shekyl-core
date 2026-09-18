@@ -40,7 +40,7 @@
 //!   history instead of guessing.
 //!
 //! - **DRS-E1 increment 3 (S-CHAIN-W)** — the connect/pop write set
-//!   (`docs/design/DRS_E1_SCHAIN_W.md`). [`store::WriteBatch::connect`]
+//!   (`docs/completed/DRS_E1_SCHAIN_W.md`). [`store::WriteBatch::connect`]
 //!   takes the validator's `ChainValid` (brand-bound to the batch and to
 //!   [`store::BatchView`], the `ChainView` projected from it) plus
 //!   [`store::ConnectFacts`] — the consensus-visible values the store

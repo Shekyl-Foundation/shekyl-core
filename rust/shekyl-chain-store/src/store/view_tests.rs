@@ -16,9 +16,9 @@ use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, Tx
 
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
-use crate::codec::{BlockInfo, Canonical, CodecError};
+use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Encoded, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS};
+use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG};
 
 /// A coinbase the block parser accepts back (§2.5: a sole `gen` input and
 /// a `Null` ct), with one output so the per-output base arrays are
@@ -78,13 +78,15 @@ fn record_block(batch: &WriteBatch<'_, '_>, height: u64, blk: &Block) -> Result<
         hash: shekyl_types::BlockHash::from_bytes(blk.hash()),
         rct_outputs: 0,
         long_term_weight: shekyl_types::LongTermWeight::ZERO,
+        cumulative_tx_count: 0,
+        long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
     };
     batch
         .open_insert_table(BLOCK_INFO, PROBE_ROW)?
-        .insert(height, info.encode().as_slice())?;
+        .insert(height, info.encoded().as_encoded())?;
     batch
         .open_insert_table(BLOCKS, PROBE_ROW)?
-        .insert(height, blk.serialize().as_slice())?;
+        .insert(height, Raw::<BlockBody>::new(&blk.serialize()))?;
     Ok(())
 }
 
@@ -93,7 +95,7 @@ fn record_root(batch: &WriteBatch<'_, '_>, key: u64, byte: u8) -> Result<(), Sto
         .open_insert_table(CURVE_TREE_ROOTS, PROBE_ROW)?
         .insert(
             key,
-            CurveTreeRoot::from_bytes([byte; 32]).encode().as_slice(),
+            CurveTreeRoot::from_bytes([byte; 32]).encoded().as_encoded(),
         )
 }
 
@@ -311,13 +313,15 @@ fn a_block_blob_that_does_not_hash_to_block_info_is_si7() {
             hash: shekyl_types::BlockHash::from_bytes(recorded.hash()),
             rct_outputs: 0,
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
+            cumulative_tx_count: 0,
+            long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?
-            .insert(0, info.encode().as_slice())?;
+            .insert(0, info.encoded().as_encoded())?;
         batch
             .open_insert_table(BLOCKS, PROBE_ROW)?
-            .insert(0, replaced.serialize().as_slice())?;
+            .insert(0, Raw::<BlockBody>::new(&replaced.serialize()))?;
         let e = batch
             .chain_view()
             .block_at(BlockHeight::ZERO)
@@ -343,7 +347,7 @@ fn has_key_image_reads_spent_keys_and_sees_the_batch_s_own_writes() {
         assert!(!view.has_key_image(&spent)?, "empty chain");
         batch
             .open_insert_table(SPENT_KEYS, PROBE_ROW)?
-            .insert(LmdbHashKey::from_bytes(*spent.as_bytes()), ())?;
+            .insert(LmdbHashKey::from_bytes(*spent.as_bytes()), Present)?;
         // The same view, no new snapshot: a write earlier in this batch is
         // visible to a validation later in it (SCW-13).
         assert!(view.has_key_image(&spent)?);
@@ -401,35 +405,56 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
     cleanup(&path);
 }
 
+/// A corrupt row read through the view is SI-7, and the batch refuses to
+/// commit even when the closure swallows the fault. Planted on the surface
+/// where a corrupt row is still **representable**: a `blocks` blob that does
+/// not parse. It used to be planted as a 3-byte `block_info` row; under
+/// §11.1(f) `block_info` is `Coded<BlockInfo>`, fixed-width 104, and the
+/// crate refuses a wrong width before redb would assert it — a wrong-width
+/// `block_info` row cannot reach
+/// the file (`a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table` below), so its
+/// `Undecodable` arm has no instance to pin.
 #[test]
-fn a_corrupt_typed_cell_read_through_the_view_is_si7_and_poisons_the_batch() {
+fn a_corrupt_row_read_through_the_view_is_si7_and_poisons_the_batch() {
     let path = tmp("view-corrupt");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // Plant a `block_info` row that is not 88 bytes, and a `blocks` row that
-    // is not a block.
     let planted: Result<(), TestErr> = store.write(|batch| {
-        batch
-            .open_insert_table(BLOCK_INFO, PROBE_ROW)?
-            .insert(3, [1u8, 2, 3].as_slice())?;
-        batch
-            .open_insert_table(BLOCK_INFO, PROBE_ROW)?
-            .insert(4, block(9, 9).hash().as_slice())?; // wrong width too, but 32 B
+        record_block(batch, 0, &block(0, 1_000))?;
+        record_block(batch, 1, &block(1, 1_060))?;
+        record_block(batch, 2, &block(2, 1_120))?;
         Ok(())
     });
     planted.expect("plant");
+    drop(store);
+    // Below the tip, with its `block_info` row intact: the blob alone is
+    // what does not decode. Planted around the write boundary — a crate
+    // handle would refuse an unparseable `BlockBody` as `RowIllFormed`.
+    {
+        let db = redb::Database::open(&path).expect("raw open");
+        let txn = db.begin_write().expect("raw write");
+        txn.open_table(BLOCKS)
+            .expect("t")
+            .insert(1, Raw::<BlockBody>::new(&[1u8, 2, 3]))
+            .expect("plant");
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
 
     // The closure swallows the fault and returns Ok; the batch still refuses.
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let e = view
-            .block_at(BlockHeight::from_raw(3))
-            .expect_err("a 3-byte block_info is not a BlockInfo");
+            .block_at(BlockHeight::from_raw(1))
+            .expect_err("a 3-byte blob is not a block");
         assert!(
             matches!(
                 e,
                 StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
-                    key: "block_info",
-                    ..
+                    key: "blocks",
+                    fault: CellFault::Undecodable(CodecError::Invalid {
+                        codec: "block",
+                        reason: "block blob does not parse",
+                    }),
                 })
             ),
             "{e}"
@@ -439,7 +464,7 @@ fn a_corrupt_typed_cell_read_through_the_view_is_si7_and_poisons_the_batch() {
     assert!(
         matches!(
             out,
-            Err(TestErr::Store(ref msg)) if msg.contains("SI-7 violated: typed cell `block_info`")
+            Err(TestErr::Store(ref msg)) if msg.contains("SI-7 violated: typed cell `blocks`")
         ),
         "{out:?}"
     );
@@ -459,10 +484,12 @@ fn a_block_info_row_with_no_blocks_row_is_si7() {
             hash: shekyl_types::BlockHash::from_bytes([9; 32]),
             rct_outputs: 0,
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
+            cumulative_tx_count: 0,
+            long_term_effective_median: shekyl_types::LongTermWeight::ZERO,
         };
         batch
             .open_insert_table(BLOCK_INFO, PROBE_ROW)?
-            .insert(7, info.encode().as_slice())?;
+            .insert(7, info.encoded().as_encoded())?;
         Ok(())
     });
     planted.expect("plant");
@@ -565,7 +592,9 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
             let mut blocks = txn.open_table(BLOCKS).expect("blocks");
             blocks.remove(1).expect("remove 1");
             let rewritten = block(2, 9_999).serialize();
-            blocks.insert(2, rewritten.as_slice()).expect("rewrite 2");
+            blocks
+                .insert(2, Raw::<BlockBody>::new(&rewritten))
+                .expect("rewrite 2");
         }
         txn.commit().expect("commit");
     }
@@ -601,17 +630,27 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
     cleanup(&path);
 }
 
-/// The one deliberate tightening the shared body brought (its module docs,
-/// *The tip is one decoded read*), pinned as the scenario the PR #764 review
-/// named: heights 0 and 1 recorded, `block_info[1]` — the tip — rewritten
-/// to bytes that do not decode. Before, `block_at(0)` succeeded and
-/// `block_at(2)` was `AboveTip` because the tip was read by key alone; now
-/// **every** classified read is SI-7 `block_info` / `Undecodable` and the
-/// batch is poisoned — a store whose tip row does not decode has no trusted
-/// tip, and `connect` would poison on this same row before its first belt.
+/// §11.1(f): a `Coded<V>` table reports `V::FIXED_WIDTH` to the engine, and
+/// the engine **asserts** it in `LeafBuilder::append` (redb 4.1
+/// `btree_base.rs`) — a panic that poisons the transaction lock. So the
+/// scenario this test used to pin — `block_info[tip]` rewritten to 87 bytes,
+/// then SI-7 `Undecodable` on every classified read (the PR #764 review's
+/// case) — has **no representable instance**: the bytes never reach the
+/// file. The tightening it motivated stands (`chain_reads` module docs, *The
+/// tip is one decoded read*); what changed is that `BlockInfo`, whose codec
+/// checks only width (now 104 bytes), can no longer be undecodable in a file
+/// redb accepted.
+///
+/// This test pins what replaced the scenario: the wrong-width write is
+/// refused **by this crate, as a value**, before the engine's assertion.
+/// `Canonical::encoded` cannot produce it, but redb's `Value::from_bytes` is
+/// a public trait method and can (`Encoded::forged` is that path under
+/// `cfg(test)`), so every write through the crate's handles checks the
+/// width first (`keyed::check_row`) and returns `StoreCannot::RowWidth`.
+/// Nothing lands, nothing panics, and the store is still usable afterwards.
 #[test]
-fn an_undecodable_tip_row_is_si7_on_every_classified_read() {
-    let path = tmp("view-undecodable-tip");
+fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
+    let path = tmp("view-wrong-width");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let planted: Result<(), TestErr> = store.write(|batch| {
         record_block(batch, 0, &block(0, 1_000))?;
@@ -619,66 +658,57 @@ fn an_undecodable_tip_row_is_si7_on_every_classified_read() {
         Ok(())
     });
     planted.expect("plant");
-    drop(store);
-    {
-        let db = redb::Database::open(&path).expect("raw open");
-        let txn = db.begin_write().expect("raw write");
-        {
-            let mut infos = txn.open_table(BLOCK_INFO).expect("block_info");
-            infos
-                .insert(1, &[0xee; 87][..])
-                .expect("87 bytes: not a BlockInfo");
-        }
-        txn.commit().expect("commit");
-    }
-    // One handle per height: the branded-view SI-7 halts the *writer*, and
-    // the halt lives in the handle (DRS §3.6.2 — re-derived on restart,
-    // never persisted). A second `write` on the same handle is refused at
-    // admission as `WriterHalted` before the closure runs, which would let
-    // the outer assertion pass without `block_at` ever being called — the
-    // PR #764 review caught exactly that. The outer assertion also names
-    // the row, so a refusal cannot satisfy it.
-    for asked in [0u64, 1, 2] {
-        let store = ChainStore::create(&path, EPOCH).expect("reopen");
-        assert_eq!(store.connect_state(), ConnectState::Live, "fresh handle");
-        let mut ran = false;
-        let out: Result<(), TestErr> = store.write(|batch| {
-            ran = true;
-            let e = batch
-                .chain_view()
-                .block_at(BlockHeight::from_raw(asked))
-                .expect_err("the tip row does not decode");
-            assert!(
-                matches!(
-                    e,
-                    StoreError::InvariantViolated(StoreInvariant::CellCorrupt {
-                        key: "block_info",
-                        fault: CellFault::Undecodable(_),
-                    })
-                ),
-                "block_at({asked}): {e}"
-            );
-            Ok(())
-        });
-        assert!(ran, "block_at({asked}) must actually run");
-        let expected = StoreError::from(StoreInvariant::CellCorrupt {
-            key: "block_info",
-            fault: CellFault::Undecodable(CodecError::Length {
-                codec: "block_info",
-                expected: 88,
-                actual: 87,
-            }),
-        })
-        .to_string();
-        assert_eq!(
-            out,
-            Err(TestErr::Store(expected)),
-            "block_at({asked}) must poison the batch with the tip row's SI-7"
-        );
-        assert!(
-            matches!(store.connect_state(), ConnectState::Halted { .. }),
-            "the branded-view SI-7 halts the writer (block_at({asked}))"
-        );
-    }
+    let refused: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_upsert_table(BLOCK_INFO)?
+            .upsert(1, Encoded::forged(&[0xee; 103]))?;
+        Ok(())
+    });
+    let expected = StoreError::from(StoreCannot::RowWidth {
+        table: "block_info",
+        expected: BlockInfo::FIXED_WIDTH.expect("fixed"),
+        actual: 103,
+    })
+    .to_string();
+    assert_eq!(refused, Err(TestErr::Store(expected)));
+    // The refused write left nothing behind, and the writer is not halted:
+    // a caller error is a refusal (`StoreCannot`), not an invariant.
+    assert_eq!(store.connect_state(), ConnectState::Live);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let AtHeight::Recorded(recorded) = batch
+            .chain_view()
+            .block_at(BlockHeight::from_raw(1))
+            .expect("block_at(1)")
+        else {
+            panic!("height 1 is recorded");
+        };
+        assert_eq!(recorded.hash, BlockHash::from_bytes(block(1, 1_060).hash()));
+        Ok(())
+    });
+    assert_eq!(out, Ok(()), "the recorded rows are as they were");
+    cleanup(&path);
+}
+
+/// Variable-width `Coded<V>` reports `fixed_width() == None`, so the width
+/// check is a no-op. The insertion boundary still runs `V::decode` via
+/// `Restorable::well_formed`: a forged `Encoded<UndoLog>` that is not a
+/// row never reaches the file.
+#[test]
+fn a_variable_width_coded_row_that_does_not_decode_is_refused() {
+    let path = tmp("view-ill-formed-undo");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let refused: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_upsert_table(UNDO_LOG)?
+            .upsert(0, Encoded::forged(&[0xee; 3]))?;
+        Ok(())
+    });
+    let expected = StoreError::from(StoreCannot::RowIllFormed {
+        table: "undo_log",
+        reason: "row does not decode under the table's codec",
+    })
+    .to_string();
+    assert_eq!(refused, Err(TestErr::Store(expected)));
+    assert_eq!(store.connect_state(), ConnectState::Live);
     cleanup(&path);
 }

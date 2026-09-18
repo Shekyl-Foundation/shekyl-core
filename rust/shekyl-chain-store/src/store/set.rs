@@ -22,6 +22,7 @@ use crate::codec::UndoEntry;
 
 use super::error::{EngineError, StoreError};
 use super::keyed::Handles;
+use super::undo::Restorable;
 
 /// A multimap table opened for writing inside one
 /// [`WriteBatch`](super::WriteBatch).
@@ -31,7 +32,7 @@ pub struct SetTable<'txn, K: Key + 'static, V: Key + 'static> {
     batch: Handles<'txn>,
 }
 
-impl<'txn, K: Key + 'static, V: Key + 'static> SetTable<'txn, K, V> {
+impl<'txn, K: Key + Restorable + 'static, V: Key + Restorable + 'static> SetTable<'txn, K, V> {
     pub(super) const fn new(inner: MultimapTable<'txn, K, V>, batch: Handles<'txn>) -> Self {
         Self { inner, batch }
     }
@@ -49,6 +50,8 @@ impl<'txn, K: Key + 'static, V: Key + 'static> SetTable<'txn, K, V> {
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<bool, StoreError> {
+        super::keyed::check_row::<K>(self.batch.table_name(), key.borrow())?;
+        super::keyed::check_row::<V>(self.batch.table_name(), value.borrow())?;
         let captured = self
             .batch
             .capture(K::as_bytes(key.borrow()))

@@ -38,12 +38,12 @@ use redb::{ReadTransaction, ReadableTable, WriteTransaction};
 
 use crate::apply_policy::ApplyPolicy;
 use crate::codec::{
-    ApplyPolicyCell, Canonical, CoverageGaps, CoverageGapsCell, PassedThroughFacts,
-    PassedThroughFactsCell, PropertyCell, SchemaVersionCell, SettlementEpochBlocks,
-    SettlementEpochBlocksCell, SCHEMA_VERSION,
+    ApplyPolicyCell, Blob, Canonical, CoverageGaps, CoverageGapsCell, PassedThroughFacts,
+    PassedThroughFactsCell, PropertyCell, PropertyCellBytes, Raw, SchemaVersionCell,
+    SettlementEpochBlocks, SettlementEpochBlocksCell, SCHEMA_VERSION,
 };
 use crate::provenance::Provenance;
-use crate::schema::PROPERTIES;
+use crate::schema::{self, PROPERTIES};
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
 
@@ -65,13 +65,35 @@ pub(super) fn seal(
     put::<SettlementEpochBlocksCell>(txn, &epoch)?;
     put::<CoverageGapsCell>(txn, &CoverageGaps::NONE)?;
     put::<PassedThroughFactsCell>(txn, &PassedThroughFacts::NONE)?;
+    // Amendment A2 (SCR-17): every table with a writer exists from the
+    // first commit, so no reader ever has to read *absent table* as *empty
+    // table*. The set is the catalogue's, filtered by value shape.
+    for table in schema::UNDO_TARGETS {
+        table.create(txn)?;
+    }
     Ok(provenance)
+}
+
+/// Amendment A2's other half: a sealed file has every table with a writer.
+/// One that lacks a table this store's seal would have created was not
+/// written by this store — SI-7, the table named as the cell.
+fn verify_sealed_tables(txn: &ReadTransaction) -> Result<(), StoreError> {
+    for table in schema::UNDO_TARGETS.iter().filter(|t| t.sealed()) {
+        if !table.exists(txn)? {
+            return Err(StoreInvariant::CellCorrupt {
+                key: table.name(),
+                fault: CellFault::Absent,
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Read the three provenance components from an open `properties` table.
 /// Each is sealed at create, so absence is corruption, not "fresh".
 fn provenance_of(
-    table: &impl ReadableTable<&'static str, &'static [u8]>,
+    table: &impl ReadableTable<&'static str, Blob<PropertyCellBytes>>,
 ) -> Result<Provenance, StoreError> {
     let stubbed = get::<ApplyPolicyCell>(table)?.ok_or(absent::<ApplyPolicyCell>())?;
     let gaps = get::<CoverageGapsCell>(table)?.ok_or(absent::<CoverageGapsCell>())?;
@@ -100,8 +122,20 @@ pub(super) fn verify(
         Err(redb::TableError::TableDoesNotExist(_)) => {
             return Err(StoreCannot::SchemaVersionAbsent.into())
         }
+        // The header table's stored type is not this layout's (§11.1(f)
+        // moved it): a file from another layout, refused one step before
+        // the version cell could say which.
+        Err(redb::TableError::TableTypeMismatch { .. }) => {
+            return Err(StoreCannot::LayoutForeign {
+                expected: SCHEMA_VERSION,
+            }
+            .into())
+        }
         Err(e) => return Err(EngineError::Table(e).into()),
     };
+    // Version before table set: a file at another version is *foreign*,
+    // not *corrupt*, and must be named as such even where its table set
+    // would also fail the current seal's check.
     let found = get::<SchemaVersionCell>(&table)?.ok_or(StoreCannot::SchemaVersionAbsent)?;
     if found != SCHEMA_VERSION {
         return Err(StoreCannot::SchemaVersionMismatch {
@@ -110,6 +144,7 @@ pub(super) fn verify(
         }
         .into());
     }
+    verify_sealed_tables(txn)?;
     let pinned =
         get::<SettlementEpochBlocksCell>(&table)?.ok_or(absent::<SettlementEpochBlocksCell>())?;
     if pinned != epoch {
@@ -185,18 +220,20 @@ pub(super) fn widen_passed_through(
 /// `Ok(None)` if absent; [`StoreInvariant::CellCorrupt`] if present but not an
 /// encoding of `C::Value`.
 pub(super) fn get<C: PropertyCell>(
-    table: &impl ReadableTable<&'static str, &'static [u8]>,
+    table: &impl ReadableTable<&'static str, Blob<PropertyCellBytes>>,
 ) -> Result<Option<C::Value>, StoreError> {
     let Some(guard) = table.get(C::KEY).map_err(EngineError::Storage)? else {
         return Ok(None);
     };
-    C::Value::decode(guard.value()).map(Some).map_err(|cause| {
-        StoreInvariant::CellCorrupt {
-            key: C::KEY,
-            fault: CellFault::Undecodable(cause),
-        }
-        .into()
-    })
+    C::Value::decode(guard.value().bytes())
+        .map(Some)
+        .map_err(|cause| {
+            StoreInvariant::CellCorrupt {
+                key: C::KEY,
+                fault: CellFault::Undecodable(cause),
+            }
+            .into()
+        })
 }
 
 /// Write cell `C` in `txn`. Header cells are store-owned registers;
@@ -209,7 +246,7 @@ pub(super) fn put<C: PropertyCell>(
 ) -> Result<(), StoreError> {
     let mut table = txn.open_table(PROPERTIES).map_err(EngineError::Table)?;
     table
-        .insert(C::KEY, value.encode().as_slice())
+        .insert(C::KEY, Raw::<PropertyCellBytes>::new(&value.encode()))
         .map(drop)
         .map_err(|e| EngineError::Storage(e).into())
 }

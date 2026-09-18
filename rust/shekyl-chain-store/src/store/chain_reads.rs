@@ -39,8 +39,12 @@
 //! reader — `ChainView::tip()` needs the hash, the snapshot's tip needs the
 //! hash, and a second key-only path would be two readings of one row, the
 //! which-key ambiguity SCW-19 closed for `curve_tree_roots`. The cost is
-//! one 88-byte decode per read; the test that pins the tightening is
-//! `view_tests::an_undecodable_tip_row_is_si7_on_every_classified_read`.
+//! one 104-byte decode per read. The test that first pinned the tightening
+//! planted an undecodable tip row; under §11.1(f) that row cannot reach
+//! the file (the engine holds `block_info`'s width and the crate refuses
+//! first), so what is pinned now is the refusal —
+//! `view_tests::a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table`
+//! — and the decoded-tip path is exercised by every classified read.
 //!
 //! # Absence is classified against the tip, never mapped to a value
 //!
@@ -65,13 +69,13 @@
 
 use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
 use shekyl_chain_rules::AtHeight;
+use shekyl_types::BlockHash;
 use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, Canonical, CodecError};
-use crate::lmdb_order::Hash32;
+use crate::codec::{BlockInfo, Canonical, CodecError, Coded};
 use crate::schema::{BLOCKS, BLOCK_INFO};
 
-use super::error::{CellFault, EngineError, StoreInvariant};
+use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
 
 /// A transaction the chain tables can be opened from for reading.
 ///
@@ -174,6 +178,20 @@ impl From<redb::StorageError> for ReadFault {
     }
 }
 
+impl ReadFault {
+    /// The snapshot reader's policy: **return** the fault, arm nothing
+    /// (`DAEMON_REDB_STORE.md` §3.6.2 — the halt is the writer's state).
+    /// A named conversion rather than `From<ReadFault> for StoreError` on
+    /// purpose: `BatchView` must go through its `arm`, and a `From` would
+    /// let a `?` there choose this policy silently.
+    pub(super) fn into_plain(self) -> StoreError {
+        match self {
+            Self::Engine(e) => e.into(),
+            Self::Invariant(row) => row.into(),
+        }
+    }
+}
+
 /// SI-7 for a row the dense ranges say must exist and does not.
 fn absent(cell: &'static str) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::CellCorrupt {
@@ -211,16 +229,22 @@ pub(super) fn tip_of<T: ReadTables>(txn: &T) -> Result<Option<(u64, BlockInfo)>,
     let Some((height, info)) = table.last()? else {
         return Ok(None);
     };
-    let info = BlockInfo::decode(info.value()).map_err(|cause| undecodable("block_info", cause))?;
+    let info = info
+        .value()
+        .decode()
+        .map_err(|cause| undecodable("block_info", cause))?;
     Ok(Some((height.value(), info)))
 }
 
-/// One typed cell of a `u64 → bytes` table, decoded under `V`. Absent is
-/// `Ok(None)` — **the caller classifies it** against the tip, because
-/// whether an absent row is a hole is not this function's to know.
-pub(super) fn cell<T: ReadTables, V: Canonical>(
+/// One cell of a `u64 → Coded<V>` table, decoded under **the table's**
+/// codec: `V` is inferred from the definition, never named independently,
+/// so table identity and codec identity are one inference (`codec::shape`
+/// module docs, *Two guards*). Absent is `Ok(None)` — **the caller
+/// classifies it** against the tip, because whether an absent row is a
+/// hole is not this function's to know.
+pub(super) fn cell<T: ReadTables, V: Canonical + 'static>(
     txn: &T,
-    table: TableDefinition<'static, u64, &'static [u8]>,
+    table: TableDefinition<'static, u64, Coded<V>>,
     key: u64,
     cell_name: &'static str,
 ) -> Result<Option<V>, ReadFault> {
@@ -228,9 +252,69 @@ pub(super) fn cell<T: ReadTables, V: Canonical>(
     let Some(guard) = table.get(key)? else {
         return Ok(None);
     };
-    V::decode(guard.value())
+    guard
+        .value()
+        .decode()
         .map(Some)
         .map_err(|cause| undecodable(cell_name, cause))
+}
+
+/// Where `height` sits relative to the recorded tip. One match; every
+/// classified read dispatches on this so `==` / `<` / `<=` cannot drift.
+pub(super) enum HeightClass<'a> {
+    /// `height` is above the dense tip, or the chain is empty.
+    AboveTip,
+    /// `height` is the tip: the decoded row is already in hand.
+    AtTip(&'a BlockInfo),
+    /// `height` is strictly below the tip: the row must exist (SI-2).
+    Below,
+}
+
+pub(super) fn class_of(tip: Option<&(u64, BlockInfo)>, height: u64) -> HeightClass<'_> {
+    match tip {
+        Some((t, info)) if height == *t => HeightClass::AtTip(info),
+        Some((t, _)) if height < *t => HeightClass::Below,
+        _ => HeightClass::AboveTip,
+    }
+}
+
+/// The `block_info` row at `height`, classified against `tip` (the caller's
+/// [`tip_of`]): above it is [`AtHeight::AboveTip`]; **at** it the row
+/// already decoded is reused; below it the row is read and its absence is
+/// SI-7 (SI-2: `block_info` is dense to the tip). R3's body, and the first
+/// half of [`block_body`]'s.
+pub(super) fn info_at<T: ReadTables>(
+    txn: &T,
+    tip: Option<&(u64, BlockInfo)>,
+    height: u64,
+) -> Result<AtHeight<BlockInfo>, ReadFault> {
+    Ok(match class_of(tip, height) {
+        HeightClass::AtTip(info) => AtHeight::Recorded(*info),
+        HeightClass::Below => AtHeight::Recorded(
+            cell(txn, BLOCK_INFO, height, "block_info")?.ok_or_else(|| absent("block_info"))?,
+        ),
+        HeightClass::AboveTip => AtHeight::AboveTip,
+    })
+}
+
+/// The recorded `blocks` blob at `height`, **unverified** — R5's body. The
+/// same classification as [`block_body`] (above the tip is `AboveTip`, a
+/// hole is SI-7), and none of its verification: the bytes are for the relay
+/// and sync path, which forwards them and would only re-verify to discard
+/// the result (Q2). The identity lives on `block_info`; the two are checked
+/// against each other only where a parsed body is handed out.
+pub(super) fn blob_at<T: ReadTables>(
+    txn: &T,
+    tip: Option<&(u64, BlockInfo)>,
+    height: u64,
+) -> Result<AtHeight<Vec<u8>>, ReadFault> {
+    match class_of(tip, height) {
+        HeightClass::AboveTip => return Ok(AtHeight::AboveTip),
+        HeightClass::AtTip(_) | HeightClass::Below => {}
+    }
+    let blocks = txn.table(BLOCKS)?;
+    let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
+    Ok(AtHeight::Recorded(blob.value().bytes().to_vec()))
 }
 
 /// The block recorded at `height`: its identity from `block_info`, its body
@@ -246,22 +330,19 @@ pub(super) fn block_body<T: ReadTables>(
     txn: &T,
     tip: Option<&(u64, BlockInfo)>,
     height: u64,
-) -> Result<AtHeight<(Hash32, Block)>, ReadFault> {
-    let info: BlockInfo = match tip {
-        Some((tip, info)) if height == *tip => *info,
-        Some((tip, _)) if height < *tip => {
-            cell(txn, BLOCK_INFO, height, "block_info")?.ok_or_else(|| absent("block_info"))?
-        }
-        _ => return Ok(AtHeight::AboveTip),
+) -> Result<AtHeight<(BlockHash, Block)>, ReadFault> {
+    let info = match info_at(txn, tip, height)? {
+        AtHeight::Recorded(info) => info,
+        AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
     };
     let blocks = txn.table(BLOCKS)?;
     let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
-    let block =
-        Block::from_bytes(blob.value()).map_err(|_| blocks_invalid("block blob does not parse"))?;
+    let block = Block::from_bytes(blob.value().bytes())
+        .map_err(|_| blocks_invalid("block blob does not parse"))?;
     if block.hash() != info.hash.to_bytes() {
         return Err(blocks_invalid(
             "block blob does not hash to block_info.hash",
         ));
     }
-    Ok(AtHeight::Recorded((Hash32::from(info.hash), block)))
+    Ok(AtHeight::Recorded((info.hash, block)))
 }

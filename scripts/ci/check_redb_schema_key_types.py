@@ -58,8 +58,11 @@ SCHEMA = ROOT / "rust/shekyl-chain-store/src/schema.rs"
 # is a broken extractor, not a smaller schema.
 MIN_CONSTRAINTS = 30
 
+# The value type may itself be generic — `Coded<BlockInfo>`, `Blob<BlockBody>`
+# (DAEMON_REDB_STORE.md §11.1(f)) — so it is matched up to the `=` rather than
+# to the first `>`. Keys are never generic; the key group stays `[^,]`.
 DEF_RE = re.compile(
-    r"pub const \w+:\s*(Multimap)?TableDefinition<\s*([^,]+?)\s*,\s*([^>]+?)\s*>\s*=\s*"
+    r"pub const \w+:\s*(Multimap)?TableDefinition<\s*([^,]+?)\s*,\s*(.+?)\s*>\s*=\s*"
     r"(?:Multimap)?TableDefinition::new\(\"([^\"]+)\"\)",
     re.S,
 )

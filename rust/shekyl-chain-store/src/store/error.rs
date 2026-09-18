@@ -199,6 +199,49 @@ pub enum StoreCannot {
         /// The version this binary reads and writes.
         expected: SchemaVersion,
     },
+    /// The store file's header table is not this layout's: redb refused
+    /// `properties` with a stored type name other than the one this binary
+    /// declares, before any cell could be read. A file written under
+    /// another layout — §11.1(a)'s "older refuses too", reached one step
+    /// earlier than [`Self::SchemaVersionMismatch`] because the version
+    /// cell itself sits in the table whose type moved (§11.1(f)). Not
+    /// format detection (rule 15 — there is no probe under a legacy
+    /// definition): the engine's refusal, named. Rebuild.
+    LayoutForeign {
+        /// The version this binary reads and writes.
+        expected: SchemaVersion,
+    },
+    /// A value handed to a typed table's `insert` / `upsert` is not the
+    /// width its shape declares. Unreachable through `Canonical::encoded`
+    /// (the width is the codec's, snapshot-pinned); reachable only through
+    /// redb's own `Value::from_bytes`, which is a public trait method.
+    /// Refused here as a `Result`, because the alternative is redb's
+    /// `LeafBuilder::append` assertion — a panic that poisons the
+    /// transaction lock (`codec::shape` module docs, *`fixed_width` is a
+    /// layout choice*).
+    RowWidth {
+        /// The table.
+        table: &'static str,
+        /// The width the value shape declares.
+        expected: usize,
+        /// The width handed in.
+        actual: usize,
+    },
+    /// A value handed to a typed table's `insert` / `upsert` is not a
+    /// well-formed row of that table's shape. Unreachable through
+    /// `Canonical::encoded` / a `BlobKind` the chain itself serialized;
+    /// reachable through redb's public `Value::from_bytes`. The width
+    /// mismatch is [`Self::RowWidth`]; this arm is everything else — a
+    /// variable-width codec that does not decode, a blob that does not
+    /// parse. Refused as a `Result` so it never becomes SI-7: the file
+    /// was not written.
+    RowIllFormed {
+        /// The table.
+        table: &'static str,
+        /// Why [`Restorable::well_formed`](super::undo::Restorable::well_formed)
+        /// refused.
+        reason: &'static str,
+    },
     /// The raw `properties` table was requested on the write side.
     ///
     /// Its cells are typed ([`PropertyCell`](crate::codec::PropertyCell))
@@ -337,6 +380,24 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "chain store is {found} but this binary is {expected}: no migration ladder \
                  exists; rebuild from the block corpus"
+            ),
+            Self::LayoutForeign { expected } => write!(
+                f,
+                "chain store's header table is not layout {expected}'s: written by another \
+                 layout; no migration ladder exists; rebuild from the block corpus"
+            ),
+            Self::RowWidth {
+                table,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "`{table}` row is {actual} byte(s); its value shape is fixed at {expected}: \
+                 refused before the engine"
+            ),
+            Self::RowIllFormed { table, reason } => write!(
+                f,
+                "`{table}` row is not well-formed ({reason}): refused before the engine"
             ),
             Self::PropertiesAreTyped => write!(
                 f,

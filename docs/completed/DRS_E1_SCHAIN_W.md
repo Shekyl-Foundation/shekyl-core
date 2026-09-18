@@ -1,10 +1,18 @@
 # DRS-E1 S-CHAIN-W — the connect/pop write set: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **increment LANDED (PR #757, 2026-09-16)**: the §3
+**Status:** CLOSED-as-record — archived 2026-09-17 by S-CHAIN-R's
+documentation commit (PR #772) once its §11 archive condition was met:
+every S-CHAIN-W codec has a typed snapshot read (`ReadSnapshot`, R1–R9),
+and its three amendments (A1 fold fields, A2 the seal creates the chain
+table set, A3 `txs_pqc_auth_hash`) landed on that PR's layout commit,
+`SCHEMA_VERSION 3 → 4`. **Do not implement from this document**; the
+living contracts are `DAEMON_REDB_STORE.md` §3.6.3 / §3.6.4 and
+`STORE_INVARIANT_REGISTER.md`. *Superseded banner, retained:* OPEN —
+**increment LANDED (PR #757, 2026-09-16)**: the §3
 contract is code (`rust/shekyl-chain-store/src/store/{connect,pop,view,undo,halt}.rs`),
 SI-1/2/3/4/6/8/9 are `built`, and every SCW-19 residue (`root_at(h)` = key
 *h*, tip-classified absence, `CurveTreeRoot::EMPTY`) landed in the same PR.
-The document stays in `design/` only for the §11 archive condition (S-CHAIN-R
+The document stayed in `design/` only for the §11 archive condition (S-CHAIN-R
 consuming the codecs); nothing here is still proposed. History: **Round 0
 (pre-flight) executed 2026-09-15** at `dev`
 `65e7be450` against `shekyl-chain-rules` as it stands on PR #753
@@ -19,9 +27,9 @@ commits 1–3 may start before #753 merges (#753 merged 2026-09-15; this
 document was rebased onto it). Implements *from*
 [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
 (Q3–Q6, §7.3, §9, §11 — the ruling, CLOSED-as-record),
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §3.6.2–§3.6.3 and §7 (the
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §3.6.2–§3.6.3 and §7 (the
 S-CHAIN-W row and DRS-D12), and
-[`STORE_INVARIANT_REGISTER.md`](STORE_INVARIANT_REGISTER.md) (SI-1…SI-8 as
+[`STORE_INVARIANT_REGISTER.md`](../design/STORE_INVARIANT_REGISTER.md) (SI-1…SI-8 as
 found; **SI-9** is minted by this document, §6, and the register has nine rows
 from this PR on). Nothing in this document re-opens any of them; where the substrate disagrees
 with a ruling's *wording* the disagreement is a §7 finding with a disposition,
@@ -40,7 +48,7 @@ its scaffold (`docs/design/CHAIN_RULES_CRATE.md`, PR #753) and it stays in
 `docs/design/` while the increment is open.
 
 **Identifier family.** Findings and questions here are **SCW-n** (registered
-in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 by this document's
+in [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by this document's
 PR; prefix `SCW` checked distinct against the registry with
 `check_index_prefix_uniqueness.py`). One series, numbered in order of
 surfacing; a question and the finding that raised it share a number where they

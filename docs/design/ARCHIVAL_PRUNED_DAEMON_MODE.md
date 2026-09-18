@@ -37,7 +37,7 @@ the txid's third component, is owed on the identity and as a row, and
 Q6 items 1–2 are ruled before DRS-E2's first production writer or E2
 rules them by construction.** **UPDATE 2026-09-17:** DRS §7.7 items 1–2 landed on
 #768 (`TxIdentity.pqc_auth_hash` + `Transaction::txid_parts` /
-`hash_with_supplied_components`); the store row (item 3) remains A3. **F27–F29 (same day, on review): band 1
+`hash_with_supplied_components`); **UPDATE 2026-09-17 (PR #772):** the store row (item 3) landed as `txs_pqc_auth_hash` on S-CHAIN-R's layout commit. **F27–F29 (same day, on review): band 1
 needs a below-anchor `RuleSet` E6 is shaping now; the skeleton wire
 needs both txid components; Q3's instrument is `ChainView`'s surface.**
 **F30–F31 (2026-09-17, `4bc378d68`): Q11's census home is `CEN-E2`, and
@@ -592,8 +592,8 @@ component, count-prefixed (`rust/shekyl-wire/src/transaction/txid.rs`,
 sentinel. This **ratifies a landed default**: `TxIdentity { hash,
 pqc_auth_hash: Option<PqcAuthHash>, prunable_hash }`
 (`rust/shekyl-chain-rules/src/block.rs:52-59`), and the
-store row scheduled by `DAEMON_REDB_STORE.md` §7.7 on S-CHAIN-R's
-layout commit. Items 1 and 2 are one ruling: ~95 % of transaction
+store row `txs_pqc_auth_hash` landed by `DAEMON_REDB_STORE.md` §7.7
+item 3 on S-CHAIN-R's layout commit (PR #772). Items 1 and 2 are one ruling: ~95 % of transaction
 bytes jointly, neither defensible alone (`PDM-Q-F14`). No tx blob byte
 and no txid changes.
 
@@ -1203,7 +1203,7 @@ consensus-constants family — if it does, this question closes by
 reference.
 
 **Store constraint (added 2026-09-15, S-CHAIN-W pre-flight SCW-7 —
-[`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) §5.4).** `D_max` is now a
+[`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) §5.4).** `D_max` is now a
 third derivation, on the store side: in the Rust chain store a block at
 height *h* can be popped **iff** its `undo_log[h]` row exists, and the
 retention prune (S-PRUNE) deletes undo rows below its watermark. So the
@@ -2767,7 +2767,7 @@ consequence that no lane had recorded.
 | `PDM-Q3` | Residual consensus reads after TJ-A; **the instrument is `ChainView`'s surface (F29)** | OPEN — today not node-local (`PDM-Q-F8`); in the Rust validator the residual set is empty by construction at `645d09dc3` (no recorded-body accessor), instrument handed to E6 as a standing trait property (F29, 2026-09-16) |
 | `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | OPEN — collapsed 2026-09-13 (F20/F23/F24); TJ-F sentence stated |
 | `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's; **band 1 is unbuildable against DRS-D12's writer until E6 issues a below-anchor set (F27, handed off 2026-09-16); `TxBlobEntry` grows `pqc_auth_hash` (F28, owner `LV-`/`PWC-`; no longer gated — Q6 item 2 RULED 2026-09-17)**; **the Q11-ordering item is DISCHARGED 2026-09-17** — Q11 rules the anchor a *precondition* of `D_max`, not a sibling |
-| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)**; **item 3 names one unit for bond `holdings`, F17's wire echo and the challenge draw alike (§3 stripe/shard walk, 2026-09-17)** | **RULED 2026-09-17 (items 1–3)** — the good is the prunable region + `pqc_auths` for every tx below `W`, verified by `txs_prunable_hash` + `txs_pqc_auth_hash` (item 2 ratifies F26's landed default, #768 merged `398d85e7b`); a shard is a **`tx_id` range** `[k·T, (k+1)·T)`, one unit for bond `holdings`, wire echo and draw; the credit-wire `transfer_digest` collision is **not reopened**. Before DRS-E2's first writer, as F26 required. `TxIdentity` carries both occupants' hashes since #768 (`{ hash, pqc_auth_hash: Option<_>, prunable_hash }` from `Transaction::txid_parts()`, DRS §7.7 items 1–2); the `txs_pqc_auth_hash` **row** is still owed (S-CHAIN-W amendment A3 on S-CHAIN-R's layout commit, DRS §7.7 item 3). **Item 4 OPEN by name** — re-key/reopen list in the ruling block |
+| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)**; **item 3 names one unit for bond `holdings`, F17's wire echo and the challenge draw alike (§3 stripe/shard walk, 2026-09-17)** | **RULED 2026-09-17 (items 1–3)** — the good is the prunable region + `pqc_auths` for every tx below `W`, verified by `txs_prunable_hash` + `txs_pqc_auth_hash` (item 2 ratifies F26's landed default, #768 merged `398d85e7b`); a shard is a **`tx_id` range** `[k·T, (k+1)·T)`, one unit for bond `holdings`, wire echo and draw; the credit-wire `transfer_digest` collision is **not reopened**. Before DRS-E2's first writer, as F26 required. `TxIdentity` carries both occupants' hashes since #768 (`{ hash, pqc_auth_hash: Option<_>, prunable_hash }` from `Transaction::txid_parts()`, DRS §7.7 items 1–2); the `txs_pqc_auth_hash` **row** landed on PR #772 (S-CHAIN-W amendment A3 on S-CHAIN-R's layout commit, DRS §7.7 item 3). **Item 4 OPEN by name** — re-key/reopen list in the ruling block |
 | `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; unbonded exceptions OPEN (candidate: permitted, serving needs the bond) |
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
 | `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); candidate under review: the daemon holds the shard as a retention exception on the universal predicate (binding dissolves to `retain(s)`/`release(s)` over the operator leg); lapse tail, coverage floor (F20), recovery fetch OPEN. **Coverage floor owes one sentence (§3 Sybil walk, 2026-09-17): it counts personas, not hosts, and under Model D cannot see the difference — so the floor that carries weight is structural (Foundation / explorers holding `CompleteTree`, Foundation work outside `Σwork`), not the market's holder count** |

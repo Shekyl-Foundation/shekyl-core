@@ -12,12 +12,14 @@
 //! `CellCorrupt` docs describe — because the store's own surface has no
 //! way to damage its header, which is the point.
 
+use shekyl_units::AtomicUnits;
+
 use super::store_tests::{cleanup, probe_row, tmp, TestErr, EPOCH, OTHER_EPOCH, PROBE};
 use super::*;
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{
-    ApplyPolicyCell, Canonical, ProbeCell, PropertyCell, SchemaVersion, SchemaVersionCell,
-    TotalBurnedCell, SCHEMA_VERSION,
+    ApplyPolicyCell, Canonical, ProbeCell, PropertyCell, PropertyCellBytes, Raw, SchemaVersion,
+    SchemaVersionCell, TotalBurnedCell, SCHEMA_VERSION,
 };
 use crate::family_set::FamilySet;
 use crate::schema::PROPERTIES;
@@ -50,7 +52,10 @@ fn raw_put(path: &std::path::Path, key: &str, value: Option<&[u8]>) {
     {
         let mut t = txn.open_table(PROPERTIES).expect("raw properties");
         match value {
-            Some(v) => drop(t.insert(key, v).expect("raw insert")),
+            Some(v) => drop(
+                t.insert(key, Raw::<PropertyCellBytes>::new(v))
+                    .expect("raw insert"),
+            ),
             None => drop(t.remove(key).expect("raw remove")),
         }
     }
@@ -68,7 +73,9 @@ fn raw_get(path: &std::path::Path, key: &str) -> Option<Vec<u8>> {
         Err(redb::TableError::TableDoesNotExist(_)) => return None,
         Err(e) => panic!("raw properties: {e}"),
     };
-    t.get(key).expect("raw get").map(|g| g.value().to_vec())
+    t.get(key)
+        .expect("raw get")
+        .map(|g| g.value().bytes().to_vec())
 }
 
 // ---------------------------------------------------------------- seal
@@ -181,13 +188,13 @@ fn total_burned_is_a_writable_chain_state_cell() {
     store
         .write(|batch| -> Result<(), StoreError> {
             assert_eq!(batch.get_property::<TotalBurnedCell>()?, None);
-            batch.upsert_property::<TotalBurnedCell>(&5)?;
+            batch.upsert_property::<TotalBurnedCell>(&AtomicUnits::from_raw(5))?;
             // The connect-side fold: checked, never saturating (SI-8 is the
             // belt `connect` binds; this is the cell it folds into).
             let next = batch
                 .get_property::<TotalBurnedCell>()?
-                .unwrap_or(0)
-                .checked_add(7)
+                .unwrap_or(AtomicUnits::ZERO)
+                .checked_add(AtomicUnits::from_raw(7))
                 .expect("no overflow in test");
             batch.upsert_property::<TotalBurnedCell>(&next)
         })
@@ -195,7 +202,7 @@ fn total_burned_is_a_writable_chain_state_cell() {
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.get_property::<TotalBurnedCell>().expect("get"),
-        Some(12)
+        Some(AtomicUnits::from_raw(12))
     );
     drop(snap);
     drop(store);

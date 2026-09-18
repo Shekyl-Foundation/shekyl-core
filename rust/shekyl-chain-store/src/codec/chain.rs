@@ -6,13 +6,17 @@
 //! Canonical codecs for the connect write set's table values (S-CHAIN-W
 //! commit 2; `DRS_E1_SCHAIN_W.md` §3.7, §4).
 //!
-//! Every layout here is the LMDB struct the C++ store writes
-//! (`LMDB_SCHEMA.md`, `db_lmdb.cpp`), **minus the field that became the redb
-//! key** under the zerokval collapse (`schema` module docs): `block_info`
+//! The layouts here **start from** the LMDB structs the C++ store writes
+//! (`LMDB_SCHEMA.md`, `db_lmdb.cpp`), minus the field that became the redb
+//! key under the zerokval collapse (`schema` module docs): `block_info`
 //! drops `bi_height`, `tx_indices` drops the tx hash, `output_txs` drops
 //! `output_id`. Carrying the key inside the value as well would let the two
 //! disagree; the row's digest element is `key ‖ value`, assembled at fold
-//! time. `output_amounts`' member keeps its `amount_index` prefix because
+//! time. Starting from LMDB is a port convenience, **not a constraint**:
+//! byte parity with LMDB rows was never what the comparator compares (DRS
+//! §7.6 — consensus-visible bytes are hash preimages and the digest fold
+//! input, nothing else), so a record grows where the read surface needs it
+//! to (`BlockInfo`'s two FL-R3 fields, `DRS_E1_SCHAIN_R.md` §3.6 Q4). `output_amounts`' member keeps its `amount_index` prefix because
 //! that prefix *is* the multimap's member order (`U64PrefixBytes`) — SCW-8:
 //! LMDB's keying is ported verbatim while R8b-2 is open.
 //!
@@ -21,14 +25,16 @@
 //! codec ([`TxOutputIndices`]) refuses a length that is not a whole number of
 //! entries. All of it is strict both ways (`codec` module docs).
 
+use shekyl_chain_rules::RuleSetId;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
-    OneTimePubkey, OutputIndexInTx, Timelock, Timestamp, TxHash,
+    OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash, Timelock, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
+use shekyl_wire::Block;
 
-use super::{exact, Canonical, CodecError};
+use super::{exact, BlobKind, Canonical, CodecError};
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 
 /// Decode a stored `unlock_time` word.
@@ -63,16 +69,22 @@ impl Canonical for CurveTreeRoot {
     }
 }
 
-/// `block_info[height]` — LMDB `mdb_block_info_4` minus `bi_height`, 88 bytes.
+/// `block_info[height]` — the per-height record, 104 bytes: LMDB
+/// `mdb_block_info_4`'s fields minus `bi_height` (88 bytes, in LMDB's order)
+/// followed by the two per-block fold fields FL-R3-STORE routes here
+/// (`DRS_E1_SCHAIN_R.md` §3.6, Q4 ruled: widen the record, no second table).
 ///
-/// Every field but `hash` and `rct_outputs` is a consensus-visible value the
-/// store records and never derives (C2-R8 Q4; `ConnectFacts`). `rct_outputs`
-/// is a storage count the store does maintain — **this block's** RCT output
-/// count, not a running total: LMDB's `bi_cum_rct` is set to `num_rct_outs`
+/// Every field but `hash`, `rct_outputs` and `cumulative_tx_count` is a
+/// consensus-visible value the store records and never derives (C2-R8 Q4;
+/// `ConnectFacts`). The two counts are storage counts the store does
+/// maintain. `rct_outputs` is **this block's** RCT output count, not a
+/// running total: LMDB's `bi_cum_rct` is set to `num_rct_outs`
 /// (`db_lmdb.cpp:1006`) and the `major_version >= 4` arm that would add the
 /// parent's value is the dead Monero-v4 dispatch CEN-L15 rules "delete, do
-/// not port" (live major is 1). The field name follows what the bytes hold;
-/// a port that accumulated would diverge from LMDB at height 1.
+/// not port" (live major is 1); the field name follows what the bytes hold.
+/// `cumulative_tx_count` **is** a running total — the parent's plus this
+/// block's listed transactions, `checked_add` under SI-8 — because that is
+/// the read `get_tx_volume_window` needs in O(1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockInfo {
     /// `bi_timestamp`.
@@ -90,11 +102,23 @@ pub struct BlockInfo {
     pub rct_outputs: u64,
     /// `bi_long_term_block_weight`.
     pub long_term_weight: LongTermWeight,
+    /// Non-coinbase transactions recorded through this height —
+    /// `Σ_{i ≤ h} |transactions(i)|` (`FEE_LADDER_DERIVATION.md` §10.12.2).
+    /// Store-derived: the parent's value plus this block's count.
+    pub cumulative_tx_count: u64,
+    /// The long-term weight median **in force for** this block — the
+    /// median over the recorded blocks *below* it, the operand it was
+    /// validated and fee-floored against, before its own weight enters the
+    /// window (SCR-19; `relay_floor_ring.cpp:196`–`:200`). Passed through
+    /// (`ConnectFacts::long_term_effective_median`), never derived here. A
+    /// median of long-term weights is a long-term weight, so the same
+    /// newtype; `cumulative_tx_count` is a count, like `rct_outputs`.
+    pub long_term_effective_median: LongTermWeight,
 }
 
 impl Canonical for BlockInfo {
     const NAME: &'static str = "block_info";
-    const FIXED_WIDTH: Option<usize> = Some(88);
+    const FIXED_WIDTH: Option<usize> = Some(104);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.timestamp.to_raw().to_le_bytes());
@@ -105,10 +129,12 @@ impl Canonical for BlockInfo {
         out.extend_from_slice(self.hash.as_bytes());
         out.extend_from_slice(&self.rct_outputs.to_le_bytes());
         out.extend_from_slice(&self.long_term_weight.to_raw().to_le_bytes());
+        out.extend_from_slice(&self.cumulative_tx_count.to_le_bytes());
+        out.extend_from_slice(&self.long_term_effective_median.to_raw().to_le_bytes());
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let b = exact::<88>(Self::NAME, bytes)?;
+        let b = exact::<104>(Self::NAME, bytes)?;
         Ok(Self {
             timestamp: Timestamp::from_raw(le_u64(&b[0..8])),
             coins_generated: AtomicUnits::from_raw(le_u64(&b[8..16])),
@@ -119,6 +145,8 @@ impl Canonical for BlockInfo {
             hash: BlockHash::from_bytes(b[40..72].try_into().expect("32-byte slice")),
             rct_outputs: le_u64(&b[72..80]),
             long_term_weight: LongTermWeight::from_raw(le_u64(&b[80..88])),
+            cumulative_tx_count: le_u64(&b[88..96]),
+            long_term_effective_median: LongTermWeight::from_raw(le_u64(&b[96..104])),
         })
     }
 }
@@ -280,6 +308,150 @@ fn le_u64(b: &[u8]) -> u64 {
     u64::from_le_bytes(b.try_into().expect("8-byte slice"))
 }
 
+// ---------------------------------------------------------------------------
+// Scalar columns: the domain newtype where one exists, a named column
+// codec where none does (§11.1(f)). Bytes are what the `u64` / `u8` /
+// `hash32` codecs already wrote — only the value's *name* is new.
+// ---------------------------------------------------------------------------
+
+/// `block_heights[hash]` — the height a block hash sits at. The
+/// `shekyl-types` newtype, stored as its raw LE `u64`.
+impl Canonical for BlockHeight {
+    const NAME: &'static str = "block_height";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `hf_versions[height]` — the rule set in force at a height (CEN-B3's
+/// belt). The rules crate's id, stored as its raw `u8`.
+impl Canonical for RuleSetId {
+    const NAME: &'static str = "rule_set_id";
+    const FIXED_WIDTH: Option<usize> = Some(1);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u8::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+/// `txs_prunable_hash[tx_id]` — the digest of a transaction's prunable
+/// region, the txid's fourth component (S-CHAIN-W SCW-10). The
+/// `shekyl-types` identity type, stored as its 32 bytes; a `Hash32` at the
+/// engine (`lmdb_order`) only where an LMDB *ordering* is carried, which a
+/// value is not.
+impl Canonical for PrunableHash {
+    const NAME: &'static str = "prunable_hash";
+    const FIXED_WIDTH: Option<usize> = Some(32);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        exact::<32>(Self::NAME, bytes).map(Self::from_bytes)
+    }
+}
+
+/// `txs_pqc_auth_hash[tx_id]` — the digest of a transaction's `pqc_auths`
+/// segment as the txid commits it, `keccak256(varint(count) ‖ auths)`; the
+/// txid's **third** component (`PDM-Q-F26`, DRS §7.7). Present ⇔ the txid is
+/// 4-part; never deleted by a prune. The `shekyl-types` identity type, 32
+/// bytes.
+impl Canonical for PqcAuthHash {
+    const NAME: &'static str = "pqc_auth_hash";
+    const FIXED_WIDTH: Option<usize> = Some(32);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.as_bytes());
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        exact::<32>(Self::NAME, bytes).map(Self::from_bytes)
+    }
+}
+
+/// `block_burn[height]` — atomic units burned by the block, per
+/// `blockchain.cpp:6148`; written only when non-zero (`store/connect.rs`
+/// phase 8). The `shekyl-units` newtype (RTN-2 put it on `ConnectFacts`),
+/// stored as its raw LE `u64` — the bytes the `u64` codec wrote before the
+/// value had a name.
+impl Canonical for AtomicUnits {
+    const NAME: &'static str = "atomic_units";
+    const FIXED_WIDTH: Option<usize> = Some(8);
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.to_raw().encode_into(out);
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+        u64::decode(bytes)
+            .map(Self::from_raw)
+            .map_err(|e| e.in_codec(Self::NAME))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Wire blobs: bytes the chain encodes and the store does not re-codec
+// (`shape` module docs, `Blob`).
+// ---------------------------------------------------------------------------
+
+/// `blocks[height]` — a block body in the chain's wire encoding. Well-formed
+/// iff it parses; that it hashes to `block_info[height].hash` is checked
+/// where both are in hand (`store/chain_reads.rs`, *The blob is verified
+/// where it is decoded*).
+#[derive(Debug)]
+pub struct BlockBody;
+
+impl BlobKind for BlockBody {
+    const NAME: &'static str = "block";
+
+    fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
+        Block::from_bytes(bytes)
+            .map(drop)
+            .map_err(|_| "block blob does not parse")
+    }
+}
+
+/// `txs_pruned[tx_id]` — a transaction's pruned segment (prefix and base),
+/// as `Transaction::write_segments` emits it.
+#[derive(Debug)]
+pub struct TxPrunedSegment;
+
+impl BlobKind for TxPrunedSegment {
+    const NAME: &'static str = "tx_pruned";
+}
+
+/// `txs_pqc_auths[tx_id]` — a transaction's `pqc_auths` segment; absent
+/// for a 3-part txid (`PDM-Q-F26`).
+#[derive(Debug)]
+pub struct TxPqcAuthsSegment;
+
+impl BlobKind for TxPqcAuthsSegment {
+    const NAME: &'static str = "tx_pqc_auths";
+}
+
+/// `txs_prunable[tx_id]` — a transaction's prunable segment.
+#[derive(Debug)]
+pub struct TxPrunableSegment;
+
+impl BlobKind for TxPrunableSegment {
+    const NAME: &'static str = "tx_prunable";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn block_info_layout_is_the_lmdb_struct_minus_height() {
+    fn block_info_layout_is_the_lmdb_struct_minus_height_then_the_fold_fields() {
         let info = BlockInfo {
             timestamp: Timestamp::from_raw(1),
             coins_generated: AtomicUnits::from_raw(2),
@@ -299,9 +471,14 @@ mod tests {
             hash: h(0xab),
             rct_outputs: 6,
             long_term_weight: LongTermWeight::from_raw(7),
+            cumulative_tx_count: 8,
+            long_term_effective_median: LongTermWeight::from_raw(9),
         };
         let bytes = info.encode();
-        assert_eq!(bytes.len(), 88);
+        assert_eq!(bytes.len(), 104);
+        // The two FL-R3 fields follow LMDB's 88 bytes (§3.6, Q4).
+        assert_eq!(&bytes[88..96], &8u64.to_le_bytes());
+        assert_eq!(&bytes[96..104], &9u64.to_le_bytes());
         // LMDB offsets shifted left by the 8 dropped height bytes.
         assert_eq!(&bytes[0..8], &1u64.to_le_bytes());
         assert_eq!(&bytes[16..24], &3u64.to_le_bytes());
@@ -312,11 +489,11 @@ mod tests {
         assert_eq!(&bytes[80..88], &7u64.to_le_bytes());
         assert_eq!(BlockInfo::decode(&bytes), Ok(info));
         assert!(matches!(
-            BlockInfo::decode(&bytes[..87]),
+            BlockInfo::decode(&bytes[..103]),
             Err(CodecError::Length {
                 codec: "block_info",
-                expected: 88,
-                actual: 87
+                expected: 104,
+                actual: 103
             })
         ));
     }

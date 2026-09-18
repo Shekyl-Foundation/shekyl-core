@@ -32,8 +32,8 @@ use redb::{
 use crate::codec::{post_image, UndoEntry};
 use crate::schema::TableOrdinal;
 
-use super::error::{EngineError, StoreError, StoreInvariant};
-use super::undo::Journal;
+use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
+use super::undo::{Journal, Restorable};
 use super::write::Poison;
 
 /// This handle's value writes are insert-once, enforcing `row`.
@@ -80,6 +80,14 @@ pub(super) struct Handles<'txn> {
 }
 
 impl Handles<'_> {
+    /// The table's catalogue name, `'static` through its ordinal; a table
+    /// outside the catalogue (a test fixture) is named as such.
+    pub(super) fn table_name(&self) -> &'static str {
+        self.ordinal
+            .and_then(crate::schema::undo_target)
+            .map_or("<uncatalogued table>", |t| t.name())
+    }
+
     /// Record `entry(ordinal)` if the batch is recording.
     pub(super) fn journal(&self, entry: impl FnOnce(TableOrdinal) -> UndoEntry) {
         if !self.journal.is_recording() {
@@ -113,7 +121,7 @@ pub type UpsertTable<'txn, K, V> = KeyedTable<'txn, K, V, Overwrite>;
 /// One stored pair, as [`KeyedTable::first`] / [`KeyedTable::last`] return it.
 pub type TablePair<'a, K, V> = (AccessGuard<'a, K>, AccessGuard<'a, V>);
 
-impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
+impl<'txn, K: Key + Restorable + 'static, V: Restorable + 'static> InsertTable<'txn, K, V> {
     pub(super) const fn new_insert(
         inner: Table<'txn, K, V>,
         batch: Handles<'txn>,
@@ -148,6 +156,8 @@ impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<(), StoreError> {
+        check_row::<K>(self.batch.table_name(), key.borrow())?;
+        check_row::<V>(self.batch.table_name(), value.borrow())?;
         let row = self.write.row;
         if self
             .inner
@@ -174,7 +184,7 @@ impl<'txn, K: Key + 'static, V: Value + 'static> InsertTable<'txn, K, V> {
     }
 }
 
-impl<'txn, K: Key + 'static, V: Value + 'static> UpsertTable<'txn, K, V> {
+impl<'txn, K: Key + Restorable + 'static, V: Restorable + 'static> UpsertTable<'txn, K, V> {
     pub(super) const fn new_upsert(inner: Table<'txn, K, V>, batch: Handles<'txn>) -> Self {
         Self {
             inner,
@@ -197,6 +207,8 @@ impl<'txn, K: Key + 'static, V: Value + 'static> UpsertTable<'txn, K, V> {
         key: impl Borrow<K::SelfType<'k>>,
         value: impl Borrow<V::SelfType<'v>>,
     ) -> Result<Option<AccessGuard<'_, V>>, StoreError> {
+        check_row::<K>(self.batch.table_name(), key.borrow())?;
+        check_row::<V>(self.batch.table_name(), value.borrow())?;
         let key_bytes = self.batch.capture(K::as_bytes(key.borrow()));
         let post = key_bytes
             .is_some()
@@ -302,4 +314,38 @@ impl<K: Key + 'static, V: Value + 'static, W> KeyedTable<'_, K, V, W> {
             .stats()
             .map_err(|e| EngineError::Storage(e).into())
     }
+}
+
+/// The fallible insertion boundary for every value (and key) shape.
+///
+/// `redb::Value::from_bytes` is a public trait method, so an `Encoded<V>`
+/// (or a `Raw<K>`, or a key) can be constructed over arbitrary bytes.
+/// `Canonical::encoded` cannot produce a row that does not decode; the
+/// engine's `LeafBuilder::append` **asserts** a fixed width and panics.
+/// Every write through this crate's handles therefore checks here first:
+///
+/// - a declared `fixed_width` that the bytes miss is [`StoreCannot::RowWidth`];
+/// - any other `Restorable::well_formed` refusal (a variable-width codec
+///   that does not decode, a `BlobKind` that does not parse) is
+///   [`StoreCannot::RowIllFormed`].
+///
+/// The file is not touched. SI-7 remains the read of a row that reached
+/// the file around this boundary (a raw-engine plant, a damaged page).
+pub(super) fn check_row<V: Restorable>(
+    table: &'static str,
+    value: &V::SelfType<'_>,
+) -> Result<(), StoreError> {
+    let bytes = V::as_bytes(value);
+    let bytes = bytes.as_ref();
+    if let Some(expected) = V::fixed_width() {
+        if bytes.len() != expected {
+            return Err(StoreCannot::RowWidth {
+                table,
+                expected,
+                actual: bytes.len(),
+            }
+            .into());
+        }
+    }
+    V::well_formed(bytes).map_err(|reason| StoreCannot::RowIllFormed { table, reason }.into())
 }

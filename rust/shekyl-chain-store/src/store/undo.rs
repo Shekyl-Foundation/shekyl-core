@@ -46,12 +46,14 @@
 use core::cell::{Cell, RefCell};
 
 use redb::{
-    Key, MultimapTableDefinition, MultimapTableHandle, ReadableTable, TableDefinition, TableHandle,
-    Value, WriteTransaction,
+    Key, MultimapTableDefinition, MultimapTableHandle, ReadTransaction, ReadableTable,
+    TableDefinition, TableHandle, Value, WriteTransaction,
 };
 
-use crate::codec::{post_image, Canonical, CodecError, UndoEntry, UndoLog};
-use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
+use crate::codec::{
+    post_image, Blob, BlobKind, Canonical, CodecError, Coded, Present, UndoEntry, UndoLog, Unshaped,
+};
+use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
 use crate::schema::{self, UNDO_LOG};
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
@@ -59,14 +61,22 @@ use super::write::Poison;
 
 /// A stored type whose bytes can be checked before `Value::from_bytes`.
 ///
-/// Implemented for exactly the key and value types `schema.rs` uses; a
-/// table declared over a type without this impl does not compile into
-/// `UNDO_TARGETS`, so a table the journal could not safely replay is a
-/// build error. The default is the fixed-width check, which is what every
-/// panicking `from_bytes` in the set (`u64`, `u8`, `Hash32`,
-/// `LmdbHashKey`, `()`) needs; `&str` adds UTF-8; the byte-string types
-/// accept anything.
-pub(crate) trait Restorable: Value {
+/// Implemented for exactly the key types `schema.rs` uses and the four
+/// map-value shapes (`codec::shape`); a table declared over a type without
+/// this impl does not compile into `UNDO_TARGETS`, so a table the journal
+/// could not safely replay is a build error. The default is the
+/// fixed-width check, which is what every panicking `from_bytes` among
+/// the keys (`u64`, `LmdbHashKey`, [`Present`]) needs; `&str` adds UTF-8; the
+/// byte-string key accepts anything. A `Coded<V>` row is checked by
+/// `V::decode` itself — the same strict decode the read path runs.
+pub trait Restorable: Value {
+    /// Whether a table over this value type has a writer and is therefore
+    /// **created by the seal** (S-CHAIN-R amendment A2). `true` for every
+    /// shape but [`Unshaped`]: the seal set is derived from the value
+    /// shapes, never kept as a second list (`schema` module docs, *The seal
+    /// creates every table with a writer*).
+    const SEALED: bool = true;
+
     /// `Err(reason)` if `from_bytes` would panic or misread `bytes`.
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
         match Self::fixed_width() {
@@ -76,13 +86,40 @@ pub(crate) trait Restorable: Value {
     }
 }
 
-impl Restorable for u8 {}
+// Key types (and the multimap member, which redb types as a key).
 impl Restorable for u64 {}
-impl Restorable for () {}
-impl Restorable for Hash32 {}
 impl Restorable for LmdbHashKey {}
 impl Restorable for &[u8] {}
 impl Restorable for U64PrefixBytes {}
+
+// The four map-value shapes (`codec::shape`). A codec row is well-formed iff
+// it decodes — strictly, under its own codec, which is a stronger check
+// than the width the default performs and the one the read path makes; a
+// blob row iff its kind says so; a set-table row iff it is zero-width; an
+// unshaped table has no rows at all, so a journal entry naming one is
+// malformed by construction.
+impl Restorable for Present {}
+impl<V: Canonical + 'static> Restorable for Coded<V> {
+    fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
+        V::decode(bytes)
+            .map(drop)
+            .map_err(|_| "row does not decode under the table's codec")
+    }
+}
+
+impl<K: BlobKind> Restorable for Blob<K> {
+    fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
+        K::well_formed(bytes)
+    }
+}
+
+impl Restorable for Unshaped {
+    const SEALED: bool = false;
+
+    fn well_formed(_bytes: &[u8]) -> Result<(), &'static str> {
+        Err("an unshaped table has no rows")
+    }
+}
 
 impl Restorable for &str {
     fn well_formed(bytes: &[u8]) -> Result<(), &'static str> {
@@ -109,9 +146,13 @@ pub(crate) enum Undone {
     Malformed(&'static str),
 }
 
-/// A table as a replay target: dispatch from a [`TableOrdinal`] to a typed
-/// `open_table`, implemented for both definition shapes. Object-safe so
-/// the schema can hold every table in one `&[&dyn UndoTarget]`.
+/// A table as the catalogue dispatches to it: a replay target (from a
+/// [`TableOrdinal`] to a typed `open_table`) and, since S-CHAIN-R amendment
+/// A2, a **seal** target — created at `ChainStore::create` and required by
+/// `header::verify` iff its value shape has a writer
+/// ([`Restorable::SEALED`]). Implemented for both definition shapes;
+/// object-safe so the schema can hold every table in one
+/// `&[&dyn UndoTarget]`.
 pub(crate) trait UndoTarget {
     /// The table name, as the definition declares it.
     fn name(&self) -> &str;
@@ -123,6 +164,34 @@ pub(crate) trait UndoTarget {
     /// Only engine errors; the journal-level outcomes are the [`Undone`]
     /// value, so the caller names the row.
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError>;
+
+    /// Whether the seal creates this table (its value shape has a writer).
+    fn sealed(&self) -> bool;
+
+    /// Open — and so create — the table in the seal transaction. A no-op
+    /// for a table the seal does not cover.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Table`] if the engine refuses.
+    fn create(&self, txn: &WriteTransaction) -> Result<(), EngineError>;
+
+    /// Whether the table exists in `txn`'s view of the file.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::Table`] on any refusal other than *does not exist*.
+    fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError>;
+}
+
+/// Map redb's *does not exist* onto `false`, every other refusal onto the
+/// engine error, for the two `exists` impls.
+fn exists_or<T>(opened: Result<T, redb::TableError>) -> Result<bool, EngineError> {
+    match opened {
+        Ok(_) => Ok(true),
+        Err(redb::TableError::TableDoesNotExist(_)) => Ok(false),
+        Err(e) => Err(EngineError::Table(e)),
+    }
 }
 
 impl<K, V> UndoTarget for TableDefinition<'static, K, V>
@@ -134,7 +203,29 @@ where
         TableHandle::name(self)
     }
 
+    fn sealed(&self) -> bool {
+        V::SEALED
+    }
+
+    fn create(&self, txn: &WriteTransaction) -> Result<(), EngineError> {
+        if V::SEALED {
+            txn.open_table(*self).map_err(EngineError::Table)?;
+        }
+        Ok(())
+    }
+
+    fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError> {
+        exists_or(txn.open_table(*self))
+    }
+
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
+        // An `Unshaped` table has no writer, so no journal row can name it
+        // honestly; refuse before `remove` could reach the uninhabited
+        // `from_bytes`. `well_formed` alone guards only `prior`, and an
+        // `Inserted` entry has none.
+        if !V::SEALED {
+            return Ok(Undone::Malformed("journal entry names an unshaped table"));
+        }
         let (key, prior, post) = match entry {
             UndoEntry::Inserted { key, post, .. } => (key, None, post),
             UndoEntry::Replaced {
@@ -190,7 +281,25 @@ where
         MultimapTableHandle::name(self)
     }
 
+    fn sealed(&self) -> bool {
+        V::SEALED
+    }
+
+    fn create(&self, txn: &WriteTransaction) -> Result<(), EngineError> {
+        if V::SEALED {
+            txn.open_multimap_table(*self).map_err(EngineError::Table)?;
+        }
+        Ok(())
+    }
+
+    fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError> {
+        exists_or(txn.open_multimap_table(*self))
+    }
+
     fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
+        if !V::SEALED {
+            return Ok(Undone::Malformed("journal entry names an unshaped table"));
+        }
         let UndoEntry::MultiInserted { key, value, .. } = entry else {
             return Ok(Undone::Malformed(
                 "keyed-table entry recorded against a multimap",
@@ -346,7 +455,7 @@ impl<'txn> Recording<'txn> {
             }));
         }
         table
-            .insert(height, UndoLog(entries).encode().as_slice())
+            .insert(height, UndoLog(entries).encoded().as_encoded())
             .map_err(EngineError::Storage)?;
         // Only now: an open/read/insert failure above returns with
         // `sealed == false`, so a caller that swallows the error still
@@ -400,7 +509,10 @@ pub(super) fn replay(
         let Some(guard) = table.get(height).map_err(EngineError::Storage)? else {
             return Ok(Replayed::NoRow);
         };
-        UndoLog::decode(guard.value()).map_err(|cause| poison.arm(corrupt(cause)))?
+        guard
+            .value()
+            .decode()
+            .map_err(|cause| poison.arm(corrupt(cause)))?
     };
     for (index, entry) in row.0.iter().enumerate().rev() {
         let index = u32::try_from(index).expect("a decoded row has a u32 count");

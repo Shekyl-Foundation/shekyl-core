@@ -177,7 +177,7 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
         Ok(match body {
             AtHeight::AboveTip => AtHeight::AboveTip,
             AtHeight::Recorded((hash, block)) => AtHeight::Recorded(RecordedBlock {
-                hash: BlockHash::from_bytes(hash.to_bytes()),
+                hash,
                 header: block.header,
             }),
         })

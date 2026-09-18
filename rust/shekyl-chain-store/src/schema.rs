@@ -54,13 +54,40 @@
 //!
 //! # Value types
 //!
-//! Where the LMDB value is an opaque serialized blob the redb value is
-//! `&[u8]`. These are **storage** types; per DRS-0 slice A the accumulator
-//! folds a canonical encoding of the *decoded logical value*, never storage
-//! bytes. Hash *values* (not keys) are [`Hash32`]: the 32-byte stored form,
-//! which cannot be used as a table key. Write-pattern obligations (read
-//! before delete on set-shaped tables) are DRS-E1; they live in
-//! `LMDB_WRITE_ATOMICITY_AUDIT.md` §12, not as a list here.
+//! Every **map** value is one of four named shapes (`codec::shape`;
+//! `DAEMON_REDB_STORE.md` §11.1(f)) — `&[u8]` is not a value type:
+//!
+//! - [`Coded<V>`] — rows are `V::encode` under a [`Canonical`] codec; the
+//!   value `TypeName` is `shekyl::Coded<{V::NAME}>`. Per DRS-0 slice A the accumulator folds
+//!   exactly that encoding, never storage bytes. Hash *values* are the
+//!   identity type (`PrunableHash`), not a `Hash32`: a value carries no
+//!   LMDB ordering, and `lmdb_order` is for orderings.
+//! - [`Blob<K>`] — wire bytes the chain encodes and this crate does not
+//!   re-codec (`blocks`, the tx segments, `properties`' per-key cells);
+//!   [`BlobKind`] names the kind.
+//! - [`Present`] — a set-table: the key is the member, the value is a
+//!   zero-width witness (`spent_keys`).
+//! - [`Unshaped`] — a censused table no Rust writer has reached. Its row
+//!   type is uninhabited: catalogued (it has an ordinal), refused by the
+//!   journal replay, **not seal-created** (`Restorable::SEALED = false`),
+//!   **not insertable**. The increment that first writes the
+//!   table replaces this with its codec and bumps `SCHEMA_VERSION`.
+//!
+//! Multimap members (`output_amounts`) are key types: redb types a member
+//! as a key, so they carry LMDB order, not a codec.
+//!
+//! Keys are typed for **ordering** (`lmdb_order`); values for **codec**.
+//! Both are checked by redb at `open_table` (`TypeName`), which covers a
+//! definition drifting onto the wrong table; codec confusion inside a
+//! table is closed by the Rust type — a `Coded<V>` reads and writes only
+//! `Encoded<'_, V>` (`codec::shape` module docs, *Two guards*).
+//! Write-pattern obligations (read before delete on set-shaped tables) are
+//! DRS-E1; they live in `LMDB_WRITE_ATOMICITY_AUDIT.md` §12, not as a list
+//! here.
+//!
+//! [`Canonical`]: crate::codec::Canonical
+//! [`BlobKind`]: crate::codec::BlobKind
+//! [`Present`]: crate::codec::Present
 //!
 //! # The catalogue is the declaration
 //!
@@ -74,7 +101,7 @@
 //! the `SCHEMA_VERSION` bump §11.1(b) owes. A definition cannot be added
 //! outside the invocation without that module's source scan failing.
 //!
-//! # Ordinals, and the one table LMDB does not have
+//! # Ordinals, and the tables LMDB does not have
 //!
 //! The same invocation numbers its declarations: a table's
 //! [`TableOrdinal`] is its position in the list, and the pop journal
@@ -96,16 +123,36 @@
 //! who finds "bumped for a removal" in the history is looking at this
 //! sentence's consequence, not over-caution.
 //!
-//! `undo_log` is the first — and so far only — table with no X-macro twin
-//! (`DRS_E1_SCHAIN_W.md` §5, SCW-11). It is declared in [`RUST_ONLY_TABLES`]
-//! with the reason it exists, and the bijection gate reads that map: a
-//! definition with neither a twin **nor** a named reason is still red with
-//! the extra-leg's original refusal, so the mirror assumption retires one
-//! table at a time, never as a mode switch.
+//! Two tables have no X-macro twin (`docs/completed/DRS_E1_SCHAIN_W.md` §5, SCW-11):
+//! `undo_log`, the first, and `txs_pqc_auth_hash`, the second (S-CHAIN-R
+//! amendment A3, `PDM-Q-F26`). Each is declared in [`RUST_ONLY_TABLES`] with
+//! the reason it exists, and the bijection gate reads that map: a definition
+//! with neither a twin **nor** a named reason is still red with the
+//! extra-leg's original refusal, so the mirror assumption retires one table
+//! at a time, never as a mode switch.
+//!
+//! # The seal creates every table with a writer
+//!
+//! From S-CHAIN-R's layout commit (amendment A2, SCR-17) `header::seal` opens
+//! — and so creates — every table whose value shape is not [`Unshaped`], in
+//! the create transaction, and `header::verify` refuses a sealed file that
+//! lacks one (SI-7, the table named as the cell). So a reader that meets
+//! `TableDoesNotExist` on a chain table is looking at a file this store did
+//! not write, and *absent table* never has to be read as *empty table*. The
+//! set is derived from the shapes, not kept as a second list: a table gets a
+//! writer by leaving `Unshaped`, and is sealed by the same edit.
 
 use redb::{MultimapTableDefinition, MultimapTableHandle, TableDefinition, TableHandle, TypeName};
 
-use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
+use shekyl_chain_rules::RuleSetId;
+use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash};
+use shekyl_units::AtomicUnits;
+
+use crate::codec::{
+    Blob, BlockBody, BlockInfo, Coded, OutTx, Present, PropertyCellBytes, TxIndex, TxOutputIndices,
+    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+};
+use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
 use crate::store::undo::UndoTarget;
 
 /// A table's position in the `tables!` declaration list — the identity the
@@ -166,12 +213,21 @@ pub(crate) fn undo_target(ordinal: TableOrdinal) -> Option<&'static dyn UndoTarg
 /// from). Out of the digest domain by construction: the accumulator's
 /// class table is the LMDB inventory, and a table absent from it with a
 /// reason here is a named exclusion, not an omission.
-pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[(
-    "undo_log",
-    "the pop journal: one LIFO row of pre-images per connected height, replacing the C++ \
-     per-surface journals (C2-R8 Q5); a function of the journaled writes, so two correct stores \
-     of one chain agree on it by construction and it is not folded",
-)];
+pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
+    (
+        "undo_log",
+        "the pop journal: one LIFO row of pre-images per connected height, replacing the C++ \
+         per-surface journals (C2-R8 Q5); a function of the journaled writes, so two correct \
+         stores of one chain agree on it by construction and it is not folded",
+    ),
+    (
+        "txs_pqc_auth_hash",
+        "the txid's third component per 4-part transaction (PDM-Q-F26, DRS §7.7): the persisted \
+         digest that lets PDM-Q6 discard the pqc_auths segment; the C++ store never held it \
+         because it never discarded that segment. Out of the digest domain: the txid the \
+         digest already folds commits to the same value",
+    ),
+];
 
 /// Whether a table holds one value per key or many.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,183 +317,200 @@ macro_rules! tables {
 
 tables! {
     /// `blocks` — INTEGERKEY; height → block blob.
-    pub const BLOCKS: TableDefinition<u64, &[u8]> = TableDefinition::new("blocks");
+    pub const BLOCKS: TableDefinition<u64, Blob<BlockBody>> = TableDefinition::new("blocks");
 
     /// `block_heights` — zerokval collapse: dup hash (`compare_hash32`) becomes the key.
-    pub const BLOCK_HEIGHTS: TableDefinition<LmdbHashKey, u64> = TableDefinition::new("block_heights");
+    pub const BLOCK_HEIGHTS: TableDefinition<LmdbHashKey, Coded<BlockHeight>> = TableDefinition::new("block_heights");
 
     /// `block_info` — zerokval collapse: dup height (`compare_uint64`) becomes the key.
-    pub const BLOCK_INFO: TableDefinition<u64, &[u8]> = TableDefinition::new("block_info");
+    pub const BLOCK_INFO: TableDefinition<u64, Coded<BlockInfo>> = TableDefinition::new("block_info");
 
     /// `txs` — INTEGERKEY. Dead (DRS-W4): no runtime rows.
-    pub const TXS: TableDefinition<u64, &[u8]> = TableDefinition::new("txs");
+    pub const TXS: TableDefinition<u64, Unshaped> = TableDefinition::new("txs");
 
     /// `txs_pruned` — INTEGERKEY; tx_id → pruned blob.
-    pub const TXS_PRUNED: TableDefinition<u64, &[u8]> = TableDefinition::new("txs_pruned");
+    pub const TXS_PRUNED: TableDefinition<u64, Blob<TxPrunedSegment>> = TableDefinition::new("txs_pruned");
 
     /// `txs_pqc_auths` — INTEGERKEY + `compare_uint64` (numeric, same as INTEGERKEY).
-    pub const TXS_PQC_AUTHS: TableDefinition<u64, &[u8]> = TableDefinition::new("txs_pqc_auths");
+    pub const TXS_PQC_AUTHS: TableDefinition<u64, Blob<TxPqcAuthsSegment>> = TableDefinition::new("txs_pqc_auths");
 
     /// `txs_prunable` — INTEGERKEY. Node-local; excluded from the accumulator.
-    pub const TXS_PRUNABLE: TableDefinition<u64, &[u8]> = TableDefinition::new("txs_prunable");
+    pub const TXS_PRUNABLE: TableDefinition<u64, Blob<TxPrunableSegment>> = TableDefinition::new("txs_prunable");
 
-    /// `txs_prunable_hash` — INTEGERKEY; 1:1 hash value (not a key, so [`Hash32`]).
-    pub const TXS_PRUNABLE_HASH: TableDefinition<u64, Hash32> =
+    /// `txs_prunable_hash` — INTEGERKEY; 1:1 hash value. A value carries no
+    /// LMDB ordering, so it is the identity type, not a `Hash32`.
+    pub const TXS_PRUNABLE_HASH: TableDefinition<u64, Coded<PrunableHash>> =
         TableDefinition::new("txs_prunable_hash");
 
-    /// `txs_prunable_tip` — INTEGERKEY; 1:1 height value. Node-local.
-    pub const TXS_PRUNABLE_TIP: TableDefinition<u64, u64> = TableDefinition::new("txs_prunable_tip");
+    /// `txs_prunable_tip` — INTEGERKEY; 1:1 height value. Node-local. No
+    /// Rust writer yet (E1 does not prune).
+    pub const TXS_PRUNABLE_TIP: TableDefinition<u64, Unshaped> = TableDefinition::new("txs_prunable_tip");
 
     /// `tx_indices` — zerokval collapse: dup tx hash (`compare_hash32`) becomes the key.
-    pub const TX_INDICES: TableDefinition<LmdbHashKey, &[u8]> = TableDefinition::new("tx_indices");
+    pub const TX_INDICES: TableDefinition<LmdbHashKey, Coded<TxIndex>> = TableDefinition::new("tx_indices");
 
     /// `tx_outputs` — INTEGERKEY; tx_id → output indices.
-    pub const TX_OUTPUTS: TableDefinition<u64, &[u8]> = TableDefinition::new("tx_outputs");
+    pub const TX_OUTPUTS: TableDefinition<u64, Coded<TxOutputIndices>> = TableDefinition::new("tx_outputs");
 
     /// `output_txs` — zerokval collapse: dup output id (`compare_uint64`) becomes the key.
-    pub const OUTPUT_TXS: TableDefinition<u64, &[u8]> = TableDefinition::new("output_txs");
+    pub const OUTPUT_TXS: TableDefinition<u64, Coded<OutTx>> = TableDefinition::new("output_txs");
 
     /// `output_amounts` — true multimap; dups order by little-endian `amount_index` prefix.
     pub const OUTPUT_AMOUNTS: MultimapTableDefinition<u64, U64PrefixBytes> =
         MultimapTableDefinition::new("output_amounts");
 
     /// `spent_keys` — zerokval collapse: dup key image (`compare_hash32`) becomes the key.
-    pub const SPENT_KEYS: TableDefinition<LmdbHashKey, ()> = TableDefinition::new("spent_keys");
+    /// A set-table: the key is the member; [`Present`] is the zero-width witness.
+    pub const SPENT_KEYS: TableDefinition<LmdbHashKey, Present> = TableDefinition::new("spent_keys");
 
     /// `txpool_meta` — key order `compare_hash32`.
-    pub const TXPOOL_META: TableDefinition<LmdbHashKey, &[u8]> = TableDefinition::new("txpool_meta");
+    pub const TXPOOL_META: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("txpool_meta");
 
     /// `txpool_blob` — key order `compare_hash32`.
-    pub const TXPOOL_BLOB: TableDefinition<LmdbHashKey, &[u8]> = TableDefinition::new("txpool_blob");
+    pub const TXPOOL_BLOB: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("txpool_blob");
 
     /// `alt_blocks` — key order `compare_hash32`.
-    pub const ALT_BLOCKS: TableDefinition<LmdbHashKey, &[u8]> = TableDefinition::new("alt_blocks");
+    pub const ALT_BLOCKS: TableDefinition<LmdbHashKey, Unshaped> = TableDefinition::new("alt_blocks");
 
     /// `hf_starting_heights` — default flags. Dead (DRS-W5): no runtime rows.
-    pub const HF_STARTING_HEIGHTS: TableDefinition<&[u8], &[u8]> =
+    pub const HF_STARTING_HEIGHTS: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("hf_starting_heights");
 
     /// `hf_versions` — INTEGERKEY; height → hf version.
-    pub const HF_VERSIONS: TableDefinition<u64, u8> = TableDefinition::new("hf_versions");
+    pub const HF_VERSIONS: TableDefinition<u64, Coded<RuleSetId>> = TableDefinition::new("hf_versions");
 
     /// `properties` — `compare_string` == byte-lex + length tiebreak == `&str` order.
-    pub const PROPERTIES: TableDefinition<&str, &[u8]> = TableDefinition::new("properties");
+    /// The one per-key codec: each `PropertyCell` names its value's, so the
+    /// table is a `Blob` and strictness lives where the key is.
+    pub const PROPERTIES: TableDefinition<&str, Blob<PropertyCellBytes>> = TableDefinition::new("properties");
 
-    /// `block_burn` — INTEGERKEY.
-    pub const BLOCK_BURN: TableDefinition<u64, u64> = TableDefinition::new("block_burn");
+    /// `block_burn` — INTEGERKEY; height → units burned, present only when non-zero.
+    pub const BLOCK_BURN: TableDefinition<u64, Coded<AtomicUnits>> = TableDefinition::new("block_burn");
 
     /// `archival_serve_credit` — default flags; composite `P_id||shard||epoch||BE(height)`.
-    pub const ARCHIVAL_SERVE_CREDIT: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_SERVE_CREDIT: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_serve_credit");
 
     /// `archival_settlement` — default flags. On the abstract interface since
     /// 2026-09-13 (SO-D8 promotion); was `BlockchainLMDB`-only before that.
-    pub const ARCHIVAL_SETTLEMENT: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_SETTLEMENT: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_settlement");
 
     /// `archival_attestation_witness` — INTEGERKEY.
-    pub const ARCHIVAL_ATTESTATION_WITNESS: TableDefinition<u64, &[u8]> =
+    pub const ARCHIVAL_ATTESTATION_WITNESS: TableDefinition<u64, Unshaped> =
         TableDefinition::new("archival_attestation_witness");
 
     /// `archival_alt_attestation_witness` — key order `compare_hash32`.
-    pub const ARCHIVAL_ALT_ATTESTATION_WITNESS: TableDefinition<LmdbHashKey, &[u8]> =
+    pub const ARCHIVAL_ALT_ATTESTATION_WITNESS: TableDefinition<LmdbHashKey, Unshaped> =
         TableDefinition::new("archival_alt_attestation_witness");
 
     /// `archival_bond` — default flags.
-    pub const ARCHIVAL_BOND: TableDefinition<&[u8], &[u8]> = TableDefinition::new("archival_bond");
+    pub const ARCHIVAL_BOND: TableDefinition<&[u8], Unshaped> = TableDefinition::new("archival_bond");
 
     /// `archival_shard_segment` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_SHARD_SEGMENT: TableDefinition<u64, &[u8]> =
+    pub const ARCHIVAL_SHARD_SEGMENT: TableDefinition<u64, Unshaped> =
         TableDefinition::new("archival_shard_segment");
 
     /// `archival_slash_applied` — default flags.
-    pub const ARCHIVAL_SLASH_APPLIED: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_SLASH_APPLIED: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_slash_applied");
 
     /// `archival_slash_log` — default flags.
-    pub const ARCHIVAL_SLASH_LOG: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_SLASH_LOG: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_slash_log");
 
     /// `archival_emission_claim_log` — default flags.
-    pub const ARCHIVAL_EMISSION_CLAIM_LOG: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_EMISSION_CLAIM_LOG: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_emission_claim_log");
 
     /// `archival_bond_unbond_log` — default flags.
-    pub const ARCHIVAL_BOND_UNBOND_LOG: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_BOND_UNBOND_LOG: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_bond_unbond_log");
 
     /// `archival_bond_holdings_update_log` — default flags.
-    pub const ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_BOND_HOLDINGS_UPDATE_LOG: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_bond_holdings_update_log");
 
     /// `archival_bond_rebond_log` — default flags.
-    pub const ARCHIVAL_BOND_REBOND_LOG: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_BOND_REBOND_LOG: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_bond_rebond_log");
 
     /// `archival_r_market` — default flags.
-    pub const ARCHIVAL_R_MARKET: TableDefinition<&[u8], &[u8]> =
+    pub const ARCHIVAL_R_MARKET: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("archival_r_market");
 
     /// `archival_sigma_work` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_SIGMA_WORK: TableDefinition<u64, &[u8]> =
+    pub const ARCHIVAL_SIGMA_WORK: TableDefinition<u64, Unshaped> =
         TableDefinition::new("archival_sigma_work");
 
     /// `archival_epoch_close_log` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_EPOCH_CLOSE_LOG: TableDefinition<u64, &[u8]> =
+    pub const ARCHIVAL_EPOCH_CLOSE_LOG: TableDefinition<u64, Unshaped> =
         TableDefinition::new("archival_epoch_close_log");
 
     /// `archival_budget_accrual` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_BUDGET_ACCRUAL: TableDefinition<u64, u64> =
+    pub const ARCHIVAL_BUDGET_ACCRUAL: TableDefinition<u64, Unshaped> =
         TableDefinition::new("archival_budget_accrual");
 
     /// `archival_budget` — default flags, `BE(x)` keys (u64 preserves numeric order).
-    pub const ARCHIVAL_BUDGET: TableDefinition<u64, &[u8]> = TableDefinition::new("archival_budget");
+    pub const ARCHIVAL_BUDGET: TableDefinition<u64, Unshaped> = TableDefinition::new("archival_budget");
 
     /// `pending_tree_leaves` — default flags; composite BE keys.
-    pub const PENDING_TREE_LEAVES: TableDefinition<&[u8], &[u8]> =
+    pub const PENDING_TREE_LEAVES: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("pending_tree_leaves");
 
     /// `pending_tree_drain` — default flags; composite BE keys.
-    pub const PENDING_TREE_DRAIN: TableDefinition<&[u8], &[u8]> =
+    pub const PENDING_TREE_DRAIN: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("pending_tree_drain");
 
     /// `block_pending_additions` — default flags; composite BE keys.
-    pub const BLOCK_PENDING_ADDITIONS: TableDefinition<&[u8], &[u8]> =
+    pub const BLOCK_PENDING_ADDITIONS: TableDefinition<&[u8], Unshaped> =
         TableDefinition::new("block_pending_additions");
 
     /// `output_to_leaf` — INTEGERKEY.
-    pub const OUTPUT_TO_LEAF: TableDefinition<u64, &[u8]> = TableDefinition::new("output_to_leaf");
+    pub const OUTPUT_TO_LEAF: TableDefinition<u64, Unshaped> = TableDefinition::new("output_to_leaf");
 
     /// `leaf_to_output` — INTEGERKEY.
-    pub const LEAF_TO_OUTPUT: TableDefinition<u64, &[u8]> = TableDefinition::new("leaf_to_output");
+    pub const LEAF_TO_OUTPUT: TableDefinition<u64, Unshaped> = TableDefinition::new("leaf_to_output");
 
     /// `curve_tree_leaves` — INTEGERKEY.
-    pub const CURVE_TREE_LEAVES: TableDefinition<u64, &[u8]> =
+    pub const CURVE_TREE_LEAVES: TableDefinition<u64, Unshaped> =
         TableDefinition::new("curve_tree_leaves");
 
     /// `curve_tree_layers` — INTEGERKEY. Derived: recomputed from leaves, not folded.
-    pub const CURVE_TREE_LAYERS: TableDefinition<u64, &[u8]> =
+    pub const CURVE_TREE_LAYERS: TableDefinition<u64, Unshaped> =
         TableDefinition::new("curve_tree_layers");
 
     /// `curve_tree_meta` — default flags.
-    pub const CURVE_TREE_META: TableDefinition<&[u8], &[u8]> = TableDefinition::new("curve_tree_meta");
+    pub const CURVE_TREE_META: TableDefinition<&[u8], Unshaped> = TableDefinition::new("curve_tree_meta");
 
     /// `curve_tree_checkpoints` — INTEGERKEY. Derived: recomputed, not folded.
-    pub const CURVE_TREE_CHECKPOINTS: TableDefinition<u64, &[u8]> =
+    pub const CURVE_TREE_CHECKPOINTS: TableDefinition<u64, Unshaped> =
         TableDefinition::new("curve_tree_checkpoints");
 
     /// `curve_tree_roots` — INTEGERKEY.
-    pub const CURVE_TREE_ROOTS: TableDefinition<u64, &[u8]> = TableDefinition::new("curve_tree_roots");
+    pub const CURVE_TREE_ROOTS: TableDefinition<u64, Coded<CurveTreeRoot>> = TableDefinition::new("curve_tree_roots");
 
     /// `output_metadata` — INTEGERKEY. Node-local; excluded from the accumulator.
-    pub const OUTPUT_METADATA: TableDefinition<u64, &[u8]> = TableDefinition::new("output_metadata");
+    pub const OUTPUT_METADATA: TableDefinition<u64, Unshaped> = TableDefinition::new("output_metadata");
 
     /// `undo_log` — **Rust-only** ([`RUST_ONLY_TABLES`]); height → the
     /// [`UndoLog`](crate::codec::UndoLog) of pre-images `connect` recorded
     /// at that height, replayed in reverse by `pop` (C2-R8 Q5; register row
-    /// SI-6). Declared **last** so no existing ordinal moved when it was
-    /// added; a later table is likewise appended, never inserted.
-    pub const UNDO_LOG: TableDefinition<u64, &[u8]> = TableDefinition::new("undo_log");
+    /// SI-6). Appended when added so no existing ordinal moved; a later
+    /// table is likewise appended, never inserted.
+    pub const UNDO_LOG: TableDefinition<u64, Coded<UndoLog>> = TableDefinition::new("undo_log");
+
+    /// `txs_pqc_auth_hash` — **Rust-only** ([`RUST_ONLY_TABLES`]); tx_id →
+    /// the txid's third component, `keccak256(varint(count) ‖ auths)`, for
+    /// every 4-part transaction (`PDM-Q-F26`; S-CHAIN-R amendment A3). Row
+    /// present ⇔ txid 4-part, written by `connect` beside
+    /// `txs_prunable_hash`. A prune of the `txs_pqc_auths` segment does
+    /// **not** delete this digest — a row without its segment is
+    /// *discarded*, not a fault (`PDM-Q-F26` leg 3). `pop` reverses the
+    /// journaled insert with the rest of the block. Appended last
+    /// (ordinal 50).
+    pub const TXS_PQC_AUTH_HASH: TableDefinition<u64, Coded<PqcAuthHash>> =
+        TableDefinition::new("txs_pqc_auth_hash");
 }
 
 #[cfg(test)]

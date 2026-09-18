@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Daemon chain store
+
+- **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 5` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`; `spent_keys` is `Present`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
+
 ### Consensus
 
 - **RandomX v2 Phase 4 follow-on: leftover schema operands and CN
@@ -65,8 +69,8 @@
   `prunable_hash()` now returns `PrunableHash` and both supplied forms take
   `PrunableHash` / `Option<PqcAuthHash>` (`shekyl-wire` depends on
   `shekyl-types`), so the two digests a store hands back cannot be swapped
-  into the wrong operand. The `txs_pqc_auth_hash` store row (item 3) lands
-  with S-CHAIN-R's layout commit.
+  into the wrong operand. The `txs_pqc_auth_hash` store row (item 3) landed
+  on PR #772 with S-CHAIN-R's layout commit.
 
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
   (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured

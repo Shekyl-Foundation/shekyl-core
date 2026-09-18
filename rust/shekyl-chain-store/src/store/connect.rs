@@ -75,15 +75,16 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
-    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, PassedThroughFacts,
-    PropertyCell, TotalBurnedCell, TxIndex, TxOutputIndices,
+    stored_timelock, BlockBody, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx,
+    PassedThroughFacts, Present, PropertyCell, Raw, TotalBurnedCell, TxIndex, TxOutputIndices,
+    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
-use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
+use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
-    OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES,
-    TX_OUTPUTS,
+    OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH,
+    TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
@@ -175,12 +176,20 @@ pub struct ConnectFacts {
     /// header root: that is the state *before* its drain, already at key `h`
     /// from the parent's connect (SCW-19).
     pub root_after: Fact<CurveTreeRoot>,
+    /// The long-term weight median **in force for** this block — the value
+    /// it was validated and fee-floored against, the ring's `rm` at its
+    /// iteration (`relay_floor_ring.cpp:196`–`:200`), **not** the recompute
+    /// after its own weight enters the window (that is the next block's;
+    /// SCR-19, `DRS_E1_SCHAIN_R.md` §3.6). Recorded at `block_info[h]` for
+    /// the O(1) read FL-R3-STORE owes; a consensus computation, so passed
+    /// through exactly like `long_term_weight` until CEN-G6 derives it.
+    pub long_term_effective_median: Fact<LongTermWeight>,
 }
 
 impl ConnectFacts {
     /// The fields, each with the rows that will derive it, in declaration
     /// order. The table `DRS_E1_SCHAIN_W.md` §3.2 carries, as data.
-    pub const DELETED_BY: [DeletedBy; 6] = [
+    pub const DELETED_BY: [DeletedBy; 7] = [
         DeletedBy {
             field: "weight",
             rows: &["CEN-G6", "CEN-G6b"],
@@ -211,9 +220,14 @@ impl ConnectFacts {
             rows: &["CEN-B5", "CEN-I12"],
             slice: "1 / 6, through the curve-tree crate (S-CURVE grows it)",
         },
+        DeletedBy {
+            field: "long_term_effective_median",
+            rows: &["CEN-G6", "CEN-G6b"],
+            slice: "7 (4.G), beside long_term_weight",
+        },
     ];
 
-    const fn origins(&self) -> [Origin; 6] {
+    const fn origins(&self) -> [Origin; 7] {
         [
             self.weight.origin,
             self.long_term_weight.origin,
@@ -221,6 +235,7 @@ impl ConnectFacts {
             self.coins_generated.origin,
             self.burned.origin,
             self.root_after.origin,
+            self.long_term_effective_median.origin,
         ]
     }
 
@@ -229,10 +244,10 @@ impl ConnectFacts {
     /// and `Origin` themselves are deleted.
     ///
     /// `count()` is **the set of facts the store does not derive**, not a
-    /// progress bar: it grows as facts are discovered (S-CHAIN-R adds
-    /// `long_term_effective_median`, so it rises by one when that lands —
-    /// `DRS_E1_SCHAIN_R.md` §3.6) and shrinks as E6 lands the rows that
-    /// derive them. An increase is not a regression; the items are the
+    /// progress bar: it grows as facts are discovered (S-CHAIN-R added
+    /// `long_term_effective_median`, so it rose from six to seven when that
+    /// landed — `DRS_E1_SCHAIN_R.md` §3.6) and shrinks as E6 lands the rows
+    /// that derive them. An increase is not a regression; the items are the
     /// critical path.
     pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_ {
         Self::DELETED_BY
@@ -300,13 +315,16 @@ impl<'id> WriteBatch<'_, 'id> {
         // noted **before** any belt can fire: a violation here must halt
         // the writer at this height (§3.6.2), and the halt reads the noted
         // height — a belt that poisoned first would leave the writer live.
-        let height = {
+        // The parent's `cumulative_tx_count` rides out of the same decoded
+        // tip row (§3.6): genesis has no parent and starts the count at 0.
+        let (height, parent_tx_count) = {
             let tip = self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?;
             let last = tip.last()?;
             let height = last.as_ref().map_or(0, |(h, _)| h.value() + 1);
             self.journal().note_height(height);
+            let mut parent_tx_count = 0;
             if let Some((_, info)) = last {
-                let info = BlockInfo::decode(info.value()).map_err(|cause| {
+                let info = info.value().decode().map_err(|cause| {
                     self.poison().arm(StoreInvariant::CellCorrupt {
                         key: "block_info",
                         fault: CellFault::Undecodable(cause),
@@ -315,8 +333,9 @@ impl<'id> WriteBatch<'_, 'id> {
                 if valid.block().header().previous != info.hash.to_bytes() {
                     return Err(self.poison().arm(StoreInvariant::TipMismatch));
                 }
+                parent_tx_count = info.cumulative_tx_count;
             }
-            height
+            (height, parent_tx_count)
         };
         // Resolve `in_force` before comparing it with the verdict's id: a
         // `ChainValid` only ever carries an issued id, so an unissued
@@ -367,15 +386,18 @@ impl<'id> WriteBatch<'_, 'id> {
         // ---- 3. [E3 hook] pending leaves → drain → grow → segment freeze --
         // ---- 4. root ---------------------------------------------------
         self.open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
-            .insert(height + 1, facts.root_after.value.encode().as_slice())?;
+            .insert(height + 1, facts.root_after.value.encoded().as_encoded())?;
 
         // ---- 5. [E4 hook] attestation witness --------------------------
         // ---- 6. block --------------------------------------------------
         let hash = BlockHash::from_bytes(*block.hash().as_bytes());
         self.open_insert_table(BLOCKS, StoreInvariant::TipMismatch)?
-            .insert(height, block.block().serialize().as_slice())?;
+            .insert(height, Raw::<BlockBody>::new(&block.block().serialize()))?;
         self.open_insert_table(BLOCK_HEIGHTS, StoreInvariant::TipMismatch)?
-            .insert(LmdbHashKey::from(hash), &height)?;
+            .insert(
+                LmdbHashKey::from(hash),
+                BlockHeight::from_raw(height).encoded().as_encoded(),
+            )?;
         let info = BlockInfo {
             timestamp: shekyl_types::Timestamp::from_raw(block.header().timestamp),
             coins_generated: facts.coins_generated.value,
@@ -387,13 +409,25 @@ impl<'id> WriteBatch<'_, 'id> {
             // `BlockInfo::rct_outputs`.
             rct_outputs,
             long_term_weight: facts.long_term_weight.value,
+            // Store-derived running total (§3.6): the parent's plus this
+            // block's listed transactions, under SI-8 like `total_burned`.
+            cumulative_tx_count: parent_tx_count
+                .checked_add(u64::try_from(block.transactions().len()).expect("tx count fits u64"))
+                .ok_or(StoreInvariant::FoldOverflow {
+                    cell: "block_info.cumulative_tx_count",
+                })
+                .map_err(|row| self.poison().arm(row))?,
+            // Passed through, and stored at **this** height: the median in
+            // force for `h`, not the recompute that belongs to `h + 1`
+            // (SCR-19).
+            long_term_effective_median: facts.long_term_effective_median.value,
         };
         self.open_insert_table(BLOCK_INFO, StoreInvariant::TipMismatch)?
-            .insert(height, info.encode().as_slice())?;
+            .insert(height, info.encoded().as_encoded())?;
 
         // ---- 7. rule set (CEN-B3's belt) --------------------------------
         self.open_insert_table(HF_VERSIONS, StoreInvariant::TipMismatch)?
-            .insert(height, &in_force.to_raw())?;
+            .insert(height, in_force.encoded().as_encoded())?;
 
         // ---- 8. burn ---------------------------------------------------
         // Conditional as a whole, exactly as `blockchain.cpp:6148`
@@ -403,11 +437,11 @@ impl<'id> WriteBatch<'_, 'id> {
         let burned = facts.burned.value;
         if height > 0 && burned != AtomicUnits::ZERO {
             self.open_insert_table(BLOCK_BURN, StoreInvariant::TipMismatch)?
-                .insert(height, &burned.to_raw())?;
+                .insert(height, burned.encoded().as_encoded())?;
             let total = self
                 .get_property::<TotalBurnedCell>()?
-                .unwrap_or(0)
-                .checked_add(burned.to_raw())
+                .unwrap_or(AtomicUnits::ZERO)
+                .checked_add(burned)
                 .ok_or(StoreInvariant::FoldOverflow {
                     cell: TotalBurnedCell::KEY,
                 })
@@ -446,7 +480,7 @@ impl<'id> WriteBatch<'_, 'id> {
         let mut spent = self.open_insert_table(SPENT_KEYS, StoreInvariant::KeyImageNotFresh)?;
         for input in &tx.prefix.inputs {
             if let Input::ToKey { key_image, .. } = input {
-                spent.insert(LmdbHashKey::from_bytes(*key_image), ())?;
+                spent.insert(LmdbHashKey::from_bytes(*key_image), Present)?;
             }
         }
         drop(spent);
@@ -471,25 +505,45 @@ impl<'id> WriteBatch<'_, 'id> {
                     unlock_time: stored_timelock(tx.prefix.unlock_time),
                     height: BlockHeight::from_raw(height),
                 }
-                .encode()
-                .as_slice(),
+                .encoded()
+                .as_encoded(),
             )?;
         let segments = tx
             .write_segments()
             .expect("write_segments writes into Vecs; Vec writes are infallible");
-        pruned.insert(tx_id.to_raw(), segments.pruned.as_slice())?;
+        pruned.insert(
+            tx_id.to_raw(),
+            Raw::<TxPrunedSegment>::new(&segments.pruned),
+        )?;
         drop(pruned);
         if !segments.pqc_auths.is_empty() {
             self.open_insert_table(TXS_PQC_AUTHS, StoreInvariant::IdNotFresh)?
-                .insert(tx_id.to_raw(), segments.pqc_auths.as_slice())?;
+                .insert(
+                    tx_id.to_raw(),
+                    Raw::<TxPqcAuthsSegment>::new(&segments.pqc_auths),
+                )?;
         }
         self.open_insert_table(TXS_PRUNABLE, StoreInvariant::IdNotFresh)?
-            .insert(tx_id.to_raw(), segments.prunable.as_slice())?;
+            .insert(
+                tx_id.to_raw(),
+                Raw::<TxPrunableSegment>::new(&segments.prunable),
+            )?;
         self.open_insert_table(TXS_PRUNABLE_HASH, StoreInvariant::IdNotFresh)?
             .insert(
                 tx_id.to_raw(),
-                Hash32::from_bytes(*identity.prunable_hash.as_bytes()),
+                identity.prunable_hash.encoded().as_encoded(),
             )?;
+        // The txid's third component, present ⇔ the txid is 4-part
+        // (`PDM-Q-F26` leg 1; DRS §7.7). `None` is *the txid has no such
+        // component* — coinbase, empty-auths spend — and writes no row; leg 2
+        // (segment ⇒ row) is `validate`'s, which derived this identity
+        // beside the body (CEN-B6) and refuses the one shape that could
+        // split them. Never deleted by a prune: a row without its segment
+        // is *discarded*, leg 3, not a fault.
+        if let Some(pqc_auth_hash) = identity.pqc_auth_hash {
+            self.open_insert_table(TXS_PQC_AUTH_HASH, StoreInvariant::IdNotFresh)?
+                .insert(tx_id.to_raw(), pqc_auth_hash.encoded().as_encoded())?;
+        }
 
         // Outputs: `output_txs` by global id, `output_amounts` member under
         // the (zeroed for miner / emission) amount, then the per-tx index
@@ -523,8 +577,8 @@ impl<'id> WriteBatch<'_, 'id> {
                     tx_hash,
                     local_index: OutputIndexInTx::from_raw(local_index),
                 }
-                .encode()
-                .as_slice(),
+                .encoded()
+                .as_encoded(),
             )?;
             let amount = if miner || emission { 0 } else { output.amount };
             // `amount_index` is the bucket's member count (LMDB's
@@ -561,7 +615,10 @@ impl<'id> WriteBatch<'_, 'id> {
         drop(output_txs);
         drop(amounts);
         self.open_insert_table(TX_OUTPUTS, StoreInvariant::IdNotFresh)?
-            .insert(tx_id.to_raw(), TxOutputIndices(indices).encode().as_slice())?;
+            .insert(
+                tx_id.to_raw(),
+                TxOutputIndices(indices).encoded().as_encoded(),
+            )?;
         Ok(rct)
     }
 }

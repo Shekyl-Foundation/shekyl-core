@@ -120,9 +120,11 @@ mod tests {
         for v in [0_u8, 7, 0xff] {
             assert_eq!(v.encode(), <u8 as Value>::as_bytes(&v).as_ref());
         }
+        // `Hash32` is a layout type with no redb impl of its own
+        // (§11.1(f)); its codec is the stored form verbatim.
         let h = Hash32::from_bytes(core::array::from_fn(|i| {
             u8::try_from(i).expect("32 indices fit a byte")
         }));
-        assert_eq!(h.encode(), <Hash32 as Value>::as_bytes(&h).as_ref());
+        assert_eq!(h.encode(), h.to_bytes());
     }
 }

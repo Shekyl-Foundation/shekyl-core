@@ -26,8 +26,8 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
-    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, TotalBurnedCell, TxIndex,
-    TxOutputIndices, UndoLog, FACT_FIELDS,
+    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, Raw, TotalBurnedCell,
+    TxIndex, TxOutputIndices, TxPrunedSegment, FACT_FIELDS,
 };
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{
@@ -60,7 +60,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .expect("t")
             .get(0)
             .expect("g")
-            .map(|g| g.value().to_vec()),
+            .map(|g| g.value().bytes().to_vec()),
         Some(block.serialize()),
         "blocks[0] is the judged block re-serialized"
     );
@@ -69,18 +69,18 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .expect("t")
             .get(LmdbHashKey::from(block_hash))
             .expect("g")
-            .map(|g| g.value()),
-        Some(0)
+            .map(|g| g.value().decode().expect("decodes")),
+        Some(BlockHeight::ZERO)
     );
-    let info = BlockInfo::decode(
-        snap.open_table(BLOCK_INFO)
-            .expect("t")
-            .get(0)
-            .expect("g")
-            .expect("row")
-            .value(),
-    )
-    .expect("decodes");
+    let info = snap
+        .open_table(BLOCK_INFO)
+        .expect("t")
+        .get(0)
+        .expect("g")
+        .expect("row")
+        .value()
+        .decode()
+        .expect("decodes");
     assert_eq!(
         info,
         BlockInfo {
@@ -91,6 +91,11 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             hash: shekyl_types::BlockHash::from(block_hash),
             rct_outputs: 1,
             long_term_weight: shekyl_types::LongTermWeight::from_raw(900),
+            // `cum(0) == |transactions(0)|`: the genesis fixture lists none.
+            cumulative_tx_count: 0,
+            // The value handed **for** height 0, read back at height 0
+            // (SCR-19): the fixture's `300_000 + 7 * h`.
+            long_term_effective_median: shekyl_types::LongTermWeight::from_raw(300_000),
         }
     );
     assert_eq!(
@@ -98,20 +103,19 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .expect("t")
             .get(0)
             .expect("g")
-            .map(|g| g.value()),
-        Some(GENESIS_ID.to_raw()),
+            .map(|g| g.value().decode().expect("decodes")),
+        Some(GENESIS_ID),
         "hf_versions[h] is the rule set in force (SCW-16)"
     );
     assert_eq!(
-        CurveTreeRoot::decode(
-            snap.open_table(CURVE_TREE_ROOTS)
-                .expect("t")
-                .get(1)
-                .expect("g")
-                .expect("row at h + 1")
-                .value()
-        )
-        .expect("decodes"),
+        snap.open_table(CURVE_TREE_ROOTS)
+            .expect("t")
+            .get(1)
+            .expect("g")
+            .expect("row at h + 1")
+            .value()
+            .decode()
+            .expect("decodes"),
         CurveTreeRoot::from_bytes([0xc0; 32]),
         "the root after genesis is keyed at 1"
     );
@@ -124,15 +128,14 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
 
     // transaction tables
     assert_eq!(
-        TxIndex::decode(
-            snap.open_table(TX_INDICES)
-                .expect("t")
-                .get(LmdbHashKey::from(miner_hash))
-                .expect("g")
-                .expect("row")
-                .value()
-        )
-        .expect("decodes"),
+        snap.open_table(TX_INDICES)
+            .expect("t")
+            .get(LmdbHashKey::from(miner_hash))
+            .expect("g")
+            .expect("row")
+            .value()
+            .decode()
+            .expect("decodes"),
         TxIndex {
             tx_id: crate::ids::TxStorageId::from_raw(0),
             unlock_time: stored_timelock(60),
@@ -145,7 +148,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .expect("t")
             .get(0)
             .expect("g")
-            .map(|g| g.value().to_vec()),
+            .map(|g| g.value().bytes().to_vec()),
         Some(segments.pruned)
     );
     assert!(
@@ -163,7 +166,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .expect("t")
             .get(0)
             .expect("g")
-            .map(|g| g.value().to_vec()),
+            .map(|g| g.value().bytes().to_vec()),
         Some(Vec::new()),
         "a coinbase has an EMPTY prunable row (LMDB parity)"
     );
@@ -172,34 +175,32 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .expect("t")
             .get(0)
             .expect("g")
-            .map(|g| g.value()),
-        Some(Hash32::from_bytes(miner.prunable_hash().to_bytes())),
+            .map(|g| g.value().decode().expect("decodes")),
+        Some(miner.prunable_hash()),
         "keccak256 of the empty region, not the null hash"
     );
     assert_eq!(
-        TxOutputIndices::decode(
-            snap.open_table(TX_OUTPUTS)
-                .expect("t")
-                .get(0)
-                .expect("g")
-                .expect("row")
-                .value()
-        )
-        .expect("decodes"),
+        snap.open_table(TX_OUTPUTS)
+            .expect("t")
+            .get(0)
+            .expect("g")
+            .expect("row")
+            .value()
+            .decode()
+            .expect("decodes"),
         TxOutputIndices(vec![crate::ids::AmountIndex::from_raw(0)])
     );
 
     // output tables
     assert_eq!(
-        OutTx::decode(
-            snap.open_table(OUTPUT_TXS)
-                .expect("t")
-                .get(0)
-                .expect("g")
-                .expect("row")
-                .value()
-        )
-        .expect("decodes"),
+        snap.open_table(OUTPUT_TXS)
+            .expect("t")
+            .get(0)
+            .expect("g")
+            .expect("row")
+            .value()
+            .decode()
+            .expect("decodes"),
         OutTx {
             tx_hash: shekyl_types::TxHash::from(miner_hash),
             local_index: shekyl_types::OutputIndexInTx::from_raw(0)
@@ -225,8 +226,13 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         "stored under amount 0 with the ct-base commitment"
     );
 
-    // no burn, no key images, no total_burned yet
-    assert!(snap.open_table(BLOCK_BURN).is_err());
+    // no burn, no key images, no total_burned yet — and the table *exists*
+    // from the seal (A2, SCR-17): absent-table is never read as empty-table.
+    assert!(snap
+        .open_table(BLOCK_BURN)
+        .expect("sealed: exists on a chain that never burned")
+        .is_empty()
+        .expect("len"));
     assert!(snap
         .open_table(SPENT_KEYS)
         .expect("t")
@@ -234,15 +240,15 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         .expect("len"));
     assert_eq!(snap.get_property::<TotalBurnedCell>().expect("cell"), None);
     // one undo row, with exactly the journaled count
-    let undo = UndoLog::decode(
-        snap.open_table(UNDO_LOG)
-            .expect("t")
-            .get(0)
-            .expect("g")
-            .expect("row")
-            .value(),
-    )
-    .expect("decodes");
+    let undo = snap
+        .open_table(UNDO_LOG)
+        .expect("t")
+        .get(0)
+        .expect("g")
+        .expect("row")
+        .value()
+        .decode()
+        .expect("decodes");
     assert_eq!(undo.0.len(), 12);
     cleanup(&path);
 }
@@ -290,32 +296,31 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
             .expect("t")
             .get(LmdbHashKey::from_bytes(b1_hash))
             .expect("g")
-            .map(|g| g.value()),
-        Some(1)
+            .map(|g| g.value().decode().expect("decodes")),
+        Some(BlockHeight::from_raw(1))
     );
     // Dense store ids across the two blocks: tx_ids 0 (g miner), 1 (b1
     // miner), 2 (spend); output_ids 0, 1, 2, 3; amount_index under 0: 0..4.
-    let spend_index = TxIndex::decode(
-        snap.open_table(TX_INDICES)
-            .expect("t")
-            .get(LmdbHashKey::from_bytes(spend_hash))
-            .expect("g")
-            .expect("row")
-            .value(),
-    )
-    .expect("decodes");
+    let spend_index = snap
+        .open_table(TX_INDICES)
+        .expect("t")
+        .get(LmdbHashKey::from_bytes(spend_hash))
+        .expect("g")
+        .expect("row")
+        .value()
+        .decode()
+        .expect("decodes");
     assert_eq!(spend_index.tx_id, crate::ids::TxStorageId::from_raw(2));
     assert_eq!(spend_index.height, BlockHeight::from_raw(1));
     assert_eq!(
-        TxOutputIndices::decode(
-            snap.open_table(TX_OUTPUTS)
-                .expect("t")
-                .get(2)
-                .expect("g")
-                .expect("row")
-                .value()
-        )
-        .expect("decodes"),
+        snap.open_table(TX_OUTPUTS)
+            .expect("t")
+            .get(2)
+            .expect("g")
+            .expect("row")
+            .value()
+            .decode()
+            .expect("decodes"),
         TxOutputIndices(vec![
             crate::ids::AmountIndex::from_raw(2),
             crate::ids::AmountIndex::from_raw(3),
@@ -333,15 +338,15 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
             .len(),
         4
     );
-    let info1 = BlockInfo::decode(
-        snap.open_table(BLOCK_INFO)
-            .expect("t")
-            .get(1)
-            .expect("g")
-            .expect("row")
-            .value(),
-    )
-    .expect("decodes");
+    let info1 = snap
+        .open_table(BLOCK_INFO)
+        .expect("t")
+        .get(1)
+        .expect("g")
+        .expect("row")
+        .value()
+        .decode()
+        .expect("decodes");
     assert_eq!(
         info1.rct_outputs, 3,
         "this block's outputs only (1 + 2): per-block, not cumulative (CEN-L15)"
@@ -351,8 +356,8 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
             .expect("t")
             .get(1)
             .expect("g")
-            .map(|g| g.value()),
-        Some(25)
+            .map(|g| g.value().decode().expect("decodes")),
+        Some(AtomicUnits::from_raw(25))
     );
     assert!(snap
         .open_table(BLOCK_BURN)
@@ -362,7 +367,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
         .is_none());
     assert_eq!(
         snap.get_property::<TotalBurnedCell>().expect("cell"),
-        Some(25)
+        Some(AtomicUnits::from_raw(25))
     );
     // The spend's prunable row is empty (storage-pruned form) and its
     // prunable hash is keccak256("") — the same value a coinbase carries.
@@ -371,7 +376,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
             .expect("t")
             .get(2)
             .expect("g")
-            .map(|g| g.value().len()),
+            .map(|g| g.value().bytes().len()),
         Some(0)
     );
     cleanup(&path);
@@ -391,7 +396,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
             .map(|t| t.len().expect("len"))
             .unwrap_or(0)
     }
-    let counts = |store: &ChainStore| -> (u64, u64, u64, u64, u64, Option<u64>) {
+    let counts = |store: &ChainStore| -> (u64, u64, u64, u64, u64, Option<AtomicUnits>) {
         let snap = store.begin_read().expect("read");
         (
             len(&snap, BLOCKS),
@@ -414,7 +419,10 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
         Ok(batch.connect(judge(&view, b1)?, facts(1, 4), GENESIS_ID)?)
     });
     out.expect("block 1 connects");
-    assert_eq!(counts(&store), (2, 3, 3, 2, 1, Some(4)));
+    assert_eq!(
+        counts(&store),
+        (2, 3, 3, 2, 1, Some(AtomicUnits::from_raw(4)))
+    );
 
     let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
     assert!(matches!(popped, Ok(Replayed::Entries(_))));
@@ -509,9 +517,14 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
         RuleSet::for_id(unissued).is_none(),
         "the premise of the test"
     );
-    // Nothing landed: the refusal came before any write.
+    // Nothing landed: the refusal came before any write. (The table itself
+    // exists from the seal, A2; emptiness is the evidence.)
     let snap = store.begin_read().expect("read");
-    assert!(snap.open_table(BLOCKS).is_err());
+    assert!(snap
+        .open_table(BLOCKS)
+        .expect("sealed")
+        .is_empty()
+        .expect("len"));
     cleanup(&path);
 }
 
@@ -613,7 +626,7 @@ fn a_gapped_txs_pruned_primary_is_si9() {
     let planted: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(TXS_PRUNED, StoreInvariant::IdNotFresh)?
-            .insert(3, [0u8; 1].as_slice())?;
+            .insert(3, Raw::<TxPrunedSegment>::new(&[0u8; 1]))?;
         Ok(())
     });
     planted.expect("plant");
@@ -696,7 +709,7 @@ fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
     // overflow is block 1's.
     let (_, genesis) = connect_genesis(&store, 0);
     let seeded: Result<(), TestErr> = store.write(|batch| {
-        batch.upsert_property::<TotalBurnedCell>(&u64::MAX)?;
+        batch.upsert_property::<TotalBurnedCell>(&AtomicUnits::from_raw(u64::MAX))?;
         Ok(())
     });
     seeded.expect("seed");
@@ -717,7 +730,7 @@ fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
     let snap = store.begin_read().expect("read");
     assert_eq!(
         snap.get_property::<TotalBurnedCell>().expect("cell"),
-        Some(u64::MAX),
+        Some(AtomicUnits::from_raw(u64::MAX)),
         "unchanged: the batch aborted"
     );
     cleanup(&path);
@@ -730,7 +743,7 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
     let planted: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
-            .insert(1, CurveTreeRoot::from_bytes([1; 32]).encode().as_slice())?;
+            .insert(1, CurveTreeRoot::from_bytes([1; 32]).encoded().as_encoded())?;
         Ok(())
     });
     planted.expect("plant");
@@ -762,6 +775,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         coins_generated: Fact::derived(AtomicUnits::from_raw(1_000_000)),
         burned: Fact::derived(AtomicUnits::ZERO),
         root_after: Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32])),
+        long_term_effective_median: Fact::derived(shekyl_types::LongTermWeight::from_raw(300_000)),
     };
     let g = candidate(0, [0; 32], Vec::new());
     let g_hash = g.block.hash();
@@ -837,7 +851,8 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
             "weight",
             "long_term_weight",
             "cumulative_difficulty",
-            "coins_generated"
+            "coins_generated",
+            "long_term_effective_median"
         ]
     );
     assert_eq!(
@@ -846,8 +861,8 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         "unchanged"
     );
     assert!(prov.artifact_stamp().contains(
-        "passed-through=[weight,long_term_weight,cumulative_difficulty,coins_generated] \
-         NOT-PARITY-EVIDENCE"
+        "passed-through=[weight,long_term_weight,cumulative_difficulty,coins_generated,\
+         long_term_effective_median] NOT-PARITY-EVIDENCE"
     ));
     // Monotone: a later fully-derived connect cannot narrow it, and a
     // read-only reopen reads the same record from the file.
@@ -919,19 +934,20 @@ fn passed_through_names_the_rows_that_delete_each_fact() {
             "cumulative_difficulty",
             "coins_generated",
             "burned",
-            "root_after"
+            "root_after",
+            "long_term_effective_median"
         ]
     );
     let mut some = all;
     some.cumulative_difficulty = Fact::derived(CumulativeDifficulty::from_raw(100));
     some.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32]));
     let remaining: Vec<DeletedBy> = some.passed_through().collect();
-    assert_eq!(remaining.len(), 4);
+    assert_eq!(remaining.len(), 5);
     assert!(remaining
         .iter()
         .all(|d| !d.rows.is_empty() && !d.slice.is_empty()));
     assert!(remaining
         .iter()
         .any(|d| d.field == "burned" && d.rows.contains(&"CEN-F17")));
-    assert_eq!(ConnectFacts::DELETED_BY.len(), 6);
+    assert_eq!(ConnectFacts::DELETED_BY.len(), 7);
 }
