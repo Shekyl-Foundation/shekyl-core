@@ -12,9 +12,10 @@ is raw for a reason, and this gate is where the reason lives.
 
 Without it RTN-7 is a cleanup that decays invisibly: `RAW_TYPE_NEWTYPE_MIGRATION.md`
 §6 records the intent, and rows do not gate. The moment the typing lands,
-nothing stops the next wire field arriving as `[u8; 32]`. Same `{item: reason}`
-shape as the census bijection map, `RUST_ONLY_TABLES`, `DEFERRED_DOCS` and
-`CXX_HOLDER_RE`; unnamed occurrences are red.
+nothing stops the next wire field arriving as `[u8; 32]`. The allowlist is
+`dict[str, Allow]` with `Allow(reason, addressee)` as two fields — the same
+named-exception shape as the census bijection map, `RUST_ONLY_TABLES`,
+`DEFERRED_DOCS` and `CXX_HOLDER_RE`; unnamed occurrences are red.
 
 Red in **both** directions (rule 47):
 
@@ -26,15 +27,19 @@ Red in **both** directions (rule 47):
 * an empty scan — no `pub` items found at all means the crate moved or the
   parse broke, and absence of signal is first evidence the subject is absent.
 
-Scope — the **public** surface of `rust/shekyl-wire/src/**/*.rs`:
+Scope — the **public** surface of `rust/shekyl-wire/src/**/*.rs`. A
+declaration is one item even when rustfmt wraps it, so every kind of
+surface is buffered to its terminator and then searched as a whole:
 
-* `pub` struct fields;
+* `pub` struct fields — from `pub name:` through a complete type
+  (bracket depth back to zero). Completeness is depth, not a trailing
+  comma: the last field of a struct has none, and `Vec<\n [u8; 32],\n>`
+  is one field, not three lines;
 * fields of a `pub enum`'s struct variants and the payloads of its tuple
-  variants (both public with **no `pub` keyword** — a `pub`-only scan misses
-  them, and this gate's own first run did);
-* `pub fn` signatures in full — buffered from the `fn` line to the body's
-  `{`, because a multi-line signature puts the raw type on a line that does
-  not say `pub fn`.
+  variants (both public with **no `pub` keyword** — a `pub`-only scan
+  misses them, and this gate's own first run did), buffered the same way;
+* `pub fn` signatures — from the `fn` line to the body's `{` (or a trait
+  method's `;`).
 
 `pub(crate)` and private items are not surface: the mixers (`hash_concat`,
 `merkle_root`) take raw digests by design and convert at the call.
@@ -139,24 +144,79 @@ ALLOWED: dict[str, Allow] = {
 }
 
 RAW = re.compile(r"\[u8;\s*32\]")
-# A `pub` field: `pub name: <ty>` where <ty> mentions [u8; 32].
-FIELD_RE = re.compile(r"^\s*pub\s+(?P<name>\w+)\s*:\s*(?P<ty>[^,\n]*\[u8;\s*32\][^,\n]*)")
-# A field inside a `pub enum`'s struct variant — public with no `pub`.
-VARIANT_FIELD_RE = re.compile(r"^\s+(?P<name>\w+)\s*:\s*(?P<ty>[^,\n]*\[u8;\s*32\][^,\n]*)")
-# A tuple variant of a `pub enum`: `Variant([u8; 32])`, `Variant(Vec<[u8; 32]>)`.
-# Public with no keyword and no field name — reported as `Enum::Variant.0`.
-TUPLE_VARIANT_RE = re.compile(r"^\s{4}(?P<name>[A-Z]\w*)\((?P<ty>[^)]*\[u8;\s*32\][^)]*)\)")
-# The start of a `pub fn`. The signature may span lines; the scanner buffers
-# from here to the body's `{` (or a trait method's `;`) and checks the whole.
+# Declaration *starts*. The type may wrap; the scanner buffers until the
+# type is complete (fields, tuple variants) or the body opens (fns).
+# `pub(crate)` / `pub(super)` fail FIELD_START — `(crate)` is not an ident.
+FIELD_START_RE = re.compile(r"^\s*pub\s+(?P<name>\w+)\s*:")
+VARIANT_FIELD_START_RE = re.compile(r"^\s+(?P<name>\w+)\s*:")
+TUPLE_VARIANT_START_RE = re.compile(r"^\s{4}(?P<name>[A-Z]\w*)\(")
 FN_RE = re.compile(r"^\s*pub\s+(?:const\s+|async\s+|unsafe\s+)?fn\s+(?P<name>\w+)")
-# `pub struct Name {` / `pub enum Name {` — the enclosing item for a field.
 ITEM_RE = re.compile(r"^\s*pub\s+(?P<kind>struct|enum)\s+(?P<name>\w+)")
-# An enum variant's struct body: `Variant {`
 VARIANT_RE = re.compile(r"^\s{4}(?P<name>[A-Z]\w*)\s*\{")
+
+# One pending kind per surface: a fn waits for `{`/`;`, a field waits for
+# a complete type, a tuple variant waits for its closing paren.
+_KIND_FN = "fn"
+_KIND_FIELD = "field"
+_KIND_TUPLE = "tuple"
 
 
 def signature_ends(line: str) -> bool:
     return "{" in line or line.rstrip().endswith(";")
+
+
+def _joined(lines: list[str]) -> str:
+    return " ".join(part.strip() for part in lines)
+
+
+def _nesting_depth(text: str) -> int:
+    """Net unmatched `<([` openers. Types, not expressions; comments ignored."""
+    depth = 0
+    for ch in text:
+        if ch in "<([":
+            depth += 1
+        elif ch in ">)]":
+            depth = max(depth - 1, 0)
+    return depth
+
+
+def field_declaration_complete(joined: str) -> bool:
+    """True once the type after `name:` has closed.
+
+    Completeness is bracket depth, not a trailing comma. rustfmt wraps
+    `Vec<[u8; 32]>` across lines, and the last field of a struct has no
+    comma; either hole made a line-regex report green.
+    """
+    _, sep, ty = joined.partition(":")
+    if not sep or not ty.strip():
+        return False
+    depth = 0
+    for ch in ty:
+        if ch in "<([":
+            depth += 1
+        elif ch in ">)]":
+            depth = max(depth - 1, 0)
+        elif ch in ",}" and depth == 0:
+            return True
+    return depth == 0
+
+
+def tuple_variant_complete(joined: str) -> bool:
+    start = joined.find("(")
+    if start < 0:
+        return False
+    return _nesting_depth(joined[start:]) == 0
+
+
+def pending_complete(lines: list[str], kind: str) -> bool:
+    if kind == _KIND_FN:
+        return signature_ends(lines[-1])
+    joined = _joined(lines)
+    if kind == _KIND_FIELD:
+        return field_declaration_complete(joined)
+    if kind == _KIND_TUPLE:
+        return tuple_variant_complete(joined)
+    return False
 
 
 def scan(root: Path) -> tuple[dict[str, str], int]:
@@ -168,16 +228,30 @@ def scan(root: Path) -> tuple[dict[str, str], int]:
         enclosing = "?"
         variant = None
         in_enum = False
-        sig: list[str] | None = None  # an open `pub fn` signature being buffered
-        sig_name = ""
+        pending: list[str] | None = None
+        pending_kind = ""
+        pending_key = ""
+
+        def flush() -> None:
+            nonlocal pending
+            if pending is None:
+                return
+            joined = _joined(pending)
+            if RAW.search(joined):
+                found[pending_key] = joined
+            pending = None
+
+        def take(kind: str, key: str, line: str) -> None:
+            nonlocal pending, pending_kind, pending_key
+            pending_kind, pending_key, pending = kind, key, [line]
+            if pending_complete(pending, pending_kind):
+                flush()
+
         for line in path.read_text().splitlines():
-            if sig is not None:
-                sig.append(line)
-                if signature_ends(line):
-                    joined = " ".join(part.strip() for part in sig)
-                    if RAW.search(joined):
-                        found[f"{rel}::{sig_name}()"] = joined
-                    sig = None
+            if pending is not None:
+                pending.append(line)
+                if pending_complete(pending, pending_kind):
+                    flush()
                 continue
             if m := ITEM_RE.match(line):
                 enclosing, variant = m.group("name"), None
@@ -186,23 +260,25 @@ def scan(root: Path) -> tuple[dict[str, str], int]:
                 continue
             if m := FN_RE.match(line):
                 pub_items += 1
-                sig_name = m.group("name")
-                if signature_ends(line):
-                    if RAW.search(line):
-                        found[f"{rel}::{sig_name}()"] = line.strip()
-                else:
-                    sig = [line]
+                take(_KIND_FN, f"{rel}::{m.group('name')}()", line)
                 continue
             if m := VARIANT_RE.match(line):
                 variant = m.group("name")
-            if in_enum and (m := TUPLE_VARIANT_RE.match(line)):
-                found[f"{rel}::{enclosing}::{m.group('name')}.0"] = line.strip()
                 continue
-            if not RAW.search(line):
+            if in_enum and (m := TUPLE_VARIANT_START_RE.match(line)):
+                take(
+                    _KIND_TUPLE,
+                    f"{rel}::{enclosing}::{m.group('name')}.0",
+                    line,
+                )
                 continue
-            if m := FIELD_RE.match(line) or (in_enum and VARIANT_FIELD_RE.match(line)):
+            field = FIELD_START_RE.match(line)
+            if field is None and in_enum and variant:
+                field = VARIANT_FIELD_START_RE.match(line)
+            if field:
                 where = f"{enclosing}::{variant}" if variant else enclosing
-                found[f"{rel}::{where}.{m.group('name')}"] = line.strip()
+                take(_KIND_FIELD, f"{rel}::{where}.{field.group('name')}", line)
+        flush()
     return found, pub_items
 
 
@@ -311,6 +387,57 @@ def selftest() -> int:
             "}\n"
         )
         expect("multi-line signature", check(root, {}), "block.rs::reconstruct()")
+
+        # rustfmt wraps a field type; a line-regex sees `[u8; 32]` on a
+        # line with no `name:` and reports green. Completeness is depth,
+        # not a comma — the last field of a struct has none.
+        src.write_text(
+            "pub struct Header {\n"
+            "    pub digest: Vec<\n"
+            "        [u8; 32],\n"
+            "    >,\n"
+            "}\n"
+        )
+        expect("multi-line field", check(root, {}), "block.rs::Header.digest")
+        expect(
+            "multi-line field allowlisted",
+            check(root, {"block.rs::Header.digest": ok}),
+            None,
+        )
+        src.write_text(
+            "pub struct Header {\n"
+            "    pub digest: Vec<\n"
+            "        [u8; 32]\n"
+            "    >\n"
+            "}\n"
+        )
+        expect("multi-line field, no comma", check(root, {}), "block.rs::Header.digest")
+        src.write_text(
+            "pub enum Input {\n"
+            "    ToKey {\n"
+            "        key_image: Vec<\n"
+            "            [u8; 32],\n"
+            "        >,\n"
+            "    },\n"
+            "}\n"
+        )
+        expect(
+            "multi-line enum field",
+            check(root, {}),
+            "block.rs::Input::ToKey.key_image",
+        )
+        src.write_text(
+            "pub enum TxExtraField {\n"
+            "    PubKey(\n"
+            "        [u8; 32],\n"
+            "    ),\n"
+            "}\n"
+        )
+        expect(
+            "multi-line tuple variant",
+            check(root, {}),
+            "block.rs::TxExtraField::PubKey.0",
+        )
 
         # An enum variant's fields are public with no `pub` keyword.
         src.write_text(
