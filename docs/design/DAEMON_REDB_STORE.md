@@ -2246,6 +2246,8 @@ increment that touches it). Stated once, in `codec::shape`:
 - **One trait, two stores; the rule stays with the digest.** `Canonical`,
   `CodecError` and the three shapes are store-engine-generic and will move to
   a redb-only shared crate when the wallet-side curve-tree backend
+  (plan: [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md), Round 0
+  executed 2026-09-18)
   (`shekyl-curve-tree/src/store/redb_backend.rs`: `leaves`,
   `owned_identities`, `leaf_meta`, `frozen_segments`, today `&[u8; N]`) adopts
   them — as the first commit of *that* PR, with `shekyl-chain-store`
