@@ -2002,7 +2002,18 @@ body store keyed by shard `k` over `[b_k, b_{k+1})`, filled from the
 local daemon during the specified-to-scarce window (Q9), served per-tx;
 `shekyl-p-host`'s `StoreShardProvider` **keeps reading it** — the
 earlier "swaps its reader to the daemon's `get_prunable_range`" is
-**withdrawn** with that method. The curve tree's *verification-side*
+**withdrawn** with that method. **The rebuild has an owner (added
+2026-09-18 on review): the wallet lane, as its own design round —
+unbuilt by design, not by omission.** It is where the design's weight
+now sits, and every one of its decisions is unmade: fill from the local
+daemon during the grace window (Q9) and verify on fill against the
+daemon's hash rows; key by shard over `[b_k, b_{k+1})`; serve per-tx
+through `shekyl-p-serve` (`SF-D8`'s content half, sub-PR 2); carry its
+own lapse tail (#775's retention row); receive recovery shards the
+daemon hands across and retain them; hold the Foundation `CompleteTree`
+behind a persona (Q9's floor). The round registers its family at birth
+(rule 94) and cites this contract for its inputs; FOLLOWUPS row with the
+falsifier. The curve tree's *verification-side*
 leaf store, if any, is Q1's to grade. *C++:*
 `process_archival_segment_freezes_at_height`, `archival_shard_segment`,
 `frozen_segment_count`, `get_archival_shard_segment_at_height`,
@@ -3681,7 +3692,12 @@ and Q8's fetch half cites §9 of the challenge mechanism, not `SF-D10`,
 for indistinguishability. **Q5's one confirmation** — `Trust::Full |
 BelowAnchor(anchor)` — is forced by `StoreCannot::RuleSetNotInForce`.
 **Every `PDM-Q*` is now RULED or CLOSED.** What carries on past the
-round, by owner: **DRS-E** — S-PRUNE's plan on the skeleton (after Q1's
+round, by owner: **the wallet lane** — the **archiver serving-store
+rebuild** (Q12: `LeafStore` around bodies — fill-from-daemon in the grace
+window, verify-on-fill against the hash rows, shard-keyed, per-tx serve,
+lapse tail, recovery intake, the Foundation floor), a design round of its
+own, to be opened and registered — **the largest unbuilt thing this
+charter names**; **DRS-E** — S-PRUNE's plan on the skeleton (after Q1's
 horizon check lands), A3 (#772), A4, the daemon-uniformity constraint in
 `DAEMON_REDB_STORE.md` (#775's row); **E4 / S-ARCH** — the serve-credit
 verifier re-key (consensus) and the leaf-cluster deletion; **E6** — the
