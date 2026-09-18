@@ -92,8 +92,8 @@ and no consumer may depend on it (the digest does not).
 
 **B. Outputs (O1, O2).** `output(GlobalOutputIndex) -> Result<AtIndex<RecordedOutput>, StoreError>`
 — the stored record: one-time pubkey, commitment, recording height, unlock
-time. `output_origin(GlobalOutputIndex) -> Result<AtIndex<OutputOrigin>, StoreError>`
-— which transaction and which vout produced it. `AtIndex<T>` is the dense
+time. `output_origin(GlobalOutputIndex) -> Result<AtIndex<OutTx>, StoreError>`
+— which transaction and which vout produced it (`OutTx` as it exists, SOK-Q4). `AtIndex<T>` is the dense
 index's absence type (§3.3).
 
 **C. `output_amounts` becomes a keyed table (SOK-1, SOK-Q1 default).**
@@ -101,11 +101,15 @@ index's absence type (§3.3).
 replacing the multimap; `OutKey` drops the `amount_index` field its key now
 carries; **`SCHEMA_VERSION 5 → 6`**, one layout commit. Same logical content
 as LMDB's `DUPSORT` table — the pair `(amount, amount_index) → record` — in
-the shape redb can seek in. The `next_amount_index` end-peek becomes a
-`range(..).next_back()`; SI-9's density belt is restated for a unique-key
-table (SOK-Q2). `check_redb_schema_key_types.py` learns that a
-`compare_uint64` `DUPSORT` table is reproduced by a `(K, u64)` tuple key as
-well as by a `U64PrefixBytes` multimap value — the gate asserts ordering,
+the shape redb can seek in. `next_amount_index` becomes the bucket's last
+key plus one, with the single-bucket premise **checked** at the site — the
+table's first and last keys must carry the bucket's amount — before the
+table's length is trusted as the bucket's cardinality (SOK-Q2, tightened on
+#783 review: a hole compensated by a foreign-bucket row would otherwise
+sum to the right length). `check_redb_schema_key_types.py` parses the tuple
+key and accepts a `compare_uint64` `DUPSORT` table as either `u64` (a
+zerokval collapse) or `(u64, u64)` (a genuine `DUPSORT` as a key); its
+multimap value rule is gone with the multimap. The gate asserts ordering,
 and a tuple key orders `amount` numerically then `amount_index` numerically,
 which is `MDB_INTEGERKEY` then `compare_uint64`.
 
@@ -214,9 +218,16 @@ adds one absence shape.
 absence a snapshot can report is *at or beyond the count* — the same
 structure as heights above the tip. `AtIndex<T> { Recorded(T), BeyondCount }`,
 matched exhaustively, no `Option` conversion, no `?` — `AtHeight`'s
-discipline (`CHAIN_RULES_CRATE.md` G11) at a second dense index. A row
-missing *below* the count is not absence: it is SI-9's hole, reported as
-`InvariantViolated`, exactly as a `block_info` hole below the tip is SI-7.
+discipline (`CHAIN_RULES_CRATE.md` G11) at a second dense index. **Bound
+first:** the count (`output_txs.len()`, the primary `output_id` is dense in)
+is read before any row, so a stray row at or beyond it is never served as
+`Recorded` (#783 review). A row missing *below* the count is not absence:
+it is SI-9's hole, `InvariantViolated(IdNotFresh)` — the count and the keys
+disagree — as a `block_info` hole below the tip is SI-7. And a row whose
+record carries an `output_id` other than its slot's index is the same SI-9:
+O1 validates the join where it decodes, because a raw or corrupt file can
+hold what `connect` refuses to write, and serving it would hand out the
+wrong output under a global index.
 `CURVE_TREE_STORE_SHAPES.md` §3.1 is the class statement; this is its
 fourth application, and the counter-rule there applies too — `has_key_image`
 returns `bool`, because "not spent" is a value inside the type's range with
@@ -364,10 +375,17 @@ makes SOK-10 unrepresentable once the resolver exists.
   (`view.rs:50`–`:57`), duplicated for the second type rather than
   generalised (rule 21: two instances is not yet a pattern worth an
   abstraction; the third caller generalises).
-- `RecordedOutput` — `OutKey` projected without its ids (§3.2). Not
-  `Canonical`: a read projection, never stored.
-- `OutputOrigin` — `OutTx` re-exported under the name the read surface
-  uses, or `OutTx` itself if a second name buys nothing (SOK-Q4).
+- `RecordedOutput` — `OutKey` projected without its join key (§3.2), the
+  join **validated** against the slot where the record is decoded so the
+  projection can leave it out honestly. Not `Canonical`: a read projection,
+  never stored. Lives in `store/output_reads.rs`, the output tables' shared
+  read body (the sibling of `chain_reads.rs`).
+- `OutputSlot` — the `output_amounts` key as a type: bucket (an
+  `AtomicUnits`) and dense position (an `AmountIndex`), with
+  `CONFIDENTIAL_AMOUNT`, `confidential(GlobalOutputIndex)`, `key()`,
+  `from_key()` and `bucket()`, so the tuple is assembled in one place and
+  the one-bucket premise is code (`ids.rs`).
+- O2 returns `OutTx` as it exists — no `OutputOrigin` twin (SOK-Q4, ruled).
 
 ### 3.6 What this surface inherits, and for how long
 
@@ -385,8 +403,8 @@ reproduces knowingly is in §6.1.
 | Table | Key → value (after §3.4) | Read | Absence | Written by |
 | --- | --- | --- | --- | --- |
 | `spent_keys` | `LmdbHashKey → Present` | K1 membership; K2 scan | none — a set | `connect` (SI-1) |
-| `output_amounts` | `(u64, u64) → Coded<OutKey>` | O1 `get(&(0, i))` | `BeyondCount` for `i ≥ count` (the bucket's `last + 1`); `i == last` is recorded; a hole below `count` is SI-9 | `connect` (SI-9) |
-| `output_txs` | `u64 → Coded<OutTx>` | O2 `get(output_id)` | `BeyondCount` for `output_id ≥ len`; a hole below `len` is SI-9 | `connect` (SI-9) |
+| `output_amounts` | `(u64, u64) → Coded<OutKey>` | O1 `get(OutputSlot::confidential(i).key())`, bound first against `output_txs.len()` | `BeyondCount` for `i ≥ count`, no row read; a hole below `count` is SI-9; a record whose `output_id ≠ i` is SI-9 (join validated) | `connect` (SI-9) |
+| `output_txs` | `u64 → Coded<OutTx>` | O2 `get(output_id)`, bound first against `len()` | `BeyondCount` for `output_id ≥ len`, no row read; a hole below `len` is SI-9 | `connect` (SI-9) |
 | `tx_outputs` | `u64 → Coded<TxOutputIndices>` | **not read here** — S-TX's `get_tx_amount_output_indices` | — | `connect` |
 
 ---
@@ -468,7 +486,7 @@ are reads in the S-CHAIN-R shape.
 | Q | Question | Default → **Ruling** | Why it is a question |
 | --- | --- | --- | --- |
 | **SOK-Q1** | What shape does `output_amounts` take? **A** — keyed `(amount, amount_index) → Coded<OutKey>`; **B** — collapse into one `outputs: u64 → Coded<Output>` keyed by `output_id` (merging `OutTx` + `OutKey`, dropping the amount dimension — `output_id == amount_index` under one bucket, SOK-2; the leaf position is **not** part of that key and stays a separate `leaf_to_output` mapping, SOK-10); **C** — keep the multimap and accept O(n) point reads. | **A — RULED 2026-09-18.** The maintainer's reason is sharper than the default's: B answers a *storage layout* question by ruling a *consensus spec* question. R8b-2 — whether amount-0 indexing of loud coinbase and emission amounts is consensus-visible or a storage index choice — should be ruled when someone has a **consensus** reason to rule it, on its merits, not because a table would be tidier without the dimension; ruling the spec to fit the table is the same move rejected on the `properties` heading demotion (edit the document to fit the parser). A records the facts LMDB records and costs one deferred layout bump if B ever wins — free pre-genesis. **The amount dimension is carried, not chosen** (§3.4): a two-part key whose first component is always `0` is parity with R8b-2 open, not a design. | C is rejected on SOK-1 (the surface's live consumer does a point read per leaf). B is the designed shape and the one this store would have if drawn fresh — but it drops a dimension whose consensus-visibility is R8b-2's open question; the store increment cannot rule a spec question. A carries the dimension at zero cost to the reader (`get(&(0, i))`), closes §11.1(f), and leaves B a pure layout change under §7.6's reopening the day R8b-2 rules. **If the maintainer rules R8b-2 now** ("storage index choice"), B is the default instead and this row records both rulings. **D — wait for a redb multimap cursor — REJECTED 2026-09-18, researched at source so it is not re-researched:** redb 4.2.0 (2026-08-17) added `Cursor` / `CursorMut` behind `experimental_cursor` — on `Table` only, for bulk sorted insertion, "unstable and may change incompatibly, or be removed, in any release" (its CHANGELOG). redb 4.3.0 (2026-09-14) added `ReadableMultimapTable::{lower_bound, upper_bound}` behind `experimental-api-5`, returning a `MultimapCursor` that is a **stub**: its own doc comment says the type "only reserves the constructors' signatures" and navigation "will be added behind `experimental_cursor`"; the position field is `#[allow(dead_code)]` (upstream PR #1347 — reserving the redb-5 trait surface). The bound is `Bound<K>`, a seek over the *key* tree; no released or reserved signature seeks to a `(key, value)`. The engine can find a value inside a key's collection in O(log n) internally (`remove(key, value)` does), but does not expose it. No milestone, no open issue tracks a value-level seek; the 4.3.0 tarball's CHANGELOG already carries an undated `5.0.0` section. So D has no falsifiable wait, would rest a per-leaf read on an unstable flag of an unreleased major, and even if it landed would buy back only what A already has with stable tuple keys. **Reopen** if redb exposes a stable value-level multimap seek — falsify by `rg -e 'fn lower_bound' -e 'fn seek' -e 'fn get_value' src/multimap_table.rs` in the pinned version showing a `(K, V)` bound — and even then A stays the shape; the reopening would only retire the "redb cannot" half of SOK-1's wording. |
-| **SOK-Q2** | How is SI-9 stated for a unique-key `output_amounts`? | **Default — RULED 2026-09-18.** Per bucket: `last_index + 1 == next`; whole-table `len() == last + 1` as the density check, valid because one bucket exists; a second bucket at `connect` **is** a breach (CEN-H14's store-side belt). Plus SOK-2: amount-0 `last == output_txs.last` — two counters, not three (SOK-10). *Stating the premise is what makes the belt honest, and the belt is **self-guarding**: if a second bucket ever appears, `table.len() == last + 1` fails rather than passing, because per-bucket indices are dense from zero. Routing that failure to `StoreInvariantViolated` rather than a verdict is C2-R8's taxonomy — CEN-H14 is the validator's rule, so the belt firing means the validator has a hole.* | The multimap belt needed an end-peek for a compensating hole+duplicate (PR #757 review); unique keys make the duplicate unrepresentable, so the belt simplifies — but only if the single-bucket premise is stated as the premise it is, not assumed. |
+| **SOK-Q2** | How is SI-9 stated for a unique-key `output_amounts`? | **Default — RULED 2026-09-18.** Per bucket: `last_index + 1 == next`; whole-table `len() == last + 1` as the density check, valid because one bucket exists; a second bucket at `connect` **is** a breach (CEN-H14's store-side belt). Plus SOK-2: amount-0 `last == output_txs.last` — two counters, not three (SOK-10). *Stating the premise is what makes the belt honest, and the belt is **self-guarding**: if a second bucket ever appears, `table.len() == last + 1` fails rather than passing, because per-bucket indices are dense from zero. **UPDATE 2026-09-18 (#783 review): not by itself** — a hole in the bucket compensated by a foreign-bucket row (`(0,0), (0,2), (7,x)`) sums to the right length; the landed `next_amount_index` therefore *checks* the premise (first and last keys carry the bucket's amount) before trusting the length, `connect.rs`. Routing that failure to `StoreInvariantViolated` rather than a verdict is C2-R8's taxonomy — CEN-H14 is the validator's rule, so the belt firing means the validator has a hole.* | The multimap belt needed an end-peek for a compensating hole+duplicate (PR #757 review); unique keys make the duplicate unrepresentable, so the belt simplifies — but only if the single-bucket premise is stated as the premise it is, not assumed. |
 | **SOK-Q3** | `get_output_histogram`: not ported (SOK-6) — and the C++ RPC, with the `shekyld` CLI command `output_histogram` that fronts it? **A** — both die at cutover with the LMDB path (the countermand's RECORD-AND-SPECIFY default, SCR-2's precedent); **B** — deleted now (rule 60: decoy-selection tooling; U-7 already recommends it). | Default was **A**. **RULED 2026-09-18: B — on privacy grounds, not tidiness** (`00-mission.mdc` #2). The request takes `amounts`, `min_count`, `max_count`, `unlocked`, `recent_cutoff` (`src/rpc/core_rpc_server_commands_defs.h:1142`–`:1154`); the handler is live (`core_rpc_server.cpp:1160`) and fronted by a CLI command registered at `src/daemon/command_server.cpp:258`. On a chain with rings that is decoy-selection support; on a chain without them it is a **statistical disclosure surface with no consumer** — per-amount output counts over operator-chosen unlock and recency windows is close to precisely what a chain analyst would ask for, queryable by anyone who can reach the RPC. "Dies at cutover" is a schedule, not a mitigation: the C++ daemon runs testnet until then, and testnet is where analysis tooling gets built and validated; two months of U-7 unacted is the argument *for* closing it. Scope: route, handler, wire struct, CLI command, and the store chain they leave callerless — a deletion, so rule 20 does not bite; **its own PR** under rule 15, not a commit in this increment. **RK-8's row stops listing it as served the moment this ruling lands** (this PR), so the affordance cannot survive by being invisible at review time; the deletion PR marks it deleted. Falsify by `rg on_get_output_histogram src/` returning anything after that PR merges. | B is a C++ deletion PR, the class the countermand routes to cutover — which is why it was not the default; the maintainer's override weighs the disclosure surface above the schedule, and the scope is three sites plus the callerless chain. |
 | **SOK-Q4** | Is `OutputOrigin` a new name or `OutTx` re-exported? | **`OutTx`, re-exported — RULED 2026-09-18.** One type, one name; O2 returns it. | A second name for a field-identical struct is the identity-DTO hop CTS-5 and the GUI's rule 27 name. Only a semantic remap earns a second shape; there is none. |
 
@@ -491,6 +509,7 @@ are reads in the S-CHAIN-R shape.
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-18 | **PR #783 review round 1 (Copilot: 4 open + 6 suppressed; 10 taken, 0 refuted).** Two were real. (1) The reads looked the row up *before* classifying the index against the count, so a stray `(0, i)` at or beyond `output_txs.len()` would have been served as `Recorded` — the reads now classify first (`AtHeight`'s discipline) and never read past the count. (2) The SI-9 belt at `connect` was not self-guarding as SOK-Q2's ruling said: a hole compensated by a foreign-bucket row sums to the right length; `next_amount_index` now checks the premise (first and last keys carry the bucket's amount) before trusting `len()`. Also taken: O1 validates the record's `output_id` against its slot (a raw file can hold what `connect` refuses; the doc had promised a check the projection could not perform); the output reads moved to their own body, `store/output_reads.rs`, the sibling of `chain_reads.rs`, and the `(amount, amount_index)` tuple became a type, `OutputSlot` (`ids.rs`), assembled in one place; §2.1 B / §3.5 / §4 brought to the ruled `OutTx` and the keyed table; DRS §3.6.4's stale `cfg(test)` opener sentence and §7.6's `v5` lead corrected; the index row's pre-landing clause removed. Three tests added: the compensated hole, the disagreeing join, the stray row beyond the count. `cargo test -p shekyl-chain-store` 254 + 10. |
 | 2026-09-18 | **Increment landed** — §7 commits 1–3 as sequenced (commit 4 is this docs commit; commit 5's RK-8 row was written by #782). What landed differs from the plan in two places worth naming: `next_amount_index` on the keyed table is `last + 1 == len` with the single-bucket premise stated at the site (no end-peek is needed once duplicates are unrepresentable), and SOK-2's belt is enforced at `connect` as `amount_index == output_id` rather than checked only by a test — the write refuses the divergence. `AtIndex<T>` lives in its own module with `compile_fail` doctests. `check_redb_schema_key_types.py` had silently dropped the tuple-keyed definition (its key regex could not cross the inner comma) and only its constraint floor noticed — fixed with a parse selftest, the dual-form INTEGERKEY+uint64-dupsort rule, and the floor moved 30 → 29 with the reason beside it. `cargo test -p shekyl-chain-store` 251 + 10 doctests. |
 | 2026-09-18 | **Round 1 RULED (maintainer, on PR #779).** Q1 **A** — with the sharper reason: B would rule a consensus spec question (R8b-2) to settle a storage layout, the tail wagging the dog; the amount dimension is *carried, not chosen*, said in those words in §3.4. Q2 default, with the self-guarding property named (a second bucket fails `len() == last + 1`, never passes). Q4 `OutTx`. **Q3 overridden to B**: `get_output_histogram` and its CLI command are a statistical disclosure surface with no consumer on a ringless chain; "dies at cutover" is a schedule, not a mitigation, and testnet is where analysis tooling gets built — deleted now, own PR, and RK-8 stops listing it as served on this PR. Implementation may start once this document merges. |
 | 2026-09-18 | **PR #779 review round 3 (Copilot: 4 open + 4 suppressed; 8 taken, 0 refuted) — and the #777 gate lifted.** Re-based onto `51d7f2416` (#777 RTN-7 and #780 landed **code**); every code anchor re-read — only the five `undo_tests.rs` lines moved (+2); stamp moved with the checks actually re-run (242 + 8; census 6/151, held 2, 153, 126/153; policy 0/9; `tables.snap` 51; `SCHEMA_VERSION 5`). Two findings reshaped the commit sequence: the tuple key needs `impl Restorable for (u64, u64)` to pass `open_insert_table`'s bound (`write.rs:291`–`:293`), and `MultiInserted` cannot outlive its constructor — `SetTable` (`set.rs:68`) is returned by `open_multimap_table` and re-exported at `store/mod.rs:112` — so the layout change and the multimap deletions are **one commit** (6 → 5). O2's index domain pinned: the `_from_global` read (`output_txs[output_id]`), never the amount-specific composition that is right only by SOK-2's belt. `prune_tx_data`'s `get_output_key` (`db_lmdb.cpp:10282`) joins the census: a current caller that dies with the stripe engine (PDM-Q7). CEN-H14 wording corrected — miner/emission loud amounts are stored under `0` and permitted; a second bucket means a non-miner, non-emission vout escaped. Census records updated in-line (`CONSENSUS_RULE_CENSUS.md` §5.2 ×2: `get_output_key_mask_unlocked` has zero callers; `CONSENSUS_RULE_CENSUS_1.md` U-7: `get_output_distribution` has no route). Archived S-CHAIN-R doc's §10 archive bullet put in the past tense. PR title/description updated to SOK-1…SOK-10. |
