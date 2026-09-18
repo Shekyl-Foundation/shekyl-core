@@ -136,8 +136,9 @@ uniformity); the bond is the advertisement.
 
 ## 8. Falsifiers
 
-Q2's six (a shard discarded whose `b_{k+1} > first_tx_id(tip − W)`; before
-`close_height(k) + SEB`; a shard *retained* past its discard on any daemon;
+Q2's six (a shard discarded whose `b_{k+1} > first_tx_id(tip − W)`; **at or
+before** `close_height(k) + SEB` — the predicate is strict `<`, so equality
+is also red; a shard *retained* past its discard on any daemon;
 partially; a second window constant not `W` by reference; `W < D_max`),
 SCW-7's one (`undo_log` retention `< D_max`), F29's one (§6), plus: any
 durable archival serving state on a daemon — a body past `W`, a persona
