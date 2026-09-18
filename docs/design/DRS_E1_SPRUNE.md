@@ -1,0 +1,184 @@
+# DRS-E1 S-PRUNE — the retention prune: plan-doc skeleton (`PDM-Q-F31`)
+
+**Status:** OPEN — **SKELETON, not a plan.** Written 2026-09-18 at
+`dev@20ebdf1e5` by the pruning charter's lane
+([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md),
+`PDM-Q-F31`) for the **DRS-E lane to fill**: every section below names the
+contract it consolidates and where that contract is ruled, so that the
+three homes the prune's obligations are scattered across today (`PDM-Q-F10`,
+`PDM-Q-F26`/`F32`, `SCW-7`) become one document before the first increment
+is cut (rule 26: design closure precedes any cut; E1 got
+[`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) before its writers).
+**Nothing here is proposed as new design**; where a section's contract is
+not yet ruled it says so and names the question. The increment ordinal and
+the Round-0 pre-flight are DRS-E's; the filename is provisional until DRS
+numbers the increment (`FOLLOWUPS.md`'s F31 row is the falsifier). **Cannot
+open as a plan before `PDM-Q1` grades §9** (it needs the retained set to know
+what it may touch); can be written now.
+
+**Family:** none minted here. Findings and questions this document raises
+at pre-flight take DRS-E's next free series (rule 94 §1), not a `PDM-` id.
+
+---
+
+## 1. Charter
+
+S-PRUNE is the **Rust-only successor to the Monero-era stripe engine**, per
+`PDM-Q-S0` (no C++ landing before the cutover) and `PDM-Q7` (the stripe
+engine is not an extraction: five of its six methods are the stripe engine
+and die at `DRS-E*`; the transferable triple — assignment / advertisement /
+coverage, `PDM-Q-F17` — is read from, not ported). [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
+§7's S-PRUNE row is **NOT EXTRACTED** for that reason and already carries two
+contracts (§5 below) with no home; this document is the home.
+
+## 2. The predicate
+
+`PDM-Q2` (RULED 2026-09-18, shape), verbatim:
+
+> Shard `k` — a byte-bounded `tx_id` range `[b_k, b_{k+1})` (`PDM-Q-F32`) —
+> has its prunable regions and `pqc_auths` discarded **atomically, as a
+> whole**, iff `b_{k+1} ≤ first_tx_id(tip − W)` **and** `k ∉ exceptions`
+> **and** `close_height(k) + SEB < tip`.
+
+**Enforcement point:** the per-epoch batch that advances the watermark.
+Asserted there, never discovered downstream — a violated predicate is a
+refused discard, not a corrupted write. `first_tx_id(h)` is
+`block_info[h−1].cumulative_tx_count` (FL-R3-STORE, `BlockInfo`, landing on
+#772); `close_height(k)` is `height(b_{k+1})`, a binary search over the same
+running total. No new state for either.
+
+## 3. Three horizons, one constant
+
+| Horizon | Retires | Value | By |
+| --- | --- | --- | --- |
+| Bodies (prunable + `pqc_auths`) | `W` | `CRB + n·SEB + D_max` ≈ 140,720 (PROVISIONAL) | `PDM-Q2` |
+| Pop-undo journal | `≥ D_max` | 720 (PROVISIONAL) | `SCW-7` / `PDM-Q11` |
+| Slash log and the six other window-retired journals (`PDM-Q-F16`) | `tip − (CRB + n·SEB + D_max)` | = `W` | `PDM-Q-F19` |
+
+**State which are equal by ruling and which by coincidence.** Bodies and
+journals are equal **by ruling** (Q2 chose F19's floor *so that* they are one
+horizon); the undo floor is a **lower bound** on both (`W ≥ D_max`, F10) and
+is not the same number. A Round-2 re-pin that moves `W` below the journal
+floor separates the first two and this table records that it did.
+
+## 4. The retention-exception structure
+
+`PDM-Q9` (PARTIAL; daemon-storage candidate **under review, not ruled**) —
+cited, not restated. As the candidate stands: a set of retained **shards**
+(`k`, not ranges — Q2's predicate is per shard), `retain(k)` / `release(k)`
+over the operator leg, persona-agnostic at the daemon (Model D bounds network
+identity, not local process), the lapse tail as the daemon's monotone floor
+after any `retain`. **The specified-to-scarce window is the `retain` window**
+(`PDM-Q-F32`): a shard is bondable from `close_height(k)` and universally held
+until `discard(k)`, `≥ W` later, so a `retain(k)` posted in that window
+retains from in-window bytes with nothing to fetch. If Q9 rules a different
+shape, this section re-points; the predicate's `k ∉ exceptions` conjunct does
+not.
+
+## 5. Store contracts in force
+
+- **The four-leg invariant** (`DAEMON_REDB_STORE.md` §7.7 + `PDM-Q-F32`):
+  (i) hash row ⇔ 4-part txid, permanent, written at connect, never deleted;
+  (ii) segment present ⇒ hash row present; (iii) hash row ∧ segment absent ⇔
+  *discarded* — below `W` and not an exception, or never held (band 1) —
+  one store state with one meaning; (iv) length row present ⇔ hash row
+  present (S-CHAIN-W amendment A4).
+- **Hash rows and length rows are outside every prune surface**, permanent.
+  `txs_prunable_hash` (exists), `txs_pqc_auth_hash` (A3, #772), the two
+  `u32` length rows (A4, owed).
+- **`StoreCannot::PopBelowFloor`** as the pop refusal; the undo-log
+  watermark `≥ D_max` (SCW-7, landed).
+- **Body-absent is one state** for discarded and never-held; S-PRUNE writes
+  nothing to mark the difference and reads nothing that depends on it.
+
+## 6. `PDM-Q3`'s instrument
+
+`ChainView` exposes no recorded-body accessor (`PDM-Q-F29`;
+[`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §13). **S-PRUNE adds none.**
+Any body read S-PRUNE itself needs (the batch reads segment presence, not
+bytes) is on its own trait, marked above-`W`, and never reachable from
+`shekyl-chain-rules`. Falsifier: a `ChainView` method returning recorded tx
+bytes with no `CenRow`, or an S-PRUNE type imported by the rules crate
+(`check_chain_rules_no_store.sh` is the belt).
+
+## 7. What S-PRUNE does not do
+
+Never touches `spent_keys`. Never touches a hash row or a length row. Never
+varies per node inside `W` (`PDM-Q7`/`Q8`: the universal set has no switch;
+exceptions exist above `W` and are not what makes a node an archiver). Never
+advertises: what a node retains reaches no wire (`PDM-Q8`, serve-side
+uniformity); the bond is the advertisement.
+
+## 8. Falsifiers
+
+Q2's six (a shard discarded whose `b_{k+1} > first_tx_id(tip − W)`; before
+`close_height(k) + SEB`; while `k ∈ exceptions`; partially; a second window
+constant not `W` by reference; `W < D_max`), SCW-7's one (`undo_log`
+retention `< D_max`), F29's one (§6), plus: a prune surface that deletes
+below `tip − W` on a node with a live exception covering the shard; and a
+discard that runs while the serve-credit admission verifier still derives
+`R_k` from a frozen segment (§11).
+
+## 9. Sequencing
+
+Cannot open as a plan before `PDM-Q1` grades §9 of the charter against the
+tx unit — it needs the retained set to know what it may touch. Can be
+written now. Its first increment cannot land before: `#772` (A3, the second
+hash row, `cumulative_tx_count`); A4 (the length rows); and §11's
+precondition.
+
+## 10. Replay and the digest (`DRS-D10`, `DRS-D11`)
+
+- **Replay from the skeleton is load-bearing** (`PDM-Q-F13`, now a ruling's
+  ground): every leaf-derivation input is in the unprunable base, so
+  `apply_block` replay rebuilds every derived table without a byte from
+  either discarded region. S-PRUNE's existence is what makes that claim
+  testable — the negative control is a replay over a store S-PRUNE has run
+  on. `PDM-Q6`'s reversion (b) is the falsifier.
+- **`W` enters the digest domain as the accumulator's floor** (DRS-0a,
+  `DAEMON_REDB_STORE.md` §11.2: a uniform discard yields a floor-defined
+  accumulator; PDM hands DRS the boundary `W`, not `Excluded` re-grades).
+  Pre-cutover the digest runs over the full chain on both sides and the
+  `AppendMostly` running hash is already over the permanent rows; `W`
+  enters only when this surface does.
+
+## 11. The serve-credit transaction and the verifier precondition
+
+- **Pass records fall under the predicate.** A serve-credit transaction's
+  prunable region holds its pass records (`RF-D1`, `PDM-Q-F15`); below `W`
+  it is discarded like any other. Any settlement, slash or reward read of a
+  pass record after `W` is a band-2 read — the SO contact (`PDM-Q-F26`;
+  `ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`). SO states per read which it is.
+- **Precondition, not a section to fill:** S-PRUNE **cannot discard a
+  shard while a live verifier derives `R_k` from its frozen segment.** The
+  serve-credit admission verifier signs two verifier-derived leaf terms
+  today (`wire.rs:345-360`; `blockchain.cpp:5085-5125`); `PDM-Q6` item 4
+  row 1 reopens it as consensus and lands its tx-unit restatement at E4 /
+  S-ARCH. Until that lands, the first real discard is refused by §8's last
+  falsifier.
+
+## 12. Named inputs
+
+| Input | Value / source | Status |
+| --- | --- | --- |
+| `W` | `CRB + n·SEB + D_max`, via `shekyl_archival_failure_window_params` | PROVISIONAL, Round-2 gate |
+| `D_max` | 720 | PROVISIONAL, Round-2 gate (`PDM-Q11`) |
+| `SEB` | `settlement_epoch_blocks = 10,000` | pinned |
+| `SHARD_BYTES` | 3.33 MB (`RF-D6`'s, as the boundary metric) | ruled (`PDM-Q-F32`) |
+| Length rows (A4) | two `u32` per tx, sparse | **owed** to S-CHAIN-W |
+| `b_*` | derived from the length rows, binary-searched | derived, never received |
+| `first_tx_id(h)` | `BlockInfo.cumulative_tx_count` | landing on #772 |
+| `exceptions` | `retain(k)` / `release(k)` set | `PDM-Q9` candidate |
+| `w_launch` | flat in-window commitment weight before any shard is scarce; superseded by the derived scarce-set median at the first `discard(k)` | **reward leg's** (Q6 item 3 amendment, routing note) — a fourth numeric on the Round-2 gate; not S-PRUNE's to compute, but S-PRUNE's `discard(k)` event is what defines the *scarce set* the median is over |
+
+## 13. C++ deletions and their timing
+
+`process_archival_segment_freezes_at_height`, `archival_shard_segment`,
+`frozen_segment_count`, `get_archival_shard_segment_at_height`,
+`SEGMENT_LEAF_COUNT` (`PDM-Q12`), and the stripe engine's five methods
+(`check_pruning`, `get_blockchain_pruning_seed`, `prune_blockchain`,
+`prune_tx_data`, `update_pruning`; `PDM-Q7`) **die at `DRS-E*`** with the
+C++ store, under `PDM-Q-S0`. Not touched by this surface's increments; named
+here so the deletion is scheduled, not discovered. The `u32` seed arithmetic
+(`PDM-Q-F17`) is read from before it dies, if `PDM-Q9` takes it as the
+holdings advertisement.
