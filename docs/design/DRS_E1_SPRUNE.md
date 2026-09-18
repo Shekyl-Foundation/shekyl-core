@@ -40,8 +40,12 @@ contracts (§5 below) with no home; this document is the home.
 
 > Shard `k` — a byte-bounded `tx_id` range `[b_k, b_{k+1})` (`PDM-Q-F32`) —
 > has its prunable regions and `pqc_auths` discarded **atomically, as a
-> whole**, iff `b_{k+1} ≤ first_tx_id(tip − W)` **and** `k ∉ exceptions`
-> **and** `close_height(k) + SEB < tip`.
+> whole**, iff `b_{k+1} ≤ first_tx_id(tip − W)` **and**
+> `close_height(k) + SEB < tip`.
+
+*(The `k ∉ exceptions` conjunct of the first draft is struck — `PDM-Q9`
+RULED on PR #775: the daemon holds no retention exceptions; **all daemons
+prune uniformly**. There is no per-daemon input to this predicate.)*
 
 **Enforcement point:** the per-epoch batch that advances the watermark.
 Asserted there, never discovered downstream — a violated predicate is a
@@ -64,19 +68,26 @@ horizon); the undo floor is a **lower bound** on both (`W ≥ D_max`, F10) and
 is not the same number. A Round-2 re-pin that moves `W` below the journal
 floor separates the first two and this table records that it did.
 
-## 4. The retention-exception structure
+## 4. No retention exceptions — the archiver's store is the wallet's
 
-`PDM-Q9` (PARTIAL; daemon-storage candidate **under review, not ruled**) —
-cited, not restated. As the candidate stands: a set of retained **shards**
-(`k`, not ranges — Q2's predicate is per shard), `retain(k)` / `release(k)`
-over the operator leg, persona-agnostic at the daemon (Model D bounds network
-identity, not local process), the lapse tail as the daemon's monotone floor
-after any `retain`. **The specified-to-scarce window is the `retain` window**
-(`PDM-Q-F32`): a shard is bondable from `close_height(k)` and universally held
-until `discard(k)`, `≥ W` later, so a `retain(k)` posted in that window
-retains from in-window bytes with nothing to fetch. If Q9 rules a different
-shape, this section re-points; the predicate's `k ∉ exceptions` conjunct does
-not.
+`PDM-Q9` RULED 2026-09-18 on PR #775 (`PDM-Q-F33`): the daemon holds
+archival **consensus** state only and **no archival serving state, ever**;
+the fingerprint criterion is *persistent, posture-correlated*; **all
+daemons prune uniformly**. The daemon-storage candidate this section was
+first written for — `retain(k)` / `release(k)` over the operator leg — is
+**REJECTED and withdrawn**. S-PRUNE therefore has **no exception set, no
+operator input, and no per-node state**. The archiver's shards live in the
+**wallet-side store** (`shekyl-curve-tree`'s store rebuilt around bodies,
+served by `shekyl-p-serve`; PR #775's two-stores-by-obligation). **The
+specified-to-scarce window is when the wallet fills that store from the
+local daemon:** shard `k` closes at `b_{k+1}`; the archiver's wallet pulls
+`k`'s bodies over the operator leg through the ordinary split transaction
+read (`PDM-Q10`) while its daemon still holds them in-window; S-PRUNE then
+discards `k` at `W` on that daemon like every other. After the window,
+acquisition is an episodic daemon fetch from another archiver (the daemon
+retains nothing). Lapse is the wallet-side store's (#775's FOLLOWUPS row).
+Unbonded retention (`PDM-Q7`) lives in the same wallet-side store, never
+the daemon.
 
 ## 5. Store contracts in force
 
@@ -106,27 +117,29 @@ bytes with no `CenRow`, or an S-PRUNE type imported by the rules crate
 
 ## 7. What S-PRUNE does not do
 
-Never touches `spent_keys`. Never touches a hash row or a length row. Never
-varies per node inside `W` (`PDM-Q7`/`Q8`: the universal set has no switch;
-exceptions exist above `W` and are not what makes a node an archiver). Never
-advertises: what a node retains reaches no wire (`PDM-Q8`, serve-side
+Never touches `spent_keys`. Never touches a hash row or a length row.
+**Never varies per node** — inside or outside `W` (`PDM-Q7`/`Q8`/`Q9`,
+#775's corollary: all daemons prune uniformly; there are no exceptions on
+any daemon). Never advertises: what a node retains reaches no wire (`PDM-Q8`, serve-side
 uniformity); the bond is the advertisement.
 
 ## 8. Falsifiers
 
 Q2's six (a shard discarded whose `b_{k+1} > first_tx_id(tip − W)`; before
-`close_height(k) + SEB`; while `k ∈ exceptions`; partially; a second window
-constant not `W` by reference; `W < D_max`), SCW-7's one (`undo_log`
-retention `< D_max`), F29's one (§6), plus: a prune surface that deletes
-below `tip − W` on a node with a live exception covering the shard; and a
-discard that runs while the serve-credit admission verifier still derives
-`R_k` from a frozen segment (§11).
+`close_height(k) + SEB`; a shard *retained* past its discard on any daemon;
+partially; a second window constant not `W` by reference; `W < D_max`),
+SCW-7's one (`undo_log` retention `< D_max`), F29's one (§6), plus: any
+durable archival serving state on a daemon — a body past `W`, a persona
+id, a retention list (#775 / Q9); and a discard that runs while the
+serve-credit admission verifier still derives `R_k` from a frozen segment
+(§11).
 
 ## 9. Sequencing
 
-Cannot open as a plan before `PDM-Q1` grades §9 of the charter against the
-tx unit — it needs the retained set to know what it may touch. Can be
-written now. Its first increment cannot land before: `#772` (A3, the second
+`PDM-Q1` RULED 2026-09-18 — §9 is graded against the tx unit, so the
+retained set is known and the plan **may open**. Its Round-0 pre-flight
+owes Q1's one implementation item first or alongside: the journal horizon
+asserted at the journals' retirement site (F19's "the check"). Its first increment cannot land before: `#772` (A3, the second
 hash row, `cumulative_tx_count`); A4 (the length rows); and §11's
 precondition.
 
@@ -171,7 +184,6 @@ precondition.
 | Length rows (A4) | two `u32` per tx, sparse | **owed** to S-CHAIN-W |
 | `b_*` | derived from the length rows, binary-searched | derived, never received |
 | `first_tx_id(h)` | `BlockInfo.cumulative_tx_count` | landing on #772 |
-| `exceptions` | `retain(k)` / `release(k)` set | `PDM-Q9` candidate |
 | `w_launch` | flat in-window commitment weight before any shard is scarce; superseded by the derived scarce-set median at the first `discard(k)` | **reward leg's** (Q6 item 3 amendment, routing note) — a fourth numeric on the Round-2 gate; not S-PRUNE's to compute, but S-PRUNE's `discard(k)` event is what defines the *scarce set* the median is over |
 
 ## 13. C++ deletions and their timing
