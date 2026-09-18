@@ -205,8 +205,25 @@ addressees:
   hex-encode this field — typing it is the key-image *exposure* question,
   owned by the wallet-RPC and scanner lanes, not this slice.
 
-Final figure: **78 public items scanned, 15 raw occurrences, all 15
-allowlisted with a named addressee.**
+Figure after the first run: 78 public items, 15 raw, all allowlisted.
+
+**Second round (PR #777 review, 2026-09-18) — three more scanner gaps,
+same lesson.** Copilot read the scanner rather than its output and found
+what a `pub`-keyword, one-line scan still misses: (a) a `pub enum`'s
+**tuple variants** — `TxExtraField::PubKey([u8; 32])` and
+`AdditionalPubKeys(Vec<[u8; 32]>)` were public and unscanned; (b) a
+**multi-line `pub fn` signature** puts the raw type on a line that does not
+say `pub fn` (no such site exists today, which is exactly when to close the
+gap); (c) the gate **never validated the allowlist's own invariant** — the
+success line claimed every entry had a named addressee, and nothing checked
+it. All three fixed with self-test legs: tuple variants are reported as
+`Enum::Variant.0`; signatures are buffered to the body's `{`; the addressee
+is a field on an `Allow(reason, addressee)` record that `check` asserts
+non-empty. The two tuple variants are the tx public keys `R` — curve
+points, one class with `Output.key` — allowlisted with the same addressee.
+
+Final figure: **78 public items scanned, 17 raw occurrences, all 17
+allowlisted with a reason and a checked addressee.**
 
 ## 8. Two boundaries the implementation named that §3 did not
 

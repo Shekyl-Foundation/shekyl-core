@@ -4,8 +4,8 @@
 (wire hash returns and header fields). Living work plan for adopting
 domain newtypes before the redb writers freeze. Last verified against
 this branch 2026-09-17. The June 2026 PR-0 types crate **landed**;
-RTN-1…RTN-6 landed in this family PR. RTN-7 is the remaining wire-return
-adoption, carried by the wire-return PR. The
+RTN-1…RTN-6 landed in this family PR; RTN-7 (the wire hash surface, gated
+by `check_wire_raw_hash_surface.py`) landed 2026-09-18. The
 clock-semantics decision in §7 is recorded as a binding entry in
 [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) (2026-06-14 —
 "Time fields: block-height vs wall-clock dichotomy + the
@@ -26,7 +26,6 @@ status of record; a section below that disagrees with a row is
 | `shekyl-curve-tree` uses `shekyl-types` `BlockHeight` / `Gindex` (`pub type Gindex = GlobalOutputIndex`) | LANDED — RTN-4 | `shekyl-curve-tree` |
 | `shekyl-difficulty` `lwma1_next(BlockHeight, &[Timestamp], &[CumulativeDifficulty]) -> Difficulty`; leftover `shekyl-consensus::Difficulty` deleted (re-export) | LANDED — RTN-5 | `shekyl-difficulty` |
 | `TransferDetails` indices/heights typed; `PaymentRequest.expiry` is wall-clock `Timestamp`; CLI `--expiry` unix seconds or duration | LANDED — RTN-6 | `shekyl-engine-state` / CLI |
-| Wire hash returns (`Transaction::hash` / `hash_with_supplied_*`) and header fields (`previous` / `curve_tree_root` / `transactions`) | OPEN — RTN-7 | the wire-return PR; falsify by `Transaction::hash()` returning `TxHash` and `BlockHeader.previous` being `BlockHash` |
 | `shekyl-wire`'s hash surface: `Transaction::hash()` / `Block::hash()` / `prefix_hash()` returns, the header's hash fields, `Ct::Fcmp.reference_block`; new `PrefixHash`; **gated** by `check_wire_raw_hash_surface.py` | LANDED — RTN-7 ([record](../completed/RTN_7_WIRE_HASH_TYPES.md)) | `shekyl-wire` / `shekyl-types` |
 | Money-path `AtomicUnits` adoption (original PR A) | PARTIAL — not this family's freeze gate | original §4 |
 | Secret-material wrapping (original PR B) | OPEN, not the redb freeze | original §5 |
@@ -150,7 +149,7 @@ zeroize-check CI, which is the natural test home.
 | [`reserve_proof.rs:50`](../../rust/shekyl-proofs/src/reserve_proof.rs) `spend_secret: [u8;32]` | should take `&SpendSecret` |
 | [`handle.rs:188`](../../rust/shekyl-crypto-pq/src/handle.rs) `view_secret: &[u8;32]` | should take `&ViewSecret` (code comment already flags the gap) |
 
-## 6. PR C — Hash identity (`TxHash` / `BlockHash` / `CurveTreeRoot`) — records-was 2026-06-14 except OPEN — RTN-7 wire rows
+## 6. PR C — Hash identity (`TxHash` / `BlockHash` / `CurveTreeRoot`) — records-was 2026-06-14; the two wire rows LANDED as RTN-7
 
 Validation surface: **a block hash cannot be passed where a tx hash (or tree
 root) is expected.** Finish the `KeyImage`-style migration `transfer.rs`
