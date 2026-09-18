@@ -468,6 +468,22 @@ hash32! {
     BlockHash
 }
 
+impl BlockHash {
+    /// The **null hash** — 32 zero bytes — as a block identity: the genesis
+    /// block's `previous` (CEN-A2: a candidate's parent is the tip's hash,
+    /// or null when there is no tip), the C++ `null_hash`.
+    ///
+    /// Named once, here, so the genesis parent is a constant every crate
+    /// reads rather than a `[0u8; 32]` each one spells — the consensus rule
+    /// aliases it as `A2::GENESIS_PREVIOUS`, fixtures chain from it, and the
+    /// genesis tool writes it. It is a *block hash* on purpose: no
+    /// `CurveTreeRoot` or `TxHash` gets a `NULL`, because for a root the
+    /// all-zero encoding is the identity point (CEN-I12's hazard;
+    /// [`CurveTreeRoot::EMPTY`] is the real empty state), and a null txid
+    /// names no transaction.
+    pub const NULL: Self = Self::from_bytes([0u8; 32]);
+}
+
 hash32! {
     /// A transaction identity hash (txid).
     ///

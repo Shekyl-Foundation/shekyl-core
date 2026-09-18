@@ -400,12 +400,8 @@ mod tests {
         // this is the gate for adversarial input. The overflow guard fires before the loop,
         // so the (mismatched) chain contents are irrelevant.
         let blocks = chain(0, 2);
-        let err = verify_exhaustive(
-            BlockHeight::from_raw(u64::MAX),
-            BlockHash::from_bytes([0u8; 32]),
-            &blocks,
-        )
-        .expect_err("first_height near u64::MAX must fail closed, not wrap");
+        let err = verify_exhaustive(BlockHeight::from_raw(u64::MAX), BlockHash::NULL, &blocks)
+            .expect_err("first_height near u64::MAX must fail closed, not wrap");
         assert!(
             matches!(err, ExhaustivenessError::HeightOverflow { .. }),
             "got {err:?}"

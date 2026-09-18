@@ -63,12 +63,12 @@ fn funding_block(recipient: &ArchivalPKeys) -> ScannableBlock {
 /// across a rebuilt chain.
 fn chain(len: usize, recipient_blocks: &[(usize, ScannableBlock)]) -> Vec<ScannableBlock> {
     let mut c: Vec<ScannableBlock> = (0..len)
-        .map(|h| make_synthetic_block(h as u64, shekyl_types::BlockHash::from_bytes([0u8; 32])))
+        .map(|h| make_synthetic_block(h as u64, shekyl_types::BlockHash::NULL))
         .collect();
     for (i, b) in recipient_blocks {
         c[*i] = b.clone();
     }
-    let mut prev = shekyl_types::BlockHash::from_bytes([0u8; 32]);
+    let mut prev = shekyl_types::BlockHash::NULL;
     for (h, sb) in c.iter_mut().enumerate() {
         // The coinbase claims its own height. The bench fixture hard-codes `Gen(0)`,
         // so set it to the position — both to keep the F5 fetch-loop tripwire honest

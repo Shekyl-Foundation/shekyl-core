@@ -1176,7 +1176,7 @@ mod gate_tests {
             },
             ct: Ct::Fcmp {
                 fee: 0,
-                reference_block: shekyl_types::BlockHash::from_bytes([0u8; 32]),
+                reference_block: shekyl_types::BlockHash::NULL,
                 base: CtBase {
                     enc_amounts: vec![],
                     enc_labels: vec![],
@@ -1458,7 +1458,7 @@ mod cancel_tests {
             },
             ct: Ct::Fcmp {
                 fee: 0,
-                reference_block: shekyl_types::BlockHash::from_bytes([0u8; 32]),
+                reference_block: shekyl_types::BlockHash::NULL,
                 base: CtBase {
                     enc_amounts: vec![],
                     enc_labels: vec![],
@@ -1624,7 +1624,7 @@ mod cancel_tests {
             major_version: 1,
             minor_version: 0,
             timestamp: 0,
-            previous: shekyl_types::BlockHash::from_bytes([0u8; 32]),
+            previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
             curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
             attestation_root: shekyl_types::AttestationRoot::from_bytes(
@@ -1694,7 +1694,7 @@ mod cancel_tests {
             major_version: 1,
             minor_version: 0,
             timestamp: 0,
-            previous: shekyl_types::BlockHash::from_bytes([0u8; 32]),
+            previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
             curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
             attestation_root: shekyl_types::AttestationRoot::from_bytes(

@@ -203,7 +203,7 @@ mod tests {
     /// hand-forged range.
     fn covered_range(first: u64, len: u64) -> VerifiedRange {
         let mut blocks = Vec::new();
-        let mut prev = shekyl_types::BlockHash::from_bytes([0u8; 32]);
+        let mut prev = shekyl_types::BlockHash::NULL;
         for h in first..first + len {
             let sb = make_synthetic_block(h, prev);
             prev = sb.block.hash();
@@ -211,7 +211,7 @@ mod tests {
         }
         verify_exhaustive(
             BlockHeight::from_raw(first),
-            shekyl_types::BlockHash::from_bytes([0u8; 32]),
+            shekyl_types::BlockHash::NULL,
             &blocks,
         )
         .expect("a correctly chained synthetic batch verifies")

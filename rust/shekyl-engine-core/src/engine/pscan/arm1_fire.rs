@@ -187,10 +187,7 @@ pub async fn run_arm1_fire() -> Result<Arm1FireReport, String> {
 
     // Shared chain: filler (h0), funding (h1) — chained for the real
     // exhaustiveness gate from the genesis anchor.
-    let b0 = chain(
-        build_typical_case_scannable_block(1),
-        BlockHash::from_bytes([0u8; 32]),
-    );
+    let b0 = chain(build_typical_case_scannable_block(1), BlockHash::NULL);
     let b1 = chain(funding_block(&keys), b0.block.hash());
 
     // ---- Scenario A: cross-step (watch-cache path). --------------------
@@ -361,18 +358,11 @@ pub async fn run_arm3_fire(scratch_dir: &std::path::Path) -> Result<Arm3FireRepo
     .map_err(|e| format!("derive wallet persona: {e}"))?;
     let scanner = crate::engine::pscan::persona_scanner::guaranteed_scanner_for_persona(&keys)
         .map_err(|e| format!("scanner: {e}"))?;
-    let b0 = chain(
-        build_typical_case_scannable_block(1),
-        BlockHash::from_bytes([0u8; 32]),
-    );
+    let b0 = chain(build_typical_case_scannable_block(1), BlockHash::NULL);
     let b1 = chain(build_typical_case_scannable_block(1), b0.block.hash());
     let blocks = vec![b0, b1];
-    let verified = verify_exhaustive(
-        BlockHeight::from_raw(0),
-        BlockHash::from_bytes([0u8; 32]),
-        &blocks,
-    )
-    .map_err(|e| format!("exhaustiveness: {e}"))?;
+    let verified = verify_exhaustive(BlockHeight::from_raw(0), BlockHash::NULL, &blocks)
+        .map_err(|e| format!("exhaustiveness: {e}"))?;
     let range =
         BlockRange::new(BlockHeight::from_raw(0), BlockHeight::from_raw(2)).ok_or("range")?;
     // The persona rides BOTH extractor inputs, as `bonded_scan_inputs`

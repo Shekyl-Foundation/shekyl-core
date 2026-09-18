@@ -707,7 +707,7 @@ mod start_rescan_integration_tests {
 
         // `chain[h] = block at height h`; heights 0..=5, genesis at 0.
         let mut chain = Vec::new();
-        let mut parent = shekyl_types::BlockHash::from_bytes([0u8; 32]);
+        let mut parent = shekyl_types::BlockHash::NULL;
         for h in 0..6u64 {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();

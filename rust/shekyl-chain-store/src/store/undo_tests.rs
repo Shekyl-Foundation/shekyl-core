@@ -10,7 +10,7 @@
 
 use redb::ReadableTableMetadata;
 
-use super::connect_fixtures::{candidate, NO_PARENT};
+use super::connect_fixtures::candidate;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::undo::Replayed;
 use super::*;
@@ -22,7 +22,7 @@ use crate::schema::{
     ordinal_of, BLOCKS, BLOCK_HEIGHTS, HF_VERSIONS, OUTPUT_AMOUNTS, PROPERTIES, UNDO_LOG,
 };
 use shekyl_chain_rules::RuleSetId;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 
 fn hash(byte: u8) -> LmdbHashKey {
     LmdbHashKey::from_bytes([byte; 32])
@@ -34,7 +34,9 @@ fn hash(byte: u8) -> LmdbHashKey {
 fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreError> {
     let byte = u8::try_from(height).expect("test heights fit a byte");
     let recording = batch.record_undo(height);
-    let blob = candidate(height, NO_PARENT, Vec::new()).block.serialize();
+    let blob = candidate(height, BlockHash::NULL, Vec::new())
+        .block
+        .serialize();
     batch
         .open_insert_table(BLOCKS, PROBE_ROW)?
         .insert(height, Raw::<BlockBody>::new(&blob))?;
@@ -83,7 +85,7 @@ fn every_verb_journals_its_pre_image_in_write_order() {
             UndoEntry::Inserted {
                 table: ord("blocks"),
                 key: Box::new(1u64.to_le_bytes()),
-                post: post_image(&candidate(1, NO_PARENT, Vec::new()).block.serialize()),
+                post: post_image(&candidate(1, BlockHash::NULL, Vec::new()).block.serialize()),
             },
             UndoEntry::Inserted {
                 table: ord("block_heights"),
@@ -263,7 +265,7 @@ fn an_unsealed_recording_refuses_the_commit_and_lands_nothing() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let out: Result<(), TestErr> = store.write(|batch| {
         let recording = batch.record_undo(4);
-        let blob = candidate(4, NO_PARENT, Vec::new()).block.serialize();
+        let blob = candidate(4, BlockHash::NULL, Vec::new()).block.serialize();
         batch
             .open_insert_table(BLOCKS, PROBE_ROW)?
             .insert(4, Raw::<BlockBody>::new(&blob))?;

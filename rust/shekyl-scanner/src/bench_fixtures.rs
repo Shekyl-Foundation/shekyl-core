@@ -336,7 +336,7 @@ fn assemble_scannable_block(
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: BlockHash::from_bytes([0u8; 32]),
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts,
                 enc_labels,
@@ -357,7 +357,7 @@ fn assemble_scannable_block(
         major_version: 1,
         minor_version: 0,
         timestamp: 0,
-        previous: BlockHash::from_bytes([0u8; 32]),
+        previous: BlockHash::NULL,
         nonce: 0,
         curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
         attestation_root: AttestationRoot::from_bytes(

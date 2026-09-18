@@ -499,7 +499,7 @@ const WALK_REORG_DEPTH: u64 = 1;
 /// re-fire.
 fn walk_block(cursor_height: u64, h: u64) -> shekyl_scanner::ScannableBlock {
     use crate::engine::test_support::make_synthetic_block;
-    let mut block = make_synthetic_block(cursor_height, BlockHash::from_bytes([0u8; 32]));
+    let mut block = make_synthetic_block(cursor_height, BlockHash::NULL);
     let mut at = cursor_height;
     while at < h {
         let prev = block.block.hash();

@@ -732,7 +732,7 @@ mod tests {
         use crate::engine::test_support::make_synthetic_block;
 
         let mut tx_bytes = Vec::new();
-        make_synthetic_block(0, shekyl_types::BlockHash::from_bytes([0u8; 32]))
+        make_synthetic_block(0, shekyl_types::BlockHash::NULL)
             .block
             .miner_transaction
             .write(&mut tx_bytes)
@@ -815,7 +815,7 @@ mod tests {
         use crate::engine::test_support::make_synthetic_block;
 
         let mut tx_bytes = Vec::new();
-        make_synthetic_block(0, shekyl_types::BlockHash::from_bytes([0u8; 32]))
+        make_synthetic_block(0, shekyl_types::BlockHash::NULL)
             .block
             .miner_transaction
             .write(&mut tx_bytes)

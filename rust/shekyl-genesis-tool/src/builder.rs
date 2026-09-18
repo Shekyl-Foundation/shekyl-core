@@ -181,7 +181,7 @@ pub fn genesis_block(tx: Transaction, nonce: u32) -> Result<Block, GenesisToolEr
             major_version: GENESIS_BLOCK_MAJOR_VERSION,
             minor_version: GENESIS_BLOCK_MINOR_VERSION,
             timestamp: 0,
-            previous: BlockHash::from_bytes([0u8; 32]),
+            previous: BlockHash::NULL,
             nonce,
             curve_tree_root: CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
             attestation_root: AttestationRoot::from_bytes(attestation_root),

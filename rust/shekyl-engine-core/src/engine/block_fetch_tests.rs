@@ -101,7 +101,7 @@ fn coinbase_block(number: u64) -> Block {
             major_version: 1,
             minor_version: 0,
             timestamp: 1,
-            previous: BlockHash::from_bytes([0u8; 32]),
+            previous: BlockHash::NULL,
             nonce: 0,
             curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
             attestation_root: AttestationRoot::from_bytes(
@@ -245,7 +245,7 @@ fn parse_pruned_tx_rejects_coinbase_shaped() {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: BlockHash::from_bytes([0u8; 32]),
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]],
                 enc_labels: vec![[0u8; 9]],
@@ -309,7 +309,7 @@ fn pruned_spend_tx(unlock_time: u64) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: BlockHash::from_bytes([0u8; 32]),
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9], [0u8; 9]],
                 enc_labels: vec![[0u8; 9], [0u8; 9]],

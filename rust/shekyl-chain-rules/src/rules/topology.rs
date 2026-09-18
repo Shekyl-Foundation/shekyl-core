@@ -37,7 +37,7 @@ pub(crate) struct A2;
 
 impl A2 {
     /// What an empty chain's tip hash reads as: the null hash.
-    const GENESIS_PREVIOUS: BlockHash = BlockHash::from_bytes([0; 32]);
+    const GENESIS_PREVIOUS: BlockHash = BlockHash::NULL;
 }
 
 impl Rule for A2 {

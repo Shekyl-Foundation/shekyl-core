@@ -16,7 +16,7 @@ use shekyl_chain_rules::{AtHeight, RuleSetId};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, NO_PARENT};
+use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -68,7 +68,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
         Ok(())
     });
     planted.expect("plant");
-    let g = candidate(0, NO_PARENT, Vec::new());
+    let g = candidate(0, BlockHash::NULL, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, g)?, facts(0, 0), RuleSetId::GENESIS)?)
@@ -395,7 +395,7 @@ fn block_blob_above_the_tip_is_above_tip_and_a_hole_is_si7() {
 /// to read: genesis records none whatever it is handed (the `h > 0` half of
 /// the C++ guard), a zero writes no row.
 fn connect_burning(store: &ChainStore, burns: &[u64]) {
-    let mut previous = NO_PARENT;
+    let mut previous = BlockHash::NULL;
     let mut cands = Vec::new();
     for h in 0..burns.len() as u64 {
         let cand = candidate(h, previous, Vec::new());

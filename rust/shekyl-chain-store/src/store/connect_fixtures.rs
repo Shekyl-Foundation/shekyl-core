@@ -111,9 +111,6 @@ pub(super) fn root_at_height(height: u64) -> CurveTreeRoot {
     }
 }
 
-/// The genesis candidate's `previous`: the null block hash (CEN-A2).
-pub(super) const NO_PARENT: BlockHash = BlockHash::from_bytes([0; 32]);
-
 pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
     let block = Block {
         header: BlockHeader {
@@ -175,7 +172,7 @@ pub(super) fn connect_chain_with_burn(
     burned: u64,
 ) -> Vec<BlockHash> {
     let mut hashes = Vec::new();
-    let mut previous = NO_PARENT;
+    let mut previous = BlockHash::NULL;
     let mut cands = Vec::new();
     for (h, txs) in listed.iter().enumerate() {
         let cand = candidate(h as u64, previous, txs.clone());
@@ -195,7 +192,7 @@ pub(super) fn connect_chain_with_burn(
 }
 
 pub(super) fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Block) {
-    let cand = candidate(0, NO_PARENT, Vec::new());
+    let cand = candidate(0, BlockHash::NULL, Vec::new());
     let block = cand.block.clone();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();

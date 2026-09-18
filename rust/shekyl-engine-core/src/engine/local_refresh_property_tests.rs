@@ -154,7 +154,7 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
     // the P-scan's confirmation set, so the two consumers agree on the
     // post-kind byte). Mutate BEFORE reading hashes so the parent
     // chaining stays consistent.
-    let b0 = make_synthetic_block(0, BlockHash::from_bytes([0u8; 32]));
+    let b0 = make_synthetic_block(0, BlockHash::NULL);
     let mut b1 = make_synthetic_block(1, b0.block.hash());
     b1.transactions.push(test_bond_tx(&mine));
     b1.block
@@ -228,7 +228,7 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
     // Chain A built by hand so the injected bond tx is inside the hash
     // chaining (mutate BEFORE reading each block's hash).
     let mut chain_a = Vec::new();
-    let mut parent = BlockHash::from_bytes([0u8; 32]);
+    let mut parent = BlockHash::NULL;
     for h in 0..TIP {
         let mut b = make_synthetic_block(h, parent);
         if h == FORK {
@@ -288,7 +288,7 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
 fn linear_chain(n: u64) -> Vec<ScannableBlock> {
     let mut chain =
         Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-    let mut parent = BlockHash::from_bytes([0u8; 32]);
+    let mut parent = BlockHash::NULL;
     for h in 0..n {
         let block = make_synthetic_block(h, parent);
         parent = block.block.hash();

@@ -193,7 +193,7 @@ pub(crate) fn normalize_fcmp_wire_shape(tx: &mut shekyl_wire::Transaction) {
     } = &mut tx.ct
     {
         *fee = 0;
-        *reference_block = BlockHash::from_bytes([0u8; 32]);
+        *reference_block = BlockHash::NULL;
         for c in &mut base.commitments {
             *c = [0u8; 32];
         }
@@ -1003,7 +1003,7 @@ mod tests {
     fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain =
             Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-        let mut parent = BlockHash::from_bytes([0u8; 32]);
+        let mut parent = BlockHash::NULL;
         for h in 0..n {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
@@ -1114,7 +1114,7 @@ mod tests {
         let rpc = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let clone = rpc.clone();
         // Push genesis at height 0; clone observes get_height=1.
-        rpc.push_block(make_synthetic_block(0, BlockHash::from_bytes([0u8; 32])));
+        rpc.push_block(make_synthetic_block(0, BlockHash::NULL));
         assert_eq!(clone.get_height().await.unwrap(), 1);
     }
 
