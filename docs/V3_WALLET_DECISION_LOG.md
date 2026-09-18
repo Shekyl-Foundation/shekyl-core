@@ -5485,6 +5485,25 @@ was whether that split is a transitional duplication to be collapsed, and what
 justifies it if not. Ruled by Rick 2026-09-17, in-channel; verified at the
 cited sources.
 
+**Amended 2026-09-18 (`PDM-Q-F33`; PR #775 landed `e685ef1cd`, #774 landed
+`eee838d4d` fifteen minutes later, so the re-key fell to PDM).** The
+*architecture* below — two stores by obligation, no archival serving state
+in the daemon, all daemons prune uniformly — stands and is what `PDM-Q9`
+ruled on. Its *unit-bearing consequences* are written against the leaf
+partition and re-key under `PDM-Q6` item 4 / F32 / Q12
+([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](design/ARCHIVAL_PRUNED_DAEMON_MODE.md)):
+(2) the segment partition → the shard partition `b_*` over retained per-tx
+length rows closing at `SHARD_BYTES`, consensus by the same admission
+argument, with the one-home / const-assert / no-provisional-marker hazard
+transferred to `SHARD_BYTES`; the leaf partition (`SEGMENT_LEAF_COUNT`,
+`frozen_segment_count`, `SEGMENT_LAYER_J`) is a deletion surface at
+E4 / S-ARCH and its interim tie stays owed until then; (3) the daemon's
+`R_k` skeleton → the two hash rows `txs_prunable_hash` / `txs_pqc_auth_hash`;
+the E3 sentence ("import `SEGMENT_LEAF_COUNT` / `SegmentId` and define
+PDM's discard unit in them") is **refuted** by Q12 — S-PRUNE derives `b_*`
+from the A4 rows and E3 consumes it. The text below is retained as ruled,
+with its era; read it with this paragraph.
+
 **Decision — RULED.** The split stands, on a justification that does not
 depend on deployment posture or on who owns the box:
 
