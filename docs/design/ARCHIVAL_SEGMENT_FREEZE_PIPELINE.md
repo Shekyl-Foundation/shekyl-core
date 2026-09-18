@@ -1,5 +1,45 @@
 # Segment-freeze pipeline — the production writer for `m_archival_shard_segment`
 
+**Status: RETIRED BY RULING (2026-09-18, `PDM-Q12`) — live in code until
+E4 / S-ARCH.** The specification below remains live consensus until the code
+is deleted; it is no longer a plan for anything to be built. Archive-or-contract
+(rule 95) is owned by [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) and lands
+with that round's deletion increment. The original round-1 status is retained
+at its own heading below. See the retirement notice that follows.
+
+> **⚠️ RETIRED BY RULING (2026-09-18, `PDM-Q12`) — LIVE IN CODE UNTIL
+> E4 / S-ARCH.** The pipeline this document specifies is **retired**:
+> [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) `PDM-Q12`
+> rules that the segment freeze existed to commit `R_k` over a segment so
+> served bytes were content-verifiable, and that under `PDM-Q6` every txid
+> already commits `txs_prunable_hash` and `txs_pqc_auth_hash` at ingest while
+> membership is derivable from the retained length rows (`PDM-Q-F32`) — so
+> there is no height at which a range *becomes* verifiable and nothing left to
+> commit. **Not a migration:** no chain, no successor object.
+>
+> **"Retired by ruling" and "retired in code" are different states, and this
+> is the first.** The C++ half (`process_archival_segment_freezes_at_height`,
+> `archival_shard_segment`, `frozen_segment_count`, `SEGMENT_LEAF_COUNT`) dies
+> at `DRS-E*` with the stripe engine under `PDM-Q-S0`; the Rust half
+> (`shekyl-archival-retention`'s `segment_freeze.rs` and the freeze half of
+> `challenge.rs` / `path.rs`) is deleted at **E4 / S-ARCH** with the
+> serve-credit admission verifier's re-key (`PDM-Q6` item 4, row 1). Until
+> then O-1…O-3 and the first-crossing rule below remain **live consensus** and
+> this document remains their specification.
+>
+> **One consumer the retirement does not name, recorded here so it is not
+> lost with the pipeline:** the wallet-side store's `root_at_count` reads the
+> `frozen_segments` table's `r_k` as its **root-composition cache** on the
+> *proving* path (`rust/shekyl-curve-tree/src/store/redb_backend.rs:1214`,
+> `:1235-1247`; `store/ops.rs:39`) — not only on the serving path. That
+> consumer is `WSS-4` in [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md), whose
+> `WSS-9` records the consequence: retiring the freeze retires the leaf
+> segment's **consensus meaning**, not the leaf segment, which survives inside
+> the proving store as a local geometry with no consensus role.
+>
+> **Archive-or-contract (rule 95) is owned by that round** and lands with its
+> deletion increment — when the code goes, not before.
+
 > **⚠️ `K_COVER` RETIREMENT NOTICE (2026-07-19, PR #346).** This document
 > was opened as an obligation of the M1 reward-gate design round and
 > describes the freeze writer as feeding "the M1 gate". **That gate is

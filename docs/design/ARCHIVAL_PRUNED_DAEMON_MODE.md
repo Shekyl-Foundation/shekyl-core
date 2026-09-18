@@ -1027,8 +1027,26 @@ ruling's deletion surface. Both lanes are right at their own pin; the
 body-unit rebuild is **not in CTS-'s scope as of #776**. The CTS- round
 is the natural home for it and owes either a scope amendment naming the
 body unit or a successor round; this ruling does not decide which
-(FOLLOWUPS row). The curve tree's *verification-side*
-leaf store, if any, is Q1's to grade. *C++:*
+(FOLLOWUPS row). **DECIDED 2026-09-18 (steering): a successor round.**
+[`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) (family `WSS-`, Round 0 at
+`dev@8494f2a27`) opens as the wallet-side store's umbrella contract; `CTS-`
+closes as record and its work is partitioned by unit there (§8). **Two
+corrections that round returned to this ruling, recorded line-locally:**
+(a) ~~The curve tree's *verification-side* leaf store, if any, is Q1's to
+grade.~~ `PDM-Q1` grades **§9**, the daemon's chain-store inventory, where
+`curve_tree_leaves` is graded CACHE (§9.2) — so that sentence's referent is
+the **daemon's** leaf table, and the **wallet-side proving store is ungraded
+by this charter** and is the successor round's (`WSS-3`). (b) This ruling's
+deletion surface is B-shaped and correct as to symbols, but the freeze has one
+**proving-side** consumer it does not name: the wallet store's `root_at_count`
+reads `frozen_segments.r_k` as its root-composition cache
+(`redb_backend.rs:1214`, `:1235-1247`; `store/ops.rs:39`) — `WSS-4`. The
+retirement stands; what it retires is the leaf segment's **consensus
+meaning**, not the leaf segment, which survives as a local geometry inside the
+proving store (`WSS-9`). Line cites in this ruling have drifted at later shas
+(`FrozenSegmentPruned` is `:470`; the two `open_frozen_segment_body` are
+`:216` and `:1877`) — the symbols are right, and each increment re-pins
+(`WSS-10`). *C++:*
 `process_archival_segment_freezes_at_height`, `archival_shard_segment`,
 `frozen_segment_count`, `get_archival_shard_segment_at_height`,
 `SEGMENT_LEAF_COUNT` — **die at `DRS-E*` with the stripe engine under
@@ -1337,9 +1355,14 @@ round, by owner: **the wallet lane** — the **archiver serving-store
 rebuild** (Q12: `LeafStore` around bodies — fill-from-daemon in the grace
 window, verify-on-fill against the hash rows, shard-keyed, per-tx serve,
 lapse tail, recovery intake, the Foundation floor), a design round of its
-own — **the largest unbuilt thing this charter names**; the lane's active
+own — **the largest unbuilt thing this charter names**; ~~the lane's active
 `CTS-` round (#776) is a leaf-unit shape rewrite and does not yet scope
-it (Q12 block); **DRS-E** — S-PRUNE's **plan** (the skeleton `DRS_E1_SPRUNE.md` landed; the plan — increment ordinal, Round-0 pre-flight, commit sequence — is still owed, after Q1's
+it (Q12 block)~~ **— DISCHARGED as to ownership 2026-09-18: the round
+exists.** [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) (family `WSS-`,
+registered at birth) is the wallet-side store's umbrella; `CTS-` closes as
+record and is partitioned by unit there. Its `WSS-Q1` — one store with two
+obligations, or two files — is the axis every one of Q12's unmade decisions
+inherits, and it is posed, not yet ruled; **DRS-E** — S-PRUNE's **plan** (the skeleton `DRS_E1_SPRUNE.md` landed; the plan — increment ordinal, Round-0 pre-flight, commit sequence — is still owed, after Q1's
 horizon check lands), A3 (#772), A4, the daemon-uniformity constraint in
 `DAEMON_REDB_STORE.md` (#775's row); **E4 / S-ARCH** — the serve-credit
 verifier re-key (consensus) and the leaf-cluster deletion; **E6** — the
