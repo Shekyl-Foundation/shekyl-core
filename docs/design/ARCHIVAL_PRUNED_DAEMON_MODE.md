@@ -1,7 +1,11 @@
 # Pruned-daemon mode — set-B discard (PDM)
 
-**Status: OPEN** — round opened 2026-09-12. `PDM-Q1`…`PDM-Q6`, `PDM-Q8`
-and `PDM-Q10` are **OPEN**. `PDM-Q3` is restated (today not node-local,
+**Status: OPEN** — round opened 2026-09-12. **RULED 2026-09-17:
+`PDM-Q6` items 1–3 (the prunable region + `pqc_auths` are the good; a
+shard is a `tx_id` range; item 4 OPEN by name) and `PDM-Q11` (`D_max`:
+shape frozen, home `CEN-E2`, numeric 720 PROVISIONAL to the Round-2
+gate). Unblocked by them: Q1, Q2, Q12, `SF` sub-PR 2, F28.** As
+opened: `PDM-Q1`…`PDM-Q6`, `PDM-Q8` and `PDM-Q10` were **OPEN**. `PDM-Q3` is restated (today not node-local,
 `PDM-Q-F8`). `PDM-Q1` is widened and `PDM-Q6` promoted (`PDM-Q-F12`:
 leaves are a cache of the block corpus; set-B scarcity as scoped does
 not exist), then **`PDM-Q6` is the round's subject** (`PDM-Q-F13`: the
@@ -562,7 +566,113 @@ one; none is anticipated.
    anchored chain, and a node with an empty checkpoint table has no
    cap at all, which is the pin today.
 
-### `PDM-Q6` OPEN — The prunable region as the archival good: the round's subject (promoted 2026-09-13 `PDM-Q-F12`; made the subject 2026-09-13 `PDM-Q-F13`)
+### `PDM-Q6` RULED 2026-09-17 (items 1–3; item 4 OPEN) — The prunable region and `pqc_auths` are the archival good; a shard is a `tx_id` range
+
+**Grounded at** `dev@4bc378d68` (2026-09-17); `#768` (E6 slice 1 —
+`TxIdentity.pqc_auth_hash` and the wire's txid module; read at head
+`245a60761` when ruled, **merged the same evening as `398d85e7b`**)
+and `#770` (§3 walk; merged `071dfd2f5`) read at their heads and
+treated as authoritative per steering. Cites below were re-verified on
+`dev@eac99894a` after #768 and #771 merged. Items 1–3 ruled; **item 4 is left OPEN by name** — the
+instruction was items 1–3.
+
+**Item 1 — the good.** The archival subject is the transaction's
+prunable region (`CtSigPrunable`, `src/fcmp/ct_types.h:333`) for every
+transaction below Q2's `W`. The unit of possession is one transaction's
+`CtSigPrunable` bytes; the unit of verification is its
+`txs_prunable_hash`, a txid component every node retains forever.
+Grounds: `PDM-Q-F12` (leaves are a cache of the base) and `PDM-Q-F13`
+(the prunable region is original, admission-only, and every byte replay
+needs lives in the other half). Nothing else in §9 is scarce.
+
+**Item 2 — the second occupant.** `pqc_auths` enter the good on
+identical terms, verified by `txs_pqc_auth_hash` — the txid's third
+component, count-prefixed (`rust/shekyl-wire/src/transaction/txid.rs`,
+`Transaction::txid_parts()` / `pqc_auth_hash()`), `Option`-shaped (`None` ⇔ 3-part txid), never a
+sentinel. This **ratifies a landed default**: `TxIdentity { hash,
+pqc_auth_hash: Option<PqcAuthHash>, prunable_hash }`
+(`rust/shekyl-chain-rules/src/block.rs:52-59`), and the
+store row scheduled by `DAEMON_REDB_STORE.md` §7.7 on S-CHAIN-R's
+layout commit. Items 1 and 2 are one ruling: ~95 % of transaction
+bytes jointly, neither defensible alone (`PDM-Q-F14`). No tx blob byte
+and no txid changes.
+
+**Item 3 — shard membership.** A shard is a **`tx_id` range**
+`[k·T, (k+1)·T)` over the store's monotone transaction index
+(`tx_id = get_tx_count()` at insert, KEEP-C). Membership is derived —
+`tx ∈ s ⇔ ⌊tx_id / T⌋ = k` — and nothing joins the retained set for
+it. `height(tx)` for the F10 discard predicate is one `tx_indices`
+lookup. Chosen over the height range (byte size floats with
+throughput, breaks per-shard pricing) and the leaf segment (needs
+`output_to_leaf`, graded CACHE, to become load-bearing). Keeps
+`RF-D6`'s fixed cardinality without keeping a mapping. **One unit,
+three surfaces:** the bond's `holdings`, `PDM-Q-F17`'s wire echo, and
+the challenge draw all name the same `tx_id` range; §3's stripe/shard
+item discharges on that identity and reopens if any of the three names
+a different unit.
+
+**Item 3, the credit-wire collision — not reopened.**
+`ARCHIVAL_CREDIT_WIRE.md` §3's `transfer_digest` rejection stands.
+Under this unit a digest over the shard's *hash rows* is
+admission-reconstructible — and therefore computable by any node that
+possesses nothing, so it proves nothing about possession; a digest over
+the shard's *bytes* remains non-reconstructible, so the original ground
+holds. For any signed digest, admission-reconstructibility and
+possession-discrimination are in opposition; the only escape is
+reveal-and-check, which this unit supplies per-tx and which the
+whole-shard topology read (§9.4) already uses. No signed content
+artifact is added to the wire. Reopens only if the credit wire abandons
+the topology read for a sampled test — in which case `PC-D3`'s draw
+problem returns with it, and that is the credit wire's round to rule.
+
+**Consequences, now in force.**
+
+- `PDM-Q1` may be ruled; it grades §9 against this unit.
+- `PDM-Q12` may be ruled; the commitment exists at ingest, and the
+  segment freeze has nothing left to freeze under this unit (candidate:
+  retires; `LeafStore` is a deletion target).
+- `SF` sub-PR 2 is unblocked: frame codec and `ContentVerify` are
+  per-tx against the two hash rows; `SHARD_BYTES` and
+  `recompute_segment_r_k` do not survive (`PDM-Q-F25`).
+- `PDM-Q-F28` (skeleton wire carries `pqc_auth_hash`) is no longer
+  gated on this question.
+- `DAEMON_REDB_STORE.md` §7.7's three-leg invariant is the store's
+  contract for this good: hash row ⇔ 4-part txid, permanent; segment
+  present ⇒ hash row present; hash row present ∧ segment absent ⇔
+  discarded or never held (band 1).
+
+**Owed to item 4 (OPEN):** the re-key/reopen disposition for each
+closed leaf-shaped ruling — `RF-D1` (`leaf_bytes` claim), `RF-D6`
+(`SHARD_BYTES`), `challenge_leaf_index` and the fire schedule (already
+on the credit wire's deletion surface), `LeafStore::frozen_segment` and
+the freeze pipeline (→ Q12), `SF-D7`/`SF-D8`/`SF-D1`'s addressing
+clause (→ sub-PR 2), `CR-D2`'s carrier. Each is re-keyed if the unit
+substitutes cleanly, reopened if its argument depended on a shared root.
+
+**Reversion criteria (rule 21).** This ruling reverts to OPEN if any
+of: (a) a consensus reader of the prunable region or `pqc_auths`
+appears outside admission — falsifier: `PDM-Q-F29`'s `ChainView`
+surface acquires a body accessor without an above-`W` mark, or a rule
+in `shekyl-chain-rules` reads a recorded body; (b) replay through
+`apply_block` is shown to need a byte from either region — falsifier: a
+derived table that `DRS-D10` replay cannot rebuild from the skeleton
+alone; (c) the `tx_id` index stops being monotone or KEEP-C in the Rust
+store — falsifier: `tx_indices` graded CACHE or below in DRS's
+accumulator classes.
+
+**Falsifiers on the ruling as landed.** A `TxIdentity` whose
+`pqc_auth_hash` is `Some` for a 3-part txid or `None` for a 4-part one
+is red (KAT on S-CHAIN-R's row). A bond `holdings`, wire echo, or
+challenge draw expressed in a unit other than `tx_id` range is red. A
+shard whose byte size is used for pricing without being bounded by
+`T × max_tx_size` is red.
+
+---
+
+*The analysis below is the ground the ruling was taken on. It predates
+the ruling; its OPEN framing and its item numbering as questions are
+superseded by the block above, and it is kept as the record of how the
+question was argued.*
 
 Curve-tree leaves have a designed home; tx-prunable blobs have only the
 inherited stripe scheme. No document before this one asks whether they
@@ -998,7 +1108,84 @@ do not hold shard `s`" discloses nothing the operator did not configure.
 Q8's query-privacy concern lives on the *fetch* leg to a third-party
 archiver, not here.
 
-### `PDM-Q11` OPEN — `D_max`, the consensus reorg cap
+### `PDM-Q11` RULED 2026-09-17 — `D_max`: shape frozen, numeric provisional, home `CEN-E2`
+
+**Grounded at** `dev@4bc378d68`. Not archival-scoped; closes by
+reference if a consensus-constants family rules it.
+
+**What it is.** `D_max` is the maximum reorg depth a node with an
+anchored chain will accept. It is a **detectability boundary**, not a
+security margin: it does not raise attack cost, it converts a deep
+rewrite from a silent reorg into a visible split. Any depth below
+`D_max` is bought silently by an adversary who can afford it; the
+requirement is `D_max < d_afford` for the rentable-RandomX adversary
+positioned in the candidate derivation below.
+
+**Home.** `CEN-E2` — `is_alternative_block_allowed` — one function,
+two bands: the anchor floor (refuse any alternative at or below the
+last release-carried checkpoint) and the rolling cap (refuse any
+alternative deeper than `D_max` below tip). `CEN-E1` (hash equality at
+a checkpointed height) is the anchor's own rule, not this one. Both
+census rows are re-keyed in the PR that lands `Trust::BelowAnchor`
+(`PDM-Q-F30`), because that PR moves checkpoint state into Rust and
+fires the reopening trigger both rows named.
+
+**Binding condition.** `D_max` binds only once a node has an anchored
+chain. A fresh node's exposure is bounded by the anchor `C` and not by
+`D_max` at any value; a node with an empty checkpoint table has no cap
+at all, which is the pin today (`init_default_checkpoints` is a
+rule-71-shaped no-op, `src/checkpoints/checkpoints.cpp:136-145`). The anchor
+is therefore a **precondition** of `D_max`, not a sibling, and
+`PDM-Q5`'s ordering item is discharged by this sentence.
+
+**Numeric.** `D_max = 720` blocks (24 h at 120 s), **PROVISIONAL**, on
+the `bond_duration` precedent. The argument for 720 is coordination
+with the archival domain's frozen assumptions and is recorded as such
+(below). Two independent arguments for shallower are recorded beside it
+and are not overridden: (i) 720 sits at the top of the honest-partition
+floor and plausibly above `d_afford` in the first year; (ii) a deep
+`D_max` widens the window in which a syncing node above `C` trusts
+proofs it has not verified. Re-pinned at the Round-2 testnet gate
+together with `archival_failure_window_n` and `W` — **one gate item,
+three entries**; a re-pin task that names fewer than three is
+incomplete. *Editorial, line-local (rule 23):* the ruling as delivered
+named a **fourth** entry, the relation `bond_duration ≥ W`. That
+relation was drawn by the §3 free-riding walk and **withdrawn by
+steering the same morning** (the free-regime reward is the ruled
+bootstrap subsidy; #770 landed the gate at three). Landed here at
+three, consistent with the withdrawal; if the withdrawal was not meant
+to reach this block, reinstating is one sentence in this paragraph and
+the gate paragraph below.
+
+**Derivations that now bind.** Q2's discard predicate (`W ≥ D_max`,
+F10); Q1's journal retirement floor `tip − (CRB + n·SEB + D_max)`,
+computed through `shekyl_archival_failure_window_params`, never literal
+(F19); S-PRUNE's undo-log watermark `≥ D_max` (SCW-7,
+`StoreCannot::PopBelowFloor` as the refusal); and — the fourth, added
+by this ruling — `Trust::BelowAnchor(anchor)` is mintable only from the
+release-carried table (`PDM-Q-F27`), so `D_max` never has to defend a
+node below its anchor.
+
+**Reversion criteria (rule 21).** Numeric reverts to OPEN at the
+Round-2 gate by construction. Shape reverts to OPEN if: (a) a
+consensus-constants family rules a reorg cap with different semantics —
+then this closes by reference and the derivers re-point; (b) the anchor
+model in `PDM-Q5` is rejected, since without a precondition the
+fresh-node argument returns to `D_max` and the detectability framing no
+longer holds for syncing nodes.
+
+**Falsifiers.** A fork of depth `D_max + 1` accepted on an anchored
+node is red. A fork below `C` accepted on any node is red. `undo_log`
+retention constant `< D_max` is red (SCW-7). A second reorg-depth
+constant in any consensus or store crate that is not `D_max` by
+reference is red — the drift pair the constants policy forbids.
+
+---
+
+*The analysis below is the ground the ruling was taken on. It predates
+the ruling; its OPEN framing is superseded by the block above, and it is
+kept as the record — including the candidate derivation and the
+Round-2 gate paragraph the ruling's numeric refers to.*
 
 Minted 2026-09-13 because two rulings derive from one number that
 does not exist: Q2's discard floor (F10) and Q1's journal retirement
@@ -2534,15 +2721,14 @@ consequence that no lane had recorded.
 
 ### Undetermined (ruling pass)
 
-- The prunable region as the archival good, the `pqc_auths` second
-  occupant, and the leaf→transaction unit change it forces on the
-  closed archival rulings (Q6, F13–F15; now including the `SF-`
-  fetch contract that closed on the leaf unit mid-round, F25) —
-  ruled first. **Q11's *shape* does not wait on Q6** — `D_max` is a
-  reorg cap, unit-independent, and it needs a consensus-side owner who
-  is not in this PR and needs lead time; start it in parallel. Only
-  its *use* in Q2 and Q1 waits on Q6's unit. The critical path is Q6
-  alone. Then the
+- ~~The prunable region as the archival good, the `pqc_auths` second
+  occupant, and the leaf→transaction unit change … ruled first.
+  **Q11's *shape* does not wait on Q6** … The critical path is Q6
+  alone.~~ **RULED 2026-09-17: Q6 items 1–3 and Q11 (shape; numeric
+  PROVISIONAL) are ruled** — see their §2 blocks. Q6 item 4 (the
+  re-key/reopen disposition of each closed leaf-shaped ruling, F25's
+  list among them) stays OPEN by name. **Unblocked by the two rulings:
+  Q1, Q2, Q12; `SF` sub-PR 2; `PDM-Q-F28`.** Then the
   retained set (starting from layer 0 / `m_curve_tree_leaves`, F7;
   widened to the leaf's derivation inputs, F12; §9's `CACHE` and
   `LOCAL-BOUNDED` rows, F16), the trigger (including the free-regime
@@ -2576,18 +2762,18 @@ consequence that no lane had recorded.
 | ID | Question | State |
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
-| `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory; journal horizon `tip − (CRB + n·SEB + D_max)`, F19) | OPEN — widened 2026-09-13; ruled after Q6 (F13); horizon blocked on Q11 |
-| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24); the free regime's market behaviour is **bootstrap** — the ruled staker emission share (`DESIGN_CONCEPTS.md` Component 4) favours early adopters by intent; the `bond_duration` vs `W` relation proposed by the §3 walk on 2026-09-17 is WITHDRAWN the same day, no gate entry | OPEN — blocked on Q11 |
+| `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory; journal horizon `tip − (CRB + n·SEB + D_max)`, F19) | OPEN — widened 2026-09-13; **unblocked 2026-09-17**: Q6 items 1–3 RULED (grades §9 against the `tx_id`-range unit), Q11 RULED (horizon formula binds through `shekyl_archival_failure_window_params`, `D_max` = 720 PROVISIONAL) |
+| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24); the free regime's market behaviour is **bootstrap** — the ruled staker emission share (`DESIGN_CONCEPTS.md` Component 4) favours early adopters by intent; the `bond_duration` vs `W` relation proposed by the §3 walk on 2026-09-17 is WITHDRAWN the same day, no gate entry | OPEN — **unblocked 2026-09-17**: Q11 RULED (`W ≥ D_max`, F10, now binds); owes `W`'s number to the Round-2 gate and the regime's behaviour (bootstrap) |
 | `PDM-Q3` | Residual consensus reads after TJ-A; **the instrument is `ChainView`'s surface (F29)** | OPEN — today not node-local (`PDM-Q-F8`); in the Rust validator the residual set is empty by construction at `645d09dc3` (no recorded-body accessor), instrument handed to E6 as a standing trait property (F29, 2026-09-16) |
 | `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | OPEN — collapsed 2026-09-13 (F20/F23/F24); TJ-F sentence stated |
-| `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's; **band 1 is unbuildable against DRS-D12's writer until E6 issues a below-anchor set (F27, handed off 2026-09-16); `TxBlobEntry` grows `pqc_auth_hash` under Q6 item 2 (F28, owner `LV-`/`PWC-`)** |
-| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)**; **item 3 names one unit for bond `holdings`, F17's wire echo and the challenge draw alike (§3 stripe/shard walk, 2026-09-17)** | OPEN — the round's subject 2026-09-13; ruled before Q1; **items 1–2 ruled before DRS-E2's first production writer (F26, 2026-09-16)** — `TxIdentity` carries both occupants' hashes since #768 (2026-09-17: `{ hash, pqc_auth_hash: Option<_>, prunable_hash }` from `Transaction::txid_parts()`, DRS §7.7 items 1–2); the `txs_pqc_auth_hash` **row** is still owed (S-CHAIN-R amendment A3, DRS §7.7 item 3) |
+| `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's; **band 1 is unbuildable against DRS-D12's writer until E6 issues a below-anchor set (F27, handed off 2026-09-16); `TxBlobEntry` grows `pqc_auth_hash` (F28, owner `LV-`/`PWC-`; no longer gated — Q6 item 2 RULED 2026-09-17)**; **the Q11-ordering item is DISCHARGED 2026-09-17** — Q11 rules the anchor a *precondition* of `D_max`, not a sibling |
+| `PDM-Q6` | The prunable region as the archival good; `pqc_auths` second occupant; shard membership (height / leaf-segment / `tx_id` range); leaf→tx unit change (F13, F14, F15, F22); **the store identity carries both occupants' hashes (F26)**; **item 3 names one unit for bond `holdings`, F17's wire echo and the challenge draw alike (§3 stripe/shard walk, 2026-09-17)** | **RULED 2026-09-17 (items 1–3)** — the good is the prunable region + `pqc_auths` for every tx below `W`, verified by `txs_prunable_hash` + `txs_pqc_auth_hash` (item 2 ratifies F26's landed default, #768 merged `398d85e7b`); a shard is a **`tx_id` range** `[k·T, (k+1)·T)`, one unit for bond `holdings`, wire echo and draw; the credit-wire `transfer_digest` collision is **not reopened**. Before DRS-E2's first writer, as F26 required. `TxIdentity` carries both occupants' hashes since #768 (`{ hash, pqc_auth_hash: Option<_>, prunable_hash }` from `Transaction::txid_parts()`, DRS §7.7 items 1–2); the `txs_pqc_auth_hash` **row** is still owed (S-CHAIN-W amendment A3 on S-CHAIN-R's layout commit, DRS §7.7 item 3). **Item 4 OPEN by name** — re-key/reopen list in the ruling block |
 | `PDM-Q7` | Stripe engine / `--prune-blockchain`; unbonded retention exceptions | **PARTIAL 2026-09-12** — opt-in flag rejected, scoped to the universal set (2026-09-13); C++ stays until this design is complete; removal at `DRS-E*`; unbonded exceptions OPEN (candidate: permitted, serving needs the bond) |
 | `PDM-Q8` | Privacy (density vs query; serve-side uniformity) | **PARTIAL 2026-09-13** — ruled: P2P body-serving uniform inside the universal window on every node, beyond-window serving wallet-fronted over onion only (F21); fetch-side wargame OPEN |
 | `PDM-Q9` | Archiver's retention set: source, binding, lapse, coverage floor, recovery fetch | **PARTIAL 2026-09-13** — source ruled: shard retention is the bond process (`holdings` on-chain); candidate under review: the daemon holds the shard as a retention exception on the universal predicate (binding dissolves to `retain(s)`/`release(s)` over the operator leg); lapse tail, coverage floor (F20), recovery fetch OPEN. **Coverage floor owes one sentence (§3 Sybil walk, 2026-09-17): it counts personas, not hosts, and under Model D cannot see the difference — so the floor that carries weight is structural (Foundation / explorers holding `CompleteTree`, Foundation work outside `Σwork`), not the market's holder count** |
 | `PDM-Q10` | RPC contract for "not retained" | OPEN |
-| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2), F19 (Q1) **and the store's undo-log retention (S-CHAIN-W SCW-7, 2026-09-15: retention ≥ `D_max`)** all derive from; home is `is_alternative_block_allowed` above the checkpoint — census row **`CEN-E2`** (F30; `CEN-E1` is the equality rule, the band-1 trust assertion) — so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | OPEN — minted 2026-09-13; **owner unnamed at day five (2026-09-17, F30)**; F27's `Trust::BelowAnchor` fires `CEN-E1`/`CEN-E2`'s C2-R1b reopening trigger — re-key owed in F27's PR; candidate 720 (24 h) as coordination with the archival domain, security wants shallower on two grounds (silent-reorg window; F23: an empty table has no cap at all); numeric pinned to the Round-2 re-pin gate with `n` |
-| `PDM-Q12` | The freeze pipeline and the wallet-side `LeafStore` under Q6's unit — does the freeze retire when the commitment exists at ingest; `LeafStore` as deletion target (F21) | OPEN — minted 2026-09-13; held as a question because of `TJ-D` / `RF-D6` / `SF-` dependents |
+| `PDM-Q11` | `D_max`, the consensus reorg cap — the one constant F10 (Q2), F19 (Q1) **and the store's undo-log retention (S-CHAIN-W SCW-7, 2026-09-15: retention ≥ `D_max`)** all derive from; home is `is_alternative_block_allowed` above the checkpoint — census row **`CEN-E2`** (F30; `CEN-E1` is the equality rule, the band-1 trust assertion) — so the checkpoint (Q5) is its precondition; not archival-scoped, carried here until ruled | **RULED 2026-09-17** — shape frozen (a *detectability boundary*, home `CEN-E2`, the anchor a precondition), **numeric `720` PROVISIONAL** on the `bond_duration` precedent with the two shallower arguments recorded beside it, re-pinned at the Round-2 gate with `n` and `W` (three entries); the owner ask is discharged by the ruling itself; `CEN-E1`/`CEN-E2` re-key still owed in F27's PR (F30) |
+| `PDM-Q12` | The freeze pipeline and the wallet-side `LeafStore` under Q6's unit — does the freeze retire when the commitment exists at ingest; `LeafStore` as deletion target (F21) | OPEN — minted 2026-09-13; **unblocked 2026-09-17** by Q6: the commitment exists at ingest and the freeze has nothing left to freeze under the `tx_id`-range unit (candidate: retires; `LeafStore` a deletion target); `TJ-D` / `RF-D6` / `SF-` dependents re-keyed via Q6 item 4 |
 
 When this round proposes a test, it will name the edit that makes that
 test red. A red test that cannot be made red by a specific edit is not
@@ -2698,6 +2884,20 @@ personas; S-PRUNE's plan doc (F31) carries the discard-side predicate
 assertion. Nothing in the six requires a mechanism the design lacks.
 The ruling pass for Q6 items 1–3 can now be the transcription it was
 said to be.
+
+**Rulings taken (2026-09-17, same day, grounded `4bc378d68` + #768/#770
+heads).** `PDM-Q6` items 1–3 and `PDM-Q11` are RULED — the blocks sit
+at the head of their §2 sections. What the next pass owes is therefore
+re-ordered: **Q6 item 4** (the re-key/reopen list, OPEN by name), then
+**Q1** (grade §9 against the `tx_id`-range unit), **Q2** (`W`'s number
+to the Round-2 gate; the regime's behaviour is bootstrap), **Q12**
+(candidate: the freeze retires, `LeafStore` is a deletion target), then
+Q3 / Q5 (launch window, release-gate step, band-2 egress — the Q11
+ordering item is discharged) / Q7 / Q8 / Q9 (floor structural, counts
+personas) / Q10. Cross-lane: `SF` sub-PR 2 and F28 are unblocked;
+the `CEN-E1`/`CEN-E2` re-key rides F27's PR (F30); S-PRUNE's plan doc
+(F31) now has its unit and its cap. The "Q6 first, Q11 in parallel"
+ordering in §6 is struck.
 
 ---
 
