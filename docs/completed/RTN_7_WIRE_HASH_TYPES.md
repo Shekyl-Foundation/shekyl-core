@@ -101,26 +101,34 @@ The value of RTN-7 is that raw `[u8; 32]` stops appearing on the wire
 surface; the moment it lands, nothing stops the next wire field arriving as
 `[u8; 32]`. §6 rows record intent; rows do not gate. This is the fourth
 instance of one pattern in this tree — the census bijection map,
-`RUST_ONLY_TABLES`, `DEFERRED_DOCS`, `CXX_HOLDER_RE` — `{item: reason}`,
-unnamed occurrences red.
+`RUST_ONLY_TABLES`, `DEFERRED_DOCS`, `CXX_HOLDER_RE` — named exceptions
+with a reason, unnamed occurrences red.
 
 - **Subject:** every `pub` field type and `pub fn` signature in
   `rust/shekyl-wire/src/**/*.rs` containing `[u8; 32]` (including
-  `Vec<[u8; 32]>`, `Option<[u8; 32]>`, `&[[u8; 32]]`). `pub(crate)` is not
-  surface and is not scanned.
-- **Allowlist:** `ALLOWED: dict[str, str]` of `"<file>::<item>": "<reason>"`
-  — §3.2's rows, byte-exact. **Q4 (ruled): the broad reading** — every
-  `[u8; 32]` on the surface is the subject, the crypto objects are the
-  named exceptions, and every exception's reason **names its addressee
-  crate**, because the red-when-the-item-is-gone leg cannot help an entry
-  whose owner is unspecified.
+  `Vec<[u8; 32]>`, `Option<[u8; 32]>`, `&[[u8; 32]]`). A declaration is
+  one item even when rustfmt wraps it: fields, enum-variant fields, and
+  tuple-variant payloads are buffered until the type's bracket depth
+  returns to zero (completeness is depth, not a trailing comma — the last
+  field of a struct has none); signatures are buffered to the body's `{`.
+  `pub(crate)` is not surface and is not scanned.
+- **Allowlist:** `ALLOWED: dict[str, Allow]` of
+  `"<file>::<item>": Allow(reason, addressee)` — §3.2's rows, byte-exact.
+  The addressee is a **field**, not a phrase inside the reason, so `check`
+  can assert it exists (second-round, 2026-09-18). **Q4 (ruled): the
+  broad reading** — every `[u8; 32]` on the surface is the subject, the
+  crypto objects are the named exceptions, and every exception names its
+  addressee crate, because the red-when-the-item-is-gone leg cannot help
+  an entry whose owner is unspecified.
 - **Red in both directions (rule 47):** an occurrence not in the allowlist;
   an allowlist entry whose item no longer exists (the allowlist may not
-  outlive its subject); an empty scan (the crate moved, the regex broke —
-  absence of signal is first evidence the subject is absent).
+  outlive its subject); an entry with an empty reason or no addressee;
+  an empty scan (the crate moved, the parse broke — absence of signal is
+  first evidence the subject is absent).
 - **Self-test** (`--selftest`): a synthetic `pub previous: [u8; 32]` goes
-  red; a synthetic allowlisted item passes; a stale allowlist entry goes
-  red; an empty tree goes red.
+  red; a rustfmt-wrapped field (`Vec<\n [u8; 32],\n>`) goes red; a
+  synthetic allowlisted item passes; empty reason / empty addressee go
+  red; a stale allowlist entry goes red; an empty tree goes red.
 - Wired into `docs-gates.yml`'s bundled grep gates.
 
 ## 5. Commit plan (rule 90; ≤ 10)
@@ -220,6 +228,22 @@ points, one class with `Output.key` — allowlisted with the same addressee.
 
 Final figure: **78 public items scanned, 17 raw occurrences, all 17
 allowlisted with a reason and a checked addressee.**
+
+**Third round (PR #777 review, 2026-09-18, at `7906dab1d`).** The same
+line-regex hole the second round closed for signatures was still open
+for fields: `pub digest: Vec<\n    [u8; 32],\n>` puts the raw type on a
+line with no `name:`, `pub_items` stays nonzero, and the gate is
+vacuously green. Fields, enum-variant fields, and tuple-variant payloads
+now share one buffer with signatures — a declaration is complete when
+its type's bracket depth is zero, not when a comma appears (the last
+field of a struct has none). Self-test legs for the wrap, the no-comma
+last field, a wrapped enum field, and a wrapped tuple variant. The
+archived §4 still described the pre-review `dict[str, str]` shape with
+the addressee buried in the reason; that paragraph is the
+`Allow(reason, addressee)` contract above. The unified implementation
+index stamp stays `20ebdf1e5` (rule 94: RTN-7 is a row-local UPDATE;
+stamping HEAD would claim the DRS-E6 coverage gate ran against a tree
+it never read).
 
 ## 8. Two boundaries the implementation named that §3 did not
 
