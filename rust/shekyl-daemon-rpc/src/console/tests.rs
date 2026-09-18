@@ -323,7 +323,7 @@ fn console_spend() -> shekyl_wire::Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: BlockHash::from_bytes([0; 32]),
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0; 9], [0; 9]],
                 enc_labels: vec![[0; 9], [0; 9]],

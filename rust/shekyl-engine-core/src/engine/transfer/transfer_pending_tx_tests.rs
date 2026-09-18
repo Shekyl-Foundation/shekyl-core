@@ -3404,7 +3404,7 @@ fn assemble_tx_to_sign_rejects_missing_key_image() {
         c1_layers: Vec::new(),
         c2_layers: Vec::new(),
         tree: CtTreeContext {
-            reference_block: BlockHash::from_bytes([0u8; 32]),
+            reference_block: BlockHash::NULL,
             tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
             tree_depth: 1,
         },

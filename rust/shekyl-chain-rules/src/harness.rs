@@ -266,7 +266,7 @@ pub mod fixture {
         };
         let block = Block {
             header: BlockHeader {
-                previous: tip.map_or(BlockHash::from_bytes([0; 32]), |t| t.hash),
+                previous: tip.map_or(BlockHash::NULL, |t| t.hash),
                 curve_tree_root: root,
                 ..header()
             },

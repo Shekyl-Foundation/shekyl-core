@@ -397,7 +397,7 @@ where
                 reference: ReferenceBlock {
                     height: BlockHeight::from_raw(0),
                     curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-                    block_hash: BlockHash::from_bytes([0u8; 32]),
+                    block_hash: BlockHash::NULL,
                 },
                 content_gen: 0,
                 fingerprint: ContentFingerprint::from_build(
