@@ -24,7 +24,13 @@ the 2D2 plan §2/§12, the WI-1 "made the chain live" comment — PR #333 and th
 Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
-The unified stamp is `dev` = `02df36ef0` as of 2026-09-18 (§5) — moved by
+The unified stamp is `dev` = `eee838d4d` as of 2026-09-18 (§5) — moved by
+the F33 re-key (PR #778) after #775 (`e685ef1cd`) and #774 (`eee838d4d`)
+landed; both were docs-only, so the code tree at `eee838d4d` is
+byte-identical to `02df36ef0`'s (`git diff --stat 02df36ef0 eee838d4d --
+rust src scripts config cmake tests` is empty) and the `02df36ef0`
+verification below applies verbatim to it. *Superseded stamp, retained:*
+`02df36ef0` (2026-09-18) — moved by
 the PDM second ruling pass (PR #774), whose rows (`PDM-Q*`, the
 `ARCHIVAL_PRUNED_DAEMON_MODE.md` / `ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md` /
 `DRS_E1_SPRUNE.md` document rows) are decision-anchored and whose code

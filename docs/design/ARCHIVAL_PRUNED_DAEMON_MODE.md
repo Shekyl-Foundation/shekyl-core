@@ -823,8 +823,38 @@ retires) and F32 (the unit is `b_*`); the hazard it names — a
 provisional marker / config door on the partition constant — survives
 unchanged and applies to **`SHARD_BYTES`**: one home, const-asserted,
 not editable as a tune. #775's *"memory-only seed ring of Q10"* is
-**SO-D8's** Q10, not this round's. **Whichever of #774 / #775 lands
-second owes the re-key**; named in both.
+**SO-D8's** Q10, not this round's. ~~Whichever of #774 / #775 lands
+second owes the re-key~~ **— #775 landed `e685ef1cd`, #774 landed
+`eee838d4d` fifteen minutes later; PDM re-keyed (2026-09-18,
+`docs/pdm-f33-rekey-775`): #775's partition and CT-1 FOLLOWUPS rows in
+place, its serving-route paragraph, a dated amendment on its decision-log
+entry. DISCHARGED.**
+
+*Dispositions the re-key fixed, so the FOLLOWUPS rows can stay
+one-liners:* (i) **Scope of the one-home claim.** It binds the
+**production** `SHARD_BYTES` — the crates the daemon and wallet ship
+(`BuildRust.cmake`'s roots: `shekyl-chain-store`, `shekyl-chain-rules`,
+`shekyl-archival-retention`, `shekyl-curve-tree`, `shekyl-p-serve` /
+`-fetch`) — and not measurement code: `shekyl-sp-t3-spike`'s fixture
+constant (`fixture.rs:74`, derived from the leaf count) and
+`shekyl-economics-sim`'s `f64` model constant (`burden.rs:39`, which says
+it is not consensus) are intentional and stay. A production `SHARD_BYTES`
+appearing in a second shipped crate or in `consensus_constants.json` is
+the violation; the model constants tracking a moved production value is
+the spike/sim lanes' own re-measurement, not this contract's.
+(ii) **The leaf partition's interim tie.** `SEGMENT_LEAF_COUNT`,
+`frozen_segment_count`, `SEGMENT_LAYER_J`, `outputs_per_node` are a
+deletion surface at E4 / S-ARCH (Q12) but live consensus until then, so
+#775's tie assert `const _: () = assert!(leaves_per_segment() as u64 ==
+SEGMENT_LEAF_COUNT)` in `shekyl-archival-retention` stands as scoped —
+one line that dies with the freeze — while its `const fn` rewrite and
+marker removal are not worth doing on a deletion target (rule 15); a
+`#[test]` tie is an acceptable fallback there. Owner: the wallet lane,
+same PR as the CT-1 dedup assert. (iii) **Who derives `b_*`.** S-PRUNE's
+forward pass over the A4 rows, once; E3 S-CURVE, the wallet-side store
+(Q12's rebuild) and the verifier *read* it (Q6 item 4), none mints a
+partition of its own — that is the re-keyed form of #775's "E3 consumes
+`frozen_segment_count`, never a partition of its own".
 
 **Reversion (rule 21).** Reopens only if #775's line is redrawn — its
 own reopener: archival serving becomes universal. Falsifiers: any
