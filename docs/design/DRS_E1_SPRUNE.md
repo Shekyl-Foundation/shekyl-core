@@ -50,9 +50,14 @@ prune uniformly**. There is no per-daemon input to this predicate.)*
 **Enforcement point:** the per-epoch batch that advances the watermark.
 Asserted there, never discovered downstream — a violated predicate is a
 refused discard, not a corrupted write. `first_tx_id(h)` is
-`block_info[h−1].cumulative_tx_count` (FL-R3-STORE, `BlockInfo`, landing on
-#772); `close_height(k)` is `height(b_{k+1})`, a binary search over the same
-running total. No new state for either.
+`block_info[h−1].cumulative_tx_count` for `h ≥ 1` and **`first_tx_id(0) = 0`**
+(FL-R3-STORE, `BlockInfo`, landed on #772); `close_height(k)` is
+`height(b_{k+1})`, a binary search over the same running total. No new
+state for either. **Genesis guard:** the batch evaluates the predicate
+**only when `tip ≥ W`**; while the chain is younger than `W` no shard
+discards. `tip − W` is never formed by saturating arithmetic — the store's
+`BlockHeight − BlockCount` panics on this boundary, and that is correct: a
+launch-window discard is a bug, not a zero (Q2, amended on review).
 
 ## 3. Three horizons, one constant
 
@@ -91,12 +96,16 @@ the daemon.
 
 ## 5. Store contracts in force
 
-- **The four-leg invariant** (`DAEMON_REDB_STORE.md` §7.7 + `PDM-Q-F32`):
+- **The store invariant: three legs landed, a fourth owed.**
+  `DAEMON_REDB_STORE.md` §7.7 as it stands (F26, landed with A3 on #772):
   (i) hash row ⇔ 4-part txid, permanent, written at connect, never deleted;
   (ii) segment present ⇒ hash row present; (iii) hash row ∧ segment absent ⇔
-  *discarded* — below `W` and not an exception, or never held (band 1) —
-  one store state with one meaning; (iv) length row present ⇔ hash row
-  present (S-CHAIN-W amendment A4).
+  *discarded* — below `W`, or never held (band 1) — one store state with
+  one meaning. **Owed with S-CHAIN-W amendment A4 (`PDM-Q-F32`), not yet
+  in §7.7:** (iv) the length rows, **pairwise** — prunable-length row
+  present ⇔ `txs_prunable_hash` row present; `pqc_auths`-length row
+  present ⇔ `txs_pqc_auth_hash` row present. The plan may not present
+  (iv) as in force until A4 lands.
 - **Hash rows and length rows are outside every prune surface**, permanent.
   `txs_prunable_hash` (exists), `txs_pqc_auth_hash` (A3, #772), the two
   `u32` length rows (A4, owed).
@@ -183,7 +192,7 @@ precondition.
 | `SHARD_BYTES` | 3.33 MB (`RF-D6`'s, as the boundary metric) | ruled (`PDM-Q-F32`) |
 | Length rows (A4) | two `u32` per tx, sparse | **owed** to S-CHAIN-W |
 | `b_*` | derived from the length rows, binary-searched | derived, never received |
-| `first_tx_id(h)` | `BlockInfo.cumulative_tx_count` | landing on #772 |
+| `first_tx_id(h)` | `BlockInfo.cumulative_tx_count`; `first_tx_id(0) = 0`; evaluated only for `tip ≥ W` | landed on #772 |
 | `w_launch` | flat in-window commitment weight before any shard is scarce; superseded by the derived scarce-set median at the first `discard(k)` | **reward leg's** (Q6 item 3 amendment, routing note) — a fourth numeric on the Round-2 gate; not S-PRUNE's to compute, but S-PRUNE's `discard(k)` event is what defines the *scarce set* the median is over |
 
 ## 13. C++ deletions and their timing

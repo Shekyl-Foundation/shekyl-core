@@ -3500,7 +3500,8 @@ consequence that no lane had recorded.
   alone.~~ **RULED 2026-09-17: Q6 items 1–3 and Q11 (shape; numeric
   PROVISIONAL) are ruled** — see their §2 blocks. Q6 item 4 (the
   re-key/reopen disposition of each closed leaf-shaped ruling, F25's
-  list among them) stays OPEN by name. **Unblocked by the two rulings:
+  list among them) stays OPEN by name *(as of 2026-09-17; RULED 2026-09-18 —
+  see the contract's Q6 block)*. **Unblocked by the two rulings:
   Q1, Q2, Q12; `SF` sub-PR 2; `PDM-Q-F28`.** Then the
   retained set (starting from layer 0 / `m_curve_tree_leaves`, F7;
   widened to the leaf's derivation inputs, F12; §9's `CACHE` and
