@@ -11,7 +11,7 @@
 
 use redb::ReadableTableMetadata;
 use shekyl_chain_rules::RuleSetId;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
 
@@ -21,7 +21,7 @@ use super::*;
 use crate::codec::{BlockBody, Canonical, Encoded, Raw, TotalBurnedCell};
 use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS, UNDO_LOG};
 
-fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
+fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
     connect_chain_with_burn(store, listed, 3)
 }
 
@@ -219,7 +219,9 @@ fn a_row_rewritten_around_the_journal_makes_pop_si6_not_a_silent_repair() {
     connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
     // Write around the journal: overwrite `blocks[1]` through an upsert
     // handle in a batch that records nothing.
-    let impostor = candidate(1, [0x77; 32], Vec::new()).block.serialize();
+    let impostor = candidate(1, BlockHash::from_bytes([0x77; 32]), Vec::new())
+        .block
+        .serialize();
     let around: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_upsert_table(BLOCKS)?

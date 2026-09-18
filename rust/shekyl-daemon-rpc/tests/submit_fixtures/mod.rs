@@ -21,14 +21,14 @@ use shekyl_daemon_rpc::submit::{
     SubmitFacts, SubmitStateShim, TxMeta, TxVerifier, VerificationCertificate, VerifyFailure,
     VerifyReject,
 };
-use shekyl_types::{BlockHash, BlockHeight, ChainCount, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount, PCanonicalId, TxHash};
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, TAG_INPUT_SERVE_CREDIT};
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
 /// The curve-tree root the fixture facts report at the reference height.
 pub const FIXTURE_ROOT: [u8; 32] = [0xAA; 32];
 /// The fixture reference-block hash carried by the synthetic spends.
-pub const FIXTURE_REF_BLOCK: [u8; 32] = [0x44; 32];
+pub const FIXTURE_REF_BLOCK: BlockHash = BlockHash::from_bytes([0x44; 32]);
 
 /// `n` valid key images — distinct prime-order, non-identity points
 /// (basepoint multiples), ordered **strictly descending** by compressed
@@ -157,7 +157,7 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],
@@ -315,7 +315,7 @@ pub struct SnapshotRecord {
     pub reference_block: BlockHash,
     /// The §8.7.1 BP3 probe key the engine passed (bond-post submissions
     /// only).
-    pub bond_p_canonical_id: Option<[u8; 32]>,
+    pub bond_p_canonical_id: Option<PCanonicalId>,
     /// Which archival-bond question the engine asked (§8.7.1 BP3 vs
     /// §8.7.1.1): the debit arm needs the record's contents, not just its
     /// presence, and asking the wrong one is invisible in the id alone.

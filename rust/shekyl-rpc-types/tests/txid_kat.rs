@@ -23,9 +23,9 @@
 
 use shekyl_wire::Transaction;
 
-fn hex32(bytes: &[u8; 32]) -> String {
+fn hex32(bytes: impl AsRef<[u8]>) -> String {
     let mut s = String::with_capacity(64);
-    for b in bytes {
+    for b in bytes.as_ref() {
         s.push_str(&format!("{b:02x}"));
     }
     s
@@ -56,7 +56,7 @@ fn engine_txid_equals_cpp_get_transaction_hash_over_oracle_blobs() {
         let tx = Transaction::from_bytes(blob)
             .unwrap_or_else(|e| panic!("oracle blob {i} must parse: {e}"));
         assert_eq!(
-            hex32(&tx.hash()),
+            hex32(tx.hash()),
             *cpp_txid,
             "oracle blob {i}: shekyl-wire txid diverged from C++ get_transaction_hash — \
              the §3.4 txid authority equivalence is broken"

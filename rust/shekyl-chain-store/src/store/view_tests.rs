@@ -11,7 +11,7 @@
 //! poison path.
 
 use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, RuleSet};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
@@ -50,13 +50,13 @@ fn block(height: u64, timestamp: u64) -> Block {
             major_version: 1,
             minor_version: 0,
             timestamp,
-            previous: [0x11; 32],
+            previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 7,
             // Recorded blocks are written straight into the tables here
             // (not through `validate`), so this header is not judged under
             // CEN-B5; the value is a placeholder, as it is in LMDB fixtures.
-            curve_tree_root: [0x22; 32],
-            attestation_root: [0x33; 32],
+            curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
+            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: coinbase(height),
         transaction_hashes: Vec::new(),
@@ -75,7 +75,7 @@ fn record_block(batch: &WriteBatch<'_, '_>, height: u64, blk: &Block) -> Result<
         coins_generated: shekyl_units::AtomicUnits::ZERO,
         weight: shekyl_types::BlockWeight::ZERO,
         cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty::from_raw(1),
-        hash: shekyl_types::BlockHash::from_bytes(blk.hash()),
+        hash: blk.hash(),
         rct_outputs: 0,
         long_term_weight: shekyl_types::LongTermWeight::ZERO,
         cumulative_tx_count: 0,
@@ -176,13 +176,13 @@ fn tip_is_none_on_an_empty_chain_and_the_last_recorded_identity_after() {
         record_block(batch, 0, &b0)?;
         let tip = view.tip()?.expect("one block recorded");
         assert_eq!(tip.height, BlockHeight::ZERO);
-        assert_eq!(tip.hash, BlockHash::from_bytes(b0.hash()));
+        assert_eq!(tip.hash, b0.hash());
 
         let b1 = block(1, 1_060);
         record_block(batch, 1, &b1)?;
         let tip = view.tip()?.expect("two blocks recorded");
         assert_eq!(tip.height, BlockHeight::from_raw(1));
-        assert_eq!(tip.hash, BlockHash::from_bytes(b1.hash()));
+        assert_eq!(tip.hash, b1.hash());
         let AtHeight::Recorded(recorded) = view.block_at(tip.height)? else {
             panic!("the tip's height is recorded");
         };
@@ -254,7 +254,7 @@ fn block_at_returns_the_identity_and_the_header_parsed_from_the_recorded_blob() 
         let AtHeight::Recorded(recorded) = view.block_at(BlockHeight::ZERO)? else {
             panic!("block 0 is recorded");
         };
-        assert_eq!(recorded.hash, BlockHash::from_bytes(blk.hash()));
+        assert_eq!(recorded.hash, blk.hash());
         assert_eq!(recorded.header, blk.header);
         assert_eq!(
             view.block_at(BlockHeight::from_raw(1))?,
@@ -310,7 +310,7 @@ fn a_block_blob_that_does_not_hash_to_block_info_is_si7() {
             coins_generated: shekyl_units::AtomicUnits::ZERO,
             weight: shekyl_types::BlockWeight::ZERO,
             cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty::from_raw(1),
-            hash: shekyl_types::BlockHash::from_bytes(recorded.hash()),
+            hash: recorded.hash(),
             rct_outputs: 0,
             long_term_weight: shekyl_types::LongTermWeight::ZERO,
             cumulative_tx_count: 0,
@@ -377,7 +377,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         // 0 left. The title's claim is now the verdict, not just the type.
         let mut b1 = block(1, 1_060);
         b1.header.previous = genesis.hash();
-        b1.header.curve_tree_root = [0xaa; 32];
+        b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
         let valid = validate(Candidate::new(b1, Vec::new()), &view, &RuleSet::GENESIS)?
             .expect("block 1 built on block 0 satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSet::GENESIS.id());
@@ -386,7 +386,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         // And a block 1 that does not build on block 0 is refused, not
         // connected-then-caught: the rule sits in front of SI-2's belt.
         let mut orphan = block(1, 1_060);
-        orphan.header.curve_tree_root = [0xaa; 32];
+        orphan.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
         let Err(refused) = validate(Candidate::new(orphan, Vec::new()), &view, &RuleSet::GENESIS)?
         else {
             panic!("a block 1 not built on block 0 is refused");
@@ -398,7 +398,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         let AtHeight::Recorded(recorded) = view.block_at(BlockHeight::ZERO)? else {
             panic!("block 0 is visible to the second block's validation");
         };
-        assert_eq!(recorded.hash, BlockHash::from_bytes(genesis.hash()));
+        assert_eq!(recorded.hash, genesis.hash());
         Ok(())
     });
     assert_eq!(out, Ok(()));
@@ -540,15 +540,15 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
         .expect("tip_of")
         .expect("two blocks recorded");
     assert_eq!(tip.0, 1);
-    assert_eq!(tip.1.hash.to_bytes(), blk1.hash());
+    assert_eq!(tip.1.hash, blk1.hash());
     match chain_reads::block_body(&txn, Some(&tip), 1).expect("block_body") {
         AtHeight::Recorded((hash, body)) => {
-            assert_eq!(hash.to_bytes(), blk1.hash());
+            assert_eq!(hash, blk1.hash());
             assert_eq!(body, blk1);
             assert_eq!(
                 batch_tip_block,
                 AtHeight::Recorded(RecordedBlock {
-                    hash: BlockHash::from_bytes(hash.to_bytes()),
+                    hash,
                     header: body.header,
                 }),
                 "the batch view is the same body wrapped"
@@ -682,7 +682,7 @@ fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
         else {
             panic!("height 1 is recorded");
         };
-        assert_eq!(recorded.hash, BlockHash::from_bytes(block(1, 1_060).hash()));
+        assert_eq!(recorded.hash, block(1, 1_060).hash());
         Ok(())
     });
     assert_eq!(out, Ok(()), "the recorded rows are as they were");

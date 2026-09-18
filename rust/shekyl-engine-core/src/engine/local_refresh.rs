@@ -159,7 +159,7 @@ use std::time::Duration;
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use shekyl_rpc_client::RpcError;
 use shekyl_scanner::{ScanError, ScanOutcome, ScannableBlock, Scanner, ViewPair, MAX_OUTPUTS};
-use shekyl_types::PCanonicalId;
+use shekyl_types::{BlockHash, CurveTreeRoot, PCanonicalId};
 use shekyl_wire::Input;
 use std::collections::BTreeMap;
 
@@ -688,7 +688,7 @@ impl RefreshEngine for LocalRefresh {
                 .await?;
                 effective_parent_hash = Some(parent.block.hash());
             }
-            let mut block_hashes: Vec<(u64, [u8; 32])> = Vec::new();
+            let mut block_hashes: Vec<(u64, BlockHash)> = Vec::new();
             let mut new_transfers: Vec<DetectedTransfer> = Vec::new();
             let mut spent_key_images: Vec<KeyImageObserved> = Vec::new();
             let mut bond_sightings: Vec<BondSightingObserved> = Vec::new();
@@ -705,7 +705,7 @@ impl RefreshEngine for LocalRefresh {
             // here where the `ScannableBlock` is in hand and carried on
             // `ScanResult` for the merge-driven ingest (CT-5a commit 4).
             let mut block_leaves: Vec<(u64, Vec<OwnedTxLeaves>)> = Vec::new();
-            let mut block_curve_tree_roots: Vec<(u64, [u8; 32])> = Vec::new();
+            let mut block_curve_tree_roots: Vec<(u64, CurveTreeRoot)> = Vec::new();
 
             let mut h = original_start;
             while h < end {
@@ -754,7 +754,7 @@ impl RefreshEngine for LocalRefresh {
                 if h > 1 {
                     let expected_parent = match block_hashes.last() {
                         Some(&(prev_h, prev_hash)) if prev_h + 1 == h => Some(prev_hash),
-                        _ => snapshot.block_hash_at(h - 1).or(if h == effective_start {
+                        _ => parent_hash_for_start(&snapshot, h).or(if h == effective_start {
                             effective_parent_hash
                         } else {
                             None
@@ -918,9 +918,8 @@ impl RefreshEngine for LocalRefresh {
                 let mut miner_tx_hash: Option<shekyl_types::TxHash> = None;
                 for input in &miner_tx.prefix.inputs {
                     if let Input::ToKey { key_image, .. } = input {
-                        let containing_tx_hash = *miner_tx_hash.get_or_insert_with(|| {
-                            shekyl_types::TxHash::from_bytes(miner_tx.hash())
-                        });
+                        let containing_tx_hash =
+                            *miner_tx_hash.get_or_insert_with(|| miner_tx.hash());
                         spent_key_images.push(KeyImageObserved {
                             block_height: h,
                             key_image: shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
@@ -946,7 +945,7 @@ impl RefreshEngine for LocalRefresh {
                                     shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
                                         *key_image,
                                     ),
-                                containing_tx_hash: shekyl_types::TxHash::from_bytes(*tx_hash),
+                                containing_tx_hash: *tx_hash,
                             });
                         }
                     }
@@ -1077,12 +1076,13 @@ impl RefreshEngine for LocalRefresh {
 /// Resolve the `parent_hash` field for a result whose
 /// `processed_height_range.start == start`. Returns `None` for
 /// genesis (`start <= 1`) and the snapshot's recorded hash at
-/// `start - 1` otherwise.
-fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<[u8; 32]> {
+/// `start - 1` otherwise — typed here, at the seam where the persisted
+/// reorg rows (bytes until RAW_TYPE PR C) meet the typed scan.
+fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<BlockHash> {
     if start <= 1 {
         None
     } else {
-        snapshot.block_hash_at(start - 1)
+        snapshot.block_hash_at(start - 1).map(BlockHash::from_bytes)
     }
 }
 
@@ -1208,7 +1208,7 @@ async fn find_fork_point<R: DaemonEngine>(
             return Ok(1);
         }
 
-        let Some(stored_hash) = snapshot.block_hash_at(h) else {
+        let Some(stored_hash) = snapshot.block_hash_at(h).map(BlockHash::from_bytes) else {
             return Ok(h + 1);
         };
 

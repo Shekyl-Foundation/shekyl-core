@@ -27,7 +27,7 @@ fn make_recovered_output(seed: u8, global_index: u64) -> RecoveredWalletOutput {
     let scalar = Scalar::from_bytes_mod_order(bytes);
     let key = &scalar * ED25519_BASEPOINT_TABLE;
     let base = WalletOutput::new_for_test(
-        [seed; 32],
+        TxHash::from_bytes([seed; 32]),
         0,
         global_index,
         key,
@@ -47,14 +47,14 @@ fn empty_state() -> (LedgerBlock, LedgerIndexes) {
 #[test]
 fn apply_scan_result_accepts_birthday_anchored_start() {
     let (mut ledger, mut indexes) = empty_state();
-    let parent = [0x55; 32];
+    let parent = BlockHash::from_bytes([0x55; 32]);
     super::super::scan_floor::anchor_ledger_block(&mut ledger, 999, parent)
         .expect("anchor at birthday boundary");
 
     let result = ScanResult {
         processed_height_range: 1000..1001,
         parent_hash: Some(parent),
-        block_hashes: vec![(1000, [0x66; 32])],
+        block_hashes: vec![(1000, BlockHash::from_bytes([0x66; 32]))],
         new_transfers: vec![],
         spent_key_images: vec![],
         reorg_rewind: None,
@@ -84,7 +84,7 @@ fn apply_refuses_a_result_with_attached_bond_sightings() {
     let (mut ledger, mut indexes) = empty_state();
     let mut result = ScanResult::empty_at(1, None);
     result.processed_height_range = 1..2;
-    result.block_hashes = vec![(1, [0x11; 32])];
+    result.block_hashes = vec![(1, BlockHash::from_bytes([0x11; 32]))];
     result
         .bond_sightings
         .push(crate::scan::BondSightingObserved {
@@ -116,7 +116,7 @@ fn apply_rejects_wrong_start_height() {
 #[test]
 fn apply_rejects_some_parent_hash_at_genesis() {
     let (mut ledger, mut indexes) = empty_state();
-    let result = ScanResult::empty_at(1, Some([0xAA; 32]));
+    let result = ScanResult::empty_at(1, Some(BlockHash::from_bytes([0xAA; 32])));
     let err = apply_scan_result_to_state(&mut ledger, &mut indexes, result).unwrap_err();
     assert!(matches!(err, RefreshError::ConcurrentMutation { .. }));
 }
@@ -127,7 +127,11 @@ fn apply_advances_synced_height_for_blocks_without_events() {
     let result = ScanResult {
         processed_height_range: 1..4,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32]), (3, [0x33; 32])],
+        block_hashes: vec![
+            (1, BlockHash::from_bytes([0x11; 32])),
+            (2, BlockHash::from_bytes([0x22; 32])),
+            (3, BlockHash::from_bytes([0x33; 32])),
+        ],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -148,7 +152,7 @@ fn apply_detects_parent_hash_mismatch() {
     let first = ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -161,8 +165,8 @@ fn apply_detects_parent_hash_mismatch() {
     // Second batch claims a different parent hash for height 1 — must be rejected.
     let second = ScanResult {
         processed_height_range: 2..3,
-        parent_hash: Some([0xFF; 32]),
-        block_hashes: vec![(2, [0x22; 32])],
+        parent_hash: Some(BlockHash::from_bytes([0xFF; 32])),
+        block_hashes: vec![(2, BlockHash::from_bytes([0x22; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -181,7 +185,7 @@ fn apply_accepts_matching_parent_hash() {
     let first = ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -193,8 +197,8 @@ fn apply_accepts_matching_parent_hash() {
 
     let second = ScanResult {
         processed_height_range: 2..3,
-        parent_hash: Some([0x11; 32]),
-        block_hashes: vec![(2, [0x22; 32])],
+        parent_hash: Some(BlockHash::from_bytes([0x11; 32])),
+        block_hashes: vec![(2, BlockHash::from_bytes([0x22; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -213,7 +217,10 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
     let result = ScanResult {
         processed_height_range: 1..3,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+        block_hashes: vec![
+            (1, BlockHash::from_bytes([0x11; 32])),
+            (2, BlockHash::from_bytes([0x22; 32])),
+        ],
         new_transfers: vec![DetectedTransfer {
             block_height: 1,
             output,
@@ -243,8 +250,8 @@ fn apply_ingests_detected_transfer_and_marks_spent() {
 
     let result = ScanResult {
         processed_height_range: 3..4,
-        parent_hash: Some([0x22; 32]),
-        block_hashes: vec![(3, [0x33; 32])],
+        parent_hash: Some(BlockHash::from_bytes([0x22; 32])),
+        block_hashes: vec![(3, BlockHash::from_bytes([0x33; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: vec![KeyImageObserved {
             block_height: 3,
@@ -282,7 +289,10 @@ fn apply_scan_result_to_state_returns_indices_of_new_transfers() {
     let first = ScanResult {
         processed_height_range: 1..3,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+        block_hashes: vec![
+            (1, BlockHash::from_bytes([0x11; 32])),
+            (2, BlockHash::from_bytes([0x22; 32])),
+        ],
         new_transfers: vec![
             DetectedTransfer {
                 block_height: 1,
@@ -313,8 +323,8 @@ fn apply_scan_result_to_state_returns_indices_of_new_transfers() {
     // post-prior-merge offset (start at 3, not 0).
     let second = ScanResult {
         processed_height_range: 3..4,
-        parent_hash: Some([0x22; 32]),
-        block_hashes: vec![(3, [0x33; 32])],
+        parent_hash: Some(BlockHash::from_bytes([0x22; 32])),
+        block_hashes: vec![(3, BlockHash::from_bytes([0x33; 32]))],
         new_transfers: vec![DetectedTransfer {
             block_height: 3,
             output: make_recovered_output(4, 103),
@@ -334,8 +344,8 @@ fn apply_scan_result_to_state_returns_indices_of_new_transfers() {
     // advance. Returned Vec is empty.
     let third = ScanResult {
         processed_height_range: 4..5,
-        parent_hash: Some([0x33; 32]),
-        block_hashes: vec![(4, [0x44; 32])],
+        parent_hash: Some(BlockHash::from_bytes([0x33; 32])),
+        block_hashes: vec![(4, BlockHash::from_bytes([0x44; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -358,7 +368,7 @@ fn apply_handles_reorg_rewind_before_per_height_events() {
         processed_height_range: 1..6,
         parent_hash: None,
         block_hashes: (1u64..6)
-            .map(|h| (h, [u8::try_from(h).unwrap(); 32]))
+            .map(|h| (h, BlockHash::from_bytes([u8::try_from(h).unwrap(); 32])))
             .collect(),
         new_transfers: vec![DetectedTransfer {
             block_height: 3,
@@ -379,8 +389,12 @@ fn apply_handles_reorg_rewind_before_per_height_events() {
     let new_output = make_recovered_output(3, 201);
     let second = ScanResult {
         processed_height_range: 3..6,
-        parent_hash: Some([2u8; 32]),
-        block_hashes: vec![(3, [0xA3; 32]), (4, [0xA4; 32]), (5, [0xA5; 32])],
+        parent_hash: Some(BlockHash::from_bytes([2u8; 32])),
+        block_hashes: vec![
+            (3, BlockHash::from_bytes([0xA3; 32])),
+            (4, BlockHash::from_bytes([0xA4; 32])),
+            (5, BlockHash::from_bytes([0xA5; 32])),
+        ],
         new_transfers: vec![DetectedTransfer {
             block_height: 4,
             output: new_output,
@@ -409,7 +423,7 @@ fn apply_rejects_short_block_hashes_as_malformed() {
     let result = ScanResult {
         processed_height_range: 1..3,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -429,7 +443,10 @@ fn apply_rejects_duplicate_block_hash_height() {
     let result = ScanResult {
         processed_height_range: 1..3,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (1, [0x99; 32])],
+        block_hashes: vec![
+            (1, BlockHash::from_bytes([0x11; 32])),
+            (1, BlockHash::from_bytes([0x99; 32])),
+        ],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -486,7 +503,7 @@ fn apply_rejects_reorg_fork_height_zero_as_malformed() {
     let result = ScanResult {
         processed_height_range: 0..1,
         parent_hash: None,
-        block_hashes: vec![(0, [0x00; 32])],
+        block_hashes: vec![(0, BlockHash::from_bytes([0x00; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: Some(ReorgRewind { fork_height: 0 }),
@@ -513,7 +530,10 @@ fn apply_rejects_out_of_range_block_hash() {
     let result = ScanResult {
         processed_height_range: 1..3,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (5, [0x55; 32])],
+        block_hashes: vec![
+            (1, BlockHash::from_bytes([0x11; 32])),
+            (5, BlockHash::from_bytes([0x55; 32])),
+        ],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -533,7 +553,10 @@ fn apply_rejects_out_of_range_transfer() {
     let result = ScanResult {
         processed_height_range: 1..3,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+        block_hashes: vec![
+            (1, BlockHash::from_bytes([0x11; 32])),
+            (2, BlockHash::from_bytes([0x22; 32])),
+        ],
         new_transfers: vec![DetectedTransfer {
             block_height: 7,
             output,
@@ -555,7 +578,10 @@ fn apply_rejects_out_of_range_key_image() {
     let result = ScanResult {
         processed_height_range: 1..3,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+        block_hashes: vec![
+            (1, BlockHash::from_bytes([0x11; 32])),
+            (2, BlockHash::from_bytes([0x22; 32])),
+        ],
         new_transfers: Vec::new(),
         spent_key_images: vec![KeyImageObserved {
             block_height: 9,
@@ -579,7 +605,7 @@ fn apply_rejects_events_against_empty_range() {
     let result = ScanResult {
         processed_height_range: 1..1,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -598,6 +624,7 @@ use std::collections::HashMap;
 use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
 
 use super::populate_engine_handle_fields;
+use shekyl_types::{BlockHash, TxHash};
 
 fn ciphertext_for_seed(seed: u8) -> HybridCiphertext {
     let mut x25519 = [0u8; 32];
@@ -625,7 +652,7 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     let result = ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: vec![DetectedTransfer {
             block_height: 1,
             output,
@@ -644,7 +671,7 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
         .transfers()
         .iter()
         .find(|t| {
-            t.tx_hash.as_bytes() == &tx_hash
+            t.tx_hash == tx_hash
                 && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
         })
         .expect("merged transfer present");
@@ -656,7 +683,7 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     let mut residue = HashMap::new();
     residue.insert(
         (
-            shekyl_types::TxHash::from_bytes(tx_hash),
+            tx_hash,
             shekyl_types::OutputIndexInTx::from_raw(internal_idx),
         ),
         ct.clone(),
@@ -668,7 +695,7 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
         .transfers()
         .iter()
         .find(|t| {
-            t.tx_hash.as_bytes() == &tx_hash
+            t.tx_hash == tx_hash
                 && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
         })
         .expect("merged transfer still present");
@@ -680,7 +707,7 @@ fn populate_engine_handle_fields_sets_both_fields_on_match() {
     assert_eq!(stored_ct.ml_kem, ct.ml_kem);
 
     let stored_handle = td.output_handle.as_ref().expect("output_handle set");
-    let expected_handle = derive_output_handle(&view_secret, &tx_hash, internal_idx);
+    let expected_handle = derive_output_handle(&view_secret, tx_hash.as_bytes(), internal_idx);
     assert_eq!(*stored_handle, expected_handle);
 }
 
@@ -699,7 +726,7 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
     let result = ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: vec![
             DetectedTransfer {
                 block_height: 1,
@@ -722,7 +749,7 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
     let mut residue = HashMap::new();
     residue.insert(
         (
-            shekyl_types::TxHash::from_bytes(matched_tx),
+            matched_tx,
             shekyl_types::OutputIndexInTx::from_raw(matched_idx),
         ),
         ciphertext_for_seed(0x01),
@@ -733,7 +760,7 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
         .transfers()
         .iter()
         .find(|t| {
-            t.tx_hash.as_bytes() == &matched_tx
+            t.tx_hash == matched_tx
                 && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(matched_idx)
         })
         .expect("matched transfer present");
@@ -744,7 +771,7 @@ fn populate_engine_handle_fields_skips_unmatched_transfers() {
         .transfers()
         .iter()
         .find(|t| {
-            t.tx_hash.as_bytes() == &unmatched_tx
+            t.tx_hash == unmatched_tx
                 && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(unmatched_idx)
         })
         .expect("unmatched transfer present");
@@ -763,7 +790,7 @@ fn populate_engine_handle_fields_is_idempotent() {
     let result = ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: vec![DetectedTransfer {
             block_height: 1,
             output,
@@ -781,7 +808,7 @@ fn populate_engine_handle_fields_is_idempotent() {
     let mut residue = HashMap::new();
     residue.insert(
         (
-            shekyl_types::TxHash::from_bytes(tx_hash),
+            tx_hash,
             shekyl_types::OutputIndexInTx::from_raw(internal_idx),
         ),
         ct1.clone(),
@@ -796,7 +823,7 @@ fn populate_engine_handle_fields_is_idempotent() {
     let mut residue2 = HashMap::new();
     residue2.insert(
         (
-            shekyl_types::TxHash::from_bytes(tx_hash),
+            tx_hash,
             shekyl_types::OutputIndexInTx::from_raw(internal_idx),
         ),
         ct2,
@@ -807,7 +834,7 @@ fn populate_engine_handle_fields_is_idempotent() {
         .transfers()
         .iter()
         .find(|t| {
-            t.tx_hash.as_bytes() == &tx_hash
+            t.tx_hash == tx_hash
                 && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
         })
         .expect("merged transfer present");
@@ -841,7 +868,7 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let result = ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: vec![
             DetectedTransfer {
                 block_height: 1,
@@ -867,13 +894,13 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let sentinel_ct = ciphertext_for_seed(0xEE);
     let sentinel_handle = derive_output_handle(&[0xCC; 32], &[0xCC; 32], 0xCC);
     for td in &mut ledger.transfers {
-        if td.tx_hash.as_bytes() == &tx_hash_a
+        if td.tx_hash == tx_hash_a
             && td.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx_a)
         {
             // Transfer A: source_ciphertext pre-populated, output_handle still None.
             td.source_ciphertext = Some(sentinel_ct.clone());
             td.output_handle = None;
-        } else if td.tx_hash.as_bytes() == &tx_hash_b
+        } else if td.tx_hash == tx_hash_b
             && td.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx_b)
         {
             // Transfer B: output_handle pre-populated, source_ciphertext still None.
@@ -888,14 +915,14 @@ fn populate_engine_handle_fields_respects_partial_population() {
     let mut residue = HashMap::new();
     residue.insert(
         (
-            shekyl_types::TxHash::from_bytes(tx_hash_a),
+            tx_hash_a,
             shekyl_types::OutputIndexInTx::from_raw(internal_idx_a),
         ),
         real_ct_a.clone(),
     );
     residue.insert(
         (
-            shekyl_types::TxHash::from_bytes(tx_hash_b),
+            tx_hash_b,
             shekyl_types::OutputIndexInTx::from_raw(internal_idx_b),
         ),
         real_ct_b.clone(),
@@ -906,7 +933,7 @@ fn populate_engine_handle_fields_respects_partial_population() {
         .transfers()
         .iter()
         .find(|t| {
-            t.tx_hash.as_bytes() == &tx_hash_a
+            t.tx_hash == tx_hash_a
                 && t.internal_output_index
                     == shekyl_types::OutputIndexInTx::from_raw(internal_idx_a)
         })
@@ -920,7 +947,7 @@ fn populate_engine_handle_fields_respects_partial_population() {
         stored_ct_a.x25519, sentinel_ct.x25519,
         "pre-populated source_ciphertext must not be overwritten"
     );
-    let derived_handle_a = derive_output_handle(&view_secret, &tx_hash_a, internal_idx_a);
+    let derived_handle_a = derive_output_handle(&view_secret, tx_hash_a.as_bytes(), internal_idx_a);
     assert_eq!(
         td_a.output_handle.expect("output_handle filled"),
         derived_handle_a,
@@ -931,7 +958,7 @@ fn populate_engine_handle_fields_respects_partial_population() {
         .transfers()
         .iter()
         .find(|t| {
-            t.tx_hash.as_bytes() == &tx_hash_b
+            t.tx_hash == tx_hash_b
                 && t.internal_output_index
                     == shekyl_types::OutputIndexInTx::from_raw(internal_idx_b)
         })
@@ -992,7 +1019,7 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     let first = ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: prior_outputs
             .into_iter()
             .map(|output| DetectedTransfer {
@@ -1025,8 +1052,8 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     let new_idx = new_output.wallet_output().index_in_transaction();
     let second = ScanResult {
         processed_height_range: 2..3,
-        parent_hash: Some([0x11; 32]),
-        block_hashes: vec![(2, [0x22; 32])],
+        parent_hash: Some(BlockHash::from_bytes([0x11; 32])),
+        block_hashes: vec![(2, BlockHash::from_bytes([0x22; 32]))],
         new_transfers: vec![DetectedTransfer {
             block_height: 2,
             output: new_output,
@@ -1045,10 +1072,7 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     let view_secret = [0xCCu8; 32];
     let mut residue = HashMap::new();
     residue.insert(
-        (
-            shekyl_types::TxHash::from_bytes(new_tx),
-            shekyl_types::OutputIndexInTx::from_raw(new_idx),
-        ),
+        (new_tx, shekyl_types::OutputIndexInTx::from_raw(new_idx)),
         ciphertext_for_seed(0xB0),
     );
     // Prior-key residue entries: read the ACTUAL prior
@@ -1105,7 +1129,7 @@ fn populate_engine_handle_fields_visits_only_inserted_indices() {
     assert!(new.output_handle.is_some());
     assert_eq!(
         new.output_handle.expect("output_handle filled"),
-        derive_output_handle(&view_secret, &new_tx, new_idx),
+        derive_output_handle(&view_secret, new_tx.as_bytes(), new_idx),
     );
 }
 
@@ -1118,7 +1142,7 @@ fn populate_engine_handle_fields_no_op_on_empty_residue() {
     let result = ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: vec![DetectedTransfer {
             block_height: 1,
             output,
@@ -1140,7 +1164,7 @@ fn populate_engine_handle_fields_no_op_on_empty_residue() {
         .transfers()
         .iter()
         .find(|t| {
-            t.tx_hash.as_bytes() == &tx_hash
+            t.tx_hash == tx_hash
                 && t.internal_output_index == shekyl_types::OutputIndexInTx::from_raw(internal_idx)
         })
         .expect("merged transfer present");

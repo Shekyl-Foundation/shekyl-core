@@ -82,6 +82,7 @@ use shekyl_curve_tree::{
 };
 
 use crate::scan::OwnedTxLeaves;
+use shekyl_types::CurveTreeRoot;
 
 // ---------------------------------------------------------------------------
 // Actor
@@ -293,7 +294,7 @@ pub(crate) struct VerifyRoot {
     /// The height whose reconstructed root to check (must be `<=` ingested tip).
     pub height: BlockHeight,
     /// The consensus header-committed root the reconstruction must match.
-    pub expected_root: [u8; 32],
+    pub expected_root: CurveTreeRoot,
 }
 
 /// Actor message reading [`CurveTreeClient::root_and_depth_at`]: the
@@ -446,13 +447,12 @@ impl Message<VerifyRoot> for CurveTreeActor {
         // error from `root_at` (e.g. `Poisoned`) propagates as-is; only a
         // genuine divergence becomes `RootMismatch`.
         let got = self.client.root_at(msg.height)?;
-        let expected = shekyl_curve_tree::CurveTreeRoot::from_bytes(msg.expected_root);
-        if got == expected {
+        if got == msg.expected_root {
             Ok(())
         } else {
             Err(ClientError::RootMismatch {
                 height: msg.height,
-                expected,
+                expected: msg.expected_root,
                 got,
             })
         }
@@ -885,7 +885,7 @@ impl CurveTreeHandle {
     pub(crate) async fn verify_root(
         &self,
         height: BlockHeight,
-        expected_root: [u8; 32],
+        expected_root: CurveTreeRoot,
     ) -> Result<(), CurveTreeHandleError> {
         self.actor_ref()
             .ask(VerifyRoot {

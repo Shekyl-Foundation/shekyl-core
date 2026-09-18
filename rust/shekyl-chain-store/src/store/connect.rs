@@ -330,7 +330,7 @@ impl<'id> WriteBatch<'_, 'id> {
                         fault: CellFault::Undecodable(cause),
                     })
                 })?;
-                if valid.block().header().previous != info.hash.to_bytes() {
+                if valid.block().header().previous != info.hash {
                     return Err(self.poison().arm(StoreInvariant::TipMismatch));
                 }
                 parent_tx_count = info.cumulative_tx_count;

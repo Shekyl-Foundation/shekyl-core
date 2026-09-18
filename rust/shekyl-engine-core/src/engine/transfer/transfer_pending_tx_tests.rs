@@ -223,7 +223,7 @@ fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredW
         amount,
     };
     let base = WalletOutput::new_for_test(
-        tx_hash,
+        shekyl_types::TxHash::from_bytes(tx_hash),
         output_index,
         global_index,
         key,
@@ -2303,7 +2303,7 @@ struct RealTreeBondProofs {
     spend_key_x: [u8; 32],
     fee: u64,
     floor: u64,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: shekyl_types::PrefixHash,
 }
 
 async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
@@ -2337,7 +2337,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
     let fee: u64 = 1_000;
     // Funding covers the change output, the fee, and the bond credit.
     let input_amount: u64 = floor + fee + 1_000_000;
-    let signable_tx_hash = [0xC3u8; 32];
+    let signable_tx_hash = shekyl_types::PrefixHash::from_bytes([0xC3u8; 32]);
 
     // ── A real, consistent ledger+tree (depth 2: two drained leaves) ─
     // The bond spends gindex 0 (the first leaf); the second leaf makes the
@@ -2427,8 +2427,8 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         })
         .collect();
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block.to_bytes(),
-        tree_root: path.tree.tree_root.to_bytes(),
+        reference_block: path.tree.reference_block,
+        tree_root: path.tree.tree_root,
         tree_depth: path.tree.tree_depth,
     };
 
@@ -2561,9 +2561,9 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        &tree_ctx.tree_root,
+        tree_ctx.tree_root.as_bytes(),
         tree_ctx.tree_depth,
-        signable_tx_hash,
+        signable_tx_hash.to_bytes(),
     );
     assert!(
         matches!(fcmp_result, Ok(true)),

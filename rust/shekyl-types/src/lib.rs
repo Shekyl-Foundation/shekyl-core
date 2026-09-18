@@ -271,7 +271,31 @@ macro_rules! hash32 {
             }
         }
 
+        impl Hash32Bytes for $name {
+            fn from_bytes(bytes: [u8; 32]) -> Self {
+                $name(bytes)
+            }
+            fn as_bytes(&self) -> &[u8; 32] {
+                &self.0
+            }
+        }
     };
+}
+
+/// The byte edge of a `hash32!` identity, as a bound.
+///
+/// Each member already exposes inherent `from_bytes` / `as_bytes` /
+/// `to_bytes`. This trait is what a generic helper names so a new family
+/// member is usable without a second hex-serde (or store-key) copy.
+pub trait Hash32Bytes: Copy + Sized {
+    /// Wrap raw bytes. Same contract as the inherent edge constructor.
+    fn from_bytes(bytes: [u8; 32]) -> Self;
+    /// Borrow the raw bytes. Same contract as the inherent accessor.
+    fn as_bytes(&self) -> &[u8; 32];
+    /// Unwrap to the raw bytes.
+    fn to_bytes(self) -> [u8; 32] {
+        *self.as_bytes()
+    }
 }
 
 scalar_u64! {
@@ -444,12 +468,52 @@ hash32! {
     BlockHash
 }
 
+impl BlockHash {
+    /// The **null hash** — 32 zero bytes — as a block identity: the genesis
+    /// block's `previous` (CEN-A2: a candidate's parent is the tip's hash,
+    /// or null when there is no tip), the C++ `null_hash`.
+    ///
+    /// Named once, here, so the genesis parent is a constant every crate
+    /// reads rather than a `[0u8; 32]` each one spells — the consensus rule
+    /// aliases it as `A2::GENESIS_PREVIOUS`, fixtures chain from it, and the
+    /// genesis tool writes it. It is a *block hash* on purpose: no
+    /// `CurveTreeRoot` or `TxHash` gets a `NULL`, because for a root the
+    /// all-zero encoding is the identity point (CEN-I12's hazard;
+    /// [`CurveTreeRoot::EMPTY`] is the real empty state), and a null txid
+    /// names no transaction.
+    pub const NULL: Self = Self::from_bytes([0u8; 32]);
+}
+
 hash32! {
     /// A transaction identity hash (txid).
     ///
     /// Distinct from [`BlockHash`]. Canonical replacement for the ad-hoc
     /// `TxHash([u8; 32])` previously defined in `shekyl-engine-core`.
+    ///
+    /// The **output** of the txid construction. Its inputs are the
+    /// component hashes — [`PrefixHash`] (first), the base hash (second,
+    /// never surfaced), [`PqcAuthHash`] (third), [`PrunableHash`] (fourth)
+    /// — and each is a distinct type so no component can be passed where
+    /// the txid is expected, or the txid where a component is
+    /// (`RTN-7`, `RTN_7_WIRE_HASH_TYPES.md` Q3).
     TxHash
+}
+
+hash32! {
+    /// `keccak256(varint(TX_VERSION) ‖ transaction_prefix)` — the **first
+    /// component** of a transaction's [`TxHash`], and the FCMP++
+    /// `signable_tx_hash` the membership/SAL proof signs
+    /// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `cn_fast_hash` over
+    /// `transaction_prefix`, version varint first).
+    ///
+    /// A member of the component-hash family beside [`PqcAuthHash`] and
+    /// [`PrunableHash`], not a signing-specific category: the value the
+    /// builder signs *is* the txid's first component, and one type for one
+    /// value is what lets the type system refuse the confusion a bare
+    /// `[u8; 32]` permits — a prefix hash passed to `TxHash::from_bytes`, or
+    /// a txid handed to the signer (`RTN-7`, Q3). Distinct from [`TxHash`]
+    /// in both directions.
+    PrefixHash
 }
 
 hash32! {
@@ -498,8 +562,9 @@ hash32! {
     /// The block-header **attestation root** (archival credit-wire witness
     /// commitment), not a [`CurveTreeRoot`] and not a [`BlockHash`].
     ///
-    /// The wire header stores `[u8; 32]`; convert at the edge via
-    /// [`AttestationRoot::from_bytes`] / [`AttestationRoot::as_bytes`].
+    /// The wire header field is this type (`shekyl_wire::BlockHeader`). The
+    /// codec reads and writes the 32 bytes via [`Self::from_bytes`] /
+    /// [`Self::as_bytes`].
     AttestationRoot
 }
 
@@ -531,9 +596,9 @@ hash32! {
     /// must carry is the consensus state transition (`CONSENSUS_C2_R8_STORE_PLACEMENT.md`
     /// §5), owned by `shekyl-curve-tree` and the validation crate. Minted here
     /// so a rule can *read* a recorded root without depending on the crate that
-    /// computes it — the low-level wire header stores the raw `[u8; 32]`
-    /// (rule 18 byte-layout) and converts at its edge via
-    /// [`CurveTreeRoot::from_bytes`] / [`CurveTreeRoot::as_bytes`].
+    /// computes it. The wire header field is this type
+    /// (`shekyl_wire::BlockHeader.curve_tree_root`); the codec reads and
+    /// writes the 32 bytes via [`Self::from_bytes`] / [`Self::as_bytes`].
     ///
     /// Distinct from [`BlockHash`] / [`TxHash`]: a root is a commitment to a set
     /// of outputs, not an identity, and one can never be passed where the other

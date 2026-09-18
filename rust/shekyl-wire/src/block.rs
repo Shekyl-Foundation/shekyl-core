@@ -19,6 +19,8 @@ use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
 
+use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
+
 use crate::bytes::read_array;
 use crate::hash::merkle_root;
 use crate::transaction::{Ct, Input, Transaction, MAX_TX_SIZE};
@@ -56,19 +58,19 @@ pub struct BlockHeader {
     pub minor_version: u8,
     /// Seconds since the epoch.
     pub timestamp: u64,
-    /// The previous block's hash.
-    pub previous: [u8; 32],
+    /// The previous block's hash (CEN-A2 compares it to the tip's).
+    pub previous: BlockHash,
     /// The PoW nonce.
     pub nonce: u32,
     /// The FCMP++ curve-tree root **at this block's own height**: the tree
     /// grown with every leaf that matured through the parent, before any of
     /// this block's outputs (CEN-B5, wording corrected 2026-09-05). The root
     /// *after* this block is the next header's.
-    pub curve_tree_root: [u8; 32],
+    pub curve_tree_root: CurveTreeRoot,
     /// The archival credit-wire attestation root over this block's pass records
     /// (`ARCHIVAL_CREDIT_WIRE.md` §3). A `block_header` field alongside
     /// `curve_tree_root`, mined via the header being the PoW preimage.
-    pub attestation_root: [u8; 32],
+    pub attestation_root: AttestationRoot,
 }
 
 impl BlockHeader {
@@ -77,10 +79,10 @@ impl BlockHeader {
         write_varint(self.major_version, w)?;
         write_varint(self.minor_version, w)?;
         write_varint(self.timestamp, w)?;
-        w.write_all(&self.previous)?;
+        w.write_all(self.previous.as_bytes())?;
         w.write_all(&self.nonce.to_le_bytes())?;
-        w.write_all(&self.curve_tree_root)?;
-        w.write_all(&self.attestation_root)
+        w.write_all(self.curve_tree_root.as_bytes())?;
+        w.write_all(self.attestation_root.as_bytes())
     }
 
     /// Read the header.
@@ -89,10 +91,10 @@ impl BlockHeader {
             major_version: read_varint(r)?,
             minor_version: read_varint(r)?,
             timestamp: read_varint(r)?,
-            previous: read_array(r)?,
+            previous: BlockHash::from_bytes(read_array(r)?),
             nonce: u32::from_le_bytes(read_array::<4, _>(r)?),
-            curve_tree_root: read_array(r)?,
-            attestation_root: read_array(r)?,
+            curve_tree_root: CurveTreeRoot::from_bytes(read_array(r)?),
+            attestation_root: AttestationRoot::from_bytes(read_array(r)?),
         })
     }
 }
@@ -105,7 +107,7 @@ pub struct Block {
     /// The miner (coinbase) transaction, embedded inline.
     pub miner_transaction: Transaction,
     /// Hashes of the block's non-miner transactions.
-    pub transaction_hashes: Vec<[u8; 32]>,
+    pub transaction_hashes: Vec<TxHash>,
 }
 
 impl Block {
@@ -115,7 +117,7 @@ impl Block {
         self.miner_transaction.write(w)?;
         write_varint(self.transaction_hashes.len(), w)?;
         for hash in &self.transaction_hashes {
-            w.write_all(hash)?;
+            w.write_all(hash.as_bytes())?;
         }
         Ok(())
     }
@@ -169,7 +171,7 @@ impl Block {
         // against a finite reader fails on the missing bytes, not on allocation.
         let mut transaction_hashes = Vec::new();
         for _ in 0..n_tx {
-            transaction_hashes.push(read_array::<32, _>(r)?);
+            transaction_hashes.push(TxHash::from_bytes(read_array::<32, _>(r)?));
         }
 
         Ok(Block {
@@ -225,8 +227,8 @@ impl Block {
             .write(&mut blob)
             .expect("Vec write is infallible");
         let mut leaves = Vec::with_capacity(1 + self.transaction_hashes.len());
-        leaves.push(self.miner_transaction.hash());
-        leaves.extend_from_slice(&self.transaction_hashes);
+        leaves.push(self.miner_transaction.hash().to_bytes());
+        leaves.extend(self.transaction_hashes.iter().map(|h| h.to_bytes()));
         let tree_hash = merkle_root(leaves).expect("the miner tx is always present");
         blob.extend_from_slice(&tree_hash);
         write_varint(self.transaction_hashes.len() + 1, &mut blob)
@@ -238,12 +240,12 @@ impl Block {
     /// length-varint prefix is what distinguishes the block-hash preimage from the
     /// PoW preimage (which omits it). The Monero block-202612 special case is shed
     /// (dead pre-genesis chain history).
-    pub fn hash(&self) -> [u8; 32] {
+    pub fn hash(&self) -> BlockHash {
         let blob = self.pow_blob();
         let mut preimage = Vec::new();
         write_varint(blob.len(), &mut preimage).expect("Vec write is infallible");
         preimage.extend_from_slice(&blob);
-        keccak256(&preimage)
+        BlockHash::from_bytes(keccak256(&preimage))
     }
 }
 
@@ -257,10 +259,10 @@ mod tests {
             major_version: 1,
             minor_version: 0,
             timestamp: 1_700_000_000,
-            previous: [0x11; 32],
+            previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 0xDEAD_BEEF,
-            curve_tree_root: [0x22; 32],
-            attestation_root,
+            curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
+            attestation_root: AttestationRoot::from_bytes(attestation_root),
         }
     }
 
@@ -275,7 +277,7 @@ mod tests {
         assert_eq!(&bytes[bytes.len() - 32..], &empty);
         let back = BlockHeader::read(&mut &bytes[..]).unwrap();
         assert_eq!(back, h);
-        assert_eq!(back.attestation_root, empty);
+        assert_eq!(back.attestation_root, AttestationRoot::from_bytes(empty));
     }
 
     #[test]

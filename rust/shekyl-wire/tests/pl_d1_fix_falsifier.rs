@@ -248,8 +248,15 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         &[Some(payment.view_tag_prefilter)],
         &[],
     );
-    let pqc_auths = sign_pqc_auths(&[tx_prefix_hash], std::slice::from_ref(&spend_input))
-        .expect("PQC auth signing");
+    let pqc_auths = sign_pqc_auths(
+        // A stand-in message: the prefix hash's bytes, not the §1.5 per-input
+        // payload (`phase1_payload_hashes`). These auths are never verified
+        // here; the `.to_bytes()` is the deliberate, visible un-typing — the
+        // `PrefixHash` type refuses the silent form (RTN-7 Q3).
+        &[tx_prefix_hash.to_bytes()],
+        std::slice::from_ref(&spend_input),
+    )
+    .expect("PQC auth signing");
     assert_eq!(pqc_auths.len(), 1, "one PQC auth per input");
     let revealed_key: &[u8] = &pqc_auths[0].public_key;
 

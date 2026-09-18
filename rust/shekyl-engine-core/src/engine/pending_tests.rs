@@ -34,7 +34,7 @@ fn make_recovered_output(seed: u8, global_index: u64, amount: u64) -> RecoveredW
     let scalar = Scalar::from_bytes_mod_order(bytes);
     let key = &scalar * ED25519_BASEPOINT_TABLE;
     let base = WalletOutput::new_for_test(
-        [seed; 32],
+        shekyl_types::TxHash::from_bytes([seed; 32]),
         0,
         global_index,
         key,

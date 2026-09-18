@@ -23,6 +23,7 @@ use crate::census::CenRow;
 use crate::rules::{BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
 use crate::view::ChainView;
+use shekyl_types::BlockHash;
 
 /// CEN-A2: the candidate's `previous` is the recorded tip's hash — or, on
 /// an empty chain, the null hash the genesis block carries.
@@ -36,7 +37,7 @@ pub(crate) struct A2;
 
 impl A2 {
     /// What an empty chain's tip hash reads as: the null hash.
-    const GENESIS_PREVIOUS: [u8; 32] = [0; 32];
+    const GENESIS_PREVIOUS: BlockHash = BlockHash::NULL;
 }
 
 impl Rule for A2 {
@@ -49,7 +50,7 @@ impl BlockRule for A2 {
         view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
         let expected = match view.tip()? {
-            Some(tip) => tip.hash.to_bytes(),
+            Some(tip) => tip.hash,
             None => Self::GENESIS_PREVIOUS,
         };
         if cx.candidate.block.header.previous == expected {

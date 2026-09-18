@@ -328,8 +328,7 @@ fn verify_bond_post(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<()
     // `DoubleSpendConflict` is the more actionable verdict even when later
     // legs would also have refused — the engine's most-terminal-first
     // doctrine, applied inside the battery.
-    if p_canonical_id_from_hybrid_pubkey(&bond.hybrid_public_key).as_bytes() != &bond.p_canonical_id
-    {
+    if p_canonical_id_from_hybrid_pubkey(&bond.hybrid_public_key) != bond.p_canonical_id {
         return Err(VerifyReject::malformed(
             "BP2: p_canonical_id does not recompute from the vin pubkey",
         ));
@@ -585,8 +584,11 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         .ok()
         .and_then(|depth| depth.checked_add(1))
         .ok_or_else(|| VerifyReject::stale_root("emission E9: tree_depth + 1 overflows u8"))?;
-    let backing = emission_vin_verify_backing(vin, &reference.root, layers, signable_tx_hash)
-        .map_err(|e| emission_reject(&e))?;
+    // `shekyl-archival-retention` takes the signable hash as bytes (the
+    // proof-crate boundary, RTN-7 §3.2).
+    let backing =
+        emission_vin_verify_backing(vin, &reference.root, layers, signable_tx_hash.to_bytes())
+            .map_err(|e| emission_reject(&e))?;
     let reward_commits: Vec<RewardCommit> = parsed
         .tx
         .prefix
@@ -603,7 +605,7 @@ fn verify_emission(parsed: &ParsedSubmission, facts: &SubmitFacts) -> Result<(),
         })
         .collect::<Option<Vec<_>>>()
         .ok_or_else(|| VerifyReject::malformed("emission: loud vout without a commitment"))?;
-    let auth = emission_vin_verify_auth(vin, &reward_commits, &signable_tx_hash)
+    let auth = emission_vin_verify_auth(vin, &reward_commits, signable_tx_hash.as_bytes())
         .map_err(|e| emission_reject(&e))?;
     // The witness assembly is infallible once the three minters passed —
     // mirroring the C++ oracle's single `shekyl_emission_vin_verify`
@@ -878,7 +880,9 @@ fn retention_vin(
     };
     Some(ArchivalBondPostVin {
         hybrid_public_key: bond.hybrid_public_key.clone(),
-        p_canonical_id: bond.p_canonical_id,
+        // The retention descriptor still carries the id as bytes; typing it
+        // is that crate's (RTN-7 §3.2 addressee), not this boundary's.
+        p_canonical_id: bond.p_canonical_id.to_bytes(),
         kind,
         holdings: HoldingsDescriptor {
             kind: holdings_kind,
@@ -1048,7 +1052,8 @@ fn verify_fcmp(
         &pqc_hashes,
         tree_root,
         layers,
-        parsed.tx.prefix_hash(),
+        // Proof-crate boundary: the verifier takes the signable hash as bytes.
+        parsed.tx.prefix_hash().to_bytes(),
     ) {
         Ok(true) => Ok(()),
         // `verify` never returns `Ok(false)` today (failures are `Err`);

@@ -126,7 +126,7 @@ fn built_weight(n_in: usize, n_out: usize, layers: u8, fee: u64, bp: &Bulletproo
         out_commitments: (0..n_out).map(|i| [filler(i, 0xA5); 32]).collect(),
         pseudo_outs: (0..n_in).map(|i| [filler(i, 0x3C); 32]).collect(),
         bulletproof: bp.clone(),
-        reference_block: [0xAB; 32],
+        reference_block: shekyl_types::BlockHash::from_bytes([0xAB; 32]),
         // The one stubbed term. Length from the table; the table is anchored by
         // real proving in the KATs named in this file's header.
         fcmp_proof: vec![0xCC; fcmp_proof_size(InputCount::clamped(n_in), layers)],

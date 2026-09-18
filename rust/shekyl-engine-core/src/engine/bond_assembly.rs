@@ -635,7 +635,9 @@ pub(crate) fn wire_bond_post_input(vin: &ArchivalBondPostVin) -> Result<Input, B
     };
     Ok(Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vin.hybrid_public_key.clone(),
-        p_canonical_id: vin.p_canonical_id,
+        // The retention descriptor carries the id as bytes; typing it is that
+        // crate's (RTN-7 §3.2 addressee), not this boundary's.
+        p_canonical_id: PCanonicalId::from_bytes(vin.p_canonical_id),
         kind,
         holdings: wire_holdings(&vin.holdings),
         bonded_total_atomic: vin.bonded_total_atomic,

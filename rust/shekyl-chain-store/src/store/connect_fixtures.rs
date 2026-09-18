@@ -9,7 +9,7 @@
 
 use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight};
+use shekyl_types::{AttestationRoot, BlockHash, BlockWeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, PqcAuth, Transaction, TxPrefix};
 
@@ -65,7 +65,7 @@ pub(super) fn spend(key_image: u8, outputs: usize) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 7,
-            reference_block: [0x99; 32],
+            reference_block: BlockHash::from_bytes([0x99; 32]),
             base: CtBase {
                 enc_amounts: vec![[0x11; 9]; outputs],
                 enc_labels: vec![[0x22; 9]; outputs],
@@ -111,7 +111,7 @@ pub(super) fn root_at_height(height: u64) -> CurveTreeRoot {
     }
 }
 
-pub(super) fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction>) -> Candidate {
+pub(super) fn candidate(height: u64, previous: BlockHash, listed: Vec<Transaction>) -> Candidate {
     let block = Block {
         header: BlockHeader {
             major_version: 1,
@@ -119,8 +119,8 @@ pub(super) fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction
             timestamp: 1_000 + height * 60,
             previous,
             nonce: 7,
-            curve_tree_root: root_at_height(height).to_bytes(),
-            attestation_root: [0x33; 32],
+            curve_tree_root: root_at_height(height),
+            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         },
         miner_transaction: coinbase(height, 1),
         transaction_hashes: listed.iter().map(Transaction::hash).collect(),
@@ -160,7 +160,7 @@ pub(super) const GENESIS_ID: RuleSetId = RuleSetId::GENESIS;
 
 /// Connect `listed` as consecutive blocks from genesis in one batch,
 /// handing each `facts(h, 0)`. Returns each block's hash.
-pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<[u8; 32]> {
+pub(super) fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
     connect_chain_with_burn(store, listed, 0)
 }
 
@@ -170,9 +170,9 @@ pub(super) fn connect_chain_with_burn(
     store: &ChainStore,
     listed: &[Vec<Transaction>],
     burned: u64,
-) -> Vec<[u8; 32]> {
+) -> Vec<BlockHash> {
     let mut hashes = Vec::new();
-    let mut previous = [0u8; 32];
+    let mut previous = BlockHash::NULL;
     let mut cands = Vec::new();
     for (h, txs) in listed.iter().enumerate() {
         let cand = candidate(h as u64, previous, txs.clone());
@@ -192,7 +192,7 @@ pub(super) fn connect_chain_with_burn(
 }
 
 pub(super) fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Block) {
-    let cand = candidate(0, [0; 32], Vec::new());
+    let cand = candidate(0, BlockHash::NULL, Vec::new());
     let block = cand.block.clone();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();

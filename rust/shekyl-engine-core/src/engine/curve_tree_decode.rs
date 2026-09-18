@@ -385,10 +385,12 @@ mod tests {
             major_version: 1,
             minor_version: 0,
             timestamp: 1,
-            previous: [0u8; 32],
+            previous: shekyl_types::BlockHash::NULL,
             nonce: 0,
-            curve_tree_root: [0u8; 32],
-            attestation_root: shekyl_archival_retention::empty_attestation_root(),
+            curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes([0u8; 32]),
+            attestation_root: shekyl_types::AttestationRoot::from_bytes(
+                shekyl_archival_retention::empty_attestation_root(),
+            ),
         };
         let miner_tx = null_tx(vec![tagged_output([7u8; 32])], vec![[0u8; 32]], None);
         let block = Block {

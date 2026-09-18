@@ -379,8 +379,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 6. Sign via the production transaction builder ────────────────────
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block.to_bytes(),
-        tree_root: path.tree.tree_root.to_bytes(),
+        reference_block: path.tree.reference_block,
+        tree_root: path.tree.tree_root,
         tree_depth: path.tree.tree_depth,
     };
     // Bind the proof + PQC auths to the *real* transaction prefix, exactly as
@@ -433,7 +433,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &pqc_pk_hashes,
         tree_root.as_bytes(),
         signed.tree_depth,
-        tx_prefix_hash,
+        // Proof-crate boundary: the verifier takes the signable hash as bytes.
+        tx_prefix_hash.to_bytes(),
     )
     .expect("verify must not error");
     assert!(
@@ -466,7 +467,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &pqc_pk_hashes,
         tree_root.as_bytes(),
         signed.tree_depth,
-        mutated_prefix_hash,
+        mutated_prefix_hash.to_bytes(),
     );
     assert!(
         !matches!(mutated_result, Ok(true)),
@@ -514,8 +515,15 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // carries real, canonically-sized auth blobs. The signed message is the
     // prefix hash; the per-input message-binding semantics are exercised by the
     // dedicated `shekyl-ffi` signing test, not asserted here.
-    let pqc_auths = sign_pqc_auths(&[tx_prefix_hash], std::slice::from_ref(&spend_input))
-        .expect("Phase-2 PQC auth signing");
+    let pqc_auths = sign_pqc_auths(
+        // A stand-in message: the prefix hash's bytes, not the §1.5 per-input
+        // payload (`phase1_payload_hashes`). These auths are never verified
+        // here; the `.to_bytes()` is the deliberate, visible un-typing — the
+        // `PrefixHash` type refuses the silent form (RTN-7 Q3).
+        &[tx_prefix_hash.to_bytes()],
+        std::slice::from_ref(&spend_input),
+    )
+    .expect("Phase-2 PQC auth signing");
     assert_eq!(pqc_auths.len(), 1, "one PQC auth per input");
 
     // ── 11. shekyl-wire byte-identical round-trip (replaces the live KAT) ──

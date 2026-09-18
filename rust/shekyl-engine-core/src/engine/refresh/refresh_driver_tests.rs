@@ -38,6 +38,7 @@ use crate::engine::{
 use crate::scan::ScanResult;
 use shekyl_crypto_pq::account::MASTER_SEED_BYTES;
 use shekyl_engine_state::{BlockchainTip, LedgerBlock, ReorgBlocks};
+use shekyl_types::BlockHash;
 
 use super::{derive_snapshot_id, summarize, LedgerSnapshot, RefreshReorgEvent};
 use crate::engine::pending::SnapshotId;
@@ -146,7 +147,10 @@ fn drain<T>(queue: &Mutex<Vec<T>>) -> T {
 /// terminates the loop with `Ok(_)`.
 fn empty_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
     let start = snapshot.synced_height.saturating_add(1);
-    let parent_hash = snapshot.block_hash_at(snapshot.synced_height);
+    // The snapshot's reorg rows are persisted bytes (RAW_TYPE PR C).
+    let parent_hash = snapshot
+        .block_hash_at(snapshot.synced_height)
+        .map(BlockHash::from_bytes);
     ScanResult::empty_at(start, parent_hash)
 }
 
@@ -167,11 +171,18 @@ fn stale_snapshot_result(bad_start: u64) -> ScanResult {
 /// path deterministically.
 fn malformed_result_for(snapshot: &LedgerSnapshot) -> ScanResult {
     let start = snapshot.synced_height.saturating_add(1);
-    let mut result = ScanResult::empty_at(start, snapshot.block_hash_at(snapshot.synced_height));
+    let mut result = ScanResult::empty_at(
+        start,
+        snapshot
+            .block_hash_at(snapshot.synced_height)
+            .map(BlockHash::from_bytes),
+    );
     // Empty range + non-empty block_hashes is the
     // contract-violation shape `apply_scan_result_to_state`
     // gates against in its early-return branch.
-    result.block_hashes.push((start, [0xAB; 32]));
+    result
+        .block_hashes
+        .push((start, BlockHash::from_bytes([0xAB; 32])));
     result
 }
 
@@ -473,9 +484,13 @@ fn production_refresh_against_unreachable_daemon_returns_io_daemon() {
 /// than a silent shape drift.
 #[test]
 fn summarize_records_every_field() {
-    let mut result = ScanResult::empty_at(5, Some([0x11; 32]));
+    let mut result = ScanResult::empty_at(5, Some(BlockHash::from_bytes([0x11; 32])));
     result.processed_height_range = 5..8;
-    result.block_hashes = vec![(5, [1; 32]), (6, [2; 32]), (7, [3; 32])];
+    result.block_hashes = vec![
+        (5, BlockHash::from_bytes([1; 32])),
+        (6, BlockHash::from_bytes([2; 32])),
+        (7, BlockHash::from_bytes([3; 32])),
+    ];
     // `new_transfers` and `spent_key_images` are exercised
     // structurally elsewhere; here we just record the count.
     result.spent_key_images = vec![

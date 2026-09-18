@@ -213,7 +213,12 @@ mod tests {
     fn make_candidate(global_idx: u64, amount: u64, height: u64) -> TransferDetails {
         let mut tx_hash = [0u8; 32];
         tx_hash[..8].copy_from_slice(&global_idx.to_le_bytes());
-        let output = make_wallet_output(tx_hash, 0, global_idx, amount);
+        let output = make_wallet_output(
+            shekyl_types::TxHash::from_bytes(tx_hash),
+            0,
+            global_idx,
+            amount,
+        );
         TransferDetails::from_wallet_output(&output, height)
     }
 

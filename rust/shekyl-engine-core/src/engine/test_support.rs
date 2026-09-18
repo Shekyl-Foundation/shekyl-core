@@ -74,6 +74,7 @@ use sha2::Sha256;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
+use shekyl_types::{AttestationRoot, BlockHash};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
@@ -192,7 +193,7 @@ pub(crate) fn normalize_fcmp_wire_shape(tx: &mut shekyl_wire::Transaction) {
     } = &mut tx.ct
     {
         *fee = 0;
-        *reference_block = [0u8; 32];
+        *reference_block = BlockHash::NULL;
         for c in &mut base.commitments {
             *c = [0u8; 32];
         }
@@ -794,7 +795,7 @@ impl DaemonEngine for TestDaemon {
 /// detection by parent-hash compare, retries) build their chains
 /// from this helper. Tests that need owned-output recovery construct
 /// their own `ScannableBlock` (see module docs).
-pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> ScannableBlock {
+pub(crate) fn make_synthetic_block(height: u64, parent_hash: BlockHash) -> ScannableBlock {
     let header = BlockHeader {
         major_version: 1,
         minor_version: 0,
@@ -807,10 +808,14 @@ pub(crate) fn make_synthetic_block(height: u64, parent_hash: [u8; 32]) -> Scanna
         // ingest verify compares the reconstructed root against this header
         // field, so it must be the sentinel (not `[0u8; 32]`) for the verify to
         // pass on the synthetic-block test paths.
-        curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
+        curve_tree_root: shekyl_types::CurveTreeRoot::from_bytes(
+            shekyl_fcmp::tree::selene_hash_init(),
+        ),
         // Same lesson as curve_tree_root: the valid empty is the empty-set
         // root (ARCHIVAL_CREDIT_WIRE.md §3), never `[0u8; 32]` (null_hash).
-        attestation_root: shekyl_archival_retention::empty_attestation_root(),
+        attestation_root: AttestationRoot::from_bytes(
+            shekyl_archival_retention::empty_attestation_root(),
+        ),
     };
 
     // A coinbase carrying no outputs: the sole `Gen` input and a `Null` ct whose
@@ -998,7 +1003,7 @@ mod tests {
     fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain =
             Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-        let mut parent = [0u8; 32];
+        let mut parent = BlockHash::NULL;
         for h in 0..n {
             let block = make_synthetic_block(h, parent);
             parent = block.block.hash();
@@ -1109,7 +1114,7 @@ mod tests {
         let rpc = TestDaemon::with_seed(DEFAULT_TEST_SEED);
         let clone = rpc.clone();
         // Push genesis at height 0; clone observes get_height=1.
-        rpc.push_block(make_synthetic_block(0, [0u8; 32]));
+        rpc.push_block(make_synthetic_block(0, BlockHash::NULL));
         assert_eq!(clone.get_height().await.unwrap(), 1);
     }
 

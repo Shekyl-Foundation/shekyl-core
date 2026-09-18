@@ -28,6 +28,7 @@
 
 use super::*;
 use shekyl_crypto_pq::output::construct_output;
+use shekyl_types::{BlockHash, PrefixHash};
 
 /// Standard test seed; every test uses this unless it specifically
 /// exercises seed-divergence behavior.
@@ -749,8 +750,8 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
     let n_in_values: [usize; 3] = [1, 2, 3];
 
     let tree_depth: u8 = 1;
-    let signable_tx_hash = [0xC3u8; 32];
-    let reference_block = [0xD4u8; 32];
+    let signable_tx_hash = PrefixHash::from_bytes([0xC3u8; 32]);
+    let reference_block = BlockHash::from_bytes([0xD4u8; 32]);
     let fee: u64 = 1_000;
 
     // Recipient = base spend key `D = b·G`. The spend witness is `ho + b`
@@ -1119,9 +1120,9 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             &key_images,
             &signed_engine.pseudo_outs,
             &pqc_pk_hashes,
-            &tree.tree_root,
+            tree.tree_root.as_bytes(),
             tree.tree_depth,
-            signable_tx_hash,
+            signable_tx_hash.to_bytes(),
         );
         assert!(
             matches!(result, Ok(true)),
@@ -1224,8 +1225,8 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
         "bond floor must be positive for the fixture holdings"
     );
 
-    let signable_tx_hash = [0xC3u8; 32];
-    let reference_block = [0xD4u8; 32];
+    let signable_tx_hash = PrefixHash::from_bytes([0xC3u8; 32]);
+    let reference_block = BlockHash::from_bytes([0xD4u8; 32]);
     let tree_depth: u8 = 1;
     let fee: u64 = 1_000;
 
@@ -1404,9 +1405,9 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
                 &key_images,
                 &signed.pseudo_outs,
                 &pqc_pk_hashes,
-                &tree.tree_root,
+                tree.tree_root.as_bytes(),
                 tree.tree_depth,
-                signable_tx_hash,
+                signable_tx_hash.to_bytes(),
             ),
             Ok(true)
         ),
@@ -1564,8 +1565,8 @@ async fn sign_transaction_rejects_empty_inputs() {
         outputs: vec![],
         fcmp_plus_plus_context: FcmpPlusPlusContext {
             tree: TreeContext {
-                reference_block: [0; 32],
-                tree_root: [0; 32],
+                reference_block: BlockHash::from_bytes([0; 32]),
+                tree_root: shekyl_types::CurveTreeRoot::from_bytes([0; 32]),
                 tree_depth: 1,
             },
         },

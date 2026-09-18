@@ -253,7 +253,7 @@ pub fn build_connect_tx<R: RngCore + CryptoRng>(
         },
         ct: Ct::Fcmp {
             fee: 1,
-            reference_block: [0xAB; 32],
+            reference_block: shekyl_types::BlockHash::from_bytes([0xAB; 32]),
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]; n_out],
                 enc_labels: vec![[0u8; 9]; n_out],

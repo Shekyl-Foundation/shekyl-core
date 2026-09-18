@@ -80,6 +80,7 @@ use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
 use shekyl_curve_tree::{BlockHeight, ClientError};
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
+use shekyl_types::{BlockHash, CurveTreeRoot};
 
 use crate::{
     attribution::{
@@ -529,7 +530,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // `block_hashes`). Backfill heights below `range_start` are not in this map
     // (the producer only emits roots for its scanned range); their header root
     // comes from the daemon-fetched block instead.
-    let mut producer_roots: BTreeMap<u64, [u8; 32]> = BTreeMap::new();
+    let mut producer_roots: BTreeMap<u64, CurveTreeRoot> = BTreeMap::new();
     for (height, root) in &result.block_curve_tree_roots {
         if producer_roots.insert(*height, *root).is_some() {
             return Err(RefreshError::MalformedScanResult {
@@ -728,7 +729,11 @@ pub(crate) fn apply_scan_result_to_state(
     // result's claim. (For `start == 1`, both sides must be `None`.)
     let start = result.processed_height_range.start;
     if start > 1 {
-        let stored = ledger.block_hash_at(start - 1).copied();
+        // The persisted reorg rows are still bytes (RAW_TYPE PR C).
+        let stored = ledger
+            .block_hash_at(start - 1)
+            .copied()
+            .map(BlockHash::from_bytes);
         match (stored, result.parent_hash) {
             (Some(stored_hash), Some(claimed_hash)) if stored_hash == claimed_hash => {}
             // Stored / claimed disagree, or one side is `None` and the
@@ -840,7 +845,7 @@ pub(crate) fn apply_scan_result_to_state(
         });
     }
 
-    let mut hash_at: BTreeMap<u64, [u8; 32]> = BTreeMap::new();
+    let mut hash_at: BTreeMap<u64, BlockHash> = BTreeMap::new();
     for (h, hash) in block_hashes {
         if !processed_height_range.contains(&h) {
             return Err(RefreshError::MalformedScanResult {
@@ -902,7 +907,10 @@ pub(crate) fn apply_scan_result_to_state(
 
         let outputs = transfers_by_height.remove(&h).unwrap_or_default();
         let timelocked = Timelocked::from_vec(outputs);
-        let inserted_range = indexes.process_scanned_outputs(ledger, h, block_hash, timelocked);
+        // The persisted ledger still records the block hash as bytes
+        // (RAW_TYPE_NEWTYPE_MIGRATION.md PR C, engine-state's persisted rows).
+        let inserted_range =
+            indexes.process_scanned_outputs(ledger, h, block_hash.to_bytes(), timelocked);
         // Per-height ranges are contiguous suffixes of
         // `ledger.transfers`, monotonically advancing across the loop
         // (each iteration appends, never reorders). Flattening to a
@@ -963,7 +971,7 @@ fn collect_detection_residue(result: &ScanResult) -> DetectionResidue {
         let wo = dt.output.wallet_output();
         map.insert(
             (
-                shekyl_types::TxHash::from_bytes(wo.transaction()),
+                wo.transaction(),
                 shekyl_types::OutputIndexInTx::from_raw(wo.index_in_transaction()),
             ),
             dt.output.source_ciphertext().clone(),

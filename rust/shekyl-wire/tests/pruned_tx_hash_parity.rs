@@ -45,7 +45,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
-use shekyl_types::PrunableHash;
+use shekyl_types::{BlockHash, PrunableHash};
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
@@ -71,8 +71,8 @@ const BASEPOINT: [u8; 32] = {
     k
 };
 
-fn hex_str(b: &[u8]) -> String {
-    b.iter().map(|x| format!("{x:02x}")).collect()
+fn hex_str(b: impl AsRef<[u8]>) -> String {
+    b.as_ref().iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn hex_bytes(s: &str) -> Vec<u8> {
@@ -139,7 +139,7 @@ fn build_tx(with_prunable: bool) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![[0u8; 9], [0u8; 9]],
                 enc_labels: vec![[0u8; 9], [0u8; 9]],
@@ -187,10 +187,10 @@ fn regenerate_pruned_tx_hash_parity_fixture() {
          prunable_hash_hex = keccak256 of the prunable region; tx_hash_hex the \
          txid. The C++ leg (pruned_tx_hash_parity.cpp) must reproduce all four \
          with its production serializer and hash functions.",
-        "tx_hex": hex_str(&tx.serialize()),
-        "pruned_hex": hex_str(&build_tx(false).serialize()),
-        "prunable_hash_hex": hex_str(&digest),
-        "tx_hash_hex": hex_str(&tx.hash()),
+        "tx_hex": hex_str(tx.serialize()),
+        "pruned_hex": hex_str(build_tx(false).serialize()),
+        "prunable_hash_hex": hex_str(digest),
+        "tx_hash_hex": hex_str(tx.hash()),
     });
     std::fs::write(
         manifest(PARITY_FIXTURE),
@@ -215,10 +215,10 @@ fn pruned_spend_identity_matches_the_pinned_oracle() {
     // The construction still serializes and hashes to the pinned bytes.
     let tx = build_tx(true);
     tx.validate().expect("validate");
-    assert_eq!(hex_str(&tx.serialize()), tx_hex, "full tx bytes");
-    assert_eq!(hex_str(&tx.hash()), tx_hash_hex, "txid");
+    assert_eq!(hex_str(tx.serialize()), tx_hex, "full tx bytes");
+    assert_eq!(hex_str(tx.hash()), tx_hash_hex, "txid");
     assert_eq!(
-        hex_str(&prunable_digest()),
+        hex_str(prunable_digest()),
         prunable_hash_hex,
         "prunable digest"
     );
@@ -243,7 +243,7 @@ fn pruned_spend_identity_matches_the_pinned_oracle() {
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&hex_bytes(prunable_hash_hex));
     assert_eq!(
-        hex_str(&pruned.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
+        hex_str(pruned.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
         tx_hash_hex,
         "pruned identity (supplied digest) diverged from the pinned txid"
     );
@@ -276,7 +276,7 @@ fn skeleton_identity_reconstructs_the_pinned_txid_from_both_stored_digests() {
         .expect("a spend's txid is 4-part, so its third component exists");
     let prunable = parts.prunable_hash;
     assert_eq!(
-        parts.hash.to_bytes(),
+        parts.hash,
         tx.hash(),
         "txid_parts.hash is hash(), not a second construction"
     );
@@ -314,12 +314,12 @@ fn skeleton_identity_reconstructs_the_pinned_txid_from_both_stored_digests() {
         *prunable = None;
     }
     assert_ne!(
-        hex_str(&skeleton.hash()),
+        hex_str(skeleton.hash()),
         tx_hash_hex,
         "a skeleton hashed as a body is the wrong identity — the reason this API exists"
     );
     assert_eq!(
-        hex_str(&skeleton.hash_with_supplied_components(Some(pqc_auth), prunable)),
+        hex_str(skeleton.hash_with_supplied_components(Some(pqc_auth), prunable)),
         tx_hash_hex,
         "skeleton identity (both digests supplied) diverged from the pinned txid"
     );
@@ -384,14 +384,14 @@ fn live_oracle_spend_identity_matches_the_accepted_bytes() {
     // Round-trip: re-serializing the parsed form reproduces them exactly. This
     // is what breaks if the serializer drifts away from what the chain took.
     assert_eq!(
-        hex_str(&tx.serialize()),
+        hex_str(tx.serialize()),
         tx_hex,
         "re-serializing the accepted spend changed its bytes"
     );
 
     // And the identity the daemon indexed it under.
     assert_eq!(
-        hex_str(&tx.hash()),
+        hex_str(tx.hash()),
         tx_hash_hex,
         "txid recomputed from the accepted bytes differs from the one the \
          daemon accepted"
@@ -415,7 +415,7 @@ fn live_oracle_spend_identity_matches_the_accepted_bytes() {
     );
     let digest = keccak256(&bytes[pruned_form.len()..]);
     assert_eq!(
-        hex_str(&tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
+        hex_str(tx.hash_with_supplied_prunable(PrunableHash::from_bytes(digest))),
         tx_hash_hex,
         "pruned identity (supplied digest) diverged from the accepted txid"
     );

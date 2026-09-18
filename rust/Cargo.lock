@@ -4306,6 +4306,7 @@ dependencies = [
  "shekyl-crypto-hash",
  "shekyl-crypto-pq",
  "shekyl-fcmp",
+ "shekyl-types",
  "shekyl-wire",
  "thiserror 2.0.18",
  "zeroize",
@@ -4723,6 +4724,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-fcmp",
+ "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
  "thiserror 2.0.18",
@@ -4743,6 +4745,7 @@ dependencies = [
  "shekyl-fcmp",
  "shekyl-scanner",
  "shekyl-tx-builder",
+ "shekyl-types",
  "shekyl-wire",
 ]
 

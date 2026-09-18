@@ -38,7 +38,7 @@
 //! refuses to fabricate a `None`).
 
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHash, BlockHeight};
 
 /// A height range `[low, high)` `P` AFFIRMATIVELY, EXHAUSTIVELY verified on the
 /// chain it was served (recompute-and-chain continuity + per-body tx-hash).
@@ -250,7 +250,7 @@ pub(crate) enum ExhaustivenessError {
 /// separate `Err`-with-partial-range variant the caller opts into, never a default.)
 pub(crate) fn verify_exhaustive(
     first_height: BlockHeight,
-    anchor: [u8; 32],
+    anchor: BlockHash,
     blocks: &[ScannableBlock],
 ) -> Result<VerifiedBatch, ExhaustivenessError> {
     let first = first_height.to_raw();
@@ -321,7 +321,9 @@ pub(crate) fn verify_exhaustive(
         // hash of the last block — exactly the value continuity chained through. The
         // frontier the caller seals is therefore provably the verified one, never a
         // parallel recompute that merely happens to agree.
-        frontier_hash: expected_previous,
+        // The verified frontier feeds the pscan cursor, whose persisted form
+        // is still bytes (RAW_TYPE PR C).
+        frontier_hash: expected_previous.to_bytes(),
     })
 }
 
@@ -331,7 +333,7 @@ mod tests {
 
     use crate::engine::test_support::make_synthetic_block;
 
-    const ANCHOR: [u8; 32] = [0xA0; 32];
+    const ANCHOR: BlockHash = BlockHash::from_bytes([0xA0; 32]);
 
     /// Build a chain of `len` synthetic blocks starting at `first`, each correctly
     /// linked to the recomputed hash of its predecessor (the first to `ANCHOR`).
@@ -358,7 +360,7 @@ mod tests {
         // value continuity chained through, so the caller seals it without re-hashing.
         assert_eq!(
             verified.frontier_hash(),
-            blocks.last().expect("non-empty").block.hash(),
+            blocks.last().expect("non-empty").block.hash().to_bytes(),
             "the frontier hash is the verified last-block hash, not a separate recompute"
         );
     }
@@ -370,7 +372,7 @@ mod tests {
         assert_eq!(verified.range().low(), verified.range().high());
         assert_eq!(
             verified.frontier_hash(),
-            ANCHOR,
+            ANCHOR.to_bytes(),
             "an empty batch does not move the frontier — the anchor is unchanged"
         );
     }
@@ -398,7 +400,7 @@ mod tests {
         // this is the gate for adversarial input. The overflow guard fires before the loop,
         // so the (mismatched) chain contents are irrelevant.
         let blocks = chain(0, 2);
-        let err = verify_exhaustive(BlockHeight::from_raw(u64::MAX), [0u8; 32], &blocks)
+        let err = verify_exhaustive(BlockHeight::from_raw(u64::MAX), BlockHash::NULL, &blocks)
             .expect_err("first_height near u64::MAX must fail closed, not wrap");
         assert!(
             matches!(err, ExhaustivenessError::HeightOverflow { .. }),
@@ -410,8 +412,12 @@ mod tests {
     fn rejects_an_anchor_mismatch() {
         // First block's `previous` doesn't attach to the supplied anchor.
         let blocks = chain(100, 2);
-        let err = verify_exhaustive(BlockHeight::from_raw(100), [0xFF; 32], &blocks)
-            .expect_err("a batch that doesn't chain to the anchor must fail");
+        let err = verify_exhaustive(
+            BlockHeight::from_raw(100),
+            BlockHash::from_bytes([0xFF; 32]),
+            &blocks,
+        )
+        .expect_err("a batch that doesn't chain to the anchor must fail");
         assert_eq!(err, ExhaustivenessError::AnchorMismatch { height: 100 });
     }
 
@@ -420,7 +426,7 @@ mod tests {
         // A forged middle block: block[101] does NOT chain to the recomputed hash of
         // block[100] (compare-to-claimed would miss this; recompute catches it).
         let mut blocks = chain(100, 3);
-        blocks[1] = make_synthetic_block(101, [0xBB; 32]); // wrong `previous`
+        blocks[1] = make_synthetic_block(101, BlockHash::from_bytes([0xBB; 32])); // wrong `previous`
         let err = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &blocks)
             .expect_err("a broken link must fail");
         assert_eq!(err, ExhaustivenessError::ContinuityBreak { height: 101 });
@@ -433,7 +439,7 @@ mod tests {
         let mut sb = make_synthetic_block(100, ANCHOR);
         let body = sb.block.miner_transaction.clone();
         sb.transactions = vec![body];
-        sb.block.transaction_hashes = vec![[0x77; 32]]; // != body.hash()
+        sb.block.transaction_hashes = vec![shekyl_types::TxHash::from_bytes([0x77; 32])]; // != body.hash()
         let err = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
             .expect_err("a tampered body must fail");
         assert_eq!(
@@ -460,7 +466,7 @@ mod tests {
     fn rejects_a_body_count_mismatch() {
         // Committed one tx hash but delivered zero bodies (a withheld body).
         let mut sb = make_synthetic_block(100, ANCHOR);
-        sb.block.transaction_hashes = vec![[0x11; 32]];
+        sb.block.transaction_hashes = vec![shekyl_types::TxHash::from_bytes([0x11; 32])];
         sb.transactions = vec![];
         let err = verify_exhaustive(BlockHeight::from_raw(100), ANCHOR, &[sb])
             .expect_err("a missing body must fail");

@@ -270,9 +270,9 @@ mod tests {
     /// (the daemon serves `chain[height]`), so dummy parents suffice here.
     fn three_block_chain() -> Vec<ScannableBlock> {
         vec![
-            make_synthetic_block(0, [0u8; 32]),
-            make_synthetic_block(1, [0u8; 32]),
-            make_synthetic_block(2, [0u8; 32]),
+            make_synthetic_block(0, shekyl_types::BlockHash::NULL),
+            make_synthetic_block(1, shekyl_types::BlockHash::NULL),
+            make_synthetic_block(2, shekyl_types::BlockHash::NULL),
         ]
     }
 

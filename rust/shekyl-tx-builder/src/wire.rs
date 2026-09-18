@@ -9,6 +9,7 @@
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
+use shekyl_types::{BlockHash, PrefixHash};
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -45,7 +46,7 @@ pub struct WireEncodeInput {
     pub out_commitments: Vec<[u8; 32]>,
     pub pseudo_outs: Vec<[u8; 32]>,
     pub bulletproof: Bulletproof,
-    pub reference_block: [u8; 32],
+    pub reference_block: BlockHash,
     pub fcmp_proof: Vec<u8>,
     pub pqc_auths: Vec<PqcAuth>,
     /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
@@ -301,15 +302,15 @@ pub fn encode_final_tx(input: &WireEncodeInput) -> Result<Vec<u8>, TxBuilderErro
 
 /// The FCMP++ `signable_tx_hash` — the canonical prefix hash (§1.2), via shekyl-wire.
 ///
-/// Infallible by contract — it returns `[u8; 32]` because its callers (the spend
-/// signing path) require an unconditional hash. It panics only on a malformed
+/// Infallible by contract — it returns a [`PrefixHash`] because its callers (the
+/// spend signing path) require an unconditional hash. It panics only on a malformed
 /// [`WireEncodeInput`] the builder never constructs: either an output missing its
 /// view_tag, or an [`Input::ToKey`] in `extra_inputs` (spend inputs go through
 /// `key_images`; `extra_inputs` carries only non-`ToKey` prefix inputs such as an
 /// archival bond post). For a spend `extra_inputs` is empty, so only the view_tag
 /// arm is reachable. Callers that supply `extra_inputs` from unvalidated parts use
 /// the fallible [`tx_prefix_hash_from_parts_with_extra`] instead.
-pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> [u8; 32] {
+pub fn tx_prefix_hash_for_signing(input: &WireEncodeInput) -> PrefixHash {
     // `prefix_hash` depends only on the prefix, so build a prefix-only tx — skips the
     // ct/Bp+ assembly and its unrelated failure modes (e.g. BpPlus parsing).
     prefix_only_tx(
@@ -333,7 +334,7 @@ pub fn tx_prefix_hash_from_parts(
     output_keys: &[[u8; 32]],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
-) -> [u8; 32] {
+) -> PrefixHash {
     let zero_amounts = vec![0u64; output_keys.len()];
     prefix_only_tx(
         key_images,
@@ -365,7 +366,7 @@ pub fn tx_prefix_hash_from_parts_with_extra(
     output_amounts: &[u64],
     view_tags: &[Option<u8>],
     tx_extra: &[u8],
-) -> Result<[u8; 32], TxBuilderError> {
+) -> Result<PrefixHash, TxBuilderError> {
     Ok(prefix_only_tx(
         key_images,
         extra_inputs,
@@ -403,7 +404,7 @@ mod tests {
                 )],
             )
             .expect("bp prove"),
-            reference_block: [0xAB; 32],
+            reference_block: BlockHash::from_bytes([0xAB; 32]),
             fcmp_proof: vec![0xCC; 64],
             pqc_auths: vec![PqcAuth {
                 auth_version: 1,
@@ -524,11 +525,12 @@ mod tests {
 
     /// A canonical-length wire bond post usable as an `extra_inputs` entry.
     fn synthetic_bond_post() -> Input {
+        use shekyl_types::PCanonicalId;
         use shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN;
         use shekyl_wire::{BondPost, BondPostKind, Holdings};
         Input::BondPost(Box::new(BondPost {
             hybrid_public_key: vec![0xA1; PQC_HYBRID_SINGLE_KEY_LEN],
-            p_canonical_id: [0xB2; 32],
+            p_canonical_id: PCanonicalId::from_bytes([0xB2; 32]),
             kind: BondPostKind::JoinMarket {
                 bond_spend_pk: vec![0xC3; PQC_HYBRID_SINGLE_KEY_LEN],
                 endpoint: [0xEE; 32],

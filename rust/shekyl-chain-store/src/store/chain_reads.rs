@@ -339,7 +339,7 @@ pub(super) fn block_body<T: ReadTables>(
     let blob = blocks.get(height)?.ok_or_else(|| absent("blocks"))?;
     let block = Block::from_bytes(blob.value().bytes())
         .map_err(|_| blocks_invalid("block blob does not parse"))?;
-    if block.hash() != info.hash.to_bytes() {
+    if block.hash() != info.hash {
         return Err(blocks_invalid(
             "block blob does not hash to block_info.hash",
         ));

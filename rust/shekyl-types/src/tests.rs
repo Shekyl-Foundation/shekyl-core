@@ -30,8 +30,14 @@ fn edge_round_trip() {
     assert_eq!(BlockWeight::from_raw(1_000).to_raw(), 1_000);
     assert_eq!(LongTermWeight::from_raw(800).to_raw(), 800);
     assert_eq!(PqcAuthHash::from_bytes(bytes).to_bytes(), bytes);
+    assert_eq!(PrefixHash::from_bytes(bytes).to_bytes(), bytes);
     assert_eq!(AttestationRoot::from_bytes(bytes).as_bytes(), &bytes);
     assert_eq!(OneTimePubkey::from_bytes(bytes).to_bytes(), bytes);
+    fn via_trait<T: Hash32Bytes>(bytes: [u8; 32]) -> [u8; 32] {
+        T::from_bytes(bytes).to_bytes()
+    }
+    assert_eq!(via_trait::<PrefixHash>(bytes), bytes);
+    assert_eq!(via_trait::<CurveTreeRoot>(bytes), bytes);
     assert_eq!(CommitmentBytes::from_bytes(bytes).to_bytes(), bytes);
 }
 

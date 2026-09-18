@@ -92,12 +92,14 @@ crate's own types — the handoff names them as a confusion hazard; they are
 
 ### 3.2 `shekyl-wire` candidate-type verdict: **SUITABLE**, with two recorded deltas
 
-- `Block { header: BlockHeader, miner_transaction: Transaction, transaction_hashes: Vec<[u8; 32]> }`
-  and `Block::hash() -> [u8; 32]` (consensus Keccak-256 via
+- `Block { header: BlockHeader, miner_transaction: Transaction, transaction_hashes: Vec<TxHash> }`
+  and `Block::hash() -> BlockHash` (consensus Keccak-256 via
   `shekyl-crypto-hash`) — the identity derivation CEN-B6 defines, computed once
-  by the validator (ruling Q4/L4).
-- `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: [u8; 32], nonce: u32, curve_tree_root: [u8; 32], attestation_root: [u8; 32] }`.
-- `Transaction::hash() -> [u8; 32]`, `prefix_hash()`, `pqc_signing_payload_hashes()`.
+  by the validator (ruling Q4/L4). *(The verdict was recorded 2026-09-15
+  against raw `[u8; 32]` returns and fields; RTN-7 typed them 2026-09-18 —
+  the shapes here are the current ones.)*
+- `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: BlockHash, nonce: u32, curve_tree_root: CurveTreeRoot, attestation_root: AttestationRoot }`.
+- `Transaction::hash() -> TxHash`, `prefix_hash() -> PrefixHash`, `pqc_signing_payload_hashes() -> Vec<[u8; 32]>` (per-input signing messages, not identities — allowlisted in `check_wire_raw_hash_surface.py`).
 - `Input` is an `enum` — L5's whitelist dissolves into match exhaustiveness.
 - Dependency graph: `shekyl-crypto-hash`, `shekyl-curve-generators` directly.
   No `redb`, no store. **Measured at commit 4** (`cargo tree -e normal

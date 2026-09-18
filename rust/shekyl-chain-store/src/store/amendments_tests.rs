@@ -73,7 +73,7 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
 
     // Re-connect a different block 2 with three transactions: the total
     // resumes from the parent's row, not from anything the popped block left.
-    let b1_hash = block_info(&store, 1).expect("row").hash.to_bytes();
+    let b1_hash = block_info(&store, 1).expect("row").hash;
     let b2 = candidate(
         2,
         b1_hash,
@@ -114,7 +114,7 @@ fn long_term_effective_median_is_stored_at_the_height_it_is_in_force_for() {
         block_info(&store, 2).is_none(),
         "the row went with the block"
     );
-    let b1_hash = block_info(&store, 1).expect("row").hash.to_bytes();
+    let b1_hash = block_info(&store, 1).expect("row").hash;
     let mut different = facts(2, 0);
     different.long_term_effective_median = Fact::passed_through(LongTermWeight::from_raw(424_242));
     let out: Result<Connected, TestErr> = store.write(|batch| {

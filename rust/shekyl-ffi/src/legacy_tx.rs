@@ -103,13 +103,14 @@ pub unsafe extern "C" fn shekyl_sign_transaction(
     };
 
     let tree = shekyl_tx_builder::TreeContext {
-        reference_block,
-        tree_root,
+        // The C ABI stays raw (rule 40); the typed world begins here.
+        reference_block: shekyl_types::BlockHash::from_bytes(reference_block),
+        tree_root: shekyl_types::CurveTreeRoot::from_bytes(tree_root),
         tree_depth,
     };
 
     match shekyl_tx_builder::sign_transaction(
-        tx_prefix_hash,
+        shekyl_types::PrefixHash::from_bytes(tx_prefix_hash),
         &inputs,
         &outputs,
         shekyl_units::AtomicUnits::from_raw(fee),
@@ -323,13 +324,14 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
     // C++ wallet passes LMDB depth; convert to upstream layers (depth + 1).
     let layers = tree_depth.saturating_add(1);
     let tree = shekyl_tx_builder::TreeContext {
-        reference_block,
-        tree_root,
+        // The C ABI stays raw (rule 40); the typed world begins here.
+        reference_block: shekyl_types::BlockHash::from_bytes(reference_block),
+        tree_root: shekyl_types::CurveTreeRoot::from_bytes(tree_root),
         tree_depth: layers,
     };
 
     let result = match shekyl_tx_builder::sign_transaction(
-        tx_prefix_hash,
+        shekyl_types::PrefixHash::from_bytes(tx_prefix_hash),
         &spend_inputs,
         &outputs,
         shekyl_units::AtomicUnits::from_raw(fee),

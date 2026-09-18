@@ -23,6 +23,7 @@ use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
+use shekyl_types::PrefixHash;
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
@@ -50,12 +51,11 @@ use crate::validate::validate_inputs;
 /// - All intermediate secret material (masks, blindings) is wrapped in
 ///   [`Zeroizing`] and wiped on drop.
 /// - Randomness comes from [`OsRng`] (OS-provided CSPRNG).
-/// - The `tree_root` in `TreeContext` must be the curve tree root from the
-///   block header's `curve_tree_root` field (the topmost-layer node, whose
-///   curve depends on tree depth), **not** the block hash. Passing the block
-///   hash will produce an invalid proof that the verifier rejects.
+/// - [`TreeContext::tree_root`] is a [`shekyl_types::CurveTreeRoot`] (the
+///   header field). The proof crate takes those bytes at this call; a
+///   [`shekyl_types::BlockHash`] cannot be passed in its place.
 pub fn sign_transaction(
-    tx_prefix_hash: [u8; 32],
+    tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
     fee: shekyl_units::AtomicUnits,
@@ -83,7 +83,7 @@ pub fn sign_transaction(
 /// This crate stays bond-agnostic: it never names "bond", it consumes generic
 /// typed-side terms (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
 pub fn sign_transaction_with_terms(
-    tx_prefix_hash: [u8; 32],
+    tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
     fee: shekyl_units::AtomicUnits,
@@ -170,9 +170,11 @@ pub fn sign_transaction_with_terms(
     // ── 7. FCMP++ prove ──────────────────────────────────────────────
     let prove_result = proof::prove(
         &prove_inputs,
-        &tree.tree_root,
+        // Proof-crate boundary: both the root and the signable hash are
+        // bytes here (RAW_TYPE_NEWTYPE_MIGRATION.md original PR E).
+        tree.tree_root.as_bytes(),
         tree.tree_depth,
-        tx_prefix_hash,
+        tx_prefix_hash.to_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 
@@ -318,7 +320,7 @@ pub struct MembershipOnlyProof {
 pub fn prove_backing_membership(
     input: &SpendInput,
     tree: &TreeContext,
-    signable_tx_hash: [u8; 32],
+    signable_tx_hash: PrefixHash,
 ) -> Result<MembershipOnlyProof, TxBuilderError> {
     // The blind is not read on the membership-only path: pseudo-out blinds
     // are a full-path (key-image) concern; the membership-only pseudo-out
@@ -327,10 +329,10 @@ pub fn prove_backing_membership(
 
     let result = proof::prove_membership_only(
         &[prove_input],
-        &tree.tree_root,
+        tree.tree_root.as_bytes(),
         tree.tree_depth,
-        signable_tx_hash,
-        &tree.tree_root,
+        signable_tx_hash.to_bytes(),
+        tree.tree_root.as_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 

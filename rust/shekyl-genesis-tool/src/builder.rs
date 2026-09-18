@@ -28,6 +28,7 @@ use shekyl_wire::tx_extra::{self, TxExtraField, ML_KEM_768_CT_BYTES, PQC_LEAF_EN
 use crate::recipients::{Recipient, GENESIS_TOTAL_ATOMIC};
 use crate::txkey::{derive_genesis_tx_secret, tx_pubkey};
 use crate::{invalid, GenesisToolError};
+use shekyl_types::{AttestationRoot, BlockHash, CurveTreeRoot, TxHash};
 
 /// Genesis block major version (`CURRENT_BLOCK_MAJOR_VERSION`,
 /// `src/cryptonote_config.h`).
@@ -44,7 +45,7 @@ pub struct BuiltGenesis {
     /// Lowercase hex of the serialized tx — the `GENESIS_TX` pin.
     pub hex: String,
     /// Consensus transaction hash.
-    pub tx_hash: [u8; 32],
+    pub tx_hash: TxHash,
 }
 
 /// Build the genesis coinbase transaction for `net` from validated
@@ -180,10 +181,10 @@ pub fn genesis_block(tx: Transaction, nonce: u32) -> Result<Block, GenesisToolEr
             major_version: GENESIS_BLOCK_MAJOR_VERSION,
             minor_version: GENESIS_BLOCK_MINOR_VERSION,
             timestamp: 0,
-            previous: [0u8; 32],
+            previous: BlockHash::NULL,
             nonce,
-            curve_tree_root: shekyl_fcmp::tree::selene_hash_init(),
-            attestation_root,
+            curve_tree_root: CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            attestation_root: AttestationRoot::from_bytes(attestation_root),
         },
         miner_transaction: tx,
         transaction_hashes: Vec::new(),

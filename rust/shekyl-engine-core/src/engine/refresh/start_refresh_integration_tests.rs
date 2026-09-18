@@ -67,6 +67,7 @@ use crate::engine::{
     Credentials, DaemonClient, Engine, IoError, RefreshError, RefreshOptions, SoloSigner,
 };
 use crate::scan::ScanResult;
+use shekyl_types::{BlockHash, CurveTreeRoot};
 
 /// Build a `DaemonClient` whose underlying RPC points at an
 /// unreachable URL, on the *current* tokio runtime. Async
@@ -311,7 +312,7 @@ fn linear_chain(n: u64) -> Vec<shekyl_scanner::ScannableBlock> {
     use crate::engine::test_support::make_synthetic_block;
     let mut chain =
         Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-    let mut parent = [0u8; 32];
+    let mut parent = BlockHash::from_bytes([0u8; 32]);
     for h in 0..n {
         let block = make_synthetic_block(h, parent);
         parent = block.block.hash();
@@ -749,7 +750,12 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
     // CT-5b §3.3: empty-leaf blocks reconstruct to the empty-tree sentinel
     // at every height, so the producer's header roots are the sentinel.
     forward.block_curve_tree_roots = (1..6)
-        .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+        .map(|h| {
+            (
+                h,
+                CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            )
+        })
         .collect();
     {
         let g = arc.read().await;
@@ -772,7 +778,12 @@ async fn ingest_pre_pass_reorg_rolls_back_and_resumes_from_cursor() {
     reorg.reorg_rewind = Some(crate::scan::ReorgRewind { fork_height: 3 });
     reorg.block_leaves = (3..5).map(|h| (h, Vec::new())).collect();
     reorg.block_curve_tree_roots = (3..5)
-        .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+        .map(|h| {
+            (
+                h,
+                CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            )
+        })
         .collect();
     {
         let g = arc.read().await;
@@ -826,7 +837,12 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
     // CT-5b §3.3: empty-leaf blocks reconstruct to the empty-tree sentinel
     // at every height, so the producer's header roots are the sentinel.
     forward.block_curve_tree_roots = (1..6)
-        .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+        .map(|h| {
+            (
+                h,
+                CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            )
+        })
         .collect();
     {
         let g = arc.read().await;
@@ -872,7 +888,12 @@ async fn ingest_pre_pass_respawns_after_actor_fail_stop() {
     forward2.processed_height_range = 6..8;
     forward2.block_leaves = (6..8).map(|h| (h, Vec::new())).collect();
     forward2.block_curve_tree_roots = (6..8)
-        .map(|h| (h, shekyl_fcmp::tree::selene_hash_init()))
+        .map(|h| {
+            (
+                h,
+                CurveTreeRoot::from_bytes(shekyl_fcmp::tree::selene_hash_init()),
+            )
+        })
         .collect();
     {
         let g = arc.read().await;
@@ -952,7 +973,7 @@ async fn ingest_rejects_header_root_mismatch() {
     let mut bad = ScanResult::empty_at(1, None);
     bad.processed_height_range = 1..2;
     bad.block_leaves = vec![(1, Vec::new())];
-    bad.block_curve_tree_roots = vec![(1, [0xAB; 32])];
+    bad.block_curve_tree_roots = vec![(1, CurveTreeRoot::from_bytes([0xAB; 32]))];
 
     let g = arc.read().await;
     let err = g
@@ -1327,7 +1348,7 @@ fn ct2_hex32(s: &str) -> [u8; 32] {
 /// client to resolve from the `0x07` blob at ingest.
 struct Ct2FixtureBlock {
     height: u64,
-    root: [u8; 32],
+    root: CurveTreeRoot,
     leaves: Vec<crate::scan::OwnedTxLeaves>,
 }
 
@@ -1373,7 +1394,9 @@ fn ct2_tier_a_chain(name: &str) -> Vec<Ct2FixtureBlock> {
                 .collect();
             Ct2FixtureBlock {
                 height: b["height"].as_u64().expect("height"),
-                root: ct2_hex32(b["curve_tree_root"].as_str().expect("root hex")),
+                root: CurveTreeRoot::from_bytes(ct2_hex32(
+                    b["curve_tree_root"].as_str().expect("root hex"),
+                )),
                 // The coinbase is the only leaf-bearing tx in a Tier-A block
                 // (coinbase-only regtest fixture). `is_miner` drives the +60
                 // maturity offset in the client's drain order.
@@ -1463,7 +1486,9 @@ async fn engine_ingest_reconstructs_ct2_tier_a_root_at_every_height() {
             .reference_root_and_depth(BlockHeight::from_raw(b.height))
             .await
             .expect("root read");
-        if got != b.root {
+        // `reference_root_and_depth` still returns bytes — its typing is the
+        // curve-tree handle's, not this PR's (RTN-7 §3.2).
+        if CurveTreeRoot::from_bytes(got) != b.root {
             mismatches.push(b.height);
         }
     }
@@ -1573,7 +1598,9 @@ async fn engine_ingest_reorg_matches_ct2_tier_a_oracle_at_every_height() {
             .reference_root_and_depth(BlockHeight::from_raw(b.height))
             .await
             .expect("root read");
-        if got != b.root {
+        // `reference_root_and_depth` still returns bytes — its typing is the
+        // curve-tree handle's, not this PR's (RTN-7 §3.2).
+        if CurveTreeRoot::from_bytes(got) != b.root {
             mismatches.push(b.height);
         }
     }

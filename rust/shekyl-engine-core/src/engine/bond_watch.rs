@@ -56,7 +56,7 @@ pub(crate) fn bond_post_observations(
 ) -> impl Iterator<Item = BondPostObservation> + '_ {
     tx.prefix.inputs.iter().filter_map(|input| match input {
         Input::BondPost(bp) => Some(BondPostObservation {
-            p_canonical_id: PCanonicalId::from_bytes(bp.p_canonical_id),
+            p_canonical_id: bp.p_canonical_id,
             post_kind: post_kind_byte(&bp.kind),
         }),
         _ => None,
