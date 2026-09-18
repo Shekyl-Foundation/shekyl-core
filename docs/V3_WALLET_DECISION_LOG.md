@@ -5608,8 +5608,26 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   computes `outputs_per_node(SEGMENT_LAYER_J)` from the same widths
   independently (`segment.rs:64`). The two agree *through the widths*, not
   through each other — change `SEGMENT_LAYER_J` and nothing asserts the
-  store's segment is still the consensus segment. **The dependency already
-  runs archival-retention → curve-tree** (`Cargo.toml:46`), so
+  store's segment is still the consensus segment. Three refinements
+  (2026-09-18), the first leading: **(i) `SEGMENT_LAYER_J` is marked
+  "provisional" (`segment.rs:17`) and is de facto consensus-frozen — the
+  marker invites the fork.** A reader takes it at face value, moves `j` to
+  3, and the wallet store partitions at 987 696 leaves while
+  `frozen_segment_count` keeps admitting `shard_id`s against 25 992; no
+  gate, and a comment that said it was safe. Either the marker goes or the
+  tie lands, and the marker going is not the cheaper fix. **(ii) The config
+  file is the more dangerous door:** `consensus_constants.json` is editable
+  without touching Rust, curve-tree would never notice, and the edit reads
+  as a parameter tune when it is a partition change. **(iii) The config
+  value reaches challenge leaf selection too**, not only admission and
+  revert: the production geometry for `challenge_leaf_index` is the
+  per-segment leaf count recorded in the segment registry at freeze
+  (`blockchain.cpp:5050–5073` → FFI), and that row is written from
+  `SEGMENT_LEAF_COUNT`. (`challenge.rs:273` passes the constant directly,
+  but that is a test.) So a config move partitions admission, revert and
+  challenge selection together and leaves the store behind. **The
+  dependency already runs archival-retention → curve-tree**
+  (`Cargo.toml:46`), so
   archival-retention is the crate that sees both and is where the equality
   assertion belongs; E3/S-CURVE is the unbuilt side that must consume
   `frozen_segment_count` / `SEGMENT_LEAF_COUNT` rather than mint a
@@ -5646,7 +5664,19 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   archival-retention (which sees both), or curve-tree's copy moves there and
   is imported back. A PR that starts in `segment.rs` discovers this the
   wrong way round. Same site, same PR, as the
-  `SEGMENT_LEAF_COUNT == outputs_per_node(SEGMENT_LAYER_J)` tie above. (b) **`recon`'s
+  `SEGMENT_LEAF_COUNT == leaves_per_segment()` tie above. **Implementation
+  wrinkle on that tie:** `leaves_per_segment` and `outputs_per_node` are
+  `pub fn`, not `const fn`, so the equality cannot be a compile-time assert
+  as written; and `outputs_per_node`'s loop uses
+  `u8::try_from(layer).expect(..)`, which is not const (`Result::expect`
+  needs `E: Debug`), so the loop is rewritten over a `u8` counter
+  (`layer_is_selene` is already `is_multiple_of`, const-stable). For a
+  consensus-equality invariant the compile-time form is strictly better
+  than a test; a PR that tries the assert first will hit this and may
+  settle for a test. The partition PR is therefore three small pieces —
+  `const fn` in curve-tree, the equality assert and the 720 assert in
+  archival-retention — all in the crate the dependency direction forces,
+  all before E3 has anything to import. (b) **`recon`'s
   oracle is a fact about timing:** `recon.rs:6–13` replicates the daemon's
   C++ leaf-stream derivation bit-exactly, and that duplication is an oracle
   *because* the two implementations are independent. After E3 the daemon's
