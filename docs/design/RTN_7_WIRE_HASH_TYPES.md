@@ -1,10 +1,10 @@
 # RTN-7 — the wire crate's hash surface is typed, and a gate keeps it so
 
-**Status:** OPEN — Round 0 (rule-26 pre-flight), written 2026-09-17 against
-`dev` = `398d85e7b` (post-#768). **Halt condition:** no production code
-lands until PR #771 (`RTN-1…RTN-6`) is on `dev` — this item's `AttestationRoot`
-and `#![no_std]` `shekyl-types` arrive there, and #771 edits the same
-`block.rs` doc lines. Family: `RTN-1…RTN-N`, registered by #771
+**Status:** OPEN — Round 0 **ruled 2026-09-17 (Q1–Q5, §6)**; implementing
+against `dev` = `eac99894a` (post-#771). Written 2026-09-17 against
+`398d85e7b`; the halt (no production code until #771, which brings
+`AttestationRoot` and `#![no_std]` `shekyl-types`) lifted when #771 merged
+the same day. Family: `RTN-1…RTN-N`, registered by #771
 ([`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2); this is the
 seventh item. Work plan of record:
 [`RAW_TYPE_NEWTYPE_MIGRATION.md`](RAW_TYPE_NEWTYPE_MIGRATION.md) §6, whose
@@ -69,16 +69,16 @@ either. Returns and fields are one unit.
 | `BlockHeader.curve_tree_root` | `[u8; 32]` | `CurveTreeRoot` | CEN-B5 compares it to `root_at(h): CurveTreeRoot` |
 | `BlockHeader.attestation_root` | `[u8; 32]` | `AttestationRoot` | minted by #771 for exactly this field |
 | `Block.transaction_hashes` | `Vec<[u8; 32]>` | `Vec<TxHash>` | `repr(transparent)` keeps the merkle path sound |
-| `Ct::Fcmp.reference_block` | `[u8; 32]` | `BlockHash` | **ruled in 2026-09-17, for a reason beyond symmetry:** it is `ref_height`'s companion — the field CEN-I12's finding is about. Raw beside a typed `previous` is the asymmetry someone asks about in six months and finds no answer for. **Scope consequence, stated:** this reaches `shekyl-tx-builder`, the *construction* side, and reference-block selection is the path the I12 gap lives on. Type-only or not, that changes who reviews it — the tx-builder owner reviews the `reference_block` commit, not only the wire owner. |
-| `BondPost.p_canonical_id` | `[u8; 32]` | `PCanonicalId` | **Q1** — `PCanonicalId` exists (`redact` arm: truncated `Debug`, full `Display`); the wire field predates it. Same class as the hashes (an identity, not a crypto object). Default: **in**. |
+| `Ct::Fcmp.reference_block` | `[u8; 32]` | `BlockHash` | **ruled in 2026-09-17, for a reason beyond symmetry:** it is `ref_height`'s companion — the field CEN-I12's finding is about. Raw beside a typed `previous` is the asymmetry someone asks about in six months and finds no answer for. **Scope consequence, stated:** this reaches `shekyl-tx-builder`, the *construction* side, and reference-block selection is the path the I12 gap lives on. **Q5 (ruled): the review is narrow and the commit says so** — what the reviewer establishes is that no `reference_block` / `ref_height` *selection* logic moved, only the type. Naming it that way keeps the scope from expanding into the I12 question. |
+| `BondPost.p_canonical_id` | `[u8; 32]` | `PCanonicalId` | **Q1 — in (ruled).** `PCanonicalId` exists under the `redact` arm (truncated `Debug`, full `Display`), is already on the wire, and truncated `Debug` is the right rendering for a persona identity inside a `BondPost`. |
+| `Transaction::prefix_hash()` | `[u8; 32]` | `PrefixHash` (**new**, `shekyl-types`, default arm) | **Q3 — overridden (ruled): typed, and not as `SignableTxHash`.** `prefix_hash()` is `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)` — the **first** component of the txid preimage; `PrunableHash` (`lib.rs:427`) is the fourth and `PqcAuthHash` the third. The component-hash family already exists and this is its missing member, not a new category; a fresh name would make the next reader work out whether `SignableTxHash` and `PrunableHash` are the same kind of thing. And it closes the confusion the allowlist would only have named: raw, it passes into `TxHash::from_bytes` or any `[u8; 32]` parameter without complaint. `TxHash` is the output, the component hashes are the inputs, and the type system refuses either direction. Consumer: `shekyl-tx-builder` (`wire.rs:324,347,377,520`) signs its bytes — `as_bytes()` at the signing call. |
 
 ### 3.2 Out — stays `[u8; 32]`, named in the gate's allowlist with the reason
 
 | Surface | Reason |
 | --- | --- |
-| `Output.key`, `CtBase.commitments`, `BpPlus.{a,b,l,r}`, `Prunable.pseudo_outs` | curve points / scalars — transform-shaped crypto objects, `RAW_TYPE_NEWTYPE_MIGRATION.md` original PR E, **DEFERRED** to the defining crates. #771 mints `OneTimePubkey` / `CommitmentBytes` for `TransferDetails` (engine-state persistence), not for the wire codec; adopting them here is that family's next item, not this one. |
-| `PqcOwnershipEntry.group_id` (`tx_extra.rs:108`) | a multisig group id — an identity, but with no `shekyl-types` newtype and no consumer that would distinguish it; **Q2**: mint `GroupId` here, or allowlist with this reason and a reopening criterion (a second consumer). Default: allowlist. |
-| `Transaction::prefix_hash()` | the FCMP++ `signable_tx_hash` — a *signing preimage digest*, not a chain identity; consumed by `shekyl-tx-builder` as bytes to sign. Not a `TxHash` (it would be wrong to let one be passed where the other is expected — that is the confusion the types exist to refuse). **Q3**: allowlist as-is, or mint `SignableTxHash`. Default: allowlist; reopen if a second consumer appears. |
+| `Output.key`, `CtBase.commitments`, `BpPlus.{a,b,l,r}`, `Prunable.pseudo_outs` | curve points / scalars — transform-shaped crypto objects, `RAW_TYPE_NEWTYPE_MIGRATION.md` original PR E, **DEFERRED — addressee named (Q4 ruling: a cause with no addressee is how `DEFERRED_DOCS`-shaped lists rot):** `Output.key` → `shekyl-tx-builder` / `shekyl-scanner` (the one-time-key derivation and match sites; #771's `OneTimePubkey` is minted for `TransferDetails` persistence in `shekyl-engine-state` and its adoption at the codec is that crate pair's decision); `commitments`, `pseudo_outs` → `shekyl-tx-builder` (`CommitmentBytes`, same provenance); `BpPlus.{a,b,l,r}` → `shekyl-proofs` (proof scalars/points; their newtypes, if any, live where the proof is built and verified). Reopen: when any addressee adopts the newtype on its own side of the boundary, the wire field follows in the same PR. |
+| `PqcOwnershipEntry.group_id` (`tx_extra.rs:108`) | **Q2 — allowlist (ruled), with the discriminator in the cell so a later reviewer re-runs the test instead of re-deriving it:** *adjacency* — could a code path plausibly pass a txid, key image or component hash where a group id belongs? It is parsed into a struct and consumed by group logic; no site takes a bare `[u8; 32]` that could be either. Low. Reopen when a second consumer of `group_id` appears, or when any site accepts it as a bare array beside another 32-byte value. Zero-hash for single-signer. |
 | `hash.rs` `hash_concat` / `merkle_root` / `hash_pair` | `pub(crate)` mixers over raw digests; not surface. The gate scans `pub` items only. |
 | `TxSegments` byte vectors, `Vec<u8>` blobs | not 32-byte, not in the gate's pattern. |
 
@@ -109,7 +109,11 @@ unnamed occurrences red.
   `Vec<[u8; 32]>`, `Option<[u8; 32]>`, `&[[u8; 32]]`). `pub(crate)` is not
   surface and is not scanned.
 - **Allowlist:** `ALLOWED: dict[str, str]` of `"<file>::<item>": "<reason>"`
-  — §3.2's rows, byte-exact.
+  — §3.2's rows, byte-exact. **Q4 (ruled): the broad reading** — every
+  `[u8; 32]` on the surface is the subject, the crypto objects are the
+  named exceptions, and every exception's reason **names its addressee
+  crate**, because the red-when-the-item-is-gone leg cannot help an entry
+  whose owner is unspecified.
 - **Red in both directions (rule 47):** an occurrence not in the allowlist;
   an allowlist entry whose item no longer exists (the allowlist may not
   outlive its subject); an empty scan (the crate moved, the regex broke —
@@ -121,36 +125,40 @@ unnamed occurrences red.
 
 ## 5. Commit plan (rule 90; ≤ 10)
 
-1. `wire: hash returns and header fields are typed` — `txid.rs` returns,
-   `Block::hash()`, `BlockHeader.{previous,curve_tree_root,attestation_root}`,
-   `Block.transaction_hashes`, `BondPost.p_canonical_id` (Q1). Serializer
+1. `types: PrefixHash — the txid preimage's first component` — beside
+   `PqcAuthHash` and `PrunableHash`, default arm.
+2. `wire: hash returns and header fields are typed` — `txid.rs` returns,
+   `Block::hash()`, `prefix_hash() -> PrefixHash`,
+   `BlockHeader.{previous,curve_tree_root,attestation_root}`,
+   `Block.transaction_hashes`, `BondPost.p_canonical_id`. Serializer
    unchanged; every parity KAT (`pruned_tx_hash_parity`,
    `serve_credit_tx_parity`, live-oracle pin, block vectors) green
    unchanged — that is the proof the change is type-only.
-2. `wire: Ct::Fcmp.reference_block is a BlockHash` — its own commit, its
-   own reviewer (§3.1).
-3. `chain-store: Hash32 converts from the identity types` — `From<BlockHash>`,
+3. `wire: Ct::Fcmp.reference_block is a BlockHash` — its own commit, its
+   own reviewer (§3.1); the message states that no selection logic moved.
+4. `chain-store: Hash32 converts from the identity types` — `From<BlockHash>`,
    `From<TxHash>`; codec call sites.
-4. `chain-rules: …`, 5. `engine-core: …`, 6. `daemon-rpc + genesis-tool +
-   singletons: …` — one fixup commit per consuming crate; deletions of
-   `from_bytes` wrappers, wrapped literals in tests.
-5. `ci: check_wire_raw_hash_surface — the wire surface refuses raw [u8; 32]`
+5. `chain-rules: …`, 6. `engine-core + tx-builder: …`, 7. `daemon-rpc +
+   genesis-tool + singletons: …` — one fixup commit per consuming crate;
+   deletions of `from_bytes` wrappers, wrapped literals in tests.
+8. `ci: check_wire_raw_hash_surface — the wire surface refuses raw [u8; 32]`
    — gate + selftest + workflow wiring.
-6. `docs:` — §6 rows closed in `RAW_TYPE_NEWTYPE_MIGRATION.md` (status
+9. `docs:` — §6 rows closed in `RAW_TYPE_NEWTYPE_MIGRATION.md` (status
    table gains the RTN-7 row, LANDED); index RTN row `UPDATE`; CHANGELOG
    API entry; this doc's banner → LANDED and `git mv` to `docs/completed/`
    (rule 95). FOLLOWUPS row for the `Tagged<V>` finding (§2) if its owner
    has not landed one.
 
-## 6. Open questions for ruling
+## 6. Questions — ruled 2026-09-17
 
-- **Q1** `BondPost.p_canonical_id: PCanonicalId` — default in (§3.1).
-- **Q2** `group_id` — allowlist with reason, or mint `GroupId`. Default: allowlist.
-- **Q3** `prefix_hash()` — allowlist as a signing-preimage digest, or mint
-  `SignableTxHash`. Default: allowlist.
-- **Q4** Gate breadth — chain-identity types only (this doc), or every
-  `[u8; 32]` on the surface with the crypto objects allowlisted (§3.2 is
-  written for the latter; the ruling's wording — "refusing `[u8; 32]`
-  outside a named allowlist" — is the latter). Default: the latter.
-- **Q5** Reviewer of record for commit 2 (`reference_block`): the
-  tx-builder / I12 owner.
+- **Q1** `BondPost.p_canonical_id: PCanonicalId` — **in**, as defaulted (§3.1).
+- **Q2** `group_id` — **allowlist**, with the adjacency discriminator
+  written into the reason cell (§3.2).
+- **Q3** `prefix_hash()` — **overridden: typed as `PrefixHash`**, a new
+  `shekyl-types` member of the existing component-hash family, not
+  `SignableTxHash` and not allowlisted (§3.1).
+- **Q4** Gate breadth — **the broad reading**; every exception names its
+  addressee crate (§3.2, §4).
+- **Q5** Reviewer for the `reference_block` commit — the implementer's
+  call; the commit states the narrow subject (type only, no selection
+  logic moved) so the review stays that narrow (§3.1).
