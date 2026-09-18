@@ -195,6 +195,22 @@ auth (no per-fetch circuit isolation).
 - Not a reserved `/v2/shard/` (or any other token) in today's route
   table. The suffix-shaped successor is the reopening *shape*, not a
   path this endpoint answers.
+- Not a path the **daemon** answers, now or under any performance
+  argument. The serving path runs from the wallet-side shard store; the
+  daemon holds archival consensus state and no serving state, because an
+  archiver-backed daemon that behaves differently from a plain one
+  fingerprints the Principal's public address (RULED 2026-09-17,
+  `V3_WALLET_DECISION_LOG.md`, two stores). The 128-byte leaf bytes this
+  route serves are already consensus (the leaf-hash preimage, PL-D3
+  frozen); what the two independently built stores must agree on beyond
+  them is the **segment partition**, which is itself consensus
+  (`frozen_segment_count` decides admissible `shard_id`s and what pop
+  revert deletes), with the tie between `SEGMENT_LEAF_COUNT` and
+  `shekyl_curve_tree::segment` owed in archival-retention. That tie and
+  the archiver-store retention horizon are FOLLOWUPS rows.
+  A daemon *fetching* a shard through this route for its own reasons is
+  episodic and carries no posture signal; *serving* would be durable, and
+  that is the distinction the ruling rests on.
 
 ---
 
