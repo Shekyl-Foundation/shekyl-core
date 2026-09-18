@@ -10,15 +10,20 @@
 //! pinned in `docs/design/CT1_ROUND1_PINS.md`.
 
 use shekyl_consensus::DEFAULT_LOCK_WINDOW;
-use shekyl_fcmp::tree::{
-    layer_is_selene, try_build_layers, HELIOS_CHUNK_WIDTH, SCALARS_PER_LEAF, SELENE_CHUNK_WIDTH,
-};
+use shekyl_fcmp::tree::{try_build_layers, SCALARS_PER_LEAF};
 
-/// Sub-root layer index `j` for segment boundaries (provisional; §7.2.2).
-pub const SEGMENT_LAYER_J: u8 = 2;
+/// Sub-root layer index `j` for segment boundaries — re-exported from
+/// [`shekyl_fcmp::tree`], which owns the partition (the one home; see the
+/// module comment there). This crate's `LeafStore` partitions by it and the
+/// consensus reader in `shekyl-archival-retention` asserts its
+/// `SEGMENT_LEAF_COUNT` against it; neither restates it.
+pub use shekyl_fcmp::tree::SEGMENT_LAYER_J;
 
 /// Same numeric value as `ARCHIVAL_REORG_DEPTH_BLOCKS` (720). Hardcoded until
-/// PHASE_2B codegen; see `docs/FOLLOWUPS.md`.
+/// PHASE_2B codegen (`docs/FOLLOWUPS.md`, CT-1 dedup); the equality is
+/// const-asserted in `shekyl-archival-retention` (`segment_freeze.rs`), the
+/// crate that sees both constants — it cannot be asserted here, because the
+/// dependency runs the other way.
 pub const SEGMENT_FREEZE_REORG_MARGIN_BLOCKS: u64 = 720;
 
 /// Output maturity / spendable age in blocks (`CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE`).
@@ -43,26 +48,9 @@ pub struct SegmentId(pub u32);
 
 crate::types::redb_delegated_key!(SegmentId, u32, "shekyl_curve_tree::SegmentId");
 
-/// Outputs covered by one node at sub-root layer `j` (= segment size `E`).
-#[must_use]
-pub fn outputs_per_node(j: u8) -> usize {
-    let mut e = SELENE_CHUNK_WIDTH;
-    for layer in 1..=usize::from(j) {
-        let layer = u8::try_from(layer).expect("tree layer fits u8");
-        e *= if layer_is_selene(layer) {
-            SELENE_CHUNK_WIDTH
-        } else {
-            HELIOS_CHUNK_WIDTH
-        };
-    }
-    e
-}
-
-/// Leaves per segment at the pinned layer `j`.
-#[must_use]
-pub fn leaves_per_segment() -> usize {
-    outputs_per_node(SEGMENT_LAYER_J)
-}
+/// Segment size `E` at layer `j`, and the pinned segment size — re-exported
+/// from [`shekyl_fcmp::tree`] (the one home for the partition).
+pub use shekyl_fcmp::tree::{leaves_per_segment, outputs_per_node};
 
 /// Height-based freeze gate (`CT1_ROUND1_PINS.md`).
 #[must_use]
@@ -104,16 +92,6 @@ pub fn leaf_bytes_to_scalars(leaves: &[[u8; 128]]) -> Vec<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn outputs_per_node_matches_ct0_harness() {
-        assert_eq!(outputs_per_node(0), SELENE_CHUNK_WIDTH);
-        assert_eq!(outputs_per_node(1), SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH);
-        assert_eq!(
-            outputs_per_node(2),
-            SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH * SELENE_CHUNK_WIDTH
-        );
-    }
 
     #[test]
     fn freeze_gate_requires_height_burial() {

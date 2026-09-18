@@ -600,9 +600,73 @@ pub fn chunk_width(layer: u8) -> usize {
 }
 
 /// Returns true if the given layer uses Selene (even layers), false for Helios (odd layers).
-pub fn layer_is_selene(layer: u8) -> bool {
+pub const fn layer_is_selene(layer: u8) -> bool {
     layer.is_multiple_of(2)
 }
+
+// ---------------------------------------------------------------------------
+// Segment partition — the one home (V3_WALLET_DECISION_LOG.md 2026-09-17,
+// "two stores"; ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2)
+//
+// The archival segment is a level-`j` subtree of this tree. Which leaves make
+// up segment `k` is read by two independently built stores — the wallet-side
+// shard store (`shekyl-curve-tree`) that serves segment bytes, and the
+// consensus reader in `shekyl-archival-retention` (`frozen_segment_count`:
+// bond admission and pop revert) — and by every challenge, whose leaf index
+// is taken against the segment's recorded leaf count. A divergent partition
+// forks admission and revert away from the store. The derivation therefore
+// lives here, beside the widths it is a function of, and both consumers take
+// it from this crate: the consensus side const-asserts its config-generated
+// `SEGMENT_LEAF_COUNT` against `leaves_per_segment()`, and the store side
+// re-exports these rather than restating them. `const fn`, so that assert is
+// compile-time in the production graph, not a test that may or may not run.
+
+/// Sub-root layer index `j` for archival segment boundaries.
+///
+/// **Consensus-frozen, not a tunable.** `frozen_segment_count` partitions
+/// admissible `shard_id`s and pop revert by `SEGMENT_LEAF_COUNT`, which
+/// `shekyl-archival-retention` const-asserts equal to [`leaves_per_segment`].
+/// Moving `j` is a consensus change — a constants bump plus fixture
+/// regeneration under `ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2's reversion
+/// criteria — and the build fails at that assert until both sides move
+/// together. *SUPERSEDED 2026-09-18: "(provisional; §7.2.2)" — Gate 2's
+/// provisional level 2 became the pinned constant in the freeze pipeline
+/// round.*
+pub const SEGMENT_LAYER_J: u8 = 2;
+
+/// Outputs covered by one node at sub-root layer `j` (= segment size `E`):
+/// the product of the chunk widths from the leaf layer up to `j`.
+#[must_use]
+pub const fn outputs_per_node(j: u8) -> usize {
+    let mut e = SELENE_CHUNK_WIDTH;
+    let mut layer: u8 = 1;
+    while layer <= j {
+        e *= if layer_is_selene(layer) {
+            SELENE_CHUNK_WIDTH
+        } else {
+            HELIOS_CHUNK_WIDTH
+        };
+        layer += 1;
+    }
+    e
+}
+
+/// Leaves per archival segment at the pinned layer [`SEGMENT_LAYER_J`]
+/// (`38 · 18 · 38 = 25 992` under the production widths).
+#[must_use]
+pub const fn leaves_per_segment() -> usize {
+    outputs_per_node(SEGMENT_LAYER_J)
+}
+
+// The CT-0 harness figures ("j=0 → 38, j=1 → 684, j=2 → 25 992",
+// tests/curve_tree_freeze.rs), pinned at compile time now that the
+// derivation is `const`: a width or layer change that moves the segment size
+// fails here, not in a test that has to be selected.
+const _: () = assert!(outputs_per_node(0) == SELENE_CHUNK_WIDTH);
+const _: () = assert!(outputs_per_node(1) == SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH);
+const _: () =
+    assert!(outputs_per_node(2) == SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH * SELENE_CHUNK_WIDTH);
+const _: () = assert!(leaves_per_segment() == 25_992);
 
 // ---------------------------------------------------------------------------
 // Scalar deserialization helpers

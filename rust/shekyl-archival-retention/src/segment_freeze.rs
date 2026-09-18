@@ -34,18 +34,30 @@
 //! bump + fixture regen), or a V4 tree migration changing widths (that
 //! migration's own design round).
 
-use shekyl_fcmp::tree::{HELIOS_CHUNK_WIDTH, SELENE_CHUNK_WIDTH};
+use shekyl_fcmp::tree::{leaves_per_segment, SELENE_CHUNK_WIDTH};
 
 include!(concat!(env!("OUT_DIR"), "/segment_leaf_count_generated.rs"));
 
-// Width-product pin: SEGMENT_LEAF_COUNT is derived from the tree widths,
-// not chosen. A width change on the shekyl-fcmp side fails here instead
-// of silently stranding the JSON value (pipeline doc §5.2).
+// Partition pin (V3_WALLET_DECISION_LOG.md 2026-09-17, "two stores"): the
+// config-generated SEGMENT_LEAF_COUNT must equal the partition derivation
+// that lives in `shekyl_fcmp::tree` — the one home both stores consume. The
+// wallet-side shard store partitions by `leaves_per_segment()`; this crate's
+// consensus reader (`frozen_segment_count`: bond admission and pop revert)
+// partitions by the JSON value. Until this assert the two agreed only because
+// the JSON value happened to equal the width product `38 · 18 · 38`; a
+// `SEGMENT_LAYER_J` move, or a config edit that reads as a tune, would have
+// forked admission and revert away from the store with nothing failing.
+// Compile-time, in the production graph — a consensus equality must not
+// depend on which tests ran. (Replaces the earlier hand-written
+// `SELENE * HELIOS * SELENE` pin, which restated the derivation instead of
+// taking it from its owner.)
 const _: () = assert!(
-    SEGMENT_LEAF_COUNT == (SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH * SELENE_CHUNK_WIDTH) as u64,
-    "SEGMENT_LEAF_COUNT must equal the level-2 subtree leaf count \
-     SELENE_CHUNK_WIDTH * HELIOS_CHUNK_WIDTH * SELENE_CHUNK_WIDTH \
-     (ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2)"
+    SEGMENT_LEAF_COUNT == leaves_per_segment() as u64,
+    "SEGMENT_LEAF_COUNT (consensus, config-generated) must equal \
+     shekyl_fcmp::tree::leaves_per_segment() (the partition both stores take \
+     from that crate): a divergent partition forks bond admission and pop \
+     revert away from the shard store (V3_WALLET_DECISION_LOG.md 2026-09-17; \
+     ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md §5.2)"
 );
 
 // Chunk alignment: segment bases are leaf-chunk-aligned, which the §6.2
@@ -132,6 +144,25 @@ pub fn challenge_leaf_chunk_bounds(
         leaf_count: width,
     })
 }
+
+// Freeze-margin tie, in the dev graph: `shekyl-curve-tree` hardcodes 720
+// beside a comment saying it equals `ARCHIVAL_REORG_DEPTH_BLOCKS`, which is
+// generated here from the economics config. A segment freezing at one depth
+// while the bond assembly window, the pass anchor and SO-D8e's fork analysis
+// move at another is a segment frozen and served inside the depth the rest of
+// the system treats as reorg-able. This crate takes `shekyl-curve-tree` only
+// as a dev-dependency — the production edge is refused (`path.rs`: the
+// consensus crate does not import the wallet-side store crate), so the pin is
+// compile-time in every test build and every `clippy --all-targets`, not in
+// the lib. Interim to the PHASE_2B codegen dedup (docs/FOLLOWUPS.md, CT-1).
+#[cfg(test)]
+const _: () = assert!(
+    shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS
+        == crate::bond_floor::ARCHIVAL_REORG_DEPTH_BLOCKS,
+    "shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS must equal \
+     ARCHIVAL_REORG_DEPTH_BLOCKS: a segment must not freeze inside the depth the \
+     rest of the system treats as reorg-able (docs/FOLLOWUPS.md, CT-1 dedup)"
+);
 
 #[cfg(test)]
 mod tests {
