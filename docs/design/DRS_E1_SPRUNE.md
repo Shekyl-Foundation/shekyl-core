@@ -12,9 +12,10 @@ is cut (rule 26: design closure precedes any cut; E1 got
 **Nothing here is proposed as new design**; where a section's contract is
 not yet ruled it says so and names the question. The increment ordinal and
 the Round-0 pre-flight are DRS-E's; the filename is provisional until DRS
-numbers the increment (`FOLLOWUPS.md`'s F31 row is the falsifier). **Cannot
-open as a plan before `PDM-Q1` grades §9** (it needs the retained set to know
-what it may touch); can be written now.
+numbers the increment (`FOLLOWUPS.md`'s F31 row is the falsifier). **The
+Q1 gate is cleared:** `PDM-Q1` RULED 2026-09-18 (§9 of the charter graded
+against the tx unit), so the plan **may open**; its Round-0 pre-flight owes
+Q1's journal-horizon check alongside (§9 below).
 
 **Family:** none minted here. Findings and questions this document raises
 at pre-flight take DRS-E's next free series (rule 94 §1), not a `PDM-` id.
@@ -52,8 +53,9 @@ Asserted there, never discovered downstream — a violated predicate is a
 refused discard, not a corrupted write. `first_tx_id(h)` is
 `block_info[h−1].cumulative_tx_count` for `h ≥ 1` and **`first_tx_id(0) = 0`**
 (FL-R3-STORE, `BlockInfo`, landed on #772); `close_height(k)` is
-`height(b_{k+1})`, a binary search over the same running total. No new
-state for either. **Genesis guard:** the batch evaluates the predicate
+`height(b_{k+1} − 1)` — the last **included** transaction's height, since
+`b_{k+1}` is the first of `k+1` and need not exist yet — a binary search
+over the same running total. No new state for either. **Genesis guard:** the batch evaluates the predicate
 **only when `tip ≥ W`**; while the chain is younger than `W` no shard
 discards. `tip − W` is never formed by saturating arithmetic — the store's
 `BlockHeight − BlockCount` panics on this boundary, and that is correct: a
