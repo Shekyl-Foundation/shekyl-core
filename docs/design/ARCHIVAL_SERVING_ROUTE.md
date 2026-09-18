@@ -200,14 +200,19 @@ auth (no per-fetch circuit isolation).
   daemon holds archival consensus state and no serving state, because an
   archiver-backed daemon that behaves differently from a plain one
   fingerprints the Principal's public address (RULED 2026-09-17,
-  `V3_WALLET_DECISION_LOG.md`, two stores). The 128-byte leaf bytes this
-  route serves are already consensus (the leaf-hash preimage, PL-D3
-  frozen); what the two independently built stores must agree on beyond
-  them is the **segment partition**, which is itself consensus
-  (`frozen_segment_count` decides admissible `shard_id`s and what pop
-  revert deletes), with the tie between `SEGMENT_LEAF_COUNT` and
-  `shekyl_curve_tree::segment` owed in archival-retention. That tie and
-  the archiver-store retention horizon are FOLLOWUPS rows.
+  `V3_WALLET_DECISION_LOG.md`, two stores). **As built today** the route
+  serves 128-byte leaf bytes (consensus already: the leaf-hash preimage,
+  PL-D3 frozen) under the leaf partition (`frozen_segment_count` decides
+  admissible `shard_id`s and what pop revert deletes; the
+  `SEGMENT_LEAF_COUNT` ↔ `shekyl_curve_tree::segment` tie is an interim
+  FOLLOWUPS row). **Under `PDM-Q6` item 4 (RULED 2026-09-18, #774; re-keyed
+  here 2026-09-18, `PDM-Q-F33`)** the served frame becomes per-tx prunable
+  bodies keyed by `[b_k, b_{k+1})`, and what the two independently built
+  stores must agree on is the **shard partition `b_*`** — consensus,
+  derived only from the daemon's retained length rows (F32) with
+  `SHARD_BYTES` in one const-asserted home; the leaf partition and its
+  tie are a deletion surface at E4 / S-ARCH (Q12). The archiver-store
+  retention horizon is a FOLLOWUPS row under either unit.
   A daemon *fetching* a shard through this route for its own reasons is
   episodic and carries no posture signal; *serving* would be durable, and
   that is the distinction the ruling rests on.
