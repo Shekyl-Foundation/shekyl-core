@@ -1,6 +1,11 @@
 # SOK-10 — path position resolution
 
-**Status:** OPEN — Round 0 (sweep). No design round. No production code.
+**Status:** OPEN — **Round 1 (design) proposed 2026-09-18**, awaiting rulings
+on `SOK-Q7` (then `SOK-Q5` / `SOK-Q6` only if Q7 keeps the assembler). Round 0
+sweep confirmed by the maintainer 2026-09-18 with the mechanism sharpened
+(§1.1a). No production code. Process per `26-sub-pr-design-discipline.mdc`
+(A2 audit-against-actual-code, A4 boundary reasoning, review-round
+denominator §4).
 
 **Owner:** the path-FFI lane (this branch, `feat/sok-10-path-position-resolution`).
 FOLLOWUPS routes SOK-10 here as "PDM-Q-F9's"; that is this lane. The next reader
@@ -9,8 +14,9 @@ does not re-derive it.
 **Pin:** `dev` = `8494f2a27f8b88aecdb11bb9548be5c70f3e9357` (merge of PR #779).
 Every code claim below was re-read at this SHA. Line numbers are of this pin.
 
-**Halt.** This file is the Phase 0 sweep record. Round 1 (rule 26 design) does
-not start until the maintainer says so. Nothing in §2 is ruled.
+**Halt.** §1 is the Round 0 sweep record (confirmed). §3 is Round 1's
+proposal. Nothing in §2 or §3 is ruled. Implementation does not start until
+`SOK-Q7` is ruled.
 
 Implements *from* [`DRS_E1_SOUT_KI.md`](DRS_E1_SOUT_KI.md) §3.4 / findings table
 SOK-10 (routed off that surface, rule 22), [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)
@@ -106,10 +112,57 @@ the proof fails verification. Fail-closed; not a soundness hole; live
 liveness. Inherited from pre-extraction C++ (`f2df035e7`), as SOK-10
 already records.
 
-Recorded fix (not designed this round): Rust assembler resolves
+Recorded fix (not designed in Round 0): Rust assembler resolves
 `TreePosition → GlobalOutputIndex` before `output_oc`, via `leaf_to_output`
 (S-CURVE's read on redb; `get_leaf_output_index` on LMDB today). Rule 20:
-the resolution is Rust; C++ stays a callback shim.
+the resolution is Rust; C++ stays a callback shim. Whether that fix is
+built at all is `SOK-Q7` (§3.1).
+
+### 1.1a Mechanism, sharpened (maintainer check 2026-09-18, verified at source)
+
+The two indexes diverge on **every chain that has ever carried a
+transaction**, not only on a contrived one. The maturity rule is per output
+type, on both target variants:
+
+```565:577:src/blockchain_db/blockchain_db.cpp
+        if (std::holds_alternative<txout_to_tagged_key>(vout.target))
+        {
+          output_key = std::get<txout_to_tagged_key>(vout.target).key;
+          maturity_raw = is_miner
+              ? block_height_raw + CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW
+              : block_height_raw + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE;
+        }
+        else if (std::holds_alternative<txout_to_key>(vout.target))
+        {
+          // ... same rule
+```
+
+`CRYPTONOTE_MINED_MONEY_UNLOCK_WINDOW = 60`, `CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE
+= 10` (`cryptonote_config.h:45`, `:49`). Global index is assigned in scan order,
+coinbase first (`this_output{next_output_seq++}` at `:555`;
+`CT2_DRAIN_ORDER.md` §2.1). Leaves drain in `(maturity, gindex)`.
+
+So in the first block `h` that carries a transaction: the coinbase holds the
+**lower** gindex and matures at `h+60`; the transaction's outputs hold higher
+gindexes and mature at `h+10`. The transaction's leaves land at **lower** tree
+positions than the coinbase's. From that block on, `pos ≠ gindex` for the
+inverted pair and every later leaf shifts with it; the two orderings never
+re-coincide under any continuing transaction flow.
+
+`read_output_oc(pos)` therefore pairs the leaf at position `pos` with a
+**different output's** `(O, C)` on every real chain. Fail-closed at proof
+verification (§1.1), but wrong everywhere.
+
+Why nothing caught it (§1.3, restated with the mechanism): every fixture is
+coinbase-only, where one maturity rule applies to every output and the two
+orderings coincide exactly. The divergence is unrepresentable in those
+fixtures — the same shape as a zero `curve_tree_roots` entry passing on a
+chain too short to have a gap.
+
+Why production is unaffected: the wallet assembles locally
+(`assemble.rs:98–:116`) by resolving `gindex` **through the drain-order
+stream** — the correct resolution. The daemon assembler is the only site with
+the bug, and it has no production consumer (§1.2, §3.1 table).
 
 ### 1.2 Wallet `output_indices` semantics — (c)
 
@@ -310,7 +363,9 @@ a status change in their cell is not.
 | **SOK-11** | Wire field `output_indices` is unlabeled (`FCMP_PLUS_PLUS.md:383`); the handler implements **tree position** (`core_rpc_server.cpp:1522–:1541`). Production spend does not call this RPC (§1.2). A client following the field name would get (b): the whole path for the wrong leaf. In-tree callers today either send a tree position (spike) or `[0]` on a coinciding fixture (e2e). | Contract prose (and possibly a rename) is this lane's `FCMP_PLUS_PLUS.md` half. Do not fold into SOK-10. Question **SOK-Q5**. |
 | **SOK-12** | `db_lmdb.h:971` comments `m_curve_tree_leaves` as keyed by `global_output_index`. The write (`db_lmdb.cpp:9103–:9110`) keys by `old_leaf_count + i` (tree position). Same confusion as SOK-10, in the table header. | Comment is this lane's to correct when the assembler fix lands (file already on the path-FFI touch list via `get_curve_tree_leaf_by_tree_position`). Not a second product. |
 | **SOK-Q5** | What does the JSON field *mean* going forward: pin it as tree position (document + keep the name, or rename), or pin it as `GlobalOutputIndex` and have the handler resolve via `get_output_leaf_index` before assembly? Production has no caller to preserve. | Round 1. |
-| **SOK-Q6** | Where does `TreePosition → GlobalOutputIndex` resolve: a new `PathStore` method / FFI callback (Rust assembler asks; C++ shim calls `get_leaf_output_index`), or change `output_oc`'s `u64` domain from position to gindex after a Rust-side resolve the assembler cannot perform without a new read? Recorded routing says Rust assembler resolves before `output_oc`. That implies a new store read on the trait, not a silent ABI meaning-change of `pos`. | Round 1. Rule 20: resolution in Rust; C++ remains the LMDB callback. The redb `leaf_to_output` reader stays S-CURVE's; LMDB `get_leaf_output_index` is the callback body until then. |
+| **SOK-Q6** | Where does `TreePosition → GlobalOutputIndex` resolve: a new `PathStore` method / FFI callback (Rust assembler asks; C++ shim calls `get_leaf_output_index`), or change `output_oc`'s `u64` domain from position to gindex after a Rust-side resolve the assembler cannot perform without a new read? Recorded routing says Rust assembler resolves before `output_oc`. That implies a new store read on the trait, not a silent ABI meaning-change of `pos`. | §3.3. **Conditional on Q7 ≠ A.** Rule 20: resolution in Rust; C++ remains the LMDB callback. |
+| **SOK-Q7** | **Does the daemon assembler survive at all?** Zero production consumers; forbidden on the send path by a binding ruling; wrong on every real chain. Same question `get_output_histogram` got (SOK-Q3 → B). | §3.1. **Asked first**; Q5/Q6 are moot under arm A. Default **A — delete**. |
+| **SOK-13** | `FOLLOWUPS.md:254` "C++ path RPC computes a crypto contract (`hash_to_p3`) inline" is **stale at this pin**: the extraction moved `I = Hp(O)` to Rust (`rpc_path.rs:90` `key_image_generator(&o)`); `curve_tree_path.cpp` and the handler contain no `hash_to_p3`. The row survived the fix that closed it. | Path-FFI FOLLOWUPS row, this lane's. Remove under either Q7 arm (rule 91: resolved items are removed). |
 
 Stale comments that are not new findings (rule 16, same round as the
 touch, not a FOLLOWUPS row): `proof.rs:177–:180` (C++ wallet /
@@ -320,11 +375,186 @@ construct FCMP++ proofs") — the live wallet does not.
 
 ---
 
-## 3. Halt
+## 3. Round 1 — design (proposed, not ruled)
 
-Round 0 is the sweep. Report is this file. **Stop.**
+Short by construction: the correct resolution already exists in the tree
+(`assemble.rs:98–:116`), so there is no open design space on *how* to
+resolve. The round's two questions are whether the daemon assembler is
+kept (Q7) and, only if it is, where the resolution lives (Q6) and what the
+wire field means (Q5). Q7 is asked first because its default answer makes
+the other two moot.
 
-Do not start Round 1 (design: PathStore shape, wire contract, LMDB callback
-vs redb reader timing, test-chain shape) until told. Do not edit production
-code, `DRS_E1_SOUT_KI.md`, `FOLLOWUPS.md`, `IMPLEMENTATION_INDEX.md`,
-`FCMP_PLUS_PLUS.md`, or any other-lane row from this halt.
+### 3.1 SOK-Q7 — does `get_curve_tree_path` survive? Default **A — delete**
+
+**Substrate.**
+
+1. **Binding privacy ruling, already on record.** `PHASE_2A_SEND_PATH.md`
+   §3.0.1 (`:170`, "Decision (binding): the wallet never reveals which leaf
+   it spends"): a per-output path request tells the daemon, before
+   broadcast, exactly which output is being spent — "No per-leaf path
+   query, full stop." The endpoint's disposition there (`:196–:203`):
+   **must not** be used by the wallet send path; "flagged for daemon-side
+   Rule-60 / privacy review as a separate C++ PR (acceptable, if at all,
+   only for explicitly non-private contexts — debug, or an opt-in
+   light-wallet mode that documents the linkability cost)." That review
+   was never opened — no FOLLOWUPS row carries it. **This question is that
+   review.**
+2. **Every consumer, enumerated.**
+
+   | Caller | Repo | Nature | Survives deletion? |
+   | --- | --- | --- | --- |
+   | Engine spend path | core | uses `CurveTreeClient::assemble_path` locally (`curve_tree_actor.rs:501`) | unaffected |
+   | `e2e_get_curve_tree_path_returns_valid_path` (`regtest_e2e.rs:761`) | core | tests that the endpoint is not 404 on the Axum transport; its doc says "the call the send path makes" — false at this pin | deleted with the endpoint |
+   | `curve_tree_path_fail_closed.cpp` | core | C++ seam test of the shim | deleted with the shim |
+   | `extract_shard.rs` (`shekyl-sp-t3-spike`) | core | **disposable debt, labelled at birth** (`spike/src/lib.rs:6–:7`: "MUST BE DELETED OR FULLY REWRITTEN BEFORE TJ-B"); uses the RPC as a batched leaf source (`fixture.rs:41–:50`) | loses its data source; disclosed to that crate's owner (§3.4), not repaired here |
+   | GUI wallet, mobile wallet, web | sibling repos | `rg get_curve_tree_path` → **no match** in any | n/a |
+   | `shekyl-daemon-rpc` (Rust daemon RPC) | core | no handler | n/a |
+   | Archival personas / fetch side | core | `PDM-Q8` RULED 2026-09-18: "the persona never fetches — its daemon does, episodically" (`ARCHIVAL_PRUNED_DAEMON_MODE.md:1303`); the serve unit is a raw leaf array (`FCMP_SPEND_LINKABILITY_CENSUS.md` S0 `served_frame.rs` row), not this RPC | unaffected |
+   | Bulk non-revealing leaf-range RPC (`CURVE_TREE_CLIENT.md:620–:628`, `PHASE_2A` §3.0.2) | core | **not landed** (`core_rpc_ffi.cpp:285–:287` dispatches only `path` / `info` / `checkpoint`); the wallet is block-derived and does not need it | independent |
+
+3. **The data is wrong on every real chain** (§1.1a). An RPC with no
+   consumer that returns wrong data is not a thing to repair — the shape
+   of `SOK-Q3 → B` (`get_output_histogram`, deleted on privacy grounds as a
+   disclosure surface with no consumer). This one is the stronger case: a
+   disclosure surface *and* incorrect.
+4. **Rule 15 default is delete.** Rule 22: a STAGED surface needs a named
+   live-plan consumer; there is none, and the §3.0.1 carve-out names a
+   *class* ("debug, or an opt-in light-wallet mode"), not a plan.
+   Rule 23: the **name** stays REJECTED in the namespace contract so it is
+   not re-minted — the daemon has no method registry analogous to
+   `wallet_rpc.yaml` (observed; not this lane's to build), so the entry
+   lives in `FCMP_PLUS_PLUS.md`'s RPC section as a one-line
+   `get_curve_tree_path — REJECTED (spend-revealing, PHASE_2A §3.0.1; SOK-10)`.
+
+**Arms.**
+
+- **A — delete the endpoint and the daemon assembler.** Default.
+- **B — fix (Q6) and keep, for the §3.0.1 carve-out.** Requires naming the
+  consumer now. None exists → this is the rule-22 callee-without-caller
+  smell wearing a fix. Rejected unless a plan doc names the light-wallet /
+  debug consumer with its written linkability disposition **before** the
+  fix lands.
+- **C — fix and gate (regtest / debug flag).** Same as B with a nettype or
+  flag branch on an RPC surface; a consumer-less gate is a gate nobody
+  opens. Rejected on B's grounds.
+
+**Reopening criteria (rule 21).** A named production consumer with a
+written linkability disposition (the §3.0.1 carve-out made concrete) reopens
+this in **that consumer's** design round, which then answers Q6 and Q5
+below against this document's §1 as its substrate read. The deletion is
+mechanically reversible from git; the *contract* to rebuild against is this
+file, not the deleted code.
+
+**Deletion surface (arm A) — enumerated at the pin.**
+
+| Surface | Lines | Action |
+| --- | --- | --- |
+| `rust/shekyl-fcmp/src/rpc_path.rs` | whole module; `lib.rs:21`, `:28` re-exports | delete |
+| `rust/shekyl-ffi/src/curve_tree_path_ffi.rs` | whole; `shekyl_ffi.h:1435–:1444+` prototypes | delete |
+| `src/cryptonote_core/curve_tree_path.{h,cpp}` | whole | delete |
+| `core_rpc_server.cpp` `on_get_curve_tree_path` | `:1463–:1562`; `core_rpc_server.h:152`; `core_rpc_ffi.cpp:283–:285` dispatch row and its 404 comment | delete |
+| `COMMAND_RPC_GET_CURVE_TREE_PATH` | `core_rpc_server_commands_defs.h:1371–:1418` | delete |
+| `CORE_RPC_VERSION_MINOR` | `rust/shekyl-rpc-types/src/chain.rs:64` (`32`) + its history comment and `:472` assert | bump — removing a method is a wire change |
+| `BlockchainDB::get_curve_tree_layer_hash` | `blockchain_db.h:2719`; `db_lmdb.{h:620,cpp:9637}`; stubs `testdb.h:274`, `chaingen.cpp:165` | delete — the shim was its only caller (`rg` shows no other) |
+| `tests/unit_tests/curve_tree_path_fail_closed.cpp` | whole | delete |
+| `e2e_get_curve_tree_path_returns_valid_path` | `regtest_e2e.rs:754–:~900` | delete |
+| `tree.rs:11`, `:530` comments naming `rpc_path` / `append_layer0` | — | rewrite (`leaf_from_chunk_entry` itself **stays**: archival tests consume it, `gate2_serve_credit_kat.rs:474`, `assembled_path_crosscheck.rs:170`) |
+| `hash_trim_selene` / `hash_trim_helios` | — | **stay** — the LMDB trim path uses them (`db_lmdb.cpp:9426`) |
+| `db_lmdb.h:971` comment (SOK-12) | — | correct to "tree position" |
+| `proof.rs:177–:180` doc | — | rewrite: witness comes from `CurveTreeClient::assemble_path` |
+| `FCMP_PLUS_PLUS.md` `:377–:413` | — | replace the section with the REJECTED line + pointer to `PHASE_2A` §3.0.1 and local assembly |
+| `DAEMON_RPC_RUST.md:274` | — | remove the bullet |
+| `FOLLOWUPS.md:254` (`hash_to_p3`, SOK-13), `:597` ("Historical tree path assembly uses current LMDB state"), `:600` (SOK-10) | — | remove — all three are rows about the deleted surface |
+| `DRS_E1_SOUT_KI.md` SOK-10 row (`:414`) and §3.4 | — | resolution recorded: closed by deletion, not by fix |
+| `IMPLEMENTATION_INDEX.md` `SOK-1…SOK-N` row (`:222`) | — | `UPDATE` line: SOK-10 closed by deletion (Q7 A), SOK-11/12/13 |
+
+**Other-lane rows — one-line consumer pointers only (rule 94 §6):**
+`DAEMON_RPC_KV_CUTOVER.md` RK-9 (`:133`, lists the method);
+`FCMP_SPEND_LINKABILITY_CENSUS.md` S0 "RPC path" row (`:136`) and `:46`,
+`:402` — deletion **closes** that linkability surface, which the census
+lane records; `ARCHIVAL_PRUNED_DAEMON_MODE.md` F9 register row (`:1262`)
+— moot once the RPC path is gone; `DRS_E1_SOUT_KI.md` SOK-7 note — O1's
+"shaped for the live consumer (returns pubkey **and** commitment)" loses
+that consumer; the shape may still be right, but its stated reason is
+gone, and that lane decides. `CT4_ROUND1_CLOSEOUT.md` is `docs/completed/`;
+left alone.
+
+**Tests under A.** No divergence falsifier is built — there is nothing left
+to falsify (rule 22: moot, not deferred). Exit check:
+`rg 'get_curve_tree_path|GET_CURVE_TREE_PATH|assemble_curve_tree_path|rpc_path|get_curve_tree_layer_hash' src rust tests`
+returns nothing. `cargo test -p shekyl-fcmp -p shekyl-ffi -p shekyl-rpc-types`
+and the C++ unit-test target build clean. The RPC-version assert is
+re-pinned.
+
+**Commit shape under A** (rule 90, one PR, ≤ 5 commits): (1) Rust — delete
+`rpc_path` + FFI + `CORE_RPC_VERSION` bump; (2) C++ — delete shim, handler,
+command struct, `get_curve_tree_layer_hash`, tests; (3) docs — contract
+REJECTED line, FOLLOWUPS rows, SOK rows, index `UPDATE`, stale comments
+(SOK-12, `proof.rs`), other-lane pointers; (4) `git mv` this file to
+`docs/completed/` with `Status: CLOSED-as-record`.
+
+### 3.2 SOK-Q5 — wire meaning (only if Q7 ≠ A)
+
+Default: pin as **tree position**. Rename the field `tree_positions`
+(there is no production caller to preserve), bump `CORE_RPC_VERSION_MINOR`,
+and write the position semantics into `FCMP_PLUS_PLUS.md` with a pointer to
+`:57–:65`. The alternative — accept `GlobalOutputIndex` and resolve with
+`get_output_leaf_index` in the handler — moves the resolution into C++,
+against rule 20, and makes a spend-revealing query *more* convenient.
+Under A this question and SOK-11 close with the interface.
+
+### 3.3 SOK-Q6 — where the resolution lives (only if Q7 ≠ A)
+
+Default **(i)**: a new `PathStore` read, `output_index_at(pos: u64) ->
+Result<GlobalOutputIndex, PathAssembleError>` (new variant
+`MissingLeafMapping(u64)`, the F9 class), with a fourth C callback whose
+LMDB body is `get_leaf_output_index(TreePosition{pos})`; `output_oc` then
+takes `GlobalOutputIndex` (`shekyl-fcmp` already depends on `shekyl-types`,
+`Cargo.toml:53`). The FFI stays `u64` at the C boundary; the domain is
+carried by the callback's name and the Rust trait's types. The redb body
+is S-CURVE's when it lands (that lane's row; this lane is its consumer).
+
+Rejected **(ii)**: reconstruct the drain order inside the assembler. The
+daemon already holds the mapping as a table; recomputing it needs the
+pending/maturity stream, which the daemon has only *as* those tables.
+
+Falsifier: `MapStore` gains a permuted `leaf_to_output` map (position `0`
+→ gindex `1`, position `1` → gindex `0`), and
+`complete_store_yields_expected_shape` asserts `chunk_outputs[j]` carries
+the `(O, C)` of `leaf_to_output[j]`, red before the change; plus the
+regtest chain of §1.3 as the daemon-level check. A `TreePosition` newtype
+in `shekyl-types`, if wanted, is an `RTN-` row proposed with disclosure to
+`RAW_TYPE_NEWTYPE_MIGRATION.md` (§1.4), not minted here.
+
+### 3.4 Interactions disclosed to other lanes (no edits made)
+
+- **`shekyl-sp-t3-spike` owner:** arm A removes `extract_shard.rs`'s data
+  source. The crate is labelled disposable and pre-TJ-B; replacement, if
+  wanted, is a block-derived rebuild via `shekyl-curve-tree` or a bulk
+  leaf-range read the design already names (`CURVE_TREE_CLIENT.md:620`).
+- **S-OUT-KI lane:** SOK-7's shaping rationale for O1 loses its live
+  consumer under A (above).
+- **Census lane (`FCMP_SPEND_LINKABILITY_CENSUS.md`):** S0 "RPC path"
+  surface closes under A.
+- **PDM lane:** F9 register row becomes moot under A.
+- **DAEMON_RPC_KV_CUTOVER (RK-9):** method count drops by one under A.
+
+## 4. What this round did not find
+
+Surfaces examined that yielded nothing: the three sibling wallet repos and
+`shekyl-web` (no caller of the RPC); `shekyl-daemon-rpc` (no Rust handler);
+`hash_trim_*` (has consumers outside the shim — survives);
+`leaf_from_chunk_entry` (archival test consumers — survives); the wallet's
+local resolution at `assemble.rs:98–:116` (read for its resolve step only,
+not re-audited end to end — CT-4's KAT is that audit). Not examined this
+round: whether `get_curve_tree_info` / `get_curve_tree_checkpoint` carry
+any per-output surface (they take no output index; out of scope unless a
+reviewer names a reason).
+
+## 5. Halt
+
+Round 1 is proposed. **Stop.** Awaiting the `SOK-Q7` ruling; if A, the §3.1
+commit shape is the implementation; if B/C, `SOK-Q5` / `SOK-Q6` need
+rulings first and the §3.3 falsifier is built red-first. No production
+code, no `FOLLOWUPS.md` / `DRS_E1_SOUT_KI.md` / `IMPLEMENTATION_INDEX.md` /
+`FCMP_PLUS_PLUS.md` edits, and no other-lane rows from this halt.
