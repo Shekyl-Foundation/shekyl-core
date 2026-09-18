@@ -20,7 +20,7 @@ use shekyl_types::{BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    candidate, coinbase, connect_genesis, facts, judge, spend, GENESIS_ID,
+    candidate, coinbase, connect_genesis, facts, judge, spend, GENESIS_ID, NO_PARENT,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -50,8 +50,8 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     assert_eq!(connected.journaled, 12, "no pqc_auths row, no burn rows");
 
     let miner = &block.miner_transaction;
-    let miner_hash = Hash32::from_bytes(miner.hash());
-    let block_hash = Hash32::from_bytes(block.hash());
+    let miner_hash = Hash32::from(miner.hash());
+    let block_hash = Hash32::from(block.hash());
     let snap = store.begin_read().expect("read");
 
     // block tables
@@ -257,7 +257,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
 fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     let path = tmp("connect-two");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let g = candidate(0, [0; 32], Vec::new());
+    let g = candidate(0, NO_PARENT, Vec::new());
     let g_hash = g.block.hash();
     let b1 = candidate(1, g_hash, vec![spend(0x5e, 2)]);
     let b1_hash = b1.block.hash();
@@ -294,7 +294,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     assert_eq!(
         snap.open_table(BLOCK_HEIGHTS)
             .expect("t")
-            .get(LmdbHashKey::from_bytes(b1_hash))
+            .get(LmdbHashKey::from(b1_hash))
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
         Some(BlockHeight::from_raw(1))
@@ -304,7 +304,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     let spend_index = snap
         .open_table(TX_INDICES)
         .expect("t")
-        .get(LmdbHashKey::from_bytes(spend_hash))
+        .get(LmdbHashKey::from(Hash32::from(spend_hash)))
         .expect("g")
         .expect("row")
         .value()
@@ -507,7 +507,7 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
     let unissued = RuleSetId::from_raw(7);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let valid = judge(&view, candidate(0, [0; 32], Vec::new()))?;
+        let valid = judge(&view, candidate(0, NO_PARENT, Vec::new()))?;
         Ok(batch.connect(valid, facts(0, 0), unissued)?)
     });
     let want = StoreCannot::RuleSetUnknown(unissued);
@@ -750,7 +750,7 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(
-            judge(&view, candidate(0, [0; 32], Vec::new()))?,
+            judge(&view, candidate(0, NO_PARENT, Vec::new()))?,
             facts(0, 0),
             GENESIS_ID,
         )?)
@@ -777,7 +777,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         root_after: Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32])),
         long_term_effective_median: Fact::derived(shekyl_types::LongTermWeight::from_raw(300_000)),
     };
-    let g = candidate(0, [0; 32], Vec::new());
+    let g = candidate(0, NO_PARENT, Vec::new());
     let g_hash = g.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();

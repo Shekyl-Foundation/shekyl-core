@@ -16,7 +16,7 @@ use shekyl_chain_rules::{AtHeight, RuleSetId};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend};
+use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, NO_PARENT};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -68,7 +68,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
         Ok(())
     });
     planted.expect("plant");
-    let g = candidate(0, [0; 32], Vec::new());
+    let g = candidate(0, NO_PARENT, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         Ok(batch.connect(judge(&view, g)?, facts(0, 0), RuleSetId::GENESIS)?)
@@ -96,7 +96,7 @@ fn tip_is_the_last_recorded_block_and_the_writer_is_live() {
         tip.recorded.expect("recorded"),
         shekyl_chain_rules::Tip {
             height: h(1),
-            hash: BlockHash::from_bytes(hashes[1]),
+            hash: hashes[1],
         }
     );
     assert_eq!(tip.connect, ConnectState::Live);
@@ -112,10 +112,7 @@ fn height_of_is_some_for_a_recorded_hash_and_none_otherwise() {
     let hashes = connect_chain(&store, &[vec![], vec![], vec![]]);
     let snap = store.begin_read().expect("read");
     for (i, hash) in hashes.iter().enumerate() {
-        assert_eq!(
-            snap.height_of(&BlockHash::from_bytes(*hash)).expect("read"),
-            Some(h(i as u64))
-        );
+        assert_eq!(snap.height_of(hash).expect("read"), Some(h(i as u64)));
     }
     assert_eq!(
         snap.height_of(&BlockHash::from_bytes([0xee; 32]))
@@ -256,7 +253,7 @@ fn block_returns_the_body_verified_against_the_recorded_identity() {
     let AtHeight::Recorded(body) = snap.block(h(1)).expect("read") else {
         panic!("height 1 is recorded");
     };
-    assert_eq!(body.hash, BlockHash::from_bytes(hashes[1]));
+    assert_eq!(body.hash, hashes[1]);
     assert_eq!(
         body.block.hash(),
         hashes[1],
@@ -277,7 +274,9 @@ fn a_rewritten_blob_is_si7_on_block_and_blocks_but_block_blob_still_hands_out_th
     connect_chain(&store, &[vec![], vec![], vec![]]);
     // Rewrite `blocks[1]` to a different, parseable block: the identity on
     // `block_info[1]` no longer matches.
-    let impostor = candidate(1, [0x77; 32], Vec::new()).block.serialize();
+    let impostor = candidate(1, BlockHash::from_bytes([0x77; 32]), Vec::new())
+        .block
+        .serialize();
     let out: Result<(), TestErr> = store.write(|batch| {
         batch.open_upsert_table(crate::schema::BLOCKS)?.upsert(
             1,
@@ -331,7 +330,7 @@ fn blocks_range_clamps_at_the_tip_and_yields_the_last_height_of_a_half_open_rang
     let AtHeight::Recorded(rows) = snap.blocks(h(start)..h(start + count)).expect("range") else {
         panic!("start 1 is recorded");
     };
-    let got: Vec<(u64, [u8; 32])> = rows
+    let got: Vec<(u64, BlockHash)> = rows
         .map(|r| {
             let (height, body) = r.expect("row");
             (height.to_raw(), body.block.hash())
@@ -396,7 +395,7 @@ fn block_blob_above_the_tip_is_above_tip_and_a_hole_is_si7() {
 /// to read: genesis records none whatever it is handed (the `h > 0` half of
 /// the C++ guard), a zero writes no row.
 fn connect_burning(store: &ChainStore, burns: &[u64]) {
-    let mut previous = [0u8; 32];
+    let mut previous = NO_PARENT;
     let mut cands = Vec::new();
     for h in 0..burns.len() as u64 {
         let cand = candidate(h, previous, Vec::new());
