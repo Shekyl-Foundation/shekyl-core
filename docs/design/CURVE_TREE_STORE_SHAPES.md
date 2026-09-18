@@ -16,8 +16,7 @@ position on how a value is stored, and it shows: values are anonymous byte
 arrays with offsets in prose, two tables of identical type carry different
 meanings, a set is stored as a `u32` that is always `1`, a 192-byte record has
 70 dead bytes, and one 4 196-line file holds the schema, six codecs, the error
-enum (17 variants), two handle types, every operation, and ~1 900 lines of
-tests (from `:2300`). The daemon store settled the
+enum, two handle types, and every operation. The daemon store settled the
 value-side convention on PR #772 (`DAEMON_REDB_STORE.md` §11.1(f)); this
 increment gives the wallet store the same convention **from one shared codec
 contract**, redesigns the records it stores rather than re-encoding the old
@@ -30,9 +29,9 @@ things the user's brief named: proper types, DRY, decomposition.
 
 | Precondition | State at `d89f99791` |
 | --- | --- |
-| §11.1(f) ruled and landed for the daemon store | **landed** (PR #772, 2026-09-18): `Coded<V>` / `Blob<K>` / `Present` / `Unshaped`, `Encoded<'_, V>` from `Canonical::encoded`, the `check_row` insertion boundary, `Restorable::SEALED`. All in `rust/shekyl-chain-store/src/codec/{mod,shape}.rs`. |
+| §11.1(f) ruled and landed for the daemon store | **landed** (PR #772, 2026-09-18): `Coded<V>` / `Blob<K>` / `Present` / `Unshaped`, `Encoded<'_, V>` from `Canonical::encoded` (`rust/shekyl-chain-store/src/codec/{mod,shape}.rs`); the `check_row` insertion boundary (`src/store/keyed.rs`); `Restorable` and its `SEALED` (`src/store/undo.rs`). |
 | The shared-crate move is named, not done | §11.1(f) last bullet: `Canonical`, `CodecError` and the shapes "will move to a redb-only shared crate when the wallet-side curve-tree backend adopts them — as the first commit of *that* PR, with `shekyl-chain-store` re-exporting so import paths move once. What does **not** travel: (b)'s bump obligation, the snapshot gate and the `impl Canonical` source scan." This document is that PR's plan. |
-| Curve-tree store design-of-record | `CURVE_TREE_CLIENT.md` §3.6 (CT-1: redb, "greenfield, not a migration"; valid store = ACID + oracle-validated leaf encoding, **not** daemon layout parity); `CT1_ROUND1_PINS.md` (archived). Nothing here reopens CT-1. |
+| Curve-tree store design-of-record | `CURVE_TREE_CLIENT.md` §3.6 — the **CT-1 decision** (redb; valid store = ACID + oracle-validated leaf encoding, **not** daemon layout parity), reused as ruled. Its body is Round-0 prose preserved as design-of-record and speaks of the store in the future tense ("does not exist yet"); this PR adds the in-line UPDATE at §3.6 that says the store exists and points here, so the two documents do not contradict each other line-locally. `CT1_ROUND1_PINS.md` (archived). Nothing here reopens CT-1. |
 | Store layout version | `SCHEMA_VERSION = 5` (PL-D3), in-band `meta["schema_version"]`; refuse-on-mismatch already the posture (`15-deletion-and-debt.mdc`: pre-genesis, delete and re-sync). |
 | Dependency direction | `shekyl-chain-store` and `shekyl-curve-tree` do not depend on each other. `shekyl-curve-tree` depends on `shekyl-fcmp` (the leaf type) and `redb`. Nine crates depend on `shekyl-curve-tree` (`engine-core`, `p-host`, `p-serve`, `ffi`, `archival-retention`, `daemon-rpc`, `wire`, `p-fetch`, `economics-sim`). |
 | External API surface (the contract this PR keeps) | `LeafStore::{open, open_ephemeral, clear, leaf_count, sync_tip_height, next_freeze_seg, prune_disabled, set_prune_disabled, pruned_frozen_segments, members_missing_pins, append_drained, append_block_deltas, read_pending_candidates, read_drained_entries, maybe_freeze_segments, root_at_count, truncate_from_tree_position, rollback_to_fork, pin_segment_for_serving, pin_serve_set, pinned_shard_ids, release_pins, prune_frozen, frozen_segment, open_frozen_segment_body}`; `ServingReader::{new, open_frozen_segment_body, sync_tip_height, members_missing_pins, prune_disabled, next_freeze_seg, pruned_frozen_segments, same_store}`; `FrozenSegmentBody`, `FrozenSegmentRecord`, `SegmentPin`, `PostureDeclaration`, `StoreError`. Verified by grep across the nine dependents (§7). |
@@ -43,21 +42,43 @@ things the user's brief named: proper types, DRY, decomposition.
 
 ### 2.1 In
 
-**A. The shared codec crate — `shekyl-store-codec`** (new, `rust/shekyl-store-codec`, depends on `redb` only).
+**A. The shared codec crate — `shekyl-store-codec`** (new, `rust/shekyl-store-codec`; depends on `redb`, `shekyl-types`, `shekyl-units` — CTS-13).
 Moves, verbatim in semantics: `Canonical` (+ `encoded()`), `CodecError`, `exact`,
-the primitive impls (`u8`, `u64`), and the value shapes — `Coded<V>`,
-`Encoded<'_, V>`, `EncodedBuf<V>`, `Blob<K>`, `BlobKind`, `Raw<'_, K>`,
-`Present`, `Unshaped`, `NoRow`. Adds two primitives both stores need: `bool`
-(`0`/`1`, strict) and `u32` (LE). `shekyl-chain-store` re-exports every moved
-item at its current path (`crate::codec::*`), so no daemon-side caller moves.
-**Stays in `shekyl-chain-store`:** `Restorable` (+ `SEALED`, its impls for the
-shapes — the trait is local, the types foreign, orphan-rule-clean), `check_row`,
-the snapshot gate, the `impl Canonical` source scan, `PropertyCell`, and
-§11.1(b)'s bump obligation — the consensus discipline lives where the digest is.
+the value shapes — `Coded<V>`, `Encoded<'_, V>`, `EncodedBuf<V>`, `Blob<K>`,
+`BlobKind`, `Raw<'_, K>`, `Present`, `Unshaped`, `NoRow` — and **every
+`Canonical` impl whose type is not the daemon store's own**: the primitives
+(`u8`, `u64`; adds `bool` strict `0`/`1` and `u32` LE) and the vocabulary
+codecs (`BlockHeight`, `CurveTreeRoot`, `PrunableHash`, `PqcAuthHash` from
+`shekyl-types`; `AtomicUnits` from `shekyl-units`). The orphan rule decides
+this, not taste (CTS-13, PR #776 review): once the trait is foreign to
+`shekyl-chain-store`, those impls can live only where the trait or the type
+lives, and the vocabulary crates are `no_std` and must not depend on `redb` —
+so the codec crate depends on the vocabulary and hosts the codecs **once**, for
+both stores (the wallet store's `SyncTipCell: BlockHeight` and `CurveTreeRoot`
+reads want exactly these). `NAME` strings do not change, so no `TypeName`
+moves and `tables.snap` is byte-identical. **The one exception:** `RuleSetId`
+is `shekyl-chain-rules`' type, and the codec crate must not depend on the rules
+crate (direction: the rules crate is consensus, the codec crate is storage);
+`hf_versions` gets a chain-store-local column codec `RuleSetInForce(RuleSetId)`
+with `NAME = "rule_set_id"` — one adapter, named, its reason on its doc comment.
+`shekyl-chain-store` re-exports every moved item at its current path
+(`crate::codec::*`), so no daemon-side caller moves.
+**Stays in `shekyl-chain-store`:** its own column codecs (`BlockInfo`, `TxIndex`,
+`OutTx`, `OutKey`, `TxOutputIndices`, `UndoLog`, `CoverageGaps`,
+`PassedThroughFacts`, `SchemaVersion`, `SettlementEpochBlocks`, `FamilySet`,
+`Hash32`), `Restorable` (+ `SEALED`, its impls for the shapes — the trait is
+local, the types foreign, orphan-rule-clean), `check_row`, `PropertyCell`, the
+snapshot gate and the `impl Canonical` source scan — **which still pin the
+moved codecs' bytes:** `snapshotted_codecs!` names types by path and keeps
+`BlockHeight`, `AtomicUnits`, … in its list, so a byte change in the codec
+crate fails the daemon's snapshot test and demands its bump; the scan (impls
+*in* chain-store's tree) simply no longer sees them — and §11.1(b)'s bump
+obligation, which lives where the digest is.
 
 **B. The wallet store's tables get named value shapes and redesigned records** (§3).
-Every `TableDefinition` value is `Coded<T>` or `Present`; no `&[u8; N]`, no bare
-integer, no `()` remains. Records are **designed**, not re-encoded: dense
+Every `TableDefinition` value is `Coded<T>`, `Present`, or — for the one
+per-key-codec table, `meta` — `Blob<K>`; no `&[u8; N]`, no bare integer, no
+`()` remains. Records are **designed**, not re-encoded: dense
 layouts, LE integers throughout (the shared `u64` codec), one codec per meaning,
 and composition where the store composes (`PendingLeaf = Leaf ‖ LeafMeta`).
 `SCHEMA_VERSION 5 → 6`; rebuild-never-migrate as before.
@@ -121,13 +142,21 @@ Every line is at `d89f99791`, `rust/shekyl-curve-tree/src/store/redb_backend.rs`
 Seven tables, seven named shapes. `TypeName`s on disk: `shekyl::Coded<leaf>`,
 `shekyl::Coded<owned_leaf>`, `shekyl::Coded<leaf_meta>`,
 `shekyl::Coded<frozen_segment>`, `shekyl::Coded<pending_leaf>`,
-`shekyl::Present`, `shekyl::Blob<meta_cell>`. A pre-6 file fails to open its
-first table with a type-name refusal, which `LeafStore::open` names as
-`StoreError::SchemaVersionMismatch`-class (`LayoutForeign`, the #772 shape)
-**before** it can read the version cell — the `IMPLICIT_SCHEMA_VERSION = 1`
-fallback (`:91`) and the five-version prose (`:53`–`:80`) are deleted: a
-version-6 store carries its version cell from creation, and there is no file
-the store should read leniently (CTS-9).
+`shekyl::Present`, `shekyl::Blob<meta_cell>`. **How a pre-6 file is refused,
+precisely.** `LeafStore::open` keeps its order — `check_schema_version` on an
+existing file *before* `init_tables` (`:623`–`:639`), so nothing is created or
+written in a file that is refused — but the version check itself opens `meta`
+under its v6 definition (`Blob<MetaCellBytes>`), and a v5 file's `meta` is
+stored as `&str → u64`: redb refuses that open with a type-name mismatch
+**before any cell is read**. `open` names that as `StoreError::LayoutForeign
+{ expected: 6 }` (the #772 shape) — not as a `SchemaVersionMismatch`, because
+the file cannot say which version it is. A file whose `meta` opens (v6
+layout) but whose cell disagrees is `SchemaVersionMismatch`; a file with no
+cell is `SchemaVersionAbsent`. The `IMPLICIT_SCHEMA_VERSION = 1` fallback
+(`:91`) and the five-version prose (`:53`–`:80`) are deleted: a version-6
+store carries its version cell from creation, and there is no file the store
+should read leniently (CTS-9). A test plants a v5-shaped `meta` table through
+the raw engine and asserts `LayoutForeign` with the file unmodified.
 
 ---
 
@@ -215,7 +244,8 @@ collapse". Commit 4 is the one a reviewer reads line by line.
 | Q | Question | Default | Why it is a question |
 | --- | --- | --- | --- |
 | **CTS-Q1** | Does `open_frozen_segment_body` take a `FrozenSegment` handle obtainable only from `frozen_segment(id)` / the freeze, making "only frozen segments are servable" a compile-time fact (the `WriteBatch<'id>` brand pattern)? | **No, in this PR.** `SegmentPin` already makes the three servability states a value, and the handle is an external API change across `p-host`/`p-serve`. | Named in the §11.1(f) discussion as worth doing; the question is *where* — a typestate belongs to the increment that defines servability (S-ARCH for the daemon), and for the wallet store it is an API round of its own. Reopen when `p-host`'s serve-set code is next touched. |
-| **CTS-Q2** | Crate name and home: `shekyl-store-codec` at `rust/shekyl-store-codec`? | **Yes.** | Alternatives considered: folding into `shekyl-types` (rejected — it depends on `redb`, and `shekyl-types` is `no_std` vocabulary); into `shekyl-curve-tree` (rejected — wrong direction for the daemon). |
+| **CTS-Q2** | Crate name and home: `shekyl-store-codec` at `rust/shekyl-store-codec`, depending on `redb` + `shekyl-types` + `shekyl-units`? | **Yes.** | Alternatives considered: folding into `shekyl-types` (rejected — it depends on `redb`, and `shekyl-types` is `no_std` vocabulary); into `shekyl-curve-tree` (rejected — wrong direction for the daemon); `redb`-only (rejected on PR #776 review — the orphan rule then strands every vocabulary codec, CTS-13). |
+| **CTS-Q6** | Where do the `Canonical` impls for vocabulary types live once the trait moves? | **In `shekyl-store-codec`**, which depends on the vocabulary crates; `RuleSetId` alone gets a chain-store-local adapter (`RuleSetInForce`). | The orphan rule leaves three homes: the trait's crate, the type's crate, or a local newtype per use. The type's crates are `no_std` and must not learn about `redb`; a newtype per vocabulary type per store is the duplication the shared crate exists to end; so the trait's crate hosts them, and the one type whose crate the codec crate must not depend on (the rules crate) is the one adapter. |
 | **CTS-Q3** | Is `Leaf` a newtype over `shekyl_fcmp::ShekylLeaf`, or does `shekyl-fcmp` implement `Canonical` itself? | **Newtype in `shekyl-curve-tree`.** | The orphan rule forces the impl into `shekyl-fcmp` or the codec crate otherwise; a crypto crate depending on a store-codec crate is the wrong direction, and the codec crate depending on `shekyl-fcmp` is worse. |
 | **CTS-Q4** | Does the module-envelope table (§4) become a CI ratchet for this crate? | **Yes**, via the existing file-size ratchet conf if it takes a per-crate entry; else a one-line gate. | A decomposition that is not held decomposes again. |
 | **CTS-Q5** | Do `frozen_segments` integers move BE → LE? | **Yes.** | Values carry no ordering (that was the key-side reason for BE); every other record here and in the daemon store is LE via the shared `u64` codec; one integer codec, not two. The bump pays for it. |
@@ -238,6 +268,7 @@ collapse". Commit 4 is the one a reviewer reads line by line.
 | **CTS-10** | `redb_backend.rs` is 4 196 lines: schema, six codecs, `StoreError` (17 variants), three handle types, every operation, and ~2 000 lines of tests in one file. | §4. |
 | **CTS-11** | `read_leaf_bytes_range` × 3 (`_in`, plain, `_read`; `:2134`–`:2158`) and `delete_*_batched` × 3 (`:1950`–`:2011`) — three copies each of one loop, differing in the transaction or key type. | One generic each (§4). |
 | **CTS-12** | The vocabulary types are already the shared ones — `types.rs:135` re-exports `BlockHeight`, `GlobalOutputIndex`, `OneTimePubkey`, `CommitmentBytes`, `CurveTreeRoot` from `shekyl_types` (RTN-4), and `Gindex = GlobalOutputIndex` (`:142`). `TreePosition` and `SegmentId` are crate-local, correctly: they are this store's coordinates, not chain vocabulary. | No change; recorded so the newtype question is not re-asked for these. |
+| **CTS-13** | **(PR #776 review.)** PR A as first drafted (`shekyl-store-codec` depending on `redb` only) cannot be implemented: with `Canonical` foreign to `shekyl-chain-store`, its `impl Canonical for BlockHeight` / `CurveTreeRoot` / `PrunableHash` / `PqcAuthHash` / `AtomicUnits` / `RuleSetId` are foreign-trait-on-foreign-type, and a `redb`-only crate cannot host them. | The codec crate depends on `shekyl-types` and `shekyl-units` and hosts the vocabulary codecs once (§2.1 A, CTS-Q6); `RuleSetId` gets the one local adapter. Recorded so the next shared-trait move asks the orphan question at design time. |
 
 ---
 
@@ -255,4 +286,5 @@ collapse". Commit 4 is the one a reviewer reads line by line.
 
 | Date | Decision |
 | --- | --- |
+| 2026-09-18 | **PR #776 review (Copilot: 1 open + 5 suppressed; 6 taken, 0 refuted).** The open one reshaped PR A: with `Canonical` foreign to `shekyl-chain-store`, its vocabulary-type impls are orphan-rule violations, and a `redb`-only codec crate cannot host them — so `shekyl-store-codec` depends on `shekyl-types` + `shekyl-units` and hosts those codecs once for both stores, with `RuleSetId` as the one named local adapter (CTS-13, CTS-Q6). Suppressed, all valid: `Restorable`/`check_row` locations; `Blob<K>` missing from the allowed-shapes sentence; the pre-6 refusal stated precisely (the v6 `meta` open inside `check_schema_version` is where a v5 file is refused, before any cell is read — `LayoutForeign`; open order and no-mutation preserved); `CURVE_TREE_CLIENT.md` §3.6's "does not exist yet" gets an in-line UPDATE now; DRS §11.1(f)'s "three shapes" → four. |
 | 2026-09-18 | **Round 0 executed at `d89f99791`.** Twelve findings, five questions with defaults, a two-PR split (shared crate first), a nine-commit sequence for PR B with one layout commit, and a module tree with envelopes to be held by a ratchet. The brief: proper types, DRY, decomposition — not transcription. The one thing deliberately *not* proposed is any change to what the nine dependents call. |

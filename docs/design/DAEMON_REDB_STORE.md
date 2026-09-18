@@ -2244,7 +2244,7 @@ increment that touches it). Stated once, in `codec::shape`:
   `TypeName` never enters it. The file format is not: a file under version 2
   is refused at the header seal, per (a).
 - **One trait, two stores; the rule stays with the digest.** `Canonical`,
-  `CodecError` and the three shapes are store-engine-generic and will move to
+  `CodecError` and the value shapes (`Coded`, `Blob`, `Present`, `Unshaped`) are store-engine-generic and will move to
   a redb-only shared crate when the wallet-side curve-tree backend
   (plan: [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md), Round 0
   executed 2026-09-18)
