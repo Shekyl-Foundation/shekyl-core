@@ -86,6 +86,7 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod at_index;
 mod chain_reads;
 mod connect;
 mod error;
@@ -100,6 +101,7 @@ pub(crate) mod undo;
 mod view;
 mod write;
 
+pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
     CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
@@ -107,7 +109,9 @@ pub use error::{
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use pop::Popped;
-pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState};
+pub use read::{
+    RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, RecordedOutput, TipState,
+};
 pub use undo::Restorable;
 pub use view::BatchView;
 pub use write::WriteBatch;

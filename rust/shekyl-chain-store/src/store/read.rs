@@ -37,15 +37,22 @@
 //!   writer exists from the seal (amendment A2), so `TableDoesNotExist` on
 //!   a chain table is a file this store did not write, not an empty chain.
 
-use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
+use redb::{Key, ReadOnlyTable, ReadTransaction, ReadableTableMetadata, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, Tip};
-use shekyl_types::{BlockHash, BlockHeight, KeyImage, LongTermWeight};
+use shekyl_types::{
+    BlockHash, BlockHeight, CommitmentBytes, GlobalOutputIndex, KeyImage, LongTermWeight,
+    OneTimePubkey, Timelock,
+};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, PropertyCell, TotalBurnedCell};
+use crate::codec::{BlockInfo, OutTx, PropertyCell, TotalBurnedCell};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES, SPENT_KEYS};
+use crate::schema::{
+    BLOCK_BURN, BLOCK_HEIGHTS, OUTPUT_AMOUNTS, OUTPUT_TXS, PROPERTIES, SPENT_KEYS,
+};
+
+use super::at_index::AtIndex;
 
 use super::chain_reads;
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
@@ -139,6 +146,24 @@ impl RawBlockBytes {
 /// recorded there, or that row's own fault. The range's `Err`s are
 /// per-item so a hole is reported where it is, not as an early end.
 pub type RangeItem<T> = Result<(BlockHeight, T), StoreError>;
+
+/// The stored record of one output, as [`ReadSnapshot::output`] (S-OUT-KI
+/// **O1**) returns it: LMDB's `output_data_t` — one-time pubkey, unlock
+/// time, recording height, commitment — with the store's join key left
+/// out. `OutKey` minus `output_id`: a read projection, never stored, so not
+/// `Canonical`. The live consumer is the path builder's `read_output_oc`,
+/// which wants the pubkey **and** the commitment (SOK-7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RecordedOutput {
+    /// The output's one-time public key (`O`).
+    pub pubkey: OneTimePubkey,
+    /// The amount commitment (`C`).
+    pub commitment: CommitmentBytes,
+    /// The height of the block that created the output.
+    pub height: BlockHeight,
+    /// The output's `unlock_time`, as stored.
+    pub unlock_time: Timelock,
+}
 
 /// A read snapshot of the store.
 ///
@@ -472,6 +497,109 @@ impl ReadSnapshot<'_> {
                 .map(|(key, _present)| KeyImage::from_bytes(key.value().to_bytes()))
                 .map_err(|e| StoreError::from(EngineError::Storage(e)))
         }))
+    }
+
+    // ------------------------------------------------------------------
+    // S-OUT-KI (`DRS_E1_SOUT_KI.md` §3.2): outputs, by global index.
+    // ------------------------------------------------------------------
+
+    /// **O1.** The stored record of the output at `index`. Replaces
+    /// `get_output_key(amount, index)` in both its single and batch forms
+    /// (the batch form dissolves into N calls on one snapshot, SOK-3), and
+    /// the C++'s `amount` parameter: the read is `output_amounts[(0, i)]`,
+    /// because Shekyl has one bucket — every miner and emission vout is
+    /// stored under `0` and CEN-H14 makes every other vout's amount `0` —
+    /// and the C++ itself refused any other amount (`db_lmdb.cpp:3746`).
+    /// The amount dimension in the key is carried, not chosen, while R8b-2
+    /// is open (§3.4); if R8b-2 rules it consensus-visible, this read grows a
+    /// parameter and the table needs no change.
+    ///
+    /// `index` is the chain-wide [`GlobalOutputIndex`] — under one bucket
+    /// equal to the store's `amount_index` and `output_id` (SOK-2's belt,
+    /// checked at every connect). It is **not** a curve-tree position: leaf
+    /// order is `(maturity, gindex)`, not gindex (`CT2_DRAIN_ORDER.md` §"Index
+    /// ≠ tree position"), and a caller holding a position resolves it through
+    /// `leaf_to_output` first (SOK-10). The parameter type is what makes the
+    /// confusion unrepresentable here.
+    ///
+    /// # Errors
+    ///
+    /// SI-7 if the row does not decode; SI-9 (`InvariantViolated`) if the
+    /// row is missing **below** the bucket's count — that is a hole, not
+    /// absence; engine errors pass through.
+    pub fn output(&self, index: GlobalOutputIndex) -> Result<AtIndex<RecordedOutput>, StoreError> {
+        let table = self.open_table(OUTPUT_AMOUNTS)?;
+        let key = (0u64, index.to_raw());
+        let Some(guard) = table.get(key).map_err(EngineError::Storage)? else {
+            return self.classify_absent_output(index, "output_amounts");
+        };
+        let record = guard.value().decode().map_err(|cause| {
+            StoreError::from(StoreInvariant::CellCorrupt {
+                key: "output_amounts",
+                fault: CellFault::Undecodable(cause),
+            })
+        })?;
+        Ok(AtIndex::Recorded(RecordedOutput {
+            pubkey: record.pubkey,
+            commitment: record.commitment,
+            height: record.height,
+            unlock_time: record.unlock_time,
+        }))
+    }
+
+    /// **O2.** Which transaction created the output at `index`, and at which
+    /// `vout` position. Replaces `get_output_tx_and_index` (single and batch)
+    /// and is the `_from_global` read — `output_txs[output_id]`, one lookup
+    /// — **not** the amount-specific composition through `OutKey.output_id`,
+    /// which equals it only by SOK-2's belt; a read that is right only while
+    /// a belt holds is the wrong read. Returns [`OutTx`] as it exists
+    /// (SOK-Q4: no renamed twin). Kept although its `blockchain.cpp` callers
+    /// are dead: E2's comparator projects `output_txs` through it, and
+    /// `output(i).output_id` against `output_origin(i)` is how SOK-2's belt
+    /// is checked from the read side.
+    ///
+    /// # Errors
+    ///
+    /// As [`output`](Self::output).
+    pub fn output_origin(&self, index: GlobalOutputIndex) -> Result<AtIndex<OutTx>, StoreError> {
+        let table = self.open_table(OUTPUT_TXS)?;
+        let Some(guard) = table.get(index.to_raw()).map_err(EngineError::Storage)? else {
+            return self.classify_absent_output(index, "output_txs");
+        };
+        let origin = guard.value().decode().map_err(|cause| {
+            StoreError::from(StoreInvariant::CellCorrupt {
+                key: "output_txs",
+                fault: CellFault::Undecodable(cause),
+            })
+        })?;
+        Ok(AtIndex::Recorded(origin))
+    }
+
+    /// An absent output row is classified against the dense count, never
+    /// mapped to a value (§3.3): at or beyond `output_txs`' count it is
+    /// [`AtIndex::BeyondCount`]; below it, the row is SI-9's hole.
+    /// `output_txs` is the count's authority because it is the unique-key
+    /// primary `output_id` is dense in (SI-9); under one bucket the amount
+    /// bucket has the same count, and SOK-2's belt at connect is what keeps
+    /// that true.
+    fn classify_absent_output<T>(
+        &self,
+        index: GlobalOutputIndex,
+        cell: &'static str,
+    ) -> Result<AtIndex<T>, StoreError> {
+        let count = self
+            .open_table(OUTPUT_TXS)?
+            .len()
+            .map_err(EngineError::Storage)?;
+        if index.to_raw() >= count {
+            Ok(AtIndex::BeyondCount)
+        } else {
+            Err(StoreInvariant::CellCorrupt {
+                key: cell,
+                fault: CellFault::Absent,
+            }
+            .into())
+        }
     }
 }
 
