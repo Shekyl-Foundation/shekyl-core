@@ -873,7 +873,7 @@ fn every_v2_sibling_is_its_v1_capture_minus_only_the_identifier() {
 fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // One row per bump, oldest first. Each is (the vector before the bump,
     // the vector after it).
-    let links: [(&str, &str); 8] = [
+    let links: [(&str, &str); 9] = [
         (
             include_str!("vectors/rpc/get_version_synced_v1.json"),
             include_str!("vectors/rpc/get_version_synced_v2.json"),
@@ -906,6 +906,10 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
             include_str!("vectors/rpc/get_version_synced_v8.json"),
             include_str!("vectors/rpc/get_version_synced_v9.json"),
         ),
+        (
+            include_str!("vectors/rpc/get_version_synced_v9.json"),
+            include_str!("vectors/rpc/get_version_synced_v10.json"),
+        ),
     ];
 
     let version_of = |raw: &str| -> u64 {
@@ -919,7 +923,7 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
     // pure version bump. VC-2 adds the identity tuple at the last link, and
     // naming them here is what keeps "differs by exactly the version" a real
     // invariant rather than one weakened until it stopped failing.
-    const ADDED_AT_LINK: [&[&str]; 8] = [
+    const ADDED_AT_LINK: [&[&str]; 9] = [
         &[],
         &[],
         &[],
@@ -930,6 +934,8 @@ fn the_get_version_chain_differs_by_exactly_the_version_at_every_link() {
         // 3.31 (coverage/fetch RPC); `get_version` gains nothing.
         &[],
         // 3.32 (`calc_pow` drops leftover `major_version`); `get_version` gains nothing.
+        &[],
+        // 3.33 (`get_output_histogram` deleted); `get_version` gains nothing.
         &[],
     ];
     assert_eq!(

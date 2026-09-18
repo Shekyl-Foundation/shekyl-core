@@ -29,8 +29,9 @@
 
 ### API
 
-- **`get_output_histogram` removed** (JSON-RPC method, its wire structs, and
-  the `shekyld` console command `output_histogram`); `CORE_RPC_VERSION`
+- **`get_output_histogram` removed** (JSON-RPC method, its wire structs, the
+  `shekyld` console command `output_histogram`, the python-rpc helper, and
+  the `shekyld` rlwrap completion entry); `CORE_RPC_VERSION`
   3.32 → 3.33. On a chain without rings the per-amount output-count query —
   filtered by unlock state and a caller-chosen recency window — served no
   consumer and was a statistical disclosure surface reachable by anyone on

@@ -469,10 +469,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_640);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 32);
+        assert_eq!(CORE_RPC_VERSION, 196_641);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 33);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 32);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 33);
     }
 
     #[test]

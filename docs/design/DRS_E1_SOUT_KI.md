@@ -30,12 +30,12 @@ one of them (R8b-2's neighbour, the physical shape of `output_amounts`)
 because this surface is its first reader and cannot be built at LMDB's
 complexity on the ported shape.
 
-**Why a separate document.** The S-OUT-KI row is one table line naming eight
-`BlockchainDB` methods. Of the eight, **four** become reads here, one
-dissolves into the snapshot handle's own shape (SOK-3), and **three are not
+**Why a separate document.** The S-OUT-KI row is one table line naming seven
+`BlockchainDB` methods (histogram **DELETED 2026-09-18**, PR #782; it is not
+a ghost name on the DRS §3.5 map). Of the seven, **four** become reads here, one
+dissolves into the snapshot handle's own shape (SOK-3), and **two are not
 ported** — one has no caller at all, one has no production route (a unit
-test is its only caller), and one is Monero decoy-selection tooling the
-census already flagged (U-7). The four reads are: **K1** membership
+test is its only caller). The four reads are: **K1** membership
 (`has_key_image`, with `has_key_images` folded into it), **K2** the
 key-image scan (`for_all_key_images`, the digest's), **O1** the stored
 output record (`get_output_key`, from `output_amounts`) and **O2** the
@@ -133,16 +133,17 @@ SI-9 cell; `LMDB_SCHEMA.md`'s redb-mapping note if it names the multimap;
   posture (`db_lmdb.cpp:3746`–`:3747` throws on `amount != 0`), not a ruling.
 - **`for_all_outputs`** (both overloads) — ported as nothing (SOK-4).
 - **`get_output_distribution`** — ported as nothing (SOK-5; extends SCR-2).
-- **`get_output_histogram`** — ported as nothing (SOK-6); the RPC, its CLI
-  command and the store chain are **deleted by PR #782** (SOK-Q3 ruled B),
-  not by this increment; the S-OUT-KI vocabulary is seven methods from there. The three stay on the DRS §3.5 row so
-  `check_drs_c_surface_map.py`'s count holds (the SCW-2 / SCR-2 precedent).
+- **`get_output_histogram`** — **DELETED 2026-09-18** by PR #782 (SOK-6;
+  SOK-Q3 ruled B), not by this increment. The S-OUT-KI vocabulary is seven
+  methods from there. The name does **not** stay on the DRS §3.5 row:
+  unlike SCW-2/SCR-2, the C++ method is gone from `blockchain.cpp`, so the
+  map must drop it or `check_drs_c_surface_map.py` is a lie.
 - **The pool's half of double-spend detection** (`tx_memory_pool::have_tx_keyimg_as_spent`,
   `src/cryptonote_core/tx_pool.cpp:1711`) — S-POOL's. K1 is the chain half
   only; the RPC that unions them (`is_key_image_spent`,
   `src/rpc/rpc_facts_ffi.cpp:915`) is a cutover-time consumer.
 - **`get_tx_unlock_time`, `get_tx_block_height`** — S-TX's, even though the
-  histogram's `unlocked` walk called them; the histogram is not ported.
+  histogram's `unlocked` walk called them; the histogram is **DELETED**.
 - **Any daemon wiring.** The daemon serves LMDB at this pin; the path
   builder's `read_output_oc` callback (`src/cryptonote_core/curve_tree_path.cpp:67`)
   and the two key-image RPC/verdict readers switch to `ReadSnapshot` at
@@ -185,18 +186,18 @@ does not look outputs up by index — FCMP++ has no ring members to fetch)
 and live on the snapshot only; they move to `chain_reads` the day a rule
 wants them, not before (rule 21: no pre-provisioned second arm).
 
-### 3.2 The mapping — 8 methods, 4 reads
+### 3.2 The mapping — 7 live methods + 1 DELETED, 4 reads
 
 | C++ (`BlockchainDB`) | Live callers at HEAD | Rust read | Notes |
 | --- | --- | --- | --- |
 | `has_key_image` | `Blockchain::have_tx_keyimg_as_spent` (`blockchain.cpp:254`) ← CEN-I7's per-input check (`:3366`, `:3502`, `:3526`, `:3555`), the pool's chain half (`tx_pool.cpp:1711`), the submit verdict (`daemon_submit_ffi.cpp:126`); the block-level double-spend visitor (`blockchain.cpp:3097`) | **K1** `has_key_image(&KeyImage) -> Result<bool>` | Shared body with `BatchView` (SCR-13 shape). The C++ warns in prose that this read takes no lock and must not be paired with another (`blockchain.cpp:250`–`:253`); the snapshot is the lock. |
 | `has_key_images` | `have_tx_keyimges_as_spent` (`:3380`) ← `is_key_image_spent` RPC (`rpc_facts_ffi.cpp:915`) | **dissolves into K1** (SOK-3) | The batch form exists to hold one `rtxn` across N keys (`db_lmdb.cpp:3851`–`:3869`). A `ReadSnapshot` *is* one transaction; N calls to K1 on it are the batch. |
 | `for_all_key_images` | the digest oracle (`logical_state_digest.cpp:73`) | **K2** `key_images() -> impl Iterator<Item = Result<KeyImage, StoreError>>` | Order is the table's (`LmdbHashKey`); the one consumer is order-insensitive. |
-| `get_output_key` (single, `db_lmdb.cpp:3728`; batch `:4460`) | `Blockchain::get_output_key` (`blockchain.cpp:2616`) — **no caller**; the path builder reads the DB directly, `db.get_output_key(0, pos)` (`curve_tree_path.cpp:67`; SOK-10); `BlockchainLMDB::prune_tx_data`'s stripe walk (`db_lmdb.cpp:10282`, reached from `Blockchain::{prune_blockchain, update_blockchain_pruning}` `:6221`, `:6232`) — **dies with the stripe engine** (`PDM-Q7`, S-PRUNE), so it is a current caller with no redb successor; `blockchain_utilities` (LMDB tools, die with LMDB) | **O1** `output(GlobalOutputIndex) -> Result<AtIndex<RecordedOutput>>` | `RecordedOutput { pubkey: OneTimePubkey, commitment: CommitmentBytes, height: BlockHeight, unlock_time: Timelock }` — `OutKey` minus the ids. The batch form (`allow_partial`) dissolves like SOK-3: the caller loops on one snapshot and stops at the first `BeyondCount`. |
-| `get_output_tx_and_index` (amount-specific: single `:3778`, batch `:4506`, both composing `output_amounts[(amount, index)].output_id` → `output_txs`) and `get_output_tx_and_index_from_global` (`:3755`, reading `output_txs[output_id]` directly — **not** in the S-OUT-KI vocabulary, `blockchain.cpp` never calls it; the LMDB body's own helper) | `get_output_key_mask_unlocked` (`blockchain.cpp:2623`–`:2631`) — **no caller**; the histogram's `unlocked` walk (`db_lmdb.cpp:4603`) — not ported | **O2** `output_origin(GlobalOutputIndex) -> Result<AtIndex<OutTx>>` | **Index domain, stated so the implementation cannot pick the wrong one (PR #779 review):** O2 takes a *global* index and is the `_from_global` read — `output_txs[output_id]`, one lookup. It is **not** the amount-specific composition; that path (`(0, i)` → `OutKey.output_id` → `output_txs`) equals the direct read only by SOK-2's belt, and a read that depends on a belt to be right is the wrong read. `OutTx { tx_hash: TxHash, local_index: OutputIndexInTx }` as it exists (`codec/chain.rs:187`–`:192`; SOK-Q4). Kept although its `blockchain.cpp` callers are dead: E2's comparator projects `output_txs` through it, and O1(i).`output_id` vs O2(i) is how SOK-2's belt is checked from the read side. |
+| `get_output_key` (single, `db_lmdb.cpp:3728`; batch `:4460`) | `Blockchain::get_output_key` (`blockchain.cpp:2616`) — **no caller**; the path builder reads the DB directly, `db.get_output_key(0, pos)` (`curve_tree_path.cpp:67`; SOK-10); `BlockchainLMDB::prune_tx_data`'s stripe walk (`db_lmdb.cpp:10189`, reached from `Blockchain::{prune_blockchain, update_blockchain_pruning}` `:6221`, `:6232`) — **dies with the stripe engine** (`PDM-Q7`, S-PRUNE), so it is a current caller with no redb successor; `blockchain_utilities` (LMDB tools, die with LMDB) | **O1** `output(GlobalOutputIndex) -> Result<AtIndex<RecordedOutput>>` | `RecordedOutput { pubkey: OneTimePubkey, commitment: CommitmentBytes, height: BlockHeight, unlock_time: Timelock }` — `OutKey` minus the ids. The batch form (`allow_partial`) dissolves like SOK-3: the caller loops on one snapshot and stops at the first `BeyondCount`. |
+| `get_output_tx_and_index` (amount-specific: single `:3778`, batch `:4506`, both composing `output_amounts[(amount, index)].output_id` → `output_txs`) and `get_output_tx_and_index_from_global` (`:3755`, reading `output_txs[output_id]` directly — **not** in the S-OUT-KI vocabulary, `blockchain.cpp` never calls it; the LMDB body's own helper) | `get_output_key_mask_unlocked` (`blockchain.cpp:2623`–`:2631`) — **no caller**; the histogram's `unlocked` walk (deleted with it, SOK-Q3) — not ported | **O2** `output_origin(GlobalOutputIndex) -> Result<AtIndex<OutTx>>` | **Index domain, stated so the implementation cannot pick the wrong one (PR #779 review):** O2 takes a *global* index and is the `_from_global` read — `output_txs[output_id]`, one lookup. It is **not** the amount-specific composition; that path (`(0, i)` → `OutKey.output_id` → `output_txs`) equals the direct read only by SOK-2's belt, and a read that depends on a belt to be right is the wrong read. `OutTx { tx_hash: TxHash, local_index: OutputIndexInTx }` as it exists (`codec/chain.rs:187`–`:192`; SOK-Q4). Kept although its `blockchain.cpp` callers are dead: E2's comparator projects `output_txs` through it, and O1(i).`output_id` vs O2(i) is how SOK-2's belt is checked from the read side. |
 | `for_all_outputs` ×2 (`:4028`, `:4063`) | **none** — `Blockchain::for_all_outputs` (`blockchain.cpp:7029`, `:7034`) has no caller in `src/` or `tests/` | **not ported** (SOK-4) | Zero consumers at HEAD; the row keeps the names. |
-| `get_output_distribution` (`:4635`) | `Blockchain::get_output_distribution` (`blockchain.cpp:2633`) ← `core::get_output_distribution` ← `RpcHandler::get_output_distribution` (`src/rpc/rpc_handler.cpp:29`) — **no RPC route**: `core_rpc_server.cpp` has no `on_get_output_distribution`; the only caller is `tests/unit_tests/output_distribution.cpp:92` | **not ported** (SOK-5) | SCR-2 found the `amount == 0` arm's helper dead; this confirms the whole method is. Its `m_nettype != FAKECHAIN` branch (`blockchain.cpp:2636`) — a rule-71 divergence — dies with it. |
-| `get_output_histogram` (`:4542`) | `on_get_output_histogram` (`src/rpc/core_rpc_server.cpp:1160`; routed `core_rpc_ffi.cpp:273`) — a **live RPC** with two in-tree clients: the daemon CLI command `output_histogram` (`src/daemon/rpc_command_executor.cpp:1204`–`:1226`, remote and local modes) and a regtest asserting the restricted listener *refuses* the whole-chain query (`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:4090`) | **not ported** (SOK-6; SOK-Q3) | Monero decoy-selection tooling: per-amount output counts with `unlocked` / `recent_cutoff` walks. FCMP++ selects no decoys (rule 60; census U-7, `CONSENSUS_RULE_CENSUS_1.md:233`). |
+| `get_output_distribution` (`:4542`) | `Blockchain::get_output_distribution` (`blockchain.cpp:2633`) ← `core::get_output_distribution` ← `RpcHandler::get_output_distribution` (`src/rpc/rpc_handler.cpp:29`) — **no RPC route**: `core_rpc_server.cpp` has no `on_get_output_distribution`; the only caller is `tests/unit_tests/output_distribution.cpp:92` | **not ported** (SOK-5) | SCR-2 found the `amount == 0` arm's helper dead; this confirms the whole method is. Its `m_nettype != FAKECHAIN` branch (`blockchain.cpp:2636`) — a rule-71 divergence — dies with it. |
+| `get_output_histogram` | **DELETED 2026-09-18** by PR #782 (SOK-Q3 B) — was a live RPC + `shekyld` CLI `output_histogram` + store chain; `CORE_RPC_VERSION` 3.33; the name is refused in RK-8 so it is not re-minted (rule 23). Not in the DRS §3.5 vocabulary (7 methods). The regtest `get_output_histogram_stays_unrouted` pins `Method not found` on both listeners. | **not ported** (SOK-6) | Monero decoy-selection tooling: per-amount output counts with `unlocked` / `recent_cutoff` walks. FCMP++ selects no decoys (rule 60; census U-7). |
 
 ### 3.3 Absence, faults, and what a read may not do
 
@@ -415,7 +416,7 @@ reproduces knowingly is in §6.1.
 | **SOK-3** | `has_key_images` and the batch `get_output_key` / `get_output_tx_and_index` exist to hold one LMDB `rtxn` across N lookups. `ReadSnapshot` is that transaction. | Dissolve into K1 / O1 / O2 on one snapshot; no batch API. |
 | **SOK-4** | `Blockchain::for_all_outputs` (two overloads) has no caller in `src/` or `tests/`. | Not ported. |
 | **SOK-5** | `get_output_distribution` has no RPC route (`core_rpc_server.cpp` has no handler; `RpcHandler::get_output_distribution` is reached only from `tests/unit_tests/output_distribution.cpp:92`). Extends SCR-2 from "the `amount == 0` helper is dead" to "the method is". Carries a rule-71 nettype branch (`blockchain.cpp:2636`). | Not ported; branch dies with it. |
-| **SOK-6** | `get_output_histogram` is a live RPC serving Monero decoy selection; census U-7 flagged it 2026-07 as a deletion candidate under RT-9's precedent. Two in-tree clients: the `shekyld` CLI command `output_histogram` (`rpc_command_executor.cpp:1204`–`:1226`) — the same decoy tooling, one layer up — and a regtest whose assertion is that the restricted listener refuses it. | Not ported; **SOK-Q3 RULED B — LANDED**: the RPC, its CLI command and the callerless store chain deleted by PR #782 (privacy grounds — a disclosure surface with no consumer); `CORE_RPC_VERSION` 3.33; the regtest pins `Method not found` on both listeners. |
+| **SOK-6** | **DELETED 2026-09-18.** At `d89f99791` `get_output_histogram` was a live RPC serving Monero decoy selection; census U-7 flagged it 2026-07 as a deletion candidate under RT-9's precedent. Two in-tree clients at that pin: the `shekyld` CLI command `output_histogram` (`rpc_command_executor.cpp:1204`–`:1226`) — the same decoy tooling, one layer up — and a regtest whose assertion was that the restricted listener refuses it. | Not ported; **SOK-Q3 RULED B — LANDED**: the RPC, its CLI command and the callerless store chain deleted by PR #782 (privacy grounds — a disclosure surface with no consumer); `CORE_RPC_VERSION` 3.33; the regtest pins `Method not found` on both listeners. |
 | **SOK-7** | `Blockchain::get_output_key` and `get_output_key_mask_unlocked` (`blockchain.cpp:2616`–`:2631`) have no callers; the live consumer of the underlying DB read bypasses `Blockchain` (`curve_tree_path.cpp:67`). | Note only — C++ dies at cutover; the Rust read is shaped for the live consumer (O1 returns pubkey **and** commitment). |
 | **SOK-8** | `output_amounts` is the one table §11.1(f) left without a value shape: `U64PrefixBytes` is a `Key` type carrying `OutKey` bytes. | Closed by SOK-1 (`Coded<OutKey>`). |
 | **SOK-9** | `has_key_images` initialises its result to `true` (`db_lmdb.cpp:3856`) before overwriting every element — harmless, but the fail-open default is the shape §3.1 of the curve-tree plan names. | Dissolved with SOK-3; noted so it is not re-created. |
@@ -452,7 +453,7 @@ are reads in the S-CHAIN-R shape.
 - `scripts/ci/check_redb_schema_key_types.py` — **extended** (tuple key parse; `DUPSORT compare_uint64 → (K, u64)` accepted); its `--selftest` gains the tuple case; its floor of 30 constraints holds (the table is still constrained, differently).
 - `check_redb_schema_coverage.py` (bijection) — unchanged; the table keeps its name.
 - The codec snapshot gate — `OutKey` and `UndoLog` fixtures change; the bump in commit 2 is what §11.1(b) demands.
-- `check_drs_c_surface_map.py` — the S-OUT-KI row keeps all eight names.
+- `check_drs_c_surface_map.py` — the S-OUT-KI row names the seven remaining methods (histogram deleted, not a ghost name).
 - **Extended:** K1/K2 tests (commit 1); the SOK-2 two-counter test, `BeyondCount`, planted-hole SI-9, `AtIndex` `compile_fail` (commit 4); a `range`-based bucket read asserting O(log n) *shape* (a `get`, not an iteration — pinned by the code, not timed).
 - Docs gates: links, code citations, claims, index prefix/table shape, banners, landed-row stamps, surface map.
 
@@ -471,7 +472,7 @@ are reads in the S-CHAIN-R shape.
 
 ## 10. Documentation owed by the increment (rule 91)
 
-- `DAEMON_REDB_STORE.md` §7 S-OUT-KI row: landed stamp, "8 methods → 4 reads (K1, K2, O1, O2); `has_key_images` + batch forms dissolve (SOK-3); three not ported (SOK-4/5/6)"; §7.6's "`output_amounts` keyed verbatim with R8b-2 open" gets `UPDATE`: keyed tuple table at v6, same logical content, R8b-2 still open, arm B named.
+- `DAEMON_REDB_STORE.md` §7 S-OUT-KI row: landed stamp, "7 methods → 4 reads (K1, K2, O1, O2); `has_key_images` + batch forms dissolve (SOK-3); two not ported (SOK-4/5); histogram DELETED (SOK-6)"; §7.6's "`output_amounts` keyed verbatim with R8b-2 open" gets `UPDATE`: keyed tuple table at v6, same logical content, R8b-2 still open, arm B named.
 - `STORE_INVARIANT_REGISTER.md` SI-9: the unique-key restatement and the SOK-2 leg.
 - `FOLLOWUPS.md`: the SOK-10 row (this PR) — owner the path-FFI lane, falsifier named.
 - `LMDB_SCHEMA.md` if it carries the redb mapping for `output_amounts`: multimap → keyed tuple.
