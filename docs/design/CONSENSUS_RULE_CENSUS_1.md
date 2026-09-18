@@ -238,7 +238,7 @@ deleting 2001, so there is one block path and Design A describes all of it.
 `get_output_histogram` is routed (`core_rpc_server.cpp:1160`, plus the
 `shekyld` CLI command `output_histogram`); `get_output_distribution` has **no
 RPC route** — its only caller is `tests/unit_tests/output_distribution.cpp`.
-Neither is ported to the redb store; the histogram RPC's fate is SOK-Q3. In
+Neither is ported to the redb store; the histogram RPC's fate was SOK-Q3 — ruled B and **closed below**. In
 Monero these serve **decoy selection**. With
 FCMP++ there is no decoy selection. `blockchain.cpp:2686-2688` still contains
 `// rct outputs don't exist before v4` and a `HF_VERSION_DYNAMIC_FEE` height
@@ -247,6 +247,19 @@ lookup.
 Under RT-9's precedent (`--public-node` removed because an affordance is what
 people reach for), an endpoint whose only purpose was ring selection is a
 candidate for deletion rather than maintenance.
+
+**UPDATE 2026-09-18 — CLOSED.** `get_output_histogram` is **deleted** (RPC route,
+handler, wire struct, the `shekyld` CLI command `output_histogram`, and the
+callerless `Blockchain` / `BlockchainDB` / `BlockchainLMDB` chain;
+`CORE_RPC_VERSION` 3.33) by PR #782 under the S-OUT-KI pre-flight's ruling SOK-Q3
+(`DRS_E1_SOUT_KI.md`), on **privacy** grounds rather than tidiness: on a chain
+without rings, per-amount output counts over caller-chosen unlock and recency
+windows are a statistical disclosure surface with no consumer, and "dies at
+cutover" is a schedule, not a mitigation while the C++ daemon runs testnet.
+`get_output_distribution` was already unrouted at that pin (no
+`on_get_output_distribution`; its only caller is
+`tests/unit_tests/output_distribution.cpp`) and is *not ported* to the redb
+store (SOK-5); its C++ dies with the LMDB path.
 
 ### U-8 — Timestamp validation (MEDIUM: partially Shekyl, partially inherited)
 

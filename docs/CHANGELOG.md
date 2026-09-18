@@ -29,6 +29,15 @@
 
 ### API
 
+- **`get_output_histogram` removed** (JSON-RPC method, its wire structs, and
+  the `shekyld` console command `output_histogram`); `CORE_RPC_VERSION`
+  3.32 → 3.33. On a chain without rings the per-amount output-count query —
+  filtered by unlock state and a caller-chosen recency window — served no
+  consumer and was a statistical disclosure surface reachable by anyone on
+  the RPC; it is deleted rather than carried to cutover
+  (`DRS_E1_SOUT_KI.md` SOK-Q3; census U-7 closed). There is no replacement:
+  FCMP++ selects no decoys, which was the query's only purpose.
+
 - **`shekyl-wire`'s hash surface is typed (RTN-7).** `Transaction::hash()`,
   `hash_with_supplied_prunable` and `hash_with_supplied_components` return
   `TxHash`; `Block::hash()` returns `BlockHash`; `prefix_hash()` returns the

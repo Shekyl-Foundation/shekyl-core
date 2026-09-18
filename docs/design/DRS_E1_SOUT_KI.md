@@ -134,8 +134,8 @@ SI-9 cell; `LMDB_SCHEMA.md`'s redb-mapping note if it names the multimap;
 - **`for_all_outputs`** (both overloads) — ported as nothing (SOK-4).
 - **`get_output_distribution`** — ported as nothing (SOK-5; extends SCR-2).
 - **`get_output_histogram`** — ported as nothing (SOK-6); the RPC, its CLI
-  command and the store chain are **deleted by their own PR** (SOK-Q3 ruled
-  B), not by this increment. The three stay on the DRS §3.5 row so
+  command and the store chain are **deleted by PR #782** (SOK-Q3 ruled B),
+  not by this increment; the S-OUT-KI vocabulary is seven methods from there. The three stay on the DRS §3.5 row so
   `check_drs_c_surface_map.py`'s count holds (the SCW-2 / SCR-2 precedent).
 - **The pool's half of double-spend detection** (`tx_memory_pool::have_tx_keyimg_as_spent`,
   `src/cryptonote_core/tx_pool.cpp:1711`) — S-POOL's. K1 is the chain half
@@ -415,7 +415,7 @@ reproduces knowingly is in §6.1.
 | **SOK-3** | `has_key_images` and the batch `get_output_key` / `get_output_tx_and_index` exist to hold one LMDB `rtxn` across N lookups. `ReadSnapshot` is that transaction. | Dissolve into K1 / O1 / O2 on one snapshot; no batch API. |
 | **SOK-4** | `Blockchain::for_all_outputs` (two overloads) has no caller in `src/` or `tests/`. | Not ported. |
 | **SOK-5** | `get_output_distribution` has no RPC route (`core_rpc_server.cpp` has no handler; `RpcHandler::get_output_distribution` is reached only from `tests/unit_tests/output_distribution.cpp:92`). Extends SCR-2 from "the `amount == 0` helper is dead" to "the method is". Carries a rule-71 nettype branch (`blockchain.cpp:2636`). | Not ported; branch dies with it. |
-| **SOK-6** | `get_output_histogram` is a live RPC serving Monero decoy selection; census U-7 flagged it 2026-07 as a deletion candidate under RT-9's precedent. Two in-tree clients: the `shekyld` CLI command `output_histogram` (`rpc_command_executor.cpp:1204`–`:1226`) — the same decoy tooling, one layer up — and a regtest whose assertion is that the restricted listener refuses it. | Not ported; **SOK-Q3 RULED B**: the RPC, its CLI command and the callerless store chain are deleted now, as their own PR (privacy grounds — a disclosure surface with no consumer). |
+| **SOK-6** | `get_output_histogram` is a live RPC serving Monero decoy selection; census U-7 flagged it 2026-07 as a deletion candidate under RT-9's precedent. Two in-tree clients: the `shekyld` CLI command `output_histogram` (`rpc_command_executor.cpp:1204`–`:1226`) — the same decoy tooling, one layer up — and a regtest whose assertion is that the restricted listener refuses it. | Not ported; **SOK-Q3 RULED B — LANDED**: the RPC, its CLI command and the callerless store chain deleted by PR #782 (privacy grounds — a disclosure surface with no consumer); `CORE_RPC_VERSION` 3.33; the regtest pins `Method not found` on both listeners. |
 | **SOK-7** | `Blockchain::get_output_key` and `get_output_key_mask_unlocked` (`blockchain.cpp:2616`–`:2631`) have no callers; the live consumer of the underlying DB read bypasses `Blockchain` (`curve_tree_path.cpp:67`). | Note only — C++ dies at cutover; the Rust read is shaped for the live consumer (O1 returns pubkey **and** commitment). |
 | **SOK-8** | `output_amounts` is the one table §11.1(f) left without a value shape: `U64PrefixBytes` is a `Key` type carrying `OutKey` bytes. | Closed by SOK-1 (`Coded<OutKey>`). |
 | **SOK-9** | `has_key_images` initialises its result to `true` (`db_lmdb.cpp:3856`) before overwriting every element — harmless, but the fail-open default is the shape §3.1 of the curve-tree plan names. | Dissolved with SOK-3; noted so it is not re-created. |
