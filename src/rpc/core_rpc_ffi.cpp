@@ -270,7 +270,6 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_bans",              on_get_bans,                    COMMAND_RPC_GETBANS),
         DJRPC_WE("banned",                on_banned,                      COMMAND_RPC_BANNED),
         DJRPC_WE("flush_txpool",          on_flush_txpool,                COMMAND_RPC_FLUSH_TRANSACTION_POOL),
-        DJRPC_WE("get_output_histogram",   on_get_output_histogram,       COMMAND_RPC_GET_OUTPUT_HISTOGRAM),
         DJRPC_WE("get_coinbase_tx_sum",    on_get_coinbase_tx_sum,        COMMAND_RPC_GET_COINBASE_TX_SUM),
         DJRPC_WE("get_alternate_chains",   on_get_alternate_chains,       COMMAND_RPC_GET_ALTERNATE_CHAINS),
         DJRPC_WE("relay_tx",              on_relay_tx,                    COMMAND_RPC_RELAY_TX),

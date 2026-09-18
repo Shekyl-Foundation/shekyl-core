@@ -4058,9 +4058,20 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
     //   * a refusal written into `error_resp`  -> the error envelope
     //   * a refusal written into `res.status`  -> the result envelope
     //
-    // `get_block_header_by_hash` takes the first path, `get_output_histogram`
-    // the second. (After this branch deleted the unused `DJRPC` macro and its
-    // template, these two are the only JSON-RPC dispatcher left.)
+    // `get_block_header_by_hash` takes the first path. The second used to be
+    // `get_output_histogram`'s restricted refusal; that method is deleted
+    // (SOK-Q3 — a disclosure surface with no consumer), and after it no WE
+    // handler refuses a *restricted* caller into `res.status`. So the
+    // restricted-policy assertions on the JSON-RPC half are both error
+    // envelopes — the handler-level cap (`get_block_header_by_hash`) and the
+    // method-level gate (`get_coinbase_tx_sum` is admin-only) — and the
+    // result-envelope shape is held on the admin listener by
+    // `get_coinbase_tx_sum`'s universal cap (`height or count is too large`),
+    // which proves the template carries a non-OK status through `result` but
+    // says nothing about the origin. If a WE handler ever grows a restricted
+    // `res.status` refusal, move that leg back onto the restricted listener.
+    // (After the unused `DJRPC` macro and its template were deleted,
+    // `dispatch_jsonrpc_we` is the only JSON-RPC dispatcher left.)
     let json_rpc = |method: &str, params: serde_json::Value| json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
 
     // Over the block cap: refused into `error_resp`, so the reply is an error
@@ -4082,39 +4093,80 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
          if this succeeds the JSON-RPC template stopped passing the origin"
     );
 
-    // The whole-chain histogram: refused into `res.status`, so the reply is a
-    // *result* envelope carrying a non-OK status. Same gate, other shape.
-    let hist: serde_json::Value = restricted
+    // The method-level gate: an admin-only method on the restricted listener
+    // is refused at dispatch, before any handler runs — an error envelope.
+    let gated: serde_json::Value = restricted
         .rpc_call(
             "json_rpc",
-            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+            Some(json_rpc(
+                "get_coinbase_tx_sum",
+                json!({ "height": 0, "count": 1 }),
+            )),
         )
         .await
-        .expect("restricted get_output_histogram with no amounts");
+        .expect("restricted get_coinbase_tx_sum");
     assert_eq!(
-        hist.pointer("/result/status").and_then(|s| s.as_str()),
-        Some(
-            "Restricted RPC will not serve histograms on the whole blockchain. Use your own node."
-        ),
-        "a restricted listener must refuse the whole-chain histogram"
+        gated.pointer("/error/message").and_then(|m| m.as_str()),
+        Some("Method not allowed in restricted mode"),
+        "a restricted listener must refuse an admin-only JSON-RPC method at dispatch"
     );
 
-    // And the same JSON-RPC request on the admin listener is served, so the
-    // JSON-RPC half has its blast-radius control too.
-    let admin_hist: serde_json::Value = unrestricted
+    // The result-envelope shape: on the admin listener, a count past the chain
+    // height is refused into `res.status`, so the reply is a *result* envelope
+    // carrying a non-OK status (see the note above on what this proves).
+    let over: serde_json::Value = unrestricted
         .rpc_call(
             "json_rpc",
-            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+            Some(json_rpc(
+                "get_coinbase_tx_sum",
+                json!({ "height": 0, "count": 1_000_000 }),
+            )),
         )
         .await
-        .expect("unrestricted get_output_histogram with no amounts");
+        .expect("unrestricted get_coinbase_tx_sum over the chain height");
     assert_eq!(
-        admin_hist
-            .pointer("/result/status")
-            .and_then(|s| s.as_str()),
-        Some("OK"),
-        "the unrestricted listener must still serve the whole-chain histogram"
+        over.pointer("/result/status").and_then(|s| s.as_str()),
+        Some("height or count is too large"),
+        "a count past the chain height must be refused through the result envelope"
     );
+
+    // And the well-formed request is served, so the JSON-RPC half is exercised
+    // end to end and a status of `OK` is distinguishable from a refusal.
+    let admin_sum: serde_json::Value = unrestricted
+        .rpc_call(
+            "json_rpc",
+            Some(json_rpc(
+                "get_coinbase_tx_sum",
+                json!({ "height": 0, "count": 1 }),
+            )),
+        )
+        .await
+        .expect("unrestricted get_coinbase_tx_sum for the genesis block");
+    assert_eq!(
+        admin_sum.pointer("/result/status").and_then(|s| s.as_str()),
+        Some("OK"),
+        "the unrestricted listener must serve a well-formed JSON-RPC request"
+    );
+
+    // The deletion has a gate that can fail (rule 47): `get_output_histogram`
+    // is unknown to both listeners. A route re-minted under the old name would
+    // turn this red before it could serve a single histogram.
+    for (name, listener) in [("restricted", &restricted), ("unrestricted", &unrestricted)] {
+        let gone: serde_json::Value = listener
+            .rpc_call(
+                "json_rpc",
+                Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+            )
+            .await
+            .expect(
+                "get_output_histogram must answer with an error envelope, not a transport failure",
+            );
+        assert_eq!(
+            gone.pointer("/error/message").and_then(|m| m.as_str()),
+            Some("Method not found: get_output_histogram"),
+            "get_output_histogram was deleted (SOK-Q3) and must stay unrouted on the {name} listener"
+        );
+    }
 }
 
 /// The native handlers apply their own request caps.

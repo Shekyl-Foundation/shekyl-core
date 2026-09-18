@@ -1135,58 +1135,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_GET_OUTPUT_HISTOGRAM
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<uint64_t> amounts;
-      uint64_t min_count;
-      uint64_t max_count;
-      bool unlocked;
-      uint64_t recent_cutoff;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base);
-        KV_SERIALIZE(amounts);
-        KV_SERIALIZE(min_count);
-        KV_SERIALIZE(max_count);
-        KV_SERIALIZE(unlocked);
-        KV_SERIALIZE(recent_cutoff);
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct entry
-    {
-      uint64_t amount;
-      uint64_t total_instances;
-      uint64_t unlocked_instances;
-      uint64_t recent_instances;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(amount);
-        KV_SERIALIZE(total_instances);
-        KV_SERIALIZE(unlocked_instances);
-        KV_SERIALIZE(recent_instances);
-      END_KV_SERIALIZE_MAP()
-
-      entry(uint64_t amount, uint64_t total_instances, uint64_t unlocked_instances, uint64_t recent_instances):
-          amount(amount), total_instances(total_instances), unlocked_instances(unlocked_instances), recent_instances(recent_instances) {}
-      entry() {}
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      std::vector<entry> histogram;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(histogram)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct COMMAND_RPC_GET_COINBASE_TX_SUM
   {
     struct request_t: public rpc_request_base
