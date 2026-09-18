@@ -200,14 +200,14 @@ auth (no per-fetch circuit isolation).
   daemon holds archival consensus state and no serving state, because an
   archiver-backed daemon that behaves differently from a plain one
   fingerprints the Principal's public address (RULED 2026-09-17,
-  `V3_WALLET_DECISION_LOG.md`, two stores). The same ruling makes the
-  128-byte leaf encoding this route serves a **wire** format between two
-  independently built stores — the exposed object being the **segment
-  partition**, which is itself consensus (`frozen_segment_count` decides
-  admissible `shard_id`s and what pop revert deletes), with the tie between
-  `SEGMENT_LEAF_COUNT` and `shekyl_curve_tree::segment` owed in
-  archival-retention — and the archiver-store retention horizon are
-  FOLLOWUPS rows.
+  `V3_WALLET_DECISION_LOG.md`, two stores). The 128-byte leaf bytes this
+  route serves are already consensus (the leaf-hash preimage, PL-D3
+  frozen); what the two independently built stores must agree on beyond
+  them is the **segment partition**, which is itself consensus
+  (`frozen_segment_count` decides admissible `shard_id`s and what pop
+  revert deletes), with the tie between `SEGMENT_LEAF_COUNT` and
+  `shekyl_curve_tree::segment` owed in archival-retention. That tie and
+  the archiver-store retention horizon are FOLLOWUPS rows.
   A daemon *fetching* a shard through this route for its own reasons is
   episodic and carries no posture signal; *serving* would be durable, and
   that is the distinction the ruling rests on.

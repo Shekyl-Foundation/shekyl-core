@@ -5676,7 +5676,10 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   settle for a test. The partition PR is therefore three small pieces —
   `const fn` in curve-tree, the equality assert and the 720 assert in
   archival-retention — all in the crate the dependency direction forces,
-  all before E3 has anything to import. (b) **`recon`'s
+  all before E3 has anything to import. E3's own two obligations (import
+  the partition and define PDM's discard unit in `SegmentId`; run the CT-0
+  freeze KAT against its skeleton) are E3's, not this PR's; the FOLLOWUPS
+  row separates the two. (b) **`recon`'s
   oracle is a fact about timing:** `recon.rs:6–13` replicates the daemon's
   C++ leaf-stream derivation bit-exactly, and that duplication is an oracle
   *because* the two implementations are independent. After E3 the daemon's
