@@ -449,7 +449,31 @@ hash32! {
     ///
     /// Distinct from [`BlockHash`]. Canonical replacement for the ad-hoc
     /// `TxHash([u8; 32])` previously defined in `shekyl-engine-core`.
+    ///
+    /// The **output** of the txid construction. Its inputs are the
+    /// component hashes — [`PrefixHash`] (first), the base hash (second,
+    /// never surfaced), [`PqcAuthHash`] (third), [`PrunableHash`] (fourth)
+    /// — and each is a distinct type so no component can be passed where
+    /// the txid is expected, or the txid where a component is
+    /// (`RTN-7`, `RTN_7_WIRE_HASH_TYPES.md` Q3).
     TxHash
+}
+
+hash32! {
+    /// `keccak256(varint(TX_VERSION) ‖ transaction_prefix)` — the **first
+    /// component** of a transaction's [`TxHash`], and the FCMP++
+    /// `signable_tx_hash` the membership/SAL proof signs
+    /// (`FCMP_SPEND_SIGNING_PREIMAGE.md` §1.2; the C++ `cn_fast_hash` over
+    /// `transaction_prefix`, version varint first).
+    ///
+    /// A member of the component-hash family beside [`PqcAuthHash`] and
+    /// [`PrunableHash`], not a signing-specific category: the value the
+    /// builder signs *is* the txid's first component, and one type for one
+    /// value is what lets the type system refuse the confusion a bare
+    /// `[u8; 32]` permits — a prefix hash passed to `TxHash::from_bytes`, or
+    /// a txid handed to the signer (`RTN-7`, Q3). Distinct from [`TxHash`]
+    /// in both directions.
+    PrefixHash
 }
 
 hash32! {
