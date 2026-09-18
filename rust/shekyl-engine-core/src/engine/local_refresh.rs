@@ -754,14 +754,11 @@ impl RefreshEngine for LocalRefresh {
                 if h > 1 {
                     let expected_parent = match block_hashes.last() {
                         Some(&(prev_h, prev_hash)) if prev_h + 1 == h => Some(prev_hash),
-                        // The snapshot's reorg rows are persisted bytes (RAW_TYPE PR C).
-                        _ => snapshot.block_hash_at(h - 1).map(BlockHash::from_bytes).or(
-                            if h == effective_start {
-                                effective_parent_hash
-                            } else {
-                                None
-                            },
-                        ),
+                        _ => parent_hash_for_start(&snapshot, h).or(if h == effective_start {
+                            effective_parent_hash
+                        } else {
+                            None
+                        }),
                     };
                     if let Some(expected_parent) = expected_parent {
                         if expected_parent != scannable.block.header.previous {
@@ -1079,12 +1076,12 @@ impl RefreshEngine for LocalRefresh {
 /// Resolve the `parent_hash` field for a result whose
 /// `processed_height_range.start == start`. Returns `None` for
 /// genesis (`start <= 1`) and the snapshot's recorded hash at
-/// `start - 1` otherwise.
+/// `start - 1` otherwise — typed here, at the seam where the persisted
+/// reorg rows (bytes until RAW_TYPE PR C) meet the typed scan.
 fn parent_hash_for_start(snapshot: &LedgerSnapshot, start: u64) -> Option<BlockHash> {
     if start <= 1 {
         None
     } else {
-        // The snapshot reads the persisted reorg rows, still bytes (RAW_TYPE PR C).
         snapshot.block_hash_at(start - 1).map(BlockHash::from_bytes)
     }
 }
@@ -1211,12 +1208,12 @@ async fn find_fork_point<R: DaemonEngine>(
             return Ok(1);
         }
 
-        let Some(stored_hash) = snapshot.block_hash_at(h) else {
+        let Some(stored_hash) = snapshot.block_hash_at(h).map(BlockHash::from_bytes) else {
             return Ok(h + 1);
         };
 
         let daemon_block = fetch_block_with_retry(rpc, h, cancel, emit_state, diagnostics).await?;
-        if daemon_block.block.hash() == BlockHash::from_bytes(stored_hash) {
+        if daemon_block.block.hash() == stored_hash {
             return Ok(h + 1);
         }
 
