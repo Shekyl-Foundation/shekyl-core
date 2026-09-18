@@ -5698,7 +5698,22 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   all before E3 has anything to import. E3's own two obligations (import
   the partition and define PDM's discard unit in `SegmentId`; run the CT-0
   freeze KAT against its skeleton) are E3's, not this PR's; the FOLLOWUPS
-  row separates the two. (b) **`recon`'s
+  row separates the two. **LANDED 2026-09-18 (partition PR), with one
+  correction to the sketch above:** `shekyl-curve-tree` is only a
+  *dev*-dependency of archival-retention — `path.rs:53–56` refuses the
+  production edge (the consensus crate does not import the wallet-side
+  store crate) — so the assert could not name `shekyl_curve_tree` in the
+  lib. The derivation moved instead to the crate both already depend on and
+  that owns the geometry: `shekyl_fcmp::tree` now holds `SEGMENT_LAYER_J`,
+  `outputs_per_node`, `leaves_per_segment` as `const fn`; curve-tree
+  re-exports them; archival-retention asserts `SEGMENT_LEAF_COUNT ==
+  leaves_per_segment()` compile-time in the production graph, replacing its
+  hand-written width product. The 720 tie has no shared home and is a
+  `#[cfg(test)]` const assert in archival-retention's dev graph, interim to
+  the PHASE_2B codegen dedup. Both doors red-checked. *SUPERSEDED: "the
+  dependency already runs archival-retention → curve-tree" as a production
+  fact; "the assert belongs in archival-retention" for the partition tie —
+  it does, but via `shekyl-fcmp`, not via curve-tree.* (b) **`recon`'s
   oracle is a fact about timing:** `recon.rs:6–13` replicates the daemon's
   C++ leaf-stream derivation bit-exactly, and that duplication is an oracle
   *because* the two implementations are independent. After E3 the daemon's

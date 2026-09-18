@@ -338,8 +338,10 @@ foreclosed by design.** Segment freeze fires on first crossing of
 `SEGMENT_LEAF_COUNT = 25_992`. There is no regtest override, and
 `config/consensus_constants.json:43` states the reason: it is **"NOT a
 tunable"**, with a compile-time assert in
-`rust/shekyl-archival-retention/src/segment_freeze.rs` tying it to the
-`shekyl-fcmp` width constants so a width change cannot silently strand it.
+`rust/shekyl-archival-retention/src/segment_freeze.rs` tying it to
+`shekyl_fcmp::tree::leaves_per_segment()`, the partition derivation both
+stores take from that crate (since 2026-09-18; before that, to the width
+product directly), so a width change cannot silently strand it.
 Forcing this pair means ~26k outputs in the corpus. That is a scoped cost, not
 a blocker, and it is the single largest item in the build.
 
