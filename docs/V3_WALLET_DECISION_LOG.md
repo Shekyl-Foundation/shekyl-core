@@ -5684,7 +5684,8 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   is imported back. A PR that starts in `segment.rs` discovers this the
   wrong way round. Same site, same PR, as the
   `SEGMENT_LEAF_COUNT == leaves_per_segment()` tie above. **Implementation
-  wrinkle on that tie:** `leaves_per_segment` and `outputs_per_node` are
+  wrinkle on that tie** *(SUPERSEDED 2026-09-18 — landed as described in the
+  LANDED note below; `const fn` since the partition PR)*: `leaves_per_segment` and `outputs_per_node` are
   `pub fn`, not `const fn`, so the equality cannot be a compile-time assert
   as written; and `outputs_per_node`'s loop uses
   `u8::try_from(layer).expect(..)`, which is not const (`Result::expect`
@@ -5708,9 +5709,14 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   `outputs_per_node`, `leaves_per_segment` as `const fn`; curve-tree
   re-exports them; archival-retention asserts `SEGMENT_LEAF_COUNT ==
   leaves_per_segment()` compile-time in the production graph, replacing its
-  hand-written width product. The 720 tie has no shared home and is a
-  `#[cfg(test)]` const assert in archival-retention's dev graph, interim to
-  the PHASE_2B codegen dedup. Both doors red-checked. *SUPERSEDED: "the
+  hand-written width product. The 720 tie landed as the dedup itself, not an
+  assert: `shekyl-curve-tree`'s `build.rs` already read
+  `consensus_constants.json`, so `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` is now
+  generated from `archival_reorg_depth_blocks` — the same key as
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` — and the literal, the interim assert and the
+  CT-1 FOLLOWUPS row are gone (a `cfg(test)` assert was tried first and
+  refused in review: integration-test targets build the lib without
+  `cfg(test)`, so it was skippable). Both doors red-checked. *SUPERSEDED: "the
   dependency already runs archival-retention → curve-tree" as a production
   fact; "the assert belongs in archival-retention" for the partition tie —
   it does, but via `shekyl-fcmp`, not via curve-tree.* (b) **`recon`'s

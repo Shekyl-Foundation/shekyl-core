@@ -95,7 +95,7 @@ brief's authority.
 
 | # | Fact | Confirmed at |
 |---|---|---|
-| 1 | The leaf is 4 Selene scalars, 128 bytes | `rust/shekyl-curve-tree/src/segment.rs:36` (`LEAF_BYTES = SCALARS_PER_LEAF * 32`), `:38` (`assert!(LEAF_BYTES == 128)`); `rust/shekyl-fcmp/src/tree.rs:506–524` (`construct_leaf`: `leaf[96..128] = h_pqc`) |
+| 1 | The leaf is 4 Selene scalars, 128 bytes | `rust/shekyl-curve-tree/src/segment.rs` (`LEAF_BYTES = SCALARS_PER_LEAF * 32`, `assert!(LEAF_BYTES == 128)`); `rust/shekyl-fcmp/src/tree.rs:506–524` (`construct_leaf`: `leaf[96..128] = h_pqc`) |
 | 2 | At creation the creator publishes `h_pqc = H(hybrid_pk)` per output, vout order, in `tx_extra` `0x07` | Coinbase: `src/cryptonote_core/cryptonote_tx_utils.cpp:198–199` (field), `:237` (`append(od.h_pqc)`), `:253–261` (serialised into `tx.extra`). C++ non-coinbase path: `:499–500`, `:547`, `:567`. **The live wallet producer is Rust** (`rust/shekyl-wire/src/tx_extra.rs`, `rust/shekyl-engine-core/src/engine/sign_bridge.rs`, `drain_assembly.rs`, genesis: `rust/shekyl-genesis-tool/src/builder.rs`) — same derivation, same bytes (§9 census) |
 | 3 | Each published `h_pqc` is copied into that output's leaf at DB add, as opaque bytes | `src/blockchain_db/blockchain_db.cpp:528–548` (`extract_leaf_hashes`: shape-checked, then the blob is returned verbatim), `:550–557` (`collect_outputs`: `h_pqc = blob + i*32`), `:608–611` (`shekyl_construct_curve_tree_leaf(output_key, commitment, h_pqc, leaf)`); `rust/shekyl-ffi/src/legacy_curve_tree.rs:526–563` → `shekyl_fcmp::tree::construct_leaf`. **No node can recompute it** — nodes never hold the output's `pqc_pk` |
 | 4 | `h_pqc` is per-output unique | `rust/shekyl-crypto-pq/src/derivation.rs:230–265` (`derive_output_secrets(combined_ss, output_index)`: `ml_dsa_seed` and `ed25519_pqc_seed` are `HKDF-Expand` under labels salted with `idx_le64`, `:198–199`); `:66–81` (`hash_pqc_public_key`: Blake2b-512 under `DOMAIN_PQC_LEAF`, `wide_reduce` into the leaf field); `:87–113` (`derive_pqc_leaf_hash`); `rust/shekyl-crypto-pq/src/output.rs:1412–1434` (`compute_hybrid_h_pqc`, the creation/scan-side value at `:394`, `:751`, `:965`) |
@@ -147,7 +147,7 @@ verifier implementations, for every spend arm.
 The lookup table is not derived data; every node already holds it. The
 `0x07` blob is parsed at admission (`check_tx_extra_pqc_field_shape`) and the
 leaf bytes `[96..128]` are stored per output in the curve-tree store
-(`LEAVES_TABLE`, `segment.rs:32–36`). `tx_extra` is part of the non-prunable
+(`LEAVES_TABLE`, `segment.rs` `LEAF_BYTES`). `tx_extra` is part of the non-prunable
 transaction prefix, so a pruned node holds the `0x07` table too. No
 special-purpose indexer is needed.
 
