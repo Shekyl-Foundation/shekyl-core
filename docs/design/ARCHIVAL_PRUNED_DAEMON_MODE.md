@@ -4,7 +4,7 @@
 `PDM-Q6` items 1–3 (the prunable region + `pqc_auths` are the good; a
 shard is a `tx_id` range; item 4 OPEN by name) and `PDM-Q11` (`D_max`:
 shape frozen, home `CEN-E2`, numeric 720 PROVISIONAL to the Round-2
-gate). Unblocked by them: Q1, Q2, Q12, `SF` sub-PR 2, F28. RULED 2026-09-18: Q6 item 4 (nine-row re-key/reopen table — the serve-credit admission verifier is reopened as **consensus**, E4's), Q6 item 3 AMENDED (`PDM-Q-F32`: byte-bounded shards over a retained length row, shard-granular discard), Q12 (freeze retires; conditional on Q9 only for where dependents re-point).** As
+gate). Unblocked by them: Q1, Q2, Q12, `SF` sub-PR 2, F28. RULED 2026-09-18: Q6 item 4 (nine-row re-key/reopen table — the serve-credit admission verifier is reopened as **consensus**, E4's), Q6 item 3 AMENDED (`PDM-Q-F32`: byte-bounded shards over a retained length row, shard-granular discard), Q12 (freeze retires; conditional on Q9 only for where dependents re-point), Q2 (shape: shard-granular discard predicate with an epoch floor; `W` ≈ 195 days PROVISIONAL, set by the journal floor, its cost stated).** As
 opened: `PDM-Q1`…`PDM-Q6`, `PDM-Q8` and `PDM-Q10` were **OPEN**. `PDM-Q3` is restated (today not node-local,
 `PDM-Q-F8`). `PDM-Q1` is widened and `PDM-Q6` promoted (`PDM-Q-F12`:
 leaves are a cache of the block corpus; set-B scarcity as scoped does
@@ -297,7 +297,107 @@ of the tree before the ruling pass reads it. The slice A class assignments for t
 tables (`PDM-Q-F11`) are re-graded against Q1's output by the DRS-0
 lane, not here.
 
-### `PDM-Q2` OPEN — Discard trigger and depth
+### `PDM-Q2` RULED 2026-09-18 (shape; numeric PROVISIONAL) — The discard predicate and the universal window `W`
+
+**Grounded at** `dev@20ebdf1e5`, on Q6 items 1–4 and F32 (byte-bounded
+shards, shard-granular discard) and Q11 (`D_max`).
+
+**The predicate.** Shard `k` — a byte-bounded `tx_id` range
+`[b_k, b_{k+1})` (F32) — has its prunable regions and `pqc_auths`
+discarded **atomically, as a whole**, iff:
+
+> `b_{k+1} ≤ first_tx_id(tip − W)` **and** `k ∉ exceptions`
+> **and** `close_height(k) + SEB < tip`
+
+where `first_tx_id(h) = block_info[h−1].cumulative_tx_count` (FL-R3-STORE,
+landing on #772), `close_height(k) = height(b_{k+1})` (a binary search
+over the same running total — no new state), and `exceptions` is the
+daemon's set of retained shards (Q9, now per shard: `retain(k)` /
+`release(k)`). The first conjunct is the horizon on the shard's *last*
+transaction, so a shard discards only when its youngest byte is `W`
+old — never a transaction at a time (F32: on an ordinary node a shard
+is entirely present or entirely absent). The third conjunct is an
+**epoch floor** on the specified-to-scarce window: it is `≥ W` by the
+first conjunct alone, and the floor exists so that guarantee does not
+silently depend on `W` being large if Round-2 moves it down hard. The
+predicate is **asserted where the discard is decided** — S-PRUNE's
+per-epoch batch — never discovered downstream: a violated predicate is
+a refused discard, not a corrupted write. Pops are unaffected: a block
+within `D_max` has its transactions in shards whose last tx is above
+`tip − W` (`W ≥ D_max`).
+
+**`W` — the floor and what sets it.** Floor `D_max`: pops must re-pool
+full transactions, and the undo-log floor is the same inequality on the
+store side (SCW-7). No adversary-side ceiling. **`W` is set by
+coincidence with the slash-log retirement floor, not by honest
+downtime:** `W = CRB + n·SEB + D_max` (F19) makes bodies and journals
+one horizon, and honest downtime (days to weeks) is satisfied with a
+wide margin as a consequence. The price is stated as an argument, not
+"priced": **no scarce byte exists until day ~195**, the bootstrap
+subsidy runs that long against no possession, and the first real
+possession test fires at `W`. Accepted because the subsidy is ruled
+bootstrap (`DESIGN_CONCEPTS.md` Component 4), because one horizon
+removes a drift pair, and because a shorter `W` buys scarcity at the
+cost of putting running nodes into band 2 on ordinary outages. If the
+Round-2 outage CDF shows the tail well inside a shorter window, `W` can
+fall toward it and the horizons separate — that is the numeric's gate,
+not the shape's.
+
+**Candidate, PROVISIONAL: `W = CRB + n·SEB + D_max` ≈ 140,720 blocks
+≈ 195 days** at the pinned constants (`n = 13`, `SEB = 10,000`,
+`D_max = 720`). Computed through `shekyl_archival_failure_window_params`,
+never a literal. Re-pinned at the Round-2 gate with `n` and `D_max`
+(three entries). The disk cost in the Q2 row stands as the price.
+
+**The free regime, and every shard's own.** For the first `W` blocks
+nothing is scarce; bonds, challenges and the possession test are live
+from block 1 and challenges are answerable by any synced node — the
+ruled bootstrap subsidy, not a defect (§3 free-riding walk). Under
+shard-granular discard this is not only a launch effect: **every shard
+is bondable from `close_height(k)` and scarce only at `discard(k)`,
+`≥ W` blocks later**, so each has its own window of being paid for
+while universally held. Stated so no one re-derives §3. The one open
+question it raises is the reward leg's (item 3 amendment): whether
+channel 1's `1/R_market` weight applies from bond or from `discard(k)`.
+
+**Uniformity.** `W` decides no verdict and is not consensus. It is
+network-uniform under `PDM-Q8` — every daemon answers identically
+inside it — so a `W` change ships as a coordinated release, and its
+home is beside `D_max`'s. Two releases with different `W` are
+distinguishable on the wire during a rollout: that is a **bounded Q8
+uniformity exception** (retention selecting wire behaviour for the
+length of the rollout), accepted and named as such, not a rule-71
+matter.
+
+**Closed rulings touched.** `RF-D6` (reopened per Q6 item 4); the
+retention prune's `tip − W` for the seven window-retired journals
+(`PDM-Q-F16`) — same `W`, now one constant, not two; `SF-D10`'s
+organic-need lifetime (`TJ-D`'s) inherits `W` as the horizon beyond
+which a need becomes band 2; the serve-credit transaction's *own*
+prunable region — the pass records — falls under this predicate like
+any other, so any settlement read of a pass record after `W` is band 2
+(the SO contact, F26); and S-PRUNE **cannot** discard a shard while a
+live verifier still derives `R_k` from its frozen segment — Q6 item 4
+row 1 is a precondition of the first real discard.
+
+**Reversion (rule 21).** Shape reverts to OPEN if the honest-downtime
+argument is shown to require `W` above the economic ceiling —
+falsifier: the Round-2 measured outage CDF's tail exceeds the
+candidate. Numeric reverts at the gate by construction.
+
+**Falsifiers.** A shard discarded whose `b_{k+1} > first_tx_id(tip − W)`
+is red. A shard discarded before `close_height(k) + SEB` is red. A
+shard discarded while `k ∈ exceptions` is red. A partially discarded
+shard on an ordinary node is red. A second window constant in any crate
+not `W` by reference is red. `W < D_max` is red.
+
+---
+
+*The analysis below is the ground the ruling was taken on. It predates
+the ruling and the unit change; its OPEN framing, its segment-freeze
+candidate and its per-segment `eligible_height` predicate (F10) are
+superseded by the block above — F10's demand (assert at the decision,
+defined failure) is what the block satisfies.*
 
 Segment freeze is the natural candidate; read
 [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md)
@@ -3012,7 +3112,7 @@ consequence that no lane had recorded.
 | --- | --- | --- |
 | `PDM-Q-S0` | Implementation site + genesis sequencing | **RULED 2026-09-12** — after `DRS-E*`; no C++; genesis does not precede this design's implementation |
 | `PDM-Q1` | Retained set (layer 0 boundary, F7; widened to leaf derivation inputs, F12; §9 inventory; journal horizon `tip − (CRB + n·SEB + D_max)`, F19) | OPEN — widened 2026-09-13; **unblocked 2026-09-17**: Q6 items 1–3 RULED (grades §9 against the `tx_id`-range unit), Q11 RULED (horizon formula binds through `shekyl_archival_failure_window_params`, `D_max` = 720 PROVISIONAL) |
-| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24); the free regime's market behaviour is **bootstrap** — the ruled staker emission share (`DESIGN_CONCEPTS.md` Component 4) favours early adopters by intent; the `bond_duration` vs `W` relation proposed by the §3 walk on 2026-09-17 is WITHDRAWN the same day, no gate entry | OPEN — **unblocked 2026-09-17**: Q11 RULED (`W ≥ D_max`, F10, now binds); owes `W`'s number to the Round-2 gate and the regime's behaviour (bootstrap) |
+| `PDM-Q2` | Trigger, depth, free-regime duration, discard predicate on `eligible_height` (F10); **`W`, the universal bytes window** — floor `D_max`, honest-downtime argument, economic ceiling, candidate F19's retirement floor (~195 days) so bodies and journals retire together (F24); the free regime's market behaviour is **bootstrap** — the ruled staker emission share (`DESIGN_CONCEPTS.md` Component 4) favours early adopters by intent; the `bond_duration` vs `W` relation proposed by the §3 walk on 2026-09-17 is WITHDRAWN the same day, no gate entry | **RULED 2026-09-18 (shape; numeric PROVISIONAL)** — shard-granular predicate `b_{k+1} ≤ first_tx_id(tip − W) ∧ k ∉ exceptions ∧ close_height(k) + SEB < tip`, asserted at S-PRUNE's per-epoch batch; `W` set by coincidence with F19's journal floor (`CRB + n·SEB + D_max` ≈ 140,720 ≈ 195 days), honest downtime satisfied as a consequence, the day-195 no-scarce-byte cost stated as an argument; every shard has its own `≥ W` bondable-while-universal window; the two-`W` rollout is a bounded Q8 exception; pass records fall under the predicate; item 4 row 1 is a precondition of the first real discard. Numeric to the Round-2 gate with `n`, `D_max` |
 | `PDM-Q3` | Residual consensus reads after TJ-A; **the instrument is `ChainView`'s surface (F29)** | OPEN — today not node-local (`PDM-Q-F8`); in the Rust validator the residual set is empty by construction at `645d09dc3` (no recorded-body accessor), instrument handed to E6 as a standing trait property (F29, 2026-09-16) |
 | `PDM-Q4` | Reconstruction path — collapsed: no chain-following read reaches an archiver for a node with downtime under `W`; the daemon's fetches (band-2 fill, own-exception recovery, history read-back) are all optional; TJ-F rebinds to the per-tx verify (a body-fill read that does not hash to the retained row fails loudly, never skipped) | OPEN — collapsed 2026-09-13 (F20/F23/F24); TJ-F sentence stated |
 | `PDM-Q5` | Cold sync and bootstrap — the anchor question: release-carried checkpoint on the `assumevalid` argument, three bands (`≤ C` trusted with the binary; `(C, tip − W]` filled from archivers; above from peers, `W ≥ D_max` per F24); trust-below fallback REJECTED; owes the launch window, the release-gate full-verify step, the JSON-channel deletion, band-2 egress, and the Q11 ordering; **band 1 needs a below-anchor `RuleSet` (F27) and both txid components on the skeleton wire (F28)** | OPEN — restated 2026-09-13 (F20/F23); transport is the `SF-` round's; **band 1 is unbuildable against DRS-D12's writer until E6 issues a below-anchor set (F27, handed off 2026-09-16); `TxBlobEntry` grows `pqc_auth_hash` (F28, owner `LV-`/`PWC-`; no longer gated — Q6 item 2 RULED 2026-09-17)**; **the Q11-ordering item is DISCHARGED 2026-09-17** — Q11 rules the anchor a *precondition* of `D_max`, not a sibling |
@@ -3159,12 +3259,12 @@ deleted) — a consensus change, written before genesis; **S-CHAIN-W A4**
 (the per-tx length rows, same rung as A3) is owed to the DRS lane, and
 the §7.7 invariant's fourth leg with it; the **reward leg** owes one
 decision — does channel 1's `1/R_market` weight apply from bond or from
-`discard(k)`; **Q2** restates its predicate shard-granular on
-`b_{k+1}`; **Q9** gains "the specified-to-scarce window is the `retain`
+`discard(k)`; **Q2** — RULED the same pass, shape only: the predicate shard-granular on
+`b_{k+1}` with an epoch floor, `W` PROVISIONAL at F19's floor; **Q9** gains "the specified-to-scarce window is the `retain`
 window" and Q12's dependents re-point on its ruling; `SF` sub-PR 2 has
 its `expected` and its unchanged `N`/`L`. Still owed from the first
-pass: Q1, Q2, Q9, Q3/Q5/Q7/Q8/Q10, and F31's plan doc — which now has
-its predicate.
+pass: Q1, Q9, Q3/Q5/Q7/Q8/Q10, and F31's plan doc — which now has
+its predicate (Q2) and its unit (F32).
 
 ---
 
