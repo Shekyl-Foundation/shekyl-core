@@ -83,7 +83,7 @@ impl Transaction {
             Ct::Null(_) | Ct::Fcmp { prunable: None, .. } => [0u8; 32],
         };
         TxidParts {
-            hash: TxHash::from_bytes(self.hash_from_components(pqc_auth_hash, mix_prunable)),
+            hash: self.hash_from_components(pqc_auth_hash, mix_prunable),
             pqc_auth_hash,
             prunable_hash,
         }
@@ -166,10 +166,10 @@ impl Transaction {
     /// back is typed at the row, and a txid or a `PqcAuthHash` passed here is
     /// a compile error rather than a wrong identity.
     pub fn hash_with_supplied_prunable(&self, prunable_hash: PrunableHash) -> TxHash {
-        TxHash::from_bytes(self.hash_from_components(
+        self.hash_from_components(
             self.pqc_auth_hash(),
             self.prunable_component(Some(prunable_hash)),
-        ))
+        )
     }
 
     /// The consensus transaction hash of a **skeleton** — prefix and base
@@ -197,9 +197,7 @@ impl Transaction {
         prunable_hash: PrunableHash,
     ) -> TxHash {
         let pqc_auth = pqc_auth.filter(|_| self.prefix_carries_pqc_component());
-        TxHash::from_bytes(
-            self.hash_from_components(pqc_auth, self.prunable_component(Some(prunable_hash))),
-        )
+        self.hash_from_components(pqc_auth, self.prunable_component(Some(prunable_hash)))
     }
 
     /// Whether this prefix can carry a third txid component (C++ oracle,
@@ -246,15 +244,17 @@ impl Transaction {
 
     /// Shared mixer of every txid path: `H(prefix)` and `H(base)` from the
     /// parts every form carries, then 3-part or 4-part by whether
-    /// `pqc_auth` is `Some`. Callers that can supply a lying `Some` (the
-    /// skeleton form) filter through [`Self::prefix_carries_pqc_component`]
-    /// first; [`Self::pqc_auth_hash`] already returns `None` unless the body
-    /// is 4-part. Both arms carry struct-derived cross-language hash parity
+    /// `pqc_auth` is `Some`. The concat stays raw (`hash_concat`); the
+    /// identity leaves here as a [`TxHash`] so no public path re-wraps.
+    /// Callers that can supply a lying `Some` (the skeleton form) filter
+    /// through [`Self::prefix_carries_pqc_component`] first;
+    /// [`Self::pqc_auth_hash`] already returns `None` unless the body is
+    /// 4-part. Both arms carry struct-derived cross-language hash parity
     /// (`pruned_tx_hash_parity` and `serve_credit_tx_parity`, each with a
     /// C++ leg asserting the same pin); the live-oracle pin
     /// (`live_oracle_spend_v1.json`) binds both languages to a
     /// daemon-accepted spend.
-    fn hash_from_components(&self, pqc_auth: Option<PqcAuthHash>, prunable: [u8; 32]) -> [u8; 32] {
+    fn hash_from_components(&self, pqc_auth: Option<PqcAuthHash>, prunable: [u8; 32]) -> TxHash {
         let mut prefix_buf = Vec::new();
         write_varint(TX_VERSION, &mut prefix_buf).expect("Vec write is infallible");
         self.prefix
@@ -262,7 +262,7 @@ impl Transaction {
             .expect("Vec write is infallible");
         let h_prefix = keccak256(&prefix_buf);
 
-        match &self.ct {
+        let mixed = match &self.ct {
             Ct::Null(base) => {
                 let mut base_buf = vec![CT_TYPE_NULL];
                 base.write(&mut base_buf).expect("Vec write is infallible");
@@ -284,6 +284,7 @@ impl Transaction {
                     None => hash_concat(&[h_prefix, h_base, prunable]),
                 }
             }
-        }
+        };
+        TxHash::from_bytes(mixed)
     }
 }
