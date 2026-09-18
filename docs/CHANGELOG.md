@@ -69,8 +69,8 @@
   `prunable_hash()` now returns `PrunableHash` and both supplied forms take
   `PrunableHash` / `Option<PqcAuthHash>` (`shekyl-wire` depends on
   `shekyl-types`), so the two digests a store hands back cannot be swapped
-  into the wrong operand. The `txs_pqc_auth_hash` store row (item 3) lands
-  with S-CHAIN-R's layout commit.
+  into the wrong operand. The `txs_pqc_auth_hash` store row (item 3) landed
+  on PR #772 with S-CHAIN-R's layout commit.
 
 - **`shekyl_p_fetch::MAX_INFLIGHT` 4 → 8.** The §9.1 (c) W₂ pin
   (`ARCHIVAL_SHARD_FETCH.md`; PR #746): largest non-churning measured

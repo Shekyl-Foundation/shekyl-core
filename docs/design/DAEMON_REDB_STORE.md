@@ -1113,7 +1113,7 @@ already rules it are otherwise read as a gap by the next person down the list.
 | Phase | Digest role |
 | --- | --- |
 | **DRS-P0 / DRS-C** | Build digest **against LMDB**. Oracle for decomposition: byte-identical before/after each extraction. Discovers “canonical logical state” definition DRS-D8 re-encodes. |
-| **DRS-E2** | Same harness already exercised. **The acceptance condition is per conformance state (CSR-3a), not blanket digest identity** — changing only the *label* on a match would have left the unsafe gate in place, since blanket identity requires redb to reproduce CEN-L11's silent omission in order to pass. **CHECKED-CONFORMANT:** digest identity **required**, and a match *is* correctness evidence. **DIVERGENT:** identity is **not** the pass condition — the row needs an explicitly reviewed expected-divergence (or a replacement KAT/oracle asserting the corrected behavior); reproducing the defect **fails**. **UNREVIEWED (the default):** identity may be *observed* as regression signal but grants **no** correctness acceptance, and no row may be promoted out of this state without a **DRS-P0f** record. As of 2026-09-05 **100 rows are CHECKED-CONFORMANT** over P0f's 102-row snapshot (1 DIVERGENT — CEN-B5's rule-71 skip — plus 1 failed closed, CEN-L8; CEN-I12 promoted 2026-09-05, and the nineteen C2-R1b/R1c promotions UNREVIEWED; both S-graded findings closed: **M8/G4/J26 promoted** at PR #602's merged fix, **D2/D1** at PR #604's and **L11/L12** at PR #609's) and bucket-3/4 rows remain UNREVIEWED pending their design rounds, so E2 gates on correctness for those and on regression everywhere else — with **§7.1.1 barring E2 from acting on any S-ARCH row** (CEN-L7, CEN-L9 and CEN-L10 are its CHECKED-CONFORMANT rows) until archival digest coverage exists. **Precondition (§7.7, 2026-09-16):** `PDM-Q6` items 1–2 ruled and the per-tx identity shaped for both occupants — `TxIdentity.pqc_auth_hash` and `Transaction::hash_with_supplied_components` (**landed 2026-09-17, PR #768**), the `txs_pqc_auth_hash` row (S-CHAIN-R's layout commit, still owed) — **before E2's first production writer**, or E2 rules them by construction and the cost steps at E2 (replay-derived identity rows, KATs, fixtures), not at genesis. |
+| **DRS-E2** | Same harness already exercised. **The acceptance condition is per conformance state (CSR-3a), not blanket digest identity** — changing only the *label* on a match would have left the unsafe gate in place, since blanket identity requires redb to reproduce CEN-L11's silent omission in order to pass. **CHECKED-CONFORMANT:** digest identity **required**, and a match *is* correctness evidence. **DIVERGENT:** identity is **not** the pass condition — the row needs an explicitly reviewed expected-divergence (or a replacement KAT/oracle asserting the corrected behavior); reproducing the defect **fails**. **UNREVIEWED (the default):** identity may be *observed* as regression signal but grants **no** correctness acceptance, and no row may be promoted out of this state without a **DRS-P0f** record. As of 2026-09-05 **100 rows are CHECKED-CONFORMANT** over P0f's 102-row snapshot (1 DIVERGENT — CEN-B5's rule-71 skip — plus 1 failed closed, CEN-L8; CEN-I12 promoted 2026-09-05, and the nineteen C2-R1b/R1c promotions UNREVIEWED; both S-graded findings closed: **M8/G4/J26 promoted** at PR #602's merged fix, **D2/D1** at PR #604's and **L11/L12** at PR #609's) and bucket-3/4 rows remain UNREVIEWED pending their design rounds, so E2 gates on correctness for those and on regression everywhere else — with **§7.1.1 barring E2 from acting on any S-ARCH row** (CEN-L7, CEN-L9 and CEN-L10 are its CHECKED-CONFORMANT rows) until archival digest coverage exists. **Precondition (§7.7, 2026-09-16):** `PDM-Q6` items 1–2 ruled and the per-tx identity shaped for both occupants — `TxIdentity.pqc_auth_hash` and `Transaction::hash_with_supplied_components` (**landed 2026-09-17, PR #768**), the `txs_pqc_auth_hash` row (S-CHAIN-R's layout commit, **LANDED 2026-09-17, PR #772**) — **before E2's first production writer**, or E2 rules them by construction and the cost steps at E2 (replay-derived identity rows, KATs, fixtures), not at genesis. |
 
 No existing `state_hash` / `db_digest` in tree — greenfield; **when** is the
 variable, not **whether**.
@@ -1839,7 +1839,7 @@ Reopener (rule 21): a consensus-visible encoding found *outside* the set
 named above (hash preimages, digest input) reopens the "nothing else is
 pinned" sentence for that encoding, with the row that pins it named.
 
-### 7.7 Landing plan for `PDM-Q-F26` — the per-tx identity carries both of Q6's occupants before E2 (RULED 2026-09-16; items 1–2 LANDED 2026-09-17, PR #768)
+### 7.7 Landing plan for `PDM-Q-F26` — the per-tx identity carries both of Q6's occupants before E2 (RULED 2026-09-16; items 1–2 LANDED 2026-09-17, PR #768; item 3 LANDED 2026-09-17, PR #772)
 
 **The finding is the pruning round's, not this document's.** `PDM-Q-F26`
 ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §6,
@@ -1918,18 +1918,16 @@ not there. What was owed, and where each piece stands:
    skeleton hashed as a body does not (`pruned_tx_hash_parity`);
    serve-credit, coinbase and the no-input shape are `None`; bond-post is
    `Some` — the arity is the predicate's, never an input arm's.
-3. **The row** — `txs_pqc_auth_hash: u64 → Hash32`, written by `connect`
+3. **The row** — `txs_pqc_auth_hash: u64 → Coded<PqcAuthHash>` (§11.1(f); the identity type, not a `Hash32`), written by `connect`
    beside `txs_prunable_hash` from the identity it is handed, under the
    three-leg invariant above (present ⇔ 4-part; never deleted by a
-   prune), Rust-only until an LMDB twin exists (`RUST_ONLY_TABLES`,
+   prune; pop reverses the journaled insert), Rust-only until an LMDB twin exists (`RUST_ONLY_TABLES`,
    SCW-11), journaled, SI-9-fresh under `tx_id`. **Store crate: S-CHAIN-W
    amendment A3**, riding S-CHAIN-R's amendments layout commit
    ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) §7 commit 2b, `SCHEMA_VERSION
    3 → 4`; commit 2a's value shapes, §11.1(f), took 2 → 3 ahead of it) so
-   the three amendments share one bump. That commit waited on 1 and 2 as it
-   waited on `Tip`, and all three are now on `dev` (#768) — **item 3 is the
-   one piece still owed**, its input present on the identity `connect` is
-   handed. The second Rust-only table retires two
+   the three amendments share one bump. **LANDED 2026-09-17 on PR #772**
+   (`schema.rs` `TableDefinition` `txs_pqc_auth_hash`). The second Rust-only table retires two
    sentences the first one wrote — §7.6's "50 tables, 49 mirrors plus
    Rust-only `undo_log`" (51, plus one) and `schema.rs`'s "first — and so
    far only" — in the same commit, and §7.6's write-target denominator
@@ -1955,8 +1953,9 @@ exactly why this reads as free and is not: the cost is in derived state
 and frozen vectors, and it steps at **E2**, not at genesis. F26's
 falsifier: an E2 replay PR opening while the Q6 index row reads OPEN
 voids the deferral — that PR states which items it rules, or does not
-merge. The FOLLOWUPS row is F26's (PR #765); this section adds no second
-one.
+merge. F26's FOLLOWUPS row closed with the row (PR #772); this section
+adds no second one. Q6 items 1–3 RULED (#773); the E2-writer deadline is
+met.
 
 ---
 

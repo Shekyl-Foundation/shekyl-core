@@ -458,7 +458,7 @@ never derives it.
 `TxIdentity { hash, pqc_auth_hash: Option<PqcAuthHash>, prunable_hash }`,
 populated from `Transaction::txid_parts()` — one construction, each
 discardable region hashed once. The `txs_pqc_auth_hash` store row (item 3)
-is still S-CHAIN-R amendment A3.
+landed as S-CHAIN-R amendment A3 (PR #772).
 
 ### 4.5 `Coverage<R>` (`coverage.rs`); `ChainValid<'id, V>`, `InvalidBlock`, `Locus` (`verdict.rs`)
 
@@ -1197,9 +1197,8 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   supplied forms; the raw `[u8; 32]` the crate carried there was unfinished
   migration (`RAW_TYPE_NEWTYPE_MIGRATION.md` §6), not a boundary, and
   `hash()`'s own return type is that plan's remaining row. Item
-  3 — the `txs_pqc_auth_hash` row — stays where §7.7 put it: S-CHAIN-W
-  amendment A3 on S-CHAIN-R's layout commit, one `SCHEMA_VERSION` bump;
-  its input now exists on the identity `connect` is handed.
+  3 — the `txs_pqc_auth_hash` row — **LANDED 2026-09-17 on PR #772**
+  where §7.7 put it: S-CHAIN-W amendment A3 on S-CHAIN-R's layout commit.
 
 **Received from `PDM-Q` 2026-09-16 (`PDM-Q-F27`, `F29`,
 [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) §6) —
