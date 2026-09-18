@@ -639,14 +639,20 @@ pub const SEGMENT_LAYER_J: u8 = 2;
 #[must_use]
 pub const fn outputs_per_node(j: u8) -> usize {
     let mut e = SELENE_CHUNK_WIDTH;
-    let mut layer: u8 = 1;
-    while layer <= j {
+    // Pre-increment: `layer` is bounded by `layer < j <= u8::MAX` at the
+    // increment, so `j == u8::MAX` terminates (a post-increment form wraps
+    // there and never exits). The product itself overflows `usize` far
+    // below that — around layer 12 with the production widths — which is
+    // a const-eval or debug panic, not a silent wrap: `j` names a layer of
+    // the tree, whose depth is single digits.
+    let mut layer: u8 = 0;
+    while layer < j {
+        layer += 1;
         e *= if layer_is_selene(layer) {
             SELENE_CHUNK_WIDTH
         } else {
             HELIOS_CHUNK_WIDTH
         };
-        layer += 1;
     }
     e
 }

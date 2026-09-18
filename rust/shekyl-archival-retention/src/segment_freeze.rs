@@ -20,14 +20,16 @@
 //!
 //! # `SEGMENT_LEAF_COUNT` (pipeline doc §5.2)
 //!
-//! The level-2 subtree leaf count under the production curve-tree widths:
-//! `38 * 18 * 38 = 25 992` (leaf-chunk width `SELENE_CHUNK_WIDTH`, layer-1
-//! width `HELIOS_CHUNK_WIDTH`, layer-2 width `SELENE_CHUNK_WIDTH`;
-//! `CURVE_TREE_CLIENT.md` §7.2.2, gate-2 §2 sizing provisional "subtree
-//! level 2"). The value flows from `config/consensus_constants.json`
-//! through `build.rs` like every cross-language consensus constant, and
-//! the compile-time assert below ties it to the `shekyl-fcmp` width
-//! constants so a width change cannot silently strand it.
+//! The level-`SEGMENT_LAYER_J` (= 2) subtree leaf count under the production
+//! curve-tree widths: `38 * 18 * 38 = 25 992`. The value flows from
+//! `config/consensus_constants.json` through `build.rs` like every
+//! cross-language consensus constant, and the compile-time assert below ties
+//! it to `shekyl_fcmp::tree::leaves_per_segment()` — the one partition
+//! derivation, which the wallet-side shard store also takes from that crate
+//! (`V3_WALLET_DECISION_LOG.md` 2026-09-17, two stores) — so neither a width
+//! change nor a config edit can move this crate's admission and pop revert
+//! away from the store. Level 2 was gate-2's provisional sizing; the freeze
+//! pipeline round pinned it (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2).
 //!
 //! Not a tunable. Reversion criteria per the pipeline doc §5.2: a CT
 //! sizing re-review before genesis moving the subtree level (constants
@@ -144,25 +146,6 @@ pub fn challenge_leaf_chunk_bounds(
         leaf_count: width,
     })
 }
-
-// Freeze-margin tie, in the dev graph: `shekyl-curve-tree` hardcodes 720
-// beside a comment saying it equals `ARCHIVAL_REORG_DEPTH_BLOCKS`, which is
-// generated here from the economics config. A segment freezing at one depth
-// while the bond assembly window, the pass anchor and SO-D8e's fork analysis
-// move at another is a segment frozen and served inside the depth the rest of
-// the system treats as reorg-able. This crate takes `shekyl-curve-tree` only
-// as a dev-dependency — the production edge is refused (`path.rs`: the
-// consensus crate does not import the wallet-side store crate), so the pin is
-// compile-time in every test build and every `clippy --all-targets`, not in
-// the lib. Interim to the PHASE_2B codegen dedup (docs/FOLLOWUPS.md, CT-1).
-#[cfg(test)]
-const _: () = assert!(
-    shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS
-        == crate::bond_floor::ARCHIVAL_REORG_DEPTH_BLOCKS,
-    "shekyl_curve_tree::SEGMENT_FREEZE_REORG_MARGIN_BLOCKS must equal \
-     ARCHIVAL_REORG_DEPTH_BLOCKS: a segment must not freeze inside the depth the \
-     rest of the system treats as reorg-able (docs/FOLLOWUPS.md, CT-1 dedup)"
-);
 
 #[cfg(test)]
 mod tests {
