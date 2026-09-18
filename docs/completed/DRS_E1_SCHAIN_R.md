@@ -33,8 +33,9 @@ Rust read each C++ method becomes, what each returns when the height is
 above the tip or the row is missing, and which C++ sentinels do not
 survive — plus the two per-block fold fields FL-R3-STORE routes to this
 surface. Rule 26's pre-flight pass is the instrument; this is the same shape
-as [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) and stays in `docs/design/`
-while the increment is open.
+as [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md); it stayed in `docs/design/`
+while the increment was open and moved here when S-OUT-KI's pre-flight had
+read it (PR #779).
 
 **Identifier family.** Findings and questions here are **SCR-n**, registered
 in [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by this document's
