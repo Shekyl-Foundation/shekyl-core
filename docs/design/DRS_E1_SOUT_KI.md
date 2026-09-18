@@ -21,8 +21,8 @@ CEN-L6 (amount-0 indexing is **arm C — unspecified**, routed to **R8b-2** and
 open); and from [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) G11 and the
 rules crate's own statement of it (`rust/shekyl-chain-rules/src/view.rs:30`,
 "absence is a case, not a `None`" — adopted here for every by-index read;
-the class is stated once, with its instances, in `CURVE_TREE_STORE_SHAPES.md`
-§3.1, PR #776, linked when it lands). Nothing in this document re-opens any of them; §3.4 and SOK-1 *ask*
+the class is stated once, with its instances, in
+[`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md) §3.1). Nothing in this document re-opens any of them; §3.4 and SOK-1 *ask*
 one of them (R8b-2's neighbour, the physical shape of `output_amounts`)
 because this surface is its first reader and cannot be built at LMDB's
 complexity on the ported shape.
@@ -60,7 +60,7 @@ share a number.
 | The validator's half of key-image uniqueness | **landed** (the trait PR #753, E6 increment 1; the `BatchView` impl PR #757, S-CHAIN-W): `ChainView::has_key_image` (`rust/shekyl-chain-rules/src/view.rs:161`), implemented on `BatchView` over `spent_keys` (`rust/shekyl-chain-store/src/store/view.rs:151`–`:161`). CEN-I7 (chain-wide, validator) and CEN-L1 (intra-block, validator) are both on the register; `spent_keys` set-ness is SI-1, a belt, never a verdict (CSR `:171`). |
 | The consumer that routed a read here | E2's digest reader: SCR-11 routed the `spent_keys` scan to S-OUT-KI. Digest v0's key-image input is order-insensitive — "`spent_keys` is `n_spent` concatenated 32-byte key images **in any order**" (`rust/shekyl-ffi/src/chain_digest_ffi.rs:29`–`:30`). The C++ oracle feeds it from `for_all_key_images` (`src/blockchain_db/lmdb/logical_state_digest.cpp:73`). |
 | The amount-0 indexing question | **open**: R8b-2 (`CONSENSUS_C2_R8_STORE_PLACEMENT.md` §12, archived) — *is amount-0 indexing a consensus-visible fact or a storage index choice?* S-CHAIN-W ported the keying **verbatim** under it (SCW-8) and recorded that as a knowingly-reproduced shape with R8b-2 as its reopener. §3.4 here does not rule R8b-2; it separates the *physical* table shape (this surface's) from the *exposure* question (R8b-2's). |
-| In flight, and why it matters | PR #777 (RTN-7, the wire crate's hash surface) edits `store/connect.rs`, `store/chain_reads.rs`, the connect fixtures and tests. §7's code commits wait for it; this document does not touch code. PR #776 (curve-tree store plan) is docs-only and disjoint. |
+| In flight, and why it matters | PR #777 (RTN-7, the wire crate's hash surface) edits `store/connect.rs`, `store/chain_reads.rs`, the connect fixtures and tests. §7's code commits wait for it; this document does not touch code. **Substrate re-check 2026-09-18 at `eee838d4d`** (#774, #775, #776 landed after the pin): no code under `rust/` or `src/` changed — every `:line` anchor above holds at `git diff d89f99791..eee838d4d --stat`, docs only. #774 (PDM-Q rulings, the S-PRUNE skeleton) touches this surface's tables in one way, recorded in §3.3. |
 
 ---
 
@@ -204,6 +204,21 @@ missing *below* the count is not absence: it is SI-9's hole, reported as
 fourth application, and the counter-rule there applies too — `has_key_image`
 returns `bool`, because "not spent" is a value inside the type's range with
 no arm that differs.
+
+**The dense model and S-PRUNE (checked against #774).** `PDM-Q1` grades
+`output_txs` / `output_amounts` **CACHE** — a pure function of the retained
+base, rebuilt by replay (`ARCHIVAL_PRUNED_DAEMON_MODE.md` §9.2) — and
+`spent_keys` **KEEP-C**, never prunable at any depth. `PDM-Q2`'s discard
+predicate removes a shard's *prunable regions and `pqc_auths`* and nothing
+else; no ruling discards a CACHE row, and the class definition says a CACHE
+discard "is a performance choice, never scarcity" that no one has chosen.
+So at this pin a row missing below the count is corruption, as stated. **If
+a later S-PRUNE ruling elects to discard CACHE rows below `W`**, that
+discard is shard-atomic by Q2's shape and `BeyondCount` is not its word:
+the absence would need its own arm (`Discarded`, say), decided by that
+ruling, not by this surface guessing — reopen there; falsify by
+`DRS_E1_SPRUNE.md` naming `output_amounts` or `output_txs` in a discard
+set.
 
 **Key-image membership is exact, never approximate.** K1 reads the table;
 no bloom filter, no cache, no "probably". The C++ has none either; stated so
@@ -421,5 +436,6 @@ and 4 are reads in the S-CHAIN-R shape.
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-18 | **Substrate re-check at `eee838d4d`** (#774 PDM-Q second ruling pass + S-PRUNE skeleton, #775 two-store record, #776 curve-tree plan — all docs-only; no `rust/` or `src/` change, anchors hold). One interaction found and recorded in §3.3: `PDM-Q1` grades this surface's output tables CACHE and `spent_keys` KEEP-C; `PDM-Q2`'s predicate discards only the GOOD region, so the dense-index absence model stands, with the reopener named if a CACHE discard is ever ruled. `CURVE_TREE_STORE_SHAPES.md` landed (#776) and is now linked. Nothing in this plan is re-addressed. |
 | 2026-09-18 | **SOK-Q1 arm D (wait for a redb multimap cursor) researched at source and REJECTED**, with the falsifier in the row: 4.2.0's `experimental_cursor` is `Table`-only and self-declared removable; 4.3.0's `MultimapCursor` is a constructor-only stub seeking the key tree, no `(K, V)` bound anywhere; no milestone or issue tracks a value-level seek. Recorded so the next reader of SOK-1 does not re-research it. |
 | 2026-09-18 | **Round 0 executed at `d89f99791`.** Nine findings, four questions with defaults. The finding that shapes the increment is not a read: `output_amounts`' ported multimap has no seek (verified in redb 4.1.0 at source), so the surface's point read is O(n) on it — corrected as a keyed `(amount, amount_index)` table under DRS §7.6's own statement that the comparator projects logical content, with R8b-2 left exactly as open as it was (SOK-1, SOK-Q1). Three of eight methods are not ported (no callers / decoy tooling); the batch forms dissolve into the snapshot. `DRS_E1_SCHAIN_R.md` read and archived by this PR (§2.4). Code commits wait on PR #777. |
