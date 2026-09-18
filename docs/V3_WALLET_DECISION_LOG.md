@@ -5701,10 +5701,13 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   freeze KAT against its skeleton) are E3's, not this PR's; the FOLLOWUPS
   row separates the two. **LANDED 2026-09-18 (partition PR), with one
   correction to the sketch above:** `shekyl-curve-tree` is only a
-  *dev*-dependency of archival-retention — `path.rs:53–56` refuses the
-  production edge (the consensus crate does not import the wallet-side
-  store crate) — so the assert could not name `shekyl_curve_tree` in the
-  lib. The derivation moved instead to the crate both already depend on and
+  *dev*-dependency of archival-retention — the manifest entry
+  `shekyl-archival-retention/Cargo.toml:46` sits under the
+  `[dev-dependencies]` header at `:39`, and `path.rs:53–56` records the
+  refusal of the production edge as policy (the consensus crate does not
+  import the wallet-side store crate) — so the assert could not name
+  `shekyl_curve_tree` in the lib. (The sketch quoted `:46` without its
+  section header.) The derivation moved instead to the crate both already depend on and
   that owns the geometry: `shekyl_fcmp::tree` now holds `SEGMENT_LAYER_J`,
   `outputs_per_node`, `leaves_per_segment` as `const fn`; curve-tree
   re-exports them; archival-retention asserts `SEGMENT_LEAF_COUNT ==

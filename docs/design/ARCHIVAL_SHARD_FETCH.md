@@ -447,8 +447,9 @@ Both callers, every request:
 - `anchor_height` is `tip − archival_reorg_depth_blocks` (720) at
   request time, as a little-endian `u64`, and `anchor_hash` is the
   requester's own block hash at that height. A block 720 deep is the
-  segment-freeze depth (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`,
-  const-asserted equal in the retention KAT): identical on every
+  segment-freeze depth (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, generated
+  from the same JSON key and const-asserted equal in
+  `tests/attestation_wire_kat.rs`): identical on every
   honest node's chain, so races at the tip cannot make an honest
   requester's anchor fail, and every miner building on the same tip
   sends the same anchor. It is freshness, not identity: it does not
@@ -1056,8 +1057,11 @@ validated predecessor is at height `h`:
 **Constants, single-sourced.** Depth is the existing
 `archival_reorg_depth_blocks` (720, `config/consensus_constants.json`),
 which gains a third consumer; `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`
-(`segment.rs`) is generated from the same key since 2026-09-18 and the
-retention KAT const-asserts the pass anchor against it, and the JSON
+(`segment.rs`) is generated from the same key since 2026-09-18, and
+`shekyl-archival-retention/tests/attestation_wire_kat.rs` const-asserts
+`PASS_ANCHOR_DEPTH_BLOCKS` (an alias of retention's generated
+`ARCHIVAL_REORG_DEPTH_BLOCKS`) equal to it — since the dedup that pin
+guards the two `build.rs` readers agreeing, not a hand literal — and the JSON
 comment now names **both** danger directions — lower makes the anchor
 reorg-sensitive and re-introduces honest fork misses; higher lengthens
 the collusive pre-signing lead — plus the `PDM-Q11` `D_max` gate as a

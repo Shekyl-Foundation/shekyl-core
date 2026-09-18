@@ -308,9 +308,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Wallet-local `O.x → position` match index (`CurveTreeClient` §4.3 scan [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md)**
   - Target: pre-genesis
 
-- **Confirm segment layer `j` / shard size `E` against mainnet leaf growth [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md)**
-  - Target: pre-genesis
-
 - **Anonymized (Tor/I2P) routing for non-forward segment fetch (CT Round 0 [`docs/design/CURVE_TREE_CLIENT.md`](./design/CURVE_TREE_CLIENT.md)**
   - Target: pre-genesis
 
