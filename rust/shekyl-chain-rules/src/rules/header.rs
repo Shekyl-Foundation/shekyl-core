@@ -44,7 +44,7 @@
 //! the rule set `RuleSchedule::rules_at(height)` names, so "the version at
 //! this height" is a property of the input, not a second code path.
 
-use shekyl_types::{BlockHash, CurveTreeRoot};
+use shekyl_types::BlockHash;
 use shekyl_wire::Block;
 
 use crate::census::CenRow;
@@ -161,7 +161,7 @@ impl BlockRule for B5 {
         view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
         let connecting = Tip::connecting_height(view.tip()?.as_ref());
-        let claimed = CurveTreeRoot::from_bytes(cx.candidate.block.header.curve_tree_root);
+        let claimed = cx.candidate.block.header.curve_tree_root;
         match view.root_at(connecting)? {
             AtHeight::Recorded(root) if root == claimed => Ok(Ok(())),
             AtHeight::Recorded(_) | AtHeight::AboveTip => refused(Self::ROW, Locus::Block),
@@ -195,7 +195,7 @@ impl B6 {
     /// row having been applied.
     pub(crate) fn identity(block: &Block, coverage: &mut RuleCoverage) -> BlockHash {
         coverage.insert(Self::ROW);
-        BlockHash::from_bytes(block.hash())
+        block.hash()
     }
 }
 

@@ -20,6 +20,14 @@ use crate::rule_set::RuleSet;
 use crate::rules::BlockContext;
 use crate::validate::validate;
 use crate::verdict::{ChainValid, Locus, Verdict};
+use shekyl_types::CurveTreeRoot;
+
+/// One bit off: the wrong-root fixtures, without indexing into a newtype.
+fn flip_first_byte(root: CurveTreeRoot) -> CurveTreeRoot {
+    let mut bytes = root.to_bytes();
+    bytes[0] ^= 1;
+    CurveTreeRoot::from_bytes(bytes)
+}
 
 fn with_versions(major: u8, minor: u8) -> Candidate {
     let mut candidate = candidate(Vec::new());
@@ -145,11 +153,11 @@ fn cen_b5_header_root_is_the_root_at_the_connecting_height() {
     let chain = three_blocks();
     // The fixture carries root_at(3) = the root pushed with block 2.
     let good = candidate_on(&chain, Vec::new());
-    assert_eq!(good.block.header.curve_tree_root, root(0xa2).to_bytes());
+    assert_eq!(good.block.header.curve_tree_root, root(0xa2));
     check_alone_on::<B5>(&chain, &good).expect("the state at the connecting height passes B5");
 
     let mut wrong = good.clone();
-    wrong.block.header.curve_tree_root[0] ^= 1;
+    wrong.block.header.curve_tree_root = flip_first_byte(wrong.block.header.curve_tree_root);
     assert_refused(
         check_alone_on::<B5>(&chain, &wrong),
         CenRow::B5,
@@ -165,7 +173,7 @@ fn cen_b5_reads_the_state_at_the_connecting_height_not_the_tips_own() {
     // makes the off-by-one observable: the tip's own root is refused.
     let chain = three_blocks();
     let mut stale = candidate_on(&chain, Vec::new());
-    stale.block.header.curve_tree_root = root(0xa1).to_bytes(); // root_at(2), the tip's own
+    stale.block.header.curve_tree_root = root(0xa1); // root_at(2), the tip's own
     assert_refused(
         check_alone_on::<B5>(&chain, &stale),
         CenRow::B5,
@@ -177,14 +185,11 @@ fn cen_b5_reads_the_state_at_the_connecting_height_not_the_tips_own() {
 fn cen_b5_genesis_root_is_the_empty_tree() {
     let chain = MockChain::default();
     let genesis = candidate_on(&chain, Vec::new());
-    assert_eq!(
-        genesis.block.header.curve_tree_root,
-        CurveTreeRoot::EMPTY.to_bytes()
-    );
+    assert_eq!(genesis.block.header.curve_tree_root, CurveTreeRoot::EMPTY);
     check_alone_on::<B5>(&chain, &genesis).expect("genesis carries the empty tree");
 
     let mut wrong = genesis;
-    wrong.block.header.curve_tree_root = root(0x22).to_bytes();
+    wrong.block.header.curve_tree_root = root(0x22);
     assert_refused(
         check_alone_on::<B5>(&chain, &wrong),
         CenRow::B5,
@@ -234,7 +239,7 @@ fn cen_b6_identity_is_block_hash_and_records_the_row() {
     let block = candidate(Vec::new()).block;
     let mut coverage = RuleCoverage::EMPTY;
     let identity = B6::identity(&block, &mut coverage);
-    assert_eq!(identity, BlockHash::from_bytes(block.hash()));
+    assert_eq!(identity, block.hash());
     assert!(coverage.contains(CenRow::B6));
     assert_eq!(coverage.len(), 1, "B6 records exactly its own row");
 }

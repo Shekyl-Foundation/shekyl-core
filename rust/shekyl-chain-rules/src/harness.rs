@@ -18,7 +18,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::BTreeSet;
 
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Transaction, TxPrefix};
 
 use crate::block::Candidate;
@@ -245,10 +245,10 @@ pub mod fixture {
             major_version: 1,
             minor_version: 0,
             timestamp: 1_700_000_000,
-            previous: [0x11; 32],
+            previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 7,
-            curve_tree_root: [0x22; 32],
-            attestation_root: [0x33; 32],
+            curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
+            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
         }
     }
 
@@ -266,8 +266,8 @@ pub mod fixture {
         };
         let block = Block {
             header: BlockHeader {
-                previous: tip.map_or([0; 32], |t| t.hash.to_bytes()),
-                curve_tree_root: root.to_bytes(),
+                previous: tip.map_or(BlockHash::from_bytes([0; 32]), |t| t.hash),
+                curve_tree_root: root,
                 ..header()
             },
             miner_transaction: coinbase(60),
@@ -292,7 +292,7 @@ pub mod fixture {
             transaction_hashes: Vec::new(),
         };
         RecordedBlock {
-            hash: BlockHash::from_bytes(block.hash()),
+            hash: block.hash(),
             header: block.header,
         }
     }
