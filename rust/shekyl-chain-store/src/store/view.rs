@@ -87,7 +87,7 @@
 
 use redb::ReadableTable;
 use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock, Tip};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
 
 use crate::codec::BlockInfo;
 use crate::lmdb_order::LmdbHashKey;
@@ -190,7 +190,7 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     fn tip(&self) -> Result<Option<Tip>, StoreError> {
         Ok(self.tip_row()?.map(|(height, info)| Tip {
             height: BlockHeight::from_raw(height),
-            hash: BlockHash::from_bytes(info.hash.to_bytes()),
+            hash: info.hash,
         }))
     }
 

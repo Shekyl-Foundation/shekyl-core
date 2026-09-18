@@ -496,8 +496,8 @@ fn block_header(facts: &crate::chain_facts::BlockHeaderFacts) -> BlockHeader {
         pow_hash: facts.pow_hash.map(HashHex::from_bytes),
         long_term_weight: facts.long_term_weight,
         miner_tx_hash: HashHex::from_bytes(facts.miner_tx_hash.to_bytes()),
-        curve_tree_root: HashHex::from_bytes(facts.curve_tree_root),
-        attestation_root: HashHex::from_bytes(facts.attestation_root),
+        curve_tree_root: HashHex::from_bytes(facts.curve_tree_root.to_bytes()),
+        attestation_root: HashHex::from_bytes(facts.attestation_root.to_bytes()),
     }
 }
 
@@ -1353,7 +1353,7 @@ pub(crate) mod tests {
     };
     use crate::core::{ConnectionsSnapshot, SyncSpansSnapshot};
     use serde_json::json;
-    use shekyl_types::{BlockHash, BlockHeight, TxHash};
+    use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     /// In-memory facts: what a store-backed implementation will look like.
@@ -1646,8 +1646,8 @@ pub(crate) mod tests {
             hash: tagged_hash(11),
             prev_hash: tagged_hash(3),
             miner_tx_hash: TxHash::from_bytes(tagged_bytes(31)),
-            curve_tree_root: tagged_bytes(41),
-            attestation_root: tagged_bytes(53),
+            curve_tree_root: CurveTreeRoot::from_bytes(tagged_bytes(41)),
+            attestation_root: AttestationRoot::from_bytes(tagged_bytes(53)),
             pow_hash: None,
             height: BlockHeight::from_raw(1_234_567),
             depth: 42,

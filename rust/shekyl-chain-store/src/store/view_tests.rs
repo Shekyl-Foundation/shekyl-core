@@ -548,7 +548,7 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
             assert_eq!(
                 batch_tip_block,
                 AtHeight::Recorded(RecordedBlock {
-                    hash: BlockHash::from_bytes(hash.to_bytes()),
+                    hash,
                     header: body.header,
                 }),
                 "the batch view is the same body wrapped"

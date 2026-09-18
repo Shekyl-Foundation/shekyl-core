@@ -242,7 +242,7 @@ impl<'store> ReadSnapshot<'store> {
     pub fn tip(&self) -> Result<TipState, StoreError> {
         let recorded = self.tip_row()?.map(|(height, info)| Tip {
             height: BlockHeight::from_raw(height),
-            hash: BlockHash::from_bytes(info.hash.to_bytes()),
+            hash: info.hash,
         });
         // After `begin_read`, deliberately (type docs).
         let connect = self.store.connect_state();

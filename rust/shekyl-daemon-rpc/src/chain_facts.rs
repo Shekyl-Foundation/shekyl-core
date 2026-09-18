@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, TxHash};
 
 use crate::core::{ConnectionsSnapshot, CoreRpc, PeerFacts, SyncSpansSnapshot};
 use crate::ffi;
@@ -81,11 +81,12 @@ pub struct BlockHeaderFacts {
     /// it as the latter is exactly the confusion `shekyl-types`' hash
     /// newtypes exist to prevent.
     pub miner_tx_hash: TxHash,
-    /// Raw bytes, like `shekyl-wire::BlockHeader`: neither root has a domain
-    /// newtype in this tree, and minting one here would be pre-provisioning
-    /// (rule 18 — byte layout at the boundary, names where they are known).
-    pub curve_tree_root: [u8; 32],
-    pub attestation_root: [u8; 32],
+    /// The header's two committed roots, as the types `shekyl-wire::BlockHeader`
+    /// carries them (RTN-7). The C ABI POD they are read from is raw (rule
+    /// 40); the facts layer is where each root's kind is known, so it is
+    /// named here and stays named until the handler renders hex.
+    pub curve_tree_root: CurveTreeRoot,
+    pub attestation_root: AttestationRoot,
     /// `None` unless the caller asked for it and was entitled to. Raw bytes:
     /// a proof-of-work hash is not any block's identity.
     pub pow_hash: Option<[u8; 32]>,
@@ -360,8 +361,8 @@ fn header_facts_from_pod(pod: &ffi::BlockHeaderFactsFfi) -> BlockHeaderFacts {
         hash: BlockHash::from_bytes(pod.hash),
         prev_hash: BlockHash::from_bytes(pod.prev_hash),
         miner_tx_hash: TxHash::from_bytes(pod.miner_tx_hash),
-        curve_tree_root: pod.curve_tree_root,
-        attestation_root: pod.attestation_root,
+        curve_tree_root: CurveTreeRoot::from_bytes(pod.curve_tree_root),
+        attestation_root: AttestationRoot::from_bytes(pod.attestation_root),
         pow_hash: (pod.pow_hash_filled != 0).then_some(pod.pow_hash),
         height: BlockHeight::from_raw(pod.height),
         depth: pod.depth,
