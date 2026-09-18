@@ -477,7 +477,7 @@ fn one_block_scan_result(
     crate::scan::ScanResult {
         processed_height_range: 1..2,
         parent_hash: None,
-        block_hashes: vec![(1, [0x11; 32])],
+        block_hashes: vec![(1, BlockHash::from_bytes([0x11; 32]))],
         new_transfers: Vec::new(),
         spent_key_images: Vec::new(),
         reorg_rewind: None,
@@ -609,7 +609,10 @@ async fn apply_scan_result_reorg_replaces_orphaned_sighting_rows() {
         .apply_scan_result(crate::scan::ScanResult {
             processed_height_range: 1..3,
             parent_hash: None,
-            block_hashes: vec![(1, [0x11; 32]), (2, [0x22; 32])],
+            block_hashes: vec![
+                (1, BlockHash::from_bytes([0x11; 32])),
+                (2, BlockHash::from_bytes([0x22; 32])),
+            ],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
             reorg_rewind: None,
@@ -636,8 +639,11 @@ async fn apply_scan_result_reorg_replaces_orphaned_sighting_rows() {
     engine
         .apply_scan_result(crate::scan::ScanResult {
             processed_height_range: 2..4,
-            parent_hash: Some([0x11; 32]),
-            block_hashes: vec![(2, [0xB2; 32]), (3, [0xB3; 32])],
+            parent_hash: Some(BlockHash::from_bytes([0x11; 32])),
+            block_hashes: vec![
+                (2, BlockHash::from_bytes([0xB2; 32])),
+                (3, BlockHash::from_bytes([0xB3; 32])),
+            ],
             new_transfers: Vec::new(),
             spent_key_images: Vec::new(),
             reorg_rewind: Some(crate::scan::ReorgRewind { fork_height: 2 }),

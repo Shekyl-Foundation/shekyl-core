@@ -890,7 +890,7 @@ pub(crate) async fn orchestrate_drain(
             detail: "assemble_tx returned no paths for a non-empty selection".to_owned(),
         })?;
     let tree_ctx = TreeContext {
-        reference_block: first.tree.reference_block.to_bytes(),
+        reference_block: first.tree.reference_block,
         tree_root: first.tree.tree_root.to_bytes(),
         tree_depth: first.tree.tree_depth,
     };

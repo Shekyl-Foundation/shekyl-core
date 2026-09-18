@@ -21,6 +21,7 @@ use super::local_ledger::LocalLedger;
 use super::local_refresh::LocalRefresh;
 use super::traits::ledger::LedgerEngine;
 use super::traits::DaemonEngine;
+use shekyl_types::BlockHash;
 
 /// Types that carry the wallet open-time scan floor into refresh.
 pub(crate) trait ScanStartFloorProvider {
@@ -96,8 +97,12 @@ pub(crate) fn anchor_target(scan_start_floor: u64, daemon_height: u64) -> Option
 pub(crate) fn anchor_ledger_block(
     ledger: &mut LedgerBlock,
     anchor_synced: u64,
-    tip_hash: [u8; 32],
+    tip_hash: BlockHash,
 ) -> Result<(), RefreshError> {
+    // The ledger's tip and reorg rows are persisted as bytes until
+    // RAW_TYPE_NEWTYPE_MIGRATION.md PR C types them (engine-state's rows,
+    // schema-checked); this is the one conversion, at the persisted boundary.
+    let tip_hash = tip_hash.to_bytes();
     // The ledger already being past the anchor height is a satisfied
     // anchor with nothing to do. This must be checked *before* the
     // empty-transfer precondition: a concurrent refresh may have advanced
@@ -154,7 +159,7 @@ pub(crate) fn anchor_ledger_block(
 pub(crate) async fn fetch_block_hash_at<D: DaemonEngine>(
     daemon: &D,
     height: u64,
-) -> Result<[u8; 32], RefreshError> {
+) -> Result<BlockHash, RefreshError> {
     let number = usize::try_from(height).map_err(|_| RefreshError::MalformedScanResult {
         reason: "block height exceeds usize",
     })?;
@@ -236,7 +241,7 @@ mod tests {
     #[test]
     fn anchor_ledger_block_sets_tip_and_reorg_window() {
         let mut ledger = LedgerBlock::empty();
-        anchor_ledger_block(&mut ledger, 999, [0xAB; 32]).expect("anchor");
+        anchor_ledger_block(&mut ledger, 999, BlockHash::from_bytes([0xAB; 32])).expect("anchor");
         assert_eq!(ledger.height(), 999);
         assert_eq!(ledger.tip.tip_hash, Some([0xAB; 32]));
         assert_eq!(ledger.block_hash_at(999), Some(&[0xAB; 32]));
@@ -248,8 +253,10 @@ mod tests {
         // The transfer set is empty, so re-anchoring must overwrite the
         // stale hash rather than fail with `ConcurrentMutation`.
         let mut ledger = LedgerBlock::empty();
-        anchor_ledger_block(&mut ledger, 999, [0xAB; 32]).expect("first anchor");
-        anchor_ledger_block(&mut ledger, 999, [0xCD; 32]).expect("re-anchor overwrites");
+        anchor_ledger_block(&mut ledger, 999, BlockHash::from_bytes([0xAB; 32]))
+            .expect("first anchor");
+        anchor_ledger_block(&mut ledger, 999, BlockHash::from_bytes([0xCD; 32]))
+            .expect("re-anchor overwrites");
         assert_eq!(ledger.height(), 999);
         assert_eq!(ledger.tip.tip_hash, Some([0xCD; 32]));
         assert_eq!(ledger.block_hash_at(999), Some(&[0xCD; 32]));

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
 use shekyl_archival_retention::{BondPostKind, ARCHIVAL_REORG_DEPTH_BLOCKS};
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
 use tokio_util::sync::CancellationToken;
 
 use super::accrual::{AccrualError, PScanAccrual};
@@ -330,7 +330,7 @@ where
         // the natural second offload candidate if batch sizes ever grow materially.
         let verified = verify_exhaustive(
             BlockHeight::from_raw(start),
-            accrual.frontier_hash(),
+            BlockHash::from_bytes(accrual.frontier_hash()),
             &blocks,
         )?;
 

@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::diagnostics::{AssertionSink, PanickingSink, PanickingSinkTrigger};
 use crate::engine::test_support::{make_synthetic_block, TestDaemon, DEFAULT_TEST_SEED};
 use crate::engine::view_material::ViewMaterial;
+use shekyl_types::{BlockHash, TxHash};
 
 /// Real wallet master seed (64 bytes). Drives `rederive_account`
 /// against the same key-derivation path `Engine::create` uses
@@ -64,7 +65,7 @@ fn make_local_refresh() -> LocalRefresh {
     LocalRefresh::new(vm, 0)
 }
 
-fn snapshot_at_anchor(synced: u64, hash: [u8; 32]) -> LedgerSnapshot {
+fn snapshot_at_anchor(synced: u64, hash: BlockHash) -> LedgerSnapshot {
     let mut ledger = LedgerBlock::empty();
     crate::engine::scan_floor::anchor_ledger_block(&mut ledger, synced, hash).expect("test anchor");
     LedgerSnapshot::from_ledger(&ledger)
@@ -118,7 +119,7 @@ fn test_bond_tx_kind(
                     .hybrid_bond_id()
                     .to_canonical_bytes()
                     .expect("encode hybrid id"),
-                p_canonical_id: test_persona_id(keys).to_bytes(),
+                p_canonical_id: test_persona_id(keys),
                 kind,
                 holdings: Holdings::CompleteTree,
                 bonded_total_atomic: 1_000,
@@ -153,17 +154,23 @@ async fn bond_watch_emits_sightings_for_watched_ids_only() {
     // the P-scan's confirmation set, so the two consumers agree on the
     // post-kind byte). Mutate BEFORE reading hashes so the parent
     // chaining stays consistent.
-    let b0 = make_synthetic_block(0, [0u8; 32]);
+    let b0 = make_synthetic_block(0, BlockHash::from_bytes([0u8; 32]));
     let mut b1 = make_synthetic_block(1, b0.block.hash());
     b1.transactions.push(test_bond_tx(&mine));
-    b1.block.transaction_hashes.push([0xA1; 32]);
+    b1.block
+        .transaction_hashes
+        .push(TxHash::from_bytes([0xA1; 32]));
     b1.transactions.push(test_bond_tx(&stranger));
-    b1.block.transaction_hashes.push([0xA2; 32]);
+    b1.block
+        .transaction_hashes
+        .push(TxHash::from_bytes([0xA2; 32]));
     b1.transactions.push(test_bond_tx_kind(
         &mine,
         shekyl_wire::transaction::BondPostKind::Other(0x7F),
     ));
-    b1.block.transaction_hashes.push([0xA3; 32]);
+    b1.block
+        .transaction_hashes
+        .push(TxHash::from_bytes([0xA3; 32]));
 
     let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, vec![b0.clone(), b1.clone()]);
     let snapshot = snapshot_at_anchor(0, b0.block.hash());
@@ -221,12 +228,14 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
     // Chain A built by hand so the injected bond tx is inside the hash
     // chaining (mutate BEFORE reading each block's hash).
     let mut chain_a = Vec::new();
-    let mut parent = [0u8; 32];
+    let mut parent = BlockHash::from_bytes([0u8; 32]);
     for h in 0..TIP {
         let mut b = make_synthetic_block(h, parent);
         if h == FORK {
             b.transactions.push(test_bond_tx(&mine));
-            b.block.transaction_hashes.push([0xB0; 32]);
+            b.block
+                .transaction_hashes
+                .push(TxHash::from_bytes([0xB0; 32]));
         }
         parent = b.block.hash();
         chain_a.push(b);
@@ -279,7 +288,7 @@ async fn reorg_discards_abandoned_fork_bond_sightings() {
 fn linear_chain(n: u64) -> Vec<ScannableBlock> {
     let mut chain =
         Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-    let mut parent = [0u8; 32];
+    let mut parent = BlockHash::from_bytes([0u8; 32]);
     for h in 0..n {
         let block = make_synthetic_block(h, parent);
         parent = block.block.hash();
@@ -391,7 +400,7 @@ async fn intra_attempt_reorg_is_detected_and_rewound() {
     // below the fork, B at and above it. No old-chain block above
     // the fork survives — the pre-fix behavior (A6/A7 spliced
     // against B8..B11) is exactly what this rules out.
-    let expected: Vec<(u64, [u8; 32])> = (SYNCED + 1..FORK)
+    let expected: Vec<(u64, BlockHash)> = (SYNCED + 1..FORK)
         .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
         .chain((FORK..TIP).map(|h| {
             let idx = usize::try_from(h - FORK).unwrap();
@@ -471,7 +480,7 @@ async fn intra_attempt_reorg_at_exact_synced_height_rewinds_through_seam() {
     // Every height from the fork up carries the B-chain hash — including
     // height 4 itself (the window-top block the reorg replaced) and
     // heights 5/6 (fetched as A before the swap, purged, refetched as B).
-    let expected: Vec<(u64, [u8; 32])> = (FORK..TIP)
+    let expected: Vec<(u64, BlockHash)> = (FORK..TIP)
         .map(|h| {
             let idx = usize::try_from(h - FORK).unwrap();
             (h, tail_b[idx].block.hash())
@@ -569,7 +578,7 @@ async fn two_reorgs_in_one_attempt_are_both_detected_never_spliced() {
     // below FORK1, B between the forks, C at and above FORK2. The pre-fix
     // behavior — B8/B9 spliced against C10/C11 with a broken link at 10 — is
     // exactly what this rules out.
-    let expected: Vec<(u64, [u8; 32])> = (SYNCED + 1..FORK1)
+    let expected: Vec<(u64, BlockHash)> = (SYNCED + 1..FORK1)
         .map(|h| (h, chain_a[usize::try_from(h).unwrap()].block.hash()))
         .chain((FORK1..FORK2).map(|h| {
             let idx = usize::try_from(h - FORK1).unwrap();

@@ -13,6 +13,9 @@ description = "Structural transaction-weight predictor (byte-mirror of shekyl_wi
 shekyl-fcmp = { path = "../shekyl-fcmp" }
 # Tx wire layout constants + the canonical Bp+ clawback formula + MAX_OUTPUTS.
 shekyl-wire = { path = "../shekyl-wire" }
+# The wire block/tx hash surface is typed (`BlockHash`; RTN-7); the weight
+# fixtures build `Ct::Fcmp` directly.
+shekyl-types = { path = "../shekyl-types" }
 # ML-KEM-768 ciphertext length (the per-output hybrid KEM extra field).
 shekyl-crypto-pq = { path = "../shekyl-crypto-pq" }
 # varint byte-length.

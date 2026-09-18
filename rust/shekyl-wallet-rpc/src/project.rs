@@ -658,7 +658,7 @@ mod tests {
 
         let sender_tx = [0x5au8; 32];
         let out = WalletOutput::new_for_test(
-            sender_tx,
+            shekyl_types::TxHash::from_bytes(sender_tx),
             1,
             9,
             ED25519_BASEPOINT_POINT,

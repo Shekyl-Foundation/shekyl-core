@@ -77,6 +77,7 @@ use shekyl_units::AtomicUnits;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::engine::error::KeyEngineError;
+use shekyl_types::BlockHash;
 
 // --- Constants -------------------------------------------------------------
 
@@ -608,7 +609,7 @@ pub(crate) struct TxSignatures {
     pub per_input: Vec<TxInputSignature>,
     pub fcmp_proof: Vec<u8>,
     pub fee: u64,
-    pub reference_block: [u8; 32],
+    pub reference_block: BlockHash,
     pub tree_depth: u8,
     /// Output one-time keys for final wire encode (LocalSigner).
     pub output_keys: Vec<[u8; 32]>,
@@ -994,7 +995,7 @@ mod tests {
             outputs: vec![],
             fcmp_plus_plus_context: FcmpPlusPlusContext {
                 tree: TreeContext {
-                    reference_block: [0; 32],
+                    reference_block: BlockHash::from_bytes([0; 32]),
                     tree_root: [0; 32],
                     tree_depth: 1,
                 },

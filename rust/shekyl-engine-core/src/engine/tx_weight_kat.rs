@@ -134,7 +134,7 @@ pub(crate) mod support {
         };
 
         let tree = TreeContext {
-            reference_block: [0xD4; 32],
+            reference_block: shekyl_types::BlockHash::from_bytes([0xD4; 32]),
             tree_root,
             tree_depth,
         };

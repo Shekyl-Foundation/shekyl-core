@@ -74,6 +74,7 @@ use std::ops::Range;
 
 use shekyl_curve_tree::RawOutput;
 use shekyl_scanner::RecoveredWalletOutput;
+use shekyl_types::{BlockHash, CurveTreeRoot};
 
 /// One transaction's leaf inputs, decoded from a `ScannableBlock` and
 /// owned (`Send + 'static`) so it can ride on [`ScanResult`] and cross the
@@ -132,14 +133,14 @@ pub struct ScanResult {
     /// against the wallet's recorded chain at `start - 1`; a
     /// mismatch indicates the wallet's chain shifted under the
     /// scanner between snapshot and merge.
-    pub parent_hash: Option<[u8; 32]>,
+    pub parent_hash: Option<BlockHash>,
 
     /// Block hashes for every height in `processed_height_range`,
     /// ascending. Every height must appear exactly once. The merge
     /// drives [`shekyl_engine_state::LedgerIndexes::ingest_block`]
     /// per height, even when no events fired in that block, because
     /// the persisted ledger's `synced_height` advances per block.
-    pub block_hashes: Vec<(u64, [u8; 32])>,
+    pub block_hashes: Vec<(u64, BlockHash)>,
 
     /// Outputs detected as belonging to the wallet. Each carries
     /// the block height it was found in; the merge groups them by
@@ -184,7 +185,7 @@ pub struct ScanResult {
     /// CT-5a populates this field but does **not** yet consume it — the §3.3
     /// verify lands in CT-5b. This is a deliberate write-but-not-read transit
     /// field, not dead code; do not remove it (CT-5 §6 E6b note).
-    pub block_curve_tree_roots: Vec<(u64, [u8; 32])>,
+    pub block_curve_tree_roots: Vec<(u64, CurveTreeRoot)>,
 
     /// Bond-post sightings from the principal scan's **bond watch**
     /// (SA-R-6 from-seed reconstruction): slots whose cached persona
@@ -263,7 +264,7 @@ impl ScanResult {
     ///
     /// Useful in tests and as the "nothing-changed" return shape
     /// from a scanner pass that found the wallet already at tip.
-    pub fn empty_at(start: u64, parent_hash: Option<[u8; 32]>) -> Self {
+    pub fn empty_at(start: u64, parent_hash: Option<BlockHash>) -> Self {
         Self {
             processed_height_range: start..start,
             parent_hash,

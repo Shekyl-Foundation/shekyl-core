@@ -27,7 +27,7 @@ pub(crate) fn collect_label_residue(
         let wo = dt.output.wallet_output();
         map.insert(
             (
-                TxHash::from_bytes(wo.transaction()),
+                wo.transaction(),
                 OutputIndexInTx::from_raw(wo.index_in_transaction()),
             ),
             *dt.output.label_plaintext(),

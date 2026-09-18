@@ -57,7 +57,7 @@ fn funding_block(recipient: &ArchivalPKeys) -> ScannableBlock {
 fn bond_post_for(p: &ArchivalPKeys) -> BondPost {
     BondPost {
         hybrid_public_key: p.hybrid_bond_id().to_canonical_bytes().expect("encode"),
-        p_canonical_id: canonical_id(p).to_bytes(),
+        p_canonical_id: canonical_id(p),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: Vec::new(),
             endpoint: [0xEE; 32],

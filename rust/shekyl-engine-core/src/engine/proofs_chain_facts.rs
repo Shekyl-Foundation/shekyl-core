@@ -30,6 +30,7 @@ use shekyl_wire::{Ct, Transaction};
 
 use super::block_fetch::{parse_tx_batch, refuse_unless_ok, TxBodyForm, TXS_PER_REQUEST};
 use super::proofs::ProofsError;
+use shekyl_types::TxHash;
 
 /// Where the daemon found a transaction, and the depth that goes with
 /// it. An arm rather than a `bool` beside an `Option`, for the reason
@@ -102,8 +103,10 @@ pub(crate) async fn fetch_proof_tx<R: Rpc>(
         Some(TxLocation::Pooled { .. }) | None => TxChainState::Pooled,
     };
 
-    let mut parsed =
-        parse_tx_batch(&[txid], txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?;
+    // Proof payloads carry txids as bytes (their own format); the typed world
+    // starts at the batch parser.
+    let mut parsed = parse_tx_batch(&[TxHash::from_bytes(txid)], txs, TxBodyForm::Pruned)
+        .map_err(ProofsError::Daemon)?;
     let tx = parsed
         .pop()
         .expect("parse_tx_batch returns exactly one tx per requested hash");
@@ -181,8 +184,9 @@ pub(crate) async fn fetch_proof_txs<R: Rpc>(
                 return Err(ProofsError::TxUnconfirmed(hex::encode(requested)));
             }
         }
+        let typed: Vec<TxHash> = batch.iter().copied().map(TxHash::from_bytes).collect();
         bodies.extend(
-            parse_tx_batch(batch, &resp.txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?,
+            parse_tx_batch(&typed, &resp.txs, TxBodyForm::Pruned).map_err(ProofsError::Daemon)?,
         );
     }
     Ok(bodies)

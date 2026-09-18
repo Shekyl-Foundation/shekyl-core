@@ -476,7 +476,7 @@ mod tests {
                 },
                 ct: Ct::Fcmp {
                     fee,
-                    reference_block: [0; 32],
+                    reference_block: shekyl_types::BlockHash::from_bytes([0; 32]),
                     base: CtBase {
                         enc_amounts: vec![[0; 9]; n_out],
                         enc_labels: vec![[0; 9]; n_out],

@@ -57,7 +57,7 @@ use shekyl_archival_retention::{p_canonical_id_from_hybrid_pubkey, ArchivalRewar
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_engine_state::transfer::eligible_height;
 use shekyl_scanner::{GuaranteedScanner, ScannableBlock};
-use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockHeight, PCanonicalId, SettlementEpoch, TxHash};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::transaction::{Input, Transaction};
 
@@ -604,15 +604,15 @@ struct OwnEmissionSlots<'a> {
     known_personas: &'a BTreeMap<PCanonicalId, u32>,
     /// Positionally-paired hash → tx index (32-byte copies only; built
     /// without touching any vin blob).
-    idx_by_hash: BTreeMap<[u8; 32], usize>,
+    idx_by_hash: BTreeMap<TxHash, usize>,
     /// Computed verdicts: an entry present means "parsed" (possibly empty).
-    memo: BTreeMap<[u8; 32], BTreeSet<u32>>,
+    memo: BTreeMap<TxHash, BTreeSet<u32>>,
 }
 
 impl<'a> OwnEmissionSlots<'a> {
     fn new(
         transactions: &'a [Transaction],
-        transaction_hashes: &'a [[u8; 32]],
+        transaction_hashes: &'a [TxHash],
         known_personas: &'a BTreeMap<PCanonicalId, u32>,
     ) -> Self {
         Self {
@@ -629,7 +629,7 @@ impl<'a> OwnEmissionSlots<'a> {
 
     /// Whether `tx_hash`'s tx carries `slot`'s own emission vin — parsing
     /// (and memoizing) that one tx's emission vins on first query.
-    fn contains(&mut self, tx_hash: [u8; 32], slot: u32) -> bool {
+    fn contains(&mut self, tx_hash: TxHash, slot: u32) -> bool {
         if let Some(slots) = self.memo.get(&tx_hash) {
             return slots.contains(&slot);
         }
@@ -741,7 +741,7 @@ pub(crate) fn run_dual_extractor(
              (scanner invariant); a mismatch would silently degrade GF-4b lineage \
              attribution to ExternalTransfer"
         );
-        let mut bond_post_slots: BTreeMap<[u8; 32], BTreeSet<u32>> = BTreeMap::new();
+        let mut bond_post_slots: BTreeMap<TxHash, BTreeSet<u32>> = BTreeMap::new();
         let mut emission_slots = OwnEmissionSlots::new(
             &block.transactions,
             &block.block.transaction_hashes,

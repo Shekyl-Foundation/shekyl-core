@@ -709,7 +709,7 @@ mod tests {
                 .expect("vin blob parses");
             tx.prefix.inputs.remove(emission_index);
             let signable = tx.prefix_hash();
-            emission_vin_verify_backing(&vin, &root, depth, signable)
+            emission_vin_verify_backing(&vin, &root, depth, signable.to_bytes())
                 .expect("backing leg verifies against the REAL tree root and depth");
         }
     }

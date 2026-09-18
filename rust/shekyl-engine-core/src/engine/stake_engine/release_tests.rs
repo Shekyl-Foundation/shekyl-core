@@ -13,7 +13,7 @@
 use shekyl_archival_retention::{
     HoldingsDescriptor, HoldingsKind, ShardSet, RELEASE_COOLDOWN_EPOCHS,
 };
-use shekyl_types::ChainCount;
+use shekyl_types::{BlockHash, ChainCount};
 
 use crate::engine::emission_source::{BondContext, ClaimSourceFor, EmissionClaimSource};
 
@@ -141,7 +141,7 @@ fn exit_funding(slot: u32) -> (Vec<FundingInputContext>, TreeContext) {
     let depth = 2u8;
     let (c1_layers, c2_layers, tree_root) = consistent_synthetic_path(&leaf_chunk, depth);
     let tree_ctx = TreeContext {
-        reference_block: [7u8; 32],
+        reference_block: BlockHash::from_bytes([7u8; 32]),
         tree_root,
         tree_depth: depth,
     };

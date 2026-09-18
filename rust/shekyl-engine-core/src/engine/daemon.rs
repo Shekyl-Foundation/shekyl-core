@@ -47,7 +47,6 @@ use shekyl_rpc_types::{FeeTier, GetFeeEstimateResponse};
 use shekyl_scanner::ScannableBlock;
 use shekyl_wire::Transaction;
 
-use crate::engine::pending::TxHash;
 use crate::engine::traits::{DaemonEngine, DaemonHealth, FeeEstimates, TxSubmitOutcome};
 use crate::engine::transaction_submitter::submit_outcome_from_verdict;
 
@@ -426,7 +425,7 @@ impl DaemonEngine for DaemonClient {
                 }
             };
 
-            let hash = TxHash::from_bytes(tx.hash());
+            let hash = tx.hash();
 
             let verdict = self.publish_transaction(&tx_bytes).await?;
             Ok(submit_outcome_from_verdict(&verdict, hash))
