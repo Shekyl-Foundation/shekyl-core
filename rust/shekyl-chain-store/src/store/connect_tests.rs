@@ -29,6 +29,7 @@ use crate::codec::{
     stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, Raw, TotalBurnedCell,
     TxIndex, TxOutputIndices, TxPrunedSegment, FACT_FIELDS,
 };
+use crate::ids::OutputSlot;
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
@@ -543,7 +544,7 @@ fn a_gapped_amount_bucket_is_si9() {
     let planted: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
-            .insert((0, 5), amount_record(99).encoded().as_encoded())?;
+            .insert(slot(0, 5).key(), amount_record(99).encoded().as_encoded())?;
         Ok(())
     });
     planted.expect("plant");
@@ -563,6 +564,13 @@ fn a_gapped_amount_bucket_is_si9() {
     cleanup(&path);
 }
 
+fn slot(amount: u64, index: u64) -> OutputSlot {
+    OutputSlot::new(
+        AtomicUnits::from_raw(amount),
+        crate::ids::AmountIndex::from_raw(index),
+    )
+}
+
 fn amount_record(output_id: u64) -> OutKey {
     OutKey {
         output_id: crate::ids::OutputStorageId::from_raw(output_id),
@@ -575,13 +583,15 @@ fn amount_record(output_id: u64) -> OutKey {
     }
 }
 
-/// The single-bucket premise is stated, and self-guarding (SOK-Q2): a
-/// second bucket makes `len() == last + 1` fail rather than pass, because
-/// per-bucket indices are dense from zero. `connect` stores every miner and
-/// emission vout under `0` and CEN-H14 makes every other vout's amount `0`,
-/// so a row under another amount can only mean a non-miner, non-emission
-/// vout with a loud amount reached the store — the validator's hole, and
-/// the belt fires as `StoreInvariantViolated`, never a verdict.
+/// The single-bucket premise is **checked**, not assumed (SOK-Q2, tightened
+/// on #783 review): `next_amount_index` reads the table's first and last
+/// keys and refuses a bucket that is not both, before it trusts the table's
+/// length as the bucket's cardinality. `connect` stores every miner and
+/// emission vout under the confidential amount and CEN-H14 makes every
+/// other vout's amount `0`, so a row under another amount can only mean a
+/// non-miner, non-emission vout with a loud amount reached the store — the
+/// validator's hole, and the belt fires as `StoreInvariantViolated`, never
+/// a verdict.
 #[test]
 fn a_second_amount_bucket_is_si9_the_validators_hole_not_a_verdict() {
     let path = tmp("connect-second-bucket");
@@ -590,7 +600,7 @@ fn a_second_amount_bucket_is_si9_the_validators_hole_not_a_verdict() {
     let planted: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
-            .insert((7, 0), amount_record(98).encoded().as_encoded())?;
+            .insert(slot(7, 0).key(), amount_record(98).encoded().as_encoded())?;
         Ok(())
     });
     planted.expect("plant");
@@ -607,6 +617,31 @@ fn a_second_amount_bucket_is_si9_the_validators_hole_not_a_verdict() {
             row: StoreInvariant::IdNotFresh,
         }
     );
+    cleanup(&path);
+}
+
+/// The case the whole-table length alone would accept (PR #783 review): a
+/// hole in the confidential bucket compensated by a foreign-bucket row —
+/// `(0,0), (0,2), (7,5)` has `len == 3` and bucket-0 `last == 2`. The ends
+/// check refuses it: the last key's amount is `7`, not the bucket's.
+#[test]
+fn a_hole_compensated_by_a_foreign_bucket_row_is_still_si9() {
+    let path = tmp("connect-compensated-hole");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (_, genesis) = connect_genesis(&store, 0);
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        let mut amounts = batch.open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?;
+        amounts.insert(slot(0, 2).key(), amount_record(2).encoded().as_encoded())?;
+        amounts.insert(slot(7, 5).key(), amount_record(3).encoded().as_encoded())?;
+        Ok(())
+    });
+    planted.expect("plant");
+    let b1 = candidate(1, genesis.hash(), Vec::new());
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+    });
+    expect_row(&out, StoreInvariant::IdNotFresh);
     cleanup(&path);
 }
 

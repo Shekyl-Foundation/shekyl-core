@@ -18,7 +18,7 @@ use crate::codec::{
     post_image, stored_timelock, BlockBody, Canonical, Encoded, OutKey, ProbeCell, PropertyCell,
     Raw, UndoEntry, UndoLog,
 };
-use crate::ids::OutputStorageId;
+use crate::ids::{OutputSlot, OutputStorageId};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
     ordinal_of, BLOCKS, BLOCK_HEIGHTS, HF_VERSIONS, OUTPUT_AMOUNTS, PROPERTIES, UNDO_LOG,
@@ -42,7 +42,16 @@ fn out_key(byte: u8) -> OutKey {
     }
 }
 
-fn tuple_key_bytes(amount: u64, index: u64) -> Box<[u8]> {
+fn slot(index: u64) -> (u64, u64) {
+    OutputSlot::new(
+        OutputSlot::CONFIDENTIAL_AMOUNT,
+        crate::ids::AmountIndex::from_raw(index),
+    )
+    .key()
+}
+
+fn slot_bytes(index: u64) -> Box<[u8]> {
+    let (amount, index) = slot(index);
     [amount.to_le_bytes(), index.to_le_bytes()]
         .concat()
         .into_boxed_slice()
@@ -70,7 +79,7 @@ fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreE
     drop(hf);
     batch
         .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
-        .insert((0, height), out_key(byte).encoded().as_encoded())?;
+        .insert(slot(height), out_key(byte).encoded().as_encoded())?;
     batch.upsert_property::<ProbeCell>(&(100 + height))?;
     recording.seal()
 }
@@ -126,7 +135,7 @@ fn every_verb_journals_its_pre_image_in_write_order() {
             },
             UndoEntry::Inserted {
                 table: ord("output_amounts"),
-                key: tuple_key_bytes(0, 1),
+                key: slot_bytes(1),
                 post: post_image(&out_key(1).encode()),
             },
             UndoEntry::Replaced {
@@ -153,7 +162,7 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
             .upsert(0, RuleSetId::from_raw(7).encoded().as_encoded())?;
         batch
             .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
-            .insert((0, 0), out_key(0xee).encoded().as_encoded())?;
+            .insert(slot(0), out_key(0xee).encoded().as_encoded())?;
         batch.upsert_property::<ProbeCell>(&5)?;
         Ok(())
     });
@@ -214,12 +223,12 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
         .collect();
     assert_eq!(
         keys,
-        vec![(0, 0)],
+        vec![slot(0)],
         "the seeded row survives, the connected one goes"
     );
     assert_eq!(
         amounts
-            .get((0, 0))
+            .get(slot(0))
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
         Some(out_key(0xee))
@@ -272,15 +281,15 @@ fn a_present_output_key_is_refused_not_journaled_and_the_first_row_survives_the_
     let seeded: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
-            .insert((0, 0), out_key(9).encoded().as_encoded())?;
+            .insert(slot(0), out_key(9).encoded().as_encoded())?;
         Ok(())
     });
     seeded.expect("seed");
     let out: Result<usize, TestErr> = store.write(|batch| {
         let recording = batch.record_undo(1);
         let mut amounts = batch.open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?;
-        amounts.insert((0, 1), out_key(1).encoded().as_encoded())?;
-        let again = amounts.insert((0, 1), out_key(1).encoded().as_encoded());
+        amounts.insert(slot(1), out_key(1).encoded().as_encoded())?;
+        let again = amounts.insert(slot(1), out_key(1).encoded().as_encoded());
         assert!(
             matches!(again, Err(StoreError::InvariantViolated(_))),
             "a present key is refused, not accepted as 'not new'"
@@ -294,7 +303,7 @@ fn a_present_output_key_is_refused_not_journaled_and_the_first_row_survives_the_
     let snap = store.begin_read().expect("read");
     let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
     assert_eq!(amounts.len().expect("len"), 1);
-    assert!(amounts.get((0, 0)).expect("g").is_some());
+    assert!(amounts.get(slot(0)).expect("g").is_some());
     cleanup(&path);
 }
 

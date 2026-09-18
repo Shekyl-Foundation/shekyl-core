@@ -94,6 +94,7 @@ mod halt;
 mod header;
 mod invariant;
 mod keyed;
+mod output_reads;
 mod pop;
 mod read;
 mod shared;
@@ -108,10 +109,9 @@ pub use error::{
 };
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
+pub use output_reads::RecordedOutput;
 pub use pop::Popped;
-pub use read::{
-    RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, RecordedOutput, TipState,
-};
+pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState};
 pub use undo::Restorable;
 pub use view::BatchView;
 pub use write::WriteBatch;

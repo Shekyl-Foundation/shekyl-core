@@ -202,7 +202,9 @@ fn absent(cell: &'static str) -> ReadFault {
 }
 
 /// SI-7 for a row that is present and does not decode under its codec.
-fn undecodable(cell: &'static str, cause: CodecError) -> ReadFault {
+/// Shared with `output_reads`: one classification of "the bytes are not
+/// this codec" for every typed cell.
+pub(super) fn undecodable(cell: &'static str, cause: CodecError) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::CellCorrupt {
         key: cell,
         fault: CellFault::Undecodable(cause),

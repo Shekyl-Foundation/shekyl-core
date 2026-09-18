@@ -12,6 +12,7 @@
 //! returns, the writer **still `Live`**: a read never arms the halt
 //! (`DAEMON_REDB_STORE.md` §3.6.2, the read-side half).
 
+use redb::ReadableTable;
 use shekyl_chain_rules::{AtHeight, RuleSetId};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_units::AtomicUnits;
@@ -21,6 +22,7 @@ use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 use crate::codec::Canonical;
+use crate::ids::OutputSlot;
 use crate::schema::{BLOCK_INFO, CURVE_TREE_ROOTS, OUTPUT_AMOUNTS};
 
 fn h(raw: u64) -> BlockHeight {
@@ -767,8 +769,11 @@ fn a_hole_below_the_output_count_is_si9_not_beyond_count() {
         .output(gi(2))
         .expect_err("a hole below the count is corruption");
     assert!(
-        is_si7_absent(&err, "output_amounts"),
-        "hole below the count must be InvariantViolated(Absent), got {err:?}"
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::IdNotFresh)
+        ),
+        "a hole below the count is SI-9 — the count and the keys disagree — got {err:?}"
     );
     // The neighbours are unaffected, and the count still says 5.
     assert!(matches!(
@@ -779,5 +784,91 @@ fn a_hole_below_the_output_count_is_si9_not_beyond_count() {
     // The read never armed the writer (the halt is the writer's state).
     assert_eq!(store.connect_state(), ConnectState::Live);
     let _ = store;
+    cleanup(&path);
+}
+
+#[test]
+fn a_row_whose_output_id_disagrees_with_its_slot_is_si9_not_served() {
+    // `connect` refuses to write this (SOK-2's belt); a raw or corrupt file
+    // can still hold it, and serving it would hand out the wrong output
+    // under a global index. O1 validates the join where it decodes.
+    let path = tmp("read-output-join-mismatch");
+    let (store, _) = output_chain(&path);
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut amounts = txn.open_table(OUTPUT_AMOUNTS).expect("t");
+            let slot = OutputSlot::confidential(gi(1)).key();
+            let mut record = amounts
+                .get(slot)
+                .expect("g")
+                .expect("recorded")
+                .value()
+                .decode()
+                .expect("decodes");
+            record.output_id = crate::ids::OutputStorageId::from_raw(7);
+            amounts
+                .insert(slot, record.encoded().as_encoded())
+                .expect("plant");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    let err = snap
+        .output(gi(1))
+        .expect_err("a disagreeing join is corruption");
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::IdNotFresh)
+        ),
+        "join mismatch is SI-9, got {err:?}"
+    );
+    assert!(matches!(
+        snap.output(gi(0)).expect("read"),
+        AtIndex::Recorded(_)
+    ));
+    cleanup(&path);
+}
+
+#[test]
+fn a_stray_row_at_or_beyond_the_count_is_beyond_count_not_served() {
+    // Bound first: the count (`output_txs.len()`) decides what exists, so a
+    // row planted at index 9 in `output_amounts` is not `Recorded` — the
+    // reads never look past the count.
+    let path = tmp("read-output-stray");
+    let (store, _) = output_chain(&path);
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut amounts = txn.open_table(OUTPUT_AMOUNTS).expect("t");
+            let record = amounts
+                .get(OutputSlot::confidential(gi(0)).key())
+                .expect("g")
+                .expect("recorded")
+                .value()
+                .decode()
+                .expect("decodes");
+            amounts
+                .insert(
+                    OutputSlot::confidential(gi(9)).key(),
+                    record.encoded().as_encoded(),
+                )
+                .expect("plant");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    assert_eq!(snap.output(gi(9)).expect("read"), AtIndex::BeyondCount);
+    assert_eq!(
+        snap.output_origin(gi(9)).expect("read"),
+        AtIndex::BeyondCount
+    );
     cleanup(&path);
 }
