@@ -32,7 +32,7 @@ signature-alignment round (`SA-R-1`…`SA-R-7`).
 | 4 | A holder earns `g(age_s) / r_market[s]` | `scarcity_micro`, `reward_arithmetic.rs:71–82`; `shard_contribution_micro`, `consensus_state.rs:536–556` |
 | 5 | `r_market` counts pairs that **served**, folded at epoch close | `r_market_count`, `consensus_state.rs:151`; a bond is invisible to it for a full `SETTLEMENT_EPOCH_BLOCKS = 10_000` |
 | 6 | Segments freeze **sequentially**, `⌊leaf_count / SEGMENT_LEAF_COUNT⌋` | `segment_freeze.rs:63–72` |
-| 7 | `SEGMENT_LEAF_COUNT = 25_992` (`38 × 18 × 38`; `LEAF_BYTES = 128`) | `segment_freeze.rs:41–48`; `segment.rs:36` |
+| 7 | `SEGMENT_LEAF_COUNT = 25_992` (`38 × 18 × 38`; `LEAF_BYTES = 128`) | `segment_freeze.rs` (`SEGMENT_LEAF_COUNT` partition assert); `segment.rs` (`LEAF_BYTES`) |
 | 8 | CompleteTree is market-excluded from the gather | `bond.is_complete_tree()` membership filter, `consensus_state.rs:475–478` |
 
 ### 1.1 The identity that decides this round

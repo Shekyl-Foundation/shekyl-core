@@ -350,9 +350,12 @@ described here rather than by reference) (the value is *not*
 provisional — it is derived from pinned production widths):
 `config/consensus_constants.json` entry, `build.rs` emission,
 `SEGMENT_LEAF_COUNT: u64 = 25_992` with a compile-time assert tying
-it to the width product (`38 * 18 * 38`) so a width change cannot
-silently strand it, and doc-comment rationale (level-2 per gate-2's
-sizing provisional; `CURVE_TREE_CLIENT.md` §7.2.2).
+it to the partition derivation `shekyl_fcmp::tree::leaves_per_segment()`
+(since 2026-09-18; to the width product `38 * 18 * 38` directly before
+that) so a width change cannot silently strand it, and doc-comment
+rationale (level 2 — gate-2's provisional sizing, pinned by this round;
+the reversion criteria are the clause below, and `CURVE_TREE_CLIENT.md`
+§7.2.2 / status item 8 record the closure).
 
 **Reversion clause (rule 21).** Rejected: making `E` a per-row-only
 value with no global constant ("flexibility" for future re-sizing).

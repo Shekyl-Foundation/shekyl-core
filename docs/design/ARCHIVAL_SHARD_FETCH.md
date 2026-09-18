@@ -157,7 +157,7 @@ inherited as "the client waits."
 | Discovery | `EU-D3`/`EU-D4` — endpoint = raw 32-byte Ed25519 key on the bond record; witness reads it from the drawable snapshot at epoch open, joined by `p_id` (`DrawablePair`, `rust/shekyl-archival-retention/src/challenge_assignment.rs:71`). **Producer RULED 2026-09-16 (SO-D8 Q3):** `DrawableSet::at_epoch_open` (`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md` §7.4) | `SF-D5`'s input: key → onion is derivation, not lookup. `SF-D10` reads the holder set of `s` from the same snapshot |
 | Derived assignment | [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md) §2: assignment for block *h* is a pure function of *h*−1's hash over the epoch-open drawable set. Public at *h*−1's publication; every node including `P` computes it identically. Witness = producer. Window = `CHALLENGE_RESPONSE_BLOCKS`. *(The v1 block-bound `attestation_nonce = H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` was deleted with `SF-D8` (a0), 2026-09-13.)* | Assignment stays derived. **It does not go on the fetch.** Both callers send requester-random bytes plus their own chain anchor at `tip − 720` (height and hash; `SF-D5` as amended). Nothing derived from the assignment is a request field |
 | Request parse | `rust/shekyl-p-serve/src/serve.rs:558–560` — `path.strip_prefix(ROUTE_PREFIX)` then `parse::<u64>()`; comment: "Exact decimal id — no path suffix, no query string" | The request unit is a whole shard (`§4`) |
-| Segment size | `rust/shekyl-curve-tree/src/segment.rs:36` — `LEAF_BYTES`; `:63` — `leaves_per_segment()` | Honest-holder egress of a challenge fetch: one full segment (`leaves_per_segment() × LEAF_BYTES`) |
+| Segment size | `rust/shekyl-curve-tree/src/segment.rs` — `LEAF_BYTES`; `shekyl_fcmp::tree::leaves_per_segment()` (re-exported there) | Honest-holder egress of a challenge fetch: one full segment (`leaves_per_segment() × LEAF_BYTES`) |
 | Serving ↔ fetching Tor | `PWD-E9` ([`P2P_2_ENDPOINT_ROUND.md`](P2P_2_ENDPOINT_ROUND.md) §PWD-E9): daemon gets its own tor path, no crossover to the archival-serving persona; launch path takes instance identity as a parameter. Implemented 2026-09-09 (`DaemonTorControl`, `shekyl-tor-control-daemon`) | Closed. Constrains `SF-D2` (RULED): reuse is the **daemon zone's** SOCKS, never the serving persona's |
 | Intro-layer PoW | `rust/shekyl-tor-control-wallet/src/onion_service.rs:146–148` — `HiddenServicePoW` defaults **on**; `rust/shekyl-tor-control-client/src/control/onion.rs:272–292` — PoW throttles rendezvous **arrival**, not egress; over onion the body transfer is symmetric (flow control). `control/actor.rs:1725–1754` — live `ADD_ONION` with PoW. Measurement: [`SP_T3_SKELETON_MEASUREMENT.md`](SP_T3_SKELETON_MEASUREMENT.md) SPIKE-F-15/17/18, §19/§19a | Threat-3 pin: intro flooding is priced; not general Tor lore |
 
@@ -447,8 +447,9 @@ Both callers, every request:
 - `anchor_height` is `tip − archival_reorg_depth_blocks` (720) at
   request time, as a little-endian `u64`, and `anchor_hash` is the
   requester's own block hash at that height. A block 720 deep is the
-  segment-freeze depth (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`,
-  const-asserted equal in the retention KAT): identical on every
+  segment-freeze depth (`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`, generated
+  from the same JSON key and const-asserted equal in
+  `tests/attestation_wire_kat.rs`): identical on every
   honest node's chain, so races at the tip cannot make an honest
   requester's anchor fail, and every miner building on the same tip
   sends the same anchor. It is freshness, not identity: it does not
@@ -1055,8 +1056,12 @@ validated predecessor is at height `h`:
 
 **Constants, single-sourced.** Depth is the existing
 `archival_reorg_depth_blocks` (720, `config/consensus_constants.json`),
-which gains a third consumer; the retention KAT const-asserts it equal
-to `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (`segment.rs`), and the JSON
+which gains a third consumer; `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS`
+(`segment.rs`) is generated from the same key since 2026-09-18, and
+`shekyl-archival-retention/tests/attestation_wire_kat.rs` const-asserts
+`PASS_ANCHOR_DEPTH_BLOCKS` (an alias of retention's generated
+`ARCHIVAL_REORG_DEPTH_BLOCKS`) equal to it — since the dedup that pin
+guards the two `build.rs` readers agreeing, not a hand literal — and the JSON
 comment now names **both** danger directions — lower makes the anchor
 reorg-sensitive and re-introduces honest fork misses; higher lengthens
 the collusive pre-signing lead — plus the `PDM-Q11` `D_max` gate as a

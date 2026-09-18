@@ -213,8 +213,9 @@ until buried beyond max plausible reorg depth in **block** terms:
 tip_height − segment.end_block_height ≥ SPENDABLE_AGE + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS
 ```
 
-(`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720`, same numeric value as
-`ARCHIVAL_REORG_DEPTH_BLOCKS`; height-gated, not position-gated — see
+(`SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` **is** `ARCHIVAL_REORG_DEPTH_BLOCKS` —
+generated from the same `archival_reorg_depth_blocks` key since 2026-09-18,
+720 today; height-gated, not position-gated — see
 [`CT1_ROUND1_PINS.md`](../completed/CT1_ROUND1_PINS.md).) `frozen_segments` records
 `end_block_height` (when the segment's newest leaf entered the tree) and
 `frozen_at_height` (when the freeze was applied). The active frontier stays
@@ -740,7 +741,12 @@ boundary itself.
 there is no clean 10k level. The realized shard size is a genuine tradeoff (shard
 count × per-shard storage × proof-of-storage cost), decided at CT-1 once the
 mainnet leaf-growth rate sets the disk budget; the doc records that the boundary
-is a subtree level, with level 2 the provisional choice pending that sizing.
+is a subtree level. Level 2 was the provisional choice pending that sizing;
+the freeze pipeline round pinned it as `SEGMENT_LEAF_COUNT = 25 992`
+(`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2, with its reversion criteria),
+and since 2026-09-18 the derivation has one home, `shekyl_fcmp::tree`
+(`SEGMENT_LAYER_J`, `leaves_per_segment`), const-asserted against that
+constant on the consensus side.
 
 #### 7.2.3 Position↔height is a presentation lookup
 
@@ -1156,17 +1162,20 @@ canonical tree under replacement at both deepen boundaries.
    remains G1 (would require a future `shekyl-fcmp::tree` change that moves a
    completed subtree's root value); none observed. The only residual is CT-2's
    Rust↔C++ reconstruct-root KAT (end-to-end G2).
-8. **Derive `E` as a subtree level (§7.2.2).** Levels are coarse: 38 / 684 /
-   25,992 / … leaves. No clean ~10k level — level 2 (≈26k) is provisional; confirm
-   against mainnet leaf-growth and the shard-count × per-shard-storage tradeoff.
-   **Tracked in `FOLLOWUPS.md`** (V3.x, with the `ArchivalEngine` shard policy).
+8. **Derive `E` as a subtree level (§7.2.2). CLOSED — pinned at level 2
+   (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2; one home in `shekyl_fcmp::tree`
+   since 2026-09-18).** Levels are coarse: 38 / 684 / 25,992 / … leaves. No
+   clean ~10k level; level 2 (≈26k) was provisional pending mainnet leaf-growth
+   and the shard-count × per-shard-storage tradeoff, and the pipeline round
+   made it `SEGMENT_LEAF_COUNT` with reversion criteria (a CT sizing re-review
+   before genesis, or a V4 width change). Not tracked in `FOLLOWUPS.md`.
 9. **Pin vs evict / prune policy (§7.6).** Minimal wallet prunes non-owned leaves
    of frozen segments to `R_k` but keeps owned-output chunks forever; staker pins
    full shards. The `LeafStore` API must expose both without a V3.x restructure —
    confirm the pin/prune seam is in CT-1's type design, not deferred.
 10. **Freeze-lag depth (§3.4). CLOSED (CT-1 Round 1).** Margin is
-    `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720` (`ARCHIVAL_REORG_DEPTH_BLOCKS`,
-    block counts). Gate is **height-based:**
+    `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` (= `ARCHIVAL_REORG_DEPTH_BLOCKS`, 720,
+    block counts; generated from the same JSON key since 2026-09-18). Gate is **height-based:**
     `tip_height − end_block_height ≥ SPENDABLE_AGE + 720`. Not position-based.
     Pinned in [`CT1_ROUND1_PINS.md`](../completed/CT1_ROUND1_PINS.md).
 11. **Anonymized segment fetch (§7.4).** Wire the source-agnostic fetch to the

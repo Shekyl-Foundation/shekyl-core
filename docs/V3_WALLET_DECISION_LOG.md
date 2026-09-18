@@ -5684,7 +5684,8 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   is imported back. A PR that starts in `segment.rs` discovers this the
   wrong way round. Same site, same PR, as the
   `SEGMENT_LEAF_COUNT == leaves_per_segment()` tie above. **Implementation
-  wrinkle on that tie:** `leaves_per_segment` and `outputs_per_node` are
+  wrinkle on that tie** *(SUPERSEDED 2026-09-18 — landed as described in the
+  LANDED note below; `const fn` since the partition PR)*: `leaves_per_segment` and `outputs_per_node` are
   `pub fn`, not `const fn`, so the equality cannot be a compile-time assert
   as written; and `outputs_per_node`'s loop uses
   `u8::try_from(layer).expect(..)`, which is not const (`Result::expect`
@@ -5698,7 +5699,30 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   all before E3 has anything to import. E3's own two obligations (import
   the partition and define PDM's discard unit in `SegmentId`; run the CT-0
   freeze KAT against its skeleton) are E3's, not this PR's; the FOLLOWUPS
-  row separates the two. (b) **`recon`'s
+  row separates the two. **LANDED 2026-09-18 (partition PR), with one
+  correction to the sketch above:** `shekyl-curve-tree` is only a
+  *dev*-dependency of archival-retention — the manifest entry
+  `shekyl-archival-retention/Cargo.toml:46` sits under the
+  `[dev-dependencies]` header at `:39`, and `path.rs:53–56` records the
+  refusal of the production edge as policy (the consensus crate does not
+  import the wallet-side store crate) — so the assert could not name
+  `shekyl_curve_tree` in the lib. (The sketch quoted `:46` without its
+  section header.) The derivation moved instead to the crate both already depend on and
+  that owns the geometry: `shekyl_fcmp::tree` now holds `SEGMENT_LAYER_J`,
+  `outputs_per_node`, `leaves_per_segment` as `const fn`; curve-tree
+  re-exports them; archival-retention asserts `SEGMENT_LEAF_COUNT ==
+  leaves_per_segment()` compile-time in the production graph, replacing its
+  hand-written width product. The 720 tie landed as the dedup itself, not an
+  assert: `shekyl-curve-tree`'s `build.rs` already read
+  `consensus_constants.json`, so `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` is now
+  generated from `archival_reorg_depth_blocks` — the same key as
+  `ARCHIVAL_REORG_DEPTH_BLOCKS` — and the literal, the interim assert and the
+  CT-1 FOLLOWUPS row are gone (a `cfg(test)` assert was tried first and
+  refused in review: integration-test targets build the lib without
+  `cfg(test)`, so it was skippable). Both doors red-checked. *SUPERSEDED: "the
+  dependency already runs archival-retention → curve-tree" as a production
+  fact; "the assert belongs in archival-retention" for the partition tie —
+  it does, but via `shekyl-fcmp`, not via curve-tree.* (b) **`recon`'s
   oracle is a fact about timing:** `recon.rs:6–13` replicates the daemon's
   C++ leaf-stream derivation bit-exactly, and that duplication is an oracle
   *because* the two implementations are independent. After E3 the daemon's
