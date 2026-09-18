@@ -6934,11 +6934,6 @@ uint64_t Blockchain::get_difficulty_target() const
   return SHEKYL_DAA_TARGET_SECONDS;
 }
 
-std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> Blockchain:: get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const
-{
-  return m_db->get_output_histogram(amounts, unlocked, recent_cutoff, min_count);
-}
-
 std::vector<std::pair<Blockchain::block_extended_info,std::vector<crypto::hash>>> Blockchain::get_alternative_chains() const
 {
   std::vector<std::pair<Blockchain::block_extended_info,std::vector<crypto::hash>>> chains;
