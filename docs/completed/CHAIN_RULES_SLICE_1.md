@@ -125,7 +125,7 @@ never from the candidate (F5's spoof).
 `tip()` PR; `BatchView::tip()` reads through `chain_reads::tip_of`, the
 inherent helper renamed `tip_row`). *Pre-flight text:* `BatchView` today has a
 private `fn tip() -> Result<Option<u64>, StoreError>` (`view.rs:97–108`)
-reading `block_info.last()`. S-CHAIN-R's commit 1 ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md), landed PR #760, archived 2026-09-18)
+reading `block_info.last()`. S-CHAIN-R's commit 1 ([`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) — plan PR #760, increment PR #772, archived 2026-09-18)
 §7, SCR-13) replaces that helper with a private `store/chain_reads.rs`
 (`tip_of`, `cell`, `block_body`) shared by `BatchView` and `ReadSnapshot`, so
 both lanes edit `store/view.rs`. **Order agreed 2026-09-16:** S-CHAIN-R's

@@ -25,11 +25,26 @@ Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
 The unified stamp is `dev` = `eee838d4d` as of 2026-09-18 (§5) — moved by
-the F33 re-key (PR #778) after #775 (`e685ef1cd`) and #774 (`eee838d4d`)
-landed; both were docs-only, so the code tree at `eee838d4d` is
-byte-identical to `02df36ef0`'s (`git diff --stat 02df36ef0 eee838d4d --
-rust src scripts config cmake tests` is empty) and the `02df36ef0`
-verification below applies verbatim to it. *Superseded stamp, retained:*
+the F33 re-key (PR #778) and the S-OUT-KI pre-flight (PR #779), both
+landing after #775 (`e685ef1cd`) and #774 (`eee838d4d`). All were
+docs-only, so the code tree at `eee838d4d` is byte-identical to
+`02df36ef0`'s (`git diff --stat 02df36ef0 eee838d4d -- rust src scripts
+config cmake tests` is empty) and the `02df36ef0` verification below
+applies verbatim to it; #779 re-ran it anyway at that tree —
+`cargo test -p shekyl-chain-store` 242 + 8 doctests green;
+`check_chain_rules_coverage.py --describe` consensus implemented 6 /
+validator-enforced 151 (held-by-cxx 2, enforced 153, ratified 126 / 153),
+policy 0 / 9; `schemas/tables.snap` 51 tables, `SCHEMA_VERSION = 5` — and
+re-read its own rows' code anchors (`SOK-`, the `DRS-*` lead cell, the
+`DRS_E1_SOUT_KI.md` / `DRS_E1_SCHAIN_R.md` document rows; a pre-flight
+lands no code, so the rows are decision-anchored): `spent_keys:
+LmdbHashKey → Present` at `rust/shekyl-chain-store/src/schema.rs:364`,
+`output_amounts` still the `MultimapTableDefinition<u64, U64PrefixBytes>`
+at `:359` (SOK-1's subject), `BatchView::has_key_image` at
+`store/view.rs:151`, `get_leaf_output_index` at
+`src/blockchain_db/blockchain_db.h:2670` and the unresolved
+`get_output_key(0, pos)` at `src/cryptonote_core/curve_tree_path.cpp:67`
+(SOK-10). *Superseded stamp, retained:*
 `02df36ef0` (2026-09-18) — moved by
 the PDM second ruling pass (PR #774), whose rows (`PDM-Q*`, the
 `ARCHIVAL_PRUNED_DAEMON_MODE.md` / `ARCHIVAL_PRUNED_DAEMON_MODE_ROUND.md` /

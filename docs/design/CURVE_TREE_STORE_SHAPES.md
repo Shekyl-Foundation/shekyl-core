@@ -202,7 +202,7 @@ could not tell it from data:
    §5.4.1 CEN-I12).
 2. **`top_block_hash`, daemon (SCR-4):** an empty chain hands back `UINT64_MAX`
    beside `null_hash` — two sentinels, neither distinguishable from data
-   (`DRS_E1_SCHAIN_R.md` §3.4).
+   ([`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) §3.4).
 3. **`meta`, this store (CTS-8):** five `unwrap_or` defaults, so a missing
    `leaf_count` reads as `0`, a missing `prune_disabled` as `false`, and a
    missing `sync_tip` as height `0` — each a value the store could legitimately
@@ -228,7 +228,7 @@ Where the default *is* the semantics — a fresh file's `leaf_count` is zero
 because the tree is empty — `init_tables` writes the cell; the reader still
 does not default. The counter-rule stands too: `Option` stays `Option` where
 the absent value lies *outside* the type's range and no arm differs
-(`DRS_E1_SCHAIN_R.md` §3.4, "`Option` stays `Option` (ruled)").
+([`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) §3.4, "`Option` stays `Option` (ruled)").
 
 Seven tables, seven named shapes. `TypeName`s on disk: `shekyl::Coded<leaf>`,
 `shekyl::Coded<owned_leaf>`, `shekyl::Coded<leaf_meta>`,

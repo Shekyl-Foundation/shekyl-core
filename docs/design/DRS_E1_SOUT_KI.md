@@ -30,13 +30,17 @@ complexity on the ported shape.
 **Why a separate document.** The S-OUT-KI row is one table line naming eight
 `BlockchainDB` methods. Of the eight, **four** become reads here, one
 dissolves into the snapshot handle's own shape (SOK-3), and **three are not
-ported** — two have no caller at HEAD and one is Monero decoy-selection
-tooling the census already flagged (U-7). The four are not four functions:
-the two key-image tests are one membership read, the two output lookups
-are one record read projected two ways, so they land as **four** Rust reads
-(§3.2). The increment's content is the mapping, the absence semantics for a
-dense index (§3.3), and one finding that is not a read at all: the shape
-S-CHAIN-W wrote `output_amounts` in makes this surface's point read a scan
+ported** — one has no caller at all, one has no production route (a unit
+test is its only caller), and one is Monero decoy-selection tooling the
+census already flagged (U-7). The four reads are: **K1** membership
+(`has_key_image`, with `has_key_images` folded into it), **K2** the
+key-image scan (`for_all_key_images`, the digest's), **O1** the stored
+output record (`get_output_key`, from `output_amounts`) and **O2** the
+output's origin (`get_output_tx_and_index`, from `output_txs`) — two
+independent lookups over one dense index, not one record (§3.2). The
+increment's content is the mapping, the absence semantics for a dense index
+(§3.3), and one finding that is not a read at all: the shape in which
+S-CHAIN-W wrote `output_amounts` makes this surface's point read a scan
 (SOK-1, §3.4). Rule 26's pre-flight pass is the instrument; this is the same
 shape as `DRS_E1_SCHAIN_R.md` and stays in `docs/design/` while the
 increment is open.
@@ -181,10 +185,10 @@ wants them, not before (rule 21: no pre-provisioned second arm).
 | `has_key_images` | `have_tx_keyimges_as_spent` (`:3380`) ← `is_key_image_spent` RPC (`rpc_facts_ffi.cpp:915`) | **dissolves into K1** (SOK-3) | The batch form exists to hold one `rtxn` across N keys (`db_lmdb.cpp:3851`–`:3869`). A `ReadSnapshot` *is* one transaction; N calls to K1 on it are the batch. |
 | `for_all_key_images` | the digest oracle (`logical_state_digest.cpp:73`) | **K2** `key_images() -> impl Iterator<Item = Result<KeyImage, StoreError>>` | Order is the table's (`LmdbHashKey`); the one consumer is order-insensitive. |
 | `get_output_key` (single, `db_lmdb.cpp:3728`; batch `:4460`) | `Blockchain::get_output_key` (`blockchain.cpp:2616`) — **no caller**; the path builder reads the DB directly, `db.get_output_key(0, pos)` (`curve_tree_path.cpp:67`); `blockchain_utilities` (LMDB tools, die with LMDB) | **O1** `output(GlobalOutputIndex) -> Result<AtIndex<RecordedOutput>>` | `RecordedOutput { pubkey: OneTimePubkey, commitment: CommitmentBytes, height: BlockHeight, unlock_time: Timelock }` — `OutKey` minus the ids. The batch form (`allow_partial`) dissolves like SOK-3: the caller loops on one snapshot and stops at the first `BeyondCount`. |
-| `get_output_tx_and_index` (single `:3778`; batch `:4506`) | `get_output_key_mask_unlocked` (`blockchain.cpp:2623`–`:2631`) — **no caller**; the histogram's `unlocked` walk (`db_lmdb.cpp:4603`) — not ported | **O2** `output_origin(GlobalOutputIndex) -> Result<AtIndex<OutputOrigin>>` | `OutputOrigin { tx_hash: TxHash, index_in_tx: OutputIndexInTx }` = `OutTx` (`output_txs[output_id]`). Kept although its C++ callers are dead: E2's comparator projects `output_txs` through it, and it is the read that makes SOK-2's coincidence checkable. |
+| `get_output_tx_and_index` (single `:3778`; batch `:4506`) | `get_output_key_mask_unlocked` (`blockchain.cpp:2623`–`:2631`) — **no caller**; the histogram's `unlocked` walk (`db_lmdb.cpp:4603`) — not ported | **O2** `output_origin(GlobalOutputIndex) -> Result<AtIndex<OutTx>>` | `OutTx { tx_hash: TxHash, local_index: OutputIndexInTx }` as it exists (`codec/chain.rs:187`–`:192`; SOK-Q4: re-exported, not renamed) from `output_txs[output_id]`. Kept although its C++ callers are dead: E2's comparator projects `output_txs` through it, and it is the read that makes SOK-2's coincidence checkable. |
 | `for_all_outputs` ×2 (`:4028`, `:4063`) | **none** — `Blockchain::for_all_outputs` (`blockchain.cpp:7029`, `:7034`) has no caller in `src/` or `tests/` | **not ported** (SOK-4) | Zero consumers at HEAD; the row keeps the names. |
 | `get_output_distribution` (`:4635`) | `Blockchain::get_output_distribution` (`blockchain.cpp:2633`) ← `core::get_output_distribution` ← `RpcHandler::get_output_distribution` (`src/rpc/rpc_handler.cpp:29`) — **no RPC route**: `core_rpc_server.cpp` has no `on_get_output_distribution`; the only caller is `tests/unit_tests/output_distribution.cpp:92` | **not ported** (SOK-5) | SCR-2 found the `amount == 0` arm's helper dead; this confirms the whole method is. Its `m_nettype != FAKECHAIN` branch (`blockchain.cpp:2636`) — a rule-71 divergence — dies with it. |
-| `get_output_histogram` (`:4542`) | `on_get_output_histogram` (`src/rpc/core_rpc_server.cpp:1160`; routed `core_rpc_ffi.cpp:273`) — a **live RPC** whose only in-tree client is a regtest asserting the restricted listener *refuses* it (`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:4090`) | **not ported** (SOK-6; SOK-Q3) | Monero decoy-selection tooling: per-amount output counts with `unlocked` / `recent_cutoff` walks. FCMP++ selects no decoys (rule 60; census U-7, `CONSENSUS_RULE_CENSUS_1.md:233`). |
+| `get_output_histogram` (`:4542`) | `on_get_output_histogram` (`src/rpc/core_rpc_server.cpp:1160`; routed `core_rpc_ffi.cpp:273`) — a **live RPC** with two in-tree clients: the daemon CLI command `output_histogram` (`src/daemon/rpc_command_executor.cpp:1204`–`:1226`, remote and local modes) and a regtest asserting the restricted listener *refuses* the whole-chain query (`rust/shekyl-engine-core/src/engine/regtest_e2e.rs:4090`) | **not ported** (SOK-6; SOK-Q3) | Monero decoy-selection tooling: per-amount output counts with `unlocked` / `recent_cutoff` walks. FCMP++ selects no decoys (rule 60; census U-7, `CONSENSUS_RULE_CENSUS_1.md:233`). |
 
 ### 3.3 Absence, faults, and what a read may not do
 
@@ -295,17 +299,46 @@ is nothing a caller could pass but `0` — and *not* because R8b-2 is
 prejudged: if R8b-2 rules the dimension consensus-visible, the read grows a
 parameter and the table needs no change (rule 21 reopening: R8b-2 ruled).
 
-**The three counters that coincide (SOK-2).** With one bucket, three dense
-counters are equal for every output: `output_id` (`output_txs`' count),
-`amount_index` under `0` (the bucket's count), and the curve-tree leaf
-position the path builder passes as `pos` to `get_output_key(0, pos)`. The
-path builder's correctness rests on the third equalling the first two, and
-nothing at HEAD asserts it — it is true by construction of three separate
-`last + 1` counters that happen to advance together. The increment adds the
-belt: after every `connect`, the amount-0 bucket's last index equals
-`output_txs`' last id (SI-9 restated, SOK-Q2), and a test pins that O1 and
-O2 at index *i* describe the same output the leaf at *i* commits to. S-CURVE
-inherits the third leg when it lands its leaf reads.
+**The two counters that coincide, and the third that does not (SOK-2,
+SOK-10 — corrected on PR #779 review).** With one bucket, two dense
+counters are equal for every output: `output_id` (`output_txs`' count) and
+`amount_index` under `0` (the bucket's count). `CT2_DRAIN_ORDER.md` §"What
+'global index' the wallet sees" already records the equality as the fact
+the wallet relies on; nothing in the store asserts it — it is true by
+construction of two separate `last + 1` counters that advance together. The
+increment adds the belt: after every `connect`, the amount-0 bucket's last
+index equals `output_txs`' last id (SI-9 restated, SOK-Q2).
+
+The curve-tree **leaf position is not a third member of that equality.**
+`OutputIndex` is not `TreePosition`: leaves drain in `(maturity, gindex)`
+order, coinbase leaves defer sixty blocks, and the LMDB store keeps
+`output_to_leaf` / `leaf_to_output` for exactly that reason
+(`CT2_DRAIN_ORDER.md:85`; `blockchain_db.h:2670`, `get_leaf_output_index`).
+The first draft of this section asserted the three-way equality and
+proposed a test for it; the review refuted the premise at source, and
+reading the call chain found the defect the wrong premise had been
+covering: the path builder's `read_output_oc` callback passes a **tree
+position** straight to `get_output_key(0, pos)` (`curve_tree_path.cpp:67`;
+`rust/shekyl-fcmp/src/rpc_path.rs:85`–`:89` calls `output_oc(pos)` with the
+same `pos` it hands `leaf(pos)`), never resolving it through
+`get_leaf_output_index`. The pre-extraction C++ did the same
+(`get_output_key(0, i)`, commit `f2df035e7`), so the Rust assembler
+inherited the contract. For any chunk whose leaf order differs from gindex
+order, `chunk_outputs` carries the wrong `(O, I, C)` for those leaves, the
+prover rebuilds the wrong siblings (`proof.rs:377`–`:385`), and the proof
+**fails verification** — fail-closed, so not a soundness hole, but a live
+liveness defect that no current test reaches (a coinbase-only chain drains
+in gindex order). **This is SOK-10, and it is not this surface's to fix**
+(rule 22: named, routed, disclosed): the fix is Rust, in the assembler's
+contract — `PathStore` resolves position → `GlobalOutputIndex` (a
+`leaf_to_output` read, S-CURVE's on redb; `get_leaf_output_index` on LMDB
+today) before `output_oc` — owned by the path-FFI lane (PDM-Q-F9's).
+`FOLLOWUPS.md` row with the falsifier: a chain in which a normal-tx output
+drains before an earlier coinbase's leaf, asserting `chunk_outputs[j]` is
+the output whose leaf sits at position `j`. What this surface owes it is
+already in the design: O1 takes a `GlobalOutputIndex`, so a caller cannot
+hand it a position without a named conversion, which is the shape that
+makes SOK-10 unrepresentable once the resolver exists.
 
 ### 3.5 Types this increment adds to the store crate
 
@@ -335,8 +368,8 @@ reproduces knowingly is in §6.1.
 | Table | Key → value (after §3.4) | Read | Absence | Written by |
 | --- | --- | --- | --- | --- |
 | `spent_keys` | `LmdbHashKey → Present` | K1 membership; K2 scan | none — a set | `connect` (SI-1) |
-| `output_amounts` | `(u64, u64) → Coded<OutKey>` | O1 `get(&(0, i))` | `BeyondCount` at/after the bucket's last; a hole below is SI-9 | `connect` (SI-9) |
-| `output_txs` | `u64 → Coded<OutTx>` | O2 `get(output_id)` | `BeyondCount` at/after `len`; a hole below is SI-9 | `connect` (SI-9) |
+| `output_amounts` | `(u64, u64) → Coded<OutKey>` | O1 `get(&(0, i))` | `BeyondCount` for `i ≥ count` (the bucket's `last + 1`); `i == last` is recorded; a hole below `count` is SI-9 | `connect` (SI-9) |
+| `output_txs` | `u64 → Coded<OutTx>` | O2 `get(output_id)` | `BeyondCount` for `output_id ≥ len`; a hole below `len` is SI-9 | `connect` (SI-9) |
 | `tx_outputs` | `u64 → Coded<TxOutputIndices>` | **not read here** — S-TX's `get_tx_amount_output_indices` | — | `connect` |
 
 ---
@@ -352,7 +385,7 @@ reproduces knowingly is in §6.1.
   belt firing, because a non-zero amount on a connected vout is what CEN-H14
   forbids and the validator admitted it (`StoreInvariantViolated`, never a
   verdict; the validator has the bug). The SOK-2 coincidence (`output_id ==
-  amount_index` under `0`) joins the row.
+  amount_index` under `0`) joins the row; the leaf position does not (SOK-10).
 - **SI-7** — every decode strict, unchanged.
 
 ---
@@ -362,11 +395,12 @@ reproduces knowingly is in §6.1.
 | # | Finding (at `d89f99791`) | Disposition |
 | --- | --- | --- |
 | **SOK-1** | `output_amounts` is a redb multimap whose only lookup is a full iteration of the key's members (redb 4.1.0 has no seek within `MultimapValue`); `get_output_key`'s `MDB_GET_BOTH` seek has no O(log n) equivalent on it. First reader finds the writer's shape unservable. | Keyed tuple table, `SCHEMA_VERSION 5 → 6` (§3.4, SOK-Q1). |
-| **SOK-2** | Three dense counters coincide by construction and nothing asserts it: `output_id`, amount-0 `amount_index`, leaf position (`curve_tree_path.cpp:67` passes a leaf position as an amount-0 index). | Belt on SI-9 + a test (§3.4, SOK-Q2). |
+| **SOK-2** | Two dense counters coincide by construction and nothing asserts it: `output_id` and amount-0 `amount_index` (`CT2_DRAIN_ORDER.md` records the equality as the wallet's assumption). *Corrected on #779 review:* the first draft counted the leaf position as a third; it is not (SOK-10). | Belt on SI-9 (§3.4, SOK-Q2). |
+| **SOK-10** | **(PR #779 review; defect, not this surface's.)** The path builder's `read_output_oc` passes a **tree position** to `get_output_key(0, pos)` (`curve_tree_path.cpp:67`; `rpc_path.rs:85`–`:89`) without `get_leaf_output_index`; leaf order ≠ gindex order (`CT2_DRAIN_ORDER.md:85`), so a reordered chunk yields wrong `chunk_outputs`, wrong rebuilt siblings, a proof that fails verification. Inherited from the pre-extraction C++ (`f2df035e7`). Fail-closed; no current test reaches it. | Routed to the path-FFI lane (Rust fix: `PathStore` resolves position → `GlobalOutputIndex` before `output_oc`); `FOLLOWUPS.md` row with falsifier. O1's `GlobalOutputIndex` parameter is the type that makes the confusion unrepresentable at the store. |
 | **SOK-3** | `has_key_images` and the batch `get_output_key` / `get_output_tx_and_index` exist to hold one LMDB `rtxn` across N lookups. `ReadSnapshot` is that transaction. | Dissolve into K1 / O1 / O2 on one snapshot; no batch API. |
 | **SOK-4** | `Blockchain::for_all_outputs` (two overloads) has no caller in `src/` or `tests/`. | Not ported. |
 | **SOK-5** | `get_output_distribution` has no RPC route (`core_rpc_server.cpp` has no handler; `RpcHandler::get_output_distribution` is reached only from `tests/unit_tests/output_distribution.cpp:92`). Extends SCR-2 from "the `amount == 0` helper is dead" to "the method is". Carries a rule-71 nettype branch (`blockchain.cpp:2636`). | Not ported; branch dies with it. |
-| **SOK-6** | `get_output_histogram` is a live RPC serving Monero decoy selection; census U-7 flagged it 2026-07 as a deletion candidate under RT-9's precedent. Its one in-tree client tests that the restricted listener refuses it. | Not ported; the RPC's fate is SOK-Q3. |
+| **SOK-6** | `get_output_histogram` is a live RPC serving Monero decoy selection; census U-7 flagged it 2026-07 as a deletion candidate under RT-9's precedent. Two in-tree clients: the `shekyld` CLI command `output_histogram` (`rpc_command_executor.cpp:1204`–`:1226`) — the same decoy tooling, one layer up — and a regtest whose assertion is that the restricted listener refuses it. | Not ported; the RPC's fate, and the CLI command's with it, is SOK-Q3. |
 | **SOK-7** | `Blockchain::get_output_key` and `get_output_key_mask_unlocked` (`blockchain.cpp:2616`–`:2631`) have no callers; the live consumer of the underlying DB read bypasses `Blockchain` (`curve_tree_path.cpp:67`). | Note only — C++ dies at cutover; the Rust read is shaped for the live consumer (O1 returns pubkey **and** commitment). |
 | **SOK-8** | `output_amounts` is the one table §11.1(f) left without a value shape: `U64PrefixBytes` is a `Key` type carrying `OutKey` bytes. | Closed by SOK-1 (`Coded<OutKey>`). |
 | **SOK-9** | `has_key_images` initialises its result to `true` (`db_lmdb.cpp:3856`) before overwriting every element — harmless, but the fail-open default is the shape §3.1 of the curve-tree plan names. | Dissolved with SOK-3; noted so it is not re-created. |
@@ -388,7 +422,7 @@ intermediate (O(n) scan) was wrong, and it never ships.
 1. `store: ReadSnapshot::has_key_image + key_images — spent_keys membership shared with BatchView` — K1, K2; the shared body moves to `chain_reads.rs` (SCR-13 shape); tests: membership on a connected chain, the scan equals the connected set, the snapshot sees one state across a concurrent connect. No layout change.
 2. `store: layout v6 — output_amounts is a keyed (amount, amount_index) table; OutKey drops its prefix; MultiInserted retired; SCHEMA_VERSION 5 → 6` — **the one layout commit**: `schema.rs`, `OutKey`, `UndoEntry`, `connect`'s output write and `next_amount_index`, SI-9 restated (SOK-Q2), `check_redb_schema_key_types.py`'s tuple rule, snapshots re-pinned, the `SCHEMA_VERSION` history entry.
 3. `store: delete the multimap machinery — U64PrefixBytes, UndoTarget for MultimapTableDefinition, open_multimap_table` — pure deletion; `undo_tests` that used `OUTPUT_AMOUNTS` as their multimap example are rewritten against the keyed table (no assertion weakened — each names what it now pins).
-4. `store: ReadSnapshot::output / output_origin — AtIndex, RecordedOutput` — O1, O2, `AtIndex<T>` with its `compile_fail` doctests, the SOK-2 coincidence test, `BeyondCount` at the count and SI-9 on a planted hole.
+4. `store: ReadSnapshot::output / output_origin — AtIndex, RecordedOutput` — O1, O2, `AtIndex<T>` with its `compile_fail` doctests, the SOK-2 two-counter test, `BeyondCount` at the count and SI-9 on a planted hole.
 5. `store: DRS §7 row, SI-9 cell, §7.6 UPDATE, index, CHANGELOG` — §10.
 6. (`docs`, if not folded into 5) `DAEMON_RPC_KV_CUTOVER.md` row for `get_output_histogram` per SOK-Q3's ruling.
 
@@ -404,7 +438,7 @@ and 4 are reads in the S-CHAIN-R shape.
 - `check_redb_schema_coverage.py` (bijection) — unchanged; the table keeps its name.
 - The codec snapshot gate — `OutKey` and `UndoLog` fixtures change; the bump in commit 2 is what §11.1(b) demands.
 - `check_drs_c_surface_map.py` — the S-OUT-KI row keeps all eight names.
-- **Extended:** K1/K2 tests (commit 1); the SOK-2 coincidence test, `BeyondCount`, planted-hole SI-9, `AtIndex` `compile_fail` (commit 4); a `range`-based bucket read asserting O(log n) *shape* (a `get`, not an iteration — pinned by the code, not timed).
+- **Extended:** K1/K2 tests (commit 1); the SOK-2 two-counter test, `BeyondCount`, planted-hole SI-9, `AtIndex` `compile_fail` (commit 4); a `range`-based bucket read asserting O(log n) *shape* (a `get`, not an iteration — pinned by the code, not timed).
 - Docs gates: links, code citations, claims, index prefix/table shape, banners, landed-row stamps, surface map.
 
 ---
@@ -413,9 +447,9 @@ and 4 are reads in the S-CHAIN-R shape.
 
 | Q | Question | Default | Why it is a question |
 | --- | --- | --- | --- |
-| **SOK-Q1** | What shape does `output_amounts` take? **A** — keyed `(amount, amount_index) → Coded<OutKey>`; **B** — collapse into one `outputs: u64 → Coded<Output>` (merging `OutTx` + `OutKey`, dropping the amount dimension; `output_id == amount_index == leaf` by construction); **C** — keep the multimap and accept O(n) point reads. | **A.** | C is rejected on SOK-1 (the surface's live consumer does a point read per leaf). B is the designed shape and the one this store would have if drawn fresh — but it drops a dimension whose consensus-visibility is R8b-2's open question; the store increment cannot rule a spec question. A carries the dimension at zero cost to the reader (`get(&(0, i))`), closes §11.1(f), and leaves B a pure layout change under §7.6's reopening the day R8b-2 rules. **If the maintainer rules R8b-2 now** ("storage index choice"), B is the default instead and this row records both rulings. **D — wait for a redb multimap cursor — REJECTED 2026-09-18, researched at source so it is not re-researched:** redb 4.2.0 (2026-08-17) added `Cursor` / `CursorMut` behind `experimental_cursor` — on `Table` only, for bulk sorted insertion, "unstable and may change incompatibly, or be removed, in any release" (its CHANGELOG). redb 4.3.0 (2026-09-14) added `ReadableMultimapTable::{lower_bound, upper_bound}` behind `experimental-api-5`, returning a `MultimapCursor` that is a **stub**: its own doc comment says the type "only reserves the constructors' signatures" and navigation "will be added behind `experimental_cursor`"; the position field is `#[allow(dead_code)]` (upstream PR #1347 — reserving the redb-5 trait surface). The bound is `Bound<K>`, a seek over the *key* tree; no released or reserved signature seeks to a `(key, value)`. The engine can find a value inside a key's collection in O(log n) internally (`remove(key, value)` does), but does not expose it. No milestone, no open issue tracks a value-level seek; the 4.3.0 tarball's CHANGELOG already carries an undated `5.0.0` section. So D has no falsifiable wait, would rest a per-leaf read on an unstable flag of an unreleased major, and even if it landed would buy back only what A already has with stable tuple keys. **Reopen** if redb exposes a stable value-level multimap seek — falsify by `rg 'fn (lower_bound\|seek\|get_value)' src/multimap_table.rs` in the pinned version showing a `(K, V)` bound — and even then A stays the shape; the reopening would only retire the "redb cannot" half of SOK-1's wording. |
-| **SOK-Q2** | How is SI-9 stated for a unique-key `output_amounts`? | Per bucket: `last_index + 1 == next`; whole-table `len() == last + 1` as the density check, valid because one bucket exists; a second bucket at `connect` **is** a breach (CEN-H14's store-side belt). Plus SOK-2: amount-0 `last == output_txs.last`. | The multimap belt needed an end-peek for a compensating hole+duplicate (PR #757 review); unique keys make the duplicate unrepresentable, so the belt simplifies — but only if the single-bucket premise is stated as the premise it is, not assumed. |
-| **SOK-Q3** | `get_output_histogram`: not ported (SOK-6) — and the C++ RPC? **A** — dies at cutover with the LMDB path (the countermand's RECORD-AND-SPECIFY default, SCR-2's precedent); **B** — deleted now (rule 60: decoy-selection tooling; U-7 already recommends it). | **A**, recorded in `DAEMON_RPC_KV_CUTOVER.md` as *not carried*, falsify by `rg on_get_output_histogram src/` after cutover. | B is a C++ deletion PR, the class the countermand routes to cutover; but U-7 is a 2026-07 finding nobody has acted on, and a live RPC that advertises ring-selection data on a chain with no rings is an affordance (RT-9). If the maintainer prefers B it is its own PR, not a commit here. |
+| **SOK-Q1** | What shape does `output_amounts` take? **A** — keyed `(amount, amount_index) → Coded<OutKey>`; **B** — collapse into one `outputs: u64 → Coded<Output>` (merging `OutTx` + `OutKey`, dropping the amount dimension; `output_id == amount_index == leaf` by construction); **C** — keep the multimap and accept O(n) point reads. | **A.** | C is rejected on SOK-1 (the surface's live consumer does a point read per leaf). B is the designed shape and the one this store would have if drawn fresh — but it drops a dimension whose consensus-visibility is R8b-2's open question; the store increment cannot rule a spec question. A carries the dimension at zero cost to the reader (`get(&(0, i))`), closes §11.1(f), and leaves B a pure layout change under §7.6's reopening the day R8b-2 rules. **If the maintainer rules R8b-2 now** ("storage index choice"), B is the default instead and this row records both rulings. **D — wait for a redb multimap cursor — REJECTED 2026-09-18, researched at source so it is not re-researched:** redb 4.2.0 (2026-08-17) added `Cursor` / `CursorMut` behind `experimental_cursor` — on `Table` only, for bulk sorted insertion, "unstable and may change incompatibly, or be removed, in any release" (its CHANGELOG). redb 4.3.0 (2026-09-14) added `ReadableMultimapTable::{lower_bound, upper_bound}` behind `experimental-api-5`, returning a `MultimapCursor` that is a **stub**: its own doc comment says the type "only reserves the constructors' signatures" and navigation "will be added behind `experimental_cursor`"; the position field is `#[allow(dead_code)]` (upstream PR #1347 — reserving the redb-5 trait surface). The bound is `Bound<K>`, a seek over the *key* tree; no released or reserved signature seeks to a `(key, value)`. The engine can find a value inside a key's collection in O(log n) internally (`remove(key, value)` does), but does not expose it. No milestone, no open issue tracks a value-level seek; the 4.3.0 tarball's CHANGELOG already carries an undated `5.0.0` section. So D has no falsifiable wait, would rest a per-leaf read on an unstable flag of an unreleased major, and even if it landed would buy back only what A already has with stable tuple keys. **Reopen** if redb exposes a stable value-level multimap seek — falsify by `rg -e 'fn lower_bound' -e 'fn seek' -e 'fn get_value' src/multimap_table.rs` in the pinned version showing a `(K, V)` bound — and even then A stays the shape; the reopening would only retire the "redb cannot" half of SOK-1's wording. |
+| **SOK-Q2** | How is SI-9 stated for a unique-key `output_amounts`? | Per bucket: `last_index + 1 == next`; whole-table `len() == last + 1` as the density check, valid because one bucket exists; a second bucket at `connect` **is** a breach (CEN-H14's store-side belt). Plus SOK-2: amount-0 `last == output_txs.last` — two counters, not three (SOK-10). | The multimap belt needed an end-peek for a compensating hole+duplicate (PR #757 review); unique keys make the duplicate unrepresentable, so the belt simplifies — but only if the single-bucket premise is stated as the premise it is, not assumed. |
+| **SOK-Q3** | `get_output_histogram`: not ported (SOK-6) — and the C++ RPC, with the `shekyld` CLI command `output_histogram` that fronts it? **A** — both die at cutover with the LMDB path (the countermand's RECORD-AND-SPECIFY default, SCR-2's precedent); **B** — deleted now (rule 60: decoy-selection tooling; U-7 already recommends it). | **A**, recorded in `DAEMON_RPC_KV_CUTOVER.md` as *not carried*, falsify by `rg on_get_output_histogram src/` after cutover. | B is a C++ deletion PR, the class the countermand routes to cutover; but U-7 is a 2026-07 finding nobody has acted on, and a live RPC that advertises ring-selection data on a chain with no rings is an affordance (RT-9). If the maintainer prefers B it is its own PR, not a commit here. |
 | **SOK-Q4** | Is `OutputOrigin` a new name or `OutTx` re-exported? | **`OutTx`, re-exported** — one type, one name; O2 returns it. | A second name for a field-identical struct is the identity-DTO hop CTS-5 and the GUI's rule 27 name. Only a semantic remap earns a second shape; there is none. |
 
 ---
@@ -424,6 +458,7 @@ and 4 are reads in the S-CHAIN-R shape.
 
 - `DAEMON_REDB_STORE.md` §7 S-OUT-KI row: landed stamp, "8 methods → 4 reads (K1, K2, O1, O2); `has_key_images` + batch forms dissolve (SOK-3); three not ported (SOK-4/5/6)"; §7.6's "`output_amounts` keyed verbatim with R8b-2 open" gets `UPDATE`: keyed tuple table at v6, same logical content, R8b-2 still open, arm B named.
 - `STORE_INVARIANT_REGISTER.md` SI-9: the unique-key restatement and the SOK-2 leg.
+- `FOLLOWUPS.md`: the SOK-10 row (this PR) — owner the path-FFI lane, falsifier named.
 - `LMDB_SCHEMA.md` if it carries the redb mapping for `output_amounts`: multimap → keyed tuple.
 - `DAEMON_RPC_KV_CUTOVER.md`: `get_output_histogram` per SOK-Q3.
 - `IMPLEMENTATION_INDEX.md`: `SOK-` row (this PR); `DRS-*` row UPDATE; §7 document rows — this document (this PR), `DRS_E1_SCHAIN_R.md` → completed (this PR).
@@ -436,6 +471,7 @@ and 4 are reads in the S-CHAIN-R shape.
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-18 | **PR #779 review (Copilot: 4 open + 11 suppressed; 15 taken, 0 refuted).** The one that changed the plan was suppressed: the leaf position is **not** a third member of SOK-2's equality — `OutputIndex ≠ TreePosition`, leaves drain in `(maturity, gindex)` order — and reading the call chain behind the wrong premise found **SOK-10**: the path builder passes a tree position to `get_output_key(0, pos)` unresolved (`curve_tree_path.cpp:67`, `rpc_path.rs:85`–`:89`), inherited from the pre-extraction C++; a reordered chunk fails proof verification. Routed to the path-FFI lane with a `FOLLOWUPS.md` row and falsifier; O1's `GlobalOutputIndex` parameter is the store's half. Also taken: the `output_histogram` CLI command joins SOK-6/Q3's caller set; O2 returns `OutTx` as it exists (`local_index`); the `BeyondCount` boundary stated as `≥ count`; preamble reworded (K2 named, two lookups not one record, no-caller vs no-route, the SOK-1 sentence); the redb falsifier without a pipe; `#760` = plan PR, `#772` = increment in the two chain-rules docs; the archived S-CHAIN-R doc's two live instructions marked done; CTS's two name-mentions linked to `completed/`; index stamp moved to `eee838d4d` with its checks re-run. |
 | 2026-09-18 | **Substrate re-check at `eee838d4d`** (#774 PDM-Q second ruling pass + S-PRUNE skeleton, #775 two-store record, #776 curve-tree plan — all docs-only; no `rust/` or `src/` change, anchors hold). One interaction found and recorded in §3.3: `PDM-Q1` grades this surface's output tables CACHE and `spent_keys` KEEP-C; `PDM-Q2`'s predicate discards only the GOOD region, so the dense-index absence model stands, with the reopener named if a CACHE discard is ever ruled. `CURVE_TREE_STORE_SHAPES.md` landed (#776) and is now linked. Nothing in this plan is re-addressed. |
 | 2026-09-18 | **SOK-Q1 arm D (wait for a redb multimap cursor) researched at source and REJECTED**, with the falsifier in the row: 4.2.0's `experimental_cursor` is `Table`-only and self-declared removable; 4.3.0's `MultimapCursor` is a constructor-only stub seeking the key tree, no `(K, V)` bound anywhere; no milestone or issue tracks a value-level seek. Recorded so the next reader of SOK-1 does not re-research it. |
 | 2026-09-18 | **Round 0 executed at `d89f99791`.** Nine findings, four questions with defaults. The finding that shapes the increment is not a read: `output_amounts`' ported multimap has no seek (verified in redb 4.1.0 at source), so the surface's point read is O(n) on it — corrected as a keyed `(amount, amount_index)` table under DRS §7.6's own statement that the comparator projects logical content, with R8b-2 left exactly as open as it was (SOK-1, SOK-Q1). Three of eight methods are not ported (no callers / decoy tooling); the batch forms dissolve into the snapshot. `DRS_E1_SCHAIN_R.md` read and archived by this PR (§2.4). Code commits wait on PR #777. |

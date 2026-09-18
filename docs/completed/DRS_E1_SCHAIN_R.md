@@ -4,7 +4,8 @@
 `3560b80c2` (the tree that merged PR #757, S-CHAIN-W); **round-1 rulings
 taken 2026-09-16 on every §9 question** (each entry carries its ruling
 line-local; Q4 overturned its own default — §3.6). §3 is the contract as
-ruled; §7 the commit sequence, which may start once this document merges.
+ruled; §7 the commit sequence, which may start once this document merges
+(it did — PR #772; every §7 commit is on `dev`).
 The review also minted [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md)
 **§7.6** (the ported partition is transitional; parity first, repair after,
 in Rust; the comparator gates cutover and `ratified / enforced` gates
@@ -694,7 +695,7 @@ gating release (§3.8 points at it).
 - `IMPLEMENTATION_INDEX.md`: `SCR` family and §7 doc row (this PR); the `DRS-*` row `UPDATE` for the increment is the increment PR's (rule 94 §4).
 - `docs/CHANGELOG.md`: one Unreleased line at landing (`SCHEMA_VERSION` 2 → 5 across commits 2a/2b and the review's `Present` shape is a rebuild; the reads are a crate API).
 - **Archive:** [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) becomes **eligible** when commit 5 lands (its stated archive condition, "S-CHAIN-R has consumed the codecs", is met once every S-CHAIN-W codec has a snapshot read) and is **`git mv`'d** to `docs/completed/` in commit 7, the increment's documentation commit — same PR, two commits apart. Its index §7 row moves with it in commit 7.
-- This document: banner flips to *landed* at the increment PR; archive-or-contract per index §8 when S-OUT-KI's pre-flight has read it (the next surface's pre-flight is the reader this document exists for).
+- This document: banner flips to *landed* at the increment PR; archive-or-contract per index §8 when S-OUT-KI's pre-flight has read it — **DONE 2026-09-18: archived by PR #779** (`DRS_E1_SOUT_KI.md` §2.4) (the next surface's pre-flight is the reader this document exists for).
 
 ---
 
