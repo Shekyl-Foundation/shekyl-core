@@ -24,10 +24,13 @@ at pre-flight take DRS-E's next free series (rule 94 §1), not a `PDM-` id.
 ## 1. Charter
 
 S-PRUNE is the **Rust-only successor to the Monero-era stripe engine**, per
-`PDM-Q-S0` (no C++ landing before the cutover) and `PDM-Q7` (the stripe
-engine is not an extraction: five of its six methods are the stripe engine
-and die at `DRS-E*`; the transferable triple — assignment / advertisement /
-coverage, `PDM-Q-F17` — is read from, not ported). [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
+`PDM-Q-S0` (no C++ landing before the cutover) and `PDM-Q7` (**RULED
+2026-09-18: the engine is removed completely; nothing of it survives as
+design**). Not an extraction and not a port: five of its six methods are
+the stripe engine and die at `DRS-E*`; `PDM-Q-F17`'s triple — assignment /
+advertisement / coverage — is **not** read from, because each has a
+successor that is not the engine (the bond, the bond, price). S-PRUNE reads
+nothing from `src/common/pruning.{h,cpp}`. [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
 §7's S-PRUNE row is **NOT EXTRACTED** for that reason and already carries two
 contracts (§5 below) with no home; this document is the home.
 
@@ -180,5 +183,8 @@ precondition.
 `prune_tx_data`, `update_pruning`; `PDM-Q7`) **die at `DRS-E*`** with the
 C++ store, under `PDM-Q-S0`. Not touched by this surface's increments; named
 here so the deletion is scheduled, not discovered. The `u32` seed arithmetic
-(`PDM-Q-F17`) is read from before it dies, if `PDM-Q9` takes it as the
-holdings advertisement.
+(`PDM-Q-F17`) is **not** read from — `PDM-Q7` refuted the triple; the
+holdings advertisement is the bond. `--sync-pruned-blocks`
+(`cryptonote_core.cpp:127`) dies with them, **under `PDM-Q5`'s rejection**
+(trust-the-txid with no anchor), recorded on its own FOLLOWUPS row so the
+reason outlives the engine.
