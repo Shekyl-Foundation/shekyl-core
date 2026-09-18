@@ -16,9 +16,12 @@
 //! This crate is the canonical home for these types per
 //! `18-type-placement.mdc` (state-shaped types live with a foundational
 //! semantic owner, not in `shekyl-curve-tree` where some predecessors
-//! incidentally landed). It is the PR-0 deliverable of
-//! `docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md`; downstream crates re-export
-//! or import from here rather than redefining.
+//! incidentally landed). It is the vocabulary crate of
+//! `docs/design/RAW_TYPE_NEWTYPE_MIGRATION.md` (`RTN-1…RTN-N`); downstream
+//! crates import from here rather than redefining. `#![no_std]` so a leaf
+//! math crate (`shekyl-difficulty`) can consume the same types the store
+//! and wallet do — refusing that edge is how `BlockHeight` got redefined
+//! as `u64` in the DAA.
 //!
 //! ## Two clocks, three types
 //!
@@ -71,6 +74,7 @@
 //! assert_as_ref::<shekyl_types::KeyImage>();
 //! ```
 
+#![no_std]
 #![deny(unsafe_code)]
 
 use core::fmt;
@@ -84,7 +88,7 @@ macro_rules! scalar_u64 {
         $(#[$doc])*
         #[derive(
             Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default,
-            ::serde::Serialize, ::serde::Deserialize,
+            ::serde::Serialize, ::serde::Deserialize, ::zeroize::Zeroize,
         )]
         #[cfg_attr(feature = "schema", derive(::postcard_schema::Schema))]
         #[serde(transparent)]
@@ -114,6 +118,12 @@ macro_rules! scalar_u64 {
             #[must_use]
             pub const fn is_zero(self) -> bool {
                 self.0 == 0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(&self.0, f)
             }
         }
     };
@@ -394,6 +404,38 @@ scalar_u64! {
     SettlementEpoch
 }
 
+scalar_u64! {
+    /// An archival **shard** identifier — a corpus partition, not a height,
+    /// epoch, or gindex.
+    ///
+    /// Bond-post `shard_ids`, serve-credit `(P, s, E)`, and emission preimages
+    /// all name shards. A bare `u64` here transposes against [`SettlementEpoch`]
+    /// or [`BlockHeight`] and binds the wrong commitment.
+    ShardId
+}
+
+scalar_u64! {
+    /// A leaf's position **inside a frozen segment** (the archival serve unit),
+    /// not a ledger-wide [`GlobalOutputIndex`] and not a curve-tree
+    /// drain-order `TreePosition`.
+    LeafIndex
+}
+
+scalar_u64! {
+    /// A block's **weight** (serialized size used by the median / long-term
+    /// window), not an amount and not a difficulty.
+    ///
+    /// Distinct from [`LongTermWeight`] so a connect fact cannot pass one
+    /// where the other is expected.
+    BlockWeight
+}
+
+scalar_u64! {
+    /// A block's **long-term weight** (the clipped weight that feeds the
+    /// long-term median), not [`BlockWeight`] and not an amount.
+    LongTermWeight
+}
+
 hash32! {
     /// A block identity hash.
     ///
@@ -450,6 +492,34 @@ hash32! {
     /// from [`PrunableHash`] so the two components can never be swapped when
     /// a store hands them back for reconstruction.
     PqcAuthHash
+}
+
+hash32! {
+    /// The block-header **attestation root** (archival credit-wire witness
+    /// commitment), not a [`CurveTreeRoot`] and not a [`BlockHash`].
+    ///
+    /// The wire header stores `[u8; 32]`; convert at the edge via
+    /// [`AttestationRoot::from_bytes`] / [`AttestationRoot::as_bytes`].
+    AttestationRoot
+}
+
+hash32! {
+    /// An output's **one-time public key** (CryptoNote `P = H_s(rA) G + B`),
+    /// 32-byte compressed Ed25519 encoding.
+    ///
+    /// Distinct from [`KeyImage`] (the spend identifier `I = x · H_p(P)`),
+    /// from [`CommitmentBytes`] (the amount commitment), and from [`TxHash`].
+    /// On-chain public; full-hex `Debug`.
+    OneTimePubkey
+}
+
+hash32! {
+    /// An output's **Pedersen amount commitment** as 32 compressed bytes.
+    ///
+    /// Distinct from [`OneTimePubkey`] and from [`KeyImage`]. The curve type
+    /// lives in `shekyl-curve-primitives`; this is the store/wire *name* so a
+    /// commitment cannot be passed where a pubkey is expected.
+    CommitmentBytes
 }
 
 hash32! {
@@ -652,6 +722,12 @@ impl Add<BlockCount> for BlockCount {
     }
 }
 
+impl BlockCount {
+    /// A one-block span. Consecutive-height and drain-cutoff arithmetic
+    /// uses this instead of punching through to `u64`.
+    pub const ONE: Self = Self(1);
+}
+
 impl BlockHeight {
     /// Advance by a span, returning `None` on overflow.
     #[must_use]
@@ -678,14 +754,49 @@ impl BlockHeight {
     pub const fn saturating_sub(self, earlier: BlockHeight) -> BlockCount {
         BlockCount(self.0.saturating_sub(earlier.0))
     }
+
+    /// Rewind by a span, saturating at genesis rather than panicking.
+    ///
+    /// [`Sub<BlockCount>`](core::ops::Sub) panics below genesis; drain
+    /// cutoffs and height-0 predecessors need a floor.
+    #[must_use]
+    pub const fn saturating_sub_count(self, rhs: BlockCount) -> BlockHeight {
+        BlockHeight(self.0.saturating_sub(rhs.0))
+    }
 }
 
 impl Timestamp {
+    /// Unix seconds below this are height-shaped. Invoice minting
+    /// (CLI `--expiry`, wallet-RPC `create_payment_request` / `make_uri`)
+    /// refuses them so a chain instant cannot be stored as a wall-clock
+    /// (RTN-6). Block timestamps are not gated here.
+    pub const INVOICE_UNIX_FLOOR: u64 = 1_000_000_000;
+
+    /// Wrap Unix seconds as an invoice clock, or `None` when `secs` is
+    /// below [`Self::INVOICE_UNIX_FLOOR`].
+    #[must_use]
+    pub const fn from_invoice_unix(secs: u64) -> Option<Self> {
+        if secs < Self::INVOICE_UNIX_FLOOR {
+            None
+        } else {
+            Some(Timestamp(secs))
+        }
+    }
+
     /// Whole seconds elapsed since an earlier instant, returning `None` if
     /// `earlier` is actually ahead of `self` (a clock that went backwards).
     #[must_use]
     pub const fn checked_secs_since(self, earlier: Timestamp) -> Option<u64> {
         self.0.checked_sub(earlier.0)
+    }
+
+    /// Advance by whole seconds, returning `None` on `u64` overflow.
+    #[must_use]
+    pub const fn checked_add_secs(self, secs: u64) -> Option<Timestamp> {
+        match self.0.checked_add(secs) {
+            Some(v) => Some(Timestamp(v)),
+            None => None,
+        }
     }
 }
 

@@ -169,7 +169,7 @@ fn verdict_reaches_the_ledger_row_and_the_balance() {
         sender_tx_hash,
         "the row names the sender's transaction (rule 82)"
     );
-    assert!(!td.is_spendable(u64::MAX, &no_locks()));
+    assert!(!td.is_spendable(shekyl_types::BlockHeight::from_raw(u64::MAX), &no_locks()));
 
     let amount = td.amount();
     let summary = BalanceSummary::compute(&ledger.transfers, u64::MAX, &no_locks());

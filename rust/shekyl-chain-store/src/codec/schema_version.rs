@@ -27,7 +27,7 @@ use super::{Canonical, CodecError};
 /// - `2` — DRS-E1 increment 3 (S-CHAIN-W): the `undo_log` table (first
 ///   Rust-only table; `TableOrdinal` 49) and its `UndoLog` row codec
 ///   (commit 1); the connect write set's value codecs — `BlockInfo`,
-///   `TxIndex`, `OutTx`, `OutKey`, `TxOutputIndices`, `CurveRoot` — pinned
+///   `TxIndex`, `OutTx`, `OutKey`, `TxOutputIndices`, `CurveTreeRoot` — pinned
 ///   to the LMDB layouts minus the collapsed key (commit 2). Ordinals are
 ///   now load-bearing, so any later reorder **or removal** in the `tables!`
 ///   list is also a bump.

@@ -32,13 +32,13 @@
 mod check_hash_corpus;
 
 use check_hash_corpus::CHECK_HASH_VECTORS;
-use shekyl_difficulty::check_hash;
+use shekyl_difficulty::{check_hash, Difficulty};
 
 /// The locked C++-captured corpus must match bit-for-bit.
 #[test]
 fn matches_cpp_oracle_corpus() {
     for (idx, (hash, difficulty, expected)) in CHECK_HASH_VECTORS.iter().enumerate() {
-        let got = check_hash(hash, *difficulty);
+        let got = check_hash(hash, Difficulty::from_raw(*difficulty));
         assert_eq!(
             got, *expected,
             "corpus vector #{idx}: hash={hash:02x?} difficulty={difficulty} \
@@ -114,7 +114,7 @@ fn reference_check_hash(hash: &[u8; 32], difficulty: u128) -> bool {
 fn agrees_with_independent_reference_on_corpus() {
     for (hash, difficulty, _) in &CHECK_HASH_VECTORS {
         assert_eq!(
-            check_hash(hash, *difficulty),
+            check_hash(hash, Difficulty::from_raw(*difficulty)),
             reference_check_hash(hash, *difficulty),
             "reference disagreement: hash={hash:02x?} difficulty={difficulty}",
         );
@@ -130,7 +130,7 @@ proptest::proptest! {
         difficulty in proptest::num::u128::ANY,
     ) {
         proptest::prop_assert_eq!(
-            check_hash(&hash, difficulty),
+            check_hash(&hash, Difficulty::from_raw(difficulty)),
             reference_check_hash(&hash, difficulty)
         );
     }
@@ -154,6 +154,6 @@ proptest::proptest! {
         } else {
             difficulty <= u128::from(255u8 / b)
         };
-        proptest::prop_assert_eq!(check_hash(&hash, difficulty), golden);
+        proptest::prop_assert_eq!(check_hash(&hash, Difficulty::from_raw(difficulty)), golden);
     }
 }

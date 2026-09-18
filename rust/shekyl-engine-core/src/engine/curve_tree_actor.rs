@@ -446,12 +446,13 @@ impl Message<VerifyRoot> for CurveTreeActor {
         // error from `root_at` (e.g. `Poisoned`) propagates as-is; only a
         // genuine divergence becomes `RootMismatch`.
         let got = self.client.root_at(msg.height)?;
-        if got == msg.expected_root {
+        let expected = shekyl_curve_tree::CurveTreeRoot::from_bytes(msg.expected_root);
+        if got == expected {
             Ok(())
         } else {
             Err(ClientError::RootMismatch {
                 height: msg.height,
-                expected: msg.expected_root,
+                expected,
                 got,
             })
         }
@@ -466,7 +467,9 @@ impl Message<RootAndDepthAt> for CurveTreeActor {
         msg: RootAndDepthAt,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.client.root_and_depth_at(msg.height)
+        self.client
+            .root_and_depth_at(msg.height)
+            .map(|(root, depth)| (root.to_bytes(), depth))
     }
 }
 
@@ -820,7 +823,7 @@ impl CurveTreeHandle {
     /// Read the tree's authoritative resume cursor
     /// ([`CurveTreeClient::ingested_tip_height`]): the last ingested height, or
     /// `None` when fresh. The forward / backfill driver calls this every
-    /// iteration to compute its next height (`tip + 1`, `BlockHeight(0)` when
+    /// iteration to compute its next height (`tip + 1`, `BlockHeight::from_raw(0)` when
     /// `None`) instead of holding a local frontier (D2). On a stopped actor it
     /// returns [`CurveTreeHandleError::Unavailable`]; the read itself never
     /// produces [`CurveTreeHandleError::Client`].
@@ -1045,13 +1048,13 @@ mod tests {
         // Ingest empty blocks 0..=2 → persisted cursor at height 2.
         for h in 0..=2 {
             handle
-                .ingest(BlockHeight(h), Arc::new(Vec::new()))
+                .ingest(BlockHeight::from_raw(h), Arc::new(Vec::new()))
                 .await
                 .expect("ingest empty block");
         }
         assert_eq!(
             handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight(2)),
+            Some(BlockHeight::from_raw(2)),
             "three consecutive ingests leave the cursor at height 2"
         );
 
@@ -1085,24 +1088,24 @@ mod tests {
         // (a) resume-from-store: the persisted cursor survived the fail-stop.
         assert_eq!(
             handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight(2)),
+            Some(BlockHeight::from_raw(2)),
             "respawn resumes from the persisted store cursor (no genesis replay)"
         );
         // (b) propagation: the clone taken before the respawn observes the
         // fresh actor through the shared cell — whole heal, not partial.
         assert_eq!(
             clone.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight(2)),
+            Some(BlockHeight::from_raw(2)),
             "the pre-respawn clone observes the respawned actor via the shared cell"
         );
         // And ingest resumes at cursor+1 through the clone.
         clone
-            .ingest(BlockHeight(3), Arc::new(Vec::new()))
+            .ingest(BlockHeight::from_raw(3), Arc::new(Vec::new()))
             .await
             .expect("ingest resumes at cursor+1 after respawn");
         assert_eq!(
             handle.ingested_tip_height().await.expect("cursor read"),
-            Some(BlockHeight(3)),
+            Some(BlockHeight::from_raw(3)),
             "post-respawn ingest advances the shared cursor seen by every clone"
         );
     }
@@ -1138,7 +1141,7 @@ mod tests {
     }
 
     /// Cursor-read `ask` round-trip on a fresh client returns `None` — the
-    /// `BlockHeight(0)` resume point for a from-genesis ingest (D2). This pins
+    /// `BlockHeight::from_raw(0)` resume point for a from-genesis ingest (D2). This pins
     /// the transport + reply type + collapse for [`IngestedTipHeight`]; the
     /// non-`None` (post-ingest, post-rollback) cursor behavior is proven at the
     /// client level (`ingested_tip_height_getter_tracks_cursor`) and exercised

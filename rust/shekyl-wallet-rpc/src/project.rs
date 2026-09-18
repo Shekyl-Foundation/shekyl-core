@@ -274,11 +274,11 @@ pub fn transfer_view(
         amount: atomic_units_string(td.amount()),
         fee: "0".to_owned(),
         // Ledger rows are scanner-observed, so they are always mined.
-        block_height: Some(i64::try_from(td.block_height).unwrap_or(i64::MAX)),
+        block_height: Some(i64::try_from(td.block_height.to_raw()).unwrap_or(i64::MAX)),
         state: transfer_state(td, spend_locks),
         spent_height: td
             .spent_height
-            .map(|h| i64::try_from(h).unwrap_or(i64::MAX)),
+            .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX)),
         unspendable_reason: unspendable_reason_string(td),
         // Receive-side row, so attribution is always meaningful here.
         attribution: Some(attribution_view(&td.receive_attribution)),

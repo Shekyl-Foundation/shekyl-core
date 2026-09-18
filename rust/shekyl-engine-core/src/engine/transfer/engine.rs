@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use shekyl_curve_tree::{
-    select_reference_height, should_reanchor, two_sided_reference_height, AssembleInput,
-    BlockHeight, Gindex, ReferenceBlock, TwoSidedRefusal, REF_ANCHOR_AGE,
+    select_reference_height, should_reanchor, two_sided_reference_height, AssembleInput, BlockHash,
+    BlockHeight, CurveTreeRoot, ReferenceBlock, TwoSidedRefusal, REF_ANCHOR_AGE,
 };
 use shekyl_engine_state::LedgerBlock;
 use shekyl_units::AtomicUnits;
@@ -42,7 +42,7 @@ use super::super::tx_counts::{InputCount, OutputCount};
 use super::super::tx_fee_model::{build_fee_directive, fee_rate_for_priority};
 
 use super::support::{
-    build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
+    assemble_input, build_error_kind, fail_build_after_attempted, map_fee_estimator_error,
     map_handle_err_to_reanchor, map_output_selector_error, map_signer_error,
     release_output_locks_for, with_pending_tx_state_mut, TreeSpendGate,
 };
@@ -287,8 +287,8 @@ where
     /// canonical hash, not a retained fork history.
     pub(super) fn reference_orphaned(&self, reference: &ReferenceBlock) -> bool {
         self.ledger
-            .with_ledger_block(|ledger| ledger.block_hash_at(reference.height.0).copied())
-            != Some(reference.block_hash)
+            .with_ledger_block(|ledger| ledger.block_hash_at(reference.height.to_raw()).copied())
+            != Some(reference.block_hash.to_bytes())
     }
 
     #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
@@ -425,7 +425,7 @@ where
             let reference_height = if c2_active {
                 reference
                     .as_ref()
-                    .map(|r| r.height.0)
+                    .map(|r| r.height.to_raw())
                     .or_else(|| select_reference_height(synced))
             } else {
                 None
@@ -456,12 +456,12 @@ where
                     // C2 active: spendability is decided against the *reference*
                     // height, not the per-output eligible height.
                     Some(rh) => {
-                        if td.eligible_height > rh {
+                        if td.eligible_height.to_raw() > rh {
                             // Too fresh for the reference block — not in the tree
                             // there even if its leaf is already ingested.
                             let raw = amount.to_raw();
                             not_yet_spendable_total = not_yet_spendable_total.saturating_add(raw);
-                            not_yet_spendable.push((td.eligible_height, raw));
+                            not_yet_spendable.push((td.eligible_height.to_raw(), raw));
                         } else if tree_gate.covers(rh) {
                             // The tree has reached the reference height, so its
                             // root is reconstructable and every `eligible <= rh`
@@ -485,7 +485,7 @@ where
                     // decides (`Unenforced` ⇒ covers all), preserving the
                     // no-tree path.
                     None => {
-                        if tree_gate.covers(td.eligible_height) {
+                        if tree_gate.covers(td.eligible_height.to_raw()) {
                             spendable_now_total =
                                 spendable_now_total.saturating_add(amount.to_raw());
                             candidates.push(OutputCandidate { index: idx, amount });
@@ -768,11 +768,7 @@ where
                 let td = transfers.get(index).ok_or(SendError::CannotSign {
                     reason: "selected transfer index out of range",
                 })?;
-                assemble_inputs.push(AssembleInput {
-                    gindex: Gindex(td.global_output_index),
-                    output_key: td.key.compress().to_bytes(),
-                    commitment: td.commitment.calculate().compress().to_bytes(),
-                });
+                assemble_inputs.push(assemble_input(td));
             }
             Ok::<_, SendError>(assemble_inputs)
         })?;
@@ -863,7 +859,7 @@ where
                     reason: "selected transfer index out of range at commit",
                 });
             };
-            if td.global_output_index != ai.gindex.0 {
+            if td.global_output_index != ai.gindex {
                 return Err(SendError::CannotSign {
                     reason: "selected transfer shifted under the transaction before commit",
                 });
@@ -983,7 +979,7 @@ where
             recipients: summary,
             // Fresh build: generation 0, anchored at the resolved reference.
             content_gen: 0,
-            reference_height: reference.height.0,
+            reference_height: reference.height.to_raw(),
         };
 
         emit_pending_tx_diagnostic(
@@ -1093,7 +1089,7 @@ where
                 .ingested_tip_height()
                 .await
                 .map_err(|err| map_handle_err_to_reanchor(&err))?
-                .map(|bh| bh.0);
+                .map(shekyl_types::BlockHeight::to_raw);
             let ingested = covered_through.ok_or(ReanchorError::ReferenceResyncing {
                 detail: "curve tree has not ingested any block yet",
             })?;
@@ -1121,7 +1117,7 @@ where
                     }
                 })?;
             let (curve_tree_root, depth) = handle
-                .reference_root_and_depth(BlockHeight(reference_height))
+                .reference_root_and_depth(BlockHeight::from_raw(reference_height))
                 .await
                 .map_err(|err| map_handle_err_to_reanchor(&err))?;
             let reference = match self
@@ -1129,9 +1125,9 @@ where
                 .with_ledger_block(|ledger| ledger.block_hash_at(reference_height).copied())
             {
                 Some(block_hash) => ReferenceBlock {
-                    height: BlockHeight(reference_height),
-                    curve_tree_root,
-                    block_hash,
+                    height: BlockHeight::from_raw(reference_height),
+                    curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+                    block_hash: BlockHash::from_bytes(block_hash),
                 },
                 None => {
                     return Err(ReanchorError::ReferenceResyncing {
@@ -1195,11 +1191,7 @@ where
                                 .ok_or(SendError::CannotSign {
                                     reason: "selected-input sum overflowed during re-anchor",
                                 })?;
-                        assemble_inputs.push(AssembleInput {
-                            gindex: Gindex(td.global_output_index),
-                            output_key: td.key.compress().to_bytes(),
-                            commitment: td.commitment.calculate().compress().to_bytes(),
-                        });
+                        assemble_inputs.push(assemble_input(td));
                     }
                     Ok::<_, SendError>((assemble_inputs, covered))
                 })
@@ -1292,7 +1284,7 @@ where
             let still_canonical = self
                 .ledger
                 .with_ledger_block(|ledger| ledger.block_hash_at(reference_height).copied())
-                == Some(reference.block_hash);
+                == Some(reference.block_hash.to_bytes());
             if !still_canonical || should_reanchor(current_tip, reference_height) {
                 last_resync = Some(ReanchorError::ReferenceResyncing {
                     detail: "reference re-staled during the prover run",
@@ -1408,8 +1400,8 @@ where
 
         // Staleness decision — ledger reads only, no pending-tx lock held (F-J).
         let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
-        let stale =
-            should_reanchor(current_tip, reference.height.0) || self.reference_orphaned(&reference);
+        let stale = should_reanchor(current_tip, reference.height.to_raw())
+            || self.reference_orphaned(&reference);
 
         // --- re-anchor if stale (three-phase, lock-free prover) ---
         if stale {
@@ -1530,7 +1522,7 @@ where
                             panic!("dispatch: output_locks references missing transfer index {idx}")
                         });
                         shekyl_engine_state::SendInputRef {
-                            gindex: td.global_output_index,
+                            gindex: td.global_output_index.to_raw(),
                             amount: td.amount().to_raw(),
                         }
                     })

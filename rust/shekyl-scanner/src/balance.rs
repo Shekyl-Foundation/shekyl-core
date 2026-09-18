@@ -86,7 +86,8 @@ impl BalanceSummary {
                 continue;
             }
 
-            let timelock_satisfied = current_height >= td.eligible_height;
+            let timelock_satisfied =
+                shekyl_types::BlockHeight::from_raw(current_height) >= td.eligible_height;
 
             if !timelock_satisfied {
                 summary.locked_by_timelock = accumulate(summary.locked_by_timelock, amount);
@@ -110,9 +111,9 @@ mod tests {
         use crate::transfer::SPENDABLE_AGE;
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes([0u8; 32]),
-            internal_output_index: 0,
-            global_output_index: 0,
-            block_height: height,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(0),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(0),
+            block_height: shekyl_types::BlockHeight::from_raw(height),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ZERO,
             commitment: Commitment::new(Scalar::ZERO, amount),
@@ -123,7 +124,7 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: height + SPENDABLE_AGE,
+            eligible_height: shekyl_types::BlockHeight::from_raw(height) + SPENDABLE_AGE,
             frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
@@ -195,7 +196,7 @@ mod tests {
     #[test]
     fn awaiting_confirmation_excluded_from_unlocked() {
         let mut td = make_td(1000, 50);
-        td.global_output_index = 77;
+        td.global_output_index = shekyl_types::GlobalOutputIndex::from_raw(77);
         let locks = locks_over(77, [7u8; 32]);
         let transfers = vec![td];
         let summary = BalanceSummary::compute(&transfers, 100, &locks);
@@ -210,7 +211,7 @@ mod tests {
     #[test]
     fn spent_row_supersedes_its_journal_lock() {
         let mut td = make_td(1000, 50);
-        td.global_output_index = 78;
+        td.global_output_index = shekyl_types::GlobalOutputIndex::from_raw(78);
         td.spent = true;
         let locks = locks_over(78, [8u8; 32]);
         let summary = BalanceSummary::compute(&[td], 100, &locks);

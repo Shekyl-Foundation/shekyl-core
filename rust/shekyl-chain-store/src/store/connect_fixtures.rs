@@ -8,7 +8,9 @@
 //! root the connect of the parent wrote.
 
 use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
-use shekyl_types::CurveTreeRoot;
+use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_types::{BlockWeight, CurveTreeRoot, LongTermWeight};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use super::store_tests::TestErr;
@@ -107,11 +109,13 @@ pub(super) fn candidate(height: u64, previous: [u8; 32], listed: Vec<Transaction
 
 pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
     ConnectFacts {
-        weight: Fact::passed_through(1_000 + height),
-        long_term_weight: Fact::passed_through(900 + height),
-        cumulative_difficulty: Fact::passed_through(u128::from(height + 1) * 100),
-        coins_generated: Fact::passed_through((height + 1) * 1_000_000),
-        burned: Fact::passed_through(burned),
+        weight: Fact::passed_through(BlockWeight::from_raw(1_000 + height)),
+        long_term_weight: Fact::passed_through(LongTermWeight::from_raw(900 + height)),
+        cumulative_difficulty: Fact::passed_through(CumulativeDifficulty::from_raw(
+            u128::from(height + 1) * 100,
+        )),
+        coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
+        burned: Fact::passed_through(AtomicUnits::from_raw(burned)),
         root_after: Fact::passed_through(CurveTreeRoot::from_bytes(
             [0xc0 + u8::try_from(height).expect("small"); 32],
         )),

@@ -18,7 +18,8 @@
 //! for genesis short-circuit, invalid count, overflow, and the
 //! §5.3 step-8 boundary live in `tests/edge_cases.rs`.
 
-use shekyl_difficulty::{lwma1_next, N, N_USIZE, T_SECONDS};
+use shekyl_difficulty::{lwma1_next, CumulativeDifficulty, Difficulty, N, N_USIZE, T_SECONDS};
+use shekyl_types::{BlockHeight, Timestamp};
 
 /// Unix-epoch base anchor matching `tests/phase0/preflight_outofseq.cpp`
 /// line 114 (`B = 1_700_000_000`). The Rust implementation itself does
@@ -46,14 +47,26 @@ const B: u64 = 1_700_000_000;
 const AVG_D: u128 = 1_000_000;
 
 /// Build `cumulative_difficulties[0..=N] = i * AVG_D`.
-fn cd_window() -> Vec<u128> {
-    (0..=N).map(|i| u128::from(i) * AVG_D).collect()
+fn cd_window() -> Vec<CumulativeDifficulty> {
+    (0..=N)
+        .map(|i| CumulativeDifficulty::from_raw(u128::from(i) * AVG_D))
+        .collect()
+}
+
+fn ts_window(raw: impl IntoIterator<Item = u64>) -> Vec<Timestamp> {
+    raw.into_iter().map(Timestamp::from_raw).collect()
 }
 
 /// `chain_height` for §8.1 vectors: window spans heights `0..=N`, so
 /// the chain tip is at height `N` and the algorithm computes the
 /// difficulty for the next block at height `N+1`.
-const CHAIN_HEIGHT: u64 = N;
+fn chain_height() -> BlockHeight {
+    BlockHeight::from_raw(N)
+}
+
+fn expected(v: u128) -> Difficulty {
+    Difficulty::from_raw(v)
+}
 
 // (1) Perfectly stable hashrate (§8.1).
 // `timestamps[i] = B + i*T` → `next_D = 990_000` (the 1% bias-factor
@@ -61,11 +74,12 @@ const CHAIN_HEIGHT: u64 = N;
 // for the stochastic-vs-deterministic explanation).
 #[test]
 fn vector_1_perfectly_stable_hashrate() {
-    let ts: Vec<u64> = (0..=N).map(|i| B + i * T_SECONDS).collect();
+    let ts = ts_window((0..=N).map(|i| B + i * T_SECONDS));
     let cd = cd_window();
-    let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 1 must compute");
+    let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 1 must compute");
     assert_eq!(
-        next_d, 990_000,
+        next_d,
+        expected(990_000),
         "DAA_LWMA1.md §8.1 stable-hashrate vector: expected 990_000, \
          got {next_d}"
     );
@@ -75,11 +89,12 @@ fn vector_1_perfectly_stable_hashrate() {
 // `timestamps[i] = B + i*(T/2)` → `next_D = 1_980_000`.
 #[test]
 fn vector_2_sudden_2x_hashrate_increase() {
-    let ts: Vec<u64> = (0..=N).map(|i| B + i * (T_SECONDS / 2)).collect();
+    let ts = ts_window((0..=N).map(|i| B + i * (T_SECONDS / 2)));
     let cd = cd_window();
-    let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 2 must compute");
+    let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 2 must compute");
     assert_eq!(
-        next_d, 1_980_000,
+        next_d,
+        expected(1_980_000),
         "DAA_LWMA1.md §8.1 2x-up vector: expected 1_980_000, got {next_d}"
     );
 }
@@ -88,11 +103,12 @@ fn vector_2_sudden_2x_hashrate_increase() {
 // `timestamps[i] = B + i*(2*T)` → `next_D = 495_000`.
 #[test]
 fn vector_3_sudden_2x_hashrate_decrease() {
-    let ts: Vec<u64> = (0..=N).map(|i| B + i * (2 * T_SECONDS)).collect();
+    let ts = ts_window((0..=N).map(|i| B + i * (2 * T_SECONDS)));
     let cd = cd_window();
-    let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 3 must compute");
+    let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 3 must compute");
     assert_eq!(
-        next_d, 495_000,
+        next_d,
+        expected(495_000),
         "DAA_LWMA1.md §8.1 2x-down vector: expected 495_000, got {next_d}"
     );
 }
@@ -103,18 +119,19 @@ fn vector_3_sudden_2x_hashrate_decrease() {
 // `next_D = 892_000`.
 #[test]
 fn vector_4_solvetime_clamp_engagement() {
-    let mut ts: Vec<u64> = (0..=N).map(|i| B + i * T_SECONDS).collect();
-    ts[N_USIZE] = ts[N_USIZE - 1] + 100 * T_SECONDS;
+    let mut ts = ts_window((0..=N).map(|i| B + i * T_SECONDS));
+    ts[N_USIZE] = Timestamp::from_raw(ts[N_USIZE - 1].to_raw() + 100 * T_SECONDS);
     let cd = cd_window();
-    let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 4 must compute");
+    let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 4 must compute");
     assert_eq!(
-        next_d, 892_000,
+        next_d,
+        expected(892_000),
         "DAA_LWMA1.md §8.1 clamp vector: expected 892_000, got {next_d}"
     );
     // §8.1 secondary assertion: the clamp absorbs the rest of the
     // outlier, so next_D ends below the stable-hashrate reference.
     assert!(
-        next_d < 990_000,
+        next_d < expected(990_000),
         "clamp vector should produce lower difficulty than stable \
          (clamp absorbed part of the outlier)"
     );
@@ -126,11 +143,12 @@ fn vector_4_solvetime_clamp_engagement() {
 // fires. `next_D = 10_000_000` (≈10× stable reference).
 #[test]
 fn vector_5_minimum_l_floor_engagement() {
-    let ts: Vec<u64> = (0..=N).map(|i| B + i).collect();
+    let ts = ts_window((0..=N).map(|i| B + i));
     let cd = cd_window();
-    let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 5 must compute");
+    let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 5 must compute");
     assert_eq!(
-        next_d, 10_000_000,
+        next_d,
+        expected(10_000_000),
         "DAA_LWMA1.md §8.1 min-L floor vector: expected 10_000_000, \
          got {next_d}"
     );
@@ -147,12 +165,13 @@ fn vector_5_minimum_l_floor_engagement() {
 // security property per §5.3 step 2.
 #[test]
 fn vector_6_out_of_sequence_single_back_step() {
-    let mut ts: Vec<u64> = (0..=N).map(|i| B + i * T_SECONDS).collect();
-    ts[N_USIZE] = B + (N - 2) * T_SECONDS;
+    let mut ts = ts_window((0..=N).map(|i| B + i * T_SECONDS));
+    ts[N_USIZE] = Timestamp::from_raw(B + (N - 2) * T_SECONDS);
     let cd = cd_window();
-    let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 6 must compute");
+    let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 6 must compute");
     assert_eq!(
-        next_d, 1_040_000,
+        next_d,
+        expected(1_040_000),
         "DAA_LWMA1.md §8.1 out-of-sequence vector (Shekyl): expected \
          1_040_000, got {next_d}"
     );
@@ -160,7 +179,7 @@ fn vector_6_out_of_sequence_single_back_step() {
     // higher difficulty than the all-monotonic-T reference (denies
     // the attack).
     assert!(
-        next_d > 990_000,
+        next_d > expected(990_000),
         "out-of-sequence must penalize (next_D > stable 990_000); \
          this is the §5.3 step-2 selfish-mine defense."
     );
@@ -181,20 +200,21 @@ fn vector_6_out_of_sequence_single_back_step() {
 // in action.
 #[test]
 fn vector_7_selfish_mine_attack_regression() {
-    let mut ts: Vec<u64> = (0..=N).map(|i| B + i * T_SECONDS).collect();
-    ts[N_USIZE - 1] = B + (N - 2) * T_SECONDS + 1000 * T_SECONDS;
-    ts[N_USIZE] = B + (N - 2) * T_SECONDS + T_SECONDS;
+    let mut ts = ts_window((0..=N).map(|i| B + i * T_SECONDS));
+    ts[N_USIZE - 1] = Timestamp::from_raw(B + (N - 2) * T_SECONDS + 1000 * T_SECONDS);
+    ts[N_USIZE] = Timestamp::from_raw(B + (N - 2) * T_SECONDS + T_SECONDS);
     let cd = cd_window();
-    let next_d = lwma1_next(CHAIN_HEIGHT, &ts, &cd).expect("vector 7 must compute");
+    let next_d = lwma1_next(chain_height(), &ts, &cd).expect("vector 7 must compute");
     assert_eq!(
-        next_d, 1_040_000,
+        next_d,
+        expected(1_040_000),
         "DAA_LWMA1.md §8.1 selfish-mine vector (Shekyl): expected \
          1_040_000, got {next_d}"
     );
     // §8.1 (b): Shekyl output strictly above stable reference
     // (penalizes the attack rather than rewarding it).
     assert!(
-        next_d > 990_000,
+        next_d > expected(990_000),
         "selfish-mine vector must produce next_D > stable 990_000; \
          this is the September 2018 attack-class defense."
     );

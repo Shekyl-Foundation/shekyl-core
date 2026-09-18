@@ -185,6 +185,7 @@ impl ConsumerHeldEntry {
     /// tests build through the real pipeline and never use this — the
     /// `request` / `reference` here are placeholders, not a re-anchorable tx.
     pub(crate) fn for_outstanding_test(tx_bytes: Vec<u8>) -> Self {
+        use shekyl_curve_tree::{BlockHash, CurveTreeRoot};
         Self {
             created_at: Instant::now(),
             snapshot_id: SnapshotId([0u8; 16]),
@@ -196,9 +197,9 @@ impl ConsumerHeldEntry {
                 priority: crate::engine::pending::FeePriority::Standard,
             },
             reference: ReferenceBlock {
-                height: shekyl_curve_tree::BlockHeight(0),
-                curve_tree_root: [0u8; 32],
-                block_hash: [0u8; 32],
+                height: shekyl_curve_tree::BlockHeight::from_raw(0),
+                curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+                block_hash: BlockHash::from_bytes([0u8; 32]),
             },
             content_gen: 0,
             fingerprint: ContentFingerprint::from_parts(AtomicUnits::ZERO, &[], AtomicUnits::ZERO),

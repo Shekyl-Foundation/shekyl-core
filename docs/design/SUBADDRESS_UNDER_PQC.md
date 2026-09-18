@@ -947,8 +947,8 @@ pub struct PaymentRequest {
                                          // text — treat as sensitive local data
                                          // (Zeroizing<String>; file_kek at rest)
     pub amount_atomic: u64,
-    pub created_at: u64,                // wall or block height — product choice
-    pub expiry: Option<u64>,
+    pub created_at: u64,                // RTN-6: wall-clock Unix seconds (`Timestamp`); not block height
+    pub expiry: Option<u64>,            // RTN-6: wall-clock Unix seconds; absent = no expiry
     pub state: PaymentRequestState,      // Pending | Matched | Expired | Cancelled
     pub matched_tx_hash: Option<[u8; 32]>,
     pub matched_output_index: Option<u64>,
@@ -1650,7 +1650,7 @@ the standard; third-party wallets will parse these names. **Pinned now:**
 | `amount` | Atomic units (piconoins / smallest unit) | Same as Monero-style atomic; document in user-facing copy |
 | `rid` | Opaque `u64` decimal in URI | Random assignment; never sequential |
 | `label` | URL-encoded UTF-8 | Bookkeeping only; sensitive at rest |
-| `expiry` | Product-defined (height or unix) | Not consensus |
+| `expiry` | Unix seconds (RTN-6) | Not consensus; CLI also accepts relative durations |
 
 Optional future params (`tx_description`, `recipient_name`, …) require an
 explicit spec amendment — do not bolt on ad hoc aliases at first integration.

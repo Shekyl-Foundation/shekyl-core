@@ -7,6 +7,10 @@
 //! identity to the wrapped primitive), the height/count algebra, and the
 //! hex hash formatting.
 
+extern crate std;
+
+use std::prelude::v1::*;
+
 use super::*;
 
 #[test]
@@ -21,6 +25,14 @@ fn edge_round_trip() {
     let bytes = [3u8; 32];
     assert_eq!(TxHash::from_bytes(bytes).to_bytes(), bytes);
     assert_eq!(BlockHash::from_bytes(bytes).as_bytes(), &bytes);
+    assert_eq!(ShardId::from_raw(9).to_raw(), 9);
+    assert_eq!(LeafIndex::from_raw(4).to_raw(), 4);
+    assert_eq!(BlockWeight::from_raw(1_000).to_raw(), 1_000);
+    assert_eq!(LongTermWeight::from_raw(800).to_raw(), 800);
+    assert_eq!(PqcAuthHash::from_bytes(bytes).to_bytes(), bytes);
+    assert_eq!(AttestationRoot::from_bytes(bytes).as_bytes(), &bytes);
+    assert_eq!(OneTimePubkey::from_bytes(bytes).to_bytes(), bytes);
+    assert_eq!(CommitmentBytes::from_bytes(bytes).to_bytes(), bytes);
 }
 
 #[test]
@@ -45,6 +57,15 @@ fn serde_is_transparent_to_inner_bytes() {
 
     let back: TxHash = postcard::from_bytes(&raw).unwrap();
     assert_eq!(back, TxHash::from_bytes(bytes));
+}
+
+#[test]
+fn invoice_unix_floor_refuses_height_shaped_seconds() {
+    assert!(Timestamp::from_invoice_unix(999_999_999).is_none());
+    assert_eq!(
+        Timestamp::from_invoice_unix(Timestamp::INVOICE_UNIX_FLOOR),
+        Some(Timestamp::from_raw(Timestamp::INVOICE_UNIX_FLOOR))
+    );
 }
 
 #[test]
@@ -88,6 +109,18 @@ fn checked_and_saturating_boundaries() {
     // `earlier` ahead of `self` → None (checked) / ZERO (saturating).
     assert_eq!(earlier.checked_sub(later), None);
     assert_eq!(earlier.saturating_sub(later), BlockCount::ZERO);
+    assert_eq!(
+        BlockHeight::from_raw(0).saturating_sub_count(BlockCount::ONE),
+        BlockHeight::ZERO
+    );
+    assert_eq!(
+        BlockHeight::from_raw(5).saturating_sub_count(BlockCount::ONE),
+        BlockHeight::from_raw(4)
+    );
+    assert_eq!(
+        BlockHeight::from_raw(5).checked_add(BlockCount::ONE),
+        Some(BlockHeight::from_raw(6))
+    );
 }
 
 #[test]
@@ -102,6 +135,8 @@ fn timestamp_secs_since() {
     let before = Timestamp::from_raw(600);
     assert_eq!(now.checked_secs_since(before), Some(400));
     assert_eq!(before.checked_secs_since(now), None);
+    assert_eq!(now.checked_add_secs(50), Some(Timestamp::from_raw(1_050)));
+    assert_eq!(Timestamp::from_raw(u64::MAX).checked_add_secs(1), None);
 }
 
 /// The two chain facts a [`ChainCount`] carries: the tip is one below the
@@ -235,6 +270,7 @@ fn hashes_order_lexicographically_for_btree_keys() {
     // wallet-state uses for deterministic txid ordering (PR C). Ordering is
     // lexicographic over the raw bytes, matching `[u8; 32]`.
     use std::collections::BTreeSet;
+    use std::vec::Vec;
 
     let mut a = [0u8; 32];
     a[0] = 1;
@@ -314,9 +350,14 @@ fn schema_is_derivable() {
     use postcard_schema::Schema;
     assert_eq!(BlockHeight::SCHEMA.name, "BlockHeight");
     assert_eq!(TxHash::SCHEMA.name, "TxHash");
+    assert_eq!(PqcAuthHash::SCHEMA.name, "PqcAuthHash");
+    assert_eq!(ShardId::SCHEMA.name, "ShardId");
+    assert_eq!(OneTimePubkey::SCHEMA.name, "OneTimePubkey");
     assert_ne!(
         BlockHeight::SCHEMA.name,
         TxHash::SCHEMA.name,
         "distinct newtypes must carry distinct named schemas"
     );
+    assert_ne!(PqcAuthHash::SCHEMA.name, PrunableHash::SCHEMA.name);
+    assert_ne!(BlockWeight::SCHEMA.name, LongTermWeight::SCHEMA.name);
 }

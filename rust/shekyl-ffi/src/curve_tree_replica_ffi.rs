@@ -224,8 +224,9 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
                 return false;
             };
             outputs.push(RawOutput {
-                output_key: o.output_key,
-                commitment: (o.has_commitment != 0).then_some(o.commitment),
+                output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(o.output_key),
+                commitment: (o.has_commitment != 0)
+                    .then_some(shekyl_curve_tree::CommitmentBytes::from_bytes(o.commitment)),
                 target,
             });
         }
@@ -241,7 +242,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_ingest_block(
         .collect();
 
     match replica.client.ingest_block(BlockLeaves {
-        height: BlockHeight(height),
+        height: BlockHeight::from_raw(height),
         txs: &views,
     }) {
         Ok(()) => true,
@@ -270,7 +271,10 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_rollback_to_fork(
     }
     // SAFETY: caller contract.
     let replica = unsafe { &mut *replica };
-    match replica.client.rollback_to_fork(BlockHeight(fork_height)) {
+    match replica
+        .client
+        .rollback_to_fork(BlockHeight::from_raw(fork_height))
+    {
         Ok(()) => true,
         Err(err) => {
             tracing::error!("curve-tree replica: rollback to {fork_height} failed: {err:?}");
@@ -297,7 +301,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_tip_height(
     match replica.client.ingested_tip_height() {
         Some(tip) => {
             // SAFETY: caller contract on `out_height`.
-            unsafe { *out_height = tip.0 };
+            unsafe { *out_height = tip.to_raw() };
             true
         }
         None => false,
@@ -326,7 +330,7 @@ pub unsafe extern "C" fn shekyl_curve_tree_replica_next_block_root(
     match replica.client.next_block_root() {
         Ok(root) => {
             // SAFETY: caller contract on `out_root`.
-            unsafe { *out_root = root };
+            unsafe { *out_root = root.to_bytes() };
             true
         }
         Err(err) => {

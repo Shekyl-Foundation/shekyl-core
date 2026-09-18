@@ -218,9 +218,6 @@ Default. Lands before genesis if it should exist at launch.
 - **The pool admits duplicate archival unique-keys that only fail at connect.** Serve-credit `(P,s,E)`, bond-post-per-P, and emission `(P,E)` uniqueness are block-connect rules (`blockchain.cpp:6102–6261`), not `add_tx`. Two conflicting txs can sit in the mempool; a block that includes both is rejected. Owner: [`CONSENSUS_RULE_CENSUS.md`](design/CONSENSUS_RULE_CENSUS.md) CEN-G7 / CEN-G10 / CEN-G9 (were RC-113 / RC-123 / RC-130).
   - Target: pre-genesis
 
-- **Difficulty-surface newtypes — type `shekyl-difficulty`'s primitive PoW [`18-type-placement`](../.cursor/rules/18-type-placement.mdc)**
-  - Target: pre-genesis
-
 - **External cryptographic review of the `FcmpMembershipOnly` soundness [`completed/FCMP_MEMBERSHIP_ONLY.md`](./completed/FCMP_MEMBERSHIP_ONLY.md)**
   - Target: pre-genesis
 

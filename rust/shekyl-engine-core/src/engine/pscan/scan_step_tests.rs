@@ -922,7 +922,7 @@ fn spendable_height_plain_transfer_is_the_shared_baseline() {
     let rec = res.funding_outputs.first().expect("one record");
     assert_eq!(
         rec.spendable_height,
-        BlockHeight::from_raw(20_001 + SPENDABLE_AGE)
+        BlockHeight::from_raw(20_001) + SPENDABLE_AGE
     );
     assert_eq!(
         rec.spendable_height,

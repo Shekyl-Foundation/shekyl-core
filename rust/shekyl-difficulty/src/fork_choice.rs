@@ -35,6 +35,8 @@ pub enum ForkChoiceVerdict {
     Switch = 1,
 }
 
+use crate::types::CumulativeDifficulty;
+
 /// Decide between the incumbent chain and an alternative.
 ///
 /// * `current_cumulative` — cumulative difficulty of the incumbent tip.
@@ -44,8 +46,8 @@ pub enum ForkChoiceVerdict {
 ///   operator-loaded checkpoint at its height (the forced arm).
 #[must_use]
 pub fn fork_choice(
-    current_cumulative: u128,
-    alternative_cumulative: u128,
+    current_cumulative: CumulativeDifficulty,
+    alternative_cumulative: CumulativeDifficulty,
     checkpoint_match: bool,
 ) -> ForkChoiceVerdict {
     if checkpoint_match {
@@ -62,32 +64,48 @@ pub fn fork_choice(
 mod tests {
     use super::*;
 
+    fn cd(v: u128) -> CumulativeDifficulty {
+        CumulativeDifficulty::from_raw(v)
+    }
+
     #[test]
     fn strictly_greater_switches() {
-        assert_eq!(fork_choice(10, 11, false), ForkChoiceVerdict::Switch);
+        assert_eq!(
+            fork_choice(cd(10), cd(11), false),
+            ForkChoiceVerdict::Switch
+        );
     }
 
     #[test]
     fn equality_keeps_the_incumbent() {
         // The boundary the ruling names: equal weight is NOT a reorg.
-        assert_eq!(fork_choice(11, 11, false), ForkChoiceVerdict::KeepCurrent);
+        assert_eq!(
+            fork_choice(cd(11), cd(11), false),
+            ForkChoiceVerdict::KeepCurrent
+        );
     }
 
     #[test]
     fn lighter_keeps_the_incumbent() {
-        assert_eq!(fork_choice(11, 10, false), ForkChoiceVerdict::KeepCurrent);
+        assert_eq!(
+            fork_choice(cd(11), cd(10), false),
+            ForkChoiceVerdict::KeepCurrent
+        );
     }
 
     #[test]
     fn checkpoint_forces_even_when_lighter() {
-        assert_eq!(fork_choice(u128::MAX, 0, true), ForkChoiceVerdict::Switch);
+        assert_eq!(
+            fork_choice(cd(u128::MAX), cd(0), true),
+            ForkChoiceVerdict::Switch
+        );
     }
 
     #[test]
     fn u128_boundary_no_truncation() {
         // Above-u64 halves must participate: a hi-word difference decides.
-        let lo_heavy = u128::from(u64::MAX);
-        let hi_heavy = 1u128 << 64;
+        let lo_heavy = cd(u128::from(u64::MAX));
+        let hi_heavy = cd(1u128 << 64);
         assert_eq!(
             fork_choice(lo_heavy, hi_heavy, false),
             ForkChoiceVerdict::Switch

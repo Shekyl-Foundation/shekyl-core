@@ -40,8 +40,8 @@ use shekyl_crypto_pq::output::{
     compute_output_key_image, construct_output, recover_combined_ss, OutputData,
 };
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
-    ReferenceBlock, TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash as TreeHash, BlockHeight as TreeHeight, BlockLeaves, CurveTreeClient,
+    Gindex, RawOutput, ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_daemon_rpc::submit::{
     parse_submission, CommitOutcome, DaemonTxVerifier, EngineFault, KeyImageConflict,
@@ -287,15 +287,19 @@ fn build_funding_setup() -> FundingSetup {
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
     let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
-        output_key: spent.output_key,
-        commitment: Some(spent.commitment),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+            spent.commitment,
+        )),
         target: TargetKind::TaggedKey,
     });
     genesis_blob.extend_from_slice(&spent_entry);
     for _ in 1..TREE_OUTPUTS {
         genesis_outputs.push(RawOutput {
-            output_key: random_point(&mut rng),
-            commitment: Some(random_point(&mut rng)),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(random_point(&mut rng)),
+            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                random_point(&mut rng),
+            )),
             target: TargetKind::TaggedKey,
         });
         genesis_blob.extend_from_slice(&spent_entry);
@@ -315,8 +319,10 @@ fn build_funding_setup() -> FundingSetup {
         } else {
             (
                 vec![RawOutput {
-                    output_key: filler_key,
-                    commitment: Some(filler_commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(filler_key),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        filler_commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 }],
                 spent_entry.to_vec(),
@@ -329,14 +335,14 @@ fn build_funding_setup() -> FundingSetup {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: TreeHeight(height),
+                height: TreeHeight::from_raw(height),
                 txs: &txs,
             })
             .expect("ingest block");
     }
 
     let (tree_root, tree_depth) = client
-        .root_and_depth_at(TreeHeight(reference_height))
+        .root_and_depth_at(TreeHeight::from_raw(reference_height))
         .expect("tree root + depth at reference height");
     assert_eq!(
         usize::from(tree_depth),
@@ -346,21 +352,21 @@ fn build_funding_setup() -> FundingSetup {
     // One block later the height-1 filler has matured into the tree: a
     // different, equally valid root at the same depth.
     let (other_root, other_depth) = client
-        .root_and_depth_at(TreeHeight(reference_height + 1))
+        .root_and_depth_at(TreeHeight::from_raw(reference_height + 1))
         .expect("tree root + depth one block later");
     assert_eq!(other_depth, tree_depth, "one extra leaf keeps depth 2");
     assert_ne!(other_root, tree_root, "one extra leaf moves the root");
 
     // ── Membership path + SpendInput ────────────────────────────────────
     let reference = ReferenceBlock {
-        height: TreeHeight(reference_height),
+        height: TreeHeight::from_raw(reference_height),
         curve_tree_root: tree_root,
-        block_hash: [0xAB; 32],
+        block_hash: TreeHash::from_bytes([0xAB; 32]),
     };
     let target = AssembleInput {
-        gindex: Gindex(spent_index),
-        output_key: spent.output_key,
-        commitment: spent.commitment,
+        gindex: Gindex::from_raw(spent_index),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
     };
     let path = client
         .assemble_path(&target, &reference)
@@ -375,9 +381,9 @@ fn build_funding_setup() -> FundingSetup {
         .leaf_chunk
         .iter()
         .map(|cl| LeafEntry {
-            output_key: cl.output_key,
+            output_key: cl.output_key.to_bytes(),
             key_image_gen: cl.key_image_gen,
-            commitment: cl.commitment,
+            commitment: cl.commitment.to_bytes(),
             cm_x: cl.cm_x,
         })
         .collect();
@@ -398,8 +404,8 @@ fn build_funding_setup() -> FundingSetup {
     let pqc_pk =
         derive_pqc_public_key(&combined_ss.0, spent_index).expect("derive hybrid public key");
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
+        reference_block: path.tree.reference_block.to_bytes(),
+        tree_root: path.tree.tree_root.to_bytes(),
         tree_depth: path.tree.tree_depth,
     };
 
@@ -409,8 +415,8 @@ fn build_funding_setup() -> FundingSetup {
         spend_input,
         pqc_pk,
         tree_ctx,
-        tree_root,
-        other_root,
+        tree_root: tree_root.to_bytes(),
+        other_root: other_root.to_bytes(),
         reference_height,
         lmdb_depth: tree_depth - 1,
     }

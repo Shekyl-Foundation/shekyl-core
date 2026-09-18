@@ -46,7 +46,8 @@ mod undo;
 #[path = "snapshot_tests.rs"]
 mod snapshot_tests;
 
-pub use chain::{BlockInfo, CurveRoot, OutKey, OutTx, TxIndex, TxOutputIndices};
+pub(crate) use chain::stored_timelock;
+pub use chain::{BlockInfo, OutKey, OutTx, TxIndex, TxOutputIndices};
 pub use evidence::{CoverageGaps, PassedThroughFacts, FACT_FIELDS};
 #[cfg(test)]
 pub(crate) use property::ProbeCell;

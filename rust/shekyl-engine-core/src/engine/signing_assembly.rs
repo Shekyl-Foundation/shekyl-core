@@ -92,7 +92,7 @@ pub(crate) fn assemble_tx_to_sign(
         // transfer vector shifted under the tx between selection and fold (a
         // reorg during the AssembleTx round-trip) — refuse rather than bind the
         // wrong secrets to this path.
-        if td.global_output_index != ai.gindex.0 {
+        if td.global_output_index != ai.gindex {
             return Err(SendError::CannotSign {
                 reason: "selected transfer shifted under the transaction during assembly",
             });
@@ -164,7 +164,7 @@ fn input_context_from_transfer(
         // Signing context crosses into the crypto/FCMP layer, which takes raw
         // `[u8; 32]` (rule 18); convert at this edge.
         tx_hash: td.tx_hash.to_bytes(),
-        internal_output_index: td.internal_output_index,
+        internal_output_index: td.internal_output_index.to_raw(),
         amount: td.amount(),
         key_image,
         source_ciphertext,
@@ -182,9 +182,9 @@ fn input_context_from_transfer(
 /// boundary.
 pub(crate) fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
     LeafEntry {
-        output_key: cl.output_key,
+        output_key: cl.output_key.to_bytes(),
         key_image_gen: cl.key_image_gen,
-        commitment: cl.commitment,
+        commitment: cl.commitment.to_bytes(),
         cm_x: cl.cm_x,
     }
 }
@@ -193,8 +193,8 @@ pub(crate) fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
 /// [`leaf_entry_from_chunk`]).
 pub(crate) fn tree_context_from(tree: &CurveTreeContext) -> TreeContext {
     TreeContext {
-        reference_block: tree.reference_block,
-        tree_root: tree.tree_root,
+        reference_block: tree.reference_block.to_bytes(),
+        tree_root: tree.tree_root.to_bytes(),
         tree_depth: tree.tree_depth,
     }
 }

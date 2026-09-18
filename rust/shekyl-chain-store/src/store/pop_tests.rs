@@ -303,15 +303,15 @@ fn a_recorded_tip_with_no_journal_row_is_si6_not_the_floor() {
     let planted: Result<(), TestErr> = store.write(|batch| {
         for h in 0..2u64 {
             let info = crate::codec::BlockInfo {
-                timestamp: h,
-                coins_generated: 0,
-                weight: 0,
-                cumulative_difficulty: 1,
-                hash: crate::lmdb_order::Hash32::from_bytes(
+                timestamp: shekyl_types::Timestamp::from_raw(h),
+                coins_generated: shekyl_units::AtomicUnits::ZERO,
+                weight: shekyl_types::BlockWeight::ZERO,
+                cumulative_difficulty: shekyl_difficulty::CumulativeDifficulty::from_raw(1),
+                hash: shekyl_types::BlockHash::from_bytes(
                     [u8::try_from(h).expect("two heights"); 32],
                 ),
                 rct_outputs: 0,
-                long_term_weight: 0,
+                long_term_weight: shekyl_types::LongTermWeight::ZERO,
             };
             batch
                 .open_insert_table(BLOCK_INFO, PROBE_ROW)?

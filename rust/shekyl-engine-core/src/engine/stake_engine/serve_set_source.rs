@@ -248,7 +248,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         // that means anything.
         let releasable = {
             let pinned = self.last_pinned.lock().expect("pin view").clone();
-            self.releasable(&shard_ids, &pinned, as_of.0)
+            self.releasable(&shard_ids, &pinned, as_of.to_raw())
         };
 
         let reply = self
@@ -304,7 +304,9 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         let as_of_height = source
             .chain_height
             .tip()
-            .map_or(BlockHeight(0), |h| BlockHeight(h.to_raw()));
+            .map_or(BlockHeight::from_raw(0), |h| {
+                BlockHeight::from_raw(h.to_raw())
+            });
 
         // Two different empties reach this match, and conflating them is
         // the defect it exists to prevent. `shard_ids` is only in scope
@@ -454,13 +456,15 @@ mod tests {
                     let mut leaf = [1u8; 128];
                     leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
                     LeafEntry {
-                        gindex: Gindex(gindex),
-                        maturity: BlockHeight(60),
-                        creation_height: BlockHeight(0),
+                        gindex: Gindex::from_raw(gindex),
+                        maturity: BlockHeight::from_raw(60),
+                        creation_height: BlockHeight::from_raw(0),
                         leaf,
                         identity: OutputIdentity {
-                            output_key: [1u8; 32],
-                            commitment: Some([2u8; 32]),
+                            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([1u8; 32]),
+                            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                                [2u8; 32],
+                            )),
                             cm: [3u8; 32],
                             target: TargetKind::TaggedKey,
                         },
@@ -469,7 +473,7 @@ mod tests {
                 .collect();
             // Buried far past the freeze gate, so segment 0 froze on append.
             store
-                .append_block_deltas(&entries, &[], &[], BlockHeight(30_000))
+                .append_block_deltas(&entries, &[], &[], BlockHeight::from_raw(30_000))
                 .expect("append a full frozen segment");
         }
         let client = CurveTreeClient::open(path).expect("resume over the frozen store");
@@ -588,7 +592,7 @@ mod tests {
         );
         assert_eq!(
             report.as_of_height,
-            BlockHeight(30_000),
+            BlockHeight::from_raw(30_000),
             "chain_height is a COUNT; the stamp is the tip it describes, one lower"
         );
         assert_eq!(
@@ -630,7 +634,7 @@ mod tests {
         };
         assert!(shard_ids.is_empty());
         assert!(outcomes.is_empty());
-        assert_eq!(report.as_of_height, BlockHeight(30_000));
+        assert_eq!(report.as_of_height, BlockHeight::from_raw(30_000));
     }
 
     /// **The two empties, asserted together, because the pair is the
@@ -682,7 +686,7 @@ mod tests {
             "the first report declares the prune-disabled posture — the \
              prefix arm's pin — and says it did"
         );
-        assert_eq!(report.as_of_height, BlockHeight(30_000));
+        assert_eq!(report.as_of_height, BlockHeight::from_raw(30_000));
 
         // Same empty list on the wire, opposite meaning, and it must still
         // report the LIST arm.
@@ -771,7 +775,7 @@ mod tests {
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(0, None), [7; 32]);
 
         let report = pinner.pin_serve_set().await.expect("pin");
-        assert_eq!(report.as_of_height, BlockHeight(0));
+        assert_eq!(report.as_of_height, BlockHeight::from_raw(0));
     }
 
     /// The reader that comes back must be a handle on the store the pins

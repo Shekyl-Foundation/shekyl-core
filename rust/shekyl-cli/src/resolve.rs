@@ -13,7 +13,7 @@
 //! **removed**, not stubbed: they resolve to `Diagnostic` with a message that
 //! names the replacement or the reason (rule 60; WI-RPC-2b deletions).
 
-use shekyl_types::BlockHeight;
+use shekyl_types::Timestamp;
 
 /// A fully-resolved command ready for execution.
 #[derive(Debug)]
@@ -80,9 +80,11 @@ pub enum ResolvedCommand {
     RequestNew {
         amount: u64,
         label: String,
-        /// Expiry as an absolute chain instant (shared `shekyl-types` newtype);
-        /// serialized transparently as a raw height on the JSON-RPC wire.
-        expiry: Option<BlockHeight>,
+        /// Invoice expiry as wall-clock Unix seconds (`Timestamp`, RTN-6).
+        /// Accepts an absolute unix timestamp or a relative duration
+        /// (`1h`, `30m`, `7d`) resolved at parse time. The JSON-RPC wire
+        /// still carries a raw integer.
+        expiry: Option<Timestamp>,
     },
     RequestsList {
         filter: Option<String>,
@@ -384,12 +386,19 @@ pub fn parse(input: &str) -> ResolvedCommand {
         },
         "request" if args.first().copied() == Some("new") => {
             let rest: Vec<&str> = args.iter().skip(1).copied().collect();
-            let expiry = match parse_flag::<u64>(&rest, "--expiry") {
+            let expiry = match parse_flag_str(&rest, "--expiry") {
                 FlagValue::Absent => None,
-                FlagValue::Set(h) => Some(BlockHeight::from_raw(h)),
+                FlagValue::Set(raw) => match parse_invoice_expiry(&raw, unix_now()) {
+                    Some(ts) => Some(ts),
+                    None => {
+                        return diag(format!(
+                            "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {raw:?}"
+                        ));
+                    }
+                },
                 FlagValue::Invalid(v) => {
                     return diag(format!(
-                        "request new: --expiry expects a block height, got {v:?}"
+                        "request new: --expiry expects unix seconds or a duration (1h, 30m, 7d), got {v:?}"
                     ));
                 }
             };
@@ -406,7 +415,7 @@ pub fn parse(input: &str) -> ResolvedCommand {
                     diag(format!("request new: invalid amount {:?}", filtered[0]))
                 }
             } else {
-                diag("request new: need <amount> <label> [--expiry <height>]")
+                diag("request new: need <amount> <label> [--expiry <unix|duration>]")
             }
         }
         "requests" if args.first().copied() == Some("list") => {
@@ -868,6 +877,46 @@ fn parse_flag<T: std::str::FromStr>(args: &[&str], flag: &str) -> FlagValue<T> {
     }
 }
 
+fn unix_now() -> Timestamp {
+    Timestamp::from_raw(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    )
+}
+
+/// Absolute unix seconds, or a relative duration (`30s`/`5m`/`1h`/`7d`)
+/// added to `now`. Invoice expiry is wall-clock, not block height (RTN-6).
+fn parse_invoice_expiry(raw: &str, now: Timestamp) -> Option<Timestamp> {
+    if let Ok(secs) = raw.parse::<u64>() {
+        // A bare integer below INVOICE_UNIX_FLOOR is a height-shaped
+        // leftover of the pre-RTN-6 CLI (`--expiry <height>`). Refuse
+        // it rather than minting a 1970 timestamp.
+        return Timestamp::from_invoice_unix(secs);
+    }
+    let duration = parse_duration_secs(raw)?;
+    now.checked_add_secs(duration)
+}
+
+fn parse_duration_secs(raw: &str) -> Option<u64> {
+    let raw = raw.trim();
+    let (last_idx, unit) = raw.char_indices().next_back()?;
+    if last_idx == 0 {
+        return None;
+    }
+    let digits = raw.get(..last_idx)?;
+    let n: u64 = digits.parse().ok()?;
+    let mul = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3600,
+        'd' => 86400,
+        _ => return None,
+    };
+    n.checked_mul(mul)
+}
+
 /// Construct a formatted parse-time [`ResolvedCommand::Diagnostic`].
 fn diag(message: impl Into<String>) -> ResolvedCommand {
     ResolvedCommand::Diagnostic {
@@ -974,7 +1023,7 @@ mod tests {
 
     #[test]
     fn test_request_new_with_expiry() {
-        match parse("request new 2.5 coffee order 42 --expiry 1000") {
+        match parse("request new 2.5 coffee order 42 --expiry 1735689600") {
             ResolvedCommand::RequestNew {
                 amount,
                 label,
@@ -982,7 +1031,34 @@ mod tests {
             } => {
                 assert_eq!(amount, 2_500_000_000);
                 assert_eq!(label, "coffee order 42");
-                assert_eq!(expiry, Some(BlockHeight::from_raw(1000)));
+                assert_eq!(expiry, Some(Timestamp::from_raw(1_735_689_600)));
+            }
+            other => panic!("expected RequestNew, got {other:?}"),
+        }
+        assert!(
+            matches!(
+                parse("request new 2.5 coffee --expiry 1000"),
+                ResolvedCommand::Diagnostic { .. }
+            ),
+            "a height-shaped integer must not become a 1970 timestamp"
+        );
+        assert!(
+            matches!(
+                parse("request new 2.5 coffee --expiry é"),
+                ResolvedCommand::Diagnostic { .. }
+            ),
+            "a non-ASCII unit must diagnose, not panic"
+        );
+    }
+
+    #[test]
+    fn test_request_new_expiry_duration() {
+        match parse("request new 1.0 coffee --expiry 1h") {
+            ResolvedCommand::RequestNew { expiry, .. } => {
+                let ts = expiry.expect("1h must parse");
+                let now = unix_now().to_raw();
+                let delta = ts.to_raw().abs_diff(now + 3600);
+                assert!(delta <= 2, "1h should resolve to now+3600, delta={delta}");
             }
             other => panic!("expected RequestNew, got {other:?}"),
         }
@@ -1078,10 +1154,10 @@ mod tests {
     /// is stripped so it never leaks into the positional args (label/amount).
     #[test]
     fn flags_accept_the_equals_form_without_leaking() {
-        match parse("request new 5.0 rent --expiry=1000") {
+        match parse("request new 5.0 rent --expiry=1735689600") {
             ResolvedCommand::RequestNew { label, expiry, .. } => {
                 assert_eq!(label, "rent", "the =flag must not leak into the label");
-                assert_eq!(expiry, Some(BlockHeight::from_raw(1000)));
+                assert_eq!(expiry, Some(Timestamp::from_raw(1_735_689_600)));
             }
             other => panic!("expected RequestNew, got {other:?}"),
         }

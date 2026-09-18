@@ -66,13 +66,19 @@
 //! `amount_index` is ever *exposed* stays R8b-2's question.
 
 use shekyl_chain_rules::{ChainValid, RuleSet, RuleSetId, TxIdentity};
-use shekyl_types::{BlockHeight, CurveTreeRoot};
+use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_types::{
+    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
+    OneTimePubkey, OutputIndexInTx,
+};
+use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
-    BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, PassedThroughFacts, PropertyCell,
-    TotalBurnedCell, TxIndex, TxOutputIndices,
+    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, PassedThroughFacts,
+    PropertyCell, TotalBurnedCell, TxIndex, TxOutputIndices,
 };
+use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::lmdb_order::{Hash32, LmdbHashKey, U64PrefixBytes};
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
@@ -150,18 +156,18 @@ pub struct DeletedBy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConnectFacts {
     /// `block_weight`.
-    pub weight: Fact<u64>,
+    pub weight: Fact<BlockWeight>,
     /// `long_term_block_weight`.
-    pub long_term_weight: Fact<u64>,
+    pub long_term_weight: Fact<LongTermWeight>,
     /// Cumulative difficulty through this block.
-    pub cumulative_difficulty: Fact<u128>,
+    pub cumulative_difficulty: Fact<CumulativeDifficulty>,
     /// Coins generated through this block (`already_generated_coins`).
-    pub coins_generated: Fact<u64>,
+    pub coins_generated: Fact<AtomicUnits>,
     /// This block's destroyed amount. `0` (and genesis, whatever its amount)
     /// writes no `block_burn` row and no `total_burned` fold — LMDB's
     /// absent-reads-as-0 convention and the `blockchain.cpp:6148` guard,
     /// kept so the digest domain and the undo row match.
-    pub burned: Fact<u64>,
+    pub burned: Fact<AtomicUnits>,
     /// The tree root **after this block's drain** — the state the *next*
     /// header must carry (CEN-B5) and a spend referencing `h + 1` anchors to
     /// (CEN-I12); recorded at `curve_tree_roots[h + 1]` on every connect
@@ -361,22 +367,17 @@ impl<'id> WriteBatch<'_, 'id> {
         // ---- 3. [E3 hook] pending leaves → drain → grow → segment freeze --
         // ---- 4. root ---------------------------------------------------
         self.open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
-            .insert(
-                height + 1,
-                CurveRoot::from_bytes(*facts.root_after.value.as_bytes())
-                    .encode()
-                    .as_slice(),
-            )?;
+            .insert(height + 1, facts.root_after.value.encode().as_slice())?;
 
         // ---- 5. [E4 hook] attestation witness --------------------------
         // ---- 6. block --------------------------------------------------
-        let hash = Hash32::from_bytes(*block.hash().as_bytes());
+        let hash = BlockHash::from_bytes(*block.hash().as_bytes());
         self.open_insert_table(BLOCKS, StoreInvariant::TipMismatch)?
             .insert(height, block.block().serialize().as_slice())?;
         self.open_insert_table(BLOCK_HEIGHTS, StoreInvariant::TipMismatch)?
             .insert(LmdbHashKey::from(hash), &height)?;
         let info = BlockInfo {
-            timestamp: block.header().timestamp,
+            timestamp: shekyl_types::Timestamp::from_raw(block.header().timestamp),
             coins_generated: facts.coins_generated.value,
             weight: facts.weight.value,
             cumulative_difficulty: facts.cumulative_difficulty.value,
@@ -400,13 +401,13 @@ impl<'id> WriteBatch<'_, 'id> {
         // genesis write neither row nor a `total_burned` pre-image, so the
         // declared write set and the undo row are the C++'s.
         let burned = facts.burned.value;
-        if height > 0 && burned > 0 {
+        if height > 0 && burned != AtomicUnits::ZERO {
             self.open_insert_table(BLOCK_BURN, StoreInvariant::TipMismatch)?
-                .insert(height, &burned)?;
+                .insert(height, &burned.to_raw())?;
             let total = self
                 .get_property::<TotalBurnedCell>()?
                 .unwrap_or(0)
-                .checked_add(burned)
+                .checked_add(burned.to_raw())
                 .ok_or(StoreInvariant::FoldOverflow {
                     cell: TotalBurnedCell::KEY,
                 })
@@ -433,7 +434,7 @@ impl<'id> WriteBatch<'_, 'id> {
         tx: &Transaction,
         miner: bool,
     ) -> Result<u64, StoreError> {
-        let tx_hash = Hash32::from_bytes(*identity.hash.as_bytes());
+        let tx_hash = identity.hash;
         let emission = tx
             .prefix
             .inputs
@@ -455,18 +456,20 @@ impl<'id> WriteBatch<'_, 'id> {
         // `last + 1 == len` complete, so a hole (`{0, 3}` → len 2) poisons
         // instead of minting key 2 over the gap (PR #757 review).
         let mut pruned = self.open_insert_table(TXS_PRUNED, StoreInvariant::IdNotFresh)?;
-        let tx_id = next_dense_id(
-            pruned.last()?.as_ref().map(|(k, _)| k.value()),
-            pruned.len()?,
-        )
-        .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?;
+        let tx_id = TxStorageId::from_raw(
+            next_dense_id(
+                pruned.last()?.as_ref().map(|(k, _)| k.value()),
+                pruned.len()?,
+            )
+            .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?,
+        );
         self.open_insert_table(TX_INDICES, StoreInvariant::TxHashNotFresh)?
             .insert(
                 LmdbHashKey::from(tx_hash),
                 TxIndex {
                     tx_id,
-                    unlock_time: tx.prefix.unlock_time,
-                    height,
+                    unlock_time: stored_timelock(tx.prefix.unlock_time),
+                    height: BlockHeight::from_raw(height),
                 }
                 .encode()
                 .as_slice(),
@@ -474,17 +477,17 @@ impl<'id> WriteBatch<'_, 'id> {
         let segments = tx
             .write_segments()
             .expect("write_segments writes into Vecs; Vec writes are infallible");
-        pruned.insert(tx_id, segments.pruned.as_slice())?;
+        pruned.insert(tx_id.to_raw(), segments.pruned.as_slice())?;
         drop(pruned);
         if !segments.pqc_auths.is_empty() {
             self.open_insert_table(TXS_PQC_AUTHS, StoreInvariant::IdNotFresh)?
-                .insert(tx_id, segments.pqc_auths.as_slice())?;
+                .insert(tx_id.to_raw(), segments.pqc_auths.as_slice())?;
         }
         self.open_insert_table(TXS_PRUNABLE, StoreInvariant::IdNotFresh)?
-            .insert(tx_id, segments.prunable.as_slice())?;
+            .insert(tx_id.to_raw(), segments.prunable.as_slice())?;
         self.open_insert_table(TXS_PRUNABLE_HASH, StoreInvariant::IdNotFresh)?
             .insert(
-                tx_id,
+                tx_id.to_raw(),
                 Hash32::from_bytes(*identity.prunable_hash.as_bytes()),
             )?;
 
@@ -507,16 +510,18 @@ impl<'id> WriteBatch<'_, 'id> {
                 }
                 .into());
             };
-            let output_id = next_dense_id(
-                output_txs.last()?.as_ref().map(|(k, _)| k.value()),
-                output_txs.len()?,
-            )
-            .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?;
+            let output_id = OutputStorageId::from_raw(
+                next_dense_id(
+                    output_txs.last()?.as_ref().map(|(k, _)| k.value()),
+                    output_txs.len()?,
+                )
+                .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?,
+            );
             output_txs.insert(
-                output_id,
+                output_id.to_raw(),
                 OutTx {
                     tx_hash,
-                    local_index,
+                    local_index: OutputIndexInTx::from_raw(local_index),
                 }
                 .encode()
                 .as_slice(),
@@ -533,15 +538,17 @@ impl<'id> WriteBatch<'_, 'id> {
             // the low end and no adjacent duplicate of first or last —
             // Copilot's cited shape, without walking the amount-0 UTXO
             // set on every output (PR #757 review).
-            let amount_index = next_amount_index(&mut amounts.get(amount)?)?
-                .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?;
+            let amount_index = AmountIndex::from_raw(
+                next_amount_index(&mut amounts.get(amount)?)?
+                    .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?,
+            );
             let member = OutKey {
                 amount_index,
                 output_id,
-                pubkey: output.key,
-                unlock_time: tx.prefix.unlock_time,
-                height,
-                commitment: *commitment,
+                pubkey: OneTimePubkey::from_bytes(output.key),
+                unlock_time: stored_timelock(tx.prefix.unlock_time),
+                height: BlockHeight::from_raw(height),
+                commitment: CommitmentBytes::from_bytes(*commitment),
             };
             if !amounts.insert(amount, member.encode().as_slice())? {
                 return Err(self.poison().arm(StoreInvariant::IdNotFresh));
@@ -554,7 +561,7 @@ impl<'id> WriteBatch<'_, 'id> {
         drop(output_txs);
         drop(amounts);
         self.open_insert_table(TX_OUTPUTS, StoreInvariant::IdNotFresh)?
-            .insert(tx_id, TxOutputIndices(indices).encode().as_slice())?;
+            .insert(tx_id.to_raw(), TxOutputIndices(indices).encode().as_slice())?;
         Ok(rct)
     }
 }
@@ -581,8 +588,9 @@ fn next_dense_id(last: Option<u64>, len: u64) -> Option<u64> {
 fn next_amount_index(
     members: &mut redb::MultimapValue<'_, U64PrefixBytes>,
 ) -> Result<Option<u64>, StoreError> {
-    let prefix_of =
-        |guard: redb::AccessGuard<'_, U64PrefixBytes>| OutKey::amount_index_of(guard.value());
+    let prefix_of = |guard: redb::AccessGuard<'_, U64PrefixBytes>| {
+        OutKey::amount_index_of(guard.value()).map(AmountIndex::to_raw)
+    };
     let len = members.len();
     let mut step = |back: bool| -> Result<Option<Option<u64>>, StoreError> {
         let item = if back {

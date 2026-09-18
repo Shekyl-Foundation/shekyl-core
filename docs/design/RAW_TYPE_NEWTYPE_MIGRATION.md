@@ -1,14 +1,55 @@
 # Raw-primitive → domain-newtype migration (work plan)
 
-**Status:** Design / work plan (2026-06-14). Scopes a PR series that lifts
-raw `u64` / `u128` / `[u8; N]` / `Vec<u8>` carrying domain meaning into
-domain newtypes across the `shekyl-core` Rust stack, finishing the migration
-that `AtomicUnits` and `KeyImage` started. Not yet executed; this doc is the
-contract the PRs cut against. The clock-semantics decision in §7 (PR D) is
-recorded as a binding entry in
+**Status:** LANDED — `RTN-1…RTN-6` (as of 2026-09-17); **RTN-7 OPEN**
+(wire hash returns and header fields). Living work plan for adopting
+domain newtypes before the redb writers freeze. Last verified against
+this branch 2026-09-17. The June 2026 PR-0 types crate **landed**;
+RTN-1…RTN-6 landed in this family PR. RTN-7 is the remaining wire-return
+adoption, carried by the wire-return PR. The
+clock-semantics decision in §7 is recorded as a binding entry in
 [`V3_WALLET_DECISION_LOG.md`](../V3_WALLET_DECISION_LOG.md) (2026-06-14 —
 "Time fields: block-height vs wall-clock dichotomy + the
 `BlockHeight`/`Timestamp`/`BlockCount` type trio").
+
+## 0. HEAD validity (2026-09-17) — grep surface
+
+A June 2026 finding is **not** automatically still owed. This table is the
+status of record; a section below that disagrees with a row is
+**records-was** (the 2026-06-14 plan), not current.
+
+| Item | Status at HEAD (2026-09-17) | Carrier |
+| --- | --- | --- |
+| `shekyl-types` crate (`BlockHeight`, `BlockCount`, `Timestamp`, `TxHash`, `BlockHash`, `GlobalOutputIndex`, `OutputIndexInTx`, `KeyImage`, `CurveTreeRoot`, `PrunableHash`, `Timelock`, `PCanonicalId`, `SettlementEpoch`, …) | LANDED (PR 0, June 2026) | `rust/shekyl-types` |
+| `PqcAuthHash`, `ShardId`, `LeafIndex`, `BlockWeight`, `LongTermWeight`, `OneTimePubkey`, `CommitmentBytes`, `AttestationRoot`; crate `#![no_std]` | LANDED — RTN-1 | `rust/shekyl-types` |
+| Store codecs (`BlockInfo`, `TxIndex`, `OutTx`, `OutKey`, `TxOutputIndices`, `ConnectFacts`) typed; `CurveRoot` deleted in favor of `CurveTreeRoot`; type-only codec change, no `SCHEMA_VERSION` bump | LANDED — RTN-2 | `shekyl-chain-store` |
+| `TxIdentity.pqc_auth_hash: Option<PqcAuthHash>` (`PDM-Q-F26`) | LANDED — #768 | DRS §7.7 item 1; `shekyl-chain-rules` |
+| `shekyl-curve-tree` uses `shekyl-types` `BlockHeight` / `Gindex` (`pub type Gindex = GlobalOutputIndex`) | LANDED — RTN-4 | `shekyl-curve-tree` |
+| `shekyl-difficulty` `lwma1_next(BlockHeight, &[Timestamp], &[CumulativeDifficulty]) -> Difficulty`; leftover `shekyl-consensus::Difficulty` deleted (re-export) | LANDED — RTN-5 | `shekyl-difficulty` |
+| `TransferDetails` indices/heights typed; `PaymentRequest.expiry` is wall-clock `Timestamp`; CLI `--expiry` unix seconds or duration | LANDED — RTN-6 | `shekyl-engine-state` / CLI |
+| Wire hash returns (`Transaction::hash` / `hash_with_supplied_*`) and header fields (`previous` / `curve_tree_root` / `transactions`) | OPEN — RTN-7 | the wire-return PR; falsify by `Transaction::hash()` returning `TxHash` and `BlockHeader.previous` being `BlockHash` |
+| Money-path `AtomicUnits` adoption (original PR A) | PARTIAL — not this family's freeze gate | original §4 |
+| Secret-material wrapping (original PR B) | OPEN, not the redb freeze | original §5 |
+| Crypto-object newtypes (original PR E) | DEFERRED — transform-shaped, live in defining crates | original §8 |
+
+**What this family will not do.** Role-tagged heights (`CreationHeight` /
+`EvalHeight`) — one [`BlockHeight`], named fields. RPC DTO newtypes
+(hex strings in `shekyl-rpc-types`; wallet-rpc / daemon-rpc serde
+structs). `shekyl-wire` hash returns and header fields are RTN-7, not
+refused. `impl redb::Key for shekyl_types::BlockHeight` (orphan rule —
+thin local key wrappers). Bumping `SCHEMA_VERSION` for type-only codec
+field changes that encode identically. Putting `Difficulty` in
+`shekyl-types` (it is transform-shaped; it lives in `shekyl-difficulty`).
+
+**Payment-request clock (RTN-6 LANDED 2026-09-17, restating §7.2).** Humans /
+off-chain invoices use wall-clock [`Timestamp`]. Daemon-internal deadlines
+use [`BlockHeight`]. The CLI that shipped `--expiry <height>` (pre-RTN-6)
+was a defect against the 2026-06-14 ruling; RTN-6 restored `Timestamp` and
+corrected the flag.
+
+Original PR sequence (PR 0 / A / B / C / D / E) is the 2026-06-14
+unbundling. **RTN-1…RTN-6** landed; **RTN-7** is the remaining
+wire-return adoption, registered in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2.
 
 ## 1. Thesis & precedent
 
@@ -108,7 +149,7 @@ zeroize-check CI, which is the natural test home.
 | [`reserve_proof.rs:50`](../../rust/shekyl-proofs/src/reserve_proof.rs) `spend_secret: [u8;32]` | should take `&SpendSecret` |
 | [`handle.rs:188`](../../rust/shekyl-crypto-pq/src/handle.rs) `view_secret: &[u8;32]` | should take `&ViewSecret` (code comment already flags the gap) |
 
-## 6. PR C — Hash identity (`TxHash` / `BlockHash` / `CurveTreeRoot`)
+## 6. PR C — Hash identity (`TxHash` / `BlockHash` / `CurveTreeRoot`) — records-was 2026-06-14 except OPEN — RTN-7 wire rows
 
 Validation surface: **a block hash cannot be passed where a tx hash (or tree
 root) is expected.** Finish the `KeyImage`-style migration `transfer.rs`
@@ -122,8 +163,8 @@ field per §1).
 | [`sync_state_block.rs:75,86`](../../rust/shekyl-engine-state/src/sync_state_block.rs) `creation_anchor_hash`, `pending_tx_hashes` | persisted |
 | [`tx_meta_block.rs:174,178`](../../rust/shekyl-engine-state/src/tx_meta_block.rs) map keys keyed by txid | persisted |
 | [`consensus types.rs:18,25`](../../rust/shekyl-consensus/src/types.rs) `prev_hash`, `top_hash` | |
-| `shekyl-wire` block `previous` / `curve_tree_root` / `transactions` | the oxide `block.rs` was deleted in the slice-1 wire extraction; these wire fields now live in `shekyl-wire`'s block serializer — distinguish `BlockHash` vs `CurveTreeRoot` |
-| `shekyl-wire` `Transaction::hash()` / `hash_with_supplied_*` **return** | still `[u8; 32]` → `TxHash`; ~70 call sites. The txid's *component* surface — `prunable_hash() -> PrunableHash`, `pqc_auth_hash() -> Option<PqcAuthHash>`, and both supplied forms' operands — was typed 2026-09-17 with `PDM-Q-F26` (`DAEMON_REDB_STORE.md` §7.7), which added the `shekyl-types` dependency to `shekyl-wire`; the return type is the remaining raw scalar on that surface |
+| `shekyl-wire` block `previous` / `curve_tree_root` / `transactions` | OPEN — RTN-7. the oxide `block.rs` was deleted in the slice-1 wire extraction; these wire fields now live in `shekyl-wire`'s block serializer — distinguish `BlockHash` vs `CurveTreeRoot` |
+| `shekyl-wire` `Transaction::hash()` / `hash_with_supplied_*` **return** | OPEN — RTN-7. still `[u8; 32]` → `TxHash`; ~70 call sites. The txid's *component* surface — `prunable_hash() -> PrunableHash`, `pqc_auth_hash() -> Option<PqcAuthHash>`, and both supplied forms' operands — was typed 2026-09-17 with `PDM-Q-F26` (`DAEMON_REDB_STORE.md` §7.7 / #768), which added the `shekyl-types` dependency to `shekyl-wire`; the return type is the remaining raw scalar on that surface |
 | curve-tree [`types.rs:189-191,245-250`](../../rust/shekyl-curve-tree/src/types.rs) `reference_block`/`tree_root`/`curve_tree_root` | |
 
 ## 7. PR D — Heights, indices, timestamps (the clock-semantics decision)

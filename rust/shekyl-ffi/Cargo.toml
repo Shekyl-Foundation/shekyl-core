@@ -37,6 +37,9 @@ shekyl-curve-generators = { path = "../shekyl-curve-generators" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 shekyl-consensus = { path = "../shekyl-consensus" }
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# Domain newtypes reconstructed immediately inside the difficulty FFI
+# shims (RTN-5). ABI stays raw `u64` / `ShekylU128`.
+shekyl-types = { path = "../shekyl-types" }
 # DRS-P0d logical-state digest v0. The hasher is safe-only; this crate
 # is the pointer boundary. DRS-E1 will grow shekyl-chain-store further.
 shekyl-chain-store = { path = "../shekyl-chain-store" }

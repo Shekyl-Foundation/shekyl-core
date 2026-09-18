@@ -146,7 +146,7 @@ fn check_tip_not_below_transfer(ledger: &LedgerBlock) -> Result<(), WalletLedger
         return Ok(());
     };
     let tip = ledger.tip.synced_height;
-    if tip < max_block_height {
+    if tip < max_block_height.to_raw() {
         return Err(invariant_error(
             INV_TIP_NOT_BELOW_TRANSFER,
             format!(
@@ -388,9 +388,9 @@ mod tests {
     fn mk_transfer(seed: u8, block_height: u64) -> TransferDetails {
         TransferDetails {
             tx_hash: shekyl_types::TxHash::from_bytes([seed; 32]),
-            internal_output_index: u64::from(seed),
-            global_output_index: u64::from(seed),
-            block_height,
+            internal_output_index: shekyl_types::OutputIndexInTx::from_raw(u64::from(seed)),
+            global_output_index: shekyl_types::GlobalOutputIndex::from_raw(u64::from(seed)),
+            block_height: shekyl_types::BlockHeight::from_raw(block_height),
             key: ED25519_BASEPOINT_POINT,
             key_offset: Scalar::ONE,
             commitment: Commitment::new(Scalar::ONE, 1_000),
@@ -401,7 +401,7 @@ mod tests {
             spending_tx_hash: None,
             source_ciphertext: None,
             output_handle: None,
-            eligible_height: block_height + SPENDABLE_AGE,
+            eligible_height: shekyl_types::BlockHeight::from_raw(block_height) + SPENDABLE_AGE,
             frozen: false,
             unspendable: None,
             fcmp_precomputed_path: None,
@@ -598,7 +598,7 @@ mod tests {
         // `spending_tx_hash` leg satisfies I-2 here.
         let mut spent_row = mk_transfer(0x11, 10);
         spent_row.spent = true;
-        spent_row.spent_height = Some(20);
+        spent_row.spent_height = Some(shekyl_types::BlockHeight::from_raw(20));
         spent_row.key_image = Some(shekyl_crypto_pq::key_image::KeyImage::from_canonical_bytes(
             [0x33; 32],
         ));
@@ -783,7 +783,7 @@ mod tests {
     fn spent_without_key_image_is_refused() {
         let mut t = mk_transfer(1, 10);
         t.spent = true;
-        t.spent_height = Some(20);
+        t.spent_height = Some(shekyl_types::BlockHeight::from_raw(20));
         t.key_image = None;
         let ledger = LedgerBlock::new(
             vec![t],
@@ -807,7 +807,7 @@ mod tests {
     fn not_spent_with_spent_height_is_refused() {
         let mut t = mk_transfer(1, 10);
         t.spent = false;
-        t.spent_height = Some(20);
+        t.spent_height = Some(shekyl_types::BlockHeight::from_raw(20));
         let ledger = LedgerBlock::new(
             vec![t],
             BlockchainTip::new(100, [0xAA; 32]),
@@ -831,10 +831,10 @@ mod tests {
         let mut t1 = mk_transfer(1, 10);
         let mut t2 = mk_transfer(2, 15);
         t1.spent = true;
-        t1.spent_height = Some(20);
+        t1.spent_height = Some(shekyl_types::BlockHeight::from_raw(20));
         t1.key_image = Some(KeyImage::from_canonical_bytes([0xCC; 32]));
         t2.spent = true;
-        t2.spent_height = Some(30);
+        t2.spent_height = Some(shekyl_types::BlockHeight::from_raw(30));
         t2.key_image = Some(KeyImage::from_canonical_bytes([0xCC; 32]));
         let ledger = LedgerBlock::new(
             vec![t1, t2],

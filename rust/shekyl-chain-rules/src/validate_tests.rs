@@ -71,7 +71,11 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     assert_ne!(expected_miner.prunable_hash.as_bytes(), &[0u8; 32]);
     // A coinbase txid is 3-part: there is no third component to record
     // (PDM-Q-F26) — `None` is the identity's arity, not a discarded value.
+    // The listed bodies in this fixture are also coinbases.
     assert_eq!(expected_miner.pqc_auth_hash, None);
+    for (id, _) in &expected_listed {
+        assert_eq!(id.pqc_auth_hash, None);
+    }
 
     MockChain::default().with_view(|view| {
         let valid = infallible(validate(input, &view, &RuleSet::GENESIS))

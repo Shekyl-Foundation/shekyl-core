@@ -73,7 +73,8 @@ fn a_fragmented_pool_is_its_own_first_stake_refusal() {
 }
 
 use super::*;
-use shekyl_curve_tree::{should_reanchor, REF_ANCHOR_AGE};
+use shekyl_curve_tree::{should_reanchor, BlockHash, CurveTreeRoot, REF_ANCHOR_AGE};
+use shekyl_types::BlockHeight;
 
 /// The posture is the conversion: Market has nothing to post until
 /// assignment exists, Foundation is CompleteTree with the empty-set
@@ -178,14 +179,14 @@ fn orchestrator_uses_sweep_as_sole_funding_path() {
 #[test]
 fn sweep_reference_height_equals_anchored_reference_block_height() {
     let reference = ReferenceBlock {
-        height: CtBlockHeight(1_234),
-        curve_tree_root: [0xAB; 32],
-        block_hash: [0xCD; 32],
+        height: CtBlockHeight::from_raw(1_234),
+        curve_tree_root: CurveTreeRoot::from_bytes([0xAB; 32]),
+        block_hash: BlockHash::from_bytes([0xCD; 32]),
     };
-    let sweep_height = BlockHeight::from_raw(reference.height.0);
+    let sweep_height = BlockHeight::from_raw(reference.height.to_raw());
     assert_eq!(
         sweep_height.to_raw(),
-        reference.height.0,
+        reference.height.to_raw(),
         "sweep must filter against the anchored ReferenceBlock's height"
     );
 }
@@ -651,12 +652,20 @@ async fn apply_scan_result_reorg_replaces_orphaned_sighting_rows() {
 
     let staking = engine.ledger().staking.clone();
     assert_eq!(
-        staking.bond_sightings.get(&0).map(|h| h.to_raw()),
+        staking
+            .bond_sightings
+            .get(&0)
+            .copied()
+            .map(shekyl_types::BlockHeight::to_raw),
         Some(1),
         "a row below the fork survives untouched"
     );
     assert_eq!(
-        staking.bond_sightings.get(&1).map(|h| h.to_raw()),
+        staking
+            .bond_sightings
+            .get(&1)
+            .copied()
+            .map(shekyl_types::BlockHeight::to_raw),
         Some(3),
         "a re-mined post's row moves to its new canonical height"
     );
@@ -707,7 +716,8 @@ async fn apply_scan_result_adopts_a_cached_slot_and_advances_the_tip() {
             .staking
             .bond_sightings
             .get(&0)
-            .map(|h| h.to_raw()),
+            .copied()
+            .map(shekyl_types::BlockHeight::to_raw),
         Some(1)
     );
 }

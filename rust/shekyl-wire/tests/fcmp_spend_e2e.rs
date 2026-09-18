@@ -73,8 +73,8 @@ use shekyl_crypto_pq::output::{
 use shekyl_ct_balance::verify_ct_balance;
 use shekyl_curve_io::CompressedPoint;
 use shekyl_curve_tree::{
-    AssembleInput, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput, ReferenceBlock,
-    TargetKind, TxLeafInputs,
+    AssembleInput, BlockHash, BlockHeight, BlockLeaves, CurveTreeClient, Gindex, RawOutput,
+    ReferenceBlock, TargetKind, TxLeafInputs,
 };
 use shekyl_fcmp::proof::{self, KeyImage, ShekylFcmpProof};
 use shekyl_fcmp::PqcKeyScalar;
@@ -219,15 +219,19 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     let mut genesis_outputs: Vec<RawOutput> = Vec::with_capacity(TREE_OUTPUTS);
     let mut genesis_blob: Vec<u8> = Vec::with_capacity(TREE_OUTPUTS * 64);
     genesis_outputs.push(RawOutput {
-        output_key: spent.output_key,
-        commitment: Some(spent.commitment),
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+            spent.commitment,
+        )),
         target: TargetKind::TaggedKey,
     });
     genesis_blob.extend_from_slice(&spent_entry);
     for _ in 1..TREE_OUTPUTS {
         genesis_outputs.push(RawOutput {
-            output_key: random_point(&mut rng),
-            commitment: Some(random_point(&mut rng)),
+            output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(random_point(&mut rng)),
+            commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                random_point(&mut rng),
+            )),
             target: TargetKind::TaggedKey,
         });
         genesis_blob.extend_from_slice(&spent_entry);
@@ -252,8 +256,10 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         } else {
             (
                 vec![RawOutput {
-                    output_key: filler_key,
-                    commitment: Some(filler_commitment),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(filler_key),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes(
+                        filler_commitment,
+                    )),
                     target: TargetKind::TaggedKey,
                 }],
                 spent_entry.to_vec(),
@@ -266,14 +272,14 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         }];
         client
             .ingest_block(BlockLeaves {
-                height: BlockHeight(height),
+                height: BlockHeight::from_raw(height),
                 txs: &txs,
             })
             .expect("ingest block");
     }
 
     let (tree_root, tree_depth) = client
-        .root_and_depth_at(BlockHeight(reference_height))
+        .root_and_depth_at(BlockHeight::from_raw(reference_height))
         .expect("tree root + depth at reference height");
     assert!(
         tree_depth >= 3,
@@ -282,14 +288,14 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 3. Assemble the membership path via the production client ─────────
     let reference = ReferenceBlock {
-        height: BlockHeight(reference_height),
+        height: BlockHeight::from_raw(reference_height),
         curve_tree_root: tree_root,
-        block_hash: [0xAB; 32],
+        block_hash: BlockHash::from_bytes([0xAB; 32]),
     };
     let target = AssembleInput {
-        gindex: Gindex(spent_index), // genesis vout 0 → first drained leaf
-        output_key: spent.output_key,
-        commitment: spent.commitment,
+        gindex: Gindex::from_raw(spent_index), // genesis vout 0 → first drained leaf
+        output_key: shekyl_curve_tree::OneTimePubkey::from_bytes(spent.output_key),
+        commitment: shekyl_curve_tree::CommitmentBytes::from_bytes(spent.commitment),
     };
     let path = client
         .assemble_path(&target, &reference)
@@ -309,9 +315,9 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         .leaf_chunk
         .iter()
         .map(|cl| LeafEntry {
-            output_key: cl.output_key,
+            output_key: cl.output_key.to_bytes(),
             key_image_gen: cl.key_image_gen,
-            commitment: cl.commitment,
+            commitment: cl.commitment.to_bytes(),
             cm_x: cl.cm_x,
         })
         .collect();
@@ -373,8 +379,8 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 6. Sign via the production transaction builder ────────────────────
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root,
+        reference_block: path.tree.reference_block.to_bytes(),
+        tree_root: path.tree.tree_root.to_bytes(),
         tree_depth: path.tree.tree_depth,
     };
     // Bind the proof + PQC auths to the *real* transaction prefix, exactly as
@@ -425,7 +431,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        &tree_root,
+        tree_root.as_bytes(),
         signed.tree_depth,
         tx_prefix_hash,
     )
@@ -458,7 +464,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        &tree_root,
+        tree_root.as_bytes(),
         signed.tree_depth,
         mutated_prefix_hash,
     );

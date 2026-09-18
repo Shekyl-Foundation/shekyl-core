@@ -8,7 +8,9 @@
 use std::collections::HashSet;
 use std::future::Future;
 
-use shekyl_curve_tree::{select_reference_height, BlockHeight, ReferenceBlock};
+use shekyl_curve_tree::{
+    select_reference_height, BlockHash, BlockHeight, CurveTreeRoot, ReferenceBlock,
+};
 use shekyl_engine_state::LedgerBlock;
 
 use super::super::diagnostics::{emit_pending_tx_diagnostic, DiscardReason, PendingTxDiagnostic};
@@ -200,7 +202,7 @@ where
                     )
                 })?;
                 TreeSpendGate::Enforced {
-                    covered_through: covered_through.map(|bh| bh.0),
+                    covered_through: covered_through.map(shekyl_types::BlockHeight::to_raw),
                 }
             }
         };
@@ -227,7 +229,7 @@ where
                         ) =>
                     {
                         let (curve_tree_root, depth) = handle
-                            .reference_root_and_depth(BlockHeight(rh))
+                            .reference_root_and_depth(BlockHeight::from_raw(rh))
                             .await
                             .map_err(|err| {
                                 fail_build_after_attempted(
@@ -248,9 +250,9 @@ where
                             })?;
                         (
                             Some(ReferenceBlock {
-                                height: BlockHeight(rh),
-                                curve_tree_root,
-                                block_hash,
+                                height: BlockHeight::from_raw(rh),
+                                curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
+                                block_hash: BlockHash::from_bytes(block_hash),
                             }),
                             depth,
                         )
@@ -393,9 +395,9 @@ where
                     priority: super::super::pending::FeePriority::Standard,
                 },
                 reference: ReferenceBlock {
-                    height: BlockHeight(0),
-                    curve_tree_root: [0u8; 32],
-                    block_hash: [0u8; 32],
+                    height: BlockHeight::from_raw(0),
+                    curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
+                    block_hash: BlockHash::from_bytes([0u8; 32]),
                 },
                 content_gen: 0,
                 fingerprint: ContentFingerprint::from_build(

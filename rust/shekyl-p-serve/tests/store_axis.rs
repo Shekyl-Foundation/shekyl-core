@@ -54,13 +54,13 @@ fn segment_entries() -> Vec<LeafEntry> {
             let mut leaf = [1u8; 128];
             leaf[..8].copy_from_slice(&(gindex + 1).to_le_bytes());
             LeafEntry {
-                gindex: Gindex(gindex),
-                maturity: BlockHeight(0),
-                creation_height: BlockHeight(0),
+                gindex: Gindex::from_raw(gindex),
+                maturity: BlockHeight::from_raw(0),
+                creation_height: BlockHeight::from_raw(0),
                 leaf,
                 identity: OutputIdentity {
-                    output_key: [1u8; 32],
-                    commitment: Some([2u8; 32]),
+                    output_key: shekyl_curve_tree::OneTimePubkey::from_bytes([1u8; 32]),
+                    commitment: Some(shekyl_curve_tree::CommitmentBytes::from_bytes([2u8; 32])),
                     cm: [3u8; 32],
                     target: TargetKind::TaggedKey,
                 },
@@ -107,7 +107,7 @@ async fn served_shard_recomputes_to_the_committed_r_k() {
     // sequence — then serve and run the witness's own verification.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
 
     let pins = store.pin_serve_set(&[0, 1]).expect("pin serve set");
@@ -187,7 +187,7 @@ async fn unfrozen_and_unknown_shards_are_indistinguishable_404s() {
     // must not become a second, unauthenticated oracle for them.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     let (ep, _) = bind(Arc::new(StoreShardProvider::new(ServingReader::new(
         Arc::clone(&store),
@@ -210,7 +210,7 @@ async fn unpinned_prune_surfaces_as_a_counted_failure_not_a_distinct_response() 
     // probeable); the local counter shows exactly what went wrong.
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     store.prune_frozen(&[]).expect("prune without pinning");
 
@@ -234,7 +234,7 @@ fn provider_body_is_exactly_the_store_leaves_in_order() {
     let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
     let entries = segment_entries();
     store
-        .append_block_deltas(&entries, &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&entries, &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze");
     let provider = StoreShardProvider::new(ServingReader::new(store));
     let mut body = provider
@@ -272,7 +272,7 @@ fn an_unfrozen_serve_set_member_is_pinned_before_it_freezes() {
 
     // Freeze, then prune with no further pinning call at all.
     store
-        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight(10_000))
+        .append_block_deltas(&segment_entries(), &[], &[], BlockHeight::from_raw(10_000))
         .expect("append and freeze segment 0");
     store.prune_frozen(&[]).expect("prune");
 

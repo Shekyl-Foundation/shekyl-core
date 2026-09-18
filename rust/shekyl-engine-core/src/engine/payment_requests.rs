@@ -19,8 +19,8 @@ use super::{Engine, EngineSignerKind, LocalLedger};
 pub struct NewPaymentRequest {
     pub label: String,
     pub amount_atomic: AtomicUnits,
-    pub created_at: u64,
-    pub expiry: Option<u64>,
+    pub created_at: shekyl_types::Timestamp,
+    pub expiry: Option<shekyl_types::Timestamp>,
 }
 
 /// Filter for listing payment requests (minimal V3.0).
@@ -126,7 +126,14 @@ impl<
     }
 
     /// List payment requests matching `filter`.
+    ///
+    /// Classification uses the host clock: a persisted `Pending` row whose
+    /// expiry has passed is returned (and filtered) as `Expired`, so the
+    /// pending list cannot keep a dead invoice (`SUBADDRESS_UNDER_PQC.md`
+    /// §5.7.9). The on-disk row stays `Pending` until a write path persists
+    /// the transition; every read of this list goes through the same clock.
     pub fn list_payment_requests(&self, filter: PaymentRequestFilter) -> Vec<PaymentRequest> {
+        let now = crate::attribution::unix_now();
         self.ledger
             .read()
             .ledger
@@ -135,10 +142,14 @@ impl<
             .iter()
             .filter(|r| match filter {
                 PaymentRequestFilter::All => true,
-                PaymentRequestFilter::Pending => r.state == PaymentRequestState::Pending,
+                PaymentRequestFilter::Pending => r.state_at(now) == PaymentRequestState::Pending,
                 PaymentRequestFilter::Matched => r.state == PaymentRequestState::Matched,
             })
-            .cloned()
+            .map(|r| {
+                let mut clone = r.clone();
+                clone.state = clone.state_at(now);
+                clone
+            })
             .collect()
     }
 
@@ -160,7 +171,7 @@ impl<
             Some(req.amount_atomic.to_raw()),
             label,
             Some(req.id.as_u64()),
-            req.expiry,
+            req.expiry.map(shekyl_types::Timestamp::to_raw),
         ))
     }
 

@@ -228,7 +228,7 @@ impl<
             rewind_matched_payment_requests_after_reorg(
                 &mut state.ledger.bookkeeping.payment_requests,
                 &state.ledger.ledger,
-                state.ledger.ledger.height(),
+                crate::attribution::unix_now(),
             );
         }
 
@@ -304,7 +304,7 @@ impl<
     ///
     /// Every iteration reads the tree's own
     /// [`super::curve_tree_actor::CurveTreeHandle::ingested_tip_height`] and
-    /// ingests `tip + 1` (`BlockHeight(0)` when the tree is fresh). The
+    /// ingests `tip + 1` (`BlockHeight::from_raw(0)` when the tree is fresh). The
     /// driver holds **no** local fetch frontier, which makes counter/cursor
     /// drift unrepresentable: it is idempotent under the refresh retry loop
     /// (a merge that failed [`RefreshError::ConcurrentMutation`] left the tree
@@ -545,13 +545,13 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
     // still climbing below it has nothing to drop (R3-Q6).
     if let Some(rewind) = result.reorg_rewind.as_ref() {
         validate_reorg_fork_height(rewind.fork_height)?;
-        let keep = BlockHeight(rewind.fork_height - 1);
+        let keep = BlockHeight::from_raw(rewind.fork_height - 1);
         if let Some(tip) = curve_tree
             .ingested_tip_height()
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?
         {
-            if tip.0 > keep.0 {
+            if tip > keep {
                 curve_tree
                     .rollback_to_fork(keep)
                     .await
@@ -570,10 +570,13 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // but block heights are consensus-adjacent — never silently wrap.
         let next = match tip {
             None => 0,
-            Some(t) => t.0.checked_add(1).ok_or(RefreshError::CurveTreeIngest {
-                context: "ingested tip height overflow",
-                recoverable_by_respawn: false,
-            })?,
+            Some(t) => t
+                .to_raw()
+                .checked_add(1)
+                .ok_or(RefreshError::CurveTreeIngest {
+                    context: "ingested tip height overflow",
+                    recoverable_by_respawn: false,
+                })?,
         };
         if next >= range_end {
             break;
@@ -630,7 +633,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         };
 
         curve_tree
-            .ingest(BlockHeight(next), leaves)
+            .ingest(BlockHeight::from_raw(next), leaves)
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?;
 
@@ -644,7 +647,7 @@ async fn curve_tree_ingest_scan_result<D: super::traits::DaemonEngine>(
         // liar (bad leaves + matching bad header) passes here and is caught at
         // consensus submit — still DoS, never a witness leak.
         curve_tree
-            .verify_root(BlockHeight(next), expected_root)
+            .verify_root(BlockHeight::from_raw(next), expected_root)
             .await
             .map_err(|e| map_curve_tree_handle_error(&e))?;
     }
@@ -942,7 +945,8 @@ pub(crate) fn apply_scan_result_to_state(
 /// [`apply_scan_result_to_state`] has destructured the
 /// [`ScanResult`]. The key matches the corresponding fields on
 /// [`shekyl_engine_state::TransferDetails`] post-merge.
-type DetectionResidue = HashMap<([u8; 32], u64), HybridCiphertext>;
+type DetectionResidue =
+    HashMap<(shekyl_types::TxHash, shekyl_types::OutputIndexInTx), HybridCiphertext>;
 
 /// Build a [`DetectionResidue`] map from a [`ScanResult`]'s detected
 /// transfers before they are consumed by
@@ -958,7 +962,10 @@ fn collect_detection_residue(result: &ScanResult) -> DetectionResidue {
     for dt in &result.new_transfers {
         let wo = dt.output.wallet_output();
         map.insert(
-            (wo.transaction(), wo.index_in_transaction()),
+            (
+                shekyl_types::TxHash::from_bytes(wo.transaction()),
+                shekyl_types::OutputIndexInTx::from_raw(wo.index_in_transaction()),
+            ),
             dt.output.source_ciphertext().clone(),
         );
     }
@@ -1057,7 +1064,7 @@ pub(crate) fn populate_engine_handle_fields(
     for &i in inserted {
         let td = &mut ledger.transfers[i];
         // `residue` is keyed by the scanner's raw `[u8; 32]` txid; convert.
-        let key = (td.tx_hash.to_bytes(), td.internal_output_index);
+        let key = (td.tx_hash, td.internal_output_index);
         let Some(ciphertext) = residue.get(&key) else {
             continue;
         };
@@ -1076,7 +1083,7 @@ pub(crate) fn populate_engine_handle_fields(
             td.output_handle = Some(derive_output_handle(
                 view_secret,
                 td.tx_hash.as_bytes(),
-                td.internal_output_index,
+                td.internal_output_index.to_raw(),
             ));
         }
     }

@@ -15,7 +15,9 @@
 
 use redb::ReadableTableMetadata;
 use shekyl_chain_rules::{RowStatus, RuleSet, RuleSetId};
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHeight, CurveTreeRoot};
+use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
     candidate, coinbase, connect_genesis, facts, judge, spend, GENESIS_ID,
@@ -24,7 +26,7 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
-    BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, TotalBurnedCell, TxIndex,
+    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, TotalBurnedCell, TxIndex,
     TxOutputIndices, UndoLog, FACT_FIELDS,
 };
 use crate::lmdb_order::{Hash32, LmdbHashKey};
@@ -82,13 +84,13 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     assert_eq!(
         info,
         BlockInfo {
-            timestamp: 1_000,
-            coins_generated: 1_000_000,
-            weight: 1_000,
-            cumulative_difficulty: 100,
-            hash: block_hash,
+            timestamp: shekyl_types::Timestamp::from_raw(1_000),
+            coins_generated: AtomicUnits::from_raw(1_000_000),
+            weight: shekyl_types::BlockWeight::from_raw(1_000),
+            cumulative_difficulty: CumulativeDifficulty::from_raw(100),
+            hash: shekyl_types::BlockHash::from(block_hash),
             rct_outputs: 1,
-            long_term_weight: 900,
+            long_term_weight: shekyl_types::LongTermWeight::from_raw(900),
         }
     );
     assert_eq!(
@@ -101,7 +103,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         "hf_versions[h] is the rule set in force (SCW-16)"
     );
     assert_eq!(
-        CurveRoot::decode(
+        CurveTreeRoot::decode(
             snap.open_table(CURVE_TREE_ROOTS)
                 .expect("t")
                 .get(1)
@@ -110,7 +112,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
                 .value()
         )
         .expect("decodes"),
-        CurveRoot::from_bytes([0xc0; 32]),
+        CurveTreeRoot::from_bytes([0xc0; 32]),
         "the root after genesis is keyed at 1"
     );
     assert!(snap
@@ -132,9 +134,9 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         )
         .expect("decodes"),
         TxIndex {
-            tx_id: 0,
-            unlock_time: 60,
-            height: 0
+            tx_id: crate::ids::TxStorageId::from_raw(0),
+            unlock_time: stored_timelock(60),
+            height: BlockHeight::from_raw(0)
         }
     );
     let segments = miner.write_segments().expect("segments");
@@ -184,7 +186,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
                 .value()
         )
         .expect("decodes"),
-        TxOutputIndices(vec![0])
+        TxOutputIndices(vec![crate::ids::AmountIndex::from_raw(0)])
     );
 
     // output tables
@@ -199,8 +201,8 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
         )
         .expect("decodes"),
         OutTx {
-            tx_hash: miner_hash,
-            local_index: 0
+            tx_hash: shekyl_types::TxHash::from(miner_hash),
+            local_index: shekyl_types::OutputIndexInTx::from_raw(0)
         }
     );
     let members: Vec<OutKey> = snap
@@ -213,12 +215,12 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
     assert_eq!(
         members,
         vec![OutKey {
-            amount_index: 0,
-            output_id: 0,
-            pubkey: [0x40; 32],
-            unlock_time: 60,
-            height: 0,
-            commitment: [0x70; 32],
+            amount_index: crate::ids::AmountIndex::from_raw(0),
+            output_id: crate::ids::OutputStorageId::from_raw(0),
+            pubkey: shekyl_types::OneTimePubkey::from_bytes([0x40; 32]),
+            unlock_time: stored_timelock(60),
+            height: BlockHeight::from_raw(0),
+            commitment: shekyl_types::CommitmentBytes::from_bytes([0x70; 32]),
         }],
         "stored under amount 0 with the ct-base commitment"
     );
@@ -302,8 +304,8 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
             .value(),
     )
     .expect("decodes");
-    assert_eq!(spend_index.tx_id, 2);
-    assert_eq!(spend_index.height, 1);
+    assert_eq!(spend_index.tx_id, crate::ids::TxStorageId::from_raw(2));
+    assert_eq!(spend_index.height, BlockHeight::from_raw(1));
     assert_eq!(
         TxOutputIndices::decode(
             snap.open_table(TX_OUTPUTS)
@@ -314,7 +316,10 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
                 .value()
         )
         .expect("decodes"),
-        TxOutputIndices(vec![2, 3])
+        TxOutputIndices(vec![
+            crate::ids::AmountIndex::from_raw(2),
+            crate::ids::AmountIndex::from_raw(3),
+        ])
     );
     assert_eq!(
         snap.open_table(OUTPUT_TXS).expect("t").len().expect("len"),
@@ -525,12 +530,12 @@ fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
     // whose prefix skips to 5: len becomes 2 but the highest prefix is 5.
     let planted: Result<(), TestErr> = store.write(|batch| {
         let hole = OutKey {
-            amount_index: 5,
-            output_id: 99,
-            pubkey: [9; 32],
-            unlock_time: 0,
-            height: 0,
-            commitment: [9; 32],
+            amount_index: crate::ids::AmountIndex::from_raw(5),
+            output_id: crate::ids::OutputStorageId::from_raw(99),
+            pubkey: shekyl_types::OneTimePubkey::from_bytes([9; 32]),
+            unlock_time: stored_timelock(0),
+            height: BlockHeight::from_raw(0),
+            commitment: shekyl_types::CommitmentBytes::from_bytes([9; 32]),
         };
         batch
             .open_multimap_table(OUTPUT_AMOUNTS)?
@@ -556,12 +561,14 @@ fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
 
 fn amount_member(amount_index: u64, output_id: u64) -> OutKey {
     OutKey {
-        amount_index,
-        output_id,
-        pubkey: [u8::try_from(output_id & 0xff).expect("byte"); 32],
-        unlock_time: 0,
-        height: 0,
-        commitment: [9; 32],
+        amount_index: crate::ids::AmountIndex::from_raw(amount_index),
+        output_id: crate::ids::OutputStorageId::from_raw(output_id),
+        pubkey: shekyl_types::OneTimePubkey::from_bytes(
+            [u8::try_from(output_id & 0xff).expect("byte"); 32],
+        ),
+        unlock_time: stored_timelock(0),
+        height: BlockHeight::from_raw(0),
+        commitment: shekyl_types::CommitmentBytes::from_bytes([9; 32]),
     }
 }
 
@@ -723,7 +730,7 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
     let planted: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(CURVE_TREE_ROOTS, StoreInvariant::RootRewritten)?
-            .insert(1, CurveRoot::from_bytes([1; 32]).encode().as_slice())?;
+            .insert(1, CurveTreeRoot::from_bytes([1; 32]).encode().as_slice())?;
         Ok(())
     });
     planted.expect("plant");
@@ -749,11 +756,11 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
 
     // Fully derived facts (the E6-complete shape): nothing is stamped.
     let derived = ConnectFacts {
-        weight: Fact::derived(1_000),
-        long_term_weight: Fact::derived(900),
-        cumulative_difficulty: Fact::derived(100),
-        coins_generated: Fact::derived(1_000_000),
-        burned: Fact::derived(0),
+        weight: Fact::derived(shekyl_types::BlockWeight::from_raw(1_000)),
+        long_term_weight: Fact::derived(shekyl_types::LongTermWeight::from_raw(900)),
+        cumulative_difficulty: Fact::derived(CumulativeDifficulty::from_raw(100)),
+        coins_generated: Fact::derived(AtomicUnits::from_raw(1_000_000)),
+        burned: Fact::derived(AtomicUnits::ZERO),
         root_after: Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32])),
     };
     let g = candidate(0, [0; 32], Vec::new());
@@ -815,7 +822,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
 
     // A committed pass-through connect stamps exactly the passed fields.
     let mut partial = facts(1, 0);
-    partial.burned = Fact::derived(0);
+    partial.burned = Fact::derived(AtomicUnits::ZERO);
     partial.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc1; 32]));
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
@@ -916,7 +923,7 @@ fn passed_through_names_the_rows_that_delete_each_fact() {
         ]
     );
     let mut some = all;
-    some.cumulative_difficulty = Fact::derived(100);
+    some.cumulative_difficulty = Fact::derived(CumulativeDifficulty::from_raw(100));
     some.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32]));
     let remaining: Vec<DeletedBy> = some.passed_through().collect();
     assert_eq!(remaining.len(), 4);

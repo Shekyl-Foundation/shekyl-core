@@ -66,7 +66,8 @@ Transfers:
 
 Receiving (payment requests):
   request new <amount> <label>        Create a payment request (shekyl: URI)
-    [--expiry <height>]               Optional absolute expiry height
+    [--expiry <unix|1h|7d>]           Optional wall-clock expiry (unix seconds
+                                      or a duration from now)
   requests list [pending|matched|all] List payment requests
   make_uri [--amount X] [--label L]   Compose a shekyl: payment URI
     [--address ADDR]                  Defaults to the wallet's address

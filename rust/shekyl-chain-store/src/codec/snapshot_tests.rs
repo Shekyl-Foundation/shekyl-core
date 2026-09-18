@@ -82,12 +82,19 @@ use crate::lmdb_order::Hash32;
 use crate::schema::{self, TableShape};
 
 use super::{
-    post_image, BlockInfo, Canonical, CoverageGaps, CurveRoot, OutKey, OutTx, PassedThroughFacts,
-    ProbeCell, PropertyCell, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices,
-    UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, PassedThroughFacts, ProbeCell,
+    PropertyCell, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices, UndoEntry,
+    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
+use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
 use shekyl_chain_rules::CenRow;
+use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_types::{
+    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
+    OneTimePubkey, OutputIndexInTx, Timestamp, TxHash,
+};
+use shekyl_units::AtomicUnits;
 
 /// Catalogue snapshot stems under `schemas/`. Not codec names;
 /// [`every_canonical_impl_has_a_snapshot`] holds the two namespaces apart.
@@ -289,13 +296,13 @@ impl Fixtures for PassedThroughFacts {
     }
 }
 
-impl Fixtures for CurveRoot {
+impl Fixtures for CurveTreeRoot {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
-            ("zero", CurveRoot::from_bytes([0; 32])),
+            ("zero", CurveTreeRoot::from_bytes([0; 32])),
             (
                 "ascending",
-                CurveRoot::from_bytes(core::array::from_fn(|i| {
+                CurveTreeRoot::from_bytes(core::array::from_fn(|i| {
                     u8::try_from(i).expect("32 indices fit a byte")
                 })),
             ),
@@ -309,13 +316,13 @@ impl Fixtures for BlockInfo {
             (
                 "genesis_like",
                 BlockInfo {
-                    timestamp: 0,
-                    coins_generated: 0,
-                    weight: 0,
-                    cumulative_difficulty: 1,
-                    hash: Hash32::from_bytes([0; 32]),
+                    timestamp: Timestamp::from_raw(0),
+                    coins_generated: AtomicUnits::from_raw(0),
+                    weight: BlockWeight::from_raw(0),
+                    cumulative_difficulty: CumulativeDifficulty::from_raw(1),
+                    hash: BlockHash::from_bytes([0; 32]),
                     rct_outputs: 0,
-                    long_term_weight: 0,
+                    long_term_weight: LongTermWeight::from_raw(0),
                 },
             ),
             // Every field distinct, difficulty straddling the lo/hi split so
@@ -323,13 +330,13 @@ impl Fixtures for BlockInfo {
             (
                 "distinct_fields",
                 BlockInfo {
-                    timestamp: 0x0102_0304_0506_0708,
-                    coins_generated: 2,
-                    weight: 3,
-                    cumulative_difficulty: (5u128 << 64) | 4,
-                    hash: Hash32::from_bytes([0xab; 32]),
+                    timestamp: Timestamp::from_raw(0x0102_0304_0506_0708),
+                    coins_generated: AtomicUnits::from_raw(2),
+                    weight: BlockWeight::from_raw(3),
+                    cumulative_difficulty: CumulativeDifficulty::from_raw((5u128 << 64) | 4),
+                    hash: BlockHash::from_bytes([0xab; 32]),
                     rct_outputs: 6,
-                    long_term_weight: 7,
+                    long_term_weight: LongTermWeight::from_raw(7),
                 },
             ),
         ]
@@ -342,17 +349,17 @@ impl Fixtures for TxIndex {
             (
                 "zero",
                 TxIndex {
-                    tx_id: 0,
-                    unlock_time: 0,
-                    height: 0,
+                    tx_id: TxStorageId::from_raw(0),
+                    unlock_time: crate::codec::stored_timelock(0),
+                    height: BlockHeight::from_raw(0),
                 },
             ),
             (
                 "distinct_fields",
                 TxIndex {
-                    tx_id: 1,
-                    unlock_time: 0x0102_0304_0506_0708,
-                    height: 3,
+                    tx_id: TxStorageId::from_raw(1),
+                    unlock_time: crate::codec::stored_timelock(0x0102_0304_0506_0708),
+                    height: BlockHeight::from_raw(3),
                 },
             ),
         ]
@@ -365,15 +372,15 @@ impl Fixtures for OutTx {
             (
                 "zero",
                 OutTx {
-                    tx_hash: Hash32::from_bytes([0; 32]),
-                    local_index: 0,
+                    tx_hash: TxHash::from_bytes([0; 32]),
+                    local_index: OutputIndexInTx::from_raw(0),
                 },
             ),
             (
                 "distinct_fields",
                 OutTx {
-                    tx_hash: Hash32::from_bytes([0x33; 32]),
-                    local_index: 0x0102_0304_0506_0708,
+                    tx_hash: TxHash::from_bytes([0x33; 32]),
+                    local_index: OutputIndexInTx::from_raw(0x0102_0304_0506_0708),
                 },
             ),
         ]
@@ -386,12 +393,12 @@ impl Fixtures for OutKey {
             (
                 "zero",
                 OutKey {
-                    amount_index: 0,
-                    output_id: 0,
-                    pubkey: [0; 32],
-                    unlock_time: 0,
-                    height: 0,
-                    commitment: [0; 32],
+                    amount_index: AmountIndex::from_raw(0),
+                    output_id: OutputStorageId::from_raw(0),
+                    pubkey: OneTimePubkey::from_bytes([0; 32]),
+                    unlock_time: crate::codec::stored_timelock(0),
+                    height: BlockHeight::from_raw(0),
+                    commitment: CommitmentBytes::from_bytes([0; 32]),
                 },
             ),
             // The amount_index prefix in byte-order-witness form: a
@@ -399,12 +406,12 @@ impl Fixtures for OutKey {
             (
                 "distinct_fields",
                 OutKey {
-                    amount_index: 0x0102_0304_0506_0708,
-                    output_id: 1,
-                    pubkey: [0x11; 32],
-                    unlock_time: 2,
-                    height: 3,
-                    commitment: [0x22; 32],
+                    amount_index: AmountIndex::from_raw(0x0102_0304_0506_0708),
+                    output_id: OutputStorageId::from_raw(1),
+                    pubkey: OneTimePubkey::from_bytes([0x11; 32]),
+                    unlock_time: crate::codec::stored_timelock(2),
+                    height: BlockHeight::from_raw(3),
+                    commitment: CommitmentBytes::from_bytes([0x22; 32]),
                 },
             ),
         ]
@@ -415,10 +422,14 @@ impl Fixtures for TxOutputIndices {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
             ("empty", TxOutputIndices::default()),
-            ("one", TxOutputIndices(vec![7])),
+            ("one", TxOutputIndices(vec![AmountIndex::from_raw(7)])),
             (
                 "three",
-                TxOutputIndices(vec![0, 0x0102_0304_0506_0708, u64::MAX]),
+                TxOutputIndices(vec![
+                    AmountIndex::from_raw(0),
+                    AmountIndex::from_raw(0x0102_0304_0506_0708),
+                    AmountIndex::from_raw(u64::MAX),
+                ]),
             ),
         ]
     }
@@ -800,7 +811,7 @@ snapshotted_codecs! {
     SettlementEpochBlocks => codec_snapshot_settlement_epoch_blocks,
     CoverageGaps => codec_snapshot_rule_coverage_gaps,
     PassedThroughFacts => codec_snapshot_passed_through_facts,
-    CurveRoot => codec_snapshot_curve_root,
+    CurveTreeRoot => codec_snapshot_curve_root,
     BlockInfo => codec_snapshot_block_info,
     TxIndex => codec_snapshot_tx_index,
     OutTx => codec_snapshot_out_tx,

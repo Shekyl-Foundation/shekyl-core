@@ -20,8 +20,9 @@ use crate::rules::header::B6;
 /// SCW-10) — the values the chain store records as `txs_pqc_auth_hash` and
 /// `txs_prunable_hash` so a node that keeps only the skeleton can still
 /// reconstruct the txid it accepted (`Transaction::hash_with_supplied_components`).
-/// All three come from the same `validate`, so no consumer re-hashes a body
-/// and the store never derives a consensus-visible value (C2-R8 Q4).
+/// All three come from the same `validate`, copied from
+/// [`Transaction::txid_parts`] so no consumer re-hashes a body and the store
+/// never derives a consensus-visible value (C2-R8 Q4).
 ///
 /// `pqc_auth_hash` is `None` exactly when the txid is **3-part** — a
 /// coinbase, a serve-credit, the malformed gen-first and no-input shapes —
@@ -107,9 +108,9 @@ impl Candidate {
 ///
 /// The candidate exactly as judged — the block is kept whole, so what the
 /// store persists is what the rules saw — with every identity derived once:
-/// `Block::hash`, and per transaction a [`TxIdentity`] (`Transaction::hash`
-/// and `Transaction::prunable_hash`), CEN-B6's definition applied, each
-/// paired with its body. No consumer re-hashes and no two values can disagree
+/// `Block::hash`, and per transaction a [`TxIdentity`] copied from
+/// [`Transaction::txid_parts`] (CEN-B6's definition applied), each paired
+/// with its body. No consumer re-hashes and no two values can disagree
 /// about which block or transaction they describe (ruling Q4/L4: one value
 /// per identity).
 ///

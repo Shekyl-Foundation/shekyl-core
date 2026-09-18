@@ -20,9 +20,12 @@
 //!   safe Rust primitives; the FFI shim (Phase 3, in
 //!   `rust/shekyl-ffi`) is the only `unsafe` boundary in the LWMA-1
 //!   landing.
-//! - Leaf crate per `docs/completed/DAA_LWMA1.md` §2.1: zero internal
-//!   workspace dependencies. The build script reads
-//!   `config/consensus_constants.json` directly.
+//! - Leaf crate: no external runtime crates. First-party `shekyl-types`
+//!   supplies [`shekyl_types::BlockHeight`] / [`shekyl_types::Timestamp`]
+//!   so this crate does not redefine them as `u64` (the DAA §2.1 cycle
+//!   ban is a ban on *external* crates, not on the domain vocabulary).
+//!   The build script still reads `config/consensus_constants.json`
+//!   directly.
 //!
 //! # Public surface
 //!
@@ -71,6 +74,7 @@ mod error;
 mod fork_choice;
 mod lwma1;
 mod timestamp;
+mod types;
 
 pub use alt_window::{alt_window_plan, AltWindowPlan};
 pub use check_hash::check_hash;
@@ -83,3 +87,4 @@ pub use lwma1::lwma1_next;
 pub use timestamp::{
     check_timestamp_rule, is_above_mtp, is_timestamp_below_ftl, mtp_median, TimestampRuleVerdict,
 };
+pub use types::{CumulativeDifficulty, Difficulty};
