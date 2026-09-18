@@ -342,8 +342,12 @@ here as a migration, and it is worth setting down why:
   C++ surface, it doesn't grow it — touching one optional RPC is not leverage for
   a consensus-DB rewrite. An engine change for the daemon is a **V4,
   consensus-invisible** question; defer with confidence.
-- **The wallet `LeafStore` is greenfield Rust.** It does not exist yet (new
-  `shekyl-curve-tree` crate) and is Rust by default under the
+- **The wallet `LeafStore` is greenfield Rust.** It did not exist when this was
+  written (new `shekyl-curve-tree` crate) — **UPDATE 2026-09-18:** it exists
+  (`rust/shekyl-curve-tree/src/store/redb_backend.rs`, CT-1 landed), and its
+  rewrite to typed value shapes is planned in
+  [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md); the CT-1 decision
+  below stands — and is Rust by default under the
   untrusted-input→Rust policy (`20-rust-vs-cpp-policy.mdc`). So "shift to heed"
   is not a migration question — it is *which Rust persistence for a new
   component*, decided on the wallet store's own merits.
