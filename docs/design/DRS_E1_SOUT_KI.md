@@ -1,11 +1,15 @@
 # DRS-E1 S-OUT-KI — outputs and key images: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **Round 0 (pre-flight) executed 2026-09-18** at `dev` =
-`d89f99791` (the tree that merged PR #772, S-CHAIN-R). **Round 1 RULED
-2026-09-18** (maintainer, on PR #779; §9, each ruling line-local): Q1 **A**,
-Q2 default, Q4 `OutTx`; **Q3 overridden to B** — the histogram RPC and its
-CLI command are deleted now, on privacy grounds, as their own PR. The
-increment (§7) may start once this document merges. (The code gate on PR #777 — RTN-7 retyped `store/connect.rs`
+**Status:** OPEN — **increment LANDED 2026-09-18** (the §7 commits 1–3 are
+code: `store/read.rs` K1/K2/O1/O2, `store/at_index.rs`, layout v6 in
+`schema.rs` / `codec/chain.rs` / `codec/undo.rs` / `store/connect.rs`; Q3's
+deletion is PR #782). Stays in `design/` until S-TX's pre-flight has read it
+(archive-or-contract per index §8 then). History: **Round 0 (pre-flight)
+executed 2026-09-18** at `dev` = `d89f99791` (the tree that merged PR #772,
+S-CHAIN-R). **Round 1 RULED 2026-09-18** (maintainer, on PR #779; §9, each
+ruling line-local): Q1 **A**, Q2 default, Q4 `OutTx`; **Q3 overridden to B**
+— the histogram RPC and its CLI command are deleted now, on privacy grounds,
+as their own PR. (The code gate on PR #777 — RTN-7 retyped `store/connect.rs`
 and `store/chain_reads.rs`, which §7 commits 1, 2 and 4 edit — **lifted
 2026-09-18: #777 merged**, and this document was re-based and re-verified on
 that tree, `51d7f2416`; every code anchor re-read.) Implements *from*
@@ -487,6 +491,7 @@ are reads in the S-CHAIN-R shape.
 
 | Date | Entry |
 | --- | --- |
+| 2026-09-18 | **Increment landed** — §7 commits 1–3 as sequenced (commit 4 is this docs commit; commit 5's RK-8 row was written by #782). What landed differs from the plan in two places worth naming: `next_amount_index` on the keyed table is `last + 1 == len` with the single-bucket premise stated at the site (no end-peek is needed once duplicates are unrepresentable), and SOK-2's belt is enforced at `connect` as `amount_index == output_id` rather than checked only by a test — the write refuses the divergence. `AtIndex<T>` lives in its own module with `compile_fail` doctests. `check_redb_schema_key_types.py` had silently dropped the tuple-keyed definition (its key regex could not cross the inner comma) and only its constraint floor noticed — fixed with a parse selftest, the dual-form INTEGERKEY+uint64-dupsort rule, and the floor moved 30 → 29 with the reason beside it. `cargo test -p shekyl-chain-store` 251 + 10 doctests. |
 | 2026-09-18 | **Round 1 RULED (maintainer, on PR #779).** Q1 **A** — with the sharper reason: B would rule a consensus spec question (R8b-2) to settle a storage layout, the tail wagging the dog; the amount dimension is *carried, not chosen*, said in those words in §3.4. Q2 default, with the self-guarding property named (a second bucket fails `len() == last + 1`, never passes). Q4 `OutTx`. **Q3 overridden to B**: `get_output_histogram` and its CLI command are a statistical disclosure surface with no consumer on a ringless chain; "dies at cutover" is a schedule, not a mitigation, and testnet is where analysis tooling gets built — deleted now, own PR, and RK-8 stops listing it as served on this PR. Implementation may start once this document merges. |
 | 2026-09-18 | **PR #779 review round 3 (Copilot: 4 open + 4 suppressed; 8 taken, 0 refuted) — and the #777 gate lifted.** Re-based onto `51d7f2416` (#777 RTN-7 and #780 landed **code**); every code anchor re-read — only the five `undo_tests.rs` lines moved (+2); stamp moved with the checks actually re-run (242 + 8; census 6/151, held 2, 153, 126/153; policy 0/9; `tables.snap` 51; `SCHEMA_VERSION 5`). Two findings reshaped the commit sequence: the tuple key needs `impl Restorable for (u64, u64)` to pass `open_insert_table`'s bound (`write.rs:291`–`:293`), and `MultiInserted` cannot outlive its constructor — `SetTable` (`set.rs:68`) is returned by `open_multimap_table` and re-exported at `store/mod.rs:112` — so the layout change and the multimap deletions are **one commit** (6 → 5). O2's index domain pinned: the `_from_global` read (`output_txs[output_id]`), never the amount-specific composition that is right only by SOK-2's belt. `prune_tx_data`'s `get_output_key` (`db_lmdb.cpp:10282`) joins the census: a current caller that dies with the stripe engine (PDM-Q7). CEN-H14 wording corrected — miner/emission loud amounts are stored under `0` and permitted; a second bucket means a non-miner, non-emission vout escaped. Census records updated in-line (`CONSENSUS_RULE_CENSUS.md` §5.2 ×2: `get_output_key_mask_unlocked` has zero callers; `CONSENSUS_RULE_CENSUS_1.md` U-7: `get_output_distribution` has no route). Archived S-CHAIN-R doc's §10 archive bullet put in the past tense. PR title/description updated to SOK-1…SOK-10. |
 | 2026-09-18 | **PR #779 review round 2 (Copilot: 4 open + 1 suppressed; 5 taken, 0 refuted).** Commit 3's opener deletion has a non-`OUTPUT_AMOUNTS` caller — the `properties` `IMPOSTOR` multimap leg at `store_tests.rs:449`–`:453`, the only test of the by-name half of the typed-properties refusal — kept as a keyed impostor, named in §7 and §8; Q1 arm B no longer carries the refuted `== leaf` equality; Q3's default is stated as the future doc action it is (RK-8 still lists the route); the index `SOK-` row and `DRS-*` cell synchronised to two counters and SOK-10; the archived S-CHAIN-R doc's lifecycle sentence put in the past tense. Rebased onto `cb6b72b47` (#778); the two lanes' stamp moves to `eee838d4d` merged into one stamp crediting both. |
