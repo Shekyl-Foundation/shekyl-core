@@ -156,6 +156,59 @@ and a reader must be able to check the paraphrase.
   consensus, and it lands at **E4 / S-ARCH** in `shekyl-chain-rules`, not here
   (§5, row 7).
 - **Any C++ deletion.** `PDM-Q-S0`: no C++ landing before the cutover.
+- **The `PDM` propagation sweep** — **named here because it is the reason this
+  round exists, and refused here because it is not this round's.** `PDM-Q6` /
+  `PDM-Q12` never propagated: `grep -c PDM` returns **0** for
+  [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md),
+  [`ARCHIVAL_CHALLENGE_MECHANISM.md`](ARCHIVAL_CHALLENGE_MECHANISM.md),
+  [`CURVE_TREE_CLIENT.md`](CURVE_TREE_CLIENT.md) and
+  [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) at
+  `8494f2a27`, and all four still design against the **leaf unit**. This is
+  the same failure that produced the `CTS-`/`PDM-Q12` collision this round was
+  opened to resolve, and folding it in here would repeat the error in the
+  other direction — a store round silently editing the archival design home.
+  **It needs its own owner** (FOLLOWUPS row). What it must sweep, verified at
+  `8494f2a27`:
+  - `V3_STAKER_ARCHIVAL.md` — "Problem 2" (`:70-77`) says proof construction
+    needs historical tree state served by archival nodes; `WSS-1` shows the
+    wallet holds its own complete tree and spending never touches the pruned
+    regions. The data-scope pin's Set B (segment leaves proven against `R_k`,
+    non-stakers pruning to `R_k`) is re-keyed by `PDM-Q6` and retired by
+    `PDM-Q12`. "V3 architectural requirements" is **claim-era throughout**
+    (`staker_pool_share`, `is_active_staker`, `stake_tier`, tier-weighted
+    rewards) and routes wallet archival queries to staker peers through a
+    multi-source `assemble_tree_path_for_output` RPC — which contradicts
+    `EU-D1` ([`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md) §2,
+    "no wallet talks to a wallet"), the claim-era retirement, and the
+    tier-neutral pricing later in the same document. **Highest priority:** the
+    ship-timing banner's *"The design is unchanged by this correction — only
+    the ship timing"* (`:18`) is **no longer true**, and it is the sentence an
+    agent will trust.
+  - `ARCHIVAL_CHALLENGE_MECHANISM.md` — §1 (`:87`) and `:1421` define a shard
+    as a 3,326,976-byte partition, which is 25,992 leaves × 128. **The figure
+    survives and its derivation does not** (`PDM-Q6` item 4's `RF-D6` row:
+    `SHARD_BYTES` survives as the *boundary metric*; the leaves × 128
+    derivation does not) — so this is a re-derivation, not a find-and-replace.
+    §2 step 2 (`:134`) has the witness verify against `R_k`; under `PDM-Q12`
+    the check is per transaction against `txs_prunable_hash` /
+    `txs_pqc_auth_hash`. The banner's "live remainder" still carries a nonce
+    that §2 step 3 and `SF-D8` deleted with (a0) — **a banner contradicting
+    its own body.**
+  - `CURVE_TREE_CLIENT.md` §7.2–§7.6 — still design-of-record for the retired
+    model (`R_k` as a content address, a minimal wallet pruning to `R_k`,
+    archivers holding full leaves), and §7.2.1 #5 carries a **standing
+    uncorrected error**: "`R_k` plus owned chunks suffice" to build a spend
+    path. They do not.
+  - `PRINCIPAL_STAKE_LIFECYCLE.md` — §0.1's cites have drifted (`Engine` is
+    `mod.rs:585` not L403; `key` `:630` not L452; `stake` `:885` not L681 —
+    **verified**). §5 gate 1 still presents the `GF-4` output-count rule as an
+    open design gate with its retirement appended as an `UPDATE`, and the
+    `GF-4b` note of 2026-09-11 says outright that it was *"annotated rather
+    than edited"* — the pattern the current-only principle forbids. *(One row
+    checked and **sound**: §5 item 2 is still accurate — rebond and
+    `HoldingsUpdate` have verify arms at `bond_post.rs:255`, `:324`, `:440`
+    and no builder; `shekyl-archival-bond-builder` has only
+    `build_join_market_vin` and `build_release_vin`.)*
 
 ---
 
@@ -264,13 +317,14 @@ Each is a substrate fact at `8494f2a27`, with its file and line.
 | **WSS-2** | **The sender-side handle is `Option`, the engine's is not.** `LocalPendingTx.curve_tree: Option<CurveTreeHandle>` (`engine/transfer/engine.rs:156`), matched at `transfer/trait_impl.rs:195` (`None => TreeSpendGate::Unenforced`) and `:280`. So there is already one seam where "no tree" is a representable state — a **composition seam**, not a production posture, since the engine always holds one. Recorded so `WSS-Q1` is not argued from this `Option` as if it were a wallet without a tree. | `WSS-Q1` inputs; the spend-gate contract |
 | **WSS-3** | **`PDM-Q12`'s sentence *"The curve tree's verification-side leaf store, if any, is Q1's to grade"* does not refer to this store.** `PDM-Q1` (:117) grades **§9** — the daemon's chain-store inventory — and §9.2 grades `curve_tree_leaves` **CACHE** (:1421). The daemon verifies FCMP++ too (`curve_tree_roots`, CEN-I12). So the referent is the **daemon's** leaf table, already graded; **the wallet-side proving store is ungraded by PDM and is this round's.** | Forecloses reading that sentence as license over obligation A |
 | **WSS-4** | **`root_at_count` — a pure obligation-A method — reads the `frozen_segments` table.** `redb_backend.rs:1214`, reading `r_k` per complete segment at `:1235-1247` and falling back to `recompute_segment_r_k` from leaves when a row is absent (`:1241-1245`); composition is `ops.rs:39` `mixed_composition_root(leaf_count, &frozen_r, &tail)`, documented at `ops.rs:6` as *"frozen `R_k` + partial tail"*. **The freeze is therefore not serving-only: it is also the proving path's root-composition cache.** `PDM-Q12`'s deletion surface does not name this consumer. | `WSS-Q1`; §8 bucket (iii); the freeze retirement's true blast radius |
-| **WSS-5** | **A pruned store cannot be reopened as a proving client.** `CurveTreeClient::rebuild_from_store` (`client.rs:628`) refuses with `ClientError::ResumeFromPrunedStore` (`client.rs:200`) when readable drained rows are fewer than `leaf_count` — *"Pruning dropped frozen leaf bytes: the in-memory vec would undercount and every root would be silently wrong"* (`:631-639`). So **obligation B's size discipline and obligation A's resume are already mutually exclusive on one file**, and the conflict is realized today as a refuse-to-open. This is the strongest single argument in the tree that the two obligations have different lifecycles. | `WSS-Q1` — the decisive row |
-| **WSS-6** | **`ServingReader` and `same_store` exist because redb takes an exclusive file lock.** `client.rs:283-290` — the `Arc<LeafStore>` is shared *"because redb takes an exclusive file lock, so a second open would simply be refused"*; `redb_backend.rs:160-177` — the serving side gets a narrowed handle because *"handing it the store itself would put a second writer beside the one the actor exists to be… the two would contend on the write lock"*; `same_store` is `Arc::ptr_eq` (`:325`). **One file is a consequence of the engine's file lock, not of a ruling.** Under two files each obligation has its own writer, and `same_store`'s subject ("pins applied to one are not pins in the other") cannot arise. | `WSS-Q1`; CT-5 §3.1's single-writer actor |
+| **WSS-5** | **A pruned store cannot be reopened as a proving client.** `CurveTreeClient::rebuild_from_store` (`client.rs:628`) refuses with `ClientError::ResumeFromPrunedStore` (`client.rs:200`) when readable drained rows are fewer than `leaf_count` — *"Pruning dropped frozen leaf bytes: the in-memory vec would undercount and every root would be silently wrong"* (`:631-639`). So obligation B's size discipline and obligation A's resume **cannot both be satisfied by one file**. **Corrected 2026-09-18 (steering review): the conflict is *latent*, not realized** — `WSS-8` says nothing prunes in production, so no store is in this state today, and the refusal is a guard that has never fired. And its axis was mis-stated: this is not two *obligations* colliding over storage, it is **one identity's storage policy destroying another identity's state** (`WSS-13`). It is evidence for `WSS-Q1`'s firewall framing (§6.1), not the ground of it. | `WSS-Q1` (supporting, not decisive) |
+| **WSS-6** | **`ServingReader` and `same_store` exist because redb takes an exclusive file lock.** `client.rs:283-290` — the `Arc<LeafStore>` is shared *"because redb takes an exclusive file lock, so a second open would simply be refused"*; `redb_backend.rs:160-177` — the serving side gets a narrowed handle because *"handing it the store itself would put a second writer beside the one the actor exists to be… the two would contend on the write lock"*; `same_store` is `Arc::ptr_eq` (`:325`). **One file is a consequence of the engine's file lock, not of a ruling.** Under two files each obligation has its own writer, and `same_store`'s subject ("pins applied to one are not pins in the other") cannot arise. **Weight, corrected 2026-09-18:** this is *mechanics*. It says the one-file arrangement was never chosen, which removes an argument for keeping it; it does not say what should replace it. The replacement is decided on the firewall (§6.1), not here. | `WSS-Q1` (mechanics); CT-5 §3.1's single-writer actor |
 | **WSS-7** | **The reorg path touches all seven tables.** `truncate_from_tree_position` / `rollback_to_fork` (`redb_backend.rs`, the `delete_*_batched` trio at `:1950-2011` per `CTS-11`) span proving and serving tables in one write transaction. Under two files this is the one genuinely hard row: either B does not reorg (it is filled from below the horizon, `PDM-Q2`'s `W ≥ D_max`), or two rollbacks need an ordering rule. | `WSS-Q1`; `WSS-Q3` |
 | **WSS-8** | **`prune_frozen` has no production caller at this sha, and the archiving wallet disables pruning outright.** Every call site is a test (`shekyl-p-host/tests/composition.rs` ×7, `shekyl-p-serve/tests/store_axis.rs:125`) or a doc comment reasoning *about* it as a hazard (`p-host/src/serve_set/{report,staleness,witness}.rs`, `shekyl-operator-alarm/src/lib.rs:341`). Production instead declares the one-way prune-disabled posture — `curve_tree_actor.rs:402` calls `set_prune_disabled` — so an archiving wallet **never prunes**. **"Unused" is a hypothesis, not a verdict:** the capability is designed-for and guarded by live detectors (`PostureDeclaration`, pins, staleness, witness), so the finding is *the discard has no caller*, not *the machinery is dead*. **Provenance, per the dead-code discipline (`git log -S'prune_frozen(' -- rust/shekyl-{p-host,p-serve,engine-core}/src` returns nothing): the discard was never wired**, not wired and later removed. So `WSS-Q2` is "design the size discipline", not "reinstate or delete a caller". What follows is a question, not a deletion: **does the rebuilt store prune at all, and what bounds obligation A's growth if it does not?** | `WSS-Q2`; §8 bucket (ii)'s scope; the size discipline nobody has ruled |
 | **WSS-9** | **The composition boundary and the shard partition are different objects, and cannot be tied.** The tie today is `SEGMENT_LEAF_COUNT == leaves_per_segment()` (`PDM-Q-F33` (ii)); under `PDM-Q6`/`F32` the consensus partition becomes `b_*`, a **byte-bounded `tx_id` range**, while `root_at_count`'s composition boundary is a **leaf-count geometry** (`outputs_per_node(SEGMENT_LAYER_J)`, `segment.rs`). **Verified consequence:** the `F33` (ii) interim assert must die with the freeze and must **not** be re-pointed at `SHARD_BYTES` — the two constants would be asserting a relation that does not exist. **Not verified, and therefore `WSS-Q2`'s to rule:** whether obligation A keeps *any* segment-subroot cache after the freeze retires. `WSS-4`'s `r_k` read has a recompute-from-leaves fallback (`redb_backend.rs:1241-1245`) and `WSS-8` says nothing prunes in production, so on today's store the cache is **dispensable, not load-bearing** — dropping it, keeping it, or replacing it with a different checkpoint scheme are all open, and this finding does not choose. | §5 rows 1–2; §8; `WSS-Q2`; the interim-tie PR's scope |
 | **WSS-10** | **`PDM-Q12`'s code cites have drifted ~6–50 lines at this pin.** `StoreError::FrozenSegmentPruned` is at `redb_backend.rs:470` (cited `:464`); `ServingReader`'s doc block spans `:160-183` and its `open_frozen_segment_body` is at `:216`, while `LeafStore::open_frozen_segment_body` is at `:1877` (cited as `:164-183` for all three). The **symbols** named are correct; the **ranges** are stale. Recorded as a re-pin, not a defect. | Every increment's Round-0 re-pins rather than inheriting |
 | **WSS-11** | **`redb_backend.rs` is still 4 196 lines** — nothing of `CTS-` is built. The file holds the schema, six codecs, `StoreError` (17 variants), three handle types, every operation, and ~2 000 lines of tests. | §8; the decomposition principle survives any `WSS-Q1` answer |
+| **WSS-13** | **`P`'s serving state is written through the *principal's* curve-tree actor, into the principal's file — a firewall-layering defect.** `EngineServeSetPinner` holds a `CurveTreeHandle` and a `p_id` side by side (`stake_engine/serve_set_source.rs:79`, `:101`) and calls `pin_serve_set` on that handle (`:254-257`); the handle it is given in production is the **engine's own** — `g.curve_tree.clone()` at `stake_engine/serving/start.rs:158`, passed at `:203-206`. So the serve set — which is `P`'s bonded obligation, and whose membership is `P`-correlated — is persisted by the actor that owns the principal's proving state, in the same `.curvetree` file. [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §0 treats keeping `P`'s material inside the `StakeEngine` actor as load-bearing; this path routes around that. **This, not `WSS-5` or `WSS-6`, is what makes `WSS-Q1` urgent**, and it re-poses it as an *ownership* question rather than a storage one (§6.1). | `WSS-Q1` — the ground; the firewall stack |
 | **WSS-12** | **`CurveTreeClient` holds the full leaf set in memory.** `entries: Vec<LeafEntry>` (`client.rs:293`) beside `store: Arc<LeafStore>` (`:290`); the store is the durable mirror and `rebuild_from_store` reloads it wholesale at open. Obligation A's working set is therefore RAM-resident and grows with the chain — a device-floor question at the Pi-4 provisioning floor ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)) that no round has asked. | `WSS-Q2`; out of scope for increment 1, named so it is not shed |
 
 ---
@@ -324,41 +378,56 @@ commit.**
 | **WSS-Q10** | **The Foundation `CompleteTree` behind a persona, never on a daemon** | `PDM-Q9` coverage floor; [`FOUNDATION_ARCHIVAL_DISCLOSURE.md`](FOUNDATION_ARCHIVAL_DISCLOSURE.md):196, [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md):120 | Proposed: a `CompleteTree` is this store with **every** shard held and the prune-disabled posture declared — a configuration, not a fourth store type |
 | **WSS-Q11** | **`SEGMENT_LEAF_COUNT` / `leaves_per_segment()`'s interim tie** | `PDM-Q-F33` (ii), assigned to this lane; `WSS-9` | Proposed: land as scoped — **one line that dies with the freeze**, same PR as the CT-1 dedup assert — and **do not re-point it at `SHARD_BYTES`**, because `WSS-9` says the two are different objects |
 
-### 6.1 `WSS-Q1` — the two arms, written out
+### 6.1 `WSS-Q1` — re-grounded on the firewall (steering review, 2026-09-18)
 
-Posed, not answered, so Round 1 chooses between positions rather than drafting
-one.
+**The question was posed on the wrong axis.** As first written, `WSS-Q1` asked
+"one file or two" and argued it from storage mechanics — the shared file lock
+(`WSS-6`) and the prune/resume collision (`WSS-5`). Steering's reading
+re-grounds it, and the substrate agrees (`WSS-13`):
 
-**Arm A — one file, two obligations.** One redb file, one `SCHEMA_VERSION`,
-one writer (the CT-5 actor), one open/refuse path. *For:* no cross-file
-consistency rule; the reorg path stays in one transaction (`WSS-7`); no second
-file to lose, back up, or leave behind; `same_store` keeps meaning.
-*Against:* a non-archiver wallet — the overwhelming majority — carries
-serving tables it never writes; `WSS-5`'s refuse-to-open says the two
-lifecycles already contradict each other; every `WSS-Q2` answer must hold for
-both obligations at once; and the serving loop's narrowing apparatus
-(`WSS-6`) exists only to manage the shared lock.
+> **`WSS-Q1` is not a storage question. It is a question of which identity
+> owns which state.**
 
-**Arm B — two files.** The archiver's serving store is a separate artifact
-with its own lifecycle, lapse tail, fill path and writer; the proving store
-stays what every wallet has always had. *For:* §4.1's type split already
-tracks it (`ServingReader` in one crate, `LeafStore` in one); `WSS-5`'s
-conflict dissolves — A never prunes, B prunes by lapse, neither refuses to
-open because of the other; `WSS-6`'s lock contention and `same_store` both
-disappear; a wallet that is not an archiver has no serving file at all, which
-is the **privacy-shaped** answer (the disk of a non-archiver looks like the
-disk of a non-archiver); steering (1) is satisfied — A is "very WALLET" and
-buildable now, B is gated on daemon elements still in flux. *Against:* two
-schema versions and two refuse paths; `WSS-7`'s reorg needs `WSS-Q3` ruled
-first; the `CompleteTree` floor holds both files; two-file atomicity is a
-property nothing asserts today.
+- **The serving store is `P`'s.** The serve set is a persona's bonded
+  obligation; its membership is `P`-correlated; it exists only while `P` is
+  bonded. It should be owned by `P`'s side — the `StakeEngine` and the serving
+  task — live in its **own file**, be encrypted under **`P`-derived keys**, and
+  be **destroyed when the bond ends**.
+- **The proving state is the principal's.** It is the wallet's own tree state,
+  opened unconditionally (`WSS-1`), carrying no persona correlation.
 
-**What the pre-flight does not settle.** The attribution is clean at the type
-and crate level and messy at exactly three methods (`root_at_count`,
-`prune_frozen`, `open_frozen_segment_body`), each of which crosses **only
-through the leaf segment** — the object `PDM-Q12` retires. Whether that makes
-Arm B nearly free or merely cheaper depends on `WSS-Q3`, which is why Q3 is
-listed as a separate question rather than folded in.
+**Why this is the right axis and the mechanics were not.** The firewall is a
+stack — network, timing, output, bond funding — and
+[`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §0 treats
+keeping `P`'s material inside the `StakeEngine` actor as load-bearing. A
+question answered on file-lock mechanics can be re-answered by a future change
+to redb; a question answered on the firewall cannot, because the firewall is
+the mission commitment (`00-mission` #2, privacy). It is also the axis that
+**names a defect in the code today** rather than only a preference about
+tomorrow: `WSS-13` shows `P`'s serve-set pins passing through the principal's
+actor into the principal's file. Under the storage framing that is invisible;
+under this one it is the finding.
+
+**What this does to the two arms.** "One file" is no longer a neutral
+alternative — it is the arrangement that puts two identities' state in one
+artifact, which is what `WSS-13` reports as a defect. So the round's remaining
+work on `WSS-Q1` is not *whether* to separate but **what each side becomes**:
+
+| Side | Open question |
+| --- | --- |
+| **`P`'s serving store** | Its own file, `P`-derived encryption, bond-lifetime scope — what writes it (the `StakeEngine`, not the curve-tree actor), what the fill and lapse paths are (`WSS-Q4`, `WSS-Q8`), and how `WSS-13`'s current routing is unwound |
+| **The principal's proving state** | **Whether it stays a redb store at all** — steering's standing "A is not a store" argument, which `WSS-12` is consistent with (the full leaf set is RAM-resident, `entries: Vec<LeafEntry>`, and the redb file is a durability mirror rebuilt wholesale at open). **That argument is not restated here**, because this round does not hold its text; it is owed to Round 1 from steering, and the arm is written to receive it |
+
+**What is still genuinely open, and is Round 1's:** the two questions in that
+table, plus `WSS-Q3` (reorg, which under this framing is the principal's alone
+if `P`'s store is filled only from below the horizon). **The mechanics
+findings are retained as supporting evidence, not as grounds** — `WSS-6` says
+the one-file arrangement was never chosen, and `WSS-5` says it cannot be made
+to satisfy both storage policies; neither is why the answer is what it is.
+
+*Superseded: the "Arm A / Arm B" pair as first written, which argued the
+question on storage mechanics and treated one file as a live option on equal
+footing. Retained in the git history of this document, not restated here.*
 
 ---
 
@@ -585,4 +654,5 @@ What must be true before genesis for this lane, in mission order.
 
 | Date | Decision |
 | --- | --- |
+| 2026-09-18 | **`WSS-Q1` re-grounded on the firewall (steering review).** The question was posed on the wrong axis: "one file or two", argued from the shared file lock (`WSS-6`) and the prune/resume collision (`WSS-5`). It is an **ownership** question — the serving store is `P`'s (own file, `P`-derived keys, bond-lifetime scope, owned by the `StakeEngine`), the proving state is the principal's. **`WSS-13` added**, and it is the ground: `P`'s serve-set pins are written through the *principal's* curve-tree actor into the principal's file (`serve_set_source.rs:254-257` on the handle from `serving/start.rs:158`), routing around `PRINCIPAL_STAKE_LIFECYCLE.md` §0's load-bearing containment of `P`'s material — a firewall-layering defect visible only on this axis. `WSS-5` corrected twice over: its conflict is **latent** (nothing prunes in production, `WSS-8`) and its axis was mis-stated — it is one identity's storage policy destroying another's state, not two obligations colliding. `WSS-6` demoted to mechanics. §6.1 rewritten; the "Arm A / Arm B" pair is superseded. The proving side's "is it a store at all" arm is **owed to Round 1 from steering** — this round does not hold that argument's text and does not reconstruct it. **`PDM` propagation is not this round's** (§2.2, FOLLOWUPS): four documents never received `PDM-Q6`/`Q12` and are the next agent's trap. |
 | 2026-09-18 | **Round opened** at `dev@8494f2a27`, Round 0 executed. `WSS-` family registered at birth. Twelve findings; `WSS-4` (`root_at_count` reads `frozen_segments` — the freeze is also the proving path's root cache), `WSS-5` (a pruned store cannot be reopened as a proving client — the two obligations already conflict, observably) and `WSS-6` (`ServingReader` and `same_store` exist because redb takes an exclusive file lock) are the three that reframe `WSS-Q1` from an architectural preference into a question about a conflict the tree already has. `WSS-9` is split into its verified half (the composition boundary cannot be tied to `b_*`, so the `F33` (ii) assert dies with the freeze) and its open half (whether any subroot cache survives — `WSS-Q2`'s). `WSS-3` resolves `PDM-Q12`'s "verification-side leaf store" to the **daemon's** `curve_tree_leaves` (graded CACHE by `PDM-Q1` over §9), so the wallet-side proving store is ungraded and is this round's. **`CTS-` closes as record with this document as its successor** (disposed on steering's answer 3, confirmed by Rick on review); its work is partitioned by unit in §8, and no `CTS-` implementation PR lands beyond PR A. **PR A is cleared ahead of the round** (steering, answer 2), with the §11.1(f) sequencing departure disclosed. `WSS-Q1…Q11` posed; **none ruled**. |
