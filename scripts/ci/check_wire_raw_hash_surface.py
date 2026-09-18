@@ -151,8 +151,15 @@ FIELD_START_RE = re.compile(r"^\s*pub\s+(?P<name>\w+)\s*:")
 VARIANT_FIELD_START_RE = re.compile(r"^\s+(?P<name>\w+)\s*:")
 TUPLE_VARIANT_START_RE = re.compile(r"^\s{4}(?P<name>[A-Z]\w*)\(")
 FN_RE = re.compile(r"^\s*pub\s+(?:const\s+|async\s+|unsafe\s+)?fn\s+(?P<name>\w+)")
-ITEM_RE = re.compile(r"^\s*pub\s+(?P<kind>struct|enum)\s+(?P<name>\w+)")
+# A method inside a `pub trait`'s body. Trait methods are written without
+# `pub` and are public anyway — the third "public with no keyword" surface
+# after enum struct-variant fields and tuple-variant payloads.
+TRAIT_FN_RE = re.compile(r"^\s{4}(?:unsafe\s+|async\s+)?fn\s+(?P<name>\w+)")
+ITEM_RE = re.compile(r"^\s*pub\s+(?P<kind>struct|enum|trait)\s+(?P<name>\w+)")
 VARIANT_RE = re.compile(r"^\s{4}(?P<name>[A-Z]\w*)\s*\{")
+# A top-level `}` closes the enclosing item, so a bare `fn` after a trait
+# body is an impl's, not a trait method's.
+ITEM_END_RE = re.compile(r"^\}")
 
 # One pending kind per surface: a fn waits for `{`/`;`, a field waits for
 # a complete type, a tuple variant waits for its closing paren.
@@ -228,6 +235,7 @@ def scan(root: Path) -> tuple[dict[str, str], int]:
         enclosing = "?"
         variant = None
         in_enum = False
+        in_trait = False
         pending: list[str] | None = None
         pending_kind = ""
         pending_key = ""
@@ -256,11 +264,19 @@ def scan(root: Path) -> tuple[dict[str, str], int]:
             if m := ITEM_RE.match(line):
                 enclosing, variant = m.group("name"), None
                 in_enum = m.group("kind") == "enum"
+                in_trait = m.group("kind") == "trait"
                 pub_items += 1
+                continue
+            if ITEM_END_RE.match(line):
+                in_enum = in_trait = False
                 continue
             if m := FN_RE.match(line):
                 pub_items += 1
                 take(_KIND_FN, f"{rel}::{m.group('name')}()", line)
+                continue
+            if in_trait and (m := TRAIT_FN_RE.match(line)):
+                pub_items += 1
+                take(_KIND_FN, f"{rel}::{enclosing}::{m.group('name')}()", line)
                 continue
             if m := VARIANT_RE.match(line):
                 variant = m.group("name")
@@ -461,6 +477,29 @@ def selftest() -> int:
         problems = check(root, {})
         expect("tuple variant", problems, "block.rs::TxExtraField::PubKey.0")
         expect("tuple variant (vec)", problems, "block.rs::TxExtraField::AdditionalPubKeys.0")
+
+        # Trait methods are the third keyword-less public surface: written
+        # `fn`, public through the `pub trait`. A `fn` after the trait's
+        # closing brace is an impl's and is not surface.
+        src.write_text(
+            "pub trait Digest: Copy {\n"
+            "    fn digest(&self) -> [u8; 32];\n"
+            "    fn wide(\n"
+            "        &self,\n"
+            "    ) -> Vec<[u8; 32]>;\n"
+            "}\n"
+            "impl Digest for Thing {\n"
+            "    fn digest(&self) -> [u8; 32] {}\n"
+            "}\n"
+        )
+        problems = check(root, {})
+        expect("trait method", problems, "block.rs::Digest::digest()")
+        expect("trait method (multi-line)", problems, "block.rs::Digest::wide()")
+        expect(
+            "impl fn is not surface",
+            [p for p in problems if "Thing" in p or p.count("digest()") > 1],
+            None,
+        )
 
         # Not surface: pub(crate) fields and fns are not scanned.
         src.write_text(

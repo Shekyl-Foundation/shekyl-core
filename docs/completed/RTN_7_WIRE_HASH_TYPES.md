@@ -226,7 +226,24 @@ is a field on an `Allow(reason, addressee)` record that `check` asserts
 non-empty. The two tuple variants are the tx public keys `R` — curve
 points, one class with `Output.key` — allowlisted with the same addressee.
 
-Final figure: **78 public items scanned, 17 raw occurrences, all 17
+Figure after the second round: 78 public items, 17 raw, all allowlisted.
+
+**Third round (2026-09-18) — public trait methods.** Copilot again read
+the scanner: a `pub trait`'s methods are written `fn` with no `pub` and
+are public through the trait — the third keyword-less surface, after
+enum struct-variant fields and tuple-variant payloads (`varint::VarInt` is
+the live instance). Now scanned as `Trait::method()`, with the item
+closing at the top-level `}` so an `impl`'s `fn` is not mistaken for one;
+self-test legs for a one-line and a multi-line trait method and for the
+impl exclusion. The same round typed `BlockHeaderFacts`' roots in
+`shekyl-daemon-rpc` — its comment said "neither root has a domain newtype
+in this tree", which RTN-7 had made false, and the fix for a comment made
+false by a type is the type, not a reworded comment — and minted
+`BlockHash::NULL` so the genesis parent is one constant
+(`A2::GENESIS_PREVIOUS` aliases it) instead of a `[0u8; 32]` in thirty
+fixtures and the genesis tool.
+
+Final figure: **81 public items scanned, 17 raw occurrences, all 17
 allowlisted with a reason and a checked addressee.**
 
 **Third round (PR #777 review, 2026-09-18, at `7906dab1d`).** The same

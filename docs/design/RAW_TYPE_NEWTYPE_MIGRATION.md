@@ -1,6 +1,6 @@
 # Raw-primitive → domain-newtype migration (work plan)
 
-**Status:** LANDED — `RTN-1…RTN-7` (as of 2026-09-17)
+**Status:** LANDED — `RTN-1…RTN-7` (as of 2026-09-18)
 (wire hash returns and header fields). Living work plan for adopting
 domain newtypes before the redb writers freeze. Last verified against
 this branch 2026-09-17. The June 2026 PR-0 types crate **landed**;
@@ -163,8 +163,8 @@ field per §1).
 | [`sync_state_block.rs:75,86`](../../rust/shekyl-engine-state/src/sync_state_block.rs) `creation_anchor_hash`, `pending_tx_hashes` | persisted |
 | [`tx_meta_block.rs:174,178`](../../rust/shekyl-engine-state/src/tx_meta_block.rs) map keys keyed by txid | persisted |
 | [`consensus types.rs:18,25`](../../rust/shekyl-consensus/src/types.rs) `prev_hash`, `top_hash` | |
-| `shekyl-wire` block `previous` / `curve_tree_root` / `transactions` | **LANDED — RTN-7** (2026-09-17): `BlockHash` / `CurveTreeRoot` / `Vec<TxHash>`, plus `attestation_root: AttestationRoot` and `BondPost.p_canonical_id: PCanonicalId`. Type-only; every parity KAT unchanged. |
-| `shekyl-wire` `Transaction::hash()` / `hash_with_supplied_*` **return**, `Block::hash()`, `prefix_hash()` | **LANDED — RTN-7** (2026-09-17): `TxHash`, `BlockHash`, and the new `PrefixHash` (the txid preimage's *first* component, minted beside `PqcAuthHash` and `PrunableHash` rather than as a signing-specific name — Q3). ~160 call sites in 12 crates; the component surface (`prunable_hash() -> PrunableHash`, `pqc_auth_hash() -> Option<PqcAuthHash>`) was typed with `PDM-Q-F26` the day before. Held by `scripts/ci/check_wire_raw_hash_surface.py`. |
+| `shekyl-wire` block `previous` / `curve_tree_root` / `transactions` | **LANDED — RTN-7** (2026-09-18): `BlockHash` / `CurveTreeRoot` / `Vec<TxHash>`, plus `attestation_root: AttestationRoot` and `BondPost.p_canonical_id: PCanonicalId`. Type-only; every parity KAT unchanged. |
+| `shekyl-wire` `Transaction::hash()` / `hash_with_supplied_*` **return**, `Block::hash()`, `prefix_hash()` | **LANDED — RTN-7** (2026-09-18): `TxHash`, `BlockHash`, and the new `PrefixHash` (the txid preimage's *first* component, minted beside `PqcAuthHash` and `PrunableHash` rather than as a signing-specific name — Q3). ~160 call sites in 12 crates; the component surface (`prunable_hash() -> PrunableHash`, `pqc_auth_hash() -> Option<PqcAuthHash>`) was typed with `PDM-Q-F26` the day before. Held by `scripts/ci/check_wire_raw_hash_surface.py`. |
 | curve-tree [`types.rs:189-191,245-250`](../../rust/shekyl-curve-tree/src/types.rs) `reference_block`/`tree_root`/`curve_tree_root` | |
 
 ## 7. PR D — Heights, indices, timestamps (the clock-semantics decision)
