@@ -676,13 +676,80 @@ a discarded shard's true size is unrecoverable. So:
   `b_{k+1}` yet) is **not bondable** — a clean `HoldingsUpdate`
   admission rule the per-tx model did not give. Every shard therefore
   has its own `≥ W` window of being bondable while universally held;
-  the launch free regime (§3) is the first instance. **Routed to the
-  reward leg, not ruled here:** whether channel 1's `1/R_market`
-  scarcity weight (`REWARD_EMISSION_LEG.md`) applies from *bond* or
-  from *discard(k)* — from bond, an in-window shard with one bond earns
-  maximum scarcity weight while every node holds it, per shard,
-  permanently; from discard, the window pays base only. The bootstrap
-  ruling (Component 4) settles that payment happens, not its weight.
+  the launch free regime (§3) is the first instance.
+
+  **Routed to the reward leg (`REWARD_EMISSION_LEG.md`), with the trade
+  and a proposed mechanism — not ruled here.** *Why this is not the case
+  the bootstrap ruling covered:* the launch free regime is one window,
+  once, and Component 4's ruling that it is a subsidy was a ruling about
+  *launch*. Under shard-granular discard every shard the chain ever
+  produces has its own `≥ W` window of being bondable while universally
+  held — **steady state, recurring, not bootstrap** — so the §3
+  `bond_duration ≥ W` withdrawal does not reach it, and the reward leg is
+  asked a question the bootstrap ruling did not answer: at what weight
+  does channel 1 pay a bond on an in-window shard? *The trade:* **from
+  bond**, a single early bonder earns maximum scarcity weight
+  (`1/R_market` with `R_market = 1`) on a good every node holds, for
+  `≥ W`, on every shard — it overpays, but it is *exactly the incentive
+  the specified-to-scarce window exists to create*: commit to `k` before
+  it is scarce so that scarcity arrives with holders; pay nothing early
+  and every shard reaches `discard(k)` with zero bonds and the Foundation
+  `CompleteTree` is the first and only holder of every freshly scarce
+  shard, permanently — the structural floor doing the market's job.
+  **From discard**, no overpay, no early bonders, and the window is a
+  window nobody uses. **The window is load-bearing on this answer:** if
+  channel 1 pays from discard, shard-granular discard still buys atomic
+  scarcity and clean "not retained" semantics, but the staker-window
+  rationale above does not hold. *A second gap, same place:* during the
+  window `R_market(k)` counts **bonders**, not holders — every node holds
+  it — so the self-dilution that discharged §3's Sybil item does not
+  operate on in-window shards by itself; a `k`-persona bonder dilutes
+  only against other bonders, of whom there may be none. The Sybil
+  argument was made for scarce shards; the reward leg confirms it holds
+  in-window or says what does.
+
+  *Proposed mechanism (for the reward leg to rule or replace): a derived
+  commitment weight, the median of what scarce shards are paying this
+  epoch.* At each epoch boundary, for a closed shard `k` not yet at
+  `discard(k)`:
+
+  > `w(k, E) = median_{s scarce at E} ( g(age_s) / R_market(s, E) ) · 1 / R_market(k, E)`
+
+  It prices a new shard at what a typical scarce shard pays *this epoch*,
+  so it tracks the market rather than guessing it — under-held history
+  raises the median and new shards pay well; good coverage lowers both —
+  and it keeps `1/R_market(k)` on the new shard, so the self-dilution
+  operates in the window too: a `k`-persona bonder splits the median `k`
+  ways rather than earning it `k` times, which closes the second gap.
+  **Where the constant lives:** before any shard is scarce there is no
+  median — that is the launch window, chain younger than `W` — and only
+  there is a flat **`w_launch`** needed, superseded by the derived median
+  the epoch the first shard discards. So the tweakable governs ~195 days
+  once, not every shard forever. *Bounds, adversary first:* **upper** —
+  `w` must not outcompete the median scarce shard or marginal capital
+  flows to new shards (free to hold, no fetch) and abandons old history,
+  the harm that actually matters; the median enforces this by
+  construction, `w_launch` must be set below where scarce shards will
+  settle, which is the part needing judgement. **Lower** — `w` must
+  exceed the cost of committing (bond lock + disk) or nobody bonds early
+  and the floor is first holder of everything. **Adversarial** — moving
+  the median means bonding many scarce shards, which is paying to hold
+  history, the honest act; low leverage. *Deriving `w_launch`:* sim for
+  the band where neither failure occurs (bounding, a legitimate sim use),
+  then **Round-2 pins it with `n`, `D_max` and `W` on the same gate — a
+  fourth numeric there**, not a fourth entry of a different kind. *Two
+  things so the reward leg does not lose them:* (a) the median is over
+  **scarce** shards only, and "scarce" is now one chain-derivable event
+  (`discard(k)` at `b_{k+1} ≤ first_tx_id(tip − W)`), so the set is
+  unambiguous and identical on every node — computable in the settlement
+  writer without a new consensus object; (b) at the epoch of the first
+  `discard(k)` the scarce set is **one shard**, so the median is a single
+  sample for some epochs — the leg says when `w_launch` hands over (first
+  discard, or a minimum scarce-set size). *Consensus:* `w` is computed by
+  the settlement writer and every node must agree, so the **shape is
+  genesis-frozen and the numeric provisional**, the same discipline as
+  the other three — and it lands in `shekyl-chain-rules` under DRS-D12 /
+  SO-D8 Q15, never in the C++ path.
 - **The preimage terms** (item 4's consensus row): the serve-credit
   signature signs `shard_id` and `(b_k, b_{k+1})`, each **read by the
   verifier** from the retained length rows and `cumulative_tx_count`,
@@ -1260,8 +1327,11 @@ floor and plausibly above `d_afford` in the first year; (ii) a deep
 `D_max` widens the window in which a syncing node above `C` trusts
 proofs it has not verified. Re-pinned at the Round-2 testnet gate
 together with `archival_failure_window_n` and `W` — **one gate item,
-three entries**; a re-pin task that names fewer than three is
-incomplete. *Editorial, line-local (rule 23):* the ruling as delivered
+three numerics** at this ruling; **a fourth numeric, `w_launch`, joined
+the same gate 2026-09-18** (Q6 item 3 amendment, the commitment-weight
+routing note: the flat in-window weight before any shard is scarce,
+superseded by the derived median once one is); a re-pin task that
+names fewer than four is incomplete. *Editorial, line-local (rule 23):* the ruling as delivered
 named a **fourth** entry, the relation `bond_duration ≥ W`. That
 relation was drawn by the §3 free-riding walk and **withdrawn by
 steering the same morning** (the free-regime reward is the ruled
@@ -1387,8 +1457,11 @@ a **detectability boundary**, not a security margin.
   free-regime reward is the ruled bootstrap subsidy
   (`DESIGN_CONCEPTS.md` Component 4), favouring early adopters by
   intent, and a bond releasing before scarcity is that subsidy working.
-  **The gate is three entries.** The §3 bullet keeps the arithmetic as
-  a record.
+  **The gate is three numerics at this date** (`n`, `D_max`, `W`); the
+  §3 bullet keeps the arithmetic as a record. **2026-09-18: a fourth
+  numeric, `w_launch`** — the launch-window commitment weight for
+  in-window shards (Q6 item 3 amendment) — joins it; a *numeric*, not a
+  relation, so this is not the withdrawn entry returning.
 
 - *Second reason it wants to be shallow (2026-09-13, from Q5).* Under
   Q5's anchor model a **synced** node trusts nothing it did not verify
