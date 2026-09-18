@@ -1039,11 +1039,15 @@ the **daemon's** leaf table, and the **wallet-side proving store is ungraded
 by this charter** and is the successor round's (`WSS-3`). (b) This ruling's
 deletion surface is B-shaped and correct as to symbols, but the freeze has one
 **proving-side** consumer it does not name: the wallet store's `root_at_count`
-reads `frozen_segments.r_k` as its root-composition cache
-(`redb_backend.rs:1214`, `:1235-1247`; `store/ops.rs:39`) — `WSS-4`. The
-retirement stands; what it retires is the leaf segment's **consensus
-meaning**, not the leaf segment, which survives as a local geometry inside the
-proving store (`WSS-9`). Line cites in this ruling have drifted at later shas
+reads `frozen_segments.r_k` as a root-composition cache
+(`redb_backend.rs:1214`, `:1235-1247`; `store/ops.rs:39`) — `WSS-4`. **The
+retirement stands** — the read has a recompute-from-leaves fallback and
+nothing prunes in production, so the cache is dispensable rather than
+load-bearing. What the successor round takes from it is narrower than a
+survival claim: the composition boundary is a leaf-count geometry that
+**cannot be tied to `b_*`**, so `F33` (ii)'s interim assert dies with the
+freeze and is not re-pointed at `SHARD_BYTES`; whether obligation A keeps any
+subroot cache at all is that round's `WSS-Q2` (`WSS-9`). Line cites in this ruling have drifted at later shas
 (`FrozenSegmentPruned` is `:470`; the two `open_frozen_segment_body` are
 `:216` and `:1877`) — the symbols are right, and each increment re-pins
 (`WSS-10`). *C++:*
