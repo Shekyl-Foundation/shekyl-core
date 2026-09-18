@@ -1130,7 +1130,7 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §2:
   `Result<Option<Tip { height, hash }>, Fault>`; §4.3 above).
 - `difficulty_at` — **slice 2 (4.D)**, handed to this crate by S-CHAIN-R's
-  round-1 Q1 (`DRS_E1_SCHAIN_R.md` (PR #760, not yet on `dev` — linked at landing) SCR-3): the store
+  round-1 Q1 ([`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) — plan PR #760, increment PR #772, archived 2026-09-18; SCR-3): the store
   exposes `cumulative_difficulty` (a `RecordedBlock` field, 4.D) and never
   the per-block difference — per-block difficulty is a consensus
   computation and C2-R8 Q4 bans the store from computing consensus-visible

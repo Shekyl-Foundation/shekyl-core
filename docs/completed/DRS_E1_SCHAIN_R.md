@@ -1,23 +1,24 @@
 # DRS-E1 S-CHAIN-R — the committed-chain read surface: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **increment LANDED (PR #772, 2026-09-17)**: the §3 contract is code (`rust/shekyl-chain-store/src/store/{read,chain_reads}.rs`), the three amendments and §11.1(f)'s value shapes are the layout (`SCHEMA_VERSION 2 → 5`), `DRS_E1_SCHAIN_W.md` is archived; nothing here is still proposed. Stays in `design/` until S-OUT-KI's pre-flight has read it (archive-or-contract per index §8 then). History: **Round 0 (pre-flight) executed 2026-09-16** at `dev`
+**Status:** CLOSED-as-record — **archived 2026-09-18 by S-OUT-KI's pre-flight PR** ([`DRS_E1_SOUT_KI.md`](../design/DRS_E1_SOUT_KI.md) §2.4), the reader §10 was waiting for. Increment LANDED (PR #772, 2026-09-17): the §3 contract is code (`rust/shekyl-chain-store/src/store/{read,chain_reads}.rs`), the three amendments and §11.1(f)'s value shapes are the layout (`SCHEMA_VERSION 2 → 5`), `DRS_E1_SCHAIN_W.md` is archived; nothing here is still proposed and this document owns no open residue (FL-R3-STORE's consumer half is a `FOLLOWUPS.md` row). Do not implement from this file. History: **Round 0 (pre-flight) executed 2026-09-16** at `dev`
 `3560b80c2` (the tree that merged PR #757, S-CHAIN-W); **round-1 rulings
 taken 2026-09-16 on every §9 question** (each entry carries its ruling
 line-local; Q4 overturned its own default — §3.6). §3 is the contract as
-ruled; §7 the commit sequence, which may start once this document merges.
-The review also minted [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
+ruled; §7 the commit sequence, which may start once this document merges
+(it did — PR #772; every §7 commit is on `dev`).
+The review also minted [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md)
 **§7.6** (the ported partition is transitional; parity first, repair after,
 in Rust; the comparator gates cutover and `ratified / enforced` gates
 release) — a property of the whole E-series, recorded there and pointed to
 from §3.8 here. Implements *from*
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §3.6.2 (halt visibility on
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §3.6.2 (halt visibility on
 the tip), §3.5/§7 (the S-CHAIN-R row: extraction order **3**, "reads the
 tables S-CHAIN-W writes") and DRS-D12 (replay-that-validates is the only
 pre-cutover writer — this increment writes nothing on the connect path
 except what §3.6 names); from
-[`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) (the codecs and tables this
+[`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) (the codecs and tables this
 surface decodes, landed PR #757); and from
-[`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) G11 (absence is matched,
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) G11 (absence is matched,
 never propagated — the `AtHeight<T>` discipline, adopted here for every
 by-height read). Nothing in this document re-opens any of them.
 
@@ -32,11 +33,12 @@ Rust read each C++ method becomes, what each returns when the height is
 above the tip or the row is missing, and which C++ sentinels do not
 survive — plus the two per-block fold fields FL-R3-STORE routes to this
 surface. Rule 26's pre-flight pass is the instrument; this is the same shape
-as [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) and stays in `docs/design/`
-while the increment is open.
+as [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md); it stayed in `docs/design/`
+while the increment was open and moved here when S-OUT-KI's pre-flight had
+read it (PR #779).
 
 **Identifier family.** Findings and questions here are **SCR-n**, registered
-in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 by this document's
+in [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by this document's
 PR (prefix `SCR` checked distinct against the registry with
 `check_index_prefix_uniqueness.py`: `SCR` ≠ `SCW`, `SCE`, `CSR`). One series,
 numbered in order of surfacing; a question and the finding that raised it
@@ -693,8 +695,8 @@ gating release (§3.8 points at it).
 - `codec/chain.rs` module docs: the "LMDB struct minus the key" framing goes (commit 2); the record is described by what its bytes hold and which are consensus-visible (none of `BlockInfo`'s — the block hash is a preimage-derived identity *stored* here, not *defined* here).
 - `IMPLEMENTATION_INDEX.md`: `SCR` family and §7 doc row (this PR); the `DRS-*` row `UPDATE` for the increment is the increment PR's (rule 94 §4).
 - `docs/CHANGELOG.md`: one Unreleased line at landing (`SCHEMA_VERSION` 2 → 5 across commits 2a/2b and the review's `Present` shape is a rebuild; the reads are a crate API).
-- **Archive:** [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) becomes **eligible** when commit 5 lands (its stated archive condition, "S-CHAIN-R has consumed the codecs", is met once every S-CHAIN-W codec has a snapshot read) and is **`git mv`'d** to `docs/completed/` in commit 7, the increment's documentation commit — same PR, two commits apart. Its index §7 row moves with it in commit 7.
-- This document: banner flips to *landed* at the increment PR; archive-or-contract per index §8 when S-OUT-KI's pre-flight has read it (the next surface's pre-flight is the reader this document exists for).
+- **Archive — DONE (PR #772, 2026-09-17; the file is beside this one in `docs/completed/`):** [`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) became **eligible** when commit 5 landed (its stated archive condition, "S-CHAIN-R has consumed the codecs", was met once every S-CHAIN-W codec had a snapshot read) and was **`git mv`'d** to `docs/completed/` in commit 7, the increment's documentation commit — same PR, two commits apart. Its index §7 row moves with it in commit 7.
+- This document: banner flips to *landed* at the increment PR; archive-or-contract per index §8 when S-OUT-KI's pre-flight has read it — **DONE 2026-09-18: archived by PR #779** (`DRS_E1_SOUT_KI.md` §2.4) (the next surface's pre-flight is the reader this document exists for).
 
 ---
 

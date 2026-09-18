@@ -233,7 +233,13 @@ deleting 2001, so there is one block path and Design A describes all of it.
 ### U-7 — Output histogram / distribution (LOW: RPC-only, but consensus-adjacent)
 
 `get_output_histogram` / `get_output_distribution` exist and are RPC-exposed
-(`core_rpc_server.cpp:1872`). In Monero these serve **decoy selection**. With
+(`core_rpc_server.cpp:1872`). **UPDATE 2026-09-18 (S-OUT-KI pre-flight,
+[`DRS_E1_SOUT_KI.md`](DRS_E1_SOUT_KI.md) SOK-5/SOK-6):** at `51d7f2416` only
+`get_output_histogram` is routed (`core_rpc_server.cpp:1160`, plus the
+`shekyld` CLI command `output_histogram`); `get_output_distribution` has **no
+RPC route** — its only caller is `tests/unit_tests/output_distribution.cpp`.
+Neither is ported to the redb store; the histogram RPC's fate is SOK-Q3. In
+Monero these serve **decoy selection**. With
 FCMP++ there is no decoy selection. `blockchain.cpp:2686-2688` still contains
 `// rct outputs don't exist before v4` and a `HF_VERSION_DYNAMIC_FEE` height
 lookup.
