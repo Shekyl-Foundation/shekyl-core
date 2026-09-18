@@ -304,7 +304,7 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
     let spend_index = snap
         .open_table(TX_INDICES)
         .expect("t")
-        .get(LmdbHashKey::from(Hash32::from(spend_hash)))
+        .get(LmdbHashKey::from(spend_hash))
         .expect("g")
         .expect("row")
         .value()

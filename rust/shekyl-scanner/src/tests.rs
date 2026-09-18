@@ -6,6 +6,12 @@
 //! Unit tests for scanner ledger ingestion, spend tracking, and the
 //! `(LedgerBlock, LedgerIndexes)` runtime pair.
 
+/// A filled-byte txid for fixtures. One helper so wrapping a literal does
+/// not become a 40-character tax at every `make_wallet_output` site.
+fn txh(fill: u8) -> shekyl_types::TxHash {
+    shekyl_types::TxHash::from_bytes([fill; 32])
+}
+
 #[cfg(test)]
 pub(crate) mod ledger_ops {
     use curve25519_dalek::{constants::ED25519_BASEPOINT_TABLE, Scalar};
@@ -21,6 +27,8 @@ pub(crate) mod ledger_ops {
     };
     use shekyl_engine_state::{InFlightSpendLocks, LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
+
+    use super::txh;
 
     /// These tests drive a bare [`LedgerBlock`] with no send journal, so
     /// nothing is in flight and the derived lock set is empty. Spelled
@@ -122,21 +130,11 @@ pub(crate) mod ledger_ops {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output(
-                    shekyl_types::TxHash::from_bytes([60; 32]),
-                    0,
-                    800,
-                    1_000_000_000,
-                ),
+                make_wallet_output(txh(60), 0, 800, 1_000_000_000),
                 1_000_000_000,
             ),
             (
-                make_wallet_output(
-                    shekyl_types::TxHash::from_bytes([60; 32]),
-                    1,
-                    801,
-                    2_000_000_000,
-                ),
+                make_wallet_output(txh(60), 1, 801, 2_000_000_000),
                 2_000_000_000,
             ),
         ];
@@ -145,18 +143,8 @@ pub(crate) mod ledger_ops {
         let ki_0 = ledger.transfers()[0].key_image.unwrap();
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
 
-        assert!(indexes.mark_spent(
-            &mut ledger,
-            &ki_0,
-            200,
-            shekyl_types::TxHash::from_bytes([0xEE; 32])
-        ));
-        assert!(indexes.mark_spent(
-            &mut ledger,
-            &ki_1,
-            200,
-            shekyl_types::TxHash::from_bytes([0xEE; 32])
-        ));
+        assert!(indexes.mark_spent(&mut ledger, &ki_0, 200, txh(0xEE)));
+        assert!(indexes.mark_spent(&mut ledger, &ki_1, 200, txh(0xEE)));
         assert!(ledger.transfers()[0].spent);
         assert!(ledger.transfers()[1].spent);
 
@@ -183,12 +171,7 @@ pub(crate) mod ledger_ops {
     fn unmark_spent_unknown_key_image_is_noop() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output(
-                shekyl_types::TxHash::from_bytes([61; 32]),
-                0,
-                810,
-                1_000_000_000,
-            ),
+            make_wallet_output(txh(61), 0, 810, 1_000_000_000),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA1; 32], make_timelocked(outputs));
@@ -203,12 +186,7 @@ pub(crate) mod ledger_ops {
     fn unmark_spent_idempotent_on_already_unspent() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output(
-                shekyl_types::TxHash::from_bytes([62; 32]),
-                0,
-                820,
-                1_000_000_000,
-            ),
+            make_wallet_output(txh(62), 0, 820, 1_000_000_000),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA2; 32], make_timelocked(outputs));
@@ -223,30 +201,15 @@ pub(crate) mod ledger_ops {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output(
-                    shekyl_types::TxHash::from_bytes([63; 32]),
-                    0,
-                    830,
-                    1_000_000_000,
-                ),
+                make_wallet_output(txh(63), 0, 830, 1_000_000_000),
                 1_000_000_000,
             ),
             (
-                make_wallet_output(
-                    shekyl_types::TxHash::from_bytes([63; 32]),
-                    1,
-                    831,
-                    2_000_000_000,
-                ),
+                make_wallet_output(txh(63), 1, 831, 2_000_000_000),
                 2_000_000_000,
             ),
             (
-                make_wallet_output(
-                    shekyl_types::TxHash::from_bytes([63; 32]),
-                    2,
-                    832,
-                    3_000_000_000,
-                ),
+                make_wallet_output(txh(63), 2, 832, 3_000_000_000),
                 3_000_000_000,
             ),
         ];
@@ -256,24 +219,9 @@ pub(crate) mod ledger_ops {
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
         let ki_2 = ledger.transfers()[2].key_image.unwrap();
 
-        indexes.mark_spent(
-            &mut ledger,
-            &ki_0,
-            200,
-            shekyl_types::TxHash::from_bytes([0xEE; 32]),
-        );
-        indexes.mark_spent(
-            &mut ledger,
-            &ki_1,
-            200,
-            shekyl_types::TxHash::from_bytes([0xEE; 32]),
-        );
-        indexes.mark_spent(
-            &mut ledger,
-            &ki_2,
-            200,
-            shekyl_types::TxHash::from_bytes([0xEE; 32]),
-        );
+        indexes.mark_spent(&mut ledger, &ki_0, 200, txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki_1, 200, txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki_2, 200, txh(0xEE));
 
         let unmarked = indexes.unmark_spent(&mut ledger, &[ki_1]);
         assert_eq!(unmarked, 1);
@@ -291,21 +239,11 @@ pub(crate) mod ledger_ops {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
             (
-                make_wallet_output(
-                    shekyl_types::TxHash::from_bytes([64; 32]),
-                    0,
-                    840,
-                    500_000_000,
-                ),
+                make_wallet_output(txh(64), 0, 840, 500_000_000),
                 500_000_000,
             ),
             (
-                make_wallet_output(
-                    shekyl_types::TxHash::from_bytes([64; 32]),
-                    1,
-                    841,
-                    1_000_000_000,
-                ),
+                make_wallet_output(txh(64), 1, 841, 1_000_000_000),
                 1_000_000_000,
             ),
         ];
@@ -314,18 +252,8 @@ pub(crate) mod ledger_ops {
         let ki_0 = ledger.transfers()[0].key_image.unwrap();
         let ki_1 = ledger.transfers()[1].key_image.unwrap();
 
-        indexes.mark_spent(
-            &mut ledger,
-            &ki_0,
-            200,
-            shekyl_types::TxHash::from_bytes([0xEE; 32]),
-        );
-        indexes.mark_spent(
-            &mut ledger,
-            &ki_1,
-            200,
-            shekyl_types::TxHash::from_bytes([0xEE; 32]),
-        );
+        indexes.mark_spent(&mut ledger, &ki_0, 200, txh(0xEE));
+        indexes.mark_spent(&mut ledger, &ki_1, 200, txh(0xEE));
         indexes
             .check_invariants(&ledger)
             .expect("invariants after mark_spent");
@@ -347,12 +275,7 @@ pub(crate) mod ledger_ops {
     fn immature_output_not_spendable() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![(
-            make_wallet_output(
-                shekyl_types::TxHash::from_bytes([65; 32]),
-                0,
-                850,
-                1_000_000_000,
-            ),
+            make_wallet_output(txh(65), 0, 850, 1_000_000_000),
             1_000_000_000,
         )];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xA5; 32], make_timelocked(outputs));
@@ -385,25 +308,14 @@ pub(crate) mod ledger_ops {
     fn invariants_hold_after_process_and_spend_cycle() {
         let (mut ledger, mut indexes) = fresh_state();
         let outputs = vec![
-            (
-                make_wallet_output(shekyl_types::TxHash::from_bytes([66; 32]), 0, 860, 1_000),
-                1_000,
-            ),
-            (
-                make_wallet_output(shekyl_types::TxHash::from_bytes([66; 32]), 1, 861, 2_000),
-                2_000,
-            ),
+            (make_wallet_output(txh(66), 0, 860, 1_000), 1_000),
+            (make_wallet_output(txh(66), 1, 861, 2_000), 2_000),
         ];
         indexes.process_scanned_outputs(&mut ledger, 100, [0xB0; 32], make_timelocked(outputs));
         indexes.check_invariants(&ledger).expect("after process");
 
         let ki = ledger.transfers()[0].key_image.unwrap();
-        indexes.mark_spent(
-            &mut ledger,
-            &ki,
-            200,
-            shekyl_types::TxHash::from_bytes([0xEE; 32]),
-        );
+        indexes.mark_spent(&mut ledger, &ki, 200, txh(0xEE));
         indexes.check_invariants(&ledger).expect("after mark_spent");
 
         indexes.unmark_spent(&mut ledger, &[ki]);
@@ -437,28 +349,19 @@ pub(crate) mod ledger_ops {
             &mut ledger,
             100,
             [0xC0; 32],
-            make_timelocked(vec![(
-                make_wallet_output(shekyl_types::TxHash::from_bytes([70; 32]), 0, 900, 1_000),
-                1_000,
-            )]),
+            make_timelocked(vec![(make_wallet_output(txh(70), 0, 900, 1_000), 1_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             200,
             [0xC1; 32],
-            make_timelocked(vec![(
-                make_wallet_output(shekyl_types::TxHash::from_bytes([71; 32]), 0, 901, 2_000),
-                2_000,
-            )]),
+            make_timelocked(vec![(make_wallet_output(txh(71), 0, 901, 2_000), 2_000)]),
         );
         indexes.process_scanned_outputs(
             &mut ledger,
             300,
             [0xC2; 32],
-            make_timelocked(vec![(
-                make_wallet_output(shekyl_types::TxHash::from_bytes([72; 32]), 0, 902, 3_000),
-                3_000,
-            )]),
+            make_timelocked(vec![(make_wallet_output(txh(72), 0, 902, 3_000), 3_000)]),
         );
         indexes.check_invariants(&ledger).expect("3 blocks");
 
@@ -499,6 +402,8 @@ mod ledger_proptest {
     };
     use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
     use shekyl_units::AtomicUnits;
+
+    use super::txh;
 
     fn unique_point(seed: u64) -> curve25519_dalek::EdwardsPoint {
         let mut bytes = [0u8; 32];
@@ -616,7 +521,7 @@ mod ledger_proptest {
                         if count > 0 {
                             let idx = ((*frac * count as f64) as usize).min(count - 1);
                             if let Some(ki) = ledger.transfers()[idx].key_image {
-                                indexes.mark_spent(&mut ledger, &ki, next_height, shekyl_types::TxHash::from_bytes([0xEE; 32]));
+                                indexes.mark_spent(&mut ledger, &ki, next_height, txh(0xEE));
                             }
                         }
                     }
@@ -695,6 +600,8 @@ mod sync_bookkeeping {
     };
     use shekyl_engine_state::{InFlightSpendLocks, LedgerBlock, LedgerIndexes, SendJournalBlock};
     use shekyl_units::AtomicUnits;
+
+    use super::txh;
 
     /// These tests drive a bare [`LedgerBlock`] with no send journal, so
     /// nothing is in flight and the derived lock set is empty. Spelled
@@ -853,11 +760,7 @@ mod sync_bookkeeping {
         assert_eq!(ledger.transfers().len(), 2);
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(8000));
 
-        indexes.detect_spends(
-            &mut ledger,
-            20,
-            &[(ki_100, shekyl_types::TxHash::from_bytes([0xEE; 32]))],
-        );
+        indexes.detect_spends(&mut ledger, 20, &[(ki_100, txh(0xEE))]);
         assert!(ledger.transfers()[0].spent);
         assert!(!ledger.transfers()[1].spent);
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::from_raw(3000));
@@ -939,11 +842,7 @@ mod sync_bookkeeping {
         let ki = o.key_image;
         indexes.process_scanned_outputs(&mut ledger, 10, block_hash(10), Timelocked(vec![o]));
 
-        let spent = indexes.detect_spends(
-            &mut ledger,
-            20,
-            &[(ki, shekyl_types::TxHash::from_bytes([0xEE; 32]))],
-        );
+        let spent = indexes.detect_spends(&mut ledger, 20, &[(ki, txh(0xEE))]);
         assert_eq!(spent, 1);
         assert_eq!(balance_of(&ledger, 100).total, AtomicUnits::ZERO);
 
