@@ -24,7 +24,20 @@ the 2D2 plan §2/§12, the WI-1 "made the chain live" comment — PR #333 and th
 Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
-The unified stamp is `dev` = `071dfd2f5` as of 2026-09-17 (§5) — moved by
+The unified stamp is `dev` = `20ebdf1e5` as of 2026-09-17 (§5) — moved by
+DRS-E1 increment 4 (PR #772, S-CHAIN-R), whose rows (`DRS-*`, `SCR-`, the
+`DRS_E1_SCHAIN_R.md` / `DRS_E1_SCHAIN_W.md` document rows) were re-verified
+against code on the branch tree containing that dev commit (#773 merged into
+the branch; #771's newtypes are what the tree compiles against): the eleven
+`ReadSnapshot` reads present in `rust/shekyl-chain-store/src/store/read.rs`;
+`schemas/tables.snap` at 51 tables with `spent_keys` as `shekyl::Present`;
+`SCHEMA_VERSION = 5` in `codec/schema_version.rs`; `cargo test -p
+shekyl-chain-store` 242 + 8 doctests green; and the DRS-E6 coverage gate
+re-run at that tree — `check_chain_rules_coverage.py --describe`:
+consensus implemented 6 / validator-enforced 151 (held-by-cxx 2, enforced
+153, ratified 126 / 153), policy 0 / 9 — identical to the #768 stamp's
+census, so the `CHAIN_RULES_*` rows stand as verified. *Superseded stamp,
+retained:* `071dfd2f5` (2026-09-17) — moved by
 DRS-E6 slice 1 (PR #768), whose rows (`CHAIN_RULES_CRATE.md`,
 `CHAIN_RULES_SLICE_1.md`) were re-verified against code at that revision —
 `check_chain_rules_coverage.py --describe` and the crate's tests on the

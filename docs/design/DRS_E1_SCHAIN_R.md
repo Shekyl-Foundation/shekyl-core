@@ -692,7 +692,7 @@ gating release (§3.8 points at it).
 - `LMDB_SCHEMA.md` / `LMDB_WRITE_ATOMICITY_AUDIT.md`: no change (no LMDB table changes; the widened `BlockInfo` is the redb record — `LMDB_SCHEMA.md`'s `block_info` row describes LMDB's 96 bytes and stays true of LMDB).
 - `codec/chain.rs` module docs: the "LMDB struct minus the key" framing goes (commit 2); the record is described by what its bytes hold and which are consensus-visible (none of `BlockInfo`'s — the block hash is a preimage-derived identity *stored* here, not *defined* here).
 - `IMPLEMENTATION_INDEX.md`: `SCR` family and §7 doc row (this PR); the `DRS-*` row `UPDATE` for the increment is the increment PR's (rule 94 §4).
-- `docs/CHANGELOG.md`: one Unreleased line at landing (`SCHEMA_VERSION` 2 → 4 across commits 2a/2b is a rebuild; the reads are a crate API).
+- `docs/CHANGELOG.md`: one Unreleased line at landing (`SCHEMA_VERSION` 2 → 5 across commits 2a/2b and the review's `Present` shape is a rebuild; the reads are a crate API).
 - **Archive:** [`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) becomes **eligible** when commit 5 lands (its stated archive condition, "S-CHAIN-R has consumed the codecs", is met once every S-CHAIN-W codec has a snapshot read) and is **`git mv`'d** to `docs/completed/` in commit 7, the increment's documentation commit — same PR, two commits apart. Its index §7 row moves with it in commit 7.
 - This document: banner flips to *landed* at the increment PR; archive-or-contract per index §8 when S-OUT-KI's pre-flight has read it (the next surface's pre-flight is the reader this document exists for).
 
