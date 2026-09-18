@@ -9,7 +9,7 @@
 use shekyl_bulletproofs::Bulletproof;
 use shekyl_crypto_pq::output::EncryptedOutputField;
 use shekyl_crypto_pq::signature::HYBRID_SCHEME_ID_ED25519_ML_DSA_65;
-use shekyl_types::PrefixHash;
+use shekyl_types::{BlockHash, PrefixHash};
 use shekyl_wire::{
     BpPlus, Ct, CtBase, Input, Output, PqcAuth as WirePqcAuth, Prunable, Transaction, TxPrefix,
 };
@@ -46,7 +46,7 @@ pub struct WireEncodeInput {
     pub out_commitments: Vec<[u8; 32]>,
     pub pseudo_outs: Vec<[u8; 32]>,
     pub bulletproof: Bulletproof,
-    pub reference_block: [u8; 32],
+    pub reference_block: BlockHash,
     pub fcmp_proof: Vec<u8>,
     pub pqc_auths: Vec<PqcAuth>,
     /// The FCMP++ proof's **layer count** `L` (what `proof::prove`/`verify`
@@ -404,7 +404,7 @@ mod tests {
                 )],
             )
             .expect("bp prove"),
-            reference_block: [0xAB; 32],
+            reference_block: BlockHash::from_bytes([0xAB; 32]),
             fcmp_proof: vec![0xCC; 64],
             pqc_auths: vec![PqcAuth {
                 auth_version: 1,

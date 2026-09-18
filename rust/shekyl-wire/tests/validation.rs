@@ -11,8 +11,7 @@
 mod common;
 use common::conforming_pqc_extra;
 
-use shekyl_types::PCanonicalId;
-use shekyl_types::{PqcAuthHash, PrunableHash};
+use shekyl_types::{BlockHash, PCanonicalId, PqcAuthHash, PrunableHash};
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
     Block, BondPost, BondPostKind, BpPlus, Ct, CtBase, Holdings, Input, Output, PqcAuth, Prunable,
@@ -31,7 +30,7 @@ fn fee_only_with(input: Input) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],
@@ -103,7 +102,7 @@ fn spend(inputs: Vec<Input>, outputs: Vec<Output>, unlock_time: u64, nbp: usize)
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]; n_out],
                 enc_labels: vec![[0u8; 9]; n_out],
@@ -389,7 +388,7 @@ fn serve_credit_must_not_mix_with_a_spend() {
         // Counts here are irrelevant: the shape check rejects before the ct coupling.
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]],
                 enc_labels: vec![[0u8; 9]],
@@ -419,7 +418,7 @@ fn multiple_serve_credits_allowed() {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],

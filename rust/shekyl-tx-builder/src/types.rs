@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use shekyl_crypto_pq::output::EncryptedOutputField;
+use shekyl_types::BlockHash;
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -32,6 +33,27 @@ pub mod hex_bytes32 {
         v.try_into().map_err(|v: Vec<u8>| {
             serde::de::Error::custom(format!("expected 32 bytes, got {}", v.len()))
         })
+    }
+}
+
+/// Serde helper: hex-encode/decode a [`BlockHash`] exactly as [`hex_bytes32`]
+/// does its bytes, so typing a field (RTN-7) leaves its JSON form unchanged.
+pub mod hex_block_hash {
+    use serde::{Deserializer, Serializer};
+    use shekyl_types::BlockHash;
+
+    pub fn serialize<S>(hash: &BlockHash, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        super::hex_bytes32::serialize(hash.as_bytes(), serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<BlockHash, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        super::hex_bytes32::deserialize(deserializer).map(BlockHash::from_bytes)
     }
 }
 
@@ -278,8 +300,8 @@ pub struct OutputInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeContext {
     /// Hash of the reference block (stored in CtSig.referenceBlock).
-    #[serde(with = "hex_bytes32")]
-    pub reference_block: [u8; 32],
+    #[serde(with = "hex_block_hash")]
+    pub reference_block: BlockHash,
     /// Curve tree root at the reference block height (passed to prover).
     #[serde(with = "hex_bytes32")]
     pub tree_root: [u8; 32],
@@ -336,8 +358,8 @@ pub struct SignedProofs {
     /// Per-input PQC authentication (ML-DSA-65 hybrid signatures).
     pub pqc_auths: Vec<PqcAuth>,
     /// Reference block hash (echo back for CtSig).
-    #[serde(with = "hex_bytes32")]
-    pub reference_block: [u8; 32],
+    #[serde(with = "hex_block_hash")]
+    pub reference_block: BlockHash,
     /// Tree depth (echo back for CtSig).
     pub tree_depth: u8,
 }

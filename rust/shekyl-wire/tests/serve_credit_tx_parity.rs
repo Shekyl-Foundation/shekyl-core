@@ -27,7 +27,7 @@
 use std::path::PathBuf;
 
 use serde_json::Value;
-use shekyl_types::PrunableHash;
+use shekyl_types::{BlockHash, PrunableHash};
 use shekyl_wire::{Ct, CtBase, Input, Prunable, Transaction, TxPrefix};
 
 const GATE2_FIXTURE: &str =
@@ -70,7 +70,7 @@ fn build_tx(kept: Vec<u8>, pruned: Vec<u8>) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],

@@ -45,7 +45,7 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 use shekyl_crypto_hash::keccak256;
-use shekyl_types::PrunableHash;
+use shekyl_types::{BlockHash, PrunableHash};
 use shekyl_wire::transaction::{PQC_HYBRID_SINGLE_KEY_LEN, PQC_HYBRID_SINGLE_SIG_LEN};
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
@@ -139,7 +139,7 @@ fn build_tx(with_prunable: bool) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![[0u8; 9], [0u8; 9]],
                 enc_labels: vec![[0u8; 9], [0u8; 9]],

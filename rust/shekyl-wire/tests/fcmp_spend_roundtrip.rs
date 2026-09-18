@@ -25,6 +25,7 @@
 mod common;
 use common::conforming_pqc_extra;
 
+use shekyl_types::BlockHash;
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{BpPlus, Ct, CtBase, Input, Output, PqcAuth, Prunable, Transaction, TxPrefix};
 
@@ -99,7 +100,7 @@ fn synthetic_spend() -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 12_345,
-            reference_block: [0x44; 32],
+            reference_block: BlockHash::from_bytes([0x44; 32]),
             base,
             pqc_auths,
             prunable: Some(prunable),
@@ -221,7 +222,7 @@ fn serve_credit_tx(n: usize) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0x44; 32],
+            reference_block: BlockHash::from_bytes([0x44; 32]),
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],

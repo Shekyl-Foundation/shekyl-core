@@ -276,7 +276,7 @@ impl Transaction {
             } => {
                 let mut base_buf = vec![CT_TYPE_FCMP];
                 write_varint(*fee, &mut base_buf).expect("Vec write is infallible");
-                base_buf.extend_from_slice(reference_block);
+                base_buf.extend_from_slice(reference_block.as_bytes());
                 base.write(&mut base_buf).expect("Vec write is infallible");
                 let h_base = keccak256(&base_buf);
                 match pqc_auth {

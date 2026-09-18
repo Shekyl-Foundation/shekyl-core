@@ -379,7 +379,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
 
     // ── 6. Sign via the production transaction builder ────────────────────
     let tree_ctx = TreeContext {
-        reference_block: path.tree.reference_block.to_bytes(),
+        reference_block: path.tree.reference_block,
         tree_root: path.tree.tree_root.to_bytes(),
         tree_depth: path.tree.tree_depth,
     };

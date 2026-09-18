@@ -44,7 +44,7 @@
 use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
-use shekyl_types::{PCanonicalId, PrefixHash};
+use shekyl_types::{BlockHash, PCanonicalId, PrefixHash};
 
 use crate::bytes::{read_array, read_byte};
 use crate::tx_extra::{check_pqc_field_shape_of, parse as parse_tx_extra};
@@ -1093,8 +1093,11 @@ pub enum Ct {
     Fcmp {
         /// Transaction fee.
         fee: u64,
-        /// Block hash anchoring the curve-tree root the proof is against.
-        reference_block: [u8; 32],
+        /// Block hash anchoring the curve-tree root the proof is against —
+        /// `ref_height`'s companion (CEN-I12). Typed as the block hash it is
+        /// (RTN-7): raw beside a typed `previous` would be the asymmetry no
+        /// later reader could explain.
+        reference_block: BlockHash,
         /// Committed base arrays (per output).
         base: CtBase,
         /// Per-input PQC authentication (count == `nvin`, no length prefix; empty
@@ -1132,7 +1135,7 @@ impl Ct {
             } => {
                 w.write_all(&[CT_TYPE_FCMP])?;
                 write_varint(*fee, w)?;
-                w.write_all(reference_block)?;
+                w.write_all(reference_block.as_bytes())?;
                 base.write(w)
             }
         }
@@ -1184,7 +1187,7 @@ impl Ct {
             CT_TYPE_NULL => Ok(Ct::Null(CtBase::read(outputs, r)?)),
             CT_TYPE_FCMP => {
                 let fee = read_varint(r)?;
-                let reference_block = read_array(r)?;
+                let reference_block = BlockHash::from_bytes(read_array(r)?);
                 let base = CtBase::read(outputs, r)?;
                 // EOF-tolerant tail (§9.8 / §4). A genuine spend that ends
                 // after the base is the storage-pruned form with empty
@@ -1567,7 +1570,7 @@ impl Transaction {
         let mut ct_base_blob = Vec::new();
         ct_base_blob.push(CT_TYPE_FCMP);
         write_varint(*fee, &mut ct_base_blob).expect("Vec write is infallible");
-        ct_base_blob.extend_from_slice(reference_block);
+        ct_base_blob.extend_from_slice(reference_block.as_bytes());
         base.write(&mut ct_base_blob)
             .expect("Vec write is infallible");
 

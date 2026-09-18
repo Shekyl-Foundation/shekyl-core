@@ -23,7 +23,7 @@
 
 mod common;
 use common::conforming_pqc_extra;
-use shekyl_types::PCanonicalId;
+use shekyl_types::{BlockHash, PCanonicalId};
 
 use shekyl_wire::transaction::{
     ARCHIVAL_EMISSION_VIN_MAX_BYTES, TAG_INPUT_ARCHIVAL_REWARD_EMISSION,
@@ -91,7 +91,7 @@ fn emission_tx(inputs: Vec<Input>, outputs: Vec<Output>) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: [0u8; 32],
+            reference_block: BlockHash::from_bytes([0u8; 32]),
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]; n_out],
                 enc_labels: vec![[0u8; 9]; n_out],
