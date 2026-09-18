@@ -15,22 +15,42 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
-    post_image, BlockBody, Canonical, Encoded, ProbeCell, PropertyCell, Raw, UndoEntry, UndoLog,
+    post_image, stored_timelock, BlockBody, Canonical, Encoded, OutKey, ProbeCell, PropertyCell,
+    Raw, UndoEntry, UndoLog,
 };
+use crate::ids::OutputStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
     ordinal_of, BLOCKS, BLOCK_HEIGHTS, HF_VERSIONS, OUTPUT_AMOUNTS, PROPERTIES, UNDO_LOG,
 };
 use shekyl_chain_rules::RuleSetId;
-use shekyl_types::{BlockHash, BlockHeight};
+use shekyl_types::{BlockHash, BlockHeight, CommitmentBytes, OneTimePubkey};
 
 fn hash(byte: u8) -> LmdbHashKey {
     LmdbHashKey::from_bytes([byte; 32])
 }
 
+/// An `output_amounts` row for the tests: the `(0, index)` key LMDB's
+/// one bucket has, with a record that names its index in every field.
+fn out_key(byte: u8) -> OutKey {
+    OutKey {
+        output_id: OutputStorageId::from_raw(u64::from(byte)),
+        pubkey: OneTimePubkey::from_bytes([byte; 32]),
+        unlock_time: stored_timelock(0),
+        height: BlockHeight::from_raw(u64::from(byte)),
+        commitment: CommitmentBytes::from_bytes([byte; 32]),
+    }
+}
+
+fn tuple_key_bytes(amount: u64, index: u64) -> Box<[u8]> {
+    [amount.to_le_bytes(), index.to_le_bytes()]
+        .concat()
+        .into_boxed_slice()
+}
+
 /// The connect-shaped write set the tests journal: one insert per keyed
-/// shape, one upsert over a present key and one over an absent key, one
-/// multimap member, one chain-state cell.
+/// shape (including the tuple-keyed `output_amounts`), one upsert over a
+/// present key and one over an absent key, one chain-state cell.
 fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreError> {
     let byte = u8::try_from(height).expect("test heights fit a byte");
     let recording = batch.record_undo(height);
@@ -49,8 +69,8 @@ fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreE
     hf.upsert(height, RuleSetId::from_raw(1).encoded().as_encoded())?; // absent: undo removes it
     drop(hf);
     batch
-        .open_multimap_table(OUTPUT_AMOUNTS)?
-        .insert(0, [byte; 9].as_slice())?;
+        .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
+        .insert((0, height), out_key(byte).encoded().as_encoded())?;
     batch.upsert_property::<ProbeCell>(&(100 + height))?;
     recording.seal()
 }
@@ -104,10 +124,10 @@ fn every_verb_journals_its_pre_image_in_write_order() {
                 prior: None,
                 post: post_image(&[1]),
             },
-            UndoEntry::MultiInserted {
+            UndoEntry::Inserted {
                 table: ord("output_amounts"),
-                key: Box::new(0u64.to_le_bytes()),
-                value: Box::new([1u8; 9]),
+                key: tuple_key_bytes(0, 1),
+                post: post_image(&out_key(1).encode()),
             },
             UndoEntry::Replaced {
                 table: ord("properties"),
@@ -132,8 +152,8 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
             .open_upsert_table(HF_VERSIONS)?
             .upsert(0, RuleSetId::from_raw(7).encoded().as_encoded())?;
         batch
-            .open_multimap_table(OUTPUT_AMOUNTS)?
-            .insert(0, [0xee; 9].as_slice())?;
+            .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
+            .insert((0, 0), out_key(0xee).encoded().as_encoded())?;
         batch.upsert_property::<ProbeCell>(&5)?;
         Ok(())
     });
@@ -186,17 +206,23 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
         "prior restored"
     );
     assert!(hf.get(1).expect("g").is_none(), "absent-before key removed");
-    let members: Vec<Vec<u8>> = snap
-        .open_multimap_table(OUTPUT_AMOUNTS)
-        .expect("t")
-        .get(0)
-        .expect("g")
-        .map(|m| m.expect("member").value().to_vec())
+    let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
+    let keys: Vec<(u64, u64)> = amounts
+        .range::<(u64, u64)>(..)
+        .expect("range")
+        .map(|r| r.expect("row").0.value())
         .collect();
     assert_eq!(
-        members,
-        vec![vec![0xee; 9]],
-        "the seeded member survives, the connected one goes"
+        keys,
+        vec![(0, 0)],
+        "the seeded row survives, the connected one goes"
+    );
+    assert_eq!(
+        amounts
+            .get((0, 0))
+            .expect("g")
+            .map(|g| g.value().decode().expect("decodes")),
+        Some(out_key(0xee))
     );
     assert_eq!(snap.get_property::<ProbeCell>().expect("cell"), Some(5));
     assert!(undo_row(&store, 1).is_none(), "the row is consumed");
@@ -236,26 +262,39 @@ fn two_heights_in_one_batch_pop_in_lifo_order() {
 }
 
 #[test]
-fn a_member_already_present_is_not_journaled_and_survives_the_pop() {
-    let path = tmp("undo-member");
+fn a_present_output_key_is_refused_not_journaled_and_the_first_row_survives_the_pop() {
+    // Under the multimap a second identical member was "not new" and not
+    // journaled; under the keyed table a present `(amount, amount_index)` is
+    // an SI-9 breach — `insert` refuses it and arms the batch. What the
+    // journal holds is the one write that happened.
+    let path = tmp("undo-present-key");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    let out: Result<(bool, bool, usize), TestErr> = store.write(|batch| {
-        let recording = batch.record_undo(1);
-        let mut set = batch.open_multimap_table(OUTPUT_AMOUNTS)?;
-        let first = set.insert(0, [9u8; 9].as_slice())?;
-        let second = set.insert(0, [9u8; 9].as_slice())?;
-        drop(set);
-        Ok((first, second, recording.seal()?))
+    let seeded: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
+            .insert((0, 0), out_key(9).encoded().as_encoded())?;
+        Ok(())
     });
-    assert_eq!(out, Ok((true, false, 1)));
-    let popped: Result<Replayed, TestErr> = store.write(|batch| Ok(batch.replay_undo(1)?));
-    assert_eq!(popped, Ok(Replayed::Entries(1)));
+    seeded.expect("seed");
+    let out: Result<usize, TestErr> = store.write(|batch| {
+        let recording = batch.record_undo(1);
+        let mut amounts = batch.open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?;
+        amounts.insert((0, 1), out_key(1).encoded().as_encoded())?;
+        let again = amounts.insert((0, 1), out_key(1).encoded().as_encoded());
+        assert!(
+            matches!(again, Err(StoreError::InvariantViolated(_))),
+            "a present key is refused, not accepted as 'not new'"
+        );
+        drop(amounts);
+        Ok(recording.seal()?)
+    });
+    // The refusal armed the batch, so the write closure's outcome is the
+    // poison, whatever it returned; the seeded row is untouched either way.
+    assert!(out.is_err(), "an armed batch does not commit");
     let snap = store.begin_read().expect("read");
-    assert!(snap
-        .open_multimap_table(OUTPUT_AMOUNTS)
-        .expect("t")
-        .is_empty()
-        .expect("len"));
+    let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
+    assert_eq!(amounts.len().expect("len"), 1);
+    assert!(amounts.get((0, 0)).expect("g").is_some());
     cleanup(&path);
 }
 
@@ -401,17 +440,9 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
         "{msg}"
     );
 
-    let wrong_shape = UndoLog(vec![UndoEntry::MultiInserted {
-        table: ordinal_of("blocks").expect("catalogued"),
-        key: Box::new([0; 8]),
-        value: Box::new([0; 8]),
-    }]);
-    plant_row(&store, 3, &wrong_shape.encode());
-    let msg = replay_err(&store, 3);
-    assert!(
-        msg.contains("multimap member recorded against a keyed table"),
-        "{msg}"
-    );
+    // (Tag 2, the retired multimap member, is refused at the codec — the
+    // `codec::undo` tests pin it — so no entry shape can reach the target
+    // dispatch that the target's table cannot hold.)
 
     let wrong_width = UndoLog(vec![UndoEntry::Inserted {
         table: ordinal_of("blocks").expect("catalogued"),

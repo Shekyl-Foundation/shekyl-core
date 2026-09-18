@@ -50,7 +50,18 @@ use super::{Canonical, CodecError};
 /// - `5` — `spent_keys` value is [`Present`](super::Present) (`shekyl::Present`),
 ///   not redb's `()`. Completes §11.1(f): every map value is a named shape.
 ///   Zero stored bytes change; the `TypeName` is a layout change.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(5);
+/// - `6` — DRS-E1 increment 5 (S-OUT-KI) layout commit (`DRS_E1_SOUT_KI.md`
+///   §3.4, SOK-1 / SOK-Q1 arm A): `output_amounts` is a keyed
+///   `(amount, amount_index) → Coded<OutKey>` table, not a multimap — redb
+///   has no seek within a key's members, so the ported multimap's point read
+///   walked the whole amount-0 bucket; the tuple key is LMDB's `DUPSORT`
+///   pair as a key, same logical content, same order, O(log n). `OutKey`
+///   drops the `amount_index` prefix its key now carries (96 → 88 B). The
+///   catalogue has no multimap left, so the journal's `MultiInserted` (tag
+///   2) is retired and the tag RESERVED; `U64PrefixBytes`, `SetTable` and the
+///   multimap `UndoTarget` are deleted. Row fixtures move for `out_key` and
+///   `undo_log`; the catalogue row for `output_amounts` moves.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(6);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -107,10 +118,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(5));
-        assert_eq!(SCHEMA_VERSION.encode(), [5, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(6));
+        assert_eq!(SCHEMA_VERSION.encode(), [6, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[5, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[6, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

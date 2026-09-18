@@ -38,8 +38,6 @@
 //!   a chain table is a file this store did not write, not an empty chain.
 
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
-#[cfg(test)]
-use redb::{MultimapTableDefinition, ReadOnlyMultimapTable};
 use shekyl_chain_rules::{AtHeight, Tip};
 use shekyl_types::{BlockHash, BlockHeight, KeyImage, LongTermWeight};
 use shekyl_units::AtomicUnits;
@@ -179,29 +177,6 @@ impl<'store> ReadSnapshot<'store> {
     {
         self.txn
             .open_table(definition)
-            .map_err(|e| EngineError::Table(e).into())
-    }
-
-    /// Open a multimap table for reading — crate-private as
-    /// [`open_table`](Self::open_table), and **test-only**: no production
-    /// read in the crate opens a multimap raw (`output_amounts` has no
-    /// S-CHAIN-R read; S-ARCH lands its own typed ones), so outside tests
-    /// this would be dead code.
-    ///
-    /// # Errors
-    ///
-    /// [`EngineError::Table`] if the table does not exist or the engine refuses.
-    #[cfg(test)]
-    pub(crate) fn open_multimap_table<K, V>(
-        &self,
-        definition: MultimapTableDefinition<'_, K, V>,
-    ) -> Result<ReadOnlyMultimapTable<K, V>, StoreError>
-    where
-        K: Key + 'static,
-        V: Key + 'static,
-    {
-        self.txn
-            .open_multimap_table(definition)
             .map_err(|e| EngineError::Table(e).into())
     }
 

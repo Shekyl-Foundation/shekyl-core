@@ -22,7 +22,5 @@
 //! [`LmdbHashKey`] — its order is not the inner `[u8; 32]` order.
 
 mod hash;
-mod u64_prefix;
 
 pub use hash::{Hash32, LmdbHashKey};
-pub use u64_prefix::U64PrefixBytes;

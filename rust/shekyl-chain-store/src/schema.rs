@@ -27,7 +27,7 @@
 //! | LMDB | redb |
 //! |---|---|
 //! | `MDB_INTEGERKEY` | `u64` key (redb orders `u64` numerically) |
-//! | `MDB_DUPSORT` | multimap, **or** a zerokval collapse (below) |
+//! | `MDB_DUPSORT` | a zerokval collapse (below), **or** a keyed `(key, dup)` tuple — never a redb multimap (SOK-1) |
 //! | `MDB_DUPFIXED` | storage hint only; no semantic effect |
 //! | `compare_uint64` | `u64` ordering — numeric, same as `MDB_INTEGERKEY` |
 //! | `compare_string` | `&str` — byte-lexicographic with a length tiebreak |
@@ -73,8 +73,10 @@
 //!   **not insertable**. The increment that first writes the
 //!   table replaces this with its codec and bumps `SCHEMA_VERSION`.
 //!
-//! Multimap members (`output_amounts`) are key types: redb types a member
-//! as a key, so they carry LMDB order, not a codec.
+//! There is no multimap in the catalogue: LMDB's one `DUPSORT` table,
+//! `output_amounts`, is a keyed `(amount, amount_index)` tuple (S-OUT-KI
+//! SOK-1) — the multimap had no seek within a key's members, and a set of
+//! members ordered by a prefix is a composite key wearing a value's clothes.
 //!
 //! Keys are typed for **ordering** (`lmdb_order`); values for **codec**.
 //! Both are checked by redb at `open_table` (`TypeName`), which covers a
@@ -142,17 +144,17 @@
 //! set is derived from the shapes, not kept as a second list: a table gets a
 //! writer by leaving `Unshaped`, and is sealed by the same edit.
 
-use redb::{MultimapTableDefinition, MultimapTableHandle, TableDefinition, TableHandle, TypeName};
+use redb::{TableDefinition, TableHandle, TypeName};
 
 use shekyl_chain_rules::RuleSetId;
 use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash};
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    Blob, BlockBody, BlockInfo, Coded, OutTx, Present, PropertyCellBytes, TxIndex, TxOutputIndices,
-    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+    Blob, BlockBody, BlockInfo, Coded, OutKey, OutTx, Present, PropertyCellBytes, TxIndex,
+    TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
 };
-use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
+use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
 
 /// A table's position in the `tables!` declaration list — the identity the
@@ -229,13 +231,14 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Whether a table holds one value per key or many.
+/// Whether a table holds one value per key or many. One variant since
+/// S-OUT-KI's layout commit retired the catalogue's only multimap; the enum
+/// stays because the snapshot line spells the shape (`map<…>`) and a second
+/// shape would have to re-mint it here, in the catalogue, not in prose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TableShape {
     /// `TableDefinition` — one value per key.
     Map,
-    /// `MultimapTableDefinition` — a set of values per key.
-    Multimap,
 }
 
 /// One table's identity as redb records it in the file: name, shape, and
@@ -244,7 +247,7 @@ pub enum TableShape {
 pub struct TableSpec {
     /// The redb table name (the LMDB table name, verbatim).
     pub name: String,
-    /// Map or multimap.
+    /// The table's shape (one variant today, `Map`).
     pub shape: TableShape,
     /// The key type as redb names it on disk.
     pub key: TypeName,
@@ -263,19 +266,6 @@ impl<K: redb::Key + 'static, V: redb::Value + 'static> Catalogued for TableDefin
         TableSpec {
             name: TableHandle::name(self).to_owned(),
             shape: TableShape::Map,
-            key: K::type_name(),
-            value: V::type_name(),
-        }
-    }
-}
-
-impl<K: redb::Key + 'static, V: redb::Key + 'static> Catalogued
-    for MultimapTableDefinition<'_, K, V>
-{
-    fn spec(&self) -> TableSpec {
-        TableSpec {
-            name: MultimapTableHandle::name(self).to_owned(),
-            shape: TableShape::Multimap,
             key: K::type_name(),
             value: V::type_name(),
         }
@@ -355,9 +345,16 @@ tables! {
     /// `output_txs` — zerokval collapse: dup output id (`compare_uint64`) becomes the key.
     pub const OUTPUT_TXS: TableDefinition<u64, Coded<OutTx>> = TableDefinition::new("output_txs");
 
-    /// `output_amounts` — true multimap; dups order by little-endian `amount_index` prefix.
-    pub const OUTPUT_AMOUNTS: MultimapTableDefinition<u64, U64PrefixBytes> =
-        MultimapTableDefinition::new("output_amounts");
+    /// `output_amounts` — LMDB's `DUPSORT` table as a keyed tuple: key
+    /// `(amount, amount_index)`, the pair LMDB keyed by (`MDB_INTEGERKEY` on
+    /// `amount`, `compare_uint64` on the member prefix), so the tuple's
+    /// lexicographic order over two numeric `u64`s **is** LMDB's order. Not
+    /// a multimap: redb has no seek within a key's value set, so a point
+    /// read on the ported multimap walked the whole amount-0 bucket
+    /// (S-OUT-KI SOK-1); `get(&(0, i))` is O(log n). The amount dimension
+    /// is carried, not chosen, while R8b-2 is open (`DRS_E1_SOUT_KI.md` §3.4).
+    pub const OUTPUT_AMOUNTS: TableDefinition<(u64, u64), Coded<OutKey>> =
+        TableDefinition::new("output_amounts");
 
     /// `spent_keys` — zerokval collapse: dup key image (`compare_hash32`) becomes the key.
     /// A set-table: the key is the member; [`Present`] is the zero-width witness.

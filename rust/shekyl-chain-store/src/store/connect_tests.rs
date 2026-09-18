@@ -206,24 +206,28 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             local_index: shekyl_types::OutputIndexInTx::from_raw(0)
         }
     );
-    let members: Vec<OutKey> = snap
-        .open_multimap_table(OUTPUT_AMOUNTS)
-        .expect("t")
-        .get(0)
-        .expect("g")
-        .map(|m| OutKey::decode(m.expect("member").value()).expect("decodes"))
+    let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
+    let rows: Vec<((u64, u64), OutKey)> = amounts
+        .range::<(u64, u64)>(..)
+        .expect("range")
+        .map(|r| {
+            let (k, v) = r.expect("row");
+            (k.value(), v.value().decode().expect("decodes"))
+        })
         .collect();
     assert_eq!(
-        members,
-        vec![OutKey {
-            amount_index: crate::ids::AmountIndex::from_raw(0),
-            output_id: crate::ids::OutputStorageId::from_raw(0),
-            pubkey: shekyl_types::OneTimePubkey::from_bytes([0x40; 32]),
-            unlock_time: stored_timelock(60),
-            height: BlockHeight::from_raw(0),
-            commitment: shekyl_types::CommitmentBytes::from_bytes([0x70; 32]),
-        }],
-        "stored under amount 0 with the ct-base commitment"
+        rows,
+        vec![(
+            (0, 0),
+            OutKey {
+                output_id: crate::ids::OutputStorageId::from_raw(0),
+                pubkey: shekyl_types::OneTimePubkey::from_bytes([0x40; 32]),
+                unlock_time: stored_timelock(60),
+                height: BlockHeight::from_raw(0),
+                commitment: shekyl_types::CommitmentBytes::from_bytes([0x70; 32]),
+            }
+        )],
+        "keyed (amount 0, amount_index 0) with the ct-base commitment; the key carries the index"
     );
 
     // no burn, no key images, no total_burned yet — and the table *exists*
@@ -331,12 +335,12 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
         4
     );
     assert_eq!(
-        snap.open_multimap_table(OUTPUT_AMOUNTS)
+        snap.open_table(OUTPUT_AMOUNTS)
             .expect("t")
-            .get(0)
-            .expect("g")
-            .len(),
-        4
+            .len()
+            .expect("len"),
+        4,
+        "one bucket: amount_index runs 0..4 under amount 0, and equals output_id"
     );
     let info1 = snap
         .open_table(BLOCK_INFO)
@@ -528,31 +532,18 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
     cleanup(&path);
 }
 
-/// SI-9 for the derived `amount_index`: redb orders `output_amounts`
-/// members by index prefix *then* payload, so a second member under one
-/// index with a different payload is "new" to redb. `connect` checks
-/// `last + 1 == len` and that the first/last prefixes are not duplicated
-/// at the ends, so a hole or Copilot's `[0, 2, 2]` poisons before a second
-/// member under one index can be written.
+/// SI-9 on the keyed `output_amounts` (SOK-Q2): density is `last + 1 == len`
+/// over the one bucket. A planted row at index 5 makes `len == 2` with
+/// `last == 5`, so the next connect poisons before it writes.
 #[test]
-fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
+fn a_gapped_amount_bucket_is_si9() {
     let path = tmp("connect-amount-bucket");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
-    // Genesis put one member (index 0) under amount 0. Plant a foreign member
-    // whose prefix skips to 5: len becomes 2 but the highest prefix is 5.
     let planted: Result<(), TestErr> = store.write(|batch| {
-        let hole = OutKey {
-            amount_index: crate::ids::AmountIndex::from_raw(5),
-            output_id: crate::ids::OutputStorageId::from_raw(99),
-            pubkey: shekyl_types::OneTimePubkey::from_bytes([9; 32]),
-            unlock_time: stored_timelock(0),
-            height: BlockHeight::from_raw(0),
-            commitment: shekyl_types::CommitmentBytes::from_bytes([9; 32]),
-        };
         batch
-            .open_multimap_table(OUTPUT_AMOUNTS)?
-            .insert(0, hole.encode().as_slice())?;
+            .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
+            .insert((0, 5), amount_record(99).encoded().as_encoded())?;
         Ok(())
     });
     planted.expect("plant");
@@ -572,9 +563,8 @@ fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
     cleanup(&path);
 }
 
-fn amount_member(amount_index: u64, output_id: u64) -> OutKey {
+fn amount_record(output_id: u64) -> OutKey {
     OutKey {
-        amount_index: crate::ids::AmountIndex::from_raw(amount_index),
         output_id: crate::ids::OutputStorageId::from_raw(output_id),
         pubkey: shekyl_types::OneTimePubkey::from_bytes(
             [u8::try_from(output_id & 0xff).expect("byte"); 32],
@@ -585,18 +575,22 @@ fn amount_member(amount_index: u64, output_id: u64) -> OutKey {
     }
 }
 
-/// Compensating hole+duplicate at the high end: prefixes `[0, 2, 2]` have
-/// `len == 3` and `last == 2`, so `last + 1 == len` alone would accept.
-/// The end-peek refuses the duplicated last prefix.
+/// The single-bucket premise is stated, and self-guarding (SOK-Q2): a
+/// second bucket makes `len() == last + 1` fail rather than pass, because
+/// per-bucket indices are dense from zero. `connect` stores every miner and
+/// emission vout under `0` and CEN-H14 makes every other vout's amount `0`,
+/// so a row under another amount can only mean a non-miner, non-emission
+/// vout with a loud amount reached the store — the validator's hole, and
+/// the belt fires as `StoreInvariantViolated`, never a verdict.
 #[test]
-fn a_compensating_duplicate_at_the_amount_bucket_end_is_si9() {
-    let path = tmp("connect-amount-dup-end");
+fn a_second_amount_bucket_is_si9_the_validators_hole_not_a_verdict() {
+    let path = tmp("connect-second-bucket");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
     let planted: Result<(), TestErr> = store.write(|batch| {
-        let mut amounts = batch.open_multimap_table(OUTPUT_AMOUNTS)?;
-        amounts.insert(0, amount_member(2, 98).encode().as_slice())?;
-        amounts.insert(0, amount_member(2, 99).encode().as_slice())?;
+        batch
+            .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
+            .insert((7, 0), amount_record(98).encoded().as_encoded())?;
         Ok(())
     });
     planted.expect("plant");
@@ -613,6 +607,39 @@ fn a_compensating_duplicate_at_the_amount_bucket_end_is_si9() {
             row: StoreInvariant::IdNotFresh,
         }
     );
+    cleanup(&path);
+}
+
+/// SOK-2's belt from the write side: `amount_index` must equal `output_id`.
+/// A planted `output_txs` row makes the next `output_id` 2 while the amount
+/// bucket's next index is 1; the two counters disagree and the connect
+/// poisons rather than writing a record whose key and `output_id` differ.
+#[test]
+fn amount_index_and_output_id_diverging_is_si9() {
+    let path = tmp("connect-two-counters");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let (_, genesis) = connect_genesis(&store, 0);
+    let planted: Result<(), TestErr> = store.write(|batch| {
+        batch
+            .open_insert_table(OUTPUT_TXS, StoreInvariant::IdNotFresh)?
+            .insert(
+                1,
+                OutTx {
+                    tx_hash: shekyl_types::TxHash::from_bytes([0xab; 32]),
+                    local_index: shekyl_types::OutputIndexInTx::from_raw(0),
+                }
+                .encoded()
+                .as_encoded(),
+            )?;
+        Ok(())
+    });
+    planted.expect("plant");
+    let b1 = candidate(1, genesis.hash(), Vec::new());
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+    });
+    expect_row(&out, StoreInvariant::IdNotFresh);
     cleanup(&path);
 }
 
