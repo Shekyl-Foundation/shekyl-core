@@ -5475,3 +5475,260 @@ two mechanism-1 customizations and two mechanism-2 labels added);
 `.cursor/rules/50-testing.mdc`.
 
 ---
+## 2026-09-17 — Two stores by obligation, not by posture: the wallet holds serving state, the daemon holds only archival consensus state; daemon uniformity forecloses any archival serving path in the daemon
+
+**Context.** The wallet-side shard store (`shekyl-curve-tree`'s redb
+`LeafStore`, `rust/shekyl-curve-tree/src/store/redb_backend.rs`, 128-byte
+leaves at `SCHEMA_VERSION = 5`, served by `shekyl-p-serve`) and the daemon's
+consensus store (`shekyl-chain-store`, DRS) are two databases. The question
+was whether that split is a transitional duplication to be collapsed, and what
+justifies it if not. Ruled by Rick 2026-09-17, in-channel; verified at the
+cited sources.
+
+**Decision — RULED.** The split stands, on a justification that does not
+depend on deployment posture or on who owns the box:
+
+1. **The wallet-side store is the thing the bond obligates, not a duplicate.**
+   `shekyl-curve-tree` carries two purposes: membership-path assembly, and
+   `serving_route` (`rust/shekyl-curve-tree/src/lib.rs`; consumed by
+   `shekyl-p-serve` and `shekyl-p-fetch`). The first is the privacy argument
+   that is latent under a co-resident daemon. The second is unconditional — an
+   archiver must hold its shards to serve them; that is what it is bonded to
+   do, and no posture makes it optional. The wallet-side store stands on the
+   serving purpose whatever becomes of the path-assembly one.
+2. **Under PDM the two stores stop overlapping.** A full daemon co-resident
+   with an archiver duplicates bytes; the pruned-daemon round
+   (`ARCHIVAL_PRUNED_DAEMON_MODE.md`) exists so the daemon discards what the
+   archival market holds. The daemon keeps consensus state and skeleton; the
+   archiver keeps the segments. The duplication is a property of the
+   transitional deployment, not of the design.
+3. **Daemon uniformity — the argument that survives everything else.**
+   "`P` is serving these shards" rides the bond-post wire in cleartext
+   (`Holdings::ShardSetCompact(shard_ids)`,
+   `rust/shekyl-wire/src/transaction.rs:502`). What must never leak is
+   **`P` → Principal**. The daemon is the one process with a publicly
+   identified network address — it peers. If a daemon backing an archiver
+   behaved differently from a plain one — extra tables, extra RPC surface, a
+   different disk footprint, different latency under load — probing daemons
+   would reveal that *this address has an archiver behind it*. That does not
+   name `P`, but it puts the Principal's public identity and archival
+   participation in one bucket, reachable by anyone who can connect to peers.
+   Uniform daemons remove that probe channel rather than mitigating it.
+   **Precision from review (2026-09-18):** the premise "the daemon's IP is
+   known" holds on the clearnet posture, which the relay round already
+   classes as confidentiality-and-integrity-not-anonymity (PW-3a); on the
+   ruled Tor default a daemon's peers see an onion. Uniformity is therefore
+   defence in depth that matters most for the operators who have no other
+   anonymity, and any clearnet RPC surface an operator exposes — and it is
+   the correct default because posture is the operator's choice, not the
+   protocol's. *SUPERSEDED: "removes the channel entirely"; "holds whatever
+   any operator's posture is."* Two textbook channels were raised against
+   the design in review and **withdrawn** on the record: transaction-origin
+   analysis of `P`'s bond-lifecycle submissions (the standard Dandelion++
+   residual, clearnet-only, π₀ = 0 measured on Tor — `DAEMON_RELAY_PRIVACY.md`
+   §6; not a channel the split creates) and co-located hidden-service load
+   correlation (needs a clearnet candidate set, a measurable effect from one
+   capped 3.33 MB stream, and Pi-class hardware nobody archives on; not a
+   channel the split creates either). **Noise NN over clearnet (planned;
+   paused for the DRS storage migration) does not move this:** it hides the
+   *traffic*, not the fact that a given IP is a Shekyl node — an active
+   prober still completes the handshake with a known address, and NN carries
+   no authentication to refuse it with (PW-19a). NN mitigates
+   confidentiality, not identity; the uniformity argument stands unchanged
+   under it.
+
+**The line, stated so it is not redrawn.** The daemon holds **archival
+consensus state** — bonds, serve credits, settlement, slash — because every
+daemon validates those and they are uniform by definition. The daemon holds
+**no archival serving state, ever**. Consensus is universal; serving is
+elective, and elective behaviour in a publicly addressed process is a
+fingerprint.
+
+**The criterion under the line (review, 2026-09-18).** The fingerprint is
+**persistent, posture-correlated** state or behaviour: a bond is a months-long
+commitment and serving state is durable, so a daemon carrying either differs
+from its neighbours for as long as the bond lives. **Episodic** actions any
+daemon takes for its own reasons — fetching a shard to inspect the
+visualisation, to confirm a transaction, or as the **witness** verifying a
+challenge it drew (Q8; the memory-only seed ring of Q10 retains nothing past
+inclusion) — carry no posture signal, because every daemon does them sometimes
+and none retains anything afterwards. So: *the daemon may do anything episodic
+and universally available; it may hold nothing durable that correlates with
+archival participation.* That admits the witness fetch and forecloses the
+fast path without a per-case list. Mining is elective and long-term, but it
+is not archival posture and is public through its own door.
+
+**Corollary — pruning posture is part of uniformity (RULED with this
+entry).** Full and pruned daemons differ observably. If archiver operators
+tended to run full daemons, "runs a full node" would become the fingerprint
+with no archival code involved. **All daemons prune uniformly**, and the
+archiver-backed daemon sits at the network's default posture — which is part
+of the reason for the two-store split: the segments live in the wallet-side
+store so the daemon beside it can prune like every other. PDM owns the
+default; this is the constraint it carries.
+
+**REJECTED, recorded so it is not rediscovered: an archival fast path in the
+daemon.** Once wallet and daemon are co-resident, letting the daemon serve
+segments directly (it already has the blocks; skip the IPC hop) is the obvious
+optimisation. Every form of it makes an archiver-backed daemon observably
+different from a plain one and reopens exactly the channel the split closes.
+**No archival serving path in the daemon, at any performance argument.**
+Reopening criterion (rule 21): only a change that makes archival serving
+universal — every daemon serves, none is elective — would dissolve the
+fingerprint; short of that, the rejection is not revisited on latency grounds.
+
+**Consequences recorded with the ruling.**
+
+- **What crosses the boundary is the segment partition, not the leaf
+  codec (sharpened in review, 2026-09-18).** A challenge is verified by the
+  witness comparing bytes fetched from the **archiver's** store against an
+  `R_k` it holds **locally** (`served_frame.rs:9–12`) — and under PDM that
+  local `R_k` is the skeleton the **daemon's** store keeps after discarding
+  leaves. Four objects must agree across that boundary, and they are not one
+  kind of thing. (1) **Leaf bytes** (128 B = 4 Selene scalars): already
+  consensus — the hash preimage, PL-D3 frozen, rule-42 pinned, `LEAF_BYTES`
+  derived from `SCALARS_PER_LEAF` with a const-assert (`segment.rs:36`);
+  nothing to share. (2) **The segment partition** — `SEGMENT_LAYER_J = 2`,
+  `outputs_per_node(j)`, `SegmentId` numbering (`segment.rs:18,:42,:48`) —
+  **and it is consensus, which inverts the first reading (design review,
+  2026-09-18).** `frozen_segment_count(leaf_count) = ⌊leaf_count /
+  SEGMENT_LEAF_COUNT⌋` (`shekyl-archival-retention/src/segment_freeze.rs:12–13`)
+  is *"deterministic in its one consensus input (O-1)"*; bond admission
+  reads it to decide which `shard_id`s are admissible, and pop revert
+  deletes exactly the rows with `shard_id ≥ frozen_segment_count(post_trim)`
+  (O-3); both daemon hooks consume it via
+  `shekyl_archival_frozen_segment_count`. A divergent partition therefore
+  does not fail challenges silently — it **forks**, at admission and at
+  revert. Better news for safety, and it relocates the argument: the
+  partition needs no shared home as a courtesy; it is a consensus surface
+  and is treated as one. **Where the tie is thin today:** `SEGMENT_LEAF_COUNT`
+  is *generated* in archival-retention (`build.rs:249`, from the economics
+  config) and const-asserted against the `shekyl-fcmp` width product
+  `38·18·38 = 25 992` (`segment_freeze.rs:44–46`); the wallet-side store
+  computes `outputs_per_node(SEGMENT_LAYER_J)` from the same widths
+  independently (`segment.rs:64`). The two agree *through the widths*, not
+  through each other — change `SEGMENT_LAYER_J` and nothing asserts the
+  store's segment is still the consensus segment. Three refinements
+  (2026-09-18), the first leading: **(i) `SEGMENT_LAYER_J` is marked
+  "provisional" (`segment.rs:17`) and is de facto consensus-frozen — the
+  marker invites the fork.** A reader takes it at face value, moves `j` to
+  3, and the wallet store partitions at 987 696 leaves while
+  `frozen_segment_count` keeps admitting `shard_id`s against 25 992; no
+  gate, and a comment that said it was safe. Either the marker goes or the
+  tie lands, and the marker going is not the cheaper fix. **(ii) The config
+  file is the more dangerous door:** `consensus_constants.json` is editable
+  without touching Rust, curve-tree would never notice, and the edit reads
+  as a parameter tune when it is a partition change. **(iii) The config
+  value reaches challenge leaf selection too**, not only admission and
+  revert: the production geometry for `challenge_leaf_index` is the
+  per-segment leaf count recorded in the segment registry at freeze
+  (`blockchain.cpp:5050–5073` → FFI), and that row is written from
+  `SEGMENT_LEAF_COUNT`. (`challenge.rs:273` passes the constant directly,
+  but that is a test.) So a config move partitions admission, revert and
+  challenge selection together and leaves the store behind. **The
+  dependency already runs archival-retention → curve-tree**
+  (`Cargo.toml:46`), so
+  archival-retention is the crate that sees both and is where the equality
+  assertion belongs; E3/S-CURVE is the unbuilt side that must consume
+  `frozen_segment_count` / `SEGMENT_LEAF_COUNT` rather than mint a
+  partition. **The hazard has a recorded instance at this exact boundary:**
+  `challenged_leaf_offset_in_chunk` carries the RF-D8 note
+  (`segment_freeze.rs:89–92`) — a first FFI draft subtracted a
+  segment-relative index from a global tree position, *"selected leaf 0 of
+  every chunk for every shard past the first, so every signature verified
+  against the wrong leaf and the C++ end-to-end path rejected what the Rust
+  KATs (which had the arithmetic right, locally) accepted."* "One home for
+  this arithmetic (RF-D8)" is already the established remedy; cite it
+  rather than argue from first principles. (3) **`R_k`** — `try_extract_r_k` over `shekyl_fcmp::tree` layer
+  math (`ops.rs:9,:65`): consensus by construction through `shekyl-fcmp`;
+  what E3 owes is the CT-0 freeze KAT
+  (`shekyl-fcmp/tests/curve_tree_freeze.rs`) run against its own skeleton.
+  (4) **The served frame** (`served_frame.rs:17–24`, `shekyl_curve_io`
+  canonical varint): already single-sourced, reasoning written at `:34–40`.
+  Ordering for the shared-code work therefore reads **partition first** —
+  exposed as a *consensus* surface, which makes it more urgent, not less —
+  then schema gates and the shared key macro. *SUPERSEDED: "the leaf
+  encoding becomes a wire format"; "codec first"; "the partition is not
+  consensus" (the first reading of this review).* FOLLOWUPS row.
+- **Two hazards the sharpening surfaced.** (a) **A second pin of 720:**
+  `segment.rs:20–22` hardcodes `SEGMENT_FREEZE_REORG_MARGIN_BLOCKS = 720`
+  beside a comment "same numeric value as `ARCHIVAL_REORG_DEPTH_BLOCKS`",
+  which is generated from the economics config (`build.rs:210`) — two
+  constants, one meaning, no assertion joining them; if the config moves,
+  segments keep freezing at 720 while the fork analysis (`SO-D8e`), the bond
+  assembly window and the pass anchor move. FOLLOWUPS row (the existing
+  CT-1 dedup row, amended). **Site constraint:** the assert cannot live in
+  `shekyl-curve-tree` — `ARCHIVAL_REORG_DEPTH_BLOCKS` is generated in
+  archival-retention's `build.rs` and the dependency runs
+  archival-retention → curve-tree, so the assert belongs in
+  archival-retention (which sees both), or curve-tree's copy moves there and
+  is imported back. A PR that starts in `segment.rs` discovers this the
+  wrong way round. Same site, same PR, as the
+  `SEGMENT_LEAF_COUNT == leaves_per_segment()` tie above. **Implementation
+  wrinkle on that tie:** `leaves_per_segment` and `outputs_per_node` are
+  `pub fn`, not `const fn`, so the equality cannot be a compile-time assert
+  as written; and `outputs_per_node`'s loop uses
+  `u8::try_from(layer).expect(..)`, which is not const (`Result::expect`
+  needs `E: Debug`), so the loop is rewritten over a `u8` counter
+  (`layer_is_selene` is already `is_multiple_of`, const-stable). For a
+  consensus-equality invariant the compile-time form is strictly better
+  than a test; a PR that tries the assert first will hit this and may
+  settle for a test. The partition PR is therefore three small pieces —
+  `const fn` in curve-tree, the equality assert and the 720 assert in
+  archival-retention — all in the crate the dependency direction forces,
+  all before E3 has anything to import. E3's own two obligations (import
+  the partition and define PDM's discard unit in `SegmentId`; run the CT-0
+  freeze KAT against its skeleton) are E3's, not this PR's; the FOLLOWUPS
+  row separates the two. (b) **`recon`'s
+  oracle is a fact about timing:** `recon.rs:6–13` replicates the daemon's
+  C++ leaf-stream derivation bit-exactly, and that duplication is an oracle
+  *because* the two implementations are independent. After E3 the daemon's
+  derivation is Rust in the same workspace and independence is nominal; the
+  argument for two copies lapses and the standard drift argument against
+  them returns, with the pinned CT-2 vectors (`CT2_DRAIN_ORDER.md`) and
+  header-root equality taking over the oracle role. **The bar that raises
+  (design review):** RF-D8 is a case where the cross-language check
+  *worked* — C++ rejected what local Rust KATs accepted — so unifying after
+  E3 retires a mechanism with a demonstrated catch, not only a redundancy.
+  Not grounds to keep two implementations; grounds for a precondition:
+  **the CT-2 pins must cover specifically what the cross-language check
+  caught — global-versus-segment-relative index confusion — before
+  unification**, or the unification loses coverage it cannot see it is
+  losing. Unification of `recon` with the shared derivation is therefore
+  the expected disposition **after E3, with that vector pinned first** —
+  a separate decision, as first recorded.
+- **Retention has two owners now.** The daemon's journal horizon pinned in the
+  `SO-D8` round (four bond journals back to `h_open(E)` at `h_slash`) is the
+  daemon's. The archiver's store has its own — how long a shard is held after
+  a release, and whether anything enforces it — and with two databases nobody
+  owns that question by default. FOLLOWUPS row; owner named there.
+- **The remote-daemon reserves acquire a constituency.** Local `P` store plus
+  remote daemon is the non-default posture WI-3 R2-1 and the `2d-2` family
+  hold mitigations in reserve for — the
+  `min(claimed_tip, verified_frontier + reorg_depth)` clamp among them
+  (`ARCHIVAL_BOND_SP_R0_PLAN.md:140,:193`), fully specified and deliberately
+  unbuilt because building it now would be remote-daemon defence in the local
+  default. If exchanges and heavy stakers are the expected shape of that
+  deployment, the reopen criterion for that family is a **deployment
+  milestone**, not an unforeseeable event. Not an objection to the reserve;
+  a restatement of when it fires.
+
+**What this does not decide.** Which of the wallet's two curve-tree purposes
+(path assembly) remains load-bearing under a co-resident daemon — that
+ranking is a separate question and the split does not depend on its answer.
+
+**Review record (2026-09-18).** Adversarial review raised seven findings;
+two were withdrawn at source (origin analysis; load correlation — see the
+uniformity paragraph), one was withdrawn on the Foundation-seed
+`CompleteTree` floor (archiver-store durability is an operator's trade, not
+the network's availability floor — `FOUNDATION_ARCHIVAL_DISCLOSURE.md:196`,
+`V3_STAKER_ARCHIVAL.md:120`), and the rest are folded in above.
+
+**Reference.** `docs/design/ARCHIVAL_SERVING_ROUTE.md` (request contract;
+cross-reference added), `docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md` (the
+discard that makes the stores complementary), `docs/design/DAEMON_REDB_STORE.md`
+S-ARCH / DRS-E4 (where "no serving state in the daemon" is enforced when the
+archival surface is ported — FOLLOWUPS row), `docs/design/ARCHIVAL_BOND_SP_R0_PLAN.md`
+(the R2-1 reserve).
+
+---
