@@ -8,7 +8,7 @@ contract it consolidates and where that contract is ruled, so that the
 three homes the prune's obligations are scattered across today (`PDM-Q-F10`,
 `PDM-Q-F26`/`F32`, `SCW-7`) become one document before the first increment
 is cut (rule 26: design closure precedes any cut; E1 got
-[`DRS_E1_SCHAIN_W.md`](DRS_E1_SCHAIN_W.md) before its writers).
+[`DRS_E1_SCHAIN_W.md`](../completed/DRS_E1_SCHAIN_W.md) before its writers).
 **Nothing here is proposed as new design**; where a section's contract is
 not yet ruled it says so and names the question. The increment ordinal and
 the Round-0 pre-flight are DRS-E's; the filename is provisional until DRS
