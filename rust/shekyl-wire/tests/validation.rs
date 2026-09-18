@@ -11,6 +11,7 @@
 mod common;
 use common::conforming_pqc_extra;
 
+use shekyl_types::PCanonicalId;
 use shekyl_types::{PqcAuthHash, PrunableHash};
 use shekyl_wire::transaction::TAG_INPUT_SERVE_CREDIT;
 use shekyl_wire::{
@@ -447,7 +448,7 @@ fn two_bond_posts_rejected() {
     let bp = || {
         Input::BondPost(Box::new(BondPost {
             hybrid_public_key: vec![],
-            p_canonical_id: [0u8; 32],
+            p_canonical_id: PCanonicalId::from_bytes([0u8; 32]),
             kind: BondPostKind::Other(3),
             holdings: Holdings::CompleteTree,
             bonded_total_atomic: 0,
@@ -466,7 +467,7 @@ fn two_bond_posts_rejected() {
 fn join_market_bond_post() -> Input {
     Input::BondPost(Box::new(BondPost {
         hybrid_public_key: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
-        p_canonical_id: [7u8; 32],
+        p_canonical_id: PCanonicalId::from_bytes([7u8; 32]),
         kind: BondPostKind::JoinMarket {
             bond_spend_pk: vec![9u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN],
             endpoint: [0xEE; 32],
@@ -582,7 +583,7 @@ fn bond_post_spend_with_per_vin_pseudo_outs_rejected() {
 fn bond_post_oversized_pubkey_rejected() {
     let bp = BondPost {
         hybrid_public_key: vec![0u8; shekyl_wire::transaction::PQC_HYBRID_SINGLE_KEY_LEN + 1],
-        p_canonical_id: [0u8; 32],
+        p_canonical_id: PCanonicalId::from_bytes([0u8; 32]),
         kind: BondPostKind::Other(3),
         holdings: Holdings::CompleteTree,
         bonded_total_atomic: 0,

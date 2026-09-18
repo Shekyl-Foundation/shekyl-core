@@ -23,6 +23,7 @@ use shekyl_ct_balance::{verify_ct_balance, InputTerm, OutputTerm};
 use shekyl_curve_primitives::Commitment;
 use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
 use shekyl_fcmp::PqcLeafScalar;
+use shekyl_types::PrefixHash;
 
 use crate::error::TxBuilderError;
 use crate::types::{OutputInfo, PqcAuth, SignedProofs, SpendInput, TreeContext};
@@ -55,7 +56,7 @@ use crate::validate::validate_inputs;
 ///   curve depends on tree depth), **not** the block hash. Passing the block
 ///   hash will produce an invalid proof that the verifier rejects.
 pub fn sign_transaction(
-    tx_prefix_hash: [u8; 32],
+    tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
     fee: shekyl_units::AtomicUnits,
@@ -83,7 +84,7 @@ pub fn sign_transaction(
 /// This crate stays bond-agnostic: it never names "bond", it consumes generic
 /// typed-side terms (`docs/design/ARCHIVAL_BOND_CONSTRUCTION.md` §7.2).
 pub fn sign_transaction_with_terms(
-    tx_prefix_hash: [u8; 32],
+    tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
     outputs: &[OutputInfo],
     fee: shekyl_units::AtomicUnits,
@@ -172,7 +173,10 @@ pub fn sign_transaction_with_terms(
         &prove_inputs,
         &tree.tree_root,
         tree.tree_depth,
-        tx_prefix_hash,
+        // The proof crates are transform-shaped and take the signable hash as
+        // bytes (RAW_TYPE_NEWTYPE_MIGRATION.md original PR E, deferred to them);
+        // this is the one place the typed prefix hash becomes its bytes.
+        tx_prefix_hash.to_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 

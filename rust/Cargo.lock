@@ -4723,6 +4723,7 @@ dependencies = [
  "shekyl-curve-io",
  "shekyl-curve-primitives",
  "shekyl-fcmp",
+ "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
  "thiserror 2.0.18",

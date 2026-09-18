@@ -10,7 +10,7 @@
 //! [`Transaction::hash_with_supplied_prunable`] (prunable digest supplied),
 //! [`Transaction::hash_with_supplied_components`] (both discardable
 //! components supplied). [`Transaction::hash`] is the `hash` field of
-//! `txid_parts` as bytes.
+//! `txid_parts`. Every txid leaves this module as a [`TxHash`] (RTN-7).
 
 use shekyl_crypto_hash::keccak256;
 use shekyl_types::{PqcAuthHash, PrunableHash, TxHash};
@@ -24,8 +24,7 @@ use crate::varint::write_varint;
 ///
 /// One construction: [`Transaction::txid_parts`] hashes each discardable
 /// region once and mixes the txid from those values, so the three fields
-/// cannot disagree. [`Transaction::hash`] is the `hash` field as bytes
-/// (`RAW_TYPE_NEWTYPE_MIGRATION.md` §6 still owns that return type).
+/// cannot disagree. [`Transaction::hash`] is the `hash` field.
 /// `TxIdentity::of` is this value, not three independent accessors — and
 /// `validate` only calls it on the candidate as received, which still
 /// holds the regions it is judged against.
@@ -60,8 +59,8 @@ impl Transaction {
     /// The `hash` field of [`Self::txid_parts`]. Reconstruction of a body that
     /// no longer holds a discardable region is
     /// [`Self::hash_with_supplied_components`].
-    pub fn hash(&self) -> [u8; 32] {
-        self.txid_parts().hash.to_bytes()
+    pub fn hash(&self) -> TxHash {
+        self.txid_parts().hash
     }
 
     /// This body's consensus txid and the two store-row digests, hashed
@@ -166,11 +165,11 @@ impl Transaction {
     /// is a [`PrunableHash`], not a bare `[u8; 32]`: what the store hands
     /// back is typed at the row, and a txid or a `PqcAuthHash` passed here is
     /// a compile error rather than a wrong identity.
-    pub fn hash_with_supplied_prunable(&self, prunable_hash: PrunableHash) -> [u8; 32] {
-        self.hash_from_components(
+    pub fn hash_with_supplied_prunable(&self, prunable_hash: PrunableHash) -> TxHash {
+        TxHash::from_bytes(self.hash_from_components(
             self.pqc_auth_hash(),
             self.prunable_component(Some(prunable_hash)),
-        )
+        ))
     }
 
     /// The consensus transaction hash of a **skeleton** — prefix and base
@@ -196,9 +195,11 @@ impl Transaction {
         &self,
         pqc_auth: Option<PqcAuthHash>,
         prunable_hash: PrunableHash,
-    ) -> [u8; 32] {
+    ) -> TxHash {
         let pqc_auth = pqc_auth.filter(|_| self.prefix_carries_pqc_component());
-        self.hash_from_components(pqc_auth, self.prunable_component(Some(prunable_hash)))
+        TxHash::from_bytes(
+            self.hash_from_components(pqc_auth, self.prunable_component(Some(prunable_hash))),
+        )
     }
 
     /// Whether this prefix can carry a third txid component (C++ oracle,

@@ -36,6 +36,7 @@
 //! corpus.
 
 use shekyl_archival_retention::empty_attestation_root;
+use shekyl_types::AttestationRoot;
 use shekyl_wire::Block;
 
 /// Published mainnet genesis block id (`docs/GENESIS_ALLOCATIONS.md`,
@@ -45,9 +46,9 @@ use shekyl_wire::Block;
 const MAINNET_GENESIS_BLOCK_ID: &str =
     "b6293d3ec814d4b7acdcba7d79d2d22b035eaae52bb35cb3f862adac16c14031";
 
-fn hex32(bytes: &[u8; 32]) -> String {
+fn hex32(bytes: impl AsRef<[u8]>) -> String {
     let mut s = String::with_capacity(64);
-    for b in bytes {
+    for b in bytes.as_ref() {
         s.push_str(&format!("{b:02x}"));
     }
     s
@@ -79,12 +80,12 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
         let block =
             Block::from_bytes(blob).unwrap_or_else(|e| panic!("height {height}: parse: {e}"));
         assert_eq!(
-            hex32(&block.miner_transaction.hash()),
+            hex32(block.miner_transaction.hash()),
             miner_tx_hash,
             "height {height}: miner tx hash (3-part keccak256) must match the daemon"
         );
         assert_eq!(
-            hex32(&block.hash()),
+            hex32(block.hash()),
             block_hash,
             "height {height}: block hash (keccak256 of V(len)·preimage) must match the daemon"
         );
@@ -92,7 +93,8 @@ fn coinbase_block_and_tx_hashes_match_the_daemon() {
         // commit the empty-set root — not null_hash. Ties C++ constructor default /
         // create_block_template to Rust empty_attestation_root() without a hex pin.
         assert_eq!(
-            block.header.attestation_root, empty_root,
+            block.header.attestation_root,
+            AttestationRoot::from_bytes(empty_root),
             "height {height}: attestation_root must be empty_attestation_root(), not null_hash"
         );
         if height == 0 {

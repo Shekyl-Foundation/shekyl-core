@@ -44,6 +44,7 @@
 use std::io::{self, BufRead, Read, Write};
 
 use shekyl_crypto_hash::keccak256;
+use shekyl_types::{PCanonicalId, PrefixHash};
 
 use crate::bytes::{read_array, read_byte};
 use crate::tx_extra::{check_pqc_field_shape_of, parse as parse_tx_extra};
@@ -622,7 +623,7 @@ pub struct BondPost {
     /// `P`'s canonical hybrid public key.
     pub hybrid_public_key: Vec<u8>,
     /// `P`'s canonical id.
-    pub p_canonical_id: [u8; 32],
+    pub p_canonical_id: PCanonicalId,
     /// The post kind and its coupled `bond_spend_pk` + endpoint (§9.11, `EU-D3`).
     pub kind: BondPostKind,
     /// Holdings served.
@@ -639,7 +640,7 @@ impl BondPost {
     fn write<W: Write>(&self, w: &mut W) -> io::Result<()> {
         write_varint(self.hybrid_public_key.len(), w)?;
         w.write_all(&self.hybrid_public_key)?;
-        w.write_all(&self.p_canonical_id)?;
+        w.write_all(self.p_canonical_id.as_bytes())?;
         match &self.kind {
             BondPostKind::JoinMarket {
                 bond_spend_pk,
@@ -673,7 +674,7 @@ impl BondPost {
     fn read<R: Read>(r: &mut R) -> io::Result<BondPost> {
         let hybrid_public_key =
             read_len_prefixed_exact(r, "bond_post hybrid_public_key", PQC_HYBRID_SINGLE_KEY_LEN)?;
-        let p_canonical_id = read_array(r)?;
+        let p_canonical_id = PCanonicalId::from_bytes(read_array(r)?);
         let post_kind = read_byte(r)?;
         // `read` never yields `Other(JOINMARKET)`: the JoinMarket tag always takes the
         // first arm, so the `write` guard above only fires on a hand-built value.
@@ -1509,13 +1510,13 @@ impl Transaction {
     /// serializes `VARINT(version)` first, so this is
     /// `keccak256(varint(TX_VERSION) ‖ TxPrefix::write)` — the same `varint(3) ‖
     /// prefix` composition [`Self::write`] emits at the head of the tx.
-    pub fn prefix_hash(&self) -> [u8; 32] {
+    pub fn prefix_hash(&self) -> PrefixHash {
         let mut buf = Vec::new();
         write_varint(TX_VERSION, &mut buf).expect("writing to a Vec is infallible");
         self.prefix
             .write(&mut buf)
             .expect("writing to a Vec is infallible");
-        keccak256(&buf)
+        PrefixHash::from_bytes(keccak256(&buf))
     }
 
     /// Per-input PQC signing-preimage hashes — the `signed_hash(i)` each input's PQC

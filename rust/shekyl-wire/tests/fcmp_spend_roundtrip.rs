@@ -367,6 +367,7 @@ fn synthetic_spend_hash_preimage_is_pinned() {
     // the layout regressed — confirm against the C++ leg before updating.
     let h: String = synthetic_spend()
         .hash()
+        .as_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
@@ -384,9 +385,12 @@ fn synthetic_spend_prefix_hash_is_pinned() {
     // hash above. Source-validated against the spec; no live spend-hash oracle yet, so
     // this pins the value against drift — confirm vs the daemon before changing it.
     let tx = synthetic_spend();
+    // `PrefixHash` and `TxHash` are distinct types (RTN-7), so the type system
+    // already refuses one for the other; the byte comparison pins that the
+    // *values* differ too.
     assert_ne!(
-        tx.prefix_hash(),
-        tx.hash(),
+        tx.prefix_hash().to_bytes(),
+        tx.hash().to_bytes(),
         "prefix (signable) hash must differ from the chain-identity tx hash"
     );
     // Structural: the prefix hash depends ONLY on the prefix, not the ct — changing the
@@ -402,6 +406,7 @@ fn synthetic_spend_prefix_hash_is_pinned() {
     );
     let h: String = tx
         .prefix_hash()
+        .as_bytes()
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
