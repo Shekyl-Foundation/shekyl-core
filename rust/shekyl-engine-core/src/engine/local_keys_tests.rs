@@ -1120,7 +1120,7 @@ fn engine_derived_bundle_signs_through_tx_builder_end_to_end() {
             &key_images,
             &signed_engine.pseudo_outs,
             &pqc_pk_hashes,
-            &tree.tree_root,
+            tree.tree_root.as_bytes(),
             tree.tree_depth,
             signable_tx_hash.to_bytes(),
         );
@@ -1405,7 +1405,7 @@ fn join_market_bond_post_signs_and_verifies_through_prover() {
                 &key_images,
                 &signed.pseudo_outs,
                 &pqc_pk_hashes,
-                &tree.tree_root,
+                tree.tree_root.as_bytes(),
                 tree.tree_depth,
                 signable_tx_hash.to_bytes(),
             ),
@@ -1566,7 +1566,7 @@ async fn sign_transaction_rejects_empty_inputs() {
         fcmp_plus_plus_context: FcmpPlusPlusContext {
             tree: TreeContext {
                 reference_block: BlockHash::from_bytes([0; 32]),
-                tree_root: [0; 32],
+                tree_root: shekyl_types::CurveTreeRoot::from_bytes([0; 32]),
                 tree_depth: 1,
             },
         },

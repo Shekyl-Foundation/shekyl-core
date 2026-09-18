@@ -194,7 +194,7 @@ pub(crate) fn leaf_entry_from_chunk(cl: &ChunkLeaf) -> LeafEntry {
 pub(crate) fn tree_context_from(tree: &CurveTreeContext) -> TreeContext {
     TreeContext {
         reference_block: tree.reference_block,
-        tree_root: tree.tree_root.to_bytes(),
+        tree_root: tree.tree_root,
         tree_depth: tree.tree_depth,
     }
 }

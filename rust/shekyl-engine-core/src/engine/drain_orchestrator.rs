@@ -891,7 +891,7 @@ pub(crate) async fn orchestrate_drain(
         })?;
     let tree_ctx = TreeContext {
         reference_block: first.tree.reference_block,
-        tree_root: first.tree.tree_root.to_bytes(),
+        tree_root: first.tree.tree_root,
         tree_depth: first.tree.tree_depth,
     };
     let funding: Vec<FundingInputContext> = selected

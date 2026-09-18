@@ -380,7 +380,7 @@ fn fcmp_spend_real_tree_verifies_against_consensus() {
     // ── 6. Sign via the production transaction builder ────────────────────
     let tree_ctx = TreeContext {
         reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root.to_bytes(),
+        tree_root: path.tree.tree_root,
         tree_depth: path.tree.tree_depth,
     };
     // Bind the proof + PQC auths to the *real* transaction prefix, exactly as

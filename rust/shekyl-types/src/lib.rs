@@ -271,7 +271,31 @@ macro_rules! hash32 {
             }
         }
 
+        impl Hash32Bytes for $name {
+            fn from_bytes(bytes: [u8; 32]) -> Self {
+                $name(bytes)
+            }
+            fn as_bytes(&self) -> &[u8; 32] {
+                &self.0
+            }
+        }
     };
+}
+
+/// The byte edge of a `hash32!` identity, as a bound.
+///
+/// Each member already exposes inherent `from_bytes` / `as_bytes` /
+/// `to_bytes`. This trait is what a generic helper names so a new family
+/// member is usable without a second hex-serde (or store-key) copy.
+pub trait Hash32Bytes: Copy + Sized {
+    /// Wrap raw bytes. Same contract as the inherent edge constructor.
+    fn from_bytes(bytes: [u8; 32]) -> Self;
+    /// Borrow the raw bytes. Same contract as the inherent accessor.
+    fn as_bytes(&self) -> &[u8; 32];
+    /// Unwrap to the raw bytes.
+    fn to_bytes(self) -> [u8; 32] {
+        *self.as_bytes()
+    }
 }
 
 scalar_u64! {
@@ -522,8 +546,9 @@ hash32! {
     /// The block-header **attestation root** (archival credit-wire witness
     /// commitment), not a [`CurveTreeRoot`] and not a [`BlockHash`].
     ///
-    /// The wire header stores `[u8; 32]`; convert at the edge via
-    /// [`AttestationRoot::from_bytes`] / [`AttestationRoot::as_bytes`].
+    /// The wire header field is this type (`shekyl_wire::BlockHeader`). The
+    /// codec reads and writes the 32 bytes via [`Self::from_bytes`] /
+    /// [`Self::as_bytes`].
     AttestationRoot
 }
 
@@ -555,9 +580,9 @@ hash32! {
     /// must carry is the consensus state transition (`CONSENSUS_C2_R8_STORE_PLACEMENT.md`
     /// §5), owned by `shekyl-curve-tree` and the validation crate. Minted here
     /// so a rule can *read* a recorded root without depending on the crate that
-    /// computes it — the low-level wire header stores the raw `[u8; 32]`
-    /// (rule 18 byte-layout) and converts at its edge via
-    /// [`CurveTreeRoot::from_bytes`] / [`CurveTreeRoot::as_bytes`].
+    /// computes it. The wire header field is this type
+    /// (`shekyl_wire::BlockHeader.curve_tree_root`); the codec reads and
+    /// writes the 32 bytes via [`Self::from_bytes`] / [`Self::as_bytes`].
     ///
     /// Distinct from [`BlockHash`] / [`TxHash`]: a root is a commitment to a set
     /// of outputs, not an identity, and one can never be passed where the other

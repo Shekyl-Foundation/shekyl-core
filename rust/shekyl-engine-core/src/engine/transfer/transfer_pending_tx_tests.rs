@@ -2428,7 +2428,7 @@ async fn real_tree_bond_post_proofs() -> RealTreeBondProofs {
         .collect();
     let tree_ctx = TreeContext {
         reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root.to_bytes(),
+        tree_root: path.tree.tree_root,
         tree_depth: path.tree.tree_depth,
     };
 
@@ -2561,7 +2561,7 @@ async fn join_market_bond_post_fcmp_verify_over_real_tree() {
         &key_images,
         &signed.pseudo_outs,
         &pqc_pk_hashes,
-        &tree_ctx.tree_root,
+        tree_ctx.tree_root.as_bytes(),
         tree_ctx.tree_depth,
         signable_tx_hash.to_bytes(),
     );

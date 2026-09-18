@@ -51,10 +51,9 @@ use crate::validate::validate_inputs;
 /// - All intermediate secret material (masks, blindings) is wrapped in
 ///   [`Zeroizing`] and wiped on drop.
 /// - Randomness comes from [`OsRng`] (OS-provided CSPRNG).
-/// - The `tree_root` in `TreeContext` must be the curve tree root from the
-///   block header's `curve_tree_root` field (the topmost-layer node, whose
-///   curve depends on tree depth), **not** the block hash. Passing the block
-///   hash will produce an invalid proof that the verifier rejects.
+/// - [`TreeContext::tree_root`] is a [`shekyl_types::CurveTreeRoot`] (the
+///   header field). The proof crate takes those bytes at this call; a
+///   [`shekyl_types::BlockHash`] cannot be passed in its place.
 pub fn sign_transaction(
     tx_prefix_hash: PrefixHash,
     inputs: &[SpendInput],
@@ -171,11 +170,10 @@ pub fn sign_transaction_with_terms(
     // ── 7. FCMP++ prove ──────────────────────────────────────────────
     let prove_result = proof::prove(
         &prove_inputs,
-        &tree.tree_root,
+        // Proof-crate boundary: both the root and the signable hash are
+        // bytes here (RAW_TYPE_NEWTYPE_MIGRATION.md original PR E).
+        tree.tree_root.as_bytes(),
         tree.tree_depth,
-        // The proof crates are transform-shaped and take the signable hash as
-        // bytes (RAW_TYPE_NEWTYPE_MIGRATION.md original PR E, deferred to them);
-        // this is the one place the typed prefix hash becomes its bytes.
         tx_prefix_hash.to_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
@@ -331,11 +329,10 @@ pub fn prove_backing_membership(
 
     let result = proof::prove_membership_only(
         &[prove_input],
-        &tree.tree_root,
+        tree.tree_root.as_bytes(),
         tree.tree_depth,
-        // Proof-crate boundary: bytes.
         signable_tx_hash.to_bytes(),
-        &tree.tree_root,
+        tree.tree_root.as_bytes(),
     )
     .map_err(|e| TxBuilderError::FcmpProveError(e.to_string()))?;
 

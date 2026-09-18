@@ -974,6 +974,7 @@ mod tests {
         // the per-input shape; pre-establishing the redaction
         // discipline is cheaper than re-establishing it later.
         use shekyl_tx_builder::TreeContext;
+        use shekyl_types::CurveTreeRoot;
 
         use shekyl_address::Network;
 
@@ -996,7 +997,7 @@ mod tests {
             fcmp_plus_plus_context: FcmpPlusPlusContext {
                 tree: TreeContext {
                     reference_block: BlockHash::from_bytes([0; 32]),
-                    tree_root: [0; 32],
+                    tree_root: CurveTreeRoot::from_bytes([0; 32]),
                     tree_depth: 1,
                 },
             },

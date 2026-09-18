@@ -4,12 +4,13 @@
 //! [`OutputInfo`], and [`TreeContext`], pass them to [`crate::sign_transaction`],
 //! and receive [`SignedProofs`] on success.
 //!
-//! All `[u8; 32]` fields serialize/deserialize as hex strings when used with
-//! JSON (via the `hex_bytes` module), matching the C++ FFI convention.
+//! 32-byte fields serialize as hex strings in JSON (via [`hex_bytes32`] for
+//! raw arrays and [`hex_typed_hash`] for `hash32!` identities), matching
+//! the C++ FFI convention.
 
 use serde::{Deserialize, Serialize};
 use shekyl_crypto_pq::output::EncryptedOutputField;
-use shekyl_types::BlockHash;
+use shekyl_types::{BlockHash, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -36,24 +37,27 @@ pub mod hex_bytes32 {
     }
 }
 
-/// Serde helper: hex-encode/decode a [`BlockHash`] exactly as [`hex_bytes32`]
-/// does its bytes, so typing a field (RTN-7) leaves its JSON form unchanged.
-pub mod hex_block_hash {
+/// Hex serde for any [`shekyl_types::Hash32Bytes`] identity — one helper for the family,
+/// so typing another field does not mint another `hex_block_hash` copy.
+/// JSON form is the same 64 lowercase hex characters [`hex_bytes32`] emits.
+pub mod hex_typed_hash {
     use serde::{Deserializer, Serializer};
-    use shekyl_types::BlockHash;
+    use shekyl_types::Hash32Bytes;
 
-    pub fn serialize<S>(hash: &BlockHash, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S, T>(hash: &T, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
+        T: Hash32Bytes,
     {
         super::hex_bytes32::serialize(hash.as_bytes(), serializer)
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<BlockHash, D::Error>
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
     where
         D: Deserializer<'de>,
+        T: Hash32Bytes,
     {
-        super::hex_bytes32::deserialize(deserializer).map(BlockHash::from_bytes)
+        super::hex_bytes32::deserialize(deserializer).map(T::from_bytes)
     }
 }
 
@@ -290,21 +294,20 @@ pub struct OutputInfo {
 
 /// Curve tree context at the reference block height.
 ///
-/// # Important distinction
-///
-/// `tree_root` is the curve tree root extracted from the block header's
-/// `curve_tree_root` field (the topmost-layer node — Helios or Selene
-/// depending on tree depth, per `shekyl-fcmp/src/tree.rs`). It is **not** the
-/// block hash. Confusing these was the root cause of the prover bug this
-/// crate was created to fix.
+/// Mirrors the curve-tree crate's `TreeContext`: `reference_block` is the
+/// block identity, `tree_root` is the header-committed [`CurveTreeRoot`].
+/// The two cannot be swapped — that mix-up was the prover bug this crate
+/// was created to fix. Bytes for the transform-shaped proof crate are
+/// taken at the `prove` call, not here.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeContext {
     /// Hash of the reference block (stored in CtSig.referenceBlock).
-    #[serde(with = "hex_block_hash")]
+    #[serde(with = "hex_typed_hash")]
     pub reference_block: BlockHash,
-    /// Curve tree root at the reference block height (passed to prover).
-    #[serde(with = "hex_bytes32")]
-    pub tree_root: [u8; 32],
+    /// Curve tree root at the reference block height (passed to the prover
+    /// as bytes at the proof-crate boundary).
+    #[serde(with = "hex_typed_hash")]
+    pub tree_root: CurveTreeRoot,
     /// Tree depth (number of layers). Must be >= 1.
     pub tree_depth: u8,
 }
@@ -358,7 +361,7 @@ pub struct SignedProofs {
     /// Per-input PQC authentication (ML-DSA-65 hybrid signatures).
     pub pqc_auths: Vec<PqcAuth>,
     /// Reference block hash (echo back for CtSig).
-    #[serde(with = "hex_block_hash")]
+    #[serde(with = "hex_typed_hash")]
     pub reference_block: BlockHash,
     /// Tree depth (echo back for CtSig).
     pub tree_depth: u8,

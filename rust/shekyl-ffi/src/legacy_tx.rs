@@ -105,7 +105,7 @@ pub unsafe extern "C" fn shekyl_sign_transaction(
     let tree = shekyl_tx_builder::TreeContext {
         // The C ABI stays raw (rule 40); the typed world begins here.
         reference_block: shekyl_types::BlockHash::from_bytes(reference_block),
-        tree_root,
+        tree_root: shekyl_types::CurveTreeRoot::from_bytes(tree_root),
         tree_depth,
     };
 
@@ -326,7 +326,7 @@ pub unsafe extern "C" fn shekyl_sign_fcmp_transaction(
     let tree = shekyl_tx_builder::TreeContext {
         // The C ABI stays raw (rule 40); the typed world begins here.
         reference_block: shekyl_types::BlockHash::from_bytes(reference_block),
-        tree_root,
+        tree_root: shekyl_types::CurveTreeRoot::from_bytes(tree_root),
         tree_depth: layers,
     };
 

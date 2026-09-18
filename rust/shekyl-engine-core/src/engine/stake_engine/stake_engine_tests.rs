@@ -1491,7 +1491,7 @@ mod emission_claim_assembly {
         // auths, and the economics recompute. A builder/daemon drift in
         // the signable hash, index derivation, commit set, or either
         // auth key refuses here.
-        emission_vin_verify_backing(&vin, &tree_root, depth, signable.to_bytes())
+        emission_vin_verify_backing(&vin, tree_root.as_bytes(), depth, signable.to_bytes())
             .expect("backing leg verifies against the erase-rule hash");
         emission_vin_verify_auth(&vin, &reward_commits, signable.as_bytes())
             .expect("both auth legs verify against the erase-rule hash");

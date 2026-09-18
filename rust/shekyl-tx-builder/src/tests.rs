@@ -14,7 +14,7 @@ use crate::types::*;
 use crate::validate::validate_inputs;
 use crate::{MAX_INPUTS, MAX_OUTPUTS};
 use shekyl_crypto_pq::output::EncryptedOutputField;
-use shekyl_types::{BlockHash, PrefixHash};
+use shekyl_types::{BlockHash, CurveTreeRoot, PrefixHash};
 use shekyl_units::AtomicUnits;
 
 fn dummy_leaf_entry() -> LeafEntry {
@@ -88,7 +88,7 @@ fn dummy_output(amount: u64) -> OutputInfo {
 fn dummy_tree() -> TreeContext {
     TreeContext {
         reference_block: BlockHash::from_bytes([30u8; 32]),
-        tree_root: [31u8; 32],
+        tree_root: CurveTreeRoot::from_bytes([31u8; 32]),
         tree_depth: 2,
     }
 }
@@ -372,7 +372,7 @@ fn dummy_spend_input_at_depth(depth: u8) -> SpendInput {
 fn dummy_tree_at_depth(depth: u8) -> TreeContext {
     TreeContext {
         reference_block: BlockHash::from_bytes([30u8; 32]),
-        tree_root: [31u8; 32],
+        tree_root: CurveTreeRoot::from_bytes([31u8; 32]),
         tree_depth: depth,
     }
 }

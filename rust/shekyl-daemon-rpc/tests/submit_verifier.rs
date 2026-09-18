@@ -405,7 +405,7 @@ fn build_funding_setup() -> FundingSetup {
         derive_pqc_public_key(&combined_ss.0, spent_index).expect("derive hybrid public key");
     let tree_ctx = TreeContext {
         reference_block: path.tree.reference_block,
-        tree_root: path.tree.tree_root.to_bytes(),
+        tree_root: path.tree.tree_root,
         tree_depth: path.tree.tree_depth,
     };
 

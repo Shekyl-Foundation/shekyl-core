@@ -401,7 +401,7 @@ impl Message<AssembleEmissionClaim> for StakeEngine {
             // over the assembled vin (cause-blind on refusal, CB-5).
             if let Err(e) = emission_vin_verify_backing(
                 &vin,
-                &tree.tree_root,
+                tree.tree_root.as_bytes(),
                 tree.tree_depth,
                 signable_tx_hash.to_bytes(),
             ) {
