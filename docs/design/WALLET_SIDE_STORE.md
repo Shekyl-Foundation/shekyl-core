@@ -338,8 +338,10 @@ Each is a substrate fact at `8494f2a27`, with its file and line.
 | **WSS-10** | **`PDM-Q12`'s code cites have drifted ~6–50 lines at this pin.** `StoreError::FrozenSegmentPruned` is at `redb_backend.rs:470` (cited `:464`); `ServingReader`'s doc block spans `:160-183` and its `open_frozen_segment_body` is at `:216`, while `LeafStore::open_frozen_segment_body` is at `:1877` (cited as `:164-183` for all three). The **symbols** named are correct; the **ranges** are stale. Recorded as a re-pin, not a defect. | Every increment's Round-0 re-pins rather than inheriting |
 | **WSS-11** | **`redb_backend.rs` is still 4 196 lines** — nothing of `CTS-` is built. The file holds the schema, six codecs, `StoreError` (17 variants), three handle types, every operation, and ~2 000 lines of tests. | §8; the decomposition principle survives any `WSS-Q1` answer |
 | **WSS-13** | **`P`'s serving state is written through the *principal's* curve-tree actor, into the principal's file — a firewall-layering defect.** `EngineServeSetPinner` holds a `CurveTreeHandle` and a `p_id` side by side (`stake_engine/serve_set_source.rs:79`, `:101`) and calls `pin_serve_set` on that handle (`:254-257`); the handle it is given in production is the **engine's own** — `g.curve_tree.clone()` at `stake_engine/serving/start.rs:158`, passed at `:203-206`. So the serve set — which is `P`'s bonded obligation, and whose membership is `P`-correlated — is persisted by the actor that owns the principal's proving state, in the same `.curvetree` file. [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §0 treats keeping `P`'s material inside the `StakeEngine` actor as load-bearing; this path routes around that. **This, not `WSS-5` or `WSS-6`, is what makes `WSS-Q1` urgent**, and it re-poses it as an *ownership* question rather than a storage one (§6.1). | `WSS-Q1` — the ground; the firewall stack |
+| **WSS-18** | **The plaintext `.curvetree` file is an at-rest route to `P`, beside an encrypted `.wallet` — verified.** The store is a **sibling of the wallet file** (`shekyl-engine-file/src/paths.rs:117-121`: `primary.wallet` → `primary.wallet.curvetree`) and `shekyl-curve-tree` contains **no encryption at all** — the only `chacha` hits in the crate are a test RNG (`store/ops.rs:148-158`). The serve-set pins that `WSS-13` routes into it are therefore **`P`'s holdings in plaintext next to an encrypted wallet**, which is the gap on its own: the wallet already ruled that no-password disk access is worth defending against, and a plaintext companion undoes that ruling for exactly the adversaries it was made for. **Verified negative that bounds the problem:** the onion key is *not* a second route — `Detach` is unrepresentable, the onion dies with its control connection, and the identity holds re-mintable expanded bytes behind `Zeroizing` (`shekyl-tor-control-client/src/onion_identity.rs:74-83`, `:148-152`), so Tor never writes it to disk. | §6.2 — the whole at-rest case rests on this row |
+| **WSS-19** | **`P`'s *other* persisted state is unaudited, and the audit gates the claim that encrypting the store closes the gap.** `WSS-18` establishes one plaintext route to `P`; it does not establish that it is the only one. `P`-scan records, serving counters and logs are **not audited at this pin**. **Owed as a Round-0 item before any increment claims the hole is closed** — a fix that closes one of several routes and is described as closing "the" route is worse than none, because it retires the question. | §6.2; the serving increment's Round-0 |
 | **WSS-14** | **The subroot cache's role is cost, and the cost is per block.** `verify_root` is called on **every ingested block** (`engine/merge.rs:651`, in the per-block pre-pass that refuses to advance past tree state the wallet cannot reproduce). `root_at_count` under it reads `frozen_segments.r_k` per complete segment (`WSS-4`); without the cache each block recomputes every complete segment from leaves, so **sync cost becomes quadratic in chain length**. Correctness has a fallback; throughput does not. | `WSS-9`; `WSS-Q2`; the proving-side arm in §6.1 |
-| **WSS-15** | **Per-shard file sizes are a fingerprint, and encryption does not hide them.** Under `PDM-Q-F32` a closed shard's size lies in **`[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)`** (`ARCHIVAL_PRUNED_DAEMON_MODE.md:411`) — **variable, not fixed** — and every shard's exact size is **public**, because the A4 length rows are consensus. So one encrypted file per shard maps file size → `shard_id` → `P`, and a file vanishing at drop time lines up with the drop's on-chain timestamp. Encryption hides content; it hides neither sizes nor the times sizes change. | `WSS-Q12`; §6.1's `P`-store side; the #775 criterion applied to disk |
+| **WSS-15** | **Per-shard file sizes are a fingerprint, and encryption does not hide them.** Under `PDM-Q-F32` a closed shard's size lies in **`[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)`** (`ARCHIVAL_PRUNED_DAEMON_MODE.md:411`) — **variable, not fixed** — and every shard's exact size is **public**, because the A4 length rows are consensus. So a per-shard file layout would map file size → `shard_id` → `P`, and a file vanishing at drop time would line up with the drop's on-chain timestamp. Encryption hides content; it hides neither sizes nor the times sizes change. **Disposition 2026-09-18 (steering): ACCEPTED RESIDUAL, not a design constraint.** Exploiting it needs a forensic adversary who cannot get the password but *will* compute every persona's holdings count from the chain and match it against disk capacity; the payoff is modest (holdings counts are probably shared by many archivers, and multiple gigabytes of archival data already says "archiver", padded or not) against 15–30 % of storage plus complexity. **Reopening criteria (rule 21):** evidence that holdings counts are near-unique across the market — the sim can measure the distribution — or forensic tooling that actually targets this. | `WSS-Q12` (residual); the #775 criterion applied to disk |
 | **WSS-16** | **`WSS-Q8`'s lapse tail may have no consumer.** Serving is daemon→`P` only (`EU-D1`, [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md) §2); the witness skips the fetch for a pair not held at fire height (the FOLLOWUPS retention row, `SO-D8` Q3 §7.4); and a dropped `P` no longer advertises the shard. The FOLLOWUPS row motivates the tail with *"the path-assembly serving purpose"* — **which is leaf-era and gone under `PDM-Q6`**. If nothing consumes it the tail is **zero**. Not verified: whether any episodic recovery fetch expects dropped holders to answer. | `WSS-Q8` — its proposed answer, and the check that answer needs |
 | **WSS-17** | **`R1`'s invariant holds today and is mechanically checkable.** The store never talks to the daemon: `shekyl-curve-tree`'s dependencies are `redb`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-consensus`, `shekyl-types` (`Cargo.toml`) — no daemon-RPC edge, and the edge that exists runs the other way (`shekyl-daemon-rpc` imports vocabulary from it, §4.1). **Falsifier: any dependency edge from the store crate to a daemon-RPC crate, checkable with `cargo tree`.** Stated as an invariant with a falsifier rather than left as an accident of the current graph — the fill path (`WSS-Q4`) is exactly the pressure that would add one. | `WSS-Q4`; the increment gates in §9 |
 | **WSS-12** | **`CurveTreeClient` holds the full leaf set in memory.** `entries: Vec<LeafEntry>` (`client.rs:293`) beside `store: Arc<LeafStore>` (`:290`); the store is the durable mirror and `rebuild_from_store` reloads it wholesale at open. Obligation A's working set is therefore RAM-resident and grows with the chain — a device-floor question at the Pi-4 provisioning floor ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)) that no round has asked. | `WSS-Q2`; out of scope for increment 1, named so it is not shed |
@@ -417,10 +419,10 @@ commit.**
 | **WSS-Q5** | **Verify-on-fill against the daemon's hash rows** | `PDM-Q6`; §5 row 3 | Proposed: yes, per transaction, `expected = (txs_prunable_hash, Option<txs_pqc_auth_hash>)` |
 | **WSS-Q6** | **Key by shard over `[b_k, b_{k+1})`** | `PDM-Q-F32`, `PDM-Q9` (iii); §5 rows 1–2 | Proposed: yes; the store **reads** `b_*` and mints nothing |
 | **WSS-Q7** | **Serve per-tx through `shekyl-p-serve`** | `SF-D8` content half, sub-PR 2 | Proposed: yes; `ShardProvider` unchanged in kind, its unit re-keyed |
-| **WSS-Q8** | **The lapse tail** — how long an archiver serves a shard it no longer bonds | [`FOLLOWUPS.md`](../FOLLOWUPS.md) (the archiver retention-horizon row), owner [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md), **enforcing site this store**. **This row has no builder today** | No default. The rule is the serving route's; the *enforcement* is this store's, and the round owes the test |
+| **WSS-Q8** | **The lapse tail** — how long an archiver serves a shard it no longer bonds | [`FOLLOWUPS.md`](../FOLLOWUPS.md) (the archiver retention-horizon row), owner [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md), **enforcing site this store**. **This row has no builder today** | **Proposed: zero** (`WSS-16`, steering 2026-09-18). Serving is daemon→`P` only, the witness skips unheld pairs, and a dropped `P` stops advertising — so there is no identified consumer, and the row's stated motivation (*"the path-assembly serving purpose"*) is leaf-era and gone under `PDM-Q6`. **Pending one check:** that no episodic recovery fetch expects dropped holders to answer. The rule stays the serving route's; the enforcement and its test are this round's |
 | **WSS-Q9** | **Recovery intake** — the daemon's episodic fetch hands a shard across and retains nothing | `PDM-Q9` recovery clause | Proposed: intake is the same write path as fill, with the same verify; the daemon side is episodic and stateless by `PDM-Q9` |
 | **WSS-Q10** | **The Foundation `CompleteTree` behind a persona, never on a daemon** | `PDM-Q9` coverage floor; [`FOUNDATION_ARCHIVAL_DISCLOSURE.md`](FOUNDATION_ARCHIVAL_DISCLOSURE.md):196, [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md):120 | Proposed: a `CompleteTree` is this store with **every** shard held and the prune-disabled posture declared — a configuration, not a fourth store type |
-| **WSS-Q12** | **The `P`-store's at-rest shape** — per-shard data keys, how they are wrapped, and a layout that does not leak per-shard sizes | `WSS-15`; §6.1's `P`-store side; [`35-secure-memory`](../../.cursor/rules/35-secure-memory.mdc) | Proposed: **random** per-shard keys (never `HKDF(K_P, shard_id)` — a re-derivable key can never be destroyed), wrapped under a `P`-derived key; erasure destroys the wrapped copy. Size-hiding is **open**: one container with a uniform allocation granule, or padding every shard to `SHARD_BYTES + MAX_TX_SIZE` at ~30 % waste |
+| **WSS-Q12** | **Where the `P`-store's encryption key lives** — the question the withdrawal (§6.2) shrank this to | `WSS-18`; `WSS-19`; [`35-secure-memory`](../../.cursor/rules/35-secure-memory.mdc), [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc) | Proposed: **one** store key from the wallet's existing key hierarchy — not per-shard, not `P`-derived-per-shard (both withdrawn). It must stay **out of the Tor-facing serving task**, which follows from rule 36 anyway and is `WSS-Q13`. *Withdrawn from this row: per-shard keys, wrapping, crypto-shredding, size-hiding layout (`WSS-15` is an accepted residual).* |
 | **WSS-Q13** | **Secret locality on the serving path** — `shekyl-p-serve` needs plaintext bodies but must not hold `P`-derived keys | [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc); §6.1 | Proposed: the serving path gets a **decrypting read capability scoped to currently-held shards**, never the key. The capability's scope is the enforcement point for "a dropped shard cannot be served" |
 | **WSS-Q11** | **What happens to the landed `SEGMENT_LEAF_COUNT` / `leaves_per_segment()` tie at E4** | `PDM-Q-F33` (ii); `WSS-9`; the FOLLOWUPS partition row | **Corrected 2026-09-18 (steering review): the tie is LANDED, not owed.** #780 put one home in `shekyl_fcmp::tree` with the consensus-side compile-time assert in `shekyl-archival-retention`'s production lib, red-checked at `segment_leaf_count = 26030`; the CT-1 row closed with its dedup. This round proposed landing it again — wrong. What is actually open: it **dies at E4 / S-ARCH with the freeze**, and is **not re-pointed at `SHARD_BYTES`** (`WSS-9`: one is a leaf count, the other a byte threshold). Its one possible survival is as the boundary of a proving-side subroot cache, which is `WSS-Q2`'s |
 
@@ -436,9 +438,11 @@ re-grounds it, and the substrate agrees (`WSS-13`):
 
 - **The serving store is `P`'s.** The serve set is a persona's bonded
   obligation; its membership is `P`-correlated. It should be owned by `P`'s
-  side — the `StakeEngine` and the serving task — live in its **own file**, and
-  be encrypted under **`P`-derived keys**. **Its erasure lifecycle is per
-  shard, not per bond** (§6.2).
+  side — the `StakeEngine` and the serving task — live in its **own file**, be
+  **encrypted at rest under a key from the wallet's existing key hierarchy**,
+  and be **deleted at drop-connect + `D_max`** with a **zero lapse tail**
+  (§6.2). *Superseded 2026-09-18: "`P`-derived per-shard keys, crypto-shredded"
+  — withdrawn by steering, §6.2.*
 - **The proving state is the principal's.** Opened unconditionally (`WSS-1`),
   carrying no persona correlation, and — `R3` — **derived from canon and
   self-checking against it on every block**, so it never needs a migration.
@@ -463,7 +467,7 @@ work on `WSS-Q1` is not *whether* to separate but **what each side becomes**:
 
 | Side | Open question | Written up in |
 | --- | --- | --- |
-| **`P`'s serving store** | Its own file, `P`-derived encryption, **per-shard** erasure — what writes it (the `StakeEngine`, not the curve-tree actor), the fill and lapse paths (`WSS-Q4`, `WSS-Q8`), the at-rest shape (`WSS-Q12`), the serving path's read capability (`WSS-Q13`), and how `WSS-13`'s current routing is unwound | §6.2 |
+| **`P`'s serving store** | Its own file, encrypted at rest, deleted at drop-connect + `D_max` — what writes it (the `StakeEngine`, not the curve-tree actor), the fill path (`WSS-Q4`), **where the store key lives** (`WSS-Q12`, the question the withdrawal shrank this to), the serving path's read capability (`WSS-Q13`), and how `WSS-13`'s current routing is unwound | §6.2 |
 | **The principal's proving state** | **Whether it is a store at all** — steering's "A is not a store" argument, now recorded | §6.3 |
 
 **What is still genuinely open, and is Round 1's:** the two questions in that
@@ -477,85 +481,98 @@ to satisfy both storage policies; neither is why the answer is what it is.
 question on storage mechanics and treated one file as a live option on equal
 footing. Retained in the git history of this document, not restated here.*
 
-### 6.2 `P`'s serving store — the erasure lifecycle (steering, 2026-09-18; **open**)
+### 6.2 `P`'s serving store — what the disk reveals, and what that justifies (steering, 2026-09-18; **open**)
 
-Recorded as steering's design reasoning, **not as a ruling** — every clause
-below is a proposal Round 1 rules on.
+**This section was rewritten on 2026-09-18 after steering worked the threat
+model properly and withdrew most of its own previous proposal.** The withdrawn
+material is recorded as withdrawn, with the reason each ground failed — it was
+in a pushed commit and a reviewer may have read it.
 
-**Correction to §6.1 as first written: "destroyed when the bond ends" is wrong
-on both granularity and timing.**
+**Correction that stands, from the previous pass: "destroyed when the bond
+ends" was wrong twice.** Granularity is **per shard** — a `HoldingsUpdate` drop
+releases one shard while the bond continues. Timing is **drop-connect +
+`D_max`**, not the drop: under [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md)
+Pin 3 (`:488-497`) the slash scheduler challenges **currently-held** shards and
+exit forgiveness applies only once the drop **connects**, and a connected drop
+can be **reorged out**, which puts the obligation back. Erasing at *post* time
+would risk a slash for a shard `P` destroyed and was then obligated for again.
 
-- **Granularity is per shard, not per bond.** A `HoldingsUpdate` drop releases
-  one shard while the bond continues.
-- **Timing is later than the drop.** Under `PHASE_2B_FSM_RETOOL.md` Pin 3
-  (`:488-497`) the slash scheduler challenges **currently-held** shards
-  (`process_archival_slash_for_epoch` iterates `held_shard_ids`), and exit
-  forgiveness applies only once the drop **connects**; the drop itself cannot
-  post until the shard's cooldown has elapsed and its slashes have settled. A
-  connected drop can still be **reorged out**, which puts the obligation back.
-  So the earliest safe erasure point is **drop-or-release connect + `D_max`**,
-  plus whatever lapse tail `WSS-Q8` rules. Shredding at *post* time would risk
-  a slash for a shard `P` destroyed and was then obligated for again.
+#### 6.2.1 What the disk actually reveals
 
-**Why destroy at all, when the data is public.** The bytes are reconstructible
-from the chain by anyone, so the case is **not** content confidentiality. It
-rests on four other things:
+The shard contents are **public chain data**, so reading them does no harm.
+**The only secret on the disk is the link between this device and persona
+`P`** — which shards are held, matched against `P`'s public holdings.
+Everything bad follows from that link: it says the person is an archiver, it
+gives their bonded capital (public as shards × rate), and it gives their reward
+history and timing. That is **financial-participation disclosure**, the same
+kind of harm as someone learning a wallet balance.
 
-1. **Making "not held" true by construction.** After a drop connects, `P` must
-   not serve, answer for, or be credited for that shard. If the bytes remain
-   readable that is a policy the code must remember to enforce; if they cannot
-   be decrypted it is impossible — `05-system-thinking`'s make-bad-states-
-   unrepresentable, applied to a lifecycle.
-2. **Bounding what a breach of the serving path reaches.** The serving task is
-   `P`'s most exposed component: it faces Tor and parses untrusted requests.
-   Per-shard keys that die at drop mean a compromise reaches what `P` currently
-   holds, not its whole history.
-3. **On-disk footprint as a posture signal** — the #775 criterion applied to
-   disk. Data kept past its obligation keeps the device looking like an
-   archiver's, and like *this* archiver's.
-4. **Legal posture.** The network promises permanent retention; an individual
-   archiver does not. *"I cannot produce it"* should be a technical fact after
-   a drop, not a statement of intent — the good includes other people's
-   transaction bodies.
+So the question per adversary is what the disk gives them that they could not
+get otherwise.
 
-**Why crypto-shred rather than delete.** Deleting multi-megabyte data does not
-remove it on this stack: redb is a **copy-on-write B-tree**, so freed pages
-persist until reused; **SSD wear levelling** remaps blocks under the
-filesystem; and **btrfs/ZFS snapshots, backups and swap** hold further copies.
-Overwriting in place reaches none of them. Encrypting each shard under its own
-key and destroying the key makes every leftover copy inert — it shrinks the
-erasure problem from gigabytes across media we do not control to **32 bytes**.
-**The per-shard key must be random, not derived:** `HKDF(K_P, shard_id)` is
-tempting and fatal, because a key re-derivable from the seed can never be
-destroyed (`WSS-Q12`).
+| Adversary | Realistic capability | What the store adds | Assessment |
+| --- | --- | --- | --- |
+| **State forensics, device seized, password compellable** | Full image **and** the password | Nothing — the decrypted `.wallet` already contains `P` | **Out of scope** for any at-rest measure |
+| **State forensics, password not compellable** (jurisdiction, 5th Amendment, border search without compulsion) | Offline image only | Today, the **plaintext `.curvetree` pins give them `P`** despite the encrypted `.wallet` (`WSS-18`) | **Real — and the one that matters** |
+| **VPS / cloud host** (archivers are storage-heavy and will rent) | Snapshots and backups offline; memory if they choose | Same as the row above for offline images; nothing extra if they read live memory | **Real** for offline images and snapshot leaks |
+| **Thief** | Device, no password | `P` — marks the owner as holding bonded capital | Low: a marginal extortion signal; they already know who they robbed |
+| **Malware on the host** | Live memory, keylogging | Nothing — it gets the keys and the funds | Irrelevant: theft dwarfs any at-rest measure |
+| **Shared machine / employer IT / disposed drive** | Offline file access | `P` | Low to moderate |
 
-**What it does not buy, stated so it is not oversold.** Against an adversary
-with the device *and* the wallet password, shredding adds nothing: they derive
-`P` from the seed and read `P`'s full shard history from the public chain. The
-reasoning rests on 1–4, not on hiding history from a fully compromised owner.
-It also has a limit — the wrapped keys live on the same SSD, so remanence does
-not vanish, it shrinks to a few bytes. A truly erasable anchor needs a hardware
-key store (TPM, secure enclave) where one exists; without one, **rotating the
-wrapping key on every drop** so older wrapped copies become undecryptable is
-the best software can do.
+#### 6.2.2 What is justified
 
-**Two consequences that fall out of this, both open.**
+1. **Encrypt `P`'s serving store at rest, under a single key from the wallet's
+   existing key hierarchy.** **The reason is consistency, not a new threat.**
+   The wallet already decided that no-password disk access is worth defending
+   against — that is why `.wallet` is encrypted — and a plaintext companion
+   file that reveals `P` **undoes that decision** for rows 2, 3 and 6 above.
+   The gap is real today (`WSS-18`) and the fix is cheap.
+2. **Delete at drop-connect + `D_max`, with a zero lapse tail** (`WSS-Q8`,
+   `WSS-16`). This reclaims storage and makes "not held" true. With the store
+   encrypted, whatever survives in freed pages is recoverable only by someone
+   holding the password — and that person already knows `P`'s history from the
+   chain.
 
-- **`WSS-15` — variable shard sizes make per-shard file sizes a fingerprint.**
-  The layout must hide them. Both candidates cost something: one container with
-  a uniform allocation granule, or padding every shard to
-  `SHARD_BYTES + MAX_TX_SIZE` at up to ~30 % waste. `WSS-Q12`.
-- **`WSS-16` — the lapse tail may have no consumer**, in which case `WSS-Q8`'s
-  answer is **zero** and the design is clean: shred at drop-connect + `D_max`
-  and nothing lingers. **Pending one check:** that no episodic recovery fetch
-  expects dropped holders to answer.
+#### 6.2.3 What is WITHDRAWN, and why each ground failed
 
-**And a secret-locality question this opens (`WSS-Q13`, rule 36).** The
-`P`-derived keys never leave the `StakeEngine` actor, but `shekyl-p-serve`'s
-provider needs **plaintext bodies** to serve. The serving path should get a
-**decrypting read capability scoped to currently-held shards**, never the key
-itself — which also makes the capability's scope the enforcement point for
-point 1 above.
+**Per-shard keys and crypto-shredding — WITHDRAWN (steering, 2026-09-18).**
+Defended the previous turn on three grounds, none of which survives:
+
+- *Remnants* (redb copy-on-write, SSD wear levelling, snapshots and swap) —
+  **covered by 6.2.2 item 1.** Once the store is encrypted, remnants are inert
+  to everyone who lacks the password, and everyone who has it already knows.
+- *Scoping a compromised serving task* — **protects nothing confidential.**
+  The data the task could read is **public**. Its real assets are `P`'s
+  countersigning capability and a route into `StakeEngine`, and per-shard keys
+  touch neither.
+- *Unrepresentability of serving a dropped shard* — **a correctness property,
+  and it has a cheaper mechanism.** A **type-level held-slot token** plus
+  deleting the rows gives it **without key management**.
+
+**A single store key is sufficient.** The whole apparatus of random per-shard
+keys, wrapping under a `P`-derived key, wrapping-key rotation on every drop,
+and the TPM/secure-enclave discussion goes with it.
+
+**Size padding and slot preallocation — WITHDRAWN**, recorded as an **accepted
+residual with reopening criteria** (`WSS-15`).
+
+*What the withdrawal does not sanitise:* `WSS-15`'s underlying observation is
+**still true** — shard sizes are variable and public, and encryption hides
+neither sizes nor when they change. What changed is the **disposition**, not
+the fact. It is accepted because the adversary who could use it is narrow and
+the cost is 15–30 % of storage, not because the channel closed.
+
+#### 6.2.4 What remains open
+
+- **`WSS-Q12` — where the store key lives.** It must stay **out of the
+  Tor-facing serving task**, which gets a **read capability through the actor**
+  — and that follows from [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc)
+  anyway, so it is `WSS-Q13` rather than a new constraint.
+- **`WSS-19` — the audit of `P`'s other persisted state** (`P`-scan records,
+  serving counters, logs). **This is a Round-0 item, and it gates the claim
+  that encrypting the store closes the gap** rather than one of several routes.
+  `WSS-18` records the one verified negative that bounds it: the onion key does
+  not reach disk.
 
 ### 6.3 The proving side — "A is not a store" (steering's argument, recorded; **open**)
 
@@ -842,6 +859,7 @@ What must be true before genesis for this lane, in mission order.
 
 | Date | Decision |
 | --- | --- |
+| 2026-09-18 | **Steering worked the at-rest threat model properly and withdrew most of the previous turn's proposal; §6.2 rewritten around what the disk actually reveals.** The only secret on disk is the **device ↔ `P` link**; the shard contents are public. An adversary table prices six positions and finds **one that matters**: forensics with an offline image but no password, where today's **plaintext `.curvetree` gives `P` despite the encrypted `.wallet`** (`WSS-18`, verified — the store is a sibling of the wallet file and the crate contains no encryption; and the onion key is *not* a second route, `Detach` being unrepresentable). **Justified:** encrypt the store under **one** key from the wallet's existing hierarchy — *for consistency, not a new threat*, since a plaintext companion undoes a decision `.wallet` already made — and delete at **drop-connect + `D_max`** with a **zero** lapse tail. **WITHDRAWN:** per-shard keys and crypto-shredding, with each of its three grounds failed on the record (remnants are covered by encryption; scoping a compromised serving task protects public data while its real assets are the countersigning capability and the `StakeEngine` route; unrepresentability is a correctness property a **type-level held-slot token** buys without key management). **WITHDRAWN:** size padding and slot preallocation — `WSS-15` becomes an **accepted residual** with reopening criteria (near-unique holdings counts measured by the sim, or forensic tooling that targets it); the underlying channel is unchanged, only its disposition. `WSS-Q12` shrinks to **where the one key lives**; `WSS-Q13` survives unchanged because rule 36 already requires it. **`WSS-19` added:** `P`'s other persisted state is unaudited, and that audit **gates** any claim that encrypting the store closes the gap. |
 | 2026-09-18 | **Amendment on steering's second review — five carryover corrections, the `P`-store erasure lifecycle, and the proving-side arm. No rulings; every clause is a proposal Round 1 rules on.** *Corrections:* `WSS-9` / PDM's correction (b) called the subroot cache "dispensable" — true for correctness, **false for cost**: `verify_root` runs per ingested block (`merge.rs:651`), so dropping the cache makes sync **quadratic** (`WSS-14`). "The wallet's own tree state, not a slice" overstated it — the proving state **is** derived from canon and self-checks against the header root every block; `R3`'s property is that it therefore **never needs a migration, ever**. `R1`'s invariant recorded with its falsifier (`WSS-17`: no daemon-RPC edge from the store crate, `cargo tree`). `WSS-Q11` proposed landing a tie **#780 already landed** — corrected to what is actually open (it dies at E4, and is not re-pointed at `SHARD_BYTES`). `WSS-8` overstated: `set_prune_disabled` is reached only on the `PinCompleteTreePrefix` / Foundation-`CompleteTree` path (`curve_tree_actor.rs:391-402`), so most archivers declare nothing. *New:* §6.2 — "destroyed when the bond ends" was wrong on granularity (**per shard**) and timing (**drop-connect + `D_max`**, per `PHASE_2B_FSM_RETOOL.md` Pin 3, because a connected drop can be reorged out); erasure means **crypto-shred** with **random** per-shard keys wrapped under a `P`-derived key, with the four reasons to destroy public data, the redb-CoW / wear-levelling / snapshot reasons delete does not work, and what it does not buy. §6.3 — steering's **"A is not a store"** argument recorded as the proving-side arm with its six attacks. `WSS-15` (variable shard sizes make file sizes a fingerprint; encryption hides neither sizes nor when they change), `WSS-16` (the lapse tail may have **no consumer**, so `WSS-Q8`'s answer may be zero), `WSS-Q12` (at-rest shape), `WSS-Q13` (rule-36 decrypting read capability). §5.1 puts three properties of the new shard unit on the record: bonds no longer buy uniform work, boundaries are fee-influenceable, and `SHARD_BYTES` is inherited rather than derived. |
 | 2026-09-18 | **`WSS-Q1` re-grounded on the firewall (steering review).** The question was posed on the wrong axis: "one file or two", argued from the shared file lock (`WSS-6`) and the prune/resume collision (`WSS-5`). It is an **ownership** question — the serving store is `P`'s (own file, `P`-derived keys, bond-lifetime scope, owned by the `StakeEngine`), the proving state is the principal's. **`WSS-13` added**, and it is the ground: `P`'s serve-set pins are written through the *principal's* curve-tree actor into the principal's file (`serve_set_source.rs:254-257` on the handle from `serving/start.rs:158`), routing around `PRINCIPAL_STAKE_LIFECYCLE.md` §0's load-bearing containment of `P`'s material — a firewall-layering defect visible only on this axis. `WSS-5` corrected twice over: its conflict is **latent** (nothing prunes in production, `WSS-8`) and its axis was mis-stated — it is one identity's storage policy destroying another's state, not two obligations colliding. `WSS-6` demoted to mechanics. §6.1 rewritten; the "Arm A / Arm B" pair is superseded. The proving side's "is it a store at all" arm is **owed to Round 1 from steering** — this round does not hold that argument's text and does not reconstruct it. **`PDM` propagation is not this round's** (§2.2, FOLLOWUPS): four documents never received `PDM-Q6`/`Q12` and are the next agent's trap. |
 | 2026-09-18 | **Round opened** at `dev@8494f2a27`, Round 0 executed. `WSS-` family registered at birth. Twelve findings; `WSS-4` (`root_at_count` reads `frozen_segments` — the freeze is also the proving path's root cache), `WSS-5` (a pruned store cannot be reopened as a proving client — the two obligations already conflict, observably) and `WSS-6` (`ServingReader` and `same_store` exist because redb takes an exclusive file lock) are the three that reframe `WSS-Q1` from an architectural preference into a question about a conflict the tree already has. `WSS-9` is split into its verified half (the composition boundary cannot be tied to `b_*`, so the `F33` (ii) assert dies with the freeze) and its open half (whether any subroot cache survives — `WSS-Q2`'s). `WSS-3` resolves `PDM-Q12`'s "verification-side leaf store" to the **daemon's** `curve_tree_leaves` (graded CACHE by `PDM-Q1` over §9), so the wallet-side proving store is ungraded and is this round's. **`CTS-` closes as record with this document as its successor** (disposed on steering's answer 3, confirmed by Rick on review); its work is partitioned by unit in §8, and no `CTS-` implementation PR lands beyond PR A. **PR A is cleared ahead of the round** (steering, answer 2), with the §11.1(f) sequencing departure disclosed. `WSS-Q1…Q11` posed; **none ruled**. |
