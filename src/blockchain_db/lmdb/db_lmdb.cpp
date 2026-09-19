@@ -4539,99 +4539,6 @@ void BlockchainLMDB::get_output_tx_and_index(const uint64_t& amount, const std::
   LOG_PRINT_L3("db3: " << db3);
 }
 
-std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> BlockchainLMDB::get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-
-  TXN_PREFIX_RDONLY();
-  RCURSOR(output_amounts);
-
-  std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> histogram;
-  MDB_val k;
-  MDB_val v;
-
-  if (amounts.empty())
-  {
-    MDB_cursor_op op = MDB_FIRST;
-    while (1)
-    {
-      int ret = mdb_cursor_get(m_cur_output_amounts, &k, &v, op);
-      op = MDB_NEXT_NODUP;
-      if (ret == MDB_NOTFOUND)
-        break;
-      if (ret)
-        throw0(DB_ERROR(lmdb_error("Failed to enumerate outputs: ", ret).c_str()));
-      mdb_size_t num_elems = 0;
-      mdb_cursor_count(m_cur_output_amounts, &num_elems);
-      uint64_t amount = *(const uint64_t*)k.mv_data;
-      if (num_elems >= min_count)
-        histogram[amount] = std::make_tuple(num_elems, 0, 0);
-    }
-  }
-  else
-  {
-    for (const auto &amount: amounts)
-    {
-      MDB_val_copy<uint64_t> k(amount);
-      int ret = mdb_cursor_get(m_cur_output_amounts, &k, &v, MDB_SET);
-      if (ret == MDB_NOTFOUND)
-      {
-        if (0 >= min_count)
-          histogram[amount] = std::make_tuple(0, 0, 0);
-      }
-      else if (ret == MDB_SUCCESS)
-      {
-        mdb_size_t num_elems = 0;
-        mdb_cursor_count(m_cur_output_amounts, &num_elems);
-        if (num_elems >= min_count)
-          histogram[amount] = std::make_tuple(num_elems, 0, 0);
-      }
-      else
-      {
-        throw0(DB_ERROR(lmdb_error("Failed to enumerate outputs: ", ret).c_str()));
-      }
-    }
-  }
-
-  if (unlocked || recent_cutoff > 0) {
-    const uint64_t blockchain_height = height();
-    for (std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>>::iterator i = histogram.begin(); i != histogram.end(); ++i) {
-      uint64_t amount = i->first;
-      uint64_t num_elems = std::get<0>(i->second);
-      while (num_elems > 0) {
-        const tx_out_index toi = get_output_tx_and_index(amount, num_elems - 1);
-        const uint64_t height = get_tx_block_height(toi.first);
-        if (height + CRYPTONOTE_DEFAULT_TX_SPENDABLE_AGE <= blockchain_height)
-          break;
-        --num_elems;
-      }
-      // modifying second does not invalidate the iterator
-      std::get<1>(i->second) = num_elems;
-
-      if (recent_cutoff > 0)
-      {
-        uint64_t recent = 0;
-        while (num_elems > 0) {
-          const tx_out_index toi = get_output_tx_and_index(amount, num_elems - 1);
-          const uint64_t height = get_tx_block_height(toi.first);
-          const uint64_t ts = get_block_timestamp(height);
-          if (ts < recent_cutoff)
-            break;
-          --num_elems;
-          ++recent;
-        }
-        // modifying second does not invalidate the iterator
-        std::get<2>(i->second) = recent;
-      }
-    }
-  }
-
-  TXN_POSTFIX_RDONLY();
-
-  return histogram;
-}
-
 bool BlockchainLMDB::get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);
@@ -9632,24 +9539,6 @@ uint64_t BlockchainLMDB::get_curve_tree_leaf_count() const
     memcpy(&count, v.mv_data, sizeof(uint64_t));
   TXN_POSTFIX_RDONLY();
   return count;
-}
-
-bool BlockchainLMDB::get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-  if (!hash_out) return false;
-
-  TXN_PREFIX_RDONLY();
-  uint64_t key = ct_layer_chunk_key(layer, chunk);
-  MDB_val k = {sizeof(key), (void *)&key};
-  MDB_val v;
-  int result = mdb_get(m_txn, m_curve_tree_layers, &k, &v);
-  bool found = (result == 0 && v.mv_size == 32);
-  if (found)
-    memcpy(hash_out, v.mv_data, 32);
-  TXN_POSTFIX_RDONLY();
-  return found;
 }
 
 bool BlockchainLMDB::get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const

@@ -9,16 +9,16 @@ use super::*;
 use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::harness::fixture::{candidate_on, root};
-use crate::harness::{assert_refused, infallible, FaultingView, MockChain};
-use crate::rule_set::RuleSet;
+use crate::harness::{assert_refused, formed_on, infallible, FaultingView, MockChain};
 use crate::rules::BlockContext;
 use crate::verdict::{Locus, Verdict};
 use shekyl_types::BlockHash;
 
 fn check_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
+    let formed = formed_on(chain, candidate.clone());
     chain.with_view(|view| {
         infallible(A2::check(
-            &BlockContext::new(candidate, &RuleSet::GENESIS),
+            &BlockContext::for_tests(&formed, chain.tip(), None),
             &view,
         ))
     })
@@ -43,7 +43,7 @@ fn cen_a2_previous_must_be_the_tip_hash() {
     };
     assert_refused(check_on(&chain, &flipped), CenRow::A2, Locus::Block);
     let mut zero = good.clone();
-    zero.block.header.previous = BlockHash::from_bytes([0; 32]);
+    zero.block.header.previous = BlockHash::NULL;
     assert_refused(check_on(&chain, &zero), CenRow::A2, Locus::Block);
 }
 
@@ -54,10 +54,7 @@ fn cen_a2_genesis_previous_is_the_null_hash() {
     let chain = MockChain::default();
     assert_eq!(chain.tip(), None);
     let genesis = candidate_on(&chain, Vec::new());
-    assert_eq!(
-        genesis.block.header.previous,
-        BlockHash::from_bytes([0; 32])
-    );
+    assert_eq!(genesis.block.header.previous, BlockHash::NULL);
     check_on(&chain, &genesis).expect("genesis with a null previous passes A2");
 
     let mut not_genesis = genesis;
@@ -66,12 +63,15 @@ fn cen_a2_genesis_previous_is_the_null_hash() {
 }
 
 #[test]
-fn cen_a2_propagates_a_fault_and_does_not_judge() {
+fn cen_a2_reads_the_context_tip_not_the_view() {
+    // The connecting tip is a shared connect fact, derived once. A2 does
+    // not re-read `view.tip()`, so a view that cannot answer still yields
+    // a verdict from the context.
     let chain = MockChain::default();
-    let candidate = candidate_on(&chain, Vec::new());
+    let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
     let view = FaultingView::default();
     assert_eq!(
-        A2::check(&BlockContext::new(&candidate, &RuleSet::GENESIS), &view),
-        Err(crate::harness::Faulted)
+        A2::check(&BlockContext::for_tests(&formed, chain.tip(), None), &view),
+        Ok(Ok(()))
     );
 }

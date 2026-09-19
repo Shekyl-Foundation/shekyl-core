@@ -24,7 +24,9 @@
 //! UndoLog   := count:u32 LE, then `count` entries
 //! UndoEntry := tag:u8, table:u32 LE, key:bytes, payload
 //!   tag 1  Inserted       payload = post:[u8; 32]
-//!   tag 2  MultiInserted  payload = value:bytes
+//!   tag 2  RESERVED       (was MultiInserted, a multimap member; retired
+//!                          at layout v6 with the catalogue's only multimap,
+//!                          S-OUT-KI SOK-1 — the tag is not reused, rule 23)
 //!   tag 3  Replaced       payload = (0x00 | 0x01 prior:bytes), post:[u8; 32]
 //! bytes     := len:u32 LE, len raw bytes
 //! post      := cSHAKE256-32(POST_IMAGE_DST, value the write left under key)
@@ -39,9 +41,8 @@
 //! the store to a state no journal describes. So every keyed entry carries
 //! a 32-byte digest of the value the write **left** under the key, and
 //! replay compares it against the value it displaces before counting the
-//! entry reversed; a mismatch is SI-6 (`UndoLogIncoherent`). A multimap
-//! member needs none: its inverse removes exactly `(key, value)`, which is
-//! already the full post-image. The digest is domain-separated
+//! entry reversed; a mismatch is SI-6 (`UndoLogIncoherent`). The digest is
+//! domain-separated
 //! ([`POST_IMAGE_DST`]) so a value's digest cannot be confused with any
 //! other 32-byte quantity the store hashes (rule 30).
 //!
@@ -83,16 +84,6 @@ pub enum UndoEntry {
         /// [`post_image`] of the value the insert wrote.
         post: [u8; 32],
     },
-    /// A multimap write added a `(key, value)` member that was not
-    /// present. Undo **removes** exactly that member; it must be present.
-    MultiInserted {
-        /// The table, by declaration ordinal.
-        table: TableOrdinal,
-        /// The key's redb bytes.
-        key: Box<[u8]>,
-        /// The member's redb bytes.
-        value: Box<[u8]>,
-    },
     /// A declared overwrite (`upsert`, `upsert_property`) replaced `prior`
     /// — or nothing, if the key was absent. Undo **restores** `prior`
     /// (re-inserting it) or removes the key; the key must be present when
@@ -114,21 +105,19 @@ impl UndoEntry {
     #[must_use]
     pub const fn table(&self) -> TableOrdinal {
         match self {
-            Self::Inserted { table, .. }
-            | Self::MultiInserted { table, .. }
-            | Self::Replaced { table, .. } => *table,
+            Self::Inserted { table, .. } | Self::Replaced { table, .. } => *table,
         }
     }
 
     const TAG_INSERTED: u8 = 1;
-    const TAG_MULTI_INSERTED: u8 = 2;
+    // Tag 2 is RESERVED (module docs): the retired multimap member.
     const TAG_REPLACED: u8 = 3;
 
     /// The fewest bytes any entry can occupy: tag, table, an empty key's
-    /// length prefix, and the shortest payload (a multimap member with an
-    /// empty value's length prefix). Bounds how many entries a row's bytes
-    /// can hold, so a corrupt count never drives an allocation.
-    const MIN_ENTRY_LEN: usize = 1 + 4 + 4 + 4;
+    /// length prefix, and the shortest payload (an `Inserted` post-image).
+    /// Bounds how many entries a row's bytes can hold, so a corrupt count
+    /// never drives an allocation.
+    const MIN_ENTRY_LEN: usize = 1 + 4 + 4 + 32;
 
     fn encode_into(&self, out: &mut Vec<u8>) {
         match self {
@@ -137,12 +126,6 @@ impl UndoEntry {
                 out.extend_from_slice(&table.index().to_le_bytes());
                 bytes(out, key);
                 out.extend_from_slice(post);
-            }
-            Self::MultiInserted { table, key, value } => {
-                out.push(Self::TAG_MULTI_INSERTED);
-                out.extend_from_slice(&table.index().to_le_bytes());
-                bytes(out, key);
-                bytes(out, value);
             }
             Self::Replaced {
                 table,
@@ -173,10 +156,6 @@ impl UndoEntry {
             Self::TAG_INSERTED => {
                 let post = r.post()?;
                 Ok(Self::Inserted { table, key, post })
-            }
-            Self::TAG_MULTI_INSERTED => {
-                let value = r.bytes()?;
-                Ok(Self::MultiInserted { table, key, value })
             }
             Self::TAG_REPLACED => {
                 let prior = match r.u8()? {
@@ -298,11 +277,6 @@ mod tests {
                 key: Box::new([1, 2, 3]),
                 post: post_image(&[4, 5, 6]),
             },
-            UndoEntry::MultiInserted {
-                table: TableOrdinal::from_index(12),
-                key: Box::new(7u64.to_le_bytes()),
-                value: Box::new([0xaa; 5]),
-            },
             UndoEntry::Replaced {
                 table: TableOrdinal::from_index(19),
                 key: Box::from(*b"total_burned"),
@@ -326,6 +300,22 @@ mod tests {
             post_image(b"x"),
             shekyl_crypto_hash::cshake256_32(b"other", b"x"),
             "the DST is part of the layout"
+        );
+    }
+
+    #[test]
+    fn the_retired_multimap_tag_is_reserved_and_refused() {
+        // tag 2 carried `MultiInserted` until layout v6; a row written under
+        // that layout cannot reach a v6 file (the seal refuses it), and a
+        // tag 2 byte that does is a corrupt cell, not a member to replay.
+        let mut bytes = 1u32.to_le_bytes().to_vec();
+        bytes.push(2);
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            UndoLog::decode(&bytes),
+            Err(invalid("entry tag names no variant"))
         );
     }
 
@@ -385,7 +375,7 @@ mod tests {
             Err(invalid("entry tag names no variant"))
         );
 
-        let mut replaced = UndoLog(entries()[3..].to_vec()).encode();
+        let mut replaced = UndoLog(entries()[2..].to_vec()).encode();
         let flag = replaced.len() - 1 - 32; // `prior: None`'s flag byte precedes the post-image
         assert_eq!(replaced[flag], 0);
         replaced[flag] = 2;
@@ -397,7 +387,7 @@ mod tests {
 
     #[test]
     fn table_accessor_names_each_entry_s_target() {
-        for (entry, want) in entries().iter().zip([0, 12, 19, 19]) {
+        for (entry, want) in entries().iter().zip([0, 19, 19]) {
             assert_eq!(entry.table().index(), want);
         }
     }

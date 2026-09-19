@@ -86,6 +86,7 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod at_index;
 mod chain_reads;
 mod connect;
 mod error;
@@ -93,23 +94,24 @@ mod halt;
 mod header;
 mod invariant;
 mod keyed;
+mod output_reads;
 mod pop;
 mod read;
-mod set;
 mod shared;
 pub(crate) mod undo;
 mod view;
 mod write;
 
+pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
     CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
+pub use output_reads::RecordedOutput;
 pub use pop::Popped;
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState};
-pub use set::SetTable;
 pub use undo::Restorable;
 pub use view::BatchView;
 pub use write::WriteBatch;
@@ -529,6 +531,13 @@ mod connect_fixtures;
 #[path = "connect_tests.rs"]
 mod connect_tests;
 
+/// The mock is reconciled against the real view (E6 slice 2 F11): every
+/// landed rule, both stages, identical verdicts and coverage over
+/// `BatchView` and the rules crate's `MockChain`.
+#[cfg(test)]
+#[path = "conformance_tests.rs"]
+mod conformance_tests;
+
 #[cfg(test)]
 #[path = "pop_tests.rs"]
 mod pop_tests;
@@ -540,3 +549,7 @@ mod amendments_tests;
 #[cfg(test)]
 #[path = "read_tests.rs"]
 mod read_tests;
+
+#[cfg(test)]
+#[path = "output_read_tests.rs"]
+mod output_read_tests;

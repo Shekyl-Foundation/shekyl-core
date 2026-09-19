@@ -10,15 +10,26 @@
 //! visibility across two blocks (SCW-13), and the corrupt-read → SI-7 →
 //! poison path.
 
-use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, RuleSet};
+use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, Fault, RuleSet};
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
+use super::connect_fixtures::formed;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
 use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Encoded, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG};
+
+/// The store's fault is the only outer arm these tests expect; the
+/// validation crate's own arms are fixture bugs here, named as such.
+fn view_fault(fault: Fault<StoreError>) -> StoreError {
+    match fault {
+        Fault::View(fault) => fault,
+        Fault::Stale(stale) => panic!("fixture claim went stale: {stale}"),
+        Fault::Corrupt(corrupt) => panic!("fixture view is corrupt: {corrupt}"),
+    }
+}
 
 /// A coinbase the block parser accepts back (§2.5: a sole `gen` input and
 /// a `Null` ct), with one output so the per-output base arrays are
@@ -378,8 +389,13 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         let mut b1 = block(1, 1_060);
         b1.header.previous = genesis.hash();
         b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
-        let valid = validate(Candidate::new(b1, Vec::new()), &view, &RuleSet::GENESIS)?
-            .expect("block 1 built on block 0 satisfies every landed rule");
+        let valid = validate(
+            formed(&view, Candidate::new(b1, Vec::new()))?,
+            &view,
+            &RuleSet::GENESIS,
+        )
+        .map_err(view_fault)?
+        .expect("block 1 built on block 0 satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSet::GENESIS.id());
         assert!(valid.coverage().contains(shekyl_chain_rules::CenRow::A2));
         assert!(valid.coverage().contains(shekyl_chain_rules::CenRow::B5));
@@ -387,7 +403,12 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         // connected-then-caught: the rule sits in front of SI-2's belt.
         let mut orphan = block(1, 1_060);
         orphan.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
-        let Err(refused) = validate(Candidate::new(orphan, Vec::new()), &view, &RuleSet::GENESIS)?
+        let Err(refused) = validate(
+            formed(&view, Candidate::new(orphan, Vec::new()))?,
+            &view,
+            &RuleSet::GENESIS,
+        )
+        .map_err(view_fault)?
         else {
             panic!("a block 1 not built on block 0 is refused");
         };
@@ -542,16 +563,17 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
     assert_eq!(tip.0, 1);
     assert_eq!(tip.1.hash, blk1.hash());
     match chain_reads::block_body(&txn, Some(&tip), 1).expect("block_body") {
-        AtHeight::Recorded((hash, body)) => {
-            assert_eq!(hash, blk1.hash());
+        AtHeight::Recorded((info, body)) => {
+            assert_eq!(info.hash, blk1.hash());
             assert_eq!(body, blk1);
             assert_eq!(
                 batch_tip_block,
                 AtHeight::Recorded(RecordedBlock {
-                    hash,
+                    hash: info.hash,
                     header: body.header,
+                    cumulative_difficulty: info.cumulative_difficulty,
                 }),
-                "the batch view is the same body wrapped"
+                "the batch view is the same body wrapped, with the row's work"
             );
         }
         AtHeight::AboveTip => panic!("height 1 is the tip"),

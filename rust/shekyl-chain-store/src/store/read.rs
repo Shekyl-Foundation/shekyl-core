@@ -38,16 +38,17 @@
 //!   a chain table is a file this store did not write, not an empty chain.
 
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
-#[cfg(test)]
-use redb::{MultimapTableDefinition, ReadOnlyMultimapTable};
 use shekyl_chain_rules::{AtHeight, Tip};
-use shekyl_types::{BlockHash, BlockHeight, LongTermWeight};
+use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, KeyImage, LongTermWeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, PropertyCell, TotalBurnedCell};
+use crate::codec::{BlockInfo, OutTx, PropertyCell, TotalBurnedCell};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES};
+use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES, SPENT_KEYS};
+
+use super::at_index::AtIndex;
+use super::output_reads::{self, RecordedOutput};
 
 use super::chain_reads;
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
@@ -179,29 +180,6 @@ impl<'store> ReadSnapshot<'store> {
     {
         self.txn
             .open_table(definition)
-            .map_err(|e| EngineError::Table(e).into())
-    }
-
-    /// Open a multimap table for reading — crate-private as
-    /// [`open_table`](Self::open_table), and **test-only**: no production
-    /// read in the crate opens a multimap raw (`output_amounts` has no
-    /// S-CHAIN-R read; S-ARCH lands its own typed ones), so outside tests
-    /// this would be dead code.
-    ///
-    /// # Errors
-    ///
-    /// [`EngineError::Table`] if the table does not exist or the engine refuses.
-    #[cfg(test)]
-    pub(crate) fn open_multimap_table<K, V>(
-        &self,
-        definition: MultimapTableDefinition<'_, K, V>,
-    ) -> Result<ReadOnlyMultimapTable<K, V>, StoreError>
-    where
-        K: Key + 'static,
-        V: Key + 'static,
-    {
-        self.txn
-            .open_multimap_table(definition)
             .map_err(|e| EngineError::Table(e).into())
     }
 
@@ -450,6 +428,107 @@ impl ReadSnapshot<'_> {
             AtHeight::AboveTip => AtHeight::AboveTip,
         })
     }
+
+    // ------------------------------------------------------------------
+    // S-OUT-KI (`DRS_E1_SOUT_KI.md` §3.2): key images.
+    // ------------------------------------------------------------------
+
+    /// **K1.** Whether `key_image` is spent on the committed chain — the
+    /// chain half of CEN-I7, served to the pool's admission check, the
+    /// submit verdict and `is_key_image_spent` from one snapshot. Replaces
+    /// `has_key_image` **and** `has_key_images`: the batch form existed to
+    /// hold one LMDB `rtxn` across N keys (`db_lmdb.cpp:3851`–`:3869`), and
+    /// this snapshot *is* that transaction — N calls on it are the batch
+    /// (SOK-3). Exact, never approximate (§3.3). One body with the
+    /// validator's `BatchView::has_key_image`
+    /// ([`chain_reads::has_key_image`]).
+    ///
+    /// # Errors
+    ///
+    /// Engine errors pass through; a membership read has no decode and no
+    /// invariant arm.
+    pub fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, StoreError> {
+        chain_reads::has_key_image(&self.txn, key_image).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **K2.** Every key image on the committed chain, in the table's
+    /// (`LmdbHashKey`) order — the `spent_keys` scan E2's
+    /// `logical_state_digest_v0` needs (SCR-11), and the only consumer
+    /// named. Replaces `for_all_key_images`. The digest is order-insensitive
+    /// (`chain_digest_ffi.rs:29`–`:30`, "in any order"); no consumer may
+    /// depend on the order this yields.
+    ///
+    /// # Errors
+    ///
+    /// Opening the table: engine errors pass through. Each yielded item is
+    /// `Err` on a storage fault at that position; a caller folding the set
+    /// stops at the first.
+    pub fn key_images(
+        &self,
+    ) -> Result<impl Iterator<Item = Result<KeyImage, StoreError>> + '_, StoreError> {
+        let table = self.open_table(SPENT_KEYS)?;
+        let range = table
+            .range::<LmdbHashKey>(..)
+            .map_err(|e| StoreError::from(EngineError::Storage(e)))?;
+        Ok(range.map(|entry| {
+            entry
+                .map(|(key, _present)| KeyImage::from_bytes(key.value().to_bytes()))
+                .map_err(|e| StoreError::from(EngineError::Storage(e)))
+        }))
+    }
+
+    // ------------------------------------------------------------------
+    // S-OUT-KI (`DRS_E1_SOUT_KI.md` §3.2): outputs, by global index.
+    // ------------------------------------------------------------------
+
+    /// **O1.** The stored record of the output at `index`. Replaces
+    /// `get_output_key(amount, index)` in both its single and batch forms
+    /// (the batch form dissolves into N calls on one snapshot, SOK-3), and
+    /// the C++'s `amount` parameter: the read is the confidential bucket's
+    /// slot ([`OutputSlot::confidential`](crate::OutputSlot::confidential)),
+    /// because Shekyl has one bucket — every miner and emission vout is
+    /// stored under `0` and CEN-H14 makes every other vout's amount `0` —
+    /// and the C++ itself refused any other amount (`db_lmdb.cpp:3746`). The
+    /// amount dimension in the key is carried, not chosen, while R8b-2 is
+    /// open (§3.4); if R8b-2 rules it consensus-visible, this read grows a
+    /// parameter and the table needs no change.
+    ///
+    /// `index` is the chain-wide [`GlobalOutputIndex`] — under one bucket
+    /// equal to the store's `amount_index` and `output_id` (SOK-2's belt,
+    /// enforced at every connect and **re-validated by this read** against
+    /// the record's own `output_id`, `output_reads` module docs). It is
+    /// **not** a curve-tree position: leaf order is `(maturity, gindex)`, not
+    /// gindex (`CT2_DRAIN_ORDER.md` §"Index ≠ tree position"), and a caller
+    /// holding a position resolves it through `leaf_to_output` first
+    /// (SOK-10). The parameter type is what makes the confusion
+    /// unrepresentable here.
+    ///
+    /// # Errors
+    ///
+    /// Bound first: at or beyond the dense count this is
+    /// [`AtIndex::BeyondCount`] and no row is read. Below it, a missing row
+    /// or a record whose `output_id` is not `index` is **SI-9**
+    /// (`InvariantViolated(IdNotFresh)`); an undecodable row is SI-7; engine
+    /// errors pass through.
+    pub fn output(&self, index: GlobalOutputIndex) -> Result<AtIndex<RecordedOutput>, StoreError> {
+        output_reads::output_at(&self.txn, index).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **O2.** Which transaction created the output at `index`, and at which
+    /// `vout` position. Replaces `get_output_tx_and_index` (single and batch)
+    /// and is the `_from_global` read — `output_txs[output_id]`, one lookup
+    /// — **not** the amount-specific composition through `OutKey.output_id`,
+    /// which equals it only by SOK-2's belt; a read that is right only while
+    /// a belt holds is the wrong read. Returns [`OutTx`] as it exists
+    /// (SOK-Q4: no renamed twin). Kept although its `blockchain.cpp` callers
+    /// are dead: E2's comparator projects `output_txs` through it.
+    ///
+    /// # Errors
+    ///
+    /// As [`output`](Self::output).
+    pub fn output_origin(&self, index: GlobalOutputIndex) -> Result<AtIndex<OutTx>, StoreError> {
+        output_reads::origin_at(&self.txn, index).map_err(chain_reads::ReadFault::into_plain)
+    }
 }
 
 /// R6's and R7's shared step: the verified `(identity, body)` pair from the
@@ -464,9 +543,10 @@ fn body_at(
         match chain_reads::block_body(txn, tip, height)
             .map_err(chain_reads::ReadFault::into_plain)?
         {
-            AtHeight::Recorded((hash, block)) => {
-                AtHeight::Recorded(RecordedBlockBody { hash, block })
-            }
+            AtHeight::Recorded((info, block)) => AtHeight::Recorded(RecordedBlockBody {
+                hash: info.hash,
+                block,
+            }),
             AtHeight::AboveTip => AtHeight::AboveTip,
         },
     )

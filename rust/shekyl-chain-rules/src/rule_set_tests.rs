@@ -136,7 +136,7 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     assert_eq!(
         format!("{genesis:?}"),
         format!(
-            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (validator-enforced; held rows excluded), header_major_version: 1 }}",
+            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (validator-enforced; held rows excluded), header_major_version: 1, difficulty: Lwma1 }}",
             v = CenRow::ALL.len() - 2,
             n = CenRow::ALL.len()
         )

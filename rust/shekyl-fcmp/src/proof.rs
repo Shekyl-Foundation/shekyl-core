@@ -176,8 +176,10 @@ pub struct BranchLayer {
 
 /// Full witness data for one input in an FCMP++ proof.
 ///
-/// The C++ wallet constructs this from the output being spent, the
-/// per-output key derivation, and the Merkle path from `get_curve_tree_path`.
+/// The wallet constructs this from the output being spent, the per-output
+/// key derivation, and the Merkle path it assembles locally from its
+/// block-derived leaf stream (`shekyl_curve_tree::CurveTreeClient::assemble_path`).
+/// The daemon serves no per-output path (`PHASE_2A_SEND_PATH.md` §3.0.1).
 ///
 /// Carries the spend's signing secrets (`spend_key_x`, `spend_key_y`,
 /// `commitment_mask`, `pseudo_out_blind`, `pqc_leaf_blind`), so the struct

@@ -389,18 +389,6 @@ public:
    */
   void note_archival_prune_watermark_epoch(uint64_t prune_below_epoch);
 
-  /**
-   * @brief return a histogram of outputs on the blockchain
-   *
-   * @param amounts optional set of amounts to lookup
-   * @param unlocked whether to restrict count to unlocked outputs
-   * @param recent_cutoff timestamp to determine which outputs are recent
-   * @param min_count return only amounts with at least that many instances
-   *
-   * @return a set of amount/instances
-   */
-  std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const;
-
   bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const;
 
   // helper functions
@@ -617,7 +605,6 @@ private:
   virtual std::array<uint8_t, 32> get_curve_tree_root() const override;
   virtual uint8_t get_curve_tree_depth() const override;
   virtual uint64_t get_curve_tree_leaf_count() const override;
-  virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const override;
   virtual bool get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const override;
   virtual bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const override;
   virtual bool get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const override;
@@ -968,7 +955,7 @@ private:
   MDB_dbi m_output_to_leaf;           // output_index [8B native] -> tree_position [8B native] (MDB_INTEGERKEY)
   MDB_dbi m_leaf_to_output;           // tree_position [8B native] -> output_index [8B native] (MDB_INTEGERKEY)
 
-  MDB_dbi m_curve_tree_leaves;    // global_output_index -> 128 bytes leaf data {O.x, I.x, C.x, CM.x}
+  MDB_dbi m_curve_tree_leaves;    // tree_position (drain order, NOT global_output_index — SOK-10) -> 128 bytes leaf data {O.x, I.x, C.x, CM.x}
   MDB_dbi m_curve_tree_layers;    // (layer_idx << 56 | chunk_idx) -> 32 bytes hash
   MDB_dbi m_curve_tree_meta;      // key string -> value (root, leaf_count, depth)
   MDB_dbi m_curve_tree_checkpoints; // block_height -> serialized checkpoint (root + depth + leaf_count)

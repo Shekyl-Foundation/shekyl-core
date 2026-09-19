@@ -3,13 +3,20 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The block on either side of `validate`: the untrusted [`Candidate`] going
-//! in, the typed [`ValidatedBlock`] coming out inside a `ChainValid`.
+//! The block at each stage of judgement: the untrusted [`Candidate`] going
+//! into `form`, the [`StructurallyValid`] it hands to `validate`, and the
+//! typed [`ValidatedBlock`] coming out inside a `ChainValid`.
 
-use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, TxHash};
+use core::fmt;
+
+use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_types::{BlockHash, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use crate::coverage::RuleCoverage;
+use crate::fault::FormAttempt;
+use crate::rule_set::{RuleSet, RuleSetId};
+use crate::rules::difficulty::Target;
 use crate::rules::header::B6;
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
@@ -104,6 +111,165 @@ impl Candidate {
     }
 }
 
+/// A candidate that passed the **stateless stage** (`form`): every rule
+/// decidable without the chain, plus what those rules established and the
+/// view-bound stage will read or verify.
+///
+/// The token between the two stages (`CHAIN_RULES_SLICE_2.md` §4.2). `form`
+/// runs outside the write transaction, in parallel; `validate` takes this
+/// type — never a bare `Candidate` — so the view-bound stage cannot be
+/// reached without the stateless one, the same move that makes a
+/// `ChainValid` unmintable outside `connect`. What it carries besides the
+/// candidate:
+///
+/// * `rule_set` — the rules the caller **claimed** were in force, as the
+///   set itself (not only its id). `validate` compares with `PartialEq`
+///   and returns [`Stale::RuleSet`](crate::Stale::RuleSet) on a mismatch.
+///   The id alone is not the set: a Fakechain `Fixed` target reuses
+///   `RuleSetId::GENESIS` (Q10), so two sets at the same id can differ.
+/// * `seed` — the block id the caller **claimed** sits at the seed height
+///   (CEN-D3). `validate` verifies it against the committing view and
+///   returns [`Stale::Seed`](crate::Stale::Seed) on a mismatch.
+/// * `pow` — the RandomX longhash under that seed (CEN-D2), computed here
+///   because it is the most expensive call in the validator and this stage
+///   runs outside the write transaction.
+/// * `judged_at` — the wall clock at `form`. **This makes the verdict
+///   time-dependent**: a `StructurallyValid`, and the `ChainValid` minted
+///   from it, is no longer a pure function of `(candidate, view, rule_set)`.
+///   The FTL leg (CEN-C1) was judged against *this* instant. The window is
+///   small because the brand ties a `ChainValid` to a live batch, but
+///   anything that caches or defers one lets that leg go stale silently —
+///   which is why the instant is carried rather than forgotten: a consumer
+///   can see how old the judgement is.
+/// * `attempt` — which try at `form` this is, so a `Stale` fault can say
+///   whether another is allowed ([`Retry`](crate::Retry)).
+///
+/// Constructed only by `form`; the fields are private and there is no
+/// public constructor (G5):
+///
+/// ```compile_fail
+/// use shekyl_chain_rules::StructurallyValid;
+/// let forged = StructurallyValid {
+///     candidate: todo!(),
+///     rule_set: todo!(),
+///     coverage: todo!(),
+///     judged_at: todo!(),
+///     seed: todo!(),
+///     pow: todo!(),
+///     attempt: todo!(),
+/// };
+/// ```
+///
+/// Not `Clone`: a stage token has one consumer.
+#[must_use = "a StructurallyValid is the input to `validate`; dropping it discards the stateless stage's work"]
+pub struct StructurallyValid {
+    candidate: Candidate,
+    rule_set: RuleSet,
+    coverage: RuleCoverage,
+    judged_at: Timestamp,
+    seed: BlockHash,
+    pow: PowHash,
+    attempt: FormAttempt,
+}
+
+impl StructurallyValid {
+    /// Called by `form` once every stateless rule has passed, and nowhere
+    /// else.
+    pub(crate) const fn new(
+        candidate: Candidate,
+        rule_set: RuleSet,
+        coverage: RuleCoverage,
+        judged_at: Timestamp,
+        seed: BlockHash,
+        pow: PowHash,
+        attempt: FormAttempt,
+    ) -> Self {
+        Self {
+            candidate,
+            rule_set,
+            coverage,
+            judged_at,
+            seed,
+            pow,
+            attempt,
+        }
+    }
+
+    /// The candidate, still untrusted on every view-bound row.
+    #[must_use]
+    pub const fn candidate(&self) -> &Candidate {
+        &self.candidate
+    }
+
+    /// The rule set `form` judged under — a claim `validate` checks by
+    /// value, not by id.
+    #[must_use]
+    pub const fn rule_set(&self) -> RuleSet {
+        self.rule_set
+    }
+
+    /// The id of the set `form` judged under. What the store persists;
+    /// not a proxy for set equality (a Fakechain `Fixed` target reuses
+    /// [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS)).
+    #[must_use]
+    pub const fn rule_set_id(&self) -> RuleSetId {
+        self.rule_set.id()
+    }
+
+    /// The stateless rows that ran and passed.
+    #[must_use]
+    pub const fn coverage(&self) -> &RuleCoverage {
+        &self.coverage
+    }
+
+    /// The wall clock at `form` — the instant CEN-C1 was (or will be)
+    /// judged against. See the type's docs on time-dependence.
+    #[must_use]
+    pub const fn judged_at(&self) -> Timestamp {
+        self.judged_at
+    }
+
+    /// The seed the caller claimed for CEN-D3 — verified, not trusted, by
+    /// `validate`.
+    #[must_use]
+    pub const fn seed(&self) -> BlockHash {
+        self.seed
+    }
+
+    /// The longhash under the claimed seed (CEN-D2) — what CEN-D1 compares
+    /// against the target once the seed is verified.
+    #[must_use]
+    pub const fn pow(&self) -> PowHash {
+        self.pow
+    }
+
+    /// Which attempt at `form` produced this.
+    #[must_use]
+    pub const fn attempt(&self) -> FormAttempt {
+        self.attempt
+    }
+
+    /// Hand the candidate and the stateless coverage to the view-bound
+    /// stage, consuming the token.
+    pub(crate) fn into_parts(self) -> (Candidate, RuleCoverage) {
+        (self.candidate, self.coverage)
+    }
+}
+
+impl fmt::Debug for StructurallyValid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StructurallyValid")
+            .field("block", &self.candidate.block.hash())
+            .field("rule_set", &self.rule_set)
+            .field("coverage", &self.coverage)
+            .field("judged_at", &self.judged_at)
+            .field("seed", &self.seed)
+            .field("pow", &self.pow)
+            .field("attempt", &self.attempt)
+            .finish()
+    }
+}
+
 /// The typed payload a `ChainValid` wraps.
 ///
 /// The candidate exactly as judged — the block is kept whole, so what the
@@ -124,6 +290,8 @@ impl Candidate {
 ///     block: todo!(),
 ///     miner_tx: todo!(),
 ///     transactions: todo!(),
+///     target: todo!(),
+///     cumulative_difficulty: todo!(),
 /// };
 /// ```
 #[derive(Debug, PartialEq, Eq)]
@@ -132,13 +300,22 @@ pub struct ValidatedBlock {
     block: Block,
     miner_tx: TxIdentity,
     transactions: Vec<(TxIdentity, Transaction)>,
+    target: Target,
+    cumulative_difficulty: CumulativeDifficulty,
 }
 
 impl ValidatedBlock {
     /// Derive every identity once. Called by `validate` after the last rule
     /// has passed and nowhere else. The block's identity comes from CEN-B6's
-    /// function, which records the row in `coverage` (slice 1, Q5).
-    pub(crate) fn derive(candidate: Candidate, coverage: &mut RuleCoverage) -> Self {
+    /// function, which records the row in `coverage` (slice 1, Q5); the
+    /// target and the cumulative work are CEN-D4's derivation, recorded
+    /// where it ran.
+    pub(crate) fn derive(
+        candidate: Candidate,
+        target: Target,
+        cumulative_difficulty: CumulativeDifficulty,
+        coverage: &mut RuleCoverage,
+    ) -> Self {
         let Candidate {
             block,
             transactions,
@@ -151,7 +328,24 @@ impl ValidatedBlock {
                 .into_iter()
                 .map(|tx| (TxIdentity::of(&tx), tx))
                 .collect(),
+            target,
+            cumulative_difficulty,
         }
+    }
+
+    /// The difficulty this block was judged against (CEN-D4, D6).
+    #[must_use]
+    pub const fn target(&self) -> Target {
+        self.target
+    }
+
+    /// Work through this block: the parent's cumulative difficulty plus
+    /// the target. What the store records as `block_info.cumulative_
+    /// difficulty` — derived here, never by the store (C2-R8 Q4; slice 2
+    /// Q5).
+    #[must_use]
+    pub const fn cumulative_difficulty(&self) -> CumulativeDifficulty {
+        self.cumulative_difficulty
     }
 
     /// The block's identity.

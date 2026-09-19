@@ -270,19 +270,12 @@ const std::unordered_map<std::string, jsonrpc_fn>& get_jsonrpc_table() {
         DJRPC_WE("get_bans",              on_get_bans,                    COMMAND_RPC_GETBANS),
         DJRPC_WE("banned",                on_banned,                      COMMAND_RPC_BANNED),
         DJRPC_WE("flush_txpool",          on_flush_txpool,                COMMAND_RPC_FLUSH_TRANSACTION_POOL),
-        DJRPC_WE("get_output_histogram",   on_get_output_histogram,       COMMAND_RPC_GET_OUTPUT_HISTOGRAM),
         DJRPC_WE("get_coinbase_tx_sum",    on_get_coinbase_tx_sum,        COMMAND_RPC_GET_COINBASE_TX_SUM),
         DJRPC_WE("get_alternate_chains",   on_get_alternate_chains,       COMMAND_RPC_GET_ALTERNATE_CHAINS),
         DJRPC_WE("relay_tx",              on_relay_tx,                    COMMAND_RPC_RELAY_TX),
         DJRPC_WE("get_txpool_backlog",     on_get_txpool_backlog,         COMMAND_RPC_GET_TRANSACTION_POOL_BACKLOG),
         DJRPC_WE("prune_blockchain",       on_prune_blockchain,           COMMAND_RPC_PRUNE_BLOCKCHAIN),
         DJRPC_WE("flush_cache",            on_flush_cache,                COMMAND_RPC_FLUSH_CACHE),
-        // FCMP++ curve-tree membership-path endpoints. The handlers + KV-serializable
-        // request/response structs already exist and are registered in the legacy epee
-        // map (core_rpc_server.h); they were missing here, so on the default Rust/Axum
-        // transport every get_curve_tree_path returned 404 — blocking the wallet from
-        // fetching a spend membership path. See docs/FOLLOWUPS.md + FCMP_SPEND_SIGNING_PREIMAGE.md.
-        DJRPC_WE("get_curve_tree_path",       on_get_curve_tree_path,        COMMAND_RPC_GET_CURVE_TREE_PATH),
         DJRPC_WE("get_curve_tree_info",       on_get_curve_tree_info,        COMMAND_RPC_GET_CURVE_TREE_INFO),
         DJRPC_WE("get_curve_tree_checkpoint", on_get_curve_tree_checkpoint,  COMMAND_RPC_GET_CURVE_TREE_CHECKPOINT),
         // Emission claim-source query (EMISSION_CLAIM_BUILDER.md §7): the

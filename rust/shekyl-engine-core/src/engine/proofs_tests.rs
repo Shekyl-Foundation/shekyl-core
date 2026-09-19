@@ -469,7 +469,7 @@ mod check_workflows {
             },
             ct: Ct::Fcmp {
                 fee: 0,
-                reference_block: BlockHash::from_bytes([0u8; 32]),
+                reference_block: BlockHash::NULL,
                 base: CtBase {
                     enc_amounts: outputs
                         .iter()

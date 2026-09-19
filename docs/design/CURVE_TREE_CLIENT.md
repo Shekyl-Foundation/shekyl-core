@@ -114,8 +114,12 @@ Rust-side primitives **already exist** (`shekyl-fcmp::tree`):
 - `chunk_width(layer)`, `layer_is_selene(layer)`, `proof_size(n_in, depth)`,
   `SELENE_CHUNK_WIDTH` / `HELIOS_CHUNK_WIDTH` / `SCALARS_PER_LEAF`.
 
-**Gap:** no Rust path-assembler (`get_curve_tree_path`-shape) exists; layer walk
-+ sibling extraction into `c1_layers`/`c2_layers` is the new work.
+**Gap (records-was, Round 0):** no wallet-side Rust path-assembler existed; layer
+walk + sibling extraction into `c1_layers`/`c2_layers` was the new work — landed
+as `assemble_path` (CT-4). The daemon's own per-output assembler
+(`get_curve_tree_path`) was **deleted 2026-09-18** (`SOK-10` Q7 → A,
+spend-revealing per `PHASE_2A_SEND_PATH.md` §3.0.1); the wallet is now the only
+path assembler.
 
 The two **age** constants (distinct — do not conflate, §5.4):
 
@@ -525,9 +529,10 @@ binding a height to a consensus root stays the caller's responsibility
 **Rule:** `reference_height = tip − REF_ANCHOR_AGE`, with
 `REF_ANCHOR_AGE = FCMP_REFERENCE_BLOCK_MIN_AGE + 1 = 6`.
 
-- Matches the daemon's existing `get_curve_tree_path` anchor
-  (`top_height − (MIN_AGE + 1)`), so wallet-assembled and daemon-assembled paths
-  agree on the anchor.
+- One block deeper than the bare `MIN_AGE` floor. (It also matched the anchor the
+  daemon's `get_curve_tree_path` used before that RPC was removed — `SOK-10` Q7 →
+  A, 2026-09-18; there is no daemon-assembled path to agree with any more, and
+  the offset stands on its own reorg-safety and privacy-canonical grounds.)
 - Reorg-safe: ≥ `MIN_AGE` deep, so the reference block is unlikely to be
   reorged out (and §5.3 handles the residual).
 - Maximizes the submit window (§5.2): closest legal block to the tip.

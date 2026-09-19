@@ -3798,7 +3798,9 @@ dependencies = [
 name = "shekyl-chain-rules"
 version = "3.1.0"
 dependencies = [
+ "serde_json",
  "shekyl-address",
+ "shekyl-difficulty",
  "shekyl-types",
  "shekyl-wire",
 ]

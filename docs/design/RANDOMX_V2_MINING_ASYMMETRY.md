@@ -204,7 +204,7 @@ Symmetric with the ceiling, the floor is not a point. It spans a **portable rele
 | **Orphan rate** for light miners while the whale is present | fraction of honest blocks orphaned | block-submit path `on_submitblock` |
 | **Selfish-mining / block-withholding** feasibility at the observed ratio | can the whale withhold and win the race? | anti-selfish-mine vectors 6–7 |
 | **Time-to-restabilize** after the whale leaves | blocks/seconds until difficulty re-tracks honest hashrate | `lwma1.rs` window `N=90` |
-| **Seed-epoch rollover under load** | does an epoch boundary stall verification under whale pressure? | `seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048`, `LAG=64`); eager-derive `pow_randomx_ffi.rs:263`; regtest fast-epoch override guarded fakechain-only `blockchain.cpp:582-599` |
+| **Seed-epoch rollover under load** | does an epoch boundary stall verification under whale pressure? | `shekyl-difficulty/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048`, `LAG=64`; moved from the engine crate 2026-09-19); eager-derive `pow_randomx_ffi.rs:263`; regtest fast-epoch override guarded fakechain-only `blockchain.cpp:582-599` |
 
 Cross-check the block-arrival **stall detector** (`cryptonote_core.cpp:1781-1835`, calibration pinned by `tests/unit_tests/stall_detection_calibration.cpp:121`) is not falsely tripped by the whale's arrival/departure transients.
 
@@ -330,7 +330,7 @@ Structured adversarial passes on the measurement design (2026-07-05). All findin
 - regtest/fakechain `src/cryptonote_core/cryptonote_core.cpp:84-91,335-336,472-473`. RPC `src/rpc/core_rpc_server.cpp`: `getblocktemplate:1597`, `submitblock:1894`, `generateblocks:1953` (gated `:1963`), `get_info:368`. Stressnet `tests/stressnet/load_generator.py:60` (`DaemonRPC`).
 
 **Seed epoch**
-- `rust/shekyl-pow-randomx/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048` `:46`, `LAG=64` `:48`, `seedheight` `:109`). FFI/eager-derive `rust/shekyl-ffi/src/pow_randomx_ffi.rs:263-278`. Regtest fast-epoch override (fakechain-only) `src/cryptonote_core/blockchain.cpp:582-599`. Stall detector `src/cryptonote_core/cryptonote_core.cpp:1781-1835`, calibration `tests/unit_tests/stall_detection_calibration.cpp:121`. Drift sentinel `tests/unit_tests/seed_epoch.cpp:31`.
+- `rust/shekyl-difficulty/src/seed_epoch.rs` (`SEEDHASH_EPOCH_BLOCKS=2048` `:37`, `LAG=64` `:40`, `seedheight` `:49`; moved from `rust/shekyl-pow-randomx/src/seed_epoch.rs` 2026-09-19, E6 slice 2 — the validator adopts the schedule without depending on the engine). FFI/eager-derive `rust/shekyl-ffi/src/pow_randomx_ffi.rs:263-278`. Regtest fast-epoch override (fakechain-only) `src/cryptonote_core/blockchain.cpp:582-599`. Stall detector `src/cryptonote_core/cryptonote_core.cpp:1781-1835`, calibration `tests/unit_tests/stall_detection_calibration.cpp:121`. Drift sentinel `tests/unit_tests/seed_epoch.cpp:31`.
 
 **External artifacts (pins)**
 - `external/randomx-v2` @ `aaafe71` (v2.0.1, pristine tevador — working tree clean, no `shekyl` markers). `/home/torvaldsl/shekyl/RandomX` @ `0720fe4d` (dev-tooling atop `aaafe71`; `configuration.h` byte-identical). **XMRig @ `b2ca7248` (v6.26.0)** at `/home/torvaldsl/shekyl/xmrig` — present; `RX_V2` config `src/crypto/rx/RxAlgo.cpp:35-36` → `RandomX_MoneroConfigV2` (`src/crypto/randomx/randomx.cpp:55-62`), base defaults `randomx.cpp:124-133` / `randomx.h:70-76`. Constant delta vs fork = **none** (§3.1). Release-watch duty: re-pin deliberately on any bump.

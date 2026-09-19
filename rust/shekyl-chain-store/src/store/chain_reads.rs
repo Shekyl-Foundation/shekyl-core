@@ -69,11 +69,12 @@
 
 use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
 use shekyl_chain_rules::AtHeight;
-use shekyl_types::BlockHash;
+use shekyl_types::KeyImage;
 use shekyl_wire::Block;
 
 use crate::codec::{BlockInfo, Canonical, CodecError, Coded};
-use crate::schema::{BLOCKS, BLOCK_INFO};
+use crate::lmdb_order::LmdbHashKey;
+use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS};
 
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
 
@@ -201,7 +202,9 @@ fn absent(cell: &'static str) -> ReadFault {
 }
 
 /// SI-7 for a row that is present and does not decode under its codec.
-fn undecodable(cell: &'static str, cause: CodecError) -> ReadFault {
+/// Shared with `output_reads`: one classification of "the bytes are not
+/// this codec" for every typed cell.
+pub(super) fn undecodable(cell: &'static str, cause: CodecError) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::CellCorrupt {
         key: cell,
         fault: CellFault::Undecodable(cause),
@@ -257,6 +260,29 @@ pub(super) fn cell<T: ReadTables, V: Canonical + 'static>(
         .decode()
         .map(Some)
         .map_err(|cause| undecodable(cell_name, cause))
+}
+
+/// `spent_keys` membership — the chain half of CEN-L1 / CEN-I7, read from
+/// the table SI-1 guards (S-OUT-KI **K1**, `DRS_E1_SOUT_KI.md` §3.2). One
+/// body for both readers: the validator's `BatchView::has_key_image` inside
+/// a batch and `ReadSnapshot::has_key_image` on the committed chain. The
+/// answer is exact — a table read, never a filter or a cache — and `bool`
+/// is the right shape: "not spent" is a value inside the type's range with
+/// no arm that differs (`CURVE_TREE_STORE_SHAPES.md` §3.1's counter-rule).
+///
+/// The C++ warned in prose that this read takes no lock and must not be
+/// paired with another (`blockchain.cpp:250`–`:253`); here the transaction
+/// is the lock, and N calls on one snapshot are the batch form
+/// `has_key_images` existed to be (SOK-3).
+pub(super) fn has_key_image<T: ReadTables>(
+    txn: &T,
+    key_image: &KeyImage,
+) -> Result<bool, ReadFault> {
+    let table = txn.table(SPENT_KEYS)?;
+    let found = table
+        .get(LmdbHashKey::from_bytes(*key_image.as_bytes()))?
+        .is_some();
+    Ok(found)
 }
 
 /// Where `height` sits relative to the recorded tip. One match; every
@@ -317,8 +343,10 @@ pub(super) fn blob_at<T: ReadTables>(
     Ok(AtHeight::Recorded(blob.value().bytes().to_vec()))
 }
 
-/// The block recorded at `height`: its identity from `block_info`, its body
-/// parsed from `blocks` and **verified to hash to that identity**.
+/// The block recorded at `height`: its `block_info` row (identity and the
+/// per-height record — the view projects `cumulative_difficulty` from it
+/// for CEN-D4, E6 slice 2), its body parsed from `blocks` and **verified to
+/// hash to that identity**.
 ///
 /// Classified against `tip` — the caller's [`tip_of`], passed in whole so
 /// one read of the tip serves a whole range and a read **of** the tip
@@ -330,7 +358,7 @@ pub(super) fn block_body<T: ReadTables>(
     txn: &T,
     tip: Option<&(u64, BlockInfo)>,
     height: u64,
-) -> Result<AtHeight<(BlockHash, Block)>, ReadFault> {
+) -> Result<AtHeight<(BlockInfo, Block)>, ReadFault> {
     let info = match info_at(txn, tip, height)? {
         AtHeight::Recorded(info) => info,
         AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
@@ -344,5 +372,5 @@ pub(super) fn block_body<T: ReadTables>(
             "block blob does not hash to block_info.hash",
         ));
     }
-    Ok(AtHeight::Recorded((info.hash, block)))
+    Ok(AtHeight::Recorded((info, block)))
 }

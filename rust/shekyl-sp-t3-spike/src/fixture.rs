@@ -38,7 +38,9 @@
 //!   (`DEFAULT_LOCK_WINDOW`). Shard 0 additionally needs the freeze gate
 //!   `tip − end_block_height ≥ SPENDABLE_AGE(60) + REORG_MARGIN(720)`, so the
 //!   target height is ≈ 25 992 + 60 + 780 ≈ 26 832 blocks.
-//! - **Does an extraction path exist?** Yes, and it is a *batched* RPC rather than
+//! - **Does an extraction path exist?** It did at the time of the measurement
+//!   (records-was; the RPC below was removed 2026-09-18 — `SOK-10` Q7 → A, see
+//!   `bins/extract_shard.rs`). It was a *batched* RPC rather than
 //!   the 684 round-trips a per-chunk read would imply:
 //!   `COMMAND_RPC_GET_CURVE_TREE_PATH` takes a **vector** of `output_indices` and
 //!   returns, per entry, a `chunk_outputs_blob` of `[O:32][I:32][C:32][CM.x:32]`

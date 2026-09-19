@@ -1,0 +1,76 @@
+---
+description: Worktree hygiene. The tested tree and the shipped tree are the same object, by construction, not by inspection.
+alwaysApply: true
+---
+
+# Worktree hygiene — the tested tree is the shipped tree
+
+Concurrent lanes each work in their own `git worktree` (`06-branching.mdc`).
+A worktree left open between edits — by an agent across tool calls, by an
+editor with the file loaded — has been observed to **revert edited files
+to an earlier buffer** with no diff shown to whoever made the edit. This
+rule exists because that has now happened in two independent lanes, and
+the cause is environmental rather than anything either lane did.
+
+## The observed failure
+
+- **`wt-schain-r` (2026-09-16):** an uncommitted revert of a rename landed
+  in the working tree after the edit had been made by tool; one of the
+  reverted files would not have compiled.
+- **`wt-stx` (2026-09-19):** the working copy of a plan doc drifted back to
+  its *pre-verification* text — cite corrections that had been checked at
+  source, committed, and pushed were undone in the working tree while the
+  committed version stayed correct.
+
+Both were caught by a human or an agent reading the diff. That does not
+scale, and it is not the dangerous case. **The dangerous case is a drift
+followed by `git add -A` or `git commit -a`:** the stale content is
+committed, and the tree that was tested and the tree that ships diverge
+with nothing to notice. The drift specifically reverts *verified* edits to
+what was wrong before someone checked — so what would be committed is
+exactly the content the verification existed to remove.
+
+## Two constraints, both mechanical
+
+1. **Stage explicit paths. Never `git add -A`, `git add .`, `git add -u`,
+   or `git commit -a` in a worktree that has been left open between edits.**
+   Every commit names the files it carries. If a file you did not edit shows
+   as modified, that is the signal — read the diff before touching it, and
+   restore it from `HEAD` if it is a drift (`git checkout -- <path>`), not a
+   change you made.
+
+2. **Verify from a fresh checkout of the pushed SHA, not from the worktree.**
+   Before reporting a PR head as green — and before resolving review
+   findings against it — run the gates and tests in a checkout that
+   contains only what was pushed:
+
+   ```bash
+   git clone -q --no-checkout --shared <repo> /tmp/verify-<pr>
+   cd /tmp/verify-<pr> && git fetch -q origin <branch> && git checkout -q <sha>
+   git submodule update --init --recursive -q
+   # run the same gates CI runs, then delete the clone
+   ```
+
+   The worktree's gates are a fast local loop; they are not the
+   verification. A clone of the pushed commit makes the tested artifact and
+   the shipped artifact **the same object**, and it is the only mitigation
+   here that does not depend on someone noticing.
+
+## What this rule does not change
+
+CI runs on the pushed SHA already, so a drift that reaches a push will
+eventually fail there when it breaks a gate. This rule closes the two gaps
+CI does not: a drift that passes gates while being *wrong* (a reverted
+doc correction, a comment restored to a false claim), and the window
+between "I ran the tests" and "CI is green" during which findings get
+resolved against a tree that was never built.
+
+## Related rules
+
+- **`06-branching.mdc`** — worktrees, short-lived branches, each push
+  separately authorized. This rule governs what is *in* the push.
+- **`90-commits.mdc`** — scope per commit. Explicit staging is how a
+  commit's scope is enforced, not just described.
+- **`91-documentation-after-plans.mdc`** — the descriptive surface is
+  checked by sweeps, not gates; a drift that restores a stale claim is the
+  failure that rule's sweeps exist to catch, arriving through a new door.

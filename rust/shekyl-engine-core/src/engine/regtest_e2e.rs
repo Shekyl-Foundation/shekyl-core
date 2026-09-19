@@ -751,155 +751,6 @@ async fn regtest_daemon_spawns_and_mines_to_wallet_address() {
     assert!(after >= before + 3, "chain should advance by >= 3 blocks");
 }
 
-/// `get_curve_tree_path` was registered only in the legacy epee dispatch, so on the
-/// default Rust/Axum transport it returned 404 — blocking a wallet from fetching a
-/// spend membership path. This drives the live endpoint end-to-end: mine until early
-/// coinbase outputs mature + drain into the reference tree, then fetch the path for the
-/// first leaf and assert a well-formed, non-404 response (the call the send path makes).
-#[tokio::test(flavor = "multi_thread")]
-#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
-async fn e2e_get_curve_tree_path_returns_valid_path() {
-    use super::lifecycle::{CapabilityInput, Credentials, EngineCreateParams};
-    use super::{DaemonClient, Engine, SoloSigner};
-    use shekyl_address::Network;
-    use shekyl_crypto_pq::account::{SeedFormat, MASTER_SEED_BYTES};
-    use shekyl_crypto_pq::wallet_envelope::KdfParams;
-    use shekyl_engine_file::SafetyOverrides;
-    use shekyl_engine_prefs::WalletPrefs;
-
-    let daemon = RegtestDaemon::start().await;
-
-    // The endpoint answering at all (not 404) is the fix this PR proves: the
-    // curve-tree handlers are now in the Rust/Axum FFI dispatch, not only the
-    // legacy epee map. This holds even on a fresh, empty tree.
-    let info: serde_json::Value = daemon
-        .rpc
-        .json_rpc_call("get_curve_tree_info", None)
-        .await
-        .expect("get_curve_tree_info must not 404 (curve-tree endpoints wired into FFI dispatch)");
-    eprintln!("curve_tree_info (fresh): {info}");
-
-    // Mine enough for early coinbase outputs to mature + drain into the reference tree.
-    let rpc = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port))
-        .await
-        .expect("wallet rpc");
-    let tmp = tempfile::tempdir().expect("wallet tempdir");
-    let wallet_path = tmp.path().join("wallet");
-    let seed = [0x22u8; MASTER_SEED_BYTES];
-    let creds = Credentials::password_only(b"track2-curve-tree");
-    let params = EngineCreateParams {
-        base_path: &wallet_path,
-        credentials: &creds,
-        // FAKECHAIN/regtest uses the mainnet config + address format
-        // (cryptonote_config.h), so the wallet is Mainnet (Bip39 is the only seed
-        // format permitted for Mainnet). There is no separate regtest address prefix;
-        // verified end-to-end — the daemon accepts this address and mines to it.
-        network: Network::Mainnet,
-        capability: CapabilityInput::Full {
-            master_seed_64: &seed,
-            seed_format: SeedFormat::Bip39,
-        },
-        creation_timestamp: 0,
-        restore_height_hint: 0,
-        kdf: KdfParams {
-            m_log2: 0x08,
-            t: 1,
-            p: 1,
-        },
-        overrides: SafetyOverrides::none(),
-        prefs: WalletPrefs::default(),
-    };
-    let wallet =
-        Engine::<SoloSigner>::create(params, DaemonClient::verifying(rpc, regtest_expectation()))
-            .expect("create wallet");
-    let address = wallet.primary_address().encode().expect("encode address");
-
-    // get_curve_tree_info answers non-404 even on a fresh tree — proves the *info*
-    // endpoint is wired into the FFI dispatch, independent of any leaves existing.
-    let info: serde_json::Value = daemon
-        .rpc
-        .json_rpc_call("get_curve_tree_info", None)
-        .await
-        .expect("get_curve_tree_info must not 404 (FFI dispatch wired)");
-    assert_eq!(
-        info.get("root")
-            .and_then(serde_json::Value::as_str)
-            .map(str::len),
-        Some(64),
-        "get_curve_tree_info.root must be 32-byte hex; got {info}"
-    );
-
-    // Mine in small batches (a single ~80-block call exceeds the RPC client timeout)
-    // until output 0 is drained into the *reference* tree (tip − REF_ANCHOR_AGE). Poll
-    // get_curve_tree_path itself rather than get_curve_tree_info.leaf_count: that is the
-    // *tip* leaf count and races ahead of the reference tree the path is built against.
-    // While the tree is still empty the call errors ("Curve tree is empty"); once leaves
-    // exist but output 0 isn't yet at the reference height it returns Ok with empty paths;
-    // either way we mine more (any Err is "not ready" — only an Ok with a non-empty path
-    // is success). For output 0 the per-index WRONG_PARAM guard never fires: 0 < tip once
-    // the tree is non-empty, and the empty-tree case errors out above it.
-    const MINE_BATCH_BLOCKS: u64 = 10;
-    const MAX_MINE_BATCHES: usize = 24; // upper bound ~240 blocks before giving up
-    let mut path = serde_json::Value::Null;
-    let mut mined = 0u64;
-    for _ in 0..MAX_MINE_BATCHES {
-        daemon.generate_blocks(MINE_BATCH_BLOCKS, &address).await;
-        mined += MINE_BATCH_BLOCKS;
-        if let Ok(resp) = daemon
-            .rpc
-            .json_rpc_call::<serde_json::Value>(
-                "get_curve_tree_path",
-                Some(json!({ "output_indices": [0u64] })),
-            )
-            .await
-        {
-            let has_path = resp
-                .get("paths")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|a| !a.is_empty());
-            if has_path {
-                eprintln!("output 0 in reference tree after {mined} blocks: {resp}");
-                path = resp;
-                break;
-            }
-        }
-    }
-    assert!(
-        !path.is_null(),
-        "output 0 should have a reference-tree membership path within {mined} blocks"
-    );
-
-    let root = path
-        .get("curve_tree_root")
-        .and_then(serde_json::Value::as_str)
-        .expect("curve_tree_root field");
-    assert_eq!(
-        root.len(),
-        64,
-        "curve_tree_root must be 32-byte hex; got {root:?}"
-    );
-    let paths = path
-        .get("paths")
-        .and_then(serde_json::Value::as_array)
-        .expect("paths array");
-    assert!(
-        !paths.is_empty(),
-        "output 0 should have a membership path in the reference tree"
-    );
-    assert_eq!(
-        paths[0]
-            .get("output_index")
-            .and_then(serde_json::Value::as_u64),
-        Some(0),
-        "first path entry must be for output_index 0"
-    );
-    let path_blob = paths[0]
-        .get("path_blob")
-        .and_then(serde_json::Value::as_str)
-        .expect("path_blob field");
-    assert!(!path_blob.is_empty(), "path_blob must be non-empty");
-}
-
 /// Acceptance gate for the §8 step-4 scanner migration (shekyl-oxide → shekyl-wire
 /// block/tx parse). Mine coinbase blocks to the wallet's own address, drive the
 /// production [`Engine::start_refresh`] against the live daemon, and assert the
@@ -3968,6 +3819,13 @@ fn capture_block(
     })
 }
 
+/// JSON-RPC 2.0 body for `POST json_rpc`. Shared by the origin-cap,
+/// result-envelope, and deleted-method tests so the three stay one request
+/// shape.
+fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
+    json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })
+}
+
 /// The restricted RPC posture reaches the C++ handlers behind the FFI bridge.
 ///
 /// This is the regression guard for the bridge's origin context. Until
@@ -3984,7 +3842,12 @@ fn capture_block(
 /// bridge had three. They now live in
 /// `native_handlers_apply_their_own_request_caps`, which is what they actually
 /// test. What remains: `/get_info`'s field trimming on `dispatch_json`, and
-/// two `dispatch_jsonrpc_we` refusals, one per answer shape.
+/// the JSON-RPC origin cap on `dispatch_jsonrpc_we`
+/// (`get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT`). Admin-only
+/// method gating is `admin_methods_are_refused_only_on_the_restricted_listener`
+/// in `shekyl-daemon-rpc`. The WE result-envelope shape is
+/// `jsonrpc_we_carries_handler_status_through_the_result_envelope`. The
+/// histogram deletion gate is `get_output_histogram_stays_unrouted`.
 ///
 /// Both listeners come from one daemon, so the postures are compared against
 /// the same chain in the same process, and the unrestricted rows are the
@@ -4048,29 +3911,17 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
          assertions above would hold for a daemon that reports nothing to anyone"
     );
 
-    // ── The other template ──────────────────────────────────────────────
-    //
-    // Everything above is REST, which reaches the handlers through
-    // `dispatch_json`. JSON-RPC goes through `dispatch_jsonrpc_we`, a separate
-    // template that could regress on its own, so it needs its own assertions —
-    // and it has two answer shapes, both worth crossing:
-    //
-    //   * a refusal written into `error_resp`  -> the error envelope
-    //   * a refusal written into `res.status`  -> the result envelope
-    //
-    // `get_block_header_by_hash` takes the first path, `get_output_histogram`
-    // the second. (After this branch deleted the unused `DJRPC` macro and its
-    // template, these two are the only JSON-RPC dispatcher left.)
-    let json_rpc = |method: &str, params: serde_json::Value| json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
-
-    // Over the block cap: refused into `error_resp`, so the reply is an error
-    // envelope and `result` never appears.
+    // JSON-RPC goes through `dispatch_jsonrpc_we`, a separate template. Over
+    // the block cap the handler writes `error_resp`, so the reply is an error
+    // envelope and `result` never appears. That is the remaining origin
+    // witness on this template: if the dispatcher stops passing `ctx`, the
+    // cap does not fire.
     let hdr: serde_json::Value = restricted
         .rpc_call(
             "json_rpc",
-            Some(json_rpc(
+            Some(jsonrpc_body(
                 "get_block_header_by_hash",
-                json!({ "hashes": hashes(BLOCK_CAP + 1) }),
+                &json!({ "hashes": hashes(BLOCK_CAP + 1) }),
             )),
         )
         .await
@@ -4081,40 +3932,92 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
         "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
          if this succeeds the JSON-RPC template stopped passing the origin"
     );
+}
 
-    // The whole-chain histogram: refused into `res.status`, so the reply is a
-    // *result* envelope carrying a non-OK status. Same gate, other shape.
-    let hist: serde_json::Value = restricted
+/// `dispatch_jsonrpc_we` can carry a handler's non-OK `res.status` in the
+/// JSON-RPC *result* envelope, not only in `error`.
+///
+/// No WE handler now refuses a *restricted* caller into `res.status`
+/// (`get_output_histogram` was the last). The remaining witness is a
+/// universal cap on the admin listener. This is not an origin check: if a
+/// WE handler grows a restricted `res.status` refusal, that leg belongs on
+/// `restricted_listener_applies_request_caps_through_the_ffi_bridge`.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn jsonrpc_we_carries_handler_status_through_the_result_envelope() {
+    const COINBASE_SUM_RANGE_REFUSAL: &str = "height or count is too large";
+
+    let daemon = RegtestDaemon::start().await;
+    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
+        .await
+        .expect("admin rpc client");
+
+    let over: serde_json::Value = admin
         .rpc_call(
             "json_rpc",
-            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+            Some(jsonrpc_body(
+                "get_coinbase_tx_sum",
+                &json!({ "height": 0, "count": 1_000_000 }),
+            )),
         )
         .await
-        .expect("restricted get_output_histogram with no amounts");
+        .expect("admin get_coinbase_tx_sum over the chain height");
     assert_eq!(
-        hist.pointer("/result/status").and_then(|s| s.as_str()),
-        Some(
-            "Restricted RPC will not serve histograms on the whole blockchain. Use your own node."
-        ),
-        "a restricted listener must refuse the whole-chain histogram"
+        over.pointer("/result/status").and_then(|s| s.as_str()),
+        Some(COINBASE_SUM_RANGE_REFUSAL),
+        "a count past the chain height must be refused through the result envelope"
     );
 
-    // And the same JSON-RPC request on the admin listener is served, so the
-    // JSON-RPC half has its blast-radius control too.
-    let admin_hist: serde_json::Value = unrestricted
+    let ok: serde_json::Value = admin
         .rpc_call(
             "json_rpc",
-            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+            Some(jsonrpc_body(
+                "get_coinbase_tx_sum",
+                &json!({ "height": 0, "count": 1 }),
+            )),
         )
         .await
-        .expect("unrestricted get_output_histogram with no amounts");
+        .expect("admin get_coinbase_tx_sum for the genesis block");
     assert_eq!(
-        admin_hist
-            .pointer("/result/status")
-            .and_then(|s| s.as_str()),
+        ok.pointer("/result/status").and_then(|s| s.as_str()),
         Some("OK"),
-        "the unrestricted listener must still serve the whole-chain histogram"
+        "a well-formed request must remain distinguishable from the range refusal"
     );
+}
+
+/// `get_output_histogram` stays unrouted on both listeners (SOK-Q3 B).
+///
+/// A route re-minted under the old name turns this red before it can serve
+/// a histogram (rule 47).
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn get_output_histogram_stays_unrouted() {
+    const DELETED_METHOD: &str = "get_output_histogram";
+
+    let daemon = RegtestDaemon::start_with_restricted_listener().await;
+    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
+        .await
+        .expect("restricted rpc client");
+    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
+        .await
+        .expect("admin rpc client");
+
+    for (name, listener) in [("restricted", &restricted), ("admin", &admin)] {
+        let gone: serde_json::Value = listener
+            .rpc_call(
+                "json_rpc",
+                Some(jsonrpc_body(DELETED_METHOD, &json!({ "amounts": [] }))),
+            )
+            .await
+            .expect(
+                "get_output_histogram must answer with an error envelope, not a transport failure",
+            );
+        assert_eq!(
+            gone.pointer("/error/message").and_then(|m| m.as_str()),
+            Some("Method not found: get_output_histogram"),
+            "{DELETED_METHOD} was deleted (SOK-Q3) and must stay unrouted on the {name} listener"
+        );
+    }
 }
 
 /// The native handlers apply their own request caps.

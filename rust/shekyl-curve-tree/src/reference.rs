@@ -72,10 +72,10 @@ const _: () = assert!(
 /// Canonical age offset for the reference block of a freshly built proof:
 /// `reference_height = tip − REF_ANCHOR_AGE` (§5.1).
 ///
-/// `MIN_AGE + 1`, matching the daemon's `get_curve_tree_path` anchor
-/// (`top_height − (MIN_AGE + 1)`) so wallet- and daemon-assembled paths
-/// agree on the anchor. One block deeper than the bare `MIN_AGE` floor
-/// for reorg safety. **Privacy-canonical, not a per-wallet knob:** every
+/// `MIN_AGE + 1`: one block deeper than the bare `MIN_AGE` floor for reorg
+/// safety. (It was also the anchor the daemon's per-output path RPC used
+/// before that RPC was removed as spend-revealing — `SOK-10` Q7; the wallet
+/// is now the only path assembler.) **Privacy-canonical, not a per-wallet knob:** every
 /// honest wallet uses this exact offset so the on-wire reference age does
 /// not fingerprint the wallet. Re-derived only on a substrate change
 /// (observed depth-6 reorg rate, or a `MIN_AGE` consensus change), not by

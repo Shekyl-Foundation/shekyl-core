@@ -43,9 +43,19 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.32: `calc_pow` drops leftover
-/// `major_version` (RandomX-only longhash; C++ daemon RPC is still live
-/// via `core_rpc_ffi`). 3.31: `get_archival_shard_coverage` and
+/// `CORE_RPC_VERSION_MINOR`. 3.34: `get_curve_tree_path` **removed** — a
+/// per-output path query is spend-revealing (`PHASE_2A_SEND_PATH.md` §3.0.1),
+/// had no production consumer, and paired each leaf with a different
+/// output's `(O, C)` on any chain carrying a transaction (`SOK-10`, Q7 → A);
+/// the wallet assembles paths locally. (#782 and #784 both minted 3.33 on
+/// their branches and git merged the constant clean — the collision the
+/// paragraph below warns about, caught on merge by the parity chain test.)
+/// 3.33: `get_output_histogram` deleted — a
+/// per-amount output-count query over caller-chosen unlock and recency
+/// windows is a statistical disclosure surface with no consumer on a chain
+/// without rings (`DRS_E1_SOUT_KI.md` SOK-Q3, ruled B; census U-7). 3.32:
+/// `calc_pow` drops leftover `major_version` (RandomX-only longhash; C++
+/// daemon RPC is still live via `core_rpc_ffi`). 3.31: `get_archival_shard_coverage` and
 /// `request_archival_shard` (`ARCHIVAL_SHARD_SELECTION_LIST.md` `SL-D`).
 /// 3.30: `get_fee_estimate.fees` drops the dead
 /// fourth slot — three priced tiers, one slot each (FL-R25; the RK-5 bridge
@@ -59,9 +69,10 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// **Read from this tree at the moment this line is written, never carried
 /// forward from a plan.** `chain.rs:59-70` records two branches taking 3.26
 /// honestly and git merging them character-for-character, because `= 25` →
-/// `= 26` is textually identical whoever writes it. 3.32 is the
-/// `calc_pow.major_version` deletion on this branch.
-pub const CORE_RPC_VERSION_MINOR: u32 = 32;
+/// `= 26` is textually identical whoever writes it. 3.33 is the
+/// `get_output_histogram` deletion on this branch; 3.34 the
+/// `get_curve_tree_path` removal, chained after it on merge.
+pub const CORE_RPC_VERSION_MINOR: u32 = 34;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -466,10 +477,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_640);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 32);
+        assert_eq!(CORE_RPC_VERSION, 196_642);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 34);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 32);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 34);
     }
 
     #[test]

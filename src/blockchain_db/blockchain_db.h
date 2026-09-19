@@ -2106,18 +2106,6 @@ public:
    */
   virtual void drop_hard_fork_info() = 0;
 
-  /**
-   * @brief return a histogram of outputs on the blockchain
-   *
-   * @param amounts optional set of amounts to lookup
-   * @param unlocked whether to restrict count to unlocked outputs
-   * @param recent_cutoff timestamp to determine whether an output is recent
-   * @param min_count return only amounts with at least that many instances
-   *
-   * @return a set of amount/instances
-   */
-  virtual std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> get_output_histogram(const std::vector<uint64_t> &amounts, bool unlocked, uint64_t recent_cutoff, uint64_t min_count) const = 0;
-
   virtual bool get_output_distribution(uint64_t amount, uint64_t from_height, uint64_t to_height, std::vector<uint64_t> &distribution, uint64_t &base) const = 0;
 
   /**
@@ -2707,16 +2695,6 @@ public:
    * @brief return the total number of leaves (outputs) in the curve tree.
    */
   virtual uint64_t get_curve_tree_leaf_count() const = 0;
-
-  /**
-   * @brief get the hash for a specific layer/chunk in the tree.
-   *
-   * @param layer  layer index (0 = leaf layer)
-   * @param chunk  chunk index within the layer
-   * @param hash_out  32-byte output buffer
-   * @return true if the entry exists
-   */
-  virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const = 0;
 
   /**
    * @brief get the leaf data for a specific tree position.

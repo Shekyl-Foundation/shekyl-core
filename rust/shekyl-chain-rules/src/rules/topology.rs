@@ -47,13 +47,13 @@ impl Rule for A2 {
 impl BlockRule for A2 {
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
-        view: &V,
+        _view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
-        let expected = match view.tip()? {
+        let expected = match cx.tip {
             Some(tip) => tip.hash,
             None => Self::GENESIS_PREVIOUS,
         };
-        if cx.candidate.block.header.previous == expected {
+        if cx.candidate().block.header.previous == expected {
             Ok(Ok(()))
         } else {
             refused(Self::ROW, Locus::Block)

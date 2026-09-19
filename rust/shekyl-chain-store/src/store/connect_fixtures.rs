@@ -7,9 +7,17 @@
 //! header root a candidate carries (`root_at_height`) cannot drift from the
 //! root the connect of the parent wrote.
 
-use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
-use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{AttestationRoot, BlockHash, BlockWeight, CurveTreeRoot, LongTermWeight};
+use core::convert::Infallible;
+
+use shekyl_chain_rules::{
+    form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, RuleSet,
+    RuleSetId, StructurallyValid, Substrate,
+};
+use shekyl_difficulty::{seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
+use shekyl_types::{
+    AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash,
+    Timestamp,
+};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, PqcAuth, Transaction, TxPrefix};
 
@@ -132,9 +140,6 @@ pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
     ConnectFacts {
         weight: Fact::passed_through(BlockWeight::from_raw(1_000 + height)),
         long_term_weight: Fact::passed_through(LongTermWeight::from_raw(900 + height)),
-        cumulative_difficulty: Fact::passed_through(CumulativeDifficulty::from_raw(
-            u128::from(height + 1) * 100,
-        )),
         coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::from_raw(burned)),
         root_after: Fact::passed_through(CurveTreeRoot::from_bytes(
@@ -148,12 +153,80 @@ pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
     }
 }
 
+/// The world the fixtures are judged in: a clock after every fixture
+/// timestamp (`candidate` stamps `1_000 + 60·h`), and a longhash of zeros,
+/// which satisfies every target. The store's tests are about the store;
+/// the substrate is the validation crate's subject and is mocked here as
+/// plainly as possible.
+pub(super) struct FixtureSubstrate;
+
+impl FixtureSubstrate {
+    pub(super) const CLOCK: Timestamp = Timestamp::from_raw(1_000_000);
+}
+
+impl Substrate for FixtureSubstrate {
+    type Fault = Infallible;
+
+    fn local_clock(&self) -> Result<Timestamp, Infallible> {
+        Ok(Self::CLOCK)
+    }
+
+    fn longhash(&self, _: &[u8], _: &BlockHash) -> Result<PowHash, Infallible> {
+        Ok(PowHash::from_bytes([0; 32]))
+    }
+}
+
+/// The seed CEN-D3 expects for a candidate on `view`'s tip — what an honest
+/// driver claims to `form`: the null hash at genesis admission, else the
+/// identity of the block at `seedheight(connecting)`. Read from the same
+/// view the verdict will be minted against, as E2's replay driver will.
+fn expected_seed<'id, V: ChainView<'id>>(view: &V) -> Result<BlockHash, V::Fault> {
+    let Some(tip) = view.tip()? else {
+        return Ok(BlockHash::NULL);
+    };
+    let connecting = tip.height.to_raw() + 1;
+    let seed_height = seedheight(connecting, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG);
+    Ok(match view.block_at(BlockHeight::from_raw(seed_height))? {
+        AtHeight::Recorded(block) => block.hash,
+        AtHeight::AboveTip => panic!("the seed height is below the tip"),
+    })
+}
+
+/// The stateless stage over the fixture substrate, under `GENESIS`,
+/// claiming the seed `view` expects.
+pub(super) fn formed<'id, V: ChainView<'id>>(
+    view: &V,
+    candidate: Candidate,
+) -> Result<StructurallyValid, V::Fault> {
+    let seed = expected_seed(view)?;
+    Ok(
+        match form(
+            candidate,
+            &RuleSet::GENESIS,
+            &FixtureSubstrate,
+            seed,
+            FormAttempt::FIRST,
+        ) {
+            Ok(Ok(formed)) => formed,
+            Ok(Err(refused)) => panic!("the fixtures satisfy every stateless rule: {refused}"),
+            Err(never) => match never {},
+        },
+    )
+}
+
+/// Both stages; the store's own fault is the only one the fixtures expect
+/// to see in the outer position (a stale claim or a corrupt view would be
+/// a fixture bug, named as such).
 pub(super) fn judge<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    Ok(validate(candidate, view, &RuleSet::GENESIS)?
-        .expect("the fixtures satisfy every landed rule"))
+    match validate(formed(view, candidate)?, view, &RuleSet::GENESIS) {
+        Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
+        Err(Fault::View(fault)) => Err(fault),
+        Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
+        Err(Fault::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt}"),
+    }
 }
 
 pub(super) const GENESIS_ID: RuleSetId = RuleSetId::GENESIS;

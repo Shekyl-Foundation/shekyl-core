@@ -14,13 +14,13 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{RowStatus, RuleSet, RuleSetId};
+use shekyl_chain_rules::{form, validate, FormAttempt, RowStatus, RuleSet, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    candidate, coinbase, connect_genesis, facts, judge, spend, GENESIS_ID,
+    candidate, coinbase, connect_genesis, facts, judge, spend, FixtureSubstrate, GENESIS_ID,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -29,6 +29,7 @@ use crate::codec::{
     stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, Raw, TotalBurnedCell,
     TxIndex, TxOutputIndices, TxPrunedSegment, FACT_FIELDS,
 };
+use crate::ids::OutputSlot;
 use crate::lmdb_order::{Hash32, LmdbHashKey};
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
@@ -87,7 +88,9 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             timestamp: shekyl_types::Timestamp::from_raw(1_000),
             coins_generated: AtomicUnits::from_raw(1_000_000),
             weight: shekyl_types::BlockWeight::from_raw(1_000),
-            cumulative_difficulty: CumulativeDifficulty::from_raw(100),
+            // Derived by the validator, not passed through: block 0's work
+            // is its own target, 1 (CEN-D4; E6 slice 2).
+            cumulative_difficulty: CumulativeDifficulty::from_raw(1),
             hash: shekyl_types::BlockHash::from(block_hash),
             rct_outputs: 1,
             long_term_weight: shekyl_types::LongTermWeight::from_raw(900),
@@ -206,24 +209,28 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             local_index: shekyl_types::OutputIndexInTx::from_raw(0)
         }
     );
-    let members: Vec<OutKey> = snap
-        .open_multimap_table(OUTPUT_AMOUNTS)
-        .expect("t")
-        .get(0)
-        .expect("g")
-        .map(|m| OutKey::decode(m.expect("member").value()).expect("decodes"))
+    let amounts = snap.open_table(OUTPUT_AMOUNTS).expect("t");
+    let rows: Vec<((u64, u64), OutKey)> = amounts
+        .range::<(u64, u64)>(..)
+        .expect("range")
+        .map(|r| {
+            let (k, v) = r.expect("row");
+            (k.value(), v.value().decode().expect("decodes"))
+        })
         .collect();
     assert_eq!(
-        members,
-        vec![OutKey {
-            amount_index: crate::ids::AmountIndex::from_raw(0),
-            output_id: crate::ids::OutputStorageId::from_raw(0),
-            pubkey: shekyl_types::OneTimePubkey::from_bytes([0x40; 32]),
-            unlock_time: stored_timelock(60),
-            height: BlockHeight::from_raw(0),
-            commitment: shekyl_types::CommitmentBytes::from_bytes([0x70; 32]),
-        }],
-        "stored under amount 0 with the ct-base commitment"
+        rows,
+        vec![(
+            (0, 0),
+            OutKey {
+                output_id: crate::ids::OutputStorageId::from_raw(0),
+                pubkey: shekyl_types::OneTimePubkey::from_bytes([0x40; 32]),
+                unlock_time: stored_timelock(60),
+                height: BlockHeight::from_raw(0),
+                commitment: shekyl_types::CommitmentBytes::from_bytes([0x70; 32]),
+            }
+        )],
+        "keyed (amount 0, amount_index 0) with the ct-base commitment; the key carries the index"
     );
 
     // no burn, no key images, no total_burned yet — and the table *exists*
@@ -331,12 +338,12 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
         4
     );
     assert_eq!(
-        snap.open_multimap_table(OUTPUT_AMOUNTS)
+        snap.open_table(OUTPUT_AMOUNTS)
             .expect("t")
-            .get(0)
-            .expect("g")
-            .len(),
-        4
+            .len()
+            .expect("len"),
+        4,
+        "one bucket: amount_index runs 0..4 under amount 0, and equals output_id"
     );
     let info1 = snap
         .open_table(BLOCK_INFO)
@@ -528,31 +535,54 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
     cleanup(&path);
 }
 
-/// SI-9 for the derived `amount_index`: redb orders `output_amounts`
-/// members by index prefix *then* payload, so a second member under one
-/// index with a different payload is "new" to redb. `connect` checks
-/// `last + 1 == len` and that the first/last prefixes are not duplicated
-/// at the ends, so a hole or Copilot's `[0, 2, 2]` poisons before a second
-/// member under one index can be written.
 #[test]
-fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
-    let path = tmp("connect-amount-bucket");
+fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
+    // Same id, different set: `fakechain(7)` reuses `RuleSetId::GENESIS`.
+    // An id-only check would accept the fixed-target work as public-network
+    // GENESIS work; compared by value, `connect` refuses.
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let path = tmp("connect-fakechain");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let cand = candidate(0, BlockHash::NULL, Vec::new());
+        let formed = match form(
+            cand,
+            &seven,
+            &FixtureSubstrate,
+            BlockHash::NULL,
+            FormAttempt::FIRST,
+        ) {
+            Ok(Ok(formed)) => formed,
+            other => panic!("stateless stage: {other:?}"),
+        };
+        let valid = match validate(formed, &view, &seven) {
+            Ok(Ok(valid)) => valid,
+            other => panic!("view stage: {other:?}"),
+        };
+        Ok(batch.connect(valid, facts(0, 0), GENESIS_ID)?)
+    });
+    let want = StoreCannot::RuleSetNotInForce {
+        height: 0,
+        judged: seven.id(),
+        in_force: GENESIS_ID,
+    };
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
+    cleanup(&path);
+}
+
+/// Genesis, plant through `plant`, connect block 1 — SI-9 poisons and
+/// halts. The unique assertion is the planted keys; the scaffold is one
+/// helper so these belts cannot drift from each other.
+fn plant_then_connect_is_si9(
+    label: &str,
+    plant: impl FnOnce(&mut WriteBatch<'_, '_>) -> Result<(), StoreError>,
+) {
+    let path = tmp(label);
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
-    // Genesis put one member (index 0) under amount 0. Plant a foreign member
-    // whose prefix skips to 5: len becomes 2 but the highest prefix is 5.
     let planted: Result<(), TestErr> = store.write(|batch| {
-        let hole = OutKey {
-            amount_index: crate::ids::AmountIndex::from_raw(5),
-            output_id: crate::ids::OutputStorageId::from_raw(99),
-            pubkey: shekyl_types::OneTimePubkey::from_bytes([9; 32]),
-            unlock_time: stored_timelock(0),
-            height: BlockHeight::from_raw(0),
-            commitment: shekyl_types::CommitmentBytes::from_bytes([9; 32]),
-        };
-        batch
-            .open_multimap_table(OUTPUT_AMOUNTS)?
-            .insert(0, hole.encode().as_slice())?;
+        plant(batch)?;
         Ok(())
     });
     planted.expect("plant");
@@ -572,9 +602,15 @@ fn a_gapped_or_duplicated_amount_bucket_is_si9_not_a_second_member() {
     cleanup(&path);
 }
 
-fn amount_member(amount_index: u64, output_id: u64) -> OutKey {
+fn slot(amount: u64, index: u64) -> OutputSlot {
+    OutputSlot::new(
+        AtomicUnits::from_raw(amount),
+        crate::ids::AmountIndex::from_raw(index),
+    )
+}
+
+fn amount_record(output_id: u64) -> OutKey {
     OutKey {
-        amount_index: crate::ids::AmountIndex::from_raw(amount_index),
         output_id: crate::ids::OutputStorageId::from_raw(output_id),
         pubkey: shekyl_types::OneTimePubkey::from_bytes(
             [u8::try_from(output_id & 0xff).expect("byte"); 32],
@@ -585,65 +621,76 @@ fn amount_member(amount_index: u64, output_id: u64) -> OutKey {
     }
 }
 
-/// Compensating hole+duplicate at the high end: prefixes `[0, 2, 2]` have
-/// `len == 3` and `last == 2`, so `last + 1 == len` alone would accept.
-/// The end-peek refuses the duplicated last prefix.
+/// SI-9 on the keyed `output_amounts` (SOK-Q2): density is `last + 1 == len`
+/// over the one bucket. A planted row at index 5 makes `len == 2` with
+/// `last == 5`, so the next connect poisons before it writes.
 #[test]
-fn a_compensating_duplicate_at_the_amount_bucket_end_is_si9() {
-    let path = tmp("connect-amount-dup-end");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
-    let planted: Result<(), TestErr> = store.write(|batch| {
-        let mut amounts = batch.open_multimap_table(OUTPUT_AMOUNTS)?;
-        amounts.insert(0, amount_member(2, 98).encode().as_slice())?;
-        amounts.insert(0, amount_member(2, 99).encode().as_slice())?;
+fn a_gapped_amount_bucket_is_si9() {
+    plant_then_connect_is_si9("connect-amount-bucket", |batch| {
+        batch
+            .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
+            .insert(slot(0, 5).key(), amount_record(99).encoded().as_encoded())?;
         Ok(())
     });
-    planted.expect("plant");
-    let b1 = candidate(1, genesis.hash(), Vec::new());
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+}
+
+/// The single-bucket premise is checked, not assumed: a row under another
+/// amount is a non-miner, non-emission loud vout that reached the store —
+/// the validator's hole, SI-9, never a verdict.
+#[test]
+fn a_second_amount_bucket_is_si9_the_validators_hole_not_a_verdict() {
+    plant_then_connect_is_si9("connect-second-bucket", |batch| {
+        batch
+            .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
+            .insert(slot(7, 0).key(), amount_record(98).encoded().as_encoded())?;
+        Ok(())
     });
-    expect_row(&out, StoreInvariant::IdNotFresh);
-    assert_eq!(
-        store.connect_state(),
-        ConnectState::Halted {
-            at_height: BlockHeight::from_raw(1),
-            row: StoreInvariant::IdNotFresh,
-        }
-    );
-    cleanup(&path);
+}
+
+/// A hole in the confidential bucket compensated by a foreign-bucket row
+/// — `(0,0), (0,2), (7,5)` has `len == 3` and bucket-0 `last == 2`. The
+/// ends check refuses it: the last key's amount is `7`, not the bucket's.
+#[test]
+fn a_hole_compensated_by_a_foreign_bucket_row_is_still_si9() {
+    plant_then_connect_is_si9("connect-compensated-hole", |batch| {
+        let mut amounts = batch.open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?;
+        amounts.insert(slot(0, 2).key(), amount_record(2).encoded().as_encoded())?;
+        amounts.insert(slot(7, 5).key(), amount_record(3).encoded().as_encoded())?;
+        Ok(())
+    });
+}
+
+/// SOK-2: a planted `output_txs` row makes the next `output_id` 2 while
+/// the amount bucket's next index is 1. The two counters disagree; the
+/// write refuses a record whose key and `output_id` differ.
+#[test]
+fn amount_index_and_output_id_diverging_is_si9() {
+    plant_then_connect_is_si9("connect-two-counters", |batch| {
+        batch
+            .open_insert_table(OUTPUT_TXS, StoreInvariant::IdNotFresh)?
+            .insert(
+                1,
+                OutTx {
+                    tx_hash: shekyl_types::TxHash::from_bytes([0xab; 32]),
+                    local_index: shekyl_types::OutputIndexInTx::from_raw(0),
+                }
+                .encoded()
+                .as_encoded(),
+            )?;
+        Ok(())
+    });
 }
 
 /// Unique-key primary: `txs_pruned` keys `{0, 3}` have `len == 2`; using
 /// `len` as the next id would insert 2 over the hole.
 #[test]
 fn a_gapped_txs_pruned_primary_is_si9() {
-    let path = tmp("connect-txid-gap");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
-    let planted: Result<(), TestErr> = store.write(|batch| {
+    plant_then_connect_is_si9("connect-txid-gap", |batch| {
         batch
             .open_insert_table(TXS_PRUNED, StoreInvariant::IdNotFresh)?
             .insert(3, Raw::<TxPrunedSegment>::new(&[0u8; 1]))?;
         Ok(())
     });
-    planted.expect("plant");
-    let b1 = candidate(1, genesis.hash(), Vec::new());
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
-    });
-    expect_row(&out, StoreInvariant::IdNotFresh);
-    assert_eq!(
-        store.connect_state(),
-        ConnectState::Halted {
-            at_height: BlockHeight::from_raw(1),
-            row: StoreInvariant::IdNotFresh,
-        }
-    );
-    cleanup(&path);
 }
 
 #[test]
@@ -771,7 +818,6 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     let derived = ConnectFacts {
         weight: Fact::derived(shekyl_types::BlockWeight::from_raw(1_000)),
         long_term_weight: Fact::derived(shekyl_types::LongTermWeight::from_raw(900)),
-        cumulative_difficulty: Fact::derived(CumulativeDifficulty::from_raw(100)),
         coins_generated: Fact::derived(AtomicUnits::from_raw(1_000_000)),
         burned: Fact::derived(AtomicUnits::ZERO),
         root_after: Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32])),
@@ -850,7 +896,6 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         [
             "weight",
             "long_term_weight",
-            "cumulative_difficulty",
             "coins_generated",
             "long_term_effective_median"
         ]
@@ -861,7 +906,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         "unchanged"
     );
     assert!(prov.artifact_stamp().contains(
-        "passed-through=[weight,long_term_weight,cumulative_difficulty,coins_generated,\
+        "passed-through=[weight,long_term_weight,coins_generated,\
          long_term_effective_median] NOT-PARITY-EVIDENCE"
     ));
     // Monotone: a later fully-derived connect cannot narrow it, and a
@@ -931,23 +976,27 @@ fn passed_through_names_the_rows_that_delete_each_fact() {
         [
             "weight",
             "long_term_weight",
-            "cumulative_difficulty",
             "coins_generated",
             "burned",
             "root_after",
             "long_term_effective_median"
-        ]
+        ],
+        "six: cumulative_difficulty left with E6 slice 2 (CEN-D4 derives it)"
     );
     let mut some = all;
-    some.cumulative_difficulty = Fact::derived(CumulativeDifficulty::from_raw(100));
+    some.coins_generated = Fact::derived(AtomicUnits::from_raw(1_000_000));
     some.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32]));
     let remaining: Vec<DeletedBy> = some.passed_through().collect();
-    assert_eq!(remaining.len(), 5);
+    assert_eq!(remaining.len(), 4);
     assert!(remaining
         .iter()
         .all(|d| !d.rows.is_empty() && !d.slice.is_empty()));
     assert!(remaining
         .iter()
         .any(|d| d.field == "burned" && d.rows.contains(&"CEN-F17")));
-    assert_eq!(ConnectFacts::DELETED_BY.len(), 7);
+    assert_eq!(
+        ConnectFacts::DELETED_BY.len(),
+        6,
+        "seven until E6 slice 2 derived cumulative_difficulty"
+    );
 }

@@ -330,7 +330,7 @@ fn client_reconstructs_consensus_root_at_every_height() {
             let reference = ReferenceBlock {
                 height: BlockHeight::from_raw(blk.height),
                 curve_tree_root: CurveTreeRoot::from_bytes(blk.root),
-                block_hash: BlockHash::from_bytes([0u8; 32]),
+                block_hash: BlockHash::NULL,
             };
             if client.verify_root(&reference).is_err() {
                 mismatches.push(blk.height);

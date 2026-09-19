@@ -1011,8 +1011,12 @@ earlier "swaps its reader to the daemon's `get_prunable_range`" is
 2026-09-18 on review): the wallet lane, as its own design round —
 unbuilt by design, not by omission.** It is where the design's weight
 now sits, and every one of its decisions is unmade: fill from the local
-daemon during the grace window (Q9) and verify on fill against the
-daemon's hash rows; key by shard over `[b_k, b_{k+1})`; serve per-tx
+daemon during the grace window (Q9) and verify on fill **against the
+txid** — *amended 2026-09-19 by the wallet lane's `WSS-Q5` ruling
+([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.4): a filler holds the whole
+transaction, so it recomputes the consensus commitment itself rather than
+trusting a supplied digest; the hash rows remain the **discarding daemon's**
+own need for `DRS-D10` skeleton replay*; key by shard over `[b_k, b_{k+1})`; serve per-tx
 through `shekyl-p-serve` (`SF-D8`'s content half, sub-PR 2); carry its
 own lapse tail (#775's retention row); receive recovery shards the
 daemon hands across and retain them; hold the Foundation `CompleteTree`
@@ -1281,7 +1285,7 @@ or the question block named). Grades as recorded there.
 | F6 | **RETRACTED** — the launch-state fork; genesis does not precede this design (`S0`) | record §6 |
 | F7 | The intermediate-layer prune already runs on every node; leaves are the boundary | record §6 |
 | F8 | Q3 is not node-local today: the serve-credit verifier reads leaves (`get_curve_tree_leaf_chunk`) | record §6; Q3 |
-| F9 | Silent zero-fill of a missing leaf in the RPC path — fixed PR #733 | record §6 |
+| F9 | Silent zero-fill of a missing leaf in the RPC path — fixed PR #733; the RPC path itself was removed 2026-09-18 (`SOK-10` Q7 → A, path-FFI lane) — moot thereafter | record §6 |
 | F10 | `trim_curve_tree` reads the boundary chunk on pop; discard floor `≥ D_max` and a defined failure both owed | record §6; Q2, Q11 |
 | F11 | DRS-0 slice A's accumulator grades assumed universal leaf retention — handed as the boundary `W`, not re-grades | record §6 |
 | F12 | Leaves are a cache of a pure function of the block corpus; set-B scarcity as scoped does not exist | record §6; Q6 |
@@ -1357,7 +1361,9 @@ BelowAnchor(anchor)` — is forced by `StoreCannot::RuleSetNotInForce`.
 **Every `PDM-Q*` is now RULED or CLOSED.** What carries on past the
 round, by owner: **the wallet lane** — the **archiver serving-store
 rebuild** (Q12: `LeafStore` around bodies — fill-from-daemon in the grace
-window, verify-on-fill against the hash rows, shard-keyed, per-tx serve,
+window, verify-on-fill **against the txid** (`WSS-Q5`, 2026-09-19),
+shard-keyed, **whole-shard serve** (`WSS-Q7`: `SF-D1` kept the read
+whole-shard; it is *verification* that is per-tx),
 lapse tail, recovery intake, the Foundation floor), a design round of its
 own — **the largest unbuilt thing this charter names**; ~~the lane's active
 `CTS-` round (#776) is a leaf-unit shape rewrite and does not yet scope

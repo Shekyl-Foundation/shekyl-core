@@ -354,7 +354,15 @@ scalar_u64! {
 
 scalar_u64! {
     /// A ledger-wide global output index (the daemon's `next_output_seq`
-    /// counter), assigned densely to every output in drain order.
+    /// counter), assigned densely to every output in **chain scan order** —
+    /// coinbase first, then each transaction's `vout` in block order.
+    ///
+    /// This is **not** the curve-tree position: leaves enter the tree in
+    /// `(maturity, gindex)` drain order and coinbase matures 50 blocks after
+    /// a transaction output from the same block, so the two orders diverge in
+    /// the first block that carries a transaction (`SOK-10`). The tree's own
+    /// dense position is `shekyl_curve_tree::TreePosition`; a value of this
+    /// type is never a tree position and never converts to one implicitly.
     ///
     /// Canonical replacement for the historical `shekyl-curve-tree::Gindex`.
     /// Distinct from [`OutputIndexInTx`]: this is the chain-wide position, not
@@ -440,8 +448,9 @@ scalar_u64! {
 
 scalar_u64! {
     /// A leaf's position **inside a frozen segment** (the archival serve unit),
-    /// not a ledger-wide [`GlobalOutputIndex`] and not a curve-tree
-    /// drain-order `TreePosition`.
+    /// not a ledger-wide [`GlobalOutputIndex`] and not the curve tree's dense
+    /// drain-order position (`shekyl_curve_tree::TreePosition` — that type is
+    /// not in this crate).
     LeafIndex
 }
 
@@ -461,10 +470,27 @@ scalar_u64! {
 }
 
 hash32! {
+    /// A block's **proof-of-work longhash** — RandomX v2 over the block's
+    /// PoW preimage (`Block::pow_blob`) under a seed block's identity
+    /// (CEN-D2, CEN-D3). What CEN-D1 compares against the difficulty target
+    /// (`hash · difficulty < 2^256`, CEN-D1b).
+    ///
+    /// Not a [`BlockHash`]: the identity is `keccak256` over the same bytes
+    /// with a length prefix, and the two are never interchangeable — a
+    /// longhash passed as a block id, or a block id compared against a
+    /// target, is exactly the transposition this type refuses. Minted by
+    /// the validation crate's stateless stage (`shekyl-chain-rules::form`,
+    /// DRS-E6 slice 2) from a `Substrate::longhash` the daemon implements;
+    /// no consensus code computes RandomX except behind that call.
+    PowHash
+}
+
+hash32! {
     /// A block identity hash.
     ///
-    /// Distinct from [`TxHash`] and from a curve-tree root: a block hash can
-    /// never be passed where a transaction hash is expected.
+    /// Distinct from [`TxHash`], from [`PowHash`] (the longhash over the
+    /// same preimage), and from a curve-tree root: a block hash can never
+    /// be passed where a transaction hash is expected.
     BlockHash
 }
 
