@@ -14,13 +14,13 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{RowStatus, RuleSet, RuleSetId};
+use shekyl_chain_rules::{form, validate, FormAttempt, RowStatus, RuleSet, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    candidate, coinbase, connect_genesis, facts, judge, spend, GENESIS_ID,
+    candidate, coinbase, connect_genesis, facts, judge, spend, FixtureSubstrate, GENESIS_ID,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -532,6 +532,42 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
         .expect("sealed")
         .is_empty()
         .expect("len"));
+    cleanup(&path);
+}
+
+#[test]
+fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
+    // Same id, different set: `fakechain(7)` reuses `RuleSetId::GENESIS`.
+    // An id-only check would accept the fixed-target work as public-network
+    // GENESIS work; compared by value, `connect` refuses.
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let path = tmp("connect-fakechain");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let cand = candidate(0, BlockHash::NULL, Vec::new());
+        let formed = match form(
+            cand,
+            &seven,
+            &FixtureSubstrate,
+            BlockHash::NULL,
+            FormAttempt::FIRST,
+        ) {
+            Ok(Ok(formed)) => formed,
+            other => panic!("stateless stage: {other:?}"),
+        };
+        let valid = match validate(formed, &view, &seven) {
+            Ok(Ok(valid)) => valid,
+            other => panic!("view stage: {other:?}"),
+        };
+        Ok(batch.connect(valid, facts(0, 0), GENESIS_ID)?)
+    });
+    let want = StoreCannot::RuleSetNotInForce {
+        height: 0,
+        judged: seven.id(),
+        in_force: GENESIS_ID,
+    };
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
     cleanup(&path);
 }
 

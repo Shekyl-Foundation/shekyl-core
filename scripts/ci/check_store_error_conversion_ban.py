@@ -83,7 +83,7 @@ STORE_TOKEN = r"(?:StoreError|StoreInvariant|InvariantViolated|StoreCannot)"
 # (`Fault::View(_) => InvalidBlock…` would launder the store's fault through
 # the wrapper the bare STORE_TOKEN cannot see).
 FAULT_TOKEN = r"(?:Stale|Corrupt|Fault)"
-FAULT_ARM_TOKEN = r"(?:Stale|Fault::(?:View|Stale|Corrupt))"
+FAULT_ARM_TOKEN = r"(?:Stale|Corrupt|Fault::(?:View|Stale|Corrupt))"
 VERDICT_TOKEN = r"InvalidBlock"
 STORE_RE = re.compile(rf"\b(?:{STORE_TOKEN}|{FAULT_TOKEN})\b")
 STORE_ARM_RE = re.compile(rf"\b(?:{STORE_TOKEN}|{FAULT_ARM_TOKEN})\b")
@@ -471,6 +471,11 @@ def selftest() -> None:
     run(
         "clause 3: view fault laundered through the wrapper",
         {E: STORE_ERR, V: "match f {\n    Fault::View(_) => InvalidBlock::new(row, locus),\n}\n"},
+        "clause 3",
+    )
+    run(
+        "clause 3: unqualified Corrupt arm onto verdict",
+        {E: STORE_ERR, V: "match f {\n    Corrupt(_) => InvalidBlock::new(row, locus),\n}\n"},
         "clause 3",
     )
     run(

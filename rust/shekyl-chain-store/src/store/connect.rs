@@ -344,14 +344,16 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             (height, parent_tx_count)
         };
-        // Resolve `in_force` before comparing it with the verdict's id: a
-        // `ChainValid` only ever carries an issued id, so an unissued
-        // `in_force` would otherwise always report as a mismatch and the
-        // unknown-id refusal could never fire (PR #757 review). With one
-        // rule set issued today the mismatch arm is reached only once a
-        // second set exists; it is the contract, not dead code.
+        // Resolve `in_force` before comparing it with the verdict: a
+        // `ChainValid` only ever carries an issued id *or* a Fakechain
+        // set that reuses that id, so an unissued `in_force` would
+        // otherwise always report as a mismatch and the unknown-id
+        // refusal could never fire (PR #757 review). Compared by
+        // **value**: Fakechain `Fixed` reuses `RuleSetId::GENESIS`, and
+        // an id-only check would accept fixed-target work as public-
+        // network GENESIS work.
         let rule_set = RuleSet::for_id(in_force).ok_or(StoreCannot::RuleSetUnknown(in_force))?;
-        if valid.rule_set_id() != in_force {
+        if valid.rule_set() != rule_set {
             return Err(StoreCannot::RuleSetNotInForce {
                 height,
                 judged: valid.rule_set_id(),
