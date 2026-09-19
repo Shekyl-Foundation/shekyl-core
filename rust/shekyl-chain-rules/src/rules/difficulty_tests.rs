@@ -53,14 +53,30 @@ fn target_on(chain: &MockChain) -> (Target, RuleCoverage) {
 // --- CEN-D4 ---------------------------------------------------------------
 
 #[test]
-fn cen_d4_genesis_admission_is_the_genesis_constant() {
+fn cen_d4_the_genesis_block_is_judged_at_one_not_at_the_genesis_constant() {
+    // Block 0 has no tip and the DAA is not consulted for it: its own PoW
+    // difficulty is 1 (builder.rs mines nonce 0 against it; consts.rs pins
+    // GENESIS_DIFFICULTY > 1 to keep the two apart). Judging genesis at the
+    // constant would refuse the shipped genesis block.
     let (target, coverage) = target_on(&MockChain::default());
+    assert_eq!(target.difficulty(), Difficulty::from_raw(1));
+    // `shekyl-difficulty` const-asserts GENESIS_DIFFICULTY > 1 (consts.rs:94)
+    // so the two subjects cannot collide; this fixture pins which one block
+    // 0 gets.
+    assert!(coverage.contains(CenRow::D4));
+    assert!(coverage.contains(CenRow::D6), "the mint records D6");
+}
+
+#[test]
+fn cen_d4_block_one_is_the_first_judged_at_the_genesis_constant() {
+    // Tip at 0: lwma1_next's chain_height = 0 arm — the genesis constant
+    // for heights 1..N.
+    let (chain, _, _) = worked_chain(1);
+    let (target, _) = target_on(&chain);
     assert_eq!(
         target.difficulty(),
         Difficulty::from_raw(GENESIS_DIFFICULTY)
     );
-    assert!(coverage.contains(CenRow::D4));
-    assert!(coverage.contains(CenRow::D6), "the mint records D6");
 }
 
 #[test]
@@ -185,6 +201,7 @@ fn cumulative_after_genesis_is_the_target_alone() {
         D4::cumulative_after(&view, BlockHeight::ZERO, target).expect("no fault")
     });
     assert_eq!(after.to_raw(), target.difficulty().to_raw());
+    assert_eq!(after.to_raw(), 1, "block 0's work is its own difficulty, 1");
 }
 
 #[test]
@@ -282,7 +299,8 @@ fn cen_d7_a_fakechain_rule_set_fixes_the_target_and_forces_one_at_genesis() {
 
 #[test]
 fn cen_d7_records_under_an_issued_rule_set_and_overrides_nothing() {
-    let (target, coverage) = target_on(&MockChain::default());
+    let (chain, _, _) = worked_chain(1);
+    let (target, coverage) = target_on(&chain);
     assert!(coverage.contains(CenRow::D7), "consulted on every block");
     assert_eq!(
         target.difficulty(),

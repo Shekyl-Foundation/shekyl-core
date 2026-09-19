@@ -81,9 +81,14 @@ impl Target {
         Self(Difficulty::from_raw(fixed.get()))
     }
 
-    /// The target the C++ forces at height 0 under `--fixed-difficulty`
-    /// (`blockchain.cpp:975`: `m_db->height() ? m_fixed_difficulty : 1`).
-    const ONE: Self = Self(Difficulty::from_raw(1));
+    /// The **genesis block's own** PoW difficulty. Block 0 has no tip, so
+    /// the DAA is never consulted for it: its nonce satisfies `check_hash`
+    /// at `1` (`shekyl-genesis-tool/src/builder.rs`), and `shekyl-difficulty`
+    /// pins `GENESIS_DIFFICULTY > 1` (`consts.rs:94`–`:102`) precisely to
+    /// keep the two apart — `GENESIS_DIFFICULTY` is the DAA's short-circuit
+    /// for heights `1..N`, not block 0's target. The C++ forces the same
+    /// `1` at height 0 under `--fixed-difficulty` (`blockchain.cpp:975`).
+    const GENESIS_BLOCK: Self = Self(Difficulty::from_raw(1));
 }
 
 impl fmt::Debug for Target {
@@ -141,9 +146,10 @@ impl D4 {
     ///
     /// `lwma1_next`'s `chain_height` is the **tip's** height — the C++
     /// passes `height − 1` of its block count (`blockchain.cpp:1002`) — so
-    /// it is `connecting − 1`, and `0` for genesis admission, where the
-    /// function short-circuits to `GENESIS_DIFFICULTY` without reading the
-    /// slices.
+    /// it is `connecting − 1`. Its `chain_height = 0` arm is therefore the
+    /// target for block **1** given a tip at 0; block 0 itself has no tip,
+    /// the DAA is not consulted, and its target is
+    /// [`Target::GENESIS_BLOCK`] — `1`, under every rule set.
     pub(crate) fn target<'id, V: ChainView<'id>>(
         view: &V,
         connecting: BlockHeight,
@@ -154,7 +160,11 @@ impl D4 {
         if let Some(fixed) = D7::fixed_target(rule_set, connecting, coverage) {
             return Ok(fixed);
         }
-        let chain_height = BlockHeight::from_raw(connecting.to_raw().saturating_sub(1));
+        let Some(chain_height) = connecting.to_raw().checked_sub(1) else {
+            coverage.insert(D6::ROW);
+            return Ok(Target::GENESIS_BLOCK);
+        };
+        let chain_height = BlockHeight::from_raw(chain_height);
         let window = Self::window(view, chain_height)?;
         let difficulty = match lwma1_next(chain_height, &window.timestamps, &window.work) {
             Ok(difficulty) => difficulty,
@@ -260,7 +270,7 @@ impl D7 {
         coverage.insert(Self::ROW);
         match rule_set.difficulty() {
             DifficultyRule::Lwma1 => None,
-            DifficultyRule::Fixed(_) if connecting.is_zero() => Some(Target::ONE),
+            DifficultyRule::Fixed(_) if connecting.is_zero() => Some(Target::GENESIS_BLOCK),
             DifficultyRule::Fixed(fixed) => Some(fixed),
         }
     }
