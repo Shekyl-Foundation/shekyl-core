@@ -344,6 +344,17 @@ breath as ruling it defective. The digest **survives with changed status**:
 
 <!-- conformance-tally: 126 CHECKED-CONFORMANT, 2 DIVERGENT, 3 UNREVIEWED -->
 
+**Adjudication semantics (RULED 2026-09-19, E2 direction —
+[`DRS_E2_REPLAY_DRIVER.md`](DRS_E2_REPLAY_DRIVER.md) §0):** the C++ trace is
+**evidence, not a target**. A Rust/C++ divergence resolves to exactly one of
+*fix Rust* or *record a `ReviewedDivergence` with the Rust behaviour
+canonical* — there is no third arm, and C++ is never fixed; a trace row
+tainted by C++'s wrongness is **annotated as adjudicated**, not repaired at the
+source; after cutover the fixtures re-baseline from Rust and become permanent
+regression gates. A row sourced from a **borrowed** (passed-through) fact is
+never evidence and never grades CHECKED-CONFORMANT; it flips to real evidence
+when Rust derives the fact, with no harness change.
+
 **A bucket is not a conformance claim.** The census's buckets say whether a
 rule is *specified and ratified on record* — they say nothing about whether the
 C++ **implements** the spec it was ratified against. Those are different axes,

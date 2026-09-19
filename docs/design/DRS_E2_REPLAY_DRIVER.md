@@ -15,17 +15,33 @@ harness"*), and the **DRS-E2** row (§6.1: acceptance per conformance state,
 CSR-3a). Identifier families **RD-Q** (questions) and **RD-F** (findings),
 registered in `IMPLEMENTATION_INDEX.md` §2 with this file.
 
-## 0. The ruling (2026-09-19)
+## 0. The ruling (2026-09-19, ruled by Rick; direction memo of 2026-09-19, ground `origin/dev@306af9bae`, #788 at `91a20216`)
 
-> **The C++ daemon is a non-canonical reference — divergences are adjudicated
-> against the spec, never resolved toward C++; it is extracted from and never
-> fixed. All C++ written for E2 is harvest shims that die at cutover. The
-> ingest pipeline is production code shared by E2 and E3, with the replay
-> driver as its first source. The sole surviving C++ is the mining JIT, behind
-> a permanent parity gate.**
+> **The C++ daemon is a non-canonical reference: divergences adjudicate
+> against the spec, never resolve toward C++, and C++ is never fixed. All C++
+> written for E2 is harvest shims that die at cutover. The sole surviving C++
+> is the `external/randomx-v2` JIT behind the existing `randomx-v2-sys`
+> boundary, its parity vectors promoted to a permanent gate re-run on either
+> pin's move. The ingest pipeline is production code shared by E2 and E3, with
+> the replay driver as its first source — and #788 is amended before merge so
+> its pre-flight doesn't land asserting the superseded scope.**
 
-Everything below is derivable from that sentence; the Round-0 text that it
-superseded is kept where the change is instructive and marked in-line.
+### 0.1 How this file records the memo
+
+The memo carries **two kinds** of content and this file marks them
+differently: what is **RULED** (§0 verbatim; the memo's §2 amendments — the
+"is not" clause, RD-Q1, RD-Q2 with typed doors, the grader's law, the
+adjudication sentence) is tagged `RULED (memo §2)` where it lands; what is
+**design review feeding Round 1** (the memo's §3 — pipeline stage shape,
+mutation and reorg corpus families, `Stale::Seed` grounding, JIT
+consequences — and its §4 questions Q-A–Q-D) is tagged `REVIEW INPUT` and is
+answered or posed in §4, never recorded as ruled. The memo was written against
+#788 at `91a20216` (Round 0 as first pushed); commits `1c31927f8` … `156bbb60b`
+had already amended most of its §2 from the same reviewer's earlier rounds.
+This revision (`e80cdbf23` onward, re-pinned to `306af9bae`) brings the
+wording into conformity with the memo and adds what was net-new: the typed
+doors, the corpus/trace contents, the two corpus families, Q-B and Q-D, and
+the `randomx-v2-sys` correction to RD-F12.
 
 **Why this file exists now.** Six pieces of landed or planned work route to
 "the driver" and, until this file, no document, branch or PR owned it —
@@ -41,7 +57,7 @@ fixtures' `0xc0 + h` root bytes cap chains at 63; no LWMA-1 window past `N`).
 
 ## 1. What this increment builds
 
-### 1.1 The inversion (RULED 2026-09-19)
+### 1.1 The inversion (RULED, §0) — and the stage shape (REVIEW INPUT, memo §3)
 
 Round 0 wrote *"the driver is not the daemon's live connect path (that is
 cutover, DRS-E3+)."* **Superseded.** The C++ codebase's deepest defect is
@@ -50,7 +66,8 @@ path the network never runs, so its tests exercise code production does not.
 An E2 bench tool followed by a separately built E3 live path would reproduce
 that in Rust on day one. Instead the **block-ingest pipeline is built once, as
 production code**, and the E2 driver *is* that pipeline with a different
-source and an extra sink:
+source and an extra sink. That much is ruled. The stage decomposition below
+is the memo's design input for Round 1 (composition is RD-Q11):
 
 ```text
 Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect ──► Sinks
@@ -80,13 +97,18 @@ E3's cutover then stops being "build the live connect path" and becomes
 at cutover (§1.3), so the pipeline E2 hardens is not merely shared with
 production — it is the only ingest the daemon will ever have.
 
-### 1.2 What it is not
+### 1.2 What it is not (RULED, memo §2)
 
-A second validator (D12 (i): one crate); an FFI shim minting `ChainValid`
-from the C++ verdict (rejected, D12 (ii)); a place where any consensus value
-is computed outside `shekyl-chain-rules` (C2-R8 Q4 — the facts it passes
-through are *read* from the LMDB record, never computed); a consumer of the
-mining JIT for validation (§1.3).
+**Not a second connect path** — the pipeline the driver drives *is* the
+production ingest spine; E3's cutover swaps its source and drops the grader.
+(This replaces Round 0's *"not the daemon's live connect path (that is
+cutover, DRS-E3+)"*, superseded before merge so the pre-flight does not land
+asserting the old scope.) The other three stand and are strengthened: not a
+second validator (D12 (i): one crate, now also one ingest path); not an FFI
+shim minting `ChainValid` from the C++ verdict (rejected, D12 (ii)); not a
+place where any consensus value is computed outside `shekyl-chain-rules`
+(C2-R8 Q4 — borrowed facts are *read* from the LMDB record, never computed).
+And not a consumer of the mining JIT for validation (§1.3).
 
 ### 1.3 The C++ posture (RULED 2026-09-19)
 
@@ -297,26 +319,51 @@ verdict.
 `dev`; `shekyl-pow-randomx/src/seed_epoch.rs` is gone. §3.2's citation is now
 the tree's.
 
+
+### 3.8 Design inputs from the memo (REVIEW INPUT — not ruled; feed Round 1)
+
+- **Pipeline stage shape** — §1.1's diagram and supervision map; composition
+  is RD-Q11.
+- **Two more corpus families.** *Mutations*: systematic invalidations of a
+  valid corpus — header flips, wrong reward, reordered transactions, double
+  spend, bad seed, **future timestamp** (which closes §5's FTL row) — with
+  **spec-first expected verdicts**, a regtest C++ daemon as *secondary*
+  evidence only (§1.3: evidence, not target). *Reorgs*: forked branches
+  through `pop` + `connect`, digests after each switch — the only family that
+  exercises the pop path. Both are `Source` implementors (§1.1); both land
+  after the corpus source proves the loop (RD-Q8's sequencing).
+- **`Stale::Seed`, grounded** (the RD-Q3/RD-Q5 fix): `fault.rs:70` (the arm),
+  `block.rs:132` (the claimed seed on `StructurallyValid`) — verified at
+  `306af9bae`. In replay of a fixed chain any occurrence is a driver defect:
+  record and surface the first; exercise the retry path by an
+  injected-wrong-seed test; the live-mode DoS bound (Q8) is untouched.
+- **JIT consequences.** Verification is `shekyl-pow-randomx` everywhere
+  including the driver — never the JIT in replay, or E2 tests a hasher
+  production doesn't run. **`PowHash`'s distinctness from `BlockHash`** (#785)
+  is the type seam the parity gate asserts across (RD-Q12).
+
 ## 4. Questions — Round 0 defaults, with the 2026-09-19 rulings in-line
 
 | Q | Question | Disposition | Why |
 | --- | --- | --- | --- |
-| **RD-Q1** | **Home.** | **RULED: a new crate, `shekyl-chain-ingest`** — the production ingest pipeline (§1.1), depending on rules + store + `shekyl-pow-randomx`, with the replay driver as its first `src/bin/`. *Round-0 default was `shekyl-chain-replay`, "a test tool"; same dependency shape, different name and life expectancy.* Rule 18: the corpus/trace format types live in the ingest crate (or `shekyl-store-codec` once CTS PR A lands), never in a binary. | The store crate is `#![deny(unsafe_code)]` and names neither RandomX nor the verdict type (conversion ban clause 2); the pipeline keeps the store ignorant of the validator's faults and G1 trivially true. |
-| **RD-Q2** | **Block, body and fact source** (§3.4). | **RULED: corpus from RPC, trace from one LMDB exporter → bytes across the FFI → a Rust writer; the format minted in Rust with a version constant, one serializer shared by writer and reader.** *Round-0 default (c) — extend `blockchain_export`'s bootstrap file — is **withdrawn** (RD-F9): that container is Monero's, serialized with epee, and a Rust reader of it is a second parser of an inherited format, rule 16's pattern.* Keeps everything that made (c) attractive (offline, one artifact per chain, no LMDB crate) and keeps the C++ change a transport shim that dies at cutover (§1.3). | Byte transport across the FFI is what D12 allows; verdicts are what it rejected. The digest walker (`logical_state_digest.cpp` → FFI) is the existing shape. |
-| **RD-Q3** | **Production `Substrate`.** | **Default holds with one correction:** two-cache `CacheStore` keyed by the chain's seed at `seedheight(h)`, swapped at epoch boundaries; wall clock. *Round 0 called the retry loop "load-bearing" at the boundary; **withdrawn** (RD-F10) — the driver takes the seed from the chain it replays, so a `Stale::Seed` cannot arise from a correct driver; it is a defect signal (RD-Q5).* Throughput: parallel `form` workers over `VmStatePool` (§1.1) now; the Rust dataset mode is an **open option gated on a measurement E2 itself produces** — the pipeline's metrics sink records light-mode wall-clock per hash and per block, which is the number `RANDOMX_V2_MINING_ASYMMETRY.md` option (a) has been waiting for (RD-F11); never the JIT (§1.3). **Caveat:** C1's FTL leg reads the clock and a historical block is always below `now + FTL`, so replay cannot exercise C1's refusal — recorded in §5. | Reuses the daemon's cache lifecycle; the epoch boundary is where a stale cache would silently produce wrong longhashes, and that now surfaces as a defect, not a retry. |
+| **RD-Q1** | **Home.** | **RULED (memo §2): the new crate is the production ingest crate**, depending on rules + store + `shekyl-pow-randomx`, with the replay driver as its first `src/bin/`; corpus/trace format types live in this crate (or `shekyl-store-codec` once CTS PR A lands), never in a binary. **Its name is Q-A → default `shekyl-chain-ingest`** (REVIEW INPUT; adopted unless Round 1 objects). *Round-0 default was `shekyl-chain-replay`, "a test tool" — same dependency shape, different life expectancy.* | The store crate is `#![deny(unsafe_code)]` and names neither RandomX nor the verdict type (conversion ban clause 2); the pipeline keeps the store ignorant of the validator's faults and G1 trivially true. |
+| **RD-Q2** | **Block, body and fact source** (§3.4). | **RULED (memo §2): corpus + trace, with typed doors.** **Corpus** — *network-shaped only*: per height, the block plus full transaction bodies in header order (what `Candidate` consumes, `block.rs:88`–`:93`), taken from an **unpruned** node, declaring its prune state and refused on mismatch; format minted in Rust, versioned — the Monero bootstrap/epee container is **not** extended (rules 42/16); **zero C++** — the existing block-by-height read suffices. **Trace** — the six facts, cumulative difficulty, digest checkpoints, and (later) verdicts — produced by **one** C++ exporter shim that walks LMDB and hands bytes to a Rust writer, deletable in the same commit that deletes the daemon. **The doors are the grader's law:** `expect(h)` feeds *only* the grader; `borrow(h)` feeds `connect` for facts Rust does not derive yet, keyed off `Fact::origin` — a borrowed value is never evidence (RD-Q6). RD-F1's option matrix collapses to this; RD-F2 dissolves — no LMDB crate enters the workspace. *Round-0 default (c) withdrawn (RD-F9).* | Byte transport across the FFI is what D12 allows; verdicts are what it rejected. The digest walker (`logical_state_digest.cpp` → FFI) is the existing shape. Two doors with different types make "the grader read a borrowed fact as evidence" a compile error, not a review catch. |
+| **RD-Q3** | **Production `Substrate`.** | **Default holds with one correction:** two-cache `CacheStore` keyed by the chain's seed at `seedheight(h)`, swapped at epoch boundaries; wall clock. *Round 0 called the retry loop "load-bearing" at the boundary; **withdrawn** (RD-F10) — the driver takes the seed from the chain it replays, so a `Stale::Seed` cannot arise from a correct driver; it is a defect signal (RD-Q5).* Throughput: parallel `form` workers over `VmStatePool` (§1.1) now; the Rust dataset mode is an **open option gated on a measurement E2 itself produces** — the pipeline's metrics sink records light-mode wall-clock per hash and per block, which is the number `RANDOMX_V2_MINING_ASYMMETRY.md` option (a) has been waiting for (RD-F11); never the JIT (§1.3). **Memo Q-C answered here:** checked at source — `shekyl-pow-randomx` does not expose full-dataset verification (`Cache::derive_item`, `cache.rs:449`; no public dataset builder) and cannot "cheaply" grow one inside this increment (it is the RandomX lane's and a 2 GiB-per-epoch provisioning question, rule 76); so parallel `form` is the win now, and the benchmark this pipeline emits is what decides the rest. **Caveat:** C1's FTL leg reads the clock and a historical block is always below `now + FTL`, so replay cannot exercise C1's refusal — recorded in §5. | Reuses the daemon's cache lifecycle; the epoch boundary is where a stale cache would silently produce wrong longhashes, and that now surfaces as a defect, not a retry. |
 | **RD-Q4** | **`Fault::Corrupt` at the store.** | **RULED as defaulted:** `WriteBatch::refuse_corrupt(Corrupt) -> StoreError`, inside the batch, arming the poison at the noted height with a `StoreInvariant` row mapped from the `Corrupt` arm (new SI rows minted with it), returning the `InvariantViolated` the pipeline propagates. Minted here **with its caller** — the commit-9 scope #785 shed, as ruled 2026-09-19. | The validator saw what a belt would have; the store's halt is the consequence and must poison *this* batch. Taking the value keeps the store from naming `CenRow`s it does not own. |
 | **RD-Q5** | **The retry loop and `Stale::Seed` in replay.** | **RULED:** the loop lives in the pipeline (`form` → `validate`; on `Stale::Seed` re-`form` with the expected seed and `attempt.next()`; `Exhausted` → terminal run error). **In replay every `Stale::Seed` is a driver defect: the run records and surfaces the first occurrence rather than retrying it away**, and **the retry path is exercised by a test that injects a wrong seed**, not by waiting for a bug. The live-daemon role (Q8's DoS bound) is unaffected. | Resolves the RD-Q3/RD-Q5 contradiction Round 0 carried (RD-F10). |
-| **RD-Q6** | **Grading.** | **RULED as defaulted, plus one rule:** Python extractor → JSON → the pure Rust grader, reusing `drs_artifact.py`'s schema discipline. **Rows whose value is sourced from a passed-through fact grade as not-evidence** ("borrowed is never evidence", RD-F7): identity there is copying, not conformance. Under §1.3 the rule's point is honesty about progress toward Rust deriving everything, not fidelity to C++. | The register is prose Python already parses (`check_conformance_coverage.py`); the grade is reproducible from the artifact alone. |
+| **RD-Q6** | **Grading.** | **RULED as defaulted, plus the grader's law (memo §2):** Python extractor → JSON → the pure Rust grader, reusing `drs_artifact.py`'s schema discipline. **A borrowed value is never evidence** — a row sourced from a borrowed fact (`Fact::origin == PassedThrough`, reached through `borrow(h)`) grades not-evidence, never CHECKED-CONFORMANT (RD-F7). As slices derive facts, rows flip to real evidence **with no harness change**; **progress is the count of derived-and-conformant rows.** Adjudication semantics (one sentence, also in the grader doc — `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1): the trace is evidence, not a target; a divergence resolves to *fix Rust* or *`ReviewedDivergence` with Rust canonical* — no third arm; tainted trace rows are annotated; fixtures re-baseline from Rust after cutover, becoming permanent regression gates. RD-Q9's producer/consumer split refines *which* rows the law reaches. | The register is prose Python already parses (`check_conformance_coverage.py`); the grade is reproducible from the artifact alone. |
 | **RD-Q7** | **Fakechain wiring.** | **RULED as defaulted:** the driver takes `--fixed-difficulty n` → `RuleSet::fakechain(n)`, refused unless the nettype is regtest; the `Network::Fakechain` witness stays its own change (12 files / 9 crates). | The consumers need the lever, not the witness. |
 | **RD-Q8** | **First chains.** | **RULED as defaulted:** regtest (the `e2e_fcmp_spend_accepted_by_daemon` fixture, ~80 s), then a testnet snapshot past `N` **and** a seed epoch (≥ 2113 blocks). | Only a chain past 2112 exercises the cache swap and D3's roll-over against real data. |
 | **RD-Q9** *(Round 1 question, posed 2026-09-19 — must be answered before commit 7, grading)* | **RD-F7's edge: producing a borrowed value vs consuming one as an oracle.** `root_after` is passed through, so the digest's `curve_root` component is worthless as evidence — but CEN-B5's equality check (candidate header root == recorded root at `h`) still **refuses a wrong header** against that borrowed value. Does "rows sourced from passed-through facts grade not-evidence" apply to rows that *produce* the borrowed value (the SCW-19 root write, the weight folds, the coin fold) only, or also to rows that *consume* one as an oracle (B5's equality; C-rows reading recorded timestamps are unaffected since timestamps are real)? | **Default: producers only.** A consumer row is a real check whose oracle happens to be borrowed: a wrong candidate is refused regardless of where the oracle came from, so the *rule* grades on its own evidence while the *component* it feeds does not. Producers (the rows whose output *is* the passed-through value) grade not-evidence until Rust derives them. | This split decides how many rows actually grade not-evidence — under "producers only" it is the six facts' deriving rows (CEN-G6/G6b, F13/F14/F14b, F17/G11, B5's write half via S-CURVE, I12); under "consumers too" B5 and every rule reading a recorded fact joins them. The grader needs the distinction as a typed origin on each row's oracle, not a comment. |
 | **RD-Q10** *(Round 1, posed 2026-09-19 from the sweep; decides RD-Q7's store leg)* | **`connect`'s `in_force` cannot name a Fakechain set** (RD-F13). `connect(valid, facts, in_force: RuleSetId)` resolves the id through `for_id` over `ISSUED`; Fakechain reuses `RuleSetId::GENESIS`, so no id reaches a `Fixed` set and a Fakechain verdict is always refused `RuleSetNotInForce`. What does the driver's schedule hand `connect`? | **Default: `connect` takes the in-force `RuleSet` by value — `in_force: RuleSet` — and compares by `PartialEq` exactly as `d6ba4d98f` already does after resolution; `RuleSetUnknown` moves to where the id is resolved (the schedule, `RuleSchedule::rules_at`), which is the layer that owns the id→set mapping.** The CEN-B3 belt (`hf_versions[h] = in_force`) stores `in_force.id()`, unchanged on disk. A schedule that can *name* Fakechain (a `RuleSchedule::fakechain(n)` whose `rules_at` yields the set, or `rules_at -> RuleSet`) is the driver-side half and lands with RD-Q7's flag. | Rule 71 holds: the store still carries no schedule and no `Network`; it receives a value and compares. The alternative — minting a distinct `RuleSetId` for each Fakechain set — was already refused when Q10 chose to reuse `GENESIS` (an id space for operator-chosen difficulties is nonsense), and a `RuleSetId::FAKECHAIN` sentinel would need the id→set resolution to consult something other than `ISSUED`, i.e. exactly the value the default passes. Falsify the finding's premise by `rg 'RuleSetId::FAKECHAIN\|fakechain' rust/shekyl-chain-rules/src/rule_set.rs` showing an id that `for_id` resolves to a `Fixed` set — none does at `93f91b0d4`. |
+| **RD-Q11** *(memo Q-B, REVIEW INPUT → posed for Round 1)* | **Composition.** `kameo` (the workspace precedent, exact-pinned `=0.20.0` in engine-core) vs plain `tokio` stages; rule 25 is silent on actor frameworks. | **Default (memo's): `kameo` for the one stateful actor — Validate+Connect, which owns the write transaction — and plain tasks + bounded channels for Form workers, the Sequencer and the Sinks.** | The only state in the pipeline is the batch; an actor earns its keep exactly there (mailbox = the single-writer queue; supervision = the halt). Stateless stages under an actor framework would be ceremony. Rule 17: `kameo` is already a workspace dependency at a pinned version; no new edge. |
+| **RD-Q12** *(memo Q-D, REVIEW INPUT → posed for Round 1; owner the RandomX lane, recorded here because §0 created the obligation)* | **The parity gate's CI home** for §0's "permanent gate re-run on either pin's move, plus `longhash` fuzz across `randomx-v2-sys`." | **Default: `randomx-v2-differential.yml` is already the home** — verified at `306af9bae`: its `push`/`pull_request` `paths` include `external/randomx-v2/**`, `rust/randomx-v2-sys/**`, `rust/shekyl-pow-randomx/**`, `Cargo.lock` (`:82`–`:88`, `:96`–`:100`), so the re-run-on-either-pin half is **mechanically true today**. What promotion adds: (i) the workflow's header, which frames the vector set as rewrite scaffolding with a V3.0 deferral, re-framed as the permanent verifier↔JIT parity obligation with §0 as its authority; (ii) a `longhash` fuzz job across `randomx-v2-sys` (random blobs × pinned seeds, both sides, asserting equality) on the daily cron; (iii) the type seam it asserts across is `PowHash` (distinct from `BlockHash` since #785) — the fuzz compares `PowHash`es, not bytes. | The gate exists and fires; only its *meaning* and one job are missing. A second workflow would split the record. |
 
 ## 5. Test deviations (F12's first live section)
 
 | Deviation | Reason | Reopen / falsify |
 | --- | --- | --- |
-| C1's FTL refusal is not exercised by replay | historical blocks are always below `now + FTL` | a synthetic future-stamped block appended to a regtest replay; owed as an E2 fixture |
+| C1's FTL refusal is not exercised by corpus replay | historical blocks are always below `now + FTL` | **closed by the mutation corpus family's future-timestamp case** (§3.8, REVIEW INPUT) once that family lands; until then the row stands open |
 | `--fixed-difficulty` on regtest runs (RD-Q7) | the bench needs real RandomX cost at a reachable target | production nets refuse the flag by type (`for_network` cannot yield `Fixed`, pinned) |
 | `drs_bench.py`'s lowered target | benchmark reproducibility on the provisioning floor | the artifact records the target; `drs_artifact.py` refuses cross-condition ratios |
 | The redb file's `Provenance` is NOT-PARITY-EVIDENCE throughout E2 | six facts passed through; enforced rows unimplemented | `passed_through().count() == 0 && coverage_gaps().is_empty()` — the genesis gate |
@@ -326,10 +373,12 @@ the tree's.
 
 - **RD-F1 — the daemon RPC cannot source the driver's facts.** `coins_generated`,
   `burned`, `long_term_effective_median` are LMDB-only (§3.4); computing them
-  in the driver is a C2-R8 Q4 violation. Decides RD-Q2's trace half.
-- **RD-F2 — no LMDB crate in the workspace.** A Rust LMDB reader is a new
-  dependency; rule 17's verification at source is owed before it can be
-  *proposed*. Moot under RD-Q2's ruling (the exporter reads LMDB in C++).
+  in the driver is a C2-R8 Q4 violation. Its option matrix **collapsed** to
+  RD-Q2's corpus + trace (memo §2).
+- **RD-F2 (DISSOLVED, memo §2) — no LMDB crate in the workspace.** A Rust
+  LMDB reader would have been a new dependency needing rule-17 verification
+  first; under RD-Q2 the one exporter reads LMDB in C++ and hands bytes, so
+  no LMDB crate enters the workspace. Closed, not deferred.
 - **RD-F3 — six items routed to a lane that did not exist.** Individually
   legitimate deferrals; in aggregate an unchosen queue (rule 22). This file is
   the repair; the generalization is RD-F4.
@@ -408,11 +457,14 @@ the tree's.
   with a standing obligation.** The RandomX parity corpus and
   `randomx-v2-differential.yml` become a **permanent gate** (full vector set on
   every pin move of either side; ongoing `longhash` fuzz across the boundary),
-  and at cutover the FFI direction flips for this dependency alone — a vendored
-  C library behind a rule-40 adapter crate, W^X confined to mining. Owner: the
-  RandomX lane; recorded here because E2's ruling created the obligation.
-  Falsify by the workflow's description no longer reading as rewrite
-  scaffolding and its trigger including the JIT pin.
+  and at cutover the FFI direction flips for this dependency alone — **behind
+  the existing `randomx-v2-sys` boundary** (`rust/randomx-v2-sys`, a workspace
+  member whose sole consumer today is `shekyl-randomx-differential`; memo §1
+  corrects this finding's first text, which spoke of an adapter crate to be
+  created), W^X confined to mining. Owner: the RandomX lane; recorded here
+  because §0 created the obligation. CI home and what promotion adds: RD-Q12.
+  Falsify by the workflow's header no longer reading as rewrite scaffolding
+  and a `longhash` fuzz job existing across `randomx-v2-sys`.
 
 ## 7. Commit plan (sketch; Round 1 fixes it)
 
@@ -459,3 +511,4 @@ code or a re-pointed FOLLOWUPS row with a live owner.
 | 2026-09-19 | **Round 0 REVIEWED and RULED (maintainer).** Substrate claims confirmed at `dev` `14f8dc739`. Four findings taken: RD-F7 (the root component compares a copy of itself → borrowed-is-never-evidence grader rule; §8 names the real components), RD-F8 (tx bodies; unpruned source; prune state declared and refused), RD-F9 (bootstrap format inherited → Rust-minted trace format), RD-F10 (Q3/Q5 contradiction → `Stale::Seed` is a defect signal in replay; injected-seed test). **The ruling (§0):** C++ is a non-canonical reference, adjudicated against the spec with two outcomes, extracted from and never fixed; all E2 C++ is harvest shims that die at cutover; the ingest pipeline is production code shared by E2 and E3 (§1.1 — RD-Q1 → `shekyl-chain-ingest`); the mining JIT is the sole surviving C++ behind a permanent parity gate (RD-F12). Throughput item checked at source: cache-only today; the dataset mode is measurement-gated, not ruled out (RD-F11 as first written said "by ruling" — corrected the same day). RD-Q4/Q6/Q7/Q8 as defaulted; RD-F4 endorsed as a standing check. Round 1 opens after #785 merges. |
 | 2026-09-19 | **RD-F11 RULED as a scheduled input** (dataset mode unbuilt pending measured need; the driver is the first instrument able to measure it; the benchmark is part of its deliverable — inventory item 7, commit 7b). The mood variant of the wrong-subject family recorded in rule 16's corollary. **RD-Q9 posed** (RD-F7's produce/consume split; default producers-only; must be answered before commit 7). |
 | 2026-09-19 | **Round 1 OPENED with the sweep of #785 as merged** (`93f91b0d4`; §3.7). Two review commits Round 0 never saw: `5e3c2982a` (`Target` is `NonZeroU128`, D6 records on every path so `RuleSet::fakechain` can mint; `StructurallyValid` and `Stale::RuleSet` carry the set by value; D4 overflow unreachable-by-fixture) and `d6ba4d98f` (`ChainValid` carries the set; `connect` compares by value after `for_id`). The second exposes **RD-F13**: a Fakechain verdict can never connect as merged, because no id resolves to a `Fixed` set — **RD-Q10** posed (default: `connect` takes the in-force `RuleSet` by value). RD-F6 discharged. Branch synced to `dev` (`d5d418f5b`). |
+| 2026-09-19 | **Direction memo received and recorded (§0 verbatim, §0.1 provenance).** Re-pinned to `origin/dev@306af9bae` (`e80cdbf23`). RULED (memo §2) landed: the "is not" clause (§1.2 — not a second connect path), RD-Q1 (the production ingest crate; name is Q-A), RD-Q2 (corpus + trace with **typed doors** `expect(h)` / `borrow(h)` keyed off `Fact::origin`; RD-F1 collapsed, RD-F2 dissolved), the grader's law and adjudication sentence (RD-Q6; also `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1), RD-F12 corrected to the existing `randomx-v2-sys` boundary. REVIEW INPUT recorded, not ruled (§3.8): stage shape, mutation and reorg corpus families (the FTL §5 row's closer), `Stale::Seed` grounding verified at `fault.rs:70` / `block.rs:132`, `PowHash` as the parity seam. Memo §4: Q-A → RD-Q1 default; Q-B → **RD-Q11** posed (kameo for the one stateful actor); Q-C → answered under RD-Q3/RD-F11 (no dataset mode exposed; parallel `form`; benchmark in the deliverable); Q-D → **RD-Q12** posed (the differential workflow already triggers on both pins — promotion is the framing and a `longhash` fuzz job). Memo §5 honoured: RD-F5 stands, the FOLLOWUPS rows stand, the wallet-store lane untouched. |
