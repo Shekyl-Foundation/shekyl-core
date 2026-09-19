@@ -78,10 +78,12 @@
 
 #![forbid(unsafe_code)]
 
+pub mod daemon_tip;
 pub mod host;
 pub mod serve_set;
 pub mod signer;
 
+pub use daemon_tip::DaemonTipCache;
 pub use host::{HostError, PersonaServing, PersonaServingHost, ServeCounters};
 pub use serve_set::{
     PinError, PinReport, PinnedServeSet, ReportedSet, ServeObligation, ServeSet, ServeSetPinner,
