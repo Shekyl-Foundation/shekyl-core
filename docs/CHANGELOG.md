@@ -195,6 +195,30 @@
 
 ### Changed
 
+- **A persona's pass gate reads the daemon's tip, not the wallet's block
+  scan (`WSS-24`).** The `SF-D5` anchor gate admits a challenge only when
+  `|anchor − (own_height − 720)| ≤ 4`, and `own_height` was the height the
+  **principal's block scan** had advanced the serving store to. Nothing
+  bounds that lag below the gate's 4 blocks — the serving side's only
+  freshness check (`caught_up`, slack 64) reports to the operator alarm
+  board and gates nothing, and no timer in this workspace starts a wallet
+  refresh at all (the scan advances only when a client calls the `refresh`
+  JSON-RPC). An honest persona whose wallet had not refreshed recently
+  therefore refused **valid** challenges, missed the pass, and was slashed
+  for its own scanner's cadence.
+
+  `own_height` is now the configured daemon's top block height, read over
+  the persona's own transport (loopback by default, never a peer draw),
+  gated on the daemon reporting itself synchronized, and cached with an age
+  bound of one block target — a quarter of the gate's tolerance — refreshed
+  four times per bound. A daemon that reports itself syncing, or a tip past
+  the age bound, refuses; a single unreachable poll does not, because an
+  unreachable daemon is the absence of a fact and the age bound already
+  covers it. Refusals keep their existing handling: the identical 404 and a
+  `ServeCounters` lookup failure, with no new error surface. Chain height
+  becomes block height once, at the RPC read — `get_info.height` is top + 1
+  while admission centres its window on `predecessor_height − 720`.
+
 - **Isolation gate check 6: the pinned PoW test setter is link-time
   unreachable from production.** `check_randomx_symbol_isolation.sh`
   asserts on the linked `shekyld` that `cryptonote::set_pow_hash_override_for_tests`
