@@ -516,8 +516,13 @@ left alone.
 
 **Tests under A.** No divergence falsifier is built — there is nothing left
 to falsify (rule 22: moot, not deferred). Exit check:
-`rg 'get_curve_tree_path|GET_CURVE_TREE_PATH|assemble_curve_tree_path|rpc_path|get_curve_tree_layer_hash' src rust tests`
-returns nothing. `cargo test -p shekyl-fcmp -p shekyl-ffi -p shekyl-rpc-types`
+`rg 'get_curve_tree_path|GET_CURVE_TREE_PATH|assemble_curve_tree_path|rpc_path|get_curve_tree_layer_hash' src rust tests --glob '!*.md'`
+returns **only** the expected residuals, none of them code that runs against
+the deleted surface: the RPC-version history comment and its 3.33 entry
+(`rust/shekyl-rpc-types/src/chain.rs`, `tests/rpc_parity.rs` — the record of
+*why* the minor bumped), and the disposable `shekyl-sp-t3-spike`'s
+records-was header and its JSON string literal (`bins/extract_shard.rs`,
+`src/fixture.rs` — marked non-running, §3.4). Every other hit is a defect. `cargo test -p shekyl-fcmp -p shekyl-ffi -p shekyl-rpc-types`
 and the C++ unit-test target build clean. The RPC-version assert is
 re-pinned.
 

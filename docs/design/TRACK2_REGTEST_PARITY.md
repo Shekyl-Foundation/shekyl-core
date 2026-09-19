@@ -157,7 +157,10 @@ vendored monero-oxide client and our axum `shekyl-daemon-rpc` server — all
 (2) and (3) edit vendored `shekyl-oxide` RPC code (protocol code, ours per rule
 10) and diverge from the stale `monero-oxide@3933664d` pin.
 
-4. **`get_curve_tree_path` returns 404 under the Rust/Axum daemon RPC.** The
+4. **`get_curve_tree_path` returns 404 under the Rust/Axum daemon RPC.** *(Records-was:
+   the route was registered 2026-06-23 (PR #174) and the endpoint was then
+   **removed** 2026-09-18 — `SOK-10` Q7 → A, spend-revealing; the wallet
+   assembles paths locally, so no daemon path fetch exists to 404.)* The
    C++ `on_get_curve_tree_*` handlers exist and are registered in the legacy
    epee dispatch but are missing from the Axum/FFI JSON-RPC dispatch table
    (`src/rpc/core_rpc_ffi.cpp` `get_jsonrpc_table()`), so the wallet's

@@ -88,8 +88,6 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     e2e_fcmp_spend_accepted_by_daemon — pre-existing (armed 2026-09-07;
 #     the north-star also failed red in CI 2026-09-08, PR #656).
 #   regtest_daemon_spawns_and_mines_to_wallet_address — sabotage 2026-09-08.
-#   e2e_get_curve_tree_path_returns_valid_path — historical red: 404 on the
-#     Axum transport before the route registration (its doc comment).
 #   e2e_refresh_scans_coinbase_balance — historical red: RpcError::
 #     InvalidNode("invalid block") before the shekyl-wire parse migration.
 #   e2e_trim_curve_tree_restores_grow_root — sabotage 2026-09-08.
@@ -110,7 +108,6 @@ ARMED=(
   engine::regtest_e2e::native_handlers_apply_their_own_request_caps
   engine::regtest_e2e::e2e_fcmp_spend_accepted_by_daemon
   engine::regtest_e2e::regtest_daemon_spawns_and_mines_to_wallet_address
-  engine::regtest_e2e::e2e_get_curve_tree_path_returns_valid_path
   engine::regtest_e2e::e2e_refresh_scans_coinbase_balance
   engine::regtest_e2e::e2e_trim_curve_tree_restores_grow_root
   engine::regtest_e2e::e2e_staker_bond_post_accepted_and_applied

@@ -283,7 +283,8 @@ machinery.
 
 **Do NOT conflate the two "tree roots" (validated at source 2026-08-03).** The
 FCMP `tree_root` (`shekyl-fcmp/src/proof.rs`, from `Selene`/`Helios` branch
-layers via `get_curve_tree_path`) is the **curve tree** over *outputs* — the
+layers the wallet assembles locally — `shekyl-curve-tree::assemble_path`; the
+daemon path RPC was removed 2026-09-18, `SOK-10`) is the **curve tree** over *outputs* — the
 membership structure a spend proof binds to. The block's `tx_tree_hash`
 (`format_utils.cpp:1419`) is a **`cn_fast_hash` binary merkle** over *tx hashes*
 for the PoW blob. Different data, different hash, different purpose; FCMP binds

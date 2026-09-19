@@ -40,8 +40,8 @@
   (`+10`) maturity inverts those orders in the first block with a
   transaction. Wallets assemble paths locally from the block-derived leaf
   stream and are unaffected. Callers now receive JSON-RPC method-not-found;
-  `CORE_RPC_VERSION_MINOR` `32 → 33`. `get_curve_tree_layer_hash` leaves
-  `BlockchainDB` with its only caller. Record:
+  `CORE_RPC_VERSION_MINOR` `32 → 33`. `BlockchainDB::get_curve_tree_layer_hash`
+  is deleted too — the removed shim was its only caller. Record:
   `docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`.
 - **`shekyl-wire`'s hash surface is typed (RTN-7).** `Transaction::hash()`,
   `hash_with_supplied_prunable` and `hash_with_supplied_components` return

@@ -784,12 +784,17 @@ material would be lost.
 ### Database API
 
 ```cpp
-// Curve tree state
+// Curve tree state (blockchain_db.h; the leaf reads are keyed by TREE
+// POSITION unless the name says otherwise — tree position != global output
+// index, see above). No per-chunk layer-hash accessor exists: the only
+// caller was the per-output path RPC removed 2026-09-18 (SOK-10 Q7 -> A).
 std::array<uint8_t, 32> get_curve_tree_root() const;
+std::array<uint8_t, 32> get_curve_tree_root_at_height(uint64_t block_height) const;
 uint8_t get_curve_tree_depth() const;
 uint64_t get_curve_tree_leaf_count() const;
-bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const;
-bool get_curve_tree_leaf(uint64_t global_output_index, uint8_t* leaf_out) const;
+bool get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const;
+bool get_curve_tree_leaf_by_output_index(uint64_t output_index, uint8_t* leaf_out) const;
+bool get_curve_tree_leaf_chunk(uint64_t first_tree_position, uint64_t count, uint8_t* out) const;
 
 // Checkpoints
 void save_curve_tree_checkpoint(uint64_t block_height);
