@@ -1,11 +1,9 @@
 # `shekyl-chain-rules` slice 2 — census 4.C + 4.D (DRS-E6 increment 3)
 
-**Status:** OPEN — **Round 1 RULED 2026-09-19** (Q1–Q7, §8; pre-flight
-written 2026-09-18 against `dev` @ `5adfc5423`, post-#782). **Round 2
-proposed** (Q8–Q10, §8.1) — two consequences of the Q1 staging ruling and
-Q6's fourth arm after its falsifier failed (c). Rules-crate commits may start
-on Round 2's defaults if so instructed; the store-side commit waits for #783
-regardless. Template:
+**Status:** OPEN — **Rounds 1 and 2 RULED 2026-09-19** (Q1–Q10, §8/§8.1;
+pre-flight written 2026-09-18 against `dev` @ `5adfc5423`, post-#782).
+**Implementation open: commits 1–8 on the rulings; commit 9 (store side)
+waits for #783.** Template:
 [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessor
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md). Parent
 plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 table 3 (*"slice 2 —
@@ -80,7 +78,7 @@ the validator's perspective — the C++ keeps calling it until cutover).
 | CEN-D1 | 1 | `check_hash(pow, target)` must pass; FFI failure rejects | `check_hash` (`check_hash.rs:74`) | `:5535` | **Land** — predicate; the longhash arrives through the substrate (§4.2) |
 | CEN-D1b | 4 | the comparison is `hash · diff < 2^256`, hash LE-256 | `check_hash` body; vectors `shekyl-difficulty/tests/check_hash_vectors.rs` | `difficulty.cpp:52`–`:86` | **Land as adopted** — `implemented(rules::pow::D1b)` names the comparison function D1 calls; ports **as-is with the existing vectors** (bucket 4: parity first, ratification converts the class later — §7.6) |
 | CEN-D2 | 1 | longhash is RandomX v2 unconditionally; verifier failure is the fail-closed gate at every difficulty | `shekyl-pow-randomx::compute_hash` (`vm.rs:2287`) | `cryptonote_tx_utils.cpp:770`–`:780`; `blockchain.cpp:5520`–`:5531` | **Land** — the *rule* is "the longhash the substrate returns is the one compared"; a substrate `Err` is a **fault** (`V::Fault`-shaped), never `InvalidBlock` (§4.2) |
-| CEN-D3 | 1 | `seedheight(h) = 0 for h ≤ 2112, else (h−65) & ~2047`; seed = block id at that height | `seedheight` (`seed_epoch.rs:109`); constants `:46`/`:48` | `cryptonote_tx_utils.cpp:777` | **Land** — the rule derives the seed height from the connecting height and reads `block_at(seedheight).hash`; the env override (`clamp_lag`/`clamp_blocks`, `:55`/`:72`) is **not** read here — the validator has no environment (rule 71) |
+| CEN-D3 | 1 | `seedheight(h) = 0 for h ≤ 2112, else (h−65) & ~2047`; seed = block id at that height | `seedheight` (`shekyl-difficulty/src/seed_epoch.rs:49`, moved from `shekyl-pow-randomx` in commit 6a so the validator adopts it without the engine — F10); constants `:37`/`:40` | `cryptonote_tx_utils.cpp:777` | **Land** — the rule derives the seed height from the connecting height and reads `block_at(seedheight).hash`; the env override (`clamp_lag`/`clamp_blocks`, `:55`/`:72`) is **not** read here — the validator has no environment (rule 71) |
 | CEN-D4 | 1 | next difficulty = LWMA-1 over the last N+1 = 91; genesis constant (100) below N; T = 120 | `lwma1_next` (`lwma1.rs:64`) | `blockchain.cpp:971`–`:1010` (cached window) | **Land** — the target is a **definition row** (like B6): derived once per validation, recorded at derivation, carried in the verdict (§4.3); D1 compares against it |
 | CEN-D5 | 2 | alt-chain difficulty: same LWMA-1 over prefix+suffix window ending at `bei.height − 1`; height-0 alt sentinels 0 | `alt_window_plan` (`alt_window.rs:52`) | `:1544`–`:1638` | **Subsumed-by-D4 over an alt view** — D4 reads its window through `ChainView::block_at`; the *stitching* is what an alt view's `block_at` does. Stays `pending` with a `subsumed-by` registry comment (the A5 shape); closes when slice 9 lands the alt view and a fixture drives D4 over it |
 | CEN-D6 | 2 | a zero next-block difficulty rejects the block | `Difficulty::is_zero` (`types.rs:41`); `lwma1_next` cannot return 0 on main (`GENESIS_DIFFICULTY = 100`; LWMA-1 min-L clamp) | `:5494`, `:2324` | **Land as a definition belt** — §8 Q4: type (`NonZero`) vs predicate |
@@ -248,6 +246,64 @@ minted until a rule reads it (rule 21).
 miner-template floor's read, not the validator's. The rule discards it; the
 template's consumer is the daemon's (unchanged, C++ until cutover).
 
+### 4.5 CEN-D7 as Fakechain rule-set data (Q10, arm (d) as RULED)
+
+`RuleSet` gains a difficulty parameter, `DifficultyRule::{Lwma1,
+Fixed(Target)}`; D4 reads it — `Lwma1` derives over the window, `Fixed(d)`
+returns `d` (connecting height 0 → 1, as `blockchain.cpp:975` has it). The
+only constructor of a `Fixed` rule set is `RuleSet::fakechain(fixed)`;
+`RuleSchedule::for_network(Network)` → `rules_at` → `RuleSet::for_id` can
+yield only `ISSUED` sets, all `Lwma1`. D7 flips `implemented` on the type
+that owns the `Fixed` arm; the census row's *"test-only carve-out live in
+the production binary"* is deleted as a description, not ported as a
+mechanism.
+
+**The claim, stated as correctly as (d) delivers it (ruled 2026-09-19).**
+Not "no override path in the production binary by type" — `main.cpp:374`
+selects `FAKECHAIN` at runtime from `--regtest`, so a shipped binary can
+reach the constructor when the operator asks for fakechain. The honest and
+still-strong form: **no override path on any nettype other than Fakechain,
+enforced by the type system rather than by a runtime check** — the API the
+public nettypes select cannot express `Fixed`. The same guarantee shape
+SCW-2 accepted for the settlement-epoch pin. A reviewer who runs
+`--regtest` and constructs one has not found the guarantee failing.
+
+**F10 — what the type system can and cannot anchor here.** The workspace's
+nettype enum, `shekyl_address::Network`, has **no `Fakechain` variant**
+(`network.rs:14`–`:18`; the daemon-facing `DaemonNetwork` in
+`shekyl-rpc-types` does, but that is a serde DTO crate the validator does
+not take). So the witness Q10 sketched — "constructible only from
+`Network::Fakechain`" — has no structural source in this crate today; the
+binding between the operator's `--regtest` and the `fakechain` constructor is
+the daemon's. What **is** enforced by type is the half above: `for_network`
+over the three public nets cannot yield `Fixed`. Adding `Network::Fakechain`
+ripples through ~12 files in 9 crates (address prefixes, wallet lifecycle,
+genesis tool) and is not this slice's; recorded here with the falsifier
+`rg 'Fakechain' rust/shekyl-address/src/network.rs` returning a variant —
+when it does, `RuleSet::fakechain` takes it as its argument and the
+constructor becomes unreachable without one.
+
+**The caveat, recorded beside the variant.** Once `RuleSet` carries
+`Fixed(n)`, **`RuleSetId` no longer uniquely determines the rule set**: two
+Fakechain nodes at `RuleSetId::GENESIS` may hold different rule sets.
+Tolerable because Fakechain is single-operator and cross-node identity does
+not matter there — but `RuleSetId` equality is no longer a valid proxy for
+rule-set equality, and someone will eventually use it as one. The sentence
+sits on `DifficultyRule::Fixed`'s doc, where that someone will read it.
+
+**The consumers are Fakechain tests, and belong in a register (ruled
+2026-09-19, §6 F12).** F9's consumers keep the target low for different
+reasons and establish different things: `scripts/bench/drs_bench.py`
+measures **real RandomX cost — the production machinery — at a target that
+is not the production target**; a genuine partial, and writing down which
+half is real is worth more than arguing whether it counts.
+`tests/unit_tests/curve_tree_header_root_check.cpp` uses difficulty 1 as a
+locus for a check that is not about difficulty at all. Each is a row in the
+test-deviation register F12 proposes, with what it does and does not
+establish; arm (d) is the *better* answer under that principle than (c) or
+the C++ flag, because the lever is impossible on mainnet and testnet by
+type rather than by a check.
+
 ---
 
 ## 5. Fixtures per row (§7.5.1 (c)) and commit plan
@@ -276,10 +332,12 @@ Commit plan (rule 90, ≤ 10; each names its rows):
 3. `chain-rules: RecordedBlock.cumulative_difficulty; MockChain carries it` — the view growth; store projection **not** in this commit (C9).
 4. `chain-rules: CEN-C1 (FTL in form, MTP leg with C2) / C2 / C3` + three fixtures.
 5. `chain-rules: CEN-D4 as a definition row; NonZero target (Q4, CEN-D6 recorded at the mint); ValidatedBlock.target + cumulative_difficulty (Q5)` + fixtures.
+6a. `difficulty, pow-randomx, ffi: the seed-epoch schedule moves to the consensus-arithmetic crate` (F10) — `seedheight` + constants to `shekyl-difficulty::seed_epoch`, env clamps to `shekyl-ffi`, the engine crate's copy deleted; live doc anchors swept; RandomX/FFI lane disclosure.
 6. `chain-rules: CEN-D2 in form; CEN-D3 seed verification and CEN-D1/D1b comparison in validate; Stale::Seed fault` (Q8) + fixtures incl. the ≥ 64-block-reorg stale-seed fixture.
 7. `chain-rules: CEN-D5 subsumed-by-D4` registry comment; `CEN-D7` per Q10.
 8. `chain-rules: coverage — registry flips; expected record` (§7); `DELETED_BY` narrowed to D4 (Q5, F6) — **note:** that constant lives in `chain-store/connect.rs`, so it rides C9, not this commit.
-9. `chain-store: BatchView projects cumulative_difficulty; connect derives it from the verdict; DELETED_BY narrows` — **after #783 merges**, rebased on layout v6; S-CHAIN-W row disclosure.
+9. `chain-store: connect derives cumulative_difficulty from the verdict; DELETED_BY narrows; Fault::Corrupt is an InvariantViolated at connect` — **after #783 merges**, rebased on layout v6; S-CHAIN-W row disclosure. (The projection half of the old commit 9 landed in commit 3: the grown `RecordedBlock` would not compile without it.)
+9b. `chain-store: mock-vs-BatchView conformance harness` (F11) — every landed rule over `BatchView` on a real store and over `MockChain`, identical verdicts and coverage; store side because G1 puts it there. After #783, with 9.
 10. `docs` — §7's record, index rows, CHANGELOG (security-relevant: the validator now decides PoW and timestamps), FOLLOWUPS sweep, this file to `completed/`.
 
 Commits 1–8 can start when Round 2 is ruled (or on its defaults if so
@@ -371,6 +429,81 @@ instructed); C9 waits for #783 regardless.
   cheap, which (c) would also serve. So the lever must **fix the target**,
   and the question is how it enters without an override path in the
   production binary — §8.1 Q10.
+- **F10 — the seed-epoch schedule had the wrong home for the validator to
+  adopt it.** `seedheight` and the 2048/64 constants lived in
+  `shekyl-pow-randomx`, the RandomX **engine** crate — which never called
+  them (it hosted them for the FFI). Adopting D3 from there would have put
+  the VM and its `aes`/`blake2`/`argon2` closure into the validation crate
+  (the thing Q1/Q2 keep out); re-deriving a 3-line formula would have been
+  the second implementation every ruling this month refuses. The schedule
+  is **consensus arithmetic the validator evaluates**, so it moved to
+  `shekyl-difficulty` beside LWMA-1, the timestamp rule and `check_hash`
+  (commit 6a; that crate's zero-dependency posture holds), and the env
+  clamps moved to the FFI boundary that reads the environment, which their
+  own doc already said owned "the ambient half". A sibling-lane write into
+  the RandomX and FFI crates (rule 94 §6), disclosed in the commit and on
+  the RandomX rows it touches. Also see §4.5's F10 on `Network::Fakechain`.
+- **F11 — the harness mock is never reconciled against the real view
+  (ruled a gap 2026-09-19).** `BatchView` appears nowhere in
+  `shekyl-chain-rules`; every rule landing in slices 1–9 is tested against
+  a `MockChain` whose fidelity to the store's projection is **assumed**. The
+  same shape as W12 (`BaseTestDB` overriding 0 of 15 archival hooks with
+  green tests), CEN-I12 and SOK-10 (the e2e's `[0]` on a coinbase-only mine,
+  where tree position and output index coincide and the conflation is
+  unrepresentable), and the `curve_tree_roots` zero-root gap (permanent
+  below ~160 blocks on FAKECHAIN, self-healing on a real chain — a regime
+  production leaves and never returns to): *the condition that would expose
+  the defect cannot occur in the test.* The distinction that makes the
+  principle operational: the problem is not substitution but **unvalidated**
+  substitution — a double's behaviour is the author's belief about the real
+  thing, and a wrong belief passes the test and fails production, whether
+  the double is a subsystem or a three-method trait. G1 forbids the rules
+  crate from depending on the store, so the conformance test's home is the
+  **store side**: each landed rule run against `BatchView` over a real store
+  and against the mock, asserting identical verdicts and coverage. The
+  dependency direction picks the location. Scoped into this slice as
+  **commit 9b** (store side, after #783, with 9); if #783 has not landed
+  when 1–8 are done, the deferral takes rule-22 shape with the falsifier
+  `rg 'BatchView' rust/shekyl-chain-store/src/store/*conformance*` returning
+  the harness.
+- **F12 — every deviation from production configuration is a named row
+  with a reason and a reopening criterion, and the set is gated (program
+  principle, ruled 2026-09-19; not this slice's to mint).** The honest cost
+  the principle must not pretend away: some deviations are unavoidable — a
+  settlement epoch is 10 000 blocks and a segment freeze 25 992 leaves, so a
+  corpus crossing either at production parameters is out of reach for a
+  test, and the regtest epoch override exists because of that arithmetic.
+  So the operational form is not "never deviate"; it is the shape already
+  working four times over in this tree (`RUST_ONLY_TABLES`, `DEFERRED_DOCS`,
+  the bijection map, `held_by_cxx`): a **test-deviation register** whose
+  rows say what a test does and does not establish, with a gate that goes
+  red when a deviation is acquired rather than declared. Then "what did this
+  test prove" has an answer someone can read. Without the gate the principle
+  erodes the way every ungated property here has — one convenient fixture at
+  a time, with nothing going red. Proposed home
+  `docs/design/TEST_DEVIATION_REGISTER.md` + `scripts/ci/check_test_deviations.py`;
+  first rows: the two Fakechain consumers of §4.5, `SEEDHASH_EPOCH_*`
+  (no consumer, no effect — F5), `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` (F8), the
+  `curve_tree_roots` regime, `--fixed-difficulty=1` at every harness F9
+  lists. Owner: the DRS program (E2's comparator is where "what did this
+  test prove" is judged); FOLLOWUPS row carries the falsifier.
+- **F13 — the census D4 row says the genesis constant is 100; the config
+  says 400.** `config/consensus_constants.json:13` `daa_genesis_difficulty:
+  400` (the 2026-09-11 testnet calibration, per its own comment; 100 is the
+  zawy12 historical pin), and `CONSENSUS_RULE_CENSUS.md:359` still reads
+  "the genesis difficulty constant (100)". F3's class — row text stale
+  against what shipped — so a census amendment, not a divergence. Adjacent
+  and unresolved here: `shekyl-genesis-tool/src/builder.rs:174`–`:176` says
+  *"genesis difficulty is 1 (the first nonce tried always satisfies the PoW
+  check)"*, while D4 at connecting height 0 derives `GENESIS_DIFFICULTY`
+  (400) and the C++ `get_difficulty_for_next_block` on an empty store takes
+  a path this pre-flight could not follow to a value (`get_tail_id` on an
+  empty DB, then `++height`, `chain_height = height − 1`). Whether the
+  mainnet genesis block's nonce satisfies target 400 under its own seed is
+  a **question with a checkable answer** — compute its longhash and
+  `check_hash` at 400 — and it is the genesis-tool lane's, routed with that
+  falsifier (FOLLOWUPS). D4's fixture pins the Rust side: genesis admission
+  derives 400.
 
 ---
 
@@ -400,7 +533,23 @@ Store: `passed_through().count()` 7 → 6.
 | **Q6** | CEN-D7 `--fixed-difficulty`: (a) port as-is — `Substrate::difficulty_override() -> Option<Difficulty>`, height 0 forced to 1, fixture; (b) leave `pending` until R9's test-seam ruling; (c) rule now that the lever is the **substrate's**: a regtest `Substrate` implementor returns a constant `longhash` that always satisfies the target, and the DAA is never bypassed. | **(c)**, if the maintainer will rule it here; else (a). Under (c) the validator has no override path at all, `regtest_e2e.rs:243`'s flag is reinterpreted by the daemon's implementor, D7 becomes **REJECTED** in the registry (the lever moved to where a test seam belongs), and the "test-only carve-out live in the production binary" is deleted rather than ported. | (a) if regtest needs the difficulty *value* fixed (fee/emission tests that read it), not merely PoW to pass — check `tests/functional_tests` and the GUI regtest harness before ruling; that is the sweep this row owes and it is not done here. | **APPROVED (c) conditionally — run the falsifier before commit, not after.** Run 2026-09-19: **(c) fails it** (F9: `drs_bench.py` measures real RandomX at a lowered target; difficulty 1 is a deliberate test locus). Fourth arm → §8.1 Q10. |
 | **Q7** | D5 `subsumed-by-D4` (stays `pending`, closes with slice 9's alt view) — or `implemented` now, on the grounds that D4 over any `ChainView` *is* D5? | **Subsumed, pending.** No alt view exists to drive a fixture; `implemented` without a fixture is the PWD-B10 shape. | Slice 9 lands the alt view: D5's fixture is D4 over it, row closes. | **APPROVED as defaulted** — subsumed, not deferred: the A3/B4 distinction; closes when D4 gets an alt view. |
 
-### 8.1 Round 2 — consequences of the Q1 ruling, and Q6's fourth arm
+### 8.1 Round 2 — consequences of the Q1 ruling, and Q6's fourth arm (RULED 2026-09-19)
+
+**Q8 — RULED: take the split** ("my staging was wrong on the facts"). `Stale::Seed`
+is a **fourth kind** — unproven is not disproven, not a validator hole, not a
+store capability limit — with two attachments: **(i) the conversion ban
+extends to it** — no `From`/`Into` between `Stale` and `InvalidBlock`, a
+separate arm at every consumer, and `check_store_error_conversion_ban.py`
+covers both (a retry arm is *more* tempting to collapse, because "couldn't
+prove it" reads like "rejected it"); **(ii) the retry is bounded with a named
+terminal outcome** — an unbounded redo on an attacker-influenced trigger
+(sustained reorg pressure) is a DoS primitive; the bound is specified now,
+before anyone writes the loop. The falsifier (does a second fault kind at
+`connect` change the store lane's signature) **runs before commit 1** — §8.2.
+**Q9 — RULED: yes.** Stage membership is a property (view-dependence), not a
+record of which slice added what; B1 reads `RuleSet` and the candidate, so it
+is view-free by that test. **Q10 — RULED: arm (d)**, with one correction and
+one caveat, both recorded in §4.5.
 
 | # | Question | Default | Falsifier / what changes downstream |
 | --- | --- | --- | --- |
@@ -412,6 +561,21 @@ The seed-epoch lever (F5) has no consumer and no effect under the staging;
 it is **not** given an arm here. If one is ever needed it takes Q10's shape
 (`SeedSchedule` data on a fakechain rule set), and the register row's pass
 condition (CEN-D3, §5.4.1) already says so.
+
+---
+
+### 8.2 Q8's falsifier — run before commit 1 (2026-09-19)
+
+*Does a second fault kind at `connect` change the signature the store lane
+consumes?* **No.** `ChainStore::connect` takes a `ChainValid<'id,
+BatchView<'_, 'id>>` (`store/connect.rs:307`–`:312`), never `validate`'s
+`Result`; and `validate` has **no production caller** outside the rules
+crate (`rg` over `rust/` excluding the crate: doc mentions only — E2's
+replay driver, the caller-to-be, is unlanded). The second fault kind
+changes the **driver's** signature, not the store lane's. The store's own
+test fixtures do call `validate` (`connect_fixtures.rs`, `view_tests.rs`)
+and were adapted in commit 2 — test-only edits in #783's files, disclosed
+there.
 
 ---
 
@@ -434,3 +598,4 @@ consumers outside the daemon (Q6's owed sweep).
 | --- | --- |
 | 2026-09-18 | Pre-flight written against `dev` @ `5adfc5423`. Q1–Q7 proposed with defaults. **HALT** for rulings (rule 26). |
 | 2026-09-19 | **Round 1 RULED** (Q1–Q7). Q1 approved with the staging refinement (`Substrate` → the stateless stage `form` / `StructurallyValid`); Q2–Q5, Q7 as defaulted; Q6 approved conditionally on its falsifier, which then **failed (c)** (F9). F3 reclassified as a census amendment (CEN-C1 row bracketed); F5 promoted to a CSR-3a register entry (CEN-D3 row, pass condition added); F8 the `blockchain.cpp:330` check (SCW-2 holds; slice-8 forward pin). **Round 2 proposed:** Q8 (seed as caller-supplied claim, verified in `validate`; D1 compares there), Q9 (B1/B2/B7 move to `form`), Q10 (D7 arm (d): fixed target as fakechain `RuleSet` data behind a witness type). **HALT** for Q8–Q10, or proceed on defaults if instructed. |
+| 2026-09-19 | **Round 2 RULED** (Q8 the split, with the conversion-ban extension and the bounded retry; Q9 yes; Q10 arm (d) with the corrected claim and the `RuleSetId` caveat — §4.5). **Commits 1–8 on the rulings.** Q8's falsifier ran first (§8.2: `connect` unaffected). Commits 1–5 landed on the branch; F10 forced commit 6a (the seed-epoch schedule's home). **Program findings taken from the reviewer's four instances:** F11 (the mock is never reconciled against `BatchView` — commit 9b), F12 (the test-deviation register — program-level, FOLLOWUPS), F13 (census D4 constant 100 vs config 400; genesis-tool "difficulty 1" — routed). |
