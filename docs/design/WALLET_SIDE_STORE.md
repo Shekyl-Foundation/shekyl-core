@@ -768,14 +768,20 @@ an operand with no value smuggles in an assumption.
 | # | Measurement | Reopening threshold |
 | --- | --- | --- |
 | 1 | What `rollback_to_fork` does on a reorg **deeper than `W`** | **Statable now, and behavioural rather than numeric: it must *refuse*, not silently produce a wrong tree.** If it corrupts rather than refusing, (b) reopens — a proving state that can be silently wrong is worse than one that is large. **And it carries a rule-82 failure mode**: the remedy is a full resync, and the wallet must say so in those terms |
-| 2 | **Spend-time replay** of the buffer on a **Pi 4** — up to ~725 blocks of drains between `F` and the reference height | **Owes a value.** There is **no landed spend-latency budget** in the tree to anchor against, so the threshold is *"replay must fit inside the spend-path budget"* with that budget **undefined today**. Naming a number here would be the operand-with-no-value error. The budget is owed by the usability side ([`80-usability`](../../.cursor/rules/80-usability.mdc)), and until it exists this measurement can be *taken* but not *graded* |
-| 3 | **Refetching the buffer on open**, and whether it needs its own companion file | **Owes a value**, same reason — an open-latency budget does not exist either. The *decision* it feeds is stateable without one: if refetch is slow enough to be felt at open, the buffer gets a companion file, which §6.3.1 attack 5 already anticipates |
+| 2 | **Spend-time replay** of the buffer on a **Pi 4**, over the ≤ ~725 blocks between `F` and the reference height. **Measure at a stated worst-case leaf rate, not an average one:** the cost scales with **drained leaves** in the window, not with blocks — an empty window replays free and a busy one does not, so a measurement taken on a quiet chain would grade green and reopen on a busy one | **Owes a value.** There is **no landed spend-latency budget** in the tree to anchor against, so the threshold is *"replay must fit inside the spend-path budget"* with that budget **undefined today**. Naming a number here would be the operand-with-no-value error. Owner: **unassigned** — see the FOLLOWUPS row; until it exists this measurement can be *taken* but not *graded* |
+| 3 | **Refetching the buffer on open**, and whether it needs its own companion file | **Owes a value**, same reason — an open-latency budget does not exist either, and its owner is **unassigned** (FOLLOWUPS row). The *decision* it feeds is stateable without one: if refetch is slow enough to be felt at open, the buffer gets a companion file, which §6.3.1 attack 5 already anticipates |
 | 4 | **Property tests against `build_layers`** over every edge where a layer finalizes | **Statable now, and binary: any mismatch reopens (b) outright.** The existing full-tree implementation is the oracle, which is what makes this replaceable rather than rewritten blind |
 
 **Two of four can be graded today; two cannot.** That asymmetry is the finding,
 not an omission: measurements 2 and 3 are gated on a latency budget this
 project has never written down, and discovering that is a cheaper outcome than
-inventing one.
+inventing one. **It is tracked as an obligation with an unassigned owner
+(FOLLOWUPS), not left as a sentence here** — "the usability side" resolves to
+nothing, because [`80-usability`](../../.cursor/rules/80-usability.mdc) is a
+principles file and not a lane. **Setting the two numbers is a maintainer call
+that can be made alongside `WSS-Q1`(b)'s ruling:** they are product judgments —
+how long a send may take to assemble, how long an open may take before it needs
+a progress indicator — not derivations.
 
 **A failure mode, not a measurement, and it sits under row 1:** a reorg deeper
 than `W` is expected to be the same class as crossing a frozen segment today —
