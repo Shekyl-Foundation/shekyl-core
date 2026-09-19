@@ -1905,7 +1905,7 @@ pub(crate) mod tests {
 
         let mut ours: serde_json::Value = serde_json::to_value(&out).unwrap();
         let mut oracle: serde_json::Value = serde_json::from_str(include_str!(
-            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v9.json"
+            "../../shekyl-rpc-types/tests/vectors/rpc/get_version_synced_v10.json"
         ))
         .unwrap();
         for moving in ["consensus_constants_digest", "genesis_hash"] {

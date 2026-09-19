@@ -43,7 +43,11 @@ use crate::hash::HashHex;
 /// `src/rpc/core_rpc_server_commands_defs.h` with `get_version`, its only
 /// reader (RK-D8).
 pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
-/// `CORE_RPC_VERSION_MINOR`. 3.32: `calc_pow` drops leftover
+/// `CORE_RPC_VERSION_MINOR`. 3.33: `get_curve_tree_path` **removed** — a
+/// per-output path query is spend-revealing (`PHASE_2A_SEND_PATH.md` §3.0.1),
+/// had no production consumer, and paired each leaf with a different
+/// output's `(O, C)` on any chain carrying a transaction (`SOK-10`, Q7 → A);
+/// the wallet assembles paths locally. 3.32: `calc_pow` drops leftover
 /// `major_version` (RandomX-only longhash; C++ daemon RPC is still live
 /// via `core_rpc_ffi`). 3.31: `get_archival_shard_coverage` and
 /// `request_archival_shard` (`ARCHIVAL_SHARD_SELECTION_LIST.md` `SL-D`).
@@ -59,9 +63,9 @@ pub const CORE_RPC_VERSION_MAJOR: u32 = 3;
 /// **Read from this tree at the moment this line is written, never carried
 /// forward from a plan.** `chain.rs:59-70` records two branches taking 3.26
 /// honestly and git merging them character-for-character, because `= 25` →
-/// `= 26` is textually identical whoever writes it. 3.32 is the
-/// `calc_pow.major_version` deletion on this branch.
-pub const CORE_RPC_VERSION_MINOR: u32 = 32;
+/// `= 26` is textually identical whoever writes it. 3.33 is the
+/// `get_curve_tree_path` removal on this branch.
+pub const CORE_RPC_VERSION_MINOR: u32 = 33;
 /// `MAKE_CORE_RPC_VERSION(major, minor)` = `(major << 16) | minor`.
 pub const CORE_RPC_VERSION: u32 = (CORE_RPC_VERSION_MAJOR << 16) | CORE_RPC_VERSION_MINOR;
 
@@ -466,10 +470,10 @@ mod tests {
         // reasons and git merged the line clean**, because a one-line change
         // from 25 to 26 is textually identical whoever makes it. The minor
         // number is not a lock.
-        assert_eq!(CORE_RPC_VERSION, 196_640);
-        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 32);
+        assert_eq!(CORE_RPC_VERSION, 196_641);
+        assert_eq!(CORE_RPC_VERSION, (3 << 16) | 33);
         assert_eq!(CORE_RPC_VERSION_MAJOR, 3);
-        assert_eq!(CORE_RPC_VERSION_MINOR, 32);
+        assert_eq!(CORE_RPC_VERSION_MINOR, 33);
     }
 
     #[test]
