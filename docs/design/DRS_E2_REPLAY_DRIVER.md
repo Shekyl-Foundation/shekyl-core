@@ -1,8 +1,10 @@
 # DRS-E2 — the ingest spine and its first source, the replay driver (pre-flight)
 
-**Status:** OPEN — **Round 0 REVIEWED and RULED 2026-09-19 (maintainer);
-Round 1 opens after #785 merges** (RD-F6). Written against `dev` @ `14f8dc739`
-(post-#787) with #785 (E6 slice 2) in flight and read as landed where named.
+**Status:** OPEN — **Round 1 OPEN 2026-09-19, opened with the sweep of #785 as
+merged** (`dev` @ `93f91b0d4`; §3.7). Round 0 REVIEWED and RULED 2026-09-19
+(maintainer). Round-0 text was written against `dev` @ `14f8dc739` with #785
+in flight; §3.7 records what the merged tree changed, and every citation
+below is read against `93f91b0d4` unless it says otherwise.
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1's slice shape,
 applied to a *program* increment. Parent plan:
 [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) — **DRS-D10** (replayable derived
@@ -240,6 +242,61 @@ the P0f register (`CONSENSUS_STORE_RECONCILIATION.md`, 124 `CEN-` rows). The
 register is prose; the grader takes typed states. A row extractor is owed
 (RD-Q6).
 
+
+### 3.7 Round-1 sweep — what #785 landed that Round 0 did not see (2026-09-19)
+
+Two review commits landed on #785 after Round 0's sweep and are in the merged
+tree (`93f91b0d4`). Swept the way slice 2 swept #783/#784, before any Round-1
+question is answered.
+
+**`5e3c2982a` — `chain-rules: Target, connecting height, and honest D4
+overflow`.**
+- `Target` wraps `NonZeroU128`; D6 records on **every** production path
+  (`D6::mint` for LWMA-1, `D6::record` for the genesis block's 1 and for
+  Fakechain `Fixed`). Consequence for RD-Q7: **`RuleSet::fakechain` can now
+  mint a `ChainValid`** — before this commit the `Fixed` arm returned a target
+  without inserting D6 and `covers_landed` panicked at mint, so the wiring
+  RD-Q7 owes had no working target to wire to. Fixture-pinned (fakechain
+  genesis and past-`N` mint).
+- `StructurallyValid` carries the **`RuleSet`**, not only its id, and
+  `Stale::RuleSet { formed_under: RuleSet, in_force: RuleSet, retry }` compares
+  **by value**, because Fakechain reuses `RuleSetId::GENESIS` (Q10's caveat,
+  now load-bearing). Consequence for the pipeline: `form` and `validate` are
+  handed the same `&RuleSet`; the id is not a proxy for the set anywhere in
+  the loop.
+- `BlockContext` is the connect's derived facts (connecting height, tip, MTP
+  window, target). Internal to the rules crate; no pipeline consequence.
+- D4's window walk is the SI-8 observer; `lwma1_next`'s `Overflow` after a
+  monotone `N+1` window is **unreachable** at the ratified `(N, T)` (pinned by a
+  `u128::MAX` fixture). `Corrupt` still has three variants
+  (`CumulativeDifficultyNotMonotone`, `CumulativeDifficultyOverflow`,
+  `ZeroTarget`); RD-Q4's arm→SI-row mapping covers all three and records the
+  second as unreachable-by-fixture rather than dropping it.
+- Crate description: *"form (stateless) then validate (view-bound)"*.
+
+**`d6ba4d98f` — `chain-store: connect compares the rule set, not only its
+id`.** `ChainValid` now carries the `RuleSet` (`verdict.rs:115`
+`rule_set()`, `:122 rule_set_id()`); `connect` resolves `in_force: RuleSetId`
+through `RuleSet::for_id` over `ISSUED` and compares **by value**
+(`connect.rs:347`–`:362`). Fixture: `fakechain(7)` handed to `connect` with
+`GENESIS` in force is refused `RuleSetNotInForce`. Correct for that case — and
+it exposes **RD-F13**: as merged, **a Fakechain verdict can never connect at
+all.** `for_id(GENESIS)` yields the public GENESIS set, which compares unequal
+to any `Fixed` set, and there is no id that names a Fakechain set because
+Fakechain reuses `RuleSetId::GENESIS` by design. `RuleSchedule::rules_at(h)
+-> RuleSetId` (`rule_set.rs:283`) cannot name it either. So RD-Q7's owed
+wiring has a blocked leg on the *store* side, not only the daemon's: the
+`in_force` parameter's type cannot express the set the driver's schedule
+names. **RD-Q10** poses the fix. The conversion-ban gate's clause 3 now
+matches an unqualified `Corrupt(_)` arm (`FAULT_ARM_TOKEN`); the ingest crate
+is outside the store path, so it is not subject to clause 2, but clause 3's
+discipline applies to it by intent — the pipeline never maps a fault onto a
+verdict.
+
+**RD-F6 discharged:** `rust/shekyl-difficulty/src/seed_epoch.rs` exists on
+`dev`; `shekyl-pow-randomx/src/seed_epoch.rs` is gone. §3.2's citation is now
+the tree's.
+
 ## 4. Questions — Round 0 defaults, with the 2026-09-19 rulings in-line
 
 | Q | Question | Disposition | Why |
@@ -253,6 +310,7 @@ register is prose; the grader takes typed states. A row extractor is owed
 | **RD-Q7** | **Fakechain wiring.** | **RULED as defaulted:** the driver takes `--fixed-difficulty n` → `RuleSet::fakechain(n)`, refused unless the nettype is regtest; the `Network::Fakechain` witness stays its own change (12 files / 9 crates). | The consumers need the lever, not the witness. |
 | **RD-Q8** | **First chains.** | **RULED as defaulted:** regtest (the `e2e_fcmp_spend_accepted_by_daemon` fixture, ~80 s), then a testnet snapshot past `N` **and** a seed epoch (≥ 2113 blocks). | Only a chain past 2112 exercises the cache swap and D3's roll-over against real data. |
 | **RD-Q9** *(Round 1 question, posed 2026-09-19 — must be answered before commit 7, grading)* | **RD-F7's edge: producing a borrowed value vs consuming one as an oracle.** `root_after` is passed through, so the digest's `curve_root` component is worthless as evidence — but CEN-B5's equality check (candidate header root == recorded root at `h`) still **refuses a wrong header** against that borrowed value. Does "rows sourced from passed-through facts grade not-evidence" apply to rows that *produce* the borrowed value (the SCW-19 root write, the weight folds, the coin fold) only, or also to rows that *consume* one as an oracle (B5's equality; C-rows reading recorded timestamps are unaffected since timestamps are real)? | **Default: producers only.** A consumer row is a real check whose oracle happens to be borrowed: a wrong candidate is refused regardless of where the oracle came from, so the *rule* grades on its own evidence while the *component* it feeds does not. Producers (the rows whose output *is* the passed-through value) grade not-evidence until Rust derives them. | This split decides how many rows actually grade not-evidence — under "producers only" it is the six facts' deriving rows (CEN-G6/G6b, F13/F14/F14b, F17/G11, B5's write half via S-CURVE, I12); under "consumers too" B5 and every rule reading a recorded fact joins them. The grader needs the distinction as a typed origin on each row's oracle, not a comment. |
+| **RD-Q10** *(Round 1, posed 2026-09-19 from the sweep; decides RD-Q7's store leg)* | **`connect`'s `in_force` cannot name a Fakechain set** (RD-F13). `connect(valid, facts, in_force: RuleSetId)` resolves the id through `for_id` over `ISSUED`; Fakechain reuses `RuleSetId::GENESIS`, so no id reaches a `Fixed` set and a Fakechain verdict is always refused `RuleSetNotInForce`. What does the driver's schedule hand `connect`? | **Default: `connect` takes the in-force `RuleSet` by value — `in_force: RuleSet` — and compares by `PartialEq` exactly as `d6ba4d98f` already does after resolution; `RuleSetUnknown` moves to where the id is resolved (the schedule, `RuleSchedule::rules_at`), which is the layer that owns the id→set mapping.** The CEN-B3 belt (`hf_versions[h] = in_force`) stores `in_force.id()`, unchanged on disk. A schedule that can *name* Fakechain (a `RuleSchedule::fakechain(n)` whose `rules_at` yields the set, or `rules_at -> RuleSet`) is the driver-side half and lands with RD-Q7's flag. | Rule 71 holds: the store still carries no schedule and no `Network`; it receives a value and compares. The alternative — minting a distinct `RuleSetId` for each Fakechain set — was already refused when Q10 chose to reuse `GENESIS` (an id space for operator-chosen difficulties is nonsense), and a `RuleSetId::FAKECHAIN` sentinel would need the id→set resolution to consult something other than `ISSUED`, i.e. exactly the value the default passes. Falsify the finding's premise by `rg 'RuleSetId::FAKECHAIN\|fakechain' rust/shekyl-chain-rules/src/rule_set.rs` showing an id that `for_id` resolves to a `Fixed` set — none does at `93f91b0d4`. |
 
 ## 5. Test deviations (F12's first live section)
 
@@ -286,8 +344,9 @@ register is prose; the grader takes typed states. A row extractor is owed
   caller, fed by C++. E2 needs the same three families read from the redb
   file — `ReadSnapshot::logical_state_digest_v0()` or a pipeline-side assembly
   over the existing reads. Owed to this increment.
-- **RD-F6 — the seed schedule's home moves under this file** (#785). Round 1
-  opens after it merges.
+- **RD-F6 (DISCHARGED 2026-09-19) — the seed schedule's home moved under this
+  file** (#785). Merged; `shekyl-difficulty/src/seed_epoch.rs` is the tree's
+  (§3.7).
 - **RD-F7 (review, 2026-09-19) — one of the digest's three components compares
   a value with a copy of itself.** `connect` writes `curve_tree_roots[h+1] =
   facts.root_after`, a passed-through fact read from LMDB, so the redb digest's
@@ -333,6 +392,18 @@ register is prose; the grader takes typed states. A row extractor is owed
   reads as a ruling. The JIT is never the lever (§1.3). *Same correction the
   driver deferral itself just received, one level up: an item pointed at
   nobody becoming an item pointed at the thing being built.*
+- **RD-F13 (Round-1 sweep, `d6ba4d98f`) — as merged, a Fakechain verdict can
+  never connect.** `connect` resolves `in_force: RuleSetId` through
+  `RuleSet::for_id` over `ISSUED` and compares the set by value; Fakechain
+  reuses `RuleSetId::GENESIS`, so the resolution always yields the public set
+  and every `Fixed` verdict is refused `RuleSetNotInForce` — the fixture that
+  proves the refusal is also the proof that no path accepts. `RuleSchedule::
+  rules_at -> RuleSetId` cannot name a Fakechain set either. RD-Q7's owed
+  wiring therefore has a store-side leg the review commit created while
+  closing a real hole; **RD-Q10** poses the repair (the in-force `RuleSet` by
+  value). The two consumers Q10 named (`drs_bench.py`,
+  `curve_tree_header_root_check.cpp`) are blocked on this as much as on the
+  flag. Falsifier as in RD-Q10.
 - **RD-F12 (ruling) — the mining JIT is the one permanent C++↔Rust boundary,
   with a standing obligation.** The RandomX parity corpus and
   `randomx-v2-differential.yml` become a **permanent gate** (full vector set on
@@ -350,7 +421,8 @@ register is prose; the grader takes typed states. A row extractor is owed
 3. `ingest: shekyl-chain-ingest scaffold — Source trait, pipeline stages, production Substrate over shekyl-pow-randomx` (RD-Q1, RD-Q3).
 4. `ingest: corpus + trace formats (Rust-minted, versioned); RPC corpus reader with prune-state refusal; LMDB trace exporter as a C++ harvest shim` (RD-Q2, RD-F8, RD-F9).
 5. `ingest: form workers → sequencer → validate+connect actor; Corrupt → halt; Stale::Seed surfaced; injected-wrong-seed test` (RD-Q5).
-6. `ingest: --fixed-difficulty → RuleSet::fakechain on regtest` (RD-Q7).
+6. `chain-store: connect takes the in-force RuleSet by value; RuleSetUnknown moves to schedule resolution` (RD-Q10, RD-F13) — precedes 6b.
+6b. `ingest: --fixed-difficulty → RuleSet::fakechain on regtest; a schedule that names it` (RD-Q7).
 7. `ingest: CSR-3a grading — extractor, artifact, borrowed-is-not-evidence rule (RD-Q9 answered first), grader wiring` (RD-Q6, RD-F7).
 7b. `ingest: metrics sink — light-mode RandomX wall-clock per hash / per block; the dataset-mode measurement artifact` (RD-F11, item 7).
 8. `ingest: first runs — regtest fixture; testnet past N and a seed epoch` (RD-Q8); LWMA-window conformance recorded.
@@ -384,5 +456,6 @@ code or a re-pointed FOLLOWUPS row with a live owner.
 | Date | Entry |
 | --- | --- |
 | 2026-09-19 | **Round 0.** Opened on #785's review after "owner: the E2 lane" was found to name nothing. Sweep at source; eight questions with defaults; six findings, one a proposed gate (RD-F4). Opens before #785 merges so #785's deferrals point at a document under review. |
-| 2026-09-19 | **Round 0 REVIEWED and RULED (maintainer).** Substrate claims confirmed at `dev` `14f8dc739`. Four findings taken: RD-F7 (the root component compares a copy of itself → borrowed-is-never-evidence grader rule; §8 names the real components), RD-F8 (tx bodies; unpruned source; prune state declared and refused), RD-F9 (bootstrap format inherited → Rust-minted trace format), RD-F10 (Q3/Q5 contradiction → `Stale::Seed` is a defect signal in replay; injected-seed test). **The ruling (§0):** C++ is a non-canonical reference, adjudicated against the spec with two outcomes, extracted from and never fixed; all E2 C++ is harvest shims that die at cutover; the ingest pipeline is production code shared by E2 and E3 (§1.1 — RD-Q1 → `shekyl-chain-ingest`); the mining JIT is the sole surviving C++ behind a permanent parity gate (RD-F12). Throughput item checked at source: cache-only today; the dataset mode is measurement-gated, not ruled out (RD-F11 as first written said "by ruling" — corrected the same day). |
-| 2026-09-19 | **RD-F11 RULED as a scheduled input** (dataset mode unbuilt pending measured need; the driver is the first instrument able to measure it; the benchmark is part of its deliverable — inventory item 7, commit 7b). The mood variant of the wrong-subject family recorded in rule 16's corollary. **RD-Q9 posed** (RD-F7's produce/consume split; default producers-only; must be answered before commit 7). RD-Q4/Q6/Q7/Q8 as defaulted; RD-F4 endorsed as a standing check. Round 1 opens after #785 merges. |
+| 2026-09-19 | **Round 0 REVIEWED and RULED (maintainer).** Substrate claims confirmed at `dev` `14f8dc739`. Four findings taken: RD-F7 (the root component compares a copy of itself → borrowed-is-never-evidence grader rule; §8 names the real components), RD-F8 (tx bodies; unpruned source; prune state declared and refused), RD-F9 (bootstrap format inherited → Rust-minted trace format), RD-F10 (Q3/Q5 contradiction → `Stale::Seed` is a defect signal in replay; injected-seed test). **The ruling (§0):** C++ is a non-canonical reference, adjudicated against the spec with two outcomes, extracted from and never fixed; all E2 C++ is harvest shims that die at cutover; the ingest pipeline is production code shared by E2 and E3 (§1.1 — RD-Q1 → `shekyl-chain-ingest`); the mining JIT is the sole surviving C++ behind a permanent parity gate (RD-F12). Throughput item checked at source: cache-only today; the dataset mode is measurement-gated, not ruled out (RD-F11 as first written said "by ruling" — corrected the same day). RD-Q4/Q6/Q7/Q8 as defaulted; RD-F4 endorsed as a standing check. Round 1 opens after #785 merges. |
+| 2026-09-19 | **RD-F11 RULED as a scheduled input** (dataset mode unbuilt pending measured need; the driver is the first instrument able to measure it; the benchmark is part of its deliverable — inventory item 7, commit 7b). The mood variant of the wrong-subject family recorded in rule 16's corollary. **RD-Q9 posed** (RD-F7's produce/consume split; default producers-only; must be answered before commit 7). |
+| 2026-09-19 | **Round 1 OPENED with the sweep of #785 as merged** (`93f91b0d4`; §3.7). Two review commits Round 0 never saw: `5e3c2982a` (`Target` is `NonZeroU128`, D6 records on every path so `RuleSet::fakechain` can mint; `StructurallyValid` and `Stale::RuleSet` carry the set by value; D4 overflow unreachable-by-fixture) and `d6ba4d98f` (`ChainValid` carries the set; `connect` compares by value after `for_id`). The second exposes **RD-F13**: a Fakechain verdict can never connect as merged, because no id resolves to a `Fixed` set — **RD-Q10** posed (default: `connect` takes the in-force `RuleSet` by value). RD-F6 discharged. Branch synced to `dev` (`d5d418f5b`). |
