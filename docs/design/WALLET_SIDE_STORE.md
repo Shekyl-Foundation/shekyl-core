@@ -116,6 +116,15 @@ and a reader must be able to check the paraphrase.
   and is the *daemon's* verification-side store, not this one (`WSS-3`).
   Reading (3) as "the wallet store is a serving cache" would delete obligation
   A by construction, and §3 is the evidence that it cannot be deleted.
+  **Corrected 2026-09-18 (steering review): "not a slice" overstated it.** The
+  proving state **is** derived from canon — it is built by replaying the
+  daemon's blocks, and the code checks it against the **header root on every
+  ingested block** (`verify_root`, `engine/merge.rs:651`). What distinguishes
+  it from obligation B is not independence from canon but **`R3`: it is
+  derived, self-checking against canon, and therefore never needs a migration,
+  ever** — a divergence is caught at the next block and repaired by replay, not
+  by a schema version. That is a stronger property than "the wallet's own", and
+  it is the one to state.
 
 ---
 
@@ -185,8 +194,12 @@ and a reader must be able to check the paraphrase.
     the ship timing"* (`:18`) is **no longer true**, and it is the sentence an
     agent will trust.
   - `ARCHIVAL_CHALLENGE_MECHANISM.md` — §1 (`:87`) and `:1421` define a shard
-    as a 3,326,976-byte partition, which is 25,992 leaves × 128. **The figure
-    survives and its derivation does not** (`PDM-Q6` item 4's `RF-D6` row:
+    as a *"3,326,976-byte deterministic partition"*, which is 25,992 leaves ×
+    128. **Wrong on "deterministic" as well as on the derivation:** under
+    `PDM-Q-F32` shards are **no longer fixed-size** — a closed shard's size
+    lies in `[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)`
+    ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md):411).
+    **The figure survives as the boundary metric and its derivation does not** (`PDM-Q6` item 4's `RF-D6` row:
     `SHARD_BYTES` survives as the *boundary metric*; the leaves × 128
     derivation does not) — so this is a re-derivation, not a find-and-replace.
     §2 step 2 (`:134`) has the witness verify against `R_k`; under `PDM-Q12`
@@ -320,11 +333,15 @@ Each is a substrate fact at `8494f2a27`, with its file and line.
 | **WSS-5** | **A pruned store cannot be reopened as a proving client.** `CurveTreeClient::rebuild_from_store` (`client.rs:628`) refuses with `ClientError::ResumeFromPrunedStore` (`client.rs:200`) when readable drained rows are fewer than `leaf_count` — *"Pruning dropped frozen leaf bytes: the in-memory vec would undercount and every root would be silently wrong"* (`:631-639`). So obligation B's size discipline and obligation A's resume **cannot both be satisfied by one file**. **Corrected 2026-09-18 (steering review): the conflict is *latent*, not realized** — `WSS-8` says nothing prunes in production, so no store is in this state today, and the refusal is a guard that has never fired. And its axis was mis-stated: this is not two *obligations* colliding over storage, it is **one identity's storage policy destroying another identity's state** (`WSS-13`). It is evidence for `WSS-Q1`'s firewall framing (§6.1), not the ground of it. | `WSS-Q1` (supporting, not decisive) |
 | **WSS-6** | **`ServingReader` and `same_store` exist because redb takes an exclusive file lock.** `client.rs:283-290` — the `Arc<LeafStore>` is shared *"because redb takes an exclusive file lock, so a second open would simply be refused"*; `redb_backend.rs:160-177` — the serving side gets a narrowed handle because *"handing it the store itself would put a second writer beside the one the actor exists to be… the two would contend on the write lock"*; `same_store` is `Arc::ptr_eq` (`:325`). **One file is a consequence of the engine's file lock, not of a ruling.** Under two files each obligation has its own writer, and `same_store`'s subject ("pins applied to one are not pins in the other") cannot arise. **Weight, corrected 2026-09-18:** this is *mechanics*. It says the one-file arrangement was never chosen, which removes an argument for keeping it; it does not say what should replace it. The replacement is decided on the firewall (§6.1), not here. | `WSS-Q1` (mechanics); CT-5 §3.1's single-writer actor |
 | **WSS-7** | **The reorg path touches all seven tables.** `truncate_from_tree_position` / `rollback_to_fork` (`redb_backend.rs`, the `delete_*_batched` trio at `:1950-2011` per `CTS-11`) span proving and serving tables in one write transaction. Under two files this is the one genuinely hard row: either B does not reorg (it is filled from below the horizon, `PDM-Q2`'s `W ≥ D_max`), or two rollbacks need an ordering rule. | `WSS-Q1`; `WSS-Q3` |
-| **WSS-8** | **`prune_frozen` has no production caller at this sha, and the archiving wallet disables pruning outright.** Every call site is a test (`shekyl-p-host/tests/composition.rs` ×7, `shekyl-p-serve/tests/store_axis.rs:125`) or a doc comment reasoning *about* it as a hazard (`p-host/src/serve_set/{report,staleness,witness}.rs`, `shekyl-operator-alarm/src/lib.rs:341`). Production instead declares the one-way prune-disabled posture — `curve_tree_actor.rs:402` calls `set_prune_disabled` — so an archiving wallet **never prunes**. **"Unused" is a hypothesis, not a verdict:** the capability is designed-for and guarded by live detectors (`PostureDeclaration`, pins, staleness, witness), so the finding is *the discard has no caller*, not *the machinery is dead*. **Provenance, per the dead-code discipline (`git log -S'prune_frozen(' -- rust/shekyl-{p-host,p-serve,engine-core}/src` returns nothing): the discard was never wired**, not wired and later removed. So `WSS-Q2` is "design the size discipline", not "reinstate or delete a caller". What follows is a question, not a deletion: **does the rebuilt store prune at all, and what bounds obligation A's growth if it does not?** | `WSS-Q2`; §8 bucket (ii)'s scope; the size discipline nobody has ruled |
-| **WSS-9** | **The composition boundary and the shard partition are different objects, and cannot be tied.** The tie today is `SEGMENT_LEAF_COUNT == leaves_per_segment()` (`PDM-Q-F33` (ii)); under `PDM-Q6`/`F32` the consensus partition becomes `b_*`, a **byte-bounded `tx_id` range**, while `root_at_count`'s composition boundary is a **leaf-count geometry** (`outputs_per_node(SEGMENT_LAYER_J)`, `segment.rs`). **Verified consequence:** the `F33` (ii) interim assert must die with the freeze and must **not** be re-pointed at `SHARD_BYTES` — the two constants would be asserting a relation that does not exist. **Not verified, and therefore `WSS-Q2`'s to rule:** whether obligation A keeps *any* segment-subroot cache after the freeze retires. `WSS-4`'s `r_k` read has a recompute-from-leaves fallback (`redb_backend.rs:1241-1245`) and `WSS-8` says nothing prunes in production, so on today's store the cache is **dispensable, not load-bearing** — dropping it, keeping it, or replacing it with a different checkpoint scheme are all open, and this finding does not choose. | §5 rows 1–2; §8; `WSS-Q2`; the interim-tie PR's scope |
+| **WSS-8** | **`prune_frozen` has no production caller at this sha, and the archiving wallet disables pruning outright.** Every call site is a test (`shekyl-p-host/tests/composition.rs` ×7, `shekyl-p-serve/tests/store_axis.rs:125`) or a doc comment reasoning *about* it as a hazard (`p-host/src/serve_set/{report,staleness,witness}.rs`, `shekyl-operator-alarm/src/lib.rs:341`). Production instead declares the one-way prune-disabled posture — `curve_tree_actor.rs:402` calls `set_prune_disabled` — so that wallet never prunes. **Narrowed 2026-09-18 (steering review): `set_prune_disabled` is reached only on the `PinCompleteTreePrefix` path** (`curve_tree_actor.rs:391-402`, inside `impl Message<PinCompleteTreePrefix>`) — the **Foundation `CompleteTree` posture**, not the ordinary archiver, which pins its serve set instead (`pin_serve_set`). So "the archiving wallet declares prune-disabled" was too broad: **most archivers declare nothing**, and their stores are unpruned only because nothing calls the discard. **"Unused" is a hypothesis, not a verdict:** the capability is designed-for and guarded by live detectors (`PostureDeclaration`, pins, staleness, witness), so the finding is *the discard has no caller*, not *the machinery is dead*. **Provenance, per the dead-code discipline (`git log -S'prune_frozen(' -- rust/shekyl-{p-host,p-serve,engine-core}/src` returns nothing): the discard was never wired**, not wired and later removed. So `WSS-Q2` is "design the size discipline", not "reinstate or delete a caller". What follows is a question, not a deletion: **does the rebuilt store prune at all, and what bounds obligation A's growth if it does not?** | `WSS-Q2`; §8 bucket (ii)'s scope; the size discipline nobody has ruled |
+| **WSS-9** | **The composition boundary and the shard partition are different objects, and cannot be tied.** The tie today is `SEGMENT_LEAF_COUNT == leaves_per_segment()` (`PDM-Q-F33` (ii)); under `PDM-Q6`/`F32` the consensus partition becomes `b_*`, a **byte-bounded `tx_id` range**, while `root_at_count`'s composition boundary is a **leaf-count geometry** (`outputs_per_node(SEGMENT_LAYER_J)`, `segment.rs`). **Verified consequence:** the `F33` (ii) interim assert must die with the freeze and must **not** be re-pointed at `SHARD_BYTES` — the two constants would be asserting a relation that does not exist. **Not verified, and therefore `WSS-Q2`'s to rule:** whether obligation A keeps *any* segment-subroot cache after the freeze retires. `WSS-4`'s `r_k` read has a recompute-from-leaves fallback (`redb_backend.rs:1241-1245`), so the cache is **dispensable for correctness**. **Corrected 2026-09-18 (steering review): it is load-bearing for *cost*.** `verify_root` runs on **every ingested block** (`engine/merge.rs:651`, inside the per-block pre-pass), so without the cache every complete segment is recomputed from its leaves once per block and **sync becomes quadratic** (`WSS-14`). Dropping it, keeping it, and replacing it with a different checkpoint scheme are all still open — but "dispensable" alone was wrong, and the option that drops it owes a cost answer. | §5 rows 1–2; §8; `WSS-Q2`; the interim-tie PR's scope |
 | **WSS-10** | **`PDM-Q12`'s code cites have drifted ~6–50 lines at this pin.** `StoreError::FrozenSegmentPruned` is at `redb_backend.rs:470` (cited `:464`); `ServingReader`'s doc block spans `:160-183` and its `open_frozen_segment_body` is at `:216`, while `LeafStore::open_frozen_segment_body` is at `:1877` (cited as `:164-183` for all three). The **symbols** named are correct; the **ranges** are stale. Recorded as a re-pin, not a defect. | Every increment's Round-0 re-pins rather than inheriting |
 | **WSS-11** | **`redb_backend.rs` is still 4 196 lines** — nothing of `CTS-` is built. The file holds the schema, six codecs, `StoreError` (17 variants), three handle types, every operation, and ~2 000 lines of tests. | §8; the decomposition principle survives any `WSS-Q1` answer |
 | **WSS-13** | **`P`'s serving state is written through the *principal's* curve-tree actor, into the principal's file — a firewall-layering defect.** `EngineServeSetPinner` holds a `CurveTreeHandle` and a `p_id` side by side (`stake_engine/serve_set_source.rs:79`, `:101`) and calls `pin_serve_set` on that handle (`:254-257`); the handle it is given in production is the **engine's own** — `g.curve_tree.clone()` at `stake_engine/serving/start.rs:158`, passed at `:203-206`. So the serve set — which is `P`'s bonded obligation, and whose membership is `P`-correlated — is persisted by the actor that owns the principal's proving state, in the same `.curvetree` file. [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §0 treats keeping `P`'s material inside the `StakeEngine` actor as load-bearing; this path routes around that. **This, not `WSS-5` or `WSS-6`, is what makes `WSS-Q1` urgent**, and it re-poses it as an *ownership* question rather than a storage one (§6.1). | `WSS-Q1` — the ground; the firewall stack |
+| **WSS-14** | **The subroot cache's role is cost, and the cost is per block.** `verify_root` is called on **every ingested block** (`engine/merge.rs:651`, in the per-block pre-pass that refuses to advance past tree state the wallet cannot reproduce). `root_at_count` under it reads `frozen_segments.r_k` per complete segment (`WSS-4`); without the cache each block recomputes every complete segment from leaves, so **sync cost becomes quadratic in chain length**. Correctness has a fallback; throughput does not. | `WSS-9`; `WSS-Q2`; the proving-side arm in §6.1 |
+| **WSS-15** | **Per-shard file sizes are a fingerprint, and encryption does not hide them.** Under `PDM-Q-F32` a closed shard's size lies in **`[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)`** (`ARCHIVAL_PRUNED_DAEMON_MODE.md:411`) — **variable, not fixed** — and every shard's exact size is **public**, because the A4 length rows are consensus. So one encrypted file per shard maps file size → `shard_id` → `P`, and a file vanishing at drop time lines up with the drop's on-chain timestamp. Encryption hides content; it hides neither sizes nor the times sizes change. | `WSS-Q12`; §6.1's `P`-store side; the #775 criterion applied to disk |
+| **WSS-16** | **`WSS-Q8`'s lapse tail may have no consumer.** Serving is daemon→`P` only (`EU-D1`, [`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md) §2); the witness skips the fetch for a pair not held at fire height (the FOLLOWUPS retention row, `SO-D8` Q3 §7.4); and a dropped `P` no longer advertises the shard. The FOLLOWUPS row motivates the tail with *"the path-assembly serving purpose"* — **which is leaf-era and gone under `PDM-Q6`**. If nothing consumes it the tail is **zero**. Not verified: whether any episodic recovery fetch expects dropped holders to answer. | `WSS-Q8` — its proposed answer, and the check that answer needs |
+| **WSS-17** | **`R1`'s invariant holds today and is mechanically checkable.** The store never talks to the daemon: `shekyl-curve-tree`'s dependencies are `redb`, `shekyl-fcmp`, `shekyl-crypto-pq`, `shekyl-consensus`, `shekyl-types` (`Cargo.toml`) — no daemon-RPC edge, and the edge that exists runs the other way (`shekyl-daemon-rpc` imports vocabulary from it, §4.1). **Falsifier: any dependency edge from the store crate to a daemon-RPC crate, checkable with `cargo tree`.** Stated as an invariant with a falsifier rather than left as an accident of the current graph — the fill path (`WSS-Q4`) is exactly the pressure that would add one. | `WSS-Q4`; the increment gates in §9 |
 | **WSS-12** | **`CurveTreeClient` holds the full leaf set in memory.** `entries: Vec<LeafEntry>` (`client.rs:293`) beside `store: Arc<LeafStore>` (`:290`); the store is the durable mirror and `rebuild_from_store` reloads it wholesale at open. Obligation A's working set is therefore RAM-resident and grows with the chain — a device-floor question at the Pi-4 provisioning floor ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)) that no round has asked. | `WSS-Q2`; out of scope for increment 1, named so it is not shed |
 
 ---
@@ -345,6 +362,33 @@ of one row rather than a redesign.
 | 6 | **Codecs** | `shekyl-store-codec` (§8 (i), PR A) | Shares one **encoding contract** with the daemon store **without sharing a schema** | The two stores' `Canonical` impls diverge for one vocabulary type |
 | 7 | **The serve-credit admission verifier** | **E4 / S-ARCH in `shekyl-chain-rules`** (`PDM-Q6` item 4 row 1) | **Not this round's.** Named here only so the lane is not assumed | A preimage change landing in this lane |
 | 8 | **Format policy** | [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §11.1(f) | Adopted **by citation**; not restated here | §11.1(f) changes and this row does not move |
+
+### 5.1 Three properties of the new shard unit, put on the record (**open**, not this round's to rule)
+
+Consequences of `PDM-Q6` / `F32` that the byte-bounded unit acquires and that
+no document states. Recorded here because this store is the first consumer to
+meet them; each is owed to the lane named, not settled here.
+
+1. **A bond no longer buys a uniform amount of work.** The per-shard bond is
+   flat, but a closed shard's size varies over
+   `[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)` — **up to ~30 % more storage for
+   the same collateral**, and scarcity pricing per shard inherits the same
+   unevenness. Probably tolerable; **the sim should confirm it holds rather
+   than assume it**. Owner: [`REWARD_EMISSION_LEG.md`](REWARD_EMISSION_LEG.md)
+   / `shekyl-economics-sim`.
+2. **Boundaries can be influenced.** Anyone paying fees can place
+   large-prunable transactions to shift where `b_*` falls and which
+   transactions share a shard. **No exploit is identified** — it costs fees,
+   and challenge assignment derives from `h−1`'s hash anyway — but it is an
+   adversary-controlled input to a consensus partition and belongs on the
+   **wargame list**, not in a footnote.
+3. **`SHARD_BYTES = 3.33 MB` is inherited, not derived.** It was set by the
+   *leaf* geometry (25,992 × 128) and `PDM` kept it so `SF`'s measured `N = 8`
+   and the anchor-lag `L` candidate stay valid — a reasonable engineering
+   choice, **and the record should say so**. Otherwise a future reader assumes
+   the number has a first-principles basis in the new unit, which is exactly
+   the unexamined inheritance [`16-architectural-inheritance`](../../.cursor/rules/16-architectural-inheritance.mdc)
+   exists to catch.
 
 **`PDM-Q6` item 4's rows whose enforcing site is this store.** Enumerated
 rather than assumed, per the brief. Of item 4's nine rows, exactly **one** has
@@ -376,7 +420,9 @@ commit.**
 | **WSS-Q8** | **The lapse tail** — how long an archiver serves a shard it no longer bonds | [`FOLLOWUPS.md`](../FOLLOWUPS.md) (the archiver retention-horizon row), owner [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md), **enforcing site this store**. **This row has no builder today** | No default. The rule is the serving route's; the *enforcement* is this store's, and the round owes the test |
 | **WSS-Q9** | **Recovery intake** — the daemon's episodic fetch hands a shard across and retains nothing | `PDM-Q9` recovery clause | Proposed: intake is the same write path as fill, with the same verify; the daemon side is episodic and stateless by `PDM-Q9` |
 | **WSS-Q10** | **The Foundation `CompleteTree` behind a persona, never on a daemon** | `PDM-Q9` coverage floor; [`FOUNDATION_ARCHIVAL_DISCLOSURE.md`](FOUNDATION_ARCHIVAL_DISCLOSURE.md):196, [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md):120 | Proposed: a `CompleteTree` is this store with **every** shard held and the prune-disabled posture declared — a configuration, not a fourth store type |
-| **WSS-Q11** | **`SEGMENT_LEAF_COUNT` / `leaves_per_segment()`'s interim tie** | `PDM-Q-F33` (ii), assigned to this lane; `WSS-9` | Proposed: land as scoped — **one line that dies with the freeze**, same PR as the CT-1 dedup assert — and **do not re-point it at `SHARD_BYTES`**, because `WSS-9` says the two are different objects |
+| **WSS-Q12** | **The `P`-store's at-rest shape** — per-shard data keys, how they are wrapped, and a layout that does not leak per-shard sizes | `WSS-15`; §6.1's `P`-store side; [`35-secure-memory`](../../.cursor/rules/35-secure-memory.mdc) | Proposed: **random** per-shard keys (never `HKDF(K_P, shard_id)` — a re-derivable key can never be destroyed), wrapped under a `P`-derived key; erasure destroys the wrapped copy. Size-hiding is **open**: one container with a uniform allocation granule, or padding every shard to `SHARD_BYTES + MAX_TX_SIZE` at ~30 % waste |
+| **WSS-Q13** | **Secret locality on the serving path** — `shekyl-p-serve` needs plaintext bodies but must not hold `P`-derived keys | [`36-secret-locality`](../../.cursor/rules/36-secret-locality.mdc); §6.1 | Proposed: the serving path gets a **decrypting read capability scoped to currently-held shards**, never the key. The capability's scope is the enforcement point for "a dropped shard cannot be served" |
+| **WSS-Q11** | **What happens to the landed `SEGMENT_LEAF_COUNT` / `leaves_per_segment()` tie at E4** | `PDM-Q-F33` (ii); `WSS-9`; the FOLLOWUPS partition row | **Corrected 2026-09-18 (steering review): the tie is LANDED, not owed.** #780 put one home in `shekyl_fcmp::tree` with the consensus-side compile-time assert in `shekyl-archival-retention`'s production lib, red-checked at `segment_leaf_count = 26030`; the CT-1 row closed with its dedup. This round proposed landing it again — wrong. What is actually open: it **dies at E4 / S-ARCH with the freeze**, and is **not re-pointed at `SHARD_BYTES`** (`WSS-9`: one is a leaf count, the other a byte threshold). Its one possible survival is as the boundary of a proving-side subroot cache, which is `WSS-Q2`'s |
 
 ### 6.1 `WSS-Q1` — re-grounded on the firewall (steering review, 2026-09-18)
 
@@ -389,12 +435,14 @@ re-grounds it, and the substrate agrees (`WSS-13`):
 > owns which state.**
 
 - **The serving store is `P`'s.** The serve set is a persona's bonded
-  obligation; its membership is `P`-correlated; it exists only while `P` is
-  bonded. It should be owned by `P`'s side — the `StakeEngine` and the serving
-  task — live in its **own file**, be encrypted under **`P`-derived keys**, and
-  be **destroyed when the bond ends**.
-- **The proving state is the principal's.** It is the wallet's own tree state,
-  opened unconditionally (`WSS-1`), carrying no persona correlation.
+  obligation; its membership is `P`-correlated. It should be owned by `P`'s
+  side — the `StakeEngine` and the serving task — live in its **own file**, and
+  be encrypted under **`P`-derived keys**. **Its erasure lifecycle is per
+  shard, not per bond** (§6.2).
+- **The proving state is the principal's.** Opened unconditionally (`WSS-1`),
+  carrying no persona correlation, and — `R3` — **derived from canon and
+  self-checking against it on every block**, so it never needs a migration.
+  Whether it needs to be a **store** at all is §6.3.
 
 **Why this is the right axis and the mechanics were not.** The firewall is a
 stack — network, timing, output, bond funding — and
@@ -413,10 +461,10 @@ alternative — it is the arrangement that puts two identities' state in one
 artifact, which is what `WSS-13` reports as a defect. So the round's remaining
 work on `WSS-Q1` is not *whether* to separate but **what each side becomes**:
 
-| Side | Open question |
-| --- | --- |
-| **`P`'s serving store** | Its own file, `P`-derived encryption, bond-lifetime scope — what writes it (the `StakeEngine`, not the curve-tree actor), what the fill and lapse paths are (`WSS-Q4`, `WSS-Q8`), and how `WSS-13`'s current routing is unwound |
-| **The principal's proving state** | **Whether it stays a redb store at all** — steering's standing "A is not a store" argument, which `WSS-12` is consistent with (the full leaf set is RAM-resident, `entries: Vec<LeafEntry>`, and the redb file is a durability mirror rebuilt wholesale at open). **That argument is not restated here**, because this round does not hold its text; it is owed to Round 1 from steering, and the arm is written to receive it |
+| Side | Open question | Written up in |
+| --- | --- | --- |
+| **`P`'s serving store** | Its own file, `P`-derived encryption, **per-shard** erasure — what writes it (the `StakeEngine`, not the curve-tree actor), the fill and lapse paths (`WSS-Q4`, `WSS-Q8`), the at-rest shape (`WSS-Q12`), the serving path's read capability (`WSS-Q13`), and how `WSS-13`'s current routing is unwound | §6.2 |
+| **The principal's proving state** | **Whether it is a store at all** — steering's "A is not a store" argument, now recorded | §6.3 |
 
 **What is still genuinely open, and is Round 1's:** the two questions in that
 table, plus `WSS-Q3` (reorg, which under this framing is the principal's alone
@@ -428,6 +476,146 @@ to satisfy both storage policies; neither is why the answer is what it is.
 *Superseded: the "Arm A / Arm B" pair as first written, which argued the
 question on storage mechanics and treated one file as a live option on equal
 footing. Retained in the git history of this document, not restated here.*
+
+### 6.2 `P`'s serving store — the erasure lifecycle (steering, 2026-09-18; **open**)
+
+Recorded as steering's design reasoning, **not as a ruling** — every clause
+below is a proposal Round 1 rules on.
+
+**Correction to §6.1 as first written: "destroyed when the bond ends" is wrong
+on both granularity and timing.**
+
+- **Granularity is per shard, not per bond.** A `HoldingsUpdate` drop releases
+  one shard while the bond continues.
+- **Timing is later than the drop.** Under `PHASE_2B_FSM_RETOOL.md` Pin 3
+  (`:488-497`) the slash scheduler challenges **currently-held** shards
+  (`process_archival_slash_for_epoch` iterates `held_shard_ids`), and exit
+  forgiveness applies only once the drop **connects**; the drop itself cannot
+  post until the shard's cooldown has elapsed and its slashes have settled. A
+  connected drop can still be **reorged out**, which puts the obligation back.
+  So the earliest safe erasure point is **drop-or-release connect + `D_max`**,
+  plus whatever lapse tail `WSS-Q8` rules. Shredding at *post* time would risk
+  a slash for a shard `P` destroyed and was then obligated for again.
+
+**Why destroy at all, when the data is public.** The bytes are reconstructible
+from the chain by anyone, so the case is **not** content confidentiality. It
+rests on four other things:
+
+1. **Making "not held" true by construction.** After a drop connects, `P` must
+   not serve, answer for, or be credited for that shard. If the bytes remain
+   readable that is a policy the code must remember to enforce; if they cannot
+   be decrypted it is impossible — `05-system-thinking`'s make-bad-states-
+   unrepresentable, applied to a lifecycle.
+2. **Bounding what a breach of the serving path reaches.** The serving task is
+   `P`'s most exposed component: it faces Tor and parses untrusted requests.
+   Per-shard keys that die at drop mean a compromise reaches what `P` currently
+   holds, not its whole history.
+3. **On-disk footprint as a posture signal** — the #775 criterion applied to
+   disk. Data kept past its obligation keeps the device looking like an
+   archiver's, and like *this* archiver's.
+4. **Legal posture.** The network promises permanent retention; an individual
+   archiver does not. *"I cannot produce it"* should be a technical fact after
+   a drop, not a statement of intent — the good includes other people's
+   transaction bodies.
+
+**Why crypto-shred rather than delete.** Deleting multi-megabyte data does not
+remove it on this stack: redb is a **copy-on-write B-tree**, so freed pages
+persist until reused; **SSD wear levelling** remaps blocks under the
+filesystem; and **btrfs/ZFS snapshots, backups and swap** hold further copies.
+Overwriting in place reaches none of them. Encrypting each shard under its own
+key and destroying the key makes every leftover copy inert — it shrinks the
+erasure problem from gigabytes across media we do not control to **32 bytes**.
+**The per-shard key must be random, not derived:** `HKDF(K_P, shard_id)` is
+tempting and fatal, because a key re-derivable from the seed can never be
+destroyed (`WSS-Q12`).
+
+**What it does not buy, stated so it is not oversold.** Against an adversary
+with the device *and* the wallet password, shredding adds nothing: they derive
+`P` from the seed and read `P`'s full shard history from the public chain. The
+reasoning rests on 1–4, not on hiding history from a fully compromised owner.
+It also has a limit — the wrapped keys live on the same SSD, so remanence does
+not vanish, it shrinks to a few bytes. A truly erasable anchor needs a hardware
+key store (TPM, secure enclave) where one exists; without one, **rotating the
+wrapping key on every drop** so older wrapped copies become undecryptable is
+the best software can do.
+
+**Two consequences that fall out of this, both open.**
+
+- **`WSS-15` — variable shard sizes make per-shard file sizes a fingerprint.**
+  The layout must hide them. Both candidates cost something: one container with
+  a uniform allocation granule, or padding every shard to
+  `SHARD_BYTES + MAX_TX_SIZE` at up to ~30 % waste. `WSS-Q12`.
+- **`WSS-16` — the lapse tail may have no consumer**, in which case `WSS-Q8`'s
+  answer is **zero** and the design is clean: shred at drop-connect + `D_max`
+  and nothing lingers. **Pending one check:** that no episodic recovery fetch
+  expects dropped holders to answer.
+
+**And a secret-locality question this opens (`WSS-Q13`, rule 36).** The
+`P`-derived keys never leave the `StakeEngine` actor, but `shekyl-p-serve`'s
+provider needs **plaintext bodies** to serve. The serving path should get a
+**decrypting read capability scoped to currently-held shards**, never the key
+itself — which also makes the capability's scope the enforcement point for
+point 1 above.
+
+### 6.3 The proving side — "A is not a store" (steering's argument, recorded; **open**)
+
+Recorded as received, as the proving-side arm. **Not ruled**, and not endorsed
+by this document — §6.3.1 lists the attacks it must survive, each a Round-0
+item for whichever increment takes it up. If it holds, the wallet's **only**
+redb is `P`'s serving store, which makes this round's original framing —
+*"the wallet's redb exists for serving from `P` when bonded"* — literally true
+rather than the overstatement it was.
+
+**Claim.** The principal's proving state does not need a **leaf store**. To
+spend, a wallet needs a membership path from each owned output to the root at
+the reference height; to verify each block (`merge.rs:651`) it needs the
+current root. The tree is append-only by `hash_grow`, so both come from:
+
+1. **the frontier** — the partial chunk at each layer, O(depth × width);
+2. **one witness per owned output** — its chunk at each layer, started at
+   drain, updated as right-siblings fill;
+3. **pending candidates** until drain;
+4. **a reorg undo log** over `D_max` plus the reference-height window.
+
+State then scales **with the wallet, not the chain**.
+
+**What it dissolves.** `WSS-12` (RAM growing with the chain); `WSS-9` /
+`WSS-Q2` (no proving-side subroot cache, so the freeze keeps no proving-side
+consumer at all — and `WSS-14`'s quadratic-sync cost goes with the recompute it
+was avoiding); the at-rest leak (the state is small and private, so it lives
+encrypted); and `WSS-Q1`'s proving arm. `R3` becomes literal, and **DRS-D3c
+becomes root-and-frontier parity with the daemon** rather than a leaf/position
+KAT (§10). The existing full-tree `build_layers` becomes the **property-test
+oracle** for every witness path — the denominator survives as the oracle.
+
+#### 6.3.1 Attacks the claim must survive — each a Round-0 item, none answered here
+
+1. **Pending-set bound.** The largest drain delay per leaf class
+   (`CT2_DRAIN_ORDER`). *The tier-lock concern raised earlier was claim-era and
+   is **withdrawn**;* verify no rebased-era class has a long pre-drain delay.
+2. **Reference-height witnesses.** Proofs anchor `REFERENCE_BLOCK_MIN_AGE`
+   behind tip, so this needs lagged witness state or checkpoints across that
+   window. **The part to design most carefully.**
+3. **Late discovery.** Restore mid-chain, a newly imported key, or a multisig
+   member learning of an output all mean no historic leaves. The answer is a
+   bulk rescan from that height; the **user-facing failure mode is rule 82's**.
+4. **Chunk-width update cost.** Selene/Helios widths mean a witness update
+   rewrites a chunk. **Measure it; do not assume it.**
+5. **Persistence write model.** Frontier and witnesses change every block. If
+   `.wallet` is rewritten whole on save, per-block updates are write
+   amplification on the encrypted file — which may argue for a small encrypted
+   companion with an append-only undo log (still "not a leaf store", but still
+   a file). **Check `shekyl-engine-file`'s save path before choosing.**
+6. **Blast radius.** Every `CurveTreeHandle` consumer enumerated before
+   anything is proposed — the spend gate, `assemble_tx` (C1 single-snapshot),
+   the claim and drain orchestrators, and the `shekyl-ffi` curve-tree replica
+   family.
+
+**Failure mode, stated because it is the reason this is attemptable.** A
+witness bug produces proofs that fail to verify: **the user's own spend fails,
+nothing leaks, no funds are at risk.** Check the witness-derived root against
+the reference root before proving — the same shape as today's integrity gate
+(`assemble.rs:80-89`).
 
 ---
 
@@ -567,7 +755,7 @@ increment 4  the leaf-cluster deletion    [E4 / S-ARCH — NOT this lane's
 | Row | Disposition |
 | --- | --- |
 | [`FOLLOWUPS.md`](../FOLLOWUPS.md) — **the archiver's retention horizon** (the serving purpose's lapse tail; owner `ARCHIVAL_SERVING_ROUTE.md`, enforcing site this store; *"no builder today"*) | **Inherited** as `WSS-Q8`. The rule stays the serving route's; **this round takes the enforcement and the test**. The row is updated to name this document as the enforcing site's owner |
-| [`FOLLOWUPS.md`](../FOLLOWUPS.md) — **DRS-D3c, the cross-store leaf/position KAT** (daemon vs wallet `LeafStore`) | **Inherited, and re-scoped by `WSS-9`.** Under the unit change the daemon's leaf table and this store's leaves are both still leaves, so the KAT's subject survives; what changes is that it is a **proving-store** KAT (obligation A ↔ DRS-E3's `curve_tree_*`), not a serving-store one. Lands with increment 2. Recorded here so it is not carried into increment 3 and then found to have no subject |
+| [`FOLLOWUPS.md`](../FOLLOWUPS.md) — **DRS-D3c, the cross-store leaf/position KAT** (daemon vs wallet `LeafStore`) | **Inherited, and re-scoped by `WSS-9`.** Under the unit change the daemon's leaf table and this store's leaves are both still leaves, so the KAT's subject survives; what changes is that it is a **proving-store** KAT (obligation A ↔ DRS-E3's `curve_tree_*`), not a serving-store one. Lands with increment 2. Recorded here so it is not carried into increment 3 and then found to have no subject. **And its shape is contingent on §6.3:** if the proving state is not a leaf store, this becomes **root-and-frontier parity** with the daemon rather than a leaf/position KAT |
 | [`FOLLOWUPS.md`](../FOLLOWUPS.md) — **the archiver serving-store rebuild row** (`PDM-Q12`, owner "the wallet lane") | **Discharged as to ownership by this document**, which is the round it asks for. The row is updated: the successor round exists, the family is registered, and the row's remaining content is the *increment 3 gate*, not the absence of a round |
 | `PDM-Q-F33` (ii) — the interim partition tie | **Inherited** as `WSS-Q11`, with `WSS-9`'s correction: it dies with the freeze and is **not** re-pointed at `SHARD_BYTES` |
 | [`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md`](ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md) — archive-or-contract under rule 95, now that the freeze is retired by `PDM-Q12` | **Owned by this round.** Its status banner is updated by this PR to record *retired by ruling, live in code until E4 / S-ARCH*; the **archive move lands with increment 4**, when the code goes, not before — archiving a document whose subject is still live would lower the citation ratchet on a live surface |
@@ -654,5 +842,6 @@ What must be true before genesis for this lane, in mission order.
 
 | Date | Decision |
 | --- | --- |
+| 2026-09-18 | **Amendment on steering's second review — five carryover corrections, the `P`-store erasure lifecycle, and the proving-side arm. No rulings; every clause is a proposal Round 1 rules on.** *Corrections:* `WSS-9` / PDM's correction (b) called the subroot cache "dispensable" — true for correctness, **false for cost**: `verify_root` runs per ingested block (`merge.rs:651`), so dropping the cache makes sync **quadratic** (`WSS-14`). "The wallet's own tree state, not a slice" overstated it — the proving state **is** derived from canon and self-checks against the header root every block; `R3`'s property is that it therefore **never needs a migration, ever**. `R1`'s invariant recorded with its falsifier (`WSS-17`: no daemon-RPC edge from the store crate, `cargo tree`). `WSS-Q11` proposed landing a tie **#780 already landed** — corrected to what is actually open (it dies at E4, and is not re-pointed at `SHARD_BYTES`). `WSS-8` overstated: `set_prune_disabled` is reached only on the `PinCompleteTreePrefix` / Foundation-`CompleteTree` path (`curve_tree_actor.rs:391-402`), so most archivers declare nothing. *New:* §6.2 — "destroyed when the bond ends" was wrong on granularity (**per shard**) and timing (**drop-connect + `D_max`**, per `PHASE_2B_FSM_RETOOL.md` Pin 3, because a connected drop can be reorged out); erasure means **crypto-shred** with **random** per-shard keys wrapped under a `P`-derived key, with the four reasons to destroy public data, the redb-CoW / wear-levelling / snapshot reasons delete does not work, and what it does not buy. §6.3 — steering's **"A is not a store"** argument recorded as the proving-side arm with its six attacks. `WSS-15` (variable shard sizes make file sizes a fingerprint; encryption hides neither sizes nor when they change), `WSS-16` (the lapse tail may have **no consumer**, so `WSS-Q8`'s answer may be zero), `WSS-Q12` (at-rest shape), `WSS-Q13` (rule-36 decrypting read capability). §5.1 puts three properties of the new shard unit on the record: bonds no longer buy uniform work, boundaries are fee-influenceable, and `SHARD_BYTES` is inherited rather than derived. |
 | 2026-09-18 | **`WSS-Q1` re-grounded on the firewall (steering review).** The question was posed on the wrong axis: "one file or two", argued from the shared file lock (`WSS-6`) and the prune/resume collision (`WSS-5`). It is an **ownership** question — the serving store is `P`'s (own file, `P`-derived keys, bond-lifetime scope, owned by the `StakeEngine`), the proving state is the principal's. **`WSS-13` added**, and it is the ground: `P`'s serve-set pins are written through the *principal's* curve-tree actor into the principal's file (`serve_set_source.rs:254-257` on the handle from `serving/start.rs:158`), routing around `PRINCIPAL_STAKE_LIFECYCLE.md` §0's load-bearing containment of `P`'s material — a firewall-layering defect visible only on this axis. `WSS-5` corrected twice over: its conflict is **latent** (nothing prunes in production, `WSS-8`) and its axis was mis-stated — it is one identity's storage policy destroying another's state, not two obligations colliding. `WSS-6` demoted to mechanics. §6.1 rewritten; the "Arm A / Arm B" pair is superseded. The proving side's "is it a store at all" arm is **owed to Round 1 from steering** — this round does not hold that argument's text and does not reconstruct it. **`PDM` propagation is not this round's** (§2.2, FOLLOWUPS): four documents never received `PDM-Q6`/`Q12` and are the next agent's trap. |
 | 2026-09-18 | **Round opened** at `dev@8494f2a27`, Round 0 executed. `WSS-` family registered at birth. Twelve findings; `WSS-4` (`root_at_count` reads `frozen_segments` — the freeze is also the proving path's root cache), `WSS-5` (a pruned store cannot be reopened as a proving client — the two obligations already conflict, observably) and `WSS-6` (`ServingReader` and `same_store` exist because redb takes an exclusive file lock) are the three that reframe `WSS-Q1` from an architectural preference into a question about a conflict the tree already has. `WSS-9` is split into its verified half (the composition boundary cannot be tied to `b_*`, so the `F33` (ii) assert dies with the freeze) and its open half (whether any subroot cache survives — `WSS-Q2`'s). `WSS-3` resolves `PDM-Q12`'s "verification-side leaf store" to the **daemon's** `curve_tree_leaves` (graded CACHE by `PDM-Q1` over §9), so the wallet-side proving store is ungraded and is this round's. **`CTS-` closes as record with this document as its successor** (disposed on steering's answer 3, confirmed by Rick on review); its work is partitioned by unit in §8, and no `CTS-` implementation PR lands beyond PR A. **PR A is cleared ahead of the round** (steering, answer 2), with the §11.1(f) sequencing departure disclosed. `WSS-Q1…Q11` posed; **none ruled**. |
