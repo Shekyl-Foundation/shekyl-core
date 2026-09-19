@@ -1259,7 +1259,7 @@ or the question block named). Grades as recorded there.
 | F6 | **RETRACTED** — the launch-state fork; genesis does not precede this design (`S0`) | record §6 |
 | F7 | The intermediate-layer prune already runs on every node; leaves are the boundary | record §6 |
 | F8 | Q3 is not node-local today: the serve-credit verifier reads leaves (`get_curve_tree_leaf_chunk`) | record §6; Q3 |
-| F9 | Silent zero-fill of a missing leaf in the RPC path — fixed PR #733 | record §6 |
+| F9 | Silent zero-fill of a missing leaf in the RPC path — fixed PR #733; the RPC path itself was removed 2026-09-18 (`SOK-10` Q7 → A, path-FFI lane) — moot thereafter | record §6 |
 | F10 | `trim_curve_tree` reads the boundary chunk on pop; discard floor `≥ D_max` and a defined failure both owed | record §6; Q2, Q11 |
 | F11 | DRS-0 slice A's accumulator grades assumed universal leaf retention — handed as the boundary `W`, not re-grades | record §6 |
 | F12 | Leaves are a cache of a pure function of the block corpus; set-B scarcity as scoped does not exist | record §6; Q6 |

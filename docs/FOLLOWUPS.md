@@ -251,9 +251,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Store-backed / pruned-tree path assembly (CT-3 pre-flight F5, [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md)**
   - Target: pre-genesis
 
-- **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —**
-  - Target: pre-genesis
-
 - **C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)**
   - Target: pre-genesis
 
@@ -592,12 +589,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **PQC Multisig : wire `shekyl_pqc_verify_with_group_id` into [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Historical tree path assembly uses current LMDB state.**
-  - Target: pre-genesis
-
-- **Path assembly reads the output for a tree *position*, not for the leaf's output index** (`SOK-10`, found 2026-09-18 on PR #779 review; owner **the path-FFI lane**, PDM-Q-F9's). `PathStore::output_oc(pos)` is called with the tree position (`rust/shekyl-fcmp/src/rpc_path.rs:85`–`:89`) and the daemon callback hands it to `get_output_key(0, pos)` unresolved (`src/cryptonote_core/curve_tree_path.cpp:67`), though `get_leaf_output_index` exists (`blockchain_db.h:2670`) because leaf order is `(maturity, gindex)`, not gindex (`CT2_DRAIN_ORDER.md:85`). A reordered chunk yields wrong `chunk_outputs`, wrong rebuilt siblings, a proof that fails verification — fail-closed, no soundness loss, live liveness defect; inherited from the pre-extraction C++ (`f2df035e7`). Fix in Rust (rule 20): the assembler resolves position → `GlobalOutputIndex` before `output_oc`, via `leaf_to_output` (S-CURVE's read on redb). Falsify by a test chain in which a normal-tx output drains before an earlier coinbase's leaf, asserting `chunk_outputs[j]` is the output whose leaf is at `j`; the redb-side type that makes the confusion unrepresentable is `ReadSnapshot::output(GlobalOutputIndex)` ([`DRS_E1_SOUT_KI.md`](design/DRS_E1_SOUT_KI.md) §3.4).
   - Target: pre-genesis
 
 - **Resolution: FCMP++ historical-reference cutover via Stage 5**

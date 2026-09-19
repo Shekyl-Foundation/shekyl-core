@@ -29,6 +29,20 @@
 
 ### API
 
+- **`get_curve_tree_path` is removed (RPC 3.33; `SOK-10` Q7 → A).** The
+  daemon's per-output membership-path endpoint, its Rust assembler
+  (`shekyl-fcmp::rpc_path`) and the C++ store-callback shim are deleted.
+  The query was spend-revealing — it told the daemon which output a wallet
+  is about to spend (`PHASE_2A_SEND_PATH.md` §3.0.1, a binding ruling) —
+  had no production consumer, and returned wrong `chunk_outputs` on every
+  chain carrying a transaction: it paired the leaf at tree position `p`
+  with the output at global index `p`, and coinbase (`+60`) vs transaction
+  (`+10`) maturity inverts those orders in the first block with a
+  transaction. Wallets assemble paths locally from the block-derived leaf
+  stream and are unaffected. Callers now receive JSON-RPC method-not-found;
+  `CORE_RPC_VERSION_MINOR` `32 → 33`. `get_curve_tree_layer_hash` leaves
+  `BlockchainDB` with its only caller. Record:
+  `docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`.
 - **`shekyl-wire`'s hash surface is typed (RTN-7).** `Transaction::hash()`,
   `hash_with_supplied_prunable` and `hash_with_supplied_components` return
   `TxHash`; `Block::hash()` returns `BlockHash`; `prefix_hash()` returns the

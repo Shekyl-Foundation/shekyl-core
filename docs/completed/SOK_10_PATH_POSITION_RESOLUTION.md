@@ -1,13 +1,16 @@
 # SOK-10 — path position resolution
 
-**Status:** OPEN — **Round 2 (wargame) closed 2026-09-18** (§3.5); implementation
-per §3.1's commit shape follows on this branch. **`SOK-Q7` RULED 2026-09-18
-(maintainer): A — delete** the endpoint and the daemon assembler (§3.1
-"Ruling"). `SOK-Q5` / `SOK-Q6` moot under A; `SOK-11` closes with the
-interface; `SOK-13` closes. Round 0 sweep confirmed 2026-09-18 with the
-mechanism sharpened (§1.1a). Process per `26-sub-pr-design-discipline.mdc`
-(A2 audit-against-actual-code, A4 boundary reasoning, review-round
-denominator §4).
+**Status:** CLOSED-as-record (2026-09-18). `SOK-Q7` RULED A by the
+maintainer 2026-09-18; the endpoint `get_curve_tree_path`, `shekyl-fcmp::rpc_path`,
+the `shekyl-ffi` callback shim and `curve_tree_path.{h,cpp}` are deleted on
+this branch (RPC 3.33). `SOK-Q5` / `SOK-Q6` moot under A; `SOK-11` closed with
+the interface; `SOK-12` comment corrected; `SOK-13` FOLLOWUPS row removed.
+Round 0 sweep confirmed 2026-09-18 with the mechanism sharpened (§1.1a);
+Round 1 (§3) and Round 2 wargame (§3.5) closed the same day. Process per
+`26-sub-pr-design-discipline.mdc`. **Do not implement from this file**; the
+live contract is `FCMP_PLUS_PLUS.md`'s REJECTED line and
+`PHASE_2A_SEND_PATH.md` §3.0.1. Every `path:line` below is a records-was
+anchor at the pin, most into files this record deleted.
 
 **Owner:** the path-FFI lane (this branch, `feat/sok-10-path-position-resolution`).
 FOLLOWUPS routes SOK-10 here as "PDM-Q-F9's"; that is this lane. The next reader
@@ -21,13 +24,13 @@ Every code claim below was re-read at this SHA. Line numbers are of this pin.
 a future consumer's design round would have to answer. §3.5 is the Round 2
 wargame against the ruled design.
 
-Implements *from* [`DRS_E1_SOUT_KI.md`](DRS_E1_SOUT_KI.md) §3.4 / findings table
+Implements *from* [`DRS_E1_SOUT_KI.md`](../design/DRS_E1_SOUT_KI.md) §3.4 / findings table
 SOK-10 (routed off that surface, rule 22), [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)
-the SOK-10 row, [`CT2_DRAIN_ORDER.md`](CT2_DRAIN_ORDER.md),
+the SOK-10 row, [`CT2_DRAIN_ORDER.md`](../design/CT2_DRAIN_ORDER.md),
 [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) `get_curve_tree_path`,
-[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md) F9,
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) S-CURVE / S-OUT-KI,
-[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 `SOK-1…SOK-N`.
+[`ARCHIVAL_PRUNED_DAEMON_MODE.md`](../design/ARCHIVAL_PRUNED_DAEMON_MODE.md) F9,
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) S-CURVE / S-OUT-KI,
+[`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 `SOK-1…SOK-N`.
 Nothing here re-opens S-OUT-KI's Q1–Q4.
 
 ---

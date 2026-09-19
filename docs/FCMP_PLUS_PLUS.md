@@ -374,43 +374,29 @@ shared by `get_block_header_by_height`, `get_block_header_by_hash`,
 replaced the C++ `block_header_response`, deleted in RK-5b — an implementer
 sent to that name would find nothing.
 
-### `get_curve_tree_path` JSON-RPC
+### `get_curve_tree_path` — REJECTED (removed 2026-09-18, RPC 3.33)
 
-The `get_curve_tree_path` endpoint returns Merkle authentication paths
-for one or more outputs. The wallet uses these paths to construct FCMP++
-proofs.
+`get_curve_tree_path` — **REJECTED** (spend-revealing; `PHASE_2A_SEND_PATH.md`
+§3.0.1; `SOK-10` Q7 → A). The name is kept here so it is not re-minted
+(rule 23): a per-output membership-path query tells the daemon, before
+broadcast, exactly which output is being spent — the one boundary FCMP++
+closed, with no ring to hide behind. The removed implementation was also
+wrong on every chain carrying a transaction: it paired the leaf at tree
+position `p` with the `(O, C)` of global output index `p`, and the two
+orders diverge in the first block with a transaction (coinbase `+60` vs
+transaction output `+10` maturity — see "tree position is **not** the same
+as global output index" above).
 
-**Request:** `{ "output_indices": [uint64, ...] }`
-
-**Response:**
-```json
-{
-  "reference_block": "hex hash",
-  "reference_height": 12345,
-  "tree_depth": 3,
-  "leaf_count": 4200,
-  "paths": [...]
-}
-```
-
-Request is limited to 64 output indices per call (`MAX_OUTPUTS_PER_RPC_REQUEST`).
-
-Each `path_entry` contains a hex-encoded `path_blob` with the following
-binary layout:
-
-```text
-Layer 0 (leaf layer):
-  position[2]           -- LE uint16, leaf index within the chunk
-  leaf_scalars[N*128]   -- all leaves in the chunk (N <= 38), 128 bytes each
-
-Layer 1..depth-1 (internal layers):
-  position[2]           -- LE uint16, child index within the parent chunk
-  sibling_hashes[M*32]  -- all children in the parent chunk (M <= chunk_width)
-```
-
-Chunk widths: 38 for Selene layers (even), 18 for Helios layers (odd).
-The verifier identifies the proven element by its position; all other
-entries in the chunk are authentication siblings.
+**Where membership paths come from:** the wallet assembles them locally
+from its block-derived leaf stream
+(`shekyl_curve_tree::CurveTreeClient::assemble_path`), resolving its own
+output by global index through the drain order and checking the
+reconstructed root against the reference block's `curve_tree_root`. The
+daemon serves no per-output path. A future light-wallet consumer needs a
+**bulk, non-revealing leaf-range** service (`PHASE_2A_SEND_PATH.md` §3.0.2,
+`CURVE_TREE_CLIENT.md` §"leaf range") — a design round in that consumer's
+plan, not a restoration of this method. Record:
+`docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`.
 
 ### `get_curve_tree_info` JSON-RPC
 
@@ -1302,7 +1288,7 @@ Do not reintroduce them. Archival emission is a different vin
 | PQC key rederivation from stored secret | **Deleted 2026-08-19** with `wallet2.cpp` (it was the Phase-5 deletion target named here) | — |
 | Restore-from-seed PQC rederivation | **Done** (frozen v1 pipeline; `shekyl_account_rederive`) | `rust/shekyl-crypto-pq/src/account.rs` |
 | `prune_tx_data` + `txs_pqc_auths` split | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
-| `get_curve_tree_path` RPC | **Done** | `core_rpc_server.cpp` |
+| `get_curve_tree_path` RPC | **REMOVED 2026-09-18** (RPC 3.33; spend-revealing, `PHASE_2A` §3.0.1; `SOK-10` Q7 → A) | paths are wallet-assembled (`shekyl-curve-tree::assemble_path`) |
 | `get_curve_tree_info` RPC | **Done** | `core_rpc_server.cpp` |
 | `get_curve_tree_checkpoint` RPC | **Done** | `core_rpc_server.cpp` |
 | CI: Rust workspace + FCMP crate build | **Done** | `.github/workflows/build.yml` |
@@ -1390,7 +1376,7 @@ Do not reintroduce them. Archival emission is a different vin
 | FROST DKG FFI (keys import/export/validate/group_key/free) | **Done** | `rust/shekyl-ffi/src/lib.rs`, `shekyl_ffi.h` |
 | FFI `shekyl_fcmp_prove` variable-length witness format | **Deleted 2026-08-22** | The export is gone with the legacy prove seam; the witness format survives as `parse_prove_witness` / `shekyl_fcmp_build_witness_header` in `rust/shekyl-ffi/src/legacy_fcmp.rs` and `legacy_tx.rs`, both `#[cfg(feature = "multisig")]` and read by the FROST coordinator |
 | `genRctFcmpPlusPlus` accepts leaf chunk entries | **Deleted 2026-08-22** | Had no caller; production signing is `shekyl_sign_fcmp_transaction` (`CT_SURFACE_NAMING_PIN.md` §5 step 1) |
-| Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **Done** | `core_rpc_server.cpp`, `core_rpc_server_commands_defs.h` |
+| Daemon RPC `chunk_outputs_blob` in `get_curve_tree_path` | **REMOVED 2026-09-18** with the RPC (`SOK-10` Q7 → A) | — |
 | Wallet `fcmp_precomputed_path` stores `leaf_chunk_entries` | **Done** | `wallet2.h/cpp` |
 | C++ wallet FROST code removed | **Done** | `wallet2.h/cpp`, `wallet2_ffi.cpp`, `shekyl_ffi.h` (SHEKYL_MULTISIG blocks deleted) |
 | Rust FROST DKG ceremony (`MultisigDkgSession`) | **Done** | `rust/shekyl-engine-core/src/multisig/dkg.rs` |
