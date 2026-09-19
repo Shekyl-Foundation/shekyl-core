@@ -145,6 +145,20 @@ PERMANENT: dict[tuple[str, str], str] = {}
 # uncategorized; both listed crates are clean at registration
 # (`shekyl-chain-store` declares none; `shekyl-tor-control-client` declares
 # only its TEST_ONLY row).
+#
+# THE RESIDUAL, NAMED: this set is itself opt-in — two crates out of a
+# workspace approaching seventy. Exhaustiveness holds *within* governance, and
+# governance has the shape the third limb closed one level down: a crate that
+# acquires a consumer-owned feature and never joins this set is outside the
+# whole construction, and nothing here notices. It is deliberately not closed
+# — governing every crate would force every feature in the workspace into
+# three categories and generate churn for no safety on crates that will never
+# have a consumer-owned feature. Instead the rule for joining is stated so it
+# can be applied without asking: **a crate joins this set in the commit that
+# first declares a feature another crate enables.** A feature only its own
+# tests or its own `default` turn on does not trigger it; a feature that
+# crosses a crate boundary does, because that is the edge every limb above is
+# about.
 GOVERNED_OWNERS: frozenset[str] = frozenset({"shekyl-chain-store", "shekyl-tor-control-client"})
 
 RUST_DIR = Path(__file__).resolve().parents[2] / "rust"
