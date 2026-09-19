@@ -922,9 +922,11 @@ stand in the crate. Code wins where this list and the code disagree.
   (`store/undo.rs`; S-CURVE names a journaling delete when its drain needs
   one). Reads return `StoreError`. Typed `properties` cells are registers
   and go through `upsert_property` (store-owned header cells go through
-  `header::put`). Multimap tables open as `SetTable`: a set per key has no
-  value to overwrite and no verb to declare, and `insert` says whether the
-  member was new.
+  `header::put`). There is no multimap verb: the catalogue has had no
+  multimap since S-OUT-KI's layout v6 (`output_amounts` is a keyed
+  `(amount, amount_index)` table, its `SetTable` opener and `MultiInserted`
+  journal arm deleted with it); a future multimap re-mints its opener, its
+  verb and its journal tag together.
 - **Poison** (Q2 made a property of the batch): every
   `StoreInvariantViolated` produced or observed through a batch — a refused
   `insert`, a `get_property` on a cell that will not decode — arms a
@@ -938,8 +940,9 @@ stand in the crate. Code wins where this list and the code disagree.
 - **The pop journal** (Q5; increment 3, `store/undo.rs`, `codec/undo.rs`):
   every declared verb records its own pre-image while the batch is
   recording — `InsertTable::insert` the key, `UpsertTable::upsert` and
-  `upsert_property` the displaced value, `SetTable::insert` a new member —
-  and `connect` seals them as `undo_log[h]` (the first Rust-only table,
+  `upsert_property` the displaced value (journal tag 2, the retired
+  multimap member arm, is RESERVED — never re-read) — and `connect` seals
+  them as `undo_log[h]` (the first Rust-only table,
   named with its reason in `schema::RUST_ONLY_TABLES`; tables are named by
   declaration ordinal, so a reorder **or removal** is a `SCHEMA_VERSION`
   bump). `pop` replays the tip's row last-first; every inverse asserts the

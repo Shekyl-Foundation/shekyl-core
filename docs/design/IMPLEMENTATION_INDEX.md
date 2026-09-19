@@ -1,7 +1,7 @@
 # Implementation index and phase map
 
 **Status:** MAP — identifier families and landing inventory. Not a design SoT.
-Last verification: 2026-08-28, `dev` = `fabc2b7c0` (docs-flow repair on current origin/dev).
+Last verification: 2026-09-18, `dev` = `af5443d03` (S-OUT-KI increment, PR #783; the unified stamp below carries what was re-run there).
 
 **Purpose.** One page that answers "what does this identifier mean, which doc
 owns it, and what has actually landed on `dev`?" The wallet/staking work spans
