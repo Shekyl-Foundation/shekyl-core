@@ -255,12 +255,6 @@ t_command_server::t_command_server(
     , "Flush a transaction from the tx pool by its <txid>, or the whole tx pool."
     );
     m_command_lookup.set_handler(
-      "output_histogram"
-    , std::bind(&t_command_parser_executor::output_histogram, &m_parser, p::_1)
-    , "output_histogram [@<amount>] <min_count> [<max_count>]"
-    , "Print the output histogram of outputs."
-    );
-    m_command_lookup.set_handler(
       "print_coinbase_tx_sum"
     , std::bind(&t_command_parser_executor::print_coinbase_tx_sum, &m_parser, p::_1)
     , "print_coinbase_tx_sum <start_height> [<block_count>]"
