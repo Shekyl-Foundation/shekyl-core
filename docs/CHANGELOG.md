@@ -193,6 +193,27 @@
   after this fetch. The wallet never dials `.onion`.
   `CORE_RPC_VERSION_MINOR` `30 → 31`.
 
+### Security
+
+- **`P`-correlated identifiers no longer reach a log line (`WSS-20`;
+  design record lands with PR #790, `WALLET_SIDE_STORE.md`).** The
+  serve-set pin release logged `shard_ids = ?releasable` at `info`, and
+  the spent-watch quarantine logged a `GlobalOutputIndex` at `error`.
+  Both sinks are a plaintext `--log-file` (created mode `0600`) that
+  outlives the process, so released shard ids matched against the chain's
+  **public** bond history identify the serving persona `P`, and a global
+  output index says *this machine owns chain output N*. Same at-rest
+  adversary the encrypted `.wallet` was ruled against — offline image, no
+  password. Both now log **counts**: `releasable` beside the existing
+  `released` (the epoch gate's set versus what the store actually
+  unpinned), and the quarantine's size beside its unchanged `reason`.
+  Standing guard: `shekyl-logging/tests/p_correlated_ids_absent_from_logs.rs`
+  scans `stake_engine/` log sites for a forbidden identifier as a field
+  name, a field value, or an inline format capture, and asserts that
+  `shekyl-p-host` / `shekyl-p-serve` / `shekyl-tor-control-client` — which
+  hold `P`'s identity, serve set and onion address — keep carrying no
+  logging surface at all. No behaviour change beyond the log text.
+
 ### Changed
 
 - **Isolation gate check 6: the pinned PoW test setter is link-time
