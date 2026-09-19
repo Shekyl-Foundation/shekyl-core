@@ -125,8 +125,6 @@ public:
 
   bool flush_txpool(const std::vector<std::string>& args);
 
-  bool output_histogram(const std::vector<std::string>& args);
-
   bool print_coinbase_tx_sum(const std::vector<std::string>& args);
 
   bool alt_chain_info(const std::vector<std::string>& args);

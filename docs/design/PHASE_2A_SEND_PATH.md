@@ -104,7 +104,7 @@ prerequisite + Phase 6.
 | Refresh + `apply_scan_result` | `refresh.rs`, `merge.rs` | **Prerequisite** — spendable outputs must exist |
 | FCMP++ tree primitives + daemon leaf/checkpoint substrate | `shekyl-fcmp::tree`, `curve_tree_leaves`, `curve_tree_checkpoints`, `prune_curve_tree_intermediate_layers` | **Reuse** — local path assembly (§3.0); only gap is a **bulk, non-revealing** leaf-range RPC |
 | Curve-tree client (local leaf store + delta sync + local path assembly) | **new phase** (§3.0.4) | **Prerequisite (own phase)** — 2A consumes a synthetic locally-computed path; real-root sends gated on this + Phase 6 |
-| `get_curve_tree_path` (per-output Merkle path) | ~~`core_rpc_server`~~ | **Forbidden on send path** — spend-revealing (§3.0.1). **The daemon-side review this row flagged ran as `SOK-10` Q7 and the endpoint was deleted 2026-09-18 (RPC 3.33; PR #784)** — the name is REJECTED in `FCMP_PLUS_PLUS.md` |
+| `get_curve_tree_path` (per-output Merkle path) | ~~`core_rpc_server`~~ | **Forbidden on send path** — spend-revealing (§3.0.1). **The daemon-side review this row flagged ran as `SOK-10` Q7 and the endpoint was deleted 2026-09-18 (RPC 3.34; PR #784)** — the name is REJECTED in `FCMP_PLUS_PLUS.md` |
 
 **Explicit stubs to remove:**
 
@@ -200,7 +200,7 @@ review as a separate PR (acceptable, if at all, only for explicitly non-private
 contexts). **That review ran as `SOK-10` Q7 (2026-09-18) and ruled A — delete:**
 no consumer existed, the carve-out named no plan, and the assembler was also
 wrong on every chain carrying a transaction. The endpoint, its Rust assembler and
-its C++ shim are gone (RPC 3.33); the name is kept REJECTED in
+its C++ shim are gone (RPC 3.34); the name is kept REJECTED in
 `FCMP_PLUS_PLUS.md`. A future light-wallet consumer needs the bulk,
 non-revealing leaf-range service of §3.0.2, never this shape. Record:
 `docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`. (`DAEMON_RPC_RUST.md`'s

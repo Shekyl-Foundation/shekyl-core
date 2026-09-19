@@ -3,7 +3,7 @@
 **Status:** CLOSED-as-record (2026-09-18). `SOK-Q7` RULED A by the
 maintainer 2026-09-18; the endpoint `get_curve_tree_path`, `shekyl-fcmp::rpc_path`,
 the `shekyl-ffi` callback shim and `curve_tree_path.{h,cpp}` are deleted on
-this branch (RPC 3.33). `SOK-Q5` / `SOK-Q6` moot under A; `SOK-11` closed with
+this branch (RPC 3.34 — #782 took 3.33 on the same day; chained on merge). `SOK-Q5` / `SOK-Q6` moot under A; `SOK-11` closed with
 the interface; `SOK-12` comment corrected; `SOK-13` FOLLOWUPS row removed.
 Round 0 sweep confirmed 2026-09-18 with the mechanism sharpened (§1.1a);
 Round 1 (§3) and Round 2 wargame (§3.5) closed the same day. Process per
@@ -518,7 +518,7 @@ left alone.
 to falsify (rule 22: moot, not deferred). Exit check:
 `rg 'get_curve_tree_path|GET_CURVE_TREE_PATH|assemble_curve_tree_path|rpc_path|get_curve_tree_layer_hash' src rust tests --glob '!*.md'`
 returns **only** the expected residuals, none of them code that runs against
-the deleted surface: the RPC-version history comment and its 3.33 entry
+the deleted surface: the RPC-version history comment and its 3.34 entry
 (`rust/shekyl-rpc-types/src/chain.rs`, `tests/rpc_parity.rs` — the record of
 *why* the minor bumped), and the disposable `shekyl-sp-t3-spike`'s
 records-was header and its JSON string literal (`bins/extract_shard.rs`,

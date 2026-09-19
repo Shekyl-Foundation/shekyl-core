@@ -63,11 +63,6 @@ using namespace epee;
 #undef SHEKYL_DEFAULT_LOG_CATEGORY
 #define SHEKYL_DEFAULT_LOG_CATEGORY "daemon.rpc"
 
-#define MAX_RESTRICTED_FAKE_OUTS_COUNT 40
-#define MAX_RESTRICTED_GLOBAL_FAKE_OUTS_COUNT 5000
-
-#define OUTPUT_HISTOGRAM_RECENT_CUTOFF_RESTRICTION (3 * 86400) // 3 days max, the wallet requests 1.8 days
-
 #define RESTRICTED_BLOCK_HEADER_RANGE 1000
 #define RESTRICTED_BLOCK_COUNT 1000
 
@@ -1150,47 +1145,6 @@ namespace cryptonote
       else
         res.status = "Failed to parse some of the txids";
       return true;
-    }
-
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_output_histogram(const COMMAND_RPC_GET_OUTPUT_HISTOGRAM::request& req, COMMAND_RPC_GET_OUTPUT_HISTOGRAM::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_output_histogram);
-
-    const bool restricted = caller_is_restricted(ctx);
-    size_t amounts = req.amounts.size();
-    if (restricted && amounts == 0)
-    {
-      res.status = "Restricted RPC will not serve histograms on the whole blockchain. Use your own node.";
-      return true;
-    }
-
-    if (restricted && req.recent_cutoff > 0 && req.recent_cutoff < (uint64_t)time(NULL) - OUTPUT_HISTOGRAM_RECENT_CUTOFF_RESTRICTION)
-    {
-      res.status = "Recent cutoff is too old";
-      return true;
-    }
-
-    std::map<uint64_t, std::tuple<uint64_t, uint64_t, uint64_t>> histogram;
-    try
-    {
-      histogram = m_core.get_blockchain_storage().get_output_histogram(req.amounts, req.unlocked, req.recent_cutoff, req.min_count);
-    }
-    catch (const std::exception &e)
-    {
-      res.status = "Failed to get output histogram";
-      return true;
-    }
-
-    res.histogram.clear();
-    res.histogram.reserve(histogram.size());
-    for (const auto &i: histogram)
-    {
-      if (std::get<0>(i.second) >= req.min_count && (std::get<0>(i.second) <= req.max_count || req.max_count == 0))
-        res.histogram.push_back(COMMAND_RPC_GET_OUTPUT_HISTOGRAM::entry(i.first, std::get<0>(i.second), std::get<1>(i.second), std::get<2>(i.second)));
     }
 
     res.status = CORE_RPC_STATUS_OK;

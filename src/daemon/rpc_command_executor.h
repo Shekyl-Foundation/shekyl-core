@@ -153,8 +153,6 @@ public:
 
   bool flush_txpool(const std::string &txid);
 
-  bool output_histogram(const std::vector<uint64_t> &amounts, uint64_t min_count, uint64_t max_count);
-
   bool print_coinbase_tx_sum(uint64_t height, uint64_t count);
 
   bool alt_chain_info(const std::string &tip, size_t above, uint64_t last_blocks);

@@ -370,22 +370,6 @@ class Daemon(object):
         }
         return self.rpc.send_json_rpc_request(get_output_distribution)
 
-    def get_output_histogram(self, amounts = [], min_count = 0, max_count = 0, unlocked = False, recent_cutoff = 0, client = ""):
-        get_output_histogram = {
-            'method': 'get_output_histogram',
-            'params': {
-                'client': client,
-                'amounts': amounts,
-                'min_count': min_count,
-                'max_count': max_count,
-                'unlocked': unlocked,
-                'recent_cutoff': recent_cutoff,
-            },
-            'jsonrpc': '2.0',
-            'id': '0'
-        }
-        return self.rpc.send_json_rpc_request(get_output_histogram)
-
     def set_log_level(self, level):
         set_log_level = {
             'level': level,

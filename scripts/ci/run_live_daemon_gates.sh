@@ -98,6 +98,13 @@ regtest_ignored=$(grep -c '^engine::regtest_e2e::.*: test$' "$ignored" || true)
 #     e2e_unbond_accepted_and_connected, pre Unbond→Release rename).
 #   e2e_unstake_collect_retire_composed_arc — sabotage 2026-09-08.
 #   e2e_arm3_phantom_slot_collected_at_open — sabotage 2026-09-08.
+#   jsonrpc_we_carries_handler_status_through_the_result_envelope — the
+#     result-envelope leg split out of restricted_listener_* by PR #782;
+#     sabotage 2026-09-18 (envelope pointer inverted, panicked there).
+#   get_output_histogram_stays_unrouted — PR #782's deletion falsifier
+#     (SOK-Q3): red by construction on any tree that routes the method
+#     (dev at 8494f2a27 does); sabotage 2026-09-18 (expected message
+#     inverted, panicked there).
 #   e2e_fcmp_spend_over_depth3_tree (slow) — historical red: CurveTreeIngest
 #     root mismatch pre-fix, confirmed 2026-06-27 (its doc comment).
 #   e2e_emission_claim_accepted_and_applied (slow) — sabotage 2026-09-08.
@@ -115,6 +122,8 @@ ARMED=(
   engine::regtest_e2e::e2e_release_accepted_and_connected
   engine::regtest_e2e::e2e_unstake_collect_retire_composed_arc
   engine::regtest_e2e::e2e_arm3_phantom_slot_collected_at_open
+  engine::regtest_e2e::jsonrpc_we_carries_handler_status_through_the_result_envelope
+  engine::regtest_e2e::get_output_histogram_stays_unrouted
 )
 
 # Consensus gates too heavy for the per-PR lane (13 + 19 min measured):

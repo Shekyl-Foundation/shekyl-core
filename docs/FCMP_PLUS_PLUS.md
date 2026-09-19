@@ -374,7 +374,7 @@ shared by `get_block_header_by_height`, `get_block_header_by_hash`,
 replaced the C++ `block_header_response`, deleted in RK-5b — an implementer
 sent to that name would find nothing.
 
-### `get_curve_tree_path` — REJECTED (removed 2026-09-18, RPC 3.33)
+### `get_curve_tree_path` — REJECTED (removed 2026-09-18, RPC 3.34)
 
 `get_curve_tree_path` — **REJECTED** (spend-revealing; `PHASE_2A_SEND_PATH.md`
 §3.0.1; `SOK-10` Q7 → A). The name is kept here so it is not re-minted
@@ -1293,7 +1293,7 @@ Do not reintroduce them. Archival emission is a different vin
 | PQC key rederivation from stored secret | **Deleted 2026-08-19** with `wallet2.cpp` (it was the Phase-5 deletion target named here) | — |
 | Restore-from-seed PQC rederivation | **Done** (frozen v1 pipeline; `shekyl_account_rederive`) | `rust/shekyl-crypto-pq/src/account.rs` |
 | `prune_tx_data` + `txs_pqc_auths` split | **Done** | `db_lmdb.cpp`, `cryptonote_basic.h` |
-| `get_curve_tree_path` RPC | **REMOVED 2026-09-18** (RPC 3.33; spend-revealing, `PHASE_2A` §3.0.1; `SOK-10` Q7 → A) | paths are wallet-assembled (`shekyl-curve-tree::assemble_path`) |
+| `get_curve_tree_path` RPC | **REMOVED 2026-09-18** (RPC 3.34; spend-revealing, `PHASE_2A` §3.0.1; `SOK-10` Q7 → A) | paths are wallet-assembled (`shekyl-curve-tree::assemble_path`) |
 | `get_curve_tree_info` RPC | **Done** | `core_rpc_server.cpp` |
 | `get_curve_tree_checkpoint` RPC | **Done** | `core_rpc_server.cpp` |
 | CI: Rust workspace + FCMP crate build | **Done** | `.github/workflows/build.yml` |

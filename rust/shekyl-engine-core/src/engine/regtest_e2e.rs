@@ -3819,6 +3819,13 @@ fn capture_block(
     })
 }
 
+/// JSON-RPC 2.0 body for `POST json_rpc`. Shared by the origin-cap,
+/// result-envelope, and deleted-method tests so the three stay one request
+/// shape.
+fn jsonrpc_body(method: &str, params: &serde_json::Value) -> serde_json::Value {
+    json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params })
+}
+
 /// The restricted RPC posture reaches the C++ handlers behind the FFI bridge.
 ///
 /// This is the regression guard for the bridge's origin context. Until
@@ -3835,7 +3842,12 @@ fn capture_block(
 /// bridge had three. They now live in
 /// `native_handlers_apply_their_own_request_caps`, which is what they actually
 /// test. What remains: `/get_info`'s field trimming on `dispatch_json`, and
-/// two `dispatch_jsonrpc_we` refusals, one per answer shape.
+/// the JSON-RPC origin cap on `dispatch_jsonrpc_we`
+/// (`get_block_header_by_hash` over `RESTRICTED_BLOCK_COUNT`). Admin-only
+/// method gating is `admin_methods_are_refused_only_on_the_restricted_listener`
+/// in `shekyl-daemon-rpc`. The WE result-envelope shape is
+/// `jsonrpc_we_carries_handler_status_through_the_result_envelope`. The
+/// histogram deletion gate is `get_output_histogram_stays_unrouted`.
 ///
 /// Both listeners come from one daemon, so the postures are compared against
 /// the same chain in the same process, and the unrestricted rows are the
@@ -3899,29 +3911,17 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
          assertions above would hold for a daemon that reports nothing to anyone"
     );
 
-    // ── The other template ──────────────────────────────────────────────
-    //
-    // Everything above is REST, which reaches the handlers through
-    // `dispatch_json`. JSON-RPC goes through `dispatch_jsonrpc_we`, a separate
-    // template that could regress on its own, so it needs its own assertions —
-    // and it has two answer shapes, both worth crossing:
-    //
-    //   * a refusal written into `error_resp`  -> the error envelope
-    //   * a refusal written into `res.status`  -> the result envelope
-    //
-    // `get_block_header_by_hash` takes the first path, `get_output_histogram`
-    // the second. (After this branch deleted the unused `DJRPC` macro and its
-    // template, these two are the only JSON-RPC dispatcher left.)
-    let json_rpc = |method: &str, params: serde_json::Value| json!({ "jsonrpc": "2.0", "id": 0, "method": method, "params": params });
-
-    // Over the block cap: refused into `error_resp`, so the reply is an error
-    // envelope and `result` never appears.
+    // JSON-RPC goes through `dispatch_jsonrpc_we`, a separate template. Over
+    // the block cap the handler writes `error_resp`, so the reply is an error
+    // envelope and `result` never appears. That is the remaining origin
+    // witness on this template: if the dispatcher stops passing `ctx`, the
+    // cap does not fire.
     let hdr: serde_json::Value = restricted
         .rpc_call(
             "json_rpc",
-            Some(json_rpc(
+            Some(jsonrpc_body(
                 "get_block_header_by_hash",
-                json!({ "hashes": hashes(BLOCK_CAP + 1) }),
+                &json!({ "hashes": hashes(BLOCK_CAP + 1) }),
             )),
         )
         .await
@@ -3932,40 +3932,92 @@ async fn restricted_listener_applies_request_caps_through_the_ffi_bridge() {
         "a restricted listener must refuse more than {BLOCK_CAP} block hashes; \
          if this succeeds the JSON-RPC template stopped passing the origin"
     );
+}
 
-    // The whole-chain histogram: refused into `res.status`, so the reply is a
-    // *result* envelope carrying a non-OK status. Same gate, other shape.
-    let hist: serde_json::Value = restricted
+/// `dispatch_jsonrpc_we` can carry a handler's non-OK `res.status` in the
+/// JSON-RPC *result* envelope, not only in `error`.
+///
+/// No WE handler now refuses a *restricted* caller into `res.status`
+/// (`get_output_histogram` was the last). The remaining witness is a
+/// universal cap on the admin listener. This is not an origin check: if a
+/// WE handler grows a restricted `res.status` refusal, that leg belongs on
+/// `restricted_listener_applies_request_caps_through_the_ffi_bridge`.
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn jsonrpc_we_carries_handler_status_through_the_result_envelope() {
+    const COINBASE_SUM_RANGE_REFUSAL: &str = "height or count is too large";
+
+    let daemon = RegtestDaemon::start().await;
+    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
+        .await
+        .expect("admin rpc client");
+
+    let over: serde_json::Value = admin
         .rpc_call(
             "json_rpc",
-            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+            Some(jsonrpc_body(
+                "get_coinbase_tx_sum",
+                &json!({ "height": 0, "count": 1_000_000 }),
+            )),
         )
         .await
-        .expect("restricted get_output_histogram with no amounts");
+        .expect("admin get_coinbase_tx_sum over the chain height");
     assert_eq!(
-        hist.pointer("/result/status").and_then(|s| s.as_str()),
-        Some(
-            "Restricted RPC will not serve histograms on the whole blockchain. Use your own node."
-        ),
-        "a restricted listener must refuse the whole-chain histogram"
+        over.pointer("/result/status").and_then(|s| s.as_str()),
+        Some(COINBASE_SUM_RANGE_REFUSAL),
+        "a count past the chain height must be refused through the result envelope"
     );
 
-    // And the same JSON-RPC request on the admin listener is served, so the
-    // JSON-RPC half has its blast-radius control too.
-    let admin_hist: serde_json::Value = unrestricted
+    let ok: serde_json::Value = admin
         .rpc_call(
             "json_rpc",
-            Some(json_rpc("get_output_histogram", json!({ "amounts": [] }))),
+            Some(jsonrpc_body(
+                "get_coinbase_tx_sum",
+                &json!({ "height": 0, "count": 1 }),
+            )),
         )
         .await
-        .expect("unrestricted get_output_histogram with no amounts");
+        .expect("admin get_coinbase_tx_sum for the genesis block");
     assert_eq!(
-        admin_hist
-            .pointer("/result/status")
-            .and_then(|s| s.as_str()),
+        ok.pointer("/result/status").and_then(|s| s.as_str()),
         Some("OK"),
-        "the unrestricted listener must still serve the whole-chain histogram"
+        "a well-formed request must remain distinguishable from the range refusal"
     );
+}
+
+/// `get_output_histogram` stays unrouted on both listeners (SOK-Q3 B).
+///
+/// A route re-minted under the old name turns this red before it can serve
+/// a histogram (rule 47).
+#[tokio::test]
+#[ignore = "Track-2 regtest: requires SHEKYLD_BIN; spawns a live daemon"]
+async fn get_output_histogram_stays_unrouted() {
+    const DELETED_METHOD: &str = "get_output_histogram";
+
+    let daemon = RegtestDaemon::start_with_restricted_listener().await;
+    let restricted = HttpRpc::new(daemon.restricted_url().to_owned())
+        .await
+        .expect("restricted rpc client");
+    let admin = HttpRpc::new(format!("http://127.0.0.1:{}", daemon.rpc_port()))
+        .await
+        .expect("admin rpc client");
+
+    for (name, listener) in [("restricted", &restricted), ("admin", &admin)] {
+        let gone: serde_json::Value = listener
+            .rpc_call(
+                "json_rpc",
+                Some(jsonrpc_body(DELETED_METHOD, &json!({ "amounts": [] }))),
+            )
+            .await
+            .expect(
+                "get_output_histogram must answer with an error envelope, not a transport failure",
+            );
+        assert_eq!(
+            gone.pointer("/error/message").and_then(|m| m.as_str()),
+            Some("Method not found: get_output_histogram"),
+            "{DELETED_METHOD} was deleted (SOK-Q3) and must stay unrouted on the {name} listener"
+        );
+    }
 }
 
 /// The native handlers apply their own request caps.
