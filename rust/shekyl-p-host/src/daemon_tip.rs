@@ -105,12 +105,6 @@ impl DaemonTipCache {
         }
     }
 
-    /// The age bound this cache was built with.
-    #[must_use]
-    pub fn max_age(&self) -> Duration {
-        self.max_age
-    }
-
     /// Record the daemon's tip, read at this moment from a daemon that
     /// reported itself synchronized.
     ///

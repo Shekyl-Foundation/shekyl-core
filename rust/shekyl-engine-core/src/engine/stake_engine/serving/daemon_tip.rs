@@ -25,6 +25,23 @@
 //! persona will be slashed against; sourcing it from a drawn peer would let
 //! whoever answers choose which challenges `P` refuses.
 //!
+//! # `get_info` is served by C++ today, and that is why the seam matters
+//!
+//! The reply this module parses comes from the **C++** daemon
+//! (`src/rpc/core_rpc_server.cpp` — `synchronized` at its `on_get_info`,
+//! `target_height` under the "0 when synchronized" rule). There is no
+//! `get_info` handler in `shekyl-daemon-rpc`: the Rust RPC tree has
+//! `get_version` and `get_height`, not this method.
+//!
+//! Per the standing ruling (2026-09-19) we do not build *to* the C++ daemon,
+//! and daemon elements still in flux stay behind a seam the wallet owns. That
+//! is what [`PersonaIsolatedTransport`] and [`TipReading`] are here — the
+//! wallet's own transport type and its own typed reading, with
+//! [`tip_reading_from_info`] the single place the wire shape is known. The
+//! response shape **will move** when DRS lands the Rust chain store, and when
+//! it does this one function changes while the gate, the cache, and every
+//! test above them do not. The seam is load-bearing, not incidental.
+//!
 //! # Chain height is converted to block height here
 //!
 //! `get_info.height` is the chain height — the top block's height **plus one**
@@ -207,16 +224,107 @@ pub(crate) async fn run_daemon_tip_refresher<R>(
 mod tests {
     use super::*;
     use serde_json::json;
+    use shekyl_rpc_client::{Rpc, RpcError};
+
+    /// A transport that answers every call with one canned result.
+    ///
+    /// `PersonaIsolatedTransport`'s doc permits test implementations
+    /// explicitly ("the pin is against production misuse, not test
+    /// plumbing"), and without one the dispatch below — which reading stamps
+    /// what — has no oracle at all: every other test in this module calls
+    /// `tip_reading_from_info` and then stamps by hand, which is the thing
+    /// under test doing the test's job.
+    #[derive(Clone)]
+    struct CannedRpc(std::sync::Arc<Result<Vec<u8>, RpcError>>);
+
+    impl CannedRpc {
+        /// A well-formed JSON-RPC reply carrying `result`.
+        fn replying(result: &serde_json::Value) -> Self {
+            Self(std::sync::Arc::new(Ok(json!({ "result": result })
+                .to_string()
+                .into_bytes())))
+        }
+
+        /// A reply that is not the envelope the caller expects.
+        fn garbage() -> Self {
+            Self(std::sync::Arc::new(Ok(b"not json".to_vec())))
+        }
+
+        /// A daemon that could not be reached at all.
+        fn unreachable() -> Self {
+            Self(std::sync::Arc::new(Err(RpcError::ConnectionError(
+                "test: no daemon".to_string(),
+            ))))
+        }
+    }
+
+    impl Rpc for CannedRpc {
+        fn post(
+            &self,
+            _route: &str,
+            _body: Vec<u8>,
+        ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+            let answer = match &*self.0 {
+                Ok(bytes) => Ok(bytes.clone()),
+                Err(RpcError::ConnectionError(m)) => Err(RpcError::ConnectionError(m.clone())),
+                Err(_) => Err(RpcError::InternalError("test".to_string())),
+            };
+            async move { answer }
+        }
+    }
+
+    impl PersonaIsolatedTransport for CannedRpc {}
 
     /// The block target this suite reasons in, matching the mainnet default.
     const BLOCK_TARGET: u64 = 120;
 
+    /// The conversion, pinned on its own axis.
+    ///
+    /// This is the most dangerous line in the module: `get_info.height` is
+    /// the CHAIN height (top block + 1), while admission centres its window
+    /// on `predecessor_height - 720`, a BLOCK height. An off-by-one here
+    /// centres P's gate one block high and makes it sign anchors the daemon
+    /// then refuses — silently, because every signature is still
+    /// well-formed and every counter still reads zero.
+    ///
+    /// Asserted in both directions so a later refactor that moves the `-1`
+    /// elsewhere, or drops it, cannot pass: the reading must equal the top
+    /// block height AND must not equal the chain height it was derived from.
     #[test]
     fn a_synced_daemon_reads_as_the_top_block_height_not_the_chain_height() {
-        // Chain height 9_001 means the top block is 9_000. Stamping 9_001
-        // would centre P's gate one block above admission's window.
-        let info = json!({"height": 9_001, "target_height": 0, "synchronized": true});
-        assert_eq!(tip_reading_from_info(&info), TipReading::Synced(9_000));
+        const CHAIN_HEIGHT: u64 = 9_001;
+        const TOP_BLOCK: u64 = CHAIN_HEIGHT - 1;
+
+        let info = json!({
+            "height": CHAIN_HEIGHT, "target_height": 0, "synchronized": true
+        });
+        let reading = tip_reading_from_info(&info);
+        assert_eq!(
+            reading,
+            TipReading::Synced(TOP_BLOCK),
+            "the gate's height is the top block, not the chain height"
+        );
+        assert_ne!(
+            reading,
+            TipReading::Synced(CHAIN_HEIGHT),
+            "stamping the chain height unconverted centres the gate one block high"
+        );
+    }
+
+    /// And the conversion survives the whole producer path, not just the
+    /// parse: what reaches the cache is the block height too.
+    #[tokio::test]
+    async fn the_conversion_reaches_the_cache_not_only_the_reading() {
+        let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+        let rpc = CannedRpc::replying(&json!({
+            "height": 9_001, "target_height": 0, "synchronized": true
+        }));
+        refresh_tip_once(&rpc, &tip).await;
+        assert_eq!(
+            tip.height(),
+            Some(9_000),
+            "a gate reading 9_001 would sign anchors admission refuses"
+        );
     }
 
     /// The case `synchronized` exists for: a freshly started daemon with no
@@ -314,5 +422,77 @@ mod tests {
             max_age * 4 <= Duration::from_secs(BLOCK_TARGET * 4 * 4),
             "one block target is well inside the gate's +/-4 block tolerance"
         );
+    }
+
+    // ── The dispatch: which reading stamps what ─────────────────────────
+    //
+    // These are the only tests that run `refresh_tip_once` itself. Without
+    // them the match arms are unpinned: turning `Unusable => {}` into
+    // `Unusable => tip.stamp_syncing()` leaves every other test in this file
+    // green while re-creating the slash WSS-24 removes.
+
+    #[tokio::test]
+    async fn a_synced_reply_stamps_the_top_block_height() {
+        let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+        let rpc = CannedRpc::replying(&json!({
+            "height": 9_001, "target_height": 0, "synchronized": true
+        }));
+        assert_eq!(
+            refresh_tip_once(&rpc, &tip).await,
+            TipReading::Synced(9_000)
+        );
+        assert_eq!(tip.height(), Some(9_000), "the reading reached the cache");
+    }
+
+    #[tokio::test]
+    async fn a_syncing_reply_clears_a_held_tip() {
+        let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+        tip.stamp_synced(9_000);
+        let rpc = CannedRpc::replying(&json!({
+            "height": 9_001, "target_height": 12_000, "synchronized": true
+        }));
+        assert_eq!(refresh_tip_once(&rpc, &tip).await, TipReading::Syncing);
+        assert_eq!(
+            tip.height(),
+            None,
+            "a daemon that says it is behind must invalidate the tip it gave before"
+        );
+    }
+
+    /// The two "no news" cases, and the property that makes them one case: a
+    /// held tip SURVIVES. This is the arm a mutation would flip, and the
+    /// reason it must not is that an honest persona would otherwise be
+    /// slashed for a dropped loopback poll.
+    #[tokio::test]
+    async fn an_unreadable_or_unreachable_daemon_leaves_the_held_tip_alone() {
+        for (name, rpc) in [
+            ("a malformed reply", CannedRpc::garbage()),
+            ("an unreachable daemon", CannedRpc::unreachable()),
+        ] {
+            let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+            tip.stamp_synced(9_000);
+            assert_eq!(
+                refresh_tip_once(&rpc, &tip).await,
+                TipReading::Unusable,
+                "{name} is not a fact about the tip"
+            );
+            assert_eq!(
+                tip.height(),
+                Some(9_000),
+                "{name} must not refuse challenges the held tip can still gate"
+            );
+        }
+    }
+
+    /// And "no news" does not manufacture a tip either: nothing stamped
+    /// stays nothing stamped.
+    #[tokio::test]
+    async fn an_unreachable_daemon_does_not_invent_a_tip() {
+        let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+        assert_eq!(
+            refresh_tip_once(&CannedRpc::unreachable(), &tip).await,
+            TipReading::Unusable
+        );
+        assert_eq!(tip.height(), None);
     }
 }

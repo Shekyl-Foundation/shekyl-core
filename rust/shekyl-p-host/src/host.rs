@@ -74,12 +74,21 @@ impl fmt::Debug for PersonaServing {
 ///
 /// Every non-servable outcome renders one identical 404 on the wire; these
 /// are the only place the outcomes are distinguishable, and only in
-/// aggregate. In particular `sign_failures` is how an operator tells "the
-/// serving store could not be read" (`lookup_failures`) from "the store
-/// answered but the attestation key refused" — a persona started with
+/// aggregate. In particular `sign_failures` is how an operator tells "this
+/// persona could not read what it needed" (`lookup_failures`) from "it read
+/// everything and the attestation key refused" — a persona started with
 /// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
 /// ordinary miss — a shard the persona simply does not hold — is the
 /// deliberate 404 and moves neither counter.
+///
+/// `lookup_failures` has **two** causes, deliberately pooled because a
+/// requester cannot distinguish them either: the serving store could not be
+/// read, or there is no usable daemon tip to run the anchor gate against
+/// (nothing stamped yet, the daemon reports itself syncing, or the last
+/// stamp aged out — `WSS-24`, see [`crate::signer`]). Both mean the same
+/// thing to an operator, which is what the counter is for: this persona has
+/// lost sight of something it needs, and passes are being lost to that
+/// rather than to a signer that is down.
 ///
 /// **Distinguishable is not yet surfaced.** These are read through
 /// [`PersonaServingHost::counters`]; today the production serving task
