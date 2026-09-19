@@ -276,9 +276,16 @@ census_rows! {
         D1b pending,
         D2 pending,
         D3 pending,
-        D4 pending,
+        // D4 the target definition, recorded at `D4::target`; D6 held by the
+        // `Target` type, recorded at its one constructor `D6::mint` (slice 2
+        // Q4). D5 is **subsumed by D4 over an alt view**: the same LWMA-1
+        // reads its window through `ChainView::block_at`, and the alt
+        // stitching is what an alt view's `block_at` does — it stays
+        // `pending` until slice 9 lands that view and a fixture drives D4
+        // over it (slice 2 Q7; the A5 → 4.G shape).
+        D4 implemented(crate::rules::difficulty::D4),
         D5 pending,
-        D6 pending,
+        D6 implemented(crate::rules::difficulty::D6),
         D7 pending,
         // 4.E Checkpoints and fast-sync trust
         E1 pending,

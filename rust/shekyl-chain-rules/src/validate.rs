@@ -47,6 +47,7 @@ use crate::block::{Candidate, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, FormAttempt, Stale};
 use crate::rule_set::RuleSet;
+use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B7};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
@@ -266,9 +267,12 @@ pub fn validate<'id, V: ChainView<'id>>(
 
     // Definitions the predicates read, derived once and recorded where they
     // are derived: the connecting height (one tip read), the MTP window
-    // (C3). B6 records at `ValidatedBlock::derive`.
+    // (C3), the target (D4, minted through D6) and the work it implies. B6
+    // records at `ValidatedBlock::derive`.
     let connecting = Tip::connecting_height(view.tip().map_err(Fault::View)?.as_ref());
     let mtp_window = C3::window(view, connecting, &mut coverage).map_err(Fault::View)?;
+    let target = D4::target(view, connecting, &mut coverage)?;
+    let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
 
     // View-bound block-level predicates (4.A–4.G), in census order.
     let cx = BlockContext::new(&formed, mtp_window);
@@ -294,7 +298,7 @@ pub fn validate<'id, V: ChainView<'id>>(
     }
 
     let (candidate, _stateless) = formed.into_parts();
-    let block = ValidatedBlock::derive(candidate, &mut coverage);
+    let block = ValidatedBlock::derive(candidate, target, cumulative_difficulty, &mut coverage);
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }
 

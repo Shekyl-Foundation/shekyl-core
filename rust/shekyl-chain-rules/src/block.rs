@@ -9,12 +9,14 @@
 
 use core::fmt;
 
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, Timestamp, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
 use crate::rule_set::RuleSetId;
+use crate::rules::difficulty::Target;
 use crate::rules::header::B6;
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
@@ -262,6 +264,8 @@ impl fmt::Debug for StructurallyValid {
 ///     block: todo!(),
 ///     miner_tx: todo!(),
 ///     transactions: todo!(),
+///     target: todo!(),
+///     cumulative_difficulty: todo!(),
 /// };
 /// ```
 #[derive(Debug, PartialEq, Eq)]
@@ -270,13 +274,22 @@ pub struct ValidatedBlock {
     block: Block,
     miner_tx: TxIdentity,
     transactions: Vec<(TxIdentity, Transaction)>,
+    target: Target,
+    cumulative_difficulty: CumulativeDifficulty,
 }
 
 impl ValidatedBlock {
     /// Derive every identity once. Called by `validate` after the last rule
     /// has passed and nowhere else. The block's identity comes from CEN-B6's
-    /// function, which records the row in `coverage` (slice 1, Q5).
-    pub(crate) fn derive(candidate: Candidate, coverage: &mut RuleCoverage) -> Self {
+    /// function, which records the row in `coverage` (slice 1, Q5); the
+    /// target and the cumulative work are CEN-D4's derivation, recorded
+    /// where it ran.
+    pub(crate) fn derive(
+        candidate: Candidate,
+        target: Target,
+        cumulative_difficulty: CumulativeDifficulty,
+        coverage: &mut RuleCoverage,
+    ) -> Self {
         let Candidate {
             block,
             transactions,
@@ -289,7 +302,24 @@ impl ValidatedBlock {
                 .into_iter()
                 .map(|tx| (TxIdentity::of(&tx), tx))
                 .collect(),
+            target,
+            cumulative_difficulty,
         }
+    }
+
+    /// The difficulty this block was judged against (CEN-D4, D6).
+    #[must_use]
+    pub const fn target(&self) -> Target {
+        self.target
+    }
+
+    /// Work through this block: the parent's cumulative difficulty plus
+    /// the target. What the store records as `block_info.cumulative_
+    /// difficulty` — derived here, never by the store (C2-R8 Q4; slice 2
+    /// Q5).
+    #[must_use]
+    pub const fn cumulative_difficulty(&self) -> CumulativeDifficulty {
+        self.cumulative_difficulty
     }
 
     /// The block's identity.

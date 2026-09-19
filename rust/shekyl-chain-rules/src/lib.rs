@@ -109,6 +109,7 @@ pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
 pub use fault::{Corrupt, Fault, FormAttempt, Retry, Stale, MAX_FORM_ATTEMPTS};
 pub use rule_set::{AdmissionPolicy, AdmissionPolicyId, RuleSchedule, RuleSet, RuleSetId};
+pub use rules::difficulty::Target;
 pub use substrate::Substrate;
 pub use validate::{form, tx_against, tx_form, validate};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};

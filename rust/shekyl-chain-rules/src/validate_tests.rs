@@ -21,8 +21,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
         // Slice 1's block rows — B1, B2, B7 from the stateless stage, A2,
         // B5 from the view-bound one, B6 from the derivation — and slice 2's
-        // 4.C rows (C1, C2 predicates; C3 definition), and nothing else (the
-        // per-tx entry points are still empty).
+        // 4.C rows (C1, C2 predicates; C3 definition) and 4.D definitions
+        // (D4 the target, D6 at its mint), and nothing else (the per-tx
+        // entry points are still empty).
         assert_eq!(
             valid.coverage().iter().collect::<Vec<_>>(),
             [
@@ -35,6 +36,8 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::C1,
                 CenRow::C2,
                 CenRow::C3,
+                CenRow::D4,
+                CenRow::D6,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
