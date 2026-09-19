@@ -45,6 +45,7 @@
 //! number attached, not a pre-provision (rule 21; slice 2 §3).
 
 use core::fmt;
+use core::num::NonZeroU128;
 
 use shekyl_difficulty::{lwma1_next, CumulativeDifficulty, Difficulty, Error, N_USIZE};
 use shekyl_types::{BlockHeight, Timestamp};
@@ -52,13 +53,15 @@ use shekyl_types::{BlockHeight, Timestamp};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault};
+use crate::rule_set::{DifficultyRule, RuleSet};
 use crate::rules::Rule;
 use crate::view::{AtHeight, ChainView, RecordedBlock};
 
 /// The difficulty a candidate must satisfy, **non-zero by construction**
-/// (CEN-D6). Minted only by [`D6::mint`] from [`D4::target`]'s derivation;
-/// there is no public constructor and no `From<Difficulty>`, so a zero
-/// target is unrepresentable where CEN-D1 compares.
+/// (CEN-D6). Minted by [`D6::mint`] from [`D4::target`]'s derivation, or
+/// fixed from a `NonZeroU128` on a Fakechain rule set ([`Target::fixed`],
+/// CEN-D7); there is no public constructor and no `From<Difficulty>`, so a
+/// zero target is unrepresentable where CEN-D1 compares.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Target(Difficulty);
 
@@ -69,6 +72,17 @@ impl Target {
     pub const fn difficulty(self) -> Difficulty {
         self.0
     }
+
+    /// A fixed target for a Fakechain rule set (`RuleSet::fakechain`,
+    /// CEN-D7). Non-zero by the argument's type, so the invariant this type
+    /// exists for is the caller's type's, not a check.
+    pub(crate) const fn fixed(fixed: NonZeroU128) -> Self {
+        Self(Difficulty::from_raw(fixed.get()))
+    }
+
+    /// The target the C++ forces at height 0 under `--fixed-difficulty`
+    /// (`blockchain.cpp:975`: `m_db->height() ? m_fixed_difficulty : 1`).
+    const ONE: Self = Self(Difficulty::from_raw(1));
 }
 
 impl fmt::Debug for Target {
@@ -120,8 +134,9 @@ impl Rule for D4 {
 }
 
 impl D4 {
-    /// The target a candidate connecting at `connecting` must satisfy,
-    /// recorded in `coverage` as this row (and D6, at the mint).
+    /// The target a candidate connecting at `connecting` must satisfy under
+    /// `rule_set`, recorded in `coverage` as this row (and D6 at the mint,
+    /// D7 at the override consultation).
     ///
     /// `lwma1_next`'s `chain_height` is the **tip's** height — the C++
     /// passes `height − 1` of its block count (`blockchain.cpp:1002`) — so
@@ -131,9 +146,13 @@ impl D4 {
     pub(crate) fn target<'id, V: ChainView<'id>>(
         view: &V,
         connecting: BlockHeight,
+        rule_set: &RuleSet,
         coverage: &mut RuleCoverage,
     ) -> Result<Target, Fault<V::Fault>> {
         coverage.insert(Self::ROW);
+        if let Some(fixed) = D7::fixed_target(rule_set, connecting, coverage) {
+            return Ok(fixed);
+        }
         let chain_height = BlockHeight::from_raw(connecting.to_raw().saturating_sub(1));
         let window = Self::window(view, chain_height)?;
         let difficulty = match lwma1_next(chain_height, &window.timestamps, &window.work) {
@@ -210,6 +229,39 @@ impl D4 {
             .checked_add(target.difficulty().to_raw())
             .map(CumulativeDifficulty::from_raw)
             .ok_or(Fault::Corrupt(Corrupt::CumulativeDifficultyOverflow))
+    }
+}
+
+/// CEN-D7: `--fixed-difficulty` overrides the DAA on regtest, height 0
+/// forced to 1.
+///
+/// Ported as **data on a Fakechain rule set** (`DifficultyRule::Fixed`,
+/// `RuleSet::fakechain`; slice 2 §4.5, arm (d)), not as a flag the validator
+/// consults: no override path exists on any nettype other than Fakechain,
+/// by type. The row is *evaluated* on every block — is the target
+/// overridden here? — and records either way, so coverage is complete under
+/// every rule set; under an issued set the answer is always "no".
+pub(crate) struct D7;
+
+impl Rule for D7 {
+    const ROW: CenRow = CenRow::D7;
+}
+
+impl D7 {
+    /// The fixed target `rule_set` names, if any, recorded in `coverage` as
+    /// this row having been consulted. Height 0 is `1` under a fixed
+    /// target, as the C++ has it.
+    fn fixed_target(
+        rule_set: &RuleSet,
+        connecting: BlockHeight,
+        coverage: &mut RuleCoverage,
+    ) -> Option<Target> {
+        coverage.insert(Self::ROW);
+        match rule_set.difficulty() {
+            DifficultyRule::Lwma1 => None,
+            DifficultyRule::Fixed(_) if connecting.is_zero() => Some(Target::ONE),
+            DifficultyRule::Fixed(fixed) => Some(fixed),
+        }
     }
 }
 

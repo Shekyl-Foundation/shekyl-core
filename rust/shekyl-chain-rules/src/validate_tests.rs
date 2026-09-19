@@ -43,6 +43,7 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::D3,
                 CenRow::D4,
                 CenRow::D6,
+                CenRow::D7,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));

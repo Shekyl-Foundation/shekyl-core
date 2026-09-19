@@ -288,7 +288,9 @@ census_rows! {
         D4 implemented(crate::rules::difficulty::D4),
         D5 pending,
         D6 implemented(crate::rules::difficulty::D6),
-        D7 pending,
+        // D7 as data on a Fakechain rule set (`DifficultyRule::Fixed`), the
+        // override arm D4 consults on every block (slice 2 Q10, arm (d)).
+        D7 implemented(crate::rules::difficulty::D7),
         // 4.E Checkpoints and fast-sync trust
         E1 pending,
         E2 pending,

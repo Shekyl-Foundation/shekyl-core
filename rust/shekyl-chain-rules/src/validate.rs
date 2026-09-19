@@ -283,7 +283,7 @@ pub fn validate<'id, V: ChainView<'id>>(
     // judging until `form` is redone.
     D3::verify_seed(view, connecting, &formed, &mut coverage)?;
     let mtp_window = C3::window(view, connecting, &mut coverage).map_err(Fault::View)?;
-    let target = D4::target(view, connecting, &mut coverage)?;
+    let target = D4::target(view, connecting, rule_set, &mut coverage)?;
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
     let pow_meets_target = D1b::satisfies(formed.pow(), target, &mut coverage);
 

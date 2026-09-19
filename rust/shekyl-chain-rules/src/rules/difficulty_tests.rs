@@ -12,6 +12,7 @@
 use super::*;
 use crate::harness::fixture::{recorded, recorded_with_work, root};
 use crate::harness::{Faulted, FaultingView, MockChain};
+use crate::rule_set::RuleSet;
 use shekyl_difficulty::{GENESIS_DIFFICULTY, N};
 
 /// A chain of `len` blocks whose timestamps and work follow a non-uniform
@@ -41,7 +42,7 @@ fn target_on(chain: &MockChain) -> (Target, RuleCoverage) {
     let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |t| t.height.to_raw() + 1));
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        let target = match D4::target(&view, connecting, &mut coverage) {
+        let target = match D4::target(&view, connecting, &RuleSet::GENESIS, &mut coverage) {
             Ok(target) => target,
             Err(fault) => panic!("unexpected fault: {fault}"),
         };
@@ -132,7 +133,7 @@ fn cen_d4_non_monotone_work_is_a_corrupt_view_not_a_verdict() {
     let connecting = BlockHeight::from_raw(chain.tip().expect("blocks").height.to_raw() + 1);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        match D4::target(&view, connecting, &mut coverage) {
+        match D4::target(&view, connecting, &RuleSet::GENESIS, &mut coverage) {
             Err(Fault::Corrupt(Corrupt::CumulativeDifficultyNotMonotone { at })) => {
                 assert_eq!(
                     at.to_raw(),
@@ -150,7 +151,12 @@ fn cen_d4_propagates_a_view_fault() {
     let view = FaultingView::default();
     let mut coverage = RuleCoverage::EMPTY;
     // Past N the window must be read; the first read faults.
-    match D4::target(&view, BlockHeight::from_raw(N + 1), &mut coverage) {
+    match D4::target(
+        &view,
+        BlockHeight::from_raw(N + 1),
+        &RuleSet::GENESIS,
+        &mut coverage,
+    ) {
         Err(Fault::View(Faulted)) => {}
         other => panic!("expected the view's fault, got {other:?}"),
     }
@@ -229,7 +235,7 @@ fn cen_d6_a_window_with_no_work_derives_zero_and_the_mint_refuses_it() {
     let connecting = BlockHeight::from_raw(chain.tip().expect("blocks").height.to_raw() + 1);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
-        match D4::target(&view, connecting, &mut coverage) {
+        match D4::target(&view, connecting, &RuleSet::GENESIS, &mut coverage) {
             Err(Fault::Corrupt(Corrupt::ZeroTarget)) => {}
             other => panic!("expected the zero-target fault, got {other:?}"),
         }
@@ -249,4 +255,63 @@ fn a_recorded_block_with_no_work_is_still_a_valid_short_chain() {
         target.difficulty(),
         Difficulty::from_raw(GENESIS_DIFFICULTY)
     );
+}
+
+// --- CEN-D7 ---------------------------------------------------------------
+
+#[test]
+fn cen_d7_a_fakechain_rule_set_fixes_the_target_and_forces_one_at_genesis() {
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    // Past the window the DAA would derive something else entirely; the
+    // fixed set says 7 regardless.
+    let (chain, _, _) = worked_chain(N_USIZE + 3);
+    let connecting = BlockHeight::from_raw(chain.tip().expect("blocks").height.to_raw() + 1);
+    chain.with_view(|view| {
+        let mut coverage = RuleCoverage::EMPTY;
+        let target = D4::target(&view, connecting, &seven, &mut coverage).expect("no fault");
+        assert_eq!(target.difficulty(), Difficulty::from_raw(7));
+        assert!(coverage.contains(CenRow::D7) && coverage.contains(CenRow::D4));
+    });
+    // Height 0 is 1 under a fixed target (blockchain.cpp:975).
+    MockChain::default().with_view(|view| {
+        let mut coverage = RuleCoverage::EMPTY;
+        let target = D4::target(&view, BlockHeight::ZERO, &seven, &mut coverage).expect("no fault");
+        assert_eq!(target.difficulty(), Difficulty::from_raw(1));
+    });
+}
+
+#[test]
+fn cen_d7_records_under_an_issued_rule_set_and_overrides_nothing() {
+    let (target, coverage) = target_on(&MockChain::default());
+    assert!(coverage.contains(CenRow::D7), "consulted on every block");
+    assert_eq!(
+        target.difficulty(),
+        Difficulty::from_raw(GENESIS_DIFFICULTY)
+    );
+    assert_eq!(RuleSet::GENESIS.difficulty(), DifficultyRule::Lwma1);
+}
+
+#[test]
+fn cen_d7_no_public_network_schedule_can_name_a_fixed_target() {
+    use shekyl_address::Network;
+    for network in [Network::Mainnet, Network::Testnet, Network::Stagenet] {
+        let schedule = crate::rule_set::RuleSchedule::for_network(network);
+        for height in [0u64, 1, 2113, 1_000_000] {
+            let id = schedule.rules_at(BlockHeight::from_raw(height));
+            let rule_set = RuleSet::for_id(id).expect("issued");
+            assert_eq!(
+                rule_set.difficulty(),
+                DifficultyRule::Lwma1,
+                "{network:?} @ {height}"
+            );
+        }
+    }
+}
+
+#[test]
+fn cen_d7_the_rule_set_id_is_no_longer_a_proxy_for_the_rule_set() {
+    // The caveat, pinned: same id, different rules.
+    let fixed = RuleSet::fakechain(core::num::NonZeroU128::new(3).expect("non-zero"));
+    assert_eq!(fixed.id(), RuleSet::GENESIS.id());
+    assert_ne!(fixed, RuleSet::GENESIS);
 }

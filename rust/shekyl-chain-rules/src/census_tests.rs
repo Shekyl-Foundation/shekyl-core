@@ -109,6 +109,7 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::D3,
             CenRow::D4,
             CenRow::D6,
+            CenRow::D7,
         ]
     );
     assert!(PolicyRow::ALL
