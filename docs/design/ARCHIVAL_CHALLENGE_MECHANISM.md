@@ -1965,8 +1965,9 @@ Two residuals, both stated rather than discovered:
   price would be a schema version plus a migration.
 - **Release lags the pin by one refresh.** The reconcile learns the store's
   pin set from the reply it is answering, so the difference is acted on next
-  time. Against a 720-block gate that is not a lag that means anything, and
-  it keeps the refresh at one actor round trip.
+  time. Against the two-epoch gate (`EPOCHS_BEFORE_PIN_RELEASE = 2`, ~28 days)
+  that is not a lag that means anything, and it keeps the refresh at one actor
+  round trip.
 
 The store deliberately does **not** enforce the gate — it has no clock, no
 view of the record, and no memory of when a shard left one. A half-check
