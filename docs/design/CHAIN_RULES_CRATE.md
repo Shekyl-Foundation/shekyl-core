@@ -444,6 +444,16 @@ the hash from `B6::identity`, which records the row in coverage there — not a
 `BlockRule` with a check that always passes (B7 is the no-op *policy* that
 still runs through `rules::run`).
 
+**The "check that always passes" test is run over the adversarial input
+space, not the conforming one** (rule 47, "Run the cannot-fail test against
+the adversarial input space"; slice 2, 2026-09-19). A refusal unreachable on
+every valid chain is not dead if a corrupt store or a non-conforming peer can
+reach it: CEN-D6's zero-target arm never fires on a conforming chain and
+fires on a view recording no work across a full LWMA window (`Corrupt::
+ZeroTarget`), which is what it exists for. Fold into a type only what cannot
+fail over the inputs the rule exists to refuse; B6 qualifies (no input makes
+the identity function fail), a refusal reachable from bad data does not.
+
 The `Block` is kept **whole** rather than decomposed into header + miner tx
 (the round-2 sketch): the header's `transaction_hashes` are part of what
 `Block::hash` commits to and part of what S-CHAIN-W persists, and until the

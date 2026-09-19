@@ -284,6 +284,17 @@ genesis tool) and is not this slice's; recorded here with the falsifier
 when it does, `RuleSet::fakechain` takes it as its argument and the
 constructor becomes unreachable without one.
 
+**Owed, so Q10 does not read as finished while its motivating case is open
+(ruled 2026-09-19).** The two consumers whose needs refused arm (c) —
+`scripts/bench/drs_bench.py` (real RandomX cost at a lowered target) and
+`tests/unit_tests/curve_tree_header_root_check.cpp` (difficulty 1 as a
+locus) — still have **no lever in the Rust validator**: nothing in
+production calls `RuleSet::fakechain`, and the witness has no source. Q10 is
+RULED, not finished, until both have a Rust-validated path; the FOLLOWUPS
+row names both consumers, both halves (witness, wiring) and a falsifier for
+each. Owner: this lane with the daemon-integration (E2) lane, which is
+where the daemon's `--fixed-difficulty` meets a Rust rule set.
+
 **The caveat, recorded beside the variant.** Once `RuleSet` carries
 `Fixed(n)`, **`RuleSetId` no longer uniquely determines the rule set**: two
 Fakechain nodes at `RuleSetId::GENESIS` may hold different rule sets.
@@ -369,6 +380,18 @@ instructed); C9 waits for #783 regardless.
   that would return it is D5's height-0 alt sentinel, which has no Rust
   caller. D6 as a *predicate* would be a check with no reachable refusal on
   main — the "gate that cannot fail" slice 1 Q5 declined for B6. Q4.
+  **Refined by the implementation (2026-09-19; rule 47 amended):** "no
+  reachable refusal on main" was true and was the wrong test. Commit 6's
+  fixtures met a view recording **no work across a full LWMA window**;
+  LWMA-1 derived zero and the mint refused it (`Corrupt::ZeroTarget`,
+  `cen_d6_a_window_with_no_work_derives_zero_and_the_mint_refuses_it`). A
+  refusal unreachable on every *valid* chain is not dead — the input space
+  it exists for is the non-conforming one, and slice 1's B6 reasoning,
+  applied here as first written, would have deleted the arm. The
+  gate-that-cannot-fail test is run over the adversarial input space;
+  what cannot fail *there* folds into a type (B6), what cannot fail only on
+  the happy path is a refusal and stays (D6's arm). Written where the test
+  lives: rule 47, `CHAIN_RULES_CRATE.md` §4.4.
 - **F5 — the seed-epoch env override is a validator-side read today.**
   `clamp_lag`/`clamp_blocks` read `SEEDHASH_EPOCH_*`; the C++ refuses them on
   public networks at init. The validator must not read the environment
@@ -489,23 +512,29 @@ instructed); C9 waits for #783 regardless.
   lists. Owner: the DRS program (E2's comparator is where "what did this
   test prove" is judged); FOLLOWUPS row carries the falsifier.
 - **F13 — the census D4 row says the genesis constant is 100; the config
-  says 400.** `config/consensus_constants.json:13` `daa_genesis_difficulty:
-  400` (the 2026-09-11 testnet calibration, per its own comment; 100 is the
-  zawy12 historical pin), and `CONSENSUS_RULE_CENSUS.md:359` still reads
-  "the genesis difficulty constant (100)". F3's class — row text stale
-  against what shipped — so a census amendment, not a divergence. Adjacent
-  and unresolved here: `shekyl-genesis-tool/src/builder.rs:174`–`:176` says
-  *"genesis difficulty is 1 (the first nonce tried always satisfies the PoW
-  check)"*, while D4 at connecting height 0 derives `GENESIS_DIFFICULTY`
-  (400) and the C++ `get_difficulty_for_next_block` on an empty store takes
-  a path this pre-flight could not follow to a value (`get_tail_id` on an
-  empty DB, then `++height`, `chain_height = height − 1`). Whether the
-  mainnet genesis block's nonce satisfies target 400 under its own seed is
-  a **question with a checkable answer** — compute its longhash and
-  `check_hash` at 400 — and it is the genesis-tool lane's, routed with that
-  falsifier (FOLLOWUPS). D4's fixture pins the Rust side: genesis admission
-  derives 400.
-
+  says 400** (`config/consensus_constants.json:13` `daa_genesis_difficulty:
+  400`, the 2026-09-11 testnet calibration per its own comment; 100 is the
+  zawy12 historical pin). F3's class — row text stale against what shipped
+  — **amended on the CEN-D4 row 2026-09-19** (the row now points at the JSON
+  key and repeats no number). **Re-pointed on review before it reached a
+  lane:** this pre-flight first filed it as a three-way discrepancy with the
+  genesis tool's *"genesis difficulty is 1"*. That was two subjects read as
+  one. `shekyl-difficulty/src/consts.rs:55` has `GENESIS_DIFFICULTY =
+  DAA_GENESIS_DIFFICULTY` from the JSON, and `:94`–`:102` already
+  distinguishes it from **the genesis block's own PoW difficulty of 1**,
+  with a const assertion `GENESIS_DIFFICULTY > 1` keeping them apart —
+  documented and gated. The "1" was never in question; the census's "100"
+  was the only live figure. **And the re-pointing found a defect in this
+  slice:** commit 5's `D4::target` returned the DAA constant at connecting
+  height 0, reading `lwma1_next`'s `chain_height = 0` arm as genesis
+  admission — it is the target for block **1** given a tip at 0; block 0
+  has no tip and the DAA is not consulted. Judging genesis at 400 would have
+  refused the shipped genesis block. Corrected in `15563dcd5`:
+  `Target::GENESIS_BLOCK` (1) at connecting height 0 under every rule set,
+  the same value the C++ forces there under `--fixed-difficulty`; fixtures
+  pin block 0 at 1 and block 1 as the first judged at the constant. The
+  FOLLOWUPS row filed for the three-way reading is withdrawn — resolved
+  items are removed (rule 95).
 ---
 
 ## 7. Record at close of the rules-crate commits (1–8, 2026-09-19)
@@ -569,7 +598,7 @@ one caveat, both recorded in §4.5.
 | --- | --- | --- | --- |
 | **Q8** | The Q1 staging put D1/D2/D3 in the stateless stage, but D3's seed is a chain read and D1's target is D4's derivation (§4.2). Split as: **D2** (`longhash`) in `form` under a **caller-supplied seed**; **D3** verifies that seed against the committing view in `validate`, a mismatch being a crate-defined **fault** (`Stale::Seed`, "redo `form`") rather than `InvalidBlock`; **D1/D1b** compare in `validate`. Or: forbid the split and accept RandomX inside the txn for D1–D3 only? | **The split.** The expensive call stays outside the txn, which was the ruling's point; every chain-dependent judgement stays inside it, which was C2-R8 Q3's. The seed height is ≥ 64 blocks below `c` by construction (`seedheight`, 2048/64), so `Stale::Seed` fires only on a ≥ 64-block reorg between the stages — the block is unproven, not disproven, hence a fault. The caller (the daemon's ingest driver; E2's replay) reads the seed id from any snapshot. | If the store lane rules that `connect` must never see a crate-defined fault beside the view's (one opaque type only), `Stale::Seed` becomes a `Verdict` arm that is *not* `InvalidBlock` — a third verdict kind — and that is a bigger change than the enum arm; say so now. |
 | **Q9** | Do B1, B2, B7 (view-free, landed in slice 1 on `validate`) move to `form`? | **Yes.** The partition is "reads the view or not", and a stage whose membership is "what slice 2 happened to add" is the accretion pattern. Their tests move unchanged; coverage unions. | If moving landed rules in a slice that is not theirs is ruled out of scope, they stay and the partition is documented as "view-free rules added from slice 2 onward" — worse, but honest. |
-| **Q10** | CEN-D7, fourth arm **(d): the fixed target enters as `RuleSet` data on FAKECHAIN only.** `rules_at(Network::Fakechain, …)` may issue a rule set whose difficulty parameter is `DifficultyRule::Fixed(NonZeroDifficulty)`; D4 reads `rule_set.difficulty()` — `Lwma1` derives, `Fixed(d)` returns `d` (height 0 → 1, as today). The constructor takes a `Fakechain` **witness type** obtainable only from `Network::Fakechain`, so no public-network code path can build one — the production binary has no override path *by type*, which was (c)'s virtue, and the target is really fixed, which is what F9's consumers need. `--fixed-difficulty` becomes the daemon's argument to that constructor. D7 then flips `implemented(rules::difficulty::D4)` (the `Fixed` arm is D4's), and the census row's "test-only carve-out live in the production binary" is deleted as a description, not ported as a mechanism. | **(d).** Rule 71 is satisfied literally: nettype selects **data**; the control flow is one `match` on a rule-set field that every nettype has. | (i) `RuleSet` is `Copy` and issued from a `const` list; a runtime `Fixed(d)` needs a constructor beside `for_id` and a `RuleSetId` for the persisted coverage — proposal: id `GENESIS` with the parameter carried on the value (fakechain chains are not comparable across processes anyway). If the store lane objects to a non-`ISSUED` rule set reaching `connect`, arm (a) (`Substrate::difficulty_override`) is the fallback, with the production implementor returning `None` as a **discipline**, not a structure — recorded as such. (ii) If any consumer needs *real* PoW at a fixed target **and** a fake longhash elsewhere, neither (c) nor (d) alone serves; none found. |
+| **Q10** *(RULED (d), with an owed item — §4.5: the motivating consumers are unserved until the witness and the daemon wiring land)* | CEN-D7, fourth arm **(d): the fixed target enters as `RuleSet` data on FAKECHAIN only.** `rules_at(Network::Fakechain, …)` may issue a rule set whose difficulty parameter is `DifficultyRule::Fixed(NonZeroDifficulty)`; D4 reads `rule_set.difficulty()` — `Lwma1` derives, `Fixed(d)` returns `d` (height 0 → 1, as today). The constructor takes a `Fakechain` **witness type** obtainable only from `Network::Fakechain`, so no public-network code path can build one — the production binary has no override path *by type*, which was (c)'s virtue, and the target is really fixed, which is what F9's consumers need. `--fixed-difficulty` becomes the daemon's argument to that constructor. D7 then flips `implemented(rules::difficulty::D4)` (the `Fixed` arm is D4's), and the census row's "test-only carve-out live in the production binary" is deleted as a description, not ported as a mechanism. | **(d).** Rule 71 is satisfied literally: nettype selects **data**; the control flow is one `match` on a rule-set field that every nettype has. | (i) `RuleSet` is `Copy` and issued from a `const` list; a runtime `Fixed(d)` needs a constructor beside `for_id` and a `RuleSetId` for the persisted coverage — proposal: id `GENESIS` with the parameter carried on the value (fakechain chains are not comparable across processes anyway). If the store lane objects to a non-`ISSUED` rule set reaching `connect`, arm (a) (`Substrate::difficulty_override`) is the fallback, with the production implementor returning `None` as a **discipline**, not a structure — recorded as such. (ii) If any consumer needs *real* PoW at a fixed target **and** a fake longhash elsewhere, neither (c) nor (d) alone serves; none found. |
 
 The seed-epoch lever (F5) has no consumer and no effect under the staging;
 it is **not** given an arm here. If one is ever needed it takes Q10's shape
@@ -613,3 +642,4 @@ consumers outside the daemon (Q6's owed sweep).
 | 2026-09-18 | Pre-flight written against `dev` @ `5adfc5423`. Q1–Q7 proposed with defaults. **HALT** for rulings (rule 26). |
 | 2026-09-19 | **Round 1 RULED** (Q1–Q7). Q1 approved with the staging refinement (`Substrate` → the stateless stage `form` / `StructurallyValid`); Q2–Q5, Q7 as defaulted; Q6 approved conditionally on its falsifier, which then **failed (c)** (F9). F3 reclassified as a census amendment (CEN-C1 row bracketed); F5 promoted to a CSR-3a register entry (CEN-D3 row, pass condition added); F8 the `blockchain.cpp:330` check (SCW-2 holds; slice-8 forward pin). **Round 2 proposed:** Q8 (seed as caller-supplied claim, verified in `validate`; D1 compares there), Q9 (B1/B2/B7 move to `form`), Q10 (D7 arm (d): fixed target as fakechain `RuleSet` data behind a witness type). **HALT** for Q8–Q10, or proceed on defaults if instructed. |
 | 2026-09-19 | **Round 2 RULED** (Q8 the split, with the conversion-ban extension and the bounded retry; Q9 yes; Q10 arm (d) with the corrected claim and the `RuleSetId` caveat — §4.5). **Commits 1–8 on the rulings.** Q8's falsifier ran first (§8.2: `connect` unaffected). Commits 1–5 landed on the branch; F10 forced commit 6a (the seed-epoch schedule's home). **Program findings taken from the reviewer's four instances:** F11 (the mock is never reconciled against `BatchView` — commit 9b), F12 (the test-deviation register — program-level, FOLLOWUPS), F13 (census D4 constant 100 vs config 400; genesis-tool "difficulty 1" — routed). |
+| 2026-09-19 | **Review of commits 1–8.** F4 refined into a rule-47 amendment (the cannot-fail test runs over the adversarial input space; D6's arm is reachable from a no-work view). F13 re-pointed: the "1" is the genesis *block's* own difficulty, already gated (`consts.rs:94`); only the census's 100 was live — amended on CEN-D4 — **and the re-pointing exposed a slice defect: D4 judged block 0 at the DAA constant; corrected to `Target::GENESIS_BLOCK` (1) in `15563dcd5`.** F10 → an owed item on Q10 naming both unserved consumers (FOLLOWUPS). F12's falsifier made one that fires (the first E2 pre-flight). Next: sweep #783/#784 (merged), then commits 9 / 9b. |
