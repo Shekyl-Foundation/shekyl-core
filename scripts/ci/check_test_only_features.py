@@ -92,6 +92,29 @@ three times — the bijection gate's `{table: reason}`, `CXX_HOLDER_RE`,
 `shekyl-chain-store` declares no features at all, which is the one moment it
 could be added for free.
 
+# The fourth limb — the trigger for joining governance is detected, not remembered
+
+`GOVERNED_OWNERS` is opt-in, and the rule for joining it — *a crate joins in
+the commit that first declares a feature another crate enables* — is exactly
+the condition `cargo metadata` already shows: crate X declares F, some other
+member's dependency edge on X enables F, X is not governed. So the rule is a
+limb, not a memory: **an ungoverned crate that meets the trigger is red**,
+with the instruction to join and categorize. It fires only on crates that
+actually cross a boundary; the sixty-odd that never will are untouched, which
+was the whole objection to governing everything. Governing all crates and
+*detecting the trigger* are different things, and the second is nearly free.
+
+Twelve crates already met the trigger when this limb was written
+(2026-09-19; a crate's dev-edge on itself crosses no boundary and does not
+count), and categorizing their features is not the S-TX pre-flight's
+scope, so they sit in `MET_TRIGGER_UNGOVERNED_AT_REGISTRATION` — a dated,
+shrink-only list of the DEFERRED_DOCS / bijection-allowlist shape. An entry
+is refused if the crate no longer meets the trigger (stale exception) or has
+joined `GOVERNED_OWNERS` (both at once is a contradiction); the list only
+shrinks. Three of the twelve are findings rather than chores — a feature
+whose name says test-only, enabled on a **normal** edge — and are called out
+in the list with their FOLLOWUPS row.
+
 # A limit this file does not close, named
 
 The gate reads the manifest. It can see that a feature is declared, owned and
@@ -146,20 +169,40 @@ PERMANENT: dict[tuple[str, str], str] = {}
 # (`shekyl-chain-store` declares none; `shekyl-tor-control-client` declares
 # only its TEST_ONLY row).
 #
-# THE RESIDUAL, NAMED: this set is itself opt-in — two crates out of a
-# workspace approaching seventy. Exhaustiveness holds *within* governance, and
-# governance has the shape the third limb closed one level down: a crate that
-# acquires a consumer-owned feature and never joins this set is outside the
-# whole construction, and nothing here notices. It is deliberately not closed
-# — governing every crate would force every feature in the workspace into
-# three categories and generate churn for no safety on crates that will never
-# have a consumer-owned feature. Instead the rule for joining is stated so it
-# can be applied without asking: **a crate joins this set in the commit that
-# first declares a feature another crate enables.** A feature only its own
-# tests or its own `default` turn on does not trigger it; a feature that
-# crosses a crate boundary does, because that is the edge every limb above is
-# about.
+# This set is opt-in — two crates out of a workspace approaching seventy — so
+# exhaustiveness holds *within* governance. The rule for joining: **a crate
+# joins this set in the commit that first declares a feature another crate
+# enables.** A feature only its own tests or its own `default` turn on does
+# not trigger it; one that crosses a crate boundary does, because that edge
+# is what every limb above is about. The rule is not remembered: the fourth
+# limb (`check_trigger`) reads it off `cargo metadata` and goes red on an
+# ungoverned crate that meets it. (The first draft named this as a residual
+# left open, on the argument that governing everything is churn; detecting
+# the trigger is a different, nearly free thing, and it is what landed.)
 GOVERNED_OWNERS: frozenset[str] = frozenset({"shekyl-chain-store", "shekyl-tor-control-client"})
+
+# Crates that met the governance trigger before the fourth limb existed
+# (measured 2026-09-19 on the S-TX pre-flight, PR #786) and are not yet
+# governed. Shrink-only: a crate leaves this list by joining GOVERNED_OWNERS
+# with its features categorized (FOLLOWUPS "Twelve crates meet the feature-
+# governance trigger ungoverned", Target: pre-genesis). Each entry names the
+# cross-crate feature(s) that tripped it. Entries marked FINDING enable a
+# test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
+# and are governed first.
+MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, str] = {
+    "shekyl-crypto-pq": "test-utils — FINDING: enabled on a NORMAL edge by shekyl-ffi",
+    "shekyl-curve-generators": "std (build edge, shekyl-fcmp-proofs)",
+    "shekyl-curve-tree": "test-tamper (dev edge, shekyl-p-host)",
+    "shekyl-engine-core": "test-helpers (dev edge, shekyl-wallet-rpc)",
+    "shekyl-fcmp-proofs": "std, compile-time-generators (normal edges)",
+    "shekyl-p-serve": "test-signer — FINDING: enabled on a NORMAL edge by shekyl-sp-t3-spike (dev by shekyl-p-fetch)",
+    "shekyl-pow-randomx": "test-internals — FINDING: enabled on a NORMAL edge by shekyl-randomx-differential",
+    "shekyl-rpc-client": "std (normal edges)",
+    "shekyl-scanner": "test-utils (dev edges, shekyl-engine-core / shekyl-wallet-rpc)",
+    "shekyl-standoff": "conformance (dev), gf7-hooks (normal, shekyl-staking-sim)",
+    "shekyl-types": "schema (normal edge, shekyl-engine-state)",
+    "shekyl-units": "schema (normal edge, shekyl-engine-state)",
+}
 
 RUST_DIR = Path(__file__).resolve().parents[2] / "rust"
 
@@ -279,6 +322,71 @@ def check_exhaustive(
     return failures
 
 
+def crates_meeting_trigger(meta: dict) -> dict[str, set[tuple[str, str, str]]]:
+    """Owner → {(feature, enabling crate, edge kind)} for every workspace
+    feature some *other* member's edge enables — the governance trigger."""
+    members = {p["name"]: p for p in meta["packages"]}
+    hits: dict[str, set[tuple[str, str, str]]] = {}
+    for consumer in meta["packages"]:
+        for dep in consumer["dependencies"]:
+            owner = members.get(dep["name"])
+            # A crate's dev-edge on itself is how it turns a feature on for
+            # its own tests; it crosses no boundary and is not the trigger.
+            if owner is None or dep["name"] == consumer["name"]:
+                continue
+            for feature in dep.get("features", []):
+                if feature in owner.get("features", {}):
+                    hits.setdefault(dep["name"], set()).add(
+                        (feature, consumer["name"], dep.get("kind") or "normal")
+                    )
+    return hits
+
+
+def check_trigger(
+    meta: dict, governed: frozenset[str], grandfathered: dict[str, str]
+) -> list[str]:
+    """The fourth limb: a crate that meets the trigger is governed or
+    grandfathered; a grandfather entry is still true and not also governed."""
+    failures: list[str] = []
+    hits = crates_meeting_trigger(meta)
+    for owner in sorted(hits):
+        if owner in governed or owner in grandfathered:
+            continue
+        edges = ", ".join(f"{f} ← {c} ({k})" for f, c, k in sorted(hits[owner]))
+        failures.append(
+            f"{owner}: declares a feature another crate enables ({edges}) and is "
+            f"not in GOVERNED_OWNERS — that is the trigger for joining. Add it, "
+            f"and categorize each of its features (TEST_ONLY / CONSUMER_OWNED / "
+            f"PERMANENT) in the same commit."
+        )
+    for owner in sorted(grandfathered):
+        if owner in governed:
+            failures.append(
+                f"{owner}: both in GOVERNED_OWNERS and in the grandfather list — "
+                f"it has joined; delete its grandfather entry"
+            )
+        elif owner not in hits:
+            failures.append(
+                f"{owner}: grandfathered as meeting the trigger, but no other crate "
+                f"enables any feature of it now — the exception is stale; delete "
+                f"the entry (the list only shrinks)"
+            )
+    return failures
+
+
+def _synthetic_self_edge() -> dict:
+    """One crate whose only feature is enabled by its own dev-dependency on itself."""
+    return {
+        "packages": [
+            {
+                "name": "owner",
+                "features": {"cfeat": []},
+                "dependencies": [{"name": "owner", "features": ["cfeat"], "kind": "dev"}],
+            }
+        ]
+    }
+
+
 def _synthetic(
     owner_features: dict[str, list[str]],
     edges: dict[str, list[tuple[str, list[str]]]],
@@ -363,7 +471,58 @@ def selftest() -> int:
             ["not a workspace member"],
         ),
     ]
+    trigger_cases = [
+        (
+            "ungoverned crate meets the trigger: red",
+            _synthetic({"cfeat": []}, {"comparator": [("owner", ["cfeat"])]}),
+            frozenset(),
+            {},
+            ["trigger for joining"],
+        ),
+        (
+            "governed crate meets the trigger: green",
+            _synthetic({"cfeat": []}, {"comparator": [("owner", ["cfeat"])]}),
+            frozenset({"owner"}),
+            {},
+            [],
+        ),
+        (
+            "grandfathered crate meets the trigger: green",
+            _synthetic({"cfeat": []}, {"comparator": [("owner", ["cfeat"])]}),
+            frozenset(),
+            {"owner": "cfeat"},
+            [],
+        ),
+        (
+            "grandfather entry gone stale (no enabler left): red",
+            _synthetic({"cfeat": []}, {"comparator": [("owner", [])]}),
+            frozenset(),
+            {"owner": "cfeat"},
+            ["exception is stale"],
+        ),
+        (
+            "grandfathered and governed at once: red",
+            _synthetic({"cfeat": []}, {"comparator": [("owner", ["cfeat"])]}),
+            frozenset({"owner"}),
+            {"owner": "cfeat"},
+            ["delete its grandfather entry"],
+        ),
+        (
+            "a crate's dev-edge on itself crosses no boundary: green",
+            _synthetic_self_edge(),
+            frozenset(),
+            {},
+            [],
+        ),
+    ]
     bad: list[str] = []
+    for label, meta, governed, grand, want in trigger_cases:
+        got = check_trigger(meta, governed, grand)
+        if not want and got:
+            bad.append(f"{label}: expected green, got {got!r}")
+        for needle in want:
+            if not any(needle in f for f in got):
+                bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
     for label, meta, governed, want in exhaustive_cases:
         got = check_exhaustive(meta, governed, {}, reg, {})
         if not want and got:
@@ -393,7 +552,8 @@ def selftest() -> int:
         return 1
     print(
         f"feature-gate selftest: {len(cases)} consumer-owned cases + "
-        f"{len(exhaustive_cases) + 1} exhaustiveness cases held"
+        f"{len(exhaustive_cases) + 1} exhaustiveness cases + "
+        f"{len(trigger_cases)} trigger cases held"
     )
     return 0
 
@@ -407,6 +567,7 @@ def main() -> int:
 
     failures: list[str] = check_consumer_owned(meta, CONSUMER_OWNED)
     failures += check_exhaustive(meta, GOVERNED_OWNERS, TEST_ONLY, CONSUMER_OWNED, PERMANENT)
+    failures += check_trigger(meta, GOVERNED_OWNERS, MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)
 
     for (owner, feature), why in sorted(TEST_ONLY.items()):
         # Subject assertion: the feature must exist where it is claimed to.
@@ -477,7 +638,9 @@ def main() -> int:
     print(
         f"Test-only feature gate OK: {checked} (dev-dependency edges only); "
         f"consumer-owned: {owned or 'none registered (selftest is the subject)'}; "
-        f"governed feature tables exhaustively categorized: {', '.join(sorted(GOVERNED_OWNERS))}"
+        f"governed feature tables exhaustively categorized: {', '.join(sorted(GOVERNED_OWNERS))}; "
+        f"trigger met and grandfathered (shrink-only): "
+        f"{len(MET_TRIGGER_UNGOVERNED_AT_REGISTRATION)}"
     )
     return 0
 
