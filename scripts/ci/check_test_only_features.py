@@ -104,18 +104,21 @@ actually cross a boundary; the sixty-odd that never will are untouched, which
 was the whole objection to governing everything. Governing all crates and
 *detecting the trigger* are different things, and the second is nearly free.
 
-Twelve crates already met the trigger when this limb was written
-(2026-09-19; a crate's dev-edge on itself crosses no boundary and does not
-count), and categorizing their features is not the S-TX pre-flight's
-scope, so they sit in `MET_TRIGGER_UNGOVERNED_AT_REGISTRATION` — a dated,
-shrink-only list of the DEFERRED_DOCS / bijection-allowlist shape. An entry
-is refused if the crate no longer meets the trigger (stale exception) or has
-joined `GOVERNED_OWNERS` (both at once is a contradiction); the list only
-shrinks. Three of the twelve are findings rather than chores — a feature
-whose name says test-only, enabled on a **normal** edge. Two are hygiene
-(move the edge, or rule PERMANENT with the reason) and share the governance
-FOLLOWUPS row; the third, `shekyl-crypto-pq/test-utils` enabled by
-`shekyl-ffi`, is **FOLLOWUPS F-7**'s — its exports are unconditional
+Fifteen crates already met the trigger when this limb was written
+(2026-09-19, with feature forwarding counted; a crate's edge on itself
+crosses no boundary and does not count), and categorizing their features is
+not the S-TX pre-flight's scope, so they sit in
+`MET_TRIGGER_UNGOVERNED_AT_REGISTRATION` — a dated, shrink-only list of the
+DEFERRED_DOCS / bijection-allowlist shape that records each crate's **exact
+hit set** (feature, consumer, edge kind). A new feature or a new enabler on a
+listed crate is red (an owner-keyed exemption would have covered it
+silently); a recorded hit that vanished is red until deleted; a crate that
+has joined `GOVERNED_OWNERS` may not also be listed. Three of the fifteen are
+findings rather than chores — a feature whose name says test-only, enabled
+on a **normal** edge. Two are hygiene (move the edge, or rule PERMANENT with
+the reason) and share the governance FOLLOWUPS row; the third,
+`shekyl-crypto-pq/test-utils` enabled by `shekyl-ffi` directly and by
+`shekyl-p-serve` through forwarding, is **FOLLOWUPS F-7**'s — its exports are unconditional
 `extern "C"` in the production header, so categorizing the feature changes
 nothing and the fix is the structural gate that row already names.
 
@@ -196,28 +199,144 @@ GOVERNED_OWNERS: frozenset[str] = frozenset(
     {"shekyl-chain-store", "shekyl-tor-control-client", "shekyl-chain-rules"}
 )
 
+Hit = tuple[str, str, str]  # feature, consumer, edge kind
+
 # Crates that met the governance trigger before the fourth limb existed
-# (measured 2026-09-19 on the S-TX pre-flight, PR #786) and are not yet
-# governed. Shrink-only: a crate leaves this list by joining GOVERNED_OWNERS
-# with its features categorized (FOLLOWUPS "Eleven crates meet the feature-
-# governance trigger ungoverned", Target: pre-genesis; the twelfth entry,
-# shekyl-crypto-pq, leaves via FOLLOWUPS F-7). Each entry names the
-# cross-crate feature(s) that tripped it. Entries marked FINDING enable a
-# test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
-# and are governed first.
-MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, str] = {
-    "shekyl-crypto-pq": "test-utils — FINDING owned by FOLLOWUPS F-7, not the governance row: enabled on a NORMAL edge by shekyl-ffi (present-in-archive by unification), and the FFI exports that call it are unconditional extern \"C\" in the production header (reachable, and NOT removed by an archive split) — two remedies, F-7 chooses; categorizing changes nothing. Leaves this list when F-7 lands.",
-    "shekyl-curve-generators": "std (build edge, shekyl-fcmp-proofs)",
-    "shekyl-curve-tree": "test-tamper (dev edge, shekyl-p-host)",
-    "shekyl-engine-core": "test-helpers (dev edge, shekyl-wallet-rpc)",
-    "shekyl-fcmp-proofs": "std, compile-time-generators (normal edges)",
-    "shekyl-p-serve": "test-signer — FINDING: enabled on a NORMAL edge by shekyl-sp-t3-spike (dev by shekyl-p-fetch)",
-    "shekyl-pow-randomx": "test-internals — FINDING: enabled on a NORMAL edge by shekyl-randomx-differential",
-    "shekyl-rpc-client": "std (normal edges)",
-    "shekyl-scanner": "test-utils (dev edges, shekyl-engine-core / shekyl-wallet-rpc)",
-    "shekyl-standoff": "conformance (dev), gf7-hooks (normal, shekyl-staking-sim)",
-    "shekyl-types": "schema (normal edge, shekyl-engine-state)",
-    "shekyl-units": "schema (normal edge, shekyl-engine-state)",
+# (measured 2026-09-19 on the S-TX pre-flight, PR #786, forwarding included)
+# and are not yet governed. Each entry records its EXACT hit set — (feature,
+# consumer, edge kind) — so a new feature or enabler on a listed crate is red,
+# and a vanished hit is red until deleted. Shrink-only: a crate leaves this
+# list by joining GOVERNED_OWNERS
+# with its features categorized (FOLLOWUPS "Fourteen crates meet the feature-
+# governance trigger ungoverned", Target: pre-genesis; the fifteenth entry,
+# shekyl-crypto-pq, leaves via FOLLOWUPS F-7). Entries marked FINDING enable
+# a test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
+# and are governed first. Forwarding raised the count from twelve to fifteen
+# (shekyl-curve-io, shekyl-curve-primitives, shekyl-fcmp are reached only by
+# forwarded `std` / `multisig` features) and added the two forwarded
+# normal-edge test paths named in the FINDING notes.
+MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, tuple[str, frozenset[Hit]]] = {
+    "shekyl-crypto-pq": (
+        "FINDING owned by FOLLOWUPS F-7, not the governance row: test-utils reaches "
+        "shekyl-ffi on a NORMAL edge directly and shekyl-p-serve on a NORMAL edge by "
+        "forwarding (its test-signer feature); the FFI exports that call it are "
+        "unconditional extern \"C\" in the production header, so categorizing changes "
+        "nothing. Leaves this list when F-7 lands.",
+        frozenset({
+            ("test-utils", "shekyl-archival-retention", "dev"),
+            ("test-utils", "shekyl-ffi", "normal"),
+            ("test-utils", "shekyl-p-fetch", "dev"),
+            ("test-utils", "shekyl-p-serve", "normal"),
+            ("test-utils", "shekyl-tx-builder", "dev"),
+        }),
+    ),
+    "shekyl-curve-generators": (
+        "categorization only",
+        frozenset({
+            ("std", "shekyl-bulletproofs", "build"),
+            ("std", "shekyl-curve-primitives", "normal"),
+            ("std", "shekyl-fcmp-proofs", "build"),
+            ("std", "shekyl-scanner", "normal"),
+        }),
+    ),
+    "shekyl-curve-io": (
+        "categorization only",
+        frozenset({
+            ("std", "shekyl-bulletproofs", "normal"),
+            ("std", "shekyl-curve-generators", "normal"),
+            ("std", "shekyl-rpc-client", "normal"),
+            ("std", "shekyl-scanner", "normal"),
+        }),
+    ),
+    "shekyl-curve-primitives": (
+        "categorization only",
+        frozenset({
+            ("std", "shekyl-bulletproofs", "normal"),
+            ("std", "shekyl-scanner", "normal"),
+        }),
+    ),
+    "shekyl-curve-tree": (
+        "categorization only",
+        frozenset({
+            ("test-tamper", "shekyl-p-host", "dev"),
+        }),
+    ),
+    "shekyl-engine-core": (
+        "categorization only",
+        frozenset({
+            ("test-helpers", "shekyl-wallet-rpc", "dev"),
+        }),
+    ),
+    "shekyl-fcmp": (
+        "categorization only",
+        frozenset({
+            ("multisig", "shekyl-ffi", "normal"),
+        }),
+    ),
+    "shekyl-fcmp-proofs": (
+        "categorization only",
+        frozenset({
+            ("compile-time-generators", "shekyl-engine-core", "dev"),
+            ("compile-time-generators", "shekyl-engine-core", "normal"),
+            ("compile-time-generators", "shekyl-fcmp", "normal"),
+            ("multisig", "shekyl-fcmp", "normal"),
+            ("std", "shekyl-engine-core", "dev"),
+            ("std", "shekyl-engine-core", "normal"),
+            ("std", "shekyl-fcmp", "normal"),
+        }),
+    ),
+    "shekyl-p-serve": (
+        "FINDING: test-signer enabled on NORMAL edges by shekyl-sp-t3-spike (direct) and shekyl-p-host (forwarded via its own test-signer)",
+        frozenset({
+            ("test-signer", "shekyl-p-fetch", "dev"),
+            ("test-signer", "shekyl-p-host", "normal"),
+            ("test-signer", "shekyl-sp-t3-spike", "normal"),
+        }),
+    ),
+    "shekyl-pow-randomx": (
+        "FINDING: test-internals enabled on a NORMAL edge by shekyl-randomx-differential",
+        frozenset({
+            ("test-internals", "shekyl-randomx-differential", "normal"),
+        }),
+    ),
+    "shekyl-rpc-client": (
+        "categorization only",
+        frozenset({
+            ("std", "shekyl-daemon-rpc", "normal"),
+            ("std", "shekyl-engine-core", "normal"),
+            ("std", "shekyl-rpc-transport", "normal"),
+            ("std", "shekyl-scanner", "normal"),
+            ("std", "shekyl-wallet-rpc", "normal"),
+        }),
+    ),
+    "shekyl-scanner": (
+        "categorization only",
+        frozenset({
+            ("test-utils", "shekyl-engine-core", "dev"),
+            ("test-utils", "shekyl-wallet-rpc", "dev"),
+        }),
+    ),
+    "shekyl-standoff": (
+        "categorization only",
+        frozenset({
+            ("conformance", "shekyl-engine-core", "normal"),
+            ("conformance", "shekyl-staking-sim", "dev"),
+            ("gf7-hooks", "shekyl-engine-core", "normal"),
+            ("gf7-hooks", "shekyl-staking-sim", "normal"),
+        }),
+    ),
+    "shekyl-types": (
+        "categorization only",
+        frozenset({
+            ("schema", "shekyl-engine-state", "normal"),
+        }),
+    ),
+    "shekyl-units": (
+        "categorization only",
+        frozenset({
+            ("schema", "shekyl-engine-state", "normal"),
+        }),
+    ),
 }
 
 RUST_DIR = Path(__file__).resolve().parents[2] / "rust"
@@ -237,11 +356,54 @@ def cargo_metadata() -> dict:
     return json.loads(out.stdout)
 
 
+# One enablement: `consumer` turns on `feature` of `owner` over a dependency
+# edge of `kind`, either directly (`via = "edge"`) or by **feature forwarding**
+# — an entry `"<dep>/<feature>"` or `"<dep>?/<feature>"` in the consumer's own
+# feature table (`via = "feature:<name>"`). Cargo activates the forwarded
+# feature whenever the consumer's feature is on, so a forwarded activation is
+# an enablement for every limb here (PR #786 review round 4: the direct-edge
+# view let a forwarded second consumer bypass the sole-enabler check, and hid
+# a cross-crate feature from the trigger). The dep name in a forward is the
+# consumer's *alias* for it (`package = "..."` renames), resolved through the
+# consumer's dependency list; `"dep:<name>"` entries enable an optional
+# dependency and no feature, and are not enablements.
+Enablement = tuple[str, str, str, str, str]  # owner, feature, consumer, kind, via
+
+
+def enablements(meta: dict) -> list[Enablement]:
+    """Every (owner, feature, consumer, kind, via) in one `cargo metadata`
+    document — direct edges and forwarded features alike."""
+    members = {p["name"] for p in meta["packages"]}
+    out: list[Enablement] = []
+    for consumer in meta["packages"]:
+        alias_to_edge: dict[str, tuple[str, str]] = {}
+        for dep in consumer["dependencies"]:
+            kind = dep.get("kind") or "normal"
+            alias = dep.get("rename") or dep["name"]
+            alias_to_edge[alias] = (dep["name"], kind)
+            for feature in dep.get("features", []):
+                out.append((dep["name"], feature, consumer["name"], kind, "edge"))
+        for fname, entries in consumer.get("features", {}).items():
+            for entry in entries:
+                if "/" not in entry or entry.startswith("dep:"):
+                    continue
+                alias, feature = entry.split("/", 1)
+                alias = alias.rstrip("?")
+                edge = alias_to_edge.get(alias)
+                if edge is None:
+                    continue
+                owner, kind = edge
+                if owner in members:
+                    out.append((owner, feature, consumer["name"], kind, f"feature:{fname}"))
+    return out
+
+
 def check_consumer_owned(
     meta: dict, registry: dict[tuple[str, str], tuple[str, str]]
 ) -> list[str]:
     """The consumer-owned limb, over one `cargo metadata` document."""
     packages = {p["name"]: p for p in meta["packages"]}
+    all_enablements = enablements(meta)
     failures: list[str] = []
     for (owner, feature), (enabler, why) in sorted(registry.items()):
         pkg = packages.get(owner)
@@ -274,12 +436,7 @@ def check_consumer_owned(
                     f"only, never from the owner's own feature table"
                 )
         enablers = sorted(
-            {
-                consumer["name"]
-                for consumer in meta["packages"]
-                for dep in consumer["dependencies"]
-                if dep["name"] == owner and feature in dep.get("features", [])
-            }
+            {c for (o, f, c, _k, _v) in all_enablements if o == owner and f == feature}
         )
         if not enablers:
             failures.append(
@@ -343,51 +500,88 @@ def crates_meeting_trigger(meta: dict) -> dict[str, set[tuple[str, str, str]]]:
     feature some *other* member's edge enables — the governance trigger."""
     members = {p["name"]: p for p in meta["packages"]}
     hits: dict[str, set[tuple[str, str, str]]] = {}
-    for consumer in meta["packages"]:
-        for dep in consumer["dependencies"]:
-            owner = members.get(dep["name"])
-            # A crate's dev-edge on itself is how it turns a feature on for
-            # its own tests; it crosses no boundary and is not the trigger.
-            if owner is None or dep["name"] == consumer["name"]:
-                continue
-            for feature in dep.get("features", []):
-                if feature in owner.get("features", {}):
-                    hits.setdefault(dep["name"], set()).add(
-                        (feature, consumer["name"], dep.get("kind") or "normal")
-                    )
+    for owner, feature, consumer, kind, _via in enablements(meta):
+        # A crate's edge on itself is how it turns a feature on for its own
+        # tests; it crosses no boundary and is not the trigger.
+        if owner == consumer or owner not in members:
+            continue
+        if feature in members[owner].get("features", {}):
+            hits.setdefault(owner, set()).add((feature, consumer, kind))
     return hits
 
 
 def check_trigger(
-    meta: dict, governed: frozenset[str], grandfathered: dict[str, str]
+    meta: dict,
+    governed: frozenset[str],
+    grandfathered: dict[str, tuple[str, frozenset[Hit]]],
 ) -> list[str]:
-    """The fourth limb: a crate that meets the trigger is governed or
-    grandfathered; a grandfather entry is still true and not also governed."""
+    """The fourth limb: a crate that meets the trigger is governed, or every
+    one of its hits is grandfathered **exactly** — (feature, consumer, kind).
+    An owner-keyed exemption would silently cover every future feature and
+    enabler of a listed crate, and stay green when the recorded hit vanished
+    while another remained (PR #786 review round 4); the exact set is what
+    makes the list genuinely shrink-only."""
     failures: list[str] = []
     hits = crates_meeting_trigger(meta)
     for owner in sorted(hits):
-        if owner in governed or owner in grandfathered:
+        if owner in governed:
             continue
-        edges = ", ".join(f"{f} ← {c} ({k})" for f, c, k in sorted(hits[owner]))
-        failures.append(
-            f"{owner}: declares a feature another crate enables ({edges}) and is "
-            f"not in GOVERNED_OWNERS — that is the trigger for joining. Add it, "
-            f"and categorize each of its features (TEST_ONLY / CONSUMER_OWNED / "
-            f"PERMANENT) in the same commit."
-        )
-    for owner in sorted(grandfathered):
+        recorded = grandfathered.get(owner)
+        if recorded is None:
+            edges = ", ".join(f"{f} ← {c} ({k})" for f, c, k in sorted(hits[owner]))
+            failures.append(
+                f"{owner}: declares a feature another crate enables ({edges}) and is "
+                f"not in GOVERNED_OWNERS — that is the trigger for joining. Add it, "
+                f"and categorize each of its features (TEST_ONLY / CONSUMER_OWNED / "
+                f"PERMANENT) in the same commit."
+            )
+            continue
+        _note, recorded_hits = recorded
+        for f, c, k in sorted(hits[owner] - recorded_hits):
+            failures.append(
+                f"{owner}: new cross-crate enablement `{f} ← {c} ({k})` on a "
+                f"grandfathered crate — the exception covers only the hits it "
+                f"recorded. Join GOVERNED_OWNERS and categorize, or record the hit "
+                f"with its reason (the list may not grow by omission)."
+            )
+    for owner, (_note, recorded_hits) in sorted(grandfathered.items()):
         if owner in governed:
             failures.append(
                 f"{owner}: both in GOVERNED_OWNERS and in the grandfather list — "
                 f"it has joined; delete its grandfather entry"
             )
-        elif owner not in hits:
+            continue
+        current = hits.get(owner, set())
+        for f, c, k in sorted(recorded_hits - current):
             failures.append(
-                f"{owner}: grandfathered as meeting the trigger, but no other crate "
-                f"enables any feature of it now — the exception is stale; delete "
-                f"the entry (the list only shrinks)"
+                f"{owner}: grandfathered hit `{f} ← {c} ({k})` no longer exists — "
+                f"delete it from the entry (the list only shrinks); if that empties "
+                f"the entry, delete the entry"
             )
+        if not recorded_hits:
+            failures.append(f"{owner}: grandfather entry records no hits — delete it")
     return failures
+
+
+def _synthetic_forwarded() -> dict:
+    """An owner with `cfeat`; `comparator` enables it on a direct edge, and a
+    second crate `forwarder` enables it only through its own feature table
+    (`x = ["owner/cfeat"]`) over a normal edge that lists no features."""
+    return {
+        "packages": [
+            {"name": "owner", "features": {"cfeat": []}, "dependencies": []},
+            {
+                "name": "comparator",
+                "features": {},
+                "dependencies": [{"name": "owner", "features": ["cfeat"], "kind": None}],
+            },
+            {
+                "name": "forwarder",
+                "features": {"x": ["owner/cfeat"]},
+                "dependencies": [{"name": "owner", "features": [], "kind": None}],
+            },
+        ]
+    }
 
 
 def _synthetic_self_edge() -> dict:
@@ -503,24 +697,51 @@ def selftest() -> int:
             [],
         ),
         (
-            "grandfathered crate meets the trigger: green",
+            "grandfathered exact hit meets the trigger: green",
             _synthetic({"cfeat": []}, {"comparator": [("owner", ["cfeat"])]}),
             frozenset(),
-            {"owner": "cfeat"},
+            {"owner": ("note", frozenset({("cfeat", "comparator", "normal")}))},
             [],
         ),
         (
-            "grandfather entry gone stale (no enabler left): red",
+            "grandfather hit gone (no enabler left): red, delete the hit",
             _synthetic({"cfeat": []}, {"comparator": [("owner", [])]}),
             frozenset(),
-            {"owner": "cfeat"},
-            ["exception is stale"],
+            {"owner": ("note", frozenset({("cfeat", "comparator", "normal")}))},
+            ["no longer exists"],
+        ),
+        (
+            "new enabler on a grandfathered crate: red (owner-keyed exemption would hide it)",
+            _synthetic(
+                {"cfeat": []},
+                {"comparator": [("owner", ["cfeat"])], "wallet": [("owner", ["cfeat"])]},
+            ),
+            frozenset(),
+            {"owner": ("note", frozenset({("cfeat", "comparator", "normal")}))},
+            ["new cross-crate enablement"],
+        ),
+        (
+            "new feature on a grandfathered crate: red",
+            _synthetic(
+                {"cfeat": [], "other": []},
+                {"comparator": [("owner", ["cfeat", "other"])]},
+            ),
+            frozenset(),
+            {"owner": ("note", frozenset({("cfeat", "comparator", "normal")}))},
+            ["new cross-crate enablement"],
+        ),
+        (
+            "recorded hit vanished while a different hit remains: red (stale substitution)",
+            _synthetic({"cfeat": []}, {"wallet": [("owner", ["cfeat"])]}),
+            frozenset(),
+            {"owner": ("note", frozenset({("cfeat", "comparator", "normal")}))},
+            ["no longer exists", "new cross-crate enablement"],
         ),
         (
             "grandfathered and governed at once: red",
             _synthetic({"cfeat": []}, {"comparator": [("owner", ["cfeat"])]}),
             frozenset({"owner"}),
-            {"owner": "cfeat"},
+            {"owner": ("note", frozenset({("cfeat", "comparator", "normal")}))},
             ["delete its grandfather entry"],
         ),
         (
@@ -530,8 +751,26 @@ def selftest() -> int:
             {},
             [],
         ),
+        (
+            "forwarded feature (`consumer.features.x = [\"owner/cfeat\"]`) is the trigger too: red",
+            _synthetic_forwarded(),
+            frozenset(),
+            {},
+            ["trigger for joining"],
+        ),
     ]
-    bad: list[str] = []
+    # Forwarding through the consumer's own feature table must count as an
+    # enablement for the sole-enabler and the test-only limbs as well.
+    fwd = _synthetic_forwarded()
+    fwd_owned = check_consumer_owned(fwd, {("owner", "cfeat"): ("comparator", "why")})
+    if not any("second consumer" in f for f in fwd_owned):
+        bad_pre = [f"forwarded second consumer not seen by the sole-enabler check: {fwd_owned!r}"]
+    else:
+        bad_pre = []
+    fwd_en = enablements(fwd)
+    if ("owner", "cfeat", "forwarder", "normal", "feature:x") not in fwd_en:
+        bad_pre.append(f"enablements() did not record the forwarded activation: {fwd_en!r}")
+    bad: list[str] = list(bad_pre)
     for label, meta, governed, grand, want in trigger_cases:
         got = check_trigger(meta, governed, grand)
         if not want and got:
@@ -580,6 +819,7 @@ def main() -> int:
 
     meta = cargo_metadata()
     packages = {p["name"]: p for p in meta["packages"]}
+    all_enablements = enablements(meta)
 
     failures: list[str] = check_consumer_owned(meta, CONSUMER_OWNED)
     failures += check_exhaustive(meta, GOVERNED_OWNERS, TEST_ONLY, CONSUMER_OWNED, PERMANENT)
@@ -619,21 +859,19 @@ def main() -> int:
                 )
 
         dev_enablers: list[str] = []
-        for consumer in meta["packages"]:
-            for dep in consumer["dependencies"]:
-                if dep["name"] != owner or feature not in dep.get("features", []):
-                    continue
-                # `kind` is null for a normal dependency, else "dev" / "build".
-                kind = dep.get("kind") or "normal"
-                if kind == "dev":
-                    dev_enablers.append(consumer["name"])
-                else:
-                    failures.append(
-                        f"{consumer['name']}: enables `{owner}/{feature}` on a "
-                        f"{kind} dependency edge — this feature {why}, and a "
-                        f"non-dev edge puts it in builds that ship. Move the "
-                        f"feature to the [dev-dependencies] edge."
-                    )
+        for o, f, consumer, kind, via in all_enablements:
+            if o != owner or f != feature:
+                continue
+            if kind == "dev":
+                dev_enablers.append(consumer)
+            else:
+                how = "on a" if via == "edge" else f"by forwarding (`{via}`) over a"
+                failures.append(
+                    f"{consumer}: enables `{owner}/{feature}` {how} {kind} "
+                    f"dependency edge — this feature {why}, and a non-dev edge puts "
+                    f"it in builds that ship. Move the feature to the "
+                    f"[dev-dependencies] edge."
+                )
 
         if not dev_enablers:
             failures.append(
