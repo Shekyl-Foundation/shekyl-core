@@ -814,7 +814,8 @@ partition is consensus) is unit-independent and stands. Its
 rows (consensus by the same argument — admission validates `shard_id`
 against closed shards, a divergent partition forks at admission);
 `R_k` becomes the two hash rows on the daemon's skeleton; the served
-frame is per-tx; hash rows and `b_*` on the daemon (consensus,
+frame is **whole-shard** (`WSS-Q7`: `SF-D1` keeps the read whole-shard —
+it is *verification* that is per-tx); hash rows and `b_*` on the daemon (consensus,
 uniform), bodies in the wallet store, frame shared. Its FOLLOWUPS
 "partition tie" row (`SEGMENT_LEAF_COUNT == leaves_per_segment()`
 compile-time assert; *"E3 consumes `frozen_segment_count` / `SegmentId`
@@ -1004,7 +1005,8 @@ existence. *Rust, deleted:* `rust/shekyl-curve-tree/src/store/redb_backend.rs:16
 (item 4's "retired by ruling, live in code" row — deleted at E4 /
 S-ARCH with the verifier). *Rust, rebuilt:* `LeafStore` becomes a
 body store keyed by shard `k` over `[b_k, b_{k+1})`, filled from the
-local daemon during the specified-to-scarce window (Q9), served per-tx;
+local daemon during the specified-to-scarce window (Q9), served
+**whole-shard** (`WSS-Q7`; verification is per-tx, the read is not);
 `shekyl-p-host`'s `StoreShardProvider` **keeps reading it** — the
 earlier "swaps its reader to the daemon's `get_prunable_range`" is
 **withdrawn** with that method. **The rebuild has an owner (added
@@ -1016,7 +1018,9 @@ txid** — *amended 2026-09-19 by the wallet lane's `WSS-Q5` ruling
 ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.4): a filler holds the whole
 transaction, so it recomputes the consensus commitment itself rather than
 trusting a supplied digest; the hash rows remain the **discarding daemon's**
-own need for `DRS-D10` skeleton replay*; key by shard over `[b_k, b_{k+1})`; serve per-tx
+own need for `DRS-D10` skeleton replay*; key by shard over `[b_k, b_{k+1})`; serve **whole-shard**
+(`WSS-Q7`, 2026-09-19 — `SF-D1`'s whole-shard read stands; it is *verification*
+that Q6 made per-tx)
 through `shekyl-p-serve` (`SF-D8`'s content half, sub-PR 2); carry its
 own lapse tail (#775's retention row); receive recovery shards the
 daemon hands across and retain them; hold the Foundation `CompleteTree`
@@ -1046,8 +1050,10 @@ deletion surface is B-shaped and correct as to symbols, but the freeze has one
 reads `frozen_segments.r_k` as a root-composition cache
 (`redb_backend.rs:1214`, `:1235-1247`; `store/ops.rs:39`) — `WSS-4`. **The
 retirement stands** — the read has a recompute-from-leaves fallback and
-nothing prunes in production, so the cache is dispensable rather than
-load-bearing. What the successor round takes from it is narrower than a
+nothing prunes in production, so the cache is **dispensable for
+correctness**. It is **load-bearing for cost**, though: `verify_root` runs on
+every ingested block, so without it every complete segment is recomputed from
+its leaves once per block and sync becomes quadratic (`WSS-14`). What the successor round takes from it is narrower than a
 survival claim: the composition boundary is a leaf-count geometry that
 **cannot be tied to `b_*`**, so `F33` (ii)'s interim assert dies with the
 freeze and is not re-pointed at `SHARD_BYTES`; whether obligation A keeps any
