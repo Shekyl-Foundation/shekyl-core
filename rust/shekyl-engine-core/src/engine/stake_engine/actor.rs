@@ -354,8 +354,16 @@ impl StakeEngine {
             }
             Err(reason) => {
                 if self.watch_quarantine.insert(gindex) {
+                    // A count, never the gindex (`WSS-20`). A global output
+                    // index in a plaintext log says *this machine owns chain
+                    // output N* — the wallet-correlating class `shekyl-types`
+                    // already puts behind a redacted `Debug` for `KeyImage`,
+                    // reached here through a `scalar_u64!` that carries no
+                    // such policy. `reason` is a fixed failure description,
+                    // not an identifier, and it is what the operator acts on;
+                    // the count says how far the corruption has spread.
                     tracing::error!(
-                        gindex = gindex.to_raw(),
+                        quarantined = self.watch_quarantine.len(),
                         %reason,
                         "watch key-image derivation failed; record quarantined from the \
                          spent-watch until it leaves the held set (its on-chain spend \
