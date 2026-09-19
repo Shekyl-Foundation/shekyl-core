@@ -1,0 +1,156 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! [`SyncedChainFacts`] — the constructor's refusal, the unit it carries, and
+//! the `get_info` decode it shares with the watchdog's health snapshot.
+
+use super::*;
+use serde_json::json;
+
+/// A `get_info` reply. `target_height` follows the info surface's convention:
+/// `0` means the daemon considers itself synchronized.
+fn info(height: u64, target_height: u64) -> Value {
+    json!({
+        "height": height,
+        "target_height": target_height,
+        "synchronized": true,
+        "outgoing_connections_count": 5,
+        "incoming_connections_count": 3,
+    })
+}
+
+/// With the daemon's own flag set, `target_height: 0` is the steady state —
+/// a live synchronized node reports it at every height.
+#[test]
+fn a_zero_target_is_the_synchronized_statement_at_any_height() {
+    for height in [0, 1, 20_000, u64::MAX] {
+        assert!(
+            SyncedChainFacts::new(ChainCount::from_raw(height), 0, true).is_some(),
+            "target 0 is synchronized at height {height}",
+        );
+    }
+}
+
+/// A daemon still climbing toward a target above its height refuses to yield
+/// the type. This is the `WSS-25` state: mid-resync, a record answers at a
+/// pre-bond height while the daemon says it has a long way to go.
+#[test]
+fn a_daemon_below_its_target_yields_no_facts() {
+    assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000), 1_000_000, true).is_none());
+    assert!(
+        SyncedChainFacts::new(ChainCount::from_raw(999_999), 1_000_000, true).is_none(),
+        "one block short is still short — there is no near-enough",
+    );
+}
+
+/// Reaching or overtaking the target is synchronized whatever the field says:
+/// a node whose network estimate has been passed is not behind.
+#[test]
+fn reaching_or_overtaking_the_target_is_synchronized() {
+    assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000_000), 1_000_000, true).is_some());
+    assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000_001), 1_000_000, true).is_some());
+}
+
+/// The count/height distinction, pinned. `get_info.height` is the block
+/// **count** (`core_rpc_server.cpp:206-207` increments the top block's
+/// height), so the newest existing block sits one below it. A consumer doing
+/// epoch arithmetic on the count instead of the tip lands one block early at
+/// every boundary — invisible to any test that never crosses one.
+#[test]
+fn the_tip_is_one_below_the_count_and_an_empty_chain_reads_zero() {
+    let facts = SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true).expect("synced");
+    assert_eq!(facts.tip(), BlockHeight::from_raw(20_000));
+
+    let empty =
+        SyncedChainFacts::new(ChainCount::from_raw(0), 0, true).expect("synced, empty chain");
+    assert_eq!(
+        empty.tip(),
+        BlockHeight::from_raw(0),
+        "an empty chain has no tip; elapsed-block arithmetic reads it as zero",
+    );
+}
+
+/// A reply without `height` is a malformed reply, not a synced chain of
+/// length zero. Defaulting here would mint a `SyncedChainFacts` vouching for
+/// a view that does not exist — the one decode error that must not fail soft.
+#[test]
+fn a_reply_without_a_height_is_refused_rather_than_defaulted() {
+    let err = health_from_get_info(&json!({ "target_height": 0 }))
+        .expect_err("a missing height is malformed");
+    assert!(
+        matches!(err, RpcError::InvalidNode(ref m) if m.contains("height")),
+        "the refusal names the missing field: {err:?}",
+    );
+}
+
+/// The optional fields take the safe default. `target_height`'s absence means
+/// synchronized (the surface's convention); an absent connection count reads
+/// as zero, which only ever routes the watchdog to the operator-alarm rung.
+#[test]
+fn the_optional_fields_default_in_the_safe_direction() {
+    let health = health_from_get_info(&json!({ "height": 77 })).expect("height is enough");
+    assert_eq!(health.height, 77);
+    assert_eq!(health.target_height, 0);
+    assert_eq!(health.connections, 0);
+}
+
+/// Connection counts are summed with `saturating_add`, so a daemon reporting
+/// absurd counts cannot wrap the sum to a peerless reading.
+#[test]
+fn the_connection_sum_saturates_rather_than_wrapping() {
+    let health = health_from_get_info(&json!({
+        "height": 1,
+        "outgoing_connections_count": u64::MAX,
+        "incoming_connections_count": 4,
+    }))
+    .expect("decodes");
+    assert_eq!(health.connections, u64::MAX);
+}
+
+/// The decode and the constructor compose: a synced reply yields facts at the
+/// reply's count, an unsynced one yields none.
+#[test]
+fn the_decode_and_the_constructor_compose() {
+    let synced = SyncedChainFacts::from_health(health_from_get_info(&info(500, 0)).expect("ok"))
+        .expect("synced");
+    assert_eq!(synced.tip(), BlockHeight::from_raw(499));
+
+    assert!(
+        SyncedChainFacts::from_health(health_from_get_info(&info(500, 900)).expect("ok")).is_none(),
+        "a climbing daemon yields no facts to act on",
+    );
+}
+
+/// **The hole the height comparison alone leaves open.** A freshly started
+/// daemon with no peers reports `target_height == 0` — the sentinel that
+/// *means* synchronized — while its own `synchronized` flag says otherwise
+/// and its height is genesis-adjacent. That is precisely the `WSS-25` state:
+/// a rebuilt database, before the node has anyone to catch up from.
+///
+/// Deleting `synchronized` from the constructor turns this red. It is the
+/// edit `50-testing` asks you to be able to name.
+#[test]
+fn a_peerless_fresh_daemon_is_not_synchronized_despite_the_zero_target() {
+    assert!(
+        SyncedChainFacts::new(ChainCount::from_raw(5), 0, false).is_none(),
+        "target 0 is the daemon's sentinel for synced, but the daemon itself \
+         says it is not — the flag is not decoration on the heights",
+    );
+    assert!(
+        health_from_get_info(&json!({ "height": 5, "target_height": 0 }))
+            .map(SyncedChainFacts::from_health)
+            .expect("decodes")
+            .is_none(),
+        "an absent `synchronized` reads as false — the direction that refuses",
+    );
+}
+
+/// Both halves are required, so the flag alone is not enough either: a daemon
+/// claiming synchronized while its own height sits below its target is
+/// contradicting itself, and the answer is still no.
+#[test]
+fn the_flag_alone_does_not_override_the_heights() {
+    assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000), 1_000_000, true).is_none());
+}

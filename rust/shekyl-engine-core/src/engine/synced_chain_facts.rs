@@ -1,0 +1,243 @@
+// Copyright (c) 2026, The Shekyl Foundation
+//
+// All rights reserved.
+// BSD-3-Clause
+
+//! [`SyncedChainFacts`] — chain facts the wallet may act on, because the
+//! daemon that answered them says it is synchronized (`WALLET_SIDE_STORE.md`
+//! `WSS-Q14`, ruled 2026-09-19; the defect it closes is `WSS-25`).
+//!
+//! # Why a type and not a call-site check
+//!
+//! Steering's `R-B`: *every consensus-derived decision reads the configured
+//! daemon, and while it reports syncing the answer is **unknown**, failing
+//! safe — do not erase, post or sign.* A rule of that shape enforced by
+//! call-site checks is enforced nowhere in particular: the check is invisible
+//! at the signature, a new consumer inherits nothing, and its absence is what
+//! `WSS-25` found — the serve-set release gate derived settlement epochs from
+//! the height a bond record answered at, with no synchronization check
+//! anywhere in the call chain.
+//!
+//! So "synced" is a **value you must hold**, not a question you are trusted to
+//! ask. A function that needs a synchronized view takes `&SyncedChainFacts`;
+//! there is no constructor that yields one from an unsynchronized reading, so
+//! the unsynced path is a compile error rather than a missing branch. Deleting
+//! the operand does not silently restore the old behaviour — it stops
+//! compiling, which is what `50-testing`'s *"name the edit that makes this
+//! red"* asks of a check that guards a destructive verb.
+//!
+//! # The predicate, and where it came from
+//!
+//! ```text
+//! synchronized && (target_height == 0 || height >= target_height)
+//! ```
+//!
+//! The **height half** is lifted verbatim from
+//! `submit_watchdog::DaemonHealthContext::is_synced`, which until this type
+//! landed was the only honest reading of sync state in the wallet. The
+//! watchdog now asks this constructor instead
+//! ([`DaemonHealthContext::synced_facts`](super::submit_watchdog::DaemonHealthContext)),
+//! so the predicate has one site and a change to it cannot leave two
+//! consumers disagreeing about what "synced" means.
+//!
+//! `target_height == 0` is the info surface's own convention, not a guess:
+//! `core_rpc_server.cpp:209` writes `is_synchronized() ? 0 :
+//! get_target_blockchain_height()`, and `shekyl-daemon-rpc`'s handlers apply
+//! the same rule (`methods.rs:138`). `height >= target_height` is the belt to
+//! that braces — a node whose target estimate has been overtaken is caught up
+//! whatever the estimate says.
+//!
+//! **The `synchronized` half is not decoration, and the height half alone is
+//! not sufficient.** A daemon that has just started with no peers reports
+//! `target_height == 0` — the sentinel that *means* synchronized — while
+//! `synchronized` is false and its height is genesis-adjacent
+//! (`core_rpc_server_commands_defs.h:254`, set from `check_core_ready()` at
+//! `core_rpc_server.cpp:248`). That is exactly `WSS-25`'s state: a rebuilt
+//! database, before the node has anyone to catch up from. Taking only the
+//! watchdog's half would have minted facts for it. Absent on the wire, the
+//! flag reads `false` — the direction that refuses.
+//!
+//! This correction is the `WSS-24` lane's (`fix/wss-24-own-height-daemon-tip`,
+//! `serving/daemon_tip.rs`), which derived the same predicate independently
+//! and found the gap; `WSS-Q14`'s brief said to lift the watchdog's form
+//! verbatim, and verbatim was not enough. The two lanes converge here: this
+//! constructor is the shared home, and the tip cache's reading adopts it.
+//!
+//! # The `R1` seam
+//!
+//! The type is wallet-side and is built from the engine's daemon client. A
+//! DRS change to the daemon's chain-facts response shape lands in
+//! [`health_from_get_info`] and [`fetch_synced_chain_facts`] and nowhere else
+//! — every consumer holds the type, not the response.
+//!
+//! # Units
+//!
+//! `get_info.height` is the block **count**, not the tip height:
+//! `core_rpc_server.cpp:206-207` reads the top block's height and then
+//! increments it (*"turn top block height into blockchain height"*). It is
+//! therefore the same quantity as [`EmissionClaimSource::chain_height`]
+//! (`super::emission_source`), and it is stored here as a [`ChainCount`] so
+//! the count/height confusion cannot be made by a consumer. Consumers that
+//! want the newest existing block's height take [`SyncedChainFacts::tip`].
+
+use serde_json::Value;
+use shekyl_rpc_client::{Rpc, RpcError};
+use shekyl_types::{BlockHeight, ChainCount};
+
+use super::traits::daemon::DaemonHealth;
+
+/// Chain facts from a daemon that reports itself synchronized.
+///
+/// Holding one is the proof — there is no other way to obtain it, and no way
+/// to obtain it from a syncing daemon. See the module docs for why this is a
+/// type rather than a check.
+///
+/// # What it does *not* prove
+///
+/// **It is the daemon's own claim, not an independent measurement.** Under the
+/// V3.0 own-daemon deployment model that claim is trusted; under a
+/// multi-daemon reopen it is not, and a daemon lying "synchronized" can hand a
+/// wallet a stale view (the same trust classification the watchdog's health
+/// context carries — `DAEMON_SUBMIT_VERDICT.md` §7.2). This type closes the
+/// *honest-resync* hazard `WSS-25` describes, whose adversary is nobody; it is
+/// not an authentication of the answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SyncedChainFacts {
+    /// The daemon's block count at the moment it reported synchronized.
+    chain_height: ChainCount,
+}
+
+impl SyncedChainFacts {
+    /// The sole constructor: chain facts **iff** the daemon reports
+    /// synchronized, otherwise `None`.
+    ///
+    /// `chain_height` is the response's block count and `target_height` its
+    /// network estimate under the *"0 when synchronized"* convention. Both
+    /// come from one response — do not pair a height from one read with a
+    /// target from another, which is why this takes them together rather than
+    /// offering a setter.
+    ///
+    /// `None` is not an error. It is the `R-B` answer: while the daemon
+    /// reports syncing, consensus-derived facts are **unknown**, and a caller
+    /// that cannot proceed without them declines to act rather than acting on
+    /// a view it cannot vouch for.
+    pub(crate) fn new(
+        chain_height: ChainCount,
+        target_height: u64,
+        synchronized: bool,
+    ) -> Option<Self> {
+        // The height half, verbatim from the submit watchdog.
+        let heights_agree = target_height == 0 || chain_height.to_raw() >= target_height;
+        if synchronized && heights_agree {
+            Some(Self { chain_height })
+        } else {
+            None
+        }
+    }
+
+    /// Build from the engine's [`DaemonHealth`] projection of `get_info`.
+    ///
+    /// The connection count is deliberately not carried: peerlessness is the
+    /// watchdog's escalation axis, not a synchronization fact, and a type
+    /// named for one property that silently carries another is how a consumer
+    /// comes to read the wrong one.
+    pub(crate) fn from_health(health: DaemonHealth) -> Option<Self> {
+        Self::new(
+            ChainCount::from_raw(health.height),
+            health.target_height,
+            health.synchronized,
+        )
+    }
+
+    /// The newest existing block's height, or `0` on an empty chain.
+    ///
+    /// The `0` for an empty chain matches how `EngineServeSetPinner`
+    /// already stamps a `PinReport`: an empty chain has no tip, and every
+    /// consumer of this value is doing elapsed-block arithmetic in which
+    /// "no blocks yet" and "block zero" are the same answer.
+    pub(crate) fn tip(&self) -> BlockHeight {
+        self.chain_height
+            .tip()
+            .map_or(BlockHeight::from_raw(0), |h| {
+                BlockHeight::from_raw(h.to_raw())
+            })
+    }
+}
+
+/// Decode the daemon's `get_info` result into [`DaemonHealth`].
+///
+/// The single parse site for this response, shared by
+/// [`DaemonEngine::get_health`](super::traits::daemon::DaemonEngine::get_health) and
+/// [`fetch_synced_chain_facts`], so the two cannot come to disagree about what
+/// the daemon said. Two decoders over one wire response with no cross-check is
+/// exactly the shape that lets a field's meaning drift on one side only.
+///
+/// Untrusted-daemon input is parsed defensively (`20-rust-vs-cpp-policy` §3):
+/// a response missing the mandatory `height` field is a malformed reply
+/// ([`RpcError::InvalidNode`]), not a silently defaulted zero — a false
+/// "synced at height 0" would be a *constructible* [`SyncedChainFacts`]
+/// vouching for a view that does not exist. Absent connection counts map to
+/// `0` (the safe direction: a peerless reading only ever routes to the
+/// operator-alarm rung). `target_height` follows the info surface's "0 when
+/// synced" convention, so its absence maps to `0`, and the connection sum is
+/// `saturating_add` (rule §4).
+///
+/// # Errors
+///
+/// [`RpcError::InvalidNode`] when `height` is absent or not an integer.
+pub(crate) fn health_from_get_info(info: &Value) -> Result<DaemonHealth, RpcError> {
+    let height = info
+        .get("height")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| RpcError::InvalidNode("get_info missing height".to_string()))?;
+    let target_height = info
+        .get("target_height")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let outgoing = info
+        .get("outgoing_connections_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let incoming = info
+        .get("incoming_connections_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let synchronized = info
+        .get("synchronized")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(DaemonHealth {
+        connections: outgoing.saturating_add(incoming),
+        height,
+        target_height,
+        synchronized,
+    })
+}
+
+/// One `get_info` read, yielding [`SyncedChainFacts`] only if the daemon says
+/// it is synchronized.
+///
+/// Bound on bare [`Rpc`] rather than on the engine's richer daemon trait so a
+/// caller holding only a persona-isolated transport can use it — the serve-set
+/// pinner is exactly that caller, and routing its sync read anywhere but over
+/// `P`'s own transport would break the §7.4 transport pin.
+///
+/// `Ok(None)` is *"the daemon is syncing"*. An `Err` is *"the daemon did not
+/// answer"*. Callers for whom both mean "do not act" may collapse them, but
+/// they are different facts and this signature keeps them so — an operator
+/// diagnosing a stalled release wants to know which one they have (rule 82).
+///
+/// # Errors
+///
+/// [`RpcError`] from the transport, or [`RpcError::InvalidNode`] if the reply
+/// is missing `height`.
+pub(crate) async fn fetch_synced_chain_facts<R: Rpc>(
+    rpc: &R,
+) -> Result<Option<SyncedChainFacts>, RpcError> {
+    let info: Value = rpc.json_rpc_call("get_info", None).await?;
+    Ok(SyncedChainFacts::from_health(health_from_get_info(&info)?))
+}
+
+#[cfg(test)]
+#[path = "synced_chain_facts_tests.rs"]
+mod tests;

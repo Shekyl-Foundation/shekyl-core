@@ -215,6 +215,7 @@ impl StubDaemon {
                     connections: 8,
                     height: 10_000,
                     target_height: 0,
+                    synchronized: true,
                 },
                 health_fail: false,
                 block_hashes: HashMap::new(),
@@ -538,6 +539,7 @@ async fn peerless_daemon_alarms_without_probing() {
         connections: 0,
         height: 10_000,
         target_height: 0,
+        synchronized: true,
     });
     let mut d = driver();
 
@@ -567,6 +569,7 @@ async fn syncing_daemon_waits() {
         connections: 8,
         height: 5_000,
         target_height: 6_000,
+        synchronized: true,
     });
     let mut d = driver();
 

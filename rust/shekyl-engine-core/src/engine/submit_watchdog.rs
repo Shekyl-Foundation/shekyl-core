@@ -59,7 +59,9 @@
 
 use std::collections::HashSet;
 
-use shekyl_types::TxHash;
+use shekyl_types::{ChainCount, TxHash};
+
+use super::synced_chain_facts::SyncedChainFacts;
 
 // ---------------------------------------------------------------------------
 // Horizon configuration
@@ -212,12 +214,36 @@ pub(crate) struct DaemonHealthContext {
     /// The daemon's network-estimated target height (0 when synced —
     /// the info surface's convention).
     pub target_height: u64,
+    /// The daemon's own `synchronized` flag. Required alongside the
+    /// heights: a peerless freshly-started daemon reports
+    /// `target_height == 0` with `synchronized == false`, and the height
+    /// comparison alone reads that as synced.
+    pub synchronized: bool,
 }
 
 impl DaemonHealthContext {
+    /// These facts as a [`SyncedChainFacts`], or `None` while the daemon
+    /// reports syncing.
+    ///
+    /// The ladder itself only needs the boolean ([`Self::is_synced`]), so this
+    /// looks like the long way round. It is the point: this predicate used to
+    /// be the wallet's **only** reading of sync state, and `WSS-25` found the
+    /// serve-set release gate acting on a resyncing daemon's view because
+    /// nothing carried the answer out of this file. The predicate now lives in
+    /// the constructor (`WSS-Q14`), and the watchdog asks it like every other
+    /// consumer — so a change to what "synced" means cannot leave the ladder
+    /// and the release gate disagreeing.
+    fn synced_facts(&self) -> Option<SyncedChainFacts> {
+        SyncedChainFacts::new(
+            ChainCount::from_raw(self.height),
+            self.target_height,
+            self.synchronized,
+        )
+    }
+
     /// The daemon believes it is synced with the network.
     fn is_synced(&self) -> bool {
-        self.target_height == 0 || self.height >= self.target_height
+        self.synced_facts().is_some()
     }
 
     /// The daemon has someone to relay to.
@@ -679,6 +705,7 @@ mod tests {
             connections: 8,
             height: 10_000,
             target_height: 0,
+            synchronized: true,
         }
     }
 
@@ -769,6 +796,7 @@ mod tests {
             connections: 8,
             height: 5_000,
             target_height: 6_000,
+            synchronized: true,
         };
         assert_eq!(
             escape_ladder_step(&h, past, behind, CFG),
@@ -779,6 +807,7 @@ mod tests {
             connections: 0,
             height: 6_000,
             target_height: 0,
+            synchronized: true,
         };
         assert_eq!(
             escape_ladder_step(&h, past, peerless, CFG),
@@ -876,10 +905,47 @@ mod tests {
             connections: 0,
             height: 5_000,
             target_height: 6_000,
+            synchronized: true,
         };
         assert_eq!(
             escape_ladder_step(&h, past, behind_and_peerless, CFG),
             WatchdogStep::OperatorAlarm(AlarmReason::DaemonPeerless)
         );
+    }
+
+    /// **The convergence pin.** The predicate has one site, and the watchdog's
+    /// health context reaches it rather than keeping a second copy — which is the
+    /// whole point of `WSS-Q14`. This agrees the two readings across the boundary
+    /// where they used to be independent.
+    ///
+    /// This bites against the two readings diverging; it does **not** cover a
+    /// third consumer that re-implements the predicate instead of calling the
+    /// constructor. Nothing but review catches that.
+    #[test]
+    fn the_watchdogs_health_context_agrees_with_the_constructor() {
+        // The last row is the case the `synchronized` half exists for: a
+        // freshly started daemon with no peers reports `target_height == 0`,
+        // which the height comparison alone reads as synced.
+        for (height, target, synchronized) in [
+            (0, 0, true),
+            (1_000, 1_000_000, true),
+            (999_999, 1_000_000, true),
+            (5, 5, true),
+            (6, 5, true),
+            (5, 0, false),
+        ] {
+            let ctx = DaemonHealthContext {
+                connections: 1,
+                height,
+                target_height: target,
+                synchronized,
+            };
+            assert_eq!(
+                ctx.is_synced(),
+                SyncedChainFacts::new(ChainCount::from_raw(height), target, synchronized).is_some(),
+                "the ladder and the constructor must not disagree at \
+                 ({height}, {target}, {synchronized})",
+            );
+        }
     }
 }

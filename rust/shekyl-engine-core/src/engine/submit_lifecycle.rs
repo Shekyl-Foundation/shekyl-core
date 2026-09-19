@@ -609,6 +609,7 @@ fn health_context(health: DaemonHealth) -> DaemonHealthContext {
         connections: health.connections,
         height: health.height,
         target_height: health.target_height,
+        synchronized: health.synchronized,
     }
 }
 

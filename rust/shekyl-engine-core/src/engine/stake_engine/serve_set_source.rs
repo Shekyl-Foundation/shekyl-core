@@ -54,6 +54,7 @@ use shekyl_p_host::{PinReport, ServeSetPinner};
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 use crate::engine::emission_source::fetch_emission_claim_source;
 use crate::engine::prpc::PersonaIsolatedTransport;
+use crate::engine::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 
 /// Derives a persona's serve-set from its connected bond record and pins it.
 // Wired by `Engine::start_serving_if_staker` (SH-2b-2). Landed with the seam
@@ -167,7 +168,32 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     ///
     /// A shard that reappears in the record clears its entry, so a departure
     /// that reverses inside the window costs nothing and leaves no trace.
-    fn releasable(&self, owed: &[u64], pinned: &[u64], as_of: u64) -> Vec<u64> {
+    ///
+    /// # Why the clock is [`SyncedChainFacts`] and not a bare height
+    ///
+    /// This function is only reachable with a witness that the daemon
+    /// reported itself synchronized, and it reads its clock **off that
+    /// witness** (`WSS-Q14`, closing `WSS-25`). Both halves matter.
+    ///
+    /// *Reachability:* a resyncing daemon answers the bond record at heights
+    /// before the persona bonded, so the owed set is empty and every held
+    /// shard looks departed — while the answering height climbs through epoch
+    /// opens at resync speed rather than chain speed, minutes to hours for the
+    /// two this gate needs. The gate would then fire for **everything held**,
+    /// with nobody as the adversary and the `C++→Rust` cutover forcing the
+    /// resync on every daemon. Taking the witness by value makes that path
+    /// impossible to write, rather than a branch someone must remember.
+    ///
+    /// *The clock:* the elapsed-obligation arithmetic reads
+    /// [`SyncedChainFacts::tip`], not the record's own `as_of`. A token
+    /// parameter the body ignored would delete cleanly and silently restore
+    /// `WSS-25` — a check that cannot fail (`50-testing`). Reading it also
+    /// makes the reading *conservative*: `pin_serve_set` takes the sync
+    /// reading **before** the record, so this height is the earlier of the
+    /// two and can only under-count elapsed obligation. Under-counting costs
+    /// disk; over-counting costs a slash (§9.7 item 5's asymmetry).
+    fn releasable(&self, owed: &[u64], pinned: &[u64], synced: &SyncedChainFacts) -> Vec<u64> {
+        let as_of = synced.tip().to_raw();
         let owed: std::collections::BTreeSet<u64> = owed.iter().copied().collect();
         let mut ledger = self.absent_since.lock().expect("departure ledger");
 
@@ -183,8 +209,15 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             }
             let first_absent = *ledger.entry(shard_id).or_insert(as_of);
             let absent_epoch = first_absent / SETTLEMENT_EPOCH_BLOCKS;
-            // Saturating: a record height below the first observation means the
-            // chain moved backwards under us, which is not elapsed obligation.
+            // Saturating: a height below the first observation means the chain
+            // moved backwards under us, which is not elapsed obligation.
+            //
+            // **This is not synchronization coverage, and reading it as such
+            // is how `WSS-25` survived review.** It guards the chain moving
+            // *backwards*; the resync hazard is the chain moving *forwards*
+            // through epoch opens on a view that is not the network's. The
+            // `synced` operand is what covers that direction — a reviewer
+            // checking for a sync gate should look at the signature, not here.
             if now_epoch.saturating_sub(absent_epoch) >= EPOCHS_BEFORE_PIN_RELEASE {
                 releasable.push(shard_id);
             }
@@ -232,13 +265,18 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// Explicit-holdings list arm: pin the record's shard list, release
     /// what the epoch gate has cleared, report both.
     ///
-    /// `as_of` is the same provenance stamp the caller puts on the
-    /// [`PinReport`] — the release gate is epoch-shaped, so it needs the
-    /// height the record was read at, not a second clock.
+    /// `synced` is `None` while the daemon reports syncing. The pin half runs
+    /// regardless — the host's witness must keep describing reality, and
+    /// pinning is additive and idempotent (the store's `pin_serve_set` has
+    /// **no** implicit release: *"Pins are cleared by
+    /// `truncate_from_tree_position` … and by nothing else"*), so an empty
+    /// owed list from a resyncing daemon unpins nothing by itself. Only the
+    /// **release** half is withheld, and it is withheld structurally: the
+    /// gate takes `&SyncedChainFacts`, so there is no unsynced call to make.
     async fn report_list(
         &self,
         shard_ids: &[u64],
-        as_of: BlockHeight,
+        synced: Option<&SyncedChainFacts>,
     ) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
         let shard_ids = shard_ids.to_vec();
         // The release set is computed from the *previous* reconcile's view
@@ -246,9 +284,17 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         // round trip per refresh, and the release lags one refresh —
         // against a gate measured in settlement epochs that is not a lag
         // that means anything.
-        let releasable = {
-            let pinned = self.last_pinned.lock().expect("pin view").clone();
-            self.releasable(&shard_ids, &pinned, as_of.to_raw())
+        let releasable = match synced {
+            Some(synced) => {
+                let pinned = self.last_pinned.lock().expect("pin view").clone();
+                self.releasable(&shard_ids, &pinned, synced)
+            }
+            // `WSS-25`, §6.7.3: *records no absence observations and releases
+            // nothing while the daemon is unsynced*. Both halves come from
+            // this one arm, because `releasable` is the departure ledger's
+            // only writer — not calling it writes nothing, so a resync leaves
+            // no trace to act on once the daemon catches up.
+            None => Vec::new(),
         };
 
         let reply = self
@@ -285,6 +331,45 @@ const EPOCHS_BEFORE_PIN_RELEASE: u64 = 2;
 
 impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner<R> {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
+        // **Sync reading first, record second** (`WSS-Q14`). Two orderings
+        // were available and only this one is sound: a daemon that reports
+        // synchronized and *then* answers the record cannot have answered it
+        // from deep resync, whereas reading the record first leaves a window
+        // in which a pre-bond record is paired with a by-then-caught-up
+        // `get_info`. It also makes the witness's height the earlier of the
+        // two, which is the conservative direction for the release gate's
+        // clock (see [`Self::releasable`]).
+        //
+        // Neither a syncing daemon (`Ok(None)`) nor an unreachable one
+        // (`Err`) yields facts to act on, so both withhold the release half —
+        // but they are different faults and the log says which, because an
+        // operator diagnosing pins that never release should not be sent to
+        // the wrong one (rule 82). The refresh itself does **not** fail: the
+        // pin half and the host's witness still need to run, for the same
+        // reason a persona with no bond record reports an empty list rather
+        // than failing forever.
+        let synced = match fetch_synced_chain_facts(&self.rpc).await {
+            Ok(Some(facts)) => Some(facts),
+            Ok(None) => {
+                tracing::info!(
+                    "serve-set refresh: the daemon reports it is still synchronizing, so no \
+                     serve-set pin will be released this refresh. Holdings are retained until \
+                     the daemon is caught up — an unsynchronized view cannot tell a shard this \
+                     persona no longer owes from one the resync has not reached yet"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    "serve-set refresh: could not read the daemon's chain facts, so no \
+                     serve-set pin will be released this refresh. Holdings are retained. This \
+                     is a daemon reachability fault, not a synchronization state"
+                );
+                None
+            }
+        };
+
         let source = fetch_emission_claim_source(&self.rpc, &self.p_id)
             .await
             .map_err(|e| format!("claim-source fetch failed: {e}"))?;
@@ -334,11 +419,11 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             Some(bond) => match bond.holdings.kind {
                 HoldingsKind::CompleteTree => self.report_prefix().await?,
                 HoldingsKind::ShardSetCompact => {
-                    self.report_list(bond.holdings.shard_ids.as_slice(), as_of_height)
+                    self.report_list(bond.holdings.shard_ids.as_slice(), synced.as_ref())
                         .await?
                 }
             },
-            None => self.report_list(&[], as_of_height).await?,
+            None => self.report_list(&[], synced.as_ref()).await?,
         };
 
         Ok(PinReport {
@@ -369,12 +454,34 @@ mod tests {
     struct ClaimSourceDaemon(Arc<serde_json::Value>);
 
     impl Rpc for ClaimSourceDaemon {
+        /// Answers `get_info` as a **synchronized** daemon at the same chain
+        /// count its claim source reports, so these fixtures keep exactly the
+        /// semantics they had before `SyncedChainFacts` (`WSS-Q14`) — the
+        /// unsynchronized timeline is `ResyncingDaemon`'s to exercise, and a
+        /// fixture that answered it here would silently disable the release
+        /// half of every test below.
         fn post(
             &self,
             route: &str,
-            _body: Vec<u8>,
+            body: Vec<u8>,
         ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-            let reply = serde_json::to_vec(&serde_json::json!({ "result": *self.0 }))
+            let is_get_info = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
+                .is_some_and(|m| m == "get_info");
+            let result = if is_get_info {
+                serde_json::json!({
+                    "height": self.0.get("chain_height").and_then(serde_json::Value::as_u64)
+                        .expect("the fixture source carries a chain height"),
+                    "target_height": 0,
+                    "synchronized": true,
+                    "outgoing_connections_count": 8,
+                    "incoming_connections_count": 0,
+                })
+            } else {
+                (*self.0).clone()
+            };
+            let reply = serde_json::to_vec(&serde_json::json!({ "result": result }))
                 .expect("fixture result encodes");
             let ok = route == "json_rpc";
             async move {
@@ -428,6 +535,16 @@ mod tests {
             }),
             epochs: Vec::new(),
         })))
+    }
+
+    /// A **synchronized** daemon whose newest block is at `tip`.
+    ///
+    /// The count is one more than the tip — the relation `get_info` reports
+    /// (`top_block + 1`) — so these heights read exactly as they did when the
+    /// gate took a bare `as_of`, and the two-epoch semantics below are the
+    /// same assertions against the same numbers.
+    fn synced_at(tip: u64) -> SyncedChainFacts {
+        SyncedChainFacts::new(ChainCount::from_raw(tip + 1), 0, true).expect("synchronized")
     }
 
     fn handle() -> (tempfile::TempDir, CurveTreeHandle) {
@@ -498,14 +615,18 @@ mod tests {
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
 
         // Dropped mid-epoch-0. Still drawable for the rest of epoch 0.
-        assert!(pinner.releasable(&[1], &[1, 9], 1_000).is_empty());
+        assert!(pinner
+            .releasable(&[1], &[1, 9], &synced_at(1_000))
+            .is_empty());
 
         // A reorg depth later — what the first version of this gate released
         // on. Epoch 0 has ~8_280 blocks left, and the provider is
         // serve-set-blind, so reclaiming here means a real challenge finds no
         // bytes.
         assert!(
-            pinner.releasable(&[1], &[1, 9], 1_720).is_empty(),
+            pinner
+                .releasable(&[1], &[1, 9], &synced_at(1_720))
+                .is_empty(),
             "720 blocks is a reorg depth, not an obligation: releasing here \
              converts a disk leak into a miss",
         );
@@ -513,15 +634,22 @@ mod tests {
         // Epoch 1's open: not drawable in epoch 1, but epoch 0's challenges
         // may have fired as late as block 9_999 and still need to resolve.
         assert!(
-            pinner.releasable(&[1], &[1, 9], 10_000).is_empty(),
+            pinner
+                .releasable(&[1], &[1, 9], &synced_at(10_000))
+                .is_empty(),
             "one epoch is too tight — a challenge issued in epoch 0's last \
              block has had no time to resolve",
         );
-        assert!(pinner.releasable(&[1], &[1, 9], 19_999).is_empty());
+        assert!(pinner
+            .releasable(&[1], &[1, 9], &synced_at(19_999))
+            .is_empty());
 
         // Epoch 2's open: absent across two consecutive epoch opens, and the
         // last epoch it could have been drawn in closed a full epoch ago.
-        assert_eq!(pinner.releasable(&[1], &[1, 9], 20_000), vec![9]);
+        assert_eq!(
+            pinner.releasable(&[1], &[1, 9], &synced_at(20_000)),
+            vec![9]
+        );
     }
 
     /// A departure that reverses inside the window costs nothing, and the clock
@@ -531,19 +659,30 @@ mod tests {
         let (_dir, curve_tree) = handle();
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
 
-        assert!(pinner.releasable(&[1], &[1, 9], 1_000).is_empty());
+        assert!(pinner
+            .releasable(&[1], &[1, 9], &synced_at(1_000))
+            .is_empty());
         // Back in the record inside epoch 0 — it was held at no epoch open it
         // missed, so nothing has elapsed.
-        assert!(pinner.releasable(&[1, 9], &[1, 9], 5_000).is_empty());
+        assert!(pinner
+            .releasable(&[1, 9], &[1, 9], &synced_at(5_000))
+            .is_empty());
         // It leaves again in epoch 1. Had the first clock survived, epoch 2's
         // open would release it while it was drawable in epoch 1.
-        assert!(pinner.releasable(&[1], &[1, 9], 15_000).is_empty());
+        assert!(pinner
+            .releasable(&[1], &[1, 9], &synced_at(15_000))
+            .is_empty());
         assert!(
-            pinner.releasable(&[1], &[1, 9], 20_000).is_empty(),
+            pinner
+                .releasable(&[1], &[1, 9], &synced_at(20_000))
+                .is_empty(),
             "the clock restarted at the second departure: absent at epoch 2's \
              open only, and it was drawable in epoch 1",
         );
-        assert_eq!(pinner.releasable(&[1], &[1, 9], 30_000), vec![9]);
+        assert_eq!(
+            pinner.releasable(&[1], &[1, 9], &synced_at(30_000)),
+            vec![9]
+        );
     }
 
     /// A shard still owed is never releasable, however long it has been pinned
@@ -553,7 +692,7 @@ mod tests {
         let (_dir, curve_tree) = handle();
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
         assert!(pinner
-            .releasable(&[1, 9], &[1, 9], 10 * SETTLEMENT_EPOCH_BLOCKS)
+            .releasable(&[1, 9], &[1, 9], &synced_at(10 * SETTLEMENT_EPOCH_BLOCKS))
             .is_empty());
     }
 
@@ -562,9 +701,11 @@ mod tests {
     async fn a_record_height_going_backwards_does_not_elapse_the_gate() {
         let (_dir, curve_tree) = handle();
         let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
-        assert!(pinner.releasable(&[1], &[1, 9], 50_000).is_empty());
+        assert!(pinner
+            .releasable(&[1], &[1, 9], &synced_at(50_000))
+            .is_empty());
         assert!(
-            pinner.releasable(&[1], &[1, 9], 100).is_empty(),
+            pinner.releasable(&[1], &[1, 9], &synced_at(100)).is_empty(),
             "saturating subtraction: a lower height is not five epochs of elapsed \
              obligation",
         );
@@ -794,5 +935,222 @@ mod tests {
             first.reader.same_store(&second.reader),
             "two pins through one handle are two pins in one store"
         );
+    }
+
+    // ── WSS-25: the resync that would erase every holding ───────────────
+    //
+    // `WALLET_SIDE_STORE.md` §6.7.3: *the release gate records no absence
+    // observations and releases nothing while the daemon is unsynced*, and it
+    // *"owes a property test: no shard is erased while the pair can still be
+    // drawn, including across a simulated resync. A test that only exercises a
+    // synced timeline cannot fail on WSS-25's scenario, which is the one that
+    // matters."*
+
+    /// Every shard id the store is actually retaining, read through the actor
+    /// that owns it. A no-op reconcile (pin nothing, release nothing) is the
+    /// only read path there is, and its `pinned_now` is the same value the
+    /// production refresh reads back.
+    async fn pins_in_store(curve_tree: &CurveTreeHandle) -> Vec<u64> {
+        curve_tree
+            .pin_serve_set(Vec::new(), Vec::new())
+            .await
+            .expect("read the pin set")
+            .pinned_now
+    }
+
+    /// A daemon rebuilding its chain — the state the C++→Rust cutover forces
+    /// on every daemon.
+    ///
+    /// One height schedule drives **both** answers, which is the point: the
+    /// resync hazard is that the record answers at a pre-bond height *while*
+    /// the daemon's own height climbs past epoch boundaries, so a fixture that
+    /// let the two drift apart would be testing something else. `get_info`
+    /// advances the cursor and the claim source reads it, matching production
+    /// order (health first, then the record).
+    ///
+    /// `target_height` is the sync dial: a non-zero value above the answering
+    /// height is a daemon that says it is still catching up; `0` is the info
+    /// surface's "synchronized" convention.
+    #[derive(Clone)]
+    struct ResyncingDaemon {
+        schedule: Arc<Vec<u64>>,
+        cursor: Arc<std::sync::atomic::AtomicUsize>,
+        /// The height the current step answers at, written by `get_info`.
+        current: Arc<std::sync::Mutex<u64>>,
+        /// `0` means synchronized; anything else is the climbing target.
+        target_height: u64,
+        /// What the bond record says this persona owes, at every step.
+        owed: Vec<u64>,
+    }
+
+    impl ResyncingDaemon {
+        fn new(schedule: Vec<u64>, target_height: u64, owed: Vec<u64>) -> Self {
+            let first = schedule[0];
+            Self {
+                schedule: Arc::new(schedule),
+                cursor: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                current: Arc::new(std::sync::Mutex::new(first)),
+                target_height,
+                owed,
+            }
+        }
+
+        /// Take the next scheduled height, holding at the last one so a test
+        /// may drive more refreshes than it scheduled.
+        fn step(&self) -> u64 {
+            let i = self
+                .cursor
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                .min(self.schedule.len() - 1);
+            let h = self.schedule[i];
+            *self.current.lock().expect("resync cursor") = h;
+            h
+        }
+    }
+
+    impl Rpc for ResyncingDaemon {
+        fn post(
+            &self,
+            route: &str,
+            body: Vec<u8>,
+        ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+            let method = serde_json::from_slice::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
+                .unwrap_or_default();
+            let result = if method == "get_info" {
+                // `get_info.height` is the block COUNT (`top_block + 1`), and
+                // the schedule is written in tips — the same relation the
+                // claim source below reports, because both come off one
+                // `db.height()` read on the daemon.
+                let tip = self.step();
+                serde_json::json!({
+                    "height": tip + 1,
+                    "target_height": self.target_height,
+                    // A resyncing daemon says so outright; the heights are
+                    // the second half of the same statement.
+                    "synchronized": self.target_height == 0,
+                    "outgoing_connections_count": 8,
+                    "incoming_connections_count": 0,
+                })
+            } else {
+                // `chain_height` is a COUNT; the schedule is expressed in
+                // tips, so the record answers one more than the tip — the
+                // same relation `get_info` carries (`top_block + 1`).
+                let tip = *self.current.lock().expect("resync cursor");
+                source_json(&EmissionClaimSource {
+                    chain_height: ChainCount::from_raw(tip + 1),
+                    current_settled_epoch: settlement_epoch_at_height(tip + 1),
+                    bond: Some(BondContext {
+                        join_settlement_epoch: 0,
+                        holdings: HoldingsDescriptor {
+                            kind: HoldingsKind::ShardSetCompact,
+                            shard_ids: ShardSet::new(self.owed.clone()).expect("fixture set"),
+                        },
+                        claimed_settlement_epochs: Vec::new(),
+                        bonded_total_atomic: 0,
+                        bad_interval_count: 0,
+                        last_served: crate::engine::emission_source::ServeAnchor::NeverServed,
+                        last_settled_slash:
+                            crate::engine::emission_source::SlashWatermark::NothingSettled,
+                    }),
+                    epochs: Vec::new(),
+                })
+            };
+            let reply = serde_json::to_vec(&serde_json::json!({ "result": result }))
+                .expect("fixture result encodes");
+            let ok = route == "json_rpc";
+            async move {
+                if ok {
+                    Ok(reply)
+                } else {
+                    Err(RpcError::InternalError("unexpected route".into()))
+                }
+            }
+        }
+    }
+
+    impl PersonaIsolatedTransport for ResyncingDaemon {}
+
+    /// The heights a resync walks through: a pre-bond height, then a climb
+    /// crossing **four** settlement-epoch opens — far past the two the gate
+    /// releases at. `SETTLEMENT_EPOCH_BLOCKS = 10_000`.
+    fn resync_climb() -> Vec<u64> {
+        vec![1_000, 9_999, 10_000, 20_000, 30_000, 40_000]
+    }
+
+    /// **The `WSS-25` property.** A shard held but absent from the record
+    /// answered by an **unsynchronized** daemon is neither observed absent nor
+    /// released, however far the answering height climbs.
+    ///
+    /// This bites against the release gate acting on a resyncing view; it does
+    /// **not** cover a daemon that lies "synchronized" (`SyncedChainFacts`
+    /// carries the daemon's claim, not an independent measurement), nor the
+    /// erasure semantics that replace unpinning after the `WSS-13` unwind.
+    #[tokio::test]
+    async fn a_resyncing_daemon_releases_nothing_and_observes_no_absence() {
+        let (_dir, curve_tree) = handle();
+        // Owes shard 1 only; shard 9 is held from an older record.
+        let rpc = ResyncingDaemon::new(resync_climb(), 1_000_000, vec![1]);
+        let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32]);
+
+        // Seed the store's pin view with both shards, so 9 is retained-but-
+        // not-owed for every step of the climb.
+        pinner
+            .curve_tree
+            .pin_serve_set(vec![1, 9], Vec::new())
+            .await
+            .expect("seed pins");
+        *pinner.last_pinned.lock().expect("pin view") = vec![1, 9];
+
+        for _ in 0..resync_climb().len() {
+            let report = pinner.pin_serve_set().await.expect("refresh");
+            match report.set {
+                shekyl_p_host::ReportedSet::ShardList { .. } => {}
+                other => panic!("expected a shard list, got {other:?}"),
+            }
+        }
+
+        assert!(
+            pinner
+                .absent_since
+                .lock()
+                .expect("departure ledger")
+                .is_empty(),
+            "an unsynchronized view must record NO absence observation: the \
+             record answers at pre-bond heights, so 'absent' is a statement \
+             about the resync, not about the persona's holdings",
+        );
+        assert_eq!(
+            pins_in_store(&pinner.curve_tree).await,
+            vec![1, 9],
+            "nothing released across a climb of four epoch opens",
+        );
+    }
+
+    /// The negative control, and the "two-epoch semantics unchanged" half:
+    /// the identical climb against a **synchronized** daemon releases the
+    /// departed shard at the second consecutive epoch open, exactly as before
+    /// this type existed. Without this, the test above would pass on a gate
+    /// that had simply stopped working.
+    #[tokio::test]
+    async fn the_same_climb_synchronized_still_releases_at_the_second_epoch_open() {
+        let (_dir, curve_tree) = handle();
+        let rpc = ResyncingDaemon::new(resync_climb(), 0, vec![1]);
+        let pinner = EngineServeSetPinner::new(curve_tree, rpc, [7; 32]);
+
+        pinner
+            .curve_tree
+            .pin_serve_set(vec![1, 9], Vec::new())
+            .await
+            .expect("seed pins");
+        *pinner.last_pinned.lock().expect("pin view") = vec![1, 9];
+
+        // 1_000 (first absent, epoch 0), 9_999 (epoch 0), 10_000 (epoch 1 —
+        // one open, too tight), 20_000 (epoch 2 — released).
+        for expected_pins in [vec![1, 9], vec![1, 9], vec![1, 9], vec![1]] {
+            pinner.pin_serve_set().await.expect("refresh");
+            assert_eq!(pins_in_store(&pinner.curve_tree).await, expected_pins);
+        }
     }
 }

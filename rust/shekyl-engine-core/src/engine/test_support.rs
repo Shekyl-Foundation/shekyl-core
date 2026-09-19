@@ -409,6 +409,7 @@ fn default_health() -> DaemonHealth {
         connections: 8,
         height: 0,
         target_height: 0,
+        synchronized: true,
     }
 }
 

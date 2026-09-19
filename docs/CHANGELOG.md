@@ -21,6 +21,25 @@
 
 - **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 5` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`; `spent_keys` is `Present`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
 
+### Wallet
+
+- **"Synchronized" is a type the release gate must hold
+  (`WALLET_SIDE_STORE.md` `WSS-Q14`, closing `WSS-25`).** New
+  `SyncedChainFacts` in `shekyl-engine-core`: its sole constructor yields
+  chain facts only when the daemon reports itself synchronized, so acting on
+  an unsynchronized view is a compile error rather than a missing branch.
+  The archival serve-set **release gate** now takes it — during a daemon
+  resync (which the C++→Rust cutover forces on every daemon) the bond record
+  answers at pre-bond heights while the answering height climbs through
+  settlement-epoch opens, and the gate would have noted every held shard
+  absent and released all of them. It now records **no absence observations
+  and releases nothing** while the daemon is syncing or unreachable. Harmless
+  today (a release only unpins); this lands before the wallet-side store, in
+  which release deletes and the failure is an honest archiver wiping its
+  holdings and being slashed while it refills. The submit watchdog's sync
+  predicate — until now the wallet's only reading of sync state — becomes
+  that constructor, so the two cannot disagree. No RPC or wire change.
+
 ### Consensus
 
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6

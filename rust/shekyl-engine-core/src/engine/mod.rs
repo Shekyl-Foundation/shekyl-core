@@ -412,6 +412,14 @@ pub(crate) mod submit_lifecycle;
 /// privacy-tiered escape ladder with presence branching, health-context
 /// gating, and the F35 horizon bound. Driven by [`submit_lifecycle`].
 pub(crate) mod submit_watchdog;
+/// `WALLET_SIDE_STORE.md` `WSS-Q14` (ruled 2026-09-19): `SyncedChainFacts`,
+/// the one wallet-side type that says a chain reading came from a daemon
+/// reporting itself synchronized. Steering's `R-B` — while the daemon reports
+/// syncing the answer is **unknown**, so do not erase, post or sign — is made
+/// structural: a consumer takes the type, and there is no constructor from an
+/// unsynchronized reading. Closes `WSS-25`, where the serve-set release gate
+/// derived settlement epochs from a resyncing daemon's answering height.
+pub(crate) mod synced_chain_facts;
 /// CT-5c: production no longer uses synthetic membership vectors — the signer
 /// folds the real paths the curve-tree client assembled (`assemble_path`).
 /// Retained `#[cfg(test)]` for the two non-daemon test surfaces that genuinely
