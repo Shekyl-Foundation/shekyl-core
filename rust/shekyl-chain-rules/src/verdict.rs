@@ -61,7 +61,7 @@ type Brand<'id> = PhantomData<fn(&'id ()) -> &'id ()>;
 /// Not `Clone`: a second copy of a brand-bearing token has no meaning.
 pub struct ChainValid<'id, V> {
     block: ValidatedBlock,
-    rule_set: RuleSetId,
+    rule_set: RuleSet,
     coverage: RuleCoverage,
     _brand: Brand<'id>,
     _view: PhantomData<fn(V) -> V>,
@@ -95,7 +95,7 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
         }
         Self {
             block,
-            rule_set: rule_set.id(),
+            rule_set: *rule_set,
             coverage,
             _brand: PhantomData,
             _view: PhantomData,
@@ -108,10 +108,19 @@ impl<'id, V: ChainView<'id>> ChainValid<'id, V> {
         &self.block
     }
 
-    /// The rule set the block was judged under.
+    /// The rule set the block was judged under — the set, not only its
+    /// id. A Fakechain `Fixed` target reuses [`RuleSetId::GENESIS`], so
+    /// `connect` compares this with the issued set `in_force` names.
+    #[must_use]
+    pub const fn rule_set(&self) -> RuleSet {
+        self.rule_set
+    }
+
+    /// The id of the set the block was judged under. What the store
+    /// persists as `hf_versions`; not a proxy for set equality.
     #[must_use]
     pub const fn rule_set_id(&self) -> RuleSetId {
-        self.rule_set
+        self.rule_set.id()
     }
 
     /// The rows actually evaluated. `RuleCoverage::EMPTY` until rules land;

@@ -37,6 +37,7 @@
 //! refusal the rule writes, never a pass it arrives at by `?` or
 //! `unwrap_or_default`.
 
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::BlockHeader;
 
@@ -122,15 +123,22 @@ impl Tip {
 ///
 /// Every field is here because a named row reads it (round-1 ruling Q3):
 /// `hash` — CEN-A2 (`prev_id` is the tip's hash), CEN-A4 (the parent is a
-/// known block); `header` — CEN-C2, CEN-C3 (the timestamps of the eleven
-/// preceding blocks). Fields grow with rows — cumulative difficulty and
-/// weight arrive with 4.D / 4.G — never ahead of them.
+/// known block), CEN-D3 (the seed block's identity); `header` — CEN-C2,
+/// CEN-C3 (the timestamps of the eleven preceding blocks), CEN-D4 (the
+/// LWMA-1 window's timestamps); `cumulative_difficulty` — CEN-D4 (the
+/// window's work). Weight arrives with 4.G; fields grow with rows, never
+/// ahead of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordedBlock {
     /// The block's identity, derived once when it was recorded (CEN-B6).
     pub hash: BlockHash,
     /// The header as recorded.
     pub header: BlockHeader,
+    /// Work through this block: the parent's plus this block's target
+    /// (`block_info.cumulative_difficulty`). Monotone non-decreasing along
+    /// the chain (SI-8); a rule that sees otherwise reports
+    /// [`Corrupt::CumulativeDifficultyNotMonotone`](crate::Corrupt::CumulativeDifficultyNotMonotone).
+    pub cumulative_difficulty: CumulativeDifficulty,
 }
 
 /// The narrow, read-only view a rule consumes.

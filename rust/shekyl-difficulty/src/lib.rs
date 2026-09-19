@@ -73,6 +73,7 @@ pub mod consts;
 mod error;
 mod fork_choice;
 mod lwma1;
+mod seed_epoch;
 mod timestamp;
 mod types;
 
@@ -84,6 +85,7 @@ pub use consts::{
 pub use error::Error;
 pub use fork_choice::{fork_choice, ForkChoiceVerdict};
 pub use lwma1::lwma1_next;
+pub use seed_epoch::{next_seedheight, seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 pub use timestamp::{
     check_timestamp_rule, is_above_mtp, is_timestamp_below_ftl, mtp_median, TimestampRuleVerdict,
 };
