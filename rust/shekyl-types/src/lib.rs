@@ -354,7 +354,15 @@ scalar_u64! {
 
 scalar_u64! {
     /// A ledger-wide global output index (the daemon's `next_output_seq`
-    /// counter), assigned densely to every output in drain order.
+    /// counter), assigned densely to every output in **chain scan order** —
+    /// coinbase first, then each transaction's `vout` in block order.
+    ///
+    /// This is **not** the curve-tree position: leaves enter the tree in
+    /// `(maturity, gindex)` drain order and coinbase matures 50 blocks after
+    /// a transaction output from the same block, so the two orders diverge in
+    /// the first block that carries a transaction (`SOK-10`). The tree's own
+    /// dense position is `shekyl_curve_tree::TreePosition`; a value of this
+    /// type is never a tree position and never converts to one implicitly.
     ///
     /// Canonical replacement for the historical `shekyl-curve-tree::Gindex`.
     /// Distinct from [`OutputIndexInTx`]: this is the chain-wide position, not
@@ -440,8 +448,9 @@ scalar_u64! {
 
 scalar_u64! {
     /// A leaf's position **inside a frozen segment** (the archival serve unit),
-    /// not a ledger-wide [`GlobalOutputIndex`] and not a curve-tree
-    /// drain-order `TreePosition`.
+    /// not a ledger-wide [`GlobalOutputIndex`] and not the curve tree's dense
+    /// drain-order position (`shekyl_curve_tree::TreePosition` — that type is
+    /// not in this crate).
     LeafIndex
 }
 
