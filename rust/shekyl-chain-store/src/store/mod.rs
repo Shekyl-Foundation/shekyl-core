@@ -86,6 +86,7 @@
 //! answer to either is a rebuild from the block corpus
 //! (`DAEMON_REDB_STORE.md` §11), never a migrator.
 
+mod at_index;
 mod chain_reads;
 mod connect;
 mod error;
@@ -93,23 +94,24 @@ mod halt;
 mod header;
 mod invariant;
 mod keyed;
+mod output_reads;
 mod pop;
 mod read;
-mod set;
 mod shared;
 pub(crate) mod undo;
 mod view;
 mod write;
 
+pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
 pub use error::{
     CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
 pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
+pub use output_reads::RecordedOutput;
 pub use pop::Popped;
 pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState};
-pub use set::SetTable;
 pub use undo::Restorable;
 pub use view::BatchView;
 pub use write::WriteBatch;
@@ -540,3 +542,7 @@ mod amendments_tests;
 #[cfg(test)]
 #[path = "read_tests.rs"]
 mod read_tests;
+
+#[cfg(test)]
+#[path = "output_read_tests.rs"]
+mod output_read_tests;

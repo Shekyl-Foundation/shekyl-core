@@ -52,18 +52,23 @@
 //! `tx_id`, `output_id` and the per-amount `amount_index` are the owning
 //! table's next dense key at write time (`last + 1`, which equals the
 //! entry count when the primary is dense — LMDB's `mdb_stat` /
-//! `mdb_cursor_count` at `db_lmdb.cpp:1078`, `:1284`, `:1314`). Unique-key
-//! primaries make `last + 1 == len` complete; the `output_amounts` bucket
-//! is a multimap, so the same check is paired with an O(1) end-peek that
-//! refuses a duplicate prefix at first or last. The insert under each is
-//! bound to **SI-9**: a collision or a hole is a corrupted index, not a
-//! consensus fact.
+//! `mdb_cursor_count` at `db_lmdb.cpp:1078`, `:1284`, `:1314`). All three
+//! primaries are unique-key tables — `output_amounts` has been a keyed
+//! `(amount, amount_index)` table since S-OUT-KI's layout v6 (SOK-1), so
+//! `last + 1 == len` is complete for each. The insert under each is bound
+//! to **SI-9**: a collision or a hole is a corrupted index, not a consensus
+//! fact.
 //!
-//! `output_amounts` is keyed **verbatim** (SCW-8): every coinbase and
+//! `output_amounts` keeps LMDB's logical keying (SCW-8): every coinbase and
 //! emission vout is stored under amount `0` with its ct-base commitment, and
 //! every other vout under its own amount — which CEN-H14 makes `0` — so the
-//! multimap has the shape the LMDB parity oracle has, and whether
-//! `amount_index` is ever *exposed* stays R8b-2's question.
+//! table holds **one bucket** and the E2 comparator projects it 1:1 onto
+//! LMDB's `DUPSORT` pairs. The amount dimension is carried, not chosen:
+//! whether `amount_index` is ever *exposed* stays R8b-2's question
+//! (`DRS_E1_SOUT_KI.md` §3.4). The single-bucket premise is checked at
+//! both ends of the table before `len` is trusted as the bucket's
+//! cardinality: a second bucket, or a hole compensated by a foreign row,
+//! is SI-9, never a verdict.
 
 use shekyl_chain_rules::{ChainValid, RuleSet, RuleSetId, TxIdentity};
 use shekyl_difficulty::CumulativeDifficulty;
@@ -75,20 +80,21 @@ use shekyl_units::AtomicUnits;
 use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
-    stored_timelock, BlockBody, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx,
+    stored_timelock, BlockBody, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx,
     PassedThroughFacts, Present, PropertyCell, Raw, TotalBurnedCell, TxIndex, TxOutputIndices,
     TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
-use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
-use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
+use crate::ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
+use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{
     BLOCKS, BLOCK_BURN, BLOCK_HEIGHTS, BLOCK_INFO, CURVE_TREE_ROOTS, HF_VERSIONS, OUTPUT_AMOUNTS,
     OUTPUT_TXS, SPENT_KEYS, TXS_PQC_AUTHS, TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH,
     TXS_PRUNED, TX_INDICES, TX_OUTPUTS,
 };
 
-use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant};
+use super::error::{CellFault, StoreCannot, StoreError, StoreInvariant};
 use super::header;
+use super::keyed::KeyedTable;
 use super::view::BatchView;
 use super::write::WriteBatch;
 
@@ -545,14 +551,14 @@ impl<'id> WriteBatch<'_, 'id> {
                 .insert(tx_id.to_raw(), pqc_auth_hash.encoded().as_encoded())?;
         }
 
-        // Outputs: `output_txs` by global id, `output_amounts` member under
-        // the (zeroed for miner / emission) amount, then the per-tx index
-        // list.
+        // Outputs: `output_txs` by global id, `output_amounts` under
+        // `(amount, amount_index)` with the amount zeroed for miner /
+        // emission, then the per-tx index list.
         let commitments = match &tx.ct {
             Ct::Null(base) | Ct::Fcmp { base, .. } => &base.commitments,
         };
         let mut output_txs = self.open_insert_table(OUTPUT_TXS, StoreInvariant::IdNotFresh)?;
-        let mut amounts = self.open_multimap_table(OUTPUT_AMOUNTS)?;
+        let mut amounts = self.open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?;
         let mut indices = Vec::with_capacity(tx.prefix.outputs.len());
         let mut rct = 0u64;
         for (i, output) in tx.prefix.outputs.iter().enumerate() {
@@ -580,34 +586,23 @@ impl<'id> WriteBatch<'_, 'id> {
                 .encoded()
                 .as_encoded(),
             )?;
-            let amount = if miner || emission { 0 } else { output.amount };
-            // `amount_index` is the bucket's member count (LMDB's
-            // `mdb_cursor_count` after positioning on the amount). redb
-            // orders members by index prefix *then* payload, so a second
-            // member under one index is distinct and `insert` would report
-            // it new. Unique-key primaries make `last + 1 == len` complete;
-            // this bucket is a multimap, so that check alone accepts a
-            // compensating hole+duplicate at the high end (`[0, 2, 2]`:
-            // last 2, len 3). The O(1) end-peek also requires prefix 0 at
-            // the low end and no adjacent duplicate of first or last —
-            // Copilot's cited shape, without walking the amount-0 UTXO
-            // set on every output (PR #757 review).
-            let amount_index = AmountIndex::from_raw(
-                next_amount_index(&mut amounts.get(amount)?)?
-                    .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?,
-            );
-            let member = OutKey {
-                amount_index,
+            let bucket = if miner || emission {
+                OutputSlot::CONFIDENTIAL_AMOUNT
+            } else {
+                AtomicUnits::from_raw(output.amount)
+            };
+            // SI-9 / SOK-2: one dense bucket whose next index is this output_id.
+            let slot = next_output_slot(&amounts, bucket, output_id)?
+                .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?;
+            let record = OutKey {
                 output_id,
                 pubkey: OneTimePubkey::from_bytes(output.key),
                 unlock_time: stored_timelock(tx.prefix.unlock_time),
                 height: BlockHeight::from_raw(height),
                 commitment: CommitmentBytes::from_bytes(*commitment),
             };
-            if !amounts.insert(amount, member.encode().as_slice())? {
-                return Err(self.poison().arm(StoreInvariant::IdNotFresh));
-            }
-            indices.push(amount_index);
+            amounts.insert(slot.key(), record.encoded().as_encoded())?;
+            indices.push(slot.index());
             if miner || emission || output.amount == 0 {
                 rct += 1;
             }
@@ -634,61 +629,37 @@ fn next_dense_id(last: Option<u64>, len: u64) -> Option<u64> {
     }
 }
 
-/// Next `amount_index` for one amount's bucket, or `None` if the bucket is
-/// not a dense unique prefix sequence at the ends.
+/// The slot `output_id` occupies in `bucket`, or `None` if SI-9 would not
+/// hold: the table is not exactly that one dense bucket, or its next index
+/// is not `output_id` (SOK-2).
 ///
-/// `last + 1 == len` plus prefix 0 at the front, with no adjacent duplicate
-/// of first or last. That is O(1) in the bucket size: it catches a hole,
-/// a trailing duplicate, a compensating `[0, 2, 2]`, and `[0, 0, 2]`. An
-/// interior compensating pair (`[0, 1, 1, 3]`) would need a linear scan of
-/// the amount-0 UTXO set, which this path will not do.
-fn next_amount_index(
-    members: &mut redb::MultimapValue<'_, U64PrefixBytes>,
-) -> Result<Option<u64>, StoreError> {
-    let prefix_of = |guard: redb::AccessGuard<'_, U64PrefixBytes>| {
-        OutKey::amount_index_of(guard.value()).map(AmountIndex::to_raw)
-    };
-    let len = members.len();
-    let mut step = |back: bool| -> Result<Option<Option<u64>>, StoreError> {
-        let item = if back {
-            members.next_back()
-        } else {
-            members.next()
-        };
-        Ok(item
-            .transpose()
-            .map_err(EngineError::Storage)?
-            .map(prefix_of))
-    };
-    let dense = match len {
-        0 => true,
-        1 => matches!(step(false)?, Some(Some(0))),
-        n => {
-            let first = step(false)?;
-            let last = step(true)?;
-            let last2 = step(true)?;
-            let first2 = step(false)?;
-            let Some(Some(0)) = first else {
-                return Ok(None);
-            };
-            let Some(Some(last_p)) = last else {
-                return Ok(None);
-            };
-            if last_p.checked_add(1) != Some(n) {
+/// Three O(log n) reads: first key, last key, length. Keys sort by
+/// `(amount, index)`, so a foreign-bucket row sits at an end — both ends
+/// carrying `bucket` **is** the single-bucket premise. Only then is `len`
+/// the bucket's cardinality; unique keys make density `last + 1 == len`.
+/// A hole compensated by a foreign row (`(0,0), (0,2), (7,x)`) would pass
+/// the length check alone. Mixed first/last is not an empty table.
+fn next_output_slot<W>(
+    amounts: &KeyedTable<'_, (u64, u64), Coded<OutKey>, W>,
+    bucket: AtomicUnits,
+    output_id: OutputStorageId,
+) -> Result<Option<OutputSlot>, StoreError> {
+    let next = match (amounts.first()?, amounts.last()?) {
+        (None, None) => next_dense_id(None, 0),
+        (Some((first, _)), Some((last, _))) => {
+            let first = OutputSlot::from_key(first.value());
+            let last = OutputSlot::from_key(last.value());
+            if first.amount() != bucket || last.amount() != bucket {
                 return Ok(None);
             }
-            if let Some(Some(p)) = last2 {
-                if p == last_p || p == 0 {
-                    return Ok(None);
-                }
-            }
-            if let Some(Some(p)) = first2 {
-                if p == 0 || p == last_p {
-                    return Ok(None);
-                }
-            }
-            true
+            next_dense_id(Some(last.index().to_raw()), amounts.len()?)
         }
+        _ => return Ok(None),
     };
-    Ok(dense.then_some(len))
+    match next {
+        Some(n) if n == output_id.to_raw() => {
+            Ok(Some(OutputSlot::new(bucket, AmountIndex::from_raw(n))))
+        }
+        _ => Ok(None),
+    }
 }

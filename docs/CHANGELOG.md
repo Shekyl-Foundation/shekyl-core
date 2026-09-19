@@ -4,6 +4,21 @@
 
 ### Daemon chain store
 
+- **Outputs and key images read surface (S-OUT-KI, DRS-E1 increment 5).**
+  `ReadSnapshot` gains `has_key_image` (one body with the validator's
+  `BatchView`), `key_images()` (the digest's `spent_keys` scan), and
+  `output` / `output_origin` by `GlobalOutputIndex`, returning `AtIndex<T>`
+  — a dense-index absence type: at or beyond the count is `BeyondCount`, a
+  hole below it is an invariant violation, never a default. **Layout v6**
+  (`SCHEMA_VERSION 5 → 6`, delete `~/.shekyl` and re-sync): `output_amounts`
+  is a keyed `(amount, amount_index)` table instead of a multimap — redb
+  has no seek within a key's members, so the ported shape made every
+  output lookup a scan of the whole amount-0 bucket; the tuple is LMDB's
+  `DUPSORT` pair as a key with the same order, O(log n). `OutKey` drops its
+  redundant index prefix; the pop journal's multimap entry is retired
+  (tag 2 reserved). No C++ daemon behaviour changes; the daemon still
+  serves LMDB.
+
 - **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 5` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`; `spent_keys` is `Present`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
 
 ### Consensus
