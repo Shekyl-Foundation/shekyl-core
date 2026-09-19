@@ -20,7 +20,8 @@
 //! anchors the persona has not seen. So `p` is not an argument, and the
 //! only question is which reading the host takes.
 //!
-//! It used to be [`ServingReader::sync_tip_height`] — the height the
+//! It used to be [`ServingReader::sync_tip_height`](shekyl_curve_tree::ServingReader::sync_tip_height)
+//! — the height the
 //! **principal's block scan** had advanced the served store to. The
 //! argument was that the store being read is the store being signed for, so
 //! the two cannot disagree. That is true and it is not the property the
@@ -33,7 +34,7 @@
 //!
 //! The reading is therefore the configured daemon's tip, taken on `P`'s own
 //! transport and never from a peer draw, stamped into a
-//! [`DaemonTipCache`](crate::DaemonTipCache) by a producer on a cadence and
+//! [`DaemonTipCache`] by a producer on a cadence and
 //! read here synchronously. A `p` that is stale past the cache's age bound,
 //! or a daemon that reports itself syncing, is `None` — the same answer an
 //! unreadable store gave, on the same path.
