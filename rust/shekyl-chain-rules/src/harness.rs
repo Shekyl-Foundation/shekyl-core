@@ -8,7 +8,7 @@
 //! written with (`CHAIN_RULES_CRATE.md` §8.7).
 //!
 //! Test-only (`#[cfg(test)]` at the declaration). Rules are generic over
-//! `ChainView<'id>`, so a rule is exercised here against a [`MockChain`] of
+//! `ChainView<'id>`, so a rule is exercised here against a [`MockChain`](crate::harness::MockChain) of
 //! a few recorded blocks with no database — the capability the C++ never
 //! had (C2-R8 §9.1). A harness with no subject is a vacuous pass; the probe
 //! in `harness_probe_tests.rs` is the subject that keeps this one honest.
@@ -443,5 +443,6 @@ pub mod fixture {
     }
 }
 
+#[cfg(test)]
 #[path = "harness_probe_tests.rs"]
 mod harness_probe_tests;

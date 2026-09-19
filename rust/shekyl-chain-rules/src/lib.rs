@@ -107,10 +107,19 @@ mod validate;
 mod verdict;
 mod view;
 
-/// The negative-fixture harness (§8.2). Test-only: an in-memory `ChainView`
-/// with the `assert_refused` / `boundary_pair` idiom every rule test uses.
-#[cfg(test)]
-mod harness;
+/// The negative-fixture harness (§8.2): an in-memory `ChainView`
+/// (`MockChain`), an environment (`MockSubstrate`), fixtures, and the
+/// `assert_refused` / `boundary_pair` idiom every rule test uses.
+///
+/// Test-only inside this crate. Behind the `harness` feature it is also a
+/// library surface for exactly one consumer — the store's mock-vs-`BatchView`
+/// conformance test (slice 2 F11): the mock's fidelity to the real view is
+/// a **gated property** there, not an assumption here. G1 puts that test on
+/// the store side (this crate cannot name the store), so the mock travels
+/// to it rather than the store to the mock. Not a production API; a normal
+/// dependency enabling the feature is a review finding.
+#[cfg(any(test, feature = "harness"))]
+pub mod harness;
 
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};

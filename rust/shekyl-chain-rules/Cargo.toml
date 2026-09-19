@@ -36,6 +36,16 @@ shekyl-address = { path = "../shekyl-address" }
 # alone; the G1 belt's closure grows by exactly this crate.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 
+[features]
+# The negative-fixture harness (`harness.rs`: `MockChain`, `MockSubstrate`,
+# fixtures) as a library surface for ONE consumer: the store's
+# mock-vs-`BatchView` conformance test (slice 2 F11). G1 forbids this crate
+# from depending on the store, so the test that reconciles the mock against
+# the real view must live on the store side and reach the mock from here.
+# Test-only in effect — enabled from `shekyl-chain-store`'s dev-dependencies;
+# never from a normal dependency. Nothing here is a production API.
+harness = []
+
 [dev-dependencies]
 # The shared C2-R3 boundary vectors (`docs/test_vectors/MTP_BOUNDARY_V1.json`)
 # are driven through the 4.C rules as well as through `shekyl-difficulty`.

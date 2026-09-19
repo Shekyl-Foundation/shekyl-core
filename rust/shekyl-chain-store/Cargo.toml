@@ -33,3 +33,10 @@ shekyl-wire = { path = "../shekyl-wire" }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The validation crate's mock view and environment, for the conformance test
+# that reconciles `MockChain` against `BatchView` over a real store (E6 slice
+# 2 F11): every landed rule, identical verdicts and coverage over both. The
+# feature is test-only by contract; see the rules crate's `[features]`.
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }

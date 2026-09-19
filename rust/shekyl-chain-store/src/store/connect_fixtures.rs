@@ -161,7 +161,7 @@ pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
 pub(super) struct FixtureSubstrate;
 
 impl FixtureSubstrate {
-    const CLOCK: Timestamp = Timestamp::from_raw(1_000_000);
+    pub(super) const CLOCK: Timestamp = Timestamp::from_raw(1_000_000);
 }
 
 impl Substrate for FixtureSubstrate {
