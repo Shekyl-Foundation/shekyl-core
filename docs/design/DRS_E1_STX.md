@@ -1,9 +1,12 @@
 # DRS-E1 S-TX — transaction blob and existence: increment plan and Round-0 pre-flight
 
 **Status:** OPEN — **Round 0 (pre-flight) executed 2026-09-19** at `dev` =
-`8b48f574c` (the tree that merged PR #783, S-OUT-KI). **Round-1 questions
-proposed** (§9); implementation may start once this document merges and §9
-is ruled. Implements *from* [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
+`8b48f574c` (the tree that merged PR #783, S-OUT-KI); re-based on `090f2e8f2`
+(#784, SOK-10 closed by deletion). **Round 1 RULED 2026-09-19** (maintainer,
+on PR #786; §9, each ruling line-local): **Q1 B** (`Option`, the counter-rule's
+worked case), **Q2 A**, **Q4 A** with a coupling to Q3; **Q3 is asked of the
+E2 lane this round**, not defaulted (§9, and the DRS lane-coordination log) —
+implementation may start once this document merges and Q3 has E2's answer. Implements *from* [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md)
 §3.5/§7 (the S-TX row: extraction order **5**, "tx blob and existence reads,
 dependent on chain-R for height context; no writer of its own — the daemon
 writes txs only through `add_block`"), §7.6 (parity first; the ported
@@ -57,9 +60,10 @@ S-CHAIN-W writes every transaction table at `connect` (`tx_indices`,
 
 Two things make this surface more than "S-OUT-KI again with hashes":
 
-- **Three absence shapes on one surface, each earned.** A lookup by
-  transaction hash is sparse — absence is ordinary and carries no
-  instruction beyond *not here*. A lookup by `tx_id` is dense — a hole is
+- **Three absence shapes on one surface, each earned — and one of them is
+  `Option`.** A lookup by transaction hash is sparse — absence is ordinary
+  and carries no instruction beyond *not here*, so it is the counter-rule's
+  case and stays `Option` (Q1 B). A lookup by `tx_id` is dense — a hole is
   SI-9. A lookup of the *prunable region* of a recorded transaction has a
   third state that is neither: **discarded**, the store state
   `DAEMON_REDB_STORE.md` §7.7 leg (iii) defines (hash row present ∧ segment
@@ -213,18 +217,21 @@ Faults classify through `ReadFault` as the other two bodies do.
 
 | Read | Signature (proposed) | Replaces |
 |---|---|---|
-| **T1** | `tx_index(&TxHash) -> Result<AtHash<TxIndex>, StoreError>` | `tx_exists` (both overloads); the index row *is* existence, and callers that then want the id (`get_tx_outputs_gindexs`) have it |
+| **T1** | `tx_index(&TxHash) -> Result<Option<TxIndex>, StoreError>` | `tx_exists` (both overloads); the index row *is* existence, and callers that then want the id (`get_tx_outputs_gindexs`) have it |
 | **T2** | `tx_count() -> Result<u64, StoreError>` | `get_tx_count` (`txs_pruned.len()`, the dense primary) |
-| **T3** | `tx_record(&TxHash) -> Result<AtHash<TxRecord>, StoreError>` | `get_pruned_tx_blob`, `get_prunable_tx_hash`, `get_tx_block_height`, and the pruned half of `get_tx_blob` |
+| **T3** | `tx_record(&TxHash) -> Result<Option<TxRecord>, StoreError>` | `get_pruned_tx_blob`, `get_prunable_tx_hash`, `get_tx_block_height`, and the pruned half of `get_tx_blob` |
 | **T4** | `tx_prunable(TxStorageId) -> Result<Prunable, StoreError>` | `get_prunable_tx_blob`, and the prunable half of `get_tx_blob` |
 | **T5** | `tx_output_indices(TxStorageId) -> Result<AtIndex<TxOutputIndices>, StoreError>` | `get_tx_amount_output_indices` |
 
-`get_tx_unlock_time` and `for_all_transactions` are not in the table: §2.1
-and §9.
+`get_tx_unlock_time` is not in the table (Q2 A, not ported). `for_all_transactions`'
+successor — **T6** `tx_headers(range) -> impl Iterator<Item = Result<(TxStorageId, TxHeader), StoreError>>`,
+a walk over `txs_pruned`'s dense key yielding the index and hash rows
+**without the blob** — lands in commit 3 with E2 named as its consumer if
+E2 confirms this round (Q3, asked; Q4's coupling).
 
 T4 takes a **`TxStorageId`, not a hash** — deliberately. A caller reaches
-the prunable region *through* a record (T3 hands it the id), so
-`NotRecorded` cannot recur at T4: the read has exactly the two cases a
+the prunable region *through* a record (T3 hands it the id), so the
+by-hash `None` cannot recur at T4: the read has exactly the two cases a
 recorded transaction's region can be in. That is the typestate the
 `SegmentAvailability` ruling (`CURVE_TREE_STORE_SHAPES.md` CTS-Q1) wanted
 without a type parameter: the *argument type* carries "already resolved."
@@ -232,7 +239,7 @@ without a type parameter: the *argument type* carries "already resolved."
 segment order (STX-8); no third read exists for the composition, because the composition is one line and a
 third read would be the identity-DTO hop SOK-Q4 refused.
 
-### 3.3 Absence, faults, and what a read may not do — three shapes, one discriminator
+### 3.3 Absence, faults, and what a read may not do — three shapes, one discriminator (Q1 RULED B)
 
 `CHAIN_RULES_CRATE.md` G11 / `CURVE_TREE_STORE_SHAPES.md` §3.1: **absence
 earns a type when its case carries caller-actionable semantics**, and
@@ -240,18 +247,22 @@ S-CHAIN-R's counter-rule: **`Option` stays `Option`** when it does not.
 This surface has three lookups and they land on three different sides of
 that line; the pattern is now easy to cargo-cult, so each is justified:
 
-- **By hash (T1, T3) — `AtHash<T> { Recorded(T), NotRecorded }`.** Hashes
-  are sparse. A miss is ordinary and instructs nothing beyond *not here*
-  (`have_tx` returns false; `get_transactions` adds to `missed_txs`). By
-  the counter-rule this would be `Option<T>` — and **STX-Q1** offers
-  exactly that. The default is the named two-arm enum for one reason
-  only: this surface's *third* shape (below) is a three-arm enum whose
-  first arm is the same *not recorded*, and a caller composing T3 → T4
-  should read the same word for the same state across the family rather
-  than `None` here and `NotRecorded` there. The enum earns its name by
-  family coherence, not by a hidden instruction; if the maintainer rules
-  the coherence not worth a type, `Option` is correct and the doc says
-  why.
+- **By hash (T1, T3) — `Option<T>`. This is the counter-rule's worked
+  case, recorded as such (Q1 RULED B, 2026-09-19).** Hashes are sparse. A
+  miss is ordinary and instructs nothing beyond *not here* (`have_tx`
+  returns false; `get_transactions` adds to `missed_txs`); there is no
+  second absence the caller must tell apart, so there is nothing for an
+  arm to name. The round's proposed alternative — a named
+  `AtHash { Recorded, NotRecorded }` "for family coherence" with T4 — was
+  refuted by this section's own text: T4 is **two** arms, neither of which
+  is *not recorded*, and the state the coherence argument leaned on
+  (`Discarded` for an id with no hash row) is the one this section forbids
+  as SI-7, "never a third arm." With that removed the discriminator decides
+  alone, and it says `Option`. **Why this is written down rather than
+  just done:** the absence pattern is now easy to cargo-cult — `AtHeight`,
+  `AtIndex`, `SegmentAvailability`, `Prunable` all in the tree — and a
+  documented instance of *here it does not apply* is what stops the next
+  reader from minting a fourth absence type for a sparse key.
 - **By dense id (T5) — `AtIndex<T>`, reused.** `tx_id` is dense (SI-9:
   `txs_pruned`' entry count at write time). At or beyond the count is
   `BeyondCount`; a hole below it is **SI-9**; bound first, then the row —
@@ -279,19 +290,24 @@ through. **A read never arms the halt** (DRS §3.6.2, read-side half).
 
 ### 3.4 Types this increment adds to the store crate
 
-- `AtHash<T>` — `store/at_hash.rs`, with `compile_fail` doctests as
-  `AtIndex` has, so the two absence types cannot be confused at a call
-  site (a `TxHash` is not a `TxStorageId`; the compiler already says so —
-  the doctests pin that the *return* types are distinct too).
+- No by-hash absence type (Q1 B): T1 and T3 return `Option`. The
+  `TxHash`/`TxStorageId` parameter types already keep a sparse lookup and
+  a dense one from being confused at a call site.
+- `TxHeader` — the walk's item (T6, if Q3 lands B): `id`, `height`,
+  `unlock_time`, `prunable_hash`, `pqc_auth_hash` — `TxRecord` **without
+  the blobs**. A genuinely different shape from `TxRecord`, not the same
+  shape renamed (Q4's coupling): a full-chain comparator pass over an
+  eager record would materialise every pruned blob in sequence.
 - `TxRecord` — a read projection, not `Canonical`: `id: TxStorageId`,
   `height: BlockHeight`, `unlock_time: Timelock` (the stored fact, carried
   because `TxIndex` stores it; no read exposes it *separately* — STX-Q2),
   `pruned: Bytes` (the `TxPrunedSegment` blob), `pqc_auths: Option<Bytes>`
   (present ⇔ the txid is 4-part, §7.7), `prunable_hash: PrunableHash`,
-  `pqc_auth_hash: Option<PqcAuthHash>` (A3). Whether `pruned` is read
-  eagerly with the record or lazily is a §9 question only if a caller
-  emerges that wants the index without the bytes; `have_tx` uses T1 for
-  that already.
+  `pqc_auth_hash: Option<PqcAuthHash>` (A3). `pruned` is read eagerly
+  with the record (Q4 A): every T3 caller wants the bytes, and `have_tx`
+  has T1. The one consumer that wants the header without the blob is the
+  walk, and it gets its own item type (`TxHeader`), not a lazy flag on
+  this one.
 - `Prunable` — the two-arm enum above, with the bytes as the
   `TxPrunableSegment` blob.
 - No new key type: `tx_indices` is `LmdbHashKey`-keyed (`Hash32`), and
@@ -317,7 +333,7 @@ through. **A read never arms the halt** (DRS §3.6.2, read-side half).
 
 | Table | Key → value (at v6) | Read here | Absence | Writer |
 |---|---|---|---|---|
-| `tx_indices` | `LmdbHashKey → Coded<TxIndex>` | T1, T3 `get(hash)` | `NotRecorded` — sparse | `connect` (SI-3) |
+| `tx_indices` | `LmdbHashKey → Coded<TxIndex>` | T1, T3 `get(hash)`; T6 walks it only through `txs_pruned`'s ids | `None` — sparse (Q1 B) | `connect` (SI-3) |
 | `txs_pruned` | `u64 → Blob<TxPrunedSegment>` | T2 `len()`; T3 `get(id)` after T1 | below the count and absent: **SI-9**; T3 never asks beyond it (the id came from a record) | `connect` (SI-9) |
 | `txs_prunable` | `u64 → Blob<TxPrunableSegment>` | T4 `get(id)` | absent with hash row present: **`Discarded`** (§7.7 (iii)) | `connect`; removed by S-PRUNE's discard |
 | `txs_prunable_hash` | `u64 → Coded<PrunableHash>` | T3 `get(id)`; T4 checks presence before `Discarded` | absent for a recorded id: **SI-7** (permanent row, leg (i)) | `connect`, never deleted |
@@ -352,7 +368,7 @@ read back). Leg (iv) is A4's and not read here.
 | **STX-4** | `txs_prunable_tip` (`u64 → Unshaped`) is the stripe worker's cursor table: written by `prune_worker`, read by nothing this surface replaces, and `PDM-Q7` deleted the engine. | Not read. Stays in the catalogue (renumbering is a layout bump) until DRS-E* deletes it with the C++; named here so the deletion is scheduled, not discovered. |
 | **STX-5** | `get_tx_block_height` (re-homed here by S-OUT-KI §2.2) has two FFI-seam callers (`rpc_facts_ffi.cpp:785`, `daemon_submit_ffi.cpp:405`) and one tool; its answer is `TxIndex.height`. | Carried on T3's record; no separate read. |
 | **STX-6** | `shekyl_rpc_transactions` reads the prunable **hash** unconditionally and `MERROR`s when a recorded transaction has none (`rpc_facts_ffi.cpp:771`–`776`, with the comment above it naming why: the hash is what lets a client bind a pruned body). That is §7.7 leg (i) enforced by a log line. | Under T3 a record without its hash row is **SI-7** `CellCorrupt { "txs_prunable_hash", Absent }` — a fault the caller cannot ignore, not a message it can. |
-| **STX-7** | Three absence shapes on one surface (§3.3). The risk after S-OUT-KI is that `AtIndex` gets copied onto a sparse key because it is the newest shape in the tree. | §3.3 states the discriminator per read; `AtHash` gets `compile_fail` doctests; STX-Q1 keeps the `Option` alternative visible so the choice is ruled, not inherited. |
+| **STX-7** | Three absence shapes on one surface (§3.3). The risk after S-OUT-KI is that `AtIndex` gets copied onto a sparse key because it is the newest shape in the tree. | §3.3 states the discriminator per read, and — Q1 RULED B — records the sparse lookup as the counter-rule's **worked case**: `Option`, with the refuted coherence argument kept in the text so the next reader sees why a fourth absence type was not minted. |
 | **STX-8** | `get_tx_blob` is `pruned ‖ pqc_auths ‖ prunable` (`db_lmdb.cpp:3363`–`3366`: `assign` the pruned segment, `append` the `pqc_auths` segment where present, `append` the prunable one — the same three segments `connect` splits at write). No LMDB read returns the composition *and* a discard state, so `get_transactions(pruned = false)` on a pruned node fails the whole lookup where T3 → T4 answers `Recorded` + `Discarded`. | The composition is the caller's one line over T3 and T4; the new state is what the cutover-time caller needs and the C++ could not express. |
 
 ### 6.1 Reproduced deviations on this surface (DRS §7.6 item 1)
@@ -363,11 +379,11 @@ tables reproduce; the only behavioural difference is STX-8, and it is an
 
 ---
 
-## 7. Commit sequence (rule 90; one PR, ≤ 4 commits, cut from `dev` after this document merges and §9 is ruled)
+## 7. Commit sequence (rule 90; one PR, ≤ 4 commits, cut from `dev` after this document merges and Q3 has E2's answer)
 
-1. `store: AtHash<T> — by-hash absence for the sparse index` — `store/at_hash.rs` with `compile_fail` doctests (or nothing, if STX-Q1 rules `Option`; then this commit folds into 2).
-2. `store: ReadSnapshot::tx_index / tx_count / tx_record — T1, T2, T3 on tx_reads.rs` — the shared body, `TxRecord`, SI-7 on a missing hash row (STX-6); tests: recorded / not recorded on one snapshot, a record with its hash row removed is SI-7, a 3-part txid has no `pqc_auths`, snapshot isolation across a concurrent connect.
-3. `store: ReadSnapshot::tx_prunable / tx_output_indices — T4 (Prunable), T5 (AtIndex)` — `Prunable` with `Discarded` planted by removing the segment under a present hash row; T5 bound first, `BeyondCount` at the count, SI-9 on a hole; T3 → T4 composition test against `get_tx_blob`'s concatenation.
+1. `store: ReadSnapshot::tx_index / tx_count / tx_record — T1, T2, T3 on tx_reads.rs` — the shared body, `TxRecord`, SI-7 on a missing hash row (STX-6); tests: recorded / not recorded on one snapshot, a record with its hash row removed is SI-7, a 3-part txid has no `pqc_auths`, snapshot isolation across a concurrent connect.
+2. `store: ReadSnapshot::tx_prunable / tx_output_indices — T4 (Prunable), T5 (AtIndex)` — `Prunable` with `Discarded` planted by removing the segment under a present hash row; T5 bound first, `BeyondCount` at the count, SI-9 on a hole; T3 → T4 composition test against `get_tx_blob`'s concatenation.
+3. `store: ReadSnapshot::tx_headers — T6, the tx walk for E2's comparator` — **only if Q3 lands B** (E2 names itself this round); `TxHeader`, the walk over `txs_pruned`'s dense key, a test that the walk and T3 agree header-for-header and that the walk reads no blob. If E2 answers no, this commit does not exist and §9 says so.
 4. `docs: S-TX landed — DRS §7 row, index, plan banner, CHANGELOG` — §10.
 
 No layout change: `SCHEMA_VERSION` stays 6; the codec snapshot gate is
@@ -388,14 +404,14 @@ unchanged (no codec added — `TxRecord` and `Prunable` are projections).
 
 ---
 
-## 9. Round-1 questions — PROPOSED 2026-09-19 (defaults stated; each row gets its ruling line-locally)
+## 9. Round-1 questions — RULED 2026-09-19 (maintainer, PR #786; Q3 asked of E2, each row line-local)
 
 | # | Question | Default and reasoning |
 |---|---|---|
-| **STX-Q1** | By-hash absence (T1, T3): **A** — named `AtHash<T> { Recorded, NotRecorded }`; **B** — `Option<T>` per S-CHAIN-R's counter-rule. | **A**, narrowly, for family coherence with T4's `Prunable` (§3.3): one word for one state across a composition callers will write in one expression. **B is correct on the counter-rule's own terms** — a hash miss instructs nothing — and if the maintainer weighs the counter-rule above coherence, B lands and §3.3 records that the sparse lookup is the case where `Option` is right. Either way the choice is ruled, not inherited from S-OUT-KI. |
-| **STX-Q2** | `get_tx_unlock_time` (STX-1, transitively callerless): **A** — not ported; the C++ method and its dead caller die with the C++ store at DRS-E* (`PDM-Q-S0`); **B** — delete both now, #782's shape, own PR. | **A.** Unlike #782 this is not a served surface — `get_output_key_mask_unlocked` has no RPC route and no caller — so there is no disclosure to close and no schedule to distrust; and no daemon is built until the redb conversion completes (steering item 1), so the deletion's timing buys nothing before then. The FOLLOWUPS row carries the field-fate falsifier (§3.5). Reopen to B if a route to `get_output_key_mask_unlocked` is found. |
-| **STX-Q3** | `for_all_transactions` (STX-3): **A** — not ported; **B** — a `tx_records(range)` iterator over `txs_pruned` by `tx_id`, staged for E2's digest/comparator. | **A** unless E2 names the consumer in this round. `DRS-D10`/`D11` project tables through typed reads; if E2's comparator wants a tx walk it should say so here and B lands in commit 3 with E2 as the named consumer (rule 23 STAGED). An iterator nobody has asked for is the residue rule 22 forbids. |
-| **STX-Q4** | T3's `pruned` bytes: **A** — eager (the record carries the blob); **B** — a separate `tx_pruned(TxStorageId)` read, T3 carrying only the index and hash rows. | **A.** Every T3 caller in §2.1 wants the bytes (`get_pruned_tx_blob`, `get_transactions`, the FFI seam); the one caller that wants existence alone (`have_tx`) has T1. B would be the identity-DTO hop SOK-Q4 refused, one read later. Reopen if a caller emerges that wants the height and hash without the blob on a hot path. |
+| **STX-Q1** | By-hash absence (T1, T3): **A** — named `AtHash<T> { Recorded, NotRecorded }`; **B** — `Option<T>` per S-CHAIN-R's counter-rule. | **B — RULED 2026-09-19.** A's only argument (family coherence with a three-arm T4 whose first arm is *not recorded*) did not survive §3.3 itself: T4 is two arms, neither *not recorded*, and the state the argument leaned on is the one §3.3 forbids as SI-7. With it removed the discriminator decides alone — a hash miss instructs nothing — and §3.3 now records the sparse lookup as the counter-rule's **worked case**, which is worth more than a fourth absence type because the pattern is now easy to cargo-cult. *(Proposed default was A.)* |
+| **STX-Q2** | `get_tx_unlock_time` (STX-1, transitively callerless): **A** — not ported; the C++ method and its dead caller die with the C++ store at DRS-E* (`PDM-Q-S0`); **B** — delete both now, #782's shape, own PR. | **A — RULED 2026-09-19.** Unlike #782 this is not a served surface — `get_output_key_mask_unlocked` has no RPC route and no caller — so there is no disclosure to close and no schedule to distrust; and no daemon is built until the redb conversion completes (steering item 1), so the deletion's timing buys nothing before then. The FOLLOWUPS row carries the field-fate falsifier (§3.5). Reopen to B if a route to `get_output_key_mask_unlocked` is found. |
+| **STX-Q3** | `for_all_transactions` (STX-3): **A** — not ported; **B** — **T6** `tx_headers(range)`, a walk over `txs_pruned` by `tx_id` yielding `TxHeader` (index + hash rows, **no blob** — Q4's coupling), staged for E2's comparator. | **ASKED OF E2 THIS ROUND, not defaulted (maintainer, 2026-09-19).** The abstract reasoning for A is right — an iterator nobody asked for is rule-22 residue — but E2's comparator is the per-table diff, ruled in DRS §7.6 as *"logical content through per-table projections"*, walked row by row over the catalogue's tables; a tx walk is close to a structural requirement of that instrument, not a speculative consumer. Defaulting to A and discovering the need inside E2 would land the iterator as a retrofit against a read set this surface has frozen. **The question, put to the E2 lane in the DRS lane-coordination log (2026-09-19):** *does the comparator's projection of `txs_pruned` / `tx_indices` / `txs_prunable_hash` walk transactions by `tx_id`, and if so is `TxHeader` (id, height, unlock_time, prunable_hash, pqc_auth_hash — no blob) the row it wants?* If yes, B lands in commit 3 with E2 named (rule 23 STAGED). If E2 says no, A, and commit 3 does not exist. The increment is not cut until the answer is in this row. |
+| **STX-Q4** | T3's `pruned` bytes: **A** — eager (the record carries the blob); **B** — a separate `tx_pruned(TxStorageId)` read, T3 carrying only the index and hash rows. | **A — RULED 2026-09-19, with a coupling to Q3.** For the **point read** eager is right: every T3 caller in §2.1 wants the bytes (`get_pruned_tx_blob`, `get_transactions`, the FFI seam); the one caller that wants existence alone (`have_tx`) has T1; B would be SOK-Q4's identity hop one read later. **If Q3 lands B, the walk does not reuse `TxRecord`:** a pass over every transaction with an eager record materialises every pruned blob in sequence — fine for a point read, expensive for a full-chain comparator pass — so T6 yields `TxHeader` (index and hash rows, no blob). That is *not* the DTO hop, because the two reads have genuinely different shapes rather than one shape renamed. §3.4 carries both types. |
 
 ---
 
@@ -412,6 +428,8 @@ unchanged (no codec added — `TxRecord` and `Prunable` are projections).
   archive-or-contract per index §8 when S-CURVE's pre-flight has read it.
 - `FOLLOWUPS.md`: the `TxIndex.unlock_time` field-fate row (§3.5), with its
   falsifier, `Target: pre-genesis`.
+- The DRS lane-coordination log: Q3's answer from E2 copied into §9 the day
+  it arrives, with the E2 doc or PR it came from.
 
 ---
 
@@ -419,4 +437,5 @@ unchanged (no codec added — `TxRecord` and `Prunable` are projections).
 
 | Date | Entry |
 |---|---|
+| 2026-09-19 | **Round 1 RULED (maintainer, on PR #786).** Q1 **B** — the proposed A rested on coherence with a three-arm T4 whose first arm is *not recorded*; §3.3 defines T4 as two arms and forbids the third as SI-7, so the argument refuted itself and the discriminator alone decides: `Option`, recorded in §3.3 as the counter-rule's worked case (the documented *here it does not apply* being what stops the pattern being cargo-culted). Q2 **A** — transitively callerless, no route, no served surface, no daemon built before the conversion completes; the reopening criterion is checkable, which is what separates it from a deferral. Q3 **asked of E2 this round, not defaulted** — E2's comparator is the per-table diff (DRS §7.6), and a tx walk is close to a structural requirement of it; defaulting to A would land the iterator as a retrofit against a frozen read set. Put to the E2 lane in the coordination log; B lands in commit 3 with E2 named if yes. Q4 **A** with the coupling written into both rows: eager for the point read; if Q3 is B the walk yields `TxHeader` without the blob — a different shape, not the DTO hop. Re-based on `090f2e8f2` (#784: SOK-10 closed by deletion; the archived S-OUT-KI banner and the index SOK row say so). |
 | 2026-09-19 | **Round 0 executed at `8b48f574c`.** Eight findings, four questions with defaults. Steering recorded as premises: #784 is not in `dev` and is not a dependency (S-CHAIN-R is, and is in); the prune-shaped methods are the archival good's read path per `PDM-Q6`, not `PDM-Q7` residue — stated in §2.3 so the next lane inherits the right conclusion; `get_tx_unlock_time` and `for_all_transactions` censused before disposition (STX-1: transitively callerless; STX-3: one tool + one callerless wrapper). Three absence shapes on one surface, each justified against the discriminator rather than copied (§3.3, STX-7). `DRS_E1_SOUT_KI.md` archived by this PR (its §10 condition — this pre-flight has read it — is met). |
