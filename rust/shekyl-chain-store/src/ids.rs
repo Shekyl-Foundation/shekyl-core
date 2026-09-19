@@ -86,7 +86,7 @@ store_id! {
 /// [`Self::confidential`], which is where the "one bucket" premise lives
 /// as code rather than as a comment. Fields are private: the tuple is
 /// assembled only through [`Self::new`] / [`Self::confidential`] /
-/// [`Self::from_key`].
+/// [`Self::from_key`], and bounded only through [`Self::bucket`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct OutputSlot {
     amount: AtomicUnits,
@@ -142,5 +142,44 @@ impl OutputSlot {
     #[must_use]
     pub const fn index(self) -> AmountIndex {
         self.index
+    }
+
+    /// The key range covering every slot in `amount`'s bucket. The bound
+    /// that keeps the tuple's field order in this type: a ranger that
+    /// spelled `(amount, 0)..=(amount, u64::MAX)` would duplicate `key()`.
+    /// Not the SI-9 end-peek — that read is the table's first and last so
+    /// a foreign-bucket row is visible (`next_output_slot`).
+    #[must_use]
+    pub const fn bucket(amount: AtomicUnits) -> core::ops::RangeInclusive<(u64, u64)> {
+        let lo = Self::new(amount, AmountIndex::from_raw(0)).key();
+        let hi = Self::new(amount, AmountIndex::from_raw(u64::MAX)).key();
+        lo..=hi
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bucket_range_is_this_amount_then_every_index() {
+        let amount = AtomicUnits::from_raw(7);
+        let r = OutputSlot::bucket(amount);
+        assert_eq!(
+            *r.start(),
+            OutputSlot::new(amount, AmountIndex::from_raw(0)).key()
+        );
+        assert_eq!(
+            *r.end(),
+            OutputSlot::new(amount, AmountIndex::from_raw(u64::MAX)).key()
+        );
+        assert!(
+            OutputSlot::new(AtomicUnits::from_raw(6), AmountIndex::from_raw(0)).key() < *r.start(),
+            "a lesser amount sorts before this bucket"
+        );
+        assert!(
+            OutputSlot::new(AtomicUnits::from_raw(8), AmountIndex::from_raw(0)).key() > *r.end(),
+            "a greater amount sorts after this bucket"
+        );
     }
 }
