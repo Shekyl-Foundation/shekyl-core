@@ -1,8 +1,11 @@
 # `shekyl-chain-rules` slice 2 — census 4.C + 4.D (DRS-E6 increment 3)
 
-**Status:** OPEN — **Round 1 proposed** (pre-flight written 2026-09-18
-against `dev` @ `5adfc5423`, post-#782). No production code until the §8
-questions are ruled (rule 26 halt). Template:
+**Status:** OPEN — **Round 1 RULED 2026-09-19** (Q1–Q7, §8; pre-flight
+written 2026-09-18 against `dev` @ `5adfc5423`, post-#782). **Round 2
+proposed** (Q8–Q10, §8.1) — two consequences of the Q1 staging ruling and
+Q6's fourth arm after its falsifier failed (c). Rules-crate commits may start
+on Round 2's defaults if so instructed; the store-side commit waits for #783
+regardless. Template:
 [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessor
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md). Parent
 plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 table 3 (*"slice 2 —
@@ -148,12 +151,68 @@ pub trait Substrate {
 }
 ```
 
-`validate` grows one parameter (`substrate: &S`) and one fault channel.
-§8 Q1 asks whether the two faults unify (`S::Fault = V::Fault`, one
-`Result`) or stay distinct (a `Fault<V, S>` enum). `PowHash` is a new
-`hash32!` member in `shekyl-types` — a longhash is not a `BlockHash` and
+~~`validate` grows one parameter (`substrate: &S`) and one fault channel.~~
+**RULED 2026-09-19 (Q1): the trait is approved, but it binds to a
+stateless stage, not to `validate(candidate, view, rule_set)`.** C2-R8 Q3
+ruled that the `ChainView` is projected from the write transaction that
+applies the block, so `ChainValid` is minted *inside* the exclusive write
+batch. Handing `Substrate` to the same entry point would run RandomX — the
+most expensive call in the validator — inside that transaction and
+serialize IBD behind the write lock, undoing the split by a parameter. So:
+
+```text
+form(candidate, rule_set, substrate, seed)  →  Verdict<StructurallyValid>   stateless · expensive · parallel · outside the txn
+validate(structurally_valid, view, rule_set) →  Verdict<ChainValid<'id, V>>   inside the batch, view-bound
+```
+
+`StructurallyValid` is a new type; `validate` takes it **instead of** a
+`Candidate`, so the second stage cannot be reached without the first
+(type-enforced ordering, the same move as `ChainValid` being unmintable
+outside `connect`). It carries the candidate, the stage's coverage, the
+`PowHash` it computed, the `seed` it computed it under, and the clock
+reading it judged FTL against. `tx_form` / `tx_against` are already this
+partition for transactions (`validate.rs:12`, `:208`); this is the block
+analogue.
+
+**The wrinkle the ruling did not see, stated so it is ruled rather than
+discovered in commit 6 (§8.1 Q8):** the ruling sorted "D1/D2/D3 need the
+candidate and a longhash, no view". Two of the three *do* read the chain —
+**D3's seed is `block_at(seedheight(c)).hash`** and **D1's target is D4's
+derivation over the LWMA window**. Neither can be evaluated statelessly.
+The C++ resolves the same tension by having the precompute worker fetch the
+seed id itself (`cryptonote_tx_utils.cpp:777`, `get_pending_block_id_by_height`)
+and comparing against the target inside the connect path (`blockchain.cpp:5535`).
+The split that preserves the ruling's intent — **the expensive call outside
+the txn, every chain-dependent judgement inside it**:
+
+| Row | Stage | What it does there |
+| --- | --- | --- |
+| D2 | `form` | `pow = substrate.longhash(hashing_blob, seed)`; `Err` is a fault, never a verdict |
+| D3 | **`validate`** | `seed == block_at(seedheight(c)).hash` — verifies the **claimed** seed `form` was given against the committing view; the seed height is always ≥ 64 blocks below `c`, so a mismatch means a ≥ 64-block reorg between the two stages, and the result is a crate-defined **fault** (`Stale::Seed`, "redo `form`"), not `InvalidBlock` — the block is unproven, not disproven |
+| D4 | `validate` | target over the recorded window (definition row) |
+| D1 | `validate` | `check_hash(pow, target)` — one comparison, cheap; the refusal is here |
+| C1 (FTL) | `form` | `is_timestamp_below_ftl(header.timestamp, substrate.local_clock())` |
+| C2, C3 | `validate` | the MTP window is recorded chain |
+| B1, B2, B7 | `form` | view-free already (§8.1 Q9) |
+| A2, B5 | `validate` | read the tip / the root |
+
+`Substrate`'s fault and the view's stay **distinct and both opaque** (ruled
+with Q1): `form` returns `Result<Verdict<StructurallyValid>, S::Fault>`,
+`validate` returns `Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>>`
+where `Fault` is the view's fault **or** the crate's own `Stale` — the store's
+`connect` already handles one opaque fault and gains an arm. `PowHash` is a
+new `hash32!` member in `shekyl-types` — a longhash is not a `BlockHash` and
 the type refuses the transposition (RTN pattern; `RAW_TYPE_NEWTYPE_MIGRATION.md`
 row, disclosed to that lane).
+
+**Recorded with the ruling — the verdict is now time-dependent.**
+`local_clock` makes `StructurallyValid`, and therefore `ChainValid`, no
+longer a pure function of `(candidate, view, rule_set)`. The window is
+small because the brand ties a `ChainValid` to a live batch, but anything
+that caches or defers one lets the FTL leg go stale silently. The sentence
+goes on both types' docs in commit 2, and `StructurallyValid` carries the
+clock reading it was judged at so a consumer *can* re-check rather than
+trust.
 
 Consequences the shape buys: the crate's dependency closure is unchanged
 (`shekyl-difficulty` only — §8 Q2); D2's fail-closed behaviour is the fault
@@ -213,17 +272,18 @@ per-block `cumulative_difficulty` and a `MockSubstrate { clock, longhash: fn }`.
 Commit plan (rule 90, ≤ 10; each names its rows):
 
 1. `types: PowHash` — the longhash newtype; RTN row disclosed.
-2. `chain-rules: Substrate trait; validate takes it; harness MockSubstrate` — no rule yet; every existing test passes with a mock that is never called.
+2. `chain-rules: the stateless stage — Substrate, form() → StructurallyValid; validate takes it` (Q1 as ruled, §4.2) — B1/B2/B7 move to `form` (Q9); `harness::MockSubstrate`; every existing test passes with a mock whose `longhash` is never called yet; the time-dependence sentence on both verdict types.
 3. `chain-rules: RecordedBlock.cumulative_difficulty; MockChain carries it` — the view growth; store projection **not** in this commit (C9).
-4. `chain-rules: CEN-C1/C2/C3 — timestamps over the view` + three fixtures.
-5. `chain-rules: CEN-D4 as a definition row; ValidatedBlock.target` + fixture.
-6. `chain-rules: CEN-D3, D2, D1, D1b — seed, longhash via Substrate, target comparison` + fixtures.
-7. `chain-rules: CEN-D6` per Q4; `CEN-D5 subsumed-by-D4` registry comment; `CEN-D7` per Q6.
-8. `chain-rules: coverage — registry flips; expected record` (§7).
-9. `chain-store: BatchView projects cumulative_difficulty; connect derives it from the verdict` — **after #783 merges**, rebased on layout v6; S-CHAIN-W row disclosure.
+4. `chain-rules: CEN-C1 (FTL in form, MTP leg with C2) / C2 / C3` + three fixtures.
+5. `chain-rules: CEN-D4 as a definition row; NonZero target (Q4, CEN-D6 recorded at the mint); ValidatedBlock.target + cumulative_difficulty (Q5)` + fixtures.
+6. `chain-rules: CEN-D2 in form; CEN-D3 seed verification and CEN-D1/D1b comparison in validate; Stale::Seed fault` (Q8) + fixtures incl. the ≥ 64-block-reorg stale-seed fixture.
+7. `chain-rules: CEN-D5 subsumed-by-D4` registry comment; `CEN-D7` per Q10.
+8. `chain-rules: coverage — registry flips; expected record` (§7); `DELETED_BY` narrowed to D4 (Q5, F6) — **note:** that constant lives in `chain-store/connect.rs`, so it rides C9, not this commit.
+9. `chain-store: BatchView projects cumulative_difficulty; connect derives it from the verdict; DELETED_BY narrows` — **after #783 merges**, rebased on layout v6; S-CHAIN-W row disclosure.
 10. `docs` — §7's record, index rows, CHANGELOG (security-relevant: the validator now decides PoW and timestamps), FOLLOWUPS sweep, this file to `completed/`.
 
-Commits 1–8 can start when the round is ruled; C9 waits for #783 regardless.
+Commits 1–8 can start when Round 2 is ruled (or on its defaults if so
+instructed); C9 waits for #783 regardless.
 
 ---
 
@@ -240,9 +300,11 @@ Commits 1–8 can start when the round is ruled; C9 waits for #783 regardless.
   Nothing new is asked of the C++ before cutover.
 - **F3 — genesis is exempt from C1 as well as C2/C3 in the C++** (`h == 0`
   returns before the FTL arm, `:5224`–`:5228`). The census states C1 without
-  the exemption. Not a divergence to repair now (parity first, §7.6); it is
-  recorded so Q3's default is checked against what the C++ does, not what the
-  row says.
+  the exemption. **RULED 2026-09-19: a census amendment, not a conformance
+  exception** — the row's *text* is incomplete relative to what C2-R3
+  ratified and the C++ implements; filing it DIVERGENT-shaped would misstate
+  which artifact is wrong. The CEN-C1 row in `CONSENSUS_RULE_CENSUS.md`
+  carries the dated bracket (landed with this round's docs commit).
 - **F4 — `Difficulty` can be zero by construction.** `Difficulty::ZERO`
   exists (`types.rs:25`) and `from_raw(0)` is `const fn`; the only producer
   that would return it is D5's height-0 alt sentinel, which has no Rust
@@ -252,8 +314,22 @@ Commits 1–8 can start when the round is ruled; C9 waits for #783 regardless.
   `clamp_lag`/`clamp_blocks` read `SEEDHASH_EPOCH_*`; the C++ refuses them on
   public networks at init. The validator must not read the environment
   (rule 71: nettype selects data, never control flow on the consensus
-  surface). §4.2's D3 uses the two constants; the fakechain lever, if kept,
-  is the daemon implementor's and is out of this crate.
+  surface). §4.2's D3 uses the two constants. **RULED 2026-09-19: promoted
+  from a finding to a graded register entry** — "the Rust validator reads no
+  environment" is a design ruling that *creates* a behavioural difference
+  between the two implementations (the CEN-I12-corrected-read class), and
+  under CSR-3a it needs a register row with a pass condition, or the first E2
+  comparison over a regtest chain with the override set produces a divergence
+  nobody predicted. Landed on the CEN-D3 row of
+  `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1 (state unchanged; pass condition
+  added, the I12 shape). *Checked while there:* no harness sets
+  `SEEDHASH_EPOCH_*` (`rg` over `tests/ scripts/ rust/` finds only the clamp
+  unit test and the FFI), so the lever has **no consumer** today; under the
+  staging in §4.2 it also has **no effect** on a Rust-validated chain — D3
+  derives the seed from the two constants and D2 computes under that seed,
+  so a block mined under an overridden schedule fails D1. If a regtest need
+  for a short epoch appears, it enters as **data** the way §8.1 Q10 proposes
+  for the difficulty lever, never as an environment read.
 - **F6 — `DELETED_BY` names D5 beside D4 for `cumulative_difficulty`**
   (`connect.rs:204`–`:206`). The Rust store has no alt-admission path, so D4
   alone lets `connect` derive the field for every block it will connect
@@ -262,6 +338,39 @@ Commits 1–8 can start when the round is ruled; C9 waits for #783 regardless.
 - **F7 — `RecordedBlock`'s comment already promised this field**
   (`view.rs:126`: "cumulative difficulty and weight arrive with 4.D / 4.G").
   A promise kept on schedule; noted so nobody reads it as drift.
+- **F8 — `blockchain.cpp:330` and `SHEKYL_SETTLEMENT_EPOCH_BLOCKS` (checked
+  2026-09-19 at the reviewer's request).** The site is `Blockchain::init`
+  (`:300`–`:336`), reached only when the variable is *present*; it refuses
+  to start on any nettype but FAKECHAIN (`:313`–`:317`) and on FAKECHAIN
+  arms the override once through `shekyl_archival_settlement_epoch_arm_regtest()`.
+  The `getenv` at `:330` is **diagnostic text** for the refusal message, not a
+  second read of the value. On the Rust side the read is once per process
+  behind a `OnceLock` (`shekyl-archival-retention/src/constants.rs:275`–`:284`),
+  and consensus code consumes `effective_settlement_epoch_blocks()` — one
+  latched value, never the raw env (`:290`–`:305`). So there is **one source**,
+  read at init; SCW-2's `EngineLocal` reasoning holds against this site as it
+  did against the arming path. **What it does expose — a forward pin for
+  slice 8 (4.J):** the latched value is a process global inside a library
+  crate. When the archival rows enter this validator, the epoch length must
+  arrive as **data** (a `RuleSet` parameter or a `Substrate` read), not as a
+  call into that global — the F5 ruling ("the validator reads no
+  environment") extends to "the validator reads no process global whose value
+  the environment set". Written here so slice 8's pre-flight inherits it.
+- **F9 — Q6's falsifier ran and (c) fails it.** Consumers that depend on the
+  difficulty **value**, not merely on PoW passing: `scripts/bench/drs_bench.py:449`–`:451`
+  records `verify_exercised: {pow: True}` with the note *"PoW longhash is
+  computed and checked for every block with no nettype bypass;
+  `--fixed-difficulty` lowers the TARGET only"* — the store benchmark
+  deliberately measures **real RandomX at a low target**, which a substrate
+  that fakes the longhash removes; `tests/unit_tests/curve_tree_header_root_check.cpp:45`–`:48`
+  argues difficulty 1 is *"the locus where…"* a specific check bites, and the
+  P0f CEN-D2 correction was found *because* difficulty 1 was reachable.
+  Every other consumer (`regtest_e2e.rs:243`, `dual_stack.rs:70`,
+  `gen_ct2_fixture.py:93`, `capture_coinbase.py:80`, `node_server.cpp:920`,
+  `chaingen.h:800`) uses `--fixed-difficulty=1` to make `generateblocks`
+  cheap, which (c) would also serve. So the lever must **fix the target**,
+  and the question is how it enters without an override path in the
+  production binary — §8.1 Q10.
 
 ---
 
@@ -279,17 +388,30 @@ Store: `passed_through().count()` 7 → 6.
 
 ---
 
-## 8. Questions for the reviewer — round 1
+## 8. Questions for the reviewer — round 1 (RULED 2026-09-19)
+
+| # | Question | Default | Falsifier / what changes downstream | Ruling (2026-09-19) |
+| --- | --- | --- | --- | --- |
+| **Q1** | `Substrate` as a second trait beside `ChainView` (§4.2) — and do its faults unify with the view's? | **Second trait; one `Fault` type via `validate<V, S>` where `S::Fault: Into<V::Fault>`?** No — **distinct and both opaque**: `validate` returns `Result<Verdict<..>, Fault<V::Fault, S::Fault>>` (a two-arm enum the caller matches; the store's `connect` already handles one opaque fault and gains an arm). Unifying would let the store implement both with `StoreError` and lose the distinction between "the chain could not answer" and "the verifier could not compute". | If the caller never distinguishes them, the enum is ceremony — reopen when `connect`'s handling of the two arms is identical after E2. | **APPROVED, refined:** the trait binds to a **stateless stage** (`form` → `StructurallyValid`), not to `validate` — C2-R8's two-stage split keeps RandomX out of the write txn; faults distinct, as defaulted. Time-dependence sentence owed on the type. §4.2 as amended; consequences → §8.1 Q8, Q9. |
+| **Q2** | Dependency: adopt `shekyl-difficulty` directly (one `shekyl-types` dep, no store); keep `shekyl-pow-randomx` **out** (behind `Substrate`). | **Yes to both.** G1's belt output before/after is the evidence (`check_chain_rules_no_store.sh`; closure grows by exactly `shekyl-difficulty`). | A rule that needs `compute_hash` in-crate — none named. | **APPROVED.** `shekyl-difficulty` depends on `shekyl-types` alone; G1-clean, verified. |
+| **Q3** | Genesis admission (`connecting_height == 0`): C1/C2/C3 pass with no window (the C++'s `h == 0` arm, F3) — do the rows **record** as applied, or is coverage for them absent at height 0 (and therefore incomplete)? | **Record as applied.** The rule ran; its premise (a predecessor exists) was checked and found false; that is a decision, not a fall-through (G11). Complete coverage at genesis is what `connect` demands. | If the maintainer prefers "not applicable" to be visible in coverage, `RuleCoverage` needs an `n/a` state — a type change with 153 consumers; name it now or never. | **APPROVED as defaulted.** |
+| **Q4** | CEN-D6 — a `NonZeroDifficulty` (or `Target`) type that D1 compares against, minted by D4's derivation and unconstructible from zero (**definition belt**, D6 recorded at the mint), or a predicate `target.is_zero() → refused(D6)`? | **Type.** F4: the predicate has no reachable refusal on main and would be a gate that cannot fail. The ratified statement ("a zero next-block difficulty rejects the block") is held **by construction** — the derivation site refuses to mint, and that refusal is the fault channel, not a verdict, exactly as the census's "marshaling belt on the FFI result" reads once the FFI is gone. | Slice 9's alt view: if D5's height-0 sentinel must become a *verdict* rather than a fault, the type stays and D6 gains a predicate arm there. | **APPROVED as defaulted** — a predicate with no reachable refusal is the gate that cannot fail; the `NonZero` mint is B6's move. |
+| **Q5** | The verdict carries `target` only (store folds `parent.cum + target` under SI-8) or `cumulative_difficulty` too (validator computes, store persists)? And does `DELETED_BY`'s entry narrow to `["CEN-D4"]`? | **Carries both.** C2-R8 Q4: the store computes nothing consensus-visible; the fold is one `checked_add` but it is the definition of the stored quantity, and the Q1 ruling on `tip()` put per-block difficulty *and* the arithmetic on it in this crate. `DELETED_BY` narrows to D4 with the F6 reason in the comment. | If S-CHAIN-W's owner rules the fold store-side (as `cumulative_tx_count` is), the verdict carries `target` only and the store's SI-8 arm grows one line. | **APPROVED as defaulted.** |
+| **Q6** | CEN-D7 `--fixed-difficulty`: (a) port as-is — `Substrate::difficulty_override() -> Option<Difficulty>`, height 0 forced to 1, fixture; (b) leave `pending` until R9's test-seam ruling; (c) rule now that the lever is the **substrate's**: a regtest `Substrate` implementor returns a constant `longhash` that always satisfies the target, and the DAA is never bypassed. | **(c)**, if the maintainer will rule it here; else (a). Under (c) the validator has no override path at all, `regtest_e2e.rs:243`'s flag is reinterpreted by the daemon's implementor, D7 becomes **REJECTED** in the registry (the lever moved to where a test seam belongs), and the "test-only carve-out live in the production binary" is deleted rather than ported. | (a) if regtest needs the difficulty *value* fixed (fee/emission tests that read it), not merely PoW to pass — check `tests/functional_tests` and the GUI regtest harness before ruling; that is the sweep this row owes and it is not done here. | **APPROVED (c) conditionally — run the falsifier before commit, not after.** Run 2026-09-19: **(c) fails it** (F9: `drs_bench.py` measures real RandomX at a lowered target; difficulty 1 is a deliberate test locus). Fourth arm → §8.1 Q10. |
+| **Q7** | D5 `subsumed-by-D4` (stays `pending`, closes with slice 9's alt view) — or `implemented` now, on the grounds that D4 over any `ChainView` *is* D5? | **Subsumed, pending.** No alt view exists to drive a fixture; `implemented` without a fixture is the PWD-B10 shape. | Slice 9 lands the alt view: D5's fixture is D4 over it, row closes. | **APPROVED as defaulted** — subsumed, not deferred: the A3/B4 distinction; closes when D4 gets an alt view. |
+
+### 8.1 Round 2 — consequences of the Q1 ruling, and Q6's fourth arm
 
 | # | Question | Default | Falsifier / what changes downstream |
 | --- | --- | --- | --- |
-| **Q1** | `Substrate` as a second trait beside `ChainView` (§4.2) — and do its faults unify with the view's? | **Second trait; one `Fault` type via `validate<V, S>` where `S::Fault: Into<V::Fault>`?** No — **distinct and both opaque**: `validate` returns `Result<Verdict<..>, Fault<V::Fault, S::Fault>>` (a two-arm enum the caller matches; the store's `connect` already handles one opaque fault and gains an arm). Unifying would let the store implement both with `StoreError` and lose the distinction between "the chain could not answer" and "the verifier could not compute". | If the caller never distinguishes them, the enum is ceremony — reopen when `connect`'s handling of the two arms is identical after E2. |
-| **Q2** | Dependency: adopt `shekyl-difficulty` directly (one `shekyl-types` dep, no store); keep `shekyl-pow-randomx` **out** (behind `Substrate`). | **Yes to both.** G1's belt output before/after is the evidence (`check_chain_rules_no_store.sh`; closure grows by exactly `shekyl-difficulty`). | A rule that needs `compute_hash` in-crate — none named. |
-| **Q3** | Genesis admission (`connecting_height == 0`): C1/C2/C3 pass with no window (the C++'s `h == 0` arm, F3) — do the rows **record** as applied, or is coverage for them absent at height 0 (and therefore incomplete)? | **Record as applied.** The rule ran; its premise (a predecessor exists) was checked and found false; that is a decision, not a fall-through (G11). Complete coverage at genesis is what `connect` demands. | If the maintainer prefers "not applicable" to be visible in coverage, `RuleCoverage` needs an `n/a` state — a type change with 153 consumers; name it now or never. |
-| **Q4** | CEN-D6 — a `NonZeroDifficulty` (or `Target`) type that D1 compares against, minted by D4's derivation and unconstructible from zero (**definition belt**, D6 recorded at the mint), or a predicate `target.is_zero() → refused(D6)`? | **Type.** F4: the predicate has no reachable refusal on main and would be a gate that cannot fail. The ratified statement ("a zero next-block difficulty rejects the block") is held **by construction** — the derivation site refuses to mint, and that refusal is the fault channel, not a verdict, exactly as the census's "marshaling belt on the FFI result" reads once the FFI is gone. | Slice 9's alt view: if D5's height-0 sentinel must become a *verdict* rather than a fault, the type stays and D6 gains a predicate arm there. |
-| **Q5** | The verdict carries `target` only (store folds `parent.cum + target` under SI-8) or `cumulative_difficulty` too (validator computes, store persists)? And does `DELETED_BY`'s entry narrow to `["CEN-D4"]`? | **Carries both.** C2-R8 Q4: the store computes nothing consensus-visible; the fold is one `checked_add` but it is the definition of the stored quantity, and the Q1 ruling on `tip()` put per-block difficulty *and* the arithmetic on it in this crate. `DELETED_BY` narrows to D4 with the F6 reason in the comment. | If S-CHAIN-W's owner rules the fold store-side (as `cumulative_tx_count` is), the verdict carries `target` only and the store's SI-8 arm grows one line. |
-| **Q6** | CEN-D7 `--fixed-difficulty`: (a) port as-is — `Substrate::difficulty_override() -> Option<Difficulty>`, height 0 forced to 1, fixture; (b) leave `pending` until R9's test-seam ruling; (c) rule now that the lever is the **substrate's**: a regtest `Substrate` implementor returns a constant `longhash` that always satisfies the target, and the DAA is never bypassed. | **(c)**, if the maintainer will rule it here; else (a). Under (c) the validator has no override path at all, `regtest_e2e.rs:243`'s flag is reinterpreted by the daemon's implementor, D7 becomes **REJECTED** in the registry (the lever moved to where a test seam belongs), and the "test-only carve-out live in the production binary" is deleted rather than ported. | (a) if regtest needs the difficulty *value* fixed (fee/emission tests that read it), not merely PoW to pass — check `tests/functional_tests` and the GUI regtest harness before ruling; that is the sweep this row owes and it is not done here. |
-| **Q7** | D5 `subsumed-by-D4` (stays `pending`, closes with slice 9's alt view) — or `implemented` now, on the grounds that D4 over any `ChainView` *is* D5? | **Subsumed, pending.** No alt view exists to drive a fixture; `implemented` without a fixture is the PWD-B10 shape. | Slice 9 lands the alt view: D5's fixture is D4 over it, row closes. |
+| **Q8** | The Q1 staging put D1/D2/D3 in the stateless stage, but D3's seed is a chain read and D1's target is D4's derivation (§4.2). Split as: **D2** (`longhash`) in `form` under a **caller-supplied seed**; **D3** verifies that seed against the committing view in `validate`, a mismatch being a crate-defined **fault** (`Stale::Seed`, "redo `form`") rather than `InvalidBlock`; **D1/D1b** compare in `validate`. Or: forbid the split and accept RandomX inside the txn for D1–D3 only? | **The split.** The expensive call stays outside the txn, which was the ruling's point; every chain-dependent judgement stays inside it, which was C2-R8 Q3's. The seed height is ≥ 64 blocks below `c` by construction (`seedheight`, 2048/64), so `Stale::Seed` fires only on a ≥ 64-block reorg between the stages — the block is unproven, not disproven, hence a fault. The caller (the daemon's ingest driver; E2's replay) reads the seed id from any snapshot. | If the store lane rules that `connect` must never see a crate-defined fault beside the view's (one opaque type only), `Stale::Seed` becomes a `Verdict` arm that is *not* `InvalidBlock` — a third verdict kind — and that is a bigger change than the enum arm; say so now. |
+| **Q9** | Do B1, B2, B7 (view-free, landed in slice 1 on `validate`) move to `form`? | **Yes.** The partition is "reads the view or not", and a stage whose membership is "what slice 2 happened to add" is the accretion pattern. Their tests move unchanged; coverage unions. | If moving landed rules in a slice that is not theirs is ruled out of scope, they stay and the partition is documented as "view-free rules added from slice 2 onward" — worse, but honest. |
+| **Q10** | CEN-D7, fourth arm **(d): the fixed target enters as `RuleSet` data on FAKECHAIN only.** `rules_at(Network::Fakechain, …)` may issue a rule set whose difficulty parameter is `DifficultyRule::Fixed(NonZeroDifficulty)`; D4 reads `rule_set.difficulty()` — `Lwma1` derives, `Fixed(d)` returns `d` (height 0 → 1, as today). The constructor takes a `Fakechain` **witness type** obtainable only from `Network::Fakechain`, so no public-network code path can build one — the production binary has no override path *by type*, which was (c)'s virtue, and the target is really fixed, which is what F9's consumers need. `--fixed-difficulty` becomes the daemon's argument to that constructor. D7 then flips `implemented(rules::difficulty::D4)` (the `Fixed` arm is D4's), and the census row's "test-only carve-out live in the production binary" is deleted as a description, not ported as a mechanism. | **(d).** Rule 71 is satisfied literally: nettype selects **data**; the control flow is one `match` on a rule-set field that every nettype has. | (i) `RuleSet` is `Copy` and issued from a `const` list; a runtime `Fixed(d)` needs a constructor beside `for_id` and a `RuleSetId` for the persisted coverage — proposal: id `GENESIS` with the parameter carried on the value (fakechain chains are not comparable across processes anyway). If the store lane objects to a non-`ISSUED` rule set reaching `connect`, arm (a) (`Substrate::difficulty_override`) is the fallback, with the production implementor returning `None` as a **discipline**, not a structure — recorded as such. (ii) If any consumer needs *real* PoW at a fixed target **and** a fake longhash elsewhere, neither (c) nor (d) alone serves; none found. |
+
+The seed-epoch lever (F5) has no consumer and no effect under the staging;
+it is **not** given an arm here. If one is ever needed it takes Q10's shape
+(`SeedSchedule` data on a fakechain rule set), and the register row's pass
+condition (CEN-D3, §5.4.1) already says so.
 
 ---
 
@@ -311,3 +433,4 @@ consumers outside the daemon (Q6's owed sweep).
 | Date | Event |
 | --- | --- |
 | 2026-09-18 | Pre-flight written against `dev` @ `5adfc5423`. Q1–Q7 proposed with defaults. **HALT** for rulings (rule 26). |
+| 2026-09-19 | **Round 1 RULED** (Q1–Q7). Q1 approved with the staging refinement (`Substrate` → the stateless stage `form` / `StructurallyValid`); Q2–Q5, Q7 as defaulted; Q6 approved conditionally on its falsifier, which then **failed (c)** (F9). F3 reclassified as a census amendment (CEN-C1 row bracketed); F5 promoted to a CSR-3a register entry (CEN-D3 row, pass condition added); F8 the `blockchain.cpp:330` check (SCW-2 holds; slice-8 forward pin). **Round 2 proposed:** Q8 (seed as caller-supplied claim, verified in `validate`; D1 compares there), Q9 (B1/B2/B7 move to `form`), Q10 (D7 arm (d): fixed target as fakechain `RuleSet` data behind a witness type). **HALT** for Q8–Q10, or proceed on defaults if instructed. |
