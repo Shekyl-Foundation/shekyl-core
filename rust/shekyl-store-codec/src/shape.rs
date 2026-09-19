@@ -36,17 +36,16 @@
 //!   `shekyl-chain-store`'s `store/chain_reads.rs`).
 //! - [`Present`] — a set-table's value: the key is the fact, the value is
 //!   a zero-width witness that the key is a member. The daemon store's
-//!   `spent_keys` is the one catalogued instance at this pin. Named, so two set-tables cannot silently
-//!   share redb's `()` `TypeName`.
+//!   `spent_keys` is the one catalogued instance at this pin. Named, so
+//!   two set-tables cannot silently share redb's `()` `TypeName`.
 //! - [`Unshaped`] — a table the LMDB census declares and no Rust writer
 //!   has reached. Its value type is uninhabited: the table is catalogued
 //!   (it has an ordinal) and dispatched to by the journal replay, which
-//!   refuses it; it is **not** created by the seal
-//!   (`shekyl-chain-store`'s `Restorable::SEALED`
-//!   is `false` for exactly this shape) and cannot be inserted into. "No
-//!   writer yet" is a fact of the type, not of the code; the
-//!   increment that first writes the table replaces this shape with the
-//!   table's codec and bumps `SCHEMA_VERSION`.
+//!   refuses it; it is **not** created by the seal (`shekyl-chain-store`'s
+//!   `Restorable::SEALED` is `false` for exactly this shape) and cannot be
+//!   inserted into. "No writer yet" is a fact of the type, not of the
+//!   code; the increment that first writes the table replaces this shape
+//!   with the table's codec and bumps `SCHEMA_VERSION`.
 //!
 //! `&[u8]` is not a value type, and there is no multimap in the catalogue
 //! (S-OUT-KI SOK-1): every value is one of the four shapes above.
