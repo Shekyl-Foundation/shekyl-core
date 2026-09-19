@@ -1,7 +1,7 @@
 # Implementation index and phase map
 
 **Status:** MAP — identifier families and landing inventory. Not a design SoT.
-Last verification: 2026-09-18, `dev` = `af5443d03` (S-OUT-KI increment, PR #783; the unified stamp below carries what was re-run there).
+Last verification: 2026-09-18, `dev` = `5adfc5423` (S-OUT-KI increment, PR #783; the unified stamp below carries what was re-run there).
 
 **Purpose.** One page that answers "what does this identifier mean, which doc
 owns it, and what has actually landed on `dev`?" The wallet/staking work spans
@@ -24,13 +24,14 @@ the 2D2 plan §2/§12, the WI-1 "made the chain live" comment — PR #333 and th
 Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
-The unified stamp is `dev` = `af5443d03` as of 2026-09-18 (§5) — moved by
+The unified stamp is `dev` = `5adfc5423` as of 2026-09-18 (§5) — moved by
 the S-OUT-KI increment (DRS-E1 increment 5), whose rows (`SOK-`, the
 `DRS-*` lead cell, the `DRS_E1_SOUT_KI.md` document row) flip to landed on
 the code it carries and were verified on the branch tree containing that
-dev commit (#781, the RTN-7 completion sweep, landed code — 24 files —
-between the increment's first stamp at `8494f2a27` and this one, so the
-checks below were re-run at the re-base): `cargo test -p shekyl-chain-store`
+dev commit (#781, the RTN-7 completion sweep, and #782, the histogram
+deletion, landed code — 24 and 21 files — between the increment's first
+stamp at `8494f2a27` and this one, so the checks below were re-run at each
+re-base): `cargo test -p shekyl-chain-store`
 254 + 10 doctests green
 (the `AtIndex` `compile_fail` pair among them); `check_chain_rules_coverage.py
 --describe` consensus implemented 6 / validator-enforced 151 (held-by-cxx
