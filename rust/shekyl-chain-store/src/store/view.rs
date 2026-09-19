@@ -85,16 +85,14 @@
 //! every classified read, not only on a read of the tip itself
 //! (`chain_reads` module docs, *The tip is one decoded read*).
 
-use redb::ReadableTable;
 use shekyl_chain_rules::{AtHeight, ChainView, RecordedBlock, Tip};
 use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
 
 use crate::codec::BlockInfo;
-use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{CURVE_TREE_ROOTS, SPENT_KEYS};
+use crate::schema::CURVE_TREE_ROOTS;
 
 use super::chain_reads::{self, ReadFault};
-use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
+use super::error::{CellFault, StoreError, StoreInvariant};
 use super::write::WriteBatch;
 
 /// The recorded chain as this batch sees it — including the batch's own
@@ -147,17 +145,13 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
     type Fault = StoreError;
 
     /// `spent_keys` membership — the chain half of CEN-L1 / CEN-I7, read
-    /// from the table SI-1 guards.
+    /// from the table SI-1 guards. The body is [`chain_reads::has_key_image`],
+    /// shared with the read snapshot (S-OUT-KI K1); a membership read has no
+    /// invariant arm to classify, so the batch's poison policy has nothing
+    /// to do here and the fault passes through plain.
     fn has_key_image(&self, key_image: &KeyImage) -> Result<bool, StoreError> {
-        let table = self
-            .batch
-            .txn()
-            .open_table(SPENT_KEYS)
-            .map_err(EngineError::Table)?;
-        table
-            .get(LmdbHashKey::from_bytes(*key_image.as_bytes()))
-            .map(|found| found.is_some())
-            .map_err(|e| EngineError::Storage(e).into())
+        chain_reads::has_key_image(self.batch.txn(), key_image)
+            .map_err(chain_reads::ReadFault::into_plain)
     }
 
     /// `block_info[height]` for the identity, `blocks[height]` for the

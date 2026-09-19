@@ -10,7 +10,6 @@
 //! While a [`Recording`] is live on a batch, every declared write made
 //! through that batch — [`InsertTable::insert`](super::InsertTable::insert),
 //! [`UpsertTable::upsert`](super::UpsertTable::upsert),
-//! [`SetTable::insert`](super::SetTable::insert),
 //! [`WriteBatch::upsert_property`](super::WriteBatch::upsert_property) —
 //! pushes its own pre-image as a side effect of succeeding. There is no
 //! "journaled" flavour of a verb to forget to call: the handle records or
@@ -46,14 +45,13 @@
 use core::cell::{Cell, RefCell};
 
 use redb::{
-    Key, MultimapTableDefinition, MultimapTableHandle, ReadTransaction, ReadableTable,
-    TableDefinition, TableHandle, Value, WriteTransaction,
+    Key, ReadTransaction, ReadableTable, TableDefinition, TableHandle, Value, WriteTransaction,
 };
 
 use crate::codec::{
     post_image, Blob, BlobKind, Canonical, CodecError, Coded, Present, UndoEntry, UndoLog, Unshaped,
 };
-use crate::lmdb_order::{LmdbHashKey, U64PrefixBytes};
+use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{self, UNDO_LOG};
 
 use super::error::{CellFault, EngineError, StoreCannot, StoreError, StoreInvariant, UndoFault};
@@ -86,11 +84,15 @@ pub trait Restorable: Value {
     }
 }
 
-// Key types (and the multimap member, which redb types as a key).
+// Key types. The tuple key is `output_amounts`' `(amount, amount_index)`
+// (S-OUT-KI SOK-1): redb's tuple `from_bytes` slices its components at
+// their fixed widths, so the well-formedness check is the default
+// fixed-width one — 16 bytes — which `Value::fixed_width` derives for a
+// tuple of fixed-width parts.
 impl Restorable for u64 {}
+impl Restorable for (u64, u64) {}
 impl Restorable for LmdbHashKey {}
 impl Restorable for &[u8] {}
-impl Restorable for U64PrefixBytes {}
 
 // The four map-value shapes (`codec::shape`). A codec row is well-formed iff
 // it decodes — strictly, under its own codec, which is a stronger check
@@ -141,8 +143,8 @@ pub(crate) enum Undone {
     /// journaled write left — its post-image digest disagrees (SI-6):
     /// something wrote around the journal, or the file is corrupt.
     PostImageMismatch,
-    /// The entry's shape does not fit this table (a multimap member against
-    /// a keyed table or vice versa), or its bytes would not decode (SI-7).
+    /// The entry names an unshaped table, or its bytes would not decode
+    /// (SI-7).
     Malformed(&'static str),
 }
 
@@ -231,11 +233,6 @@ where
             UndoEntry::Replaced {
                 key, prior, post, ..
             } => (key, prior.as_deref(), post),
-            UndoEntry::MultiInserted { .. } => {
-                return Ok(Undone::Malformed(
-                    "multimap member recorded against a keyed table",
-                ))
-            }
         };
         if let Err(reason) = K::well_formed(key) {
             return Ok(Undone::Malformed(reason));
@@ -268,54 +265,6 @@ where
             None => Undone::TargetMismatch,
             Some(found) if found == *post => Undone::Reversed,
             Some(_) => Undone::PostImageMismatch,
-        })
-    }
-}
-
-impl<K, V> UndoTarget for MultimapTableDefinition<'static, K, V>
-where
-    K: Key + Restorable + 'static,
-    V: Key + Restorable + 'static,
-{
-    fn name(&self) -> &str {
-        MultimapTableHandle::name(self)
-    }
-
-    fn sealed(&self) -> bool {
-        V::SEALED
-    }
-
-    fn create(&self, txn: &WriteTransaction) -> Result<(), EngineError> {
-        if V::SEALED {
-            txn.open_multimap_table(*self).map_err(EngineError::Table)?;
-        }
-        Ok(())
-    }
-
-    fn exists(&self, txn: &ReadTransaction) -> Result<bool, EngineError> {
-        exists_or(txn.open_multimap_table(*self))
-    }
-
-    fn undo(&self, txn: &WriteTransaction, entry: &UndoEntry) -> Result<Undone, StoreError> {
-        if !V::SEALED {
-            return Ok(Undone::Malformed("journal entry names an unshaped table"));
-        }
-        let UndoEntry::MultiInserted { key, value, .. } = entry else {
-            return Ok(Undone::Malformed(
-                "keyed-table entry recorded against a multimap",
-            ));
-        };
-        if let Err(reason) = K::well_formed(key).and_then(|()| V::well_formed(value)) {
-            return Ok(Undone::Malformed(reason));
-        }
-        let mut table = txn.open_multimap_table(*self).map_err(EngineError::Table)?;
-        let removed = table
-            .remove(K::from_bytes(key), V::from_bytes(value))
-            .map_err(EngineError::Storage)?;
-        Ok(if removed {
-            Undone::Reversed
-        } else {
-            Undone::TargetMismatch
         })
     }
 }

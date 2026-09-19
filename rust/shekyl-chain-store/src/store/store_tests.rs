@@ -445,11 +445,14 @@ fn the_properties_table_has_no_raw_write_handle() {
                 batch.open_insert_table(crate::schema::PROPERTIES, PROBE_ROW),
                 Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
             ));
-            // Nor by redefining it under another type: the refusal is by name.
-            const IMPOSTOR: redb::MultimapTableDefinition<&str, &[u8]> =
-                redb::MultimapTableDefinition::new("properties");
+            // Nor by redefining it under another type: the refusal is by
+            // name. (This leg was a multimap impostor until S-OUT-KI's layout
+            // commit retired the multimap opener; a keyed impostor proves the
+            // same thing against the opener that survives.)
+            const IMPOSTOR: redb::TableDefinition<&str, &[u8]> =
+                redb::TableDefinition::new("properties");
             assert!(matches!(
-                batch.open_multimap_table(IMPOSTOR),
+                batch.open_insert_table(IMPOSTOR, PROBE_ROW),
                 Err(StoreError::Cannot(StoreCannot::PropertiesAreTyped))
             ));
             abort::<()>(batch)

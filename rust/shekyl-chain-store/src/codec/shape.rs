@@ -43,9 +43,8 @@
 //!   increment that first writes the table replaces this shape with the
 //!   table's codec and bumps `SCHEMA_VERSION`.
 //!
-//! `&[u8]` is not a value type. Multimap **members** are key types
-//! (`lmdb_order`) because redb types a member as a key: they carry
-//! ordering, not a codec.
+//! `&[u8]` is not a value type, and there is no multimap in the catalogue
+//! (S-OUT-KI SOK-1): every value is one of the four shapes above.
 //!
 //! # Two guards, stated exactly
 //!

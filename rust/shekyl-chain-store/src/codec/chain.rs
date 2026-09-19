@@ -16,9 +16,11 @@
 //! byte parity with LMDB rows was never what the comparator compares (DRS
 //! §7.6 — consensus-visible bytes are hash preimages and the digest fold
 //! input, nothing else), so a record grows where the read surface needs it
-//! to (`BlockInfo`'s two FL-R3 fields, `DRS_E1_SCHAIN_R.md` §3.6 Q4). `output_amounts`' member keeps its `amount_index` prefix because
-//! that prefix *is* the multimap's member order (`U64PrefixBytes`) — SCW-8:
-//! LMDB's keying is ported verbatim while R8b-2 is open.
+//! to (`BlockInfo`'s two FL-R3 fields, `DRS_E1_SCHAIN_R.md` §3.6 Q4) and
+//! shrinks where a field only duplicated its key (`OutKey` dropped LMDB's
+//! `amount_index` prefix when `output_amounts` became a keyed
+//! `(amount, amount_index)` table — S-OUT-KI SOK-1, layout v6; the amount
+//! dimension itself is carried, not chosen, while R8b-2 is open).
 //!
 //! Integers are little-endian `u64` (`primitives`), hashes are the raw 32
 //! bytes. Fixed-width codecs refuse any other length; the one variable-width
@@ -209,17 +211,20 @@ impl Canonical for OutTx {
     }
 }
 
-/// `output_amounts[amount] ∋ member` — LMDB `outkey`, 96 bytes, **verbatim**.
+/// `output_amounts[(amount, amount_index)]` — the stored output record,
+/// 88 bytes (S-OUT-KI layout v6, SOK-1).
 ///
-/// The member keeps `amount_index` as its first 8 bytes because that is the
-/// member order (`U64PrefixBytes` compares the little-endian prefix first),
-/// and LMDB keys every confidential output under `amount = 0` with a dense
-/// per-amount `amount_index` (SCW-8; the R8b-2 question is whether that
-/// index is *exposed*, not how it is stored).
+/// LMDB's `outkey` carried `amount_index` as its first 8 bytes because that
+/// was the `DUPSORT` member order (`compare_uint64` on the prefix). Under
+/// the keyed table the pair `(amount, amount_index)` **is the key**, so the
+/// record carries neither: a field that duplicates its own key is the
+/// accretion `CURVE_TREE_STORE_SHAPES.md` CTS-2 names. `output_id` stays —
+/// it is the join to `output_txs`, not the key. LMDB keys every
+/// confidential output under `amount = 0` with a dense per-amount
+/// `amount_index` (SCW-8); the amount dimension is **carried, not chosen**
+/// while R8b-2 is open (`DRS_E1_SOUT_KI.md` §3.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutKey {
-    /// Position among this amount's outputs — the member's sort prefix.
-    pub amount_index: AmountIndex,
     /// The global output id (`output_txs` key).
     pub output_id: OutputStorageId,
     /// The output's one-time public key.
@@ -232,24 +237,11 @@ pub struct OutKey {
     pub commitment: CommitmentBytes,
 }
 
-impl OutKey {
-    /// The `amount_index` an encoded member carries — its `U64PrefixBytes`
-    /// sort prefix, read without decoding the rest. `None` for bytes too
-    /// short to carry one (a member this codec never wrote).
-    #[must_use]
-    pub fn amount_index_of(encoded: &[u8]) -> Option<AmountIndex> {
-        encoded
-            .first_chunk::<8>()
-            .map(|prefix| AmountIndex::from_raw(u64::from_le_bytes(*prefix)))
-    }
-}
-
 impl Canonical for OutKey {
     const NAME: &'static str = "out_key";
-    const FIXED_WIDTH: Option<usize> = Some(96);
+    const FIXED_WIDTH: Option<usize> = Some(88);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.amount_index.to_raw().to_le_bytes());
         out.extend_from_slice(&self.output_id.to_raw().to_le_bytes());
         out.extend_from_slice(self.pubkey.as_bytes());
         out.extend_from_slice(&self.unlock_time.to_unlock_raw().to_le_bytes());
@@ -258,14 +250,13 @@ impl Canonical for OutKey {
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        let b = exact::<96>(Self::NAME, bytes)?;
+        let b = exact::<88>(Self::NAME, bytes)?;
         Ok(Self {
-            amount_index: AmountIndex::from_raw(le_u64(&b[0..8])),
-            output_id: OutputStorageId::from_raw(le_u64(&b[8..16])),
-            pubkey: OneTimePubkey::from_bytes(b[16..48].try_into().expect("32-byte slice")),
-            unlock_time: stored_timelock(le_u64(&b[48..56])),
-            height: BlockHeight::from_raw(le_u64(&b[56..64])),
-            commitment: CommitmentBytes::from_bytes(b[64..96].try_into().expect("32-byte slice")),
+            output_id: OutputStorageId::from_raw(le_u64(&b[0..8])),
+            pubkey: OneTimePubkey::from_bytes(b[8..40].try_into().expect("32-byte slice")),
+            unlock_time: stored_timelock(le_u64(&b[40..48])),
+            height: BlockHeight::from_raw(le_u64(&b[48..56])),
+            commitment: CommitmentBytes::from_bytes(b[56..88].try_into().expect("32-byte slice")),
         })
     }
 }
@@ -521,22 +512,25 @@ mod tests {
     }
 
     #[test]
-    fn out_key_is_the_96_byte_outkey_with_amount_index_first() {
+    fn out_key_is_the_88_byte_record_without_its_key() {
         let ok = OutKey {
-            amount_index: AmountIndex::from_raw(0x0102_0304_0506_0708),
-            output_id: OutputStorageId::from_raw(1),
+            output_id: OutputStorageId::from_raw(0x0102_0304_0506_0708),
             pubkey: OneTimePubkey::from_bytes([0x11; 32]),
             unlock_time: stored_timelock(2),
             height: BlockHeight::from_raw(3),
             commitment: CommitmentBytes::from_bytes([0x22; 32]),
         };
         let bytes = ok.encode();
-        assert_eq!(bytes.len(), 96);
-        // The U64PrefixBytes member order reads these first 8 bytes LE.
+        assert_eq!(bytes.len(), 88);
+        // LMDB's outkey carried amount_index in [0..8); the keyed table's
+        // key carries it now, so the record opens on output_id.
         assert_eq!(&bytes[0..8], &[8, 7, 6, 5, 4, 3, 2, 1]);
-        assert_eq!(&bytes[16..48], &[0x11; 32]);
-        assert_eq!(&bytes[64..96], &[0x22; 32]);
+        assert_eq!(&bytes[8..40], &[0x11; 32]);
+        assert_eq!(&bytes[40..48], &2u64.to_le_bytes());
+        assert_eq!(&bytes[48..56], &3u64.to_le_bytes());
+        assert_eq!(&bytes[56..88], &[0x22; 32]);
         assert_eq!(OutKey::decode(&bytes), Ok(ok));
+        assert!(OutKey::decode(&bytes[..87]).is_err(), "fixed width, strict");
     }
 
     #[test]
