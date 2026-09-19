@@ -43,16 +43,18 @@ use super::{Canonical, CodecError};
 /// The `ConnectFacts` fields, in declaration order — the bit assignment of
 /// [`PassedThroughFacts`] and the names it encodes. `ConnectFacts::DELETED_BY`
 /// is held to this list by a test in `store::connect`.
-pub const FACT_FIELDS: [&str; 7] = [
+pub const FACT_FIELDS: [&str; 6] = [
     "weight",
     "long_term_weight",
-    "cumulative_difficulty",
+    // `cumulative_difficulty` sat here until E6 slice 2 derived it
+    // (2026-09-19, CEN-D4). The cell encodes NAMES, not positions, so the
+    // in-memory bits below renumber freely; what changes on disk is the
+    // accepted vocabulary — a file naming the deleted field is refused —
+    // and that rides SCHEMA_VERSION 7 (rule 42; rebuild, never migrate).
     "coins_generated",
     "burned",
     "root_after",
-    // Appended, not inserted: the six positions above keep their bits
-    // (S-CHAIN-R §3.6; the widening is still a layout change to this cell's
-    // encoding and rides that commit's SCHEMA_VERSION bump).
+    // Appended, not inserted (S-CHAIN-R §3.6; SCHEMA_VERSION 4).
     "long_term_effective_median",
 ];
 
@@ -408,7 +410,7 @@ mod tests {
             })
         );
         // The canonical order round-trips, and is what `encode` emits.
-        let set = PassedThroughFacts::of_positions([4, 1]);
+        let set = PassedThroughFacts::of_positions([3, 1]);
         let mut canonical = Vec::new();
         encode_names(
             &mut canonical,
@@ -423,7 +425,7 @@ mod tests {
 
     #[test]
     fn passed_through_facts_round_trip_and_refuse_unknowns() {
-        let set = PassedThroughFacts::of_positions([4, 1]);
+        let set = PassedThroughFacts::of_positions([3, 1]);
         assert_eq!(
             set.iter().collect::<Vec<_>>(),
             ["long_term_weight", "burned"]

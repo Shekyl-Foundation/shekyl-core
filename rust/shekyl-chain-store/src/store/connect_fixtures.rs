@@ -13,9 +13,7 @@ use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, RuleSet,
     RuleSetId, StructurallyValid, Substrate,
 };
-use shekyl_difficulty::{
-    seedheight, CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG,
-};
+use shekyl_difficulty::{seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash,
     Timestamp,
@@ -142,9 +140,6 @@ pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
     ConnectFacts {
         weight: Fact::passed_through(BlockWeight::from_raw(1_000 + height)),
         long_term_weight: Fact::passed_through(LongTermWeight::from_raw(900 + height)),
-        cumulative_difficulty: Fact::passed_through(CumulativeDifficulty::from_raw(
-            u128::from(height + 1) * 100,
-        )),
         coins_generated: Fact::passed_through(AtomicUnits::from_raw((height + 1) * 1_000_000)),
         burned: Fact::passed_through(AtomicUnits::from_raw(burned)),
         root_after: Fact::passed_through(CurveTreeRoot::from_bytes(
