@@ -1,9 +1,11 @@
 # SOK-10 — path position resolution
 
-**Status:** OPEN — **Round 1 (design) proposed 2026-09-18**, awaiting rulings
-on `SOK-Q7` (then `SOK-Q5` / `SOK-Q6` only if Q7 keeps the assembler). Round 0
-sweep confirmed by the maintainer 2026-09-18 with the mechanism sharpened
-(§1.1a). No production code. Process per `26-sub-pr-design-discipline.mdc`
+**Status:** OPEN — **Round 2 (wargame) closed 2026-09-18** (§3.5); implementation
+per §3.1's commit shape follows on this branch. **`SOK-Q7` RULED 2026-09-18
+(maintainer): A — delete** the endpoint and the daemon assembler (§3.1
+"Ruling"). `SOK-Q5` / `SOK-Q6` moot under A; `SOK-11` closes with the
+interface; `SOK-13` closes. Round 0 sweep confirmed 2026-09-18 with the
+mechanism sharpened (§1.1a). Process per `26-sub-pr-design-discipline.mdc`
 (A2 audit-against-actual-code, A4 boundary reasoning, review-round
 denominator §4).
 
@@ -14,9 +16,10 @@ does not re-derive it.
 **Pin:** `dev` = `8494f2a27f8b88aecdb11bb9548be5c70f3e9357` (merge of PR #779).
 Every code claim below was re-read at this SHA. Line numbers are of this pin.
 
-**Halt.** §1 is the Round 0 sweep record (confirmed). §3 is Round 1's
-proposal. Nothing in §2 or §3 is ruled. Implementation does not start until
-`SOK-Q7` is ruled.
+**Rulings.** §1 is the Round 0 sweep record (confirmed). §3.1 carries the
+`SOK-Q7` ruling; §3.2–§3.3 are moot under it and kept as the record of what
+a future consumer's design round would have to answer. §3.5 is the Round 2
+wargame against the ruled design.
 
 Implements *from* [`DRS_E1_SOUT_KI.md`](DRS_E1_SOUT_KI.md) §3.4 / findings table
 SOK-10 (routed off that surface, rule 22), [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)
@@ -158,6 +161,17 @@ coinbase-only, where one maturity rule applies to every output and the two
 orderings coincide exactly. The divergence is unrepresentable in those
 fixtures — the same shape as a zero `curve_tree_roots` entry passing on a
 chain too short to have a gap.
+
+**The test's own comment is a finding of the same family (maintainer,
+2026-09-18).** `regtest_e2e.rs:758` calls `get_curve_tree_path` "the call
+the send path makes." The send path has never made it (the wallet assembles
+locally, §1.2). So: a green test, a true-looking comment, the wrong subject
+— on a fixture whose shape is the exact reason the defect stayed invisible.
+Rule 16's "comment that outlived its architecture" had been caught in doc
+comments, plan prose and table headers; this is the first instance in a
+**test's statement of what it covers**, which is the one layer a reader
+trusts to tell them what is verified. Recorded here so the lesson outlives
+the test, which is deleted with the endpoint.
 
 Why production is unaffected: the wallet assembles locally
 (`assemble.rs:98–:116`) by resolving `gindex` **through the drain-order
@@ -438,12 +452,30 @@ the other two moot.
   flag branch on an RPC surface; a consumer-less gate is a gate nobody
   opens. Rejected on B's grounds.
 
-**Reopening criteria (rule 21).** A named production consumer with a
-written linkability disposition (the §3.0.1 carve-out made concrete) reopens
-this in **that consumer's** design round, which then answers Q6 and Q5
-below against this document's §1 as its substrate read. The deletion is
-mechanically reversible from git; the *contract* to rebuild against is this
-file, not the deleted code.
+**Ruling — `SOK-Q7` RULED 2026-09-18 (maintainer): A.** Four grounds
+converge, each sufficient on its own: (1) spend-revealing under a binding
+ruling (`PHASE_2A_SEND_PATH.md:107`, `:184–:190`: `get_outs` went because
+FCMP++ needs no ring, and that same absence leaves nothing to hide behind
+when a wallet asks for one specific path); (2) no production consumer on any
+repo, and `PDM-Q8` forecloses the persona path; (3) wrong data on every real
+chain (§1.1a, verified at source by the maintainer independently); (4) under
+`00-mission.mdc`'s ordering a privacy surface with no users is removed, not
+repaired. B and C rejected: fixing a spend-revealing endpoint so it reveals
+spends *accurately* is not an improvement, and gating it mitigates a feature
+nobody asked for. Q7 was the daemon-side privacy review §3.0.1 flagged; this
+is its answer.
+
+**Reopening criterion (rule 21) — read this before reaching for `git
+revert`.** The criterion is **not** "restore this endpoint." §3.0.1 forbids
+the **shape** — a per-output path query — not an implementation. A future
+light-wallet or debug consumer needs a **bulk, non-revealing leaf-range
+service** (`PHASE_2A_SEND_PATH.md:105`, the "only gap"; `CURVE_TREE_CLIENT.md:620–:628`:
+takes a position *range*, capped, never per-output; the client assembles
+locally). That is a **design round in the consumer's plan**, which inherits
+§1 of this file as its substrate read and §3.2/§3.3 as the questions a
+per-output shape would have had to answer — and does not answer them,
+because it does not ship that shape. Reverting the deletion is the wrong
+action under every reopening this document can name.
 
 **Deletion surface (arm A) — enumerated at the pin.**
 
@@ -539,6 +571,38 @@ in `shekyl-types`, if wanted, is an `RTN-` row proposed with disclosure to
 - **PDM lane:** F9 register row becomes moot under A.
 - **DAEMON_RPC_KV_CUTOVER (RK-9):** method count drops by one under A.
 
+### 3.5 Round 2 — wargame against the ruled design (closed 2026-09-18)
+
+The Phase 2 attack list was written against a *fix*. Under arm A most
+attacks lose their subject; each is still disposed, not skipped, so a
+reader can tell "moot by deletion" from "not examined." Dispositions:
+**closed by construction** (name the invariant), **closed by test**,
+**REJECTED** (reasoning + rule-21 reopening), **DEFERRED** (blocker +
+falsifier). No undisposed attacks.
+
+| # | Attack | Disposition |
+| --- | --- | --- |
+| W1 | **Soundness — a daemon feeds `(O, I, C)` for the wrong output and the proof still verifies.** | Closed by construction, twice. (a) The surface that served `chunk_outputs` is gone; no daemon-supplied prover input remains. (b) The only path source is the wallet's own block-derived stream: `assemble_path` refuses unless its locally recomputed root equals the consensus `curve_tree_root` at the reference height (`assemble.rs:83–:90`, `RootMismatch`) and checks the resolved leaf carries the expected `(O, C)` (`:117–:120`, X3). No trust-in-daemon finding to file: the wallet never took prover inputs from the daemon on the send path (`PHASE_2A` §3.0.1). |
+| W2 | **Liveness under reorg — mapping as of reference vs tip; `BoundaryTrim`; a coinbase whose deferral crosses the reference boundary.** | Moot by deletion: `BoundaryTrim` and the reference/tip split were this assembler's. The wallet's equivalent is CT-4's `drained_through(reference.height)` cutoff, KAT-pinned there; not re-audited here (§4). |
+| W3 | **Fail-closed vs fail-open — every miss path.** | Moot for the deleted paths. The one *new* behaviour: a client calling `get_curve_tree_path` gets JSON-RPC method-not-found from the Axum dispatch (the row is removed from `get_jsonrpc_table()`), plus `CORE_RPC_VERSION_MINOR` bumped so a client checking `get_version` sees the change. No plausible-looking default remains — the method does not exist. |
+| W4 | **Pruned daemon — which resolver tables survive discard.** | Moot: no resolver. Side-effect recorded for the PDM lane: `output_to_leaf` / `leaf_to_output`'s reader list "on pop and RPC" (`ARCHIVAL_PRUNED_DAEMON_MODE.md:1424`) loses the RPC reader; F9's register row (`:1262`) is moot. Pointer only (§3.4). |
+| W5 | **Privacy — does the change widen what the RPC reveals.** | Closed by construction: deletion strictly narrows. The endpoint that revealed which indices a wallet asks about no longer exists; `get_curve_tree_info` / `get_curve_tree_checkpoint` take no output index. The census lane's S0 "RPC path" row closes (§3.4). |
+| W6 | **Network uniformity (rule 71).** | Closed by construction: no code path remains to branch on nettype. Arm C (a gated endpoint) was the only arm that could have introduced one; rejected. |
+| W7 | **Type escape hatches — a `TreePosition` built from a gindex's `u64`.** | Moot for the deleted trait. Residue outside this lane, recorded not fixed (§1.4): `shekyl_types::GlobalOutputIndex`'s doc says "in drain order" (wrong order); `LeafIndex`'s doc names a `shekyl-types::TreePosition` that does not exist. Adjacent rows, not this PR. |
+| W8 | **Determinism / KAT — does the assembled byte layout change.** | Moot: no daemon-assembled bytes remain. The wallet's path layout is pinned by CT-4's reconstruct-root KAT (`CT4_ROUND1_CLOSEOUT.md` §6), unchanged by this PR. |
+| W9 | **Something still compiles against the deleted symbols.** | Closed by test: the §3.1 exit `rg` returns nothing in `src/ rust/ tests/`; `cargo build`/`clippy` over the workspace lane and the C++ build of `cryptonote_core`, `rpc`, `unit_tests` are the check. `hash_trim_*` (`db_lmdb.cpp:9426`) and `leaf_from_chunk_entry` (archival tests) keep their consumers and stay. |
+| W10 | **Something still *calls* the deleted RPC at runtime.** | Closed by enumeration (§3.1 table): the only runtime caller left is `shekyl-sp-t3-spike` `extract_shard.rs`, disposable debt labelled at birth, disclosed to its owner (§3.4). It compiles (the method name is a string literal) and fails loudly at run with the daemon's method-not-found. REJECTED as a blocker: rewriting the spike is that crate's scope; its own header says it must be deleted or rewritten before TJ-B. Reopen if TJ-B's plan names a leaf source and it is not the bulk service. |
+| W11 | **The deletion is later reverted as "restoring a missing RPC".** | REJECTED by the reopening criterion (§3.1 "Ruling"): the criterion names a *different shape* (bulk, non-revealing range service) and a *design round*, not a revert. The REJECTED line in `FCMP_PLUS_PLUS.md` is the grep surface that stops a re-mint (rule 23). |
+| W12 | **A FOLLOWUPS row is removed whose subject was not this assembler.** | `:600` is SOK-10 by name. `:254` (`hash_to_p3`) names "C++ path RPC" — this endpoint; SOK-13 shows it stale regardless. `:597` "Historical tree path assembly uses current LMDB state": the daemon has exactly one tree-path assembler, and its reference-vs-tip handling (`maybe_trim_boundary`) is what the row describes; closed by deletion. If a reader knows a second subject for `:597`, that is a reopen with the subject named. |
+| W13 | **Deleting `get_curve_tree_layer_hash` breaks a store read someone else needs.** | Closed by enumeration: `rg` at the pin lists the shim, the LMDB body, the abstract decl and the two test stubs — no other caller. Grow/trim read `m_curve_tree_layers` through their own cursors (`db_lmdb.cpp:9164`, `:9417`), not this accessor. S-CURVE's five-method list (`DAEMON_REDB_STORE.md:628`) never included it. |
+
+**What this round did not find.** No finding against the wallet's local
+assembler beyond the resolve step already read; none against
+`get_curve_tree_info` / `get_curve_tree_checkpoint`; none against the
+archival serve path (`get_curve_tree_leaf_chunk`, F8), which is a different
+read and is not touched. No attack reopened a ruled question; implementation
+proceeds.
+
 ## 4. What this round did not find
 
 Surfaces examined that yielded nothing: the three sibling wallet repos and
@@ -551,10 +615,10 @@ round: whether `get_curve_tree_info` / `get_curve_tree_checkpoint` carry
 any per-output surface (they take no output index; out of scope unless a
 reviewer names a reason).
 
-## 5. Halt
+## 5. Implementation
 
-Round 1 is proposed. **Stop.** Awaiting the `SOK-Q7` ruling; if A, the §3.1
-commit shape is the implementation; if B/C, `SOK-Q5` / `SOK-Q6` need
-rulings first and the §3.3 falsifier is built red-first. No production
-code, no `FOLLOWUPS.md` / `DRS_E1_SOUT_KI.md` / `IMPLEMENTATION_INDEX.md` /
-`FCMP_PLUS_PLUS.md` edits, and no other-lane rows from this halt.
+`SOK-Q7` ruled A; Round 2 closed with no reopen. The §3.1 commit shape is
+the implementation, on this branch. No red-first falsifier is built: there
+is no fix to falsify (rule 22 — moot, not deferred; disclosed in §3.1
+"Tests under A"). The docs commit records every other-lane pointer it
+writes. This file moves to `docs/completed/` as the last commit.
