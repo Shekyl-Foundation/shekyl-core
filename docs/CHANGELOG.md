@@ -39,8 +39,15 @@
   (`seedheight`, 2048/64) moved from `shekyl-pow-randomx` to
   `shekyl-difficulty::seed_epoch` (FFI exports unchanged). Coverage:
   `implemented 16 / validator-enforced 151`; `ratified 126 / 153`
-  unchanged — porting does not ratify. Genesis-block PoW: see the
-  FOLLOWUPS row on the D4 constant (100 / 400 / 1).
+  unchanged — porting does not ratify. The genesis block is judged at
+  its own PoW difficulty, 1 — not the DAA's genesis constant, which is
+  block 1's first target (`shekyl-difficulty` already pinned the two
+  apart; the census CEN-D4 row now points at the JSON key instead of a
+  stale 100). Store side: `cumulative_difficulty` is derived by the
+  validator and leaves `ConnectFacts` (`SCHEMA_VERSION` 6 → 7 — the
+  `passed_through_facts` vocabulary shrinks; rebuild the datadir), and a
+  conformance harness holds the rules' test mock to the real `BatchView`
+  over every landed rule, with a negative control.
 - **RandomX v2 Phase 4 follow-on: leftover schema operands and CN
   vestiges are gone.** `get_block_longhash` no longer takes
   `major_version` / `miners`. `hash_pow_randomx` takes a

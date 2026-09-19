@@ -1,17 +1,22 @@
 # `shekyl-chain-rules` slice 2 — census 4.C + 4.D (DRS-E6 increment 3)
 
-**Status:** OPEN — **Rounds 1 and 2 RULED 2026-09-19** (Q1–Q10, §8/§8.1;
-pre-flight written 2026-09-18 against `dev` @ `5adfc5423`, post-#782).
-**Rules-crate commits 1–8 LANDED on the branch 2026-09-19** (§7: `implemented
-16 / 151`); **commits 9 / 9b (store side) wait for #783** and are the
-residue this file stays open for. Template:
-[`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessor
-[`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md). Parent
-plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 table 3 (*"slice 2 —
+**Status:** CLOSED-as-record — **implementation LANDED 2026-09-19** (all
+commits, 1–10, including the store side 9 / 9b after #783 / #784 merged;
+Rounds 1 and 2 RULED 2026-09-19, Q1–Q10, §8/§8.1; pre-flight written
+2026-09-18 against `dev` @ `5adfc5423`, post-#782). Record: `implemented
+16 / validator-enforced 151`, `ratified 126 / 153`; `SCHEMA_VERSION` 6 → 7;
+`passed_through().count()` 7 → 6. **Open residue lives in FOLLOWUPS, not
+here:** Q10's owed consumers (§4.5), F12's register, and the `Fault::Corrupt`
+writer-halt whose first caller is the E2 driver (§4.3). Do not implement
+from this file; the living contract is
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md). Template:
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) §7.5.1; predecessor
+[`CHAIN_RULES_SLICE_1.md`](CHAIN_RULES_SLICE_1.md). Parent
+plan: [`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §7.5 table 3 (*"slice 2 —
 MTP / FTL; body in `shekyl-difficulty` (adopt)"* / *"LWMA-1 body in
 `shekyl-difficulty`, PoW in `shekyl-pow-randomx` (adopt)"*). Cites
 `26-sub-pr-design-discipline.mdc`. The living contract is
-[`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md); do not implement from this
+[`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md); do not implement from this
 file. Owner: the DRS-E6 lane.
 
 **Scope (table 3).** The eleven surface-free rows of 4.C (CEN-C1, C2, C3)
@@ -226,12 +231,30 @@ D4 is not a predicate on the candidate — nothing about a candidate fails
 "what is the next difficulty". It is B6's shape: a **definition** derived
 once, recorded in coverage at derivation, consumed by D1. `ValidatedBlock`
 gains `target: Difficulty` (and the derived `cumulative_difficulty`, §8 Q5),
-so the store's `connect` reads the value the validator computed:
-`ConnectFacts.cumulative_difficulty` flips from `Fact::passed_through` to
-`Fact::derived` (`connect.rs:123`/`:131`), and `passed_through()`'s count
-goes **7 → 6** — the direction the SCR-10 note says it moves when E6 lands
-a deriving row (`connect.rs:246`–`:251`). This is the first such flip; it is
-the pattern 4.G's weight rows will repeat.
+so the store's `connect` reads the value the validator computed.
+**As landed (commit 9, `0aba3b815`): the field is deleted, not flipped.**
+The pre-flight wrote "flips to `Fact::derived`"; a derived value the caller
+still had to construct would be a second source with one right answer, and
+`DELETED_BY`'s own contract is that the deriving row *deletes* the field. So
+`ConnectFacts` is six fields, `connect` writes
+`block_info.cumulative_difficulty` from `ValidatedBlock::cumulative_difficulty`
+and nothing else, `passed_through().count()` goes **7 → 6** — the direction
+the SCR-10 note says it moves when E6 lands a deriving row — and `FACT_FIELDS`
+loses the name, which shrinks the `passed_through_facts` cell's accepted
+vocabulary: a layout change, **`SCHEMA_VERSION` 6 → 7** (rule 42; rebuild,
+never migrate). This is the first such deletion; it is the pattern 4.G's
+weight rows will repeat.
+
+**`Fault::Corrupt` at connect — deferred with its blocker named (rule 22).**
+The plan had commit 9 treat `Fault::Corrupt` as an `InvariantViolated` the
+store did not see itself. `connect` takes a `ChainValid`; a `Corrupt` is
+returned by `validate` to the **driver**, which does not exist yet — the E2
+replay is its first instance — and a store API for "the validator found the
+file corrupt" has no caller until then (rule 21: not minted before a reader).
+Blocker: no driver. Falsify by `rg 'Fault::Corrupt' rust/` returning a match
+site outside `shekyl-chain-rules` — that site must arm the writer halt at the
+noted height, exactly as a belt does, and the store API it needs is minted
+with it. FOLLOWUPS row.
 
 `RecordedBlock` grows `cumulative_difficulty: CumulativeDifficulty`
 (`view.rs:129`–`:134`; the doc comment already reserves the field for 4.D).
@@ -348,9 +371,9 @@ Commit plan (rule 90, ≤ 10; each names its rows):
 6. `chain-rules: CEN-D2 in form; CEN-D3 seed verification and CEN-D1/D1b comparison in validate; Stale::Seed fault` (Q8) + fixtures incl. the ≥ 64-block-reorg stale-seed fixture.
 7. `chain-rules: CEN-D5 subsumed-by-D4` registry comment; `CEN-D7` per Q10.
 8. `chain-rules: coverage — registry flips; expected record` (§7); `DELETED_BY` narrowed to D4 (Q5, F6) — **note:** that constant lives in `chain-store/connect.rs`, so it rides C9, not this commit.
-9. `chain-store: connect derives cumulative_difficulty from the verdict; DELETED_BY narrows; Fault::Corrupt is an InvariantViolated at connect` — **after #783 merges**, rebased on layout v6; S-CHAIN-W row disclosure. (The projection half of the old commit 9 landed in commit 3: the grown `RecordedBlock` would not compile without it.)
-9b. `chain-store: mock-vs-BatchView conformance harness` (F11) — every landed rule over `BatchView` on a real store and over `MockChain`, identical verdicts and coverage; store side because G1 puts it there. After #783, with 9.
-10. `docs` — §7's record, index rows, CHANGELOG (security-relevant: the validator now decides PoW and timestamps), FOLLOWUPS sweep, this file to `completed/`.
+9. `chain-store: cumulative_difficulty leaves ConnectFacts — connect reads the verdict` — **LANDED `0aba3b815`** after #783/#784 merged (`3b49001fd`), on layout v6 → `SCHEMA_VERSION` 7; the field deleted rather than flipped (§4.3); `Fault::Corrupt` at connect deferred with its blocker (§4.3); S-CHAIN-W row disclosure. (The projection half of the old commit 9 landed in commit 3: the grown `RecordedBlock` would not compile without it.)
+9b. `chain-store: the mock is reconciled against BatchView — conformance harness` (F11) — **LANDED `dfea31dc9`**: every landed rule, both stages, over `BatchView` on a real store and over `MockChain` built from the same inputs; identical verdicts and coverage row-lists at genesis, one block, and a full MTP window; the reads compared directly; a **negative control** (a mock keyed one height late is refused on B5 where the store passes). The mock travels to the store through a `harness` feature on the rules crate (G1 picked the side). The store crate still never names the verdict type — the test projects a refusal to `(rule, locus)` through `Verdict`, so the conversion-ban gate holds for tests too.
+10. `docs` — **LANDED**: §7's record, index rows, CHANGELOG, FOLLOWUPS sweep, this file to `completed/`. Preceded by the review pass (`15563dcd5` the genesis-target correction; `a8a349253` F4/F13/F10/F12 records).
 
 Commits 1–8 can start when Round 2 is ruled (or on its defaults if so
 instructed); C9 waits for #783 regardless.
@@ -467,7 +490,7 @@ instructed); C9 waits for #783 regardless.
   own doc already said owned "the ambient half". A sibling-lane write into
   the RandomX and FFI crates (rule 94 §6), disclosed in the commit and on
   the RandomX rows it touches. Also see §4.5's F10 on `Network::Fakechain`.
-- **F11 — the harness mock is never reconciled against the real view
+- **F11 (LANDED 9b, `dfea31dc9`) — the harness mock is never reconciled against the real view
   (ruled a gap 2026-09-19).** `BatchView` appears nowhere in
   `shekyl-chain-rules`; every rule landing in slices 1–9 is tested against
   a `MockChain` whose fidelity to the store's projection is **assumed**. The
@@ -553,14 +576,13 @@ Rules crate: 102 unit tests + 14 doctests; the G1 belt at 184 packages with
 neither forbidden one; `check_store_error_conversion_ban.py` green over the
 new fault tokens; workspace `clippy -D warnings` clean.
 
-**Owed to commits 9 / 9b (store side, after #783):** `connect` derives
-`block_info.cumulative_difficulty` from `ValidatedBlock::cumulative_difficulty`
-(`Fact::derived`; `passed_through().count()` 7 → 6; `DELETED_BY` narrows to
-D4), treats `Fault::Corrupt` as an `InvariantViolated` it did not see itself,
-and the mock-vs-`BatchView` conformance harness (F11). Falsify each by
-`rg 'Fact::derived' rust/shekyl-chain-store/src/store/connect.rs` for the
-field, and F11's own falsifier. This file stays in `docs/design/` until they
-land.
+**Commits 9 / 9b LANDED 2026-09-19** (`0aba3b815`, `dfea31dc9`): `connect`
+writes `block_info.cumulative_difficulty` from the verdict and the field is
+gone from `ConnectFacts` (`passed_through().count()` 7 → 6; `DELETED_BY` six
+entries; `SCHEMA_VERSION` 7); the conformance harness runs green with its
+negative control. The one piece the plan had in 9 that did not land —
+`Fault::Corrupt` as a writer halt — is deferred with its blocker in §4.3 and
+a FOLLOWUPS row.
 
 ---
 
@@ -643,3 +665,4 @@ consumers outside the daemon (Q6's owed sweep).
 | 2026-09-19 | **Round 1 RULED** (Q1–Q7). Q1 approved with the staging refinement (`Substrate` → the stateless stage `form` / `StructurallyValid`); Q2–Q5, Q7 as defaulted; Q6 approved conditionally on its falsifier, which then **failed (c)** (F9). F3 reclassified as a census amendment (CEN-C1 row bracketed); F5 promoted to a CSR-3a register entry (CEN-D3 row, pass condition added); F8 the `blockchain.cpp:330` check (SCW-2 holds; slice-8 forward pin). **Round 2 proposed:** Q8 (seed as caller-supplied claim, verified in `validate`; D1 compares there), Q9 (B1/B2/B7 move to `form`), Q10 (D7 arm (d): fixed target as fakechain `RuleSet` data behind a witness type). **HALT** for Q8–Q10, or proceed on defaults if instructed. |
 | 2026-09-19 | **Round 2 RULED** (Q8 the split, with the conversion-ban extension and the bounded retry; Q9 yes; Q10 arm (d) with the corrected claim and the `RuleSetId` caveat — §4.5). **Commits 1–8 on the rulings.** Q8's falsifier ran first (§8.2: `connect` unaffected). Commits 1–5 landed on the branch; F10 forced commit 6a (the seed-epoch schedule's home). **Program findings taken from the reviewer's four instances:** F11 (the mock is never reconciled against `BatchView` — commit 9b), F12 (the test-deviation register — program-level, FOLLOWUPS), F13 (census D4 constant 100 vs config 400; genesis-tool "difficulty 1" — routed). |
 | 2026-09-19 | **Review of commits 1–8.** F4 refined into a rule-47 amendment (the cannot-fail test runs over the adversarial input space; D6's arm is reachable from a no-work view). F13 re-pointed: the "1" is the genesis *block's* own difficulty, already gated (`consts.rs:94`); only the census's 100 was live — amended on CEN-D4 — **and the re-pointing exposed a slice defect: D4 judged block 0 at the DAA constant; corrected to `Target::GENESIS_BLOCK` (1) in `15563dcd5`.** F10 → an owed item on Q10 naming both unserved consumers (FOLLOWUPS). F12's falsifier made one that fires (the first E2 pre-flight). Next: sweep #783/#784 (merged), then commits 9 / 9b. |
+| 2026-09-19 | **Commits 9 / 9b / 10 LANDED; file CLOSED-as-record → `completed/`.** Swept #783 (layout v6, `connect.rs` restructured; the `cumulative_difficulty` fact intact) and #784 (SOK-10 deletions; nothing this slice touches), merged (`3b49001fd`). Commit 9 deleted the fact rather than flipping it (§4.3) — `SCHEMA_VERSION` 7. Commit 9b's harness agrees on 7 shapes × 3 chain lengths and goes red on a drifted mock. `Fault::Corrupt` at connect deferred with its blocker (no driver; §4.3). Residue: FOLLOWUPS (Q10 owed consumers, F12 register, Corrupt writer-halt). |

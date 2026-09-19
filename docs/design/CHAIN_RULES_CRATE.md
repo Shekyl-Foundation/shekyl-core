@@ -988,7 +988,10 @@ second lines behind the belt and the type shapes, not gates.
 
 ### 8.7 The harness and its probe (`harness.rs`, `harness_probe_tests.rs`)
 
-Harness surface (`#[cfg(test)]`; as landed, commit 6):
+Harness surface (`#[cfg(any(test, feature = "harness"))]` since slice 2 —
+`pub mod` behind the `harness` feature for exactly one consumer, §8.8; the
+probe tests stay `#[cfg(test)]`. A normal dependency enabling the feature is
+a review finding; nothing in it is a production API. As landed, commit 6):
 
 ```rust
 /// A recorded chain: blocks dense from height 0, roots keyed as the store keys
@@ -1051,6 +1054,27 @@ makes this harness's own green mean something.
 
 ---
 
+
+### 8.8 The mock reconciled against `BatchView` (`shekyl-chain-store/src/store/conformance_tests.rs`)
+
+Every rule above is tested against `MockChain`; that the mock answers as the
+store's `BatchView` does was **assumed** until slice 2 (F11). The
+conformance harness makes it a gated property: the same chain is built
+twice — connected into a real file through `connect`, and pushed into a
+`MockChain` from the same blocks, `root_after` facts and derived work — and
+`form` + `validate` run over **both** views for every shape the landed rules
+can judge (well-formed, A2, B5, C1, C2/C3, D1, B1) at genesis admission, one
+block and a full MTP window, asserting identical verdicts **and** identical
+coverage row-lists. The reads are also compared directly (`block_at`,
+`root_at` across and above the tip, `tip`) so a disagreement has a named
+cause. Negative control: a mock keyed one height late is refused on B5 where
+the store passes. It lives on the store side because G1 forbids this crate
+from naming the store, and reaches the mock through the `harness` feature
+(§8.7). The store crate still never names the verdict type: the test projects
+a refusal to `(rule, locus)` through `Verdict`, so the conversion-ban gate
+holds for its tests too. Not covered there, named: a full LWMA-1 window past
+`N` (the store fixtures' root bytes cap the chain at 63) — the E2 replay is
+that instrument.
 ## 9. Commit plan (rule 90; ≤ 10 commits, no AI trailers)
 
 1. `types: move KeyImage into shekyl-types; mint CurveTreeRoot (E6 inc 1 pre-flight)`
