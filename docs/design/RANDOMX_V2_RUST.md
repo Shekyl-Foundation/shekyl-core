@@ -541,7 +541,13 @@ No Monero-era RandomX env vars carry forward.
 - `MONERO_RANDOMX_UMASK` becomes an explicit verifier configuration
   parameter if needed; no env var.
 - `MONERO_RANDOMX_FULL_MEM` is miner-only; verifier code does not use
-  the full 2 GiB dataset.
+  the full 2 GiB dataset **today** — a measure-first staging, not a
+  foreclosure: `Dataset::derive(cache)` is a planned transform (§4) and
+  the verifier-side dataset mode is revisited on the measurement
+  [`RANDOMX_V2_MINING_ASYMMETRY.md`](RANDOMX_V2_MINING_ASYMMETRY.md)
+  option (a) names (clarified 2026-09-19 after E2's pre-flight read this
+  line as a ruling; `DRS_E2_REPLAY_DRIVER.md` RD-F11 — the replay pipeline
+  emits that measurement).
 - `SEEDHASH_EPOCH_BLOCKS` becomes a typed constant.
 - `SEEDHASH_EPOCH_LAG` becomes a typed constant.
 

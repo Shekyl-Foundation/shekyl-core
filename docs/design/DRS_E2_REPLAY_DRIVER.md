@@ -196,12 +196,16 @@ mining JIT for validation (§1.3).
 `PreparedCache::derive(Seedhash)` (the 256 MiB Argon2d fill),
 `compute_hash(&PreparedCache, &[u8]) -> [u8;32]`, `CacheStore::{lookup,
 lookup_or_derive, set_canonical}` (the daemon's two-epoch cache), `VmStatePool`
-+ `compute_hash_with_pool`. **Cache-only by ruling, not omission:**
-`RANDOMX_V2_RUST.md:544` — *"`MONERO_RANDOMX_FULL_MEM` is miner-only; verifier
-code does not use the full 2 GiB dataset"*; `Cache::derive_item` is the
-per-item path (`cache.rs:449`, ~16 µs/item) and nothing public builds a
-dataset (RD-F11). The replay throughput lever is therefore **parallel `form`**
-(§1.1), not a dataset mode and never the JIT (§1.3).
++ `compute_hash_with_pool`. **Cache-only today, as a measure-first staging —
+not a foreclosure** (RD-F11, corrected 2026-09-19): `Cache::derive_item` is
+the per-item path (`cache.rs:449`, ~16 µs/item) and nothing public builds a
+dataset; `RANDOMX_V2_RUST.md` §4 lists `Dataset::derive(cache)` as a planned
+transform, and `RANDOMX_V2_MINING_ASYMMETRY.md` names the no-dataset verifier
+as *"the thing disposition option (a) would revisit"* once its measurement
+exists — and no measurement exists yet. The replay throughput levers are
+**parallel `form`** (§1.1) and, if the measurement says so, **the Rust dataset
+mode**; never the JIT (§1.3). E2 is the first real verification workload, so
+the pipeline **emits the measurement** (RD-Q3).
 
 ### 3.4 Block, body and fact sources — the load-bearing finding
 
@@ -241,7 +245,7 @@ register is prose; the grader takes typed states. A row extractor is owed
 | --- | --- | --- | --- |
 | **RD-Q1** | **Home.** | **RULED: a new crate, `shekyl-chain-ingest`** — the production ingest pipeline (§1.1), depending on rules + store + `shekyl-pow-randomx`, with the replay driver as its first `src/bin/`. *Round-0 default was `shekyl-chain-replay`, "a test tool"; same dependency shape, different name and life expectancy.* Rule 18: the corpus/trace format types live in the ingest crate (or `shekyl-store-codec` once CTS PR A lands), never in a binary. | The store crate is `#![deny(unsafe_code)]` and names neither RandomX nor the verdict type (conversion ban clause 2); the pipeline keeps the store ignorant of the validator's faults and G1 trivially true. |
 | **RD-Q2** | **Block, body and fact source** (§3.4). | **RULED: corpus from RPC, trace from one LMDB exporter → bytes across the FFI → a Rust writer; the format minted in Rust with a version constant, one serializer shared by writer and reader.** *Round-0 default (c) — extend `blockchain_export`'s bootstrap file — is **withdrawn** (RD-F9): that container is Monero's, serialized with epee, and a Rust reader of it is a second parser of an inherited format, rule 16's pattern.* Keeps everything that made (c) attractive (offline, one artifact per chain, no LMDB crate) and keeps the C++ change a transport shim that dies at cutover (§1.3). | Byte transport across the FFI is what D12 allows; verdicts are what it rejected. The digest walker (`logical_state_digest.cpp` → FFI) is the existing shape. |
-| **RD-Q3** | **Production `Substrate`.** | **Default holds with one correction:** two-cache `CacheStore` keyed by the chain's seed at `seedheight(h)`, swapped at epoch boundaries; wall clock. *Round 0 called the retry loop "load-bearing" at the boundary; **withdrawn** (RD-F10) — the driver takes the seed from the chain it replays, so a `Stale::Seed` cannot arise from a correct driver; it is a defect signal (RD-Q5).* Throughput: parallel `form` workers over `VmStatePool` (§1.1); no dataset mode (ruled out, RD-F11); never the JIT (§1.3). **Caveat:** C1's FTL leg reads the clock and a historical block is always below `now + FTL`, so replay cannot exercise C1's refusal — recorded in §5. | Reuses the daemon's cache lifecycle; the epoch boundary is where a stale cache would silently produce wrong longhashes, and that now surfaces as a defect, not a retry. |
+| **RD-Q3** | **Production `Substrate`.** | **Default holds with one correction:** two-cache `CacheStore` keyed by the chain's seed at `seedheight(h)`, swapped at epoch boundaries; wall clock. *Round 0 called the retry loop "load-bearing" at the boundary; **withdrawn** (RD-F10) — the driver takes the seed from the chain it replays, so a `Stale::Seed` cannot arise from a correct driver; it is a defect signal (RD-Q5).* Throughput: parallel `form` workers over `VmStatePool` (§1.1) now; the Rust dataset mode is an **open option gated on a measurement E2 itself produces** — the pipeline's metrics sink records light-mode wall-clock per hash and per block, which is the number `RANDOMX_V2_MINING_ASYMMETRY.md` option (a) has been waiting for (RD-F11); never the JIT (§1.3). **Caveat:** C1's FTL leg reads the clock and a historical block is always below `now + FTL`, so replay cannot exercise C1's refusal — recorded in §5. | Reuses the daemon's cache lifecycle; the epoch boundary is where a stale cache would silently produce wrong longhashes, and that now surfaces as a defect, not a retry. |
 | **RD-Q4** | **`Fault::Corrupt` at the store.** | **RULED as defaulted:** `WriteBatch::refuse_corrupt(Corrupt) -> StoreError`, inside the batch, arming the poison at the noted height with a `StoreInvariant` row mapped from the `Corrupt` arm (new SI rows minted with it), returning the `InvariantViolated` the pipeline propagates. Minted here **with its caller** — the commit-9 scope #785 shed, as ruled 2026-09-19. | The validator saw what a belt would have; the store's halt is the consequence and must poison *this* batch. Taking the value keeps the store from naming `CenRow`s it does not own. |
 | **RD-Q5** | **The retry loop and `Stale::Seed` in replay.** | **RULED:** the loop lives in the pipeline (`form` → `validate`; on `Stale::Seed` re-`form` with the expected seed and `attempt.next()`; `Exhausted` → terminal run error). **In replay every `Stale::Seed` is a driver defect: the run records and surfaces the first occurrence rather than retrying it away**, and **the retry path is exercised by a test that injects a wrong seed**, not by waiting for a bug. The live-daemon role (Q8's DoS bound) is unaffected. | Resolves the RD-Q3/RD-Q5 contradiction Round 0 carried (RD-F10). |
 | **RD-Q6** | **Grading.** | **RULED as defaulted, plus one rule:** Python extractor → JSON → the pure Rust grader, reusing `drs_artifact.py`'s schema discipline. **Rows whose value is sourced from a passed-through fact grade as not-evidence** ("borrowed is never evidence", RD-F7): identity there is copying, not conformance. Under §1.3 the rule's point is honesty about progress toward Rust deriving everything, not fidelity to C++. | The register is prose Python already parses (`check_conformance_coverage.py`); the grade is reproducible from the artifact alone. |
@@ -303,14 +307,22 @@ register is prose; the grader takes typed states. A row extractor is owed
   `Stale::Seed`.** Q5 was right: in replay a seed change is impossible from a
   correct driver, so the arm is a defect signal, recorded and surfaced, with an
   injected-wrong-seed test exercising the path (RD-Q5).
-- **RD-F11 (review's throughput item, checked at source) — no dataset mode,
-  by ruling.** `RANDOMX_V2_RUST.md:544` rules the verifier cache-only; the crate
-  has `Cache::derive_item` (`cache.rs:449`) and no public dataset. Upstream's
-  full-memory mode is ~10× faster per hash for a ~2 GiB init that would
-  amortise over a long replay — but adopting it is a **reopening of that
-  plan's ruling** (rule 21 shape: reopen on a measured replay wall-clock that
-  parallel `form` cannot meet on the provisioning floor), not a coding-agent
-  check. Until then the lever is parallel `form`; the JIT is never it (§1.3).
+- **RD-F11 (review's throughput item, checked at source; corrected
+  2026-09-19) — the verifier is cache-only as a measure-first staging, not by
+  ruling.** This finding first read `RANDOMX_V2_RUST.md:544` (*"verifier code
+  does not use the full 2 GiB dataset"*) as a foreclosure requiring a
+  reopening. **Wrong:** the dataset path was left unbuilt to measure whether
+  the daemon needed it — §4 of that plan lists `Dataset::derive(cache)` as a
+  planned transform, and `RANDOMX_V2_MINING_ASYMMETRY.md` names the
+  no-dataset verifier as the thing its option (a) revisits once Phases 1–3
+  produce a number; none has. Upstream's full-memory mode is ~10× faster per
+  hash for a ~2 GiB init that amortises over a long replay. So: the dataset
+  mode is an **open option whose trigger is the measurement**, and E2 is the
+  first real verification workload able to produce it — the pipeline emits
+  light-mode wall-clock per hash / per block as a sink metric, feeding that
+  study rather than deciding for it. Line 544 amended in the same commit so
+  it no longer reads as a ruling (sibling-lane write, disclosed). The JIT is
+  never the lever (§1.3).
 - **RD-F12 (ruling) — the mining JIT is the one permanent C++↔Rust boundary,
   with a standing obligation.** The RandomX parity corpus and
   `randomx-v2-differential.yml` become a **permanent gate** (full vector set on
@@ -357,4 +369,4 @@ code or a re-pointed FOLLOWUPS row with a live owner.
 | Date | Entry |
 | --- | --- |
 | 2026-09-19 | **Round 0.** Opened on #785's review after "owner: the E2 lane" was found to name nothing. Sweep at source; eight questions with defaults; six findings, one a proposed gate (RD-F4). Opens before #785 merges so #785's deferrals point at a document under review. |
-| 2026-09-19 | **Round 0 REVIEWED and RULED (maintainer).** Substrate claims confirmed at `dev` `14f8dc739`. Four findings taken: RD-F7 (the root component compares a copy of itself → borrowed-is-never-evidence grader rule; §8 names the real components), RD-F8 (tx bodies; unpruned source; prune state declared and refused), RD-F9 (bootstrap format inherited → Rust-minted trace format), RD-F10 (Q3/Q5 contradiction → `Stale::Seed` is a defect signal in replay; injected-seed test). **The ruling (§0):** C++ is a non-canonical reference, adjudicated against the spec with two outcomes, extracted from and never fixed; all E2 C++ is harvest shims that die at cutover; the ingest pipeline is production code shared by E2 and E3 (§1.1 — RD-Q1 → `shekyl-chain-ingest`); the mining JIT is the sole surviving C++ behind a permanent parity gate (RD-F12). Throughput item checked at source: no dataset mode, by `RANDOMX_V2_RUST.md`'s ruling (RD-F11). RD-Q4/Q6/Q7/Q8 as defaulted; RD-F4 endorsed as a standing check. Round 1 opens after #785 merges. |
+| 2026-09-19 | **Round 0 REVIEWED and RULED (maintainer).** Substrate claims confirmed at `dev` `14f8dc739`. Four findings taken: RD-F7 (the root component compares a copy of itself → borrowed-is-never-evidence grader rule; §8 names the real components), RD-F8 (tx bodies; unpruned source; prune state declared and refused), RD-F9 (bootstrap format inherited → Rust-minted trace format), RD-F10 (Q3/Q5 contradiction → `Stale::Seed` is a defect signal in replay; injected-seed test). **The ruling (§0):** C++ is a non-canonical reference, adjudicated against the spec with two outcomes, extracted from and never fixed; all E2 C++ is harvest shims that die at cutover; the ingest pipeline is production code shared by E2 and E3 (§1.1 — RD-Q1 → `shekyl-chain-ingest`); the mining JIT is the sole surviving C++ behind a permanent parity gate (RD-F12). Throughput item checked at source: cache-only today; the dataset mode is measurement-gated, not ruled out (RD-F11 as first written said "by ruling" — corrected the same day; E2 emits the measurement). RD-Q4/Q6/Q7/Q8 as defaulted; RD-F4 endorsed as a standing check. Round 1 opens after #785 merges. |
