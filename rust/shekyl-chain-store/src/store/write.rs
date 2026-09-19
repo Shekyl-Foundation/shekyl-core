@@ -38,10 +38,10 @@
 //! The verb is the handle: a set table cannot upsert, a register cannot
 //! insert, and a hard-fork that reclassifies a table opens the other
 //! handle. Typed `properties` cells are registers and are written
-//! through [`upsert_property`](WriteBatch::upsert_property). Multimap
-//! tables are sets of values per key: there is no overwrite to declare,
-//! so they open as a [`SetTable`] with one `insert` that says whether the
-//! member was new.
+//! through [`upsert_property`](WriteBatch::upsert_property). There is no
+//! multimap opener: the catalogue has had no multimap since S-OUT-KI's
+//! layout commit made `output_amounts` a keyed `(amount, amount_index)`
+//! table (SOK-1).
 //!
 //! # The pop journal
 //!
@@ -66,10 +66,7 @@
 use core::cell::Cell;
 use core::marker::PhantomData;
 
-use redb::{
-    Key, MultimapTableDefinition, MultimapTableHandle, ReadableTable, TableDefinition, TableHandle,
-    WriteTransaction,
-};
+use redb::{Key, ReadableTable, TableDefinition, TableHandle, WriteTransaction};
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{post_image, Canonical, ChainState, PropertyCell, UndoEntry};
@@ -78,7 +75,6 @@ use crate::schema::{self, BLOCK_INFO, PROPERTIES};
 use super::error::{EngineError, StoreCannot, StoreError, StoreInvariant};
 use super::header;
 use super::keyed::{Handles, InsertTable, UpsertTable};
-use super::set::SetTable;
 use super::shared::Shared;
 use super::undo::{self, Journal, Recording, Replayed, Restorable};
 use super::view::BatchView;
@@ -343,34 +339,6 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         self.txn()
             .open_table(definition)
             .map(|table| UpsertTable::new_upsert(table, handles))
-            .map_err(|e| EngineError::Table(e).into())
-    }
-
-    /// Open a multimap table for writing. Same refusals as
-    /// [`open_insert_table`](Self::open_insert_table).
-    ///
-    /// A multimap is a set of members per key, so an insert either adds a
-    /// member or finds it present — there is no value to overwrite and no
-    /// verb to declare (C2-R8 §7.3 is about keyed tables). The handle
-    /// journals an added member while the batch is recording.
-    ///
-    /// # Errors
-    ///
-    /// [`StoreCannot::FamilyStubbed`], [`StoreCannot::PropertiesAreTyped`]
-    /// or [`EngineError::Table`].
-    pub fn open_multimap_table<'txn, K, V>(
-        &'txn self,
-        definition: MultimapTableDefinition<'_, K, V>,
-    ) -> Result<SetTable<'txn, K, V>, StoreError>
-    where
-        K: Key + Restorable + 'static,
-        V: Key + Restorable + 'static,
-    {
-        self.admit(definition.name())?;
-        let handles = self.handles(definition.name());
-        self.txn()
-            .open_multimap_table(definition)
-            .map(|table| SetTable::new(table, handles))
             .map_err(|e| EngineError::Table(e).into())
     }
 

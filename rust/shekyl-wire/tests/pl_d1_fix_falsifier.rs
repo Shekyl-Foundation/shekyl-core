@@ -23,8 +23,8 @@
 //! 1. every 64-byte entry of every `0x07` field the chain published (the
 //!    commitment half against `K`, the record half against nothing — the
 //!    record is `cSHAKE256(pk ‖ r_h)` under a blind the observer lacks);
-//! 2. every leaf 4th scalar the chain serves — the assembled leaf chunk,
-//!    which is the daemon's `get_curve_tree_path` `chunk_outputs` surface —
+//! 2. every leaf 4th scalar the chain serves — the assembled leaf chunk, the
+//!    surface an archival shard or a wallet-side leaf stream carries —
 //!    against `K.x`.
 //!
 //! It expects **zero** matches on both. On the pre-`PL-D3` tree (the same
@@ -276,7 +276,7 @@ fn pl_d1_revealed_key_does_not_identify_the_spent_output() {
         .map(|(i, _)| i)
         .collect();
     // Surface 2: every leaf 4th scalar the chain serves in the assembled
-    // chunk (the `get_curve_tree_path` `chunk_outputs` surface) against K.x.
+    // chunk (the served-leaf surface) against K.x.
     let chunk_matches: Vec<usize> = path
         .leaf_chunk
         .iter()

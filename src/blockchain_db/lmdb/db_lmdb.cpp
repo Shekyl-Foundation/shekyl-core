@@ -9541,24 +9541,6 @@ uint64_t BlockchainLMDB::get_curve_tree_leaf_count() const
   return count;
 }
 
-bool BlockchainLMDB::get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const
-{
-  LOG_PRINT_L3("BlockchainLMDB::" << __func__);
-  check_open();
-  if (!hash_out) return false;
-
-  TXN_PREFIX_RDONLY();
-  uint64_t key = ct_layer_chunk_key(layer, chunk);
-  MDB_val k = {sizeof(key), (void *)&key};
-  MDB_val v;
-  int result = mdb_get(m_txn, m_curve_tree_layers, &k, &v);
-  bool found = (result == 0 && v.mv_size == 32);
-  if (found)
-    memcpy(hash_out, v.mv_data, 32);
-  TXN_POSTFIX_RDONLY();
-  return found;
-}
-
 bool BlockchainLMDB::get_curve_tree_leaf_by_tree_position(uint64_t tree_position, uint8_t* leaf_out) const
 {
   LOG_PRINT_L3("BlockchainLMDB::" << __func__);

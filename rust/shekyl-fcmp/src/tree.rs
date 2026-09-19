@@ -7,8 +7,9 @@
 //!
 //! These functions wrap the upstream FCMP++ Pedersen hash operations for the
 //! Helios/Selene curve tower. The C++ LMDB layer owns the store; Rust owns
-//! the hash primitives and the RPC membership-path byte layout
-//! ([`crate::rpc_path`]).
+//! the hash primitives. Membership paths are assembled wallet-side from the
+//! block-derived leaf stream (`shekyl-curve-tree`); the daemon serves no
+//! per-output path (`PHASE_2A_SEND_PATH.md` §3.0.1, `SOK-10` Q7).
 //!
 //! ## Tree topology
 //!
@@ -527,7 +528,8 @@ pub fn construct_leaf(
 /// compressed points and the leaf's 4th scalar **as the chunk carries it**
 /// (`CM.x`, already extracted — `ChunkLeaf::h_pqc` / `LeafEntry::h_pqc`).
 /// The chunk does not carry the commitment point, so [`construct_leaf`]
-/// cannot be used here; this is the inverse of `rpc_path::append_layer0`.
+/// cannot be used here; this is the inverse of the served-chunk entry layout
+/// `O(32) ‖ I(32) ‖ C(32) ‖ CM.x(32)`.
 ///
 /// Returns `None` if `O`, `I` or `C` is not a decompressible point.
 pub fn leaf_from_chunk_entry(

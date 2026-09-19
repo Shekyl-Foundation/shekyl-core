@@ -4,6 +4,21 @@
 
 ### Daemon chain store
 
+- **Outputs and key images read surface (S-OUT-KI, DRS-E1 increment 5).**
+  `ReadSnapshot` gains `has_key_image` (one body with the validator's
+  `BatchView`), `key_images()` (the digest's `spent_keys` scan), and
+  `output` / `output_origin` by `GlobalOutputIndex`, returning `AtIndex<T>`
+  — a dense-index absence type: at or beyond the count is `BeyondCount`, a
+  hole below it is an invariant violation, never a default. **Layout v6**
+  (`SCHEMA_VERSION 5 → 6`, delete `~/.shekyl` and re-sync): `output_amounts`
+  is a keyed `(amount, amount_index)` table instead of a multimap — redb
+  has no seek within a key's members, so the ported shape made every
+  output lookup a scan of the whole amount-0 bucket; the tuple is LMDB's
+  `DUPSORT` pair as a key with the same order, O(log n). `OutKey` drops its
+  redundant index prefix; the pop journal's multimap entry is retired
+  (tag 2 reserved). No C++ daemon behaviour changes; the daemon still
+  serves LMDB.
+
 - **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 5` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`; `spent_keys` is `Present`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
 
 ### Consensus
@@ -47,6 +62,20 @@
 
 ### API
 
+- **`get_curve_tree_path` is removed (RPC 3.34; `SOK-10` Q7 → A).** The
+  daemon's per-output membership-path endpoint, its Rust assembler
+  (`shekyl-fcmp::rpc_path`) and the C++ store-callback shim are deleted.
+  The query was spend-revealing — it told the daemon which output a wallet
+  is about to spend (`PHASE_2A_SEND_PATH.md` §3.0.1, a binding ruling) —
+  had no production consumer, and returned wrong `chunk_outputs` on every
+  chain carrying a transaction: it paired the leaf at tree position `p`
+  with the output at global index `p`, and coinbase (`+60`) vs transaction
+  (`+10`) maturity inverts those orders in the first block with a
+  transaction. Wallets assemble paths locally from the block-derived leaf
+  stream and are unaffected. Callers now receive JSON-RPC method-not-found;
+  `CORE_RPC_VERSION_MINOR` `33 → 34`. `BlockchainDB::get_curve_tree_layer_hash`
+  is deleted too — the removed shim was its only caller. Record:
+  `docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`.
 - **`get_output_histogram` removed** (JSON-RPC method, its wire structs, the
   `shekyld` console command `output_histogram`, the python-rpc helper, and
   the `shekyld` rlwrap completion entry); `CORE_RPC_VERSION`

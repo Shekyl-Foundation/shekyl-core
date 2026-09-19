@@ -134,8 +134,9 @@ The stressnet passes when ALL of the following hold for 4 consecutive weeks:
 3. **Verification cache hit rate > 95%** on nodes processing mempool txs
 4. **Wallet restore-from-seed** produces identical key images and balances
    on a fresh node after full sync
-5. **Checkpoint pruning** does not corrupt the tree — a pruned node can still
-   serve correct `get_curve_tree_path` responses for recent outputs
+5. **Checkpoint pruning** does not corrupt the tree — a pruned node's
+   `curve_tree_root` at every height still equals a wallet's block-derived
+   reconstruction (the daemon serves no per-output path; `SOK-10` Q7 → A)
 6. **No unrecoverable node crashes** — any crash must be followed by
    automatic recovery without manual database surgery
 7. **Staking lifecycle** completes at least 100 full cycles (stake → mature

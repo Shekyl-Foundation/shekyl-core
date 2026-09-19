@@ -43,8 +43,8 @@ Grounded at `shekyl-core` `dev` @ `42333d34f` (2026-09-13). Read-only; every
   `h_pqc` value that was published in some earlier transaction's 0x07 field.
 - **Also on the wire in cleartext:** the archival emission vin carries
   `backing.pqc_pk_hash` (`rust/shekyl-archival-retention/src/emission_wire.rs:154,543,617`); the daemon RPC
-  `get_curve_tree_path` returns every chunk leaf's `h_pqc` (`rust/shekyl-fcmp/src/rpc_path.rs:94`,
-  `src/rpc/core_rpc_server.cpp:1560`); served archival shards are raw 128-byte leaves
+  `get_curve_tree_path` returned every chunk leaf's `h_pqc` (`fcmp/src/rpc_path.rs:94`,
+  `rpc/core_rpc_server.cpp:1560` at `8494f2a27` — **surface removed 2026-09-18, `SOK-10` Q7 → A**; records-was); served archival shards are raw 128-byte leaves
   (`rust/shekyl-curve-tree/src/store/redb_backend.rs:411-420`, `p-serve provider.rs:111-116`).
 
 Column 4 of the table marks each site's role: **PUBLIC-INPUT** (the value crosses
@@ -81,7 +81,7 @@ N grep hits inside one function are one site.
 | S0 | leaf format | `rust/shekyl-fcmp/src/tree.rs:43-44` (`SCALARS_PER_LEAF = 4`), `:53` (`LEAF_CHUNK_SCALARS`) | Leaf width constants consumed by daemon/wallet/archival. LAYOUT | Count change only. |
 | S0 | leaf format | `rust/shekyl-fcmp/src/tree.rs:490-523` (`construct_leaf(output_key, commitment, h_pqc) -> Option<[u8;128]>`; `:522` copies `h_pqc` verbatim to `[96..128]`; doc `:504-505` still says "pass `&[0u8;32]` for outputs that have no PQC key commitment") | The ONE leaf constructor shared by daemon (via FFI) and wallet. STORE | Signature/doc; any change to what the 4th field *is* lands here first. Doc is stale (zero no longer admissible, CEN-I19). |
 | S0 | leaf format | `rust/shekyl-fcmp/src/tree.rs:548-556` (`leaves_to_bytes`) | Serializes `ShekylLeaf`s for LMDB. STORE | Transparent for 32-byte content. |
-| S0 | leaf format | `rust/shekyl-fcmp/src/rpc_path.rs:24-25` (`LEAF_BYTES = 128`), `:53-56` (layout doc), `:72-94` (`append_layer0` — `:94` copies `leaf[96..128]` into `chunk_outputs` served over RPC) | RPC path serving hands the wallet every sibling leaf's 4th scalar in cleartext. WIRE (RPC) | If the 4th scalar becomes hiding, this still serves it (fine); if the wallet needs openings it cannot get them here. |
+| S0 | leaf format — **SURFACE REMOVED 2026-09-18** (`SOK-10` Q7 → A) | records-was at `8494f2a27`: `fcmp/src/rpc_path.rs:24-25` (`LEAF_BYTES = 128`), `:53-56` (layout doc), `:72-94` (`append_layer0` — `:94` copied `leaf[96..128]` into `chunk_outputs` served over RPC); the module is deleted | RPC path serving handed the wallet every sibling leaf's 4th scalar in cleartext. WIRE (RPC) — **no longer exists** | None going forward: a leaf-format change no longer propagates through this surface. Historical: it served the scalar as-is and could not have served openings. |
 | S0 | prove/verify | `rust/shekyl-fcmp/src/proof.rs:161-193` (`ProveInput.h_pqc: PqcLeafScalar` `:168-169`; `leaf_chunk_h_pqc: Vec<[u8;32]>` `:192-193`) | Prover input carries own + sibling 4th scalars. WITNESS | Field semantics; prover needs whatever the leaf holds. |
 | S0 | prove/verify | `rust/shekyl-fcmp/src/proof.rs:224-414` (`prove_with_rng`: `:349-355` deserializes each `leaf_chunk_h_pqc[j]` as Selene scalar into `chunk_extra`, `:358-361` own `h_pqc`, `:412-414` `output_extra_scalars`/`leaves_extra_scalars`) | Builds the FCMP `Path` extras. WITNESS | Same. |
 | S0 | prove/verify | `rust/shekyl-fcmp/src/proof.rs:513-684` (`prove_membership_only`: `:628-640`, `:682-684`) | Same for membership-only proofs. WITNESS | Same. |
@@ -133,7 +133,7 @@ N grep hits inside one function are one site.
 | S0 | wallet-side replica | `rust/shekyl-curve-tree/src/assemble.rs:72-155` (`assemble_path` — `:153` `h_pqc: e.identity.h_pqc` into `ChunkLeaf`) | Path assembly reads the 4th scalar back from the drained leaf identity. WITNESS | Semantics. |
 | S0 | replica FFI | `rust/shekyl-ffi/src/curve_tree_replica_ffi.rs:74-82` (`ShekylCurveTreeReplicaTx { has_leaf_hash_blob, leaf_hash_blob, leaf_hash_blob_len, … }`), `:94-101` (`const _` ABI offset pins), `:200-240` (marshals to `TxLeafInputs`), `:359-365` (test) | C++→Rust replica feed of the raw 0x07 payload (used by `tests/core_tests/chaingen.cpp:323-382`). WIRE/S3 | Struct name/doc; ABI pins hold unless a field is added. |
 | S0 | leaf FFI | `rust/shekyl-ffi/src/legacy_curve_tree.rs:321-328` (`shekyl_curve_tree_scalars_per_leaf` = 4), `:512-560` (`shekyl_construct_curve_tree_leaf(output_key, commitment, h_pqc_ptr, leaf_out)` — doc `:514` "or 32 zero bytes if unavailable", `:556` → `construct_leaf`) | C ABI leaf constructor used by `src/blockchain_db/blockchain_db.cpp:608`. STORE | Doc stale (zero not admissible); parameter semantics. |
-| S0 | RPC path | `rust/shekyl-ffi/src/curve_tree_path_ffi.rs:13-35` (`CallbackStore::leaf` reads `[u8; LEAF_BYTES]` via C callback), `:84-90` (`shekyl_assemble_curve_tree_path`); `src/cryptonote_core/curve_tree_path.cpp:50` (`read_leaf(.., uint8_t leaf_out[128])`), `:91-119` (`assemble_curve_tree_path` → `chunk_outputs`); `src/cryptonote_core/curve_tree_path.h:20-27` (layout doc "`O(32) ‖ I(32) ‖ C(32) ‖ h_pqc(32)`"); `src/rpc/core_rpc_server.cpp:1470-1561` (`on_get_curve_tree_path`, `:1560-1561` hex-encodes `chunk_outputs`); `src/rpc/core_rpc_server_commands_defs.h:1389-1390` (`chunk_outputs_blob // per entry: [O:32][I:32][C:32][h_pqc:32] = 128 bytes`) | Daemon serves every chunk sibling's 4th scalar to wallets over RPC. WIRE (RPC) | Doc strings name the content; if openings are needed by provers they are not served here. |
+| S0 | RPC path — **SURFACE REMOVED 2026-09-18** (`SOK-10` Q7 → A; spend-revealing, `PHASE_2A` §3.0.1) | records-was at `8494f2a27`: `ffi/src/curve_tree_path_ffi.rs:13-35` (`CallbackStore::leaf`), `:84-90` (`shekyl_assemble_curve_tree_path`); `cryptonote_core/curve_tree_path.cpp:50` (`read_leaf`), `:91-119` (`assemble_curve_tree_path` → `chunk_outputs`); `cryptonote_core/curve_tree_path.h:20-27` (layout doc); `rpc/core_rpc_server.cpp:1470-1561` (`on_get_curve_tree_path`); `rpc/core_rpc_server_commands_defs.h:1389-1390` (`chunk_outputs_blob`) — all deleted | Daemon served every chunk sibling's 4th scalar to wallets over RPC. WIRE (RPC) — **no longer exists** | None going forward: provers take the 4th scalar from their own drained leaf identity (`assemble.rs`, the row above), never from a daemon. Historical: doc strings named the content; openings were never served. |
 | S0 | genesis | `rust/shekyl-genesis-tool/src/builder.rs:56-128` (`build_genesis_tx`: `:110` `leaf_blob.extend_from_slice(&od.h_pqc)`, `:122` length assert, `:124-128` `TxExtraField::PqcLeafHashes(leaf_blob)`) | Genesis coinbase publishes real `h_pqc` per recipient in 0x07. WIRE/DERIVE | Genesis tx bytes, tx hash, block id all change → `golden_kat.rs` pins (S1). |
 | S0 | creation (C++) | `src/cryptonote_core/cryptonote_tx_utils.cpp:126` (`construct_miner_tx`: `:198-199` reserve `n×PQC_LEAF_HASH_BYTES`, `:237` `leaf_hash_field.blob.append(od.h_pqc, 32)`, `:256-258` serialize) | Coinbase creation publishes `od.h_pqc` from `shekyl_construct_output`. WIRE | Published value/width. |
 | S0 | creation (C++) | `src/cryptonote_core/cryptonote_tx_utils.cpp:301` (`construct_tx_with_tx_key`: `:499-500`, `:547`, `:567-569`) | Non-coinbase creation (test/legacy C++ path). WIRE | Same. |
@@ -388,7 +388,7 @@ Not under `docs/test_vectors/` but equally frozen: `ct2_tier_{a,b}.json`,
    full container)" (it is `32·N` per tx). `rust/shekyl-daemon-rpc/src/submit/verifier.rs:1009` cites
    `src/cryptonote_core/blockchain.cpp:3810-3820`; the arms are at `:3782-3783`, `:4091-4092`, `:4211-4212`.
 8. **Three independent `LEAF_BYTES = 128` declarations outside the derived one.**
-   `rust/shekyl-fcmp/src/rpc_path.rs:25` (bare `128`), `rust/shekyl-sp-t3-spike/src/fixture.rs:68`
+   ~~`rpc_path.rs:25`~~ (deleted 2026-09-18, `SOK-10` Q7 → A), `rust/shekyl-sp-t3-spike/src/fixture.rs:68`
    (bare `128`), `tests/unit_tests/{deferred_insertion,pending_tree_fuzz}.cpp:46-47`
    (bare `128`), C++ `kLeafSize = 128` (`src/blockchain_db/shekyl_types.h:144`) vs the derived
    `rust/shekyl-curve-tree/src/segment.rs` `LEAF_BYTES` (`SCALARS_PER_LEAF * 32`, asserted `== 128`) and
@@ -399,8 +399,8 @@ Not under `docs/test_vectors/` but equally frozen: `ct2_tier_{a,b}.json`,
    (ii) `tx.pqc_auths[i].hybrid_public_key` at spend — every node, and the
    recomputed hash is logged at `src/cryptonote_core/blockchain.cpp:4225`; (iii) the emission vin's
    `backing.pqc_pk_hash` + `backing_pubkey` (`rust/shekyl-archival-retention/src/emission_wire.rs:154-157`) — every
-   node, per epoch; (iv) `get_curve_tree_path` `chunk_outputs` (`rust/shekyl-fcmp/src/rpc_path.rs:94`,
-   `src/rpc/core_rpc_server.cpp:1560`) — RPC clients; (v) served archival shards
+   node, per epoch; (iv) `get_curve_tree_path` `chunk_outputs` (`fcmp/src/rpc_path.rs:94`,
+   `rpc/core_rpc_server.cpp:1560` at `8494f2a27`) — RPC clients — **surface removed 2026-09-18 (`SOK-10` Q7 → A); this leg no longer exists**; (v) served archival shards
    (`rust/shekyl-curve-tree/src/store/redb_backend.rs:411-420`, `served_frame.rs`) — P2P; (vi) the wallet's own
    leaf-meta table stores a second copy (`rust/shekyl-curve-tree/src/store/redb_backend.rs:2183`).
    `docs/design/REWARD_EMISSION_LEG.md:807-809` already states "leaf extra-scalars are publicly

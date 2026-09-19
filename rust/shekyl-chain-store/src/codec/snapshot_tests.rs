@@ -79,7 +79,7 @@ use std::path::{Path, PathBuf};
 use crate::apply_policy::ArchivalFamily;
 use crate::family_set::FamilySet;
 use crate::lmdb_order::Hash32;
-use crate::schema::{self, TableShape};
+use crate::schema;
 
 use super::{
     post_image, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, PassedThroughFacts, ProbeCell,
@@ -207,14 +207,6 @@ impl Fixtures for UndoLog {
                 }]),
             ),
             (
-                "multi_inserted",
-                UndoLog(vec![UndoEntry::MultiInserted {
-                    table: TableOrdinal::from_index(12),
-                    key: Box::new(0u64.to_le_bytes()),
-                    value: Box::new([0xaa, 0xbb, 0xcc]),
-                }]),
-            ),
-            (
                 "replaced_with_prior",
                 UndoLog(vec![UndoEntry::Replaced {
                     table: TableOrdinal::from_index(19),
@@ -246,10 +238,12 @@ impl Fixtures for UndoLog {
                         prior: Some(Box::new([1])),
                         post: post_image(&[2]),
                     },
-                    UndoEntry::MultiInserted {
+                    UndoEntry::Inserted {
                         table: TableOrdinal::from_index(12),
-                        key: Box::new(5u64.to_le_bytes()),
-                        value: Box::new([0x01; 9]),
+                        key: [5u64.to_le_bytes(), 0u64.to_le_bytes()]
+                            .concat()
+                            .into_boxed_slice(),
+                        post: post_image(&[0x01; 9]),
                     },
                 ]),
             ),
@@ -461,7 +455,6 @@ impl Fixtures for OutKey {
             (
                 "zero",
                 OutKey {
-                    amount_index: AmountIndex::from_raw(0),
                     output_id: OutputStorageId::from_raw(0),
                     pubkey: OneTimePubkey::from_bytes([0; 32]),
                     unlock_time: crate::codec::stored_timelock(0),
@@ -469,13 +462,12 @@ impl Fixtures for OutKey {
                     commitment: CommitmentBytes::from_bytes([0; 32]),
                 },
             ),
-            // The amount_index prefix in byte-order-witness form: a
-            // big-endian regression reads `0102030405060708` at offset 0.
+            // `output_id` in byte-order-witness form: a big-endian
+            // regression reads `0102030405060708` at offset 0.
             (
                 "distinct_fields",
                 OutKey {
-                    amount_index: AmountIndex::from_raw(0x0102_0304_0506_0708),
-                    output_id: OutputStorageId::from_raw(1),
+                    output_id: OutputStorageId::from_raw(0x0102_0304_0506_0708),
                     pubkey: OneTimePubkey::from_bytes([0x11; 32]),
                     unlock_time: crate::codec::stored_timelock(2),
                     height: BlockHeight::from_raw(3),
@@ -565,19 +557,12 @@ fn render_table_catalogue() -> String {
     assert!(!catalogue.is_empty(), "schema::catalogue() is empty");
     let mut rows = BTreeMap::new();
     for (ordinal, spec) in catalogue.iter().enumerate() {
-        let shape = match spec.shape {
-            TableShape::Map => "map",
-            TableShape::Multimap => "multimap",
-        };
         // The ordinal is part of the layout (schema module docs): the pop
         // journal names tables by it, so a reorder must move this snapshot
         // and take the version bump with it, even though the rows are
-        // sorted by name for a stable diff.
-        let row = format!(
-            "#{ordinal} {shape}<{}, {}>",
-            spec.key.name(),
-            spec.value.name()
-        );
+        // sorted by name for a stable diff. `map` is the catalogue's one
+        // shape (rule 21); a second shape re-mints the word with its table.
+        let row = format!("#{ordinal} map<{}, {}>", spec.key.name(), spec.value.name());
         assert!(
             rows.insert(spec.name.as_str(), row).is_none(),
             "duplicate table name `{}` in schema::catalogue()",

@@ -251,9 +251,6 @@ Default. Lands before genesis if it should exist at launch.
 - **Store-backed / pruned-tree path assembly (CT-3 pre-flight F5, [`docs/completed/CT3_SYNC.md`](./completed/CT3_SYNC.md)**
   - Target: pre-genesis
 
-- **C++ path RPC computes a crypto contract (`hash_to_p3`) inline —**
-  - Target: pre-genesis
-
 - **C++ FCMP++ wallet send path is incomplete; 2026-06-21 debugging [`20-rust-vs-cpp-policy`](../.cursor/rules/20-rust-vs-cpp-policy.mdc)**
   - Target: pre-genesis
 
@@ -592,12 +589,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
 
 - **PQC Multisig : wire `shekyl_pqc_verify_with_group_id` into [`V3_1_MULTISIG_RUST_ENGINE.md`](design/V3_1_MULTISIG_RUST_ENGINE.md)**
-  - Target: pre-genesis
-
-- **Historical tree path assembly uses current LMDB state.**
-  - Target: pre-genesis
-
-- **Path assembly reads the output for a tree *position*, not for the leaf's output index** (`SOK-10`, found 2026-09-18 on PR #779 review; owner **the path-FFI lane**, PDM-Q-F9's). `PathStore::output_oc(pos)` is called with the tree position (`rust/shekyl-fcmp/src/rpc_path.rs:85`–`:89`) and the daemon callback hands it to `get_output_key(0, pos)` unresolved (`src/cryptonote_core/curve_tree_path.cpp:67`), though `get_leaf_output_index` exists (`blockchain_db.h:2670`) because leaf order is `(maturity, gindex)`, not gindex (`CT2_DRAIN_ORDER.md:85`). A reordered chunk yields wrong `chunk_outputs`, wrong rebuilt siblings, a proof that fails verification — fail-closed, no soundness loss, live liveness defect; inherited from the pre-extraction C++ (`f2df035e7`). Fix in Rust (rule 20): the assembler resolves position → `GlobalOutputIndex` before `output_oc`, via `leaf_to_output` (S-CURVE's read on redb). Falsify by a test chain in which a normal-tx output drains before an earlier coinbase's leaf, asserting `chunk_outputs[j]` is the output whose leaf is at `j`; the redb-side type that makes the confusion unrepresentable is `ReadSnapshot::output(GlobalOutputIndex)` ([`DRS_E1_SOUT_KI.md`](design/DRS_E1_SOUT_KI.md) §3.4).
   - Target: pre-genesis
 
 - **Test-deviation register: every deviation from production configuration is a named row with a reason and a reopening criterion, and the set is gated** (program principle ruled 2026-09-19 on E6 slice 2; owner **the DRS program** — E2's comparator is where "what did this test prove" is judged). Four instances share the shape *the condition that would expose the defect cannot occur in the test*: W12 (`BaseTestDB` overrides 0 of 15 archival hooks, tests green), CEN-I12 / SOK-10 (the e2e's `[0]` on a coinbase-only mine, position ≡ index), the `curve_tree_roots` zero-root regime (permanent below ~160 blocks on FAKECHAIN, self-healing on a real chain). Unavoidable deviations exist (a 10 000-block settlement epoch, a 25 992-leaf freeze), so the form is a register — `docs/design/TEST_DEVIATION_REGISTER.md` + `scripts/ci/check_test_deviations.py`, the `RUST_ONLY_TABLES` / `held_by_cxx` shape — not a ban. First rows named in [`CHAIN_RULES_SLICE_2.md`](design/CHAIN_RULES_SLICE_2.md) §6 F12 and §4.5 (`drs_bench.py`: real RandomX at a non-production target — a partial with one real half; `curve_tree_header_root_check.cpp`: difficulty 1 as a locus; `--fixed-difficulty=1` at every harness; `SEEDHASH_EPOCH_*`; `SHEKYL_SETTLEMENT_EPOCH_BLOCKS`). Falsifier that **fires** rather than waits: a program-level register proposed from inside a slice is the kind of item that stays proposed, so the trigger is an event that will happen — **the first DRS-E2 pre-flight (`docs/design/DRS_E2_*.md`) opened after 2026-09-19 must either carry a test-deviation section for its comparator harness (the register's first live consumer) or reject this row with reasoning; an E2 pre-flight that does neither is the failure, and its reviewer refuses it on this row.** Closure: `ls docs/design/TEST_DEVIATION_REGISTER.md && python3 scripts/ci/check_test_deviations.py --selftest` succeeding.
