@@ -372,7 +372,7 @@ a status change in their cell is not.
 
 ---
 
-## 2. Findings opened this sweep (not ruled)
+## 2. Findings opened this sweep — all CLOSED by `SOK-Q7` → A (2026-09-18)
 
 | # | Finding (at `8494f2a27`) | Disposition this round |
 | --- | --- | --- |
@@ -392,7 +392,7 @@ construct FCMP++ proofs") — the live wallet does not.
 
 ---
 
-## 3. Round 1 — design (proposed, not ruled)
+## 3. Round 1 — design — RULED 2026-09-18 (`SOK-Q7` A; §3.2–§3.3 moot, kept as record)
 
 Short by construction: the correct resolution already exists in the tree
 (`assemble.rs:98–:116`), so there is no open design space on *how* to
