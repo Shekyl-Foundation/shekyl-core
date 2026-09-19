@@ -76,6 +76,34 @@ row land in the same commit. The registry may be empty — today it is — and
 `--selftest` exercises the limb on synthetic metadata so the gate asserts its
 own subject with zero live rows (rule 47) rather than passing vacuously.
 
+# The third limb — every feature a governed crate declares is categorized
+
+Both registries above are keyed by row, so a feature that is *never
+registered* is outside them: declared in the store's manifest, enabled by two
+crates, no row — the sole-enabler check never runs on it, because it is keyed
+by the row. That is exactly the shape the consumer-owned class exists to
+prevent, arriving through the door without the check on it. So for every
+crate in `GOVERNED_OWNERS`, **every feature it declares must be in exactly one
+of `TEST_ONLY`, `CONSUMER_OWNED` or `PERMANENT`; an uncategorized feature is
+red** (`default` is exempt — it is the feature table's entry point, and what
+it enables is checked by the other limbs). The pattern the tree already uses
+three times — the bijection gate's `{table: reason}`, `CXX_HOLDER_RE`,
+`RUST_ONLY_TABLES`: the registry is exhaustive, not opt-in. Landed while
+`shekyl-chain-store` declares no features at all, which is the one moment it
+could be added for free.
+
+# A limit this file does not close, named
+
+The gate reads the manifest. It can see that a feature is declared, owned and
+enabled; it cannot see whether anything is still *guarded* by it. Registry
+row and feature intact, every `#[cfg(feature = "comparator-parity")]` item
+deleted, and the row keeps asserting a construction that no longer exists —
+and the next person to add an item under that cfg inherits an expiry they
+did not choose. Detecting that needs a source scan, a different instrument
+from `cargo metadata`, so it is not a fifth limb here. Whoever deletes the
+last cfg'd item deletes the feature and the row with it; this sentence is
+what tells them so.
+
 Reads `cargo metadata`, not the manifest text: a `Cargo.toml` grep cannot see
 inherited workspace dependencies, renamed edges (`package = "..."`), or
 platform-specific tables, and would report clean on all three.
@@ -106,6 +134,18 @@ TEST_ONLY: dict[tuple[str, str], str] = {
 # crate>", "TxHeader.unlock_time for the LMDB txindex parity diff")`, which
 # lands only if E2 asks for the column (DRS_E1_STX.md STX-9 / STX-Q3).
 CONSUMER_OWNED: dict[tuple[str, str], tuple[str, str]] = {}
+
+# (owning crate, feature) → why it is an ordinary, permanent feature. The third
+# category, so that a governed crate's feature table can be exhaustively
+# categorized without forcing every feature into the two special classes.
+PERMANENT: dict[tuple[str, str], str] = {}
+
+# Crates whose feature table must be exhaustively categorized (third limb).
+# Adding a crate here is the declaration that no feature of it may exist
+# uncategorized; both listed crates are clean at registration
+# (`shekyl-chain-store` declares none; `shekyl-tor-control-client` declares
+# only its TEST_ONLY row).
+GOVERNED_OWNERS: frozenset[str] = frozenset({"shekyl-chain-store", "shekyl-tor-control-client"})
 
 RUST_DIR = Path(__file__).resolve().parents[2] / "rust"
 
@@ -187,6 +227,44 @@ def check_consumer_owned(
     return failures
 
 
+def check_exhaustive(
+    meta: dict,
+    governed: frozenset[str],
+    *registries: dict,
+) -> list[str]:
+    """Every feature a governed crate declares is in exactly one registry."""
+    packages = {p["name"]: p for p in meta["packages"]}
+    failures: list[str] = []
+    categorized: dict[tuple[str, str], int] = {}
+    for reg in registries:
+        for key in reg:
+            categorized[key] = categorized.get(key, 0) + 1
+    for key, n in sorted(categorized.items()):
+        if n > 1:
+            failures.append(
+                f"{key[0]}/{key[1]}: registered in {n} categories — a feature is "
+                f"test-only, consumer-owned or permanent, never two of them"
+            )
+    for owner in sorted(governed):
+        pkg = packages.get(owner)
+        if pkg is None:
+            failures.append(
+                f"{owner}: named in GOVERNED_OWNERS but is not a workspace member"
+            )
+            continue
+        for feature in sorted(pkg.get("features", {})):
+            if feature == "default":
+                continue
+            if (owner, feature) not in categorized:
+                failures.append(
+                    f"{owner}: declares feature `{feature}` that no registry names — "
+                    f"add it to TEST_ONLY, CONSUMER_OWNED or PERMANENT in the commit "
+                    f"that declares it; an uncategorized feature is the door the "
+                    f"consumer-owned checks do not stand at"
+                )
+    return failures
+
+
 def _synthetic(
     owner_features: dict[str, list[str]],
     edges: dict[str, list[tuple[str, list[str]]]],
@@ -248,7 +326,45 @@ def selftest() -> int:
             ["does not declare"],
         ),
     ]
+    exhaustive_cases = [
+        (
+            "governed owner, every feature categorized: green",
+            _synthetic({"cfeat": [], "default": []}, {"comparator": [("owner", ["cfeat"])]}),
+            frozenset({"owner"}),
+            [],
+        ),
+        (
+            "unregistered feature with two enablers — the uncovered door",
+            _synthetic(
+                {"cfeat": [], "stray": []},
+                {"comparator": [("owner", ["cfeat"])], "wallet": [("owner", ["stray"])]},
+            ),
+            frozenset({"owner"}),
+            ["no registry names"],
+        ),
+        (
+            "governed owner missing from the workspace",
+            _synthetic({"cfeat": []}, {"comparator": [("owner", ["cfeat"])]}),
+            frozenset({"owner", "vanished"}),
+            ["not a workspace member"],
+        ),
+    ]
     bad: list[str] = []
+    for label, meta, governed, want in exhaustive_cases:
+        got = check_exhaustive(meta, governed, {}, reg, {})
+        if not want and got:
+            bad.append(f"{label}: expected green, got {got!r}")
+        for needle in want:
+            if not any(needle in f for f in got):
+                bad.append(f"{label}: expected a failure containing {needle!r}, got {got!r}")
+    double = check_exhaustive(
+        _synthetic({"cfeat": []}, {"comparator": [("owner", ["cfeat"])]}),
+        frozenset({"owner"}),
+        {("owner", "cfeat"): "x"},
+        reg,
+    )
+    if not any("registered in 2 categories" in f for f in double):
+        bad.append(f"double registration: expected a failure, got {double!r}")
     for label, meta, want in cases:
         got = check_consumer_owned(meta, reg)
         if not want and got:
@@ -261,7 +377,10 @@ def selftest() -> int:
         for b in bad:
             print(f"  - {b}", file=sys.stderr)
         return 1
-    print(f"consumer-owned feature selftest: {len(cases)} cases held")
+    print(
+        f"feature-gate selftest: {len(cases)} consumer-owned cases + "
+        f"{len(exhaustive_cases) + 1} exhaustiveness cases held"
+    )
     return 0
 
 
@@ -273,6 +392,7 @@ def main() -> int:
     packages = {p["name"]: p for p in meta["packages"]}
 
     failures: list[str] = check_consumer_owned(meta, CONSUMER_OWNED)
+    failures += check_exhaustive(meta, GOVERNED_OWNERS, TEST_ONLY, CONSUMER_OWNED, PERMANENT)
 
     for (owner, feature), why in sorted(TEST_ONLY.items()):
         # Subject assertion: the feature must exist where it is claimed to.
@@ -342,7 +462,8 @@ def main() -> int:
     owned = ", ".join(f"{o}/{f}→{e}" for (o, f), (e, _) in sorted(CONSUMER_OWNED.items()))
     print(
         f"Test-only feature gate OK: {checked} (dev-dependency edges only); "
-        f"consumer-owned: {owned or 'none registered (selftest is the subject)'}"
+        f"consumer-owned: {owned or 'none registered (selftest is the subject)'}; "
+        f"governed feature tables exhaustively categorized: {', '.join(sorted(GOVERNED_OWNERS))}"
     )
     return 0
 
