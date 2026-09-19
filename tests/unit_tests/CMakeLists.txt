@@ -126,7 +126,6 @@ set(unit_tests_sources
   archival_shard_coverage_rpc.cpp
   ct_balance_differential.cpp
   curve_tree_header_root_check.cpp
-  curve_tree_path_fail_closed.cpp
   tx_extra_pqc_field_shape.cpp
   deferred_insertion.cpp
   economics_b5_fee_coinbase.cpp

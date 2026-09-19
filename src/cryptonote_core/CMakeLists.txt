@@ -33,7 +33,6 @@ set(cryptonote_core_sources
   tx_pool.cpp
   tx_pqc_verify.cpp
   cryptonote_tx_utils.cpp
-  curve_tree_path.cpp
   tx_verification_utils.cpp
 )
 

@@ -47,7 +47,6 @@ using namespace epee;
 #include "cryptonote_basic/cryptonote_basic_impl.h"
 #include "cryptonote_config.h"
 #include "shekyl/shekyl_ffi.h"
-#include "cryptonote_core/curve_tree_path.h"
 #include "misc_language.h"
 #include "net/local_ip.h"
 #include "net/parse.h"
@@ -1456,107 +1455,6 @@ namespace cryptonote
     RPC_TRACKER(flush_cache);
     if (req.bad_blocks)
       m_core.flush_invalid_blocks();
-    res.status = CORE_RPC_STATUS_OK;
-    return true;
-  }
-  //------------------------------------------------------------------------------------------------------------------------------
-  bool core_rpc_server::on_get_curve_tree_path(const COMMAND_RPC_GET_CURVE_TREE_PATH::request& req, COMMAND_RPC_GET_CURVE_TREE_PATH::response& res, epee::json_rpc::error& error_resp, const connection_context *ctx)
-  {
-    RPC_TRACKER(get_curve_tree_path);
-
-    static constexpr size_t MAX_OUTPUTS_PER_RPC_REQUEST = 64;
-
-    if (req.output_indices.empty())
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "output_indices must not be empty";
-      return false;
-    }
-
-    if (req.output_indices.size() > MAX_OUTPUTS_PER_RPC_REQUEST)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-      error_resp.message = "Too many output_indices (max " + std::to_string(MAX_OUTPUTS_PER_RPC_REQUEST) + ")";
-      return false;
-    }
-
-    const auto &db = m_core.get_blockchain_storage().get_db();
-    const uint8_t depth = db.get_curve_tree_depth();
-    const uint64_t tip_leaf_count = db.get_curve_tree_leaf_count();
-
-    if (tip_leaf_count == 0)
-    {
-      error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-      error_resp.message = "Curve tree is empty";
-      return false;
-    }
-
-    const uint64_t height = m_core.get_current_blockchain_height();
-    const uint64_t top_height = height - 1;
-    const uint64_t min_anchor_age = FCMP_REFERENCE_BLOCK_MIN_AGE + 1;
-    const uint64_t reference_height = top_height > min_anchor_age ? (top_height - min_anchor_age) : 0;
-    const crypto::hash reference_hash = m_core.get_block_id_by_height(reference_height);
-    res.reference_block = epee::string_tools::pod_to_hex(reference_hash);
-    cryptonote::block ref_blk;
-    m_core.get_blockchain_storage().get_block_by_hash(reference_hash, ref_blk);
-    res.curve_tree_root = epee::string_tools::pod_to_hex(ref_blk.curve_tree_root);
-    res.reference_height = reference_height;
-    res.tree_depth = depth;
-
-    // Compute the leaf count at reference_height (not tip) by subtracting
-    // leaves drained into the tree after reference_height.
-    uint64_t leaves_after_ref = 0;
-    for (uint64_t h = reference_height + 1; h <= top_height; ++h)
-      leaves_after_ref += db.get_pending_tree_drain_entries(shekyl::db::BlockHeight{h}).size();
-    const uint64_t ref_leaf_count = tip_leaf_count - leaves_after_ref;
-
-    res.leaf_count = ref_leaf_count;
-    res.paths.clear();
-
-    for (const uint64_t output_idx : req.output_indices)
-    {
-      COMMAND_RPC_GET_CURVE_TREE_PATH::path_entry entry{};
-      entry.output_index = output_idx;
-      entry.tree_depth = depth;
-
-      if (output_idx >= tip_leaf_count)
-      {
-        // Beyond the entire tree: the wallet only knows outputs up to the tip, so this
-        // is a malformed request, not a timing race. Hard-fail (WRONG_PARAM) so a client
-        // bug surfaces instead of being silently omitted like the not-yet-drained case.
-        error_resp.code = CORE_RPC_ERROR_CODE_WRONG_PARAM;
-        error_resp.message = "output_index " + std::to_string(output_idx) +
-                             " >= tip_leaf_count " + std::to_string(tip_leaf_count);
-        return false;
-      }
-      if (output_idx >= ref_leaf_count)
-      {
-        // In the tree but not yet drained into the *reference* tree (still inside the
-        // maturity + reorg window): skip this index rather than failing the whole batch.
-        // A wallet legitimately requests paths for all its unspent outputs and matches
-        // the returned paths by output_index, waiting for the rest. The omission is
-        // unambiguous: an out-of-tree index hard-fails above, and a genuine fault (e.g.
-        // the leaf read below) still `return false`s the whole call, so a missing index
-        // in a *successful* response means only "not yet in the reference tree".
-        continue;
-      }
-
-      curve_tree_path_bytes bytes;
-      std::string err;
-      if (!assemble_curve_tree_path(db, output_idx, ref_leaf_count, tip_leaf_count, depth, bytes, err))
-      {
-        error_resp.code = CORE_RPC_ERROR_CODE_INTERNAL_ERROR;
-        error_resp.message = std::move(err);
-        return false;
-      }
-
-      entry.chunk_outputs_blob = epee::string_tools::buff_to_hex_nodelimer(
-        std::string(reinterpret_cast<const char*>(bytes.chunk_outputs.data()), bytes.chunk_outputs.size()));
-      entry.path_blob = epee::string_tools::buff_to_hex_nodelimer(
-        std::string(reinterpret_cast<const char*>(bytes.path.data()), bytes.path.size()));
-      res.paths.push_back(std::move(entry));
-    }
-
     res.status = CORE_RPC_STATUS_OK;
     return true;
   }
