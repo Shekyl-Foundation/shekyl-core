@@ -677,6 +677,16 @@ mod lifecycle_tests {
             virtual_port: SERVING_VIRTUAL_PORT,
             max_streams: SERVING_MAX_STREAMS,
             key: std::sync::Arc::new(shekyl_p_host::NoResidentKey),
+            // Stamped, so these lifecycle cases exercise a persona whose
+            // gate can answer. What the gate does with an unstamped cache is
+            // `signer`'s and `daemon_tip`'s to assert, not this suite's.
+            tip: {
+                let tip = std::sync::Arc::new(shekyl_p_host::DaemonTipCache::new(
+                    Duration::from_secs(3_600),
+                ));
+                tip.stamp_synced(9_000);
+                tip
+            },
         }
     }
 

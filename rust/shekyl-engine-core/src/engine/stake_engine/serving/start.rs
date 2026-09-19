@@ -5,8 +5,9 @@
 
 //! `Engine::start_serving_if_staker` — the construction site.
 
-use shekyl_p_host::{NoResidentKey, PersonaServing};
+use shekyl_p_host::{DaemonTipCache, NoResidentKey, PersonaServing};
 
+use super::daemon_tip;
 use super::task::{
     spawn_serving_task, ServingConfig, CLAIM_SOURCE_TIMEOUT, SERVING_MAX_STREAMS,
     SERVING_VIRTUAL_PORT,
@@ -200,6 +201,26 @@ where
                 .await
                 .map_err(|e| ServingStartError::DaemonNotLoopback(Box::new(e)))?;
 
+        // ② the `SF-D5` gate's height (`WSS-24`). The same loopback transport,
+        // cloned rather than re-derived: one construction, one loopback proof,
+        // and no second place that could be pointed somewhere else.
+        //
+        // Both timings come off the block target, which is already
+        // single-sourced here for the staleness bound below.
+        let block_target = shekyl_economics::EconomicParams::default().daa_target_seconds;
+        let tip = std::sync::Arc::new(DaemonTipCache::new(daemon_tip::tip_max_age(block_target)));
+        // One read before the host can bind, so a persona that is otherwise
+        // ready does not spend its first interval answering 404 to challenges
+        // it could have served. A failure here is not fatal: the refresher
+        // retries on its cadence, and an unstamped cache refuses, which is the
+        // safe direction.
+        let _first = daemon_tip::refresh_tip_once(&claim_rpc, &tip).await;
+        tokio::spawn(daemon_tip::run_daemon_tip_refresher(
+            claim_rpc.clone(),
+            std::sync::Arc::downgrade(&tip),
+            daemon_tip::tip_refresh_interval(block_target),
+        ));
+
         let pinner = crate::engine::stake_engine::serve_set_source::EngineServeSetPinner::new(
             curve_tree,
             claim_rpc,
@@ -221,6 +242,10 @@ where
                 // is the identical 404, counted under `sign_failures`, and
                 // no unsigned shard is ever served.
                 key: std::sync::Arc::new(NoResidentKey),
+                // The anchor gate reads the daemon's tip, not the principal's
+                // scan (`WSS-24`). The refresher spawned above keeps it
+                // stamped and exits with the last reader.
+                tip,
             },
             pinner,
             std::sync::Arc::new(shekyl_operator_alarm::OperatorAlarms::new()),
@@ -230,7 +255,7 @@ where
                 // watchdog horizon comes from, rather than taken as an
                 // embedder argument: the block target is a consensus
                 // parameter, not a wallet setting.
-                shekyl_economics::EconomicParams::default().daa_target_seconds,
+                block_target,
             ),
             // The wallet's own directory — the volume the curve-tree
             // store grows on. Tor's data dir is deliberately not used:
