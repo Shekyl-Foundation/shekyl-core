@@ -195,7 +195,7 @@ GOVERNED_OWNERS: frozenset[str] = frozenset({"shekyl-chain-store", "shekyl-tor-c
 # test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
 # and are governed first.
 MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, str] = {
-    "shekyl-crypto-pq": "test-utils — FINDING owned by FOLLOWUPS F-7, not the governance row: enabled on a NORMAL edge by shekyl-ffi; its exports are unconditional extern \"C\" in the production header, so categorizing changes nothing — the structural gate (separate test archive) is the fix. Leaves this list when F-7 lands.",
+    "shekyl-crypto-pq": "test-utils — FINDING owned by FOLLOWUPS F-7, not the governance row: enabled on a NORMAL edge by shekyl-ffi (present-in-archive by unification), and the FFI exports that call it are unconditional extern \"C\" in the production header (reachable, and NOT removed by an archive split) — two remedies, F-7 chooses; categorizing changes nothing. Leaves this list when F-7 lands.",
     "shekyl-curve-generators": "std (build edge, shekyl-fcmp-proofs)",
     "shekyl-curve-tree": "test-tamper (dev edge, shekyl-p-host)",
     "shekyl-engine-core": "test-helpers (dev edge, shekyl-wallet-rpc)",
