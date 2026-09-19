@@ -91,7 +91,7 @@ fn emission_tx(inputs: Vec<Input>, outputs: Vec<Output>) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee: 0,
-            reference_block: BlockHash::from_bytes([0u8; 32]),
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![[0u8; 9]; n_out],
                 enc_labels: vec![[0u8; 9]; n_out],

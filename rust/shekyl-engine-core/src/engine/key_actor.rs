@@ -807,7 +807,7 @@ mod tests {
             outputs: Vec::new(),
             fcmp_plus_plus_context: FcmpPlusPlusContext {
                 tree: TreeContext {
-                    reference_block: shekyl_types::BlockHash::from_bytes([0; 32]),
+                    reference_block: shekyl_types::BlockHash::NULL,
                     tree_root: shekyl_types::CurveTreeRoot::from_bytes([0; 32]),
                     tree_depth: 1,
                 },

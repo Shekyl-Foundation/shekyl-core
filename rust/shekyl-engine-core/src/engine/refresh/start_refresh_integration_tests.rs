@@ -312,7 +312,7 @@ fn linear_chain(n: u64) -> Vec<shekyl_scanner::ScannableBlock> {
     use crate::engine::test_support::make_synthetic_block;
     let mut chain =
         Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
-    let mut parent = BlockHash::from_bytes([0u8; 32]);
+    let mut parent = BlockHash::NULL;
     for h in 0..n {
         let block = make_synthetic_block(h, parent);
         parent = block.block.hash();

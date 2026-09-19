@@ -448,7 +448,7 @@ fn ct2_ingested() -> (CurveTreeClient, Vec<Ct2Block>, ReferenceBlock) {
     let reference = ReferenceBlock {
         height: BlockHeight::from_raw(tip.height),
         curve_tree_root: CurveTreeRoot::from_bytes(tip.root),
-        block_hash: BlockHash::from_bytes([0u8; 32]),
+        block_hash: BlockHash::NULL,
     };
     (client, blocks, reference)
 }

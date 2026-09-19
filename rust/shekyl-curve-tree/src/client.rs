@@ -1760,7 +1760,7 @@ mod tests {
             client.verify_root(&ReferenceBlock {
                 height: BlockHeight::from_raw(5),
                 curve_tree_root: CurveTreeRoot::from_bytes([0u8; 32]),
-                block_hash: BlockHash::from_bytes([0u8; 32]),
+                block_hash: BlockHash::NULL,
             }),
             Err(ClientError::Poisoned)
         ));
@@ -1922,14 +1922,14 @@ mod tests {
         let good = ReferenceBlock {
             height: BlockHeight::from_raw(61),
             curve_tree_root: client.root_at(BlockHeight::from_raw(61)).unwrap(),
-            block_hash: BlockHash::from_bytes([0u8; 32]),
+            block_hash: BlockHash::NULL,
         };
         assert!(client.verify_root(&good).is_ok());
 
         let bad = ReferenceBlock {
             height: BlockHeight::from_raw(61),
             curve_tree_root: CurveTreeRoot::from_bytes([0xFFu8; 32]),
-            block_hash: BlockHash::from_bytes([0u8; 32]),
+            block_hash: BlockHash::NULL,
         };
         match client.verify_root(&bad) {
             Err(ClientError::RootMismatch {

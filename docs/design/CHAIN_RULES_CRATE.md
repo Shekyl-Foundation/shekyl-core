@@ -97,7 +97,11 @@ crate's own types — the handoff names them as a confusion hazard; they are
   `shekyl-crypto-hash`) — the identity derivation CEN-B6 defines, computed once
   by the validator (ruling Q4/L4). *(The verdict was recorded 2026-09-15
   against raw `[u8; 32]` returns and fields; RTN-7 typed them 2026-09-18 —
-  the shapes here are the current ones.)*
+  the shapes here are the current ones. RTN-7 also wrote in this crate —
+  `A2::GENESIS_PREVIOUS` aliases `BlockHash::NULL` — a sibling-lane write
+  under rule 94 §6; the E6 lane re-verified at `dev` = `51d7f2416` the same
+  day: coverage record unchanged, crate tests green, stamp moved in
+  [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md).)*
 - `BlockHeader { major_version: u8, minor_version: u8, timestamp: u64, previous: BlockHash, nonce: u32, curve_tree_root: CurveTreeRoot, attestation_root: AttestationRoot }`.
 - `Transaction::hash() -> TxHash`, `prefix_hash() -> PrefixHash`, `pqc_signing_payload_hashes() -> Vec<[u8; 32]>` (per-input signing messages, not identities — allowlisted in `check_wire_raw_hash_surface.py`).
 - `Input` is an `enum` — L5's whitelist dissolves into match exhaustiveness.
