@@ -16,7 +16,7 @@ use shekyl_types::BlockHash;
 
 fn check_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed(candidate.clone());
-    chain.with_view(|view| infallible(A2::check(&BlockContext::new(&formed), &view)))
+    chain.with_view(|view| infallible(A2::check(&BlockContext::new(&formed, None), &view)))
 }
 
 #[test]
@@ -63,7 +63,7 @@ fn cen_a2_propagates_a_fault_and_does_not_judge() {
     let formed = formed(candidate_on(&chain, Vec::new()));
     let view = FaultingView::default();
     assert_eq!(
-        A2::check(&BlockContext::new(&formed), &view),
+        A2::check(&BlockContext::new(&formed, None), &view),
         Err(crate::harness::Faulted)
     );
 }

@@ -48,11 +48,12 @@ use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, FormAttempt, Stale};
 use crate::rule_set::RuleSet;
 use crate::rules::header::{B1, B2, B5, B7};
+use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
 use crate::verdict::{ChainValid, InvalidBlock, TxSlot, Verdict};
-use crate::view::ChainView;
+use crate::view::{ChainView, Tip};
 
 /// Run the listed stateless rules in order; the first refusal is the verdict.
 ///
@@ -261,11 +262,17 @@ pub fn validate<'id, V: ChainView<'id>>(
         }));
     }
 
-    // View-bound block-level predicates (4.A–4.G), in census order.
-    // Definition rows (B6) record at `ValidatedBlock::derive`, not here.
-    let cx = BlockContext::new(&formed);
     let mut coverage = *formed.coverage();
-    judge_block!(cx, view, coverage; A2, B5);
+
+    // Definitions the predicates read, derived once and recorded where they
+    // are derived: the connecting height (one tip read), the MTP window
+    // (C3). B6 records at `ValidatedBlock::derive`.
+    let connecting = Tip::connecting_height(view.tip().map_err(Fault::View)?.as_ref());
+    let mtp_window = C3::window(view, connecting, &mut coverage).map_err(Fault::View)?;
+
+    // View-bound block-level predicates (4.A–4.G), in census order.
+    let cx = BlockContext::new(&formed, mtp_window);
+    judge_block!(cx, view, coverage; A2, B5, C1, C2);
 
     let candidate = cx.candidate;
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);

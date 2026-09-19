@@ -266,10 +266,11 @@ census_rows! {
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
         B7 implemented(crate::rules::header::B7),
-        // 4.C Timestamps
-        C1 pending,
-        C2 pending,
-        C3 pending,
+        // 4.C Timestamps (slice 2): C1/C2 predicates, C3 the window definition
+        // recorded at `C3::window`.
+        C1 implemented(crate::rules::timestamps::C1),
+        C2 implemented(crate::rules::timestamps::C2),
+        C3 implemented(crate::rules::timestamps::C3),
         // 4.D PoW and difficulty
         D1 pending,
         D1b pending,

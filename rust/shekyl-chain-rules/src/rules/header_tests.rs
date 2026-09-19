@@ -72,7 +72,7 @@ fn check_alone<R: FormRule>(candidate: &Candidate, rule_set: &RuleSet) -> Verdic
 /// Run one view-bound rule on its own against `chain`.
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_under(candidate.clone(), &RuleSet::GENESIS);
-    chain.with_view(|view| infallible(R::check(&BlockContext::new(&formed), &view)))
+    chain.with_view(|view| infallible(R::check(&BlockContext::new(&formed, None), &view)))
 }
 
 // --- CEN-B1 ---------------------------------------------------------------
@@ -234,7 +234,7 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
         }
     }
     let genesis = formed_under(candidate(Vec::new()), &RuleSet::GENESIS);
-    let verdict = infallible(B5::check(&BlockContext::new(&genesis), &NoRoots));
+    let verdict = infallible(B5::check(&BlockContext::new(&genesis, None), &NoRoots));
     assert_refused(verdict, CenRow::B5, Locus::Block);
 }
 

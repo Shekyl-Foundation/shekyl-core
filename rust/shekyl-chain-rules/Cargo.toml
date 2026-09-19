@@ -36,5 +36,11 @@ shekyl-address = { path = "../shekyl-address" }
 # alone; the G1 belt's closure grows by exactly this crate.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
 
+[dev-dependencies]
+# The shared C2-R3 boundary vectors (`docs/test_vectors/MTP_BOUNDARY_V1.json`)
+# are driven through the 4.C rules as well as through `shekyl-difficulty`.
+# Already pinned in the workspace lockfile; test-only.
+serde_json = "1"
+
 [lints]
 workspace = true

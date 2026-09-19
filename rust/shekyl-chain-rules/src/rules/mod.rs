@@ -58,12 +58,14 @@
 //! (`view.rs`, "Three answers, three positions").
 
 pub(crate) mod header;
+pub(crate) mod timestamps;
 pub(crate) mod topology;
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
+use crate::rules::timestamps::MtpWindow;
 use crate::verdict::Verdict;
 use crate::view::ChainView;
 
@@ -139,21 +141,30 @@ pub(crate) fn run_form<R: FormRule>(
 }
 
 /// What a **view-bound** block-level rule may read besides the view. Built
-/// from the [`StructurallyValid`] the stateless stage produced; fields grow
-/// with the rows that read them (the rule set with 4.D, what `form`
-/// established with C1/D3), never ahead of them.
+/// from the [`StructurallyValid`] the stateless stage produced and the
+/// definitions `validate` derives before the predicates run; fields grow
+/// with the rows that read them (the rule set with 4.D), never ahead of
+/// them.
 ///
 /// The view is passed beside it, not inside it, so `V` and its `Fault` stay
 /// on the method and the context is one type for every view.
 pub(crate) struct BlockContext<'a> {
     /// The untrusted candidate, exactly as received.
     pub(crate) candidate: &'a Candidate,
+    /// What `form` established — the clock reading (C1), the seed claim.
+    pub(crate) formed: &'a StructurallyValid,
+    /// The median-time-past window at the connecting height (C3's
+    /// definition); `None` at genesis. Read by C1 (the genesis exemption)
+    /// and C2.
+    pub(crate) mtp_window: Option<MtpWindow>,
 }
 
 impl<'a> BlockContext<'a> {
-    pub(crate) const fn new(formed: &'a StructurallyValid) -> Self {
+    pub(crate) const fn new(formed: &'a StructurallyValid, mtp_window: Option<MtpWindow>) -> Self {
         Self {
             candidate: formed.candidate(),
+            formed,
+            mtp_window,
         }
     }
 }

@@ -20,8 +20,9 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
             .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
         // Slice 1's block rows — B1, B2, B7 from the stateless stage, A2,
-        // B5 from the view-bound one, B6 from the derivation — and nothing
-        // else (the per-tx entry points are still empty).
+        // B5 from the view-bound one, B6 from the derivation — and slice 2's
+        // 4.C rows (C1, C2 predicates; C3 definition), and nothing else (the
+        // per-tx entry points are still empty).
         assert_eq!(
             valid.coverage().iter().collect::<Vec<_>>(),
             [
@@ -30,7 +31,10 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::B2,
                 CenRow::B5,
                 CenRow::B6,
-                CenRow::B7
+                CenRow::B7,
+                CenRow::C1,
+                CenRow::C2,
+                CenRow::C3,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
