@@ -24,11 +24,14 @@ the 2D2 plan §2/§12, the WI-1 "made the chain live" comment — PR #333 and th
 Round-0 exit.)
 
 **Verification stamp.** Statuses below were verified against landed code.
-The unified stamp is `dev` = `8494f2a27` as of 2026-09-18 (§5) — moved by
+The unified stamp is `dev` = `af5443d03` as of 2026-09-18 (§5) — moved by
 the S-OUT-KI increment (DRS-E1 increment 5), whose rows (`SOK-`, the
 `DRS-*` lead cell, the `DRS_E1_SOUT_KI.md` document row) flip to landed on
 the code it carries and were verified on the branch tree containing that
-dev commit: `cargo test -p shekyl-chain-store` 251 + 10 doctests green
+dev commit (#781, the RTN-7 completion sweep, landed code — 24 files —
+between the increment's first stamp at `8494f2a27` and this one, so the
+checks below were re-run at the re-base): `cargo test -p shekyl-chain-store`
+254 + 10 doctests green
 (the `AtIndex` `compile_fail` pair among them); `check_chain_rules_coverage.py
 --describe` consensus implemented 6 / validator-enforced 151 (held-by-cxx
 2, enforced 153, ratified 126 / 153), policy 0 / 9 — unchanged, this
@@ -37,7 +40,8 @@ increment lands no rule; `schemas/tables.snap` 51 tables with
 `SCHEMA_VERSION = 6`; `check_redb_schema_key_types.py` 51 definitions / 29
 constraints (floor 29); `ReadSnapshot::{has_key_image, key_images, output,
 output_origin}` at `rust/shekyl-chain-store/src/store/read.rs`, `AtIndex`
-at `store/at_index.rs`, `impl Restorable for (u64, u64)` at
+at `store/at_index.rs`, the output read body at `store/output_reads.rs`,
+`OutputSlot` at `ids.rs`, `impl Restorable for (u64, u64)` at
 `store/undo.rs`. *Superseded stamp, retained:* `51d7f2416` (2026-09-18) — moved by
 the S-OUT-KI pre-flight (PR #779) after #777 (RTN-7, `474dd72f5`) and #780
 (the segment-partition tie, `51d7f2416`) landed **code** on top of the
