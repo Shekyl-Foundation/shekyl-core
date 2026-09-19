@@ -3,13 +3,18 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The block on either side of `validate`: the untrusted [`Candidate`] going
-//! in, the typed [`ValidatedBlock`] coming out inside a `ChainValid`.
+//! The block at each stage of judgement: the untrusted [`Candidate`] going
+//! into `form`, the [`StructurallyValid`] it hands to `validate`, and the
+//! typed [`ValidatedBlock`] coming out inside a `ChainValid`.
 
-use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, TxHash};
+use core::fmt;
+
+use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, Timestamp, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use crate::coverage::RuleCoverage;
+use crate::fault::FormAttempt;
+use crate::rule_set::RuleSetId;
 use crate::rules::header::B6;
 
 /// A transaction's identities, derived once (CEN-B6) beside its body.
@@ -101,6 +106,139 @@ impl Candidate {
             block,
             transactions,
         }
+    }
+}
+
+/// A candidate that passed the **stateless stage** (`form`): every rule
+/// decidable without the chain, plus what those rules established and the
+/// view-bound stage will read or verify.
+///
+/// The token between the two stages (`CHAIN_RULES_SLICE_2.md` §4.2). `form`
+/// runs outside the write transaction, in parallel; `validate` takes this
+/// type — never a bare `Candidate` — so the view-bound stage cannot be
+/// reached without the stateless one, the same move that makes a
+/// `ChainValid` unmintable outside `connect`. What it carries besides the
+/// candidate:
+///
+/// * `rule_set` — the rules the caller **claimed** were in force. `validate`
+///   compares it to the rule set it is given and returns
+///   [`Stale::RuleSet`](crate::Stale::RuleSet) on a mismatch.
+/// * `seed` — the block id the caller **claimed** sits at the seed height
+///   (CEN-D3). `validate` verifies it against the committing view and
+///   returns [`Stale::Seed`](crate::Stale::Seed) on a mismatch.
+/// * `judged_at` — the wall clock at `form`. **This makes the verdict
+///   time-dependent**: a `StructurallyValid`, and the `ChainValid` minted
+///   from it, is no longer a pure function of `(candidate, view, rule_set)`.
+///   The FTL leg (CEN-C1) was judged against *this* instant. The window is
+///   small because the brand ties a `ChainValid` to a live batch, but
+///   anything that caches or defers one lets that leg go stale silently —
+///   which is why the instant is carried rather than forgotten: a consumer
+///   can see how old the judgement is.
+/// * `attempt` — which try at `form` this is, so a `Stale` fault can say
+///   whether another is allowed ([`Retry`](crate::Retry)).
+///
+/// Constructed only by `form`; the fields are private and there is no
+/// public constructor (G5):
+///
+/// ```compile_fail
+/// use shekyl_chain_rules::StructurallyValid;
+/// let forged = StructurallyValid {
+///     candidate: todo!(),
+///     rule_set: todo!(),
+///     coverage: todo!(),
+///     judged_at: todo!(),
+///     seed: todo!(),
+///     attempt: todo!(),
+/// };
+/// ```
+///
+/// Not `Clone`: a stage token has one consumer.
+#[must_use = "a StructurallyValid is the input to `validate`; dropping it discards the stateless stage's work"]
+pub struct StructurallyValid {
+    candidate: Candidate,
+    rule_set: RuleSetId,
+    coverage: RuleCoverage,
+    judged_at: Timestamp,
+    seed: BlockHash,
+    attempt: FormAttempt,
+}
+
+impl StructurallyValid {
+    /// Called by `form` once every stateless rule has passed, and nowhere
+    /// else.
+    pub(crate) const fn new(
+        candidate: Candidate,
+        rule_set: RuleSetId,
+        coverage: RuleCoverage,
+        judged_at: Timestamp,
+        seed: BlockHash,
+        attempt: FormAttempt,
+    ) -> Self {
+        Self {
+            candidate,
+            rule_set,
+            coverage,
+            judged_at,
+            seed,
+            attempt,
+        }
+    }
+
+    /// The candidate, still untrusted on every view-bound row.
+    #[must_use]
+    pub const fn candidate(&self) -> &Candidate {
+        &self.candidate
+    }
+
+    /// The rule set `form` judged under — a claim `validate` checks.
+    #[must_use]
+    pub const fn rule_set_id(&self) -> RuleSetId {
+        self.rule_set
+    }
+
+    /// The stateless rows that ran and passed.
+    #[must_use]
+    pub const fn coverage(&self) -> &RuleCoverage {
+        &self.coverage
+    }
+
+    /// The wall clock at `form` — the instant CEN-C1 was (or will be)
+    /// judged against. See the type's docs on time-dependence.
+    #[must_use]
+    pub const fn judged_at(&self) -> Timestamp {
+        self.judged_at
+    }
+
+    /// The seed the caller claimed for CEN-D3 — verified, not trusted, by
+    /// `validate`.
+    #[must_use]
+    pub const fn seed(&self) -> BlockHash {
+        self.seed
+    }
+
+    /// Which attempt at `form` produced this.
+    #[must_use]
+    pub const fn attempt(&self) -> FormAttempt {
+        self.attempt
+    }
+
+    /// Hand the candidate and the stateless coverage to the view-bound
+    /// stage, consuming the token.
+    pub(crate) fn into_parts(self) -> (Candidate, RuleCoverage) {
+        (self.candidate, self.coverage)
+    }
+}
+
+impl fmt::Debug for StructurallyValid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StructurallyValid")
+            .field("block", &self.candidate.block.hash())
+            .field("rule_set", &self.rule_set)
+            .field("coverage", &self.coverage)
+            .field("judged_at", &self.judged_at)
+            .field("seed", &self.seed)
+            .field("attempt", &self.attempt)
+            .finish()
     }
 }
 

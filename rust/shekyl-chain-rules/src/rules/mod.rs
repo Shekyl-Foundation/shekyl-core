@@ -20,22 +20,33 @@
 //! decided before the first rule so the migration is one call site rather
 //! than 153 (SCW-18).
 //!
-//! # One signature per rule class
+//! # One signature per rule class — and the class is view-dependence
 //!
-//! [`BlockRule::check`] is the block-level shape: the candidate and the rule
-//! set through a [`BlockContext`], and the view beside it. A rule that needs
-//! a chain fact (the tip, for A2 and B5) reads it from the view, so a new
-//! fact is a new `ChainView` method and no rule's signature moves. `validate`
-//! runs the landed **predicate** rows from a list and [`run`] records
-//! `R::ROW` itself: a rule cannot record another row's coverage, and a rule
-//! that was not run is not in coverage (G6, G9's runtime half). A
-//! **definition** row — one whose "check" is a derivation the verdict
-//! carries, today only CEN-B6 — is not in that list: it records its own
-//! `ROW` at the derivation site ([`header::B6::identity`]), so a gate that
-//! could never fail is never run as one (slice 1 Q5). Those are the two
-//! writers of coverage, and `RuleCoverage::insert` names both. The
-//! per-transaction classes (4.H `tx_form`, 4.I `tx_against`) get their own
-//! traits with their slices.
+//! Two block-level shapes, one per stage (`CHAIN_RULES_SLICE_2.md` §4.2,
+//! Q1/Q9 as ruled). [`FormRule::check`] is the **stateless** shape: the
+//! candidate, the rule set and the clock reading through a
+//! [`FormContext`], nothing else — B1, B2, B7 read only those, so they
+//! belong here whatever slice added them. [`BlockRule::check`] is the
+//! **view-bound** shape: a [`BlockContext`] (the candidate, the rule set, and
+//! what `form` established) with the view beside it. A rule that needs a
+//! chain fact (the tip, for A2 and B5; the seed block, for D3) reads it from
+//! the view, so a new fact is a new `ChainView` method and no rule's
+//! signature moves. Stage membership is a *property* — does the rule read
+//! the view — not a record of which slice landed it; a stage whose
+//! membership was "whatever slice 2 happened to add" would be the accretion
+//! pattern with a trait name on it.
+//!
+//! `form` and `validate` each run their landed **predicate** rows from a
+//! list, and [`run_form`] / [`run`] record `R::ROW` themselves: a rule cannot
+//! record another row's coverage, and a rule that was not run is not in
+//! coverage (G6, G9's runtime half). A **definition** row — one whose
+//! "check" is a derivation the verdict carries (CEN-B6; CEN-D4's target,
+//! CEN-D2's longhash) — is not in either list: it records its own `ROW` at
+//! the derivation site ([`header::B6::identity`]), so a gate that could
+//! never fail is never run as one (slice 1 Q5). Those are the writers of
+//! coverage, and `RuleCoverage::insert` names them. The per-transaction
+//! classes (4.H `tx_form`, 4.I `tx_against`) get their own traits with their
+//! slices.
 //!
 //! # Where a refusal is written
 //!
@@ -49,7 +60,7 @@
 pub(crate) mod header;
 pub(crate) mod topology;
 
-use crate::block::Candidate;
+use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
@@ -78,20 +89,25 @@ impl<T: Rule> Bound<CenRow> for T {
     const ROW: CenRow = T::ROW;
 }
 
-/// What a block-level rule may read besides the view.
+/// What a **stateless** block-level rule may read: the candidate and the
+/// rule set. No view, by construction — a rule that needs one is a
+/// [`BlockRule`]. The clock `form` reads is not here either: its one
+/// consumer (CEN-C1) also reads the connecting height for the genesis
+/// exemption, so the comparison is view-bound and the reading travels on
+/// the `StructurallyValid` instead.
 ///
 /// A struct rather than positional arguments so the set can grow without
 /// moving any rule's signature (rule 26 A1: freeze the signature, replace
-/// the body). The view is passed beside it, not inside it, so `V` and its
-/// `Fault` stay on the method and the context is one type for every view.
-pub(crate) struct BlockContext<'a> {
+/// the body).
+pub(crate) struct FormContext<'a> {
     /// The untrusted candidate, exactly as received.
     pub(crate) candidate: &'a Candidate,
-    /// The rules in force at the connecting height.
+    /// The rules the caller claims are in force; `validate` checks the
+    /// claim against the committing view.
     pub(crate) rule_set: &'a RuleSet,
 }
 
-impl<'a> BlockContext<'a> {
+impl<'a> FormContext<'a> {
     pub(crate) const fn new(candidate: &'a Candidate, rule_set: &'a RuleSet) -> Self {
         Self {
             candidate,
@@ -100,7 +116,51 @@ impl<'a> BlockContext<'a> {
     }
 }
 
-/// A block-level rule (census 4.A–4.G): judges the candidate as a whole.
+/// A stateless block-level rule: judges the candidate with no view. Runs in
+/// `form`, outside the write transaction, in parallel with other blocks.
+///
+/// No fault position: everything a form rule reads was read before it ran
+/// (`form` takes the clock once, up front). `Ok(())` passed;
+/// `Err(refused)` refused on `Self::ROW`.
+pub(crate) trait FormRule: Rule {
+    fn check(cx: &FormContext<'_>) -> Verdict<()>;
+}
+
+/// Run one form rule and, if it passed, record its row.
+pub(crate) fn run_form<R: FormRule>(
+    cx: &FormContext<'_>,
+    coverage: &mut RuleCoverage,
+) -> Verdict<()> {
+    let verdict = R::check(cx);
+    if verdict.is_ok() {
+        coverage.insert(R::ROW);
+    }
+    verdict
+}
+
+/// What a **view-bound** block-level rule may read besides the view. Built
+/// from the [`StructurallyValid`] the stateless stage produced; fields grow
+/// with the rows that read them (the rule set with 4.D, what `form`
+/// established with C1/D3), never ahead of them.
+///
+/// The view is passed beside it, not inside it, so `V` and its `Fault` stay
+/// on the method and the context is one type for every view.
+pub(crate) struct BlockContext<'a> {
+    /// The untrusted candidate, exactly as received.
+    pub(crate) candidate: &'a Candidate,
+}
+
+impl<'a> BlockContext<'a> {
+    pub(crate) const fn new(formed: &'a StructurallyValid) -> Self {
+        Self {
+            candidate: formed.candidate(),
+        }
+    }
+}
+
+/// A view-bound block-level rule (census 4.A–4.G): judges the candidate
+/// against the recorded chain. Runs in `validate`, inside the write
+/// transaction that will apply the block.
 pub(crate) trait BlockRule: Rule {
     /// `Ok(Ok(()))` passed; `Ok(Err(refused))` refused on `Self::ROW`;
     /// `Err(fault)` the view could not answer. A rule that needs the

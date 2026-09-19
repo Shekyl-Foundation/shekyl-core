@@ -43,14 +43,20 @@
 //! height) collapses into the same predicates: the caller hands `validate`
 //! the rule set `RuleSchedule::rules_at(height)` names, so "the version at
 //! this height" is a property of the input, not a second code path.
+//!
+//! B1, B2 and B7 read the header and the rule set and nothing else, so they
+//! are [`FormRule`]s — the stateless stage's, run in `form` outside the
+//! write transaction (slice 2, Q9: stage membership is view-dependence, not
+//! which slice landed the rule). B5 reads the tip and a root and stays a
+//! [`BlockRule`].
 
 use shekyl_types::BlockHash;
 use shekyl_wire::Block;
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
-use crate::rules::{BlockContext, BlockRule, Rule};
-use crate::verdict::{refused, Locus, Verdict};
+use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
+use crate::verdict::{refused, InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
 
 /// CEN-B1: `major_version` must equal the version the rule set admits.
@@ -60,15 +66,12 @@ impl Rule for B1 {
     const ROW: CenRow = CenRow::B1;
 }
 
-impl BlockRule for B1 {
-    fn check<'id, V: ChainView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+impl FormRule for B1 {
+    fn check(cx: &FormContext<'_>) -> Verdict<()> {
         if cx.candidate.block.header.major_version == cx.rule_set.header_major_version() {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            refused(Self::ROW, Locus::Block)
+            Err(InvalidBlock::new(Self::ROW, Locus::Block))
         }
     }
 }
@@ -93,16 +96,13 @@ impl Rule for B2 {
     const ROW: CenRow = CenRow::B2;
 }
 
-impl BlockRule for B2 {
-    fn check<'id, V: ChainView<'id>>(
-        cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
+impl FormRule for B2 {
+    fn check(cx: &FormContext<'_>) -> Verdict<()> {
         let vote = Self::normalised_vote(cx.candidate.block.header.minor_version);
         if vote >= cx.rule_set.header_major_version() {
-            Ok(Ok(()))
+            Ok(())
         } else {
-            refused(Self::ROW, Locus::Block)
+            Err(InvalidBlock::new(Self::ROW, Locus::Block))
         }
     }
 }
@@ -124,12 +124,9 @@ impl Rule for B7 {
     const ROW: CenRow = CenRow::B7;
 }
 
-impl BlockRule for B7 {
-    fn check<'id, V: ChainView<'id>>(
-        _cx: &BlockContext<'_>,
-        _view: &V,
-    ) -> Result<Verdict<()>, V::Fault> {
-        Ok(Ok(()))
+impl FormRule for B7 {
+    fn check(_cx: &FormContext<'_>) -> Verdict<()> {
+        Ok(())
     }
 }
 

@@ -7,9 +7,16 @@
 //! header root a candidate carries (`root_at_height`) cannot drift from the
 //! root the connect of the parent wrote.
 
-use shekyl_chain_rules::{validate, Candidate, ChainValid, RuleSet, RuleSetId};
+use core::convert::Infallible;
+
+use shekyl_chain_rules::{
+    form, validate, Candidate, ChainValid, Fault, FormAttempt, RuleSet, RuleSetId,
+    StructurallyValid, Substrate,
+};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{AttestationRoot, BlockHash, BlockWeight, CurveTreeRoot, LongTermWeight};
+use shekyl_types::{
+    AttestationRoot, BlockHash, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash, Timestamp,
+};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, PqcAuth, Transaction, TxPrefix};
 
@@ -148,12 +155,57 @@ pub(super) fn facts(height: u64, burned: u64) -> ConnectFacts {
     }
 }
 
+/// The world the fixtures are judged in: a clock after every fixture
+/// timestamp (`candidate` stamps `1_000 + 60·h`), and a longhash of zeros,
+/// which satisfies every target. The store's tests are about the store;
+/// the substrate is the validation crate's subject and is mocked here as
+/// plainly as possible.
+pub(super) struct FixtureSubstrate;
+
+impl FixtureSubstrate {
+    const CLOCK: Timestamp = Timestamp::from_raw(1_000_000);
+}
+
+impl Substrate for FixtureSubstrate {
+    type Fault = Infallible;
+
+    fn local_clock(&self) -> Result<Timestamp, Infallible> {
+        Ok(Self::CLOCK)
+    }
+
+    fn longhash(&self, _: &[u8], _: &BlockHash) -> Result<PowHash, Infallible> {
+        Ok(PowHash::from_bytes([0; 32]))
+    }
+}
+
+/// The stateless stage over the fixture substrate, under `GENESIS`.
+pub(super) fn formed(candidate: Candidate) -> StructurallyValid {
+    match form(
+        candidate,
+        &RuleSet::GENESIS,
+        &FixtureSubstrate,
+        BlockHash::NULL,
+        FormAttempt::FIRST,
+    ) {
+        Ok(Ok(formed)) => formed,
+        Ok(Err(refused)) => panic!("the fixtures satisfy every stateless rule: {refused}"),
+        Err(never) => match never {},
+    }
+}
+
+/// Both stages; the store's own fault is the only one the fixtures expect
+/// to see in the outer position (a stale claim or a corrupt view would be
+/// a fixture bug, named as such).
 pub(super) fn judge<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    Ok(validate(candidate, view, &RuleSet::GENESIS)?
-        .expect("the fixtures satisfy every landed rule"))
+    match validate(formed(candidate), view, &RuleSet::GENESIS) {
+        Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
+        Err(Fault::View(fault)) => Err(fault),
+        Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),
+        Err(Fault::Corrupt(corrupt)) => panic!("fixture view is corrupt: {corrupt}"),
+    }
 }
 
 pub(super) const GENESIS_ID: RuleSetId = RuleSetId::GENESIS;

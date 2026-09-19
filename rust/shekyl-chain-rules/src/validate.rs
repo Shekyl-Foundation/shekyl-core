@@ -3,67 +3,146 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! The three entry points: [`validate`] for a block, [`tx_form`] and
-//! [`tx_against`] for one transaction.
+//! The entry points: [`form`] then [`validate`] for a block — two stages —
+//! and [`tx_form`] / [`tx_against`] for one transaction.
 //!
-//! [`validate`] and [`tx_against`] are generic over the view (`V: ChainView<'id>`,
-//! never `&dyn`), so DRS-E5's pool decorator implements the trait without this
-//! crate naming it, and return a fault in the outer position and a verdict in
-//! the inner one. [`tx_form`] is stateless: it takes no view and returns
-//! [`Verdict`] directly, with no outer fault. Inside a view-reading rule, `?`
+//! # Two stages, one property
+//!
+//! [`form`] is **stateless**: the candidate, a `RuleSet`, a
+//! [`Substrate`] (clock, longhash) and a seed claim in; a
+//! [`StructurallyValid`] out. It runs outside the exclusive write
+//! transaction, in parallel with other blocks, and it is where the expensive
+//! call lives. [`validate`] is **view-bound**: a `StructurallyValid`, a
+//! `ChainView<'id>` and the rule set in force in; a `ChainValid<'id, V>` out.
+//! It runs inside the transaction C2-R8 Q3 projects the view from, and it
+//! verifies the claims `form` was given — the seed, the rule set — against
+//! that view before judging anything (`CHAIN_RULES_SLICE_2.md` §4.2, Q1/Q8).
+//! The partition is view-dependence and nothing else (Q9).
+//!
+//! Both are generic over their substrate (`S: Substrate`, `V: ChainView<'id>`,
+//! never `&dyn`), so DRS-E5's pool decorator and the daemon's verifier
+//! implement the traits without this crate naming them. Each returns a
+//! fault in the outer position and a verdict in the inner one; `validate`'s
+//! outer position is a [`Fault<V::Fault>`] — the view's, or one of the two
+//! kinds this crate defines (`fault.rs`). Inside a view-reading rule, `?`
 //! propagates a fault and only a fault; a refusal is always written out as
 //! [`refused`](crate::refused) at the site that judged, so the row is named
 //! where the decision is made.
 //!
 //! # The pipeline
 //!
-//! Block-level rules run first, in census order, each through
-//! [`rules::run`] so its row enters coverage only if it ran and passed; then
-//! each transaction is judged by form and then against the view, coverages
-//! are unioned, and the `ChainValid` is minted only after the last rule
-//! passed. Slice 1 (`CHAIN_RULES_SLICE_1.md`) landed the first block rules;
-//! the per-transaction entry points are still empty (DRS-D12) and return
-//! `RuleCoverage::EMPTY`. Coverage is never complete for any rule set until
+//! `form` runs the stateless block rules in census order through
+//! [`rules::run_form`]; `validate` checks the two claims, then runs the
+//! view-bound block rules through [`rules::run`], then judges each
+//! transaction by form and against the view, unions the coverages (the
+//! stateless stage's included), and mints the `ChainValid` only after the
+//! last rule passed. Coverage is never complete for any rule set until
 //! every row has landed, so no verdict minted before then can be mistaken
 //! for parity evidence.
 
+use shekyl_types::BlockHash;
 use shekyl_wire::Transaction;
 
-use crate::block::{Candidate, ValidatedBlock};
+use crate::block::{Candidate, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
+use crate::fault::{Fault, FormAttempt, Stale};
 use crate::rule_set::RuleSet;
 use crate::rules::header::{B1, B2, B5, B7};
 use crate::rules::topology::A2;
-use crate::rules::{self, BlockContext};
+use crate::rules::{self, BlockContext, FormContext};
+use crate::substrate::Substrate;
 use crate::verdict::{ChainValid, InvalidBlock, TxSlot, Verdict};
 use crate::view::ChainView;
 
-/// Run the listed block rules in order; the first refusal is the verdict.
+/// Run the listed stateless rules in order; the first refusal is the verdict.
 ///
 /// A macro rather than a loop because each rule is a distinct *type*
-/// (SCW-18): the list is the slice's declaration of which rows `validate`
+/// (SCW-18): the list is the slice's declaration of which rows the stage
 /// evaluates, and a rule missing from it is a row missing from coverage —
 /// which `ChainValid::mint` refuses if the row is `implemented` (G9).
-macro_rules! judge_block {
-    ($cx:expr, $view:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
+macro_rules! judge_form {
+    ($cx:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
         $(
-            if let Err(refused) = rules::run::<$rule, V>(&$cx, $view, &mut $coverage)? {
+            if let Err(refused) = rules::run_form::<$rule>(&$cx, &mut $coverage) {
                 return Ok(Err(refused));
             }
         )+
     };
 }
 
-/// Judge a candidate block under `rule_set` against `view`.
+/// Run the listed view-bound rules in order; the first refusal is the
+/// verdict. A view fault is wrapped into its arm of [`Fault`].
+macro_rules! judge_block {
+    ($cx:expr, $view:expr, $coverage:expr; $($rule:ty),+ $(,)?) => {
+        $(
+            if let Err(refused) =
+                rules::run::<$rule, V>(&$cx, $view, &mut $coverage).map_err(Fault::View)?
+            {
+                return Ok(Err(refused));
+            }
+        )+
+    };
+}
+
+/// The stateless stage: judge a candidate on every rule decidable without
+/// the chain, and establish what the view-bound stage will read.
+///
+/// `rule_set` and `seed` are the caller's **claims** — the rules in force
+/// at the height this block will connect at, and the block id at the seed
+/// height (CEN-D3) — read from whatever snapshot the caller has. `validate`
+/// verifies both against the committing view and returns a
+/// [`Stale`] fault, not a refusal, if either moved (a reorg at least
+/// `SEEDHASH_EPOCH_LAG` deep between the stages, or a rule-set boundary).
+/// `attempt` is which try this is: a driver starts at
+/// [`FormAttempt::FIRST`] and may only try again with the attempt a `Stale`
+/// hands back (`fault.rs`: the bound is the type).
+///
+/// Returns `Err(fault)` if the substrate could not answer — the clock, the
+/// verifier — which is not a judgement about the block; `Ok(Err(refused))`
+/// if a stateless rule refused; `Ok(Ok(formed))` otherwise.
+pub fn form<S: Substrate>(
+    candidate: Candidate,
+    rule_set: &RuleSet,
+    substrate: &S,
+    seed: BlockHash,
+    attempt: FormAttempt,
+) -> Result<Verdict<StructurallyValid>, S::Fault> {
+    // Read the clock once, before any rule: every stateless judgement is
+    // against one instant, and the instant travels on the token.
+    let clock = substrate.local_clock()?;
+    let mut coverage = RuleCoverage::EMPTY;
+
+    // Stateless block-level predicates, in census order.
+    let cx = FormContext::new(&candidate, rule_set);
+    judge_form!(cx, coverage; B1, B2, B7);
+
+    Ok(Ok(StructurallyValid::new(
+        candidate,
+        rule_set.id(),
+        coverage,
+        clock,
+        seed,
+        attempt,
+    )))
+}
+
+/// The view-bound stage: judge a [`StructurallyValid`] against the chain it
+/// will connect onto, under `rule_set`.
 ///
 /// Returns, in order of what happened:
 ///
-/// * `Err(fault)` — the view's substrate failed before a verdict was
-///   reached. Not a judgement about the block; the caller halts.
+/// * `Err(Fault::Stale(_))` — a claim `form` was given does not hold against
+///   this view: the seed (CEN-D3) or the rule set. Not a judgement about
+///   the block; the payload says whether the driver may redo `form`.
+/// * `Err(Fault::View(fault))` — the view's substrate failed before a
+///   verdict was reached. Not a judgement about the block; the caller halts.
+/// * `Err(Fault::Corrupt(_))` — the view answered with data no conforming
+///   store holds. The writer halt.
 /// * `Ok(Err(refused))` — a rule refused. `refused.rule` is the census row,
 ///   `refused.locus` where in the candidate it pointed.
 /// * `Ok(Ok(valid))` — every rule the set enforces passed.
-///   `valid.coverage()` records which rows were actually evaluated.
+///   `valid.coverage()` records which rows were actually evaluated, the
+///   stateless stage's included.
 ///
 /// The miner transaction and each listed transaction are judged by
 /// [`tx_form`] then [`tx_against`]; a refusal from either is re-homed from
@@ -103,13 +182,13 @@ macro_rules! judge_block {
 /// }
 /// // The store's `connect`: the verdict must carry *this* view's brand.
 /// fn connect<'id>(_view: &View<'id>, _valid: ChainValid<'id, View<'id>>) {}
-/// fn candidate() -> Candidate {
+/// fn formed() -> StructurallyValid {
 ///     unimplemented!()
 /// }
 ///
 /// with_view(|outer| {
 ///     with_view(|inner| {
-///         let valid = validate(candidate(), &inner, &RuleSet::GENESIS)
+///         let valid = validate(formed(), &inner, &RuleSet::GENESIS)
 ///             .unwrap()
 ///             .unwrap();
 ///         connect(&outer, valid); // judged against `inner`: does not compile
@@ -156,28 +235,39 @@ macro_rules! judge_block {
 ///     }
 /// }
 /// fn connect<'id>(_: &View<'id>, _: ChainValid<'id, View<'id>>) {}
-/// fn candidate() -> Candidate { unimplemented!() }
+/// fn formed() -> StructurallyValid { unimplemented!() }
 ///
 /// fn with_view<R>(f: impl for<'id> FnOnce(View<'id>) -> R) -> R {
 ///     f(View(PhantomData))
 /// }
 /// with_view(|view| {
-///     let valid = validate(candidate(), &Evil, &RuleSet::GENESIS).unwrap().unwrap();
+///     let valid = validate(formed(), &Evil, &RuleSet::GENESIS).unwrap().unwrap();
 ///     connect(&view, valid); // ChainValid<Evil> ≠ ChainValid<View>
 /// });
 /// ```
 pub fn validate<'id, V: ChainView<'id>>(
-    candidate: Candidate,
+    formed: StructurallyValid,
     view: &V,
     rule_set: &RuleSet,
-) -> Result<Verdict<ChainValid<'id, V>>, V::Fault> {
-    let mut coverage = RuleCoverage::EMPTY;
+) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>> {
+    // The stateless stage's rule-set claim, checked before any rule reads
+    // the wrong parameters. A mismatch is the world having moved, not a
+    // verdict — and the retry is bounded by the attempt the token carries.
+    if formed.rule_set_id() != rule_set.id() {
+        return Err(Fault::Stale(Stale::RuleSet {
+            formed_under: formed.rule_set_id(),
+            in_force: rule_set.id(),
+            retry: formed.attempt().next(),
+        }));
+    }
 
-    // Block-level predicates (4.A–4.G), in census order. Definition rows
-    // (B6) record at `ValidatedBlock::derive`, not in this list.
-    let cx = BlockContext::new(&candidate, rule_set);
-    judge_block!(cx, view, coverage; A2, B1, B2, B5, B7);
+    // View-bound block-level predicates (4.A–4.G), in census order.
+    // Definition rows (B6) record at `ValidatedBlock::derive`, not here.
+    let cx = BlockContext::new(&formed);
+    let mut coverage = *formed.coverage();
+    judge_block!(cx, view, coverage; A2, B5);
 
+    let candidate = cx.candidate;
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
     let listed = candidate
         .transactions
@@ -185,7 +275,7 @@ pub fn validate<'id, V: ChainView<'id>>(
         .enumerate()
         .map(|(n, tx)| (TxSlot::Listed(n), tx));
     for (slot, tx) in core::iter::once(miner).chain(listed) {
-        match judge_tx(tx, view, rule_set)? {
+        match judge_tx(tx, view, rule_set).map_err(Fault::View)? {
             Ok(tx_coverage) => coverage.union(&tx_coverage),
             Err(refused) => {
                 return Ok(Err(InvalidBlock::new(
@@ -196,6 +286,7 @@ pub fn validate<'id, V: ChainView<'id>>(
         }
     }
 
+    let (candidate, _stateless) = formed.into_parts();
     let block = ValidatedBlock::derive(candidate, &mut coverage);
     Ok(Ok(ChainValid::mint(block, rule_set, coverage)))
 }

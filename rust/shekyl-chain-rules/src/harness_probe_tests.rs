@@ -140,8 +140,8 @@ fn key_images_are_a_set() {
 fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
     let chain = one_block();
     chain.with_view(|view| {
-        let valid = infallible(validate(
-            candidate_on(&chain, vec![coinbase(1)]),
+        let valid = judged(validate(
+            formed(candidate_on(&chain, vec![coinbase(1)])),
             &view,
             &RuleSet::GENESIS,
         ))

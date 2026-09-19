@@ -73,8 +73,20 @@ SELF = Path(__file__).resolve()
 STRIPPER = ROOT / "scripts" / "ci" / "strip_c_comments.py"
 
 STORE_TOKEN = r"(?:StoreError|StoreInvariant|InvariantViolated|StoreCannot)"
+# The validation crate's OWN non-verdict outcomes (`shekyl-chain-rules/src/
+# fault.rs`, E6 slice 2 Q8): a stale stateless-stage claim, a corrupt view,
+# and the enum that carries them beside the view's fault. The ban extends to
+# them for the same reason it exists for store errors — "couldn't prove it"
+# reads like "rejected it" at a glance, and a retry arm is MORE tempting to
+# collapse onto `InvalidBlock` than a store error, not less. Clause 1 sees
+# the bare names in a conversion header; clause 3 sees the qualified arms
+# (`Fault::View(_) => InvalidBlock…` would launder the store's fault through
+# the wrapper the bare STORE_TOKEN cannot see).
+FAULT_TOKEN = r"(?:Stale|Corrupt|Fault)"
+FAULT_ARM_TOKEN = r"(?:Stale|Fault::(?:View|Stale|Corrupt))"
 VERDICT_TOKEN = r"InvalidBlock"
-STORE_RE = re.compile(rf"\b{STORE_TOKEN}\b")
+STORE_RE = re.compile(rf"\b(?:{STORE_TOKEN}|{FAULT_TOKEN})\b")
+STORE_ARM_RE = re.compile(rf"\b(?:{STORE_TOKEN}|{FAULT_ARM_TOKEN})\b")
 VERDICT_RE = re.compile(rf"\b{VERDICT_TOKEN}\b")
 VERDICT_DEF_RE = re.compile(rf"\bpub\s+struct\s+{VERDICT_TOKEN}\b")
 STORE_ENUM_RE = re.compile(r"pub\s+enum\s+StoreError\s*\{(.*?)\n\}", re.S)
@@ -84,8 +96,11 @@ VARIANT_RE = re.compile(r"^\s*([A-Z][A-Za-z0-9]*)\s*(?:[,({]|$)", re.M)
 # path-qualified trait name. Longer names first so `TryFrom` is not eaten
 # as `From`. Matched on a single joined line.
 TRAIT = r"(?:(?:::)?(?:[A-Za-z_][\w]*::)*(?:TryFrom|TryInto|From|Into))"
+# The converted type may itself be generic one level deep (`From<Fault<V>>`),
+# so the inner group admits one nested `<…>`; a deeper nesting is not a shape
+# the ban's subjects take.
 CONV_RE = re.compile(
-    rf"impl(?:<[^>]*>)?\s+{TRAIT}\s*<\s*([^>]+?)\s*>\s+for\s+([\w:<>' ,]+)"
+    rf"impl(?:<[^>]*>)?\s+{TRAIT}\s*<\s*((?:[^<>]|<[^<>]*>)+?)\s*>\s+for\s+([\w:<>' ,]+)"
 )
 SKIP_DIRS = {"target", ".git"}
 
@@ -306,17 +321,19 @@ def check(rust_root: Path, store_crate: Path, error_file: Path, exclude: set[Pat
                 findings.append(
                     f"clause 1: {rel} converts between store error and verdict: `{m.group(0).strip()}`"
                 )
-        # clause 3 — store token on the pattern side of `=>`, verdict on the body
+        # clause 3 — store or fault token on the pattern side of `=>`, verdict
+        # on the body
         for pattern, body, line in match_arms(text):
-            if STORE_RE.search(pattern) and VERDICT_RE.search(body):
+            if STORE_ARM_RE.search(pattern) and VERDICT_RE.search(body):
                 findings.append(
-                    f"clause 3: {rel}:{line} match arm maps a store-error token onto {VERDICT_TOKEN}"
+                    f"clause 3: {rel}:{line} match arm maps a store-error or fault token onto {VERDICT_TOKEN}"
                 )
     if findings:
         raise GateError("conversion ban violated:\n" + "".join(f"  {f}\n" for f in findings))
     return (
         f"store-error conversion ban: StoreError {n_variants} variants, {len(files)} files walked, "
-        f"canonical pub struct {VERDICT_TOKEN} in {VERDICT_REL}; clauses 1-3 clean"
+        f"canonical pub struct {VERDICT_TOKEN} in {VERDICT_REL}; clauses 1-3 clean "
+        f"(store tokens and the validation crate's own fault tokens)"
     )
 
 
@@ -440,6 +457,27 @@ def selftest() -> None:
         "clause 1",
     )
     run("clause 1 not tripped by daemon error", {E: STORE_ERR, V: "impl From<StoreError> for DaemonError {}\n"}, None)
+    run("clause 1: From stale->verdict", {E: STORE_ERR, V: "impl From<Stale> for InvalidBlock {}\n"}, "clause 1")
+    run(
+        "clause 1: From the fault enum->verdict",
+        {E: STORE_ERR, V: "impl<V> From<Fault<V>> for InvalidBlock {}\n"},
+        "clause 1",
+    )
+    run(
+        "clause 3: stale arm onto verdict",
+        {E: STORE_ERR, V: "match f {\n    Fault::Stale(_) => InvalidBlock::new(row, locus),\n    other => other,\n}\n"},
+        "clause 3",
+    )
+    run(
+        "clause 3: view fault laundered through the wrapper",
+        {E: STORE_ERR, V: "match f {\n    Fault::View(_) => InvalidBlock::new(row, locus),\n}\n"},
+        "clause 3",
+    )
+    run(
+        "clause 3: a fault arm that stays a fault is fine",
+        {E: STORE_ERR, V: "match f {\n    Fault::View(e) => e,\n    Fault::Stale(s) => panic!(\"{s}\"),\n}\n"},
+        None,
+    )
     run("clause 2: store names verdict", {E: STORE_ERR, "shekyl-chain-store/src/lib.rs": "pub use x::InvalidBlock;\n"}, "clause 2")
     run("clause 2: comment does not count", {E: STORE_ERR, "shekyl-chain-store/src/lib.rs": "// never InvalidBlock here\n"}, None)
     run(

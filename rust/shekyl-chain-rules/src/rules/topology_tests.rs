@@ -9,19 +9,14 @@ use super::*;
 use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::harness::fixture::{candidate_on, root};
-use crate::harness::{assert_refused, infallible, FaultingView, MockChain};
-use crate::rule_set::RuleSet;
+use crate::harness::{assert_refused, formed, infallible, FaultingView, MockChain};
 use crate::rules::BlockContext;
 use crate::verdict::{Locus, Verdict};
 use shekyl_types::BlockHash;
 
 fn check_on(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
-    chain.with_view(|view| {
-        infallible(A2::check(
-            &BlockContext::new(candidate, &RuleSet::GENESIS),
-            &view,
-        ))
-    })
+    let formed = formed(candidate.clone());
+    chain.with_view(|view| infallible(A2::check(&BlockContext::new(&formed), &view)))
 }
 
 #[test]
@@ -65,10 +60,10 @@ fn cen_a2_genesis_previous_is_the_null_hash() {
 #[test]
 fn cen_a2_propagates_a_fault_and_does_not_judge() {
     let chain = MockChain::default();
-    let candidate = candidate_on(&chain, Vec::new());
+    let formed = formed(candidate_on(&chain, Vec::new()));
     let view = FaultingView::default();
     assert_eq!(
-        A2::check(&BlockContext::new(&candidate, &RuleSet::GENESIS), &view),
+        A2::check(&BlockContext::new(&formed), &view),
         Err(crate::harness::Faulted)
     );
 }

@@ -18,11 +18,17 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::BTreeSet;
 
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_types::{
+    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
+};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Transaction, TxPrefix};
 
-use crate::block::Candidate;
+use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
+use crate::fault::{Fault, FormAttempt};
+use crate::rule_set::RuleSet;
+use crate::substrate::Substrate;
+use crate::validate::form;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
 
@@ -172,11 +178,100 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     }
 }
 
+/// The environment a fixture is judged in: a fixed clock and a longhash
+/// function the test chooses.
+///
+/// The default longhash is the **all-zero** hash — `0 · d < 2^256` for
+/// every target, so PoW passes at any difficulty and a fixture that is not
+/// about PoW never trips on it. A PoW fixture swaps in a closure that
+/// returns what it needs; a fault fixture swaps in one that returns
+/// [`Faulted`].
+#[derive(Clone, Copy)]
+pub struct MockSubstrate {
+    /// What `local_clock` returns.
+    pub clock: Timestamp,
+    /// What `longhash` returns, given the preimage and the seed.
+    pub longhash: fn(&[u8], &BlockHash) -> Result<PowHash, Faulted>,
+}
+
+impl MockSubstrate {
+    /// A clock comfortably after every fixture header's timestamp
+    /// ([`fixture::header`] is `1_700_000_000`), so CEN-C1 passes unless a
+    /// test moves one or the other.
+    pub const CLOCK: Timestamp = Timestamp::from_raw(1_700_000_100);
+
+    /// The longhash that satisfies every target. The `Result` is the fn
+    /// pointer's shape, not this function's choice.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn always_satisfies(_: &[u8], _: &BlockHash) -> Result<PowHash, Faulted> {
+        Ok(PowHash::from_bytes([0; 32]))
+    }
+}
+
+impl Default for MockSubstrate {
+    fn default() -> Self {
+        Self {
+            clock: Self::CLOCK,
+            longhash: Self::always_satisfies,
+        }
+    }
+}
+
+impl Substrate for MockSubstrate {
+    type Fault = Faulted;
+
+    fn local_clock(&self) -> Result<Timestamp, Faulted> {
+        Ok(self.clock)
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Faulted> {
+        (self.longhash)(pow_blob, seed)
+    }
+}
+
+/// Run the stateless stage under `rule_set` with the default substrate and
+/// a null seed claim. Panics if the substrate faults or a stateless rule
+/// refuses — a fixture that wants to exercise either calls [`form`] itself.
+#[track_caller]
+pub fn formed_under(candidate: Candidate, rule_set: &RuleSet) -> StructurallyValid {
+    let seed = BlockHash::NULL;
+    match form(
+        candidate,
+        rule_set,
+        &MockSubstrate::default(),
+        seed,
+        FormAttempt::FIRST,
+    ) {
+        Ok(Ok(formed)) => formed,
+        Ok(Err(refused)) => panic!("the fixture was refused by a stateless rule: {refused}"),
+        Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
+    }
+}
+
+/// [`formed_under`] the genesis rule set.
+#[track_caller]
+pub fn formed(candidate: Candidate) -> StructurallyValid {
+    formed_under(candidate, &RuleSet::GENESIS)
+}
+
 /// Unwrap a result whose error cannot exist.
 pub fn infallible<T>(result: Result<T, Infallible>) -> T {
     match result {
         Ok(value) => value,
         Err(never) => match never {},
+    }
+}
+
+/// Unwrap `validate`'s outer position over a view that cannot fault: the
+/// view arm is uninhabited, and the crate's own arms are a fixture failure
+/// unless the test asked for them.
+#[track_caller]
+pub fn judged<T>(result: Result<T, Fault<Infallible>>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(Fault::View(never)) => match never {},
+        Err(Fault::Stale(stale)) => panic!("unexpected stale premise: {stale}"),
+        Err(Fault::Corrupt(corrupt)) => panic!("unexpected corrupt view: {corrupt}"),
     }
 }
 
