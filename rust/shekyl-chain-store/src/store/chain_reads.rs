@@ -69,7 +69,6 @@
 
 use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
 use shekyl_chain_rules::AtHeight;
-use shekyl_types::BlockHash;
 use shekyl_wire::Block;
 
 use crate::codec::{BlockInfo, Canonical, CodecError, Coded};
@@ -317,8 +316,10 @@ pub(super) fn blob_at<T: ReadTables>(
     Ok(AtHeight::Recorded(blob.value().bytes().to_vec()))
 }
 
-/// The block recorded at `height`: its identity from `block_info`, its body
-/// parsed from `blocks` and **verified to hash to that identity**.
+/// The block recorded at `height`: its `block_info` row (identity and the
+/// per-height record — the view projects `cumulative_difficulty` from it
+/// for CEN-D4, E6 slice 2), its body parsed from `blocks` and **verified to
+/// hash to that identity**.
 ///
 /// Classified against `tip` — the caller's [`tip_of`], passed in whole so
 /// one read of the tip serves a whole range and a read **of** the tip
@@ -330,7 +331,7 @@ pub(super) fn block_body<T: ReadTables>(
     txn: &T,
     tip: Option<&(u64, BlockInfo)>,
     height: u64,
-) -> Result<AtHeight<(BlockHash, Block)>, ReadFault> {
+) -> Result<AtHeight<(BlockInfo, Block)>, ReadFault> {
     let info = match info_at(txn, tip, height)? {
         AtHeight::Recorded(info) => info,
         AtHeight::AboveTip => return Ok(AtHeight::AboveTip),
@@ -344,5 +345,5 @@ pub(super) fn block_body<T: ReadTables>(
             "block blob does not hash to block_info.hash",
         ));
     }
-    Ok(AtHeight::Recorded((info.hash, block)))
+    Ok(AtHeight::Recorded((info, block)))
 }

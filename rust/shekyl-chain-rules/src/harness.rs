@@ -18,6 +18,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::BTreeSet;
 
+use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
@@ -376,8 +377,21 @@ pub mod fixture {
         candidate_on(&MockChain::default(), listed)
     }
 
-    /// A recorded block whose header carries `timestamp`, identity derived.
+    /// A recorded block whose header carries `timestamp`, identity derived,
+    /// with **no work recorded** (`cumulative_difficulty` zero). Enough for
+    /// every fixture that is not about difficulty — a chain shorter than
+    /// the LWMA-1 window never reads the field — and a chain that *is*
+    /// about it builds its series with [`recorded_with_work`].
     pub fn recorded(timestamp: u64) -> RecordedBlock {
+        recorded_with_work(timestamp, CumulativeDifficulty::ZERO)
+    }
+
+    /// A recorded block with `timestamp` and `cumulative_difficulty` both
+    /// chosen — the LWMA-1 fixtures' shape.
+    pub fn recorded_with_work(
+        timestamp: u64,
+        cumulative_difficulty: CumulativeDifficulty,
+    ) -> RecordedBlock {
         let block = Block {
             header: BlockHeader {
                 timestamp,
@@ -389,6 +403,7 @@ pub mod fixture {
         RecordedBlock {
             hash: block.hash(),
             header: block.header,
+            cumulative_difficulty,
         }
     }
 

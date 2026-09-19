@@ -563,16 +563,17 @@ fn the_read_transaction_body_agrees_with_the_batch_body() {
     assert_eq!(tip.0, 1);
     assert_eq!(tip.1.hash, blk1.hash());
     match chain_reads::block_body(&txn, Some(&tip), 1).expect("block_body") {
-        AtHeight::Recorded((hash, body)) => {
-            assert_eq!(hash, blk1.hash());
+        AtHeight::Recorded((info, body)) => {
+            assert_eq!(info.hash, blk1.hash());
             assert_eq!(body, blk1);
             assert_eq!(
                 batch_tip_block,
                 AtHeight::Recorded(RecordedBlock {
-                    hash,
+                    hash: info.hash,
                     header: body.header,
+                    cumulative_difficulty: info.cumulative_difficulty,
                 }),
-                "the batch view is the same body wrapped"
+                "the batch view is the same body wrapped, with the row's work"
             );
         }
         AtHeight::AboveTip => panic!("height 1 is the tip"),
