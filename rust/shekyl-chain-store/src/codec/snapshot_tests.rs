@@ -5,10 +5,13 @@
 
 //! The rule-42 codec gate for the chain store.
 //!
-//! One committed fixture snapshot per [`Canonical`] impl under
-//! `rust/shekyl-chain-store/schemas/<NAME>.snap`: the codec's name and
-//! width, then representative values with their canonical encodings in
-//! hex. The per-codec tests re-encode the fixtures and compare against the
+//! One committed fixture snapshot per codec this store's layout uses,
+//! under `rust/shekyl-chain-store/schemas/<NAME>.snap`: the codec's name
+//! and width, then representative values with their canonical encodings
+//! in hex. That set is the codecs implemented here **plus** the ones this
+//! store persists whose impls moved to `shekyl-store-codec` — their bytes
+//! are still this store's layout and still the digest's fold input, so
+//! their fixtures stay here. The per-codec tests re-encode the fixtures and compare against the
 //! committed text, then decode the encoding back and compare against the
 //! value, so both directions are pinned to the bytes reviewers approved.
 //!
@@ -45,9 +48,12 @@
 //! (§11.1(a)). `.github/workflows/schema-snapshot.yml` therefore enforces
 //! *any change under `schemas/` ⟹ `SCHEMA_VERSION` has a greater value
 //! in the same PR*, with no per-codec registry to keep in sync. What this
-//! module still has to guard is that the snapshot **set** is the impl set
-//! plus the catalogues ([`every_canonical_impl_has_a_snapshot`]) and that
-//! the workflow is actually wired to this crate — runs this whole module,
+//! module still has to guard is that the snapshot **set** is exactly the
+//! registered codecs' names plus the catalogues, and that no codec
+//! implemented here escapes registration
+//! ([`every_canonical_impl_has_a_snapshot`] — read its *Why containment
+//! here and equality there* for what the move did and did not cost), and
+//! that the workflow is actually wired — runs this whole module,
 //! and parses the declaration in the grammar it is written in
 //! ([`workflow_gates_this_crate`]). A gate whose subject is absent is not a
 //! gate (rule 47).
