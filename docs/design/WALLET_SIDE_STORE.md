@@ -806,11 +806,19 @@ spec. The rest is stated here:
    Per-input proving makes the denominator shape-dependent, so the shape must
    be stated; minting a second canonical shape beside §13's would be the
    duplicate-source error.
-2. **The boundary between *delta* and *proving* must be stated**, because the
-   relative arm is only well-defined once it is. Whatever is charged as delta
-   is excluded from the denominator and vice versa — otherwise the same work
-   moves across the line and changes the verdict with nothing else changing.
-   **State it once in the corpus spec, not per run.**
+2. **The boundary between *delta* and *proving* is the prover API call**
+   (**RULED 2026-09-19**, drawn here rather than left to the bench):
+   - **delta** = spend-intent through **constructed `Path`** — the state copy
+     at `F`, the buffer replay, the path read-off, and `Path` construction;
+   - **the denominator** = the **prover invocation**, `Path` in, proof bytes
+     out;
+   - **proof serialization is charged to neither.**
+
+   It sits at the `assemble_tx` → prover seam, which is what makes it hold:
+   **work cannot migrate across it without a visible signature change.** A
+   boundary drawn anywhere inside either side would be a convention the bench
+   could drift; this one is a type boundary the compiler enforces. Stated once
+   here, not per run.
 3. **Report the absolute delta alongside the ratio.** 15 % of an unknown
    denominator is an unknown number of seconds, and the denominator does not
    exist yet — so a pass on the ratio should still be read against the seconds
