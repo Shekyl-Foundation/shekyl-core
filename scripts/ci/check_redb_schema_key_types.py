@@ -26,14 +26,26 @@
 #   mdb_set_compare compare_hash32     -> LmdbHashKey
 #   mdb_set_compare compare_string     -> &str
 #   mdb_set_dupsort compare_hash32     -> LmdbHashKey  (zerokval collapse)
-#   MDB_INTEGERKEY                     -> u64, or `(u64, u64)` when the table
-#                                         also carries dupsort compare_uint64:
-#                                         a zerokval collapse keys by the dup
-#                                         (`u64`); a genuine DUPSORT table keys
-#                                         by (key, dup) as a tuple, whose
-#                                         lexicographic order over two numeric
-#                                         u64s is INTEGERKEY then compare_uint64
-#                                         (S-OUT-KI SOK-1, `output_amounts`)
+#   MDB_INTEGERKEY                     -> u64
+#   MDB_INTEGERKEY + dupsort compare_uint64: decided by HOW THE C++ WRITES
+#                                         the table — the key argument of its
+#                                         `mdb_cursor_put` calls, which is the
+#                                         fact the flags do not carry:
+#     every put keyed by `zerokval`      -> u64            (a collapse: the dup
+#                                         IS the key; block_info, output_txs)
+#     a real key, put with MDB_APPENDDUP -> (u64, u64)     (a genuine multi-
+#                                         member DUPSORT: (key, dup) as a
+#                                         tuple, whose lexicographic order over
+#                                         two numeric u64s is INTEGERKEY then
+#                                         compare_uint64; S-OUT-KI SOK-1,
+#                                         `output_amounts`)
+#     a real key, put without APPENDDUP  -> u64 or (u64, u64) (the key's order
+#                                         is what is consensus-visible; whether
+#                                         the dup is a second key component or
+#                                         part of the value is a shape choice
+#                                         both of which preserve it)
+#   A uint64-dupsort INTEGERKEY table with NO parsed put is a gate failure,
+#   not an unconstrained table: the fact that classifies it is missing.
 #
 # No multimap rule remains: the catalogue has no multimap since S-OUT-KI's
 # layout commit. A future multimap re-mints its rule here with its table.
@@ -45,9 +57,14 @@
 # a rule here would fail correct code, which teaches people to weaken gates.
 #
 # Instance of 47-gate-subject-assertion.mdc: zero parsed definitions, zero
-# parsed tables, or a missed `lmdb_db_open` (which would look like a
-# default-flag table) fail loudly. `--selftest` pins the rule function,
-# including the two zerokval-uint64 tables a name-set elif used to swallow.
+# parsed tables, a missed `lmdb_db_open` (which would look like a
+# default-flag table), or a uint64-dupsort table with no parsed put (which
+# would look like an unconstrained one) fail loudly. `--selftest` pins the
+# rule function, including the two zerokval-uint64 tables a name-set elif
+# used to swallow and the three put-shapes that tell a collapse from a
+# genuine DUPSORT (PR #783 review: accepting both shapes for every
+# uint64-dupsort table let `output_amounts` lose its amount component, or
+# `block_info` gain a spurious one, without the gate noticing).
 
 from __future__ import annotations
 
@@ -84,11 +101,28 @@ DEF_RE = re.compile(
 )
 
 
-def expected_key_types(flags: str, kinds: dict[str, str]) -> tuple[str, ...] | None:
+# How the C++ writes a table, read off its `mdb_cursor_put` calls. This is the
+# fact that separates a zerokval collapse from a genuine DUPSORT table: the
+# open flags of `block_info` and `output_amounts` are identical.
+PUT_ZEROKVAL = "zerokval"  # every put keyed by the dummy key: the dup is the key
+PUT_REAL_APPENDDUP = "real+appenddup"  # real key, members appended in dup order
+PUT_REAL = "real"  # real key, no APPENDDUP: one member per key in practice
+PUT_UNSEEN = None  # no put parsed — the classifying fact is missing
+
+
+class UnclassifiedTable(Exception):
+    """A uint64-dupsort INTEGERKEY table whose put shape did not parse. Raised,
+    not returned as None, so a missing fact reads as a gate failure rather
+    than as an unconstrained table."""
+
+
+def expected_key_types(
+    flags: str, kinds: dict[str, str], put: str | None = PUT_UNSEEN
+) -> tuple[str, ...] | None:
     """The redb key types that reproduce the table's LMDB order, or None if
-    the table is unconstrained. More than one only where LMDB's facts cannot
-    tell two correct shapes apart (INTEGERKEY + uint64 dupsort: a zerokval
-    collapse keys by the dup, a genuine DUPSORT table by the tuple)."""
+    the table is unconstrained. More than one only where two shapes both
+    preserve the order LMDB's facts pin (a real-keyed DUPSORT table written
+    without APPENDDUP), never where the facts pick one."""
     if kinds.get("compare") == "compare_hash32":
         return ("LmdbHashKey",)
     if kinds.get("compare") == "compare_string":
@@ -96,10 +130,36 @@ def expected_key_types(flags: str, kinds: dict[str, str]) -> tuple[str, ...] | N
     if kinds.get("dupsort") == "compare_hash32":
         return ("LmdbHashKey",)
     if "MDB_INTEGERKEY" in flags:
-        if kinds.get("dupsort") == "compare_uint64":
+        if kinds.get("dupsort") != "compare_uint64":
+            return ("u64",)
+        if put == PUT_ZEROKVAL:
+            return ("u64",)
+        if put == PUT_REAL_APPENDDUP:
+            return ("(u64, u64)",)
+        if put == PUT_REAL:
             return ("u64", "(u64, u64)")
-        return ("u64",)
+        raise UnclassifiedTable(
+            "INTEGERKEY + dupsort compare_uint64, but no `mdb_cursor_put` on the "
+            "table's cursor parsed — a collapse and a genuine DUPSORT cannot be told apart"
+        )
     return None
+
+
+def classify_puts(puts: list[tuple[str, str]]) -> str | None:
+    """Fold a table's `(key argument, flags)` put pairs into one put shape.
+
+    An `MDB_CURRENT` put overwrites the record the cursor already sits on;
+    its key argument is not how the table is keyed (`block_info`'s in-place
+    update positions with `zerokval` and then puts with `&key2`), so it says
+    nothing here and is left out of the fold."""
+    inserts = [(key, fl) for key, fl in puts if "MDB_CURRENT" not in fl]
+    if not inserts:
+        return PUT_UNSEEN
+    if all("zerokval" in key for key, _ in inserts):
+        return PUT_ZEROKVAL
+    if any("MDB_APPENDDUP" in fl for _, fl in inserts):
+        return PUT_REAL_APPENDDUP
+    return PUT_REAL
 
 
 def lmdb_facts():
@@ -115,10 +175,18 @@ def lmdb_facts():
     cmps = {}
     for m in re.finditer(r"mdb_set_(dupsort|compare)\(txn,\s*m_(\w+),\s*(\w+)\)", src):
         cmps.setdefault(m.group(2), []).append((m.group(1), m.group(3)))
+    # Every `mdb_cursor_put(m_cur_<member>, <key>, <data>, <flags>)`, by member;
+    # the key argument and the flags are the put shape (`classify_puts`).
+    puts = {}
+    for m in re.finditer(
+        r"mdb_cursor_put\(\s*m_cur_(\w+)\s*,\s*([^,]+),\s*[^,]+,\s*([^)]*)\)", src
+    ):
+        puts.setdefault(m.group(1), []).append((m.group(2).strip(), m.group(3).strip()))
     facts = {}
     for const, name in names:
         flags, member = opens.get(const, ("", ""))
-        facts[name] = (flags, cmps.get(re.sub(r"^m_", "", member), []), const)
+        member = re.sub(r"^m_", "", member)
+        facts[name] = (flags, cmps.get(member, []), const, classify_puts(puts.get(member, [])))
     return facts, names, opens
 
 
@@ -130,50 +198,90 @@ def selftest() -> None:
             "spent_keys collapse",
             "MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED",
             {"dupsort": "compare_hash32"},
+            PUT_ZEROKVAL,
             ("LmdbHashKey",),
         ),
         (
-            "block_info collapse",
+            "block_info collapse: puts keyed by zerokval, exactly u64",
             "MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED",
             {"dupsort": "compare_uint64"},
-            ("u64", "(u64, u64)"),
+            PUT_ZEROKVAL,
+            ("u64",),
         ),
         (
-            "output_amounts genuine DUPSORT as a tuple key",
+            "output_amounts genuine DUPSORT: real key + APPENDDUP, exactly the tuple",
             "MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED",
             {"dupsort": "compare_uint64"},
+            PUT_REAL_APPENDDUP,
+            ("(u64, u64)",),
+        ),
+        (
+            "txs_prunable_hash: real key without APPENDDUP, either shape",
+            "MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED",
+            {"dupsort": "compare_uint64"},
+            PUT_REAL,
             ("u64", "(u64, u64)"),
         ),
         (
             "output_to_leaf INTEGERKEY",
             "MDB_INTEGERKEY | MDB_CREATE",
             {},
+            PUT_UNSEEN,
             ("u64",),
         ),
         (
             "txpool_meta hash key",
             "MDB_CREATE",
             {"compare": "compare_hash32"},
+            PUT_UNSEEN,
             ("LmdbHashKey",),
         ),
         (
             "properties string key",
             "MDB_CREATE",
             {"compare": "compare_string"},
+            PUT_UNSEEN,
             ("&str",),
         ),
         (
             "default-flag BE key unconstrained",
             "MDB_CREATE",
             {},
-            None,
-        ),
+            PUT_UNSEEN,
+            None,),
     ]
     failures = []
-    for label, flags, kinds, want in cases:
-        got = expected_key_types(flags, kinds)
+    for label, flags, kinds, put, want in cases:
+        got = expected_key_types(flags, kinds, put)
         if got != want:
             failures.append(f"{label}: expected key {want!r}, got {got!r}")
+    # A uint64-dupsort table with no parsed put is a failure, never None.
+    try:
+        expected_key_types(
+            "MDB_INTEGERKEY | MDB_CREATE | MDB_DUPSORT | MDB_DUPFIXED",
+            {"dupsort": "compare_uint64"},
+            PUT_UNSEEN,
+        )
+        failures.append("unclassified uint64-dupsort table was accepted instead of raised")
+    except UnclassifiedTable:
+        pass
+    # The put-shape fold, on the three shapes db_lmdb.cpp actually writes.
+    folds = [
+        ("zerokval puts", [("(MDB_val *)&zerokval", "MDB_APPENDDUP")], PUT_ZEROKVAL),
+        ("real key + APPENDDUP", [("&val_amount", "MDB_APPENDDUP")], PUT_REAL_APPENDDUP),
+        ("real key + APPEND", [("&val_tx_id", "MDB_APPEND")], PUT_REAL),
+        (
+            "block_info: zerokval insert plus an in-place MDB_CURRENT update",
+            [("(MDB_val *)&zerokval", "MDB_APPENDDUP"), ("&key2", "MDB_CURRENT")],
+            PUT_ZEROKVAL,
+        ),
+        ("no puts", [], PUT_UNSEEN),
+        ("only an MDB_CURRENT update", [("&key2", "MDB_CURRENT")], PUT_UNSEEN),
+    ]
+    for label, puts, want in folds:
+        got = classify_puts(puts)
+        if got != want:
+            failures.append(f"put fold {label}: expected {want!r}, got {got!r}")
     # The tuple parse: the key group must cross the inner comma.
     m = DEF_RE.search(
         'pub const X: TableDefinition<(u64, u64), Coded<OutKey>> = TableDefinition::new("x");'
@@ -185,7 +293,10 @@ def selftest() -> None:
         for f in failures:
             print(f"  {f}\n", file=sys.stderr)
         sys.exit(1)
-    print(f"redb key-type selftest: {len(cases)} key-rule cases + 1 parse case, all held")
+    print(
+        f"redb key-type selftest: {len(cases)} key-rule cases + 1 unclassified case + "
+        f"{len(folds)} put-fold cases + 1 parse case, all held"
+    )
 
 
 def main():
@@ -245,7 +356,7 @@ def main():
                 f"(and is not named in RUST_ONLY_TABLES)"
             )
             continue
-        flags, cmps, _const = facts[name]
+        flags, cmps, _const, put = facts[name]
         key, value = key.strip(), value.strip()
         kinds = {k: fn for k, fn in cmps}
 
@@ -258,7 +369,11 @@ def main():
                     f"`{flags.strip()}` / comparators {cmps or 'none'}"
                 )
 
-        exp_key = expected_key_types(flags, kinds)
+        try:
+            exp_key = expected_key_types(flags, kinds, put)
+        except UnclassifiedTable as e:
+            failures.append(f"{name}: {e} — the gate's classifying fact is missing")
+            continue
         if exp_key is not None:
             want(exp_key, key, "key type")
         if multimap:
