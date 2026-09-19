@@ -23,6 +23,33 @@
 
 ### Consensus
 
+- **The Rust validator decides timestamps and proof-of-work (DRS-E6
+  slice 2).** `shekyl-chain-rules` now evaluates census 4.C (CEN-C1 FTL,
+  C2 strict MTP, C3 genesis-padded window) and 4.D (D1/D1b PoW vs target,
+  D2 RandomX longhash, D3 seed epoch, D4 LWMA-1 target, D6 non-zero target,
+  D7 fixed difficulty), adopting the bodies `shekyl-difficulty` and the
+  daemon already share — no rule restated. Validation is two stages:
+  `form` (stateless, outside the write transaction, where the longhash is
+  computed through a `Substrate` the daemon implements) then `validate`
+  (view-bound). A verifier that cannot compute is a fault, never a
+  verdict: the `0xff…` sentinel path is unrepresentable in the validator.
+  `--fixed-difficulty` becomes data on a Fakechain rule set
+  (`RuleSet::fakechain`): no override path exists on any nettype other
+  than Fakechain, by type. A Fakechain verdict records CEN-D6 on the
+  same path as LWMA-1 (`Target` is `NonZeroU128`; `Stale::RuleSet`
+  compares the set, not only the id that Fakechain reuses). The RandomX seed-epoch schedule
+  (`seedheight`, 2048/64) moved from `shekyl-pow-randomx` to
+  `shekyl-difficulty::seed_epoch` (FFI exports unchanged). Coverage:
+  `implemented 16 / validator-enforced 151`; `ratified 126 / 153`
+  unchanged — porting does not ratify. The genesis block is judged at
+  its own PoW difficulty, 1 — not the DAA's genesis constant, which is
+  block 1's first target (`shekyl-difficulty` already pinned the two
+  apart; the census CEN-D4 row now points at the JSON key instead of a
+  stale 100). Store side: `cumulative_difficulty` is derived by the
+  validator and leaves `ConnectFacts` (`SCHEMA_VERSION` 6 → 7 — the
+  `passed_through_facts` vocabulary shrinks; rebuild the datadir), and a
+  conformance harness holds the rules' test mock to the real `BatchView`
+  over every landed rule, with a negative control.
 - **RandomX v2 Phase 4 follow-on: leftover schema operands and CN
   vestiges are gone.** `get_block_longhash` no longer takes
   `major_version` / `miners`. `hash_pow_randomx` takes a

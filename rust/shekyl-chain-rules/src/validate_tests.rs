@@ -5,21 +5,26 @@
 
 use super::*;
 use crate::census::CenRow;
+use crate::fault::{Fault, FormAttempt, Retry, Stale};
 use crate::harness::fixture::{candidate, coinbase};
-use crate::harness::{infallible, MockChain};
+use crate::harness::{formed, formed_under, judged, Faulted, MockChain, MockSubstrate};
 use crate::rule_set::RuleSetId;
+use crate::substrate::Substrate;
 use crate::TxIdentity;
 
 #[test]
 fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
     MockChain::default().with_view(|view| {
         let input = candidate(vec![coinbase(1), coinbase(2)]);
-        let valid = infallible(validate(input, &view, &RuleSet::GENESIS))
+        let valid = judged(validate(formed(input), &view, &RuleSet::GENESIS))
             .expect("the fixture satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSetId::GENESIS);
-        // Slice 1's block rows — A2, B1, B2, B5, B7 from the pipeline and
-        // B6 from the derivation — and nothing else (the per-tx entry points
-        // are still empty).
+        // Slice 1's block rows — B1, B2, B7 from the stateless stage, A2,
+        // B5 from the view-bound one, B6 from the derivation — and slice 2's
+        // 4.C rows (C1, C2 predicates; C3 definition) and 4.D rows (D2 in
+        // form; D3's verification, D4 the target, D6 at its mint, D1b the
+        // comparison, D1 the predicate), and nothing else (the per-tx entry
+        // points are still empty).
         assert_eq!(
             valid.coverage().iter().collect::<Vec<_>>(),
             [
@@ -28,7 +33,17 @@ fn a_well_formed_candidate_passes_and_covers_only_the_landed_rows() {
                 CenRow::B2,
                 CenRow::B5,
                 CenRow::B6,
-                CenRow::B7
+                CenRow::B7,
+                CenRow::C1,
+                CenRow::C2,
+                CenRow::C3,
+                CenRow::D1,
+                CenRow::D1b,
+                CenRow::D2,
+                CenRow::D3,
+                CenRow::D4,
+                CenRow::D6,
+                CenRow::D7,
             ]
         );
         assert!(valid.coverage().covers_landed(&RuleSet::GENESIS));
@@ -76,7 +91,7 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
     }
 
     MockChain::default().with_view(|view| {
-        let valid = infallible(validate(input, &view, &RuleSet::GENESIS))
+        let valid = judged(validate(formed(input), &view, &RuleSet::GENESIS))
             .expect("the fixture satisfies every landed rule");
         let block = valid.block();
         assert_eq!(block.hash(), expected_hash);
@@ -93,8 +108,12 @@ fn the_validated_block_is_the_candidate_with_identities_derived_once() {
 #[test]
 fn a_block_with_no_listed_transactions_passes() {
     MockChain::default().with_view(|view| {
-        let valid = infallible(validate(candidate(Vec::new()), &view, &RuleSet::GENESIS))
-            .expect("the fixture satisfies every landed rule");
+        let valid = judged(validate(
+            formed(candidate(Vec::new())),
+            &view,
+            &RuleSet::GENESIS,
+        ))
+        .expect("the fixture satisfies every landed rule");
         assert!(valid.block().transactions().is_empty());
     });
 }
@@ -108,5 +127,171 @@ fn tx_entry_points_pass_with_empty_coverage() {
             tx_against(&tx, &view, &RuleSet::GENESIS),
             Ok(Ok(RuleCoverage::EMPTY))
         );
+    });
+}
+
+// --- the two stages ---------------------------------------------------------
+
+#[test]
+fn form_carries_the_clock_the_seed_and_the_attempt_it_was_given() {
+    let seed = shekyl_types::BlockHash::from_bytes([0x5e; 32]);
+    let substrate = MockSubstrate {
+        clock: shekyl_types::Timestamp::from_raw(1_700_000_777),
+        ..MockSubstrate::default()
+    };
+    let formed = form(
+        candidate(Vec::new()),
+        &RuleSet::GENESIS,
+        &substrate,
+        seed,
+        FormAttempt::FIRST,
+    )
+    .expect("the mock substrate answers")
+    .expect("a well-formed candidate passes the stateless stage");
+    assert_eq!(formed.judged_at(), substrate.clock);
+    assert_eq!(formed.seed(), seed);
+    assert_eq!(formed.attempt(), FormAttempt::FIRST);
+    assert_eq!(formed.rule_set_id(), RuleSetId::GENESIS);
+    // The stateless rows, and only those, are recorded before the view
+    // stage runs — the three version rows and D2, the longhash.
+    assert_eq!(
+        formed.coverage().iter().collect::<Vec<_>>(),
+        [CenRow::B1, CenRow::B2, CenRow::B7, CenRow::D2]
+    );
+}
+
+#[test]
+fn a_substrate_that_cannot_read_the_clock_is_a_fault_not_a_verdict() {
+    struct NoClock;
+    impl Substrate for NoClock {
+        type Fault = Faulted;
+        fn local_clock(&self) -> Result<shekyl_types::Timestamp, Faulted> {
+            Err(Faulted)
+        }
+        fn longhash(
+            &self,
+            _: &[u8],
+            _: &shekyl_types::BlockHash,
+        ) -> Result<shekyl_types::PowHash, Faulted> {
+            unreachable!("the clock faults first")
+        }
+    }
+    let result = form(
+        candidate(Vec::new()),
+        &RuleSet::GENESIS,
+        &NoClock,
+        shekyl_types::BlockHash::NULL,
+        FormAttempt::FIRST,
+    );
+    assert!(matches!(result, Err(Faulted)));
+}
+
+#[test]
+fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
+    let admits_two = RuleSet::admitting_for_tests(2);
+    let mut input = candidate(Vec::new());
+    input.block.header.major_version = 2;
+    input.block.header.minor_version = 2;
+    // Formed under the rule set that admits 2; validated under GENESIS.
+    let formed = form(
+        input,
+        &admits_two,
+        &MockSubstrate::default(),
+        shekyl_types::BlockHash::NULL,
+        FormAttempt::FIRST,
+    )
+    .expect("no fault")
+    .expect("major 2 passes B1 under a set that admits 2");
+    MockChain::default().with_view(|view| {
+        let fault = validate(formed, &view, &RuleSet::GENESIS)
+            .expect_err("a stale rule-set claim is a fault, not a verdict");
+        let Fault::Stale(Stale::RuleSet {
+            formed_under,
+            in_force,
+            retry,
+        }) = fault
+        else {
+            panic!("expected Stale::RuleSet, got {fault:?}");
+        };
+        assert_eq!(formed_under, admits_two);
+        assert_eq!(in_force, RuleSet::GENESIS);
+        // The first attempt may be retried; the payload says with what.
+        assert_eq!(retry, Retry::Again(FormAttempt::FIRST.next_for_tests()));
+    });
+}
+
+#[test]
+fn the_last_attempt_is_terminal() {
+    let admits_two = RuleSet::admitting_for_tests(2);
+    let mut input = candidate(Vec::new());
+    input.block.header.major_version = 2;
+    input.block.header.minor_version = 2;
+    let last = FormAttempt::last_for_tests();
+    let formed = form(
+        input,
+        &admits_two,
+        &MockSubstrate::default(),
+        shekyl_types::BlockHash::NULL,
+        last,
+    )
+    .expect("no fault")
+    .expect("passes the stateless stage");
+    MockChain::default().with_view(|view| match validate(formed, &view, &RuleSet::GENESIS) {
+        Err(Fault::Stale(Stale::RuleSet { retry, .. })) => {
+            assert_eq!(retry, Retry::Exhausted);
+        }
+        other => panic!("expected an exhausted stale fault, got {other:?}"),
+    });
+}
+
+#[test]
+fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
+    // The Fixed arm used to return a Target without recording D6;
+    // `covers_landed` then panicked at mint. Genesis and the set's id
+    // coinciding with GENESIS is the shape that hid it.
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    MockChain::default().with_view(|view| {
+        let formed = formed_under(candidate(Vec::new()), &seven, shekyl_types::BlockHash::NULL);
+        let valid = judged(validate(formed, &view, &seven)).expect("fakechain genesis mints");
+        assert!(valid.coverage().covers_landed(&seven));
+        assert!(valid.coverage().contains(CenRow::D6));
+        assert_eq!(
+            valid.block().target().difficulty(),
+            shekyl_difficulty::Difficulty::from_raw(1),
+            "height 0 is 1 under a fixed target"
+        );
+    });
+}
+
+#[test]
+fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    assert_eq!(seven.id(), RuleSet::GENESIS.id());
+    let formed = formed_under(candidate(Vec::new()), &seven, shekyl_types::BlockHash::NULL);
+    MockChain::default().with_view(|view| {
+        let fault = validate(formed, &view, &RuleSet::GENESIS)
+            .expect_err("the set moved, even though the id did not");
+        match fault {
+            Fault::Stale(Stale::RuleSet {
+                formed_under,
+                in_force,
+                ..
+            }) => {
+                assert_eq!(formed_under, seven);
+                assert_eq!(in_force, RuleSet::GENESIS);
+            }
+            other => panic!("expected Stale::RuleSet, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn two_fakechain_targets_are_distinct_sets() {
+    let three = RuleSet::fakechain(core::num::NonZeroU128::new(3).expect("non-zero"));
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let formed = formed_under(candidate(Vec::new()), &three, shekyl_types::BlockHash::NULL);
+    MockChain::default().with_view(|view| {
+        let fault = validate(formed, &view, &seven).expect_err("different Fixed targets");
+        assert!(matches!(fault, Fault::Stale(Stale::RuleSet { .. })));
     });
 }

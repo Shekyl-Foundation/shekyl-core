@@ -33,6 +33,7 @@ use shekyl_address::Network;
 use shekyl_types::BlockHeight;
 
 use crate::census::{CenRow, RowStatus};
+use crate::rules::difficulty::Target;
 
 /// Identifies the consensus rule set a `ChainValid` was checked under.
 ///
@@ -74,31 +75,88 @@ impl RuleSetId {
 /// The consensus rules as an explicit input to `validate`.
 ///
 /// A rule set is a named, **issued** value: [`RuleSet::for_id`] resolves an
-/// id to one, and there is no way to build one that was not issued.
-/// Parameters populate as rules land. The first is `enforced` — the census
-/// rows this rule set holds a block to, which is also the denominator a
-/// verdict's coverage is measured complete against. The second is
-/// `header_major_version` — the `BlockHeader.major_version` this rule set
-/// admits (CEN-B1; the vote floor of CEN-B2), landed with slice 1.
+/// id to one, and the public-network path — `RuleSchedule::for_network` →
+/// `rules_at` → `for_id` — can build no other. Parameters populate as
+/// rules land. The first is `enforced` — the census rows this rule set
+/// holds a block to, which is also the denominator a verdict's coverage is
+/// measured complete against. The second is `header_major_version` — the
+/// `BlockHeader.major_version` this rule set admits (CEN-B1; the vote
+/// floor of CEN-B2), landed with slice 1. The third is `difficulty` — how
+/// CEN-D4 derives the target — landed with slice 2 and the reason one
+/// non-issued constructor exists ([`RuleSet::fakechain`]).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct RuleSet {
     id: RuleSetId,
     enforced: &'static [CenRow],
     header_major_version: u8,
+    difficulty: DifficultyRule,
+}
+
+/// How a rule set derives the next-block target (CEN-D4 reads this).
+///
+/// Every issued rule set is [`Lwma1`](Self::Lwma1). [`Fixed`](Self::Fixed)
+/// is the `--fixed-difficulty` regtest lever as **data on a Fakechain rule
+/// set** (CEN-D7; `CHAIN_RULES_SLICE_2.md` §4.5, arm (d)): the DAA is not
+/// bypassed by a flag the validator consults, the rule set in force simply
+/// says what the target is. No override path exists on any nettype other
+/// than Fakechain, enforced by the type system rather than by a runtime
+/// check — the API the public nettypes select cannot express `Fixed`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DifficultyRule {
+    /// LWMA-1 over the recorded window; the genesis constant below `N`.
+    Lwma1,
+    /// A fixed target at every height above genesis (height `0` is `1`, as
+    /// `blockchain.cpp:975` has it).
+    ///
+    /// **`RuleSetId` no longer uniquely determines the rule set once this
+    /// variant exists.** A Fakechain set carries `RuleSetId::GENESIS` with a
+    /// parameter no issued set has, so two Fakechain nodes at the same id
+    /// may hold different rule sets. Tolerable — Fakechain is
+    /// single-operator and cross-node identity does not matter there — but
+    /// `RuleSetId` equality is **not** a proxy for rule-set equality, and
+    /// code that compares ids to decide whether two nodes run the same rules
+    /// is wrong on Fakechain by exactly this variant.
+    Fixed(Target),
 }
 
 impl RuleSet {
     /// The genesis rule set: every consensus row of the census; admits
-    /// header version `1` (`hardforks.cpp:35–50`, the one-entry table).
+    /// header version `1` (`hardforks.cpp:35–50`, the one-entry table);
+    /// LWMA-1 difficulty.
     pub const GENESIS: Self = Self {
         id: RuleSetId::GENESIS,
         enforced: CenRow::ALL,
         header_major_version: 1,
+        difficulty: DifficultyRule::Lwma1,
     };
 
     /// Every rule set a schedule may name, in id order. A schedule step that
     /// names an id absent from here does not compile (`well_formed`).
     const ISSUED: &'static [Self] = &[Self::GENESIS];
+
+    /// The genesis rules with the target **fixed** — `shekyld --regtest
+    /// --fixed-difficulty=<n>` as a rule set (CEN-D7, arm (d)).
+    ///
+    /// The one constructor of a non-issued rule set, and deliberately not
+    /// reachable from [`RuleSchedule::for_network`]: `shekyl_address::Network`
+    /// has no Fakechain variant (slice 2 §4.5 F10), so the daemon's
+    /// `--regtest` is what binds this call to fakechain today; when the
+    /// variant exists this takes it as a witness. `fixed` is non-zero by
+    /// its type, so the target it fixes is a [`Target`] by construction
+    /// (CEN-D6).
+    #[must_use]
+    pub const fn fakechain(fixed: core::num::NonZeroU128) -> Self {
+        Self {
+            difficulty: DifficultyRule::Fixed(Target::fixed(fixed)),
+            ..Self::GENESIS
+        }
+    }
+
+    /// How this rule set derives the next-block target.
+    #[must_use]
+    pub const fn difficulty(&self) -> DifficultyRule {
+        self.difficulty
+    }
 
     /// The rule set `id` names; `None` for an id no schedule has issued.
     #[must_use]
@@ -138,6 +196,7 @@ impl RuleSet {
             id: RuleSetId::from_raw(u8::MAX),
             enforced: CenRow::ALL,
             header_major_version,
+            difficulty: DifficultyRule::Lwma1,
         }
     }
 
@@ -168,6 +227,7 @@ impl fmt::Debug for RuleSet {
                 ),
             )
             .field("header_major_version", &self.header_major_version)
+            .field("difficulty", &self.difficulty)
             .finish()
     }
 }

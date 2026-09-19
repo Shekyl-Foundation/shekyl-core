@@ -14,13 +14,18 @@
 use super::*;
 use crate::block::Candidate;
 use crate::census::CenRow;
+use crate::fault::FormAttempt;
 use crate::harness::fixture::{candidate, candidate_on, recorded, root};
-use crate::harness::{assert_refused, boundary_pair, infallible, MockChain};
+use crate::harness::{
+    assert_refused, boundary_pair, formed, formed_on, infallible, judged, MockChain,
+};
+use crate::harness::{Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
-use crate::rules::BlockContext;
-use crate::validate::validate;
+use crate::rules::{BlockContext, FormContext, FormRule};
+use crate::validate::{form, validate};
 use crate::verdict::{ChainValid, Locus, Verdict};
-use shekyl_types::CurveTreeRoot;
+use crate::view::{AtHeight, ChainView, Tip};
+use shekyl_types::{BlockHash, CurveTreeRoot};
 
 /// One bit off: the wrong-root fixtures, without indexing into a newtype.
 fn flip_first_byte(root: CurveTreeRoot) -> CurveTreeRoot {
@@ -36,34 +41,46 @@ fn with_versions(major: u8, minor: u8) -> Candidate {
     candidate
 }
 
-/// Judge a candidate against an empty recorded chain under `rule_set`; the
-/// mock never faults, so the outer position is discharged here.
+/// Judge a candidate through both stages against an empty recorded chain
+/// under `rule_set`; the mock never faults, so the outer positions are
+/// discharged here. A stateless refusal is the verdict without the view
+/// stage running — as in production.
 fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
-    MockChain::default().with_view(|view| {
-        infallible(validate(candidate, &view, rule_set)).map(|_valid: ChainValid<_>| ())
-    })
+    let formed = match form(
+        candidate,
+        rule_set,
+        &MockSubstrate::default(),
+        BlockHash::NULL,
+        FormAttempt::FIRST,
+    ) {
+        Ok(Ok(formed)) => formed,
+        Ok(Err(refused)) => return Err(refused),
+        Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
+    };
+    MockChain::default()
+        .with_view(|view| judged(validate(formed, &view, rule_set)).map(|_valid: ChainValid<_>| ()))
 }
 
 fn judge(candidate: Candidate) -> Verdict<()> {
     judge_under(candidate, &RuleSet::GENESIS)
 }
 
-/// Run one rule on its own — the pipeline stops at the first refusal, so a
-/// rule behind B1 is only reachable this way for a header B1 refuses.
-fn check_alone<R: BlockRule>(candidate: &Candidate, rule_set: &RuleSet) -> Verdict<()> {
-    check_alone_on_under::<R>(&MockChain::default(), candidate, rule_set)
+/// Run one stateless rule on its own — the stage stops at the first
+/// refusal, so a rule behind B1 is only reachable this way for a header B1
+/// refuses.
+fn check_alone<R: FormRule>(candidate: &Candidate, rule_set: &RuleSet) -> Verdict<()> {
+    R::check(&FormContext::new(candidate, rule_set))
 }
 
+/// Run one view-bound rule on its own against `chain`.
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
-    check_alone_on_under::<R>(chain, candidate, &RuleSet::GENESIS)
-}
-
-fn check_alone_on_under<R: BlockRule>(
-    chain: &MockChain,
-    candidate: &Candidate,
-    rule_set: &RuleSet,
-) -> Verdict<()> {
-    chain.with_view(|view| infallible(R::check(&BlockContext::new(candidate, rule_set), &view)))
+    let formed = formed_on(chain, candidate.clone());
+    chain.with_view(|view| {
+        infallible(R::check(
+            &BlockContext::for_tests(&formed, chain.tip(), None),
+            &view,
+        ))
+    })
 }
 
 // --- CEN-B1 ---------------------------------------------------------------
@@ -224,9 +241,9 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
             Ok(None)
         }
     }
-    let genesis = candidate(Vec::new());
+    let genesis = formed(candidate(Vec::new()));
     let verdict = infallible(B5::check(
-        &BlockContext::new(&genesis, &RuleSet::GENESIS),
+        &BlockContext::for_tests(&genesis, None, None),
         &NoRoots,
     ));
     assert_refused(verdict, CenRow::B5, Locus::Block);

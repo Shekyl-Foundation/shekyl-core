@@ -266,19 +266,33 @@ census_rows! {
         B5 implemented(crate::rules::header::B5),
         B6 implemented(crate::rules::header::B6),
         B7 implemented(crate::rules::header::B7),
-        // 4.C Timestamps
-        C1 pending,
-        C2 pending,
-        C3 pending,
-        // 4.D PoW and difficulty
-        D1 pending,
-        D1b pending,
-        D2 pending,
-        D3 pending,
-        D4 pending,
+        // 4.C Timestamps (slice 2): C1/C2 predicates, C3 the window definition
+        // recorded at `C3::window`.
+        C1 implemented(crate::rules::timestamps::C1),
+        C2 implemented(crate::rules::timestamps::C2),
+        C3 implemented(crate::rules::timestamps::C3),
+        // 4.D PoW and difficulty (slice 2). D2 the longhash definition in
+        // `form`; D3 the seed verification, D1b the comparison definition
+        // and D1 the predicate in `validate` (`rules/pow.rs`).
+        D1 implemented(crate::rules::pow::D1),
+        D1b implemented(crate::rules::pow::D1b),
+        D2 implemented(crate::rules::pow::D2),
+        D3 implemented(crate::rules::pow::D3),
+        // D4 the target definition, recorded at `D4::target`; D6 held by the
+        // `Target` type (`NonZeroU128`), recorded at every production path
+        // (`D6::record` / `D6::mint`) so Fakechain `Fixed` and genesis-block
+        // `1` cover the row as well as LWMA-1 (slice 2 Q4). D5 is **subsumed
+        // by D4 over an alt view**: the same LWMA-1
+        // reads its window through `ChainView::block_at`, and the alt
+        // stitching is what an alt view's `block_at` does — it stays
+        // `pending` until slice 9 lands that view and a fixture drives D4
+        // over it (slice 2 Q7; the A5 → 4.G shape).
+        D4 implemented(crate::rules::difficulty::D4),
         D5 pending,
-        D6 pending,
-        D7 pending,
+        D6 implemented(crate::rules::difficulty::D6),
+        // D7 as data on a Fakechain rule set (`DifficultyRule::Fixed`), the
+        // override arm D4 consults on every block (slice 2 Q10, arm (d)).
+        D7 implemented(crate::rules::difficulty::D7),
         // 4.E Checkpoints and fast-sync trust
         E1 pending,
         E2 pending,

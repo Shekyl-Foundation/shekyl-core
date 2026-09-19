@@ -6,8 +6,10 @@
 //! The harness's own subject.
 //!
 //! A harness with nothing to test passes vacuously; the probe below is a
-//! *labelled* rule — not an implementation of CEN-C1, whose registry entry
-//! stays `pending` — shaped exactly like the rules the porting increments
+//! *labelled* rule — not an implementation of CEN-E1, whose registry entry
+//! stays `pending` until slice 3 (it wore the CEN-C1 label until slice 2
+//! landed that row; the probe moves ahead of the port so it never names a
+//! landed rule) — shaped exactly like the rules the porting increments
 //! will write, so the mock, the fault channel and the two assertions are
 //! each shown to bite before the first real rule leans on them. The
 //! `should_panic` cases are what make this file's green mean something.
@@ -19,14 +21,14 @@ use crate::validate::validate;
 use crate::verdict::{refused, Locus, TxSlot};
 
 /// The probe: reads the view (so a fault must travel), then refuses on a
-/// zero timestamp under the CEN-C1 label.
-fn probe_cen_c1<'id, V: ChainView<'id>>(
+/// zero timestamp under the CEN-E1 label.
+fn probe_cen_e1<'id, V: ChainView<'id>>(
     candidate: &Candidate,
     view: &V,
 ) -> Result<Verdict<()>, V::Fault> {
     let _genesis = view.block_at(BlockHeight::ZERO)?;
     if candidate.block.header.timestamp == 0 {
-        return refused(CenRow::C1, Locus::Block);
+        return refused(CenRow::E1, Locus::Block);
     }
     Ok(Ok(()))
 }
@@ -140,15 +142,15 @@ fn key_images_are_a_set() {
 fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
     let chain = one_block();
     chain.with_view(|view| {
-        let valid = infallible(validate(
-            candidate_on(&chain, vec![coinbase(1)]),
+        let valid = judged(validate(
+            formed_on(&chain, candidate_on(&chain, vec![coinbase(1)])),
             &view,
             &RuleSet::GENESIS,
         ))
         .expect("a candidate built on the chain's tip satisfies every landed rule");
         assert_eq!(valid.rule_set_id(), RuleSet::GENESIS.id());
         // The landed block rules ran; the probe is not among them.
-        assert!(!valid.coverage().contains(CenRow::C1));
+        assert!(!valid.coverage().contains(CenRow::E1));
     });
 }
 
@@ -158,12 +160,12 @@ fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
 fn probe_harness_fires_on_the_named_row() {
     one_block().with_view(|view| {
         assert_refused(
-            infallible(probe_cen_c1(&with_timestamp(0), &view)),
-            CenRow::C1,
+            infallible(probe_cen_e1(&with_timestamp(0), &view)),
+            CenRow::E1,
             Locus::Block,
         );
-        boundary_pair(1, 0, CenRow::C1, Locus::Block, |timestamp| {
-            infallible(probe_cen_c1(&with_timestamp(timestamp), &view))
+        boundary_pair(1, 0, CenRow::E1, Locus::Block, |timestamp| {
+            infallible(probe_cen_e1(&with_timestamp(timestamp), &view))
         });
     });
 }
@@ -172,53 +174,53 @@ fn probe_harness_fires_on_the_named_row() {
 fn probe_passes_a_good_candidate() {
     one_block().with_view(|view| {
         assert_eq!(
-            infallible(probe_cen_c1(&with_timestamp(1_000), &view)),
+            infallible(probe_cen_e1(&with_timestamp(1_000), &view)),
             Ok(())
         );
     });
 }
 
 #[test]
-#[should_panic(expected = "expected CEN-C2 at block, but CEN-C1 refused at block")]
+#[should_panic(expected = "expected CEN-E2 at block, but CEN-E1 refused at block")]
 fn probe_harness_bites_wrong_row() {
     one_block().with_view(|view| {
         assert_refused(
-            infallible(probe_cen_c1(&with_timestamp(0), &view)),
-            CenRow::C2,
+            infallible(probe_cen_e1(&with_timestamp(0), &view)),
+            CenRow::E2,
             Locus::Block,
         );
     });
 }
 
 #[test]
-#[should_panic(expected = "expected CEN-C1 at block, but the candidate passed")]
+#[should_panic(expected = "expected CEN-E1 at block, but the candidate passed")]
 fn probe_harness_bites_ok() {
     one_block().with_view(|view| {
         assert_refused(
-            infallible(probe_cen_c1(&with_timestamp(1_000), &view)),
-            CenRow::C1,
+            infallible(probe_cen_e1(&with_timestamp(1_000), &view)),
+            CenRow::E1,
             Locus::Block,
         );
     });
 }
 
 #[test]
-#[should_panic(expected = "the last acceptable value was refused: CEN-C1 refused at block")]
+#[should_panic(expected = "the last acceptable value was refused: CEN-E1 refused at block")]
 fn probe_boundary_bites_inverted_pair() {
     one_block().with_view(|view| {
-        boundary_pair(0, 1, CenRow::C1, Locus::Block, |timestamp| {
-            infallible(probe_cen_c1(&with_timestamp(timestamp), &view))
+        boundary_pair(0, 1, CenRow::E1, Locus::Block, |timestamp| {
+            infallible(probe_cen_e1(&with_timestamp(timestamp), &view))
         });
     });
 }
 
 #[test]
-#[should_panic(expected = "expected CEN-C1 at miner tx, but CEN-C1 refused at block")]
+#[should_panic(expected = "expected CEN-E1 at miner tx, but CEN-E1 refused at block")]
 fn probe_harness_bites_wrong_locus() {
     one_block().with_view(|view| {
         assert_refused(
-            infallible(probe_cen_c1(&with_timestamp(0), &view)),
-            CenRow::C1,
+            infallible(probe_cen_e1(&with_timestamp(0), &view)),
+            CenRow::E1,
             Locus::Tx {
                 slot: TxSlot::Miner,
             },
@@ -240,9 +242,9 @@ fn probe_propagates_a_fault_and_never_reaches_a_verdict() {
     let faulting = FaultingView::default();
     // Both the candidate the probe would refuse and the one it would pass
     // come back as the fault: the substrate failed before any judgement.
-    assert_eq!(probe_cen_c1(&with_timestamp(0), &faulting), Err(Faulted));
+    assert_eq!(probe_cen_e1(&with_timestamp(0), &faulting), Err(Faulted));
     assert_eq!(
-        probe_cen_c1(&with_timestamp(1_000), &faulting),
+        probe_cen_e1(&with_timestamp(1_000), &faulting),
         Err(Faulted)
     );
 }

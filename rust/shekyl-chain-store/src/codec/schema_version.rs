@@ -61,7 +61,14 @@ use super::{Canonical, CodecError};
 ///   2) is retired and the tag RESERVED; `U64PrefixBytes`, `SetTable` and the
 ///   multimap `UndoTarget` are deleted. Row fixtures move for `out_key` and
 ///   `undo_log`; the catalogue row for `output_amounts` moves.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(6);
+/// - `7` — DRS-E6 slice 2 (`CHAIN_RULES_SLICE_2.md` §4.3, Q5), the first
+///   passed-through fact deleted by the row that derives it:
+///   `cumulative_difficulty` leaves `ConnectFacts` (the validator derives it,
+///   CEN-D4, and `connect` reads it off the verdict), so `FACT_FIELDS` loses
+///   its name and `PassedThroughFacts` its accepted vocabulary shrinks
+///   7 → 6. Zero bytes of any table change; the `passed_through_facts` cell's
+///   fixtures move.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(7);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -118,10 +125,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(6));
-        assert_eq!(SCHEMA_VERSION.encode(), [6, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(7));
+        assert_eq!(SCHEMA_VERSION.encode(), [7, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[6, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[7, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }

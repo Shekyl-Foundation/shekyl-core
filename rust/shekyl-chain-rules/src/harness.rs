@@ -8,7 +8,7 @@
 //! written with (`CHAIN_RULES_CRATE.md` §8.7).
 //!
 //! Test-only (`#[cfg(test)]` at the declaration). Rules are generic over
-//! `ChainView<'id>`, so a rule is exercised here against a [`MockChain`] of
+//! `ChainView<'id>`, so a rule is exercised here against a [`MockChain`](crate::harness::MockChain) of
 //! a few recorded blocks with no database — the capability the C++ never
 //! had (C2-R8 §9.1). A harness with no subject is a vacuous pass; the probe
 //! in `harness_probe_tests.rs` is the subject that keeps this one honest.
@@ -18,11 +18,20 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::BTreeSet;
 
-use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
+use shekyl_difficulty::{
+    seedheight, CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG,
+};
+use shekyl_types::{
+    AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
+};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Transaction, TxPrefix};
 
-use crate::block::Candidate;
+use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
+use crate::fault::{Fault, FormAttempt};
+use crate::rule_set::RuleSet;
+use crate::substrate::Substrate;
+use crate::validate::form;
 use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView, RecordedBlock, Tip};
 
@@ -172,11 +181,127 @@ impl<'id> ChainView<'id> for FaultingView<'id> {
     }
 }
 
+/// The environment a fixture is judged in: a fixed clock and a longhash
+/// function the test chooses.
+///
+/// The default longhash is the **all-zero** hash — `0 · d < 2^256` for
+/// every target, so PoW passes at any difficulty and a fixture that is not
+/// about PoW never trips on it. A PoW fixture swaps in a closure that
+/// returns what it needs; a fault fixture swaps in one that returns
+/// [`Faulted`].
+#[derive(Clone, Copy)]
+pub struct MockSubstrate {
+    /// What `local_clock` returns.
+    pub clock: Timestamp,
+    /// What `longhash` returns, given the preimage and the seed.
+    pub longhash: fn(&[u8], &BlockHash) -> Result<PowHash, Faulted>,
+}
+
+impl MockSubstrate {
+    /// A clock comfortably after every fixture header's timestamp
+    /// ([`fixture::header`] is `1_700_000_000`), so CEN-C1 passes unless a
+    /// test moves one or the other.
+    pub const CLOCK: Timestamp = Timestamp::from_raw(1_700_000_100);
+
+    /// The longhash that satisfies every target. The `Result` is the fn
+    /// pointer's shape, not this function's choice.
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn always_satisfies(_: &[u8], _: &BlockHash) -> Result<PowHash, Faulted> {
+        Ok(PowHash::from_bytes([0; 32]))
+    }
+}
+
+impl Default for MockSubstrate {
+    fn default() -> Self {
+        Self {
+            clock: Self::CLOCK,
+            longhash: Self::always_satisfies,
+        }
+    }
+}
+
+impl Substrate for MockSubstrate {
+    type Fault = Faulted;
+
+    fn local_clock(&self) -> Result<Timestamp, Faulted> {
+        Ok(self.clock)
+    }
+
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Faulted> {
+        (self.longhash)(pow_blob, seed)
+    }
+}
+
+/// The seed CEN-D3 expects for a candidate on `chain`'s tip: the null hash
+/// at genesis admission, else the identity of the block at
+/// `seedheight(connecting)`. What an honest driver claims to `form`.
+#[must_use]
+pub fn expected_seed(chain: &MockChain) -> BlockHash {
+    let Some(tip) = chain.tip() else {
+        return BlockHash::NULL;
+    };
+    let connecting = tip.height.to_raw() + 1;
+    let seed_height = seedheight(connecting, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG);
+    match chain.block(BlockHeight::from_raw(seed_height)) {
+        AtHeight::Recorded(block) => block.hash,
+        AtHeight::AboveTip => unreachable!("the seed height is below the tip"),
+    }
+}
+
+/// Run the stateless stage under `rule_set` with the default substrate,
+/// claiming `seed`. Panics if the substrate faults or a stateless rule
+/// refuses — a fixture that wants to exercise either calls [`form`] itself.
+#[track_caller]
+pub fn formed_under(
+    candidate: Candidate,
+    rule_set: &RuleSet,
+    seed: BlockHash,
+) -> StructurallyValid {
+    match form(
+        candidate,
+        rule_set,
+        &MockSubstrate::default(),
+        seed,
+        FormAttempt::FIRST,
+    ) {
+        Ok(Ok(formed)) => formed,
+        Ok(Err(refused)) => panic!("the fixture was refused by a stateless rule: {refused}"),
+        Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
+    }
+}
+
+/// [`formed_under`] the genesis rule set, claiming the seed `chain` expects
+/// — the honest driver's call, so D3 holds and the view stage judges the
+/// candidate.
+#[track_caller]
+pub fn formed_on(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
+    formed_under(candidate, &RuleSet::GENESIS, expected_seed(chain))
+}
+
+/// [`formed_on`] an empty chain — a genesis candidate.
+#[track_caller]
+pub fn formed(candidate: Candidate) -> StructurallyValid {
+    formed_on(&MockChain::default(), candidate)
+}
+
 /// Unwrap a result whose error cannot exist.
 pub fn infallible<T>(result: Result<T, Infallible>) -> T {
     match result {
         Ok(value) => value,
         Err(never) => match never {},
+    }
+}
+
+/// Unwrap `validate`'s outer position over a view that cannot fault: the
+/// view arm is uninhabited, and the crate's own arms are a fixture failure
+/// unless the test asked for them.
+#[track_caller]
+pub fn judged<T>(result: Result<T, Fault<Infallible>>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(Fault::View(never)) => match never {},
+        Err(Fault::Stale(stale)) => panic!("unexpected stale premise: {stale}"),
+        Err(Fault::Corrupt(corrupt)) => panic!("unexpected corrupt view: {corrupt}"),
     }
 }
 
@@ -281,8 +406,21 @@ pub mod fixture {
         candidate_on(&MockChain::default(), listed)
     }
 
-    /// A recorded block whose header carries `timestamp`, identity derived.
+    /// A recorded block whose header carries `timestamp`, identity derived,
+    /// with **no work recorded** (`cumulative_difficulty` zero). Enough for
+    /// every fixture that is not about difficulty — a chain shorter than
+    /// the LWMA-1 window never reads the field — and a chain that *is*
+    /// about it builds its series with [`recorded_with_work`].
     pub fn recorded(timestamp: u64) -> RecordedBlock {
+        recorded_with_work(timestamp, CumulativeDifficulty::ZERO)
+    }
+
+    /// A recorded block with `timestamp` and `cumulative_difficulty` both
+    /// chosen — the LWMA-1 fixtures' shape.
+    pub fn recorded_with_work(
+        timestamp: u64,
+        cumulative_difficulty: CumulativeDifficulty,
+    ) -> RecordedBlock {
         let block = Block {
             header: BlockHeader {
                 timestamp,
@@ -294,6 +432,7 @@ pub mod fixture {
         RecordedBlock {
             hash: block.hash(),
             header: block.header,
+            cumulative_difficulty,
         }
     }
 
@@ -304,5 +443,6 @@ pub mod fixture {
     }
 }
 
+#[cfg(test)]
 #[path = "harness_probe_tests.rs"]
 mod harness_probe_tests;
