@@ -337,6 +337,7 @@ Each is a substrate fact at `8494f2a27`, with its file and line.
 | **WSS-11** | **`redb_backend.rs` is still 4 196 lines** — nothing of `CTS-` is built. The file holds the schema, six codecs, `StoreError` (17 variants), three handle types, every operation, and ~2 000 lines of tests. | §8; the decomposition principle survives any `WSS-Q1` answer |
 | **WSS-13** | **`P`'s serving state is written through the *principal's* curve-tree actor, into the principal's file — a firewall-layering defect.** `EngineServeSetPinner` holds a `CurveTreeHandle` and a `p_id` side by side (`stake_engine/serve_set_source.rs:79`, `:101`) and calls `pin_serve_set` on that handle (`:254-257`); the handle it is given in production is the **engine's own** — `g.curve_tree.clone()` at `stake_engine/serving/start.rs:158`, passed at `:203-206`. So the serve set — which is `P`'s bonded obligation, and whose membership is `P`-correlated — is persisted by the actor that owns the principal's proving state, in the same `.curvetree` file. [`PRINCIPAL_STAKE_LIFECYCLE.md`](PRINCIPAL_STAKE_LIFECYCLE.md) §0 treats keeping `P`'s material inside the `StakeEngine` actor as load-bearing; this path routes around that. **This, not `WSS-5` or `WSS-6`, is what makes `WSS-Q1` urgent**, and it re-poses it as an *ownership* question rather than a storage one (§6.1). | `WSS-Q1` — the ground; the firewall stack |
 | **WSS-18** | **The plaintext `.curvetree` file is an at-rest route to `P`, beside an encrypted `.wallet` — verified.** The store is a **sibling of the wallet file** (`shekyl-engine-file/src/paths.rs:117-121`: `primary.wallet` → `primary.wallet.curvetree`) and `shekyl-curve-tree` contains **no encryption at all** — the only `chacha` hits in the crate are a test RNG (`store/ops.rs:148-158`). The serve-set pins that `WSS-13` routes into it are therefore **`P`'s holdings in plaintext next to an encrypted wallet**, which is the gap on its own: the wallet already ruled that no-password disk access is worth defending against, and a plaintext companion undoes that ruling for exactly the adversaries it was made for. **Verified negative that bounds the problem:** the onion key is *not* a second route — `Detach` is unrepresentable, the onion dies with its control connection, and the identity holds re-mintable expanded bytes behind `Zeroizing` (`shekyl-tor-control-client/src/onion_identity.rs:74-83`, `:148-152`), so Tor never writes it to disk. | §6.2 — the whole at-rest case rests on this row |
+| **WSS-21** | **The two hash rows are the last two components of the txid, and the txid is committed in the block the wallet already syncs.** A spend's txid is 4-part — `H(prefix) · H(base) · H(pqc_auths) · H(prunable)` (`shekyl-wire/src/transaction/txid.rs:52-58`; the coinbase is 3-part with a null prunable component, so it carries no archival good) — and `TxidParts { hash, pqc_auth_hash, prunable_hash }` (`:43-50`) is precisely the txid **plus** the two store rows, computed in one pass. Block-level commitment: the tree root is `merkle(miner_tx_hash ‖ tx_hashes)` inside the PoW blob (`shekyl-chain-rules/src/rules/header.rs:173`). **So a holder of the full bytes can verify them against consensus directly**, without the rows. The rows exist for the party that *cannot* — `hash_with_supplied_components(pqc_auth, prunable_hash)` (`txid.rs:194-201`) is the skeleton path, and its existence is the evidence that the rows' consumer is the discarding daemon, not the filling wallet. | §6.4; `WSS-Q5` |
 | **WSS-20** | **A `tracing` log line puts `P` in a plaintext file — a second at-rest route, and a new gap.** `serve_set_source.rs:261-263` emits `shard_ids = ?releasable` at **`info`** level on every pin release. Released shard ids matched against the chain's public bond history **identify `P`**. The sink is a plaintext file (`--log-file`, `shekyl-wallet-rpc/src/main.rs:87-89`; created mode `0600`, `shekyl-logging/src/appender.rs:119-124`) and persists exactly as `.curvetree` does — as does journald. **So encrypting `P`'s store does not close the at-rest route on its own** (`WSS-18`): this line reaches the same adversaries — no-password forensics, offline VPS snapshots, shared machines. **Fix is cheap:** log the released **count**, never the ids, plus a lint or test that no `P`-correlated id reaches a log at any level. | §6.2; `WSS-19`; it gates the same claim |
 | **WSS-19** | **`P`'s *other* persisted state is unaudited, and the audit gates the claim that encrypting the store closes the gap.** `WSS-18` establishes one plaintext route to `P`; it does not establish that it is the only one. **Audit executed 2026-09-19** over the per-wallet siblings in `shekyl-engine-file/src/paths.rs` (`.keys` `:59`, `.curvetree` `:98`, `.tor` `:126`, `.pscan` `:170`, `.pending` `:198`) — see §6.2.5 for the table. Result: **one new route found** (`WSS-20`, the log line), **one accepted residual** (the *existence* of `.pscan` / `.pending` says the wallet has staked — not which persona; same class as the store's multi-gigabyte footprint, `WSS-15`), and **one factual check still owed** (whether the pinned Tor version records anything per hosted service in its `state` file). **Until that check runs, `WSS-19` cannot claim closure** — a fix that closes one of several routes and is described as closing "the" route is worse than none, because it retires the question. | §6.2.5; it gates the at-rest claim |
 | **WSS-14** | **The subroot cache's role is cost, and the cost is per block.** `verify_root` is called on **every ingested block** (`engine/merge.rs:651`, in the per-block pre-pass that refuses to advance past tree state the wallet cannot reproduce). `root_at_count` under it reads `frozen_segments.r_k` per complete segment (`WSS-4`); without the cache each block recomputes every complete segment from leaves, so **sync cost becomes quadratic in chain length**. Correctness has a fallback; throughput does not. | `WSS-9`; `WSS-Q2`; the proving-side arm in §6.1 |
@@ -357,7 +358,7 @@ of one row rather than a redesign.
 | --- | --- | --- | --- | --- |
 | 1 | **The shard partition `b_*`** | S-PRUNE's forward pass over the A4 length rows, once (`PDM-Q9` (iii)) | **Reads. Never mints.** E3 S-CURVE, this store and the verifier all read it | This store computes a boundary. A divergent partition **forks at admission** — consensus, not a local convention |
 | 2 | **`SHARD_BYTES`** | One home, const-asserted, not editable as a tune (`PDM-Q-F33` (i)) | Reads. Production scope is `BuildRust.cmake`'s roots; `shekyl-sp-t3-spike`'s fixture constant and `shekyl-economics-sim`'s `f64` model constant are **intentional exclusions** | A production `SHARD_BYTES` in a second shipped crate, or in `consensus_constants.json` |
-| 3 | **`txs_prunable_hash` / `txs_pqc_auth_hash`** | The daemon, uniform, forever (`PDM-Q6` items 1–2; rows landed on #772) | **Verify-on-fill is against them.** Never recomputed here as an authority | A verify-on-fill that trusts anything else |
+| 3 | **The txid**, committed through `merkle(miner_tx_hash ‖ tx_hashes)` in the PoW blob | Consensus; the wallet already holds it from the blocks it syncs | **Verify-on-fill is against the txid** (§6.4, `WSS-21`), recomputed from the bytes just fetched. `txs_prunable_hash` / `txs_pqc_auth_hash` stay the **daemon's** need for `DRS-D10` skeleton replay and are **not** an input here | A verify-on-fill that trusts a supplied digest rather than recomputing the commitment |
 | 4 | **Fill transport** | The **ordinary split transaction read every wallet already makes** — `shekyl-daemon-rpc/src/methods.rs:552-605` (`PDM-Q9`/`Q10`) | Consumes. `get_prunable_range` is **withdrawn** | **Any archival-serving RPC on the daemon is a falsifier of `PDM-Q9`**, not a convenience |
 | 5 | **The specified-to-scarce window** | `PDM-Q6` item 3 / `PDM-Q9` — shard `k` is bondable from `close_height(k)`, scarce at `discard(k)`, `≥ W` later | The window is **when** this store fills, from the local daemon over the operator leg | A fill outside the window with no recovery-fetch path |
 | 6 | **Codecs** | `shekyl-store-codec` (§8 (i), PR A) | Shares one **encoding contract** with the daemon store **without sharing a schema** | The two stores' `Canonical` impls diverge for one vocabulary type |
@@ -415,8 +416,8 @@ commit.**
 | **WSS-Q2** | **Does the rebuilt store prune, what bounds obligation A's growth, and does it keep a segment-subroot cache?** **Conditional on §6.3** — if the proving state is not a store, the A-side half of this question does not arise | `WSS-8` (the discard was never wired; prune-disabled is only the `CompleteTree` posture), `WSS-9` / `WSS-14` (the cache is dispensable for correctness and **load-bearing for cost** — `verify_root` runs on every block, `engine/merge.rs:651` — and its boundary cannot be tied to `b_*`), `WSS-12` (full leaf set in RAM), `76-device-provisioning-floor` | Proposed **if A stays a store**: B prunes by shard lapse; A does not prune and owes a stated growth bound at the Pi-4 floor. A growth bound is owed either way, and whoever drops the subroot cache owes a sync-cost answer |
 | **WSS-Q3** | **Reorg under the answer to Q1** | `WSS-7`; `PDM-Q2`'s `W ≥ D_max` (B fills from below the horizon) | Proposed: **B does not reorg** — it is filled only from shards whose last transaction is `≥ W` old — so A keeps the reorg path alone |
 | **WSS-Q4** | **Fill from the local daemon in the specified-to-scarce window** | `PDM-Q9`, "the one sentence Q9 still owed"; §5 rows 4–5 | Proposed: yes, over the operator leg, through the existing split read; no new RPC |
-| **WSS-Q5** | **Verify-on-fill against the daemon's hash rows** | `PDM-Q6`; §5 row 3 | Proposed: yes, per transaction, `expected = (txs_prunable_hash, Option<txs_pqc_auth_hash>)` |
-| **WSS-Q6** | **Key by shard over `[b_k, b_{k+1})`** | `PDM-Q-F32`, `PDM-Q9` (iii); §5 rows 1–2 | Proposed: yes; the store **reads** `b_*` and mints nothing |
+| **WSS-Q5** | **What a fill is verified against** | `PDM-Q6`; §5 row 3; `WSS-21` | **Proposed: the txid, not the hash rows** (§6.4) — recompute each transaction's txid from the bytes just fetched and compare it with the txid committed in the block. A **recorded difference from `PDM-Q6`'s wording**, with its argument at §6.4: it verifies against the consensus commitment rather than the daemon's cache of two of its components, it needs no DRS row that has not landed, and recovery shards verify identically |
+| **WSS-Q6** | **Key by shard over `[b_k, b_{k+1})`** | `PDM-Q-F32`, `PDM-Q9` (iii); §5 rows 1–2 | Proposed: yes; the store **reads** `b_*` and mints nothing. **And the boundary is the one input the wallet cannot fully verify** — §6.4.3 states what it can check, what it cannot, and how a wrong `b_k` fails |
 | **WSS-Q7** | **Serve per-tx through `shekyl-p-serve`** | `SF-D8` content half, sub-PR 2 | Proposed: yes; `ShardProvider` unchanged in kind, its unit re-keyed |
 | **WSS-Q8** | **The lapse tail** — how long an archiver serves a shard it no longer bonds | [`FOLLOWUPS.md`](../FOLLOWUPS.md) (the archiver retention-horizon row), owner [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md), **enforcing site this store**. **The rule has a builder** — `stake_engine/serve_set_source.rs` | **Adopt the landed rule: erase at the second consecutive epoch open at which the shard is absent from the bond record** (`EPOCHS_BEFORE_PIN_RELEASE = 2`, `WSS-16`). It already covers the recovery-fetch consumer, because the pair stops being drawable before release, and it carries its own rule-21 reopening criterion. **Rejected — and it was this round's own proposal:** *"erase at the close of the epoch in which the drop connected, plus `D_max`"*. It looks equivalent and is weaker: it silently assumes `W₂ < D_max` (~720 blocks), i.e. it **smuggles in an operand that has no value yet**, which is precisely what the landed gate was written to avoid. **Also rejected:** filtering `D` against holdings at tip, which reopens `SF-D10` **and** `SO-D8` Q3 to save ~4 MB; and accepting the misses, which exports an avoidable cost to the daemon that needed the data. The rule stays the serving route's; the enforcement and its test are this round's |
 | **WSS-Q9** | **Recovery intake** — the daemon's episodic fetch hands a shard across and retains nothing | `PDM-Q9` recovery clause | Proposed: intake is the same write path as fill, with the same verify; the daemon side is episodic and stateless by `PDM-Q9` |
@@ -712,6 +713,98 @@ risk does not merely go away with the subroot cache — **the per-block check
 gets cheaper than it is today**, and `WSS-Q2`'s A-side half stops arising at
 all (`WSS-12` with it).
 
+### 6.4 How `P`'s store verifies what it fills (**open**; the first real decision inside the store)
+
+**Proposed: verify against the txid, not against the daemon's hash rows.** A
+recorded difference from `PDM-Q6`'s wording, with the argument here — which is
+what `R3` requires of a divergence.
+
+#### 6.4.1 The mechanism
+
+Fetch the whole transaction — prefix, base, `pqc_auths`, prunable region —
+recompute its **txid**, and compare with the txid committed in the block.
+A match proves the archived bytes are exactly the committed ones.
+
+The chain of trust is already whole for a party holding the bytes:
+
+```text
+PoW blob  ⊃  merkle(miner_tx_hash ‖ tx_hashes)      header.rs:173
+                         │
+                      txid of each tx
+                         │
+   H(prefix) · H(base) · H(pqc_auths) · H(prunable)  txid.rs:52-58
+                                  │          │
+                          the archived good ─┘
+```
+
+The two hash rows are the **last two components of that txid**, cached
+(`TxidParts`, `txid.rs:43-50`). A party that holds the bytes recomputes them;
+it does not need them supplied.
+
+#### 6.4.2 Why this is better for the wallet — three reasons, in order
+
+1. **It removes the dependency on the daemon rewrite.** The hash rows are DRS
+   work that has not landed (A3 landed on #772; **A4 is still owed**). Verifying
+   against the txid needs only the ordinary full-transaction read that exists
+   today (§5 row 4) plus txids the wallet already holds. **The fill path becomes
+   buildable now**, and verification does not break if the row format moves
+   during DRS — which is steering's "properly decouple the daemon elements that
+   are in flux" (§1.1 (1)) applied to the store's first decision.
+2. **It checks against the root of trust rather than a cache of it.** Under
+   `R3` the wallet adopts canon and never mints its own. The txid **is** the
+   consensus commitment; the rows are the daemon's copy of two of its
+   components. Verifying against the txid is adopting canon **more** directly,
+   not diverging from it — so the difference from `PDM-Q6` narrows the trusted
+   surface rather than widening it.
+3. **Recovery shards verify identically.** A shard handed over by another
+   archiver is checked the same way: recompute each txid from the bytes,
+   compare with the block. **No trust in the sender is required**, and
+   `WSS-Q9`'s intake needs no separate verification design.
+
+**Why the daemon still needs the rows — so this is not read as retiring them.**
+After a daemon discards a shard it can no longer recompute those txids from
+what it retains, but replaying and validating its own skeleton (`DRS-D10`)
+still needs them. That is the rows' job and it stays daemon-side. The API says
+so itself: `hash_with_supplied_components(pqc_auth, prunable_hash)`
+(`txid.rs:194-201`) exists for the party without the bytes. The wallet **has**
+the bytes at the moment it verifies, so it does not share that need.
+
+#### 6.4.3 The one input the wallet cannot fully verify — shard boundaries
+
+Membership is `[b_k, b_{k+1})`, derived from the daemon's A4 length rows. Under
+`R3` the wallet **adopts** `b_*` and mints none of its own (§5 row 1), so this
+is a trust edge by design rather than an oversight. What the wallet can and
+cannot check, stated precisely:
+
+- **Checkable — the end boundary, given the start.** Once shard `k` is filled,
+  the running byte total over its transactions must cross `SHARD_BYTES` **at
+  the last transaction and not before** (`PDM-Q-F32`'s closing rule). That
+  confirms `b_{k+1}`.
+- **Not checkable — the start.** `b_k` cannot be confirmed without the previous
+  shard's bytes, which the store does not hold. It rests on trusting the
+  **local daemon over the operator leg** — the existing trust model (§5 row 4),
+  not a new hole.
+
+**How it fails, stated because a trust edge without a failure mode is an
+unexamined one.** A wrong `b_k` from the local daemon means the store holds the
+**wrong set of transactions** for shard `k`. Nothing detects it at fill time.
+The **first challenge on that shard misses**, and the operator is **slashed**.
+That is a loud, attributable, operator-local failure with no consensus effect
+and no privacy effect — acceptable, and the design should say that is how it
+fails rather than leave a reader to discover it. (It is also an argument for
+the checkable half: a `b_{k+1}` that does not close at `SHARD_BYTES` is a
+refusable fill, and refusing it costs nothing.)
+
+#### 6.4.4 What comes after this, in order
+
+1. **When the fill runs** — inside the specified-to-scarce window while the
+   local daemon still holds the bytes, triggered by a shard joining `P`'s
+   holdings (`WSS-Q4`).
+2. **The serving interface** — per-transaction reads by `shekyl-p-serve`,
+   **keeping the serve-set blindness** of §6.2.6 (`WSS-Q7`).
+3. **Unwinding `WSS-13`** — the serve set and the posture move out of the
+   curve-tree actor into the `StakeEngine`.
+
 ---
 
 ## 7. `CTS-`'s disposition — successor round, **disposed** on steering's answer (3)
@@ -937,6 +1030,7 @@ What must be true before genesis for this lane, in mission order.
 
 | Date | Decision |
 | --- | --- |
+| 2026-09-19 | **§6.4 — `WSS-Q5` proposed against the txid rather than the daemon's hash rows; a recorded difference from `PDM-Q6`'s wording, with its argument.** Verified at source (`WSS-21`): a spend's txid is `H(prefix) · H(base) · H(pqc_auths) · H(prunable)` (`txid.rs:52-58`), `TxidParts` is that txid plus the two rows in one pass (`:43-50`), and the block commits every txid through `merkle(miner_tx_hash ‖ tx_hashes)` in the PoW blob (`header.rs:173`). So a holder of the bytes recomputes the commitment instead of being handed a cache of two of its components. **Three reasons, in order:** it removes the dependency on unlanded DRS work (A4 is still owed) so the fill path is buildable now and survives row-format churn — steering's "decouple what is in flux", applied; it checks the **root of trust** rather than a cache of it, which under `R3` narrows the trusted surface rather than widening it; and recovery shards verify identically, so `WSS-Q9` needs no separate design and no trust in the sender. **The rows are not retired** — they remain the discarding daemon's own need for `DRS-D10` skeleton replay, and `hash_with_supplied_components` (`txid.rs:194-201`) exists for exactly that party. **§6.4.3 states the one unverifiable input:** `b_k`. The wallet can confirm the **end** boundary (the running total must cross `SHARD_BYTES` at the last transaction and not before) but not the **start**, which rests on the local daemon over the operator leg — the existing trust model. **Failure mode recorded:** a wrong `b_k` means the wrong transaction set, nothing detects it at fill, the first challenge misses and the operator is slashed — loud, attributable, operator-local, with no consensus or privacy effect. |
 | 2026-09-19 | **`WSS-Q8` is answered by landed code, and the answer this round proposed was weaker.** `EPOCHS_BEFORE_PIN_RELEASE = 2` (`serve_set_source.rs:284`) already releases a pin only after two consecutive epoch opens with the shard absent from the bond record, and `releasable`'s doc comment carries the argument — drawability is evaluated at epoch open, one epoch is too tight because a challenge from the last drawable block must still **resolve**, and **`W₂` is deliberately not an operand** because it is UNDERIVED (§9.7 item 6), with a rule-21 reopening criterion if it ever reaches one epoch. **This round's "epoch-close + `D_max`" is rejected as its own proposal:** it looks equivalent and silently assumes `W₂ < D_max`, smuggling in an operand with no value — exactly what the landed gate was written to avoid. The recovery-fetch consumer found the previous day is covered, because the pair stops being drawable before release. **The FOLLOWUPS row's "no builder today" was false.** **`WSS-19` audit executed** over the per-wallet siblings (§6.2.5): **`WSS-20` found** — `serve_set_source.rs:261-263` logs released `shard_ids` at `info` into a plaintext file (`--log-file`, mode `0600`), and those ids against the public bond history **identify `P`**, so sealing the store does **not** close the at-rest route alone; fix is count-not-ids plus a lint. The *existence* of `.pscan` / `.pending` is an **accepted residual** (says the wallet staked, not which persona — `WSS-15`'s class). One factual check still owed: whether the pinned Tor version records per-service state. **§6.2.6 added:** `StoreShardProvider` takes only a shard id and has no serve-set notion, so a dropped-but-still-pinned shard staying served is what keeps the obligation met — the `WSS-13` unwind must erase on the pin-release gate and **nothing earlier**. |
 | 2026-09-18 | **`WSS-Q8`'s pending check ran and failed: the lapse tail is not zero.** Recovery fetches draw from the epoch's **drawable set**, and `SO-D8` Q3 §7.4 deliberately does **not** filter `D` at the tip — filtering would let a later drop retroactively falsify the point query and make `D` time-varying — so *"a dropped pair stays in `D` for `E`"* (`ARCHIVAL_CHALLENGE_MECHANISM.md:197-203`), while `SF-D10` makes organic selection a uniform draw over that snapshot with the scheduler doing no filtering of its own (`ARCHIVAL_SHARD_FETCH.md:184`, `:1232-1257`). At `settlement_epoch_blocks = 10000` that is ~10 000 blocks against a `D_max` of 720, so erasure at drop-connect + `D_max` would delete data that is still drawable. **Answer: erase at the close of the epoch in which the drop connected, plus `D_max`** — no new tunable (`E` and `D_max` are both ruled), never earlier than the previous answer so Pin 3's reorg protection is preserved, ≤ 4.33 MB for ≤ one epoch + 720 blocks, and it leaks nothing because the data is public and the drop is on-chain. It also makes the drawable set honest for recovery rather than only for challenges. **Rejected:** filtering `D` at tip (reopens `SF-D10` and `SO-D8` Q3, both ruled, to save ~4 MB) and accepting the misses (pushes a known avoidable cost onto the daemon that needed the data). **The record is that the check found a consumer**, not that a new policy was adopted. |
 | 2026-09-18 | **§6.3 resolved: the proving side is not a store — verified at source, with three amendments.** A public frontier at `F = tip − W` plus a buffer (shared, ownership-free) and private per-output membership paths in each identity's existing sealed file; the wallet's only redb is then `P`'s serving store. **Premise verified:** ZK hides the leaf from the *verifier*, not the prover, which needs only its own path — pinned to the FCMP++ prover's `Path` at `assemble.rs:18-35`; the anonymity set is unchanged, and today's full-leaf retention is an implementation choice the module doc states itself. **All six attacks answered at source** (`recon.rs:116-126` + `shekyl-consensus:28,:31`; `consensus_constants.json:4-5,:26` + `segment.rs:69-71` giving `W = 730` exactly; `refresh/task.rs:337-358`; widths at `fcmps/src/lib.rs:61,:63`; `handle.rs:611,:641` + `payload.rs:117-126`; the actor's **exactly eight** messages). **Three amendments from verification:** the buffer is **`W + 60`** blocks, not `W`, because replaying drains over `[F, ref]` needs outputs created from `F − 60` (coinbase maturity); late discovery is free **except** for an output already scanned but not marked path-worthy, whose remedy is to define path-worthy as *"in the ledger"* rather than *"currently spendable"*; and `IngestBlock` learning ownership would relocate `WSS-13` unless the **frontier advance stays public and identity-free with path capture as a per-identity filter** (§6.3.3). **One inversion:** `verify_root` becomes an O(depth) frontier advance, so the per-block check gets **cheaper than today** and `WSS-14`'s quadratic risk, `WSS-Q2`'s A-side half and `WSS-12` all stop arising. Open on four measurements (§6.3.4), one of which — a reorg deeper than `W` — carries a rule-82 user-facing failure mode, not only a technical one. |
