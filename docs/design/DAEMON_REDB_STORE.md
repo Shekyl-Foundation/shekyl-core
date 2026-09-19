@@ -2256,19 +2256,34 @@ increment that touches it). Stated once, in `codec::shape`:
   digest is unchanged — `digest_v0` folds hashes, not encodings, and
   `TypeName` never enters it. The file format is not: a file under version 2
   is refused at the header seal, per (a).
-- **One trait, two stores; the rule stays with the digest.** `Canonical`,
-  `CodecError` and the value shapes (`Coded`, `Blob`, `Present`, `Unshaped`) are store-engine-generic and will move to
-  a redb-only shared crate when the wallet-side curve-tree backend
+- **One trait, two stores; the rule stays with the digest. MOVED
+  2026-09-18 (steering), ahead of wallet adoption.** `Canonical`,
+  `CodecError`, `exact` and the value shapes (`Coded`, `Blob`, `Present`,
+  `Unshaped`) are store-engine-generic and now live in `shekyl-store-codec`
   (plan: [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md), Round 0
-  executed 2026-09-18)
+  executed 2026-09-18; PR A), with `shekyl-chain-store` re-exporting at
+  `crate::codec::*` so no import path moved. The move was taken **ahead of**
+  the wallet-side curve-tree backend
   (`shekyl-curve-tree/src/store/redb_backend.rs`: `leaves`,
-  `owned_identities`, `leaf_meta`, `frozen_segments`, today `&[u8; N]`) adopts
-  them — as the first commit of *that* PR, with `shekyl-chain-store`
-  re-exporting so import paths move once. What does **not** travel: (b)'s
-  bump obligation, the snapshot gate and the `impl Canonical` source scan are
-  properties of the daemon store's implementations — the consensus
-  obligation lives where the digest is, and a general-purpose trait must not
-  look like the thing someone could later relax for the wallet's convenience.
+  `owned_identities`, `leaf_meta`, `frozen_segments`, today `&[u8; N]`)
+  adopting the shapes, rather than as that PR's first commit: a move mixed
+  with a rewrite is unreviewable, and PR B and E3 both depend on the crate
+  existing. The crate is **not** `redb`-only as this bullet first said — the
+  orphan rule strands every vocabulary codec in a `redb`-only crate once the
+  trait is foreign to `shekyl-chain-store`, so it depends on `shekyl-types`
+  and `shekyl-units` and hosts those codecs once for both stores (CTS-13,
+  CTS-Q6); `RuleSetId` alone keeps a chain-store-local adapter
+  (`RuleSetInForce`), because the codec crate must not depend on the rules
+  crate. What did **not** travel: (b)'s bump obligation, the fixture
+  snapshots and the `impl Canonical` source scan are properties of the
+  daemon store's implementations — the consensus obligation lives where the
+  digest is, and a general-purpose trait must not look like the thing
+  someone could later relax for the wallet's convenience. The scan is
+  therefore containment over *this* crate's tree, not equality: a registry
+  row for a moved codec that ceased to exist is a compile error, the moved
+  codecs' fixtures stay committed here, and
+  `.github/workflows/schema-snapshot.yml` triggers on the codec crate's path
+  so a byte change there still runs this gate.
 
 **Implementation pointers (DRS-E1 increment 2, 2026-09-14).**
 
