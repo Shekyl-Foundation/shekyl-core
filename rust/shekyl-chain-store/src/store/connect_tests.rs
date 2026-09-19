@@ -533,18 +533,18 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
     cleanup(&path);
 }
 
-/// SI-9 on the keyed `output_amounts` (SOK-Q2): density is `last + 1 == len`
-/// over the one bucket. A planted row at index 5 makes `len == 2` with
-/// `last == 5`, so the next connect poisons before it writes.
-#[test]
-fn a_gapped_amount_bucket_is_si9() {
-    let path = tmp("connect-amount-bucket");
+/// Genesis, plant through `plant`, connect block 1 — SI-9 poisons and
+/// halts. The unique assertion is the planted keys; the scaffold is one
+/// helper so these belts cannot drift from each other.
+fn plant_then_connect_is_si9(
+    label: &str,
+    plant: impl FnOnce(&mut WriteBatch<'_, '_>) -> Result<(), StoreError>,
+) {
+    let path = tmp(label);
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let (_, genesis) = connect_genesis(&store, 0);
     let planted: Result<(), TestErr> = store.write(|batch| {
-        batch
-            .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
-            .insert(slot(0, 5).key(), amount_record(99).encoded().as_encoded())?;
+        plant(batch)?;
         Ok(())
     });
     planted.expect("plant");
@@ -583,78 +583,51 @@ fn amount_record(output_id: u64) -> OutKey {
     }
 }
 
-/// The single-bucket premise is **checked**, not assumed (SOK-Q2, tightened
-/// on #783 review): `next_amount_index` reads the table's first and last
-/// keys and refuses a bucket that is not both, before it trusts the table's
-/// length as the bucket's cardinality. `connect` stores every miner and
-/// emission vout under the confidential amount and CEN-H14 makes every
-/// other vout's amount `0`, so a row under another amount can only mean a
-/// non-miner, non-emission vout with a loud amount reached the store — the
-/// validator's hole, and the belt fires as `StoreInvariantViolated`, never
-/// a verdict.
+/// SI-9 on the keyed `output_amounts` (SOK-Q2): density is `last + 1 == len`
+/// over the one bucket. A planted row at index 5 makes `len == 2` with
+/// `last == 5`, so the next connect poisons before it writes.
+#[test]
+fn a_gapped_amount_bucket_is_si9() {
+    plant_then_connect_is_si9("connect-amount-bucket", |batch| {
+        batch
+            .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
+            .insert(slot(0, 5).key(), amount_record(99).encoded().as_encoded())?;
+        Ok(())
+    });
+}
+
+/// The single-bucket premise is checked, not assumed: a row under another
+/// amount is a non-miner, non-emission loud vout that reached the store —
+/// the validator's hole, SI-9, never a verdict.
 #[test]
 fn a_second_amount_bucket_is_si9_the_validators_hole_not_a_verdict() {
-    let path = tmp("connect-second-bucket");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
-    let planted: Result<(), TestErr> = store.write(|batch| {
+    plant_then_connect_is_si9("connect-second-bucket", |batch| {
         batch
             .open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?
             .insert(slot(7, 0).key(), amount_record(98).encoded().as_encoded())?;
         Ok(())
     });
-    planted.expect("plant");
-    let b1 = candidate(1, genesis.hash(), Vec::new());
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
-    });
-    expect_row(&out, StoreInvariant::IdNotFresh);
-    assert_eq!(
-        store.connect_state(),
-        ConnectState::Halted {
-            at_height: BlockHeight::from_raw(1),
-            row: StoreInvariant::IdNotFresh,
-        }
-    );
-    cleanup(&path);
 }
 
-/// The case the whole-table length alone would accept (PR #783 review): a
-/// hole in the confidential bucket compensated by a foreign-bucket row —
-/// `(0,0), (0,2), (7,5)` has `len == 3` and bucket-0 `last == 2`. The ends
-/// check refuses it: the last key's amount is `7`, not the bucket's.
+/// A hole in the confidential bucket compensated by a foreign-bucket row
+/// — `(0,0), (0,2), (7,5)` has `len == 3` and bucket-0 `last == 2`. The
+/// ends check refuses it: the last key's amount is `7`, not the bucket's.
 #[test]
 fn a_hole_compensated_by_a_foreign_bucket_row_is_still_si9() {
-    let path = tmp("connect-compensated-hole");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
-    let planted: Result<(), TestErr> = store.write(|batch| {
+    plant_then_connect_is_si9("connect-compensated-hole", |batch| {
         let mut amounts = batch.open_insert_table(OUTPUT_AMOUNTS, StoreInvariant::IdNotFresh)?;
         amounts.insert(slot(0, 2).key(), amount_record(2).encoded().as_encoded())?;
         amounts.insert(slot(7, 5).key(), amount_record(3).encoded().as_encoded())?;
         Ok(())
     });
-    planted.expect("plant");
-    let b1 = candidate(1, genesis.hash(), Vec::new());
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
-    });
-    expect_row(&out, StoreInvariant::IdNotFresh);
-    cleanup(&path);
 }
 
-/// SOK-2's belt from the write side: `amount_index` must equal `output_id`.
-/// A planted `output_txs` row makes the next `output_id` 2 while the amount
-/// bucket's next index is 1; the two counters disagree and the connect
-/// poisons rather than writing a record whose key and `output_id` differ.
+/// SOK-2: a planted `output_txs` row makes the next `output_id` 2 while
+/// the amount bucket's next index is 1. The two counters disagree; the
+/// write refuses a record whose key and `output_id` differ.
 #[test]
 fn amount_index_and_output_id_diverging_is_si9() {
-    let path = tmp("connect-two-counters");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
-    let planted: Result<(), TestErr> = store.write(|batch| {
+    plant_then_connect_is_si9("connect-two-counters", |batch| {
         batch
             .open_insert_table(OUTPUT_TXS, StoreInvariant::IdNotFresh)?
             .insert(
@@ -668,44 +641,18 @@ fn amount_index_and_output_id_diverging_is_si9() {
             )?;
         Ok(())
     });
-    planted.expect("plant");
-    let b1 = candidate(1, genesis.hash(), Vec::new());
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
-    });
-    expect_row(&out, StoreInvariant::IdNotFresh);
-    cleanup(&path);
 }
 
 /// Unique-key primary: `txs_pruned` keys `{0, 3}` have `len == 2`; using
 /// `len` as the next id would insert 2 over the hole.
 #[test]
 fn a_gapped_txs_pruned_primary_is_si9() {
-    let path = tmp("connect-txid-gap");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let (_, genesis) = connect_genesis(&store, 0);
-    let planted: Result<(), TestErr> = store.write(|batch| {
+    plant_then_connect_is_si9("connect-txid-gap", |batch| {
         batch
             .open_insert_table(TXS_PRUNED, StoreInvariant::IdNotFresh)?
             .insert(3, Raw::<TxPrunedSegment>::new(&[0u8; 1]))?;
         Ok(())
     });
-    planted.expect("plant");
-    let b1 = candidate(1, genesis.hash(), Vec::new());
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
-    });
-    expect_row(&out, StoreInvariant::IdNotFresh);
-    assert_eq!(
-        store.connect_state(),
-        ConnectState::Halted {
-            at_height: BlockHeight::from_raw(1),
-            row: StoreInvariant::IdNotFresh,
-        }
-    );
-    cleanup(&path);
 }
 
 #[test]

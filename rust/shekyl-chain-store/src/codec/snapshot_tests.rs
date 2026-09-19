@@ -79,7 +79,7 @@ use std::path::{Path, PathBuf};
 use crate::apply_policy::ArchivalFamily;
 use crate::family_set::FamilySet;
 use crate::lmdb_order::Hash32;
-use crate::schema::{self, TableShape};
+use crate::schema;
 
 use super::{
     post_image, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, PassedThroughFacts, ProbeCell,
@@ -557,18 +557,12 @@ fn render_table_catalogue() -> String {
     assert!(!catalogue.is_empty(), "schema::catalogue() is empty");
     let mut rows = BTreeMap::new();
     for (ordinal, spec) in catalogue.iter().enumerate() {
-        let shape = match spec.shape {
-            TableShape::Map => "map",
-        };
         // The ordinal is part of the layout (schema module docs): the pop
         // journal names tables by it, so a reorder must move this snapshot
         // and take the version bump with it, even though the rows are
-        // sorted by name for a stable diff.
-        let row = format!(
-            "#{ordinal} {shape}<{}, {}>",
-            spec.key.name(),
-            spec.value.name()
-        );
+        // sorted by name for a stable diff. `map` is the catalogue's one
+        // shape (rule 21); a second shape re-mints the word with its table.
+        let row = format!("#{ordinal} map<{}, {}>", spec.key.name(), spec.value.name());
         assert!(
             rows.insert(spec.name.as_str(), row).is_none(),
             "duplicate table name `{}` in schema::catalogue()",

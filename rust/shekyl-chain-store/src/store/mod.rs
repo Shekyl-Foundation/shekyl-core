@@ -542,3 +542,7 @@ mod amendments_tests;
 #[cfg(test)]
 #[path = "read_tests.rs"]
 mod read_tests;
+
+#[cfg(test)]
+#[path = "output_read_tests.rs"]
+mod output_read_tests;

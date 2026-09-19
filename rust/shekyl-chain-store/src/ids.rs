@@ -84,13 +84,13 @@ store_id! {
 /// not chosen, while R8b-2 is open (`DRS_E1_SOUT_KI.md` §3.4); the read
 /// surface takes a [`shekyl_types::GlobalOutputIndex`] and resolves it to
 /// [`Self::confidential`], which is where the "one bucket" premise lives
-/// as code rather than as a comment.
+/// as code rather than as a comment. Fields are private: the tuple is
+/// assembled only through [`Self::new`] / [`Self::confidential`] /
+/// [`Self::from_key`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct OutputSlot {
-    /// The bucket: the output's loud amount, `0` for a confidential output.
-    pub amount: AtomicUnits,
-    /// The dense position within the bucket.
-    pub index: AmountIndex,
+    amount: AtomicUnits,
+    index: AmountIndex,
 }
 
 impl OutputSlot {
@@ -132,10 +132,15 @@ impl OutputSlot {
         Self::new(AtomicUnits::from_raw(amount), AmountIndex::from_raw(index))
     }
 
-    /// The key range covering every slot in `amount`'s bucket — how a
-    /// reader or writer finds a bucket's last slot in O(log n).
+    /// The bucket this slot sits in.
     #[must_use]
-    pub const fn bucket(amount: AtomicUnits) -> core::ops::RangeInclusive<(u64, u64)> {
-        (amount.to_raw(), 0)..=(amount.to_raw(), u64::MAX)
+    pub const fn amount(self) -> AtomicUnits {
+        self.amount
+    }
+
+    /// The dense position within the bucket.
+    #[must_use]
+    pub const fn index(self) -> AmountIndex {
+        self.index
     }
 }

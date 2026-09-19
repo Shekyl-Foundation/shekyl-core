@@ -65,9 +65,10 @@
 //! table holds **one bucket** and the E2 comparator projects it 1:1 onto
 //! LMDB's `DUPSORT` pairs. The amount dimension is carried, not chosen:
 //! whether `amount_index` is ever *exposed* stays R8b-2's question
-//! (`DRS_E1_SOUT_KI.md` §3.4). The single-bucket premise is what makes the
-//! SI-9 density check exact, and SOK-Q2 states it as a premise: a second
-//! bucket fails the check rather than passing it.
+//! (`DRS_E1_SOUT_KI.md` §3.4). The single-bucket premise is checked at
+//! both ends of the table before `len` is trusted as the bucket's
+//! cardinality: a second bucket, or a hole compensated by a foreign row,
+//! is SI-9, never a verdict.
 
 use shekyl_chain_rules::{ChainValid, RuleSet, RuleSetId, TxIdentity};
 use shekyl_difficulty::CumulativeDifficulty;
@@ -590,29 +591,9 @@ impl<'id> WriteBatch<'_, 'id> {
             } else {
                 AtomicUnits::from_raw(output.amount)
             };
-            // `amount_index` is the bucket's next dense key (LMDB's
-            // `mdb_cursor_count` after positioning on the amount). Under the
-            // keyed `(amount, amount_index)` table (S-OUT-KI SOK-1) a
-            // duplicate is unrepresentable — `insert` refuses a present key
-            // — so SI-9's belt is density, `last + 1 == len`, which is exact
-            // only under the premise SOK-Q2 states: the whole table holds
-            // **one** bucket, because every miner and emission vout is
-            // stored under the confidential amount and CEN-H14 makes every
-            // other vout's amount `0`. `next_amount_index` *checks* that
-            // premise (the table's first and last keys carry this bucket's
-            // amount) rather than assuming it, so a second bucket is refused
-            // whether or not its rows happen to make the table's length
-            // come out right (PR #783 review): a non-miner, non-emission
-            // vout with a non-zero amount reached the store, which the
-            // validator was to refuse — `StoreInvariantViolated`, never a
-            // verdict; the validator has the hole. SOK-2's belt rides the
-            // same check: `output_id` is `output_txs`' next dense key, so
-            // with one bucket `amount_index == output_id` for every output.
-            let amount_index = AmountIndex::from_raw(
-                next_amount_index(&amounts, bucket)?
-                    .filter(|next| *next == output_id.to_raw())
-                    .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?,
-            );
+            // SI-9 / SOK-2: one dense bucket whose next index is this output_id.
+            let slot = next_output_slot(&amounts, bucket, output_id)?
+                .ok_or_else(|| self.poison().arm(StoreInvariant::IdNotFresh))?;
             let record = OutKey {
                 output_id,
                 pubkey: OneTimePubkey::from_bytes(output.key),
@@ -620,11 +601,8 @@ impl<'id> WriteBatch<'_, 'id> {
                 height: BlockHeight::from_raw(height),
                 commitment: CommitmentBytes::from_bytes(*commitment),
             };
-            amounts.insert(
-                OutputSlot::new(bucket, amount_index).key(),
-                record.encoded().as_encoded(),
-            )?;
-            indices.push(amount_index);
+            amounts.insert(slot.key(), record.encoded().as_encoded())?;
+            indices.push(slot.index());
             if miner || emission || output.amount == 0 {
                 rct += 1;
             }
@@ -651,36 +629,37 @@ fn next_dense_id(last: Option<u64>, len: u64) -> Option<u64> {
     }
 }
 
-/// Next `amount_index` for `bucket` in the keyed `(amount, amount_index)`
-/// table, or `None` if the table is not exactly that one dense bucket
-/// (SI-9 as SOK-Q2 states it).
+/// The slot `output_id` occupies in `bucket`, or `None` if SI-9 would not
+/// hold: the table is not exactly that one dense bucket, or its next index
+/// is not `output_id` (SOK-2).
 ///
-/// Three O(log n) reads: the table's first key, its last key, and its
-/// length. Keys sort by `(amount, index)`, so a row from any *other* bucket
-/// would sit at the first or the last position — checking that both ends
-/// carry `bucket` **is** the single-bucket premise, checked rather than
-/// assumed. Only then is the table's length the bucket's cardinality, and
-/// unique keys make a duplicate unrepresentable, so density is
-/// `last + 1 == len`. Without the ends check a foreign row could make a
-/// hole in this bucket sum to the right length (`(0,0), (0,2), (7,x)`; PR
-/// #783 review) — which is why the premise is verified at the site and not
-/// stated in a comment.
-fn next_amount_index<W>(
+/// Three O(log n) reads: first key, last key, length. Keys sort by
+/// `(amount, index)`, so a foreign-bucket row sits at an end — both ends
+/// carrying `bucket` **is** the single-bucket premise. Only then is `len`
+/// the bucket's cardinality; unique keys make density `last + 1 == len`.
+/// A hole compensated by a foreign row (`(0,0), (0,2), (7,x)`) would pass
+/// the length check alone. Mixed first/last is not an empty table.
+fn next_output_slot<W>(
     amounts: &KeyedTable<'_, (u64, u64), Coded<OutKey>, W>,
     bucket: AtomicUnits,
-) -> Result<Option<u64>, StoreError> {
-    let ends = (amounts.first()?, amounts.last()?);
-    let (Some((first, _)), Some((last, _))) = ends else {
-        // Empty table: the first slot of the first bucket.
-        return Ok(next_dense_id(None, 0));
+    output_id: OutputStorageId,
+) -> Result<Option<OutputSlot>, StoreError> {
+    let next = match (amounts.first()?, amounts.last()?) {
+        (None, None) => next_dense_id(None, 0),
+        (Some((first, _)), Some((last, _))) => {
+            let first = OutputSlot::from_key(first.value());
+            let last = OutputSlot::from_key(last.value());
+            if first.amount() != bucket || last.amount() != bucket {
+                return Ok(None);
+            }
+            next_dense_id(Some(last.index().to_raw()), amounts.len()?)
+        }
+        _ => return Ok(None),
     };
-    let (first, last) = (
-        OutputSlot::from_key(first.value()),
-        OutputSlot::from_key(last.value()),
-    );
-    if first.amount != bucket || last.amount != bucket {
-        return Ok(None);
+    match next {
+        Some(n) if n == output_id.to_raw() => {
+            Ok(Some(OutputSlot::new(bucket, AmountIndex::from_raw(n))))
+        }
+        _ => Ok(None),
     }
-    let len = amounts.len()?;
-    Ok(next_dense_id(Some(last.index.to_raw()), len))
 }

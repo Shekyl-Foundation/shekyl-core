@@ -94,14 +94,16 @@
 //! # The catalogue is the declaration
 //!
 //! Every definition is declared through one `tables!` invocation, which
-//! also emits [`catalogue`]: the same list as [`TableSpec`] rows — name,
-//! shape, and the key/value [`TypeName`]s redb checks against the
-//! definition at every `open_table`. Those three facts are what a binary
-//! with a different layout trips over, so they are what the table
-//! catalogue snapshot (`codec::snapshot_tests`, rule 42) pins: adding,
-//! removing or re-keying a table moves the snapshot and therefore requires
-//! the `SCHEMA_VERSION` bump §11.1(b) owes. A definition cannot be added
-//! outside the invocation without that module's source scan failing.
+//! also emits [`catalogue`]: the same list as [`TableSpec`] rows — name
+//! and the key/value [`TypeName`]s redb checks against the definition at
+//! every `open_table`. Those facts are what a binary with a different
+//! layout trips over, so they are what the table catalogue snapshot
+//! (`codec::snapshot_tests`, rule 42) pins: adding, removing or re-keying
+//! a table moves the snapshot and therefore requires the `SCHEMA_VERSION`
+//! bump §11.1(b) owes. A definition cannot be added outside the invocation
+//! without that module's source scan failing. The snapshot line spells
+//! `map<key, value>`: the catalogue has one shape (rule 21 — a second
+//! shape re-mints the word here with its table, not a reserved enum).
 //!
 //! # Ordinals, and the tables LMDB does not have
 //!
@@ -231,24 +233,12 @@ pub const RUST_ONLY_TABLES: &[(&str, &str)] = &[
     ),
 ];
 
-/// Whether a table holds one value per key or many. One variant since
-/// S-OUT-KI's layout commit retired the catalogue's only multimap; the enum
-/// stays because the snapshot line spells the shape (`map<…>`) and a second
-/// shape would have to re-mint it here, in the catalogue, not in prose.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TableShape {
-    /// `TableDefinition` — one value per key.
-    Map,
-}
-
-/// One table's identity as redb records it in the file: name, shape, and
-/// the key/value type names it validates at `open_table`.
+/// One table's identity as redb records it in the file: name and the
+/// key/value type names it validates at `open_table`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TableSpec {
     /// The redb table name (the LMDB table name, verbatim).
     pub name: String,
-    /// The table's shape (one variant today, `Map`).
-    pub shape: TableShape,
     /// The key type as redb names it on disk.
     pub key: TypeName,
     /// The value type as redb names it on disk.
@@ -265,7 +255,6 @@ impl<K: redb::Key + 'static, V: redb::Value + 'static> Catalogued for TableDefin
     fn spec(&self) -> TableSpec {
         TableSpec {
             name: TableHandle::name(self).to_owned(),
-            shape: TableShape::Map,
             key: K::type_name(),
             value: V::type_name(),
         }

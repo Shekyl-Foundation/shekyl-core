@@ -126,7 +126,7 @@ pub(super) fn output_at<T: ReadTables>(
     // The join the record carries must be the slot it sits under: with one
     // bucket, `output_id == amount_index` (SOK-2). Validated here, once, so
     // the projection below can omit it.
-    if record.output_id.to_raw() != slot.index.to_raw() {
+    if record.output_id.to_raw() != slot.index().to_raw() {
         return Err(not_dense());
     }
     Ok(AtIndex::Recorded(RecordedOutput {
