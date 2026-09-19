@@ -24,6 +24,7 @@ use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, FormContext, FormRule};
 use crate::validate::{form, validate};
 use crate::verdict::{ChainValid, Locus, Verdict};
+use crate::view::{AtHeight, ChainView, Tip};
 use shekyl_types::{BlockHash, CurveTreeRoot};
 
 /// One bit off: the wrong-root fixtures, without indexing into a newtype.
@@ -74,7 +75,12 @@ fn check_alone<R: FormRule>(candidate: &Candidate, rule_set: &RuleSet) -> Verdic
 /// Run one view-bound rule on its own against `chain`.
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
     let formed = formed_on(chain, candidate.clone());
-    chain.with_view(|view| infallible(R::check(&BlockContext::new(&formed, None, true), &view)))
+    chain.with_view(|view| {
+        infallible(R::check(
+            &BlockContext::for_tests(&formed, chain.tip(), None),
+            &view,
+        ))
+    })
 }
 
 // --- CEN-B1 ---------------------------------------------------------------
@@ -237,7 +243,7 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
     }
     let genesis = formed(candidate(Vec::new()));
     let verdict = infallible(B5::check(
-        &BlockContext::new(&genesis, None, true),
+        &BlockContext::for_tests(&genesis, None, None),
         &NoRoots,
     ));
     assert_refused(verdict, CenRow::B5, Locus::Block);

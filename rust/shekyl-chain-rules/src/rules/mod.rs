@@ -67,9 +67,11 @@ use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::rule_set::RuleSet;
+use crate::rules::difficulty::Target;
 use crate::rules::timestamps::MtpWindow;
 use crate::verdict::Verdict;
-use crate::view::ChainView;
+use crate::view::{ChainView, Tip};
+use shekyl_types::BlockHeight;
 
 /// A consensus rule, bound to the census row it implements.
 ///
@@ -142,41 +144,62 @@ pub(crate) fn run_form<R: FormRule>(
     verdict
 }
 
-/// What a **view-bound** block-level rule may read besides the view. Built
-/// from the [`StructurallyValid`] the stateless stage produced and the
-/// definitions `validate` derives before the predicates run; fields grow
-/// with the rows that read them (the rule set with 4.D), never ahead of
-/// them.
+/// What a **view-bound** block-level rule may read besides the view: the
+/// connect's derived facts, computed once in `validate` before the
+/// predicates run.
 ///
-/// The view is passed beside it, not inside it, so `V` and its `Fault` stay
-/// on the method and the context is one type for every view.
+/// The connecting height is the operand almost every view-bound rule
+/// needs (genesis exemption, seed height, MTP window, DAA window, B5's
+/// root key). It is derived from the tip here, so a rule does not
+/// re-read `view.tip()` and C1 does not infer genesis from
+/// `mtp_window.is_none()`. The view stays beside the context for
+/// per-rule lookups that are not shared (`root_at`, further `block_at`).
 pub(crate) struct BlockContext<'a> {
-    /// The untrusted candidate, exactly as received.
-    pub(crate) candidate: &'a Candidate,
-    /// What `form` established — the clock reading (C1), the seed claim.
+    /// What `form` established — the candidate, the clock reading (C1),
+    /// the seed claim, the longhash.
     pub(crate) formed: &'a StructurallyValid,
-    /// The median-time-past window at the connecting height (C3's
-    /// definition); `None` at genesis. Read by C1 (the genesis exemption)
-    /// and C2.
+    /// Height this candidate will occupy. `ZERO` is genesis admission.
+    pub(crate) connecting: BlockHeight,
+    /// The recorded tip this candidate connects onto; `None` at genesis.
+    pub(crate) tip: Option<Tip>,
+    /// C3's window. `None` at genesis — the same fact as
+    /// `connecting.is_zero()`, not a second genesis signal. C1 reads the
+    /// height; C2 reads the window.
     pub(crate) mtp_window: Option<MtpWindow>,
-    /// Whether the longhash satisfies the target under the ported
-    /// comparison (D1b's definition, evaluated once over D4's target). D1
-    /// acts on it; the target itself travels on the verdict, not here.
-    pub(crate) pow_meets_target: bool,
+    /// D4's target. D1 compares `formed.pow()` against it.
+    pub(crate) target: Target,
 }
 
 impl<'a> BlockContext<'a> {
-    pub(crate) const fn new(
+    pub(crate) fn new(
         formed: &'a StructurallyValid,
+        tip: Option<Tip>,
         mtp_window: Option<MtpWindow>,
-        pow_meets_target: bool,
+        target: Target,
     ) -> Self {
         Self {
-            candidate: formed.candidate(),
             formed,
+            connecting: Tip::connecting_height(tip.as_ref()),
+            tip,
             mtp_window,
-            pow_meets_target,
+            target,
         }
+    }
+
+    /// The untrusted candidate, exactly as received.
+    pub(crate) const fn candidate(&self) -> &Candidate {
+        self.formed.candidate()
+    }
+
+    /// Isolated-rule tests that do not read the target. Production
+    /// `validate` always passes D4's.
+    #[cfg(test)]
+    pub(crate) fn for_tests(
+        formed: &'a StructurallyValid,
+        tip: Option<Tip>,
+        mtp_window: Option<MtpWindow>,
+    ) -> Self {
+        Self::new(formed, tip, mtp_window, Target::GENESIS_BLOCK)
     }
 }
 
@@ -185,9 +208,11 @@ impl<'a> BlockContext<'a> {
 /// transaction that will apply the block.
 pub(crate) trait BlockRule: Rule {
     /// `Ok(Ok(()))` passed; `Ok(Err(refused))` refused on `Self::ROW`;
-    /// `Err(fault)` the view could not answer. A rule that needs the
-    /// recorded chain reads `view` itself — the tip, a parent, a root — so
-    /// a new read is a new `ChainView` method, never a new parameter here.
+    /// `Err(fault)` the view could not answer. Shared connect facts (tip,
+    /// connecting height, window, target) live on [`BlockContext`]. A rule
+    /// that needs a further recorded fact reads `view` itself — a root, a
+    /// parent — so a new shared fact is a new context field, and a new
+    /// per-rule lookup is a new `ChainView` method.
     fn check<'id, V: ChainView<'id>>(
         cx: &BlockContext<'_>,
         view: &V,

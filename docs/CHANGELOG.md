@@ -35,7 +35,9 @@
   verdict: the `0xff…` sentinel path is unrepresentable in the validator.
   `--fixed-difficulty` becomes data on a Fakechain rule set
   (`RuleSet::fakechain`): no override path exists on any nettype other
-  than Fakechain, by type. The RandomX seed-epoch schedule
+  than Fakechain, by type. A Fakechain verdict records CEN-D6 on the
+  same path as LWMA-1 (`Target` is `NonZeroU128`; `Stale::RuleSet`
+  compares the set, not only the id that Fakechain reuses). The RandomX seed-epoch schedule
   (`seedheight`, 2048/64) moved from `shekyl-pow-randomx` to
   `shekyl-difficulty::seed_epoch` (FFI exports unchanged). Coverage:
   `implemented 16 / validator-enforced 151`; `ratified 126 / 153`

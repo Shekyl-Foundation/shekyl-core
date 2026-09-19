@@ -57,7 +57,7 @@ use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::rules::{BlockContext, BlockRule, FormContext, FormRule, Rule};
 use crate::verdict::{refused, InvalidBlock, Locus, Verdict};
-use crate::view::{AtHeight, ChainView, Tip};
+use crate::view::{AtHeight, ChainView};
 
 /// CEN-B1: `major_version` must equal the version the rule set admits.
 pub(crate) struct B1;
@@ -157,9 +157,8 @@ impl BlockRule for B5 {
         cx: &BlockContext<'_>,
         view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
-        let connecting = Tip::connecting_height(view.tip()?.as_ref());
-        let claimed = cx.candidate.block.header.curve_tree_root;
-        match view.root_at(connecting)? {
+        let claimed = cx.candidate().block.header.curve_tree_root;
+        match view.root_at(cx.connecting)? {
             AtHeight::Recorded(root) if root == claimed => Ok(Ok(())),
             AtHeight::Recorded(_) | AtHeight::AboveTip => refused(Self::ROW, Locus::Block),
         }

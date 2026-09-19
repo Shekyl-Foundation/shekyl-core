@@ -15,7 +15,7 @@ use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use crate::coverage::RuleCoverage;
 use crate::fault::FormAttempt;
-use crate::rule_set::RuleSetId;
+use crate::rule_set::{RuleSet, RuleSetId};
 use crate::rules::difficulty::Target;
 use crate::rules::header::B6;
 
@@ -122,9 +122,11 @@ impl Candidate {
 /// `ChainValid` unmintable outside `connect`. What it carries besides the
 /// candidate:
 ///
-/// * `rule_set` — the rules the caller **claimed** were in force. `validate`
-///   compares it to the rule set it is given and returns
-///   [`Stale::RuleSet`](crate::Stale::RuleSet) on a mismatch.
+/// * `rule_set` — the rules the caller **claimed** were in force, as the
+///   set itself (not only its id). `validate` compares with `PartialEq`
+///   and returns [`Stale::RuleSet`](crate::Stale::RuleSet) on a mismatch.
+///   The id alone is not the set: a Fakechain `Fixed` target reuses
+///   `RuleSetId::GENESIS` (Q10), so two sets at the same id can differ.
 /// * `seed` — the block id the caller **claimed** sits at the seed height
 ///   (CEN-D3). `validate` verifies it against the committing view and
 ///   returns [`Stale::Seed`](crate::Stale::Seed) on a mismatch.
@@ -162,7 +164,7 @@ impl Candidate {
 #[must_use = "a StructurallyValid is the input to `validate`; dropping it discards the stateless stage's work"]
 pub struct StructurallyValid {
     candidate: Candidate,
-    rule_set: RuleSetId,
+    rule_set: RuleSet,
     coverage: RuleCoverage,
     judged_at: Timestamp,
     seed: BlockHash,
@@ -175,7 +177,7 @@ impl StructurallyValid {
     /// else.
     pub(crate) const fn new(
         candidate: Candidate,
-        rule_set: RuleSetId,
+        rule_set: RuleSet,
         coverage: RuleCoverage,
         judged_at: Timestamp,
         seed: BlockHash,
@@ -199,10 +201,19 @@ impl StructurallyValid {
         &self.candidate
     }
 
-    /// The rule set `form` judged under — a claim `validate` checks.
+    /// The rule set `form` judged under — a claim `validate` checks by
+    /// value, not by id.
+    #[must_use]
+    pub const fn rule_set(&self) -> RuleSet {
+        self.rule_set
+    }
+
+    /// The id of the set `form` judged under. What the store persists;
+    /// not a proxy for set equality (a Fakechain `Fixed` target reuses
+    /// [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS)).
     #[must_use]
     pub const fn rule_set_id(&self) -> RuleSetId {
-        self.rule_set
+        self.rule_set.id()
     }
 
     /// The stateless rows that ran and passed.

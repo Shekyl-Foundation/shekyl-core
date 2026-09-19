@@ -27,10 +27,11 @@
 //! `cumulative_difficulty` instead of being handed it.
 //!
 //! D6 — *"a zero next-block difficulty rejects the block"* — is held **by
-//! the type**, not by a predicate (Q4, F4): [`Target`] cannot be built from
-//! zero, and the one place a `Difficulty` becomes a `Target` is
-//! [`D6::mint`], which records the row and refuses zero as a
-//! [`Corrupt::ZeroTarget`] fault. A predicate `target.is_zero()` would
+//! the type**, not by a predicate (Q4, F4): [`Target`] wraps [`NonZeroU128`],
+//! the one `Difficulty` → [`Target`] edge is [`D6::mint`] (zero is
+//! [`Corrupt::ZeroTarget`]), and every already-valid target (genesis-block
+//! `1`, Fakechain `Fixed`) records the row through [`D6::record`] so a
+//! Fakechain verdict can mint. A predicate `target.is_zero()` would
 //! have no reachable refusal on the main chain — LWMA-1 floors its output
 //! and `GENESIS_DIFFICULTY` is positive — and a gate that cannot fail is
 //! the one thing this program has decided it does not ship. The fault arm
@@ -47,8 +48,8 @@
 use core::fmt;
 use core::num::NonZeroU128;
 
-use shekyl_difficulty::{lwma1_next, CumulativeDifficulty, Difficulty, Error, N_USIZE};
-use shekyl_types::{BlockHeight, Timestamp};
+use shekyl_difficulty::{check_hash, lwma1_next, CumulativeDifficulty, Difficulty, Error, N_USIZE};
+use shekyl_types::{BlockHeight, PowHash, Timestamp};
 
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
@@ -58,28 +59,22 @@ use crate::rules::Rule;
 use crate::view::{AtHeight, ChainView, RecordedBlock};
 
 /// The difficulty a candidate must satisfy, **non-zero by construction**
-/// (CEN-D6). Minted by the crate's `D6::mint` from CEN-D4's derivation, or
-/// fixed from a `NonZeroU128` on a Fakechain rule set
-/// ([`RuleSet::fakechain`](crate::RuleSet::fakechain), CEN-D7); there is
-/// no public constructor and no `From<Difficulty>`, so a zero target is
-/// unrepresentable where CEN-D1 compares.
+/// (CEN-D6). The inner type is [`NonZeroU128`]: a zero target cannot be
+/// assembled, only refused — `D6::mint` is the one `Difficulty` →
+/// [`Target`] edge, and every path that already has a `Target` (genesis
+/// block, Fakechain `Fixed`) still records CEN-D6 through
+/// [`D6::record`](D6::record) so coverage is complete under every rule
+/// set. No public constructor and no `From<Difficulty>`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Target(Difficulty);
+pub struct Target(NonZeroU128);
 
 impl Target {
-    /// The difficulty value, for the comparison (`check_hash`) and the
-    /// store's fold.
-    #[must_use]
-    pub const fn difficulty(self) -> Difficulty {
-        self.0
-    }
-
-    /// A fixed target for a Fakechain rule set (`RuleSet::fakechain`,
-    /// CEN-D7). Non-zero by the argument's type, so the invariant this type
-    /// exists for is the caller's type's, not a check.
-    pub(crate) const fn fixed(fixed: NonZeroU128) -> Self {
-        Self(Difficulty::from_raw(fixed.get()))
-    }
+    /// One, as a non-zero. Named so block 0's PoW difficulty cannot be
+    /// spelled as a raw `1` beside the DAA's genesis constant.
+    const ONE: NonZeroU128 = match NonZeroU128::new(1) {
+        Some(n) => n,
+        None => unreachable!(),
+    };
 
     /// The **genesis block's own** PoW difficulty. Block 0 has no tip, so
     /// the DAA is never consulted for it: its nonce satisfies `check_hash`
@@ -88,7 +83,28 @@ impl Target {
     /// keep the two apart — `GENESIS_DIFFICULTY` is the DAA's short-circuit
     /// for heights `1..N`, not block 0's target. The C++ forces the same
     /// `1` at height 0 under `--fixed-difficulty` (`blockchain.cpp:975`).
-    const GENESIS_BLOCK: Self = Self(Difficulty::from_raw(1));
+    pub(crate) const GENESIS_BLOCK: Self = Self(Self::ONE);
+
+    /// The difficulty value, for the comparison (`check_hash`) and the
+    /// store's fold.
+    #[must_use]
+    pub const fn difficulty(self) -> Difficulty {
+        Difficulty::from_raw(self.0.get())
+    }
+
+    /// A fixed target for a Fakechain rule set (`RuleSet::fakechain`,
+    /// CEN-D7). Non-zero by the argument's type.
+    pub(crate) const fn fixed(fixed: NonZeroU128) -> Self {
+        Self(fixed)
+    }
+
+    /// Whether `pow` satisfies this target under CEN-D1b (`check_hash`:
+    /// `hash · difficulty < 2^256`, little-endian). The comparison's one
+    /// site; D1b records the definition, D1 acts on the answer.
+    #[must_use]
+    pub(crate) fn is_satisfied_by(self, pow: PowHash) -> bool {
+        check_hash(pow.as_bytes(), self.difficulty())
+    }
 }
 
 impl fmt::Debug for Target {
@@ -112,19 +128,27 @@ impl Rule for D6 {
 }
 
 impl D6 {
-    /// Mint the target from a derived difficulty, recording this row.
-    /// Zero is a [`Corrupt::ZeroTarget`] fault — the derivation produced a
-    /// value no issued rule set and no conforming view can produce, so it
-    /// is not the block's fault and not a verdict.
+    /// Record this row against an already-valid [`Target`]. Every path
+    /// that produces a target for a verdict — LWMA-1, genesis-block `1`,
+    /// Fakechain `Fixed` — goes through here, so `covers_landed` cannot
+    /// depend on which arm D4 took.
+    pub(crate) fn record(target: Target, coverage: &mut RuleCoverage) -> Target {
+        coverage.insert(Self::ROW);
+        target
+    }
+
+    /// The `Difficulty` → [`Target`] edge. Zero is a
+    /// [`Corrupt::ZeroTarget`] fault — the derivation produced a value no
+    /// issued rule set and no conforming view can produce, so it is not
+    /// the block's fault and not a verdict. Records this row either way.
     pub(crate) fn mint(
         difficulty: Difficulty,
         coverage: &mut RuleCoverage,
     ) -> Result<Target, Corrupt> {
         coverage.insert(Self::ROW);
-        if difficulty.is_zero() {
-            return Err(Corrupt::ZeroTarget);
-        }
-        Ok(Target(difficulty))
+        NonZeroU128::new(difficulty.to_raw())
+            .map(Target)
+            .ok_or(Corrupt::ZeroTarget)
     }
 }
 
@@ -158,28 +182,27 @@ impl D4 {
     ) -> Result<Target, Fault<V::Fault>> {
         coverage.insert(Self::ROW);
         if let Some(fixed) = D7::fixed_target(rule_set, connecting, coverage) {
-            return Ok(fixed);
+            return Ok(D6::record(fixed, coverage));
         }
         let Some(chain_height) = connecting.to_raw().checked_sub(1) else {
-            coverage.insert(D6::ROW);
-            return Ok(Target::GENESIS_BLOCK);
+            return Ok(D6::record(Target::GENESIS_BLOCK, coverage));
         };
         let chain_height = BlockHeight::from_raw(chain_height);
         let window = Self::window(view, chain_height)?;
         let difficulty = match lwma1_next(chain_height, &window.timestamps, &window.work) {
             Ok(difficulty) => difficulty,
-            // `window` holds exactly `N + 1` entries whenever the function
-            // inspects them, so the count arm has no producer here; the
-            // `Window` arm is `alt_window_plan`'s alone (slice 9's).
-            Err(Error::InvalidCount | Error::Window) => {
-                unreachable!("D4 builds exactly N + 1 entries past N; lwma1_next has no Window arm")
-            }
-            // Monotonicity was checked as the window was read; the
-            // function's own guard is a second belt on the same fact.
-            Err(Error::Overflow) => {
-                return Err(Fault::Corrupt(Corrupt::CumulativeDifficultyNotMonotone {
-                    at: chain_height,
-                }));
+            // `window` is monotone and, past `N`, exactly `N + 1` long. At
+            // the ratified `(N, T)` the formula's `u128` multiplies cannot
+            // overflow over such a window (`avg_D ≤ u128::MAX / N`). Count,
+            // Window, and Overflow therefore have no producer here: Count
+            // and Window are construction bugs; Overflow is the function's
+            // SI-8 belt on a decrease the walk already refused. Named as
+            // unreachable so a producer panics rather than wearing a more
+            // specific `Corrupt` that would lie about which invariant broke.
+            Err(Error::InvalidCount | Error::Window | Error::Overflow) => {
+                unreachable!(
+                    "D4 builds a monotone N+1 window past N; lwma1_next's error arms have no producer here"
+                )
             }
         };
         D6::mint(difficulty, coverage).map_err(Fault::Corrupt)

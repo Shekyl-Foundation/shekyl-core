@@ -54,7 +54,8 @@
 //! `StructurallyValid` (`judged_at`) — read once, outside the write
 //! transaction, so the FTL leg is judged against one instant a consumer can
 //! see. The comparison itself is here, view-bound, because the genesis
-//! exemption needs the connecting height.
+//! exemption is `connecting.is_zero()` on the context — the height, not
+//! "the MTP window was absent".
 
 use shekyl_difficulty::{
     check_timestamp_rule, is_timestamp_below_ftl, TimestampRuleVerdict, MTP_WINDOW_USIZE,
@@ -168,10 +169,10 @@ impl BlockRule for C1 {
         cx: &BlockContext<'_>,
         _view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
-        if cx.mtp_window.is_none() {
+        if cx.connecting.is_zero() {
             return Ok(Ok(()));
         }
-        let ts = Timestamp::from_raw(cx.candidate.block.header.timestamp);
+        let ts = Timestamp::from_raw(cx.candidate().block.header.timestamp);
         if is_timestamp_below_ftl(ts, cx.formed.judged_at()) {
             Ok(Ok(()))
         } else {
@@ -194,10 +195,13 @@ impl BlockRule for C2 {
         cx: &BlockContext<'_>,
         _view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
-        let Some(window) = &cx.mtp_window else {
+        if cx.connecting.is_zero() {
             return Ok(Ok(()));
+        }
+        let Some(window) = cx.mtp_window.as_ref() else {
+            unreachable!("C3 yields a window at every height above genesis");
         };
-        let ts = Timestamp::from_raw(cx.candidate.block.header.timestamp);
+        let ts = Timestamp::from_raw(cx.candidate().block.header.timestamp);
         if window.is_above_median(ts) {
             Ok(Ok(()))
         } else {

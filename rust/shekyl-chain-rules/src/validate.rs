@@ -125,13 +125,7 @@ pub fn form<S: Substrate>(
     let pow = D2::longhash(substrate, &candidate, seed, &mut coverage)?;
 
     Ok(Ok(StructurallyValid::new(
-        candidate,
-        rule_set.id(),
-        coverage,
-        clock,
-        seed,
-        pow,
-        attempt,
+        candidate, *rule_set, coverage, clock, seed, pow, attempt,
     )))
 }
 
@@ -262,10 +256,10 @@ pub fn validate<'id, V: ChainView<'id>>(
     // The stateless stage's rule-set claim, checked before any rule reads
     // the wrong parameters. A mismatch is the world having moved, not a
     // verdict — and the retry is bounded by the attempt the token carries.
-    if formed.rule_set_id() != rule_set.id() {
+    if formed.rule_set() != *rule_set {
         return Err(Fault::Stale(Stale::RuleSet {
-            formed_under: formed.rule_set_id(),
-            in_force: rule_set.id(),
+            formed_under: formed.rule_set(),
+            in_force: *rule_set,
             retry: formed.attempt().next(),
         }));
     }
@@ -277,7 +271,8 @@ pub fn validate<'id, V: ChainView<'id>>(
     // verification (D3), the MTP window (C3), the target (D4, minted
     // through D6) and the work it implies, the comparison (D1b). B6 records
     // at `ValidatedBlock::derive`.
-    let connecting = Tip::connecting_height(view.tip().map_err(Fault::View)?.as_ref());
+    let tip = view.tip().map_err(Fault::View)?;
+    let connecting = Tip::connecting_height(tip.as_ref());
     // The seed claim first: a stale seed means the longhash below was
     // computed against a chain this is not, and nothing else is worth
     // judging until `form` is redone.
@@ -285,13 +280,13 @@ pub fn validate<'id, V: ChainView<'id>>(
     let mtp_window = C3::window(view, connecting, &mut coverage).map_err(Fault::View)?;
     let target = D4::target(view, connecting, rule_set, &mut coverage)?;
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
-    let pow_meets_target = D1b::satisfies(formed.pow(), target, &mut coverage);
+    D1b::record(&mut coverage);
 
     // View-bound block-level predicates (4.A–4.G), in census order.
-    let cx = BlockContext::new(&formed, mtp_window, pow_meets_target);
+    let cx = BlockContext::new(&formed, tip, mtp_window, target);
     judge_block!(cx, view, coverage; A2, B5, C1, C2, D1);
 
-    let candidate = cx.candidate;
+    let candidate = cx.candidate();
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);
     let listed = candidate
         .transactions

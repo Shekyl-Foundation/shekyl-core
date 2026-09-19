@@ -18,8 +18,10 @@ use crate::harness::{
     MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSet;
+use crate::rules::{BlockContext, BlockRule};
 use crate::validate::{form, validate};
 use crate::verdict::{ChainValid, Locus};
+use crate::Target;
 use shekyl_types::BlockHash;
 
 /// A chain whose blocks carry `timestamps` in height order.
@@ -80,7 +82,10 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
         let mut coverage = RuleCoverage::EMPTY;
         let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |t| t.height.to_raw() + 1));
         let window = crate::harness::infallible(C3::window(&view, connecting, &mut coverage));
-        crate::harness::infallible(R::check(&BlockContext::new(&formed, window, true), &view))
+        crate::harness::infallible(R::check(
+            &BlockContext::new(&formed, chain.tip(), window, Target::GENESIS_BLOCK),
+            &view,
+        ))
     })
 }
 

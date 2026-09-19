@@ -16,7 +16,9 @@ use crate::harness::{assert_refused, expected_seed, judged, Faulted, MockChain, 
 use crate::rule_set::RuleSet;
 use crate::validate::{form, validate};
 use crate::verdict::ChainValid;
-use shekyl_difficulty::{seedheight, CumulativeDifficulty, Difficulty, GENESIS_DIFFICULTY};
+use shekyl_difficulty::{
+    check_hash, seedheight, CumulativeDifficulty, Difficulty, GENESIS_DIFFICULTY,
+};
 
 /// A chain of `len` blocks with distinct identities (timestamps a target
 /// block time apart) and the genesis constant of work per block — enough

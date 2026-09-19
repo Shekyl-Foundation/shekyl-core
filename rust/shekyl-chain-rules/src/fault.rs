@@ -45,7 +45,7 @@ use core::fmt;
 
 use shekyl_types::{BlockHash, BlockHeight};
 
-use crate::rule_set::RuleSetId;
+use crate::rule_set::RuleSet;
 
 /// What `validate` can fail with: the view's own fault, or one of the two
 /// kinds this crate defines. Matched arm by arm — `?` on the caller's side
@@ -82,12 +82,15 @@ pub enum Stale {
         retry: Retry,
     },
     /// The rule set `form` judged under is not the one in force at the
-    /// connecting height.
+    /// connecting height. Compared by **value** — a Fakechain `Fixed`
+    /// target reuses [`RuleSetId::GENESIS`](crate::RuleSetId::GENESIS), so
+    /// the id alone cannot tell `GENESIS` from `fakechain(n)`, or two
+    /// different `n`.
     RuleSet {
         /// What `form` was given.
-        formed_under: RuleSetId,
+        formed_under: RuleSet,
         /// What `validate` was given.
-        in_force: RuleSetId,
+        in_force: RuleSet,
         /// Whether `form` may be run again.
         retry: Retry,
     },

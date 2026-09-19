@@ -140,12 +140,10 @@ fn cen_d4_past_n_the_window_is_the_newest_n_plus_one_oldest_first() {
 fn cen_d4_non_monotone_work_is_a_corrupt_view_not_a_verdict() {
     let (mut chain, _, _) = worked_chain(N_USIZE + 1);
     // Break SI-8 inside the window: a block whose work is below its parent's.
-    let at = BlockHeight::from_raw(5);
     chain = chain.push(
         recorded_with_work(9_999_999, CumulativeDifficulty::ZERO),
         root(0xee),
     );
-    let _ = at;
     let connecting = BlockHeight::from_raw(chain.tip().expect("blocks").height.to_raw() + 1);
     chain.with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
@@ -288,12 +286,20 @@ fn cen_d7_a_fakechain_rule_set_fixes_the_target_and_forces_one_at_genesis() {
         let target = D4::target(&view, connecting, &seven, &mut coverage).expect("no fault");
         assert_eq!(target.difficulty(), Difficulty::from_raw(7));
         assert!(coverage.contains(CenRow::D7) && coverage.contains(CenRow::D4));
+        assert!(
+            coverage.contains(CenRow::D6),
+            "the Fixed arm records D6 so validate can mint"
+        );
     });
     // Height 0 is 1 under a fixed target (blockchain.cpp:975).
     MockChain::default().with_view(|view| {
         let mut coverage = RuleCoverage::EMPTY;
         let target = D4::target(&view, BlockHeight::ZERO, &seven, &mut coverage).expect("no fault");
         assert_eq!(target.difficulty(), Difficulty::from_raw(1));
+        assert!(
+            coverage.contains(CenRow::D6),
+            "every Target records D6, including the genesis-1 override"
+        );
     });
 }
 
@@ -332,4 +338,52 @@ fn cen_d7_the_rule_set_id_is_no_longer_a_proxy_for_the_rule_set() {
     let fixed = RuleSet::fakechain(core::num::NonZeroU128::new(3).expect("non-zero"));
     assert_eq!(fixed.id(), RuleSet::GENESIS.id());
     assert_ne!(fixed, RuleSet::GENESIS);
+}
+
+#[test]
+fn cen_d7_fakechain_validate_mints_past_n() {
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let (chain, _, _) = worked_chain(N_USIZE + 3);
+    let candidate = crate::harness::fixture::candidate_on(&chain, Vec::new());
+    let seed = crate::harness::expected_seed(&chain);
+    let formed = crate::validate::form(
+        candidate,
+        &seven,
+        &crate::harness::MockSubstrate::default(),
+        seed,
+        crate::fault::FormAttempt::FIRST,
+    )
+    .expect("no fault")
+    .expect("stateless");
+    chain.with_view(|view| {
+        let valid = crate::harness::judged(crate::validate::validate(formed, &view, &seven))
+            .expect("fakechain past N mints");
+        assert!(valid.coverage().covers_landed(&seven));
+        assert!(valid.coverage().contains(CenRow::D6));
+        assert_eq!(valid.block().target().difficulty(), Difficulty::from_raw(7));
+    });
+}
+
+#[test]
+fn cen_d4_a_monotone_window_at_u128_max_is_a_target_not_an_overflow() {
+    // Pins finding 3: after the window walk has refused a decrease, the
+    // formula's Overflow arm cannot fire at the ratified (N, T) over a
+    // monotone N+1 window — even when cumulative work is u128::MAX. A
+    // producer would panic (the arm is `unreachable!`), not wear
+    // `CumulativeDifficultyNotMonotone` for a different fact.
+    let n = N_USIZE + 1;
+    let mut chain = MockChain::default();
+    for i in 0..n {
+        let work = if i + 1 == n {
+            CumulativeDifficulty::from_raw(u128::MAX)
+        } else {
+            CumulativeDifficulty::from_raw(u128::from(u64::try_from(i).expect("small") + 1))
+        };
+        chain = chain.push(
+            recorded_with_work(1_000 + u64::try_from(i).expect("small") * 120, work),
+            root(u8::try_from(i % 250).expect("fits") + 1),
+        );
+    }
+    let (target, _) = target_on(&chain);
+    assert!(!target.difficulty().is_zero());
 }

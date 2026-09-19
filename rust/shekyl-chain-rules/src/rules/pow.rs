@@ -67,13 +67,14 @@
 //! pass condition in `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1). D3 uses
 //! the two constants at every nettype.
 
-use shekyl_difficulty::{check_hash, seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
+use shekyl_difficulty::{seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_types::{BlockHash, BlockHeight, PowHash};
 
 use crate::block::{Candidate, StructurallyValid};
 use crate::census::CenRow;
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, Stale};
+#[cfg(test)]
 use crate::rules::difficulty::Target;
 use crate::rules::{BlockContext, BlockRule, Rule};
 use crate::substrate::Substrate;
@@ -175,11 +176,21 @@ impl Rule for D1b {
 }
 
 impl D1b {
-    /// Whether `pow` satisfies `target` under the ported comparison,
-    /// recorded in `coverage` as this row.
-    pub(crate) fn satisfies(pow: PowHash, target: Target, coverage: &mut RuleCoverage) -> bool {
+    /// Record this row: the comparison form is [`Target::is_satisfied_by`]
+    /// (`check_hash`). D1 acts on the answer; the definition records here
+    /// so a forgotten predicate cannot mint without naming the form.
+    pub(crate) fn record(coverage: &mut RuleCoverage) {
         coverage.insert(Self::ROW);
-        check_hash(pow.as_bytes(), target.difficulty())
+    }
+
+    /// Whether `pow` satisfies `target` under the ported comparison,
+    /// recorded in `coverage` as this row. Test surface for the definition;
+    /// production records at [`Self::record`] and D1 acts on
+    /// [`Target::is_satisfied_by`].
+    #[cfg(test)]
+    pub(crate) fn satisfies(pow: PowHash, target: Target, coverage: &mut RuleCoverage) -> bool {
+        Self::record(coverage);
+        target.is_satisfied_by(pow)
     }
 }
 
@@ -195,7 +206,7 @@ impl BlockRule for D1 {
         cx: &BlockContext<'_>,
         _view: &V,
     ) -> Result<Verdict<()>, V::Fault> {
-        if cx.pow_meets_target {
+        if cx.target.is_satisfied_by(cx.formed.pow()) {
             Ok(Ok(()))
         } else {
             refused(Self::ROW, Locus::Block)

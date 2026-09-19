@@ -279,8 +279,10 @@ census_rows! {
         D2 implemented(crate::rules::pow::D2),
         D3 implemented(crate::rules::pow::D3),
         // D4 the target definition, recorded at `D4::target`; D6 held by the
-        // `Target` type, recorded at its one constructor `D6::mint` (slice 2
-        // Q4). D5 is **subsumed by D4 over an alt view**: the same LWMA-1
+        // `Target` type (`NonZeroU128`), recorded at every production path
+        // (`D6::record` / `D6::mint`) so Fakechain `Fixed` and genesis-block
+        // `1` cover the row as well as LWMA-1 (slice 2 Q4). D5 is **subsumed
+        // by D4 over an alt view**: the same LWMA-1
         // reads its window through `ChainView::block_at`, and the alt
         // stitching is what an alt view's `block_at` does — it stays
         // `pending` until slice 9 lands that view and a fixture drives D4

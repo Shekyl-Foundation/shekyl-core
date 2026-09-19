@@ -7,7 +7,7 @@ use super::*;
 use crate::census::CenRow;
 use crate::fault::{Fault, FormAttempt, Retry, Stale};
 use crate::harness::fixture::{candidate, coinbase};
-use crate::harness::{formed, judged, Faulted, MockChain, MockSubstrate};
+use crate::harness::{formed, formed_under, judged, Faulted, MockChain, MockSubstrate};
 use crate::rule_set::RuleSetId;
 use crate::substrate::Substrate;
 use crate::TxIdentity;
@@ -213,8 +213,8 @@ fn a_rule_set_claim_the_view_stage_refutes_is_stale_with_a_bounded_retry() {
         else {
             panic!("expected Stale::RuleSet, got {fault:?}");
         };
-        assert_eq!(formed_under, admits_two.id());
-        assert_eq!(in_force, RuleSetId::GENESIS);
+        assert_eq!(formed_under, admits_two);
+        assert_eq!(in_force, RuleSet::GENESIS);
         // The first attempt may be retried; the payload says with what.
         assert_eq!(retry, Retry::Again(FormAttempt::FIRST.next_for_tests()));
     });
@@ -241,5 +241,57 @@ fn the_last_attempt_is_terminal() {
             assert_eq!(retry, Retry::Exhausted);
         }
         other => panic!("expected an exhausted stale fault, got {other:?}"),
+    });
+}
+
+#[test]
+fn a_fakechain_rule_set_mints_at_genesis_with_d6_in_coverage() {
+    // The Fixed arm used to return a Target without recording D6;
+    // `covers_landed` then panicked at mint. Genesis and the set's id
+    // coinciding with GENESIS is the shape that hid it.
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    MockChain::default().with_view(|view| {
+        let formed = formed_under(candidate(Vec::new()), &seven, shekyl_types::BlockHash::NULL);
+        let valid = judged(validate(formed, &view, &seven)).expect("fakechain genesis mints");
+        assert!(valid.coverage().covers_landed(&seven));
+        assert!(valid.coverage().contains(CenRow::D6));
+        assert_eq!(
+            valid.block().target().difficulty(),
+            shekyl_difficulty::Difficulty::from_raw(1),
+            "height 0 is 1 under a fixed target"
+        );
+    });
+}
+
+#[test]
+fn a_fakechain_set_is_stale_against_genesis_even_at_the_same_id() {
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    assert_eq!(seven.id(), RuleSet::GENESIS.id());
+    let formed = formed_under(candidate(Vec::new()), &seven, shekyl_types::BlockHash::NULL);
+    MockChain::default().with_view(|view| {
+        let fault = validate(formed, &view, &RuleSet::GENESIS)
+            .expect_err("the set moved, even though the id did not");
+        match fault {
+            Fault::Stale(Stale::RuleSet {
+                formed_under,
+                in_force,
+                ..
+            }) => {
+                assert_eq!(formed_under, seven);
+                assert_eq!(in_force, RuleSet::GENESIS);
+            }
+            other => panic!("expected Stale::RuleSet, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn two_fakechain_targets_are_distinct_sets() {
+    let three = RuleSet::fakechain(core::num::NonZeroU128::new(3).expect("non-zero"));
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let formed = formed_under(candidate(Vec::new()), &three, shekyl_types::BlockHash::NULL);
+    MockChain::default().with_view(|view| {
+        let fault = validate(formed, &view, &seven).expect_err("different Fixed targets");
+        assert!(matches!(fault, Fault::Stale(Stale::RuleSet { .. })));
     });
 }

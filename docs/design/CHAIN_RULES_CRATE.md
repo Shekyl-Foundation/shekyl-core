@@ -571,7 +571,7 @@ pub fn validate<'id, V: ChainView<'id>>(
 ) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>>;
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
-pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under, in_force, retry } }
+pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry } }
 pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS = 3
 pub enum Corrupt { CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow, ZeroTarget }
 
@@ -596,11 +596,16 @@ Block-level **predicates** run in census order, each through
 `validate`), inserting `R::ROW` iff `R` passed. **Definition** rows record at
 their derivation site: CEN-B6 at `B6::identity` (from `ValidatedBlock::derive`);
 CEN-D2 at `D2::longhash` (in `form`); CEN-C3 at `C3::window`, CEN-D4 at
-`D4::target` (D7 consulted inside it, D6 recorded at the `Target` mint),
-CEN-D1b at `D1b::satisfies` — all derived once in `validate` before the
-predicate list and read through `BlockContext`. CEN-D3 is a **verification
+`D4::target` (D7 consulted inside it, D6 recorded at every `Target`
+production — `D6::mint` for LWMA-1, `D6::record` for genesis-block `1` and
+Fakechain `Fixed`), CEN-D1b at `D1b::record` — all derived once in
+`validate` before the predicate list and read through `BlockContext`
+(connecting height, tip, MTP window, target; C1's genesis exemption is
+`connecting.is_zero()`). CEN-D3 is a **verification
 of a claim**, recorded at `D3::verify_seed`, whose failure is `Fault::Stale`.
-Stage membership at slice 2: `form` runs B1, B2, B7 and derives D2;
+`Stale::RuleSet` compares the `RuleSet` by value: a Fakechain `Fixed`
+target reuses `RuleSetId::GENESIS`, so the id is not the set. Stage
+membership at slice 2: `form` runs B1, B2, B7 and derives D2;
 `validate` verifies D3, derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
 D1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
