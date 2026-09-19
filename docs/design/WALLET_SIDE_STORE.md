@@ -465,7 +465,7 @@ work on `WSS-Q1` is not *whether* to separate but **what each side becomes**:
 | Side | Open question | Written up in |
 | --- | --- | --- |
 | **`P`'s serving store** | Its own file, encrypted at rest, deleted at drop-connect + `D_max` — what writes it (the `StakeEngine`, not the curve-tree actor), the fill path (`WSS-Q4`), **where the store key lives** (`WSS-Q12`, the question the withdrawal shrank this to), the serving path's read capability (`WSS-Q13`), and how `WSS-13`'s current routing is unwound | §6.2 |
-| **The principal's proving state** | **Whether it is a store at all** — steering's "A is not a store" argument, now recorded | §6.3 |
+| **The principal's proving state** | **Resolved: it is not a store.** A public frontier at `F` plus a buffer, shared; private per-output paths in each identity's existing sealed file. Open on four measurements and the ingest-path firewall answer | §6.3 |
 
 **What is still genuinely open, and is Round 1's:** the two questions in that
 table, plus `WSS-Q3` (reorg, which under this framing is the principal's alone
@@ -563,65 +563,94 @@ closed**.
   `WSS-18` records the one verified negative that bounds it: the onion key does
   not reach disk.
 
-### 6.3 The proving side — "A is not a store" (steering's argument, recorded; **open**)
+### 6.3 The proving side is **not a store** — resolved (steering, 2026-09-18); **open** on four measurements
 
-Recorded as received, as the proving-side arm. **Not ruled**, and not endorsed
-by this document — §6.3.1 lists the attacks it must survive, each a Round-0
-item for whichever increment takes it up. If it holds, the wallet's **only**
-redb is `P`'s serving store, which makes this round's original framing —
-*"the wallet's redb exists for serving from `P` when bonded"* — literally true
-rather than the overstatement it was.
+**Resolution.** The principal's proving state is **not a leaf store**. It is:
 
-**Claim.** The principal's proving state does not need a **leaf store**. To
-spend, a wallet needs a membership path from each owned output to the root at
-the reference height; to verify each block (`merge.rs:651`) it needs the
-current root. The tree is append-only by `hash_grow`, so both come from:
+- a **public frontier at `F = tip − W`** plus a **block buffer** below the tip,
+  **shared by both identities** because it is derived from the chain and
+  reveals nothing about ownership;
+- **private membership paths per owned output**, kept in **that identity's
+  existing sealed file** — the principal's in the sealed ledger beside
+  `TransferDetails`, `P`'s in `P`'s sealed state.
 
-1. **the frontier** — the partial chunk at each layer, O(depth × width);
-2. **one witness per owned output** — its chunk at each layer, started at
-   drain, updated as right-siblings fill;
-3. **pending candidates** until drain;
-4. **a reorg undo log** over `D_max` plus the reference-height window.
+**The wallet's only redb is then `P`'s serving store**, which makes this
+round's opening description — *"the wallet's redb exists for serving from `P`
+when bonded"* — literally true.
 
-State then scales **with the wallet, not the chain**.
+#### 6.3.1 Why the leaf store is not required — the premise, at source
 
-**What it dissolves.** `WSS-12` (RAM growing with the chain); `WSS-9` /
-`WSS-Q2` (no proving-side subroot cache, so the freeze keeps no proving-side
-consumer at all — and `WSS-14`'s quadratic-sync cost goes with the recompute it
-was avoiding); the at-rest leak (the state is small and private, so it lives
-encrypted); and `WSS-Q1`'s proving arm. `R3` becomes literal, and **DRS-D3c
-becomes root-and-frontier parity with the daemon** rather than a leaf/position
-KAT (§10). The existing full-tree `build_layers` becomes the **property-test
-oracle** for every witness path — the denominator survives as the oracle.
+Zero knowledge hides which leaf is spent **from the verifier**, not from the
+prover, which knows its own leaf. The two sides need different things: the
+**verifier** needs only the root (the daemon holds it in `curve_tree_roots`
+and the header commits to it); the **prover** needs only **its own output's
+path** — the full child chunk at each layer from its leaf to the root, plus
+the root. That is pinned to the FCMP++ prover's `Path` type at
+`assemble.rs:18-35` (`shekyl-oxide/crypto/fcmps/src/prover/mod.rs`): the
+prover consumes `c1_layers` / `c2_layers` chunks and a `tree_root`, and
+nothing else.
 
-#### 6.3.1 Attacks the claim must survive — each a Round-0 item, none answered here
+**The anonymity set is unchanged.** The proof ranges over everything under the
+root however little the wallet stores. Today's full-leaf retention is an
+implementation choice — `assemble.rs` says so in its own module doc
+(*"branch extraction rebuilds layers from replay-held `CurveTreeClient::entries`"*,
+`:14-16`) — not something FCMP++ requires.
 
-1. **Pending-set bound.** The largest drain delay per leaf class
-   (`CT2_DRAIN_ORDER`). *The tier-lock concern raised earlier was claim-era and
-   is **withdrawn**;* verify no rebased-era class has a long pre-drain delay.
-2. **Reference-height witnesses.** Proofs anchor `REFERENCE_BLOCK_MIN_AGE`
-   behind tip, so this needs lagged witness state or checkpoints across that
-   window. **The part to design most carefully.**
-3. **Late discovery.** Restore mid-chain, a newly imported key, or a multisig
-   member learning of an output all mean no historic leaves. The answer is a
-   bulk rescan from that height; the **user-facing failure mode is rule 82's**.
-4. **Chunk-width update cost.** Selene/Helios widths mean a witness update
-   rewrites a chunk. **Measure it; do not assume it.**
-5. **Persistence write model.** Frontier and witnesses change every block. If
-   `.wallet` is rewritten whole on save, per-block updates are write
-   amplification on the encrypted file — which may argue for a small encrypted
-   companion with an append-only undo log (still "not a leaf store", but still
-   a file). **Check `shekyl-engine-file`'s save path before choosing.**
-6. **Blast radius.** Every `CurveTreeHandle` consumer enumerated before
-   anything is proposed — the spend gate, `assemble_tx` (C1 single-snapshot),
-   the claim and drain orchestrators, and the `shekyl-ffi` curve-tree replica
-   family.
+#### 6.3.2 The six attacks, answered at source
 
-**Failure mode, stated because it is the reason this is attemptable.** A
-witness bug produces proofs that fail to verify: **the user's own spend fails,
-nothing leaks, no funds are at risk.** Check the witness-derived root against
-the reference root before proving — the same shape as today's integrity gate
-(`assemble.rs:80-89`).
+Each row was **verified at `8494f2a27`** by this round; the fourth column says
+what verification changed.
+
+| # | Answer | Anchors | Verified / amended |
+| --- | --- | --- | --- |
+| 1 | **Pending set is bounded at 60 blocks.** Maturity is creation height + `COINBASE_LOCK_WINDOW` (miner) or + `DEFAULT_LOCK_WINDOW` (otherwise); `TargetKind::Other` returns `None` and never becomes a leaf | `recon.rs:116-126`; `shekyl-consensus/src/lib.rs:28,:31` (10 / 60) | **Verified**, including the load-bearing negative: `unlock_time` appears **nowhere** in `shekyl-curve-tree/src/`, so maturity is the only drain gate. This check could have sunk the design and does not |
+| 2 | **Finalized state at `F = tip − W`, `W = 730`, plus a buffer replayed to the reference height.** Reorgs shallower than `W` never touch persisted state, so **no undo log** | `consensus_constants.json:4-5` (min age 5, max 100), `:26` (`archival_reorg_depth_blocks = 720`); `segment.rs:37,:69-71` — `segment_freeze_eligible` requires `SPENDABLE_AGE_BLOCKS + SEGMENT_FREEZE_REORG_MARGIN_BLOCKS` = 10 + 720 = **730**, the same margin | **Verified**, with one **amendment: the buffer is `W + 60` blocks, not `W`.** To replay drains over `[F, ref]` the wallet needs outputs **created** from `F − 60` (coinbase maturity). Either the buffer extends 60 blocks below `F`, or the state at `F` carries the pending set. The design must say which |
+| 3 | **Late discovery costs the rescan that was already required.** Today's tree is always rebuilt from genesis (`refresh/task.rs:337-358`'s "rebuilding membership" backfill); a late output is handled by streaming again and capturing its path along the way, at tree-depth memory instead of chain-size | `refresh/task.rs:337-358` | **Verified with one narrowing.** For an imported key or a lowered restore height the rescan is needed *anyway* — the scanner needs the block data — so the path rides it free and the row is right. **The exception is an output the wallet already scanned but did not mark path-worthy** (a multisig member learning of an output under a shared view key): today that is free from `entries`, here it needs a fresh stream. **Remedy, and it is cheap:** define path-worthy as *"in the ledger"* rather than *"currently spendable"*, and the exception disappears |
+| 4 | **Per-block update cost is essentially none.** In an append-only tree only the rightmost node at each layer is incomplete, so every chunk on an owned path is either **final forever** or **identical to the frontier's chunk at that layer**. Each output stores its final lower chunks; the upper part is read from the frontier at spend time. The only per-output work is one chunk copy when a layer finalizes | widths 38 / 18 at `fcmps/src/lib.rs:61,:63`; `SELENE_CHUNK_WIDTH = LAYER_ONE_LEN` at `shekyl-fcmp/src/tree.rs:47`; leaf-chunk read at `assemble.rs:137-141` | **Verified, arithmetic included.** At ~100 M leaves the tree is ~6 layers (38 → 18 → 38 → 18 → 38 → 18). A path is **~9 KB**: 38 × 128 B = 4 864 B leaf chunk, 18 × 32 = 576 B per Helios layer, 38 × 32 = 1 216 B per Selene layer. The frontier is the same size. Against **~12.8 GB** of leaves (100 M × 128 B) held on disk *and* in RAM today |
+| 5 | **The persistence pattern already exists.** `save_state` seals the whole `.wallet` atomically; `save_pscan_state` is the precedent — `P`'s scan state in its own sealed `.wallet.pscan` under the **same** region-2 envelope with a **distinct `PayloadKind`**, so a swapped file is refused on load | `handle.rs:611-617`, `:641-647`; `payload.rs:117-126` (`WalletLedgerPostcard = 0x01`, `PScanStatePostcard = 0x02`) | **Verified, and the precedent is exact** — `payload.rs:123-126` says in its own words that the distinct kind byte is what makes a swapped file *"a loud refusal, not a postcard decode at a random offset"*. Private state changes only when an owned output drains or a layer finalizes, and those rides saves that already happen. **This also answers `WSS-Q12`** (`P`'s serving store takes the same envelope with its own `PayloadKind`) and **part of `WSS-19`** (`P`'s scan state is already encrypted) |
+| 6 | **Blast radius is bounded by the actor's interface.** Eight messages: six proving (`IngestBlock`, `RollbackToFork`, `IngestedTipHeight`, `VerifyRoot`, `RootAndDepthAt`, `AssembleTx`) and two that move to `P`'s store anyway (`PinServeSet`, `PinCompleteTreePrefix`, `WSS-13`). `shekyl-ffi/src/curve_tree_replica_ffi.rs` is the **C++ test generator** and stays as the full-tree oracle beside `build_layers` | `curve_tree_actor.rs:336,:362,:391,:412,:424,:437,:462,:476` — **exactly eight**; `curve_tree_replica_ffi.rs:6-14` | **Verified exactly.** See §6.3.3 for the one interface change and the firewall question it raises |
+
+#### 6.3.3 The one interface change, and the firewall answer it needs
+
+`IngestBlock` must learn **which drained leaves are owned, and by which
+identity**. Today the tree has no notion of ownership, and **that neutrality is
+exactly what let one store serve both identities**.
+
+**The risk this creates, named because it is `WSS-13` in a new location:** if
+one ingest path must know both the principal's and `P`'s ownership, a single
+component again sees both identities' material — the defect §6.1 was opened to
+remove, relocated rather than fixed.
+
+**The answer is available and should be built in rather than left to
+discipline:** the **frontier advance is public and identity-free**, and **path
+capture is a per-identity filter over the same public stream**. One public
+ingest; two private capture sides, each seeing only its own outputs, each
+writing into its own sealed file. The shared part is then public data only —
+the frontier and the buffer — and the path sets split by identity, which is
+`WSS-Q1`'s ownership rule applied inside the proving side.
+
+#### 6.3.4 What remains open — four measurements and one failure mode
+
+1. **What `rollback_to_fork` does on a reorg deeper than `W`.** Expected to be
+   the same failure class as crossing a frozen segment today, but unverified.
+   **And it carries a user-facing failure mode, not only a technical one**
+   ([`82-failure-mode-ux`](../../.cursor/rules/82-failure-mode-ux.mdc)): the
+   remedy is a full resync, and the wallet has to say so in those terms.
+2. **Spend-time replay of the buffer on a Pi 4** — up to ~725 blocks of drains
+   between `F` and the reference height, at the provisioning floor
+   ([`76-device-provisioning-floor`](../../.cursor/rules/76-device-provisioning-floor.mdc)).
+3. **Refetching the buffer on open**, and whether it needs its own companion
+   file instead.
+4. **Property tests against `build_layers`** over every edge where a layer
+   finalizes — the existing full-tree implementation becomes the oracle, which
+   is what makes this replaceable rather than rewritten blind.
+
+**One consequence worth stating, because it inverts an earlier finding:**
+under this design `verify_root` (`engine/merge.rs:651`, every block) becomes an
+**O(depth) frontier advance** rather than a tree read. So `WSS-14`'s quadratic
+risk does not merely go away with the subroot cache — **the per-block check
+gets cheaper than it is today**, and `WSS-Q2`'s A-side half stops arising at
+all (`WSS-12` with it).
 
 ---
 
@@ -848,6 +877,7 @@ What must be true before genesis for this lane, in mission order.
 
 | Date | Decision |
 | --- | --- |
+| 2026-09-18 | **§6.3 resolved: the proving side is not a store — verified at source, with three amendments.** A public frontier at `F = tip − W` plus a buffer (shared, ownership-free) and private per-output membership paths in each identity's existing sealed file; the wallet's only redb is then `P`'s serving store. **Premise verified:** ZK hides the leaf from the *verifier*, not the prover, which needs only its own path — pinned to the FCMP++ prover's `Path` at `assemble.rs:18-35`; the anonymity set is unchanged, and today's full-leaf retention is an implementation choice the module doc states itself. **All six attacks answered at source** (`recon.rs:116-126` + `shekyl-consensus:28,:31`; `consensus_constants.json:4-5,:26` + `segment.rs:69-71` giving `W = 730` exactly; `refresh/task.rs:337-358`; widths at `fcmps/src/lib.rs:61,:63`; `handle.rs:611,:641` + `payload.rs:117-126`; the actor's **exactly eight** messages). **Three amendments from verification:** the buffer is **`W + 60`** blocks, not `W`, because replaying drains over `[F, ref]` needs outputs created from `F − 60` (coinbase maturity); late discovery is free **except** for an output already scanned but not marked path-worthy, whose remedy is to define path-worthy as *"in the ledger"* rather than *"currently spendable"*; and `IngestBlock` learning ownership would relocate `WSS-13` unless the **frontier advance stays public and identity-free with path capture as a per-identity filter** (§6.3.3). **One inversion:** `verify_root` becomes an O(depth) frontier advance, so the per-block check gets **cheaper than today** and `WSS-14`'s quadratic risk, `WSS-Q2`'s A-side half and `WSS-12` all stop arising. Open on four measurements (§6.3.4), one of which — a reorg deeper than `W` — carries a rule-82 user-facing failure mode, not only a technical one. |
 | 2026-09-18 | **Steering worked the at-rest threat model properly and withdrew most of the previous turn's proposal; §6.2 rewritten around what the disk actually reveals.** The only secret on disk is the **device ↔ `P` link**; the shard contents are public. An adversary table prices six positions and finds **one that matters**: forensics with an offline image but no password, where today's **plaintext `.curvetree` gives `P` despite the encrypted `.wallet`** (`WSS-18`, verified — the store is a sibling of the wallet file and the crate contains no encryption; and the onion key is *not* a second route, `Detach` being unrepresentable). **Justified:** encrypt the store under **one** key from the wallet's existing hierarchy — *for consistency, not a new threat*, since a plaintext companion undoes a decision `.wallet` already made — and delete at **drop-connect + `D_max`** with a **zero** lapse tail. **WITHDRAWN:** per-shard keys and crypto-shredding, with each of its three grounds failed on the record (remnants are covered by encryption; scoping a compromised serving task protects public data while its real assets are the countersigning capability and the `StakeEngine` route; unrepresentability is a correctness property a **type-level held-slot token** buys without key management). **WITHDRAWN:** size padding and slot preallocation — `WSS-15` becomes an **accepted residual** with reopening criteria (near-unique holdings counts measured by the sim, or forensic tooling that targets it); the underlying channel is unchanged, only its disposition. `WSS-Q12` shrinks to **where the one key lives**; `WSS-Q13` survives unchanged because rule 36 already requires it. **`WSS-19` added:** `P`'s other persisted state is unaudited, and that audit **gates** any claim that encrypting the store closes the gap. |
 | 2026-09-18 | **Amendment on steering's second review — five carryover corrections, the `P`-store erasure lifecycle, and the proving-side arm. No rulings; every clause is a proposal Round 1 rules on.** *Corrections:* `WSS-9` / PDM's correction (b) called the subroot cache "dispensable" — true for correctness, **false for cost**: `verify_root` runs per ingested block (`merge.rs:651`), so dropping the cache makes sync **quadratic** (`WSS-14`). "The wallet's own tree state, not a slice" overstated it — the proving state **is** derived from canon and self-checks against the header root every block; `R3`'s property is that it therefore **never needs a migration, ever**. `R1`'s invariant recorded with its falsifier (`WSS-17`: no daemon-RPC edge from the store crate, `cargo tree`). `WSS-Q11` proposed landing a tie **#780 already landed** — corrected to what is actually open (it dies at E4, and is not re-pointed at `SHARD_BYTES`). `WSS-8` overstated: `set_prune_disabled` is reached only on the `PinCompleteTreePrefix` / Foundation-`CompleteTree` path (`curve_tree_actor.rs:391-402`), so most archivers declare nothing. *New:* §6.2 — "destroyed when the bond ends" was wrong on granularity (**per shard**) and timing (**drop-connect + `D_max`**, per `PHASE_2B_FSM_RETOOL.md` Pin 3, because a connected drop can be reorged out); erasure means **crypto-shred** with **random** per-shard keys wrapped under a `P`-derived key, with the four reasons to destroy public data, the redb-CoW / wear-levelling / snapshot reasons delete does not work, and what it does not buy. §6.3 — steering's **"A is not a store"** argument recorded as the proving-side arm with its six attacks. `WSS-15` (variable shard sizes make file sizes a fingerprint; encryption hides neither sizes nor when they change), `WSS-16` (the lapse tail may have **no consumer**, so `WSS-Q8`'s answer may be zero), `WSS-Q12` (at-rest shape), `WSS-Q13` (rule-36 decrypting read capability). §5.1 puts three properties of the new shard unit on the record: bonds no longer buy uniform work, boundaries are fee-influenceable, and `SHARD_BYTES` is inherited rather than derived. |
 | 2026-09-18 | **`WSS-Q1` re-grounded on the firewall (steering review).** The question was posed on the wrong axis: "one file or two", argued from the shared file lock (`WSS-6`) and the prune/resume collision (`WSS-5`). It is an **ownership** question — the serving store is `P`'s (own file, `P`-derived keys, bond-lifetime scope, owned by the `StakeEngine`), the proving state is the principal's. **`WSS-13` added**, and it is the ground: `P`'s serve-set pins are written through the *principal's* curve-tree actor into the principal's file (`serve_set_source.rs:254-257` on the handle from `serving/start.rs:158`), routing around `PRINCIPAL_STAKE_LIFECYCLE.md` §0's load-bearing containment of `P`'s material — a firewall-layering defect visible only on this axis. `WSS-5` corrected twice over: its conflict is **latent** (nothing prunes in production, `WSS-8`) and its axis was mis-stated — it is one identity's storage policy destroying another's state, not two obligations colliding. `WSS-6` demoted to mechanics. §6.1 rewritten; the "Arm A / Arm B" pair is superseded. The proving side's "is it a store at all" arm is **owed to Round 1 from steering** — this round does not hold that argument's text and does not reconstruct it. **`PDM` propagation is not this round's** (§2.2, FOLLOWUPS): four documents never received `PDM-Q6`/`Q12` and are the next agent's trap. |
