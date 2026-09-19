@@ -47,17 +47,25 @@
 //! 'id>` and takes a `ChainValid<'id, V>` — `V` its own view type — into
 //! `connect`. Increments 2+ port the 141 surface-free rules one census
 //! subsystem at a time (`DAEMON_REDB_STORE.md` §7.5.2 table 3), flipping
-//! entries to `implemented(<rule type>)` as they land; slice 1
-//! (`CHAIN_RULES_SLICE_1.md`) began with 4.B's version rows. Only complete
+//! entries to `implemented(<rule type>)` as they land: slice 1
+//! (`CHAIN_RULES_SLICE_1.md`) landed 4.A/4.B's six predicate rows; slice 2
+//! (`CHAIN_RULES_SLICE_2.md`) landed 4.C and 4.D — the two-stage split,
+//! [`Substrate`], and ten rows (C1–C3, D1, D1b, D2, D3, D4, D6, D7; D5 is
+//! subsumed by D4 over an alt view and closes with slice 9). Only complete
 //! coverage is parity evidence, so no verdict minted before the last slice
 //! can be read as one.
 //!
 //! # Consumers
 //!
-//! * **Block connect** (S-CHAIN-W): [`validate`] over the store's projected
-//!   `ChainView<'id>`; the `ChainValid<'id, V>` it mints is the only thing
-//!   `connect` accepts, branded with both the batch `'id` and the view type
-//!   `V` so an unbranded impl cannot satisfy `connect`.
+//! * **Block connect** (S-CHAIN-W): [`form`] outside the write transaction
+//!   — the ingest driver supplies the [`Substrate`] and its seed and
+//!   rule-set claims — then [`validate`] inside it, over the store's
+//!   projected `ChainView<'id>`; the `ChainValid<'id, V>` it mints is the
+//!   only thing `connect` accepts, branded with both the batch `'id` and
+//!   the view type `V` so an unbranded impl cannot satisfy `connect`. A
+//!   [`Fault::Stale`] from `validate` means redo `form` (bounded by
+//!   [`FormAttempt`]); a [`Fault::Corrupt`] is an invariant violation
+//!   `connect` treats as its own.
 //! * **Pool admission** (DRS-E5): the *same* [`tx_form`] / [`tx_against`]
 //!   over a `PoolView` the pool defines by decorating a `ChainView` with its
 //!   unconfirmed set. There is no second validator

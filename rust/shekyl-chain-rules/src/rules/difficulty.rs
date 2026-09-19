@@ -58,10 +58,11 @@ use crate::rules::Rule;
 use crate::view::{AtHeight, ChainView, RecordedBlock};
 
 /// The difficulty a candidate must satisfy, **non-zero by construction**
-/// (CEN-D6). Minted by [`D6::mint`] from [`D4::target`]'s derivation, or
-/// fixed from a `NonZeroU128` on a Fakechain rule set ([`Target::fixed`],
-/// CEN-D7); there is no public constructor and no `From<Difficulty>`, so a
-/// zero target is unrepresentable where CEN-D1 compares.
+/// (CEN-D6). Minted by the crate's `D6::mint` from CEN-D4's derivation, or
+/// fixed from a `NonZeroU128` on a Fakechain rule set
+/// ([`RuleSet::fakechain`](crate::RuleSet::fakechain), CEN-D7); there is
+/// no public constructor and no `From<Difficulty>`, so a zero target is
+/// unrepresentable where CEN-D1 compares.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Target(Difficulty);
 
