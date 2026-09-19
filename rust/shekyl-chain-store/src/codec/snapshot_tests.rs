@@ -384,7 +384,7 @@ impl Fixtures for BlockInfo {
                     coins_generated: AtomicUnits::from_raw(0),
                     weight: BlockWeight::from_raw(0),
                     cumulative_difficulty: CumulativeDifficulty::from_raw(1),
-                    hash: BlockHash::from_bytes([0; 32]),
+                    hash: BlockHash::NULL,
                     rct_outputs: 0,
                     long_term_weight: LongTermWeight::from_raw(0),
                     cumulative_tx_count: 0,

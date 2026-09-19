@@ -157,7 +157,7 @@ pub fn serve_credit_tx(fee: u64) -> Transaction {
         },
         ct: Ct::Fcmp {
             fee,
-            reference_block: BlockHash::from_bytes([0u8; 32]),
+            reference_block: BlockHash::NULL,
             base: CtBase {
                 enc_amounts: vec![],
                 enc_labels: vec![],

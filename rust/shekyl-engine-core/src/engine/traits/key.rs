@@ -996,7 +996,7 @@ mod tests {
             outputs: vec![],
             fcmp_plus_plus_context: FcmpPlusPlusContext {
                 tree: TreeContext {
-                    reference_block: BlockHash::from_bytes([0; 32]),
+                    reference_block: BlockHash::NULL,
                     tree_root: CurveTreeRoot::from_bytes([0; 32]),
                     tree_depth: 1,
                 },

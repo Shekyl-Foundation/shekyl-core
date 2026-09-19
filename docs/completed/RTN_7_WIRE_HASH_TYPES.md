@@ -1,14 +1,14 @@
 # RTN-7 — the wire crate's hash surface is typed, and a gate keeps it so
 
-**Status:** CLOSED-as-record — **LANDED 2026-09-17** against `dev` =
-`eac99894a` (post-#771). Round 0 ruled the same day (Q1–Q5, §6). Archived
-per rule 95 when the work it owns landed; the living contract for the
-newtype family is
+**Status:** CLOSED-as-record — **LANDED 2026-09-18** (PR #777, merged as
+`474dd72f5`; last verified on the branch at `dev` = `d89f99791`, post-#772).
+Round 0 ruled 2026-09-17 (Q1–Q5, §6). Archived per rule 95 when the work
+it owns landed; the living contract for the newtype family is
 [`RAW_TYPE_NEWTYPE_MIGRATION.md`](../design/RAW_TYPE_NEWTYPE_MIGRATION.md).
-Originally written against `dev` = `398d85e7b` (post-#768). Written 2026-09-17 against
-`398d85e7b`; the halt (no production code until #771, which brings
-`AttestationRoot` and `#![no_std]` `shekyl-types`) lifted when #771 merged
-the same day. Family: `RTN-1…RTN-N`, registered by #771
+Written 2026-09-17 against `dev` = `398d85e7b` (post-#768); the halt (no
+production code until #771, which brings `AttestationRoot` and `#![no_std]`
+`shekyl-types`) lifted when #771 merged the same day, and the first
+production commits were cut against `eac99894a` (post-#771). Family: `RTN-1…RTN-N`, registered by #771
 ([`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2); this is the
 seventh item. Work plan of record:
 [`RAW_TYPE_NEWTYPE_MIGRATION.md`](../design/RAW_TYPE_NEWTYPE_MIGRATION.md) §6, whose
@@ -171,7 +171,7 @@ with a reason, unnamed occurrences red.
   call; the commit states the narrow subject (type only, no selection
   logic moved) so the review stays that narrow (§3.1).
 
-## 7. What the gate found about this document (2026-09-17)
+## 7. What the gate found about this document (2026-09-17 → 09-18)
 
 `check_wire_raw_hash_surface.py`'s **first run failed** — on its author's
 own §3.2 enumeration. That is the outcome the gate exists for, so it is
@@ -228,7 +228,24 @@ points, one class with `Output.key` — allowlisted with the same addressee.
 
 Figure after the second round: 78 public items, 17 raw, all allowlisted.
 
-**Third round (2026-09-18) — public trait methods.** Copilot again read
+**Third round (PR #777 review, 2026-09-18, at `7906dab1d`) — wrapped
+fields.** The same line-regex hole the second round closed for signatures
+was still open for fields: `pub digest: Vec<\n    [u8; 32],\n>` puts the
+raw type on a line with no `name:`, `pub_items` stays nonzero, and the
+gate is vacuously green. Fields, enum-variant fields, and tuple-variant
+payloads now share one buffer with signatures — a declaration is complete
+when its type's bracket depth is zero, not when a comma appears (the last
+field of a struct has none). Self-test legs for the wrap, the no-comma
+last field, a wrapped enum field, and a wrapped tuple variant. The
+archived §4 still described the pre-review `dict[str, str]` shape with
+the addressee buried in the reason; that paragraph is the
+`Allow(reason, addressee)` contract above. The unified implementation
+index stamp was left at `20ebdf1e5` by this pass (rule 94: RTN-7 is a
+row-local UPDATE; stamping HEAD would have claimed the DRS-E6 coverage
+gate ran against a tree it never read) — the E6 lane's post-merge re-run
+is what moves it (§7's closing note).
+
+**Fourth round (2026-09-18) — public trait methods.** Copilot again read
 the scanner: a `pub trait`'s methods are written `fn` with no `pub` and
 are public through the trait — the third keyword-less surface, after
 enum struct-variant fields and tuple-variant payloads (`varint::VarInt` is
@@ -246,21 +263,16 @@ fixtures and the genesis tool.
 Final figure: **81 public items scanned, 17 raw occurrences, all 17
 allowlisted with a reason and a checked addressee.**
 
-**Third round (PR #777 review, 2026-09-18, at `7906dab1d`).** The same
-line-regex hole the second round closed for signatures was still open
-for fields: `pub digest: Vec<\n    [u8; 32],\n>` puts the raw type on a
-line with no `name:`, `pub_items` stays nonzero, and the gate is
-vacuously green. Fields, enum-variant fields, and tuple-variant payloads
-now share one buffer with signatures — a declaration is complete when
-its type's bracket depth is zero, not when a comma appears (the last
-field of a struct has none). Self-test legs for the wrap, the no-comma
-last field, a wrapped enum field, and a wrapped tuple variant. The
-archived §4 still described the pre-review `dict[str, str]` shape with
-the addressee buried in the reason; that paragraph is the
-`Allow(reason, addressee)` contract above. The unified implementation
-index stamp stays `20ebdf1e5` (rule 94: RTN-7 is a row-local UPDATE;
-stamping HEAD would claim the DRS-E6 coverage gate ran against a tree
-it never read).
+**Completion sweep (2026-09-18, post-merge, at `dev` = `51d7f2416`).** The
+fourth round's "thirty fixtures" was a grep with one spelling: 32 more
+`BlockHash::from_bytes([0; 32])` / `([0u8; 32])` sites survived across 24
+fixture files (`shekyl-wire/tests`, engine-core test modules, the
+curve-tree KATs, the rules crate's own `harness.rs` — where
+`tip.map_or(BlockHash::NULL, |t| t.hash)` is CEN-A2 verbatim). All are
+`BlockHash::NULL` now; the tree has no zero-array block hash left
+(`rg 'BlockHash::from_bytes\(\[0(u8)?; 32\]\)' rust/` is empty). The
+lesson is the A7 one from slice 1 in miniature: a sweep's denominator is
+what the regex matched, and a literal has more than one spelling.
 
 ## 8. Two boundaries the implementation named that §3 did not
 
