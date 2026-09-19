@@ -1316,57 +1316,6 @@ namespace cryptonote
     typedef epee::misc_utils::struct_init<response_t> response;
   };
 
-  struct COMMAND_RPC_GET_CURVE_TREE_PATH
-  {
-    struct request_t: public rpc_request_base
-    {
-      std::vector<uint64_t> output_indices;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_request_base)
-        KV_SERIALIZE(output_indices)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<request_t> request;
-
-    struct path_entry
-    {
-      uint64_t output_index;
-      uint8_t  tree_depth;
-      std::string path_blob;          // hex-encoded Merkle path (leaf scalars + branch hashes)
-      std::string chunk_outputs_blob; // hex-encoded Ed25519 output data for each leaf in the chunk:
-                                      // per entry: [O:32][I:32][C:32][CM.x:32] = 128 bytes (PL-D3)
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE(output_index)
-        KV_SERIALIZE(tree_depth)
-        KV_SERIALIZE(path_blob)
-        KV_SERIALIZE(chunk_outputs_blob)
-      END_KV_SERIALIZE_MAP()
-    };
-
-    struct response_t: public rpc_response_base
-    {
-      std::string reference_block;
-      std::string curve_tree_root;
-      uint64_t    reference_height;
-      uint8_t     tree_depth;
-      uint64_t    leaf_count;
-      std::vector<path_entry> paths;
-
-      BEGIN_KV_SERIALIZE_MAP()
-        KV_SERIALIZE_PARENT(rpc_response_base)
-        KV_SERIALIZE(reference_block)
-        KV_SERIALIZE(curve_tree_root)
-        KV_SERIALIZE(reference_height)
-        KV_SERIALIZE(tree_depth)
-        KV_SERIALIZE(leaf_count)
-        KV_SERIALIZE(paths)
-      END_KV_SERIALIZE_MAP()
-    };
-    typedef epee::misc_utils::struct_init<response_t> response;
-  };
-
   struct COMMAND_RPC_GET_CURVE_TREE_INFO
   {
     struct request_t: public rpc_request_base

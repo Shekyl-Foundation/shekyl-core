@@ -2697,16 +2697,6 @@ public:
   virtual uint64_t get_curve_tree_leaf_count() const = 0;
 
   /**
-   * @brief get the hash for a specific layer/chunk in the tree.
-   *
-   * @param layer  layer index (0 = leaf layer)
-   * @param chunk  chunk index within the layer
-   * @param hash_out  32-byte output buffer
-   * @return true if the entry exists
-   */
-  virtual bool get_curve_tree_layer_hash(uint8_t layer, uint64_t chunk, uint8_t* hash_out) const = 0;
-
-  /**
    * @brief get the leaf data for a specific tree position.
    *
    * WARNING: The parameter is a tree_position, NOT a global_output_index.

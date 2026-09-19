@@ -5,6 +5,15 @@
 
 //! D4 — extract a **real** archival shard from a live regtest chain.
 //!
+//! **DOES NOT RUN at this pin (2026-09-18):** the `get_curve_tree_path` RPC it
+//! reads from was removed — spend-revealing under `PHASE_2A_SEND_PATH.md`
+//! §3.0.1 and wrong on any chain carrying a transaction (`SOK-10`, Q7 → A;
+//! `docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`). The daemon answers
+//! method-not-found. This crate is disposable debt (see `src/lib.rs`); a
+//! replacement leaf source, if the spike is rerun, is a block-derived rebuild
+//! via `shekyl-curve-tree` or the bulk leaf-range service
+//! `CURVE_TREE_CLIENT.md` §"leaf range" names. Not repaired here.
+//!
 //! ```text
 //! SHEKYL_SPIKE_RPC=http://127.0.0.1:28601 \
 //! SHEKYL_SPIKE_SHARD_OUT=/path/to/shard.bin \

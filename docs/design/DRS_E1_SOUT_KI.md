@@ -152,9 +152,9 @@ SI-9 cell; `LMDB_SCHEMA.md`'s redb-mapping note if it names the multimap;
 - **`get_tx_unlock_time`, `get_tx_block_height`** — S-TX's, even though the
   histogram's `unlocked` walk called them; the histogram is **DELETED**.
 - **Any daemon wiring.** The daemon serves LMDB at this pin; the path
-  builder's `read_output_oc` callback (`src/cryptonote_core/curve_tree_path.cpp:67`)
-  and the two key-image RPC/verdict readers switch to `ReadSnapshot` at
-  cutover, not here.
+  builder's `read_output_oc` callback (`curve_tree_path.cpp:67` at `8494f2a27` —
+  deleted 2026-09-18 with the RPC, `SOK-10` Q7 → A) and the two key-image
+  RPC/verdict readers switch to `ReadSnapshot` at cutover, not here.
 - **S-TX, S-CURVE**: the next surfaces in DRS §7's order. Named so a read
   this increment finds convenient (a tx blob, a leaf) is not smuggled in.
 
@@ -346,7 +346,7 @@ proposed a test for it; the review refuted the premise at source, and
 reading the call chain found the defect the wrong premise had been
 covering: the path builder's `read_output_oc` callback passes a **tree
 position** straight to `get_output_key(0, pos)` (`curve_tree_path.cpp:67`;
-`rust/shekyl-fcmp/src/rpc_path.rs:85`–`:89` calls `output_oc(pos)` with the
+`fcmp/src/rpc_path.rs:85`–`:89` (at `8494f2a27`; deleted since) calls `output_oc(pos)` with the
 same `pos` it hands `leaf(pos)`), never resolving it through
 `get_leaf_output_index`. The pre-extraction C++ did the same
 (`get_output_key(0, i)`, commit `f2df035e7`), so the Rust assembler
@@ -366,6 +366,19 @@ the output whose leaf sits at position `j`. What this surface owes it is
 already in the design: O1 takes a `GlobalOutputIndex`, so a caller cannot
 hand it a position without a named conversion, which is the shape that
 makes SOK-10 unrepresentable once the resolver exists.
+
+**UPDATE 2026-09-18 — SOK-10 closed by deletion, not by fix (`SOK-Q7` → A,
+RULED by the maintainer; [`SOK_10_PATH_POSITION_RESOLUTION.md`](../completed/SOK_10_PATH_POSITION_RESOLUTION.md)).**
+The path-FFI lane found the endpoint spend-revealing under a binding ruling
+(`PHASE_2A_SEND_PATH.md` §3.0.1), consumer-less on every repo, and wrong on
+every chain carrying a transaction (coinbase `+60` vs tx `+10` inverts the
+orders in the first block with a transaction). `rpc_path.rs`,
+`curve_tree_path.cpp` and `get_curve_tree_path` are deleted (RPC 3.34). No
+resolver is built. Consequence for this surface: SOK-7's "the Rust read is
+shaped for the live consumer" has lost that consumer (`curve_tree_path.cpp:67`
+no longer exists); O1's pubkey-and-commitment shape is still the record's
+logical content, but its stated reason is gone — this lane decides whether
+the row's note is re-grounded. Disclosed here by the path-FFI lane (rule 94 §6).
 
 ### 3.5 Types this increment adds to the store crate
 
@@ -434,7 +447,7 @@ reproduces knowingly is in §6.1.
 | --- | --- | --- |
 | **SOK-1** | `output_amounts` is a redb multimap whose only lookup is a full iteration of the key's members (redb 4.1.0 has no seek within `MultimapValue`); `get_output_key`'s `MDB_GET_BOTH` seek has no O(log n) equivalent on it. First reader finds the writer's shape unservable. | Keyed tuple table, `SCHEMA_VERSION 5 → 6` (§3.4, SOK-Q1). |
 | **SOK-2** | Two dense counters coincide by construction and nothing asserts it: `output_id` and amount-0 `amount_index` (`CT2_DRAIN_ORDER.md` records the equality as the wallet's assumption). *Corrected on #779 review:* the first draft counted the leaf position as a third; it is not (SOK-10). | Belt on SI-9 (§3.4, SOK-Q2). |
-| **SOK-10** | **(PR #779 review; defect, not this surface's.)** The path builder's `read_output_oc` passes a **tree position** to `get_output_key(0, pos)` (`curve_tree_path.cpp:67`; `rpc_path.rs:85`–`:89`) without `get_leaf_output_index`; leaf order ≠ gindex order (`CT2_DRAIN_ORDER.md:85`), so a reordered chunk yields wrong `chunk_outputs`, wrong rebuilt siblings, a proof that fails verification. Inherited from the pre-extraction C++ (`f2df035e7`). Fail-closed; no current test reaches it. | Routed to the path-FFI lane (Rust fix: `PathStore` resolves position → `GlobalOutputIndex` before `output_oc`); `FOLLOWUPS.md` row with falsifier. O1's `GlobalOutputIndex` parameter is the type that makes the confusion unrepresentable at the store. |
+| **SOK-10** | **(PR #779 review; defect, not this surface's.)** The path builder's `read_output_oc` passes a **tree position** to `get_output_key(0, pos)` (`curve_tree_path.cpp:67`; `rpc_path.rs:85`–`:89`) without `get_leaf_output_index`; leaf order ≠ gindex order (`CT2_DRAIN_ORDER.md:85`), so a reordered chunk yields wrong `chunk_outputs`, wrong rebuilt siblings, a proof that fails verification. Inherited from the pre-extraction C++ (`f2df035e7`). Fail-closed; no current test reaches it. | **CLOSED 2026-09-18 by deletion** (`SOK-Q7` → A, path-FFI lane): the endpoint and its assembler are removed (RPC 3.34) — spend-revealing (`PHASE_2A` §3.0.1), consumer-less, wrong on every real chain. FOLLOWUPS row removed. O1's `GlobalOutputIndex` parameter still makes the confusion unrepresentable at the store. Record: [`SOK_10_PATH_POSITION_RESOLUTION.md`](../completed/SOK_10_PATH_POSITION_RESOLUTION.md). |
 | **SOK-3** | `has_key_images` and the batch `get_output_key` / `get_output_tx_and_index` exist to hold one LMDB `rtxn` across N lookups. `ReadSnapshot` is that transaction. | Dissolve into K1 / O1 / O2 on one snapshot; no batch API. |
 | **SOK-4** | `Blockchain::for_all_outputs` (two overloads) has no caller in `src/` or `tests/`. | Not ported. |
 | **SOK-5** | `get_output_distribution` has no RPC route (`core_rpc_server.cpp` has no handler; `RpcHandler::get_output_distribution` is reached only from `tests/unit_tests/output_distribution.cpp:92`). Extends SCR-2 from "the `amount == 0` helper is dead" to "the method is". Carries a rule-71 nettype branch (`blockchain.cpp:2636`). | Not ported; branch dies with it. |

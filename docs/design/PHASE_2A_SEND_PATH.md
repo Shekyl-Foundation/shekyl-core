@@ -104,7 +104,7 @@ prerequisite + Phase 6.
 | Refresh + `apply_scan_result` | `refresh.rs`, `merge.rs` | **Prerequisite** — spendable outputs must exist |
 | FCMP++ tree primitives + daemon leaf/checkpoint substrate | `shekyl-fcmp::tree`, `curve_tree_leaves`, `curve_tree_checkpoints`, `prune_curve_tree_intermediate_layers` | **Reuse** — local path assembly (§3.0); only gap is a **bulk, non-revealing** leaf-range RPC |
 | Curve-tree client (local leaf store + delta sync + local path assembly) | **new phase** (§3.0.4) | **Prerequisite (own phase)** — 2A consumes a synthetic locally-computed path; real-root sends gated on this + Phase 6 |
-| `get_curve_tree_path` (per-output Merkle path) | `core_rpc_server` | **Forbidden on send path** — spend-revealing (§3.0.1); daemon-side Rule-60/privacy review is a separate C++ PR |
+| `get_curve_tree_path` (per-output Merkle path) | ~~`core_rpc_server`~~ | **Forbidden on send path** — spend-revealing (§3.0.1). **The daemon-side review this row flagged ran as `SOK-10` Q7 and the endpoint was deleted 2026-09-18 (RPC 3.34; PR #784)** — the name is REJECTED in `FCMP_PLUS_PLUS.md` |
 
 **Explicit stubs to remove:**
 
@@ -184,23 +184,28 @@ Rationale (privacy > security > features per `00-mission.mdc`):
   not tell which was real* (the decoys were the cover). `60-no-monero-legacy.mdc`
   deleted `get_outs` because FCMP++ needs no ring — but that same absence means
   there is **nothing to hide behind** if the wallet asks for one specific path.
-- The daemon already exposes `get_curve_tree_path(output_indices) -> {path_blob,
-  chunk_outputs_blob}` (`core_rpc_server_commands_defs.h
-  COMMAND_RPC_GET_CURVE_TREE_PATH`). If the wallet calls it with its real output
-  index, the daemon learns **with certainty, before broadcast,** exactly which
-  output is being spent — defeating the membership-proof privacy model at the
-  one boundary FCMP++ was meant to close.
+- The daemon exposed (until 2026-09-18) `get_curve_tree_path(output_indices) ->
+  {path_blob, chunk_outputs_blob}` (`COMMAND_RPC_GET_CURVE_TREE_PATH`, deleted
+  with `SOK-10` Q7 → A). Had the wallet called it with its real output index,
+  the daemon would have learned **with certainty, before broadcast,** exactly
+  which output is being spent — defeating the membership-proof privacy model at
+  the one boundary FCMP++ was meant to close.
 - Under the priority hierarchy this is decisive regardless of how much cheaper a
   per-output query would be. No per-leaf path query, full stop.
 
-**Disposition of the existing `get_curve_tree_path` endpoint:** it must **not**
-be used by the wallet send path. It is flagged for daemon-side Rule-60 / privacy
-review as a **separate C++ PR** (acceptable, if at all, only for explicitly
-non-private contexts — debug, or an opt-in light-wallet mode that documents the
-linkability cost; it is not the default private spend path). Note also that
-`DAEMON_RPC_RUST.md` §"Cutover Remaining Work" currently lists "curve tree path
-fetch via `/get_curve_tree_path`" as part of the wallet-sync test — that
-assumption is now **wrong for private spends** and is corrected by this section.
+**Disposition of the `get_curve_tree_path` endpoint — RULED and EXECUTED
+(records-was, then outcome).** As written here (2026-06): it must **not** be
+used by the wallet send path, and was flagged for daemon-side Rule-60 / privacy
+review as a separate PR (acceptable, if at all, only for explicitly non-private
+contexts). **That review ran as `SOK-10` Q7 (2026-09-18) and ruled A — delete:**
+no consumer existed, the carve-out named no plan, and the assembler was also
+wrong on every chain carrying a transaction. The endpoint, its Rust assembler and
+its C++ shim are gone (RPC 3.34); the name is kept REJECTED in
+`FCMP_PLUS_PLUS.md`. A future light-wallet consumer needs the bulk,
+non-revealing leaf-range service of §3.0.2, never this shape. Record:
+`docs/completed/SOK_10_PATH_POSITION_RESOLUTION.md`. (`DAEMON_RPC_RUST.md`'s
+old "path fetch via `/get_curve_tree_path`" wallet-sync line was corrected in
+the same change.)
 
 #### 3.0.2 Privacy-preserving shape: daemon serves bulk, wallet assembles locally
 
@@ -1844,5 +1849,5 @@ step 2), never read from a daemon field.
 - `rust/shekyl-fcmp/src/tree.rs` — local path-assembly primitives (`construct_leaf`, `hash_grow_*`, point↔scalar)
 - `docs/FCMP_PLUS_PLUS.md` — curve tree, checkpoints (`FCMP_CURVE_TREE_CHECKPOINT_INTERVAL`), leaf format
 - `docs/LMDB_SCHEMA.md` — `curve_tree_leaves`, `curve_tree_checkpoints` schema
-- `docs/DAEMON_RPC_RUST.md` — curve-tree RPC surface (`get_curve_tree_path` forbidden on send path per §3.0.1)
+- `docs/DAEMON_RPC_RUST.md` — curve-tree RPC surface (`get_curve_tree_path` forbidden on send path per §3.0.1; **removed 2026-09-18**, `SOK-10` Q7 → A)
 - `60-no-monero-legacy.mdc` — `get_outs` removal; the no-ring/no-decoy basis for §3.0.1
