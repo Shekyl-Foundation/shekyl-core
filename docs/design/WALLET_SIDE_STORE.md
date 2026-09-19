@@ -1321,7 +1321,7 @@ ruling has touched. It is not deferred for a reason of its own — only
 
 The dependency graph, not a schedule. Each increment gets its own plan
 document with a Round-0 pre-flight and numbered findings, in the shape of
-[`DRS_E1_SOUT_KI.md`](DRS_E1_SOUT_KI.md); each is separately authorized.
+[`DRS_E1_SOUT_KI.md`](../completed/DRS_E1_SOUT_KI.md); each is separately authorized.
 
 ```text
 PR A         shekyl-store-codec                    [AUTHORIZED 2026-09-19]
