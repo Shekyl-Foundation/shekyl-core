@@ -139,6 +139,7 @@ mining JIT for validation (§1.3).
 | 4 | `RuleSet::fakechain` wiring | Q10 / F10; FOLLOWUPS row | `--regtest` / `--fixed-difficulty` reach `RuleSet::fakechain` through the driver (RD-Q7). |
 | 5 | The test-deviation register's first consumer | F12; FOLLOWUPS row (falsifier: *this* pre-flight) | §5 carries the section F12's falsifier demands. |
 | 6 | LWMA-1 conformance past `N` | `conformance_tests.rs` header; `CHAIN_RULES_CRATE.md` §8.8 | The first replay past 91 blocks exercises D4's window against a real store. |
+| 7 | **The verifier dataset-mode measurement** | `RANDOMX_V2_RUST.md` §9 (unbuilt pending measured need); `RANDOMX_V2_MINING_ASYMMETRY.md` option (a) | The pipeline is the first instrument able to run RandomX verification at volume over a real chain; **the benchmark is part of its deliverable** (RD-F11): light-mode wall-clock per hash / per block, on the provisioning floor, as a sink artifact. A deferred decision's input arrives with the driver instead of being argued for. |
 
 ## 3. Round-0 sweep — what exists, verified at source
 
@@ -251,6 +252,7 @@ register is prose; the grader takes typed states. A row extractor is owed
 | **RD-Q6** | **Grading.** | **RULED as defaulted, plus one rule:** Python extractor → JSON → the pure Rust grader, reusing `drs_artifact.py`'s schema discipline. **Rows whose value is sourced from a passed-through fact grade as not-evidence** ("borrowed is never evidence", RD-F7): identity there is copying, not conformance. Under §1.3 the rule's point is honesty about progress toward Rust deriving everything, not fidelity to C++. | The register is prose Python already parses (`check_conformance_coverage.py`); the grade is reproducible from the artifact alone. |
 | **RD-Q7** | **Fakechain wiring.** | **RULED as defaulted:** the driver takes `--fixed-difficulty n` → `RuleSet::fakechain(n)`, refused unless the nettype is regtest; the `Network::Fakechain` witness stays its own change (12 files / 9 crates). | The consumers need the lever, not the witness. |
 | **RD-Q8** | **First chains.** | **RULED as defaulted:** regtest (the `e2e_fcmp_spend_accepted_by_daemon` fixture, ~80 s), then a testnet snapshot past `N` **and** a seed epoch (≥ 2113 blocks). | Only a chain past 2112 exercises the cache swap and D3's roll-over against real data. |
+| **RD-Q9** *(Round 1 question, posed 2026-09-19 — must be answered before commit 7, grading)* | **RD-F7's edge: producing a borrowed value vs consuming one as an oracle.** `root_after` is passed through, so the digest's `curve_root` component is worthless as evidence — but CEN-B5's equality check (candidate header root == recorded root at `h`) still **refuses a wrong header** against that borrowed value. Does "rows sourced from passed-through facts grade not-evidence" apply to rows that *produce* the borrowed value (the SCW-19 root write, the weight folds, the coin fold) only, or also to rows that *consume* one as an oracle (B5's equality; C-rows reading recorded timestamps are unaffected since timestamps are real)? | **Default: producers only.** A consumer row is a real check whose oracle happens to be borrowed: a wrong candidate is refused regardless of where the oracle came from, so the *rule* grades on its own evidence while the *component* it feeds does not. Producers (the rows whose output *is* the passed-through value) grade not-evidence until Rust derives them. | This split decides how many rows actually grade not-evidence — under "producers only" it is the six facts' deriving rows (CEN-G6/G6b, F13/F14/F14b, F17/G11, B5's write half via S-CURVE, I12); under "consumers too" B5 and every rule reading a recorded fact joins them. The grader needs the distinction as a typed origin on each row's oracle, not a comment. |
 
 ## 5. Test deviations (F12's first live section)
 
@@ -307,22 +309,30 @@ register is prose; the grader takes typed states. A row extractor is owed
   `Stale::Seed`.** Q5 was right: in replay a seed change is impossible from a
   correct driver, so the arm is a defect signal, recorded and surfaced, with an
   injected-wrong-seed test exercising the path (RD-Q5).
-- **RD-F11 (review's throughput item, checked at source; corrected
-  2026-09-19) — the verifier is cache-only as a measure-first staging, not by
-  ruling.** This finding first read `RANDOMX_V2_RUST.md:544` (*"verifier code
-  does not use the full 2 GiB dataset"*) as a foreclosure requiring a
-  reopening. **Wrong:** the dataset path was left unbuilt to measure whether
-  the daemon needed it — §4 of that plan lists `Dataset::derive(cache)` as a
-  planned transform, and `RANDOMX_V2_MINING_ASYMMETRY.md` names the
-  no-dataset verifier as the thing its option (a) revisits once Phases 1–3
-  produce a number; none has. Upstream's full-memory mode is ~10× faster per
-  hash for a ~2 GiB init that amortises over a long replay. So: the dataset
-  mode is an **open option whose trigger is the measurement**, and E2 is the
-  first real verification workload able to produce it — the pipeline emits
-  light-mode wall-clock per hash / per block as a sink metric, feeding that
-  study rather than deciding for it. Line 544 amended in the same commit so
-  it no longer reads as a ruling (sibling-lane write, disclosed). The JIT is
-  never the lever (§1.3).
+- **RD-F11 (review's throughput item; corrected 2026-09-19, then RULED) —
+  dataset mode unbuilt pending measured need; the replay driver is the first
+  instrument capable of measuring it; the benchmark is part of its
+  deliverable.** What stands as fact about the code: `Cache::derive_item`
+  (`cache.rs:449`) is the per-item path and no public dataset builder exists.
+  What this finding first got wrong: it read `RANDOMX_V2_RUST.md:544`
+  (*"verifier code does not use the full 2 GiB dataset"*) as a ruling and
+  wrote a rule-21 reopener — a description of current implementation read as
+  a prescription (rule 16's corollary, the family's *mood* variant, recorded
+  there). The dataset path was left unbuilt to **measure** whether the daemon
+  needed it (§4 of that plan lists `Dataset::derive(cache)` as planned;
+  `RANDOMX_V2_MINING_ASYMMETRY.md` option (a) revisits on the measurement, and
+  none exists). **Disposition — stronger than a reopener:** the postponed
+  decision's input is exactly what this increment produces. Replay-that-
+  validates is the first workload that runs RandomX verification at volume
+  over a real chain, so the measurement arrives *with* the driver: the
+  pipeline's metrics sink records light-mode wall-clock per hash and per block
+  on the provisioning floor, and that artifact is inventory item 7 and part
+  of §8's record. Upstream's full-memory mode is ~10× faster per hash for a
+  ~2 GiB init that amortises over a long replay; whether Shekyl wants it is
+  decided on the number, by the RandomX lane. Line 544 amended so it no longer
+  reads as a ruling. The JIT is never the lever (§1.3). *Same correction the
+  driver deferral itself just received, one level up: an item pointed at
+  nobody becoming an item pointed at the thing being built.*
 - **RD-F12 (ruling) — the mining JIT is the one permanent C++↔Rust boundary,
   with a standing obligation.** The RandomX parity corpus and
   `randomx-v2-differential.yml` become a **permanent gate** (full vector set on
@@ -341,7 +351,8 @@ register is prose; the grader takes typed states. A row extractor is owed
 4. `ingest: corpus + trace formats (Rust-minted, versioned); RPC corpus reader with prune-state refusal; LMDB trace exporter as a C++ harvest shim` (RD-Q2, RD-F8, RD-F9).
 5. `ingest: form workers → sequencer → validate+connect actor; Corrupt → halt; Stale::Seed surfaced; injected-wrong-seed test` (RD-Q5).
 6. `ingest: --fixed-difficulty → RuleSet::fakechain on regtest` (RD-Q7).
-7. `ingest: CSR-3a grading — extractor, artifact, borrowed-is-not-evidence rule, grader wiring` (RD-Q6, RD-F7).
+7. `ingest: CSR-3a grading — extractor, artifact, borrowed-is-not-evidence rule (RD-Q9 answered first), grader wiring` (RD-Q6, RD-F7).
+7b. `ingest: metrics sink — light-mode RandomX wall-clock per hash / per block; the dataset-mode measurement artifact` (RD-F11, item 7).
 8. `ingest: first runs — regtest fixture; testnet past N and a seed epoch` (RD-Q8); LWMA-window conformance recorded.
 9. `docs` — DRS-E2 row, index, FOLLOWUPS sweep (items 1–6 of §2), the RandomX parity-gate obligation handed to its lane (RD-F12), this file to `completed/`.
 
@@ -353,8 +364,12 @@ root_after, long_term_effective_median]` and E6's open coverage gaps —
 NOT-PARITY-EVIDENCE, honestly. **Of the digest's three components, two are
 evidence (block hashes; spent keys — both from real `form` → `validate` →
 `connect`) and one is borrowed (`curve_root`, copied from LMDB through
-`root_after`) and is graded as such** (RD-F7). Register rows sourced from a
-passed-through fact grade not-evidence by rule, and the artifact names them.
+`root_after`) and is graded as such** (RD-F7). Register rows that *produce* a
+passed-through fact grade not-evidence by rule (RD-Q9 decides whether
+consumers join them), and the artifact names them. **The dataset-mode
+measurement is part of the record** (inventory item 7): light-mode wall-clock
+per hash and per block on the provisioning floor, as an artifact the RandomX
+lane's option (a) decision reads.
 The graded artifact reports, per register row, CHECKED-CONFORMANT identity
 held / DIVERGENT rows not reproduced / UNREVIEWED observed-only, with **every**
 disagreement adjudicated to one of §1.3's two outcomes or named as
@@ -369,4 +384,5 @@ code or a re-pointed FOLLOWUPS row with a live owner.
 | Date | Entry |
 | --- | --- |
 | 2026-09-19 | **Round 0.** Opened on #785's review after "owner: the E2 lane" was found to name nothing. Sweep at source; eight questions with defaults; six findings, one a proposed gate (RD-F4). Opens before #785 merges so #785's deferrals point at a document under review. |
-| 2026-09-19 | **Round 0 REVIEWED and RULED (maintainer).** Substrate claims confirmed at `dev` `14f8dc739`. Four findings taken: RD-F7 (the root component compares a copy of itself → borrowed-is-never-evidence grader rule; §8 names the real components), RD-F8 (tx bodies; unpruned source; prune state declared and refused), RD-F9 (bootstrap format inherited → Rust-minted trace format), RD-F10 (Q3/Q5 contradiction → `Stale::Seed` is a defect signal in replay; injected-seed test). **The ruling (§0):** C++ is a non-canonical reference, adjudicated against the spec with two outcomes, extracted from and never fixed; all E2 C++ is harvest shims that die at cutover; the ingest pipeline is production code shared by E2 and E3 (§1.1 — RD-Q1 → `shekyl-chain-ingest`); the mining JIT is the sole surviving C++ behind a permanent parity gate (RD-F12). Throughput item checked at source: cache-only today; the dataset mode is measurement-gated, not ruled out (RD-F11 as first written said "by ruling" — corrected the same day; E2 emits the measurement). RD-Q4/Q6/Q7/Q8 as defaulted; RD-F4 endorsed as a standing check. Round 1 opens after #785 merges. |
+| 2026-09-19 | **Round 0 REVIEWED and RULED (maintainer).** Substrate claims confirmed at `dev` `14f8dc739`. Four findings taken: RD-F7 (the root component compares a copy of itself → borrowed-is-never-evidence grader rule; §8 names the real components), RD-F8 (tx bodies; unpruned source; prune state declared and refused), RD-F9 (bootstrap format inherited → Rust-minted trace format), RD-F10 (Q3/Q5 contradiction → `Stale::Seed` is a defect signal in replay; injected-seed test). **The ruling (§0):** C++ is a non-canonical reference, adjudicated against the spec with two outcomes, extracted from and never fixed; all E2 C++ is harvest shims that die at cutover; the ingest pipeline is production code shared by E2 and E3 (§1.1 — RD-Q1 → `shekyl-chain-ingest`); the mining JIT is the sole surviving C++ behind a permanent parity gate (RD-F12). Throughput item checked at source: cache-only today; the dataset mode is measurement-gated, not ruled out (RD-F11 as first written said "by ruling" — corrected the same day). |
+| 2026-09-19 | **RD-F11 RULED as a scheduled input** (dataset mode unbuilt pending measured need; the driver is the first instrument able to measure it; the benchmark is part of its deliverable — inventory item 7, commit 7b). The mood variant of the wrong-subject family recorded in rule 16's corollary. **RD-Q9 posed** (RD-F7's produce/consume split; default producers-only; must be answered before commit 7). RD-Q4/Q6/Q7/Q8 as defaulted; RD-F4 endorsed as a standing check. Round 1 opens after #785 merges. |
