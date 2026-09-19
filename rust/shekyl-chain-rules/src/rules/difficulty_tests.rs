@@ -214,6 +214,33 @@ fn cen_d6_zero_cannot_become_a_target() {
 }
 
 #[test]
+fn cen_d6_a_window_with_no_work_derives_zero_and_the_mint_refuses_it() {
+    // F4 said the predicate has no reachable refusal on a CONFORMING chain.
+    // A view that records no work across a full window is not one — LWMA-1
+    // over zero cumulative difficulty derives zero — and the type refuses
+    // it as the corrupt-view fault, never as a target D1 could compare
+    // against. This is the arm earning its keep.
+    let chain = (0..=N_USIZE).fold(MockChain::default(), |chain, i| {
+        chain.push(
+            recorded(1_000 + u64::try_from(i).expect("small") * 120),
+            root(u8::try_from(i % 250).expect("fits") + 1),
+        )
+    });
+    let connecting = BlockHeight::from_raw(chain.tip().expect("blocks").height.to_raw() + 1);
+    chain.with_view(|view| {
+        let mut coverage = RuleCoverage::EMPTY;
+        match D4::target(&view, connecting, &mut coverage) {
+            Err(Fault::Corrupt(Corrupt::ZeroTarget)) => {}
+            other => panic!("expected the zero-target fault, got {other:?}"),
+        }
+        assert!(
+            coverage.contains(CenRow::D6),
+            "D6 records at the refusing mint"
+        );
+    });
+}
+
+#[test]
 fn a_recorded_block_with_no_work_is_still_a_valid_short_chain() {
     // `recorded(ts)` records zero work; below N no rule reads it.
     let chain = MockChain::default().push(recorded(1_000), root(1));

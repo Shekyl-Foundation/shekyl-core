@@ -18,7 +18,9 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use std::collections::BTreeSet;
 
-use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_difficulty::{
+    seedheight, CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG,
+};
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage, PowHash, Timestamp,
 };
@@ -230,12 +232,31 @@ impl Substrate for MockSubstrate {
     }
 }
 
-/// Run the stateless stage under `rule_set` with the default substrate and
-/// a null seed claim. Panics if the substrate faults or a stateless rule
+/// The seed CEN-D3 expects for a candidate on `chain`'s tip: the null hash
+/// at genesis admission, else the identity of the block at
+/// `seedheight(connecting)`. What an honest driver claims to `form`.
+#[must_use]
+pub fn expected_seed(chain: &MockChain) -> BlockHash {
+    let Some(tip) = chain.tip() else {
+        return BlockHash::NULL;
+    };
+    let connecting = tip.height.to_raw() + 1;
+    let seed_height = seedheight(connecting, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG);
+    match chain.block(BlockHeight::from_raw(seed_height)) {
+        AtHeight::Recorded(block) => block.hash,
+        AtHeight::AboveTip => unreachable!("the seed height is below the tip"),
+    }
+}
+
+/// Run the stateless stage under `rule_set` with the default substrate,
+/// claiming `seed`. Panics if the substrate faults or a stateless rule
 /// refuses — a fixture that wants to exercise either calls [`form`] itself.
 #[track_caller]
-pub fn formed_under(candidate: Candidate, rule_set: &RuleSet) -> StructurallyValid {
-    let seed = BlockHash::NULL;
+pub fn formed_under(
+    candidate: Candidate,
+    rule_set: &RuleSet,
+    seed: BlockHash,
+) -> StructurallyValid {
     match form(
         candidate,
         rule_set,
@@ -249,10 +270,18 @@ pub fn formed_under(candidate: Candidate, rule_set: &RuleSet) -> StructurallyVal
     }
 }
 
-/// [`formed_under`] the genesis rule set.
+/// [`formed_under`] the genesis rule set, claiming the seed `chain` expects
+/// — the honest driver's call, so D3 holds and the view stage judges the
+/// candidate.
+#[track_caller]
+pub fn formed_on(chain: &MockChain, candidate: Candidate) -> StructurallyValid {
+    formed_under(candidate, &RuleSet::GENESIS, expected_seed(chain))
+}
+
+/// [`formed_on`] an empty chain — a genesis candidate.
 #[track_caller]
 pub fn formed(candidate: Candidate) -> StructurallyValid {
-    formed_under(candidate, &RuleSet::GENESIS)
+    formed_on(&MockChain::default(), candidate)
 }
 
 /// Unwrap a result whose error cannot exist.

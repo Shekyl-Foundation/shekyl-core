@@ -59,6 +59,7 @@
 
 pub(crate) mod difficulty;
 pub(crate) mod header;
+pub(crate) mod pow;
 pub(crate) mod timestamps;
 pub(crate) mod topology;
 
@@ -158,14 +159,23 @@ pub(crate) struct BlockContext<'a> {
     /// definition); `None` at genesis. Read by C1 (the genesis exemption)
     /// and C2.
     pub(crate) mtp_window: Option<MtpWindow>,
+    /// Whether the longhash satisfies the target under the ported
+    /// comparison (D1b's definition, evaluated once over D4's target). D1
+    /// acts on it; the target itself travels on the verdict, not here.
+    pub(crate) pow_meets_target: bool,
 }
 
 impl<'a> BlockContext<'a> {
-    pub(crate) const fn new(formed: &'a StructurallyValid, mtp_window: Option<MtpWindow>) -> Self {
+    pub(crate) const fn new(
+        formed: &'a StructurallyValid,
+        mtp_window: Option<MtpWindow>,
+        pow_meets_target: bool,
+    ) -> Self {
         Self {
             candidate: formed.candidate(),
             formed,
             mtp_window,
+            pow_meets_target,
         }
     }
 }

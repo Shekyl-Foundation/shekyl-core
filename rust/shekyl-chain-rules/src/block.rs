@@ -10,7 +10,7 @@
 use core::fmt;
 
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{BlockHash, PqcAuthHash, PrunableHash, Timestamp, TxHash};
+use shekyl_types::{BlockHash, PowHash, PqcAuthHash, PrunableHash, Timestamp, TxHash};
 use shekyl_wire::{Block, BlockHeader, Transaction};
 
 use crate::coverage::RuleCoverage;
@@ -128,6 +128,9 @@ impl Candidate {
 /// * `seed` — the block id the caller **claimed** sits at the seed height
 ///   (CEN-D3). `validate` verifies it against the committing view and
 ///   returns [`Stale::Seed`](crate::Stale::Seed) on a mismatch.
+/// * `pow` — the RandomX longhash under that seed (CEN-D2), computed here
+///   because it is the most expensive call in the validator and this stage
+///   runs outside the write transaction.
 /// * `judged_at` — the wall clock at `form`. **This makes the verdict
 ///   time-dependent**: a `StructurallyValid`, and the `ChainValid` minted
 ///   from it, is no longer a pure function of `(candidate, view, rule_set)`.
@@ -150,6 +153,7 @@ impl Candidate {
 ///     coverage: todo!(),
 ///     judged_at: todo!(),
 ///     seed: todo!(),
+///     pow: todo!(),
 ///     attempt: todo!(),
 /// };
 /// ```
@@ -162,6 +166,7 @@ pub struct StructurallyValid {
     coverage: RuleCoverage,
     judged_at: Timestamp,
     seed: BlockHash,
+    pow: PowHash,
     attempt: FormAttempt,
 }
 
@@ -174,6 +179,7 @@ impl StructurallyValid {
         coverage: RuleCoverage,
         judged_at: Timestamp,
         seed: BlockHash,
+        pow: PowHash,
         attempt: FormAttempt,
     ) -> Self {
         Self {
@@ -182,6 +188,7 @@ impl StructurallyValid {
             coverage,
             judged_at,
             seed,
+            pow,
             attempt,
         }
     }
@@ -218,6 +225,13 @@ impl StructurallyValid {
         self.seed
     }
 
+    /// The longhash under the claimed seed (CEN-D2) — what CEN-D1 compares
+    /// against the target once the seed is verified.
+    #[must_use]
+    pub const fn pow(&self) -> PowHash {
+        self.pow
+    }
+
     /// Which attempt at `form` produced this.
     #[must_use]
     pub const fn attempt(&self) -> FormAttempt {
@@ -239,6 +253,7 @@ impl fmt::Debug for StructurallyValid {
             .field("coverage", &self.coverage)
             .field("judged_at", &self.judged_at)
             .field("seed", &self.seed)
+            .field("pow", &self.pow)
             .field("attempt", &self.attempt)
             .finish()
     }

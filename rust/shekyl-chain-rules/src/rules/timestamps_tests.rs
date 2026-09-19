@@ -14,7 +14,8 @@ use crate::block::Candidate;
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{candidate_on, recorded, root};
 use crate::harness::{
-    assert_refused, boundary_pair, formed, judged, Faulted, FaultingView, MockChain, MockSubstrate,
+    assert_refused, boundary_pair, expected_seed, formed_on, judged, Faulted, FaultingView,
+    MockChain, MockSubstrate,
 };
 use crate::rule_set::RuleSet;
 use crate::validate::{form, validate};
@@ -48,7 +49,7 @@ fn judge_at(chain: &MockChain, candidate: Candidate, clock: u64) -> Verdict<()> 
         candidate,
         &RuleSet::GENESIS,
         &substrate,
-        BlockHash::NULL,
+        expected_seed(chain),
         FormAttempt::FIRST,
     ) {
         Ok(Ok(formed)) => formed,
@@ -70,7 +71,7 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
         candidate,
         &RuleSet::GENESIS,
         &substrate,
-        BlockHash::NULL,
+        expected_seed(chain),
         FormAttempt::FIRST,
     )
     .expect("no fault")
@@ -79,7 +80,7 @@ fn check_alone<R: BlockRule>(chain: &MockChain, candidate: Candidate, clock: u64
         let mut coverage = RuleCoverage::EMPTY;
         let connecting = BlockHeight::from_raw(chain.tip().map_or(0, |t| t.height.to_raw() + 1));
         let window = crate::harness::infallible(C3::window(&view, connecting, &mut coverage));
-        crate::harness::infallible(R::check(&BlockContext::new(&formed, window), &view))
+        crate::harness::infallible(R::check(&BlockContext::new(&formed, window, true), &view))
     })
 }
 
@@ -307,7 +308,7 @@ fn a_well_formed_candidate_covers_the_timestamp_rows() {
     let chain = chain_with(&[CLOCK - 120]);
     chain.with_view(|view| {
         let valid = judged(validate(
-            formed(candidate_at(&chain, CLOCK)),
+            formed_on(&chain, candidate_at(&chain, CLOCK)),
             &view,
             &RuleSet::GENESIS,
         ))

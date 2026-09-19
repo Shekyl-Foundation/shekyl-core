@@ -49,6 +49,7 @@ use crate::fault::{Fault, FormAttempt, Stale};
 use crate::rule_set::RuleSet;
 use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B7};
+use crate::rules::pow::{D1b, D1, D2, D3};
 use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::{self, BlockContext, FormContext};
@@ -118,12 +119,18 @@ pub fn form<S: Substrate>(
     let cx = FormContext::new(&candidate, rule_set);
     judge_form!(cx, coverage; B1, B2, B7);
 
+    // The one expensive definition, last — after the cheap refusals, and
+    // outside any transaction (D2; the seed is the caller's claim, D3
+    // verifies it in `validate`).
+    let pow = D2::longhash(substrate, &candidate, seed, &mut coverage)?;
+
     Ok(Ok(StructurallyValid::new(
         candidate,
         rule_set.id(),
         coverage,
         clock,
         seed,
+        pow,
         attempt,
     )))
 }
@@ -266,17 +273,23 @@ pub fn validate<'id, V: ChainView<'id>>(
     let mut coverage = *formed.coverage();
 
     // Definitions the predicates read, derived once and recorded where they
-    // are derived: the connecting height (one tip read), the MTP window
-    // (C3), the target (D4, minted through D6) and the work it implies. B6
-    // records at `ValidatedBlock::derive`.
+    // are derived: the connecting height (one tip read), the seed
+    // verification (D3), the MTP window (C3), the target (D4, minted
+    // through D6) and the work it implies, the comparison (D1b). B6 records
+    // at `ValidatedBlock::derive`.
     let connecting = Tip::connecting_height(view.tip().map_err(Fault::View)?.as_ref());
+    // The seed claim first: a stale seed means the longhash below was
+    // computed against a chain this is not, and nothing else is worth
+    // judging until `form` is redone.
+    D3::verify_seed(view, connecting, &formed, &mut coverage)?;
     let mtp_window = C3::window(view, connecting, &mut coverage).map_err(Fault::View)?;
     let target = D4::target(view, connecting, &mut coverage)?;
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
+    let pow_meets_target = D1b::satisfies(formed.pow(), target, &mut coverage);
 
     // View-bound block-level predicates (4.A–4.G), in census order.
-    let cx = BlockContext::new(&formed, mtp_window);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2);
+    let cx = BlockContext::new(&formed, mtp_window, pow_meets_target);
+    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1);
 
     let candidate = cx.candidate;
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);

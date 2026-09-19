@@ -271,11 +271,13 @@ census_rows! {
         C1 implemented(crate::rules::timestamps::C1),
         C2 implemented(crate::rules::timestamps::C2),
         C3 implemented(crate::rules::timestamps::C3),
-        // 4.D PoW and difficulty
-        D1 pending,
-        D1b pending,
-        D2 pending,
-        D3 pending,
+        // 4.D PoW and difficulty (slice 2). D2 the longhash definition in
+        // `form`; D3 the seed verification, D1b the comparison definition
+        // and D1 the predicate in `validate` (`rules/pow.rs`).
+        D1 implemented(crate::rules::pow::D1),
+        D1b implemented(crate::rules::pow::D1b),
+        D2 implemented(crate::rules::pow::D2),
+        D3 implemented(crate::rules::pow::D3),
         // D4 the target definition, recorded at `D4::target`; D6 held by the
         // `Target` type, recorded at its one constructor `D6::mint` (slice 2
         // Q4). D5 is **subsumed by D4 over an alt view**: the same LWMA-1

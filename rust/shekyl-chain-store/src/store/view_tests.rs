@@ -390,7 +390,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         b1.header.previous = genesis.hash();
         b1.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
         let valid = validate(
-            formed(Candidate::new(b1, Vec::new())),
+            formed(&view, Candidate::new(b1, Vec::new()))?,
             &view,
             &RuleSet::GENESIS,
         )
@@ -404,7 +404,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
         let mut orphan = block(1, 1_060);
         orphan.header.curve_tree_root = CurveTreeRoot::from_bytes([0xaa; 32]);
         let Err(refused) = validate(
-            formed(Candidate::new(orphan, Vec::new())),
+            formed(&view, Candidate::new(orphan, Vec::new()))?,
             &view,
             &RuleSet::GENESIS,
         )

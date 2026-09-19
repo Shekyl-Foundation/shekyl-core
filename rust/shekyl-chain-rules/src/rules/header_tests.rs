@@ -16,7 +16,9 @@ use crate::block::Candidate;
 use crate::census::CenRow;
 use crate::fault::FormAttempt;
 use crate::harness::fixture::{candidate, candidate_on, recorded, root};
-use crate::harness::{assert_refused, boundary_pair, formed_under, infallible, judged, MockChain};
+use crate::harness::{
+    assert_refused, boundary_pair, formed, formed_on, infallible, judged, MockChain,
+};
 use crate::harness::{Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, FormContext, FormRule};
@@ -71,8 +73,8 @@ fn check_alone<R: FormRule>(candidate: &Candidate, rule_set: &RuleSet) -> Verdic
 
 /// Run one view-bound rule on its own against `chain`.
 fn check_alone_on<R: BlockRule>(chain: &MockChain, candidate: &Candidate) -> Verdict<()> {
-    let formed = formed_under(candidate.clone(), &RuleSet::GENESIS);
-    chain.with_view(|view| infallible(R::check(&BlockContext::new(&formed, None), &view)))
+    let formed = formed_on(chain, candidate.clone());
+    chain.with_view(|view| infallible(R::check(&BlockContext::new(&formed, None, true), &view)))
 }
 
 // --- CEN-B1 ---------------------------------------------------------------
@@ -233,8 +235,11 @@ fn cen_b5_above_tip_is_a_refusal_not_a_pass() {
             Ok(None)
         }
     }
-    let genesis = formed_under(candidate(Vec::new()), &RuleSet::GENESIS);
-    let verdict = infallible(B5::check(&BlockContext::new(&genesis, None), &NoRoots));
+    let genesis = formed(candidate(Vec::new()));
+    let verdict = infallible(B5::check(
+        &BlockContext::new(&genesis, None, true),
+        &NoRoots,
+    ));
     assert_refused(verdict, CenRow::B5, Locus::Block);
 }
 

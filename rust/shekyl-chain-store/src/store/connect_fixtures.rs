@@ -10,12 +10,15 @@
 use core::convert::Infallible;
 
 use shekyl_chain_rules::{
-    form, validate, Candidate, ChainValid, Fault, FormAttempt, RuleSet, RuleSetId,
-    StructurallyValid, Substrate,
+    form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, RuleSet,
+    RuleSetId, StructurallyValid, Substrate,
 };
-use shekyl_difficulty::CumulativeDifficulty;
+use shekyl_difficulty::{
+    seedheight, CumulativeDifficulty, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG,
+};
 use shekyl_types::{
-    AttestationRoot, BlockHash, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash, Timestamp,
+    AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash,
+    Timestamp,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, PqcAuth, Transaction, TxPrefix};
@@ -178,19 +181,42 @@ impl Substrate for FixtureSubstrate {
     }
 }
 
-/// The stateless stage over the fixture substrate, under `GENESIS`.
-pub(super) fn formed(candidate: Candidate) -> StructurallyValid {
-    match form(
-        candidate,
-        &RuleSet::GENESIS,
-        &FixtureSubstrate,
-        BlockHash::NULL,
-        FormAttempt::FIRST,
-    ) {
-        Ok(Ok(formed)) => formed,
-        Ok(Err(refused)) => panic!("the fixtures satisfy every stateless rule: {refused}"),
-        Err(never) => match never {},
-    }
+/// The seed CEN-D3 expects for a candidate on `view`'s tip — what an honest
+/// driver claims to `form`: the null hash at genesis admission, else the
+/// identity of the block at `seedheight(connecting)`. Read from the same
+/// view the verdict will be minted against, as E2's replay driver will.
+fn expected_seed<'id, V: ChainView<'id>>(view: &V) -> Result<BlockHash, V::Fault> {
+    let Some(tip) = view.tip()? else {
+        return Ok(BlockHash::NULL);
+    };
+    let connecting = tip.height.to_raw() + 1;
+    let seed_height = seedheight(connecting, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG);
+    Ok(match view.block_at(BlockHeight::from_raw(seed_height))? {
+        AtHeight::Recorded(block) => block.hash,
+        AtHeight::AboveTip => panic!("the seed height is below the tip"),
+    })
+}
+
+/// The stateless stage over the fixture substrate, under `GENESIS`,
+/// claiming the seed `view` expects.
+pub(super) fn formed<'id, V: ChainView<'id>>(
+    view: &V,
+    candidate: Candidate,
+) -> Result<StructurallyValid, V::Fault> {
+    let seed = expected_seed(view)?;
+    Ok(
+        match form(
+            candidate,
+            &RuleSet::GENESIS,
+            &FixtureSubstrate,
+            seed,
+            FormAttempt::FIRST,
+        ) {
+            Ok(Ok(formed)) => formed,
+            Ok(Err(refused)) => panic!("the fixtures satisfy every stateless rule: {refused}"),
+            Err(never) => match never {},
+        },
+    )
 }
 
 /// Both stages; the store's own fault is the only one the fixtures expect
@@ -200,7 +226,7 @@ pub(super) fn judge<'b, 'id>(
     view: &BatchView<'b, 'id>,
     candidate: Candidate,
 ) -> Result<ChainValid<'id, BatchView<'b, 'id>>, StoreError> {
-    match validate(formed(candidate), view, &RuleSet::GENESIS) {
+    match validate(formed(view, candidate)?, view, &RuleSet::GENESIS) {
         Ok(verdict) => Ok(verdict.expect("the fixtures satisfy every landed rule")),
         Err(Fault::View(fault)) => Err(fault),
         Err(Fault::Stale(stale)) => panic!("fixture claim went stale: {stale}"),

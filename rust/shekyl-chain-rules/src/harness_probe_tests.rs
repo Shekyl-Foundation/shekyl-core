@@ -143,7 +143,7 @@ fn the_mock_view_validates_a_candidate_with_a_brand_of_its_own() {
     let chain = one_block();
     chain.with_view(|view| {
         let valid = judged(validate(
-            formed(candidate_on(&chain, vec![coinbase(1)])),
+            formed_on(&chain, candidate_on(&chain, vec![coinbase(1)])),
             &view,
             &RuleSet::GENESIS,
         ))

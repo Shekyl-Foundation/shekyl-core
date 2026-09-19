@@ -103,6 +103,10 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::C1,
             CenRow::C2,
             CenRow::C3,
+            CenRow::D1,
+            CenRow::D1b,
+            CenRow::D2,
+            CenRow::D3,
             CenRow::D4,
             CenRow::D6,
         ]
