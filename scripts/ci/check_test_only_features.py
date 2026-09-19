@@ -112,8 +112,12 @@ shrink-only list of the DEFERRED_DOCS / bijection-allowlist shape. An entry
 is refused if the crate no longer meets the trigger (stale exception) or has
 joined `GOVERNED_OWNERS` (both at once is a contradiction); the list only
 shrinks. Three of the twelve are findings rather than chores — a feature
-whose name says test-only, enabled on a **normal** edge — and are called out
-in the list with their FOLLOWUPS row.
+whose name says test-only, enabled on a **normal** edge. Two are hygiene
+(move the edge, or rule PERMANENT with the reason) and share the governance
+FOLLOWUPS row; the third, `shekyl-crypto-pq/test-utils` enabled by
+`shekyl-ffi`, is **FOLLOWUPS F-7**'s — its exports are unconditional
+`extern "C"` in the production header, so categorizing the feature changes
+nothing and the fix is the structural gate that row already names.
 
 # A limit this file does not close, named
 
@@ -184,13 +188,14 @@ GOVERNED_OWNERS: frozenset[str] = frozenset({"shekyl-chain-store", "shekyl-tor-c
 # Crates that met the governance trigger before the fourth limb existed
 # (measured 2026-09-19 on the S-TX pre-flight, PR #786) and are not yet
 # governed. Shrink-only: a crate leaves this list by joining GOVERNED_OWNERS
-# with its features categorized (FOLLOWUPS "Twelve crates meet the feature-
-# governance trigger ungoverned", Target: pre-genesis). Each entry names the
+# with its features categorized (FOLLOWUPS "Eleven crates meet the feature-
+# governance trigger ungoverned", Target: pre-genesis; the twelfth entry,
+# shekyl-crypto-pq, leaves via FOLLOWUPS F-7). Each entry names the
 # cross-crate feature(s) that tripped it. Entries marked FINDING enable a
 # test-named feature on a NORMAL edge — the very shape TEST_ONLY refuses —
 # and are governed first.
 MET_TRIGGER_UNGOVERNED_AT_REGISTRATION: dict[str, str] = {
-    "shekyl-crypto-pq": "test-utils — FINDING: enabled on a NORMAL edge by shekyl-ffi",
+    "shekyl-crypto-pq": "test-utils — FINDING owned by FOLLOWUPS F-7, not the governance row: enabled on a NORMAL edge by shekyl-ffi; its exports are unconditional extern \"C\" in the production header, so categorizing changes nothing — the structural gate (separate test archive) is the fix. Leaves this list when F-7 lands.",
     "shekyl-curve-generators": "std (build edge, shekyl-fcmp-proofs)",
     "shekyl-curve-tree": "test-tamper (dev edge, shekyl-p-host)",
     "shekyl-engine-core": "test-helpers (dev edge, shekyl-wallet-rpc)",
