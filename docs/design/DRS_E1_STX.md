@@ -330,7 +330,14 @@ through. **A read never arms the halt** (DRS §3.6.2, read-side half).
   quietly depending on code that dies with the first), when no crate
   enables it, or when the owner's own feature table does; `--selftest`
   pins all four on synthetic metadata so the limb asserts its subject while
-  the registry is still empty (rule 47). A genuinely different shape from `TxRecord`, not the same
+  the registry is still empty (rule 47). And because those checks are keyed
+  by the row, the same gate makes the registries **exhaustive** for
+  `shekyl-chain-store`: every feature the crate declares must be categorized
+  (test-only, consumer-owned or permanent) or the gate is red — landed while
+  the crate declares no features, the one moment that costs nothing. What
+  the gate cannot see, named in its docstring: whether anything is still
+  *guarded* by the feature; whoever deletes the last `cfg`'d item deletes
+  the feature and the row with it. A genuinely different shape from `TxRecord`, not the same
   shape renamed (Q4's coupling): a full-chain comparator pass over an
   eager record would materialise every pruned blob in sequence.
 - `TxRecord` — a read projection, not `Canonical`: `id: TxStorageId`,
