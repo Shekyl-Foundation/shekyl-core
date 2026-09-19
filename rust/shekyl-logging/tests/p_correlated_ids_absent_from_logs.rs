@@ -42,7 +42,13 @@
 //! 2. The same identifier reaching the message through an **inline format
 //!    capture** (`"… {shard_id} …"`), which the field scan alone cannot see
 //!    because the scan deliberately blanks string literals.
-//! 3. `shekyl-p-host`, `shekyl-p-serve` and `shekyl-tor-control-client`
+//! 3. The same identifier arriving through a `tracing` surface that is not a
+//!    level macro: `event!`, and the `*_span!` family whose fields print on
+//!    every event inside the span. `#[tracing::instrument]` is refused
+//!    outright in these paths — it records every un-skipped argument as a
+//!    span field, so the identifier is named by a function signature the
+//!    body scan never reads.
+//! 4. `shekyl-p-host`, `shekyl-p-serve` and `shekyl-tor-control-client`
 //!    **growing a logging surface at all** — a logging dependency or a
 //!    `println!`/`eprintln!`/`dbg!`. These three crates have none today, so a
 //!    denylist over their (zero) log sites would be vacuously green: the edit
@@ -96,11 +102,11 @@ use std::path::{Path, PathBuf};
 const FORBIDDEN_STEMS: &[&str] = &[
     // `P`-correlated: the serve set and the persona's own identity.
     "shard",
-    "p_id",
     "p_canonical",
-    "p_slot",
     "persona",
-    // The onion service id: the address `P` publishes.
+    // The onion service id: the address `P` publishes. `hostname` is here
+    // because `ServiceId`'s own doc calls `hostname()` "a forensic surface"
+    // — its `Debug` is redacted, that accessor is not.
     "onion",
     "service_id",
     "hs_addr",
@@ -112,6 +118,14 @@ const FORBIDDEN_STEMS: &[&str] = &[
     "keyimage",
     "output_key",
 ];
+
+/// Stems too short to match as a substring without catching innocents:
+/// `step_id`, `stop_id` and `map_id` all *contain* `p_id`, and `map_slot`
+/// contains `p_slot`. Matched as a prefix instead, so `p_id` / `p_ids` /
+/// `p_slot_of` trip and `step_id` does not. A gate that goes red on an
+/// innocent field invites someone to delete the stem, which is the failure
+/// this split is avoiding.
+const FORBIDDEN_PREFIX_STEMS: &[&str] = &["p_id", "p_slot"];
 
 /// Crates on `P`'s serving path that carry **no logging surface at all**, and
 /// must keep carrying none. See the module doc, item 3.
@@ -136,9 +150,30 @@ const LOGGING_CRATES: &[&str] = &[
 /// Macros that write a line a human can read off disk.
 const PRINT_MACROS: &[&str] = &["println", "eprintln", "print", "eprint", "dbg"];
 
-/// `tracing` level macros, in the two spellings the workspace uses
-/// (`tracing::info!` and a bare `info!` behind a `use`).
-const LEVELS: &[&str] = &["trace", "debug", "info", "warn", "error"];
+/// Every `tracing` macro that takes a field list, in both spellings the
+/// workspace uses (`tracing::info!` and a bare `info!` behind a `use`).
+///
+/// The `*_span!` names are listed individually rather than relying on a
+/// `span!` match: the whole-word check in [`log_sites`] rejects the `span!`
+/// inside `info_span!` because `_` continues an identifier, so an unlisted
+/// `info_span!` would be missed entirely. A span's fields print on every
+/// event inside it under the `fmt` layer, so they reach the file exactly
+/// as an event's own fields do. `event!`'s leading `Level::INFO` is just a
+/// harmless first element to the field parser.
+const LEVELS: &[&str] = &[
+    "trace",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "event",
+    "span",
+    "trace_span",
+    "debug_span",
+    "info_span",
+    "warn_span",
+    "error_span",
+];
 
 // ─────────────────────────────────────────────────────────────────────────
 // Lexing: blank comments and string contents, keeping byte offsets stable.
@@ -272,13 +307,17 @@ fn lex(src: &str) -> Lexed {
             // A char literal can hold a quote (`'"'`) and would otherwise
             // open a phantom string. A lifetime (`'a`) must not be eaten.
             b'\'' => {
+                // Blank the interior too: a `'('` left in place would forge
+                // paren depth for the body matcher below.
                 if i + 1 < b.len() && b[i + 1] == b'\\' {
                     let mut m = i + 2;
                     while m < b.len() && b[m] != b'\'' {
                         m += 1;
                     }
+                    blank(&mut out, i + 1, m.min(b.len()));
                     i = (m + 1).min(b.len());
                 } else if i + 2 < b.len() && b[i + 2] == b'\'' {
+                    blank(&mut out, i + 1, i + 2);
                     i += 3;
                 } else {
                     i += 1;
@@ -314,7 +353,9 @@ fn flagged_idents(text: &str) -> Vec<String> {
                 i += 1;
             }
             let ident = text[start..i].to_ascii_lowercase();
-            if FORBIDDEN_STEMS.iter().any(|s| ident.contains(s)) && !hits.contains(&ident) {
+            let forbidden = FORBIDDEN_STEMS.iter().any(|s| ident.contains(s))
+                || FORBIDDEN_PREFIX_STEMS.iter().any(|s| ident.starts_with(s));
+            if forbidden && !hits.contains(&ident) {
                 hits.push(ident);
             }
         } else {
@@ -557,6 +598,41 @@ fn print_macro_sites(src: &str) -> Vec<(usize, &'static str)> {
     out
 }
 
+/// `#[tracing::instrument]` sites in already-lexed source: `(line, text)`.
+///
+/// The attribute records **every** function argument into the span unless
+/// `skip` / `skip_all` names it, and those fields print on every event
+/// inside the span. It is a field list written as an attribute, so the body
+/// scanner cannot see it — and the argument it would capture is named by the
+/// function signature, not by the log site. Treated the way a logging
+/// dependency is: absent, and a deliberate edit to introduce.
+fn instrument_sites(src: &str) -> Vec<(usize, String)> {
+    let lexed = lex(src);
+    let text = &lexed.blanked;
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = text[from..].find("instrument") {
+        let at = from + rel;
+        from = at + "instrument".len();
+        let b = text.as_bytes();
+        if at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_') {
+            continue;
+        }
+        // Only the attribute form, not the word in a path or a binding.
+        let before = text[..at].trim_end();
+        if !(before.ends_with("#[") || before.ends_with("tracing::") || before.ends_with('(')) {
+            continue;
+        }
+        let line = text[..at].matches('\n').count() + 1;
+        // Report the whole source line, not the slice from the match: the
+        // `#[tracing::` prefix is the part that identifies the attribute.
+        let start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+        let end = text[at..].find('\n').map_or(text.len(), |n| at + n);
+        out.push((line, text[start..end].trim().to_owned()));
+    }
+    out
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Self-tests: the negative controls. `50-testing` — a check that has never
 // been seen red is not a check.
@@ -657,6 +733,60 @@ fn scanner_does_not_fire_on_safe_neighbours() {
 }
 
 #[test]
+fn scanner_flags_the_span_and_event_macros_and_the_instrument_attribute() {
+    // `event!` carries fields in the same body shape, behind a level arg.
+    let event = "tracing::event!(Level::INFO, shard_id = ?x, \"released\");";
+    assert!(
+        violations_in_source(event)
+            .iter()
+            .any(|(_, id, _)| id == "shard_id"),
+        "`event!` must be in scope: it is a log line with a field list"
+    );
+
+    // A span's fields print on every event inside it. `info_span!` must be
+    // matched by name — the whole-word check rejects the `span!` inside it.
+    let span = "let _g = tracing::info_span!(\"serve\", onion_address = %addr).entered();";
+    assert!(
+        violations_in_source(span)
+            .iter()
+            .any(|(_, id, _)| id == "onion_address"),
+        "`info_span!` must be in scope, not shadowed by the `span!` entry"
+    );
+
+    // The attribute form captures arguments the body scan never sees.
+    let instrumented = "#[tracing::instrument]\nfn serve(shard_id: u64) {}\n";
+    assert!(
+        !instrument_sites(instrumented).is_empty(),
+        "`#[tracing::instrument]` must be flagged: it records every \
+         un-skipped argument as a span field"
+    );
+    // The bare word is not the attribute.
+    assert!(
+        instrument_sites("let instrument = 3; // instrument\n").is_empty(),
+        "a binding named `instrument` is not the attribute"
+    );
+}
+
+#[test]
+fn prefix_stems_do_not_catch_innocent_neighbours() {
+    // `step_id` contains `p_id`; `map_slot` contains `p_slot`. Neither is an
+    // identifier this gate is about, and a gate that reds on them invites
+    // someone to delete the stem.
+    assert!(
+        flagged_idents("step_id stop_id map_id map_slot group_id").is_empty(),
+        "prefix stems must not fire on innocent identifiers: {:?}",
+        flagged_idents("step_id stop_id map_id map_slot group_id")
+    );
+    // The real ones still trip.
+    for ident in ["p_id", "p_ids", "p_slot", "p_slot_of"] {
+        assert!(
+            !flagged_idents(ident).is_empty(),
+            "`{ident}` must still be flagged"
+        );
+    }
+}
+
+#[test]
 fn manifest_matcher_separates_a_real_dep_from_a_dev_dep_and_a_comment() {
     let with_dep = "[dependencies]\ntracing = { version = \"0.1\" }\n";
     assert!(
@@ -738,6 +868,13 @@ fn stake_engine_logs_name_no_p_correlated_identifier() {
                 file.display()
             ));
         }
+        for (line, text) in instrument_sites(&src) {
+            offenders.push(format!(
+                "{}:{line}: `{text}` records every un-skipped argument as a \
+                 span field, which the body scan cannot see",
+                file.display()
+            ));
+        }
     }
 
     assert!(
@@ -814,6 +951,9 @@ fn p_serving_crates_carry_no_logging_surface() {
                     "{}:{line}: `{ident}` reaches a log line as a {how}",
                     file.display()
                 ));
+            }
+            for (line, attr) in instrument_sites(&text) {
+                failures.push(format!("{}:{line}: `{attr}`", file.display()));
             }
         }
     }
