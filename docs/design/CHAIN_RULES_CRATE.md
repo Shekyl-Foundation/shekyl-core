@@ -282,7 +282,8 @@ impl RuleSetId {
 /// The header version a rule set *admits* will be another — a parameter, never
 /// the identity.
 #[derive(Clone, Copy, PartialEq, Eq)]                 // Debug by hand: prints the row *count*
-pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow] }
+pub struct RuleSet { id: RuleSetId, enforced: &'static [CenRow], header_major_version: u8, difficulty: DifficultyRule }
+pub enum DifficultyRule { Lwma1, Fixed(Target) } // `Fixed` only via `RuleSet::fakechain(NonZeroU128)` — CEN-D7 as data (slice 2 §4.5); `RuleSetId` is then NOT a proxy for rule-set equality
 impl RuleSet {
     pub const GENESIS: Self;                           // enforced: CenRow::ALL
     const ISSUED: &'static [Self];                     // every rule set a schedule may name
@@ -360,7 +361,7 @@ pub enum AtHeight<T> {
 /// `hash` — CEN-A2 (`prev_id == top_hash`), CEN-A4 (parent is known);
 /// `header` — CEN-C2/C3 (the timestamps of the 11 preceding blocks).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RecordedBlock { pub hash: BlockHash, pub header: shekyl_wire::BlockHeader }
+pub struct RecordedBlock { pub hash: BlockHash, pub header: shekyl_wire::BlockHeader, pub cumulative_difficulty: CumulativeDifficulty } // the third field landed with 4.D (slice 2): the LWMA-1 window's work
 
 /// The narrow, read-only view a rule consumes. Implemented by the store over
 /// its `WriteBatch<'_, 'id>` (S-CHAIN-W) and by `MockView<'id>` in this crate's
@@ -531,12 +532,38 @@ pub struct InvalidBlock { pub rule: CenRow, pub locus: Locus }
 pub type Verdict<T> = Result<T, InvalidBlock>;
 ```
 
-### 4.6 `validate`, `tx_form`, `tx_against` (`validate.rs`)
+### 4.6 `form`, `validate`, `tx_form`, `tx_against` (`validate.rs`); `Substrate` (`substrate.rs`); `Fault` (`fault.rs`)
+
+**Two stages since slice 2 (2026-09-19; `CHAIN_RULES_SLICE_2.md` §4.2,
+Q1/Q8/Q9 as ruled).** The partition is view-dependence and nothing else.
 
 ```rust
+/// The world a block is judged in, not the chain: a clock (CEN-C1) and a
+/// RandomX longhash (CEN-D2). Implemented by the daemon; mocked in tests.
+pub trait Substrate {
+    type Fault;
+    fn local_clock(&self) -> Result<Timestamp, Self::Fault>;
+    fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault>;
+}
+
+/// Stateless — outside the write transaction, parallel, expensive. The
+/// caller CLAIMS the rule set in force and the seed at `seedheight(h)`.
+pub fn form<S: Substrate>(
+    candidate: Candidate, rule_set: &RuleSet, substrate: &S,
+    seed: BlockHash, attempt: FormAttempt,
+) -> Result<Verdict<StructurallyValid>, S::Fault>;
+
+/// View-bound — inside the transaction C2-R8 Q3 projects the view from.
+/// Verifies the claims first; a refuted claim is a `Fault::Stale`, never a
+/// refusal (unproven ≠ disproven); redo `form` as the payload's `Retry` allows.
 pub fn validate<'id, V: ChainView<'id>>(
-    candidate: Candidate, view: &V, rule_set: &RuleSet,
-) -> Result<Verdict<ChainValid<'id, V>>, V::Fault>;
+    formed: StructurallyValid, view: &V, rule_set: &RuleSet,
+) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>>;
+
+pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
+pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under, in_force, retry } }
+pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS = 3
+pub enum Corrupt { CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow, ZeroTarget }
 
 /// Stateless per-tx rules (4.H). Shared verbatim by connect and pool admission.
 pub fn tx_form(tx: &shekyl_wire::Transaction, rule_set: &RuleSet) -> Verdict<RuleCoverage>;
@@ -554,12 +581,27 @@ rule, locus }))` at the site that judged — the row is named where the decision
 is made. `validate` calls `tx_form` then `tx_against` for the miner tx and each
 listed tx, re-homing a `Locus::Tx { slot: Lone }` / `Locus::Input { slot: Lone,
 .. }` to the real `TxSlot`, unions the coverages, and mints the `ChainValid`.
-Block-level **predicates** run first, in census order, each through
-`rules::run` (inserts `R::ROW` iff `R` passed). Definition rows record at
-their derivation site: CEN-B6 at `B6::identity`, called from
-`ValidatedBlock::derive`. Slice 1's predicates are A2, B1, B2, B5, B7;
-B6 is the identity function. `tx_form` / `tx_against` are still empty and
-return `RuleCoverage::EMPTY` until 4.H/4.I.
+Block-level **predicates** run in census order, each through
+`rules::run_form` (stateless, in `form`) or `rules::run` (view-bound, in
+`validate`), inserting `R::ROW` iff `R` passed. **Definition** rows record at
+their derivation site: CEN-B6 at `B6::identity` (from `ValidatedBlock::derive`);
+CEN-D2 at `D2::longhash` (in `form`); CEN-C3 at `C3::window`, CEN-D4 at
+`D4::target` (D7 consulted inside it, D6 recorded at the `Target` mint),
+CEN-D1b at `D1b::satisfies` — all derived once in `validate` before the
+predicate list and read through `BlockContext`. CEN-D3 is a **verification
+of a claim**, recorded at `D3::verify_seed`, whose failure is `Fault::Stale`.
+Stage membership at slice 2: `form` runs B1, B2, B7 and derives D2;
+`validate` verifies D3, derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
+D1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
+verdict is time-dependent**: anything that caches or defers one lets CEN-C1's
+leg go stale silently, so the instant is carried, not forgotten. `tx_form` /
+`tx_against` are still empty and return `RuleCoverage::EMPTY` until 4.H/4.I.
+
+The conversion ban (G2) covers the crate's own fault tokens: no `From`/`Into`
+between `Stale`/`Fault` and `InvalidBlock`, no arm mapping one onto the other
+(`check_store_error_conversion_ban.py`, clauses 1 and 3, with the qualified
+`Fault::View(_) => InvalidBlock…` arm so the view's fault cannot be laundered
+through the wrapper).
 
 ---
 
@@ -1133,15 +1175,17 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
 - ~~`ChainView::tip()`~~ — **DISCHARGED** by slice 1 (shape ruled at
   [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md) §2:
   `Result<Option<Tip { height, hash }>, Fault>`; §4.3 above).
-- `difficulty_at` — **slice 2 (4.D)**, handed to this crate by S-CHAIN-R's
-  round-1 Q1 ([`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) — plan PR #760, increment PR #772, archived 2026-09-18; SCR-3): the store
-  exposes `cumulative_difficulty` (a `RecordedBlock` field, 4.D) and never
-  the per-block difference — per-block difficulty is a consensus
-  computation and C2-R8 Q4 bans the store from computing consensus-visible
-  values, on the *read* side as on the write side. One implementation, here.
+- ~~`difficulty_at`~~ — **DISCHARGED by slice 2 (4.D), 2026-09-19**, in a
+  shape that refined the sketch: `lwma1_next` takes cumulative values
+  directly, so no per-block difference is ever computed; `D4::target`
+  derives the next target from the `RecordedBlock.cumulative_difficulty`
+  window and `D4::cumulative_after` folds `parent + target` for the store to
+  persist (Q5) — the arithmetic stays in this crate, as S-CHAIN-R's round-1
+  Q1 ruled ([`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md); SCR-3),
+  and the store computes nothing consensus-visible on either side.
 - `ChainView::has_output_key` — the output-key-uniqueness row when ruled; §3.3.
-- `RecordedBlock` field growth (cumulative difficulty, weight) — 4.D / 4.G
-  slices, each field with its row.
+- `RecordedBlock` field growth — ~~cumulative difficulty~~ (**landed with
+  4.D, slice 2**); weight arrives with 4.G, with its row.
 - `RuleCoverage` persisted encoding — S-CHAIN-W, rule 42 there (ruling §9.4
   "persisted with anything it writes").
 - `ChainView` store-side implementor (`Fault = StoreError`), `connect`,

@@ -2,8 +2,9 @@
 
 **Status:** OPEN — **Rounds 1 and 2 RULED 2026-09-19** (Q1–Q10, §8/§8.1;
 pre-flight written 2026-09-18 against `dev` @ `5adfc5423`, post-#782).
-**Implementation open: commits 1–8 on the rulings; commit 9 (store side)
-waits for #783.** Template:
+**Rules-crate commits 1–8 LANDED on the branch 2026-09-19** (§7: `implemented
+16 / 151`); **commits 9 / 9b (store side) wait for #783** and are the
+residue this file stays open for. Template:
 [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessor
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md). Parent
 plan: [`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §7.5 table 3 (*"slice 2 —
@@ -507,17 +508,30 @@ instructed); C9 waits for #783 regardless.
 
 ---
 
-## 7. Expected record at close
+## 7. Record at close of the rules-crate commits (1–8, 2026-09-19)
 
-`consensus: implemented 15 / validator-enforced 151   held-by-cxx 2
-enforced 153   ratified 126 / enforced 153` (C1, C2, C3, D1, D1b, D2, D3,
-D4, D6 flip `pending → implemented`; D5 `pending` with a `subsumed-by-D4`
-comment; D7 per Q6 — **16** if it lands). `ratified` does not move:
-porting does not ratify (slice 1 §9). D1b and D7 are bucket-4 rows carried
-into the validator as-is with fixtures; the repair backlog's denominator is
-unchanged by this slice.
+**Measured** (`check_chain_rules_coverage.py --describe` at the branch tip):
+`consensus: implemented 16 / validator-enforced 151   held-by-cxx 2
+enforced 153   ratified 126 / enforced 153`; `4.C 3/3`, `4.D 7/8`. C1, C2,
+C3, D1, D1b, D2, D3, D4, D6, D7 flipped `pending → implemented`; D5
+`pending` with its `subsumed-by-D4` registry comment (Q7). `ratified` did
+not move: porting does not ratify (slice 1 §9). D1b and D7 are bucket-4
+rows carried into the validator as-is with fixtures; the repair backlog's
+denominator is unchanged by this slice. The pre-flight predicted
+`15–16 / 151`; D7 landed under arm (d), so 16.
 
-Store: `passed_through().count()` 7 → 6.
+Rules crate: 102 unit tests + 14 doctests; the G1 belt at 184 packages with
+neither forbidden one; `check_store_error_conversion_ban.py` green over the
+new fault tokens; workspace `clippy -D warnings` clean.
+
+**Owed to commits 9 / 9b (store side, after #783):** `connect` derives
+`block_info.cumulative_difficulty` from `ValidatedBlock::cumulative_difficulty`
+(`Fact::derived`; `passed_through().count()` 7 → 6; `DELETED_BY` narrows to
+D4), treats `Fault::Corrupt` as an `InvariantViolated` it did not see itself,
+and the mock-vs-`BatchView` conformance harness (F11). Falsify each by
+`rg 'Fact::derived' rust/shekyl-chain-store/src/store/connect.rs` for the
+field, and F11's own falsifier. This file stays in `docs/design/` until they
+land.
 
 ---
 
