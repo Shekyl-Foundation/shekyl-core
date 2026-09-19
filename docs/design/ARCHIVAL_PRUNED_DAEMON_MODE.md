@@ -1012,7 +1012,8 @@ earlier "swaps its reader to the daemon's `get_prunable_range`" is
 **withdrawn** with that method. **The rebuild has an owner (added
 2026-09-18 on review): the wallet lane, as its own design round —
 unbuilt by design, not by omission.** It is where the design's weight
-now sits, and every one of its decisions is unmade: fill from the local
+now sits. **Its decisions were ruled 2026-09-19 (PR #790); what follows is the
+list this charter owed, each now answered in that contract:** fill from the local
 daemon during the grace window (Q9) and verify on fill **against the
 txid** — *amended 2026-09-19 by the wallet lane's `WSS-Q5` ruling
 ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.4): a filler holds the whole
