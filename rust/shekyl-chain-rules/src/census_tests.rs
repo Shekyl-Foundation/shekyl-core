@@ -84,7 +84,8 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
     // Rewritten from `increment_one_registers_no_rule` as that test said it
     // would be: every flip to `implemented(...)` is a visible, reviewed
     // change here rather than a quiet numerator move. Slice 1: the six
-    // predicate rows of 4.A/4.B (`CHAIN_RULES_SLICE_1.md` §3).
+    // predicate rows of 4.A/4.B (`CHAIN_RULES_SLICE_1.md` §3). Slice 2: 4.C
+    // (`CHAIN_RULES_SLICE_2.md` §2, commit 4), then 4.D by its commits.
     let implemented: Vec<CenRow> = CenRow::ALL
         .iter()
         .copied()
@@ -98,7 +99,17 @@ fn the_implemented_rows_are_exactly_the_landed_slices() {
             CenRow::B2,
             CenRow::B5,
             CenRow::B6,
-            CenRow::B7
+            CenRow::B7,
+            CenRow::C1,
+            CenRow::C2,
+            CenRow::C3,
+            CenRow::D1,
+            CenRow::D1b,
+            CenRow::D2,
+            CenRow::D3,
+            CenRow::D4,
+            CenRow::D6,
+            CenRow::D7,
         ]
     );
     assert!(PolicyRow::ALL

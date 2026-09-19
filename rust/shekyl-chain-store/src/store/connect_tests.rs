@@ -14,13 +14,13 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{RowStatus, RuleSet, RuleSetId};
+use shekyl_chain_rules::{form, validate, FormAttempt, RowStatus, RuleSet, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    candidate, coinbase, connect_genesis, facts, judge, spend, GENESIS_ID,
+    candidate, coinbase, connect_genesis, facts, judge, spend, FixtureSubstrate, GENESIS_ID,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -88,7 +88,9 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             timestamp: shekyl_types::Timestamp::from_raw(1_000),
             coins_generated: AtomicUnits::from_raw(1_000_000),
             weight: shekyl_types::BlockWeight::from_raw(1_000),
-            cumulative_difficulty: CumulativeDifficulty::from_raw(100),
+            // Derived by the validator, not passed through: block 0's work
+            // is its own target, 1 (CEN-D4; E6 slice 2).
+            cumulative_difficulty: CumulativeDifficulty::from_raw(1),
             hash: shekyl_types::BlockHash::from(block_hash),
             rct_outputs: 1,
             long_term_weight: shekyl_types::LongTermWeight::from_raw(900),
@@ -533,6 +535,42 @@ fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
     cleanup(&path);
 }
 
+#[test]
+fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
+    // Same id, different set: `fakechain(7)` reuses `RuleSetId::GENESIS`.
+    // An id-only check would accept the fixed-target work as public-network
+    // GENESIS work; compared by value, `connect` refuses.
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let path = tmp("connect-fakechain");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let out: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let cand = candidate(0, BlockHash::NULL, Vec::new());
+        let formed = match form(
+            cand,
+            &seven,
+            &FixtureSubstrate,
+            BlockHash::NULL,
+            FormAttempt::FIRST,
+        ) {
+            Ok(Ok(formed)) => formed,
+            other => panic!("stateless stage: {other:?}"),
+        };
+        let valid = match validate(formed, &view, &seven) {
+            Ok(Ok(valid)) => valid,
+            other => panic!("view stage: {other:?}"),
+        };
+        Ok(batch.connect(valid, facts(0, 0), GENESIS_ID)?)
+    });
+    let want = StoreCannot::RuleSetNotInForce {
+        height: 0,
+        judged: seven.id(),
+        in_force: GENESIS_ID,
+    };
+    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
+    cleanup(&path);
+}
+
 /// Genesis, plant through `plant`, connect block 1 — SI-9 poisons and
 /// halts. The unique assertion is the planted keys; the scaffold is one
 /// helper so these belts cannot drift from each other.
@@ -780,7 +818,6 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     let derived = ConnectFacts {
         weight: Fact::derived(shekyl_types::BlockWeight::from_raw(1_000)),
         long_term_weight: Fact::derived(shekyl_types::LongTermWeight::from_raw(900)),
-        cumulative_difficulty: Fact::derived(CumulativeDifficulty::from_raw(100)),
         coins_generated: Fact::derived(AtomicUnits::from_raw(1_000_000)),
         burned: Fact::derived(AtomicUnits::ZERO),
         root_after: Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32])),
@@ -859,7 +896,6 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         [
             "weight",
             "long_term_weight",
-            "cumulative_difficulty",
             "coins_generated",
             "long_term_effective_median"
         ]
@@ -870,7 +906,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
         "unchanged"
     );
     assert!(prov.artifact_stamp().contains(
-        "passed-through=[weight,long_term_weight,cumulative_difficulty,coins_generated,\
+        "passed-through=[weight,long_term_weight,coins_generated,\
          long_term_effective_median] NOT-PARITY-EVIDENCE"
     ));
     // Monotone: a later fully-derived connect cannot narrow it, and a
@@ -940,23 +976,27 @@ fn passed_through_names_the_rows_that_delete_each_fact() {
         [
             "weight",
             "long_term_weight",
-            "cumulative_difficulty",
             "coins_generated",
             "burned",
             "root_after",
             "long_term_effective_median"
-        ]
+        ],
+        "six: cumulative_difficulty left with E6 slice 2 (CEN-D4 derives it)"
     );
     let mut some = all;
-    some.cumulative_difficulty = Fact::derived(CumulativeDifficulty::from_raw(100));
+    some.coins_generated = Fact::derived(AtomicUnits::from_raw(1_000_000));
     some.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc0; 32]));
     let remaining: Vec<DeletedBy> = some.passed_through().collect();
-    assert_eq!(remaining.len(), 5);
+    assert_eq!(remaining.len(), 4);
     assert!(remaining
         .iter()
         .all(|d| !d.rows.is_empty() && !d.slice.is_empty()));
     assert!(remaining
         .iter()
         .any(|d| d.field == "burned" && d.rows.contains(&"CEN-F17")));
-    assert_eq!(ConnectFacts::DELETED_BY.len(), 7);
+    assert_eq!(
+        ConnectFacts::DELETED_BY.len(),
+        6,
+        "seven until E6 slice 2 derived cumulative_difficulty"
+    );
 }

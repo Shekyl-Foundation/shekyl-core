@@ -170,9 +170,10 @@ impl<'id> ChainView<'id> for BatchView<'_, 'id> {
             .map_err(|f| self.arm(f))?;
         Ok(match body {
             AtHeight::AboveTip => AtHeight::AboveTip,
-            AtHeight::Recorded((hash, block)) => AtHeight::Recorded(RecordedBlock {
-                hash,
+            AtHeight::Recorded((info, block)) => AtHeight::Recorded(RecordedBlock {
+                hash: info.hash,
                 header: block.header,
+                cumulative_difficulty: info.cumulative_difficulty,
             }),
         })
     }

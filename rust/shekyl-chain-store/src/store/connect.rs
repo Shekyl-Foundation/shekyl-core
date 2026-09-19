@@ -71,7 +71,6 @@
 //! is SI-9, never a verdict.
 
 use shekyl_chain_rules::{ChainValid, RuleSet, RuleSetId, TxIdentity};
-use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
     BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
     OneTimePubkey, OutputIndexInTx,
@@ -166,8 +165,11 @@ pub struct ConnectFacts {
     pub weight: Fact<BlockWeight>,
     /// `long_term_block_weight`.
     pub long_term_weight: Fact<LongTermWeight>,
-    /// Cumulative difficulty through this block.
-    pub cumulative_difficulty: Fact<CumulativeDifficulty>,
+    // `cumulative_difficulty` left this struct 2026-09-19 (E6 slice 2,
+    // CEN-D4): the validator derives it and the verdict carries it
+    // (`ValidatedBlock::cumulative_difficulty`), so `connect` reads it there
+    // — the first passed-through fact to be deleted by the row that derives
+    // it, which is what `DELETED_BY` always said would happen.
     /// Coins generated through this block (`already_generated_coins`).
     pub coins_generated: Fact<AtomicUnits>,
     /// This block's destroyed amount. `0` (and genesis, whatever its amount)
@@ -195,7 +197,7 @@ pub struct ConnectFacts {
 impl ConnectFacts {
     /// The fields, each with the rows that will derive it, in declaration
     /// order. The table `DRS_E1_SCHAIN_W.md` §3.2 carries, as data.
-    pub const DELETED_BY: [DeletedBy; 7] = [
+    pub const DELETED_BY: [DeletedBy; 6] = [
         DeletedBy {
             field: "weight",
             rows: &["CEN-G6", "CEN-G6b"],
@@ -206,11 +208,10 @@ impl ConnectFacts {
             rows: &["CEN-G6", "CEN-G6b"],
             slice: "7 (4.G)",
         },
-        DeletedBy {
-            field: "cumulative_difficulty",
-            rows: &["CEN-D4", "CEN-D5"],
-            slice: "2 (4.D, body in shekyl-difficulty)",
-        },
+        // `cumulative_difficulty` — deleted by CEN-D4, slice 2 (4.D, body in
+        // shekyl-difficulty), 2026-09-19. The entry named D5 as well; D5 is
+        // subsumed by D4 over an alt view and the Rust store has no
+        // alt-admission path, so D4 alone deleted the field (slice 2 F6).
         DeletedBy {
             field: "coins_generated",
             rows: &["CEN-F13", "CEN-F14", "CEN-F14b"],
@@ -233,11 +234,10 @@ impl ConnectFacts {
         },
     ];
 
-    const fn origins(&self) -> [Origin; 7] {
+    const fn origins(&self) -> [Origin; 6] {
         [
             self.weight.origin,
             self.long_term_weight.origin,
-            self.cumulative_difficulty.origin,
             self.coins_generated.origin,
             self.burned.origin,
             self.root_after.origin,
@@ -253,7 +253,8 @@ impl ConnectFacts {
     /// progress bar: it grows as facts are discovered (S-CHAIN-R added
     /// `long_term_effective_median`, so it rose from six to seven when that
     /// landed — `DRS_E1_SCHAIN_R.md` §3.6) and shrinks as E6 lands the rows
-    /// that derive them. An increase is not a regression; the items are the
+    /// that derive them (E6 slice 2 deleted `cumulative_difficulty`, seven
+    /// back to six). An increase is not a regression; the items are the
     /// critical path.
     pub fn passed_through(&self) -> impl Iterator<Item = DeletedBy> + '_ {
         Self::DELETED_BY
@@ -343,14 +344,16 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             (height, parent_tx_count)
         };
-        // Resolve `in_force` before comparing it with the verdict's id: a
-        // `ChainValid` only ever carries an issued id, so an unissued
-        // `in_force` would otherwise always report as a mismatch and the
-        // unknown-id refusal could never fire (PR #757 review). With one
-        // rule set issued today the mismatch arm is reached only once a
-        // second set exists; it is the contract, not dead code.
+        // Resolve `in_force` before comparing it with the verdict: a
+        // `ChainValid` only ever carries an issued id *or* a Fakechain
+        // set that reuses that id, so an unissued `in_force` would
+        // otherwise always report as a mismatch and the unknown-id
+        // refusal could never fire (PR #757 review). Compared by
+        // **value**: Fakechain `Fixed` reuses `RuleSetId::GENESIS`, and
+        // an id-only check would accept fixed-target work as public-
+        // network GENESIS work.
         let rule_set = RuleSet::for_id(in_force).ok_or(StoreCannot::RuleSetUnknown(in_force))?;
-        if valid.rule_set_id() != in_force {
+        if valid.rule_set() != rule_set {
             return Err(StoreCannot::RuleSetNotInForce {
                 height,
                 judged: valid.rule_set_id(),
@@ -408,7 +411,11 @@ impl<'id> WriteBatch<'_, 'id> {
             timestamp: shekyl_types::Timestamp::from_raw(block.header().timestamp),
             coins_generated: facts.coins_generated.value,
             weight: facts.weight.value,
-            cumulative_difficulty: facts.cumulative_difficulty.value,
+            // Derived by the validator (CEN-D4: the parent's work plus this
+            // block's target, `checked_add` there) and carried on the
+            // verdict; the store records what the rules computed and computes
+            // nothing consensus-visible (C2-R8 Q4; E6 slice 2 Q5).
+            cumulative_difficulty: block.cumulative_difficulty(),
             hash,
             // Per-block, not accumulated: LMDB's `bi_cum_rct` is this block's
             // count and the accumulation arm is dead (CEN-L15) — see

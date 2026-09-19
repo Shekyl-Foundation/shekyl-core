@@ -283,10 +283,10 @@ impl Fixtures for PassedThroughFacts {
     fn fixtures() -> Vec<(&'static str, Self)> {
         vec![
             ("none", PassedThroughFacts::NONE),
-            ("burned", PassedThroughFacts::of_positions([4])),
-            // Every field: the seven-name spelling is the layout (the
-            // seventh, `long_term_effective_median`, S-CHAIN-R §3.6).
-            ("all", PassedThroughFacts::of_positions(0..7)),
+            ("burned", PassedThroughFacts::of_positions([3])),
+            // Every field: the six-name spelling is the layout —
+            // `cumulative_difficulty` left at SCHEMA_VERSION 7 (E6 slice 2).
+            ("all", PassedThroughFacts::of_positions(0..6)),
         ]
     }
 }

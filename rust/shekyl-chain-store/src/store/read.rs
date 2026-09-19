@@ -543,9 +543,10 @@ fn body_at(
         match chain_reads::block_body(txn, tip, height)
             .map_err(chain_reads::ReadFault::into_plain)?
         {
-            AtHeight::Recorded((hash, block)) => {
-                AtHeight::Recorded(RecordedBlockBody { hash, block })
-            }
+            AtHeight::Recorded((info, block)) => AtHeight::Recorded(RecordedBlockBody {
+                hash: info.hash,
+                block,
+            }),
             AtHeight::AboveTip => AtHeight::AboveTip,
         },
     )

@@ -461,10 +461,27 @@ scalar_u64! {
 }
 
 hash32! {
+    /// A block's **proof-of-work longhash** — RandomX v2 over the block's
+    /// PoW preimage (`Block::pow_blob`) under a seed block's identity
+    /// (CEN-D2, CEN-D3). What CEN-D1 compares against the difficulty target
+    /// (`hash · difficulty < 2^256`, CEN-D1b).
+    ///
+    /// Not a [`BlockHash`]: the identity is `keccak256` over the same bytes
+    /// with a length prefix, and the two are never interchangeable — a
+    /// longhash passed as a block id, or a block id compared against a
+    /// target, is exactly the transposition this type refuses. Minted by
+    /// the validation crate's stateless stage (`shekyl-chain-rules::form`,
+    /// DRS-E6 slice 2) from a `Substrate::longhash` the daemon implements;
+    /// no consensus code computes RandomX except behind that call.
+    PowHash
+}
+
+hash32! {
     /// A block identity hash.
     ///
-    /// Distinct from [`TxHash`] and from a curve-tree root: a block hash can
-    /// never be passed where a transaction hash is expected.
+    /// Distinct from [`TxHash`], from [`PowHash`] (the longhash over the
+    /// same preimage), and from a curve-tree root: a block hash can never
+    /// be passed where a transaction hash is expected.
     BlockHash
 }
 
