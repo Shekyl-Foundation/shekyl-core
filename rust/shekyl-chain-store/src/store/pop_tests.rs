@@ -18,7 +18,7 @@ use shekyl_wire::Transaction;
 use super::connect_fixtures::{candidate, connect_chain_with_burn, facts, judge, spend};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::*;
-use crate::codec::{BlockBody, Canonical, Encoded, Raw, TotalBurnedCell};
+use crate::codec::{forged, BlockBody, Canonical, Raw, TotalBurnedCell};
 use crate::schema::{BLOCKS, BLOCK_INFO, SPENT_KEYS, UNDO_LOG};
 
 fn connect_chain(store: &ChainStore, listed: &[Vec<Transaction>]) -> Vec<BlockHash> {
@@ -122,7 +122,7 @@ fn a_journal_whose_top_is_not_the_tip_is_si6_and_halts_the_writer() {
     let planted: Result<(), TestErr> = store.write(|batch| {
         let mut info = batch.open_insert_table(BLOCK_INFO, PROBE_ROW)?;
         let row = info.get(1)?.expect("block 1").value().bytes().to_vec();
-        info.insert(2, Encoded::forged(&row))?;
+        info.insert(2, forged(&row))?;
         Ok(())
     });
     planted.expect("plant");

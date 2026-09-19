@@ -148,13 +148,13 @@
 
 use redb::{TableDefinition, TableHandle, TypeName};
 
-use shekyl_chain_rules::RuleSetId;
 use shekyl_types::{BlockHeight, CurveTreeRoot, PqcAuthHash, PrunableHash};
 use shekyl_units::AtomicUnits;
 
 use crate::codec::{
-    Blob, BlockBody, BlockInfo, Coded, OutKey, OutTx, Present, PropertyCellBytes, TxIndex,
-    TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog, Unshaped,
+    Blob, BlockBody, BlockInfo, Coded, OutKey, OutTx, Present, PropertyCellBytes, RuleSetInForce,
+    TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment, UndoLog,
+    Unshaped,
 };
 use crate::lmdb_order::LmdbHashKey;
 use crate::store::undo::UndoTarget;
@@ -363,7 +363,8 @@ tables! {
         TableDefinition::new("hf_starting_heights");
 
     /// `hf_versions` — INTEGERKEY; height → hf version.
-    pub const HF_VERSIONS: TableDefinition<u64, Coded<RuleSetId>> = TableDefinition::new("hf_versions");
+    pub const HF_VERSIONS: TableDefinition<u64, Coded<RuleSetInForce>> =
+        TableDefinition::new("hf_versions");
 
     /// `properties` — `compare_string` == byte-lex + length tiebreak == `&str` order.
     /// The one per-key codec: each `PropertyCell` names its value's, so the

@@ -3813,6 +3813,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-crypto-hash",
  "shekyl-difficulty",
+ "shekyl-store-codec",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
@@ -4651,6 +4652,15 @@ dependencies = [
 [[package]]
 name = "shekyl-stats"
 version = "3.1.0"
+
+[[package]]
+name = "shekyl-store-codec"
+version = "3.1.0"
+dependencies = [
+ "redb",
+ "shekyl-types",
+ "shekyl-units",
+]
 
 [[package]]
 name = "shekyl-tor-control-client"

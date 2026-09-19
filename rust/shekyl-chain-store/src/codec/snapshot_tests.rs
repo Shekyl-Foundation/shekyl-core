@@ -83,8 +83,8 @@ use crate::schema;
 
 use super::{
     post_image, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, PassedThroughFacts, ProbeCell,
-    PropertyCell, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices, UndoEntry,
-    UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    PropertyCell, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices,
+    UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -304,13 +304,16 @@ impl Fixtures for BlockHeight {
     }
 }
 
-impl Fixtures for RuleSetId {
+impl Fixtures for RuleSetInForce {
     fn fixtures() -> Vec<(&'static str, Self)> {
+        // Labels and values unchanged from when the codec was
+        // `impl Canonical for RuleSetId`: the adapter moved the impl's
+        // home, not its layout, so `rule_set_id.snap` must not move.
         vec![
-            ("zero", RuleSetId::from_raw(0)),
-            ("genesis", RuleSetId::GENESIS),
-            ("high_bit", RuleSetId::from_raw(0x80)),
-            ("max", RuleSetId::from_raw(0xff)),
+            ("zero", RuleSetInForce(RuleSetId::from_raw(0))),
+            ("genesis", RuleSetInForce(RuleSetId::GENESIS)),
+            ("high_bit", RuleSetInForce(RuleSetId::from_raw(0x80))),
+            ("max", RuleSetInForce(RuleSetId::from_raw(0xff))),
         ]
     }
 }
@@ -866,7 +869,7 @@ snapshotted_codecs! {
     PassedThroughFacts => codec_snapshot_passed_through_facts,
     CurveTreeRoot => codec_snapshot_curve_root,
     BlockHeight => codec_snapshot_block_height,
-    RuleSetId => codec_snapshot_rule_set_id,
+    RuleSetInForce => codec_snapshot_rule_set_id,
     PrunableHash => codec_snapshot_prunable_hash,
     AtomicUnits => codec_snapshot_atomic_units,
     PqcAuthHash => codec_snapshot_pqc_auth_hash,
@@ -891,11 +894,34 @@ fn codec_snapshot_assertions_are_armed() {
     );
 }
 
-/// Source scan: the set of `impl Canonical for <T>` in `src/` equals the
-/// set registered in [`snapshotted_codecs!`], and the committed `.snap`
-/// files are exactly that set's names plus the table catalogue. A codec
-/// cannot be added without a fixture, and a deleted codec cannot leave an
-/// orphan snapshot behind.
+/// Source scan: every `impl Canonical for <T>` in **this crate's** `src/`
+/// is registered in [`snapshotted_codecs!`], and the committed `.snap`
+/// files are exactly the registered set's names plus the catalogue stems.
+/// A codec cannot be added without a fixture, and a deleted codec cannot
+/// leave an orphan snapshot behind.
+///
+/// # Why containment here and equality there
+///
+/// Since `Canonical` moved to `shekyl-store-codec`, some registered
+/// codecs' impls are in that crate's tree — the scalars and the
+/// vocabulary — and this scan cannot see them. That does **not** loosen
+/// the other direction into something that cannot fail: a registry row
+/// naming a codec that no longer exists is a **compile** error, because
+/// [`snapshotted_codecs!`] expands each row to `<$ty as Canonical>::NAME`
+/// and a `check_or_update_snapshot::<$ty>()` test. So "registered but not
+/// implemented" is caught by the build, "implemented here but not
+/// registered" is caught below, and the moved codecs' *bytes* are still
+/// caught by their fixtures — which stay committed under this crate's
+/// `schemas/` and still pair with [`SCHEMA_VERSION`], which is why
+/// `.github/workflows/schema-snapshot.yml` triggers on the codec crate's
+/// path too ([`workflow_gates_this_crate`]).
+///
+/// What is **not** asserted, named so it is not mistaken for covered: a
+/// codec added to `shekyl-store-codec` for the *other* store and never
+/// registered here. Its bytes are not this store's layout — and the moment
+/// this store's layout names it, the table or property catalogue snapshot
+/// moves (`tables.snap` carries `shekyl::Coded<{NAME}>`), which is the
+/// same paired bump.
 #[test]
 fn every_canonical_impl_has_a_snapshot() {
     if env::var_os("UPDATE_SNAPSHOTS").is_some() {
@@ -905,11 +931,20 @@ fn every_canonical_impl_has_a_snapshot() {
     let mut impls = BTreeSet::new();
     scan_impls(&src, &mut impls);
     let registered: BTreeSet<&str> = snapshotted().into_iter().map(|(ty, _)| ty).collect();
-    assert_eq!(
-        impls.iter().map(String::as_str).collect::<BTreeSet<_>>(),
-        registered,
+    let local: BTreeSet<&str> = impls.iter().map(String::as_str).collect();
+    // The scan's subject: a scan that found nothing would pass the
+    // containment below for the wrong reason (rule 47).
+    assert!(
+        !local.is_empty(),
+        "the `impl Canonical for T` scan of {} found nothing; the census is reading \
+         the wrong tree",
+        src.display()
+    );
+    let unregistered: Vec<&str> = local.difference(&registered).copied().collect();
+    assert!(
+        unregistered.is_empty(),
         "every `impl Canonical for T` under src/ must appear in `snapshotted_codecs!` \
-         (and vice versa) so it has a committed fixture snapshot"
+         so it has a committed fixture snapshot; these do not: {unregistered:?}"
     );
 
     let mut names: BTreeSet<&str> = snapshotted().into_iter().map(|(_, name)| name).collect();
@@ -1058,6 +1093,10 @@ fn workflow_gates_this_crate() {
     let run_line = format!("cargo test -p shekyl-chain-store {TEST_FILTER}");
     let needles = [
         (TRIGGER, "- \"rust/shekyl-chain-store/**\""),
+        // The moved codecs' fixtures are committed here and still pair
+        // with SCHEMA_VERSION, so an edit to their impls must run this
+        // gate — which it only does if the trigger names their crate.
+        (TRIGGER, "- \"rust/shekyl-store-codec/**\""),
         (ASSERT_JOB, run_line.as_str()),
         (BUMP_JOB, "rust/shekyl-chain-store/schemas/"),
         (

@@ -56,6 +56,12 @@ on:
     paths:
       - "rust/shekyl-engine-state/**"
       - "rust/shekyl-chain-store/**"
+      # `Canonical`, the value shapes and the codecs for types the store
+      # does not own live here (CTS-Q2); their fixtures stay committed
+      # under `shekyl-chain-store/schemas/` and still pair with
+      # SCHEMA_VERSION, so a byte change there must run this gate.
+      # `workflow_gates_this_crate` asserts this line.
+      - "rust/shekyl-store-codec/**"
       - "rust/Cargo.lock"
       - "rust/Cargo.toml"
       - ".github/workflows/schema-snapshot.yml"

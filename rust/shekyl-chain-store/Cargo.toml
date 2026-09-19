@@ -13,6 +13,13 @@ license.workspace = true
 
 [dependencies]
 redb = { workspace = true }
+# The shared redb value contract (CTS-Q2, ruled 2026-09-18): `Canonical`,
+# `CodecError`, the four value shapes, and the codecs for types this crate
+# does not own. Moved out of `codec` here and re-exported from it, so every
+# call path keeps its import (`crate::codec::…`). What did NOT move:
+# this store's own column codecs, §11.1(b)'s bump obligation, the fixture
+# snapshots and the `impl Canonical` source scan.
+shekyl-store-codec = { path = "../shekyl-store-codec" }
 shekyl-crypto-hash = { path = "../shekyl-crypto-hash" }
 # S-CHAIN-W (SCW-14): the store implements the validator's `ChainView` and
 # takes its `ChainValid`; the direction is store → rules and never the

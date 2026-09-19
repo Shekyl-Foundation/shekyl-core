@@ -17,7 +17,7 @@ use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, Tx
 use super::connect_fixtures::formed;
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE_ROW};
 use super::*;
-use crate::codec::{BlockBody, BlockInfo, Canonical, CodecError, Encoded, Present, Raw};
+use crate::codec::{forged, BlockBody, BlockInfo, Canonical, CodecError, Present, Raw};
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{BLOCKS, BLOCK_INFO, CURVE_TREE_ROOTS, SPENT_KEYS, UNDO_LOG};
 
@@ -666,8 +666,8 @@ fn the_read_transaction_body_classifies_holes_and_bad_blobs_as_si7() {
 /// This test pins what replaced the scenario: the wrong-width write is
 /// refused **by this crate, as a value**, before the engine's assertion.
 /// `Canonical::encoded` cannot produce it, but redb's `Value::from_bytes` is
-/// a public trait method and can (`Encoded::forged` is that path under
-/// `cfg(test)`), so every write through the crate's handles checks the
+/// a public trait method and can (`codec::forged` is that call, spelled
+/// once for the tests), so every write through the crate's handles checks the
 /// width first (`keyed::check_row`) and returns `StoreCannot::RowWidth`.
 /// Nothing lands, nothing panics, and the store is still usable afterwards.
 #[test]
@@ -683,7 +683,7 @@ fn a_wrong_width_row_is_refused_before_it_can_reach_a_coded_table() {
     let refused: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_upsert_table(BLOCK_INFO)?
-            .upsert(1, Encoded::forged(&[0xee; 103]))?;
+            .upsert(1, forged(&[0xee; 103]))?;
         Ok(())
     });
     let expected = StoreError::from(StoreCannot::RowWidth {
@@ -722,7 +722,7 @@ fn a_variable_width_coded_row_that_does_not_decode_is_refused() {
     let refused: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_upsert_table(UNDO_LOG)?
-            .upsert(0, Encoded::forged(&[0xee; 3]))?;
+            .upsert(0, forged(&[0xee; 3]))?;
         Ok(())
     });
     let expected = StoreError::from(StoreCannot::RowIllFormed {
