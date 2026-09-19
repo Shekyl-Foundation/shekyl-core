@@ -152,6 +152,13 @@ TEST_ONLY: dict[tuple[str, str], str] = {
         "unpinned-tor-for-tests",
     ): "forges VerifiedTorBinary, the SP-T0c hash-pin witness, for lifecycle "
     "tests that inject an arbitrary unpinned tor",
+    (
+        "shekyl-chain-rules",
+        "harness",
+    ): "exposes the negative-fixture harness (MockChain, MockSubstrate) as a "
+    "library surface for the store's mock-vs-BatchView conformance test "
+    "(E6 slice 2 F11); its own manifest says 'test-only in effect, never "
+    "from a normal dependency' — this row is that sentence as a gate",
 }
 
 # (owning crate, feature) → (the one crate that may enable it, why it exists).
@@ -170,8 +177,10 @@ PERMANENT: dict[tuple[str, str], str] = {}
 # Crates whose feature table must be exhaustively categorized (third limb).
 # Adding a crate here is the declaration that no feature of it may exist
 # uncategorized; both listed crates are clean at registration
-# (`shekyl-chain-store` declares none; `shekyl-tor-control-client` declares
-# only its TEST_ONLY row).
+# (`shekyl-chain-store` declares none; `shekyl-tor-control-client` and
+# `shekyl-chain-rules` declare only their TEST_ONLY row — the latter joined
+# 2026-09-19 when the fourth limb fired on `harness` in CI, the first
+# cross-crate feature declared after the limb landed).
 #
 # This set is opt-in — two crates out of a workspace approaching seventy — so
 # exhaustiveness holds *within* governance. The rule for joining: **a crate
@@ -183,7 +192,9 @@ PERMANENT: dict[tuple[str, str], str] = {}
 # ungoverned crate that meets it. (The first draft named this as a residual
 # left open, on the argument that governing everything is churn; detecting
 # the trigger is a different, nearly free thing, and it is what landed.)
-GOVERNED_OWNERS: frozenset[str] = frozenset({"shekyl-chain-store", "shekyl-tor-control-client"})
+GOVERNED_OWNERS: frozenset[str] = frozenset(
+    {"shekyl-chain-store", "shekyl-tor-control-client", "shekyl-chain-rules"}
+)
 
 # Crates that met the governance trigger before the fourth limb existed
 # (measured 2026-09-19 on the S-TX pre-flight, PR #786) and are not yet
