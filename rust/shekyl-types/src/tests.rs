@@ -164,6 +164,56 @@ fn chain_count_bridges() {
 }
 
 #[test]
+fn chain_count_plus_span_is_count() {
+    let count = ChainCount::from_raw(100);
+    let span = BlockCount::from_raw(10);
+    assert_eq!(count + span, ChainCount::from_raw(110));
+    assert_eq!(count - span, ChainCount::from_raw(90));
+    assert_eq!(count.saturating_add(span), ChainCount::from_raw(110));
+    assert_eq!(count.saturating_sub_count(span), ChainCount::from_raw(90));
+}
+
+#[test]
+fn chain_count_minus_count_is_span() {
+    let later = ChainCount::from_raw(150);
+    let earlier = ChainCount::from_raw(40);
+    assert_eq!(later - earlier, BlockCount::from_raw(110));
+    assert_eq!(later.checked_sub(earlier), Some(BlockCount::from_raw(110)));
+    assert_eq!(earlier.checked_sub(later), None);
+    assert_eq!(earlier.saturating_sub(later), BlockCount::ZERO);
+}
+
+#[test]
+fn chain_count_saturating_and_checked_boundaries() {
+    assert_eq!(
+        ChainCount::from_raw(5).checked_add(BlockCount::from_raw(2)),
+        Some(ChainCount::from_raw(7))
+    );
+    assert_eq!(
+        ChainCount::from_raw(u64::MAX).checked_add(BlockCount::from_raw(1)),
+        None
+    );
+    assert_eq!(
+        ChainCount::ZERO.saturating_sub_count(BlockCount::ONE),
+        ChainCount::ZERO
+    );
+    assert_eq!(ChainCount::ZERO.checked_sub_count(BlockCount::ONE), None);
+    // Exclusive-end split used by the pscan horizon: count − depth, then
+    // next_height is the exclusive ordinal bound (COUNT=100, depth=10 → 90).
+    let claimed = ChainCount::from_raw(100);
+    let horizon = claimed
+        .saturating_sub_count(BlockCount::from_raw(10))
+        .next_height();
+    assert_eq!(horizon, BlockHeight::from_raw(90));
+}
+
+#[test]
+#[should_panic(expected = "underflowed below empty")]
+fn chain_count_subtraction_underflow_panics() {
+    let _ = ChainCount::from_raw(3) - BlockCount::from_raw(10);
+}
+
+#[test]
 fn hash_display_is_lowercase_hex() {
     let mut bytes = [0u8; 32];
     bytes[0] = 0xDE;

@@ -40,6 +40,12 @@
 //! `height - height` yields a count, and `height + height` /
 //! `height - timestamp` do not compile.
 //!
+//! [`ChainCount`] is the fourth related type: the chain's total block
+//! **count** (not a clock). It is not interchangeable with [`BlockHeight`];
+//! the only bridges are [`ChainCount::tip`] and [`ChainCount::next_height`].
+//! Arithmetic against a span is the same shape as height (`count + span`
+//! yields a count).
+//!
 //! ## Boundaries
 //!
 //! Inner fields are private. Conversion is through the named edge
@@ -72,6 +78,24 @@
 //! ```compile_fail
 //! fn assert_as_ref<T: AsRef<[u8]>>() {}
 //! assert_as_ref::<shekyl_types::KeyImage>();
+//! ```
+//!
+//! A chain **count** is not an ordinal **height**. Passing one where the
+//! other is required is the Phase 1 defect (`HEIGHT_SEMANTICS.md` C9);
+//! the mix does not compile.
+//!
+//! ```compile_fail
+//! fn needs_height(_h: shekyl_types::BlockHeight) {}
+//! needs_height(shekyl_types::ChainCount::from_raw(1));
+//! ```
+//!
+//! ```compile_fail
+//! fn needs_count(_c: shekyl_types::ChainCount) {}
+//! needs_count(shekyl_types::BlockHeight::from_raw(0));
+//! ```
+//!
+//! ```compile_fail
+//! let _ = shekyl_types::ChainCount::from_raw(10) + shekyl_types::BlockHeight::from_raw(1);
 //! ```
 
 #![no_std]
@@ -908,6 +932,98 @@ impl ChainCount {
     #[must_use]
     pub const fn next_height(self) -> BlockHeight {
         BlockHeight(self.0)
+    }
+
+    /// Advance by a span, returning `None` on overflow.
+    #[must_use]
+    pub const fn checked_add(self, rhs: BlockCount) -> Option<ChainCount> {
+        match self.0.checked_add(rhs.0) {
+            Some(v) => Some(ChainCount(v)),
+            None => None,
+        }
+    }
+
+    /// Advance by a span, saturating at `u64::MAX`.
+    #[must_use]
+    pub const fn saturating_add(self, rhs: BlockCount) -> ChainCount {
+        ChainCount(self.0.saturating_add(rhs.0))
+    }
+
+    /// The span back to an earlier count, returning `None` if `earlier` is
+    /// actually ahead of `self`.
+    #[must_use]
+    pub const fn checked_sub(self, earlier: ChainCount) -> Option<BlockCount> {
+        match self.0.checked_sub(earlier.0) {
+            Some(v) => Some(BlockCount(v)),
+            None => None,
+        }
+    }
+
+    /// The span back to an earlier count, saturating to
+    /// [`BlockCount::ZERO`] when `earlier` is ahead of `self`.
+    #[must_use]
+    pub const fn saturating_sub(self, earlier: ChainCount) -> BlockCount {
+        BlockCount(self.0.saturating_sub(earlier.0))
+    }
+
+    /// Rewind by a span, saturating at the empty chain rather than panicking.
+    ///
+    /// [`Sub<BlockCount>`](core::ops::Sub) panics below empty; a finality
+    /// horizon on a young chain needs a floor.
+    #[must_use]
+    pub const fn saturating_sub_count(self, rhs: BlockCount) -> ChainCount {
+        ChainCount(self.0.saturating_sub(rhs.0))
+    }
+
+    /// Rewind by a span, returning `None` if the span is larger than the
+    /// count.
+    #[must_use]
+    pub const fn checked_sub_count(self, rhs: BlockCount) -> Option<ChainCount> {
+        match self.0.checked_sub(rhs.0) {
+            Some(v) => Some(ChainCount(v)),
+            None => None,
+        }
+    }
+}
+
+impl Add<BlockCount> for ChainCount {
+    type Output = ChainCount;
+
+    /// Grow a count by a span. Panics on `u64` overflow.
+    fn add(self, rhs: BlockCount) -> ChainCount {
+        ChainCount(
+            self.0
+                .checked_add(rhs.0)
+                .expect("ChainCount + BlockCount overflowed u64"),
+        )
+    }
+}
+
+impl Sub<BlockCount> for ChainCount {
+    type Output = ChainCount;
+
+    /// Shrink a count by a span (e.g. a reorg-window floor). Panics if the
+    /// span is larger than the count (would underflow below empty).
+    fn sub(self, rhs: BlockCount) -> ChainCount {
+        ChainCount(
+            self.0
+                .checked_sub(rhs.0)
+                .expect("ChainCount - BlockCount underflowed below empty"),
+        )
+    }
+}
+
+impl Sub<ChainCount> for ChainCount {
+    type Output = BlockCount;
+
+    /// The span between two counts. Panics if `rhs > self`; use
+    /// [`ChainCount::saturating_sub`] when `rhs` may be ahead.
+    fn sub(self, rhs: ChainCount) -> BlockCount {
+        BlockCount(
+            self.0
+                .checked_sub(rhs.0)
+                .expect("ChainCount - ChainCount underflowed (rhs ahead of self)"),
+        )
     }
 }
 
