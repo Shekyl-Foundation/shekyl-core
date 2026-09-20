@@ -67,7 +67,9 @@
 //! two notions of a block's identity in one store is SCR-7, and this body
 //! has one.
 
-use redb::{Key, ReadTransaction, ReadableTable, TableDefinition, Value, WriteTransaction};
+use redb::{
+    Key, ReadTransaction, ReadableTable, TableDefinition, TableHandle, Value, WriteTransaction,
+};
 use shekyl_chain_rules::AtHeight;
 use shekyl_types::KeyImage;
 use shekyl_wire::Block;
@@ -253,6 +255,14 @@ pub(super) fn cell<T: ReadTables, V: Canonical + 'static>(
     key: u64,
     cell_name: &'static str,
 ) -> Result<Option<V>, ReadFault> {
+    // The fault names its table: `cell_name` is the `'static` the fault
+    // carries and redb's `TableHandle::name` borrow is not, so the two are
+    // bound here and a test that reaches the row catches a drift.
+    debug_assert_eq!(
+        TableHandle::name(&table),
+        cell_name,
+        "fault names its table"
+    );
     let table = txn.table(table)?;
     let Some(guard) = table.get(key)? else {
         return Ok(None);
