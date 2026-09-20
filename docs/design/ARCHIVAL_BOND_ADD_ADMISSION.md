@@ -80,13 +80,15 @@ bond names ghost shard k
         ▼  P has no bytes for k and answers the SINGLE SHARED 404
         │  (provider.rs:239 — "only the local counters tell them apart";
         │  :38 — a distinct failure would itself be a signal)
-   recorded miss
+   the challenge expires with no pass — and that IS the miss
+        │  "A miss is never asserted. It is the expiry of a derived
+        │   challenge with no pass recorded within W2. No miss record
+        │   exists on the wire" (ARCHIVAL_CHALLENGE_MECHANISM.md:184-187)
+   no serve-credit bit is set
         │
-        ▼  a miss yields no serve-credit bit
-   no credit bit
-        │
-        ▼  2-of-3 within an epoch, m-of-n across epochs
-        │  (ARCHIVAL_CHALLENGE_MECHANISM.md §3)
+        ▼  2-of-3 within an epoch, m-of-n across epochs, recomputed
+        │  from the serve_credit_bit ledger + bond record every time —
+        │  "Nothing is persisted" (db_lmdb.cpp:5744-5751)
    observed across epochs
         │
         ▼
@@ -98,8 +100,12 @@ needs no special handling:
 
 1. **The 404 is the ordinary one.** A ghost shard is indistinguishable on the
    wire from any other miss — no new response, no new state, no new branch.
-2. **No leg treats the ghost specially.** Every step is the path a withholding
-   `P` already takes, so a ghost costs the mechanism no new code.
+2. **No leg treats the ghost specially, and none of them *writes*.** Every step
+   is the path a withholding `P` already takes, so a ghost costs the mechanism
+   no new code — **and no new state**: a miss is never asserted, only the
+   **absence** of a pass within `W₂`, and the m-of-n window is **recomputed**
+   from the `serve_credit_bit` ledger and the bond record on every evaluation
+   rather than stored. There is no miss record for a ghost to create.
 3. **The cost falls on the poster.** The slash lands on the `P` that named the
    ghost. What the guard saves is not `P` from itself but the **network** from
    spending real work to reach that conclusion.
