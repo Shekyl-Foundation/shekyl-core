@@ -21,7 +21,7 @@ the archival persona `P` bond/scan machinery — that is
 [`PHASE_2B_FSM_RETOOL.md`](PHASE_2B_FSM_RETOOL.md) P2B-4 (the `P`-state FSM) and the
 **built** `StakeEngine` actor. This doc sits one layer up, at the orchestrator.
 
-**The archival unit is not this document's either — it is cited, never restated.**
+**The archival unit is not defined here either — it is cited, never restated.**
 Where this contract says *shard*, it means the unit `P` bonds, and that unit is
 [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)'s: the archival
 good is each transaction's prunable body plus its `pqc_auths` (`PDM-Q6` items 1–2); a
@@ -39,9 +39,9 @@ No section below designs against leaves, `R_k`, or a frozen segment.
 
 - **Write against the `P` model, never the claim-era body.** The
   confidential-principal design (`StakeInstance`, `stake()` / `claim()` /
-  `unstake()`, tiers, entitlement, nullifiers) is **deleted, not stubbed** — the
-  claim-era specs under rule 95's standing instruction, and the `shekyl-staking`
-  crate with PR #232 (2026-07-02; no `StakeInstance`, `LockTier`, `StakeTier` or
+  `unstake()`, tiers, entitlement, nullifiers) is **deleted, not stubbed**: the
+  claim-era specs were deleted under rule 95's standing instruction, and the
+  `shekyl-staking` crate was deleted with PR #232 (2026-07-02; no `StakeInstance`, `LockTier`, `StakeTier` or
   `TierTable` symbol exists under `rust/` — DQ6). A method carrying `claim` / `tier` /
   `StakeInstance` is wrong by construction. (`unstake` was later re-minted as the
   user verb for the gate-4 `Release` post — PR-C, §4a — which shares nothing with
