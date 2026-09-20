@@ -592,7 +592,11 @@ mod tests {
     /// gate is pushed out when more than `L` arrive.
     #[test]
     fn the_documented_residual_matches_the_poisson_model() {
-        let lambda = TIP_MAX_AGE_BLOCK_TARGETS as f64; // age / T at the bound
+        // age / T at the bound. `u32::from` then `f64::from` are both
+        // lossless, so the model's input cannot silently round.
+        let targets = u32::try_from(TIP_MAX_AGE_BLOCK_TARGETS)
+            .expect("the age bound is a small multiple of the block target");
+        let lambda = f64::from(targets);
         let l = u32::try_from(PASS_ANCHOR_LAG_BLOCKS).expect("L is small");
         // P(N > L) = 1 - sum_{k=0..L} e^-lambda lambda^k / k!
         let mut term = (-lambda).exp();
