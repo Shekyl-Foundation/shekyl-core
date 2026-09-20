@@ -36,7 +36,7 @@
 //! transport and never from a peer draw, stamped into a
 //! [`DaemonTipCache`] by a producer on a cadence and
 //! read here synchronously. A `p` that is stale past the cache's age bound,
-//! or a daemon that reports itself syncing, is `None` — the same answer an
+//! or a daemon that has stopped following the chain, is `None` — the same answer an
 //! unreadable store gave, on the same path.
 //!
 //! # Why the key is
@@ -113,7 +113,7 @@ impl PassSigner for HostSigner {
     /// cache's age bound.
     ///
     /// `None` when there is no usable tip — nothing stamped yet, the daemon
-    /// reported itself syncing, or the last stamp has aged out. All three
+    /// stopped following the chain, or the last stamp has aged out. All three
     /// take the path the unreadable store took before them: the serve loop
     /// renders the identical 404 and counts a lookup failure, so a persona
     /// that has lost sight of the chain shows up in `ServeCounters` rather

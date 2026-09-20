@@ -237,15 +237,27 @@
 
   `own_height` is now the configured daemon's top block height, read over
   the persona's own transport (loopback by default, never a peer draw),
-  gated on the daemon reporting itself synchronized, and cached with an age
-  bound of one block target — a quarter of the gate's tolerance — refreshed
-  four times per bound. A daemon that reports itself syncing, or a tip past
-  the age bound, refuses; a single unreachable poll does not, because an
-  unreachable daemon is the absence of a fact and the age bound already
-  covers it. Refusals keep their existing handling: the identical 404 and a
-  `ServeCounters` lookup failure, with no new error surface. Chain height
-  becomes block height once, at the RPC read — `get_info.height` is top + 1
-  while admission centres its window on `predecessor_height − 720`.
+  gated on the daemon's own health facts (the sticky `synchronized` flag is
+  necessary, not sufficient — `offline`, `following_degraded` and, where
+  `--restricted-rpc` has not zeroed them, the peer counts must agree), and
+  cached with an age bound of one block target, refreshed four times per
+  bound. That bound buys a **residual, not a guarantee**: block arrival is
+  Poisson, so a wall-clock age does not cap how many blocks a cached tip
+  can miss, only how likely. With the gate's `L = 4`, the probability the
+  cache alone pushes an honest persona out of the window is about `1e-6`
+  in steady state (age roughly uniform on one refresh interval) and
+  `3.7e-3` at the bound, which is reached only after three consecutive
+  failed polls. The multiplier is a named constant with that table beside
+  it; tightening it is a ruling, not an edit. A daemon that has stopped
+  following the chain, or a tip past the age bound, refuses; a single
+  unreachable poll does not, because an unreachable daemon is the absence
+  of a fact and the age bound already covers it. A reply whose `status` is
+  not `OK` is the same absence: its body is not evidence, so it neither
+  refreshes nor clears the held tip. Refusals keep their existing handling:
+  the identical 404 and a `ServeCounters` lookup failure, with no new error
+  surface. Chain height becomes block height once, at the RPC read —
+  `get_info.height` is top + 1 while admission centres its window on
+  `predecessor_height − 720`.
 
 - **Isolation gate check 6: the pinned PoW test setter is link-time
   unreachable from production.** `check_randomx_symbol_isolation.sh`

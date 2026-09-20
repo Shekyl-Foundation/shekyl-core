@@ -233,7 +233,7 @@ mod tests {
         );
     }
 
-    /// A daemon that says it is syncing invalidates the tip immediately —
+    /// A daemon that says it has stopped following invalidates the tip immediately —
     /// the distinguishing case against a plain age-out, which would have
     /// kept gating on the pre-sync stamp for the rest of its window.
     #[test]

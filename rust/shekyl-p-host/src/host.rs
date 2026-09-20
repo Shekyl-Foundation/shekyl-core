@@ -84,7 +84,7 @@ impl fmt::Debug for PersonaServing {
 /// `lookup_failures` has **two** causes, deliberately pooled because a
 /// requester cannot distinguish them either: the serving store could not be
 /// read, or there is no usable daemon tip to run the anchor gate against
-/// (nothing stamped yet, the daemon reports itself syncing, or the last
+/// (nothing stamped yet, the daemon has stopped following the chain, or the last
 /// stamp aged out — `WSS-24`, see [`crate::signer`]). Both mean the same
 /// thing to an operator, which is what the counter is for: this persona has
 /// lost sight of something it needs, and passes are being lost to that
