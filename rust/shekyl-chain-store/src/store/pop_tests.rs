@@ -10,7 +10,7 @@
 //! open, and NOT latched by a violation in a batch that connected nothing.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::RuleSetId;
+use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHash, BlockHeight};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Transaction;
@@ -190,7 +190,7 @@ fn a_poisoned_connect_halts_the_writer_but_a_probe_violation_does_not() {
     let double = candidate(2, hashes[1], vec![spend(0x5e, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, double)?, facts(2, 0), RuleSetId::GENESIS)?)
+        Ok(batch.connect(judge(&view, double)?, facts(2, 0), RuleSet::GENESIS)?)
     });
     assert!(matches!(out, Err(TestErr::Store(ref m)) if m.starts_with("SI-1 violated")));
     assert_eq!(

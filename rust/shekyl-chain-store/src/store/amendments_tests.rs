@@ -18,7 +18,7 @@
 //!   pop removes it with the rest of the block.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::RuleSetId;
+use shekyl_chain_rules::RuleSet;
 use shekyl_types::{BlockHeight, LongTermWeight};
 
 use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, spend_with_pqc_auth};
@@ -81,7 +81,7 @@ fn cumulative_tx_count_is_the_running_total_through_pop_and_reconnect() {
     );
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSetId::GENESIS)?)
+        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
     });
     out.expect("reconnect");
     assert_eq!(cum(2) - cum(1), 3);
@@ -120,7 +120,7 @@ fn long_term_effective_median_is_stored_at_the_height_it_is_in_force_for() {
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let b2 = candidate(2, b1_hash, Vec::new());
-        Ok(batch.connect(judge(&view, b2)?, different, RuleSetId::GENESIS)?)
+        Ok(batch.connect(judge(&view, b2)?, different, RuleSet::GENESIS)?)
     });
     out.expect("reconnect");
     assert_eq!(

@@ -34,7 +34,7 @@
 //! to owe later.
 
 use crate::apply_policy::ArchivalFamily;
-use shekyl_chain_rules::RuleSetId;
+use shekyl_chain_rules::RuleSet;
 use shekyl_types::TxHash;
 
 use crate::codec::{SchemaVersion, SettlementEpochBlocks};
@@ -316,15 +316,13 @@ pub enum StoreCannot {
     RuleSetNotInForce {
         /// The height the block would have been recorded at.
         height: u64,
-        /// The rule set the verdict was minted under.
-        judged: RuleSetId,
+        /// The rule set the verdict was minted under — the set, not its id:
+        /// two Fakechain sets share `RuleSetId::GENESIS`, and the refusal
+        /// must be able to say which differed (RD-Q10).
+        judged: RuleSet,
         /// The rule set the caller says is in force at `height`.
-        in_force: RuleSetId,
+        in_force: RuleSet,
     },
-    /// `connect` was told a rule set is in force that no schedule has
-    /// issued (`RuleSet::for_id` is `None`), so what it enforces — and
-    /// therefore what the verdict may have skipped — cannot be known.
-    RuleSetUnknown(RuleSetId),
     /// `pop` on a store with no block recorded.
     ChainEmpty,
     /// `pop` at `tip` cannot run: the height is below the pop floor
@@ -440,11 +438,6 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "the chain store's writer is halted since height {at_height} ({row}); reads stay \
                  open; restart after the check or rebuild from the block corpus"
-            ),
-            Self::RuleSetUnknown(id) => write!(
-                f,
-                "rule set {id:?} has not been issued by any schedule; connect cannot know what it \
-                 enforces"
             ),
             Self::OutputWithoutCommitment { tx, index } => write!(
                 f,

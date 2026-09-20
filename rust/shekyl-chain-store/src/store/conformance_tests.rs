@@ -49,7 +49,7 @@ use shekyl_chain_rules::{
 use shekyl_difficulty::{seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 
-use super::connect_fixtures::{candidate, facts, judge, FixtureSubstrate, GENESIS_ID};
+use super::connect_fixtures::{candidate, facts, judge, FixtureSubstrate};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
 
@@ -194,7 +194,7 @@ fn twin_chains(len: u64) -> (ChainStore, std::path::PathBuf, MockChain, Vec<Cand
             let view = batch.chain_view();
             let valid = judge(&view, cand.clone())?;
             let work = valid.block().cumulative_difficulty();
-            batch.connect(valid, facts(h, 0), GENESIS_ID)?;
+            batch.connect(valid, facts(h, 0), RuleSet::GENESIS)?;
             Ok(work)
         });
         let work = work.expect("connects");

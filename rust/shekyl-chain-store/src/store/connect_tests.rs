@@ -21,7 +21,6 @@ use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
     candidate, coinbase, connect_chain, connect_genesis, facts, judge, spend, FixtureSubstrate,
-    GENESIS_ID,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -108,8 +107,8 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .get(0)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
-        Some(GENESIS_ID),
-        "hf_versions[h] is the rule set in force (SCW-16)"
+        Some(RuleSetId::GENESIS),
+        "hf_versions[h] is the rule set in force's id (SCW-16; the id, not the set — RD-Q10)"
     );
     assert_eq!(
         snap.open_table(CURVE_TREE_ROOTS)
@@ -273,10 +272,10 @@ fn two_blocks_in_one_batch_with_a_spend_and_a_burn() {
 
     let out: Result<(Connected, Connected), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let c0 = batch.connect(judge(&view, g)?, facts(0, 0), GENESIS_ID)?;
+        let c0 = batch.connect(judge(&view, g)?, facts(0, 0), RuleSet::GENESIS)?;
         // Block 1 is validated against a view that already holds block 0
         // and connected in the same batch.
-        let c1 = batch.connect(judge(&view, b1)?, facts(1, 25), GENESIS_ID)?;
+        let c1 = batch.connect(judge(&view, b1)?, facts(1, 25), RuleSet::GENESIS)?;
         Ok((c0, c1))
     });
     let (c0, c1) = out.expect("both connect");
@@ -424,7 +423,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
     let b1 = candidate(1, genesis.hash(), vec![spend(0x5e, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 4), GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 4), RuleSet::GENESIS)?)
     });
     out.expect("block 1 connects");
     assert_eq!(
@@ -483,8 +482,8 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
         let view = batch.chain_view();
         let first = judge(&view, sibling)?;
         let second = judge(&view, stale)?; // judged against the same tip: passes A2
-        batch.connect(first, facts(1, 0), GENESIS_ID)?; // the tip moves
-        Ok(batch.connect(second, facts(1, 0), GENESIS_ID)?) // stale: SI-2
+        batch.connect(first, facts(1, 0), RuleSet::GENESIS)?; // the tip moves
+        Ok(batch.connect(second, facts(1, 0), RuleSet::GENESIS)?) // stale: SI-2
     });
     expect_row(&out, StoreInvariant::TipMismatch);
     assert_eq!(StoreInvariant::TipMismatch.row(), 2);
@@ -538,7 +537,7 @@ fn a_corrupt_seen_by_the_validator_poisons_the_batch_and_halts_the_writer() {
         let view = batch.chain_view();
         let tip = ChainView::tip(&view)?.expect("two blocks").hash;
         let cand = candidate(2, tip, Vec::new());
-        Ok(batch.connect(judge(&view, cand)?, facts(2, 0), GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?)
     });
     assert!(again.is_err(), "the writer stays halted: {again:?}");
     cleanup(&path);
@@ -598,36 +597,47 @@ fn a_cumulative_difficulty_overflow_is_the_fold_belt_not_a_new_row() {
 }
 
 #[test]
-fn an_in_force_id_no_schedule_issued_is_refused_as_unknown_not_as_a_mismatch() {
-    let path = tmp("connect-ruleset");
+fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
+    // RD-F13: with `in_force: RuleSetId`, no id resolved to a `Fixed` set and
+    // a Fakechain verdict could never connect. The caller now hands the set
+    // itself (RD-Q10), and the path exists.
+    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
+    let path = tmp("connect-fakechain-in-force");
     let store = ChainStore::create(&path, EPOCH).expect("create");
-    // Raw id 7 is issued by no schedule. The verdict necessarily carries an
-    // issued id, so comparing first would always report a mismatch and the
-    // unknown-id refusal could never fire; `connect` resolves `in_force`
-    // first (PR #757 review). `RuleSetNotInForce` is reached only once a
-    // second rule set is issued — with GENESIS the sole set, a verdict's id
-    // and an issued `in_force` cannot differ.
-    let unissued = RuleSetId::from_raw(7);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        let valid = judge(&view, candidate(0, BlockHash::NULL, Vec::new()))?;
-        Ok(batch.connect(valid, facts(0, 0), unissued)?)
+        let cand = candidate(0, BlockHash::NULL, Vec::new());
+        let formed = match form(
+            cand,
+            &seven,
+            &FixtureSubstrate,
+            BlockHash::NULL,
+            FormAttempt::FIRST,
+        ) {
+            Ok(Ok(formed)) => formed,
+            other => panic!("stateless stage: {other:?}"),
+        };
+        let valid = match validate(formed, &view, &seven) {
+            Ok(Ok(valid)) => valid,
+            other => panic!("view stage: {other:?}"),
+        };
+        Ok(batch.connect(valid, facts(0, 0), seven)?)
     });
-    let want = StoreCannot::RuleSetUnknown(unissued);
-    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
-    assert_eq!(StoreError::from(want).class(), ErrorClass::Cannot);
-    assert!(
-        RuleSet::for_id(unissued).is_none(),
-        "the premise of the test"
-    );
-    // Nothing landed: the refusal came before any write. (The table itself
-    // exists from the seal, A2; emptiness is the evidence.)
+    out.expect("a Fakechain verdict connects under the Fakechain set");
+    // The CEN-B3 belt recorded the id — which is GENESIS's, and is not the
+    // set (the caveat at the belt).
     let snap = store.begin_read().expect("read");
-    assert!(snap
-        .open_table(BLOCKS)
+    let recorded: RuleSetId = snap
+        .open_table(HF_VERSIONS)
         .expect("sealed")
-        .is_empty()
-        .expect("len"));
+        .get(0u64)
+        .expect("read")
+        .expect("row")
+        .value()
+        .decode()
+        .expect("decodes");
+    assert_eq!(recorded, RuleSetId::GENESIS);
+    assert_eq!(seven.id(), RuleSetId::GENESIS, "the id is not the set");
     cleanup(&path);
 }
 
@@ -656,12 +666,12 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };
-        Ok(batch.connect(valid, facts(0, 0), GENESIS_ID)?)
+        Ok(batch.connect(valid, facts(0, 0), RuleSet::GENESIS)?)
     });
     let want = StoreCannot::RuleSetNotInForce {
         height: 0,
-        judged: seven.id(),
-        in_force: GENESIS_ID,
+        judged: seven,
+        in_force: RuleSet::GENESIS,
     };
     assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
     cleanup(&path);
@@ -685,7 +695,7 @@ fn plant_then_connect_is_si9(
     let b1 = candidate(1, genesis.hash(), Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::IdNotFresh);
     assert_eq!(
@@ -798,7 +808,7 @@ fn a_key_image_spent_in_an_earlier_block_is_si1() {
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), RuleSet::GENESIS)?)
     });
     out.expect("block 1");
     // No landed rule checks key images yet (CEN-I7 is slice 6), so the
@@ -807,7 +817,7 @@ fn a_key_image_spent_in_an_earlier_block_is_si1() {
     let b2 = candidate(2, b1_hash, vec![spend(0x5e, 1)]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::KeyImageNotFresh);
     let snap = store.begin_read().expect("read");
@@ -832,13 +842,13 @@ fn the_same_transaction_in_two_blocks_is_si3() {
     let b1_hash = b1.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, b1)?, facts(1, 0), RuleSet::GENESIS)?)
     });
     out.expect("block 1");
     let b2 = candidate(2, b1_hash, vec![dup]);
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, b2)?, facts(2, 0), RuleSet::GENESIS)?)
     });
     expect_row(&out, StoreInvariant::TxHashNotFresh);
     cleanup(&path);
@@ -861,7 +871,7 @@ fn a_total_burned_fold_that_would_wrap_is_si8_never_a_saturate() {
         Ok(batch.connect(
             judge(&view, candidate(1, genesis.hash(), Vec::new()))?,
             facts(1, 1),
-            GENESIS_ID,
+            RuleSet::GENESIS,
         )?)
     });
     expect_row(
@@ -895,7 +905,7 @@ fn a_root_already_recorded_at_the_connecting_height_is_si4() {
         Ok(batch.connect(
             judge(&view, candidate(0, BlockHash::NULL, Vec::new()))?,
             facts(0, 0),
-            GENESIS_ID,
+            RuleSet::GENESIS,
         )?)
     });
     expect_row(&out, StoreInvariant::RootRewritten);
@@ -923,7 +933,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     let g_hash = g.block.hash();
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, g)?, derived, GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, g)?, derived, RuleSet::GENESIS)?)
     });
     out.expect("genesis");
     // Derived facts stamp no pass-through. But GENESIS *enforces* every
@@ -966,7 +976,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     let b1 = candidate(1, g_hash, Vec::new());
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        batch.connect(judge(&view, b1.clone())?, facts(1, 0), GENESIS_ID)?;
+        batch.connect(judge(&view, b1.clone())?, facts(1, 0), RuleSet::GENESIS)?;
         Err(TestErr::Abort)
     });
     assert_eq!(out, Err(TestErr::Abort));
@@ -982,7 +992,7 @@ fn a_pass_through_connect_taints_the_file_s_provenance_and_a_derived_one_does_no
     partial.root_after = Fact::derived(CurveTreeRoot::from_bytes([0xc1; 32]));
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, b1)?, partial, GENESIS_ID)?)
+        Ok(batch.connect(judge(&view, b1)?, partial, RuleSet::GENESIS)?)
     });
     out.expect("block 1");
     let prov = store.provenance();
