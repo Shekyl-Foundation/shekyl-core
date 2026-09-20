@@ -380,3 +380,41 @@ fn a_stray_row_at_or_beyond_the_count_is_beyond_count_not_served() {
     );
     cleanup(&path);
 }
+
+#[test]
+fn a_missing_output_txs_row_below_the_count_is_si9_whatever_output_amounts_holds() {
+    // PR #800 review, the O1 analogue: `output_txs` is the count's authority;
+    // a hole in it at `i` is SI-9 even when `output_amounts[(0, i)]` is
+    // present and well-formed.
+    let path = tmp("read-output-primary-hole");
+    let (store, _) = output_chain(&path);
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut primary = txn.open_table(crate::schema::OUTPUT_TXS).expect("t");
+            primary.remove(1u64).expect("remove");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    let err = snap.output(gi(1)).expect_err("primary hole");
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::IdNotFresh)
+        ),
+        "got {err:?}"
+    );
+    let err = snap.output_origin(gi(1)).expect_err("primary hole");
+    assert!(
+        matches!(
+            err,
+            StoreError::InvariantViolated(StoreInvariant::IdNotFresh)
+        ),
+        "got {err:?}"
+    );
+    cleanup(&path);
+}

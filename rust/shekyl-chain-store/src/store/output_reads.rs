@@ -53,11 +53,11 @@ use super::chain_reads::{undecodable, ReadFault, ReadTables};
 use super::error::StoreInvariant;
 
 /// The stored record of one output, as [`ReadSnapshot::output`](super::ReadSnapshot::output)
-/// returns it: LMDB's `output_data_t` — one-time pubkey, unlock time,
-/// recording height, commitment. `OutKey` minus its join key: the join was
-/// **validated** against the slot where the record was decoded (module
-/// docs), so the projection carries what a consumer needs and nothing it
-/// would have to re-check. A read projection, never stored, so not
+/// returns it: one-time pubkey, commitment, recording height — LMDB's
+/// `output_data_t` minus its `unlock_time`. `OutKey` minus its join key and
+/// that field: the join was **validated** against the slot where the record
+/// was decoded (module docs), so the projection carries what a consumer
+/// needs and nothing it would have to re-check. A read projection, never stored, so not
 /// `Canonical`. The live consumer is the path builder's `read_output_oc`,
 /// which wants the pubkey **and** the commitment (SOK-7).
 ///
@@ -117,6 +117,13 @@ pub(super) fn output_at<T: ReadTables>(
 ) -> Result<AtIndex<RecordedOutput>, ReadFault> {
     if let IndexClass::Beyond = class_of(output_count(txn)?, index) {
         return Ok(AtIndex::BeyondCount);
+    }
+    // The primary must be present below the count before a side row is
+    // served (PR #800 review, the same admission `tx_reads::admit` takes):
+    // `output_txs` is the count's authority, and a hole in it at `index` is
+    // the count lying — SI-9 — whatever `output_amounts` holds there.
+    if txn.table(OUTPUT_TXS)?.get(index.to_raw())?.is_none() {
+        return Err(not_dense());
     }
     let slot = OutputSlot::confidential(index);
     let table = txn.table(OUTPUT_AMOUNTS)?;

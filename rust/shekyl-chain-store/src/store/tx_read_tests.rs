@@ -18,7 +18,7 @@ use super::store_tests::{cleanup, tmp, EPOCH};
 use super::*;
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH};
+use crate::schema::{TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED};
 
 fn id(raw: u64) -> TxStorageId {
     TxStorageId::from_raw(raw)
@@ -407,6 +407,61 @@ fn tx_locations_walks_tx_indices_in_key_order_and_agrees_with_tx_location_row_fo
         .expect("decodes");
     assert_eq!(rest.len(), 4);
     assert!(rest.iter().all(|(h, _)| *h != first));
+    cleanup(&path);
+}
+
+// ------------------------------------------------ the primary row (round 1)
+
+#[test]
+fn a_missing_primary_row_below_the_count_is_si9_on_every_by_id_read_whatever_the_side_rows_hold() {
+    // PR #800 review: the bound says the id exists; only the primary proves
+    // it. With `txs_pruned[id]` gone and the hash row, the segment and the
+    // output indices all still present, T4 and T5 must not serve them.
+    let path = tmp("tx-primary-hole");
+    let (store, _, plain, _) = tx_chain(&path);
+    let plain_id = store
+        .begin_read()
+        .expect("read")
+        .tx_location(&hash_of(&plain))
+        .expect("read")
+        .expect("recorded")
+        .id;
+    let count = store.begin_read().expect("read").tx_count().expect("read");
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut pruned = txn.open_table(TXS_PRUNED).expect("t");
+            pruned.remove(plain_id.to_raw()).expect("remove");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    assert!(
+        plain_id.to_raw() < count - 1,
+        "the hole is below the (now shorter) count, so the bound admits it"
+    );
+    for (name, err) in [
+        ("T4", snap.tx_prunable(plain_id).expect_err("primary hole")),
+        (
+            "T5",
+            snap.tx_output_indices(plain_id).expect_err("primary hole"),
+        ),
+    ] {
+        assert!(
+            matches!(
+                err,
+                StoreError::InvariantViolated(StoreInvariant::IdNotFresh)
+            ),
+            "{name}: a missing primary below the count is SI-9, got {err:?}"
+        );
+    }
+    // T3 reaches the same row by hash and names the table.
+    let err = snap.tx_record(&hash_of(&plain)).expect_err("primary hole");
+    assert!(is_si7_absent(&err, "txs_pruned"), "got {err:?}");
+    assert_eq!(store.connect_state(), ConnectState::Live);
     cleanup(&path);
 }
 

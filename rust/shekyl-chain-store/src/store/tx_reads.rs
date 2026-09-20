@@ -20,8 +20,12 @@
 //! - **By dense id** ([`prunable_at`], [`output_indices_at`]) —
 //!   [`AtIndex`]. `tx_id` is dense (SI-9: `txs_pruned`' entry count at write
 //!   time), so the count is the authority and every by-id read classifies
-//!   **bound first**: at or beyond the count is [`AtIndex::BeyondCount`] and
-//!   no row is read; below it a missing row is **SI-9**. `TxStorageId` has a
+//!   **bound first, then the primary**: at or beyond the count is
+//!   [`AtIndex::BeyondCount`] and no row is read; below it the primary
+//!   `txs_pruned[id]` must exist before any side table is consulted — a
+//!   side row present at an id whose primary is missing is not a recorded
+//!   transaction, it is the count lying (**SI-9**); and a missing side row
+//!   under a present primary is SI-9 or SI-7 by its leg. `TxStorageId` has a
 //!   public `from_raw`, so a forged or stale id is ordinary invalid input,
 //!   never corruption — which is why T4 is `AtIndex<Prunable>` and not a bare
 //!   two-state enum (STX-Q, round 4).
@@ -272,6 +276,33 @@ const fn not_dense() -> ReadFault {
     ReadFault::Invariant(StoreInvariant::IdNotFresh)
 }
 
+/// Whether a by-id read may proceed for `id`: the **admission** step every
+/// dense-id read takes before touching a side table (PR #800 review). Two
+/// facts, in order: the id is below the count (else `BeyondCount`, and no
+/// row is read), and the **primary** row `txs_pruned[id]` exists — the
+/// count is `txs_pruned`' length, so a missing primary below it is the
+/// count lying about the id space, **SI-9**, and a side row that happens
+/// to be present at that id (`txs_prunable_hash`, `tx_outputs`) must not
+/// be served as if the transaction were recorded. One helper, so T4 and
+/// T5 cannot disagree on what "recorded at `id`" means.
+enum Admitted {
+    /// Below the count and the primary row is present: read the side table.
+    Recorded,
+    /// At or beyond the count: nothing was ever recorded here.
+    Beyond,
+}
+
+fn admit<T: ReadTables>(txn: &T, id: TxStorageId) -> Result<Admitted, ReadFault> {
+    let primary = txn.table(TXS_PRUNED)?;
+    if let IdClass::Beyond = class_of(primary.len()?, id) {
+        return Ok(Admitted::Beyond);
+    }
+    if primary.get(id.to_raw())?.is_none() {
+        return Err(not_dense());
+    }
+    Ok(Admitted::Recorded)
+}
+
 /// The stored row projected to what a read hands out — the **one** place
 /// `TxIndex` becomes [`TxLocation`], so the field it drops is dropped once.
 pub(super) const fn project(row: TxIndex) -> TxLocation {
@@ -401,15 +432,16 @@ pub(super) fn record_at<T: ReadTables>(
 /// at `id`, bound first (module docs).
 ///
 /// At or beyond the count: [`AtIndex::BeyondCount`], no row read — a forged
-/// or stale id is invalid input, not corruption. Below it: the hash row
-/// must exist (leg (i); missing is **SI-7**), and then the segment's
-/// presence is the answer — [`Prunable::Retained`] or
-/// [`Prunable::Discarded`], leg (iii)'s one state.
+/// or stale id is invalid input, not corruption. Below it the primary row
+/// must exist (a hole is **SI-9**, [`admit`]); then the hash row must exist
+/// (leg (i); missing is **SI-7**), and then the segment's presence is the
+/// answer — [`Prunable::Retained`] or [`Prunable::Discarded`], leg (iii)'s
+/// one state.
 pub(super) fn prunable_at<T: ReadTables>(
     txn: &T,
     id: TxStorageId,
 ) -> Result<AtIndex<Prunable>, ReadFault> {
-    if let IdClass::Beyond = class_of(tx_count(txn)?, id) {
+    if let Admitted::Beyond = admit(txn, id)? {
         return Ok(AtIndex::BeyondCount);
     }
     let raw = id.to_raw();
@@ -425,12 +457,13 @@ pub(super) fn prunable_at<T: ReadTables>(
 
 /// **T5.** The `output_amounts` indices of the transaction at `id`'s
 /// outputs, in `vout` order — `tx_outputs[id]`, bound first. Replaces
-/// `get_tx_amount_output_indices`; a hole below the count is **SI-9**.
+/// `get_tx_amount_output_indices`; a hole below the count — in the primary
+/// ([`admit`]) or in `tx_outputs` itself — is **SI-9**.
 pub(super) fn output_indices_at<T: ReadTables>(
     txn: &T,
     id: TxStorageId,
 ) -> Result<AtIndex<TxOutputIndices>, ReadFault> {
-    if let IdClass::Beyond = class_of(tx_count(txn)?, id) {
+    if let Admitted::Beyond = admit(txn, id)? {
         return Ok(AtIndex::BeyondCount);
     }
     let table = txn.table(TX_OUTPUTS)?;
