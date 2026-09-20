@@ -614,9 +614,12 @@ pub const fn layer_is_selene(layer: u8) -> bool {
 // up segment `k` is read by two independently built stores — the wallet-side
 // shard store (`shekyl-curve-tree`) that serves segment bytes, and the
 // consensus reader in `shekyl-archival-retention` (`frozen_segment_count`:
-// bond admission and pop revert) — and by every challenge, whose leaf index
+// the D2 escalation operand, the coverage RPC, and pop revert — **not** bond
+// admission, which reads it nowhere; its shard predicate was ruled 2026-09-19
+// and is unbuilt, `docs/design/ARCHIVAL_BOND_ADD_ADMISSION.md` §3) — and by
+// every challenge, whose leaf index
 // is taken against the segment's recorded leaf count. A divergent partition
-// forks admission and revert away from the store. The derivation therefore
+// forks revert away from the store. The derivation therefore
 // lives here, beside the widths it is a function of, and both consumers take
 // it from this crate: the consensus side const-asserts its config-generated
 // `SEGMENT_LEAF_COUNT` against `leaves_per_segment()`, and the store side
