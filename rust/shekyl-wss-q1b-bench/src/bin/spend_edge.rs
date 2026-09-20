@@ -46,10 +46,16 @@ struct Args {
     #[arg(long, default_value_t = 6)]
     depth: u8,
 
-    /// Depth the sparse-versus-dense control runs at. Must be a depth whose
-    /// dense corpus is cheap to build.
-    #[arg(long, default_value_t = 4)]
-    control_depth: u8,
+    /// Depths the sparse-versus-dense control runs at. Repeatable.
+    ///
+    /// Two rungs by default, not one: a single rung proves sparse == dense at
+    /// *that* depth and leaves every deeper rung an extrapolation off the end
+    /// of one point. Two adjacent rungs show whether the ratio is flat, which
+    /// is what licenses the next one. Depth 5 (467 857 leaves, 60 MB) is the
+    /// deepest rung whose dense corpus is cheap to build; depth 6 is 2.28 GB,
+    /// which is the reason the sparse path exists at all.
+    #[arg(long = "control-depth", default_values_t = [4u8, 5u8])]
+    control_depths: Vec<u8>,
 
     /// Leaves to replay. Defaults to the worst-case window at `--depth`.
     #[arg(long)]
@@ -111,26 +117,35 @@ fn main() -> ExitCode {
         .window_leaves
         .unwrap_or(leaf_rate.leaves_per_block * REPLAY_WINDOW_BLOCKS);
 
-    eprintln!(
-        "── control: sparse vs dense at depth {} ──",
-        args.control_depth
-    );
-    let control = run_control(args.control_depth);
-    if !control.both_verified {
-        eprintln!("control arms did not both verify; refusing to report a denominator");
-        return ExitCode::from(3);
+    let mut controls: Vec<ControlExperiment> = Vec::new();
+    for depth in &args.control_depths {
+        eprintln!("── control: sparse vs dense at depth {depth} ──");
+        let control = run_control(*depth);
+        if !control.both_verified {
+            eprintln!("control arms did not both verify; refusing to report a denominator");
+            return ExitCode::from(3);
+        }
+        eprintln!(
+            "   {} leaves: dense {:.3} s vs sparse {:.3} s ({:+.1} %)",
+            control.dense_leaves, control.dense_s, control.sparse_s, control.divergence_pct
+        );
+        controls.push(control);
     }
-    let sparse_licensed = control.sparse_equals_dense;
+    // Every arm must hold. One arm passing while another fails is not a flat
+    // ratio -- it is a depth dependence, which is exactly what would make the
+    // extrapolation to the grading depth unsafe.
+    let sparse_licensed = !controls.is_empty() && controls.iter().all(|c| c.sparse_equals_dense);
+    let deepest_control = controls.iter().map(|c| c.tree_depth).max().unwrap_or(0);
     eprintln!(
-        "   dense {:.3} s vs sparse {:.3} s ({:+.1} %) -> sparse {}",
-        control.dense_s,
-        control.sparse_s,
-        control.divergence_pct,
+        "   -> sparse {} ({} rung(s), deepest {}; grading at {})",
         if sparse_licensed {
             "licensed"
         } else {
             "REFUSED"
-        }
+        },
+        controls.len(),
+        deepest_control,
+        args.depth
     );
 
     eprintln!("── corpus: {window_leaves} leaves over {REPLAY_WINDOW_BLOCKS} blocks ──");
@@ -192,17 +207,26 @@ fn main() -> ExitCode {
             } else {
                 "non-canonical"
             },
-            path_provenance: if sparse_licensed {
-                "synthesized sparse, licensed by the same-depth control"
+            // The provenance names the DISTANCE from the deepest control arm.
+            // "Licensed by the control" would be true only at a depth the
+            // control actually ran at; anywhere above it the claim is an
+            // extrapolation, and the record says how far.
+            path_provenance: if !sparse_licensed {
+                "dense, read off a real tree (the control refused the sparse arm)"
+            } else if args.depth <= deepest_control {
+                "synthesized sparse, licensed by a control AT the grading depth"
+            } else if args.depth == deepest_control + 1 {
+                "synthesized sparse, one rung above the deepest control arm"
             } else {
-                "dense, read off a real tree (control refused the sparse arm)"
+                "synthesized sparse, MORE THAN ONE RUNG above the deepest control arm"
             },
         },
         replay: replay_series,
         path_construction: path_series,
         proving: prove_series,
         budget,
-        paths_verified: proof_ok && control.both_verified,
+        controls: controls.clone(),
+        paths_verified: proof_ok && controls.iter().all(|c| c.both_verified),
         proxy_note: "replay proxy: leaf-layer hashing exact (dominant ~38x); \
                      upper-layer work under-modelled (2-3 layers vs ~6); net an \
                      upper bound, since build_layers rehashes every upper node \
@@ -210,7 +234,7 @@ fn main() -> ExitCode {
     };
 
     emit(&record, args.json.as_deref());
-    summarize(&record, &control);
+    summarize(&record, &controls);
 
     match record.budget.verdict {
         Verdict::Miss => ExitCode::from(1),
@@ -272,7 +296,7 @@ fn emit(record: &SpendEdgeRecord, path: Option<&str>) {
     }
 }
 
-fn summarize(record: &SpendEdgeRecord, control: &ControlExperiment) {
+fn summarize(record: &SpendEdgeRecord, controls: &[ControlExperiment]) {
     let b = &record.budget;
     eprintln!();
     eprintln!("── WSS-Q1(b) spend edge ──");
@@ -289,10 +313,13 @@ fn summarize(record: &SpendEdgeRecord, control: &ControlExperiment) {
         "  leaf rate      {} leaves/block (ceiling {} weight)",
         record.corpus.leaf_rate.leaves_per_block, record.corpus.leaf_rate.block_weight_ceiling
     );
-    eprintln!(
-        "  control        dense {:.3} s vs sparse {:.3} s ({:+.1} %)",
-        control.dense_s, control.sparse_s, control.divergence_pct
-    );
+    for c in controls {
+        eprintln!(
+            "  control d{}     dense {:.3} s vs sparse {:.3} s ({:+.1} %)",
+            c.tree_depth, c.dense_s, c.sparse_s, c.divergence_pct
+        );
+    }
+    eprintln!("  path source    {}", record.corpus.path_provenance);
     eprintln!(
         "  replay         {:.3} s (converged: {})",
         record.replay.median_s, record.replay.converged

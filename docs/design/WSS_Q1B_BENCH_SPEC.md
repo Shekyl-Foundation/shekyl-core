@@ -197,18 +197,28 @@ on a board the rig pins at 8 GB — hostile to build, and unnecessary.
 `proof::prove` takes `tree_depth` directly and the circuit pads each chunk to the
 layer width, so a path with one real child per layer should cost what a full one
 costs. **The bench does not take that on the padding comment's word.** It runs a
-**control experiment** (`fixture::ControlExperiment`, driven by `spend_edge
---control-depth`):
+**control experiment** (`fixture::ControlExperiment`, driven by repeatable
+`spend_edge --control-depth`):
 
 - **same depth**, dense path off a real tree versus a synthesized sparse path;
 - sparsity is the **only** variable, which is what makes a difference
   attributable to it;
-- run at a depth where both arms are cheap; the result licenses (or refuses) the
-  sparse path at depths where a dense corpus is not.
+- **at two adjacent rungs, not one** — depths 4 and 5 by default.
+
+**Why two rungs.** One rung proves sparse ≈ dense *at that depth* and leaves
+every deeper rung an extrapolation off the end of a single point. Two adjacent
+rungs show whether the ratio is **flat**, and it is the flatness that licenses
+the next rung. Depth 5 (467 857 leaves, 60 MB) is the deepest rung whose dense
+arm is cheap, so grading at depth 6 is **one** rung beyond the deepest control —
+and the record says exactly that: `path_provenance` names the *distance* from
+the deepest control arm rather than claiming the control covered the grading
+depth. Every arm must hold; one arm passing while another fails is not a flat
+ratio but a depth dependence, which is what would make the extrapolation unsafe.
 
 An earlier draft proposed comparing a **sparse depth-6** path against a **dense
 depth-4** one. That varies depth *and* sparsity at once and could not attribute
-a difference to either.
+a difference to either. A later draft ran one rung and called the result a
+licence for depth 6 — two layers the experiment never touched.
 
 A synthesized path's root is a genuine hash of the chain below it — the prover
 and the verifier both see a well-formed tree. What makes it synthetic is only
@@ -377,6 +387,29 @@ seconds, and it has no notion of a ruled threshold or a rig gate.
 **Nothing in the production dependency graph may depend on this crate.** That is
 enforced by `scripts/ci/check_bench_not_a_dependency.py`, with its own
 `--selftest` — a crate-doc sentence is not a check.
+
+### 6.1 Verification status of the two binaries, stated separately
+
+They are **not** equally exercised, and a spec that implied otherwise would be
+the kind of claim this lane exists to refuse.
+
+| | `spend_edge` | `open_edge` |
+| --- | --- | --- |
+| Unit tests | Covered — corpus, ladder, timing, fixture, `verify` round trip | Covered — projection and attribution, over synthetic samples |
+| Run end to end | **Yes**, at the worst-case window on an x86 dev box | **No live daemon run** |
+| Refusal paths run live | Yes — off-rig grading refused, exit 2 | Yes — off-rig grading refused (exit 2), unreachable daemon refused (exit 4) |
+
+**What the gap is and is not.** `open_edge`'s RPC surface is
+**compile-checked against the shared wire types** — `GetBlockRequest` /
+`GetBlockResponse`, the same types `block_fetch.rs` deserializes — so a renamed
+field breaks this build exactly as it breaks the wallet's. Its field paths
+into `ScannableBlock` are likewise compile-checked. What has **not** been
+observed is a real daemon answering: the round-trip floor, the per-block
+distribution, and the attribution have never run against live bytes.
+
+**First action at rig time: run `open_edge` against a local daemon before
+trusting any number it prints.** A one-block sample is enough to prove the
+surface; the projection needs a real sample.
 
 ---
 

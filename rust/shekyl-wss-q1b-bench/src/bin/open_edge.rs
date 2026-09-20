@@ -21,6 +21,7 @@ use clap::Parser;
 use serde::Serialize;
 use shekyl_engine_core::engine::daemon::DaemonClient;
 use shekyl_rpc_client::Rpc;
+use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
 use shekyl_wss_q1b_bench::openedge::{
     project, Attribution, BlockSample, Projection, RoundTripFloor,
 };
@@ -249,14 +250,26 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Wire bytes for one block, through the **shared** request/response types.
+///
+/// `GetBlockRequest` / `GetBlockResponse` are the same types `block_fetch.rs`
+/// deserializes, for the reason its own comment gives: a hand-rolled params
+/// object and a walk over an untyped reply are *"two definitions of one shape,
+/// and the one the daemon cannot see is the one that drifts."* A renamed field
+/// then fails this compile the same way it fails the wallet, instead of
+/// silently reporting zero bytes.
 async fn measure_bytes(client: &DaemonClient, height: u64) -> (u64, u64) {
-    let params = serde_json::json!({ "hash": "", "height": height, "fill_pow_hash": false });
-    let res: Result<serde_json::Value, _> = client.json_rpc_call("get_block", Some(params)).await;
-    let Ok(value) = res else { return (0, 0) };
-    let hex_len = value
-        .get("blob")
-        .and_then(serde_json::Value::as_str)
-        .map_or(0, str::len) as u64;
+    let request = GetBlockRequest {
+        hash: String::new(),
+        height,
+        fill_pow_hash: false,
+    };
+    let Ok(params) = serde_json::to_value(request) else {
+        return (0, 0);
+    };
+    let res: Result<GetBlockResponse, _> = client.json_rpc_call("get_block", Some(params)).await;
+    let Ok(response) = res else { return (0, 0) };
+    let hex_len = response.blob.len() as u64;
     // The blob arrives hex-encoded, so the decoded size is half the wire size.
     // Reporting one figure for both would understate the wire by half.
     (hex_len, hex_len / 2)

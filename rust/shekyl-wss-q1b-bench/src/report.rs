@@ -132,6 +132,11 @@ pub struct SpendEdgeRecord {
     pub proving: Series,
     /// The graded budget.
     pub budget: SpendBudget,
+    /// The sparse-versus-dense control, one arm per depth. The record carries
+    /// these because the denominator's path provenance depends on them: a
+    /// reader who does not see the control cannot tell whether the sparse path
+    /// was licensed or merely assumed.
+    pub controls: Vec<crate::fixture::ControlExperiment>,
     /// Whether every measured `Path` round-tripped through `verify`.
     pub paths_verified: bool,
     /// The proxy's stated direction of error.
