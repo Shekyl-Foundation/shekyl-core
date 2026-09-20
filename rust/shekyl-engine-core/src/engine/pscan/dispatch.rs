@@ -746,7 +746,7 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
         }
 
         // GF-7 emission (§3.7): at the submit call site, after the dispersal
-        // sleep. `at` is the logical block the due-check fired against;
+        // sleep. `at` is the claimed count the due-check fired against;
         // `persona` is the opaque wallet-local slot ordinal (payload
         // discipline: no wall-clock, no txid, no identity).
         #[cfg(feature = "gf7-hooks")]

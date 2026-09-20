@@ -169,12 +169,12 @@ The index-row D1 invariant, discharged in three parts:
    driver's input type is the pending-post seal, which carries only bond
    posts), not disciplinary.
 2. **At most one dispatch per sweep tick.** Distinct personas' posts have
-   independently-anchored due blocks (independent draws, independent
+   independently-anchored due counts (independent draws, independent
    `anchor_t0`), so same-tick collisions are rare in steady state — but a
    catch-up sweep after downtime makes *every* overdue post due on one
    tick, and co-launching them links the wallet's personas to each other
    by simultaneity. The driver dispatches the single overdue post with the
-   **lowest due block** (ties: lowest `anchor_t0`, then persona id — pinned
+   **lowest due count** (ties: lowest `anchor_t0`, then persona id — pinned
    so replay is deterministic) and leaves the rest for subsequent ticks.
    The added delay is monotone noise (§3.6).
 3. **Send-time dispersal within the tick.** A sweep tick is also a burst
