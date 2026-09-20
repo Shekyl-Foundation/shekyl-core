@@ -52,8 +52,9 @@
 # rows, when the index registry parses empty, or when NO row carries an
 # Owner: (a gate over a cell nobody writes has no subject).
 #
-# --selftest exercises: a doc owner resolves; a family owner resolves; a
-# completed/ path is refused; a traversal (`design/../completed/`) is refused;
+# --selftest exercises: a doc owner resolves; a family owner resolves (`RD-Q4`,
+# `SI-10`, and `DRS-E2` against a wildcard `DRS` row); a completed/ path is
+# refused; a traversal (`design/../completed/`) is refused;
 # a prose owner ("the E2 lane") is refused; a PR-only owner is refused; a
 # grandfathered row missing its heading is refused; a row neither
 # grandfathered nor owned is refused; the ratchet refuses a list above the
@@ -143,6 +144,27 @@ def under_design(rel: str, design_dir: str) -> bool:
     return target.startswith(base + os.sep) and os.path.isfile(target)
 
 
+def token_prefixes(token: str) -> list[str]:
+    """The family prefixes a token such as `SI-10`, `RD-Q4` or `DRS-E2` may
+    resolve under, finest first.
+
+    The token is handed to `family_prefix` WHOLE — `SI-10` derives `SI`;
+    gluing the regex groups back together made `SI10`, which derives `SI10`
+    and matches nothing (Bugbot on #804). And a registry row may be coarser
+    than the token: `**DRS-***` registers `DRS`, while `DRS-E2` derives
+    `DRS-E`, so the token's head before its first hyphen or digit is tried
+    too. Finest first, so `RD-Q4` reports `RD-Q`, not `RD`, when both exist.
+    """
+    out: list[str] = []
+    fine = family_prefix(token)
+    if fine:
+        out.append(fine)
+    head = re.match(r"[A-Z][A-Za-z]*", token)
+    if head and head.group(0) not in out:
+        out.append(head.group(0))
+    return out
+
+
 def resolves(owner: str, prefixes: set[str], design_dir: str) -> tuple[bool, str]:
     """Whether an Owner: value names something that outlives its landing."""
     if COMPLETED_RE.search(owner) and not DOC_PATH_RE.search(owner):
@@ -153,9 +175,9 @@ def resolves(owner: str, prefixes: set[str], design_dir: str) -> tuple[bool, str
             return True, f"live doc design/{rel}"
         return False, f"design/{rel} is not a live document under docs/design/ (missing, or a path that escapes the directory)"
     for m in TOKEN_RE.finditer(owner):
-        pref = family_prefix(m.group(1) + m.group(2))
-        if pref and pref in prefixes:
-            return True, f"family {pref}"
+        for pref in token_prefixes(m.group(0)):
+            if pref in prefixes:
+                return True, f"family {pref}"
     if PR_RE.search(owner):
         return False, "a PR number is not an owner on its own (PRs merge and close); name the doc or family it lands in"
     return False, "names neither a live docs/design/ document nor a registered identifier family"
@@ -274,6 +296,13 @@ def selftest() -> int:
         doc_owner = "- **A**\n  - Target: pre-genesis\n  - Owner: [`LIVE.md`](design/LIVE.md) §4\n"
         fam_owner = "- **B**\n  - Target: pre-genesis\n  - Owner: the RD-Q4 lane\n"
         assert run(doc_owner + fam_owner, []) == [], "doc and family owners resolve"
+        # A hyphen-then-digits token (`SI-10`) and a token finer than its
+        # wildcard registry row (`DRS-E2` against `DRS`) both resolve.
+        si_owner = "- **S**\n  - Target: pre-genesis\n  - Owner: SI-10 (the store-invariant register)\n"
+        drs_owner = "- **D**\n  - Target: pre-genesis\n  - Owner: DRS-E2\n"
+        assert run(doc_owner + si_owner + drs_owner, []) == [], "SI-10 and DRS-E2 resolve"
+        assert token_prefixes("SI-10") == ["SI"], token_prefixes("SI-10")
+        assert token_prefixes("DRS-E2") == ["DRS-E", "DRS"], token_prefixes("DRS-E2")
 
         bad = [
             ("- **C**\n  - Target: pre-genesis\n  - Owner: the E2 lane\n", "names neither"),
@@ -328,7 +357,7 @@ def selftest() -> int:
             pass
         else:
             raise AssertionError("empty registry must be a missing subject")
-    print("followups owners selftest: 16 cases OK")
+    print("followups owners selftest: 18 cases OK")
     return 0
 
 
