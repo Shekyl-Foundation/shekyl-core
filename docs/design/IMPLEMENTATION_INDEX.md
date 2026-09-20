@@ -213,6 +213,16 @@ items start with an index row).
   target on `dev`; *decision-anchored* items (round closures, wire freezes,
   contract docs — no code artifact) cite the commit hash or PR number of the
   doc edit that closed them.
+- **A PR that lands code flips its own rows.** The code and the row that
+  says it landed travel in one PR, so `dev` never holds a landed row without
+  its code or the code without its row. Until the merge the claim is true of
+  the branch tree, not of `dev`; the stamp therefore names the `dev` commit
+  the branch stands on **and says the checks ran on the branch tree
+  containing it** — that sentence is the disclosure, and the merge is what
+  makes the claim true on `dev` (rule 94.3's "landed code" is then the
+  merge). There is no separate "carried on branch" status: it would cost a
+  docs-only follow-up PR per increment to flip, and the row it produced
+  would be true of exactly the same tree.
 - **Section contract:** rule 94 refers to §2 (identifier-family registry),
   §4–§5 (live / built-unwired / missing inventory), and §6
   (known-stale-statuses ledger) by role. Their meanings — and this numbering
