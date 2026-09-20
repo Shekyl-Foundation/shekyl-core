@@ -298,6 +298,60 @@ timed path would change what is being timed.
 refetches more slowly and is not graded by the 5 s threshold — a stated scope,
 not an omission. The record carries the posture string.
 
+### 4.4 The corpus density — RULED 2026-09-20, and it differs from the spend edge
+
+**The open edge grades at a stated nominal density: the full-reward zone,
+`MIN_BLOCK_WEIGHT` = 300 000 weight per block.** The adversarial window is an
+**accepted long-tail**, covered by
+[rule 80](../../.cursor/rules/80-usability.mdc) progress indication rather than
+by the 5 s budget.
+
+**Why this is a ruling and not an oversight.** Do the arithmetic the spend edge
+invites and the open edge's answer is pre-written: 790 blocks at the
+2 400 000-weight sustained ceiling is **≈ 1.9 GB decoded** (≈ 3.8 GB on the
+wire, which is hex). No hardware refetches that in 5 s. **Grading there would
+write §6.3.4 row 3's miss response — the companion file — before measuring
+anything**, which is precisely the failure the amendment above was made to
+avoid, arrived at from the other direction.
+
+**The test that picks the density: can the measurement still surprise you?**
+
+| Density | Outcome | Verdict as evidence |
+| --- | --- | --- |
+| Adversarial ceiling (2.4 MB) | ~1.9 GB in 5 s | Foregone **fail** |
+| Empty / coinbase-only | ~1.4 kB per block | Foregone **pass** |
+| **Full-reward zone (300 kB)** | 790 × 300 kB ≈ **237 MB** in 5 s ⇒ ~47 MB/s decoded | **Genuinely open** |
+
+Whether a Pi 4 sustains that over JSON-RPC with a hex-encoded blob is a real
+question, which is what makes the zone the honest place to grade.
+
+**Why the two edges may differ, stated so it does not read as inconsistency.**
+§6.3.4 row 2 rules the spend edge at worst case for a recorded reason — *"a
+measurement taken on a quiet chain would grade green and reopen on a busy
+one"*. That argument is about an **architecture**: the spend edge decides
+whether the proving state is a store, and the cost is paid **on every spend**.
+The open edge decides a **local mitigation** — persist the buffer or refetch it
+— and is paid **once per launch**, where a slow path is a progress bar rather
+than a broken design. Different stake, different density. The asymmetry is the
+ruling.
+
+**The nominal is a stated judgment, not a derivation** — the same class as
+§6.3.4's 2 s and 15 % budgets, and labelled as such in
+`corpus::nominal_block_weight`. There is no chain history to take a typical
+fill from, and the zone is an upper bound on the un-penalized region rather
+than a measured average. **Reopening criterion (rule 21):** a measured
+distribution of real block weights once a chain exists, or a crossover
+measurement showing the 5 s budget breaks below this density.
+
+**The ruling is enforced, not merely written.** `open_edge` measures the
+sampled blocks' decoded bytes against the graded weight and **withholds a
+verdict** when the corpus is below `MIN_CORPUS_DENSITY_FRACTION` (50 %) of it —
+reported as its own `ungraded_because`, separately from the rig check. The
+first live run reads *"1432 B/block measured vs 300000 graded (0.5 % — TOO THIN
+TO GRADE)"*, so its 0.2 s **cannot** be read as a pass. A sample far below the
+density the budget is stated at cannot fail, and a pass over it would be a pass
+for the wrong reason.
+
 ---
 
 ## 5. The rig protocol
@@ -514,4 +568,6 @@ round-trip term alone reached 5 s.
 | 2026-09-20 | Denominator is `proof::prove` directly — driving `sign_transaction` would fold BP+ and PQC signing into it |
 | 2026-09-20 | Leaf rate derived from `block_weight_limit` + the surge clamp + `predict_weight`, **not** from `config/consensus_constants.json`, which carries no weight ceiling |
 | 2026-09-20 | Rig gate split into **enforced** (arch, userland, RAM) and **attested** (storage, thermals); "sustained" became a convergence criterion |
+| 2026-09-20 | **The open edge grades at a stated nominal density (the full-reward zone), not at the adversarial ceiling** (§4.4). 790 blocks at the ceiling is ≈ 1.9 GB decoded, so grading there writes the companion-file miss response before measuring it. The zone is the density at which the measurement can still surprise you. The asymmetry with the spend edge is deliberate: that edge decides an architecture and is paid per spend, this one decides a local mitigation and is paid once per launch. Enforced by a corpus-density gate that withholds the verdict rather than by a sentence |
+| 2026-09-20 | **`per_block_advance_worst_case_s` added to the record**: the replay term over the blocks it covers. It is what decides whether a spend-edge miss kills the design or moves the work, and a reader should not need a calculator to see it |
 | 2026-09-20 | **A wall-clock stop added beside the iteration cap**, found by running the harness rather than by reading it: the first worst-case run made plain that 60 unconverged iterations of a multi-minute replay is hours on the rig. The count bounds a fast noisy workload; only the clock bounds a slow one |

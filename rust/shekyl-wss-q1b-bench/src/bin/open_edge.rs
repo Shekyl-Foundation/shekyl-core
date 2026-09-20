@@ -22,8 +22,9 @@ use serde::Serialize;
 use shekyl_engine_core::engine::daemon::DaemonClient;
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
+use shekyl_wss_q1b_bench::corpus::nominal_block_weight;
 use shekyl_wss_q1b_bench::openedge::{
-    project, Attribution, BlockSample, Projection, RoundTripFloor,
+    judge_density, project, Attribution, BlockSample, CorpusDensity, Projection, RoundTripFloor,
 };
 use shekyl_wss_q1b_bench::report::{ProverPin, Verdict, OPEN_EDGE_BUDGET_S, SCHEMA_VERSION};
 use shekyl_wss_q1b_bench::rig::{self, Environment, RigVerdict, StorageAttestation};
@@ -98,6 +99,10 @@ struct OpenEdgeRecord {
     build_pin: ProverPin,
     projection: Projection,
     round_trip_floor: RoundTripFloor,
+    /// The density the budget is graded at, and whether the sample reached it.
+    density: CorpusDensity,
+    /// Why grading was withheld, when it was.
+    ungraded_because: Option<&'static str>,
     threshold_s: f64,
     verdict: Verdict,
     /// Which remedy a miss fires — the §6.3.4 row 3 amendment.
@@ -196,12 +201,24 @@ async fn main() -> ExitCode {
     }
 
     let projection = project(&samples, floor);
-    let verdict = if !rig_verdict.grading {
-        Verdict::Ungraded
+    let density = judge_density(&samples, nominal_block_weight());
+    // Two independent reasons to withhold a verdict, reported separately: the
+    // wrong machine, and a corpus too thin for the budget to bite. A pass over
+    // coinbase-only blocks would be a pass for the wrong reason.
+    let (verdict, ungraded_because) = if !rig_verdict.grading {
+        (
+            Verdict::Ungraded,
+            Some("not the pinned rig, or --grade not given"),
+        )
+    } else if !density.sufficient {
+        (
+            Verdict::Ungraded,
+            Some("the sampled blocks are below the graded density -- this corpus cannot fail"),
+        )
     } else if projection.projected_s <= OPEN_EDGE_BUDGET_S {
-        Verdict::Pass
+        (Verdict::Pass, None)
     } else {
-        Verdict::Miss
+        (Verdict::Miss, None)
     };
 
     let miss_response = match projection.attribution {
@@ -225,6 +242,8 @@ async fn main() -> ExitCode {
         build_pin: ProverPin::capture(),
         projection,
         round_trip_floor: floor,
+        density,
+        ungraded_because,
         threshold_s: OPEN_EDGE_BUDGET_S,
         verdict,
         miss_response,
@@ -302,5 +321,19 @@ fn summarize(record: &OpenEdgeRecord) {
         p.attribution, p.round_trip_term_s, p.volume_term_s
     );
     eprintln!("  miss response  {}", record.miss_response);
+    eprintln!(
+        "  density        {} B/block measured vs {} graded ({:.1} % -- {})",
+        record.density.measured_bytes_per_block,
+        record.density.graded_at_weight,
+        record.density.fraction_of_graded * 100.0,
+        if record.density.sufficient {
+            "sufficient"
+        } else {
+            "TOO THIN TO GRADE"
+        }
+    );
     eprintln!("  VERDICT        {:?}", record.verdict);
+    if let Some(why) = record.ungraded_because {
+        eprintln!("                 {why}");
+    }
 }

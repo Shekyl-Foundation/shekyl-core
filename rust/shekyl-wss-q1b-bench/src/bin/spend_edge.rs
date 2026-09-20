@@ -187,7 +187,8 @@ fn main() -> ExitCode {
         },
     );
 
-    let delta_s = replay_series.graded_s() + path_series.graded_s();
+    let replay_median = replay_series.graded_s();
+    let delta_s = replay_median + path_series.graded_s();
     let budget = SpendBudget::grade(delta_s, prove_series.graded_s(), rig_verdict.grading);
 
     let record = SpendEdgeRecord {
@@ -225,6 +226,9 @@ fn main() -> ExitCode {
         path_construction: path_series,
         proving: prove_series,
         budget,
+        // The replay term alone over the window it covers -- path construction
+        // is not per-block work and would inflate it.
+        per_block_advance_worst_case_s: replay_median / REPLAY_WINDOW_BLOCKS as f64,
         controls: controls.clone(),
         paths_verified: proof_ok && controls.iter().all(|c| c.both_verified),
         proxy_note: "replay proxy: leaf-layer hashing exact (dominant ~38x); \
@@ -329,6 +333,10 @@ fn summarize(record: &SpendEdgeRecord, controls: &[ControlExperiment]) {
         record.path_construction.median_s
     );
     eprintln!("  DELTA          {:.3} s", b.delta_s);
+    eprintln!(
+        "  per block      {:.0} ms  (amortized frontier advance, worst case)",
+        record.per_block_advance_worst_case_s * 1000.0
+    );
     eprintln!(
         "  proving        {:.3} s (converged: {})",
         b.proving_s, record.proving.converged

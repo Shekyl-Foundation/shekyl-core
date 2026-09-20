@@ -46,6 +46,55 @@ use crate::timing::duration_s;
 /// Share of projected cost above which one term is called dominant.
 pub const DOMINANCE_THRESHOLD: f64 = 0.60;
 
+/// Fraction of the graded density a corpus must reach before a run may grade.
+///
+/// A sample far below the density the budget is stated at cannot fail, so a
+/// pass over it is a pass for the wrong reason. The first live run measured
+/// **1 432 B** per block against a nominal target three orders of magnitude
+/// larger — coinbase-only regtest blocks — and the harness must say so rather
+/// than report 0.2 s and a green tick.
+pub const MIN_CORPUS_DENSITY_FRACTION: f64 = 0.50;
+
+/// Whether the sampled blocks were dense enough for the budget to bite.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct CorpusDensity {
+    /// Mean decoded bytes per sampled block.
+    pub measured_bytes_per_block: u64,
+    /// The per-block weight the budget is graded at
+    /// ([`crate::corpus::nominal_block_weight`]).
+    pub graded_at_weight: u64,
+    /// `measured / graded`.
+    pub fraction_of_graded: f64,
+    /// Whether the corpus is dense enough to grade against.
+    pub sufficient: bool,
+}
+
+/// Judge a sample's density against the weight the budget is stated at.
+///
+/// Weight and decoded bytes are not the same unit — weight carries the
+/// Bulletproof+ clawback — but they agree within a small factor for ordinary
+/// transactions, and the question here is three-orders-of-magnitude coarse.
+/// Treating them as comparable is stated rather than assumed.
+#[must_use]
+pub fn judge_density(samples: &[BlockSample], graded_at_weight: u64) -> CorpusDensity {
+    let measured = if samples.is_empty() {
+        0
+    } else {
+        samples.iter().map(|s| s.decoded_bytes).sum::<u64>() / samples.len() as u64
+    };
+    let fraction = if graded_at_weight == 0 {
+        0.0
+    } else {
+        measured as f64 / graded_at_weight as f64
+    };
+    CorpusDensity {
+        measured_bytes_per_block: measured,
+        graded_at_weight,
+        fraction_of_graded: fraction,
+        sufficient: fraction >= MIN_CORPUS_DENSITY_FRACTION,
+    }
+}
+
 /// Which term an open-edge cost sits in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]

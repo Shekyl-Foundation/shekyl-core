@@ -132,6 +132,17 @@ pub struct SpendEdgeRecord {
     pub proving: Series,
     /// The graded budget.
     pub budget: SpendBudget,
+    /// **The amortized form's refresh-side cost**: worst-case replay seconds
+    /// divided by the blocks replayed.
+    ///
+    /// Derived rather than left to a reader with a calculator, because it is
+    /// the number that decides what a miss on the spend edge *means*. A delta
+    /// that misses by 48× as a spend-time copy-and-replay is not the same
+    /// finding as one whose amortized form costs a fraction of a block
+    /// interval — the first kills the design, the second moves the work.
+    /// Compare it against the block cadence: at 120 s, this figure over 1.2 s
+    /// is a 1 % duty cycle.
+    pub per_block_advance_worst_case_s: f64,
     /// The sparse-versus-dense control, one arm per depth. The record carries
     /// these because the denominator's path provenance depends on them: a
     /// reader who does not see the control cannot tell whether the sparse path

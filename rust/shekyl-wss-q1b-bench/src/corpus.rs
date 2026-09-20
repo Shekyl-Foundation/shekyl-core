@@ -158,6 +158,34 @@ pub struct LeafShape {
     pub weight: usize,
 }
 
+/// The **nominal** per-block weight the open edge grades at.
+///
+/// The full-reward zone, [`MIN_BLOCK_WEIGHT`] — a block that fills the space
+/// every block gets regardless of the dynamic median.
+///
+/// **This is a stated judgment, not a derivation**, in the same class as
+/// §6.3.4's 2 s and 15 % budgets. There is no chain history to take a typical
+/// fill from, and the zone is an *upper bound on the un-penalized region*
+/// rather than a measured average — so grading here is conservative in the
+/// right direction without being the adversarial ceiling.
+///
+/// **Why this value and not another:** it is the density at which the
+/// measurement can still surprise you. The adversarial ceiling
+/// ([`sustained_block_weight_ceiling`]) is a foregone *fail* — 790 blocks at
+/// 2.4 MB is ~1.9 GB decoded, which no hardware refetches in 5 s, so grading
+/// there writes the miss response before measuring it. An empty chain is a
+/// foregone *pass*. The zone is neither: 790 × 300 kB ≈ 237 MB in 5 s is
+/// ~47 MB/s decoded (about twice that on the wire, which is hex), and whether
+/// a Pi 4 does that over JSON-RPC is a genuinely open question.
+///
+/// **Reopening criterion (rule 21):** a measured distribution of real block
+/// weights, once a chain exists, or a crossover measurement showing the 5 s
+/// budget breaks below this density.
+#[must_use]
+pub fn nominal_block_weight() -> u64 {
+    MIN_BLOCK_WEIGHT as u64
+}
+
 /// Worst-case leaves per block at a stated tree depth.
 ///
 /// Every output becomes a leaf: §6.3.2 row 1 verified that maturity is the
@@ -176,8 +204,17 @@ pub struct LeafShape {
 /// the result.
 #[must_use]
 pub fn worst_case_leaves_per_block(tree_depth: u8) -> LeafRate {
+    leaves_per_block_at(tree_depth, sustained_block_weight_ceiling())
+}
+
+/// Leaves per block at a stated per-block weight.
+///
+/// The density is a parameter because the two edges grade at different ones,
+/// and that asymmetry is a ruling rather than an oversight — see
+/// [`nominal_block_weight`] and `WSS_Q1B_BENCH_SPEC.md` §4.4.
+#[must_use]
+pub fn leaves_per_block_at(tree_depth: u8, ceiling: u64) -> LeafRate {
     let shape = densest_leaf_shape(tree_depth);
-    let ceiling = sustained_block_weight_ceiling();
     let txs = ceiling / shape.weight as u64;
     LeafRate {
         tree_depth,
