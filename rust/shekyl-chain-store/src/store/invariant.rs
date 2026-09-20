@@ -90,6 +90,27 @@ pub enum StoreInvariant {
         /// The `properties` key of the cell whose fold overflowed.
         cell: &'static str,
     },
+    /// **SI-10** — recorded cumulative work strictly increases with height:
+    /// `block_info[h].cumulative_difficulty > block_info[h−1].cumulative_difficulty`
+    /// for every recorded `h ≥ 1`, because every block's target is at least
+    /// one (CEN-D6, `Target` is `NonZeroU128`).
+    ///
+    /// The belt beneath CEN-D4. Unlike the rows above it is **not armed by a
+    /// store write site** — the store records the work the verdict carries
+    /// and computes none (C2-R8 Q4) — but by the **validator reading the
+    /// store**: `D4`'s window walk over `BatchView` observes a height below
+    /// its parent (`Corrupt::CumulativeDifficultyNotMonotone`) or a full
+    /// LWMA window with no increase (`Corrupt::ZeroTarget`) and returns a
+    /// `Fault::Corrupt`, which the ingest pipeline hands to
+    /// [`WriteBatch::refuse_corrupt`](super::WriteBatch::refuse_corrupt) to
+    /// arm this row. The validator saw what a belt would have seen; the
+    /// store's halt is the consequence (DRS-E2 RD-Q4).
+    WorkNotIncreasing {
+        /// The recorded height whose cumulative work is not above its
+        /// parent's — or, for a window that derived zero, the connecting
+        /// height whose window it was.
+        height: u64,
+    },
     /// **SI-9** — store-derived ids are dense and fresh: `tx_id`,
     /// `output_id` and the per-amount `amount_index` are the owning table's
     /// entry count at write time, and the slot an insert targets under one
@@ -111,6 +132,7 @@ impl StoreInvariant {
             Self::TxHashNotFresh => 3,
             Self::RootRewritten => 4,
             Self::UndoLogIncoherent { .. } => 6,
+            Self::WorkNotIncreasing { .. } => 10,
             Self::CellCorrupt { .. } => 7,
             Self::FoldOverflow { .. } => 8,
             Self::IdNotFresh => 9,
@@ -146,6 +168,12 @@ impl core::fmt::Display for StoreInvariant {
                 "a store-derived id (tx_id / output_id / amount_index) names an occupied slot; \
                  the table's count and its keys disagree",
             ),
+            Self::WorkNotIncreasing { height } => write!(
+                f,
+                "recorded cumulative work does not increase at height {height}; the validator \
+                 read a store whose block_info rows contradict CEN-D4/D6, rebuild from the \
+                 block corpus"
+            ),
             Self::UndoLogIncoherent { height, fault } => write!(
                 f,
                 "undo log at height {height}: {fault}; the journal no longer describes the \
@@ -172,6 +200,7 @@ impl core::error::Error for StoreInvariant {
                 ..
             }
             | Self::KeyImageNotFresh
+            | Self::WorkNotIncreasing { .. }
             | Self::TipMismatch
             | Self::TxHashNotFresh
             | Self::RootRewritten

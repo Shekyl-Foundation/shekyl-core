@@ -14,13 +14,14 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{form, validate, FormAttempt, RowStatus, RuleSet, RuleSetId};
+use shekyl_chain_rules::{form, validate, ChainView, FormAttempt, RowStatus, RuleSet, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
 use super::connect_fixtures::{
-    candidate, coinbase, connect_genesis, facts, judge, spend, FixtureSubstrate, GENESIS_ID,
+    candidate, coinbase, connect_chain, connect_genesis, facts, judge, spend, FixtureSubstrate,
+    GENESIS_ID,
 };
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
@@ -456,7 +457,7 @@ fn pop_by_replay_returns_the_store_to_the_state_before_the_block() {
 
 // ---------------------------------------------------------------- belts
 
-fn expect_row(out: &Result<Connected, TestErr>, want: StoreInvariant) {
+fn expect_row<T: core::fmt::Debug + PartialEq>(out: &Result<T, TestErr>, want: StoreInvariant) {
     assert_eq!(
         *out,
         Err(TestErr::Store(StoreError::from(want).to_string())),
@@ -497,6 +498,101 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
             at_height: BlockHeight::from_raw(2),
             row: StoreInvariant::TipMismatch,
         }
+    );
+    cleanup(&path);
+}
+
+// --- SI-10: the validator's Corrupt arms the halt (DRS-E2 RD-Q4) --------
+
+#[test]
+fn a_corrupt_seen_by_the_validator_poisons_the_batch_and_halts_the_writer() {
+    // The pipeline shape: read the branded view, get `Fault::Corrupt` back
+    // from `validate`, hand it in. The store did not see the violation; it
+    // supplies the consequence — poison, no commit, writer halted at the
+    // connecting height the view read noted (§3.6.2).
+    let path = tmp("connect-refuse-corrupt");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new(), Vec::new()]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view(); // notes tip + 1 = 2
+        Err(batch
+            .refuse_corrupt(
+                shekyl_chain_rules::Corrupt::CumulativeDifficultyNotMonotone {
+                    at: BlockHeight::from_raw(1),
+                },
+            )
+            .into())
+    });
+    expect_row(&out, StoreInvariant::WorkNotIncreasing { height: 1 });
+    assert_eq!(StoreInvariant::WorkNotIncreasing { height: 1 }.row(), 10);
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(2),
+            row: StoreInvariant::WorkNotIncreasing { height: 1 },
+        }
+    );
+    // Halted means halted: a fresh batch's connect is refused before it
+    // reaches the tables.
+    let again: Result<Connected, TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let tip = ChainView::tip(&view)?.expect("two blocks").hash;
+        let cand = candidate(2, tip, Vec::new());
+        Ok(batch.connect(judge(&view, cand)?, facts(2, 0), GENESIS_ID)?)
+    });
+    assert!(again.is_err(), "the writer stays halted: {again:?}");
+    cleanup(&path);
+}
+
+#[test]
+fn refusing_a_corrupt_is_chain_work_even_when_nothing_else_in_the_batch_was() {
+    // No `chain_view` first: the method notes the connecting height itself,
+    // so the halt fires — §3.6.2's "no chain work, no halt" cannot apply to
+    // a batch whose chain was just found inconsistent.
+    let path = tmp("connect-refuse-corrupt-notes");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new()]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::ZeroTarget)
+            .into())
+    });
+    // ZeroTarget names the connecting height: the window with no increase
+    // ends at its parent.
+    expect_row(&out, StoreInvariant::WorkNotIncreasing { height: 1 });
+    assert_eq!(
+        store.connect_state(),
+        ConnectState::Halted {
+            at_height: BlockHeight::from_raw(1),
+            row: StoreInvariant::WorkNotIncreasing { height: 1 },
+        }
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn a_cumulative_difficulty_overflow_is_the_fold_belt_not_a_new_row() {
+    let path = tmp("connect-refuse-corrupt-overflow");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[Vec::new()]);
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let _view = batch.chain_view();
+        Err(batch
+            .refuse_corrupt(shekyl_chain_rules::Corrupt::CumulativeDifficultyOverflow)
+            .into())
+    });
+    expect_row(
+        &out,
+        StoreInvariant::FoldOverflow {
+            cell: "block_info.cumulative_difficulty",
+        },
+    );
+    assert_eq!(
+        StoreInvariant::FoldOverflow {
+            cell: "block_info.cumulative_difficulty"
+        }
+        .row(),
+        8
     );
     cleanup(&path);
 }
