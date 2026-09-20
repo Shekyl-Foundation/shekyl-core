@@ -349,10 +349,17 @@ different responses.
 **There are two hard stops, and both are needed.** An iteration cap alone is not
 a bound: the worst-case replay is a multi-minute operation on the rig, so 60
 unconverged iterations of it is *hours* — a harness that could run for an
-unbounded time on the very machine it exists to measure. So the loop stops at
+unbounded time on the very machine it exists to measure. So each loop stops at
 **60 iterations or 30 minutes, whichever comes first**. The wall budget is a
 parameter rather than only a constant, so a test can reach it: a limit no test
 can exercise is a limit nobody has seen work.
+
+**The cap is per series, not per run** — stated because it is the kind of
+detail a reader would otherwise assume the other way. A `spend_edge` run times
+three series (replay, path construction, proving) plus two per control arm, so
+a fully unconverged run is bounded by that count times the budget, not by the
+budget. Each series reports its own `stopped_because`, so a run that took the
+long path says which measurement did it.
 
 **The whole per-iteration series is in the record**, so a reader can watch the
 throttle happen instead of taking the converged figure on trust.
@@ -406,24 +413,98 @@ the kind of claim this lane exists to refuse.
 | | `spend_edge` | `open_edge` |
 | --- | --- | --- |
 | Unit tests | Covered — corpus, ladder, timing, fixture, `verify` round trip | Covered — projection and attribution, over synthetic samples |
-| Run end to end | **Yes**, at the worst-case window on an x86 dev box | **No live daemon run** |
-| Refusal paths run live | Yes — off-rig grading refused, exit 2 | Yes — off-rig grading refused (exit 2), unreachable daemon refused (exit 4) |
+| Run end to end | **Yes**, at the worst-case window on an x86 dev box | **Yes**, against a live `shekyld --regtest` |
+| Refusal paths run live | Off-rig grading refused, exit 2 | Off-rig grading refused (exit 2), unreachable daemon refused (exit 4) |
 
-**What the gap is and is not.** `open_edge`'s RPC surface is
-**compile-checked against the shared wire types** — `GetBlockRequest` /
+Both binaries have now been run. `open_edge`'s RPC surface is additionally
+compile-checked against the **shared** wire types — `GetBlockRequest` /
 `GetBlockResponse`, the same types `block_fetch.rs` deserializes — so a renamed
-field breaks this build exactly as it breaks the wallet's. Its field paths
-into `ScannableBlock` are likewise compile-checked. What has **not** been
-observed is a real daemon answering: the round-trip floor, the per-block
-distribution, and the attribution have never run against live bytes.
+field breaks this build exactly as it breaks the wallet's.
 
-**First action at rig time: run `open_edge` against a local daemon before
-trusting any number it prints.** A one-block sample is enough to prove the
-surface; the projection needs a real sample.
+**One live-run detail worth carrying:** `shekyld` exits on stdin EOF. A
+background job inherits its parent's stdin, so a shell driver must hold a pipe
+open (the Rust harness gives it a piped stdin and keeps the handle). A driver
+that does not gets a daemon that binds its RPC port, logs
+*"EOF on stdin, exiting"*, and is gone before the first request.
 
 ---
 
-## 7. Decision log
+## 7. First runs — 2026-09-20, x86 dev box
+
+**Measurements, not verdicts.** Both records are `"verdict": "ungraded"`: this
+is not the rig. They are recorded because the schema and the model are easier
+to review against real output than against a description of it, and because two
+of them say something the rig run will not change.
+
+### 7.1 Spend edge — the worst-case window misses by a wide margin
+
+| Term | Value |
+| --- | --- |
+| Window | 765 600 leaves over 725 blocks (1 056 leaves/block at depth 6) |
+| Replay | **96.8 s**, converged |
+| Path read-off + `Path` construction | 0.001 s |
+| **Delta** | **96.8 s** |
+| **Denominator** (`proof::prove`, 2-in, depth 6) | **1.113 s**, converged |
+| Threshold | **2.0 s** — the **absolute floor** binds, the 15 % arm is 0.17 s |
+| Ratio | 8 699 % |
+
+**Read it as: ~48× over budget on hardware far faster than the rig.** The
+direction is not in doubt even though the magnitude on a Cortex-A72 is, so
+§6.3.4 row 2's pre-registered miss response — **amortized replay first** — is
+the likely landing, and `WSS-Q1`(b) reopens only if the amortized form also
+fails. This bench does not settle that: the amortized form is unbuilt, and the
+rig grades.
+
+**Note which arm binds.** At a 1.1 s denominator, 15 % is 0.17 s, so the
+**2 s floor is the whole threshold**. A ratio-only record would have reported
+"8 699 % of proving" and hidden that the budget being missed is an absolute
+one — which is exactly why §6.3.4 asks for the seconds beside the ratio.
+
+**The byproduct §6.3.4 wanted:** FCMP++ proving time for a 2-in canonical
+transaction at depth 6 is **1.113 s on x86**. Not the Cortex-A72 figure the
+project wants — that needs the rig — but the first measured number of its kind
+here, and the rig run yields the A72 one for free.
+
+**The sparse-path control held at every rung run:** −1.4 % at depth 3, +0.2 %
+and +0.0 % at depth 4.
+
+### 7.2 Open edge — comfortably inside budget, and round-trip bound
+
+Against a live `shekyld --regtest`, 40 blocks mined, 30 sampled.
+
+| Term | Value |
+| --- | --- |
+| Round-trip floor | **224 µs** (50 samples, loopback) |
+| Per block | median 0.2 ms, p95 0.3 ms |
+| Projected over 790 blocks | **1 580 round trips, 0.197 s** |
+| Threshold | 5.0 s |
+| Attribution | **round-trip bound** — 0.197 s round trips, ~0.000 s volume |
+
+**This confirms the model correction empirically**: the cost is in round trips,
+and the volume term is not where it lives. That is what §6.3.4 row 3's
+amendment was made for.
+
+**Three reasons this is not the whole answer, stated because the number looks
+reassuring:**
+
+1. **Regtest blocks are coinbase-only, so the fetch makes 2 round trips per
+   block, not 3** — the record says `2.0` exactly. `get_transactions` is never
+   called because there are no non-miner transactions. A real chain pays the
+   third call, so the round-trip count is ~50 % higher (≈ 2 370).
+2. **The volume term is untested, not measured as zero.** These blocks carry
+   **1 432 B** decoded apiece. A worst-case chain block is three orders of
+   magnitude larger, and at that size the volume term is a different quantity
+   entirely. The `round-trip bound` attribution here is as much an artifact of
+   an empty corpus as a finding about the path. **Owed: a corpus with realistic
+   block weights**, which regtest coinbase mining cannot produce — it needs a
+   wallet spending into the blocks.
+3. **Loopback on a fast x86.** The Pi's per-round-trip floor will be higher, and
+   1 580–2 370 round trips multiply it.
+
+Even so, the headroom is large: the floor would have to rise ~25× before the
+round-trip term alone reached 5 s.
+
+## 8. Decision log
 
 | Date | Decision |
 | --- | --- |
