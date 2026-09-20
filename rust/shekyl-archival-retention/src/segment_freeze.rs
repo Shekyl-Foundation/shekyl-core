@@ -27,8 +27,13 @@
 //! it to `shekyl_fcmp::tree::leaves_per_segment()` — the one partition
 //! derivation, which the wallet-side shard store also takes from that crate
 //! (`V3_WALLET_DECISION_LOG.md` 2026-09-17, two stores) — so neither a width
-//! change nor a config edit can move this crate's admission and pop revert
-//! away from the store. Level 2 was gate-2's provisional sizing; the freeze
+//! change nor a config edit can move this crate's pop revert away from the
+//! store. (*Corrected 2026-09-19:* this sentence previously said "admission
+//! and pop revert". **`frozen_segment_count` is not read by bond admission** —
+//! its consumers are the D2 escalation operand, the coverage RPC and
+//! freeze / pop-revert. Bond admission's shard predicate was ruled
+//! 2026-09-19 and is **unbuilt**; see
+//! `docs/design/ARCHIVAL_BOND_ADD_ADMISSION.md` §3.) Level 2 was gate-2's provisional sizing; the freeze
 //! pipeline round pinned it (`ARCHIVAL_SEGMENT_FREEZE_PIPELINE.md` §5.2).
 //!
 //! Not a tunable. Reversion criteria per the pipeline doc §5.2: a CT
@@ -44,7 +49,8 @@ include!(concat!(env!("OUT_DIR"), "/segment_leaf_count_generated.rs"));
 // config-generated SEGMENT_LEAF_COUNT must equal the partition derivation
 // that lives in `shekyl_fcmp::tree` — the one home both stores consume. The
 // wallet-side shard store partitions by `leaves_per_segment()`; this crate's
-// consensus reader (`frozen_segment_count`: bond admission and pop revert)
+// consensus reader (`frozen_segment_count`: the D2 escalation operand, the
+// coverage RPC, and pop revert — **not** bond admission; see the module doc)
 // partitions by the JSON value. Until this assert the two agreed only because
 // the JSON value happened to equal the width product `38 · 18 · 38`; a
 // `SEGMENT_LAYER_J` move, or a config edit that reads as a tune, would have

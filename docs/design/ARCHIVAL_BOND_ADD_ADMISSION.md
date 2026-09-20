@@ -100,12 +100,17 @@ needs no special handling:
 
 1. **The 404 is the ordinary one.** A ghost shard is indistinguishable on the
    wire from any other miss — no new response, no new state, no new branch.
-2. **No leg treats the ghost specially, and none of them *writes*.** Every step
-   is the path a withholding `P` already takes, so a ghost costs the mechanism
-   no new code — **and no new state**: a miss is never asserted, only the
-   **absence** of a pass within `W₂`, and the m-of-n window is **recomputed**
-   from the `serve_credit_bit` ledger and the bond record on every evaluation
-   rather than stored. There is no miss record for a ghost to create.
+2. **No leg treats the ghost specially, and none writes any *ghost-specific*
+   state.** Every step is the path a withholding `P` already takes, so a ghost
+   costs the mechanism no new code and **no new state along the way**: a miss
+   is never asserted, only the **absence** of a pass within `W₂`, and the
+   m-of-n window is **recomputed** from the `serve_credit_bit` ledger and the
+   bond record on every evaluation rather than stored. There is no miss record
+   for a ghost to create. **The terminal slash does write** — the bond,
+   `total_bonded`, `total_burned`, the slash-applied bit and the slash log
+   (`db_lmdb.cpp:5964-5985`) — but those are the **ordinary** slash's writes,
+   identical to any withholding `P`'s, which is the point: the ghost adds
+   nothing to them.
 3. **The cost falls on the poster.** The slash lands on the `P` that named the
    ghost. What the guard saves is not `P` from itself but the **network** from
    spending real work to reach that conclusion.
@@ -210,4 +215,4 @@ handoff with no return address.
 
 | Date | Decision |
 | --- | --- |
-| 2026-09-19 | **RULED (maintainer): bond admission accepts only valid, closed, final shards.** Two legs — *"exists"* as hygiene, *"closed and final"* as the determinism load-bearer, extending `PDM-Q6` item 3's non-bondable frontier shard to the reorg window. **Justified on unrepresentability and network economy, explicitly *not* exploit prevention:** the mechanism digests a ghost unaided — bond-derived draws, the single shared 404 (`provider.rs:239`), recorded misses, no credit bit, m-of-n across epochs, the ordinary slash — so the guard is defense in depth in the exact sense, a layer in front of a mechanism that already works. It spares the **network** the draws, circuits, witness work and slash machinery, not `P` from itself. **The reasoning is recorded, not just the conclusion, because the guard survived having its scariest justification dismantled** — a rule still worth its cost after the exploit story dies stands on structure, and nobody should later feel the need to re-inflate the threat to defend it. **Correction carried from the wallet lane, stated precisely:** the task is **a new rule plus an unimplemented old one** — `PDM-Q6` item 3 already rules the open frontier shard non-bondable in **design** (`:458-459`, unbuilt, silent on the reorg window), while the **existence** half has no predecessor at all and **neither half has one in code** — `ShardSet::new` enforces only cardinality and duplicate-freeness (`bond_wire.rs:210-227`), and `frozen_segment_count`'s three consumers (D2 escalation operand, coverage RPC, freeze / pop-revert) are **none of them** bond admission, contrary to the 2026-09-17 decision-log sentence. Three design questions left to **E4 / S-ARCH**: the predicate's site, its evaluation height (with `blockchain.cpp:1478-1492`'s read-point hazard applying), and whether `ShardSet` gains chain context or a separate check owns it — the last trading one fallible constructor against a pure one. |
+| 2026-09-19 | **RULED (maintainer): bond admission accepts only valid, closed, final shards.** Two legs — *"exists"* as hygiene, *"closed and final"* as the determinism load-bearer, extending `PDM-Q6` item 3's non-bondable frontier shard to the reorg window. **Justified on unrepresentability and network economy, explicitly *not* exploit prevention:** the mechanism digests a ghost unaided — bond-derived draws, the single shared 404 (`provider.rs:239`), recorded misses, no credit bit, m-of-n across epochs, the ordinary slash — so the guard is defense in depth in the exact sense, a layer in front of a mechanism that already works. **No *ghost-specific* state is written along the way** — the terminal slash writes exactly what any withholding `P`'s slash writes (`db_lmdb.cpp:5964-5985`), which is the point. It spares the **network** the draws, circuits, witness work and slash machinery, not `P` from itself. **The reasoning is recorded, not just the conclusion, because the guard survived having its scariest justification dismantled** — a rule still worth its cost after the exploit story dies stands on structure, and nobody should later feel the need to re-inflate the threat to defend it. **Correction carried from the wallet lane, stated precisely:** the task is **a new rule plus an unimplemented old one** — `PDM-Q6` item 3 already rules the open frontier shard non-bondable in **design** (`:458-459`, unbuilt, silent on the reorg window), while the **existence** half has no predecessor at all and **neither half has one in code** — `ShardSet::new` enforces only cardinality and duplicate-freeness (`bond_wire.rs:210-227`), and `frozen_segment_count`'s three consumers (D2 escalation operand, coverage RPC, freeze / pop-revert) are **none of them** bond admission, contrary to the 2026-09-17 decision-log sentence. Three design questions left to **E4 / S-ARCH**: the predicate's site, its evaluation height (with `blockchain.cpp:1478-1492`'s read-point hazard applying), and whether `ShardSet` gains chain context or a separate check owns it — the last trading one fallible constructor against a pure one. |
