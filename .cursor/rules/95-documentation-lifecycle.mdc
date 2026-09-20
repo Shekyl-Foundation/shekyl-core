@@ -92,8 +92,12 @@ own named open residue stay in `design/`.
 ## FOLLOWUPS is a queue of one-liners
 
 Each item is **≤20 lines**: one sentence of what remains, a `Target:`
-from the three tokens below, and a link to the owning doc. Essays belong
-in the plan doc or the completed record, not in the queue.
+from the three tokens below, and an `Owner:` sub-bullet that **resolves** —
+a live `docs/design/` doc, an *open* `PR #NNN`, or an index §2 family
+(`check_followups_owners.py`; a closed record, a merged PR or a prose
+"the X lane" owns nothing, which is how six items once sat routed to a
+lane that did not exist). Essays belong in the plan doc or the completed
+record, not in the queue.
 
 Allowed `Target:` values only:
 
