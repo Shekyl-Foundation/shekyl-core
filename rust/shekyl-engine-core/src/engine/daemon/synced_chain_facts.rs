@@ -36,26 +36,40 @@
 //! `submit_watchdog::DaemonHealthContext::is_synced`, which until this type
 //! landed was the only honest reading of sync state in the wallet. The
 //! watchdog now asks this constructor instead
-//! ([`DaemonHealthContext::synced_facts`](super::submit_watchdog::DaemonHealthContext)),
+//! ([`DaemonHealthContext::synced_facts`](crate::engine::submit_watchdog::DaemonHealthContext)),
 //! so the predicate has one site and a change to it cannot leave two
 //! consumers disagreeing about what "synced" means.
 //!
-//! `target_height == 0` is the info surface's own convention, not a guess:
-//! `core_rpc_server.cpp:209` writes `is_synchronized() ? 0 :
-//! get_target_blockchain_height()`, and `shekyl-daemon-rpc`'s handlers apply
-//! the same rule (`methods.rs:138`). `height >= target_height` is the belt to
-//! that braces — a node whose target estimate has been overtaken is caught up
-//! whatever the estimate says.
-//!
-//! **The `synchronized` half is not decoration, and the height half alone is
-//! not sufficient.** A daemon that has just started with no peers reports
-//! `target_height == 0` — the sentinel that *means* synchronized — while
-//! `synchronized` is false and its height is genesis-adjacent
+//! **The predicate is ours; the C++ is provenance, not authority.** What the
+//! conjunction is doing is absorbing the *shape of the response it consumes*.
+//! This constructor reads `get_info`, which is still served by the inherited
+//! C++ (`core_rpc_server.cpp`) and has no Rust handler yet. That surface
+//! encodes sync state twice: a `synchronized` bool
 //! (`core_rpc_server_commands_defs.h:254`, set from `check_core_ready()` at
-//! `core_rpc_server.cpp:248`). That is exactly `WSS-25`'s state: a rebuilt
-//! database, before the node has anyone to catch up from. Taking only the
-//! watchdog's half would have minted facts for it. Absent on the wire, the
-//! flag reads `false` — the direction that refuses.
+//! `:248`) **and** a `target_height` overloaded with a zero sentinel
+//! (`:209`, `is_synchronized() ? 0 : get_target_blockchain_height()`). Those
+//! citations say what the guide *does*; they do not define what we require.
+//!
+//! We require both fields because, on that shape, **neither alone is
+//! sufficient**. A daemon that has just started with no peers reports
+//! `target_height == 0` — the sentinel that *means* synchronized — while
+//! `synchronized` is false and its height is genesis-adjacent. That is
+//! exactly `WSS-25`'s state: a rebuilt database, before the node has anyone
+//! to catch up from. Reading only the sentinel mints facts for it. Reading
+//! only the flag accepts a node that contradicts itself by sitting below its
+//! own target. Absent on the wire, the flag reads `false` — the direction
+//! that refuses.
+//!
+//! **This is a seam, and it simplifies when the producer moves.** The Rust
+//! contract already models this correctly — `shekyl-daemon-rpc`'s `ChainTip`
+//! (`chain_facts.rs`) carries a raw `target_height` and a separate
+//! `synchronized` bool, and its own doc disclaims the zero sentinel as "the
+//! handler's". The sentinel survives only at the wire boundary, and only
+//! until the p2p layer migrates. When `get_info` gains a Rust handler over
+//! `ChainTip`, the sentinel arm has nothing left to absorb and this
+//! conjunction collapses to the flag. Until then a reader should not have to
+//! re-derive why both fields are read: it is the guide's shape, not our
+//! contract's.
 //!
 //! This correction is the `WSS-24` lane's (`fix/wss-24-own-height-daemon-tip`,
 //! `serving/daemon_tip.rs`), which derived the same predicate independently
@@ -76,7 +90,7 @@
 //! `core_rpc_server.cpp:206-207` reads the top block's height and then
 //! increments it (*"turn top block height into blockchain height"*). It is
 //! therefore the same quantity as [`EmissionClaimSource::chain_height`]
-//! (`super::emission_source`), and it is stored here as a [`ChainCount`] so
+//! (`crate::engine::emission_source`), and it is stored here as a [`ChainCount`] so
 //! the count/height confusion cannot be made by a consumer. Consumers that
 //! want the newest existing block's height take [`SyncedChainFacts::tip`].
 
@@ -84,7 +98,7 @@ use serde_json::Value;
 use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_types::{BlockHeight, ChainCount};
 
-use super::traits::daemon::DaemonHealth;
+use crate::engine::traits::daemon::DaemonHealth;
 
 /// Chain facts from a daemon that reports itself synchronized.
 ///
@@ -149,6 +163,18 @@ impl SyncedChainFacts {
         )
     }
 
+    /// The daemon's block **count** — one more than the newest block's height.
+    ///
+    /// Exists for one caller: `daemon_claimed_tip`, which historically
+    /// labelled this count as a `BlockHeight` and must keep doing so until
+    /// that off-by-one is ruled on separately (see its doc). Prefer
+    /// [`Self::tip`] everywhere else — a consumer that wants a height and
+    /// reaches for this is reintroducing the confusion the type exists to
+    /// prevent.
+    pub(crate) fn chain_height(&self) -> ChainCount {
+        self.chain_height
+    }
+
     /// The newest existing block's height, or `0` on an empty chain.
     ///
     /// The `0` for an empty chain matches how `EngineServeSetPinner`
@@ -167,7 +193,7 @@ impl SyncedChainFacts {
 /// Decode the daemon's `get_info` result into [`DaemonHealth`].
 ///
 /// The single parse site for this response, shared by
-/// [`DaemonEngine::get_health`](super::traits::daemon::DaemonEngine::get_health) and
+/// [`DaemonEngine::get_health`](crate::engine::traits::daemon::DaemonEngine::get_health) and
 /// [`fetch_synced_chain_facts`], so the two cannot come to disagree about what
 /// the daemon said. Two decoders over one wire response with no cross-check is
 /// exactly the shape that lets a field's meaning drift on one side only.

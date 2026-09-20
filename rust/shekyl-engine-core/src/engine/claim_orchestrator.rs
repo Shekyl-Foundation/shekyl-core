@@ -85,6 +85,7 @@ use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
 use super::emission_source::{fetch_emission_claim_source, EmissionSourceError};
 use super::prpc::PersonaIsolatedTransport;
+use super::daemon::synced_chain_facts::fetch_synced_chain_facts;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
     AssembleEmissionClaim, AssembledEmissionClaim, PersonaHandle, StakeEngineError,
@@ -125,6 +126,17 @@ pub(crate) enum ClaimOrchestrationError {
     /// The actor refused or failed the assembly itself.
     #[error(transparent)]
     Stake(#[from] StakeEngineError),
+    /// The daemon reports it is still synchronizing (`WSS-Q14`), so the
+    /// record it would answer with is not a settled view of the chain.
+    ///
+    /// `R-B`: while the daemon reports syncing the answer is **unknown** — do
+    /// not erase, post or sign. A claim assembled here would be signed against
+    /// a gather tip the network has not agreed to, so the lane declines and
+    /// retries on its cadence. Distinct from [`Self::ReferenceUnanchorable`],
+    /// which is about the *tree* lagging the daemon; this is the daemon
+    /// lagging the network, the axis `WSS-25` found nothing was measuring.
+    #[error("the daemon is still synchronizing; no claim can be assembled yet")]
+    DaemonSyncing,
 }
 
 /// The read-side operands of one claim assembly, borrowed from their owners
@@ -240,12 +252,27 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     //    structural pin; decode enforces the settled/height invariant at
     //    the untrusted boundary) and read the tree's ingested tip — two
     //    independent awaits, joined.
-    let (source, ingested) = tokio::join!(
+    //    The sync witness rides the same join: `R-B` forbids signing on an
+    //    unsynchronized view, and the claim is signed inside the stake actor
+    //    further down, so the refusal has to happen before assembly rather
+    //    than at dispatch. Unlike the release gate, the witness does **not**
+    //    supply this lane's clock — the record's own `chain_height` is the
+    //    gather tip the handler's same-tip check compares against, so
+    //    substituting the witness's tip would break that invariant. Its role
+    //    here is narrower and worth naming: may this lane act at all.
+    let (source, ingested, synced) = tokio::join!(
         fetch_emission_claim_source(rpc, ctx.p_canonical_id.as_bytes()),
-        ctx.tree.ingested_tip_height()
+        ctx.tree.ingested_tip_height(),
+        fetch_synced_chain_facts(rpc)
     );
     let source = source?;
     let ingested = ingested.map_err(ClaimOrchestrationError::Tree)?;
+    // An unreachable daemon is already `Source`'s business on the line above;
+    // reaching here with `Err` means the facts read failed while the record
+    // read succeeded, which is the same "cannot vouch for the view" state.
+    if !matches!(synced, Ok(Some(_))) {
+        return Err(ClaimOrchestrationError::DaemonSyncing);
+    }
 
     // 2b. Anchor: the gather tip ([`ChainCount::tip`] — typed, so the count
     //    cannot be laundered into a height) and the reference height (the
@@ -491,16 +518,50 @@ mod tests {
         /// real `json_rpc_call` envelope path (the trait's default impl runs
         /// unmocked — only the transport is canned).
         #[derive(Clone)]
-        struct ClaimSourceDaemon(Arc<Value>);
+        /// The canned claim source, plus the sync state the daemon reports.
+        ///
+        /// `synchronized` is the lever the `WSS-Q14` bite pulls; every other
+        /// test in this module wants the default (synced), because they were
+        /// written against a daemon whose record is authoritative.
+        struct ClaimSourceDaemon(Arc<Value>, bool);
+
+        impl ClaimSourceDaemon {
+            fn synced(source: Arc<Value>) -> Self {
+                Self(source, true)
+            }
+            fn syncing(source: Arc<Value>) -> Self {
+                Self(source, false)
+            }
+        }
 
         impl Rpc for ClaimSourceDaemon {
+            /// Dispatches on the JSON-RPC method: the orchestrator now reads
+            /// `get_info` for the sync witness alongside the claim source, so
+            /// answering every method with the claim source would decode as a
+            /// reply with no `height` and refuse the whole lane.
             fn post(
                 &self,
                 route: &str,
-                _body: Vec<u8>,
+                body: Vec<u8>,
             ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
-                let reply = serde_json::to_vec(&json!({ "result": *self.0 }))
-                    .expect("fixture result encodes");
+                let is_get_info = serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
+                    .is_some_and(|m| m == "get_info");
+                let synced = self.1;
+                let result = if is_get_info {
+                    json!({
+                        "height": 10_000,
+                        "target_height": if synced { 0 } else { 1_000_000 },
+                        "synchronized": synced,
+                        "outgoing_connections_count": 8,
+                        "incoming_connections_count": 0,
+                    })
+                } else {
+                    (*self.0).clone()
+                };
+                let reply =
+                    serde_json::to_vec(&json!({ "result": result })).expect("fixture encodes");
                 let ok = route == "json_rpc";
                 async move {
                     if ok {
@@ -641,7 +702,54 @@ mod tests {
             let reserved = BTreeSet::new();
             let pruned = SpentRecordsDurablyPruned::for_test();
             let fee = 10_000u64;
-            let rpc = ClaimSourceDaemon(Arc::new(source_json(&source)));
+            let canned = Arc::new(source_json(&source));
+
+            // ── WSS-Q14 class-B refusal bite ────────────────────────────
+            //
+            // The claim is SIGNED inside the stake actor further down this
+            // same call, so `R-B`'s "do not sign" has to bite here rather
+            // than at the dispatch stamp. Same substrate, same operands, one
+            // lever moved: the daemon says it is still catching up.
+            //
+            // The edit that turns this red is deleting the `DaemonSyncing`
+            // early return in `orchestrate_emission_claim`. It bites against
+            // assembling a claim on a resyncing view; it does **not** cover a
+            // daemon that lies "synchronized".
+            {
+                let syncing = ClaimSourceDaemon::syncing(Arc::clone(&canned));
+                // Its own handle: `PersonaHandle` is deliberately one-shot,
+                // and a refused lane must not consume the one the assertion
+                // path below needs.
+                let bite_handle = stake
+                    .mint_handle(PSlot::from_raw(0))
+                    .await
+                    .expect("slot 0 held");
+                let err = orchestrate_emission_claim(
+                    &syncing,
+                    bite_handle,
+                    ClaimAssemblyContext {
+                        stake: &stake,
+                        tree: &tree,
+                        pruning_landed: &pruned,
+                        funding_records: &funding_records,
+                        bond_posts: &bond_posts,
+                        reserved: &reserved,
+                        p_canonical_id: p_id,
+                        fee,
+                        fee_floor: 0,
+                    },
+                    |_| panic!("a refused lane must not reach the block-hash lookup"),
+                )
+                .await
+                .expect_err("a syncing daemon cannot ground a claim");
+                assert!(
+                    matches!(err, ClaimOrchestrationError::DaemonSyncing),
+                    "must refuse as DaemonSyncing — not ReferenceUnanchorable, \
+                     which is the tree lagging the daemon, the other axis: {err:?}"
+                );
+            }
+
+            let rpc = ClaimSourceDaemon::synced(canned);
 
             let reply = orchestrate_emission_claim(
                 &rpc,

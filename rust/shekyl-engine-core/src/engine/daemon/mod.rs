@@ -38,6 +38,24 @@
 //! Wallet-file vs caller network remains [`OpenError::NetworkMismatch`]
 //! (`{ wallet, expected }`); that is a different fact.
 
+/// `WALLET_SIDE_STORE.md` `WSS-Q14` (ruled 2026-09-19): [`SyncedChainFacts`],
+/// the one wallet-side type that says a chain reading came from a daemon
+/// reporting itself synchronized. Steering's `R-B` — while the daemon reports
+/// syncing the answer is **unknown**, so do not erase, post or sign — is made
+/// structural: a consumer takes the type, and there is no constructor from an
+/// unsynchronized reading. Closes `WSS-25`.
+///
+/// It lives **inside** this module rather than beside it because the design
+/// record's `R1` seam says the type is *built from the engine's daemon
+/// client*: the `get_info` decode it shares with [`DaemonEngine::get_health`]
+/// has exactly one other caller, in this file. Keeping the response vocabulary
+/// in one directory is what makes "a DRS response-shape change touches the
+/// constructor and nothing else" a property of the tree rather than a promise
+/// in a comment.
+///
+/// [`SyncedChainFacts`]: synced_chain_facts::SyncedChainFacts
+pub(crate) mod synced_chain_facts;
+
 use std::future::Future;
 
 use serde_json::{json, Value};
@@ -439,7 +457,7 @@ impl DaemonEngine for DaemonClient {
     /// position feed the §5.3 escape ladder's health gate.
     ///
     /// The response decode lives in
-    /// [`health_from_get_info`](crate::engine::synced_chain_facts::health_from_get_info)
+    /// [`health_from_get_info`](synced_chain_facts::health_from_get_info)
     /// — one parse for this reply, because `SyncedChainFacts` (`WSS-Q14`)
     /// reads the same fields over a bare [`Rpc`] for callers that do not
     /// hold this trait, and two decoders over one wire response with no
@@ -448,7 +466,7 @@ impl DaemonEngine for DaemonClient {
     fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
         async move {
             let info: Value = self.json_rpc_call("get_info", None).await?;
-            crate::engine::synced_chain_facts::health_from_get_info(&info)
+            synced_chain_facts::health_from_get_info(&info)
         }
     }
 }

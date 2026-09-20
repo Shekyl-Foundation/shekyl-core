@@ -103,6 +103,7 @@ use super::curve_tree_actor::CurveTreeHandleError;
 use super::emission_source::{fetch_claim_source_for, EmissionSourceError};
 use super::fee_policy::FeeEstimatorError;
 use super::prpc::PersonaIsolatedTransport;
+use super::daemon::synced_chain_facts::fetch_synced_chain_facts;
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::pending_post_store_for_engine;
@@ -213,6 +214,16 @@ pub(crate) enum ReleaseRequestError {
     /// this daemon does not have) is not the remedy for any refusal below.
     #[error("the daemon holds no bond record for this persona; there is nothing to release")]
     NoBondRecord,
+
+    /// The daemon reports it is still synchronizing (`WSS-Q14`), so its bond
+    /// record is not a settled view and no exit verdict can rest on it.
+    ///
+    /// `R-B`: while the daemon reports syncing the answer is **unknown**.
+    /// Distinct from [`Self::NoBondRecord`] — "there is no record" and "the
+    /// record cannot be trusted yet" send an operator to different places
+    /// (rule 82). Retry once the daemon is caught up.
+    #[error("the daemon is still synchronizing; no exit verdict can be read yet")]
+    DaemonSyncing,
     /// A live pending exit already exists for this persona. One live exit
     /// per persona: the exit debits the whole bonded total, so a second is
     /// doomed by construction — wait for the pending exit to settle.
@@ -441,6 +452,20 @@ where
         // requested for (the binding fetch — never the bare form, which
         // returns facts with no record of whose they are). `None` means the
         // daemon holds no bond record: nothing to exit, its own condition.
+        // `R-B` before the record is read as truth. An exit is a post, and a
+        // readiness verdict computed on a resyncing daemon's record is a
+        // claim about the chain ("you may exit now") the wallet cannot
+        // vouch for — `ReleaseRecordState::from_claim_source` reads the
+        // cooldown and the slash watermark straight out of it. Refusing here
+        // rather than at the dispatch stamp below keeps the verdict and the
+        // post on the same footing; the stamp is gated too, by
+        // `daemon_claimed_tip`.
+        if !matches!(
+            fetch_synced_chain_facts(release_rpc).await,
+            Ok(Some(_))
+        ) {
+            return Err(ReleaseRequestError::DaemonSyncing);
+        }
         let fetched = fetch_claim_source_for(release_rpc, p_canonical_id).await?;
         let record = ReleaseRecordState::from_claim_source(&fetched)
             .ok_or(ReleaseRequestError::NoBondRecord)?;

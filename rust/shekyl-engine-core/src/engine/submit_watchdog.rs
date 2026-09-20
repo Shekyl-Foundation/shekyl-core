@@ -61,7 +61,7 @@ use std::collections::HashSet;
 
 use shekyl_types::{ChainCount, TxHash};
 
-use super::synced_chain_facts::SyncedChainFacts;
+use super::daemon::synced_chain_facts::SyncedChainFacts;
 
 // ---------------------------------------------------------------------------
 // Horizon configuration

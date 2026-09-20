@@ -40,6 +40,20 @@
   predicate — until now the wallet's only reading of sync state — becomes
   that constructor, so the two cannot disagree. No RPC or wire change.
 
+  **Every consensus-derived read of a daemon height now holds the witness**,
+  not only the release gate. `daemon_claimed_tip` — the one derivation six
+  consumers read their clock through (`anchor_t0`, the claim / drain /
+  release dispatch stamps, both `BlockSource::tip_height` impls, and the
+  pscan finality horizon) — yields the witness or refuses with a named
+  `DaemonSyncing`, so a post cannot be stamped on a resync height. Claim
+  assembly refuses before signing, and the exit path refuses before reading
+  a bond record as an exit verdict; both surface as "resyncing, retry",
+  never as "you have nothing staked". `SyncedChainFacts` and the `get_info`
+  decode now live inside the `engine::daemon` module tree, beside the client
+  they are built from. Proof **verification** is not yet gated: a new
+  refusal there needs a `-293xx` JSON-RPC contract code, which is the wallet
+  RPC contract's surface, not this change's.
+
 ### Consensus
 
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6
