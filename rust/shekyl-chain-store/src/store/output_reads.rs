@@ -42,7 +42,7 @@
 //! place the "one bucket" premise (§3.4) is code.
 
 use redb::{ReadableTable, ReadableTableMetadata};
-use shekyl_types::{BlockHeight, CommitmentBytes, GlobalOutputIndex, OneTimePubkey, Timelock};
+use shekyl_types::{BlockHeight, CommitmentBytes, GlobalOutputIndex, OneTimePubkey};
 
 use crate::codec::OutTx;
 use crate::ids::OutputSlot;
@@ -53,13 +53,19 @@ use super::chain_reads::{undecodable, ReadFault, ReadTables};
 use super::error::StoreInvariant;
 
 /// The stored record of one output, as [`ReadSnapshot::output`](super::ReadSnapshot::output)
-/// returns it: LMDB's `output_data_t` — one-time pubkey, unlock time,
-/// recording height, commitment. `OutKey` minus its join key: the join was
-/// **validated** against the slot where the record was decoded (module
-/// docs), so the projection carries what a consumer needs and nothing it
-/// would have to re-check. A read projection, never stored, so not
+/// returns it: one-time pubkey, commitment, recording height — LMDB's
+/// `output_data_t` minus its `unlock_time`. `OutKey` minus its join key and
+/// that field: the join was **validated** against the slot where the record
+/// was decoded (module docs), so the projection carries what a consumer
+/// needs and nothing it would have to re-check. A read projection, never stored, so not
 /// `Canonical`. The live consumer is the path builder's `read_output_oc`,
 /// which wants the pubkey **and** the commitment (SOK-7).
+///
+/// **No `unlock_time`** (S-TX STX-9, landed with the S-TX increment): the
+/// stored `OutKey` row carries it and this read decodes that row, but no
+/// public read type under `store/` hands the field out — its fate is census
+/// U-2's, and this projection had no consumer of it. Gated by
+/// `scripts/ci/check_store_unlock_time_projection.py`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedOutput {
     /// The output's one-time public key (`O`).
@@ -68,8 +74,6 @@ pub struct RecordedOutput {
     pub commitment: CommitmentBytes,
     /// The height of the block that created the output.
     pub height: BlockHeight,
-    /// The output's `unlock_time`, as stored.
-    pub unlock_time: Timelock,
 }
 
 /// Where `index` sits relative to the dense count. The mirror of
@@ -114,6 +118,13 @@ pub(super) fn output_at<T: ReadTables>(
     if let IndexClass::Beyond = class_of(output_count(txn)?, index) {
         return Ok(AtIndex::BeyondCount);
     }
+    // The primary must be present below the count before a side row is
+    // served (PR #800 review, the same admission `tx_reads::admit` takes):
+    // `output_txs` is the count's authority, and a hole in it at `index` is
+    // the count lying — SI-9 — whatever `output_amounts` holds there.
+    if txn.table(OUTPUT_TXS)?.get(index.to_raw())?.is_none() {
+        return Err(not_dense());
+    }
     let slot = OutputSlot::confidential(index);
     let table = txn.table(OUTPUT_AMOUNTS)?;
     let Some(guard) = table.get(slot.key())? else {
@@ -133,7 +144,6 @@ pub(super) fn output_at<T: ReadTables>(
         pubkey: record.pubkey,
         commitment: record.commitment,
         height: record.height,
-        unlock_time: record.unlock_time,
     }))
 }
 

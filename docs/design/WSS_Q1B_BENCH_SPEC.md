@@ -258,7 +258,7 @@ the root.
 ### 4.1 Why the model is not throughput × bytes
 
 `DaemonClient::fetch_scannable_block`
-(`shekyl-engine-core/src/engine/daemon.rs:248`) resolves to
+(`shekyl-engine-core/src/engine/daemon/mod.rs:266`) resolves to
 `engine::block_fetch::fetch_scannable_block_with_form`
 (`block_fetch.rs:132`), which is **strictly per-block** and issues, sequentially
 and with no pipelining:

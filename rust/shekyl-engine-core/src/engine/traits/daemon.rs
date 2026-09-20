@@ -238,6 +238,16 @@ pub(crate) struct DaemonHealth {
     /// The daemon's network-estimated target height (`0` when synced —
     /// the info surface's convention).
     pub target_height: u64,
+    /// The daemon's own `synchronized` flag (`core_rpc_server.cpp:248`,
+    /// from `check_core_ready()`).
+    ///
+    /// **Not decoration on top of the heights.** A daemon that has just
+    /// started with no peers reports `target_height == 0` *and*
+    /// `synchronized == false`: the height comparison alone reads that as
+    /// synced, at a genesis-adjacent height. That is the rebuilt-database
+    /// case `WSS-25` is about, so both halves are required —
+    /// `SyncedChainFacts` is where the two are combined.
+    pub synchronized: bool,
 }
 
 /// Engine-side view of the daemon RPC surface (§2.5).

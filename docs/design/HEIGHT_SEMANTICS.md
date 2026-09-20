@@ -2,7 +2,8 @@
 
 **Status:** OPEN — Phase 1 walked 2026-09-19; height-semantics Phase 2a
 RULED 2026-09-20 (census, wire table, naming/difference convention). Remaining:
-height-semantics Phase 2b (dispatch-clock retype, blocked on PR #792),
+height-semantics Phase 2b (dispatch-clock retype, blocked on PR #792 —
+**UPDATE 2026-09-20 (#792):** unblocked; next),
 Phase 2c (wire/FFI decode), Phase 2d (inland bare-`u64` tail). Numerics
 are frozen as pinned (Rick, 2026-09-19). This file does not change any stamp.
 
@@ -43,7 +44,7 @@ refuses an unsynced view. It is not a special case of this audit.
 ## 2. Phase 1 — the consensus-adjacent walk
 
 Ground: `daemon_claimed_tip`
-(`rust/shekyl-engine-core/src/engine/pscan/block_source.rs:141-148` on
+(`rust/shekyl-engine-core/src/engine/pscan/block_source.rs:181-199` on
 this tree) wraps `Rpc::get_height` — documented as **the amount of
 blocks**, genesis-only = 1 (`rust/shekyl-rpc-client/src/lib.rs:380-384`)
 — into `BlockHeight::from_raw`. PR #792 freezes that numeric
@@ -83,18 +84,18 @@ ruled-fix item for **that** PR, not a Phase 1 value change.
 
 | Site | file:line | Protocol quantity | Stamped today | Evidence | Disposition |
 | --- | --- | --- | --- | --- | --- |
-| Producer | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:141-148` | n/a (wrapper) | COUNT as `BlockHeight` | `get_height` is count (`rust/shekyl-rpc-client/src/lib.rs:380-384`); wrap is `from_raw`. | Pin; retype in height-semantics Phase 2b. |
-| `BlockSource::tip_height` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:81-92`; DaemonBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:187-189`; PBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:238-241` | **COUNT** (claimed chain size; exclusive end of `0 .. tip`) | COUNT as `BlockHeight` | Trait doc already: "the *count* of blocks"; `block_at` valid on `0 .. tip_height`. | Rename honestly (`ChainCount`). `block_at` args stay ordinal. |
-| `block_at` / `block_number` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:117-120`, `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:151-160` | **ORDINAL** (which block) | `BlockHeight` used as a 0-indexed fetch number | `get_block_hash` `number` is "zero-indexed position" (`rust/shekyl-rpc-client/src/lib.rs:410-413`). | Already the right type; keep. |
+| Producer | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:181-199` | n/a (wrapper) | COUNT as `BlockHeight` | `get_height` is count (`rust/shekyl-rpc-client/src/lib.rs:380-384`); wrap is `from_raw`. | Pin; retype in height-semantics Phase 2b. |
+| `BlockSource::tip_height` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:94-105`; DaemonBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:238-240`; PBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:289-292` | **COUNT** (claimed chain size; exclusive end of `0 .. tip`) | COUNT as `BlockHeight` | Trait doc already: "the *count* of blocks"; `block_at` valid on `0 .. tip_height`. | Rename honestly (`ChainCount`). `block_at` args stay ordinal. |
+| `block_at` / `block_number` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:130-133`, `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:202-211` | **ORDINAL** (which block) | `BlockHeight` used as a 0-indexed fetch number | `get_block_hash` `number` is "zero-indexed position" (`rust/shekyl-rpc-client/src/lib.rs:410-413`). | Already the right type; keep. |
 | P-scan sweep exclusive end | `rust/shekyl-engine-core/src/engine/pscan/task.rs:245-248`, `rust/shekyl-engine-core/src/engine/pscan/task.rs:295-297` | bound = COUNT; index = ORDINAL | COUNT − `reorg_depth` as exclusive end; loop `for height in start..end` calls `block_at(ordinal)` | Half-open range over a count. Flipping the bound to `.tip()` without changing the loop **skips the last block**. | Split types at retype. No numeric change. |
 | `anchor_t0` stamp | `rust/shekyl-engine-core/src/engine/bond_orchestrator.rs:555-557`; field `rust/shekyl-engine-state/src/pending_post_block.rs:137-143` | same-clock threshold (WI-3 R2-1) | COUNT as `BlockHeight` | Spec name is "tip height at assemble time" (`ARCHIVAL_BOND_WI2_ASSEMBLY.md:250-268`); the consuming rule is `due = anchor_t0 + offset` compared to the **same** `daemon_claimed_tip` read. Arithmetic never indexes a block. | COUNT. Rename honestly. Converting to ordinal is only legal if stamp, due-check, and alarm move together. |
 | Due-check | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:256-264`, `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:292` | same clock as `anchor_t0` | COUNT vs COUNT | `due_height <= tip.to_raw()`. WI-3 R2-1: stamp and due-check switch together or offsets change meaning. | Shared. Rename both ends together. |
 | Alarm / resubmit horizon | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:296-298` | same clock as dispatch `at` | COUNT vs COUNT | `tip < at + alarm_horizon`. `at` is the dispatch stamp. | Shared. Same as due-check. |
 | Claim dispatch `at` | `rust/shekyl-engine-core/src/engine/claim_dispatch.rs:369` | "when dispatched" vs a later same-clock tip | COUNT | Comment: same named clock as bond dispatch (WI-3 R2-1). | COUNT. Rename with the clock. |
 | Drain dispatch `at` | `rust/shekyl-engine-core/src/engine/drain_dispatch.rs:397` | same | COUNT | Same clock comment (`rust/shekyl-engine-core/src/engine/drain_dispatch.rs:394-396`). | COUNT. Rename with the clock. |
-| Release dispatch `at` | `rust/shekyl-engine-core/src/engine/release_dispatch.rs:572` | same | COUNT | Same clock comment (`rust/shekyl-engine-core/src/engine/release_dispatch.rs:570-571`). | COUNT. Rename with the clock. |
-| Emission claim gather | `rust/shekyl-engine-core/src/engine/emission_source.rs:254-265`, `rust/shekyl-engine-core/src/engine/emission_source.rs:541-544` | already split | `ChainCount` | Decode names the type; consumers take `next_height()` (inclusion) or `tip()` (spendability). **Does not** call `daemon_claimed_tip`. | Pattern, not a finding. |
-| Claim orchestrator reference | `rust/shekyl-engine-core/src/engine/claim_orchestrator.rs:184-192` | `ChainCount::tip` for spendability | typed | Same pattern. | Pattern, not a finding. |
+| Release dispatch `at` | `rust/shekyl-engine-core/src/engine/release_dispatch.rs:606` | same | COUNT | Same clock comment (`rust/shekyl-engine-core/src/engine/release_dispatch.rs:604-605`). | COUNT. Rename with the clock. |
+| Emission claim gather | `rust/shekyl-engine-core/src/engine/emission_source.rs:259-270`, `rust/shekyl-engine-core/src/engine/emission_source.rs:546-549` | already split | `ChainCount` | Decode names the type; consumers take `next_height()` (inclusion) or `tip()` (spendability). **Does not** call `daemon_claimed_tip`. | Pattern, not a finding. |
+| Claim orchestrator reference | `rust/shekyl-engine-core/src/engine/claim_orchestrator.rs:198-206` | `ChainCount::tip` for spendability | typed | Same pattern. | Pattern, not a finding. |
 | `release.rs` record predicates | `rust/shekyl-engine-core/src/engine/stake_engine/release.rs` | record facts from the claim source | `ChainCount` on the source; predicates are not a block-axis stamp | Not a `daemon_claimed_tip` consumer. | Out of this walk. |
 
 ### 2.3 Phase 1 conclusion — RULED by this walk, 2026-09-19
@@ -130,7 +131,8 @@ owned by the retype slice that creates that boundary (height-semantics
 Phase 2b onward), not by a docs PR.
 
 Ground: `origin/dev` at the walk (`85071a24f`, merge of PR #801). PR
-#792 is still OPEN; height-semantics Phase 2b waits on it.
+#792 is still OPEN; height-semantics Phase 2b waits on it. **UPDATE
+2026-09-20 (#792):** merged; Phase 2b is next.
 
 ### 3.1 Convention — RULED 2026-09-20
 
@@ -238,7 +240,7 @@ one family. **Unclear: none.**
 
 | Family | Quantity | Type today | Ruled inland | Remaining |
 | --- | --- | --- | --- | --- |
-| Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | COUNT as `BlockHeight` | `ChainCount` | height-semantics Phase 2b, blocked on PR #792 |
+| Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | COUNT as `BlockHeight` | `ChainCount` | height-semantics Phase 2b, blocked on PR #792 — **UPDATE 2026-09-20 (#792):** unblocked, next |
 | Wallet ledger (`TransferDetails.block_height` / `spent_height` / `eligible_height`, `rust/shekyl-engine-state/src/transfer.rs:226-237`, `rust/shekyl-engine-state/src/transfer.rs:328`) | ORDINAL | `BlockHeight` | `BlockHeight` | keep |
 | Emission / claim source | COUNT split at decode | `ChainCount` | `ChainCount` | keep (pattern) |
 | Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs:47-54`, wrap at `rust/shekyl-daemon-rpc/src/chain_facts.rs:439-442`) | COUNT (target: COUNT-or-sentinel) | COUNT as `BlockHeight` | `ChainCount` and `Option<ChainCount>` | height-semantics Phase 2c |
@@ -263,7 +265,7 @@ quantity.
   `block_at` stays `BlockHeight`; `anchor_t0` / due / alarm / dispatch
   `at` retype together (WI-3 R2-1). No numeric change (Phase 1).
   Persisted stamp fields that change type take a schema bump (rule 42).
-  **Blocked on PR #792** — that PR still wraps the same clock as
+  **Blocked on PR #792** (**UPDATE 2026-09-20 (#792):** merged — unblocked) — that PR still wraps the same clock as
   `BlockHeight`; retyping under it fights. Falsify the block:
   `gh pr view 792 --json state` reports `MERGED`. If #792 is still
   OPEN when this file is next touched for Phase 2b, wait; do not start

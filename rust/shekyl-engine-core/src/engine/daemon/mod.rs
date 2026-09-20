@@ -38,6 +38,24 @@
 //! Wallet-file vs caller network remains [`OpenError::NetworkMismatch`]
 //! (`{ wallet, expected }`); that is a different fact.
 
+/// `WALLET_SIDE_STORE.md` `WSS-Q14` (ruled 2026-09-19): [`SyncedChainFacts`],
+/// the one wallet-side type that says a chain reading came from a daemon
+/// reporting itself synchronized. Steering's `R-B` — while the daemon reports
+/// syncing the answer is **unknown**, so do not erase, post or sign — is made
+/// structural: a consumer takes the type, and there is no constructor from an
+/// unsynchronized reading. Closes `WSS-25`.
+///
+/// It lives **inside** this module rather than beside it because the design
+/// record's `R1` seam says the type is *built from the engine's daemon
+/// client*: the `get_info` decode it shares with [`DaemonEngine::get_health`]
+/// has exactly one other caller, in this file. Keeping the response vocabulary
+/// in one directory is what makes "a DRS response-shape change touches the
+/// constructor and nothing else" a property of the tree rather than a promise
+/// in a comment.
+///
+/// [`SyncedChainFacts`]: synced_chain_facts::SyncedChainFacts
+pub(crate) mod synced_chain_facts;
+
 use std::future::Future;
 
 use serde_json::{json, Value};
@@ -436,40 +454,19 @@ impl DaemonEngine for DaemonClient {
     /// (§5.2 item 3). Identity is already gated at [`Rpc::post`].
     ///
     /// The summed outgoing/incoming connection counts and the sync
-    /// position feed the §5.3 escape ladder's health gate. Untrusted-
-    /// daemon input is parsed defensively (rule `20-rust-vs-cpp-policy`
-    /// §3): a response missing the mandatory `height` field is a
-    /// malformed reply ([`RpcError::InvalidNode`]), not a silently
-    /// defaulted zero (a false "synced at height 0" would mislead the
-    /// ladder's sync gate). Absent connection counts map to `0` — the
-    /// safe direction, since a peerless reading only ever routes to the
-    /// operator-alarm rung, never to a rebuild. `target_height` follows
-    /// the info surface's "0 when synced" convention, so its absence
-    /// maps to `0`, and the connection sum is `saturating_add` (rule §4).
+    /// position feed the §5.3 escape ladder's health gate.
+    ///
+    /// The response decode lives in
+    /// [`health_from_get_info`](synced_chain_facts::health_from_get_info)
+    /// — one parse for this reply, because `SyncedChainFacts` (`WSS-Q14`)
+    /// reads the same fields over a bare [`Rpc`] for callers that do not
+    /// hold this trait, and two decoders over one wire response with no
+    /// cross-check is how a field's meaning drifts on one side only. The
+    /// defensive-parsing rationale moved with it.
     fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
         async move {
             let info: Value = self.json_rpc_call("get_info", None).await?;
-            let height = info
-                .get("height")
-                .and_then(Value::as_u64)
-                .ok_or_else(|| RpcError::InvalidNode("get_info missing height".to_string()))?;
-            let target_height = info
-                .get("target_height")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let outgoing = info
-                .get("outgoing_connections_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let incoming = info
-                .get("incoming_connections_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            Ok(DaemonHealth {
-                connections: outgoing.saturating_add(incoming),
-                height,
-                target_height,
-            })
+            Ok(synced_chain_facts::health_from_get_info(&info)?)
         }
     }
 }

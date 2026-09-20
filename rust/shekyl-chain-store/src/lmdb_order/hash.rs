@@ -156,6 +156,16 @@ impl LmdbHashKey {
         Self(Hash32::from_bytes(bytes))
     }
 
+    /// Least key in `compare_hash32` order — every byte zero. Same bytes as
+    /// the lexicographic minimum; the two orders only disagree in between.
+    pub const MIN: Self = Self::from_bytes([0; 32]);
+
+    /// Greatest key in `compare_hash32` order — every byte `0xff`. Same
+    /// bytes as the lexicographic maximum; a half-open range cannot name a
+    /// successor of this key, which is why walks over this type are
+    /// inclusive.
+    pub const MAX: Self = Self::from_bytes([0xff; 32]);
+
     /// The stored hash, without the key order.
     #[must_use]
     pub const fn to_hash(self) -> Hash32 {
@@ -181,6 +191,28 @@ impl LmdbHashKey {
     #[must_use]
     pub fn order(a: &[u8; 32], b: &[u8; 32]) -> Ordering {
         a.iter().rev().cmp(b.iter().rev())
+    }
+
+    /// Next key in `compare_hash32` order, or [`None`] at [`Self::MAX`].
+    ///
+    /// Byte 0 is the least-significant end (little-endian 256-bit), so the
+    /// increment walks `0..32` and carries toward byte 31 — the opposite
+    /// of a lexicographic successor on `[u8; 32]`.
+    #[must_use]
+    pub const fn checked_successor(self) -> Option<Self> {
+        let mut bytes = self.to_bytes();
+        let mut i = 0;
+        while i < 32 {
+            match bytes[i].checked_add(1) {
+                Some(n) => {
+                    bytes[i] = n;
+                    return Some(Self::from_bytes(bytes));
+                }
+                None => bytes[i] = 0,
+            }
+            i += 1;
+        }
+        None
     }
 }
 
@@ -403,5 +435,49 @@ mod tests {
         assert_eq!(key_encoded, h, "key as_bytes is the same stored form");
         assert_eq!(<LmdbHashKey as Value>::from_bytes(&key_encoded), key);
         assert_eq!(Hash32::from(key).to_bytes(), h);
+    }
+
+    #[test]
+    fn min_is_the_least_key_and_max_has_no_successor() {
+        assert_eq!(LmdbHashKey::MIN, LmdbHashKey::from_bytes([0; 32]));
+        assert_eq!(LmdbHashKey::MAX, LmdbHashKey::from_bytes([0xff; 32]));
+        assert!(LmdbHashKey::MIN < LmdbHashKey::MAX);
+        assert_eq!(LmdbHashKey::MAX.checked_successor(), None);
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        assert_eq!(
+            LmdbHashKey::MIN.checked_successor(),
+            Some(LmdbHashKey::from_bytes(one))
+        );
+        let mut carry_from = [0u8; 32];
+        carry_from[0] = 0xff;
+        let mut carry_to = [0u8; 32];
+        carry_to[1] = 1;
+        assert_eq!(
+            LmdbHashKey::from_bytes(carry_from).checked_successor(),
+            Some(LmdbHashKey::from_bytes(carry_to)),
+            "byte 0 is the least-significant end: 0xff carries into byte 1"
+        );
+    }
+
+    #[test]
+    fn txhash_ord_disagrees_on_the_worked_example() {
+        // The reason T6 takes `RangeInclusive<LmdbHashKey>`, not `Range<TxHash>`:
+        // the domain type's Ord is byte-lexicographic, and converting endpoints
+        // into this order inverts the interval on the pair this type exists to
+        // distinguish.
+        let mut lsb_end = [0u8; 32];
+        lsb_end[0] = 1;
+        let mut msb_end = [0u8; 32];
+        msb_end[31] = 1;
+        assert_eq!(
+            LmdbHashKey::from_bytes(lsb_end).cmp(&LmdbHashKey::from_bytes(msb_end)),
+            Ordering::Less
+        );
+        assert_eq!(
+            shekyl_types::TxHash::from_bytes(lsb_end)
+                .cmp(&shekyl_types::TxHash::from_bytes(msb_end)),
+            Ordering::Greater
+        );
     }
 }

@@ -17,6 +17,7 @@ use shekyl_tor_control_wallet::service::{
 };
 use tokio::sync::watch;
 
+use crate::daemon_tip::DaemonTipCache;
 use crate::serve_set::{PinError, PinnedServeSet, ServeSetPinner, Staleness, StalenessBound};
 use crate::signer::HostSigner;
 use crate::PassKey;
@@ -44,9 +45,17 @@ pub struct PersonaServing {
     pub max_streams: u16,
     /// The persona's attestation signing key for the `SF-D8` pass
     /// countersignature — [`NoResidentKey`](crate::NoResidentKey) until the resident key is
-    /// wired (SH-2). The gate height is **not** here: the host reads it
-    /// from the store it serves (see [`crate::signer`]).
+    /// wired (SH-2).
     pub key: Arc<dyn PassKey>,
+    /// The `SF-D5` gate's height source: the configured daemon's tip,
+    /// stamped by a producer the caller owns (see [`crate::signer`] for why
+    /// the daemon and not the served store — `WSS-24`).
+    ///
+    /// Shared, not owned: the host reads it, and whoever built it keeps
+    /// stamping. A cache nobody stamps refuses every anchor, which is the
+    /// correct direction for a persona that cannot see the chain — but it
+    /// is a wiring bug, not a posture.
+    pub tip: Arc<DaemonTipCache>,
 }
 
 impl fmt::Debug for PersonaServing {
@@ -56,6 +65,7 @@ impl fmt::Debug for PersonaServing {
             .field("virtual_port", &self.virtual_port)
             .field("max_streams", &self.max_streams)
             .field("key", &"<dyn PassKey>")
+            .field("tip", &self.tip)
             .finish()
     }
 }
@@ -64,12 +74,21 @@ impl fmt::Debug for PersonaServing {
 ///
 /// Every non-servable outcome renders one identical 404 on the wire; these
 /// are the only place the outcomes are distinguishable, and only in
-/// aggregate. In particular `sign_failures` is how an operator tells "the
-/// serving store could not be read" (`lookup_failures`) from "the store
-/// answered but the attestation key refused" — a persona started with
+/// aggregate. In particular `sign_failures` is how an operator tells "this
+/// persona could not read what it needed" (`lookup_failures`) from "it read
+/// everything and the attestation key refused" — a persona started with
 /// [`NoResidentKey`](crate::NoResidentKey) accrues only the latter. An
 /// ordinary miss — a shard the persona simply does not hold — is the
 /// deliberate 404 and moves neither counter.
+///
+/// `lookup_failures` has **two** causes, deliberately pooled because a
+/// requester cannot distinguish them either: the serving store could not be
+/// read, or there is no usable daemon tip to run the anchor gate against
+/// (nothing stamped yet, the daemon has stopped following the chain, or the last
+/// stamp aged out — `WSS-24`, see [`crate::signer`]). Both mean the same
+/// thing to an operator, which is what the counter is for: this persona has
+/// lost sight of something it needs, and passes are being lost to that
+/// rather than to a signer that is down.
 ///
 /// **Distinguishable is not yet surfaced.** These are read through
 /// [`PersonaServingHost::counters`]; today the production serving task
@@ -287,10 +306,13 @@ impl<P: ServeSetPinner> PersonaServingHost<P> {
         // The reader comes from the witness, not from an argument: the store
         // served must be the store pinned, and the only way to make that
         // unconditional is to leave the caller no way to name a second one.
-        // The signer's gate height comes from that same reader, for the
-        // same reason (see `signer`).
+        //
+        // The signer's gate height does NOT come from that reader. It is the
+        // daemon's tip, carried in on `serving.tip` — the scan tip and the
+        // chain tip answer different questions, and the gate asks the second
+        // one (`WSS-24`; the reasoning is in `signer`'s module doc).
         let provider = StoreShardProvider::new(pinned.reader().clone());
-        let signer = HostSigner::new(pinned.reader().clone(), serving.key);
+        let signer = HostSigner::new(serving.tip, serving.key);
         let endpoint = PServeEndpoint::bind(Arc::new(provider), Arc::new(signer))
             .await
             .map_err(|e| HostError::Bind {

@@ -4,6 +4,17 @@
 
 ### Daemon chain store
 
+- **Transaction read surface (S-TX, DRS-E1 increment 6).** `ReadSnapshot`
+  gains `tx_location` / `tx_record` by `TxHash` (returning `Option` — a hash
+  miss is ordinary), `tx_count`, `tx_prunable` / `tx_output_indices` by
+  `TxStorageId` (returning `AtIndex`, bound first against the dense count),
+  and `tx_locations(RangeInclusive<LmdbHashKey>)`, a bounded walk of
+  `tx_indices` in the table's own key order. `tx_prunable`'s answer is `Prunable { Retained, Discarded }`:
+  a discarded prunable region is a defined state (the hash row stays, the
+  bytes are the archival good), not an error. `TxRecord::wire_bytes`
+  recomposes a transaction's wire form from its segments. **No public read
+  type under the store hands out `unlock_time`** (gated); S-OUT-KI's
+  `RecordedOutput` loses that field. No layout change.
 - **Outputs and key images read surface (S-OUT-KI, DRS-E1 increment 5).**
   `ReadSnapshot` gains `has_key_image` (one body with the validator's
   `BatchView`), `key_images()` (the digest's `spent_keys` scan), and
@@ -20,6 +31,58 @@
   serves LMDB.
 
 - **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 5` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`; `spent_keys` is `Present`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
+
+### Wallet
+
+- **"Synchronized" is a type the release gate must hold
+  (`WALLET_SIDE_STORE.md` `WSS-Q14`, closing `WSS-25`).** New
+  `SyncedChainFacts` in `shekyl-engine-core`: its sole constructor yields
+  chain facts only when the daemon reports itself synchronized, so acting on
+  an unsynchronized view is a compile error rather than a missing branch.
+  The archival serve-set **release gate** now takes it — during a daemon
+  resync (which the C++→Rust cutover forces on every daemon) the bond record
+  answers at pre-bond heights while the answering height climbs through
+  settlement-epoch opens, and the gate would have noted every held shard
+  absent and released all of them. It now records **no absence observations
+  and releases nothing** while the daemon is syncing or unreachable. Harmless
+  today (a release only unpins); this lands before the wallet-side store, in
+  which release deletes and the failure is an honest archiver wiping its
+  holdings and being slashed while it refills. The submit watchdog's `is_synced` — until now the wallet's only reading of
+  sync state — and this constructor now call one shared predicate,
+  `daemon_reports_synchronized`, so the two cannot disagree. No RPC or wire change.
+
+  **Every consensus-derived read of a daemon height now passes through the
+  witness**, not only the release gate. `daemon_claimed_tip` — the one derivation six
+  consumers read their clock through (`anchor_t0`, the claim / drain /
+  release dispatch stamps, both `BlockSource::tip_height` impls, and the
+  pscan finality horizon) — consumes the witness and yields the claimed clock only when one could be
+  minted, refusing otherwise with a named `DaemonSyncing`, so a post cannot be
+  stamped on a resync height. Claim
+  assembly refuses before signing, and the exit path refuses before reading
+  a bond record as an exit verdict; both surface as "resyncing, retry",
+  never as "you have nothing staked". `SyncedChainFacts` and the `get_info`
+  decode now live inside the `engine::daemon` module tree, beside the client
+  they are built from. Proof **verification** is not yet gated: a new
+  refusal there needs a `-293xx` JSON-RPC contract code, which is the wallet
+  RPC contract's surface, not this change's.
+
+  **The vouching is bracketed, and the ledger has an identity.** A vouched
+  view is minted only between two identical readings of the block the sync
+  witness stood on — that block is re-read *after* the record
+  (`SyncedChainFacts::bracket`), so a reorg that crosses the witness tip and
+  catches back up cannot pass as ordinary advance; what the bracket does not
+  cover is named on it, and its closing fix (the claim-source reply carrying
+  its own gather-tip hash) is filed to the daemon-RPC lane. The departure
+  ledger rests on the hash of the block at its observed height, re-read
+  before any observation is carried across, and hears every vouched
+  observation whatever the holdings kind — a `CompleteTree` record owes
+  everything, which forgets the absence clocks a compact record started. The
+  `get_info` decode's error contract is `GetInfoFault`, one member per
+  mandatory field, every member a node fault and never a transport failure.
+  The anchor gate's daemon-tip reading (`WSS-24`, #791, which landed first
+  with its own copy of the sync conjunction) now decodes through the same
+  decoder and takes its verdict from the same predicate, which also closes
+  its absent-`target_height`-reads-as-synchronized default.
 
 ### Consensus
 
@@ -222,6 +285,42 @@
   surface at all. No behaviour change beyond the log text.
 
 ### Changed
+
+- **A persona's pass gate reads the daemon's tip, not the wallet's block
+  scan (`WSS-24`).** The `SF-D5` anchor gate admits a challenge only when
+  `|anchor − (own_height − 720)| ≤ 4`, and `own_height` was the height the
+  **principal's block scan** had advanced the serving store to. Nothing
+  bounds that lag below the gate's 4 blocks — the serving side's only
+  freshness check (`caught_up`, slack 64) reports to the operator alarm
+  board and gates nothing, and no timer in this workspace starts a wallet
+  refresh at all (the scan advances only when a client calls the `refresh`
+  JSON-RPC). An honest persona whose wallet had not refreshed recently
+  therefore refused **valid** challenges, missed the pass, and was slashed
+  for its own scanner's cadence.
+
+  `own_height` is now the configured daemon's top block height, read over
+  the persona's own transport (loopback by default, never a peer draw),
+  gated on the daemon's own health facts (the sticky `synchronized` flag is
+  necessary, not sufficient — `offline`, `following_degraded` and, where
+  `--restricted-rpc` has not zeroed them, the peer counts must agree), and
+  cached with an age bound of one block target, refreshed four times per
+  bound. That bound buys a **residual, not a guarantee**: block arrival is
+  Poisson, so a wall-clock age does not cap how many blocks a cached tip
+  can miss, only how likely. With the gate's `L = 4`, the probability the
+  cache alone pushes an honest persona out of the window is about `1e-6`
+  in steady state (age roughly uniform on one refresh interval) and
+  `3.7e-3` at the bound, which is reached only after three consecutive
+  failed polls. The multiplier is a named constant with that table beside
+  it; tightening it is a ruling, not an edit. A daemon that has stopped
+  following the chain, or a tip past the age bound, refuses; a single
+  unreachable poll does not, because an unreachable daemon is the absence
+  of a fact and the age bound already covers it. A reply whose `status` is
+  not `OK` is the same absence: its body is not evidence, so it neither
+  refreshes nor clears the held tip. Refusals keep their existing handling:
+  the identical 404 and a `ServeCounters` lookup failure, with no new error
+  surface. Chain height becomes block height once, at the RPC read —
+  `get_info.height` is top + 1 while admission centres its window on
+  `predecessor_height − 720`.
 
 - **Isolation gate check 6: the pinned PoW test setter is link-time
   unreachable from production.** `check_randomx_symbol_isolation.sh`
@@ -22488,7 +22587,7 @@ production callers.
   [`docs/CI_BASELINE.md`](./CI_BASELINE.md) cluster C.
 
 - **`DaemonClient::inner()` accessor** in
-  [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon.rs).
+  [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon/mod.rs).
   The method exposed the wrapped `SimpleRequestRpc` so callers
   could invoke `Rpc` methods through it; with the Stage 1 PR 1
   parameterization, `DaemonClient` implements `Rpc` directly and

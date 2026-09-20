@@ -193,8 +193,10 @@ impl ReadFault {
     }
 }
 
-/// SI-7 for a row the dense ranges say must exist and does not.
-fn absent(cell: &'static str) -> ReadFault {
+/// SI-7 for a row the dense ranges say must exist and does not. Shared
+/// with `tx_reads`: a permanent hash row missing below its record is the
+/// same fault class.
+pub(super) fn absent(cell: &'static str) -> ReadFault {
     ReadFault::Invariant(StoreInvariant::CellCorrupt {
         key: cell,
         fault: CellFault::Absent,
