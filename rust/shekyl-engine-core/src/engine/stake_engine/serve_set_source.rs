@@ -328,6 +328,12 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                          pin is released and holdings are retained. Check that the daemon's \
                          version matches this wallet's expectations"
                     ),
+                    TimelineBreak::WitnessBlockReplaced => tracing::warn!(
+                        "serve-set refresh: the block the sync witness stood on was replaced \
+                         while the bond record was being read — a reorg crossed it, so nothing \
+                         vouches for this record. Departure observations are discarded and \
+                         re-taken; no pin is released this refresh"
+                    ),
                     TimelineBreak::DaemonUnreachable | TimelineBreak::ChainRolledBack => {
                         tracing::warn!(
                             why = ?why,

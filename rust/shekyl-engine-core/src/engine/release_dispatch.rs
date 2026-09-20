@@ -901,6 +901,7 @@ mod tests {
             (TimelineBreak::DaemonSyncing, true),
             (TimelineBreak::FactsUnreadable, false),
             (TimelineBreak::DaemonUnreachable, false),
+            (TimelineBreak::WitnessBlockReplaced, false),
         ] {
             let fetched = ClaimSourceFor::for_test_with_vouching(
                 p_id,
@@ -929,7 +930,12 @@ mod tests {
             BlockHash::from_bytes([0xAB; 32]),
         )
         .expect("synced");
-        let view = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001));
+        let view = CoherentChainView::reconcile(
+            &stale_high
+                .bracket(stale_high.top_hash())
+                .expect("bracketed"),
+            ChainCount::from_raw(10_001),
+        );
         assert!(view.rolled_back(), "the fixture must actually roll back");
         let fetched = ClaimSourceFor::for_test_with_vouching(
             p_id,
@@ -944,7 +950,12 @@ mod tests {
 
         // And the control: an agreeing, vouched record is admitted, so the
         // refusals above are the gate and not a helper that refuses all.
-        let agreeing = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(20_001));
+        let agreeing = CoherentChainView::reconcile(
+            &stale_high
+                .bracket(stale_high.top_hash())
+                .expect("bracketed"),
+            ChainCount::from_raw(20_001),
+        );
         let fetched = ClaimSourceFor::for_test_with_vouching(
             p_id,
             bondless_source(),

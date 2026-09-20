@@ -47,9 +47,10 @@ use shekyl_archival_retention::{
 use shekyl_rpc_client::{Rpc, RpcError};
 
 use crate::engine::daemon::synced_chain_facts::{
-    fetch_synced_chain_facts, CoherentChainView, TimelineBreak,
+    fetch_synced_chain_facts, BracketedChainFacts, CoherentChainView, SyncedChainFacts,
+    TimelineBreak,
 };
-use shekyl_types::{ChainCount, PCanonicalId};
+use shekyl_types::{BlockHash, ChainCount, PCanonicalId};
 
 /// The daemon JSON-RPC method name (registered on both the epee and
 /// Rust/Axum transports in PR 1's daemon half).
@@ -687,7 +688,13 @@ impl VouchedClaimSource {
             )),
         )
         .expect("test vouching is synchronized by construction");
-        let vouching = Vouching::Vouched(CoherentChainView::reconcile(&facts, source.chain_height));
+        let bracketed = facts
+            .bracket(facts.top_hash())
+            .expect("the test witness stands on its own block");
+        let vouching = Vouching::Vouched(CoherentChainView::reconcile(
+            &bracketed,
+            source.chain_height,
+        ));
         Self { source, vouching }
     }
 
@@ -717,11 +724,23 @@ impl VouchedClaimSource {
 /// store read, say — which is safe because the ordering that matters is
 /// internal.
 ///
+/// **Then the bracket.** Ordering alone says the record is the later read;
+/// it does not say the record was gathered on the chain the witness
+/// described — a reorg that crosses the witness tip and catches back up
+/// inside the window leaves the *heights* looking like ordinary advance. So
+/// after the record is in hand the block at the witness tip is re-read
+/// ([`SyncedChainFacts::bracket`]), and only a witness found standing on the
+/// same block can be reconciled. Three sequential round trips, then: witness,
+/// record, re-read. The third is a `get_block_hash` at one height, and it is
+/// paid on every path that mints a vouched view — claim assembly, the exit
+/// path, the serve-set refresh. What it does not prove is on `bracket`.
+///
 /// # Errors
 ///
 /// [`EmissionSourceError`] only for the record read. A failed *facts* read
-/// is not an error here: it is [`Vouching::Broken`], because the record may
-/// still be worth describing even when it cannot be acted on.
+/// or a failed re-read is not an error here: it is [`Vouching::Broken`],
+/// because the record may still be worth describing even when it cannot be
+/// acted on.
 pub(crate) async fn fetch_vouched_claim_source<R: Rpc>(
     rpc: &R,
     p_id: &[u8; 32],
@@ -729,14 +748,41 @@ pub(crate) async fn fetch_vouched_claim_source<R: Rpc>(
     // Witness first, and awaited, before the record request is issued.
     let witness = fetch_synced_chain_facts(rpc).await;
     let source = fetch_emission_claim_source(rpc, p_id).await?;
+    // Then the bracket: the witness block re-read AFTER the record is in
+    // hand. Only a bracketed witness can be reconciled, so this is not a
+    // step the function could forget.
     let vouching = match witness {
-        Ok(Some(facts)) => {
-            Vouching::Vouched(CoherentChainView::reconcile(&facts, source.chain_height))
-        }
+        Ok(Some(facts)) => match bracket_after_record(rpc, facts).await {
+            Ok(bracketed) => Vouching::Vouched(CoherentChainView::reconcile(
+                &bracketed,
+                source.chain_height,
+            )),
+            Err(why) => Vouching::Broken(why),
+        },
         Ok(None) => Vouching::Broken(TimelineBreak::DaemonSyncing),
         Err(e) => Vouching::Broken(TimelineBreak::from_facts_error(&e)),
     };
     Ok(VouchedClaimSource { source, vouching })
+}
+
+/// Re-read the block the witness stands on, now that the record is in hand,
+/// and confirm the witness against it.
+///
+/// One `get_block_hash` at the witness **height** — not a second `get_info`,
+/// whose top hash would move on any honest advance during the record read.
+/// A re-read that fails is classified like a failed witness read: the wallet
+/// cannot vouch, and the reason is the transport's or the contract's.
+async fn bracket_after_record<R: Rpc>(
+    rpc: &R,
+    facts: SyncedChainFacts,
+) -> Result<BracketedChainFacts, TimelineBreak> {
+    let number =
+        usize::try_from(facts.tip().to_raw()).map_err(|_| TimelineBreak::FactsUnreadable)?;
+    let at_tip_now = rpc
+        .get_block_hash(number)
+        .await
+        .map_err(|e| TimelineBreak::from_facts_error(&e))?;
+    facts.bracket(BlockHash::from_bytes(at_tip_now))
 }
 
 /// A claim-source response **paired with the `P` it was actually requested

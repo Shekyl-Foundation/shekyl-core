@@ -546,6 +546,21 @@ mod tests {
         }
 
         impl Rpc for ClaimSourceDaemon {
+            /// The bracket's re-read, from the same derivation `get_info`'s
+            /// top hash below comes from, so the witness stands on its own
+            /// block. The default would ride `post` and be answered with the
+            /// claim source.
+            fn get_block_hash(
+                &self,
+                number: usize,
+            ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+                async move {
+                    Ok(crate::engine::test_support::test_block_hash_at(
+                        number as u64,
+                    ))
+                }
+            }
+
             /// Dispatches on the JSON-RPC method: the orchestrator now reads
             /// `get_info` for the sync witness alongside the claim source, so
             /// answering every method with the claim source would decode as a

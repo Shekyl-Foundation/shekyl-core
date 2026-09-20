@@ -211,7 +211,10 @@ fn the_flag_alone_does_not_override_the_heights() {
 fn agreeing_view(tip: u64) -> CoherentChainView {
     let synced =
         SyncedChainFacts::new(ChainCount::from_raw(tip + 1), 0, true, any_hash()).expect("synced");
-    CoherentChainView::reconcile(&synced, ChainCount::from_raw(tip + 1))
+    CoherentChainView::reconcile(
+        &synced.bracket(synced.top_hash()).expect("bracketed"),
+        ChainCount::from_raw(tip + 1),
+    )
 }
 
 /// **The sticky-flag hazard.** `synchronized` never returns to false, so a
@@ -225,14 +228,22 @@ fn agreeing_view(tip: u64) -> CoherentChainView {
 fn the_clock_believes_the_lower_of_two_disagreeing_reads() {
     let stale_high =
         SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true, any_hash()).expect("synced");
-    let rolled_back = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001));
+    let rolled_back = CoherentChainView::reconcile(
+        &stale_high
+            .bracket(stale_high.top_hash())
+            .expect("bracketed"),
+        ChainCount::from_raw(10_001),
+    );
     assert_eq!(rolled_back.at(), BlockHeight::from_raw(10_000));
 
     // The ordinary direction — chain advanced between the reads — takes the
     // same rule and equally must not admit the newer height.
     let witness =
         SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true, any_hash()).expect("synced");
-    let advanced = CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001));
+    let advanced = CoherentChainView::reconcile(
+        &witness.bracket(witness.top_hash()).expect("bracketed"),
+        ChainCount::from_raw(20_001),
+    );
     assert_eq!(advanced.at(), BlockHeight::from_raw(10_000));
 }
 
@@ -248,7 +259,13 @@ fn a_record_below_its_witness_is_reported_as_rolled_back() {
     let stale_high =
         SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true, any_hash()).expect("synced");
     assert!(
-        CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001)).rolled_back(),
+        CoherentChainView::reconcile(
+            &stale_high
+                .bracket(stale_high.top_hash())
+                .expect("bracketed"),
+            ChainCount::from_raw(10_001)
+        )
+        .rolled_back(),
         "a record below the witness read before it is the rollback signature"
     );
 
@@ -257,7 +274,11 @@ fn a_record_below_its_witness_is_reported_as_rolled_back() {
     assert!(!agreeing_view(10_000).rolled_back());
     let witness =
         SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true, any_hash()).expect("synced");
-    assert!(!CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001)).rolled_back());
+    assert!(!CoherentChainView::reconcile(
+        &witness.bracket(witness.top_hash()).expect("bracketed"),
+        ChainCount::from_raw(20_001)
+    )
+    .rolled_back());
 }
 
 /// The failure classifier draws the contract-fault/transport line once, so
@@ -307,7 +328,10 @@ fn a_view_anchors_at_its_observed_height_unless_rolled_back() {
     let witness =
         SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true, any_hash()).expect("synced");
 
-    let agreeing = CoherentChainView::reconcile(&witness, ChainCount::from_raw(10_001));
+    let agreeing = CoherentChainView::reconcile(
+        &witness.bracket(witness.top_hash()).expect("bracketed"),
+        ChainCount::from_raw(10_001),
+    );
     let anchor = agreeing.anchor().expect("agreeing reads anchor");
     assert_eq!(
         anchor.height,
@@ -321,15 +345,21 @@ fn a_view_anchors_at_its_observed_height_unless_rolled_back() {
     );
 
     // Chain advanced between the reads: still anchored, at the witness.
-    let advanced = CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001));
+    let advanced = CoherentChainView::reconcile(
+        &witness.bracket(witness.top_hash()).expect("bracketed"),
+        ChainCount::from_raw(20_001),
+    );
     assert_eq!(advanced.anchor().map(|a| a.height), Some(advanced.at()));
 
     // Rolled back: no coherent anchor exists.
     let stale_high =
         SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true, any_hash()).expect("synced");
-    assert!(
-        CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001))
-            .anchor()
-            .is_none()
-    );
+    assert!(CoherentChainView::reconcile(
+        &stale_high
+            .bracket(stale_high.top_hash())
+            .expect("bracketed"),
+        ChainCount::from_raw(10_001)
+    )
+    .anchor()
+    .is_none());
 }

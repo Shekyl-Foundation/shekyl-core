@@ -31,7 +31,10 @@ fn view_at(tip: u64) -> CoherentChainView {
         BlockHash::from_bytes(test_block_hash_at(tip)),
     )
     .expect("synced");
-    CoherentChainView::reconcile(&synced, ChainCount::from_raw(tip + 1))
+    CoherentChainView::reconcile(
+        &synced.bracket(synced.top_hash()).expect("bracketed"),
+        ChainCount::from_raw(tip + 1),
+    )
 }
 
 /// What an **unbroken** chain reports at the ledger's anchor: the very block

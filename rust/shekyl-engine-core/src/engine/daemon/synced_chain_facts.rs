@@ -199,6 +199,64 @@ impl SyncedChainFacts {
     pub(crate) fn tip(&self) -> BlockHeight {
         tip_of(self.chain_height)
     }
+
+    /// Confirm this witness **after** the read it vouches for, by the hash
+    /// the chain reports *now* at the witness tip.
+    ///
+    /// A witness read before a record proves only that the daemon was
+    /// synchronized before the record was gathered. It does not prove the
+    /// record was gathered on the chain the witness described: a reorg can
+    /// begin after `get_info`, replace the witness-tip block, and catch back
+    /// up **above** that height before the record reply, and no relation
+    /// between the two *heights* can see it — `record_tip >= witness_tip`
+    /// reads as ordinary advance. Re-reading the block at the witness tip
+    /// once the record is in hand closes that: if it is the same block
+    /// before and after, the record was gathered between two identical views
+    /// of it — the same-hash-same-block argument, sound for identity at that
+    /// height.
+    ///
+    /// The re-read is at the witness **height**, not at the tip: the tip may
+    /// have honestly advanced during the record read, and a tip-to-tip
+    /// comparison would refuse every such refresh while proving nothing.
+    ///
+    /// # What the bracket does not prove
+    ///
+    /// It bounds the window; it does not make the reads atomic. A chain that
+    /// leaves the witness block and returns to it inside the window is not
+    /// seen. Blocks **above** the witness tip that arrived inside the window
+    /// are not bracketed: the record may carry them, and the identity vouched
+    /// for stops at the witness tip. Both residuals close only when the
+    /// record carries the hash of its own gather tip — a daemon-side wire
+    /// change, filed in `docs/FOLLOWUPS.md`.
+    pub(crate) fn bracket(
+        self,
+        at_tip_now: BlockHash,
+    ) -> Result<BracketedChainFacts, TimelineBreak> {
+        if at_tip_now == self.top_hash {
+            Ok(BracketedChainFacts { facts: self })
+        } else {
+            Err(TimelineBreak::WitnessBlockReplaced)
+        }
+    }
+}
+
+/// A sync witness re-read **after** the record it vouches for, and found to
+/// stand on the same block.
+///
+/// The only input [`CoherentChainView::reconcile`] accepts, so a vouched view
+/// cannot be minted from a witness and a record alone: the post-read is a
+/// type obligation, not a step a caller remembers. Obtained only from
+/// [`SyncedChainFacts::bracket`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BracketedChainFacts {
+    facts: SyncedChainFacts,
+}
+
+impl BracketedChainFacts {
+    /// The witness this bracket confirmed.
+    pub(crate) fn facts(&self) -> &SyncedChainFacts {
+        &self.facts
+    }
 }
 
 /// The sync predicate: `synchronized && (target_height == 0 || height >=
@@ -276,10 +334,13 @@ pub(crate) struct CoherentChainView {
 impl CoherentChainView {
     /// Reconcile the sync witness with the height a record was answered at.
     ///
-    /// Takes the witness by reference so the caller keeps it: holding
-    /// [`SyncedChainFacts`] is what says the wallet may act at all, and that
-    /// permission outlives one reconciliation.
-    pub(crate) fn reconcile(synced: &SyncedChainFacts, record_height: ChainCount) -> Self {
+    /// Takes the **bracketed** witness, and only that: a view exists only for
+    /// a record that was read between two identical readings of the witness
+    /// block ([`SyncedChainFacts::bracket`]). There is no way to reconcile an
+    /// unbracketed witness, which is what makes "vouched" mean the post-read
+    /// happened rather than that a caller remembered to do it.
+    pub(crate) fn reconcile(bracketed: &BracketedChainFacts, record_height: ChainCount) -> Self {
+        let synced = bracketed.facts();
         Self {
             witness_tip: synced.tip(),
             witness_hash: synced.top_hash(),
@@ -373,6 +434,15 @@ pub(crate) enum TimelineBreak {
     /// consumer's own error: the departure ledger takes a `TimelineBreak`
     /// to decide it must forget, and a rollback is exactly a reason to.
     ChainRolledBack,
+    /// The block the witness stood on was **replaced** between the witness
+    /// read and the re-read that brackets the record: a reorg crossed the
+    /// witness tip inside the window. The record may have been gathered on
+    /// either branch, so nothing vouches for it.
+    ///
+    /// Distinct from [`Self::ChainRolledBack`], which the *heights* reveal;
+    /// this is the case the heights cannot reveal — a reorg that caught back
+    /// up — and the reason [`SyncedChainFacts::bracket`] exists.
+    WitnessBlockReplaced,
 }
 
 impl TimelineBreak {
