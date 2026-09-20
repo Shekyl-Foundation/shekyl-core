@@ -551,21 +551,36 @@ of them say something the rig run will not change.
 | Path read-off + `Path` construction | 0.001 s |
 | **Delta** | **73.9 s** |
 | **Per-block amortized advance** | **102 ms** |
-| **Denominator** (`proof::prove`, 2-in, depth 6) | **1.118 s**, converged |
+| **Denominator** (`proof::prove`, 2-in, depth 6) | **1.105 s**, converged |
 | Threshold | **2.0 s** — the **absolute floor** binds, the 15 % arm is 0.17 s |
-| Ratio | 6 609 % |
+| Ratio | 6 694 % |
+| Graded path verified | **yes** — see below |
 
-**Two runs, and the difference is the rig protocol arguing for itself.** An
-earlier run of the same corpus measured **96.8 s** — 31 % higher — because it
-was sharing the box with a C++ daemon compile. The figures above are from a
-quiet machine. Nothing about the finding changes, but the swing is larger than
-many thresholds are, which is the concrete case for §5.2's *sustained, quiet,
-to steady state* discipline: **a run that shares its machine measures the
-other job too.** Both runs are reported rather than only the favourable one.
+**The figures above are from the run that verifies.** The review pass found
+that `paths_verified` had been set from `prove`'s `Ok` and that `proof::verify`
+appeared nowhere in either binary (§3.6), so every earlier run measured work it
+had never shown to be real. The corpus was re-run under the verify gate; these
+are those numbers.
 
-The denominator reproduced to **0.4 %** across the two runs (1.113 s and
-1.118 s), which is the reassuring half of the same comparison: the prover is
-stable, the replay is what the contention moved.
+**What the re-run establishes, precisely.** The **depth-6 sparse path verifies
+against its own root**, and so does each control arm — the first time the
+graded path has been checked at all, at any depth, by anything but the unit
+tests (which reach depth 3). That makes the artifact real. It does **not**
+extend the *cost-equivalence* claim: sparse ≈ dense is still licensed by the
+two-rung control at depths 4 and 5, one rung below the grading depth, exactly
+as §3.5 says.
+
+**The replay reproduced to 0.09 %** across the two quiet runs (73.871 s and
+73.939 s) and the denominator to 1.2 % (1.118 s and 1.105 s) — the measurement
+is stable, and nothing in the review pass moved it, because nothing the fixes
+touched was inside a timer.
+
+**A third run, and the rig protocol arguing for itself.** An earlier run of the
+same corpus measured **96.8 s** — 31 % higher — because it was sharing the box
+with a C++ daemon compile. Reported rather than dropped: the swing is larger
+than many thresholds are, which is the concrete case for §5.2's *sustained,
+quiet, to steady state* discipline. **A run that shares its machine measures
+the other job too.**
 
 **Read it as: ~37× over budget on hardware far faster than the rig.** The
 direction is not in doubt even though the magnitude on a Cortex-A72 is, so
@@ -576,20 +591,23 @@ rig grades.
 
 **Note which arm binds.** At a 1.1 s denominator, 15 % is 0.17 s, so the
 **2 s floor is the whole threshold**. A ratio-only record would have reported
-"6 609 % of proving" and hidden that the budget being missed is an absolute
+"6 694 % of proving" and hidden that the budget being missed is an absolute
 one — which is exactly why §6.3.4 asks for the seconds beside the ratio.
 
 **The byproduct §6.3.4 wanted:** FCMP++ proving time for a 2-in canonical
-transaction at depth 6 is **1.118 s on x86**. Not the Cortex-A72 figure the
+transaction at depth 6 is **1.105 s on x86** (1.105–1.118 s across runs). Not the Cortex-A72 figure the
 project wants — that needs the rig — but the first measured number of its kind
 here, and the rig run yields the A72 one for free.
 
 **The sparse-path control held at every rung, and the ratio is flat across
-two:** −0.0 % at depth 4 (25 993 leaves) and **+0.3 % at depth 5** (467 857
-leaves), plus −1.4 % and +0.2 % at depth 3 and 4 in earlier runs. Flatness
-across adjacent rungs is what licenses the next one, so the record reads
-*"synthesized sparse, one rung above the deepest control arm"* — the claim it
-is entitled to, not "licensed by the control".
+two.** In the verified run: **−1.5 % at depth 4** (25 993 leaves) and
+**−1.1 % at depth 5** (467 857 leaves), both arms verified. Across all runs the
+divergence sits in **−1.5 % … +0.9 %** — reported as a range because at that
+magnitude a single run's figure is noise, not precision, and the claim that
+matters is that the ratio does not *trend* with depth. Flatness across adjacent
+rungs licenses the next one, so the record reads *"synthesized sparse, one rung
+above the deepest control arm"* — the claim it is entitled to, not "licensed by
+the control".
 
 ### 7.2 Open edge — comfortably inside budget, and round-trip bound
 
