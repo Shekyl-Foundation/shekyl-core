@@ -530,3 +530,16 @@ jobs:
         # Instance of 47-gate-subject-assertion.mdc.
         if: '!cancelled()'
         run: python3 scripts/ci/check_landed_rows_stamped.py
+
+      - name: Run bench-crate dependency check
+        # `shekyl-wss-q1b-bench` is a measurement harness -- synthetic corpus,
+        # a rig gate keyed on /proc, a fixture that mints curve points with
+        # known secrets. None of that ships. The crate's own docs say so, and
+        # a crate-doc sentence is not a check (47-gate-subject-assertion.mdc).
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_bench_not_a_dependency.py
+
+      - name: Run bench-crate dependency check selftest
+        # A gate never shown to fire is indistinguishable from one that cannot.
+        if: '!cancelled()'
+        run: python3 scripts/ci/check_bench_not_a_dependency.py --selftest
