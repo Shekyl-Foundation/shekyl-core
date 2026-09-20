@@ -164,6 +164,9 @@ The read itself (unchanged from the TJ round):
    `ContentVerify`). The read stays whole-shard (`SF-D1`); it is verification,
    not the read, that is per-tx (`WSS-Q7`). The response is self-authenticating;
    there is no shard-level `R_k` (the segment freeze is retired, `PDM-Q12`).
+   `ARCHIVAL_SHARD_FETCH.md`'s own `SF-D8` step 2 still reads "recompute
+   `R_k`": `PDM-Q6` item 4 reopened that content half, and `SF` sub-PR 2
+   re-keys it in the owning contract. This document states the ruled form.
 3. P countersigns the read, proving it reached P's link. **As of
    2026-09-13 (`SF-D8`; verifier LANDED by `ARCHIVAL_SHARD_FETCH.md`
    §9.1 step (a0), signer lands with (a)):** the message is the decoded
@@ -1269,8 +1272,14 @@ record, none silently:
   remains — the term is on chain by construction, and the prunable side
   table sheds its `r` entry. (`block_hash(h−1)` then left the signed message
   too — `SF-D8`, 2026-09-13: the request carries requester-random bytes and
-  the requester's chain anchor, §2 step 3 — which changes nothing here: still
-  no residence question.)
+  the requester's chain anchor, §2 step 3. A random term reopens the residence
+  question, and the same ruling answers it: the pass record **carries** the
+  32-byte `nonce` and the 8-byte `anchor_height`, neither recomputable from
+  chain terms; the anchor hash is not carried — admission reads it from the
+  connecting chain at `anchor_height`. +40 bytes per witness entry versus v1
+  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) §`SF-D8`). The
+  record's tx carrier and prunable residence are the pass-record round's,
+  [`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md).)
 - **Secret-set estimators** (`β̂` from pass/miss conflicts; "sets are
   secret, so a padder cannot steer") → moot: with no miss records there is
   nothing to conflict, and sets are public by design. `λ_eff` as the
