@@ -5617,7 +5617,7 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   2026-09-19: it does not.** `frozen_segment_count`'s three consumers are the
   D2 escalation operand (`blockchain.cpp:1502`), the coverage RPC
   (`archival_shard_coverage.cpp:34`) and the freeze / pop-revert path
-  (`db_lmdb.cpp:8090`); none is bond admission, and `ShardSet::new`
+  (`db_lmdb.cpp:7997`); none is bond admission, and `ShardSet::new`
   (`bond_wire.rs:210-227`) bounds a `shard_id` against no chain state at all.
   Bond admission's shard predicate was RULED 2026-09-19 and is being **built,
   not ported** —

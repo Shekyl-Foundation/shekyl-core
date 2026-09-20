@@ -2,7 +2,9 @@
 
 **Status:** **RULED 2026-09-19** (maintainer). The rule is settled; three
 **design** questions are open and belong to the **daemon lane** (§4). Grounded
-at `dev` = `6c41bf820` (the #790 merge); re-pin before implementing.
+at `dev` = `6c41bf820` (the #790 merge) and **re-based onto `fbc92287a`**
+(the #795–#798 `PDM` sweep and #786 S-TX); every code anchor below re-verified
+at that tree. Re-pin before implementing.
 
 **Provenance.** This is `WSS-22`, the one remainder of the wallet-side store
 round ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.5.5), delivered to the
@@ -134,7 +136,7 @@ and not a greenfield. The evidence for the code column:
   operand** (`src/cryptonote_core/blockchain.cpp:1502`, and its own comment
   names it as such), the **coverage RPC**
   (`src/rpc/archival_shard_coverage.cpp:34`), and the **freeze / pop-revert**
-  path (`src/blockchain_db/lmdb/db_lmdb.cpp:8090`). **None is bond admission.**
+  path (`src/blockchain_db/lmdb/db_lmdb.cpp:7997`). **None is bond admission.**
 
 So the daemon lane is **building**, not porting — and a reader who trusts the
 inherited claim will look for a predecessor, find the C++ symbol, and conclude
@@ -151,7 +153,7 @@ The **rule** is ruled. These are **how**, and they are E4 / S-ARCH's:
 | # | Question | Why it is open |
 | --- | --- | --- |
 | **1** | **Where does the predicate live?** | Admission-side in `shekyl-chain-rules`, or in `shekyl-archival-retention` beside the rest of the bond rules. The verifier that lands at E4 / S-ARCH (`PDM-Q6` item 4, row 1) is the natural neighbour, but that is a placement argument, not a ruling |
-| **2** | **At what height is it evaluated?** | Admission reads chain state, so the predicate needs a stated evaluation point — and the same hazard `blockchain.cpp:1469-1499` documents for the D2 operand applies: *"a refactor that moves the read past `add_block` … must stop the node here"*. Whatever height is chosen, **the operand must be captured before the connecting block advances the chain**, or the check becomes a tautology that still passes every test |
+| **2** | **At what height is it evaluated?** | Admission reads chain state, so the predicate needs a stated evaluation point — and the same hazard `blockchain.cpp:1478-1492` documents for the D2 operand applies: *"a refactor that moves the read past `add_block` … must stop the node here"*. Whatever height is chosen, **the operand must be captured before the connecting block advances the chain**, or the check becomes a tautology that still passes every test |
 | **3** | **Does `ShardSet` gain chain context, or does a separate check own this?** | `ShardSet::new` is currently a **pure** constructor — cardinality and duplicates, no I/O, reachable from decoders, FFI marshals and builders alike. Giving it chain context would change that character on **every** one of those paths. A separate admission-side check keeps the constructor pure. **Trade named, not settled:** one fallible constructor is a strong invariant to keep, and a second check is a second thing to remember |
 
 ### 4.1 What the predicate needs, and what supplies it
@@ -163,10 +165,10 @@ The **rule** is ruled. These are **how**, and they are E4 / S-ARCH's:
   (`PDM-Q6` item 3); no new state.
 - **`D_max`** — `archival_reorg_depth_blocks` = 720
   (`config/consensus_constants.json:26`), for the finality leg.
-- **The dense `tx_id` space the partition is derived over.** *In flight:*
-  `DRS_E1_STX.md` (**PR #786, not yet merged** — cite with that state, not as
-  settled) makes `tx_count()` the dense count authority over `txs_pruned` (T2)
-  and records that **`tx_id` order is ruled and dense** (SI-9, STX-10). That
+- **The dense `tx_id` space the partition is derived over.**
+  [`DRS_E1_STX.md`](DRS_E1_STX.md) — **landed 2026-09-19, PR #786** — makes
+  `tx_count()` the dense count authority over `txs_pruned` (T2, `:233`) and
+  records that **`tx_id` order is ruled and dense** (SI-9, STX-10 `:494`). That
   density is what makes *"does shard `k` exist"* a determinate question rather
   than a lookup that can silently answer for a hole.
 
@@ -202,4 +204,4 @@ handoff with no return address.
 
 | Date | Decision |
 | --- | --- |
-| 2026-09-19 | **RULED (maintainer): bond admission accepts only valid, closed, final shards.** Two legs — *"exists"* as hygiene, *"closed and final"* as the determinism load-bearer, extending `PDM-Q6` item 3's non-bondable frontier shard to the reorg window. **Justified on unrepresentability and network economy, explicitly *not* exploit prevention:** the mechanism digests a ghost unaided — bond-derived draws, the single shared 404 (`provider.rs:239`), recorded misses, no credit bit, m-of-n across epochs, the ordinary slash — so the guard is defense in depth in the exact sense, a layer in front of a mechanism that already works. It spares the **network** the draws, circuits, witness work and slash machinery, not `P` from itself. **The reasoning is recorded, not just the conclusion, because the guard survived having its scariest justification dismantled** — a rule still worth its cost after the exploit story dies stands on structure, and nobody should later feel the need to re-inflate the threat to defend it. **Correction carried from the wallet lane, stated precisely:** the task is **a new rule plus an unimplemented old one** — `PDM-Q6` item 3 already rules the open frontier shard non-bondable in **design** (`:458-459`, unbuilt, silent on the reorg window), while the **existence** half has no predecessor at all and **neither half has one in code** — `ShardSet::new` enforces only cardinality and duplicate-freeness (`bond_wire.rs:210-227`), and `frozen_segment_count`'s three consumers (D2 escalation operand, coverage RPC, freeze / pop-revert) are **none of them** bond admission, contrary to the 2026-09-17 decision-log sentence. Three design questions left to **E4 / S-ARCH**: the predicate's site, its evaluation height (with `blockchain.cpp:1469-1499`'s read-point hazard applying), and whether `ShardSet` gains chain context or a separate check owns it — the last trading one fallible constructor against a pure one. |
+| 2026-09-19 | **RULED (maintainer): bond admission accepts only valid, closed, final shards.** Two legs — *"exists"* as hygiene, *"closed and final"* as the determinism load-bearer, extending `PDM-Q6` item 3's non-bondable frontier shard to the reorg window. **Justified on unrepresentability and network economy, explicitly *not* exploit prevention:** the mechanism digests a ghost unaided — bond-derived draws, the single shared 404 (`provider.rs:239`), recorded misses, no credit bit, m-of-n across epochs, the ordinary slash — so the guard is defense in depth in the exact sense, a layer in front of a mechanism that already works. It spares the **network** the draws, circuits, witness work and slash machinery, not `P` from itself. **The reasoning is recorded, not just the conclusion, because the guard survived having its scariest justification dismantled** — a rule still worth its cost after the exploit story dies stands on structure, and nobody should later feel the need to re-inflate the threat to defend it. **Correction carried from the wallet lane, stated precisely:** the task is **a new rule plus an unimplemented old one** — `PDM-Q6` item 3 already rules the open frontier shard non-bondable in **design** (`:458-459`, unbuilt, silent on the reorg window), while the **existence** half has no predecessor at all and **neither half has one in code** — `ShardSet::new` enforces only cardinality and duplicate-freeness (`bond_wire.rs:210-227`), and `frozen_segment_count`'s three consumers (D2 escalation operand, coverage RPC, freeze / pop-revert) are **none of them** bond admission, contrary to the 2026-09-17 decision-log sentence. Three design questions left to **E4 / S-ARCH**: the predicate's site, its evaluation height (with `blockchain.cpp:1478-1492`'s read-point hazard applying), and whether `ShardSet` gains chain context or a separate check owns it — the last trading one fallible constructor against a pure one. |
