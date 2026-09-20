@@ -11,7 +11,9 @@
   substrate (the verifier's `compute_hash`, never the JIT), and the
   **corpus** artifact (Rust-minted, versioned) whose writer verifies every
   block's bodies against its header before writing — a pruned source's
-  silent shortfall is refused by height. Store: `WriteBatch::refuse_corrupt`
+  silent shortfall is refused by height — and whose reader takes the
+  header as the bound on `tx_count` (a crafted count cannot allocate
+  before the listed hashes are known). Store: `WriteBatch::refuse_corrupt`
   lets the validator's `Fault::Corrupt` halt the writer (**SI-10**, recorded
   cumulative work strictly increases; the first invariant armed by the
   validator reading the store); `ReadSnapshot::logical_state_digest_v0`

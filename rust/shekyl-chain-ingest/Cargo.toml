@@ -12,11 +12,14 @@ rust-version.workspace = true
 license.workspace = true
 
 # This crate is the one place the validator, the store and RandomX meet
-# (DRS_E2_REPLAY_DRIVER.md RD-Q1). The store never names RandomX or the
-# validator's fault/substrate types; the validator never names the store (G1);
-# the pipeline names all three and wires them. Dependencies are added as the
-# stage that uses them lands — a dependency with no consumer is a claim about
-# the future, not a fact about the crate.
+# (DRS_E2_REPLAY_DRIVER.md RD-Q1). The store names `Corrupt` at
+# `WriteBatch::refuse_corrupt` (RD-Q4) and nothing else of the validator's
+# fault/substrate types; it never names RandomX or `InvalidBlock`. The
+# validator never names the store (G1); the pipeline names all three and
+# wires them. Dependencies are added as the stage that uses them lands — a
+# dependency with no consumer is a claim about the future, not a fact about
+# the crate. The store dependency lands with the Validate+Connect actor
+# (increment 2); this crate currently names rules + RandomX + the corpus.
 [dependencies]
 # `Substrate`, `Candidate`, the two-stage entry points and the fault arms the
 # supervision map (§1.1) is written over.

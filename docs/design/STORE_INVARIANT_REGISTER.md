@@ -29,9 +29,15 @@ Two consequences of "never decides":
   When it does, the row is a belt behind that rule, and a violation means
   the validator has a hole. When it does not, a violation means the file is
   corrupt or the store's own write path is wrong;
-- a row is enforced at the **write** (an `InsertTable::insert` on a present
-  key, a root that does not match), not by a scan. There is no "check
-  invariants" pass.
+- a row is enforced at a **site**, not by a scan. There is no "check
+  invariants" pass over the file. Two sites:
+  - **write** — an `InsertTable::insert` on a present key, a root that does
+    not match, a fold that would wrap. Most rows.
+  - **validator read** — a rule walked the store and found it incoherent
+    (`Fault::Corrupt`); `WriteBatch::refuse_corrupt` arms the row and
+    poisons the batch. **SI-10** is the first: the inconsistency is already
+    recorded, so a connect-time insert belt cannot see it. The observation
+    arrives because a rule read the cells it needs.
 
 ## 2. The register
 

@@ -99,8 +99,8 @@ pub enum Stale {
 /// View data that violates a store invariant, observed by a rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corrupt {
-    /// Cumulative difficulty decreased between two recorded heights (SI-8
-    /// holds it monotone).
+    /// Cumulative difficulty decreased between two recorded heights (SI-10
+    /// holds it monotone; overflow of the same fold is SI-8).
     CumulativeDifficultyNotMonotone {
         /// The height whose cumulative difficulty is below its parent's.
         at: BlockHeight,
