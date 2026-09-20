@@ -1,6 +1,29 @@
 # Curve-tree `LeafStore` rewrite — typed value shapes, one codec contract, decomposition: plan and Round-0 pre-flight
 
-**Status:** OPEN — **Round 0 (pre-flight) executed 2026-09-18** at `dev` =
+**Status:** **CLOSED AS RECORD 2026-09-18 — superseded by unit.** Successor:
+[`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md), which partitions this
+document's `CTS-1…13` / `CTS-Q1…Q6` by unit in its §8 and carries the
+unit-independent work forward as its increment 1. **Read this document as the
+record of what was ruled on 2026-09-18 against the *leaf* unit**, not as a
+live plan: `PDM-Q12` (`ARCHIVAL_PRUNED_DAEMON_MODE.md`, ruled and amended the
+same day) retires the segment-freeze pipeline and re-keys the store's serving
+half from leaves to prunable bodies, so `CTS-Q1`'s subject
+(`open_frozen_segment_body`) and `CTS-4`/`CTS-Q5`'s `FrozenSegmentRecord` are
+on that ruling's deletion surface. **The rulings below are not reversed; their
+subjects are retired.** Closed as record rather than amended in place on
+steering's ground (2026-09-18): *"CTS as-is was an initial design, but the
+daemon DRS series has refined that design. In essence, the daemon is canon,
+and the wallet store serves to securely serve a SLICE of that canonical
+data."* One document holding a ruled leaf-unit design and a body-unit
+supersession of it is how a contract starts lying.
+
+**What retains its clearance: PR A alone** (`shekyl-store-codec`, §2.1 A /
+§2.3), cleared ahead of the successor round by steering the same day — it is
+the only piece here that survives every answer to the successor's `WSS-Q1`,
+it is a mechanical move with re-exports and no behaviour change, and DRS-E3
+wants it too. **No other implementation PR from this document lands.**
+
+*Original status, retained:* OPEN — **Round 0 (pre-flight) executed 2026-09-18** at `dev` =
 `d89f99791` (the #772 merge). **Round 1 ruled 2026-09-18** (maintainer, on PR
 #776; §8, each ruling line-local): CTS-Q1 ruled to a third option — type the
 **return** of `open_frozen_segment_body`, not the handle (§2.1 F, §3.1);
@@ -383,6 +406,7 @@ reviewable as one move they merge, never the other way.
 
 | Date | Decision |
 | --- | --- |
+| 2026-09-18 | **Closed as record; superseded by unit.** `PDM-Q12` retires the segment-freeze pipeline and rebuilds the store's serving half around prunable bodies keyed by shard, which retires `CTS-Q1`'s subject and `CTS-4`/`CTS-Q5`'s record. Successor round opened the same day: [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md), family `WSS-`, which partitions this document's findings and questions into unit-independent (its increment 1), superseded-by-the-body-unit, and `WSS-Q1`-dependent buckets (§8 there). Steering ruled successor-round over scope-amendment: the daemon is canon and the wallet store serves a slice of it, so a document ruled against the leaf unit stays a record rather than becoming a contract that contradicts itself. PR A (`shekyl-store-codec`) keeps its clearance and lands as the successor's increment 1; nothing else here is built. |
 | 2026-09-18 | **Round 1 ruled (maintainer, on PR #776).** CTS-Q1 to a third option: type the return of `open_frozen_segment_body` — `SegmentAvailability { Servable, NotYetFrozen, Pruned }`, the twin of `SegmentPin` — rather than a typestate handle; the handle would prevent what the runtime check already prevents, the typed return makes retry-later and rebuild-required two arms a caller must write. Premise correction recorded in the row: at source the pruned case is already `Err(FrozenSegmentPruned)` and `p-serve` names it, so the defect is shape (a state as an absence; an instruction as one error variant among seventeen), not a live retry-forever. Handle reopening sharpened from "when serve-set code is next touched" to a named trigger with a falsifier. **§3.1 added — "absence is a case, never a value"** — the class stated once with its three instances (`curve_tree_roots` → *O*, CEN-I12; `top_block_hash` `UINT64_MAX`, SCR-4; `meta` `unwrap_or`, CTS-8) and the rules crate's discriminator; `MetaCell` justified by it. CTS-Q2…Q6 stand; CTS-7/8/9 dispositions sharpened as ruled (set wearing a map; third instance; coverage for a case that cannot occur). Commit sequence gains the one API commit (10). Implementation may start, PR A first. |
 | 2026-09-18 | **PR #776 review (Copilot: 1 open + 5 suppressed; 6 taken, 0 refuted).** The open one reshaped PR A: with `Canonical` foreign to `shekyl-chain-store`, its vocabulary-type impls are orphan-rule violations, and a `redb`-only codec crate cannot host them — so `shekyl-store-codec` depends on `shekyl-types` + `shekyl-units` and hosts those codecs once for both stores, with `RuleSetId` as the one named local adapter (CTS-13, CTS-Q6). Suppressed, all valid: `Restorable`/`check_row` locations; `Blob<K>` missing from the allowed-shapes sentence; the pre-6 refusal stated precisely (the v6 `meta` open inside `check_schema_version` is where a v5 file is refused, before any cell is read — `LayoutForeign`; open order and no-mutation preserved); `CURVE_TREE_CLIENT.md` §3.6's "does not exist yet" gets an in-line UPDATE now; DRS §11.1(f)'s "three shapes" → four. |
 | 2026-09-18 | **Round 0 executed at `d89f99791`.** Twelve findings, five questions with defaults, a two-PR split (shared crate first), a nine-commit sequence for PR B with one layout commit, and a module tree with envelopes to be held by a ratchet. The brief: proper types, DRY, decomposition — not transcription. The one thing deliberately *not* proposed is any change to what the nine dependents call. |
