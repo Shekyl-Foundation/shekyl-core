@@ -60,7 +60,7 @@ use shekyl_types::BlockHash;
 
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 
-use crate::engine::daemon::synced_chain_facts::{ChainAnchor, CoherentChainView, TimelineBreak};
+use crate::engine::daemon::synced_chain_facts::{AnchoredView, ChainAnchor, TimelineBreak};
 
 /// Consecutive epoch opens a shard must be absent across before its pin may
 /// be released.
@@ -155,7 +155,7 @@ impl Obligation<'_> {
 /// ledger forgets, rather than trying to reason about what it did not see.
 #[derive(Debug, Default)]
 pub(crate) struct DepartureLedger {
-    absent_since: BTreeMap<u64, CoherentChainView>,
+    absent_since: BTreeMap<u64, AnchoredView>,
     /// The chain identity the current observations were taken against.
     /// Before the next observation is carried, the caller re-reads the block
     /// at this height and the ledger checks it is still this block.
@@ -166,6 +166,11 @@ impl DepartureLedger {
     /// Fold one refresh's observation in, and return the shards whose pins
     /// are now releasable.
     ///
+    /// `view` is an [`AnchoredView`] and nothing weaker: the ledger records
+    /// no observation it could not later check for continuity, and that is
+    /// the argument type's guarantee rather than a branch here or a guard at
+    /// the call site (the edit that would reopen it is `observe` accepting a
+    /// `CoherentChainView` again — which no longer compiles at the pinner).
     /// `obligation` is what the connected record says this persona must
     /// serve, in the record's own shape ([`Obligation`]); `pinned` is what
     /// the store is actually retaining. The difference is
@@ -196,7 +201,7 @@ impl DepartureLedger {
     /// that reverses inside the window costs nothing and leaves no trace.
     pub(crate) fn observe(
         &mut self,
-        view: CoherentChainView,
+        view: AnchoredView,
         continuity: Continuity,
         obligation: Obligation<'_>,
         pinned: &[u64],
@@ -215,17 +220,13 @@ impl DepartureLedger {
         if !carried {
             self.absent_since.clear();
         }
-        // A view with no coherent anchor (the reads disagreed in the
-        // rollback direction) must not become the thing the NEXT refresh
-        // rests on; the caller breaks the timeline on that path before
-        // reaching here, so this is belt to that braces.
-        match view.anchor() {
-            Some(anchor) => self.resting_on = Some(anchor),
-            None => {
-                self.absent_since.clear();
-                self.resting_on = None;
-            }
-        }
+        // This observation becomes what the NEXT refresh rests on. There is
+        // no unanchored branch to get wrong: an `AnchoredView` cannot be a
+        // rolled-back view, so nothing recorded here is ever un-checkable.
+        // (The branch this replaces cleared the ledger for such a view and
+        // then recorded from it anyway, with `resting_on` left `None` — the
+        // next refresh read those entries as a first timeline.)
+        self.resting_on = Some(view.anchor());
 
         // A shard back in the record is not departed at all: drop its entry
         // so its clock restarts if it leaves again.

@@ -15,7 +15,7 @@ use shekyl_types::ChainCount;
 
 use shekyl_types::BlockHash;
 
-use crate::engine::daemon::synced_chain_facts::SyncedChainFacts;
+use crate::engine::daemon::synced_chain_facts::{CoherentChainView, SyncedChainFacts};
 use crate::engine::test_support::test_block_hash_at;
 
 /// A view both reads agree on at `tip`.
@@ -23,7 +23,7 @@ use crate::engine::test_support::test_block_hash_at;
 /// Built through the real constructor rather than the private field so the
 /// `min` relation is exercised by every test here, not only the one that
 /// names it.
-fn view_at(tip: u64) -> CoherentChainView {
+fn view_at(tip: u64) -> AnchoredView {
     let synced = SyncedChainFacts::new(
         ChainCount::from_raw(tip + 1),
         0,
@@ -35,6 +35,8 @@ fn view_at(tip: u64) -> CoherentChainView {
         &synced.bracket(synced.top_hash()).expect("bracketed"),
         ChainCount::from_raw(tip + 1),
     )
+    .anchored()
+    .expect("agreeing reads are anchored")
 }
 
 /// What an **unbroken** chain reports at the ledger's anchor: the very block
@@ -495,7 +497,7 @@ fn an_owed_everything_observation_forgets_every_absence_and_moves_the_anchor() {
     );
     assert_eq!(
         ledger.resting_on(),
-        everything.anchor(),
+        Some(everything.anchor()),
         "the anchor moves to this observation so the next refresh verifies continuity here"
     );
 

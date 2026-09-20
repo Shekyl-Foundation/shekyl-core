@@ -364,9 +364,15 @@ impl CoherentChainView {
         }
     }
 
-    /// The chain identity this view was observed against, or `None` if the
-    /// two reads disagree in the rollback direction and there is no coherent
-    /// one.
+    /// The view **with** the anchor its observations rest on, or the reason
+    /// it has none: a record below its witness is a rollback, and a view the
+    /// chain has abandoned anchors nothing.
+    ///
+    /// This is the only way to obtain an [`AnchoredView`], which is the only
+    /// view the departure ledger accepts — so "no observation is recorded
+    /// without an anchor to check it against" is a property of the argument
+    /// type rather than of a branch inside `observe` or a guard at its call
+    /// site. The pinner and the acting lanes both go through here.
     ///
     /// # Why height monotonicity is not a timeline
     ///
@@ -389,15 +395,20 @@ impl CoherentChainView {
     /// height?* A reorg entirely above it leaves the answer yes, and the
     /// observations correctly survive.
     ///
-    /// On every path that proceeds to observe, `at()` equals the witness
-    /// tip — a record above the witness is ordinary advance and the minimum
-    /// picks the witness; a record below is a rollback and this returns
-    /// `None` — so the witness hash is the hash *at* `at()`, and the anchor
+    /// On every path that proceeds, `at()` equals the witness tip — a record
+    /// above the witness is ordinary advance and the minimum picks the
+    /// witness — so the witness hash is the hash *at* `at()`, and the anchor
     /// is exactly the pair the ledger needs.
-    pub(crate) fn anchor(self) -> Option<ChainAnchor> {
-        (!self.rolled_back()).then_some(ChainAnchor {
-            height: self.witness_tip,
-            hash: self.witness_hash,
+    pub(crate) fn anchored(self) -> Result<AnchoredView, TimelineBreak> {
+        if self.rolled_back() {
+            return Err(TimelineBreak::ChainRolledBack);
+        }
+        Ok(AnchoredView {
+            at: self.at(),
+            anchor: ChainAnchor {
+                height: self.witness_tip,
+                hash: self.witness_hash,
+            },
         })
     }
 
@@ -421,6 +432,33 @@ impl CoherentChainView {
     /// of the chain and no choice of clock repairs them.
     pub(crate) fn rolled_back(self) -> bool {
         self.record_tip < self.witness_tip
+    }
+}
+
+/// A coherent view **with** the anchor its observations rest on — the only
+/// view the departure ledger accepts.
+///
+/// Obtained only from [`CoherentChainView::anchored`], which refuses a
+/// rolled-back view. So a view the chain has abandoned cannot be handed to
+/// the ledger at all: the invariant that every recorded observation is
+/// continuity-checkable lives in this type, and a caller that skipped the
+/// check has nothing to pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AnchoredView {
+    at: BlockHeight,
+    anchor: ChainAnchor,
+}
+
+impl AnchoredView {
+    /// The clock elapsed-obligation arithmetic may count on — the same
+    /// lower-of-two-reads rule as [`CoherentChainView::at`].
+    pub(crate) fn at(self) -> BlockHeight {
+        self.at
+    }
+
+    /// The block this observation rests on: the witness block, at `at()`.
+    pub(crate) fn anchor(self) -> ChainAnchor {
+        self.anchor
     }
 }
 

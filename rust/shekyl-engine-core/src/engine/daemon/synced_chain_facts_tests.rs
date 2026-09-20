@@ -326,49 +326,51 @@ fn a_reply_without_a_top_hash_is_refused_rather_than_defaulted() {
     );
 }
 
-/// The view yields an anchor exactly when the reads agree — and it is the
-/// anchor at the **observed** height, carrying the witness's identity, which
-/// is the pair the ledger rests on. A rolled-back view has no coherent
-/// anchor and yields none.
+/// **The anchor is at the observed height, and only a view that has one can
+/// be observed.** `anchored()` is the sole way to an `AnchoredView`; a
+/// rolled-back view has no anchor and is refused with `ChainRolledBack`, so
+/// the ledger cannot be handed evidence it could never continuity-check.
+///
+/// The edit that turns this red is `anchored()` succeeding on a rolled-back
+/// view, or anchoring at the record's height instead of the witness's.
 #[test]
 fn a_view_anchors_at_its_observed_height_unless_rolled_back() {
     let witness =
         SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true, any_hash()).expect("synced");
-
-    let agreeing = CoherentChainView::reconcile(
-        &witness.bracket(witness.top_hash()).expect("bracketed"),
-        ChainCount::from_raw(10_001),
-    );
-    let anchor = agreeing.anchor().expect("agreeing reads anchor");
+    let bracketed = witness.bracket(witness.top_hash()).expect("bracketed");
+    let agreeing = CoherentChainView::reconcile(&bracketed, ChainCount::from_raw(10_001))
+        .anchored()
+        .expect("agreeing reads are anchored");
     assert_eq!(
-        anchor.height,
-        agreeing.at(),
-        "the anchor is at the observed height"
+        agreeing.anchor(),
+        ChainAnchor {
+            height: BlockHeight::from_raw(10_000),
+            hash: witness.top_hash(),
+        }
     );
+    let advanced = CoherentChainView::reconcile(&bracketed, ChainCount::from_raw(20_001))
+        .anchored()
+        .expect("advance is anchored at the witness");
     assert_eq!(
-        anchor.hash,
-        any_hash(),
-        "and carries the witness's identity"
+        advanced.anchor().height,
+        advanced.at(),
+        "the anchor is at the observed height, not the record's"
     );
 
-    // Chain advanced between the reads: still anchored, at the witness.
-    let advanced = CoherentChainView::reconcile(
-        &witness.bracket(witness.top_hash()).expect("bracketed"),
-        ChainCount::from_raw(20_001),
-    );
-    assert_eq!(advanced.anchor().map(|a| a.height), Some(advanced.at()));
-
-    // Rolled back: no coherent anchor exists.
     let stale_high =
         SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true, any_hash()).expect("synced");
-    assert!(CoherentChainView::reconcile(
+    let rolled_back = CoherentChainView::reconcile(
         &stale_high
             .bracket(stale_high.top_hash())
             .expect("bracketed"),
-        ChainCount::from_raw(10_001)
-    )
-    .anchor()
-    .is_none());
+        ChainCount::from_raw(10_001),
+    );
+    assert_eq!(
+        rolled_back
+            .anchored()
+            .expect_err("a rolled-back view has no anchor"),
+        TimelineBreak::ChainRolledBack
+    );
 }
 
 /// **The error contract, as a type.** Every `get_info` contract fault is

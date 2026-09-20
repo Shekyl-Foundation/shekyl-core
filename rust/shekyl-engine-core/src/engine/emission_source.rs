@@ -47,8 +47,8 @@ use shekyl_archival_retention::{
 use shekyl_rpc_client::{Rpc, RpcError};
 
 use crate::engine::daemon::synced_chain_facts::{
-    fetch_synced_chain_facts, BracketedChainFacts, CoherentChainView, SyncedChainFacts,
-    TimelineBreak,
+    fetch_synced_chain_facts, AnchoredView, BracketedChainFacts, CoherentChainView,
+    SyncedChainFacts, TimelineBreak,
 };
 use shekyl_types::{BlockHash, ChainCount, PCanonicalId};
 
@@ -647,7 +647,11 @@ impl VouchedClaimSource {
         self.source
     }
 
-    /// Whether this record may be acted on, and if not, why not.
+    /// The vouching as decided, for tests that assert *which* broken state
+    /// production reached. Production reads [`Self::actionable`], which is
+    /// the only question it asks; this hatch is test-only for the same
+    /// reason [`Self::for_test`] is.
+    #[cfg(test)]
     pub(crate) fn vouching(&self) -> Vouching {
         self.vouching
     }
@@ -659,10 +663,9 @@ impl VouchedClaimSource {
     /// A rolled-back record is refused here rather than clocked around,
     /// because no choice of clock repairs contents drawn from a view the
     /// chain has abandoned.
-    pub(crate) fn actionable(&self) -> Result<CoherentChainView, TimelineBreak> {
+    pub(crate) fn actionable(&self) -> Result<AnchoredView, TimelineBreak> {
         match self.vouching {
-            Vouching::Vouched(view) if view.rolled_back() => Err(TimelineBreak::ChainRolledBack),
-            Vouching::Vouched(view) => Ok(view),
+            Vouching::Vouched(view) => view.anchored(),
             Vouching::Broken(why) => Err(why),
         }
     }
@@ -878,7 +881,7 @@ impl ClaimSourceFor {
     /// record can pair them, and every downstream check then agrees with the
     /// pairing rather than with the chain. So the witness is acquired with
     /// the record, inside one constructor, and cannot be re-associated.
-    pub(crate) fn actionable(&self) -> Result<CoherentChainView, TimelineBreak> {
+    pub(crate) fn actionable(&self) -> Result<AnchoredView, TimelineBreak> {
         self.vouched.actionable()
     }
 
