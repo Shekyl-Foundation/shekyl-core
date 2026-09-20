@@ -76,6 +76,19 @@ Worked instances, all verified at source:
   zone". That describes a design-time choice, not a mechanism: it is a
   hand-picked scalar, and a zone slower than the one it was chosen
   against is silently under-provisioned.
+- **`RANDOMX_V2_RUST.md` §9** (E2 pre-flight, 2026-09-19) read *"verifier
+  code does not use the full 2 GiB dataset"* as a ruling against a
+  verifier dataset mode. It was a description of what was built: the
+  dataset path was left unbuilt **to measure whether it was needed**, and
+  the same plan's §4 lists `Dataset::derive` as planned. This is the
+  family's **mood** variant — the earlier instances mistook *which site*
+  or *which figure*; this one mistook a sentence's mood, reading an
+  indicative as an imperative. It is the variant that turns *unbuilt*
+  into *forbidden*, and unbuilt-because-unmeasured is a large category
+  in a pre-genesis codebase. Before treating a present-tense line as a
+  decision, find the decision: a ratified question, a dated ruling, a
+  reversion clause. A line that only says what *is* has recorded a state,
+  and a state is an input to a decision, not one.
 
 So, when a claim is load-bearing for a security property:
 
