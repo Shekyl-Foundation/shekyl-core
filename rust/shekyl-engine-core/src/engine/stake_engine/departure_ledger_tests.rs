@@ -11,6 +11,11 @@
 
 use super::*;
 
+use shekyl_curve_tree::BlockHeight;
+use shekyl_types::ChainCount;
+
+use crate::engine::daemon::synced_chain_facts::SyncedChainFacts;
+
 /// A view both reads agree on at `tip`.
 ///
 /// Built through the real constructor rather than the private field so the
@@ -148,33 +153,7 @@ fn a_break_forgets_absences_so_a_stale_clock_cannot_resume() {
     );
 }
 
-// ── Hazard 2: a rollback under a sticky `synchronized` flag ─────────────
-
-/// **The sticky-flag hazard.** The daemon's `synchronized` never returns to
-/// false, so a rollback between the sync read and the record read leaves a
-/// witness above the record. The view must believe the record.
-///
-/// The edit that turns this red is taking `synced.tip()` instead of the
-/// minimum in `reconcile` — which is precisely what the code did before this
-/// finding, and which reading the sync witness first does *not* prevent.
-#[test]
-fn a_view_believes_the_lower_of_two_disagreeing_reads() {
-    // Witness read first, at 20 000. The chain then rolls back, and the
-    // record answers at 10 000 — with `synchronized` still true.
-    let stale_high = SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true).expect("synced");
-    let rolled_back = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001));
-    assert_eq!(
-        rolled_back.height(),
-        BlockHeight::from_raw(10_000),
-        "a witness left stale-high by a sticky flag must not set the clock"
-    );
-
-    // The ordinary direction — chain advanced between the two reads — is the
-    // same rule, and equally must not let the newer height in.
-    let witness = SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true).expect("synced");
-    let advanced = CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001));
-    assert_eq!(advanced.height(), BlockHeight::from_raw(10_000));
-}
+// ── Hazard 2: a rollback between refreshes ──────────────────────────────
 
 /// A rollback *between* refreshes resets rather than merely declining to
 /// elapse. The saturating subtraction this replaces kept stale entries alive.

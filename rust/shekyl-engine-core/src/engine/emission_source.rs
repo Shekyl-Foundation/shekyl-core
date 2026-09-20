@@ -45,6 +45,10 @@ use shekyl_archival_retention::{
     EpochCloseBond, EpochCloseInputs, EpochCloseShard, HoldingsDescriptor, HoldingsKind, ShardSet,
 };
 use shekyl_rpc_client::{Rpc, RpcError};
+
+use crate::engine::daemon::synced_chain_facts::{
+    fetch_synced_chain_facts, CoherentChainView, TimelineBreak,
+};
 use shekyl_types::{ChainCount, PCanonicalId};
 
 /// The daemon JSON-RPC method name (registered on both the epee and
@@ -580,6 +584,150 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
     EmissionClaimSource::from_json(&result)
 }
 
+/// Whether the wallet can vouch for the record it is holding.
+///
+/// Exactly one of the two states, which is the point: the previous shape
+/// was an `Option<view>` beside an `Option<reason>`, and "both `Some`" and
+/// "both `None`" were representable states meaning nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Vouching {
+    /// Both reads agree on a chain view; act on it.
+    Vouched(CoherentChainView),
+    /// The wallet holds the record but cannot vouch for it.
+    Broken(TimelineBreak),
+}
+
+/// A claim source together with the wallet's ability to vouch for it.
+///
+/// # Why this is a type and not three call sites doing the same two awaits
+///
+/// `WSS-Q14` gave the wallet a witness; `WSS-25`'s review gave it a
+/// reconciliation. Neither was enough on its own, because **both depend on
+/// how the two reads were acquired**, and acquisition was left to each
+/// caller:
+///
+/// - The witness must be read **before** the record, so that a record below
+///   it is the signature of a rollback rather than ordinary chain advance. A
+///   `tokio::join!` establishes no such ordering, and the resulting bug is
+///   invisible at the call site — the code reads as if it had.
+/// - The witness must be **retained** and reconciled against the record's
+///   own height. A caller that reduces it to `matches!(…, Ok(Some(_)))` has
+///   proved the daemon was synced *at some moment* and thrown away the only
+///   thing that relates that moment to the record it is about to act on.
+/// - The failure must keep its **class**. Collapsing "still syncing",
+///   "answered garbage" and "unreachable" into one boolean sends operators
+///   to the wrong subsystem.
+///
+/// Each of those is a discipline a call site can silently fail to follow,
+/// and three call sites did. So the ordering, the reconciliation and the
+/// classification move inside one constructor, and the pair can only be
+/// obtained already correct. There is no way to write the unordered fetch,
+/// because there is no exposed step to put in the wrong order.
+#[derive(Clone, Debug)]
+pub(crate) struct VouchedClaimSource {
+    source: EmissionClaimSource,
+    vouching: Vouching,
+}
+
+impl VouchedClaimSource {
+    /// The decoded record. Always present — a daemon that is syncing still
+    /// answers, and a consumer that only needs to *describe* what it holds
+    /// (the serve-set witness) must keep doing so while refusing to *act*.
+    pub(crate) fn source(&self) -> &EmissionClaimSource {
+        &self.source
+    }
+
+    /// Take the record, once its vouching has been decided.
+    ///
+    /// Consuming rather than cloning: the acting lanes need to own the
+    /// source, and a `clone` here would copy every epoch snapshot in it
+    /// purely to satisfy a borrow.
+    pub(crate) fn into_source(self) -> EmissionClaimSource {
+        self.source
+    }
+
+    /// Whether this record may be acted on, and if not, why not.
+    pub(crate) fn vouching(&self) -> Vouching {
+        self.vouching
+    }
+
+    /// The view to act on, or the reason there is none.
+    ///
+    /// For consumers that **act on the record's contents** — signing a claim
+    /// against its gather tip, reading an exit verdict out of its cooldown.
+    /// A rolled-back record is refused here rather than clocked around,
+    /// because no choice of clock repairs contents drawn from a view the
+    /// chain has abandoned.
+    pub(crate) fn actionable(&self) -> Result<CoherentChainView, TimelineBreak> {
+        match self.vouching {
+            Vouching::Vouched(view) if view.rolled_back() => Err(TimelineBreak::ChainRolledBack),
+            Vouching::Vouched(view) => Ok(view),
+            Vouching::Broken(why) => Err(why),
+        }
+    }
+}
+
+impl VouchedClaimSource {
+    /// Pair a response with a vouching **without** having read a witness.
+    ///
+    /// Test-only, and deliberately not feature-gated, for the same reason
+    /// [`ClaimSourceFor::for_test`] is not: production has exactly one way
+    /// to obtain this pair, and this is the hatch that lets a test build the
+    /// states production refuses in order to assert that it refuses them.
+    /// Vouches at the record's own height, so a test that does not care
+    /// about the sync axis reads as though it were synced.
+    #[cfg(test)]
+    pub(crate) fn for_test(source: EmissionClaimSource) -> Self {
+        let facts = crate::engine::daemon::synced_chain_facts::SyncedChainFacts::new(
+            source.chain_height,
+            0,
+            true,
+        )
+        .expect("test vouching is synchronized by construction");
+        let vouching = Vouching::Vouched(CoherentChainView::reconcile(&facts, source.chain_height));
+        Self { source, vouching }
+    }
+}
+
+/// Fetch the sync witness and then the claim source, and reconcile them.
+///
+/// **The order is the contract.** The witness is read first and awaited
+/// before the record request is issued, so the record can only be equal or
+/// later in wall-clock time; a record *height* below the witness is
+/// therefore a rollback, not a race. Reversing these two lines would not
+/// change what any caller reads — it would change what a rolled-back read
+/// looks like, silently — which is exactly why callers do not get to write
+/// them.
+///
+/// Deliberately **not** a `tokio::join!` of the two: the concurrency saved
+/// is one round trip on a path that then signs a transaction, and the
+/// ordering it destroys is the whole guarantee. Callers that want
+/// concurrency can join *this* future with an independent one — a local
+/// store read, say — which is safe because the ordering that matters is
+/// internal.
+///
+/// # Errors
+///
+/// [`EmissionSourceError`] only for the record read. A failed *facts* read
+/// is not an error here: it is [`Vouching::Broken`], because the record may
+/// still be worth describing even when it cannot be acted on.
+pub(crate) async fn fetch_vouched_claim_source<R: Rpc>(
+    rpc: &R,
+    p_id: &[u8; 32],
+) -> Result<VouchedClaimSource, EmissionSourceError> {
+    // Witness first, and awaited, before the record request is issued.
+    let witness = fetch_synced_chain_facts(rpc).await;
+    let source = fetch_emission_claim_source(rpc, p_id).await?;
+    let vouching = match witness {
+        Ok(Some(facts)) => {
+            Vouching::Vouched(CoherentChainView::reconcile(&facts, source.chain_height))
+        }
+        Ok(None) => Vouching::Broken(TimelineBreak::DaemonSyncing),
+        Err(e) => Vouching::Broken(TimelineBreak::from_facts_error(&e)),
+    };
+    Ok(VouchedClaimSource { source, vouching })
+}
+
 /// A claim-source response **paired with the `P` it was actually requested
 /// for**, by the code that sent the request.
 ///
@@ -647,7 +795,7 @@ pub async fn fetch_emission_claim_source<R: Rpc>(
 #[derive(Debug, Clone)]
 pub struct ClaimSourceFor {
     p_id: PCanonicalId,
-    source: EmissionClaimSource,
+    vouched: VouchedClaimSource,
 }
 
 impl ClaimSourceFor {
@@ -660,7 +808,21 @@ impl ClaimSourceFor {
     /// The decoded response.
     #[must_use]
     pub fn source(&self) -> &EmissionClaimSource {
-        &self.source
+        self.vouched.source()
+    }
+
+    /// The chain view this record may be acted on against, or why it may
+    /// not be.
+    ///
+    /// The **second** binding this type carries. Its own doc argues that
+    /// `(p_id, response)` as two arguments is a label rather than a binding;
+    /// exactly the same is true of `(witness, response)`, and for the same
+    /// reason — a caller holding one persona's witness and another moment's
+    /// record can pair them, and every downstream check then agrees with the
+    /// pairing rather than with the chain. So the witness is acquired with
+    /// the record, inside one constructor, and cannot be re-associated.
+    pub(crate) fn actionable(&self) -> Result<CoherentChainView, TimelineBreak> {
+        self.vouched.actionable()
     }
 
     /// Pair a response with an id **without** having sent the request.
@@ -672,7 +834,10 @@ impl ClaimSourceFor {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn for_test(p_id: PCanonicalId, source: EmissionClaimSource) -> Self {
-        Self { p_id, source }
+        Self {
+            p_id,
+            vouched: VouchedClaimSource::for_test(source),
+        }
     }
 }
 
@@ -691,8 +856,8 @@ pub async fn fetch_claim_source_for<R: Rpc>(
     rpc: &R,
     p_id: PCanonicalId,
 ) -> Result<ClaimSourceFor, EmissionSourceError> {
-    let source = fetch_emission_claim_source(rpc, p_id.as_bytes()).await?;
-    Ok(ClaimSourceFor { p_id, source })
+    let vouched = fetch_vouched_claim_source(rpc, p_id.as_bytes()).await?;
+    Ok(ClaimSourceFor { p_id, vouched })
 }
 
 #[cfg(test)]

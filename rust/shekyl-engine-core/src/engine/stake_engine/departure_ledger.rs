@@ -47,10 +47,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
-use shekyl_curve_tree::BlockHeight;
-use shekyl_types::ChainCount;
 
-use crate::engine::daemon::synced_chain_facts::SyncedChainFacts;
+use crate::engine::daemon::synced_chain_facts::{CoherentChainView, TimelineBreak};
 
 /// Consecutive epoch opens a shard must be absent across before its pin may
 /// be released.
@@ -70,79 +68,6 @@ use crate::engine::daemon::synced_chain_facts::SyncedChainFacts;
 /// `W₂` at or above one epoch, this gate is wrong and must take `W₂` as an
 /// operand.
 pub(crate) const EPOCHS_BEFORE_PIN_RELEASE: u64 = 2;
-
-/// A height two independent reads of the same daemon both vouch for.
-///
-/// Built from the sync witness and the height the bond record was answered
-/// at, and equal to the **lower** of the two. That is the whole content of
-/// the type, and it is the fix for the rollback hazard in the module docs:
-/// taking the minimum means a witness left stale-high by a sticky
-/// `synchronized` flag cannot advance the ledger's clock past what the
-/// record it is being compared against actually saw.
-///
-/// The minimum is also the right direction on the other axis. The two reads
-/// straddle a rollback in only one order that matters — the witness high, the
-/// record low — because the witness is read first; a record *above* the
-/// witness is just the chain advancing between two reads, which is ordinary
-/// and which the minimum also handles by ignoring the newer height. Under-
-/// counting elapsed obligation costs retained disk; over-counting costs a
-/// slash (`§9.7` item 5's asymmetry), so when the two disagree the lower is
-/// the one to believe.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct CoherentChainView {
-    at: BlockHeight,
-}
-
-impl CoherentChainView {
-    /// Reconcile the sync witness with the height the record answered at.
-    ///
-    /// Takes the witness by reference rather than by value so the caller
-    /// keeps it: holding [`SyncedChainFacts`] is what says the wallet may act
-    /// at all, and that permission outlives this one reconciliation.
-    pub(crate) fn reconcile(synced: &SyncedChainFacts, record_height: ChainCount) -> Self {
-        let record_tip = record_height.tip().map_or(BlockHeight::from_raw(0), |h| {
-            BlockHeight::from_raw(h.to_raw())
-        });
-        Self {
-            at: synced.tip().min(record_tip),
-        }
-    }
-
-    /// The height this view vouches for.
-    ///
-    /// **Test-only, deliberately.** Production reads the epoch, not the
-    /// height ([`Self::epoch`]), and this accessor has no named future
-    /// consumer — so rather than sit in the production surface as an
-    /// unused getter waiting for one, it is scoped to the reconciliation
-    /// tests that need to observe the `min` relation directly. Rule 23: a
-    /// surface with no named caller is not staged, it is dead.
-    #[cfg(test)]
-    pub(crate) fn height(self) -> BlockHeight {
-        self.at
-    }
-
-    /// The settlement epoch this view falls in.
-    fn epoch(self) -> u64 {
-        self.at.to_raw() / SETTLEMENT_EPOCH_BLOCKS
-    }
-}
-
-/// Why a ledger stopped being able to observe.
-///
-/// Carried rather than collapsed to a bool because the two reach an operator
-/// through different remedies (rule 82), and because a future reader deciding
-/// whether some third condition belongs here needs to see what the existing
-/// members have in common: both mean *the wallet did not see what happened*,
-/// not *nothing happened*.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TimelineBreak {
-    /// The daemon reported it is still synchronizing, so the wallet declined
-    /// to read anything into the record it would have answered with.
-    DaemonSyncing,
-    /// The daemon could not be reached, or answered something that did not
-    /// decode as chain facts.
-    FactsUnavailable,
-}
 
 /// Shards pinned in the store but absent from the connected record, and the
 /// coherent height at which each was **first** observed absent.
@@ -211,7 +136,7 @@ impl DepartureLedger {
         // subtraction: saturating kept stale entries alive and merely
         // declined to elapse them, which is the shape that let a pre-gap
         // timestamp survive into a post-gap decision.
-        if self.last_observed.is_some_and(|last| view < last) {
+        if self.last_observed.is_some_and(|last| view.at() < last.at()) {
             self.absent_since.clear();
         }
         self.last_observed = Some(view);
@@ -221,14 +146,15 @@ impl DepartureLedger {
         self.absent_since
             .retain(|shard_id, _| !owed.contains(shard_id));
 
-        let now_epoch = view.epoch();
+        let now_epoch = view.at().to_raw() / SETTLEMENT_EPOCH_BLOCKS;
         let mut releasable = Vec::new();
         for &shard_id in pinned {
             if owed.contains(&shard_id) {
                 continue;
             }
             let first_absent = *self.absent_since.entry(shard_id).or_insert(view);
-            if now_epoch.saturating_sub(first_absent.epoch()) >= EPOCHS_BEFORE_PIN_RELEASE {
+            let absent_epoch = first_absent.at().to_raw() / SETTLEMENT_EPOCH_BLOCKS;
+            if now_epoch.saturating_sub(absent_epoch) >= EPOCHS_BEFORE_PIN_RELEASE {
                 releasable.push(shard_id);
             }
         }

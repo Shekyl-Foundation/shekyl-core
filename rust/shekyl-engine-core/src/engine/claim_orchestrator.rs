@@ -16,7 +16,7 @@
 //! that gathers those operands from their authoritative sources and hands
 //! them to the actor:
 //!
-//! 1. **Fetch** ([`fetch_emission_claim_source`]) — the single-field `p_id`
+//! 1. **Fetch** ([`fetch_vouched_claim_source`]) — the single-field `p_id`
 //!    query (§7.2: the request shape is identical for every claimant),
 //!    over a [`PersonaIsolatedTransport`] **only** (the §7.4 transport pin,
 //!    structural: the principal's daemon session does not implement the
@@ -83,8 +83,8 @@ use shekyl_units::AtomicUnits;
 use super::backing_set::{BackingSet, ClaimFundingError, InsufficientBacking, MembershipPath};
 use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
-use super::daemon::synced_chain_facts::fetch_synced_chain_facts;
-use super::emission_source::{fetch_emission_claim_source, EmissionSourceError};
+use super::daemon::synced_chain_facts::TimelineBreak;
+use super::emission_source::{fetch_vouched_claim_source, EmissionSourceError};
 use super::prpc::PersonaIsolatedTransport;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
@@ -135,8 +135,10 @@ pub(crate) enum ClaimOrchestrationError {
     /// retries on its cadence. Distinct from [`Self::ReferenceUnanchorable`],
     /// which is about the *tree* lagging the daemon; this is the daemon
     /// lagging the network, the axis `WSS-25` found nothing was measuring.
-    #[error("the daemon is still synchronizing; no claim can be assembled yet")]
-    DaemonSyncing,
+    #[error(
+        "the daemon's chain facts cannot be vouched for ({0:?}); no claim can be assembled yet"
+    )]
+    Unvouchable(TimelineBreak),
 }
 
 /// The read-side operands of one claim assembly, borrowed from their owners
@@ -260,19 +262,28 @@ pub(crate) async fn orchestrate_emission_claim<R: PersonaIsolatedTransport>(
     //    gather tip the handler's same-tip check compares against, so
     //    substituting the witness's tip would break that invariant. Its role
     //    here is narrower and worth naming: may this lane act at all.
-    let (source, ingested, synced) = tokio::join!(
-        fetch_emission_claim_source(rpc, ctx.p_canonical_id.as_bytes()),
-        ctx.tree.ingested_tip_height(),
-        fetch_synced_chain_facts(rpc)
+    //    The two RPCs are ordered inside `fetch_vouched_claim_source` —
+    //    witness first, awaited, then the record — so a record height below
+    //    the witness is a rollback rather than a race. They are NOT joined
+    //    with each other: joining them destroys that ordering while reading
+    //    as though it had been kept, which is the defect this replaced. The
+    //    join that remains is against the *tree* read, which is local and
+    //    independent, so the ordering that matters is untouched.
+    let (vouched, ingested) = tokio::join!(
+        fetch_vouched_claim_source(rpc, ctx.p_canonical_id.as_bytes()),
+        ctx.tree.ingested_tip_height()
     );
-    let source = source?;
+    let vouched = vouched?;
     let ingested = ingested.map_err(ClaimOrchestrationError::Tree)?;
-    // An unreachable daemon is already `Source`'s business on the line above;
-    // reaching here with `Err` means the facts read failed while the record
-    // read succeeded, which is the same "cannot vouch for the view" state.
-    if !matches!(synced, Ok(Some(_))) {
-        return Err(ClaimOrchestrationError::DaemonSyncing);
-    }
+    // This lane SIGNS against the record's own gather tip further down, so
+    // it needs the record to be actionable, not merely the daemon to have
+    // been synced at some moment. `actionable` refuses a rolled-back read
+    // for that reason: no choice of clock repairs contents drawn from a
+    // view the chain has abandoned.
+    vouched
+        .actionable()
+        .map_err(ClaimOrchestrationError::Unvouchable)?;
+    let source = vouched.into_source();
 
     // 2b. Anchor: the gather tip ([`ChainCount::tip`] — typed, so the count
     //    cannot be laundered into a height) and the reference height (the
@@ -743,8 +754,11 @@ mod tests {
                 .await
                 .expect_err("a syncing daemon cannot ground a claim");
                 assert!(
-                    matches!(err, ClaimOrchestrationError::DaemonSyncing),
-                    "must refuse as DaemonSyncing — not ReferenceUnanchorable, \
+                    matches!(
+                        err,
+                        ClaimOrchestrationError::Unvouchable(TimelineBreak::DaemonSyncing)
+                    ),
+                    "must refuse as Unvouchable(DaemonSyncing) — not ReferenceUnanchorable, \
                      which is the tree lagging the daemon, the other axis: {err:?}"
                 );
             }

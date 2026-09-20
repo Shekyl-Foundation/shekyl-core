@@ -100,7 +100,7 @@ use super::bond_assembly::{
 };
 use super::bond_orchestrator::{anchored_reference_block, p_lane_floor_fee};
 use super::curve_tree_actor::CurveTreeHandleError;
-use super::daemon::synced_chain_facts::fetch_synced_chain_facts;
+use super::daemon::synced_chain_facts::TimelineBreak;
 use super::emission_source::{fetch_claim_source_for, EmissionSourceError};
 use super::fee_policy::FeeEstimatorError;
 use super::prpc::PersonaIsolatedTransport;
@@ -460,10 +460,31 @@ where
         // rather than at the dispatch stamp below keeps the verdict and the
         // post on the same footing; the stamp is gated too, by
         // `daemon_claimed_tip`.
-        if !matches!(fetch_synced_chain_facts(release_rpc).await, Ok(Some(_))) {
-            return Err(ReleaseRequestError::DaemonSyncing);
-        }
+        //
+        // The three failure states are kept apart rather than collapsed to a
+        // boolean. "Still catching up" is routine and retryable; "answered
+        // garbage" is a contract fault; "unreachable" is the network. The
+        // public surface already distinguishes the last from the first
+        // ([`Self::DaemonUnreachable`]), and reporting a dead transport as
+        // `Resyncing` tells an operator to wait for something that will
+        // never happen (rule 82).
+        //
+        // `actionable` also refuses a record that came back BELOW the
+        // witness read before it: a rolled-back source would otherwise read
+        // as a pre-bond response and surface as `NoBondRecord` — "you have
+        // nothing staked" — which is the most damaging possible wording for
+        // a wallet that does.
         let fetched = fetch_claim_source_for(release_rpc, p_canonical_id).await?;
+        match fetched.actionable() {
+            Ok(_) => {}
+            Err(TimelineBreak::DaemonSyncing) => return Err(ReleaseRequestError::DaemonSyncing),
+            Err(why) => {
+                return Err(ReleaseRequestError::daemon_unreachable(
+                    "exit-path chain facts",
+                    format!("{why:?}"),
+                ))
+            }
+        }
         let record = ReleaseRecordState::from_claim_source(&fetched)
             .ok_or(ReleaseRequestError::NoBondRecord)?;
 

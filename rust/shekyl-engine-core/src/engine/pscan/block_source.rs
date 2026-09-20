@@ -150,10 +150,17 @@ pub(crate) trait BlockSource {
 /// stamping a post with a resync height.
 ///
 /// This is the choke point, which is why the gate sits here and not at six
-/// call sites. The witness is consumed by `.tip()` at each of them; what the
-/// type buys is that **there is no other way to obtain this clock**, so a
-/// future consumer inherits the gate instead of having to remember it —
+/// call sites. **The witness is consumed here, not returned** — callers
+/// receive a [`BlockHeight`], exactly as before the gate existed, and cannot
+/// inspect the facts it was derived from. What the type buys is not an API
+/// for them: it is that **there is no other way to obtain this clock**, so a
+/// future consumer inherits the refusal instead of having to remember it —
 /// adopt-on-next-touch is how `WSS-25` happened.
+///
+/// A consumer that needs to *reason* about the facts rather than take a
+/// height — to reject a rolled-back record, say — must hold the witness
+/// itself and reconcile it (`CoherentChainView`), which is what the claim
+/// and exit lanes do. This function is for consumers that only need a clock.
 ///
 /// One `get_info` read replaces the former `get_height` read: the same
 /// response carries the height and the sync state, so the gate costs no extra

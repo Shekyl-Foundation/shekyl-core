@@ -55,9 +55,9 @@ use crate::engine::curve_tree_actor::CurveTreeHandle;
 use shekyl_rpc_client::RpcError;
 use shekyl_types::ChainCount;
 
-use super::departure_ledger::{CoherentChainView, DepartureLedger, TimelineBreak};
-use crate::engine::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
-use crate::engine::emission_source::fetch_emission_claim_source;
+use super::departure_ledger::{DepartureLedger, EPOCHS_BEFORE_PIN_RELEASE};
+use crate::engine::daemon::synced_chain_facts::{CoherentChainView, TimelineBreak};
+use crate::engine::emission_source::{fetch_vouched_claim_source, Vouching};
 use crate::engine::prpc::PersonaIsolatedTransport;
 
 /// Derives a persona's serve-set from its connected bond record and pins it.
@@ -116,19 +116,23 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// [`CoherentChainView::reconcile`]'s verdict on the sync witness and the
     /// record's own height, never a number chosen here, so neither a stale
     /// witness nor a rolled-back record can set the clock.
-    fn releasable(
-        &self,
-        owed: &[u64],
-        pinned: &[u64],
-        synced: &SyncedChainFacts,
-        record_height: ChainCount,
-    ) -> Vec<u64> {
+    fn releasable(&self, owed: &[u64], pinned: &[u64], view: CoherentChainView) -> Vec<u64> {
         let owed: std::collections::BTreeSet<u64> = owed.iter().copied().collect();
-        let view = CoherentChainView::reconcile(synced, record_height);
         self.absent_since
             .lock()
             .expect("departure ledger")
             .observe(view, &owed, pinned)
+    }
+
+    /// Forget the departure ledger's observations.
+    ///
+    /// One helper so every break path reads identically and none can forget
+    /// to forget — the defect that produced this method.
+    fn break_ledger(&self, why: TimelineBreak) {
+        self.absent_since
+            .lock()
+            .expect("departure ledger")
+            .break_timeline(why);
     }
 
     /// CompleteTree prefix arm: declare the prune-disabled posture, then
@@ -178,9 +182,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     async fn report_list(
         &self,
         shard_ids: &[u64],
-        synced: Option<&SyncedChainFacts>,
-        record_height: ChainCount,
-        break_reason: Option<TimelineBreak>,
+        view: Option<CoherentChainView>,
     ) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
         let shard_ids = shard_ids.to_vec();
         // The release set is computed from the *previous* reconcile's view
@@ -188,30 +190,20 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         // round trip per refresh, and the release lags one refresh —
         // against a gate measured in settlement epochs that is not a lag
         // that means anything.
-        let releasable = match synced {
-            Some(synced) => {
+        let releasable = match view {
+            Some(view) => {
                 let pinned = self.last_pinned.lock().expect("pin view").clone();
-                self.releasable(&shard_ids, &pinned, synced, record_height)
+                self.releasable(&shard_ids, &pinned, view)
             }
             // `WSS-25`, §6.7.3: *records no absence observations and releases
             // nothing while the daemon is unsynced*. Both halves come from
             // this one arm, because `releasable` is the departure ledger's
             // only writer — not calling it writes nothing, so a resync leaves
             // no trace to act on once the daemon catches up.
-            None => {
-                // Forget, do not freeze. A frozen entry is a claim about an
-                // interval the wallet did not watch: a shard absent before
-                // the break, re-added during it and departed again after it
-                // would otherwise resume a clock that had already been
-                // satisfied, and release at once. Costs a re-observation —
-                // at worst two more epochs of retained disk, the recoverable
-                // direction.
-                self.absent_since
-                    .lock()
-                    .expect("departure ledger")
-                    .break_timeline(break_reason.unwrap_or(TimelineBreak::FactsUnavailable));
-                Vec::new()
-            }
+            // The break was already applied at acquisition, on every
+            // path rather than only this one. Nothing to release without a
+            // view, and nothing left to forget.
+            None => Vec::new(),
         };
 
         let reply = self
@@ -241,11 +233,6 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     }
 }
 
-/// Consecutive epoch opens a shard must be absent across before its pin may be
-/// released. See [`EngineServeSetPinner::releasable`] for why two, and why the
-/// resolution window `W₂` is not an operand.
-const EPOCHS_BEFORE_PIN_RELEASE: u64 = 2;
-
 impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner<R> {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
         // **Sync reading first, record second** (`WSS-Q14`). Two orderings
@@ -265,46 +252,68 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         // pin half and the host's witness still need to run, for the same
         // reason a persona with no bond record reports an empty list rather
         // than failing forever.
-        let (synced, break_reason) = match fetch_synced_chain_facts(&self.rpc).await {
-            Ok(Some(facts)) => (Some(facts), None),
-            Ok(None) => {
-                tracing::info!(
-                    "serve-set refresh: the daemon reports it is still synchronizing, so no \
-                     serve-set pin will be released this refresh. Holdings are retained until \
-                     the daemon is caught up — an unsynchronized view cannot tell a shard this \
-                     persona no longer owes from one the resync has not reached yet"
-                );
-                (None, Some(TimelineBreak::DaemonSyncing))
-            }
-            // Three states, not two. `fetch_synced_chain_facts` answers
-            // `InvalidNode` for a reply that arrived and did not decode as
-            // chain facts, which is a contract or version fault in the
-            // daemon — a different thing from not reaching it, with a
-            // different remedy. Calling both "unreachable" sends an operator
-            // to the network layer to debug a schema break (rule 82).
-            Err(e @ RpcError::InvalidNode(_)) => {
-                tracing::error!(
-                    error = ?e,
-                    "serve-set refresh: the daemon answered, but its chain facts did not \
-                     decode — a protocol or contract fault, NOT a connectivity problem. No \
-                     serve-set pin will be released this refresh and holdings are retained. \
-                     Check that the daemon's version matches this wallet's expectations"
-                );
-                (None, Some(TimelineBreak::FactsUnavailable))
-            }
+        // One acquisition, ordered inside: witness, then record, then
+        // reconciliation. A failed *record* read is still fatal to the
+        // refresh — there is nothing to report a serve set from — but the
+        // ledger must forget FIRST, because that failure is itself an
+        // unobserved interval.
+        let vouched = match fetch_vouched_claim_source(&self.rpc, &self.p_id).await {
+            Ok(v) => v,
             Err(e) => {
-                tracing::warn!(
-                    error = ?e,
-                    "serve-set refresh: could not reach the daemon to read its chain facts, \
-                     so no serve-set pin will be released this refresh. Holdings are retained"
-                );
-                (None, Some(TimelineBreak::FactsUnavailable))
+                self.break_ledger(TimelineBreak::DaemonUnreachable);
+                return Err(format!("claim-source fetch failed: {e}"));
             }
         };
 
-        let source = fetch_emission_claim_source(&self.rpc, &self.p_id)
-            .await
-            .map_err(|e| format!("claim-source fetch failed: {e}"))?;
+        // **The break is applied here, once, before anything branches.**
+        // It used to live in `report_list`, which meant it never ran on the
+        // `CompleteTree` arm (that goes to `report_prefix`) nor when the
+        // record read failed — so on exactly those paths a pre-gap absence
+        // survived an interval nobody watched and could release the moment
+        // sync resumed. A reset deferred to one branch is not a reset; it is
+        // a reset the other branches silently opt out of.
+        let view = match vouched.vouching() {
+            Vouching::Vouched(view) if view.rolled_back() => {
+                // Not fatal here, unlike the acting lanes: this refresh
+                // still describes what it holds. But the ledger's evidence
+                // is not comparable across a rollback, so it forgets.
+                tracing::warn!(
+                    "serve-set refresh: the bond record came back below the sync witness read \
+                     before it — the chain rolled back between the two reads. Departure \
+                     observations are discarded and re-taken; no pin is released this refresh"
+                );
+                self.break_ledger(TimelineBreak::ChainRolledBack);
+                None
+            }
+            Vouching::Vouched(view) => Some(view),
+            Vouching::Broken(why) => {
+                match why {
+                    TimelineBreak::DaemonSyncing => tracing::info!(
+                        "serve-set refresh: the daemon reports it is still synchronizing, so \
+                         no serve-set pin will be released this refresh. Holdings are retained \
+                         until it is caught up — an unsynchronized view cannot tell a shard \
+                         this persona no longer owes from one the resync has not reached yet"
+                    ),
+                    TimelineBreak::FactsUnreadable => tracing::error!(
+                        "serve-set refresh: the daemon answered, but its chain facts did not \
+                         decode — a protocol or contract fault, NOT a connectivity problem. No \
+                         pin is released and holdings are retained. Check that the daemon's \
+                         version matches this wallet's expectations"
+                    ),
+                    TimelineBreak::DaemonUnreachable | TimelineBreak::ChainRolledBack => {
+                        tracing::warn!(
+                            why = ?why,
+                            "serve-set refresh: could not vouch for the daemon's chain facts, \
+                             so no serve-set pin will be released this refresh. Holdings are \
+                             retained"
+                        )
+                    }
+                }
+                self.break_ledger(why);
+                None
+            }
+        };
+        let source = vouched.source();
 
         // One stamp, both arms. `chain_height` is a ChainCount (the
         // daemon's `db.height()`), one more than the height of the block
@@ -351,19 +360,11 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             Some(bond) => match bond.holdings.kind {
                 HoldingsKind::CompleteTree => self.report_prefix().await?,
                 HoldingsKind::ShardSetCompact => {
-                    self.report_list(
-                        bond.holdings.shard_ids.as_slice(),
-                        synced.as_ref(),
-                        source.chain_height,
-                        break_reason,
-                    )
-                    .await?
+                    self.report_list(bond.holdings.shard_ids.as_slice(), view)
+                        .await?
                 }
             },
-            None => {
-                self.report_list(&[], synced.as_ref(), source.chain_height, break_reason)
-                    .await?
-            }
+            None => self.report_list(&[], view).await?,
         };
 
         Ok(PinReport {

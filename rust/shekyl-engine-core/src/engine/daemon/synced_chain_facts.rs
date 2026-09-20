@@ -182,12 +182,138 @@ impl SyncedChainFacts {
     /// consumer of this value is doing elapsed-block arithmetic in which
     /// "no blocks yet" and "block zero" are the same answer.
     pub(crate) fn tip(&self) -> BlockHeight {
-        self.chain_height
-            .tip()
-            .map_or(BlockHeight::from_raw(0), |h| {
-                BlockHeight::from_raw(h.to_raw())
-            })
+        tip_of(self.chain_height)
     }
+}
+
+/// A chain reading two independent reads of the same daemon both vouch for.
+///
+/// Built from the sync witness and the height a bond record was answered at.
+/// It keeps **both** heights rather than collapsing them on construction,
+/// because the two questions consumers ask of this pair are different and a
+/// single number can only answer one of them:
+///
+/// - [`Self::at`] — *what clock may I count elapsed obligation on?* The
+///   lower of the two. Under-counting costs retained disk; over-counting
+///   costs a slash (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7 item 5), so when
+///   the reads disagree the lower is the one to believe.
+/// - [`Self::rolled_back`] — *did they disagree in the direction that means
+///   the chain moved under me?* A record **below** the witness, which is the
+///   signature of a rollback between the two reads.
+///
+/// Storing the minimum alone would have answered the first and silently
+/// destroyed the second, which is why a consumer that must refuse a
+/// rolled-back read (claim assembly, the exit path) could not be built on it.
+///
+/// # Why the disagreement happens at all
+///
+/// The daemon's `synchronized` flag is **sticky**. The inherited C++ sets it
+/// `false → true` exactly once (`cryptonote_protocol_handler.inl:2465`, the
+/// only mutation; the constructor at `:219` is the only other write) and
+/// never clears it on a pop or reorg. So a rollback between the sync read
+/// and the record read leaves a witness whose height is *above* the record's
+/// while the flag still says synchronized.
+///
+/// That is why **reading the witness first is not sufficient**, and the
+/// point is worth stating because the ordering argument sounds like it
+/// covers this: ordering fixes which read is *older in wall-clock time*; the
+/// hazard is about which *height is larger*. A sticky flag severs the two.
+/// Ordering is still necessary — it makes the witness the earlier read, so a
+/// record below it is the rollback signature rather than ordinary chain
+/// advance — but it is the relation between the heights that carries the
+/// guarantee.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CoherentChainView {
+    witness_tip: BlockHeight,
+    record_tip: BlockHeight,
+}
+
+impl CoherentChainView {
+    /// Reconcile the sync witness with the height a record was answered at.
+    ///
+    /// Takes the witness by reference so the caller keeps it: holding
+    /// [`SyncedChainFacts`] is what says the wallet may act at all, and that
+    /// permission outlives one reconciliation.
+    pub(crate) fn reconcile(synced: &SyncedChainFacts, record_height: ChainCount) -> Self {
+        Self {
+            witness_tip: synced.tip(),
+            record_tip: tip_of(record_height),
+        }
+    }
+
+    /// The clock elapsed-obligation arithmetic may count on: the **lower** of
+    /// the two reads.
+    ///
+    /// The only height accessor, deliberately. A consumer that could reach
+    /// the witness height alone could reintroduce the hazard this type exists
+    /// to close.
+    pub(crate) fn at(self) -> BlockHeight {
+        self.witness_tip.min(self.record_tip)
+    }
+
+    /// The record sits **below** the witness — the chain moved backwards
+    /// between the two reads.
+    ///
+    /// Consumers that merely *count* time may clock from [`Self::at`] and
+    /// carry on; consumers that **act on the record's own contents** — a
+    /// claim signed against its gather tip, an exit verdict read out of its
+    /// cooldown — must refuse, because those contents are a rolled-back view
+    /// of the chain and no choice of clock repairs them.
+    pub(crate) fn rolled_back(self) -> bool {
+        self.record_tip < self.witness_tip
+    }
+}
+
+/// Why the wallet stopped being able to vouch for what it read.
+///
+/// Three members rather than a bool, and rather than the two this started
+/// with: each reaches an operator through a different remedy (rule 82), and
+/// the public error classes downstream already distinguish "still catching
+/// up" from "cannot be reached". Collapsing them costs the diagnosis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TimelineBreak {
+    /// The daemon reported it is still synchronizing. Routine; retry on
+    /// cadence.
+    DaemonSyncing,
+    /// The daemon answered and the reply did not decode as chain facts — a
+    /// protocol or contract fault, **not** a connectivity problem.
+    FactsUnreadable,
+    /// The daemon could not be reached at all.
+    DaemonUnreachable,
+    /// The record came back **below** the witness that preceded it: the
+    /// chain rolled back between the two reads, under a `synchronized` flag
+    /// that is sticky and therefore still says otherwise.
+    ///
+    /// A member of this family because it is the same statement as the
+    /// others — *the wallet cannot vouch for what it read* — arriving by a
+    /// different route. It matters that it sits here rather than in a
+    /// consumer's own error: the departure ledger takes a `TimelineBreak`
+    /// to decide it must forget, and a rollback is exactly a reason to.
+    ChainRolledBack,
+}
+
+impl TimelineBreak {
+    /// Classify a failed chain-facts read.
+    ///
+    /// The one place the `InvalidNode`-versus-transport distinction is drawn,
+    /// so every consumer inherits the same reading of the same error.
+    pub(crate) fn from_facts_error(err: &RpcError) -> Self {
+        match err {
+            RpcError::InvalidNode(_) => Self::FactsUnreadable,
+            _ => Self::DaemonUnreachable,
+        }
+    }
+}
+
+/// A block count as the height of its newest block, or `0` on an empty chain.
+///
+/// One conversion, shared by [`SyncedChainFacts::tip`] and
+/// [`CoherentChainView::reconcile`], so the count/height relation has a
+/// single site rather than one per caller.
+fn tip_of(count: ChainCount) -> BlockHeight {
+    count.tip().map_or(BlockHeight::from_raw(0), |h| {
+        BlockHeight::from_raw(h.to_raw())
+    })
 }
 
 /// Decode the daemon's `get_info` result into [`DaemonHealth`].
@@ -205,8 +331,13 @@ impl SyncedChainFacts {
 /// vouching for a view that does not exist. Absent connection counts map to
 /// `0` (the safe direction: a peerless reading only ever routes to the
 /// operator-alarm rung). `target_height` follows the info surface's "0 when
-/// synced" convention, so its absence maps to `0`, and the connection sum is
-/// `saturating_add` (rule §4).
+/// **`target_height` is mandatory**, and is the one field here that cannot
+/// take a default: `0` is not a neutral absence, it is the *synchronized
+/// sentinel*, so defaulting it would have this decoder manufacture the very
+/// claim [`SyncedChainFacts::new`] exists to verify. Absent or non-numeric
+/// is [`RpcError::InvalidNode`]. Only the connection counts default, because
+/// zero is honestly "none known" there and routes at worst to the
+/// operator-alarm rung; the sum is `saturating_add` (rule §4).
 ///
 /// # Errors
 ///

@@ -177,3 +177,67 @@ fn a_peerless_fresh_daemon_is_not_synchronized_despite_the_zero_target() {
 fn the_flag_alone_does_not_override_the_heights() {
     assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000), 1_000_000, true).is_none());
 }
+
+// ── CoherentChainView: the reconciliation the acting lanes rest on ──────
+
+/// A view at `tip`, both reads agreeing.
+fn agreeing_view(tip: u64) -> CoherentChainView {
+    let synced = SyncedChainFacts::new(ChainCount::from_raw(tip + 1), 0, true).expect("synced");
+    CoherentChainView::reconcile(&synced, ChainCount::from_raw(tip + 1))
+}
+
+/// **The sticky-flag hazard.** `synchronized` never returns to false, so a
+/// rollback between the sync read and the record read leaves a witness above
+/// the record. The clock must believe the lower read.
+///
+/// The edit that turns this red is `at()` returning `witness_tip`. It bites
+/// against the clock being set from a stale-high witness; it does **not**
+/// cover a daemon that lies about being synchronized.
+#[test]
+fn the_clock_believes_the_lower_of_two_disagreeing_reads() {
+    let stale_high = SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true).expect("synced");
+    let rolled_back = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001));
+    assert_eq!(rolled_back.at(), BlockHeight::from_raw(10_000));
+
+    // The ordinary direction — chain advanced between the reads — takes the
+    // same rule and equally must not admit the newer height.
+    let witness = SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true).expect("synced");
+    let advanced = CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001));
+    assert_eq!(advanced.at(), BlockHeight::from_raw(10_000));
+}
+
+/// **The signal `at()` alone would have destroyed.** Clocking conservatively
+/// is right for a consumer that merely counts time; a consumer that acts on
+/// the record's *contents* must know the two disagreed in the rollback
+/// direction, and a stored minimum cannot tell it.
+///
+/// The edit that turns this red is collapsing the view to one height on
+/// construction — the shape this type had before the acting lanes needed it.
+#[test]
+fn a_record_below_its_witness_is_reported_as_rolled_back() {
+    let stale_high = SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true).expect("synced");
+    assert!(
+        CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001)).rolled_back(),
+        "a record below the witness read before it is the rollback signature"
+    );
+
+    // Equal, and the ordinary advance, are both NOT rollbacks — otherwise
+    // every refresh on a live chain would read as one.
+    assert!(!agreeing_view(10_000).rolled_back());
+    let witness = SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true).expect("synced");
+    assert!(!CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001)).rolled_back());
+}
+
+/// The failure classifier draws the contract-fault/transport line once, so
+/// every consumer inherits the same reading.
+#[test]
+fn a_failed_facts_read_is_classified_by_its_cause() {
+    assert_eq!(
+        TimelineBreak::from_facts_error(&RpcError::InvalidNode("bad shape".into())),
+        TimelineBreak::FactsUnreadable,
+    );
+    assert_eq!(
+        TimelineBreak::from_facts_error(&RpcError::InternalError("no route".into())),
+        TimelineBreak::DaemonUnreachable,
+    );
+}
