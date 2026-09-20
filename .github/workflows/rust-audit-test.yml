@@ -172,8 +172,12 @@ jobs:
       # toolchain; wiring a cargo-metadata gate there works only because the
       # GitHub-hosted image happens to ship cargo, the same "image has it,
       # container does not" class this job already paid for with clang.
-      - name: test-only features stay on dev-dependency edges
-        run: python3 scripts/ci/check_test_only_features.py
+      - name: test-only features stay on dev-dependency edges; consumer-owned features die with their consumer
+        # `--selftest` first: the consumer-owned registry may be empty, and the
+        # selftest is what keeps that limb from passing vacuously (rule 47).
+        run: |
+          python3 scripts/ci/check_test_only_features.py --selftest
+          python3 scripts/ci/check_test_only_features.py
       # Same placement reason as the step above: this reads `cargo tree`.
       # shekyl-chain-rules (DRS-E6) must reach neither `redb` nor
       # `shekyl-chain-store` anywhere in its resolved graph, normal or dev

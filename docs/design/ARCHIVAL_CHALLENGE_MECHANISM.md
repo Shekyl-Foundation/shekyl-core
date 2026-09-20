@@ -1,7 +1,15 @@
 # Archival challenge mechanism — design round (2026-08-07)
 
 
-**Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
+**Status:** LIVING CONTRACT — last verified 2026-09-19 at `dev@6c41bf820` (the
+`PDM` propagation sweep, document 2 of 4; landing status per identifier in
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md)). The unit this mechanism
+tests is [`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)'s
+(`PDM-Q6` / `PDM-Q-F32` / `PDM-Q12`; §1, §2 step 2), the read is
+[`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)'s (`SF-D1`, `SF-D8`; §2
+step 3), and the serving store's erasure gate is
+[`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md)'s (`WSS-Q8`; §9.7 item 5) — each
+cited here, none restated.
 **Status (landed on `dev` 2026-08-11 — this file is now the record; the
 branch snapshot and its superseded-in-place banner are retired):**
 **Design-round output. Direction ratified; the mechanism as a whole is NOT
@@ -10,12 +18,20 @@ ratified to exactly its scope** (derivation module, persona key hierarchy, the
 Tor inbound half; landed as PRs #442 / #445 / #447). §9.5 *narrows* the
 "do not cut consensus code" gate below rather than repealing it: everything on
 the §9.5 HOLD list — pass-record serialization, the response format,
-`EndpointUpdate` on the bond wire, the settlement writer — still waits on the
-format round. *(Updated 2026-09-13: `EndpointUpdate` is **REJECTED** — Rick's
-HARD NO of 2026-09-13, recorded in
-[`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md): a bonded
-persona's endpoint never changes; a new address is a new persona. The other
-three entries read as they did.)* The ruling of record from this round: challenge
+`EndpointUpdate` on the bond wire, the settlement writer — waited on the
+format round, which has since run: pass-record serialization and the response
+format are [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md) /
+[`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md)'s (`RF-` /
+`CR-`, #522); the fetch and countersignature are
+[`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md)'s (`SF-`); `EndpointUpdate`
+is **REJECTED** — Rick's HARD NO of 2026-09-13, recorded in
+[`ARCHIVAL_ENDPOINT_UPDATE.md`](ARCHIVAL_ENDPOINT_UPDATE.md): a bonded persona's
+endpoint never changes; a new address is a new persona; the settlement writer is
+[`ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md`](ARCHIVAL_SETTLEMENT_SO_D8_PROPOSAL.md)'s
+(`SO-D8`; its Slice C stays unauthorized until Q15's falsifiers fire —
+[`FOLLOWUPS.md`](../FOLLOWUPS.md)). Consensus code for this mechanism lands only
+in `shekyl-chain-rules` at E4 / S-ARCH (`PDM-Q6` item 4, row 1), never in
+`blockchain.cpp`. The ruling of record from this round: challenge
 assignment is **derived, not committed** (§2, ruled 2026-08-07 — "the more the
 system regulates itself, the better"; derivation makes challenges verifiable
 by anyone and scope-limited against DDoS). Everything else here is the round's
@@ -46,14 +62,19 @@ relocated to §8 as the tx-carrier justification.
 **Revised 2026-08-10 (later): fork 2 CLOSED in full** — witness =
 producer of block h (the only party with a liveness oracle; a nominee
 cannot be compelled post-impossibility), anchor = that block's
-`cb_out_key` as a consequence; P-side already ruled (onion-bound
+`cb_out_key` as a consequence *(the anchor left the signed message with
+`SF-D8`, 2026-09-13 — the requester's own chain anchor at `tip − 720`; §2
+step 3)*; P-side already ruled (onion-bound
 identity, three-tier custody; the cold-authorized `EndpointUpdate` this
 sentence listed was REJECTED 2026-09-13 — see §7 item 2).
-**Live remainder: ONE consolidated format round** (response wire,
-pass-record tx carrier + prunable residence, bond-wire fields, binding
-artifact, key tiers; nonce re-pinned as
-`H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)` — `r` deleted) **then the
-three derivations** (W₂; (m, n); the `λ_eff` tripwire *response*). Note
+**Remainder (as of 2026-09-19).** The consolidated format round this banner
+once named as the live remainder has run: response wire (`RF-`), pass-record
+tx carrier + prunable residence (`CR-`), binding artifact and countersignature
+(`SF-D8` / `SF-D13` — the signed message is the requester-random `nonce[32]` ‖
+the requester's chain anchor at `tip − 720` ‖ `shard_id_le[8]`; `block_hash(h−1)`,
+`cb_out_key`, `(P, s, E)` and `r` are all out of it — §2 step 3), key tiers
+(§7.2). W₂ is ruled (§9.7 item 6a). **What remains: two derivations** — (m, n)
+(§3) and the `λ_eff` tripwire *response*. Note
 λ_target itself is **not** among them — it is ruled by §3 (= 3, landed
 2026-08-11), and *k* (draws per block) is derived by the urn as λ·D/E;
 the earlier "k/λ_target" framing was mandate-era, when k was a tuned
@@ -84,8 +105,13 @@ standing rules, re-verify at file:line before planning — docs drift.
 ## 1. Problem and settled doctrine
 
 Archivers post bonds under personas (`p_id`) and earn emission for storing and
-serving shards (3,326,976-byte deterministic partitions). The unit of
-obligation is the pair `(P, s)`. The system must test that archivers actually
+serving shards. A shard is a consecutive `tx_id` range `[b_k, b_{k+1})` of
+transactions' prunable bodies plus their `pqc_auths`, closed when its cumulative
+bytes cross `SHARD_BYTES` = 3,326,976, so a closed shard's size lies in
+`[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)` — neither fixed-size nor derived from
+leaves ([`ARCHIVAL_PRUNED_DAEMON_MODE.md`](ARCHIVAL_PRUNED_DAEMON_MODE.md)
+`PDM-Q6` items 1–3, `PDM-Q-F32`; `RF-D6` keeps the figure only as the boundary
+metric). The unit of obligation is the pair `(P, s)`. The system must test that archivers actually
 store what they claim:
 
 - **Serving earns:** `work_P(E) = Σ_s scarcity(s,E) · serve_credit_bit(P,s,E)`
@@ -131,8 +157,16 @@ before any read, with no second win required.
 The read itself (unchanged from the TJ round):
 
 1. The witness pulls the **entire shard** over P's onion rendezvous.
-2. The witness verifies the bytes against the shard's leaf hash `R_k` — the
-   response is self-authenticating.
+2. The witness verifies the bytes **per transaction** against the two hash
+   rows every node retains forever — `txs_prunable_hash` and
+   `txs_pqc_auth_hash`, the txid's own components — and membership against
+   `(b_k, b_{k+1})` (`PDM-Q6` item 4, the `SF-D8` row; `SF` sub-PR 2's
+   `ContentVerify`). The read stays whole-shard (`SF-D1`); it is verification,
+   not the read, that is per-tx (`WSS-Q7`). The response is self-authenticating;
+   there is no shard-level `R_k` (the segment freeze is retired, `PDM-Q12`).
+   `ARCHIVAL_SHARD_FETCH.md`'s own `SF-D8` step 2 still reads "recompute
+   `R_k`": `PDM-Q6` item 4 reopened that content half, and `SF` sub-PR 2
+   re-keys it in the owning contract. This document states the ruled form.
 3. P countersigns the read, proving it reached P's link. **As of
    2026-09-13 (`SF-D8`; verifier LANDED by `ARCHIVAL_SHARD_FETCH.md`
    §9.1 step (a0), signer lands with (a)):** the message is the decoded
@@ -819,9 +853,11 @@ the round kept trying to add forensics underneath it.
      and no coverage problem; knowing the fallback's true price calibrates
      how much pressure (a) and (b) must survive.
    The **nonce anchor** (what replaces `cb_out_key` when the reader is not
-   the including block's producer) is subordinate to this fork and touches
-   the frozen response wire — decide with TJ-B's format specification,
-   which also carries TJ-H's framing constraint (§7.4).
+   the including block's producer) was subordinate to this fork and touched
+   the response wire; it was decided by the format round as `SF-D5` / `SF-D8`
+   (2026-09-13): a requester-random nonce plus the requester's own chain
+   anchor at `tip − 720`, for both callers (§2 step 3). TJ-H's framing
+   constraint (§7.4) went to the same round.
    **Obligation half CLOSED (2026-08-08, impossibility):** no pay and no
    penalty are both forced, so coverage is **routine duty, norm-borne,
    `λ_eff` the tripwire** — now as the *only reachable answer*, not the
@@ -869,10 +905,16 @@ the round kept trying to add forensics underneath it.
    nothing prevents that) and stay priced where they always were, by
    the 2-of-3 quadratic and the outer window. `cb_out_key` distinctness
    is enforced independently by the epoch-windowed uniqueness consensus
-   rule (`ARCHIVAL_CREDIT_WIRE.md` authority row). Format-round ruling:
-   nonce = `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`, and the
-   property bought is **pre-signing resistance against a colluding
-   producer — which `r` never provided**.
+   rule (`ARCHIVAL_CREDIT_WIRE.md` authority row). The format-round ruling
+   this fork handed over — nonce = `H(block_hash(h−1) ‖ cb_out_key ‖ P ‖ s ‖ E)`
+   — is **SUPERSEDED (`SF-D8`, 2026-09-13)**: the signed message is the
+   requester-random `nonce[32]` ‖ `anchor_height ‖ anchor_hash` at `tip − 720`
+   ‖ `shard_id_le[8]`, with no `block_hash(h−1)`, no `cb_out_key` and no
+   `(P, s, E)` in it, because the fetch proves `P` served, not which miner
+   asked (§2 step 3). The property this paragraph argued for survives in that
+   form — a nonce the requester draws at request time cannot be pre-signed —
+   and **pre-signing resistance against a colluding producer is still what
+   `r` never provided**.
    **The residue this ruling does not settle, on its face so item 12
    does not rediscover it:** challenge servicing is available only to
    parties that win blocks, so the coverage rate is bounded by **how
@@ -1049,8 +1091,9 @@ the round kept trying to add forensics underneath it.
    pad zero — omitting it forecloses permanently, reserving forecloses
    nothing. **Framing constraint (structural, settled when TJ-B specifies
    the format, not deferred with the distribution):** the padding region
-   must sit outside the bytes hashed against `R_k`, or content-addressed
-   self-authentication breaks.
+   must sit outside the bytes each transaction's `txs_prunable_hash` /
+   `txs_pqc_auth_hash` commit to (`PDM-Q6`; `R_k` when this was written), or
+   content-addressed self-authentication breaks.
    **Mitigation actions, none genesis-frozen:** (1) pin **full vanguards**
    (not lite) for serving personas, with L2/L3 set sizes and rotation
    periods derived against our pull rate rather than inherited (rotation
@@ -1166,11 +1209,14 @@ the round kept trying to add forensics underneath it.
   open-anchor question. **This assumption must not live only in a
   conversation** — it is recorded here precisely so it is not rediscovered
   expensively.
-- **TJ-B read/serve protocol is unbuilt** (SP-T3 supplies payload and
-  consumer; promoted to challenge substrate). The mechanism has no transport
-  until it lands. Its format specification carries two frozen obligations
-  from this round: the reserved padding field with its framing constraint
-  (TJ-H, §7.4) and the nonce anchor (§7.2).
+- **TJ-B read/serve protocol — BUILT** (`shekyl-p-serve` on the
+  [`ARCHIVAL_SERVING_ROUTE.md`](ARCHIVAL_SERVING_ROUTE.md) route, the
+  `shekyl-p-fetch` client of [`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md),
+  the [`ARCHIVAL_RESPONSE_FORMAT.md`](ARCHIVAL_RESPONSE_FORMAT.md) frame). The two
+  obligations this round handed its format specification were discharged there:
+  the reserved padding field with its framing constraint (TJ-H, §7.4 → `RF-`)
+  and the nonce anchor (§7.2 → `SF-D5` / `SF-D8`: requester-random bytes plus
+  the requester's anchor at `tip − 720`).
 - **Prunable residence — the merits question is ANSWERED (2026-08-10,
   verified at source): nothing downstream of settlement reaches raw pass
   records.** Three independent layers: (1) `shekyl_emission_vin_verify`'s
@@ -1224,7 +1270,16 @@ record, none silently:
   (2026-08-10, fork §7.2's closure): `r` is removed from the nonce
   entirely and `block_hash(h−1)` substitutes.** No residence question
   remains — the term is on chain by construction, and the prunable side
-  table sheds its `r` entry.
+  table sheds its `r` entry. (`block_hash(h−1)` then left the signed message
+  too — `SF-D8`, 2026-09-13: the request carries requester-random bytes and
+  the requester's chain anchor, §2 step 3. A random term reopens the residence
+  question, and the same ruling answers it: the pass record **carries** the
+  32-byte `nonce` and the 8-byte `anchor_height`, neither recomputable from
+  chain terms; the anchor hash is not carried — admission reads it from the
+  connecting chain at `anchor_height`. +40 bytes per witness entry versus v1
+  ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md) §`SF-D8`). The
+  record's tx carrier and prunable residence are the pass-record round's,
+  [`ARCHIVAL_PASS_RECORD_CARRIER.md`](ARCHIVAL_PASS_RECORD_CARRIER.md).)
 - **Secret-set estimators** (`β̂` from pass/miss conflicts; "sets are
   secret, so a padder cannot steer") → moot: with no miss records there is
   nothing to conflict, and sets are public by design. `λ_eff` as the
@@ -1398,7 +1453,8 @@ than repealing it:
    inbound path end-to-end with `shekyl-p-transport`'s read-side twin.
    The genuinely unbuilt production half: **the persona serving loop**
    (loopback listener answering shard-by-id from the store; the
-   self-authenticating-against-`R_k` response; provisional framing,
+   self-authenticating response — per-tx against the hash rows under
+   `PDM-Q6`, against `R_k` when this list was ruled; provisional framing,
    THROWAWAY per the discipline above), **its lifecycle wiring** into
    `WalletTorControl` with the wallet-derived `hs_id` bundle (index 0 today;
    derived-bundles-only custody per §7.2 check (iii)), and **the
@@ -1417,8 +1473,10 @@ than repealing it:
    comes from the Pi floor (rule 76) — **build the rig so a floor run
    is a re-run, not a rewrite**. Measure on the **real Tor network**,
    never a local test net (chutney has none of the latency structure
-   that makes the distribution heavy-tailed); synthetic
-   3,326,976-byte payloads are fine. And the sharpest form of the
+   that makes the distribution heavy-tailed); synthetic payloads sized in
+   `[SHARD_BYTES, SHARD_BYTES + MAX_TX_SIZE)` are fine (`PDM-Q-F32` — the
+   3,326,976 figure is the boundary metric, not a body size). And the
+   sharpest form of the
    throwaway-framing discipline: a streaming or chunked serving loop
    makes **resumability** feel natural — resumability is a *format
    property* with real W₂ consequences, decided on its merits in the
@@ -1514,7 +1572,11 @@ and this cutover is what replaces it.** Enforcing
 consensus now, still permit adaptive selection, and buy nothing.
 
 **2. The sampled-leaf floor is weaker until responses are pinned to their
-assignment blocks.** `PC-D3` made the challenged leaf index vary per block. Under
+assignment blocks — RETIRED BY RULING with the leaf unit (`PDM-Q6` item 4:
+`challenge_leaf_index` and the `c1_layers` / `c2_layers` path are retired by
+ruling, live in code, deleted at E4 / S-ARCH); the per-challenge binding this
+cutover restores is now the count bound alone (item 1).** *Record:* `PC-D3` made
+the challenged leaf index vary per block. Under
 the beacon a response may land anywhere in its `H_fire` window, so a prover gets
 roughly `CHALLENGE_RESPONSE_BLOCKS` leaf draws and needs only one leaf it holds:
 the floor degrades from "the one assigned leaf" to "best of a window". `RF-D8`
@@ -1575,7 +1637,14 @@ against these.
    derived once wallet-side, never a seed. Made unrepresentable —
    `OnionServiceSpec::new` takes an `OnionIdentity`, not a seed.
 
-2. ~~**The sampled-leaf verification path is fossil — do not build against
+2. **Current (2026-09-19): resolved upward by `PDM-Q6` — there is no leaf to
+   sample.** `verify_segment_path` / `challenge_leaf_index` are retired by
+   ruling, live in code, and deleted at E4 / S-ARCH with the serve-credit
+   verifier (`PDM-Q6` item 4, rows 1 and 4); verification is per-tx against
+   the hash rows (§2 step 2). The entry below is the record of how the
+   deletion surface was reached, and it stands.
+
+   ~~**The sampled-leaf verification path is fossil — do not build against
    it.**~~ **SUPERSEDED 2026-08-20 by `RF-D8` ruling (i); the correction is
    recorded here rather than the text deleted, because the original named a
    deletion trigger that has since fired.**
@@ -1599,7 +1668,9 @@ against these.
    trust.
 
    *What is true.* The premise held — whole-shard fetch **remains the
-   mechanism**, and `recompute_segment_r_k` is still what verifies it. What
+   mechanism** (`SF-D1`), and `recompute_segment_r_k` was what verified it
+   (per-tx against `txs_prunable_hash` / `txs_pqc_auth_hash` since `PDM-Q6`;
+   `recompute_segment_r_k` does not survive — `PDM-Q-F25`). What
    changed is that the opening is now carried **additively on top**, which
    the standing sampled-leaf finding never argued against — it found
    sampled-leaf insufficient as a ***standalone*** mechanism, which says
@@ -1648,12 +1719,15 @@ against these.
    the correction where they read the instruction.
 
 3. **The shard universe grows without bound; `D` is a moving number, not
-   a maturity plateau.** `SegmentId` is dense and `segment_freeze_eligible`
-   is a pure height gate, so one shard freezes per `SEGMENT_LEAF_COUNT`
-   outputs, forever; `MAX_HOLDINGS_SHARDS = 4096` caps a *bond's*
-   holdings, not the universe. Three unpriced consequences: challenge
-   load `λ·D/E` per block rises monotonically with `D`; an archiver must
-   post `HoldingsUpdate` **continuously** to keep covering new segments (a
+   a maturity plateau.** A shard closes whenever the chain's cumulative
+   prunable + `pqc_auths` bytes cross the next `SHARD_BYTES` boundary
+   (`PDM-Q-F32`; the segment-freeze pipeline that once closed one per
+   `SEGMENT_LEAF_COUNT` outputs is retired, `PDM-Q12`), forever;
+   `MAX_HOLDINGS_SHARDS = 4096` caps a *bond's* holdings, not the universe.
+   Three unpriced consequences: challenge load `λ·D/E` per block rises
+   monotonically with `D`; an archiver must post `HoldingsUpdate`
+   **continuously** to keep covering new shards (only a closed shard is
+   bondable, never the open frontier — `PDM-Q6` item 3; a
    recurring on-chain cost, with a recurring principal-funding question
    attached); and the Foundation `CompleteTree` node's holdings grow forever
    by definition. **The `D ≈ 324k` figure the round sized against is a
@@ -1665,31 +1739,38 @@ against these.
 4. **The pin set must be *derived from the bond record*, not maintained
    alongside it.** Nothing structural binds `held_shard_ids` in the
    consensus bond record to local `pin_segment` state, so a `P` that posts
-   holdings and forgets to pin has *its own node* prune the leaf bytes it
-   is obligated to serve — then fails challenges, then slashes, an epoch
+   holdings and forgets to pin has *its own node* prune the bytes it is
+   obligated to serve — then fails challenges, then slashes, an epoch
    later, for a local bookkeeping mismatch. PR-A already shaped
    `pin_serve_set(&[u64])` to take the serve-set as an **input**; the
    **daemon-composition slice** must feed it `record_held_shard_ids` from
-   the bond record (re-pinning as shards freeze), never a
+   the bond record (re-pinning as shards close), never a
    separately-maintained list. Build-list requirement, recorded so the
-   composition cannot forget it.
+   composition cannot forget it. *(Built over the leaf-unit `LeafStore` at
+   SH-1; the store is rebuilt around bodies as `P`'s serving store —
+   `PDM-Q12`, `WSS-Q1` (a) — and the serve-set → store binding this item
+   names carries over unchanged.)*
 
 5. **The retention economy closes cleanly, and it should be stated.** The
-   witness verifies a `SEGMENT_LEAF_COUNT·128`-byte response against a
-   56-byte `FrozenSegmentRecord`, and `prune_frozen` keeps `R_k` while
-   discarding leaves — so a pruning full node retains exactly what it
-   needs to *challenge* and nothing it needs to *serve*. **Verification is
+   witness verifies a whole-shard response (`[SHARD_BYTES, SHARD_BYTES +
+   MAX_TX_SIZE)` bytes) per transaction against two 32-byte hash rows every
+   node keeps forever — `txs_prunable_hash` and `txs_pqc_auth_hash` — and
+   the discarding daemon keeps the rows while discarding the bodies
+   (`PDM-Q6`, `DRS-D10`; the `FrozenSegmentRecord` / `prune_frozen` form this
+   was first stated in is retired, `PDM-Q12`) — so a pruning full node
+   retains exactly what it needs to *challenge* and nothing it needs to
+   *serve*. **Verification is
    free; storage is the scarce thing; the asymmetry is structural**, which
    is what makes challenge coverage cheap for miners (the property GF-7
    and the coverage sim implicitly rely on). Worth stating as a first-class
    property rather than leaving implicit.
 
-6. **The witness-side fetch-and-recompute path is equally unbuilt.** The
-   build survey's "net for a serving loop" was entirely `P`-side; the
-   witness leg (fetch the whole shard over the rendezvous,
-   `recompute_segment_r_k`, compare to the on-chain `R_k`) is the other
-   half, and it is **W₂-rig scope** — the rig measures both legs of the
-   3.33 MB transfer.
+6. **The witness-side fetch-and-verify path — since BUILT as `shekyl-p-fetch`**
+   ([`ARCHIVAL_SHARD_FETCH.md`](ARCHIVAL_SHARD_FETCH.md); the verify seam is
+   `SF-D8`'s, per-tx against the hash rows under `PDM-Q6`). When this list was
+   ruled the build survey's "net for a serving loop" was entirely `P`-side and
+   the witness leg (fetch the whole shard over the rendezvous, verify) was the
+   other half; W₂ was then a rig measurement and is now ruled (§9.7 item 6a).
 
 ## 9.7 The composition slice (SH-1, landed 2026-08-12)
 
@@ -1702,8 +1783,10 @@ decide implicitly.
 
 **1. The composition is entirely Rust, and nothing crosses the FFI.** The
 serving host's three inputs are all already wallet-side: the shard bytes are
-the wallet's redb `LeafStore` (the daemon's LMDB curve tree is the consensus
-copy and is not involved), the onion is the wallet's own `WalletTorControl`, and
+the wallet's redb `LeafStore` (the leaf-unit store at SH-1; rebuilt around
+bodies as `P`'s serving store, the wallet's only redb — `PDM-Q12`, `WSS-Q1`
+(a); the daemon's LMDB curve tree is the consensus copy and is not involved),
+the onion is the wallet's own `WalletTorControl`, and
 the connected `held_shard_ids` come back over the **existing**
 `get_archival_emission_claim_source` RPC, whose wallet-side decode already
 exists in Rust and already rides the persona transport. Recorded because the
@@ -1712,8 +1795,12 @@ added and none needed deleting* — the boundary did not move because this
 slice never reaches it.
 
 **2. Pinning is a store write, so it cannot live on the serving side.** The
-`LeafStore` is single-writer redb, and its single writer is the wallet's
-curve-tree actor — that is what the actor is *for*. §9.6 item 4's "feed
+`LeafStore` is single-writer redb, and its single writer at SH-1 is the wallet's
+curve-tree actor — that is what the actor is *for* (record of landed code; under
+`WSS-Q1` (a) the serving store is the `StakeEngine`'s own and the curve-tree
+actor is not its writer — the `WSS-13` unwind,
+[`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.7, retires this shape in code
+under its own authorization). §9.6 item 4's "feed
 `pin_serve_set` from the bond record" therefore could not be implemented by
 handing the serving host a store handle: that is a second writer beside the
 one whose message loop is the serialization. The split: the host holds a
@@ -1791,7 +1878,7 @@ Two directions, and they are not symmetric:
 
 *Gained shard (the direction that slashes).* A reorg — or an ordinary
 `HoldingsUpdate`, which §9.6 item 3 says an archiver must post
-**continuously** to keep covering new segments — puts a shard in the
+**continuously** to keep covering new shards — puts a shard in the
 connected record that the running host never pinned. A `prune_frozen` in that
 window discards its bytes, `AlreadyPruned` is terminal (the remedy is a chain
 replay, not a retry), and the persona is now obligated to serve a shard it
@@ -1800,7 +1887,7 @@ refresh axis after the construction axis closed it.
 
 *Departed shard (the direction that leaks).* A shard leaving holdings leaves
 its pin forever. At `MAX_HOLDINGS_SHARDS = 4096` and
-`SEGMENT_LEAF_COUNT · 128 ≈ 3.33 MB` per shard, unbounded churn against a
+~`SHARD_BYTES` ≈ 3.33 MB per shard (the boundary metric, `PDM-Q-F32`), unbounded churn against a
 growing `D` retains up to ~13.6 GB the node is no longer obligated to hold —
 on a rule-76 Pi-4 floor. Not a rounding error, and not self-correcting.
 
@@ -1846,8 +1933,13 @@ currently what *keeps the obligation met* — a dropped-but-still-pinned shard
 is still served. Releasing on a reorg depth would have converted a disk leak
 into a miss, then a slash: §9.7's own asymmetry pointed the wrong way.
 
-**The condition is two consecutive epoch opens of absence.** Then the shard
-was not drawable in the current epoch or the one before, so the last epoch it
+**The condition is two consecutive epoch opens of absence** — landed as
+`EPOCHS_BEFORE_PIN_RELEASE = 2`
+([`serve_set_source.rs`](../../rust/shekyl-engine-core/src/engine/stake_engine/serve_set_source.rs) L284),
+and ruled the serving store's erasure gate by `WSS-Q8` (2026-09-19, conditional on
+`WSS-Q14` landing first, because under `PDM-Q12` release deletes the bodies). Then
+the shard was not drawable in the current epoch or the one before, so the last
+epoch it
 could have been drawn in closed a full epoch ago. Two rather than one because
 one is too tight — absent at only the current open leaves the previous epoch
 as the last drawable one, and a challenge issued in its final block still has
@@ -1882,8 +1974,9 @@ Two residuals, both stated rather than discovered:
   price would be a schema version plus a migration.
 - **Release lags the pin by one refresh.** The reconcile learns the store's
   pin set from the reply it is answering, so the difference is acted on next
-  time. Against a 720-block gate that is not a lag that means anything, and
-  it keeps the refresh at one actor round trip.
+  time. Against the two-epoch gate (`EPOCHS_BEFORE_PIN_RELEASE = 2`, ~28 days)
+  that is not a lag that means anything, and it keeps the refresh at one actor
+  round trip.
 
 The store deliberately does **not** enforce the gate — it has no clock, no
 view of the record, and no memory of when a shard left one. A half-check

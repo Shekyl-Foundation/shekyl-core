@@ -1,10 +1,10 @@
 # DRS-E1 S-OUT-KI — outputs and key images: increment plan and Round-0 pre-flight
 
-**Status:** OPEN — **increment LANDED 2026-09-18** (the §7 commits 1–3 are
+**Status:** CLOSED-as-record — **archived 2026-09-19 by S-TX's pre-flight PR** ([`DRS_E1_STX.md`](../design/DRS_E1_STX.md) §2.5), the reader §10 was waiting for; owns no open residue (SOK-10 CLOSED by deletion in PR #784, [`SOK_10_PATH_POSITION_RESOLUTION.md`](SOK_10_PATH_POSITION_RESOLUTION.md)). Increment LANDED 2026-09-18 (the §7 commits 1–3 are
 code: `store/read.rs` K1/K2/O1/O2, `store/at_index.rs`, layout v6 in
 `schema.rs` / `codec/chain.rs` / `codec/undo.rs` / `store/connect.rs`; Q3's
-deletion is PR #782). Stays in `design/` until S-TX's pre-flight has read it
-(archive-or-contract per index §8 then). History: **Round 0 (pre-flight)
+deletion is PR #782). It stayed in `design/` until S-TX's pre-flight had read it
+(archive-or-contract per index §8), which it now has. History: **Round 0 (pre-flight)
 executed 2026-09-18** at `dev` = `d89f99791` (the tree that merged PR #772,
 S-CHAIN-R). **Round 1 RULED 2026-09-18** (maintainer, on PR #779; §9, each
 ruling line-local): Q1 **A**, Q2 default, Q4 `OutTx`; **Q3 overridden to B**
@@ -13,23 +13,23 @@ as their own PR. (The code gate on PR #777 — RTN-7 retyped `store/connect.rs`
 and `store/chain_reads.rs`, which §7 commits 1, 2 and 4 edit — **lifted
 2026-09-18: #777 merged**, and this document was re-based and re-verified on
 that tree, `51d7f2416`; every code anchor re-read.) Implements *from*
-[`DAEMON_REDB_STORE.md`](DAEMON_REDB_STORE.md) §3.5/§7 (the S-OUT-KI row:
+[`DAEMON_REDB_STORE.md`](../design/DAEMON_REDB_STORE.md) §3.5/§7 (the S-OUT-KI row:
 extraction order **4**, "consensus-critical (double-spend admission) and
 needs chain reads for height context, so it follows S-CHAIN-R"), §7.6 (parity
 first, the ported partition is transitional, **byte parity was never a
 constraint — the comparator projects logical content**), and §11.1(f) (every
 value is a named shape); from
-[`DRS_E1_SCHAIN_R.md`](../completed/DRS_E1_SCHAIN_R.md) (the read handle,
+[`DRS_E1_SCHAIN_R.md`](DRS_E1_SCHAIN_R.md) (the read handle,
 `ReadSnapshot`, and its fault policy — this surface is more reads on it;
 SCR-11 routes E2's key-image scan here); from
-[`CONSENSUS_STORE_RECONCILIATION.md`](CONSENSUS_STORE_RECONCILIATION.md)
+[`CONSENSUS_STORE_RECONCILIATION.md`](../design/CONSENSUS_STORE_RECONCILIATION.md)
 CEN-L1 / CEN-I7 (the two halves of key-image uniqueness, ruled C2-R8 Q6) and
 CEN-L6 (amount-0 indexing is **arm C — unspecified**, routed to **R8b-2** and
-open); and from [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) G11 and the
+open); and from [`CHAIN_RULES_CRATE.md`](../design/CHAIN_RULES_CRATE.md) G11 and the
 rules crate's own statement of it (`rust/shekyl-chain-rules/src/view.rs:30`,
 "absence is a case, not a `None`" — adopted here for every by-index read;
 the class is stated once, with its instances, in
-[`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md) §3.1). Nothing in this document re-opens any of them; §3.4 and SOK-1 *ask*
+[`CURVE_TREE_STORE_SHAPES.md`](../design/CURVE_TREE_STORE_SHAPES.md) §3.1). Nothing in this document re-opens any of them; §3.4 and SOK-1 *ask*
 one of them (R8b-2's neighbour, the physical shape of `output_amounts`)
 because this surface is its first reader and cannot be built at LMDB's
 complexity on the ported shape.
@@ -53,7 +53,7 @@ shape as `DRS_E1_SCHAIN_R.md` and stays in `docs/design/` while the
 increment is open.
 
 **Identifier family.** Findings and questions here are **SOK-n**, registered
-in [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §2 by this document's
+in [`IMPLEMENTATION_INDEX.md`](../design/IMPLEMENTATION_INDEX.md) §2 by this document's
 PR (prefix `SOK` checked distinct against the registry with
 `check_index_prefix_uniqueness.py`: `SOK` ≠ `SCR`, `SCW`, `SO-`). One series,
 numbered in order of surfacing; a question and the finding that raised it

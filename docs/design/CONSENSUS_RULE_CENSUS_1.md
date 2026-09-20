@@ -169,6 +169,19 @@ interaction has never been written down.
 **This is the highest-value item in the census.** It needs a ruling, not a
 port.
 
+**UPDATE 2026-09-19 (S-TX pre-flight, [`DRS_E1_STX.md`](DRS_E1_STX.md)
+STX-1 / STX-9):** the `:2681` residue is now **transitively callerless** —
+`get_tx_unlock_time`'s only caller is `get_output_key_mask_unlocked`, which
+has no caller of its own (SOK-7). The redb store keeps writing
+`TxIndex.unlock_time` (no layout move) and holds the invariant **no public
+read type under `store/` has an `unlock_time` field** (S-TX STX-9, gated
+from its commit 1). *Corrected 2026-09-19 (S-TX round 3):* the first form
+of this note said the store "projects it on no read", which was false —
+S-OUT-KI's `RecordedOutput.unlock_time` (`store/output_reads.rs:72`) was
+the one Rust projection, consumer-less; S-TX's commit 1 removes it. So this
+ruling, when made, finds no Rust consumer to unwind. The field's fate stays
+this item's.
+
 ### U-3 — Alt-chain / reorg handling (HIGH: large, unexamined, safety-critical)
 
 `switch_to_alternative_blockchain` at `:1386`, 42 `alt_chain` references,
