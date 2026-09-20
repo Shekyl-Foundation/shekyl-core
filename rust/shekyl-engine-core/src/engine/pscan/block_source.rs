@@ -98,11 +98,11 @@ pub(crate) trait BlockSource {
     /// [`ChainCount::next_height`]).
     ///
     /// The method name is the WI-3 named clock (`daemon_claimed_tip` /
-    /// `BlockSource::tip_height`); the return type is the quantity
-    /// (height-semantics Phase 2b). It is a *claimed* count, **not** a
-    /// trusted-current one: a single source can withhold or truncate its
-    /// tip for free (the SP-7 stale-tip residual) — forging a header chain
-    /// is PoW-expensive, truncating it is not. Tip *currency* is resolved
+    /// `BlockSource::tip_height`); the return type is the quantity. It is a
+    /// *claimed* count, **not** a trusted-current one: a single source can
+    /// withhold or truncate its tip for free (the SP-7 stale-tip residual)
+    /// — forging a header chain is PoW-expensive, truncating it is not. Tip
+    /// *currency* is resolved
     /// by **posture**, not multi-source machinery
     /// (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4); this trait only reports
     /// what the source claims.
@@ -157,11 +157,11 @@ pub(crate) trait BlockSource {
 /// This is the choke point, which is why the gate sits here and not at six
 /// call sites. **The witness is consumed here, not returned** — callers
 /// receive a [`ChainCount`], the quantity this clock has always carried
-/// (height-semantics Phase 2b: the type now matches; the number does not
-/// move), and cannot inspect the facts it was derived from. What the type
-/// buys is not an API for them: it is that **there is no other way to
-/// obtain this clock**, so a future consumer inherits the refusal instead
-/// of having to remember it — adopt-on-next-touch is how `WSS-25` happened.
+/// (the type matches; the number does not move), and cannot inspect the
+/// facts it was derived from. What the type buys is not an API for them:
+/// it is that **there is no other way to obtain this clock**, so a future
+/// consumer inherits the refusal instead of having to remember it —
+/// adopt-on-next-touch is how `WSS-25` happened.
 ///
 /// A consumer that needs to *reason* about the facts rather than take a
 /// height — to reject a rolled-back record, say — must hold the witness
@@ -171,8 +171,9 @@ pub(crate) trait BlockSource {
 /// One `get_info` read replaces the former `get_height` read: the same
 /// response carries the height and the sync state, so the gate costs no extra
 /// round trip, and the former `usize → u64` conversion is gone with it. The
-/// value returned is **numerically unchanged** — height-semantics Phase 2b
-/// retypes it to [`ChainCount`] without flipping to `.tip()`.
+/// value returned is **numerically unchanged** — [`ChainCount`], not
+/// `.tip()`. Flipping to `.tip()` would fire due one block late and skip
+/// the last pscan block.
 ///
 /// **Named daemon-claimed-tip clock (WI-2 F-2 / WI-3 R2-1).** This is the
 /// single function both (a) bond-assemble `anchor_t0` stamps and (b) the
@@ -187,14 +188,9 @@ pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<ChainCount, Bl
     let facts = fetch_synced_chain_facts(rpc)
         .await?
         .ok_or(BlockSourceError::DaemonSyncing)?;
-    // **Count, not tip ordinal — the number is frozen (Phase 1).**
-    // `Rpc::get_height` / `get_info.height` are the block COUNT ("for a
-    // blockchain with only its genesis block, the height will be 1").
-    // Height-semantics Phase 1 walked every consumer: they all carry that
-    // COUNT and compare it only to COUNT. Phase 2b retypes the clock to
-    // `ChainCount` so a mix with an ordinal is a compile error; flipping
-    // to `.tip()` would fire due one block late and skip the last pscan
-    // block. Numerically unchanged: a 3-block chain still reports 3.
+    // Count, not tip ordinal — the number is frozen (Phase 1).
+    // Flipping to `.tip()` would fire due one block late and skip the
+    // last pscan block. A 3-block chain still reports 3.
     Ok(facts.chain_height())
 }
 

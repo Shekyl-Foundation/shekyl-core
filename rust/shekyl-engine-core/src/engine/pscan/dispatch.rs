@@ -253,18 +253,18 @@ pub(crate) enum DispatchError {
 // Selection (pure — gates 1 and 2)
 // ---------------------------------------------------------------------------
 
-/// The pure due-block arithmetic (§3.1): `due = anchor_t0 +
-/// bond_post_offset_blocks`. Saturating: a plan whose offset overflows the
-/// height space can only push the due block *later* (monotone noise), never
-/// wrap to "due immediately".
-fn due_height(post: &PendingBondPost) -> ChainCount {
+/// The pure due-count arithmetic (§3.1): `due = anchor_t0 +
+/// bond_post_offset_blocks` on the dispatch count clock. Saturating: a
+/// plan whose offset overflows the count space can only push due *later*
+/// (monotone noise), never wrap to "due immediately".
+fn due_count(post: &PendingBondPost) -> ChainCount {
     post.anchor_t0
         .saturating_add(BlockCount::from_raw(post.bond_post_offset_blocks))
 }
 
 /// Select the single post to dispatch this tick, or `None` (§3.2 part 2).
 ///
-/// Candidates are live posts whose due block has arrived at `tip` and that
+/// Candidates are live posts whose due count has arrived at `tip` and that
 /// still have a send to make:
 ///
 /// - [`PendingPostState::Pending`] — the first dispatch;
@@ -275,7 +275,7 @@ fn due_height(post: &PendingBondPost) -> ChainCount {
 ///   (past the horizon; the escalation is the alarm, not a faster loop), or
 ///   past the alarm horizon (the alarm pass this tick will catch it).
 ///
-/// Ordering: lowest due block; ties broken by lowest `anchor_t0`, then
+/// Ordering: lowest due count; ties broken by lowest `anchor_t0`, then
 /// persona id — pinned so a catch-up backlog replays deterministically. The
 /// posts left behind wait for subsequent ticks (one-per-tick: co-launching a
 /// backlog links the wallet's personas by simultaneity).
@@ -288,7 +288,7 @@ fn select_dispatch_candidate<'a>(
 ) -> Option<&'a PendingBondPost> {
     posts
         .iter()
-        .filter(|p| due_height(p) <= tip)
+        .filter(|p| due_count(p) <= tip)
         .filter(|p| !alarmed.contains(&p.persona))
         .filter(|p| match p.state {
             PendingPostState::Pending => true,
@@ -296,7 +296,7 @@ fn select_dispatch_candidate<'a>(
                 !held.contains(&p.persona) && tip < at.saturating_add(alarm_horizon)
             }
         })
-        .min_by_key(|p| (due_height(p), p.anchor_t0, p.persona))
+        .min_by_key(|p| (due_count(p), p.anchor_t0, p.persona))
 }
 
 // ---------------------------------------------------------------------------
@@ -491,9 +491,9 @@ impl<S: PendingSealStore, T: BondBroadcast> DispatchTick for DispatchDriver<S, T
     /// sweep-corroborated clamp is the pre-designed mitigation held in
     /// reserve for that reopen). The tip has **two consumers in this tick
     /// with opposite sensitivities to a lying daemon** (finding A-1,
-    /// 2026-07-06): the *due-check* (`due_height(p) <= tip`), where
+    /// 2026-07-06): the *due-check* (`due_count(p) <= tip`), where
     /// inflation is benign-later (monotone noise, posts dispatch late);
-    /// and the *alarm horizon* (`tip < at + alarm_horizon_blocks`), where
+    /// and the *alarm horizon* (`tip < at.saturating_add(alarm_horizon)`), where
     /// inflation is **premature-alarm** — a tip reported
     /// `alarm_horizon_blocks` ahead trips the operator alarm on posts
     /// that are propagating normally. The 2d-2 clamp must therefore cover

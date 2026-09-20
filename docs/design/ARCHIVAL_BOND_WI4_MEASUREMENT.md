@@ -778,7 +778,8 @@ valid** (positive `P(link)=0.996 ≥ 0.80`; negative `P(link)=0.102`,
 > observer*. The spread is therefore **live defense-in-depth only against an
 > off-chain-anchored adversary** — someone who knows the principal and saw them
 > act at time `T` — and **dead against the chain observer**, which is exactly
-> the non-certified posture. Its single execution site is `due_height` in
+> the non-certified posture. Its single execution site is `due_count`
+> (was `due_height`) in
 > `shekyl-engine-core`'s `pscan/dispatch.rs`
 > (`due = anchor_t0 + bond_post_offset_blocks`) — the claim is checkable there,
 > not prose.

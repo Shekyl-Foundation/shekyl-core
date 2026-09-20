@@ -495,13 +495,14 @@ async fn dispatch_retires(
     // — a source lying LOW merely defers the prune, fail-safe). The actor
     // key-wipe keeps its existing frontier basis (idempotent + re-derivable);
     // only the durable removal takes the token gate.
-    // Exclusive scan end (`next_height`) is numerically the count of
-    // scanned-or-next; wrap it as COUNT so the corroboration min is
-    // same-clock (C6). Adding reorg_depth as a span is C4.
-    let scanned_as_count = ChainCount::from_raw(accrual.next_height().to_raw());
+    // Exclusive scan end is `next_height`; C6's inverse puts it back on
+    // the count clock so the corroboration min is same-clock. Adding
+    // reorg_depth as a span is C4. `to_raw` is the edge into
+    // `settlement_epoch_at_height` (still a u64 until Phase 2d).
+    let scanned_as_count = ChainCount::from_next_height(accrual.next_height());
     let corroborated = scanned_as_count.saturating_add(BlockCount::from_raw(config.reorg_depth));
-    let token_height = claimed_tip.min(corroborated).to_raw();
-    let token_settled = settlement_epoch_at_height(token_height)
+    let token_count = claimed_tip.min(corroborated);
+    let token_settled = settlement_epoch_at_height(token_count.to_raw())
         .checked_sub(1)
         .map(SettlementEpoch::from_raw);
     let mut pruned_any = false;
