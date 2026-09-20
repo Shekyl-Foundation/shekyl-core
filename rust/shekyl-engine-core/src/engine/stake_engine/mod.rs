@@ -77,6 +77,7 @@ mod actor;
 mod bond;
 mod bond_post_assemble;
 mod claim;
+pub(crate) mod departure_ledger;
 mod drain;
 mod handle;
 mod helpers;

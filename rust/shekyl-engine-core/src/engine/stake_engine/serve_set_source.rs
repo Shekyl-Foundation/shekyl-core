@@ -47,11 +47,15 @@
 //! This type still does not create transports; it takes one. The bound decides
 //! *which kind*, the construction site decides *whose*.
 
-use shekyl_archival_retention::{HoldingsKind, SETTLEMENT_EPOCH_BLOCKS};
+use shekyl_archival_retention::HoldingsKind;
 use shekyl_curve_tree::{BlockHeight, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
+use shekyl_rpc_client::RpcError;
+use shekyl_types::ChainCount;
+
+use super::departure_ledger::{CoherentChainView, DepartureLedger, TimelineBreak};
 use crate::engine::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 use crate::engine::emission_source::fetch_emission_claim_source;
 use crate::engine::prpc::PersonaIsolatedTransport;
@@ -80,18 +84,11 @@ pub(crate) struct EngineServeSetPinner<R: PersonaIsolatedTransport> {
     curve_tree: CurveTreeHandle,
     rpc: R,
     p_id: [u8; 32],
-    /// Shards pinned in the store but absent from the connected record, and the
-    /// record height at which each was *first* observed absent. The release
-    /// gate reads from here; see [`Self::releasable`].
-    ///
-    /// **In memory, per session, deliberately.** A restart forgets the clock
-    /// and restarts it, so a wallet that reopens repeatedly reclaims more
-    /// slowly — but it never releases *early*, which is the only direction
-    /// that costs anything irreversible. Persisting it would buy faster
-    /// reclamation of disk (recoverable) at the price of a schema version and
-    /// a migration (not free), for a decision §9.7 item 5 already rules should
-    /// fail toward retention.
-    absent_since: std::sync::Mutex<std::collections::BTreeMap<u64, u64>>,
+    /// The departure ledger: which pinned shards are absent from the record,
+    /// since when, and whether the timeline those observations sit on is
+    /// still intact. Owns the release decision; see
+    /// [`DepartureLedger::observe`].
+    absent_since: std::sync::Mutex<DepartureLedger>,
     /// The store's pin set as of the last reconcile — the other half of the
     /// release input, kept here so a refresh costs one actor round trip.
     last_pinned: std::sync::Mutex<Vec<u64>>,
@@ -104,129 +101,34 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             curve_tree,
             rpc,
             p_id,
-            absent_since: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            absent_since: std::sync::Mutex::new(DepartureLedger::default()),
             last_pinned: std::sync::Mutex::new(Vec::new()),
         }
     }
 
-    /// Fold this refresh's observation into the departure ledger and return the
-    /// shards whose pins are now releasable.
+    /// Fold this refresh's observation into the departure ledger and return
+    /// the shards whose pins are now releasable.
     ///
-    /// `owed` is what the connected record says this persona must serve;
-    /// `pinned` is what the store is actually retaining. The difference is
-    /// retained-but-not-owed — the leak `ARCHIVAL_CHALLENGE_MECHANISM.md` §9.7
-    /// item 5 prices at ~13.6 GB against a rule-76 Pi-4 floor, since nothing
-    /// else ever removes a pin.
-    ///
-    /// # The gate is epoch-shaped, not reorg-shaped, and that is the whole point
-    ///
-    /// The obvious gate is a reorg depth — wait until the departure has settled
-    /// on the chain. **That is the wrong quantity, and using it here would turn
-    /// a disk leak into a slash risk.** §4 quantizes drawability to epoch
-    /// boundaries: *"a pair is drawable in E iff it held the shard at E's
-    /// open"*, and evaluation at that fixed pre-challenge height is deliberate
-    /// — it is the WS-1 constraint, *"no tip-holdings read that would let P
-    /// drop the shard after the fire and escape"*. So a mid-epoch drop does
-    /// **not** end the obligation for E; the pair stays drawable, and
-    /// challengeable, through E's close.
-    ///
-    /// That matters here and not one layer up, because
-    /// [`StoreShardProvider`](shekyl_p_serve::StoreShardProvider) is
-    /// **serve-set-blind**: it holds only a `ServingReader` and answers for any
-    /// shard whose bytes are in the store. A dropped-but-still-pinned shard is
-    /// therefore still *served*, which is why today's leak happens to keep the
-    /// obligation met. Release the pin early and the prune reclaims the bytes
-    /// while the pair is still drawable — a miss, then a slash, for disk.
-    /// §9.7's own asymmetry, pointed the other way: the reclaim is recoverable,
-    /// the loss is not.
-    ///
-    /// # The condition
-    ///
-    /// Release once the shard has been absent across **two consecutive epoch
-    /// opens**. Then it was not drawable in the current epoch or the one
-    /// before, so the last epoch in which it could have been drawn closed a
-    /// full epoch ago.
-    ///
-    /// Two epochs rather than one because one is too tight: absent at only the
-    /// current epoch's open makes the previous epoch the last drawable one, and
-    /// a challenge issued in its final block still has to resolve. The extra
-    /// epoch is that resolution slack.
-    ///
-    /// **W₂ is deliberately not an input.** The resolution window has no landed
-    /// constant — it is the rig's output (§9.7 item 6, still UNDERIVED) — so a
-    /// gate that named it could not be written yet. This one does not need it:
-    /// a full epoch of slack covers any W₂ shorter than
-    /// `SETTLEMENT_EPOCH_BLOCKS`, which at ~14 days against a window measured
-    /// in minutes-to-hours is not a close call. **Reopening criterion (rule
-    /// 21):** if the rig ever derives a W₂ at or above one epoch, this gate is
-    /// wrong and must take W₂ as an operand.
-    ///
-    /// The reorg question the naive gate was answering is subsumed rather than
-    /// dropped: §2 notes drawability is evaluated at epoch open, *"deep history
-    /// relative to any plausible reorg, so the drawable set is reorg-stable"*.
-    /// Two epoch boundaries is far deeper than `ARCHIVAL_REORG_DEPTH_BLOCKS`.
-    ///
-    /// A shard that reappears in the record clears its entry, so a departure
-    /// that reverses inside the window costs nothing and leaves no trace.
-    ///
-    /// # Why the clock is [`SyncedChainFacts`] and not a bare height
-    ///
-    /// This function is only reachable with a witness that the daemon
-    /// reported itself synchronized, and it reads its clock **off that
-    /// witness** (`WSS-Q14`, closing `WSS-25`). Both halves matter.
-    ///
-    /// *Reachability:* a resyncing daemon answers the bond record at heights
-    /// before the persona bonded, so the owed set is empty and every held
-    /// shard looks departed — while the answering height climbs through epoch
-    /// opens at resync speed rather than chain speed, minutes to hours for the
-    /// two this gate needs. The gate would then fire for **everything held**,
-    /// with nobody as the adversary and the `C++→Rust` cutover forcing the
-    /// resync on every daemon. Taking the witness by value makes that path
-    /// impossible to write, rather than a branch someone must remember.
-    ///
-    /// *The clock:* the elapsed-obligation arithmetic reads
-    /// [`SyncedChainFacts::tip`], not the record's own `as_of`. A token
-    /// parameter the body ignored would delete cleanly and silently restore
-    /// `WSS-25` — a check that cannot fail (`50-testing`). Reading it also
-    /// makes the reading *conservative*: `pin_serve_set` takes the sync
-    /// reading **before** the record, so this height is the earlier of the
-    /// two and can only under-count elapsed obligation. Under-counting costs
-    /// disk; over-counting costs a slash (§9.7 item 5's asymmetry).
-    fn releasable(&self, owed: &[u64], pinned: &[u64], synced: &SyncedChainFacts) -> Vec<u64> {
-        let as_of = synced.tip().to_raw();
+    /// The gate's reasoning, its constant and the two evidence hazards it
+    /// guards live in [`departure_ledger`](super::departure_ledger) — this is
+    /// the seam that binds the ledger to *this* refresh's two reads. The
+    /// binding is the whole content: the observation height is
+    /// [`CoherentChainView::reconcile`]'s verdict on the sync witness and the
+    /// record's own height, never a number chosen here, so neither a stale
+    /// witness nor a rolled-back record can set the clock.
+    fn releasable(
+        &self,
+        owed: &[u64],
+        pinned: &[u64],
+        synced: &SyncedChainFacts,
+        record_height: ChainCount,
+    ) -> Vec<u64> {
         let owed: std::collections::BTreeSet<u64> = owed.iter().copied().collect();
-        let mut ledger = self.absent_since.lock().expect("departure ledger");
-
-        // A shard back in the record is not departed at all: drop its entry so
-        // its clock restarts if it leaves again.
-        ledger.retain(|shard_id, _| !owed.contains(shard_id));
-
-        let now_epoch = as_of / SETTLEMENT_EPOCH_BLOCKS;
-        let mut releasable = Vec::new();
-        for &shard_id in pinned {
-            if owed.contains(&shard_id) {
-                continue;
-            }
-            let first_absent = *ledger.entry(shard_id).or_insert(as_of);
-            let absent_epoch = first_absent / SETTLEMENT_EPOCH_BLOCKS;
-            // Saturating: a height below the first observation means the chain
-            // moved backwards under us, which is not elapsed obligation.
-            //
-            // **This is not synchronization coverage, and reading it as such
-            // is how `WSS-25` survived review.** It guards the chain moving
-            // *backwards*; the resync hazard is the chain moving *forwards*
-            // through epoch opens on a view that is not the network's. The
-            // `synced` operand is what covers that direction — a reviewer
-            // checking for a sync gate should look at the signature, not here.
-            if now_epoch.saturating_sub(absent_epoch) >= EPOCHS_BEFORE_PIN_RELEASE {
-                releasable.push(shard_id);
-            }
-        }
-        // Released pins stop being pinned, so their ledger entries are spent.
-        for shard_id in &releasable {
-            ledger.remove(shard_id);
-        }
-        releasable
+        let view = CoherentChainView::reconcile(synced, record_height);
+        self.absent_since
+            .lock()
+            .expect("departure ledger")
+            .observe(view, &owed, pinned)
     }
 
     /// CompleteTree prefix arm: declare the prune-disabled posture, then
@@ -277,6 +179,8 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         &self,
         shard_ids: &[u64],
         synced: Option<&SyncedChainFacts>,
+        record_height: ChainCount,
+        break_reason: Option<TimelineBreak>,
     ) -> Result<(shekyl_p_host::ReportedSet, ServingReader), String> {
         let shard_ids = shard_ids.to_vec();
         // The release set is computed from the *previous* reconcile's view
@@ -287,14 +191,27 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         let releasable = match synced {
             Some(synced) => {
                 let pinned = self.last_pinned.lock().expect("pin view").clone();
-                self.releasable(&shard_ids, &pinned, synced)
+                self.releasable(&shard_ids, &pinned, synced, record_height)
             }
             // `WSS-25`, §6.7.3: *records no absence observations and releases
             // nothing while the daemon is unsynced*. Both halves come from
             // this one arm, because `releasable` is the departure ledger's
             // only writer — not calling it writes nothing, so a resync leaves
             // no trace to act on once the daemon catches up.
-            None => Vec::new(),
+            None => {
+                // Forget, do not freeze. A frozen entry is a claim about an
+                // interval the wallet did not watch: a shard absent before
+                // the break, re-added during it and departed again after it
+                // would otherwise resume a clock that had already been
+                // satisfied, and release at once. Costs a re-observation —
+                // at worst two more epochs of retained disk, the recoverable
+                // direction.
+                self.absent_since
+                    .lock()
+                    .expect("departure ledger")
+                    .break_timeline(break_reason.unwrap_or(TimelineBreak::FactsUnavailable));
+                Vec::new()
+            }
         };
 
         let reply = self
@@ -348,8 +265,8 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
         // pin half and the host's witness still need to run, for the same
         // reason a persona with no bond record reports an empty list rather
         // than failing forever.
-        let synced = match fetch_synced_chain_facts(&self.rpc).await {
-            Ok(Some(facts)) => Some(facts),
+        let (synced, break_reason) = match fetch_synced_chain_facts(&self.rpc).await {
+            Ok(Some(facts)) => (Some(facts), None),
             Ok(None) => {
                 tracing::info!(
                     "serve-set refresh: the daemon reports it is still synchronizing, so no \
@@ -357,16 +274,31 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
                      the daemon is caught up — an unsynchronized view cannot tell a shard this \
                      persona no longer owes from one the resync has not reached yet"
                 );
-                None
+                (None, Some(TimelineBreak::DaemonSyncing))
+            }
+            // Three states, not two. `fetch_synced_chain_facts` answers
+            // `InvalidNode` for a reply that arrived and did not decode as
+            // chain facts, which is a contract or version fault in the
+            // daemon — a different thing from not reaching it, with a
+            // different remedy. Calling both "unreachable" sends an operator
+            // to the network layer to debug a schema break (rule 82).
+            Err(e @ RpcError::InvalidNode(_)) => {
+                tracing::error!(
+                    error = ?e,
+                    "serve-set refresh: the daemon answered, but its chain facts did not \
+                     decode — a protocol or contract fault, NOT a connectivity problem. No \
+                     serve-set pin will be released this refresh and holdings are retained. \
+                     Check that the daemon's version matches this wallet's expectations"
+                );
+                (None, Some(TimelineBreak::FactsUnavailable))
             }
             Err(e) => {
                 tracing::warn!(
                     error = ?e,
-                    "serve-set refresh: could not read the daemon's chain facts, so no \
-                     serve-set pin will be released this refresh. Holdings are retained. This \
-                     is a daemon reachability fault, not a synchronization state"
+                    "serve-set refresh: could not reach the daemon to read its chain facts, \
+                     so no serve-set pin will be released this refresh. Holdings are retained"
                 );
-                None
+                (None, Some(TimelineBreak::FactsUnavailable))
             }
         };
 
@@ -419,11 +351,19 @@ impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner
             Some(bond) => match bond.holdings.kind {
                 HoldingsKind::CompleteTree => self.report_prefix().await?,
                 HoldingsKind::ShardSetCompact => {
-                    self.report_list(bond.holdings.shard_ids.as_slice(), synced.as_ref())
-                        .await?
+                    self.report_list(
+                        bond.holdings.shard_ids.as_slice(),
+                        synced.as_ref(),
+                        source.chain_height,
+                        break_reason,
+                    )
+                    .await?
                 }
             },
-            None => self.report_list(&[], synced.as_ref()).await?,
+            None => {
+                self.report_list(&[], synced.as_ref(), source.chain_height, break_reason)
+                    .await?
+            }
         };
 
         Ok(PinReport {
@@ -537,16 +477,6 @@ mod tests {
         })))
     }
 
-    /// A **synchronized** daemon whose newest block is at `tip`.
-    ///
-    /// The count is one more than the tip — the relation `get_info` reports
-    /// (`top_block + 1`) — so these heights read exactly as they did when the
-    /// gate took a bare `as_of`, and the two-epoch semantics below are the
-    /// same assertions against the same numbers.
-    fn synced_at(tip: u64) -> SyncedChainFacts {
-        SyncedChainFacts::new(ChainCount::from_raw(tip + 1), 0, true).expect("synchronized")
-    }
-
     fn handle() -> (tempfile::TempDir, CurveTreeHandle) {
         let dir = tempfile::tempdir().expect("tempdir");
         let client = CurveTreeClient::open(dir.path().join("curve_tree.redb"))
@@ -603,113 +533,12 @@ mod tests {
     /// outcomes + reader — is the one part of the seam no host-side test can
     /// reach. Without this it could be wrong in any of those four places
     /// while the whole suite stayed green.
-    /// The gate, exercised as a pure function of its three inputs — no store,
-    /// no actor, no daemon. This is where the slash-vs-disk asymmetry lives.
-    ///
-    /// The heights are chosen against `SETTLEMENT_EPOCH_BLOCKS = 10_000`:
-    /// a drop at 1_000 is mid-epoch-0, and the pair stays drawable through
-    /// epoch 0's close at 9_999.
-    #[tokio::test]
-    async fn a_departed_shard_is_not_releasable_while_it_is_still_drawable() {
-        let (_dir, curve_tree) = handle();
-        let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
-
-        // Dropped mid-epoch-0. Still drawable for the rest of epoch 0.
-        assert!(pinner
-            .releasable(&[1], &[1, 9], &synced_at(1_000))
-            .is_empty());
-
-        // A reorg depth later — what the first version of this gate released
-        // on. Epoch 0 has ~8_280 blocks left, and the provider is
-        // serve-set-blind, so reclaiming here means a real challenge finds no
-        // bytes.
-        assert!(
-            pinner
-                .releasable(&[1], &[1, 9], &synced_at(1_720))
-                .is_empty(),
-            "720 blocks is a reorg depth, not an obligation: releasing here \
-             converts a disk leak into a miss",
-        );
-
-        // Epoch 1's open: not drawable in epoch 1, but epoch 0's challenges
-        // may have fired as late as block 9_999 and still need to resolve.
-        assert!(
-            pinner
-                .releasable(&[1], &[1, 9], &synced_at(10_000))
-                .is_empty(),
-            "one epoch is too tight — a challenge issued in epoch 0's last \
-             block has had no time to resolve",
-        );
-        assert!(pinner
-            .releasable(&[1], &[1, 9], &synced_at(19_999))
-            .is_empty());
-
-        // Epoch 2's open: absent across two consecutive epoch opens, and the
-        // last epoch it could have been drawn in closed a full epoch ago.
-        assert_eq!(
-            pinner.releasable(&[1], &[1, 9], &synced_at(20_000)),
-            vec![9]
-        );
-    }
-
-    /// A departure that reverses inside the window costs nothing, and the clock
-    /// restarts if it leaves again.
-    #[tokio::test]
-    async fn a_shard_that_returns_clears_its_departure_clock() {
-        let (_dir, curve_tree) = handle();
-        let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
-
-        assert!(pinner
-            .releasable(&[1], &[1, 9], &synced_at(1_000))
-            .is_empty());
-        // Back in the record inside epoch 0 — it was held at no epoch open it
-        // missed, so nothing has elapsed.
-        assert!(pinner
-            .releasable(&[1, 9], &[1, 9], &synced_at(5_000))
-            .is_empty());
-        // It leaves again in epoch 1. Had the first clock survived, epoch 2's
-        // open would release it while it was drawable in epoch 1.
-        assert!(pinner
-            .releasable(&[1], &[1, 9], &synced_at(15_000))
-            .is_empty());
-        assert!(
-            pinner
-                .releasable(&[1], &[1, 9], &synced_at(20_000))
-                .is_empty(),
-            "the clock restarted at the second departure: absent at epoch 2's \
-             open only, and it was drawable in epoch 1",
-        );
-        assert_eq!(
-            pinner.releasable(&[1], &[1, 9], &synced_at(30_000)),
-            vec![9]
-        );
-    }
-
-    /// A shard still owed is never releasable, however long it has been pinned
-    /// — the direction that would cause a slash rather than waste disk.
-    #[tokio::test]
-    async fn an_owed_shard_is_never_releasable() {
-        let (_dir, curve_tree) = handle();
-        let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
-        assert!(pinner
-            .releasable(&[1, 9], &[1, 9], &synced_at(10 * SETTLEMENT_EPOCH_BLOCKS))
-            .is_empty());
-    }
-
-    /// A chain that moves backwards under the ledger is not elapsed finality.
-    #[tokio::test]
-    async fn a_record_height_going_backwards_does_not_elapse_the_gate() {
-        let (_dir, curve_tree) = handle();
-        let pinner = EngineServeSetPinner::new(curve_tree, daemon(1, None), [7; 32]);
-        assert!(pinner
-            .releasable(&[1], &[1, 9], &synced_at(50_000))
-            .is_empty());
-        assert!(
-            pinner.releasable(&[1], &[1, 9], &synced_at(100)).is_empty(),
-            "saturating subtraction: a lower height is not five epochs of elapsed \
-             obligation",
-        );
-    }
+    // The gate's pure semantics — the two-epoch window, the returning-shard
+    // reset, the owed-shard refusal and the backwards-chain case — moved to
+    // `departure_ledger_tests.rs` with the type that now owns them. They are
+    // not duplicated here: a second copy of one gate's rules is how the two
+    // come to disagree. What stays below is the *seam* this file owns —
+    // record decode, the two empties, and the resync property test.
 
     #[tokio::test]
     async fn the_report_is_derived_from_the_connected_record() {
@@ -1116,7 +945,8 @@ mod tests {
                 .absent_since
                 .lock()
                 .expect("departure ledger")
-                .is_empty(),
+                .observed_absences()
+                == 0,
             "an unsynchronized view must record NO absence observation: the \
              record answers at pre-bond heights, so 'absent' is a statement \
              about the resync, not about the persona's holdings",

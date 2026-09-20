@@ -85,15 +85,35 @@ fn a_reply_without_a_height_is_refused_rather_than_defaulted() {
     );
 }
 
-/// The optional fields take the safe default. `target_height`'s absence means
-/// synchronized (the surface's convention); an absent connection count reads
-/// as zero, which only ever routes the watchdog to the operator-alarm rung.
+/// Only the connection counts are optional, and only because zero is
+/// honestly "none known" there.
+///
+/// `target_height` is **not** among them: zero is its synchronized sentinel,
+/// so a default would have the decoder manufacture the claim the constructor
+/// verifies. The edit that turns this red is restoring `.unwrap_or(0)` for
+/// symmetry — which is exactly the tempting edit, hence the test.
 #[test]
-fn the_optional_fields_default_in_the_safe_direction() {
-    let health = health_from_get_info(&json!({ "height": 77 })).expect("height is enough");
+fn only_the_non_destructive_connection_counts_default() {
+    let health = health_from_get_info(&json!({ "height": 77, "target_height": 0 }))
+        .expect("height and target are enough");
     assert_eq!(health.height, 77);
-    assert_eq!(health.target_height, 0);
     assert_eq!(health.connections, 0);
+
+    let err = health_from_get_info(&json!({ "height": 500, "synchronized": true }))
+        .expect_err("an absent target_height is contract drift, not an omission");
+    assert!(
+        matches!(err, RpcError::InvalidNode(ref m) if m.contains("target_height")),
+        "the refusal names the missing field: {err:?}"
+    );
+}
+
+/// A non-numeric `target_height` is refused for the same reason — the
+/// `and_then(as_u64)` arm must not fall through to the sentinel either.
+#[test]
+fn a_non_numeric_target_height_is_refused_rather_than_defaulted() {
+    let err = health_from_get_info(&json!({ "height": 500, "target_height": "soon" }))
+        .expect_err("a string target_height does not decode");
+    assert!(matches!(err, RpcError::InvalidNode(_)), "{err:?}");
 }
 
 /// Connection counts are summed with `saturating_add`, so a daemon reporting
@@ -102,6 +122,9 @@ fn the_optional_fields_default_in_the_safe_direction() {
 fn the_connection_sum_saturates_rather_than_wrapping() {
     let health = health_from_get_info(&json!({
         "height": 1,
+        // Mandatory since the sentinel may not be manufactured by the
+        // decoder; this test's subject is the connection sum, not the gate.
+        "target_height": 0,
         "outgoing_connections_count": u64::MAX,
         "incoming_connections_count": 4,
     }))

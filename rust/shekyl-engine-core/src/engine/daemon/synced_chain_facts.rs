@@ -216,10 +216,24 @@ pub(crate) fn health_from_get_info(info: &Value) -> Result<DaemonHealth, RpcErro
         .get("height")
         .and_then(Value::as_u64)
         .ok_or_else(|| RpcError::InvalidNode("get_info missing height".to_string()))?;
+    // **Mandatory, and this one cannot take a default.** `0` is not a
+    // neutral absence here — it is the synchronized *sentinel*, so defaulting
+    // an absent or non-numeric `target_height` would have the decoder
+    // manufacture the very claim the constructor is supposed to verify. That
+    // is fail-OPEN: `{"height": 500, "synchronized": true}` would mint facts
+    // for a daemon that never said it was caught up.
+    //
+    // The field is declared on the response
+    // (`core_rpc_server_commands_defs.h:269`, `KV_SERIALIZE(target_height)`),
+    // so its absence is contract drift, not an optional-field omission.
+    // Do not restore a default here for symmetry with the connection counts
+    // below: those default because zero is honestly "none known" and only
+    // ever routes to the operator-alarm rung, whereas zero here is an
+    // assertion about the chain.
     let target_height = info
         .get("target_height")
         .and_then(Value::as_u64)
-        .unwrap_or(0);
+        .ok_or_else(|| RpcError::InvalidNode("get_info missing target_height".to_string()))?;
     let outgoing = info
         .get("outgoing_connections_count")
         .and_then(Value::as_u64)
