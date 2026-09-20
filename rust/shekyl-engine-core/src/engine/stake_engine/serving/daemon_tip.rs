@@ -86,14 +86,39 @@ pub(crate) fn tip_refresh_interval(daa_target_seconds: u64) -> Duration {
     tip_max_age(daa_target_seconds) / TIP_REFRESH_INTERVAL_DIVISOR
 }
 
+/// Why a daemon's reported height is **not** evidence about the chain.
+///
+/// Each variant is a fact the daemon states about itself, so the gate's
+/// refusal can be attributed rather than guessed. They are checked in a
+/// fixed order and the first that holds is reported, which keeps the
+/// diagnosis stable for an operator reading two polls in a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NotFollowing {
+    /// `offline` — the daemon is not talking to the network at all.
+    Offline,
+    /// `following_degraded` — it refused a switch at the prune watermark and
+    /// knows it is not on the heaviest chain it has seen (`C2-R1b F-1(a)`).
+    /// One-way in C++ by design, so this refusal latches until a resync;
+    /// that is the direction we want, and the daemon's own log says the
+    /// remedy.
+    Degraded,
+    /// `synchronized` is false — it has never caught up since start.
+    NeverSynchronized,
+    /// Its own `height` is behind its own `target_height`.
+    BehindItsTarget,
+    /// No peers. A daemon with nobody to learn from is not tracking the
+    /// chain, whatever a sticky flag from an earlier epoch still says.
+    NoPeers,
+}
+
 /// What one `get_info` read says about the daemon's tip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TipReading {
-    /// The daemon is synchronized and its top block is at this height.
+    /// The daemon is following the chain and its top block is at this height.
     Synced(u64),
-    /// The daemon says it is not synchronized. Its height is not the
-    /// chain's, and the gate must not centre on it.
-    Syncing,
+    /// The daemon said something that means its height is not the chain's.
+    /// The gate must not centre on it, so the cache is cleared.
+    NotFollowing(NotFollowing),
     /// The reply could not be read as either. Treated as "no news": the
     /// producer stamps nothing and the held tip ages out on schedule, so a
     /// single malformed or dropped reply does not refuse challenges.
@@ -102,57 +127,100 @@ pub(crate) enum TipReading {
 
 /// Read one `get_info` reply into a [`TipReading`].
 ///
-/// # The sync predicate
+/// # The sync predicate, and why one flag is not enough
 ///
-/// A daemon is synced when it says so **and** its own heights agree with
-/// that. The height half is lifted verbatim from the submit watchdog's
-/// `DaemonHealthContext::is_synced` (`submit_watchdog.rs:219-221`):
+/// `synchronized` is **sticky**. In `cryptonote_protocol_handler.inl` the
+/// backing `m_synchronized` is written exactly twice — the constructor, and
+/// a one-way `compare_exchange_strong(expected, true)`. Nothing ever stores
+/// `false`: not a disconnect, not a pop, not a refused reorg. `get_info`
+/// then forces `target_height` to `0` whenever that bit is set, so the
+/// height half of the predicate is satisfied by construction too.
 ///
-/// ```text
-/// target_height == 0 || height >= target_height
-/// ```
+/// A once-synced daemon that later loses every peer therefore keeps
+/// reporting `synchronized: true, target_height: 0` at a frozen height,
+/// forever. Stamping that as fresh re-creates the unbounded lag `WSS-24`
+/// exists to remove — by a different route, and silently, because every
+/// signature stays well-formed.
 ///
-/// This converges with `WSS-Q14`'s `SyncedChainFacts`; whichever of the two
-/// lands second adopts the other's form, and this comment is the marker for
-/// that merge.
+/// So the sticky flag is treated as **necessary and not sufficient**, and
+/// joined by facts that can go false again:
 ///
-/// `synchronized` is **not** decoration on top of it. A daemon that has just
-/// started with no peers reports `target_height == 0` and
-/// `synchronized == false` — the height half alone reads that as synced, and
-/// would centre the gate on a genesis-adjacent tip. That case is the reason
-/// both halves are required.
+/// | fact | reverts? | zeroed by `--restricted-rpc`? |
+/// |---|---|---|
+/// | `synchronized` | never (one-way) | no |
+/// | `height` vs `target_height` | yes | no |
+/// | `offline` | yes | no |
+/// | `following_degraded` | never (one-way, refusing) | no |
+/// | connection counts | yes | **yes** |
+///
+/// The height half is lifted verbatim from the submit watchdog's
+/// `DaemonHealthContext::is_synced` (`target_height == 0 || height >=
+/// target_height`). This converges with `WSS-Q14`'s `SyncedChainFacts`;
+/// whichever lands second adopts the other's form.
+///
+/// # `--restricted-rpc` zeroes the connection counts *by policy*
+///
+/// `core_rpc_server.cpp` writes `restricted ? 0 : …` for both connection
+/// counts. On a restricted daemon "no peers" and "not telling you" are the
+/// same bytes, so requiring `connections > 0` unconditionally would refuse
+/// every challenge forever on that configuration — the same slash, moved to
+/// a new deployment. The reply carries `restricted`, so the operand is used
+/// only where it means something, and the residual is named rather than
+/// papered over: **on a restricted daemon the peer check is unavailable**
+/// and only `offline` / `following_degraded` remain to contradict the
+/// sticky flag.
 ///
 /// # Untrusted input (rule 20 §3)
 ///
-/// Every field is parsed defensively and each absence has a named direction:
+/// Each absence has a named direction, and none of them is the convenient
+/// one by accident:
 ///
 /// - `height` absent or unparseable ⇒ [`TipReading::Unusable`]. There is no
 ///   safe default: a silent `0` is a claim about the chain.
-/// - `synchronized` absent ⇒ `false` ⇒ [`TipReading::Syncing`]. The
-///   conservative direction, and the one that refuses rather than signs.
-/// - `target_height` absent ⇒ `0`, following the info surface's own "0 when
-///   synced" convention (`core_rpc_server.cpp:209`), which is the same
-///   mapping `DaemonEngine::get_health` makes.
-/// - `height == 0` ⇒ [`TipReading::Unusable`]: there is no top block, so
-///   there is no block height to stamp. A chain always has genesis, so this
-///   is a broken reply rather than a young chain.
+/// - `synchronized` absent ⇒ `false` ⇒ refuse. The conservative direction.
+/// - `target_height` absent ⇒ `0`, the info surface's own "0 when synced"
+///   convention (`core_rpc_server.cpp`), as `DaemonEngine::get_health` maps it.
+/// - `offline`, `following_degraded`, `restricted` absent ⇒ `false`. These
+///   are **refusal** triggers, so absent-as-true would refuse every daemon
+///   too old to carry the field — a self-inflicted outage on an upgrade skew.
+/// - connection counts absent ⇒ `0`, which refuses only when the daemon also
+///   said it was unrestricted, i.e. when it claimed the numbers were real.
+/// - `height == 0` ⇒ [`TipReading::Unusable`]: no top block to stamp, and a
+///   chain always has genesis, so this is a broken reply rather than a young
+///   chain.
 pub(crate) fn tip_reading_from_info(info: &Value) -> TipReading {
     let Some(chain_height) = info.get("height").and_then(Value::as_u64) else {
         return TipReading::Unusable;
     };
-    let synchronized = info
-        .get("synchronized")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let target_height = info
-        .get("target_height")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    // Lifted verbatim from `submit_watchdog.rs:219-221`; see the doc above.
+    let flag = |name: &str| info.get(name).and_then(Value::as_bool).unwrap_or(false);
+    let count = |name: &str| info.get(name).and_then(Value::as_u64).unwrap_or(0);
+
+    let target_height = count("target_height");
+    // Lifted verbatim from `DaemonHealthContext::is_synced`; see the doc above.
     let heights_agree = target_height == 0 || chain_height >= target_height;
-    if !synchronized || !heights_agree {
-        return TipReading::Syncing;
+    let connections =
+        count("outgoing_connections_count").saturating_add(count("incoming_connections_count"));
+
+    // Ordered most-specific first, so the reported cause is the one an
+    // operator can act on: "offline" is actionable, "never synchronized" is
+    // the symptom it would also produce.
+    let cause = if flag("offline") {
+        Some(NotFollowing::Offline)
+    } else if flag("following_degraded") {
+        Some(NotFollowing::Degraded)
+    } else if !flag("synchronized") {
+        Some(NotFollowing::NeverSynchronized)
+    } else if !heights_agree {
+        Some(NotFollowing::BehindItsTarget)
+    } else if !flag("restricted") && connections == 0 {
+        Some(NotFollowing::NoPeers)
+    } else {
+        None
+    };
+    if let Some(cause) = cause {
+        return TipReading::NotFollowing(cause);
     }
+
     // Chain height -> top block height. The one place the conversion happens.
     match chain_height.checked_sub(1) {
         Some(top_block_height) => TipReading::Synced(top_block_height),
@@ -177,7 +245,7 @@ where
     };
     match reading {
         TipReading::Synced(top_block_height) => tip.stamp_synced(top_block_height),
-        TipReading::Syncing => tip.stamp_syncing(),
+        TipReading::NotFollowing(_) => tip.stamp_not_following(),
         TipReading::Unusable => {}
     }
     reading
@@ -296,7 +364,8 @@ mod tests {
         const TOP_BLOCK: u64 = CHAIN_HEIGHT - 1;
 
         let info = json!({
-            "height": CHAIN_HEIGHT, "target_height": 0, "synchronized": true
+            "height": CHAIN_HEIGHT, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 8
         });
         let reading = tip_reading_from_info(&info);
         assert_eq!(
@@ -317,7 +386,8 @@ mod tests {
     async fn the_conversion_reaches_the_cache_not_only_the_reading() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         let rpc = CannedRpc::replying(&json!({
-            "height": 9_001, "target_height": 0, "synchronized": true
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 8
         }));
         refresh_tip_once(&rpc, &tip).await;
         assert_eq!(
@@ -332,18 +402,33 @@ mod tests {
     /// as synced. Dropping `synchronized` from the predicate turns this red.
     #[test]
     fn a_peerless_daemon_reporting_target_zero_is_syncing_not_synced() {
-        let info = json!({"height": 5, "target_height": 0, "synchronized": false});
-        assert_eq!(tip_reading_from_info(&info), TipReading::Syncing);
+        let info = json!({
+            "height": 5, "target_height": 0, "synchronized": false,
+            "outgoing_connections_count": 8
+        });
+        assert_eq!(
+            tip_reading_from_info(&info),
+            TipReading::NotFollowing(NotFollowing::NeverSynchronized)
+        );
     }
 
     /// The height half of the lifted predicate, with `synchronized` true so
     /// only the heights can decide.
     #[test]
     fn a_daemon_behind_its_own_target_is_syncing() {
-        let behind = json!({"height": 9_000, "target_height": 9_500, "synchronized": true});
-        assert_eq!(tip_reading_from_info(&behind), TipReading::Syncing);
+        let behind = json!({
+            "height": 9_000, "target_height": 9_500, "synchronized": true,
+            "outgoing_connections_count": 8
+        });
+        assert_eq!(
+            tip_reading_from_info(&behind),
+            TipReading::NotFollowing(NotFollowing::BehindItsTarget)
+        );
 
-        let level = json!({"height": 9_500, "target_height": 9_500, "synchronized": true});
+        let level = json!({
+            "height": 9_500, "target_height": 9_500, "synchronized": true,
+            "outgoing_connections_count": 8
+        });
         assert_eq!(
             tip_reading_from_info(&level),
             TipReading::Synced(9_499),
@@ -355,27 +440,38 @@ mod tests {
     #[test]
     fn absent_fields_take_their_named_directions() {
         assert_eq!(
-            tip_reading_from_info(&json!({"target_height": 0, "synchronized": true})),
+            tip_reading_from_info(&json!({
+                "target_height": 0, "synchronized": true,
+                "outgoing_connections_count": 8
+            })),
             TipReading::Unusable,
             "no height is not height 0"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({"height": 9_001, "target_height": 0})),
-            TipReading::Syncing,
+            tip_reading_from_info(&json!({
+                "height": 9_001, "target_height": 0,
+                "outgoing_connections_count": 8
+            })),
+            TipReading::NotFollowing(NotFollowing::NeverSynchronized),
             "absent `synchronized` is false, which refuses"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({"height": 9_001, "synchronized": true})),
+            tip_reading_from_info(&json!({
+                "height": 9_001, "synchronized": true,
+                "outgoing_connections_count": 8
+            })),
             TipReading::Synced(9_000),
             "absent `target_height` is the info surface's 0-when-synced"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({"height": "nope", "synchronized": true})),
+            tip_reading_from_info(&json!({"height": "nope", "synchronized": true,
+                "outgoing_connections_count": 8})),
             TipReading::Unusable,
             "an unparseable height is never silently defaulted"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({"height": 0, "synchronized": true})),
+            tip_reading_from_info(&json!({"height": 0, "synchronized": true,
+                "outgoing_connections_count": 8})),
             TipReading::Unusable,
             "chain height 0 has no top block to stamp"
         );
@@ -401,7 +497,7 @@ mod tests {
             "an unreadable reply stamps nothing"
         );
 
-        tip.stamp_syncing();
+        tip.stamp_not_following();
         assert_eq!(tip.height(), None);
     }
 
@@ -428,14 +524,15 @@ mod tests {
     //
     // These are the only tests that run `refresh_tip_once` itself. Without
     // them the match arms are unpinned: turning `Unusable => {}` into
-    // `Unusable => tip.stamp_syncing()` leaves every other test in this file
+    // `Unusable => tip.stamp_not_following()` leaves every other test in this file
     // green while re-creating the slash WSS-24 removes.
 
     #[tokio::test]
     async fn a_synced_reply_stamps_the_top_block_height() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         let rpc = CannedRpc::replying(&json!({
-            "height": 9_001, "target_height": 0, "synchronized": true
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 8
         }));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
@@ -445,13 +542,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_syncing_reply_clears_a_held_tip() {
+    async fn a_reply_that_stopped_following_clears_a_held_tip() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(9_000);
         let rpc = CannedRpc::replying(&json!({
             "height": 9_001, "target_height": 12_000, "synchronized": true
         }));
-        assert_eq!(refresh_tip_once(&rpc, &tip).await, TipReading::Syncing);
+        assert_eq!(
+            refresh_tip_once(&rpc, &tip).await,
+            TipReading::NotFollowing(NotFollowing::BehindItsTarget)
+        );
         assert_eq!(
             tip.height(),
             None,
@@ -494,5 +594,131 @@ mod tests {
             TipReading::Unusable
         );
         assert_eq!(tip.height(), None);
+    }
+
+    // ── F2: the sticky `synchronized` flag is not sufficient ────────────
+    //
+    // `m_synchronized` is written once, one-way, and never cleared, and
+    // `get_info` forces `target_height` to 0 whenever it is set. Every case
+    // below therefore presents `synchronized: true, target_height: 0` — a
+    // reply the pre-F2 predicate accepted unconditionally — and differs only
+    // in a fact that CAN revert.
+
+    /// The motivating case: a once-synced daemon that has lost every peer
+    /// keeps claiming synchronization at a frozen height. Dropping the
+    /// `connections == 0` arm turns this green again, which is the whole
+    /// defect.
+    #[test]
+    fn a_once_synced_daemon_with_no_peers_is_not_following() {
+        let info = json!({
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 0, "incoming_connections_count": 0
+        });
+        assert_eq!(
+            tip_reading_from_info(&info),
+            TipReading::NotFollowing(NotFollowing::NoPeers)
+        );
+    }
+
+    /// One peer of either kind is enough to be learning from somebody; the
+    /// check is "nobody at all", not a quorum we have no basis to set.
+    #[test]
+    fn a_single_peer_of_either_kind_still_counts() {
+        for field in ["outgoing_connections_count", "incoming_connections_count"] {
+            let info = json!({
+                "height": 9_001, "target_height": 0, "synchronized": true,
+                field: 1
+            });
+            assert_eq!(
+                tip_reading_from_info(&info),
+                TipReading::Synced(9_000),
+                "{field} = 1 is somebody to learn from"
+            );
+        }
+    }
+
+    /// `--restricted-rpc` zeroes the connection counts BY POLICY
+    /// (`core_rpc_server.cpp`: `restricted ? 0 : ...`), so on such a daemon
+    /// "no peers" and "not telling you" are the same bytes. Requiring
+    /// `connections > 0` unconditionally would refuse every challenge
+    /// forever there — the same slash in a new deployment. The reply says
+    /// `restricted`, so the operand is used only where it means something.
+    #[test]
+    fn a_restricted_daemons_zeroed_counts_are_not_read_as_no_peers() {
+        let info = json!({
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 0, "incoming_connections_count": 0,
+            "restricted": true
+        });
+        assert_eq!(
+            tip_reading_from_info(&info),
+            TipReading::Synced(9_000),
+            "a policy-zeroed count is an absent fact, not a peerless daemon"
+        );
+    }
+
+    /// `following_degraded` is the daemon saying it knowingly is not on the
+    /// heaviest chain it has seen. It is one-way in C++ — which is the safe
+    /// direction here, because the refusal should latch until a resync.
+    #[test]
+    fn a_degraded_daemon_is_not_following_however_synchronized_it_claims_to_be() {
+        let info = json!({
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 8, "following_degraded": true
+        });
+        assert_eq!(
+            tip_reading_from_info(&info),
+            TipReading::NotFollowing(NotFollowing::Degraded)
+        );
+    }
+
+    #[test]
+    fn an_offline_daemon_is_not_following() {
+        let info = json!({
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 8, "offline": true
+        });
+        assert_eq!(
+            tip_reading_from_info(&info),
+            TipReading::NotFollowing(NotFollowing::Offline)
+        );
+    }
+
+    /// The three refusal triggers must read as FALSE when absent. A daemon
+    /// too old to carry the field would otherwise be refused on every poll —
+    /// an outage we would inflict on ourselves at an upgrade skew.
+    #[test]
+    fn absent_refusal_triggers_do_not_refuse() {
+        let info = json!({
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 8
+        });
+        assert_eq!(
+            tip_reading_from_info(&info),
+            TipReading::Synced(9_000),
+            "absent `offline` / `following_degraded` / `restricted` are all false"
+        );
+    }
+
+    /// Through the real producer, not just the parse: a peerless daemon
+    /// CLEARS a held tip rather than refreshing it. This is the end-to-end
+    /// statement of F2 — the stale height must not be stamped fresh.
+    #[tokio::test]
+    async fn a_peerless_daemon_clears_the_tip_instead_of_restamping_it() {
+        let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+        tip.stamp_synced(9_000);
+        let rpc = CannedRpc::replying(&json!({
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 0, "incoming_connections_count": 0
+        }));
+        assert_eq!(
+            refresh_tip_once(&rpc, &tip).await,
+            TipReading::NotFollowing(NotFollowing::NoPeers)
+        );
+        assert_eq!(
+            tip.height(),
+            None,
+            "a frozen height must not be stamped fresh forever"
+        );
     }
 }

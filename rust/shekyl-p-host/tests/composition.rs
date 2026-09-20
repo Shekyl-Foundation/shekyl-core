@@ -1740,11 +1740,17 @@ async fn the_gate_follows_the_daemon_not_the_principals_scan() {
     )
     .expect("the served countersignature binds the requester's anchor");
 
-    // A daemon that reports itself syncing is the other direction: its height
-    // is not the chain's, so the persona must refuse rather than certify
-    // against it. Same store, same pins, same request — only the daemon's
-    // sync state differs, which is what makes this pair discriminating.
-    tip.stamp_syncing();
+    // A daemon that has stopped following the chain is the other direction:
+    // its height is not the chain's, so the persona must refuse rather than
+    // certify against it. Same store, same pins, same request — only the
+    // daemon's state differs, which is what makes this pair discriminating.
+    //
+    // "Stopped following" is deliberately broader than "syncing" since F2:
+    // a once-synced daemon that lost its peers, went offline, or refused a
+    // switch at the prune watermark all land here, because the sticky
+    // `synchronized` flag cannot distinguish them (`daemon_tip`'s suite
+    // owns which reply means which).
+    tip.stamp_not_following();
     let refused = fetch(host.serve_addr(), "/shard/0", CHAIN_TIP).await;
     assert!(
         is_refused(&refused),

@@ -163,13 +163,13 @@ mod tests {
         );
     }
 
-    /// A daemon that reports itself syncing refuses, even with a tip that
-    /// is still well inside the age bound.
+    /// A daemon that has stopped following the chain refuses, even with a
+    /// tip that is still well inside the age bound.
     #[test]
-    fn a_syncing_daemon_refuses() {
+    fn a_daemon_that_stopped_following_refuses() {
         let (tip, signer) = signer();
         tip.stamp_synced(4_321);
-        tip.stamp_syncing();
+        tip.stamp_not_following();
         assert_eq!(signer.own_height(), None);
     }
 

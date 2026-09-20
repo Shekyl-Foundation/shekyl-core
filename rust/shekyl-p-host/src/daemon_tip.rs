@@ -64,7 +64,8 @@ use std::time::{Duration, Instant};
 /// does not distinguish (all three render the identical 404):
 ///
 /// - nothing has been stamped yet — the wallet has just started serving;
-/// - the daemon last said it was **syncing**, so its tip is not the chain's;
+/// - the daemon last said something that means it is **not following the
+///   chain**, so its tip is not the chain's tip;
 /// - the last stamp is older than `max_age`.
 ///
 /// # Reachability is absence of a fact, not a fact
@@ -76,10 +77,11 @@ use std::time::{Duration, Instant};
 /// loopback connection — the exact failure `WSS-24` exists to remove, coming
 /// back through a different door.
 ///
-/// A daemon that reports itself **syncing** is the opposite case: that is an
-/// affirmative statement that its tip is not the chain's tip, so
-/// [`stamp_syncing`](Self::stamp_syncing) clears immediately regardless of
-/// age.
+/// A daemon that reports itself **not following the chain** is the opposite
+/// case: that is an affirmative statement about its own tip, so
+/// [`stamp_not_following`](Self::stamp_not_following) clears immediately
+/// regardless of age. What counts as such a statement is the producer's to
+/// decide — this type holds the consequence, not the diagnosis.
 #[derive(Debug)]
 pub struct DaemonTipCache {
     /// How old a stamp may be and still gate. Supplied by the caller that
@@ -115,12 +117,16 @@ impl DaemonTipCache {
         self.stamp_synced_at(top_block_height, Instant::now());
     }
 
-    /// Record that the daemon reports itself **not** synchronized.
+    /// Record that the daemon is **not following the chain** — it is still
+    /// syncing, has no peers, is offline, or knows it refused a switch.
     ///
     /// Clears any held tip: the daemon has affirmatively said its height is
-    /// not the chain's, and a stale-but-young stamp from before it fell
-    /// behind is not evidence about the chain now.
-    pub fn stamp_syncing(&self) {
+    /// not the chain's, and a stale-but-young stamp from before it stopped
+    /// following is not evidence about the chain now.
+    ///
+    /// Deliberately **not** called for an unreachable or unreadable daemon —
+    /// see this type's doc: absence of a fact is not a fact.
+    pub fn stamp_not_following(&self) {
         *self.guard() = None;
     }
 
@@ -227,20 +233,20 @@ mod tests {
     /// the distinguishing case against a plain age-out, which would have
     /// kept gating on the pre-sync stamp for the rest of its window.
     #[test]
-    fn a_syncing_daemon_clears_a_stamp_that_is_still_young() {
+    fn a_daemon_that_stopped_following_clears_a_stamp_that_is_still_young() {
         let c = cache();
         let now = Instant::now();
         c.stamp_synced_at(9_000, now);
-        c.stamp_syncing();
+        c.stamp_not_following();
         assert_eq!(
             c.height_at(now),
             None,
-            "syncing is an affirmative fact about the tip, not a stale reading"
+            "not-following is an affirmative fact about the tip, not a stale reading"
         );
     }
 
     /// The counterpart to the test above, and the reason the producer must
-    /// *not* call `stamp_syncing` when a poll simply fails: an unreachable
+    /// *not* call `stamp_not_following` when a poll simply fails: an unreachable
     /// daemon leaves the held tip alone, and it ages out on schedule.
     #[test]
     fn a_held_tip_survives_until_it_ages_out_when_nothing_is_stamped() {
