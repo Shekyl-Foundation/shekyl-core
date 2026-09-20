@@ -52,8 +52,6 @@ use shekyl_curve_tree::{BlockHeight, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
-use shekyl_rpc_client::RpcError;
-use shekyl_types::ChainCount;
 
 use super::departure_ledger::{DepartureLedger, EPOCHS_BEFORE_PIN_RELEASE};
 use crate::engine::daemon::synced_chain_facts::{CoherentChainView, TimelineBreak};

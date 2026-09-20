@@ -11,7 +11,6 @@
 
 use super::*;
 
-use shekyl_curve_tree::BlockHeight;
 use shekyl_types::ChainCount;
 
 use crate::engine::daemon::synced_chain_facts::SyncedChainFacts;
