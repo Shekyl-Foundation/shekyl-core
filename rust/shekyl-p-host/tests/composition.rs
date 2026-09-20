@@ -19,7 +19,9 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use shekyl_archival_retention::pass_anchor::{pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS};
+use shekyl_archival_retention::pass_anchor::{
+    pass_request_header_bytes, PASS_ANCHOR_DEPTH_BLOCKS, PASS_ANCHOR_LAG_BLOCKS,
+};
 use shekyl_archival_retention::verify_pass_transcript;
 use shekyl_crypto_pq::signature::HybridSignature;
 use shekyl_curve_tree::serving_route::{encode_request_header, REQUEST_HEADER_NAME};
@@ -29,9 +31,9 @@ use shekyl_curve_tree::{
     LEAF_BYTES,
 };
 use shekyl_p_host::{
-    HostError, NoResidentKey, PassKey, PersonaServing, PersonaServingHost, PinError, PinReport,
-    PinnedServeSet, ReportedSet, ServeCounters, ServeObligation, ServeSetPinner, Staleness,
-    StalenessBound,
+    DaemonTipCache, HostError, NoResidentKey, PassKey, PersonaServing, PersonaServingHost,
+    PinError, PinReport, PinnedServeSet, ReportedSet, ServeCounters, ServeObligation,
+    ServeSetPinner, Staleness, StalenessBound,
 };
 use shekyl_p_serve::{TestKeySigner, SIGNATURE_ENVELOPE_LEN};
 use shekyl_tor_control_wallet::service::{
@@ -261,6 +263,23 @@ fn test_key() -> Arc<TestKeySigner> {
     Arc::new(TestKeySigner::ephemeral(0))
 }
 
+/// The gate's height source under test: a daemon tip stamped at `height`.
+///
+/// Since `WSS-24` the `SF-D5` anchor gate reads the **daemon's** tip, not the
+/// store's scan tip, so a test that moves the chain must move this too. That
+/// is the contract rather than a fixture chore — the two heights are
+/// different facts, and the whole point of the change is that the gate
+/// follows the second one.
+///
+/// The age bound is an hour: long enough that no case in this file can expire
+/// mid-test. The age policy itself belongs to `daemon_tip`'s own suite, which
+/// drives it against a supplied instant rather than a clock.
+fn tip_at(height: u64) -> Arc<DaemonTipCache> {
+    let tip = Arc::new(DaemonTipCache::new(Duration::from_secs(3_600)));
+    tip.stamp_synced(height);
+    tip
+}
+
 /// The request header a daemon at `own_height` attaches: anchored at
 /// `tip − 720`, the centre of the persona's gate.
 const NONCE: [u8; 32] = [0x5a; 32];
@@ -301,6 +320,17 @@ fn served_segment_len(response: &[u8]) -> u64 {
         "the frame accounts for every byte after the header"
     );
     frame.segment_bytes()
+}
+
+/// Whether a response is the endpoint's identical refusal. Every non-servable
+/// outcome renders the same 404, so this is all a requester can tell — which
+/// is the point of asserting through it rather than through a counter.
+fn is_refused(response: &[u8]) -> bool {
+    let head_end = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("response has a head");
+    String::from_utf8_lossy(&response[..head_end]).contains(" 404 ")
 }
 
 /// One request as a daemon at `own_height` sends it: the ruled route plus
@@ -491,6 +521,7 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
             virtual_port: 80,
             max_streams: 8,
             key: Arc::clone(&key) as Arc<dyn PassKey>,
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -510,9 +541,8 @@ async fn the_serving_endpoint_outlives_tor_incarnations() {
         "a whole shard, not a 404 that happens to be non-empty"
     );
     // The envelope verifies against the key the host was started with,
-    // over the transcript the request fixed — the gate height it passed
-    // came from the store (tip 10_000), not from anything this test told
-    // the host.
+    // over the transcript the request fixed — at a gate centred on the
+    // daemon tip the host was started with (`WSS-24`).
     let (signature, _) = envelope_of(&first);
     verify_pass_transcript(
         key.public_key(),
@@ -599,6 +629,7 @@ async fn shutdown_stops_the_listener() {
             virtual_port: 80,
             max_streams: 8,
             key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -672,6 +703,7 @@ async fn overlapping_refreshes_cannot_install_an_older_witness_last() {
             virtual_port: 80,
             max_streams: 8,
             key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -714,6 +746,10 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
 
     let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(1));
 
+    // Hoisted: this test advances the chain, so it must advance the gate's
+    // view of the chain too (see `tip_at`).
+    let tip = tip_at(10_000);
+
     let dir = tempfile::tempdir().expect("tempdir");
     let host = PersonaServingHost::start(
         churning_tor(&dir),
@@ -722,6 +758,7 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
             virtual_port: 80,
             max_streams: 8,
             key: test_key(),
+            tip: Arc::clone(&tip),
         },
         &pinner,
     )
@@ -738,6 +775,9 @@ async fn a_refresh_pins_shards_gained_since_the_host_started() {
     store
         .append_block_deltas(&second, &[], &[], BlockHeight::from_raw(20_000))
         .expect("freeze segment 1");
+    // The daemon the persona reads has moved with the chain — what the tip
+    // refresher does on its cadence in production.
+    tip.stamp_synced(20_000);
 
     // The prune that would have cost the shard. The refresh's pin is what
     // survives it — taken before the freeze, which is the whole point.
@@ -1057,6 +1097,7 @@ async fn a_failing_refresh_is_visible_when_both_store_clocks_are_frozen() {
             virtual_port: 80,
             max_streams: 8,
             key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -1122,6 +1163,7 @@ async fn a_failed_refresh_leaves_the_previous_pins_in_place() {
             virtual_port: 80,
             max_streams: 8,
             key: test_key(),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -1165,6 +1207,7 @@ async fn start_refuses_a_pinner_that_cannot_pin() {
             virtual_port: 80,
             max_streams: 8,
             key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         DeadPinner,
     )
@@ -1231,6 +1274,7 @@ async fn host_staleness_uses_the_live_witness() {
             virtual_port: 80,
             max_streams: 8,
             key: Arc::new(NoResidentKey),
+            tip: tip_at(10_000),
         },
         &pinner,
     )
@@ -1618,4 +1662,121 @@ async fn prefix_loss_window_prune_is_surfaced_persisted_and_refuses_a_restart() 
         PinError::MembersAlreadyPruned { shard_ids: vec![0] },
         "got {err:?}"
     );
+}
+
+#[tokio::test]
+async fn the_gate_follows_the_daemon_not_the_principals_scan() {
+    // WSS-24, end to end. The defect: `own_height` was the principal's
+    // block-scan tip, and nothing bounds that lag below the gate's L = 4. An
+    // honest persona whose wallet refresh was a few blocks behind refused a
+    // VALID challenge, missed the pass, and was slashed for its own scanner's
+    // cadence.
+    //
+    // The store here is deliberately stale — frozen and ingested to 10_000 —
+    // while the chain, and the daemon, are at 10_006. Six blocks is past L, so
+    // under the old reading this fetch is refused; under the ruled one it is
+    // served. That gap is the whole finding, and it is what makes this test a
+    // falsifier rather than a restatement: re-point `HostSigner::own_height`
+    // at `ServingReader::sync_tip_height` and this goes red.
+    const SCAN_TIP: u64 = 10_000;
+    const CHAIN_TIP: u64 = 10_006;
+    // Compile-time: the fixture must put the scan tip OUTSIDE the gate, or
+    // this test proves nothing. A later edit to either constant that closed
+    // the gap would otherwise leave a green test asserting nothing.
+    const _: () = assert!(CHAIN_TIP - SCAN_TIP > PASS_ANCHOR_LAG_BLOCKS);
+
+    let store = Arc::new(LeafStore::open_ephemeral().expect("open store"));
+    store
+        .append_block_deltas(
+            &segment_entries(),
+            &[],
+            &[],
+            BlockHeight::from_raw(SCAN_TIP),
+        )
+        .expect("freeze segment 0");
+    let pinner = StorePinner::new(Arc::clone(&store), &[0], BlockHeight::from_raw(SCAN_TIP));
+
+    let tip = tip_at(CHAIN_TIP);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let key = test_key();
+    let host = PersonaServingHost::start(
+        churning_tor(&dir),
+        PersonaServing {
+            identity: identity(),
+            virtual_port: 80,
+            max_streams: 8,
+            key: Arc::clone(&key) as Arc<dyn PassKey>,
+            tip: Arc::clone(&tip),
+        },
+        &pinner,
+    )
+    .await
+    .expect("start");
+
+    // The challenge an honest witness sends, anchored at the chain's own
+    // tip - 720. Nothing about it is unusual; it is refused today only
+    // because of where this persona read its height.
+    let served = fetch(host.serve_addr(), "/shard/0", CHAIN_TIP).await;
+    assert!(
+        !is_refused(&served),
+        "a valid challenge must be served even though the scan tip is {} blocks behind",
+        CHAIN_TIP - SCAN_TIP
+    );
+    assert_eq!(
+        served_segment_len(&served),
+        (leaves_per_segment() * LEAF_BYTES) as u64,
+        "a whole shard, not a 404 that happens to be non-empty"
+    );
+    // And the countersignature binds the anchor the requester actually sent,
+    // so "served" is not merely "did not 404".
+    let (signature, _) = envelope_of(&served);
+    verify_pass_transcript(
+        key.public_key(),
+        &NONCE,
+        anchor_for(CHAIN_TIP),
+        &ANCHOR_HASH,
+        0,
+        &signature,
+    )
+    .expect("the served countersignature binds the requester's anchor");
+
+    // A daemon that has stopped following the chain is the other direction:
+    // its height is not the chain's, so the persona must refuse rather than
+    // certify against it. Same store, same pins, same request — only the
+    // daemon's state differs, which is what makes this pair discriminating.
+    //
+    // "Stopped following" is deliberately broader than "syncing" since F2:
+    // a once-synced daemon that lost its peers, went offline, or refused a
+    // switch at the prune watermark all land here, because the sticky
+    // `synchronized` flag cannot distinguish them (`daemon_tip`'s suite
+    // owns which reply means which).
+    tip.stamp_not_following();
+    let refused = fetch(host.serve_addr(), "/shard/0", CHAIN_TIP).await;
+    assert!(
+        is_refused(&refused),
+        "a persona whose daemon is syncing must not certify an anchor"
+    );
+
+    // Refusing on a height it cannot read is a LOOKUP failure, not a sign
+    // failure: the key was never asked. That is the bucket an operator reads
+    // to tell "lost sight of the chain" from "key not resident".
+    let counters = host.counters();
+    assert_eq!(
+        counters.sign_failures, 0,
+        "the key is not consulted for an anchor the gate already refused"
+    );
+    assert!(
+        counters.lookup_failures >= 1,
+        "an unreadable height lands in the same bucket an unreadable store does"
+    );
+
+    // Once the daemon is synced again the persona serves again — the refusal
+    // is a state, not a latch.
+    tip.stamp_synced(CHAIN_TIP);
+    assert!(
+        !is_refused(&fetch(host.serve_addr(), "/shard/0", CHAIN_TIP).await),
+        "a persona must recover when its daemon does"
+    );
+
+    host.shutdown().await;
 }
