@@ -15,6 +15,21 @@
   recomposes a transaction's wire form from its segments. **No public read
   type under the store hands out `unlock_time`** (gated); S-OUT-KI's
   `RecordedOutput` loses that field. No layout change.
+
+- **The redb value contract is a crate both stores can reach
+  (`shekyl-store-codec`).** `Canonical`, `CodecError`, `exact` and the four
+  value shapes (`Coded<V>`, `Blob<K>`, `Present`, `Unshaped`) moved out of
+  `shekyl-chain-store` into a new workspace crate, together with the codecs
+  for types neither store owns — the scalars and the `shekyl-types` /
+  `shekyl-units` vocabulary, which the orphan rule leaves nowhere else once
+  the trait is foreign to a store. `shekyl-chain-store` re-exports every
+  moved item at `crate::codec::*`, so no call path moved and the daemon side
+  is unchanged. Behaviour and bytes are identical: every committed codec
+  fixture and the table catalogue snapshot are byte-for-byte what they were,
+  and `SCHEMA_VERSION` does not move. What stayed with the digest: this
+  store's own column codecs, the fixture snapshots, the `impl Canonical`
+  source scan, and §11.1(b)'s bump obligation.
+
 - **Outputs and key images read surface (S-OUT-KI, DRS-E1 increment 5).**
   `ReadSnapshot` gains `has_key_image` (one body with the validator's
   `BatchView`), `key_images()` (the digest's `spent_keys` scan), and
