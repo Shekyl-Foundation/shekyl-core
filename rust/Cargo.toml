@@ -154,6 +154,17 @@ members = [
     # is DRS-E1. Named at birth so DRS-0 has a crate to grow into.
     "shekyl-chain-store",
 
+    # The redb value contract both stores share (CTS-Q2, ruled 2026-09-18):
+    # `Canonical` + `CodecError` + the four value shapes, plus the codecs for
+    # types neither store owns (the scalars, and the `shekyl-types` /
+    # `shekyl-units` vocabulary). It depends on the vocabulary crates because
+    # the orphan rule leaves nowhere else for those impls once the trait is
+    # foreign to `shekyl-chain-store` (CTS-13); the vocabulary crates are
+    # `no_std` and must not learn about `redb`. Not the home of either store's
+    # own column codecs, and not the home of the digest's bump obligation —
+    # that stays with `shekyl-chain-store` (DAEMON_REDB_STORE.md §11.1(b), (f)).
+    "shekyl-store-codec",
+
     # Consensus validation (DRS-E6, CONSENSUS_C2_R8_STORE_PLACEMENT.md §9):
     # candidate + ChainView + RuleSet → ChainValid<'id, V> | InvalidBlock. Shares
     # no Rust with shekyl-chain-store and must never reach it or redb — the

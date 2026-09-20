@@ -30,8 +30,8 @@
 use shekyl_chain_rules::RuleSetId;
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{
-    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
-    OneTimePubkey, OutputIndexInTx, PqcAuthHash, PrunableHash, Timelock, Timestamp, TxHash,
+    BlockHash, BlockHeight, BlockWeight, CommitmentBytes, LongTermWeight, OneTimePubkey,
+    OutputIndexInTx, Timelock, Timestamp, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
@@ -51,23 +51,6 @@ pub(crate) fn stored_timelock(raw: u64) -> Timelock {
         Timelock::None
     } else {
         Timelock::Block(BlockHeight::from_raw(raw))
-    }
-}
-
-/// `curve_tree_roots[h + 1]` — a Selene field element, not a [`Hash32`].
-///
-/// Codec `NAME` stays `"curve_root"` so the committed snapshot identity
-/// does not move; the wrapper type `CurveRoot` is deleted (RTN-2).
-impl Canonical for CurveTreeRoot {
-    const NAME: &'static str = "curve_root";
-    const FIXED_WIDTH: Option<usize> = Some(32);
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(self.as_bytes());
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        exact::<32>(Self::NAME, bytes).map(Self::from_bytes)
     }
 }
 
@@ -300,97 +283,46 @@ fn le_u64(b: &[u8]) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Scalar columns: the domain newtype where one exists, a named column
-// codec where none does (§11.1(f)). Bytes are what the `u64` / `u8` /
-// `hash32` codecs already wrote — only the value's *name* is new.
+// Scalar columns (§11.1(f)): the domain newtype where one exists, a named
+// column codec where none does. Bytes are what the `u64` / `u8` / `hash32`
+// codecs already wrote — only the value's *name* is new. The vocabulary
+// newtypes' codecs (`BlockHeight`, `CurveTreeRoot`, `PrunableHash`,
+// `PqcAuthHash`, `AtomicUnits`) live in `shekyl-store-codec` and are
+// re-exported by `codec`; what stays here is the one type whose crate that
+// crate must not depend on.
 // ---------------------------------------------------------------------------
 
-/// `block_heights[hash]` — the height a block hash sits at. The
-/// `shekyl-types` newtype, stored as its raw LE `u64`.
-impl Canonical for BlockHeight {
-    const NAME: &'static str = "block_height";
-    const FIXED_WIDTH: Option<usize> = Some(8);
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.to_raw().encode_into(out);
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        u64::decode(bytes)
-            .map(Self::from_raw)
-            .map_err(|e| e.in_codec(Self::NAME))
-    }
-}
-
 /// `hf_versions[height]` — the rule set in force at a height (CEN-B3's
-/// belt). The rules crate's id, stored as its raw `u8`.
-impl Canonical for RuleSetId {
+/// belt), as a value this crate owns. The rules crate's id, stored as its
+/// raw `u8`.
+///
+/// The id is `shekyl-chain-rules`' type, and `shekyl-store-codec` must not
+/// depend on the rules crate: the rules crate is consensus and the codec
+/// crate is storage, and the one edge between them already runs the other
+/// way — store → rules, held there by `check_chain_rules_no_store.sh`.
+/// With [`Canonical`] foreign here too, `impl Canonical for RuleSetId`
+/// would be a foreign trait on a foreign type — so the one type whose
+/// crate neither home may reach gets the one named adapter
+/// (`CURVE_TREE_STORE_SHAPES.md` CTS-Q6).
+///
+/// `NAME` stays `"rule_set_id"`, so `hf_versions`' value `TypeName` is the
+/// `shekyl::Coded<rule_set_id>` it already was and the committed
+/// `rule_set_id.snap` fixtures do not move: the adapter names the codec's
+/// home, not a new layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuleSetInForce(pub RuleSetId);
+
+impl Canonical for RuleSetInForce {
     const NAME: &'static str = "rule_set_id";
     const FIXED_WIDTH: Option<usize> = Some(1);
 
     fn encode_into(&self, out: &mut Vec<u8>) {
-        self.to_raw().encode_into(out);
+        self.0.to_raw().encode_into(out);
     }
 
     fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         u8::decode(bytes)
-            .map(Self::from_raw)
-            .map_err(|e| e.in_codec(Self::NAME))
-    }
-}
-
-/// `txs_prunable_hash[tx_id]` — the digest of a transaction's prunable
-/// region, the txid's fourth component (S-CHAIN-W SCW-10). The
-/// `shekyl-types` identity type, stored as its 32 bytes; a `Hash32` at the
-/// engine (`lmdb_order`) only where an LMDB *ordering* is carried, which a
-/// value is not.
-impl Canonical for PrunableHash {
-    const NAME: &'static str = "prunable_hash";
-    const FIXED_WIDTH: Option<usize> = Some(32);
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(self.as_bytes());
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        exact::<32>(Self::NAME, bytes).map(Self::from_bytes)
-    }
-}
-
-/// `txs_pqc_auth_hash[tx_id]` — the digest of a transaction's `pqc_auths`
-/// segment as the txid commits it, `keccak256(varint(count) ‖ auths)`; the
-/// txid's **third** component (`PDM-Q-F26`, DRS §7.7). Present ⇔ the txid is
-/// 4-part; never deleted by a prune. The `shekyl-types` identity type, 32
-/// bytes.
-impl Canonical for PqcAuthHash {
-    const NAME: &'static str = "pqc_auth_hash";
-    const FIXED_WIDTH: Option<usize> = Some(32);
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(self.as_bytes());
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        exact::<32>(Self::NAME, bytes).map(Self::from_bytes)
-    }
-}
-
-/// `block_burn[height]` — atomic units burned by the block, per
-/// `blockchain.cpp:6148`; written only when non-zero (`store/connect.rs`
-/// phase 8). The `shekyl-units` newtype (RTN-2 put it on `ConnectFacts`),
-/// stored as its raw LE `u64` — the bytes the `u64` codec wrote before the
-/// value had a name.
-impl Canonical for AtomicUnits {
-    const NAME: &'static str = "atomic_units";
-    const FIXED_WIDTH: Option<usize> = Some(8);
-
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.to_raw().encode_into(out);
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
-        u64::decode(bytes)
-            .map(Self::from_raw)
+            .map(|raw| Self(RuleSetId::from_raw(raw)))
             .map_err(|e| e.in_codec(Self::NAME))
     }
 }
@@ -447,6 +379,8 @@ impl BlobKind for TxPrunableSegment {
 mod tests {
     use super::*;
     use crate::lmdb_order::Hash32;
+
+    use shekyl_types::CurveTreeRoot;
 
     fn h(byte: u8) -> BlockHash {
         BlockHash::from_bytes([byte; 32])
@@ -553,13 +487,42 @@ mod tests {
         );
     }
 
+    /// The codec itself is `shekyl-store-codec`'s and is tested there.
+    /// What belongs here is the property of *this store's* layout: two
+    /// 32-byte codecs it stores must not share a `NAME`, or their tables
+    /// would share a value `TypeName` and a definition could drift onto
+    /// the wrong one — the hazard §11.1(f) exists against.
     #[test]
-    fn curve_root_is_32_bytes_and_not_a_hash32() {
-        let root = CurveTreeRoot::from_bytes([0x5e; 32]);
-        assert_eq!(root.encode(), vec![0x5e; 32]);
-        assert_eq!(CurveTreeRoot::decode(&[0x5e; 32]), Ok(root));
-        assert!(CurveTreeRoot::decode(&[0x5e; 31]).is_err());
+    fn curve_root_and_hash32_are_distinct_32_byte_codecs() {
+        assert_eq!(CurveTreeRoot::FIXED_WIDTH, Hash32::FIXED_WIDTH);
         assert_eq!(CurveTreeRoot::NAME, "curve_root");
+        assert_eq!(Hash32::NAME, "hash32");
         assert_ne!(CurveTreeRoot::NAME, Hash32::NAME);
+    }
+
+    /// `RuleSetInForce` is a home for the codec, not a layout: the bytes
+    /// are the id's raw `u8`, and `NAME` is what `hf_versions`' value
+    /// `TypeName` and `rule_set_id.snap` were already written against.
+    #[test]
+    fn rule_set_in_force_is_the_ids_raw_byte_under_the_unmoved_name() {
+        assert_eq!(RuleSetInForce::NAME, "rule_set_id");
+        assert_eq!(RuleSetInForce::FIXED_WIDTH, Some(1));
+        for raw in [0_u8, 1, 0x80, 0xff] {
+            let v = RuleSetInForce(RuleSetId::from_raw(raw));
+            assert_eq!(v.encode(), vec![raw]);
+            assert_eq!(RuleSetInForce::decode(&[raw]), Ok(v));
+        }
+        assert!(matches!(
+            RuleSetInForce::decode(&[]),
+            Err(CodecError::Length {
+                codec: "rule_set_id",
+                expected: 1,
+                actual: 0
+            })
+        ));
+        assert!(matches!(
+            RuleSetInForce::decode(&[0, 0]),
+            Err(CodecError::Length { .. })
+        ));
     }
 }
