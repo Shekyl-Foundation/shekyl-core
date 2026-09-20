@@ -16,7 +16,10 @@
 //! - **By hash** ([`location_at`], [`record_at`]) — **`Option`**. Hashes are
 //!   sparse; a miss is ordinary and instructs nothing beyond *not here*.
 //!   This is the counter-rule's worked case, written down so the absence
-//!   pattern is not cargo-culted onto a sparse key (STX-Q1 B).
+//!   pattern is not cargo-culted onto a sparse key (STX-Q1 B). A present
+//!   index row whose `tx_id` is at or past the dense count is **SI-9**,
+//!   not a location: T4 would call that id [`AtIndex::BeyondCount`], and
+//!   a location T4 refuses is not a location.
 //! - **By dense id** ([`prunable_at`], [`output_indices_at`]) —
 //!   [`AtIndex`]. `tx_id` is dense (SI-9: `txs_pruned`' entry count at write
 //!   time), so the count is the authority and every by-id read classifies
@@ -64,7 +67,8 @@ use redb::{ReadableTable, ReadableTableMetadata};
 use shekyl_types::{BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 
 use crate::codec::{
-    BlobKind, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
+    BlobKind, Coded, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    TxPrunedSegment,
 };
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
@@ -111,8 +115,9 @@ pub struct SegmentBytes<K: BlobKind> {
     kind: PhantomData<fn() -> K>,
 }
 
-// Manual impls: a derive would demand `K: Clone + PartialEq + Eq` of the
-// marker, which is a zero-sized name and implements none of them.
+// Handwritten: `#[derive(Clone, PartialEq, Eq)]` still demands `K: Clone + Eq`
+// of the type parameter, even with `PhantomData<fn() -> K>`. The marker is a
+// zero-sized name (`BlobKind`) and implements none of them.
 impl<K: BlobKind> Clone for SegmentBytes<K> {
     fn clone(&self) -> Self {
         Self {
@@ -256,35 +261,19 @@ pub enum Prunable {
 
 // ------------------------------------------------------------ helpers
 
-/// Where `id` sits relative to the dense count.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IdClass {
-    Within,
-    Beyond,
-}
-
-const fn class_of(count: u64, id: TxStorageId) -> IdClass {
-    if id.to_raw() < count {
-        IdClass::Within
-    } else {
-        IdClass::Beyond
-    }
-}
-
 /// SI-9 for a read: the count and the keys disagree.
 const fn not_dense() -> ReadFault {
     ReadFault::Invariant(StoreInvariant::IdNotFresh)
 }
 
-/// Whether a by-id read may proceed for `id`: the **admission** step every
-/// dense-id read takes before touching a side table (PR #800 review). Two
-/// facts, in order: the id is below the count (else `BeyondCount`, and no
-/// row is read), and the **primary** row `txs_pruned[id]` exists — the
-/// count is `txs_pruned`' length, so a missing primary below it is the
-/// count lying about the id space, **SI-9**, and a side row that happens
-/// to be present at that id (`txs_prunable_hash`, `tx_outputs`) must not
-/// be served as if the transaction were recorded. One helper, so T4 and
-/// T5 cannot disagree on what "recorded at `id`" means.
+/// Whether a by-id read may proceed for `id`. Two facts, in order: the id
+/// is below the count (else `BeyondCount`, and no row is read), and the
+/// **primary** row `txs_pruned[id]` exists — the count is `txs_pruned`'
+/// length, so a missing primary below it is the count lying about the id
+/// space, **SI-9**, and a side row that happens to be present at that id
+/// (`txs_prunable_hash`, `tx_outputs`) must not be served as if the
+/// transaction were recorded. One helper, so T4 and T5 cannot disagree on
+/// what "recorded at `id`" means.
 enum Admitted {
     /// Below the count and the primary row is present: read the side table.
     Recorded,
@@ -294,7 +283,7 @@ enum Admitted {
 
 fn admit<T: ReadTables>(txn: &T, id: TxStorageId) -> Result<Admitted, ReadFault> {
     let primary = txn.table(TXS_PRUNED)?;
-    if let IdClass::Beyond = class_of(primary.len()?, id) {
+    if id.to_raw() >= primary.len()? {
         return Ok(Admitted::Beyond);
     }
     if primary.get(id.to_raw())?.is_none() {
@@ -305,30 +294,35 @@ fn admit<T: ReadTables>(txn: &T, id: TxStorageId) -> Result<Admitted, ReadFault>
 
 /// The stored row projected to what a read hands out — the **one** place
 /// `TxIndex` becomes [`TxLocation`], so the field it drops is dropped once.
-pub(super) const fn project(row: TxIndex) -> TxLocation {
+const fn project(row: TxIndex) -> TxLocation {
     TxLocation {
         id: row.tx_id,
         height: row.height,
     }
 }
 
-/// The `tx_indices` key for a hash. `pub(super)` so the walk in `read.rs`
-/// (which needs the snapshot's owned table for a `'static` range) builds
-/// its bounds the same way.
-pub(super) fn key_of(hash: &TxHash) -> LmdbHashKey {
+/// [`project`] after the id has been shown to sit inside the dense count.
+/// An index pointing at or past `count` is SI-9: T4 would classify that id
+/// as [`AtIndex::BeyondCount`], and a location T4 refuses is not a location.
+fn location_of(row: TxIndex, count: u64) -> Result<TxLocation, ReadFault> {
+    if row.tx_id.to_raw() >= count {
+        return Err(not_dense());
+    }
+    Ok(project(row))
+}
+
+fn key_of(hash: &TxHash) -> LmdbHashKey {
     LmdbHashKey::from_bytes(hash.to_bytes())
 }
 
-/// Decode a `tx_indices` value, naming the table on a codec fault.
-pub(super) fn decode_index(
-    value: crate::codec::Encoded<'_, TxIndex>,
-) -> Result<TxIndex, ReadFault> {
+fn decode_index(value: crate::codec::Encoded<'_, TxIndex>) -> Result<TxIndex, ReadFault> {
     value
         .decode()
         .map_err(|cause| undecodable("tx_indices", cause))
 }
 
-/// Read a `TxIndex` row by hash and project it.
+/// Read a `TxIndex` row by hash and locate it. A miss is `None`; a present
+/// row whose `tx_id` is at or past the dense count is SI-9, not a location.
 fn location_by_hash<T: ReadTables>(
     txn: &T,
     hash: &TxHash,
@@ -337,7 +331,25 @@ fn location_by_hash<T: ReadTables>(
     let Some(guard) = table.get(key_of(hash))? else {
         return Ok(None);
     };
-    Ok(Some(project(decode_index(guard.value())?)))
+    let row = decode_index(guard.value())?;
+    Ok(Some(location_of(row, tx_count(txn)?)?))
+}
+
+/// T6's body: each `tx_indices` entry in the caller's (already ordered)
+/// range, located against `count`. Lives here so the field drop and the
+/// domain check are the same functions T1 uses; the snapshot opens the
+/// table because only its owned handle can feed a `'static` range.
+pub(super) fn walk_indices<'a>(
+    range: redb::Range<'a, LmdbHashKey, Coded<TxIndex>>,
+    count: u64,
+) -> impl Iterator<Item = Result<(TxHash, TxLocation), ReadFault>> + 'a {
+    range.map(move |entry| {
+        let (key, value) = entry?;
+        Ok((
+            TxHash::from_bytes(key.value().to_bytes()),
+            location_of(decode_index(value.value())?, count)?,
+        ))
+    })
 }
 
 // -------------------------------------------------------------- reads

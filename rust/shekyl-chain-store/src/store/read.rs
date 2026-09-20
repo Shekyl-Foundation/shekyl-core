@@ -37,7 +37,7 @@
 //!   writer exists from the seal (amendment A2), so `TableDoesNotExist` on
 //!   a chain table is a file this store did not write, not an empty chain.
 
-use core::ops::Range;
+use core::ops::RangeInclusive;
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, Tip};
 
@@ -549,7 +549,8 @@ impl ReadSnapshot<'_> {
     ///
     /// # Errors
     ///
-    /// An undecodable row is SI-7; engine errors pass through.
+    /// An undecodable row is SI-7; a present index whose `tx_id` is at or
+    /// past the dense count is **SI-9**; engine errors pass through.
     pub fn tx_location(&self, hash: &TxHash) -> Result<Option<TxLocation>, StoreError> {
         tx_reads::location_at(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
     }
@@ -577,7 +578,8 @@ impl ReadSnapshot<'_> {
     /// A recorded transaction missing its pruned segment or its prunable
     /// hash row, or a `pqc_auths` segment and hash row that disagree on
     /// presence, is **SI-7** with the table named (§7.7 legs (i)–(ii));
-    /// an undecodable row is SI-7; engine errors pass through.
+    /// a present index whose `tx_id` is at or past the dense count is
+    /// **SI-9**; an undecodable row is SI-7; engine errors pass through.
     pub fn tx_record(&self, hash: &TxHash) -> Result<Option<TxRecord>, StoreError> {
         tx_reads::record_at(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
     }
@@ -594,8 +596,9 @@ impl ReadSnapshot<'_> {
     ///
     /// # Errors
     ///
-    /// An id below the count with no `txs_prunable_hash` row is **SI-7**
-    /// (leg (i)); engine errors pass through.
+    /// An id below the count with no primary `txs_pruned` row is **SI-9**;
+    /// below it with no `txs_prunable_hash` row is **SI-7** (leg (i));
+    /// engine errors pass through.
     pub fn tx_prunable(&self, id: TxStorageId) -> Result<AtIndex<Prunable>, StoreError> {
         tx_reads::prunable_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
     }
@@ -616,38 +619,46 @@ impl ReadSnapshot<'_> {
         tx_reads::output_indices_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
     }
 
-    /// **T6.** Every recorded transaction whose hash lies in `hashes`, in
+    /// **T6.** Every recorded transaction whose key lies in `hashes`, in
     /// `tx_indices`' own key order — the table's projection, one sequential
-    /// scan, nothing joined to it. `Range<TxHash>` is half-open with both
-    /// endpoints present: the type is the bound, and the full-chain scan
-    /// does not compile. Successor to `for_all_transactions`, which
-    /// cursored this same table; lands on completeness grounds (STX-10),
-    /// with no consumer named — E2's redb-side digest projects no tx table
-    /// (#788 §3.1). A join to the hash rows, an id-ordered alternative and a
-    /// reverse index are one coupled reopen criterion (`DRS_E1_STX.md`
-    /// §3.2): a consumer names the row and the order it needs *together*.
+    /// scan, nothing joined to it. The range is [`RangeInclusive`] over
+    /// [`LmdbHashKey`]: that is the table's `Ord`, both endpoints are
+    /// present so `..` does not compile, and the bound is inclusive so
+    /// [`LmdbHashKey::MAX`] is nameable (a half-open range has no successor
+    /// of that key). Convert a [`TxHash`] at the edge with
+    /// [`LmdbHashKey::from`]; do not range over `TxHash` — its `Ord` is
+    /// byte-lexicographic, the order this key type exists to reject.
+    /// Successor to `for_all_transactions`, which cursored this same table;
+    /// lands on completeness grounds (STX-10), with no consumer named —
+    /// E2's redb-side digest projects no tx table (#788 §3.1). A join to
+    /// the hash rows, an id-ordered alternative and a reverse index are one
+    /// coupled reopen criterion (`DRS_E1_STX.md` §3.2): a consumer names
+    /// the row and the order it needs *together*.
+    ///
+    /// ```compile_fail
+    /// # use shekyl_chain_store::store::ReadSnapshot;
+    /// # use shekyl_types::TxHash;
+    /// fn walk(snap: &ReadSnapshot<'_>, hashes: core::ops::RangeInclusive<TxHash>) {
+    ///     let _ = snap.tx_locations(hashes); // the walk is LmdbHashKey order, not TxHash order
+    /// }
+    /// ```
     ///
     /// # Errors
     ///
     /// Opening the table or the range; then per item, so an undecodable
-    /// row (SI-7) is reported where it is, not as an early end.
+    /// row (SI-7) or an index whose `tx_id` is at or past the dense count
+    /// (SI-9) is reported where it is, not as an early end.
     pub fn tx_locations(
         &self,
-        hashes: Range<TxHash>,
+        hashes: RangeInclusive<LmdbHashKey>,
     ) -> Result<impl Iterator<Item = TxWalkItem> + '_, StoreError> {
+        let count = tx_reads::tx_count(&self.txn).map_err(chain_reads::ReadFault::into_plain)?;
         let table = self.open_table(TX_INDICES)?;
         let range = table
-            .range::<LmdbHashKey>(tx_reads::key_of(&hashes.start)..tx_reads::key_of(&hashes.end))
+            .range(hashes)
             .map_err(|e| StoreError::from(EngineError::Storage(e)))?;
-        Ok(range.map(|entry| {
-            let (key, value) = entry.map_err(|e| StoreError::from(EngineError::Storage(e)))?;
-            let row = tx_reads::decode_index(value.value())
-                .map_err(chain_reads::ReadFault::into_plain)?;
-            Ok((
-                TxHash::from_bytes(key.value().to_bytes()),
-                tx_reads::project(row),
-            ))
-        }))
+        Ok(tx_reads::walk_indices(range, count)
+            .map(|item| item.map_err(chain_reads::ReadFault::into_plain)))
     }
 }
 

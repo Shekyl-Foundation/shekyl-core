@@ -16,9 +16,10 @@ use super::connect_fixtures::{connect_chain, spend, spend_with_pqc_auth};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, EPOCH};
 use super::*;
+use crate::codec::{stored_timelock, Canonical, Raw, TxIndex, TxPrunedSegment};
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED};
+use crate::schema::{TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES};
 
 fn id(raw: u64) -> TxStorageId {
     TxStorageId::from_raw(raw)
@@ -374,20 +375,13 @@ fn tx_locations_walks_tx_indices_in_key_order_and_agrees_with_tx_location_row_fo
     let (store, _, _, _) = tx_chain(&path);
     let snap = store.begin_read().expect("read");
     let all: Vec<(TxHash, TxLocation)> = snap
-        .tx_locations(TxHash::from_bytes([0x00; 32])..TxHash::from_bytes([0xff; 32]))
+        .tx_locations(LmdbHashKey::MIN..=LmdbHashKey::MAX)
         .expect("range")
         .collect::<Result<_, _>>()
         .expect("every row decodes");
-    assert_eq!(
-        all.len(),
-        5,
-        "five transactions; the range covers every hash below 0xff…"
-    );
+    assert_eq!(all.len(), 5, "five transactions; MIN..=MAX is the table");
     // Key order: `LmdbHashKey`'s, the table's own.
-    let keys: Vec<LmdbHashKey> = all
-        .iter()
-        .map(|(h, _)| LmdbHashKey::from_bytes(h.to_bytes()))
-        .collect();
+    let keys: Vec<LmdbHashKey> = all.iter().map(|(h, _)| LmdbHashKey::from(*h)).collect();
     assert!(
         keys.windows(2).all(|w| w[0] < w[1]),
         "the walk is in the table's key order"
@@ -396,17 +390,31 @@ fn tx_locations_walks_tx_indices_in_key_order_and_agrees_with_tx_location_row_fo
     for (hash, location) in &all {
         assert_eq!(snap.tx_location(hash).expect("read"), Some(*location));
     }
-    // Bounded: a range that excludes the first key excludes exactly it.
-    let first = all[0].0;
-    let mut after = first.to_bytes();
-    after[31] = after[31].wrapping_add(1);
+    let first = keys[0];
+    let last = keys[4];
+    // Inclusive: a singleton range is the key itself, so MAX is nameable.
+    let only_first: Vec<_> = snap
+        .tx_locations(first..=first)
+        .expect("range")
+        .collect::<Result<_, _>>()
+        .expect("decodes");
+    assert_eq!(only_first.len(), 1);
+    assert_eq!(only_first[0].0, all[0].0);
+    // Successor in table order excludes exactly the first key.
     let rest: Vec<_> = snap
-        .tx_locations(TxHash::from_bytes(after)..TxHash::from_bytes([0xff; 32]))
+        .tx_locations(first.checked_successor().expect("first is not MAX")..=LmdbHashKey::MAX)
         .expect("range")
         .collect::<Result<_, _>>()
         .expect("decodes");
     assert_eq!(rest.len(), 4);
-    assert!(rest.iter().all(|(h, _)| *h != first));
+    assert!(rest.iter().all(|(h, _)| LmdbHashKey::from(*h) != first));
+    // An inverted bound in this order is empty, not a silent reshuffle.
+    let inverted: Vec<_> = snap
+        .tx_locations(last..=first)
+        .expect("range")
+        .collect::<Result<_, _>>()
+        .expect("decodes");
+    assert!(inverted.is_empty());
     cleanup(&path);
 }
 
@@ -462,6 +470,88 @@ fn a_missing_primary_row_below_the_count_is_si9_on_every_by_id_read_whatever_the
     let err = snap.tx_record(&hash_of(&plain)).expect_err("primary hole");
     assert!(is_si7_absent(&err, "txs_pruned"), "got {err:?}");
     assert_eq!(store.connect_state(), ConnectState::Live);
+    cleanup(&path);
+}
+
+#[test]
+fn an_index_id_at_or_past_the_count_is_si9_on_every_hash_read_even_with_a_stray_primary() {
+    // The hash path mints `TxLocation.id`. An index pointing at or past
+    // `tx_count` is SI-9 — T4 would call that id `BeyondCount`, and a
+    // location T4 refuses is not a location. Planted at `LmdbHashKey::MAX`
+    // so T6's inclusive bound is the thing that sees it (a half-open
+    // `Range` cannot name a successor of MAX).
+    let path = tmp("tx-index-out-of-domain");
+    let (store, _, _, _) = tx_chain(&path);
+    let count = store.begin_read().expect("read").tx_count().expect("read");
+    let planted_id = id(count + 7);
+    let planted_hash = TxHash::from_bytes(LmdbHashKey::MAX.to_bytes());
+    drop(store);
+    {
+        let db = redb::Database::open(&path).expect("open raw");
+        let txn = db.begin_write().expect("write");
+        {
+            let mut indices = txn.open_table(TX_INDICES).expect("t");
+            indices
+                .insert(
+                    LmdbHashKey::MAX,
+                    TxIndex {
+                        tx_id: planted_id,
+                        unlock_time: stored_timelock(0),
+                        height: BlockHeight::from_raw(1),
+                    }
+                    .encoded()
+                    .as_encoded(),
+                )
+                .expect("plant index");
+            let mut pruned = txn.open_table(TXS_PRUNED).expect("t");
+            pruned
+                .insert(planted_id.to_raw(), Raw::<TxPrunedSegment>::new(&[0xaa]))
+                .expect("plant stray primary");
+        }
+        txn.commit().expect("commit");
+    }
+    let store = ChainStore::create(&path, EPOCH).expect("reopen");
+    let snap = store.begin_read().expect("read");
+    for (name, err) in [
+        (
+            "T1",
+            snap.tx_location(&planted_hash).expect_err("out of domain"),
+        ),
+        (
+            "T3",
+            snap.tx_record(&planted_hash).expect_err("out of domain"),
+        ),
+    ] {
+        assert!(
+            matches!(
+                err,
+                StoreError::InvariantViolated(StoreInvariant::IdNotFresh)
+            ),
+            "{name}: an index id at or past the count is SI-9, got {err:?}"
+        );
+    }
+    assert_eq!(
+        snap.tx_prunable(planted_id).expect("read"),
+        AtIndex::BeyondCount,
+        "by id, past the count is invalid input, not a served stray primary"
+    );
+    let mut ok = 0;
+    let mut si9 = 0;
+    for item in snap
+        .tx_locations(LmdbHashKey::MIN..=LmdbHashKey::MAX)
+        .expect("range")
+    {
+        match item {
+            Ok(_) => ok += 1,
+            Err(StoreError::InvariantViolated(StoreInvariant::IdNotFresh)) => si9 += 1,
+            Err(e) => panic!("unexpected walk fault: {e:?}"),
+        }
+    }
+    assert_eq!(ok, 5, "the honest rows still walk");
+    assert_eq!(
+        si9, 1,
+        "MAX is included and classified, not dropped by an exclusive end"
+    );
     cleanup(&path);
 }
 
