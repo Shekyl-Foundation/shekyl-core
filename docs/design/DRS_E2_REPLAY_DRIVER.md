@@ -396,6 +396,78 @@ states is now gated, and the ingest crate must not enable it.
   production doesn't run. **`PowHash`'s distinctness from `BlockHash`** (#785)
   is the type seam the parity gate asserts across (RD-Q12).
 
+### 3.9 Artifact formats — the commit-4 specification (written 2026-09-20, before the code; rule 05)
+
+Two artifacts, two producers, one discipline: **Rust-minted, versioned,
+fixed-layout, self-verifying on read**. Neither extends an inherited container
+(RD-F9); neither carries a flag a reader would have to trust (RD-F15). Both
+live in `shekyl-chain-ingest` (`corpus`, `trace`), never in a binary (RD-Q1).
+Every multi-byte integer is little-endian. Every layout change bumps the
+version byte; a reader refuses any version but its own — a stale artifact
+fails loudly, it does not decode to something plausible.
+
+**Corpus** (`corpus::CORPUS_MAGIC` = `SHKCORP\0`, version `0x00`) — what the
+network carries, from an unpruned node over `/get_blocks_by_height.bin`; zero
+C++. Height-ordered, consecutive from the header's first height.
+
+| Field | Width | Notes |
+| --- | --- | --- |
+| magic | 8 | `SHKCORP\0` |
+| version | 1 | `0x00` |
+| reserved | 7 | zero; a reader refuses non-zero |
+| first_height | 8 | u64 — the height of the first record |
+| **record** × n | | tag `0x01` **Extend**: `height` u64 (must equal first_height + i), `block_len` u32, block bytes, `tx_count` u32, then `tx_count` × (`tx_len` u32, body bytes). Tag `0x02` **Rewind** is RESERVED for the reorg family (RD-Q13, commit 8c): `to` u64, no payload — named in the table so the byte is not re-minted; no code until that commit (rule 23). |
+| trailer | | tag `0xFF`, `count` u64 (records), `tip_hash` 32 (the last block's hash) |
+
+**The record is verified, not declared** (RD-F15), by writer and reader
+alike: parse the block (`Block::from_bytes`), parse each body
+(`Transaction::from_bytes`), and require `tx_count == block.transaction_hashes.len()`
+and `body[i].hash() == block.transaction_hashes[i]` for every `i`. A shortfall,
+a surplus, a reorder or a wrong body is `CorpusFault::Incomplete { height, .. }`
+naming the height; a block whose `previous` is not the prior record's hash is
+`CorpusFault::Unchained { height }`. There is no "unpruned" field because the
+property is re-established on every read; an artifact the reader cannot
+re-verify is refused, whatever its writer believed.
+
+**Trace** (`trace::TRACE_MAGIC` = `SHKTRAC\0`, version `0x00`) — the LMDB-only
+facts and the digest checkpoints, produced by **one** C++ exporter walking LMDB
+and handing bytes across the FFI to the Rust writer (`shekyl_e2_trace_*`), the
+whole of which dies with the daemon (§1.3).
+
+| Field | Width | Notes |
+| --- | --- | --- |
+| magic | 8 | `SHKTRAC\0` |
+| version | 1 | `0x00` |
+| reserved | 7 | zero |
+| **record** × n | | tag `0x01` **Facts** at `height` u64: `weight` u64, `long_term_weight` u64, `coins_generated` u64, `burned` u64, `root_after` 32, `long_term_effective_median` u64, `cumulative_difficulty` u128 — the six passed-through facts (`ConnectFacts`' order) plus the accumulator D4 reads; **72 + 16 = 88 bytes after the height**, fixed. Tag `0x02` **Checkpoint** after `height` u64: `n_blocks` u64, `n_spent` u64, `chain` 32, `spent` 32, `curve_root` 32, `digest` 32 — the `LogicalStateDigestV0` shape (commit 2), **computed in Rust** from the families the exporter hands over (block hashes, spent keys, root), never by the C++: the grader compares component to component (RD-Q9) and the two sides must have hashed them the same way. Tag `0x03` **Verdict** is RESERVED for the mutation family (§3.8): no code until it lands. |
+| trailer | | tag `0xFF`, `facts` u64, `checkpoints` u64 |
+
+Facts records are consecutive by height from the first; a checkpoint's height
+must equal the height of a facts record already written (a digest after a
+block that is not in the trace is unanchored). The reader exposes the two typed
+doors RD-Q2 ruled: `borrow(h) -> Borrowed<Facts>` for `connect` (the `Fact::origin`
+is `PassedThrough` by construction of the type — a borrowed fact cannot be
+constructed as derived) and `expect(h) -> Expected<Checkpoint>` for the grader
+only. Both doors are `Option`: a height the trace does not cover is an ordinary
+absence, not a fault (the corpus may run past the trace; the run then grades
+nothing there and says so).
+
+**What is deliberately not in either artifact.** No `Network` byte — a corpus
+fed to the wrong schedule fails at genesis (block 0's hash is the schedule's),
+loudly, so a field would be pre-provisioning (rule 21). No per-record digest —
+the block is self-verifying (its bodies hash to its list, its `previous` to the
+prior record) and the trailer's `tip_hash` plus counts bound truncation. No
+compression — a corpus is read once per run and the bodies are already compact.
+
+**Landing shape.** Commit 4 splits (a split inside the plan, rule 22): **4a**
+formats + writers + readers + verification, with pinned byte fixtures; **4b**
+the RPC corpus fetcher over `shekyl-rpc-client`'s `Rpc` trait (testable against
+a mock; `shekyl-rpc-transport::HttpRpc` in the binary); **4c** the trace
+writer's FFI and the C++ exporter shim. 4c cannot be built or run on the
+implementation host (no C++ build, no LMDB) — it lands compiled against the
+header only and is exercised by the first run (commit 8), which is where the
+plan already puts the first real chain.
+
 ## 4. Questions — Round 0 defaults, with the 2026-09-19 rulings in-line
 
 | Q | Question | Disposition | Why |
