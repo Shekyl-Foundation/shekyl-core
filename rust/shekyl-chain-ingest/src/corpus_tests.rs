@@ -160,6 +160,47 @@ fn the_writer_refuses_a_pruned_sources_shortfall_by_height() {
 }
 
 #[test]
+fn trailing_bytes_inside_a_length_prefix_are_malformed_not_verified() {
+    // The corpus holds complete blobs. `Block::read` / `Transaction::read`
+    // are streaming parsers and would drop a trailing byte; from_bytes
+    // refuses it, so a padded source cannot land and a padded artifact
+    // cannot be read as the canonical body.
+    let (_, mut block, txs) = blobs(0, 0);
+    block.push(0x00);
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Fakechain,
+        BlockHeight::ZERO,
+    )
+    .expect("header");
+    let refused = w.append(&block, &txs).expect_err("padded block");
+    assert!(
+        matches!(refused, CorpusFault::Malformed { what: "block", .. }),
+        "{refused}"
+    );
+
+    let (_, block, mut txs) = blobs(0, 1);
+    txs[0].push(0x00);
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Mainnet,
+        BlockHeight::ZERO,
+    )
+    .expect("header");
+    let refused = w.append(&block, &txs).expect_err("padded body");
+    assert!(
+        matches!(
+            refused,
+            CorpusFault::Malformed {
+                what: "transaction",
+                ..
+            }
+        ),
+        "{refused}"
+    );
+}
+
+#[test]
 fn the_writer_refuses_bodies_out_of_header_order() {
     let (_, b, mut t) = blobs(0, 2);
     t.swap(0, 1);

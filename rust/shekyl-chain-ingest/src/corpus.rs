@@ -236,7 +236,9 @@ impl From<io::Error> for CorpusFault {
 }
 
 fn parse_block(height: BlockHeight, blob: &[u8]) -> Result<Block, CorpusFault> {
-    Block::read(&mut &blob[..]).map_err(|cause| CorpusFault::Malformed {
+    // Complete length-delimited blob: exact consumption (§12). `read` would
+    // drop trailing bytes inside the prefix and store them as if verified.
+    Block::from_bytes(blob).map_err(|cause| CorpusFault::Malformed {
         height,
         what: "block",
         cause,
@@ -244,7 +246,7 @@ fn parse_block(height: BlockHeight, blob: &[u8]) -> Result<Block, CorpusFault> {
 }
 
 fn parse_tx(height: BlockHeight, blob: &[u8]) -> Result<Transaction, CorpusFault> {
-    Transaction::read(&mut &blob[..]).map_err(|cause| CorpusFault::Malformed {
+    Transaction::from_bytes(blob).map_err(|cause| CorpusFault::Malformed {
         height,
         what: "transaction",
         cause,
