@@ -98,9 +98,9 @@ pub enum StoreInvariant {
     /// The belt beneath CEN-D4. Unlike the rows above it is **not armed by a
     /// store write site** — the store records the work the verdict carries
     /// and computes none (C2-R8 Q4) — but by the **validator reading the
-    /// store**: `D4`'s window walk over `BatchView` observes a height below
-    /// its parent (`Corrupt::CumulativeDifficultyNotMonotone`) or a full
-    /// LWMA window with no increase (`Corrupt::ZeroTarget`) and returns a
+    /// store**: `D4`'s window walk over `BatchView` observes a height whose
+    /// work is not above its parent's — a decrease or an equal pair
+    /// (`Corrupt::CumulativeDifficultyNotMonotone { at }`) — and returns a
     /// `Fault::Corrupt`, which the ingest pipeline hands to
     /// [`WriteBatch::refuse_corrupt`](super::WriteBatch::refuse_corrupt) to
     /// arm this row. The validator saw what a belt would have seen; the

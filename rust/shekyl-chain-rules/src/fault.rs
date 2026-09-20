@@ -107,12 +107,12 @@ pub enum Corrupt {
     },
     /// The parent's cumulative difficulty plus this block's target does not
     /// fit the type.
+    ///
+    /// (A `ZeroTarget` arm lived here until 2026-09-20. Zero at the mint is
+    /// **not** a corrupt view — LWMA-1 has no output floor and a conforming
+    /// slow chain derives it — so it is CEN-D6's *refusal*, a verdict, and
+    /// no longer a fault: `rules::difficulty` module docs, DRS-E2 RD-F17.)
     CumulativeDifficultyOverflow,
-    /// The next-block target derived to zero (CEN-D6). Unreachable over a
-    /// conforming view and an issued rule set — the type that carries the
-    /// target refuses zero at the mint — and written as a fault so the
-    /// refusal has a name if a producer ever appears.
-    ZeroTarget,
 }
 
 /// The bound on redoing `form` after a [`Stale`] fault.
@@ -220,7 +220,6 @@ impl fmt::Display for Corrupt {
             Self::CumulativeDifficultyOverflow => {
                 f.write_str("cumulative difficulty overflows past the parent")
             }
-            Self::ZeroTarget => f.write_str("next-block target derived to zero (CEN-D6)"),
         }
     }
 }

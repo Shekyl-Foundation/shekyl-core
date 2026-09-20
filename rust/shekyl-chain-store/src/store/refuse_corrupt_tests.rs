@@ -72,17 +72,21 @@ fn refusing_a_corrupt_is_chain_work_even_when_nothing_else_in_the_batch_was() {
     connect_chain(&store, &[Vec::new()]);
     let out: Result<(), TestErr> = store.write(|batch| {
         Err(batch
-            .refuse_corrupt(shekyl_chain_rules::Corrupt::ZeroTarget)
+            .refuse_corrupt(
+                shekyl_chain_rules::Corrupt::CumulativeDifficultyNotMonotone {
+                    at: BlockHeight::ZERO,
+                },
+            )
             .into())
     });
-    // ZeroTarget names the connecting height: the window with no increase
-    // ends at its parent.
-    expect_row(&out, StoreInvariant::WorkNotIncreasing { height: 1 });
+    expect_row(&out, StoreInvariant::WorkNotIncreasing { height: 0 });
+    // The halt reports the connecting height the method noted for itself:
+    // one block recorded, so tip + 1 = 1.
     assert_eq!(
         store.connect_state(),
         ConnectState::Halted {
             at_height: BlockHeight::from_raw(1),
-            row: StoreInvariant::WorkNotIncreasing { height: 1 },
+            row: StoreInvariant::WorkNotIncreasing { height: 0 },
         }
     );
     cleanup(&path);

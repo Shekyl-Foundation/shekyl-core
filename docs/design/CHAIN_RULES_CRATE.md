@@ -448,11 +448,24 @@ still runs through `rules::run`).
 space, not the conforming one** (rule 47, "Run the cannot-fail test against
 the adversarial input space"; slice 2, 2026-09-19). A refusal unreachable on
 every valid chain is not dead if a corrupt store or a non-conforming peer can
-reach it: CEN-D6's zero-target arm never fires on a conforming chain and
-fires on a view recording no work across a full LWMA window (`Corrupt::
-ZeroTarget`), which is what it exists for. Fold into a type only what cannot
-fail over the inputs the rule exists to refuse; B6 qualifies (no input makes
-the identity function fail), a refusal reachable from bad data does not.
+reach it. Fold into a type only what cannot fail over the inputs the rule
+exists to refuse; B6 qualifies (no input makes the identity function fail), a
+refusal reachable from bad data does not.
+
+**The worked example this paragraph first used was itself wrong, and the
+correction is the sharper lesson (DRS-E2 RD-F17, 2026-09-20).** It said
+CEN-D6's zero-target arm "never fires on a conforming chain" and fires only
+on a corrupt view. LWMA-1 has **no output floor**: with every solvetime at
+the `+6T` clamp the formula is zero for `avg_D ≤ 6`, so a **conforming**
+slow chain derives a zero next target. The arm was therefore reachable from
+valid data — which makes it a *rule's refusal* (the census: "a zero
+next-block difficulty rejects the block"; the C++ refuses), not a
+store-invariant fault. `Corrupt::ZeroTarget` is deleted; `D6::mint` returns
+the CEN-D6 verdict. So the test has a third outcome beside "fold into a type"
+and "keep the refusal": **re-classify** — a refusal reachable from valid
+inputs belongs to the rules, not to the store's belts, and mis-filing it as
+corruption would have halted the writer on a chain the C++ merely refuses a
+block on.
 
 The `Block` is kept **whole** rather than decomposed into header + miner tx
 (the round-2 sketch): the header's `transaction_hashes` are part of what
@@ -573,7 +586,7 @@ pub fn validate<'id, V: ChainView<'id>>(
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
 pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry } }
 pub enum Retry { Again(FormAttempt), Exhausted }          // MAX_FORM_ATTEMPTS = 3
-pub enum Corrupt { CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow, ZeroTarget }
+pub enum Corrupt { CumulativeDifficultyNotMonotone { at }, CumulativeDifficultyOverflow }   // ZeroTarget deleted 2026-09-20 (RD-F17): zero is CEN-D6's verdict
 
 /// Stateless per-tx rules (4.H). Shared verbatim by connect and pool admission.
 pub fn tx_form(tx: &shekyl_wire::Transaction, rule_set: &RuleSet) -> Verdict<RuleCoverage>;

@@ -217,8 +217,12 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     /// | `Corrupt` | `StoreInvariant` |
     /// | --- | --- |
     /// | `CumulativeDifficultyNotMonotone { at }` | `WorkNotIncreasing { height: at }` (SI-10) |
-    /// | `ZeroTarget` | `WorkNotIncreasing { height: connecting }` (SI-10 — a full window with no increase, ending at the connecting height's parent) |
     /// | `CumulativeDifficultyOverflow` | `FoldOverflow { cell: "block_info.cumulative_difficulty" }` (SI-8) |
+    ///
+    /// A zero next-block target is **not** in this table and never was a
+    /// store matter: LWMA-1 has no output floor and a conforming slow chain
+    /// derives zero, so it is CEN-D6's refusal of the block — a verdict the
+    /// validator returns, which the store never sees (RD-F17, 2026-09-20).
     ///
     /// Returns the `InvariantViolated` the caller propagates — the batch is
     /// poisoned either way, and `complete` refuses to commit it. **This is
@@ -242,12 +246,6 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
         let row = match corrupt {
             Corrupt::CumulativeDifficultyNotMonotone { at } => StoreInvariant::WorkNotIncreasing {
                 height: at.to_raw(),
-            },
-            Corrupt::ZeroTarget => StoreInvariant::WorkNotIncreasing {
-                height: self
-                    .journal
-                    .height_hint()
-                    .expect("noted above: refusing a Corrupt is chain work"),
             },
             Corrupt::CumulativeDifficultyOverflow => StoreInvariant::FoldOverflow {
                 cell: "block_info.cumulative_difficulty",
