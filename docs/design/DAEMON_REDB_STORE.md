@@ -495,7 +495,8 @@ cannot — and the failure mode is “wallet can’t spend.”
 | --- | --- |
 | **Match pure C++ LMDB throughput / ops/sec** | Steady-state is network-bound at block cadence; 10× engine gap is invisible. **Retired from DRS-BENCH** (§7.4). |
 | `data.mdb` compatibility | Pre-genesis |
-| Unify LeafStore / shared redb-helpers crate | DRS-D3 / D3d — threat model, not LOC |
+| Unify LeafStore | DRS-D3 — threat model, not LOC |
+| Shared redb-helpers crate — lifecycle, txn model, error taxonomy | DRS-D3d — threat model, not LOC. **One admitted edge since 2026-09-18** (CTS-Q2): the *value contract* `shekyl-store-codec`. The helpers this row names are not it, and remain refused — D3d states the bounds. |
 | Permanent FFI DB façade | DRS-D1 |
 | Port archival math | Already retention crate |
 | 1:1 rehost of archival marshal shell | E-7: delete marshal; cursor surface |
@@ -2123,8 +2124,10 @@ will be written, because §11 makes replay-from-blocks the answer, and because
 the C++ precedent shows where the other posture ends: `#define VERSION 12`
 (`src/blockchain_db/lmdb/db_lmdb.cpp:145`) with a `migrate()` ladder whose
 Monero-era rungs are unreachable and were deleted under rule 60. Name and shape
-follow DRS-D3b's *written pattern* rather than a shared crate, which DRS-D3d
-forbids.
+follow DRS-D3b's *written pattern* rather than a shared crate: the
+schema-version cell is one of the idioms DRS-D3d keeps **per store**, and it
+did not travel with the value contract — D3d's 2026-09-18 narrowing admits
+that one edge and no other, this one included.
 
 **(b) A bump is required for any change that alters stored bytes — including a
 value-codec change.** Adding, removing or re-keying a table bumps; so does
