@@ -466,7 +466,14 @@ pub struct ControlExperiment {
     pub sparse_s: f64,
     /// `|sparse - dense| / dense`, as a percentage.
     pub divergence_pct: f64,
-    /// Whether the divergence is within tolerance.
+    /// Whether both arms' timing series reached steady state.
+    ///
+    /// Carried because the divergence is computed from medians, and a median
+    /// drawn from an unconverged series is the statistic §5.2 says must be
+    /// reported rather than used. An unconverged control cannot license
+    /// anything.
+    pub converged: bool,
+    /// Whether the divergence is within tolerance **and** both arms converged.
     pub sparse_equals_dense: bool,
     /// Whether both arms' proofs verified.
     pub both_verified: bool,

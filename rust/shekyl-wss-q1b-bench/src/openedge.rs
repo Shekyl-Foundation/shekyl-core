@@ -108,6 +108,20 @@ pub enum Attribution {
     /// Neither term clears [`DOMINANCE_THRESHOLD`]. A miss here is attributed
     /// by the maintainer, not by the harness.
     Mixed,
+    /// **The two instruments disagree**: the measured per-round-trip floor,
+    /// multiplied by the round trips the fetch makes, exceeds the whole
+    /// measured cost. No attribution follows from an inconsistent measurement,
+    /// and none is offered.
+    ///
+    /// This is not hypothetical — it is what the first live runs actually
+    /// produced. A 224 µs floor across 2 round trips per block is 448 µs,
+    /// against a ~200 µs observed per-block fetch. Clamping that to the total
+    /// assigned **100 %** of the cost to round trips and reported a confident
+    /// `round_trip_bound`, which is measurement noise wearing a verdict.
+    /// The usual cause is that the floor probe is not the cheap call it is
+    /// assumed to be, or that the per-block calls hit a cache the probe does
+    /// not; either way the fix is a better floor, not a clamp.
+    Inconsistent,
 }
 
 /// One fetched block, with every term the attribution needs.
@@ -161,8 +175,13 @@ pub struct Projection {
     /// Seconds of the projection attributable to fixed round-trip cost.
     pub round_trip_term_s: f64,
     /// The remainder: bytes, parsing, and daemon-side work that scales with
-    /// block content.
+    /// block content. Floored at zero; see [`Projection::floor_exceeds_total`]
+    /// for whether that floor was reached, which means the measurement is
+    /// inconsistent rather than that the volume term is genuinely nil.
     pub volume_term_s: f64,
+    /// Whether the floor term exceeds the whole projection — an inconsistent
+    /// measurement, reported rather than clamped away.
+    pub floor_exceeds_total: bool,
     /// Which term dominates.
     pub attribution: Attribution,
     /// Projected wire (hex) bytes.
@@ -188,6 +207,7 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
             round_trip_term_s: 0.0,
             volume_term_s: 0.0,
             attribution: Attribution::Mixed,
+            floor_exceeds_total: false,
             projected_wire_hex_bytes: 0,
             projected_decoded_bytes: 0,
         };
@@ -213,13 +233,19 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
     // it, so a reader can see the spread the single number hides.
     let projected_s = median * blocks;
     let projected_round_trips = mean_round_trips * blocks;
-    // The floor is per round trip and cannot exceed the whole cost; clamping
-    // keeps a noisy floor measurement from reporting a negative volume term.
-    let round_trip_term_s = (floor.median_s * projected_round_trips).min(projected_s);
-    let volume_term_s = projected_s - round_trip_term_s;
+    // Reported UNCLAMPED, so an inconsistency is visible instead of absorbed.
+    // The earlier version clamped this to the total, which cannot make an
+    // inconsistent measurement consistent -- it only hides that the floor and
+    // the per-block timings disagree, while manufacturing a 100 % round-trip
+    // share out of the disagreement.
+    let round_trip_term_s = floor.median_s * projected_round_trips;
+    let floor_exceeds_total = round_trip_term_s > projected_s;
+    let volume_term_s = (projected_s - round_trip_term_s).max(0.0);
 
     let attribution = if projected_s <= 0.0 {
         Attribution::Mixed
+    } else if floor_exceeds_total {
+        Attribution::Inconsistent
     } else if round_trip_term_s / projected_s >= DOMINANCE_THRESHOLD {
         Attribution::RoundTripBound
     } else if volume_term_s / projected_s >= DOMINANCE_THRESHOLD {
@@ -238,6 +264,7 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
         round_trip_term_s,
         volume_term_s,
         attribution,
+        floor_exceeds_total,
         projected_wire_hex_bytes: (mean_wire * blocks) as u64,
         projected_decoded_bytes: (mean_decoded * blocks) as u64,
     }

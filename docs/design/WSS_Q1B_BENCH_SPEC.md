@@ -390,15 +390,20 @@ for the wrong reason ([rule 47](../../.cursor/rules/47-gate-subject-assertion.md
 | `aarch64` | **Enforced** — `std::env::consts::ARCH` | `rig::Environment::check_enforceable` |
 | 64-bit userland | **Enforced** — pointer width | same |
 | 8 GB RAM | **Enforced** — `/proc/meminfo`; **unreadable refuses**, never assumes | same |
-| **Pi 4 Model B** | **Enforced** — `/proc/cpuinfo` must name the board (`Raspberry Pi 4`, `BCM2711` or `Cortex-A72`); unreadable refuses | same |
+| **Pi 4 Model B** | **Enforced** — `/proc/cpuinfo` must name the **board** (`Raspberry Pi 4` or `BCM2711`); unreadable refuses | same |
 | USB-SSD | **Attested** — `--attest-storage=usb-ssd`, recorded verbatim | `rig::decide` |
 | Sustained thermals | **Attested** — `--attest-thermal-steady`, recorded verbatim | same |
 
 The device row was **captured but not checked** in the first landing: any
 aarch64 host with 7.5 GB passed as the pinned rig. The string is observable,
-so by this section's own rule it belongs on the enforced side. Three markers,
-because the field a kernel answers with varies by board — aarch64 Linux
-usually omits `model name` and gives `Model` / `Hardware` instead.
+so by this section's own rule it belongs on the enforced side.
+
+**Board markers only.** `Cortex-A72` was accepted in the first fix and is wrong
+in a way that reopens the hole it closed: the A72 is a **CPU core**, shipped in
+many aarch64 boards that are not a Pi 4. §6.3.4 pins the board, so the markers
+are `Raspberry Pi 4` (the `Model` line) and `BCM2711` (the `Hardware` line) —
+and `read_cpu_model` reads those fields **before** `model name`, which names
+the core and cannot identify a board even when the board is two lines below.
 
 The record separates `enforced` from `attested`, so a reader grading a run can
 see which claims carry machine evidence and which carry a human's word.
@@ -419,7 +424,8 @@ it appears to is a refusal rather than a footnote. Beyond the rig pins above:
 | Any timing series unconverged | §5.2's contract says an unconverged series is *reported*, never substituted for a converged one |
 | The prover failed in the timed loop | A fast repeated failure yields a small median that grades as a pass; there is no denominator without a proof |
 | The graded path did not verify | See §3.6 |
-| Grading depth more than one rung above the deepest control | Flatness across adjacent rungs licenses *the next* rung and no further |
+| Grading depth beyond what the controls licence | **Flatness needs two rungs to exist.** Two or more adjacent rungs licence one rung beyond the deepest; a **single** rung shows the costs agree *at that depth* and nothing about how the ratio moves, so it licences only its own depth — `--control-depth 4 --depth 5` previously graded an extrapolation on no flatness evidence at all |
+| A control arm's timing series did not converge | The divergence is a median, and a median from an unconverged series is the statistic §5.2 says to report rather than compute a licence from |
 | Sparse unlicensed **and** the dense fallback misses the requested depth | The fallback is the *window's* tree, whose depth is set by the leaf count, so a refused control would silently move the denominator to another depth |
 | Control depths repeated, non-adjacent, or below the ladder floor | A set that cannot express flatness across adjacent rungs cannot license anything |
 | A non-loopback daemon with `--grade` (open edge) | §6.3.4 row 3's budget is defined for the local posture and the record hard-codes that claim; grading a remote daemon against it is a category error, not a slow run |
@@ -446,8 +452,19 @@ grades a machine that does not exist after a minute"*. A fixed iteration count
 cannot express that — it is too few on a board that throttles late and wasted
 minutes on one that never throttles.
 
-The loop runs until **two consecutive running medians agree within 5 %**, with a
-warm-up phase discarded first. A series that never settles is reported
+The loop runs until **the median of the last three samples agrees within 5 %
+with the median of the three before them**, with a warm-up phase discarded
+first.
+
+**Two disjoint windows, not two running medians** — and the difference is the
+whole criterion. A running median over a growing sample damps each new
+observation, so a workload that slows *every iteration* eventually moves it by
+under the tolerance and is certified converged: the test would pass exactly the
+condition it exists to detect. The original unit test hid this by using a
+0.000001 % tolerance where grading uses 5 %. Disjoint windows are each fully
+replaced as the run proceeds, so a sustained trend keeps the later window above
+the earlier one indefinitely — and the test now runs at the **grading**
+tolerance against a workload that slows 6 % per iteration. A series that never settles is reported
 `converged: false` rather than looped forever or quietly summarized, and the
 record names **why** it stopped — a noisy fast workload and a slow one call for
 different responses.
@@ -619,11 +636,30 @@ Against a live `shekyld --regtest`, 40 blocks mined, 30 sampled.
 | Per block | median 0.2 ms, p95 0.3 ms |
 | Projected over 790 blocks | **1 580 round trips, 0.197 s** |
 | Threshold | 5.0 s |
-| Attribution | **round-trip bound** — 0.197 s round trips, ~0.000 s volume |
+| Attribution | **INCONSISTENT** — see below |
 
-**This confirms the model correction empirically**: the cost is in round trips,
-and the volume term is not where it lives. That is what §6.3.4 row 3's
-amendment was made for.
+**The attribution was wrong, and the way it was wrong is worth keeping.** The
+first runs reported `round_trip_bound` with a volume term of exactly `0.000`.
+That figure came from a **clamp**: the round-trip term was computed as
+`floor × round_trips` and then clamped to the total. At the measured values —
+a 224 µs floor across 2.0 round trips per block, against a ~200 µs observed
+per-block fetch — `2 × 224 > 200`, so the floor **cannot fit inside the cost it
+is supposed to be part of**. The two instruments disagree, and the clamp turned
+that disagreement into a confident verdict assigning 100 % of the cost to round
+trips.
+
+The clamp is gone. The term is reported **unclamped**, a floor that exceeds the
+total is reported as `Attribution::Inconsistent`, and the miss response for that
+state names **no remedy** — the fix is a better floor measurement, not a choice
+between the companion file and pipelining.
+
+**What survives and what does not.** The *model correction* stands: the fetch is
+per-block and makes **2.0 round trips per block, measured directly** from each
+block's shape, which is the empirical half of §6.3.4 row 3's amendment. The
+*attribution verdict* does not: no run has yet earned one, and the likeliest
+cause of the inconsistency is that the `get_info` floor probe is not the cheap
+call it was assumed to be, or that the per-block calls hit a daemon cache the
+probe does not.
 
 **Three reasons this is not the whole answer, stated because the number looks
 reassuring:**
@@ -633,7 +669,13 @@ reassuring:**
    called because there are no non-miner transactions. A real chain pays the
    third call, so the round-trip count is ~50 % higher (≈ 2 370).
 2. **The volume term is untested, not measured as zero.** These blocks carry
-   **1 432 B** decoded apiece. A worst-case chain block is three orders of
+   **1 432 B** decoded apiece. *Byte accounting was also incomplete until the
+   review pass:* it counted only the `get_block` blob, which carries the miner
+   transaction and the **hashes** of the others, while the bodies arrive
+   separately through `get_transactions`. A transaction-filled block would
+   still have measured thin — and since the **density gate reads this figure**,
+   it could never have recognised the 300 kB corpus §4.4 requires. Both are now
+   counted, in the pruned form the production fetch requests. A worst-case chain block is three orders of
    magnitude larger, and at that size the volume term is a different quantity
    entirely. The `round-trip bound` attribution here is as much an artifact of
    an empty corpus as a finding about the path. **Owed: a corpus with realistic
@@ -655,6 +697,7 @@ round-trip term alone reached 5 s.
 | 2026-09-20 | Denominator is `proof::prove` directly — driving `sign_transaction` would fold BP+ and PQC signing into it |
 | 2026-09-20 | Leaf rate derived from `block_weight_limit` + the surge clamp + `predict_weight`, **not** from `config/consensus_constants.json`, which carries no weight ceiling |
 | 2026-09-20 | Rig gate split into **enforced** (arch, userland, RAM) and **attested** (storage, thermals); "sustained" became a convergence criterion |
+| 2026-09-20 | **Second review pass: an attribution that was an artifact, and a convergence test that would have certified the thing it measures for.** Twelve findings, all valid. **The attribution was the clamp talking:** `round_trip_term = floor × round_trips` was clamped to the total, so when the 224 µs floor across 2.0 round trips could not fit inside a ~200 µs per-block fetch, the clamp reported `round_trip_bound` with volume exactly 0.000. Unclamped now, with `Inconsistent` as its own state naming **no** remedy — the *model correction* (2.0 round trips per block) stands because it was measured directly; the *verdict* was never earned. **Convergence compared running medians**, which damp each new sample as the count grows, so a steadily throttling board converges — the criterion certifying the condition it exists to detect, its test passing only at a 0.000001 % tolerance. Now two disjoint windows at the grading tolerance. **Byte accounting counted only the block blob**, not the transaction bodies the production fetch downloads separately, so the density gate could never have seen its own 300 kB corpus. **`Cortex-A72` is a core, not a board** — accepting it reopened the wrong-device hole one commit after closing it. **A single control rung licensed the next depth**, though flatness needs two. Plus: loopback delegated to the wallet's canonical classifier after a `starts_with("127.")` accepted `127.0.0.1.evil.com`; the revision captured at run time, because no build-script trigger covers a dependency edit; the dependency gate made recursive (85 manifests — nested crates were invisible); and a `FOLLOWUPS` falsifier naming `budget.verdict` on a record with no `budget`. |
 | 2026-09-20 | **Review pass: the harness graded things it should have refused, and claimed a check it never ran.** Seventeen findings, all valid on inspection. The two that mattered most: `proof::verify` appeared **nowhere** in either binary while `paths_verified: true` was emitted from `prove`'s `Ok` and §3.6 asserted the round trip — now run once per graded path and per control arm, outside every timer; and the build script watched `../../.git/HEAD`, which in a **worktree** is not a directory at all (`.git` is a file), so the re-grade pin's staleness guard was inert in the setup every lane uses — now resolved through `git rev-parse --git-path`, watching HEAD, the branch ref and `packed-refs`. The rest became refusals (§5.1.1): a corpus override under `--grade`, unconverged series, prover failure, unlicensed extrapolation, a dense fallback at the wrong depth, malformed control sets, a remote daemon under `--grade`, and an unwritable artifact. The device pin moved from captured-but-unchecked to **enforced**. The dependency gate moved from a key regex to TOML with resolved package names, closing renamed and workspace-inherited edges (red-bitten live). |
 | 2026-09-20 | **The open edge grades at a stated nominal density (the full-reward zone), not at the adversarial ceiling** (§4.4). 790 blocks at the ceiling is ≈ 1.9 GB decoded, so grading there writes the companion-file miss response before measuring it. The zone is the density at which the measurement can still surprise you. The asymmetry with the spend edge is deliberate: that edge decides an architecture and is paid per spend, this one decides a local mitigation and is paid once per launch. Enforced by a corpus-density gate that withholds the verdict rather than by a sentence |
 | 2026-09-20 | **`per_block_advance_worst_case_s` added to the record**: the replay term over the blocks it covers. It is what decides whether a spend-edge miss kills the design or moves the work, and a reader should not need a calculator to see it |

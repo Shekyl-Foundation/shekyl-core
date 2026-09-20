@@ -22,8 +22,17 @@ mkdir -p "$SCRATCH"
 BIN="${SHEKYLD_BIN:-$WT/build/bin/shekyld}"
 PORT="${PORT:-28591}"
 DATA="${DATA:-${TMPDIR:-/tmp}/skl-oe-run}"
-ADDR="${1:?usage: regtest_open_edge.sh <mining-address> [blocks]}"
+ADDR="${1:?usage: wss_q1b_regtest_open_edge.sh <mining-address> [blocks]}"
 BLOCKS="${2:-40}"
+# The sample is derived from what was mined, not fixed: the fetch used to start
+# at height 1 and always take 30, so `blocks=20` mined 20 and then failed
+# fetching heights 21-30 -- an argument the script accepted and did not honour.
+# One block is held back because height 0 is genesis and the mined range ends at
+# $BLOCKS.
+SAMPLE=$(( BLOCKS < 30 ? BLOCKS : 30 ))
+if [ "$BLOCKS" -lt 2 ]; then
+  echo "blocks must be at least 2 (one genesis, one sampled); got $BLOCKS"; exit 7
+fi
 
 rm -rf "$DATA"; mkdir -p "$DATA"
 # The daemon exits on stdin EOF (its own log says so: "EOF on stdin, exiting"),
@@ -74,7 +83,7 @@ GEN=$?
 if [ "$GEN" -ne 0 ]; then kill -9 "$DPID" 2>/dev/null; exit 8; fi
 
 "${OPEN_EDGE:-$WT/rust/target/release/open_edge}" --daemon "http://127.0.0.1:$PORT" \
-  --blocks 30 --from-height 1 --floor-samples 50 \
+  --blocks "$SAMPLE" --from-height 1 --floor-samples 50 \
   --json "$SCRATCH/openedge.json"
 RC=$?
 kill -9 "$DPID" 2>/dev/null

@@ -10,7 +10,10 @@ fn rig_machine() -> Environment {
         arch: "aarch64",
         pointer_width_bits: 64,
         total_ram_bytes: Some(8_000_000_000),
-        cpu_model: Some("Cortex-A72".to_string()),
+        // The BOARD, as `/proc/cpuinfo`'s `Model` line gives it -- not the
+        // core. `Cortex-A72` used to sit here and used to pass, which is the
+        // same confusion the marker list carried.
+        cpu_model: Some("Raspberry Pi 4 Model B Rev 1.4".to_string()),
         kernel: Some("6.6.0".to_string()),
         git_revision: None,
     }
@@ -203,6 +206,12 @@ fn loopback_endpoints_are_recognised_and_others_are_not() {
         // The trap a substring check would fall into: loopback in the PATH,
         // not the host.
         "http://evil.example/127.0.0.1",
+        // The trap a PREFIX check falls into, and the one the hand-rolled
+        // version actually fell into: a remote hostname that begins with the
+        // loopback digits. `is_loopback_host` parses an IP literal first, so a
+        // name that is not an address cannot pass.
+        "http://127.0.0.1.evil.com:18081",
+        "http://127evil.com",
     ] {
         assert!(!rig_is_loopback(url), "{url} should not be loopback");
     }
@@ -210,4 +219,19 @@ fn loopback_endpoints_are_recognised_and_others_are_not() {
 
 fn rig_is_loopback(url: &str) -> bool {
     super::is_loopback_endpoint(url)
+}
+
+#[test]
+fn a_cortex_a72_core_string_alone_no_longer_grades() {
+    // The hole the marker list reopened: the A72 is a CPU CORE shipped in many
+    // aarch64 boards, so accepting it graded any of them as the pinned Pi 4.
+    // §6.3.4 pins the board.
+    let other_board_same_core = Environment {
+        cpu_model: Some("ARMv8 Processor rev 3 Cortex-A72".to_string()),
+        ..rig_machine()
+    };
+    assert!(
+        other_board_same_core.check_enforceable().is_err(),
+        "a core name must not stand in for a board"
+    );
 }

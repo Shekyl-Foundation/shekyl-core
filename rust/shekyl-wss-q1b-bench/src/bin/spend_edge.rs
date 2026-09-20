@@ -147,8 +147,16 @@ fn main() -> ExitCode {
             return ExitCode::from(3);
         }
         eprintln!(
-            "   {} leaves: dense {:.3} s vs sparse {:.3} s ({:+.1} %)",
-            control.dense_leaves, control.dense_s, control.sparse_s, control.divergence_pct
+            "   {} leaves: dense {:.3} s vs sparse {:.3} s ({:+.1} %){}",
+            control.dense_leaves,
+            control.dense_s,
+            control.sparse_s,
+            control.divergence_pct,
+            if control.converged {
+                ""
+            } else {
+                "  [UNCONVERGED — licenses nothing]"
+            }
         );
         controls.push(control);
     }
@@ -157,11 +165,15 @@ fn main() -> ExitCode {
     // extrapolation to the grading depth unsafe.
     let sparse_licensed = !controls.is_empty() && controls.iter().all(|c| c.sparse_equals_dense);
     let deepest_control = controls.iter().map(|c| c.tree_depth).max().unwrap_or(0);
-    // Flatness across adjacent rungs licenses THE NEXT ONE, and no further.
-    // Labelling a two-rung extrapolation `MORE THAN ONE RUNG` documented an
-    // invalid claim instead of refusing it; `--depth 8` under the default
-    // controls would still have produced a graded budget.
-    let within_licence = args.depth <= deepest_control + 1;
+    // Flatness across adjacent rungs licenses THE NEXT ONE, and no further --
+    // and *flatness* needs two rungs to exist. A single control shows the
+    // sparse and dense costs agree AT THAT DEPTH and says nothing about how the
+    // ratio moves, so it licenses only its own depth; `--control-depth 4
+    // --depth 5` previously graded an extrapolation on no flatness evidence at
+    // all. Two or more adjacent rungs (the validator guarantees adjacency)
+    // license one rung beyond the deepest.
+    let reach = if controls.len() >= 2 { 1 } else { 0 };
+    let within_licence = args.depth <= deepest_control + reach;
     let sparse_licensed = sparse_licensed && within_licence;
     eprintln!(
         "   -> sparse {} ({} rung(s), deepest {}; grading at {})",
@@ -176,9 +188,17 @@ fn main() -> ExitCode {
     );
     if !within_licence {
         eprintln!(
-            "   grading depth {} is more than one rung above the deepest control ({}); \
-             the sparse path is not licensed there",
-            args.depth, deepest_control
+            "   grading depth {} is beyond what {} control rung(s) licence (deepest {}, \
+             reach +{}); {}",
+            args.depth,
+            controls.len(),
+            deepest_control,
+            reach,
+            if reach == 0 {
+                "one rung shows no flatness, so it licenses only its own depth"
+            } else {
+                "flatness across adjacent rungs licenses one rung beyond, and no further"
+            }
         );
     }
 
@@ -368,6 +388,9 @@ fn run_control(depth: u8) -> ControlExperiment {
         std::hint::black_box(prove_only(&sparse_inputs, &sparse_path, [0x02; 32]).ok());
     });
 
+    // A median from an unconverged series is the statistic §5.2 says to report,
+    // not to compute a licence from. Both arms must have reached steady state.
+    let converged = dense.converged && sparse.converged;
     let dense_s = dense.graded_s();
     let sparse_s = sparse.graded_s();
     let divergence_pct = if dense_s > 0.0 {
@@ -381,7 +404,8 @@ fn run_control(depth: u8) -> ControlExperiment {
         dense_s,
         sparse_s,
         divergence_pct,
-        sparse_equals_dense: divergence_pct.abs() <= CONTROL_TOLERANCE_PCT,
+        converged,
+        sparse_equals_dense: converged && divergence_pct.abs() <= CONTROL_TOLERANCE_PCT,
         both_verified,
     }
 }

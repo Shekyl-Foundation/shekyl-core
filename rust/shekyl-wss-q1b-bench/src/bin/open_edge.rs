@@ -21,7 +21,9 @@ use clap::Parser;
 use serde::Serialize;
 use shekyl_engine_core::engine::daemon::DaemonClient;
 use shekyl_rpc_client::Rpc;
-use shekyl_rpc_types::{GetBlockRequest, GetBlockResponse};
+use shekyl_rpc_types::{
+    GetBlockRequest, GetBlockResponse, GetTransactionsRequest, GetTransactionsResponse,
+};
 use shekyl_wss_q1b_bench::corpus::nominal_block_weight;
 use shekyl_wss_q1b_bench::openedge::{
     judge_density, project, Attribution, BlockSample, CorpusDensity, Projection, RoundTripFloor,
@@ -260,6 +262,11 @@ async fn main() -> ExitCode {
         Attribution::Mixed => {
             "neither term dominates: a miss is attributed by the maintainer, not here"
         }
+        Attribution::Inconsistent => {
+            "the per-round-trip floor does not fit inside the measured cost: the two \
+             instruments disagree, so NO remedy follows from this run -- fix the floor \
+             measurement and re-run before attributing a miss"
+        }
     };
 
     let record = OpenEdgeRecord {
@@ -317,6 +324,20 @@ async fn main() -> ExitCode {
 /// and the one the daemon cannot see is the one that drifts."* A renamed field
 /// then fails this compile the same way it fails the wallet, instead of
 /// silently reporting zero bytes.
+/// Wire bytes for one block: **the block blob plus the non-miner transaction
+/// bodies**, in the pruned form the production fetch requests.
+///
+/// The first version counted only the `get_block` blob. That blob carries the
+/// miner transaction and the *hashes* of the non-miner ones — the bodies come
+/// separately, through `get_transactions` (`block_fetch.rs`). So a
+/// transaction-filled block still measured thin, which is not a cosmetic
+/// undercount: **the density gate reads this figure**, so it could never have
+/// recognised the 300 kB corpus it exists to require, and the volume term it
+/// feeds was understated at the same time.
+///
+/// `prune: true` matches `TxBodyForm::Pruned`, which is what
+/// `default_fetch_scannable_block` asks for — measuring the unpruned form
+/// would count bytes the timed path never moves.
 async fn measure_bytes(client: &DaemonClient, height: u64) -> Result<(u64, u64), String> {
     let request = GetBlockRequest {
         hash: String::new(),
@@ -328,9 +349,35 @@ async fn measure_bytes(client: &DaemonClient, height: u64) -> Result<(u64, u64),
         .json_rpc_call("get_block", Some(params))
         .await
         .map_err(|e| format!("get_block: {e}"))?;
-    let hex_len = response.blob.len() as u64;
-    // The blob arrives hex-encoded, so the decoded size is half the wire size.
-    // Reporting one figure for both would understate the wire by half.
+    let mut hex_len = response.blob.len() as u64;
+
+    let block = shekyl_wire::Block::from_bytes(
+        &hex::decode(&response.blob).map_err(|e| format!("block blob is not hex: {e}"))?,
+    )
+    .map_err(|_| "block blob did not parse".to_string())?;
+    let hashes: Vec<String> = block.transaction_hashes.iter().map(hex::encode).collect();
+    if !hashes.is_empty() {
+        let req = GetTransactionsRequest {
+            txs_hashes: hashes,
+            decode_as_json: false,
+            prune: true,
+            split: false,
+        };
+        let params = serde_json::to_value(req).map_err(|e| format!("encode tx request: {e}"))?;
+        let txs: GetTransactionsResponse = client
+            .rpc_call("get_transactions", Some(params))
+            .await
+            .map_err(|e| format!("get_transactions: {e}"))?;
+        for entry in &txs.txs {
+            // The pruned body is what the timed fetch moves; `as_hex` carries
+            // the whole transaction and would overcount by the prunable region.
+            hex_len += entry.pruned_as_hex.len() as u64;
+        }
+    }
+
+    // Everything above arrives hex-encoded, so the decoded size is half the
+    // wire size. Reporting one figure for both would understate the wire by
+    // half.
     Ok((hex_len, hex_len / 2))
 }
 
@@ -360,6 +407,13 @@ fn summarize(record: &OpenEdgeRecord) {
         "  attribution    {:?}  — round trips {:.3} s, volume {:.3} s",
         p.attribution, p.round_trip_term_s, p.volume_term_s
     );
+    if record.projection.floor_exceeds_total {
+        eprintln!(
+            "  WARNING        the round-trip floor ({:.6} s x {}) exceeds the whole projection: \
+             the floor probe and the per-block timings disagree",
+            record.round_trip_floor.median_s, record.projection.projected_round_trips
+        );
+    }
     eprintln!("  miss response  {}", record.miss_response);
     eprintln!(
         "  density        {} B/block measured vs {} graded ({:.1} % -- {})",

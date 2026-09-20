@@ -105,10 +105,17 @@ def scan(rust_root: Path) -> list[tuple[str, str]]:
         root = tomllib.load(fh)
     aliases = workspace_aliases(root)
 
+    # RECURSIVE. `*/Cargo.toml` saw only crates one level down and missed every
+    # nested one -- `shekyl-*/fuzz/Cargo.toml`, `shekyl-oxide/crypto/*` -- so a
+    # reverse edge added there was invisible while the gate reported clean over
+    # "every other crate". A gate with an unchecked subtree is not a gate over
+    # the graph it names.
     violations: list[tuple[str, str]] = []
-    for manifest_path in sorted(rust_root.glob("*/Cargo.toml")):
-        crate = manifest_path.parent.name
-        if crate == BENCH_CRATE:
+    for manifest_path in sorted(rust_root.rglob("Cargo.toml")):
+        if "target" in manifest_path.parts:
+            continue
+        crate = str(manifest_path.parent.relative_to(rust_root))
+        if crate == BENCH_CRATE or manifest_path.parent == rust_root:
             continue
         with manifest_path.open("rb") as fh:
             manifest = tomllib.load(fh)
@@ -210,6 +217,15 @@ def selftest() -> int:
     return 0
 
 
+def _manifest_count(rust_root: Path) -> int:
+    """Manifests actually inspected — printed so a silent narrowing is visible."""
+    return sum(
+        1
+        for m in rust_root.rglob("Cargo.toml")
+        if "target" not in m.parts and m.parent != rust_root
+    )
+
+
 def main() -> int:
     if "--selftest" in sys.argv:
         return selftest()
@@ -242,7 +258,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"{BENCH_CRATE}: no production dependents")
+    print(f"{BENCH_CRATE}: no production dependents across {_manifest_count(rust_root)} manifests")
     return 0
 
 

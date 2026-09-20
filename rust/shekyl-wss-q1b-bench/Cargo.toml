@@ -56,12 +56,19 @@ shekyl-engine-core = { path = "../shekyl-engine-core" }
 # The `Rpc` trait, for timing a single minimal round trip (the floor the
 # attribution needs).
 shekyl-rpc-client = { path = "../shekyl-rpc-client" }
+# Also the canonical endpoint classifier (`network_posture::host_of` /
+# `is_loopback_host`): the local-posture grading gate delegates to the wallet's
+# one answer rather than hand-parsing a URL, which is how the first version
+# came to accept the hostname `127.0.0.1.evil.com`.
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # The SHARED get_block request/response types -- the same ones `block_fetch.rs`
 # uses, for the reason its own comment gives: a hand-rolled params object plus a
 # walk over an untyped reply is a second definition of one shape, and the one
 # the daemon cannot see is the one that drifts.
 shekyl-rpc-types = { path = "../shekyl-rpc-types" }
+# `hex`: decoding the block blob to reach its non-miner transaction hashes, so
+# byte accounting covers the bodies the production fetch downloads separately.
+hex = "0.4"
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
 clap = { version = "4", features = ["derive"] }
 

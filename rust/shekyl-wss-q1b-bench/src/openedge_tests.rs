@@ -90,9 +90,11 @@ fn an_empty_sample_does_not_claim_an_attribution() {
 }
 
 #[test]
-fn a_noisy_floor_never_produces_a_negative_volume_term() {
-    // A round-trip floor measured higher than the per-block cost (contended
-    // box, cold cache) must clamp rather than report a negative remainder.
+fn a_floor_that_cannot_fit_inside_the_total_is_reported_inconsistent() {
+    // The defect this replaces: clamping the floor term to the total turned an
+    // inconsistent measurement into a confident 100 % round-trip attribution.
+    // The two instruments disagree; the harness must say so rather than pick a
+    // remedy from the disagreement.
     let samples: Vec<_> = (0..10).map(|_| sample(3, 100, 0.001)).collect();
     let p = project(
         &samples,
@@ -101,8 +103,26 @@ fn a_noisy_floor_never_produces_a_negative_volume_term() {
             samples: 5,
         },
     );
-    assert!(p.volume_term_s >= 0.0);
-    assert!(p.round_trip_term_s <= p.projected_s);
+    assert_eq!(p.attribution, Attribution::Inconsistent);
+    assert!(p.floor_exceeds_total);
+    assert!(p.round_trip_term_s > p.projected_s, "reported unclamped");
+    assert!(p.volume_term_s >= 0.0, "the remainder never goes negative");
+}
+
+#[test]
+fn the_first_live_runs_figures_would_have_been_refused() {
+    // Not hypothetical: 224 us per round trip, 2.0 round trips per block, and
+    // a ~200 us per-block fetch. 2 x 224 > 200, so the floor cannot fit -- yet
+    // this was reported as `round_trip_bound` with volume exactly 0.000.
+    let samples: Vec<_> = (0..30).map(|_| sample(2, 716, 0.000_249)).collect();
+    let p = project(
+        &samples,
+        RoundTripFloor {
+            median_s: 0.000_224,
+            samples: 50,
+        },
+    );
+    assert_eq!(p.attribution, Attribution::Inconsistent);
 }
 
 // ── The corpus-density gate ─────────────────────────────────────────────────

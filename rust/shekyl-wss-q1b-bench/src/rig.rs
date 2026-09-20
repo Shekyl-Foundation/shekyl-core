@@ -36,11 +36,14 @@ pub const REQUIRED_RAM_BYTES: u64 = 7_500_000_000;
 /// Without this, any aarch64 host with 7.5 GB passed as the pinned rig, which
 /// is a gate advertising a device check it never made.
 ///
-/// Three markers because the field a kernel answers with varies: aarch64
-/// Linux usually omits `model name`, giving `Model` (*"Raspberry Pi 4 Model B
-/// Rev 1.x"*) and `Hardware` (*"BCM2711"*) instead. Any one of them is the
-/// board.
-pub const REQUIRED_DEVICE_MARKERS: &[&str] = &["Raspberry Pi 4", "BCM2711", "Cortex-A72"];
+/// **Board markers, not a core marker.** An earlier version also accepted
+/// `Cortex-A72`, which is wrong in a way that reopens the hole it was added to
+/// close: the A72 is a **CPU core**, shipped in many aarch64 boards that are
+/// not a Pi 4, so accepting it graded any of them as the pinned rig. §6.3.4
+/// pins the *board*. `Raspberry Pi 4` is the `Model` line and `BCM2711` the
+/// `Hardware` line; both name the board, and the kernel answers with one or
+/// the other depending on the field it populates.
+pub const REQUIRED_DEVICE_MARKERS: &[&str] = &["Raspberry Pi 4", "BCM2711"];
 
 /// What the operator asserts about the properties the process cannot see.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -235,27 +238,29 @@ impl fmt::Display for StorageAttestation {
     }
 }
 
-/// Whether a daemon URL names this machine.
+/// Whether a daemon endpoint names this machine.
 ///
 /// §6.3.4 row 3's 5 s budget is defined for the **local** posture, and the
 /// record hard-codes that claim — so grading a remote daemon against it is a
 /// category error rather than a slow run: the verdict would be incomparable
 /// with every other graded run while presenting as one of them.
 ///
-/// Host-based rather than DNS-resolving on purpose: a resolver round trip in a
-/// gate is a second failure mode, and the question here is which posture the
-/// operator asked for, not which address the kernel would pick.
+/// **Delegated, not reimplemented.** The first version split the URL by hand
+/// and tested `host.starts_with("127.")`, which accepts the remote hostname
+/// `127.0.0.1.evil.com` — a prefix test on a *name* where an address was
+/// meant. `shekyl_rpc_transport::network_posture` already owns this question
+/// for the whole wallet: `host_of` handles userinfo and bracketed IPv6, and
+/// `is_loopback_host` parses an actual IP literal before classifying it, so
+/// `127.0.0.1.evil.com` is a name that does not parse and is refused. Its
+/// module doc also records *why* the check is syntactic rather than
+/// resolving — a resolver is a manipulable oracle, and consulting one would
+/// leak the endpoint before the proxy decision. A second copy here would be a
+/// second answer to drift.
 #[must_use]
 pub fn is_loopback_endpoint(url: &str) -> bool {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(rest)
-        .rsplit_once(':')
-        .map_or(rest, |(h, _)| h)
-        .trim_matches(['[', ']']);
-    host == "localhost" || host == "::1" || host.starts_with("127.")
+    shekyl_rpc_transport::network_posture::is_loopback_host(
+        shekyl_rpc_transport::network_posture::host_of(url),
+    )
 }
 
 fn read_first_line(path: &str) -> Option<String> {
@@ -274,9 +279,16 @@ fn read_total_ram_bytes() -> Option<u64> {
     kb.checked_mul(1024)
 }
 
+/// The device string, preferring the fields that name a **board**.
+///
+/// Order matters and is the opposite of the obvious one. `model name` is the
+/// *core* (on the Pi 4: `ARMv7 Processor rev 3` on a 32-bit userland, absent
+/// on 64-bit), while `Model` and `Hardware` name the board. Reading
+/// `model name` first would hand the device check a string that cannot
+/// identify a board even when the board is right there two lines below.
 fn read_cpu_model() -> Option<String> {
     let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").ok()?;
-    for key in ["model name", "Model", "Hardware"] {
+    for key in ["Model", "Hardware", "model name"] {
         if let Some(line) = cpuinfo.lines().find(|l| l.starts_with(key)) {
             if let Some((_, value)) = line.split_once(':') {
                 return Some(value.trim().to_owned());

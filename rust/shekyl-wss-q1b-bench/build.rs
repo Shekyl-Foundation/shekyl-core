@@ -27,6 +27,17 @@
 //! So the paths are resolved through `git rev-parse --git-path`, which is
 //! worktree-aware, and both `HEAD` and the branch ref are watched — plus
 //! `packed-refs`, since a packed branch has no loose ref file to watch.
+//!
+//! ## This stamp is the FALLBACK, not the pin
+//!
+//! Even watching the right files, a build script cannot close the window:
+//! Cargo exposes no rerun trigger for *"a dependency's sources changed"*, so
+//! editing `shekyl-fcmp` after a clean build relinks the bench while leaving
+//! this stamp untouched — a clean revision behind a dirty prover. The record's
+//! revision is therefore captured at **run time**
+//! (`report::ProverPin::capture`), and this stamp serves only the case runtime
+//! capture cannot: a binary built elsewhere and copied to the rig without the
+//! repo. `revision_source` in the record says which one a reader is holding.
 
 use std::process::Command;
 

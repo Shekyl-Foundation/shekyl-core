@@ -184,18 +184,69 @@ pub struct ProverPin {
     pub crate_name: &'static str,
     /// Its version.
     pub crate_version: &'static str,
-    /// The repository revision, where the build recorded one.
+    /// The repository revision the record describes.
     pub revision: Option<String>,
+    /// Where [`ProverPin::revision`] came from, because the two sources carry
+    /// different guarantees.
+    pub revision_source: &'static str,
 }
 
 impl ProverPin {
-    /// The pin for this build.
+    /// The pin for this run.
+    ///
+    /// **Captured at run time, not only at build time.** A build script cannot
+    /// close the staleness window: its rerun triggers watch git metadata, so
+    /// editing `shekyl-fcmp` after a clean build changes none of them, and
+    /// Cargo may relink a *dirty* prover behind a stamp that still says clean.
+    /// Cargo exposes no trigger for "a dependency's sources changed", so the
+    /// window cannot be closed from inside the build.
+    ///
+    /// Asking git **when the measurement runs** removes the window entirely
+    /// for the ordinary case — the harness is a dev and rig tool, run from a
+    /// checkout. The build-time stamp is kept as the fallback for the case
+    /// runtime capture cannot serve: a binary cross-built and copied to the
+    /// rig without the repo. The record says which was used, so a reader never
+    /// has to guess which guarantee they hold.
     #[must_use]
     pub fn capture() -> Self {
+        let (revision, revision_source) = match runtime_revision() {
+            Some(rev) => (Some(rev), "runtime (git, at measurement time)"),
+            None => match option_env!("SHEKYL_GIT_REVISION") {
+                Some(rev) => (
+                    Some(rev.to_owned()),
+                    "build-time stamp (no git at run time; may predate a dependency edit)",
+                ),
+                None => (None, "unavailable"),
+            },
+        };
         Self {
             crate_name: "shekyl-fcmp",
             crate_version: env!("CARGO_PKG_VERSION"),
-            revision: option_env!("SHEKYL_GIT_REVISION").map(str::to_owned),
+            revision,
+            revision_source,
         }
+    }
+}
+
+/// `<short sha>` or `<short sha>-dirty`, asked of git in the working directory.
+///
+/// A dirty tree is marked because a record produced from uncommitted changes
+/// names a revision that does not describe what ran.
+fn runtime_revision() -> Option<String> {
+    let rev = git(&["rev-parse", "--short=9", "HEAD"])?;
+    let dirty = git(&["status", "--porcelain"]).is_some_and(|s| !s.is_empty());
+    Some(if dirty { format!("{rev}-dirty") } else { rev })
+}
+
+fn git(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("git").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
     }
 }

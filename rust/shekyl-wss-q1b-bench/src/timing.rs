@@ -11,19 +11,36 @@
 //! express that: it is either too few on a board that throttles late or wasted
 //! minutes on one that never throttles.
 //!
-//! So the loop runs until the running median stops moving — two consecutive
-//! medians within [`Series::tolerance_pct`] — and the **whole per-iteration
-//! series is reported**, so a reader can see the throttle happen rather than
-//! taking the converged figure on trust.
+//! ## Why two independent windows, and not two running medians
+//!
+//! The first version compared consecutive **running** medians over the whole
+//! sample. That cannot establish steady state, and fails in exactly the
+//! direction that matters here: as the sample count grows each new observation
+//! moves the running median less, so a workload whose duration **increases
+//! every iteration** — a board throttling — eventually moves it by under the
+//! tolerance and is marked converged. The criterion would have certified the
+//! condition it exists to detect. Its own unit test only failed to expose this
+//! because it used a 0.000001 % tolerance where grading uses 5 %.
+//!
+//! So convergence compares the median of the **last [`CONVERGENCE_WINDOW`]
+//! samples** against the median of the [`CONVERGENCE_WINDOW`] before them —
+//! two disjoint windows, each fully replaced as the run proceeds. A sustained
+//! trend keeps the later window above the earlier one and never converges,
+//! which is the behaviour the thermal protocol needs. The **whole
+//! per-iteration series is reported** either way, so a reader can see the
+//! throttle rather than taking the verdict on trust.
 
 use serde::Serialize;
 use std::time::{Duration, Instant};
 
 /// Default convergence tolerance, in percent.
 pub const DEFAULT_TOLERANCE_PCT: f64 = 5.0;
-/// Iterations before convergence is first tested. Below this a median is a
-/// statement about two or three samples.
-pub const MIN_ITERATIONS: usize = 5;
+/// Samples in each of the two independent windows the convergence test
+/// compares.
+pub const CONVERGENCE_WINDOW: usize = 3;
+
+/// Iterations before convergence is first tested — two full windows.
+pub const MIN_ITERATIONS: usize = 2 * CONVERGENCE_WINDOW;
 /// Hard stop on iteration count. A board that has not converged by here is
 /// reported unconverged rather than measured forever — and `converged: false`
 /// is what a grading reader keys on.
@@ -105,7 +122,6 @@ where
         f();
     }
     let mut samples: Vec<f64> = Vec::new();
-    let mut previous_median: Option<f64> = None;
     let mut converged = false;
     let mut stopped_because = "iteration cap";
     let began = Instant::now();
@@ -120,18 +136,21 @@ where
         if samples.len() < MIN_ITERATIONS {
             continue;
         }
-        let median = median_of(&samples);
-        if let Some(prev) = previous_median {
-            // Relative change against the larger of the two, so the test is
-            // symmetric: a 5 % rise and a 5 % fall are the same distance.
-            let scale = prev.max(median);
-            if scale > 0.0 && (prev - median).abs() / scale * 100.0 <= tolerance_pct {
-                converged = true;
-                stopped_because = "converged";
-                break;
-            }
+        // Two DISJOINT windows: the most recent `CONVERGENCE_WINDOW` samples
+        // against the `CONVERGENCE_WINDOW` before them. Each is fully replaced
+        // as the run proceeds, so a sustained trend cannot be averaged away by
+        // a growing denominator.
+        let n = samples.len();
+        let recent = median_of(&samples[n - CONVERGENCE_WINDOW..]);
+        let prior = median_of(&samples[n - 2 * CONVERGENCE_WINDOW..n - CONVERGENCE_WINDOW]);
+        // Relative change against the larger of the two, so the test is
+        // symmetric: a 5 % rise and a 5 % fall are the same distance.
+        let scale = prior.max(recent);
+        if scale > 0.0 && (prior - recent).abs() / scale * 100.0 <= tolerance_pct {
+            converged = true;
+            stopped_because = "converged";
+            break;
         }
-        previous_median = Some(median);
     }
     Series {
         median_s: median_of(&samples),
