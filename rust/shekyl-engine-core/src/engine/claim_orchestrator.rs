@@ -83,9 +83,9 @@ use shekyl_units::AtomicUnits;
 use super::backing_set::{BackingSet, ClaimFundingError, InsufficientBacking, MembershipPath};
 use super::bond_assembly::SpentRecordsDurablyPruned;
 use super::curve_tree_actor::{CurveTreeHandle, CurveTreeHandleError};
+use super::daemon::synced_chain_facts::fetch_synced_chain_facts;
 use super::emission_source::{fetch_emission_claim_source, EmissionSourceError};
 use super::prpc::PersonaIsolatedTransport;
-use super::daemon::synced_chain_facts::fetch_synced_chain_facts;
 use super::signing_assembly::{leaf_entry_from_chunk, tree_context_from};
 use super::stake_engine::{
     AssembleEmissionClaim, AssembledEmissionClaim, PersonaHandle, StakeEngineError,

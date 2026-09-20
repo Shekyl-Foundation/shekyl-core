@@ -52,9 +52,9 @@ use shekyl_curve_tree::{BlockHeight, ServingReader};
 use shekyl_p_host::{PinReport, ServeSetPinner};
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
+use crate::engine::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 use crate::engine::emission_source::fetch_emission_claim_source;
 use crate::engine::prpc::PersonaIsolatedTransport;
-use crate::engine::daemon::synced_chain_facts::{fetch_synced_chain_facts, SyncedChainFacts};
 
 /// Derives a persona's serve-set from its connected bond record and pins it.
 // Wired by `Engine::start_serving_if_staker` (SH-2b-2). Landed with the seam

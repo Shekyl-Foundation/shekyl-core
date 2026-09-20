@@ -677,8 +677,6 @@ fn a_sync_refusal_flattens_to_the_resyncing_disposition() {
             detail.contains("synchroniz"),
             "the detail must name the daemon's state so the remedy is legible: {detail}"
         ),
-        other => panic!(
-            "a sync refusal must not present as a different remedy: {other:?}"
-        ),
+        other => panic!("a sync refusal must not present as a different remedy: {other:?}"),
     }
 }

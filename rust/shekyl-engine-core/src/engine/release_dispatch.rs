@@ -100,10 +100,10 @@ use super::bond_assembly::{
 };
 use super::bond_orchestrator::{anchored_reference_block, p_lane_floor_fee};
 use super::curve_tree_actor::CurveTreeHandleError;
+use super::daemon::synced_chain_facts::fetch_synced_chain_facts;
 use super::emission_source::{fetch_claim_source_for, EmissionSourceError};
 use super::fee_policy::FeeEstimatorError;
 use super::prpc::PersonaIsolatedTransport;
-use super::daemon::synced_chain_facts::fetch_synced_chain_facts;
 use super::pscan::block_source::daemon_claimed_tip;
 use super::pscan::seal_basis::{load_seal_basis, SealBasisError};
 use super::pscan::start::pending_post_store_for_engine;
@@ -460,10 +460,7 @@ where
         // rather than at the dispatch stamp below keeps the verdict and the
         // post on the same footing; the stamp is gated too, by
         // `daemon_claimed_tip`.
-        if !matches!(
-            fetch_synced_chain_facts(release_rpc).await,
-            Ok(Some(_))
-        ) {
+        if !matches!(fetch_synced_chain_facts(release_rpc).await, Ok(Some(_))) {
             return Err(ReleaseRequestError::DaemonSyncing);
         }
         let fetched = fetch_claim_source_for(release_rpc, p_canonical_id).await?;
