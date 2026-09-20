@@ -34,6 +34,14 @@
 
 ### Wallet
 
+- **Height-semantics Phase 2b: dispatch-clock stamps are `ChainCount`.**
+  `daemon_claimed_tip`, `BlockSource::tip_height`, `anchor_t0`, and
+  `Dispatched::at` carry the claimed chain **count** (same numeric as
+  Phase 1: a 3-block chain still reports 3). Pending-post schema
+  **v10 → v11** — postcard bytes of the transparent `u64` are identical;
+  the schema type-name change still bumps. Pre-genesis: a v10 seal is
+  refused, not migrated.
+
 - **"Synchronized" is a type the release gate must hold
   (`WALLET_SIDE_STORE.md` `WSS-Q14`, closing `WSS-25`).** New
   `SyncedChainFacts` in `shekyl-engine-core`: its sole constructor yields
