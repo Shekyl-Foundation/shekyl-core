@@ -47,16 +47,17 @@
   and releases nothing** while the daemon is syncing or unreachable. Harmless
   today (a release only unpins); this lands before the wallet-side store, in
   which release deletes and the failure is an honest archiver wiping its
-  holdings and being slashed while it refills. The submit watchdog's sync
-  predicate — until now the wallet's only reading of sync state — becomes
-  that constructor, so the two cannot disagree. No RPC or wire change.
+  holdings and being slashed while it refills. The submit watchdog's `is_synced` — until now the wallet's only reading of
+  sync state — and this constructor now call one shared predicate,
+  `daemon_reports_synchronized`, so the two cannot disagree. No RPC or wire change.
 
-  **Every consensus-derived read of a daemon height now holds the witness**,
-  not only the release gate. `daemon_claimed_tip` — the one derivation six
+  **Every consensus-derived read of a daemon height now passes through the
+  witness**, not only the release gate. `daemon_claimed_tip` — the one derivation six
   consumers read their clock through (`anchor_t0`, the claim / drain /
   release dispatch stamps, both `BlockSource::tip_height` impls, and the
-  pscan finality horizon) — yields the witness or refuses with a named
-  `DaemonSyncing`, so a post cannot be stamped on a resync height. Claim
+  pscan finality horizon) — consumes the witness and yields the claimed clock only when one could be
+  minted, refusing otherwise with a named `DaemonSyncing`, so a post cannot be
+  stamped on a resync height. Claim
   assembly refuses before signing, and the exit path refuses before reading
   a bond record as an exit verdict; both surface as "resyncing, retry",
   never as "you have nothing staked". `SyncedChainFacts` and the `get_info`

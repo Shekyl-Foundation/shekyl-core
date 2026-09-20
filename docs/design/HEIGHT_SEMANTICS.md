@@ -2,7 +2,8 @@
 
 **Status:** OPEN — Phase 1 walked 2026-09-19; height-semantics Phase 2a
 RULED 2026-09-20 (census, wire table, naming/difference convention). Remaining:
-height-semantics Phase 2b (dispatch-clock retype, blocked on PR #792),
+height-semantics Phase 2b (dispatch-clock retype, blocked on PR #792 —
+**UPDATE 2026-09-20 (#792):** unblocked; next),
 Phase 2c (wire/FFI decode), Phase 2d (inland bare-`u64` tail). Numerics
 are frozen as pinned (Rick, 2026-09-19). This file does not change any stamp.
 
@@ -130,7 +131,8 @@ owned by the retype slice that creates that boundary (height-semantics
 Phase 2b onward), not by a docs PR.
 
 Ground: `origin/dev` at the walk (`85071a24f`, merge of PR #801). PR
-#792 is still OPEN; height-semantics Phase 2b waits on it.
+#792 is still OPEN; height-semantics Phase 2b waits on it. **UPDATE
+2026-09-20 (#792):** merged; Phase 2b is next.
 
 ### 3.1 Convention — RULED 2026-09-20
 
@@ -238,7 +240,7 @@ one family. **Unclear: none.**
 
 | Family | Quantity | Type today | Ruled inland | Remaining |
 | --- | --- | --- | --- | --- |
-| Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | COUNT as `BlockHeight` | `ChainCount` | height-semantics Phase 2b, blocked on PR #792 |
+| Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | COUNT as `BlockHeight` | `ChainCount` | height-semantics Phase 2b, blocked on PR #792 — **UPDATE 2026-09-20 (#792):** unblocked, next |
 | Wallet ledger (`TransferDetails.block_height` / `spent_height` / `eligible_height`, `rust/shekyl-engine-state/src/transfer.rs:226-237`, `rust/shekyl-engine-state/src/transfer.rs:328`) | ORDINAL | `BlockHeight` | `BlockHeight` | keep |
 | Emission / claim source | COUNT split at decode | `ChainCount` | `ChainCount` | keep (pattern) |
 | Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs:47-54`, wrap at `rust/shekyl-daemon-rpc/src/chain_facts.rs:439-442`) | COUNT (target: COUNT-or-sentinel) | COUNT as `BlockHeight` | `ChainCount` and `Option<ChainCount>` | height-semantics Phase 2c |
@@ -263,7 +265,7 @@ quantity.
   `block_at` stays `BlockHeight`; `anchor_t0` / due / alarm / dispatch
   `at` retype together (WI-3 R2-1). No numeric change (Phase 1).
   Persisted stamp fields that change type take a schema bump (rule 42).
-  **Blocked on PR #792** — that PR still wraps the same clock as
+  **Blocked on PR #792** (**UPDATE 2026-09-20 (#792):** merged — unblocked) — that PR still wraps the same clock as
   `BlockHeight`; retyping under it fights. Falsify the block:
   `gh pr view 792 --json state` reports `MERGED`. If #792 is still
   OPEN when this file is next touched for Phase 2b, wait; do not start
