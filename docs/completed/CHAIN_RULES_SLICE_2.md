@@ -245,7 +245,7 @@ vocabulary: a layout change, **`SCHEMA_VERSION` 6 → 7** (rule 42; rebuild,
 never migrate). This is the first such deletion; it is the pattern 4.G's
 weight rows will repeat.
 
-**`Fault::Corrupt` at connect — deferred with its blocker named (rule 22).**
+**`Fault::Corrupt` at connect — deferred with its blocker named (rule 22). DISCHARGED 2026-09-20: `WriteBatch::refuse_corrupt(Corrupt)`, SI-10, DRS-E2 §7 commit 1 (PR #806); the FOLLOWUPS row is withdrawn.**
 The plan had commit 9 treat `Fault::Corrupt` as an `InvariantViolated` the
 store did not see itself. `connect` takes a `ChainValid`; a `Corrupt` is
 returned by `validate` to the **driver**, which does not exist yet — the E2

@@ -561,5 +561,8 @@ mod digest_read_tests;
 #[path = "output_read_tests.rs"]
 mod output_read_tests;
 #[cfg(test)]
+#[path = "refuse_tests.rs"]
+mod refuse_tests;
+#[cfg(test)]
 #[path = "tx_read_tests.rs"]
 mod tx_read_tests;

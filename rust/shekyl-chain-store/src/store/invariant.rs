@@ -21,6 +21,8 @@
 //! `DAEMON_REDB_STORE.md` §3.6.2) so an operator can read which belt caught
 //! the hole; that is why the type is `Copy + Eq` and names its row.
 
+use shekyl_chain_rules::Corrupt;
+
 use crate::codec::CodecError;
 
 /// A store invariant that the store itself enforces at the write, named by
@@ -99,6 +101,23 @@ pub enum StoreInvariant {
     /// is not folded into SI-3: R8-Q1's three-arm test needs rule-twinned
     /// belts and pure invariants to stay distinguishable.
     IdNotFresh,
+    /// **SI-10** — the recorded difficulty accumulator is coherent as the
+    /// validator reads it: cumulative difficulty is monotone across
+    /// recorded heights, the parent's plus the connecting target fits the
+    /// type, and a target derived from the recorded window is nonzero.
+    ///
+    /// The one row whose **observer is the validator**, not a write site:
+    /// D4's window walk and D6 read the record inside the batch's branded
+    /// view and, finding it incoherent, return `Fault::Corrupt` — an
+    /// `InvariantViolated` the store did not see itself. The pipeline hands
+    /// that observation back through
+    /// [`WriteBatch::refuse_corrupt`](super::WriteBatch::refuse_corrupt),
+    /// which arms this batch's poison exactly as a belt would (DRS-E2
+    /// RD-Q4): the store cannot detect it and must not connect onto it. The
+    /// validator's own value is carried, not re-described — its three arms
+    /// are the finding, and a store enum mirroring them would say nothing
+    /// the value does not.
+    DifficultyRecordIncoherent(Corrupt),
 }
 
 impl StoreInvariant {
@@ -114,6 +133,7 @@ impl StoreInvariant {
             Self::CellCorrupt { .. } => 7,
             Self::FoldOverflow { .. } => 8,
             Self::IdNotFresh => 9,
+            Self::DifficultyRecordIncoherent(_) => 10,
         }
     }
 }
@@ -156,6 +176,25 @@ impl core::fmt::Display for StoreInvariant {
                 "typed cell `{key}` is {fault}; the file was modified outside this crate, \
                  rebuild from the block corpus"
             ),
+            Self::DifficultyRecordIncoherent(observed) => {
+                f.write_str(
+                    "the validator found the recorded difficulty accumulator incoherent: ",
+                )?;
+                match observed {
+                    Corrupt::CumulativeDifficultyNotMonotone { at } => write!(
+                        f,
+                        "cumulative difficulty at height {} is below its parent's",
+                        at.to_raw()
+                    ),
+                    Corrupt::CumulativeDifficultyOverflow => f.write_str(
+                        "the parent's cumulative difficulty plus the connecting target overflows",
+                    ),
+                    Corrupt::ZeroTarget => {
+                        f.write_str("the target derived from the recorded window is zero")
+                    }
+                }?;
+                f.write_str("; the writer halts, rebuild from the block corpus")
+            }
         }
     }
 }
@@ -177,6 +216,7 @@ impl core::error::Error for StoreInvariant {
             | Self::RootRewritten
             | Self::FoldOverflow { .. }
             | Self::IdNotFresh
+            | Self::DifficultyRecordIncoherent(_)
             | Self::UndoLogIncoherent { .. } => None,
         }
     }

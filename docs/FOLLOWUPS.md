@@ -648,10 +648,6 @@ Default. Lands before genesis if it should exist at launch.
   - Target: pre-genesis
   - Owner: [`DRS_E2_REPLAY_DRIVER.md`](design/DRS_E2_REPLAY_DRIVER.md)
 
-- **`Fault::Corrupt` has no writer-halt consumer until the E2 replay driver exists** (E6 slice 2 §4.3, 2026-09-19; owner **the DRS-E2 replay-driver pre-flight, PR #788 — `docs/design/DRS_E2_REPLAY_DRIVER.md` RD-Q4**, where the store API is minted with its caller; until 2026-09-19 11:17 this row named "the E2 lane", which existed in no form — RD-F3). `validate` returns `Fault::Corrupt` (non-monotone or overflowing cumulative work, a zero target) when the *store's* record is inconsistent — an `InvariantViolated` the store did not see itself. `connect` takes a `ChainValid` and never sees it; the receiver is the driver that calls `validate`, and no driver exists yet. What is owed: the driver arms the writer halt at the noted height on `Corrupt`, exactly as a belt does, and the store API it needs (a halt the store did not detect) is minted with that first caller — not before (rule 21). Blocker: the driver is unbuilt; **scheduled** as DRS-E2's commit 1 (RD-Q4 defaults `WriteBatch::refuse_corrupt(Corrupt)`, inside the batch). Falsify by `rg 'Fault::Corrupt' rust/` returning a match site outside `rust/shekyl-chain-rules/`; that site is the consumer and must halt. Record: [`CHAIN_RULES_SLICE_2.md`](completed/CHAIN_RULES_SLICE_2.md) §4.3.
-  - Target: pre-genesis
-  - Owner: [`DRS_E2_REPLAY_DRIVER.md`](design/DRS_E2_REPLAY_DRIVER.md)
-
 - **Resolution: FCMP++ historical-reference cutover via Stage 5**
   - Target: pre-genesis
 

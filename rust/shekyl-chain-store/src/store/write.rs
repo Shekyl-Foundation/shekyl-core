@@ -67,6 +67,7 @@ use core::cell::Cell;
 use core::marker::PhantomData;
 
 use redb::{Key, ReadableTable, TableDefinition, TableHandle, WriteTransaction};
+use shekyl_chain_rules::Corrupt;
 
 use crate::apply_policy::{ApplyPolicy, ArchivalFamily};
 use crate::codec::{post_image, Canonical, ChainState, PropertyCell, UndoEntry};
@@ -216,6 +217,29 @@ impl<'store, 'id> WriteBatch<'store, 'id> {
     pub fn chain_view(&self) -> BatchView<'_, 'id> {
         self.note_chain_work();
         BatchView::new(self)
+    }
+
+    /// **RD-Q4.** The validator, reading this batch's branded view, found
+    /// the recorded difficulty accumulator incoherent and returned
+    /// `Fault::Corrupt`; hand that observation back so the store treats it
+    /// as the belt it would have been (**SI-10**). Arms this batch's poison
+    /// — first row wins, as for any belt — and returns the
+    /// [`StoreError::InvariantViolated`] the caller propagates; nothing
+    /// this batch wrote lands, and [`complete`](Self::complete) halts the
+    /// writer at the connecting height (§3.6.2).
+    ///
+    /// Value in, inside the batch: the store takes the validator's finding
+    /// as it is and names no census row of its own. The API the deferral in
+    /// `CHAIN_RULES_SLICE_2.md` §4.3 owed, minted with the caller that
+    /// shapes it (the DRS-E2 pipeline's Validate+Connect actor).
+    #[must_use = "the returned error is the refusal; propagate it out of the write closure"]
+    pub fn refuse_corrupt(&self, observed: Corrupt) -> StoreError {
+        // A refusal is chain work at `tip + 1` even if the caller never
+        // opened the view (it did — the validator read through it — but the
+        // halt's height must not depend on that).
+        self.note_chain_work();
+        self.poison
+            .arm(StoreInvariant::DifficultyRecordIncoherent(observed))
     }
 
     /// Remember that this batch is chain work at `tip + 1`, so a poisoned
