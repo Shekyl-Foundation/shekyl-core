@@ -236,20 +236,20 @@ Faults classify through `ReadFault` as the other two bodies do.
 | **T5** | `tx_output_indices(TxStorageId) -> Result<AtIndex<TxOutputIndices>, StoreError>` | `get_tx_amount_output_indices` |
 
 `get_tx_unlock_time` is not in the table (Q2 A, not ported). `for_all_transactions`'
-successor is **T6** `tx_locations(range: Range<TxHash>) -> impl Iterator<Item = Result<(TxHash, TxLocation), StoreError>>`
-— a **bounded** walk over **`tx_indices` in its own key order** (hash order,
-`LmdbHashKey`), yielding the table's projection and nothing joined to it.
-`Range<TxHash>`, half-open with both endpoints present — S-CHAIN-R's clamped
-shape — **not** `impl RangeBounds` (round 4): `RangeBounds` admits `..`,
-`start..` and `..end`, so a signature stated as bounded would have let a
-caller request the full-chain scan the word was there to exclude. The type
-is the bound; there is nothing to test for rejection because the unbounded
-call does not compile.
+successor is **T6** `tx_locations(RangeInclusive<LmdbHashKey>) -> impl Iterator<Item = Result<(TxHash, TxLocation), StoreError>>`
+— a **bounded** walk over **`tx_indices` in its own key order** (`LmdbHashKey`),
+yielding the table's projection and nothing joined to it. Convert a `TxHash`
+at the edge with `LmdbHashKey::from`; do not range over `TxHash` — its `Ord`
+is byte-lexicographic, the order this key type exists to reject (round 2).
+`RangeInclusive<LmdbHashKey>`, both endpoints present — **not** `impl RangeBounds`
+(round 4): `RangeBounds` admits `..`, so a signature stated as bounded would
+have let a caller request the full-chain scan the word was there to exclude.
+Inclusive, not half-open: hash space has no successor of `LmdbHashKey::MAX`,
+and S-CHAIN-R's `Range<BlockHeight>` was the wrong copy (`tip+1` exists;
+`MAX+1` does not). The type is the bound; the unbounded call does not compile.
 It lands in commit 3 on **completeness** grounds (Q3 as re-ruled): a range
 read over a keyed table is part of what makes the table a table — `keyed.rs`
-ships a generic `range`, `read.rs` has `range_at`, S-CHAIN-R landed
-half-open clamped ranges — and S-TX would otherwise be the one surface
-walkable in principle and not in practice.
+ships a generic `range`; S-TX would otherwise be walkable in principle and not in practice.
 
 **Why this shape and not the round-2 one** (round 3, two corrections):
 
@@ -328,8 +328,8 @@ that line; the pattern is now easy to cargo-cult, so each is justified:
 - **By dense id (T4, T5) — `AtIndex<T>`, reused.** `tx_id` is dense (SI-9: `txs_pruned`' entry count at write time). At or beyond the count is `BeyondCount`; a hole below it is **SI-9**; bound first, then the row — exactly `output_reads`' discipline, and the same type, because the index domain is the same kind of thing.
   **Then the primary, before any side table** (PR #800 review round 1): the count proves an id *should* exist, only `txs_pruned[id]` proves it *does*,
   and a side row present at an id whose primary is missing is the count lying — SI-9 — not a recorded transaction. One admission step
-  (`tx_reads::admit`) does both, so T4 and T5 cannot disagree on what "recorded at `id`" means; S-OUT-KI's O1 had the same gap against
-  `output_txs` and takes the same step in the same commit.
+  (`tx_reads::admit`) does both for T4/T5; S-OUT-KI's O1 takes the same step. T1/T3/T6 run `location_of` against that count: an
+  index `tx_id` at or past it is SI-9, not a location T4 would call `BeyondCount`.
 - **The prunable region (T4) — `AtIndex<Prunable>`, with
   `Prunable { Retained(bytes), Discarded }` inside.** The outer `AtIndex`
   is the dense-id bound (round 4: `TxStorageId::from_raw` is public, so an
@@ -516,7 +516,7 @@ The sequence below is the plan as ruled; what changed is only the grouping.
 
 1. `store: ReadSnapshot::tx_location / tx_count / tx_record — T1, T2, T3 on tx_reads.rs; the unlock_time projection gate` — also **removes `RecordedOutput.unlock_time`** (S-OUT-KI O1, consumer-less, §3.5) and lands the grep-shaped gate that no public read type under `store/` carries the field, red on that line until this commit — the shared body, `TxRecord`, SI-7 on a missing hash row (STX-6); tests: recorded / not recorded on one snapshot, a record with its hash row removed is SI-7, a 3-part txid has no `pqc_auths`, snapshot isolation across a concurrent connect.
 2. `store: ReadSnapshot::tx_prunable / tx_output_indices — T4 (AtIndex<Prunable>), T5 (AtIndex)` — both bound-first against `txs_pruned.len()` (`BeyondCount` at the count for a forged or stale id, no row read); `Prunable` with `Discarded` planted by removing the segment under a present hash row; T5 bound first, `BeyondCount` at the count, SI-9 on a hole; T3 → T4 composition test against `get_tx_blob`'s concatenation.
-3. `store: ReadSnapshot::tx_locations — T6, the bounded walk over tx_indices` — `(TxHash, TxLocation)` in the table's key order with S-CHAIN-R's half-open clamping; tests that the walk and T1 agree row-for-row over the range, that the order is the key order, and that the body opens exactly one table (no blob table, no join); no consumer is named (#788: E2 projects no tx table) and the doc comment carries §3.2's reopen criterion.
+3. `store: ReadSnapshot::tx_locations — T6, the bounded walk over tx_indices` — `(TxHash, TxLocation)` in the table's key order (`RangeInclusive<LmdbHashKey>`); tests that the walk and T1 agree row-for-row over the range, that the order is the key order, and that the body opens exactly one table (no blob table, no join); no consumer is named (#788: E2 projects no tx table) and the doc comment carries §3.2's reopen criterion.
 4. `docs: S-TX landed — DRS §7 row, index, plan banner, CHANGELOG` — §10.
 
 No layout change: `SCHEMA_VERSION` is untouched by this increment (it was 6 when this plan was written and 7 at the cut — DRS-E6 slice 2 moved it between; the increment's own delta is zero bytes of layout); the codec snapshot gate is
@@ -574,6 +574,7 @@ unchanged (no codec added — `TxRecord` and `Prunable` are projections).
 
 | Date | Entry |
 |---|---|
+| 2026-09-20 | **PR #800 review round 2 (Copilot: 1 open thread + 2 overview-only; 2 taken, 1 refuted).** T6 took `Range<TxHash>` and converted endpoints into `LmdbHashKey` — `TxHash::Ord` is byte-lexicographic, `LmdbHashKey` compares byte 31 first, so a valid caller range can invert after conversion, and a half-open exclusive end cannot name `LmdbHashKey::MAX`. Taken as `RangeInclusive<LmdbHashKey>` (not a third range type): both endpoints still required so `..` does not compile, the range's `Ord` is the table's, `MIN`/`MAX`/`checked_successor` live on the key. Copilot's "bounded range type" wrapper was extra machinery. Hash-keyed reads (T1/T3/T6) now run `location_of` against the dense count: an index `tx_id` at or past it is SI-9, not a `TxLocation` T4 would call `BeyondCount` (overview-only T3 finding, applied on every hash→location path). Gate "strip comments / `cfg(test)`" **refuted**: `FIELD_RE` is `^\s*pub…unlock_time\s*:`; docs, `//` comments and field uses already fail the selftest; a struct parser is the instrument the gate's header refuses. `IdClass` deleted — `admit` already classified. `SegmentBytes` keeps handwritten `Clone`/`Eq`: `#[derive]` still demands `K: Clone` of the type parameter. |
 | 2026-09-19 | **PR #800 review round 1 (Copilot: 3 open; 3 taken, 0 refuted).** Two were one defect in the bound-first discipline: after the count admitted an id, T4 read the hash row and T5 read `tx_outputs` without checking that the **primary** `txs_pruned[id]` existed — so a hole in the primary below the count, with side rows still present, was served as a recorded transaction instead of SI-9. Fixed structurally: one admission step, `tx_reads::admit` (bound, then primary), used by both by-id reads; S-OUT-KI's O1 had the same gap against `output_txs` and takes the same check in the same commit (same class, same file family, disclosed here rather than deferred). Both new tests observed red without the checks. The third: `RecordedOutput`'s doc still described LMDB's `output_data_t` *with* `unlock_time`; corrected. |
 | 2026-09-19 | **Increment landed** (cut from `dev` `fbc92287a`, the day the plan merged). Three commits (§7's disclosed regrouping): the STX-9 gate + `RecordedOutput.unlock_time` removal; T1–T6 on `store/tx_reads.rs` with `read.rs` delegating; this docs commit. What landed matches §3 as ruled through round 4, with three implementation facts worth naming: (1) `SegmentBytes<K: BlobKind>` is one newtype per segment through the marker the table is already typed by — `RawBlockBytes`' discipline (no slice view, `into_wire_bytes` the one way out) plus a `compile_fail` that a pruned segment cannot be handed where a prunable one is expected; `Clone`/`PartialEq`/`Eq` are hand-written so the zero-sized marker owes no bounds. (2) T6 lives on `ReadSnapshot` directly rather than in the shared body: the trait's borrowed table cannot outlive the function, and the snapshot's owned table gives the `'static` range; the projection `TxIndex → TxLocation` and the key helper are the body's, so the field is dropped in one place. (3) The pqc pair is checked pairwise (leg ii), naming whichever table is the one missing. `TxIndex` has no non-canonical same-width encoding, so the "undecodable row" arm of T6 is exercised by type, not by a planted row. T2's doc names #799's shard predicate as the consumer standing on the dense count. `cargo test -p shekyl-chain-store` 270 + 13 doctests; clippy `-D warnings`; every store gate green, the new one observed red on the pre-change tree at `output_reads.rs:72`. |
 | 2026-09-19 | **PR #786 review round 4 (Copilot: 10 open; 10 taken, 0 refuted).** Contract: T4 returns `AtIndex<Prunable>` — `TxStorageId` has a public `from_raw`, so "the argument type carries already-resolved" was not true and an out-of-range id must be `BeyondCount`, not SI-7 (§3.2, §3.3); T6 takes `Range<TxHash>`, not `impl RangeBounds` — the type is the bound, the unbounded call does not compile (§3.2); two stale `TxHeader` mentions (Q4's row, the index) brought to `tx_locations`. Gate (`check_test_only_features.py`): **feature forwarding** (`x = ["owner/feat"]` in a consumer's own feature table) now counts as an enablement in all three limbs — it had let a forwarded second consumer past the sole-enabler check and hidden cross-crate features from the trigger; counting it raised the grandfathered set from twelve to fifteen and exposed a second normal-edge path for `shekyl-crypto-pq/test-utils` (via `shekyl-p-serve`'s `test-signer`, F-7 §4); the grandfather list now records each crate's **exact hit set** (feature, consumer, kind) so a new feature or enabler on a listed crate is red and a vanished hit is red until deleted (owner-keyed exemption would have covered both silently); selftest 6 + 4 + 10. Rule 95: the F-7 audit the FOLLOWUPS row had grown into moves to its own record, `F7_TEST_ONLY_FFI_EXPORTS.md`; both rows are one sentence, a link and a target (F-7's original row had no `Target:` — fixed). The PR's description stops saying "docs only": it ships a gate and the workflow runs it. |
