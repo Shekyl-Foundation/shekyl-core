@@ -31,7 +31,7 @@ use std::future::Future;
 use shekyl_p_transport::PTorClient;
 use shekyl_rpc_client::{Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockHeight, ChainCount};
 
 use crate::engine::block_fetch::default_fetch_scannable_block_full;
 use crate::engine::daemon::synced_chain_facts::fetch_synced_chain_facts;
@@ -91,18 +91,22 @@ impl From<RpcError> for BlockSourceError {
 // placeholder and tests. Bump to `pub` when 2d-2's transport needs to implement
 // it from another crate (a one-word change behind a stable signature).
 pub(crate) trait BlockSource {
-    /// This source's **claimed** chain height — the *count* of blocks, matching
-    /// the daemon's `get_height` (a genesis-only chain has height `1`). So the
-    /// highest existing block is `tip_height - 1`, and [`Self::block_at`] is valid
-    /// for heights in `0 .. tip_height` (half-open).
+    /// This source's **claimed** chain **count** — matching the daemon's
+    /// `get_height` (a genesis-only chain reports `1`). So the highest
+    /// existing block is `tip()`, and [`Self::block_at`] is valid for
+    /// ordinals in `0 .. count` (half-open; exclusive end is
+    /// [`ChainCount::next_height`]).
     ///
-    /// It is a *claimed* height, **not** a trusted-current one: a single source
-    /// can withhold or truncate its tip for free (the SP-7 stale-tip residual) —
-    /// forging a header chain is PoW-expensive, truncating it is not. Tip *currency*
-    /// is resolved by **posture**, not multi-source machinery
-    /// (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4); this trait only reports what the
-    /// source claims.
-    fn tip_height(&self) -> impl Future<Output = Result<BlockHeight, BlockSourceError>> + Send;
+    /// The method name is the WI-3 named clock (`daemon_claimed_tip` /
+    /// `BlockSource::tip_height`); the return type is the quantity
+    /// (height-semantics Phase 2b). It is a *claimed* count, **not** a
+    /// trusted-current one: a single source can withhold or truncate its
+    /// tip for free (the SP-7 stale-tip residual) — forging a header chain
+    /// is PoW-expensive, truncating it is not. Tip *currency* is resolved
+    /// by **posture**, not multi-source machinery
+    /// (`ARCHIVAL_BOND_2D2_TRANSPORT_PLAN.md` §4); this trait only reports
+    /// what the source claims.
+    fn tip_height(&self) -> impl Future<Output = Result<ChainCount, BlockSourceError>> + Send;
 
     /// Fetch the **whole** block at `height` (header + every transaction + the
     /// first global output index), in scannable form.
@@ -152,11 +156,12 @@ pub(crate) trait BlockSource {
 ///
 /// This is the choke point, which is why the gate sits here and not at six
 /// call sites. **The witness is consumed here, not returned** — callers
-/// receive a [`BlockHeight`], exactly as before the gate existed, and cannot
-/// inspect the facts it was derived from. What the type buys is not an API
-/// for them: it is that **there is no other way to obtain this clock**, so a
-/// future consumer inherits the refusal instead of having to remember it —
-/// adopt-on-next-touch is how `WSS-25` happened.
+/// receive a [`ChainCount`], the quantity this clock has always carried
+/// (height-semantics Phase 2b: the type now matches; the number does not
+/// move), and cannot inspect the facts it was derived from. What the type
+/// buys is not an API for them: it is that **there is no other way to
+/// obtain this clock**, so a future consumer inherits the refusal instead
+/// of having to remember it — adopt-on-next-touch is how `WSS-25` happened.
 ///
 /// A consumer that needs to *reason* about the facts rather than take a
 /// height — to reject a rolled-back record, say — must hold the witness
@@ -166,8 +171,8 @@ pub(crate) trait BlockSource {
 /// One `get_info` read replaces the former `get_height` read: the same
 /// response carries the height and the sync state, so the gate costs no extra
 /// round trip, and the former `usize → u64` conversion is gone with it. The
-/// value returned is **numerically unchanged** — see the body for the
-/// count-vs-tip finding this deliberately does not fix here.
+/// value returned is **numerically unchanged** — height-semantics Phase 2b
+/// retypes it to [`ChainCount`] without flipping to `.tip()`.
 ///
 /// **Named daemon-claimed-tip clock (WI-2 F-2 / WI-3 R2-1).** This is the
 /// single function both (a) bond-assemble `anchor_t0` stamps and (b) the
@@ -178,25 +183,19 @@ pub(crate) trait BlockSource {
 /// Generic over the transport so the local (`DaemonEngine: Rpc`) and remote
 /// ([`PRpc`]) sources share one body; the returned future is `Send` because
 /// `get_height`'s is.
-pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<BlockHeight, BlockSourceError> {
+pub(crate) async fn daemon_claimed_tip<R: Rpc>(rpc: &R) -> Result<ChainCount, BlockSourceError> {
     let facts = fetch_synced_chain_facts(rpc)
         .await?
         .ok_or(BlockSourceError::DaemonSyncing)?;
-    // **Count, not tip — the pre-existing off-by-one, preserved deliberately.**
-    // `Rpc::get_height` returns the block COUNT ("for a blockchain with only
-    // its genesis block, the height will be 1"), and this function has always
-    // wrapped that count straight into a `BlockHeight`. `get_info.height` is
-    // the same count, so `chain_height()` reproduces the old value exactly and
-    // `.tip()` would silently move `anchor_t0` and every dispatch stamp down
-    // by one block.
-    //
-    // That shift may well be the correct reading — the identifier says "tip"
-    // and `BlockHeight` is a height — but it is a consensus-adjacent change to
-    // what gets stamped on posts, and it is not what a sync-gating change is
-    // for. Correcting it is its own ruling with its own red-bite; conflating
-    // the two would land an unreviewed one-block move inside a PR nobody is
-    // reading for that. Reported as a finding.
-    Ok(BlockHeight::from_raw(facts.chain_height().to_raw()))
+    // **Count, not tip ordinal — the number is frozen (Phase 1).**
+    // `Rpc::get_height` / `get_info.height` are the block COUNT ("for a
+    // blockchain with only its genesis block, the height will be 1").
+    // Height-semantics Phase 1 walked every consumer: they all carry that
+    // COUNT and compare it only to COUNT. Phase 2b retypes the clock to
+    // `ChainCount` so a mix with an ordinal is a compile error; flipping
+    // to `.tip()` would fire due one block late and skip the last pscan
+    // block. Numerically unchanged: a 3-block chain still reports 3.
+    Ok(facts.chain_height())
 }
 
 /// A [`BlockHeight`] as the `usize` block **number** the fetch layer indexes by,
@@ -235,7 +234,7 @@ impl<D: DaemonEngine> DaemonBlockSource<D> {
 }
 
 impl<D: DaemonEngine> BlockSource for DaemonBlockSource<D> {
-    async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
+    async fn tip_height(&self) -> Result<ChainCount, BlockSourceError> {
         // `DaemonEngine: Rpc`, so `get_height` is the inherited tip query.
         daemon_claimed_tip(&self.daemon).await
     }
@@ -286,7 +285,7 @@ impl PBlockSource {
 }
 
 impl BlockSource for PBlockSource {
-    async fn tip_height(&self) -> Result<BlockHeight, BlockSourceError> {
+    async fn tip_height(&self) -> Result<ChainCount, BlockSourceError> {
         // `PRpc: Rpc`, so `get_height` is the inherited tip query — over `P`'s
         // circuit, same claimed-not-trusted semantics as any single source.
         daemon_claimed_tip(&self.rpc).await
@@ -335,7 +334,7 @@ mod tests {
         // tip_height reports the source's claimed height (chain length).
         assert_eq!(
             source.tip_height().await.expect("tip_height"),
-            BlockHeight::from_raw(3)
+            ChainCount::from_raw(3)
         );
 
         // block_at returns the WHOLE block at the requested height — fetch-everything,
@@ -405,7 +404,7 @@ mod tests {
         let daemon = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, three_block_chain());
         assert_eq!(
             daemon_claimed_tip(&daemon).await.expect("synced"),
-            BlockHeight::from_raw(3),
+            ChainCount::from_raw(3),
         );
     }
 

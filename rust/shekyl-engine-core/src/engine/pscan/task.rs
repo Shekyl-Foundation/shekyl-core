@@ -21,7 +21,7 @@ use std::sync::Arc;
 use shekyl_archival_retention::consensus_state::settlement_epoch_at_height;
 use shekyl_archival_retention::{BondPostKind, ARCHIVAL_REORG_DEPTH_BLOCKS};
 use shekyl_engine_state::pscan_state::PScanState;
-use shekyl_types::{BlockHash, BlockHeight, PCanonicalId, SettlementEpoch};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount, PCanonicalId, SettlementEpoch};
 use tokio_util::sync::CancellationToken;
 
 use super::accrual::{AccrualError, PScanAccrual};
@@ -242,10 +242,14 @@ where
     S: PScanStore,
     D: DispatchTick,
 {
-    let tip = block_source.tip_height().await?;
-    // Finality horizon: scan only blocks behind `tip − reorg_depth`, so every
-    // accrued range and every witnessed Release is reorg-deep.
-    let horizon = tip.to_raw().saturating_sub(config.reorg_depth);
+    let claimed = block_source.tip_height().await?;
+    // Finality horizon: scan only blocks behind `claimed − reorg_depth`.
+    // `claimed` is COUNT; the exclusive ordinal end of the scan is
+    // `next_height()` of that shortened count (COUNT=100, depth=10 → 90).
+    // Flipping to `.tip()` would skip the last reorg-deep block.
+    let horizon = claimed
+        .saturating_sub_count(BlockCount::from_raw(config.reorg_depth))
+        .next_height();
     let batch = config.batch();
 
     // Observability: when the horizon is at or below the frontier the loop below never runs
@@ -257,12 +261,12 @@ where
     // Emit a neutral trace so a persistently-idle scan is visible without painting normal
     // catch-up as tip dishonesty; it is not an error (the safe action is to keep waiting —
     // never re-fund/GC on a stale tip), so it stays at `trace`.
-    let frontier = accrual.next_height().to_raw();
+    let frontier = accrual.next_height();
     if horizon <= frontier {
         tracing::trace!(
-            tip = tip.to_raw(),
-            horizon,
-            frontier,
+            claimed = claimed.to_raw(),
+            horizon = horizon.to_raw(),
+            frontier = frontier.to_raw(),
             "P-scan sweep: frontier reached the finality horizon — no new final blocks this tick \
              (normal when caught up; only a persistently non-advancing horizon indicates a young \
              chain or a stale/withheld tip)"
@@ -275,7 +279,7 @@ where
     // steady-state step then sends an `Arc` bump instead of deep-cloning every
     // record's ~1 KB ML-KEM ciphertext per batch of a long catch-up.
     let mut held_funding: Arc<[FundingOutputMatch]> = accrual.funding_outputs().into();
-    while accrual.next_height().to_raw() < horizon {
+    while accrual.next_height() < horizon {
         // Cancellation is checked per batch, not just between sweeps: a cold-start
         // catch-up is many batches, and shutdown must not wait for the whole sweep.
         // Each batch already sealed, so bailing mid-catch-up loses no progress.
@@ -283,7 +287,7 @@ where
             return Ok(());
         }
         let start = accrual.next_height().to_raw();
-        let end = start.saturating_add(batch).min(horizon);
+        let end = start.saturating_add(batch).min(horizon.to_raw());
         // `start < horizon` (loop guard) and `batch >= 1`, so `start < end <= horizon`:
         // the range is non-empty and within the batch bound — `new` cannot fail here.
         let range = BlockRange::new(BlockHeight::from_raw(start), BlockHeight::from_raw(end))
@@ -392,7 +396,16 @@ where
         // durable); collapsing them would re-introduce the crash windows each
         // guards. The lever if this ever profiles hot is seal *cadence*, as noted
         // above — not merging these two.
-        if dispatch_retires(stake, accrual, retired_this_session, cancel, tip, *config).await? {
+        if dispatch_retires(
+            stake,
+            accrual,
+            retired_this_session,
+            cancel,
+            claimed,
+            *config,
+        )
+        .await?
+        {
             // Re-snapshot the held-funding list the actor watches. The funded-gate
             // keeps retire from ever pruning `funding_outputs` (it fires only for a
             // drained slot), so this is defensive — but it guarantees the actor's
@@ -420,7 +433,7 @@ where
         accrual.funding_outputs().iter().map(|f| f.gindex).collect();
     dispatch
         .on_tick(
-            tip,
+            claimed,
             TickEvidence {
                 confirmed_posts: &accrual.confirmed_join_market_personas(),
                 live_funding: &live_funding,
@@ -467,7 +480,7 @@ async fn dispatch_retires(
     accrual: &mut PScanAccrual,
     retired_this_session: &mut BTreeSet<PCanonicalId>,
     cancel: &CancellationToken,
-    claimed_tip: BlockHeight,
+    claimed_tip: ChainCount,
     config: PScanConfig,
 ) -> Result<bool, PScanTaskError> {
     let Some(settled) = accrual.settled_epoch() else {
@@ -482,12 +495,12 @@ async fn dispatch_retires(
     // — a source lying LOW merely defers the prune, fail-safe). The actor
     // key-wipe keeps its existing frontier basis (idempotent + re-derivable);
     // only the durable removal takes the token gate.
-    let token_height = claimed_tip.to_raw().min(
-        accrual
-            .next_height()
-            .to_raw()
-            .saturating_add(config.reorg_depth),
-    );
+    // Exclusive scan end (`next_height`) is numerically the count of
+    // scanned-or-next; wrap it as COUNT so the corroboration min is
+    // same-clock (C6). Adding reorg_depth as a span is C4.
+    let scanned_as_count = ChainCount::from_raw(accrual.next_height().to_raw());
+    let corroborated = scanned_as_count.saturating_add(BlockCount::from_raw(config.reorg_depth));
+    let token_height = claimed_tip.min(corroborated).to_raw();
     let token_settled = settlement_epoch_at_height(token_height)
         .checked_sub(1)
         .map(SettlementEpoch::from_raw);

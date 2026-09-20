@@ -379,7 +379,7 @@ async fn dispatch_retires_an_expired_persona_and_dedups_within_session() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(u64::MAX),
+        ChainCount::from_raw(u64::MAX),
         PScanConfig::production(),
     )
     .await
@@ -397,7 +397,7 @@ async fn dispatch_retires_an_expired_persona_and_dedups_within_session() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(u64::MAX),
+        ChainCount::from_raw(u64::MAX),
         PScanConfig::production(),
     )
     .await
@@ -458,7 +458,7 @@ async fn dispatch_defers_retire_while_the_slot_holds_unspent_funding() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(u64::MAX), // fully corroborating tip
+        ChainCount::from_raw(u64::MAX), // fully corroborating tip
         PScanConfig::production(),
     )
     .await
@@ -506,7 +506,7 @@ async fn durable_prune_defers_when_the_claimed_tip_does_not_corroborate() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(0),
+        ChainCount::from_raw(0),
         PScanConfig::production(),
     )
     .await
@@ -553,7 +553,7 @@ async fn dispatch_does_not_retire_before_the_window_closes() {
         &mut accrual,
         &mut retired,
         &CancellationToken::new(),
-        BlockHeight::from_raw(u64::MAX),
+        ChainCount::from_raw(u64::MAX),
         PScanConfig::production(),
     )
     .await
