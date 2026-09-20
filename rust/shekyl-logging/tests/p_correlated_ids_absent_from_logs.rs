@@ -56,7 +56,6 @@
 //!    a denylisted name. The check that can actually fail is structural, and
 //!    it makes adding logging to the persona host a conscious gate edit —
 //!    which is when review should happen (`47-gate-subject-assertion`).
-//!
 //! 5. Every **spelling** of a macro call, because site detection reads a
 //!    token stream rather than source text: whitespace or a comment between
 //!    the path and its `!`, the `{}` and `[]` delimiter forms, the raw
