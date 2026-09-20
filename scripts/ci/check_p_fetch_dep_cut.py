@@ -112,6 +112,11 @@ CLIENT_CUT = (
 NO_SOCKS = (
     "shekyl-consensus",
     "shekyl-chain-store",
+    # The value contract both stores share (CTS-Q2). Named as its own root,
+    # not left to `shekyl-chain-store`'s closure: the wallet store adopts it
+    # next, and a root here is what keeps the assertion local to the crate
+    # rather than to whichever consumer happens to be listed.
+    "shekyl-store-codec",
     "shekyl-curve-tree",
     "shekyl-archival-retention",
     SERVER,

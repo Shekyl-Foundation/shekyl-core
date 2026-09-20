@@ -15,8 +15,8 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH, PROBE, PROBE_ROW};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
-    post_image, stored_timelock, BlockBody, Canonical, Encoded, OutKey, ProbeCell, PropertyCell,
-    Raw, UndoEntry, UndoLog,
+    forged, post_image, stored_timelock, BlockBody, Canonical, OutKey, ProbeCell, PropertyCell,
+    Raw, RuleSetInForce, UndoEntry, UndoLog,
 };
 use crate::ids::{OutputSlot, OutputStorageId};
 use crate::lmdb_order::LmdbHashKey;
@@ -74,8 +74,18 @@ fn connect_like(batch: &WriteBatch<'_, '_>, height: u64) -> Result<usize, StoreE
         BlockHeight::from_raw(height).encoded().as_encoded(),
     )?;
     let mut hf = batch.open_upsert_table(HF_VERSIONS)?;
-    hf.upsert(0, RuleSetId::from_raw(byte).encoded().as_encoded())?; // present after the first connect: prior restored
-    hf.upsert(height, RuleSetId::from_raw(1).encoded().as_encoded())?; // absent: undo removes it
+    hf.upsert(
+        0,
+        RuleSetInForce(RuleSetId::from_raw(byte))
+            .encoded()
+            .as_encoded(),
+    )?; // present after the first connect: prior restored
+    hf.upsert(
+        height,
+        RuleSetInForce(RuleSetId::from_raw(1))
+            .encoded()
+            .as_encoded(),
+    )?; // absent: undo removes it
     drop(hf);
     batch
         .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
@@ -97,9 +107,12 @@ fn every_verb_journals_its_pre_image_in_write_order() {
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let seeded: Result<(), TestErr> = store.write(|batch| {
         // Unjournaled seed, so the `hf_versions[0]` upsert below has a prior.
-        batch
-            .open_upsert_table(HF_VERSIONS)?
-            .upsert(0, RuleSetId::from_raw(7).encoded().as_encoded())?;
+        batch.open_upsert_table(HF_VERSIONS)?.upsert(
+            0,
+            RuleSetInForce(RuleSetId::from_raw(7))
+                .encoded()
+                .as_encoded(),
+        )?;
         Ok(())
     });
     seeded.expect("seed");
@@ -157,9 +170,12 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
     let path = tmp("undo-replay");
     let store = ChainStore::create(&path, EPOCH).expect("create");
     let seeded: Result<(), TestErr> = store.write(|batch| {
-        batch
-            .open_upsert_table(HF_VERSIONS)?
-            .upsert(0, RuleSetId::from_raw(7).encoded().as_encoded())?;
+        batch.open_upsert_table(HF_VERSIONS)?.upsert(
+            0,
+            RuleSetInForce(RuleSetId::from_raw(7))
+                .encoded()
+                .as_encoded(),
+        )?;
         batch
             .open_insert_table(OUTPUT_AMOUNTS, PROBE_ROW)?
             .insert(slot(0), out_key(0xee).encoded().as_encoded())?;
@@ -185,7 +201,7 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
                 .get(0)
                 .expect("g")
                 .map(|g| g.value().decode().expect("decodes")),
-            Some(RuleSetId::from_raw(1))
+            Some(RuleSetInForce(RuleSetId::from_raw(1)))
         );
         assert_eq!(snap.get_property::<ProbeCell>().expect("cell"), Some(101));
     }
@@ -211,7 +227,7 @@ fn replay_restores_every_table_and_deletes_the_row_then_the_floor_is_reached() {
         hf.get(0)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
-        Some(RuleSetId::from_raw(7)),
+        Some(RuleSetInForce(RuleSetId::from_raw(7))),
         "prior restored"
     );
     assert!(hf.get(1).expect("g").is_none(), "absent-before key removed");
@@ -368,7 +384,7 @@ fn plant_row(store: &ChainStore, height: u64, bytes: &[u8]) {
     let out: Result<(), TestErr> = store.write(|batch| {
         batch
             .open_insert_table(UNDO_LOG, PROBE_ROW)?
-            .insert(height, Encoded::forged(bytes))?;
+            .insert(height, forged(bytes))?;
         Ok(())
     });
     out.expect("planted");
@@ -426,7 +442,7 @@ fn a_row_that_does_not_decode_or_names_no_table_or_wrong_shape_is_si7() {
         let txn = db.begin_write().expect("raw write");
         txn.open_table(UNDO_LOG)
             .expect("t")
-            .insert(1, Encoded::forged(&[0xff, 0xff]))
+            .insert(1, forged(&[0xff, 0xff]))
             .expect("plant");
         txn.commit().expect("commit");
     }

@@ -66,6 +66,25 @@
 //! remaining tables' values land per surface (S-CHAIN-W onward) and
 //! inherit both that pin and the snapshot gate.
 
+//!
+//! # What is public here, and to whom
+//!
+//! [`schema`], [`codec`] and [`store`] are `pub` so the daemon's other
+//! crates can reach them; they are the daemon's **internal store
+//! contract**, not a supported public API. Pre-genesis, this workspace is
+//! the crate's only consumer — `shekyl-ffi` is its one dependent
+//! (`cargo tree -i shekyl-chain-store`) and no sibling repository names
+//! it — so a table definition, a codec type or a re-export changes shape
+//! when the store's own design does, and the compiler finds every caller
+//! in the same PR. No compatibility surface exists and none will be
+//! written for callers that do not exist (rule 15): a shim is debt with
+//! no creditor. What *is* held stable is the contract those modules
+//! describe on disk — `TypeName`s, codec `NAME`s and the row bytes —
+//! pinned by `schemas/*.snap` and the paired `SCHEMA_VERSION` bump
+//! (`DAEMON_REDB_STORE.md` §11.1(b)). `HF_VERSIONS: Coded<RuleSetInForce>`
+//! is the worked example: the Rust type changed with the codec's home,
+//! `shekyl::Coded<rule_set_id>` and the row bytes did not.
+
 #![deny(unsafe_code)]
 
 pub mod accumulator;

@@ -80,8 +80,8 @@ use shekyl_wire::{Ct, Input, Transaction};
 
 use crate::codec::{
     stored_timelock, BlockBody, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx,
-    PassedThroughFacts, Present, PropertyCell, Raw, TotalBurnedCell, TxIndex, TxOutputIndices,
-    TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
+    PassedThroughFacts, Present, PropertyCell, Raw, RuleSetInForce, TotalBurnedCell, TxIndex,
+    TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment, TxPrunedSegment,
 };
 use crate::ids::{AmountIndex, OutputSlot, OutputStorageId, TxStorageId};
 use crate::lmdb_order::LmdbHashKey;
@@ -440,7 +440,7 @@ impl<'id> WriteBatch<'_, 'id> {
 
         // ---- 7. rule set (CEN-B3's belt) --------------------------------
         self.open_insert_table(HF_VERSIONS, StoreInvariant::TipMismatch)?
-            .insert(height, in_force.encoded().as_encoded())?;
+            .insert(height, RuleSetInForce(in_force).encoded().as_encoded())?;
 
         // ---- 8. burn ---------------------------------------------------
         // Conditional as a whole, exactly as `blockchain.cpp:6148`
