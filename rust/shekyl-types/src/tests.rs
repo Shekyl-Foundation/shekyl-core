@@ -44,8 +44,8 @@ fn edge_round_trip() {
 #[test]
 fn serde_is_transparent_to_inner_u64() {
     // `#[serde(transparent)]` means the postcard wire bytes of the newtype
-    // are byte-identical to the bare `u64` — the property that lets a
-    // persisted field adopt the newtype without a format-version bump.
+    // are byte-identical to the bare `u64`. A type-name change in a persisted
+    // field still bumps the owning block's version (rule 42).
     let typed = postcard::to_allocvec(&BlockHeight::from_raw(0x0102_0304)).unwrap();
     let raw = postcard::to_allocvec(&0x0102_0304u64).unwrap();
     assert_eq!(typed, raw);

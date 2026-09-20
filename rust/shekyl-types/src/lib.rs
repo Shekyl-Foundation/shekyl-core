@@ -54,9 +54,9 @@
 //! sites are the greppable edge set that bounds each migration — the same
 //! discipline `AtomicUnits` uses. `#[serde(transparent)]` +
 //! `#[repr(transparent)]` keep every type wire- and ABI-identical to the
-//! primitive it wraps, so adopting one in a persisted field requires no
-//! serialized-format version bump (it may still require a `postcard-schema`
-//! snapshot regeneration; see `42-serialization-policy.mdc`).
+//! primitive it wraps: postcard bytes match the bare `u64`. A type-name
+//! change in a persisted field still bumps the owning block's version
+//! (`42-serialization-policy.mdc`); the schema snapshot is the identity.
 //!
 //! ## Exposure policy on the 32-byte identities
 //!
