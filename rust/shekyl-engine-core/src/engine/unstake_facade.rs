@@ -937,6 +937,15 @@ fn flatten_unstake_error(e: ReleaseRequestError) -> UnstakeError {
     match e {
         ReleaseRequestError::NotStaker => UnstakeError::NotStaker,
         ReleaseRequestError::NoBondRecord => UnstakeError::NoBondRecord,
+        // Lands on the existing resyncing disposition rather than a new one:
+        // the operator remedy is identical ("wait for the daemon, retry"),
+        // and the public surface already speaks that word. The distinction
+        // the crate-internal variant keeps — daemon-behind-network versus
+        // tree-behind-daemon — is a diagnostic the `detail` carries, not a
+        // second thing for a caller to branch on.
+        ReleaseRequestError::DaemonSyncing => UnstakeError::Resyncing {
+            detail: e.to_string(),
+        },
         ReleaseRequestError::ReleasePending => UnstakeError::ExitInProgress,
         // NOT ExitInProgress: a confirming bond post is
         // not an exit, and the remedies point at different verbs — wait then

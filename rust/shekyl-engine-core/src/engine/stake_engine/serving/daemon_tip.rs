@@ -36,8 +36,10 @@
 //! Per the standing ruling (2026-09-19) we do not build *to* the C++ daemon,
 //! and daemon elements still in flux stay behind a seam the wallet owns. That
 //! is what [`PersonaIsolatedTransport`] and [`TipReading`] are here — the
-//! wallet's own transport type and its own typed reading, with
-//! [`tip_reading_from_info`] the single place the wire shape is known. The
+//! wallet's own transport type and its own typed reading. The wire shape is
+//! known in two places by design: the fields the submit watchdog and the sync
+//! witness also read decode in the shared `health_from_get_info` (`WSS-Q14`),
+//! and the serving-only flags in [`tip_reading_from_info`]. The
 //! response shape **will move** when DRS lands the Rust chain store, and when
 //! it does this one function changes while the gate, the cache, and every
 //! test above them do not. The seam is load-bearing, not incidental.
@@ -49,7 +51,8 @@
 //! ++res.height;`). Admission centres its window on `predecessor_height − 720`,
 //! a block height, so stamping the chain height unconverted would centre `P`'s
 //! gate one block high and let it sign anchors admission then refuses. The
-//! `−1` happens once, here, at the only place the RPC's convention is in view.
+//! `−1` happens once, here, through `ChainCount::tip`, at the only place the
+//! RPC's convention is in view for this gate.
 
 use std::sync::Weak;
 use std::time::Duration;
@@ -57,6 +60,11 @@ use std::time::Duration;
 use serde_json::Value;
 use shekyl_p_host::DaemonTipCache;
 use shekyl_rpc_types::RpcStatus;
+use shekyl_types::ChainCount;
+
+use crate::engine::daemon::synced_chain_facts::{
+    daemon_reports_synchronized, health_from_get_info,
+};
 
 use crate::engine::block_fetch::refuse_unless_ok;
 use crate::engine::prpc::PersonaIsolatedTransport;
@@ -206,10 +214,13 @@ pub(crate) enum TipReading {
 /// | `following_degraded` | never (one-way, refusing) | no |
 /// | connection counts | yes | **yes** |
 ///
-/// The height half is lifted verbatim from the submit watchdog's
-/// `DaemonHealthContext::is_synced` (`target_height == 0 || height >=
-/// target_height`). This converges with `WSS-Q14`'s `SyncedChainFacts`;
-/// whichever lands second adopts the other's form.
+/// The sync **verdict** is [`daemon_reports_synchronized`] — the one site
+/// (`WSS-Q14`), shared with the submit watchdog's
+/// `DaemonHealthContext::is_synced` and with `SyncedChainFacts`. This
+/// reading adds, on top of it, the facts that can go false again. The two
+/// [`NotFollowing`] members the predicate covers are a *diagnosis* for the
+/// operator, each naming the half that failed; neither is a second verdict.
+/// Converged in PR #792, which landed second.
 ///
 /// # `--restricted-rpc` zeroes the connection counts *by policy*
 ///
@@ -239,9 +250,12 @@ pub(crate) enum TipReading {
 ///   poll instead of being cleared by a `BUSY` at startup.
 /// - `height` absent or unparseable ⇒ [`TipReading::Unusable`]. There is no
 ///   safe default: a silent `0` is a claim about the chain.
+/// - `target_height` absent or unparseable ⇒ [`TipReading::Unusable`], for
+///   the same reason in its sharpest form: `0` is the synchronized
+///   *sentinel*, so a default would have the decoder manufacture the claim
+///   the predicate exists to verify. Both refusals are the shared decoder's
+///   (`GetInfoFault::HeightMissing`, `GetInfoFault::TargetHeightMissing`).
 /// - `synchronized` absent ⇒ `false` ⇒ refuse. The conservative direction.
-/// - `target_height` absent ⇒ `0`, the info surface's own "0 when synced"
-///   convention (`core_rpc_server.cpp`), as `DaemonEngine::get_health` maps it.
 /// - `offline`, `following_degraded`, `restricted` absent ⇒ `false`. These
 ///   are **refusal** triggers, so absent-as-true would refuse every daemon
 ///   too old to carry the field — a self-inflicted outage on an upgrade skew.
@@ -260,17 +274,13 @@ pub(crate) fn tip_reading_from_info(info: &Value) -> TipReading {
     if refuse_unless_ok(&RpcStatus(status.to_owned()), "get_info").is_err() {
         return TipReading::Unusable;
     }
-    let Some(chain_height) = info.get("height").and_then(Value::as_u64) else {
+    // The fields the watchdog and the sync witness also read decode in the
+    // one shared place; a reply that fails its contract is not evidence.
+    let Ok(health) = health_from_get_info(info) else {
         return TipReading::Unusable;
     };
     let flag = |name: &str| info.get(name).and_then(Value::as_bool).unwrap_or(false);
-    let count = |name: &str| info.get(name).and_then(Value::as_u64).unwrap_or(0);
-
-    let target_height = count("target_height");
-    // Lifted verbatim from `DaemonHealthContext::is_synced`; see the doc above.
-    let heights_agree = target_height == 0 || chain_height >= target_height;
-    let connections =
-        count("outgoing_connections_count").saturating_add(count("incoming_connections_count"));
+    let chain_height = ChainCount::from_raw(health.height);
 
     // Ordered most-specific first, so the reported cause is the one an
     // operator can act on: "offline" is actionable, "never synchronized" is
@@ -279,11 +289,14 @@ pub(crate) fn tip_reading_from_info(info: &Value) -> TipReading {
         Some(NotFollowing::Offline)
     } else if flag("following_degraded") {
         Some(NotFollowing::Degraded)
-    } else if !flag("synchronized") {
+    } else if !health.synchronized {
         Some(NotFollowing::NeverSynchronized)
-    } else if !heights_agree {
+    } else if !daemon_reports_synchronized(chain_height, health.target_height, health.synchronized)
+    {
+        // The verdict is the shared predicate's; with the flag already
+        // true, the only half left to fail is the heights.
         Some(NotFollowing::BehindItsTarget)
-    } else if !flag("restricted") && connections == 0 {
+    } else if !flag("restricted") && health.connections == 0 {
         Some(NotFollowing::NoPeers)
     } else {
         None
@@ -292,9 +305,10 @@ pub(crate) fn tip_reading_from_info(info: &Value) -> TipReading {
         return TipReading::NotFollowing(cause);
     }
 
-    // Chain height -> top block height. The one place the conversion happens.
-    match chain_height.checked_sub(1) {
-        Some(top_block_height) => TipReading::Synced(top_block_height),
+    // Chain height -> top block height, through the type: an empty chain has
+    // no top block to stamp.
+    match chain_height.tip() {
+        Some(top_block) => TipReading::Synced(top_block.to_raw()),
         None => TipReading::Unusable,
     }
 }
@@ -509,6 +523,36 @@ mod tests {
         );
     }
 
+    /// The reading's sync verdict IS the shared predicate's (`WSS-Q14`):
+    /// over the tuples the watchdog's convergence test uses, including the
+    /// peerless fresh daemon, `Synced` iff `daemon_reports_synchronized`.
+    ///
+    /// The edit that turns this red is a second copy of the conjunction here
+    /// drifting from the shared one.
+    #[test]
+    fn the_sync_verdict_is_the_shared_predicates() {
+        for (height, target, synchronized) in [
+            (5, 0, false),
+            (9_000, 9_500, true),
+            (9_500, 9_500, true),
+            (9_001, 0, true),
+            (10, 5, false),
+            (7, 0, true),
+        ] {
+            let reading = tip_reading_from_info(&json!({
+                "height": height, "target_height": target, "status": "OK",
+                "synchronized": synchronized, "outgoing_connections_count": 8
+            }));
+            let expected =
+                daemon_reports_synchronized(ChainCount::from_raw(height), target, synchronized);
+            assert_eq!(
+                matches!(reading, TipReading::Synced(_)),
+                expected,
+                "({height}, {target}, {synchronized}) -> {reading:?}"
+            );
+        }
+    }
+
     /// Absences, each in its named direction.
     #[test]
     fn absent_fields_take_their_named_directions() {
@@ -533,8 +577,9 @@ mod tests {
                 "height": 9_001, "status": "OK", "synchronized": true,
                 "outgoing_connections_count": 8
             })),
-            TipReading::Synced(9_000),
-            "absent `target_height` is the info surface's 0-when-synced"
+            TipReading::Unusable,
+            "absent `target_height` is refused, not read as 0: 0 is the synchronized \
+             sentinel, and a default would have the decoder manufacture it"
         );
         assert_eq!(
             tip_reading_from_info(

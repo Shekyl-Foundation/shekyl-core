@@ -392,6 +392,19 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_store_error_conversion_ban.py
 
+      - name: Run store unlock_time projection gate (+ self-test)
+        # No public read type under shekyl-chain-store/src/store/ has an
+        # `unlock_time` field (S-TX STX-9): the stored codec rows keep the
+        # field until census U-2 rules it, and no read hands it out so the
+        # ruling finds no Rust consumer to unwind. Asserts its subject first
+        # — the codec rows must still declare the field, else the gate has
+        # nothing to guard and fails so it is deleted with the field.
+        # Instance of 47-gate-subject-assertion.mdc.
+        if: '!cancelled()'
+        run: |
+          python3 scripts/ci/check_store_unlock_time_projection.py --selftest
+          python3 scripts/ci/check_store_unlock_time_projection.py
+
       - name: Run store-error conversion-ban gate self-test
         # All three clauses bitten red, plus the subject-absent cases (no
         # error.rs; enum absent; zero variants; no verdict-type definition,

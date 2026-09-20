@@ -37,20 +37,25 @@
 //!   writer exists from the seal (amendment A2), so `TableDoesNotExist` on
 //!   a chain table is a file this store did not write, not an empty chain.
 
+use core::ops::RangeInclusive;
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, Tip};
 use shekyl_types::{
-    BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
+    BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
-use crate::codec::{BlockInfo, OutTx, PropertyCell, TotalBurnedCell};
+use crate::codec::{BlockInfo, OutTx, PropertyCell, TotalBurnedCell, TxOutputIndices};
+use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, CURVE_TREE_ROOTS, PROPERTIES, SPENT_KEYS};
+use crate::schema::{
+    BLOCK_BURN, BLOCK_HEIGHTS, CURVE_TREE_ROOTS, PROPERTIES, SPENT_KEYS, TX_INDICES,
+};
 
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
+use super::tx_reads::{self, Prunable, TxLocation, TxRecord};
 
 use super::chain_reads;
 use super::error::{CellFault, EngineError, StoreError, StoreInvariant};
@@ -603,7 +608,138 @@ impl ReadSnapshot<'_> {
     pub fn output_origin(&self, index: GlobalOutputIndex) -> Result<AtIndex<OutTx>, StoreError> {
         output_reads::origin_at(&self.txn, index).map_err(chain_reads::ReadFault::into_plain)
     }
+
+    // ------------------------------------------------------------------
+    // S-TX (`DRS_E1_STX.md` §3.2): transactions, by hash and by dense id.
+    // ------------------------------------------------------------------
+
+    /// **T1.** Where the transaction with `hash` is, or `None`. Replaces
+    /// `tx_exists` in both overloads: the index row *is* existence, and a
+    /// caller that then wants the id (`get_tx_outputs_gindexs`) has it.
+    ///
+    /// `Option`, not an absence enum: a hash miss is ordinary and instructs
+    /// nothing beyond *not here* — the counter-rule's worked case
+    /// (`tx_reads` module docs, STX-Q1 B). The answer is [`TxLocation`], the
+    /// stored row **without `unlock_time`** (STX-9).
+    ///
+    /// # Errors
+    ///
+    /// An undecodable row is SI-7; a present index whose `tx_id` is at or
+    /// past the dense count is **SI-9**; engine errors pass through.
+    pub fn tx_location(&self, hash: &TxHash) -> Result<Option<TxLocation>, StoreError> {
+        tx_reads::location_at(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **T2.** How many transactions the chain has recorded — `txs_pruned`'
+    /// length, the dense count `tx_id` is fresh in (SI-9). Replaces
+    /// `get_tx_count`. The bond-admission shard predicate stands on this
+    /// being the dense authority (`ARCHIVAL_BOND_ADD_ADMISSION.md` §4.1).
+    ///
+    /// # Errors
+    ///
+    /// Engine errors pass through.
+    pub fn tx_count(&self) -> Result<u64, StoreError> {
+        tx_reads::tx_count(&self.txn).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **T3.** The permanent half of the transaction with `hash` — where it
+    /// is, its pruned and `pqc_auths` segments, its two permanent hash rows
+    /// — or `None`. Replaces `get_pruned_tx_blob`, `get_prunable_tx_hash`,
+    /// `get_tx_block_height`, and with [`tx_prunable`](Self::tx_prunable)
+    /// the whole of `get_tx_blob` ([`TxRecord::wire_bytes`], STX-8).
+    ///
+    /// # Errors
+    ///
+    /// A recorded transaction missing its pruned segment or its prunable
+    /// hash row, or a `pqc_auths` segment and hash row that disagree on
+    /// presence, is **SI-7** with the table named (§7.7 legs (i)–(ii));
+    /// a present index whose `tx_id` is at or past the dense count is
+    /// **SI-9**; an undecodable row is SI-7; engine errors pass through.
+    pub fn tx_record(&self, hash: &TxHash) -> Result<Option<TxRecord>, StoreError> {
+        tx_reads::record_at(&self.txn, hash).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **T4.** Whether this node holds the prunable region of the
+    /// transaction at `id` — the archival good (`PDM-Q6` item 1;
+    /// `DRS_E1_STX.md` §2.3). Replaces `get_prunable_tx_blob`.
+    ///
+    /// Bound first: at or beyond [`tx_count`](Self::tx_count) this is
+    /// [`AtIndex::BeyondCount`] and no row is read — `TxStorageId::from_raw`
+    /// is public, so a forged or stale id is invalid input, not corruption.
+    /// Below it, [`Prunable::Retained`] or [`Prunable::Discarded`] — the
+    /// latter §7.7 leg (iii)'s defined state, never an absence.
+    ///
+    /// # Errors
+    ///
+    /// An id below the count with no primary `txs_pruned` row is **SI-9**;
+    /// below it with no `txs_prunable_hash` row is **SI-7** (leg (i));
+    /// engine errors pass through.
+    pub fn tx_prunable(&self, id: TxStorageId) -> Result<AtIndex<Prunable>, StoreError> {
+        tx_reads::prunable_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **T5.** The `output_amounts` indices of the outputs of the
+    /// transaction at `id`, in `vout` order. Replaces
+    /// `get_tx_amount_output_indices`. Bound first, as
+    /// [`tx_prunable`](Self::tx_prunable).
+    ///
+    /// # Errors
+    ///
+    /// A hole below the count is **SI-9**; an undecodable row is SI-7;
+    /// engine errors pass through.
+    pub fn tx_output_indices(
+        &self,
+        id: TxStorageId,
+    ) -> Result<AtIndex<TxOutputIndices>, StoreError> {
+        tx_reads::output_indices_at(&self.txn, id).map_err(chain_reads::ReadFault::into_plain)
+    }
+
+    /// **T6.** Every recorded transaction whose key lies in `hashes`, in
+    /// `tx_indices`' own key order — the table's projection, one sequential
+    /// scan, nothing joined to it. The range is [`RangeInclusive`] over
+    /// [`LmdbHashKey`]: that is the table's `Ord`, both endpoints are
+    /// present so `..` does not compile, and the bound is inclusive so
+    /// [`LmdbHashKey::MAX`] is nameable (a half-open range has no successor
+    /// of that key). Convert a [`TxHash`] at the edge with
+    /// [`LmdbHashKey::from`]; do not range over `TxHash` — its `Ord` is
+    /// byte-lexicographic, the order this key type exists to reject.
+    /// Successor to `for_all_transactions`, which cursored this same table;
+    /// lands on completeness grounds (STX-10), with no consumer named —
+    /// E2's redb-side digest projects no tx table (#788 §3.1). A join to
+    /// the hash rows, an id-ordered alternative and a reverse index are one
+    /// coupled reopen criterion (`DRS_E1_STX.md` §3.2): a consumer names
+    /// the row and the order it needs *together*.
+    ///
+    /// ```compile_fail
+    /// # use shekyl_chain_store::store::ReadSnapshot;
+    /// # use shekyl_types::TxHash;
+    /// fn walk(snap: &ReadSnapshot<'_>, hashes: core::ops::RangeInclusive<TxHash>) {
+    ///     let _ = snap.tx_locations(hashes); // the walk is LmdbHashKey order, not TxHash order
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Opening the table or the range; then per item, so an undecodable
+    /// row (SI-7) or an index whose `tx_id` is at or past the dense count
+    /// (SI-9) is reported where it is, not as an early end.
+    pub fn tx_locations(
+        &self,
+        hashes: RangeInclusive<LmdbHashKey>,
+    ) -> Result<impl Iterator<Item = TxWalkItem> + '_, StoreError> {
+        let count = tx_reads::tx_count(&self.txn).map_err(chain_reads::ReadFault::into_plain)?;
+        let table = self.open_table(TX_INDICES)?;
+        let range = table
+            .range(hashes)
+            .map_err(|e| StoreError::from(EngineError::Storage(e)))?;
+        Ok(tx_reads::walk_indices(range, count)
+            .map(|item| item.map_err(chain_reads::ReadFault::into_plain)))
+    }
 }
+
+/// One row of the tx walk (T6): the hash and where the store recorded it,
+/// or that row's own fault — per-item, as [`RangeItem`] is for heights.
+pub type TxWalkItem = Result<(TxHash, TxLocation), StoreError>;
 
 /// R6's and R7's shared step: the verified `(identity, body)` pair from the
 /// shared read body, wrapped as [`RecordedBlockBody`], the fault returned

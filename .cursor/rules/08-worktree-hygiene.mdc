@@ -10,7 +10,7 @@ A worktree left open between edits — by an agent across tool calls, by an
 editor with the file loaded — has been observed to **revert edited files
 to an earlier buffer** with no diff shown to whoever made the edit. This
 rule exists because that has now happened in two independent lanes, and
-the cause is environmental rather than anything either lane did.
+the cause is environmental rather than anything either lane did (a third instance followed in the same lane, below).
 
 ## The observed failure
 
@@ -21,6 +21,11 @@ the cause is environmental rather than anything either lane did.
   its *pre-verification* text — cite corrections that had been checked at
   source, committed, and pushed were undone in the working tree while the
   committed version stayed correct.
+- **`wt-stx-inc` (2026-09-20):** the same lane, eight hours after a commit
+  had been pushed and verified from a fresh clone: `git status` before a
+  `dev` merge showed the plan doc modified, and the diff was the deletion
+  of the decision-log row that commit had added. Caught by constraint 1
+  (a file that was not edited showed as modified); restored from `HEAD`.
 
 Both were caught by a human or an agent reading the diff. That does not
 scale, and it is not the dangerous case. **The dangerous case is a drift
