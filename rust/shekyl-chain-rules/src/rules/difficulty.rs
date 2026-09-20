@@ -211,8 +211,9 @@ impl D4 {
     /// The `(timestamp, cumulative difficulty)` window LWMA-1 reads: the
     /// `N + 1` blocks ending at `chain_height`, oldest first, when
     /// `chain_height ≥ N`; empty otherwise (the function does not inspect
-    /// it). Cumulative difficulty is checked monotone as it is read (SI-8
-    /// observed from this side).
+    /// it). Cumulative difficulty is checked **strictly increasing** as it
+    /// is read (SI-10 observed from this side: equal adjacent work is as
+    /// corrupt as a decrease — every target is at least one).
     fn window<'id, V: ChainView<'id>>(
         view: &V,
         chain_height: BlockHeight,
@@ -227,7 +228,7 @@ impl D4 {
         for h in first..=chain_height.to_raw() {
             let height = BlockHeight::from_raw(h);
             let block = recorded(view, height).map_err(Fault::View)?;
-            if previous.is_some_and(|p| block.cumulative_difficulty < p) {
+            if previous.is_some_and(|p| block.cumulative_difficulty <= p) {
                 return Err(Fault::Corrupt(Corrupt::CumulativeDifficultyNotMonotone {
                     at: height,
                 }));

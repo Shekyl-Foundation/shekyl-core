@@ -139,7 +139,7 @@ fn cen_d4_past_n_the_window_is_the_newest_n_plus_one_oldest_first() {
 #[test]
 fn cen_d4_non_monotone_work_is_a_corrupt_view_not_a_verdict() {
     let (mut chain, _, _) = worked_chain(N_USIZE + 1);
-    // Break SI-8 inside the window: a block whose work is below its parent's.
+    // Break SI-10 inside the window: a block whose work is below its parent's.
     chain = chain.push(
         recorded_with_work(9_999_999, CumulativeDifficulty::ZERO),
         root(0xee),
@@ -154,6 +154,26 @@ fn cen_d4_non_monotone_work_is_a_corrupt_view_not_a_verdict() {
                     connecting.to_raw() - 1,
                     "the offending height is named"
                 );
+            }
+            other => panic!("expected a corrupt-view fault, got {other:?}"),
+        }
+    });
+}
+
+#[test]
+fn cen_d4_equal_adjacent_work_is_a_corrupt_view() {
+    // SI-10 is strict: Target is NonZero, so equal adjacent cumulative
+    // work is as impossible as a decrease. The window used to check only
+    // `<`, which would have let a flat pair through.
+    let (mut chain, _, work) = worked_chain(N_USIZE + 1);
+    let last = *work.last().expect("blocks");
+    chain = chain.push(recorded_with_work(9_999_999, last), root(0xee));
+    let connecting = BlockHeight::from_raw(chain.tip().expect("blocks").height.to_raw() + 1);
+    chain.with_view(|view| {
+        let mut coverage = RuleCoverage::EMPTY;
+        match D4::target(&view, connecting, &RuleSet::GENESIS, &mut coverage) {
+            Err(Fault::Corrupt(Corrupt::CumulativeDifficultyNotMonotone { at })) => {
+                assert_eq!(at.to_raw(), connecting.to_raw() - 1);
             }
             other => panic!("expected a corrupt-view fault, got {other:?}"),
         }
