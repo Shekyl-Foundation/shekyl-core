@@ -14,6 +14,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **Count-versus-height: Phase 1 walked; Phase 2 is the census and retype.** Six `daemon_claimed_tip` consumers all carry COUNT and compare it only to COUNT (shared; rename honestly; flipping one end is the one-sided hazard). The countersign gate is a different clock — both sides ORDINAL today. Owner: [`HEIGHT_SEMANTICS.md`](design/HEIGHT_SEMANTICS.md). **Discharged when** Phase 2's census has no unclear row and each conversion boundary has a `compile_fail`. Falsify Phase 1 by a `daemon_claimed_tip` consumer missing from that table, or a consumer whose protocol quantity is ordinal and whose stamp is compared to a count from a different clock.
+  - Target: pre-genesis
+
 - **Fourteen crates meet the feature-governance trigger ungoverned** (declare a Cargo feature another workspace crate enables, directly or by forwarding) and sit in the exact-hit, shrink-only grandfather list of [`scripts/ci/check_test_only_features.py`](../scripts/ci/check_test_only_features.py), whose docstring owns the detail; two are normal-edge test-feature findings that go first, and the fifteenth entry (`shekyl-crypto-pq`) is F-7's. Falsify by the gate reporting `trigger met and grandfathered (shrink-only): 0`.
   - Target: pre-genesis
 
