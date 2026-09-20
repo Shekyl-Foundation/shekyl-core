@@ -707,7 +707,7 @@ mod tests {
 
     use super::super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
     use super::super::transaction_submitter::{BroadcastSubmitError, SubmitterError};
-    use super::{admit_exit_record, released_on_first_send_failure};
+    use super::{admit_exit_record, released_on_first_send_failure, ReleaseRequestError};
 
     /// The release predicate, outcome by outcome — the behavioral half of
     /// the terminal-reject disposition (the tripwire below pins that the
@@ -860,90 +860,96 @@ mod tests {
             "the pending-release seal must precede the network send"
         );
     }
-}
 
-// ── WSS-Q14 class-C bite, non-vacuous ───────────────────────────────
-//
-// The first attempt constructed `ReleaseRequestError::DaemonSyncing`
-// and checked how it flattened, which cannot fail on the gate itself.
-// This drives the gate with the states it exists to refuse.
+    // ── WSS-Q14 class-C bite, non-vacuous ───────────────────────────────
+    //
+    // The first attempt constructed `ReleaseRequestError::DaemonSyncing`
+    // and checked how it flattened, which cannot fail on the gate itself.
+    // This drives the gate with the states it exists to refuse.
 
-/// A record with no bond, as a resyncing daemon would answer for a
-/// persona that has one.
-fn bondless_source() -> crate::engine::emission_source::EmissionClaimSource {
-    crate::engine::emission_source::EmissionClaimSource {
-        chain_height: shekyl_types::ChainCount::from_raw(10_001),
-        current_settled_epoch: shekyl_archival_retention::settlement_epoch_at_height(10_001),
-        bond: None,
-        epochs: Vec::new(),
+    /// A record with no bond, as a resyncing daemon would answer for a
+    /// persona that has one.
+    fn bondless_source() -> crate::engine::emission_source::EmissionClaimSource {
+        crate::engine::emission_source::EmissionClaimSource {
+            chain_height: shekyl_types::ChainCount::from_raw(10_001),
+            current_settled_epoch: shekyl_archival_retention::settlement_epoch_at_height(10_001),
+            bond: None,
+            epochs: Vec::new(),
+        }
     }
-}
 
-/// Every unvouchable state is refused **before** the record is read —
-/// and refused as the state it is, never as `NoBondRecord`.
-///
-/// The edit that turns this red is `admit_exit_record` returning `Ok`
-/// unconditionally (or `submit_release` skipping it). It bites against
-/// a rolled-back or unvouched bondless record reaching
-/// `from_claim_source`; it does **not** cover a daemon that lies about
-/// being synchronized.
-#[test]
-fn an_unvouchable_record_is_refused_before_it_can_read_as_no_bond() {
-    use crate::engine::daemon::synced_chain_facts::{
-        CoherentChainView, SyncedChainFacts, TimelineBreak,
-    };
-    use crate::engine::emission_source::{ClaimSourceFor, Vouching};
-    use shekyl_types::{BlockHash, ChainCount};
+    /// Every unvouchable state is refused **before** the record is read —
+    /// and refused as the state it is, never as `NoBondRecord`.
+    ///
+    /// The edit that turns this red is `admit_exit_record` returning `Ok`
+    /// unconditionally (or `submit_release` skipping it). It bites against
+    /// a rolled-back or unvouched bondless record reaching
+    /// `from_claim_source`; it does **not** cover a daemon that lies about
+    /// being synchronized.
+    #[test]
+    fn an_unvouchable_record_is_refused_before_it_can_read_as_no_bond() {
+        use crate::engine::daemon::synced_chain_facts::{
+            CoherentChainView, SyncedChainFacts, TimelineBreak,
+        };
+        use crate::engine::emission_source::{ClaimSourceFor, Vouching};
+        use shekyl_types::{BlockHash, ChainCount};
 
-    let p_id = shekyl_types::PCanonicalId::from_bytes([1; 32]);
+        let p_id = shekyl_types::PCanonicalId::from_bytes([1; 32]);
 
-    // Each broken state, and the public class it must keep.
-    for (why, expect_syncing) in [
-        (TimelineBreak::DaemonSyncing, true),
-        (TimelineBreak::FactsUnreadable, false),
-        (TimelineBreak::DaemonUnreachable, false),
-    ] {
-        let fetched =
-            ClaimSourceFor::for_test_with_vouching(p_id, bondless_source(), Vouching::Broken(why));
-        let err = admit_exit_record(&fetched).expect_err("an unvouched record is refused");
+        // Each broken state, and the public class it must keep.
+        for (why, expect_syncing) in [
+            (TimelineBreak::DaemonSyncing, true),
+            (TimelineBreak::FactsUnreadable, false),
+            (TimelineBreak::DaemonUnreachable, false),
+        ] {
+            let fetched = ClaimSourceFor::for_test_with_vouching(
+                p_id,
+                bondless_source(),
+                Vouching::Broken(why),
+            );
+            let err = admit_exit_record(&fetched).expect_err("an unvouched record is refused");
+            assert!(
+                !matches!(err, ReleaseRequestError::NoBondRecord),
+                "{why:?} must never surface as 'you have nothing staked': {err:?}"
+            );
+            assert_eq!(
+                matches!(err, ReleaseRequestError::DaemonSyncing),
+                expect_syncing,
+                "{why:?} keeps its own public class: {err:?}"
+            );
+        }
+
+        // The rollback: the witness read at 20 000, the record answered at
+        // 10 000 with no bond, `synchronized` still true. Admitting it would
+        // read straight through to `NoBondRecord`.
+        let stale_high = SyncedChainFacts::new(
+            ChainCount::from_raw(20_001),
+            0,
+            true,
+            BlockHash::from_bytes([0xAB; 32]),
+        )
+        .expect("synced");
+        let view = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001));
+        assert!(view.rolled_back(), "the fixture must actually roll back");
+        let fetched = ClaimSourceFor::for_test_with_vouching(
+            p_id,
+            bondless_source(),
+            Vouching::Vouched(view),
+        );
+        let err = admit_exit_record(&fetched).expect_err("a rolled-back record is refused");
         assert!(
-            !matches!(err, ReleaseRequestError::NoBondRecord),
-            "{why:?} must never surface as 'you have nothing staked': {err:?}"
+            matches!(err, ReleaseRequestError::DaemonUnreachable { .. }),
+            "a rollback is refused as unreachable-class, never as NoBondRecord: {err:?}"
         );
-        assert_eq!(
-            matches!(err, ReleaseRequestError::DaemonSyncing),
-            expect_syncing,
-            "{why:?} keeps its own public class: {err:?}"
+
+        // And the control: an agreeing, vouched record is admitted, so the
+        // refusals above are the gate and not a helper that refuses all.
+        let agreeing = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(20_001));
+        let fetched = ClaimSourceFor::for_test_with_vouching(
+            p_id,
+            bondless_source(),
+            Vouching::Vouched(agreeing),
         );
+        admit_exit_record(&fetched).expect("a vouched record is admitted");
     }
-
-    // The rollback: the witness read at 20 000, the record answered at
-    // 10 000 with no bond, `synchronized` still true. Admitting it would
-    // read straight through to `NoBondRecord`.
-    let stale_high = SyncedChainFacts::new(
-        ChainCount::from_raw(20_001),
-        0,
-        true,
-        BlockHash::from_bytes([0xAB; 32]),
-    )
-    .expect("synced");
-    let view = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001));
-    assert!(view.rolled_back(), "the fixture must actually roll back");
-    let fetched =
-        ClaimSourceFor::for_test_with_vouching(p_id, bondless_source(), Vouching::Vouched(view));
-    let err = admit_exit_record(&fetched).expect_err("a rolled-back record is refused");
-    assert!(
-        matches!(err, ReleaseRequestError::DaemonUnreachable { .. }),
-        "a rollback is refused as unreachable-class, never as NoBondRecord: {err:?}"
-    );
-
-    // And the control: an agreeing, vouched record is admitted, so the
-    // refusals above are the gate and not a helper that refuses all.
-    let agreeing = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(20_001));
-    let fetched = ClaimSourceFor::for_test_with_vouching(
-        p_id,
-        bondless_source(),
-        Vouching::Vouched(agreeing),
-    );
-    admit_exit_record(&fetched).expect("a vouched record is admitted");
 }
