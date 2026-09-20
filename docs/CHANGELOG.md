@@ -54,6 +54,24 @@
   refusal there needs a `-293xx` JSON-RPC contract code, which is the wallet
   RPC contract's surface, not this change's.
 
+  **The vouching is bracketed, and the ledger has an identity.** A vouched
+  view is minted only between two identical readings of the block the sync
+  witness stood on — that block is re-read *after* the record
+  (`SyncedChainFacts::bracket`), so a reorg that crosses the witness tip and
+  catches back up cannot pass as ordinary advance; what the bracket does not
+  cover is named on it, and its closing fix (the claim-source reply carrying
+  its own gather-tip hash) is filed to the daemon-RPC lane. The departure
+  ledger rests on the hash of the block at its observed height, re-read
+  before any observation is carried across, and hears every vouched
+  observation whatever the holdings kind — a `CompleteTree` record owes
+  everything, which forgets the absence clocks a compact record started. The
+  `get_info` decode's error contract is `GetInfoFault`, one member per
+  mandatory field, every member a node fault and never a transport failure.
+  The anchor gate's daemon-tip reading (`WSS-24`, #791, which landed first
+  with its own copy of the sync conjunction) now decodes through the same
+  decoder and takes its verdict from the same predicate, which also closes
+  its absent-`target_height`-reads-as-synchronized default.
+
 ### Consensus
 
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6

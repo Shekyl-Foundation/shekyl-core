@@ -77,11 +77,14 @@
 //! re-derive why both fields are read: it is the guide's shape, not our
 //! contract's.
 //!
-//! The `synchronized` half is the `WSS-24` lane's finding (PR #791, open at
-//! this writing), which derived the same predicate independently and found
-//! the gap; `WSS-Q14`'s brief said to lift the watchdog's form verbatim, and
-//! verbatim was not enough. This function is the shared home; #791's
-//! daemon-tip reading is where the two lanes converge on it.
+//! The `synchronized` half is the `WSS-24` lane's finding (PR #791), which
+//! derived the same predicate independently and found the gap; `WSS-Q14`'s
+//! brief said to lift the watchdog's form verbatim, and verbatim was not
+//! enough. #791 landed first, with its own copy of the conjunction in the
+//! anchor gate's daemon-tip reading (`stake_engine/serving/daemon_tip.rs`);
+//! this PR landed second and converged it, as both lanes' docs had
+//! committed: that reading decodes through [`health_from_get_info`] and takes
+//! its verdict from [`daemon_reports_synchronized`].
 //!
 //! # The `R1` seam
 //!
