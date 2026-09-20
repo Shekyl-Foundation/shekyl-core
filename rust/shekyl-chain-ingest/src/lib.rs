@@ -27,6 +27,11 @@
 //!   event stream**, not a height-ordered block stream. A reorg is a
 //!   [`IngestEvent::Rewind`] followed by [`IngestEvent::Extend`]s; a source
 //!   that cannot say *rewind* cannot express a fork (RD-Q13).
+//! - [`corpus`] — the replay driver's first source: a chain's blocks with
+//!   full bodies as one Rust-minted, versioned artifact whose writer
+//!   **verifies** completeness against each header (RD-F15) and whose
+//!   reader re-verifies on every record. Network-shaped only; the trace is
+//!   a different artifact with a different door (RD-Q2).
 //! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
 //!   RandomX verification through `shekyl-pow-randomx`'s cache path and the
 //!   system clock. The only hasher any Shekyl validator runs (§1.3).
@@ -47,8 +52,10 @@
 
 #![deny(unsafe_code)]
 
+pub mod corpus;
 pub mod source;
 pub mod substrate;
 
+pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
 pub use substrate::{ProductionSubstrate, SubstrateFault};

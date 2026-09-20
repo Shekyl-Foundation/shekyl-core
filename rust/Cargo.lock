@@ -3801,6 +3801,7 @@ dependencies = [
  "shekyl-chain-rules",
  "shekyl-pow-randomx",
  "shekyl-types",
+ "shekyl-wire",
 ]
 
 [[package]]
