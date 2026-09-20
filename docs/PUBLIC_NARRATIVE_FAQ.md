@@ -2,7 +2,9 @@
 
 **Status:** living document. Archival service-promise section ratified with
 `docs/V3_STAKER_ARCHIVAL.md` §*Service promise* (2026-06). **Data scope pin**
-(sets A/B/C) added 2026-06 — counsel lock gates on §*Archival data scope*.
+re-keyed 2026-09-19 to `docs/design/ARCHIVAL_PRUNED_DAEMON_MODE.md` (`PDM-Q6`:
+the archival good is the complete transaction body) — counsel lock gates on
+`V3_STAKER_ARCHIVAL.md` §*Archival data scope*.
 
 Legal/regulatory framing for foundation archival lives in
 `docs/design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` — counsel review required
@@ -41,31 +43,35 @@ time.
 ## Archival service promise (user-facing)
 
 This is what users and integrators should expect when fetching **historical**
-chain state (old blocks, curve-tree paths, dispute backstop material). It is **not**
+chain state (old transaction bodies for rescan, audit, or dispute backstop). It is **not**
 a CDN or cloud-storage SLA.
 
 **What we store (plain language).** Shekyl separates three things:
 
 1. **Your wallet's scanned outputs** — kept on your device once synced (not
    the foundation's job).
-2. **Deep proof history** — full curve-tree segment data archivers are
-   challenged on (needed for old reference-block proofs).
-3. **Canonical block and transaction history** — needed to rescan, audit, and
-   reconstruct history from seed.
+2. **The chain skeleton** — block headers, the membership-proof tree, and every
+   transaction's fingerprint — kept by **every** node forever. It is never at
+   risk and nobody is paid to hold it.
+3. **Complete transaction bodies** — the full content of every transaction,
+   which ordinary nodes discard after a window and archivers hold and are
+   challenged on. Rescan from seed, audit, and dispute all need it.
 
-The foundation complete archive holds **(2) and (3) in full**. The permanent
-retention promise applies to **both**, not to proof-tree structure alone.
+The foundation complete archive holds **(3) for all of chain history**; with
+(2), which every node has, that is every complete transaction ever confirmed.
+The permanent retention promise applies to **complete transactions**, not to
+proof-tree structure alone.
 
 ### What we guarantee
 
-**Permanent retention.** Deep proof history **and** canonical block/transaction
-history are never deleted. If data existed on the canonical chain, the network's
-archival layer retains the material needed for rescan, audit, and dispute
-backstop — not merely curve-tree commitments. This is a hard guarantee, not a
-probability.
+**Permanent retention.** Complete transactions for all of chain history are
+never deleted. If data existed on the canonical chain, the network's archival
+layer retains the material needed for rescan, audit, and dispute backstop — not
+merely the proof tree, which every node keeps anyway. This is a hard guarantee,
+not a probability.
 
-**Never gone — auditable.** Foundation seed archivers listed in genesis hold a
-**complete deep archival copy plus canonical block history** at **known, public**
+**Never gone — auditable.** Foundation seed archivers listed in genesis hold
+**every transaction body for all of chain history** at **known, public**
 endpoints. Anyone can verify they serve the full archive. You do not have to trust
 anonymous peers alone for the question "does the data still exist?"
 
@@ -88,13 +94,13 @@ that no trusted party exists.
 
 ### Will my old transaction history disappear?
 
-No — **provided canonical block history remains retrievable** for rescan and
-your wallet has synced (or can rescan) outputs. Shekyl commits to **permanent
-retention** of deep proof history **and** canonical blocks/transactions, not
-curve-tree structure alone. The foundation operates complete archives you can
-audit; market archivers add redundancy on top. Restoring from seed still
-requires fetching **block history** from the archival layer; proof-tree data
-alone is not enough.
+No — **provided complete transaction history remains retrievable** for rescan
+and your wallet has synced (or can rescan) outputs. Shekyl commits to
+**permanent retention** of every transaction's complete body, not proof-tree
+structure alone (every node keeps that regardless). The foundation operates
+complete archives you can audit; market archivers add redundancy on top.
+Restoring from seed still requires fetching **transaction bodies** from the
+archival layer; the proof tree alone is not enough.
 
 ### How fast will a deep historical fetch be?
 
@@ -106,8 +112,8 @@ not milliseconds**, for rare deep history — and for success, not for a deadlin
 ### Is this "centralized storage"?
 
 Partially, and we say so on purpose. Genesis enumerates foundation archiver
-identities that hold a complete deep archive (**proof history + block history**)
-— auditable, challenge-tested, outside market reward economics. That is
+identities that hold **every transaction body for all of chain history** —
+auditable, challenge-tested, outside market reward economics. That is
 **foundation-as-feature**: a transparent backstop, not a hidden admin key.
 Decentralization means the **market layer growing beyond that floor**, observable
 on-chain, not pretending the floor does not exist.
@@ -181,7 +187,7 @@ from the foundation floor (no reward extraction there).
 ## Short boilerplate (website / deck)
 
 Shekyl is privacy-preserving digital cash with hybrid post-quantum cryptography
-from genesis. Deep chain history — **proof substrate and canonical blocks** — is
+from genesis. Deep chain history — **every complete transaction** — is
 **permanently retained** with an **auditable foundation complete archive** and a
 market of stakers adding decentralized redundancy. Historical retrieval is
 **best-effort over private transport**, not instant cloud delivery — honest about

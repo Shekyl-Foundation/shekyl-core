@@ -35,8 +35,8 @@ availability statements to users.
 
 | Topic | Disclosure |
 |---|---|
-| **User promise** | Permanent retention of **deep archival substrate + canonical block history** (sets B + C); best-effort retrieval latency (no real-time bound). See §3.0. |
-| **Foundation role** | Genesis-enumerated identities operate **complete-tree** replicas (**B + C**) at public endpoints; auditable via challenges (on **B**) and third-party fetch tests. |
+| **User promise** | Permanent retention of **every complete transaction for all of chain history** (the archival good, `PDM-Q6`; the proof tree is on every node and is not at risk); best-effort retrieval latency (no real-time bound). See §3.0. |
+| **Foundation role** | Genesis-enumerated identities operate **complete** replicas of the archival good (every shard, `CompleteTree`) at public endpoints; auditable via challenges (per transaction, against the fingerprints every node keeps) and third-party fetch tests. |
 | **Economics** | Foundation archivers **do not participate in market archival reward** (no slice, not in scarcity denominator). Not a profit-extraction path via protocol rewards. |
 | **Bonds** | **Nominal uniform retention bond** per active genesis identity (`ARCHIVAL_BOND_FLOOR` × 1, standard slash path — not zero, not per-shard economic skin). |
 | **Permanence** | Foundation privilege **does not sunset** by protocol — permanent-but-benign (non-extractive, verifiable). Decentralization = market redundancy **above** floor. |
@@ -50,26 +50,28 @@ availability statements to users.
 
 ### 3.0 Archival data scope (gates all retention language)
 
-Three data sets — do not conflate in user-facing copy. Authoritative table:
-`docs/V3_STAKER_ARCHIVAL.md` §*Archival data scope*.
+Three distinct things — do not conflate in user-facing copy. Authoritative
+text: `docs/V3_STAKER_ARCHIVAL.md` §*Archival data scope*, which cites the owner,
+`ARCHIVAL_PRUNED_DAEMON_MODE.md` (`PDM-Q6`, `PDM-Q9`, `PDM-Q-F32`).
 
-| Set | What it is | Foundation holds |
+| Thing | What it is | Who holds it |
 |---|---|---|
-| **A — Wallet-minimum** | Your scanned outputs + frontier (every syncing wallet) | No (user/wallet local) |
-| **B — Deep archival shard** | Full curve-tree segment leaves + proof auxiliary; **challenges verify this** | **All shards** (`CompleteTree`) |
-| **C — Block/tx corpus** | Canonical blocks/transactions for rescan, audit, history | **Complete canonical chain** |
+| **Wallet-minimum** | Your scanned outputs + frontier (every syncing wallet) | User / wallet local; not the foundation |
+| **Skeleton** | Block headers, the membership-proof tree, every transaction's fingerprint (txid hash rows) | **Every node, forever** — not archival; nobody is paid to hold it, no challenge tests it |
+| **Archival good** | Every transaction's complete body plus its PQ authenticators, in consecutive shards; **challenges verify this per transaction** against the fingerprints | Market archivers hold their bonded shards; the foundation holds **all shards** (`CompleteTree`) |
 
-**Counsel / marketing pin:** "Complete archival tree" means **B + C**, not
-curve-tree structure alone. **Permanent retention** promises **B + C**.
-**"Your transaction history won't disappear"** requires **C** retrievable for
-rescan plus wallet persistence after scan — **not** satisfied by proof-state
-(**B**) alone.
+**Counsel / marketing pin:** "Complete archive" means **every transaction body
+for all of chain history**, not curve-tree structure (every node has that).
+**Permanent retention** promises the archival good. **"Your transaction
+history won't disappear"** requires the good retrievable for rescan plus wallet
+persistence after scan — **not** satisfied by the proof tree alone.
 
 ### 3.1 Permanent retention (hard)
 
-The protocol design targets **no deletion** of canonical **deep archival
-shards (B)** or **canonical block/transaction history (C)** required for
-FCMP++ historical reference, wallet rescan, audit, and dispute backstop.
+The protocol design targets **no deletion** of the archival good — every
+complete transaction body — required for wallet rescan, audit, and dispute
+backstop. (FCMP++ proving does not depend on archival: the proof tree is
+complete on every node.)
 
 ### 3.2 Best-effort retrieval latency (soft)
 
@@ -83,7 +85,7 @@ best-effort and not guaranteed."*
 ### 3.3 Foundation complete-tree floor
 
 Genesis enumerates foundation archiver identities (see §5). Operated seeds maintain
-**complete** copies of **B + C** across **diverse providers/jurisdictions**
+**complete** copies of the archival good (every shard) across **diverse providers/jurisdictions**
 (operational choice). The public durability anchor is this **managed multi-replica
 archive** (many-nines operational target), not anonymous-market statistics alone.
 
@@ -115,7 +117,7 @@ Foundation archivers:
 - Do **not** receive market archival reward (`CompleteTree` excluded from `Market`
   / `market_R` path).
 - Do **not** enter `Σwork` servo inputs.
-- **Do** participate in retention challenges on **set B** (public pass/fail).
+- **Do** participate in retention challenges on the archival good (public pass/fail).
 
 **Draft disclosure line:** *"Foundation archival nodes are not paid from the
 staker archival reward pool; they are a separately operated durability floor."*
@@ -211,8 +213,8 @@ Do **not** state or imply:
 - "Eventual retrieval within [X hours]" unless counsel approves a specific bound.
 - Market `D*=0.999` or similar as **user-facing** permanent-loss rate.
 - Foundation archivers earn competitive archival yield from the protocol.
-- **"Complete tree" = everything needed to restore a wallet from seed** without
-  also retaining **canonical block/transaction history (set C)**.
+- **"The proof tree is on every node" = nothing is at risk** — transaction
+  bodies are what archival retains, and they are what rescan needs.
 - Curve-tree / proof state alone satisfies full wallet history recovery.
 
 Do state:
@@ -236,7 +238,7 @@ Do state:
 
 ## 10. Counsel checklist (pre-genesis)
 
-- [ ] User-facing site/FAQ aligned with §3.0 data scope (B + C, not tree-only).
+- [ ] User-facing site/FAQ aligned with §3.0 data scope (complete transaction bodies, not tree-only).
 - [ ] User-facing site/FAQ aligned with §3.1–§3.2 (no latency guarantee; permanent retention).
 - [ ] Exchange/partner DD pack includes §2 summary and genesis enumeration fact.
 - [ ] Securities / marketing review of "foundation-as-feature" framing.

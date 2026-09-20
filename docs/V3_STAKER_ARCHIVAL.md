@@ -26,9 +26,14 @@ it, never a second copy:
 Archival pay-for-service is the **genesis (V3.0) staking model**. The
 confidential claim / lock-tier staking it replaced was deleted pre-genesis
 ([`completed/LEGACY_CLAIM_ERA_RETIREMENT.md`](completed/LEGACY_CLAIM_ERA_RETIREMENT.md);
-rule 95's standing instruction), and the bond / emission / serving stack is
-built and exercised as genesis-live. Nothing here is scoped to a later
-dot-release.
+rule 95's standing instruction). That is a design pin, not an implementation
+claim; status per leg lives with the owning contracts. The archival bond and
+emission legs are built and exercised as genesis-live (the emission-claim regtest
+e2e drove an accepted-and-applied claim 2026-07-19, PR #345;
+[`design/PRINCIPAL_STAKE_LIFECYCLE.md`](design/PRINCIPAL_STAKE_LIFECYCLE.md) §4a);
+the serving leg is built and being wired
+([`design/ARCHIVAL_SHARD_FETCH.md`](design/ARCHIVAL_SHARD_FETCH.md) §9). Nothing
+here is scoped to a later dot-release.
 **Author / decision context:** Originated in Phase 1 wallet-rewrite
 session (2026-04-26) as an answer to the long-running question "what
 useful work do stakers actually do for the network?" The framing has
@@ -172,8 +177,9 @@ challengeable on every shard with public pass/fail.
 
 **Legal / FAQ inheritance.** User-facing copy must say what is actually
 retained — **complete transactions for all of chain history** — not "the
-archival tree"; the tree is never at risk. Counsel and
-`docs/PUBLIC_NARRATIVE_FAQ.md` lock against this pin.
+archival tree"; the tree is never at risk. `docs/PUBLIC_NARRATIVE_FAQ.md` and
+`design/FOUNDATION_ARCHIVAL_DISCLOSURE.md` are re-keyed to this pin
+(2026-09-19); counsel's lock is on this section.
 ### Durability guarantee — foundation floor + market redundancy
 
 **Public anchor (foundation).** The durability number users and operators
