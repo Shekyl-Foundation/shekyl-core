@@ -59,7 +59,8 @@
 //! a row under the wrong codec, or inserting bytes of the wrong codec — is
 //! closed by the Rust type instead: a `Coded<V>` table yields
 //! [`Encoded<'_, V>`] from every read and accepts only `Encoded<'_, V>` on
-//! every write, and the only way to make one is [`Canonical::encoded`].
+//! every write. [`Canonical::encoded`] is the constructor this crate
+//! offers; the guarantee is the store's insertion boundary, below.
 //! The two guards are different mechanisms with different reach; neither
 //! is "the name guards the type."
 //!
@@ -128,12 +129,14 @@ impl<V> fmt::Debug for Coded<V> {
 /// bytes, borrowed from the transaction, **not yet decoded**.
 ///
 /// This is `Coded<V>`'s `SelfType` — what a read hands back and what a
-/// write accepts. Outside this module the only constructor is
-/// [`Canonical::encoded`] (via [`EncodedBuf::as_encoded`]), so a
-/// `Coded<V>` table cannot be handed bytes that did not come out of
-/// `V::encode`; and the only exits are [`decode`](Self::decode) — strict,
-/// fallible, `V::decode` — and the raw [`bytes`](Self::bytes) for the
-/// journal's post-image digest.
+/// write accepts. The constructor this crate offers is
+/// [`Canonical::encoded`] (via [`EncodedBuf::as_encoded`]);
+/// `redb::Value::from_bytes` is public and produces one over any bytes,
+/// which is why a `Coded<V>` table's rows are held to `V::encode` at each
+/// store's insertion boundary (module docs, *Two guards*) rather than
+/// here. The exits are [`decode`](Self::decode) — strict, fallible,
+/// `V::decode` — and the raw [`bytes`](Self::bytes) for the journal's
+/// post-image digest.
 #[derive(Clone, Copy)]
 pub struct Encoded<'a, V> {
     bytes: &'a [u8],

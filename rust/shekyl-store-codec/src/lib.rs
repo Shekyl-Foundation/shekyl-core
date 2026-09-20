@@ -59,14 +59,18 @@ pub use shape::{Blob, BlobKind, Coded, Encoded, EncodedBuf, NoRow, Present, Raw,
 /// (crate docs). Implementations are strict both ways: `encode` produces
 /// the one encoding, `decode` accepts only that encoding.
 pub trait Canonical: Sized {
-    /// Stable identifier of this codec. It names the daemon store's
-    /// snapshot file (`schemas/<NAME>.snap`) and appears in every
-    /// [`CodecError`], so it is lowercase `snake_case` and never reused
-    /// for a different layout.
+    /// Stable identifier of this codec's layout. It is the `{NAME}` in a
+    /// `Coded<V>` table's `TypeName`, it names the codec in every
+    /// [`CodecError`], and a store that pins bytes keys its fixture by it
+    /// (the daemon store: `schemas/<NAME>.snap`) — so it is lowercase
+    /// `snake_case` and never reused for a different layout. Which codecs
+    /// carry a fixture, and under which version constant, is each
+    /// consuming store's decision, not this trait's.
     const NAME: &'static str;
 
     /// `Some(n)` when every encoding is exactly `n` bytes; `None` for a
-    /// variable-width codec. Part of the snapshot.
+    /// variable-width codec. Reported to the engine by `Coded<V>` and held
+    /// by a store's fixture where one is pinned.
     const FIXED_WIDTH: Option<usize>;
 
     /// Append this value's canonical encoding to `out`.
@@ -90,10 +94,13 @@ pub trait Canonical: Sized {
 
     /// The canonical encoding as the row a `Coded<Self>` table inserts.
     ///
-    /// The **only** constructor of an [`Encoded`] outside the `shape`
-    /// module (via [`EncodedBuf::as_encoded`]): a `Coded<V>` table cannot
-    /// be handed bytes that did not come out of `V::encode` (`shape`
-    /// module docs, *Two guards*).
+    /// The ergonomic constructor of an [`Encoded`] (via
+    /// [`EncodedBuf::as_encoded`]), and the only one this crate offers —
+    /// but not the guarantee. `redb::Value::from_bytes` is a public trait
+    /// method and produces an `Encoded` over any bytes. What holds a
+    /// `Coded<V>` table's rows to `V::encode` is each store's validated
+    /// insertion boundary — the daemon store's `check_row` and
+    /// `Restorable::well_formed` (`shape` module docs, *Two guards*).
     #[must_use]
     fn encoded(&self) -> EncodedBuf<Self> {
         EncodedBuf::of(self)
