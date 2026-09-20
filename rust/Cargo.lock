@@ -4851,6 +4851,7 @@ dependencies = [
  "ciphersuite",
  "clap",
  "dalek-ff-group 0.5.0",
+ "hex",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
