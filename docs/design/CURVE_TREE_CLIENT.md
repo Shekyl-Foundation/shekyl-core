@@ -757,7 +757,7 @@ against the txid, served whole-shard, and erased only on the two-epoch
 pin-release gate (`WSS-Q1` (a), `WSS-Q4`, `WSS-Q5`, `WSS-Q7`, `WSS-Q8`;
 `EPOCHS_BEFORE_PIN_RELEASE = 2`). The principal's proving state is not a store
 ([`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) §6.3). The visual consumer is
-[`V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md)'s. The "adaptations
+defined by [`V3_SHARD_VISUALIZATION.md`](../V3_SHARD_VISUALIZATION.md). The "adaptations
 the concept docs should take" this subsection once listed were superseded before
 they were applied; [`V3_STAKER_ARCHIVAL.md`](../V3_STAKER_ARCHIVAL.md) was
 contracted 2026-09-19 against `PDM`, not against this section.
