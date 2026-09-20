@@ -108,8 +108,7 @@ pub fn digest_v0(
     spent_keys: &[[u8; 32]],
     curve_root: &[u8; 32],
 ) -> [u8; 32] {
-    let preimage = canonical_preimage(block_hashes, spent_keys, curve_root);
-    cshake256_32(OUTER_CUSTOMIZATION, &preimage)
+    outer_digest(&canonical_preimage(block_hashes, spent_keys, curve_root))
 }
 
 /// Serialize the v0 families to the documented 113-byte preimage.
@@ -122,16 +121,47 @@ pub fn canonical_preimage(
     spent_keys: &[[u8; 32]],
     curve_root: &[u8; 32],
 ) -> [u8; DIGEST_PREIMAGE_LEN] {
-    let mut buf = [0u8; DIGEST_PREIMAGE_LEN];
-    buf[0] = DIGEST_FORMAT_VERSION;
     let n_blocks = u64::try_from(block_hashes.len()).expect("block count fits u64");
     let n_spent = u64::try_from(spent_keys.len()).expect("spent-key count fits u64");
+    outer_preimage(
+        n_blocks,
+        n_spent,
+        &chain_component(block_hashes),
+        &spent_accumulator(spent_keys),
+        curve_root,
+    )
+}
+
+/// The 113-byte outer preimage from **already-computed** components — the
+/// one place the layout table above is written as code. [`canonical_preimage`]
+/// computes the components and calls this; a caller that needs the
+/// components themselves (the DRS-E2 grader reads each one, since the root
+/// component is borrowed and grades differently from the other two)
+/// computes them once and assembles here rather than hashing twice.
+#[must_use]
+pub fn outer_preimage(
+    n_blocks: u64,
+    n_spent: u64,
+    chain: &[u8; 32],
+    spent: &[u8; 32],
+    curve_root: &[u8; 32],
+) -> [u8; DIGEST_PREIMAGE_LEN] {
+    let mut buf = [0u8; DIGEST_PREIMAGE_LEN];
+    buf[0] = DIGEST_FORMAT_VERSION;
     buf[1..9].copy_from_slice(&n_blocks.to_le_bytes());
     buf[9..17].copy_from_slice(&n_spent.to_le_bytes());
-    buf[17..49].copy_from_slice(&chain_component(block_hashes));
-    buf[49..81].copy_from_slice(&spent_accumulator(spent_keys));
+    buf[17..49].copy_from_slice(chain);
+    buf[49..81].copy_from_slice(spent);
     buf[81..113].copy_from_slice(curve_root);
     buf
+}
+
+/// The outer digest over a preimage — `cSHAKE256(OUTER_CUSTOMIZATION, ·)`,
+/// the last step of [`digest_v0`], exposed so an assembly from components
+/// ([`outer_preimage`]) finishes the same way.
+#[must_use]
+pub fn outer_digest(preimage: &[u8; DIGEST_PREIMAGE_LEN]) -> [u8; 32] {
+    cshake256_32(OUTER_CUSTOMIZATION, preimage)
 }
 
 /// cSHAKE over `u64_le(n) ‖ hash_0 ‖ … ‖ hash_{n-1}` (height order).

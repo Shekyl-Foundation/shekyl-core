@@ -155,7 +155,9 @@ pub type RangeItem<T> = Result<(BlockHeight, T), StoreError>;
 /// store it was taken from so [`tip`](Self::tip) can report the writer's
 /// state beside the recorded tip.
 pub struct ReadSnapshot<'store> {
-    txn: ReadTransaction,
+    /// The engine handle. `pub(super)` for the sibling read bodies
+    /// (`digest_reads`), never beyond the store module (S-CHAIN-R Q3).
+    pub(super) txn: ReadTransaction,
     store: &'store ChainStore,
 }
 

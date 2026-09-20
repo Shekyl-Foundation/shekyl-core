@@ -89,6 +89,7 @@
 mod at_index;
 mod chain_reads;
 mod connect;
+mod digest_reads;
 mod error;
 mod halt;
 mod header;
@@ -105,6 +106,7 @@ mod write;
 
 pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
+pub use digest_reads::LogicalStateDigestV0;
 pub use error::{
     CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
@@ -552,6 +554,9 @@ mod amendments_tests;
 #[path = "read_tests.rs"]
 mod read_tests;
 
+#[cfg(test)]
+#[path = "digest_read_tests.rs"]
+mod digest_read_tests;
 #[cfg(test)]
 #[path = "output_read_tests.rs"]
 mod output_read_tests;
