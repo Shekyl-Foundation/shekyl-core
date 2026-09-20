@@ -20,12 +20,19 @@ A deferral of scoped work is legitimate only when all three hold:
    made. "The commit was getting big" is a *split* reason, not a
    *deferral* reason — a split re-schedules the work inside the same
    PR; a deferral moves it out. "It felt separable" is neither.
-2. **The deferral is tagged and scheduled.** A `docs/FOLLOWUPS.md`
-   entry (or an amendment to the PR's own plan doc) with the blocker
-   named, a target version/PR, and the reopening criterion per
-   `21-reversion-clause-discipline.mdc`. An allow-comment pointing at
-   a future consumer is *not* a deferral record — it is a residue
-   marker that a deferral record must exist elsewhere to justify.
+2. **The deferral is tagged and scheduled — and its owner resolves.** A
+   `docs/FOLLOWUPS.md` entry (or an amendment to the PR's own plan doc)
+   with the blocker named, a target version/PR, the reopening criterion
+   per `21-reversion-clause-discipline.mdc`, and an **`Owner:`** that
+   resolves to a live plan document or a registered identifier family
+   (gated: `check_followups_owners.py`). "Scheduled" means an owner
+   exists in some form — a doc, a family, a plan slot — not a name.
+   Observed (2026-09-19): six deferrals named "the E2 lane" as owner; no
+   doc, branch or PR of that name existed, so each was rule-22-legal on
+   its face and the six together were an unchosen queue. An
+   allow-comment pointing at a future consumer is *not* a deferral
+   record — it is a residue marker that a deferral record must exist
+   elsewhere to justify.
 3. **The deferral is disclosed in the flow that made it.** The commit
    message or the report to the reviewer for the commit that sheds the
    work states: what was scoped, what is deferred, why, and where it

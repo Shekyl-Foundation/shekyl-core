@@ -437,8 +437,18 @@ states is now gated, and the ingest crate must not enable it.
 - **RD-F3 — six items routed to a lane that did not exist.** Individually
   legitimate deferrals; in aggregate an unchosen queue (rule 22). This file is
   the repair; the generalization is RD-F4.
-- **RD-F4 — proposed gate: a deferral's owner must resolve** (endorsed
-  2026-09-19 as a standing check). Every `FOLLOWUPS.md` row's owner must
+- **RD-F4 (LANDED, §7 commit 0, 2026-09-20) — the gate: a deferral's owner
+  must resolve.** `scripts/ci/check_followups_owners.py`: every FOLLOWUPS row
+  carries `Owner:` resolving to a live `docs/design/` document or a
+  registered index-§2 family (read through the prefix gate's own registry
+  reader); 338 pre-existing rows grandfathered by exact heading in a list
+  that only burns down; selftest of twelve cases; wired in `docs-gates.yml`.
+  **One narrowing of the memo, stated so it is reviewable:** the memo listed
+  "an open PR" among resolvable owners; the gate does not accept a PR number
+  alone — PRs merge and close, and a row whose only owner is a merged PR is
+  the shape the gate exists to catch; a PR may be cited beside the doc or
+  family it lands in. Rules 95 and 22 amended to carry the cell. *(As
+  proposed:)* endorsed 2026-09-19 as a standing check. Every `FOLLOWUPS.md` row's owner must
   resolve to a live `docs/design/` doc, an open PR, or an index-§2 family.
   Same family as `held_by_cxx` asserting its holder exists. **Falsify by**
   `scripts/ci/check_followups_owners.py` existing and refusing a row whose
@@ -551,7 +561,7 @@ states is now gated, and the ingest crate must not enable it.
 
 ## 7. Commit plan (sketch; Round 1 fixes it)
 
-0. `ci: check_followups_owners.py — a deferral's owner must resolve (live doc, open PR, or index family); Owner: sub-bullet convention; existing rows grandfathered by exact hit` (RD-F4). First, because the lane it protects against is the one this plan was opened to repair.
+0. `ci: check_followups_owners.py — a deferral's owner must resolve (live doc or index family; a PR alone is not an owner); Owner: sub-bullet convention; existing rows grandfathered by exact hit` (RD-F4) — **LANDED** (built alongside commits 1–6 while #792 held the FOLLOWUPS file; ordered first in this list because the lane it protects against is the one this plan was opened to repair).
 1. `chain-store: WriteBatch::refuse_corrupt — the validator's Corrupt arms the halt` (RD-Q4; new SI rows; withdraws the FOLLOWUPS row). **Its commit message states that this is the API #785's commit 9 shed and why it waited: the deferral was circular ("no caller") until the caller was scheduled, and the API arrives with the driver that shapes it — value in, inside the batch — rather than guessed at from the store side.** A reader landing here from #785's FOLLOWUPS row gets the reason, not a reconstruction.
 2. `chain-store: ReadSnapshot::logical_state_digest_v0 — the redb half of E2` (RD-F5).
 3. `ingest: shekyl-chain-ingest scaffold — Source trait, pipeline stages, production Substrate over shekyl-pow-randomx's compute_hash (no pool; RD-F14)` (RD-Q1, RD-Q3).
