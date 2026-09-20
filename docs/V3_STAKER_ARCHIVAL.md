@@ -70,11 +70,12 @@ to be held by *someone* or it is gone. Rescan from seed, audit, and dispute all
 need it. Foundation-only retention is a centralization concern; discarding
 without a distributed holder is a data-loss concern.
 
-*(This paragraph replaces an earlier "Problem 2" that said FCMP++ proof
-construction needs historical tree state served by archival nodes. That was
-false — the tree is complete on every node and spending never touches pruned
-regions; the corrected problem is the **retrievability of complete
-transactions**. `PDM-Q6` and `WSS-1`.)*
+*Not* "FCMP++ proof construction needs historical tree state served by
+archival nodes": that claim is false — the tree is complete on every node and
+spending never touches pruned regions — so it is not a problem this design
+solves. The problem is the **retrievability of complete transactions**
+(`PDM-Q6`, `WSS-1`).
+
 These two problems have a joint solution: **stakers archive the chain.**
 Stakers' unique properties — long-term presence, bonded reputation, and
 long-horizon economic incentive — make them the only network actor
