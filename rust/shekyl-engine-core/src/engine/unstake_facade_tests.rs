@@ -649,3 +649,34 @@ fn per_slot_zero_does_not_forge_lane_wide_completion() {
         "a live persona's funding is not an uncollected exit pool"
     );
 }
+
+// ── WSS-Q14 class-C observation ─────────────────────────────────────────
+//
+// `submit_release` gates the exit on the sync witness before it reads the
+// bond record as truth. The refusal's **public disposition** is observable
+// here; the full-path bite (drive `submit_release` against a syncing
+// transport and watch it decline) is owed and blocked — that method hangs
+// off the seven-generic `Engine`, and this crate has no async `Engine`
+// fixture to drive it with. Falsifier: when one exists, write it.
+//
+// What this does observe is not nothing, and it is the half that a caller
+// actually sees: an exit refused for sync reasons must arrive at the public
+// boundary as `Resyncing` (wait and retry), never as `NoBondRecord` (you
+// have nothing staked) — the two send an operator to opposite places.
+
+/// The sync refusal reaches the public boundary as the resyncing
+/// disposition, carrying a detail that names the daemon.
+///
+/// This bites against the refusal being flattened onto a wrong-remedy arm;
+/// it does **not** observe `submit_release` itself declining.
+#[test]
+fn a_sync_refusal_flattens_to_the_resyncing_disposition() {
+    let flattened = super::flatten_unstake_error(ReleaseRequestError::DaemonSyncing);
+    match flattened {
+        UnstakeError::Resyncing { detail } => assert!(
+            detail.contains("synchroniz"),
+            "the detail must name the daemon's state so the remedy is legible: {detail}"
+        ),
+        other => panic!("a sync refusal must not present as a different remedy: {other:?}"),
+    }
+}
