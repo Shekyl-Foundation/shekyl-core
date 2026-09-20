@@ -202,7 +202,7 @@
                   {
                     "name": "anchor_t0",
                     "ty": {
-                      "name": "BlockHeight",
+                      "name": "ChainCount",
                       "ty": {
                         "NewtypeStruct": {
                           "name": "u64",
@@ -245,7 +245,7 @@
                                 {
                                   "name": "at",
                                   "ty": {
-                                    "name": "BlockHeight",
+                                    "name": "ChainCount",
                                     "ty": {
                                       "NewtypeStruct": {
                                         "name": "u64",
@@ -472,7 +472,7 @@
                                 {
                                   "name": "at",
                                   "ty": {
-                                    "name": "BlockHeight",
+                                    "name": "ChainCount",
                                     "ty": {
                                       "NewtypeStruct": {
                                         "name": "u64",
@@ -699,7 +699,7 @@
                                 {
                                   "name": "at",
                                   "ty": {
-                                    "name": "BlockHeight",
+                                    "name": "ChainCount",
                                     "ty": {
                                       "NewtypeStruct": {
                                         "name": "u64",
@@ -926,7 +926,7 @@
                                 {
                                   "name": "at",
                                   "ty": {
-                                    "name": "BlockHeight",
+                                    "name": "ChainCount",
                                     "ty": {
                                       "NewtypeStruct": {
                                         "name": "u64",
