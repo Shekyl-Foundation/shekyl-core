@@ -510,3 +510,82 @@ fn the_fold_reads_return_exactly_what_connect_wrote() {
     );
     cleanup(&path);
 }
+
+// ------------------------------------------------ DRS-E2 RD-F5: the digest
+
+#[test]
+fn an_empty_file_digests_as_no_hashes_no_spends_and_the_empty_root() {
+    let path = tmp("read-digest-empty");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let snap = store.begin_read().expect("read");
+    assert_eq!(
+        snap.logical_state_digest_v0().expect("digest"),
+        crate::digest_v0::digest_v0(&[], &[], CurveTreeRoot::EMPTY.as_bytes())
+    );
+    cleanup(&path);
+}
+
+#[test]
+fn the_redb_digest_is_the_hasher_over_the_files_three_families() {
+    // The same three families the C++ walker hands the FFI, read from the
+    // redb file: height-ordered block hashes, the spent-key set, and the
+    // live root — `curve_tree_roots[tip + 1]`, the state after the tip's
+    // drain (SCW-19), which is `facts(tip).root_after`.
+    let path = tmp("read-digest-chain");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    let hashes = connect_chain(
+        &store,
+        &[vec![], vec![spend(0x5e, 1)], vec![spend(0x5f, 1)]],
+    );
+    let snap = store.begin_read().expect("read");
+    let by_hand = {
+        let blocks: Vec<[u8; 32]> = hashes.iter().map(|h| *h.as_bytes()).collect();
+        let spent = [[0x5e; 32], [0x5f; 32]];
+        crate::digest_v0::digest_v0(&blocks, &spent, facts(2, 0).root_after.value.as_bytes())
+    };
+    assert_eq!(snap.logical_state_digest_v0().expect("digest"), by_hand);
+    // Order-insensitive in the spent family, as the hasher promises.
+    let swapped = crate::digest_v0::digest_v0(
+        &hashes.iter().map(|h| *h.as_bytes()).collect::<Vec<_>>(),
+        &[[0x5f; 32], [0x5e; 32]],
+        facts(2, 0).root_after.value.as_bytes(),
+    );
+    assert_eq!(by_hand, swapped);
+    cleanup(&path);
+}
+
+#[test]
+fn the_digest_moves_when_any_family_moves() {
+    // Negative control (rule 47): a comparison that cannot go red proves
+    // nothing. One more block with one more spend changes it; the previous
+    // chain's digest is not the new one.
+    let path = tmp("read-digest-moves");
+    let store = ChainStore::create(&path, EPOCH).expect("create");
+    connect_chain(&store, &[vec![], vec![spend(0x5e, 1)]]);
+    let before = store
+        .begin_read()
+        .expect("read")
+        .logical_state_digest_v0()
+        .expect("digest");
+    let tip = store
+        .begin_read()
+        .expect("read")
+        .tip()
+        .expect("tip")
+        .recorded
+        .expect("two blocks");
+    let out: Result<(), TestErr> = store.write(|batch| {
+        let view = batch.chain_view();
+        let cand = candidate(2, tip.hash, vec![spend(0x60, 1)]);
+        batch.connect(judge(&view, cand)?, facts(2, 0), RuleSetId::GENESIS)?;
+        Ok(())
+    });
+    out.expect("connects");
+    let after = store
+        .begin_read()
+        .expect("read")
+        .logical_state_digest_v0()
+        .expect("digest");
+    assert_ne!(before, after);
+    cleanup(&path);
+}

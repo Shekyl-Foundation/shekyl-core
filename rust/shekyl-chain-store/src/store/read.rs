@@ -39,13 +39,15 @@
 
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, Tip};
-use shekyl_types::{BlockHash, BlockHeight, GlobalOutputIndex, KeyImage, LongTermWeight};
+use shekyl_types::{
+    BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
+};
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
 
 use crate::codec::{BlockInfo, OutTx, PropertyCell, TotalBurnedCell};
 use crate::lmdb_order::LmdbHashKey;
-use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, PROPERTIES, SPENT_KEYS};
+use crate::schema::{BLOCK_BURN, BLOCK_HEIGHTS, CURVE_TREE_ROOTS, PROPERTIES, SPENT_KEYS};
 
 use super::at_index::AtIndex;
 use super::output_reads::{self, RecordedOutput};
@@ -475,6 +477,78 @@ impl ReadSnapshot<'_> {
                 .map(|(key, _present)| KeyImage::from_bytes(key.value().to_bytes()))
                 .map_err(|e| StoreError::from(EngineError::Storage(e)))
         }))
+    }
+
+    // ------------------------------------------------------------------
+    // DRS-E2 (`DRS_E2_REPLAY_DRIVER.md` RD-F5): the redb half of the digest.
+    // ------------------------------------------------------------------
+
+    /// The layout-independent logical state digest v0 of **this** file —
+    /// the redb half of DRS-E2's comparison. The C++ half is
+    /// `BlockchainLMDB::logical_state_digest_v0` walking LMDB into the same
+    /// hasher through `shekyl_logical_state_digest_v0`; until this method
+    /// existed the hasher had one caller and E2 had one side (RD-F5).
+    ///
+    /// The three families, assembled from the reads the rules already
+    /// depend on, so the digest cannot see a table the validator does not:
+    ///
+    /// - **block hashes**, height-ordered — `block_info[h].hash` for
+    ///   `h ∈ 0..=tip` (the same rows R3 reads);
+    /// - **spent keys** — the `spent_keys` scan K2 exists for
+    ///   ([`key_images`](Self::key_images); the fold is order-insensitive);
+    /// - **the live curve-tree root** — `curve_tree_roots[tip + 1]`, the
+    ///   state *after* the tip's drain, which is what the C++'s single
+    ///   `"root"` cell holds (`db_lmdb.cpp:9495`) and what `connect` wrote
+    ///   from `root_after` (SCW-19); [`CurveTreeRoot::EMPTY`] for an empty
+    ///   chain, where nothing has been written and the C++ cell is the
+    ///   identity.
+    ///
+    /// What the digest *proves* is the grader's business, not this read's:
+    /// under RD-Q9 the root component is **borrowed** while `root_after` is
+    /// passed through (it is LMDB's root copied in), so identity there is
+    /// never evidence; the block hashes and spent keys are real replay
+    /// products. This method reports the file; the grader carries the
+    /// per-component origin.
+    ///
+    /// # Errors
+    ///
+    /// A hole or undecodable row inside the dense ranges is SI-7 (a
+    /// [`StoreInvariant::CellCorrupt`]); engine errors pass through. On a
+    /// read-only snapshot nothing is poisoned — the caller decides what a
+    /// corrupt file means for its run.
+    pub fn logical_state_digest_v0(&self) -> Result<[u8; 32], StoreError> {
+        let tip = self.tip_row()?;
+        let mut hashes: Vec<[u8; 32]> = Vec::new();
+        if let Some((tip_height, _)) = tip {
+            let end = BlockHeight::from_raw(tip_height.saturating_add(1));
+            if let AtHeight::Recorded(rows) = self.block_infos(BlockHeight::ZERO..end)? {
+                for row in rows {
+                    let (_, info) = row?;
+                    hashes.push(*info.hash.as_bytes());
+                }
+            }
+        }
+        let mut spent: Vec<[u8; 32]> = Vec::new();
+        for key_image in self.key_images()? {
+            spent.push(*key_image?.as_bytes());
+        }
+        let root = match tip {
+            None => CurveTreeRoot::EMPTY,
+            Some((tip_height, _)) => {
+                let key = tip_height.saturating_add(1);
+                chain_reads::cell(&self.txn, CURVE_TREE_ROOTS, key, "curve_tree_roots")
+                    .map_err(chain_reads::ReadFault::into_plain)?
+                    .ok_or(StoreInvariant::CellCorrupt {
+                        key: "curve_tree_roots",
+                        fault: CellFault::Absent,
+                    })?
+            }
+        };
+        Ok(crate::digest_v0::digest_v0(
+            &hashes,
+            &spent,
+            root.as_bytes(),
+        ))
     }
 
     // ------------------------------------------------------------------
