@@ -22493,7 +22493,7 @@ production callers.
   [`docs/CI_BASELINE.md`](./CI_BASELINE.md) cluster C.
 
 - **`DaemonClient::inner()` accessor** in
-  [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon.rs).
+  [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon/mod.rs).
   The method exposed the wrapped `SimpleRequestRpc` so callers
   could invoke `Rpc` methods through it; with the Stage 1 PR 1
   parameterization, `DaemonClient` implements `Rpc` directly and
