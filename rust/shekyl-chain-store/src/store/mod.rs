@@ -98,6 +98,7 @@ mod output_reads;
 mod pop;
 mod read;
 mod shared;
+mod tx_reads;
 pub(crate) mod undo;
 mod view;
 mod write;
@@ -111,7 +112,8 @@ pub use halt::ConnectState;
 pub use keyed::{InsertOnce, InsertTable, KeyedTable, Overwrite, UpsertTable};
 pub use output_reads::RecordedOutput;
 pub use pop::Popped;
-pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState};
+pub use read::{RangeItem, RawBlockBytes, ReadSnapshot, RecordedBlockBody, TipState, TxWalkItem};
+pub use tx_reads::{Prunable, SegmentBytes, TxLocation, TxRecord};
 pub use undo::Restorable;
 pub use view::BatchView;
 pub use write::WriteBatch;
@@ -553,3 +555,6 @@ mod read_tests;
 #[cfg(test)]
 #[path = "output_read_tests.rs"]
 mod output_read_tests;
+#[cfg(test)]
+#[path = "tx_read_tests.rs"]
+mod tx_read_tests;
