@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "WSS-Q1(b) grading harness: spend-edge delta and open-edge refetch, measured at the ruled prover boundary"
+# Stamps the git revision into the run record's `prover_pin`. §6.3.4 re-grades
+# on a material prover-pin change, and a pin that names only the crate version
+# cannot tell a later reader whether an old record still applies.
+build = "build.rs"
 
 [dependencies]
 # The prover the denominator is defined as (`WALLET_SIDE_STORE.md` §6.3.4:

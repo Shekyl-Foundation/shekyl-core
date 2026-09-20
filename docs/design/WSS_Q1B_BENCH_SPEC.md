@@ -506,14 +506,27 @@ of them say something the rig run will not change.
 | Term | Value |
 | --- | --- |
 | Window | 765 600 leaves over 725 blocks (1 056 leaves/block at depth 6) |
-| Replay | **96.8 s**, converged |
+| Replay | **73.9 s**, converged |
 | Path read-off + `Path` construction | 0.001 s |
-| **Delta** | **96.8 s** |
-| **Denominator** (`proof::prove`, 2-in, depth 6) | **1.113 s**, converged |
+| **Delta** | **73.9 s** |
+| **Per-block amortized advance** | **102 ms** |
+| **Denominator** (`proof::prove`, 2-in, depth 6) | **1.118 s**, converged |
 | Threshold | **2.0 s** — the **absolute floor** binds, the 15 % arm is 0.17 s |
-| Ratio | 8 699 % |
+| Ratio | 6 609 % |
 
-**Read it as: ~48× over budget on hardware far faster than the rig.** The
+**Two runs, and the difference is the rig protocol arguing for itself.** An
+earlier run of the same corpus measured **96.8 s** — 31 % higher — because it
+was sharing the box with a C++ daemon compile. The figures above are from a
+quiet machine. Nothing about the finding changes, but the swing is larger than
+many thresholds are, which is the concrete case for §5.2's *sustained, quiet,
+to steady state* discipline: **a run that shares its machine measures the
+other job too.** Both runs are reported rather than only the favourable one.
+
+The denominator reproduced to **0.4 %** across the two runs (1.113 s and
+1.118 s), which is the reassuring half of the same comparison: the prover is
+stable, the replay is what the contention moved.
+
+**Read it as: ~37× over budget on hardware far faster than the rig.** The
 direction is not in doubt even though the magnitude on a Cortex-A72 is, so
 §6.3.4 row 2's pre-registered miss response — **amortized replay first** — is
 the likely landing, and `WSS-Q1`(b) reopens only if the amortized form also
@@ -530,8 +543,12 @@ transaction at depth 6 is **1.113 s on x86**. Not the Cortex-A72 figure the
 project wants — that needs the rig — but the first measured number of its kind
 here, and the rig run yields the A72 one for free.
 
-**The sparse-path control held at every rung run:** −1.4 % at depth 3, +0.2 %
-and +0.0 % at depth 4.
+**The sparse-path control held at every rung, and the ratio is flat across
+two:** −0.0 % at depth 4 (25 993 leaves) and **+0.3 % at depth 5** (467 857
+leaves), plus −1.4 % and +0.2 % at depth 3 and 4 in earlier runs. Flatness
+across adjacent rungs is what licenses the next one, so the record reads
+*"synthesized sparse, one rung above the deepest control arm"* — the claim it
+is entitled to, not "licensed by the control".
 
 ### 7.2 Open edge — comfortably inside budget, and round-trip bound
 
