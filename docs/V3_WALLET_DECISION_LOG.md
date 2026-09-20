@@ -5613,8 +5613,8 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   2026-09-18).** `frozen_segment_count(leaf_count) = ⌊leaf_count /
   SEGMENT_LEAF_COUNT⌋` (`shekyl-archival-retention/src/segment_freeze.rs:12–13`)
   is *"deterministic in its one consensus input (O-1)"*; ~~bond admission
-  reads it to decide which `shard_id`s are admissible~~ **— corrected
-  2026-09-19: it does not. `frozen_segment_count`'s three consumers are the
+  reads it to decide which `shard_id`s are admissible~~ — **corrected
+  2026-09-19: it does not.** `frozen_segment_count`'s three consumers are the
   D2 escalation operand (`blockchain.cpp:1502`), the coverage RPC
   (`archival_shard_coverage.cpp:34`) and the freeze / pop-revert path
   (`db_lmdb.cpp:8090`); none is bond admission, and `ShardSet::new`
@@ -5622,7 +5622,7 @@ fingerprint; short of that, the rejection is not revisited on latency grounds.
   Bond admission's shard predicate was RULED 2026-09-19 and is being **built,
   not ported** —
   [`ARCHIVAL_BOND_ADD_ADMISSION.md`](design/ARCHIVAL_BOND_ADD_ADMISSION.md)
-  §3.** And pop revert
+  §3. And pop revert
   deletes exactly the rows with `shard_id ≥ frozen_segment_count(post_trim)`
   (O-3); both daemon hooks consume it via
   `shekyl_archival_frozen_segment_count`. A divergent partition therefore
