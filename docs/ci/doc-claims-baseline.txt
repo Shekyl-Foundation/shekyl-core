@@ -98,3 +98,4 @@ dead-citations: 47
 # adding a leg costs one line here — the same deliberate act as everything
 # else in this file, and the gate prints the exact line to paste.
 declares: docs/LMDB_WRITE_ATOMICITY_AUDIT.md citations,counts,numbered,range:DRS-W,sections,series:DRS-W,series:R
+declares: docs/design/HEIGHT_SEMANTICS.md citations
