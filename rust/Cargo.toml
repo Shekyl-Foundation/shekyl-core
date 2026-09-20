@@ -20,6 +20,14 @@ members = [
     # labelled at birth). See docs/design/SP_T3_SKELETON_MEASUREMENT.md.
     "shekyl-sp-t3-spike",
 
+    # WSS-Q1(b) grading harness. NOT a spike: `WALLET_SIDE_STORE.md` §6.3.4
+    # requires a re-grade on a material prover-pin change, so this one must
+    # outlive its first run and keep compiling -- the opposite lifecycle to the
+    # `-spike` crates above. `shekyl-economics-sim` is the precedent. Nothing in
+    # the production graph may depend on it; `scripts/ci/check_bench_not_a_dependency.py`
+    # is what enforces that.
+    "shekyl-wss-q1b-bench",
+
     # DISPOSABLE measurement spike (§94): Tor transit, onion-to-onion, one-way.
     # Named `-spike` on purpose -- nothing in it is canonical and it is deleted
     # once `ANON_ZONE_TRANSIT_MEASURED_MS` lands (rule 15: debt, labelled at
