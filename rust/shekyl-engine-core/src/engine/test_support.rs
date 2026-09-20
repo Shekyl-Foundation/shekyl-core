@@ -296,6 +296,10 @@ struct State {
     /// Errors queued for upcoming `get_height` calls (FIFO). Once
     /// drained, subsequent calls return the canonical height.
     height_errors: VecDeque<RpcError>,
+    /// When set, `get_info` answers as an UNSYNCHRONIZED daemon
+    /// (`WSS-Q14`). Drives the refusal bites on every consumer of
+    /// `daemon_claimed_tip`.
+    daemon_syncing: bool,
     /// Per-height error queues for `fetch_scannable_block`.
     /// FIFO; once a height's queue is drained, subsequent fetches
     /// at that height return the canonical block.
@@ -367,6 +371,7 @@ impl State {
             chain: Vec::new(),
             daemon_height_cap: None,
             height_errors: VecDeque::new(),
+            daemon_syncing: false,
             block_errors: HashMap::new(),
             malformed_at: HashSet::new(),
             reorgs_after_fetch: VecDeque::new(),
@@ -404,11 +409,25 @@ fn default_fee_estimates() -> FeeEstimates {
 /// value — the watchdog health-gate and health-failure paths are driven
 /// by the hermetic `StubDaemon` in the `submit_lifecycle` test module,
 /// which controls both health facts and submit outcomes.
+/// The hash of the block at `height` on every test fixture's chain.
+///
+/// One derivation, deliberately: `get_info`'s `top_block_hash` and
+/// `get_block_hash(height)` must agree on an unbroken chain, and the ledger's
+/// continuity check is exactly the comparison between them. Four fixtures
+/// with four derivations would make that agreement a coincidence to
+/// maintain. A fork fixture answers something else on purpose.
+pub fn test_block_hash_at(height: u64) -> [u8; 32] {
+    let mut h = [0xB1u8; 32];
+    h[..8].copy_from_slice(&height.to_le_bytes());
+    h
+}
+
 fn default_health() -> DaemonHealth {
     DaemonHealth {
         connections: 8,
         height: 0,
         target_height: 0,
+        synchronized: true,
     }
 }
 
@@ -521,6 +540,18 @@ impl TestDaemon {
             .lock()
             .expect("TestDaemon state poisoned")
             .daemon_height_cap = Some(cap);
+    }
+
+    /// Answer `get_info` as a daemon that is still synchronizing.
+    ///
+    /// The lever every `WSS-Q14` refusal bite pulls: with this set, the
+    /// daemon has no tip to claim, so `daemon_claimed_tip` and every
+    /// consumer of it must decline rather than stamp a post.
+    pub fn set_daemon_syncing(&self, syncing: bool) {
+        self.state
+            .lock()
+            .expect("TestDaemon state poisoned")
+            .daemon_syncing = syncing;
     }
 
     /// Queue `n` errors to be returned by the next `n`
@@ -638,6 +669,74 @@ impl Rpc for TestDaemon {
                  add the override rather than implementing post()."
             )
         }
+    }
+
+    /// `get_info`, answered as a **synchronized** daemon at this double's
+    /// height — the override `post`'s panic message asks for rather than a
+    /// `post` implementation.
+    ///
+    /// `daemon_claimed_tip` reads sync state and height from one `get_info`
+    /// (`WSS-Q14`), so the double has to answer it or every dispatch path
+    /// panics. Synchronized is the right default: every existing scenario was
+    /// written against a daemon whose tip is authoritative, and answering
+    /// otherwise would silently disable the release/post paths under test.
+    /// The unsynchronized timeline has its own fixtures
+    /// (`serve_set_source.rs`'s `ResyncingDaemon`).
+    ///
+    /// `height` honours [`Self::set_daemon_height_cap`] so both clocks agree.
+    /// It deliberately does **not** drain `height_errors`: that queue's
+    /// contract is `get_height`'s, pinned FIFO by
+    /// `height_errors_drain_in_fifo_then_recover`, and draining it from two
+    /// methods would make the order depend on which clock a test happened to
+    /// read first.
+    fn json_rpc_call<Response: serde::de::DeserializeOwned + std::fmt::Debug>(
+        &self,
+        method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> impl Send + std::future::Future<Output = Result<Response, RpcError>> {
+        let state = self.state.clone();
+        let method = method.to_string();
+        async move {
+            if method != "get_info" {
+                return Err(RpcError::InternalError(format!(
+                    "TestDaemon has no json_rpc_call override for '{method}': add one rather \
+                     than implementing post()"
+                )));
+            }
+            let (height, syncing) = {
+                let state = state.lock().expect("TestDaemon state poisoned");
+                let chain_len = state.chain.len() as u64;
+                let h = state
+                    .daemon_height_cap
+                    .map(|cap| cap.min(chain_len))
+                    .unwrap_or(chain_len);
+                (h, state.daemon_syncing)
+            };
+            serde_json::from_value(serde_json::json!({
+                "height": height,
+                // A daemon that is behind reports a target above its height
+                // AND clears its own flag; answering only one of the two
+                // would test a state no daemon produces.
+                "target_height": if syncing { height + 10_000 } else { 0 },
+                "synchronized": !syncing,
+                // The newest block is at height - 1 (count vs tip); an empty
+                // chain has no top block, so it reports the null hash.
+                "top_block_hash": hex::encode(test_block_hash_at(height.saturating_sub(1))),
+                "outgoing_connections_count": 8,
+                "incoming_connections_count": 0,
+            }))
+            .map_err(|e| RpcError::InvalidNode(format!("TestDaemon get_info shape: {e}")))
+        }
+    }
+
+    /// The block at `number`, on the same chain `get_info` describes — so a
+    /// ledger that re-reads its anchor finds it unchanged unless a test says
+    /// otherwise.
+    fn get_block_hash(
+        &self,
+        number: usize,
+    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+        async move { Ok(test_block_hash_at(number as u64)) }
     }
 
     fn get_height(&self) -> impl Send + std::future::Future<Output = Result<usize, RpcError>> {

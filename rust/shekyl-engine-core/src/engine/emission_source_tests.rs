@@ -547,3 +547,161 @@ fn unknown_holdings_kind_is_loud() {
         Err(EmissionSourceError::Malformed(_))
     ));
 }
+
+// ── The bracket: a vouched view is minted only between two identical
+// readings of the witness block ────────────────────────────────────────
+
+/// A daemon that answers the three reads a vouching takes, records the
+/// order it was asked in, and answers the bracket's re-read with whatever
+/// the test says the chain reports **now** at the witness tip.
+#[derive(Clone)]
+struct BracketDaemon {
+    record: std::sync::Arc<Value>,
+    at_tip_now: [u8; 32],
+    calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+/// The witness answers at this count, so its tip is one below.
+const WITNESS_COUNT: u64 = 30_001;
+
+impl BracketDaemon {
+    fn new(record: Value, at_tip_now: [u8; 32]) -> Self {
+        Self {
+            record: std::sync::Arc::new(record),
+            at_tip_now,
+            calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().expect("call log").clone()
+    }
+}
+
+impl Rpc for BracketDaemon {
+    fn get_block_hash(
+        &self,
+        number: usize,
+    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+        self.calls
+            .lock()
+            .expect("call log")
+            .push(format!("get_block_hash({number})"));
+        let now = self.at_tip_now;
+        async move { Ok(now) }
+    }
+
+    fn post(
+        &self,
+        route: &str,
+        body: Vec<u8>,
+    ) -> impl Send + std::future::Future<Output = Result<Vec<u8>, RpcError>> {
+        let method = serde_json::from_slice::<Value>(&body)
+            .ok()
+            .and_then(|v| v.get("method").and_then(|m| m.as_str()).map(str::to_owned))
+            .unwrap_or_default();
+        self.calls.lock().expect("call log").push(method.clone());
+        let result = if method == "get_info" {
+            json!({
+                "height": WITNESS_COUNT,
+                "target_height": 0,
+                "synchronized": true,
+                "top_block_hash": hex::encode(
+                    crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),
+                ),
+                "outgoing_connections_count": 8,
+                "incoming_connections_count": 0,
+            })
+        } else {
+            (*self.record).clone()
+        };
+        let reply = serde_json::to_vec(&json!({ "result": result })).expect("fixture encodes");
+        let ok = route == "json_rpc";
+        async move {
+            if ok {
+                Ok(reply)
+            } else {
+                Err(RpcError::InternalError("unexpected route".into()))
+            }
+        }
+    }
+}
+
+/// The fixture record, re-stamped as gathered at `count` — the decoder
+/// cross-checks the settled epoch against it, so both move together.
+fn record_at(count: u64) -> Value {
+    let mut v = fixture();
+    v["chain_height"] = json!(count);
+    v["current_settled_epoch"] =
+        json!(shekyl_archival_retention::settlement_epoch_at_height(count));
+    v
+}
+
+/// **The catch-back-up reorg the heights cannot see.** The record answers
+/// one block *above* the witness — ordinary advance, by the heights — but
+/// the block the witness stood on has been replaced in between. Nothing
+/// vouches for that record.
+///
+/// The edit that turns this red is `bracket` accepting any hash. The
+/// control is the same sequence on an unbroken chain, which vouches — so
+/// the refusal is the comparison and not a bracket that refuses everything.
+#[tokio::test]
+async fn a_witness_block_replaced_during_the_record_read_is_not_vouched() {
+    let witness_block = crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1);
+
+    let replaced = BracketDaemon::new(record_at(WITNESS_COUNT + 1), [0xFF; 32]);
+    let vouched = fetch_vouched_claim_source(&replaced, &[7; 32])
+        .await
+        .expect("the record itself reads");
+    assert!(
+        matches!(
+            vouched.vouching(),
+            Vouching::Broken(TimelineBreak::WitnessBlockReplaced)
+        ),
+        "a record read across a replaced witness block is not vouched: {:?}",
+        vouched.vouching()
+    );
+    assert_eq!(
+        vouched.actionable().expect_err("not actionable"),
+        TimelineBreak::WitnessBlockReplaced
+    );
+
+    let unbroken = BracketDaemon::new(record_at(WITNESS_COUNT + 1), witness_block);
+    let vouched = fetch_vouched_claim_source(&unbroken, &[7; 32])
+        .await
+        .expect("the record itself reads");
+    assert!(
+        matches!(vouched.vouching(), Vouching::Vouched(_)),
+        "the same advance on an unbroken chain vouches: {:?}",
+        vouched.vouching()
+    );
+    assert!(vouched.actionable().is_ok());
+}
+
+/// **The bracket straddles the record, at the witness height.** A re-read
+/// before the record would be a second pre-read and prove nothing about the
+/// interval the record was gathered in; a re-read at the *tip* would refuse
+/// every honest advance. The order and the height are the whole content.
+///
+/// The edit that turns this red is issuing the re-read before the record
+/// request, or reading `get_info` again instead of the block at the witness
+/// tip.
+#[tokio::test]
+async fn the_bracket_re_reads_the_witness_block_after_the_record() {
+    let daemon = BracketDaemon::new(
+        record_at(WITNESS_COUNT),
+        crate::engine::test_support::test_block_hash_at(WITNESS_COUNT - 1),
+    );
+    fetch_vouched_claim_source(&daemon, &[7; 32])
+        .await
+        .expect("reads");
+    assert_eq!(
+        daemon.calls(),
+        vec![
+            "get_info".to_string(),
+            EMISSION_CLAIM_SOURCE_METHOD.to_string(),
+            format!("get_block_hash({})", WITNESS_COUNT - 1),
+        ],
+        "witness, then record, then the witness block re-read at its own height"
+    );
+}

@@ -32,6 +32,58 @@
 
 - **The committed-chain read surface (S-CHAIN-R, DRS-E1 increment 4, PR #772).** `ReadSnapshot` gains nine typed reads (`tip`, `height_of`, `block_info`, `block_infos`, `block_blob`, `block`, `blocks`, `block_burn`, `total_burned`) plus `cumulative_tx_count` / `long_term_effective_median`; `TipState` carries the writer's halt beside the recorded tip. Store layout `SCHEMA_VERSION 2 → 5` (typed value shapes, `DAEMON_REDB_STORE.md` §11.1(f); `BlockInfo` 88 → 104 B; the seal creates every table with a writer; `txs_pqc_auth_hash`; `spent_keys` is `Present`). Pre-genesis: an existing redb store file is refused at open and rebuilt, per §11.1(a).
 
+### Wallet
+
+- **"Synchronized" is a type the release gate must hold
+  (`WALLET_SIDE_STORE.md` `WSS-Q14`, closing `WSS-25`).** New
+  `SyncedChainFacts` in `shekyl-engine-core`: its sole constructor yields
+  chain facts only when the daemon reports itself synchronized, so acting on
+  an unsynchronized view is a compile error rather than a missing branch.
+  The archival serve-set **release gate** now takes it — during a daemon
+  resync (which the C++→Rust cutover forces on every daemon) the bond record
+  answers at pre-bond heights while the answering height climbs through
+  settlement-epoch opens, and the gate would have noted every held shard
+  absent and released all of them. It now records **no absence observations
+  and releases nothing** while the daemon is syncing or unreachable. Harmless
+  today (a release only unpins); this lands before the wallet-side store, in
+  which release deletes and the failure is an honest archiver wiping its
+  holdings and being slashed while it refills. The submit watchdog's `is_synced` — until now the wallet's only reading of
+  sync state — and this constructor now call one shared predicate,
+  `daemon_reports_synchronized`, so the two cannot disagree. No RPC or wire change.
+
+  **Every consensus-derived read of a daemon height now passes through the
+  witness**, not only the release gate. `daemon_claimed_tip` — the one derivation six
+  consumers read their clock through (`anchor_t0`, the claim / drain /
+  release dispatch stamps, both `BlockSource::tip_height` impls, and the
+  pscan finality horizon) — consumes the witness and yields the claimed clock only when one could be
+  minted, refusing otherwise with a named `DaemonSyncing`, so a post cannot be
+  stamped on a resync height. Claim
+  assembly refuses before signing, and the exit path refuses before reading
+  a bond record as an exit verdict; both surface as "resyncing, retry",
+  never as "you have nothing staked". `SyncedChainFacts` and the `get_info`
+  decode now live inside the `engine::daemon` module tree, beside the client
+  they are built from. Proof **verification** is not yet gated: a new
+  refusal there needs a `-293xx` JSON-RPC contract code, which is the wallet
+  RPC contract's surface, not this change's.
+
+  **The vouching is bracketed, and the ledger has an identity.** A vouched
+  view is minted only between two identical readings of the block the sync
+  witness stood on — that block is re-read *after* the record
+  (`SyncedChainFacts::bracket`), so a reorg that crosses the witness tip and
+  catches back up cannot pass as ordinary advance; what the bracket does not
+  cover is named on it, and its closing fix (the claim-source reply carrying
+  its own gather-tip hash) is filed to the daemon-RPC lane. The departure
+  ledger rests on the hash of the block at its observed height, re-read
+  before any observation is carried across, and hears every vouched
+  observation whatever the holdings kind — a `CompleteTree` record owes
+  everything, which forgets the absence clocks a compact record started. The
+  `get_info` decode's error contract is `GetInfoFault`, one member per
+  mandatory field, every member a node fault and never a transport failure.
+  The anchor gate's daemon-tip reading (`WSS-24`, #791, which landed first
+  with its own copy of the sync conjunction) now decodes through the same
+  decoder and takes its verdict from the same predicate, which also closes
+  its absent-`target_height`-reads-as-synchronized default.
+
 ### Consensus
 
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6
@@ -22535,7 +22587,7 @@ production callers.
   [`docs/CI_BASELINE.md`](./CI_BASELINE.md) cluster C.
 
 - **`DaemonClient::inner()` accessor** in
-  [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon.rs).
+  [`engine::daemon`](../rust/shekyl-engine-core/src/engine/daemon/mod.rs).
   The method exposed the wrapped `SimpleRequestRpc` so callers
   could invoke `Rpc` methods through it; with the Stage 1 PR 1
   parameterization, `DaemonClient` implements `Rpc` directly and
