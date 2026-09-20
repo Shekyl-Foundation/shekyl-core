@@ -54,16 +54,23 @@ on:
   pull_request:
     branches: [dev]
     paths:
-      - "rust/shekyl-engine-state/**"
-      - "rust/shekyl-chain-store/**"
-      # `Canonical`, the value shapes and the codecs for types the store
-      # does not own live here (CTS-Q2); their fixtures stay committed
-      # under `shekyl-chain-store/schemas/` and still pair with
-      # SCHEMA_VERSION, so a byte change there must run this gate.
-      # `workflow_gates_this_crate` asserts this line.
-      - "rust/shekyl-store-codec/**"
-      - "rust/Cargo.lock"
-      - "rust/Cargo.toml"
+      # The gate's subject is every crate whose code can change a byte a
+      # `.snap` pins: the codecs themselves (`shekyl-store-codec`, the chain
+      # store's own, the wallet's in `shekyl-engine-state`) and everything
+      # they encode *through* -- `to_raw` / `as_bytes` on the `shekyl-types`
+      # and `shekyl-units` vocabulary, `RuleSetId` in `shekyl-chain-rules`,
+      # `CumulativeDifficulty` in `shekyl-difficulty`, the block parse in
+      # `shekyl-wire`, and their own dependencies down to the vendored
+      # `shekyl-oxide` crates. That closure is twelve first-party crates
+      # plus vendored ones today and moves whenever a manifest does. Every
+      # first-party and vendored crate is a path dependency under `rust/`
+      # (rule 25), so `rust/**` is the closure by construction -- there is no
+      # list here to drift. `workflow_gates_this_crate` derives the closure
+      # from the manifests and asserts this trigger covers each member, so
+      # narrowing this pattern goes red. An external encoder changing (a
+      # `redb` bump that re-renders `TypeName`, say) arrives as a lock-file
+      # change, which is under the same pattern.
+      - "rust/**"
       - ".github/workflows/schema-snapshot.yml"
 
 # Superseded-run cancellation (house pattern: economics-c2a-prime.yml).

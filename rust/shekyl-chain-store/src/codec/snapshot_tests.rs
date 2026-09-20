@@ -1031,6 +1031,118 @@ fn scan_impls(dir: &Path, out: &mut BTreeSet<String>) {
     }
 }
 
+/// Directories under `rust/` whose code sits on the path from a stored
+/// value to its bytes: this crate and the closure of its **normal**
+/// path dependencies, walked from the manifests — the same source cargo
+/// resolves from — so a new edge is found without anyone listing it.
+/// Dev- and build-dependencies are excluded: they cannot change a byte the
+/// production binary writes. Members are directories relative to `rust/`,
+/// not crate names, so the vendored `shekyl-oxide/crypto/*` crates the
+/// closure reaches are held to the same coverage.
+fn encoding_path_dirs() -> BTreeSet<String> {
+    let rust = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .canonicalize()
+        .expect("rust/ resolves");
+    let mut seen = BTreeSet::new();
+    let mut todo = vec![String::from("shekyl-chain-store")];
+    while let Some(dir) = todo.pop() {
+        if !seen.insert(dir.clone()) {
+            continue;
+        }
+        let crate_dir = rust.join(&dir);
+        let manifest = crate_dir.join("Cargo.toml");
+        let text = fs::read_to_string(&manifest)
+            .unwrap_or_else(|e| panic!("read {}: {e}", manifest.display()));
+        for target in normal_path_dependencies(&text) {
+            // A path dependency is relative to *its* manifest — a vendored
+            // crate under shekyl-oxide/crypto/ names its siblings as `../x`
+            // too — so resolve from there and re-express under rust/.
+            let resolved = crate_dir.join(&target).canonicalize().unwrap_or_else(|e| {
+                panic!("{}: path dependency {target:?}: {e}", manifest.display())
+            });
+            let under_rust = resolved.strip_prefix(&rust).unwrap_or_else(|_| {
+                panic!(
+                    "{}: path dependency {target:?} resolves outside rust/ ({}); the trigger \
+                     pattern cannot cover it",
+                    manifest.display(),
+                    resolved.display()
+                )
+            });
+            todo.push(under_rust.to_string_lossy().into_owned());
+        }
+    }
+    // The walker's subject (rule 47): the three crates the move itself put
+    // on this path must be found, or the walk read nothing and the coverage
+    // assertion above would pass vacuously.
+    for sentinel in ["shekyl-store-codec", "shekyl-types", "shekyl-units"] {
+        assert!(
+            seen.contains(sentinel),
+            "encoding_path_dirs did not reach `{sentinel}`; the manifest walk is broken"
+        );
+    }
+    seen
+}
+
+/// The `path = "…"` targets under a manifest's normal-dependency
+/// sections (`[dependencies]` and `[target.*.dependencies]`; never dev or
+/// build). House style writes each dependency inline on one line; any
+/// other spelling of a path dependency is refused loudly rather than
+/// skipped, because a dependency this walk cannot see is a crate the gate
+/// cannot see.
+fn normal_path_dependencies(manifest: &str) -> Vec<String> {
+    let mut in_normal_deps = false;
+    let mut out = Vec::new();
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if let Some(header) = trimmed.strip_prefix('[') {
+            let header = header.trim_end_matches(']');
+            assert!(
+                !header.starts_with("dependencies."),
+                "{trimmed}: spell path dependencies inline under [dependencies] so the \
+                 encoding-path walk can read them"
+            );
+            in_normal_deps = header.ends_with("dependencies")
+                && !header.contains("dev-dependencies")
+                && !header.contains("build-dependencies");
+            continue;
+        }
+        if !in_normal_deps || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some(rest) = trimmed.split_once("path").map(|(_, r)| r) else {
+            continue;
+        };
+        let Some(quoted) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let Some(after_quote) = quoted.trim_start().strip_prefix('"') else {
+            continue;
+        };
+        let Some((target, _)) = after_quote.split_once('"') else {
+            continue;
+        };
+        out.push(target.to_owned());
+    }
+    out
+}
+
+/// Whether a `paths:` pattern of this workflow's trigger covers `rust/<dir>`.
+/// Only the spellings the workflow uses are understood; any other `rust/`
+/// pattern is refused rather than guessed at.
+fn trigger_covers(pattern: &str, dir: &str) -> bool {
+    match pattern.strip_prefix("rust/") {
+        None => false,
+        Some("**") => true,
+        Some(rest) => {
+            let prefix = rest.strip_suffix("/**").unwrap_or_else(|| {
+                panic!("trigger pattern {pattern:?}: only `rust/**` and `rust/<dir>/**` are understood here")
+            });
+            dir == prefix || dir.starts_with(&format!("{prefix}/"))
+        }
+    }
+}
+
 /// The grammar the workflow parses `SCHEMA_VERSION` out of: the declaration
 /// at column 0, the value a decimal literal inside `SchemaVersion::new(…)`.
 /// The workflow's `sed` carries the same regex; both are pinned below.
@@ -1098,11 +1210,6 @@ fn workflow_gates_this_crate() {
         .unwrap_or_else(|e| panic!("read {}: {e}", workflow.display()));
     let run_line = format!("cargo test -p shekyl-chain-store {TEST_FILTER}");
     let needles = [
-        (TRIGGER, "- \"rust/shekyl-chain-store/**\""),
-        // The moved codecs' fixtures are committed here and still pair
-        // with SCHEMA_VERSION, so an edit to their impls must run this
-        // gate — which it only does if the trigger names their crate.
-        (TRIGGER, "- \"rust/shekyl-store-codec/**\""),
         (ASSERT_JOB, run_line.as_str()),
         (BUMP_JOB, "rust/shekyl-chain-store/schemas/"),
         (
@@ -1113,6 +1220,27 @@ fn workflow_gates_this_crate() {
         (BUMP_JOB, WORKFLOW_VERSION_REGEX),
     ];
     let regions = active_yaml_by_job(&yaml);
+    // The trigger must cover every crate whose code can change a byte a
+    // fixture pins — derived from the manifests, not listed here
+    // ([`encoding_path_dirs`]): a list in this test would be the drift it
+    // guards against.
+    let trigger_patterns: Vec<&str> = regions
+        .get(TRIGGER)
+        .map(|text| {
+            text.lines()
+                .filter_map(|l| l.trim().strip_prefix("- \""))
+                .filter_map(|l| l.strip_suffix('"'))
+                .collect()
+        })
+        .unwrap_or_default();
+    for dir in encoding_path_dirs() {
+        assert!(
+            trigger_patterns.iter().any(|p| trigger_covers(p, &dir)),
+            "{}: the trigger {trigger_patterns:?} does not cover `rust/{dir}`, a crate on the \
+             path from a stored value to its bytes; a change there must run this gate",
+            workflow.display()
+        );
+    }
     for job in [ASSERT_JOB, BUMP_JOB] {
         assert!(
             regions.contains_key(job),
