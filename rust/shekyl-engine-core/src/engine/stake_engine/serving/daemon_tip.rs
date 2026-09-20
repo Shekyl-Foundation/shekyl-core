@@ -56,7 +56,9 @@ use std::time::Duration;
 
 use serde_json::Value;
 use shekyl_p_host::DaemonTipCache;
+use shekyl_rpc_types::RpcStatus;
 
+use crate::engine::block_fetch::refuse_unless_ok;
 use crate::engine::prpc::PersonaIsolatedTransport;
 
 /// How often the tip is re-read, as a divisor of [`tip_max_age`].
@@ -226,6 +228,15 @@ pub(crate) enum TipReading {
 /// Each absence has a named direction, and none of them is the convenient
 /// one by accident:
 ///
+/// - `status` absent or not `OK` ⇒ [`TipReading::Unusable`], **checked before
+///   any other field is read**. `Rpc::json_rpc_call` only unwraps `result`;
+///   it does not enforce the wire's `status`, so a daemon may answer `BUSY`
+///   and a plausible body in one document. Nothing in that document is then
+///   evidence. The check is [`refuse_unless_ok`] — the one shared refusal
+///   every typed RPC consumer here reaches for — and the outcome is
+///   *Unusable* rather than *NotFollowing* on purpose: a refusal says nothing
+///   about the tip either way, so the held one ages out as for a dropped
+///   poll instead of being cleared by a `BUSY` at startup.
 /// - `height` absent or unparseable ⇒ [`TipReading::Unusable`]. There is no
 ///   safe default: a silent `0` is a claim about the chain.
 /// - `synchronized` absent ⇒ `false` ⇒ refuse. The conservative direction.
@@ -240,6 +251,15 @@ pub(crate) enum TipReading {
 ///   chain always has genesis, so this is a broken reply rather than a young
 ///   chain.
 pub(crate) fn tip_reading_from_info(info: &Value) -> TipReading {
+    // Status first, before any field becomes evidence. An absent status is
+    // not the contract either — a reply that omits it cannot be refused on
+    // it, so it is not accepted on it.
+    let Some(status) = info.get("status").and_then(Value::as_str) else {
+        return TipReading::Unusable;
+    };
+    if refuse_unless_ok(&RpcStatus(status.to_owned()), "get_info").is_err() {
+        return TipReading::Unusable;
+    }
     let Some(chain_height) = info.get("height").and_then(Value::as_u64) else {
         return TipReading::Unusable;
     };
@@ -417,7 +437,7 @@ mod tests {
         const TOP_BLOCK: u64 = CHAIN_HEIGHT - 1;
 
         let info = json!({
-            "height": CHAIN_HEIGHT, "target_height": 0, "synchronized": true,
+            "height": CHAIN_HEIGHT, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         });
         let reading = tip_reading_from_info(&info);
@@ -439,7 +459,7 @@ mod tests {
     async fn the_conversion_reaches_the_cache_not_only_the_reading() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         let rpc = CannedRpc::replying(&json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
+            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         }));
         refresh_tip_once(&rpc, &tip).await;
@@ -456,7 +476,7 @@ mod tests {
     #[test]
     fn a_peerless_daemon_reporting_target_zero_is_syncing_not_synced() {
         let info = json!({
-            "height": 5, "target_height": 0, "synchronized": false,
+            "height": 5, "target_height": 0, "status": "OK", "synchronized": false,
             "outgoing_connections_count": 8
         });
         assert_eq!(
@@ -470,7 +490,7 @@ mod tests {
     #[test]
     fn a_daemon_behind_its_own_target_is_syncing() {
         let behind = json!({
-            "height": 9_000, "target_height": 9_500, "synchronized": true,
+            "height": 9_000, "target_height": 9_500, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         });
         assert_eq!(
@@ -479,7 +499,7 @@ mod tests {
         );
 
         let level = json!({
-            "height": 9_500, "target_height": 9_500, "synchronized": true,
+            "height": 9_500, "target_height": 9_500, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         });
         assert_eq!(
@@ -494,7 +514,7 @@ mod tests {
     fn absent_fields_take_their_named_directions() {
         assert_eq!(
             tip_reading_from_info(&json!({
-                "target_height": 0, "synchronized": true,
+                "target_height": 0, "status": "OK", "synchronized": true,
                 "outgoing_connections_count": 8
             })),
             TipReading::Unusable,
@@ -502,7 +522,7 @@ mod tests {
         );
         assert_eq!(
             tip_reading_from_info(&json!({
-                "height": 9_001, "target_height": 0,
+                "height": 9_001, "target_height": 0, "status": "OK",
                 "outgoing_connections_count": 8
             })),
             TipReading::NotFollowing(NotFollowing::NeverSynchronized),
@@ -510,20 +530,22 @@ mod tests {
         );
         assert_eq!(
             tip_reading_from_info(&json!({
-                "height": 9_001, "synchronized": true,
+                "height": 9_001, "status": "OK", "synchronized": true,
                 "outgoing_connections_count": 8
             })),
             TipReading::Synced(9_000),
             "absent `target_height` is the info surface's 0-when-synced"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({"height": "nope", "synchronized": true,
-                "outgoing_connections_count": 8})),
+            tip_reading_from_info(
+                &json!({"height": "nope", "status": "OK", "synchronized": true,
+                "outgoing_connections_count": 8})
+            ),
             TipReading::Unusable,
             "an unparseable height is never silently defaulted"
         );
         assert_eq!(
-            tip_reading_from_info(&json!({"height": 0, "synchronized": true,
+            tip_reading_from_info(&json!({"height": 0, "status": "OK", "synchronized": true,
                 "outgoing_connections_count": 8})),
             TipReading::Unusable,
             "chain height 0 has no top block to stamp"
@@ -627,7 +649,7 @@ mod tests {
     async fn a_synced_reply_stamps_the_top_block_height() {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         let rpc = CannedRpc::replying(&json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
+            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         }));
         assert_eq!(
@@ -642,7 +664,7 @@ mod tests {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(9_000);
         let rpc = CannedRpc::replying(&json!({
-            "height": 9_001, "target_height": 12_000, "synchronized": true
+            "height": 9_001, "target_height": 12_000, "status": "OK", "synchronized": true
         }));
         assert_eq!(
             refresh_tip_once(&rpc, &tip).await,
@@ -707,7 +729,7 @@ mod tests {
     #[test]
     fn a_once_synced_daemon_with_no_peers_is_not_following() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
+            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 0, "incoming_connections_count": 0
         });
         assert_eq!(
@@ -722,7 +744,7 @@ mod tests {
     fn a_single_peer_of_either_kind_still_counts() {
         for field in ["outgoing_connections_count", "incoming_connections_count"] {
             let info = json!({
-                "height": 9_001, "target_height": 0, "synchronized": true,
+                "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
                 field: 1
             });
             assert_eq!(
@@ -742,7 +764,7 @@ mod tests {
     #[test]
     fn a_restricted_daemons_zeroed_counts_are_not_read_as_no_peers() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
+            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 0, "incoming_connections_count": 0,
             "restricted": true
         });
@@ -759,7 +781,7 @@ mod tests {
     #[test]
     fn a_degraded_daemon_is_not_following_however_synchronized_it_claims_to_be() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
+            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8, "following_degraded": true
         });
         assert_eq!(
@@ -771,7 +793,7 @@ mod tests {
     #[test]
     fn an_offline_daemon_is_not_following() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
+            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8, "offline": true
         });
         assert_eq!(
@@ -786,7 +808,7 @@ mod tests {
     #[test]
     fn absent_refusal_triggers_do_not_refuse() {
         let info = json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
+            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 8
         });
         assert_eq!(
@@ -804,7 +826,7 @@ mod tests {
         let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
         tip.stamp_synced(9_000);
         let rpc = CannedRpc::replying(&json!({
-            "height": 9_001, "target_height": 0, "synchronized": true,
+            "height": 9_001, "target_height": 0, "status": "OK", "synchronized": true,
             "outgoing_connections_count": 0, "incoming_connections_count": 0
         }));
         assert_eq!(
@@ -815,6 +837,58 @@ mod tests {
             tip.height(),
             None,
             "a frozen height must not be stamped fresh forever"
+        );
+    }
+
+    // ── The wire status is part of the contract, and it is tested ────────
+
+    /// A refusal carrying a plausible body. Every field below would read as
+    /// a healthy synced daemon at 9_000; the status says none of it is
+    /// evidence. Dropping the status check turns this green — with the
+    /// slash-sensitive cache refreshed from a `BUSY`.
+    #[test]
+    fn a_non_ok_status_makes_a_plausible_body_unusable() {
+        for status in ["BUSY", "Failed", "PAYMENT REQUIRED", "ok", ""] {
+            let info = json!({
+                "status": status, "height": 9_001, "target_height": 0,
+                "synchronized": true, "outgoing_connections_count": 8
+            });
+            assert_eq!(
+                tip_reading_from_info(&info),
+                TipReading::Unusable,
+                "status {status:?} must not let its body be read as a tip"
+            );
+        }
+    }
+
+    /// The field being absent is not the contract either. A fixture that
+    /// omits it cannot fail on it, so a reply that omits it must not pass.
+    #[test]
+    fn an_absent_status_is_unusable_not_assumed_ok() {
+        let info = json!({
+            "height": 9_001, "target_height": 0, "synchronized": true,
+            "outgoing_connections_count": 8
+        });
+        assert_eq!(tip_reading_from_info(&info), TipReading::Unusable);
+    }
+
+    /// Through the producer: a `BUSY` HOLDS a held tip rather than clearing
+    /// it. `check_core_ready()` is false at startup and briefly during some
+    /// reorgs; a refusal is the absence of a fact about the tip, so it takes
+    /// the dropped-poll path and ages out on schedule.
+    #[tokio::test]
+    async fn a_busy_daemon_holds_the_tip_it_cannot_speak_to() {
+        let tip = DaemonTipCache::new(tip_max_age(BLOCK_TARGET));
+        tip.stamp_synced(9_000);
+        let rpc = CannedRpc::replying(&json!({
+            "status": "BUSY", "height": 12_345, "target_height": 0,
+            "synchronized": true, "outgoing_connections_count": 8
+        }));
+        assert_eq!(refresh_tip_once(&rpc, &tip).await, TipReading::Unusable);
+        assert_eq!(
+            tip.height(),
+            Some(9_000),
+            "neither cleared by the refusal nor refreshed from its body"
         );
     }
 }
