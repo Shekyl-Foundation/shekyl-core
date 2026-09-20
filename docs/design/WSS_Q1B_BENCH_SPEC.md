@@ -325,6 +325,17 @@ avoid, arrived at from the other direction.
 Whether a Pi 4 sustains that over JSON-RPC with a hex-encoded blob is a real
 question, which is what makes the zone the honest place to grade.
 
+**The criterion is general, and is recorded here because this is where it was
+first written down.** It is pre-registration applied to corpus selection: *a
+graded run whose verdict is foregone in either direction is ceremony, whatever
+its density.* It is not specific to block weights, to this budget, or to this
+bench — the next measurement that must pick a corpus point, an input size or a
+load level should make the same table and reject the rungs whose answer is
+already known. The UX argument ("this is the ordinary launch") justifies one
+*value*; this criterion justifies the *method*, and survives a change of
+budget, hardware or subject. A bench that cannot show both rejected rungs are
+foregone has not made the argument.
+
 **Why the two edges may differ, stated so it does not read as inconsistency.**
 §6.3.4 row 2 rules the spend edge at worst case for a recorded reason — *"a
 measurement taken on a quiet chain would grade green and reopen on a busy
