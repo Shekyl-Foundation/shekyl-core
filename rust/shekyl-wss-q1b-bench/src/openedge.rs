@@ -163,7 +163,11 @@ pub struct Projection {
     pub blocks_measured: u64,
     /// [`HELD_BUFFER_BLOCKS`] — what the projection is to.
     pub blocks_projected: u64,
-    /// Median per-block seconds across the measured sample.
+    /// Mean per-block seconds — the estimator [`Projection::projected_s`] is
+    /// built from, because the budget is a sum over every block.
+    pub per_block_mean_s: f64,
+    /// Median per-block seconds across the measured sample. **Descriptive**:
+    /// the typical block, not the basis of the projection.
     pub per_block_median_s: f64,
     /// 95th-percentile per-block seconds.
     pub per_block_p95_s: f64,
@@ -200,6 +204,7 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
         return Projection {
             blocks_measured: 0,
             blocks_projected: HELD_BUFFER_BLOCKS,
+            per_block_mean_s: 0.0,
             per_block_median_s: 0.0,
             per_block_p95_s: 0.0,
             projected_round_trips: 0,
@@ -228,10 +233,15 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
     let mean_decoded = samples.iter().map(|s| s.decoded_bytes as f64).sum::<f64>() / n;
 
     let blocks = HELD_BUFFER_BLOCKS as f64;
-    // The projection is the per-block *distribution* scaled by block count --
-    // the median carries the typical block and the record carries p95 beside
-    // it, so a reader can see the spread the single number hides.
-    let projected_s = median * blocks;
+    // The budget is CUMULATIVE wall time over 790 blocks, so the projection is
+    // a sum -- and the unbiased estimator of a sum is the MEAN, not the median.
+    // Projecting the median discarded the tail: a sample where a minority of
+    // blocks are much slower projects as if those blocks did not exist, though
+    // the refetch must process every one of them. That is a false pass in the
+    // making. Median and p95 stay as descriptive fields, which is what they are
+    // good for -- showing the spread a single number hides.
+    let mean_seconds = samples.iter().map(|s| s.seconds).sum::<f64>() / n;
+    let projected_s = mean_seconds * blocks;
     let projected_round_trips = mean_round_trips * blocks;
     // Reported UNCLAMPED, so an inconsistency is visible instead of absorbed.
     // The earlier version clamped this to the total, which cannot make an
@@ -257,6 +267,7 @@ pub fn project(samples: &[BlockSample], floor: RoundTripFloor) -> Projection {
     Projection {
         blocks_measured: samples.len() as u64,
         blocks_projected: HELD_BUFFER_BLOCKS,
+        per_block_mean_s: mean_seconds,
         per_block_median_s: median,
         per_block_p95_s: p95,
         projected_round_trips: projected_round_trips as u64,

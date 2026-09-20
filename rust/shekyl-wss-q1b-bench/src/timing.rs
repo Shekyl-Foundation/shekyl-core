@@ -46,6 +46,19 @@ pub const MIN_ITERATIONS: usize = 2 * CONVERGENCE_WINDOW;
 /// is what a grading reader keys on.
 pub const MAX_ITERATIONS: usize = 60;
 
+/// Seconds a series must run before convergence may be declared at all.
+///
+/// Window comparison alone is not enough: six samples of a fast workload can
+/// agree inside the first few seconds and stop the loop **before the board has
+/// had time to throttle** — which is precisely the burst measurement §5.2
+/// rejects, arrived at through the steady-state test rather than around it. A
+/// minute is the figure §6.3.4 uses when it says a burst measurement "grades a
+/// machine that does not exist after a minute".
+///
+/// Only a floor on *time*: a series that is already slow (the worst-case replay
+/// is ~74 s per iteration) clears it on its first sample and is unaffected.
+pub const MIN_CONDITIONING_SECONDS: f64 = 60.0;
+
 /// Hard stop on **wall time**, in seconds.
 ///
 /// An iteration cap alone is not a bound. The worst-case replay is a
@@ -79,6 +92,8 @@ pub struct Series {
     pub tolerance_pct: f64,
     /// Warm-up iterations run and discarded before timing began.
     pub warmup_iterations: usize,
+    /// Seconds the series had to run before convergence could be declared.
+    pub min_conditioning_seconds: f64,
 }
 
 impl Series {
@@ -101,7 +116,28 @@ pub fn sustained<F>(warmup: usize, tolerance_pct: f64, f: F) -> Series
 where
     F: FnMut(),
 {
-    sustained_within(warmup, tolerance_pct, MAX_WALL_SECONDS, f)
+    sustained_within_conditioned(
+        warmup,
+        tolerance_pct,
+        MAX_WALL_SECONDS,
+        MIN_CONDITIONING_SECONDS,
+        f,
+    )
+}
+
+/// [`sustained`] with an explicit wall budget and the default conditioning
+/// floor.
+pub fn sustained_within<F>(warmup: usize, tolerance_pct: f64, max_wall_seconds: f64, f: F) -> Series
+where
+    F: FnMut(),
+{
+    sustained_within_conditioned(
+        warmup,
+        tolerance_pct,
+        max_wall_seconds,
+        MIN_CONDITIONING_SECONDS,
+        f,
+    )
 }
 
 /// [`sustained`] with an explicit wall budget.
@@ -109,10 +145,12 @@ where
 /// The budget is a parameter rather than only a constant so the cap can be
 /// *exercised* — a limit that no test can reach is a limit nobody has seen
 /// work.
-pub fn sustained_within<F>(
+/// [`sustained`] with both floors explicit, so a test can reach either.
+pub fn sustained_within_conditioned<F>(
     warmup: usize,
     tolerance_pct: f64,
     max_wall_seconds: f64,
+    min_conditioning_seconds: f64,
     mut f: F,
 ) -> Series
 where
@@ -125,15 +163,28 @@ where
     let mut converged = false;
     let mut stopped_because = "iteration cap";
     let began = Instant::now();
-    while samples.len() < MAX_ITERATIONS {
+    // The ITERATION cap must not preempt the CONDITIONING floor. A fast series
+    // reaches 60 samples long before 60 seconds, and stopping there would mean
+    // convergence could never be declared for it — the two limits would cancel
+    // rather than compose. The caps exist to bound an UNCONVERGED run; the
+    // floor exists to stop a converged verdict arriving too early. So the loop
+    // continues while either is unmet, and the wall budget bounds both.
+    while samples.len() < MAX_ITERATIONS || duration_s(began.elapsed()) < min_conditioning_seconds {
         if duration_s(began.elapsed()) >= max_wall_seconds {
             stopped_because = "wall-clock cap";
+            break;
+        }
+        if samples.len() >= MAX_ITERATIONS
+            && duration_s(began.elapsed()) >= min_conditioning_seconds
+        {
+            stopped_because = "iteration cap";
             break;
         }
         let start = Instant::now();
         f();
         samples.push(duration_s(start.elapsed()));
-        if samples.len() < MIN_ITERATIONS {
+        if samples.len() < MIN_ITERATIONS || duration_s(began.elapsed()) < min_conditioning_seconds
+        {
             continue;
         }
         // Two DISJOINT windows: the most recent `CONVERGENCE_WINDOW` samples
@@ -159,6 +210,7 @@ where
         stopped_because,
         tolerance_pct,
         warmup_iterations: warmup,
+        min_conditioning_seconds,
         iterations_s: samples,
     }
 }

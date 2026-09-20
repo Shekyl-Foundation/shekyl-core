@@ -158,6 +158,21 @@ pub struct LeafShape {
     pub weight: usize,
 }
 
+/// The tree depth a **graded** spend-edge run is owed at.
+///
+/// §6.3.2 row 4 puts the production target at ~6 layers (~100 M leaves), and
+/// `WSS_Q1B_BENCH_SPEC.md` §3.5 registers the corpus and protocol against that
+/// depth. A run at another *licensed* depth is a perfectly good measurement and
+/// a different one: its leaf rate and its denominator both move, so its verdict
+/// is not the verdict §6.3.4 waits for — and it would otherwise satisfy the
+/// `FOLLOWUPS` discharge condition while answering another question.
+///
+/// **A stated judgment with a reopening criterion (rule 21)**, not a
+/// derivation: the chain is depth 6 only while its leaf count sits between
+/// [`min_leaves_for_depth`]`(6)` and `min_leaves_for_depth(7)`. When it leaves
+/// that band the graded depth moves with it, and this constant is where.
+pub const GRADED_TREE_DEPTH: u8 = 6;
+
 /// The **nominal** per-block weight the open edge grades at.
 ///
 /// The full-reward zone, [`MIN_BLOCK_WEIGHT`] — a block that fills the space

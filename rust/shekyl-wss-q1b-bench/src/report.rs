@@ -228,7 +228,16 @@ impl ProverPin {
     }
 }
 
-/// `<short sha>` or `<short sha>-dirty`, asked of git in the working directory.
+/// `<short sha>` or `<short sha>-dirty`, asked of git **in this crate's own
+/// source directory**.
+///
+/// Not the caller's working directory: run from another checkout, that would
+/// record an unrelated repository's SHA as the `shekyl-core` revision and
+/// defeat the pin silently — worse than the build-time staleness it replaced,
+/// because a wrong revision reads exactly like a right one. `CARGO_MANIFEST_DIR`
+/// is baked in at compile time, so a binary copied away from the tree finds no
+/// such directory, git fails, and the build-time stamp takes over — which is
+/// precisely the case that fallback exists for.
 ///
 /// A dirty tree is marked because a record produced from uncommitted changes
 /// names a revision that does not describe what ran.
@@ -239,7 +248,16 @@ fn runtime_revision() -> Option<String> {
 }
 
 fn git(args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git").args(args).output().ok()?;
+    let out = std::process::Command::new("git")
+        // `-C` before the subcommand: git changes to this directory first, so
+        // the answer describes this crate's repository whatever the caller's
+        // cwd. A path that no longer exists makes git exit non-zero, which the
+        // success check below turns into the build-time fallback.
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .args(args)
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }

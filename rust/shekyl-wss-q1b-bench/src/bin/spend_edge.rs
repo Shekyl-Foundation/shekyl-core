@@ -31,7 +31,9 @@ use shekyl_wss_q1b_bench::report::{
     ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict, SCHEMA_VERSION,
 };
 use shekyl_wss_q1b_bench::rig::{self, Environment, StorageAttestation};
-use shekyl_wss_q1b_bench::timing::{sustained, DEFAULT_TOLERANCE_PCT};
+use shekyl_wss_q1b_bench::timing::{
+    sustained_within_conditioned, DEFAULT_TOLERANCE_PCT, MAX_WALL_SECONDS, MIN_CONDITIONING_SECONDS,
+};
 
 /// Divergence at which the sparse path stops being a stand-in for a dense one.
 const CONTROL_TOLERANCE_PCT: f64 = 10.0;
@@ -66,6 +68,14 @@ struct Args {
     #[arg(long, default_value_t = 2)]
     warmup: usize,
 
+    /// Seconds a series must run before convergence may be declared.
+    ///
+    /// Lowered only for dev smoke runs; a lowered value cannot be graded,
+    /// because the floor is what stops a fast workload converging inside its
+    /// first burst — before the board has had time to throttle.
+    #[arg(long, default_value_t = MIN_CONDITIONING_SECONDS)]
+    min_conditioning_s: f64,
+
     /// Apply the ruled arithmetic and emit a verdict. Refused off the pinned
     /// rig.
     #[arg(long, default_value_t = false)]
@@ -97,13 +107,43 @@ fn parse_storage(s: &str) -> Result<StorageAttestation, String> {
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    // Argument validity is machine-independent, so it is checked before the rig
-    // gate: an unusable control set is unusable on a dev box too, and finding
-    // that out only on the rig wastes the run the rig exists for.
+    // Argument and PROTOCOL validity are machine-independent, so both are
+    // checked before the rig gate: an unusable control set, a grading depth
+    // that is not the owed one, a corpus override, a lowered conditioning
+    // floor -- none is a fact about the machine, and discovering any of them
+    // only on the rig wastes the session the rig exists for.
     if let Err(why) = corpus::validate_control_depths(&args.control_depths) {
         eprintln!("{why}");
         return ExitCode::from(2);
     }
+    if args.grade && args.depth != corpus::GRADED_TREE_DEPTH {
+        eprintln!(
+            "refusing to grade: the owed run is at depth {} (§6.3.2 row 4), not {}. \
+             A run at another depth has a different leaf rate and a different \
+             denominator, so its verdict answers a different question. Drop --grade \
+             to measure at this depth.",
+            corpus::GRADED_TREE_DEPTH,
+            args.depth
+        );
+        return ExitCode::from(2);
+    }
+    if args.grade && args.min_conditioning_s != MIN_CONDITIONING_SECONDS {
+        eprintln!(
+            "refusing to grade: --min-conditioning-s is part of the thermal protocol \
+             (§5.2), not a knob. The default {MIN_CONDITIONING_SECONDS} s is the \
+             minute §6.3.4 says a burst measurement grades a machine that does not \
+             exist after."
+        );
+        return ExitCode::from(2);
+    }
+    if args.grade && args.window_leaves.is_some() {
+        eprintln!(
+            "refusing to grade: --window-leaves overrides the ruled worst-case corpus. \
+             Drop it to grade, or drop --grade to measure a custom window."
+        );
+        return ExitCode::from(2);
+    }
+
     let environment = Environment::capture();
     let rig_verdict = match rig::decide(
         &environment,
@@ -125,13 +165,6 @@ fn main() -> ExitCode {
     // genuine `rig.grading: true` record for a corpus that is not §6.3.4's
     // 725-block worst case -- the same "cannot fail" defect the open edge's
     // density gate closes, on the other edge.
-    if args.grade && args.window_leaves.is_some() {
-        eprintln!(
-            "refusing to grade: --window-leaves overrides the ruled worst-case corpus. \
-             Drop it to grade, or drop --grade to measure a custom window."
-        );
-        return ExitCode::from(2);
-    }
 
     let leaf_rate = worst_case_leaves_per_block(args.depth);
     let window_leaves = args
@@ -141,7 +174,7 @@ fn main() -> ExitCode {
     let mut controls: Vec<ControlExperiment> = Vec::new();
     for depth in &args.control_depths {
         eprintln!("── control: sparse vs dense at depth {depth} ──");
-        let control = run_control(*depth);
+        let control = run_control(*depth, args.min_conditioning_s);
         if !control.both_verified {
             eprintln!("control arms did not both verify; refusing to report a denominator");
             return ExitCode::from(3);
@@ -206,16 +239,28 @@ fn main() -> ExitCode {
     let corpus = build_corpus(window_leaves, 0x5A);
 
     // ── delta, part 1: the buffer replay ────────────────────────────────
-    let replay_series = sustained(args.warmup, DEFAULT_TOLERANCE_PCT, || {
-        std::hint::black_box(replay(&corpus));
-    });
+    let replay_series = sustained_within_conditioned(
+        args.warmup,
+        DEFAULT_TOLERANCE_PCT,
+        MAX_WALL_SECONDS,
+        args.min_conditioning_s,
+        || {
+            std::hint::black_box(replay(&corpus));
+        },
+    );
 
     // ── delta, part 2: path read-off and `Path` construction ────────────
     let layers = replay(&corpus);
-    let path_series = sustained(args.warmup, DEFAULT_TOLERANCE_PCT, || {
-        let p = read_off_path(&layers, corpus.spent_index);
-        std::hint::black_box(prove_inputs(&corpus, &p, CANONICAL_INPUTS));
-    });
+    let path_series = sustained_within_conditioned(
+        args.warmup,
+        DEFAULT_TOLERANCE_PCT,
+        MAX_WALL_SECONDS,
+        args.min_conditioning_s,
+        || {
+            let p = read_off_path(&layers, corpus.spent_index);
+            std::hint::black_box(prove_inputs(&corpus, &p, CANONICAL_INPUTS));
+        },
+    );
 
     // ── the denominator: the prover invocation, nothing else ────────────
     let graded_path: Path = if sparse_licensed {
@@ -257,9 +302,11 @@ fn main() -> ExitCode {
 
     let inputs = prove_inputs(&corpus, &graded_path, CANONICAL_INPUTS);
     let mut prove_failed = false;
-    let prove_series = sustained(
+    let prove_series = sustained_within_conditioned(
         args.warmup.min(1),
         DEFAULT_TOLERANCE_PCT,
+        MAX_WALL_SECONDS,
+        args.min_conditioning_s,
         || match prove_only(&inputs, &graded_path, [0xA5; 32]) {
             Ok(r) => {
                 // Keep the proof bytes alive past the timer so the optimizer
@@ -359,7 +406,7 @@ fn main() -> ExitCode {
 }
 
 /// Same depth, sparse versus dense — sparsity held as the only variable.
-fn run_control(depth: u8) -> ControlExperiment {
+fn run_control(depth: u8, min_conditioning_s: f64) -> ControlExperiment {
     let dense_leaves = shekyl_wss_q1b_bench::corpus::min_leaves_for_depth(depth)
         .expect("a control depth of at least 2");
     let dense_corpus = build_corpus(dense_leaves, 0xC0);
@@ -381,12 +428,24 @@ fn run_control(depth: u8) -> ControlExperiment {
 
     let dense_inputs = prove_inputs(&dense_corpus, &dense_path, CANONICAL_INPUTS);
     let sparse_inputs = prove_inputs(&dense_corpus, &sparse_path, CANONICAL_INPUTS);
-    let dense = sustained(1, DEFAULT_TOLERANCE_PCT, || {
-        std::hint::black_box(prove_only(&dense_inputs, &dense_path, [0x01; 32]).ok());
-    });
-    let sparse = sustained(1, DEFAULT_TOLERANCE_PCT, || {
-        std::hint::black_box(prove_only(&sparse_inputs, &sparse_path, [0x02; 32]).ok());
-    });
+    let dense = sustained_within_conditioned(
+        1,
+        DEFAULT_TOLERANCE_PCT,
+        MAX_WALL_SECONDS,
+        min_conditioning_s,
+        || {
+            std::hint::black_box(prove_only(&dense_inputs, &dense_path, [0x01; 32]).ok());
+        },
+    );
+    let sparse = sustained_within_conditioned(
+        1,
+        DEFAULT_TOLERANCE_PCT,
+        MAX_WALL_SECONDS,
+        min_conditioning_s,
+        || {
+            std::hint::black_box(prove_only(&sparse_inputs, &sparse_path, [0x02; 32]).ok());
+        },
+    );
 
     // A median from an unconverged series is the statistic §5.2 says to report,
     // not to compute a licence from. Both arms must have reached steady state.

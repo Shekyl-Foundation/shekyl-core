@@ -22,7 +22,8 @@ use serde::Serialize;
 use shekyl_engine_core::engine::daemon::DaemonClient;
 use shekyl_rpc_client::Rpc;
 use shekyl_rpc_types::{
-    GetBlockRequest, GetBlockResponse, GetTransactionsRequest, GetTransactionsResponse,
+    GetBlockCountResponse, GetBlockRequest, GetBlockResponse, GetTransactionsRequest,
+    GetTransactionsResponse, RpcStatus,
 };
 use shekyl_wss_q1b_bench::corpus::nominal_block_weight;
 use shekyl_wss_q1b_bench::openedge::{
@@ -161,17 +162,35 @@ async fn main() -> ExitCode {
     // Measured directly rather than regressed out of the block samples: round
     // trips per block are nearly constant, so a fit over them is
     // under-determined.
+    // `get_block_count`, not `get_info`: a minimal JSON-RPC body that is also
+    // TYPED, so the reply's `status` can be checked. The first version timed
+    // `get_info` into a `serde_json::Value`, which succeeds for any body the
+    // deserializer accepts -- including a refusal. Timing a rejected call is
+    // not timing a round trip, and this figure decides an attribution, so a
+    // BUSY reply could have selected the wrong miss remedy. `block_fetch.rs`
+    // puts it exactly right about a non-OK status: *"its body is not
+    // evidence"*.
     eprintln!("── timing {} minimal round trips ──", args.floor_samples);
     let floor_sample_count = usize::from(args.floor_samples);
     let mut floor_samples = Vec::with_capacity(floor_sample_count);
     for _ in 0..floor_sample_count {
         let start = std::time::Instant::now();
-        let res: Result<serde_json::Value, _> = client.json_rpc_call("get_info", None).await;
-        if let Err(e) = res {
-            eprintln!("floor probe failed: {e}");
-            return ExitCode::from(4);
+        let res: Result<GetBlockCountResponse, _> =
+            client.json_rpc_call("get_block_count", None).await;
+        let elapsed = duration_s(start.elapsed());
+        match res {
+            Ok(reply) => {
+                if let Err(why) = refuse_unless_ok(&reply.status, "get_block_count") {
+                    eprintln!("floor probe: {why}");
+                    return ExitCode::from(4);
+                }
+            }
+            Err(e) => {
+                eprintln!("floor probe failed: {e}");
+                return ExitCode::from(4);
+            }
         }
-        floor_samples.push(duration_s(start.elapsed()));
+        floor_samples.push(elapsed);
     }
     floor_samples.sort_by(|a, b| a.partial_cmp(b).expect("timings are never NaN"));
     let floor = RoundTripFloor {
@@ -338,6 +357,21 @@ async fn main() -> ExitCode {
 /// `prune: true` matches `TxBodyForm::Pruned`, which is what
 /// `default_fetch_scannable_block` asks for — measuring the unpruned form
 /// would count bytes the timed path never moves.
+/// Refuse a reply whose `status` is not OK, before any other field is read.
+///
+/// The wording is `block_fetch.rs`'s and so is the reason: a refusal's body is
+/// **not evidence**. A deserializer accepting the body says the daemon
+/// answered, not that it answered the question.
+fn refuse_unless_ok(status: &RpcStatus, method: &'static str) -> Result<(), String> {
+    if status.is_ok() {
+        return Ok(());
+    }
+    Err(format!(
+        "{method} refused with status {}; its body is not evidence",
+        status.0
+    ))
+}
+
 async fn measure_bytes(client: &DaemonClient, height: u64) -> Result<(u64, u64), String> {
     let request = GetBlockRequest {
         hash: String::new(),
@@ -349,6 +383,7 @@ async fn measure_bytes(client: &DaemonClient, height: u64) -> Result<(u64, u64),
         .json_rpc_call("get_block", Some(params))
         .await
         .map_err(|e| format!("get_block: {e}"))?;
+    refuse_unless_ok(&response.status, "get_block")?;
     let mut hex_len = response.blob.len() as u64;
 
     let block = shekyl_wire::Block::from_bytes(
@@ -368,6 +403,7 @@ async fn measure_bytes(client: &DaemonClient, height: u64) -> Result<(u64, u64),
             .rpc_call("get_transactions", Some(params))
             .await
             .map_err(|e| format!("get_transactions: {e}"))?;
+        refuse_unless_ok(&txs.status, "get_transactions")?;
         for entry in &txs.txs {
             // The pruned body is what the timed fetch moves; `as_hex` carries
             // the whole transaction and would overcount by the prunable region.

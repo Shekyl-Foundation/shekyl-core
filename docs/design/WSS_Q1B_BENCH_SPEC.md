@@ -275,8 +275,12 @@ dominate the byte cost, and a throughput model cannot see it at all.
 So the harness measures **round trips and per-block wall time as primary**, with
 bytes secondary and **wire-hex and decoded reported separately** — the blob
 arrives hex-encoded, so one figure for both would understate the wire by half.
-The projection to 790 blocks is built from the **per-block distribution**
-(median, with p95 beside it), not from a bandwidth product.
+The projection to 790 blocks is built from the **per-block mean**, because the
+budget is cumulative wall time over every block and the unbiased estimator of a
+sum is the mean. Median and p95 ride beside it as **descriptive** fields.
+*Projecting the median was a false-pass generator:* a sample where a minority of
+blocks are far slower projects as though those blocks did not exist, though the
+refetch must process every one of them.
 
 ### 4.2 Attribution before remedy
 
@@ -423,6 +427,8 @@ it appears to is a refusal rather than a footnote. Beyond the rig pins above:
 | Sampled blocks below half the graded density (open edge) | A corpus that cannot fail cannot pass for a good reason |
 | Any timing series unconverged | §5.2's contract says an unconverged series is *reported*, never substituted for a converged one |
 | The prover failed in the timed loop | A fast repeated failure yields a small median that grades as a pass; there is no denominator without a proof |
+| `--depth` is not the registered graded depth | §6.3.2 row 4 puts the production target at ~6 layers and §3.5 registers the corpus against it; another depth has a different leaf rate and denominator, so its verdict answers a different question while satisfying the same discharge condition |
+| `--min-conditioning-s` lowered with `--grade` | The floor is part of the thermal protocol, not a knob — it is what stops a fast series converging inside its first burst |
 | The graded path did not verify | See §3.6 |
 | Grading depth beyond what the controls licence | **Flatness needs two rungs to exist.** Two or more adjacent rungs licence one rung beyond the deepest; a **single** rung shows the costs agree *at that depth* and nothing about how the ratio moves, so it licences only its own depth — `--control-depth 4 --depth 5` previously graded an extrapolation on no flatness evidence at all |
 | A control arm's timing series did not converge | The divergence is a median, and a median from an unconverged series is the statistic §5.2 says to report rather than compute a licence from |
@@ -476,6 +482,22 @@ unbounded time on the very machine it exists to measure. So each loop stops at
 **60 iterations or 30 minutes, whichever comes first**. The wall budget is a
 parameter rather than only a constant, so a test can reach it: a limit no test
 can exercise is a limit nobody has seen work.
+
+**A conditioning floor sits beneath both caps.** Window comparison alone still
+lets six agreeing samples stop a fast series within seconds — *before the board
+has had time to throttle*, which is the burst measurement §5.2 rejects reached
+through the steady-state test rather than around it. So convergence cannot be
+declared until the series has run **60 seconds**, the figure §6.3.4 uses when it
+says a burst measurement grades a machine that does not exist after a minute. It
+is a floor on *time only*: the worst-case replay, at ~74 s per iteration, clears
+it on its first sample.
+
+**The three limits compose rather than cancel.** A fast series reaches 60
+samples long before 60 seconds, so the iteration cap must not stop it there —
+convergence could then never be declared for it at all. The loop continues while
+either the sample floor or the conditioning floor is unmet; the wall budget
+bounds both. `--min-conditioning-s` may be lowered for dev runs and **cannot be
+graded** when it is.
 
 **The cap is per series, not per run** — stated because it is the kind of
 detail a reader would otherwise assume the other way. A `spend_edge` run times

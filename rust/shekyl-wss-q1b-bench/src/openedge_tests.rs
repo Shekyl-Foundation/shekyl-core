@@ -166,3 +166,30 @@ fn an_empty_sample_is_not_dense_enough_to_grade() {
     // zero blocks must not read as "density fine".
     assert!(!judge_density(&[], crate::corpus::nominal_block_weight()).sufficient);
 }
+
+#[test]
+fn the_projection_is_a_sum_so_slow_blocks_cannot_be_medianed_away() {
+    // The budget is cumulative wall time over 790 blocks. A sample where a
+    // minority of blocks are far slower projects as if they did not exist if
+    // the median drives the projection -- a false pass, since the refetch must
+    // process every block. Nine fast blocks and one 100x block: the median is
+    // blind to it, the mean is not.
+    let mut samples: Vec<_> = (0..9).map(|_| sample(2, 1_000, 0.001)).collect();
+    samples.push(sample(2, 1_000, 0.100));
+    let p = project(
+        &samples,
+        RoundTripFloor {
+            median_s: 0.000_1,
+            samples: 10,
+        },
+    );
+    let blocks = crate::corpus::HELD_BUFFER_BLOCKS as f64;
+    assert!(
+        (p.projected_s - p.per_block_mean_s * blocks).abs() < 1e-9,
+        "the projection must be built from the mean"
+    );
+    assert!(
+        p.projected_s > p.per_block_median_s * blocks * 5.0,
+        "a median-driven projection would have discarded the slow tail"
+    );
+}
