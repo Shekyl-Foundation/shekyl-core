@@ -3817,6 +3817,7 @@ dependencies = [
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
+ "toml 0.8.23",
 ]
 
 [[package]]

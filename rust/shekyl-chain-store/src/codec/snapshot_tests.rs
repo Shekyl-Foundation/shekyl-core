@@ -58,6 +58,32 @@
 //! ([`workflow_gates_this_crate`]). A gate whose subject is absent is not a
 //! gate (rule 47).
 //!
+//! # What this gate cannot see
+//!
+//! A gate written to prove coverage is itself a coverage claim, and it
+//! inherits every hole in its own extractors. The ones that remain,
+//! named so no reader mistakes them for covered:
+//!
+//! - **A crate removed from the workflow entirely.** The encoding-path
+//!   walk seeds from the crates the workflow names in *both* its jobs and
+//!   cross-checks the two; a crate deleted from both at once is invisible
+//!   here. Each snapshot-owning crate's own test must assert its own
+//!   presence (this one does through its needles; `shekyl-engine-state`'s
+//!   through the `PAIRS` array).
+//! - **Build scripts.** `build-dependencies` are excluded from the walk
+//!   on the argument that they cannot change a byte the production
+//!   binary writes; a `build.rs` that generated a layout would falsify
+//!   that. None exists on this path today, and this test does not check.
+//! - **Encoders outside the workspace.** A `redb` bump that re-rendered
+//!   `TypeName` has no source file under `rust/` to match; it is reached
+//!   only because `Cargo.lock` is under the trigger pattern.
+//! - **Shared codecs this store's layout does not use.** A wallet-only
+//!   codec in `shekyl-store-codec` has no daemon fixture by design; its
+//!   bytes are the wallet store's to pin, and this gate says nothing
+//!   about them until a daemon table or cell names the codec.
+//! - **`Blob<K>` bytes.** A blob kind is not a codec: the bytes are the
+//!   chain's own encoding, pinned by `shekyl-wire`'s KATs, not here.
+//!
 //! # Regenerating
 //!
 //! ```text
@@ -88,9 +114,9 @@ use crate::lmdb_order::Hash32;
 use crate::schema;
 
 use super::{
-    post_image, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, PassedThroughFacts, ProbeCell,
-    PropertyCell, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, TxIndex, TxOutputIndices,
-    UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
+    post_image, BlockInfo, Canonical, Coded, CoverageGaps, OutKey, OutTx, PassedThroughFacts,
+    ProbeCell, PropertyCell, RuleSetInForce, SchemaVersion, SettlementEpochBlocks, TxIndex,
+    TxOutputIndices, UndoEntry, UndoLog, PROPERTY_CELLS, SCHEMA_VERSION,
 };
 use crate::ids::{AmountIndex, OutputStorageId, TxStorageId};
 use crate::schema::TableOrdinal;
@@ -906,28 +932,32 @@ fn codec_snapshot_assertions_are_armed() {
 /// A codec cannot be added without a fixture, and a deleted codec cannot
 /// leave an orphan snapshot behind.
 ///
-/// # Why containment here and equality there
+/// # Three directions, because two were not enough
 ///
 /// Since `Canonical` moved to `shekyl-store-codec`, some registered
 /// codecs' impls are in that crate's tree — the scalars and the
-/// vocabulary — and this scan cannot see them. That does **not** loosen
-/// the other direction into something that cannot fail: a registry row
-/// naming a codec that no longer exists is a **compile** error, because
-/// [`snapshotted_codecs!`] expands each row to `<$ty as Canonical>::NAME`
-/// and a `check_or_update_snapshot::<$ty>()` test. So "registered but not
-/// implemented" is caught by the build, "implemented here but not
-/// registered" is caught below, and the moved codecs' *bytes* are still
-/// caught by their fixtures — which stay committed under this crate's
-/// `schemas/` and still pair with [`SCHEMA_VERSION`], which is why
-/// `.github/workflows/schema-snapshot.yml` triggers on the codec crate's
-/// path too ([`workflow_gates_this_crate`]).
+/// vocabulary — and this scan cannot see them, so the scan is containment
+/// (every impl *here* is registered), not equality. Two more checks close
+/// what containment alone leaves open:
 ///
-/// What is **not** asserted, named so it is not mistaken for covered: a
-/// codec added to `shekyl-store-codec` for the *other* store and never
-/// registered here. Its bytes are not this store's layout — and the moment
-/// this store's layout names it, the table or property catalogue snapshot
-/// moves (`tables.snap` carries `shekyl::Coded<{NAME}>`), which is the
-/// same paired bump.
+/// - **A registered codec that vanished** is a compile error:
+///   [`snapshotted_codecs!`] expands each row to `<$ty as Canonical>::NAME`.
+/// - **A used codec that was un-registered** is what neither of the above
+///   sees, and it was the real hole: remove `BlockHeight` from the registry
+///   and delete `block_height.snap`, and the scan, the build and the
+///   snap-set equality all stay green while `tables.snap` still carries
+///   `shekyl::Coded<block_height>` with no fixture pinning its bytes. So
+///   the last assertion checks **need against supply**: every codec this
+///   store's layout *uses* — a `Coded<{NAME}>` table value in
+///   [`schema::catalogue`], a property cell's value codec in
+///   [`PROPERTY_CELLS`] — must be a registered codec. The layout is the
+///   demand, the registry is the supply; a coverage gate compares the two,
+///   not the supply with itself.
+///
+/// A shared codec this store's layout does not use (a wallet-only codec in
+/// `shekyl-store-codec`) is demanded by nothing here and stays
+/// unregistered — by design, not by omission (module docs, *What this gate
+/// cannot see*).
 #[test]
 fn every_canonical_impl_has_a_snapshot() {
     if env::var_os("UPDATE_SNAPSHOTS").is_some() {
@@ -977,6 +1007,46 @@ fn every_canonical_impl_has_a_snapshot() {
         names,
         "rust/shekyl-chain-store/schemas/*.snap must be exactly the registered codecs' NAMEs \
          plus the catalogue stems {CATALOGUE_SNAPS:?}"
+    );
+
+    // Need against supply (doc comment above). The `Coded<V>` TypeName's
+    // prefix is derived from a real one rather than spelled here, so this
+    // reads the same string `shape` writes.
+    let codec_names: BTreeSet<&str> = snapshotted().into_iter().map(|(_, name)| name).collect();
+    let probe = <Coded<BlockHeight> as redb::Value>::type_name();
+    let coded_prefix = probe
+        .name()
+        .strip_suffix(&format!("{}>", BlockHeight::NAME))
+        .expect("a Coded<V> TypeName ends in `{V::NAME}>`")
+        .to_owned();
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    for spec in schema::catalogue() {
+        let value = spec.value.name();
+        if let Some(rest) = value.strip_prefix(coded_prefix.as_str()) {
+            let name = rest.strip_suffix('>').unwrap_or_else(|| {
+                panic!(
+                    "table `{}`: value TypeName {value:?} is not `{coded_prefix}{{NAME}}>`",
+                    spec.name
+                )
+            });
+            used.insert(name.to_owned());
+        }
+    }
+    for cell in PROPERTY_CELLS {
+        used.insert(cell.value.to_owned());
+    }
+    assert!(
+        !used.is_empty(),
+        "no table or property cell names a codec; the demand side read nothing"
+    );
+    let unpinned: Vec<&String> = used
+        .iter()
+        .filter(|n| !codec_names.contains(n.as_str()))
+        .collect();
+    assert!(
+        unpinned.is_empty(),
+        "this store's layout uses codecs that have no registered fixture: {unpinned:?} — \
+         register each in `snapshotted_codecs!` so its bytes are pinned under SCHEMA_VERSION"
     );
 }
 
@@ -1031,21 +1101,68 @@ fn scan_impls(dir: &Path, out: &mut BTreeSet<String>) {
     }
 }
 
+/// The crates whose snapshot suites this workflow runs and versions — its
+/// subject, read from the workflow itself so the seed set is not a list
+/// here that the workflow could outgrow. Two instruments over one field:
+/// the assert job's `cargo test -p <crate>` lines and the bump job's
+/// `rust/<crate>/schemas/` mentions must name the same crates, or a suite
+/// runs that is never versioned (or the reverse), which is a wiring defect
+/// this test names rather than absorbs. This crate must be among them
+/// (rule 47: the reader read *something*, and it read the right file).
+///
+/// What this cannot see: a crate removed from **both** jobs at once
+/// (module docs, *What this gate cannot see*).
+fn snapshot_owning_crates(regions: &BTreeMap<String, String>) -> BTreeSet<String> {
+    let assert_text = regions
+        .get(ASSERT_JOB)
+        .map(String::as_str)
+        .unwrap_or_default();
+    let mut tested = BTreeSet::new();
+    let mut words = assert_text.split_whitespace();
+    while let Some(word) = words.next() {
+        if word == "-p" {
+            tested.insert(words.next().expect("`-p` names a crate").to_owned());
+        }
+    }
+    let bump_text = regions
+        .get(BUMP_JOB)
+        .map(String::as_str)
+        .unwrap_or_default();
+    let mut versioned = BTreeSet::new();
+    for (idx, _) in bump_text.match_indices("rust/") {
+        let rest = &bump_text[idx + "rust/".len()..];
+        let mut segments = rest.split('/');
+        if let (Some(krate), Some("schemas")) = (segments.next(), segments.next()) {
+            versioned.insert(krate.to_owned());
+        }
+    }
+    assert_eq!(
+        tested, versioned,
+        "the assert job tests {tested:?} but the bump job versions {versioned:?}; every \
+         snapshot-owning crate must appear in both"
+    );
+    assert!(
+        tested.contains(env!("CARGO_PKG_NAME")),
+        "the workflow's subject {tested:?} does not include this crate"
+    );
+    tested
+}
+
 /// Directories under `rust/` whose code sits on the path from a stored
-/// value to its bytes: this crate and the closure of its **normal**
-/// path dependencies, walked from the manifests — the same source cargo
-/// resolves from — so a new edge is found without anyone listing it.
-/// Dev- and build-dependencies are excluded: they cannot change a byte the
-/// production binary writes. Members are directories relative to `rust/`,
-/// not crate names, so the vendored `shekyl-oxide/crypto/*` crates the
-/// closure reaches are held to the same coverage.
-fn encoding_path_dirs() -> BTreeSet<String> {
+/// value to its bytes: every snapshot-owning crate and the closure of its
+/// **normal** path dependencies, walked from the manifests — the same
+/// source cargo resolves from — so a new edge is found without anyone
+/// listing it. Dev- and build-dependencies are excluded: they cannot change
+/// a byte the production binary writes. Members are directories relative to
+/// `rust/`, not crate names, so the vendored `shekyl-oxide/crypto/*` crates
+/// the closure reaches are held to the same coverage.
+fn encoding_path_dirs(seeds: &BTreeSet<String>) -> BTreeSet<String> {
     let rust = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .canonicalize()
         .expect("rust/ resolves");
     let mut seen = BTreeSet::new();
-    let mut todo = vec![String::from("shekyl-chain-store")];
+    let mut todo: Vec<String> = seeds.iter().cloned().collect();
     while let Some(dir) = todo.pop() {
         if !seen.insert(dir.clone()) {
             continue;
@@ -1084,45 +1201,45 @@ fn encoding_path_dirs() -> BTreeSet<String> {
     seen
 }
 
-/// The `path = "…"` targets under a manifest's normal-dependency
-/// sections (`[dependencies]` and `[target.*.dependencies]`; never dev or
-/// build). House style writes each dependency inline on one line; any
-/// other spelling of a path dependency is refused loudly rather than
-/// skipped, because a dependency this walk cannot see is a crate the gate
-/// cannot see.
+/// The `path = "…"` targets under a manifest's normal-dependency sections
+/// (`[dependencies]` and `[target.<cfg>.dependencies]`; never dev or
+/// build), read with a TOML parser rather than by line: a reader that
+/// skipped a spelling it did not know — single quotes, a
+/// `[dependencies.x]` table — would report a clean subset, and the
+/// extractor is the gate. A `path` that is not a string is refused, not
+/// skipped.
 fn normal_path_dependencies(manifest: &str) -> Vec<String> {
-    let mut in_normal_deps = false;
+    let table: toml::Table = manifest
+        .parse()
+        .unwrap_or_else(|e| panic!("manifest is not valid TOML: {e}"));
+    let deps_of = |value: &toml::Value, section: &str| -> Vec<(String, toml::Value)> {
+        let table = value
+            .as_table()
+            .unwrap_or_else(|| panic!("`{section}` is not a table"));
+        table.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+    };
+    let mut entries = Vec::new();
+    if let Some(deps) = table.get("dependencies") {
+        entries.extend(deps_of(deps, "dependencies"));
+    }
+    if let Some(targets) = table.get("target").and_then(toml::Value::as_table) {
+        for (cfg, body) in targets {
+            if let Some(deps) = body.get("dependencies") {
+                entries.extend(deps_of(deps, &format!("target.{cfg}.dependencies")));
+            }
+        }
+    }
     let mut out = Vec::new();
-    for line in manifest.lines() {
-        let trimmed = line.trim();
-        if let Some(header) = trimmed.strip_prefix('[') {
-            let header = header.trim_end_matches(']');
-            assert!(
-                !header.starts_with("dependencies."),
-                "{trimmed}: spell path dependencies inline under [dependencies] so the \
-                 encoding-path walk can read them"
-            );
-            in_normal_deps = header.ends_with("dependencies")
-                && !header.contains("dev-dependencies")
-                && !header.contains("build-dependencies");
+    for (name, spec) in entries {
+        // `x = "1.0"` is a registry dependency: no path, nothing under rust/.
+        let Some(spec) = spec.as_table() else {
             continue;
+        };
+        match spec.get("path") {
+            None => {}
+            Some(toml::Value::String(path)) => out.push(path.clone()),
+            Some(other) => panic!("dependency `{name}`: `path` is {other:?}, not a string"),
         }
-        if !in_normal_deps || trimmed.starts_with('#') {
-            continue;
-        }
-        let Some(rest) = trimmed.split_once("path").map(|(_, r)| r) else {
-            continue;
-        };
-        let Some(quoted) = rest.trim_start().strip_prefix('=') else {
-            continue;
-        };
-        let Some(after_quote) = quoted.trim_start().strip_prefix('"') else {
-            continue;
-        };
-        let Some((target, _)) = after_quote.split_once('"') else {
-            continue;
-        };
-        out.push(target.to_owned());
     }
     out
 }
@@ -1233,7 +1350,8 @@ fn workflow_gates_this_crate() {
                 .collect()
         })
         .unwrap_or_default();
-    for dir in encoding_path_dirs() {
+    let seeds = snapshot_owning_crates(&regions);
+    for dir in encoding_path_dirs(&seeds) {
         assert!(
             trigger_patterns.iter().any(|p| trigger_covers(p, &dir)),
             "{}: the trigger {trigger_patterns:?} does not cover `rust/{dir}`, a crate on the \
