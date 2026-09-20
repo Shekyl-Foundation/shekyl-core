@@ -323,6 +323,16 @@ see which claims carry machine evidence and which carry a human's word.
 push the schema's first review to the rig, which is the worst place to discover
 a problem with it. Only *grading* is gated.
 
+**What this rig grades, and what it does not.** The pins grade **obligation-A**
+quantities — the principal's proving path, which every wallet walks, and which
+is why rule 76's floor is the right subject for them. **No serving-path
+measurement grades on this rig**, conservative baseline notwithstanding: an
+archiver runs a bonded persona with a Tor service and multi-gigabyte holdings,
+and sizing that box is a separate question with its own reference class, owed
+when the software package structure settles (`FOLLOWUPS.md`). Budgeting a
+serving path against a Pi is a deliberate over-conservatism and a sound default;
+it is not a verdict this bench issues.
+
 ### 5.2 "Sustained" is a convergence criterion, not an iteration count
 
 §6.3.4: *"run to steady state before measuring"*, because *"a burst measurement
