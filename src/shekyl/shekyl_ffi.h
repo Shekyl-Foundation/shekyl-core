@@ -4043,7 +4043,66 @@ int32_t shekyl_logical_state_digest_v0(
     const uint8_t* curve_root,
     uint8_t* out_digest);
 
+// ---------------------------------------------------------------------------
+// DRS-E2 trace writer (`docs/design/DRS_E2_REPLAY_DRIVER.md` §3.9, RD-Q2).
+// The one door the C++ LMDB exporter (`shekyl_e2_trace_export`) hands
+// bytes through. HARVEST SHIM: this surface and its C++ caller die with
+// the daemon at cutover (§1.3). The artifact's format is Rust-minted and
+// its checkpoints are hashed in Rust from the families the caller walked —
+// the C++ never hashes (RD-Q9).
+//
+// Lifecycle: open -> push_facts* (consecutive heights) -> push_checkpoint*
+// -> finish (trailer, frees) | abort (frees, file left truncated).
+// ---------------------------------------------------------------------------
+struct ShekylE2TraceWriter;
+
+/// Create `path` (`path_len` UTF-8 bytes, not NUL-terminated) and write the
+/// header. NULL on failure (reason logged).
+struct ShekylE2TraceWriter* shekyl_e2_trace_open(const uint8_t* path, size_t path_len);
+
+/// Facts at `height` (the next consecutive height): the six passed-through
+/// facts in ConnectFacts order, `root_after` 32 bytes, cumulative
+/// difficulty as (lo, hi) u64 halves.
+int32_t shekyl_e2_trace_push_facts(
+    struct ShekylE2TraceWriter* writer,
+    uint64_t height,
+    uint64_t weight,
+    uint64_t long_term_weight,
+    uint64_t coins_generated,
+    uint64_t burned,
+    const uint8_t* root_after,
+    uint64_t long_term_effective_median,
+    uint64_t cumulative_difficulty_lo,
+    uint64_t cumulative_difficulty_hi);
+
+/// The LMDB logical state after `height` (which must already have facts),
+/// from the families: `n_blocks` × 32-byte hashes in height order,
+/// `n_spent` × 32-byte key images in any order (either pointer may be NULL
+/// only when its count is 0), the 32-byte live root.
+int32_t shekyl_e2_trace_push_checkpoint(
+    struct ShekylE2TraceWriter* writer,
+    uint64_t height,
+    const uint8_t* block_hashes,
+    uint64_t n_blocks,
+    const uint8_t* spent_keys,
+    uint64_t n_spent,
+    const uint8_t* curve_root);
+
+/// Trailer, flush, free. Consumes the handle either way.
+int32_t shekyl_e2_trace_finish(struct ShekylE2TraceWriter* writer);
+
+/// Free without a trailer.
+void shekyl_e2_trace_abort(struct ShekylE2TraceWriter* writer);
+
 } // extern "C"
+
+#define SHEKYL_E2_TRACE_OK               0
+#define SHEKYL_E2_TRACE_ERR_NULL_PTR    -1
+#define SHEKYL_E2_TRACE_ERR_OVERFLOW    -2
+/// A facts height gap, an unanchored checkpoint, or a duplicate checkpoint.
+#define SHEKYL_E2_TRACE_ERR_SEQUENCE    -3
+#define SHEKYL_E2_TRACE_ERR_IO          -4
+#define SHEKYL_E2_TRACE_ERR_BAD_PATH    -5
 
 /// `shekyl_difficulty_lwma1_next` returned successfully and
 /// `*out_next_difficulty` carries the next-block difficulty target.

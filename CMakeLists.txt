@@ -524,6 +524,14 @@ option(BUILD_TESTS "Build tests." OFF)
 # pinned external/randomx-v2 submodule and exposes the
 # shekyl_randomx_v2 IMPORTED static-library target.
 # See docs/design/RANDOMX_V2_PHASE1_PLAN.md §§2.3, 3.3, 3.4.
+# DRS-E2 trace exporter (docs/design/DRS_E2_REPLAY_DRIVER.md §3.9): a
+# harvest shim that walks LMDB and hands bytes to the Rust trace writer.
+# OFF by default — the daemon build does not need it, and it is deleted in
+# the same commit that deletes the daemon (§1.3).
+option(BUILD_E2_TRACE_EXPORT
+  "Build shekyl-e2-trace-export, the DRS-E2 LMDB→trace harvest shim (default OFF)."
+  OFF)
+
 option(BUILD_RANDOMX_V2_MINER_LIB
   "Build RandomX v2 C reference library out-of-tree (differential harness / Hole-1 only; default OFF). Production PoW is the Rust verifier."
   OFF)

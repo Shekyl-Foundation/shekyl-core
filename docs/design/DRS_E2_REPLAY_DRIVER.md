@@ -444,7 +444,8 @@ whole of which dies with the daemon (§1.3).
 
 Facts records are consecutive by height from the first; a checkpoint's height
 must equal the height of a facts record already written (a digest after a
-block that is not in the trace is unanchored). The reader exposes the two typed
+block that is not in the trace is unanchored). The exporter can take a
+checkpoint **only at the tip** of the LMDB it reads (RD-F16). The reader exposes the two typed
 doors RD-Q2 ruled: `borrow(h) -> Borrowed<Facts>` for `connect` (the `Fact::origin`
 is `PassedThrough` by construction of the type — a borrowed fact cannot be
 constructed as derived) and `expect(h) -> Expected<Checkpoint>` for the grader
@@ -606,6 +607,21 @@ plan already puts the first real chain.
   explicit `shekyl-pow-randomx` change for the RandomX lane, decided on the
   benchmark this pipeline emits (RD-F11) — the same measure-first shape as the
   dataset mode.
+- **RD-F16 (commit 4c, 2026-09-20) — LMDB holds the spent-key set as of
+  the tip only, so a trace checkpoint can be taken at the tip of an
+  export and nowhere else.** `for_all_key_images` walks the live set; there
+  is no as-of-height view of `spent_keys` (nothing records when a key image
+  was spent). A checkpoint at a non-tip height would pair a past chain
+  (hashes `0..=h`, `curve_tree_roots[h+1]`) with the present set and be
+  wrong by construction. The exporter therefore writes **one** checkpoint,
+  after the last exported height, and only when that height is the recorded
+  tip; several checkpoints mean several snapshots (or one long-running
+  export interleaved with the daemon's growth — not done). §1.1's
+  "checkpoints at digest heights make long replays resumable" is a redb-side
+  statement (the replay can digest itself at any height, commit 2) and
+  stands; what this finding bounds is where an LMDB *expectation* exists to
+  grade against. Falsify by an LMDB table keyed by height that yields the
+  spent set at `h` — none exists at `11929805d`.
 - **RD-F13 (Round-1 sweep, `d6ba4d98f`) — as merged, a Fakechain verdict can
   never connect.** `connect` resolves `in_force: RuleSetId` through
   `RuleSet::for_id` over `ISSUED` and compares the set by value; Fakechain
@@ -686,6 +702,7 @@ code or a re-pointed FOLLOWUPS row with a live owner.
 | 2026-09-19 | **Round 1 OPENED with the sweep of #785 as merged** (`93f91b0d4`; §3.7). Two review commits Round 0 never saw: `5e3c2982a` (`Target` is `NonZeroU128`, D6 records on every path so `RuleSet::fakechain` can mint; `StructurallyValid` and `Stale::RuleSet` carry the set by value; D4 overflow unreachable-by-fixture) and `d6ba4d98f` (`ChainValid` carries the set; `connect` compares by value after `for_id`). The second exposes **RD-F13**: a Fakechain verdict can never connect as merged, because no id resolves to a `Fixed` set — **RD-Q10** posed (default: `connect` takes the in-force `RuleSet` by value). RD-F6 discharged. Branch synced to `dev` (`d5d418f5b`). |
 | 2026-09-19 | **Direction memo received and recorded (§0 verbatim, §0.1 provenance).** Re-pinned to `origin/dev@306af9bae` (`e80cdbf23`). RULED (memo §2) landed: the "is not" clause (§1.2 — not a second connect path), RD-Q1 (the production ingest crate; name is Q-A), RD-Q2 (corpus + trace with **typed doors** `expect(h)` / `borrow(h)` keyed off `Fact::origin`; RD-F1 collapsed, RD-F2 dissolved), the grader's law and adjudication sentence (RD-Q6; also `CONSENSUS_STORE_RECONCILIATION.md` §5.4.1), RD-F12 corrected to the existing `randomx-v2-sys` boundary. REVIEW INPUT recorded, not ruled (§3.8): stage shape, mutation and reorg corpus families (the FTL §5 row's closer), `Stale::Seed` grounding verified at `fault.rs:70` / `block.rs:132`, `PowHash` as the parity seam. Memo §4: Q-A → RD-Q1 default; Q-B → **RD-Q11** posed (kameo for the one stateful actor); Q-C → answered under RD-Q3/RD-F11 (no dataset mode exposed; parallel `form`; benchmark in the deliverable); Q-D → **RD-Q12** posed (the differential workflow already triggers on both pins — promotion is the framing and a `longhash` fuzz job). Memo §5 honoured: RD-F5 stands, the FOLLOWUPS rows stand, the wallet-store lane untouched. |
 | 2026-09-19 | **Round 1 RULED** (all four verified against the plan text). RD-Q9 producers-only as **two clauses** — the rule's verdict grades on its own evidence; the digest component it feeds grades not-evidence — so "producers only" is not quoted as *B5 grades as evidence*. RD-Q10 as defaulted, plus the `Fixed` id-is-not-set caveat cross-referenced **from the CEN-B3 belt** (`connect.rs:441`), the likeliest site to use id equality as a proxy. RD-Q11 as defaulted, with the Validate+Connect actor's supervision **no-restart** — a `Corrupt` halt is terminal, and a restart would be the `InvalidBlock`-mapping failure in another shape; tested by halt-then-assert-not-back. RD-Q12 as defaulted, plus fuzz hygiene — seed logged, mismatching blob and both `PowHash`es emitted as an artifact, or the gate is an alarm that gets muted. Commit plan §7 updated (5, 6, 7, 8b). Implementation may begin. |
+| 2026-09-20 | **§7 commits 1, 6, 4a, 4b, 4c landed** (after #794 merged and was merged in). Commit 1: `WriteBatch::refuse_corrupt(Corrupt)`, SI-10 (RD-Q4); commit 6: `connect(…, in_force: RuleSet)`, `RuleSetUnknown` deleted, RD-F13's acceptance fixture (RD-Q10); 4a: the corpus and trace artifacts per §3.9, `CorpusReader` as the first `Source`, RD-Q2's two typed doors; 4b: `fetch_corpus` over the `Rpc` trait against a scripted transport, the pruned answer caught by the writer at its height; 4c: `shekyl_e2_trace_*` FFI (Rust writes and hashes; the C++ never does) and `shekyl_e2_trace_export.cpp`, opt-in `BUILD_E2_TRACE_EXPORT`, syntax-checked against the tree's headers with generated params (no C++ build on the host) — **RD-F16** found writing it: LMDB yields the spent set only at the tip, so a checkpoint exists only there. |
 | 2026-09-20 | **§7 commits 2 and 3 landed.** Commit 2: `ReadSnapshot::logical_state_digest_v0` (RD-F5) — `store/digest_reads.rs` assembles `block_info` hashes over `0..=tip`, the `spent_keys` set (K2) and the live root `curve_tree_roots[tip + 1]` (`EMPTY` when nothing is recorded; a hole is SI-7) into `LogicalStateDigestV0`, which carries its **components** beside the outer digest because the root component is borrowed (RD-F7) and grades differently under RD-Q9; `digest_v0` gained `outer_preimage`/`outer_digest` so the assembly hashes once and the pinned fixture is unchanged; the live-root read is private (S-CURVE shapes the public surface). Pop-symmetry and independent-inputs tests. Commit 3: the `shekyl-chain-ingest` crate — `Source`/`IngestEvent::{Extend, Rewind}`/`Seq` (RD-Q13; `CorpusBlock` network-shaped, no facts on the event), `Sequencer` (in order, never past a gap, refuses released/pending positions), `ChainSubstrate<C: Clock>` over `compute_hash` + a shared `CacheStore` (RD-Q3, RD-F14; the hasher is total, the fault is the clock's). Alongside: `tx_reads::hash_row` (#800) was a duplicate of `chain_reads::cell` and is gone, the name↔table debug assertion moving into `cell`. |
 | 2026-09-20 | **Implementation opened; §7 commit 0 landed** (`check_followups_owners.py`, RD-F4 discharged). Worktree cut from `dev` `c0b2bb12a`; the sweep since `fbc92287a` found only #800 under this plan's ground (S-TX: `read.rs` T1–T6, `lmdb_order/hash.rs`; rules, RandomX and difficulty crates unchanged), so §3's citations hold. CTS PR A (#794, `shekyl-store-codec`) is in flight and touches `store/connect.rs`; commits 1 and 6 wait for it, commits 2–4 do not. |
 | 2026-09-19 | Two implementation carry-forwards pinned on §7 so they outlive the review thread: commit 1's message names itself as what #785 shed and why it waited; commit 5 writes the no-restart test first. Ground confirmed: `dev` at `6c41bf820` with #785 in — no stale ground left in this file. |

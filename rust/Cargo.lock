@@ -4279,6 +4279,7 @@ dependencies = [
  "shekyl-archival-retention",
  "shekyl-bulletproofs",
  "shekyl-chacha",
+ "shekyl-chain-ingest",
  "shekyl-chain-store",
  "shekyl-consensus",
  "shekyl-crypto-hash",
