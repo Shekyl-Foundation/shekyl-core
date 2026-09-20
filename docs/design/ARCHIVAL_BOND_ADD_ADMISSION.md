@@ -27,10 +27,12 @@ Two legs, and they do different work:
 | **"exists"** | a `shard_id` naming no shard — past the end of the partition, or in a partition that does not reach that far yet | **Hygiene.** A bond may not name a thing that is not a thing |
 | **"closed and final"** | a `shard_id` whose boundary has not closed (`b_{k+1}` does not exist yet), or whose contents a reorg can still replace | **Determinism — the load-bearing leg.** Membership of an unclosed shard is not yet a fact, and membership of a shard within `D_max` of the tip is not yet a *stable* fact |
 
-The second leg is the one that carries the rule. `PDM-Q6` item 3 already makes
-the **open frontier shard non-bondable**; this extends the same reasoning to
-the reorg window, and states both as one admission predicate rather than two
-facts a reader has to join.
+The second leg is the one that carries the rule, and it is **an extension, not
+an invention**: `PDM-Q6` item 3 already rules the **open frontier shard
+non-bondable** (`ARCHIVAL_PRUNED_DAEMON_MODE.md:458-459`). This ruling extends
+that reasoning to **the reorg window**, adds the **existence** leg, and states
+all of it as **one admission predicate** rather than facts a reader has to
+join. §3 sizes what that leaves to build.
 
 ### 1.1 What the rule is *not* justified by
 
@@ -102,12 +104,21 @@ needs no special handling:
 
 ---
 
-## 3. Why there is no predecessor rule to re-key
+## 3. What predecessor exists, and what does not — sizing the work
 
 **This is the correction the wallet round returned, and it changes the shape of
 the daemon lane's task.** It is easy to read the missing guard as a re-key —
 the leaf era had `frozen_segment_count`, so surely the byte era needs its
-successor. **It is not a re-key, because there was no predecessor.**
+successor. **It is not a re-key — but the precise statement matters to whoever
+sizes the work, so state it precisely rather than as a flat "no predecessor":**
+
+| Half | Predecessor in **design** | Predecessor in **code** |
+| --- | --- | --- |
+| **"closed and final"** | **Partly yes.** `PDM-Q6` item 3 already rules the **open frontier shard** (no `b_{k+1}` yet) **not bondable** — *"a clean `HoldingsUpdate` admission rule the per-tx model did not give"* (`ARCHIVAL_PRUNED_DAEMON_MODE.md:458-459`). **Unbuilt**, and silent on the reorg window, which this ruling adds | **No** |
+| **"exists"** | **No** | **No** |
+
+So the task is **a new rule plus an unimplemented old one**, not a translation
+and not a greenfield. The evidence for the code column:
 
 - `ShardSet::new` — *"the one fallible constructor — every decoder / FFI
   marshal / builder routes through it"*
@@ -125,9 +136,11 @@ successor. **It is not a re-key, because there was no predecessor.**
   (`src/rpc/archival_shard_coverage.cpp:34`), and the **freeze / pop-revert**
   path (`src/blockchain_db/lmdb/db_lmdb.cpp:8090`). **None is bond admission.**
 
-So the daemon lane is **building a rule, not porting one** — and a reader who
-trusts the inherited claim will look for a predecessor, find the C++ symbol,
-and conclude the work is a translation. It is not.
+So the daemon lane is **building**, not porting — and a reader who trusts the
+inherited claim will look for a predecessor, find the C++ symbol, and conclude
+the work is a translation. **The one thing it *can* reuse is the design
+intent of `PDM-Q6` item 3's non-bondable frontier shard**, which is a paragraph
+to honour rather than code to port.
 
 ---
 
@@ -161,6 +174,14 @@ The **rule** is ruled. These are **how**, and they are E4 / S-ARCH's:
 length rows** land (S-CHAIN-W) and **S-PRUNE derives `b_*`** — the same gate
 `WALLET_SIDE_STORE.md` §5 rows 1–2 names for the wallet side.
 
+**The obligation that travels with these questions (rule 94):** this document
+mints no identifier family, because the answering lane already has one. **When
+E4 / S-ARCH answers, its family is stamped into this document's
+[`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) §7 row**, so the trail runs
+**both** directions — the questions point at the lane, and the lane's answer
+points back at the questions. Without that, a handoff with no family is a
+handoff with no return address.
+
 ---
 
 ## 5. What this closes elsewhere
@@ -181,4 +202,4 @@ length rows** land (S-CHAIN-W) and **S-PRUNE derives `b_*`** — the same gate
 
 | Date | Decision |
 | --- | --- |
-| 2026-09-19 | **RULED (maintainer): bond admission accepts only valid, closed, final shards.** Two legs — *"exists"* as hygiene, *"closed and final"* as the determinism load-bearer, extending `PDM-Q6` item 3's non-bondable frontier shard to the reorg window. **Justified on unrepresentability and network economy, explicitly *not* exploit prevention:** the mechanism digests a ghost unaided — bond-derived draws, the single shared 404 (`provider.rs:239`), recorded misses, no credit bit, m-of-n across epochs, the ordinary slash — so the guard is defense in depth in the exact sense, a layer in front of a mechanism that already works. It spares the **network** the draws, circuits, witness work and slash machinery, not `P` from itself. **The reasoning is recorded, not just the conclusion, because the guard survived having its scariest justification dismantled** — a rule still worth its cost after the exploit story dies stands on structure, and nobody should later feel the need to re-inflate the threat to defend it. **Correction carried from the wallet lane:** there is **no predecessor rule to re-key** — `ShardSet::new` enforces only cardinality and duplicate-freeness (`bond_wire.rs:210-227`), and `frozen_segment_count`'s three consumers (D2 escalation operand, coverage RPC, freeze / pop-revert) are **none of them** bond admission, contrary to the 2026-09-17 decision-log sentence. Three design questions left to **E4 / S-ARCH**: the predicate's site, its evaluation height (with `blockchain.cpp:1469-1499`'s read-point hazard applying), and whether `ShardSet` gains chain context or a separate check owns it — the last trading one fallible constructor against a pure one. |
+| 2026-09-19 | **RULED (maintainer): bond admission accepts only valid, closed, final shards.** Two legs — *"exists"* as hygiene, *"closed and final"* as the determinism load-bearer, extending `PDM-Q6` item 3's non-bondable frontier shard to the reorg window. **Justified on unrepresentability and network economy, explicitly *not* exploit prevention:** the mechanism digests a ghost unaided — bond-derived draws, the single shared 404 (`provider.rs:239`), recorded misses, no credit bit, m-of-n across epochs, the ordinary slash — so the guard is defense in depth in the exact sense, a layer in front of a mechanism that already works. It spares the **network** the draws, circuits, witness work and slash machinery, not `P` from itself. **The reasoning is recorded, not just the conclusion, because the guard survived having its scariest justification dismantled** — a rule still worth its cost after the exploit story dies stands on structure, and nobody should later feel the need to re-inflate the threat to defend it. **Correction carried from the wallet lane, stated precisely:** the task is **a new rule plus an unimplemented old one** — `PDM-Q6` item 3 already rules the open frontier shard non-bondable in **design** (`:458-459`, unbuilt, silent on the reorg window), while the **existence** half has no predecessor at all and **neither half has one in code** — `ShardSet::new` enforces only cardinality and duplicate-freeness (`bond_wire.rs:210-227`), and `frozen_segment_count`'s three consumers (D2 escalation operand, coverage RPC, freeze / pop-revert) are **none of them** bond admission, contrary to the 2026-09-17 decision-log sentence. Three design questions left to **E4 / S-ARCH**: the predicate's site, its evaluation height (with `blockchain.cpp:1469-1499`'s read-point hazard applying), and whether `ShardSet` gains chain context or a separate check owns it — the last trading one fallible constructor against a pure one. |
