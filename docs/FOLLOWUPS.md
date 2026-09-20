@@ -14,6 +14,9 @@ There is no V3.1 / V3.2 / V3.x release train.
 
 Default. Lands before genesis if it should exist at launch.
 
+- **Fourteen crates meet the feature-governance trigger ungoverned** (declare a Cargo feature another workspace crate enables, directly or by forwarding) and sit in the exact-hit, shrink-only grandfather list of [`scripts/ci/check_test_only_features.py`](../scripts/ci/check_test_only_features.py), whose docstring owns the detail; two are normal-edge test-feature findings that go first, and the fifteenth entry (`shekyl-crypto-pq`) is F-7's. Falsify by the gate reporting `trigger met and grandfathered (shrink-only): 0`.
+  - Target: pre-genesis
+
 - **`PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.** A hash over the leaf field chosen on measured gates and published cryptanalysis, with generated parameters, pinned vectors, a registry row and one shared Rust implementation; it makes the leaf commitment binding beyond discrete log and is what a post-quantum-sound membership leg would prove over ([`design/FCMP_SPEND_LINKABILITY.md`](design/FCMP_SPEND_LINKABILITY.md) §6.5). Ruled 2026-09-14: designed with the V4 lattice-only transition (itself gated on lattice threshold signatures or mature isogeny signatures such as PRISM) as one leaf-format cutover; until then `PL-D3a`'s record beside the point is the post-quantum ownership record for every v3 output.
   - Target: V4
 
@@ -102,7 +105,7 @@ Default. Lands before genesis if it should exist at launch.
 - **Release-asset manifest signing owed before the first non-RC release**
   - Target: pre-genesis
 
-- **F-7 structural gate for the test-only FFI exports shipped in the production archive.** The PQC test helpers (`shekyl_pqc_keypair_generate`, `shekyl_pqc_sign_multisig_participant`, added under `shekyl-crypto-pq`'s `test-utils` feature because cmake builds one `-p shekyl-ffi` archive that every binary links) ship in production through feature unification; the header and Rust docs mark them, but nothing structural keeps them out. The curve-tree replica family `shekyl_curve_tree_replica_*` (PR #623 — the core_tests generator's header-root oracle, `rust/shekyl-ffi/src/curve_tree_replica_ffi.rs`) is the same class and belongs to the same gate. Remedy: a separate test-only archive, or a cmake feature that production targets never enable, with an `nm` gate asserting the families' absence from shipped binaries. *(This line was truncated on `dev` — "(added" and nothing after — and is restored here from the Cargo.toml note that cites it.)*
+- **F-7 — structural gate for the test-only FFI exports that ship in the production archive; two leak shapes, two remedies, one `nm` gate seeded from a sweep** — record: [`design/F7_TEST_ONLY_FFI_EXPORTS.md`](design/F7_TEST_ONLY_FFI_EXPORTS.md).
   - Target: pre-genesis
 
 - **GENESIS ADDRESS FORMAT: PQ signing anchor decision (address v2) — [`design/WALLET_MESSAGE_SIGNING.md`](./design/WALLET_MESSAGE_SIGNING.md)**
