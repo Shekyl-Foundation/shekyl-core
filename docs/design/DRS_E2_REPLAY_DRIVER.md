@@ -443,8 +443,13 @@ states is now gated, and the ingest crate must not enable it.
   must resolve.** `scripts/ci/check_followups_owners.py`: every FOLLOWUPS row
   carries `Owner:` resolving to a live `docs/design/` document or a
   registered index-§2 family (read through the prefix gate's own registry
-  reader); 338 pre-existing rows grandfathered by exact heading in a list
-  that only burns down; selftest of twelve cases; wired in `docs-gates.yml`.
+  reader); pre-existing rows grandfathered by exact heading in a list that
+  only burns down — **338 at the gate's birth, 340 after the merge with
+  #792/#800 landed three pre-gate rows** — under a `GRANDFATHER_CEILING`
+  ratchet in the script (a longer list is refused; a ceiling more than five
+  above the list is refused, so the burn-down locks in); doc paths are
+  canonicalised beneath `docs/design/` so `design/../completed/` cannot pass
+  as live; selftest of sixteen cases; wired in `docs-gates.yml`.
   **One narrowing of the memo, stated so it is reviewable:** the memo listed
   "an open PR" among resolvable owners; the gate does not accept a PR number
   alone — PRs merge and close, and a row whose only owner is a merged PR is

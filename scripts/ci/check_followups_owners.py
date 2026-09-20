@@ -34,18 +34,30 @@
 # GRANDFATHER. Rows that predate the cell are listed BY EXACT HEADING in
 # scripts/ci/followups_owner_grandfather.txt (the shape #786's GOVERNED_OWNERS
 # took). The gate asserts every listed heading still exists (a row that is
-# gone must leave the list — red when the item is gone, rule 47's second leg)
-# and that the list never grows. A grandfathered row gains an Owner: by
-# leaving the list; the list is a burn-down, not a permanent exemption.
+# gone must leave the list — red when the item is gone, rule 47's second leg).
+#
+# "NEVER GROWS" IS A RATCHET, NOT A COMMENT. GRANDFATHER_CEILING below bounds
+# the list's length; a list longer than the ceiling is refused, so adding a
+# row to the exemption file cannot pass the live gate without ALSO raising a
+# constant in this script — a diff to the gate itself, reviewed as one, with
+# its reason in the commit (the shape check_redb_schema_key_types.py's floor
+# and the GUI's file-size ratchet take). The ceiling must also be LOWERED as
+# rows burn down: a ceiling more than GRANDFATHER_SLACK above the list is
+# refused, so the win is locked in rather than left as headroom for the next
+# addition. The one legitimate raise is a merge that lands rows written before
+# this gate existed (PR #804 did exactly that: 338 → 340 at the merge with
+# #792); it is legitimate because it is visible.
 #
 # SUBJECT (rule 47). Refuses to pass when FOLLOWUPS.md is missing or has no
 # rows, when the index registry parses empty, or when NO row carries an
 # Owner: (a gate over a cell nobody writes has no subject).
 #
 # --selftest exercises: a doc owner resolves; a family owner resolves; a
-# completed/ path is refused; a prose owner ("the E2 lane") is refused; a
-# PR-only owner is refused; a grandfathered row missing its heading is
-# refused; a row neither grandfathered nor owned is refused.
+# completed/ path is refused; a traversal (`design/../completed/`) is refused;
+# a prose owner ("the E2 lane") is refused; a PR-only owner is refused; a
+# grandfathered row missing its heading is refused; a row neither
+# grandfathered nor owned is refused; the ratchet refuses a list above the
+# ceiling and a ceiling too far above the list.
 from __future__ import annotations
 
 import os
@@ -56,6 +68,15 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FOLLOWUPS = os.path.join(ROOT, "docs", "FOLLOWUPS.md")
 GRANDFATHER = os.path.join(ROOT, "scripts", "ci", "followups_owner_grandfather.txt")
 DESIGN_DIR = os.path.join(ROOT, "docs", "design")
+
+# The grandfather list's length ratchet. Lower it as rows gain owners; raise
+# it only at a merge that lands rows predating the gate, and say so in the
+# commit. History: 338 at the gate's birth (2026-09-20); 340 at the merge
+# with #792/#800 (three pre-gate rows: two new, one re-titled).
+GRANDFATHER_CEILING = 340
+# How far the ceiling may sit above the list before the gate demands it be
+# lowered. Small enough that a burn-down is locked in within a few rows.
+GRANDFATHER_SLACK = 5
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from check_index_prefix_uniqueness import family_prefix, registry_rows  # noqa: E402
@@ -110,15 +131,27 @@ def registry_prefixes(rows: list[str]) -> set[str]:
     return out
 
 
+def under_design(rel: str, design_dir: str) -> bool:
+    """True iff `design/<rel>` exists AND its canonical path lies beneath
+    `design_dir`. A `..` component (`design/../completed/X.md`) matches the
+    path regex and would otherwise resolve to a completed document through
+    the front door this gate closes; the canonical check refuses it."""
+    if any(part in {"..", ""} for part in rel.split("/")):
+        return False
+    base = os.path.realpath(design_dir)
+    target = os.path.realpath(os.path.join(design_dir, rel))
+    return target.startswith(base + os.sep) and os.path.isfile(target)
+
+
 def resolves(owner: str, prefixes: set[str], design_dir: str) -> tuple[bool, str]:
     """Whether an Owner: value names something that outlives its landing."""
     if COMPLETED_RE.search(owner) and not DOC_PATH_RE.search(owner):
         return False, "points only at docs/completed/ — that work is done; the row's owner left"
     for m in DOC_PATH_RE.finditer(owner):
         rel = m.group(1)
-        if os.path.isfile(os.path.join(design_dir, rel)):
+        if under_design(rel, design_dir):
             return True, f"live doc design/{rel}"
-        return False, f"design/{rel} does not exist"
+        return False, f"design/{rel} is not a live document under docs/design/ (missing, or a path that escapes the directory)"
     for m in TOKEN_RE.finditer(owner):
         pref = family_prefix(m.group(1) + m.group(2))
         if pref and pref in prefixes:
@@ -128,7 +161,14 @@ def resolves(owner: str, prefixes: set[str], design_dir: str) -> tuple[bool, str
     return False, "names neither a live docs/design/ document nor a registered identifier family"
 
 
-def check(text: str, grandfather: list[str], prefixes: set[str], design_dir: str) -> list[str]:
+def check(
+    text: str,
+    grandfather: list[str],
+    prefixes: set[str],
+    design_dir: str,
+    ceiling: int = GRANDFATHER_CEILING,
+    slack: int = GRANDFATHER_SLACK,
+) -> list[str]:
     items = parse_items(text)
     if not items:
         raise GateError("subject absent: FOLLOWUPS has no `- **…**` items")
@@ -136,6 +176,17 @@ def check(text: str, grandfather: list[str], prefixes: set[str], design_dir: str
         raise GateError("subject absent: IMPLEMENTATION_INDEX §2 registry parsed no family prefixes")
     headings = {it["heading"] for it in items}
     findings: list[str] = []
+    if len(grandfather) > ceiling:
+        findings.append(
+            f"grandfather list has {len(grandfather)} headings, above GRANDFATHER_CEILING = {ceiling}: "
+            "the list only burns down. Give the new row an Owner:, or — only at a merge landing "
+            "rows written before this gate — raise the ceiling in this script and say why."
+        )
+    elif ceiling - len(grandfather) > slack:
+        findings.append(
+            f"GRANDFATHER_CEILING = {ceiling} sits {ceiling - len(grandfather)} above the list's "
+            f"{len(grandfather)} headings (slack {slack}): lower the ceiling to lock the burn-down in."
+        )
     listed = set()
     for g in grandfather:
         if g in listed:
@@ -216,7 +267,9 @@ def selftest() -> int:
             fh.write("# live\n")
 
         def run(text: str, gf: list[str]) -> list[str]:
-            return check(text, gf, prefixes, design)
+            # The ratchet is exercised on its own below; here the ceiling
+            # tracks the list so the other legs are tested in isolation.
+            return check(text, gf, prefixes, design, ceiling=len(gf), slack=GRANDFATHER_SLACK)
 
         doc_owner = "- **A**\n  - Target: pre-genesis\n  - Owner: [`LIVE.md`](design/LIVE.md) §4\n"
         fam_owner = "- **B**\n  - Target: pre-genesis\n  - Owner: the RD-Q4 lane\n"
@@ -226,7 +279,7 @@ def selftest() -> int:
             ("- **C**\n  - Target: pre-genesis\n  - Owner: the E2 lane\n", "names neither"),
             ("- **C**\n  - Target: pre-genesis\n  - Owner: PR #788\n", "not an owner on its own"),
             ("- **C**\n  - Target: pre-genesis\n  - Owner: [`X.md`](completed/X.md)\n", "docs/completed/"),
-            ("- **C**\n  - Target: pre-genesis\n  - Owner: design/MISSING.md\n", "does not exist"),
+            ("- **C**\n  - Target: pre-genesis\n  - Owner: design/MISSING.md\n", "not a live document"),
             ("- **C**\n  - Target: pre-genesis\n  - Owner: the ZZ-Q1 lane\n", "names neither"),
         ]
         for text, needle in bad:
@@ -241,6 +294,23 @@ def selftest() -> int:
         # A grandfathered heading that is gone → refused (red when the item is gone).
         out = run(doc_owner, ["GONE"])
         assert out and "no longer exists" in out[0], out
+        # Traversal: `design/../completed/X.md` matches the path regex; the
+        # canonical check refuses it even though the file exists.
+        completed = os.path.join(d, "completed")
+        os.makedirs(completed)
+        with open(os.path.join(completed, "DONE.md"), "w", encoding="utf-8") as fh:
+            fh.write("# done\n")
+        out = run(doc_owner + "- **T**\n  - Target: pre-genesis\n  - Owner: design/../completed/DONE.md\n", [])
+        assert out and "escapes the directory" in out[0], out
+        # The ratchet: a list above the ceiling is refused; a ceiling too far
+        # above the list is refused; a ceiling within slack passes.
+        rows = "".join(f"- **G{i}**\n  - Target: pre-genesis\n" for i in range(4))
+        gf4 = [f"G{i}" for i in range(4)]
+        out = check(doc_owner + rows, gf4, prefixes, design, ceiling=3, slack=5)
+        assert out and "above GRANDFATHER_CEILING" in out[0], out
+        out = check(doc_owner + rows, gf4, prefixes, design, ceiling=20, slack=5)
+        assert out and "lower the ceiling" in out[0], out
+        assert check(doc_owner + rows, gf4, prefixes, design, ceiling=6, slack=5) == []
         # Owned AND grandfathered → the list must burn down.
         out = run(doc_owner, ["A"])
         assert out and "still grandfathered" in out[0], out
@@ -258,7 +328,7 @@ def selftest() -> int:
             pass
         else:
             raise AssertionError("empty registry must be a missing subject")
-    print("followups owners selftest: 12 cases OK")
+    print("followups owners selftest: 16 cases OK")
     return 0
 
 
