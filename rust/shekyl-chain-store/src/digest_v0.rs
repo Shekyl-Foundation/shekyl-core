@@ -77,6 +77,7 @@
 //! version bump.
 
 use shekyl_crypto_hash::cshake256_32;
+use shekyl_types::CurveTreeRoot;
 
 /// Format-version tag prefixed to the outer preimage. Bump on any
 /// change to the field set, order, widths, or domain strings.
@@ -162,6 +163,62 @@ pub fn outer_preimage(
 #[must_use]
 pub fn outer_digest(preimage: &[u8; DIGEST_PREIMAGE_LEN]) -> [u8; 32] {
     cshake256_32(OUTER_CUSTOMIZATION, preimage)
+}
+
+/// The v0 logical state **by component**, with its outer digest — what a
+/// consumer that grades components separately needs (DRS-E2 RD-Q9: the
+/// root component is a passed-through fact written back, RD-F7, and grades
+/// not-evidence while `chain` and `spent` are real replay output). One
+/// constructor, [`from_families`](Self::from_families), so the redb read
+/// (`ReadSnapshot::logical_state_digest_v0`) and the LMDB trace checkpoint
+/// (fed by the C++ exporter through the FFI) assemble byte-for-byte alike.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LogicalStateDigestV0 {
+    /// Recorded blocks — the preimage's `n_blocks`.
+    pub n_blocks: u64,
+    /// Cardinality of the spent-key set — the preimage's `n_spent`.
+    pub n_spent: u64,
+    /// [`chain_component`] over the height-ordered block hashes.
+    pub chain: [u8; 32],
+    /// [`spent_accumulator`] over the spent-key set.
+    pub spent: [u8; 32],
+    /// The live root; [`CurveTreeRoot::EMPTY`] for the empty tree.
+    pub curve_root: CurveTreeRoot,
+    /// `cSHAKE256(OUTER_CUSTOMIZATION, outer_preimage(..))` over the five
+    /// fields above — equal to [`digest_v0`] over the same inputs.
+    pub digest: [u8; 32],
+}
+
+impl LogicalStateDigestV0 {
+    /// Assemble from the three families: height-ordered block hashes, the
+    /// spent-key set (order not load-bearing), the live root. Each component
+    /// is hashed once; the outer digest is [`digest_v0`]'s.
+    #[must_use]
+    pub fn from_families(
+        block_hashes: &[[u8; 32]],
+        spent_keys: &[[u8; 32]],
+        curve_root: CurveTreeRoot,
+    ) -> Self {
+        let n_blocks = u64::try_from(block_hashes.len()).expect("block count fits u64");
+        let n_spent = u64::try_from(spent_keys.len()).expect("spent-key count fits u64");
+        let chain = chain_component(block_hashes);
+        let spent = spent_accumulator(spent_keys);
+        let digest = outer_digest(&outer_preimage(
+            n_blocks,
+            n_spent,
+            &chain,
+            &spent,
+            curve_root.as_bytes(),
+        ));
+        Self {
+            n_blocks,
+            n_spent,
+            chain,
+            spent,
+            curve_root,
+            digest,
+        }
+    }
 }
 
 /// cSHAKE over `u64_le(n) ‖ hash_0 ‖ … ‖ hash_{n-1}` (height order).

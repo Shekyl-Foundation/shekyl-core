@@ -30,6 +30,12 @@
 //! - [`sequencer`] — order restoration after parallel `form`: workers finish
 //!   out of order, the [`Sequencer`] releases items in sequence order and
 //!   never past a gap.
+//! - [`corpus`] — the corpus artifact (§3.9): blocks with their bodies,
+//!   verified against the header's list on every record by writer and
+//!   reader alike (RD-F15); [`CorpusReader`] is the first [`Source`].
+//! - [`trace`] — the trace artifact (§3.9): the LMDB-only facts and digest
+//!   checkpoints, read through RD-Q2's two typed doors — `borrow(h)` for
+//!   `connect` (passed-through by construction), `expect(h)` for the grader.
 //!
 //! **What it does not own.** No consensus value is computed here (C2-R8
 //! Q4): `form` and `validate` are `shekyl-chain-rules`', `connect` is the
@@ -43,10 +49,16 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
+#[cfg(test)]
+mod artifact_tests;
+pub mod corpus;
 pub mod sequencer;
 pub mod source;
 pub mod substrate;
+pub mod trace;
 
+pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, VerifiedRecord};
 pub use sequencer::{SequenceError, Sequencer};
 pub use source::{CorpusBlock, IngestEvent, Seq, Sequenced, Source};
 pub use substrate::{ChainSubstrate, Clock, ClockFault, SubstrateFault, SystemClock};
+pub use trace::{Borrowed, Expected, Facts, Trace, TraceFault, TraceWriter};

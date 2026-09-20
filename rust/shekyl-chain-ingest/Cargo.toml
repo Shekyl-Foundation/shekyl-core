@@ -26,8 +26,20 @@ shekyl-chain-rules = { path = "../shekyl-chain-rules" }
 # Verification is this crate everywhere, forever (§1.3); the JIT is never
 # consulted here.
 shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
-# BlockHeight, BlockHash, PowHash, Timestamp.
+# The store the actor owns: ChainStore / WriteBatch::{connect, pop,
+# refuse_corrupt}, ConnectFacts (the trace's borrow door converts into it,
+# PassedThrough by construction), LogicalStateDigestV0 (the checkpoint
+# shape, assembled by one function on both sides).
+shekyl-chain-store = { path = "../shekyl-chain-store" }
+# CumulativeDifficulty — the accumulator the trace records for SI-10.
+shekyl-difficulty = { path = "../shekyl-difficulty" }
+# BlockHeight, BlockHash, PowHash, Timestamp, the weight newtypes.
 shekyl-types = { path = "../shekyl-types" }
+# AtomicUnits: coins_generated and burned in the trace.
+shekyl-units = { path = "../shekyl-units" }
+# Block / Transaction parsing and hashing — the corpus verifies every record
+# against the header's list (RD-F15).
+shekyl-wire = { path = "../shekyl-wire" }
 thiserror = { workspace = true }
 
 [dev-dependencies]

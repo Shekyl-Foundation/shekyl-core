@@ -14,7 +14,7 @@ use super::connect_fixtures::{connect_chain, root_at_height, spend};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
-use crate::digest_v0::{chain_component, digest_v0, spent_accumulator};
+use crate::digest_v0::{chain_component, digest_v0, spent_accumulator, LogicalStateDigestV0};
 use crate::schema::CURVE_TREE_ROOTS;
 
 /// Three blocks: genesis, one spend, two spends — three key images.

@@ -3799,8 +3799,12 @@ name = "shekyl-chain-ingest"
 version = "3.1.0"
 dependencies = [
  "shekyl-chain-rules",
+ "shekyl-chain-store",
+ "shekyl-difficulty",
  "shekyl-pow-randomx",
  "shekyl-types",
+ "shekyl-units",
+ "shekyl-wire",
  "thiserror 2.0.18",
 ]
 

@@ -23,10 +23,12 @@
 //! component compares LMDB's root with itself (RD-F7). The result therefore
 //! carries the components **separately** — [`LogicalStateDigestV0::chain`],
 //! [`spent`](LogicalStateDigestV0::spent), [`curve_root`](LogicalStateDigestV0::curve_root)
+//! (the type is [`crate::digest_v0`]'s, so the trace checkpoint assembles
+//! the same way)
 //! — so the grader applies RD-Q9's two clauses per component rather than
 //! reading one 32-byte outer digest as evidence for all three. The outer
 //! digest is still computed, once, from those components
-//! ([`digest_v0::outer_preimage`](crate::digest_v0::outer_preimage)), and is
+//! ([`LogicalStateDigestV0::from_families`]), and is
 //! byte-identical to what [`digest_v0`](crate::digest_v0::digest_v0) yields
 //! over the same inputs — the test holds both.
 //!
@@ -41,33 +43,8 @@ use shekyl_types::{BlockHeight, CurveTreeRoot, KeyImage};
 use super::chain_reads::{self, absent, ReadFault};
 use super::error::StoreError;
 use super::read::ReadSnapshot;
-use crate::digest_v0::{chain_component, outer_digest, outer_preimage, spent_accumulator};
+use crate::digest_v0::LogicalStateDigestV0;
 use crate::schema::CURVE_TREE_ROOTS;
-
-/// The v0 logical state of one snapshot, by component, with its outer
-/// digest. Produced by [`ReadSnapshot::logical_state_digest_v0`].
-///
-/// Components are carried alongside the digest because they grade
-/// differently (module docs): `chain` and `spent` are what replay actually
-/// produced; `curve_root` is the passed-through fact written back. A
-/// consumer that only wants the oracle reads [`digest`](Self::digest).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LogicalStateDigestV0 {
-    /// Recorded blocks, `tip + 1` — the preimage's `n_blocks`.
-    pub n_blocks: u64,
-    /// Cardinality of the spent-key set — the preimage's `n_spent`.
-    pub n_spent: u64,
-    /// [`chain_component`] over the height-ordered block hashes.
-    pub chain: [u8; 32],
-    /// [`spent_accumulator`] over the spent-key set.
-    pub spent: [u8; 32],
-    /// The live root, `curve_tree_roots[tip + 1]`; [`CurveTreeRoot::EMPTY`]
-    /// when nothing is recorded.
-    pub curve_root: CurveTreeRoot,
-    /// `cSHAKE256(OUTER_CUSTOMIZATION, outer_preimage(...))` over the five
-    /// fields above — equal to `digest_v0(hashes, spent, root)`.
-    pub digest: [u8; 32],
-}
 
 impl ReadSnapshot<'_> {
     /// **RD-F5.** The v0 logical-state digest of this snapshot, assembled
@@ -105,25 +82,9 @@ impl ReadSnapshot<'_> {
             Some(tip) => self.live_root(tip)?,
         };
 
-        let n_blocks = u64::try_from(hashes.len()).expect("block count fits u64");
-        let n_spent = u64::try_from(spent.len()).expect("spent-key count fits u64");
-        let chain = chain_component(&hashes);
-        let spent = spent_accumulator(&spent);
-        let digest = outer_digest(&outer_preimage(
-            n_blocks,
-            n_spent,
-            &chain,
-            &spent,
-            curve_root.as_bytes(),
-        ));
-        Ok(LogicalStateDigestV0 {
-            n_blocks,
-            n_spent,
-            chain,
-            spent,
-            curve_root,
-            digest,
-        })
+        Ok(LogicalStateDigestV0::from_families(
+            &hashes, &spent, curve_root,
+        ))
     }
 
     /// `curve_tree_roots[tip + 1]` — the state after the tip block's connect

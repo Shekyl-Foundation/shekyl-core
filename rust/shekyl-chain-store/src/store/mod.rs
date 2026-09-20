@@ -106,7 +106,6 @@ mod write;
 
 pub use at_index::AtIndex;
 pub use connect::{ConnectFacts, Connected, DeletedBy, Fact, Origin};
-pub use digest_reads::LogicalStateDigestV0;
 pub use error::{
     CellFault, EngineError, ErrorClass, StoreCannot, StoreError, StoreInvariant, UndoFault,
 };
