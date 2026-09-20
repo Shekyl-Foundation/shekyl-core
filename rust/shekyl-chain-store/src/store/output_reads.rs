@@ -42,7 +42,7 @@
 //! place the "one bucket" premise (§3.4) is code.
 
 use redb::{ReadableTable, ReadableTableMetadata};
-use shekyl_types::{BlockHeight, CommitmentBytes, GlobalOutputIndex, OneTimePubkey, Timelock};
+use shekyl_types::{BlockHeight, CommitmentBytes, GlobalOutputIndex, OneTimePubkey};
 
 use crate::codec::OutTx;
 use crate::ids::OutputSlot;
@@ -60,6 +60,12 @@ use super::error::StoreInvariant;
 /// would have to re-check. A read projection, never stored, so not
 /// `Canonical`. The live consumer is the path builder's `read_output_oc`,
 /// which wants the pubkey **and** the commitment (SOK-7).
+///
+/// **No `unlock_time`** (S-TX STX-9, landed with the S-TX increment): the
+/// stored `OutKey` row carries it and this read decodes that row, but no
+/// public read type under `store/` hands the field out — its fate is census
+/// U-2's, and this projection had no consumer of it. Gated by
+/// `scripts/ci/check_store_unlock_time_projection.py`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecordedOutput {
     /// The output's one-time public key (`O`).
@@ -68,8 +74,6 @@ pub struct RecordedOutput {
     pub commitment: CommitmentBytes,
     /// The height of the block that created the output.
     pub height: BlockHeight,
-    /// The output's `unlock_time`, as stored.
-    pub unlock_time: Timelock,
 }
 
 /// Where `index` sits relative to the dense count. The mirror of
@@ -133,7 +137,6 @@ pub(super) fn output_at<T: ReadTables>(
         pubkey: record.pubkey,
         commitment: record.commitment,
         height: record.height,
-        unlock_time: record.unlock_time,
     }))
 }
 

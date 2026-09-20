@@ -181,7 +181,6 @@ fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() 
             pubkey: shekyl_types::OneTimePubkey::from_bytes([0x40; 32]),
             commitment: shekyl_types::CommitmentBytes::from_bytes([0x70; 32]),
             height: h(0),
-            unlock_time: crate::codec::stored_timelock(60),
         })
     );
     // Index 3: the spend's second vout, recorded at height 1.
@@ -191,7 +190,6 @@ fn output_is_recorded_at_every_index_below_the_count_and_beyond_count_from_it() 
             pubkey: shekyl_types::OneTimePubkey::from_bytes([0x81; 32]),
             commitment: shekyl_types::CommitmentBytes::from_bytes([0xa1; 32]),
             height: h(1),
-            unlock_time: crate::codec::stored_timelock(0),
         })
     );
     // Index 4 is the last; 5 and beyond are `BeyondCount`, never an error
