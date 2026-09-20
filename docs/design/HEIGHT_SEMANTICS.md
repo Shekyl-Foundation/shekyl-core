@@ -1,7 +1,9 @@
 # Height semantics — ordinal vs count
 
-**Status:** OPEN — Phase 1 walked 2026-09-19 (this file); Phase 2 (workspace
-census, wire table, retype + `compile_fail`) is the remaining work. Numerics
+**Status:** OPEN — Phase 1 walked 2026-09-19; height-semantics Phase 2a
+RULED 2026-09-20 (census, wire table, naming/difference convention). Remaining:
+height-semantics Phase 2b (dispatch-clock retype, blocked on PR #792),
+Phase 2c (wire/FFI decode), Phase 2d (inland bare-`u64` tail). Numerics
 are frozen as pinned (Rick, 2026-09-19). This file does not change any stamp.
 
 <!-- claim-audit: citations -->
@@ -81,7 +83,7 @@ ruled-fix item for **that** PR, not a Phase 1 value change.
 
 | Site | file:line | Protocol quantity | Stamped today | Evidence | Disposition |
 | --- | --- | --- | --- | --- | --- |
-| Producer | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:141-148` | n/a (wrapper) | COUNT as `BlockHeight` | `get_height` is count (`rust/shekyl-rpc-client/src/lib.rs:380-384`); wrap is `from_raw`. | Pin; retype in Phase 2. |
+| Producer | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:141-148` | n/a (wrapper) | COUNT as `BlockHeight` | `get_height` is count (`rust/shekyl-rpc-client/src/lib.rs:380-384`); wrap is `from_raw`. | Pin; retype in height-semantics Phase 2b. |
 | `BlockSource::tip_height` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:81-92`; DaemonBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:187-189`; PBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:238-241` | **COUNT** (claimed chain size; exclusive end of `0 .. tip`) | COUNT as `BlockHeight` | Trait doc already: "the *count* of blocks"; `block_at` valid on `0 .. tip_height`. | Rename honestly (`ChainCount`). `block_at` args stay ordinal. |
 | `block_at` / `block_number` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:117-120`, `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:151-160` | **ORDINAL** (which block) | `BlockHeight` used as a 0-indexed fetch number | `get_block_hash` `number` is "zero-indexed position" (`rust/shekyl-rpc-client/src/lib.rs:410-413`). | Already the right type; keep. |
 | P-scan sweep exclusive end | `rust/shekyl-engine-core/src/engine/pscan/task.rs:245-248`, `rust/shekyl-engine-core/src/engine/pscan/task.rs:295-297` | bound = COUNT; index = ORDINAL | COUNT − `reorg_depth` as exclusive end; loop `for height in start..end` calls `block_at(ordinal)` | Half-open range over a count. Flipping the bound to `.tip()` without changing the loop **skips the last block**. | Split types at retype. No numeric change. |
@@ -119,46 +121,167 @@ No Phase 1 finding routes to a value-change PR. Two items that are
 2. **When the requester mint lands:** convert count → ordinal at decode
    (the #791 shape). Not live today.
 
-## 3. Phase 2 — census, convention, retype (OPEN)
+## 3. Height-semantics Phase 2a — census, wire table, convention (RULED 2026-09-20)
 
-Out of this PR. Seed rows so the census does not rediscover them:
+This slice classifies. It does not retype. Discharge of *this* slice:
+every block-axis family has a quantity and a remaining-work phase; the
+unclear set is empty. The `compile_fail` per conversion boundary is
+owned by the retype slice that creates that boundary (height-semantics
+Phase 2b onward), not by a docs PR.
 
-**Wire (conversion at decode, once; raw `u64`s do not travel inland):**
+Ground: `origin/dev` at the walk (`85071a24f`, merge of PR #801). PR
+#792 is still OPEN; height-semantics Phase 2b waits on it.
 
-| RPC field | Quantity | Provenance (this walk) |
-| --- | --- | --- |
-| `get_height` | COUNT | `rust/shekyl-rpc-client/src/lib.rs:380-384` |
-| `get_info.height` | COUNT | `src/rpc/core_rpc_server.cpp:206-207` (`++res.height`) |
-| `get_info.target_height` | **determine, do not assume** | zero-sentinel is a separate FOLLOWUPS row (daemon-RPC lane, filed with #792) |
-| block-header / `get_block_hash` number | ORDINAL | `rust/shekyl-rpc-client/src/lib.rs:410-413` |
+### 3.1 Convention — RULED 2026-09-20
 
-**Two types named `BlockHeight`:** on this tree they are one type.
+The choice the Phase 1 stub left open ("newtype everywhere" vs
+"documented bare-`u64` for ages") is the first of these:
+
+- **C1 Wire stays raw.** JSON, Levin, C FFI, and C++ daemon glue keep
+  `u64`. The wire's identity is the field name plus this table, not a
+  Rust type on the DTO.
+- **C2 Decode once.** Inland Rust never carries a block-axis quantity
+  as a bare `u64`. Conversion is a named constructor
+  (`ChainCount::from_raw`, `BlockHeight::from_raw`,
+  `BlockCount::from_raw`) at the decode site. Re-wrapping a count as
+  `BlockHeight` inland is the Phase 1 defect.
+- **C3 Three inland types.** `BlockHeight` is ordinal. `ChainCount` is
+  count. `BlockCount` is a difference. COUNT is never wrapped in
+  `BlockHeight`.
+- **C4 Differences are `BlockCount` inland.** Not "documented
+  bare-`u64` for ages." Constants such as `PASS_ANCHOR_DEPTH_BLOCKS`
+  stay `u64` at the FFI/C++ edge and become `BlockCount` when they
+  participate in inland arithmetic with a typed height.
+  `BlockHeight − BlockHeight` already yields `BlockCount`
+  (`rust/shekyl-types/src/lib.rs:39-41`,
+  `rust/shekyl-types/src/lib.rs:789-798`).
+- **C5 Sentinels are not counts.** `target_height == 0` means
+  synchronized, not a genesis-only chain. Decode to
+  `Option<ChainCount>` (`None` = synchronized). The *wire* sentinel
+  deletion stays the daemon-RPC lane's item; inland typing does not
+  wait for that deletion and does not encode 0 as `ChainCount`.
+- **C6 Template height is `ChainCount::next_height()`.**
+  `create_block_template` sets `height = m_db->height()`
+  (`src/cryptonote_core/blockchain.cpp:1718`). Numerically the count;
+  semantically the ordinal the next block will carry
+  (`rust/shekyl-types/src/lib.rs:905-909`).
+- **C7 Naming, new inland fields.** Never a bare identifier `height`.
+  `tip_height` (ordinal), `chain_count`, `anchor_height` (ordinal),
+  ages as `*_blocks`. Existing JSON/Levin keys are the wire and stay.
+- **C8 C++ daemon glue stays `u64`.** Rule 20: this campaign does not
+  retype C++. The wire table still names those producers so a Rust
+  consumer cannot guess.
+- **C9 `compile_fail` per conversion boundary** lands in the retype PR
+  that creates that boundary. The deliberate wrong-mix that no longer
+  compiles is the proof the type is load-bearing.
+
+### 3.2 One `BlockHeight`
+
 `shekyl-curve-tree` re-exports `shekyl_types::BlockHeight` (RTN-4,
-`rust/shekyl-curve-tree/src/types.rs:131-137`). Phase 2 confirms no
-second definition remains (FFI replica internals are out of scope
-beyond this name check).
+`rust/shekyl-curve-tree/src/types.rs:131-137`). Confirmed on this tree:
+no second definition. FFI replica internals remain out of scope beyond
+that name check.
 
-**Differences:** `BlockCount` already exists. Phase 2 picks "newtype
-everywhere" vs "documented bare-`u64` for ages" and enforces it.
-`height − height` silently yielding a value that then adds to a count
-is the mix the types must refuse — `BlockHeight − BlockHeight` already
-yields `BlockCount` (`rust/shekyl-types/src/lib.rs:39-41`).
+### 3.3 Wire table
 
-**Naming rule (lands with the convention):** `height` never appears
-bare. `tip_height` (ordinal), `chain_count`, `anchor_height` (ordinal),
-ages as `*_blocks`.
+Conversion at decode, once. Raw `u64`s do not travel inland. C++
+producers cited at source.
 
-**Red-bite:** at least one `compile_fail` doc-test per conversion
-boundary. The deliberate wrong-mix that no longer compiles is the proof
-the type is load-bearing.
+**JSON / JSON-RPC DTOs (`shekyl-rpc-types`):**
+
+| Surface | Field | Quantity | Producer / decode |
+| --- | --- | --- | --- |
+| `GET /get_height` | `GetHeightResponse.height` (`rust/shekyl-rpc-types/src/chain.rs:179`) | COUNT | Facts POD already `+1` (`src/rpc/rpc_facts_ffi.cpp:73-75`); handler copies (`rust/shekyl-daemon-rpc/src/methods.rs:102-108`). Wallet client documents "amount of blocks", genesis-only = 1 (`rust/shekyl-rpc-client/src/lib.rs:380-384`). |
+| `get_block_count` | `GetBlockCountResponse.count` (`rust/shekyl-rpc-types/src/chain.rs:191`) | COUNT | Same chain-height as `/get_height`, honest field name. |
+| `GET /get_info` | `height` | COUNT | C++ still serves: `get_blockchain_top` then `++res.height` (`src/rpc/core_rpc_server.cpp:206-207`). |
+| `GET /get_info`, `get_version`, `sync_info` | `target_height` | COUNT or 0-synced | Handler rule, not the core scalar: C++ `is_synchronized() ? 0 : get_target_blockchain_height()` (`src/rpc/core_rpc_server.cpp:209`); Rust `get_version` the same (`rust/shekyl-daemon-rpc/src/methods.rs:114-116`, `rust/shekyl-daemon-rpc/src/methods.rs:137-142`). Core stores the advertised remote count (`src/cryptonote_core/cryptonote_core.cpp:1755-1762`). Inland: `Option<ChainCount>` (C5). Wire sentinel deletion is not this campaign. |
+| `get_version` | `current_height` (`rust/shekyl-rpc-types/src/chain.rs:353`) | COUNT | `tip.chain_height.to_raw()` (`rust/shekyl-daemon-rpc/src/methods.rs:137`). |
+| `get_block_hash` number / `GetBlockRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:275`) / `GetBlockHeaderByHeightRequest.height` (`rust/shekyl-rpc-types/src/chain.rs:319`) / `GetBlocksByHeightRequest.heights` (`rust/shekyl-rpc-types/src/bin_commands.rs:165`) | those fields | ORDINAL | Zero-indexed position (`rust/shekyl-rpc-client/src/lib.rs:410-413`). Bound vs COUNT is `height >= chain_height` (`src/rpc/rpc_facts_ffi.h:82`). |
+| `BlockHeader.height` (`rust/shekyl-rpc-types/src/chain.rs:225`) | `height` | ORDINAL | Header of that block. |
+| `BlockHeader.depth` (`rust/shekyl-rpc-types/src/chain.rs:227`) | `depth` | DIFFERENCE | `chain_height - height - 1` (`src/rpc/rpc_facts_ffi.h:105`). Inland: `BlockCount`. |
+| `HardForkEntry.height` (`rust/shekyl-rpc-types/src/chain.rs:338`) / `HardForkInfoResponse.earliest_height` (`rust/shekyl-rpc-types/src/headers.rs:186`) | those fields | ORDINAL | Activation / earliest-voted height. |
+| `GetBlockHeadersRangeRequest.start_height` / `end_height` (`rust/shekyl-rpc-types/src/headers.rs:117-119`) | those fields | ORDINAL inclusive | Range of header lookups. |
+| `ConnectionInfo.height` (`rust/shekyl-rpc-types/src/p2p.rs:240`) | `height` | COUNT | Peer's claimed blockchain height. |
+| `SyncInfoResponse.height` (`rust/shekyl-rpc-types/src/p2p.rs:289`) | `height` | COUNT | Local chain height. |
+| `SyncSpan.start_block_height` (`rust/shekyl-rpc-types/src/p2p.rs:270`) | `start_block_height` | ORDINAL | Span origin. |
+| `getblocktemplate.height` (`src/rpc/core_rpc_server_commands_defs.h:441`) | `height` | next-block ordinal (= COUNT numeric) | `height = m_db->height()` (`src/cryptonote_core/blockchain.cpp:1718`); RPC writes `res.height` (`src/rpc/core_rpc_server.cpp:689`). Inland: `ChainCount::next_height()` (C6). |
+| `getblocktemplate.seed_height` | `seed_height` | ORDINAL | Seed block index. |
+| `get_curve_tree_info.height` | `height` | ORDINAL | `get_current_blockchain_height() - 1` (`src/rpc/core_rpc_server.cpp:1426`) — already converted to the tip ordinal. |
+| `pop_blocks.height` | `height` | COUNT | `res.height = get_current_blockchain_height()` after the pop (`src/rpc/core_rpc_server.cpp:1288`). |
+
+**FFI PODs (stay `uint64_t` / `u64`; named decode on the Rust side):**
+
+| POD | Field | Quantity |
+| --- | --- | --- |
+| `shekyl_rpc_chain_tip_facts` (`src/rpc/rpc_facts_ffi.h:35-37`) | `chain_height` | COUNT (`top_height + 1`, `src/rpc/rpc_facts_ffi.cpp:73-75`) |
+| same | `target_height` | raw core target; 0-when-synced is the handler's (C5) |
+| `shekyl_rpc_block_hash_facts` (`src/rpc/rpc_facts_ffi.h:81`) | `chain_height` | COUNT |
+| `shekyl_rpc_block_header_facts` (`src/rpc/rpc_facts_ffi.h:104-106`) | `height` ORDINAL; `depth` DIFFERENCE; `chain_height` COUNT | as named in the header |
+| `ChainTipFactsFfi` (`rust/shekyl-daemon-rpc/src/ffi.rs:337-342`) | twins of the C POD | stay raw |
+
+**Levin:** `CORE_SYNC_DATA.current_height` (`rust/shekyl-levin/src/payload/types.rs:93-94`,
+`src/cryptonote_protocol/cryptonote_protocol_defs.h:174`) is COUNT
+("Chain height"). Stays `u64` on the wire (C1). Dual-stack fixtures
+copy `get_info.height`, which is COUNT.
+
+**C++ store primitives (the producers the names above rest on):**
+
+| Call | Quantity |
+| --- | --- |
+| `BlockchainLMDB::height()` / `Blockchain::get_current_blockchain_height()` (`src/cryptonote_core/blockchain.cpp:257-264`) | COUNT |
+| `BlockchainLMDB::top_block_hash` out-param (`src/blockchain_db/lmdb/db_lmdb.cpp:3179-3185`) / `Blockchain::get_tail_id(height)` (`src/cryptonote_core/blockchain.cpp:815-819`) | ORDINAL (`m_height - 1`) |
+
+### 3.4 Inland family census
+
+Families, not a dump of every `*height*: u64`. A site belongs to exactly
+one family. **Unclear: none.**
+
+| Family | Quantity | Type today | Ruled inland | Remaining |
+| --- | --- | --- | --- | --- |
+| Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | COUNT as `BlockHeight` | `ChainCount` | height-semantics Phase 2b, blocked on PR #792 |
+| Wallet ledger (`TransferDetails.block_height` / `spent_height` / `eligible_height`, `rust/shekyl-engine-state/src/transfer.rs:226-237`, `rust/shekyl-engine-state/src/transfer.rs:328`) | ORDINAL | `BlockHeight` | `BlockHeight` | keep |
+| Emission / claim source | COUNT split at decode | `ChainCount` | `ChainCount` | keep (pattern) |
+| Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs:47-54`, wrap at `rust/shekyl-daemon-rpc/src/chain_facts.rs:439-442`) | COUNT (target: COUNT-or-sentinel) | COUNT as `BlockHeight` | `ChainCount` and `Option<ChainCount>` | height-semantics Phase 2c |
+| Wallet RPC client `Rpc::get_height` → `usize` | COUNT | bare | `ChainCount` at the client decode | height-semantics Phase 2c |
+| Submit ref-age (`ref_age_window(chain_height, ref_height)`, `rust/shekyl-daemon-rpc/src/submit/engine.rs:118`) | COUNT vs ORDINAL | both `u64` | `ChainCount` vs `BlockHeight` | height-semantics Phase 2c |
+| Countersign / pass-anchor (`own_height`, `anchor_height`, `predecessor_height`) | ORDINAL | `u64` | `BlockHeight` | height-semantics Phase 2d |
+| Anchor depth / lag (`PASS_ANCHOR_DEPTH_BLOCKS`, `PASS_ANCHOR_LAG_BLOCKS`, `max_reorg_depth`, `BlockHeaderFacts.depth`) | DIFFERENCE | `u64` | `BlockCount` | height-semantics Phase 2d |
+| Curve-tree ingest / `block_at` / DAA timestamps | ORDINAL | `BlockHeight` (RTN-4 re-export) | `BlockHeight` | keep |
+| C++ daemon, p2p, mining RPC producers | as §3.3 | `uint64_t` | stay `uint64_t` (C8) | none in this campaign |
+| Wire DTOs / FFI PODs | as §3.3 | `u64` | stay `u64` (C1); decode at the consumer | consumer work is Phase 2c/2d |
+
+**Not block-axis (named so they are not unclear):** curve-tree
+positions, gindex, leaf indices (`Gindex` is `GlobalOutputIndex`,
+`rust/shekyl-curve-tree/src/types.rs:139-142`). Epoch numbers derived
+from a height are epoch indices; the *input* height is the classified
+quantity.
+
+### 3.5 Remaining slices
+
+- **Height-semantics Phase 2b — dispatch-clock retype.** `daemon_claimed_tip`
+  returns `ChainCount`; `BlockSource::tip_height` is `ChainCount`;
+  `block_at` stays `BlockHeight`; `anchor_t0` / due / alarm / dispatch
+  `at` retype together (WI-3 R2-1). No numeric change (Phase 1).
+  Persisted stamp fields that change type take a schema bump (rule 42).
+  **Blocked on PR #792** — that PR still wraps the same clock as
+  `BlockHeight`; retyping under it fights. Falsify the block:
+  `gh pr view 792 --json state` reports `MERGED`. If #792 is still
+  OPEN when this file is next touched for Phase 2b, wait; do not start
+  2b against an unmerged pin.
+- **Height-semantics Phase 2c — wire/FFI inland decode.**
+  `ChainTip` / `BlockHashAt` / client `get_height` / submit ref-age.
+  `compile_fail` at each new boundary.
+- **Height-semantics Phase 2d — remaining inland bare `u64`.**
+  Countersign clocks and difference constants. Same `compile_fail` bar.
 
 **Out of scope of the whole audit:** any stamp value change (none from
-Phase 1); the daemon-RPC `target_height` sentinel deletion (filed,
-daemon lane); the curve-tree FFI replica's internals beyond the
-type-name check.
+Phase 1); the daemon-RPC `target_height` *wire* sentinel deletion
+(daemon lane); the curve-tree FFI replica's internals beyond the
+type-name check; C++ retyping (C8).
 
 ## 4. How a reader uses this page
 
-"Which `h`?" — §1 for the two quantities, §2.2 for the six stamps, §3
-for the wire seed. After Phase 2 the wire table in §3 is complete and
-the types make a wrong mix a compile error.
+"Which `h`?" — §1 for the two quantities, §2.2 for the six stamps, §3.1
+for the inland/wire split, §3.3 for a named RPC/FFI field, §3.4 for
+which family a site belongs to. After height-semantics Phase 2b–2d the
+types make a wrong mix a compile error.
