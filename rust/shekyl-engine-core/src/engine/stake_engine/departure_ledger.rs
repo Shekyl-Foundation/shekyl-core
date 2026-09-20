@@ -185,7 +185,7 @@ impl DepartureLedger {
     /// through E's close.
     ///
     /// That matters here and not one layer up because
-    /// [`StoreShardProvider`](shekyl_p_serve::StoreShardProvider) is
+    /// `StoreShardProvider` (`shekyl-p-serve`) is
     /// serve-set-blind: it answers for any shard whose bytes are present. A
     /// dropped-but-still-pinned shard is therefore still *served*, which is
     /// why today's leak happens to keep the obligation met. Release the pin
@@ -253,7 +253,8 @@ impl DepartureLedger {
 
     /// Record that the wallet could not observe, and forget what it knew.
     ///
-    /// Called on every refresh that cannot mint a [`SyncedChainFacts`]. The
+    /// Called on every refresh that cannot mint a
+    /// [`SyncedChainFacts`](crate::engine::daemon::synced_chain_facts::SyncedChainFacts). The
     /// entries are dropped rather than frozen because a frozen entry is a
     /// claim about an interval nobody watched: a shard absent before the
     /// break, re-added during it, and departed again after it would otherwise

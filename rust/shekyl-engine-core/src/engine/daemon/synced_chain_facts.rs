@@ -32,22 +32,28 @@
 //! synchronized && (target_height == 0 || height >= target_height)
 //! ```
 //!
-//! The **height half** is lifted verbatim from
-//! `submit_watchdog::DaemonHealthContext::is_synced`, which until this type
-//! landed was the only honest reading of sync state in the wallet. The
-//! watchdog now asks this constructor instead
-//! ([`DaemonHealthContext::synced_facts`](crate::engine::submit_watchdog::DaemonHealthContext)),
-//! so the predicate has one site and a change to it cannot leave two
-//! consumers disagreeing about what "synced" means.
+//! The predicate has **one site**, [`daemon_reports_synchronized`]. This
+//! constructor calls it and adds chain identity; the submit watchdog's
+//! `DaemonHealthContext::is_synced` calls it and adds nothing, because the
+//! escape ladder needs a boolean and holds no identity to build the type
+//! with. Neither derives the predicate, so a change to what "synced" means
+//! cannot leave the ladder and the release gate disagreeing. Its
+//! **height half** is the watchdog's own — `is_synced` was, until this type
+//! landed, the only honest reading of sync state in the wallet — and the
+//! `synchronized` half is what that reading lacked.
 //!
 //! **The predicate is ours; the C++ is provenance, not authority.** What the
 //! conjunction is doing is absorbing the *shape of the response it consumes*.
-//! This constructor reads `get_info`, which is still served by the inherited
-//! C++ (`core_rpc_server.cpp`) and has no Rust handler yet. That surface
-//! encodes sync state twice: a `synchronized` bool
-//! (`core_rpc_server_commands_defs.h:254`, set from `check_core_ready()` at
-//! `:248`) **and** a `target_height` overloaded with a zero sentinel
-//! (`:209`, `is_synchronized() ? 0 : get_target_blockchain_height()`). Those
+//! This constructor reads `get_info`, which has no Rust handler yet: the
+//! Rust listener passes it through to the inherited C++ dispatch table
+//! (`shekyl-daemon-rpc/src/handlers/json_rpc.rs`, the *"still the C++
+//! table's"* list) and adds only `rpc_connections_count`, so the shape is
+//! `core_rpc_server.cpp`'s. That surface
+//! encodes sync state twice: a `synchronized` bool (declared at
+//! `core_rpc_server_commands_defs.h:254`, set from `check_core_ready()` at
+//! `core_rpc_server.cpp:248`) **and** a `target_height` overloaded with a
+//! zero sentinel (`core_rpc_server.cpp:209`,
+//! `is_synchronized() ? 0 : get_target_blockchain_height()`). Those
 //! citations say what the guide *does*; they do not define what we require.
 //!
 //! We require both fields because, on that shape, **neither alone is
@@ -71,18 +77,20 @@
 //! re-derive why both fields are read: it is the guide's shape, not our
 //! contract's.
 //!
-//! This correction is the `WSS-24` lane's (`fix/wss-24-own-height-daemon-tip`,
-//! `serving/daemon_tip.rs`), which derived the same predicate independently
-//! and found the gap; `WSS-Q14`'s brief said to lift the watchdog's form
-//! verbatim, and verbatim was not enough. The two lanes converge here: this
-//! constructor is the shared home, and the tip cache's reading adopts it.
+//! The `synchronized` half is the `WSS-24` lane's finding (PR #791, open at
+//! this writing), which derived the same predicate independently and found
+//! the gap; `WSS-Q14`'s brief said to lift the watchdog's form verbatim, and
+//! verbatim was not enough. This function is the shared home; #791's
+//! daemon-tip reading is where the two lanes converge on it.
 //!
 //! # The `R1` seam
 //!
 //! The type is wallet-side and is built from the engine's daemon client. A
 //! DRS change to the daemon's chain-facts response shape lands in
-//! [`health_from_get_info`] and [`fetch_synced_chain_facts`] and nowhere else
-//! — every consumer holds the type, not the response.
+//! [`health_from_get_info`], [`top_hash_from_get_info`] and
+//! [`fetch_synced_chain_facts`], with its contract enumerated by
+//! [`GetInfoFault`], and nowhere else — every consumer holds the type, not
+//! the response.
 //!
 //! # Units
 //!
@@ -135,11 +143,12 @@ impl SyncedChainFacts {
     /// The sole constructor: chain facts **iff** the daemon reports
     /// synchronized, otherwise `None`.
     ///
-    /// `chain_height` is the response's block count and `target_height` its
-    /// network estimate under the *"0 when synchronized"* convention. Both
-    /// come from one response — do not pair a height from one read with a
-    /// target from another, which is why this takes them together rather than
-    /// offering a setter.
+    /// `chain_height` is the response's block count, `target_height` its
+    /// network estimate under the *"0 when synchronized"* convention,
+    /// `synchronized` its own word, and `top_hash` the identity of the chain
+    /// the count belongs to. All four come from one response — do not pair a
+    /// height from one read with a target or a hash from another, which is
+    /// why this takes them together rather than offering a setter.
     ///
     /// `None` is not an error. It is the `R-B` answer: while the daemon
     /// reports syncing, consensus-derived facts are **unknown**, and a caller
@@ -288,9 +297,13 @@ pub(crate) struct ChainAnchor {
     pub(crate) hash: BlockHash,
 }
 
-/// A chain reading two independent reads of the same daemon both vouch for.
+/// A chain reading the daemon's three reads vouch for together: the sync
+/// witness, the record, and the witness block re-read after the record.
 ///
-/// Built from the sync witness and the height a bond record was answered at.
+/// Built from the [bracketed](SyncedChainFacts::bracket) sync witness and
+/// the height a bond record was answered at — the bracket is what says the
+/// record was gathered on the chain the witness described, which the two
+/// heights alone cannot say. The heights then answer two further questions.
 /// It keeps **both** heights rather than collapsing them on construction,
 /// because the two questions consumers ask of this pair are different and a
 /// single number can only answer one of them:
@@ -410,10 +423,13 @@ impl CoherentChainView {
 
 /// Why the wallet stopped being able to vouch for what it read.
 ///
-/// Three members rather than a bool, and rather than the two this started
-/// with: each reaches an operator through a different remedy (rule 82), and
-/// the public error classes downstream already distinguish "still catching
-/// up" from "cannot be reached". Collapsing them costs the diagnosis.
+/// One member per remedy rather than a bool: each reaches an operator
+/// through a different action (rule 82), and the public error classes
+/// downstream already distinguish "still catching up" from "cannot be
+/// reached". Collapsing them costs the diagnosis. The members that name a
+/// chain that moved under the reads sit here rather than in a consumer's
+/// own error because the departure ledger takes a `TimelineBreak` to decide
+/// it must forget, and each of them is exactly a reason to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TimelineBreak {
     /// The daemon reported it is still synchronizing. Routine; retry on
@@ -637,9 +653,11 @@ pub(crate) fn top_hash_from_get_info(info: &Value) -> Result<BlockHash, GetInfoF
 /// `P`'s own transport would break the §7.4 transport pin.
 ///
 /// `Ok(None)` is *"the daemon is syncing"*. An `Err` is *"the daemon did not
-/// answer"*. Callers for whom both mean "do not act" may collapse them, but
-/// they are different facts and this signature keeps them so — an operator
-/// diagnosing a stalled release wants to know which one they have (rule 82).
+/// answer, or answered off-contract"* — two further facts the error itself
+/// separates (see Errors). Callers for whom all of these mean "do not act"
+/// may collapse them, but they are different facts and this signature keeps
+/// them so — an operator diagnosing a stalled release wants to know which
+/// one they have (rule 82).
 ///
 /// # Errors
 ///

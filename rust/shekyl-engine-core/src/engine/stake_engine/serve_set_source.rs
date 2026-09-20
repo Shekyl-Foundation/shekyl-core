@@ -17,7 +17,8 @@
 //! # The two halves, and why each comes from where it does
 //!
 //! **The set** comes from `get_archival_emission_claim_source`, decoded by
-//! [`fetch_emission_claim_source`] — the **connected** record as the daemon
+//! [`fetch_emission_claim_source`](crate::engine::emission_source::fetch_emission_claim_source)
+//! — the **connected** record as the daemon
 //! read it back from its own database, never the wallet's memory of what it
 //! posted. "What I posted" is not "what connected"
 //! (`ARCHIVAL_CHALLENGE_MECHANISM.md` §9.6 item 4), and a locally-maintained
@@ -248,14 +249,18 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
 
 impl<R: PersonaIsolatedTransport + Sync> ServeSetPinner for EngineServeSetPinner<R> {
     async fn pin_serve_set(&self) -> Result<PinReport, String> {
-        // **Sync reading first, record second** (`WSS-Q14`). Two orderings
-        // were available and only this one is sound: a daemon that reports
-        // synchronized and *then* answers the record cannot have answered it
-        // from deep resync, whereas reading the record first leaves a window
-        // in which a pre-bond record is paired with a by-then-caught-up
-        // `get_info`. It also makes the witness's height the earlier of the
-        // two, which is the conservative direction for the release gate's
-        // clock (see [`Self::releasable`]).
+        // **Sync reading first, record second, then the witness block
+        // re-read** (`WSS-Q14`). Of the two orderings of the first pair only
+        // this one is sound: a daemon that reports synchronized and *then*
+        // answers the record cannot have answered it from deep resync,
+        // whereas reading the record first leaves a window in which a
+        // pre-bond record is paired with a by-then-caught-up `get_info`. It
+        // also makes the witness's height the earlier of the two, which is
+        // the conservative direction for the release gate's clock (see
+        // [`Self::observe`]). The third read is the bracket — the witness
+        // block confirmed after the record — without which a reorg that
+        // crossed the witness tip and caught back up would read as advance;
+        // all three are `fetch_vouched_claim_source`'s, not this caller's.
         //
         // Neither a syncing daemon (`Ok(None)`) nor an unreachable one
         // (`Err`) yields facts to act on, so both withhold the release half —

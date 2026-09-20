@@ -141,7 +141,8 @@ pub(crate) trait BlockSource {
 
 /// A source's claimed tip, **only if the daemon reports itself synchronized**.
 ///
-/// Returns the [`SyncedChainFacts`] witness rather than a bare height
+/// Returns the [`SyncedChainFacts`](crate::engine::daemon::synced_chain_facts::SyncedChainFacts)
+/// witness rather than a bare height
 /// (`WALLET_SIDE_STORE.md` `WSS-Q14`). Every consumer below posts a
 /// transaction stamped with this clock, and `R-B` says that while the daemon
 /// reports syncing the answer is **unknown** — do not erase, post or sign. So
