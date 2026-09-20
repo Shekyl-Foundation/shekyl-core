@@ -48,23 +48,36 @@
 //!    outright in these paths — it records every un-skipped argument as a
 //!    span field, so the identifier is named by a function signature the
 //!    body scan never reads.
-//! 4. `shekyl-p-host`, `shekyl-p-serve` and `shekyl-tor-control-client`
-//!    **growing a logging surface at all** — a logging dependency or a
-//!    `println!`/`eprintln!`/`dbg!`. These three crates have none today, so a
-//!    denylist over their (zero) log sites would be vacuously green: the edit
-//!    that makes a field scan red there needs a dependency *and* a site *and*
-//!    a denylisted name. The check that can actually fail is structural, and
-//!    it makes adding logging to the persona host a conscious gate edit —
-//!    which is when review should happen (`47-gate-subject-assertion`).
+//! 4. `shekyl-p-host`, `shekyl-p-serve`, `shekyl-tor-control-client` and
+//!    `shekyl-tor-control-wallet` **growing a logging surface at all** — a
+//!    logging dependency or a `println!`/`eprintln!`/`dbg!`. These four
+//!    crates have none today, so a denylist over their (zero) log sites
+//!    would be vacuously green: the edit that makes a field scan red there
+//!    needs a dependency *and* a site *and* a denylisted name. The check
+//!    that can actually fail is structural, and it makes adding logging to
+//!    the persona host a conscious gate edit — which is when review should
+//!    happen (`47-gate-subject-assertion`).
 //! 5. Every **spelling** of a macro call, because site detection reads a
 //!    token stream rather than source text: whitespace or a comment between
 //!    the path and its `!`, the `{}` and `[]` delimiter forms, the raw
 //!    identifier `r#info!`, a leading-colon path, and a module-aliased path
 //!    (`t::info!`) all resolve to the same site.
-//! 6. A `use` item that **renames** a logging macro. The scan keys on a
-//!    macro's final path segment, so `use tracing::info as note;` would make
-//!    every later `note!(…)` invisible to it; the rename is refused rather
-//!    than chased.
+//! 6. An identifier spelled in **camel case**. The stems are snake case, but
+//!    a type reaches a log through its constructor (`%PCanonicalId::from(b)`),
+//!    and lowercasing alone turns `PCanonicalId` into `pcanonicalid`, which
+//!    contains no stem — so the strictest names in the workspace were the
+//!    likeliest to slip through. Identifiers are normalised to snake case
+//!    before matching.
+//! 7. Three ways to **rename the thing being matched on**, each refused
+//!    rather than chased, because each leaves the call site spelling
+//!    something this gate does not recognise:
+//!    - `use tracing::info as note;` — a `use` rename, so `note!(…)` no
+//!      longer spells a level;
+//!    - `macro_rules! note { ($($a:tt)*) => { tracing::info!($($a)*) } }` —
+//!      a forwarding wrapper, which names no identifier of its own *and*
+//!      whose call sites name no level, defeating both halves at once;
+//!    - `telemetry = { package = "tracing" }` — Cargo's own rename, which
+//!      keeps the crate linked while the dependency key stops spelling it.
 //!
 //! **Does NOT cover** — the bypasses this scanner admits by construction,
 //! each one named rather than left implied, because a source-text matcher
@@ -85,11 +98,13 @@
 //!   Those two legs cannot reach those variants today, but the *type* admits
 //!   it — a reachability argument, not a structural one, and reachability is
 //!   exactly what a later edit changes.
-//! - **A wrapper macro defined outside these paths.** A `macro_rules!`
-//!   defined in-path is scanned at its definition, because the body names the
-//!   identifier; one defined elsewhere and invoked here expands past this
-//!   scan. There are no `macro_rules!` definitions in these four paths today,
-//!   which is what keeps the gap narrow rather than closed.
+//! - **A wrapper macro defined outside these paths.** One defined *in* path
+//!   is refused outright (item 7) — scanning its definition for a forbidden
+//!   identifier is **not** sufficient, because a forwarding wrapper's body
+//!   names none. One defined elsewhere and invoked here expands past this
+//!   scan entirely, and is the residue. There are no `macro_rules!`
+//!   definitions in these five paths today, which is what keeps the gap
+//!   narrow rather than closed.
 //! - **`Span::record("shard_id", &value)`** — a field set through a method
 //!   call with a string-literal name, which this scanner blanks along with
 //!   every other literal. There are no `tracing` `Span::record` calls in
@@ -97,7 +112,7 @@
 //!   backing store, neither a span).
 //! - **The framework's own API** — `Event::dispatch`, a hand-written
 //!   `Visit`. Out of reach for a source scan of call sites by construction.
-//! - Every path outside the three crates above and `stake_engine/` — notably
+//! - Every path outside the four crates above and `stake_engine/` — notably
 //!   `engine/pscan/`, whose `persona = ?persona` sites are covered by the
 //!   ratified `redact` arm (a two-byte `Debug` prefix) and are a separate
 //!   question from this one.
@@ -114,7 +129,7 @@
 //! ## Why a static scan and not a `tracing` capture layer
 //!
 //! A capture layer can only assert about events a test actually drives, and
-//! three of the four audited paths have no `tracing` dependency at all —
+//! four of the five audited paths have no `tracing` dependency at all —
 //! there is nothing to attach to, and no way to assert "and it stays zero".
 //! A source scan covers the absent case, which is most of the subject. It
 //! also runs under the existing `cargo test --workspace` lane with no
@@ -164,11 +179,19 @@ const FORBIDDEN_STEMS: &[&str] = &[
 const FORBIDDEN_PREFIX_STEMS: &[&str] = &["p_id", "p_slot"];
 
 /// Crates on `P`'s serving path that carry **no logging surface at all**, and
-/// must keep carrying none. See the module doc, item 3.
+/// must keep carrying none. See the module doc, item 4.
+///
+/// `shekyl-tor-control-wallet` is here because it *owns* the serving
+/// identity rather than merely handling it: `shekyl-p-host/src/host.rs:15`
+/// imports `OnionIdentity` and `ServiceId` from it, and it is the supervisor
+/// that drives the control actor. Omitting it would leave the layer holding
+/// `P`'s onion credential free to grow an unreviewed logging surface while
+/// this gate stayed green — the gate being green because it was not looking.
 const P_PATH_CRATES_WITHOUT_LOGGING: &[&str] = &[
     "shekyl-p-host",
     "shekyl-p-serve",
     "shekyl-tor-control-client",
+    "shekyl-tor-control-wallet",
 ];
 
 /// Crates whose presence in a `[dependencies]` table means the crate can log.
@@ -377,7 +400,35 @@ fn lex(src: &str) -> Lexed {
 // Scanning: find log macro bodies, split their fields, flag identifiers.
 // ─────────────────────────────────────────────────────────────────────────
 
-/// Identifiers in `text` that contain a forbidden stem, lowercased.
+/// `PCanonicalId` → `p_canonical_id`, `KeyImage` → `key_image`.
+///
+/// The stems are written in snake case, but a type name reaches a log line
+/// in camel case — through a constructor (`%PCanonicalId::from_bytes(b)`) or
+/// an associated function. Lowercasing alone turns `PCanonicalId` into
+/// `pcanonicalid`, which contains **no** stem, so the strictest identifiers
+/// in the workspace were the ones most likely to slip through. An underscore
+/// goes before an upper-case letter that follows a lower-case letter or a
+/// digit, and before the last upper-case letter of a run that starts a new
+/// word — so `HTTPClient` becomes `http_client`, not `h_t_t_p_client`.
+fn snake_case(ident: &str) -> String {
+    let b = ident.as_bytes();
+    let mut out = String::with_capacity(ident.len() + 4);
+    for (i, &byte) in b.iter().enumerate() {
+        if byte.is_ascii_uppercase() && i > 0 {
+            let prev = b[i - 1];
+            let starts_word = prev.is_ascii_lowercase() || prev.is_ascii_digit();
+            let ends_acronym =
+                prev.is_ascii_uppercase() && b.get(i + 1).is_some_and(u8::is_ascii_lowercase);
+            if starts_word || ends_acronym {
+                out.push('_');
+            }
+        }
+        out.push(byte.to_ascii_lowercase() as char);
+    }
+    out
+}
+
+/// Identifiers in `text` that contain a forbidden stem, in snake case.
 fn flagged_idents(text: &str) -> Vec<String> {
     let mut hits = Vec::new();
     let bytes = text.as_bytes();
@@ -388,7 +439,7 @@ fn flagged_idents(text: &str) -> Vec<String> {
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
-            let ident = text[start..i].to_ascii_lowercase();
+            let ident = snake_case(&text[start..i]);
             let forbidden = FORBIDDEN_STEMS.iter().any(|s| ident.contains(s))
                 || FORBIDDEN_PREFIX_STEMS.iter().any(|s| ident.starts_with(s));
             if forbidden && !hits.contains(&ident) {
@@ -740,11 +791,40 @@ fn rust_files_or_fail(dir: &Path) -> Vec<PathBuf> {
     rust_files(dir).unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// The crate a `package = "…"` key renames to, if this line carries one.
+fn package_rename(line: &str) -> Option<String> {
+    let at = line.find("package")?;
+    // A key, not the tail of another one (`default-package`).
+    if at > 0 {
+        let prev = line.as_bytes()[at - 1];
+        if is_ident_continue(prev) || prev == b'-' {
+            return None;
+        }
+    }
+    let rest = line[at + "package".len()..].trim_start();
+    let rest = rest.strip_prefix('=')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_owned())
+}
+
 /// Logging crates named in a manifest's **non-dev, non-build** dependency
 /// tables, including `[dependencies.x]` and `[target.'cfg(…)'.dependencies]`.
+///
+/// A dependency can be renamed — `telemetry = { package = "tracing" }` — and
+/// then the key stops spelling the crate while the crate is still linked and
+/// still logs. That is the manifest's version of `use tracing::info as note`,
+/// and it is read the same way: the `package` **value** names the real crate
+/// whatever the key says. All three spellings are covered — the inline table
+/// on one line, the `[dependencies.telemetry]` table form, and the inline
+/// table spread across lines.
 fn logging_deps(manifest: &str) -> BTreeSet<String> {
     let mut found = BTreeSet::new();
     let mut in_deps_table = false;
+    // True while an inline table opened on an earlier line is still open, so
+    // `telemetry = {` / `package = "tracing"` / `}` reads as one entry.
+    let mut inline_table_open = false;
+
     for line in manifest.lines() {
         let t = line.trim();
         if let Some(header) = t.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
@@ -752,13 +832,17 @@ fn logging_deps(manifest: &str) -> BTreeSet<String> {
             let is_dev_or_build =
                 header.contains("dev-dependencies") || header.contains("build-dependencies");
             in_deps_table = !is_dev_or_build && header.ends_with("dependencies");
-            // `[dependencies.tracing]` names the dependency in the header.
+            inline_table_open = false;
+            // `[dependencies.tracing]` names the dependency in the header;
+            // `[dependencies.telemetry]` may still rename via `package`, so
+            // the table's body stays in scope either way.
             if !is_dev_or_build {
                 if let Some((_, dep)) = header.rsplit_once("dependencies.") {
                     let dep = dep.trim().trim_matches('"');
-                    if LOGGING_CRATES.contains(&dep) {
+                    if is_logging_crate(dep) {
                         found.insert(dep.to_owned());
                     }
+                    in_deps_table = true;
                 }
             }
             continue;
@@ -766,9 +850,27 @@ fn logging_deps(manifest: &str) -> BTreeSet<String> {
         if !in_deps_table || t.is_empty() || t.starts_with('#') {
             continue;
         }
-        let Some((key, _)) = t.split_once('=') else {
+
+        // A `package = "x"` anywhere in scope names the real crate.
+        if let Some(renamed) = package_rename(t) {
+            if is_logging_crate(&renamed) {
+                found.insert(renamed);
+            }
+        }
+
+        if inline_table_open {
+            if t.contains('}') {
+                inline_table_open = false;
+            }
+            continue;
+        }
+
+        let Some((key, value)) = t.split_once('=') else {
             continue;
         };
+        if value.trim_start().starts_with('{') && !value.contains('}') {
+            inline_table_open = true;
+        }
         // `tracing = { … }`, `tracing.workspace = true`, `"tracing" = …`.
         let key = key.trim().trim_matches('"');
         let name = key
@@ -777,7 +879,7 @@ fn logging_deps(manifest: &str) -> BTreeSet<String> {
             .unwrap_or(key)
             .trim()
             .trim_matches('"');
-        if LOGGING_CRATES.contains(&name) {
+        if is_logging_crate(name) {
             found.insert(name.to_owned());
         }
     }
@@ -799,6 +901,66 @@ fn print_macro_sites(src: &str) -> Vec<(usize, String)> {
 fn is_logging_crate(segment: &str) -> bool {
     LOGGING_CRATES.contains(&segment.replace('_', "-").as_str())
         || LOGGING_CRATES.contains(&segment)
+}
+
+/// `macro_rules!` definitions whose body invokes a logging macro:
+/// `(line, the macro's name)`.
+///
+/// A **forwarding** wrapper defeats both halves of this scanner at once:
+///
+/// ```ignore
+/// macro_rules! note { ($($a:tt)*) => { tracing::info!($($a)*) } }
+/// note!(shard_ids = ?releasable);
+/// ```
+///
+/// The definition names no forbidden identifier — `$($a:tt)*` is opaque — so
+/// scanning it finds nothing; and the call site spells `note!`, not a level,
+/// so site detection never opens it. Scanning definitions is therefore *not*
+/// enough on its own, which is why the definition is refused outright: a
+/// wrapper around a log macro in these paths is a decision, not a detail.
+fn logging_wrapper_macros(src: &str) -> Vec<(usize, String)> {
+    let lexed = lex(src);
+    let toks = tokens(&lexed);
+    let logs = log_sites(&lexed);
+    let mut out = Vec::new();
+    for (i, tok) in toks.iter().enumerate() {
+        // `macro_rules` `!` `name` `{` — the name sits where a macro call
+        // would put its delimiter, so `macro_sites` does not match this.
+        if !tok.is_ident(&lexed, "macro_rules") {
+            continue;
+        }
+        if !toks.get(i + 1).is_some_and(|t| t.is_punct(b'!')) {
+            continue;
+        }
+        let Some(name) = toks.get(i + 2).filter(|t| t.kind == TokenKind::Ident) else {
+            continue;
+        };
+        let Some(open) = toks.get(i + 3).filter(|t| t.is_punct(b'{')) else {
+            continue;
+        };
+        let (mut depth, mut body_end) = (0i32, None);
+        for later in &toks[i + 3..] {
+            if later.is_punct(b'{') {
+                depth += 1;
+            } else if later.is_punct(b'}') {
+                depth -= 1;
+                if depth == 0 {
+                    body_end = Some(later.start);
+                    break;
+                }
+            }
+        }
+        let Some(end) = body_end else {
+            continue;
+        };
+        let forwards = logs
+            .iter()
+            .any(|site| site.body.0 >= open.end && site.body.1 <= end);
+        if forwards {
+            out.push((line_of(&lexed, tok.start), name.text(&lexed).to_owned()));
+        }
+    }
+    out
 }
 
 /// `use` items that rename something out of a logging crate:
@@ -1095,6 +1257,105 @@ fn scanner_refuses_an_aliased_logging_import() {
 }
 
 #[test]
+fn camel_case_type_names_normalise_onto_their_stems() {
+    // Lowercasing alone turns `PCanonicalId` into `pcanonicalid`, which
+    // contains no stem — so the workspace's *strictest* identifiers were the
+    // likeliest to pass. Each of these is a real type from `shekyl-types`.
+    for (camel, snake) in [
+        ("PCanonicalId", "p_canonical_id"),
+        ("KeyImage", "key_image"),
+        ("ServiceId", "service_id"),
+        ("GlobalOutputIndex", "global_output_index"),
+        ("HTTPClient", "http_client"),
+        ("StepId", "step_id"),
+    ] {
+        assert_eq!(snake_case(camel), snake, "`{camel}` must normalise");
+    }
+
+    // The constructor-expression form: the identifier is a *type*, and its
+    // `Display` is full hex.
+    let constructor = "tracing::info!(id = %PCanonicalId::from_bytes(bytes));";
+    let hits = violations_in_source(constructor);
+    assert!(
+        hits.iter().any(|(_, id, _)| id == "p_canonical_id"),
+        "a camel-case type in a value expression must be flagged; found {hits:?}"
+    );
+
+    // Normalisation must not manufacture a hit: `StepId` snake-cases to
+    // `step_id`, which does not *start* with `p_id`.
+    assert!(
+        flagged_idents("StepId StopId MapSlot GroupId").is_empty(),
+        "camel-case innocents must stay clean: {:?}",
+        flagged_idents("StepId StopId MapSlot GroupId")
+    );
+}
+
+#[test]
+fn scanner_refuses_a_forwarding_wrapper_macro() {
+    // The wrapper defeats both halves at once: `$($a:tt)*` names no
+    // forbidden identifier, and `note!(…)` names no level. Scanning the
+    // definition for an identifier — which is what this gate used to claim
+    // covered the case — finds nothing at all.
+    let forwarding = "macro_rules! note { ($($a:tt)*) => { tracing::info!($($a)*) }; }\n";
+    assert!(
+        violations_in_source(forwarding).is_empty(),
+        "precondition: the wrapper body names no forbidden identifier, which \
+         is exactly why scanning definitions is not sufficient"
+    );
+    let wrappers = logging_wrapper_macros(forwarding);
+    assert!(
+        wrappers.iter().any(|(_, name)| name == "note"),
+        "a `macro_rules!` forwarding to a log macro must be refused; found \
+         {wrappers:?}"
+    );
+
+    // A `macro_rules!` that does not log is not this gate's business.
+    let innocent = "macro_rules! square { ($x:expr) => { $x * $x }; }\n";
+    assert!(
+        logging_wrapper_macros(innocent).is_empty(),
+        "a non-logging macro definition must not trip the gate"
+    );
+}
+
+#[test]
+fn manifest_matcher_sees_through_a_cargo_rename() {
+    // Cargo's own alias: the key stops spelling the crate, the crate stays
+    // linked and still logs. Same class as `use tracing::info as note`.
+    let inline = "[dependencies]\ntelemetry = { package = \"tracing\", version = \"0.1\" }\n";
+    assert!(
+        logging_deps(inline).contains("tracing"),
+        "an inline `package = \"tracing\"` rename must be found: {:?}",
+        logging_deps(inline)
+    );
+
+    let table = "[dependencies.telemetry]\npackage = \"tracing\"\nversion = \"0.1\"\n";
+    assert!(
+        logging_deps(table).contains("tracing"),
+        "the `[dependencies.telemetry]` + `package` form must be found"
+    );
+
+    let multiline =
+        "[dependencies]\ntelemetry = {\n    package = \"tracing\",\n    version = \"0.1\",\n}\n";
+    assert!(
+        logging_deps(multiline).contains("tracing"),
+        "an inline table spread across lines must be found"
+    );
+
+    // A dev-dependency rename still never ships.
+    let dev = "[dev-dependencies]\ntelemetry = { package = \"tracing\" }\n";
+    assert!(
+        logging_deps(dev).is_empty(),
+        "a renamed dev-dependency must not trip the gate"
+    );
+    // A rename to something that is not a logging crate is not a finding.
+    let unrelated = "[dependencies]\nrng = { package = \"rand_core\", version = \"0.6\" }\n";
+    assert!(
+        logging_deps(unrelated).is_empty(),
+        "an unrelated rename must not trip the gate"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn walk_reports_an_entry_it_cannot_read_instead_of_skipping_it() {
     use std::os::unix::fs::symlink;
@@ -1240,6 +1501,13 @@ fn stake_engine_logs_name_no_p_correlated_identifier() {
                 file.display()
             ));
         }
+        for (line, name) in logging_wrapper_macros(&src) {
+            offenders.push(format!(
+                "{}:{line}: `macro_rules! {name}` forwards to a log macro, so \
+                 `{name}!(…)` logs without naming a level this gate matches on",
+                file.display()
+            ));
+        }
     }
 
     assert!(
@@ -1326,13 +1594,19 @@ fn p_serving_crates_carry_no_logging_surface() {
                     file.display()
                 ));
             }
+            for (line, name) in logging_wrapper_macros(&text) {
+                failures.push(format!(
+                    "{}:{line}: `macro_rules! {name}` forwards to a log macro",
+                    file.display()
+                ));
+            }
         }
     }
 
     assert!(
         failures.is_empty(),
         "WSS-20: a crate on `P`'s serving path grew a logging surface.\n\
-         These three crates hold `P`'s identity, its serve set and its onion \
+         These four crates hold `P`'s identity, its serve set and its onion \
          address, and deliberately cannot write any of it to disk. Adding a \
          logging surface here is a decision that needs review — not a \
          dependency line. If it is the right decision, widen this gate to a \
