@@ -95,15 +95,37 @@ Source ──► Form (N workers) ──► Sequencer ──► Validate+Connect
   API (RD-F14). Whether a bounded scratchpad pool should *become* production
   is the RandomX lane's call, decided on the benchmark this pipeline emits
   (RD-F11), not assumed here.
-- **Validate+Connect** is one actor owning the store's write transaction: the
-  single-writer discipline the wallet's CT-5 actor established, and what
-  redb's exclusive lock makes the only honest shape. `kameo` is the workspace
+- **Validate+Connect** is one actor — the single-writer discipline the
+  wallet's CT-5 actor established, and what redb's exclusive lock makes the
+  only honest shape. **What the actor owns is the `ChainStore`, not a
+  `WriteBatch`:** a batch exists only inside `ChainStore::write`'s
+  higher-ranked closure (`for<'id> FnOnce(&mut WriteBatch<'_, 'id>)`,
+  `store/mod.rs:28`–`:35`, `:439`–`:447`) and cannot be held across mailbox
+  messages — that is the brand doing its job. So the transaction boundary is
+  **one `write` closure per handler invocation**: a `Rewind` is one closure
+  (pops to `to`); a bounded run of consecutive `Extend`s is one closure
+  (`connect` may be called repeatedly on one batch — `connect.rs` doc — and
+  the run's length is the checkpoint granularity, so a checkpoint is a
+  transaction boundary). "The only state is the batch" reads: the only
+  *mutable* state is inside the closure while it runs; between messages the
+  actor holds the store handle and the sequencer's cursor, nothing else. `kameo` is the workspace
   actor stack (exact-pinned `=0.20.0`, `shekyl-engine-core/Cargo.toml:113`),
   so the daemon composing the same way is consistency, not novelty.
-- **Supervision** maps the fault arms to lifecycle: `Corrupt` →
-  `refuse_corrupt`, batch poisoned, pipeline halts (RD-Q4); `Retry::Exhausted`
-  → terminal run error, surfaced not retried (RD-Q5); checkpoints at digest
-  heights make long replays resumable.
+- **Supervision** maps **every** non-verdict outcome the public contracts
+  can return to a lifecycle, so none inherits an actor framework's default
+  restart (RD-Q11: the actor is no-restart, tested). The complete map:
+
+  | Outcome | Contract | Lifecycle |
+  | --- | --- | --- |
+  | `Verdict::Err(InvalidBlock)` from `form` or `validate` | the block is refused | **not a fault**: recorded by the grader sink as the verdict (spec-first expected verdicts in the mutation family); the run continues with the next event |
+  | `S::Fault` from `form` (the substrate could not compute: cache derivation, clock) | `form -> Result<Verdict<_>, S::Fault>` | **terminal for the run**, surfaced — a verifier that cannot compute is a fault, never a verdict (slice 2 Q1); in the live daemon it is the node's own outage, not the block's |
+  | `Fault::View(store error)` from `validate` | *"the caller halts"* (`validate.rs:141`) | **halt**: if the store already poisoned the batch (`InvariantViolated`) the writer is halted and the run ends; an engine error ends the run — never retried, never a verdict |
+  | `Fault::Corrupt` | RD-Q4 | `refuse_corrupt`, batch poisoned, **halt**, terminal (RD-Q11) |
+  | `Fault::Stale(Stale::Seed { retry: Again, .. })` | RD-Q5 | in replay a **driver defect**: recorded and surfaced on first occurrence; the bounded re-`form` runs so the live-mode bound is exercised, not as a cure |
+  | `Fault::Stale(Stale::Seed { retry: Exhausted, .. })` | RD-Q5 | **terminal run error**, surfaced |
+  | `Fault::Stale(Stale::RuleSet { .. })` | `form` and `validate` were handed different sets | in replay a **driver defect** (the schedule must hand both stages one `&RuleSet`, §3.7): recorded and surfaced, **not retried** — there is no honest re-`form` for it; in the live daemon the same arm marks a schedule boundary crossed mid-formation and the block is re-formed under the in-force set once |
+
+  Checkpoints at digest heights make long replays resumable.
 
 E3's cutover then stops being "build the live connect path" and becomes
 "swap the source and drop the grader." There is no C++ ingest to fall back to
@@ -254,7 +276,7 @@ transactions** (RD-F8), and the six passed-through facts.
 | Input | LMDB | RPC (unpruned daemon) | Derivable by the driver? |
 | --- | --- | --- | --- |
 | block blob | `blocks[h]` | `/get_blocks_by_height.bin` (`bin_commands.rs:160`) ✔ | — |
-| **tx bodies** (`Candidate.transactions`) | `txs_pruned` + `txs_prunable` (+ `txs_pqc_auths`) | `/get_blocks_by_height.bin` carries them **only from an unpruned node**; a pruned source has hash rows without segments (`block.rs`'s "band-1 skeleton") | — |
+| **tx bodies** (`Candidate.transactions`) | `txs_pruned` + `txs_prunable` (+ `txs_pqc_auths`) | `/get_blocks_by_height.bin` carries them **only from an unpruned node** — and a pruned node does **not** announce it: `BlockEntry` is `{ block, txs }` only (`bin_commands.rs:201`–`:220`) and the handler drops `missed` (`rpc_facts_ffi.cpp:1053`–`:1061`), so what arrives is a block with **fewer transaction blobs than its header lists**, not hash-only rows. The corpus writer therefore **verifies, not declares**: parse the block, and require the returned bodies to match `block.tx_hashes` in **count, order and hash** before the height is written as unpruned; a shortfall is a refusal naming the height (RD-F15) | — |
 | `weight` | `block_info.bi_weight` | `block_weight` ✔ | no (CEN-G6, slice 7) |
 | `long_term_weight` | `block_info.bi_long_term_block_weight` | `long_term_weight` ✔ | no |
 | `coins_generated` | `block_info.bi_coins` | **✘** (`reward` per block; the fold is CEN-F13/F14, slice 4 — not the driver's, C2-R8 Q4) | no |
@@ -266,8 +288,11 @@ Two sources, two shapes (RD-Q2, RULED): the **corpus** (blocks + bodies) comes
 from RPC against an **unpruned** daemon with zero C++; the **trace** (the
 LMDB-only facts, and the LMDB digests at checkpoint heights) comes from one
 exporter walking LMDB and handing bytes across the FFI to a Rust writer. **The
-corpus artifact declares its prune state and is refused on read if it does
-not match** (RD-F8); a pruned-source run is not a permitted deviation (§5).
+corpus writer verifies completeness per height — count, order and hash of the
+bodies against the header's `tx_hashes` — and only then records the artifact
+as unpruned; the reader refuses an artifact whose recorded state it cannot
+re-verify** (RD-F8, RD-F15). A declaration alone would trust the source; a
+pruned-source run is not a permitted deviation (§5).
 
 ### 3.5 Tooling that already exists around E2
 
@@ -336,6 +361,17 @@ verdict.
 `dev`; `shekyl-pow-randomx/src/seed_epoch.rs` is gone. §3.2's citation is now
 the tree's.
 
+**Swept at `fbc92287a` (#786 S-TX, #795–#798 PDM sweeps; Rust/C++ tree
+unchanged since `6c41bf820`):** `DRS_E1_STX.md` records that #788 answered
+S-TX's E2 question — E2 projects **no tx table** (its redb-side reads are
+`block_info` hashes, `key_images`, the live root; RD-F5) — and states the
+coupled reopen criterion: a later E2 increment that projects tx tables names
+*together* the row it needs and the order it needs it in. Acknowledged here;
+nothing in this plan projects one. #786 also put `shekyl-chain-rules`'
+`harness` feature under `check_test_only_features.py` as a TEST_ONLY row
+(dev-dependency edges only) — the contract §8.8 of `CHAIN_RULES_CRATE.md`
+states is now gated, and the ingest crate must not enable it.
+
 
 ### 3.8 Design inputs from the memo (REVIEW INPUT — not ruled; feed Round 1)
 
@@ -365,7 +401,7 @@ the tree's.
 | Q | Question | Disposition | Why |
 | --- | --- | --- | --- |
 | **RD-Q1** | **Home.** | **RULED (memo §2): the new crate is the production ingest crate**, depending on rules + store + `shekyl-pow-randomx`, with the replay driver as its first `src/bin/`; corpus/trace format types live in this crate (or `shekyl-store-codec` once CTS PR A lands), never in a binary. **Its name is Q-A → default `shekyl-chain-ingest`** (REVIEW INPUT; adopted unless Round 1 objects). *Round-0 default was `shekyl-chain-replay`, "a test tool" — same dependency shape, different life expectancy.* | The store crate is `#![deny(unsafe_code)]`; it names `ChainValid` (the accepted verdict is `connect`'s input, `connect.rs:314`–`:318`) but **neither RandomX, nor the refusal type `InvalidBlock` (conversion ban clause 2), nor the validator's `Fault`/`Substrate` types** — and it must stay that way: the pipeline keeps the store ignorant of faults and of hashing, and G1 trivially true. |
-| **RD-Q2** | **Block, body and fact source** (§3.4). | **RULED (memo §2): corpus + trace, with typed doors.** **Corpus** — *network-shaped only*: per height, the block plus full transaction bodies in header order (what `Candidate` consumes, `block.rs:88`–`:93`), taken from an **unpruned** node, declaring its prune state and refused on mismatch; format minted in Rust, versioned — the Monero bootstrap/epee container is **not** extended (rules 42/16); **zero C++** — the existing block-by-height read suffices. **Trace** — the six facts, cumulative difficulty, digest checkpoints, and (later) verdicts — produced by **one** C++ exporter shim that walks LMDB and hands bytes to a Rust writer, deletable in the same commit that deletes the daemon. **The doors are the grader's law:** `expect(h)` feeds *only* the grader; `borrow(h)` feeds `connect` for facts Rust does not derive yet, keyed off `Fact::origin` — a borrowed value is never evidence (RD-Q6). RD-F1's option matrix collapses to this; RD-F2 dissolves — no LMDB crate enters the workspace. *Round-0 default (c) withdrawn (RD-F9).* | Byte transport across the FFI is what D12 allows; verdicts are what it rejected. The digest walker (`logical_state_digest.cpp` → FFI) is the existing shape. Two doors with different types make "the grader read a borrowed fact as evidence" a compile error, not a review catch. |
+| **RD-Q2** | **Block, body and fact source** (§3.4). | **RULED (memo §2): corpus + trace, with typed doors.** **Corpus** — *network-shaped only*: per height, the block plus full transaction bodies in header order (what `Candidate` consumes, `block.rs:88`–`:93`), taken from an **unpruned** node, its completeness **verified per height** against the header's `tx_hashes` (count, order, hash — RD-F15) and refused on a shortfall; format minted in Rust, versioned — the Monero bootstrap/epee container is **not** extended (rules 42/16); **zero C++** — the existing block-by-height read suffices. **Trace** — the six facts, cumulative difficulty, digest checkpoints, and (later) verdicts — produced by **one** C++ exporter shim that walks LMDB and hands bytes to a Rust writer, deletable in the same commit that deletes the daemon. **The doors are the grader's law:** `expect(h)` feeds *only* the grader; `borrow(h)` feeds `connect` for facts Rust does not derive yet, keyed off `Fact::origin` — a borrowed value is never evidence (RD-Q6). RD-F1's option matrix collapses to this; RD-F2 dissolves — no LMDB crate enters the workspace. *Round-0 default (c) withdrawn (RD-F9).* | Byte transport across the FFI is what D12 allows; verdicts are what it rejected. The digest walker (`logical_state_digest.cpp` → FFI) is the existing shape. Two doors with different types make "the grader read a borrowed fact as evidence" a compile error, not a review catch. |
 | **RD-Q3** | **Production `Substrate`.** | **Default holds with one correction:** two-cache `CacheStore` keyed by the chain's seed at `seedheight(h)`, swapped at epoch boundaries; wall clock. *Round 0 called the retry loop "load-bearing" at the boundary; **withdrawn** (RD-F10) — the driver takes the seed from the chain it replays, so a `Stale::Seed` cannot arise from a correct driver; it is a defect signal (RD-Q5).* Throughput: parallel `form` workers over per-worker `compute_hash` (§1.1; the pool is not production, RD-F14) now; the Rust dataset mode is an **open option gated on a measurement E2 itself produces** — the pipeline's metrics sink records light-mode wall-clock per hash and per block, which is the number `RANDOMX_V2_MINING_ASYMMETRY.md` option (a) has been waiting for (RD-F11); never the JIT (§1.3). **Memo Q-C answered here:** checked at source — `shekyl-pow-randomx` does not expose full-dataset verification (`Cache::derive_item`, `cache.rs:449`; no public dataset builder) and cannot "cheaply" grow one inside this increment (it is the RandomX lane's and a 2 GiB-per-epoch provisioning question, rule 76); so parallel `form` is the win now, and the benchmark this pipeline emits is what decides the rest. **Caveat:** C1's FTL leg reads the clock and a historical block is always below `now + FTL`, so replay cannot exercise C1's refusal — recorded in §5. | Reuses the daemon's cache lifecycle; the epoch boundary is where a stale cache would silently produce wrong longhashes, and that now surfaces as a defect, not a retry. |
 | **RD-Q4** | **`Fault::Corrupt` at the store.** | **RULED as defaulted:** `WriteBatch::refuse_corrupt(Corrupt) -> StoreError`, inside the batch, arming the poison at the noted height with a `StoreInvariant` row mapped from the `Corrupt` arm (new SI rows minted with it), returning the `InvariantViolated` the pipeline propagates. Minted here **with its caller** — the commit-9 scope #785 shed, as ruled 2026-09-19. | The validator saw what a belt would have; the store's halt is the consequence and must poison *this* batch. Taking the value keeps the store from naming `CenRow`s it does not own. |
 | **RD-Q5** | **The retry loop and `Stale::Seed` in replay.** | **RULED:** the loop lives in the pipeline (`form` → `validate`; on `Stale::Seed` re-`form` with the expected seed and `attempt.next()`; `Exhausted` → terminal run error). **In replay every `Stale::Seed` is a driver defect: the run records and surfaces the first occurrence rather than retrying it away**, and **the retry path is exercised by a test that injects a wrong seed**, not by waiting for a bug. The live-daemon role (slice 2 Q8's DoS bound) is unaffected. | Resolves the RD-Q3/RD-Q5 contradiction Round 0 carried (RD-F10). |
@@ -386,7 +422,7 @@ the tree's.
 | `--fixed-difficulty` on regtest runs (RD-Q7) | the bench needs real RandomX cost at a reachable target | production nets refuse the flag by type (`for_network` cannot yield `Fixed`, pinned) |
 | `drs_bench.py`'s lowered target | benchmark reproducibility on the provisioning floor | the artifact records the target; `drs_artifact.py` refuses cross-condition ratios |
 | The redb file's `Provenance` is NOT-PARITY-EVIDENCE throughout E2 | six facts passed through; enforced rows unimplemented | `passed_through().count() == 0 && coverage_gaps().is_empty()` — the genesis gate |
-| **Pruned corpus source — NOT PERMITTED** | bodies are the validator's input (RD-F8); a pruned source yields skeletons | the corpus artifact declares `prune_state`; the reader refuses a mismatch. If a pruned-source run is ever allowed, it enters this table as a deviation with its own reopener first. |
+| **Pruned corpus source — NOT PERMITTED** | bodies are the validator's input (RD-F8); a pruned source silently yields **fewer bodies than the header lists** (RD-F15) | the corpus writer verifies count / order / hash against `block.tx_hashes` per height and refuses a shortfall naming the height; the reader re-verifies the recorded state. If a pruned-source run is ever allowed, it enters this table as a deviation with its own reopener first. |
 
 ## 6. Findings
 
@@ -406,8 +442,15 @@ the tree's.
   resolve to a live `docs/design/` doc, an open PR, or an index-§2 family.
   Same family as `held_by_cxx` asserting its holder exists. **Falsify by**
   `scripts/ci/check_followups_owners.py` existing and refusing a row whose
-  owner is "the E2 lane" with no `DRS_E2_*.md` present. Owner: this lane, its
-  own small PR after Round 1; target pre-genesis.
+  owner is "the E2 lane" with no `DRS_E2_*.md` present. **Carrier (rule 22 —
+  a slot in this ruled plan, not "a small PR later"): §7 commit 0**, the
+  first commit of the implementation phase, ahead of `refuse_corrupt`. What
+  it must settle first, named so the slot is not a hiding place: FOLLOWUPS
+  owners are prose today (*"owner **the X lane**"*), so the gate's first job
+  is the parse — an `Owner:` sub-bullet beside `Target:` — with existing rows
+  grandfathered by exact hit and burned down, the shape `check_test_only_
+  features.py`'s `GOVERNED_OWNERS` grandfather list took in #786. Target
+  pre-genesis.
 - **RD-F5 — the redb-side digest assembly does not exist.** `digest_v0` has one
   caller, fed by C++. E2 needs the same three families read from the redb
   file — `ReadSnapshot::logical_state_digest_v0()` or a pipeline-side assembly
@@ -460,6 +503,16 @@ the tree's.
   reads as a ruling. The JIT is never the lever (§1.3). *Same correction the
   driver deferral itself just received, one level up: an item pointed at
   nobody becoming an item pointed at the thing being built.*
+- **RD-F15 (review, 2026-09-19) — a pruned RPC source fails silently, so the
+  corpus writer verifies rather than declares.** `BlockEntry { block, txs }`
+  carries no prune flag (`bin_commands.rs:201`–`:220`) and the handler drops
+  `get_transactions`' `missed` vector (`rpc_facts_ffi.cpp:1053`–`:1061`), so a
+  pruned node returns a block with fewer bodies than its header lists and no
+  signal. RD-F8's "declares its prune state" was insufficient: the writer
+  parses the block and requires count, order and hash of the returned bodies
+  to match `block.tx_hashes` before recording the height as unpruned; a
+  shortfall refuses, naming the height. Same shape as RD-F14 — a Round-0
+  claim about a source, corrected by reading the source.
 - **RD-F14 (review, 2026-09-19) — `VmStatePool` is not a production API.**
   `shekyl-pow-randomx` compiles and re-exports `VmStatePool` /
   `compute_hash_with_pool` only under `cfg(any(test, feature =
@@ -498,6 +551,7 @@ the tree's.
 
 ## 7. Commit plan (sketch; Round 1 fixes it)
 
+0. `ci: check_followups_owners.py — a deferral's owner must resolve (live doc, open PR, or index family); Owner: sub-bullet convention; existing rows grandfathered by exact hit` (RD-F4). First, because the lane it protects against is the one this plan was opened to repair.
 1. `chain-store: WriteBatch::refuse_corrupt — the validator's Corrupt arms the halt` (RD-Q4; new SI rows; withdraws the FOLLOWUPS row). **Its commit message states that this is the API #785's commit 9 shed and why it waited: the deferral was circular ("no caller") until the caller was scheduled, and the API arrives with the driver that shapes it — value in, inside the batch — rather than guessed at from the store side.** A reader landing here from #785's FOLLOWUPS row gets the reason, not a reconstruction.
 2. `chain-store: ReadSnapshot::logical_state_digest_v0 — the redb half of E2` (RD-F5).
 3. `ingest: shekyl-chain-ingest scaffold — Source trait, pipeline stages, production Substrate over shekyl-pow-randomx's compute_hash (no pool; RD-F14)` (RD-Q1, RD-Q3).
@@ -520,9 +574,12 @@ root_after, long_term_effective_median]` and E6's open coverage gaps —
 NOT-PARITY-EVIDENCE, honestly. **Of the digest's three components, two are
 evidence (block hashes; spent keys — both from real `form` → `validate` →
 `connect`) and one is borrowed (`curve_root`, copied from LMDB through
-`root_after`) and is graded as such** (RD-F7). Register rows that *produce* a
-passed-through fact grade not-evidence by rule (RD-Q9 decides whether
-consumers join them), and the artifact names them. **The dataset-mode
+`root_after`) and is graded as such** (RD-F7). Register rows grade under RD-Q9's two
+clauses: a rule's **verdict** grades on its own evidence even against a
+borrowed oracle; the digest **component** a borrowed fact feeds grades
+not-evidence; a *producer* of a borrowed value grades not-evidence on both
+until Rust derives it — carried as two typed fields per row, and the artifact
+names them. **The dataset-mode
 measurement is part of the record** (inventory item 7): light-mode wall-clock
 per hash and per block on the provisioning floor, as an artifact the RandomX
 lane's option (a) decision reads.
@@ -547,3 +604,4 @@ code or a re-pointed FOLLOWUPS row with a live owner.
 | 2026-09-19 | **Round 1 RULED** (all four verified against the plan text). RD-Q9 producers-only as **two clauses** — the rule's verdict grades on its own evidence; the digest component it feeds grades not-evidence — so "producers only" is not quoted as *B5 grades as evidence*. RD-Q10 as defaulted, plus the `Fixed` id-is-not-set caveat cross-referenced **from the CEN-B3 belt** (`connect.rs:441`), the likeliest site to use id equality as a proxy. RD-Q11 as defaulted, with the Validate+Connect actor's supervision **no-restart** — a `Corrupt` halt is terminal, and a restart would be the `InvalidBlock`-mapping failure in another shape; tested by halt-then-assert-not-back. RD-Q12 as defaulted, plus fuzz hygiene — seed logged, mismatching blob and both `PowHash`es emitted as an artifact, or the gate is an alarm that gets muted. Commit plan §7 updated (5, 6, 7, 8b). Implementation may begin. |
 | 2026-09-19 | Two implementation carry-forwards pinned on §7 so they outlive the review thread: commit 1's message names itself as what #785 shed and why it waited; commit 5 writes the no-restart test first. Ground confirmed: `dev` at `6c41bf820` with #785 in — no stale ground left in this file. |
 | 2026-09-19 | **PR review (Copilot, nine threads) taken.** RD-F14: `VmStatePool` is `cfg(test)`/bench-only — the parallel-`form` stage now rests on `compute_hash` per worker, the pool's promotion the RandomX lane's measure-first call. **RD-Q13 posed and defaulted:** a height-ordered stream cannot represent a reorg; the `Source` yields `Extend`/`Rewind` under a barrier rule, or E3 needs a second ingest path — commit 8c. The register count is the gate's (131 recorded, 126/2/3), not a literal; bare slice-2 `Q…` tokens qualified (rule 94 §2); RD-Q1's boundary sentence corrected (the store names `ChainValid`, never `InvalidBlock`/`Fault`/RandomX); the RD-Q9 two-clause rule restored in the CSR §5.4.1 and DRS-E2 restatements; the index documents-row and stamp brought current. |
+| 2026-09-19 | **Second PR review round (Copilot, eight threads) taken; merged `dev` `fbc92287a`.** The actor owns the `ChainStore`, not a `WriteBatch` — a batch is closure-scoped by the brand, so the transaction boundary is one `write` closure per handler (a `Rewind`; a bounded run of `Extend`s = the checkpoint granularity). The supervision map is now **complete** over every non-verdict outcome (`S::Fault`, `Fault::View`, `Corrupt`, both `Stale` arms, `Exhausted`), so nothing inherits a default restart. **RD-F15:** a pruned RPC source is silent (`missed` dropped; no flag on `BlockEntry`) — the corpus writer verifies count/order/hash against `tx_hashes`, not a declaration. RD-F4's gate gets a concrete carrier: **§7 commit 0**, with the owner-cell convention and grandfather shape named. §8's stale "RD-Q9 decides whether" removed; index header, RD-F range and documents-row brought to the current state; stamp moved to `fbc92287a` with the checks re-run. S-TX's coupled E2 reopen criterion acknowledged (E2 projects no tx table). |
