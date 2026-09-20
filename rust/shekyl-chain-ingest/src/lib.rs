@@ -33,6 +33,9 @@
 //! - [`corpus`] — the corpus artifact (§3.9): blocks with their bodies,
 //!   verified against the header's list on every record by writer and
 //!   reader alike (RD-F15); [`CorpusReader`] is the first [`Source`].
+//! - [`fetch`] — building a corpus from an unpruned daemon over
+//!   `/get_blocks_by_height.bin` through the workspace's `Rpc` trait; the
+//!   writer's verification is what catches a pruned answer.
 //! - [`trace`] — the trace artifact (§3.9): the LMDB-only facts and digest
 //!   checkpoints, read through RD-Q2's two typed doors — `borrow(h)` for
 //!   `connect` (passed-through by construction), `expect(h)` for the grader.
@@ -52,12 +55,14 @@
 #[cfg(test)]
 mod artifact_tests;
 pub mod corpus;
+pub mod fetch;
 pub mod sequencer;
 pub mod source;
 pub mod substrate;
 pub mod trace;
 
 pub use corpus::{CorpusFault, CorpusReader, CorpusWriter, VerifiedRecord};
+pub use fetch::{fetch_corpus, FetchFault};
 pub use sequencer::{SequenceError, Sequencer};
 pub use source::{CorpusBlock, IngestEvent, Seq, Sequenced, Source};
 pub use substrate::{ChainSubstrate, Clock, ClockFault, SubstrateFault, SystemClock};

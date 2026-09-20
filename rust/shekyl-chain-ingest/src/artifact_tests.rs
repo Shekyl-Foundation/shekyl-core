@@ -461,3 +461,172 @@ fn the_facts_layout_is_pinned() {
     assert_eq!(FACTS_LEN, 88);
     assert_eq!(CHECKPOINT_LEN, 144);
 }
+
+// ------------------------------------------------------------------- fetch
+
+mod fetch {
+    use std::collections::VecDeque;
+    use std::future::Future;
+    use std::sync::{Arc, Mutex};
+
+    use shekyl_rpc_client::{Rpc, RpcError};
+    use shekyl_rpc_types::{
+        BlockEntry, GetBlocksByHeightRequest, GetBlocksByHeightResponse, RpcStatus,
+    };
+    use shekyl_types::BlockHeight;
+
+    use super::three_blocks;
+    use crate::corpus::{CorpusFault, CorpusReader, CorpusWriter};
+    use crate::fetch::{fetch_corpus, FetchFault, ROUTE};
+
+    /// One recorded request: the route and the heights asked.
+    type Asked = (String, Vec<u64>);
+
+    /// A transport that answers from a script and records what it was asked.
+    #[derive(Clone)]
+    struct Scripted {
+        replies: Arc<Mutex<VecDeque<Vec<u8>>>>,
+        asked: Arc<Mutex<Vec<Asked>>>,
+    }
+
+    impl Scripted {
+        fn new(replies: &[GetBlocksByHeightResponse]) -> Self {
+            Self {
+                replies: Arc::new(Mutex::new(
+                    replies
+                        .iter()
+                        .map(|r| r.to_bin().expect("encode"))
+                        .collect(),
+                )),
+                asked: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl Rpc for Scripted {
+        fn post(
+            &self,
+            route: &str,
+            body: Vec<u8>,
+        ) -> impl Send + Future<Output = Result<Vec<u8>, RpcError>> {
+            let req = GetBlocksByHeightRequest::from_bin(&body).expect("a by-height request");
+            self.asked
+                .lock()
+                .expect("lock")
+                .push((route.to_owned(), req.heights));
+            let next = self.replies.lock().expect("lock").pop_front();
+            async move { next.ok_or_else(|| RpcError::ConnectionError("script exhausted".into())) }
+        }
+    }
+
+    fn reply(entries: &[(Vec<u8>, Vec<Vec<u8>>)]) -> GetBlocksByHeightResponse {
+        GetBlocksByHeightResponse {
+            status: RpcStatus::ok(),
+            blocks: entries
+                .iter()
+                .map(|(block, txs)| BlockEntry {
+                    block: block.clone(),
+                    txs: txs.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn fetches_in_batches_through_the_route_and_the_corpus_reads_back() {
+        let blocks = three_blocks();
+        let rpc = Scripted::new(&[reply(&blocks[..2]), reply(&blocks[2..])]);
+        let mut w = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(0)).expect("header");
+        let written = fetch_corpus(&rpc, 0..3, 2, &mut w).await.expect("fetched");
+        assert_eq!(written, 3);
+        assert_eq!(
+            *rpc.asked.lock().expect("lock"),
+            vec![(ROUTE.to_owned(), vec![0, 1]), (ROUTE.to_owned(), vec![2])]
+        );
+        let bytes = w.finish().expect("trailer");
+        let mut r = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+        let mut n = 0;
+        while r.next_record().expect("record").is_some() {
+            n += 1;
+        }
+        assert_eq!(n, 3);
+    }
+
+    #[tokio::test]
+    async fn a_pruned_answer_is_caught_by_the_writer_at_its_height() {
+        // RD-F15 end to end: the daemon returns block 2 with one of its two
+        // bodies and says nothing; the fetcher hands it to the writer and
+        // the writer names height 2.
+        let blocks = three_blocks();
+        let mut pruned = blocks.clone();
+        pruned[2].1.truncate(1);
+        let rpc = Scripted::new(&[reply(&pruned)]);
+        let mut w = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(0)).expect("header");
+        let err = fetch_corpus(&rpc, 0..3, 10, &mut w)
+            .await
+            .expect_err("pruned");
+        assert!(
+            matches!(
+                err,
+                FetchFault::Corpus(CorpusFault::Incomplete {
+                    height: 2,
+                    listed: 2,
+                    carried: 1
+                })
+            ),
+            "{err}"
+        );
+        assert_eq!(w.count(), 2, "the writer stopped at the height that failed");
+    }
+
+    #[tokio::test]
+    async fn a_refusal_and_a_short_reply_are_the_conversations_faults() {
+        let blocks = three_blocks();
+        let refused = GetBlocksByHeightResponse {
+            status: RpcStatus("Failed".into()),
+            blocks: Vec::new(),
+        };
+        let rpc = Scripted::new(&[refused]);
+        let mut w = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(0)).expect("header");
+        let err = fetch_corpus(&rpc, 0..3, 10, &mut w)
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(
+                err,
+                FetchFault::Refused {
+                    first: 0,
+                    end: 3,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+
+        let rpc = Scripted::new(&[reply(&blocks[..1])]);
+        let mut w = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(0)).expect("header");
+        let err = fetch_corpus(&rpc, 0..3, 10, &mut w)
+            .await
+            .expect_err("short");
+        assert!(
+            matches!(
+                err,
+                FetchFault::CountMismatch {
+                    first: 0,
+                    asked: 3,
+                    got: 1
+                }
+            ),
+            "{err}"
+        );
+
+        let rpc = Scripted::new(&[]);
+        let mut w = CorpusWriter::new(Vec::new(), BlockHeight::from_raw(0)).expect("header");
+        assert!(matches!(
+            fetch_corpus(&rpc, 0..1, 1, &mut w)
+                .await
+                .expect_err("transport"),
+            FetchFault::Rpc(RpcError::ConnectionError(_))
+        ));
+    }
+}

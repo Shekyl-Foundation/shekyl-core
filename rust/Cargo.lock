@@ -3802,10 +3802,13 @@ dependencies = [
  "shekyl-chain-store",
  "shekyl-difficulty",
  "shekyl-pow-randomx",
+ "shekyl-rpc-client",
+ "shekyl-rpc-types",
  "shekyl-types",
  "shekyl-units",
  "shekyl-wire",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

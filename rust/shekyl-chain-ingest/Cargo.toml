@@ -33,6 +33,12 @@ shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
 shekyl-chain-store = { path = "../shekyl-chain-store" }
 # CumulativeDifficulty — the accumulator the trace records for SI-10.
 shekyl-difficulty = { path = "../shekyl-difficulty" }
+# The daemon RPC contract the corpus fetcher speaks: the `Rpc` trait (a
+# transport is supplied by the binary) and the shared `.bin` request /
+# response types — the daemon serves these same definitions, so the fetcher
+# is not a second copy of the wire.
+shekyl-rpc-client = { path = "../shekyl-rpc-client" }
+shekyl-rpc-types = { path = "../shekyl-rpc-types" }
 # BlockHeight, BlockHash, PowHash, Timestamp, the weight newtypes.
 shekyl-types = { path = "../shekyl-types" }
 # AtomicUnits: coins_generated and burned in the trace.
@@ -45,6 +51,9 @@ thiserror = { workspace = true }
 [dev-dependencies]
 # `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature
 # (check_test_only_features.py) — never enabled from [dependencies].
+# The fetcher is async over `Rpc`; its tests drive it on a current-thread
+# runtime against a scripted transport.
+tokio = { version = "1", default-features = false, features = ["rt", "macros"] }
 
 [lints]
 workspace = true
