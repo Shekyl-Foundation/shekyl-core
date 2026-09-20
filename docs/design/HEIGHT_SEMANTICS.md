@@ -180,10 +180,10 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   (`rust/shekyl-types/src/block_axis.rs:180-182`). Do not punch through
   `from_raw(to_raw())`.
 - **C7 Naming, new inland fields.** Never a bare identifier `height`.
-  `tip_height` (ordinal), `chain_count`, `anchor_height` (ordinal),
-  ages as `*_blocks`. Existing JSON/Levin keys are the wire and stay.
+  Ordinal: `block_height` / `anchor_height`. Count: `chain_count`.
+  Ages: `*_blocks`. Existing JSON/Levin keys are the wire and stay.
   Exception (kept, not renamed): `BlockSource::tip_height` is the WI-3
-  named clock and returns `ChainCount` (height-semantics Phase 2b).
+  named clock and returns `ChainCount`.
 - **C8 C++ daemon glue stays `u64`.** Rule 20: this campaign does not
   retype C++. The wire table still names those producers so a Rust
   consumer cannot guess.
