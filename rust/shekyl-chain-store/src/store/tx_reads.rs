@@ -63,11 +63,11 @@
 
 use core::marker::PhantomData;
 
-use redb::{ReadableTable, ReadableTableMetadata};
+use redb::{ReadableTable, ReadableTableMetadata, TableDefinition, TableHandle};
 use shekyl_types::{BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 
 use crate::codec::{
-    BlobKind, Coded, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
+    BlobKind, Canonical, Coded, TxIndex, TxOutputIndices, TxPqcAuthsSegment, TxPrunableSegment,
     TxPrunedSegment,
 };
 use crate::ids::TxStorageId;
@@ -292,6 +292,37 @@ fn admit<T: ReadTables>(txn: &T, id: TxStorageId) -> Result<Admitted, ReadFault>
     Ok(Admitted::Recorded)
 }
 
+/// One `Coded<V>` hash row under a dense id, read the only way a hash row
+/// is read here: absent is `None`, present **decodes** — a row that is not
+/// exactly one `V` is SI-7 `Undecodable` naming the table, the same fault
+/// whether T3 or T4 met it (PR #800 review round 3). `Coded` does not
+/// decode on access, so a presence check alone (`get(..).is_some()`) would
+/// take a row on faith; every hash-row read goes through here so none
+/// does. Today the arm is unreachable by construction — both codecs are
+/// fixed-width 32, the engine refuses any other width at write time, and
+/// every 32-byte row decodes — which the tests pin rather than plant
+/// around; the reader still decodes so the seam holds if a codec gains
+/// structure. `cell` is the table's name as the fault carries it (`'static`,
+/// which redb's `TableHandle::name` borrow is not); the two are bound by
+/// the debug assertion, so a test that reaches the row catches a drift.
+fn hash_row<V: Canonical, T: ReadTables>(
+    txn: &T,
+    table: TableDefinition<'static, u64, Coded<V>>,
+    cell: &'static str,
+    id: u64,
+) -> Result<Option<V>, ReadFault> {
+    debug_assert_eq!(TableHandle::name(&table), cell, "fault names its table");
+    let rows = txn.table(table)?;
+    let Some(guard) = rows.get(id)? else {
+        return Ok(None);
+    };
+    guard
+        .value()
+        .decode()
+        .map(Some)
+        .map_err(|cause| undecodable(cell, cause))
+}
+
 /// The stored row projected to what a read hands out — the **one** place
 /// `TxIndex` becomes [`TxLocation`], so the field it drops is dropped once.
 const fn project(row: TxIndex) -> TxLocation {
@@ -401,24 +432,10 @@ pub(super) fn record_at<T: ReadTables>(
     };
     let pruned = SegmentBytes::new(pruned.value().bytes());
 
-    let hashes = txn.table(TXS_PRUNABLE_HASH)?;
-    let Some(prunable_hash) = hashes.get(id)? else {
+    let Some(prunable_hash) = hash_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", id)? else {
         return Err(absent("txs_prunable_hash"));
     };
-    let prunable_hash = prunable_hash
-        .value()
-        .decode()
-        .map_err(|cause| undecodable("txs_prunable_hash", cause))?;
-
-    let pqc_auth_hash = match txn.table(TXS_PQC_AUTH_HASH)?.get(id)? {
-        Some(guard) => Some(
-            guard
-                .value()
-                .decode()
-                .map_err(|cause| undecodable("txs_pqc_auth_hash", cause))?,
-        ),
-        None => None,
-    };
+    let pqc_auth_hash = hash_row(txn, TXS_PQC_AUTH_HASH, "txs_pqc_auth_hash", id)?;
     let pqc_auths = txn
         .table(TXS_PQC_AUTHS)?
         .get(id)?
@@ -446,9 +463,11 @@ pub(super) fn record_at<T: ReadTables>(
 /// At or beyond the count: [`AtIndex::BeyondCount`], no row read — a forged
 /// or stale id is invalid input, not corruption. Below it the primary row
 /// must exist (a hole is **SI-9**, [`admit`]); then the hash row must exist
-/// (leg (i); missing is **SI-7**), and then the segment's presence is the
-/// answer — [`Prunable::Retained`] or [`Prunable::Discarded`], leg (iii)'s
-/// one state.
+/// and decode (leg (i); missing or malformed is **SI-7**, [`hash_row`] — the
+/// answer is about the region whose digest that row is, so a row that is
+/// not a digest is not a basis for it), and then the segment's presence is
+/// the answer — [`Prunable::Retained`] or [`Prunable::Discarded`], leg
+/// (iii)'s one state.
 pub(super) fn prunable_at<T: ReadTables>(
     txn: &T,
     id: TxStorageId,
@@ -457,7 +476,7 @@ pub(super) fn prunable_at<T: ReadTables>(
         return Ok(AtIndex::BeyondCount);
     }
     let raw = id.to_raw();
-    if txn.table(TXS_PRUNABLE_HASH)?.get(raw)?.is_none() {
+    if hash_row(txn, TXS_PRUNABLE_HASH, "txs_prunable_hash", raw)?.is_none() {
         return Err(absent("txs_prunable_hash"));
     }
     let answer = match txn.table(TXS_PRUNABLE)?.get(raw)? {

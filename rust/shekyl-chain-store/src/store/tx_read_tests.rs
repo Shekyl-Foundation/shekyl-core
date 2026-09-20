@@ -9,14 +9,14 @@
 //! on a fresh snapshot: the reads must classify what is *in the file*, and
 //! the writer must be `Live` afterwards — a read never arms the halt.
 
-use shekyl_types::{BlockHash, BlockHeight, TxHash};
+use shekyl_types::{BlockHash, BlockHeight, PqcAuthHash, PrunableHash, TxHash};
 use shekyl_wire::Transaction;
 
 use super::connect_fixtures::{connect_chain, spend, spend_with_pqc_auth};
 use super::error::{CellFault, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, EPOCH};
 use super::*;
-use crate::codec::{stored_timelock, Canonical, Raw, TxIndex, TxPrunedSegment};
+use crate::codec::{stored_timelock, Canonical, Coded, Raw, TxIndex, TxPrunedSegment};
 use crate::ids::TxStorageId;
 use crate::lmdb_order::LmdbHashKey;
 use crate::schema::{TXS_PQC_AUTH_HASH, TXS_PRUNABLE, TXS_PRUNABLE_HASH, TXS_PRUNED, TX_INDICES};
@@ -562,14 +562,48 @@ fn no_read_projection_hands_out_unlock_time() {
     // The gate (`check_store_unlock_time_projection.py`) is the structural
     // check; this pins the two S-TX projections by construction so a
     // refactor that adds the field fails here before it reaches CI.
-    let _ = |loc: TxLocation| (loc.id, loc.height);
-    let _ = |rec: TxRecord| {
-        (
-            rec.location,
-            rec.pruned,
-            rec.pqc_auths,
-            rec.prunable_hash,
-            rec.pqc_auth_hash,
-        )
+    // Exhaustive destructuring, no `..`: a field added to either struct is
+    // a compile error here, where a field-access list would stay green
+    // (PR #800 review round 3).
+    let _ = |loc: TxLocation| {
+        let TxLocation { id, height } = loc;
+        (id, height)
     };
+    let _ = |rec: TxRecord| {
+        let TxRecord {
+            location,
+            pruned,
+            pqc_auths,
+            prunable_hash,
+            pqc_auth_hash,
+        } = rec;
+        (location, pruned, pqc_auths, prunable_hash, pqc_auth_hash)
+    };
+}
+
+#[test]
+fn the_hash_rows_cannot_hold_a_malformed_digest_so_undecodable_is_unreachable_by_construction() {
+    // PR #800 review round 3 asked T4 to decode the hash row, as T3 does,
+    // so a malformed row is SI-7 `Undecodable` on both. Both now read it
+    // through one reader (`tx_reads::hash_row`) — but the fault the review
+    // feared cannot be planted: the codecs are fixed-width 32 and the
+    // engine refuses a row of any other width at write time
+    // (`redb` asserts the width in `append`), and a 32-byte row *is* a
+    // digest — `decode` accepts every one. So the `Undecodable` arm of
+    // both hash reads is exercised by type, as T6's is. This pins the two
+    // facts that make it so; if either moves, the arm becomes reachable
+    // and this test is the prompt to plant the row.
+    for width in [
+        <Coded<PrunableHash> as redb::Value>::fixed_width(),
+        <Coded<PqcAuthHash> as redb::Value>::fixed_width(),
+    ] {
+        assert_eq!(width, Some(32), "the engine pins the row width");
+    }
+    let any = [0x5a; 32];
+    assert!(PrunableHash::decode(&any).is_ok());
+    assert!(PqcAuthHash::decode(&any).is_ok());
+    assert!(
+        PrunableHash::decode(&any[..31]).is_err(),
+        "and a short row would not decode"
+    );
 }
