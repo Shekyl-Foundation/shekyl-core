@@ -195,8 +195,8 @@
 
 ### Security
 
-- **`P`-correlated identifiers no longer reach a log line (`WSS-20`;
-  design record lands with PR #790, `WALLET_SIDE_STORE.md`).** The
+- **`P`-correlated identifiers no longer reach a log line (`WSS-20`,
+  `docs/design/WALLET_SIDE_STORE.md`).** The
   serve-set pin release logged `shard_ids = ?releasable` at `info`, and
   the spent-watch quarantine logged a `GlobalOutputIndex` at `error`.
   Both sinks are a plaintext `--log-file` (created mode `0600`) that
@@ -209,7 +209,9 @@
   unpinned), and the quarantine's size beside its unchanged `reason`.
   Standing guard: `shekyl-logging/tests/p_correlated_ids_absent_from_logs.rs`
   scans `stake_engine/` log sites for a forbidden identifier as a field
-  name, a field value, or an inline format capture, and asserts that
+  name, a field value, or an inline format capture — over a token stream,
+  so no spelling of a macro call (spacing, `{}`/`[]` delimiters, a raw
+  identifier, an aliased path) evades it — and asserts that
   `shekyl-p-host` / `shekyl-p-serve` / `shekyl-tor-control-client` — which
   hold `P`'s identity, serve set and onion address — keep carrying no
   logging surface at all. No behaviour change beyond the log text.

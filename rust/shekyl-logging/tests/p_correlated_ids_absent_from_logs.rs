@@ -57,15 +57,47 @@
 //!    it makes adding logging to the persona host a conscious gate edit —
 //!    which is when review should happen (`47-gate-subject-assertion`).
 //!
-//! **Does NOT cover:**
+//! 5. Every **spelling** of a macro call, because site detection reads a
+//!    token stream rather than source text: whitespace or a comment between
+//!    the path and its `!`, the `{}` and `[]` delimiter forms, the raw
+//!    identifier `r#info!`, a leading-colon path, and a module-aliased path
+//!    (`t::info!`) all resolve to the same site.
+//! 6. A `use` item that **renames** a logging macro. The scan keys on a
+//!    macro's final path segment, so `use tracing::info as note;` would make
+//!    every later `note!(…)` invisible to it; the rename is refused rather
+//!    than chased.
 //!
-//! - A value whose binding name is innocuous, passed under an innocuous field
+//! **Does NOT cover** — the bypasses this scanner admits by construction,
+//! each one named rather than left implied, because a source-text matcher
+//! that does not say where it stops is read as saying it does not stop:
+//!
+//! - **An innocuous binding name.** A value passed under an innocuous field
 //!   name or positionally (`n = ?v` where `v` holds shard ids). Only naming
 //!   discipline catches that; the durable answer is exposure policy on the
 //!   **type**, as `shekyl-types`' `hash32!` `redact` / `no_display` arms
 //!   already do for `PCanonicalId` and `KeyImage`. Shard ids are a bare `u64`
-//!   across the p-host/curve-tree API and have no such policy.
-//! - `Display`/`Debug` of error types that may embed an identifier.
+//!   across the p-host/curve-tree API and have no such policy. Two shapes of
+//!   the same hole: a **struct** logged whole whose `Debug` prints an id
+//!   under an innocent field, and a `format!`/`write!` into an innocuous
+//!   binding that is then logged.
+//! - **`Display`/`Debug` of an error type** that embeds an identifier.
+//!   `EmissionVerifyError` is the live example: three of its variants carry a
+//!   `shard_id` in their `Display`, and `claim.rs` renders it with `%e`.
+//!   Those two legs cannot reach those variants today, but the *type* admits
+//!   it — a reachability argument, not a structural one, and reachability is
+//!   exactly what a later edit changes.
+//! - **A wrapper macro defined outside these paths.** A `macro_rules!`
+//!   defined in-path is scanned at its definition, because the body names the
+//!   identifier; one defined elsewhere and invoked here expands past this
+//!   scan. There are no `macro_rules!` definitions in these four paths today,
+//!   which is what keeps the gap narrow rather than closed.
+//! - **`Span::record("shard_id", &value)`** — a field set through a method
+//!   call with a string-literal name, which this scanner blanks along with
+//!   every other literal. There are no `tracing` `Span::record` calls in
+//!   these paths today (the `.record(` hits are a timeline observer and a
+//!   backing store, neither a span).
+//! - **The framework's own API** — `Event::dispatch`, a hand-written
+//!   `Visit`. Out of reach for a source scan of call sites by construction.
 //! - Every path outside the three crates above and `stake_engine/` — notably
 //!   `engine/pscan/`, whose `persona = ?persona` sites are covered by the
 //!   ratified `redact` arm (a two-byte `Debug` prefix) and are a separate
@@ -74,6 +106,11 @@
 //!   adversary. That is a design-round question, not a call-site one.
 //! - journald, log encryption, and the logging framework itself — out of
 //!   scope for `WSS-20` by construction.
+//!
+//! What *is* caught and might read as absent: positional arguments
+//! (`info!("{}", shard_id)`), dotted field names (`shard.id = ?x`) and a
+//! value built by a call (`tracing::field::debug(&shard_ids)`) are all inside
+//! the body span and are scanned as value expressions.
 //!
 //! ## Why a static scan and not a `tracing` capture layer
 //!
@@ -150,16 +187,16 @@ const LOGGING_CRATES: &[&str] = &[
 /// Macros that write a line a human can read off disk.
 const PRINT_MACROS: &[&str] = &["println", "eprintln", "print", "eprint", "dbg"];
 
-/// Every `tracing` macro that takes a field list, in both spellings the
-/// workspace uses (`tracing::info!` and a bare `info!` behind a `use`).
+/// Every `tracing` macro that takes a field list. Matched on the macro's
+/// final path segment, so `tracing::info!` and a bare `info!` behind a `use`
+/// are the same entry and no spelling of the path needs listing.
 ///
-/// The `*_span!` names are listed individually rather than relying on a
-/// `span!` match: the whole-word check in [`log_sites`] rejects the `span!`
-/// inside `info_span!` because `_` continues an identifier, so an unlisted
-/// `info_span!` would be missed entirely. A span's fields print on every
-/// event inside it under the `fmt` layer, so they reach the file exactly
-/// as an event's own fields do. `event!`'s leading `Level::INFO` is just a
-/// harmless first element to the field parser.
+/// The `*_span!` names are each listed in full because a macro's name is one
+/// identifier token: `info_span` is not `span`, and an unlisted `info_span!`
+/// would be missed entirely. A span's fields print on every event inside it
+/// under the `fmt` layer, so they reach the file exactly as an event's own
+/// fields do. `event!`'s leading `Level::INFO` is just a harmless first
+/// element to the field parser.
 const LEVELS: &[&str] = &[
     "trace",
     "debug",
@@ -392,64 +429,185 @@ fn inline_capture_idents(literal: &str) -> Vec<String> {
     out
 }
 
-/// One log macro invocation found in a source file.
-struct LogSite {
+// ─────────────────────────────────────────────────────────────────────────
+// Tokenising: a token stream over the blanked text.
+//
+// Site detection is where every *spelling* bypass lives, so it reads tokens
+// rather than raw text. Rust accepts whitespace — or a comment — between a
+// macro's path and its `!` (`tracing::info ! (…)`), accepts `{}` and `[]` as
+// macro delimiters (`info!{…}`), and accepts the raw-identifier spelling
+// (`r#info!`). A needle like `"info!"` sees none of those. A token pair
+// `Ident("info")` + `Punct('!')` sees all of them at once, because the
+// whitespace between them never becomes a token in the first place.
+//
+// Only site *detection* moved to tokens. Field splitting and identifier
+// flagging stay text-based: they read a body span this layer has already
+// delimited correctly, which is the part that was ever in doubt.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// What a token is. Identifiers carry text; everything else that matters to
+/// site detection is a single punctuation byte.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum TokenKind {
+    Ident,
+    Punct(u8),
+}
+
+/// A token of the blanked source, spanning the same bytes as the original.
+#[derive(Clone, Copy, Debug)]
+struct Token {
+    kind: TokenKind,
+    start: usize,
+    end: usize,
+}
+
+impl Token {
+    /// The identifier's text, with any `r#` sigil already dropped.
+    fn text<'a>(&self, lexed: &'a Lexed) -> &'a str {
+        &lexed.blanked[self.start..self.end]
+    }
+
+    fn is_punct(&self, byte: u8) -> bool {
+        self.kind == TokenKind::Punct(byte)
+    }
+
+    fn is_ident(&self, lexed: &Lexed, name: &str) -> bool {
+        self.kind == TokenKind::Ident && self.text(lexed) == name
+    }
+}
+
+fn is_ident_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_ident_continue(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+/// Tokenise already-lexed source. Comment bodies and string contents are
+/// spaces by this point, so they yield no identifiers and — the reason the
+/// two passes are ordered this way — cannot forge a delimiter.
+fn tokens(lexed: &Lexed) -> Vec<Token> {
+    let b = lexed.blanked.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        // `r#ident` is the same identifier as `ident`. Start past the sigil
+        // so `r#info!` and `info!` produce the same token text. A raw string
+        // (`r#"…"#`) is not this: its third byte is a quote, not an
+        // identifier byte, so it falls through to punctuation.
+        if b[i] == b'r' && i + 2 < b.len() && b[i + 1] == b'#' && is_ident_start(b[i + 2]) {
+            i += 2;
+        }
+        if is_ident_start(b[i]) {
+            let start = i;
+            while i < b.len() && is_ident_continue(b[i]) {
+                i += 1;
+            }
+            out.push(Token {
+                kind: TokenKind::Ident,
+                start,
+                end: i,
+            });
+        } else if b[i].is_ascii_whitespace() {
+            i += 1;
+        } else {
+            out.push(Token {
+                kind: TokenKind::Punct(b[i]),
+                start: i,
+                end: i + 1,
+            });
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Line number (1-based) of a byte offset in the lexed text.
+fn line_of(lexed: &Lexed, offset: usize) -> usize {
+    lexed.blanked[..offset].matches('\n').count() + 1
+}
+
+/// The whole source line containing `offset`, trimmed — what a human needs
+/// to recognise the site, rather than the slice the match started at.
+fn source_line(lexed: &Lexed, offset: usize) -> String {
+    let start = lexed.blanked[..offset].rfind('\n').map_or(0, |n| n + 1);
+    let end = lexed.blanked[offset..]
+        .find('\n')
+        .map_or(lexed.blanked.len(), |n| offset + n);
+    lexed.blanked[start..end].trim().to_owned()
+}
+
+/// One macro invocation: `[path::]name! <delimited body>`.
+struct MacroSite {
+    /// The **final** path segment, lowercased — `info`, `info_span`,
+    /// `println`. Path-insensitive by construction, so `tracing::info!`,
+    /// `::tracing::info!` and a module-aliased `t::info!` are one site.
+    name: String,
     line: usize,
-    /// Byte span of the macro's argument list contents (inside the parens).
+    /// Byte span of the body *inside* the delimiters.
     body: (usize, usize),
 }
 
-/// Find every `[path::]<level>!( … )` invocation in already-lexed source.
-fn log_sites(lexed: &Lexed) -> Vec<LogSite> {
-    let text = &lexed.blanked;
-    let b = text.as_bytes();
-    let mut sites = Vec::new();
-    for level in LEVELS {
-        let needle = format!("{level}!");
-        let mut from = 0usize;
-        while let Some(rel) = text[from..].find(&needle) {
-            let at = from + rel;
-            from = at + needle.len();
-            // Whole word: the byte before the level name must not continue an
-            // identifier (so `is_error!` and `my_warn!` do not match).
-            if at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_') {
-                continue;
-            }
-            // `!` then optional whitespace then `(`.
-            let mut k = at + needle.len();
-            while k < b.len() && (b[k] == b' ' || b[k] == b'\t' || b[k] == b'\n') {
-                k += 1;
-            }
-            if k >= b.len() || b[k] != b'(' {
-                continue;
-            }
-            let open = k;
-            let mut depth = 0i32;
-            let mut m = open;
-            while m < b.len() {
-                match b[m] {
-                    b'(' => depth += 1,
-                    b')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-                m += 1;
-            }
-            if depth != 0 {
-                continue;
-            }
-            sites.push(LogSite {
-                line: text[..at].matches('\n').count() + 1,
-                body: (open + 1, m),
-            });
+/// Every macro invocation in already-lexed source.
+///
+/// Matches `Ident` `!` `(`|`[`|`{`, which is the whole grammar of a macro
+/// call's head. `a != b` cannot match: its third token is `=`, not an
+/// opening delimiter. The matching closer is found over the token stream, so
+/// a delimiter inside a blanked string or char literal cannot shift depth.
+fn macro_sites(lexed: &Lexed) -> Vec<MacroSite> {
+    let toks = tokens(lexed);
+    let mut out = Vec::new();
+    for (i, tok) in toks.iter().enumerate() {
+        if tok.kind != TokenKind::Ident {
+            continue;
         }
+        if !toks.get(i + 1).is_some_and(|t| t.is_punct(b'!')) {
+            continue;
+        }
+        let Some(open) = toks.get(i + 2) else {
+            continue;
+        };
+        let TokenKind::Punct(opener) = open.kind else {
+            continue;
+        };
+        let closer = match opener {
+            b'(' => b')',
+            b'[' => b']',
+            b'{' => b'}',
+            _ => continue,
+        };
+        let mut depth = 0i32;
+        let mut body_end = None;
+        for later in &toks[i + 2..] {
+            if later.is_punct(opener) {
+                depth += 1;
+            } else if later.is_punct(closer) {
+                depth -= 1;
+                if depth == 0 {
+                    body_end = Some(later.start);
+                    break;
+                }
+            }
+        }
+        let Some(end) = body_end else {
+            continue;
+        };
+        out.push(MacroSite {
+            name: tok.text(lexed).to_ascii_lowercase(),
+            line: line_of(lexed, tok.start),
+            body: (open.end, end),
+        });
     }
-    sites.sort_by_key(|s| s.body.0);
-    sites
+    out
+}
+
+/// Macro invocations that write a `tracing` line carrying a field list.
+fn log_sites(lexed: &Lexed) -> Vec<MacroSite> {
+    macro_sites(lexed)
+        .into_iter()
+        .filter(|site| LEVELS.contains(&site.name.as_str()))
+        .collect()
 }
 
 /// Split a macro body at top-level commas.
@@ -513,24 +671,74 @@ fn rust_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Every `.rs` file under `dir`, sorted. Panics on an unreadable directory:
-/// a walk that silently drops a subtree reports the same clean output as a
-/// clean corpus, which is the one failure a search-for-offenders test cannot
-/// show in its own output.
-fn rust_files(dir: &Path) -> Vec<PathBuf> {
+/// A step of the walk that could not be completed, naming the path.
+#[derive(Debug)]
+struct WalkError {
+    path: PathBuf,
+    source: std::io::Error,
+}
+
+impl std::fmt::Display for WalkError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the WSS-20 walk could not read {}: {}. The corpus is \
+             incomplete, so a clean result would mean the scan did not look \
+             rather than that there was nothing to find",
+            self.path.display(),
+            self.source
+        )
+    }
+}
+
+/// Every `.rs` file under `dir`, sorted.
+///
+/// **Every** fallible step surfaces, carrying the path that failed: the
+/// directory read, each entry within it, and the metadata call that decides
+/// whether an entry is a subtree to descend into. A walk that turns any of
+/// those into a skip reports exactly what a clean corpus reports — absence
+/// of signal read as evidence of absence, which is the failure
+/// `47-gate-subject-assertion` names, arriving inside the gate itself.
+///
+/// `Path::is_dir` is deliberately **not** used: it answers `false` for any
+/// path it cannot stat, so a dangling symlink, a permission-denied subtree
+/// or a vanished entry all become "not a directory, not a `.rs` file" and
+/// are dropped in silence. `fs::metadata` follows the link and reports the
+/// failure instead, which is the difference between a scanner that found
+/// nothing and one that could not look.
+fn rust_files(dir: &Path) -> Result<Vec<PathBuf>, WalkError> {
     let mut out = Vec::new();
-    let entries = fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("the WSS-20 walk must read {}: {e}", dir.display()));
-    for entry in entries.flatten() {
+    let entries = fs::read_dir(dir).map_err(|source| WalkError {
+        path: dir.to_path_buf(),
+        source,
+    })?;
+    for entry in entries {
+        // Iteration itself is fallible, per entry, independently of the
+        // `read_dir` that opened the directory.
+        let entry = entry.map_err(|source| WalkError {
+            path: dir.to_path_buf(),
+            source,
+        })?;
         let path = entry.path();
-        if path.is_dir() {
-            out.extend(rust_files(&path));
+        let meta = fs::metadata(&path).map_err(|source| WalkError {
+            path: path.clone(),
+            source,
+        })?;
+        if meta.is_dir() {
+            out.extend(rust_files(&path)?);
         } else if path.extension().is_some_and(|e| e == "rs") {
             out.push(path);
         }
     }
     out.sort();
-    out
+    Ok(out)
+}
+
+/// The walk, with an unreadable corpus turned into a failed gate rather than
+/// a quiet one. Every caller is a gate that must not proceed on a partial
+/// corpus, so there is one shared way to stop.
+fn rust_files_or_fail(dir: &Path) -> Vec<PathBuf> {
+    rust_files(dir).unwrap_or_else(|e| panic!("{e}"))
 }
 
 /// Logging crates named in a manifest's **non-dev, non-build** dependency
@@ -577,22 +785,57 @@ fn logging_deps(manifest: &str) -> BTreeSet<String> {
     found
 }
 
-/// Print-macro invocations in already-lexed source: `(line, macro)`.
-fn print_macro_sites(src: &str) -> Vec<(usize, &'static str)> {
+/// Print-macro invocations: `(line, macro name)`.
+fn print_macro_sites(src: &str) -> Vec<(usize, String)> {
+    macro_sites(&lex(src))
+        .into_iter()
+        .filter(|site| PRINT_MACROS.contains(&site.name.as_str()))
+        .map(|site| (site.line, site.name))
+        .collect()
+}
+
+/// Whether a `use`-path segment names a logging crate. Manifests spell these
+/// with hyphens (`tracing-core`) and source spells them with underscores
+/// (`tracing_core`); this compares in the manifest's spelling.
+fn is_logging_crate(segment: &str) -> bool {
+    LOGGING_CRATES.contains(&segment.replace('_', "-").as_str())
+        || LOGGING_CRATES.contains(&segment)
+}
+
+/// `use` items that rename something out of a logging crate:
+/// `(line, the item's source line)`.
+///
+/// Site detection keys on a macro's final path segment, so
+/// `use tracing::info as note;` followed by `note!(shard_id = 1)` would pass
+/// a name-based scan — the invocation no longer spells a level. Rather than
+/// chase an alias through the file (and still miss the multi-hop case), the
+/// rename itself is refused in these paths: there is no reason to rename a
+/// log macro here, and doing it should be a deliberate edit to this gate.
+fn aliased_logging_imports(src: &str) -> Vec<(usize, String)> {
     let lexed = lex(src);
-    let text = &lexed.blanked;
-    let b = text.as_bytes();
+    let toks = tokens(&lexed);
     let mut out = Vec::new();
-    for mac in PRINT_MACROS {
-        let needle = format!("{mac}!");
-        let mut from = 0usize;
-        while let Some(rel) = text[from..].find(&needle) {
-            let at = from + rel;
-            from = at + needle.len();
-            if at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_') {
+    for (i, tok) in toks.iter().enumerate() {
+        if !tok.is_ident(&lexed, "use") {
+            continue;
+        }
+        let (mut renamed, mut from_logging) = (false, false);
+        for later in &toks[i + 1..] {
+            if later.is_punct(b';') {
+                break;
+            }
+            if later.kind != TokenKind::Ident {
                 continue;
             }
-            out.push((text[..at].matches('\n').count() + 1, *mac));
+            let text = later.text(&lexed);
+            if text == "as" {
+                renamed = true;
+            } else if is_logging_crate(text) {
+                from_logging = true;
+            }
+        }
+        if renamed && from_logging {
+            out.push((line_of(&lexed, tok.start), source_line(&lexed, tok.start)));
         }
     }
     out
@@ -608,27 +851,42 @@ fn print_macro_sites(src: &str) -> Vec<(usize, &'static str)> {
 /// dependency is: absent, and a deliberate edit to introduce.
 fn instrument_sites(src: &str) -> Vec<(usize, String)> {
     let lexed = lex(src);
-    let text = &lexed.blanked;
+    let toks = tokens(&lexed);
     let mut out = Vec::new();
-    let mut from = 0usize;
-    while let Some(rel) = text[from..].find("instrument") {
-        let at = from + rel;
-        from = at + "instrument".len();
-        let b = text.as_bytes();
-        if at > 0 && (b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_') {
+    for (i, tok) in toks.iter().enumerate() {
+        if !tok.is_punct(b'#') {
             continue;
         }
-        // Only the attribute form, not the word in a path or a binding.
-        let before = text[..at].trim_end();
-        if !(before.ends_with("#[") || before.ends_with("tracing::") || before.ends_with('(')) {
+        // `#[…]` (outer) and `#![…]` (inner) both introduce attributes.
+        let mut j = i + 1;
+        if toks.get(j).is_some_and(|t| t.is_punct(b'!')) {
+            j += 1;
+        }
+        if !toks.get(j).is_some_and(|t| t.is_punct(b'[')) {
             continue;
         }
-        let line = text[..at].matches('\n').count() + 1;
-        // Report the whole source line, not the slice from the match: the
-        // `#[tracing::` prefix is the part that identifies the attribute.
-        let start = text[..at].rfind('\n').map_or(0, |n| n + 1);
-        let end = text[at..].find('\n').map_or(text.len(), |n| at + n);
-        out.push((line, text[start..end].trim().to_owned()));
+        // Any `instrument` identifier anywhere inside the attribute's
+        // brackets counts. That covers `#[instrument]`,
+        // `#[tracing::instrument(skip_all)]` and the indirect
+        // `#[cfg_attr(feature = "x", tracing::instrument)]` alike, without
+        // caring how the path is spelled or spaced.
+        let (mut depth, mut closed, mut found) = (0i32, false, false);
+        for later in &toks[j..] {
+            if later.is_punct(b'[') {
+                depth += 1;
+            } else if later.is_punct(b']') {
+                depth -= 1;
+                if depth == 0 {
+                    closed = true;
+                    break;
+                }
+            } else if later.is_ident(&lexed, "instrument") {
+                found = true;
+            }
+        }
+        if closed && found {
+            out.push((line_of(&lexed, tok.start), source_line(&lexed, tok.start)));
+        }
     }
     out
 }
@@ -768,6 +1026,107 @@ fn scanner_flags_the_span_and_event_macros_and_the_instrument_attribute() {
 }
 
 #[test]
+fn scanner_sees_every_spelling_of_a_macro_call() {
+    // The spellings a needle match misses. Each is valid Rust that reaches
+    // the same `fmt` layer as the contiguous form, so each must be one site.
+    let spellings = [
+        // Whitespace between the path and the `!` (Copilot, `:422`).
+        "tracing::info ! (shard_ids = ?releasable);",
+        // A comment there, which lexing turns into whitespace.
+        "tracing::info /* here */ ! (shard_ids = ?releasable);",
+        // Brace and bracket delimiters are equally valid macro delimiters.
+        "tracing::info!{shard_ids = ?releasable}",
+        "tracing::info![shard_ids = ?releasable];",
+        // The raw-identifier spelling of the same name.
+        "tracing::r#info!(shard_ids = ?releasable);",
+        // A leading-colon absolute path, and a module alias for the crate.
+        "::tracing::info!(shard_ids = ?releasable);",
+        "t::info!(shard_ids = ?releasable);",
+        // Newline-separated path, `!` and delimiter.
+        "tracing::info\n    !\n    (shard_ids = ?releasable);",
+    ];
+    for spelling in spellings {
+        let hits = violations_in_source(spelling);
+        assert!(
+            hits.iter().any(|(_, id, _)| id == "shard_ids"),
+            "`{spelling}` is a log site and must be scanned; found {hits:?}"
+        );
+    }
+
+    // `!=` is not a macro call: the token after `!` is `=`, not a delimiter.
+    assert!(
+        violations_in_source("if info != shard_ids.len() { }").is_empty(),
+        "a `!=` comparison must not open a macro site"
+    );
+    // A macro whose name merely ends in a level name is still not a level.
+    assert!(
+        violations_in_source("my_info!(shard_ids = ?x);").is_empty(),
+        "`my_info!` is a different macro; the name must match as a whole"
+    );
+}
+
+#[test]
+fn scanner_refuses_an_aliased_logging_import() {
+    // The alias bypass: the call site no longer spells a level, so a
+    // name-based scan sees nothing. The rename is refused instead.
+    let aliased = "use tracing::info as note;\nfn f() { note!(shard_id = 1); }\n";
+    assert!(
+        !aliased_logging_imports(aliased).is_empty(),
+        "`use tracing::info as note;` must be refused: it renames the very \
+         token this gate matches on"
+    );
+    // A rename that has nothing to do with logging is not this gate's
+    // business — a gate that reds on those invites someone to delete it.
+    for innocent in [
+        "use rand_core::RngCore as _;",
+        "use std::os::unix::fs::PermissionsExt as _;",
+        "use std::collections::BTreeMap as Map;",
+    ] {
+        assert!(
+            aliased_logging_imports(innocent).is_empty(),
+            "`{innocent}` is not a logging rename"
+        );
+    }
+    // Importing a logging macro *without* renaming it is fine: the call site
+    // still spells the level, so the scan still sees it.
+    assert!(
+        aliased_logging_imports("use tracing::info;").is_empty(),
+        "an un-renamed import keeps the call site's spelling and is in scope"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn walk_reports_an_entry_it_cannot_read_instead_of_skipping_it() {
+    use std::os::unix::fs::symlink;
+
+    // The F1 class: a walk step that fails must not read as "nothing here".
+    // A dangling symlink is the deterministic form — `Path::is_dir` answers
+    // `false` for it (it cannot stat the target) and the old walk therefore
+    // dropped it in silence, reporting the same clean corpus as a clean one.
+    let dir = std::env::temp_dir().join(format!("wss20-walk-{}", std::process::id()));
+    fs::remove_dir_all(&dir).ok();
+    fs::create_dir_all(&dir).expect("temp dir for the walk control");
+    fs::write(dir.join("real.rs"), "// nothing\n").expect("a readable file");
+
+    // Control: the walk is green and actually finds the subject.
+    let found = rust_files(&dir).expect("a readable corpus must walk cleanly");
+    assert_eq!(found.len(), 1, "the control must find the one real file");
+
+    symlink("/nonexistent-wss20-target", dir.join("dangling")).expect("symlink");
+    let err = rust_files(&dir).expect_err(
+        "a dangling entry must fail the walk: a corpus the scanner cannot \
+         resolve is not a corpus it found nothing in",
+    );
+    assert!(
+        err.to_string().contains("dangling"),
+        "the failure must name the path that could not be read: {err}"
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn prefix_stems_do_not_catch_innocent_neighbours() {
     // `step_id` contains `p_id`; `map_slot` contains `p_slot`. Neither is an
     // identifier this gate is about, and a gate that reds on them invites
@@ -849,7 +1208,7 @@ fn stake_engine_logs_name_no_p_correlated_identifier() {
         dir.display()
     );
 
-    let files = rust_files(&dir);
+    let files = rust_files_or_fail(&dir);
     assert!(
         !files.is_empty(),
         "no .rs files under {} — the gate has no subject",
@@ -872,6 +1231,13 @@ fn stake_engine_logs_name_no_p_correlated_identifier() {
             offenders.push(format!(
                 "{}:{line}: `{text}` records every un-skipped argument as a \
                  span field, which the body scan cannot see",
+                file.display()
+            ));
+        }
+        for (line, text) in aliased_logging_imports(&src) {
+            offenders.push(format!(
+                "{}:{line}: `{text}` renames a logging macro, so its call \
+                 sites no longer spell a level this gate matches on",
                 file.display()
             ));
         }
@@ -934,7 +1300,7 @@ fn p_serving_crates_carry_no_logging_surface() {
             "{} has no src/ — the source half of this gate has no subject",
             src.display()
         );
-        let files = rust_files(&src);
+        let files = rust_files_or_fail(&src);
         assert!(
             !files.is_empty(),
             "no .rs files under {} — the source half of this gate has no subject",
@@ -954,6 +1320,12 @@ fn p_serving_crates_carry_no_logging_surface() {
             }
             for (line, attr) in instrument_sites(&text) {
                 failures.push(format!("{}:{line}: `{attr}`", file.display()));
+            }
+            for (line, attr) in aliased_logging_imports(&text) {
+                failures.push(format!(
+                    "{}:{line}: `{attr}` renames a logging macro",
+                    file.display()
+                ));
             }
         }
     }
