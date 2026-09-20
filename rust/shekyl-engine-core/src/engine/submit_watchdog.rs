@@ -61,7 +61,7 @@ use std::collections::HashSet;
 
 use shekyl_types::{ChainCount, TxHash};
 
-use super::daemon::synced_chain_facts::SyncedChainFacts;
+use super::daemon::synced_chain_facts::daemon_reports_synchronized;
 
 // ---------------------------------------------------------------------------
 // Horizon configuration
@@ -222,28 +222,22 @@ pub(crate) struct DaemonHealthContext {
 }
 
 impl DaemonHealthContext {
-    /// These facts as a [`SyncedChainFacts`], or `None` while the daemon
-    /// reports syncing.
+    /// The daemon believes it is synced with the network.
     ///
-    /// The ladder itself only needs the boolean ([`Self::is_synced`]), so this
-    /// looks like the long way round. It is the point: this predicate used to
-    /// be the wallet's **only** reading of sync state, and `WSS-25` found the
-    /// serve-set release gate acting on a resyncing daemon's view because
-    /// nothing carried the answer out of this file. The predicate now lives in
-    /// the constructor (`WSS-Q14`), and the watchdog asks it like every other
-    /// consumer — so a change to what "synced" means cannot leave the ladder
-    /// and the release gate disagreeing.
-    fn synced_facts(&self) -> Option<SyncedChainFacts> {
-        SyncedChainFacts::new(
+    /// Asks [`daemon_reports_synchronized`] — the same site
+    /// [`SyncedChainFacts::new`] asks — rather than keeping its own copy.
+    /// This predicate used to be the wallet's **only** reading of sync
+    /// state, and `WSS-25` found the serve-set release gate acting on a
+    /// resyncing daemon's view because nothing carried the answer out of
+    /// this file. The ladder needs only the boolean and holds no chain
+    /// identity, so it calls the predicate and not the constructor; either
+    /// way there is one definition of "synced".
+    fn is_synced(&self) -> bool {
+        daemon_reports_synchronized(
             ChainCount::from_raw(self.height),
             self.target_height,
             self.synchronized,
         )
-    }
-
-    /// The daemon believes it is synced with the network.
-    fn is_synced(&self) -> bool {
-        self.synced_facts().is_some()
     }
 
     /// The daemon has someone to relay to.
@@ -913,8 +907,9 @@ mod tests {
         );
     }
 
-    /// **The convergence pin.** The predicate has one site, and the watchdog's
-    /// health context reaches it rather than keeping a second copy — which is the
+    /// **The convergence pin.** The predicate has one site
+    /// (`daemon_reports_synchronized`), and the watchdog's health context
+    /// reaches it rather than keeping a second copy — which is the
     /// whole point of `WSS-Q14`. This agrees the two readings across the boundary
     /// where they used to be independent.
     ///
@@ -942,7 +937,7 @@ mod tests {
             };
             assert_eq!(
                 ctx.is_synced(),
-                SyncedChainFacts::new(ChainCount::from_raw(height), target, synchronized).is_some(),
+                daemon_reports_synchronized(ChainCount::from_raw(height), target, synchronized),
                 "the ladder and the constructor must not disagree at \
                  ({height}, {target}, {synchronized})",
             );

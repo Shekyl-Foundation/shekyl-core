@@ -565,6 +565,9 @@ mod tests {
                         "height": 10_000,
                         "target_height": if synced { 0 } else { 1_000_000 },
                         "synchronized": synced,
+                        "top_block_hash": hex::encode(
+                            crate::engine::test_support::test_block_hash_at(9_999),
+                        ),
                         "outgoing_connections_count": 8,
                         "incoming_connections_count": 0,
                     })

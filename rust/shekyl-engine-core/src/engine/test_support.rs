@@ -409,6 +409,19 @@ fn default_fee_estimates() -> FeeEstimates {
 /// value — the watchdog health-gate and health-failure paths are driven
 /// by the hermetic `StubDaemon` in the `submit_lifecycle` test module,
 /// which controls both health facts and submit outcomes.
+/// The hash of the block at `height` on every test fixture's chain.
+///
+/// One derivation, deliberately: `get_info`'s `top_block_hash` and
+/// `get_block_hash(height)` must agree on an unbroken chain, and the ledger's
+/// continuity check is exactly the comparison between them. Four fixtures
+/// with four derivations would make that agreement a coincidence to
+/// maintain. A fork fixture answers something else on purpose.
+pub fn test_block_hash_at(height: u64) -> [u8; 32] {
+    let mut h = [0xB1u8; 32];
+    h[..8].copy_from_slice(&height.to_le_bytes());
+    h
+}
+
 fn default_health() -> DaemonHealth {
     DaemonHealth {
         connections: 8,
@@ -706,11 +719,24 @@ impl Rpc for TestDaemon {
                 // would test a state no daemon produces.
                 "target_height": if syncing { height + 10_000 } else { 0 },
                 "synchronized": !syncing,
+                // The newest block is at height - 1 (count vs tip); an empty
+                // chain has no top block, so it reports the null hash.
+                "top_block_hash": hex::encode(test_block_hash_at(height.saturating_sub(1))),
                 "outgoing_connections_count": 8,
                 "incoming_connections_count": 0,
             }))
             .map_err(|e| RpcError::InvalidNode(format!("TestDaemon get_info shape: {e}")))
         }
+    }
+
+    /// The block at `number`, on the same chain `get_info` describes — so a
+    /// ledger that re-reads its anchor finds it unchanged unless a test says
+    /// otherwise.
+    fn get_block_hash(
+        &self,
+        number: usize,
+    ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+        async move { Ok(test_block_hash_at(number as u64)) }
     }
 
     fn get_height(&self) -> impl Send + std::future::Future<Output = Result<usize, RpcError>> {

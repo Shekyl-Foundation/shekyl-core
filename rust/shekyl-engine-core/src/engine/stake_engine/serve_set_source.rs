@@ -53,7 +53,9 @@ use shekyl_p_host::{PinReport, ServeSetPinner};
 
 use crate::engine::curve_tree_actor::CurveTreeHandle;
 
-use super::departure_ledger::{DepartureLedger, EPOCHS_BEFORE_PIN_RELEASE};
+use super::departure_ledger::{Continuity, DepartureLedger, EPOCHS_BEFORE_PIN_RELEASE};
+use shekyl_types::BlockHash;
+
 use crate::engine::daemon::synced_chain_facts::{CoherentChainView, TimelineBreak};
 use crate::engine::emission_source::{fetch_vouched_claim_source, Vouching};
 use crate::engine::prpc::PersonaIsolatedTransport;
@@ -114,12 +116,33 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
     /// [`CoherentChainView::reconcile`]'s verdict on the sync witness and the
     /// record's own height, never a number chosen here, so neither a stale
     /// witness nor a rolled-back record can set the clock.
-    fn releasable(&self, owed: &[u64], pinned: &[u64], view: CoherentChainView) -> Vec<u64> {
+    async fn releasable(&self, owed: &[u64], pinned: &[u64], view: CoherentChainView) -> Vec<u64> {
         let owed: std::collections::BTreeSet<u64> = owed.iter().copied().collect();
+        // Re-read the block the ledger's observations rest on, at its own
+        // height, from the chain as it is NOW. This is one `get_block_hash`
+        // per refresh, and only when there is something to carry. The verdict
+        // is the ledger's; this only fetches the fact.
+        let resting_on = self
+            .absent_since
+            .lock()
+            .expect("departure ledger")
+            .resting_on();
+        let continuity = match resting_on {
+            None => Continuity::FirstObservation,
+            Some(anchor) => match usize::try_from(anchor.height.to_raw()) {
+                Ok(number) => match self.rpc.get_block_hash(number).await {
+                    Ok(bytes) => Continuity::Verified {
+                        canonical_now: BlockHash::from_bytes(bytes),
+                    },
+                    Err(_) => Continuity::Unverifiable,
+                },
+                Err(_) => Continuity::Unverifiable,
+            },
+        };
         self.absent_since
             .lock()
             .expect("departure ledger")
-            .observe(view, &owed, pinned)
+            .observe(view, continuity, &owed, pinned)
     }
 
     /// Forget the departure ledger's observations.
@@ -191,7 +214,7 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
         let releasable = match view {
             Some(view) => {
                 let pinned = self.last_pinned.lock().expect("pin view").clone();
-                self.releasable(&shard_ids, &pinned, view)
+                self.releasable(&shard_ids, &pinned, view).await
             }
             // `WSS-25`, §6.7.3: *records no absence observations and releases
             // nothing while the daemon is unsynced*. Both halves come from
@@ -385,6 +408,7 @@ mod tests {
     use super::*;
     use crate::engine::emission_claim::test_fixtures::source_json;
     use crate::engine::emission_source::{BondContext, EmissionClaimSource};
+    use crate::engine::test_support::test_block_hash_at;
     use shekyl_archival_retention::{
         settlement_epoch_at_height, HoldingsDescriptor, HoldingsKind, ShardSet,
     };
@@ -400,6 +424,13 @@ mod tests {
     struct ClaimSourceDaemon(Arc<serde_json::Value>);
 
     impl Rpc for ClaimSourceDaemon {
+        fn get_block_hash(
+            &self,
+            number: usize,
+        ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+            async move { Ok(test_block_hash_at(number as u64)) }
+        }
+
         /// Answers `get_info` as a **synchronized** daemon at the same chain
         /// count its claim source reports, so these fixtures keep exactly the
         /// semantics they had before `SyncedChainFacts` (`WSS-Q14`) — the
@@ -421,6 +452,11 @@ mod tests {
                         .expect("the fixture source carries a chain height"),
                     "target_height": 0,
                     "synchronized": true,
+                    "top_block_hash": hex::encode(test_block_hash_at(
+                        self.0.get("chain_height").and_then(serde_json::Value::as_u64)
+                            .expect("the fixture source carries a chain height")
+                            .saturating_sub(1),
+                    )),
                     "outgoing_connections_count": 8,
                     "incoming_connections_count": 0,
                 })
@@ -844,6 +880,13 @@ mod tests {
     }
 
     impl Rpc for ResyncingDaemon {
+        fn get_block_hash(
+            &self,
+            number: usize,
+        ) -> impl Send + std::future::Future<Output = Result<[u8; 32], RpcError>> {
+            async move { Ok(test_block_hash_at(number as u64)) }
+        }
+
         fn post(
             &self,
             route: &str,
@@ -865,6 +908,7 @@ mod tests {
                     // A resyncing daemon says so outright; the heights are
                     // the second half of the same statement.
                     "synchronized": self.target_height == 0,
+                    "top_block_hash": hex::encode(test_block_hash_at(tip)),
                     "outgoing_connections_count": 8,
                     "incoming_connections_count": 0,
                 })

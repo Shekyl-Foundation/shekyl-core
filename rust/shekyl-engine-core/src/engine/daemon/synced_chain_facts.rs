@@ -96,7 +96,7 @@
 
 use serde_json::Value;
 use shekyl_rpc_client::{Rpc, RpcError};
-use shekyl_types::{BlockHeight, ChainCount};
+use shekyl_types::{BlockHash, BlockHeight, ChainCount};
 
 use crate::engine::traits::daemon::DaemonHealth;
 
@@ -119,6 +119,16 @@ use crate::engine::traits::daemon::DaemonHealth;
 pub(crate) struct SyncedChainFacts {
     /// The daemon's block count at the moment it reported synchronized.
     chain_height: ChainCount,
+    /// The hash of the newest block at that moment — **which** chain the
+    /// count is a count of.
+    ///
+    /// A height alone is not an identity: two branches share every height
+    /// below their fork, so a ledger that carried observations across
+    /// refreshes on heights alone could not tell a reorg-and-catch-up from
+    /// ordinary advance. This is the fact that makes the difference
+    /// observable, and it is read from the same `get_info` reply as the
+    /// count, so it costs nothing.
+    top_hash: BlockHash,
 }
 
 impl SyncedChainFacts {
@@ -139,14 +149,12 @@ impl SyncedChainFacts {
         chain_height: ChainCount,
         target_height: u64,
         synchronized: bool,
+        top_hash: BlockHash,
     ) -> Option<Self> {
-        // The height half, verbatim from the submit watchdog.
-        let heights_agree = target_height == 0 || chain_height.to_raw() >= target_height;
-        if synchronized && heights_agree {
-            Some(Self { chain_height })
-        } else {
-            None
-        }
+        daemon_reports_synchronized(chain_height, target_height, synchronized).then_some(Self {
+            chain_height,
+            top_hash,
+        })
     }
 
     /// Build from the engine's [`DaemonHealth`] projection of `get_info`.
@@ -155,12 +163,19 @@ impl SyncedChainFacts {
     /// watchdog's escalation axis, not a synchronization fact, and a type
     /// named for one property that silently carries another is how a consumer
     /// comes to read the wrong one.
-    pub(crate) fn from_health(health: DaemonHealth) -> Option<Self> {
+    pub(crate) fn from_health(health: DaemonHealth, top_hash: BlockHash) -> Option<Self> {
         Self::new(
             ChainCount::from_raw(health.height),
             health.target_height,
             health.synchronized,
+            top_hash,
         )
+    }
+
+    /// The hash of the newest block at the moment the daemon reported
+    /// synchronized — the identity of the chain this count belongs to.
+    pub(crate) fn top_hash(&self) -> BlockHash {
+        self.top_hash
     }
 
     /// The daemon's block **count** — one more than the newest block's height.
@@ -184,6 +199,35 @@ impl SyncedChainFacts {
     pub(crate) fn tip(&self) -> BlockHeight {
         tip_of(self.chain_height)
     }
+}
+
+/// The sync predicate: `synchronized && (target_height == 0 || height >=
+/// target_height)`. **The one site.**
+///
+/// [`SyncedChainFacts::new`] is this plus chain identity; the submit
+/// watchdog's `DaemonHealthContext::is_synced` is this alone, because the
+/// ladder needs a boolean and holds no chain identity to build the type
+/// with. Both call here, so a change to what "synced" means cannot leave
+/// the ladder and the release gate disagreeing. The module docs carry the
+/// reasoning for each arm.
+pub(crate) fn daemon_reports_synchronized(
+    chain_height: ChainCount,
+    target_height: u64,
+    synchronized: bool,
+) -> bool {
+    let heights_agree = target_height == 0 || chain_height.to_raw() >= target_height;
+    synchronized && heights_agree
+}
+
+/// The identity of a chain at one height: **which** block sits there.
+///
+/// What the departure ledger rests its observations on, and what a caller
+/// must re-read from the daemon before the next observation may be carried
+/// across. Height alone cannot serve — see [`CoherentChainView::anchor`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ChainAnchor {
+    pub(crate) height: BlockHeight,
+    pub(crate) hash: BlockHash,
 }
 
 /// A chain reading two independent reads of the same daemon both vouch for.
@@ -225,6 +269,7 @@ impl SyncedChainFacts {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CoherentChainView {
     witness_tip: BlockHeight,
+    witness_hash: BlockHash,
     record_tip: BlockHeight,
 }
 
@@ -237,8 +282,46 @@ impl CoherentChainView {
     pub(crate) fn reconcile(synced: &SyncedChainFacts, record_height: ChainCount) -> Self {
         Self {
             witness_tip: synced.tip(),
+            witness_hash: synced.top_hash(),
             record_tip: tip_of(record_height),
         }
+    }
+
+    /// The chain identity this view was observed against, or `None` if the
+    /// two reads disagree in the rollback direction and there is no coherent
+    /// one.
+    ///
+    /// # Why height monotonicity is not a timeline
+    ///
+    /// The ledger used to detect a broken timeline by the next sampled
+    /// height being *lower*. That catches a rollback the wallet happens to
+    /// refresh in the middle of, and nothing else. A reorg can rewind across
+    /// an epoch open and **catch back up above** the last observed height
+    /// before the next refresh — and if the replacement branch restored a
+    /// shard at that epoch open and dropped it again, the surviving absence
+    /// entry releases a shard that was held when it mattered. Two branches
+    /// share every height below their fork, so no relation between heights
+    /// can see this. The hash of the block at the observed height can: if
+    /// that block has been replaced, the observation is about a chain that
+    /// no longer exists.
+    ///
+    /// The anchor is at the **observed** height, not the tip, deliberately.
+    /// The tip moves every refresh on a live chain, so a tip-to-tip
+    /// comparison would mismatch constantly and prove nothing. The question
+    /// is narrower: *is the block I anchored to still the block at that
+    /// height?* A reorg entirely above it leaves the answer yes, and the
+    /// observations correctly survive.
+    ///
+    /// On every path that proceeds to observe, `at()` equals the witness
+    /// tip — a record above the witness is ordinary advance and the minimum
+    /// picks the witness; a record below is a rollback and this returns
+    /// `None` — so the witness hash is the hash *at* `at()`, and the anchor
+    /// is exactly the pair the ledger needs.
+    pub(crate) fn anchor(self) -> Option<ChainAnchor> {
+        (!self.rolled_back()).then_some(ChainAnchor {
+            height: self.witness_tip,
+            hash: self.witness_hash,
+        })
     }
 
     /// The clock elapsed-obligation arithmetic may count on: the **lower** of
@@ -328,9 +411,8 @@ fn tip_of(count: ChainCount) -> BlockHeight {
 /// a response missing the mandatory `height` field is a malformed reply
 /// ([`RpcError::InvalidNode`]), not a silently defaulted zero — a false
 /// "synced at height 0" would be a *constructible* [`SyncedChainFacts`]
-/// vouching for a view that does not exist. Absent connection counts map to
-/// `0` (the safe direction: a peerless reading only ever routes to the
-/// operator-alarm rung). `target_height` follows the info surface's "0 when
+/// vouching for a view that does not exist.
+///
 /// **`target_height` is mandatory**, and is the one field here that cannot
 /// take a default: `0` is not a neutral absence, it is the *synchronized
 /// sentinel*, so defaulting it would have this decoder manufacture the very
@@ -385,6 +467,32 @@ pub(crate) fn health_from_get_info(info: &Value) -> Result<DaemonHealth, RpcErro
     })
 }
 
+/// Decode `top_block_hash` from the daemon's `get_info` result.
+///
+/// **Mandatory.** It is the chain's identity, and there is no honest
+/// default for an identity: a made-up hash would let a ledger carry
+/// observations across a reorg it could not see, which is the exact hazard
+/// the anchor exists to close. The field is declared on the response
+/// (`core_rpc_server.cpp:208`, `res.top_block_hash = pod_to_hex(top_hash)`),
+/// so its absence is contract drift, not an omission.
+///
+/// # Errors
+///
+/// [`RpcError::InvalidNode`] when the field is absent, not a string, not
+/// hex, or not 32 bytes.
+pub(crate) fn top_hash_from_get_info(info: &Value) -> Result<BlockHash, RpcError> {
+    let hex_str = info
+        .get("top_block_hash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RpcError::InvalidNode("get_info missing top_block_hash".to_string()))?;
+    let bytes = hex::decode(hex_str)
+        .map_err(|e| RpcError::InvalidNode(format!("get_info top_block_hash is not hex: {e}")))?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+        RpcError::InvalidNode("get_info top_block_hash is not 32 bytes".to_string())
+    })?;
+    Ok(BlockHash::from_bytes(bytes))
+}
+
 /// One `get_info` read, yielding [`SyncedChainFacts`] only if the daemon says
 /// it is synchronized.
 ///
@@ -406,7 +514,9 @@ pub(crate) async fn fetch_synced_chain_facts<R: Rpc>(
     rpc: &R,
 ) -> Result<Option<SyncedChainFacts>, RpcError> {
     let info: Value = rpc.json_rpc_call("get_info", None).await?;
-    Ok(SyncedChainFacts::from_health(health_from_get_info(&info)?))
+    let health = health_from_get_info(&info)?;
+    let top_hash = top_hash_from_get_info(&info)?;
+    Ok(SyncedChainFacts::from_health(health, top_hash))
 }
 
 #[cfg(test)]

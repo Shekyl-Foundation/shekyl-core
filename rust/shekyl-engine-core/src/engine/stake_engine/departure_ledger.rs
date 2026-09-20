@@ -34,6 +34,16 @@
 //!    ledger's clock off the witness counts epoch opens the current record
 //!    never crossed.
 //!
+//! 3. **A reorg that catches back up.** A branch can rewind across an epoch
+//!    open and be *above* the last observed height by the next refresh. If
+//!    the replacement branch restored a shard at that open and dropped it
+//!    again, the surviving entry releases a shard that was held when it
+//!    mattered. Height monotonicity — the check hazard 2 first got — cannot
+//!    see this at all: two branches share every height below their fork.
+//!    Only the identity of the block at the observed height can, so the
+//!    ledger rests on a [`ChainAnchor`] and refuses to carry an observation
+//!    across a refresh whose anchor the chain no longer reports.
+//!
 //! Hazard 2 is why *reading the sync witness first is not sufficient*, and
 //! the correction is worth stating plainly because the ordering argument
 //! sounds like it covers this and does not: ordering fixes which read is
@@ -46,9 +56,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use shekyl_types::BlockHash;
+
 use shekyl_archival_retention::SETTLEMENT_EPOCH_BLOCKS;
 
-use crate::engine::daemon::synced_chain_facts::{CoherentChainView, TimelineBreak};
+use crate::engine::daemon::synced_chain_facts::{ChainAnchor, CoherentChainView, TimelineBreak};
 
 /// Consecutive epoch opens a shard must be absent across before its pin may
 /// be released.
@@ -69,6 +81,28 @@ use crate::engine::daemon::synced_chain_facts::{CoherentChainView, TimelineBreak
 /// operand.
 pub(crate) const EPOCHS_BEFORE_PIN_RELEASE: u64 = 2;
 
+/// What the chain reports now at the anchor the ledger last rested on.
+///
+/// Supplied by the caller — the ledger is a pure type and cannot ask the
+/// daemon — but the **verdict** is the ledger's, not the caller's: it
+/// compares the hash itself and forgets on anything but an exact match. A
+/// caller cannot get this wrong in a way that helps it. Supplying the wrong
+/// hash, or `Unverifiable`, both forget, which is the safe direction; the
+/// only way to *carry* an observation is to hand back the very hash the
+/// chain reported, at the height the ledger named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Continuity {
+    /// The ledger rests on nothing yet, so there is nothing to verify.
+    /// Only meaningful when [`DepartureLedger::resting_on`] is `None`; if it
+    /// is `Some`, this is treated as unverifiable.
+    FirstObservation,
+    /// The block the chain reports now at the anchor's height.
+    Verified { canonical_now: BlockHash },
+    /// The anchor could not be re-read: the daemon was unreachable, or the
+    /// height no longer exists on its chain. Either way, not comparable.
+    Unverifiable,
+}
+
 /// Shards pinned in the store but absent from the connected record, and the
 /// coherent height at which each was **first** observed absent.
 ///
@@ -86,10 +120,10 @@ pub(crate) const EPOCHS_BEFORE_PIN_RELEASE: u64 = 2;
 #[derive(Debug, Default)]
 pub(crate) struct DepartureLedger {
     absent_since: BTreeMap<u64, CoherentChainView>,
-    /// The view of the last admitted observation, for detecting a chain that
-    /// moved backwards *between* refreshes — the same hazard
-    /// [`CoherentChainView`] closes *within* one.
-    last_observed: Option<CoherentChainView>,
+    /// The chain identity the current observations were taken against.
+    /// Before the next observation is carried, the caller re-reads the block
+    /// at this height and the ledger checks it is still this block.
+    resting_on: Option<ChainAnchor>,
 }
 
 impl DepartureLedger {
@@ -126,20 +160,35 @@ impl DepartureLedger {
     pub(crate) fn observe(
         &mut self,
         view: CoherentChainView,
+        continuity: Continuity,
         owed: &BTreeSet<u64>,
         pinned: &[u64],
     ) -> Vec<u64> {
-        // The chain moved backwards between refreshes. Prior entries were
-        // clocked against heights this view cannot be compared to, so they
-        // are not evidence any more — the same judgement the sync gap gets,
-        // for the same reason. Deliberately a *reset*, not a saturating
-        // subtraction: saturating kept stale entries alive and merely
-        // declined to elapse them, which is the shape that let a pre-gap
-        // timestamp survive into a post-gap decision.
-        if self.last_observed.is_some_and(|last| view.at() < last.at()) {
+        // Carry the prior observations only if the chain still reports the
+        // block they were anchored to. Anything else — a different hash, an
+        // unreadable anchor, `FirstObservation` claimed while resting on
+        // something — forgets. This replaces a height-monotonicity check,
+        // which a reorg-and-catch-up passes and this refuses: the heights
+        // agree, the blocks do not.
+        let carried = match (self.resting_on, continuity) {
+            (None, _) => true,
+            (Some(prior), Continuity::Verified { canonical_now }) => canonical_now == prior.hash,
+            (Some(_), _) => false,
+        };
+        if !carried {
             self.absent_since.clear();
         }
-        self.last_observed = Some(view);
+        // A view with no coherent anchor (the reads disagreed in the
+        // rollback direction) must not become the thing the NEXT refresh
+        // rests on; the caller breaks the timeline on that path before
+        // reaching here, so this is belt to that braces.
+        match view.anchor() {
+            Some(anchor) => self.resting_on = Some(anchor),
+            None => {
+                self.absent_since.clear();
+                self.resting_on = None;
+            }
+        }
 
         // A shard back in the record is not departed at all: drop its entry
         // so its clock restarts if it leaves again.
@@ -179,7 +228,14 @@ impl DepartureLedger {
     /// trade the restart case already takes.
     pub(crate) fn break_timeline(&mut self, _why: TimelineBreak) {
         self.absent_since.clear();
-        self.last_observed = None;
+        self.resting_on = None;
+    }
+
+    /// The anchor the current observations rest on — what the caller must
+    /// re-read from the chain and hand back as [`Continuity`] before the
+    /// next observation, or `None` if there is nothing to carry.
+    pub(crate) fn resting_on(&self) -> Option<ChainAnchor> {
+        self.resting_on
     }
 
     /// How many shards are currently under observation as departed.

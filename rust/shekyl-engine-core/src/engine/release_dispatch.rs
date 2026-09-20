@@ -101,7 +101,7 @@ use super::bond_assembly::{
 use super::bond_orchestrator::{anchored_reference_block, p_lane_floor_fee};
 use super::curve_tree_actor::CurveTreeHandleError;
 use super::daemon::synced_chain_facts::TimelineBreak;
-use super::emission_source::{fetch_claim_source_for, EmissionSourceError};
+use super::emission_source::{fetch_claim_source_for, ClaimSourceFor, EmissionSourceError};
 use super::fee_policy::FeeEstimatorError;
 use super::prpc::PersonaIsolatedTransport;
 use super::pscan::block_source::daemon_claimed_tip;
@@ -475,16 +475,7 @@ where
         // nothing staked" — which is the most damaging possible wording for
         // a wallet that does.
         let fetched = fetch_claim_source_for(release_rpc, p_canonical_id).await?;
-        match fetched.actionable() {
-            Ok(_) => {}
-            Err(TimelineBreak::DaemonSyncing) => return Err(ReleaseRequestError::DaemonSyncing),
-            Err(why) => {
-                return Err(ReleaseRequestError::daemon_unreachable(
-                    "exit-path chain facts",
-                    format!("{why:?}"),
-                ))
-            }
-        }
+        admit_exit_record(&fetched)?;
         let record = ReleaseRecordState::from_claim_source(&fetched)
             .ok_or(ReleaseRequestError::NoBondRecord)?;
 
@@ -686,13 +677,37 @@ where
     }
 }
 
+/// Admit a bond record to the exit path, or say why it may not be read.
+///
+/// Extracted from `submit_release` so the decision can be driven directly:
+/// that method hangs off the seven-generic `Engine` and has no async
+/// fixture, so a test of the gate *in situ* would have had to construct the
+/// refusal it was checking for — which is what the first attempt did, and
+/// what made it unable to fail.
+///
+/// The ordering is the contract: this runs **before**
+/// `ReleaseRecordState::from_claim_source`, because that function reads
+/// `bond: None` as *nothing to exit* (`NoBondRecord`), and a rolled-back or
+/// unvouched record answers `None` for a persona that does have a bond. Let
+/// it through and a staker is told they have nothing staked.
+fn admit_exit_record(fetched: &ClaimSourceFor) -> Result<(), ReleaseRequestError> {
+    match fetched.actionable() {
+        Ok(_) => Ok(()),
+        Err(TimelineBreak::DaemonSyncing) => Err(ReleaseRequestError::DaemonSyncing),
+        Err(why) => Err(ReleaseRequestError::daemon_unreachable(
+            "exit-path chain facts",
+            format!("{why:?}"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use shekyl_types::PCanonicalId;
 
     use super::super::error::{AmbiguousErrorKind, RetryableRejectCause, TerminalErrorKind};
     use super::super::transaction_submitter::{BroadcastSubmitError, SubmitterError};
-    use super::released_on_first_send_failure;
+    use super::{admit_exit_record, released_on_first_send_failure};
 
     /// The release predicate, outcome by outcome — the behavioral half of
     /// the terminal-reject disposition (the tripwire below pins that the
@@ -845,4 +860,90 @@ mod tests {
             "the pending-release seal must precede the network send"
         );
     }
+}
+
+// ── WSS-Q14 class-C bite, non-vacuous ───────────────────────────────
+//
+// The first attempt constructed `ReleaseRequestError::DaemonSyncing`
+// and checked how it flattened, which cannot fail on the gate itself.
+// This drives the gate with the states it exists to refuse.
+
+/// A record with no bond, as a resyncing daemon would answer for a
+/// persona that has one.
+fn bondless_source() -> crate::engine::emission_source::EmissionClaimSource {
+    crate::engine::emission_source::EmissionClaimSource {
+        chain_height: shekyl_types::ChainCount::from_raw(10_001),
+        current_settled_epoch: shekyl_archival_retention::settlement_epoch_at_height(10_001),
+        bond: None,
+        epochs: Vec::new(),
+    }
+}
+
+/// Every unvouchable state is refused **before** the record is read —
+/// and refused as the state it is, never as `NoBondRecord`.
+///
+/// The edit that turns this red is `admit_exit_record` returning `Ok`
+/// unconditionally (or `submit_release` skipping it). It bites against
+/// a rolled-back or unvouched bondless record reaching
+/// `from_claim_source`; it does **not** cover a daemon that lies about
+/// being synchronized.
+#[test]
+fn an_unvouchable_record_is_refused_before_it_can_read_as_no_bond() {
+    use crate::engine::daemon::synced_chain_facts::{
+        CoherentChainView, SyncedChainFacts, TimelineBreak,
+    };
+    use crate::engine::emission_source::{ClaimSourceFor, Vouching};
+    use shekyl_types::{BlockHash, ChainCount};
+
+    let p_id = shekyl_types::PCanonicalId::from_bytes([1; 32]);
+
+    // Each broken state, and the public class it must keep.
+    for (why, expect_syncing) in [
+        (TimelineBreak::DaemonSyncing, true),
+        (TimelineBreak::FactsUnreadable, false),
+        (TimelineBreak::DaemonUnreachable, false),
+    ] {
+        let fetched =
+            ClaimSourceFor::for_test_with_vouching(p_id, bondless_source(), Vouching::Broken(why));
+        let err = admit_exit_record(&fetched).expect_err("an unvouched record is refused");
+        assert!(
+            !matches!(err, ReleaseRequestError::NoBondRecord),
+            "{why:?} must never surface as 'you have nothing staked': {err:?}"
+        );
+        assert_eq!(
+            matches!(err, ReleaseRequestError::DaemonSyncing),
+            expect_syncing,
+            "{why:?} keeps its own public class: {err:?}"
+        );
+    }
+
+    // The rollback: the witness read at 20 000, the record answered at
+    // 10 000 with no bond, `synchronized` still true. Admitting it would
+    // read straight through to `NoBondRecord`.
+    let stale_high = SyncedChainFacts::new(
+        ChainCount::from_raw(20_001),
+        0,
+        true,
+        BlockHash::from_bytes([0xAB; 32]),
+    )
+    .expect("synced");
+    let view = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001));
+    assert!(view.rolled_back(), "the fixture must actually roll back");
+    let fetched =
+        ClaimSourceFor::for_test_with_vouching(p_id, bondless_source(), Vouching::Vouched(view));
+    let err = admit_exit_record(&fetched).expect_err("a rolled-back record is refused");
+    assert!(
+        matches!(err, ReleaseRequestError::DaemonUnreachable { .. }),
+        "a rollback is refused as unreachable-class, never as NoBondRecord: {err:?}"
+    );
+
+    // And the control: an agreeing, vouched record is admitted, so the
+    // refusals above are the gate and not a helper that refuses all.
+    let agreeing = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(20_001));
+    let fetched = ClaimSourceFor::for_test_with_vouching(
+        p_id,
+        bondless_source(),
+        Vouching::Vouched(agreeing),
+    );
+    admit_exit_record(&fetched).expect("a vouched record is admitted");
 }

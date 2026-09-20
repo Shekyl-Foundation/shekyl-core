@@ -9,6 +9,11 @@
 use super::*;
 use serde_json::json;
 
+/// A fixed identity for tests whose subject is the predicate, not the chain.
+fn any_hash() -> BlockHash {
+    BlockHash::from_bytes([0xAB; 32])
+}
+
 /// A `get_info` reply. `target_height` follows the info surface's convention:
 /// `0` means the daemon considers itself synchronized.
 fn info(height: u64, target_height: u64) -> Value {
@@ -16,6 +21,7 @@ fn info(height: u64, target_height: u64) -> Value {
         "height": height,
         "target_height": target_height,
         "synchronized": true,
+        "top_block_hash": hex::encode([0xAB; 32]),
         "outgoing_connections_count": 5,
         "incoming_connections_count": 3,
     })
@@ -27,7 +33,7 @@ fn info(height: u64, target_height: u64) -> Value {
 fn a_zero_target_is_the_synchronized_statement_at_any_height() {
     for height in [0, 1, 20_000, u64::MAX] {
         assert!(
-            SyncedChainFacts::new(ChainCount::from_raw(height), 0, true).is_some(),
+            SyncedChainFacts::new(ChainCount::from_raw(height), 0, true, any_hash()).is_some(),
             "target 0 is synchronized at height {height}",
         );
     }
@@ -38,9 +44,11 @@ fn a_zero_target_is_the_synchronized_statement_at_any_height() {
 /// pre-bond height while the daemon says it has a long way to go.
 #[test]
 fn a_daemon_below_its_target_yields_no_facts() {
-    assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000), 1_000_000, true).is_none());
     assert!(
-        SyncedChainFacts::new(ChainCount::from_raw(999_999), 1_000_000, true).is_none(),
+        SyncedChainFacts::new(ChainCount::from_raw(1_000), 1_000_000, true, any_hash()).is_none()
+    );
+    assert!(
+        SyncedChainFacts::new(ChainCount::from_raw(999_999), 1_000_000, true, any_hash()).is_none(),
         "one block short is still short — there is no near-enough",
     );
 }
@@ -49,8 +57,14 @@ fn a_daemon_below_its_target_yields_no_facts() {
 /// a node whose network estimate has been passed is not behind.
 #[test]
 fn reaching_or_overtaking_the_target_is_synchronized() {
-    assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000_000), 1_000_000, true).is_some());
-    assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000_001), 1_000_000, true).is_some());
+    assert!(
+        SyncedChainFacts::new(ChainCount::from_raw(1_000_000), 1_000_000, true, any_hash())
+            .is_some()
+    );
+    assert!(
+        SyncedChainFacts::new(ChainCount::from_raw(1_000_001), 1_000_000, true, any_hash())
+            .is_some()
+    );
 }
 
 /// The count/height distinction, pinned. `get_info.height` is the block
@@ -60,11 +74,12 @@ fn reaching_or_overtaking_the_target_is_synchronized() {
 /// every boundary — invisible to any test that never crosses one.
 #[test]
 fn the_tip_is_one_below_the_count_and_an_empty_chain_reads_zero() {
-    let facts = SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true).expect("synced");
+    let facts =
+        SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true, any_hash()).expect("synced");
     assert_eq!(facts.tip(), BlockHeight::from_raw(20_000));
 
-    let empty =
-        SyncedChainFacts::new(ChainCount::from_raw(0), 0, true).expect("synced, empty chain");
+    let empty = SyncedChainFacts::new(ChainCount::from_raw(0), 0, true, any_hash())
+        .expect("synced, empty chain");
     assert_eq!(
         empty.tip(),
         BlockHeight::from_raw(0),
@@ -94,8 +109,10 @@ fn a_reply_without_a_height_is_refused_rather_than_defaulted() {
 /// symmetry — which is exactly the tempting edit, hence the test.
 #[test]
 fn only_the_non_destructive_connection_counts_default() {
-    let health = health_from_get_info(&json!({ "height": 77, "target_height": 0 }))
-        .expect("height and target are enough");
+    let health = health_from_get_info(
+        &json!({ "height": 77, "target_height": 0, "top_block_hash": hex::encode([0u8; 32]) }),
+    )
+    .expect("height and target are enough");
     assert_eq!(health.height, 77);
     assert_eq!(health.connections, 0);
 
@@ -136,12 +153,20 @@ fn the_connection_sum_saturates_rather_than_wrapping() {
 /// reply's count, an unsynced one yields none.
 #[test]
 fn the_decode_and_the_constructor_compose() {
-    let synced = SyncedChainFacts::from_health(health_from_get_info(&info(500, 0)).expect("ok"))
-        .expect("synced");
+    let reply = info(500, 0);
+    let synced = SyncedChainFacts::from_health(
+        health_from_get_info(&reply).expect("ok"),
+        top_hash_from_get_info(&reply).expect("ok"),
+    )
+    .expect("synced");
     assert_eq!(synced.tip(), BlockHeight::from_raw(499));
 
     assert!(
-        SyncedChainFacts::from_health(health_from_get_info(&info(500, 900)).expect("ok")).is_none(),
+        SyncedChainFacts::from_health(
+            health_from_get_info(&info(500, 900)).expect("ok"),
+            any_hash()
+        )
+        .is_none(),
         "a climbing daemon yields no facts to act on",
     );
 }
@@ -157,13 +182,13 @@ fn the_decode_and_the_constructor_compose() {
 #[test]
 fn a_peerless_fresh_daemon_is_not_synchronized_despite_the_zero_target() {
     assert!(
-        SyncedChainFacts::new(ChainCount::from_raw(5), 0, false).is_none(),
+        SyncedChainFacts::new(ChainCount::from_raw(5), 0, false, any_hash()).is_none(),
         "target 0 is the daemon's sentinel for synced, but the daemon itself \
          says it is not — the flag is not decoration on the heights",
     );
     assert!(
         health_from_get_info(&json!({ "height": 5, "target_height": 0 }))
-            .map(SyncedChainFacts::from_health)
+            .map(|h| SyncedChainFacts::from_health(h, any_hash()))
             .expect("decodes")
             .is_none(),
         "an absent `synchronized` reads as false — the direction that refuses",
@@ -175,14 +200,17 @@ fn a_peerless_fresh_daemon_is_not_synchronized_despite_the_zero_target() {
 /// contradicting itself, and the answer is still no.
 #[test]
 fn the_flag_alone_does_not_override_the_heights() {
-    assert!(SyncedChainFacts::new(ChainCount::from_raw(1_000), 1_000_000, true).is_none());
+    assert!(
+        SyncedChainFacts::new(ChainCount::from_raw(1_000), 1_000_000, true, any_hash()).is_none()
+    );
 }
 
 // ── CoherentChainView: the reconciliation the acting lanes rest on ──────
 
 /// A view at `tip`, both reads agreeing.
 fn agreeing_view(tip: u64) -> CoherentChainView {
-    let synced = SyncedChainFacts::new(ChainCount::from_raw(tip + 1), 0, true).expect("synced");
+    let synced =
+        SyncedChainFacts::new(ChainCount::from_raw(tip + 1), 0, true, any_hash()).expect("synced");
     CoherentChainView::reconcile(&synced, ChainCount::from_raw(tip + 1))
 }
 
@@ -195,13 +223,15 @@ fn agreeing_view(tip: u64) -> CoherentChainView {
 /// cover a daemon that lies about being synchronized.
 #[test]
 fn the_clock_believes_the_lower_of_two_disagreeing_reads() {
-    let stale_high = SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true).expect("synced");
+    let stale_high =
+        SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true, any_hash()).expect("synced");
     let rolled_back = CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001));
     assert_eq!(rolled_back.at(), BlockHeight::from_raw(10_000));
 
     // The ordinary direction — chain advanced between the reads — takes the
     // same rule and equally must not admit the newer height.
-    let witness = SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true).expect("synced");
+    let witness =
+        SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true, any_hash()).expect("synced");
     let advanced = CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001));
     assert_eq!(advanced.at(), BlockHeight::from_raw(10_000));
 }
@@ -215,7 +245,8 @@ fn the_clock_believes_the_lower_of_two_disagreeing_reads() {
 /// construction — the shape this type had before the acting lanes needed it.
 #[test]
 fn a_record_below_its_witness_is_reported_as_rolled_back() {
-    let stale_high = SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true).expect("synced");
+    let stale_high =
+        SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true, any_hash()).expect("synced");
     assert!(
         CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001)).rolled_back(),
         "a record below the witness read before it is the rollback signature"
@@ -224,7 +255,8 @@ fn a_record_below_its_witness_is_reported_as_rolled_back() {
     // Equal, and the ordinary advance, are both NOT rollbacks — otherwise
     // every refresh on a live chain would read as one.
     assert!(!agreeing_view(10_000).rolled_back());
-    let witness = SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true).expect("synced");
+    let witness =
+        SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true, any_hash()).expect("synced");
     assert!(!CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001)).rolled_back());
 }
 
@@ -239,5 +271,65 @@ fn a_failed_facts_read_is_classified_by_its_cause() {
     assert_eq!(
         TimelineBreak::from_facts_error(&RpcError::InternalError("no route".into())),
         TimelineBreak::DaemonUnreachable,
+    );
+}
+
+// ── Chain identity: the anchor and its decode ───────────────────────────
+
+/// `top_block_hash` is mandatory for the same reason `target_height` is:
+/// there is no honest default for an identity. A made-up hash would let the
+/// ledger carry observations across a reorg it could not see.
+#[test]
+fn a_reply_without_a_top_hash_is_refused_rather_than_defaulted() {
+    for bad in [
+        json!({ "height": 5, "target_height": 0 }),
+        json!({ "height": 5, "target_height": 0, "top_block_hash": "not hex" }),
+        json!({ "height": 5, "target_height": 0, "top_block_hash": "abcd" }),
+        json!({ "height": 5, "target_height": 0, "top_block_hash": 7 }),
+    ] {
+        assert!(
+            matches!(top_hash_from_get_info(&bad), Err(RpcError::InvalidNode(_))),
+            "must refuse: {bad}"
+        );
+    }
+    assert_eq!(
+        top_hash_from_get_info(&info(5, 0)).expect("well-formed"),
+        any_hash()
+    );
+}
+
+/// The view yields an anchor exactly when the reads agree — and it is the
+/// anchor at the **observed** height, carrying the witness's identity, which
+/// is the pair the ledger rests on. A rolled-back view has no coherent
+/// anchor and yields none.
+#[test]
+fn a_view_anchors_at_its_observed_height_unless_rolled_back() {
+    let witness =
+        SyncedChainFacts::new(ChainCount::from_raw(10_001), 0, true, any_hash()).expect("synced");
+
+    let agreeing = CoherentChainView::reconcile(&witness, ChainCount::from_raw(10_001));
+    let anchor = agreeing.anchor().expect("agreeing reads anchor");
+    assert_eq!(
+        anchor.height,
+        agreeing.at(),
+        "the anchor is at the observed height"
+    );
+    assert_eq!(
+        anchor.hash,
+        any_hash(),
+        "and carries the witness's identity"
+    );
+
+    // Chain advanced between the reads: still anchored, at the witness.
+    let advanced = CoherentChainView::reconcile(&witness, ChainCount::from_raw(20_001));
+    assert_eq!(advanced.anchor().map(|a| a.height), Some(advanced.at()));
+
+    // Rolled back: no coherent anchor exists.
+    let stale_high =
+        SyncedChainFacts::new(ChainCount::from_raw(20_001), 0, true, any_hash()).expect("synced");
+    assert!(
+        CoherentChainView::reconcile(&stale_high, ChainCount::from_raw(10_001))
+            .anchor()
+            .is_none()
     );
 }

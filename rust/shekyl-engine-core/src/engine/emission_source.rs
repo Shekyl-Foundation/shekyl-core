@@ -682,9 +682,20 @@ impl VouchedClaimSource {
             source.chain_height,
             0,
             true,
+            shekyl_types::BlockHash::from_bytes(crate::engine::test_support::test_block_hash_at(
+                source.chain_height.to_raw().saturating_sub(1),
+            )),
         )
         .expect("test vouching is synchronized by construction");
         let vouching = Vouching::Vouched(CoherentChainView::reconcile(&facts, source.chain_height));
+        Self { source, vouching }
+    }
+
+    /// Pair a response with an explicit vouching, for tests that assert what
+    /// production **refuses**. Same hatch as [`Self::for_test`], same
+    /// reason it is not feature-gated.
+    #[cfg(test)]
+    pub(crate) fn for_test_with_vouching(source: EmissionClaimSource, vouching: Vouching) -> Self {
         Self { source, vouching }
     }
 }
@@ -837,6 +848,21 @@ impl ClaimSourceFor {
         Self {
             p_id,
             vouched: VouchedClaimSource::for_test(source),
+        }
+    }
+
+    /// The binding in an explicit vouching state — the states the exit
+    /// path must refuse, constructed so that refusal can be observed.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test_with_vouching(
+        p_id: PCanonicalId,
+        source: EmissionClaimSource,
+        vouching: Vouching,
+    ) -> Self {
+        Self {
+            p_id,
+            vouched: VouchedClaimSource::for_test_with_vouching(source, vouching),
         }
     }
 }
