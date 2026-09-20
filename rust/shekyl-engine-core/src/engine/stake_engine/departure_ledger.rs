@@ -109,6 +109,14 @@ impl CoherentChainView {
     }
 
     /// The height this view vouches for.
+    ///
+    /// **Test-only, deliberately.** Production reads the epoch, not the
+    /// height ([`Self::epoch`]), and this accessor has no named future
+    /// consumer — so rather than sit in the production surface as an
+    /// unused getter waiting for one, it is scoped to the reconciliation
+    /// tests that need to observe the `min` relation directly. Rule 23: a
+    /// surface with no named caller is not staged, it is dead.
+    #[cfg(test)]
     pub(crate) fn height(self) -> BlockHeight {
         self.at
     }
