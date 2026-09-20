@@ -11,107 +11,23 @@ use std::io::Cursor;
 use shekyl_chain_store::digest_v0::LogicalStateDigestV0;
 use shekyl_chain_store::store::{ConnectFacts, Origin};
 use shekyl_difficulty::CumulativeDifficulty;
-use shekyl_types::{
-    AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight,
-};
+use shekyl_types::{BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight};
 use shekyl_units::AtomicUnits;
-use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
+use shekyl_wire::Block;
 
 use crate::corpus::{CorpusFault, CorpusReader, CorpusWriter, CORPUS_MAGIC, CORPUS_VERSION};
 use crate::source::{IngestEvent, Seq, Source};
+use crate::test_support::{block, chain_listing, spend, wire};
 use crate::trace::{Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_LEN, TRACE_MAGIC};
 
 // ---------------------------------------------------------------- fixtures
 
-fn coinbase(height: u64) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: height + 60,
-            inputs: vec![Input::Gen(height)],
-            outputs: vec![Output {
-                amount: 0,
-                key: [0x40; 32],
-                view_tag: 1,
-            }],
-            extra: Vec::new(),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]],
-            enc_labels: vec![[0x66; 9]],
-            commitments: vec![[0x70; 32]],
-        }),
-    }
-}
-
-fn spend(key_image: u8) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: 0,
-            inputs: vec![Input::ToKey {
-                amount: 0,
-                key_offsets: Vec::new(),
-                key_image: [key_image; 32],
-            }],
-            outputs: vec![Output {
-                amount: 0,
-                key: [0x80; 32],
-                view_tag: 2,
-            }],
-            extra: Vec::new(),
-        },
-        ct: Ct::Fcmp {
-            fee: 7,
-            reference_block: BlockHash::from_bytes([0x99; 32]),
-            base: CtBase {
-                enc_amounts: vec![[0x11; 9]],
-                enc_labels: vec![[0x22; 9]],
-                commitments: vec![[0xa0; 32]],
-            },
-            pqc_auths: Vec::new(),
-            prunable: None,
-        },
-    }
-}
-
-fn block(height: u64, previous: BlockHash, listed: &[Transaction]) -> Block {
-    let tag = u8::try_from(height).expect("small fixture height");
-    Block {
-        header: BlockHeader {
-            major_version: 1,
-            minor_version: 0,
-            timestamp: 1_000 + height * 60,
-            previous,
-            nonce: 7,
-            curve_tree_root: CurveTreeRoot::from_bytes([0xc0 + tag; 32]),
-            attestation_root: AttestationRoot::from_bytes([0x33; 32]),
-        },
-        miner_transaction: coinbase(height),
-        transaction_hashes: listed.iter().map(Transaction::hash).collect(),
-    }
-}
-
-/// Three blocks: genesis (no listed txs), one spend, two spends — as the
-/// network carries them: (block bytes, body bytes).
+/// Three blocks — genesis, one spend, two spends — as the network carries
+/// them: (block bytes, body bytes).
 fn three_blocks() -> Vec<(Vec<u8>, Vec<Vec<u8>>)> {
-    let listed: [Vec<Transaction>; 3] = [vec![], vec![spend(1)], vec![spend(2), spend(3)]];
-    let mut previous = BlockHash::NULL;
-    listed
+    chain_listing(vec![vec![], vec![spend(1)], vec![spend(2), spend(3)]])
         .iter()
-        .enumerate()
-        .map(|(h, txs)| {
-            let b = block(h as u64, previous, txs);
-            previous = b.hash();
-            let mut body = Vec::new();
-            let bodies = txs
-                .iter()
-                .map(|t| {
-                    body.clear();
-                    t.write(&mut body).expect("write");
-                    body.clone()
-                })
-                .collect();
-            (b.serialize(), bodies)
-        })
+        .map(|(b, txs)| wire(b, txs))
         .collect()
 }
 

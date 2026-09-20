@@ -46,14 +46,21 @@ shekyl-units = { path = "../shekyl-units" }
 # Block / Transaction parsing and hashing — the corpus verifies every record
 # against the header's list (RD-F15).
 shekyl-wire = { path = "../shekyl-wire" }
+# The one stateful stage is an actor (RD-Q11): kameo is the workspace's
+# actor stack (exact-pinned), tokio its runtime; form workers are blocking
+# tasks on the same runtime.
+kameo = { workspace = true }
 thiserror = { workspace = true }
+tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-thread", "macros", "sync"] }
 
 [dev-dependencies]
 # `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature
 # (check_test_only_features.py) — never enabled from [dependencies].
-# The fetcher is async over `Rpc`; its tests drive it on a current-thread
-# runtime against a scripted transport.
-tokio = { version = "1", default-features = false, features = ["rt", "macros"] }
+# The rules crate's fixtures — MockSubstrate, the always-satisfying
+# longhash — for pipeline tests. Dev-dependency edge only.
+shekyl-chain-rules = { path = "../shekyl-chain-rules", features = ["harness"] }
+# Planting a corrupt row for the SI-10 path.
+redb = { workspace = true }
 
 [lints]
 workspace = true
