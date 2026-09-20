@@ -24,7 +24,7 @@ Every code claim below was re-read at this SHA. Line numbers are of this pin.
 a future consumer's design round would have to answer. §3.5 is the Round 2
 wargame against the ruled design.
 
-Implements *from* [`DRS_E1_SOUT_KI.md`](../design/DRS_E1_SOUT_KI.md) §3.4 / findings table
+Implements *from* [`DRS_E1_SOUT_KI.md`](DRS_E1_SOUT_KI.md) §3.4 / findings table
 SOK-10 (routed off that surface, rule 22), [`docs/FOLLOWUPS.md`](../FOLLOWUPS.md)
 the SOK-10 row, [`CT2_DRAIN_ORDER.md`](../design/CT2_DRAIN_ORDER.md),
 [`FCMP_PLUS_PLUS.md`](../FCMP_PLUS_PLUS.md) `get_curve_tree_path`,
