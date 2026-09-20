@@ -1,0 +1,38 @@
+# Copyright (c) 2026, The Shekyl Foundation
+#
+# All rights reserved.
+# BSD-3-Clause
+
+[package]
+name = "shekyl-chain-ingest"
+description = "The block-ingest pipeline: Source → form → sequence → validate+connect → sinks. Production code; the DRS-E2 replay driver is its first source."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# What this crate is (DRS_E2_REPLAY_DRIVER.md §1.1, RD-Q1): the one ingest
+# path the daemon will ever have. E2 drives it from a corpus and grades the
+# result; E3 swaps the source for p2p and drops the grader. It composes the
+# validator and the store; it never computes a consensus value itself
+# (C2-R8 Q4) and never maps a fault onto a verdict (the conversion ban's
+# clause 3, by intent — this crate is outside the store path, so the gate's
+# clause 2 does not reach it).
+[dependencies]
+# form (stateless) / validate (view-bound), Substrate, Candidate, the
+# verdict and fault types. The validator, never re-derived here.
+shekyl-chain-rules = { path = "../shekyl-chain-rules" }
+# The production PoW verifier: PreparedCache / compute_hash / CacheStore.
+# Verification is this crate everywhere, forever (§1.3); the JIT is never
+# consulted here.
+shekyl-pow-randomx = { path = "../shekyl-pow-randomx" }
+# BlockHeight, BlockHash, PowHash, Timestamp.
+shekyl-types = { path = "../shekyl-types" }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# `shekyl-chain-rules`' fixtures are behind `harness`, a TEST_ONLY feature
+# (check_test_only_features.py) — never enabled from [dependencies].
+
+[lints]
+workspace = true

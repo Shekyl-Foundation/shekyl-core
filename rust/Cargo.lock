@@ -3795,6 +3795,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "shekyl-chain-ingest"
+version = "3.1.0"
+dependencies = [
+ "shekyl-chain-rules",
+ "shekyl-pow-randomx",
+ "shekyl-types",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "shekyl-chain-rules"
 version = "3.1.0"
 dependencies = [

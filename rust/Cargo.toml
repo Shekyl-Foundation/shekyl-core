@@ -161,6 +161,11 @@ members = [
     # `cargo tree -e normal,dev`) holds that transitively.
     "shekyl-chain-rules",
 
+    # The block-ingest pipeline (DRS-E2, DRS_E2_REPLAY_DRIVER.md §1.1): Source
+    # → form → sequence → validate+connect → sinks, built once as production
+    # code with the replay driver as its first source; E3 swaps the source.
+    "shekyl-chain-ingest",
+
     # Foundational monetary-amount newtype (docs/completed/ATOMIC_UNITS_NEWTYPE.md)
     "shekyl-units",
 
