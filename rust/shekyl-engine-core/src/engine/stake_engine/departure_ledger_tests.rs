@@ -65,24 +65,49 @@ fn a_departed_shard_is_not_releasable_while_it_is_still_drawable() {
 
     // Dropped mid-epoch-0; still drawable for the rest of epoch 0.
     assert!(ledger
-        .observe(view_at(1_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(1_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     // A reorg depth later — what a reorg-shaped gate would have released on.
     assert!(ledger
-        .observe(view_at(1_720), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(1_720),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     // Epoch 1's open: not drawable in epoch 1, but an epoch-0 challenge
     // issued in block 9 999 still has to resolve.
     assert!(ledger
-        .observe(view_at(10_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(10_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert!(ledger
-        .observe(view_at(19_999), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(19_999),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     // Epoch 2's open: absent across two consecutive opens, and the last
     // epoch it could have been drawn in closed a full epoch ago.
     assert_eq!(
-        ledger.observe(view_at(20_000), unbroken(&ledger), &owed(&[1]), &[1, 9]),
+        ledger.observe(
+            view_at(20_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        ),
         vec![9]
     );
 }
@@ -94,23 +119,48 @@ fn a_shard_that_returns_clears_its_departure_clock() {
     let mut ledger = DepartureLedger::default();
 
     assert!(ledger
-        .observe(view_at(1_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(1_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     // Back in the record inside epoch 0: held at every open it might have
     // missed, so nothing has elapsed.
     assert!(ledger
-        .observe(view_at(5_000), unbroken(&ledger), &owed(&[1, 9]), &[1, 9])
+        .observe(
+            view_at(5_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1, 9])),
+            &[1, 9]
+        )
         .is_empty());
     // It leaves again in epoch 1. Had the first clock survived, epoch 2's
     // open would release it while it was still drawable in epoch 1.
     assert!(ledger
-        .observe(view_at(15_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(15_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert!(ledger
-        .observe(view_at(20_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(20_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert_eq!(
-        ledger.observe(view_at(30_000), unbroken(&ledger), &owed(&[1]), &[1, 9]),
+        ledger.observe(
+            view_at(30_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        ),
         vec![9]
     );
 }
@@ -124,7 +174,7 @@ fn an_owed_shard_is_never_releasable() {
         .observe(
             view_at(10 * SETTLEMENT_EPOCH_BLOCKS),
             unbroken(&ledger),
-            &owed(&[1, 9]),
+            Obligation::Exactly(&owed(&[1, 9])),
             &[1, 9]
         )
         .is_empty());
@@ -145,7 +195,12 @@ fn a_break_forgets_absences_so_a_stale_clock_cannot_resume() {
 
     // Shard 9 departs early in epoch 0.
     assert!(ledger
-        .observe(view_at(1_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(1_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert_eq!(ledger.observed_absences(), 1);
 
@@ -163,16 +218,31 @@ fn a_break_forgets_absences_so_a_stale_clock_cannot_resume() {
     // observation. Had the pre-break entry survived, this would release.
     assert!(
         ledger
-            .observe(view_at(20_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+            .observe(
+                view_at(20_000),
+                unbroken(&ledger),
+                Obligation::Exactly(&owed(&[1])),
+                &[1, 9]
+            )
             .is_empty(),
         "the clock restarts at the first observation after the break"
     );
     // And it releases only two opens after THAT.
     assert!(ledger
-        .observe(view_at(29_999), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(29_999),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert_eq!(
-        ledger.observe(view_at(40_000), unbroken(&ledger), &owed(&[1]), &[1, 9]),
+        ledger.observe(
+            view_at(40_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        ),
         vec![9]
     );
 }
@@ -194,23 +264,43 @@ fn a_rollback_between_refreshes_resets_the_ledger() {
     let mut ledger = DepartureLedger::default();
 
     assert!(ledger
-        .observe(view_at(50_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(50_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert_eq!(ledger.observed_absences(), 1);
 
     // The chain moves backwards under the ledger: the anchor at 50 000 is
     // not a height this chain has, so it cannot be re-read.
     assert!(ledger
-        .observe(view_at(100), Continuity::Unverifiable, &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(100),
+            Continuity::Unverifiable,
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
 
     // The entry from the pre-rollback timeline is gone; this shard is being
     // observed for the first time, so two opens from HERE are required.
     assert!(ledger
-        .observe(view_at(10_100), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(10_100),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert_eq!(
-        ledger.observe(view_at(20_100), unbroken(&ledger), &owed(&[1]), &[1, 9]),
+        ledger.observe(
+            view_at(20_100),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        ),
         vec![9]
     );
 }
@@ -235,7 +325,12 @@ fn a_fork_that_catches_back_up_does_not_carry_the_old_absence() {
     // Shard 9 observed absent early in epoch 0, anchored to the block at
     // 1 000 on branch A.
     assert!(ledger
-        .observe(view_at(1_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(1_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     let anchored_to = ledger.resting_on().expect("resting on branch A");
     assert_eq!(
@@ -256,7 +351,12 @@ fn a_fork_that_catches_back_up_does_not_carry_the_old_absence() {
     );
     assert!(
         ledger
-            .observe(view_at(20_000), branch_b_at_1000, &owed(&[1]), &[1, 9])
+            .observe(
+                view_at(20_000),
+                branch_b_at_1000,
+                Obligation::Exactly(&owed(&[1])),
+                &[1, 9]
+            )
             .is_empty(),
         "two epoch opens have elapsed by HEIGHT, but not on this chain: the \
          observation at 1 000 was of a block that no longer exists"
@@ -265,10 +365,20 @@ fn a_fork_that_catches_back_up_does_not_carry_the_old_absence() {
     // From here the clock restarts on branch B, and releases only two opens
     // after THIS observation.
     assert!(ledger
-        .observe(view_at(29_999), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(29_999),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert_eq!(
-        ledger.observe(view_at(40_000), unbroken(&ledger), &owed(&[1]), &[1, 9]),
+        ledger.observe(
+            view_at(40_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        ),
         vec![9]
     );
 }
@@ -281,10 +391,20 @@ fn a_fork_that_catches_back_up_does_not_carry_the_old_absence() {
 fn the_same_heights_on_an_unbroken_chain_do_release() {
     let mut ledger = DepartureLedger::default();
     assert!(ledger
-        .observe(view_at(1_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(1_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert_eq!(
-        ledger.observe(view_at(20_000), unbroken(&ledger), &owed(&[1]), &[1, 9]),
+        ledger.observe(
+            view_at(20_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        ),
         vec![9]
     );
 }
@@ -296,13 +416,18 @@ fn the_same_heights_on_an_unbroken_chain_do_release() {
 fn an_unverifiable_anchor_forgets() {
     let mut ledger = DepartureLedger::default();
     assert!(ledger
-        .observe(view_at(1_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(1_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert!(ledger
         .observe(
             view_at(20_000),
             Continuity::Unverifiable,
-            &owed(&[1]),
+            Obligation::Exactly(&owed(&[1])),
             &[1, 9]
         )
         .is_empty());
@@ -310,14 +435,80 @@ fn an_unverifiable_anchor_forgets() {
     // same lie in a different coat.
     let mut ledger = DepartureLedger::default();
     assert!(ledger
-        .observe(view_at(1_000), unbroken(&ledger), &owed(&[1]), &[1, 9])
+        .observe(
+            view_at(1_000),
+            unbroken(&ledger),
+            Obligation::Exactly(&owed(&[1])),
+            &[1, 9]
+        )
         .is_empty());
     assert!(ledger
         .observe(
             view_at(20_000),
             Continuity::FirstObservation,
-            &owed(&[1]),
+            Obligation::Exactly(&owed(&[1])),
             &[1, 9]
         )
         .is_empty());
+}
+
+// ── The owed-everything observation ─────────────────────────────────────
+
+/// A `CompleteTree` record owes every shard, so an observation under it
+/// **forgets** every absence clock and still moves the anchor — the next
+/// compact refresh carries nothing across it, and verifies continuity
+/// against the block this observation stood on, not an older one.
+///
+/// The edit that turns this red is the caller skipping `observe` for a
+/// `CompleteTree` record; the pinner-level bite for that lives in
+/// `serve_set_source`. This one pins what the ledger does with the input.
+#[test]
+fn an_owed_everything_observation_forgets_every_absence_and_moves_the_anchor() {
+    let mut ledger = DepartureLedger::default();
+    ledger.observe(
+        view_at(1_000),
+        unbroken(&ledger),
+        Obligation::Exactly(&owed(&[1])),
+        &[1, 9],
+    );
+    assert_eq!(
+        ledger.observed_absences(),
+        1,
+        "9 is absent under the compact record"
+    );
+
+    let everything = view_at(10_000);
+    let released = ledger.observe(
+        everything,
+        unbroken(&ledger),
+        Obligation::Everything,
+        &[1, 9],
+    );
+    assert!(
+        released.is_empty(),
+        "nothing is releasable when everything is owed"
+    );
+    assert_eq!(
+        ledger.observed_absences(),
+        0,
+        "an owed shard is not departed"
+    );
+    assert_eq!(
+        ledger.resting_on(),
+        everything.anchor(),
+        "the anchor moves to this observation so the next refresh verifies continuity here"
+    );
+
+    // Absent again under a compact record two epoch opens later: the clock
+    // restarted at 20 000, so this is the FIRST absence, not the third.
+    let released = ledger.observe(
+        view_at(20_000),
+        unbroken(&ledger),
+        Obligation::Exactly(&owed(&[1])),
+        &[1, 9],
+    );
+    assert!(
+        released.is_empty(),
+        "the pre-CompleteTree clock must not resume"
+    );
 }

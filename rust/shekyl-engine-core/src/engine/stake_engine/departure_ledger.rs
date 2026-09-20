@@ -103,6 +103,42 @@ pub(crate) enum Continuity {
     Unverifiable,
 }
 
+/// What the connected record says this persona owes, in the shape the record
+/// states it.
+///
+/// Two shapes because the record has two (`HoldingsKind`), and the ledger
+/// must hear about both: a `CompleteTree` record owes the whole corpus **by
+/// wire rule** — it carries no shard list, and reading its empty list as
+/// "owes nothing" would mark every pinned shard absent. Handing the ledger
+/// an honest "everything" instead lets a `CompleteTree` epoch do what any
+/// other observation does: a shard that is owed is not departed, so its
+/// clock is dropped and restarts if it leaves again.
+///
+/// The alternative — not observing a `CompleteTree` refresh at all — is
+/// the defect this type replaces: an absence clock started under a compact
+/// record survived an epoch in which the shard was owed and drawable, and
+/// released on the next compact refresh as though that epoch had never
+/// happened. Every vouched observation passes through
+/// [`DepartureLedger::observe`]; the holdings kind chooses the input, not
+/// whether the call is made.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Obligation<'a> {
+    /// Every shard, by wire rule (`HoldingsKind::CompleteTree`).
+    Everything,
+    /// Exactly this list (`HoldingsKind::ShardSetCompact`), or nothing at all
+    /// for a persona with no record.
+    Exactly(&'a BTreeSet<u64>),
+}
+
+impl Obligation<'_> {
+    fn owes(self, shard_id: u64) -> bool {
+        match self {
+            Self::Everything => true,
+            Self::Exactly(set) => set.contains(&shard_id),
+        }
+    }
+}
+
 /// Shards pinned in the store but absent from the connected record, and the
 /// coherent height at which each was **first** observed absent.
 ///
@@ -130,8 +166,9 @@ impl DepartureLedger {
     /// Fold one refresh's observation in, and return the shards whose pins
     /// are now releasable.
     ///
-    /// `owed` is what the connected record says this persona must serve;
-    /// `pinned` is what the store is actually retaining. The difference is
+    /// `obligation` is what the connected record says this persona must
+    /// serve, in the record's own shape ([`Obligation`]); `pinned` is what
+    /// the store is actually retaining. The difference is
     /// retained-but-not-owed — the leak `§9.7` item 5 prices at ~13.6 GB
     /// against a rule-76 Pi-4 floor, since nothing else removes a pin.
     ///
@@ -161,7 +198,7 @@ impl DepartureLedger {
         &mut self,
         view: CoherentChainView,
         continuity: Continuity,
-        owed: &BTreeSet<u64>,
+        obligation: Obligation<'_>,
         pinned: &[u64],
     ) -> Vec<u64> {
         // Carry the prior observations only if the chain still reports the
@@ -193,12 +230,12 @@ impl DepartureLedger {
         // A shard back in the record is not departed at all: drop its entry
         // so its clock restarts if it leaves again.
         self.absent_since
-            .retain(|shard_id, _| !owed.contains(shard_id));
+            .retain(|&shard_id, _| !obligation.owes(shard_id));
 
         let now_epoch = view.at().to_raw() / SETTLEMENT_EPOCH_BLOCKS;
         let mut releasable = Vec::new();
         for &shard_id in pinned {
-            if owed.contains(&shard_id) {
+            if obligation.owes(shard_id) {
                 continue;
             }
             let first_absent = *self.absent_since.entry(shard_id).or_insert(view);
