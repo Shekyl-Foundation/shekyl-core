@@ -235,6 +235,18 @@ proves **the path and the prover are coherent with each other**. It does **not**
 prove the tree matches consensus — that is CT-2's reconstruct-root KAT's claim,
 against a real header root.
 
+**Where it runs, and where it must not.** `fixture::prove_and_verify` is called
+**once per graded path and once per control arm, outside every timer**. Inside
+a timed series it would inflate the denominator with ~35 ms per input of
+verification — the same boundary violation that rules out driving
+`sign_transaction`, committed by the gate meant to defend the boundary.
+
+*This was a real defect in the first landing, not a hypothetical:* both
+binaries set `paths_verified: true` from `prove`'s `Ok`, and `proof::verify`
+appeared **nowhere** in either — verification existed only in the unit tests
+while this section asserted it of the bench. A record claimed a property the
+code did not have.
+
 A third test (`a_proof_does_not_verify_against_a_different_root`) is the control
 on the other two: without it, both would pass against a `verify` that ignored
 the root.
@@ -378,8 +390,15 @@ for the wrong reason ([rule 47](../../.cursor/rules/47-gate-subject-assertion.md
 | `aarch64` | **Enforced** — `std::env::consts::ARCH` | `rig::Environment::check_enforceable` |
 | 64-bit userland | **Enforced** — pointer width | same |
 | 8 GB RAM | **Enforced** — `/proc/meminfo`; **unreadable refuses**, never assumes | same |
+| **Pi 4 Model B** | **Enforced** — `/proc/cpuinfo` must name the board (`Raspberry Pi 4`, `BCM2711` or `Cortex-A72`); unreadable refuses | same |
 | USB-SSD | **Attested** — `--attest-storage=usb-ssd`, recorded verbatim | `rig::decide` |
 | Sustained thermals | **Attested** — `--attest-thermal-steady`, recorded verbatim | same |
+
+The device row was **captured but not checked** in the first landing: any
+aarch64 host with 7.5 GB passed as the pinned rig. The string is observable,
+so by this section's own rule it belongs on the enforced side. Three markers,
+because the field a kernel answers with varies by board — aarch64 Linux
+usually omits `model name` and gives `Model` / `Hardware` instead.
 
 The record separates `enforced` from `attested`, so a reader grading a run can
 see which claims carry machine evidence and which carry a human's word.
@@ -387,6 +406,28 @@ see which claims carry machine evidence and which carry a human's word.
 **Measurement is never refused** — a dev-box run is useful, and refusing it would
 push the schema's first review to the rig, which is the worst place to discover
 a problem with it. Only *grading* is gated.
+
+### 5.1.1 Everything grading refuses
+
+A verdict is evidence, so every condition under which it would mean less than
+it appears to is a refusal rather than a footnote. Beyond the rig pins above:
+
+| Condition | Why a verdict would be worthless |
+| --- | --- |
+| `--window-leaves` given with `--grade` | `--grade --window-leaves 1` would emit `rig.grading: true` for a corpus that is not the ruled 725-block worst case — the open edge's thin-corpus defect, on the other edge |
+| Sampled blocks below half the graded density (open edge) | A corpus that cannot fail cannot pass for a good reason |
+| Any timing series unconverged | §5.2's contract says an unconverged series is *reported*, never substituted for a converged one |
+| The prover failed in the timed loop | A fast repeated failure yields a small median that grades as a pass; there is no denominator without a proof |
+| The graded path did not verify | See §3.6 |
+| Grading depth more than one rung above the deepest control | Flatness across adjacent rungs licenses *the next* rung and no further |
+| Sparse unlicensed **and** the dense fallback misses the requested depth | The fallback is the *window's* tree, whose depth is set by the leaf count, so a refused control would silently move the denominator to another depth |
+| Control depths repeated, non-adjacent, or below the ladder floor | A set that cannot express flatness across adjacent rungs cannot license anything |
+| A non-loopback daemon with `--grade` (open edge) | §6.3.4 row 3's budget is defined for the local posture and the record hard-codes that claim; grading a remote daemon against it is a category error, not a slow run |
+| `--json` was requested and could not be written | A pass or miss with no artifact behind it is worse than no run |
+
+Argument validity is checked **before** the rig gate: an unusable control set
+is unusable on a dev box too, and discovering it only on the rig wastes the
+session the rig exists for.
 
 **What this rig grades, and what it does not.** The pins grade **obligation-A**
 quantities — the principal's proving path, which every wallet walks, and which
@@ -535,11 +576,11 @@ rig grades.
 
 **Note which arm binds.** At a 1.1 s denominator, 15 % is 0.17 s, so the
 **2 s floor is the whole threshold**. A ratio-only record would have reported
-"8 699 % of proving" and hidden that the budget being missed is an absolute
+"6 609 % of proving" and hidden that the budget being missed is an absolute
 one — which is exactly why §6.3.4 asks for the seconds beside the ratio.
 
 **The byproduct §6.3.4 wanted:** FCMP++ proving time for a 2-in canonical
-transaction at depth 6 is **1.113 s on x86**. Not the Cortex-A72 figure the
+transaction at depth 6 is **1.118 s on x86**. Not the Cortex-A72 figure the
 project wants — that needs the rig — but the first measured number of its kind
 here, and the rig run yields the A72 one for free.
 
@@ -596,6 +637,7 @@ round-trip term alone reached 5 s.
 | 2026-09-20 | Denominator is `proof::prove` directly — driving `sign_transaction` would fold BP+ and PQC signing into it |
 | 2026-09-20 | Leaf rate derived from `block_weight_limit` + the surge clamp + `predict_weight`, **not** from `config/consensus_constants.json`, which carries no weight ceiling |
 | 2026-09-20 | Rig gate split into **enforced** (arch, userland, RAM) and **attested** (storage, thermals); "sustained" became a convergence criterion |
+| 2026-09-20 | **Review pass: the harness graded things it should have refused, and claimed a check it never ran.** Seventeen findings, all valid on inspection. The two that mattered most: `proof::verify` appeared **nowhere** in either binary while `paths_verified: true` was emitted from `prove`'s `Ok` and §3.6 asserted the round trip — now run once per graded path and per control arm, outside every timer; and the build script watched `../../.git/HEAD`, which in a **worktree** is not a directory at all (`.git` is a file), so the re-grade pin's staleness guard was inert in the setup every lane uses — now resolved through `git rev-parse --git-path`, watching HEAD, the branch ref and `packed-refs`. The rest became refusals (§5.1.1): a corpus override under `--grade`, unconverged series, prover failure, unlicensed extrapolation, a dense fallback at the wrong depth, malformed control sets, a remote daemon under `--grade`, and an unwritable artifact. The device pin moved from captured-but-unchecked to **enforced**. The dependency gate moved from a key regex to TOML with resolved package names, closing renamed and workspace-inherited edges (red-bitten live). |
 | 2026-09-20 | **The open edge grades at a stated nominal density (the full-reward zone), not at the adversarial ceiling** (§4.4). 790 blocks at the ceiling is ≈ 1.9 GB decoded, so grading there writes the companion-file miss response before measuring it. The zone is the density at which the measurement can still surprise you. The asymmetry with the spend edge is deliberate: that edge decides an architecture and is paid per spend, this one decides a local mitigation and is paid once per launch. Enforced by a corpus-density gate that withholds the verdict rather than by a sentence |
 | 2026-09-20 | **`per_block_advance_worst_case_s` added to the record**: the replay term over the blocks it covers. It is what decides whether a spend-edge miss kills the design or moves the work, and a reader should not need a calculator to see it |
 | 2026-09-20 | **A wall-clock stop added beside the iteration cap**, found by running the harness rather than by reading it: the first worst-case run made plain that 60 unconverged iterations of a multi-minute replay is hours on the rig. The count bounds a fast noisy workload; only the clock bounds a slow one |

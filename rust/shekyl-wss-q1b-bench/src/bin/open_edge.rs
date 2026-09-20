@@ -55,9 +55,13 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     from_height: u64,
 
-    /// Minimal round trips to time for the floor.
-    #[arg(long, default_value_t = 50)]
-    floor_samples: usize,
+    /// Minimal round trips to time for the floor. At least one.
+    ///
+    /// Range-checked by clap rather than at the use site: zero produced an
+    /// empty vector that the median then indexed, so a malformed invocation
+    /// panicked instead of refusing.
+    #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u16).range(1..))]
+    floor_samples: u16,
 
     /// Apply the ruled arithmetic and emit a verdict.
     #[arg(long, default_value_t = false)]
@@ -128,6 +132,19 @@ async fn main() -> ExitCode {
         }
     };
 
+    // §6.3.4 row 3's budget is defined for the LOCAL posture, and the record
+    // hard-codes that string. Grading a remote daemon against a local budget
+    // is a category error, not a slow run: the verdict would be incomparable
+    // with every other graded run while claiming to be one of them.
+    if rig_verdict.grading && !rig::is_loopback_endpoint(&args.daemon) {
+        eprintln!(
+            "refusing to grade: {} is not a loopback daemon, and the 5 s budget grades the \
+             local posture only (§6.3.4 row 3). Measure without --grade instead.",
+            args.daemon
+        );
+        return ExitCode::from(2);
+    }
+
     let inner = match shekyl_rpc_transport::HttpRpc::new(args.daemon.clone()).await {
         Ok(r) => r,
         Err(e) => {
@@ -143,8 +160,9 @@ async fn main() -> ExitCode {
     // trips per block are nearly constant, so a fit over them is
     // under-determined.
     eprintln!("── timing {} minimal round trips ──", args.floor_samples);
-    let mut floor_samples = Vec::with_capacity(args.floor_samples);
-    for _ in 0..args.floor_samples {
+    let floor_sample_count = usize::from(args.floor_samples);
+    let mut floor_samples = Vec::with_capacity(floor_sample_count);
+    for _ in 0..floor_sample_count {
         let start = std::time::Instant::now();
         let res: Result<serde_json::Value, _> = client.json_rpc_call("get_info", None).await;
         if let Err(e) = res {
@@ -189,7 +207,18 @@ async fn main() -> ExitCode {
         // Byte accounting rides a SEPARATE, untimed `get_block`: the production
         // fetch returns parsed types, not the bytes it received, and
         // instrumenting the timed path would change what is being timed.
-        let (wire_hex_bytes, decoded_bytes) = measure_bytes(&client, height).await;
+        //
+        // A failure here is REFUSED rather than recorded as zero bytes. Zero is
+        // a legitimate-looking sample that drags the measured density down,
+        // which both understates the volume term and pushes the attribution
+        // toward round-trip bound -- an error conflated with a measurement.
+        let (wire_hex_bytes, decoded_bytes) = match measure_bytes(&client, height).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("byte accounting failed at height {height}: {e}");
+                return ExitCode::from(4);
+            }
+        };
 
         samples.push(BlockSample {
             height,
@@ -252,16 +281,27 @@ async fn main() -> ExitCode {
                                 sequentially awaited in block_fetch.rs",
     };
 
-    let json = serde_json::to_string_pretty(&record).expect("record serializes");
-    match args.json.as_deref() {
-        Some(p) => {
-            if let Err(e) = std::fs::write(p, &json) {
-                eprintln!("could not write {p}: {e}");
+    // An explicitly requested artifact that silently fails to appear leaves a
+    // pass or miss with no evidence behind it, which is worse than no run.
+    let write_failed = match serde_json::to_string_pretty(&record) {
+        Ok(json) => match args.json.as_deref() {
+            Some(p) => std::fs::write(p, &json)
+                .map_err(|e| eprintln!("could not write {p}: {e}"))
+                .is_err(),
+            None => {
+                println!("{json}");
+                false
             }
+        },
+        Err(e) => {
+            eprintln!("could not serialize the record: {e}");
+            true
         }
-        None => println!("{json}"),
-    }
+    };
     summarize(&record);
+    if write_failed {
+        return ExitCode::from(5);
+    }
 
     match record.verdict {
         Verdict::Miss => ExitCode::from(1),
@@ -277,21 +317,21 @@ async fn main() -> ExitCode {
 /// and the one the daemon cannot see is the one that drifts."* A renamed field
 /// then fails this compile the same way it fails the wallet, instead of
 /// silently reporting zero bytes.
-async fn measure_bytes(client: &DaemonClient, height: u64) -> (u64, u64) {
+async fn measure_bytes(client: &DaemonClient, height: u64) -> Result<(u64, u64), String> {
     let request = GetBlockRequest {
         hash: String::new(),
         height,
         fill_pow_hash: false,
     };
-    let Ok(params) = serde_json::to_value(request) else {
-        return (0, 0);
-    };
-    let res: Result<GetBlockResponse, _> = client.json_rpc_call("get_block", Some(params)).await;
-    let Ok(response) = res else { return (0, 0) };
+    let params = serde_json::to_value(request).map_err(|e| format!("encode request: {e}"))?;
+    let response: GetBlockResponse = client
+        .json_rpc_call("get_block", Some(params))
+        .await
+        .map_err(|e| format!("get_block: {e}"))?;
     let hex_len = response.blob.len() as u64;
     // The blob arrives hex-encoded, so the decoded size is half the wire size.
     // Reporting one figure for both would understate the wire by half.
-    (hex_len, hex_len / 2)
+    Ok((hex_len, hex_len / 2))
 }
 
 fn summarize(record: &OpenEdgeRecord) {

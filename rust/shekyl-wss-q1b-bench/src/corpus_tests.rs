@@ -86,3 +86,42 @@ fn the_window_is_the_rate_times_the_replay_window() {
         rate.leaves_per_block * REPLAY_WINDOW_BLOCKS
     );
 }
+
+// ── The control-depth validator ─────────────────────────────────────────────
+//
+// The sparse-path argument is flatness of the sparse/dense ratio across
+// ADJACENT rungs. A set that cannot express that must be refused before it is
+// used as licensing evidence, not labelled afterwards.
+
+#[test]
+fn a_repeated_rung_is_refused_because_it_is_one_rung() {
+    let err = validate_control_depths(&[4, 4]).expect_err("a repeated depth is one rung");
+    assert!(err.contains("distinct"), "{err}");
+}
+
+#[test]
+fn a_gap_is_refused_because_it_shows_no_flatness_across_what_it_skips() {
+    let err = validate_control_depths(&[4, 6]).expect_err("4 and 6 are not adjacent");
+    assert!(err.contains("adjacent"), "{err}");
+}
+
+#[test]
+fn a_depth_below_the_ladder_floor_is_refused() {
+    // The Selene leaf layer is never itself the root, so depth 2 is the floor.
+    let err = validate_control_depths(&[1, 2]).expect_err("depth 1 is not a tree shape");
+    assert!(err.contains("floor"), "{err}");
+    assert_eq!(min_leaves_for_depth(1), None);
+}
+
+#[test]
+fn an_empty_control_set_is_refused() {
+    assert!(validate_control_depths(&[]).is_err());
+}
+
+#[test]
+fn adjacent_distinct_rungs_are_accepted_in_either_order() {
+    // Order is the operator's; adjacency is the property.
+    assert!(validate_control_depths(&[4, 5]).is_ok());
+    assert!(validate_control_depths(&[5, 4]).is_ok());
+    assert!(validate_control_depths(&[4]).is_ok());
+}

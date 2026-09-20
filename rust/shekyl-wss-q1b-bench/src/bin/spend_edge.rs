@@ -18,13 +18,14 @@
 use std::process::ExitCode;
 
 use clap::Parser;
+use shekyl_wss_q1b_bench::corpus;
 use shekyl_wss_q1b_bench::corpus::{
     worst_case_leaves_per_block, CANONICAL_INPUTS, CANONICAL_OUTPUTS, HELD_BUFFER_BLOCKS,
     REPLAY_WINDOW_BLOCKS,
 };
 use shekyl_wss_q1b_bench::fixture::{
-    build_corpus, prove_inputs, prove_only, read_off_path, replay, synth_sparse_path,
-    ControlExperiment, Path,
+    build_corpus, prove_and_verify, prove_inputs, prove_only, read_off_path, replay,
+    synth_sparse_path, ControlExperiment, Path,
 };
 use shekyl_wss_q1b_bench::report::{
     ProverPin, SpendBudget, SpendCorpus, SpendEdgeRecord, Verdict, SCHEMA_VERSION,
@@ -96,6 +97,13 @@ fn parse_storage(s: &str) -> Result<StorageAttestation, String> {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    // Argument validity is machine-independent, so it is checked before the rig
+    // gate: an unusable control set is unusable on a dev box too, and finding
+    // that out only on the rig wastes the run the rig exists for.
+    if let Err(why) = corpus::validate_control_depths(&args.control_depths) {
+        eprintln!("{why}");
+        return ExitCode::from(2);
+    }
     let environment = Environment::capture();
     let rig_verdict = match rig::decide(
         &environment,
@@ -111,6 +119,19 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+
+    // In grading mode the corpus is the ruled one, not the operator's. `--grade`
+    // gating only the MACHINE would let `--grade --window-leaves 1` emit a
+    // genuine `rig.grading: true` record for a corpus that is not §6.3.4's
+    // 725-block worst case -- the same "cannot fail" defect the open edge's
+    // density gate closes, on the other edge.
+    if args.grade && args.window_leaves.is_some() {
+        eprintln!(
+            "refusing to grade: --window-leaves overrides the ruled worst-case corpus. \
+             Drop it to grade, or drop --grade to measure a custom window."
+        );
+        return ExitCode::from(2);
+    }
 
     let leaf_rate = worst_case_leaves_per_block(args.depth);
     let window_leaves = args
@@ -136,6 +157,12 @@ fn main() -> ExitCode {
     // extrapolation to the grading depth unsafe.
     let sparse_licensed = !controls.is_empty() && controls.iter().all(|c| c.sparse_equals_dense);
     let deepest_control = controls.iter().map(|c| c.tree_depth).max().unwrap_or(0);
+    // Flatness across adjacent rungs licenses THE NEXT ONE, and no further.
+    // Labelling a two-rung extrapolation `MORE THAN ONE RUNG` documented an
+    // invalid claim instead of refusing it; `--depth 8` under the default
+    // controls would still have produced a graded budget.
+    let within_licence = args.depth <= deepest_control + 1;
+    let sparse_licensed = sparse_licensed && within_licence;
     eprintln!(
         "   -> sparse {} ({} rung(s), deepest {}; grading at {})",
         if sparse_licensed {
@@ -147,6 +174,13 @@ fn main() -> ExitCode {
         deepest_control,
         args.depth
     );
+    if !within_licence {
+        eprintln!(
+            "   grading depth {} is more than one rung above the deepest control ({}); \
+             the sparse path is not licensed there",
+            args.depth, deepest_control
+        );
+    }
 
     eprintln!("── corpus: {window_leaves} leaves over {REPLAY_WINDOW_BLOCKS} blocks ──");
     let corpus = build_corpus(window_leaves, 0x5A);
@@ -167,10 +201,42 @@ fn main() -> ExitCode {
     let graded_path: Path = if sparse_licensed {
         synth_sparse_path(&corpus, args.depth)
     } else {
-        read_off_path(&layers, corpus.spent_index)
+        // The dense fallback is the WINDOW's tree, whose depth is set by the
+        // window's leaf count -- not by `--depth`. At the worst-case corpus
+        // that is depth 5 while `--depth` is 6, so a refused control would
+        // otherwise have silently moved the denominator to a different depth
+        // and still emitted a budget.
+        let dense = read_off_path(&layers, corpus.spent_index);
+        if dense.tree_depth != args.depth {
+            eprintln!(
+                "refusing to grade: the sparse path is unlicensed and the dense fallback \
+                 reaches depth {}, not the requested {}. Run a control at the grading \
+                 depth, or grade at the depth this corpus actually builds.",
+                dense.tree_depth, args.depth
+            );
+            return ExitCode::from(3);
+        }
+        dense
     };
+
+    // The verify round trip, ONCE and OUTSIDE the timer. `verify` is real work
+    // and the denominator is the prover invocation alone, so folding it into
+    // the series would inflate the figure the 15 % arm is taken against.
+    let paths_verified = match prove_and_verify(&corpus, &graded_path, CANONICAL_INPUTS, [0xA5; 32])
+    {
+        Ok(true) => true,
+        Ok(false) => {
+            eprintln!("the graded path did not verify against its own root; refusing the record");
+            return ExitCode::from(3);
+        }
+        Err(e) => {
+            eprintln!("prove failed during the verify round trip: {e}");
+            return ExitCode::from(3);
+        }
+    };
+
     let inputs = prove_inputs(&corpus, &graded_path, CANONICAL_INPUTS);
-    let mut proof_ok = true;
+    let mut prove_failed = false;
     let prove_series = sustained(
         args.warmup.min(1),
         DEFAULT_TOLERANCE_PCT,
@@ -182,14 +248,36 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("prove failed: {e}");
-                proof_ok = false;
+                prove_failed = true;
             }
         },
     );
+    // A prover that fails fast would otherwise contribute a small median and
+    // grade as a pass. There is no denominator without a proof.
+    if prove_failed {
+        eprintln!("the denominator could not be produced; refusing the record");
+        return ExitCode::from(3);
+    }
 
     let replay_median = replay_series.graded_s();
     let delta_s = replay_median + path_series.graded_s();
-    let budget = SpendBudget::grade(delta_s, prove_series.graded_s(), rig_verdict.grading);
+    // §5.2's contract: an unconverged series is REPORTED, never substituted for
+    // a converged one. Grading an unconverged median would do exactly the
+    // substitution the `stopped_because` field exists to make visible.
+    let all_converged = replay_series.converged && path_series.converged && prove_series.converged;
+    if rig_verdict.grading && !all_converged {
+        eprintln!(
+            "not grading: a timing series did not converge (replay: {}, path: {}, proving: {})",
+            replay_series.stopped_because,
+            path_series.stopped_because,
+            prove_series.stopped_because
+        );
+    }
+    let budget = SpendBudget::grade(
+        delta_s,
+        prove_series.graded_s(),
+        rig_verdict.grading && all_converged,
+    );
 
     let record = SpendEdgeRecord {
         schema_version: SCHEMA_VERSION,
@@ -230,14 +318,18 @@ fn main() -> ExitCode {
         // is not per-block work and would inflate it.
         per_block_advance_worst_case_s: replay_median / REPLAY_WINDOW_BLOCKS as f64,
         controls: controls.clone(),
-        paths_verified: proof_ok && controls.iter().all(|c| c.both_verified),
+        paths_verified: paths_verified && controls.iter().all(|c| c.both_verified),
         proxy_note: "replay proxy: leaf-layer hashing exact (dominant ~38x); \
                      upper-layer work under-modelled (2-3 layers vs ~6); net an \
                      upper bound, since build_layers rehashes every upper node \
                      where a frontier advance touches one per layer",
     };
 
-    emit(&record, args.json.as_deref());
+    if let Err(e) = emit(&record, args.json.as_deref()) {
+        eprintln!("{e}");
+        summarize(&record, &controls);
+        return ExitCode::from(5);
+    }
     summarize(&record, &controls);
 
     match record.budget.verdict {
@@ -255,19 +347,25 @@ fn run_control(depth: u8) -> ControlExperiment {
     let dense_path = read_off_path(&dense_layers, dense_corpus.spent_index);
     let sparse_path = synth_sparse_path(&dense_corpus, depth);
 
+    // Both arms verify ONCE, outside their timers. `both_verified` previously
+    // recorded only that `prove` returned -- so a prover result carrying an
+    // invalid proof could license the sparse path at the grading depth, which
+    // is the single claim this experiment exists to make.
+    let both_verified = matches!(
+        prove_and_verify(&dense_corpus, &dense_path, CANONICAL_INPUTS, [0x01; 32]),
+        Ok(true)
+    ) && matches!(
+        prove_and_verify(&dense_corpus, &sparse_path, CANONICAL_INPUTS, [0x02; 32]),
+        Ok(true)
+    );
+
     let dense_inputs = prove_inputs(&dense_corpus, &dense_path, CANONICAL_INPUTS);
     let sparse_inputs = prove_inputs(&dense_corpus, &sparse_path, CANONICAL_INPUTS);
-
-    let mut both_verified = true;
     let dense = sustained(1, DEFAULT_TOLERANCE_PCT, || {
-        if prove_only(&dense_inputs, &dense_path, [0x01; 32]).is_err() {
-            both_verified = false;
-        }
+        std::hint::black_box(prove_only(&dense_inputs, &dense_path, [0x01; 32]).ok());
     });
     let sparse = sustained(1, DEFAULT_TOLERANCE_PCT, || {
-        if prove_only(&sparse_inputs, &sparse_path, [0x02; 32]).is_err() {
-            both_verified = false;
-        }
+        std::hint::black_box(prove_only(&sparse_inputs, &sparse_path, [0x02; 32]).ok());
     });
 
     let dense_s = dense.graded_s();
@@ -288,15 +386,18 @@ fn run_control(depth: u8) -> ControlExperiment {
     }
 }
 
-fn emit(record: &SpendEdgeRecord, path: Option<&str>) {
-    let json = serde_json::to_string_pretty(record).expect("record serializes");
+/// Write the record, or say the run failed.
+///
+/// An explicitly requested artifact that silently fails to appear leaves a
+/// pass or miss with no evidence behind it, which is worse than no run.
+fn emit(record: &SpendEdgeRecord, path: Option<&str>) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(record).map_err(|e| format!("serialize: {e}"))?;
     match path {
-        Some(p) => {
-            if let Err(e) = std::fs::write(p, &json) {
-                eprintln!("could not write {p}: {e}");
-            }
+        Some(p) => std::fs::write(p, &json).map_err(|e| format!("could not write {p}: {e}")),
+        None => {
+            println!("{json}");
+            Ok(())
         }
-        None => println!("{json}"),
     }
 }
 

@@ -41,7 +41,7 @@ use shekyl_crypto_pq::derivation::derive_pqc_public_key;
 use shekyl_crypto_pq::leaf_commitment::derive_pqc_leaf;
 use shekyl_curve_generators::T;
 use shekyl_fcmp::leaf::{PqcKeyScalar, PqcLeafScalar};
-use shekyl_fcmp::proof::{self, BranchLayer, ProveInput};
+use shekyl_fcmp::proof::{self, BranchLayer, KeyImage, ProveInput};
 use shekyl_fcmp::tree::{
     build_layers, chunk_width, ed25519_point_to_selene_scalar, hash_grow_helios, hash_grow_selene,
     helios_hash_init, helios_point_to_selene_scalar, key_image_generator, layer_is_selene,
@@ -303,6 +303,67 @@ pub fn prove_inputs(corpus: &Corpus, path: &Path, n_in: usize) -> Vec<ProveInput
             }
         })
         .collect()
+}
+
+/// The key image `L = I · x` for one leaf — the verifier's per-input handle.
+///
+/// # Panics
+/// If the leaf's own secrets do not decode, which would mean the fixture built
+/// an output it cannot spend.
+#[must_use]
+pub fn key_image(leaf: &ChunkLeaf) -> KeyImage {
+    let x = Scalar::from_repr(leaf.spend_key_x).expect("fixture spend key is canonical");
+    let i = EdwardsPoint::from_bytes(&leaf.key_image_gen).expect("fixture key-image generator");
+    KeyImage::from_canonical_bytes((i * x).to_bytes())
+}
+
+/// Prove, then **verify**, one canonical-shape spend.
+///
+/// The bench contract (`WSS_Q1B_BENCH_SPEC.md` §3.6) says every measured
+/// `Path` round-trips through `proof::verify`. Until this existed that was
+/// true only of the unit tests: both binaries set `paths_verified: true` from
+/// `prove`'s `Ok`, which records that the prover *returned*, not that what it
+/// returned is coherent with the root.
+///
+/// **Deliberately not called inside a timed series.** `verify` is real work
+/// (~35 ms per input) and the denominator is defined as the prover invocation
+/// alone, so folding it in would inflate the figure the 15 % arm is taken
+/// against — the same boundary violation that rules out driving
+/// `sign_transaction`. Call it once, outside the timer, to establish the
+/// artifacts are real; time `prove_only` separately.
+///
+/// **What this establishes, and what it does not:** `verify` takes the root as
+/// an *input*, so a self-consistent wrong tree verifies. This proves the path
+/// and the prover are coherent with each other, not that the tree matches
+/// consensus — that is CT-2's reconstruct-root KAT's claim.
+///
+/// # Errors
+/// Propagates the prover's error; a proof that fails verification returns
+/// `Ok(false)`.
+pub fn prove_and_verify(
+    corpus: &Corpus,
+    path: &Path,
+    n_in: usize,
+    signable_tx_hash: [u8; 32],
+) -> Result<bool, proof::ProveError> {
+    let inputs = prove_inputs(corpus, path, n_in);
+    let result = prove_only(&inputs, path, signable_tx_hash)?;
+    let images: Vec<KeyImage> = (0..n_in)
+        .map(|i| key_image(&corpus.chunk[(corpus.spent_index + i) % corpus.chunk.len()]))
+        .collect();
+    let keys: Vec<PqcKeyScalar> = (0..n_in)
+        .map(|i| corpus.chunk[(corpus.spent_index + i) % corpus.chunk.len()].pqc_key_scalar)
+        .collect();
+    Ok(proof::verify(
+        &result.proof,
+        &images,
+        &result.pseudo_outs,
+        &keys,
+        &path.tree_root,
+        path.tree_depth,
+        signable_tx_hash,
+    )
+    .unwrap_or(false))
 }
 
 /// Invoke the prover — **the denominator, and nothing else**.

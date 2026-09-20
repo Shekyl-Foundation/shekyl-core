@@ -67,10 +67,11 @@ fn every_unmet_pin_is_reported_not_just_the_first() {
         arch: "x86_64",
         pointer_width_bits: 32,
         total_ram_bytes: Some(2_000_000_000),
+        cpu_model: Some("11th Gen Intel(R) Core(TM) i9".to_string()),
         ..rig_machine()
     };
-    let err = wrong.check_enforceable().expect_err("three pins are unmet");
-    assert_eq!(err.unmet.len(), 3, "got {:?}", err.unmet);
+    let err = wrong.check_enforceable().expect_err("every pin is unmet");
+    assert_eq!(err.unmet.len(), 4, "got {:?}", err.unmet);
 }
 
 // ── The attestation split ───────────────────────────────────────────────────
@@ -115,8 +116,13 @@ fn a_complete_rig_grades_and_separates_enforced_from_attested() {
         .expect("the pinned rig grades");
     assert!(verdict.grading);
     // The whole point of the split: a reader can tell machine evidence from a
-    // human's word.
-    assert_eq!(verdict.enforced.len(), 3);
+    // human's word. Named, not just counted -- a count alone would survive one
+    // pin being swapped for another.
+    assert_eq!(verdict.enforced.len(), 4);
+    assert!(verdict.enforced.iter().any(|e| e.contains("arch")));
+    assert!(verdict.enforced.iter().any(|e| e.contains("64-bit")));
+    assert!(verdict.enforced.iter().any(|e| e.contains("RAM")));
+    assert!(verdict.enforced.iter().any(|e| e.contains("device")));
     assert_eq!(verdict.attested.len(), 2);
 }
 
@@ -130,4 +136,78 @@ fn measurement_is_never_refused() {
     };
     let verdict = decide(&dev_box, false, None, false).expect("measurement is always allowed");
     assert!(!verdict.grading);
+}
+
+// ── The device pin ──────────────────────────────────────────────────────────
+
+#[test]
+fn an_aarch64_host_that_is_not_the_pinned_board_is_refused() {
+    // The hole this closes: arch, userland and RAM all passing made any
+    // aarch64 box with 7.5 GB "the pinned rig", though §6.3.4 names a Pi 4.
+    let other_board = Environment {
+        cpu_model: Some("Neoverse-N1".to_string()),
+        ..rig_machine()
+    };
+    let err = other_board
+        .check_enforceable()
+        .expect_err("a different aarch64 board is not the rig");
+    assert!(err.unmet.iter().any(|u| u.contains("Neoverse")), "{err}");
+}
+
+#[test]
+fn an_unreadable_device_model_refuses_rather_than_assumes() {
+    let unknown = Environment {
+        cpu_model: None,
+        ..rig_machine()
+    };
+    let err = unknown
+        .check_enforceable()
+        .expect_err("unknown device must not grade");
+    assert!(err.unmet.iter().any(|u| u.contains("device model")));
+}
+
+#[test]
+fn each_pinned_device_marker_is_accepted_on_its_own() {
+    // The kernel answers with different fields on different boards, so any one
+    // marker identifies the board. A test per marker keeps a future edit from
+    // silently dropping the one this rig actually reports.
+    for marker in REQUIRED_DEVICE_MARKERS {
+        let board = Environment {
+            cpu_model: Some(format!("something {marker} something")),
+            ..rig_machine()
+        };
+        assert!(
+            board.check_enforceable().is_ok(),
+            "marker {marker} should identify the pinned board"
+        );
+    }
+}
+
+// ── Posture ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn loopback_endpoints_are_recognised_and_others_are_not() {
+    for url in [
+        "http://127.0.0.1:18081",
+        "http://localhost:18081",
+        "http://[::1]:18081",
+        "http://127.2.3.4:28591/json_rpc",
+        "localhost:18081",
+    ] {
+        assert!(rig_is_loopback(url), "{url} should be loopback");
+    }
+    for url in [
+        "http://192.168.1.10:18081",
+        "http://daemon.example:18081",
+        "http://10.0.0.1",
+        // The trap a substring check would fall into: loopback in the PATH,
+        // not the host.
+        "http://evil.example/127.0.0.1",
+    ] {
+        assert!(!rig_is_loopback(url), "{url} should not be loopback");
+    }
+}
+
+fn rig_is_loopback(url: &str) -> bool {
+    super::is_loopback_endpoint(url)
 }

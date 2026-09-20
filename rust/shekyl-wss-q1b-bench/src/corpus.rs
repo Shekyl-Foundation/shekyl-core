@@ -271,6 +271,46 @@ pub fn min_leaves_for_depth(depth: u8) -> Option<u64> {
     Some(outputs_per_node(depth - 2) as u64 + 1)
 }
 
+/// Reject a control set that cannot license what it is asked to license.
+///
+/// The sparse-path argument is *flatness of the sparse/dense ratio across
+/// **adjacent** rungs*. A repeated depth supplies no second rung, and a gap
+/// (4 and 6) establishes no adjacency — either would have been accepted and
+/// then used as licensing evidence.
+///
+/// # Errors
+/// A human-readable reason the set cannot license a sparse path.
+pub fn validate_control_depths(depths: &[u8]) -> Result<(), String> {
+    if depths.is_empty() {
+        return Err("at least one --control-depth is required".to_string());
+    }
+    let mut sorted = depths.to_vec();
+    sorted.sort_unstable();
+    if sorted.windows(2).any(|w| w[0] == w[1]) {
+        return Err(format!(
+            "--control-depth values must be distinct; got {depths:?}. A repeated rung is \
+             one rung, and one rung licenses nothing above itself."
+        ));
+    }
+    // The Selene leaf layer is never itself the root, so depth 2 is the floor
+    // of the ladder (`corpus::min_leaves_for_depth`).
+    if let Some(&low) = sorted.first() {
+        if low < 2 {
+            return Err(format!(
+                "--control-depth {low} is below the ladder floor of 2: a tree rooted at the \
+                 leaf layer is not a tree shape"
+            ));
+        }
+    }
+    if sorted.len() > 1 && sorted.windows(2).any(|w| w[1] != w[0] + 1) {
+        return Err(format!(
+            "--control-depth values must be adjacent rungs; got {depths:?}. A gap shows no \
+             flatness across the rungs it skips."
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "corpus_tests.rs"]
 mod tests;

@@ -6,13 +6,6 @@
 use super::*;
 use crate::corpus::min_leaves_for_depth;
 
-/// Key image `L = I · x`, the verifier's per-input handle.
-fn key_image(leaf: &ChunkLeaf) -> shekyl_fcmp::proof::KeyImage {
-    let x = Scalar::from_repr(leaf.spend_key_x).expect("canonical spend key");
-    let i = EdwardsPoint::from_bytes(&leaf.key_image_gen).expect("key image generator");
-    shekyl_fcmp::proof::KeyImage::from_canonical_bytes((i * x).to_bytes())
-}
-
 // ── The verify round-trip red-bite ──────────────────────────────────────────
 //
 // The gate that makes the numbers mean anything: a harness whose artifacts do

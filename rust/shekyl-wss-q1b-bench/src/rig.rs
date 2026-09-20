@@ -29,6 +29,19 @@ pub const REQUIRED_ARCH: &str = "aarch64";
 /// 8 GB reports slightly under it, and grading must not turn on that gap.
 pub const REQUIRED_RAM_BYTES: u64 = 7_500_000_000;
 
+/// Strings that identify the pinned device in `/proc/cpuinfo`.
+///
+/// §6.3.4 pins *"Pi 4 Model B, Cortex-A72"*, and the device string **is**
+/// observable — so it belongs on the enforced side, not the attested one.
+/// Without this, any aarch64 host with 7.5 GB passed as the pinned rig, which
+/// is a gate advertising a device check it never made.
+///
+/// Three markers because the field a kernel answers with varies: aarch64
+/// Linux usually omits `model name`, giving `Model` (*"Raspberry Pi 4 Model B
+/// Rev 1.x"*) and `Hardware` (*"BCM2711"*) instead. Any one of them is the
+/// board.
+pub const REQUIRED_DEVICE_MARKERS: &[&str] = &["Raspberry Pi 4", "BCM2711", "Cortex-A72"];
+
 /// What the operator asserts about the properties the process cannot see.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum StorageAttestation {
@@ -99,6 +112,18 @@ impl Environment {
             // (rule 47): an unreadable `/proc/meminfo` is a refusal to grade,
             // never an assumed pass.
             None => unmet.push("RAM could not be read; rig pin is 8 GB".to_string()),
+        }
+        match self.cpu_model.as_deref() {
+            Some(model)
+                if REQUIRED_DEVICE_MARKERS
+                    .iter()
+                    .any(|marker| model.contains(marker)) => {}
+            Some(model) => unmet.push(format!(
+                "device is {model:?}, rig pin is a Pi 4 Model B (one of {REQUIRED_DEVICE_MARKERS:?})"
+            )),
+            None => unmet.push(
+                "the device model could not be read; rig pin is a Pi 4 Model B".to_string(),
+            ),
         }
         if unmet.is_empty() {
             Ok(())
@@ -171,6 +196,7 @@ pub fn decide(
             format!("arch == {REQUIRED_ARCH}"),
             "userland == 64-bit".to_string(),
             format!("RAM >= {REQUIRED_RAM_BYTES} B"),
+            format!("device matches one of {REQUIRED_DEVICE_MARKERS:?}"),
         ],
         attested: vec![
             "storage == usb-ssd".to_string(),
@@ -207,6 +233,29 @@ impl fmt::Display for StorageAttestation {
         };
         f.write_str(s)
     }
+}
+
+/// Whether a daemon URL names this machine.
+///
+/// §6.3.4 row 3's 5 s budget is defined for the **local** posture, and the
+/// record hard-codes that claim — so grading a remote daemon against it is a
+/// category error rather than a slow run: the verdict would be incomparable
+/// with every other graded run while presenting as one of them.
+///
+/// Host-based rather than DNS-resolving on purpose: a resolver round trip in a
+/// gate is a second failure mode, and the question here is which posture the
+/// operator asked for, not which address the kernel would pick.
+#[must_use]
+pub fn is_loopback_endpoint(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .rsplit_once(':')
+        .map_or(rest, |(h, _)| h)
+        .trim_matches(['[', ']']);
+    host == "localhost" || host == "::1" || host.starts_with("127.")
 }
 
 fn read_first_line(path: &str) -> Option<String> {
