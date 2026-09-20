@@ -351,9 +351,13 @@ breath as ruling it defective. The digest **survives with changed status**:
 canonical* — there is no third arm, and C++ is never fixed; a trace row
 tainted by C++'s wrongness is **annotated as adjudicated**, not repaired at the
 source; after cutover the fixtures re-baseline from Rust and become permanent
-regression gates. A row sourced from a **borrowed** (passed-through) fact is
-never evidence and never grades CHECKED-CONFORMANT; it flips to real evidence
-when Rust derives the fact, with no harness change.
+regression gates. **Borrowed facts, two clauses (RD-Q9):** where a row's
+oracle is a **borrowed** (passed-through) fact, (1) the rule's *verdict*
+grades on its own evidence — CEN-B5 still refuses a wrong header against the
+borrowed root — while (2) the digest *component* that fact feeds grades
+not-evidence, because identity there is copying. A row that *produces* the
+borrowed value grades not-evidence on both until Rust derives it, with no
+harness change. The grader carries the two as typed fields on the row.
 
 **A bucket is not a conformance claim.** The census's buckets say whether a
 rule is *specified and ratified on record* — they say nothing about whether the
