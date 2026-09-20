@@ -60,18 +60,15 @@ fn only_a_rewind_is_a_barrier() {
         to: BlockHeight::ZERO
     }
     .is_barrier());
-    // An Extend needs a Candidate; the barrier predicate is on the variant,
-    // pinned here by its complement rather than by constructing a block.
-    assert!(!matches!(
-        IngestEvent::Rewind {
-            to: BlockHeight::ZERO
-        },
-        IngestEvent::Extend(_)
-    ));
+    // `Extend` is the other arm of the exhaustive match in `is_barrier`;
+    // constructing a Candidate here would pin the complement at the cost of
+    // a block fixture. The corpus round-trip asserts `!is_barrier` on every
+    // Extend it yields.
 }
 
 #[test]
-fn sequence_no_saturates_rather_than_wraps() {
-    let last = SequenceNo(u64::MAX);
-    assert_eq!(last.next(), last, "a stream cannot restart from zero");
+#[should_panic(expected = "ingest sequence space exhausted")]
+fn a_sequence_number_does_not_wrap_or_saturate() {
+    let next = SequenceNo(u64::MAX).next();
+    panic!("next was {next:?} instead of panicking");
 }

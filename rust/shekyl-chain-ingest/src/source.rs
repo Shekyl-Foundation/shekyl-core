@@ -42,10 +42,16 @@ impl SequenceNo {
     /// The first event a source emits.
     pub const FIRST: Self = Self(0);
 
-    /// The next position.
+    /// The next position. Sequence numbers strictly increase: exhaustion of
+    /// the `u64` space panics rather than wrapping (a restart from zero) or
+    /// saturating (two events sharing a number).
     #[must_use]
     pub const fn next(self) -> Self {
-        Self(self.0.saturating_add(1))
+        Self(
+            self.0
+                .checked_add(1)
+                .expect("ingest sequence space exhausted"),
+        )
     }
 
     /// The raw position, for logs and artifacts.
@@ -75,10 +81,14 @@ pub enum IngestEvent {
 
 impl IngestEvent {
     /// Whether the sequencer may reorder formation across this event.
-    /// `false` exactly for a `Rewind`: it is a barrier.
+    /// `true` exactly for a `Rewind`: it is a barrier. Exhaustive so a
+    /// third variant is a compile error, not a silent non-barrier.
     #[must_use]
     pub const fn is_barrier(&self) -> bool {
-        matches!(self, Self::Rewind { .. })
+        match self {
+            Self::Rewind { .. } => true,
+            Self::Extend(_) => false,
+        }
     }
 }
 

@@ -108,6 +108,10 @@ fn a_corpus_round_trips_as_an_extend_only_source_in_height_order() {
     assert_eq!(reader.declared(), 3);
     let mut seen = Vec::new();
     while let Some(Sequenced { seq, event }) = reader.next().expect("record") {
+        assert!(
+            !event.is_barrier(),
+            "a corpus yields Extend only; Extend is not a sequencer barrier"
+        );
         match event {
             IngestEvent::Extend(cand) => seen.push((seq, *cand)),
             IngestEvent::Rewind { .. } => unreachable!("a corpus is Extend-only"),
@@ -239,6 +243,33 @@ fn an_unfinished_corpus_is_refused_by_count() {
                 declared: 0,
                 present: 1
             }
+        ),
+        "{refused}"
+    );
+}
+
+#[test]
+fn the_reader_refuses_a_crafted_tx_count_before_reading_bodies() {
+    // The file's `tx_count` is untrusted. The header lists zero transactions;
+    // a `u32::MAX` count must refuse as IncompleteBodies without allocating
+    // 2^32 pointer slots (the wire parser's own "no pre-allocation against
+    // n_tx" discipline, applied to the corpus record).
+    let (_, b0, t0) = blobs(0, 0);
+    let mut bytes = write(&[(b0.clone(), t0)]);
+    // MAGIC ‖ version ‖ net ‖ first_height ‖ count ‖ height ‖ block_len ‖ block ‖ tx_count
+    const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
+    let tx_count_at = HEADER_LEN + 8 + 4 + b0.len();
+    bytes[tx_count_at..tx_count_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
+    let refused = reader.next().expect_err("crafted count");
+    assert!(
+        matches!(
+            refused,
+            CorpusFault::IncompleteBodies {
+                listed: 0,
+                present,
+                ..
+            } if present == u32::MAX as usize
         ),
         "{refused}"
     );

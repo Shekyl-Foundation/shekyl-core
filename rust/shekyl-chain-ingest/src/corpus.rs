@@ -57,7 +57,7 @@
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
 
 use shekyl_chain_rules::Candidate;
-use shekyl_types::{BlockHeight, TxHash};
+use shekyl_types::{BlockCount, BlockHeight, TxHash};
 use shekyl_wire::block::MAX_BLOCK_BLOB_SIZE;
 use shekyl_wire::transaction::MAX_TX_SIZE;
 use shekyl_wire::{Block, Transaction};
@@ -166,8 +166,6 @@ pub enum CorpusFault {
         /// How many records were read.
         present: u64,
     },
-    /// The writer was asked to append after `finish`, or to finish twice.
-    Finished,
     /// An I/O failure on the underlying reader or writer.
     Io(io::Error),
 }
@@ -217,7 +215,6 @@ impl core::fmt::Display for CorpusFault {
                 f,
                 "header declares {declared} records, {present} present; the corpus was not finished"
             ),
-            Self::Finished => f.write_str("the corpus writer is finished"),
             Self::Io(e) => write!(f, "corpus i/o: {e}"),
         }
     }
@@ -238,19 +235,51 @@ impl From<io::Error> for CorpusFault {
     }
 }
 
-/// The check both sides run: the bodies match the header's list in count,
-/// order and hash (RD-F15). Returns the parsed block and bodies as the
-/// [`Candidate`] the validator consumes.
+fn parse_block(height: BlockHeight, blob: &[u8]) -> Result<Block, CorpusFault> {
+    Block::read(&mut &blob[..]).map_err(|cause| CorpusFault::Malformed {
+        height,
+        what: "block",
+        cause,
+    })
+}
+
+fn parse_tx(height: BlockHeight, blob: &[u8]) -> Result<Transaction, CorpusFault> {
+    Transaction::read(&mut &blob[..]).map_err(|cause| CorpusFault::Malformed {
+        height,
+        what: "transaction",
+        cause,
+    })
+}
+
+/// One listed body, hashed against the header's `index`th hash (RD-F15).
+fn verified_tx(
+    height: BlockHeight,
+    index: usize,
+    want: TxHash,
+    blob: &[u8],
+) -> Result<Transaction, CorpusFault> {
+    let tx = parse_tx(height, blob)?;
+    let got = tx.hash();
+    if got != want {
+        return Err(CorpusFault::BodyMismatch {
+            height,
+            index,
+            listed: want,
+            present: got,
+        });
+    }
+    Ok(tx)
+}
+
+/// The check the writer runs before a height is written: the bodies match
+/// the header's list in count, order and hash (RD-F15). Returns the parsed
+/// block and bodies as the [`Candidate`] the validator consumes.
 fn verified_candidate(
     height: BlockHeight,
     block_blob: &[u8],
     tx_blobs: &[Vec<u8>],
 ) -> Result<Candidate, CorpusFault> {
-    let block = Block::read(&mut &block_blob[..]).map_err(|cause| CorpusFault::Malformed {
-        height,
-        what: "block",
-        cause,
-    })?;
+    let block = parse_block(height, block_blob)?;
     let listed = block.transaction_hashes.len();
     if tx_blobs.len() != listed {
         return Err(CorpusFault::IncompleteBodies {
@@ -261,34 +290,30 @@ fn verified_candidate(
     }
     let mut transactions = Vec::with_capacity(listed);
     for (index, (blob, want)) in tx_blobs.iter().zip(&block.transaction_hashes).enumerate() {
-        let tx = Transaction::read(&mut &blob[..]).map_err(|cause| CorpusFault::Malformed {
-            height,
-            what: "transaction",
-            cause,
-        })?;
-        let got = tx.hash();
-        if got != *want {
-            return Err(CorpusFault::BodyMismatch {
-                height,
-                index,
-                listed: *want,
-                present: got,
-            });
-        }
-        transactions.push(tx);
+        transactions.push(verified_tx(height, index, *want, blob)?);
     }
     Ok(Candidate::new(block, transactions))
+}
+
+/// The next height a contiguous corpus records. Exhausting `u64` is not a
+/// representable chain; saturating would write the same height twice.
+fn successor(height: BlockHeight) -> BlockHeight {
+    height
+        .checked_add(BlockCount::ONE)
+        .expect("corpus height space exhausted")
 }
 
 /// Byte offset of the header's `count` field: `MAGIC(8) ‖ version(4) ‖ net(1) ‖ first_height(8)`.
 const COUNT_OFFSET: u64 = 8 + 4 + 1 + 8;
 
 /// Writes a corpus, verifying every record before it lands (RD-F15).
+///
+/// `finish` consumes the writer and patches the header count, so "append
+/// after finish" is unrepresentable — there is no finished flag.
 pub struct CorpusWriter<W: Write + Seek> {
     out: W,
     next: BlockHeight,
     count: u64,
-    finished: bool,
 }
 
 impl<W: Write + Seek> CorpusWriter<W> {
@@ -313,7 +338,6 @@ impl<W: Write + Seek> CorpusWriter<W> {
             out,
             next: first_height,
             count: 0,
-            finished: false,
         })
     }
 
@@ -326,52 +350,63 @@ impl<W: Write + Seek> CorpusWriter<W> {
     ///
     /// [`CorpusFault::IncompleteBodies`] / [`CorpusFault::BodyMismatch`] /
     /// [`CorpusFault::Malformed`] for the record; [`CorpusFault::Oversized`]
-    /// if a blob exceeds the wire cap; [`CorpusFault::Finished`] after
-    /// `finish`; I/O.
+    /// if a blob exceeds the wire cap; I/O.
     pub fn append(&mut self, block_blob: &[u8], tx_blobs: &[Vec<u8>]) -> Result<(), CorpusFault> {
-        if self.finished {
-            return Err(CorpusFault::Finished);
-        }
         let height = self.next;
-        let _ = verified_candidate(height, block_blob, tx_blobs)?;
-        write_len(
-            &mut self.out,
-            "block",
-            block_blob.len(),
-            MAX_BLOCK_BLOB_SIZE,
-            height.to_raw(),
-        )?;
-        self.out.write_all(block_blob)?;
-        let tx_count = u32::try_from(tx_blobs.len()).map_err(|_| CorpusFault::Oversized {
-            what: "transaction count",
-            len: tx_blobs.len() as u64,
-        })?;
-        self.out.write_all(&tx_count.to_le_bytes())?;
-        for blob in tx_blobs {
-            write_len_only(&mut self.out, "transaction", blob.len(), MAX_TX_SIZE)?;
-            self.out.write_all(blob)?;
-        }
-        self.next = BlockHeight::from_raw(height.to_raw().saturating_add(1));
-        self.count += 1;
+        verified_candidate(height, block_blob, tx_blobs)?;
+        // One buffer, one write: a verify failure writes nothing, and an
+        // I/O error cannot leave a torn prefix the next append would
+        // continue after.
+        let record = encode_record(height, block_blob, tx_blobs)?;
+        self.out.write_all(&record)?;
+        self.next = successor(height);
+        self.count = self
+            .count
+            .checked_add(1)
+            .expect("corpus record count exhausted");
         Ok(())
     }
 
     /// Patch the record count into the header and hand the writer back.
+    /// Consumes the writer: there is no append-after-finish.
     ///
     /// # Errors
     ///
-    /// [`CorpusFault::Finished`] if already finished; I/O.
+    /// I/O.
     pub fn finish(mut self) -> Result<W, CorpusFault> {
-        if self.finished {
-            return Err(CorpusFault::Finished);
-        }
-        self.finished = true;
         self.out.seek(SeekFrom::Start(COUNT_OFFSET))?;
         self.out.write_all(&self.count.to_le_bytes())?;
         self.out.seek(SeekFrom::End(0))?;
         self.out.flush()?;
         Ok(self.out)
     }
+}
+
+/// One record as the on-disk layout: `height ‖ block_len ‖ block ‖ tx_count ‖ (tx_len ‖ tx)*`.
+fn encode_record(
+    height: BlockHeight,
+    block_blob: &[u8],
+    tx_blobs: &[Vec<u8>],
+) -> Result<Vec<u8>, CorpusFault> {
+    let mut buf = Vec::new();
+    write_len(
+        &mut buf,
+        "block",
+        block_blob.len(),
+        MAX_BLOCK_BLOB_SIZE,
+        height.to_raw(),
+    )?;
+    buf.write_all(block_blob)?;
+    let tx_count = u32::try_from(tx_blobs.len()).map_err(|_| CorpusFault::Oversized {
+        what: "transaction count",
+        len: tx_blobs.len() as u64,
+    })?;
+    buf.write_all(&tx_count.to_le_bytes())?;
+    for blob in tx_blobs {
+        write_len_only(&mut buf, "transaction", blob.len(), MAX_TX_SIZE)?;
+        buf.write_all(blob)?;
+    }
+    Ok(buf)
 }
 
 /// `height u64 ‖ len u32` for a block record.
@@ -493,15 +528,31 @@ impl<R: BufRead> CorpusReader<R> {
             });
         }
         let block_blob = read_blob(&mut self.input, "block", MAX_BLOCK_BLOB_SIZE)?;
-        let tx_count = read_u32(&mut self.input)? as usize;
-        let mut tx_blobs = Vec::with_capacity(tx_count);
-        for _ in 0..tx_count {
-            tx_blobs.push(read_blob(&mut self.input, "transaction", MAX_TX_SIZE)?);
+        // The header is the bound: parse it before trusting the file's
+        // `tx_count`. `Block::read` caps the hash list at `READ_LEN_CAP`
+        // and does not pre-allocate against it; a crafted `tx_count =
+        // u32::MAX` must not `Vec::with_capacity` before this check.
+        let block = parse_block(height, &block_blob)?;
+        let listed = block.transaction_hashes.len();
+        let claimed = read_u32(&mut self.input)? as usize;
+        if claimed != listed {
+            return Err(CorpusFault::IncompleteBodies {
+                height,
+                listed,
+                present: claimed,
+            });
         }
-        let candidate = verified_candidate(height, &block_blob, &tx_blobs)?;
-        self.next = BlockHeight::from_raw(height.to_raw().saturating_add(1));
-        self.read += 1;
-        Ok(Some(candidate))
+        let mut transactions = Vec::with_capacity(listed);
+        for (index, want) in block.transaction_hashes.iter().enumerate() {
+            let blob = read_blob(&mut self.input, "transaction", MAX_TX_SIZE)?;
+            transactions.push(verified_tx(height, index, *want, &blob)?);
+        }
+        self.next = successor(height);
+        self.read = self
+            .read
+            .checked_add(1)
+            .expect("corpus record count exhausted");
+        Ok(Some(Candidate::new(block, transactions)))
     }
 }
 
