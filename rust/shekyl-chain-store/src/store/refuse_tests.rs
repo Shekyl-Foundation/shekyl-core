@@ -11,7 +11,7 @@
 use shekyl_chain_rules::Corrupt;
 use shekyl_types::BlockHeight;
 
-use super::connect_fixtures::{candidate, connect_genesis, facts, judge, GENESIS_ID};
+use super::connect_fixtures::{candidate, connect_genesis, facts, judge, GENESIS_RULES};
 use super::error::{StoreCannot, StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -33,7 +33,7 @@ fn a_refused_corrupt_halts_the_writer_at_the_connecting_height_and_lands_nothing
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let valid = judge(&view, candidate(1, genesis.hash(), Vec::new()))?;
-        let connected = batch.connect(valid, facts(1, 0), GENESIS_ID)?;
+        let connected = batch.connect(valid, facts(1, 0), GENESIS_RULES)?;
         Err(batch.refuse_corrupt(observed()))?;
         Ok(connected)
     });
@@ -102,8 +102,8 @@ fn the_first_row_wins_when_a_belt_already_fired() {
         sibling.block.header.nonce = 8;
         let first = judge(&view, sibling)?;
         let second = judge(&view, candidate(1, genesis.hash(), Vec::new()))?;
-        batch.connect(first, facts(1, 0), GENESIS_ID)?;
-        let belt = batch.connect(second, facts(1, 0), GENESIS_ID); // SI-2 arms first
+        batch.connect(first, facts(1, 0), GENESIS_RULES)?;
+        let belt = batch.connect(second, facts(1, 0), GENESIS_RULES); // SI-2 arms first
         assert!(belt.is_err());
         let refusal = batch.refuse_corrupt(observed());
         assert!(

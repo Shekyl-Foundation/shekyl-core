@@ -70,7 +70,7 @@
 //! cardinality: a second bucket, or a hole compensated by a foreign row,
 //! is SI-9, never a verdict.
 
-use shekyl_chain_rules::{ChainValid, RuleSet, RuleSetId, TxIdentity};
+use shekyl_chain_rules::{ChainValid, RuleSet, TxIdentity};
 use shekyl_types::{
     BlockHash, BlockHeight, BlockWeight, CommitmentBytes, CurveTreeRoot, LongTermWeight,
     OneTimePubkey, OutputIndexInTx,
@@ -291,9 +291,12 @@ impl<'id> WriteBatch<'_, 'id> {
     /// `valid` is branded with this batch (`'id`) and with this batch's
     /// view type, so a verdict minted anywhere else does not unify.
     /// `in_force` is the rule set the driver's schedule names for the
-    /// height (`RuleSchedule::rules_at`); the store compares it with the
-    /// verdict's and refuses a mismatch, holding no schedule and no
-    /// `Network` itself (rule 71).
+    /// height — the **set**, by value, not its id (DRS-E2 RD-Q10): the store
+    /// compares it with the verdict's by `PartialEq` and refuses a mismatch,
+    /// holding no schedule and no `Network` itself (rule 71). Resolving an
+    /// id to a set is the schedule's job, upstream; a Fakechain set reuses
+    /// `RuleSetId::GENESIS` (`DifficultyRule::Fixed`'s caveat) and no id
+    /// names it, so an id parameter could never admit one (RD-F13).
     ///
     /// May be called repeatedly on one batch: the view for block *h+1*
     /// sees block *h*, and each call journals its own row.
@@ -301,7 +304,8 @@ impl<'id> WriteBatch<'_, 'id> {
     /// # Errors
     ///
     /// [`StoreCannot::RuleSetNotInForce`] if `valid` was judged under a
-    /// rule set other than `in_force`; [`StoreCannot::OutputWithoutCommitment`]
+    /// rule set that is not `in_force` (by value — two sets may share an
+    /// id); [`StoreCannot::OutputWithoutCommitment`]
     /// for a hand-built shape the parser would not produce; the `SI-`
     /// belts — SI-2 (parent / height), SI-3 (tx hash), SI-9 (store id),
     /// SI-1 (key image), SI-4 (root), SI-8 (`total_burned` overflow) — each
@@ -315,7 +319,7 @@ impl<'id> WriteBatch<'_, 'id> {
         &self,
         valid: ChainValid<'id, BatchView<'_, 'id>>,
         facts: ConnectFacts,
-        in_force: RuleSetId,
+        in_force: RuleSet,
     ) -> Result<Connected, StoreError> {
         // ---- 1. belts -------------------------------------------------
         // The connecting height is known from the tip's key alone and is
@@ -344,20 +348,16 @@ impl<'id> WriteBatch<'_, 'id> {
             }
             (height, parent_tx_count)
         };
-        // Resolve `in_force` before comparing it with the verdict: a
-        // `ChainValid` only ever carries an issued id *or* a Fakechain
-        // set that reuses that id, so an unissued `in_force` would
-        // otherwise always report as a mismatch and the unknown-id
-        // refusal could never fire (PR #757 review). Compared by
-        // **value**: Fakechain `Fixed` reuses `RuleSetId::GENESIS`, and
-        // an id-only check would accept fixed-target work as public-
-        // network GENESIS work.
-        let rule_set = RuleSet::for_id(in_force).ok_or(StoreCannot::RuleSetUnknown(in_force))?;
-        if valid.rule_set() != rule_set {
+        // Compared by **value** (`d6ba4d98f`): Fakechain `Fixed` reuses
+        // `RuleSetId::GENESIS`, and an id-only check would accept
+        // fixed-target work as public-network GENESIS work. The set arrives
+        // resolved — the schedule that owns the id → set mapping did that
+        // (RD-Q10) — so there is no unissued id to refuse here.
+        if valid.rule_set() != in_force {
             return Err(StoreCannot::RuleSetNotInForce {
                 height,
                 judged: valid.rule_set_id(),
-                in_force,
+                in_force: in_force.id(),
             }
             .into());
         }
@@ -373,7 +373,7 @@ impl<'id> WriteBatch<'_, 'id> {
         header::widen_gaps(
             self.txn(),
             CoverageGaps::of(
-                rule_set
+                in_force
                     .enforced()
                     .filter(|row| !valid.coverage().contains(*row)),
             ),
@@ -439,8 +439,14 @@ impl<'id> WriteBatch<'_, 'id> {
             .insert(height, info.encoded().as_encoded())?;
 
         // ---- 7. rule set (CEN-B3's belt) --------------------------------
+        // What lands is the **id**, unchanged on disk. Read this row for
+        // what it is: `DifficultyRule::Fixed`'s caveat (`rule_set.rs`) —
+        // two Fakechain sets both carry `RuleSetId::GENESIS`, so id
+        // equality here is not set equality, and this is the likeliest
+        // site to use it as one (RD-Q10). The set-equality check that
+        // matters ran above, on the values.
         self.open_insert_table(HF_VERSIONS, StoreInvariant::TipMismatch)?
-            .insert(height, RuleSetInForce(in_force).encoded().as_encoded())?;
+            .insert(height, RuleSetInForce(in_force.id()).encoded().as_encoded())?;
 
         // ---- 8. burn ---------------------------------------------------
         // Conditional as a whole, exactly as `blockchain.cpp:6148`

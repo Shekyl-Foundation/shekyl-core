@@ -311,20 +311,19 @@ pub enum StoreCannot {
     ///
     /// A capability refusal, not a verdict: the block may be valid under the
     /// rules it was judged by — it was handed to the wrong height. The
-    /// driver resolves height → rule set (`RuleSchedule::rules_at`); the
-    /// store only compares.
+    /// driver resolves height → rule set (`RuleSchedule::rules_at`) and
+    /// hands `connect` the **set**; the store only compares, by value. The
+    /// two ids reported here may be **equal**: a Fakechain set reuses
+    /// `RuleSetId::GENESIS` (`DifficultyRule::Fixed`'s caveat), and then
+    /// the sets differ by their fixed target, not their id.
     RuleSetNotInForce {
         /// The height the block would have been recorded at.
         height: u64,
-        /// The rule set the verdict was minted under.
+        /// The id of the rule set the verdict was minted under.
         judged: RuleSetId,
-        /// The rule set the caller says is in force at `height`.
+        /// The id of the rule set the caller says is in force at `height`.
         in_force: RuleSetId,
     },
-    /// `connect` was told a rule set is in force that no schedule has
-    /// issued (`RuleSet::for_id` is `None`), so what it enforces — and
-    /// therefore what the verdict may have skipped — cannot be known.
-    RuleSetUnknown(RuleSetId),
     /// `pop` on a store with no block recorded.
     ChainEmpty,
     /// `pop` at `tip` cannot run: the height is below the pop floor
@@ -425,11 +424,20 @@ impl core::fmt::Display for StoreCannot {
                 height,
                 judged,
                 in_force,
-            } => write!(
-                f,
-                "the block was judged under rule set {judged:?} but rule set {in_force:?} is in \
-                 force at height {height}; re-validate under the rule set in force"
-            ),
+            } => {
+                write!(
+                    f,
+                    "the block was judged under rule set {judged:?} but rule set {in_force:?} is \
+                     in force at height {height}"
+                )?;
+                if judged == in_force {
+                    f.write_str(
+                        " (same id, different set: a Fakechain set reuses GENESIS's id with its own \
+                         fixed target)",
+                    )?;
+                }
+                f.write_str("; re-validate under the rule set in force")
+            }
             Self::ChainEmpty => f.write_str("pop on a chain store with no block recorded"),
             Self::PopBelowFloor { tip, floor } => write!(
                 f,
@@ -440,11 +448,6 @@ impl core::fmt::Display for StoreCannot {
                 f,
                 "the chain store's writer is halted since height {at_height} ({row}); reads stay \
                  open; restart after the check or rebuild from the block corpus"
-            ),
-            Self::RuleSetUnknown(id) => write!(
-                f,
-                "rule set {id:?} has not been issued by any schedule; connect cannot know what it \
-                 enforces"
             ),
             Self::OutputWithoutCommitment { tx, index } => write!(
                 f,

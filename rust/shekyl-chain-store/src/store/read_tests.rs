@@ -12,7 +12,7 @@
 //! returns, the writer **still `Live`**: a read never arms the halt
 //! (`DAEMON_REDB_STORE.md` §3.6.2, the read-side half).
 
-use shekyl_chain_rules::{AtHeight, RuleSetId};
+use shekyl_chain_rules::{AtHeight, RuleSet};
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
@@ -71,7 +71,7 @@ fn tip_carries_a_genesis_halt_with_nothing_recorded() {
     let g = candidate(0, BlockHash::NULL, Vec::new());
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        Ok(batch.connect(judge(&view, g)?, facts(0, 0), RuleSetId::GENESIS)?)
+        Ok(batch.connect(judge(&view, g)?, facts(0, 0), RuleSet::GENESIS)?)
     });
     assert!(out.is_err(), "SI-4 refuses the genesis connect");
     let snap = store.begin_read().expect("read");
@@ -408,7 +408,7 @@ fn connect_burning(store: &ChainStore, burns: &[u64]) {
             batch.connect(
                 judge(&view, cand)?,
                 facts(h as u64, burns[h]),
-                RuleSetId::GENESIS,
+                RuleSet::GENESIS,
             )?;
         }
         Ok(())

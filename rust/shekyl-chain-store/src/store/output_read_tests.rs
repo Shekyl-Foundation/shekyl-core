@@ -9,7 +9,7 @@
 use redb::ReadableTable;
 use shekyl_types::{BlockHash, BlockHeight, KeyImage};
 
-use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, GENESIS_ID};
+use super::connect_fixtures::{candidate, connect_chain, facts, judge, spend, GENESIS_RULES};
 use super::error::{StoreError, StoreInvariant};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
@@ -145,7 +145,7 @@ fn a_snapshot_sees_one_committed_state_across_a_concurrent_connect() {
     let cand = candidate(2, hashes[1], vec![spend(0x6f, 1)]);
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
-        batch.connect(judge(&view, cand)?, facts(2, 0), GENESIS_ID)?;
+        batch.connect(judge(&view, cand)?, facts(2, 0), GENESIS_RULES)?;
         Ok(())
     });
     out.expect("connect");

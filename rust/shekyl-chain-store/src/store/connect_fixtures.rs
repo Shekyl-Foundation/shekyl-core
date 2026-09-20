@@ -11,7 +11,7 @@ use core::convert::Infallible;
 
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, RuleSet,
-    RuleSetId, StructurallyValid, Substrate,
+    StructurallyValid, Substrate,
 };
 use shekyl_difficulty::{seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_types::{
@@ -229,7 +229,8 @@ pub(super) fn judge<'b, 'id>(
     }
 }
 
-pub(super) const GENESIS_ID: RuleSetId = RuleSetId::GENESIS;
+/// The rule set every fixture chain is judged and connected under.
+pub(super) const GENESIS_RULES: RuleSet = RuleSet::GENESIS;
 
 /// Connect `listed` as consecutive blocks from genesis in one batch,
 /// handing each `facts(h, 0)`. Returns each block's hash.
@@ -256,7 +257,7 @@ pub(super) fn connect_chain_with_burn(
     let out: Result<(), TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         for (h, cand) in cands.into_iter().enumerate() {
-            batch.connect(judge(&view, cand)?, facts(h as u64, burned), GENESIS_ID)?;
+            batch.connect(judge(&view, cand)?, facts(h as u64, burned), GENESIS_RULES)?;
         }
         Ok(())
     });
@@ -270,7 +271,7 @@ pub(super) fn connect_genesis(store: &ChainStore, burned: u64) -> (Connected, Bl
     let out: Result<Connected, TestErr> = store.write(|batch| {
         let view = batch.chain_view();
         let valid = judge(&view, cand)?;
-        Ok(batch.connect(valid, facts(0, burned), GENESIS_ID)?)
+        Ok(batch.connect(valid, facts(0, burned), GENESIS_RULES)?)
     });
     (out.expect("genesis connects"), block)
 }
