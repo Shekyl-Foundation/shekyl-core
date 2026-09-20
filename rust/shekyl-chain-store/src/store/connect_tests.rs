@@ -24,8 +24,8 @@ use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
 use crate::codec::{
-    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, Raw, TotalBurnedCell,
-    TxIndex, TxOutputIndices, TxPrunedSegment, FACT_FIELDS,
+    stored_timelock, BlockInfo, Canonical, CoverageGaps, OutKey, OutTx, Raw, RuleSetInForce,
+    TotalBurnedCell, TxIndex, TxOutputIndices, TxPrunedSegment, FACT_FIELDS,
 };
 use crate::ids::OutputSlot;
 use crate::lmdb_order::{Hash32, LmdbHashKey};
@@ -105,7 +105,7 @@ fn genesis_connect_writes_every_row_of_the_write_set_at_the_lmdb_layouts() {
             .get(0)
             .expect("g")
             .map(|g| g.value().decode().expect("decodes")),
-        Some(RuleSetId::GENESIS),
+        Some(RuleSetInForce(RuleSetId::GENESIS)),
         "hf_versions[h] is the rule set in force's id (SCW-16; the id, not the set — RD-Q10)"
     );
     assert_eq!(

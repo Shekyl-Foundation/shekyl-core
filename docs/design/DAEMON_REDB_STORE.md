@@ -317,7 +317,7 @@ engine swap without A1–A3.
 | **DRS-D3** | Daemon store ≠ wallet `LeafStore` — **schemas, tables, txn models, durability, APIs, and crates deliberately separate.** | **Opposed threat models** (§1.4) — not “overhead.” Unification forces the union of constraints on both stores. |
 | **DRS-D3b** | **Shared layer = encodings + tree arithmetic only** (`shekyl-fcmp`, `shekyl-wire`, related pure crates). Daemon curve grow/trim/drain **hosts storage only** and **must not** reimplement leaf codecs, tree-position maps, or hash arithmetic. | Daemon produces roots; wallet reconstructs paths. Drift presents as “wallet can’t spend,” not a storage bug (§1.4). |
 | **DRS-D3c** | **Cross-store KAT corpus** is mandatory: given output index *N* on a fixture chain, daemon tree position + leaf bytes **byte-equal** wallet LeafStore. Both stores run it. | Price of non-unification; makes separate schemas *safe* rather than merely separate. |
-| **DRS-D3d** | **No shared `redb-helpers` crate** (or equivalent dependency edge). Idioms (schema_version cell, commit-consuming txn, error taxonomy) are a **written pattern** each store implements. | Shared helpers are the unification vector: start as `open_or_create`, end as shared codecs. Rhyme by convention, not by dep. |
+| **DRS-D3d** | **No shared `redb-helpers` crate** (or equivalent dependency edge). Idioms (schema_version cell, commit-consuming txn, error taxonomy) are a **written pattern** each store implements. **NARROWED 2026-09-18 by CTS-Q2** (maintainer, PR #776), landed as PR A: the **value contract** — `Canonical`, `CodecError`, the four value shapes and the codecs for types neither store owns — is shared as `shekyl-store-codec`; everything this row names is not. | Shared helpers are the unification vector: start as `open_or_create`, end as shared codecs. Rhyme by convention, not by dep. **Why the narrowing does not reopen the vector:** the admitted crate holds none of the three idioms above — each store still writes its own lifecycle, transaction model and error taxonomy — and the thing D3b already calls shared is codecs (that row covers them explicitly). What forced it is the orphan rule, not convenience: once `Canonical` is one trait for two stores, an impl for a foreign type can live only where the trait lives, and the vocabulary crates are `no_std` and must not learn about `redb`. What stays per store is what the vector would have eaten: each store's own column codecs, §11.1(b)'s bump obligation, the fixture snapshots and the `impl Canonical` scan. A second edge into that crate — a lifecycle helper, an `open_or_create` — is this row unnarrowed, and is refused. |
 | **DRS-D4** | Wallet rewrite owns **reviewer/decision-maker bandwidth** first. | **Not** a technical “C++ cannot move until wallet Phase N.” **DRS-P0, DRS-BENCH, and DRS-C may proceed** when bandwidth allows; engine-swap (DRS-E*) stays behind wallet priority. Stated constraint = **reviewer bandwidth**, mitigable by surface-at-a-time PRs (E-5). |
 | **DRS-D5** | **Decompose first (C++ / LMDB), engine swap second.** | One variable at a time (R-4). **Rationale retired 2026-09-01** by the countermand; the mechanism survives as analysis only (CSR-4) — the decomposition is a scoping cut for the rewrite, not a sequence of shipped C++ PRs. |
 | **DRS-D6** | **Engine preference = redb, not heed** until **DRS-BENCH** says otherwise. | Pure Rust preference. Genesis-load-bearing only after **§7.4 resource/privacy measures** + IBD floor — **not** raw ops/sec vs LMDB. |
@@ -463,7 +463,7 @@ Both **widen** constraints; neither simplifies.
 | --- | --- |
 | **Encodings + tree arithmetic** | **Shared, single source** — `shekyl-fcmp`, `shekyl-wire` (leaf 128-byte layout, tree-position / output-index mapping semantics, hash/grow). DRS-D3b covers **codecs**, not only “call the math functions.” |
 | **Storage schemas, tables, txn models, durability** | **Deliberately separate** (DRS-D3) |
-| **APIs / crates** | **Deliberately separate** (DRS-D3); **no** shared redb-helpers dependency (DRS-D3d) |
+| **APIs / crates** | **Deliberately separate** (DRS-D3); **no** shared redb-helpers dependency (DRS-D3d) — one admitted edge, the value contract `shekyl-store-codec` (CTS-Q2, 2026-09-18; D3d's narrowing states its bounds) |
 
 #### Price of non-unification (DRS-D3c)
 
@@ -495,7 +495,8 @@ cannot — and the failure mode is “wallet can’t spend.”
 | --- | --- |
 | **Match pure C++ LMDB throughput / ops/sec** | Steady-state is network-bound at block cadence; 10× engine gap is invisible. **Retired from DRS-BENCH** (§7.4). |
 | `data.mdb` compatibility | Pre-genesis |
-| Unify LeafStore / shared redb-helpers crate | DRS-D3 / D3d — threat model, not LOC |
+| Unify LeafStore | DRS-D3 — threat model, not LOC |
+| Shared redb-helpers crate — lifecycle, txn model, error taxonomy | DRS-D3d — threat model, not LOC. **One admitted edge since 2026-09-18** (CTS-Q2): the *value contract* `shekyl-store-codec`. The helpers this row names are not it, and remain refused — D3d states the bounds. |
 | Permanent FFI DB façade | DRS-D1 |
 | Port archival math | Already retention crate |
 | 1:1 rehost of archival marshal shell | E-7: delete marshal; cursor surface |
@@ -2135,8 +2136,10 @@ will be written, because §11 makes replay-from-blocks the answer, and because
 the C++ precedent shows where the other posture ends: `#define VERSION 12`
 (`src/blockchain_db/lmdb/db_lmdb.cpp:145`) with a `migrate()` ladder whose
 Monero-era rungs are unreachable and were deleted under rule 60. Name and shape
-follow DRS-D3b's *written pattern* rather than a shared crate, which DRS-D3d
-forbids.
+follow DRS-D3b's *written pattern* rather than a shared crate: the
+schema-version cell is one of the idioms DRS-D3d keeps **per store**, and it
+did not travel with the value contract — D3d's 2026-09-18 narrowing admits
+that one edge and no other, this one included.
 
 **(b) A bump is required for any change that alters stored bytes — including a
 value-codec change.** Adding, removing or re-keying a table bumps; so does
@@ -2193,9 +2196,12 @@ every table inherited `&[u8]` — two tables of identical `(u64, &[u8])` shape
 were indistinguishable to the engine however different their meanings, and
 each increment ahead (S-ARCH, E3, E5) would have answered the question locally
 (the `TxIdentity` lesson, §7.7: the store takes its shape from the first
-increment that touches it). Stated once, in `codec::shape`:
+increment that touches it). Stated once, in the `shape` module — in
+`shekyl-chain-store`'s `codec` when this was ruled, in
+`shekyl-store-codec` since the move (last bullet); the statement did
+not change with its address:
 
-- A value is one of exactly three shapes. **`Coded<V>`** — rows are
+- A value is one of exactly four shapes. **`Coded<V>`** — rows are
   `V::encode` under a `Canonical` codec, `TypeName` = `shekyl::Coded<{V::NAME}>`
   — the wrapper's name carrying the codec's, which the codec contract already
   forbids reusing for a different layout; `tables.snap` pins the string.
@@ -2268,19 +2274,38 @@ increment that touches it). Stated once, in `codec::shape`:
   digest is unchanged — `digest_v0` folds hashes, not encodings, and
   `TypeName` never enters it. The file format is not: a file under version 2
   is refused at the header seal, per (a).
-- **One trait, two stores; the rule stays with the digest.** `Canonical`,
-  `CodecError` and the value shapes (`Coded`, `Blob`, `Present`, `Unshaped`) are store-engine-generic and will move to
-  a redb-only shared crate when the wallet-side curve-tree backend
+- **One trait, two stores; the rule stays with the digest. MOVED
+  2026-09-18 (steering), ahead of wallet adoption.** `Canonical`,
+  `CodecError`, `exact` and the value shapes (`Coded`, `Blob`, `Present`,
+  `Unshaped`) are store-engine-generic and now live in `shekyl-store-codec`
   (plan: [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md), Round 0
-  executed 2026-09-18)
+  executed 2026-09-18 and **closed as record** the same day with
+  [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) as successor; PR A is the
+  one increment that survived the closure), with `shekyl-chain-store` re-exporting at
+  `crate::codec::*` so no import path moved. The move was taken **ahead of**
+  the wallet-side curve-tree backend
   (`shekyl-curve-tree/src/store/redb_backend.rs`: `leaves`,
-  `owned_identities`, `leaf_meta`, `frozen_segments`, today `&[u8; N]`) adopts
-  them — as the first commit of *that* PR, with `shekyl-chain-store`
-  re-exporting so import paths move once. What does **not** travel: (b)'s
-  bump obligation, the snapshot gate and the `impl Canonical` source scan are
-  properties of the daemon store's implementations — the consensus
-  obligation lives where the digest is, and a general-purpose trait must not
-  look like the thing someone could later relax for the wallet's convenience.
+  `owned_identities`, `leaf_meta`, `frozen_segments`, today `&[u8; N]`)
+  adopting the shapes, rather than as that PR's first commit: a move mixed
+  with a rewrite is unreviewable, and PR B and E3 both depend on the crate
+  existing. The crate is **not** `redb`-only as this bullet first said — the
+  orphan rule strands every vocabulary codec in a `redb`-only crate once the
+  trait is foreign to `shekyl-chain-store`, so it depends on `shekyl-types`
+  and `shekyl-units` and hosts those codecs once for both stores (CTS-13,
+  CTS-Q6); `RuleSetId` alone keeps a chain-store-local adapter
+  (`RuleSetInForce`), because the codec crate must not depend on the rules
+  crate. This is the one edge **DRS-D3d** admits, and that row states the
+  bounds: none of the idioms it names travelled, so the unification vector
+  it guards against stays closed. What did **not** travel: (b)'s bump obligation, the fixture
+  snapshots and the `impl Canonical` source scan are properties of the
+  daemon store's implementations — the consensus obligation lives where the
+  digest is, and a general-purpose trait must not look like the thing
+  someone could later relax for the wallet's convenience. The scan is
+  therefore containment over *this* crate's tree, not equality: a registry
+  row for a moved codec that ceased to exist is a compile error, the moved
+  codecs' fixtures stay committed here, and
+  `.github/workflows/schema-snapshot.yml` triggers on the codec crate's path
+  so a byte change there still runs this gate.
 
 **Implementation pointers (DRS-E1 increment 2, 2026-09-14).**
 
@@ -2647,6 +2672,7 @@ the trigger (#507) and was missed there.
 | **2026-09-20** | **S-TX review round 2 (PR #800).** T6 is `tx_locations(RangeInclusive<LmdbHashKey>)` — the table's own `Ord`, inclusive so `LmdbHashKey::MAX` is nameable; a `Range<TxHash>` converted endpoint-wise had inverted intervals. Hash-keyed reads (T1/T3/T6) refuse an index `tx_id` at or past `tx_count` as SI-9, so a `TxLocation` T4 would call `BeyondCount` is never handed out. |
 | **2026-09-19** | **DRS-E1 increment 6 (S-TX) landed** ([`DRS_E1_STX.md`](DRS_E1_STX.md)). Two code commits: the STX-9 gate — *no public read type under `store/` has an `unlock_time` field* — with S-OUT-KI's `RecordedOutput.unlock_time` removed (the one offender, consumer-less; U-2 owns the field); and T1–T6 on `store/tx_reads.rs`, the third read body, `read.rs` delegating. `Option` for the sparse hash lookups, `AtIndex` bound first for the dense-id ones, `Prunable { Retained, Discarded }` for the archival good inside the bound (§7.7 leg (iii) read back; a missing hash row below the count is SI-7, never a third arm); `SegmentBytes<K>` per segment with `RawBlockBytes`' no-slice discipline; `tx_locations` over `tx_indices` in key order, no consumer named (E2 projects no tx table, #788) and no join. No layout change. `cargo test -p shekyl-chain-store` 270 + 13 doctests. |
 | **2026-09-17** | **DRS-E1 increment 4 (S-CHAIN-R) landed — PR #772.** Seven commits: 2a value shapes (§11.1(f), 2 → 3); 2b the three S-CHAIN-W amendments (A1 fold fields, A2 seal-created table set derived from the shapes, A3 `txs_pqc_auth_hash`, 3 → 4); 3–5 the nine reads plus the two fold reads on `ReadSnapshot` (§3.6.4); 6 raw handles crate-private; 7 this. Sweep at cut: E6's #768 had landed §7.7 items 1–2 (`TxIdentity::pqc_auth_hash`, `PqcAuthHash`, `TxidParts`), so the wire PR the lane owed was not owed. `DRS_E1_SCHAIN_W.md` archived to `completed/` (its condition — S-CHAIN-R consuming the codecs — met at commit 5). FL-R3-STORE's store half closed; the consumer half (the blob walk and the stepped median reading the fields; the derivation bit-identity gate) stays queued with its own falsifiers. Next surface: S-OUT-KI, whose pre-flight is the reader `DRS_E1_SCHAIN_R.md` now exists for. |
+| **2026-09-19** | **The value contract moved to `shekyl-store-codec`; §11.1(f)'s last bullet flipped** (`CURVE_TREE_STORE_SHAPES.md` PR A, CTS-Q2 / CTS-Q6 / CTS-13). `Canonical`, `CodecError`, `exact` and the four value shapes left `shekyl-chain-store` with the codecs for types neither store owns — the scalars and the `shekyl-types` / `shekyl-units` vocabulary — and `codec` re-exports all of it, so no call path moved. Taken **ahead of** the wallet-side adoption the bullet had scheduled it inside: a move mixed with a rewrite is unreviewable. Not `redb`-only as first written — the orphan rule strands every vocabulary codec there once the trait is foreign to the store — so the crate depends on the vocabulary and hosts those codecs once, with `RuleSetInForce` the single chain-store-local adapter (a storage crate must not depend on the consensus crate). Nothing travelled that (b) owns: this store's own column codecs, the fixture snapshots, the `impl Canonical` scan and the bump obligation stay. The scan is containment over this crate's tree now, with the reverse direction held by the compile error `snapshotted_codecs!` already produced, and `schema-snapshot.yml` gained the codec crate's path so a byte change there still runs the gate (red-bitten: a BE `BlockHeight` fails `codec_snapshot_block_height`). Every `schemas/*.snap` byte-identical; `SCHEMA_VERSION` unmoved. |
 
 ---
 

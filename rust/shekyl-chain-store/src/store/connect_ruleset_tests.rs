@@ -13,6 +13,7 @@ use shekyl_types::BlockHash;
 use super::connect_fixtures::{candidate, facts, FixtureSubstrate};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::*;
+use crate::codec::RuleSetInForce;
 use crate::schema::HF_VERSIONS;
 
 #[test]
@@ -46,7 +47,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
     // The CEN-B3 belt recorded the id — which is GENESIS's, and is not the
     // set (the caveat at the belt).
     let snap = store.begin_read().expect("read");
-    let recorded: RuleSetId = snap
+    let recorded: RuleSetInForce = snap
         .open_table(HF_VERSIONS)
         .expect("sealed")
         .get(0u64)
@@ -55,7 +56,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
         .value()
         .decode()
         .expect("decodes");
-    assert_eq!(recorded, RuleSetId::GENESIS);
+    assert_eq!(recorded, RuleSetInForce(RuleSetId::GENESIS));
     assert_eq!(seven.id(), RuleSetId::GENESIS, "the id is not the set");
     cleanup(&path);
 }

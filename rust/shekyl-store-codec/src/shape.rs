@@ -3,8 +3,11 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! How a value is stored: the three value shapes a table may declare
+//! How a value is stored: the four value shapes a table may declare
 //! (`DAEMON_REDB_STORE.md` §11.1(f)).
+//!
+//! The shapes are the contract; the write boundary that makes the
+//! `fixed_width` assertion unreachable (below) is each store's own.
 //!
 //! # The value side gets the key side's discipline
 //!
@@ -26,22 +29,23 @@
 //!   `TypeName` is `shekyl::Coded<{V::NAME}>` — the wrapper's name carrying
 //!   the codec's, which the codec contract already forbids reusing for a
 //!   different layout (`tables.snap` pins the exact string).
-//! - [`Blob<K>`] — wire bytes the chain itself encodes and that this crate
+//! - [`Blob<K>`] — wire bytes the chain itself encodes and that the store
 //!   does not re-codec: a block body, a transaction segment. [`BlobKind`]
 //!   names the kind; the bytes are verified where they are read (a block
-//!   blob against the identity `block_info` records, `store/chain_reads.rs`).
+//!   blob against the identity `block_info` records,
+//!   `shekyl-chain-store`'s `store/chain_reads.rs`).
 //! - [`Present`] — a set-table's value: the key is the fact, the value is
-//!   a zero-width witness that the key is a member. `spent_keys` is the
-//!   one catalogued instance. Named, so two set-tables cannot silently
-//!   share redb's `()` `TypeName`.
+//!   a zero-width witness that the key is a member. The daemon store's
+//!   `spent_keys` is the one catalogued instance at this pin. Named, so
+//!   two set-tables cannot silently share redb's `()` `TypeName`.
 //! - [`Unshaped`] — a table the LMDB census declares and no Rust writer
 //!   has reached. Its value type is uninhabited: the table is catalogued
 //!   (it has an ordinal) and dispatched to by the journal replay, which
-//!   refuses it; it is **not** created by the seal (`Restorable::SEALED`
-//!   is `false` for exactly this shape) and cannot be inserted into. "No
-//!   writer yet" is a fact of the type, not of the code; the
-//!   increment that first writes the table replaces this shape with the
-//!   table's codec and bumps `SCHEMA_VERSION`.
+//!   refuses it; it is **not** created by the seal (`shekyl-chain-store`'s
+//!   `Restorable::SEALED` is `false` for exactly this shape) and cannot be
+//!   inserted into. "No writer yet" is a fact of the type, not of the
+//!   code; the increment that first writes the table replaces this shape
+//!   with the table's codec and bumps `SCHEMA_VERSION`.
 //!
 //! `&[u8]` is not a value type, and there is no multimap in the catalogue
 //! (S-OUT-KI SOK-1): every value is one of the four shapes above.
@@ -55,7 +59,8 @@
 //! a row under the wrong codec, or inserting bytes of the wrong codec — is
 //! closed by the Rust type instead: a `Coded<V>` table yields
 //! [`Encoded<'_, V>`] from every read and accepts only `Encoded<'_, V>` on
-//! every write, and the only way to make one is [`Canonical::encoded`].
+//! every write. [`Canonical::encoded`] is the constructor this crate
+//! offers; the guarantee is the store's insertion boundary, below.
 //! The two guards are different mechanisms with different reach; neither
 //! is "the name guards the type."
 //!
@@ -67,7 +72,8 @@
 //! into a panic where today it is `CodecError` → SI-7 and a halted writer.
 //! So `Coded<V>` does not decode in `from_bytes`. It hands back the bytes,
 //! tagged; [`Encoded::decode`] is where `V::decode` runs, strict and
-//! fallible, exactly where `chain_reads::cell` ran it before. The open-time
+//! fallible, exactly where the daemon store's `chain_reads::cell` ran it
+//! before. The open-time
 //! guard is gained without touching the decode path.
 //!
 //! # `fixed_width` is a layout choice, made deliberately
@@ -85,23 +91,23 @@
 //! two boundaries, stated exactly. `Canonical::encoded` cannot produce the
 //! wrong width. But `redb::Value::from_bytes` is a **public trait method**,
 //! so a caller can construct an `Encoded<V>` over any bytes — constructor
-//! visibility alone is not the guarantee. So every write through this
-//! crate's table handles checks the row first (`store::keyed::check_row`)
+//! visibility alone is not the guarantee. So every write through a
+//! store's own table handles checks the row first
+//! (`shekyl-chain-store`'s `store::keyed::check_row`)
 //! and refuses as `StoreCannot::RowWidth` or `StoreCannot::RowIllFormed`,
 //! and the journal replay runs
-//! `V::decode` — exact width — as [`Restorable::well_formed`] before
+//! `V::decode` — exact width — as `Restorable::well_formed` before
 //! `from_bytes`. Reporting the width is a layout change from `&[u8]` (which
 //! is variable-width), not pure metadata; it rides the `SCHEMA_VERSION` bump
 //! of the commit that lands it, as any layout change does.
 //!
-//! [`Restorable::well_formed`]: crate::store::undo::Restorable::well_formed
 
 use core::fmt;
 use core::marker::PhantomData;
 
 use redb::{TypeName, Value};
 
-use super::{Canonical, CodecError};
+use crate::{Canonical, CodecError};
 
 // ---------------------------------------------------------------------------
 // Coded<V>
@@ -123,12 +129,14 @@ impl<V> fmt::Debug for Coded<V> {
 /// bytes, borrowed from the transaction, **not yet decoded**.
 ///
 /// This is `Coded<V>`'s `SelfType` — what a read hands back and what a
-/// write accepts. Outside this module the only constructor is
-/// [`Canonical::encoded`] (via [`EncodedBuf::as_encoded`]), so a
-/// `Coded<V>` table cannot be handed bytes that did not come out of
-/// `V::encode`; and the only exits are [`decode`](Self::decode) — strict,
-/// fallible, `V::decode` — and the raw [`bytes`](Self::bytes) for the
-/// journal's post-image digest.
+/// write accepts. The constructor this crate offers is
+/// [`Canonical::encoded`] (via [`EncodedBuf::as_encoded`]);
+/// `redb::Value::from_bytes` is public and produces one over any bytes,
+/// which is why a `Coded<V>` table's rows are held to `V::encode` at each
+/// store's insertion boundary (module docs, *Two guards*) rather than
+/// here. The exits are [`decode`](Self::decode) — strict, fallible,
+/// `V::decode` — and the raw [`bytes`](Self::bytes) for the journal's
+/// post-image digest.
 #[derive(Clone, Copy)]
 pub struct Encoded<'a, V> {
     bytes: &'a [u8],
@@ -150,20 +158,6 @@ impl<'a, V: Canonical> Encoded<'a, V> {
     #[must_use]
     pub const fn bytes(self) -> &'a [u8] {
         self.bytes
-    }
-}
-
-#[cfg(test)]
-impl<'a, V> Encoded<'a, V> {
-    /// Name arbitrary bytes as a row of a `Coded<V>` table **without**
-    /// going through `V::encode` — the one door the guard leaves open, and
-    /// only under `cfg(test)`, so the tests that prove a corrupt row is
-    /// SI-7 can plant one. Production has no such constructor.
-    pub(crate) const fn forged(bytes: &'a [u8]) -> Self {
-        Self {
-            bytes,
-            _codec: PhantomData,
-        }
     }
 }
 
@@ -223,9 +217,8 @@ impl<V: Canonical + 'static> Value for Coded<V> {
 
     /// The engine's constructor: bytes it stored come back tagged, not
     /// decoded (module docs). Reached from a read, and from the journal
-    /// replay after [`Restorable::well_formed`] has run `V::decode`.
+    /// replay after `Restorable::well_formed` has run `V::decode`.
     ///
-    /// [`Restorable::well_formed`]: crate::store::undo::Restorable::well_formed
     fn from_bytes<'a>(data: &'a [u8]) -> Encoded<'a, V>
     where
         Self: 'a,
@@ -380,7 +373,7 @@ impl Value for Present {
     where
         Self: 'a,
     {
-        // Width is the engine's and this crate's write boundary; replay
+        // Width is the engine's and the store's write boundary; replay
         // runs `Restorable::well_formed` (the width check) first.
         Present
     }
@@ -407,7 +400,7 @@ impl Value for Present {
 /// Its `SelfType` is [`NoRow`], which has no values: `insert` on an
 /// `Unshaped` table does not type-check, and `from_bytes` — reachable only
 /// if a file somehow held a row — is unreachable by construction and says
-/// so. The journal replay refuses first ([`Restorable::well_formed`]), so
+/// so. The journal replay refuses first (`Restorable::well_formed`), so
 /// a damaged journal naming an unshaped table is SI-7, not a panic.
 ///
 /// One `TypeName` for every unshaped table is deliberate: the guard has
@@ -415,7 +408,6 @@ impl Value for Present {
 /// the table's own codec name — in the commit that gives the table a
 /// writer.
 ///
-/// [`Restorable::well_formed`]: crate::store::undo::Restorable::well_formed
 #[derive(Debug)]
 pub struct Unshaped;
 
@@ -452,52 +444,42 @@ impl Value for Unshaped {
 
 #[cfg(test)]
 mod tests {
-    use shekyl_difficulty::CumulativeDifficulty;
-    use shekyl_types::{BlockHash, BlockWeight, LongTermWeight, Timestamp};
-    use shekyl_units::AtomicUnits;
+    use shekyl_types::BlockHeight;
 
     use super::*;
-    use crate::codec::BlockInfo;
 
-    fn info() -> BlockInfo {
-        BlockInfo {
-            timestamp: Timestamp::from_raw(7),
-            coins_generated: AtomicUnits::from_raw(11),
-            weight: BlockWeight::from_raw(13),
-            cumulative_difficulty: CumulativeDifficulty::from_raw(17),
-            hash: BlockHash::from_bytes([0xAB; 32]),
-            rct_outputs: 19,
-            long_term_weight: LongTermWeight::from_raw(23),
-            cumulative_tx_count: 0,
-            long_term_effective_median: LongTermWeight::ZERO,
-        }
+    // `BlockHeight` is a codec this crate owns (`vocabulary`), so the shape
+    // tests do not reach into a store for a subject. Each store's own
+    // codecs are exercised through these shapes in that store's tests.
+    fn height() -> BlockHeight {
+        BlockHeight::from_raw(0x0102_0304_0506_0708)
     }
 
     #[test]
     fn coded_round_trips_through_the_engine_constructor() {
-        let buf = info().encoded();
-        let stored = <Coded<BlockInfo> as Value>::as_bytes(&buf.as_encoded()).to_vec();
-        assert_eq!(stored, info().encode(), "stored bytes are V::encode");
-        let back = <Coded<BlockInfo> as Value>::from_bytes(&stored);
-        assert_eq!(back.decode().expect("decodes"), info());
+        let buf = height().encoded();
+        let stored = <Coded<BlockHeight> as Value>::as_bytes(&buf.as_encoded()).to_vec();
+        assert_eq!(stored, height().encode(), "stored bytes are V::encode");
+        let back = <Coded<BlockHeight> as Value>::from_bytes(&stored);
+        assert_eq!(back.decode().expect("decodes"), height());
     }
 
     #[test]
     fn coded_reports_the_codecs_declared_width_and_name() {
         assert_eq!(
-            <Coded<BlockInfo> as Value>::fixed_width(),
-            BlockInfo::FIXED_WIDTH
+            <Coded<BlockHeight> as Value>::fixed_width(),
+            BlockHeight::FIXED_WIDTH
         );
         assert_eq!(
-            <Coded<BlockInfo> as Value>::type_name(),
-            TypeName::new("shekyl::Coded<block_info>")
+            <Coded<BlockHeight> as Value>::type_name(),
+            TypeName::new("shekyl::Coded<block_height>")
         );
     }
 
     #[test]
     fn coded_decode_is_the_strict_codec_not_the_engine() {
         let short = [0u8; 3];
-        let row = <Coded<BlockInfo> as Value>::from_bytes(&short);
+        let row = <Coded<BlockHeight> as Value>::from_bytes(&short);
         assert!(
             row.decode().is_err(),
             "a malformed row is CodecError, never a panic"
