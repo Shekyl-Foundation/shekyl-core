@@ -2189,7 +2189,7 @@ increment that touches it). Stated once, in the `shape` module — in
 `shekyl-store-codec` since the move (last bullet); the statement did
 not change with its address:
 
-- A value is one of exactly three shapes. **`Coded<V>`** — rows are
+- A value is one of exactly four shapes. **`Coded<V>`** — rows are
   `V::encode` under a `Canonical` codec, `TypeName` = `shekyl::Coded<{V::NAME}>`
   — the wrapper's name carrying the codec's, which the codec contract already
   forbids reusing for a different layout; `tables.snap` pins the string.
@@ -2267,7 +2267,9 @@ not change with its address:
   `CodecError`, `exact` and the value shapes (`Coded`, `Blob`, `Present`,
   `Unshaped`) are store-engine-generic and now live in `shekyl-store-codec`
   (plan: [`CURVE_TREE_STORE_SHAPES.md`](CURVE_TREE_STORE_SHAPES.md), Round 0
-  executed 2026-09-18; PR A), with `shekyl-chain-store` re-exporting at
+  executed 2026-09-18 and **closed as record** the same day with
+  [`WALLET_SIDE_STORE.md`](WALLET_SIDE_STORE.md) as successor; PR A is the
+  one increment that survived the closure), with `shekyl-chain-store` re-exporting at
   `crate::codec::*` so no import path moved. The move was taken **ahead of**
   the wallet-side curve-tree backend
   (`shekyl-curve-tree/src/store/redb_backend.rs`: `leaves`,
