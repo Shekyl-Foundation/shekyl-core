@@ -59,26 +59,77 @@ use shekyl_p_host::DaemonTipCache;
 
 use crate::engine::prpc::PersonaIsolatedTransport;
 
-/// How often the tip is re-read.
+/// How often the tip is re-read, as a divisor of [`tip_max_age`].
 ///
-/// Four reads per block target, so the cache's age bound (one block target,
-/// see [`tip_max_age`]) is met with three consecutive failed polls of slack
-/// before the gate starts refusing. A loopback `get_info` is cheap; the cost
-/// of being wrong here is a slash.
+/// Four reads per age bound, so three consecutive failed polls still leave
+/// the gate answering. A loopback `get_info` is cheap; the cost of being
+/// wrong here is a slash.
 pub(crate) const TIP_REFRESH_INTERVAL_DIVISOR: u32 = 4;
 
-/// The age a stamped tip may reach before the gate stops trusting it: one
-/// block target.
+/// How many block targets of wall clock a stamped tip may age before the
+/// gate stops trusting it.
 ///
-/// **Derived, not picked.** The gate tolerates `±L` blocks (`L = 4`); a cached
-/// tip is wrong by however many blocks have passed since it was stamped. One
-/// block target caps that error at one block, a quarter of the tolerance, so
-/// cache age can never be what pushes an honest `P` out of the window. Sizing
-/// it at `L` blocks instead would spend the entire budget on staleness and
-/// leave nothing for the clock skew and propagation the window is actually
-/// for.
+/// # Wall clock does not bound block distance (Copilot F1)
+///
+/// What the gate actually needs is a bound on **block distance**: a cached
+/// tip `k` blocks behind the chain shifts `P`'s gate centre down by `k`, and
+/// an honest challenge is refused once `k > L`
+/// ([`PASS_ANCHOR_LAG_BLOCKS`]). An earlier version of this constant claimed
+/// one block target "caps that error at one block, so cache age can never be
+/// what pushes an honest `P` out of the window". **That was false**, and the
+/// error is worth naming precisely because it is seductive: a block target
+/// is the *expected* inter-arrival time of a Poisson process, not a ceiling
+/// on it. Any number of blocks can arrive in any interval; only the
+/// probability falls off.
+///
+/// So the honest statement is a probability, not a guarantee. With arrivals
+/// Poisson at rate `1/T` and a cache of age `a`, the blocks missed are
+/// `N ~ Poisson(a/T)` and the gate is pushed out when `N > L`:
+///
+/// | cache age | `P(N > L)` |
+/// |---|---|
+/// | 30 s (one refresh interval) | `6.6e-6` |
+/// | 60 s | `1.7e-4` |
+/// | 120 s (this bound) | `3.7e-3` |
+///
+/// In steady state the age at a challenge is roughly uniform on one refresh
+/// interval, giving **~1.2e-6** — about one challenge in a million. The
+/// `3.7e-3` row is reached only after three consecutive failed polls.
+///
+/// The review's framing — that five blocks inside 120 s is "an ordinary
+/// event, not a tail case" — overstates it by about two and a half orders
+/// of magnitude at the bound, and by six at the operating point. The
+/// reasoning error it identifies is nonetheless real, and the claim above
+/// is now a measured residual instead of a guarantee that cannot hold.
+///
+/// # This multiplier is the ruled knob, not a derivation
+///
+/// The value is **1** because that is what shipped and what was ruled
+/// against; it is not implied by anything. Tightening it buys residual and
+/// costs polls:
+///
+/// | budget on `P(N > L)` | age bound | multiplier | refresh interval |
+/// |---|---|---|---|
+/// | `1e-2` | 153 s | 1.28 | 38 s |
+/// | `1e-3` | 89 s | 0.74 | 22 s |
+/// | `1e-4` | 53 s | 0.44 | 13 s |
+/// | `1e-5` | 33 s | 0.27 | **8 s** |
+///
+/// Two couplings a reader changing this must see. The refresh interval is
+/// [`TIP_REFRESH_INTERVAL_DIVISOR`] of the bound, so it tightens in step and
+/// the "three failed polls of slack" property is preserved at any value.
+/// And it has a floor: `CLAIM_SOURCE_TIMEOUT` is 10 s, so a budget of `1e-5`
+/// asks for an 8 s interval — shorter than one poll is allowed to take, which
+/// is incoherent. Budgets at or below `1e-5` need the divisor revisited too.
+pub(crate) const TIP_MAX_AGE_BLOCK_TARGETS: u64 = 1;
+
+/// The age a stamped tip may reach before the gate stops trusting it.
+///
+/// Derived from the chain's block target and
+/// [`TIP_MAX_AGE_BLOCK_TARGETS`] — no seconds literal lives here, and the
+/// multiplier carries its own justification and its residual.
 pub(crate) fn tip_max_age(daa_target_seconds: u64) -> Duration {
-    Duration::from_secs(daa_target_seconds)
+    Duration::from_secs(daa_target_seconds.saturating_mul(TIP_MAX_AGE_BLOCK_TARGETS))
 }
 
 /// The poll cadence for a given block target.
@@ -290,8 +341,10 @@ pub(crate) async fn run_daemon_tip_refresher<R>(
 
 #[cfg(test)]
 mod tests {
+    use super::super::task::CLAIM_SOURCE_TIMEOUT;
     use super::*;
     use serde_json::json;
+    use shekyl_archival_retention::pass_anchor::PASS_ANCHOR_LAG_BLOCKS;
     use shekyl_rpc_client::{Rpc, RpcError};
 
     /// A transport that answers every call with one canned result.
@@ -514,9 +567,48 @@ mod tests {
             interval * TIP_REFRESH_INTERVAL_DIVISOR <= max_age,
             "the cache must not expire before the poll that would refresh it"
         );
+        // The interval must not ask for a poll shorter than one poll is
+        // allowed to take. This is the floor the age-bound table names, and
+        // it is what makes budgets at or below 1e-5 incoherent without also
+        // revisiting the divisor.
         assert!(
-            max_age * 4 <= Duration::from_secs(BLOCK_TARGET * 4 * 4),
-            "one block target is well inside the gate's +/-4 block tolerance"
+            interval >= CLAIM_SOURCE_TIMEOUT,
+            "a refresh interval below the RPC timeout cannot be honoured"
+        );
+        // The bound is stated in block targets, not seconds: changing the
+        // chain's block target moves it, and no seconds literal survives in
+        // the derivation.
+        assert_eq!(
+            tip_max_age(BLOCK_TARGET * 2),
+            max_age * 2,
+            "the bound tracks the block target"
+        );
+    }
+
+    /// The residual the age bound leaves is a probability, and the doc
+    /// states it. This pins the model's arithmetic so the table cannot
+    /// drift from the constant it justifies: at the bound the cache is one
+    /// block target old, so the missed-block count is Poisson(1) and the
+    /// gate is pushed out when more than `L` arrive.
+    #[test]
+    fn the_documented_residual_matches_the_poisson_model() {
+        let lambda = TIP_MAX_AGE_BLOCK_TARGETS as f64; // age / T at the bound
+        let l = u32::try_from(PASS_ANCHOR_LAG_BLOCKS).expect("L is small");
+        // P(N > L) = 1 - sum_{k=0..L} e^-lambda lambda^k / k!
+        let mut term = (-lambda).exp();
+        let mut cdf = term;
+        for k in 1..=l {
+            term *= lambda / f64::from(k);
+            cdf += term;
+        }
+        let residual = 1.0 - cdf;
+        assert!(
+            (residual - 3.66e-3).abs() < 1e-4,
+            "documented 3.7e-3 at the bound, computed {residual:e}"
+        );
+        assert!(
+            residual < 1e-2,
+            "a residual above 1% would make the bound indefensible without a ruling"
         );
     }
 

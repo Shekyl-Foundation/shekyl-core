@@ -46,13 +46,17 @@
 //! the shape that trait's doc already anticipates ("a host that stamps an
 //! atomic is also fine").
 //!
-//! A cached height is wrong by however long it has sat. That error is
-//! measured in the same unit as the gate's tolerance, so the bound is a
-//! wall-clock age chosen well under `L` blocks by the caller that knows the
-//! block target — not a constant picked here. Past `max_age` the reading is
-//! [`None`], which is the same answer as "unreadable" and takes the same
-//! path: the shared 404 plus a `ServeCounters` lookup failure. No new error
-//! surface.
+//! A cached height is wrong by however many BLOCKS have arrived while it
+//! sat, and that count is not something a wall clock bounds — block arrival
+//! is Poisson, so any number can arrive in any interval and only the
+//! probability falls off. The age bound therefore buys a *residual*, not a
+//! guarantee, and the caller that sets it owns both: it knows the block
+//! target, and its own doc states the probability its choice leaves. This
+//! type holds the policy's consequence, not its justification.
+//!
+//! Past `max_age` the reading is [`None`], which is the same answer as
+//! "unreadable" and takes the same path: the shared 404 plus a
+//! `ServeCounters` lookup failure. No new error surface.
 
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
