@@ -466,7 +466,7 @@ impl DaemonEngine for DaemonClient {
     fn get_health(&self) -> impl Send + Future<Output = Result<DaemonHealth, Self::Error>> {
         async move {
             let info: Value = self.json_rpc_call("get_info", None).await?;
-            synced_chain_facts::health_from_get_info(&info)
+            Ok(synced_chain_facts::health_from_get_info(&info)?)
         }
     }
 }

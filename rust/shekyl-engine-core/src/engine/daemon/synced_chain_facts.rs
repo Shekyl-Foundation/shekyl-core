@@ -469,6 +469,66 @@ fn tip_of(count: ChainCount) -> BlockHeight {
     })
 }
 
+/// A `get_info` reply that does not meet this decoder's contract — one
+/// member per mandatory field and the way it can fail.
+///
+/// This is the error contract of [`health_from_get_info`],
+/// [`top_hash_from_get_info`] and [`fetch_synced_chain_facts`], as a type
+/// rather than a paragraph: a caller that wants to know which faults exist
+/// reads the members, and a new mandatory field cannot be added without
+/// adding one. Every member is a **contract** fault — the daemon answered,
+/// and its answer is not the shape this wallet was built against — which is
+/// why all of them convert to [`RpcError::InvalidNode`] and none to a
+/// transport error: [`TimelineBreak::from_facts_error`] reads that
+/// distinction, and a caller must not send an operator to the network for
+/// a version mismatch.
+///
+/// The fields that are **not** here, and why: `synchronized` absent reads
+/// `false`, which is the refusing direction, so its absence costs nothing
+/// that a fault would protect; the two connection counts default to zero,
+/// which is honestly "none known" and only ever routes to the operator-alarm
+/// rung. Both are declared on the response (`KV_SERIALIZE(synchronized)`,
+/// `core_rpc_server_commands_defs.h:302`), so their absence is still drift —
+/// but drift in a direction this decoder can absorb without claiming
+/// anything false.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GetInfoFault {
+    /// `height` absent, or not an unsigned integer. Defaulting it would
+    /// mint facts for a chain of length zero that does not exist.
+    HeightMissing,
+    /// `target_height` absent, or not an unsigned integer. Cannot default:
+    /// `0` is the synchronized *sentinel*, so a default would manufacture
+    /// the claim [`SyncedChainFacts::new`] exists to verify.
+    TargetHeightMissing,
+    /// `top_block_hash` absent, or not a string. There is no honest default
+    /// for an identity.
+    TopBlockHashMissing,
+    /// `top_block_hash` is not hex.
+    TopBlockHashNotHex,
+    /// `top_block_hash` decodes to other than 32 bytes.
+    TopBlockHashWrongLength,
+}
+
+impl std::fmt::Display for GetInfoFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::HeightMissing => "get_info missing height",
+            Self::TargetHeightMissing => "get_info missing target_height",
+            Self::TopBlockHashMissing => "get_info missing top_block_hash",
+            Self::TopBlockHashNotHex => "get_info top_block_hash is not hex",
+            Self::TopBlockHashWrongLength => "get_info top_block_hash is not 32 bytes",
+        })
+    }
+}
+
+impl From<GetInfoFault> for RpcError {
+    /// Every member is a contract fault, so every member is `InvalidNode` —
+    /// never a transport error.
+    fn from(fault: GetInfoFault) -> Self {
+        RpcError::InvalidNode(fault.to_string())
+    }
+}
+
 /// Decode the daemon's `get_info` result into [`DaemonHealth`].
 ///
 /// The single parse site for this response, shared by
@@ -479,7 +539,7 @@ fn tip_of(count: ChainCount) -> BlockHeight {
 ///
 /// Untrusted-daemon input is parsed defensively (`20-rust-vs-cpp-policy` §3):
 /// a response missing the mandatory `height` field is a malformed reply
-/// ([`RpcError::InvalidNode`]), not a silently defaulted zero — a false
+/// ([`GetInfoFault::HeightMissing`]), not a silently defaulted zero — a false
 /// "synced at height 0" would be a *constructible* [`SyncedChainFacts`]
 /// vouching for a view that does not exist.
 ///
@@ -487,18 +547,22 @@ fn tip_of(count: ChainCount) -> BlockHeight {
 /// take a default: `0` is not a neutral absence, it is the *synchronized
 /// sentinel*, so defaulting it would have this decoder manufacture the very
 /// claim [`SyncedChainFacts::new`] exists to verify. Absent or non-numeric
-/// is [`RpcError::InvalidNode`]. Only the connection counts default, because
-/// zero is honestly "none known" there and routes at worst to the
-/// operator-alarm rung; the sum is `saturating_add` (rule §4).
+/// is [`GetInfoFault::TargetHeightMissing`]. Only the connection counts
+/// default, because zero is honestly "none known" there and routes at worst
+/// to the operator-alarm rung; the sum is `saturating_add` (rule §4).
+/// `synchronized` absent reads `false`, the refusing direction.
 ///
 /// # Errors
 ///
-/// [`RpcError::InvalidNode`] when `height` is absent or not an integer.
-pub(crate) fn health_from_get_info(info: &Value) -> Result<DaemonHealth, RpcError> {
+/// [`GetInfoFault::HeightMissing`] and [`GetInfoFault::TargetHeightMissing`]
+/// — the two mandatory fields this projection carries. The identity is
+/// decoded beside it by [`top_hash_from_get_info`], not here: the watchdog's
+/// health projection does not carry a chain identity.
+pub(crate) fn health_from_get_info(info: &Value) -> Result<DaemonHealth, GetInfoFault> {
     let height = info
         .get("height")
         .and_then(Value::as_u64)
-        .ok_or_else(|| RpcError::InvalidNode("get_info missing height".to_string()))?;
+        .ok_or(GetInfoFault::HeightMissing)?;
     // **Mandatory, and this one cannot take a default.** `0` is not a
     // neutral absence here — it is the synchronized *sentinel*, so defaulting
     // an absent or non-numeric `target_height` would have the decoder
@@ -516,7 +580,7 @@ pub(crate) fn health_from_get_info(info: &Value) -> Result<DaemonHealth, RpcErro
     let target_height = info
         .get("target_height")
         .and_then(Value::as_u64)
-        .ok_or_else(|| RpcError::InvalidNode("get_info missing target_height".to_string()))?;
+        .ok_or(GetInfoFault::TargetHeightMissing)?;
     let outgoing = info
         .get("outgoing_connections_count")
         .and_then(Value::as_u64)
@@ -548,18 +612,19 @@ pub(crate) fn health_from_get_info(info: &Value) -> Result<DaemonHealth, RpcErro
 ///
 /// # Errors
 ///
-/// [`RpcError::InvalidNode`] when the field is absent, not a string, not
-/// hex, or not 32 bytes.
-pub(crate) fn top_hash_from_get_info(info: &Value) -> Result<BlockHash, RpcError> {
+/// [`GetInfoFault::TopBlockHashMissing`] when the field is absent or not a
+/// string, [`GetInfoFault::TopBlockHashNotHex`] when it does not decode as
+/// hex, [`GetInfoFault::TopBlockHashWrongLength`] when it decodes to other
+/// than 32 bytes.
+pub(crate) fn top_hash_from_get_info(info: &Value) -> Result<BlockHash, GetInfoFault> {
     let hex_str = info
         .get("top_block_hash")
         .and_then(Value::as_str)
-        .ok_or_else(|| RpcError::InvalidNode("get_info missing top_block_hash".to_string()))?;
-    let bytes = hex::decode(hex_str)
-        .map_err(|e| RpcError::InvalidNode(format!("get_info top_block_hash is not hex: {e}")))?;
-    let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
-        RpcError::InvalidNode("get_info top_block_hash is not 32 bytes".to_string())
-    })?;
+        .ok_or(GetInfoFault::TopBlockHashMissing)?;
+    let bytes = hex::decode(hex_str).map_err(|_| GetInfoFault::TopBlockHashNotHex)?;
+    let bytes: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| GetInfoFault::TopBlockHashWrongLength)?;
     Ok(BlockHash::from_bytes(bytes))
 }
 
@@ -578,8 +643,13 @@ pub(crate) fn top_hash_from_get_info(info: &Value) -> Result<BlockHash, RpcError
 ///
 /// # Errors
 ///
-/// [`RpcError`] from the transport, or [`RpcError::InvalidNode`] if the reply
-/// is missing `height`.
+/// A transport [`RpcError`] when the daemon did not answer; otherwise
+/// [`RpcError::InvalidNode`] carrying one [`GetInfoFault`] — the reply
+/// arrived and is not the contract: `height` or `target_height` absent or
+/// non-numeric, `top_block_hash` absent, not a string, not hex, or not 32
+/// bytes. The two classes are what [`TimelineBreak::from_facts_error`]
+/// separates, so a contract fault reaches an operator as "check the
+/// daemon's version", never as "check the network".
 pub(crate) async fn fetch_synced_chain_facts<R: Rpc>(
     rpc: &R,
 ) -> Result<Option<SyncedChainFacts>, RpcError> {

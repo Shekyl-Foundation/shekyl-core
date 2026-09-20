@@ -94,10 +94,7 @@ fn the_tip_is_one_below_the_count_and_an_empty_chain_reads_zero() {
 fn a_reply_without_a_height_is_refused_rather_than_defaulted() {
     let err = health_from_get_info(&json!({ "target_height": 0 }))
         .expect_err("a missing height is malformed");
-    assert!(
-        matches!(err, RpcError::InvalidNode(ref m) if m.contains("height")),
-        "the refusal names the missing field: {err:?}",
-    );
+    assert_eq!(err, GetInfoFault::HeightMissing);
 }
 
 /// Only the connection counts are optional, and only because zero is
@@ -118,10 +115,7 @@ fn only_the_non_destructive_connection_counts_default() {
 
     let err = health_from_get_info(&json!({ "height": 500, "synchronized": true }))
         .expect_err("an absent target_height is contract drift, not an omission");
-    assert!(
-        matches!(err, RpcError::InvalidNode(ref m) if m.contains("target_height")),
-        "the refusal names the missing field: {err:?}"
-    );
+    assert_eq!(err, GetInfoFault::TargetHeightMissing);
 }
 
 /// A non-numeric `target_height` is refused for the same reason — the
@@ -130,7 +124,7 @@ fn only_the_non_destructive_connection_counts_default() {
 fn a_non_numeric_target_height_is_refused_rather_than_defaulted() {
     let err = health_from_get_info(&json!({ "height": 500, "target_height": "soon" }))
         .expect_err("a string target_height does not decode");
-    assert!(matches!(err, RpcError::InvalidNode(_)), "{err:?}");
+    assert_eq!(err, GetInfoFault::TargetHeightMissing);
 }
 
 /// Connection counts are summed with `saturating_add`, so a daemon reporting
@@ -302,15 +296,28 @@ fn a_failed_facts_read_is_classified_by_its_cause() {
 /// ledger carry observations across a reorg it could not see.
 #[test]
 fn a_reply_without_a_top_hash_is_refused_rather_than_defaulted() {
-    for bad in [
-        json!({ "height": 5, "target_height": 0 }),
-        json!({ "height": 5, "target_height": 0, "top_block_hash": "not hex" }),
-        json!({ "height": 5, "target_height": 0, "top_block_hash": "abcd" }),
-        json!({ "height": 5, "target_height": 0, "top_block_hash": 7 }),
+    for (bad, fault) in [
+        (
+            json!({ "height": 5, "target_height": 0 }),
+            GetInfoFault::TopBlockHashMissing,
+        ),
+        (
+            json!({ "height": 5, "target_height": 0, "top_block_hash": 7 }),
+            GetInfoFault::TopBlockHashMissing,
+        ),
+        (
+            json!({ "height": 5, "target_height": 0, "top_block_hash": "not hex" }),
+            GetInfoFault::TopBlockHashNotHex,
+        ),
+        (
+            json!({ "height": 5, "target_height": 0, "top_block_hash": "abcd" }),
+            GetInfoFault::TopBlockHashWrongLength,
+        ),
     ] {
-        assert!(
-            matches!(top_hash_from_get_info(&bad), Err(RpcError::InvalidNode(_))),
-            "must refuse: {bad}"
+        assert_eq!(
+            top_hash_from_get_info(&bad).expect_err("must refuse"),
+            fault,
+            "each shape names its own fault: {bad}"
         );
     }
     assert_eq!(
@@ -362,4 +369,42 @@ fn a_view_anchors_at_its_observed_height_unless_rolled_back() {
     )
     .anchor()
     .is_none());
+}
+
+/// **The error contract, as a type.** Every `get_info` contract fault is
+/// `InvalidNode` — the daemon answered, and its answer is not the shape this
+/// wallet was built against — and so classifies as `FactsUnreadable`, never
+/// as the daemon being unreachable. A caller reading a fault as a transport
+/// failure would send an operator to the network for a version mismatch.
+///
+/// Enumerated over every member so a fault added later without a mapping
+/// is a compile error here, not a silent transport misclassification.
+#[test]
+fn every_contract_fault_is_a_node_fault_and_never_a_transport_failure() {
+    for fault in [
+        GetInfoFault::HeightMissing,
+        GetInfoFault::TargetHeightMissing,
+        GetInfoFault::TopBlockHashMissing,
+        GetInfoFault::TopBlockHashNotHex,
+        GetInfoFault::TopBlockHashWrongLength,
+    ] {
+        let err = RpcError::from(fault);
+        assert!(
+            matches!(err, RpcError::InvalidNode(ref m) if m.starts_with("get_info ")),
+            "{fault:?} converts to InvalidNode naming the reply: {err:?}"
+        );
+        assert_eq!(
+            TimelineBreak::from_facts_error(&err),
+            TimelineBreak::FactsUnreadable,
+            "{fault:?} is a contract fault, not a connectivity problem"
+        );
+    }
+    // The member list above is the whole enum: a new member fails here.
+    let _exhaustive = |f: GetInfoFault| match f {
+        GetInfoFault::HeightMissing
+        | GetInfoFault::TargetHeightMissing
+        | GetInfoFault::TopBlockHashMissing
+        | GetInfoFault::TopBlockHashNotHex
+        | GetInfoFault::TopBlockHashWrongLength => (),
+    };
 }
