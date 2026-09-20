@@ -141,6 +141,15 @@ pub enum CorpusFault {
         /// The height it carried.
         found: BlockHeight,
     },
+    /// The next record would need a height past `u64::MAX`. Not a
+    /// representable chain; refused before anything is written or read, so
+    /// a header claiming `first_height = u64::MAX` with two records is
+    /// refused at `open`, and a writer at the last height refuses the next
+    /// `append` with no record landed.
+    HeightExhausted {
+        /// The last height this corpus can carry.
+        after: BlockHeight,
+    },
     /// A length prefix exceeds the wire's own cap; the record is not a
     /// block or a transaction.
     Oversized {
@@ -196,6 +205,10 @@ impl core::fmt::Display for CorpusFault {
             } => write!(
                 f,
                 "block {height}: body {index} hashes to {present:?}, header lists {listed:?}"
+            ),
+            Self::HeightExhausted { after } => write!(
+                f,
+                "no height follows {after}; the corpus cannot carry another record"
             ),
             Self::HeightGap { expected, found } => {
                 write!(
@@ -297,12 +310,14 @@ fn verified_candidate(
     Ok(Candidate::new(block, transactions))
 }
 
-/// The next height a contiguous corpus records. Exhausting `u64` is not a
-/// representable chain; saturating would write the same height twice.
-fn successor(height: BlockHeight) -> BlockHeight {
-    height
-        .checked_add(BlockCount::ONE)
-        .expect("corpus height space exhausted")
+/// The next height a contiguous corpus records, or `None` past `u64::MAX`.
+/// Exhausting the height space is not a representable chain; saturating
+/// would write the same height twice, and panicking would let a crafted
+/// header (`first_height = u64::MAX`) take the reader down after one valid
+/// record. `None` is carried as [`CorpusFault::HeightExhausted`] by whoever
+/// needed the successor, before it writes or reads anything.
+fn successor(height: BlockHeight) -> Option<BlockHeight> {
+    height.checked_add(BlockCount::ONE)
 }
 
 /// Byte offset of the header's `count` field: `MAGIC(8) ‖ version(4) ‖ net(1) ‖ first_height(8)`.
@@ -314,7 +329,9 @@ const COUNT_OFFSET: u64 = 8 + 4 + 1 + 8;
 /// after finish" is unrepresentable — there is no finished flag.
 pub struct CorpusWriter<W: Write + Seek> {
     out: W,
-    next: BlockHeight,
+    /// The height the next `append` records; `None` once `u64::MAX` has
+    /// been written.
+    next: Option<BlockHeight>,
     count: u64,
 }
 
@@ -338,7 +355,7 @@ impl<W: Write + Seek> CorpusWriter<W> {
         out.write_all(&0u64.to_le_bytes())?;
         Ok(Self {
             out,
-            next: first_height,
+            next: Some(first_height),
             count: 0,
         })
     }
@@ -354,7 +371,9 @@ impl<W: Write + Seek> CorpusWriter<W> {
     /// [`CorpusFault::Malformed`] for the record; [`CorpusFault::Oversized`]
     /// if a blob exceeds the wire cap; I/O.
     pub fn append(&mut self, block_blob: &[u8], tx_blobs: &[Vec<u8>]) -> Result<(), CorpusFault> {
-        let height = self.next;
+        let height = self.next.ok_or(CorpusFault::HeightExhausted {
+            after: BlockHeight::from_raw(u64::MAX),
+        })?;
         verified_candidate(height, block_blob, tx_blobs)?;
         // One buffer, one write: a verify failure writes nothing, and an
         // I/O error cannot leave a torn prefix the next append would
@@ -362,6 +381,8 @@ impl<W: Write + Seek> CorpusWriter<W> {
         let record = encode_record(height, block_blob, tx_blobs)?;
         self.out.write_all(&record)?;
         self.next = successor(height);
+        // `count` cannot outrun the height space: every record occupies one
+        // height, so `count ≤ u64::MAX − first_height + 1` fits.
         self.count = self
             .count
             .checked_add(1)
@@ -447,7 +468,9 @@ fn write_len_only<W: Write>(
 pub struct CorpusReader<R: BufRead> {
     input: R,
     net: CorpusNet,
-    next: BlockHeight,
+    /// The height the next record must carry; `None` once `u64::MAX` has
+    /// been read (a header that needs more is refused at `open`).
+    next: Option<BlockHeight>,
     declared: u64,
     read: u64,
     seq: SequenceNo,
@@ -476,10 +499,21 @@ impl<R: BufRead> CorpusReader<R> {
         let net = CorpusNet::from_tag(tag[0]).ok_or(CorpusFault::UnknownNet(tag[0]))?;
         let first = BlockHeight::from_raw(read_u64(&mut input)?);
         let declared = read_u64(&mut input)?;
+        // The header's own arithmetic must fit: `declared` records from
+        // `first` occupy `first ..= first + declared − 1`. A header that
+        // claims more than the height space holds is refused here, before
+        // any record is read, rather than after the last representable one.
+        if let Some(span) = declared.checked_sub(1) {
+            if first.to_raw().checked_add(span).is_none() {
+                return Err(CorpusFault::HeightExhausted {
+                    after: BlockHeight::from_raw(u64::MAX),
+                });
+            }
+        }
         Ok(Self {
             input,
             net,
-            next: first,
+            next: Some(first),
             declared,
             read: 0,
             seq: SequenceNo::FIRST,
@@ -523,9 +557,12 @@ impl<R: BufRead> CorpusReader<R> {
             }
             Err(e) => return Err(e),
         };
-        if height != self.next {
+        let expected = self.next.ok_or(CorpusFault::HeightExhausted {
+            after: BlockHeight::from_raw(u64::MAX),
+        })?;
+        if height != expected {
             return Err(CorpusFault::HeightGap {
-                expected: self.next,
+                expected,
                 found: height,
             });
         }
@@ -550,6 +587,7 @@ impl<R: BufRead> CorpusReader<R> {
             transactions.push(verified_tx(height, index, *want, &blob)?);
         }
         self.next = successor(height);
+        // Bounded by `declared`, which `open` proved fits the height space.
         self.read = self
             .read
             .checked_add(1)

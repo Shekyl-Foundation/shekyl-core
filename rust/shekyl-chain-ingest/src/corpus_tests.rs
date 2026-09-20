@@ -19,7 +19,7 @@ use super::*;
 fn coinbase(height: u64) -> Transaction {
     Transaction {
         prefix: TxPrefix {
-            unlock_time: height + 60,
+            unlock_time: height.saturating_add(60),
             inputs: vec![Input::Gen(height)],
             outputs: vec![Output {
                 amount: 0,
@@ -62,14 +62,16 @@ fn listed(tag: u8) -> Transaction {
 fn blobs(height: u64, n: usize) -> (Candidate, Vec<u8>, Vec<Vec<u8>>) {
     let bodies: Vec<Transaction> = (0..n)
         .map(|i| {
-            listed(0x80 + u8::try_from(i).expect("small") + u8::try_from(height).expect("small"))
+            // Distinct per (height, index); heights past u8 fold onto their
+            // low bits, which is fine for distinctness within one block.
+            listed(0x80 + u8::try_from(i).expect("small") + (height % 0x40) as u8)
         })
         .collect();
     let block = Block {
         header: BlockHeader {
             major_version: 1,
             minor_version: 0,
-            timestamp: 1_700_000_000 + height,
+            timestamp: 1_700_000_000u64.saturating_add(height),
             previous: BlockHash::from_bytes([0x11; 32]),
             nonce: 7,
             curve_tree_root: CurveTreeRoot::from_bytes([0x22; 32]),
@@ -331,5 +333,44 @@ fn a_truncated_corpus_is_refused_by_count_not_read_as_a_short_chain() {
             CorpusFault::CountMismatch { .. } | CorpusFault::Io(_)
         ),
         "{refused}"
+    );
+}
+
+#[test]
+fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
+    // A corpus may legitimately hold height u64::MAX. What it cannot do is
+    // carry a record after it — and a crafted header claiming to must be
+    // refused at `open`, not after the reader has yielded one valid record.
+    let last = BlockHeight::from_raw(u64::MAX);
+    let (_, b_last, t_last) = blobs(u64::MAX, 0);
+    let mut w =
+        CorpusWriter::create(Cursor::new(Vec::new()), CorpusNet::Fakechain, last).expect("header");
+    w.append(&b_last, &t_last)
+        .expect("the last height is representable");
+    let (_, b_more, t_more) = blobs(0, 0);
+    let refused = w.append(&b_more, &t_more).expect_err("no height follows");
+    assert!(
+        matches!(refused, CorpusFault::HeightExhausted { after } if after == last),
+        "{refused}"
+    );
+    let bytes = w.finish().expect("finish").into_inner();
+    // One record, readable.
+    let mut reader = CorpusReader::open(Cursor::new(bytes.clone())).expect("open");
+    assert_eq!(reader.declared(), 1);
+    reader
+        .next()
+        .expect("the u64::MAX record")
+        .expect("present");
+    assert!(reader.next().expect("clean end").is_none());
+    // The same bytes with the header claiming two records: refused at open,
+    // before any record is consulted.
+    let mut crafted = bytes;
+    crafted[21..29].copy_from_slice(&2u64.to_le_bytes());
+    assert!(
+        matches!(
+            CorpusReader::open(Cursor::new(crafted)).err(),
+            Some(CorpusFault::HeightExhausted { .. })
+        ),
+        "a header that outruns the height space is refused at open"
     );
 }

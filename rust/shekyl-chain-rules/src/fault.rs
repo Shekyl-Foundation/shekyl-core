@@ -99,10 +99,12 @@ pub enum Stale {
 /// View data that violates a store invariant, observed by a rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corrupt {
-    /// Cumulative difficulty decreased between two recorded heights (SI-10
-    /// holds it monotone; overflow of the same fold is SI-8).
+    /// Recorded cumulative work did not **strictly increase** between two
+    /// adjacent heights — a decrease *or an equal pair*; every target is at
+    /// least one, so both are impossible on a conforming store (SI-10;
+    /// overflow of the same fold is SI-8).
     CumulativeDifficultyNotMonotone {
-        /// The height whose cumulative difficulty is below its parent's.
+        /// The height whose cumulative difficulty is not above its parent's.
         at: BlockHeight,
     },
     /// The parent's cumulative difficulty plus this block's target does not
@@ -214,9 +216,10 @@ impl fmt::Display for Retry {
 impl fmt::Display for Corrupt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CumulativeDifficultyNotMonotone { at } => {
-                write!(f, "cumulative difficulty decreases at height {at:?} (SI-8)")
-            }
+            Self::CumulativeDifficultyNotMonotone { at } => write!(
+                f,
+                "cumulative difficulty does not increase at height {at:?} (SI-10)"
+            ),
             Self::CumulativeDifficultyOverflow => {
                 f.write_str("cumulative difficulty overflows past the parent")
             }
