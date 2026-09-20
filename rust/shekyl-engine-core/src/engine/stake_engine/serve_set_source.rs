@@ -211,9 +211,16 @@ impl<R: PersonaIsolatedTransport> EngineServeSetPinner<R> {
             .map_err(|e| format!("serve-set pin failed: {e:?}"))?;
         *self.last_pinned.lock().expect("pin view") = reply.pinned_now.clone();
         if reply.released > 0 {
+            // Counts, never ids (`WSS-20`). A released shard id matched
+            // against the chain's public bond history identifies `P`, and
+            // this sink is a plaintext file that outlives the process — the
+            // same at-rest adversary the encrypted wallet was ruled against.
+            // `releasable` is what the epoch gate cleared; `released` is what
+            // the store actually unpinned, and the two differ when a pin was
+            // already gone. Both counts are diagnostic; neither names a shard.
             tracing::info!(
                 released = reply.released,
-                shard_ids = ?releasable,
+                releasable = releasable.len(),
                 epochs_absent = EPOCHS_BEFORE_PIN_RELEASE,
                 "released serve-set pins: these shards were absent from the bond record \
                  across two consecutive settlement-epoch opens, so the last epoch they \
