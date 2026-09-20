@@ -178,9 +178,11 @@ read type under `store/` has an `unlock_time` field** (S-TX STX-9, gated
 from its commit 1). *Corrected 2026-09-19 (S-TX round 3):* the first form
 of this note said the store "projects it on no read", which was false —
 S-OUT-KI's `RecordedOutput.unlock_time` (`store/output_reads.rs:72`) was
-the one Rust projection, consumer-less; S-TX's commit 1 removes it. So this
-ruling, when made, finds no Rust consumer to unwind. The field's fate stays
-this item's.
+the one Rust projection, consumer-less; S-TX's first increment commit
+removed it (landed 2026-09-19; the gate
+`check_store_unlock_time_projection.py` is green and asserts the codec rows
+still declare the field). So this ruling, when made, finds no Rust consumer
+to unwind. The field's fate stays this item's.
 
 ### U-3 — Alt-chain / reorg handling (HIGH: large, unexamined, safety-critical)
 

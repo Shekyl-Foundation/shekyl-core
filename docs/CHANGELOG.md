@@ -4,6 +4,17 @@
 
 ### Daemon chain store
 
+- **Transaction read surface (S-TX, DRS-E1 increment 6).** `ReadSnapshot`
+  gains `tx_location` / `tx_record` by `TxHash` (returning `Option` — a hash
+  miss is ordinary), `tx_count`, `tx_prunable` / `tx_output_indices` by
+  `TxStorageId` (returning `AtIndex`, bound first against the dense count),
+  and `tx_locations(RangeInclusive<LmdbHashKey>)`, a bounded walk of
+  `tx_indices` in the table's own key order. `tx_prunable`'s answer is `Prunable { Retained, Discarded }`:
+  a discarded prunable region is a defined state (the hash row stays, the
+  bytes are the archival good), not an error. `TxRecord::wire_bytes`
+  recomposes a transaction's wire form from its segments. **No public read
+  type under the store hands out `unlock_time`** (gated); S-OUT-KI's
+  `RecordedOutput` loses that field. No layout change.
 - **Outputs and key images read surface (S-OUT-KI, DRS-E1 increment 5).**
   `ReadSnapshot` gains `has_key_image` (one body with the validator's
   `BatchView`), `key_images()` (the digest's `spent_keys` scan), and
