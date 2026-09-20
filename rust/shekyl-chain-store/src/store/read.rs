@@ -41,7 +41,8 @@ use core::ops::RangeInclusive;
 use redb::{Key, ReadOnlyTable, ReadTransaction, TableDefinition, Value};
 use shekyl_chain_rules::{AtHeight, Tip};
 use shekyl_types::{
-    BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight, TxHash,
+    BlockCount, BlockHash, BlockHeight, CurveTreeRoot, GlobalOutputIndex, KeyImage, LongTermWeight,
+    TxHash,
 };
 use shekyl_units::AtomicUnits;
 use shekyl_wire::Block;
@@ -523,37 +524,80 @@ impl ReadSnapshot<'_> {
     /// corrupt file means for its run.
     pub fn logical_state_digest_v0(&self) -> Result<[u8; 32], StoreError> {
         let tip = self.tip_row()?;
-        let mut hashes: Vec<[u8; 32]> = Vec::new();
-        if let Some((tip_height, _)) = tip {
-            let end = BlockHeight::from_raw(tip_height.saturating_add(1));
-            if let AtHeight::Recorded(rows) = self.block_infos(BlockHeight::ZERO..end)? {
-                for row in rows {
-                    let (_, info) = row?;
-                    hashes.push(*info.hash.as_bytes());
-                }
-            }
-        }
+        let hashes = self.block_hashes_through_tip(tip.as_ref())?;
         let mut spent: Vec<[u8; 32]> = Vec::new();
         for key_image in self.key_images()? {
             spent.push(*key_image?.as_bytes());
         }
-        let root = match tip {
-            None => CurveTreeRoot::EMPTY,
-            Some((tip_height, _)) => {
-                let key = tip_height.saturating_add(1);
-                chain_reads::cell(&self.txn, CURVE_TREE_ROOTS, key, "curve_tree_roots")
-                    .map_err(chain_reads::ReadFault::into_plain)?
-                    .ok_or(StoreInvariant::CellCorrupt {
-                        key: "curve_tree_roots",
-                        fault: CellFault::Absent,
-                    })?
-            }
-        };
+        let root = self.live_root(tip.as_ref())?;
         Ok(crate::digest_v0::digest_v0(
             &hashes,
             &spent,
             root.as_bytes(),
         ))
+    }
+
+    /// Height-ordered `block_info.hash` for `h ∈ 0..=tip`. An empty chain
+    /// is no hashes. A tip whose range classifies as [`AtHeight::AboveTip`]
+    /// is SI-7, not a successful digest of an empty chain.
+    fn block_hashes_through_tip(
+        &self,
+        tip: Option<&(u64, BlockInfo)>,
+    ) -> Result<Vec<[u8; 32]>, StoreError> {
+        let Some((tip_height, _)) = tip else {
+            return Ok(Vec::new());
+        };
+        let end = BlockHeight::from_raw(*tip_height)
+            .checked_add(BlockCount::ONE)
+            .expect("a recorded tip is not u64::MAX");
+        let rows = match self.block_infos(BlockHeight::ZERO..end)? {
+            AtHeight::Recorded(rows) => rows,
+            AtHeight::AboveTip => {
+                return Err(StoreInvariant::CellCorrupt {
+                    key: "block_info",
+                    fault: CellFault::Absent,
+                }
+                .into());
+            }
+        };
+        let mut hashes = Vec::new();
+        for row in rows {
+            let (_, info) = row?;
+            hashes.push(*info.hash.as_bytes());
+        }
+        let expected = tip_height
+            .checked_add(1)
+            .expect("a recorded tip is not u64::MAX");
+        let got = u64::try_from(hashes.len()).expect("hash count fits u64");
+        if got != expected {
+            return Err(StoreInvariant::CellCorrupt {
+                key: "block_info",
+                fault: CellFault::Absent,
+            }
+            .into());
+        }
+        Ok(hashes)
+    }
+
+    /// `curve_tree_roots[tip + 1]`, or [`CurveTreeRoot::EMPTY`] on an empty
+    /// chain. A tip with no live-root row is SI-7.
+    fn live_root(&self, tip: Option<&(u64, BlockInfo)>) -> Result<CurveTreeRoot, StoreError> {
+        match tip {
+            None => Ok(CurveTreeRoot::EMPTY),
+            Some((tip_height, _)) => {
+                let key = tip_height
+                    .checked_add(1)
+                    .expect("a recorded tip is not u64::MAX");
+                Ok(
+                    chain_reads::cell(&self.txn, CURVE_TREE_ROOTS, key, "curve_tree_roots")
+                        .map_err(chain_reads::ReadFault::into_plain)?
+                        .ok_or(StoreInvariant::CellCorrupt {
+                            key: "curve_tree_roots",
+                            fault: CellFault::Absent,
+                        })?,
+                )
+            }
+        }
     }
 
     // ------------------------------------------------------------------

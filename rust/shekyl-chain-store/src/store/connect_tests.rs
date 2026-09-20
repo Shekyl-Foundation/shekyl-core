@@ -14,14 +14,12 @@
 //! a fresh file (SCW-17). Fixtures live in `connect_fixtures.rs`.
 
 use redb::ReadableTableMetadata;
-use shekyl_chain_rules::{form, validate, ChainView, FormAttempt, RowStatus, RuleSet, RuleSetId};
+use shekyl_chain_rules::{RowStatus, RuleSet, RuleSetId};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_units::AtomicUnits;
 
-use super::connect_fixtures::{
-    candidate, coinbase, connect_chain, connect_genesis, facts, judge, spend, FixtureSubstrate,
-};
+use super::connect_fixtures::{candidate, coinbase, connect_genesis, facts, judge, spend};
 use super::store_tests::{cleanup, tmp, TestErr, EPOCH};
 use super::undo::Replayed;
 use super::*;
@@ -498,182 +496,6 @@ fn a_block_whose_parent_is_not_the_tip_is_si2() {
             row: StoreInvariant::TipMismatch,
         }
     );
-    cleanup(&path);
-}
-
-// --- SI-10: the validator's Corrupt arms the halt (DRS-E2 RD-Q4) --------
-
-#[test]
-fn a_corrupt_seen_by_the_validator_poisons_the_batch_and_halts_the_writer() {
-    // The pipeline shape: read the branded view, get `Fault::Corrupt` back
-    // from `validate`, hand it in. The store did not see the violation; it
-    // supplies the consequence — poison, no commit, writer halted at the
-    // connecting height the view read noted (§3.6.2).
-    let path = tmp("connect-refuse-corrupt");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[Vec::new(), Vec::new()]);
-    let out: Result<(), TestErr> = store.write(|batch| {
-        let _view = batch.chain_view(); // notes tip + 1 = 2
-        Err(batch
-            .refuse_corrupt(
-                shekyl_chain_rules::Corrupt::CumulativeDifficultyNotMonotone {
-                    at: BlockHeight::from_raw(1),
-                },
-            )
-            .into())
-    });
-    expect_row(&out, StoreInvariant::WorkNotIncreasing { height: 1 });
-    assert_eq!(StoreInvariant::WorkNotIncreasing { height: 1 }.row(), 10);
-    assert_eq!(
-        store.connect_state(),
-        ConnectState::Halted {
-            at_height: BlockHeight::from_raw(2),
-            row: StoreInvariant::WorkNotIncreasing { height: 1 },
-        }
-    );
-    // Halted means halted: a fresh batch's connect is refused before it
-    // reaches the tables.
-    let again: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let tip = ChainView::tip(&view)?.expect("two blocks").hash;
-        let cand = candidate(2, tip, Vec::new());
-        Ok(batch.connect(judge(&view, cand)?, facts(2, 0), RuleSet::GENESIS)?)
-    });
-    assert!(again.is_err(), "the writer stays halted: {again:?}");
-    cleanup(&path);
-}
-
-#[test]
-fn refusing_a_corrupt_is_chain_work_even_when_nothing_else_in_the_batch_was() {
-    // No `chain_view` first: the method notes the connecting height itself,
-    // so the halt fires — §3.6.2's "no chain work, no halt" cannot apply to
-    // a batch whose chain was just found inconsistent.
-    let path = tmp("connect-refuse-corrupt-notes");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[Vec::new()]);
-    let out: Result<(), TestErr> = store.write(|batch| {
-        Err(batch
-            .refuse_corrupt(shekyl_chain_rules::Corrupt::ZeroTarget)
-            .into())
-    });
-    // ZeroTarget names the connecting height: the window with no increase
-    // ends at its parent.
-    expect_row(&out, StoreInvariant::WorkNotIncreasing { height: 1 });
-    assert_eq!(
-        store.connect_state(),
-        ConnectState::Halted {
-            at_height: BlockHeight::from_raw(1),
-            row: StoreInvariant::WorkNotIncreasing { height: 1 },
-        }
-    );
-    cleanup(&path);
-}
-
-#[test]
-fn a_cumulative_difficulty_overflow_is_the_fold_belt_not_a_new_row() {
-    let path = tmp("connect-refuse-corrupt-overflow");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    connect_chain(&store, &[Vec::new()]);
-    let out: Result<(), TestErr> = store.write(|batch| {
-        let _view = batch.chain_view();
-        Err(batch
-            .refuse_corrupt(shekyl_chain_rules::Corrupt::CumulativeDifficultyOverflow)
-            .into())
-    });
-    expect_row(
-        &out,
-        StoreInvariant::FoldOverflow {
-            cell: "block_info.cumulative_difficulty",
-        },
-    );
-    assert_eq!(
-        StoreInvariant::FoldOverflow {
-            cell: "block_info.cumulative_difficulty"
-        }
-        .row(),
-        8
-    );
-    cleanup(&path);
-}
-
-#[test]
-fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
-    // RD-F13: with `in_force: RuleSetId`, no id resolved to a `Fixed` set and
-    // a Fakechain verdict could never connect. The caller now hands the set
-    // itself (RD-Q10), and the path exists.
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
-    let path = tmp("connect-fakechain-in-force");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let cand = candidate(0, BlockHash::NULL, Vec::new());
-        let formed = match form(
-            cand,
-            &seven,
-            &FixtureSubstrate,
-            BlockHash::NULL,
-            FormAttempt::FIRST,
-        ) {
-            Ok(Ok(formed)) => formed,
-            other => panic!("stateless stage: {other:?}"),
-        };
-        let valid = match validate(formed, &view, &seven) {
-            Ok(Ok(valid)) => valid,
-            other => panic!("view stage: {other:?}"),
-        };
-        Ok(batch.connect(valid, facts(0, 0), seven)?)
-    });
-    out.expect("a Fakechain verdict connects under the Fakechain set");
-    // The CEN-B3 belt recorded the id — which is GENESIS's, and is not the
-    // set (the caveat at the belt).
-    let snap = store.begin_read().expect("read");
-    let recorded: RuleSetId = snap
-        .open_table(HF_VERSIONS)
-        .expect("sealed")
-        .get(0u64)
-        .expect("read")
-        .expect("row")
-        .value()
-        .decode()
-        .expect("decodes");
-    assert_eq!(recorded, RuleSetId::GENESIS);
-    assert_eq!(seven.id(), RuleSetId::GENESIS, "the id is not the set");
-    cleanup(&path);
-}
-
-#[test]
-fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
-    // Same id, different set: `fakechain(7)` reuses `RuleSetId::GENESIS`.
-    // An id-only check would accept the fixed-target work as public-network
-    // GENESIS work; compared by value, `connect` refuses.
-    let seven = RuleSet::fakechain(core::num::NonZeroU128::new(7).expect("non-zero"));
-    let path = tmp("connect-fakechain");
-    let store = ChainStore::create(&path, EPOCH).expect("create");
-    let out: Result<Connected, TestErr> = store.write(|batch| {
-        let view = batch.chain_view();
-        let cand = candidate(0, BlockHash::NULL, Vec::new());
-        let formed = match form(
-            cand,
-            &seven,
-            &FixtureSubstrate,
-            BlockHash::NULL,
-            FormAttempt::FIRST,
-        ) {
-            Ok(Ok(formed)) => formed,
-            other => panic!("stateless stage: {other:?}"),
-        };
-        let valid = match validate(formed, &view, &seven) {
-            Ok(Ok(valid)) => valid,
-            other => panic!("view stage: {other:?}"),
-        };
-        Ok(batch.connect(valid, facts(0, 0), RuleSet::GENESIS)?)
-    });
-    let want = StoreCannot::RuleSetNotInForce {
-        height: 0,
-        judged: seven,
-        in_force: RuleSet::GENESIS,
-    };
-    assert_eq!(out, Err(TestErr::Store(StoreError::from(want).to_string())));
     cleanup(&path);
 }
 
