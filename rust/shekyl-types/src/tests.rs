@@ -127,6 +127,15 @@ fn checked_and_saturating_boundaries() {
         BlockHeight::from_raw(5).checked_add(BlockCount::ONE),
         Some(BlockHeight::from_raw(6))
     );
+    assert_eq!(
+        BlockHeight::from_raw(5).saturating_add(BlockCount::from_raw(2)),
+        BlockHeight::from_raw(7)
+    );
+    assert_eq!(
+        BlockHeight::from_raw(u64::MAX).saturating_add(BlockCount::ONE),
+        BlockHeight::from_raw(u64::MAX)
+    );
+    assert_eq!(BlockHeight::ZERO.checked_sub_count(BlockCount::ONE), None);
 }
 
 #[test]
@@ -161,6 +170,10 @@ fn chain_count_bridges() {
         BlockHeight::from_raw(0),
         "the next block of an empty chain is genesis"
     );
+
+    // `from_next_height` is C6's inverse, not "this existing block as a count".
+    assert_eq!(ChainCount::from_next_height(count.next_height()), count);
+    assert_eq!(ChainCount::from_next_height(empty.next_height()), empty);
 }
 
 #[test]
@@ -198,6 +211,10 @@ fn chain_count_saturating_and_checked_boundaries() {
         ChainCount::ZERO
     );
     assert_eq!(ChainCount::ZERO.checked_sub_count(BlockCount::ONE), None);
+    assert_eq!(
+        ChainCount::from_raw(u64::MAX).saturating_add(BlockCount::ONE),
+        ChainCount::from_raw(u64::MAX)
+    );
     // Exclusive-end split used by the pscan horizon: count − depth, then
     // next_height is the exclusive ordinal bound (COUNT=100, depth=10 → 90).
     let claimed = ChainCount::from_raw(100);
@@ -205,6 +222,12 @@ fn chain_count_saturating_and_checked_boundaries() {
         .saturating_sub_count(BlockCount::from_raw(10))
         .next_height();
     assert_eq!(horizon, BlockHeight::from_raw(90));
+    // Corroboration min: exclusive scan end as count, plus the reorg span.
+    let scanned = ChainCount::from_next_height(horizon);
+    assert_eq!(
+        scanned.saturating_add(BlockCount::from_raw(10)),
+        ChainCount::from_raw(100)
+    );
 }
 
 #[test]
