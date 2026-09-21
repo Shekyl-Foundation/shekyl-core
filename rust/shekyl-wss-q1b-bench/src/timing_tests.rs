@@ -10,12 +10,23 @@ use std::cell::Cell;
 fn a_steady_workload_converges_and_reports_every_iteration() {
     // A short conditioning floor so the test is a test and not a minute of
     // waiting; `the_defaults_are_the_protocols_figures` pins the real one.
+    // The workload SLEEPS rather than spinning, and that is load-bearing, not
+    // taste. A microsecond CPU workload makes `Instant::elapsed` measure the
+    // scheduler rather than the work: descheduled once, a sample is orders of
+    // magnitude off, the disjoint medians swing past the 5 % tolerance, and a
+    // test asserting `converged` fails for want of a quiet box. That is not
+    // hypothetical — the sibling test below this one asserted convergence over
+    // `(0..50).sum()` and failed on a stock CI runner (PR #812, 2026-09-21),
+    // red on someone else's unrelated branch. A 1 ms sleep dominates ordinary
+    // scheduling noise, so the quantity being compared is the workload, which
+    // is what this test is about.
     let series = sustained_within_conditioned(2, DEFAULT_TOLERANCE_PCT, 30.0, 0.05, || {
-        std::hint::black_box((0..200u64).sum::<u64>());
+        std::thread::sleep(std::time::Duration::from_millis(1));
     });
     assert!(
         series.converged,
-        "a steady workload must reach steady state"
+        "a steady workload must reach steady state (stopped_because = {})",
+        series.stopped_because
     );
     assert!(series.iterations_s.len() >= MIN_ITERATIONS);
     assert_eq!(series.warmup_iterations, 2);
@@ -35,13 +46,40 @@ fn a_never_settling_workload_is_reported_unconverged_not_looped_forever() {
     let n = Cell::new(0u64);
     let series = sustained_within_conditioned(0, DEFAULT_TOLERANCE_PCT, 30.0, 0.05, || {
         // Each call strictly longer than the last.
+        //
+        // The 2 ms step is load-bearing and MUST NOT be shrunk for speed: this
+        // test's signal is the *relative* gap between consecutive samples, and
+        // under contention sleep overshoot adds a large near-constant term to
+        // every sample, which swamps a small gap. Tried at 1 ms on 2026-09-21
+        // and it made things worse — at load average 17.97 the slowing series
+        // converged, i.e. the test's own premise failed. Two limits bound this
+        // run in opposite directions and the step size sits between them: too
+        // small and the slowdown stops being detectable, too large and
+        // `MAX_ITERATIONS` of it approaches the 30 s wall budget.
         let i = n.get();
         n.set(i + 1);
         std::thread::sleep(std::time::Duration::from_millis(2 * (i + 1)));
     });
-    assert!(!series.converged);
+    assert!(
+        !series.converged,
+        "a monotonically slowing workload is not steady state (stopped_because = {})",
+        series.stopped_because
+    );
+    // The sample cap is what must end this run — if the WALL cap ended it
+    // instead, the run was truncated and the length below is meaningless, so
+    // name that here rather than letting it surface as a confusing count.
+    assert_ne!(
+        series.stopped_because, "wall-clock cap",
+        "wall budget preempted the sample cap; this test no longer measures its subject"
+    );
     assert_eq!(series.iterations_s.len(), MAX_ITERATIONS);
-    assert_eq!(series.stopped_because, "iteration cap");
+    // The NORMAL exit: the guard went false with both limits met, and the
+    // series never settled. This used to assert `"iteration cap"` and passed
+    // — not because a cap stopped the loop (no such exit exists; see
+    // `timing.rs`) but because that string was the variable's initialiser and
+    // rode this very path out. The assertion documented the defect instead of
+    // catching it.
+    assert_eq!(series.stopped_because, "limits met, unconverged");
 }
 
 #[test]
@@ -139,13 +177,31 @@ fn a_fast_series_is_not_truncated_by_the_iteration_cap_before_conditioning() {
     let series = sustained_within_conditioned(0, DEFAULT_TOLERANCE_PCT, 30.0, 0.25, || {
         std::hint::black_box((0..50u64).sum::<u64>());
     });
-    assert!(
-        series.converged,
-        "stopped_because = {}",
-        series.stopped_because
-    );
+    // THE subject, and the sibling of the `== MAX_ITERATIONS` assertion in the
+    // slowing-workload test above: there the conditioning floor was met long
+    // before the cap, so the loop stops AT it; here the floor is still unmet at
+    // the cap, so the loop must run PAST it. If the two limits cancelled, this
+    // length would be exactly `MAX_ITERATIONS` — so `>` is what bites, and it
+    // bites however loaded the box is.
     assert!(
         series.iterations_s.len() > MAX_ITERATIONS,
-        "it must keep sampling past the iteration cap until conditioning is met"
+        "it must keep sampling past the iteration cap until conditioning is met \
+         (len = {}, stopped_because = {})",
+        series.iterations_s.len(),
+        series.stopped_because
     );
+    // Deliberately NOT `assert!(series.converged)`. Whether a microsecond
+    // workload's disjoint medians settle within `DEFAULT_TOLERANCE_PCT` is a
+    // property of the machine's scheduling, not of this loop: the guard exits
+    // as soon as both limits are met, so convergence gets only the evaluations
+    // after `elapsed` crosses the floor — stable on a quiet box, preemption
+    // noise on a busy one, where `Instant::elapsed` around a microsecond
+    // workload measures the descheduling rather than the work. That assertion
+    // was asserting the box was quiet; it failed at load average 10.40 on a
+    // shared machine (found by a concurrent workspace run, 2026-09-21).
+    //
+    // Refusing to converge under contention is the instrument WORKING — the
+    // graded binaries refuse an unconverged series rather than publish its
+    // median (`spend_edge.rs`, §5.2). So the outcome is the environment's to
+    // decide and this test does not grade it.
 }
