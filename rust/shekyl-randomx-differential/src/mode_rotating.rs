@@ -49,8 +49,9 @@
 //! `Rotation-replay:` line.
 
 use crate::c_oracle::COracleSession;
-use crate::cache_precondition::assert_equivalent;
-use crate::mode_correctness::{three_leg_verdict, CorrectnessError};
+use crate::cache_precondition::{assert_equivalent, rust_cache_sha256};
+use crate::failure_output::FailureOutput;
+use crate::mode_correctness::{hex_lower, three_leg_verdict, CorrectnessError};
 use crate::rotating_corpus::{generate_rotating_corpus, RotationContext};
 use crate::rust_subject::RustSubjectSession;
 
@@ -117,7 +118,7 @@ pub fn run(
             let pair = &corpus[index];
             let rust_hash = rust.compute_hash(&pair.data);
             let c_hash = c.calculate_hash(&pair.data);
-            three_leg_verdict(
+            if let Err(err) = three_leg_verdict(
                 seedhash,
                 usize::MAX,
                 pair.data.len(),
@@ -126,7 +127,34 @@ pub fn run(
                 // No canonical: rotating inputs are outside the pinned
                 // corpus by construction (see module docs).
                 None,
-            )?;
+            ) {
+                // RD-Q12's fuzz hygiene: the failing INPUT itself, both
+                // hashes and both cache fingerprints, as the structured
+                // record (R1-D11) on stderr — the lane's log is its
+                // failure artifact, so this line is what makes a
+                // divergence replayable without regenerating the corpus.
+                // The pair's position is named beside it so the record
+                // can also be found in a regenerated corpus.
+                eprintln!(
+                    "rotating divergence at rotation index {} — corpus pair {} of {} (seedhash {})",
+                    rotation.index,
+                    index,
+                    corpus.len(),
+                    seedhash
+                );
+                FailureOutput::new(
+                    hex_lower(seedhash.as_bytes()),
+                    hex_lower(&pair.data),
+                    hex_lower(&rust_hash),
+                    hex_lower(&c_hash),
+                    hex_lower(&rust_cache_sha256(rust.prepared())),
+                    hex_lower(&c.cache_sha256()),
+                    "rotating",
+                    String::new(),
+                )
+                .emit_stderr();
+                return Err(err);
+            }
             pairs_checked += 1;
             index += 1;
         }

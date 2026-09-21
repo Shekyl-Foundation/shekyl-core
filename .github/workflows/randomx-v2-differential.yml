@@ -11,10 +11,13 @@
 # rewrite scaffolding with an expiry: it re-runs the full pinned vector
 # set whenever EITHER pin moves (the `paths:` filters below name both
 # trees and the lockfile), and it fuzzes `longhash` across the boundary
-# on every daily cron — the `rotating` lanes below, whose input set is
-# derived from a logged rotation index (so a failure is reproducible
-# from one integer) and whose divergence forensics (seedhash, data
-# blob, both hashes) are uploaded as an artifact, so an inequality is
+# on every daily cron — the `rotating` lanes below, whose seedhashes and
+# blobs are derived from a logged rotation index (so the input set is
+# reproducible from one integer; the seeds are index-derived, not
+# pinned), and whose divergence forensics — the failing blob itself,
+# both `PowHash`es, both cache fingerprints and the pair's position, as
+# the harness's structured failure record on stderr — land in the log
+# the lane uploads as its failure artifact, so an inequality is
 # actionable and never a muted alarm. The comparison is over `PowHash`,
 # the type seam #785 minted (`three_leg_verdict`).
 #

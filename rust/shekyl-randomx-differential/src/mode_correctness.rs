@@ -394,7 +394,7 @@ pub fn run(
 /// [`crate::cache_precondition`] rather than re-exported to keep
 /// the two modules' display formatting independent (a future
 /// reshape of one doesn't perturb the other).
-fn hex_lower(bytes: &[u8]) -> String {
+pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push_str(&format!("{b:02x}"));
