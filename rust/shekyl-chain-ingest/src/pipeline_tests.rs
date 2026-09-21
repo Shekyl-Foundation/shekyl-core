@@ -633,3 +633,60 @@ async fn the_reorg_family_replays_through_the_corpus_reader_with_a_digest_after_
     assert_eq!(report.observations.digest_identical, Some(true));
     cleanup(&path);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_wrong_checkpoint_goes_red_and_the_graded_run_does_not_pass() {
+    // The comparator's negative control (rule 47; the FOLLOWUPS row that asked
+    // for one forced-red case per table predates RD-F5's digest — the E2
+    // comparator is one digest, so the control is one wrong checkpoint).
+    // A trace whose checkpoint is anything but the chain's state DIVERGEs,
+    // and the grade fails every CHECKED-CONFORMANT row on the component
+    // clause.
+    use crate::grader::{grade_run, Clause, GradedAcceptance, Register};
+    use crate::trace::{Trace, TraceWriter};
+    let path = tmp("pipeline-negative-control");
+    let chain = chain(3);
+    let trace = {
+        let mut w = TraceWriter::new(Vec::new()).expect("header");
+        for hh in 0..3u64 {
+            w.push_facts(h(hh), &crate::test_support::facts_at(hh))
+                .expect("facts");
+        }
+        w.push_checkpoint(h(2), &[0xEE; 32])
+            .expect("a wrong checkpoint");
+        Arc::new(Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read"))
+    };
+    let bytes = corpus_of(&chain);
+    let mut source = CorpusReader::open(std::io::Cursor::new(&bytes)).expect("open");
+    let report = run(
+        &mut source,
+        substrate(),
+        Arc::new(Metrics::new()),
+        GENESIS_RULES,
+        open_store(&path),
+        trace,
+        PipelineConfig::default(),
+    )
+    .await
+    .expect("the run itself completes; the verdict is the grader's");
+    let (_, ours, theirs) = &report.checkpoints[0];
+    assert_ne!(ours, theirs, "DIVERGE");
+    assert_eq!(report.observations.digest_identical, Some(false));
+    let register = Register::from_json(
+        r#"{"schema_version":"shekyl_e2_register_v1","rows":[{"id":"CEN-A1","state":"CHECKED-CONFORMANT"}],"unrecorded_ratified":[]}"#,
+    )
+    .expect("register");
+    let graded = grade_run(&register, &report.observations);
+    assert!(!graded.passes());
+    assert_eq!(
+        (
+            graded.unadjudicated[0].clause,
+            graded.unadjudicated[0].acceptance
+        ),
+        (
+            Clause::Component,
+            GradedAcceptance::FailedConformantDiffered
+        )
+    );
+    cleanup(&path);
+}

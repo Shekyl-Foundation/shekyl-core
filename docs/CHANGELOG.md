@@ -22,6 +22,25 @@
   `StoreCannot::RuleSetUnknown` deleted). Process: every FOLLOWUPS row
   carries a gated `Owner:` (`check_followups_owners.py`).
 
+- **DRS-E2 increment 2 — the replay driver runs, and the first real chains
+  match.** `shekyl-chain-ingest` gains the pipeline (`form` workers → sequencer
+  → a single validate+connect actor that does not restart after a halt), the
+  **trace** artifact (LMDB's passed-through facts and one digest checkpoint at
+  the tip, harvested by the new `shekyl-e2-trace-export` C++ shim through the
+  FFI, `-DBUILD_E2_TRACE_EXPORT=ON`), the RPC corpus fetch, a `rewind` record
+  (corpus format v2) for the reorg family, `--fixed-difficulty` →
+  `RuleSet::fakechain` on regtest only, CSR-3a grading with two typed evidence
+  clauses per register row (`scripts/ci/export_conformance_register.py` is the
+  coverage gate's own parse, serialized), and a RandomX metrics sink. The
+  binary **`shekyl-chain-replay`** (`fetch`, `replay`) drives it. First runs:
+  301- and 2301-block regtest chains replay with the redb digest **matching
+  LMDB at the tip**, 0 unadjudicated rows, the seed-epoch boundary crossed.
+  Measured (light mode, Rust interpreter, x86_64): 0.60 s CPU per hash —
+  the input `RANDOMX_V2_RUST.md` §9's dataset-mode decision was waiting for.
+  `CacheStore::lookup_or_derive_reporting` reports how a call was served.
+  `randomx-v2-differential` is stated as the permanent verifier↔JIT parity
+  gate.
+
 - **Transaction read surface (S-TX, DRS-E1 increment 6).** `ReadSnapshot`
   gains `tx_location` / `tx_record` by `TxHash` (returning `Option` — a hash
   miss is ordinary), `tx_count`, `tx_prunable` / `tx_output_indices` by
