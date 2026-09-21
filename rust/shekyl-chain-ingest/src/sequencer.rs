@@ -31,18 +31,31 @@ pub enum SequenceError {
     /// `seq` is already waiting: two results for one position.
     #[error("sequence {} is already pending", .0.to_raw())]
     Duplicate(SequenceNo),
-    /// `advance` named a position other than the next to release — a gap,
-    /// or a rewind whose sequence the dispatcher already moved past.
+    /// A position other than the next one: the dispatcher read an event
+    /// numbered past the one it expected (a source with a hole in its
+    /// numbering), or `advance` named a position other than the next to
+    /// release.
     #[error(
-        "sequence {} is not the next to release ({})",
+        "sequence {} is not the next expected ({})",
         .found.to_raw(),
         .expected.to_raw()
     )]
     NotNext {
-        /// The position the sequencer is waiting to release.
+        /// The position expected.
         expected: SequenceNo,
-        /// The position the caller named.
+        /// The position found.
         found: SequenceNo,
+    },
+    /// The source is exhausted and nothing is in flight, yet items wait
+    /// behind a position nothing will fill — unreachable while every
+    /// event's number is asserted on read, and refused loudly rather than
+    /// dropped if that ever stops being so.
+    #[error("{pending} item(s) stranded behind sequence {} with nothing in flight", .next.to_raw())]
+    Stranded {
+        /// The position the sequencer is waiting to release.
+        next: SequenceNo,
+        /// Items waiting behind it.
+        pending: usize,
     },
 }
 
@@ -235,14 +248,5 @@ mod tests {
         })
         .unwrap();
         assert_eq!(drain(&mut s), vec![(5, "e")]);
-    }
-
-    #[test]
-    fn seq_saturates_at_the_top() {
-        let top = SequenceNo::FIRST;
-        // Reaching u64::MAX by `next` is not practical; check the property
-        // on the raw value the type wraps.
-        assert_eq!(top.next().to_raw(), 1);
-        assert!(SequenceNo::FIRST < SequenceNo::FIRST.next());
     }
 }

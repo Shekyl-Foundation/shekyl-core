@@ -18,7 +18,7 @@ use shekyl_units::AtomicUnits;
 
 use crate::test_support::h;
 #[cfg(feature = "fetch")]
-use crate::test_support::{chain_listing, spend, wire};
+use crate::test_support::{chain_listing, key_image, spend, wire, Family};
 use crate::trace::{Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_LEN, TRACE_MAGIC};
 
 // ---------------------------------------------------------------- fixtures
@@ -27,7 +27,8 @@ use crate::trace::{Facts, Trace, TraceFault, TraceWriter, CHECKPOINT_LEN, FACTS_
 /// them: (block bytes, body bytes).
 #[cfg(feature = "fetch")]
 fn three_blocks() -> Vec<(Vec<u8>, Vec<Vec<u8>>)> {
-    chain_listing(vec![Vec::new(), vec![spend(1)], vec![spend(2), spend(3)]])
+    let ki = |n| spend(key_image(Family::Main, n));
+    chain_listing(vec![Vec::new(), vec![ki(1)], vec![ki(2), ki(3)]])
         .iter()
         .map(|(b, txs)| wire(b, txs))
         .collect()
@@ -54,10 +55,8 @@ fn the_trace_round_trips_through_both_doors_and_the_borrow_is_passed_through() {
     let hashes = [[0x11; 32], [0x12; 32], [0x13; 32]];
     let spent = [[0x21; 32], [0x22; 32]];
     let root = CurveTreeRoot::from_bytes([0xc2; 32]);
-    let state = w
-        .push_checkpoint_families(&hashes, &spent, root)
-        .expect("checkpoint");
-    assert_eq!(state, digest_v0(&hashes, &spent, root.as_bytes()));
+    let state = digest_v0(&hashes, &spent, root.as_bytes());
+    w.push_checkpoint(&state).expect("checkpoint");
     let bytes = w.finish().expect("trailer");
     assert_eq!(&bytes[..8], &TRACE_MAGIC);
     assert_eq!(
@@ -159,11 +158,52 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
         TraceFault::Truncated
     ));
 
-    let mut bad_version = good;
+    let mut bad_version = good.clone();
     bad_version[8] = 1;
     assert!(matches!(
         Trace::read(Cursor::new(&bad_version)).expect_err("version"),
         TraceFault::UnsupportedVersion { found: 1 }
+    ));
+
+    // The trailer ends a trace: two concatenated, or one byte past it, is
+    // refused rather than read as the first.
+    let mut doubled = good.clone();
+    doubled.extend_from_slice(&good);
+    assert!(matches!(
+        Trace::read(Cursor::new(&doubled)).expect_err("two traces"),
+        TraceFault::TrailingBytes
+    ));
+    let mut padded = good;
+    padded.push(0);
+    assert!(matches!(
+        Trace::read(Cursor::new(&padded)).expect_err("a byte past the trailer"),
+        TraceFault::TrailingBytes
+    ));
+}
+
+#[test]
+fn a_facts_record_after_the_last_height_is_a_fault_on_both_sides() {
+    // The writer may record u64::MAX; nothing follows it. The reader meets
+    // the same edge as a fault — a crafted file does not take the replay
+    // binary down through an `expect`.
+    let mut w = TraceWriter::new(Vec::new()).expect("header");
+    w.push_facts(h(u64::MAX), &facts_at(0))
+        .expect("the last height");
+    assert!(matches!(
+        w.push_facts(h(0), &facts_at(0)).expect_err("no successor"),
+        TraceFault::HeightExhausted { after: u64::MAX }
+    ));
+    let mut two = w.finish().expect("trailer");
+    let record = 1 + 8 + FACTS_LEN;
+    // Duplicate the one facts record and fix the trailer's count: the
+    // second record now follows u64::MAX.
+    let first = two[16..16 + record].to_vec();
+    two.splice(16 + record..16 + record, first);
+    let n = two.len();
+    two[n - 16..n - 8].copy_from_slice(&2u64.to_le_bytes());
+    assert!(matches!(
+        Trace::read(Cursor::new(&two)).expect_err("no successor"),
+        TraceFault::HeightExhausted { after: u64::MAX }
     ));
 }
 
@@ -268,6 +308,10 @@ mod fetch {
         }
     }
 
+    fn batch(n: usize) -> std::num::NonZeroUsize {
+        std::num::NonZeroUsize::new(n).expect("non-zero")
+    }
+
     #[tokio::test]
     async fn fetches_in_batches_through_the_route_and_the_corpus_reads_back() {
         let blocks = three_blocks();
@@ -278,7 +322,9 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let written = fetch_corpus(&rpc, 0..3, 2, &mut w).await.expect("fetched");
+        let written = fetch_corpus(&rpc, 0..3, batch(2), &mut w)
+            .await
+            .expect("fetched");
         assert_eq!(written, 3);
         assert_eq!(
             *rpc.asked.lock().expect("lock"),
@@ -308,7 +354,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, 10, &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("pruned");
         match err {
@@ -335,7 +381,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, 10, &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("refused");
         assert!(
@@ -357,7 +403,7 @@ mod fetch {
             BlockHeight::from_raw(0),
         )
         .expect("header");
-        let err = fetch_corpus(&rpc, 0..3, 10, &mut w)
+        let err = fetch_corpus(&rpc, 0..3, batch(10), &mut w)
             .await
             .expect_err("short");
         assert!(
@@ -380,7 +426,7 @@ mod fetch {
         )
         .expect("header");
         assert!(matches!(
-            fetch_corpus(&rpc, 0..1, 1, &mut w)
+            fetch_corpus(&rpc, 0..1, batch(1), &mut w)
                 .await
                 .expect_err("transport"),
             FetchFault::Rpc(RpcError::ConnectionError(_))

@@ -10,31 +10,11 @@ use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
 use super::*;
+use crate::test_support::coinbase;
 
-// Wire-valid fixtures. The rules crate's `harness::fixture::coinbase` has no
-// inputs and does not survive `Block::read` (its blocks never round-trip
-// through bytes; RD-F16), so a corpus test builds its own: a miner tx with
-// the sole `Input::Gen` the wire demands, and listed bodies that parse.
-
-fn coinbase(height: u64) -> Transaction {
-    Transaction {
-        prefix: TxPrefix {
-            unlock_time: height.saturating_add(60),
-            inputs: vec![Input::Gen(height)],
-            outputs: vec![Output {
-                amount: 0,
-                key: [0x40; 32],
-                view_tag: 1,
-            }],
-            extra: Vec::new(),
-        },
-        ct: Ct::Null(CtBase {
-            enc_amounts: vec![[0x55; 9]],
-            enc_labels: vec![[0x66; 9]],
-            commitments: vec![[0x70; 32]],
-        }),
-    }
-}
+// Wire-valid fixtures: the shared `test_support::coinbase` (a miner tx with
+// the sole `Input::Gen` the wire demands; RD-F16), and listed bodies that
+// parse.
 
 /// A listed body distinguishable from every other by `tag`.
 fn listed(tag: u8) -> Transaction {
@@ -320,27 +300,42 @@ fn the_reader_refuses_a_crafted_tx_count_before_reading_bodies() {
 
 #[test]
 fn a_truncated_corpus_is_refused_by_count_not_read_as_a_short_chain() {
+    // Wherever the cut falls inside the second record — its tag, its
+    // height, its body — the reader names one whole record present, never
+    // a bare I/O error that reads as a broken disk.
     let (_, b0, t0) = blobs(0, 0);
     let (_, b1, t1) = blobs(1, 0);
-    let mut bytes = write(&[(b0, t0), (b1, t1)]);
-    bytes.truncate(bytes.len() - 5);
-    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("open");
-    reader.next().expect("first is whole");
-    let refused = reader.next().expect_err("truncated second");
-    assert!(
-        matches!(
-            refused,
-            CorpusFault::CountMismatch { .. } | CorpusFault::Io(_)
-        ),
-        "{refused}"
-    );
+    let whole = write(&[(b0.clone(), t0.clone()), (b1, t1)]);
+    let first_record_end = write(&[(b0, t0)]).len();
+    for keep in [
+        first_record_end,     // cut before the second record's tag
+        first_record_end + 1, // inside its height
+        first_record_end + 4, // still inside its height
+        whole.len() - 5,      // inside its body
+    ] {
+        let mut reader = CorpusReader::open(Cursor::new(whole[..keep].to_vec())).expect("open");
+        reader.next().expect("first is whole");
+        let refused = reader.next().expect_err("truncated second");
+        assert!(
+            matches!(
+                refused,
+                CorpusFault::CountMismatch {
+                    declared: 2,
+                    present: 1
+                }
+            ),
+            "cut at {keep}: {refused}"
+        );
+    }
 }
 
 #[test]
 fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
     // A corpus may legitimately hold height u64::MAX. What it cannot do is
-    // carry a record after it — and a crafted header claiming to must be
-    // refused at `open`, not after the reader has yielded one valid record.
+    // carry an `extend` after it: the writer refuses the append, and the
+    // reader refuses the record that would need the height before reading
+    // any of it. (The header's count cannot say this at `open` — a `rewind`
+    // occupies no height, so the count is not a span.)
     let last = BlockHeight::from_raw(u64::MAX);
     let (_, b_last, t_last) = blobs(u64::MAX, 0);
     let mut w =
@@ -362,17 +357,42 @@ fn height_exhaustion_is_a_fault_on_both_sides_and_writes_nothing() {
         .expect("the u64::MAX record")
         .expect("present");
     assert!(reader.next().expect("clean end").is_none());
-    // The same bytes with the header claiming two records: refused at open,
-    // before any record is consulted.
-    let mut crafted = bytes;
+    // The same bytes with a second `extend` record spliced in and the
+    // header claiming two: the first reads, the second is refused before
+    // its height is consulted — as HeightExhausted, not as a gap at some
+    // wrapped height.
+    const HEADER_LEN: usize = 8 + 4 + 1 + 8 + 8;
+    let mut crafted = bytes.clone();
+    crafted.extend_from_slice(&bytes[HEADER_LEN..]);
     crafted[21..29].copy_from_slice(&2u64.to_le_bytes());
+    let mut reader = CorpusReader::open(Cursor::new(crafted)).expect("open");
+    reader.next().expect("first").expect("present");
+    let refused = reader.next().expect_err("no height follows");
     assert!(
-        matches!(
-            CorpusReader::open(Cursor::new(crafted)).err(),
-            Some(CorpusFault::HeightExhausted { .. })
-        ),
-        "a header that outruns the height space is refused at open"
+        matches!(refused, CorpusFault::HeightExhausted { after } if after == last),
+        "{refused}"
     );
+    // A writer near the top with a rewind: three records over two heights,
+    // and the reader takes them — the count is records, not a span.
+    let (_, b_prev, t_prev) = blobs(u64::MAX - 1, 0);
+    let mut w = CorpusWriter::create(
+        Cursor::new(Vec::new()),
+        CorpusNet::Fakechain,
+        BlockHeight::from_raw(u64::MAX - 1),
+    )
+    .expect("header");
+    w.append(&b_prev, &t_prev).expect("MAX - 1");
+    w.append(&b_last, &t_last).expect("MAX");
+    w.rewind(BlockHeight::from_raw(u64::MAX - 1))
+        .expect("backward, inside the corpus");
+    let bytes = w.finish().expect("finish").into_inner();
+    let mut reader = CorpusReader::open(Cursor::new(bytes)).expect("three records, two heights");
+    assert_eq!(reader.declared(), 3);
+    let mut n = 0;
+    while reader.next().expect("record").is_some() {
+        n += 1;
+    }
+    assert_eq!(n, 3);
 }
 
 // ---------------------------------------------------------------------------

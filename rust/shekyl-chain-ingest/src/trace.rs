@@ -46,9 +46,11 @@
 //!
 //! # Checkpoints are computed in Rust
 //!
-//! The exporter hands the writer the three **families** (block hashes, spent
-//! keys, root) and [`TraceWriter::push_checkpoint_families`] assembles the
-//! checkpoint with [`digest_v0`] — the same function the redb read
+//! The exporter asks the daemon's own LMDB digest walker
+//! (`BlockchainLMDB::logical_state_digest_v0`, one read snapshot across
+//! the three families) and hands the writer the finished 32 bytes through
+//! [`TraceWriter::push_checkpoint`]. That walker hashes through the FFI
+//! with `digest_v0` — the same function the redb read
 //! (`ReadSnapshot::logical_state_digest_v0`, commit 2) applies to its own
 //! families. The C++ never hashes; the two sides cannot have hashed
 //! differently. The checkpoint is the **outer** digest only: the redb read
@@ -66,7 +68,6 @@ use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::ops::RangeInclusive;
 
-use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::{ConnectFacts, Fact};
 use shekyl_difficulty::CumulativeDifficulty;
 use shekyl_types::{BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight};
@@ -152,6 +153,14 @@ pub enum TraceFault {
         /// The height it carried.
         found: u64,
     },
+    /// A facts record after height `u64::MAX`: no height follows it. Not
+    /// a representable chain; refused as a fault on both sides rather than
+    /// letting a crafted record take a reader down.
+    #[error("no height follows {after}; the trace cannot carry another facts record")]
+    HeightExhausted {
+        /// The last height a trace can carry.
+        after: u64,
+    },
     /// A checkpoint with no facts row to hang it on.
     #[error("checkpoint has no facts record to anchor to")]
     UnanchoredCheckpoint,
@@ -187,6 +196,11 @@ pub enum TraceFault {
     /// The file ended without a trailer.
     #[error("trace is truncated: no trailer")]
     Truncated,
+    /// Bytes after the trailer: two traces concatenated, or a file written
+    /// past its end. The trailer is the end of a trace, not a marker
+    /// inside one.
+    #[error("bytes after the trailer")]
+    TrailingBytes,
 }
 
 /// The six passed-through facts for one height, plus the accumulator D4
@@ -203,7 +217,11 @@ pub struct Facts {
     pub burned: AtomicUnits,
     /// `curve_tree_roots[h + 1]`.
     pub root_after: CurveTreeRoot,
-    /// `block_info`'s long-term effective median (S-CHAIN-R A1).
+    /// The long-term effective median in force for the block (S-CHAIN-R
+    /// A1, SCR-19). LMDB stores no such row: the exporter re-derives it
+    /// over the recorded long-term weights with the daemon's own rolling
+    /// median, exactly as `add_block` did, and it is passed through until a
+    /// Rust rule derives it and deletes this field (`ConnectFacts::DELETED_BY`).
     pub long_term_effective_median: LongTermWeight,
     /// `block_info.bi_diff` — the accumulator D4 reads; recorded so the
     /// SI-10 observer has the LMDB value to compare against.
@@ -332,14 +350,15 @@ impl<W: Write> TraceWriter<W> {
     ///
     /// # Errors
     ///
-    /// [`TraceFault::HeightGap`]; I/O.
+    /// [`TraceFault::HeightGap`], [`TraceFault::HeightExhausted`],
+    /// [`TraceFault::FactsAfterCheckpoint`]; I/O.
     pub fn push_facts(&mut self, height: BlockHeight, facts: &Facts) -> Result<(), TraceFault> {
         let h = height.to_raw();
         if self.checkpointed.is_some() {
             return Err(TraceFault::FactsAfterCheckpoint { height: h });
         }
         if let Some(covered) = &self.covered {
-            let expected = covered.end().checked_add(1).expect("height fits u64");
+            let expected = successor(*covered.end())?;
             if h != expected {
                 return Err(TraceFault::HeightGap { expected, found: h });
             }
@@ -355,31 +374,15 @@ impl<W: Write> TraceWriter<W> {
         Ok(())
     }
 
-    /// The LMDB logical state after the covered tip, assembled here from
-    /// the families the exporter walked (module docs).
+    /// The logical state after the covered tip — the LMDB walker's digest
+    /// (module docs), or a redb-side state being recorded as an expectation
+    /// when re-baselining from Rust after cutover. Written at the last facts
+    /// height.
     ///
     /// # Errors
     ///
     /// [`TraceFault::UnanchoredCheckpoint`], [`TraceFault::DuplicateCheckpoint`];
     /// I/O.
-    pub fn push_checkpoint_families(
-        &mut self,
-        block_hashes: &[[u8; 32]],
-        spent_keys: &[[u8; 32]],
-        curve_root: CurveTreeRoot,
-    ) -> Result<Digest, TraceFault> {
-        let state = digest_v0(block_hashes, spent_keys, curve_root.as_bytes());
-        self.push_checkpoint(&state)?;
-        Ok(state)
-    }
-
-    /// A checkpoint already assembled (a redb-side state being recorded as
-    /// an expectation, e.g. when re-baselining from Rust after cutover).
-    /// Written at the last facts height.
-    ///
-    /// # Errors
-    ///
-    /// As [`push_checkpoint_families`](Self::push_checkpoint_families).
     pub fn push_checkpoint(&mut self, state: &Digest) -> Result<(), TraceFault> {
         let h = match &self.covered {
             Some(covered) => *covered.end(),
@@ -429,6 +432,13 @@ fn read_u64<R: Read>(r: &mut R) -> Result<u64, io::Error> {
     Ok(u64::from_le_bytes(b))
 }
 
+/// The height after `last`, or [`TraceFault::HeightExhausted`] past
+/// `u64::MAX` — the same refusal on the writer and the reader.
+fn successor(last: u64) -> Result<u64, TraceFault> {
+    last.checked_add(1)
+        .ok_or(TraceFault::HeightExhausted { after: last })
+}
+
 impl Trace {
     /// Read and check a whole trace.
     ///
@@ -451,7 +461,7 @@ impl Trace {
         }
         let mut facts = BTreeMap::new();
         let mut checkpoint: Option<(u64, Digest)> = None;
-        let mut next_height: Option<u64> = None;
+        let mut last_height: Option<u64> = None;
         loop {
             let mut t = [0u8; 1];
             match input.read_exact(&mut t) {
@@ -464,7 +474,8 @@ impl Trace {
             match t[0] {
                 tag::FACTS => {
                     let h = read_u64(&mut input)?;
-                    if let Some(expected) = next_height {
+                    if let Some(last) = last_height {
+                        let expected = successor(last)?;
                         if h != expected {
                             return Err(TraceFault::HeightGap { expected, found: h });
                         }
@@ -472,7 +483,7 @@ impl Trace {
                     let mut body = [0u8; FACTS_LEN];
                     input.read_exact(&mut body)?;
                     facts.insert(h, Facts::read_from(&body));
-                    next_height = Some(h.checked_add(1).expect("height fits u64"));
+                    last_height = Some(h);
                 }
                 tag::CHECKPOINT => {
                     let h = read_u64(&mut input)?;
@@ -502,6 +513,12 @@ impl Trace {
                         if h != tip {
                             return Err(TraceFault::CheckpointNotTip { height: h, tip });
                         }
+                    }
+                    // The trailer ends a trace: one probe byte tells a
+                    // clean end from bytes written past it.
+                    let mut probe = [0u8; 1];
+                    if input.read(&mut probe)? != 0 {
+                        return Err(TraceFault::TrailingBytes);
                     }
                     return Ok(Self { facts, checkpoint });
                 }

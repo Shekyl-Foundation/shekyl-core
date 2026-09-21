@@ -24,18 +24,38 @@
 //! Lock-free counters (`AtomicU64`, relaxed): N `form` workers hash
 //! concurrently and the sink must not serialize them into the number it is
 //! measuring.
+//!
+//! The artifact also carries the **concurrency it was measured at**
+//! ([`Concurrency`]): light mode is memory-bound, so the per-hash wall
+//! grows with the number of hashers sharing the host (the first run
+//! measured 0.34 s at one hasher and 0.64 s at sixteen on a 16-thread
+//! box), and a per-hash figure without its hasher count is not a
+//! measurement of the verifier.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-/// The artifact's schema.
-pub const METRICS_SCHEMA: &str = "shekyl_e2_metrics_v1";
+/// The artifact's schema. `v2` added [`MetricsArtifact::concurrency`].
+pub const METRICS_SCHEMA: &str = "shekyl_e2_metrics_v2";
+
+/// How many workers shared the host while the numbers were taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct Concurrency {
+    /// `form` workers hashing at once (`PipelineConfig::hashers`).
+    pub hashers: usize,
+    /// Blocks formed ahead of the writer (`PipelineConfig::window`).
+    pub window: usize,
+}
 
 /// Running totals, updated from many threads without a lock.
 #[derive(Debug)]
 pub struct Metrics {
+    /// Set once by the pipeline at the start of a run; `None` in a sink no
+    /// pipeline has run over.
+    concurrency: OnceLock<Concurrency>,
     hashes: AtomicU64,
     hash_ns: AtomicU64,
     hash_ns_min: AtomicU64,
@@ -70,6 +90,7 @@ impl Metrics {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            concurrency: OnceLock::new(),
             hashes: AtomicU64::new(0),
             hash_ns: AtomicU64::new(0),
             hash_ns_min: AtomicU64::new(u64::MAX),
@@ -81,6 +102,12 @@ impl Metrics {
             blocks_formed: AtomicU64::new(0),
             form_ns: AtomicU64::new(0),
         }
+    }
+
+    /// The concurrency a run is about to measure under. The first call
+    /// stands: a sink measures one run.
+    pub fn configured(&self, concurrency: Concurrency) {
+        let _first_stands = self.concurrency.set(concurrency);
     }
 
     /// One `compute_hash` call took `d` (the derive, if any, excluded).
@@ -137,6 +164,7 @@ impl Metrics {
         MetricsArtifact {
             schema_version: METRICS_SCHEMA,
             host: Host::this(),
+            concurrency: self.concurrency.get().copied(),
             mode: "light (cache-only; no dataset)",
             hashes,
             hash_ns_total: hash_ns,
@@ -184,6 +212,9 @@ pub struct MetricsArtifact {
     pub schema_version: &'static str,
     /// The measuring host.
     pub host: Host,
+    /// How many workers shared it (module docs); `None` when no pipeline
+    /// configured the sink.
+    pub concurrency: Option<Concurrency>,
     /// Which verifier mode ran.
     pub mode: &'static str,
     /// `compute_hash` calls.
@@ -262,7 +293,28 @@ mod tests {
         );
         assert_eq!((s.blocks_formed, s.form_ns_mean), (1, Some(1_000)));
         assert_eq!(s.schema_version, METRICS_SCHEMA);
-        assert!(s.to_json().expect("json").contains("shekyl_e2_metrics_v1"));
+        assert!(s.to_json().expect("json").contains("shekyl_e2_metrics_v2"));
+        assert_eq!(s.concurrency, None, "no pipeline configured the sink");
+    }
+
+    #[test]
+    fn the_concurrency_is_stamped_once_and_the_first_stands() {
+        let m = Metrics::new();
+        m.configured(Concurrency {
+            hashers: 4,
+            window: 32,
+        });
+        m.configured(Concurrency {
+            hashers: 1,
+            window: 1,
+        });
+        assert_eq!(
+            m.snapshot().concurrency,
+            Some(Concurrency {
+                hashers: 4,
+                window: 32
+            })
+        );
     }
 
     #[test]

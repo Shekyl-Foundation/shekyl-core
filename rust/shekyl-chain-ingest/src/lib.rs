@@ -40,6 +40,8 @@
 //! - [`substrate`] — the production [`Substrate`](shekyl_chain_rules::Substrate):
 //!   RandomX verification through `shekyl-pow-randomx`'s cache path and the
 //!   system clock. The only hasher any Shekyl validator runs (§1.3).
+//! - [`metrics`] — the RandomX measurement sink (RD-F11), shared by the
+//!   substrate and the pipeline.
 //!
 //! Form is `shekyl_chain_rules::form`. The sequencer, the validate+connect
 //! actor, the grader and the driver live behind `feature = "pipeline"`.
@@ -83,21 +85,25 @@ pub(crate) mod test_support;
 pub mod trace;
 
 #[cfg(feature = "pipeline")]
-pub use connector::{Applied, Apply, Connector, ConnectorArgs, Digest, Rewind, Rewound, RunFault};
+pub use connector::{
+    Applied, Apply, Connector, ConnectorArgs, Digest, HashAt, Rewind, Rewound, RunEnd, RunFault,
+};
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 #[cfg(feature = "fetch")]
 pub use fetch::{fetch_corpus, FetchFault};
 #[cfg(feature = "pipeline")]
-pub use grader::{grade_run, GradedRun, Observations, Register};
-pub use metrics::{Metrics, MetricsArtifact};
+pub use grader::{grade_run, GradedRefusal, GradedRun, Observations, Register};
+pub use metrics::{Concurrency, Metrics, MetricsArtifact};
 #[cfg(feature = "pipeline")]
-pub use pipeline::{run, PipelineConfig, PipelineFault, RunReport, Switch};
+pub use pipeline::{
+    run, Checkpoint, Disagreement, PipelineConfig, PipelineFault, RunReport, Switch,
+};
 #[cfg(feature = "pipeline")]
 pub use schedule::{Chain, ChainRules, FixedDifficultyRefused};
 #[cfg(feature = "pipeline")]
-pub use seed::{SeedLedger, SeedSchedule};
+pub use seed::{SeedClaim, SeedLedger};
 #[cfg(feature = "pipeline")]
 pub use sequencer::{SequenceError, Sequencer};
 pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
-pub use substrate::{EpochPin, ProductionSubstrate, SubstrateFault};
+pub use substrate::{ProductionSubstrate, SubstrateFault};
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

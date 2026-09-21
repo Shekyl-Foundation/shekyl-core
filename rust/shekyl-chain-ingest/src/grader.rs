@@ -52,6 +52,22 @@
 //! open adjudication. `NeedsReviewedDivergence` is listed as owed, not as
 //! failed: the reviewed record that would license it is CI's to resolve
 //! when discharge sites exist (`conformance.rs`).
+//!
+//! # The refusal is graded once, on its own
+//!
+//! A refusal ends the run: Rust refused a block the chain holds, and
+//! nothing after it was compared. That is a disagreement whatever the
+//! register says of the refusing row, so it is graded as its own typed
+//! field ([`GradedRun::refusal`]) rather than only as one register row's
+//! verdict clause — a row the register does not carry at all (a bucket-3/4
+//! rule the census does not ratify, hence outside the coverage gate's
+//! denominator) is UNREVIEWED **by absence**, exactly as an unrecorded
+//! ratified row is. The register licenses the refusal only by recording
+//! the row DIVERGENT (owed a reviewed record); a CHECKED-CONFORMANT row
+//! failed, and an UNREVIEWED row's refusal is observed and **unlicensed**,
+//! so both are open adjudications. "UNREVIEWED is observed-only" governs
+//! what a match grants — nothing — not whether a run that stopped on a
+//! refusal may pass.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -95,6 +111,18 @@ impl From<RecordedState> for ConformanceState {
             RecordedState::CheckedConformant => Self::CheckedConformant,
             RecordedState::Divergent => Self::Divergent,
             RecordedState::Unreviewed => Self::Unreviewed,
+        }
+    }
+}
+
+impl From<ConformanceState> for RecordedState {
+    /// The inverse, so a fourth state added to either enum is a compile
+    /// error here rather than a mislabelled row.
+    fn from(s: ConformanceState) -> Self {
+        match s {
+            ConformanceState::CheckedConformant => Self::CheckedConformant,
+            ConformanceState::Divergent => Self::Divergent,
+            ConformanceState::Unreviewed => Self::Unreviewed,
         }
     }
 }
@@ -281,6 +309,22 @@ impl GradedAcceptance {
     }
 }
 
+/// The refusal that ended the run, graded on its own (module docs).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GradedRefusal {
+    /// The refusing row.
+    pub id: String,
+    /// Where the run ended.
+    pub height: u64,
+    /// The register's state for the row — UNREVIEWED by absence when the
+    /// register does not carry it.
+    pub state: RecordedState,
+    /// Whether the register records the row at all.
+    pub recorded: bool,
+    /// `grade(state, agreed = false)`.
+    pub acceptance: GradedAcceptance,
+}
+
 /// An open adjudication: a row whose evidence says the stores disagreed in
 /// a way the register does not license.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -309,6 +353,8 @@ pub struct GradedRun {
     pub schema_version: String,
     /// Every row, in id order.
     pub rows: Vec<GradedRow>,
+    /// The refusal that ended the run, if one did (module docs).
+    pub refusal: Option<GradedRefusal>,
     /// Rows with a verdict clause that accepted as correct — **progress is
     /// this count** (RD-Q6).
     pub derived_and_conformant: usize,
@@ -355,13 +401,39 @@ fn producers() -> BTreeMap<&'static str, &'static str> {
 #[must_use]
 pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
     let recorded: BTreeSet<&str> = register.rows.iter().map(|r| r.id.as_str()).collect();
+    let states = register.states();
     let producers = producers();
     let mut rows = Vec::new();
     let mut unadjudicated = Vec::new();
     let mut owed = Vec::new();
     let (mut derived_and_conformant, mut borrowed, mut not_exercised) = (0, 0, 0);
 
-    for (id, state) in register.states() {
+    // ---- the refusal, graded once whether or not the register has its row
+    let refusal = obs.refused.map(|(id, height)| {
+        let state = states
+            .get(id)
+            .copied()
+            .unwrap_or_else(|| ConformanceState::for_row(None));
+        GradedRefusal {
+            id: id.to_owned(),
+            height: height.to_raw(),
+            state: state.into(),
+            recorded: recorded.contains(id),
+            acceptance: grade(state, false).into(),
+        }
+    });
+    if let Some(r) = &refusal {
+        match r.acceptance {
+            GradedAcceptance::NeedsReviewedDivergence => owed.push(r.id.clone()),
+            acceptance => unadjudicated.push(Unadjudicated {
+                id: r.id.clone(),
+                clause: Clause::Verdict,
+                acceptance,
+            }),
+        }
+    }
+
+    for (id, state) in states {
         // ---- clause (1): the verdict ---------------------------------
         let refused_here = obs.refused.is_some_and(|(row, _)| row == id);
         let verdict = if refused_here {
@@ -399,8 +471,12 @@ pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
         if verdict == VerdictEvidence::NotExercised {
             not_exercised += 1;
         }
+        // The refusing row's verdict clause was adjudicated above, once.
         for (clause, acceptance) in [
-            (Clause::Verdict, verdict_acceptance),
+            (
+                Clause::Verdict,
+                verdict_acceptance.filter(|_| !refused_here),
+            ),
             (Clause::Component, component_acceptance),
         ] {
             match acceptance {
@@ -418,11 +494,7 @@ pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
             }
         }
         rows.push(GradedRow {
-            state: match state {
-                ConformanceState::CheckedConformant => RecordedState::CheckedConformant,
-                ConformanceState::Divergent => RecordedState::Divergent,
-                ConformanceState::Unreviewed => RecordedState::Unreviewed,
-            },
+            state: state.into(),
             recorded: recorded.contains(id.as_str()),
             id,
             verdict,
@@ -434,6 +506,7 @@ pub fn grade_run(register: &Register, obs: &Observations) -> GradedRun {
     GradedRun {
         schema_version: GRADE_SCHEMA.to_owned(),
         rows,
+        refusal,
         derived_and_conformant,
         borrowed,
         not_exercised,
@@ -565,6 +638,63 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_is_open_on_an_absent_row_and_an_unreviewed_row_and_owed_on_a_divergent_one() {
+        // CEN-B2 is implemented and bucket 4: never in the register. Its
+        // refusal ended the run; nothing licensed it.
+        let obs = Observations {
+            refused: Some(("CEN-B2", BlockHeight::from_raw(9))),
+            ..Observations::default()
+        };
+        let g = grade_run(&register(), &obs);
+        assert!(!g.passes(), "a refusal the register cannot see is open");
+        let r = g.refusal.as_ref().expect("graded");
+        assert_eq!((r.id.as_str(), r.height, r.recorded), ("CEN-B2", 9, false));
+        assert_eq!(r.state, RecordedState::Unreviewed, "by absence");
+        assert_eq!(
+            g.unadjudicated,
+            vec![Unadjudicated {
+                id: "CEN-B2".to_owned(),
+                clause: Clause::Verdict,
+                acceptance: GradedAcceptance::RegressionSignalOnly,
+            }]
+        );
+        assert!(
+            g.rows.iter().all(|row| row.id != "CEN-B2"),
+            "not a register row"
+        );
+
+        // An UNREVIEWED row's refusal is observed and unlicensed: open.
+        let obs = Observations {
+            refused: Some(("CEN-L8", BlockHeight::from_raw(3))),
+            ..Observations::default()
+        };
+        let g = grade_run(&register(), &obs);
+        assert!(!g.passes());
+        assert!(g.refusal.as_ref().is_some_and(|r| r.recorded));
+        let l8 = row(&g, "CEN-L8");
+        assert_eq!(l8.verdict, VerdictEvidence::Exercised { agreed: false });
+        assert_eq!(
+            g.unadjudicated.iter().filter(|u| u.id == "CEN-L8").count(),
+            1,
+            "adjudicated once, not once per clause"
+        );
+
+        // A DIVERGENT row's refusal is the divergence the register expects:
+        // owed a reviewed record, not open.
+        let obs = Observations {
+            refused: Some(("CEN-Z9", BlockHeight::from_raw(3))),
+            ..Observations::default()
+        };
+        let g = grade_run(&register(), &obs);
+        assert!(g.passes());
+        assert_eq!(g.owed_reviewed_divergence, vec!["CEN-Z9".to_owned()]);
+        assert_eq!(
+            g.refusal.as_ref().map(|r| r.acceptance),
+            Some(GradedAcceptance::NeedsReviewedDivergence)
+        );
+    }
+
+    #[test]
     fn a_digest_divergence_owes_a_reviewed_record_on_divergent_rows_and_fails_conformant_ones() {
         let mut obs = Observations::default();
         obs.checkpoint(false);
@@ -601,6 +731,26 @@ mod tests {
             ),
             Err(RegisterFault::Empty)
         ));
+    }
+
+    #[test]
+    fn the_extractors_committed_output_parses_as_a_register() {
+        // The cross-language check: `scripts/ci/export_conformance_register.py`
+        // emitted this file (docs-gates holds it equal to the live register,
+        // `--check-fixture`); this side parses it. A key renamed in either
+        // place fails here or there, never at the end of a replay.
+        let register = Register::from_json(include_str!("../fixtures/conformance_register.json"))
+            .expect("the extractor's own output parses");
+        assert!(!register.rows.is_empty());
+        for row in &register.rows {
+            assert!(row.id.starts_with("CEN-"), "{}", row.id);
+        }
+        let ids: Vec<&str> = register.rows.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.windows(2).all(|w| w[0] < w[1]), "sorted and unique");
+        assert!(
+            register.states().contains_key("CEN-A1"),
+            "the first ratified row is in the register"
+        );
     }
 
     #[test]

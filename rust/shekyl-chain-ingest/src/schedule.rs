@@ -31,14 +31,20 @@
 //! nettype and reads no environment (slice 2 F5, CEN-D3), so a driver that
 //! claimed seeds on a faster schedule would earn `Stale::Seed` at every
 //! block. The regtest daemon a corpus is harvested from must run without
-//! `SEEDHASH_EPOCH_*` overrides, or the corpus is a chain the validator
-//! refuses by design (RD-F17).
+//! `SEEDHASH_EPOCH_*` overrides (RD-F19). Under a **live** target such a
+//! corpus is refused by CEN-D1 from the first block mined under the fast
+//! schedule; under `--fixed-difficulty 1` every longhash satisfies the
+//! target and nothing in the chain data can tell the two schedules apart —
+//! which is why the exporter refuses to run with an override in its own
+//! environment, and why the recipe states the daemon's.
 
 use core::num::NonZeroU128;
 
 use shekyl_address::Network;
 use shekyl_chain_rules::{RuleSchedule, RuleSet};
 use shekyl_types::BlockHeight;
+
+use crate::corpus::CorpusNet;
 
 /// Where a run's chain is from, for rule-set purposes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +53,19 @@ pub enum Chain {
     Public(Network),
     /// `shekyld --regtest`: genesis rules, optionally with a fixed target.
     Regtest,
+}
+
+impl From<CorpusNet> for Chain {
+    /// The corpus's tag names the chain its blocks came from; the rules a
+    /// run resolves are that chain's.
+    fn from(net: CorpusNet) -> Self {
+        match net {
+            CorpusNet::Mainnet => Self::Public(Network::Mainnet),
+            CorpusNet::Testnet => Self::Public(Network::Testnet),
+            CorpusNet::Stagenet => Self::Public(Network::Stagenet),
+            CorpusNet::Fakechain => Self::Regtest,
+        }
+    }
 }
 
 /// `--fixed-difficulty` given somewhere it is not accepted.

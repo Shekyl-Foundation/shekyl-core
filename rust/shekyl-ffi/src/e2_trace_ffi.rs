@@ -9,8 +9,11 @@
 //! **Harvest shim, dies at cutover** (§1.3). The exporter is C++ because
 //! LMDB is; everything it produces is written by Rust
 //! (`shekyl_chain_ingest::trace::TraceWriter`), so the artifact's format is
-//! Rust-minted (RD-F9) and its checkpoints are hashed by the same function
-//! the redb side uses (RD-Q9) — the C++ never hashes.
+//! Rust-minted (RD-F9). The checkpoint the exporter pushes is the daemon's
+//! own `BlockchainLMDB::logical_state_digest_v0` — one read snapshot over
+//! the three families, hashed through `shekyl_logical_state_digest_v0` by
+//! the same `digest_v0` the redb side uses (RD-Q9) — so the C++ never
+//! hashes and never walks a family this crate would have to walk again.
 //!
 //! Byte transport is what D12 allows across this boundary; verdicts are what
 //! it rejected. Nothing here carries a secret; every input is a recorded
@@ -40,10 +43,12 @@ use crate::legacy_util::{array_from_ptr, slice_from_ptr};
 pub const SHEKYL_E2_TRACE_OK: i32 = 0;
 /// A required pointer was null.
 pub const SHEKYL_E2_TRACE_ERR_NULL_PTR: i32 = -1;
-/// A count overflowed `usize` when widened to bytes.
+/// Reserved: no count crosses this boundary any more (the checkpoint is a
+/// finished digest). Kept so the codes the header declares stay stable.
 pub const SHEKYL_E2_TRACE_ERR_OVERFLOW: i32 = -2;
-/// The writer refused the record: a facts height gap, a checkpoint with no
-/// facts record to anchor to, or a second checkpoint at one height.
+/// The writer refused the record: a facts height gap, a height past
+/// `u64::MAX`, a checkpoint with no facts record to anchor to, a second
+/// checkpoint, or facts after the checkpoint.
 pub const SHEKYL_E2_TRACE_ERR_SEQUENCE: i32 = -3;
 /// The underlying file write failed.
 pub const SHEKYL_E2_TRACE_ERR_IO: i32 = -4;
@@ -58,6 +63,7 @@ pub struct ShekylE2TraceWriter {
 fn code(fault: &TraceFault) -> i32 {
     match fault {
         TraceFault::HeightGap { .. }
+        | TraceFault::HeightExhausted { .. }
         | TraceFault::UnanchoredCheckpoint
         | TraceFault::CheckpointNotTip { .. }
         | TraceFault::DuplicateCheckpoint { .. }
@@ -71,7 +77,8 @@ fn code(fault: &TraceFault) -> i32 {
         | TraceFault::UnknownTag(_)
         | TraceFault::ReservedTag(_)
         | TraceFault::TrailerMismatch { .. }
-        | TraceFault::Truncated => SHEKYL_E2_TRACE_ERR_IO,
+        | TraceFault::Truncated
+        | TraceFault::TrailingBytes => SHEKYL_E2_TRACE_ERR_IO,
     }
 }
 
@@ -161,47 +168,31 @@ pub unsafe extern "C" fn shekyl_e2_trace_push_facts(
     }
 }
 
-/// The LMDB logical state after the last facts row (the covered tip), from
-/// the three families the exporter walked: `n_blocks` concatenated 32-byte
-/// block hashes in height order, `n_spent` concatenated 32-byte key images
-/// in any order, the 32-byte live root. Hashed here, never by the caller.
-/// Height is the writer's last facts row — the C++ does not name it.
+/// The LMDB logical state after the last facts row (the covered tip): the
+/// 32-byte `digest_v0` the daemon's own walker computed under one read
+/// snapshot (`BlockchainLMDB::logical_state_digest_v0`, itself through
+/// `shekyl_logical_state_digest_v0`). Height is the writer's last facts
+/// row — the C++ does not name it.
 ///
 /// # Safety
 ///
-/// `writer` must be a live handle; `block_hashes` / `spent_keys` may be null
-/// only when the corresponding count is 0 and must otherwise be valid for
-/// `count * 32` bytes of reads; `curve_root` must be valid for 32 bytes.
+/// `writer` must be a live handle from [`shekyl_e2_trace_open`]; `digest`
+/// must be valid for 32 bytes of reads.
 #[no_mangle]
 pub unsafe extern "C" fn shekyl_e2_trace_push_checkpoint(
     writer: *mut ShekylE2TraceWriter,
-    block_hashes: *const u8,
-    n_blocks: u64,
-    spent_keys: *const u8,
-    n_spent: u64,
-    curve_root: *const u8,
+    digest: *const u8,
 ) -> i32 {
     if writer.is_null() {
         return SHEKYL_E2_TRACE_ERR_NULL_PTR;
     }
-    let blocks = match unsafe { hashes_from_raw(block_hashes, n_blocks) } {
-        Ok(s) => s,
-        Err(c) => return c,
-    };
-    let spent = match unsafe { hashes_from_raw(spent_keys, n_spent) } {
-        Ok(s) => s,
-        Err(c) => return c,
-    };
-    let Some(root) = (unsafe { array_from_ptr::<32>(curve_root) }) else {
+    let Some(state) = (unsafe { array_from_ptr::<32>(digest) }) else {
         return SHEKYL_E2_TRACE_ERR_NULL_PTR;
     };
     // SAFETY: the caller's contract — a live handle from `open`.
     let w = unsafe { &mut *writer };
-    match w
-        .inner
-        .push_checkpoint_families(blocks, spent, CurveTreeRoot::from_bytes(root))
-    {
-        Ok(_) => SHEKYL_E2_TRACE_OK,
+    match w.inner.push_checkpoint(&state) {
+        Ok(()) => SHEKYL_E2_TRACE_OK,
         Err(e) => {
             tracing::error!("e2 trace: checkpoint: {e}");
             code(&e)
@@ -246,29 +237,6 @@ pub unsafe extern "C" fn shekyl_e2_trace_abort(writer: *mut ShekylE2TraceWriter)
     }
 }
 
-/// Borrow `n` concatenated 32-byte hashes (the digest FFI's seam, SA-R-7).
-///
-/// # Safety
-///
-/// `ptr` valid for `n * 32` bytes when `n > 0`.
-unsafe fn hashes_from_raw<'a>(ptr: *const u8, n: u64) -> Result<&'a [[u8; 32]], i32> {
-    if n == 0 {
-        return Ok(&[]);
-    }
-    let count = usize::try_from(n).map_err(|_| SHEKYL_E2_TRACE_ERR_OVERFLOW)?;
-    let byte_len = count.checked_mul(32).ok_or(SHEKYL_E2_TRACE_ERR_OVERFLOW)?;
-    let Some(bytes) = (unsafe { slice_from_ptr(ptr, byte_len) }) else {
-        return Err(if ptr.is_null() {
-            SHEKYL_E2_TRACE_ERR_NULL_PTR
-        } else {
-            SHEKYL_E2_TRACE_ERR_OVERFLOW
-        });
-    };
-    let (chunks, rem) = bytes.as_chunks::<32>();
-    debug_assert!(rem.is_empty(), "byte_len is a multiple of 32");
-    Ok(chunks)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,17 +276,16 @@ mod tests {
             };
             assert_eq!(rc, SHEKYL_E2_TRACE_OK);
         }
-        let hashes = [[0x11u8; 32], [0x12u8; 32]].concat();
-        let spent = [0x21u8; 32];
-        let rc = unsafe {
-            shekyl_e2_trace_push_checkpoint(w, hashes.as_ptr(), 2, spent.as_ptr(), 1, root.as_ptr())
-        };
+        let state = digest_v0(&[[0x11; 32], [0x12; 32]], &[[0x21; 32]], &root);
+        let rc = unsafe { shekyl_e2_trace_push_checkpoint(w, state.as_ptr()) };
         assert_eq!(rc, SHEKYL_E2_TRACE_OK);
         // A second checkpoint is refused (one, at the covered tip); the handle stays usable.
-        let rc = unsafe {
-            shekyl_e2_trace_push_checkpoint(w, hashes.as_ptr(), 2, spent.as_ptr(), 1, root.as_ptr())
-        };
+        let rc = unsafe { shekyl_e2_trace_push_checkpoint(w, state.as_ptr()) };
         assert_eq!(rc, SHEKYL_E2_TRACE_ERR_SEQUENCE);
+        assert_eq!(
+            unsafe { shekyl_e2_trace_push_checkpoint(w, std::ptr::null()) },
+            SHEKYL_E2_TRACE_ERR_NULL_PTR
+        );
         assert_eq!(unsafe { shekyl_e2_trace_finish(w) }, SHEKYL_E2_TRACE_OK);
 
         let trace = Trace::read(File::open(&path).expect("open")).expect("read");
@@ -331,10 +298,7 @@ mod tests {
         let expected = trace
             .expect(BlockHeight::from_raw(1))
             .expect("checkpointed");
-        assert_eq!(
-            *expected.value(),
-            digest_v0(&[[0x11; 32], [0x12; 32]], &[[0x21; 32]], &root)
-        );
+        assert_eq!(*expected.value(), state);
         std::fs::remove_file(&path).ok();
     }
 

@@ -6,16 +6,29 @@
 //! The driver: `Source → form (N workers) → Sequencer → Connector → sinks`
 //! (`DRS_E2_REPLAY_DRIVER.md` §1.1, RD-Q11, RD-Q13).
 //!
-//! One [`Drive`] owns the loop. It reads events from the [`Source`], claims
-//! each block's seed from the [`SeedLedger`] (falling back to the store for
-//! blocks recorded before this replay began), hands the block to a blocking
-//! `form` worker (`shekyl-chain-rules::form` — this crate does not wrap
-//! it), restores order through the [`Sequencer`], and sends bounded runs of
-//! consecutive `Extend`s to the [`Connector`] in one message each — one
-//! write closure per message. A `Rewind` is a **barrier**: no block after
-//! it is formed until the pops have committed, because its seed context is
-//! the post-rewind chain. The rewind occupies a sequence number;
+//! One [`Drive`] owns the loop. It reads events from the [`Source`],
+//! asserting their numbering as it goes; claims each block's seed from the
+//! [`SeedLedger`] (asking the store, through the connector, for a seed
+//! height the ledger's window has moved past — `seed` module docs); hands
+//! the block to a blocking `form` worker (`shekyl-chain-rules::form` — this
+//! crate does not wrap it); restores order through the [`Sequencer`]; and
+//! sends runs of consecutive `Extend`s to the [`Connector`] in one message
+//! each — one write closure per message. A `Rewind` is a **barrier**: no
+//! block after it is formed until the pops have committed, because its seed
+//! context is the post-rewind chain. The rewind occupies a sequence number;
 //! [`Sequencer::advance`] moves past it without a formed payload.
+//!
+//! # Two bounds, two knobs
+//!
+//! [`PipelineConfig::window`] bounds what is formed **ahead of the writer**
+//! — blocks in flight plus blocks formed and waiting in the sequencer — so
+//! memory is a window's worth of formed candidates, and one [`Apply`] run
+//! is at most a window. [`PipelineConfig::hashers`] bounds how many `form`
+//! workers run **at once** — RandomX light mode is memory-bound, and more
+//! hashers than cores thrash the 64 MiB scratchpad set rather than hash
+//! (RD-F11: the per-hash wall grows with concurrency). The two are
+//! independent: a wide window with few hashers keeps the writer fed while
+//! the hashers stay honest.
 //!
 //! Stateless stages are plain tasks; the one stateful stage is the actor
 //! (RD-Q11). The only state this loop holds between events is the ledger,
@@ -31,6 +44,8 @@
 //! disagreement; E3 and the mutation family keep the same actor and decide
 //! for themselves). A store halt is a fault.
 
+use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use kameo::actor::PreparedActor;
@@ -38,64 +53,72 @@ use kameo::error::SendError;
 use shekyl_chain_rules::{form, FormAttempt, InvalidBlock, StructurallyValid, Substrate, Verdict};
 use shekyl_chain_store::store::{ChainStore, StoreError};
 use shekyl_types::{BlockCount, BlockHash, BlockHeight};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 
-use crate::connector::{Apply, Connector, ConnectorArgs, Digest, Rewind, RunFault};
+use crate::connector::{Apply, Connector, ConnectorArgs, Digest, HashAt, Rewind, RunFault};
 use crate::grader::Observations;
-use crate::metrics::{Metrics, MetricsArtifact};
+use crate::metrics::{Concurrency, Metrics, MetricsArtifact};
 use crate::schedule::ChainRules;
-use crate::seed::{SeedLedger, SeedSchedule};
+use crate::seed::{SeedClaim, SeedLedger};
 use crate::sequencer::{SequenceError, Sequencer};
 use crate::source::{IngestEvent, SequenceNo, Sequenced, Source};
-use crate::substrate::EpochPin;
 use crate::trace::Trace;
 
-/// Knobs with a rationale each (rule 75).
+/// Knobs with a rationale each (rule 75; module docs).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PipelineConfig {
-    /// Blocks formed ahead of the writer at once — the speculative window.
-    /// Bounded well below `SEEDHASH_EPOCH_LAG` (64) so a seed claim for a
-    /// block in flight always names a block already read; also the maximum
-    /// run length one [`Apply`] carries.
-    pub window: usize,
+    /// Blocks formed ahead of the writer at once — in flight plus waiting
+    /// in the sequencer — and so the maximum run length one [`Apply`]
+    /// carries.
+    pub window: NonZeroUsize,
+    /// `form` workers hashing at once.
+    pub hashers: NonZeroUsize,
 }
 
 impl PipelineConfig {
-    /// The default window: half of `SEEDHASH_EPOCH_LAG` (64). A seed claim
-    /// for a block in flight always names a block already read, with the
-    /// same margin again to spare; and small enough that one `Apply` run
-    /// stays a few dozen blocks.
-    pub const DEFAULT_WINDOW: usize = (shekyl_difficulty::SEEDHASH_EPOCH_LAG / 2) as usize;
+    /// The default window: half of `SEEDHASH_EPOCH_LAG` (64) — a few dozen
+    /// formed candidates in memory, and one `Apply` run of the same size,
+    /// which amortises the two-fsync commit over a run without holding a
+    /// write transaction open long.
+    pub const DEFAULT_WINDOW: NonZeroUsize =
+        match NonZeroUsize::new((shekyl_difficulty::SEEDHASH_EPOCH_LAG / 2) as usize) {
+            Some(n) => n,
+            None => unreachable!(),
+        };
+
+    /// The default hasher count: the host's parallelism, one when the
+    /// platform will not say. Read at run time, never provisioned as a
+    /// constant (rule 76: the floor is a stated device, and a knob that
+    /// silently assumed it would mis-size every other host).
+    #[must_use]
+    pub fn default_hashers() -> NonZeroUsize {
+        std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN)
+    }
 }
 
 impl Default for PipelineConfig {
     fn default() -> Self {
         Self {
             window: Self::DEFAULT_WINDOW,
+            hashers: Self::default_hashers(),
         }
     }
 }
-
-/// The seed-epoch schedule the driver claims under — the validator's
-/// (slice 2 F5: the mainnet constants at every nettype, no environment),
-/// so it is not a knob (`schedule` module docs).
-const SEEDS: SeedSchedule = SeedSchedule::MAINNET;
 
 /// What a run produced.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunReport {
     /// Blocks connected, in order.
     pub connected: Vec<(BlockHeight, BlockHash)>,
-    /// Blocks popped by rewinds.
-    pub popped: u64,
+    /// The census rows the connected blocks' verdicts exercised — the union
+    /// of every `ChainValid`'s coverage.
+    pub exercised: BTreeSet<&'static str>,
     /// The refusal that ended the run, if a verdict did.
     pub refused: Option<(BlockHeight, InvalidBlock)>,
     /// The redb-side digest at the trace's covered-tip checkpoint, beside
     /// the trace's expectation, when that height connected.
-    pub checkpoint: Option<(BlockHeight, crate::trace::Digest, crate::trace::Digest)>,
-    /// What the grader reads (RD-Q9): exercised rows, the refusal, digest
-    /// agreement.
-    pub observations: Observations,
+    pub checkpoint: Option<Checkpoint>,
     /// The RandomX measurement (RD-F11), as of the run's end.
     pub metrics: MetricsArtifact,
     /// One entry per committed `Rewind`: the digest **after the pop**, at
@@ -103,6 +126,25 @@ pub struct RunReport {
     /// pop-symmetry check through the actor (the state at `to` must be the
     /// state the chain had when `to` was first the tip).
     pub switches: Vec<Switch>,
+}
+
+/// The covered-tip checkpoint, compared.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Checkpoint {
+    /// The height after which both digests were taken.
+    pub at: BlockHeight,
+    /// The redb-side logical state.
+    pub ours: crate::trace::Digest,
+    /// The trace's expectation (the LMDB side).
+    pub theirs: crate::trace::Digest,
+}
+
+impl Checkpoint {
+    /// Whether the two sides agree.
+    #[must_use]
+    pub fn identical(&self) -> bool {
+        self.ours == self.theirs
+    }
 }
 
 /// A committed rewind and the state it left.
@@ -116,19 +158,90 @@ pub struct Switch {
     pub digest: crate::trace::Digest,
 }
 
+/// A way the run disagreed with the chain it replayed — what a caller with
+/// no register to grade against must still not read as a pass (§1.3: the
+/// success condition is *no unadjudicated disagreement*, and with no
+/// register nothing is adjudicated).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disagreement {
+    /// Rust refused a block the chain holds.
+    Refused {
+        /// Where.
+        height: BlockHeight,
+        /// The verdict.
+        verdict: InvalidBlock,
+    },
+    /// The redb digest differed from the trace's checkpoint.
+    Diverged {
+        /// The checkpoint height.
+        at: BlockHeight,
+    },
+}
+
+impl RunReport {
+    /// Blocks popped over every committed rewind.
+    #[must_use]
+    pub fn popped(&self) -> u64 {
+        self.switches.iter().map(|s| s.popped).sum()
+    }
+
+    /// What the grader reads (RD-Q9), derived from the report so the two
+    /// cannot disagree: exercised rows, the refusal, digest agreement.
+    #[must_use]
+    pub fn observations(&self) -> Observations {
+        Observations {
+            exercised: self.exercised.clone(),
+            refused: self
+                .refused
+                .as_ref()
+                .map(|(height, verdict)| (verdict.rule.as_str(), *height)),
+            digest_identical: self.checkpoint.as_ref().map(Checkpoint::identical),
+        }
+    }
+
+    /// Every way the run disagreed with the chain, in the order they can
+    /// occur: a checkpoint that diverged, a refusal that ended the run.
+    pub fn disagreements(&self) -> impl Iterator<Item = Disagreement> + '_ {
+        let diverged = self
+            .checkpoint
+            .as_ref()
+            .filter(|c| !c.identical())
+            .map(|c| Disagreement::Diverged { at: c.at });
+        let refused = self
+            .refused
+            .as_ref()
+            .map(|(height, verdict)| Disagreement::Refused {
+                height: *height,
+                verdict: *verdict,
+            });
+        diverged.into_iter().chain(refused)
+    }
+}
+
 /// Why a run ended in an error.
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineFault<SrcF, SubF> {
     /// The source failed.
     #[error("source: {0:?}")]
     Source(SrcF),
+    /// The source's first `Extend` is not the store's next height: formed
+    /// as is, it would be judged at the wrong height and its refusal read
+    /// as a verdict (`Source::first_height`).
+    #[error("the source starts at height {source_first}, the store's next height is {store_next}")]
+    Misaligned {
+        /// Where the source's first block belongs.
+        source_first: BlockHeight,
+        /// The height the store would connect next.
+        store_next: BlockHeight,
+    },
     /// The verifier could not compute (§1.1: terminal for the run).
     #[error("substrate: {0:?}")]
     Substrate(SubF),
     /// A `form` worker was cancelled or panicked.
     #[error("form worker: {0}")]
     Worker(#[from] tokio::task::JoinError),
-    /// The sequencer refused a position (a driver defect).
+    /// The sequencer refused a position, or the source's numbering has a
+    /// hole (a driver or source defect).
     #[error(transparent)]
     Sequence(#[from] SequenceError),
     /// No seed could be claimed for `height`: neither the ledger nor the
@@ -152,9 +265,9 @@ pub enum PipelineFault<SrcF, SubF> {
     Mailbox,
 }
 
-type Formed<F> = Sequenced<(BlockHeight, Result<Verdict<StructurallyValid>, F>)>;
-/// Sequencer payload: a formed height, or the substrate's inability to compute.
-type SequencedForm<F> = Result<(BlockHeight, Verdict<StructurallyValid>), F>;
+/// What a `form` worker hands the sequencer: the formed height, or the
+/// substrate's inability to compute.
+type Formed<F> = Result<(BlockHeight, Verdict<StructurallyValid>), F>;
 
 /// A handler's own error is the connector's fault; every other way an
 /// `ask` can fail is the mailbox.
@@ -168,12 +281,24 @@ fn collapse<M, SrcF, SubF>(err: SendError<M, RunFault>) -> PipelineFault<SrcF, S
     }
 }
 
+/// The height after `tip`, or the first height on an empty store.
+fn next_height(tip: Option<BlockHeight>) -> BlockHeight {
+    tip.map_or(BlockHeight::ZERO, |t| {
+        t.checked_add(BlockCount::ONE)
+            .expect("a recorded tip is not u64::MAX")
+    })
+}
+
 /// Run a source to exhaustion against `store`.
+///
+/// `metrics` must be the sink `substrate` records into (`substrate` module
+/// docs): the pipeline times each block's `form` into it and snapshots it
+/// for the report.
 ///
 /// # Errors
 ///
 /// Any [`PipelineFault`]; the report up to the fault is not returned (the
-/// store carries what landed).
+/// store carries what landed; `metrics` carries the measurement).
 pub async fn run<Src, S>(
     source: &mut Src,
     substrate: Arc<S>,
@@ -185,33 +310,19 @@ pub async fn run<Src, S>(
 ) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>>
 where
     Src: Source,
-    S: Substrate + EpochPin + Send + Sync + 'static,
+    S: Substrate + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
-    assert!(cfg.window > 0, "a window of zero forms nothing");
-    let starting_tip = store.begin_read()?.tip()?.recorded.map(|t| t.height);
-    // Seeds for blocks recorded before this run come from the store, read
-    // once here; the actor owns the store from now on.
-    let mut ledger = SeedLedger::new();
-    if let Some(tip) = starting_tip {
-        let snap = store.begin_read()?;
-        // Only the heights a future claim can name: seed heights are
-        // non-decreasing, so from the current one up to the tip.
-        let from = SEEDS.seed_height(
-            tip.checked_add(BlockCount::ONE)
-                .expect("height space exhausted"),
-        );
-        for h in from.to_raw()..=tip.to_raw() {
-            if let shekyl_chain_rules::AtHeight::Recorded(info) =
-                snap.block_info(BlockHeight::from_raw(h))?
-            {
-                ledger.record(BlockHeight::from_raw(h), info.hash);
-            }
-        }
+    let form_at = next_height(store.begin_read()?.tip()?.recorded.map(|t| t.height));
+    if source.first_height() != form_at {
+        return Err(PipelineFault::Misaligned {
+            source_first: source.first_height(),
+            store_next: form_at,
+        });
     }
-    let form_at = starting_tip.map_or(BlockHeight::from_raw(0), |t| {
-        t.checked_add(BlockCount::ONE)
-            .expect("height space exhausted")
+    metrics.configured(Concurrency {
+        hashers: cfg.hashers.get(),
+        window: cfg.window.get(),
     });
 
     // Prepared rather than `Connector::spawn`, so the task handle is ours:
@@ -234,15 +345,14 @@ where
         connector: &connector,
         trace: &trace,
         cfg,
-        ledger: &mut ledger,
+        ledger: SeedLedger::new(),
         form_at,
+        next_seq: SequenceNo::FIRST,
         checkpoint_at: trace.checkpoint().map(|(h, _)| h),
-        report: RunReport {
-            metrics: metrics.snapshot(),
-            ..RunReport::default()
-        },
+        report: RunReport::default(),
         sequencer: Sequencer::new(SequenceNo::FIRST),
         pinned: None,
+        hashers: Arc::new(Semaphore::new(cfg.hashers.get())),
         in_flight: JoinSet::new(),
         pending_rewind: None,
         exhausted: false,
@@ -264,7 +374,7 @@ where
 struct Drive<'a, Src, S>
 where
     Src: Source,
-    S: Substrate + EpochPin + Send + Sync + 'static,
+    S: Substrate + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
     source: &'a mut Src,
@@ -274,13 +384,20 @@ where
     connector: &'a kameo::actor::ActorRef<Connector>,
     trace: &'a Arc<Trace>,
     cfg: PipelineConfig,
-    ledger: &'a mut SeedLedger,
+    ledger: SeedLedger,
+    /// The height the next `Extend` connects at.
     form_at: BlockHeight,
+    /// The sequence number the next event must carry.
+    next_seq: SequenceNo,
     checkpoint_at: Option<BlockHeight>,
     report: RunReport,
-    sequencer: Sequencer<SequencedForm<S::Fault>>,
+    sequencer: Sequencer<Formed<S::Fault>>,
+    /// The seed last pinned on the substrate.
     pinned: Option<BlockHash>,
-    in_flight: JoinSet<Formed<S::Fault>>,
+    /// One permit per hasher; a worker holds its permit for the life of
+    /// its `form`.
+    hashers: Arc<Semaphore>,
+    in_flight: JoinSet<Sequenced<Formed<S::Fault>>>,
     pending_rewind: Option<Sequenced<BlockHeight>>,
     exhausted: bool,
 }
@@ -288,23 +405,30 @@ where
 impl<Src, S> Drive<'_, Src, S>
 where
     Src: Source,
-    S: Substrate + EpochPin + Send + Sync + 'static,
+    S: Substrate + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
     async fn run_loop(&mut self) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>> {
         loop {
             self.fill().await?;
-            self.collect_one().await?;
+            self.collect().await?;
             self.apply_ready().await?;
             if self.report.refused.is_some() {
                 break;
             }
             self.try_rewind().await?;
-            if self.exhausted
-                && self.in_flight.is_empty()
-                && self.pending_rewind.is_none()
-                && self.sequencer.pending() == 0
-            {
+            if self.exhausted && self.in_flight.is_empty() && self.pending_rewind.is_none() {
+                // Nothing left to read, form or pop. Every numbered event
+                // was formed or advanced over, so nothing can be waiting;
+                // if something is, it is a defect to surface, not a queue
+                // to spin on.
+                if self.sequencer.pending() != 0 {
+                    return Err(SequenceError::Stranded {
+                        next: self.sequencer.next_expected(),
+                        pending: self.sequencer.pending(),
+                    }
+                    .into());
+                }
                 break;
             }
         }
@@ -312,15 +436,23 @@ where
         Ok(std::mem::take(&mut self.report))
     }
 
+    /// Read events and start forming them, while the window has room and a
+    /// hasher is free. Stops at a `Rewind` (the barrier) and at exhaustion.
     async fn fill(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
         while !self.exhausted
             && self.pending_rewind.is_none()
-            && self.in_flight.len() < self.cfg.window
+            && self.in_flight.len() + self.sequencer.pending() < self.cfg.window.get()
         {
+            // The permit is taken before the event is read, so no event is
+            // pulled from the source and then held with nowhere to go.
+            let Ok(permit) = Arc::clone(&self.hashers).try_acquire_owned() else {
+                break;
+            };
             let Some(event) = self.source.next().map_err(PipelineFault::Source)? else {
                 self.exhausted = true;
                 break;
             };
+            self.take_sequence(event.seq)?;
             match event.event {
                 IngestEvent::Rewind { to } => {
                     self.pending_rewind = Some(Sequenced {
@@ -329,78 +461,126 @@ where
                     });
                 }
                 IngestEvent::Extend(candidate) => {
-                    let height = self.form_at;
-                    self.form_at = height
-                        .checked_add(BlockCount::ONE)
-                        .expect("height space exhausted");
-                    self.ledger.record(height, candidate.block.hash());
-                    let seed_height = SEEDS.seed_height(height);
-                    let Some(seed) = self.ledger.claim(SEEDS, height) else {
-                        return Err(PipelineFault::SeedUnknown {
-                            height,
-                            seed_height,
-                        });
-                    };
-                    self.ledger.forget_below(seed_height);
-                    if seed != BlockHash::NULL && self.pinned != Some(seed) {
-                        let s = Arc::clone(&self.substrate);
-                        tokio::task::spawn_blocking(move || s.pin_epoch(&seed)).await?;
-                        self.pinned = Some(seed);
-                    }
-                    let substrate = Arc::clone(&self.substrate);
-                    let metrics = Arc::clone(self.metrics);
-                    let seq = event.seq;
-                    let in_force = self.rules.in_force(height);
-                    self.in_flight.spawn_blocking(move || {
-                        let started = std::time::Instant::now();
-                        let verdict =
-                            form(*candidate, &in_force, &*substrate, seed, FormAttempt::FIRST);
-                        metrics.block_formed(started.elapsed());
-                        Sequenced {
-                            seq,
-                            event: (height, verdict),
-                        }
-                    });
+                    self.spawn_form(event.seq, candidate, permit).await?;
                 }
             }
         }
         Ok(())
     }
 
-    async fn collect_one(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
-        let Some(done) = self.in_flight.join_next().await else {
-            return Ok(());
-        };
-        let item = done?;
-        self.sequencer.push(Sequenced {
-            seq: item.seq,
-            event: match item.event {
-                (height, Ok(verdict)) => Ok((height, verdict)),
-                (_, Err(fault)) => Err(fault),
-            },
-        })?;
+    /// The numbering contract, asserted at the event: consecutive from
+    /// `FIRST`, or the source is defective and the run says so here rather
+    /// than parking items behind a number nothing will fill.
+    fn take_sequence(&mut self, seq: SequenceNo) -> Result<(), SequenceError> {
+        if seq != self.next_seq {
+            return Err(SequenceError::NotNext {
+                expected: self.next_seq,
+                found: seq,
+            });
+        }
+        self.next_seq = seq.next();
         Ok(())
     }
 
+    /// Assign the next height, claim its seed, pin the epoch if it changed,
+    /// and start the worker. The permit rides with the worker and is
+    /// released when `form` returns.
+    async fn spawn_form(
+        &mut self,
+        seq: SequenceNo,
+        candidate: Box<shekyl_chain_rules::Candidate>,
+        permit: OwnedSemaphorePermit,
+    ) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let height = self.form_at;
+        self.form_at = next_height(Some(height));
+        self.ledger.record(height, candidate.block.hash());
+        let seed = self.claim_seed(height).await?;
+        if seed != BlockHash::NULL && self.pinned != Some(seed) {
+            let substrate = Arc::clone(&self.substrate);
+            tokio::task::spawn_blocking(move || substrate.pin_seed(&seed)).await?;
+            self.pinned = Some(seed);
+        }
+        let substrate = Arc::clone(&self.substrate);
+        let metrics = Arc::clone(self.metrics);
+        let in_force = self.rules.in_force(height);
+        self.in_flight.spawn_blocking(move || {
+            let started = std::time::Instant::now();
+            let verdict = form(*candidate, &in_force, &*substrate, seed, FormAttempt::FIRST);
+            metrics.block_formed(started.elapsed());
+            drop(permit);
+            Sequenced {
+                seq,
+                event: verdict.map(|verdict| (height, verdict)),
+            }
+        });
+        Ok(())
+    }
+
+    /// The seed for a block connecting at `connecting`: the ledger's, or
+    /// the store's for a seed height the ledger's window has moved past
+    /// (`seed` module docs), recorded so the next claim at that seed
+    /// height is the ledger's. Between rewinds seed heights never decrease,
+    /// so what lies below this one is forgotten.
+    async fn claim_seed(
+        &mut self,
+        connecting: BlockHeight,
+    ) -> Result<BlockHash, PipelineFault<Src::Fault, S::Fault>> {
+        let seed = match self.ledger.claim(connecting) {
+            SeedClaim::Known(seed) => seed,
+            SeedClaim::Unread { seed_height } => {
+                let recorded = self
+                    .connector
+                    .ask(HashAt {
+                        height: seed_height,
+                    })
+                    .await
+                    .map_err(collapse)?;
+                let Some(seed) = recorded else {
+                    return Err(PipelineFault::SeedUnknown {
+                        height: connecting,
+                        seed_height,
+                    });
+                };
+                self.ledger.record(seed_height, seed);
+                seed
+            }
+        };
+        if let Some(seed_height) = shekyl_chain_rules::seed_height(connecting) {
+            self.ledger.forget_below(seed_height);
+        }
+        Ok(seed)
+    }
+
+    /// Wait for one worker, then take every other one already finished, so
+    /// a run covers everything formed by the time the writer is asked.
+    async fn collect(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
+        let Some(done) = self.in_flight.join_next().await else {
+            return Ok(());
+        };
+        self.sequencer.push(done?)?;
+        while let Some(done) = self.in_flight.try_join_next() {
+            self.sequencer.push(done?)?;
+        }
+        Ok(())
+    }
+
+    /// Send the releasable run — at most a window, by the fill bound — to
+    /// the writer, and record what it did.
     async fn apply_ready(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
         let mut run: Vec<(BlockHeight, Verdict<StructurallyValid>)> = Vec::new();
         while let Some(item) = self.sequencer.pop_ready() {
-            match item.event {
-                Err(fault) => return Err(PipelineFault::Substrate(fault)),
-                Ok((height, formed)) => run.push((height, formed)),
-            }
+            run.push(item.event.map_err(PipelineFault::Substrate)?);
         }
         if run.is_empty() {
             return Ok(());
         }
         let applied = self.connector.ask(Apply(run)).await.map_err(collapse)?;
         self.report
-            .observations
             .exercised
             .extend(applied.exercised.iter().copied());
-        for (height, hash) in &applied.connected {
-            self.report.connected.push((*height, *hash));
-        }
+        self.report
+            .connected
+            .extend(applied.connected.iter().copied());
         if let Some(at) = self.checkpoint_at {
             if applied.connected.iter().any(|(h, _)| *h == at) {
                 let ours = self.connector.ask(Digest).await.map_err(collapse)?;
@@ -409,17 +589,16 @@ where
                     .expect(at)
                     .expect("checkpoint_at comes from the trace")
                     .value();
-                self.report.observations.checkpoint(ours == theirs);
-                self.report.checkpoint = Some((at, ours, theirs));
+                self.report.checkpoint = Some(Checkpoint { at, ours, theirs });
             }
         }
-        if let Some((height, refused)) = applied.refused {
-            self.report.observations.refused = Some((refused.rule.as_str(), height));
-            self.report.refused = Some((height, refused));
-        }
+        self.report.refused = applied.refused;
         Ok(())
     }
 
+    /// Commit the pending rewind once nothing is in flight ahead of it: the
+    /// barrier. Records the digest after the pop and moves the ledger and
+    /// the next height to the post-rewind chain.
     async fn try_rewind(&mut self) -> Result<(), PipelineFault<Src::Fault, S::Fault>> {
         let Some(rewind) = self.pending_rewind.take() else {
             return Ok(());
@@ -429,23 +608,16 @@ where
             return Ok(());
         }
         self.sequencer.advance(rewind.seq)?;
-        let rewound = self
-            .connector
-            .ask(Rewind { to: rewind.event })
-            .await
-            .map_err(collapse)?;
-        self.report.popped += rewound.popped;
+        let to = rewind.event;
+        let rewound = self.connector.ask(Rewind { to }).await.map_err(collapse)?;
         let digest = self.connector.ask(Digest).await.map_err(collapse)?;
         self.report.switches.push(Switch {
-            to: rewind.event,
+            to,
             popped: rewound.popped,
             digest,
         });
-        self.ledger.rewind_to(rewind.event);
-        self.form_at = rewind
-            .event
-            .checked_add(BlockCount::ONE)
-            .expect("height space exhausted");
+        self.ledger.rewind_to(to);
+        self.form_at = next_height(Some(to));
         Ok(())
     }
 }

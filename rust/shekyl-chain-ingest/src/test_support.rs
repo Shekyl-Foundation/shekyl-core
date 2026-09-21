@@ -3,10 +3,16 @@
 // All rights reserved.
 // BSD-3-Clause
 
-//! Fixtures shared by the artifact and pipeline tests: a chain the landed
-//! rules accept under the mock substrate, its corpus bytes, and a trace
-//! whose facts the chain's headers agree with (CEN-B5: the header root at
-//! `h` is `root_after(h − 1)`).
+//! Fixtures shared by the artifact, corpus and pipeline tests: a chain the
+//! landed rules accept under the mock substrate, its corpus bytes, and a
+//! trace whose facts the chain's headers agree with (CEN-B5: the header
+//! root at `h` is `root_after(h − 1)`).
+//!
+//! Every key image a fixture spends encodes the **whole height** and a
+//! family tag ([`key_image`]), so no chain or fork length collides on
+//! SI-1 (a `u8` per height would have made height 251 respend height 1's
+//! image, and a fork past 96 blocks overflow the byte — caps a test would
+//! meet as a store halt, misattributed to the pipeline).
 
 use std::collections::VecDeque;
 
@@ -64,10 +70,14 @@ pub fn root_after(height: u64) -> CurveTreeRoot {
     CurveTreeRoot::from_bytes(bytes)
 }
 
+/// A wire-valid miner transaction for `height`: the sole `Input::Gen` the
+/// wire demands (the rules harness's `fixture::coinbase` has no inputs and
+/// does not survive `Block::read`; RD-F16). Saturating, so a fixture at
+/// `u64::MAX` still serializes.
 pub fn coinbase(height: u64) -> Transaction {
     Transaction {
         prefix: TxPrefix {
-            unlock_time: height + 60,
+            unlock_time: height.saturating_add(60),
             inputs: vec![Input::Gen(height)],
             outputs: vec![Output {
                 amount: 0,
@@ -84,15 +94,35 @@ pub fn coinbase(height: u64) -> Transaction {
     }
 }
 
-/// A spend of key image `[key_image; 32]`.
-pub fn spend(key_image: u8) -> Transaction {
+/// Which chain a key image belongs to, so a fork's spends never collide
+/// with the main chain's at any height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Family {
+    /// The chain [`chain`] builds.
+    Main = 0xA0,
+    /// The fork [`reorg`] builds onto it.
+    Fork = 0xB0,
+}
+
+/// The key image block `height` of `family` spends: the family tag, then
+/// the height's eight little-endian bytes, then a fill byte.
+pub fn key_image(family: Family, height: u64) -> [u8; 32] {
+    let mut bytes = [0x11u8; 32];
+    bytes[0] = family as u8;
+    bytes[1..9].copy_from_slice(&height.to_le_bytes());
+    bytes
+}
+
+/// A spend of `key_image`.
+pub fn spend(key_image: [u8; 32]) -> Transaction {
     Transaction {
         prefix: TxPrefix {
             unlock_time: 0,
             inputs: vec![Input::ToKey {
                 amount: 0,
                 key_offsets: Vec::new(),
-                key_image: [key_image; 32],
+                key_image,
             }],
             outputs: vec![Output {
                 amount: 0,
@@ -156,7 +186,7 @@ pub fn chain_listing(listed: Vec<Vec<Transaction>>) -> Vec<(Block, Vec<Transacti
 }
 
 /// A chain of `n` blocks: genesis lists nothing; block `h > 0` lists one
-/// spend of key image `h`.
+/// spend of the main family's key image for `h`.
 pub fn chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
     chain_listing(
         (0..n)
@@ -164,7 +194,7 @@ pub fn chain(n: u64) -> Vec<(Block, Vec<Transaction>)> {
                 if hh == 0 {
                     Vec::new()
                 } else {
-                    vec![spend(u8::try_from(hh % 250 + 1).expect("small"))]
+                    vec![spend(key_image(Family::Main, hh))]
                 }
             })
             .collect(),
@@ -198,8 +228,7 @@ pub fn reorg(main_len: u64, to: u64, fork_len: u64) -> Reorg {
     let mut previous = after.last().expect("non-empty").0.hash();
     for i in 0..fork_len {
         let height = to + 1 + i;
-        // Key images 0xA0.. are never used by `chain`'s 1..=250 range.
-        let txs = vec![spend(0xA0 + u8::try_from(i).expect("small fork"))];
+        let txs = vec![spend(key_image(Family::Fork, height))];
         let b = block_with_nonce(
             height,
             previous,
@@ -289,7 +318,7 @@ pub fn spent_keys_of(chain: &[(Block, Vec<Transaction>)]) -> Vec<[u8; 32]> {
 
 /// A trace with facts for every height of `chain` and, when `checkpoint`
 /// is set, the LMDB-shaped checkpoint after the last block — computed
-/// from the chain itself, the way the exporter would from LMDB.
+/// from the chain itself, the way the daemon's walker would from LMDB.
 pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace {
     let mut w = TraceWriter::new(Vec::new()).expect("header");
     for (hh, _) in chain.iter().enumerate() {
@@ -297,9 +326,7 @@ pub fn trace_of(chain: &[(Block, Vec<Transaction>)], checkpoint: bool) -> Trace 
             .expect("facts");
     }
     if checkpoint && !chain.is_empty() {
-        let last = chain.len() as u64 - 1;
-        let hashes: Vec<[u8; 32]> = chain.iter().map(|(b, _)| b.hash().to_bytes()).collect();
-        w.push_checkpoint_families(&hashes, &spent_keys_of(chain), root_after(last))
+        w.push_checkpoint(&expected_state(chain))
             .expect("checkpoint");
     }
     Trace::read(std::io::Cursor::new(w.finish().expect("trailer"))).expect("read")
@@ -316,17 +343,39 @@ pub fn open_store(path: &std::path::Path) -> ChainStore {
     ChainStore::create(path, EPOCH).expect("create")
 }
 
-/// A source that plays a script of events, sequenced from `FIRST`.
+/// A source that plays a script of events, sequenced from `FIRST`, whose
+/// first `Extend` is at `first`.
 pub struct Scripted {
-    events: VecDeque<IngestEvent>,
-    seq: SequenceNo,
+    first: BlockHeight,
+    events: VecDeque<Sequenced<IngestEvent>>,
 }
 
 impl Scripted {
+    /// Events numbered consecutively from `FIRST`, starting at height 0.
     pub fn new(events: Vec<IngestEvent>) -> Self {
+        Self::from(h(0), events)
+    }
+
+    /// Events numbered consecutively from `FIRST`, starting at `first`.
+    pub fn from(first: BlockHeight, events: Vec<IngestEvent>) -> Self {
+        let mut seq = SequenceNo::FIRST;
+        let events = events
+            .into_iter()
+            .map(|event| {
+                let at = seq;
+                seq = seq.next();
+                Sequenced { seq: at, event }
+            })
+            .collect();
+        Self { first, events }
+    }
+
+    /// Events with the numbers given — for a source that breaks the
+    /// numbering contract on purpose.
+    pub fn numbered(first: BlockHeight, events: Vec<Sequenced<IngestEvent>>) -> Self {
         Self {
+            first,
             events: events.into(),
-            seq: SequenceNo::FIRST,
         }
     }
 }
@@ -334,12 +383,11 @@ impl Scripted {
 impl Source for Scripted {
     type Fault = std::convert::Infallible;
 
+    fn first_height(&self) -> BlockHeight {
+        self.first
+    }
+
     fn next(&mut self) -> Result<Option<Sequenced<IngestEvent>>, Self::Fault> {
-        let Some(ev) = self.events.pop_front() else {
-            return Ok(None);
-        };
-        let seq = self.seq;
-        self.seq = seq.next();
-        Ok(Some(Sequenced { seq, event: ev }))
+        Ok(self.events.pop_front())
     }
 }

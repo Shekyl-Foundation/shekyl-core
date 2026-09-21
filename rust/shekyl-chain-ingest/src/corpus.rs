@@ -31,9 +31,10 @@
 //! rewind  = 0x02 ‖ to u64
 //! ```
 //!
-//! `count` counts records of both kinds and is written at
+//! `count` counts records of both kinds — a `rewind` occupies no height,
+//! so it is a record count, not a height span — and is written at
 //! [`CorpusWriter::finish`]; a file whose header count disagrees with its
-//! records was not finished and is refused.
+//! records, or that ends inside one, was not finished and is refused.
 //!
 //! # Rewind — the reorg family's switch (RD-Q13, §7 commit 8c)
 //!
@@ -93,8 +94,11 @@ mod tag {
 /// A `rewind` record: tag ‖ `to` u64.
 const REWIND_RECORD_LEN: usize = 1 + core::mem::size_of::<u64>();
 
-/// Which chain the corpus was taken from — the artifact's own tag.
+/// Which chain the corpus was taken from — the artifact's own tag, and the
+/// one spelling of "which chain" the driver's command line takes (`--chain
+/// regtest` names the Fakechain arm, as the daemon's flag does).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "replay-cli", derive(clap::ValueEnum))]
 #[repr(u8)]
 pub enum CorpusNet {
     /// The public main network.
@@ -105,6 +109,7 @@ pub enum CorpusNet {
     Stagenet = 2,
     /// A single-operator regtest chain (`--regtest`); the one nettype whose
     /// rule set may carry a fixed difficulty (RD-Q7).
+    #[cfg_attr(feature = "replay-cli", value(name = "regtest"))]
     Fakechain = 3,
 }
 
@@ -207,8 +212,9 @@ pub enum CorpusFault {
     },
     /// A `rewind` before any block: there is no tip.
     RewindOnEmpty,
-    /// The header's `count` disagrees with the records present: the file
-    /// was not finished, or was truncated.
+    /// The header's `count` disagrees with the records present, or the
+    /// file ends inside a record: the corpus was not finished, or was
+    /// truncated.
     CountMismatch {
         /// What the header said.
         declared: u64,
@@ -453,8 +459,6 @@ impl<W: Write + Seek> CorpusWriter<W> {
         let record = encode_record(height, block_blob, tx_blobs)?;
         self.out.write_all(&record)?;
         self.next = successor(height);
-        // `count` cannot outrun the height space: every record occupies one
-        // height, so `count ≤ u64::MAX − first_height + 1` fits.
         self.count = self
             .count
             .checked_add(1)
@@ -597,18 +601,11 @@ impl<R: BufRead> CorpusReader<R> {
         input.read_exact(&mut tag)?;
         let net = CorpusNet::from_tag(tag[0]).ok_or(CorpusFault::UnknownNet(tag[0]))?;
         let first = BlockHeight::from_raw(read_u64(&mut input)?);
+        // `declared` is a record count, not a height span (rewinds occupy
+        // no height), so it says nothing about whether the heights fit;
+        // `record` refuses the first `extend` that would need a height past
+        // `u64::MAX`, before anything of it is read.
         let declared = read_u64(&mut input)?;
-        // The header's own arithmetic must fit: `declared` records from
-        // `first` occupy `first ..= first + declared − 1`. A header that
-        // claims more than the height space holds is refused here, before
-        // any record is read, rather than after the last representable one.
-        if let Some(span) = declared.checked_sub(1) {
-            if first.to_raw().checked_add(span).is_none() {
-                return Err(CorpusFault::HeightExhausted {
-                    after: BlockHeight::from_raw(u64::MAX),
-                });
-            }
-        }
         Ok(Self {
             input,
             net,
@@ -626,6 +623,12 @@ impl<R: BufRead> CorpusReader<R> {
         self.net
     }
 
+    /// The height of the first record (the header's `first_height`).
+    #[must_use]
+    pub const fn first_height(&self) -> BlockHeight {
+        self.first
+    }
+
     /// The header's record count.
     #[must_use]
     pub const fn declared(&self) -> u64 {
@@ -633,7 +636,9 @@ impl<R: BufRead> CorpusReader<R> {
     }
 
     /// One record, re-verified, or `None` at the declared end. Refuses a
-    /// record count that disagrees with the header.
+    /// record count that disagrees with the header, and a file that ends
+    /// inside a record, as [`CorpusFault::CountMismatch`] naming the whole
+    /// records present.
     fn record(&mut self) -> Result<Option<IngestEvent>, CorpusFault> {
         if self.read == self.declared {
             // The declared end. Anything past it is a count mismatch: read
@@ -647,17 +652,22 @@ impl<R: BufRead> CorpusReader<R> {
                 }),
             };
         }
-        let mut tag_byte = [0u8; 1];
-        match self.input.read_exact(&mut tag_byte) {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                return Err(CorpusFault::CountMismatch {
+        match self.whole_record() {
+            Err(CorpusFault::Io(e)) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                Err(CorpusFault::CountMismatch {
                     declared: self.declared,
                     present: self.read,
-                });
+                })
             }
-            Err(e) => return Err(e.into()),
+            other => other,
         }
+    }
+
+    /// One record's bytes, tag first; an early end anywhere inside it is
+    /// `Io(UnexpectedEof)`, which [`record`](Self::record) classifies.
+    fn whole_record(&mut self) -> Result<Option<IngestEvent>, CorpusFault> {
+        let mut tag_byte = [0u8; 1];
+        self.input.read_exact(&mut tag_byte)?;
         match tag_byte[0] {
             tag::EXTEND => {}
             tag::REWIND => {
@@ -717,6 +727,10 @@ impl<R: BufRead> CorpusReader<R> {
 
 impl<R: BufRead> Source for CorpusReader<R> {
     type Fault = CorpusFault;
+
+    fn first_height(&self) -> BlockHeight {
+        self.first
+    }
 
     fn next(&mut self) -> Result<Option<Sequenced<IngestEvent>>, CorpusFault> {
         Ok(self.record()?.map(|event| {

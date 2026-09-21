@@ -25,12 +25,30 @@
 //! clock — a system time before the Unix epoch — and it is a fault, never a
 //! timestamp of zero.
 //!
+//! # Pinning the epoch (RD-F20)
+//!
+//! `CacheStore` holds two prepared caches — canonical and transient — and
+//! derives on every miss. A driver that never pins leaves both live seeds
+//! of a lag window fighting over the one transient slot, so each switch
+//! between them is a fresh 256 MiB fill: the first real run re-derived at
+//! window 16 on a 301-block chain with two seeds. [`Substrate::pin_seed`]
+//! is the hook: the pipeline calls it with the claimed seed whenever the
+//! seed changes, before the blocks under it are formed, and this substrate
+//! makes that seed canonical through [`CacheStore::pin_canonical`] — the
+//! same call the daemon's FFI pin makes, so an epoch switch is one
+//! operation whichever door it arrives through.
+//!
 //! # Measurement
 //!
 //! This is the first workload that runs RandomX verification at volume over
 //! a real chain, so the dataset-mode question (`RANDOMX_V2_RUST.md` §9,
 //! measure-first) is answered by numbers this pipeline emits (RD-F11). The
 //! metrics sink owns the timing; this adapter owns nothing but the calls.
+//! The sink is **shared with the pipeline** — [`ProductionSubstrate::new`]
+//! takes the `Arc` the pipeline snapshots — because the pipeline times each
+//! block's `form` into the same counters the substrate times hashes and
+//! derives into; a substrate recording into a sink nobody reads would make
+//! the artifact report zero hashes for a run that hashed every block.
 
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -62,7 +80,7 @@ impl core::fmt::Display for SubstrateFault {
 impl core::error::Error for SubstrateFault {}
 
 /// RandomX through the verifier's cache path, and the system clock.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ProductionSubstrate {
     caches: Arc<CacheStore>,
     /// The RandomX measurement sink (RD-F11); shared with the pipeline,
@@ -71,26 +89,13 @@ pub struct ProductionSubstrate {
 }
 
 impl ProductionSubstrate {
-    /// A substrate over a fresh cache store. Callers that form in parallel
-    /// clone the value: the store is shared, derivation is de-duplicated
-    /// inside it, and each worker's `compute_hash` gets its own scratchpad.
+    /// A substrate over `caches` (the replay driver's own store, or the
+    /// daemon's at E3), recording into `metrics` — the same `Arc` the
+    /// pipeline is given (module docs). Callers that form in parallel clone
+    /// the value: the store is shared, derivation is de-duplicated inside
+    /// it, and each worker's `compute_hash` gets its own scratchpad.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Share an existing cache store (the daemon's, at E3).
-    #[must_use]
-    pub fn over(caches: Arc<CacheStore>) -> Self {
-        Self {
-            caches,
-            metrics: Arc::new(Metrics::new()),
-        }
-    }
-
-    /// Over `caches`, recording into `metrics`.
-    #[must_use]
-    pub const fn with_metrics(caches: Arc<CacheStore>, metrics: Arc<Metrics>) -> Self {
+    pub const fn new(caches: Arc<CacheStore>, metrics: Arc<Metrics>) -> Self {
         Self { caches, metrics }
     }
 
@@ -106,35 +111,6 @@ impl ProductionSubstrate {
             CacheOutcome::Waited => self.metrics.waited(started.elapsed()),
             CacheOutcome::Hit => {}
         }
-    }
-}
-
-/// Pinning the canonical seed epoch (RD-F20).
-///
-/// `CacheStore` holds two prepared caches — canonical and transient — and
-/// derives on every miss. A driver that never pins leaves both live seeds
-/// of a lag window fighting over the one transient slot, so each switch
-/// between them is a fresh 256 MiB fill: the first real run re-derived at
-/// window 16 on a 301-block chain with two seeds. The pipeline pins the
-/// claimed seed as canonical whenever it changes, before the blocks under
-/// it are formed. The mock substrate has nothing to pin.
-pub trait EpochPin {
-    /// Make `seed`'s cache the canonical one, deriving it if needed.
-    fn pin_epoch(&self, seed: &BlockHash);
-}
-
-#[cfg(test)]
-impl EpochPin for shekyl_chain_rules::harness::MockSubstrate {
-    fn pin_epoch(&self, _seed: &BlockHash) {}
-}
-
-impl EpochPin for ProductionSubstrate {
-    fn pin_epoch(&self, seed: &BlockHash) {
-        let seedhash = Seedhash::from_bytes(*seed.as_bytes());
-        let started = Instant::now();
-        let (prepared, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
-        self.record_cache(outcome, started);
-        self.caches.set_canonical(prepared);
     }
 }
 
@@ -159,6 +135,15 @@ impl Substrate for ProductionSubstrate {
         self.record_cache(outcome, started);
         let hash = self.metrics.timed_hash(|| compute_hash(&cache, pow_blob));
         Ok(PowHash::from_bytes(hash))
+    }
+
+    /// Make `seed`'s cache the canonical one, deriving it if needed
+    /// (module docs: pinning the epoch).
+    fn pin_seed(&self, seed: &BlockHash) {
+        let seedhash = Seedhash::from_bytes(*seed.as_bytes());
+        let started = Instant::now();
+        let outcome = self.caches.pin_canonical(&seedhash);
+        self.record_cache(outcome, started);
     }
 }
 

@@ -20,6 +20,7 @@
 //! the binary supplies `shekyl_rpc_transport::HttpRpc`.
 
 use std::io::{Seek, Write};
+use std::num::NonZeroUsize;
 use std::ops::Range;
 
 use shekyl_rpc_client::{Rpc, RpcError};
@@ -67,6 +68,8 @@ pub enum FetchFault {
 
 /// Fetch `heights` in batches of `batch` and write them through `writer`,
 /// which must be positioned at `heights.start`. Returns the records written.
+/// A batch is non-zero by type: a batch of zero heights would fetch nothing
+/// forever, and the caller's flag refuses it before a file is created.
 ///
 /// # Errors
 ///
@@ -75,14 +78,13 @@ pub enum FetchFault {
 pub async fn fetch_corpus<R: Rpc, W: Write + Seek>(
     rpc: &R,
     heights: Range<u64>,
-    batch: usize,
+    batch: NonZeroUsize,
     writer: &mut CorpusWriter<W>,
 ) -> Result<u64, FetchFault> {
-    assert!(batch > 0, "a batch of zero heights fetches nothing forever");
     let mut written = 0u64;
     let mut first = heights.start;
     while first < heights.end {
-        let end = first.saturating_add(batch as u64).min(heights.end);
+        let end = first.saturating_add(batch.get() as u64).min(heights.end);
         let asked: Vec<u64> = (first..end).collect();
         let body = GetBlocksByHeightRequest {
             heights: asked.clone(),

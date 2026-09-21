@@ -37,8 +37,11 @@
 //! `InvalidBlock`-mapping failure in another shape. Once a **store-terminal**
 //! fault has been replied, every later `Apply` / `Rewind` is refused with
 //! [`RunFault::Over`] until the driver stops the actor — the test written
-//! first in this commit holds that the actor does not come back. [`Digest`]
-//! stays a diagnosis read on a halted store.
+//! first in this commit holds that the actor does not come back. The latch
+//! is structural, not a convention each handler remembers: the store sits
+//! behind a [`Writer`] whose `write` is the only write path and refuses
+//! after the first terminal fault; its reads stay open, so [`Digest`] and
+//! [`HashAt`] are diagnosis reads on a halted store.
 //!
 //! **No fault becomes a verdict, no verdict becomes a fault.** A refusal is
 //! data on the reply; a fault is the reply's error; the two never meet.
@@ -51,9 +54,10 @@ use kameo::actor::{Actor, ActorRef, WeakActorRef};
 use kameo::error::{ActorStopReason, PanicError};
 use kameo::message::{Context, Message};
 use shekyl_chain_rules::{
-    validate, CenRow, ChainView, Fault, InvalidBlock, Retry, Stale, StructurallyValid, Verdict,
+    validate, AtHeight, CenRow, ChainView, Fault, InvalidBlock, Retry, Stale, StructurallyValid,
+    Verdict,
 };
-use shekyl_chain_store::store::{ChainStore, StoreError, StoreInvariant};
+use shekyl_chain_store::store::{ChainStore, ReadSnapshot, StoreError, StoreInvariant, WriteBatch};
 use shekyl_types::{BlockHash, BlockHeight};
 
 use crate::schedule::ChainRules;
@@ -67,6 +71,23 @@ pub enum RunEnd {
     Halted(StoreInvariant),
     /// A store engine or capability error ended the writer.
     StoreFaulted,
+}
+
+impl RunEnd {
+    /// The end a fault brings, if it is store-terminal: a store error ends
+    /// the writer; a driver defect, a missing fact and a bad rewind target
+    /// are replies the driver owns, and the writer stays up.
+    const fn of(fault: &RunFault) -> Option<Self> {
+        match fault {
+            RunFault::Store(StoreError::InvariantViolated(row)) => Some(Self::Halted(*row)),
+            RunFault::Store(_) => Some(Self::StoreFaulted),
+            RunFault::StaleSeed { .. }
+            | RunFault::StaleRuleSet { .. }
+            | RunFault::NoFacts { .. }
+            | RunFault::RewindTarget { .. }
+            | RunFault::Over(_) => None,
+        }
+    }
 }
 
 /// The reply error of a connector message: the first occurrence carries
@@ -134,10 +155,9 @@ pub struct Applied {
 /// What a [`Rewind`] did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rewound {
-    /// Blocks popped.
+    /// Blocks popped. The tip afterwards is the `to` the message named —
+    /// the handler returns only when it is.
     pub popped: u64,
-    /// The tip after the rewind.
-    pub tip: Option<BlockHeight>,
 }
 
 /// Connect a run of consecutive formed blocks in one write closure.
@@ -155,6 +175,15 @@ pub struct Rewind {
 #[derive(Clone, Copy, Debug)]
 pub struct Digest;
 
+/// The hash of the block recorded at a height, for the driver's seed claim
+/// when its ledger's window has moved past that height (`seed` module
+/// docs). `None` above the tip.
+#[derive(Clone, Copy, Debug)]
+pub struct HashAt {
+    /// The height asked for.
+    pub height: BlockHeight,
+}
+
 /// What the actor is built from.
 pub struct ConnectorArgs {
     /// The store this actor alone writes.
@@ -165,39 +194,48 @@ pub struct ConnectorArgs {
     pub trace: Arc<Trace>,
 }
 
-/// The single writer (module docs).
-pub struct Connector {
+/// The store behind its latch: the only way to a write closure, refusing
+/// every write after the first store-terminal fault (module docs). Reads
+/// stay open.
+struct Writer {
     store: ChainStore,
-    rules: ChainRules,
-    trace: Arc<Trace>,
     over: Option<RunEnd>,
 }
 
-impl Connector {
-    fn end(&mut self, end: RunEnd) {
-        if self.over.is_none() {
-            self.over = Some(end);
-        }
+impl Writer {
+    const fn live(store: ChainStore) -> Self {
+        Self { store, over: None }
     }
 
-    fn over(&self) -> Result<(), RunFault> {
-        match self.over {
-            Some(end) => Err(RunFault::Over(end)),
-            None => Ok(()),
+    /// One write closure, or [`RunFault::Over`] once a terminal fault has
+    /// been replied. A terminal fault out of `f` arms the latch; the first
+    /// stands.
+    fn write<R, F>(&mut self, f: F) -> Result<R, RunFault>
+    where
+        F: for<'id> FnOnce(&mut WriteBatch<'_, 'id>) -> Result<R, RunFault>,
+    {
+        if let Some(end) = self.over {
+            return Err(RunFault::Over(end));
         }
+        let result = self.store.write(f);
+        if let Some(end) = result.as_ref().err().and_then(RunEnd::of) {
+            self.over.get_or_insert(end);
+        }
+        result
     }
 
-    fn end_for(fault: &RunFault) -> Option<RunEnd> {
-        match fault {
-            RunFault::Store(StoreError::InvariantViolated(row)) => Some(RunEnd::Halted(*row)),
-            RunFault::Store(_) => Some(RunEnd::StoreFaulted),
-            RunFault::StaleSeed { .. }
-            | RunFault::StaleRuleSet { .. }
-            | RunFault::NoFacts { .. }
-            | RunFault::RewindTarget { .. }
-            | RunFault::Over(_) => None,
-        }
+    /// A read snapshot — open on a halted store, so the driver can still
+    /// name the store's state (or meet the same hole the validator did).
+    fn read(&self) -> Result<ReadSnapshot<'_>, StoreError> {
+        self.store.begin_read()
     }
+}
+
+/// The single writer (module docs).
+pub struct Connector {
+    writer: Writer,
+    rules: ChainRules,
+    trace: Arc<Trace>,
 }
 
 impl Actor for Connector {
@@ -206,10 +244,9 @@ impl Actor for Connector {
 
     async fn on_start(args: ConnectorArgs, _actor_ref: ActorRef<Self>) -> Result<Self, RunFault> {
         Ok(Self {
-            store: args.store,
+            writer: Writer::live(args.store),
             rules: args.rules,
             trace: args.trace,
-            over: None,
         })
     }
 
@@ -229,10 +266,9 @@ impl Message<Apply> for Connector {
     type Reply = Result<Applied, RunFault>;
 
     async fn handle(&mut self, msg: Apply, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.over()?;
         let rules = self.rules;
         let trace = Arc::clone(&self.trace);
-        let result: Result<Applied, RunFault> = self.store.write(|batch| {
+        self.writer.write(|batch| {
             let view = batch.chain_view();
             let mut applied = Applied::default();
             for (height, formed) in msg.0 {
@@ -288,16 +324,7 @@ impl Message<Apply> for Connector {
                 }
             }
             Ok(applied)
-        });
-        match result {
-            Ok(applied) => Ok(applied),
-            Err(fault) => {
-                if let Some(end) = Self::end_for(&fault) {
-                    self.end(end);
-                }
-                Err(fault)
-            }
-        }
+        })
     }
 }
 
@@ -305,9 +332,8 @@ impl Message<Rewind> for Connector {
     type Reply = Result<Rewound, RunFault>;
 
     async fn handle(&mut self, msg: Rewind, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        self.over()?;
         let to = msg.to;
-        let result: Result<Rewound, RunFault> = self.store.write(|batch| {
+        self.writer.write(|batch| {
             let mut popped = 0u64;
             loop {
                 let tip = batch.chain_view().tip()?.map(|t| t.height);
@@ -316,22 +342,11 @@ impl Message<Rewind> for Connector {
                         batch.pop()?;
                         popped += 1;
                     }
-                    Some(tip) if tip == to => {
-                        return Ok(Rewound {
-                            popped,
-                            tip: Some(tip),
-                        })
-                    }
+                    Some(tip) if tip == to => return Ok(Rewound { popped }),
                     other => return Err(RunFault::RewindTarget { to, tip: other }),
                 }
             }
-        });
-        if let Err(fault) = &result {
-            if let Some(end) = Self::end_for(fault) {
-                self.end(end);
-            }
-        }
-        result
+        })
     }
 }
 
@@ -339,8 +354,17 @@ impl Message<Digest> for Connector {
     type Reply = Result<crate::trace::Digest, RunFault>;
 
     async fn handle(&mut self, _: Digest, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
-        // A diagnosis read: stays open after a halt so the driver can still
-        // name the store's state (or meet the same hole the validator did).
-        Ok(self.store.begin_read()?.logical_state_digest_v0()?)
+        Ok(self.writer.read()?.logical_state_digest_v0()?)
+    }
+}
+
+impl Message<HashAt> for Connector {
+    type Reply = Result<Option<BlockHash>, RunFault>;
+
+    async fn handle(&mut self, msg: HashAt, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        Ok(match self.writer.read()?.block_info(msg.height)? {
+            AtHeight::Recorded(info) => Some(info.hash),
+            AtHeight::AboveTip => None,
+        })
     }
 }
