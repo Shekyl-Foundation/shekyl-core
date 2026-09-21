@@ -48,8 +48,12 @@ fn empty_state() -> (LedgerBlock, LedgerIndexes) {
 fn apply_scan_result_accepts_birthday_anchored_start() {
     let (mut ledger, mut indexes) = empty_state();
     let parent = BlockHash::from_bytes([0x55; 32]);
-    super::super::scan_floor::anchor_ledger_block(&mut ledger, 999, parent)
-        .expect("anchor at birthday boundary");
+    super::super::scan_floor::anchor_ledger_block(
+        &mut ledger,
+        shekyl_types::BlockHeight::from_raw(999),
+        parent,
+    )
+    .expect("anchor at birthday boundary");
 
     let result = ScanResult {
         processed_height_range: 1000..1001,

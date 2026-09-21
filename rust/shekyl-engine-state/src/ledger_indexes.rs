@@ -180,13 +180,13 @@ impl LedgerIndexes {
         &self,
         ledger: &mut LedgerBlock,
         key_image: &KeyImage,
-        spent_height: u64,
+        spent_height: BlockHeight,
         spending_tx: shekyl_types::TxHash,
     ) -> bool {
         if let Some(&idx) = self.key_images.get(key_image) {
             if let Some(td) = ledger.transfers.get_mut(idx) {
                 td.spent = true;
-                td.spent_height = Some(shekyl_types::BlockHeight::from_raw(spent_height));
+                td.spent_height = Some(spent_height);
                 td.spending_tx_hash = Some(spending_tx);
                 // F14 confirmed-present release (§2.6) needs no write
                 // since PR-SJ-1b: the derived lock view is superseded by
@@ -242,7 +242,7 @@ impl LedgerIndexes {
     pub fn detect_spends(
         &self,
         ledger: &mut LedgerBlock,
-        block_height: u64,
+        block_height: BlockHeight,
         spends: &[(KeyImage, shekyl_types::TxHash)],
     ) -> usize {
         let mut spent_count = 0;
@@ -300,10 +300,9 @@ impl LedgerIndexes {
     /// Drops the corresponding `(height, hash)` entries from
     /// `ledger.reorg_blocks`, rewinds `ledger.tip` to the highest
     /// remaining block, and rebuilds `key_images` and `pub_keys`.
-    pub fn handle_reorg(&mut self, ledger: &mut LedgerBlock, fork_height: u64) {
-        let fork = BlockHeight::from_raw(fork_height);
+    pub fn handle_reorg(&mut self, ledger: &mut LedgerBlock, fork_height: BlockHeight) {
         for idx in (0..ledger.transfers.len()).rev() {
-            if ledger.transfers[idx].block_height >= fork {
+            if ledger.transfers[idx].block_height >= fork_height {
                 ledger.transfers.remove(idx);
             }
         }
@@ -316,7 +315,7 @@ impl LedgerIndexes {
         // never in a block) are left untouched: a reorg of confirmed blocks does not
         // affect a spend that was never confirmed.
         for td in &mut ledger.transfers {
-            if td.spent_height.is_some_and(|h| h >= fork) {
+            if td.spent_height.is_some_and(|h| h >= fork_height) {
                 td.spent = false;
                 td.spent_height = None;
                 // The spending tx's block is gone with the fork; the
@@ -329,7 +328,7 @@ impl LedgerIndexes {
             }
         }
 
-        ledger.reorg_blocks.blocks.retain(|(h, _)| *h < fork);
+        ledger.reorg_blocks.blocks.retain(|(h, _)| *h < fork_height);
 
         match ledger.reorg_blocks.blocks.last() {
             Some(&(h, hash)) => {
@@ -683,7 +682,7 @@ mod tests {
         assert!(indexes.mark_spent(
             &mut ledger,
             &ki(0xAA),
-            200,
+            BlockHeight::from_raw(200),
             shekyl_types::TxHash::from_bytes([0xEE; 32])
         ));
         assert!(ledger.transfers[0].spent);
@@ -711,7 +710,7 @@ mod tests {
         );
         assert_eq!(ledger.transfers.len(), 2);
 
-        indexes.handle_reorg(&mut ledger, 200);
+        indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(200));
         assert_eq!(ledger.transfers.len(), 1);
         assert_eq!(ledger.tip.synced_height, BlockHeight::from_raw(100));
         assert_eq!(ledger.tip.tip_hash, Some([0xAA; 32]));
@@ -737,7 +736,7 @@ mod tests {
         assert!(indexes.mark_spent(
             &mut ledger,
             &ki(0x10),
-            200,
+            BlockHeight::from_raw(200),
             shekyl_types::TxHash::from_bytes([0xEE; 32])
         ));
         // Output 1: spend IN FLIGHT — optimistically marked at submit, no height yet.
@@ -745,7 +744,7 @@ mod tests {
         // Advance the tip past the fork (empty block) so the rewind is well-formed.
         indexes.ingest_block(&mut ledger, BlockHeight::from_raw(250), [0xBB; 32], vec![]);
 
-        indexes.handle_reorg(&mut ledger, 150);
+        indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(150));
 
         // The orphaned CONFIRMED spend (200 ≥ 150) returns to the spendable pool.
         assert!(!ledger.transfers[0].spent);

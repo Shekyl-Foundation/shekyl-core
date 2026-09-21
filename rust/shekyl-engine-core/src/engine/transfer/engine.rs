@@ -286,9 +286,14 @@ where
     /// many intervening reorgs for free, since it compares against the *current*
     /// canonical hash, not a retained fork history.
     pub(super) fn reference_orphaned(&self, reference: &ReferenceBlock) -> bool {
+        self.ledger_block_hash(reference.height) != Some(reference.block_hash.to_bytes())
+    }
+
+    /// Hash at an inclusive ordinal, if the reorg window still holds it.
+    /// One sync ledger read (F-J).
+    fn ledger_block_hash(&self, height: BlockHeight) -> Option<[u8; 32]> {
         self.ledger
-            .with_ledger_block(|ledger| ledger.block_hash_at(reference.height).copied())
-            != Some(reference.block_hash.to_bytes())
+            .with_ledger_block(|ledger| ledger.block_hash_at(height).copied())
     }
 
     #[allow(clippy::unused_self)] // `self` is used only under `test` / `test-helpers` cfgs.
@@ -412,7 +417,8 @@ where
             not_yet_spendable_total,
             not_yet_spendable,
         ) = self.ledger.with_wallet_ledger(|wallet| {
-            let synced = wallet.ledger.height().to_raw();
+            let tip = wallet.ledger.height();
+            let synced = tip.to_raw();
             // Gate against the height the *bound* reference anchors to (computed
             // in `build` before the cursor-read `.await`), so the C2 spendability
             // decision and the tx's anchored reference are the same height even
@@ -430,10 +436,7 @@ where
             } else {
                 None
             };
-            let tip_hash = wallet
-                .ledger
-                .block_hash_at(shekyl_types::BlockHeight::from_raw(synced))
-                .copied();
+            let tip_hash = wallet.ledger.block_hash_at(tip).copied();
             let locked: HashSet<OutputId> = state.output_locks.keys().copied().collect();
             // Partition the matured, non-reserved set across three buckets so an
             // insufficiency surfaces as the precise, self-resolving error rather
@@ -450,7 +453,7 @@ where
             // shortfall* rather than just the soonest output (which alone may
             // not suffice — that would underestimate the wait).
             let mut not_yet_spendable: Vec<(u64, u64)> = Vec::new();
-            for (idx, td) in wallet.spendable_outputs(synced, None) {
+            for (idx, td) in wallet.spendable_outputs(tip, None) {
                 if locked.contains(&idx) {
                     continue;
                 }
@@ -1119,17 +1122,14 @@ where
                         },
                     }
                 })?;
+            let reference_ordinal = BlockHeight::from_raw(reference_height);
             let (curve_tree_root, depth) = handle
-                .reference_root_and_depth(BlockHeight::from_raw(reference_height))
+                .reference_root_and_depth(reference_ordinal)
                 .await
                 .map_err(|err| map_handle_err_to_reanchor(&err))?;
-            let reference = match self.ledger.with_ledger_block(|ledger| {
-                ledger
-                    .block_hash_at(shekyl_types::BlockHeight::from_raw(reference_height))
-                    .copied()
-            }) {
+            let reference = match self.ledger_block_hash(reference_ordinal) {
                 Some(block_hash) => ReferenceBlock {
-                    height: BlockHeight::from_raw(reference_height),
+                    height: reference_ordinal,
                     curve_tree_root: CurveTreeRoot::from_bytes(curve_tree_root),
                     block_hash: BlockHash::from_bytes(block_hash),
                 },
@@ -1284,23 +1284,17 @@ where
             // Authoritative staleness re-derivation at commit (the lock₂ TOCTOU,
             // §3a/§5): the fresh reference must still be canonical and not itself
             // already due for re-anchor. All sync ledger reads (F-J).
-            let current_tip = self.ledger.with_ledger_block(LedgerBlock::height).to_raw();
-            let still_canonical = self.ledger.with_ledger_block(|ledger| {
-                ledger
-                    .block_hash_at(shekyl_types::BlockHeight::from_raw(reference_height))
-                    .copied()
-            }) == Some(reference.block_hash.to_bytes());
-            if !still_canonical || should_reanchor(current_tip, reference_height) {
+            let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+            let reference_ordinal = BlockHeight::from_raw(reference_height);
+            let still_canonical =
+                self.ledger_block_hash(reference_ordinal) == Some(reference.block_hash.to_bytes());
+            if !still_canonical || should_reanchor(current_tip.to_raw(), reference_height) {
                 last_resync = Some(ReanchorError::ReferenceResyncing {
                     detail: "reference re-staled during the prover run",
                 });
                 continue;
             }
-            let Some(current_tip_hash) = self.ledger.with_ledger_block(|ledger| {
-                ledger
-                    .block_hash_at(shekyl_types::BlockHeight::from_raw(current_tip))
-                    .copied()
-            }) else {
+            let Some(current_tip_hash) = self.ledger_block_hash(current_tip) else {
                 return Err(ReanchorError::Failed(SendError::CannotSign {
                     reason: "current tip block hash missing from ledger",
                 }));
@@ -1341,7 +1335,7 @@ where
             entry.reference = reference;
             entry.fingerprint = new_fingerprint;
             entry.content_gen = content_gen;
-            entry.built_at_height = current_tip;
+            entry.built_at_height = current_tip.to_raw();
             entry.built_at_tip_hash = current_tip_hash;
             entry.snapshot_id = snapshot_id;
 
@@ -1405,8 +1399,8 @@ where
         };
 
         // Staleness decision — ledger reads only, no pending-tx lock held (F-J).
-        let current_tip = self.ledger.with_ledger_block(LedgerBlock::height).to_raw();
-        let stale = should_reanchor(current_tip, reference.height.to_raw())
+        let current_tip = self.ledger.with_ledger_block(LedgerBlock::height);
+        let stale = should_reanchor(current_tip.to_raw(), reference.height.to_raw())
             || self.reference_orphaned(&reference);
 
         // --- re-anchor if stale (three-phase, lock-free prover) ---

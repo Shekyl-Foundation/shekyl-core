@@ -67,7 +67,12 @@ fn make_local_refresh() -> LocalRefresh {
 
 fn snapshot_at_anchor(synced: u64, hash: BlockHash) -> LedgerSnapshot {
     let mut ledger = LedgerBlock::empty();
-    crate::engine::scan_floor::anchor_ledger_block(&mut ledger, synced, hash).expect("test anchor");
+    crate::engine::scan_floor::anchor_ledger_block(
+        &mut ledger,
+        shekyl_types::BlockHeight::from_raw(synced),
+        hash,
+    )
+    .expect("test anchor");
     LedgerSnapshot::from_ledger(&ledger)
 }
 

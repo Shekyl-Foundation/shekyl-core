@@ -665,7 +665,8 @@ mod tests {
             Scalar::ZERO,
             Commitment::new(Scalar::ONE, 1_000),
         );
-        let mut td = TransferDetails::from_wallet_output(&out, 5);
+        let mut td =
+            TransferDetails::from_wallet_output(&out, shekyl_types::BlockHeight::from_raw(5));
         let no_locks = SendJournalBlock::empty().spend_locks();
         assert_eq!(transfer_state(&td, &no_locks), TransferState::Confirmed);
         assert_eq!(unspendable_reason_string(&td), None);

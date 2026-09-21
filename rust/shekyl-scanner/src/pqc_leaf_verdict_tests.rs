@@ -160,7 +160,12 @@ fn verdict_reaches_the_ledger_row_and_the_balance() {
 
     let mut ledger = LedgerBlock::empty();
     let mut indexes = LedgerIndexes::default();
-    indexes.process_scanned_outputs(&mut ledger, 7, [0x22u8; 32], outputs);
+    indexes.process_scanned_outputs(
+        &mut ledger,
+        shekyl_types::BlockHeight::from_raw(7),
+        [0x22u8; 32],
+        outputs,
+    );
     assert_eq!(ledger.transfers.len(), 1);
     let td = &ledger.transfers[0];
     assert_eq!(td.unspendable, Some(UnspendableReason::PqcLeafMismatch));

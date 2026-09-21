@@ -145,8 +145,23 @@ pub struct PendingBondPost {
     /// The fully-assembled, signed, wire-encoded transaction bytes — the
     /// value itself, per pin P-2: retries re-send these stored bytes.
     pub tx_bytes: Vec<u8>,
-    /// Blocks from `anchor_t0` to the bond-post broadcast — a span,
-    /// not an instant (height-semantics C4).
+    /// Blocks from `anchor_t0` to the bond-post broadcast — a span
+    /// ([`BlockCount`]), on the same clock as `anchor_t0`.
+    ///
+    /// ```
+    /// fn needs_span(offset: shekyl_types::BlockCount) {}
+    /// fn check(post: &shekyl_engine_state::PendingBondPost) {
+    ///     needs_span(post.bond_post_offset_blocks);
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// // HEIGHT_SEMANTICS.md C9: the due-count offset is a span, not an ordinal.
+    /// fn needs_height(_: shekyl_types::BlockHeight) {}
+    /// fn check(post: &shekyl_engine_state::PendingBondPost) {
+    ///     needs_height(post.bond_post_offset_blocks);
+    /// }
+    /// ```
     pub bond_post_offset_blocks: BlockCount,
     /// Claimed chain **count** at assemble time — the private intent
     /// anchor `t0` the plan's offsets are relative to. WI-3's due-check

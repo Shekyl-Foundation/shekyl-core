@@ -685,11 +685,7 @@ pub(crate) fn build_pending_tx_in_state(
         .collect();
 
     let mut candidates: Vec<(usize, AtomicUnits)> = ledger
-        .spendable_outputs(
-            synced.to_raw(),
-            None,
-            &SendJournalBlock::empty().spend_locks(),
-        )
+        .spendable_outputs(synced, None, &SendJournalBlock::empty().spend_locks())
         .into_iter()
         .filter(|(idx, _)| !reserved.contains(idx))
         .map(|(idx, td)| (idx, td.amount()))
@@ -802,9 +798,10 @@ pub(crate) fn submit_pending_tx_in_state(
     let synced = ledger.height();
     let built = entry.built_at_height;
 
-    // Both heights are still raw ordinals on this helper (`TooOld` reports
-    // that same triple). The comparison is instant − instant against the span.
-    let age = synced.saturating_sub(BlockHeight::from_raw(built));
+    // `synced` is the inclusive tip. `built` is the reservation's stored
+    // ordinal (`built_at_height` is still `u64`). Age is instant − instant.
+    let built_at = BlockHeight::from_raw(built);
+    let age = synced.saturating_sub(built_at);
     if age > max_reorg {
         return Err(PendingTxError::TooOld {
             built,
@@ -813,9 +810,7 @@ pub(crate) fn submit_pending_tx_in_state(
         });
     }
 
-    let stored = ledger
-        .block_hash_at(BlockHeight::from_raw(entry.built_at_height))
-        .copied();
+    let stored = ledger.block_hash_at(built_at).copied();
     if stored != Some(entry.built_at_tip_hash) {
         return Err(PendingTxError::ChainStateChanged {
             height: entry.built_at_height,

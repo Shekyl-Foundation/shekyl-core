@@ -338,9 +338,16 @@ quantity.
   `LedgerSnapshot` are `BlockHeight` (`LEDGER_BLOCK_VERSION` 11 → 12
   paired with `WALLET_LEDGER_FORMAT_VERSION` 18 → 19). Inclusive ledger
   tip vs exclusive-end P-scan cursor: both `BlockHeight`, different
-  conventions, comments name the mix. Snapshot-id preimage stays the
-  same 8 LE bytes via `.to_raw()`. C9 `compile_fail`s on
-  `Engine::synced_height` and `due_count`. No numeric change. Remainders
+  conventions, comments name the mix. The refresh caught-up check is
+  [`ChainCount::has_block`] of `synced.saturating_add(BlockCount::ONE)`.
+  Ledger mutations (`ingest_block`, `handle_reorg`, `detect_spends`,
+  `spendable_outputs`, `process_scanned_outputs`) take `BlockHeight`.
+  `ScanResult`'s range stays `u64`; `from_raw` happens once at that
+  edge. Snapshot-id preimage stays the same 8 LE bytes via `.to_raw()`.
+  C9 pins: `Engine::synced_height` rejects `ChainCount`;
+  `PendingBondPost.bond_post_offset_blocks` is `BlockCount` (compiling
+  doctest) and rejects `BlockHeight` (`compile_fail`). No numeric change.
+  Remainders
   named in-line: stamp-clock COUNT→ORDINAL conversion is
   optional-not-owed (§2.3 item 1); `SyncStateBlock.restore_from_height`
   still `u64`; `get_version` `target_height` wire `0` still `RK-`;

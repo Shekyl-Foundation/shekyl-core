@@ -102,6 +102,12 @@ impl LedgerSnapshot {
             .find(|(h, _)| *h == height)
             .map(|(_, hash)| *hash)
     }
+
+    /// Hash at a raw scan-range ordinal. The producer loop and
+    /// `ScanResult` still speak `u64`; the window stores [`BlockHeight`].
+    pub(crate) fn block_hash_at_ordinal(&self, height: u64) -> Option<[u8; 32]> {
+        self.block_hash_at(BlockHeight::from_raw(height))
+    }
 }
 
 /// cSHAKE256 customization for [`derive_snapshot_id`].

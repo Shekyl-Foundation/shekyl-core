@@ -559,7 +559,7 @@ pub(crate) async fn get_reserve_proof<D: Rpc>(
     // Project candidates under a short read guard.
     let candidates: Vec<ReserveCandidate> = {
         let state = ctx.ledger.read();
-        let height = state.ledger.ledger.tip.synced_height.to_raw();
+        let height = state.ledger.ledger.tip.synced_height;
         state
             .ledger
             .spendable_outputs(height, None)

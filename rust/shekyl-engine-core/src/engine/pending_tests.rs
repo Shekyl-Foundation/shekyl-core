@@ -19,6 +19,7 @@ use shekyl_curve_primitives::Commitment;
 use shekyl_scanner::{
     LedgerBlock, LedgerIndexes, LedgerIndexesExt, RecoveredWalletOutput, Timelocked, WalletOutput,
 };
+use shekyl_types::BlockHeight;
 use shekyl_units::AtomicUnits;
 
 use super::{
@@ -58,12 +59,21 @@ fn populate(
 ) {
     let timelocked = Timelocked::from_vec(outputs);
     let block_hash = [u8::try_from(block_height & 0xFF).unwrap(); 32];
-    let inserted_range =
-        indexes.process_scanned_outputs(ledger, block_height, block_hash, timelocked);
+    let inserted_range = indexes.process_scanned_outputs(
+        ledger,
+        BlockHeight::from_raw(block_height),
+        block_hash,
+        timelocked,
+    );
     assert!(!inserted_range.is_empty() || ledger.transfer_count() == 0);
     for h in (block_height + 1)..=final_height {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-        let _ = indexes.process_scanned_outputs(ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        let _ = indexes.process_scanned_outputs(
+            ledger,
+            BlockHeight::from_raw(h),
+            hash,
+            Timelocked::from_vec(Vec::new()),
+        );
     }
 }
 
@@ -283,8 +293,12 @@ fn submit_too_old_when_built_height_outside_reorg_window() {
     // Testnet's max_reorg_depth = 6.
     for h in 21..=40 {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-        let _ =
-            indexes.process_scanned_outputs(&mut ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        let _ = indexes.process_scanned_outputs(
+            &mut ledger,
+            BlockHeight::from_raw(h),
+            hash,
+            Timelocked::from_vec(Vec::new()),
+        );
     }
 
     let err =
@@ -325,8 +339,12 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     // cutoff so the output qualifies).
     for h in 6..=15 {
         let hash = [u8::try_from(h & 0xFF).unwrap(); 32];
-        let _ =
-            indexes.process_scanned_outputs(&mut ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        let _ = indexes.process_scanned_outputs(
+            &mut ledger,
+            BlockHeight::from_raw(h),
+            hash,
+            Timelocked::from_vec(Vec::new()),
+        );
     }
     let pending = build_pending_tx_in_state(
         &ledger,
@@ -340,11 +358,15 @@ fn submit_chain_state_changed_when_tip_hash_at_built_height_no_longer_matches() 
     // Reorg: rewind to fork height 15, replay 15..=20 with new
     // hashes. After rewind, `block_hash_at(15)` differs from
     // `pending.built_at_tip_hash`.
-    indexes.handle_reorg(&mut ledger, 15);
+    indexes.handle_reorg(&mut ledger, BlockHeight::from_raw(15));
     for h in 15..=20 {
         let hash = [u8::try_from(0xA0 ^ (h & 0xFF)).unwrap(); 32];
-        let _ =
-            indexes.process_scanned_outputs(&mut ledger, h, hash, Timelocked::from_vec(Vec::new()));
+        let _ = indexes.process_scanned_outputs(
+            &mut ledger,
+            BlockHeight::from_raw(h),
+            hash,
+            Timelocked::from_vec(Vec::new()),
+        );
     }
 
     let err =

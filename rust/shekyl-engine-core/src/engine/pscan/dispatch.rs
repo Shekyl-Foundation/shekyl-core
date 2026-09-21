@@ -256,15 +256,8 @@ pub(crate) enum DispatchError {
 /// The pure due-count arithmetic (§3.1): `due = anchor_t0 +
 /// bond_post_offset_blocks` on the dispatch count clock. Saturating: a
 /// plan whose offset overflows the count space can only push due *later*
-/// (monotone noise), never wrap to "due immediately".
-///
-/// ```compile_fail
-/// // HEIGHT_SEMANTICS.md C9: the due-count offset is a span, not an ordinal.
-/// use shekyl_types::{BlockHeight, ChainCount};
-/// fn due(anchor: ChainCount, offset: BlockHeight) -> ChainCount {
-///     anchor.saturating_add(offset)
-/// }
-/// ```
+/// (monotone noise), never wrap to "due immediately". The offset's type
+/// is pinned on [`PendingBondPost::bond_post_offset_blocks`].
 fn due_count(post: &PendingBondPost) -> ChainCount {
     post.anchor_t0.saturating_add(post.bond_post_offset_blocks)
 }

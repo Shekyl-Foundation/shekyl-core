@@ -80,7 +80,7 @@ use shekyl_crypto_pq::{handle::derive_output_handle, kem::HybridCiphertext};
 use shekyl_curve_tree::ClientError;
 use shekyl_engine_state::{LedgerBlock, LedgerIndexes};
 use shekyl_scanner::{LedgerIndexesExt, RecoveredWalletOutput, Timelocked};
-use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot};
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, CurveTreeRoot};
 
 use crate::{
     attribution::{
@@ -135,6 +135,11 @@ impl<
     /// implementor field; the implementor manages its own guard
     /// acquisition and projection.
     ///
+    /// ```
+    /// fn assert_ordinal(engine: &shekyl_engine_core::Engine<shekyl_engine_core::SoloSigner>) {
+    ///     let _: shekyl_types::BlockHeight = engine.synced_height();
+    /// }
+    /// ```
     /// ```compile_fail
     /// // HEIGHT_SEMANTICS.md C9: wallet-ledger tip is ordinal, not a count.
     /// fn needs_count(_: shekyl_types::ChainCount) {}
@@ -695,7 +700,7 @@ pub(crate) fn apply_scan_result_to_state(
     indexes: &mut LedgerIndexes,
     result: ScanResult,
 ) -> Result<Vec<usize>, RefreshError> {
-    let synced = ledger.height().to_raw();
+    let synced = ledger.height();
 
     // Bond sightings mutate the STAKING block, which this LedgerBlock-scoped
     // body cannot reach — the caller (`Engine::apply_scan_result`) validates
@@ -722,11 +727,11 @@ pub(crate) fn apply_scan_result_to_state(
     // result must continue exactly where the wallet left off.
     let expected_start = match result.reorg_rewind {
         Some(rewind) => rewind.fork_height,
-        None => synced.saturating_add(1),
+        None => synced.saturating_add(BlockCount::ONE).to_raw(),
     };
     if result.processed_height_range.start != expected_start {
         return Err(RefreshError::ConcurrentMutation {
-            wallet: synced,
+            wallet: synced.to_raw(),
             result: result.processed_height_range.start,
         });
     }
@@ -737,7 +742,7 @@ pub(crate) fn apply_scan_result_to_state(
     // result's claim. (For `start == 1`, both sides must be `None`.)
     let start = result.processed_height_range.start;
     if start > 1 {
-        // The persisted reorg rows are still bytes (RAW_TYPE PR C).
+        // `start` is the scan-range ordinal (`ScanResult` still speaks `u64`).
         let stored = ledger
             .block_hash_at(BlockHeight::from_raw(start - 1))
             .copied()
@@ -751,7 +756,7 @@ pub(crate) fn apply_scan_result_to_state(
             // current wallet no longer matches.
             _ => {
                 return Err(RefreshError::ConcurrentMutation {
-                    wallet: synced,
+                    wallet: synced.to_raw(),
                     result: start,
                 });
             }
@@ -761,7 +766,7 @@ pub(crate) fn apply_scan_result_to_state(
         // has nothing recorded at height 0, so a `Some` parent_hash
         // here is itself a snapshot-disagreement signal.
         return Err(RefreshError::ConcurrentMutation {
-            wallet: synced,
+            wallet: synced.to_raw(),
             result: start,
         });
     }
@@ -789,7 +794,7 @@ pub(crate) fn apply_scan_result_to_state(
     } = result;
 
     if let Some(rewind) = reorg_rewind {
-        indexes.handle_reorg(ledger, rewind.fork_height);
+        indexes.handle_reorg(ledger, BlockHeight::from_raw(rewind.fork_height));
     }
 
     if processed_height_range.start == processed_height_range.end {
@@ -915,10 +920,10 @@ pub(crate) fn apply_scan_result_to_state(
 
         let outputs = transfers_by_height.remove(&h).unwrap_or_default();
         let timelocked = Timelocked::from_vec(outputs);
-        // The persisted ledger still records the block hash as bytes
-        // (RAW_TYPE_NEWTYPE_MIGRATION.md PR C, engine-state's persisted rows).
+        // One decode of the scan-range ordinal into the ledger's height.
+        let height = BlockHeight::from_raw(h);
         let inserted_range =
-            indexes.process_scanned_outputs(ledger, h, block_hash.to_bytes(), timelocked);
+            indexes.process_scanned_outputs(ledger, height, block_hash.to_bytes(), timelocked);
         // Per-height ranges are contiguous suffixes of
         // `ledger.transfers`, monotonically advancing across the loop
         // (each iteration appends, never reorders). Flattening to a
@@ -926,7 +931,7 @@ pub(crate) fn apply_scan_result_to_state(
         inserted.extend(inserted_range);
 
         if let Some(kis) = key_images_by_height.remove(&h) {
-            let _spent = indexes.detect_spends(ledger, h, &kis);
+            let _spent = indexes.detect_spends(ledger, height, &kis);
         }
     }
 

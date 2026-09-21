@@ -307,7 +307,7 @@ impl WalletLedger {
     #[must_use]
     pub fn spendable_outputs(
         &self,
-        current_height: u64,
+        current_height: shekyl_types::BlockHeight,
         min_amount: Option<shekyl_units::AtomicUnits>,
     ) -> Vec<(usize, &TransferDetails)> {
         self.ledger

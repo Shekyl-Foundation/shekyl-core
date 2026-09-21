@@ -401,7 +401,7 @@ impl MergeProjectionBenchFixture {
         let tip = BlockchainTip::new(BlockHeight::from_raw(1_000_000), [0xAA; 32]);
         let reorg_blocks = ReorgBlocks {
             blocks: (999_990..=1_000_000)
-                .map(|h| (h, [(h & 0xff) as u8; 32]))
+                .map(|h| (BlockHeight::from_raw(h), [(h & 0xff) as u8; 32]))
                 .collect(),
         };
         let ledger = LedgerBlock::new(transfers, tip, reorg_blocks);

@@ -363,7 +363,7 @@ impl LedgerBlock {
     /// [`Self::unspent_transfers`]).
     pub fn spendable_outputs(
         &self,
-        current_height: u64,
+        current_height: BlockHeight,
         min_amount: Option<AtomicUnits>,
         spend_locks: &crate::send_journal_block::InFlightSpendLocks,
     ) -> Vec<(usize, &TransferDetails)> {
@@ -371,10 +371,7 @@ impl LedgerBlock {
             .iter()
             .enumerate()
             .filter(|(_, td)| {
-                if !td.is_spendable(
-                    shekyl_types::BlockHeight::from_raw(current_height),
-                    spend_locks,
-                ) {
+                if !td.is_spendable(current_height, spend_locks) {
                     return false;
                 }
                 if let Some(min) = min_amount {
