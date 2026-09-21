@@ -2046,7 +2046,7 @@ mod tests {
         }
 
         let overrides = SafetyOverrides {
-            max_reorg_depth: Some(2),
+            max_reorg_depth: Some(BlockCount::from_raw(2)),
             skip_to_height: Some(12_345),
             refresh_from_block_height: None,
         };

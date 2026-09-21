@@ -75,11 +75,11 @@ The countersign pre-sign gate is
 (`rust/shekyl-p-serve/src/countersign.rs:148-156`). Admission is
 `anchor ∈ [predecessor − 720 − L, predecessor − 720]`
 (`SF-D8`;
-`rust/shekyl-archival-retention/src/pass_anchor.rs:92-97`).
+`rust/shekyl-archival-retention/src/pass_anchor.rs:114-116`).
 
 | Side | Quantity today | Evidence |
 | --- | --- | --- |
-| Daemon admission | **ORDINAL** predecessor | `get_tail_id` returns the tip's index; `++blockchain_height` converts to count; `predecessor_height = blockchain_height - 1` is the tip ordinal (`src/cryptonote_core/blockchain.cpp:5420-5465`). Window hashes are looked up with `height >= m_db->height()` as the exclusive **count** bound and `get_block_hash_from_height(height)` as the **ordinal** index (`src/cryptonote_core/blockchain.cpp:5277-5281`). Fixtures: `shape_for_predecessor(H)` last = `H − 720` (`rust/shekyl-archival-retention/src/pass_anchor.rs:360-370`); `SIG_ANCHOR_HEIGHT = SIG_PREDECESSOR_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw()` (`rust/shekyl-archival-retention/tests/attestation_wire_kat.rs:533-538`). |
+| Daemon admission | **ORDINAL** predecessor | `get_tail_id` returns the tip's index; `++blockchain_height` converts to count; `predecessor_height = blockchain_height - 1` is the tip ordinal (`src/cryptonote_core/blockchain.cpp:5420-5465`). Window hashes are looked up with `height >= m_db->height()` as the exclusive **count** bound and `get_block_hash_from_height(height)` as the **ordinal** index (`src/cryptonote_core/blockchain.cpp:5277-5281`). Fixtures: `shape_for_predecessor(H)` last = `H − 720` (`rust/shekyl-archival-retention/src/pass_anchor.rs:378-381`); `SIG_ANCHOR_HEIGHT = SIG_PREDECESSOR_HEIGHT - PASS_ANCHOR_DEPTH_BLOCKS.to_raw()` (`rust/shekyl-archival-retention/tests/attestation_wire_kat.rs:533-538`). |
 | Witness (`P`) `own_height` | **ORDINAL** | `HostSigner::own_height` is the daemon tip (`DaemonTipCache`, WSS-24 / PR #791, `rust/shekyl-p-host/src/signer.rs:122-124`), typed `Option<BlockHeight>` (height-semantics Phase 2d). Unstamped / not-following / aged-out cache reports `None` (`rust/shekyl-p-host/src/signer.rs:152-158`). Ingest is consecutive from genesis `0, 1, 2, …` (`rust/shekyl-curve-tree/src/client.rs:752-756`). Gate algebra is Instant±span (`checked_sub_count` of `PASS_ANCHOR_DEPTH_BLOCKS` / `PASS_ANCHOR_LAG_BLOCKS`). |
 | Requester mint | protocol **ORDINAL**; production mint **unwired** | Header contract: "hash of its block at `tip − 720`" (`rust/shekyl-p-fetch/src/header.rs:34`). `RequestHeader::fresh` is not on the daemon production fetch path. Inland type is `BlockHeight` (height-semantics Phase 2d). |
 
@@ -321,7 +321,8 @@ quantity.
   window bounds, and `RequestHeader::anchor_height` are `BlockHeight`.
   `PASS_ANCHOR_DEPTH_BLOCKS` / `PASS_ANCHOR_LAG_BLOCKS` /
   `PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT` (the last an ordinal floor),
-  `SafetyConstants.max_reorg_depth`, `PScanConfig.reorg_depth`,
+  `SafetyConstants.max_reorg_depth` and the `SafetyOverrides` overlay
+  of that field, `PScanConfig.reorg_depth`,
   `DispatchConfig.alarm_horizon_blocks`, and `BlockHeaderFacts.depth`
   are `BlockCount` inland. Wire header still 8 LE bytes; FFI PODs stay
   `u64` (C1). C9 `compile_fail`s on each new public boundary. No

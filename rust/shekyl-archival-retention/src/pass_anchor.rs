@@ -59,12 +59,17 @@ pub const PASS_ANCHOR_DEPTH_BLOCKS: BlockCount = BlockCount::from_raw(ARCHIVAL_R
 pub const PASS_ANCHOR_LAG_BLOCKS: BlockCount =
     BlockCount::from_raw(ARCHIVAL_ATTESTATION_ANCHOR_LAG_BLOCKS);
 
-/// Lowest predecessor height with a window: genesis plus `depth + L`. Below
-/// it every pass record is refused.
+/// Lowest predecessor with a window: genesis plus depth plus lag.
+/// A predecessor below this has no admissible anchor. The sum is
+/// checked, so an overflowing pair fails to compile.
 pub const PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT: BlockHeight = {
-    BlockHeight::from_raw(0)
-        .saturating_add(PASS_ANCHOR_DEPTH_BLOCKS)
-        .saturating_add(PASS_ANCHOR_LAG_BLOCKS)
+    match BlockHeight::ZERO.checked_add(PASS_ANCHOR_DEPTH_BLOCKS) {
+        Some(after_depth) => match after_depth.checked_add(PASS_ANCHOR_LAG_BLOCKS) {
+            Some(floor) => floor,
+            None => panic!("pass anchor floor depth + lag overflowed BlockHeight"),
+        },
+        None => panic!("pass anchor floor depth + lag overflowed BlockHeight"),
+    }
 };
 
 /// Heights (and hashes) in one window: `L + 1`.
@@ -104,8 +109,10 @@ impl PassAnchorWindow {
         if predecessor_height < PASS_ANCHOR_MIN_PREDECESSOR_HEIGHT {
             return None;
         }
-        let last = predecessor_height.checked_sub_count(PASS_ANCHOR_DEPTH_BLOCKS)?;
-        let first = last.checked_sub_count(PASS_ANCHOR_LAG_BLOCKS)?;
+        // The floor is genesis + depth + lag, so both spans fit. A floor
+        // that does not match these subtractions panics here.
+        let last = predecessor_height - PASS_ANCHOR_DEPTH_BLOCKS;
+        let first = last - PASS_ANCHOR_LAG_BLOCKS;
         Some((first, PASS_ANCHOR_WINDOW_LEN))
     }
 
@@ -132,9 +139,16 @@ impl PassAnchorWindow {
         self.first
     }
 
+    /// Inclusive end of the window (`first + L`).
+    ///
+    /// Panics if the sum overflows. [`Self::from_table`] cannot build
+    /// such a window: `first` was produced by subtracting `L`.
     #[must_use]
     pub const fn last(&self) -> BlockHeight {
-        self.first.saturating_add(PASS_ANCHOR_LAG_BLOCKS)
+        match self.first.checked_add(PASS_ANCHOR_LAG_BLOCKS) {
+            Some(last) => last,
+            None => panic!("pass anchor window end overflowed BlockHeight"),
+        }
     }
 
     /// Connecting-chain hash at `anchor_height`, or `None` outside the window.

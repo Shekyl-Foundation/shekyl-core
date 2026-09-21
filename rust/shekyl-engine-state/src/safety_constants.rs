@@ -43,8 +43,9 @@ use shekyl_types::BlockCount;
 /// willing to spend from. That is exactly why they are baked into the
 /// binary and not persisted anywhere a non-root attacker could reach.
 ///
-/// The struct is `Copy` to make dispatch at call sites cheap; callers
-/// typically do:
+/// The struct is `Copy` to make dispatch at call sites cheap. The
+/// reorg-depth override is `Option<BlockCount>`, the same span as
+/// [`Self::max_reorg_depth`], so the overlay is `unwrap_or`:
 ///
 /// ```rust,ignore
 /// let base = NetworkSafetyConstants::for_network(network);
@@ -149,15 +150,15 @@ const _: () = assert!(
     "key_reuse_mitigation2 must be true on stagenet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::mainnet().max_reorg_depth.to_raw() >= 1,
+    !NetworkSafetyConstants::mainnet().max_reorg_depth.is_zero(),
     "max_reorg_depth must be at least 1 on mainnet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::testnet().max_reorg_depth.to_raw() >= 1,
+    !NetworkSafetyConstants::testnet().max_reorg_depth.is_zero(),
     "max_reorg_depth must be at least 1 on testnet",
 );
 const _: () = assert!(
-    NetworkSafetyConstants::stagenet().max_reorg_depth.to_raw() >= 1,
+    !NetworkSafetyConstants::stagenet().max_reorg_depth.is_zero(),
     "max_reorg_depth must be at least 1 on stagenet",
 );
 
