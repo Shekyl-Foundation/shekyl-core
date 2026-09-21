@@ -104,6 +104,7 @@ mod fault;
 mod rule_set;
 mod rules;
 mod substrate;
+mod trust;
 mod validate;
 mod verdict;
 mod view;
@@ -133,6 +134,7 @@ pub use rule_set::{
 pub use rules::difficulty::Target;
 pub use rules::seed_height;
 pub use substrate::Substrate;
+pub use trust::Trust;
 pub use validate::{form, tx_against, tx_form, validate};
 pub use verdict::{refused, ChainValid, InvalidBlock, Locus, TxSlot, Verdict};
 pub use view::{AtHeight, ChainView, RecordedBlock, Tip};

@@ -9,9 +9,86 @@
 
 use super::*;
 use crate::anchors::{Anchor, Remedy};
-use crate::harness::fixture::{recorded, root};
-use crate::harness::{infallible, FaultingView, MockChain};
+use crate::harness::fixture::{candidate_on, recorded, root};
+use crate::harness::{assert_refused, formed_on, infallible, judged, FaultingView, MockChain};
+use crate::rule_set::RuleSet;
+use crate::trust::Trust;
+use crate::validate::validate;
 use shekyl_types::BlockHash;
+
+// ---- CEN-E1: the anchor's equality, per block, through `validate` -------
+
+/// A one-entry table anchoring `height` at `hash`.
+fn anchoring(height: u64, hash: BlockHash) -> ReleaseAnchors {
+    ReleaseAnchors::for_tests(Box::leak(Box::new([Anchor {
+        height: BlockHeight::from_raw(height),
+        hash,
+    }])))
+}
+
+/// Refusal fixture: a valid candidate connecting at an anchored height whose
+/// identity is not the anchor is refused on E1, at the block.
+#[test]
+fn a_block_at_an_anchored_height_that_is_not_the_anchor_is_refused() {
+    let chain = five_blocks();
+    // Anchor the connecting height (5) at a hash the candidate cannot have.
+    let trust = Trust::full(anchoring(5, OTHER));
+    chain.with_view(|view| {
+        let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
+        let verdict = judged(validate(formed, &view, &RuleSet::GENESIS, &trust));
+        assert_refused(verdict, CenRow::E1, Locus::Block);
+    });
+}
+
+/// A candidate whose identity *is* the anchor passes, and E1 is in the
+/// coverage — the row ran.
+#[test]
+fn a_block_that_is_the_anchor_passes_with_e1_recorded() {
+    let chain = five_blocks();
+    let candidate = candidate_on(&chain, Vec::new());
+    let identity = candidate.block.hash();
+    let trust = Trust::full(anchoring(5, identity));
+    chain.with_view(|view| {
+        let formed = formed_on(&chain, candidate);
+        let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
+            .expect("the anchored block is the anchor");
+        assert_eq!(valid.block().hash(), identity);
+        assert!(valid.coverage().contains(CenRow::E1));
+    });
+}
+
+/// At an unanchored height — every height today — E1 is vacuously
+/// satisfied and still recorded as evaluated: the coverage says the row
+/// ran, which the C++ never records.
+#[test]
+fn an_unanchored_height_passes_vacuously_and_is_recorded() {
+    let chain = five_blocks();
+    for trust in [Trust::UNANCHORED, Trust::full(anchoring(3, OTHER))] {
+        chain.with_view(|view| {
+            let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
+            let valid = judged(validate(formed, &view, &RuleSet::GENESIS, &trust))
+                .expect("no anchor at the connecting height");
+            assert!(valid.coverage().contains(CenRow::E1));
+        });
+    }
+}
+
+/// E1 at genesis: an anchor at height 0 judges the genesis candidate.
+#[test]
+fn a_genesis_anchor_judges_the_genesis_candidate() {
+    let chain = MockChain::default();
+    let wrong = Trust::full(anchoring(0, OTHER));
+    chain.with_view(|view| {
+        let formed = formed_on(&chain, candidate_on(&chain, Vec::new()));
+        assert_refused(
+            judged(validate(formed, &view, &RuleSet::GENESIS, &wrong)),
+            CenRow::E1,
+            Locus::Block,
+        );
+    });
+}
+
+// ---- CEN-E5: the binary's anchors agree with the file, at open ---------
 
 /// A five-block chain (heights 0–4), timestamps 100–104.
 fn five_blocks() -> MockChain {

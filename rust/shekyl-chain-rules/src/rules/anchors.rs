@@ -17,8 +17,8 @@
 //!   (slice 3 Q4), excluded from per-block completeness because no
 //!   per-block coverage could ever contain it.
 //! - **CEN-E1** — a block connecting at an anchored height carries that
-//!   anchor's hash. Per block, view-bound; lands with the `Trust` input
-//!   that carries the anchors into `validate`.
+//!   anchor's hash. Per block, view-bound ([`E1`]); reads the anchors from
+//!   the `Trust` input that carries them into `validate`.
 //! - **CEN-E2** — an alternative block at or below the last anchor is
 //!   refused; `D_max`'s second band lands in the same function (`PDM-Q11`).
 //!   **No Rust site**: the store admits no alternative block, and on the
@@ -31,8 +31,44 @@ use shekyl_types::BlockHeight;
 
 use crate::anchors::{AnchorConflict, ReleaseAnchors};
 use crate::census::CenRow;
-use crate::rules::Rule;
+use crate::rules::{BlockContext, BlockRule, Rule};
+use crate::verdict::{refused, Locus, Verdict};
 use crate::view::{AtHeight, ChainView};
+
+/// CEN-E1: a block connecting at an anchored height carries that anchor's
+/// hash — the anchor's own rule (`PDM-Q11`), the `assumevalid` argument
+/// made a predicate.
+///
+/// Reads the release's anchors through the [`Trust`](crate::Trust) input
+/// (`cx.trust`) and the block's identity through the token (`form` derived
+/// it once, CEN-B6). At an unanchored height — every height today — the
+/// rule is vacuously satisfied and **recorded as evaluated**, which the C++
+/// (`blockchain.cpp:5545` main, `:2186` alt: `check_block`) does not do;
+/// the coverage says the row ran. One predicate for both C++ arms: the
+/// main arm's `is_in_checkpoint_zone` guard is a lookup short-cut, not a
+/// rule (slice 3 F11). The alt arm's *forced reorg on a match* is an
+/// alt-chain consequence and lands with CEN-E2's alt home (slice 9).
+///
+/// `form` cannot evaluate it: the connecting height is the view's
+/// (F12) — the C++ files the refusal as `reject_block_form`, the Rust as a
+/// view-bound `InvalidBlock { rule: E1, locus: Block }`.
+pub(crate) struct E1;
+
+impl Rule for E1 {
+    const ROW: CenRow = CenRow::E1;
+}
+
+impl BlockRule for E1 {
+    fn check<'id, V: ChainView<'id>>(
+        cx: &BlockContext<'_>,
+        _view: &V,
+    ) -> Result<Verdict<()>, V::Fault> {
+        match cx.trust.anchors().expected_at(cx.connecting) {
+            Some(expected) if expected != cx.formed.hash() => refused(Self::ROW, Locus::Block),
+            Some(_) | None => Ok(Ok(())),
+        }
+    }
+}
 
 /// CEN-E5: at open, every anchor the binary carries at or below the
 /// recorded tip names the block the file actually recorded there.

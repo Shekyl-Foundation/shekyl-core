@@ -22,6 +22,7 @@ use crate::harness::{
 use crate::harness::{Faulted, MockSubstrate};
 use crate::rule_set::RuleSet;
 use crate::rules::{BlockContext, FormContext, FormRule};
+use crate::trust::Trust;
 use crate::validate::{form, validate};
 use crate::verdict::{ChainValid, Locus, Verdict};
 use crate::view::{AtHeight, ChainView, Tip};
@@ -57,8 +58,10 @@ fn judge_under(candidate: Candidate, rule_set: &RuleSet) -> Verdict<()> {
         Ok(Err(refused)) => return Err(refused),
         Err(Faulted) => unreachable!("the default MockSubstrate never faults"),
     };
-    MockChain::default()
-        .with_view(|view| judged(validate(formed, &view, rule_set)).map(|_valid: ChainValid<_>| ()))
+    MockChain::default().with_view(|view| {
+        judged(validate(formed, &view, rule_set, &Trust::UNANCHORED))
+            .map(|_valid: ChainValid<_>| ())
+    })
 }
 
 fn judge(candidate: Candidate) -> Verdict<()> {

@@ -13,6 +13,7 @@ use super::*;
 use crate::harness::fixture::{recorded, recorded_with_work, root};
 use crate::harness::{Faulted, FaultingView, MockChain};
 use crate::rule_set::RuleSet;
+use crate::trust::Trust;
 use crate::verdict::Locus;
 use shekyl_difficulty::{GENESIS_DIFFICULTY, N};
 
@@ -397,8 +398,13 @@ fn cen_d7_fakechain_validate_mints_past_n() {
     .expect("no fault")
     .expect("stateless");
     chain.with_view(|view| {
-        let valid = crate::harness::judged(crate::validate::validate(formed, &view, &seven))
-            .expect("fakechain past N mints");
+        let valid = crate::harness::judged(crate::validate::validate(
+            formed,
+            &view,
+            &seven,
+            &Trust::UNANCHORED,
+        ))
+        .expect("fakechain past N mints");
         assert!(valid.coverage().covers_landed(&seven));
         assert!(valid.coverage().contains(CenRow::D6));
         assert_eq!(valid.block().target().difficulty(), Difficulty::from_raw(7));

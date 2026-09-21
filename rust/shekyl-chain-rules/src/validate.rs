@@ -47,6 +47,7 @@ use crate::block::{Candidate, StructurallyValid, ValidatedBlock};
 use crate::coverage::RuleCoverage;
 use crate::fault::{Fault, FormAttempt, Stale};
 use crate::rule_set::RuleSet;
+use crate::rules::anchors::E1;
 use crate::rules::difficulty::D4;
 use crate::rules::header::{B1, B2, B5, B6, B7};
 use crate::rules::pow::{D1b, D1, D2, D3};
@@ -54,6 +55,7 @@ use crate::rules::timestamps::{C1, C2, C3};
 use crate::rules::topology::A2;
 use crate::rules::{self, BlockContext, FormContext};
 use crate::substrate::Substrate;
+use crate::trust::Trust;
 use crate::verdict::{ChainValid, InvalidBlock, TxSlot, Verdict};
 use crate::view::{ChainView, Tip};
 
@@ -133,7 +135,11 @@ pub fn form<S: Substrate>(
 }
 
 /// The view-bound stage: judge a [`StructurallyValid`] against the chain it
-/// will connect onto, under `rule_set`.
+/// will connect onto, under `rule_set`, with what this node takes on the
+/// release's word (`trust`: the anchors CEN-E1 reads; from slice 6, the
+/// below-anchor posture — `PDM-Q5`, `trust.rs`). `rule_set` and `trust`
+/// are orthogonal inputs: the first is consensus, the second is node
+/// state, and `connect` compares only the first against what is in force.
 ///
 /// Returns, in order of what happened:
 ///
@@ -247,7 +253,7 @@ pub fn form<S: Substrate>(
 ///     f(View(PhantomData))
 /// }
 /// with_view(|view| {
-///     let valid = validate(formed(), &Evil, &RuleSet::GENESIS).unwrap().unwrap();
+///     let valid = validate(formed(), &Evil, &RuleSet::GENESIS, &Trust::UNANCHORED).unwrap().unwrap();
 ///     connect(&view, valid); // ChainValid<Evil> ≠ ChainValid<View>
 /// });
 /// ```
@@ -255,6 +261,7 @@ pub fn validate<'id, V: ChainView<'id>>(
     formed: StructurallyValid,
     view: &V,
     rule_set: &RuleSet,
+    trust: &Trust,
 ) -> Result<Verdict<ChainValid<'id, V>>, Fault<V::Fault>> {
     // The stateless stage's rule-set claim, checked before any rule reads
     // the wrong parameters. A mismatch is the world having moved, not a
@@ -292,8 +299,8 @@ pub fn validate<'id, V: ChainView<'id>>(
     D1b::record(&mut coverage);
 
     // View-bound block-level predicates (4.A–4.G), in census order.
-    let cx = BlockContext::new(&formed, tip, mtp_window, target);
-    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1);
+    let cx = BlockContext::new(&formed, tip, mtp_window, target, trust);
+    judge_block!(cx, view, coverage; A2, B5, C1, C2, D1, E1);
 
     let candidate = cx.candidate();
     let miner = (TxSlot::Miner, &candidate.block.miner_transaction);

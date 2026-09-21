@@ -330,7 +330,7 @@ census_rows! {
         D7 implemented(crate::rules::difficulty::D7),
         // 4.E Checkpoints and fast-sync trust — the anchor model's rows
         // (`CHAIN_RULES_SLICE_3.md` §0; `PDM-Q5`).
-        E1 pending,
+        E1 implemented(crate::rules::anchors::E1),
         // E2 has no Rust site: the store admits no alternative block and the
         // main chain satisfies the anchor floor by construction. Subsumed
         // behind the alt `ChainView` (slice 9) AND `D_max`'s numeric
