@@ -191,9 +191,14 @@ Why the anchors ride on a `Trust` value rather than on `RuleSet`,
   (`connect.rs:359`), so a table on the set is either refused when the
   driver's copy differs or has to be carved out of the comparison.
 - **Not `Substrate`** — `Substrate` is *services with faults* (a clock that
-  may be unavailable, a VM that may fail); the table is static data with no
-  failure mode, and adding a trait method breaks every implementor
-  (`ProductionSubstrate` in #806, the test harness) for no fault to carry.
+  may be unavailable, a VM that may fail; since #811 also advisory hints to
+  them, `pin_seed`, defaulted). The table is static data with no failure mode
+  and nothing to serve; a method returning it would make the trait carry
+  configuration, and every mock would answer with a table it has no reason
+  to hold. *(Round 0 also said "adding a trait method breaks every
+  implementor" — a defaulted method does not, as `pin_seed` shows; that
+  clause is withdrawn and the argument rests on the kind of thing the trait
+  is.)*
 - **Not the `form` token** — `form` is stateless and has no height; E1 is
   view-bound (F12). Carrying a `&'static` table through the token would work
   mechanically but would make the token describe node configuration it never
@@ -305,6 +310,22 @@ CEN-F1. Landed together because the context field's only reader is E1 — a
 parameter no rule reads is the callee-without-caller smell, and clippy
 refused it. **c6** census re-key of E1/E2/E5 (F2, F3, F4, F6, F30);
 contract, changelog, index, FOLLOWUPS (E5 wiring, owner DRS-E2), PDM F27/F30.
+
+**Sweep of `dev` `34d111551` → `b680d59e0` (2026-09-21, after #807–#811)
+for anything this slice's claims rest on:** census 4.E rows untouched
+(J13/J18 renamed for `Reinstate`); `PDM-Q5` still at `:292`–`:296`;
+`connect`'s by-value in-force check (the `Trust` reversion falsifier) still
+at `connect.rs`; `Candidate` still holds full transactions (F10 stands);
+`Substrate` gained a **defaulted** `pin_seed` (#811) — which withdraws one
+clause of §4.1's "not on `Substrate`" argument (a defaulted method breaks
+no implementor) and leaves the load-bearing one (services vs. static data);
+the CSR register's CEN-E1/E5 rows are pinned verdicts at `eb1b60198` and
+stay as records-was; the E2 grader counts a row no connected block
+exercised as `not_exercised`, never as a failure — so E5, enforced at open,
+is `not_exercised` in every replay **by construction**, and its evidence is
+the fixture and the writer's open path, not a replay. `#811`'s
+`export_conformance_register` fixture check passes over the re-keyed census
+(it reads the CSR register, not the census).
 
 Deviations from §5's plan, disclosed: commits 3 and 4 merged (above);
 `Box::leak` builds the `'static` fixture tables in tests (the production

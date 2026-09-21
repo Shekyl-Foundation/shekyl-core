@@ -29,9 +29,11 @@
 //!   have to be carved out of the comparison. `PDM-Q5`'s reversion clause
 //!   names exactly this check.
 //! - **Not on `Substrate`.** That trait is *services with faults* — a clock
-//!   that may be unavailable, a VM that may fail. The table is static data
-//!   with no failure mode, and a new trait method breaks every implementor
-//!   for no fault to carry.
+//!   that may be unavailable, a VM that may fail (and, since `pin_seed`,
+//!   advisory hints to those services). The table is static data with no
+//!   failure mode and nothing to serve; a method returning it would make
+//!   the trait carry configuration, and its mock in every test would have
+//!   to answer with a table it has no reason to hold.
 //! - **Not on the `form` token.** `form` is stateless and has no height;
 //!   E1 is view-bound. The posture is a per-sync-session choice, not a
 //!   property of one block's stateless judgement.
