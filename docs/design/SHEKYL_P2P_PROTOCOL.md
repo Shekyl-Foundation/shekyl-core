@@ -2122,7 +2122,13 @@ workaround. It is not one: it is a **hard blocker** for the affected
 populations below. A row that inherited the wrong premise would have ranked
 this wrong.
 
-#### The mechanism, verified at `dev` `f6df3abc2`
+#### The mechanism, verified at `dev` `059aca264`
+
+**Re-pinned 2026-09-21.** The first writing pinned `f6df3abc2`; `dev` has
+since moved (#808, #810). **All eleven anchors below were re-verified line by
+line at `059aca264` and every one still resolves** — the re-pin is a pin
+refresh, not a correction. Line numbers are of the **inherited** state: this
+PR's own edits shift `net_node.h` and `net_node.inl` below these points.
 
 | Anchor | What is there |
 | --- | --- |
@@ -2147,8 +2153,8 @@ Three properties follow, and all three were confirmed at those lines:
 - **(c) INBOUND ONLY.** It counts `m_is_income`.
 
 **Not PWD-I1, and this row exists partly to stop that re-attribution.** PWD-I1's
-same-host cap at `net_node.h:144` (**at the `dev` `f6df3abc2` pin**, as with the
-table above; this PR's own edits shift it by one) is `!connection_is_income && ...` — outbound-only
+same-host cap at `net_node.h:144` (**at the `dev` `059aca264` pin**, as with
+the table above; this PR's own edits shift it by one) is `!connection_is_income && ...` — outbound-only
 *by construction*, with a comment giving the reason (capping inbound there
 would let any peer suppress this node's dials to a host simply by connecting to
 us). P2P-2 did not cause this. The mechanism was first attributed to that cap
@@ -2317,6 +2323,38 @@ A third, added with the correction: **if a NAT'd node reaches chain height over
 a Tor-only transport** on an unmodified build, then `:452` does not do what its
 own comment says and the "dead end" framing above is wrong — the row would
 revert to describing a degraded path rather than a blocker.
+
+#### What the falsifier can and cannot settle
+
+**It re-sequences PWD-I8. It cannot close it.** Stated explicitly because the
+cheap outcome is the dangerous one.
+
+The cap is *already* demonstrated to be what **refuses** B: the refusal log
+line, the port-move control, and A holding every seed's slot are all in the
+record. What the falsifier settles is whether the failure cache is what makes
+that refusal **unrecoverable** — which changes the remedy for *this incident*
+and the urgency of the window row, and nothing else.
+
+**PWD-I8 was minted because `is_same_host` answers two questions with one
+quantity, and that is true whichever mechanism produced this particular dead
+node.** If the falsifier shows that tier 1 plus a window fix restores the second
+daemon, the result is **a fixed incident and an unfixed category error** — and
+a working node is the single thing most likely to stop anyone looking at I8
+again. A green falsifier is therefore a re-sequencing signal, never a closure.
+
+**Methodology, because the run is cheap to do wrong:**
+
+1. **Raise the cap on every live seed**, not one — the refusing side enforces
+   it, and one unraised seed reproduces the symptom and reads as a null result.
+2. **Restart both daemons afterwards**, to clear `m_conn_fails_cache`. B is
+   *poisoned* — 34 recorded failures — so without a restart the cache alone
+   reproduces the old behaviour against a correctly-raised cap, and the run
+   would falsify the fix rather than the hypothesis. **B's restart matters more
+   than A's**, which is the opposite of the intuition that the synced node is
+   the interesting one.
+3. **Read the observation off the SEED**, as two simultaneous connections from
+   one address — not off either daemon's sync progress, which confounds
+   admission with everything downstream of it.
 
 **Reopening criteria if the number is later raised and the row closed:** reopen
 if a fleet run shows a single host sustaining more inbound connections than the

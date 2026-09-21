@@ -675,10 +675,17 @@ namespace nodetool
         return false;
     }
 
-    // PWD-I7: the DEFAULT is Rust-owned (`shekyl_host_inbound_default_cap`,
-    // wired at the descriptor in net_node.cpp); an explicit operator value
-    // still wins here.
-    max_connections = command_line::get_arg(vm, arg_max_connections_per_ip);
+    // PWD-I7: resolve the per-host inbound cap. The descriptor carries the
+    // SENTINEL `-1`, never a value, so the default exists in exactly one
+    // place -- `shekyl_host_inbound_default_cap()` -- and no C++ literal
+    // competes with it. An explicit operator value wins, including `0`,
+    // which legitimately means "refuse every inbound connection".
+    {
+      const std::int64_t configured = command_line::get_arg(vm, arg_max_connections_per_ip);
+      max_connections = configured < 0
+        ? shekyl_host_inbound_default_cap()
+        : static_cast<uint32_t>(std::min<std::int64_t>(configured, std::numeric_limits<uint32_t>::max()));
+    }
 
     return true;
   }

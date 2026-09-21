@@ -188,14 +188,24 @@ namespace nodetool
     const command_line::arg_descriptor<bool> arg_pad_transactions = {
       "pad-transactions", "Pad relayed transactions to help defend against traffic volume analysis", false
     };
-    // The literal `1` that used to sit here is gone: the per-host INBOUND
-    // admission default is Rust-owned and reached through
+    // The literal `1` that used to sit here is gone, and so is any literal:
+    // the per-host INBOUND admission default is Rust-owned and reached through
     // `shekyl_host_inbound_default_cap()` (`shekyl/shekyl_ffi.h`), rule 20.
-    // It was a number with no owner, written twice (here and the
-    // `node_server` constructor) and compared against in a rule C++ also
-    // wrote twice. See PWD-I7 in SHEKYL_P2P_PROTOCOL.md -- the VALUE is
-    // unchanged; a ruling that moves it now has one place to land.
-    const command_line::arg_descriptor<uint32_t> arg_max_connections_per_ip = {"max-connections-per-ip", "Maximum number of p2p connections allowed from the same IP address", shekyl_host_inbound_default_cap()};
+    // See PWD-I7 in SHEKYL_P2P_PROTOCOL.md -- the VALUE is unchanged.
+    //
+    // `-1` is a SENTINEL, not a value, and the type is signed so it can be
+    // one: `0` is a legal operator choice meaning "refuse every inbound
+    // connection", so it cannot double as "unset". Resolved in
+    // `handle_command_line`, which is where `--out-peers` / `--in-peers`
+    // resolve theirs.
+    //
+    // Deliberately NOT `= shekyl_host_inbound_default_cap()`. That call would
+    // force DYNAMIC initialization of an `extern const` whose zero state is
+    // `0` -- "refuse all inbound" -- so any future reader during static init
+    // would get a silent, total inbound outage. The precedent this pattern
+    // copies does not do it either: `shekyl_p2p_default_out_peers()` is only
+    // ever called from function bodies.
+    const command_line::arg_descriptor<int64_t> arg_max_connections_per_ip = {"max-connections-per-ip", "Maximum number of p2p connections allowed from the same IP address (-1 = default)", -1};
 
     std::optional<std::vector<proxy>> get_proxies(boost::program_options::variables_map const& vm)
     {

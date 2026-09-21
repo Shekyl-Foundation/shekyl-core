@@ -2786,7 +2786,7 @@ namespace
         boost::program_options::variable_value(std::string(port), false);
       if (per_ip >= 0)
         vm.find(nodetool::arg_max_connections_per_ip.name)->second =
-          boost::program_options::variable_value(static_cast<uint32_t>(per_ip), false);
+          boost::program_options::variable_value(static_cast<std::int64_t>(per_ip), false);
 
       // Nettype is set the way the daemon sets it: the real flags, through
       // `handle_command_line`. There is no setter, and reaching around init
@@ -2817,10 +2817,10 @@ TEST(node_server, host_inbound_default_cap_comes_from_rust_not_a_cpp_literal)
   // is the inherited one. Ownership itself is not observable from a test --
   // it is observable from the absence of a second literal to disagree with,
   // which is what the deletion in net_node.cpp/.h accomplishes.
-  EXPECT_EQ(1u, shekyl_host_inbound_default_cap())
-    << "the forward cut is behaviour-preserving: the inherited value is 1, and "
-       "moving it is a ruling (PWD-I7 owed-back Q1), not a refactor";
-
+  // The VALUE is pinned once, in Rust (`the_default_cap_is_the_inherited_one`).
+  // Restating `1` here would make a ruling that moves the number edit three
+  // files while the commit claims it has one place to land -- so this side
+  // asserts only AGREEMENT, which is what it can see and what it is for.
   host_inbound_fixture d;
   ASSERT_TRUE(d.init("48091", -1, cryptonote::TESTNET));
   EXPECT_EQ(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip())
@@ -2839,6 +2839,30 @@ TEST(node_server, host_inbound_cap_still_takes_an_explicit_operator_value)
   ASSERT_TRUE(d.init("48092", 2, cryptonote::TESTNET));
   EXPECT_EQ(2u, d.server->get_max_connections_per_ip());
   EXPECT_NE(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip());
+}
+
+TEST(node_server, host_inbound_cap_sentinel_resolves_and_zero_is_not_the_sentinel)
+{
+  // `--max-connections-per-ip` carries the SENTINEL -1, never a value, so the
+  // default lives only in Rust. The trap this pins: `0` is a legal operator
+  // choice meaning "refuse every inbound connection", so it must NOT be
+  // treated as unset. A sentinel that swallowed 0 would silently hand the
+  // operator the default when they asked for a total inbound stop.
+  //
+  // Red edit: make the resolution `configured <= 0 ? default : configured`
+  // in handle_command_line.
+  {
+    host_inbound_fixture d;
+    ASSERT_TRUE(d.init("48101", -1, cryptonote::TESTNET));
+    EXPECT_EQ(shekyl_host_inbound_default_cap(), d.server->get_max_connections_per_ip())
+      << "the sentinel must resolve to the Rust-owned default";
+  }
+  {
+    host_inbound_fixture d;
+    ASSERT_TRUE(d.init("48102", 0, cryptonote::TESTNET));
+    EXPECT_EQ(0u, d.server->get_max_connections_per_ip())
+      << "--max-connections-per-ip 0 is a real choice, not an unset value";
+  }
 }
 
 TEST(node_server, host_inbound_admission_runs_through_the_shipped_limit_interface)

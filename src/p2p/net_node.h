@@ -790,7 +790,7 @@ namespace nodetool
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate_down;
     extern const command_line::arg_descriptor<int64_t> arg_limit_rate;
     extern const command_line::arg_descriptor<bool> arg_pad_transactions;
-    extern const command_line::arg_descriptor<uint32_t> arg_max_connections_per_ip;
+    extern const command_line::arg_descriptor<int64_t> arg_max_connections_per_ip;
 }
 
 POP_WARNINGS

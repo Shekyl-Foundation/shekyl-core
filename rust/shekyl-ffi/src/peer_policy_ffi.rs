@@ -317,10 +317,24 @@ pub extern "C" fn shekyl_block_sync_orphan_resync(action: u8) -> bool {
 /// The default `--max-connections-per-ip`: inbound connections one remote
 /// host may hold.
 ///
-/// Rust owns this value; C++ consumes it at the argument descriptor and at
-/// the `node_server` constructor, which are the two places the inherited `1`
-/// literal lived. **Unchanged by the forward cut** — moving it is a ruling,
-/// not a refactor (PWD-I7 owed-back question 1).
+/// Rust owns this value; C++ consumes it when resolving the
+/// `--max-connections-per-ip` sentinel and at the `node_server` constructor,
+/// which are the two places the inherited `1` literal lived. **Unchanged by
+/// the forward cut** — moving it is a ruling, not a refactor.
+///
+/// # Contract: this must stay a constant return
+///
+/// **No Rust-side global state, no lazy initialisation, no `OnceLock`.** The
+/// C++ constructor calls this during `node_server` construction, and the
+/// value's zero state on the C++ side is `0`, which means *refuse every
+/// inbound connection*. A lazily-initialised implementation would make this a
+/// genuine initialisation-order hazard whose failure mode is a silent, total
+/// inbound outage rather than a crash.
+///
+/// The descriptor in `net_node.cpp` deliberately carries the sentinel `-1`
+/// rather than calling this, so that an `extern const` is not dynamically
+/// initialised. That is a constraint on the C++ side; this doc comment is the
+/// matching constraint on ours, because the C++ half cannot enforce it.
 #[no_mangle]
 pub extern "C" fn shekyl_host_inbound_default_cap() -> u32 {
     HostInboundCap::DEFAULT.get()

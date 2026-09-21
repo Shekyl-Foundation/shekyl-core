@@ -3448,7 +3448,11 @@ std::uint32_t shekyl_p2p_default_out_peers();
 //! Per-host INBOUND admission (PWD-I7). Rust-owned (rule 20); replaces the
 //! `1` literals at `net_node.cpp`'s `--max-connections-per-ip` descriptor and
 //! the `node_server` constructor, and the comparison `has_too_many_connections`
-//! wrote twice. NOT PWD-I1's same-host cap, which is outbound-only by
+//! wrote twice. **`..._default_cap` must stay a constant return with no
+//! Rust-side global or lazy state** -- the constructor calls it, and the
+//! C++ zero state is `0`, which refuses every inbound connection. The
+//! descriptor carries the sentinel `-1` rather than calling this, so no
+//! `extern const` is dynamically initialised. NOT PWD-I1's same-host cap, which is outbound-only by
 //! construction (`net_node.h`) -- separate rules, separate reasons.
 //!
 //! `..._zone_is_capped` is TRUE FOR THE PUBLIC ZONE ONLY, and the exemption is
