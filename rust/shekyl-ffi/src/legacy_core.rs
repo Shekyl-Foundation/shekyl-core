@@ -437,6 +437,126 @@ pub extern "C" fn shekyl_compute_burn_split_escalated(
     ))
 }
 
+/// Status codes for the fee-burn family's fallible entries.
+pub const SHEKYL_ECONOMICS_OK: i32 = 0;
+/// A required out-pointer was null.
+pub const SHEKYL_ECONOMICS_NULL_OUT: i32 = -1;
+/// `total_burned > coins_generated` — a store-invariant violation
+/// ([`shekyl_economics::SupplyInvariantViolation`]), never a saturated zero.
+pub const SHEKYL_ECONOMICS_SUPPLY_INVARIANT: i32 = -2;
+
+/// **The one owner of the fee burn, at the boundary** (CEN-F17; E6 slice 4
+/// precursor, `CHAIN_RULES_SLICE_4.md` §3.1 S1/S3/S15, FL-R16c).
+///
+/// C++ passes the two **store facts** the supply derives from —
+/// `coins_generated` (the parent's `already_generated_coins`) and
+/// `total_burned` (the destroyed-fee fold), both read at parent state — and
+/// Rust derives `circulating_supply = coins_generated − total_burned`
+/// (`shekyl_economics::CirculatingSupply::derive`), the percentage, the
+/// escalated split and the zero-fee arm. Until this landed the C++ shim
+/// `economics.h` owned the zero arm and the composition, and two C++ sites
+/// defined the supply operand as gross emission — the definitional defect
+/// FL-R16c bound the implementing PR to correct.
+///
+/// # Safety
+///
+/// `out` must be null or valid for writing one `ShekylBurnSplit`. Null is
+/// checked ([`SHEKYL_ECONOMICS_NULL_OUT`]); a supply underflow returns
+/// [`SHEKYL_ECONOMICS_SUPPLY_INVARIANT`] and writes nothing — the caller
+/// halts, it does not proceed on a zero.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_compute_fee_burn(
+    total_fees: u64,
+    tx_count_sum: u64,
+    window_blocks: u64,
+    coins_generated: u64,
+    total_burned: u64,
+    frozen_segment_count: u64,
+    out: *mut ShekylBurnSplit,
+) -> i32 {
+    use shekyl_economics::{compute_fee_burn, EconomicParams, FrozenSegmentCount, TxVolume};
+    if out.is_null() {
+        return SHEKYL_ECONOMICS_NULL_OUT;
+    }
+    let Ok(supply) = circulating_supply(coins_generated, total_burned) else {
+        return SHEKYL_ECONOMICS_SUPPLY_INVARIANT;
+    };
+    let split = compute_fee_burn(
+        total_fees,
+        TxVolume::window(tx_count_sum, window_blocks),
+        supply,
+        FrozenSegmentCount::new(frozen_segment_count),
+        &EconomicParams::default(),
+    );
+    // SAFETY: non-null per the check above; the caller guarantees writability.
+    unsafe { out.write(burn_split_to_c(split)) };
+    SHEKYL_ECONOMICS_OK
+}
+
+/// The burn percentage alone, from the same two store facts (observability:
+/// the info RPC; the relay-floor fee correction). Same derivation and the
+/// same invariant status as [`shekyl_compute_fee_burn`]; the constants are
+/// the shipped `EconomicParams`, never arguments.
+///
+/// # Safety
+///
+/// `out_pct` must be null or valid for writing one `u64`.
+#[no_mangle]
+pub unsafe extern "C" fn shekyl_calc_burn_pct_at(
+    tx_count_sum: u64,
+    window_blocks: u64,
+    coins_generated: u64,
+    total_burned: u64,
+    out_pct: *mut u64,
+) -> i32 {
+    use shekyl_economics::{calc_burn_pct_at, EconomicParams, TxVolume};
+    if out_pct.is_null() {
+        return SHEKYL_ECONOMICS_NULL_OUT;
+    }
+    let Ok(supply) = circulating_supply(coins_generated, total_burned) else {
+        return SHEKYL_ECONOMICS_SUPPLY_INVARIANT;
+    };
+    let pct = calc_burn_pct_at(
+        TxVolume::window(tx_count_sum, window_blocks),
+        supply,
+        &EconomicParams::default(),
+    );
+    // SAFETY: non-null per the check above.
+    unsafe { out_pct.write(pct) };
+    SHEKYL_ECONOMICS_OK
+}
+
+fn circulating_supply(
+    coins_generated: u64,
+    total_burned: u64,
+) -> Result<shekyl_economics::CirculatingSupply, shekyl_economics::SupplyInvariantViolation> {
+    use shekyl_units::AtomicUnits;
+    shekyl_economics::CirculatingSupply::derive(
+        AtomicUnits::from_raw(coins_generated),
+        AtomicUnits::from_raw(total_burned),
+    )
+}
+
+/// **The one owner of the emission split, at the boundary** (CEN-F16; E6
+/// slice 4 precursor §3.1 S4/S6). The zero-emission arm and the
+/// share→split composition that the C++ shim `economics.h` used to own are
+/// `shekyl_economics::compute_emission_split`'s; the three constants it
+/// marshaled are that crate's. `genesis_ng_height` is CEN-F21's epoch (1 on
+/// every shipped network). Infallible.
+#[no_mangle]
+pub extern "C" fn shekyl_compute_emission_split(
+    block_emission: u64,
+    current_height: u64,
+    genesis_ng_height: u64,
+) -> ShekylEmissionSplit {
+    let split =
+        shekyl_economics::compute_emission_split(block_emission, current_height, genesis_ng_height);
+    ShekylEmissionSplit {
+        miner_emission: split.miner_emission,
+        staker_emission: split.staker_emission,
+    }
+}
+
 /// The D2-escalated staker share at `frozen_segment_count`, fixed-point `SCALE`.
 ///
 /// Observability / callers that need the share without a split. Same

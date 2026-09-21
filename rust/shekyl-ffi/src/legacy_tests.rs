@@ -1270,3 +1270,116 @@ fn relay_constants_cross_the_abi_from_the_rust_owner() {
         shekyl_economics::RELAY_ADMISSION_SLACK_BP
     );
 }
+
+// --- the composed fee-burn / emission-split boundary (E6 slice 4 precursor) -----
+//
+// `compute_fee_burn` / `compute_emission_split` own their arithmetic and are
+// tested in shekyl-economics. What only exists at THIS boundary: the supply
+// derivation from the two store facts, the invariant status, the null
+// check, and the out-pointer write.
+
+/// The fee burn at the boundary equals the crate's composition over the
+/// derived supply, for a non-trivial fee and a burned total below emission.
+#[test]
+fn compute_fee_burn_ffi_derives_the_supply_and_matches_the_crate() {
+    use shekyl_economics::{
+        compute_fee_burn, CirculatingSupply, EconomicParams, FrozenSegmentCount, TxVolume,
+    };
+    use shekyl_units::AtomicUnits;
+    let p = EconomicParams::default();
+    let (fees, sum, blocks, generated, burned, n) = (
+        1_000_000_000u64,
+        29_160u64,
+        720u64,
+        p.emission_curve_asymptote / 2,
+        1_000_000u64,
+        3u64,
+    );
+    let mut out = ShekylBurnSplit {
+        miner_fee_income: 0xDEAD,
+        staker_pool_amount: 0xDEAD,
+        actually_destroyed: 0xDEAD,
+    };
+    let st =
+        unsafe { shekyl_compute_fee_burn(fees, sum, blocks, generated, burned, n, &raw mut out) };
+    assert_eq!(st, SHEKYL_ECONOMICS_OK);
+    let supply = CirculatingSupply::derive(
+        AtomicUnits::from_raw(generated),
+        AtomicUnits::from_raw(burned),
+    )
+    .expect("burned < generated");
+    let want = compute_fee_burn(
+        fees,
+        TxVolume::window(sum, blocks),
+        supply,
+        FrozenSegmentCount::new(n),
+        &p,
+    );
+    assert_eq!(out.miner_fee_income, want.miner_fee_income);
+    assert_eq!(out.staker_pool_amount, want.staker_pool_amount);
+    assert_eq!(out.actually_destroyed, want.actually_destroyed);
+}
+
+/// `total_burned > coins_generated` is a store-invariant violation: the
+/// status says so and NOTHING is written — the caller halts rather than
+/// proceeding on a zero that `calc_burn_pct` would read as "nothing
+/// emitted" (FL-R16c; supply.rs module docs).
+#[test]
+fn compute_fee_burn_ffi_refuses_a_supply_underflow_and_writes_nothing() {
+    let mut out = ShekylBurnSplit {
+        miner_fee_income: 0xDEAD,
+        staker_pool_amount: 0xDEAD,
+        actually_destroyed: 0xDEAD,
+    };
+    let st = unsafe { shekyl_compute_fee_burn(1_000, 1, 1, 100, 101, 0, &raw mut out) };
+    assert_eq!(st, SHEKYL_ECONOMICS_SUPPLY_INVARIANT);
+    assert_eq!(out.miner_fee_income, 0xDEAD, "untouched");
+    let mut pct = 0xDEADu64;
+    let st = unsafe { shekyl_calc_burn_pct_at(1, 1, 100, 101, &raw mut pct) };
+    assert_eq!(st, SHEKYL_ECONOMICS_SUPPLY_INVARIANT);
+    assert_eq!(pct, 0xDEAD, "untouched");
+}
+
+#[test]
+fn fee_burn_ffi_null_out_is_refused() {
+    let st = unsafe { shekyl_compute_fee_burn(1, 1, 1, 10, 0, 0, std::ptr::null_mut()) };
+    assert_eq!(st, SHEKYL_ECONOMICS_NULL_OUT);
+    let st = unsafe { shekyl_calc_burn_pct_at(1, 1, 10, 0, std::ptr::null_mut()) };
+    assert_eq!(st, SHEKYL_ECONOMICS_NULL_OUT);
+}
+
+/// The percentage at the boundary equals the crate's over the derived supply.
+#[test]
+fn calc_burn_pct_at_ffi_matches_the_crate() {
+    use shekyl_economics::{calc_burn_pct_at, CirculatingSupply, EconomicParams, TxVolume};
+    use shekyl_units::AtomicUnits;
+    let p = EconomicParams::default();
+    let (generated, burned) = (p.emission_curve_asymptote / 3, 5_000_000u64);
+    let mut pct = 0u64;
+    let st = unsafe { shekyl_calc_burn_pct_at(29_160, 720, generated, burned, &raw mut pct) };
+    assert_eq!(st, SHEKYL_ECONOMICS_OK);
+    let supply = CirculatingSupply::derive(
+        AtomicUnits::from_raw(generated),
+        AtomicUnits::from_raw(burned),
+    )
+    .expect("burned < generated");
+    assert_eq!(
+        pct,
+        calc_burn_pct_at(TxVolume::window(29_160, 720), supply, &p)
+    );
+}
+
+/// The emission split at the boundary is the crate's, including the zero arm.
+#[test]
+fn compute_emission_split_ffi_matches_the_crate() {
+    for (emission, height) in [
+        (0u64, 5u64),
+        (1_638_400_000_000, 1),
+        (1_000_000_000, 3_000_000),
+    ] {
+        let ffi = shekyl_compute_emission_split(emission, height, 1);
+        let want = shekyl_economics::compute_emission_split(emission, height, 1);
+        assert_eq!(ffi.miner_emission, want.miner_emission);
+        assert_eq!(ffi.staker_emission, want.staker_emission);
+    }
+}

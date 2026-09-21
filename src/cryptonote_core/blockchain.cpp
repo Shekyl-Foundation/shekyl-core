@@ -1503,7 +1503,7 @@ uint64_t Blockchain::parent_frozen_segment_count(uint64_t block_height) const
 }
 //------------------------------------------------------------------
 // This function validates the miner transaction reward
-bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count)
+bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count, uint64_t total_burned)
 {
   LOG_PRINT_L3("Blockchain::" << __func__);
   const uint64_t block_height = std::get<txin_gen>(b.miner_tx.vin[0]).height;
@@ -1531,7 +1531,10 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
 
   uint64_t median_weight = m_current_block_cumul_weight_median;
   const shekyl::tx_volume_window tx_volume = get_tx_volume_window(block_height);
-  const uint64_t circulating_supply = already_generated_coins;
+  // The supply operand is DERIVED in Rust from these two parent-state facts
+  // (FL-R16c: `= already_generated_coins`, gross of burn, was the
+  // definitional bug; E6 slice 4 §3.1 S15). C++ passes facts, defines nothing.
+  const shekyl::supply_facts supply{already_generated_coins, total_burned};
 
   if (!get_block_reward(median_weight, cumulative_block_weight, already_generated_coins, base_reward, version, tx_volume))
   {
@@ -1548,7 +1551,7 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
   // frozen_segment_count is the caller's parent-state read (the asserting
   // read-point above); the escalated share cannot reach miner_fee_income
   // (§12.11.1 Leg 1), so this stays the security-budget-preserving split.
-  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, circulating_supply, frozen_segment_count);
+  shekyl::BurnResult burn = shekyl::compute_fee_burn(fee, tx_volume, supply, frozen_segment_count);
   uint64_t effective_fee = burn.miner_fee_income;
 
   if(miner_base_reward + effective_fee < money_in_use)
@@ -1818,14 +1821,16 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
   uint8_t hf_version = b.major_version;
   size_t max_outs = 1;
   const shekyl::tx_volume_window tx_volume = get_tx_volume_window(height);
-  const uint64_t circulating_supply = already_generated_coins;
+  // Parent-state facts the supply is derived from in Rust (FL-R16c); the
+  // template and connect read the same two so they agree by construction.
+  const shekyl::supply_facts supply{already_generated_coins, m_db->get_total_burned()};
   const uint64_t genesis_ng_height = get_earliest_ideal_height_for_version(HF_VERSION_SHEKYL_NG);
   // D2 escalation operand, computed ONCE and passed to BOTH construct_miner_tx
   // calls: the retry below re-prices the coinbase after the weight changes, and
   // a second read there could price against a different n than the first pass
   // (criterion #1 — template and connect must agree by construction).
   const uint64_t frozen_segment_count = parent_frozen_segment_count(height);
-  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, circulating_supply, genesis_ng_height);
+  bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
 #if defined(DEBUG_CREATE_BLOCK_TEMPLATE)
@@ -1834,7 +1839,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
 #endif
   for (size_t try_count = 0; try_count != 10; ++try_count)
   {
-    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, circulating_supply, genesis_ng_height);
+    r = construct_miner_tx(height, median_weight, already_generated_coins, cumulative_weight, fee, frozen_segment_count, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version, tx_volume, supply, genesis_ng_height);
 
     CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, second chance");
     size_t coinbase_weight = get_transaction_weight(b.miner_tx);
@@ -5835,7 +5840,12 @@ leave:
   // and the staker-inflow accrual — the same single-read discipline as
   // base_reward (F-B1c): verify's operand IS the accrual's operand.
   const uint64_t frozen_segment_count = parent_frozen_segment_count(blockchain_height);
-  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count))
+  // The destroyed-fee fold at PARENT state, read ONCE here and handed to both
+  // validate_miner_transaction and the accrual below (single-read discipline,
+  // as for frozen_segment_count): circulating_supply = already_generated_coins
+  // − total_burned is derived in Rust from this pair (FL-R16c).
+  const uint64_t total_burned = m_db->get_total_burned();
+  if(!validate_miner_transaction(bl, cumulative_block_weight, fee_summary, base_reward, already_generated_coins, m_hardfork->get_current_version(), frozen_segment_count, total_burned))
   {
     MERROR_VER("Block with id: " << id << " has incorrect miner transaction");
     reject_block_form(bvc);
@@ -5914,8 +5924,8 @@ leave:
         base_reward, blockchain_height, genesis_ng_height);
 
     const shekyl::BurnResult burn = shekyl::compute_fee_burn(
-        fee_summary, get_tx_volume_window(blockchain_height), already_generated_coins,
-        frozen_segment_count);
+        fee_summary, get_tx_volume_window(blockchain_height),
+        shekyl::supply_facts{already_generated_coins, total_burned}, frozen_segment_count);
 
     archival_budget_accrual = em_split.staker_emission + burn.staker_pool_amount;
     block_burn_amount = burn.actually_destroyed;

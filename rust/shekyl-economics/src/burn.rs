@@ -32,6 +32,7 @@
 
 use crate::escalation::{staker_pool_share_at, FrozenSegmentCount, ScaledShare};
 use crate::params::{clamp, isqrt, mul_scale, EconomicParams, SCALE};
+use crate::supply::CirculatingSupply;
 use crate::volume::TxVolume;
 
 /// Result of the fee burn split calculation.
@@ -75,10 +76,17 @@ pub fn calc_burn_pct(
     let sqrt_volume = isqrt(tx_volume.ratio_scaled_squared(tx_baseline)); // SCALE units
 
     // circulating_supply / total_supply scaled to SCALE, saturated at 1.0
-    // (FL-R16c): under the perpetual tail gross issuance passes the
-    // curve's asymptote, and an unsaturated ratio would silently drift
-    // the burn toward its cap on a quantity that stopped meaning
-    // "fraction emitted" at that point.
+    // (FL-R16c, saturation half). The operand is NET supply — coins generated
+    // minus coins destroyed (`CirculatingSupply`, the definitional half of the
+    // same ruling) — and the ratio still exceeds 1.0 under the perpetual tail
+    // (FL-R12′): past exhaustion every block pays TAIL regardless of the
+    // curve, while burn is a fraction of *fees*, so net supply passes the
+    // asymptote whenever cumulative burn lags the tail's overshoot — the
+    // generic post-exhaustion case, not an edge. The clamp is therefore a
+    // belt with a reason, not a compensation for the old gross operand, and
+    // `supply::tests::net_supply_exceeds_the_asymptote_under_the_tail` is the
+    // input that reaches it. Saturated, the ratio reads "fraction of the
+    // curve's cap emitted and not destroyed", meaningful in [0, 1].
     let supply_ratio = (u128::from(circulating_supply) * u128::from(SCALE)
         / u128::from(total_supply))
     .min(u128::from(SCALE)) as u64;
@@ -130,12 +138,67 @@ pub fn compute_burn_split(
     }
 }
 
+/// The burn percentage from the consensus operands and `params` — the
+/// baseline, the asymptote, the base rate and the cap are read from the
+/// parameter set, never passed by a caller (E6 slice 4 §3.1 S2: the C++
+/// shim used to marshal four `SHEKYL_*` constants into [`calc_burn_pct`]).
+/// The supply is the **derived** [`CirculatingSupply`] (FL-R16c), not a
+/// caller's choice of numerator.
+#[must_use]
+pub fn calc_burn_pct_at(
+    tx_volume: TxVolume,
+    supply: CirculatingSupply,
+    params: &EconomicParams,
+) -> u64 {
+    calc_burn_pct(
+        tx_volume,
+        params.tx_volume_baseline,
+        supply.to_raw(),
+        params.emission_curve_asymptote,
+        params.burn_base_rate,
+        params.burn_cap,
+    )
+}
+
+/// **The one owner of the fee burn** (CEN-F17; E6 slice 4 §3.1 S1/S3):
+///
+/// ```text
+/// fees == 0  ⇒  { miner_fee_income: 0, staker_pool: 0, destroyed: 0 }
+/// otherwise  ⇒  compute_burn_split_at(fees, calc_burn_pct_at(volume, supply), n)
+/// ```
+///
+/// Until this landed, both lines lived in the C++ shim `economics.h`
+/// (`compute_fee_burn`): the zero-fee arm decided the outcome before any
+/// Rust ran, and the composition — the percentage feeding the split — was
+/// C++'s. Neither survives a rule change, so neither is marshaling (R8's
+/// discriminator); both are here, with fixtures. The zero arm is
+/// behaviour-identical to running the pipeline on zero fees and is kept
+/// as the rule's own statement of the case, not as an optimisation.
+#[must_use]
+pub fn compute_fee_burn(
+    total_fees: u64,
+    tx_volume: TxVolume,
+    supply: CirculatingSupply,
+    n: FrozenSegmentCount,
+    params: &EconomicParams,
+) -> BurnSplit {
+    if total_fees == 0 {
+        return BurnSplit {
+            miner_fee_income: 0,
+            staker_pool_amount: 0,
+            actually_destroyed: 0,
+        };
+    }
+    let burn_pct = calc_burn_pct_at(tx_volume, supply, params);
+    compute_burn_split_at(total_fees, burn_pct, n, params)
+}
+
 /// **Canonical consensus burn split:** fees × burn% × D2-escalated share at `n`.
 ///
 /// `n` is parent-block [`FrozenSegmentCount`]. The share is derived from
 /// `params` via [`staker_pool_share_at`] — numerics never need to cross FFI as
-/// a free parameter. This is the single Rust function C++, the sim ledger, and
-/// future daemon paths should call.
+/// a free parameter. Consensus paths reach this through
+/// [`compute_fee_burn`], which owns the zero-fee arm and the percentage.
 #[must_use]
 pub fn compute_burn_split_at(
     total_fees: u64,
@@ -150,6 +213,76 @@ pub fn compute_burn_split_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use shekyl_units::AtomicUnits;
+
+    fn supply(net: u64) -> CirculatingSupply {
+        CirculatingSupply::derive(AtomicUnits::from_raw(net), AtomicUnits::ZERO).expect("no burn")
+    }
+
+    /// The zero-fee arm the C++ shim owned (S1): all three legs zero, and
+    /// identical to running the pipeline on zero fees — the arm is the
+    /// rule's statement, not a shortcut with its own answer.
+    #[test]
+    fn zero_fees_burn_nothing_and_pay_nothing() {
+        let p = EconomicParams::default();
+        let v = TxVolume::per_block(p.tx_volume_baseline);
+        let split = compute_fee_burn(0, v, supply(1_000_000), FrozenSegmentCount::new(0), &p);
+        assert_eq!(
+            split,
+            BurnSplit {
+                miner_fee_income: 0,
+                staker_pool_amount: 0,
+                actually_destroyed: 0
+            }
+        );
+        let pct = calc_burn_pct_at(v, supply(1_000_000), &p);
+        assert_eq!(
+            split,
+            compute_burn_split_at(0, pct, FrozenSegmentCount::new(0), &p)
+        );
+    }
+
+    /// The composition the C++ shim owned (S3): the percentage from the
+    /// operands feeds the escalated split; the three legs sum to the fees.
+    #[test]
+    fn fee_burn_composes_the_percentage_into_the_split() {
+        let p = EconomicParams::default();
+        let v = TxVolume::per_block(p.tx_volume_baseline);
+        let net = supply(p.emission_curve_asymptote / 2);
+        let fees = 1_000_000_000;
+        let split = compute_fee_burn(fees, v, net, FrozenSegmentCount::new(0), &p);
+        let pct = calc_burn_pct_at(v, net, &p);
+        assert!(pct > 0, "baseline volume at half the cap burns something");
+        assert_eq!(
+            split,
+            compute_burn_split_at(fees, pct, FrozenSegmentCount::new(0), &p)
+        );
+        assert_eq!(
+            split.miner_fee_income + split.staker_pool_amount + split.actually_destroyed,
+            fees
+        );
+    }
+
+    /// `calc_burn_pct_at` reads every constant from `params` — the four
+    /// values the C++ shim marshaled (S2) — so it equals the primitive
+    /// called with those values spelled out.
+    #[test]
+    fn burn_pct_at_reads_its_constants_from_params() {
+        let p = EconomicParams::default();
+        let v = TxVolume::window(29_160, 720);
+        let net = supply(p.emission_curve_asymptote / 3);
+        assert_eq!(
+            calc_burn_pct_at(v, net, &p),
+            calc_burn_pct(
+                v,
+                p.tx_volume_baseline,
+                net.to_raw(),
+                p.emission_curve_asymptote,
+                p.burn_base_rate,
+                p.burn_cap
+            )
+        );
+    }
 
     #[test]
     fn test_zero_baseline() {

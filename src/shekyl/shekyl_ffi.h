@@ -308,6 +308,49 @@ ShekylBurnSplit shekyl_compute_burn_split_escalated(
 /// read-point obligation as shekyl_compute_burn_split_escalated.
 uint64_t shekyl_staker_pool_share_at(uint64_t frozen_segment_count);
 
+// --- the composed owners (E6 slice 4 precursor, CHAIN_RULES_SLICE_4.md §3.1) --
+//
+// Until these landed the C++ helpers in shekyl/economics.h owned rule
+// content between the caller and the Rust calls: the zero-fee and
+// zero-emission arms, the pct→split and share→split compositions, and the
+// definition `circulating_supply = already_generated_coins` at two call
+// sites (gross emission ignoring burn — FL-R16c's definitional bug). All
+// of it is Rust now; C++ passes FACTS read at parent state and marshals a
+// result. There is nothing left on this side that changes with a rule.
+
+/// Status codes for the composed fee-burn entries.
+#define SHEKYL_ECONOMICS_OK                 0
+#define SHEKYL_ECONOMICS_NULL_OUT          (-1)
+/// total_burned > coins_generated: a store-invariant violation (every burned
+/// unit was first emitted). Nothing is written; the caller halts — it does
+/// not proceed on a zero supply, which the burn would read as "nothing
+/// emitted" and answer with a burn of 0 (FL-R16c).
+#define SHEKYL_ECONOMICS_SUPPLY_INVARIANT  (-2)
+
+/// The fee burn from the store facts (CEN-F17). coins_generated is the
+/// PARENT's already_generated_coins and total_burned the destroyed-fee fold
+/// at the same state; Rust derives circulating_supply = coins_generated −
+/// total_burned (checked), the percentage from the shipped EconomicParams,
+/// the D2-escalated split at frozen_segment_count, and the zero-fee arm.
+/// Same parent-state read-point obligation for all three facts.
+int32_t shekyl_compute_fee_burn(
+    uint64_t total_fees,
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
+    uint64_t coins_generated,
+    uint64_t total_burned,
+    uint64_t frozen_segment_count,
+    ShekylBurnSplit *out);
+
+/// The burn percentage alone, from the same two facts (info RPC; relay-floor
+/// fee correction). Same derivation, same status codes.
+int32_t shekyl_calc_burn_pct_at(
+    uint64_t tx_count_sum,
+    uint64_t window_blocks,
+    uint64_t coins_generated,
+    uint64_t total_burned,
+    uint64_t *out_pct);
+
 /// Effective block-weight median: short_term bounded to
 /// [long_term, S * long_term], S from consensus_constants.json.
 /// Cannot fail. C++ gathers the window medians; Rust owns the clamp.
@@ -428,6 +471,16 @@ struct ShekylEmissionSplit {
 ShekylEmissionSplit shekyl_split_block_emission(
     uint64_t block_emission,
     uint64_t effective_share);
+
+/// The emission split (CEN-F16) as ONE owner: the effective share at
+/// current_height measured from genesis_ng_height (CEN-F21's epoch, 1 on
+/// every shipped network), the split, and the zero-emission arm — all Rust,
+/// with the three share/decay constants read from shekyl-economics rather
+/// than marshaled (E6 slice 4 §3.1 S4/S5/S6). Infallible.
+ShekylEmissionSplit shekyl_compute_emission_split(
+    uint64_t block_emission,
+    uint64_t current_height,
+    uint64_t genesis_ng_height);
 
 /// Generate self-signed SSL certificate (Ed25519 key + X.509 via rcgen).
 bool shekyl_generate_ssl_certificate(

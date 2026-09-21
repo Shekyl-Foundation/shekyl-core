@@ -123,7 +123,7 @@ bool construct_miner_only_block(
             10,
             hf_version,
             /*tx_volume=*/{},
-            /*circulating_supply=*/already_generated_coins,
+            shekyl::supply_facts{already_generated_coins, /*total_burned=*/0},
             /*genesis_ng_height=*/0))
       return false;
 

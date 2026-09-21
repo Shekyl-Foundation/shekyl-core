@@ -1454,10 +1454,13 @@ namespace cryptonote
      * @param already_generated_coins the amount of currency generated prior to this block
      * @param version hard fork version for that transaction
      * @param frozen_segment_count D2 escalation operand n, read at parent state via parent_frozen_segment_count
+     * @param total_burned the destroyed-fee fold at PARENT state (the same read the accrual uses):
+     *        circulating_supply = already_generated_coins − total_burned is derived in Rust (FL-R16c),
+     *        never defined here
      *
      * @return false if anything is found wrong with the miner transaction, otherwise true
      */
-    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count);
+    bool validate_miner_transaction(const block& b, size_t cumulative_block_weight, uint64_t fee, uint64_t& base_reward, uint64_t already_generated_coins, uint8_t version, uint64_t frozen_segment_count, uint64_t total_burned);
 
     /**
      * @brief reverts the blockchain to its previous state following a failed switch
