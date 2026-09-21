@@ -89,6 +89,7 @@
 mod at_index;
 mod chain_reads;
 mod connect;
+mod curve_reads;
 mod error;
 mod halt;
 mod header;
@@ -560,6 +561,9 @@ mod amendments_tests;
 #[path = "read_tests.rs"]
 mod read_tests;
 
+#[cfg(test)]
+#[path = "curve_read_tests.rs"]
+mod curve_read_tests;
 #[cfg(test)]
 #[path = "output_read_tests.rs"]
 mod output_read_tests;
