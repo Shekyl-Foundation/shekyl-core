@@ -4492,6 +4492,7 @@ dependencies = [
  "sha2",
  "shekyl-crypto-hash",
  "shekyl-pow-randomx",
+ "shekyl-types",
 ]
 
 [[package]]
