@@ -34,7 +34,9 @@ this round.
 ## 1. The substrate (grounded)
 
 - **The seam:** `BlockSource` (`shekyl-engine-core/src/engine/pscan/block_source.rs`) — `pub(crate)`
-  today, with `tip_height() -> BlockHeight` and `block_at(h) -> Option<ScannableBlock>` (an
+  today, with `tip_height() -> ChainCount` (identifier kept — WI-3 named clock;
+  quantity is count, height-semantics Phase 2b; 2026-07 ROUND 0 typed the return
+  `BlockHeight`) and `block_at(h) -> Option<ScannableBlock>` (an
   `Ok(None)` = *provable* absence, a 2d-2 property; the 2d-1 `DaemonBlockSource` returns `Err` for
   missing because it cannot prove absence). The trait doc anticipates the `pub(crate)` → `pub`
   bump "when 2d-2's transport needs to implement it from another crate."
@@ -60,7 +62,7 @@ this round.
 ### DQ-T2.1 — crate placement + the `pub` trait bump
 
 `PBlockSource` needs the trait (`engine-core`), the block types (`ScannableBlock`∈`shekyl-scanner`,
-`BlockHeight`∈`shekyl-types`), the RPC (`rpc-client`/`rpc-transport`), and the circuit
+`ChainCount`∈`shekyl-types` for `tip_height`, `BlockHeight` for `block_at`), the RPC (`rpc-client`/`rpc-transport`), and the circuit
 (`shekyl-p-transport`). **Lean: implement `PBlockSource` in `shekyl-engine-core`** (a sibling to
 `DaemonBlockSource`, where the trait + `default_fetch_scannable_block` already live), taking a
 `PTorClient` in. Putting it in `shekyl-p-transport` would invert layering (transport → engine-core).

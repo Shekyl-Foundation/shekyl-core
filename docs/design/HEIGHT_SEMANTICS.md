@@ -1,11 +1,11 @@
 # Height semantics — ordinal vs count
 
 **Status:** OPEN — Phase 1 walked 2026-09-19; height-semantics Phase 2a
-RULED 2026-09-20 (census, wire table, naming/difference convention). Remaining:
-height-semantics Phase 2b (dispatch-clock retype, blocked on PR #792 —
-**UPDATE 2026-09-20 (#792):** unblocked; next),
+RULED 2026-09-20 (census, wire table, naming/difference convention);
+height-semantics Phase 2b RULED 2026-09-20 (dispatch-clock retype to
+`ChainCount`, no numeric change; `PENDING_POST_VERSION` 10 → 11). Remaining:
 Phase 2c (wire/FFI decode), Phase 2d (inland bare-`u64` tail). Numerics
-are frozen as pinned (Rick, 2026-09-19). This file does not change any stamp.
+are frozen as pinned (Rick, 2026-09-19).
 
 <!-- claim-audit: citations -->
 
@@ -21,8 +21,8 @@ age / depth / window — neither):
 | Quantity | Meaning | Genesis-only chain | Type today |
 | --- | --- | --- | --- |
 | Ordinal height | which block; genesis = 0 | tip = 0 | `BlockHeight` |
-| Chain count | how many blocks; = tip + 1 | 1 | `ChainCount` (`rust/shekyl-types/src/lib.rs:328-352`) |
-| Difference | span between two instants | n/a | `BlockCount` (`rust/shekyl-types/src/lib.rs:310-315`) |
+| Chain count | how many blocks; = tip + 1 | 1 | `ChainCount` (`rust/shekyl-types/src/lib.rs:360-389`) |
+| Difference | span between two instants | n/a | `BlockCount` (`rust/shekyl-types/src/lib.rs:342-348`) |
 
 C++ overloads "height" for the count (`m_db->height()`, `get_height`,
 `get_info.height` after `++res.height` at
@@ -30,12 +30,15 @@ C++ overloads "height" for the count (`m_db->height()`, `get_height`,
 splits the types; the remaining tax is callers that wrap a count in
 `BlockHeight`.
 
-Named conversions, already on `ChainCount`
-(`rust/shekyl-types/src/lib.rs:894-911`):
+Named conversions, on `ChainCount`
+(`rust/shekyl-types/src/block_axis.rs:150-182`):
 
 - `tip()` — newest existing block (`count − 1`); spendability / reference.
 - `next_height()` — height the next block will carry (numerically the
-  count); earliest inclusion.
+  count); earliest inclusion; exclusive end of a `0 .. count` scan.
+- `from_next_height()` — C6's inverse: exclusive-end ordinal back to
+  count. Not "this existing block, laundered." `from_raw`/`to_raw` are
+  the decode edge, not a fourth bridge.
 
 `SyncedChainFacts` (`WSS-Q14`, PR #792) is the pattern: `chain_height()`
 returns `ChainCount`, `.tip()` is the named conversion, and the type
@@ -44,13 +47,15 @@ refuses an unsynced view. It is not a special case of this audit.
 ## 2. Phase 1 — the consensus-adjacent walk
 
 Ground: `daemon_claimed_tip`
-(`rust/shekyl-engine-core/src/engine/pscan/block_source.rs:181-199` on
+(`rust/shekyl-engine-core/src/engine/pscan/block_source.rs:187-194` on
 this tree) wraps `Rpc::get_height` — documented as **the amount of
-blocks**, genesis-only = 1 (`rust/shekyl-rpc-client/src/lib.rs:380-384`)
-— into `BlockHeight::from_raw`. PR #792 freezes that numeric
-(`facts.chain_height().to_raw()`, not `.tip()`) and pins it with
-`a_synchronized_daemon_reports_the_unchanged_clock` (3-block chain
-reports 3). The identifier says "tip"; the value is a count.
+blocks**, genesis-only = 1 (`rust/shekyl-rpc-client/src/lib.rs:380-384`).
+At the Phase 1 walk it wrapped that count into `BlockHeight::from_raw`.
+PR #792 froze the numeric (`facts.chain_height()`, not `.tip()`) and
+pins it with `a_synchronized_daemon_reports_the_unchanged_clock`
+(3-block chain reports 3). Height-semantics Phase 2b retyped the return
+to `ChainCount`; the identifier still says "tip"; the value is still a
+count.
 
 The six consumers named in that finding, plus the stamps they feed, plus
 the two adjacent surfaces the handoff listed that do **not** go through
@@ -84,16 +89,16 @@ ruled-fix item for **that** PR, not a Phase 1 value change.
 
 | Site | file:line | Protocol quantity | Stamped today | Evidence | Disposition |
 | --- | --- | --- | --- | --- | --- |
-| Producer | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:181-199` | n/a (wrapper) | COUNT as `BlockHeight` | `get_height` is count (`rust/shekyl-rpc-client/src/lib.rs:380-384`); wrap is `from_raw`. | Pin; retype in height-semantics Phase 2b. |
-| `BlockSource::tip_height` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:94-105`; DaemonBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:238-240`; PBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:289-292` | **COUNT** (claimed chain size; exclusive end of `0 .. tip`) | COUNT as `BlockHeight` | Trait doc already: "the *count* of blocks"; `block_at` valid on `0 .. tip_height`. | Rename honestly (`ChainCount`). `block_at` args stay ordinal. |
-| `block_at` / `block_number` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:130-133`, `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:202-211` | **ORDINAL** (which block) | `BlockHeight` used as a 0-indexed fetch number | `get_block_hash` `number` is "zero-indexed position" (`rust/shekyl-rpc-client/src/lib.rs:410-413`). | Already the right type; keep. |
-| P-scan sweep exclusive end | `rust/shekyl-engine-core/src/engine/pscan/task.rs:245-248`, `rust/shekyl-engine-core/src/engine/pscan/task.rs:295-297` | bound = COUNT; index = ORDINAL | COUNT − `reorg_depth` as exclusive end; loop `for height in start..end` calls `block_at(ordinal)` | Half-open range over a count. Flipping the bound to `.tip()` without changing the loop **skips the last block**. | Split types at retype. No numeric change. |
-| `anchor_t0` stamp | `rust/shekyl-engine-core/src/engine/bond_orchestrator.rs:555-557`; field `rust/shekyl-engine-state/src/pending_post_block.rs:137-143` | same-clock threshold (WI-3 R2-1) | COUNT as `BlockHeight` | Spec name is "tip height at assemble time" (`ARCHIVAL_BOND_WI2_ASSEMBLY.md:250-268`); the consuming rule is `due = anchor_t0 + offset` compared to the **same** `daemon_claimed_tip` read. Arithmetic never indexes a block. | COUNT. Rename honestly. Converting to ordinal is only legal if stamp, due-check, and alarm move together. |
-| Due-check | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:256-264`, `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:292` | same clock as `anchor_t0` | COUNT vs COUNT | `due_height <= tip.to_raw()`. WI-3 R2-1: stamp and due-check switch together or offsets change meaning. | Shared. Rename both ends together. |
-| Alarm / resubmit horizon | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:296-298` | same clock as dispatch `at` | COUNT vs COUNT | `tip < at + alarm_horizon`. `at` is the dispatch stamp. | Shared. Same as due-check. |
-| Claim dispatch `at` | `rust/shekyl-engine-core/src/engine/claim_dispatch.rs:369` | "when dispatched" vs a later same-clock tip | COUNT | Comment: same named clock as bond dispatch (WI-3 R2-1). | COUNT. Rename with the clock. |
-| Drain dispatch `at` | `rust/shekyl-engine-core/src/engine/drain_dispatch.rs:397` | same | COUNT | Same clock comment (`rust/shekyl-engine-core/src/engine/drain_dispatch.rs:394-396`). | COUNT. Rename with the clock. |
-| Release dispatch `at` | `rust/shekyl-engine-core/src/engine/release_dispatch.rs:606` | same | COUNT | Same clock comment (`rust/shekyl-engine-core/src/engine/release_dispatch.rs:604-605`). | COUNT. Rename with the clock. |
+| Producer | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:187-194` | n/a (wrapper) | COUNT as `ChainCount` | `get_height` is count (`rust/shekyl-rpc-client/src/lib.rs:380-384`); returns `facts.chain_height()` (no `.tip()`). | RULED 2026-09-20 (height-semantics Phase 2b): `ChainCount`; numeric pin unchanged. |
+| `BlockSource::tip_height` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:94-109`; DaemonBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:233`; PBlockSource `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:284` | **COUNT** (claimed chain size; exclusive end of `0 .. count` is `next_height()`) | COUNT as `ChainCount` | Method name kept (WI-3 named clock); return type is the quantity. `block_at` valid on `0 .. count`. | RULED 2026-09-20. `block_at` args stay ordinal. |
+| `block_at` / `block_number` | `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:134-137`, `rust/shekyl-engine-core/src/engine/pscan/block_source.rs:200` | **ORDINAL** (which block) | `BlockHeight` used as a 0-indexed fetch number | `get_block_hash` `number` is "zero-indexed position" (`rust/shekyl-rpc-client/src/lib.rs:410-413`). | Already the right type; keep. |
+| P-scan sweep exclusive end | `rust/shekyl-engine-core/src/engine/pscan/task.rs:245-252`, `rust/shekyl-engine-core/src/engine/pscan/task.rs:282` | bound = COUNT; index = ORDINAL | COUNT − `reorg_depth` as exclusive ordinal (`saturating_sub_count` then `next_height()`); loop calls `block_at(ordinal)` | Half-open range over a count. Flipping the bound to `.tip()` without changing the loop **skips the last block**. Corroboration min uses `from_next_height` of the scan frontier (`task.rs:502`), not `from_raw(to_raw())`. | RULED 2026-09-20: types split; numeric unchanged. |
+| `anchor_t0` stamp | `rust/shekyl-engine-core/src/engine/bond_orchestrator.rs:555-557`; field `rust/shekyl-engine-state/src/pending_post_block.rs:147-151` | same-clock threshold (WI-3 R2-1) | COUNT as `ChainCount` | Spec name is "tip height at assemble time" (`ARCHIVAL_BOND_WI2_ASSEMBLY.md:250-268`); the consuming rule is `due = anchor_t0 + offset` compared to the **same** `daemon_claimed_tip` read. Arithmetic never indexes a block. | RULED 2026-09-20: `ChainCount`. Converting to ordinal is only legal if stamp, due-check, and alarm move together. |
+| Due-check | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:260-263`, `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:291` | same clock as `anchor_t0` | COUNT vs COUNT (`ChainCount`) | `due_count(p) <= tip`. WI-3 R2-1: stamp and due-check switch together or offsets change meaning. | RULED 2026-09-20: both ends `ChainCount`. |
+| Alarm / resubmit horizon | `rust/shekyl-engine-core/src/engine/pscan/dispatch.rs:296` | same clock as dispatch `at` | COUNT vs COUNT (`ChainCount`) | `tip < at.saturating_add(horizon)`. `at` is the dispatch stamp. | RULED 2026-09-20. Same as due-check. |
+| Claim dispatch `at` | `rust/shekyl-engine-core/src/engine/claim_dispatch.rs:369` | "when dispatched" vs a later same-clock tip | COUNT as `ChainCount` | Comment: same named clock as bond dispatch (WI-3 R2-1). | RULED 2026-09-20 with the clock. |
+| Drain dispatch `at` | `rust/shekyl-engine-core/src/engine/drain_dispatch.rs:397` | same | COUNT as `ChainCount` | Same clock comment (`rust/shekyl-engine-core/src/engine/drain_dispatch.rs:394-396`). | RULED 2026-09-20. |
+| Release dispatch `at` | `rust/shekyl-engine-core/src/engine/release_dispatch.rs:606` | same | COUNT as `ChainCount` | Same clock comment (`rust/shekyl-engine-core/src/engine/release_dispatch.rs:604-605`). | RULED 2026-09-20. |
 | Emission claim gather | `rust/shekyl-engine-core/src/engine/emission_source.rs:259-270`, `rust/shekyl-engine-core/src/engine/emission_source.rs:546-549` | already split | `ChainCount` | Decode names the type; consumers take `next_height()` (inclusion) or `tip()` (spendability). **Does not** call `daemon_claimed_tip`. | Pattern, not a finding. |
 | Claim orchestrator reference | `rust/shekyl-engine-core/src/engine/claim_orchestrator.rs:198-206` | `ChainCount::tip` for spendability | typed | Same pattern. | Pattern, not a finding. |
 | `release.rs` record predicates | `rust/shekyl-engine-core/src/engine/stake_engine/release.rs` | record facts from the claim source | `ChainCount` on the source; predicates are not a block-axis stamp | Not a `daemon_claimed_tip` consumer. | Out of this walk. |
@@ -131,8 +136,8 @@ owned by the retype slice that creates that boundary (height-semantics
 Phase 2b onward), not by a docs PR.
 
 Ground: `origin/dev` at the walk (`85071a24f`, merge of PR #801). PR
-#792 is still OPEN; height-semantics Phase 2b waits on it. **UPDATE
-2026-09-20 (#792):** merged; Phase 2b is next.
+#792 was OPEN at Phase 2a's close. **UPDATE 2026-09-20 (#792):** merged;
+height-semantics Phase 2b is RULED on this tree (dispatch-clock retype).
 
 ### 3.1 Convention — RULED 2026-09-20
 
@@ -155,8 +160,12 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   stay `u64` at the FFI/C++ edge and become `BlockCount` when they
   participate in inland arithmetic with a typed height.
   `BlockHeight − BlockHeight` already yields `BlockCount`
-  (`rust/shekyl-types/src/lib.rs:39-41`,
-  `rust/shekyl-types/src/lib.rs:789-798`).
+  (`rust/shekyl-types/src/lib.rs:45-52`,
+  `rust/shekyl-types/src/block_axis.rs:110-124`). Height-semantics Phase 2b
+  added the same shape for the count clock: `ChainCount ± BlockCount`
+  yields `ChainCount`; `ChainCount − ChainCount` yields `BlockCount`.
+  Both instants share one `instant_span_ops!` family
+  (`rust/shekyl-types/src/block_axis.rs`).
 - **C5 Sentinels are not counts.** `target_height == 0` means
   synchronized, not a genesis-only chain. Decode to
   `Option<ChainCount>` (`None` = synchronized). The *wire* sentinel
@@ -166,16 +175,24 @@ The choice the Phase 1 stub left open ("newtype everywhere" vs
   `create_block_template` sets `height = m_db->height()`
   (`src/cryptonote_core/blockchain.cpp:1718`). Numerically the count;
   semantically the ordinal the next block will carry
-  (`rust/shekyl-types/src/lib.rs:905-909`).
+  (`rust/shekyl-types/src/block_axis.rs:168-170`). The inverse — an
+  exclusive-end ordinal back to count — is `ChainCount::from_next_height`
+  (`rust/shekyl-types/src/block_axis.rs:180-182`). Do not punch through
+  `from_raw(to_raw())`.
 - **C7 Naming, new inland fields.** Never a bare identifier `height`.
-  `tip_height` (ordinal), `chain_count`, `anchor_height` (ordinal),
-  ages as `*_blocks`. Existing JSON/Levin keys are the wire and stay.
+  Ordinal: `block_height` / `anchor_height`. Count: `chain_count`.
+  Ages: `*_blocks`. Existing JSON/Levin keys are the wire and stay.
+  Exception (kept, not renamed): `BlockSource::tip_height` is the WI-3
+  named clock and returns `ChainCount`.
 - **C8 C++ daemon glue stays `u64`.** Rule 20: this campaign does not
   retype C++. The wire table still names those producers so a Rust
   consumer cannot guess.
 - **C9 `compile_fail` per conversion boundary** lands in the retype PR
   that creates that boundary. The deliberate wrong-mix that no longer
-  compiles is the proof the type is load-bearing.
+  compiles is the proof the type is load-bearing. Height-semantics
+  Phase 2b landed four crate-doc `compile_fail`s on `shekyl-types`
+  (count as height, height as count, `ChainCount + BlockHeight`,
+  `ChainCount - BlockHeight`).
 
 ### 3.2 One `BlockHeight`
 
@@ -240,7 +257,7 @@ one family. **Unclear: none.**
 
 | Family | Quantity | Type today | Ruled inland | Remaining |
 | --- | --- | --- | --- | --- |
-| Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | COUNT as `BlockHeight` | `ChainCount` | height-semantics Phase 2b, blocked on PR #792 — **UPDATE 2026-09-20 (#792):** unblocked, next |
+| Dispatch clock (`daemon_claimed_tip` + six consumers, §2.2) | COUNT | `ChainCount` | `ChainCount` | RULED 2026-09-20 (height-semantics Phase 2b); schema v11 |
 | Wallet ledger (`TransferDetails.block_height` / `spent_height` / `eligible_height`, `rust/shekyl-engine-state/src/transfer.rs:226-237`, `rust/shekyl-engine-state/src/transfer.rs:328`) | ORDINAL | `BlockHeight` | `BlockHeight` | keep |
 | Emission / claim source | COUNT split at decode | `ChainCount` | `ChainCount` | keep (pattern) |
 | Daemon-RPC facts inland (`ChainTip.chain_height` / `target_height`, `BlockHashAt.chain_height`, `rust/shekyl-daemon-rpc/src/chain_facts.rs:47-54`, wrap at `rust/shekyl-daemon-rpc/src/chain_facts.rs:439-442`) | COUNT (target: COUNT-or-sentinel) | COUNT as `BlockHeight` | `ChainCount` and `Option<ChainCount>` | height-semantics Phase 2c |
@@ -260,16 +277,19 @@ quantity.
 
 ### 3.5 Remaining slices
 
-- **Height-semantics Phase 2b — dispatch-clock retype.** `daemon_claimed_tip`
-  returns `ChainCount`; `BlockSource::tip_height` is `ChainCount`;
-  `block_at` stays `BlockHeight`; `anchor_t0` / due / alarm / dispatch
-  `at` retype together (WI-3 R2-1). No numeric change (Phase 1).
-  Persisted stamp fields that change type take a schema bump (rule 42).
-  **Blocked on PR #792** (**UPDATE 2026-09-20 (#792):** merged — unblocked) — that PR still wraps the same clock as
-  `BlockHeight`; retyping under it fights. Falsify the block:
-  `gh pr view 792 --json state` reports `MERGED`. If #792 is still
-  OPEN when this file is next touched for Phase 2b, wait; do not start
-  2b against an unmerged pin.
+- **Height-semantics Phase 2b — dispatch-clock retype — RULED 2026-09-20.**
+  `daemon_claimed_tip` returns `ChainCount`; `BlockSource::tip_height` is
+  `ChainCount` (method name kept: WI-3 named clock); `block_at` stays
+  `BlockHeight`; `anchor_t0` / due / alarm / dispatch `at` retyped
+  together (WI-3 R2-1). No numeric change (Phase 1 pin: a 3-block chain
+  still reports 3). Persisted stamp fields took schema bump
+  `PENDING_POST_VERSION` 10 → 11 (rule 42; postcard bytes identical).
+  C9 `compile_fail`s land in `shekyl-types` crate docs. Instant±span
+  algebra for height and count is one family (`block_axis.rs`);
+  exclusive-end ordinals convert back with `from_next_height`; due
+  arithmetic is `due_count`. Offsets (`bond_post_offset_blocks`,
+  `reorg_depth`, `alarm_horizon_blocks`) stay `u64` until Phase 2d
+  (C4: convert at inland arithmetic only).
 - **Height-semantics Phase 2c — wire/FFI inland decode.**
   `ChainTip` / `BlockHashAt` / client `get_height` / submit ref-age.
   `compile_fail` at each new boundary.

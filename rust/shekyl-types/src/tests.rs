@@ -44,8 +44,8 @@ fn edge_round_trip() {
 #[test]
 fn serde_is_transparent_to_inner_u64() {
     // `#[serde(transparent)]` means the postcard wire bytes of the newtype
-    // are byte-identical to the bare `u64` — the property that lets a
-    // persisted field adopt the newtype without a format-version bump.
+    // are byte-identical to the bare `u64`. A type-name change in a persisted
+    // field still bumps the owning block's version (rule 42).
     let typed = postcard::to_allocvec(&BlockHeight::from_raw(0x0102_0304)).unwrap();
     let raw = postcard::to_allocvec(&0x0102_0304u64).unwrap();
     assert_eq!(typed, raw);
@@ -127,6 +127,15 @@ fn checked_and_saturating_boundaries() {
         BlockHeight::from_raw(5).checked_add(BlockCount::ONE),
         Some(BlockHeight::from_raw(6))
     );
+    assert_eq!(
+        BlockHeight::from_raw(5).saturating_add(BlockCount::from_raw(2)),
+        BlockHeight::from_raw(7)
+    );
+    assert_eq!(
+        BlockHeight::from_raw(u64::MAX).saturating_add(BlockCount::ONE),
+        BlockHeight::from_raw(u64::MAX)
+    );
+    assert_eq!(BlockHeight::ZERO.checked_sub_count(BlockCount::ONE), None);
 }
 
 #[test]
@@ -161,6 +170,70 @@ fn chain_count_bridges() {
         BlockHeight::from_raw(0),
         "the next block of an empty chain is genesis"
     );
+
+    // `from_next_height` is C6's inverse, not "this existing block as a count".
+    assert_eq!(ChainCount::from_next_height(count.next_height()), count);
+    assert_eq!(ChainCount::from_next_height(empty.next_height()), empty);
+}
+
+#[test]
+fn chain_count_plus_span_is_count() {
+    let count = ChainCount::from_raw(100);
+    let span = BlockCount::from_raw(10);
+    assert_eq!(count + span, ChainCount::from_raw(110));
+    assert_eq!(count - span, ChainCount::from_raw(90));
+    assert_eq!(count.saturating_add(span), ChainCount::from_raw(110));
+    assert_eq!(count.saturating_sub_count(span), ChainCount::from_raw(90));
+}
+
+#[test]
+fn chain_count_minus_count_is_span() {
+    let later = ChainCount::from_raw(150);
+    let earlier = ChainCount::from_raw(40);
+    assert_eq!(later - earlier, BlockCount::from_raw(110));
+    assert_eq!(later.checked_sub(earlier), Some(BlockCount::from_raw(110)));
+    assert_eq!(earlier.checked_sub(later), None);
+    assert_eq!(earlier.saturating_sub(later), BlockCount::ZERO);
+}
+
+#[test]
+fn chain_count_saturating_and_checked_boundaries() {
+    assert_eq!(
+        ChainCount::from_raw(5).checked_add(BlockCount::from_raw(2)),
+        Some(ChainCount::from_raw(7))
+    );
+    assert_eq!(
+        ChainCount::from_raw(u64::MAX).checked_add(BlockCount::from_raw(1)),
+        None
+    );
+    assert_eq!(
+        ChainCount::ZERO.saturating_sub_count(BlockCount::ONE),
+        ChainCount::ZERO
+    );
+    assert_eq!(ChainCount::ZERO.checked_sub_count(BlockCount::ONE), None);
+    assert_eq!(
+        ChainCount::from_raw(u64::MAX).saturating_add(BlockCount::ONE),
+        ChainCount::from_raw(u64::MAX)
+    );
+    // Exclusive-end split used by the pscan horizon: count − depth, then
+    // next_height is the exclusive ordinal bound (COUNT=100, depth=10 → 90).
+    let claimed = ChainCount::from_raw(100);
+    let horizon = claimed
+        .saturating_sub_count(BlockCount::from_raw(10))
+        .next_height();
+    assert_eq!(horizon, BlockHeight::from_raw(90));
+    // Corroboration min: exclusive scan end as count, plus the reorg span.
+    let scanned = ChainCount::from_next_height(horizon);
+    assert_eq!(
+        scanned.saturating_add(BlockCount::from_raw(10)),
+        ChainCount::from_raw(100)
+    );
+}
+
+#[test]
+#[should_panic(expected = "underflowed below empty")]
+fn chain_count_subtraction_underflow_panics() {
+    let _ = ChainCount::from_raw(3) - BlockCount::from_raw(10);
 }
 
 #[test]

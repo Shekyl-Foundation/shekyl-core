@@ -49,6 +49,8 @@ use std::collections::BTreeSet;
 use shekyl_engine_file::WalletFileError;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PScanState};
 use shekyl_engine_state::{PendingPostBlock, WalletLedgerError};
+#[cfg(test)]
+use shekyl_types::ChainCount;
 use shekyl_types::{BlockHeight, GlobalOutputIndex, PCanonicalId, PSlot};
 use shekyl_units::AtomicUnits;
 
@@ -497,7 +499,7 @@ mod tests {
             persona: persona(id),
             tx_bytes: vec![0xAB; 4],
             bond_post_offset_blocks: 0,
-            anchor_t0: BlockHeight::from_raw(1),
+            anchor_t0: ChainCount::from_raw(1),
             funding_gindexes: Vec::new(),
             state: PendingPostState::Pending,
         }

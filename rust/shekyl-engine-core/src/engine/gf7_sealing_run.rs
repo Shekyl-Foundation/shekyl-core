@@ -63,7 +63,7 @@ use std::time::{Duration, Instant};
 
 use shekyl_engine_state::pending_post_block::{PendingBondPost, PendingPostState, SealAdmission};
 use shekyl_standoff::gf7::{BroadcastTimelineObserver, TimelineEvent};
-use shekyl_types::{BlockHeight, PCanonicalId, PSlot};
+use shekyl_types::{ChainCount, PCanonicalId, PSlot};
 use tokio::sync::RwLock;
 
 use super::pscan::dispatch::{DispatchConfig, PendingPostStore, PendingSealStore};
@@ -292,7 +292,7 @@ fn synthetic_post(persona: PCanonicalId, slot: usize, round: usize) -> PendingBo
         persona,
         tx_bytes: format!("gf7-sealing-run synthetic post slot={slot} round={round}").into_bytes(),
         bond_post_offset_blocks: 0,
-        anchor_t0: BlockHeight::from_raw(0),
+        anchor_t0: ChainCount::from_raw(0),
         funding_gindexes: Vec::new(),
         state: PendingPostState::Pending,
     }

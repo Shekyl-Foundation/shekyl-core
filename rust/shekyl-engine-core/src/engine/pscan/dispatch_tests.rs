@@ -24,7 +24,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use shekyl_types::{PSlot, TxHash};
+use shekyl_types::{BlockCount, ChainCount, PSlot, TxHash};
 
 use super::*;
 use crate::engine::transaction_submitter::BroadcastKind;
@@ -117,7 +117,7 @@ fn post(persona_byte: u8, anchor: u64, offset: u64, gindexes: &[u64]) -> Pending
         persona: persona(persona_byte),
         tx_bytes: vec![persona_byte, 0xBE, 0xEF],
         bond_post_offset_blocks: offset,
-        anchor_t0: BlockHeight::from_raw(anchor),
+        anchor_t0: ChainCount::from_raw(anchor),
         funding_gindexes: gindexes
             .iter()
             .copied()
@@ -197,7 +197,7 @@ fn ambiguous() -> Verdict {
 async fn tick(driver: &mut TestDriver, tip: u64) {
     driver
         .on_tick(
-            BlockHeight::from_raw(tip),
+            ChainCount::from_raw(tip),
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &BTreeSet::new(),
@@ -305,7 +305,7 @@ async fn failed_seal_sends_nothing() {
 
     let result = driver
         .on_tick(
-            BlockHeight::from_raw(100),
+            ChainCount::from_raw(100),
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &BTreeSet::new(),
@@ -419,7 +419,7 @@ async fn confirmation_retires_bytes_and_reservation_in_one_seal() {
     let confirmed: BTreeSet<PCanonicalId> = [persona(1), persona(2)].into();
     driver
         .on_tick(
-            BlockHeight::from_raw(101),
+            ChainCount::from_raw(101),
             TickEvidence {
                 confirmed_posts: &confirmed,
                 live_funding: &BTreeSet::new(),
@@ -452,7 +452,7 @@ fn driver_with_reservations() -> (TestDriver, std::sync::Arc<MemStore>) {
     };
     let mut block = PendingPostBlock::empty();
     let g = block.generation();
-    let at = BlockHeight::from_raw(1);
+    let at = ChainCount::from_raw(1);
     assert_eq!(
         block.seal_claim(
             PendingEmissionClaim {
@@ -521,7 +521,7 @@ async fn a_bond_post_confirmation_never_retires_a_reservation_observed_record() 
         .into();
     driver
         .on_tick(
-            BlockHeight::from_raw(100),
+            ChainCount::from_raw(100),
             TickEvidence {
                 confirmed_posts: &confirmed,
                 live_funding: &live,
@@ -567,7 +567,7 @@ async fn a_settled_reservation_retires_the_claim_the_drain_and_the_release() {
     // transactions spent their inputs and confirmed.
     driver
         .on_tick(
-            BlockHeight::from_raw(100),
+            ChainCount::from_raw(100),
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &BTreeSet::new(),
@@ -617,7 +617,7 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
     };
     let p = persona(1);
     let mut block = PendingPostBlock::empty();
-    let at = BlockHeight::from_raw(100);
+    let at = ChainCount::from_raw(100);
     let g = block.generation();
     // `seal_*` stamps `Dispatched { at, attempts: 1 }` as it inserts, which is
     // the state production reaches — the old push-then-mark pair reached the
@@ -677,7 +677,7 @@ async fn a_stalled_claim_drain_and_release_on_one_persona_all_alarm() {
         .into();
     driver
         .on_tick(
-            BlockHeight::from_raw(100 + test_config().alarm_horizon_blocks),
+            ChainCount::from_raw(100 + test_config().alarm_horizon_blocks),
             TickEvidence {
                 confirmed_posts: &BTreeSet::new(),
                 live_funding: &live,
@@ -738,7 +738,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
     };
     let p = persona(1);
     let mut block = PendingPostBlock::empty();
-    let at = BlockHeight::from_raw(100);
+    let at = ChainCount::from_raw(100);
     let g = block.generation();
     // `seal_*` stamps `Dispatched { at, attempts: 1 }` as it inserts, which is
     // the state production reaches — the old push-then-mark pair reached the
@@ -791,7 +791,7 @@ async fn settling_a_claim_leaves_still_stuck_drain_and_release_alarms_marked() {
         test_config(),
         test_lock(),
     );
-    let stalled_tip = BlockHeight::from_raw(100 + test_config().alarm_horizon_blocks);
+    let stalled_tip = ChainCount::from_raw(100 + test_config().alarm_horizon_blocks);
     let all_live: BTreeSet<shekyl_types::GlobalOutputIndex> = [11, 22, 33]
         .map(shekyl_types::GlobalOutputIndex::from_raw)
         .into();
@@ -1122,18 +1122,18 @@ async fn alarm_horizon_stops_resubmits_and_holds_the_record() {
 #[test]
 fn selector_excludes_held_and_alarmed() {
     let posts = vec![post(1, 100, 0, &[1]), post(2, 100, 0, &[2])];
-    let tip = BlockHeight::from_raw(100);
+    let tip = ChainCount::from_raw(100);
 
     let held: BTreeSet<PCanonicalId> = [persona(1)].into();
     let none = BTreeSet::new();
     // Pending posts ignore the held set (it only gates resubmits).
-    let picked =
-        select_dispatch_candidate(&posts, tip, 100, &held, &none).expect("a candidate exists");
+    let picked = select_dispatch_candidate(&posts, tip, BlockCount::from_raw(100), &held, &none)
+        .expect("a candidate exists");
     assert_eq!(picked.persona, persona(1), "Pending ignores held");
 
     let alarmed: BTreeSet<PCanonicalId> = [persona(1)].into();
-    let picked =
-        select_dispatch_candidate(&posts, tip, 100, &none, &alarmed).expect("a candidate exists");
+    let picked = select_dispatch_candidate(&posts, tip, BlockCount::from_raw(100), &none, &alarmed)
+        .expect("a candidate exists");
     assert_eq!(picked.persona, persona(2), "alarmed personas are excluded");
 }
 

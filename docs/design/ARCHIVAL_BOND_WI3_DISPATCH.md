@@ -4,8 +4,9 @@
 **Status:** see [`IMPLEMENTATION_INDEX.md`](IMPLEMENTATION_INDEX.md) for landing status (docs-flow repair 2026-08-26).
 > **Status: implemented — in review (2026-07-05, `feat/wi3-dispatch-driver`,
 > stacked on `feat/bond-assembly`).** Gates 1–11 landed: the driver + locked
-> seal path (`pscan/dispatch.rs`), schema v2 (`PENDING_POST_VERSION` 2, v1
-> fails closed), the sweep wiring (`DispatchTick` seam in `pscan/task.rs`,
+> seal path (`pscan/dispatch.rs`), schema v11 live (`PENDING_POST_VERSION` 11;
+> WI-3 2026-07 minted v2 for the Dispatched arm; v1 still fails closed),
+> the sweep wiring (`DispatchTick` seam in `pscan/task.rs`,
 > production store/broadcast in `pscan/start.rs`), the per-submit
 > `BondPostDispatched` emission test, and the gate-11 grep gate
 > (`scripts/ci/check_pending_post_write_path.sh` +
@@ -47,7 +48,8 @@ In scope:
    and what never re-draws (§3.6).
 6. **D1 entry-event coordination** — no shared-tick co-launch (§3.2).
 7. Live **`BondPostDispatched`** GF-7 emission (§3.7).
-8. `PENDING_POST_VERSION` 1 → 2 (rule 42) for the new state arms.
+8. `PENDING_POST_VERSION` 1 → 2 (rule 42) for the new state arms
+   (WI-3's 2026-07 bump; live constant is 11 after height-semantics Phase 2b).
 9. Failure modes (rule 82) and the acceptance gate, including the named
    WI-4 reconvergence gate (§5).
 
@@ -167,12 +169,12 @@ The index-row D1 invariant, discharged in three parts:
    driver's input type is the pending-post seal, which carries only bond
    posts), not disciplinary.
 2. **At most one dispatch per sweep tick.** Distinct personas' posts have
-   independently-anchored due blocks (independent draws, independent
+   independently-anchored due counts (independent draws, independent
    `anchor_t0`), so same-tick collisions are rare in steady state — but a
    catch-up sweep after downtime makes *every* overdue post due on one
    tick, and co-launching them links the wallet's personas to each other
    by simultaneity. The driver dispatches the single overdue post with the
-   **lowest due block** (ties: lowest `anchor_t0`, then persona id — pinned
+   **lowest due count** (ties: lowest `anchor_t0`, then persona id — pinned
    so replay is deterministic) and leaves the rest for subsequent ticks.
    The added delay is monotone noise (§3.6).
 3. **Send-time dispersal within the tick.** A sweep tick is also a burst
@@ -207,12 +209,17 @@ The index-row D1 invariant, discharged in three parts:
    pins compose: stored value → provenance-typed wrapper → persona-checked
    PerP egress. There is no other call site.
 
-**New state arms** (`PENDING_POST_VERSION` 1 → 2, rule 42; pre-genesis, a
-v1 seal fails closed and the operator re-assembles):
+**New state arms** (WI-3 minted these at `PENDING_POST_VERSION` 1 → 2,
+2026-07; live constant is 11 after height-semantics Phase 2b retyped `at`;
+pre-genesis, a v1 seal fails closed and the operator re-assembles):
 
 ```text
 PendingPostState::Pending                              // as v1
-PendingPostState::Dispatched { at: BlockHeight,        // tip at first send
+PendingPostState::Dispatched { at: ChainCount,         // claimed count at first send
+                                                       // (height-semantics Phase 2b;
+                                                       // 2026-07 sketch typed this
+                                                       // BlockHeight — "tip at first send";
+                                                       // quantity was always COUNT)
                                attempts: u32 }         // total send attempts
 ```
 

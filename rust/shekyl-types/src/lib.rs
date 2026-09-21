@@ -23,22 +23,33 @@
 //! and wallet do — refusing that edge is how `BlockHeight` got redefined
 //! as `u64` in the DAA.
 //!
-//! ## Two clocks, three types
+//! ## Two clocks, four types
 //!
 //! Per the 2026-06-14 decision-log entry "Time fields: block-height vs
-//! wall-clock dichotomy":
+//! wall-clock dichotomy", plus the count/ordinal split
+//! (`HEIGHT_SEMANTICS.md`):
 //!
-//! - [`BlockHeight`] — an **absolute chain instant**. Consensus- and
-//!   on-chain-evaluated deadlines (maturity, spend eligibility, stake-claim
-//!   windows) live here.
+//! - [`BlockHeight`] — an **absolute chain instant** (ordinal). Consensus-
+//!   and on-chain-evaluated deadlines (maturity, spend eligibility,
+//!   stake-claim windows) live here.
 //! - [`BlockCount`] — a **relative block span** (à la `Duration` vs
-//!   `Instant`). [`BlockHeight`] arithmetic is expressed against it.
+//!   `Instant`). Instant arithmetic on this axis is expressed against it.
 //! - [`Timestamp`] — **wall-clock Unix seconds, UTC**. Off-chain,
 //!   human-facing, cross-party, or wallet-local-audit deadlines live here.
+//! - [`ChainCount`] — the chain's total **block count**. The dispatch
+//!   clock for same-clock thresholds (`anchor_t0`, due, alarm,
+//!   `Dispatched::at`): COUNT compared only to COUNT. Not an ordinal
+//!   index — flipping a count to [`ChainCount::tip`] fires those
+//!   thresholds one block late.
 //!
-//! The three are distinct types: `height + count` yields a height,
-//! `height - height` yields a count, and `height + height` /
-//! `height - timestamp` do not compile.
+//! Height, count, and timestamp are distinct types: `height + span`
+//! yields a height, `count + span` yields a count, `height - height`
+//! yields a span, and `height + height` / `count + height` /
+//! `height - timestamp` do not compile. The named bridges between
+//! [`ChainCount`] and [`BlockHeight`] are [`ChainCount::tip`],
+//! [`ChainCount::next_height`], and [`ChainCount::from_next_height`].
+//! `from_raw` / `to_raw` are the decode/encode edge, not a quantity
+//! bridge.
 //!
 //! ## Boundaries
 //!
@@ -48,9 +59,9 @@
 //! sites are the greppable edge set that bounds each migration — the same
 //! discipline `AtomicUnits` uses. `#[serde(transparent)]` +
 //! `#[repr(transparent)]` keep every type wire- and ABI-identical to the
-//! primitive it wraps, so adopting one in a persisted field requires no
-//! serialized-format version bump (it may still require a `postcard-schema`
-//! snapshot regeneration; see `42-serialization-policy.mdc`).
+//! primitive it wraps: postcard bytes match the bare `u64`. A type-name
+//! change in a persisted field still bumps the owning block's version
+//! (`42-serialization-policy.mdc`); the schema snapshot is the identity.
 //!
 //! ## Exposure policy on the 32-byte identities
 //!
@@ -73,16 +84,37 @@
 //! fn assert_as_ref<T: AsRef<[u8]>>() {}
 //! assert_as_ref::<shekyl_types::KeyImage>();
 //! ```
+//!
+//! A chain **count** is not an ordinal **height**. Passing one where the
+//! other is required is the Phase 1 defect (`HEIGHT_SEMANTICS.md` C9);
+//! the mix does not compile.
+//!
+//! ```compile_fail
+//! fn needs_height(_h: shekyl_types::BlockHeight) {}
+//! needs_height(shekyl_types::ChainCount::from_raw(1));
+//! ```
+//!
+//! ```compile_fail
+//! fn needs_count(_c: shekyl_types::ChainCount) {}
+//! needs_count(shekyl_types::BlockHeight::from_raw(0));
+//! ```
+//!
+//! ```compile_fail
+//! let _ = shekyl_types::ChainCount::from_raw(10) + shekyl_types::BlockHeight::from_raw(1);
+//! ```
+//!
+//! ```compile_fail
+//! let _ = shekyl_types::ChainCount::from_raw(10) - shekyl_types::BlockHeight::from_raw(1);
+//! ```
 
 #![no_std]
 #![deny(unsafe_code)]
 
 use core::fmt;
-use core::ops::{Add, Sub};
 
 /// Defines a `u64`-backed, transparent domain newtype with the common edge
-/// surface (`ZERO`, `from_raw`, `to_raw`, `is_zero`). Arithmetic algebra
-/// (for the height/count pair) is added in dedicated impl blocks below.
+/// surface (`ZERO`, `from_raw`, `to_raw`, `is_zero`). Block-axis Instant/
+/// Duration algebra lives in the `block_axis` module.
 macro_rules! scalar_u64 {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
@@ -332,23 +364,28 @@ scalar_u64! {
     ///
     /// Distinct from both [`BlockHeight`] (an absolute instant — a count is
     /// not a position) and [`BlockCount`] (a relative span between two
-    /// heights — a count is anchored at genesis and carries the two chain
-    /// facts below). C++ overloads the word "height" for this value, which
-    /// is exactly the confusion this type exists to stop: laundering a
-    /// count into a height via `BlockHeight::from_raw` admitted records one
-    /// block early in the emission-claim spendability anchor and stored a
-    /// not-yet-existing "height" in refusals (claim-builder PR-3 review).
+    /// instants — a count is anchored at genesis). C++ overloads the word
+    /// "height" for this value, which is exactly the confusion this type
+    /// exists to stop: laundering a count into a height via
+    /// `BlockHeight::from_raw` admitted records one block early in the
+    /// emission-claim spendability anchor and stored a not-yet-existing
+    /// "height" in refusals (claim-builder PR-3 review).
     ///
-    /// The only bridges to [`BlockHeight`] are the two named chain facts:
+    /// Same-clock thresholds (assemble `anchor_t0`, due, alarm, dispatch
+    /// `at`) hold this type and compare it only to another count. The
+    /// named bridges to [`BlockHeight`] are:
     ///
     /// - [`ChainCount::tip`] — the newest existing block (`count − 1`;
     ///   `None` on an empty chain), the spendability / anchoring operand;
     /// - [`ChainCount::next_height`] — the height the *next* block will
     ///   carry (numerically the count itself), the earliest-inclusion
-    ///   operand (e.g. an emission claim's verify-context height).
+    ///   operand and the exclusive end of a `0 .. count` scan;
+    /// - [`ChainCount::from_next_height`] — C6's inverse: exclusive-end
+    ///   ordinal back to count. Not "this existing block, laundered."
     ///
-    /// Which fact a call site means is now spelled at the call site instead
-    /// of carried in a comment.
+    /// Which fact a call site means is spelled at the call site instead
+    /// of carried in a comment. `from_raw` is the decode edge, not a
+    /// fourth bridge.
     ChainCount
 }
 
@@ -751,110 +788,7 @@ hash32! {
     PCanonicalId, redact
 }
 
-// ── BlockHeight ↔ BlockCount algebra ────────────────────────────────────────
-//
-// All arithmetic is checked: with `overflow-checks = true` across every
-// profile (see the workspace manifest), an unchecked `+`/`-` would already
-// panic, but the explicit `.expect(...)` names the condition. Callers that
-// must *handle* the boundary use the `checked_*` / `saturating_*` methods.
-
-impl Add<BlockCount> for BlockHeight {
-    type Output = BlockHeight;
-
-    /// Advance a height by a span. Panics on `u64` overflow (unreachable in
-    /// practice; a `2^64`-block chain does not exist).
-    fn add(self, rhs: BlockCount) -> BlockHeight {
-        BlockHeight(
-            self.0
-                .checked_add(rhs.0)
-                .expect("BlockHeight + BlockCount overflowed u64"),
-        )
-    }
-}
-
-impl Sub<BlockCount> for BlockHeight {
-    type Output = BlockHeight;
-
-    /// Rewind a height by a span (e.g. a reorg-window floor). Panics if the
-    /// span is larger than the height (would underflow below genesis).
-    fn sub(self, rhs: BlockCount) -> BlockHeight {
-        BlockHeight(
-            self.0
-                .checked_sub(rhs.0)
-                .expect("BlockHeight - BlockCount underflowed below genesis"),
-        )
-    }
-}
-
-impl Sub<BlockHeight> for BlockHeight {
-    type Output = BlockCount;
-
-    /// The span between two heights. Panics if `rhs > self`; use
-    /// [`BlockHeight::saturating_sub`] when `rhs` may be ahead.
-    fn sub(self, rhs: BlockHeight) -> BlockCount {
-        BlockCount(
-            self.0
-                .checked_sub(rhs.0)
-                .expect("BlockHeight - BlockHeight underflowed (rhs ahead of self)"),
-        )
-    }
-}
-
-impl Add<BlockCount> for BlockCount {
-    type Output = BlockCount;
-
-    /// Sum two spans. Panics on `u64` overflow.
-    fn add(self, rhs: BlockCount) -> BlockCount {
-        BlockCount(
-            self.0
-                .checked_add(rhs.0)
-                .expect("BlockCount + BlockCount overflowed u64"),
-        )
-    }
-}
-
-impl BlockCount {
-    /// A one-block span. Consecutive-height and drain-cutoff arithmetic
-    /// uses this instead of punching through to `u64`.
-    pub const ONE: Self = Self(1);
-}
-
-impl BlockHeight {
-    /// Advance by a span, returning `None` on overflow.
-    #[must_use]
-    pub const fn checked_add(self, rhs: BlockCount) -> Option<BlockHeight> {
-        match self.0.checked_add(rhs.0) {
-            Some(v) => Some(BlockHeight(v)),
-            None => None,
-        }
-    }
-
-    /// The span back to an earlier height, returning `None` if `earlier` is
-    /// actually ahead of `self`.
-    #[must_use]
-    pub const fn checked_sub(self, earlier: BlockHeight) -> Option<BlockCount> {
-        match self.0.checked_sub(earlier.0) {
-            Some(v) => Some(BlockCount(v)),
-            None => None,
-        }
-    }
-
-    /// The span back to an earlier height, saturating to
-    /// [`BlockCount::ZERO`] when `earlier` is ahead of `self`.
-    #[must_use]
-    pub const fn saturating_sub(self, earlier: BlockHeight) -> BlockCount {
-        BlockCount(self.0.saturating_sub(earlier.0))
-    }
-
-    /// Rewind by a span, saturating at genesis rather than panicking.
-    ///
-    /// [`Sub<BlockCount>`](core::ops::Sub) panics below genesis; drain
-    /// cutoffs and height-0 predecessors need a floor.
-    #[must_use]
-    pub const fn saturating_sub_count(self, rhs: BlockCount) -> BlockHeight {
-        BlockHeight(self.0.saturating_sub(rhs.0))
-    }
-}
+mod block_axis;
 
 impl Timestamp {
     /// Unix seconds below this are height-shaped. Invoice minting
@@ -888,26 +822,6 @@ impl Timestamp {
             Some(v) => Some(Timestamp(v)),
             None => None,
         }
-    }
-}
-
-impl ChainCount {
-    /// The newest existing block's height (`count − 1`), or `None` on an
-    /// empty chain. The spendability / reference-anchoring operand.
-    #[must_use]
-    pub const fn tip(self) -> Option<BlockHeight> {
-        match self.0.checked_sub(1) {
-            Some(v) => Some(BlockHeight(v)),
-            None => None,
-        }
-    }
-
-    /// The height the **next** block will carry — numerically the count
-    /// itself, typed as the instant it will become. The earliest-inclusion
-    /// operand (a tx assembled now lands at this height at the soonest).
-    #[must_use]
-    pub const fn next_height(self) -> BlockHeight {
-        BlockHeight(self.0)
     }
 }
 
