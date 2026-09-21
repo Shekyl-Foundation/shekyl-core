@@ -53,6 +53,9 @@ been opened as a named round** — the work landed through ordinary lanes instea
 document reconciled the two. **UPDATE 2026-09-09:** PWD-B7's typed drop
 verdict is the next instance of that pattern (`shekyl-peer-policy`, FFI
 `shekyl_drop_verdict_severs`; row flipped IMPLEMENTED below).
+**UPDATE 2026-09-21 (second):** **PWD-I8 is minted** — the accepting-side
+category from PWD-I7's re-diagnosis. It is **routed, not ruled**, and carries
+no implementation by design. The set is **39**.
 **UPDATE 2026-09-21:** **PWD-I7 is minted** (per-host inbound admission), the first PWD id added after the 2026-09-08 sweep. It is not a P2P-2 round decision — it is inherited behaviour that had no row — so the "37" below becomes **38** and the figure stops being co-extensive with the round's own decision set. Re-tallied from the rows, not adjusted by hand.
 **UPDATE 2026-09-10:** the block-ingest twin of that verdict
 (`BlockIngest`, `bvc.m_outcome`) lands on the same row — still
@@ -156,6 +159,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **I5** Q-10 write-back obligation | **BLOCKED** | discharge gated on I4 | No — blocked |
 | **I6** Shi et al. sub-attacks closed | **N/A** | verification row: closed by rules ruled in I2, no separate artifact | n/a |
 | **I7** per-host **inbound** admission | **PARTIAL** | mechanism present and now **Rust-owned** — `HostInboundCap` / `InboundZone` in `rust/shekyl-peer-policy/src/host_inbound.rs`, FFI `shekyl_host_inbound_default_cap` / `_zone_is_capped` / `_admits`; both `1` literals in `src/p2p/` deleted; `has_too_many_connections` reduced to the connection walk. The **numeric** value is unchanged at 1 and **not ruled** — same mechanism/number split as B9 | **n/a — minted 2026-09-21, after the alpha.8 ruling.** The forward cut is behaviour-preserving and carries no wire change; the NUMBER is owed to the maintainer (I7 §*Owed*) |
+| **I8** *what is this inbound connection to me?* | **OPEN — routed** | minted 2026-09-21 with PWD-I7's re-diagnosis: the accepting-side category `is_same_host` cannot answer. **No code lands here by design** — separating the nouns needs a total ceiling plus an eviction policy with a protection set, and rule 20 makes migrating a subsystem a planning activity with its own round. Tier 1 (local self-classification, no wire) is separable and could land alone | **n/a — not ruled.** The trade (door refusal → eviction preference) is judged right and argued in the row; the protection set must be designed against a named adversary, and must not become a reachability ranking (§80.4's sorting one axis over) |
 | **A1** archival submission path | **NOT RULED** | a question in the dispatch brief with no ruling in this deliverable; the census narrowed it to a falsifiable claim | n/a — unruled decision, not a status |
 | **E1** node determines its own endpoint | NOT IMPLEMENTED | no endpoint-determination mechanism in `src/p2p/` or `shekyl-levin` | **NO — deferred to alpha.9.** Changes what a node *claims* using existing fields, not wire shape; largest of the nine, with no mechanism at all. Until it lands the advertised port stays operator-configured — a known, documented, testnet-acceptable state. *(Sweep proposed Yes.)* |
 | **E2** what verifies a candidate endpoint | NOT IMPLEMENTED | no dial-back, no hairpin, no verification site | **NO — deferred to alpha.9** with E1: *"rushing a dial-back mechanism into a release is how you get the ping-back-as-DoS-amplifier problem."* *(Sweep proposed Yes.)* |
@@ -170,8 +174,8 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 **Counts, tallied from the rows above by script rather than by reading — the
 first draft of this paragraph had three of them wrong.** 37 decisions, which is
 exactly the set of PWD ids present across the round documents and the index
-**plus PWD-I7, minted 2026-09-21 and not a round decision** (see the update
-above) — **38** as of that mint:
+**plus PWD-I7 and PWD-I8, both minted 2026-09-21 and neither a round
+decision** (see the updates above) — **39** as of those mints:
 
 | | |
 |---|---|
@@ -185,9 +189,12 @@ above) — **38** as of that mint:
 | SUPERSEDED | 1 |
 | verification-only | 1 |
 | never ruled / not ruled | 1 (A1) |
+| OPEN — routed to its own round | 1 *(I8 — minted with no implementation by design; rule 20 makes the eviction subsystem a planning activity)* |
 
-**13 of 38 are ruled and unbuilt** (11 NOT IMPLEMENTED + 2 PARTIAL). Six of
-those thirteen are the transport cluster, which Rick has ruled out of alpha.8.
+**13 of 39 are ruled and unbuilt** (11 NOT IMPLEMENTED + 2 PARTIAL). **I8 is
+not among them** — it is not yet ruled, so it is neither built nor unbuilt in
+this figure's sense; it changes the denominator only. Six of those thirteen are
+the transport cluster, which Rick has ruled out of alpha.8.
 *(The label fits twelve of them. **I7 is the inverse case** — mechanism built,
 number unruled — and is counted here only because this figure's stated formula
 is "NOT IMPLEMENTED + PARTIAL". Read it as "not finished", not as "unbuilt".)*
@@ -2065,7 +2072,7 @@ entirely (PWD-I2 carries the derivation and the early-return conditions).
 
 ---
 
-### PWD-I7 — per-host **inbound** admission: the cap, its zone scope, and who owns the number
+### PWD-I7 — per-host **inbound** admission: the cap is the right mechanism pointed at the wrong noun
 
 **Minted 2026-09-21** from a live testnet observation, and **not part of the
 original P2P-2 decision set** — the mechanism is inherited Monero-lineage code
@@ -2158,6 +2165,46 @@ the **entire tor inbound population** at one connection, not bound one host.
 The exemption is the only correct behaviour given what an anonymity zone's
 addresses mean.
 
+#### The diagnosis: one quantity answering two questions (Rick, 2026-09-21)
+
+**The cap is not mistuned, and it is not the wrong mechanism. It is the right
+mechanism pointed at the wrong noun.** `is_same_host` is asked two questions
+that happen to share a data type:
+
+| Question | Is address the right key? | Where it is asked |
+| --- | --- | --- |
+| **Is this a distinct dialable endpoint?** | **Yes** — one per `(host, port)` is correct. There really is only one listener at an address, the peerlist really should hold one entry for it | `append_with_peer_gray` → `evict_host_from_peerlist` (`net_peerlist.h:384`, whose own comment reads *"A host holds at most ONE gray entry"*) |
+| **Is this a distinct connection I should admit?** | **No** — for every reason in this row | `has_too_many_connections` |
+
+**One quantity serves both, which is why no value of `k` works.** It is not
+that the number is hard to pick — **the thing being counted is not the thing
+being bounded**. That also explains why the fix kept looking like it needed a
+measurement: *you cannot measure your way out of a category error.* Every
+derivation attempted above (a ceiling, a fraction of it, a household figure)
+was an attempt to price a quantity that does not answer the question being
+asked of it.
+
+**Only half of the categorisation has a row.** `P2P_2_ENDPOINT_ROUND.md` §5b is
+**further along than §0.5's "NOT IMPLEMENTED" implies** — it is a *designed*
+round waiting on implementation, not a blank one: PWD-E1 is **ruled (c)**,
+sources propose and a verifier decides; PWD-E2 is **ruled (a) and (b)
+together** — hairpin, plus dial-back read off our own socket — with the
+2026-09-06 amendment fencing off the minted variant and stating (b)'s guarantee
+as *conditional* (dial-back must be scoped to peers we dialled, in a session
+where we announced exactly one candidate, and that scoping belongs in the
+mechanism rather than the prose).
+
+**But E1/E2 are entirely self-side: *what is my endpoint*.** They would have
+stopped the two VMs advertising a port nobody can reach. **They would not have
+let both VMs onto a seed**, because the accepting side's question is a
+different one — *what is this inbound connection **to me**?* — and **no row
+owns it**. That row is minted below as PWD-I8.
+
+Once that is a category, **admission and peerlist identity stop being the same
+decision**, and the two VMs become what they actually are: two connections from
+a NAT with **zero dialable endpoints behind it**. Accurate, and nothing
+contends for a slot.
+
 #### Affected populations
 
 Ordinary, not exotic: **NAT'd multi-node operators** (a second daemon beside a
@@ -2219,7 +2266,15 @@ has to police.
 #### What this row lands now: the rule-20 forward cut
 
 Behaviour-preserving, value unchanged at `1`. Per-host inbound admission
-**ownership** moves to Rust; the C++ keeps only the connection walk:
+**ownership** moves to Rust; the C++ keeps only the connection walk.
+
+**The ownership move stands under the re-diagnosis, and its justification
+improves.** It was defended above as giving a *number* one place to land. After
+the category analysis it is better than that: **it is the seam a CATEGORY lands
+on.** `HostInboundCap` / `InboundZone` are where PWD-I8's admission accounting
+goes when it is ruled, and the C++ walk is already reduced to feeding it. The
+cut was worth making for a constant; it is worth more for a category, and
+nothing about it has to be redone:
 
 - `rust/shekyl-peer-policy/src/host_inbound.rs` — `HostInboundCap` (the number,
   and `admits`) and `InboundZone` (the zone scope). The crate already owns peer
@@ -2272,10 +2327,15 @@ rather than a tuning.
 
 #### Owed to the maintainer — questions, not decisions
 
-1. **The number**, and whether the coherent answer is **a real inbound ceiling
-   with a per-host cap derived from it** rather than a new standalone constant.
-   Given `--in-peers` is effectively unbounded, a per-host cap is currently
-   doing inbound resource-bounding alone, which is not the job it is shaped for.
+1. ~~**The number.**~~ **DISSOLVED 2026-09-21 by the diagnosis above, and this
+   is recorded rather than deleted because the dissolution is the finding.**
+   The question was "what is `k`, and is it derived from an inbound ceiling?".
+   Both halves stop being parameters owed once the nouns are separated: `k`
+   was pricing a quantity that does not answer the admission question, and
+   **the in-peers figure stops being a number to guess and becomes a capacity
+   ceiling whose value follows from the eviction design** — a question with a
+   derivable answer rather than a provisioning guess. *Nothing is owed on this
+   line until PWD-I8's round runs.* What replaces it is question 4.
 2. **Ratification of the posture: is Tor load-bearing for NAT'd inbound
    reachability?** **As of the correction above, it cannot be** — not because
    of a default, but because `cryptonote_protocol_handler.inl:452` refuses
@@ -2297,6 +2357,15 @@ rather than a tuning.
    the whole NAT, and a pre-handshake wire addition. The rule-82 remedy proposed
    below is local-only and needs neither.
 
+4. **Is PWD-I8's round opened now, and at which tier does it stop?** The
+   sequencing below makes tier 1 answerable without any wire change and without
+   the reflection surface that motivated question 3's rejection — so the round
+   can deliver the diagnosis that would have identified this failure in minutes
+   long before it has to rule on eviction. The question is whether to open it as
+   a named round (rule 20: migrating a subsystem is a planning activity with its
+   own design doc and review cycle) or to take tier 1 alone as a fix and defer
+   the rest.
+
 #### Proposed (not built): the rule-82 local diagnosis
 
 The refused node has a **distinctive local signature**: TCP connect succeeds,
@@ -2311,6 +2380,116 @@ inbound cap upstream, or an unreachable listener), and pointing at the Tor
 bootstrap path. Not built here — it is a `--max-connections-per-ip` diagnosis
 only by inference, and inferring a remote cause in a log line is how a wrong
 diagnosis becomes folklore. It needs its own round.
+
+---
+
+### PWD-I8 — *what is this inbound connection to me?* — the accepting-side category, and the eviction subsystem it implies
+
+**Minted 2026-09-21 (Rick), OPEN — routed to its own round, not ruled here.**
+PWD-I7 establishes that `is_same_host` answers two questions with one quantity.
+This row owns the half that has no other home: **the accepting side's
+question.**
+
+> Is this inbound connection **a peer with a verified dialable endpoint I could
+> re-reach**, or **a peer with no reachable endpoint at all**?
+
+**Why it is not PWD-E1/E2.** Cluster E is ruled and designed
+(`P2P_2_ENDPOINT_ROUND.md` §5b: E1 **(c)**, E2 **(a)+(b)** with the 2026-09-06
+enforcement amendment) — but it is **entirely self-side**: *what is my
+endpoint*. E1/E2 would have stopped PWD-I7's two VMs advertising a port nobody
+can reach. **They would not have let both VMs onto a seed.** The accepting
+side's question is a different question about a different subject, and until
+this row it had no owner.
+
+**What the category buys.** Once it exists, **admission and peerlist identity
+stop being the same decision**. Two daemons behind one NAT become what they
+actually are — two connections from an address with **zero dialable endpoints
+behind it** — which is accurate, and which contends for no slot. The peerlist
+keeps address-keyed identity, because for *its* question (one entry per
+dialable endpoint) address is the correct key.
+
+#### The honest cost: this is a subsystem, not a fix
+
+**There is no inbound eviction policy in the tree, and that is verified rather
+than assumed.** Admission is **door-only** through `is_host_limit`, and all six
+`drop_connection` call sites in `net_node.inl` (`:2800`, `:2850`, `:2858`,
+`:2866`, `:2884`, `:2891`) are **protocol faults** — bad sync data, wrong
+network id, a handshake arriving on an outbound, a duplicate handshake, a
+self-handshake. **Not one is a capacity decision.**
+
+So separating the nouns means **the door stops refusing**, and something has to
+manage capacity at the far end: **a total ceiling plus an eviction policy with a
+protection set.** That is a subsystem. **Rule 20 is explicit that migrating one
+is a planning activity** — its own design document, its own review cycle, its
+own test gates, its own PR — **not a fix folded into a lane.** This row is
+therefore a *routing*, and PWD-I7's forward cut is deliberately the only code
+that lands ahead of it.
+
+#### The trade, stated rather than assumed
+
+Moving the address heuristic from admission to eviction **moves the failure
+mode**; it does not remove it:
+
+| | Failure mode | Status |
+| --- | --- | --- |
+| **Today (door)** | honest nodes **cannot join** | **certain, and observed** — PWD-I7's testnet pair |
+| **After (eviction)** | an attacker **may be able to choose who gets evicted** | the **eclipse precondition** |
+
+**The trade is judged right — and the argument is made, not assumed** (Rick,
+2026-09-21): *an unappealable door refusal has no recovery; an eviction
+preference does.* That asymmetry is the whole case. It is also why Bitcoin's
+inbound eviction carries a **protection set** rather than a simple policy, and
+**the protection set here must be designed against a named adversary rather
+than inherited on the strength of that precedent** — an inherited defence
+overstates its constant.
+
+#### The trap, named now because it is the mirror of one already ruled
+
+**If the protection set is reachability-sorted — protect dialable peers, evict
+non-dialable ones first — then NAT'd nodes are structurally second-class, and
+an observer learns something from who survives.** That is
+`DAEMON_RELAY_PRIVACY.md` §80.4's **hardware-sorted anonymity one axis over:
+NAT-sorted connectivity.** §80.4's resolution was to provision the guarantee at
+the floor so the sorting disappears, not to accept a graceful gradient; the same
+shape of answer is what this round owes.
+
+**The constraint that follows:** the category must **inform admission
+accounting without becoming an eviction ranking.** A design that satisfies the
+first by implementing the second has reintroduced the defect it was built to
+remove, in a channel that is harder to see.
+
+#### Sequencing — the cheap tiers do most of the work
+
+Ordered so that the **diagnostic** value lands first and the **reflection
+surface** lands last, if at all:
+
+| Tier | What | Wire change | Failure direction |
+| --- | --- | --- | --- |
+| **1** | A node with a published endpoint that has received **zero inbound connections in `T`** classifies itself **probably-unreachable**, stops advertising, and **says so** (rule 82) | **none** | self-limiting |
+| **2** | **E2(a) hairpin** — dial the candidate, recognise our own nonce | none beyond E2 as ruled | **under-reports** — the safe direction |
+| **3** | **E2(b) dial-back** — the only tier carrying a reflection surface | E2(b) must specify its own mechanism (the back-ping it was written against is deleted, PWD-B10) | may amplify if unscoped; the 2026-09-06 amendment's scoping is the mitigation |
+
+**Tier 1 is the one that matters most and costs least.** *The signal that would
+have told PWD-I7's operator what was wrong in minutes needs no wire at all.* It
+is also strictly local, so it does not re-open the co-residency oracle that
+PWD-I7's question 3 rejected: the node is reporting on **itself**, to **its own
+operator**, from **its own state**.
+
+#### Falsifier (rule 21)
+
+This row is wrong, and should be closed, if:
+
+- **an inbound eviction policy already exists in the tree** — which would mean
+  the "door-only" finding is wrong and the subsystem cost is already paid; or
+- **the accepting side's question is answerable from PWD-E1/E2's outputs
+  alone** — which would make this a consumer of cluster E rather than a
+  category of its own, and the row folds into E.
+
+**Reopening criteria if tier 1 alone is taken and the rest deferred:** reopen if
+a fleet run shows nodes that tier 1 classifies probably-unreachable **still
+holding inbound slots that dialable peers are being refused for** — that is the
+door problem surviving its own diagnosis, and it is the point at which the
+eviction subsystem stops being deferrable.
 
 ---
 
