@@ -59,9 +59,19 @@ pub struct PipelineConfig {
     pub window: usize,
 }
 
+impl PipelineConfig {
+    /// The default window: half of `SEEDHASH_EPOCH_LAG` (64). A seed claim
+    /// for a block in flight always names a block already read, with the
+    /// same margin again to spare; and small enough that one `Apply` run
+    /// (the checkpoint granularity) stays a few dozen blocks.
+    pub const DEFAULT_WINDOW: usize = (shekyl_difficulty::SEEDHASH_EPOCH_LAG / 2) as usize;
+}
+
 impl Default for PipelineConfig {
     fn default() -> Self {
-        Self { window: 32 }
+        Self {
+            window: Self::DEFAULT_WINDOW,
+        }
     }
 }
 

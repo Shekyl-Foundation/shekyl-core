@@ -90,6 +90,9 @@ mod tag {
     pub const REWIND: u8 = 0x02;
 }
 
+/// A `rewind` record: tag ‖ `to` u64.
+const REWIND_RECORD_LEN: usize = 1 + core::mem::size_of::<u64>();
+
 /// Which chain the corpus was taken from — the artifact's own tag.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -417,7 +420,7 @@ impl<W: Write + Seek> CorpusWriter<W> {
     /// [`CorpusFault::RewindOnEmpty`]; I/O.
     pub fn rewind(&mut self, to: BlockHeight) -> Result<(), CorpusFault> {
         check_rewind(self.first, self.next, to)?;
-        let mut record = Vec::with_capacity(9);
+        let mut record = Vec::with_capacity(REWIND_RECORD_LEN);
         record.push(tag::REWIND);
         record.extend_from_slice(&to.to_raw().to_le_bytes());
         self.out.write_all(&record)?;

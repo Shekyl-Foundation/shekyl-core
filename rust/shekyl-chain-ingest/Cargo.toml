@@ -59,6 +59,10 @@ thiserror = { workspace = true }
 # The replay driver binary (`src/bin/shekyl-chain-replay.rs`): argument
 # parsing as shekyl-cli does it; the HTTP transport for `fetch`.
 clap = { version = "4", features = ["derive"] }
+# SETTLEMENT_EPOCH_BLOCKS — the consensus constant the store is sealed
+# under (config/consensus_constants.json → constants.rs, verified at
+# source); the driver takes no flag for a value no operator may vary.
+shekyl-archival-retention = { path = "../shekyl-archival-retention" }
 shekyl-rpc-transport = { path = "../shekyl-rpc-transport" }
 # The graded-run artifact and the extracted register are JSON (RD-Q6:
 # drs_artifact.py's schema discipline; the register comes from the coverage

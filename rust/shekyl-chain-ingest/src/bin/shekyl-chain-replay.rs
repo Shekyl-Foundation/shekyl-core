@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use shekyl_address::Network;
+use shekyl_archival_retention::constants::SETTLEMENT_EPOCH_BLOCKS;
 use shekyl_chain_ingest::corpus::{CorpusNet, CorpusReader, CorpusWriter};
 use shekyl_chain_ingest::fetch::fetch_corpus;
 use shekyl_chain_ingest::grader::{grade_run, Register};
@@ -78,6 +79,11 @@ impl From<ChainArg> for Chain {
     }
 }
 
+/// Heights per `/get_blocks_by_height.bin` request: a 2301-block regtest
+/// fetch is a few dozen round trips, and one reply stays well under the
+/// daemon's response cap at mainnet block weights.
+const DEFAULT_FETCH_BATCH: usize = 100;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "shekyl-chain-replay",
@@ -106,7 +112,7 @@ enum Command {
         #[arg(long)]
         to: u64,
         /// Heights per request.
-        #[arg(long, default_value_t = 100)]
+        #[arg(long, default_value_t = DEFAULT_FETCH_BATCH)]
         batch: usize,
         /// Where to write the corpus.
         #[arg(long)]
@@ -131,9 +137,6 @@ enum Command {
         /// does. Accepted with `--chain regtest` only.
         #[arg(long)]
         fixed_difficulty: Option<NonZeroU128>,
-        /// Settlement epoch in blocks the store is sealed under.
-        #[arg(long, default_value_t = 10_000)]
-        settlement_epoch_blocks: u64,
         /// Blocks formed ahead of the writer at once.
         #[arg(long, default_value_t = PipelineConfig::default().window)]
         window: usize,
@@ -189,15 +192,16 @@ async fn real_main(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             store,
             chain,
             fixed_difficulty,
-            settlement_epoch_blocks,
             window,
             register,
             grade_out,
             metrics_out,
         } => {
             let rules = ChainRules::new(chain.into(), fixed_difficulty)?;
-            let epoch = SettlementEpochBlocks::new(settlement_epoch_blocks)
-                .ok_or("--settlement-epoch-blocks must be non-zero")?;
+            // The settlement epoch is a consensus constant, not a knob: a
+            // store sealed under another epoch would be another chain.
+            let epoch = SettlementEpochBlocks::new(SETTLEMENT_EPOCH_BLOCKS)
+                .expect("the consensus settlement epoch is non-zero");
             let trace = Arc::new(Trace::read(BufReader::new(File::open(&trace)?))?);
             let mut source = CorpusReader::open(BufReader::new(File::open(&corpus)?))?;
             if source.net() != CorpusNet::from(chain) {
