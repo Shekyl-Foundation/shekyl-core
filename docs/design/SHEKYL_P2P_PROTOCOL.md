@@ -53,6 +53,7 @@ been opened as a named round** — the work landed through ordinary lanes instea
 document reconciled the two. **UPDATE 2026-09-09:** PWD-B7's typed drop
 verdict is the next instance of that pattern (`shekyl-peer-policy`, FFI
 `shekyl_drop_verdict_severs`; row flipped IMPLEMENTED below).
+**UPDATE 2026-09-21:** **PWD-I7 is minted** (per-host inbound admission), the first PWD id added after the 2026-09-08 sweep. It is not a P2P-2 round decision — it is inherited behaviour that had no row — so the "37" below becomes **38** and the figure stops being co-extensive with the round's own decision set. Re-tallied from the rows, not adjusted by hand.
 **UPDATE 2026-09-10:** the block-ingest twin of that verdict
 (`BlockIngest`, `bvc.m_outcome`) lands on the same row — still
 IMPLEMENTED; P2P asks `shekyl_block_announce_action` /
@@ -154,6 +155,7 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 | **I4** `ρ` / `g_max` | **DEFERRED** | deferred to its own round with the blocker named; parameter ownership unresolved | No — blocked |
 | **I5** Q-10 write-back obligation | **BLOCKED** | discharge gated on I4 | No — blocked |
 | **I6** Shi et al. sub-attacks closed | **N/A** | verification row: closed by rules ruled in I2, no separate artifact | n/a |
+| **I7** per-host **inbound** admission | **PARTIAL** | mechanism present and now **Rust-owned** — `HostInboundCap` / `InboundZone` in `rust/shekyl-peer-policy/src/host_inbound.rs`, FFI `shekyl_host_inbound_default_cap` / `_zone_is_capped` / `_admits`; both `1` literals in `src/p2p/` deleted; `has_too_many_connections` reduced to the connection walk. The **numeric** value is unchanged at 1 and **not ruled** — same mechanism/number split as B9 | **n/a — minted 2026-09-21, after the alpha.8 ruling.** The forward cut is behaviour-preserving and carries no wire change; the NUMBER is owed to the maintainer (I7 §*Owed*) |
 | **A1** archival submission path | **NOT RULED** | a question in the dispatch brief with no ruling in this deliverable; the census narrowed it to a falsifiable claim | n/a — unruled decision, not a status |
 | **E1** node determines its own endpoint | NOT IMPLEMENTED | no endpoint-determination mechanism in `src/p2p/` or `shekyl-levin` | **NO — deferred to alpha.9.** Changes what a node *claims* using existing fields, not wire shape; largest of the nine, with no mechanism at all. Until it lands the advertised port stays operator-configured — a known, documented, testnet-acceptable state. *(Sweep proposed Yes.)* |
 | **E2** what verifies a candidate endpoint | NOT IMPLEMENTED | no dial-back, no hairpin, no verification site | **NO — deferred to alpha.9** with E1: *"rushing a dial-back mechanism into a release is how you get the ping-back-as-DoS-amplifier problem."* *(Sweep proposed Yes.)* |
@@ -167,12 +169,14 @@ mechanism-versus-number split on B9 is his, not the sweep's.*
 
 **Counts, tallied from the rows above by script rather than by reading — the
 first draft of this paragraph had three of them wrong.** 37 decisions, which is
-exactly the set of PWD ids present across the round documents and the index:
+exactly the set of PWD ids present across the round documents and the index
+**plus PWD-I7, minted 2026-09-21 and not a round decision** (see the update
+above) — **38** as of that mint:
 
 | | |
 |---|---|
 | IMPLEMENTED | 14 *(B5 this PR; B3/B3a/B4 #675; B6 #677; B7 #674; E7 and E9 2026-09-09; B8/B10/I1/I2/E5/E6 were already implemented)* |
-| PARTIAL | 1 |
+| PARTIAL | 2 *(B9 the outbound cap; I7 the inbound one — both are a shipped mechanism whose NUMBER is unruled)* |
 | NOT IMPLEMENTED | 11 |
 | NO BUILD REQUIRED | 2 |
 | DEFERRED | 3 |
@@ -182,8 +186,11 @@ exactly the set of PWD ids present across the round documents and the index:
 | verification-only | 1 |
 | never ruled / not ruled | 1 (A1) |
 
-**12 of 37 are ruled and unbuilt** (11 NOT IMPLEMENTED + 1 PARTIAL). Six of
-those twelve are the transport cluster, which Rick has ruled out of alpha.8.
+**13 of 38 are ruled and unbuilt** (11 NOT IMPLEMENTED + 2 PARTIAL). Six of
+those thirteen are the transport cluster, which Rick has ruled out of alpha.8.
+*(The label fits twelve of them. **I7 is the inverse case** — mechanism built,
+number unruled — and is counted here only because this figure's stated formula
+is "NOT IMPLEMENTED + PARTIAL". Read it as "not finished", not as "unbuilt".)*
 *(This read 18 at the #665 ruling. E7 and E9 landed 2026-09-09; B7 landed in
 #674; B6 landed in #677; B10 was already implemented and is scored that way
 below; B3/B3a/B4 land here. The figure is re-tallied from the rows, not
@@ -2055,6 +2062,255 @@ entirely (PWD-I2 carries the derivation and the early-return conditions).
   a measurement rather than a hope: cluster B's prioritised-gray-draw option is
   the intended remedy, and this falsifier is what tells it how much latency there
   is to recover.
+
+---
+
+### PWD-I7 — per-host **inbound** admission: the cap, its zone scope, and who owns the number
+
+**Minted 2026-09-21** from a live testnet observation, and **not part of the
+original P2P-2 decision set** — the mechanism is inherited Monero-lineage code
+with an inherited default, and it had no row anywhere. Cluster I owns it
+because per-host admission policy is this cluster's subject.
+
+**Status: PARTIAL.** The mechanism is present and, as of this row, Rust-owned.
+The **number** is not ruled — see *Owed to the maintainer* below. This is the
+same split PWD-B9 carries for the outbound cap, and for the same reason: a
+mechanism can ship while its value is still a question.
+
+#### The observation
+
+Two daemons in two VMs behind one NAT, `v3.1.0-alpha.8`, testnet. Neither
+joined over clearnet. **Changing the advertised port changed nothing** —
+verified by moving the second node to 12022. `git diff v3.1.0-alpha.8..dev --
+src/p2p` is empty, so this reproduces on `dev`.
+
+**Correction, 2026-09-21, before this row was first written: Tor is NOT an
+escape hatch, and the first filing of the FOLLOWUPS row said it was.** The
+dispatch that opened this lane carried the same claim — that the same setup
+over Tor "worked" — and it is withdrawn by the operator who made the
+observation. Those 2741 blocks came from a **LAN peer in the public zone**
+that happened to be connected; the attribution to Tor was a misattribution.
+**Two mechanisms compose into a dead end**, and only the first is this row's:
+
+1. **Admission** — this row. An onion peer *does* connect: the cap skips
+   non-public zones at `:3238`.
+2. **Sync** — `cryptonote_protocol_handler.inl:452-457`, verified at those
+   lines: *"No chain synchronization over hidden networks (tor, i2p, etc.)"*
+   sets every non-public-zone peer to `state_normal` and returns **before any
+   block is requested**. Inherited with `0dd59b4cc`, whose subject is
+   *broadcasting transactions* over Tor — not chain sync.
+
+So a node sharing a WAN address with another node is refused by every public
+seed, and the only transport left to it **cannot serve a chain**. Measured
+after wiping the database to rule out storage: six onion peers at height 7131,
+all `state=normal`, local height 1, `busy_syncing=false`, **zero blocks in nine
+minutes on an empty database**. Competing explanations were ruled out by
+measurement, not by argument — not storage (an empty DB fails identically), not
+a fork (block 2740's hash matched the synced seed exactly before the wipe), not
+connectivity (TCP to the seeds' 12021 succeeds).
+
+**Why this correction is recorded here rather than quietly fixed.** The Tor
+claim was the reason this row could have been priced as a degraded path with a
+workaround. It is not one: it is a **hard blocker** for the affected
+populations below. A row that inherited the wrong premise would have ranked
+this wrong.
+
+#### The mechanism, verified at `dev` `f6df3abc2`
+
+| Anchor | What is there |
+| --- | --- |
+| `src/p2p/net_node.cpp:191` | `arg_max_connections_per_ip`, default `1` |
+| `src/p2p/net_node.h:449` | `max_connections(1)` in the constructor — the **second** copy of the number |
+| `src/p2p/net_node.inl:678` | assignment from the argument |
+| `src/p2p/net_node.inl:3236` | `has_too_many_connections` |
+| `src/p2p/net_node.inl:3238` | early `return false` for non-public zones |
+| `src/p2p/net_node.inl:3245` | counts `cntxt.m_is_income && is_same_host` |
+| `src/p2p/net_node.inl:241` | called from `is_host_limit` |
+| `contrib/epee/include/net/abstract_tcp_server2.inl:950` | the refusal point, `is_income`-gated |
+| `contrib/epee/include/net/net_utils_base.h:83-84` | ipv4 `is_same_host` is `ip() == other.ip()` only |
+
+Three properties follow, and all three were confirmed at those lines:
+
+- **(a) PORT-BLIND.** `is_same_host` compares `ip()` only. This is why changing
+  the advertised port did nothing, and it is the observation's signature: the
+  identity the cap tests does not include the port, so two daemons on distinct
+  ports are one subject.
+- **(b) PUBLIC-ZONE ONLY.** `:3238` exempts tor and i2p, which is why Tor
+  worked.
+- **(c) INBOUND ONLY.** It counts `m_is_income`.
+
+**Not PWD-I1, and this row exists partly to stop that re-attribution.** PWD-I1's
+same-host cap at `net_node.h:144` (**at the `dev` `f6df3abc2` pin**, as with the
+table above; this PR's own edits shift it by one) is `!connection_is_income && ...` — outbound-only
+*by construction*, with a comment giving the reason (capping inbound there
+would let any peer suppress this node's dials to a host simply by connecting to
+us). P2P-2 did not cause this. The mechanism was first attributed to that cap
+once already; the two are separate rules with separate reasons.
+
+#### The tor exemption is a necessity, not a leniency
+
+A future reader will meet `:3238` and read it as a gap. It is not.
+`add_ephemeral_tor_zone` calls `set_default_remote(net::tor_address::unknown())`
+(`net_node.inl:880`), so **every** inbound onion peer presents as the same
+address, and `tor_address::is_same_host` is a `strcmp` of those host strings
+(`src/net/tor_address.cpp:181-184`). An applied cap of 1 would therefore bound
+the **entire tor inbound population** at one connection, not bound one host.
+The exemption is the only correct behaviour given what an anonymity zone's
+addresses mean.
+
+#### Affected populations
+
+Ordinary, not exotic: **NAT'd multi-node operators** (a second daemon beside a
+miner), **CGNAT subscribers**, **VPN users sharing an egress**, and **shared
+institutional egress** (an office, a university, a household). The cap keys on
+the shape all of these produce — one public address, several honest nodes.
+
+#### Pricing context
+
+**`--in-peers` defaults to `-1`** (`net_node.cpp:181`, `int64_t`), and
+`set_max_in_peers` assigns it straight into a `uint32_t`
+(`net_node.inl:3074-3077`, `max_in_connection_count` at
+`p2p_protocol_defs.h:109`). **Confirmed: it resolves to `0xFFFFFFFF`**, and the
+comparison at `net_node.inl:235` is unsigned against an unsigned counter
+(`net_node.h:403`). Inbound slots are therefore **effectively unbounded by
+default**, and a sweep of the accept path found no other inbound
+connection-count limiter — `get_connections_count()`
+(`abstract_tcp_server2.h:433`) is an observer, not a bound. **So at DEFAULT
+settings this per-IP cap is the only inbound resource bound the daemon has.**
+
+**Stated at defaults deliberately, because the deployed fleet is not at
+defaults.** Checked on the live testnet hosts rather than assumed: both
+`skl-foundation` and `skl-seeduse` set `in-peers=128` (with `out-peers=64`)
+explicitly in `/etc/shekyl/shekyld-testnet.conf`. **As deployed, the inbound
+bound is 128 and the per-IP cap is not the only one** — the unbounded form is a
+property of the shipped default, not of this network. Both statements are load-
+bearing and they are not interchangeable: the default is what an ordinary
+operator inherits, the 128 is what the seeds this observation was made against
+were actually running. *(Noted because the stronger claim — "the only inbound
+bound", unqualified — is falsified by the maintainer's own seed config, and a
+pricing argument that dies on contact with the deployment is worse than no
+argument.)* There is no read-only RPC reporting `max_in_connection_count`; the
+`in_peers` RPC on this lineage **sets** the limit, so it is not a read.
+
+**Does PWD-E4's reasoning transfer?** PWD-E4, ruled 2026-09-06 and recorded at
+`P2P_HANDSHAKE_ADDRESS.md` §1 row 3, says a host cap "bounds honest duplicates
+and the single-IP-many-ports shape specifically — nothing adversarial beyond
+that, in any zone," because a /24 gives 256 free hosts. **That reasoning was
+minted for the OUTBOUND cap, and it transfers only in its negative half.** The
+adversarial argument does carry: an attacker with address diversity routes
+around a per-host inbound cap exactly as they route around a per-host outbound
+one, so this cap buys no Sybil resistance. What does **not** carry is the
+conclusion that the residual is therefore cheap. The outbound cap spends its
+false positives on *our own dials*, which we can retry elsewhere; the inbound
+cap spends them on *other operators' reachability*, on the passive side, where
+the refused party has no move. Combined with unbounded `--in-peers` above, the
+cap is bounding the population that cannot evade it while leaving unbounded the
+one that can.
+
+#### Nettype-uniform by construction (rule 71)
+
+`has_too_many_connections` has no nettype branch, and rule 71 forbids adding
+one on this surface. **Mainnet is therefore affected structurally and needs no
+separate observation** — the testnet reproduction is the mainnet behaviour. The
+Rust owner below takes `(zone, count, cap)` and cannot be handed a nettype at
+all, which makes the uniformity structural rather than a convention a reviewer
+has to police.
+
+#### What this row lands now: the rule-20 forward cut
+
+Behaviour-preserving, value unchanged at `1`. Per-host inbound admission
+**ownership** moves to Rust; the C++ keeps only the connection walk:
+
+- `rust/shekyl-peer-policy/src/host_inbound.rs` — `HostInboundCap` (the number,
+  and `admits`) and `InboundZone` (the zone scope). The crate already owns peer
+  admission verdicts; this follows `drop_verdict.rs`'s shape.
+- `rust/shekyl-ffi/src/peer_policy_ffi.rs` — `shekyl_host_inbound_default_cap`,
+  `shekyl_host_inbound_zone_is_capped`, `shekyl_host_inbound_admits`, matching
+  the `shekyl_drop_verdict_*` naming.
+- Both `1` literals are gone, each leaving a comment in the form
+  `cryptonote_config.h:177-182` uses for a deleted `#define`; the precedent for
+  the value itself is `shekyl-relay-privacy/src/params.rs`'s
+  `P2P_DEFAULT_OUT_PEERS` and `relay_zone_ffi/mod.rs`'s
+  `shekyl_p2p_default_out_peers`.
+- `has_too_many_connections` / `is_host_limit` are reduced to marshaling.
+
+**Why the cut qualifies under rule 20.** It does not obviously match "Rust if
+any of" — this is not a secret, a cryptographic contract, untrusted-input
+parsing, or amount arithmetic. The cut rests instead on the **"when in doubt,
+Rust" default** and on rule 20's *advance the boundary, don't thicken it*
+clause, which is the governing one here: this row is a **fix** to an inherited
+default, and rule 20 says a bug fix is **not** exempt — fixing it in C++ now and
+re-fixing it in Rust at rewrite time is two chances to get it wrong. The number
+was also *written twice* and compared against in a rule *written twice*, in the
+language whose default the migration exists to remove. The forward cut gives the
+ruling still owed below exactly one place to land. Stated openly rather than
+asserted, per the dispatch's instruction not to proceed silently.
+
+#### Falsifier (rule 21)
+
+This row is **wrong, and should be closed**, if either holds:
+
+- **Two daemons behind one NAT each hold a public-zone connection to the same
+  seed** on an unmodified build at the shipped default — which would mean the
+  mechanism is not what refuses them and the attribution above is wrong; or
+- **`--in-peers` does not resolve to an effectively unbounded ceiling** at the
+  shipped default, which would mean this cap is one bound among several rather
+  than the only one, and the pricing argument above is re-run against whatever
+  the real ceiling is.
+
+A third, added with the correction: **if a NAT'd node reaches chain height over
+a Tor-only transport** on an unmodified build, then `:452` does not do what its
+own comment says and the "dead end" framing above is wrong — the row would
+revert to describing a degraded path rather than a blocker.
+
+**Reopening criteria if the number is later raised and the row closed:** reopen
+if a fleet run shows a single host sustaining more inbound connections than the
+raised cap was provisioned for *without* address diversity — that is, if the
+honest-duplicate shape and the adversarial shape stop being distinguishable by
+address count, the cap's remaining job disappears and the row becomes a deletion
+rather than a tuning.
+
+#### Owed to the maintainer — questions, not decisions
+
+1. **The number**, and whether the coherent answer is **a real inbound ceiling
+   with a per-host cap derived from it** rather than a new standalone constant.
+   Given `--in-peers` is effectively unbounded, a per-host cap is currently
+   doing inbound resource-bounding alone, which is not the job it is shaped for.
+2. **Ratification of the posture: is Tor load-bearing for NAT'd inbound
+   reachability?** **As of the correction above, it cannot be** — not because
+   of a default, but because `cryptonote_protocol_handler.inl:452` refuses
+   chain sync on exactly the zones the admission cap exempts. The question
+   therefore changes shape and is worth re-asking as: *is `:452` to be
+   changed?* **Tor-by-default cannot carry initial sync while that line
+   stands**, so the intended end state is a change to that line, not only to a
+   default — which is a larger commitment than "turn Tor on" and should be
+   ratified as one. The other dependencies stand and are named: the four
+   testnet seed onions exist (`Q12_D6A_PEER_DISCOVERY_RUN.md` §9.3) but are
+   deliberately **not** in `get_seed_nodes` per Q12-R2, so Tor is a bootstrap
+   path for operators who hand-configure it and **not yet a default**; Q12-R1
+   is the row that would change that, and §9.3 names a precondition — the
+   hidden-service secret-key backup is a single copy on one machine beside the
+   genesis wallet. **`:452` is out of scope for this row** (different
+   subsystem, different owner) and is flagged, not fixed, here.
+3. **Whether visible refusal is wanted despite the oracle argument.** Rejected
+   on analysis here: a reason code before the drop is a co-residency oracle over
+   the whole NAT, and a pre-handshake wire addition. The rule-82 remedy proposed
+   below is local-only and needs neither.
+
+#### Proposed (not built): the rule-82 local diagnosis
+
+The refused node has a **distinctive local signature**: TCP connect succeeds,
+the handshake never completes, across several **distinct** seed hosts, with no
+wrong-network response. That is diagnosable from the node's own state — no wire
+change, no oracle, nothing the refusing peer has to send. **A log line is in
+scope; a mechanism is not.** The shape proposed for a later lane: when N
+distinct public-zone peers have each reached connected-then-destroyed without a
+completed handshake and none returned a network-id mismatch, emit one warning
+naming the pattern and the two things it is usually caused by (a per-host
+inbound cap upstream, or an unreachable listener), and pointing at the Tor
+bootstrap path. Not built here — it is a `--max-connections-per-ip` diagnosis
+only by inference, and inferring a remote cause in a log line is how a wrong
+diagnosis becomes folklore. It needs its own round.
 
 ---
 
