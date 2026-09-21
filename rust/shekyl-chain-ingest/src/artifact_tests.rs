@@ -105,6 +105,20 @@ fn trace_refusals_gap_unanchored_duplicate_reserved_and_trailer() {
         w.push_checkpoint(h(5), &state).expect_err("unanchored"),
         TraceFault::UnanchoredCheckpoint { height: 5 }
     ));
+    // Below the first facts row is as unanchored as above the last: a trace
+    // starting at 3 has nothing at 1, and the reader would refuse a
+    // checkpoint there — so the writer refuses it first (Bugbot, #811).
+    let mut from_three = TraceWriter::new(Vec::new()).expect("header");
+    from_three.push_facts(h(3), &facts_at(3)).expect("facts");
+    assert!(matches!(
+        from_three
+            .push_checkpoint(h(1), &state)
+            .expect_err("below first"),
+        TraceFault::UnanchoredCheckpoint { height: 1 }
+    ));
+    from_three
+        .push_checkpoint(h(3), &state)
+        .expect("anchored at its only row");
     w.push_checkpoint(h(0), &state).expect("anchored");
     assert!(matches!(
         w.push_checkpoint(h(0), &state).expect_err("twice"),

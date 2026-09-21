@@ -58,6 +58,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read, Write};
+use std::ops::RangeInclusive;
 
 use shekyl_chain_store::digest_v0::digest_v0;
 use shekyl_chain_store::store::{ConnectFacts, Fact};
@@ -77,15 +78,41 @@ mod tag {
     pub const TRAILER: u8 = 0xFF;
 }
 
-const HEADER_LEN: usize = 8 + 1 + 7;
-const RESERVED_LEN: usize = 7;
-/// Bytes of a facts record after its height: 5 × u64 + 32 + u128.
-pub const FACTS_LEN: usize = 5 * 8 + 32 + 16;
-/// Bytes of a checkpoint record after its height: 2 × u64 + 4 × 32.
-pub const CHECKPOINT_LEN: usize = 32;
+/// The header: magic ‖ version ‖ reserved.
+mod header {
+    use core::ops::Range;
+    pub const MAGIC: Range<usize> = 0..8;
+    pub const VERSION: usize = MAGIC.end;
+    pub const RESERVED_LEN: usize = 7;
+    pub const RESERVED: Range<usize> = VERSION + 1..VERSION + 1 + RESERVED_LEN;
+    pub const LEN: usize = RESERVED.end;
+}
+
+/// The facts row's field offsets (§3.9): every field is fixed-width and the
+/// offsets are the cumulative widths, so the writer and the reader share
+/// one table and neither can drift from the other.
+mod facts_layout {
+    use core::ops::Range;
+    const fn field(start: usize, width: usize) -> Range<usize> {
+        start..start + width
+    }
+    pub const WEIGHT: Range<usize> = field(0, 8);
+    pub const LONG_TERM_WEIGHT: Range<usize> = field(WEIGHT.end, 8);
+    pub const COINS_GENERATED: Range<usize> = field(LONG_TERM_WEIGHT.end, 8);
+    pub const BURNED: Range<usize> = field(COINS_GENERATED.end, 8);
+    pub const ROOT_AFTER: Range<usize> = field(BURNED.end, 32);
+    pub const LONG_TERM_EFFECTIVE_MEDIAN: Range<usize> = field(ROOT_AFTER.end, 8);
+    pub const CUMULATIVE_DIFFICULTY: Range<usize> = field(LONG_TERM_EFFECTIVE_MEDIAN.end, 16);
+    pub const LEN: usize = CUMULATIVE_DIFFICULTY.end;
+}
 
 /// A logical-state digest (`digest_v0`'s output), as the trace carries it.
 pub type Digest = [u8; 32];
+
+/// Bytes of a facts record after its height (the layout table's length).
+pub const FACTS_LEN: usize = facts_layout::LEN;
+/// Bytes of a checkpoint record after its height: the outer digest.
+pub const CHECKPOINT_LEN: usize = core::mem::size_of::<Digest>();
 
 /// Why a trace could not be written or read.
 #[derive(Debug, thiserror::Error)]
@@ -175,19 +202,26 @@ impl Facts {
     }
 
     fn read_from(bytes: &[u8; FACTS_LEN]) -> Self {
-        let u64_at = |o: usize| u64::from_le_bytes(bytes[o..o + 8].try_into().expect("8 bytes"));
-        let mut root = [0u8; 32];
-        root.copy_from_slice(&bytes[32..64]);
-        let mut cd = [0u8; 16];
-        cd.copy_from_slice(&bytes[72..88]);
+        use facts_layout as at;
+        let u64_at = |r: core::ops::Range<usize>| {
+            u64::from_le_bytes(bytes[r].try_into().expect("an 8-byte field"))
+        };
         Self {
-            weight: BlockWeight::from_raw(u64_at(0)),
-            long_term_weight: LongTermWeight::from_raw(u64_at(8)),
-            coins_generated: AtomicUnits::from_raw(u64_at(16)),
-            burned: AtomicUnits::from_raw(u64_at(24)),
-            root_after: CurveTreeRoot::from_bytes(root),
-            long_term_effective_median: LongTermWeight::from_raw(u64_at(64)),
-            cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from_le_bytes(cd)),
+            weight: BlockWeight::from_raw(u64_at(at::WEIGHT)),
+            long_term_weight: LongTermWeight::from_raw(u64_at(at::LONG_TERM_WEIGHT)),
+            coins_generated: AtomicUnits::from_raw(u64_at(at::COINS_GENERATED)),
+            burned: AtomicUnits::from_raw(u64_at(at::BURNED)),
+            root_after: CurveTreeRoot::from_bytes(
+                bytes[at::ROOT_AFTER].try_into().expect("a 32-byte field"),
+            ),
+            long_term_effective_median: LongTermWeight::from_raw(u64_at(
+                at::LONG_TERM_EFFECTIVE_MEDIAN,
+            )),
+            cumulative_difficulty: CumulativeDifficulty::from_raw(u128::from_le_bytes(
+                bytes[at::CUMULATIVE_DIFFICULTY]
+                    .try_into()
+                    .expect("a 16-byte field"),
+            )),
         }
     }
 }
@@ -245,8 +279,11 @@ impl<T> Expected<T> {
 #[derive(Debug)]
 pub struct TraceWriter<W: Write> {
     out: W,
-    next_height: Option<u64>,
-    last_height: Option<u64>,
+    /// The heights with a facts row so far — consecutive from the first,
+    /// so a range is exact. A checkpoint is **anchored** iff its height is
+    /// in here; the reader applies the same predicate over the rows it
+    /// read, so a writer cannot emit a checkpoint the reader refuses.
+    covered: Option<RangeInclusive<u64>>,
     facts: u64,
     checkpoints: u64,
     checkpointed: BTreeSet<u64>,
@@ -262,11 +299,10 @@ impl<W: Write> TraceWriter<W> {
     pub fn new(mut out: W) -> Result<Self, TraceFault> {
         out.write_all(&TRACE_MAGIC)?;
         out.write_all(&[TRACE_VERSION])?;
-        out.write_all(&[0u8; RESERVED_LEN])?;
+        out.write_all(&[0u8; header::RESERVED_LEN])?;
         Ok(Self {
             out,
-            next_height: None,
-            last_height: None,
+            covered: None,
             facts: 0,
             checkpoints: 0,
             checkpointed: BTreeSet::new(),
@@ -281,7 +317,8 @@ impl<W: Write> TraceWriter<W> {
     /// [`TraceFault::HeightGap`]; I/O.
     pub fn push_facts(&mut self, height: BlockHeight, facts: &Facts) -> Result<(), TraceFault> {
         let h = height.to_raw();
-        if let Some(expected) = self.next_height {
+        if let Some(covered) = &self.covered {
+            let expected = covered.end().checked_add(1).expect("height fits u64");
             if h != expected {
                 return Err(TraceFault::HeightGap { expected, found: h });
             }
@@ -289,8 +326,10 @@ impl<W: Write> TraceWriter<W> {
         self.out.write_all(&[tag::FACTS])?;
         self.out.write_all(&h.to_le_bytes())?;
         facts.write_to(&mut self.out)?;
-        self.next_height = Some(h.checked_add(1).expect("height fits u64"));
-        self.last_height = Some(h);
+        self.covered = Some(match &self.covered {
+            Some(covered) => *covered.start()..=h,
+            None => h..=h,
+        });
         self.facts += 1;
         Ok(())
     }
@@ -327,7 +366,7 @@ impl<W: Write> TraceWriter<W> {
         state: &Digest,
     ) -> Result<(), TraceFault> {
         let h = height.to_raw();
-        if self.last_height.is_none_or(|last| h > last) {
+        if !self.covered.as_ref().is_some_and(|c| c.contains(&h)) {
             return Err(TraceFault::UnanchoredCheckpoint { height: h });
         }
         if !self.checkpointed.insert(h) {
@@ -379,15 +418,17 @@ impl Trace {
     ///
     /// Any [`TraceFault`].
     pub fn read<R: Read>(mut input: R) -> Result<Self, TraceFault> {
-        let mut header = [0u8; HEADER_LEN];
-        input.read_exact(&mut header)?;
-        if header[..8] != TRACE_MAGIC {
+        let mut head = [0u8; header::LEN];
+        input.read_exact(&mut head)?;
+        if head[header::MAGIC] != TRACE_MAGIC {
             return Err(TraceFault::BadMagic);
         }
-        if header[8] != TRACE_VERSION {
-            return Err(TraceFault::UnsupportedVersion { found: header[8] });
+        if head[header::VERSION] != TRACE_VERSION {
+            return Err(TraceFault::UnsupportedVersion {
+                found: head[header::VERSION],
+            });
         }
-        if header[9..16].iter().any(|&b| b != 0) {
+        if head[header::RESERVED].iter().any(|&b| b != 0) {
             return Err(TraceFault::ReservedNonZero);
         }
         let mut facts = BTreeMap::new();
