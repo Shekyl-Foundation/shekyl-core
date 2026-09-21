@@ -2683,6 +2683,29 @@ onion peers throughout the dead period and they never moved it; it moved the
 moment **public-zone** peers were admitted. Tor was present and useless, which
 is what `cryptonote_protocol_handler.inl:452` says it must be.
 
+#### Full coverage, 2026-09-21 18:14Z — three points on one curve
+
+The cap was then raised on **all six**. Measured off the accepting side again:
+
+| | cap = 1 | cap = 8 on **3 of 6** | cap = 8 on **all six** |
+| --- | --- | --- | --- |
+| Seeds held by **A** | 4 | 6 | **6** |
+| Seeds held by **B** | 2 | 3 | **6** |
+| **Overlap** | **0** | **3 — exactly the raised set** | **6** |
+| Conns from `173.9.20.245` per seed | 1 | 2 raised / 1 unraised | **2 everywhere** |
+
+**Overlap tracks the raised set exactly at every step.** B is at height
+**7505**, `synchronized=true`, `white=6`.
+
+**The middle column is still the most informative, and that is worth saying
+while the full-coverage result is fresh.** The partial raise carried its own
+control: the unraised seeds held everything else constant — same network, same
+binaries, same instant — so the difference was attributable to the cap and
+nothing else. **The full-coverage run confirms the effect at scale but cannot
+distinguish the cap from any other change made at the same moment**, because
+it has no untreated arm left. *A cleaner-looking result is not a stronger one;
+the partial run is the one that carries the inference.*
+
 #### Two corrections to this row's own methodology, from the run
 
 **1. "A subset proves nothing" was WRONG, and the run proves it wrong.** That
