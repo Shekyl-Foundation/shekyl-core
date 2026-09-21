@@ -121,7 +121,7 @@ carries it.
 **Presence.** Present iff `post_kind == JoinMarket` — the same condition as
 `bond_spend_pk`, so the two fields share one coupling branch in `write` /
 `read_payload`. A `JoinMarket` vin without an endpoint, or a `Release` /
-`Rebond` / `HoldingsUpdate` vin with one, is unrepresentable on the wire, the
+`Reinstate` / `HoldingsUpdate` vin with one, is unrepresentable on the wire, the
 same idiom as the amount arms. An all-zero endpoint on `JoinMarket` is refused
 by consensus on both sides, because the daemon's flat vin struct represents
 "absent" as the zero key and cannot tell the two apart.

@@ -71,15 +71,10 @@
 //!
 //! ## Scope: `JoinMarket` only
 //!
-//! Rebond pins its post-holdings as a **superset** of the record
-//! ([`crate::bond_post::verify_rebond_bond_post`] Pin 1) and HoldingsUpdate-add
-//! only adds, so both are **monotone in credited work** and cannot turn a viable
-//! position into a zero — there is no bypass through them. HoldingsUpdate-**drop**
-//! can reduce work and is left ungated *on purpose*: refusing an **entry** into a
-//! zero costs the applicant nothing (they never entered, and are free to pick a
-//! different holding), whereas refusing an **exit-ward** move would trap capital
-//! in a larger position than the holder wants and force a full `Release` where
-//! they asked for a partial one. The gate protects reach; it must not tax it.
+//! Reinstate cannot change holdings (immutable-bond 2026-09-20), so it cannot
+//! turn a viable position into a zero. There is no in-place drop kind:
+//! shrinking is persona rotation (`Release` + `JoinMarket`). The gate protects
+//! reach; it must not tax it.
 
 use core::ffi::CStr;
 

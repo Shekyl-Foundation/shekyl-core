@@ -364,10 +364,10 @@ reply over one unrecognized display value, and rendering an unknown value as
 
 **F-2 — Degradation ladder: coded posture is correct; doc line was drift.**
 *(Ruled 2026-08-15; corrected in slice 5.)* Uniform for any P: misses absorb
-inside the m-of-n window (nothing to rebond — the node just resumes serving);
+inside the m-of-n window (nothing to reinstate — the node just resumes serving);
 crossing the window slashes; for a CompleteTree record the slash **demotes**
 to market kind with holdings cleared and collateral taken; from there
-**Rebond** reinstates as a market participant, or continued failure degrades
+**Reinstate** reinstates as a market participant, or continued failure degrades
 out entirely. Return to CompleteTree posture is a **fresh foundation bond
 under a new persona** (`RecordExists` blocks the slot). The
 `ARCHIVAL_CONSENSUS_STATE.md` "CompleteTree resume" phrasing was drift and is

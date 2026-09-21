@@ -512,7 +512,7 @@ impl<S: SubmitStateShim, V: TxVerifier> SubmitEngine<S, V> {
         //
         //     Do not restore the older claim that these bytes "can never
         //     connect": a partial slash lowers the balance by one FLOOR and a
-        //     later Rebond credits the same FLOOR back, so it can return to
+        //     later Reinstate credits the same FLOOR back, so it can return to
         //     exactly the bound value. The hazard is bounded by the reference
         //     age window and by the wallet being the bytes' only holder (a
         //     rejected tx is never relayed) — see §8.7.1.1's UB2 note, which

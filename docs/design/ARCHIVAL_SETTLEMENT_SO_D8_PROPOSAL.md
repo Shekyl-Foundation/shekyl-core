@@ -1182,7 +1182,7 @@ refill the ring for the trailing `W₂` — bounded by one epoch, 1.09 s here.
   contents cannot change it in either direction, verified at source: a bond
   posted there has `E_join = E` and `E_first = E_join + 1` excludes it
   (`serve_eligibility.rs:8–18`); a **re-bond** there opens its interval at
-  `E_rebond + 1` (`db_lmdb.cpp:6959–6987`), excluded the same way; **drops**
+  `E_reinstate + 1` (`db_lmdb.cpp:6959–6987`), excluded the same way; **drops**
   do not remove pairs (Q3 §7.4 (3.1)); a **release** clears nothing that
   was held — an `Exited` record already holds no shards
   (`db_lmdb.cpp:6626–6627`, "v6 coupling"); and a **slash** applied at an
@@ -1416,7 +1416,7 @@ rows only):
   at tip but `held_shard_ids` is cleared (`db_lmdb.cpp:6626–6627`), so
   tip state no longer says what it held. `bad_intervals` on the record
   gives an independent cross-check of exit epochs.
-- the rebond log.
+- the reinstate log.
 - the slash log — note `archival_slash_removed_holding_after`
   (`db_lmdb.cpp:5253–5259`) reconstructs slash removals but **only**
   slash removals; it is not a general holdings history.
@@ -2370,7 +2370,7 @@ Q12 RULED 2026-09-16 (§7.9): bare 32-B hash, independently of F5.
    deadline; the const-assert becomes load-bearing.
 3. **RULED 2026-09-16 — `DrawableSet::at_epoch_open(view, E)`.**
    Pure function in `shekyl-chain-rules` over a `ChainView` projection of
-   the append-only bond journals (holdings-update, unbond, rebond, slash).
+   the append-only bond journals (holdings-update, unbond, reinstate, slash).
    Evaluated at `h_open(E)`. No snapshot table; seeds
    `EpochAssignmentCache` once per epoch. A drawn pair whose shard has
    been dropped **stays in `D`**; the drop filter lives at settlement and

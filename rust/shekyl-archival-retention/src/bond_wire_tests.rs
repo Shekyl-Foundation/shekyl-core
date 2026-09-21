@@ -243,21 +243,23 @@ fn decode_rejects_duplicate_carrying_wire_bytes() {
     ));
 }
 
-/// The post-kind table ends at HoldingsUpdate (3). Byte 4 is an unknown
-/// kind, not a reserved one: a bonded persona's endpoint never changes, so
-/// no kind exists to rotate it (a new onion address is a new persona).
+/// The post-kind table ends at Release (2). Byte 3 was HoldingsUpdate —
+/// REJECTED 2026-09-20 (immutable-bond); it is an unknown kind, not a
+/// reserved one, so it cannot be silently re-minted. Byte 4 is the same
+/// class: a bonded persona's endpoint never changes, so no kind exists to
+/// rotate it (a new onion address is a new persona).
 #[test]
-fn post_kind_table_ends_at_holdings_update() {
+fn post_kind_table_ends_at_release_and_rejects_the_deleted_holdings_update_byte() {
+    assert!(matches!(
+        BondPostKind::from_u8(2),
+        Ok(BondPostKind::Release)
+    ));
     assert!(matches!(
         BondPostKind::from_u8(3),
-        Ok(BondPostKind::HoldingsUpdate)
+        Err(WireError::InvalidPostKind(3))
     ));
     assert!(matches!(
         BondPostKind::from_u8(4),
         Err(WireError::InvalidPostKind(4))
-    ));
-    assert!(matches!(
-        BondPostKind::from_u8(5),
-        Err(WireError::InvalidPostKind(5))
     ));
 }

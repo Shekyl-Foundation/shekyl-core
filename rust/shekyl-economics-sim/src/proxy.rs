@@ -310,7 +310,7 @@ pub fn first_slash_probability(q: f64, draws: u64) -> f64 {
 /// Callers that need attestation fraction `f` (friendly-draw share) pass
 /// `q = 1 − f`.
 ///
-/// Used by the TJ-4 slash/`Rebond` cycle arm; the chain itself lives here so
+/// Used by the TJ-4 slash/`Reinstate` cycle arm; the chain itself lives here so
 /// sibling modules never touch the window bitset.
 #[must_use]
 pub fn expected_epochs_to_first_slash(q: f64, horizon_epochs: u64) -> Option<f64> {
@@ -459,7 +459,7 @@ pub fn crossover_q(
 /// remedy: it raises the crossover `q*` the gate-4 grace window must force.
 ///
 /// The record-level bad interval `[E_slash, ∞)` is the *serve-credit* consequence
-/// (it blocks `good_through` until `Rebond`), **not** the collateral scope — the
+/// (it blocks `good_through` until `Reinstate`), **not** the collateral scope — the
 /// two are separate and must not be conflated.
 #[must_use]
 pub fn bond_at_risk_skl() -> f64 {

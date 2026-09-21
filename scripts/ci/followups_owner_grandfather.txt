@@ -5,7 +5,6 @@
 # lands a row written before this gate existed.
 Delete `get_version`'s `target_height` zero-sentinel at the wire boundary.
 The claim-source reply should carry the hash of its own gather tip, so a vouched record needs no bracket.
-Count-versus-height: height-semantics Phase 2a walked; Phase 2b next — its blocker, PR #792, is the merge that carries this edit.
 Fourteen crates meet the feature-governance trigger ungoverned
 `PL-D4` — a proper hash-commitment mechanism for the leaf's 4th scalar, succeeding the `PL-D3` Pedersen commitment.
 CEN-A7's per-block transaction-count bound has two undocumented values: `2^28` (`CRYPTONOTE_MAX_TX_PER_BLOCK`, `cryptonote_basic.h:914`, an element count) and `10^6` (`shekyl_wire::READ_LEN_CAP`, `block.rs:163`).
@@ -67,7 +66,7 @@ GF-7 `stake_in` change-co-presence residual — shipped with a warning,
 Workspace-wide `deny_unknown_fields` on the remaining wallet-RPC params
 Wallet thin-market entry disclosure — the §13.2 re-disposition's
 Solo address registry: decide (a registration tx type is genesis-only)
-Release verify: record-floor belt (the `RebondRecordFloorBroken` twin)
+Release verify: record-floor belt (the `ReinstateRecordFloorBroken` twin)
 RPC transport posture — RULED 2026-08-21; RT-W1 landed; RT-W2/W5/W7 authorized
 Daemon Axum: onion-as-remote-RPC docs + operator story
 Daemon Axum: connection caps + live `rpc_connections_count`
@@ -117,7 +116,6 @@ Re-derive genesis-sealed redundancy params against the integer backend
 Funding-seam entry-standoff: consensus surface, wallet conformance, and the [`15-deletion-and-debt.mdc`](../.cursor/rules/15-deletion-and-debt.mdc)
 Wallet bond-funding/standoff call site (tracks the `shekyl-standoff`
 `shekyl-stats` `Z_ALPHA_1E6` provenance vs. the `enc_label` test's
-`HoldingsUpdate` (partial-release/rebond) promoted to genesis scope + pre-seal
 Archival serve-credit / emission LMDB scans — bound the two unindexed table
 Emission-path micro-efficiency cluster — address with C-1 wiring / the schema
 Staker-archival settings are FROZEN; the remaining work is the operator experience, not [`docs/STAKER_OPERATOR_GUIDE.md`](STAKER_OPERATOR_GUIDE.md)

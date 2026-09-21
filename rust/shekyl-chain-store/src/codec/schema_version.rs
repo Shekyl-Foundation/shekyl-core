@@ -68,7 +68,16 @@ use super::{Canonical, CodecError};
 ///   its name and `PassedThroughFacts` its accepted vocabulary shrinks
 ///   7 → 6. Zero bytes of any table change; the `passed_through_facts` cell's
 ///   fixtures move.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(7);
+/// - `8` — the `Rebond` → `Reinstate` rename: the table
+///   `archival_bond_rebond_log` becomes `archival_bond_reinstate_log`.
+///   **Zero stored bytes change, and no codec, fixture or digest input
+///   moves** — the catalogue row is renamed and nothing else. It is a layout
+///   bump for the same reason `5` was: a table's *name* is part of the
+///   layout, because an old binary looks it up by that name at `open_table`
+///   and does not find it. The wire is untouched (the `Reinstate` bond-post
+///   kind keeps discriminant `1`, and the FFI error-code values are
+///   unchanged); this bump is about the store's file, not the chain's bytes.
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion::new(8);
 
 /// A layout version as stored in the `schema_version` cell.
 ///
@@ -125,10 +134,10 @@ mod tests {
         // Moves with every layout bump, on purpose: the history list above
         // this constant is the record, and this line is what makes a bump
         // without a history entry visible in review.
-        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(7));
-        assert_eq!(SCHEMA_VERSION.encode(), [7, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(SCHEMA_VERSION, SchemaVersion::new(8));
+        assert_eq!(SCHEMA_VERSION.encode(), [8, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
-            SchemaVersion::decode(&[7, 0, 0, 0, 0, 0, 0, 0]),
+            SchemaVersion::decode(&[8, 0, 0, 0, 0, 0, 0, 0]),
             Ok(SCHEMA_VERSION)
         );
     }
