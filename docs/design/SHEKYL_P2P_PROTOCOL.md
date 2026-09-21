@@ -2080,10 +2080,40 @@ mechanism can ship while its value is still a question.
 #### The observation
 
 Two daemons in two VMs behind one NAT, `v3.1.0-alpha.8`, testnet. Neither
-joined over clearnet. **Changing the advertised port changed nothing.** The
-same setup over Tor, pointed at the four seed onions with
-`--add-peer <onion>:12021`, worked. `git diff v3.1.0-alpha.8..dev -- src/p2p`
-is empty, so this reproduces on `dev`.
+joined over clearnet. **Changing the advertised port changed nothing** —
+verified by moving the second node to 12022. `git diff v3.1.0-alpha.8..dev --
+src/p2p` is empty, so this reproduces on `dev`.
+
+**Correction, 2026-09-21, before this row was first written: Tor is NOT an
+escape hatch, and the first filing of the FOLLOWUPS row said it was.** The
+dispatch that opened this lane carried the same claim — that the same setup
+over Tor "worked" — and it is withdrawn by the operator who made the
+observation. Those 2741 blocks came from a **LAN peer in the public zone**
+that happened to be connected; the attribution to Tor was a misattribution.
+**Two mechanisms compose into a dead end**, and only the first is this row's:
+
+1. **Admission** — this row. An onion peer *does* connect: the cap skips
+   non-public zones at `:3238`.
+2. **Sync** — `cryptonote_protocol_handler.inl:452-457`, verified at those
+   lines: *"No chain synchronization over hidden networks (tor, i2p, etc.)"*
+   sets every non-public-zone peer to `state_normal` and returns **before any
+   block is requested**. Inherited with `0dd59b4cc`, whose subject is
+   *broadcasting transactions* over Tor — not chain sync.
+
+So a node sharing a WAN address with another node is refused by every public
+seed, and the only transport left to it **cannot serve a chain**. Measured
+after wiping the database to rule out storage: six onion peers at height 7131,
+all `state=normal`, local height 1, `busy_syncing=false`, **zero blocks in nine
+minutes on an empty database**. Competing explanations were ruled out by
+measurement, not by argument — not storage (an empty DB fails identically), not
+a fork (block 2740's hash matched the synced seed exactly before the wipe), not
+connectivity (TCP to the seeds' 12021 succeeds).
+
+**Why this correction is recorded here rather than quietly fixed.** The Tor
+claim was the reason this row could have been priced as a degraded path with a
+workaround. It is not one: it is a **hard blocker** for the affected
+populations below. A row that inherited the wrong premise would have ranked
+this wrong.
 
 #### The mechanism, verified at `dev` `f6df3abc2`
 
@@ -2214,6 +2244,11 @@ This row is **wrong, and should be closed**, if either holds:
   than the only one, and the pricing argument above is re-run against whatever
   the real ceiling is.
 
+A third, added with the correction: **if a NAT'd node reaches chain height over
+a Tor-only transport** on an unmodified build, then `:452` does not do what its
+own comment says and the "dead end" framing above is wrong — the row would
+revert to describing a degraded path rather than a blocker.
+
 **Reopening criteria if the number is later raised and the row closed:** reopen
 if a fleet run shows a single host sustaining more inbound connections than the
 raised cap was provisioned for *without* address diversity — that is, if the
@@ -2228,12 +2263,21 @@ rather than a tuning.
    Given `--in-peers` is effectively unbounded, a per-host cap is currently
    doing inbound resource-bounding alone, which is not the job it is shaped for.
 2. **Ratification of the posture: is Tor load-bearing for NAT'd inbound
-   reachability?** The dependency is named: the four testnet seed onions exist
-   (`Q12_D6A_PEER_DISCOVERY_RUN.md` §9.3) but are deliberately **not** in
-   `get_seed_nodes` per Q12-R2, so Tor is a bootstrap path for operators who
-   hand-configure it and **not yet a default**. Q12-R1 is the row that would
-   change that, and §9.3 names a precondition: the hidden-service secret-key
-   backup is a single copy on one machine beside the genesis wallet.
+   reachability?** **As of the correction above, it cannot be** — not because
+   of a default, but because `cryptonote_protocol_handler.inl:452` refuses
+   chain sync on exactly the zones the admission cap exempts. The question
+   therefore changes shape and is worth re-asking as: *is `:452` to be
+   changed?* **Tor-by-default cannot carry initial sync while that line
+   stands**, so the intended end state is a change to that line, not only to a
+   default — which is a larger commitment than "turn Tor on" and should be
+   ratified as one. The other dependencies stand and are named: the four
+   testnet seed onions exist (`Q12_D6A_PEER_DISCOVERY_RUN.md` §9.3) but are
+   deliberately **not** in `get_seed_nodes` per Q12-R2, so Tor is a bootstrap
+   path for operators who hand-configure it and **not yet a default**; Q12-R1
+   is the row that would change that, and §9.3 names a precondition — the
+   hidden-service secret-key backup is a single copy on one machine beside the
+   genesis wallet. **`:452` is out of scope for this row** (different
+   subsystem, different owner) and is flagged, not fixed, here.
 3. **Whether visible refusal is wanted despite the oracle argument.** Rejected
    on analysis here: a reason code before the drop is a co-residency oracle over
    the whole NAT, and a pre-handshake wire addition. The rule-82 remedy proposed
