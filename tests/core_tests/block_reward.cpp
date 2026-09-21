@@ -259,7 +259,6 @@ bool gen_block_reward::check_block_rewards(cryptonote::core& /*c*/, size_t /*ev_
         0,
         1,
         0,
-        CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
         /*tx_count_sum=*/0,
         /*window_blocks=*/0,
         &base_reward,

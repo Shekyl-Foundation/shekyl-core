@@ -1974,7 +1974,6 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
         FULL_REWARD_ZONE_V5,
         FULL_REWARD_ZONE_V5,
         s,
-        FULL_REWARD_ZONE_V5,
         TxVolume::per_block(params.tx_volume_baseline),
         params,
     )
@@ -2010,7 +2009,6 @@ fn degenerate_pins(params: &EconomicParams) -> DegeneratePins {
             FULL_REWARD_ZONE_V5,
             FULL_REWARD_ZONE_V5 + FULL_REWARD_ZONE_V5 / 2,
             s,
-            FULL_REWARD_ZONE_V5,
             params,
         )
         .expect("tail-reward penalty pin"),

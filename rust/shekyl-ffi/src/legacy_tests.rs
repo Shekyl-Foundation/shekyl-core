@@ -872,8 +872,22 @@ fn label_plaintext_for_payment_uri_parse_fail_writes_sentinel() {
 // writes, and the null checks. Those only exist at the boundary, so they are
 // tested at the boundary — the gap Copilot raised on PR #518.
 
-/// The zone C++ passes in (`CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5`).
+/// The penalty-free zone the vectors below were minted at. Since E6 slice 4
+/// it is `EconomicParams::full_reward_zone` (one authority, generated for
+/// both languages), not an argument C++ passes; the pin asserts the vectors
+/// still describe the shipped value.
 const ZONE: u64 = 300_000;
+#[test]
+fn the_zone_the_vectors_assume_is_the_shipped_parameter() {
+    assert_eq!(
+        shekyl_economics::EconomicParams::default().full_reward_zone,
+        ZONE
+    );
+    // shekyl-wire's MIN_BLOCK_WEIGHT is the same constant, kept there because
+    // the wire crate cannot depend on economics; this pin is what holds the
+    // two readers together.
+    assert_eq!(shekyl_wire::transaction::MIN_BLOCK_WEIGHT as u64, ZONE);
+}
 /// A value no computed reward can equal, so "untouched" is distinguishable
 /// from "written with something plausible".
 const SENTINEL: u64 = 0xDEAD_BEEF_DEAD_BEEF;
@@ -894,7 +908,6 @@ fn block_reward_ok_writes_both_out_params() {
             0,
             ZONE / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -918,7 +931,6 @@ fn block_reward_accepts_the_inclusive_limit_and_pays_zero() {
             0,
             2 * ZONE,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -940,7 +952,6 @@ fn block_reward_too_big_writes_the_limit_and_leaves_the_reward_untouched() {
             0,
             2 * ZONE + 1,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -977,7 +988,6 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             std::ptr::null_mut(),
@@ -999,7 +1009,6 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -1017,7 +1026,6 @@ fn block_reward_null_out_pointers_return_invalid_without_writing() {
             0,
             ZONE / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             std::ptr::null_mut(),
@@ -1040,7 +1048,6 @@ fn block_reward_beyond_the_exact_domain_is_invalid_not_wrapped() {
             m,
             m + m / 2,
             0,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -1066,7 +1073,6 @@ fn block_reward_past_the_asymptote_pays_the_tail() {
             0,
             ZONE / 2,
             u64::MAX,
-            ZONE,
             baseline_v(),
             1,
             &raw mut reward,
@@ -1096,7 +1102,6 @@ fn block_reward_marshals_the_signed_composition() {
             0,
             ZONE / 2,
             s - tail + 1,
-            ZONE,
             0,
             0,
             &raw mut reward,
@@ -1113,7 +1118,6 @@ fn block_reward_marshals_the_signed_composition() {
             ZONE,
             ZONE + ZONE / 2,
             s + tail,
-            ZONE,
             0,
             0,
             &raw mut reward,
@@ -1124,18 +1128,8 @@ fn block_reward_marshals_the_signed_composition() {
     assert_eq!(reward, tail / 4 * 3);
 
     // Mid-curve dormancy: the paid quantity carries M_r.
-    let st = unsafe {
-        shekyl_block_reward(
-            0,
-            ZONE / 2,
-            s / 2,
-            ZONE,
-            0,
-            0,
-            &raw mut reward,
-            &raw mut limit,
-        )
-    };
+    let st =
+        unsafe { shekyl_block_reward(0, ZONE / 2, s / 2, 0, 0, &raw mut reward, &raw mut limit) };
     assert_eq!(st, SHEKYL_BLOCK_REWARD_OK);
     assert_eq!(
         reward,

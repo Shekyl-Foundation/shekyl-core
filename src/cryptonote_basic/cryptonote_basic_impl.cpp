@@ -135,7 +135,6 @@ namespace cryptonote {
         median_weight,
         current_block_weight,
         already_generated_coins,
-        get_min_block_weight(version),
         tx_volume.tx_count_sum,
         tx_volume.blocks,
         &computed,

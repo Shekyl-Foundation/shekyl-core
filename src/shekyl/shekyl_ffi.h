@@ -388,12 +388,16 @@ int32_t shekyl_corrected_fee_ladder(
 /// state, not an error. INVALID covers a null out-pointer and an input
 /// beyond the exact arithmetic domain (medians around 2^43 and above, where
 /// the product leaves 128 bits) — fail-closed rather than wrapping.
-/// Neither out-pointer may be null.
+/// Neither out-pointer may be null. The penalty-free zone is NOT an
+/// argument: it is EconomicParams::full_reward_zone, generated from
+/// config/consensus_constants.json for both languages (E6 slice 4 §3.1 S8) —
+/// the C++ macro CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5 is now defined
+/// from the same generated header, and a caller can no longer pass a
+/// different one.
 int32_t shekyl_block_reward(
     uint64_t median_weight,
     uint64_t current_block_weight,
     uint64_t already_generated_coins,
-    uint64_t full_reward_zone,
     uint64_t tx_count_sum,
     uint64_t window_blocks,
     uint64_t *out_reward,

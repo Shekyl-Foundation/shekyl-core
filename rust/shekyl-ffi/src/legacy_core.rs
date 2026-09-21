@@ -515,8 +515,11 @@ pub const SHEKYL_BLOCK_REWARD_INVALID: i32 = -1;
 /// `2 * median`. Hence a status return, with rejection POSITIVE and caller
 /// misuse NEGATIVE.
 ///
-/// `full_reward_zone` is supplied by the caller rather than read here; see
-/// `block_reward_with_penalty` for why the constant is not duplicated in Rust.
+/// The penalty-free zone is **not** a parameter: it is `EconomicParams::
+/// full_reward_zone`, generated from `config/consensus_constants.json` for
+/// both languages (E6 slice 4 §3.1 S8). Until then the C++ supplied its
+/// hand-written macro on every call — a consensus constant with no Rust
+/// home, and a caller that could pass a different one.
 ///
 /// Since FL-R12′ this marshals the ONE owner `paid_block_reward` — the full
 /// signed composition `max(M_r·curve(remaining), TAIL)·penalty(x)` — so it
@@ -535,7 +538,6 @@ pub unsafe extern "C" fn shekyl_block_reward(
     median_weight: u64,
     current_block_weight: u64,
     already_generated_coins: u64,
-    full_reward_zone: u64,
     tx_count_sum: u64,
     window_blocks: u64,
     out_reward: *mut u64,
@@ -549,7 +551,7 @@ pub unsafe extern "C" fn shekyl_block_reward(
     // Written on every path, including rejection: the caller logs the limit it
     // was rejected against, and it must come from the same clamp that made the
     // decision rather than a recomputation on the C++ side.
-    let limit = shekyl_economics::block_weight_limit(median_weight, full_reward_zone);
+    let limit = shekyl_economics::block_weight_limit(median_weight, &params);
     // SAFETY: non-null per the check above; the caller guarantees writability.
     unsafe { out_weight_limit.write(limit) };
 
@@ -557,7 +559,6 @@ pub unsafe extern "C" fn shekyl_block_reward(
         median_weight,
         current_block_weight,
         already_generated_coins,
-        full_reward_zone,
         shekyl_economics::TxVolume::window(tx_count_sum, window_blocks),
         &params,
     ) {

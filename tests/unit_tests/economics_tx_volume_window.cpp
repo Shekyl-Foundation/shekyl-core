@@ -132,7 +132,6 @@ TEST(economics_tx_volume_window, shim_hands_the_exact_pair_to_rust_undivided)
   uint64_t direct = 0;
   uint64_t limit = 0;
   ASSERT_EQ(SHEKYL_BLOCK_REWARD_OK,
-            shekyl_block_reward(0, 1, ag, CRYPTONOTE_BLOCK_GRANTED_FULL_REWARD_ZONE_V5,
-                                exact.tx_count_sum, exact.blocks, &direct, &limit));
+            shekyl_block_reward(0, 1, ag, exact.tx_count_sum, exact.blocks, &direct, &limit));
   EXPECT_EQ(reward_exact, direct);
 }
