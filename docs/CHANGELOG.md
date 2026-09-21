@@ -153,6 +153,13 @@
   ordinary market position and `ReinstateOnCompleteTree` makes the kind
   unrepresentable on a `CompleteTree` record at all.
 
+- **Reinstate CT admits zero-money; pop does not write a ghost counter.**
+  `BondTerm` gains `Unmoved` (credit and debit both 0) so a valid Reinstate
+  can close the ordinary CT equation; `from_credit_debit` is the single
+  conversion at the FFI and submit edges. `NO_BOND_TERM` (5) stays assigned
+  and is unhittable. The Reinstate pop arm no longer calls
+  `set_total_bonded_atomic` — connect does not move the counter.
+
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6
   slice 2).** `shekyl-chain-rules` now evaluates census 4.C (CEN-C1 FTL,
   C2 strict MTP, C3 genesis-padded window) and 4.D (D1/D1b PoW vs target,

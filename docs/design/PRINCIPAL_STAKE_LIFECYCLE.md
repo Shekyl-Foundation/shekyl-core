@@ -763,12 +763,12 @@ authorized.
 
 | # | Subject | Site / authority | Note |
 | --- | --- | --- | --- |
-| 1 | **`HoldingsUpdate`, both directions** — wire forms and verify arms | `BondPostKind::from_u8(3)` is `InvalidPostKind`; verify/connect/pop/FFI deleted | **LANDED** this PR — the kind is unrepresentable, not just producerless |
+| 1 | **`HoldingsUpdate`, both directions** — wire forms and verify arms | `BondPostKind::from_u8(3)` is `InvalidPostKind`; verify/connect/pop/FFI deleted | **LANDED** PR #808 — the kind is unrepresentable, not just producerless |
 | 2 | **Mid-epoch add-activation bookkeeping** — the *add* half of P2B-7 **Pin 5** | `ARCHIVAL_CHALLENGE_MECHANISM.md` §"Pin 5" | **Bond birth becomes the only activation event.** The drop half of Pin 5 is a separate question and is not claimed here |
 | 3 | **The per-shard drop anti-dodge** — P2B-7 **Pin 3** | `PHASE_2B_FSM_RETOOL.md` §"Pin 3 — slashable-when boundary" | **Subsumed** by the whole-bond release cooldown. Pin 3 was explicitly *"the exact per-shard analogue of the `Release` cooldown"*; with no per-shard drop, the analogue collapses back into its original |
 | 4 | **Drop-last-shard-rejected** | the same verify surface | **Subject deleted** — there is no drop, so there is no last-shard case to reject |
 | 5 | **`WSS` per-shard absence tracking** | `WALLET_SIDE_STORE.md` | Collapses to *"the record exists with `S`, or it does not"*. A bond's shard set is now a constant, so per-shard presence is not a tracked dimension |
-| 6 | **The `Rebond` → `Reinstate` rename** | this PR | LANDED with the ruling rather than against it: equality, zero-money, HU REJECTED |
+| 6 | **The `Rebond` → `Reinstate` rename** | this PR | **LANDED** PR #808 with the ruling rather than against it: equality, zero-money, HU REJECTED |
 
 ### 5.3.3 Residuals — named here so they are not discovered later
 
