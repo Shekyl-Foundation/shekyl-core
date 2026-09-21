@@ -2329,6 +2329,47 @@ a Tor-only transport** on an unmodified build, then `:452` does not do what its
 own comment says and the "dead end" framing above is wrong — the row would
 revert to describing a degraded path rather than a blocker.
 
+#### Chain-identity divergence is RULED OUT, with the discriminator named
+
+**Not "untested" — ruled out by two discriminators already present in the
+captured data** (Rick, 2026-09-21; verified at `dev` `059aca264`). Recorded
+because the obvious check ran the wrong way round: the genesis comparison was
+made against the node that *worked*, and a chain-identity mismatch would hide
+in the one that failed.
+
+**Discriminator 1 — `white_list: 0 / gray_list: 0` rules out a genesis fork.**
+A mismatched genesis lets the handshake **complete**; the divergence surfaces
+later, at block validation. The chain, verified:
+
+- peerlist entries arrive **only** through a `COMMAND_HANDSHAKE` response
+  (`net_node.inl:1270`) or a `COMMAND_TIMED_SYNC` response (`:1342`) — both
+  inside the *response* handler, so both require a completed exchange;
+- `process_payload_sync_data` has exactly **two** `return false` paths
+  (`cryptonote_protocol_handler.inl:417` hard-fork-version mismatch, `:428`
+  weird pruning seed) and **neither is genesis-related**. Two nodes on the same
+  binary with different genesis share a hard-fork schedule, so both pass;
+- therefore a genesis-forked peer's handshake completes, `:1270` runs, and its
+  lists fill.
+
+**The refused node's lists are empty, so no handshake response was ever
+processed.** That is the opposite of the genesis-fork signature.
+
+**Discriminator 2 — the absence of `wrong network` is a POSITIVE result.** A
+`network_id` mismatch is checked at `net_node.inl:1264` and logged at `:1266`
+— `"COMMAND_HANDSHAKE Failed, wrong network! … closing connection."` — in the
+**dialing** node's own response handler, at `LOG_WARNING`. **Unlike the per-IP
+refusal, which is visible only on the refusing node**, this one is visible on
+the side that is being refused. Its absence from the refused node's log is
+therefore evidence, not a gap. (The accepting side logs its own variant at
+`:2856`, `WRONG NETWORK AGENT CONNECTED!`, at `LOG_INFO` — so a network-id
+mismatch is loud on **both** sides, and that asymmetry against the per-IP cap
+is itself the discriminator.)
+
+**If the `wrong network` line IS present in the captured log, the attribution
+changes entirely** and this row is wrong — that is worth checking before the
+falsifier runs, not after, because it is free and it would redirect the whole
+lane.
+
 #### What the falsifier can and cannot settle
 
 **It re-sequences PWD-I8. It cannot close it.** Stated explicitly because the
