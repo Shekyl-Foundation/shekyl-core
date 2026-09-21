@@ -6709,10 +6709,10 @@ void BlockchainLMDB::revert_archival_reinstates_at_height(uint64_t block_height)
 
   const uint64_t reinstate_epoch = shekyl_archival_settlement_epoch_at_height(block_height);
 
-  // Restore in reverse connect order (§5). The record stays Bonded throughout;
-  // the pop fold guards the counter delta (a non-negative whole number of
-  // FLOORs — zero for standing-only) and the identity belts below pin the
-  // re-opened interval to the connect's product.
+  // Restore in reverse connect order (§5). Reinstate is zero-money: connect
+  // does not move total_bonded_atomic. The pop fold belts that the tip
+  // bonded_total still equals the journaled pre-image; C++ re-opens the
+  // journaled interval.
   for (auto it = rows.rbegin(); it != rows.rend(); ++it)
   {
     crypto::hash p_id{};
@@ -6740,13 +6740,13 @@ void BlockchainLMDB::revert_archival_reinstates_at_height(uint64_t block_height)
         "FATAL: archival reinstate revert interval desync (journal does not match tip)");
     bond.bad_intervals[idx].end_exclusive = std::numeric_limits<uint64_t>::max();
 
-    // Restore exactly the mutated fields from the pre-image; holdings_kind
-    // (stays ShardSetCompact) and the other intervals were never touched.
+    // Restore the journaled pre-image fields; holdings_kind (stays
+    // ShardSetCompact) and the other intervals were never touched. Connect
+    // did not move the global counter, so this arm does not write it.
     bond.bonded_total_atomic = it->pre_bonded_total;
     bond.held_shard_ids = it->pre_shard_ids;
     bond.shard_add_epochs = it->pre_shard_add_epochs;
     put_archival_bond_value(p_id, bond);
-    set_total_bonded_atomic(new_total_bonded);
   }
 
   archival_journal_delete<shekyl::db::ArchivalBondReinstateLogKey>(
