@@ -41,7 +41,13 @@ fn a_never_settling_workload_is_reported_unconverged_not_looped_forever() {
     });
     assert!(!series.converged);
     assert_eq!(series.iterations_s.len(), MAX_ITERATIONS);
-    assert_eq!(series.stopped_because, "iteration cap");
+    // The NORMAL exit: the guard went false with both limits met, and the
+    // series never settled. This used to assert `"iteration cap"` and passed
+    // — not because a cap stopped the loop (no such exit exists; see
+    // `timing.rs`) but because that string was the variable's initialiser and
+    // rode this very path out. The assertion documented the defect instead of
+    // catching it.
+    assert_eq!(series.stopped_because, "limits met, unconverged");
 }
 
 #[test]
@@ -139,13 +145,31 @@ fn a_fast_series_is_not_truncated_by_the_iteration_cap_before_conditioning() {
     let series = sustained_within_conditioned(0, DEFAULT_TOLERANCE_PCT, 30.0, 0.25, || {
         std::hint::black_box((0..50u64).sum::<u64>());
     });
-    assert!(
-        series.converged,
-        "stopped_because = {}",
-        series.stopped_because
-    );
+    // THE subject, and the sibling of the `== MAX_ITERATIONS` assertion in the
+    // slowing-workload test above: there the conditioning floor was met long
+    // before the cap, so the loop stops AT it; here the floor is still unmet at
+    // the cap, so the loop must run PAST it. If the two limits cancelled, this
+    // length would be exactly `MAX_ITERATIONS` — so `>` is what bites, and it
+    // bites however loaded the box is.
     assert!(
         series.iterations_s.len() > MAX_ITERATIONS,
-        "it must keep sampling past the iteration cap until conditioning is met"
+        "it must keep sampling past the iteration cap until conditioning is met \
+         (len = {}, stopped_because = {})",
+        series.iterations_s.len(),
+        series.stopped_because
     );
+    // Deliberately NOT `assert!(series.converged)`. Whether a microsecond
+    // workload's disjoint medians settle within `DEFAULT_TOLERANCE_PCT` is a
+    // property of the machine's scheduling, not of this loop: the guard exits
+    // as soon as both limits are met, so convergence gets only the evaluations
+    // after `elapsed` crosses the floor — stable on a quiet box, preemption
+    // noise on a busy one, where `Instant::elapsed` around a microsecond
+    // workload measures the descheduling rather than the work. That assertion
+    // was asserting the box was quiet; it failed at load average 10.40 on a
+    // shared machine (found by a concurrent workspace run, 2026-09-21).
+    //
+    // Refusing to converge under contention is the instrument WORKING — the
+    // graded binaries refuse an unconverged series rather than publish its
+    // median (`spend_edge.rs`, §5.2). So the outcome is the environment's to
+    // decide and this test does not grade it.
 }

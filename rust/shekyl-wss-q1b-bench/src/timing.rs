@@ -83,10 +83,20 @@ pub struct Series {
     pub p95_s: f64,
     /// Whether two consecutive running medians agreed within the tolerance.
     pub converged: bool,
-    /// Why the loop stopped: `"converged"`, `"iteration cap"` or
+    /// Why the loop stopped: `"converged"`, `"limits met, unconverged"` or
     /// `"wall-clock cap"`. A grading reader needs the *reason*, not only the
-    /// `converged` flag — an iteration cap on a noisy fast workload and a
-    /// wall-clock cap on a slow one call for different responses.
+    /// `converged` flag — a series that ran its full budget without settling
+    /// and one the wall clock cut short call for different responses.
+    ///
+    /// **`"iteration cap"` is deliberately not a value.** It was one until
+    /// 2026-09-21, and it could not be true: the loop continues *past*
+    /// `MAX_ITERATIONS` while the conditioning floor is unmet (that is the
+    /// whole point of the two limits composing), so "the iteration cap
+    /// stopped this run" is not a state this loop can reach. The string was
+    /// the variable's initialiser and it rode the **normal** exit out, so an
+    /// unconverged graded series reported itself as truncated by a cap when
+    /// it had in fact met both limits and simply never settled — opposite
+    /// remedies, which is exactly the distinction this field exists to draw.
     pub stopped_because: &'static str,
     /// The tolerance the convergence test used.
     pub tolerance_pct: f64,
@@ -161,7 +171,9 @@ where
     }
     let mut samples: Vec<f64> = Vec::new();
     let mut converged = false;
-    let mut stopped_because = "iteration cap";
+    // Names the NORMAL exit — the guard below going false with both limits
+    // met. Every other exit assigns over it before breaking.
+    let mut stopped_because = "limits met, unconverged";
     let began = Instant::now();
     // The ITERATION cap must not preempt the CONDITIONING floor. A fast series
     // reaches 60 samples long before 60 seconds, and stopping there would mean
@@ -169,15 +181,17 @@ where
     // rather than compose. The caps exist to bound an UNCONVERGED run; the
     // floor exists to stop a converged verdict arriving too early. So the loop
     // continues while either is unmet, and the wall budget bounds both.
+    //
+    // There is therefore no "stopped at the iteration cap" exit to take: the
+    // guard ends the loop only when BOTH limits are met, which is the
+    // `"limits met, unconverged"` reason above. A break keyed on that same
+    // condition used to sit in the body; it was the exact negation of this
+    // guard, so it was reachable only if the clock crossed the floor between
+    // the guard's read and its own, and it is deleted rather than kept as a
+    // belt that cannot buckle.
     while samples.len() < MAX_ITERATIONS || duration_s(began.elapsed()) < min_conditioning_seconds {
         if duration_s(began.elapsed()) >= max_wall_seconds {
             stopped_because = "wall-clock cap";
-            break;
-        }
-        if samples.len() >= MAX_ITERATIONS
-            && duration_s(began.elapsed()) >= min_conditioning_seconds
-        {
-            stopped_because = "iteration cap";
             break;
         }
         let start = Instant::now();
