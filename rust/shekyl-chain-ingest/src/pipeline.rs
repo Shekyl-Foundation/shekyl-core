@@ -47,6 +47,7 @@ use crate::seed::{SeedLedger, SeedSchedule};
 use crate::sequencer::{SequenceError, Sequencer};
 use crate::source::{IngestEvent, Seq, Sequenced, Source};
 use crate::stage::{form_extend, Staged};
+use crate::substrate::EpochPin;
 use crate::trace::Trace;
 
 /// Knobs with a rationale each (rule 75).
@@ -180,7 +181,7 @@ pub async fn run<Src, S>(
 ) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>>
 where
     Src: Source,
-    S: Substrate + Send + Sync + 'static,
+    S: Substrate + EpochPin + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
     assert!(cfg.window > 0, "a window of zero forms nothing");
@@ -259,7 +260,7 @@ async fn drive<Src, S>(
 ) -> Result<RunReport, PipelineFault<Src::Fault, S::Fault>>
 where
     Src: Source,
-    S: Substrate + Send + Sync + 'static,
+    S: Substrate + EpochPin + Send + Sync + 'static,
     S::Fault: Send + 'static,
 {
     let mut report = RunReport {
@@ -267,6 +268,7 @@ where
         ..RunReport::default()
     };
     let mut sequencer: Sequencer<Result<Staged, S::Fault>> = Sequencer::new(Seq::FIRST);
+    let mut pinned: Option<BlockHash> = None;
     let mut in_flight: JoinSet<Formed<S::Fault>> = JoinSet::new();
     let mut pending_rewind: Option<Sequenced<BlockHeight>> = None;
     let mut exhausted = false;
@@ -301,6 +303,14 @@ where
                         });
                     };
                     ledger.forget_below(seed_height);
+                    // A new epoch: pin its cache as canonical before any
+                    // block under it is formed (RD-F18). Genesis's NULL
+                    // seed is used once and is not an epoch.
+                    if seed != BlockHash::NULL && pinned != Some(seed) {
+                        let s = Arc::clone(&substrate);
+                        tokio::task::spawn_blocking(move || s.pin_epoch(&seed)).await?;
+                        pinned = Some(seed);
+                    }
                     let substrate = Arc::clone(&substrate);
                     let metrics = Arc::clone(metrics);
                     let seq = event.seq;

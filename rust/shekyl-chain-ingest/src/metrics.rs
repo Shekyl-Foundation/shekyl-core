@@ -42,6 +42,8 @@ pub struct Metrics {
     hash_ns_max: AtomicU64,
     derives: AtomicU64,
     derive_ns: AtomicU64,
+    waits: AtomicU64,
+    wait_ns: AtomicU64,
     blocks_formed: AtomicU64,
     form_ns: AtomicU64,
 }
@@ -78,6 +80,11 @@ impl Metrics {
         observe(&self.derives, &self.derive_ns, d);
     }
 
+    /// One hasher waited `d` for another's derivation of the same seed.
+    pub fn waited(&self, d: Duration) {
+        observe(&self.waits, &self.wait_ns, d);
+    }
+
     /// One block's stateless stage took `d` end to end.
     pub fn block_formed(&self, d: Duration) {
         observe(&self.blocks_formed, &self.form_ns, d);
@@ -106,6 +113,8 @@ impl Metrics {
         let hash_ns = self.hash_ns.load(Ordering::Relaxed);
         let derives = self.derives.load(Ordering::Relaxed);
         let derive_ns = self.derive_ns.load(Ordering::Relaxed);
+        let waits = self.waits.load(Ordering::Relaxed);
+        let wait_ns = self.wait_ns.load(Ordering::Relaxed);
         let blocks = self.blocks_formed.load(Ordering::Relaxed);
         let form_ns = self.form_ns.load(Ordering::Relaxed);
         let mean = |total: u64, n: u64| if n == 0 { None } else { Some(total / n) };
@@ -121,6 +130,8 @@ impl Metrics {
             cache_derives: derives,
             derive_ns_total: derive_ns,
             derive_ns_mean: mean(derive_ns, derives),
+            derive_waits: waits,
+            wait_ns_total: wait_ns,
             blocks_formed: blocks,
             form_ns_total: form_ns,
             form_ns_mean: mean(form_ns, blocks),
@@ -175,6 +186,11 @@ pub struct MetricsArtifact {
     pub derive_ns_total: u64,
     /// Per derive.
     pub derive_ns_mean: Option<u64>,
+    /// Hashers that waited for another's derivation of the same seed
+    /// (the concurrency's cost at an epoch boundary, not work).
+    pub derive_waits: u64,
+    /// Wall-clock spent waiting, summed over waiters.
+    pub wait_ns_total: u64,
     /// Blocks through the stateless stage.
     pub blocks_formed: u64,
     /// Wall-clock over all `form`s (hashing included).
@@ -223,6 +239,11 @@ mod tests {
         assert_eq!((s.hash_ns_min, s.hash_ns_max), (Some(100), Some(300)));
         assert_eq!(s.cache_derives, 1);
         assert_eq!(s.derive_ns_mean, Some(2_000_000));
+        m.waited(Duration::from_millis(1));
+        assert_eq!(
+            (m.snapshot().derive_waits, m.snapshot().wait_ns_total),
+            (1, 1_000_000)
+        );
         assert_eq!((s.blocks_formed, s.form_ns_mean), (1, Some(1_000)));
         assert_eq!(s.schema_version, METRICS_SCHEMA);
         assert!(s.to_json().expect("json").contains("shekyl_e2_metrics_v1"));

@@ -41,6 +41,7 @@
 #include "common/command_line.h"
 #include "cryptonote_config.h"
 #include "cryptonote_core/blockchain.h"
+#include "hardforks/hardforks.h"
 #include "cryptonote_core/cryptonote_core.h"
 #include "cryptonote_core/tx_pool.h"
 #include "rolling_median.h"
@@ -132,6 +133,7 @@ int main(int argc, char* argv[])
   command_line::add_arg(desc_cmd_sett, cryptonote::arg_data_dir);
   command_line::add_arg(desc_cmd_sett, cryptonote::arg_testnet_on);
   command_line::add_arg(desc_cmd_sett, cryptonote::arg_stagenet_on);
+  command_line::add_arg(desc_cmd_sett, cryptonote::arg_regtest_on);
   command_line::add_arg(desc_cmd_sett, arg_log_level);
   command_line::add_arg(desc_cmd_sett, arg_out);
   command_line::add_arg(desc_cmd_sett, arg_block_start);
@@ -170,10 +172,22 @@ int main(int argc, char* argv[])
     return 1;
   }
 
-  const std::string opt_data_dir = command_line::get_arg(vm, cryptonote::arg_data_dir);
   const bool opt_testnet = command_line::get_arg(vm, cryptonote::arg_testnet_on);
   const bool opt_stagenet = command_line::get_arg(vm, cryptonote::arg_stagenet_on);
-  const network_type net_type = opt_testnet ? TESTNET : opt_stagenet ? STAGENET : MAINNET;
+  // The daemon's own flag: a regtest chain lives under <data-dir>/fake, its
+  // nettype is FAKECHAIN, and Blockchain::init wants the regtest
+  // test_options the daemon hands it (cryptonote_core.cpp, core::init).
+  const bool opt_regtest = command_line::get_arg(vm, cryptonote::arg_regtest_on);
+  if (opt_regtest && (opt_testnet || opt_stagenet))
+  {
+    LOG_ERROR("--regtest excludes --testnet / --stagenet");
+    return 1;
+  }
+  const network_type net_type = opt_regtest ? FAKECHAIN : opt_testnet ? TESTNET : opt_stagenet ? STAGENET : MAINNET;
+  boost::filesystem::path data_dir(command_line::get_arg(vm, cryptonote::arg_data_dir));
+  if (opt_regtest)
+    data_dir /= "fake";
+  const std::string opt_data_dir = data_dir.string();
   const uint64_t block_start = command_line::get_arg(vm, arg_block_start);
   uint64_t block_stop = command_line::get_arg(vm, arg_block_stop);
 
@@ -198,7 +212,12 @@ int main(int argc, char* argv[])
     LOG_ERROR("Error opening database: " << e.what());
     return 1;
   }
-  if (!core_storage->init(db, net_type))
+  const std::pair<uint8_t, uint64_t> regtest_hard_forks[3] = {
+    std::make_pair(1, 0),
+    std::make_pair(mainnet_hard_forks[num_mainnet_hard_forks - 1].version, 1),
+    std::make_pair(0, 0)};
+  const cryptonote::test_options regtest_test_options = {regtest_hard_forks, 0};
+  if (!core_storage->init(db, net_type, /*offline=*/true, opt_regtest ? &regtest_test_options : nullptr))
   {
     LOG_ERROR("Failed to initialize source blockchain storage");
     return 1;

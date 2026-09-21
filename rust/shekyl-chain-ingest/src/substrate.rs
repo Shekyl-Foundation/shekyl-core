@@ -40,10 +40,11 @@
 
 use core::fmt;
 use std::sync::Arc;
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use shekyl_chain_rules::Substrate;
-use shekyl_pow_randomx::{compute_hash, CacheStore, Seedhash};
+use shekyl_pow_randomx::{compute_hash, CacheOutcome, CacheStore, Seedhash};
 use shekyl_types::{BlockHash, PowHash, Timestamp};
 
 use crate::metrics::Metrics;
@@ -85,6 +86,39 @@ pub enum SubstrateFault {
     /// The clock (CEN-C1's operand) could not be read.
     #[error(transparent)]
     Clock(#[from] ClockFault),
+}
+
+/// Pinning the canonical seed epoch (RD-F18).
+///
+/// `CacheStore` holds two prepared caches — canonical and transient — and
+/// derives on every miss. A driver that never pins leaves both live seeds
+/// of a lag window fighting over the one transient slot, so each switch
+/// between them is a fresh 256 MiB fill: the first real run re-derived at
+/// window 16 on a 301-block chain with two seeds. The pipeline pins the
+/// claimed seed as canonical whenever it changes, before the blocks under
+/// it are formed. The mock substrate has nothing to pin.
+pub trait EpochPin {
+    /// Make `seed`'s cache the canonical one, deriving it if needed.
+    fn pin_epoch(&self, seed: &BlockHash);
+}
+
+#[cfg(test)]
+impl EpochPin for shekyl_chain_rules::harness::MockSubstrate {
+    fn pin_epoch(&self, _seed: &BlockHash) {}
+}
+
+impl<C: Clock> EpochPin for ChainSubstrate<C> {
+    fn pin_epoch(&self, seed: &BlockHash) {
+        let seedhash = Seedhash::from_bytes(seed.to_bytes());
+        let started = Instant::now();
+        let (prepared, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
+        match outcome {
+            CacheOutcome::Derived => self.metrics.derived(started.elapsed()),
+            CacheOutcome::Waited => self.metrics.waited(started.elapsed()),
+            CacheOutcome::Hit => {}
+        }
+        self.caches.set_canonical(prepared);
+    }
 }
 
 /// The production substrate (module docs).
@@ -147,14 +181,17 @@ impl<C: Clock> Substrate for ChainSubstrate<C> {
     fn longhash(&self, pow_blob: &[u8], seed: &BlockHash) -> Result<PowHash, Self::Fault> {
         let seedhash = Seedhash::from_bytes(seed.to_bytes());
         // A derive is the 256 MiB fill and is timed apart from the hash
-        // (metrics module docs): look first, derive under the derive timer
-        // only when the store has nothing for this seed.
-        let prepared = match self.caches.lookup(&seedhash) {
-            Some(p) => p,
-            None => self
-                .metrics
-                .timed_derive(|| self.caches.lookup_or_derive(&seedhash)),
-        };
+        // (metrics module docs). The store says how it served the call:
+        // only a `Derived` outcome is a derivation — a `Waited` caller spent
+        // the leader's wall time and did none of the work, and counting it
+        // overstated derives 32× on the first real run (RD-F18).
+        let started = Instant::now();
+        let (prepared, outcome) = self.caches.lookup_or_derive_reporting(&seedhash);
+        match outcome {
+            CacheOutcome::Derived => self.metrics.derived(started.elapsed()),
+            CacheOutcome::Waited => self.metrics.waited(started.elapsed()),
+            CacheOutcome::Hit => {}
+        }
         let hash = self
             .metrics
             .timed_hash(|| compute_hash(&prepared, pow_blob));
