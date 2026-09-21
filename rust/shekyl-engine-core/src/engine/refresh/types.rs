@@ -327,10 +327,11 @@ pub enum RefreshPhase {
 ///   `RefreshPhase::Retrying`.
 /// - `blocks_total`: the per-attempt scan range size — the count
 ///   of blocks the producer plans to fetch and scan during this
-///   attempt. Concretely, `blocks_total =
-///   daemon.get_height().saturating_sub(synced_height + 1)` at
-///   attempt start, where `daemon.get_height()` returns the count
-///   of blocks (one past the tip-block index). Saturates to `0`
+///   attempt. Concretely, `blocks_total` is the daemon's chain
+///   **count** (`Rpc::get_height` → `ChainCount`) punched to raw at
+///   the range arithmetic:
+///   `tip.to_raw().saturating_sub(synced_height + 1)` at
+///   attempt start (one past the tip-block index). Saturates to `0`
 ///   when the wallet is at-or-above the daemon tip. Updates on
 ///   retry boundaries because each attempt re-fetches the tip;
 ///   static within an attempt.

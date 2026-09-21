@@ -316,7 +316,7 @@ pub(crate) async fn get_wallet_info(
         .get_height()
         .await
         .ok()
-        .map(|h| i64::try_from(h).unwrap_or(i64::MAX));
+        .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX));
 
     let (name, capability, network, address) = identity;
     let result = GetWalletInfoResult {
@@ -434,7 +434,7 @@ pub(crate) async fn get_height(
         .get_height()
         .await
         .ok()
-        .map(|h| i64::try_from(h).unwrap_or(i64::MAX));
+        .map(|h| i64::try_from(h.to_raw()).unwrap_or(i64::MAX));
 
     let result = GetHeightResult {
         wallet_height,

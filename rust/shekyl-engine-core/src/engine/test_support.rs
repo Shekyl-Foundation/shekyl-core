@@ -74,7 +74,7 @@ use sha2::Sha256;
 use shekyl_engine_state::pscan_state::{MintLineageOutput, PFundingOutputRecord};
 use shekyl_rpc_client::{FeeRate, Rpc, RpcError};
 use shekyl_scanner::ScannableBlock;
-use shekyl_types::{AttestationRoot, BlockHash};
+use shekyl_types::{AttestationRoot, BlockHash, ChainCount};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Transaction, TxPrefix};
 
 use crate::engine::pending::TxHash;
@@ -739,7 +739,7 @@ impl Rpc for TestDaemon {
         async move { Ok(test_block_hash_at(number as u64)) }
     }
 
-    fn get_height(&self) -> impl Send + std::future::Future<Output = Result<usize, RpcError>> {
+    fn get_height(&self) -> impl Send + std::future::Future<Output = Result<ChainCount, RpcError>> {
         let state = self.state.clone();
         async move {
             let mut state = state.lock().expect("TestDaemon state poisoned");
@@ -751,8 +751,7 @@ impl Rpc for TestDaemon {
                 .daemon_height_cap
                 .map(|cap| cap.min(chain_len))
                 .unwrap_or(chain_len);
-            usize::try_from(height)
-                .map_err(|_| RpcError::InvalidNode("TestDaemon height exceeded usize".to_string()))
+            Ok(ChainCount::from_raw(height))
         }
     }
 }
@@ -1098,7 +1097,7 @@ mod tests {
     /// from `[0u8; 32]`. Real-daemon convention: `chain[h] = block at
     /// height h`. `linear_chain(n).len() == n`, so
     /// `TestDaemon::with_seed_and_chain(_, linear_chain(n)).get_height()`
-    /// returns `n`.
+    /// returns `ChainCount::from_raw(n)`.
     fn linear_chain(n: u64) -> Vec<ScannableBlock> {
         let mut chain =
             Vec::with_capacity(usize::try_from(n).expect("test linear_chain length fits in usize"));
@@ -1114,13 +1113,13 @@ mod tests {
     #[tokio::test]
     async fn empty_chain_reports_zero_height() {
         let rpc = TestDaemon::with_seed(DEFAULT_TEST_SEED);
-        assert_eq!(rpc.get_height().await.unwrap(), 0);
+        assert_eq!(rpc.get_height().await.unwrap(), ChainCount::ZERO);
     }
 
     #[tokio::test]
     async fn linear_chain_reports_canonical_height() {
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(5));
-        assert_eq!(rpc.get_height().await.unwrap(), 5);
+        assert_eq!(rpc.get_height().await.unwrap(), ChainCount::from_raw(5));
     }
 
     #[tokio::test]
@@ -1170,7 +1169,7 @@ mod tests {
     async fn daemon_height_cap_below_chain_len() {
         let rpc = TestDaemon::with_seed_and_chain(DEFAULT_TEST_SEED, linear_chain(10));
         rpc.set_daemon_height(4);
-        assert_eq!(rpc.get_height().await.unwrap(), 4);
+        assert_eq!(rpc.get_height().await.unwrap(), ChainCount::from_raw(4));
     }
 
     #[tokio::test]
@@ -1180,7 +1179,7 @@ mod tests {
 
         assert!(rpc.get_height().await.is_err());
         assert!(rpc.get_height().await.is_err());
-        assert_eq!(rpc.get_height().await.unwrap(), 2);
+        assert_eq!(rpc.get_height().await.unwrap(), ChainCount::from_raw(2));
     }
 
     #[tokio::test]
@@ -1214,7 +1213,7 @@ mod tests {
         let clone = rpc.clone();
         // Push genesis at height 0; clone observes get_height=1.
         rpc.push_block(make_synthetic_block(0, BlockHash::NULL));
-        assert_eq!(clone.get_height().await.unwrap(), 1);
+        assert_eq!(clone.get_height().await.unwrap(), ChainCount::from_raw(1));
     }
 
     #[tokio::test]

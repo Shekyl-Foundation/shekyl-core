@@ -67,6 +67,15 @@
 
 ### Wallet
 
+- **Height-semantics Phase 2c: inland decode of chain-count RPC facts.**
+  Daemon-RPC `ChainTip.chain_height` / `BlockHashAt` / `BlockHeaderAt` /
+  `BlockAt.chain_height` are `ChainCount`; `target_height` is
+  `Option<ChainCount>` (`None` = synchronized sentinel). Wallet client
+  `Rpc::get_height` returns `ChainCount`. Submit `ref_age_window` takes
+  `ChainCount` vs `BlockHeight`. Handlers bound a requested ordinal with
+  `ChainCount::has_block` and name the top with `ChainCount::tip`. Wire
+  DTOs and FFI PODs stay `u64`. No numeric change.
+
 - **Height-semantics Phase 2b: dispatch-clock stamps are `ChainCount`.**
   `daemon_claimed_tip`, `BlockSource::tip_height`, `anchor_t0`, and
   `Dispatched::at` carry the claimed chain **count** (same numeric as
