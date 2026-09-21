@@ -135,8 +135,9 @@ pub struct RecordedBlock {
     /// The header as recorded.
     pub header: BlockHeader,
     /// Work through this block: the parent's plus this block's target
-    /// (`block_info.cumulative_difficulty`). Monotone non-decreasing along
-    /// the chain (SI-8); a rule that sees otherwise reports
+    /// (`block_info.cumulative_difficulty`). Strictly increasing along the
+    /// chain (SI-10); a rule that sees a decrease *or an equal pair*
+    /// reports
     /// [`Corrupt::CumulativeDifficultyNotMonotone`](crate::Corrupt::CumulativeDifficultyNotMonotone).
     pub cumulative_difficulty: CumulativeDifficulty,
 }

@@ -533,6 +533,14 @@ mod connect_fixtures;
 #[path = "connect_tests.rs"]
 mod connect_tests;
 
+#[cfg(test)]
+#[path = "connect_ruleset_tests.rs"]
+mod connect_ruleset_tests;
+
+#[cfg(test)]
+#[path = "refuse_corrupt_tests.rs"]
+mod refuse_corrupt_tests;
+
 /// The mock is reconciled against the real view (E6 slice 2 F11): every
 /// landed rule, both stages, identical verdicts and coverage over
 /// `BatchView` and the rules crate's `MockChain`.

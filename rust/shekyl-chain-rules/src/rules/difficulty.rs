@@ -27,16 +27,27 @@
 //! `cumulative_difficulty` instead of being handed it.
 //!
 //! D6 — *"a zero next-block difficulty rejects the block"* — is held **by
-//! the type**, not by a predicate (Q4, F4): [`Target`] wraps [`NonZeroU128`],
-//! the one `Difficulty` → [`Target`] edge is [`D6::mint`] (zero is
-//! [`Corrupt::ZeroTarget`]), and every already-valid target (genesis-block
-//! `1`, Fakechain `Fixed`) records the row through [`D6::record`] so a
-//! Fakechain verdict can mint. A predicate `target.is_zero()` would
-//! have no reachable refusal on the main chain — LWMA-1 floors its output
-//! and `GENESIS_DIFFICULTY` is positive — and a gate that cannot fail is
-//! the one thing this program has decided it does not ship. The fault arm
-//! exists so the refusal has a name if a producer ever appears (slice 9's
-//! alt sentinel is the candidate).
+//! the type**: [`Target`] wraps [`NonZeroU128`], the one `Difficulty` →
+//! [`Target`] edge is [`D6::mint`], and every already-valid target
+//! (genesis-block `1`, Fakechain `Fixed`) records the row through
+//! [`D6::record`] so a Fakechain verdict can mint.
+//!
+//! **What zero at the mint IS (premise refuted 2026-09-20, DRS-E2 RD-F17).**
+//! Slice 2 wrote zero as a corrupt-view fault on the premise that LWMA-1
+//! floors its output and no conforming view can derive it. It does not,
+//! and one can: the formula's tail is `avg_D · 99·N·(N+1)·T / 200·L` with
+//! no floor, and with every solvetime at the `+6T` clamp it is **zero for
+//! `avg_D ≤ 6`** (`400 → 66` per maximally slow window, so a conforming chain
+//! walks there). The C++ at that point **refuses the block**
+//! (`blockchain.cpp:5494`, `CHECK_AND_ASSERT_MES(current_diffic, false, …)`)
+//! — which is what the census ratified, and is the parity behaviour. So
+//! `D6::mint` yields a **verdict**: zero refuses the block as CEN-D6, never
+//! a fault, and never a store-invariant halt (the store's work strictly
+//! increased; nothing about the file is corrupt — SI-10 is D4's window walk,
+//! not this). That the DAA can drive itself to zero at all — and that a
+//! refused block there refuses every successor — is a consensus finding
+//! for the DAA's owner, recorded in `FOLLOWUPS.md`; this crate reproduces
+//! the ratified behaviour and does not add a floor (rule 71, C2-R8 Q4).
 //!
 //! # The window is the view's
 //!
@@ -56,6 +67,7 @@ use crate::coverage::RuleCoverage;
 use crate::fault::{Corrupt, Fault};
 use crate::rule_set::{DifficultyRule, RuleSet};
 use crate::rules::Rule;
+use crate::verdict::{InvalidBlock, Locus, Verdict};
 use crate::view::{AtHeight, ChainView, RecordedBlock};
 
 /// The difficulty a candidate must satisfy, **non-zero by construction**
@@ -137,18 +149,16 @@ impl D6 {
         target
     }
 
-    /// The `Difficulty` → [`Target`] edge. Zero is a
-    /// [`Corrupt::ZeroTarget`] fault — the derivation produced a value no
-    /// issued rule set and no conforming view can produce, so it is not
-    /// the block's fault and not a verdict. Records this row either way.
-    pub(crate) fn mint(
-        difficulty: Difficulty,
-        coverage: &mut RuleCoverage,
-    ) -> Result<Target, Corrupt> {
+    /// The `Difficulty` → [`Target`] edge. Zero **refuses the block** as
+    /// CEN-D6 — the census's ratified behaviour and the C++'s
+    /// (`blockchain.cpp:5494`). It is a verdict, not a fault: the view is
+    /// conforming (module docs), the derivation is honest, and the number
+    /// is what the ratified algorithm produced. Records this row either way.
+    pub(crate) fn mint(difficulty: Difficulty, coverage: &mut RuleCoverage) -> Verdict<Target> {
         coverage.insert(Self::ROW);
         NonZeroU128::new(difficulty.to_raw())
             .map(Target)
-            .ok_or(Corrupt::ZeroTarget)
+            .ok_or_else(|| InvalidBlock::new(Self::ROW, Locus::Block))
     }
 }
 
@@ -179,13 +189,13 @@ impl D4 {
         connecting: BlockHeight,
         rule_set: &RuleSet,
         coverage: &mut RuleCoverage,
-    ) -> Result<Target, Fault<V::Fault>> {
+    ) -> Result<Verdict<Target>, Fault<V::Fault>> {
         coverage.insert(Self::ROW);
         if let Some(fixed) = D7::fixed_target(rule_set, connecting, coverage) {
-            return Ok(D6::record(fixed, coverage));
+            return Ok(Ok(D6::record(fixed, coverage)));
         }
         let Some(chain_height) = connecting.to_raw().checked_sub(1) else {
-            return Ok(D6::record(Target::GENESIS_BLOCK, coverage));
+            return Ok(Ok(D6::record(Target::GENESIS_BLOCK, coverage)));
         };
         let chain_height = BlockHeight::from_raw(chain_height);
         let window = Self::window(view, chain_height)?;
@@ -205,14 +215,15 @@ impl D4 {
                 )
             }
         };
-        D6::mint(difficulty, coverage).map_err(Fault::Corrupt)
+        Ok(D6::mint(difficulty, coverage))
     }
 
     /// The `(timestamp, cumulative difficulty)` window LWMA-1 reads: the
     /// `N + 1` blocks ending at `chain_height`, oldest first, when
     /// `chain_height ≥ N`; empty otherwise (the function does not inspect
-    /// it). Cumulative difficulty is checked monotone as it is read (SI-8
-    /// observed from this side).
+    /// it). Cumulative difficulty is checked **strictly increasing** as it
+    /// is read (SI-10 observed from this side: equal adjacent work is as
+    /// corrupt as a decrease — every target is at least one).
     fn window<'id, V: ChainView<'id>>(
         view: &V,
         chain_height: BlockHeight,
@@ -227,7 +238,7 @@ impl D4 {
         for h in first..=chain_height.to_raw() {
             let height = BlockHeight::from_raw(h);
             let block = recorded(view, height).map_err(Fault::View)?;
-            if previous.is_some_and(|p| block.cumulative_difficulty < p) {
+            if previous.is_some_and(|p| block.cumulative_difficulty <= p) {
                 return Err(Fault::Corrupt(Corrupt::CumulativeDifficultyNotMonotone {
                     at: height,
                 }));

@@ -278,7 +278,13 @@ pub fn validate<'id, V: ChainView<'id>>(
     // judging until `form` is redone.
     D3::verify_seed(view, connecting, &formed, &mut coverage)?;
     let mtp_window = C3::window(view, connecting, &mut coverage).map_err(Fault::View)?;
-    let target = D4::target(view, connecting, rule_set, &mut coverage)?;
+    let target = match D4::target(view, connecting, rule_set, &mut coverage)? {
+        Ok(target) => target,
+        // CEN-D6: the ratified algorithm derived zero for this height; the
+        // block is refused, as the C++ refuses it. A verdict, not a fault
+        // (rules::difficulty module docs).
+        Err(refused) => return Ok(Err(refused)),
+    };
     let cumulative_difficulty = D4::cumulative_after(view, connecting, target)?;
     D1b::record(&mut coverage);
 

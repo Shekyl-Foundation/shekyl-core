@@ -99,20 +99,22 @@ pub enum Stale {
 /// View data that violates a store invariant, observed by a rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corrupt {
-    /// Cumulative difficulty decreased between two recorded heights (SI-8
-    /// holds it monotone).
+    /// Recorded cumulative work did not **strictly increase** between two
+    /// adjacent heights — a decrease *or an equal pair*; every target is at
+    /// least one, so both are impossible on a conforming store (SI-10;
+    /// overflow of the same fold is SI-8).
     CumulativeDifficultyNotMonotone {
-        /// The height whose cumulative difficulty is below its parent's.
+        /// The height whose cumulative difficulty is not above its parent's.
         at: BlockHeight,
     },
     /// The parent's cumulative difficulty plus this block's target does not
     /// fit the type.
+    ///
+    /// (A `ZeroTarget` arm lived here until 2026-09-20. Zero at the mint is
+    /// **not** a corrupt view — LWMA-1 has no output floor and a conforming
+    /// slow chain derives it — so it is CEN-D6's *refusal*, a verdict, and
+    /// no longer a fault: `rules::difficulty` module docs, DRS-E2 RD-F17.)
     CumulativeDifficultyOverflow,
-    /// The next-block target derived to zero (CEN-D6). Unreachable over a
-    /// conforming view and an issued rule set — the type that carries the
-    /// target refuses zero at the mint — and written as a fault so the
-    /// refusal has a name if a producer ever appears.
-    ZeroTarget,
 }
 
 /// The bound on redoing `form` after a [`Stale`] fault.
@@ -214,13 +216,13 @@ impl fmt::Display for Retry {
 impl fmt::Display for Corrupt {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::CumulativeDifficultyNotMonotone { at } => {
-                write!(f, "cumulative difficulty decreases at height {at:?} (SI-8)")
-            }
+            Self::CumulativeDifficultyNotMonotone { at } => write!(
+                f,
+                "cumulative difficulty does not increase at height {at:?} (SI-10)"
+            ),
             Self::CumulativeDifficultyOverflow => {
                 f.write_str("cumulative difficulty overflows past the parent")
             }
-            Self::ZeroTarget => f.write_str("next-block target derived to zero (CEN-D6)"),
         }
     }
 }

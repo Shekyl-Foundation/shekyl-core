@@ -4,6 +4,24 @@
 
 ### Daemon chain store
 
+- **DRS-E2 increment 1 — the ingest spine's first organs.** `shekyl-chain-ingest`
+  is born: the daemon's block-ingest pipeline as production code shared by
+  replay (E2) and live ingest (E3) — a `Source` event model
+  (`Extend`/`Rewind`, so a reorg is representable), the production RandomX
+  substrate (the verifier's `compute_hash`, never the JIT), and the
+  **corpus** artifact (Rust-minted, versioned) whose writer verifies every
+  block's bodies against its header before writing — a pruned source's
+  silent shortfall is refused by height — and whose reader takes the
+  header as the bound on `tx_count` (a crafted count cannot allocate
+  before the listed hashes are known). Store: `WriteBatch::refuse_corrupt`
+  lets the validator's `Fault::Corrupt` halt the writer (**SI-10**, recorded
+  cumulative work strictly increases; the first invariant armed by the
+  validator reading the store); `ReadSnapshot::logical_state_digest_v0`
+  reports the redb file's logical-state digest; **`connect` takes the
+  in-force `RuleSet` by value** (a Fakechain verdict can now connect;
+  `StoreCannot::RuleSetUnknown` deleted). Process: every FOLLOWUPS row
+  carries a gated `Owner:` (`check_followups_owners.py`).
+
 - **Transaction read surface (S-TX, DRS-E1 increment 6).** `ReadSnapshot`
   gains `tx_location` / `tx_record` by `TxHash` (returning `Option` — a hash
   miss is ordinary), `tx_count`, `tx_prunable` / `tx_output_indices` by
