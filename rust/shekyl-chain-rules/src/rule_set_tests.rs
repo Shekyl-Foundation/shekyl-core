@@ -120,8 +120,8 @@ fn genesis_id_is_one_and_round_trips() {
 }
 
 /// Bites: a genesis rule set that omits a validator-enforced consensus row,
-/// lists one out of census order, or lets a `held_by_cxx` row into the
-/// denominator coverage is measured against.
+/// lists one out of census order, or lets a `held_by_cxx` or `enforced_at`
+/// row into the denominator per-block coverage is measured against.
 #[test]
 fn genesis_enforces_the_census_minus_held_rows_in_order() {
     let genesis = RuleSet::GENESIS;
@@ -129,15 +129,19 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     let expected: Vec<CenRow> = CenRow::ALL
         .iter()
         .copied()
-        .filter(|row| row.status() != RowStatus::HeldByCxx)
+        .filter(|row| !matches!(row.status(), RowStatus::HeldByCxx | RowStatus::EnforcedAt))
         .collect();
     assert_eq!(enforced, expected);
-    assert_eq!(enforced.len(), CenRow::ALL.len() - 2, "A1 and A4 are held");
+    assert_eq!(
+        enforced.len(),
+        CenRow::ALL.len() - 3,
+        "A1 and A4 are held; E5 is enforced at open"
+    );
     assert_eq!(
         format!("{genesis:?}"),
         format!(
-            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (validator-enforced; held rows excluded), header_major_version: 1, difficulty: Lwma1 }}",
-            v = CenRow::ALL.len() - 2,
+            "RuleSet {{ id: RuleSetId(1), enforced: {v} of {n} rows (per-block; held and at-open rows excluded), header_major_version: 1, difficulty: Lwma1 }}",
+            v = CenRow::ALL.len() - 3,
             n = CenRow::ALL.len()
         )
     );

@@ -7,7 +7,7 @@
 //! value (DRS-E2 RD-Q10). Fakechain `Fixed` reuses `RuleSetId::GENESIS`, so
 //! these two tests pin that the belt compares sets, not ids.
 
-use shekyl_chain_rules::{form, validate, FormAttempt, RuleSet, RuleSetId};
+use shekyl_chain_rules::{form, validate, FormAttempt, RuleSet, RuleSetId, Trust};
 use shekyl_types::BlockHash;
 
 use super::connect_fixtures::{candidate, facts, FixtureSubstrate};
@@ -37,7 +37,7 @@ fn a_fakechain_verdict_connects_when_the_fakechain_set_is_in_force() {
             Ok(Ok(formed)) => formed,
             other => panic!("stateless stage: {other:?}"),
         };
-        let valid = match validate(formed, &view, &seven) {
+        let valid = match validate(formed, &view, &seven, &Trust::UNANCHORED) {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };
@@ -82,7 +82,7 @@ fn a_fakechain_verdict_is_refused_under_genesis_in_force() {
             Ok(Ok(formed)) => formed,
             other => panic!("stateless stage: {other:?}"),
         };
-        let valid = match validate(formed, &view, &seven) {
+        let valid = match validate(formed, &view, &seven, &Trust::UNANCHORED) {
             Ok(Ok(valid)) => valid,
             other => panic!("view stage: {other:?}"),
         };

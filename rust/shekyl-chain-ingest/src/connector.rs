@@ -280,7 +280,7 @@ impl Message<Apply> for Connector {
                     }
                 };
                 let in_force = rules.in_force(height);
-                match validate(formed, &view, &in_force) {
+                match validate(formed, &view, &in_force, &rules.trust()) {
                     Ok(Ok(valid)) => {
                         let Some(facts) = trace.borrow(height) else {
                             return Err(RunFault::NoFacts { height });

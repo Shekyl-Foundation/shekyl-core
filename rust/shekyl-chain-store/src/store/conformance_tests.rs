@@ -44,7 +44,7 @@
 use shekyl_chain_rules::harness::{fixture, MockChain, MockSubstrate};
 use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, CenRow, ChainView, Corrupt, Fault, FormAttempt, Locus,
-    RecordedBlock, RuleSet, Stale, Substrate, Verdict,
+    RecordedBlock, RuleSet, Stale, Substrate, Trust, Verdict,
 };
 use shekyl_types::{BlockHash, BlockHeight, CurveTreeRoot, PowHash, Timestamp};
 
@@ -167,7 +167,7 @@ where
         Err(never) => match never {},
     };
     Outcome::of(
-        validate(formed, view, &RuleSet::GENESIS)
+        validate(formed, view, &RuleSet::GENESIS, &Trust::UNANCHORED)
             .map(|verdict| verdict.map(|valid| valid.coverage().iter().collect::<Vec<_>>())),
     )
 }

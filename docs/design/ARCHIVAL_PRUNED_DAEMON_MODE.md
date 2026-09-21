@@ -1310,10 +1310,10 @@ or the question block named). Grades as recorded there.
 | F24 | The universal bytes window had inherited `D_max`; `W` minted as Q2's variable | record §6; Q2 |
 | F25 | The `SF-` round closed on the leaf unit mid-round; client survives, codec and `R_k` verify do not | record §6; Q6 item 4 |
 | F26 | The Rust store was shaped for one of Q6's two occupants; `pqc_auth_hash` owed on the identity and as a row (landed #768, row #772) | record §6; Q6 |
-| F27 | `RuleSet` needs a below-anchor mode — `Trust::BelowAnchor`, confirmed by Q5 | record §6; Q5 |
+| F27 | `RuleSet` needs a below-anchor mode — `Trust::BelowAnchor`, confirmed by Q5. **The `Trust` parameter landed 2026-09-20 (E6 slice 3, [`CHAIN_RULES_SLICE_3.md`](CHAIN_RULES_SLICE_3.md) Q1): `validate(…, trust: &Trust)`, carrying `ReleaseAnchors`; the `BelowAnchor` arm is slice 6's, by a second constructor, meaning band 1's skeleton (`:293`)** | record §6; Q5 |
 | F28 | Band-1 sync needs both txid components on the wire (`TxBlobEntry`) | record §6; Q5 |
 | F29 | Q3's instrument is `ChainView`'s surface — no body accessor | record §6; Q3 |
-| F30 | Q11's home is `CEN-E2`; F27 fires both census rows' reopening trigger | record §6; Q11 |
+| F30 | Q11's home is `CEN-E2`; F27 fires both census rows' reopening trigger. **Fired 2026-09-20: E6 slice 3 moved checkpoint state into Rust (`ReleaseAnchors`) and re-keyed CEN-E1, E2 and E5 in the census** — E1 landed (the anchor's rule), E2 subsumed behind the alt view *and* `D_max`'s numeric (slice 9), E5 at writer open | record §6; Q11 |
 | F31 | S-PRUNE had no plan doc — skeleton `DRS_E1_SPRUNE.md` | record §6 |
 | F32 | Byte-bounded shards over retained length rows; shard-granular discard (Q6 item 3 amendment) | Q6 |
 | F33 | PR #775 draws the daemon line; the Q9 candidate rejected; #775's leaf-shaped rows re-key — **discharged 2026-09-18** (#775 landed first; PDM re-keyed its partition row, CT-1 row, route paragraph, decision-log amendment on `docs/pdm-f33-rekey-775`) | record §6; Q9 |

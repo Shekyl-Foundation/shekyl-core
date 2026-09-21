@@ -55,14 +55,36 @@ pub enum Flag {
     Policy,
 }
 
-/// How a row is held: not yet, by a rule type in this crate, or by the C++
-/// ingest driver until cutover.
+/// How a row is held: not yet, by a rule type `validate` runs, by a rule
+/// type this crate enforces at another site, or by the C++ ingest driver
+/// until cutover.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowStatus {
     /// No rule yet; the row is counted in the denominator only.
     Pending,
-    /// A rule type is registered and compile-pinned (G9 + SCW-18).
+    /// A rule type is registered and compile-pinned (G9 + SCW-18), and
+    /// `form` / `validate` run it per block.
     Implemented,
+    /// A rule type is registered and compile-pinned, and **this crate**
+    /// enforces it at a site other than the per-block stages, so no
+    /// per-block coverage could ever contain it (`CHAIN_RULES_SLICE_3.md`
+    /// Q4). The first is CEN-E5, run once by the writer at open
+    /// (`ReleaseAnchors::conflict_with`); CEN-A1 and CEN-A4 take this
+    /// status at cutover, when their C++ holder leaves and the Rust ingest
+    /// driver decides acceptance topology.
+    ///
+    /// The registry entry carries the citation — `enforced_at(path, "test")`
+    /// — and that is the only copy. The path is compile-pinned; the gate
+    /// asserts the named `#[test]` is defined in this crate (rule 47). A
+    /// string stored on the value would be a second copy nothing reads, free
+    /// to drift from the entry. Same shape as [`HeldByCxx`](Self::HeldByCxx).
+    ///
+    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced) for the
+    /// same reason a hold is (per-block completeness is measured over what
+    /// `validate` evaluates) and, unlike a hold, **counted as Rust-enforced**
+    /// by the gate: `held_by_cxx` would be false here — the enforcement is
+    /// not the C++'s.
+    EnforcedAt,
     /// Acceptance topology the C++ ingest driver decides — where a block
     /// *goes* (`ALREADY_EXISTS`, `ORPHANED`), not whether it is valid — and
     /// so not a predicate `validate` can evaluate (`CHAIN_RULES_SLICE_1.md`
@@ -104,14 +126,17 @@ pub trait Row:
 }
 
 /// `RowStatus` from an entry's status token. A status other than `pending`,
-/// `implemented(path)` or `held_by_cxx("file", "test")` is a macro error at
-/// the entry.
+/// `implemented(path)`, `enforced_at(path, "test")` or
+/// `held_by_cxx("file", "test")` is a macro error at the entry.
 macro_rules! census_status {
     (pending) => {
         $crate::census::RowStatus::Pending
     };
     (implemented($path:path)) => {
         $crate::census::RowStatus::Implemented
+    };
+    (enforced_at($path:path, $test:literal)) => {
+        $crate::census::RowStatus::EnforcedAt
     };
     (held_by_cxx($file:literal, $test:literal)) => {
         $crate::census::RowStatus::HeldByCxx
@@ -135,6 +160,11 @@ macro_rules! census_pin {
     // Nothing the compiler can pin: the holder is a C++ test. The gate
     // asserts the cited file exists and contains the test (rule 47).
     (held_by_cxx($file:literal, $test:literal), $name:ident, $var:ident) => {};
+    // The same two pins as `implemented`: the site exists and is bound to
+    // this row. The test is the gate's to assert (a `#[test]` in this crate).
+    (enforced_at($path:path, $test:literal), $name:ident, $var:ident) => {
+        census_pin!(implemented($path), $name, $var);
+    };
     (implemented($path:path), $name:ident, $var:ident) => {
         #[allow(unused_imports)]
         use $path as _;
@@ -151,8 +181,9 @@ macro_rules! census_pin {
 
 /// Defines one census registry enum: `pub enum Name: Flag { Var status, … }`.
 ///
-/// Per entry, `status` is `pending`, `implemented(rust::path::to::RuleType)`
-/// or `held_by_cxx("tests/…​.cpp", "gen_test_name")`.
+/// Per entry, `status` is `pending`, `implemented(rust::path::to::RuleType)`,
+/// `enforced_at(rust::path::to::RuleType, "test_fn_in_this_crate")` or
+/// `held_by_cxx("tests/…​.cpp", "gen_test_name")`.
 /// Entries must be listed in census §4 order restricted to the flag; the gate
 /// asserts this so `index()` is census-derived. The variant name is the census
 /// id without its `CEN-` prefix (`CEN-D1b` → `D1b`).
@@ -293,10 +324,18 @@ census_rows! {
         // D7 as data on a Fakechain rule set (`DifficultyRule::Fixed`), the
         // override arm D4 consults on every block (slice 2 Q10, arm (d)).
         D7 implemented(crate::rules::difficulty::D7),
-        // 4.E Checkpoints and fast-sync trust
-        E1 pending,
+        // 4.E Checkpoints and fast-sync trust — the anchor model's rows
+        // (`CHAIN_RULES_SLICE_3.md` §0; `PDM-Q5`).
+        E1 implemented(crate::rules::anchors::E1),
+        // E2 has no Rust site: the store admits no alternative block and the
+        // main chain satisfies the anchor floor by construction. Subsumed
+        // behind the alt `ChainView` (slice 9) AND `D_max`'s numeric
+        // (`PDM-Q11`, provisional) — the D5 shape with two blockers; the
+        // longer wait governs (slice 3 §2).
         E2 pending,
-        E5 pending,
+        // E5 is enforced once, by the writer at open — not per block
+        // (slice 3 Q4 (a)); the test named is the refusal fixture.
+        E5 enforced_at(crate::rules::anchors::E5, "a_recorded_block_that_is_not_the_anchor_is_the_conflict"),
         // 4.F Miner transaction (structure and emission)
         F1 pending,
         F2 pending,

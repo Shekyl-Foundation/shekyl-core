@@ -10,7 +10,7 @@
 //! visibility across two blocks (SCW-13), and the corrupt-read → SI-7 →
 //! poison path.
 
-use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, Fault, RuleSet};
+use shekyl_chain_rules::{validate, AtHeight, Candidate, ChainView, Fault, RuleSet, Trust};
 use shekyl_types::{AttestationRoot, BlockHash, BlockHeight, CurveTreeRoot, KeyImage};
 use shekyl_wire::{Block, BlockHeader, Ct, CtBase, Input, Output, Transaction, TxPrefix};
 
@@ -393,6 +393,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
             formed(&view, Candidate::new(b1, Vec::new()))?,
             &view,
             &RuleSet::GENESIS,
+            &Trust::UNANCHORED,
         )
         .map_err(view_fault)?
         .expect("block 1 built on block 0 satisfies every landed rule");
@@ -407,6 +408,7 @@ fn a_second_block_in_one_batch_validates_against_the_chain_the_first_left() {
             formed(&view, Candidate::new(orphan, Vec::new()))?,
             &view,
             &RuleSet::GENESIS,
+            &Trust::UNANCHORED,
         )
         .map_err(view_fault)?
         else {
