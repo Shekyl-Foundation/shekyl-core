@@ -11,11 +11,14 @@
 //! - **CEN-E5** — the binary's anchors agree with the file it opens. Not a
 //!   per-block predicate: it is run **once, by the writer, at open**, over
 //!   the recorded chain ([`E5::conflict_with`]), and its verdict is a
-//!   [`AnchorConflict`] the writer remedies (pop, or refuse to run) rather
-//!   than an `InvalidBlock`. The first row this crate enforces at a site
-//!   other than `validate` — `RowStatus::EnforcedAt` is its registry status
-//!   (slice 3 Q4), excluded from per-block completeness because no
-//!   per-block coverage could ever contain it.
+//!   an [`AnchorConflict`] the writer remedies (pop to a chain count, or
+//!   refuse to run) rather than an `InvalidBlock`. The check, the conflict,
+//!   and the remedy live in this module; the table
+//!   ([`ReleaseAnchors`](crate::ReleaseAnchors)) stays data. The first row
+//!   this crate enforces at a site other than `validate` —
+//!   `RowStatus::EnforcedAt` is its registry status (slice 3 Q4), excluded
+//!   from per-block completeness because no per-block coverage could ever
+//!   contain it.
 //! - **CEN-E1** — a block connecting at an anchored height carries that
 //!   anchor's hash. Per block, view-bound ([`E1`]); reads the anchors from
 //!   the `Trust` input that carries them into `validate`.
@@ -27,9 +30,9 @@
 //!   (slice 9) *and* `D_max`'s numeric (`PDM-Q11`, provisional) — the D5
 //!   shape, with two blockers rather than one.
 
-use shekyl_types::BlockHeight;
+use shekyl_types::{BlockCount, BlockHash, BlockHeight, ChainCount};
 
-use crate::anchors::{AnchorConflict, ReleaseAnchors};
+use crate::anchors::ReleaseAnchors;
 use crate::census::CenRow;
 use crate::rules::{BlockContext, BlockRule, Rule};
 use crate::verdict::{refused, Locus, Verdict};
@@ -74,11 +77,10 @@ impl BlockRule for E1 {
 /// recorded tip names the block the file actually recorded there.
 ///
 /// What survives of the census row after `PDM-Q-F23` removed the runtime
-/// checkpoint file: C2-R1b clause (3), run once at init over the compiled-in
-/// set (`blockchain.cpp:6368` `check_against_checkpoints`). The C++ folds
-/// check and remedy into one function; here the **check** is this rule's
-/// and the **remedy** is [`AnchorConflict::remedy`]'s to state and the
-/// writer's to execute — the crate has no store handle and cannot pop.
+/// checkpoint file: C2-R1b clause (3), run once at open over the
+/// release-carried table. The check is [`E5::conflict_with`]; the remedy
+/// is [`AnchorConflict::remedy`]. The writer executes the remedy. This
+/// crate has no store handle and cannot pop.
 pub(crate) struct E5;
 
 impl Rule for E5 {
@@ -125,20 +127,108 @@ impl E5 {
     }
 }
 
-/// The C2-R1b clause (3) rollback target: two blocks before the conflict,
-/// floored at height 1 — genesis cannot be popped (`pop_block_from_blockchain`
-/// throws at `height() == 1`; `StoreCannot::PopBelowFloor` in the Rust
-/// store), so a conflict at height 1 or 2 rolls back to 1, not to a
-/// saturated 0 that would abort mid-rollback on the genesis guard
-/// (`blockchain.cpp:6403`–`:6409`, review round 4 of C2-R1b).
-pub(crate) const fn rollback_target(conflict_at: BlockHeight) -> BlockHeight {
-    const TWO_BEFORE: u64 = 2;
-    const FLOOR: u64 = 1;
-    let raw = conflict_at.to_raw();
-    if raw >= TWO_BEFORE + FLOOR {
-        BlockHeight::from_raw(raw - TWO_BEFORE)
-    } else {
-        BlockHeight::from_raw(FLOOR)
+/// A recorded chain that contradicts a release-carried anchor (CEN-E5's
+/// finding). Carries what the binary vouched for and what the file holds.
+/// [`remedy`](Self::remedy) says what the writer does about it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnchorConflict {
+    /// The anchored height.
+    pub height: BlockHeight,
+    /// The identity the release vouches for there.
+    pub expected: BlockHash,
+    /// The identity the file recorded there. `None` when the file has no
+    /// block at a height at or below its own tip — a hole where the store's
+    /// density invariant says there cannot be one.
+    pub recorded: Option<BlockHash>,
+}
+
+impl AnchorConflict {
+    /// What the writer does with this conflict (C2-R1b clause (3)).
+    ///
+    /// Genesis refuses to run: the floor that fixes every later conflict
+    /// would leave the height-0 block in place. Every other height pops
+    /// to the chain count [`Remedy::PopTo`] carries.
+    #[must_use]
+    pub const fn remedy(&self) -> Remedy {
+        if self.height.is_zero() {
+            Remedy::RefuseToRun
+        } else {
+            Remedy::PopTo(rollback_count(self.height))
+        }
+    }
+}
+
+/// The writer's response to an [`AnchorConflict`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Remedy {
+    /// The conflict is at genesis. No pop can resolve it: genesis cannot be
+    /// popped, and a chain that still holds that block still mismatches.
+    /// The file is on the wrong network for this binary; the writer does
+    /// not run.
+    RefuseToRun,
+    /// Pop until the chain has this many blocks, then resync.
+    ///
+    /// The payload is a block count, not a tip height. The tip it leaves
+    /// is [`ChainCount::tip`]: the conflicting block and the two blocks
+    /// before it are gone, and a chain too short for that keeps genesis
+    /// alone. A conflict at height 1, 2, or 3 therefore leaves genesis.
+    /// Reading the count as a tip height keeps a height-1 conflict.
+    ///
+    /// A pop the store refuses (`StoreCannot::PopBelowFloor`, the undo-log
+    /// watermark, `≥ D_max` once S-PRUNE raises it) is itself a reason not
+    /// to run (C2-R1b F-1(b)). The writer applies this; this crate has no
+    /// store.
+    PopTo(ChainCount),
+}
+
+impl ReleaseAnchors {
+    /// **CEN-E5.** The first anchor the recorded chain contradicts, if any.
+    ///
+    /// Run once, at open, before connecting anything. Anchors above the tip
+    /// are not yet checkable. An empty file contradicts nothing.
+    ///
+    /// # Errors
+    ///
+    /// The view's own fault, when it could not answer. A fault is not a
+    /// conflict.
+    pub fn conflict_with<'id, V: ChainView<'id>>(
+        &self,
+        view: &V,
+    ) -> Result<Option<AnchorConflict>, V::Fault> {
+        E5::conflict_with(self, view)
+    }
+}
+
+/// Blocks a CEN-E5 rollback discards: the conflicting anchor and the two
+/// blocks before it (C2-R1b clause (3), "a couple of blocks before").
+const ROLLBACK_DEPTH: BlockCount = {
+    const BEFORE_THE_ANCHOR: u64 = 2;
+    const THE_ANCHOR: u64 = 1;
+    BlockCount::from_raw(BEFORE_THE_ANCHOR + THE_ANCHOR)
+};
+
+/// The chain length at which a pop stops.
+///
+/// The kept tip is [`ROLLBACK_DEPTH`] below `conflict_at`. The length of
+/// the chain whose newest block is that tip is one more than
+/// [`ChainCount::from_next_height`] of it — the inverse of
+/// [`ChainCount::tip`]. A chain that cannot rewind that far keeps genesis
+/// alone ([`ChainCount`] of one). `conflict_at` of zero is not a pop;
+/// [`AnchorConflict::remedy`] refuses it.
+pub(crate) const fn rollback_count(conflict_at: BlockHeight) -> ChainCount {
+    chain_with_tip(conflict_at.saturating_sub_count(ROLLBACK_DEPTH))
+}
+
+/// The chain whose newest block is `tip`.
+///
+/// Inverse of [`ChainCount::tip`]. [`ChainCount::from_next_height`] is the
+/// chain whose *next* block would be `tip`; this chain also holds `tip`.
+const fn chain_with_tip(tip: BlockHeight) -> ChainCount {
+    match ChainCount::from_next_height(tip).checked_add(BlockCount::ONE) {
+        Some(count) => count,
+        // `tip` is `BlockHeight::MAX`. The rollback depth is non-zero, so
+        // a kept tip is at most `MAX - 1` and this arm does not run.
+        None => panic!("a chain whose tip is BlockHeight::MAX does not fit in ChainCount"),
     }
 }
 

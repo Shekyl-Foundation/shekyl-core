@@ -237,7 +237,7 @@ pub enum Flag { Consensus, Policy }
 pub enum RowStatus {
     Pending,
     Implemented,
-    EnforcedAt { site: &'static str, test: &'static str },
+    EnforcedAt, // unit: the path and the proof test stay on the registry entry
     HeldByCxx,
 }
 
@@ -618,7 +618,7 @@ impl ReleaseAnchors {
 }
 pub struct AnchorConflict { pub height: BlockHeight, pub expected: BlockHash, pub recorded: Option<BlockHash> }
 impl AnchorConflict { pub const fn remedy(&self) -> Remedy; }
-pub enum Remedy { RefuseToRun /* at genesis */, PopTo(BlockHeight) /* max(h − 2, 1) */ }
+pub enum Remedy { RefuseToRun /* at genesis */, PopTo(ChainCount) /* stop at max(h − 2, 1) blocks; the tip is count.tip() */ }
 
 pub enum Fault<V> { View(V), Stale(Stale), Corrupt(Corrupt) }
 pub enum Stale { Seed { claimed, expected, retry: Retry }, RuleSet { formed_under: RuleSet, in_force: RuleSet, retry } }
@@ -644,7 +644,7 @@ listed tx, re-homing a `Locus::Tx { slot: Lone }` / `Locus::Input { slot: Lone,
 Block-level **predicates** run in census order, each through
 `rules::run_form` (stateless, in `form`) or `rules::run` (view-bound, in
 `validate`), inserting `R::ROW` iff `R` passed. **Definition** rows record at
-their derivation site: CEN-B6 at `B6::identity` (from `ValidatedBlock::derive`);
+their derivation site: CEN-B6 at `B6::identity` (in `form`, carried on `StructurallyValid::hash`);
 CEN-D2 at `D2::longhash` (in `form`); CEN-C3 at `C3::window`, CEN-D4 at
 `D4::target` (D7 consulted inside it, D6 recorded at every `Target`
 production — `D6::mint` for LWMA-1, `D6::record` for genesis-block `1` and
@@ -655,7 +655,7 @@ Fakechain `Fixed`), CEN-D1b at `D1b::record` — all derived once in
 of a claim**, recorded at `D3::verify_seed`, whose failure is `Fault::Stale`.
 `Stale::RuleSet` compares the `RuleSet` by value: a Fakechain `Fixed`
 target reuses `RuleSetId::GENESIS`, so the id is not the set. Stage
-membership at slice 2: `form` runs B1, B2, B7 and derives D2;
+membership: `form` runs B1, B2, B7 and derives B6 and D2;
 `validate` verifies D3, derives C3/D4/D6/D7/D1b, then runs A2, B5, C1, C2,
 D1. `StructurallyValid` carries the clock reading (`judged_at`) — **the
 verdict is time-dependent**: anything that caches or defers one lets CEN-C1's

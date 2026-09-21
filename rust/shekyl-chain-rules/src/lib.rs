@@ -128,7 +128,7 @@ mod view;
 #[cfg(any(test, feature = "harness"))]
 pub mod harness;
 
-pub use anchors::{Anchor, AnchorConflict, ReleaseAnchors, Remedy};
+pub use anchors::{Anchor, ReleaseAnchors};
 pub use block::{Candidate, StructurallyValid, TxIdentity, ValidatedBlock};
 pub use census::{CenRow, Flag, PolicyRow, Row, RowStatus};
 pub use coverage::{Coverage, PolicyCoverage, RuleCoverage};
@@ -136,6 +136,7 @@ pub use fault::{Corrupt, Fault, FormAttempt, Retry, Stale, MAX_FORM_ATTEMPTS};
 pub use rule_set::{
     AdmissionPolicy, AdmissionPolicyId, DifficultyRule, RuleSchedule, RuleSet, RuleSetId,
 };
+pub use rules::anchors::{AnchorConflict, Remedy};
 pub use rules::difficulty::Target;
 pub use rules::seed_height;
 pub use substrate::Substrate;

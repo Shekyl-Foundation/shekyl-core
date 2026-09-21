@@ -228,7 +228,8 @@
   where vacuous; CEN-E5 (the recorded chain agrees with the binary's anchors)
   is `ReleaseAnchors::conflict_with`, run by the writer at open, with the
   C2-R1b remedy stated once as `AnchorConflict::remedy` (`RefuseToRun` at a
-  genesis conflict; `PopTo(max(h − 2, 1))` otherwise). CEN-E2 has no Rust
+  genesis conflict; `PopTo` a `ChainCount` otherwise — stop at `max(h − 2, 1)`
+  blocks, whose tip is `count.tip()`). CEN-E2 has no Rust
   site (the store admits no alternative block) and waits on the alt view and
   `D_max`. The block identity (CEN-B6) is now derived once in `form` and
   carried on `StructurallyValid::hash`. The registry gains

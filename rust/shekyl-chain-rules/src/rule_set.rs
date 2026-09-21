@@ -182,12 +182,10 @@ impl RuleSet {
     /// measures `enforced − held − at-open` — the census denominator itself
     /// never moves for either (the gate prints the subtractions beside it).
     pub fn enforced(&self) -> impl Iterator<Item = CenRow> + '_ {
-        self.enforced.iter().copied().filter(|row| {
-            !matches!(
-                row.status(),
-                RowStatus::HeldByCxx | RowStatus::EnforcedAt { .. }
-            )
-        })
+        self.enforced
+            .iter()
+            .copied()
+            .filter(|row| !matches!(row.status(), RowStatus::HeldByCxx | RowStatus::EnforcedAt))
     }
 
     /// A rule set that admits `header_major_version`, for the version-rule

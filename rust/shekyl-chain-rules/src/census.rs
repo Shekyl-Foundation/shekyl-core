@@ -66,26 +66,25 @@ pub enum RowStatus {
     /// `form` / `validate` run it per block.
     Implemented,
     /// A rule type is registered and compile-pinned, and **this crate**
-    /// enforces it — but at a site other than the per-block stages, so no
+    /// enforces it at a site other than the per-block stages, so no
     /// per-block coverage could ever contain it (`CHAIN_RULES_SLICE_3.md`
     /// Q4). The first is CEN-E5, run once by the writer at open
     /// (`ReleaseAnchors::conflict_with`); CEN-A1 and CEN-A4 take this
     /// status at cutover, when their C++ holder leaves and the Rust ingest
-    /// driver decides acceptance topology. `site` is the registered type's
-    /// path; `test` names the Rust `#[test]` in this crate that proves the
-    /// site refuses — the gate asserts it exists (rule 47), as it does a
-    /// `held_by_cxx` holder's. Excluded from
-    /// [`RuleSet::enforced`](crate::RuleSet::enforced) for the same reason a
-    /// hold is (per-block completeness is measured over what `validate`
-    /// evaluates) and, unlike a hold, **counted as Rust-enforced** by the
-    /// gate: `held_by_cxx` would be false here — the enforcement is not the
-    /// C++'s.
-    EnforcedAt {
-        /// The registered rule type, as written in the registry.
-        site: &'static str,
-        /// The `#[test]` function in this crate that proves the site refuses.
-        test: &'static str,
-    },
+    /// driver decides acceptance topology.
+    ///
+    /// The registry entry carries the citation — `enforced_at(path, "test")`
+    /// — and that is the only copy. The path is compile-pinned; the gate
+    /// asserts the named `#[test]` is defined in this crate (rule 47). A
+    /// string stored on the value would be a second copy nothing reads, free
+    /// to drift from the entry. Same shape as [`HeldByCxx`](Self::HeldByCxx).
+    ///
+    /// Excluded from [`RuleSet::enforced`](crate::RuleSet::enforced) for the
+    /// same reason a hold is (per-block completeness is measured over what
+    /// `validate` evaluates) and, unlike a hold, **counted as Rust-enforced**
+    /// by the gate: `held_by_cxx` would be false here — the enforcement is
+    /// not the C++'s.
+    EnforcedAt,
     /// Acceptance topology the C++ ingest driver decides — where a block
     /// *goes* (`ALREADY_EXISTS`, `ORPHANED`), not whether it is valid — and
     /// so not a predicate `validate` can evaluate (`CHAIN_RULES_SLICE_1.md`
@@ -137,10 +136,7 @@ macro_rules! census_status {
         $crate::census::RowStatus::Implemented
     };
     (enforced_at($path:path, $test:literal)) => {
-        $crate::census::RowStatus::EnforcedAt {
-            site: stringify!($path),
-            test: $test,
-        }
+        $crate::census::RowStatus::EnforcedAt
     };
     (held_by_cxx($file:literal, $test:literal)) => {
         $crate::census::RowStatus::HeldByCxx

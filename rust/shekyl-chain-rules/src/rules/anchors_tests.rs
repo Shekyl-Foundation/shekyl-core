@@ -8,7 +8,7 @@
 //! block at an anchored height is not the anchor.
 
 use super::*;
-use crate::anchors::{Anchor, Remedy};
+use crate::anchors::Anchor;
 use crate::harness::fixture::{candidate_on, recorded, root};
 use crate::harness::{assert_refused, formed_on, infallible, judged, FaultingView, MockChain};
 use crate::rule_set::RuleSet;
@@ -200,39 +200,42 @@ fn a_faulting_view_is_a_fault_not_a_verdict() {
     assert!(ReleaseAnchors::EMPTY.conflict_with(&view).is_err());
 }
 
-/// The remedy is C2-R1b clause (3): refuse at genesis; otherwise pop to two
-/// blocks before the conflict, floored at 1 (heights 1 and 2 both roll back
-/// to 1, never to a saturated 0).
+/// The remedy is C2-R1b clause (3), as a chain count. Genesis refuses.
+/// Every other conflict pops until this many blocks remain: the count whose
+/// tip is the conflict and the two blocks before it, or genesis alone when
+/// the chain is shorter than that. A conflict at height 1 leaves genesis,
+/// so the conflicting block is removed.
 #[test]
-fn the_remedy_refuses_at_genesis_and_pops_to_two_before_floored_at_one() {
+fn the_remedy_refuses_at_genesis_and_pops_to_a_chain_count() {
     let at = |height: u64| AnchorConflict {
         height: BlockHeight::from_raw(height),
         expected: OTHER,
         recorded: None,
     };
     assert_eq!(at(0).remedy(), Remedy::RefuseToRun);
-    assert_eq!(at(1).remedy(), Remedy::PopTo(BlockHeight::from_raw(1)));
-    assert_eq!(at(2).remedy(), Remedy::PopTo(BlockHeight::from_raw(1)));
-    assert_eq!(at(3).remedy(), Remedy::PopTo(BlockHeight::from_raw(1)));
-    assert_eq!(at(4).remedy(), Remedy::PopTo(BlockHeight::from_raw(2)));
-    assert_eq!(at(1000).remedy(), Remedy::PopTo(BlockHeight::from_raw(998)));
-}
-
-/// The rollback arithmetic alone, at the floor boundary.
-#[test]
-fn rollback_target_is_two_before_floored_at_one() {
-    for (conflict, target) in [
-        (1, 1),
-        (2, 1),
-        (3, 1),
-        (4, 2),
-        (5, 3),
-        (u64::MAX, u64::MAX - 2),
+    // conflict ordinal, stop count, tip that count leaves
+    for (conflict, count, tip) in [
+        (1, 1, 0),
+        (2, 1, 0),
+        (3, 1, 0),
+        (4, 2, 1),
+        (5, 3, 2),
+        (1000, 998, 997),
+        (u64::MAX, u64::MAX - 2, u64::MAX - 3),
     ] {
+        let Remedy::PopTo(got) = at(conflict).remedy() else {
+            panic!("conflict at {conflict} pops");
+        };
+        assert_eq!(got, ChainCount::from_raw(count), "count at {conflict}");
         assert_eq!(
-            rollback_target(BlockHeight::from_raw(conflict)),
-            BlockHeight::from_raw(target),
-            "conflict at {conflict}"
+            got.tip(),
+            Some(BlockHeight::from_raw(tip)),
+            "tip at {conflict}"
+        );
+        assert_eq!(
+            rollback_count(BlockHeight::from_raw(conflict)),
+            got,
+            "remedy and rollback_count agree at {conflict}"
         );
     }
 }

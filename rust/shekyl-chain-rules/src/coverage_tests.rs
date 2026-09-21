@@ -115,7 +115,7 @@ fn complete_means_every_validator_enforced_row_and_nothing_less() {
         .count();
     let at_open = CenRow::ALL
         .iter()
-        .filter(|row| matches!(row.status(), RowStatus::EnforcedAt { .. }))
+        .filter(|row| row.status() == RowStatus::EnforcedAt)
         .count();
     let mut coverage = RuleCoverage::EMPTY;
     for row in RuleSet::GENESIS.enforced() {

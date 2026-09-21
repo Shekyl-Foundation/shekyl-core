@@ -129,12 +129,7 @@ fn genesis_enforces_the_census_minus_held_rows_in_order() {
     let expected: Vec<CenRow> = CenRow::ALL
         .iter()
         .copied()
-        .filter(|row| {
-            !matches!(
-                row.status(),
-                RowStatus::HeldByCxx | RowStatus::EnforcedAt { .. }
-            )
-        })
+        .filter(|row| !matches!(row.status(), RowStatus::HeldByCxx | RowStatus::EnforcedAt))
         .collect();
     assert_eq!(enforced, expected);
     assert_eq!(

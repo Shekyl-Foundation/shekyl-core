@@ -112,7 +112,7 @@ drifted (F2). The *site* column below is the live one.
 | --- | --- | --- | --- | --- | --- |
 | CEN-E1 | 2 | at a checkpointed height the block id must equal the checkpoint hash (main **and** alt admission; an alt match *forces* the reorg) | **none** — no anchor table, no predicate | main `blockchain.cpp:5545`–`:5552` (`is_in_checkpoint_zone` → `check_block`); alt `:2186`–`:2192` (`check_block(…, is_a_checkpoint)`), the forced switch `:2446` | **Land** — the anchor's own rule (`PDM-Q5`, Q11): `anchors.expected_at(connecting) == candidate.hash` when an anchor sits at `connecting`; vacuous otherwise, **recorded as evaluated** either way (the C++ records nothing; the Rust coverage says the row ran). View-bound: the height is the tip's. Needs B6 **before** the rules (F8). The *forced-reorg* clause is an alt-chain consequence and belongs with E2's alt home (slice 9), not here. |
 | CEN-E2 | 2 | an alternative block at or below the last checkpoint preceding the current height is refused; **home of `D_max`** (Q11: a second band, the rolling cap, when the Rust validator takes it) | **none** | `blockchain.cpp:2105`–`:2110` → `checkpoints.cpp:97`–`:109` (`is_alternative_block_allowed`) | **Subsumed pending the alt view (slice 9)** — the D5 shape. On the main chain the predicate holds by construction: `is_alternative_block_allowed(H, h)` requires `last_anchor_at_or_below(H) < h`, and a main-chain candidate has `h = tip + 1 > H ≥ any anchor ≤ H`. Its only refusing arm is alt admission, which no Rust path has. Stays `pending` with a `subsumed-by` registry comment. **Subsumed behind two things, and the wait is the longer of them:** the alt `ChainView` (slice 9 — D5 waits on the same view, and slice 9 has a table-3 position but no schedule), and `D_max`'s band (`PDM-Q11`: shape frozen, **numeric provisional** at 720, re-pinned at the Round-2 testnet gate as one of four numerics). *"Pending the alt view"* alone would imply the shorter wait. **Re-keyed in the census now** (F30 binds the re-key to this PR; §8 Q3), with both blockers named in the row. |
-| CEN-E5 | 2 | *(mechanism removed, `PDM-Q-F23`)* **what survives:** at init the recorded chain is checked against the compiled-in set; a conflict below tip rolls back to `max(checkpoint − 2, 1)`; a conflict **at genesis** fail-stops (*"wrong network for the binary"*); a rollback that would cross the prune watermark fail-stops | **none** | `blockchain.cpp:6368`–`:6450` (`check_against_checkpoints`), `:6452` (`enforce_checkpoints`), `cryptonote_core.cpp:660` (fail-stop `core::init`) | **Land the predicate, hand the remedy to the writer.** The *rule* is E1 over the recorded chain instead of the candidate: for every anchor with `height < chain height`, `block_at(height).hash == anchor.hash`, else `AnchorConflict { height, expected, recorded }`. The *remedy* (pop to `max(h − 2, 1)`; refuse at genesis; refuse when the pop would cross the floor — `StoreCannot::PopBelowFloor` already exists, `pop.rs:87`) is the writer's, and the writer is the E2 driver at open. E5 is thus enforced at a site other than `validate` — the registry needs a status for that (§8 Q4). C++ holder today: `tests/core_tests/checkpoint_conflict_rollback.cpp :: gen_checkpoint_conflict_rollback`. |
+| CEN-E5 | 2 | *(mechanism removed, `PDM-Q-F23`)* **what survives:** at init the recorded chain is checked against the compiled-in set; a conflict below tip rolls back to `max(checkpoint − 2, 1)`; a conflict **at genesis** fail-stops (*"wrong network for the binary"*); a rollback that would cross the prune watermark fail-stops | **none** | `blockchain.cpp:6368`–`:6450` (`check_against_checkpoints`), `:6452` (`enforce_checkpoints`), `cryptonote_core.cpp:660` (fail-stop `core::init`) | **Land the predicate, hand the remedy to the writer.** The *rule* is E1 over the recorded chain instead of the candidate: for every anchor with `height < chain height`, `block_at(height).hash == anchor.hash`, else `AnchorConflict { height, expected, recorded }`. The *remedy* (pop until the block count is `max(h − 2, 1)`, a `ChainCount` whose tip is `count.tip()` — UPDATE 2026-09-21: not a tip height; refuse at genesis; refuse when the pop would cross the floor — `StoreCannot::PopBelowFloor` already exists, `pop.rs:87`) is the writer's, and the writer is the E2 driver at open. E5 is thus enforced at a site other than `validate` — the registry needs a status for that (§8 Q4). C++ holder today: `tests/core_tests/checkpoint_conflict_rollback.cpp :: gen_checkpoint_conflict_rollback`. |
 
 Row-count check: 3 = the `pending` entries at `census.rs:297`–`:299`.
 
@@ -212,7 +212,7 @@ Why the anchors ride on a `Trust` value rather than on `RuleSet`,
 ### 4.2 The two predicates
 
 - **E1** (`rules/anchors.rs`, `BlockRule`): `match cx.trust.anchors().expected_at(cx.connecting) { Some(expected) if expected != cx.hash => refuse, _ => pass }`, recorded evaluated on both paths. Reads `cx.hash` — B6's identity, on `BlockContext` after F8's move.
-- **E5** (`ReleaseAnchors::conflict_with<'id, V: ChainView<'id>>(&self, view: &V) -> Result<Option<AnchorConflict>, V::Fault>`): for each anchor below the tip, compare `view.block_at(height)` (an `AtHeight::Recorded`; `Absent` at an anchored height below tip is itself the conflict — the file is missing a block it claims) against the table; the first mismatch is the conflict. `AnchorConflict { height, expected, recorded: Option<BlockHash> }`. The **remedy** is documented on the type, executed by the writer: *at genesis → refuse to run (wrong network for this binary); else pop to `max(height − 2, 1)`, each `pop()` refusing at the floor.*
+- **E5** (`ReleaseAnchors::conflict_with<'id, V: ChainView<'id>>(&self, view: &V) -> Result<Option<AnchorConflict>, V::Fault>`): for each anchor below the tip, compare `view.block_at(height)` (an `AtHeight::Recorded`; `Absent` at an anchored height below tip is itself the conflict — the file is missing a block it claims) against the table; the first mismatch is the conflict. `AnchorConflict { height, expected, recorded: Option<BlockHash> }`. The **remedy** is documented on the type, executed by the writer: *at genesis → refuse to run (wrong network for this binary); else pop until the chain count is `max(height − 2, 1)` (a `ChainCount`; the tip is `count.tip()`), each `pop()` refusing at the floor.*
 
 ### 4.3 B6 moves to the head of `validate` (F8)
 
@@ -249,7 +249,7 @@ Commit plan (rules crate first; the signature commit sequenced per Q2):
    scope depend on another lane's timing, which is how a PR grows between
    plan and push). The row names `ReleaseAnchors::conflict_with` as the
    callee, the driver's open path as the site, and the remedy verbatim: pop
-   to `max(h − 2, 1)`, refuse at genesis, refuse across the prune floor
+   until the chain count is `max(h − 2, 1)`, refuse at genesis, refuse across the prune floor
    (`StoreCannot::PopBelowFloor`, already landed).
 
 Commit order on the branch: 1, 2, 5, then 3 and 4 (the signature and the
@@ -299,10 +299,16 @@ B6 derived once in `form`, carried as `StructurallyValid::hash` — one stage
 earlier than Q7 asked, same property, outside the write transaction; the
 token's `Debug` was re-hashing the block and now prints the field. **c5**
 `E5::conflict_with` (public as `ReleaseAnchors::conflict_with`),
-`AnchorConflict::remedy` → `Remedy::{RefuseToRun, PopTo}` with
-`rollback_target` pinned at the floor; `RowStatus::EnforcedAt { site, test }`
-/ `enforced_at(path, "test")` with the gate asserting the proof test is
-*defined* (12 self-test cases); `RuleSet::enforced()` excludes it; the gate's
+`AnchorConflict` and `Remedy` beside the rule. **UPDATE 2026-09-21:**
+`PopTo` carries a `ChainCount` — `max(h − 2, 1)` blocks, the quantity
+`m_db->height()` was — not a tip height. `count.tip()` is the ordinal
+that count leaves (genesis alone at heights 1, 2, and 3). The check, the
+conflict, and the remedy live in `rules/anchors.rs`; `anchors.rs` is the
+table. `RowStatus::EnforcedAt` is a unit variant: the path and the proof
+test stay on the `enforced_at(path, "test")` entry, which is what the gate
+parses, so the value cannot drift from the entry. The gate asserts the
+proof test is *defined* (12 self-test cases); `RuleSet::enforced()` excludes
+it; the gate's
 `at-open` term. **c3+c4** `Trust { anchors }` / `Trust::full` /
 `Trust::UNANCHORED`; `validate(…, trust: &Trust)`; `BlockContext.trust`;
 E1 in the block list with four fixtures; the harness probe re-labelled to

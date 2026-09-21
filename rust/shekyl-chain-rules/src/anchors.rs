@@ -25,9 +25,9 @@
 //!
 //! - **CEN-E1**, the anchor's own rule (`PDM-Q11`): a block connecting at an
 //!   anchored height must carry that anchor's hash.
-//! - **CEN-E5**, the binary's anchors agree with the file it opens:
-//!   [`ReleaseAnchors::conflict_with`] over a recorded chain, run by the
-//!   writer at open; the remedy (pop, or refuse to run) is the writer's.
+//! - **CEN-E5**, the binary's anchors agree with the file it opens. The
+//!   check and its remedy live with the rule (`rules::anchors`): the writer
+//!   calls [`ReleaseAnchors::conflict_with`] once, at open.
 //! - **`Trust`** (`CHAIN_RULES_SLICE_3.md` §4.1): the input that carries the
 //!   anchors into `validate`, and — from slice 6 — the below-anchor posture
 //!   `PDM-Q5` `:293` defines as band 1's skeleton. `Trust::below_anchor` is
@@ -48,9 +48,6 @@ use core::fmt;
 
 use shekyl_address::Network;
 use shekyl_types::{BlockHash, BlockHeight};
-
-use crate::rules::anchors::{rollback_target, E5};
-use crate::view::ChainView;
 
 /// One release-carried anchor: the block the binary vouches for at
 /// `height`.
@@ -149,80 +146,12 @@ impl ReleaseAnchors {
         self.current().is_some_and(|anchor| height <= anchor.height)
     }
 
-    /// **CEN-E5.** The first anchor the recorded chain contradicts, if any.
-    ///
-    /// The writer runs this **once, at open**, before connecting anything:
-    /// a file whose recorded block at an anchored height is not the anchor
-    /// is on a chain this binary does not vouch for, and the writer applies
-    /// [`AnchorConflict::remedy`] — pops to the rollback target, or refuses
-    /// to run when no pop can help. Anchors above the tip are not yet
-    /// checkable and are skipped; an empty file contradicts nothing.
-    ///
-    /// # Errors
-    ///
-    /// The view's own fault, when it could not answer. A fault is not a
-    /// conflict.
-    pub fn conflict_with<'id, V: ChainView<'id>>(
-        &self,
-        view: &V,
-    ) -> Result<Option<AnchorConflict>, V::Fault> {
-        E5::conflict_with(self, view)
-    }
-
     /// The entries, ascending. Crate-private: callers read through the
     /// named accessors so the table is never mistaken for a list to consult
     /// freely; the rules iterate it.
     pub(crate) const fn entries(&self) -> &'static [Anchor] {
         self.entries
     }
-}
-
-/// A recorded chain that contradicts a release-carried anchor (CEN-E5's
-/// finding). Carries what the binary vouched for and what the file holds;
-/// [`remedy`](Self::remedy) says what the writer does about it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AnchorConflict {
-    /// The anchored height.
-    pub height: BlockHeight,
-    /// The identity the release vouches for there.
-    pub expected: BlockHash,
-    /// The identity the file recorded there — `None` when the file has no
-    /// block at a height at or below its own tip (a hole where the store's
-    /// density invariant says there cannot be one).
-    pub recorded: Option<BlockHash>,
-}
-
-impl AnchorConflict {
-    /// What the writer does with this conflict — C2-R1b clause (3), the
-    /// rule the C++ `check_against_checkpoints` applies, stated once here
-    /// so no writer re-derives the floor.
-    #[must_use]
-    pub const fn remedy(&self) -> Remedy {
-        if self.height.is_zero() {
-            Remedy::RefuseToRun
-        } else {
-            Remedy::PopTo(rollback_target(self.height))
-        }
-    }
-}
-
-/// The writer's response to an [`AnchorConflict`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Remedy {
-    /// The conflict is **at genesis**: no pop can resolve it — genesis
-    /// cannot be popped, and rolling back to a chain whose height-0 block
-    /// still mismatches would report the conflict resolved while fixing
-    /// nothing. The file is on the wrong network for this binary; the
-    /// writer does not run (`blockchain.cpp:6383`–`:6395`, the
-    /// reports-success shape's fourth instance).
-    RefuseToRun,
-    /// Pop until the tip is at this height — two blocks before the
-    /// conflict, floored at 1 — then resync. A pop the store refuses
-    /// (`StoreCannot::PopBelowFloor`: the undo log's watermark, `≥ D_max`
-    /// once S-PRUNE raises it) is itself a reason not to run: a node may
-    /// not keep running in contradiction with an anchor it accepted
-    /// (C2-R1b F-1(b)).
-    PopTo(BlockHeight),
 }
 
 impl fmt::Debug for ReleaseAnchors {
