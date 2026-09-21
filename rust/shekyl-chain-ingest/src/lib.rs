@@ -54,16 +54,34 @@
 
 #[cfg(test)]
 mod artifact_tests;
+pub mod connector;
 pub mod corpus;
 pub mod fetch;
+pub mod grader;
+pub mod metrics;
+pub mod pipeline;
+#[cfg(test)]
+mod pipeline_tests;
+pub mod schedule;
+pub mod seed;
+pub mod sequencer;
 pub mod source;
+pub mod stage;
 pub mod substrate;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod trace;
 
+pub use connector::{Applied, Apply, Connector, ConnectorArgs, Digest, Rewind, Rewound, RunFault};
 pub use corpus::{CorpusFault, CorpusNet, CorpusReader, CorpusWriter, CORPUS_FORMAT_VERSION};
 pub use fetch::{fetch_corpus, FetchFault};
+pub use grader::{grade_run, GradedRun, Observations, Register};
+pub use metrics::{Metrics, MetricsArtifact};
+pub use pipeline::{run, PipelineConfig, PipelineFault, RunReport, Switch};
+pub use schedule::{Chain, ChainRules, FixedDifficultyRefused};
+pub use seed::{SeedLedger, SeedSchedule};
+pub use sequencer::{SequenceError, Sequencer};
 pub use source::{IngestEvent, SequenceNo, Sequenced, Source};
-pub use substrate::{ProductionSubstrate, SubstrateFault};
+pub use stage::{form_extend, Staged};
+pub use substrate::{EpochPin, ProductionSubstrate, SubstrateFault};
 pub use trace::{Facts, Trace, TraceFault, TraceWriter};

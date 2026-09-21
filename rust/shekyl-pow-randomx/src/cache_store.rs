@@ -365,6 +365,21 @@ impl Drop for LeaderGuard<'_> {
     }
 }
 
+/// How a [`CacheStore::lookup_or_derive_reporting`] call was served —
+/// the fact a caller measuring derivation cost needs and cannot recover
+/// from the returned cache: a follower that waited out the leader's
+/// Argon2d fill spent the same wall time as the leader and did none of
+/// the work (DRS-E2 RD-F11's instrument counts derivations, not callers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheOutcome {
+    /// Found in the canonical or transient slot.
+    Hit,
+    /// This call ran [`PreparedCache::derive`].
+    Derived,
+    /// Another call was deriving the same seed; this one waited for it.
+    Waited,
+}
+
 /// Internal role assigned by the in-flight-map dispatch step. The
 /// leader owns the derivation; followers clone the slot and wait.
 enum DerivationRole {
@@ -476,14 +491,23 @@ impl CacheStore {
     /// is load-bearing under `panic = "unwind"` profiles (notably
     /// `cargo test`, which always uses unwind).
     pub fn lookup_or_derive(&self, seedhash: &Seedhash) -> Arc<PreparedCache> {
+        self.lookup_or_derive_reporting(seedhash).0
+    }
+
+    /// [`Self::lookup_or_derive`], also saying how the call was served
+    /// ([`CacheOutcome`]). Same cost, same dedup, same panics.
+    pub fn lookup_or_derive_reporting(
+        &self,
+        seedhash: &Seedhash,
+    ) -> (Arc<PreparedCache>, CacheOutcome) {
         if let Some(p) = self.lookup(seedhash) {
-            return p;
+            return (p, CacheOutcome::Hit);
         }
 
         let role = {
             let mut in_flight = self.in_flight.lock().unwrap();
             if let Some(p) = self.lookup(seedhash) {
-                return p;
+                return (p, CacheOutcome::Hit);
             }
             match in_flight.get(seedhash) {
                 Some(slot) => DerivationRole::Follower(Arc::clone(slot)),
@@ -515,9 +539,9 @@ impl CacheStore {
                     *t = Some(Arc::clone(&prepared));
                 }
                 guard.mark_success();
-                prepared
+                (prepared, CacheOutcome::Derived)
             }
-            DerivationRole::Follower(slot) => slot.wait_for_result(),
+            DerivationRole::Follower(slot) => (slot.wait_for_result(), CacheOutcome::Waited),
         }
     }
 

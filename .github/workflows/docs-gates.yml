@@ -208,6 +208,13 @@ jobs:
         if: '!cancelled()'
         run: python3 scripts/ci/check_followups_owners.py --selftest
 
+      - name: Run the conformance-register extractor self-test
+        # DRS-E2 RD-Q6: the E2 grader's register is the coverage gate's own
+        # parse, serialized; the self-test holds the emitted tally equal to
+        # the gate's so the serialization cannot drift from the parse.
+        if: '!cancelled()'
+        run: python3 scripts/ci/export_conformance_register.py --selftest
+
       - name: Run code-citation resolver
         # Every code citation in the pinned review documents must resolve to
         # exactly one tracked file at the era that document declares — its

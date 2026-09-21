@@ -191,7 +191,7 @@ mod vm;
 mod vm_pool;
 
 pub(crate) use cache::Cache;
-pub use cache_store::CacheStore;
+pub use cache_store::{CacheOutcome, CacheStore};
 pub use prepared_cache::PreparedCache;
 pub use seedhash::Seedhash;
 pub use vm::compute_hash;
