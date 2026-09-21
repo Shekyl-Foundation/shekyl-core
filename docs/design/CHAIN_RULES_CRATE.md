@@ -1271,7 +1271,15 @@ state-shaped enum), but a third relocation in a scaffold PR, not proposed here.
   `validate` acquires callers beyond the store tests and the E2 driver —
   the signature is one parameter today and every later caller is a retrofit
   (SCW-7's standard). Falsify by: a band-1 sync test that connects a
-  skeleton block under `RuleSet::GENESIS` and is refused.
+  skeleton block under `RuleSet::GENESIS` and is refused. **Slice 3 opened
+  first (2026-09-20, [`CHAIN_RULES_SLICE_3.md`](CHAIN_RULES_SLICE_3.md) §4.1,
+  Q1):** Round-0 default is the `Trust` parameter in its final position,
+  carrying the release anchors E1 reads today, with the posture arm (and
+  this item's falsifier, which cannot run until a proof row exists to skip
+  and a skeleton block has a type — slice 3 F10) arriving in slice 6 through
+  a second constructor so no caller is retrofitted. `validate` has one
+  production caller at the time of the decision (`shekyl-chain-ingest`
+  `connector.rs:271`, PR #806).
 - **`TxIdentity::pqc_auth_hash: Option<PqcAuthHash>`** — **LANDED in the
   `tip()` PR (slice 1, 2026-09-17)**, items 1 **and** 2 of
   `DAEMON_REDB_STORE.md` §7.7's plan for `PDM-Q-F26` (PR #765): the
