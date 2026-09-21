@@ -13,7 +13,6 @@ use shekyl_chain_rules::{
     form, validate, AtHeight, Candidate, ChainValid, ChainView, Fault, FormAttempt, RuleSet,
     StructurallyValid, Substrate,
 };
-use shekyl_difficulty::{seedheight, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG};
 use shekyl_types::{
     AttestationRoot, BlockHash, BlockHeight, BlockWeight, CurveTreeRoot, LongTermWeight, PowHash,
     Timestamp,
@@ -178,15 +177,15 @@ impl Substrate for FixtureSubstrate {
 
 /// The seed CEN-D3 expects for a candidate on `view`'s tip — what an honest
 /// driver claims to `form`: the null hash at genesis admission, else the
-/// identity of the block at `seedheight(connecting)`. Read from the same
-/// view the verdict will be minted against, as E2's replay driver will.
+/// identity of the block at `shekyl_chain_rules::seed_height(connecting)`.
+/// Read from the same view the verdict will be minted against, as E2's
+/// replay driver will.
 fn expected_seed<'id, V: ChainView<'id>>(view: &V) -> Result<BlockHash, V::Fault> {
-    let Some(tip) = view.tip()? else {
+    let connecting = BlockHeight::from_raw(view.tip()?.map_or(0, |tip| tip.height.to_raw() + 1));
+    let Some(seed_height) = shekyl_chain_rules::seed_height(connecting) else {
         return Ok(BlockHash::NULL);
     };
-    let connecting = tip.height.to_raw() + 1;
-    let seed_height = seedheight(connecting, SEEDHASH_EPOCH_BLOCKS, SEEDHASH_EPOCH_LAG);
-    Ok(match view.block_at(BlockHeight::from_raw(seed_height))? {
+    Ok(match view.block_at(seed_height)? {
         AtHeight::Recorded(block) => block.hash,
         AtHeight::AboveTip => panic!("the seed height is below the tip"),
     })

@@ -107,7 +107,26 @@ impl D2 {
     }
 }
 
-/// CEN-D3: the seed is the block id at `seedheight(h)` — epoch 2048, lag
+/// CEN-D3's schedule, stated once for every consumer: the height whose block
+/// id seeds the RandomX cache for a block connecting at `connecting`, or
+/// `None` at genesis admission — no block exists yet, and the seed is
+/// [`BlockHash::NULL`] (module docs). The mainnet constants at every
+/// nettype; no environment is read (slice 2 F5). The validator (D3), the
+/// harness and the ingest driver's seed claim all call this, so the claim
+/// and the check cannot spell the schedule differently.
+#[must_use]
+pub const fn seed_height(connecting: BlockHeight) -> Option<BlockHeight> {
+    if connecting.is_zero() {
+        return None;
+    }
+    Some(BlockHeight::from_raw(seedheight(
+        connecting.to_raw(),
+        SEEDHASH_EPOCH_BLOCKS,
+        SEEDHASH_EPOCH_LAG,
+    )))
+}
+
+/// CEN-D3: the seed is the block id at [`seed_height`] — epoch 2048, lag
 /// 64 — or the null hash before block 0 exists.
 ///
 /// Verifies the claim `form` was given against the committing view
@@ -124,15 +143,10 @@ impl D3 {
         view: &V,
         connecting: BlockHeight,
     ) -> Result<BlockHash, V::Fault> {
-        if connecting.is_zero() {
+        let Some(seed_height) = seed_height(connecting) else {
             return Ok(BlockHash::NULL);
-        }
-        let seed_height = seedheight(
-            connecting.to_raw(),
-            SEEDHASH_EPOCH_BLOCKS,
-            SEEDHASH_EPOCH_LAG,
-        );
-        Ok(match view.block_at(BlockHeight::from_raw(seed_height))? {
+        };
+        Ok(match view.block_at(seed_height)? {
             AtHeight::Recorded(block) => block.hash,
             // `seed_height ≤ connecting − 1 − SEEDHASH_EPOCH_LAG` (or 0) is
             // below the tip on a conforming view; a hole is the store's SI-7,

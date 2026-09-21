@@ -27,6 +27,10 @@ impl Scripted {
 impl Source for Scripted {
     type Fault = Infallible;
 
+    fn first_height(&self) -> BlockHeight {
+        BlockHeight::ZERO
+    }
+
     fn next(&mut self) -> Result<Option<Sequenced<IngestEvent>>, Infallible> {
         Ok(self.events.next().map(|event| {
             let seq = self.seq;
