@@ -11,7 +11,8 @@
 //! [`Substrate`] (clock, longhash — the world, not the chain) and yields a
 //! [`StructurallyValid`], stateless and outside any transaction;
 //! [`validate`] takes that, a `ChainView<'id>` (narrow, read-only trait over
-//! **recorded** chain facts) and the rule set in force, and yields
+//! **recorded** chain facts), the rule set in force and the node's [`Trust`]
+//! (the release anchors; from slice 6, the below-anchor posture), and yields
 //! `ChainValid<'id, V>` or `InvalidBlock { rule: CenRow, .. }` — or a
 //! [`Fault`], which is neither. Ruled in
 //! [`CONSENSUS_C2_R8_STORE_PLACEMENT.md`](../../docs/completed/CONSENSUS_C2_R8_STORE_PLACEMENT.md)
@@ -51,7 +52,11 @@
 //! (`CHAIN_RULES_SLICE_1.md`) landed 4.A/4.B's six predicate rows; slice 2
 //! (`CHAIN_RULES_SLICE_2.md`) landed 4.C and 4.D — the two-stage split,
 //! [`Substrate`], and ten rows (C1–C3, D1, D1b, D2, D3, D4, D6, D7; D5 is
-//! subsumed by D4 over an alt view and closes with slice 9). Only complete
+//! subsumed by D4 over an alt view and closes with slice 9); slice 3
+//! (`CHAIN_RULES_SLICE_3.md`) housed `PDM-Q5`'s anchor model — the
+//! release-carried [`ReleaseAnchors`], the [`Trust`] input to `validate`,
+//! CEN-E1 per block and CEN-E5 at writer open (the first `enforced_at` row;
+//! E2 waits on the alt view and `D_max`). Only complete
 //! coverage is parity evidence, so no verdict minted before the last slice
 //! can be read as one.
 //!

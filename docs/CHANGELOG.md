@@ -215,6 +215,27 @@
   and is unhittable. The Reinstate pop arm no longer calls
   `set_total_bonded_atomic` — connect does not move the counter.
 
+- **The anchor model has a Rust home (DRS-E6 slice 3, census 4.E).**
+  `shekyl-chain-rules` gains `ReleaseAnchors` — the release-carried
+  `assumevalid` anchor table `PDM-Q5` ratified, as `const` data per network
+  shipped with the binary (never an operator-editable file; every table is
+  empty until the first checkpoint release) — and `Trust`, a fourth input to
+  `validate(formed, view, rule_set, trust)` orthogonal to `RuleSet`
+  (**API change**: every caller passes `&Trust::UNANCHORED` or
+  `&Trust::full(ReleaseAnchors::for_network(net))`; the below-anchor posture
+  arrives in slice 6 by a second constructor). CEN-E1 (a block at an anchored
+  height carries the anchor's hash) is evaluated per block and recorded even
+  where vacuous; CEN-E5 (the recorded chain agrees with the binary's anchors)
+  is `ReleaseAnchors::conflict_with`, run by the writer at open, with the
+  C2-R1b remedy stated once as `AnchorConflict::remedy` (`RefuseToRun` at a
+  genesis conflict; `PopTo(max(h − 2, 1))` otherwise). CEN-E2 has no Rust
+  site (the store admits no alternative block) and waits on the alt view and
+  `D_max`. The block identity (CEN-B6) is now derived once in `form` and
+  carried on `StructurallyValid::hash`. The registry gains
+  `enforced_at(path, "test")` / `RowStatus::EnforcedAt` for a row Rust
+  enforces outside the per-block stages; the coverage gate prints it as
+  `at-open`. Record: `implemented 18 / validator-enforced 151, held-by-cxx 2,
+  at-open 1, enforced 153`; `ratified 126 / 153` unmoved.
 - **The Rust validator decides timestamps and proof-of-work (DRS-E6
   slice 2).** `shekyl-chain-rules` now evaluates census 4.C (CEN-C1 FTL,
   C2 strict MTP, C3 genesis-padded window) and 4.D (D1/D1b PoW vs target,

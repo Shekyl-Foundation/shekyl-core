@@ -2,8 +2,11 @@
 
 **Status:** OPEN — Round 0 pre-flight written 2026-09-20 against `dev` @
 `34d111551` (post-#805); **Round 0 RULED 2026-09-20** (Q1–Q7, §8; the
-reframing in §0). Implementation begins on the rulings; the signature commit
-lands after #806.
+reframing in §0). **Rules-crate commits 1–6 LANDED on the branch
+2026-09-20** (§7 record: `implemented 18 / validator-enforced 151`,
+`held-by-cxx 2`, `at-open 1`, `4.E 2 / 3`, `ratified 126 / 153` unmoved).
+The PR lands **after #806** (Q2): the rebase adds the one-line
+`connector.rs` update. E5's writer wiring is a FOLLOWUPS row (owner DRS-E2).
 Template: [`CHAIN_RULES_CRATE.md`](CHAIN_RULES_CRATE.md) §7.5.1; predecessors
 [`CHAIN_RULES_SLICE_1.md`](../completed/CHAIN_RULES_SLICE_1.md),
 [`CHAIN_RULES_SLICE_2.md`](../completed/CHAIN_RULES_SLICE_2.md). Parent plan:
@@ -271,7 +274,39 @@ no `ConnectFacts` change.
 
 ---
 
-## 7. Round log
+## 7. Record at close of the rules-crate commits (1–6, 2026-09-20) and round log
+
+`check_chain_rules_coverage.py --describe` on the branch:
+
+```text
+consensus: implemented 18 / validator-enforced 151   held-by-cxx 2   at-open 1   enforced 153   ratified 126 / enforced 153
+  4.E: implemented 2 / enforced 3
+  enforced at open (Rust-enforced, outside per-block coverage):
+    CEN-E5: crate::rules::anchors::E5 :: a_recorded_block_that_is_not_the_anchor_is_the_conflict
+```
+
+What landed, by commit: **c1** `anchors.rs` — `Anchor`, `ReleaseAnchors`
+(`for_network`, `EMPTY`, `expected_at`, `current`, `covers`, `for_tests`;
+`well_formed` const-asserted; `no_release_has_shipped_an_anchor_yet`). **c2**
+B6 derived once in `form`, carried as `StructurallyValid::hash` — one stage
+earlier than Q7 asked, same property, outside the write transaction; the
+token's `Debug` was re-hashing the block and now prints the field. **c5**
+`E5::conflict_with` (public as `ReleaseAnchors::conflict_with`),
+`AnchorConflict::remedy` → `Remedy::{RefuseToRun, PopTo}` with
+`rollback_target` pinned at the floor; `RowStatus::EnforcedAt { site, test }`
+/ `enforced_at(path, "test")` with the gate asserting the proof test is
+*defined* (12 self-test cases); `RuleSet::enforced()` excludes it; the gate's
+`at-open` term. **c3+c4** `Trust { anchors }` / `Trust::full` /
+`Trust::UNANCHORED`; `validate(…, trust: &Trust)`; `BlockContext.trust`;
+E1 in the block list with four fixtures; the harness probe re-labelled to
+CEN-F1. Landed together because the context field's only reader is E1 — a
+parameter no rule reads is the callee-without-caller smell, and clippy
+refused it. **c6** census re-key of E1/E2/E5 (F2, F3, F4, F6, F30);
+contract, changelog, index, FOLLOWUPS (E5 wiring, owner DRS-E2), PDM F27/F30.
+
+Deviations from §5's plan, disclosed: commits 3 and 4 merged (above);
+`Box::leak` builds the `'static` fixture tables in tests (the production
+type holds `&'static [Anchor]`, which is the point — no runtime table).
 
 - **Round 0 (2026-09-20, `34d111551`).** Sweep; §1–§6; §8 questions posed.
 - **Round 0 RULED (2026-09-20).** All seven on the defaults, with the
