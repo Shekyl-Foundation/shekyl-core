@@ -127,6 +127,93 @@ last.
 it is easier should be priced against this table. "Ask the peer" is cheap in a
 round and expensive forever afterwards.)*
 
+## 2.6 ROUND 1 — the endpoint question, ANSWERED
+
+**Opened and answered 2026-09-21, pinned to `dev` `f9e000f76`.**
+
+> **Answer: the category needs NO new wire field. It is derivable from the
+> wire surface that already exists, plus what the socket already tells us.
+> Therefore PWD-I8 has no genesis deadline on wire-compatibility grounds.**
+
+**This was not obvious and is not "everything is local".** Part of the category
+*does* travel on the wire — it already does, today, and has since before this
+round. What follows is where each of the three categories comes from.
+
+### 2.6.1 The claim already travels, and the acceptor already parses it
+
+A node announces one of two things about itself in `basic_node_data.address`
+(`p2p_protocol_defs.h`), and **which one is already the category signal**:
+
+| Node's own state | What it announces | Anchor |
+| --- | --- | --- |
+| reachable **and** accepting inbound | a **port-only advert** — host zeroed, *"only the port is the claim"* | `net_node.inl:2390-2394` |
+| dialer-only (unreachable, or `in-peers 0`) | the zone's **unknown-address sentinel** — `ipv4(0,0)`, `tor_address::unknown()`, `i2p_address::unknown()` | `net_node.inl:2399-2412` |
+
+And the **accepting** side already turns that into the exact distinction I8
+needs. `derive_advertised_endpoint` (`net_node.cpp:399-411`):
+
+- returns `nullopt` when `advertised_port == 0`, commented **`// not dialable`**;
+- otherwise combines the **observed** host — from our own socket, not from the
+  peer — with the **claimed** port.
+
+**So a two-state classification is already computed on every inbound
+handshake.** I8 does not need to add it; it needs to *name* it, *own* it, and
+hang it on an object.
+
+### 2.6.2 Where each category comes from
+
+| Category | Source | New wire? |
+| --- | --- | --- |
+| **overlay-addressed** | the **zone of the socket** — purely local, the peer is not consulted | **none** |
+| **connected-but-unreachable** | the **existing sentinel** on the existing field; already parsed to `nullopt` | **none — already on the wire** |
+| **dialable and re-reachable** | the existing port-only claim, **plus verification** | **none — see below** |
+
+### 2.6.3 The gap is VERIFICATION, not signalling — and that is the whole answer
+
+The third category is the only one that is not settled by what arrives. The
+claim is **self-asserted**, which the code already knows: a derived endpoint
+enters **GRAY**, with `last_seen = 0` and the comment *"an unverified claim has
+never been 'seen'"* (`net_node.inl:2914`).
+
+**Turning that claim into a verified category is PWD-E1/E2, which is already
+ruled** — E1 **(c)** sources-propose-verifier-decides, E2 **(a)+(b)**. And
+**E2(a)'s hairpin reuses the existing handshake nonce** (PWD-E3, per-connection
+and never persisted), so it adds no field. A dial-back is an *action* over the
+existing protocol, not a new message.
+
+> **Conclusion for scheduling: no slice of PWD-I8 is wire-affecting, so none of
+> it is cheaper before genesis than after.** The round can take the time the
+> eclipse analysis in §3 actually needs. *(One caveat carried forward, not
+> waved: E2(b) was written as a reuse of the back-ping, which PWD-B10 deleted,
+> so it "must specify its own dial-back mechanism or be withdrawn". That
+> mechanism is an action over existing messages — but if a future design of it
+> reaches for a new field, this conclusion is void and the slice returns to the
+> pre-genesis bucket.)*
+
+### 2.6.4 The finding that falls out, and it is a REQUIREMENT not an observation
+
+**A claim is not a category.** The wire carries what a peer *says* about its
+own reachability, and that is an **attacker-controlled input**.
+
+**So wherever the category affects admission, it must be VERIFIED rather than
+CLAIMED** — otherwise a peer selects its own treatment by lying:
+
+- if *connected-but-unreachable* peers are evicted first, a peer claims
+  **dialable** to be protected;
+- if they are protected, a peer claims **unreachable** to be protected.
+
+**Either way the peer, not the node, decides.** That is §3.2's NAT-sorting trap
+reached from the other side — and it means **§3's protection-set design and
+this round's verification requirement are the same question**, not two. An
+unverified category used for eviction ranking is strictly worse than no
+category, because it hands the adversary the ranking function.
+
+**Consequence for slice scope:** the connection object may hold an
+**unverified** claim, but it must be **typed as unverified** — the two states
+cannot share a representation, or a later consumer will read a claim as a
+fact. That is the same discipline `GRAY` already applies to the peerlist, at a
+different altitude.
+
 ## 3. Two adversarial questions the round must ANSWER, not assume
 
 ### 3.1 The admission→eviction trade
